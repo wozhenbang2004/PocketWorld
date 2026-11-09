@@ -1,0 +1,360 @@
+name: GitHub Release
+on:
+  workflow_dispatch:
+    inputs:
+      release_mode:
+        description: Explicit new-chain full first release or verified-baseline delta
+        type: choice
+        options: [first, delta]
+        default: first
+        required: true
+      activate:
+        description: Automatically publish within this same run after draft verification succeeds
+        type: boolean
+        default: true
+      version_code:
+        description: Explicit release version, above every distributed build
+        default: "1000"
+        type: string
+        required: true
+      version_floor:
+        description: Operator release floor; 999 is conservative, not a verified historical maximum
+        default: "999"
+        type: string
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: pocketworld-github-release
+  cancel-in-progress: false
+jobs:
+  build:
+    if: ${{ github.repository == 'wozhenbang2004/PocketWorld' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      RELEASE_MODE: ${{ inputs.release_mode || vars.POCKETWORLD_RELEASE_MODE }}
+      RELEASE_VERSION_CODE: ${{ inputs.version_code || vars.POCKETWORLD_RELEASE_VERSION_CODE }}
+      RELEASE_VERSION_FLOOR: ${{ inputs.version_floor || vars.POCKETWORLD_RELEASE_VERSION_FLOOR }}
+    outputs:
+      release_artifact_id: ${{ steps.release_handoff.outputs.artifact-id }}
+      web_visual_outcome: ${{ steps.web_visual.outcome }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out selected revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Validate explicit bootstrap version and public configuration
+        run: |
+          python3 - <<'PY_GUARD'
+          import base64, hashlib, os, pathlib
+          code, floor = os.environ['RELEASE_VERSION_CODE'], os.environ['RELEASE_VERSION_FLOOR']
+          assert code.isascii() and code.isdecimal() and floor.isascii() and floor.isdecimal()
+          # 258 was observed without signature verification: lower bound only, never claimed latest.
+          assert 258 <= int(floor) < int(code) <= 2100000000
+          der = pathlib.Path('tools/ci/manifest-signing-public.der').read_bytes()
+          assert hashlib.sha256(der).hexdigest() == 'f869eae76eab3da1e0ab6f914da94f75b10f382e06c41338e887e06caee2d960'
+          with open(os.environ['GITHUB_ENV'], 'a') as f:
+              spki = base64.b64encode(der).decode()
+              f.write('RELEASE_PUBLIC_SPKI=' + spki + '\n')
+              f.write('ORG_GRADLE_PROJECT_pocketworldVersionCode=' + code + '\n')
+              f.write('ORG_GRADLE_PROJECT_pocketworldVersionName=0.4.' + code + '\n')
+              f.write('ORG_GRADLE_PROJECT_pocketworldUpdatePublicKey=' + spki + '\n')
+              f.write('ORG_GRADLE_PROJECT_pocketworldUpdateManifestUrl=https://github.com/wozhenbang2004/PocketWorld/releases/latest/download/release.json\n')
+          PY_GUARD
+
+      - name: Set up Java 17
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Check production build trigger contract
+        run: python3 -B -m unittest discover -s tools/tests -p test_apk_workflow_paths.py -v
+
+      - name: Set up pinned Node for the library Web UI
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22.22.0'
+
+      - name: Build and check the selected Web components
+        run: |
+          set -euo pipefail
+          mkdir -p build-artifacts
+          # The first source publication produces a reviewable lock artifact.
+          # Subsequent commits retain it and use npm ci without updating versions.
+          if [ ! -f web-ui/package-lock.json ]; then
+            npm install --prefix web-ui --package-lock-only --ignore-scripts 2>&1 | tee build-artifacts/web-lock.log
+          fi
+          npm ci --prefix web-ui 2>&1 | tee build-artifacts/web-install.log
+          npm run build --prefix web-ui 2>&1 | tee build-artifacts/web-build.log
+          npm test --prefix web-ui 2>&1 | tee build-artifacts/web-tests.log
+
+      - name: Preserve the dependency lock and Web build evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pocketworld-web-build-${{ github.run_number }}-${{ github.run_attempt }}
+          path: |
+            web-ui/package-lock.json
+            web-ui/public/licenses/
+            app/src/main/assets/pocket-ui/
+            build-artifacts/web-*.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Capture the actual Web components with isolated host fixtures
+        id: web_visual
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          npm exec --prefix web-ui -- playwright install --with-deps chromium
+          node tools/ci/capture-library-web.mjs
+
+      - name: Preserve Web component visual and motion evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pocketworld-library-web-visual-${{ github.run_number }}-${{ github.run_attempt }}
+          path: build-artifacts/library-web-visual/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Prepare pinned Android and native toolchains
+        run: |
+          set -euo pipefail
+          mkdir -p build-artifacts
+          : "${ANDROID_HOME:?Android SDK is required}"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "GRADLE_USER_HOME=$RUNNER_TEMP/gradle-user-home" >> "$GITHUB_ENV"
+          # The runner's defaults change; install the versions declared by this project.
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          set +o pipefail
+          yes | "$SDKMANAGER" --licenses > /dev/null
+          set -o pipefail
+          "$SDKMANAGER" 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0' 'ndk;28.2.13676358'
+          for tool in curl make patch ninja; do command -v "$tool"; done
+          # CMake 3.31.6 is an upstream pin, not the SDK's similarly named 3.31.5 package.
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess, tarfile
+          lock = json.loads(pathlib.Path('app/src/main/java/dev/pocketengine/features/local/runtime/native/source-lock.json').read_text())
+          cmake = lock['toolchain']['cmake']
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'pocketworld-cmake'
+          root.mkdir(parents=True, exist_ok=True)
+          archive = root / 'cmake.tar.gz'
+          # Inline replacement immediately after: archive = root / 'cmake.tar.gz'
+          # Source-lock remains the only accepted digest; no mirror-supplied checksum.
+          if cmake['version'] != '3.31.6' or cmake['url'] != 'https://github.com/Kitware/CMake/releases/download/v3.31.6/cmake-3.31.6-linux-x86_64.tar.gz':
+              raise RuntimeError('Unexpected CMake source-lock identity; review fallback before changing version')
+          partial = archive.with_suffix(archive.suffix + '.part')
+          archive.unlink(missing_ok=True)
+          partial.unlink(missing_ok=True)
+          try:
+              for url in (cmake['url'], 'https://cmake.org/files/v3.31/cmake-3.31.6-linux-x86_64.tar.gz'):
+                  partial.unlink(missing_ok=True)
+                  try:
+                      subprocess.run(['curl', '--fail', '--location', '--proto', '=https',
+                                      '--proto-redir', '=https', '--tlsv1.2', '--connect-timeout', '15',
+                                      '--max-time', '180', '--retry', '3', '--retry-max-time', '120',
+                                      '--output', str(partial), url], check=True)
+                  except subprocess.CalledProcessError:
+                      # Transport/HTTP failure only: try the official same-version archive.
+                      continue
+                  if hashlib.sha256(partial.read_bytes()).hexdigest() != cmake['sha256']:
+                      raise RuntimeError('CMake source-lock mismatch; archive rejected')
+                  partial.replace(archive)
+                  break
+              else:
+                  raise RuntimeError('Both official CMake archive downloads failed')
+          finally:
+              partial.unlink(missing_ok=True)
+          with tarfile.open(archive) as bundle:
+              bundle.extractall(root, filter='data')
+          home = root / ('cmake-' + cmake['version'] + '-linux-x86_64')
+          subprocess.run([str(home / 'bin/cmake'), '--version'], check=True)
+          pathlib.Path('local.properties').write_text('sdk.dir=' + os.environ['ANDROID_HOME'] + '\ncmake.dir=' + str(home) + '\n')
+          with open(os.environ['GITHUB_PATH'], 'a') as path:
+              path.write(str(home / 'bin') + '\n')
+          PY
+
+      - name: Verify the exact-task review boundaries
+        run: bash tools/ci/test-web-bridge.sh
+
+      - name: Assemble installable debug APK
+        run: |
+          set -euo pipefail
+          # Online cold build: no workstation paths, private cache, signing secret, or skipped native task.
+          ./gradlew --no-daemon --no-parallel --max-workers=1 --console=plain \
+            -Pkotlin.compiler.execution.strategy=in-process \
+            -Dorg.gradle.vfs.watch=false \
+            -PpocketworldVersionCode="$RELEASE_VERSION_CODE" \
+            -PpocketworldVersionName="0.4.$RELEASE_VERSION_CODE" \
+            -PpocketworldUpdateManifestUrl="https://github.com/wozhenbang2004/PocketWorld/releases/latest/download/release.json" \
+            -PpocketworldUpdatePublicKey="$RELEASE_PUBLIC_SPKI" :app:assembleDebug 2>&1 | tee build-artifacts/build.log
+
+      - name: Apply stable project signing key
+        env:
+          POCKETWORLD_SIGNING_KEYSTORE_B64: ${{ secrets.POCKETWORLD_SIGNING_KEYSTORE_B64 }}
+          POCKETWORLD_SIGNING_PASSWORD: ${{ secrets.POCKETWORLD_SIGNING_PASSWORD }}
+        run: |
+          set -euo pipefail
+          set +x
+          umask 077
+          test -n "$POCKETWORLD_SIGNING_KEYSTORE_B64" || { echo 'Project signing keystore is not configured'; exit 1; }
+          test -n "$POCKETWORLD_SIGNING_PASSWORD" || { echo 'Project signing password is not configured'; exit 1; }
+          SIGNING_DIR=$(mktemp -d "$RUNNER_TEMP/pocketworld-signing.XXXXXX")
+          export SIGNING_DIR
+          trap 'rm -rf -- "$SIGNING_DIR"' EXIT
+          python3 - <<'PY_SIGNING'
+          import base64, os, pathlib
+          value = base64.b64decode(os.environ.pop('POCKETWORLD_SIGNING_KEYSTORE_B64'), validate=True)
+          target = pathlib.Path(os.environ['SIGNING_DIR']) / 'project.p12'
+          target.write_bytes(value)
+          target.chmod(0o600)
+          PY_SIGNING
+          unset POCKETWORLD_SIGNING_KEYSTORE_B64
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" sign \
+            --ks "$SIGNING_DIR/project.p12" --ks-type PKCS12 --ks-key-alias pocketworld \
+            --ks-pass env:POCKETWORLD_SIGNING_PASSWORD --key-pass env:POCKETWORLD_SIGNING_PASSWORD \
+            --v4-signing-enabled false "$APK"
+          unset POCKETWORLD_SIGNING_PASSWORD
+
+      - name: Verify signed APK and packaged native payloads
+        run: |
+          set -euo pipefail
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK" | tee build-artifacts/signature.txt
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -P 16 -v 4 "$APK" > build-artifacts/alignment.txt
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" > build-artifacts/package.txt
+          python3 - <<'PY'
+          import hashlib, importlib.util, io, json, os, pathlib, subprocess, zipfile
+          web_spec = importlib.util.spec_from_file_location('pocket_web_verify', 'tools/ci/verify-web-ui.py')
+          web_verify = importlib.util.module_from_spec(web_spec)
+          web_spec.loader.exec_module(web_verify)
+          apk = pathlib.Path('app/build/outputs/apk/debug/app-debug.apk')
+          catalog = json.loads(pathlib.Path('app/src/main/assets/runtime/catalog.json').read_text())
+          with zipfile.ZipFile(apk) as z:
+              assert z.testzip() is None, 'APK ZIP integrity failed'
+              web_verify.verify_packaged_web(z)
+              names = set(z.namelist())
+              for path in ('AndroidManifest.xml', 'classes.dex', 'assets/pocketengine-display-helper.jar', 'lib/arm64-v8a/libpocketprocess.so'):
+                  assert path in names, 'Missing APK entry: ' + path
+              for name, key in (('libproot.so', 'prootSha256'), ('libloader.so', 'loaderSha256')):
+                  data = z.read('lib/arm64-v8a/' + name)
+                  assert hashlib.sha256(data).hexdigest() == catalog['engine'][key], 'Packaged runtime hash mismatch: ' + name
+              for path in names:
+                  if path.startswith('lib/') and path.endswith('.so'):
+                      assert path.startswith('lib/arm64-v8a/'), 'Unexpected native ABI: ' + path
+                      data = z.read(path)
+                      assert data[:4] == b'\x7fELF' and data[4] == 2 and int.from_bytes(data[18:20], 'little') == 183, 'Not AArch64 ELF: ' + path
+              with zipfile.ZipFile(io.BytesIO(z.read('assets/pocketengine-display-helper.jar'))) as helper:
+                  assert helper.testzip() is None and 'classes.dex' in helper.namelist(), 'Display helper DEX missing'
+          certificate_sha256 = 'b58e014e2a2e49b2e85ebd5b47a034a28cb0d313d71f379a5208d21afe388e58'
+          signature = pathlib.Path('build-artifacts/signature.txt').read_text()
+          signer_digests = [line.split(':', 1)[1].strip().lower().replace(':', '') for line in signature.splitlines() if 'certificate SHA-256 digest:' in line]
+          assert signer_digests == [certificate_sha256], 'APK signer differs from the pinned project certificate'
+          badging = pathlib.Path('build-artifacts/package.txt').read_text()
+          assert "package: name='dev.pocketengine'" in badging
+          assert "sdkVersion:'30'" in badging
+          digest = hashlib.sha256(apk.read_bytes()).hexdigest()
+          receipt = {'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(), 'tree': subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip(), 'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'apk': 'app-debug.apk', 'bytes': apk.stat().st_size, 'sha256': digest, 'application_id': 'dev.pocketengine', 'abi': 'arm64-v8a', 'minimum_android_api': 30, 'signature': 'stable PocketWorld project key', 'certificate_sha256': certificate_sha256, 'validation': ['assembleDebug', 'APK signature', 'ZIP alignment', 'APK CRC', 'exact packaged Web manifest and hashes', 'native ABI and catalog hashes', 'display helper DEX'], 'device_install_or_runtime_test': 'not performed'}
+          pathlib.Path('build-artifacts/apk-identity.json').write_text(json.dumps(receipt, indent=2) + '\n')
+          pathlib.Path('build-artifacts/SHA256SUMS').write_text(digest + '  app-debug.apk\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('## Private debug APK\n\nCommit: `' + receipt['commit'] + '`\n\nSHA256: `' + digest + '`\n\nARM64 / Android 11+. Download the APK artifact below.\n\nStable project signing: future builds with the same certificate can update compatible installations. Old temporary-debug-key installations are not migrated automatically. Private signing material is not uploaded as an artifact or cached. Build verification is not a device/runtime acceptance.\n')
+          PY
+          cp "$APK" build-artifacts/app-debug.apk
+          cp app/build/generated/android-runtime/native-build-receipt.json build-artifacts/native-build-receipt.json
+
+      - name: Retain private APK and verification evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pocketworld-debug-arm64-${{ github.run_number }}-${{ github.run_attempt }}
+          path: build-artifacts/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Retain failure log
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pocketworld-build-failure-${{ github.run_number }}-${{ github.run_attempt }}
+          path: build-artifacts/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Prepare full first release or verified delta and signed handoff
+        id: release_prepare
+        env:
+          POCKETWORLD_MANIFEST_PRIVATE_KEY_B64: ${{ secrets.POCKETWORLD_MANIFEST_PRIVATE_KEY_B64 }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 -B tools/ci/workflow-release.py prepare
+
+      - name: Preserve exact same-run verified release handoff
+        id: release_handoff
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pocketworld-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.release_prepare.outputs.handoff }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    if: ${{ github.repository == 'wozhenbang2004/PocketWorld' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the exact build SHA
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Java 17 for production manifest verification
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Download only the producing job artifact ID in this run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.build.outputs.release_artifact_id }}
+          path: ${{ runner.temp }}/release-handoff
+          merge-multiple: true
+
+      - name: Verify handoff, upload draft, verify remote bytes, optionally publish
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_ACTIVATE: ${{ (github.event_name == 'push' || inputs.activate) && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+          args=(publish --handoff "$RUNNER_TEMP/release-handoff")
+          if [[ "$RELEASE_ACTIVATE" == true ]]; then args+=(--activate); fi
+          # Cross-run recovery is intentionally unavailable. A failed run retains
+          # its draft and immutable handoff for manual reconciliation; never rebuild
+          # and claim that a newly signed manifest resumes an older draft.
+          python3 -B tools/ci/workflow-release.py "${args[@]}"
