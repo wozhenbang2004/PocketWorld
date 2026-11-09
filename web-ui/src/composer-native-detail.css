@@ -1,4 +1,6 @@
 /* Additive native-receipt display and browser-independent surface geometry. */
+.pw-context-meter-draft { font-size: 10px; font-weight: 400; opacity: .82; white-space: nowrap; }
+@media (max-width: 365px) { .pw-context-meter-draft { max-width: 64px; overflow: hidden; text-overflow: ellipsis; } }
 .pw-composer-host.pw-squircle-composer .afa-composer > .afa-card.pw-composer-card[data-continuous-shape="true"],
 .pw-composer-host.pw-squircle-composer .afa-composer > .pw-composer-context-rail[data-continuous-shape="true"] {
   background: transparent !important;
