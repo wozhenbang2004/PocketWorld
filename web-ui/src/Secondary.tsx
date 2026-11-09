@@ -1005,6 +1005,7 @@ function AccountsWorkspace({ state, data, supported, run, registerTransientBack,
         </AccordionItem></Accordion>
       </>}</Collection>
       {login.sessionId && <section className="pw-selected-object" aria-label="本次授权"><h3>本次授权</h3><Facts items={[[ '账号', loginAccount?.label ], [ '状态', accountStatusText(login.status) ], ['到期时间', timeText(login.expiresAt) ]]} />
+        {typeof login.error === 'string' && login.error.length > 0 && <p className="pw-field-error" role="alert">本次授权错误码：{text(login.error)}</p>}
         {login.status === 'pending' && <div className="pw-form-actions">{act('accounts.openAuthorization', { sessionId: login.sessionId }, '打开原授权页面')}{act('accounts.cancelLogin', { sessionId: login.sessionId }, '取消本次授权')}</div>}
         {loginRecovery.kind !== 'none' && <>
           <p className="pw-field-hint" role="status">这次登录授权已过期，原授权页面不能继续使用。{loginRecovery.kind === 'existing' ? '重新登录会为此账号准备新的授权。' : loginRecovery.kind === 'new' ? '重新开始登录，完成后再选择账号模型。' : loginRecovery.kind === 'disabled' ? '此账号已停用，请先在上方启用，再重新登录。' : '请刷新账号状态，核对原账号后再继续。'}</p>

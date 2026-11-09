@@ -69,6 +69,14 @@ try {
     assert.deepEqual((await calls(page, 'accounts.reauthorize')).map(x => x.args), [{ accountId: original.id, expectedVersion: 7 }]);
     assert.equal((await calls(page, 'accounts.beginLogin')).length, 0);
   });
+  await check('returning-login-failure-preserves-original-account-and-shows-reason', 430, false, async page => {
+    const active = { ...original, status: 'connected', error: '', planUsageEnabled: true };
+    await publish(page, [active], { sessionId: 'failed-session', accountId: original.id, status: 'failed', error: 'REGISTRATION_MISMATCH', expiresAt: 1730000000000 });
+    const region = page.getByRole('region', { name: '本次授权', exact: true });
+    await region.getByText('本次授权错误码：REGISTRATION_MISMATCH', { exact: true }).waitFor();
+    await page.getByText('已连接', { exact: true }).first().waitFor();
+    assert.equal((await calls(page, 'accounts.reauthorize')).length, 0);
+  });
   await check('registered-expired-single-retry', 430, false, async page => {
     await publish(page, [original]);
     const retry = page.getByRole('button', { name: '重新登录此账号', exact: true });
