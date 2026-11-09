@@ -22,3 +22,6 @@
 .pw-developer-footer small{flex-basis:100%;font-size:11px;line-height:1.5;color:#999}
 @media(max-width:650px){.pw-developer-logs{padding:12px 14px 16px;gap:11px}.pw-developer-console pre{font-size:10px}.pw-developer-actions{gap:4px}}
 @media(prefers-reduced-motion:reduce){.pw-developer-live-dot{animation:none}}
+
+.pw-developer-capture{display:inline-flex;align-items:center;gap:8px;font-weight:600;color:inherit;font-size:13px;margin-right:auto}
+.pw-developer-capture input{accent-color:#444;width:15px;height:15px}
