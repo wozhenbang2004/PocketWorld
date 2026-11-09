@@ -19,6 +19,7 @@ on:
       - 'app/src/test/**'
       - 'web-ui/src/**'
       - 'web-ui/tests/ai-*'
+      - 'web-ui/tests/phone-composer-*'
       - 'web-ui/tests/setup-*'
       - 'tools/host-tests.json'
       - '.github/workflows/ai-services-checks.yml'
@@ -67,6 +68,9 @@ jobs:
       - name: Verify conversation navigation, model selection and return continuity
         if: ${{ always() && steps.frontend.outcome == 'success' && steps.browser.outcome == 'success' }}
         run: node web-ui/tests/ai-conversation-ui.mjs --output build-artifacts/ai-conversation-visual
+      - name: Verify model selection and submission in both phone modes
+        if: ${{ always() && steps.frontend.outcome == 'success' && steps.browser.outcome == 'success' }}
+        run: node web-ui/tests/phone-composer-ui.mjs --output build-artifacts/phone-composer-visual
       - name: Verify account login recovery
         if: ${{ always() && steps.frontend.outcome == 'success' && steps.browser.outcome == 'success' }}
         run: ACCOUNT_RECOVERY_EVIDENCE=build-artifacts/account-login-recovery node web-ui/tests/account-login-recovery-ui.mjs
@@ -94,7 +98,7 @@ jobs:
         env:
           ORG_GRADLE_PROJECT_pocketworldVersionCode: '2000000000'
           ORG_GRADLE_PROJECT_pocketworldVersionName: '0.3.0-host-tests'
-        run: python3 -B tools/host-tests.py --group ai-services --group first-use-state --group first-use-storage --group runtime-owner-setup --group runtime-preparation-cancel --group runtime-recovery-admission --online --output build-artifacts/ai-services-native
+        run: python3 -B tools/host-tests.py --group ai-services --group conversation-phone-handoff --group first-use-state --group first-use-storage --group runtime-owner-setup --group runtime-preparation-cancel --group runtime-recovery-admission --online --output build-artifacts/ai-services-native
       - name: Preserve verification evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -103,6 +107,7 @@ jobs:
           path: |
             build-artifacts/ai-center-visual/
             build-artifacts/ai-conversation-visual/
+            build-artifacts/phone-composer-visual/
             build-artifacts/account-login-recovery/
             build-artifacts/setup-visual/
             build-artifacts/ai-services-native/

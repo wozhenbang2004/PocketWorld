@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PocketWorld phone composer · synthetic host</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module">
+      import { installAiCenterHost } from './ai-center-host-fixture.mjs';
+      import { installAiConversationHost } from './ai-conversation-host-fixture.mjs';
+      const freshConversation = new URLSearchParams(location.search).has('fresh');
+      installAiCenterHost();
+      installAiConversationHost({ phoneComposer: { freshConversation, defaultModel: freshConversation ? 'fixture-reasoner' : '' } });
+      await import('/src/main.tsx');
+    </script>
+  </body>
+</html>
