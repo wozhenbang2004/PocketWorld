@@ -161,8 +161,32 @@ jobs:
           root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'pocketworld-cmake'
           root.mkdir(parents=True, exist_ok=True)
           archive = root / 'cmake.tar.gz'
-          subprocess.run(['curl', '--fail', '--location', '--proto', '=https', '--proto-redir', '=https', '--tlsv1.2', '--retry', '3', '--output', str(archive), cmake['url']], check=True)
-          assert hashlib.sha256(archive.read_bytes()).hexdigest() == cmake['sha256'], 'CMake source-lock mismatch'
+          # Inline replacement immediately after: archive = root / 'cmake.tar.gz'
+          # Source-lock remains the only accepted digest; no mirror-supplied checksum.
+          if cmake['version'] != '3.31.6' or cmake['url'] != 'https://github.com/Kitware/CMake/releases/download/v3.31.6/cmake-3.31.6-linux-x86_64.tar.gz':
+              raise RuntimeError('Unexpected CMake source-lock identity; review fallback before changing version')
+          partial = archive.with_suffix(archive.suffix + '.part')
+          archive.unlink(missing_ok=True)
+          partial.unlink(missing_ok=True)
+          try:
+              for url in (cmake['url'], 'https://cmake.org/files/v3.31/cmake-3.31.6-linux-x86_64.tar.gz'):
+                  partial.unlink(missing_ok=True)
+                  try:
+                      subprocess.run(['curl', '--fail', '--location', '--proto', '=https',
+                                      '--proto-redir', '=https', '--tlsv1.2', '--connect-timeout', '15',
+                                      '--max-time', '180', '--retry', '3', '--retry-max-time', '120',
+                                      '--output', str(partial), url], check=True)
+                  except subprocess.CalledProcessError:
+                      # Transport/HTTP failure only: try the official same-version archive.
+                      continue
+                  if hashlib.sha256(partial.read_bytes()).hexdigest() != cmake['sha256']:
+                      raise RuntimeError('CMake source-lock mismatch; archive rejected')
+                  partial.replace(archive)
+                  break
+              else:
+                  raise RuntimeError('Both official CMake archive downloads failed')
+          finally:
+              partial.unlink(missing_ok=True)
           with tarfile.open(archive) as bundle:
               bundle.extractall(root, filter='data')
           home = root / ('cmake-' + cmake['version'] + '-linux-x86_64')
