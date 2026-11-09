@@ -18,6 +18,8 @@ import org.json.JSONObject;
 public final class ModelCapabilityAdapters implements CapabilityPort {
     public interface Authority {
         void check(String tool,RunControl control)throws Exception;
+        /** Host policy decides whether this mounted tool needs an exact-call approval. */
+        default boolean requiresApproval(CapabilityDescriptor tool){return tool.approvalRequired;}
         /** Must consume exact TaskStore approval; false is a definite non-dispatch receipt. */
         JSONObject approve(CapabilityDescriptor tool,JSONObject normalizedArgs,JSONObject capability)throws Exception;
         /** Verify the operation already prepared by AgentRunner, including exact original model arguments. */
@@ -113,8 +115,8 @@ public final class ModelCapabilityAdapters implements CapabilityPort {
         if(existing!=null)for(CapabilityDescriptor route:routes.values())if(existing.supports(route.name))throw new IllegalArgumentException("既存能力工具与leaf名称冲突："+route.name);
         Set<String> names=new java.util.HashSet<>();JSONArray tools=tools();for(int i=0;i<tools.length();i++)if(!names.add(tools.getJSONObject(i).getJSONObject("function").getString("name")))throw new IllegalArgumentException("工具名称重复");
     }
-    private void add(CapabilityDescriptor descriptor){if(!descriptor.approvalRequired||binding.allowWrites)routes.put(descriptor.name,descriptor);}
-    public JSONArray descriptors()throws Exception {JSONArray out=new JSONArray();for(CapabilityDescriptor route:routes.values())out.put(route.metadata());return out;}
+    private void add(CapabilityDescriptor descriptor){if(!"write".equals(descriptor.effect)||binding.allowWrites)routes.put(descriptor.name,descriptor);}
+    public JSONArray descriptors()throws Exception {JSONArray out=new JSONArray();for(CapabilityDescriptor route:routes.values())out.put(route.metadata().put("requiresApproval",authority.requiresApproval(route)));return out;}
     @Override public JSONArray tools()throws Exception {JSONArray out=new JSONArray();if(existing!=null){JSONArray previous=existing.tools();for(int i=0;i<previous.length();i++)out.put(new JSONObject(previous.getJSONObject(i).toString()));}for(CapabilityDescriptor route:routes.values())out.put(route.definition());return out;}
     @Override public void beginRun(String goal,RunControl control)throws Exception{binding.check(control);if(existing!=null)existing.beginRun(goal,control);}
     @Override public void admitCapabilities(dev.pocketengine.core.CapabilitySnapshot snapshot,RunControl control)throws Exception{binding.check(control);if(existing!=null)existing.admitCapabilities(snapshot,control);}
@@ -157,8 +159,9 @@ public final class ModelCapabilityAdapters implements CapabilityPort {
         if(route.feature.equals("browser"))capability.put("binding",browser.capability());
         if(route.feature.equals("ssh"))capability.put("binding",ssh.capability());
         if(route.name.matches("attachments_create_text|attachments_create_document|attachments_transform_image|attachments_trim_media"))capability.put("hostTaskId",binding.taskId).put("projectId",binding.projectId);
-        if(route.approvalRequired){
-            if(!binding.allowWrites)throw new SecurityException("本任务仅允许读取");JSONObject approval=authority.approve(route,new JSONObject(args.toString()),capability);
+        if("write".equals(route.effect)&&!binding.allowWrites)throw new SecurityException("本任务仅允许读取");
+        if(authority.requiresApproval(route)){
+            JSONObject approval=authority.approve(route,new JSONObject(args.toString()),capability);
             if(!approval.optBoolean("approved"))return new JSONObject().put("ok",false).put("accepted",false).put("code","approval_required")
                     .put("approvalId",approval.optString("approvalId")).put("message","需要主人确认本次具体参数与能力身份，尚未执行。");
         }
@@ -223,3 +226,4 @@ public final class ModelCapabilityAdapters implements CapabilityPort {
     private void checkResource(CapabilityDescriptor descriptor)throws Exception {if(descriptor.feature.equals("browser"))browser.check();else if(descriptor.feature.equals("ssh"))ssh.check();}
     private static EngineModule requireModule(EngineModule module,String id){Objects.requireNonNull(module);if(!id.equals(module.id()))throw new IllegalArgumentException("原生模块身份不符");return module;}
 }
+

@@ -9,10 +9,14 @@ import org.json.JSONObject;
 
 /** Reuses the existing TaskStore APIs. It never prepares, finishes or replays an operation. */
 public final class TaskStoreCapabilityAuthority implements ModelCapabilityAdapters.Authority {
-    private final TaskStore tasks;private final ModelCapabilityAdapters.Binding binding;private final EventSink approvals;
-    public TaskStoreCapabilityAuthority(TaskStore tasks,ModelCapabilityAdapters.Binding binding,EventSink approvalEvents){this.tasks=Objects.requireNonNull(tasks);this.binding=Objects.requireNonNull(binding);approvals=Objects.requireNonNull(approvalEvents);}
-    @Override public void check(String tool,RunControl control)throws Exception {binding.check(control);tasks.checkCapability(binding.taskId,binding.runId,binding.epoch,tool,control);}
+    private final TaskStore tasks;private final ModelCapabilityAdapters.Binding binding;private final EventSink approvals;private final CapabilityApprovalPolicy policy;private final PolicySource policySource;private final String policyFingerprint;
+    public interface PolicySource {JSONObject current()throws Exception;}
+    public TaskStoreCapabilityAuthority(TaskStore tasks,ModelCapabilityAdapters.Binding binding,EventSink approvalEvents){this.tasks=Objects.requireNonNull(tasks);this.binding=Objects.requireNonNull(binding);approvals=Objects.requireNonNull(approvalEvents);policySource=null;policyFingerprint="";policy=new CapabilityApprovalPolicy(null);}
+    public TaskStoreCapabilityAuthority(TaskStore tasks,ModelCapabilityAdapters.Binding binding,EventSink approvalEvents,PolicySource source)throws Exception {this.tasks=Objects.requireNonNull(tasks);this.binding=Objects.requireNonNull(binding);approvals=Objects.requireNonNull(approvalEvents);policySource=Objects.requireNonNull(source);JSONObject raw=source.current();JSONObject snapshot=raw==null?null:new JSONObject(raw.toString());policy=new CapabilityApprovalPolicy(snapshot);policyFingerprint=TaskStore.capabilityFingerprint(snapshot==null?new JSONObject():snapshot);}
+    @Override public boolean requiresApproval(CapabilityDescriptor tool){return policy.decisionFor(tool)!=CapabilityApprovalPolicy.Decision.ALLOW;}
+    @Override public void check(String tool,RunControl control)throws Exception {binding.check(control);if(policySource!=null){JSONObject current=policySource.current();if(!policyFingerprint.equals(TaskStore.capabilityFingerprint(current==null?new JSONObject():current)))throw new SecurityException("权限策略已改变，停止后续调用；请核对已发生结果后按新策略继续任务。");}policy.requireNotDenied(tool);tasks.checkCapability(binding.taskId,binding.runId,binding.epoch,tool,control);}
     @Override public JSONObject approve(CapabilityDescriptor tool,JSONObject args,JSONObject capability)throws Exception {
+        policy.requireNotDenied(tool.name);
         JSONObject result=tasks.requireCapabilityApproval(binding.taskId,binding.runId,tool.name,args,capability);
         if(!result.optBoolean("approved"))approvals.emit(new JSONObject().put("taskId",binding.taskId).put("runId",binding.runId)
                 .put("approvalId",result.optString("approvalId")).put("tool",tool.name).put("capability",capability)
@@ -37,3 +41,4 @@ public final class TaskStoreCapabilityAuthority implements ModelCapabilityAdapte
         if(!found)throw new SecurityException("缺少原AgentRunner登记的operation");
     }
 }
+

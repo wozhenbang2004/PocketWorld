@@ -65,6 +65,57 @@ public final class SettingsStore {
     }
     /** Application singleton only; current facts may change without rewriting private model settings. */
     public synchronized void installImageCapabilities(ImageCapabilitySource source) { imageCapabilities=java.util.Objects.requireNonNull(source); }
+
+    /** Owner-selected approval preferences; not a capability grant or a model-writable setting. */
+    public synchronized JSONObject permissionPolicySnapshot(String conversationId) throws Exception {
+        requireConfirmed();
+        JSONObject global=checkedPermissionPolicy(new JSONObject(prefs.getString("permissionPolicy","{\"version\":1,\"mode\":\"ask\",\"tools\":{}}")));
+        JSONObject overrides=new JSONObject(prefs.getString("conversationPermissionPolicies","{}"));
+        JSONObject local=conversationId==null||conversationId.isBlank()?null:overrides.optJSONObject(conversationId);
+        if(local!=null)local=checkedPermissionPolicy(local);
+        JSONObject effective=new JSONObject(global.toString());
+        if(local!=null){
+            effective.put("mode",local.getString("mode"));
+            JSONObject merged=effective.getJSONObject("tools"),rules=local.getJSONObject("tools");
+            for(var keys=rules.keys();keys.hasNext();){String name=keys.next();merged.put(name,rules.getString(name));}
+        }
+        return new JSONObject().put("revision",prefs.getLong("permissionPolicyRevision",0))
+            .put("global",global).put("conversation",local==null?JSONObject.NULL:local).put("effective",effective);
+    }
+    public synchronized JSONObject getEffectivePermissionPolicy(String conversationId) throws Exception {
+        return permissionPolicySnapshot(conversationId).getJSONObject("effective");
+    }
+    public synchronized JSONObject savePermissionPolicy(String conversationId,boolean global,JSONObject policy,long expectedRevision) throws Exception {
+        JSONObject before=permissionPolicySnapshot(conversationId);
+        if(before.getLong("revision")!=expectedRevision)throw new IllegalStateException("权限设置已改变，请重新读取后保存");
+        SharedPreferences.Editor edit=prefs.edit();
+        if(global){
+            if(policy==null)throw new IllegalArgumentException("全局权限必须选择一个模式");
+            edit.putString("permissionPolicy",checkedPermissionPolicy(policy).toString());
+        }else{
+            if(conversationId==null||conversationId.isBlank())throw new IllegalArgumentException("请先开始对话，再设置此对话权限");
+            JSONObject overrides=new JSONObject(prefs.getString("conversationPermissionPolicies","{}"));
+            if(policy==null)overrides.remove(conversationId);else overrides.put(conversationId,checkedPermissionPolicy(policy));
+            edit.putString("conversationPermissionPolicies",overrides.toString());
+        }
+        commitConfirmed(edit.putLong("permissionPolicyRevision",Math.addExact(expectedRevision,1)),false);
+        return permissionPolicySnapshot(conversationId);
+    }
+    private static JSONObject checkedPermissionPolicy(JSONObject input) throws Exception {
+        Object version=input.opt("version");
+        if(!(version instanceof Integer||version instanceof Long)||((Number)version).longValue()!=1)throw new IllegalArgumentException("不支持的权限设置版本");
+        String mode=input.getString("mode");
+        if(!java.util.Set.of("ask","controlled","auto").contains(mode))throw new IllegalArgumentException("请选择有效权限模式");
+        JSONObject rules=input.getJSONObject("tools"),copy=new JSONObject();
+        for(var keys=rules.keys();keys.hasNext();){
+            String name=keys.next(),decision=rules.getString(name);
+            if(!name.matches("(browser|ssh|attachments)_[A-Za-z0-9_]+")||!java.util.Set.of("allow","ask","deny").contains(decision))
+                throw new IllegalArgumentException("工具规则仅支持 browser_、ssh_、attachments_ 的精确工具名及允许/询问/禁止");
+            copy.put(name,decision);
+        }
+        return new JSONObject().put("version",1).put("mode",mode).put("tools",copy);
+    }
+
     public synchronized ModelConfig get() throws Exception {
         modelSelection.requireAvailable();
         ModelConfig selected=getSelected(),global=selected;

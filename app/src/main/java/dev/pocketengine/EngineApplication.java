@@ -2077,7 +2077,17 @@ public final class EngineApplication extends Application implements dev.pocketen
             }
             @Override public void requireReference(String attachment,String sha,RunControl live)throws Exception{if(live!=original||!live.matchesHostRun(id,run,epoch))throw new SecurityException("不能替换原附件控制");live.check();attachmentOutcomes.requireReference(id,attachment,sha);live.check();}
         };
-        var authority=new dev.pocketengine.features.capabilities.TaskStoreCapabilityAuthority(tasks,binding,features::emitApproval);
+        // Personal conversation preferences do not expand paired-device, team, channel,
+        // or explicitly scoped work-profile authority.
+        String permissionConversation=task.optString("conversationId");
+        boolean personalPermissionScope=!permissionConversation.isBlank()
+                && "owner".equals(task.optString("actorId")) && "private".equals(task.optString("spaceId"))
+                && task.optJSONObject("origin")==null && !teamWriteOrigin(task)
+                && !task.has("workProfileRef") && !task.has("workProfileIntent");
+        var authority=personalPermissionScope
+                ? new dev.pocketengine.features.capabilities.TaskStoreCapabilityAuthority(tasks,binding,features::emitApproval,
+                        ()->settings.getEffectivePermissionPolicy(permissionConversation))
+                : new dev.pocketengine.features.capabilities.TaskStoreCapabilityAuthority(tasks,binding,features::emitApproval);
         dev.pocketengine.features.capabilities.ModelCapabilityAdapters.SshBinding selectedSsh=null;JSONObject sshSelection=task.optJSONObject("sshSelection");
         if(sshSelection!=null){
             EngineModule selected=features.module("ssh");if(!(selected instanceof dev.pocketengine.features.ssh.SshModule))throw new SecurityException("原SSH执行器不可用");var ssh=(dev.pocketengine.features.ssh.SshModule)selected;String account=sshSelection.getString("accountResource");
