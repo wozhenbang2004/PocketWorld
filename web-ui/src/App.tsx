@@ -257,6 +257,51 @@ export default function App(){
  const showTaskLayer=useCallback((next:TaskLayer)=>{rememberTaskPosition();setTaskLayer(next)},[rememberTaskPosition]);
  const closeTask=useCallback(()=>{rememberTaskPosition();invalidateContinuation();reviewWindow.current=null;reviewRequest.current++;openedTaskId.current=null;setTaskOpening(false);const closed=can('tasks.close')?act('tasks.close').then(()=>true,()=>false):Promise.resolve(false);setTaskOpen(false);setTaskLayer('overview');setReview(null);setReviewPending(false);setReviewSubmitted(false);setReviewReceipt('');setQuestionAnswer('');return closed;},[can,act,rememberTaskPosition,invalidateContinuation]);
  const changeNavigation=useCallback((open:boolean)=>{setWorkOpen(open);if(!open)setCommandOpen(false)},[]);
+ // Open the existing Vaul navigation from the left edge without stealing vertical scrolling.
+ useEffect(()=>{
+  if(desktopNavigation||workOpen)return;
+  let gesture:{id:number;x:number;y:number;horizontal:boolean}|null=null;
+  const reset=()=>{gesture=null};
+  const start=(event:TouchEvent)=>{
+   reset();
+   if(event.touches.length!==1||document.hidden)return;
+   const touch=event.touches[0],target=event.target;
+   if(touch.clientX>32||!(target instanceof Element)||!target.closest('.pw-app'))return;
+   if(target.closest('input,textarea,select,[contenteditable="true"],[data-vaul-no-drag]')||document.querySelector('[role="dialog"][data-state="open"],[role="alertdialog"]')||window.getSelection()?.toString())return;
+   gesture={id:touch.identifier,x:touch.clientX,y:touch.clientY,horizontal:false};
+  };
+  const move=(event:TouchEvent)=>{
+   if(!gesture)return;
+   if(event.touches.length!==1){reset();return}
+   const touch=Array.from(event.touches).find(item=>item.identifier===gesture!.id);
+   if(!touch){reset();return}
+   const dx=touch.clientX-gesture.x,dy=Math.abs(touch.clientY-gesture.y);
+   if(!gesture.horizontal){
+    if(dy>12&&dy>=Math.abs(dx)||dx< -12){reset();return}
+    if(dx<12||dx<dy*1.5)return;
+    gesture.horizontal=true;
+   }
+   if(event.cancelable)event.preventDefault();
+  };
+  const end=(event:TouchEvent)=>{
+   const current=gesture;reset();
+   if(!current||!current.horizontal)return;
+   const touch=Array.from(event.changedTouches).find(item=>item.identifier===current.id);
+   if(!touch||touch.clientX-current.x<48||Math.abs(touch.clientY-current.y)>Math.max(32,(touch.clientX-current.x)/1.5))return;
+   if(event.cancelable)event.preventDefault();
+   changeNavigation(true);
+  };
+  document.addEventListener('touchstart',start,{passive:true});
+  document.addEventListener('touchmove',move,{passive:false});
+  document.addEventListener('touchend',end,{passive:false});
+  document.addEventListener('touchcancel',reset);
+  document.addEventListener('visibilitychange',reset);
+  return()=>{
+   document.removeEventListener('touchstart',start);document.removeEventListener('touchmove',move);
+   document.removeEventListener('touchend',end);document.removeEventListener('touchcancel',reset);
+   document.removeEventListener('visibilitychange',reset);
+  };
+ },[desktopNavigation,workOpen,changeNavigation]);
  const navigate=useCallback((next:string)=>{setupReturnPending.current=false;rememberChatPosition();setWorkOpen(false);setCommandOpen(false);const closed=taskOpen?closeTask():Promise.resolve(true);navigationWindow.current++;setNavigationRevision(navigationWindow.current);setRoute(next);return closed;},[taskOpen,closeTask,rememberChatPosition]);
  const openSetup=useCallback((capability?:SetupCapability,runtimeTaskId?:string)=>{
   setupOrigin.current={route:!isPrimaryRoute&&secondaryPage?secondaryPage:route,...(taskOpen&&taskId?{task:{id:taskId,layer:taskLayer}}:{})};
