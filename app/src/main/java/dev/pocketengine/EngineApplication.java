@@ -3149,7 +3149,10 @@ public final class EngineApplication extends Application implements dev.pocketen
         if(groupOrigin(task)){if(voice!=null)throw new SecurityException("语音目标不能转为群执行");groupOwnerWorkflows.check();if(feedback!=null&&!feedback.isBlank())throw new SecurityException("群任务不能导入私人补充，请在原群提出后续请求");if(groups==null)throw new IllegalStateException("原生群宿主未就绪");groups.ownerCommand("task.resume",json("requestId",task.getJSONObject("origin").getString("requestId"),"runId",task.optString("runId"),"coordinatorEpoch",task.optInt("coordinatorEpoch"),"taskRevision",task.getLong("groupStateRevision")));return tasks.get(id,false);}
         if(automationPlanTask(task))reviewedAutomationRequest(task);
         if(tasks.hasUnresolved(id))throw new IllegalStateException("请先核对未决操作");if(task.optString("status").equals("completed")&&!developmentContinuation)throw new IllegalStateException("任务已完成");
-        ModelConfig selected=roundContinuation!=null?roundContinuation.model():voice==null&&expectedRun==null?null:settings.get();if(voice!=null||roundContinuation!=null||expectedRun!=null){SettingsStore.validate(selected);dev.pocketengine.runtime.ModelGateway.validate(selected);}
+        // Capture the conversation choice before queueing, just as a new chat turn does.
+        // A conversation may have its own model while the global default is intentionally unset.
+        ModelConfig selected=roundContinuation!=null?roundContinuation.model():captureConversationModel(task.optString("conversationId"),null);
+        SettingsStore.validate(selected);dev.pocketengine.runtime.ModelGateway.validate(selected);
         RunControl control=new RunControl();if(capabilityControls.putIfAbsent(id,control)!=null)throw new IllegalStateException("任务正在执行");
         var admission=new dev.pocketengine.core.CapabilityAttemptAdmission(control,
                 ()->settleUnstartedCapabilityAdmission(id,control),
@@ -3164,7 +3167,7 @@ public final class EngineApplication extends Application implements dev.pocketen
             admitted=reserved;
             // The run remains independent of Activity/audio lifetime after native admission.
             admission.submit(capabilityWorkers,()->{},()->{
-                try{JSONObject response=runCapabilityAttempt(id,null,selected==null?settings.get():selected,control,null,null,null,approval);String conversation=task.optString("conversationId");EngineModule assistant=features.module("assistant");if(!"owner_work".equals(task.optString("executionRole"))&&!conversation.isEmpty()&&assistant instanceof dev.pocketengine.features.assistant.AssistantModule&&!response.optBoolean("nativeOwnerReplyRecorded"))((dev.pocketengine.features.assistant.AssistantModule)assistant).appendTaskResult(conversation,id,response);}
+                try{JSONObject response=runCapabilityAttempt(id,null,selected,control,null,null,null,approval);String conversation=task.optString("conversationId");EngineModule assistant=features.module("assistant");if(!"owner_work".equals(task.optString("executionRole"))&&!conversation.isEmpty()&&assistant instanceof dev.pocketengine.features.assistant.AssistantModule&&!response.optBoolean("nativeOwnerReplyRecorded"))((dev.pocketengine.features.assistant.AssistantModule)assistant).appendTaskResult(conversation,id,response);}
                 catch(Exception failure){error(approval==null?failure.getMessage():"审批已保存，但未继续执行："+failure.getMessage());}
                 finally{if(admitted!=null&&control.isCancelled())try{tasks.endCancelledPreparingCapabilityAttempt(id,admitted.getString("runId"),control,"原任务尚未由执行器接手；已有记录与未知回执保留，没有自动重试");}catch(Exception unconfirmed){error("原任务停止记录未确认，请核对原任务");}}
             });
