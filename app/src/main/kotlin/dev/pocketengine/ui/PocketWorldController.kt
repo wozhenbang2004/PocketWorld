@@ -2538,6 +2538,40 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         return app.prepareConversationPhoneStart(conversation, goal, mode, JSONObject()
             .put("scopeMinutes", newTaskScopeMinutes).put("toolLimit", newTaskToolBudget).put("modelCallLimit", newTaskModelBudget))
     }
+    internal fun prepareDraftPhoneStart(scope: String, goal: String, mode: String): EngineApplication.DraftPhoneStartReview {
+        check(webPrivateOwnerVisible() && state.conversationId.isNullOrBlank() && composerDraft?.conversationId.isNullOrBlank() && scope == conversationModelScope()) { "请回到原新对话草稿核对这次手机任务" }
+        check(!hasChannelPhoneOrigin) { "渠道请求保留原渠道归属，不能改为私人草稿任务" }
+        return app.prepareDraftPhoneStart(scope, goal, mode, JSONObject()
+            .put("scopeMinutes", newTaskScopeMinutes).put("toolLimit", newTaskToolBudget).put("modelCallLimit", newTaskModelBudget))
+    }
+    internal fun startDraftPhone(review: EngineApplication.DraftPhoneStartReview, ownerCurrent: () -> Boolean, completed: (JSONObject?, String?) -> Unit): Boolean {
+        val shown = review.view()
+        if (!webPrivateOwnerVisible() || !ownerCurrent() || hasChannelPhoneOrigin || review.modelScope() != conversationModelScope()) {
+            state = state.copy(error = "原私人手机任务草稿已变化，请重新核对"); return false
+        }
+        if (!preparePhoneSubmission(shown.getString("goal"), shown.getString("mode"))) return false
+        state = state.copy(phoneSubmitting = true)
+        return try {
+            io.execute {
+                var allocated: String? = null
+                val result = runCatching { app.startDraftPhone(review, true,
+                    java.util.function.BooleanSupplier { webPrivateOwnerVisible() && !hasChannelPhoneOrigin && ownerCurrent() },
+                    java.util.function.Consumer { allocated = it }) }
+                main.post {
+                    if (!closed) {
+                        state = state.copy(phoneSubmitting = false)
+                        result.exceptionOrNull()?.let { state = state.copy(error = message(it)) }
+                        result.getOrNull()?.takeIf { it.optBoolean("admitted") && shown.getString("mode") == "main_screen" }?.let(::moveOriginalPhoneToBackground)
+                    }
+                    completed(result.getOrNull() ?: JSONObject().also { receipt ->
+                        allocated?.let { receipt.put("taskId", it) }
+                        if (allocated == null && result.exceptionOrNull() is EngineApplication.DraftPhoneStartRejected) receipt.put("status", "rejected")
+                    }, result.exceptionOrNull()?.let(::message))
+                }
+            }
+            true
+        } catch (error: Exception) { state = state.copy(phoneSubmitting = false, error = message(error)); false }
+    }
     internal fun startConversationPhone(review: EngineApplication.ConversationPhoneStartReview, ownerCurrent: () -> Boolean, completed: (JSONObject?, String?) -> Unit): Boolean {
         val shown = review.view()
         if (!webPrivateOwnerVisible() || !ownerCurrent() || hasChannelPhoneOrigin) { state = state.copy(error = "原私人手机任务审阅已变化，请重新核对"); return false }

@@ -58,6 +58,9 @@ public final class EngineApplication extends Application implements dev.pocketen
     public ModelConfig captureConversationModel(String conversationId,String clientMessageId)throws Exception {
         settings.modelSelection().requireAvailable();
         JSONObject target=conversationModels().targetForAdmission(conversationId,clientMessageId);
+        return captureConversationPreferenceTarget(target);
+    }
+    private ModelConfig captureConversationPreferenceTarget(JSONObject target)throws Exception {
         if(target==null)return settings.get();
         ModelConfig selected=captureConversationTarget(target,true);
         var summary=settings.modelPurposeTarget("SUMMARY");
@@ -1391,13 +1394,13 @@ public final class EngineApplication extends Application implements dev.pocketen
         private final TaskStore store;
         private final TaskStore.ConversationPhoneReview creation;
         private final ModelConfig config;
-        private final long modelRevision,expiresElapsed;
+        private final long modelRevision,preferenceRevision,expiresElapsed;
         private final int minutes,tools,models;
         private final String requestId,conversationId,goal,mode,publicView;
         private boolean attempted;
         private ConversationPhoneStartReview(EngineApplication issuer,TaskStore store,TaskStore.ConversationPhoneReview creation,
-                                             ModelConfig config,long modelRevision,JSONObject view)throws Exception {
-            this.issuer=issuer;this.store=store;this.creation=creation;this.config=config;this.modelRevision=modelRevision;
+                                             ModelConfig config,long modelRevision,long preferenceRevision,JSONObject view)throws Exception {
+            this.issuer=issuer;this.store=store;this.creation=creation;this.config=config;this.modelRevision=modelRevision;this.preferenceRevision=preferenceRevision;
             expiresElapsed=android.os.SystemClock.elapsedRealtime()+120_000L;minutes=view.getInt("scopeMinutes");tools=view.getInt("toolLimit");models=view.getInt("modelCallLimit");
             requestId=view.getString("requestId");conversationId=view.getString("conversationId");goal=view.getString("goal");mode=view.getString("mode");publicView=view.toString();
         }
@@ -1413,6 +1416,85 @@ public final class EngineApplication extends Application implements dev.pocketen
         if(!(module instanceof dev.pocketengine.features.assistant.AssistantModule assistant))throw new IllegalStateException("原对话宿主尚不可用");
         return assistant;
     }
+    /** Native blank-draft review. The web surface receives display facts, never a runnable model. */
+    public static final class DraftPhoneStartReview {
+        private final EngineApplication issuer;
+        private final TaskStore store;
+        private final ModelConfig config;
+        private final String scopeKey,goal,mode,publicView;
+        private final long preferenceRevision,modelRevision,expiresElapsed;
+        private final int minutes,tools,models;
+        private boolean attempted;
+        private String taskId;
+        private DraftPhoneStartReview(EngineApplication issuer,String scopeKey,long preferenceRevision,ModelConfig config,long modelRevision,JSONObject view)throws Exception {
+            this.issuer=issuer;store=issuer.tasks;this.scopeKey=scopeKey;this.preferenceRevision=preferenceRevision;
+            this.config=config;this.modelRevision=modelRevision;expiresElapsed=android.os.SystemClock.elapsedRealtime()+120_000L;
+            goal=view.getString("goal");mode=view.getString("mode");minutes=view.getInt("scopeMinutes");tools=view.getInt("toolLimit");models=view.getInt("modelCallLimit");publicView=view.toString();
+        }
+        public JSONObject view()throws Exception{return new JSONObject(publicView);}
+        public String modelScope(){return scopeKey;}
+    }
+    public static final class DraftPhoneStartRejected extends IllegalStateException {
+        private DraftPhoneStartRejected(Exception reason){super(reason.getMessage(),reason);}
+    }
+    public DraftPhoneStartReview prepareDraftPhoneStart(String scopeKey,String goal,String mode,JSONObject scopeChoices)throws Exception {
+        if(scopeKey==null||!scopeKey.startsWith("draft:"))throw new SecurityException("请在原新对话草稿中选择手机任务模型");
+        dev.pocketengine.runtime.models.ConversationModelPreferences.draft(scopeKey.substring("draft:".length()));
+        tasks.requireExecutionEnabled();goal=goal==null?"":goal.trim();
+        if(goal.isEmpty()||goal.length()>4000)throw new IllegalArgumentException("请填写 1–4000 字的手机任务目标");
+        if(!"main_screen".equals(mode)&&!"background".equals(mode))throw new IllegalArgumentException("请选择主屏或独立后台屏模式");
+        java.util.Set<String> keys=new java.util.HashSet<>();if(scopeChoices!=null)scopeChoices.keys().forEachRemaining(keys::add);
+        if(!keys.equals(java.util.Set.of("scopeMinutes","toolLimit","modelCallLimit")))throw new SecurityException("请核对本次手机任务的执行范围");
+        int minutes=dev.pocketengine.store.TaskExecutionScope.exactInt(scopeChoices,"scopeMinutes",0,120);
+        if(minutes!=0&&minutes!=30&&minutes!=120)throw new SecurityException("本次手机任务时限无效");
+        int tools=dev.pocketengine.store.TaskExecutionScope.exactInt(scopeChoices,"toolLimit",1,400);
+        int models=dev.pocketengine.store.TaskExecutionScope.exactInt(scopeChoices,"modelCallLimit",1,512);
+        var status=settings.modelSelection().status();if(status.pending())throw new IllegalStateException("请等待原模型设置回执");
+        JSONObject preference=conversationModels().snapshot(scopeKey);
+        ModelConfig config=captureConversationPreferenceTarget(preference.optJSONObject("target"));
+        if(!status.equals(settings.modelSelection().status())||conversationModels().snapshot(scopeKey).getLong("revision")!=preference.getLong("revision"))
+            throw new IllegalStateException("草稿模型设置已变化，请重新核对手机任务");
+        SettingsStore.validate(config);dev.pocketengine.runtime.ModelGateway.validate(config);
+        JSONObject view=json("goal",goal,"mode",mode,"modelName",config.model,"provider",config.provider,"toolLimit",tools,"modelCallLimit",models,"scopeMinutes",minutes)
+                .put("screenDisclosure",config.sendScreenshots?"执行时，可见文字和获准的屏幕截图会发送到本次模型。":"执行时，可见文字会发送到本次模型；当前未开启屏幕截图发送。");
+        return new DraftPhoneStartReview(this,scopeKey,preference.getLong("revision"),config,status.revision(),view);
+    }
+    private void requireDraftPhoneReviewCurrent(DraftPhoneStartReview review,java.util.function.BooleanSupplier ownerCurrent)throws Exception {
+        if(review==null||review.issuer!=this||review.store!=tasks)throw new SecurityException("这份手机任务审阅不属于当前草稿宿主");
+        if(android.os.SystemClock.elapsedRealtime()>=review.expiresElapsed||ownerCurrent==null||!ownerCurrent.getAsBoolean())throw new SecurityException("原草稿或手机目标审阅已变化，请重新核对");
+        var selected=settings.modelSelection().status();
+        if(selected.pending()||selected.revision()!=review.modelRevision||conversationModels().snapshot(review.scopeKey).getLong("revision")!=review.preferenceRevision)
+            throw new SecurityException("本次审阅后模型设置已变化，请重新确认模型与执行范围");
+    }
+    /** Uses the ordinary private TaskStore creation/admission, with the draft's reviewed model. */
+    public synchronized JSONObject startDraftPhone(DraftPhoneStartReview review,boolean screenConsent,
+                                                   java.util.function.BooleanSupplier ownerCurrent,java.util.function.Consumer<String> allocated)throws Exception {
+        if(review==null||review.issuer!=this||review.store!=tasks)throw new SecurityException("原手机任务审阅不可核对");
+        if(review.attempted){
+            JSONObject saved=review.taskId==null?null:tasks.get(review.taskId,false);
+            if(saved==null)throw new IllegalStateException("原手机启动结果待核对，不会重复创建任务");
+            JSONObject receipt;
+            try{receipt=originalPhoneAdmissionReceipt(review.taskId).put("admitted",true);}
+            catch(IllegalStateException unavailable){receipt=json("taskId",review.taskId,"admitted",false);}
+            return receipt.put("accepted",true).put("duplicate",true).put("status",saved.optString("status"));
+        }
+        try{
+            tasks.requireExecutionEnabled();requireDraftPhoneReviewCurrent(review,ownerCurrent);requirePhoneStartReady(review.goal,screenConsent,review.mode);
+            SettingsStore.validate(review.config);dev.pocketengine.runtime.ModelGateway.validate(review.config);java.util.Objects.requireNonNull(allocated);
+        }catch(Exception rejected){throw new DraftPhoneStartRejected(rejected);}
+        review.attempted=true;
+        try{
+            JSONObject created=tasks.create(review.goal,review.mode,id->{review.taskId=id;allocated.accept(id);});
+            JSONObject scope=json("deadlineAt",review.minutes==0?0L:System.currentTimeMillis()+review.minutes*60_000L,"toolLimit",review.tools,"modelCallLimit",review.models);
+            initializeOwnerExecutionScope(created.getString("id"),review.config,scope);requireDraftPhoneReviewCurrent(review,ownerCurrent);
+            admit(review.taskId,review.mode,review.config);
+            return originalPhoneAdmissionReceipt(review.taskId).put("accepted",true).put("admitted",true).put("status",tasks.get(review.taskId,false).optString("status"));
+        }catch(Exception failure){
+            if(review.taskId==null)throw new DraftPhoneStartRejected(failure);
+            try{JSONObject retained=tasks.get(review.taskId,false);if(retained!=null&&retained.optString("runId").isEmpty()&&"preparing".equals(retained.optString("status")))tasks.status(review.taskId,"awaiting_user","手机目标已保存，但本次尚未开始执行；请核对原任务与启动条件");}catch(Exception unconfirmed){/* Preserve the original allocation after an uncertain write. */}
+            throw failure;
+        }finally{if(review.taskId!=null)pushTask(review.taskId);}
+    }
     public ConversationPhoneStartReview prepareConversationPhoneStart(String conversationId,String goal,String mode,JSONObject scopeChoices)throws Exception {
         var assistant=conversationPhoneAssistant();tasks.requireExecutionEnabled();
         goal=goal==null?"":goal.trim();
@@ -1425,8 +1507,10 @@ public final class EngineApplication extends Application implements dev.pocketen
         int tools=dev.pocketengine.store.TaskExecutionScope.exactInt(scopeChoices,"toolLimit",1,400);
         int models=dev.pocketengine.store.TaskExecutionScope.exactInt(scopeChoices,"modelCallLimit",1,512);
         var status=settings.modelSelection().status();if(status.pending())throw new IllegalStateException("请等待原模型设置回执");
+        String preferenceScope=dev.pocketengine.runtime.models.ConversationModelPreferences.conversation(conversationId);
+        long preferenceRevision=conversationModels().snapshot(preferenceScope).getLong("revision");
         ModelConfig config=captureConversationModel(conversationId,"");
-        if(!status.equals(settings.modelSelection().status()))throw new IllegalStateException("模型设置已变化，请重新核对手机任务");
+        if(!status.equals(settings.modelSelection().status())||conversationModels().snapshot(preferenceScope).getLong("revision")!=preferenceRevision)throw new IllegalStateException("模型设置已变化，请重新核对手机任务");
         var selected=new dev.pocketengine.runtime.models.ModelSelectionCoordinator.Projection<ModelConfig>(status.revision(),config);
         SettingsStore.validate(config);dev.pocketengine.runtime.ModelGateway.validate(config);
         JSONObject source=assistant.preparePhoneHandoffSource(conversationId);
@@ -1436,13 +1520,13 @@ public final class EngineApplication extends Application implements dev.pocketen
                 .put("conversationId",source.getString("conversationId")).put("conversationTitle",source.optString("conversationTitle","原对话"))
                 .put("goal",goal).put("mode",mode).put("expiresAt",System.currentTimeMillis()+120_000L)
                 .put("screenDisclosure",config.sendScreenshots?"执行时，可见文字和获准的屏幕截图会发送到本次模型。":"执行时，可见文字会发送到本次模型；当前未开启屏幕截图发送。");
-        return new ConversationPhoneStartReview(this,tasks,creation,config,selected.revision(),view);
+        return new ConversationPhoneStartReview(this,tasks,creation,config,selected.revision(),preferenceRevision,view);
     }
     private void requireConversationPhoneReviewCurrent(ConversationPhoneStartReview review,java.util.function.BooleanSupplier ownerCurrent)throws Exception {
         if(review==null||review.issuer!=this||review.store!=tasks)throw new SecurityException("这份手机任务审阅不属于当前原对话宿主");
         if(android.os.SystemClock.elapsedRealtime()>=review.expiresElapsed||ownerCurrent==null||!ownerCurrent.getAsBoolean())throw new SecurityException("原对话或手机目标审阅已变化，请重新核对");
         var selected=settings.modelSelection().status();
-        if(selected.pending()||selected.revision()!=review.modelRevision)throw new SecurityException("本次审阅后模型设置已变化，请重新确认模型与执行范围");
+        if(selected.pending()||selected.revision()!=review.modelRevision||conversationModels().snapshot(dev.pocketengine.runtime.models.ConversationModelPreferences.conversation(review.conversationId)).getLong("revision")!=review.preferenceRevision)throw new SecurityException("本次审阅后模型设置已变化，请重新确认模型与执行范围");
     }
     /** One native reviewed creation may enter phone admission once. An uncertain write is query-only. */
     public synchronized JSONObject startConversationPhone(ConversationPhoneStartReview review,boolean screenConsent,

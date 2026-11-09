@@ -17,8 +17,10 @@ on:
       - 'app/src/main/java/dev/pocketengine/store/TaskStore.java'
       - 'app/src/main/kotlin/dev/pocketengine/ui/web/**'
       - 'app/src/test/**'
+      - 'app/src/hostTest/**'
       - 'web-ui/src/**'
       - 'web-ui/tests/ai-*'
+      - 'web-ui/tests/phone-composer-*'
       - 'web-ui/tests/setup-*'
       - 'tools/host-tests.json'
       - '.github/workflows/ai-services-checks.yml'
@@ -67,6 +69,9 @@ jobs:
       - name: Verify conversation navigation, model selection and return continuity
         if: ${{ always() && steps.frontend.outcome == 'success' && steps.browser.outcome == 'success' }}
         run: node web-ui/tests/ai-conversation-ui.mjs --output build-artifacts/ai-conversation-visual
+      - name: Verify model selection and submission in both phone modes
+        if: ${{ always() && steps.frontend.outcome == 'success' && steps.browser.outcome == 'success' }}
+        run: node web-ui/tests/phone-composer-ui.mjs --output build-artifacts/phone-composer-visual
       - name: Verify account login recovery
         if: ${{ always() && steps.frontend.outcome == 'success' && steps.browser.outcome == 'success' }}
         run: ACCOUNT_RECOVERY_EVIDENCE=build-artifacts/account-login-recovery node web-ui/tests/account-login-recovery-ui.mjs
@@ -87,6 +92,12 @@ jobs:
           set -o pipefail
           "$SDKMANAGER" 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0' 'ndk;28.2.13676358'
           printf 'sdk.dir=%s\n' "$ANDROID_HOME" > local.properties
+      - name: Verify native phone model capture and conversation handoff
+        if: ${{ always() && steps.native_tools.outcome == 'success' }}
+        env:
+          ORG_GRADLE_PROJECT_pocketworldVersionCode: '2000000000'
+          ORG_GRADLE_PROJECT_pocketworldVersionName: '0.3.0-host-tests'
+        run: python3 -B tools/host-tests.py --group conversation-phone-handoff --online --output build-artifacts/phone-composer-native
       - name: Run AI service, first-use and native runtime preparation regressions
         if: ${{ always() && steps.native_tools.outcome == 'success' }}
         # This job runs host-only tests, never publishes an APK. Supply an explicit,
@@ -103,6 +114,8 @@ jobs:
           path: |
             build-artifacts/ai-center-visual/
             build-artifacts/ai-conversation-visual/
+            build-artifacts/phone-composer-visual/
+            build-artifacts/phone-composer-native/
             build-artifacts/account-login-recovery/
             build-artifacts/setup-visual/
             build-artifacts/ai-services-native/

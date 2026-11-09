@@ -8,6 +8,10 @@ import dev.pocketengine.features.assistant.AssistantModule;
 import dev.pocketengine.features.memory.SourceRef;
 import dev.pocketengine.phone.PhoneAccessibilityService;
 import dev.pocketengine.runtime.models.ModelConnectionService;
+import dev.pocketengine.runtime.models.ConversationModelPreferences;
+import dev.pocketengine.runtime.models.ModelCatalog;
+import dev.pocketengine.runtime.models.ModelFacts;
+import dev.pocketengine.runtime.models.ReasoningOptions;
 import dev.pocketengine.store.SecretVault;
 import dev.pocketengine.store.SettingsStore;
 import dev.pocketengine.store.TaskStore;
@@ -16,6 +20,8 @@ import java.nio.file.Files;
 import java.time.Clock;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -68,7 +74,8 @@ public final class ConversationPhoneStartNativeTest {
         app.getSharedPreferences("private_settings",0).edit().clear().commit();
         app.tasks=new TaskStore(app);dev.pocketengine.testutil.ReadyApplicationFixture.complete(app);
         app.settings=new SettingsStore(app);app.settings.save(new JSONObject().put("baseUrl","https://fixture.invalid/v1").put("provider","openai_chat").put("model","reviewed-model").put("sendScreenshots",false));
-        var models=new ModelConnectionService(app.settings,Files.createTempDirectory("phone-review-models").resolve("catalog.json"),Clock.systemUTC());models.connections();models.install();
+        var models=new ModelConnectionService(app.settings,Files.createTempDirectory("phone-review-models").resolve("catalog.json"),Clock.systemUTC());models.connections();models.install();app.modelConnections=models;
+        field(EngineApplication.class,"conversationModelPreferences").set(app,new ConversationModelPreferences(Files.createTempDirectory("phone-review-preferences").resolve("preferences.json")));
         app.features=new FeatureHost(event->{},app.tasks,()->false);
         assistant=new AssistantModule(new FeatureContext(app,app.settings,new SecretVault(app),event->{}),null,null,app.tasks);app.features.register(assistant);
         var repo=app.tasks.conversationRepository();repo.transaction(()->{
@@ -87,6 +94,84 @@ public final class ConversationPhoneStartNativeTest {
         return app.prepareConversationPhoneStart("original-conversation","查看已确认的目标","main_screen",new JSONObject().put("scopeMinutes",30).put("toolLimit",7).put("modelCallLimit",9));
     }
     private JSONObject start(EngineApplication.ConversationPhoneStartReview review)throws Exception{return app.startConversationPhone(review,true,()->true,id->{});}
+    private static JSONObject scope()throws Exception{return new JSONObject().put("scopeMinutes",30).put("toolLimit",7).put("modelCallLimit",9);}
+    private JSONObject draftChoice(String model)throws Exception {
+        JSONObject source=app.modelConnections.saveSource("",0,"草稿专用来源",new JSONObject().put("baseUrl","https://draft.fixture.invalid/v1")
+                .put("provider","openai_chat").put("model",model).put("sendScreenshots",false)).getJSONObject("savedConnection");
+        var binding=app.settings.apiConnectionMetadata(source.getString("id"),source.getLong("revision")).configuration.capabilityBinding;
+        var catalog=(ModelCatalog)field(ModelConnectionService.class,"catalog").get(app.modelConnections);catalog.bind(binding);
+        catalog.updateOwner(new ModelCatalog.ModelKey(binding,model),0,Map.of(
+                ModelFacts.Field.REASONING,ModelFacts.OwnerValue.known(true),
+                ModelFacts.Field.REASONING_LEVELS,ModelFacts.OwnerValue.known(List.of("high"))),Set.of());
+        var config=app.modelConnections.captureConnectionModel(source.getString("id"),source.getLong("revision"),model,1024,
+                new ReasoningOptions(ReasoningOptions.Mode.OPENAI_EFFORT,"high",0),0);
+        return app.conversationTarget(config);
+    }
+    private EngineApplication.DraftPhoneStartReview draftReview(String key,String mode)throws Exception {
+        return app.prepareDraftPhoneStart(key,"核对当前手机页面",mode,scope());
+    }
+
+    @Test public void blankDraftCapturesItsSelectedModelAndReasoningWithoutReplacingTheGlobalModel()throws Exception {
+        String key=ConversationModelPreferences.draft("new-phone-input");
+        app.conversationModels().save(key,0,draftChoice("draft-model"));
+        var background=draftReview(key,"background");assertEquals("draft-model",background.view().getString("modelName"));
+        var review=draftReview(key,"main_screen");JSONObject view=review.view();
+        assertFalse(view.has("config"));assertFalse(view.has("apiKey"));assertFalse(view.has("baseUrl"));
+        view.put("modelName","forged").put("toolLimit",400);
+        assertEquals("draft-model",review.view().getString("modelName"));assertEquals(7,review.view().getInt("toolLimit"));
+        assertEquals(0,app.tasks.list().length());
+        JSONObject receipt=app.startDraftPhone(review,true,()->true,id->{});String id=receipt.getString("taskId");
+        assertTrue(receipt.getBoolean("admitted"));assertEquals("draft-model",app.config(id).model);
+        assertEquals(new ReasoningOptions(ReasoningOptions.Mode.OPENAI_EFFORT,"high",0),app.config(id).reasoning);
+        assertEquals(1024,app.config(id).maxOutputTokens);assertEquals("reviewed-model",app.settings.get().model);
+        assertNull(app.tasks.get(id,false).optJSONObject("origin"));
+        assertNotNull(shadowOf(app).getNextStartedService());
+        String originalScope=app.tasks.get(id,false).getJSONObject("executionScope").toString();
+        JSONObject duplicate=app.startDraftPhone(review,true,()->false,ignored->{throw new AssertionError("duplicate allocated");});
+        assertTrue(duplicate.getBoolean("duplicate"));assertEquals(id,duplicate.getString("taskId"));
+        assertEquals(receipt.getString("runId"),duplicate.getString("runId"));assertEquals(originalScope,app.tasks.get(id,false).getJSONObject("executionScope").toString());
+        assertNull(shadowOf(app).getNextStartedService());
+    }
+    @Test public void blankDraftCanStartWithAConfiguredSourceAndNoGlobalDefault()throws Exception {
+        app.getSharedPreferences("private_settings",0).edit().clear().commit();app.settings=new SettingsStore(app);
+        app.modelConnections=new ModelConnectionService(app.settings,Files.createTempDirectory("no-default-models").resolve("catalog.json"),Clock.systemUTC());app.modelConnections.install();
+        String key=ConversationModelPreferences.draft("first-phone-input");app.conversationModels().save(key,0,draftChoice("only-draft-model"));
+        assertEquals("",app.settings.get().model);
+        JSONObject receipt=app.startDraftPhone(draftReview(key,"main_screen"),true,()->true,id->{});
+        assertEquals("only-draft-model",app.config(receipt.getString("taskId")).model);assertEquals("",app.settings.get().model);
+    }
+    @Test public void draftPreferenceOrGlobalRevisionChangesInvalidateTheOriginalReviewBeforeCreation()throws Exception {
+        String key=ConversationModelPreferences.draft("changing-phone-input");JSONObject choice=draftChoice("draft-model");
+        app.conversationModels().save(key,0,choice);var changedPreference=draftReview(key,"main_screen");
+        // A preference revision is checked independently, even without a global coordinator mutation.
+        app.conversationModels().save(key,1,new JSONObject(choice.toString()).put("outputTokens",2048));
+        assertThrows(EngineApplication.DraftPhoneStartRejected.class,()->app.startDraftPhone(changedPreference,true,()->true,id->{}));
+        var changedGlobal=draftReview(key,"main_screen");app.settings.save(new JSONObject().put("model","later-default"));
+        assertThrows(EngineApplication.DraftPhoneStartRejected.class,()->app.startDraftPhone(changedGlobal,true,()->true,id->{}));
+        var closed=draftReview(key,"main_screen");
+        assertThrows(EngineApplication.DraftPhoneStartRejected.class,()->app.startDraftPhone(closed,true,()->false,id->{}));
+        assertThrows(SecurityException.class,()->app.prepareDraftPhoneStart(ConversationModelPreferences.conversation("original-conversation"),"目标","main_screen",scope()));
+        assertEquals(0,app.tasks.list().length());assertNull(shadowOf(app).getNextStartedService());
+    }
+    @Test public void draftChangeDuringAllocationRetainsTheOriginalTaskAndCannotRetryCreation()throws Exception {
+        String key=ConversationModelPreferences.draft("allocated-phone-input");JSONObject choice=draftChoice("draft-model");app.conversationModels().save(key,0,choice);
+        var review=draftReview(key,"main_screen");String[] allocated={null};
+        assertThrows(SecurityException.class,()->app.startDraftPhone(review,true,()->true,id->{
+            allocated[0]=id;try{app.conversationModels().save(key,1,new JSONObject(choice.toString()).put("outputTokens",2048));}catch(Exception error){throw new AssertionError(error);}
+        }));
+        assertNotNull(allocated[0]);JSONObject original=app.tasks.get(allocated[0],false);assertEquals("awaiting_user",original.getString("status"));
+        JSONObject duplicate=app.startDraftPhone(review,true,()->true,id->{throw new AssertionError("reallocated after uncertain admission");});
+        assertTrue(duplicate.getBoolean("duplicate"));assertTrue(duplicate.getBoolean("accepted"));assertFalse(duplicate.getBoolean("admitted"));
+        assertEquals(allocated[0],duplicate.getString("taskId"));assertEquals(1,app.tasks.list().length());assertEquals(original.toString(),app.tasks.get(allocated[0],false).toString());
+        assertNull(shadowOf(app).getNextStartedService());
+    }
+    @Test public void existingConversationUsesItsPreferenceAndRejectsAChangedPreferenceReview()throws Exception {
+        String key=ConversationModelPreferences.conversation("original-conversation");JSONObject choice=draftChoice("conversation-phone-model");
+        app.conversationModels().save(key,0,choice);var review=review();assertEquals("conversation-phone-model",review.view().getString("modelName"));
+        app.conversationModels().save(key,1,new JSONObject(choice.toString()).put("outputTokens",2048));
+        assertThrows(EngineApplication.ConversationPhoneStartRejected.class,()->start(review));
+        assertNull(app.tasks.get(review.view().getString("requestId"),false));assertEquals("reviewed-model",app.settings.get().model);
+    }
 
     @Test public void prepareIsReadOnlyAndPublicReviewCannotReplaceItsNativeFields()throws Exception {
         var review=review();JSONObject view=review.view();String id=view.getString("requestId");

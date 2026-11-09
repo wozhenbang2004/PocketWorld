@@ -27,9 +27,9 @@ const bundle = argument('--bundle', path.resolve(root, '../app/src/main/assets/p
 const output = argument('--output', path.resolve(root, '../build-artifacts/ai-conversation-visual'));
 const matrix = [390, 320, 360, 1280].flatMap(width => [false, true].map(dark => ({ width, height: 844, dark })));
 const record = {
-  scope: 'Production renderer: conversation/navigation at 320, 360, 390 and 1280px in light/dark; synthetic native receipts. Not Android, IME, real provider or listener validation.',
+  scope: 'Production renderer: conversation/navigation at 320, 360, 390 and 1280px in light/dark, plus empty main at 320/390px in light mode; synthetic native receipts. Not Android, IME, real provider or listener validation.',
   synthetic: true, outcome: 'not_run', visualReview: 'not_performed_by_runner',
-  startedAt: new Date().toISOString(), matrix, checks: [], screenshots: [], errors: [], scenes: [],
+  startedAt: new Date().toISOString(), matrix, checks: [], screenshots: [], errors: [], scenes: [], emptyScenes: [],
 };
 let browser, server;
 await fs.mkdir(output, { recursive: true });
@@ -41,6 +41,10 @@ function installMainChatHost() {
   const priorBridge = Object.getOwnPropertyDescriptor(window, 'PocketWeb');
   if (!priorBridge?.get || !priorBridge?.set) throw new Error('Install the conversation fixture before its chat presentation extension');
   const originalPost = window.PocketNative.postMessage, calls = [], errors = [];
+  // The production bridge consumes and deletes this bootstrap value on handshake.
+  // Keep the same immutable host identity as installAiCenterHost, not the deleted global.
+  const documentToken = window.__pocketDocumentToken;
+  if (!documentToken) throw new Error('Install the chat host before the production document handshake');
   const clone = value => structuredClone(value);
   const taskId = 'fixture-completed', runId = 'fixture-completed-run', epoch = 2;
   const addedCommands = ['tasks.open', 'tasks.close', 'trace.read', 'trace.close', 'conversation.drafts',
@@ -97,22 +101,28 @@ function installMainChatHost() {
     calls.push(clone(request));
     queueMicrotask(() => {
       try {
-        if (request.hostDocumentToken !== window.__pocketDocumentToken) throw new Error('Chat fixture document changed');
+        if (request.hostDocumentToken !== documentToken) throw new Error('Chat fixture document changed');
         const args = request.args || {};
         let value;
         if (request.action === 'tasks.open') {
           if (args.id !== taskId || args.requestNavigation !== false || Object.keys(args).length !== 2) throw new Error('Trace entry changed the original task or navigation intent');
-          value = { opened: true, taskId };
+          value = { taskId, readOnly: true, executionAuthorized: false };
         } else if (request.action === 'trace.read') {
           if (args.taskId !== taskId || args.runId && args.runId !== runId || args.cursor !== '' || args.limit !== 100) throw new Error('Trace read changed the original task or run');
           const at = 1794205000000;
+          // A complete retained-run window: one known event, no older page or
+          // limited/invalid rows. This does not claim full historical execution coverage.
           value = { format: 'pocketworld.execution-trace.v1', taskId, runId, epoch, capturedAt: at + 2000,
-            runs: [{ runId, epoch, status: 'COMPLETED', startedAt: at, updatedAt: at + 1000 }],
+            runs: [{ runId, epoch, status: 'completed', startedAt: at, updatedAt: at + 1000 }],
+            runsLimited: false, relations: [], limit: 100,
             nodes: [{ id: 'event:fixture-completed-summary', kind: 'event', role: 'assistant', parentId: null,
-              name: '本次资料已整理，原来源仍保留', status: 'COMPLETED', sequence: 1, source: 'task_event',
-              runId, epoch, turnId: 'fixture-turn', turnIndex: 1, startedAt: at, finishedAt: at + 1000,
+              name: '本次资料已整理，原来源仍保留', status: 'completed', sequence: 1, source: 'task_event',
+              taskId, runId, epoch, turnId: 'fixture-turn', turnIndex: 1, startedAt: at, finishedAt: at + 1000,
               elapsedNanos: null, durationMs: null, timingKnown: false, legacy: false }],
-            cursor: '', nextCursor: '', hasMore: false, limited: false, readOnly: true, executionAuthorized: false };
+            cursor: 'fixture-completed-trace-page', nextCursor: '', hasMore: false, limited: false,
+            unboundLegacyEvents: 0, invalidRows: 0, oversizedRows: 0, rowsExamined: 1,
+            coverage: 'retained_run_bound_events_only', pageSemantics: 'fixed_event_membership_receipts_may_finish',
+            compact: true, bodyIncluded: false, readOnly: true, executionAuthorized: false };
         } else if (request.action === 'conversation.drafts') {
           if (args.taskId !== taskId || Object.keys(args).length !== 1) throw new Error('Proposal disclosure changed the original answer');
           value = { taskId, bodyIncluded: false, partial: false, drafts: Array.from({ length: 20 }, (_, index) => ({
@@ -135,6 +145,27 @@ function installMainChatHost() {
     setIdle(value) { idle = value; publish(); },
     setUnread(value) { unread = value; publish(); },
   };
+}
+
+/** Keep the existing empty host's accounts, history and model state. Only clear
+ * its demonstration composer text; the actual App still renders the empty screen. */
+function installEmptyMainHost({ configured = false } = {}) {
+  let bridge;
+  Object.defineProperty(window, 'PocketWeb', {
+    configurable: true, get: () => bridge,
+    set(value) {
+      const receive = value.receive;
+      value.receive = input => {
+        const message = typeof input === 'string' ? JSON.parse(input) : structuredClone(input);
+        if (message.kind === 'state') {
+          message.snapshot.composer.text = '';
+          if (configured) message.snapshot.capabilities.commands.push('attachments.openPicker', 'phone.prepare');
+        }
+        receive(message);
+      };
+      bridge = value;
+    },
+  });
 }
 
 async function composerGeometry(page, scene, label, hasText) {
@@ -188,7 +219,9 @@ async function runScene(origin, { width, height, dark }) {
   const page = await context.newPage();
   page.setDefaultTimeout(12000);
   page.on('pageerror', error => record.errors.push({ scene, error: error.message }));
-  const summary = () => page.evaluate(() => window.aiConversationFixture.summary());
+  const summary = () => page.evaluate(() => ({ ...window.aiConversationFixture.summary(),
+    mainChat: { errors: [...window.mainChatFixture.errors],
+      calls: window.mainChatFixture.calls.map(({ action, args }) => ({ action, args })) } }));
   const calls = action => page.evaluate(action => window.aiConversationFixture.calls.filter(row => row.action === action), action);
   const count = async action => (await calls(action)).length;
   const chatCalls = action => page.evaluate(action => window.mainChatFixture.calls.filter(row => row.action === action), action);
@@ -652,6 +685,77 @@ async function runScene(origin, { width, height, dark }) {
   } finally { await context.close(); }
 }
 
+async function runEmptyMainScene(origin, width) {
+  const scene = `${width}-light-empty-main`;
+  const configured = width === 320;
+  const context = await browser.newContext({ viewport: { width, height: 844 }, isMobile: true,
+    hasTouch: true, deviceScaleFactor: 1, locale: 'zh-CN', timezoneId: 'Asia/Shanghai',
+    colorScheme: 'light', reducedMotion: 'reduce', serviceWorkers: 'block' });
+  const externalRequests = [];
+  await context.route('**/*', route => {
+    if (new URL(route.request().url()).origin === origin) return route.continue();
+    externalRequests.push(route.request().url()); return route.abort();
+  });
+  await context.addInitScript({ content: `(${installAiCenterHost.toString()})(${JSON.stringify({ empty: !configured })});(${installEmptyMainHost.toString()})(${JSON.stringify({ configured })});` });
+  const page = await context.newPage();
+  page.setDefaultTimeout(12000);
+  page.on('pageerror', error => record.errors.push({ scene, error: error.message }));
+  try {
+    await page.goto(origin, { waitUntil: 'networkidle' });
+    const main = page.locator('.pw-chat-workspace');
+    await expect(main).toHaveClass(/pw-chat-empty/);
+    await expect(main.getByRole('heading', { level: 2, name: '从一个想法开始', exact: true })).toBeVisible();
+    const shortcutNames = configured ? ['处理文件', '手机操作', '使用技能'] : ['选择模型，开始对话'];
+    const start = main.locator('.pw-chat-start');
+    await expect(start.getByRole('button')).toHaveCount(shortcutNames.length);
+    for (const name of shortcutNames) {
+      const shortcut = start.getByRole('button', { name, exact: true });
+      await expect(shortcut).toBeVisible();
+      await expect(shortcut).toBeEnabled();
+      await expect(shortcut).toBeInViewport({ ratio: 1 });
+    }
+    await expect(page.locator('.pw-composer-row textarea')).toHaveValue('');
+    await expect(page.locator('.pw-message-stream')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '发送', exact: true })).toHaveCount(0);
+    await page.evaluate(() => document.fonts.ready);
+    const geometry = await main.evaluate(node => {
+      const heading = node.querySelector('.pw-start-heading h2');
+      const box = element => { const r = element.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height }; };
+      const shortcuts = [...node.querySelectorAll('.pw-chat-start button')].map(shortcut => {
+        const target = box(shortcut), hit = document.elementFromPoint(target.left + target.width / 2, target.top + target.height / 2);
+        return { name: shortcut.textContent.trim(), ...target, receivesPointer: !!hit && (hit === shortcut || shortcut.contains(hit)) };
+      });
+      return { heading: box(heading), shortcuts, viewportWidth: innerWidth, viewportHeight: innerHeight,
+        documentWidth: document.documentElement.scrollWidth };
+    });
+    assert.ok(geometry.documentWidth <= width + 1, 'Empty main must not overflow horizontally');
+    for (const target of [{ name: 'heading', ...geometry.heading }, ...geometry.shortcuts]) {
+      assert.ok(target.left >= -1 && target.right <= width + 1 && target.top >= 0 && target.bottom <= geometry.viewportHeight + 1,
+        `Empty main ${target.name} must remain fully visible`);
+    }
+    for (const shortcut of geometry.shortcuts) {
+      assert.ok(geometry.heading.bottom <= shortcut.top + 1, 'The empty-state shortcuts must stay below the heading');
+      assert.equal(shortcut.receivesPointer, true, `Empty main shortcut is covered: ${shortcut.name}`);
+      if (configured) assert.ok(shortcut.height >= 44 && shortcut.width >= 44, `Empty main shortcut lost its touch target: ${shortcut.name}`);
+    }
+    const file = `${scene}.png`;
+    await page.mouse.move(0, 0);
+    await page.screenshot({ path: path.join(output, file), animations: 'disabled' });
+    record.screenshots.push({ scene, file, synthetic: true });
+    const fixture = await page.evaluate(() => window.aiCenterFixture.summary());
+    assert.deepEqual(fixture.errors, []);
+    assert.equal(fixture.connections.length, configured ? 2 : 0);
+    assert.deepEqual(externalRequests, []);
+    passed(scene, 'Production empty main keeps its heading and shortcuts visible with a blank composer', { configured, ...geometry });
+    record.emptyScenes.push({ scene, passed: true, configured, fixture });
+  } catch (error) {
+    record.checks.push({ scene, name: 'Empty main', passed: false, error: String(error.stack || error) });
+    const file = `${scene}-failure.png`;
+    try { await page.screenshot({ path: path.join(output, file), animations: 'disabled' }); record.screenshots.push({ scene, file, synthetic: true, failure: true }); } catch {}
+    record.emptyScenes.push({ scene, passed: false });
+  } finally { await context.close(); }
+}
+
 try {
   const index = await fs.readFile(path.join(bundle, 'index.html'), 'utf8');
   const buildIdentity = JSON.parse(await fs.readFile(path.join(bundle, 'build-identity.json'), 'utf8'));
@@ -678,13 +782,15 @@ try {
   browser = await chromium.launch({ headless: true });
   record.outcome = 'executed';
   for (const scene of matrix) await runScene(origin, scene);
+  for (const width of [320, 390]) await runEmptyMainScene(origin, width);
 } catch (error) {
   record.errors.push({ stage: browser ? 'runner' : 'setup', error: String(error.stack || error) });
 } finally {
   if (browser) await browser.close();
   if (server?.listening) await new Promise(resolve => server.close(resolve));
   record.finishedAt = new Date().toISOString();
-  record.passed = record.outcome === 'executed' && record.scenes.length === matrix.length && record.scenes.every(scene => scene.passed) && !record.errors.length;
+  record.passed = record.outcome === 'executed' && record.scenes.length === matrix.length && record.scenes.every(scene => scene.passed)
+    && record.emptyScenes.length === 2 && record.emptyScenes.every(scene => scene.passed) && !record.errors.length;
   await fs.writeFile(path.join(output, 'results.json'), JSON.stringify(record, null, 2) + '\n');
 }
 console.log(JSON.stringify(record));
