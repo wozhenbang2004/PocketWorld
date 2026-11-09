@@ -23,7 +23,7 @@ export function safeNotice(payload) {
   const key = short(payload.key, 180), kind = short(payload.kind, 40);
   const title = short(payload.title, 180), body = short(payload.body, 600);
   const origin = short(payload.origin, 120);
-  if (!key || !/^[A-Za-z0-9:._/#-]+$/.test(key) || !['github_issue', 'github_pr', 'agent_task', 'service'].includes(kind) || !title || !origin) throw new Error('invalid_event');
+  if (!key || key.includes('..') || !/^[A-Za-z0-9:._/#-]+$/.test(key) || !['github_issue', 'github_pr', 'agent_task', 'service'].includes(kind) || !title || !origin) throw new Error('invalid_event');
   const url = String(payload.url || '');
   let parsed;
   try { parsed = new URL(url); } catch { throw new Error('invalid_link'); }
