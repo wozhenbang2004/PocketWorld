@@ -212,7 +212,7 @@ public final class ConversationModelPreferences {
     private JSONObject load() throws Exception {
         if (Files.notExists(file)) return new JSONObject().put("format", "pocketworld.conversation-models.v1").put("scopes", new JSONObject()).put("pending", new JSONObject());
         if (Files.size(file) > MAX_BYTES) throw new IOException("conversation_models_too_large");
-        JSONTokener parser = new JSONTokener(Files.readString(file, StandardCharsets.UTF_8)); Object parsed = parser.nextValue();
+        JSONTokener parser = new JSONTokener(new String(Files.readAllBytes(file), StandardCharsets.UTF_8)); Object parsed = parser.nextValue();
         if (!(parsed instanceof JSONObject root) || parser.nextClean() != 0 || !"pocketworld.conversation-models.v1".equals(root.getString("format")))
             throw new IOException("原对话模型偏好暂不可读取，原记录已保留");
         JSONObject rows = root.getJSONObject("scopes"), pending = root.getJSONObject("pending");
