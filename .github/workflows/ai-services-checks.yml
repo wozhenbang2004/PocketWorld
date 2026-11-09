@@ -1,0 +1,83 @@
+name: AI services integration checks
+
+on:
+  push:
+    branches: [main, 'uiux/ai-center-*']
+    paths:
+      - 'app/src/main/java/dev/pocketengine/runtime/models/**'
+      - 'app/src/main/java/dev/pocketengine/store/SettingsStore.java'
+      - 'app/src/main/java/dev/pocketengine/features/proxy/**'
+      - 'app/src/main/java/dev/pocketengine/features/NativeOwnerWorkflows.java'
+      - 'app/src/main/java/dev/pocketengine/EngineApplication.java'
+      - 'app/src/main/kotlin/dev/pocketengine/ui/web/**'
+      - 'app/src/test/**'
+      - 'web-ui/src/**'
+      - 'web-ui/tests/ai-*'
+      - 'tools/host-tests.json'
+      - '.github/workflows/ai-services-checks.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-services-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  native-and-ui:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22.22.0'
+      - name: Build the production frontend and run its tests
+        id: frontend
+        run: |
+          set -euo pipefail
+          npm ci --prefix web-ui
+          npm run build --prefix web-ui
+          npm test --prefix web-ui
+      - name: Verify the actual AI management views with isolated host fixtures
+        run: |
+          set -euo pipefail
+          npm exec --prefix web-ui -- playwright install --with-deps chromium
+          node web-ui/tests/ai-center-ui.mjs --output build-artifacts/ai-center-visual
+      - name: Prepare declared Android compile toolchains
+        id: native_tools
+        if: ${{ always() && steps.frontend.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          : "${ANDROID_HOME:?Android SDK is required}"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "GRADLE_USER_HOME=$RUNNER_TEMP/ai-services-gradle" >> "$GITHUB_ENV"
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          set +o pipefail
+          yes | "$SDKMANAGER" --licenses > /dev/null
+          set -o pipefail
+          "$SDKMANAGER" 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0' 'ndk;28.2.13676358'
+          printf 'sdk.dir=%s\n' "$ANDROID_HOME" > local.properties
+      - name: Run source, conversation, account and local API regressions
+        if: ${{ always() && steps.native_tools.outcome == 'success' }}
+        run: python3 -B tools/host-tests.py --group ai-services --online --output build-artifacts/ai-services-native
+      - name: Preserve verification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pocketworld-ai-services-${{ github.run_number }}-${{ github.run_attempt }}
+          path: |
+            build-artifacts/ai-center-visual/
+            build-artifacts/ai-services-native/
+          if-no-files-found: ignore
+          retention-days: 14

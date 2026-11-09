@@ -301,3 +301,6 @@ Android `PocketWebHost` 统一承担 systemBars / displayCutout / IME insets，�
 ### 本轮证据与复验
 
 新增原生来源、会话存储、账号捕获、反代令牌及 inset 归属回归；新增真实组件 handler 与统一选择器测试。`ai-services-checks.yml` 对生产 bundle 执行 renderer fixture 与原生 host tests，合入后以该次 Actions 回执为准。当前开发容器缺完整 Android JDK/SDK，未在本机完成 APK 构建或真机验收。合成目录与账号仅属于测试 fixture，不写入生产数据。截图须标记 production renderer / synthetic host，不冒称 Android 真机或已连通真实 AI 服务。
+
+
+发布检查点：功能提交 `940381f5bf7427a17c22b1a9ff714c0eadc7d6e5` 已直接写入 main，并保留先合入的 remote inbox 与 composer 图标。2026-11-09 的 APK Actions run `42566248760` / remote inbox run `42566248708` 均在执行任何步骤前失败；运行页明确提示账号近期付款失败或支出上限需调整，未生成 APK。当前本地完整 Web 测试尝试为 750 项：741 通过、9 失败；9 项均因该部分工作副本缺少既有源码/二进制或精确依赖而无法运行，不是完整测试通过。新增会话 handler/pure 24 项与此前接入中心/反代等 42 项已实际通过。Java 源码解析通过只代表语法，不代表类型编译或 Android 验收。视觉仍未验收，不得将旧设计稿作为本版真实截图。
