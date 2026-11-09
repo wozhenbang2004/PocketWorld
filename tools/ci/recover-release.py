@@ -94,7 +94,7 @@ def main():
  verify=cli.verify_callback(runner,data,output);verify((output/'release.json').read_bytes())
  if env.get('GITHUB_OUTPUT'):
   with open(env['GITHUB_OUTPUT'],'a') as out:out.write('prepared='+str(output)+'\n')
- result=cli.publisher.publish(client,tag,source,assets,verify,activate=True)
+ result=cli.publisher.publish(cli.publisher.Client(env['POCKETWORLD_RELEASE_TOKEN']),tag,source,assets,verify,activate=True)
  print(json.dumps(result))
 
 if __name__=='__main__':
