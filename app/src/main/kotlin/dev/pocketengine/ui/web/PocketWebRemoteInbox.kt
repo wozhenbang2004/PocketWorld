@@ -33,6 +33,8 @@ internal class PocketWebRemoteInbox(
 
     private val activity get() = controller.webPresentationActivity()
     private fun store() = RemoteInboxStore.get(activity)
+    private val storeObserver = Runnable { main.post { if (!closed) changed() } }
+    init { store().observe(storeObserver) }
     fun snapshot(): JSONObject {
         if (!controller.webPrivateOwnerVisible()) return JSONObject().put("available", false)
         return try {
@@ -44,7 +46,7 @@ internal class PocketWebRemoteInbox(
     }
 
     fun clear() { generation++ }
-    fun close() { closed = true; generation++; worker.shutdownNow() }
+    fun close() { closed = true; generation++; store().unobserve(storeObserver); worker.shutdownNow() }
 
     fun dispatch(action: String, args: JSONObject, done: (JSONObject?, String?) -> Unit) {
         check(!closed && controller.webPrivateOwnerVisible()) { "仅可在本机主人界面管理远程消息" }
