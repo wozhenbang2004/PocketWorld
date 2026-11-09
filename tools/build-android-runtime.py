@@ -29,20 +29,47 @@ def run(command, cwd, env):
     subprocess.run(list(map(str, command)), cwd=cwd, env=env, check=True)
 
 
+# A second upstream-owned distribution host for one strictly pinned source.
+# Every byte is still checked against source-lock.json before being accepted.
+TALLOC_PRIMARY = "https://www.samba.org/ftp/talloc/talloc-2.5.0.tar.gz"
+TALLOC_MIRROR = "https://download.samba.org/pub/talloc/talloc-2.5.0.tar.gz"
+TALLOC_SHA256 = "912afa237510ae542a7733998eb18a12bcda35ab6729c8e2ddb43e8d0ebab007"
+
+
+def source_urls(source):
+    primary = source["url"]
+    if (source["name"] == "talloc" and primary == TALLOC_PRIMARY
+            and source["sha256"] == TALLOC_SHA256 and source["archiveBytes"] == 690172):
+        return (primary, TALLOC_MIRROR)
+    return (primary,)
+
+
 def archive(source, cache, offline):
     path = cache / (source["name"] + "-" + source["sha256"] + "." + source["format"])
     if not path.exists():
         if offline:
             raise RuntimeError("Missing verified source archive in offline cache: " + str(path))
         temporary = path.with_suffix(path.suffix + ".part")
-        # curl uses the existing system TLS/proxy configuration, without insecure flags.
-        run(["curl", "--fail", "--location", "--proto", "=https", "--proto-redir", "=https", "--tlsv1.2",
-             "--connect-timeout", "20", "--max-time", "300", source["url"],
-             "--output", temporary], cache, os.environ.copy())
-        if temporary.stat().st_size != source["archiveBytes"] or digest(temporary) != source["sha256"]:
-            temporary.unlink()
-            raise RuntimeError("Downloaded source did not match the source lock: " + source["name"])
-        temporary.replace(path)
+        # Use trusted HTTPS sources only. A retry or fallback never bypasses the pinned hash.
+        failures = []
+        for url in source_urls(source):
+            temporary.unlink(missing_ok=True)
+            try:
+                run(["curl", "--fail", "--location", "--proto", "=https", "--proto-redir", "=https", "--tlsv1.2",
+                     "--retry", "1", "--retry-delay", "2", "--retry-all-errors",
+                     "--connect-timeout", "10", "--max-time", "75",
+                     "--speed-limit", "1024", "--speed-time", "20",
+                     "--silent", "--show-error", url, "--output", temporary], cache, os.environ.copy())
+                if (temporary.stat().st_size != source["archiveBytes"] or digest(temporary) != source["sha256"]:
+                    raise RuntimeError("Archive differs from reviewed source lock")
+                temporary.replace(path)
+                break
+            except (subprocess.CalledProcessError, OSError, RuntimeError) as failure:
+                failures.append(type(failure).__name__)
+                temporary.unlink(missing_ok=True)
+        else:
+            raise RuntimeError("All verified source download endpoints failed for "
+                               + source["name"] + ": " + ", ".join(failures))
     if path.stat().st_size != source["archiveBytes"] or digest(path) != source["sha256"]:
         raise RuntimeError("Source cache failed integrity verification: " + str(path))
     return path
