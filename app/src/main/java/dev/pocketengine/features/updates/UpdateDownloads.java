@@ -17,6 +17,7 @@ import okhttp3.Response;
 final class UpdateDownloads {
     interface Progress { void update(long bytes, long total); }
     private final Call.Factory client;
+    private final Object callLock = new Object();
     private volatile Call active;
     private volatile boolean cancelled;
 
@@ -25,13 +26,25 @@ final class UpdateDownloads {
                 .connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).callTimeout(30, TimeUnit.MINUTES).build());
     }
     UpdateDownloads(Call.Factory client) { this.client = client; }
-    void cancel() { cancelled = true; Call call = active; if (call != null) call.cancel(); }
+    void cancel() {
+        Call call;
+        synchronized (callLock) { cancelled = true; call = active; }
+        if (call != null) call.cancel();
+    }
+    private Call register(Call call) {
+        synchronized (callLock) {
+            if (!cancelled && !Thread.currentThread().isInterrupted()) {
+                active = call;
+                return call;
+            }
+        }
+        call.cancel();
+        throw new java.util.concurrent.CancellationException("下载已暂停，可稍后继续");
+    }
     void check() { if (cancelled || Thread.currentThread().isInterrupted()) throw new java.util.concurrent.CancellationException("下载已暂停，可稍后继续"); }
 
     byte[] manifest(String url) throws Exception {
-        Request request = new Request.Builder().url(UpdateManifest.https(url)).header("Accept-Encoding", "identity").build();
-        active = client.newCall(request);
-        try (Response response = active.execute()) {
+        try (Response response = executePublic(url, 0)) {
             if (response.code() != 200 || response.body() == null) throw new IOException("无法读取私有更新服务，请稍后重试");
             ByteArrayOutputStream output = new ByteArrayOutputStream();
             byte[] buffer = new byte[8192];
@@ -61,10 +74,7 @@ final class UpdateDownloads {
         if (partial.length() > artifact.bytes && !partial.delete()) throw new IOException("无法重置未完成下载");
         long offset = partial.length();
         if (offset < artifact.bytes) {
-            Request.Builder builder = new Request.Builder().url(UpdateManifest.https(artifact.url)).header("Accept-Encoding", "identity");
-            if (offset > 0) builder.header("Range", "bytes=" + offset + "-");
-            active = client.newCall(builder.build());
-            try (Response response = active.execute()) {
+            try (Response response = executePublic(artifact.url, offset)) {
                 if (response.body() == null) throw new IOException("更新服务未返回文件");
                 if (response.code() == 206) {
                     String expected = "bytes " + offset + "-" + (artifact.bytes - 1) + "/" + artifact.bytes;
@@ -92,6 +102,27 @@ final class UpdateDownloads {
         }
         if (!partial.renameTo(complete)) throw new IOException("更新包保存失败，请重试");
         return complete;
+    }
+
+    private Response executePublic(String initial, long offset) throws Exception {
+        String url = UpdateDownloadUrls.initial(initial);
+        java.util.Set<String> visited = new java.util.HashSet<>();
+        visited.add(url);
+        for (int redirects = 0; ; redirects++) {
+            check();
+            // Construct every hop afresh: never forward Authorization, Cookie or Referer.
+            Request.Builder request = new Request.Builder().url(url).header("Accept-Encoding", "identity");
+            if (offset > 0) request.header("Range", "bytes=" + offset + "-");
+            Call call = register(client.newCall(request.build()));
+            Response response = call.execute();
+            int code = response.code();
+            if (code != 301 && code != 302 && code != 303 && code != 307 && code != 308) return response;
+            try {
+                url = UpdateDownloadUrls.redirect(url, response.header("Location"), redirects, visited);
+            } finally {
+                response.close();
+            }
+        }
     }
 
     static String sha256(File file) throws Exception {
