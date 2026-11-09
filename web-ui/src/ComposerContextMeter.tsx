@@ -21,6 +21,7 @@ export function ComposerContextMeter({ composerKey, draftText = '', attachmentCo
       </svg>
       <span className="pw-context-meter-caption">{metric.available ? '上次' : ''}</span>
       <span>{metric.available ? `≈${contextPercentLabel(metric.windowPercent)}` : '未测得'}</span>
+      <span className="pw-context-meter-draft" title={draft.reason}>{draft.tokens === null ? '草稿待核对' : `草稿≈${draft.tokens.toLocaleString('zh-CN')}`}</span>
     </button>
     <SettingsDialog isOpen={open} onClose={() => setOpen(false)} title="上下文占用">
       <section className="pw-context-meter-detail" aria-label="原请求上下文检查">
