@@ -791,6 +791,9 @@ public final class AgentRunner {
                             }
                             finalRequestMessages=projection.plan().messages();
                             emit(taskId,"model_recovery","running","接口报告上下文超限；已用原任务整理器保留原件整理一次，仅再请求一次。",null,projection.diagnostics(),config,sink);
+                            // Usage views consume context_budget, not recovery events. Publish
+                            // the replacement request's check instead of leaving the rejected one current.
+                            emit(taskId,"context_budget","running","已重新核对整理后请求的上下文安全上限。",null,projection.diagnostics(),config,sink);
                             continue;
                         }
                         long delay=contextRecoveryUsed?-1:modelRecovery.delay(failed,turnRetries,System.currentTimeMillis());
