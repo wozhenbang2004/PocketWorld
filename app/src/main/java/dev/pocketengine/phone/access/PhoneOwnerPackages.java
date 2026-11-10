@@ -7,10 +7,16 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 /** A text-free native ownership probe. Missing profile identity must not become the main profile. */
-public record PhoneOwnerPackages(Set<AppCopyKey> owners,boolean known) {
-    public PhoneOwnerPackages {owners=java.util.Collections.unmodifiableSet(new LinkedHashSet<>(owners));}
+public record PhoneOwnerPackages(Set<AppCopyKey> owners,boolean windowsKnown,Set<String> unresolvedPackages) {
+    public PhoneOwnerPackages {
+        owners=java.util.Collections.unmodifiableSet(new LinkedHashSet<>(owners));
+        unresolvedPackages=java.util.Collections.unmodifiableSet(new LinkedHashSet<>(unresolvedPackages));
+    }
+    public PhoneOwnerPackages(Set<AppCopyKey> owners,boolean known){this(owners,known,Set.of());}
+    /** Full native profile identity is still required for clipboard and copy verification. */
+    public boolean known(){return windowsKnown&&unresolvedPackages.isEmpty();}
     /** Seeing the requested profile beside another copy is not proof of one unambiguous landing. */
-    public boolean provesCopy(AppCopyKey requested){if(!known||!owners.contains(requested))return false;for(AppCopyKey actual:owners)if(actual.packageName().equals(requested.packageName())&&!actual.equals(requested))return false;return true;}
+    public boolean provesCopy(AppCopyKey requested){if(!known()||!owners.contains(requested))return false;for(AppCopyKey actual:owners)if(actual.packageName().equals(requested.packageName())&&!actual.equals(requested))return false;return true;}
     @FunctionalInterface public interface Probe {PhoneOwnerPackages read(RunControl control)throws Exception;}
     /** The helper has no resumed owner on a new display, so its top-level status can be unknown. */
     public static boolean provesEmptyOwnedDisplay(JSONObject actual,int display) {

@@ -30,11 +30,17 @@ public final class PhoneAccessBindings {
         if(!policy.available())throw new SecurityException("app_policy_unavailable");
         if(policy.rules().isEmpty())return;
         PhoneOwnerPackages actual=primaryOwners(display,original);
-        policy.require(actual.owners(),actual.known(),PhoneAccessPolicy.Use.OWNER_SHARE);
+        policy.require(actual,PhoneAccessPolicy.Use.OWNER_SHARE);
     }
     public static PhoneOwnerPackages primaryOwners(DisplayModule display,RunControl original)throws Exception {
-        if(display==null)throw new SecurityException("phone_owner_identity_unavailable");
-        PhoneOwnerPackages identities=PhoneOwnerPackages.fromOwnership(display.primaryOwnership(original,original.isPaused()),"primary");
+        original.check();PhoneOwnerPackages identities=new PhoneOwnerPackages(java.util.Set.of(),false);
+        // Main-screen accessibility does not itself require a shell helper. Without
+        // native profile metadata, preserve the actual window package names and let
+        // policy reject only packages whose restricted copies cannot be distinguished.
+        if(display!=null&&display.isConnected())try{
+            identities=PhoneOwnerPackages.fromOwnership(display.primaryOwnership(original,original.isPaused()),"primary");
+        }catch(InterruptedException stopped){throw stopped;}
+        catch(Exception unavailable){original.check();}
         return PhoneWindowPackages.read(PhoneAccessibilityService.get(),Display.DEFAULT_DISPLAY,identities,original::check);
     }
 }

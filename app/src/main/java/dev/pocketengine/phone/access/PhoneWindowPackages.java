@@ -23,7 +23,7 @@ public final class PhoneWindowPackages {
         return read(service,display,identities,originalReadCheck,empty);
     }
     private static PhoneOwnerPackages read(PhoneAccessibilityService service,int display,PhoneOwnerPackages identities,AccessibilityForest.Check originalReadCheck,boolean emptyOwnedDisplay)throws Exception {
-        originalReadCheck.check();if(service==null||service!=PhoneAccessibilityService.get()||service.observationSafetyFailure()!=null||!identities.known())return new PhoneOwnerPackages(Set.of(),false);
+        originalReadCheck.check();if(service==null||service!=PhoneAccessibilityService.get()||service.observationSafetyFailure()!=null)return new PhoneOwnerPackages(Set.of(),false);
         SparseArray<List<AccessibilityWindowInfo>> all=service.getWindowsOnAllDisplays();Set<String> packages=new LinkedHashSet<>();boolean complete=true;
         if(all==null)return new PhoneOwnerPackages(Set.of(),false);
         try{
@@ -45,10 +45,13 @@ public final class PhoneWindowPackages {
     public static boolean ignoreControlOverlay(int windowType,String reportedPackage,String ownPackage){
         return windowType==AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY&&ownPackage!=null&&!ownPackage.isEmpty()&&ownPackage.equals(reportedPackage);
     }
-    /** Every observed package must be covered by actual native user identities; ambiguity checks all candidates. */
+    /** Preserve unmatched packages rather than guessing a profile or ignoring system/IME windows. */
     public static PhoneOwnerPackages match(Set<String> observed,boolean allRootsKnown,PhoneOwnerPackages identities){
-        Set<AppCopyKey> owners=new LinkedHashSet<>();boolean known=allRootsKnown&&identities.known()&&!observed.isEmpty();
-        for(String pkg:observed){boolean found=false;for(AppCopyKey key:identities.owners())if(key.packageName().equals(pkg)){owners.add(key);found=true;}if(!found)known=false;}
-        return new PhoneOwnerPackages(owners,known);
+        Set<AppCopyKey> owners=new LinkedHashSet<>();Set<String> unresolved=new LinkedHashSet<>();
+        for(String pkg:observed){boolean found=false;
+            if(identities.known())for(AppCopyKey key:identities.owners())if(key.packageName().equals(pkg)){owners.add(key);found=true;}
+            if(!found)unresolved.add(pkg);
+        }
+        return new PhoneOwnerPackages(owners,allRootsKnown&&!observed.isEmpty(),unresolved);
     }
 }

@@ -143,6 +143,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                         val next = JSONArray(snapshot.optJSONArray("teams").objects().filter { it.optString("id") != id })
                         if (command == "save") next.put(JSONObject(result.toString()))
                         snapshot.put("teams", next)
+                        if (command == "save") receipt.put("reading", view("definition", result))
                     }
                     if (command == "answerAssignment") {
                         controller.requestFeatureReceipt("teams", "get", JSONObject().put("runId", input.getString("runId"))) { current, readError ->

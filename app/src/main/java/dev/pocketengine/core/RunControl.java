@@ -47,6 +47,7 @@ public final class RunControl {
     private final CopyOnWriteArrayList<ModelRequest> modelRequests = new CopyOnWriteArrayList<>();
     private volatile AuthorityCheck authorityCheck;
     private final CopyOnWriteArrayList<AuthorityCheck> retainedAuthorityChecks=new CopyOnWriteArrayList<>();
+    private final CopyOnWriteArrayList<AuthorityCheck> retainedDispatchChecks=new CopyOnWriteArrayList<>();
     private volatile String boundTask;
     private volatile HostRun hostRun;
     // Native frozen request only. No setting here can enlarge a grant, budget or host limit.
@@ -60,6 +61,9 @@ public final class RunControl {
     public void setAuthorityCheck(AuthorityCheck check){authorityCheck=java.util.Objects.requireNonNull(check);}
     /** Native invocation scope adds live authority without replacing the original source's check. */
     public AutoCloseable retainAuthorityCheck(AuthorityCheck check){AuthorityCheck retained=java.util.Objects.requireNonNull(check);retainedAuthorityChecks.add(retained);return ()->retainedAuthorityChecks.remove(retained);}
+    /** Invocation-scoped native gate. Expensive resource probes belong at dispatch,
+     * not in every cancellation checkpoint of a bounded screen traversal. */
+    public AutoCloseable retainDispatchCheck(AuthorityCheck check){AuthorityCheck retained=java.util.Objects.requireNonNull(check);retainedDispatchChecks.add(retained);return ()->retainedDispatchChecks.remove(retained);}
     public void bindTask(String id){
         requireExecution();
         if(id==null||id.isEmpty())throw new IllegalArgumentException("Task identity required");
@@ -250,6 +254,7 @@ public final class RunControl {
         // Authority may acquire TaskStore locks or invoke pause. Never call it while
         // holding this monitor: cancellation also signals the monitor after callbacks.
         check();
+        for(AuthorityCheck retained:retainedDispatchChecks)retained.check();
         synchronized(monitor) {
             if(cancelled.get()||Thread.currentThread().isInterrupted())throw new InterruptedException("Run stopped");
             if(paused!=ownerEntry||pauseRevision.get()!=expectedPauseRevision)throw new SecurityException("执行暂停状态已变化，旧派发决定失效");

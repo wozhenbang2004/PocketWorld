@@ -21,14 +21,22 @@ public final class GuardedPhonePort implements PhonePort,NativeOcrTapPort,Native
     @FunctionalInterface private interface Body {JSONObject run(NativePhoneEntry.Admission live)throws Exception;}
     private JSONObject guarded(RunControl control,boolean needsReference,boolean effecting,Set<AppCopyKey> target,Body body)throws Exception {
         PhoneAccessPolicy.State captured=policy.current();long revision=captured.revision();
-        NativePhoneEntry.Admission gate=()->{
+        NativePhoneEntry.Admission revisionGate=()->{
             PhoneAccessPolicy.State current=policy.current();if(current.revision()!=revision){clearReferences();throw new PhoneAccessPolicy.Denied("app_policy_changed");}
+            if(!current.available())throw new PhoneAccessPolicy.Denied("app_policy_unavailable");
             if(needsReference&&(referenceRevision!=revision||referenceControl!=control))throw new PhoneAccessPolicy.Denied("app_policy_reference_expired");
+        };
+        NativePhoneEntry.Admission gate=()->{
+            revisionGate.check();PhoneAccessPolicy.State current=policy.current();
             if(target!=null)current.require(target,true,PhoneAccessPolicy.Use.AUTOMATION);
-            else {if(Boolean.TRUE.equals(probing.get()))return;probing.set(true);try{PhoneOwnerPackages actual=owners.read(control);current.require(actual.owners(),actual.known(),PhoneAccessPolicy.Use.AUTOMATION);}finally{probing.remove();}}
+            else {if(Boolean.TRUE.equals(probing.get()))return;probing.set(true);try{PhoneOwnerPackages actual=owners.read(control);current.require(actual,PhoneAccessPolicy.Use.AUTOMATION);}finally{probing.remove();}}
+            revisionGate.check();
         };
         boolean entered=false;
-        try{gate.check();try(AutoCloseable retained=control.retainAuthorityCheck(gate::check)){
+        // Probe all windows before/after content reads and at the real native entry.
+        // Per-node cancellation checks retain only the cheap policy/reference fence.
+        try{gate.check();try(AutoCloseable retained=control.retainAuthorityCheck(revisionGate::check);
+                AutoCloseable dispatch=control.retainDispatchCheck(gate::check)){
             entered=true;JSONObject result=body.run(gate);gate.check();if(result!=null)result.put("appPolicyRevision",revision);return result;
         }}catch(PhoneAccessPolicy.Denied denied){clearReferences();return new JSONObject().put("ok",false).put("accepted",entered&&effecting?JSONObject.NULL:false).put("error",denied.code).put("requiresUser",true).put("requiresReconciliation",entered&&effecting).put("automaticFallback",false);}
     }
@@ -52,7 +60,7 @@ public final class GuardedPhonePort implements PhonePort,NativeOcrTapPort,Native
         return guarded(control,true,true,null,live->((NativeTreeScrollPort)inner).scrollNode(arguments,control,()->{live.check();admission.check();}));
     }
     @Override public PhoneUiSignals uiSignals(RunControl control)throws Exception {
-        PhoneAccessPolicy.State state=policy.current();PhoneOwnerPackages actual=owners.read(control);state.require(actual.owners(),actual.known(),PhoneAccessPolicy.Use.AUTOMATION);
+        PhoneAccessPolicy.State state=policy.current();PhoneOwnerPackages actual=owners.read(control);state.require(actual,PhoneAccessPolicy.Use.AUTOMATION);
         PhoneUiSignals signals=inner instanceof NativePhoneSignals?((NativePhoneSignals)inner).uiSignals(control):null;
         control.check();if(state.revision()!=policy.current().revision()||!referencePolicyCurrent())throw new PhoneAccessPolicy.Denied("app_policy_changed");return signals;
     }
@@ -63,5 +71,5 @@ public final class GuardedPhonePort implements PhonePort,NativeOcrTapPort,Native
         return guarded(control,!listing&&!launch,!listing,target,live->((NativePhoneExtensions)inner).extension(tool,arguments,control,()->{live.check();if(admission!=null)admission.check();}));
     }
     /** Explicit owner capture is separate from automation permission; the same no-content probe is reused. */
-    public void requireOwnerShare(RunControl control)throws Exception {PhoneOwnerPackages actual=owners.read(control);policy.current().require(actual.owners(),actual.known(),PhoneAccessPolicy.Use.OWNER_SHARE);}
+    public void requireOwnerShare(RunControl control)throws Exception {PhoneOwnerPackages actual=owners.read(control);policy.current().require(actual,PhoneAccessPolicy.Use.OWNER_SHARE);}
 }

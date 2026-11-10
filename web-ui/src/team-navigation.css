@@ -1,0 +1,52 @@
+/* Teams have one directory, with saved rosters separate from individual runs.
+ * Reuse the product's controls and Paper / Graphite tokens on every width. */
+.pw-team-directory-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  margin: 12px 0 20px;
+}
+.pw-team-directory-heading > div:first-child { min-width: 0; flex: 1 1 220px; }
+.pw-team-directory-heading h2 { margin: 0; font-size: 22px; line-height: 1.4; font-weight: 600; }
+.pw-team-directory-heading p { margin: 6px 0 0; color: var(--pw-copy); font-size: 14px; line-height: 1.7; }
+.pw-team-workspace .pw-team-tabs > .pw-object-toolbar { margin-bottom: 20px; }
+.pw-team-location {
+  display: flex;
+  align-items: center;
+  gap: 8px 16px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.pw-team-location > span { min-width: 0; color: var(--pw-copy); font-size: 13px; overflow-wrap: anywhere; }
+.pw-team-location > button { padding-inline: 0; }
+.pw-team-workspace .pw-team-empty {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+  padding: 28px 0;
+  border-top: 1px solid var(--pw-edge);
+}
+.pw-team-empty h3 { margin: 0; font-size: 18px; font-weight: 600; }
+.pw-team-empty p { max-width: 48ch; margin: 0; color: var(--pw-copy); font-size: 15px; line-height: 1.7; }
+.pw-team-empty > button { margin-top: 6px; }
+.pw-team-workspace .pw-object-row-copy > .pw-team-roster-preview { color: var(--pw-muted); }
+.pw-team-section-links { display: flex; flex-wrap: wrap; gap: 4px 8px; padding-bottom: 12px; border-bottom: 1px solid var(--pw-edge); }
+.pw-team-section-links > button { min-width: 0; }
+.pw-team-workspace [data-team-section] { min-width: 0; scroll-margin-block: 16px; }
+.pw-team-workspace [data-team-section]:focus-visible { outline: 2px solid var(--pw-focus); outline-offset: 6px; border-radius: 4px; }
+.pw-team-editor-footer { display: grid; gap: 8px; }
+.pw-team-editor-footer .pw-form-actions { justify-content: flex-end; margin: 0; }
+.pw-team-editor-footer .pw-secondary-error { margin: 0; font-size: 14px; line-height: 1.5; }
+.pw-team-editor-missing { display: grid; justify-items: start; gap: 2px; min-width: 0; }
+.pw-team-editor-missing > span { font-size: 13px; color: var(--pw-copy); }
+.pw-team-editor-missing > button { height: auto; max-width: 100%; padding-inline: 0; white-space: normal; text-align: start; overflow-wrap: anywhere; }
+.pw-team-editor-missing > button > span { min-width: 0; flex-shrink: 1; }
+.pw-team-editor-member { scroll-margin-block: 16px; }
+@media (max-width: 560px) {
+  .pw-team-directory-heading { margin-top: 8px; }
+  .pw-team-directory-heading .pw-team-directory-actions { width: 100%; justify-content: space-between; }
+  .pw-team-workspace .pw-team-tabs > .pw-object-toolbar { align-items: stretch; }
+  .pw-team-section-links > button { flex: 1 1 calc(50% - 8px); }
+}

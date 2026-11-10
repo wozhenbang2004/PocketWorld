@@ -14,6 +14,15 @@ public interface PhoneAccessPolicy {
             if(!identityKnown)throw new Denied("app_owner_unknown");
             for(AppCopyKey key:owners){Rule rule=rules.get(key);if(rule!=null&&!(use==Use.AUTOMATION?rule.automation():rule.ownerShare()))throw new Denied("app_access_denied");}
         }
+        public void require(PhoneOwnerPackages actual,Use use) {
+            require(actual.owners(),actual.windowsKnown(),use);
+            // Rules narrow the default permission. An unmatched status-bar/IME
+            // package needs no invented user ID when all of its copies are allowed.
+            // If any copy is restricted, an unknown profile cannot bypass that rule.
+            for(String pkg:actual.unresolvedPackages())for(var entry:rules.entrySet())
+                if(pkg.equals(entry.getKey().packageName())&&!(use==Use.AUTOMATION?entry.getValue().automation():entry.getValue().ownerShare()))
+                    throw new Denied("app_owner_unknown");
+        }
     }
     State current();
     final class Denied extends SecurityException {public final String code;public Denied(String code){super(code);this.code=code;}}
