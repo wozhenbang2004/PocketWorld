@@ -4,6 +4,7 @@ import { Button, SelectField, SettingsDialog, TextField } from './forms-library'
 import { bridge } from './bridge';
 import { registerOverlayBack } from './overlay-back';
 import { RemoteActionReview } from './RemoteTaskArtifacts';
+import { projectLiveBounds, type PreviewRect } from './project-live-preview';
 import { holdRemoteReads, remoteObject as object, remoteRows as rows, remotePreviewIsVisible, type RemoteData as Data } from './remote-task-workspace';
 
 const ownerWindow = () => { const view = object(bridge.getState().view); return [bridge.getDocumentEpoch(), view.taskId, view.section, view.resumeRevision].join('|'); };
@@ -40,9 +41,15 @@ export function RemoteTaskPreview({ taskId, enabled }: { taskId: string; enabled
     if (!view?.mounted) return;
     const pageHandle = view.pageHandle, owner = ownerWindow(); let frame = 0, disposed = false, last = '';
     const send = (visible: boolean) => {
-      if (ownerWindow() !== owner) return; const node = viewport.current, rect = node?.getBoundingClientRect();
-      const args = { pageHandle, visible: visible && !!rect && remotePreviewIsVisible(node, document),
-        rect: { x: rect?.x || 0, y: rect?.y || 0, width: Math.max(0, rect?.width || 0), height: Math.max(0, rect?.height || 0) }, viewportWidth: Math.max(1, window.innerWidth), viewportHeight: Math.max(1, window.innerHeight) };
+      if (ownerWindow() !== owner) return; const node = viewport.current, rect = node?.getBoundingClientRect(), clips: PreviewRect[] = [];
+      if (node) for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+        const style = getComputedStyle(parent); if (/(auto|scroll|hidden|clip)/.test(`${style.overflowX} ${style.overflowY}`)) {
+          const clip = parent.getBoundingClientRect(); clips.push({ x: clip.x, y: clip.y, width: clip.width, height: clip.height });
+        }
+      }
+      const bounds = projectLiveBounds(rect ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : { x: 0, y: 0, width: 0, height: 0 }, window.innerWidth, window.innerHeight, clips, visible && !!node);
+      if (bounds.visible && !remotePreviewIsVisible(node, document, bounds.rect)) bounds.visible = false;
+      const args = { pageHandle, ...bounds, viewportWidth: Math.max(1, window.innerWidth), viewportHeight: Math.max(1, window.innerHeight) };
       const encoded = JSON.stringify(args); if (last === encoded) return; last = encoded;
       void bridge.command('remotePreview.viewport', args).catch(() => {});
     };

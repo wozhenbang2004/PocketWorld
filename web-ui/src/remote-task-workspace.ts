@@ -1,3 +1,5 @@
+import type { PreviewRect } from './project-live-preview';
+
 export type RemoteData = Record<string, any>;
 export type RemoteEditor = { id: string; revision: number; mode: string; text: string; scope: RemoteData | null };
 export const remoteObject = (value: unknown): RemoteData => value != null && typeof value === 'object' && !Array.isArray(value) ? value as RemoteData : {};
@@ -7,7 +9,7 @@ let readHolds = 0;
 export function holdRemoteReads(): () => void { readHolds++; let released = false; return () => { if (!released) { released = true; readHolds--; } }; }
 export const remoteReadsPaused = () => readHolds > 0;
 /** An Android preview must disappear when its placeholder is covered or its own dialog retires. */
-export function remotePreviewIsVisible(node: HTMLElement | null, page: Document): boolean {
+export function remotePreviewIsVisible(node: HTMLElement | null, page: Document, visibleRect?: PreviewRect): boolean {
   if (!node?.isConnected || page.hidden || node.closest('[hidden],[inert],[aria-hidden="true"]')) return false;
   const host = page.defaultView;
   if (!host) return false;
@@ -21,7 +23,8 @@ export function remotePreviewIsVisible(node: HTMLElement | null, page: Document)
   });
   const ownDialog = node.closest('[role="dialog"][aria-modal="true"]');
   if (dialogs.length && dialogs.at(-1) !== ownDialog) return false;
-  const rect = node.getBoundingClientRect(), left = Math.max(0, rect.left), top = Math.max(0, rect.top), right = Math.min(host.innerWidth, rect.right), bottom = Math.min(host.innerHeight, rect.bottom);
+  // Hit-test the portion still inside the dialog's scroll viewport, not its hidden center.
+  const rect = visibleRect || node.getBoundingClientRect(), left = Math.max(0, rect.x), top = Math.max(0, rect.y), right = Math.min(host.innerWidth, rect.x + rect.width), bottom = Math.min(host.innerHeight, rect.y + rect.height);
   if (right <= left || bottom <= top) return false;
   const hit = page.elementFromPoint((left + right) / 2, (top + bottom) / 2);
   return !!hit && (hit === node || node.contains(hit));
