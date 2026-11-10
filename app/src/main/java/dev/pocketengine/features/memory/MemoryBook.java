@@ -1587,14 +1587,60 @@ public final class MemoryBook {
         if(old.optBoolean("core",false)==core)return copy(old);
         if(core)checkCoreCapacity(s);
         JSONObject value=copy(old).put("core",core).put("revision",Math.addExact((long)revision,1)).put("updatedAt",now);
+        Map<String,JSONObject> beforeRecords=new LinkedHashMap<>(records);
         Map<String,JSONObject> beforeCandidates=new LinkedHashMap<>(learningCandidates);
         Map<String,JSONObject> beforeBarriers=new LinkedHashMap<>(recordForgetBarriers);
-        String sourceKey=recordSourceKey(s,id);JSONObject barrier=recordForgetBarriers.get(sourceKey);
-        // Selecting core changes metadata, not owner consent to reuse forgotten evidence.
-        if(barrier!=null&&barrier.getLong("forgottenThrough")>=old.getLong("revision"))recordForgetBarriers.put(sourceKey,copy(barrier).put("forgottenThrough",value.getLong("revision")));
-        records.put(id,value);invalidateLearningCandidates(now);
-        try{persist();}catch(Exception error){records.put(id,old);learningCandidates.clear();learningCandidates.putAll(beforeCandidates);recordForgetBarriers.clear();recordForgetBarriers.putAll(beforeBarriers);throw error;}
+        try{
+            records.put(id,value);
+            Set<String> changed=retainIdentityDependenciesAfterCoreSelection(beforeRecords,id);
+            // Neither selection nor the matching dependency rewrite renews forgotten evidence.
+            for(String changedId:changed){
+                JSONObject previous=beforeRecords.get(changedId),current=records.get(changedId);
+                String sourceKey=recordSourceKey(Scope.stored(previous),changedId);JSONObject barrier=recordForgetBarriers.get(sourceKey);
+                if(barrier!=null&&barrier.getLong("forgottenThrough")>=previous.getLong("revision"))
+                    recordForgetBarriers.put(sourceKey,copy(barrier).put("forgottenThrough",current.getLong("revision")));
+            }
+            invalidateLearningCandidates(now);persist();
+        }catch(Exception error){
+            records.clear();records.putAll(beforeRecords);learningCandidates.clear();learningCandidates.putAll(beforeCandidates);
+            recordForgetBarriers.clear();recordForgetBarriers.putAll(beforeBarriers);throw error;
+        }
         return copy(value);
+    }
+
+    /** A core toggle leaves identity meaning unchanged. Carry only exact same-scope pins across
+     * that metadata change; stale pins, ordinary provenance and content edits retain their rules. */
+    private Set<String> retainIdentityDependenciesAfterCoreSelection(Map<String,JSONObject> before,String root)throws Exception {
+        Set<String> changed=new LinkedHashSet<>();changed.add(root);boolean found;
+        do{
+            found=false;
+            for(JSONObject row:before.values()){
+                String id=row.getString("id");if(changed.contains(id)||!row.has("identityParentIds"))continue;
+                Set<String> identities=checkedIdentityParents(row,false);JSONArray refs=row.getJSONArray("parentRevisions");
+                for(int i=0;i<refs.length();i++){
+                    JSONObject ref=refs.getJSONObject(i);String parentId=ref.getString("id");JSONObject parent=before.get(parentId);
+                    if(identities.contains(parentId)&&changed.contains(parentId)&&parent!=null&&Scope.stored(row).matches(parent)
+                            &&ref.getLong("revision")==parent.getLong("revision")){
+                        changed.add(id);found=true;break;
+                    }
+                }
+            }
+        }while(found);
+        // Each descendant gets one new version even when several identity paths converge.
+        for(String id:changed){
+            if(id.equals(root))continue;
+            JSONObject previous=before.get(id),next=copy(previous);Set<String> identities=checkedIdentityParents(previous,false);
+            JSONArray refs=next.getJSONArray("parentRevisions");
+            for(int i=0;i<refs.length();i++){
+                JSONObject ref=refs.getJSONObject(i);String parentId=ref.getString("id");JSONObject parent=before.get(parentId);
+                if(identities.contains(parentId)&&changed.contains(parentId)&&parent!=null&&Scope.stored(previous).matches(parent)
+                        &&ref.getLong("revision")==parent.getLong("revision"))
+                    ref.put("revision",Math.addExact(parent.getLong("revision"),1));
+            }
+            // Keep fact timestamps and every source/authority field; only the exact pin changed.
+            next.put("revision",Math.addExact(previous.getLong("revision"),1));records.put(id,next);
+        }
+        return changed;
     }
 
     /**
