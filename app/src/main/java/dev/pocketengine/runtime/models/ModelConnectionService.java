@@ -451,7 +451,8 @@ public final class ModelConnectionService {
             Set<String> allowed=switch(config.provider){
                 case "openai_chat","openai_responses" -> Set.of("none","minimal","low","medium","high","xhigh","max");
                 case "anthropic" -> Set.of("low","medium","high","xhigh","max");
-                case "gemini" -> Set.of("minimal","low","medium","high");
+                case "gemini" -> ModelReasoningProfiles.usesTokenBudget(model)
+                        ? Set.of("low","medium","high") : Set.of("minimal","low","medium","high");
                 default -> throw new IllegalArgumentException("此模型协议尚未接入可声明的推理强度");
             };
             ModelCatalog.ModelKey key=new ModelCatalog.ModelKey(expected,ModelBinding.modelId(model));

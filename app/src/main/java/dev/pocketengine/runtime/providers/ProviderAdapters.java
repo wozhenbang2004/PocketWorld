@@ -40,7 +40,7 @@ public final class ProviderAdapters {
             case GEMINI_BUDGET:
                 JSONObject generation = wire.getJSONObject("generationConfig");
                 generation.put("thinkingConfig", options.mode() == ReasoningOptions.Mode.GEMINI_LEVEL
-                        ? new JSONObject().put("thinkingLevel", options.level())
+                        ? new JSONObject().put("thinkingLevel", options.level().toUpperCase(java.util.Locale.ROOT))
                         : new JSONObject().put("thinkingBudget", options.budgetTokens()));
                 break;
         }

@@ -178,6 +178,9 @@ public final class ModelCatalog {
         ModelFacts facts = snapshot == null ? null : snapshot.models().get(key.modelId());
         if (facts == null) facts = ModelFacts.unknown(key.binding());
         if (snapshot != null && !fresh) facts = facts.expired();
+        // Provider facts win when explicit; local family defaults fill only unknowns.
+        // Owner declarations are applied afterward and always take precedence.
+        facts = ModelReasoningProfiles.withFamilyDefaults(key.binding(), key.modelId(), facts);
         OwnerRecord owner = overrides.get(key);
         if (owner != null) facts = facts.withOverrides(owner.fields());
         Fact<Boolean> listed = snapshot == null ? Fact.unknown(Source.UNOBSERVED, key.binding().modelsEndpoint().toASCIIString(), 0, "not_observed")

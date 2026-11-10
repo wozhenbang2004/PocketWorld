@@ -15,7 +15,7 @@ import java.util.Objects;
 /** Capability metadata, not inference success or permission to send private data. */
 public final class ModelFacts {
     public enum Field { CONTEXT_WINDOW, OUTPUT_TOKENS, IMAGE_INPUT, TOOL_CALLS, REASONING, REASONING_LEVELS, CHAT_OUTPUT_PARAMETER }
-    public enum Source { PROVIDER_CATALOG, OWNER_OVERRIDE, UNOBSERVED }
+    public enum Source { PROVIDER_CATALOG, OWNER_OVERRIDE, BUILTIN_PROFILE, UNOBSERVED }
     public enum WindowKind { INPUT_AND_OUTPUT, INPUT_ONLY }
     public enum ChatOutputParameter { MAX_TOKENS, MAX_COMPLETION_TOKENS, NOT_APPLICABLE }
     public record TokenWindow(long tokens, WindowKind kind) {

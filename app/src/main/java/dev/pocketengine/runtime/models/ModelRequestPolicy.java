@@ -140,6 +140,8 @@ public final class ModelRequestPolicy {
             default -> false;
         };
         if (!matchingProtocol) throw new Rejected("reasoning_protocol_mismatch", "推理设置与所选原生协议不一致。");
+        if (options.mode() == ReasoningOptions.Mode.GEMINI_LEVEL && ModelReasoningProfiles.usesTokenBudget(config.model))
+            throw new Rejected("gemini25_requires_budget", "Gemini 2.5 使用 thinkingBudget，不接受 thinkingLevel；请重新选择推理强度。");
         if (!options.level().isEmpty() && (!facts.reasoningLevels().known || !facts.reasoningLevels().value.contains(options.level())))
             throw new Rejected("reasoning_level_unknown", "该精确模型没有声明此推理级别，请从已知级别中选择或保留服务默认。");
         if (options.mode() == ReasoningOptions.Mode.ANTHROPIC_BUDGET && options.budgetTokens() >= config.maxOutputTokens
