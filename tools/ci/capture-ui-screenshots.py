@@ -236,6 +236,18 @@ def find_target(tree, label):
     return None
 
 
+def wait_for_controls(*labels, timeout=20):
+    """Wait for actual accessible controls, including WebView's first tree refresh."""
+    deadline = time.monotonic() + timeout
+    tree = None
+    while time.monotonic() < deadline:
+        tree = layout()
+        if any(find_target(tree, label) for label in labels):
+            return tree
+        time.sleep(1)
+    return tree
+
+
 def tap(label, tree=None):
     point = find_target(tree if tree is not None else layout(), label)
     if point is None:
@@ -258,19 +270,25 @@ def screenshot(slug, title):
 
 
 def navigation():
-    tree = layout()
+    tree = wait_for_controls("关闭导航", "打开导航", "对话菜单", "工作区与导航",
+                             "暂时跳过准备", "以后再说")
     if find_target(tree, "关闭导航"):
         return tree
+    # Fresh installs start in the real onboarding page. Use its own skip action,
+    # never a preferences write or an edge swipe (Android interprets that as Back).
+    if find_target(tree, "以后再说") or find_target(tree, "暂时跳过准备"):
+        if tap("以后再说", tree) or tap("暂时跳过准备", tree):
+            tree = wait_for_controls("对话菜单", "打开导航", timeout=30)
     if tap("打开导航", tree):
-        return layout()
-    # The real mobile surface also supports its edge gesture. No DOM/bridge injection.
-    resumed = adb("shell", "dumpsys", "activity", "activities", check=False)
-    if any(PACKAGE in line and "ResumedActivity" in line for line in resumed.splitlines()):
-        adb("shell", "input", "swipe", "20", "900", "740", "900", "350")
-        REPORT["actions"].append({"gesture": "open navigation from left edge", "from": [20, 900], "to": [740, 900]})
-        time.sleep(1.5)
-        return layout()
-    return None
+        return wait_for_controls("关闭导航")
+    # The chat surface deliberately keeps navigation inside its overflow menu.
+    if tap("工作区与导航", tree):
+        return wait_for_controls("关闭导航")
+    if tap("对话菜单", tree):
+        tree = wait_for_controls("工作区与导航")
+    if tap("工作区与导航", tree):
+        return wait_for_controls("关闭导航")
+    return tree
 
 
 def capture_screens(apk):
@@ -287,32 +305,44 @@ def capture_screens(apk):
     (OUTPUT / "webview-provider.txt").write_text(adb("shell", "dumpsys", "webviewupdate", check=False))
     (OUTPUT / "install.txt").write_text(adb("install", "-t", str(apk), timeout=120))
     (OUTPUT / "launch.txt").write_text(adb("shell", "am", "start", "-W", "-n", PACKAGE + "/.ui.ComposeActivity", timeout=60))
-    ready = False
-    deadline = time.monotonic() + 90
-    while time.monotonic() < deadline:
-        logs = adb("logcat", "-d", "-s", "PocketWebUi:I", "*:S", timeout=15, check=False)
-        if "ready source=library-web" in logs:
-            ready = True
-            break
-        time.sleep(2)
-    REPORT["rendererReadySignalObserved"] = ready
+    # The installed renderer logs "host source=library-web", not "ready".
+    # Its log is diagnostic only; real UI controls determine when navigation can start.
+    initial = wait_for_controls("以后再说", "暂时跳过准备", "对话菜单", "打开导航", timeout=90)
+    logs = adb("logcat", "-d", "-s", "PocketWebUi:I", "*:S", timeout=15, check=False)
+    REPORT["rendererHostSignalObserved"] = "host source=library-web" in logs
+    REPORT["initialAccessibilityContentObserved"] = any(
+        find_target(initial, label) for label in ("以后再说", "暂时跳过准备", "对话菜单", "打开导航"))
     time.sleep(2)
-    screenshot("first-launch", "首次启动的实际界面")
-    if tap("暂时跳过准备"):
+    if tap("以后再说", initial) or tap("暂时跳过准备", initial):
+        wait_for_controls("对话菜单", "打开导航", timeout=30)
         screenshot("workroom", "从首次准备返回的对话界面")
+    else:
+        screenshot("first-launch", "首次启动的实际界面")
+    tree = wait_for_controls("对话菜单", "打开导航", timeout=10)
+    if tap("对话菜单", tree):
+        wait_for_controls("工作区与导航")
+        screenshot("chat-menu", "真实对话菜单")
     menu = navigation()
     if not find_target(menu, "关闭导航"):
         REPORT["unavailable"].append("导航未能打开；保留启动/阻塞界面，不注入状态绕过。")
         screenshot("navigation-unavailable", "尝试打开导航后的实际状态")
         return
     screenshot("navigation", "实际导航抽屉")
-    destinations = [("任务", "tasks"), ("成果", "projects"), ("记忆", "memory"),
-                    ("能力", "capabilities"), ("团队", "teams"), ("账号与模型", "models"), ("设置", "settings")]
+    destinations = [("任务", "tasks"), ("设备", "devices"), ("成果", "artifacts"),
+                    ("记忆", "memory"), ("能力", "capabilities"), ("团队", "teams"),
+                    ("项目", "projects"), ("自动化", "automation"),
+                    ("账号与模型", "models"), ("设置", "settings")]
     for label, slug in destinations:
         tree = navigation()
         if not find_target(tree, label) and tap("更多工作区", tree):
-            tree = layout()
+            tree = wait_for_controls(label, timeout=15)
         if tap(label, tree):
+            # Wait for the drawer to close instead of photographing its exit animation.
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                if not find_target(layout(), "关闭导航"):
+                    break
+                time.sleep(1)
             screenshot(slug, label + "入口打开后的实际界面")
         else:
             REPORT["unavailable"].append(label + "：当前新安装界面未找到可用入口。")
