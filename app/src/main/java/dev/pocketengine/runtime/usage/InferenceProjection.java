@@ -92,8 +92,9 @@ public final class InferenceProjection {
                         .put("reportedCalls",sum.known).put("unknownCalls",sum.unknown).put("partialCalls",sum.partial).put("overflow",sum.overflow));
             }
             String protocol=identity.optString("protocol");
+            boolean exclusiveCacheInput=protocol.equals("anthropic")||protocol.equals("bedrock_anthropic");
             return new JSONObject(identity.toString()).put("attempts",calls).put("counters",counts)
-                    .put("inputIncludesCacheRead",!protocol.equals("anthropic")).put("inputIncludesCacheWrite",!protocol.equals("anthropic"))
+                    .put("inputIncludesCacheRead",!exclusiveCacheInput).put("inputIncludesCacheWrite",!exclusiveCacheInput)
                     .put("outputIncludesReasoning",protocol.startsWith("openai_realtime")?JSONObject.NULL:!protocol.equals("gemini"));
         }
     }

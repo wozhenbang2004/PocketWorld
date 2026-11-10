@@ -169,7 +169,7 @@ public final class TaskAuditStore {
             Object status=original.opt("status");if(status instanceof String&&((String)status).length()<=80)receipt.put("status",status);
             JSONObject check=new JSONObject().put("format","pocketworld.context-budget-check.v1").put("taskId",id)
                     .put("runId",event.getString("runId")).put("epoch",event.getLong("epoch")).put("receipt",receipt);
-            copyContextNumber(event,check,"at");copyContextNumber(event,check,"timestamp");return check;
+            copyContextNumber(event,check,"seq");copyContextNumber(event,check,"at");copyContextNumber(event,check,"timestamp");return check;
         }
     }
     private static void copyContextNumber(JSONObject from,JSONObject to,String key)throws Exception{

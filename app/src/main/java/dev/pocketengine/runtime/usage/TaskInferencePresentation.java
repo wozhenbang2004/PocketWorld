@@ -113,8 +113,7 @@ public final class TaskInferencePresentation {
         return text;
     }
     private static Context context(JSONObject task,JSONArray events)throws Exception {
-        JSONObject latest=null,event=null;for(int i=events==null?-1:events.length()-1;i>=0;i--){JSONObject row=events.optJSONObject(i);
-            if(row!=null&&"context_budget".equals(row.optString("type"))&&task.optString("id").equals(row.optString("taskId"))&&row.optJSONObject("receipt")!=null){event=row;latest=row.getJSONObject("receipt");break;}}
+        JSONObject latest=null,event=null;
         JSONObject evidence=task.optJSONObject("evidence"),unavailable=evidence==null?null:evidence.optJSONObject("contextCompaction");
         JSONObject blocked=evidence==null?null:evidence.optJSONObject("contextBudget");List<String> lines=new ArrayList<>();
         // A final blocked result is newer than the last successfully sent request.
@@ -123,6 +122,30 @@ public final class TaskInferencePresentation {
             return new Context("上下文整理等待核对",immutable(lines),0,true);
         }
         if("awaiting_user".equals(task.optString("status"))&&blocked!=null)latest=blocked;
+        else if("awaiting_user".equals(task.optString("status"))&&"summary".equals(task.optString("taskProjection")))
+            return new Context("原请求等待核对",List.of("需读取原任务核对最新上下文状态，不使用旧请求检查代替。"),0,true);
+        else if(task.has("contextBudgetCheck")){
+            // Summary snapshots and bounded detail windows share the same native check.
+            // Explicitly unavailable projections must not fall back to an older event.
+            JSONObject check=task.optJSONObject("contextBudgetCheck");
+            if(check!=null&&"pocketworld.context-budget-check.v1".equals(check.optString("format"))&&sameContextRun(task,check)){
+                event=check;latest=check.optJSONObject("receipt");
+                Long sequence=nonnegative(check.opt("seq"));
+                if(latest!=null&&sequence!=null&&sequence>0)for(int i=events==null?-1:events.length()-1;i>=0;i--){
+                    JSONObject row=events.optJSONObject(i);
+                    if(row!=null&&"context_budget".equals(row.optString("type"))&&sameContextRun(task,row)
+                            &&sequence.equals(nonnegative(row.opt("seq")))&&row.optJSONObject("receipt")!=null){
+                        // Enrich only this exact event with its retained byte/summary details.
+                        event=row;latest=row.getJSONObject("receipt");break;
+                    }
+                }
+            }
+        }else for(int i=events==null?-1:events.length()-1;i>=0;i--){
+            JSONObject row=events.optJSONObject(i);
+            if(row==null||!"context_budget".equals(row.optString("type"))||!task.optString("id").equals(row.optString("taskId")))continue;
+            if(sameContextRun(task,row)){event=row;latest=row.optJSONObject("receipt");}
+            break;
+        }
         if(latest==null)return new Context("尚无保留的上下文检查记录",List.of("不从累计服务用量推断当前占窗，也不猜模型窗口。"),0,false);
         Long bytes=nonnegative(object(latest,"after").opt("canonicalUtf8Bytes")),limit=nonnegative(latest.opt("maxCanonicalBytes"));
         if(bytes!=null&&limit!=null)lines.add("本地请求序列化："+bytes+" / "+limit+" 字节。");
@@ -143,6 +166,11 @@ public final class TaskInferencePresentation {
         String status=latest.optString("status");boolean attention=!status.isEmpty()&&!"ready".equals(status);
         if(attention)lines.add("检查状态："+label(status,"未知")+"；不会在此继续执行或重试。");
         return new Context(attention?"上下文检查需处理":"最近一次请求的本地检查",immutable(lines),event==null||latest==blocked?0:positive(event.opt("at"),event.opt("timestamp")),attention);
+    }
+    private static boolean sameContextRun(JSONObject task,JSONObject check){
+        Long epoch=nonnegative(task.opt("coordinatorEpoch"));String run=task.optString("runId");
+        return !blank(run)&&task.optString("id").equals(check.optString("taskId"))&&run.equals(check.optString("runId"))
+                &&epoch!=null&&epoch>0&&epoch.equals(nonnegative(check.opt("epoch")));
     }
     private static JSONObject object(JSONObject value,String key){JSONObject result=value.optJSONObject(key);return result==null?new JSONObject():result;}
     private static Long nonnegative(Object value){try{if(!(value instanceof Number))return null;long number=new BigDecimal(value.toString()).longValueExact();return number<0?null:number;}catch(ArithmeticException|NumberFormatException invalid){return null;}}
