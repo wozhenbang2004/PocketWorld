@@ -21,12 +21,18 @@ export function MemoryDraftReview({ target, onClose }: { target: ConversationDra
   }, []);
   const request = async (name: string, args: Data, accept: (result: Data) => void) => {
     if (entered.current || busy) return; entered.current = true; setBusy(true); setError('');
-    try { const result = await bridge.command(name, args); if (alive.current) accept(result); }
+    try {
+      const result = await bridge.command(name, args);
+      if (alive.current) accept(result);
+      else if (name === 'memoryDraft.open' && result.handle) void bridge.command('memoryDraft.close', { handle: result.handle }).catch(() => {});
+    }
     catch (failure) { if (alive.current) setError(failure instanceof Error ? failure.message : String(failure)); }
     finally { entered.current = false; if (alive.current) setBusy(false); }
   };
   const review = value?.review, proposal = value?.proposal || review?.proposal || {}, apply = value?.apply || (value?.status ? value : {});
   const pending = apply.status === 'pending_owner' && !!review && !!handle.current && !attempted;
+  // Only a fresh query without a review can enable reopening after an uncertain attempt.
+  const canReopen = apply.status === 'pending_owner' && !review && !handle.current;
   const action = proposal.action || review?.action;
   const assertion = review?.after?.assertion || (action === 'forget' ? review?.before?.assertion : null);
   const assertionSubject = assertion?.subjectId === 'owner' ? '你' : assertion?.subjectLabel || '尚未明确';
@@ -52,7 +58,7 @@ export function MemoryDraftReview({ target, onClose }: { target: ConversationDra
           {source && <><h4>{source.title}</h4><pre className="pw-source-copy" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{source.text}</pre><p className="pw-muted">已显示原文 {source.offset}–{source.nextOffset} / {source.totalChars} 字符</p>{source.hasMore && <Button variant="ghost" disabled={busy || attempted} onClick={() => { void request('memoryDraft.source', { handle: handle.current, index: source.index, offset: source.nextOffset }, setSource); }}>继续读取原文</Button>}</>}
         </section>
 
-      </>}{(!pending || attempted || error) && <Button variant="ghost" disabled={busy} onClick={() => { void request('memoryDraft.query', original, result => { handle.current = ''; setValue(result); setSource(null); }); }}>查询原修改结果</Button>}
+      </>}{canReopen ? <Button variant="secondary" disabled={busy} onClick={() => { void request('memoryDraft.open', original, result => { handle.current = result.handle || ''; setValue(result); setSource(null); setAcknowledged(false); setAttempted(false); }); }}>重新打开审阅</Button> : (!pending || attempted || error) && <Button variant="ghost" disabled={busy} onClick={() => { void request('memoryDraft.query', original, result => { handle.current = ''; setValue(result); setSource(null); setAcknowledged(false); }); }}>查询原修改结果</Button>}
     </div>
         {pending && <section className="pw-memory-draft-confirmation"><CheckboxField isSelected={acknowledged} onChange={setAcknowledged}>我已核对正文、来源与以上影响</CheckboxField><div className="pw-action-row"><Button disabled={busy || !acknowledged} onClick={() => { const id = handle.current; setAttempted(true); void request('memoryDraft.confirm', { handle: id }, result => { handle.current = ''; setValue({ proposal, apply: result }); }); }}>确认{action === 'forget' ? '遗忘' : action === 'update' ? '纠正' : '保存'}</Button><Button variant="secondary" disabled={busy} onClick={() => { const id = handle.current; setAttempted(true); void request('memoryDraft.cancel', { handle: id }, result => { handle.current = ''; setValue(result); }); }}>放弃这个原提案</Button></div></section>}
     </Drawer.Content></Drawer.Portal></Drawer.Root>;
