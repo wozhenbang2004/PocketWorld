@@ -1061,6 +1061,8 @@ function AccountsWorkspace({ state, data, supported, run, registerTransientBack,
 function McpWorkspace({ state, data, supported, run, registerTransientBack }: { state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: BackHandlerRegistration }) {
   const [review, setReview] = useState<Data | null>(null), [selected, setSelected] = useState<string[]>([]);
   const [detail, setDetail] = useState<Data | null>(null), [busy, setBusy] = useState(false);
+  const [entryMode, setEntryMode] = useState('address');
+  const [direct, setDirect] = useState({ name: '', endpoint: '', protocolVersion: '2026-07-28' });
   const alive = useRef(true), view = useRef(0);
   const closeReview = () => { view.current++; setReview(null); };
   useEffect(() => { alive.current = true; return () => { alive.current = false; view.current++; }; }, []);
@@ -1069,6 +1071,17 @@ function McpWorkspace({ state, data, supported, run, registerTransientBack }: { 
   const progress = object(state.mcpImport), phase = text(progress.phase), pending = Array.isArray(state.ownerPending) ? state.ownerPending : [];
   const writing = busy || ['mcp.installMcp', 'mcp.setEnabledReviewed', 'mcp.setToolGrantReviewed'].some(key => pending.includes(key));
   const preparing = pending.includes('mcp.discoverMcp');
+  const choosing = pending.includes('mcp.pickConfig');
+  const activeConfig = object(progress.configuration), inputConfig: Data = entryMode === 'address' ? direct : config;
+  const previewMatchesInput = ['name', 'endpoint', 'protocolVersion'].every(key => text(activeConfig[key]) === text(inputConfig[key], key === 'protocolVersion' ? '2026-07-28' : '').trim()) &&
+    (entryMode === 'address' || activeConfig.id === config.id);
+  const discoverDirect = async () => {
+    if (writing || preparing || choosing || phase === 'unknown') return;
+    closeReview(); setBusy(true);
+    try { await run('mcp.discoverDirect', direct); }
+    catch { /* The shared page displays the native failure. */ }
+    finally { if (alive.current) setBusy(false); }
+  };
   const openReview = async (action: string, args: Data, kind: string) => {
     const original = ++view.current; setBusy(true);
     try { const receipt = object(await run(action, args)); if (alive.current && original === view.current) { setSelected([]); setReview({ ...receipt, kind }); } }
@@ -1092,10 +1105,21 @@ function McpWorkspace({ state, data, supported, run, registerTransientBack }: { 
         <Facts items={[[ '版本', object(row.manifest).version ], ['状态', row.enabled ? '已启用' : '已停用'], ['服务状态', row.mcpStatus]]} />
         <div className="pw-form-actions"><Button variant="secondary" disabled={writing || !supported('mcp.read')} onClick={async () => { const original = ++view.current; try { const receipt = object(await run('mcp.read', { id: row.id, installationId: row.installationId })); if (alive.current && original === view.current) setDetail(receipt); } catch {} }}>查看工具与权限</Button><Button variant="secondary" disabled={writing || !supported('mcp.reviewEnabled')} onClick={() => openReview('mcp.reviewEnabled', { id: row.id, installationId: row.installationId, enabled: !row.enabled }, 'enable')}>{row.enabled ? '核对并停用' : '核对并启用'}</Button></div>
       </>}</Collection>
-      <Accordion variant="divided" className="pw-mcp-import" defaultExpandedKeys={picked.ok === true || phase && phase !== 'idle' ? ['mcp-import'] : []}><AccordionItem id="mcp-import" title="添加 MCP 服务" description="选择配置，发现并核对工具后安装">
-      <HostFileUpload label="选择 MCP 配置" onChoose={() => { closeReview(); void run('mcp.pickConfig', {}).catch(() => {}); }} disabled={writing || preparing || !supported('mcp.pickConfig') || pending.includes('mcp.pickConfig')} status={pending.includes('mcp.pickConfig') ? 'importing' : picked.ok === false ? 'error' : 'idle'} statusDescription="系统选择器读取不含凭据的 JSON 配置，上限 64 KB" error={picked.ok === false ? text(picked.error) : undefined} />
-      {picked.ok === true && <div className="pw-selected-object"><h3>已读取的配置</h3><Facts items={[[ '名称', config.name ], ['端点', config.endpoint ], ['协议版本', config.protocolVersion ]]} /><p className="pw-field-hint">发现只读取服务声明；安装不会调用工具，也不会自动启用或授权。</p><CapabilityAction action="mcp.discoverImport" args={{ importRequestId: picked.requestId }} supported={supported} run={run} disabled={writing || preparing || phase === 'unknown'}>发现并预览服务</CapabilityAction></div>}
-      {phase === 'discovered' && <Button variant="secondary" disabled={writing || !supported('mcp.reviewImport')} onClick={() => openReview('mcp.reviewImport', {}, 'install')}>核对工具并安装</Button>}
+      <Accordion variant="divided" className="pw-mcp-import" defaultExpandedKeys={!list(data.plugins).length || picked.ok === true || phase && phase !== 'idle' ? ['mcp-import'] : []}><AccordionItem id="mcp-import" title="添加 MCP 服务" description="填写服务地址，或导入已有配置">
+      <RadioOptions label="添加方式" value={entryMode} onChange={value => { closeReview(); setEntryMode(value); }} isDisabled={writing || preparing || choosing} options={[{ id: 'address', label: '填写地址' }, { id: 'file', label: '导入配置' }]} />
+      {entryMode === 'address' ? <>
+        <div className="pw-form-grid">
+          <TextField label="服务名称" value={direct.name} onChange={name => setDirect(value => ({ ...value, name }))} maxLength={80} isDisabled={writing || preparing || choosing} />
+          <TextField label="HTTPS 服务地址" value={direct.endpoint} onChange={endpoint => setDirect(value => ({ ...value, endpoint }))} maxLength={2000} autoComplete="off" isDisabled={writing || preparing || choosing} hint="填写服务提供的 MCP 端点，不要把令牌或密码放进地址。" />
+          <SelectField label="协议版本" value={direct.protocolVersion} onChange={protocolVersion => setDirect(value => ({ ...value, protocolVersion }))} isDisabled={writing || preparing || choosing} options={[{ id: '2026-07-28', label: '2026-07-28' }, { id: '2025-11-25', label: '2025-11-25' }]} />
+        </div>
+        <div className="pw-form-actions"><Button disabled={writing || preparing || choosing || phase === 'unknown' || !supported('mcp.discoverDirect') || !direct.name.trim() || !direct.endpoint.trim()} onClick={discoverDirect}>发现服务工具</Button></div>
+      </> : <>
+        <HostFileUpload label="选择 MCP 配置" onChoose={() => { closeReview(); void run('mcp.pickConfig', {}).catch(() => {}); }} disabled={writing || preparing || !supported('mcp.pickConfig') || choosing} status={choosing ? 'importing' : picked.ok === false ? 'error' : 'idle'} statusDescription="系统选择器读取不含凭据的 JSON 配置，上限 64 KB" error={picked.ok === false ? text(picked.error) : undefined} />
+        {picked.ok === true && <div className="pw-selected-object"><h3>已读取的配置</h3><Facts items={[[ '名称', config.name ], ['端点', config.endpoint ], ['协议版本', config.protocolVersion ]]} /><CapabilityAction action="mcp.discoverImport" args={{ importRequestId: picked.requestId }} supported={supported} run={run} disabled={writing || preparing || choosing || phase === 'unknown'}>发现并预览服务</CapabilityAction></div>}
+      </>}
+      <p className="pw-field-hint">发现只读取服务声明；安装不会调用工具，也不会自动启用或授权。</p>
+      {phase === 'discovered' && <div className="pw-selected-object"><h3>本次发现</h3><Facts items={[[ '服务', activeConfig.name ], ['地址', activeConfig.endpoint ], ['协议版本', activeConfig.protocolVersion ]]} />{!previewMatchesInput && <p className="pw-field-hint">输入已变化，请重新发现后再安装。</p>}<Button variant="secondary" disabled={writing || preparing || choosing || !previewMatchesInput || !supported('mcp.reviewImport')} onClick={() => openReview('mcp.reviewImport', {}, 'install')}>核对工具并安装</Button></div>}
       </AccordionItem></Accordion>
       {phase !== 'idle' && <p className="pw-receipt-copy" role="status">{progressCopy[phase] || text(progress.message)}</p>}
       {preparing && <CapabilityAction action="mcp.cancel" args={{ operationId: progress.operationId }} supported={supported} run={run}>取消原发现</CapabilityAction>}

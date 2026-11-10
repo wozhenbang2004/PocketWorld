@@ -1,6 +1,7 @@
 package dev.pocketengine.ui.web
 
 import dev.pocketengine.ui.McpInstallAttempt
+import dev.pocketengine.ui.McpInstallConfig
 import dev.pocketengine.ui.McpInstallDiscovery
 import dev.pocketengine.ui.McpInstallEnableAttempt
 import dev.pocketengine.ui.McpInstallPreviewRules
@@ -28,7 +29,7 @@ internal class PocketWebMcp(private val controller: PocketWorldController) {
 
     companion object {
         val COMMANDS: Set<String> = setOf(
-            "mcp.snapshot", "mcp.pickConfig", "mcp.cancel", "mcp.discoverImport",
+            "mcp.snapshot", "mcp.pickConfig", "mcp.cancel", "mcp.discoverImport", "mcp.discoverDirect",
             "mcp.reviewImport", "mcp.installImport", "mcp.reviewEnabled", "mcp.confirmEnabled",
             "mcp.read", "mcp.reviewGrant", "mcp.confirmGrant"
         )
@@ -41,6 +42,7 @@ internal class PocketWebMcp(private val controller: PocketWorldController) {
             "mcp.pickConfig" -> { return accepted(controller.pickMcpConfig()) }
             "mcp.cancel" -> { return accepted(controller.requestOwnerDomain("mcp", "cancel", checkedPayload(args, setOf("operationId")))) }
             "mcp.discoverImport" -> { checkedPayload(args, setOf("importRequestId")); return discover(requiredString(args, "importRequestId")) }
+            "mcp.discoverDirect" -> { checkedPayload(args, setOf("name", "endpoint", "protocolVersion")); return discoverDirect(args) }
             "mcp.reviewImport" -> { checkedPayload(args, emptySet()); return review() }
             "mcp.installImport" -> { checkedPayload(args, setOf("reviewHandle", "tools")); return install(requiredString(args, "reviewHandle"), args.getJSONArray("tools")) }
             "mcp.reviewEnabled" -> { checkedPayload(args, setOf("id", "installationId", "enabled")); return reviewEnabled(requiredString(args, "id"), requiredString(args, "installationId"), requiredBoolean(args, "enabled")) }
@@ -67,9 +69,24 @@ internal class PocketWebMcp(private val controller: PocketWorldController) {
     fun clear() { revision++; discovery = null; reviewed = null; reviewHandle = null; attempt = null; enableReview = null; enableHandle = null; enableAttempt = null; grantReview = null; grantHandle = null; grantAttempt = null }
 
     fun discover(importRequestId: String): JSONObject {
-        check("mcp.discoverMcp" !in controller.state.ownerPending && "mcp.installMcp" !in controller.state.ownerPending) { "请先等待原 MCP 操作的回执" }
         val config = McpInstallPreviewRules.importedConfig(importRequestId, controller.state.ownerResponses("mcp")["pickConfig"])
             ?: error("原导入配置已变化，请重新选择不含凭据的配置文件")
+        return discoverConfig(config)
+    }
+
+    private fun discoverDirect(args: JSONObject): JSONObject {
+        val endpoint = requiredString(args, "endpoint").trim()
+        val name = requiredString(args, "name").trim()
+        val protocol = requiredString(args, "protocolVersion")
+        // A repeated address selects the same direct-entry installation, never a new random record.
+        val id = "mcp-" + McpInstallPreviewRules.digest(JSONObject().put("endpoint", endpoint)).take(24)
+        val config = McpInstallConfig(id, name, endpoint, protocol)
+        require(McpInstallPreviewRules.validConfig(config)) { "请填写 80 字以内的名称和不含凭据、查询参数或片段的 HTTPS 服务地址，并选择支持的协议版本" }
+        return discoverConfig(config)
+    }
+
+    private fun discoverConfig(config: McpInstallConfig): JSONObject {
+        check("mcp.discoverMcp" !in controller.state.ownerPending && "mcp.installMcp" !in controller.state.ownerPending) { "请先等待原 MCP 操作的回执" }
         val expected = McpInstallPreviewRules.installationId(controller.state.ownerSnapshot("mcp"), config.id)
             ?: error("原安装记录尚未读全，请刷新")
         discovery?.let { previous ->
