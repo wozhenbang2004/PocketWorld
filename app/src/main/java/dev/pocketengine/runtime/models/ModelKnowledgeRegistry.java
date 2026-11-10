@@ -163,9 +163,31 @@ final class ModelKnowledgeRegistry {
             Entry entry = provider.models.get(bare);
             if (entry != null) return new ProviderMatch(provider, entry);
         }
-        // With an arbitrary compatibility gateway, matching the spelling alone
-        // is not sufficient proof of parameter compatibility.
+        // A named model from a well-defined family can use its exact native
+        // registry record through a compatible gateway, even if the gateway
+        // hostname is not the model creator's official endpoint.
+        for (String providerId : familyProviders(bare, binding.protocol())) {
+            Provider provider = data.providers.get(providerId);
+            Entry entry = provider == null ? null : provider.models.get(bare);
+            if (entry != null) return new ProviderMatch(provider, entry);
+        }
         return null;
+    }
+
+    private static List<String> familyProviders(String id, ModelBinding.Protocol protocol) {
+        String lower = id.toLowerCase(Locale.ROOT);
+        if (protocol == ModelBinding.Protocol.GEMINI) return List.of("google");
+        if (lower.startsWith("deepseek-")) return List.of("deepseek");
+        if (lower.startsWith("kimi-") || lower.startsWith("moonshot")) return List.of("moonshotai", "moonshotai-cn");
+        if (lower.startsWith("qwen") || lower.startsWith("qwq") || lower.startsWith("qvq"))
+            return List.of("alibaba", "alibaba-cn");
+        if (lower.startsWith("glm-")) return List.of("zai", "zhipuai");
+        if (lower.startsWith("minimax-")) return List.of("minimax", "minimax-cn");
+        if (lower.startsWith("doubao-") || lower.startsWith("seed-")) return List.of("volcengine");
+        if (lower.startsWith("gpt-") || lower.startsWith("o1-") || lower.startsWith("o3-") || lower.startsWith("o4-"))
+            return List.of("openai");
+        if (lower.startsWith("claude-")) return List.of("anthropic");
+        return List.of();
     }
 
     private static String firstParty(String host, ModelBinding.Protocol protocol, String model) {
