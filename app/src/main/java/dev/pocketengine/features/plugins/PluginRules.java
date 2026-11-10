@@ -9,6 +9,7 @@ import org.json.JSONObject;
 
 /** Declarative tool manifests and explicit grants; no downloaded executable code. */
 public final class PluginRules {
+    private static final Set<String> SCHEMA_TYPES=Set.of("object","array","string","boolean","number","integer","null");
     private PluginRules() { }
     /** Read-only diagnostics for this bounded schema subset, not a full JSON Schema implementation. */
     public static JSONObject diagnoseArguments(Object arguments,JSONObject schema)throws Exception {
@@ -64,7 +65,8 @@ public final class PluginRules {
             JSONObject schema=tool.optJSONObject("schema");if(schema==null)schema=new JSONObject().put("type","object");
             validateSchema(schema,0,new int[]{0,0},kind.equals("mcp"));
             if(schema.toString().length()>16000)throw new IllegalArgumentException("工具参数定义过大");
-            if(!schema.optString("type","object").equals("object"))throw new IllegalArgumentException("工具参数根类型需为object");
+            Object rootType=schema.opt("type");
+            if(rootType!=null&&!"object".equals(rootType)&&!(rootType instanceof JSONArray&&((JSONArray)rootType).length()==1&&"object".equals(((JSONArray)rootType).opt(0))))throw new IllegalArgumentException("工具参数根类型需为object");
             if(kind.equals("mcp")){if(stdio)rejectStdioHeaders(schema);else McpHeaders.validate(schema);}
             definition.put("schema",new JSONObject(schema.toString()));normalized.put(definition);
         }
@@ -124,8 +126,20 @@ public final class PluginRules {
         for(String annotation:new String[]{"title","description","$comment"})if(schema.has(annotation)&&!(schema.get(annotation) instanceof String))throw new IllegalArgumentException(annotation+"需为文字");
         for(String annotation:new String[]{"deprecated","readOnly","writeOnly"})if(schema.has(annotation)&&!(schema.get(annotation) instanceof Boolean))throw new IllegalArgumentException(annotation+"需为布尔值");
         if(schema.has("examples")&&!(schema.get("examples") instanceof JSONArray))throw new IllegalArgumentException("examples需为列表");
-        if(schema.has("type")&&!(schema.get("type") instanceof String))throw new IllegalArgumentException("参数定义类型需为文字");
-        String type=schema.optString("type");schemaSize(nodes,type.length());if(!type.isEmpty()&&!java.util.Arrays.asList("object","array","string","boolean","number","integer").contains(type))throw new IllegalArgumentException("参数定义类型无效");
+        if(schema.has("type")){
+            Object type=schema.get("type");
+            if(type instanceof String){
+                if(!SCHEMA_TYPES.contains(type))throw new IllegalArgumentException("参数定义类型无效");schemaSize(nodes,((String)type).length());
+            }else if(type instanceof JSONArray){
+                JSONArray types=(JSONArray)type;Set<String> seen=new HashSet<>();
+                if(types.length()==0||types.length()>SCHEMA_TYPES.size())throw new IllegalArgumentException("参数类型列表需包含1至7种不同的JSON类型");
+                for(int i=0;i<types.length();i++){
+                    Object member=types.get(i);
+                    if(!(member instanceof String)||!SCHEMA_TYPES.contains(member)||!seen.add((String)member))throw new IllegalArgumentException("参数类型列表含无效或重复类型");
+                    schemaSize(nodes,((String)member).length());
+                }
+            }else throw new IllegalArgumentException("参数定义类型需为类型名称或不重复的类型列表");
+        }
         for(String key:new String[]{"maxLength","maxItems"})if(schema.has(key)){
             BigDecimal value=decimal(schema.get(key));
             if(value==null||value.signum()<0||value.compareTo(BigDecimal.valueOf(Integer.MAX_VALUE))>0||!integer(value))
@@ -156,3 +170,4 @@ public final class PluginRules {
     }
     private static String text(JSONObject source,String key,int limit)throws Exception {Object value=source.opt(key);if(!(value instanceof String)||((String)value).trim().isEmpty()||((String)value).length()>limit)throw new IllegalArgumentException(key+"无效");return ((String)value).trim();}
 }
+

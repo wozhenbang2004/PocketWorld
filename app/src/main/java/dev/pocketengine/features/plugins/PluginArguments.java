@@ -42,20 +42,16 @@ final class PluginArguments {
         if(value!=JSONObject.NULL&&!(value instanceof JSONObject)&&!(value instanceof JSONArray)&&!(value instanceof String)&&!(value instanceof Number)&&!(value instanceof Boolean)){
             error(path,"json_value","请使用有效的 JSON 值");return;
         }
-        String type=schema.optString("type");BigDecimal number=PluginRules.decimal(value);
+        Object declaredType=schema.opt("type");BigDecimal number=PluginRules.decimal(value);
         if(value instanceof Number&&number==null){error(path,"number","请输入有限的有效数字");return;}
-        boolean matches;
-        switch(type){
-            case "":matches=true;break;
-            case "object":matches=value instanceof JSONObject;break;
-            case "array":matches=value instanceof JSONArray;break;
-            case "string":matches=value instanceof String;break;
-            case "boolean":matches=value instanceof Boolean;break;
-            case "number":matches=number!=null;break;
-            case "integer":matches=number!=null&&PluginRules.integer(number);break;
-            default:throw new IllegalArgumentException("不支持的参数类型");
+        boolean matches=declaredType==null;
+        if(declaredType instanceof JSONArray){
+            JSONArray types=(JSONArray)declaredType;
+            for(int i=0;i<types.length();i++)if(matchesType(value,types.getString(i),number))matches=true;
+        }else if(declaredType instanceof String)matches=matchesType(value,(String)declaredType,number);
+        if(!matches){
+            error(path,"type",declaredType instanceof String?typeMessage((String)declaredType):"此字段的值不符合声明允许的类型");return;
         }
-        if(!matches){error(path,"type",typeMessage(type));return;}
         if(number!=null){
             if(schema.has("minimum")&&number.compareTo(PluginRules.decimal(schema.get("minimum")))<0)error(path,"minimum","数字低于允许的最小值，请增大数值");
             if(schema.has("maximum")&&number.compareTo(PluginRules.decimal(schema.get("maximum")))>0)error(path,"maximum","数字高于允许的最大值，请减小数值");
@@ -107,8 +103,21 @@ final class PluginArguments {
         return java.util.Objects.equals(a,b);
     }
     private static String pointer(String path,String key){return path+"/"+key.replace("~","~0").replace("/","~1");}
+    private static boolean matchesType(Object value,String type,BigDecimal number){
+        switch(type){
+            case "object":return value instanceof JSONObject;
+            case "array":return value instanceof JSONArray;
+            case "string":return value instanceof String;
+            case "boolean":return value instanceof Boolean;
+            case "number":return number!=null;
+            case "integer":return number!=null&&PluginRules.integer(number);
+            case "null":return value==JSONObject.NULL;
+            default:throw new IllegalArgumentException("不支持的参数类型");
+        }
+    }
     private static String typeMessage(String type){
         switch(type){
+            case "null":return "此字段只接受null";
             case "string":return "请输入文字";
             case "boolean":return "请选择是或否";
             case "number":return "请输入数字，不要使用文字形式的数字";
@@ -147,3 +156,4 @@ final class PluginArguments {
         budget[1]+=amount;
     }
 }
+
