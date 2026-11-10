@@ -326,6 +326,7 @@ def screenshot(slug, title, *, tree=None, requested_path=None, destination_obser
         screen.update(requestedPath=requested_path, destinationObserved=destination_observed)
     REPORT["screens"].append(screen)
     save_report()
+    print(f"Captured {path.name}: {title}", flush=True)
 
 
 def wait_for_page_surface(timeout=30):
@@ -347,8 +348,16 @@ def wait_for_page_surface(timeout=30):
 
 
 def navigation():
-    tree = wait_for_controls("关闭文件工作区", "关闭导航", "打开导航", "对话菜单", "工作区与导航",
-                             "暂时跳过准备", "以后再说")
+    controls = ("关闭文件工作区", "关闭导航", "打开导航", "对话菜单", "工作区与导航",
+                "暂时跳过准备", "以后再说")
+    tree = read_layout()
+    # Some real pages (for example the notification inbox) scroll their own
+    # navigation header off-screen. Restore it through touch before looking
+    # for a drawer button; waiting cannot make an off-screen button visible.
+    if not any(find_target(tree, label, prefix=label == "对话菜单") for label in controls):
+        tree = scroll_to_top(tree)
+    if not any(find_target(tree, label, prefix=label == "对话菜单") for label in controls):
+        tree = wait_for_controls(*controls, timeout=5)
     if tap("关闭文件工作区", tree):
         tree = wait_for_controls("关闭导航", "打开导航", "对话菜单", "工作区与导航")
     if find_target(tree, "关闭导航"):
@@ -424,6 +433,7 @@ def capture_pages(slug, title, tree, path, markers=(), *, scroll=True):
 def capture_route(path, slug, markers=(), *, dialog=False, scroll=True):
     # Every route starts from the real drawer. Never dispatch internal routes or
     # bridge commands; only inspect current accessible controls and tap them.
+    print("Opening " + " → ".join(path), flush=True)
     tree = navigation()
     if not find_target(tree, "关闭导航"):
         REPORT["unavailable"].append(" → ".join(path) + "：当前导航未打开。")
@@ -437,11 +447,14 @@ def capture_route(path, slug, markers=(), *, dialog=False, scroll=True):
             REPORT["unavailable"].append(" → ".join(path) + "：未找到当前可用入口“" + label + "”。")
             return
         tree = wait_for_page_surface() if index == 0 else read_layout()
-        if index == 0:
+        if index == 0 and not find_target(tree, "关闭文件工作区"):
             # The product correctly preserves per-page reading positions. Each
             # capture starts at the real top again using touch, not injected state.
             tree = scroll_to_top(tree)
-    capture_pages(slug, " → ".join(path), tree, path, markers, scroll=scroll)
+    # The file workspace is a dismissible bottom sheet. A downward gesture
+    # closes the actual sheet instead of resetting a full-page scroll position.
+    capture_pages(slug, " → ".join(path), tree, path, markers,
+                  scroll=scroll and not find_target(tree, "关闭文件工作区"))
     if dialog:
         # These scenarios only open forms/popovers. Do not save, send, pair,
         # install, authorize, toggle policy, request a model or create records.
@@ -632,3 +645,4 @@ if __name__ == "__main__":
         if EMULATOR_LOG is not None:
             EMULATOR_LOG.close()
         save_report()
+
