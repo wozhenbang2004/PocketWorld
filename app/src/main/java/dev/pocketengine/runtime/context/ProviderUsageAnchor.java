@@ -48,7 +48,9 @@ public final class ProviderUsageAnchor {
                             if(!binding.get(key).equals(actual.opt(key))){clear();return;}
                     }
                     JSONObject counters=usage.getJSONObject("counters");long count=counter(counters.optJSONObject("INPUT"));
-                    if(count<1){clear();return;}
+                    // Claude's INPUT excludes cache reads/writes. An explicit zero
+                    // can still describe a nonempty, fully cached request.
+                    if(count<0){clear();return;}
                     for(String kind:List.of("Read","Write")){
                         Object included=usage.opt("inputIncludesCache"+kind);if(!(included instanceof Boolean)){clear();return;}
                         if(Boolean.FALSE.equals(included)){
@@ -56,6 +58,7 @@ public final class ProviderUsageAnchor {
                             if(cached<0){clear();return;}count=Math.addExact(count,cached);
                         }
                     }
+                    if(count<1){clear();return;}
                     synchronized(ProviderUsageAnchor.this){anchor=new Anchor(route,schema,List.copyOf(prefix),count,receipt.callId);}
                 }catch(Exception unavailable){
                     // This optional estimate must never replace a committed real receipt or
