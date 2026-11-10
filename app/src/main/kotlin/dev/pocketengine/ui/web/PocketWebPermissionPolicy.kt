@@ -5,11 +5,16 @@ import org.json.JSONObject
 
 /** Trusted private owner UI only. The model/tool command surface does not expose these writes. */
 internal object PocketWebPermissionPolicy {
-    val COMMANDS = setOf("permissions.snapshot", "permissions.save")
+    val COMMANDS = setOf("permissions.snapshot", "permissions.save", "permissions.catalog")
     fun dispatch(controller: PocketWorldController, action: String, args: JSONObject): JSONObject {
         check(controller.webPrivateOwnerVisible()) { "请回到私人对话设置执行权限" }
         val conversation = controller.state.conversationId.orEmpty()
         val settings = controller.nativeTokenBudgetHost().settings
+        if (action == "permissions.catalog") {
+            require(args.length() == 0)
+            val app = controller.nativeTokenBudgetHost()
+            return dev.pocketengine.features.capabilities.PermissionToolCatalog.snapshot(app.features, app.tasks)
+        }
         if (action == "permissions.snapshot") {
             require(args.length() == 0)
             return settings.permissionPolicySnapshot(conversation).put("conversationId", conversation)

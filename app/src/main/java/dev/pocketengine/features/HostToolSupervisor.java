@@ -79,6 +79,15 @@ public final class HostToolSupervisor implements CapabilityPort {
     }
     /** Read-only preparation even before a Run exists. The unbound port never leaves this factory. */
     public static Set<String> configuredSkillCapabilities(FeatureHost host,TaskStore tasks)throws Exception{return new HostToolSupervisor(host,tasks,null,null,0,true,true,null,null).skillCapabilityNames();}
+    /** Owner settings metadata from the real registry, without creating or admitting a run. */
+    public static JSONArray permissionToolCatalog(FeatureHost host,TaskStore tasks)throws Exception {
+        HostToolSupervisor catalog=new HostToolSupervisor(host,tasks,null,null,0,true,true,null,null);
+        JSONArray rows=new JSONArray();for(var entry:catalog.routes.entrySet()){
+            Tool tool=entry.getValue();rows.put(new JSONObject().put("name",entry.getKey()).put("category",tool.feature)
+                    .put("description",tool.definition.getJSONObject("function").optString("description"))
+                    .put("source",tool.preset==null?"native_registry":"installed_plugin").put("configurable",true));
+        }return rows;
+    }
     private HostToolSupervisor(FeatureHost host,TaskStore tasks,String taskId,String runId,int epoch,boolean allowWrites,boolean catalogueOnly,
             dev.pocketengine.features.memory.ToolOutputCapture.Factory outputCapture,dev.pocketengine.features.controlplane.WorkProfileToolSelection workProfile)throws Exception{
         this.host=java.util.Objects.requireNonNull(host);this.tasks=java.util.Objects.requireNonNull(tasks);this.taskId=catalogueOnly?null:identifier(taskId);this.runId=catalogueOnly?null:identifier(runId);this.epoch=epoch;this.allowWrites=allowWrites;

@@ -32,7 +32,7 @@ public final class CapabilityApprovalPolicy {
         }else if(version!=2||!Set.of("custom","auto_review","full_access").contains(mode))throw new IllegalArgumentException("请选择有效权限模式");
         if(rules.length()>512)throw new IllegalArgumentException("工具审批规则最多512项");
         for(var keys=rules.keys();keys.hasNext();){String name=keys.next();Object decision=rules.opt(name);
-            if(!name.matches("[A-Za-z][A-Za-z0-9_]{0,63}")||!(decision instanceof String)||!Set.of("allow","ask","deny","review").contains(decision))throw new IllegalArgumentException("请使用精确工具名及允许/询问/禁止/AI审批规则");
+            if(!name.matches("[A-Za-z][A-Za-z0-9_-]{0,63}")||!(decision instanceof String)||!Set.of("allow","ask","deny","review").contains(decision))throw new IllegalArgumentException("请使用精确工具名及允许/询问/禁止/AI审批规则");
             copy.put(name,decision);
         }
         Object instructions=version==1?"":value.opt("instructions");if(instructions==null)instructions="";

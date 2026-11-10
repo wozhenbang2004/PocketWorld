@@ -44,7 +44,7 @@ public final class PhoneTextTargetCapabilityPort implements CapabilityPort {
         if(!binding.allowWrites||task==null||!"phone".equals(task.optString("kind"))||!task.optString("executionMode").matches("main_screen|background"))
             throw new SecurityException("仅原手机任务可操作当前文字目标");
     }
-    private JSONArray append(JSONArray base)throws Exception {
+    public static JSONArray appendTools(JSONArray base)throws Exception {
         JSONArray tools=new JSONArray(base.toString());
         JSONObject properties=new JSONObject().put("observationId",new JSONObject().put("type","string").put("maxLength",100))
                 .put("textTargetId",new JSONObject().put("type","string").put("maxLength",36));
@@ -53,7 +53,7 @@ public final class PhoneTextTargetCapabilityPort implements CapabilityPort {
                 .put("parameters",new JSONObject().put("type","object").put("properties",properties).put("required",new JSONArray().put("observationId").put("textTargetId")).put("additionalProperties",false))));
         return tools;
     }
-    @Override public JSONArray tools()throws Exception{return append(existing.tools());}
+    @Override public JSONArray tools()throws Exception{return appendTools(existing.tools());}
     @Override public boolean supports(String name){return own(name)||existing.supports(name);}
     @Override public boolean sideEffecting(String name){return own(name)||existing.sideEffecting(name);}
     @Override public dev.pocketengine.core.ExecutionPlanning.Access planningAccess(String name,JSONObject arguments)throws Exception{return own(name)?dev.pocketengine.core.ExecutionPlanning.Access.DENY:existing.planningAccess(name,arguments);}
@@ -76,7 +76,7 @@ public final class PhoneTextTargetCapabilityPort implements CapabilityPort {
     @Override public void beginRun(String goal,RunControl control)throws Exception{check(control);existing.beginRun(goal,control);}
     @Override public void prepareTurnSurface(RunControl control)throws Exception{check(control);existing.prepareTurnSurface(control);check(control);}
     @Override public void admitCapabilities(dev.pocketengine.core.CapabilitySnapshot snapshot,RunControl control)throws Exception{check(control);existing.admitCapabilities(snapshot,control);}
-    @Override public JSONObject prepareTurn(String query,int round,int steps,RunControl control)throws Exception{check(control);JSONObject turn=existing.prepareTurn(query,round,steps,control);return turn.put("tools",append(turn.getJSONArray("tools")));}
+    @Override public JSONObject prepareTurn(String query,int round,int steps,RunControl control)throws Exception{check(control);JSONObject turn=existing.prepareTurn(query,round,steps,control);return turn.put("tools",appendTools(turn.getJSONArray("tools")));}
     @Override public boolean responseCurrent(RunControl control)throws Exception{check(control);return existing.responseCurrent(control);}
     @Override public boolean stepReadSourceCurrent(String name,JSONObject receipt,RunControl control)throws Exception{check(control);return !own(name)&&existing.stepReadSourceCurrent(name,receipt,control);}
     @Override public JSONObject beforeTool(String name,JSONObject args,RunControl control)throws Exception{if(own(name))check(control);return existing.beforeTool(name,args,control);}
