@@ -320,10 +320,11 @@ public final class PluginsModule implements EngineModule {
             if("mcp".equals(tool.getString("kind"))){
                 if(!input.has("expectedInstallationId")||!input.has("expectedVersion"))throw new IllegalArgumentException("MCP调用需当前安装与版本身份，请刷新工具清单");
                 String installation=installationId(plugin);McpClient existing=mcpClients.get(installation);
-                if(existing==null&&McpData.VERSION.equals(tool.getString("protocolVersion"))){
+                // A cold process has no transport session. Re-handshake the installed protocol;
+                // call() still checks the installed server and exact tool descriptor before dispatch.
+                if(existing==null){
                     existing=authorization==null?mcpFactory.create(tool.getString("endpoint"),token,tool.getString("protocolVersion"),ignored->{}):authorization.client(tool.getString("protocolVersion"),hostControl);mcpClients.put(installation,existing);
                 }
-                if(existing==null)throw new IllegalStateException("旧版MCP会话已丢失，请重新发现、安装并授权");
                 mcp=existing;
                 for(Invocation current:active.values())if(current.pluginId.equals(id))throw new IllegalStateException("此MCP插件已有请求运行，请等待后再试");
             }else mcp=null;
@@ -341,7 +342,12 @@ public final class PluginsModule implements EngineModule {
                         .put("serverDigest",tool.getString("serverDigest")).put("descriptorDigest",tool.getString("descriptorDigest"));
                     output=McpResultCapture.open(outputFactory,nativeHostTool,operationId,invocation.control,provenance);
                 }
-                if(mcp.needsDiscovery())try{mcp.discover(invocation.control);}catch(Exception unavailable){throw new McpClient.CallFailure(false,true,"MCP重新发现失败，工具未发送，请检查配置后重新导入");}
+                if(mcp.needsDiscovery())try{mcp.discover(invocation.control);}catch(Exception unavailable){
+                    // No tools/call was sent. Release only this failed handshake so a later
+                    // explicit invocation can reconnect, never replaying an uncertain tool call.
+                    synchronized(this){mcpClients.remove(input.getString("expectedInstallationId"),mcp);}
+                    mcp.close();throw new McpClient.CallFailure(false,true,"MCP连接未完成，工具未发送；请检查网络、协议和凭据后重新发起");
+                }
                 String taskSupport=tool.optJSONObject("execution")==null?"optional":tool.getJSONObject("execution").optString("taskSupport","optional");
                 if(nativeTasks!=null&&mcp.supportsTasks()&&!"forbidden".equals(taskSupport)){
                     RunControl.HostRunIdentity run=hostControl.hostRunIdentity();if(run==null)throw new McpClient.CallFailure(false,false,"Tasks需要原TaskStore运行身份");
@@ -757,8 +763,7 @@ public final class PluginsModule implements EngineModule {
         for(int i=0;i<definitions.length();i++)if("mcp".equals(definitions.getJSONObject(i).optString("kind"))){
             if("stdio".equals(definitions.getJSONObject(i).optString("transport"))){result.put("mcpStatus","original_task_revalidation_required").put("localTaskInvocationImplemented",true).put("runtimeVerified",false);break;}
             McpClient client=mcpClients.get(installationId(plugin));
-            result.put("mcpStatus",client!=null?(client.usable()?"ready":"needs_discovery"):
-                    (McpData.VERSION.equals(definitions.getJSONObject(i).optString("protocolVersion"))?"will_revalidate":"needs_discovery"));break;
+            result.put("mcpStatus",client!=null?(client.usable()?"ready":"needs_discovery"):"will_revalidate");break;
         }
         if(definitions.length()==0&&plugin.getJSONObject("manifest").has("mcpSource")){
             McpClient client=mcpClients.get(installationId(plugin));
@@ -789,7 +794,6 @@ public final class PluginsModule implements EngineModule {
                 if("mcp".equals(tool.optString("kind"))&&!"stdio".equals(tool.optString("transport"))){
                     McpClient client=mcpClients.get(installationId(plugin));
                     if(client!=null&&!client.usable()&&!client.needsDiscovery())throw new PluginRegistryAssembly.Unavailable("discovery_required");
-                    if(client==null&&McpData.LEGACY.equals(tool.optString("protocolVersion")))throw new PluginRegistryAssembly.Unavailable("discovery_required");
                 }
                 String id="plugin:"+plugin.getString("id")+":"+name;
                 // Native-only dependency identity. No credential value is copied; provider
