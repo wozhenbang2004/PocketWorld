@@ -33,6 +33,7 @@ function NavItem({
   icon: Icon,
   label,
   badge,
+  status,
   isSelected = false,
   collapsed = false,
   href = "#",
@@ -43,6 +44,7 @@ function NavItem({
   icon: IconComponent;
   label: string;
   badge?: ReactNode;
+  status?: string;
   isSelected?: boolean;
   collapsed?: boolean;
   href?: string;
@@ -64,7 +66,7 @@ function NavItem({
           : undefined
       }
       aria-current={isSelected ? "page" : undefined}
-      aria-label={label}
+      aria-label={status ? `${label}，${status}` : label}
       aria-disabled={disabled || undefined}
       tabIndex={disabled ? -1 : undefined}
       title={collapsed ? label : undefined}
@@ -110,7 +112,7 @@ function NavItem({
 /** BoardUI rows dispatch the existing product route/action; compact is controlled
  * by the single App shell so every navigation group shares the same rail. */
 
-export type WorkNavItem={key:string;label:string;icon:IconComponent;count?:number;group?:string;description?:string;disabled?:boolean};
+export type WorkNavItem={key:string;label:string;icon:IconComponent;count?:number;status?:string;group?:string;description?:string;disabled?:boolean};
 export function WorkSidebar({items,selected,onNavigate,header,footer,label='工作与功能',hideGroupLabels=false,compact=false,onCompactChange}:{items:WorkNavItem[];selected:string;onNavigate:(key:string)=>void;header?:ReactNode;footer?:ReactNode;label?:string;hideGroupLabels?:boolean;compact?:boolean;onCompactChange?:(compact:boolean)=>void}) {
  const navigationId=useId();
  const reduceMotion=useReducedMotion();
@@ -123,7 +125,7 @@ export function WorkSidebar({items,selected,onNavigate,header,footer,label='工�
      {groups.map(group=><section key={group}>
       <h3 className={hideGroupLabels?'pw-sr-only':undefined}>{group}</h3>
       {items.filter(x=>(x.group||'工作')===group).map(item=><div className="pw-nav-item" key={item.key}>
-       <NavItem icon={item.icon} label={item.label} collapsed={compact} disabled={item.disabled} isSelected={selected===item.key} reduceMotion={reduceMotion} badge={item.count!=null?<span className="pw-nav-count">{item.count}</span>:undefined} onClick={()=>onNavigate(item.key)}/>
+       <NavItem icon={item.icon} label={item.label} status={item.status} collapsed={compact} disabled={item.disabled} isSelected={selected===item.key} reduceMotion={reduceMotion} badge={item.status?<span className="pw-nav-status" aria-hidden="true"/>:item.count!=null?<span className="pw-nav-count">{item.count}</span>:undefined} onClick={()=>onNavigate(item.key)}/>
        {item.description&&selected===item.key&&!compact&&<small>{item.description}</small>}
       </div>)}
      </section>)}

@@ -37,6 +37,12 @@
   position: relative;
   z-index: 1;
 }
+.pw-work-sidebar .pw-nav-status {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--pw-copy, #646464);
+}
 
 /* The retained BoardUI Collapsible reveals copy; neither its icon nor its hit
  * target is scaled. These caps are also used outside the desktop shell. */

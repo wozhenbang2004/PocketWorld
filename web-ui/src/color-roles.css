@@ -25,7 +25,7 @@
 }
 .pw-redesign .pw-desktop-navigation,
 .pw-work-drawer {
-  background: var(--pw-canvas);
+  background: var(--pw-surface);
   border-color: var(--pw-divider);
 }
 .pw-redesign .pw-app-header,

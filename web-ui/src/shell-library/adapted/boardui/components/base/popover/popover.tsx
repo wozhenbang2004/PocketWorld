@@ -89,7 +89,7 @@ export function PopoverTrigger({ isOpen: controlledOpen, defaultOpen = false, on
 }
 
 export interface PopoverProps
-  extends Pick<AriaPopoverProps, "placement" | "offset" | "crossOffset" | "shouldFlip" | "containerPadding" | "triggerRef" | "isOpen" | "onOpenChange"> {
+  extends Pick<AriaPopoverProps, "placement" | "offset" | "crossOffset" | "shouldFlip" | "containerPadding" | "boundaryElement" | "triggerRef" | "isOpen" | "onOpenChange"> {
   /** Draw a caret pointing at the trigger. */
   showArrow?: boolean;
   /** Accessible name when the content has no PopoverHeader title. */

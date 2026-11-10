@@ -7,6 +7,8 @@ import { FluidValueSlider } from './forms-library/uiux/FluidValueSlider';
  * remain in the host; a bridge acceptance never becomes a fabricated success.
  */
 import {useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState} from 'react';
+import {Brain,CalendarDays,Layers,MessageSquare,Monitor,MoreHorizontal,PanelLeftClose,PanelLeftOpen,Search,Settings,Sparkles,SquarePen,UserRound} from 'lucide-react';
+import {UNSAFE_PortalProvider} from 'react-aria/PortalProvider';
 import {RiArrowLeftLine,RiArrowRightSLine,RiArrowDownSLine,RiChatAiLine,RiCloseLine,RiCodeSSlashLine,RiFileLine,RiFolderLine,RiHistoryLine,RiLayoutGridLine,RiMenuLine,RiMoreLine,RiPlayLine,RiRefreshLine,RiSearchLine,RiSettings4Line,RiTeamLine,RiTerminalBoxLine,RiToolsLine,RiAddLine,RiInformationLine,RiCheckboxCircleLine,RiPauseCircleLine,RiErrorWarningLine,RiTimeLine,RiDoubleQuotesL,RiLinksLine,RiBookOpenLine,RiCalendarCheckLine,RiComputerLine,RiImage2Line,RiChatNewLine,RiNotification3Line,RiShieldCheckLine,RiBox3Line} from '@remixicon/react';
 import {bridge} from './bridge';
 import {usePocketSnapshot} from './usePocketSnapshot';
@@ -134,7 +136,10 @@ export default function App(){
  const [commandScope,setCommandScope]=useState<'all'|'conversations'>('all');
  const [desktopNavigation,setDesktopNavigation]=useState(()=>window.matchMedia('(min-width: 1024px)').matches);
  const [chatMenuOpen,setChatMenuOpen]=useState(false);const chatMenuTrigger=useRef<HTMLButtonElement>(null);
+ const [navigationMoreOpen,setNavigationMoreOpen]=useState(false);
+ const navigationDrawer=useRef<HTMLDivElement>(null);
  useEffect(()=>{setChatMenuOpen(false)},[route,state.conversationId,desktopNavigation]);
+ useEffect(()=>{setNavigationMoreOpen(false)},[route,state.conversationId,desktopNavigation,workOpen,commandOpen]);
  const [navigationCompact,setNavigationCompact]=useState(false);
  const effectiveCompact=desktopNavigation&&navigationCompact&&!commandOpen;
  useEffect(()=>{const media=window.matchMedia('(min-width: 1024px)');const update=()=>setDesktopNavigation(media.matches);update();media.addEventListener('change',update);return()=>media.removeEventListener('change',update)},[]);
@@ -433,7 +438,7 @@ export default function App(){
  },[state.requestedTaskRevision,state.requestedTaskId,snapshot?.view?.taskId,tasks,can,openTask]);
  useEffect(()=>{const revision=Number(state.requestedProjectRevision||0);if(revision>previousRequestedProject.current){rememberChatPosition();setWorkOpen(false);setCommandOpen(false);setTaskOpen(false);setRoute('projects')}previousRequestedProject.current=revision;},[state.requestedProjectRevision,rememberChatPosition]);
  useEffect(()=>{const revision=Number(state.requestedConnectionRevision||0);if(revision>previousRequestedConnection.current&&state.requestedConnectionSection){rememberChatPosition();setWorkOpen(false);setCommandOpen(false);setTaskOpen(false);setRoute(state.requestedConnectionSection)}previousRequestedConnection.current=revision;},[state.requestedConnectionRevision,state.requestedConnectionSection,rememberChatPosition]);
- useEffect(()=>{bridge.setBackHandler(()=>{if(chatMenuOpen){setChatMenuOpen(false);return true}if(permissionOptionsOpen){closePermissionOptions();return true}if(attachmentBack.current?.())return true;if(phoneViewerExpanded){setPhoneViewerExpanded(false);return true}if(readingDocuments.length){closeReading();return true}if(messageQuoteTarget){setMessageQuoteTarget(null);return true}if(routeReferenceTarget){setRouteReferenceTarget(null);return true}if(skillDraftTarget){setSkillDraftTarget(null);return true}if(memoryDraftTarget){setMemoryDraftTarget(null);return true}if(sourceSelection){setSourceSelection(null);return true}if(messageMenu){setMessageMenu(null);return true}if(conversationControlsBack.current?.())return true;if(modelPickerOpen){if(modelWriting.current||state.modelSelectionBusy)return true;finishModelPicker();return true}if(state.chatAttachmentPickerOpen&&can('attachments.closePicker')){run('attachments.closePicker');return true}if(voiceReview){setVoiceReview(null);return true}if(phoneReview){if(!phoneReviewPending)setPhoneReview(null);return true}if(newProjectOpen||newFileOpen){closeCreate();return true}if(voiceOptionsOpen){setVoiceOptionsOpen(false);return true}if(commandOpen){setCommandOpen(false);return true}if(workOpen){setWorkOpen(false);return true}if(projectPickerOpen){setProjectPickerOpen(false);return true}if(fileDisplayOpen){setFileDisplayOpen(false);return true}if(taskOpen){backFromTask();return true}if(route==='tasks'&&taskFiltersOpen){setTaskFiltersOpen(false);return true}if(route==='projects'&&projectPreview.handleBack())return true;if(route==='projects'&&state.filePath){if(fileAdoption.isPending()||bridge.getState().state.fileSaving)return true;if(projectFileBack.current?.())return true;if(can('projects.close')&&!fileAdoption.pending){run('projects.close',fileIdentity);return true}return true}if(route!=='chat'){if(route!=='tasks'&&route!=='projects'&&secondaryBack.current?.())return true;if(route==='setup')closeSetup();else returnFromSecondary();return true}return false;});return()=>{bridge.setBackHandler(()=>false)};},[chatMenuOpen,permissionOptionsOpen,closePermissionOptions,phoneViewerExpanded,messageQuoteTarget,routeReferenceTarget,skillDraftTarget,memoryDraftTarget,sourceSelection,readingDocuments,closeReading,messageMenu,modelPickerOpen,modelSelectPending,state.modelSelectionBusy,voiceReview,phoneReview,phoneReviewPending,newProjectOpen,newFileOpen,voiceOptionsOpen,commandOpen,workOpen,projectPickerOpen,fileDisplayOpen,taskFiltersOpen,taskOpen,taskLayer,backFromTask,closeTask,route,state.filePath,state.chatAttachmentPickerOpen,fileIdentity,can,run,projectPreview,fileAdoption.pending]);
+ useEffect(()=>{bridge.setBackHandler(()=>{if(navigationMoreOpen){setNavigationMoreOpen(false);return true}if(chatMenuOpen){setChatMenuOpen(false);return true}if(permissionOptionsOpen){closePermissionOptions();return true}if(attachmentBack.current?.())return true;if(phoneViewerExpanded){setPhoneViewerExpanded(false);return true}if(readingDocuments.length){closeReading();return true}if(messageQuoteTarget){setMessageQuoteTarget(null);return true}if(routeReferenceTarget){setRouteReferenceTarget(null);return true}if(skillDraftTarget){setSkillDraftTarget(null);return true}if(memoryDraftTarget){setMemoryDraftTarget(null);return true}if(sourceSelection){setSourceSelection(null);return true}if(messageMenu){setMessageMenu(null);return true}if(conversationControlsBack.current?.())return true;if(modelPickerOpen){if(modelWriting.current||state.modelSelectionBusy)return true;finishModelPicker();return true}if(state.chatAttachmentPickerOpen&&can('attachments.closePicker')){run('attachments.closePicker');return true}if(voiceReview){setVoiceReview(null);return true}if(phoneReview){if(!phoneReviewPending)setPhoneReview(null);return true}if(newProjectOpen||newFileOpen){closeCreate();return true}if(voiceOptionsOpen){setVoiceOptionsOpen(false);return true}if(commandOpen){setCommandOpen(false);return true}if(workOpen){setWorkOpen(false);return true}if(projectPickerOpen){setProjectPickerOpen(false);return true}if(fileDisplayOpen){setFileDisplayOpen(false);return true}if(taskOpen){backFromTask();return true}if(route==='tasks'&&taskFiltersOpen){setTaskFiltersOpen(false);return true}if(route==='projects'&&projectPreview.handleBack())return true;if(route==='projects'&&state.filePath){if(fileAdoption.isPending()||bridge.getState().state.fileSaving)return true;if(projectFileBack.current?.())return true;if(can('projects.close')&&!fileAdoption.pending){run('projects.close',fileIdentity);return true}return true}if(route!=='chat'){if(route!=='tasks'&&route!=='projects'&&secondaryBack.current?.())return true;if(route==='setup')closeSetup();else returnFromSecondary();return true}return false;});return()=>{bridge.setBackHandler(()=>false)};},[navigationMoreOpen,chatMenuOpen,permissionOptionsOpen,closePermissionOptions,phoneViewerExpanded,messageQuoteTarget,routeReferenceTarget,skillDraftTarget,memoryDraftTarget,sourceSelection,readingDocuments,closeReading,messageMenu,modelPickerOpen,modelSelectPending,state.modelSelectionBusy,voiceReview,phoneReview,phoneReviewPending,newProjectOpen,newFileOpen,voiceOptionsOpen,commandOpen,workOpen,projectPickerOpen,fileDisplayOpen,taskFiltersOpen,taskOpen,taskLayer,backFromTask,closeTask,route,state.filePath,state.chatAttachmentPickerOpen,fileIdentity,can,run,projectPreview,fileAdoption.pending]);
  useEffect(()=>{document.documentElement.dataset.pocketUi=ready?'ready':'connecting';},[ready]);
  useEffect(()=>{if(phoneDraft.phone===true)setIntent(phoneDraft.mode==='main_screen'?'main_screen':'background');else if(phoneDraft.phone===false)setIntent('chat');},[phoneDraft.phone,phoneDraft.mode]);
  useEffect(()=>{if(route==='projects'&&can('projects.refresh'))run('projects.refresh');else if(route==='tasks'&&can('tasks.refresh'))run('tasks.refresh');},[route,can,run]);
@@ -522,29 +527,41 @@ export default function App(){
  const taskHistory=useTaskListHistory(tasks,String(state.taskListNextCursor||''),String(state.conversationId||''),route==='tasks'&&can('history.read'));
  const filteredTasks=taskHistory.tasks.filter(t=>(filter==='all'||filter==='attention'&&attention(t)||filter==='running'&&running(t)||filter==='ended'&&terminal(t))&&[t.goal,t.summary||'',t.id].join(' ').toLocaleLowerCase().includes(taskQuery.toLocaleLowerCase()));
  const attentionTasks=tasks.filter(attention);
- const navigationSelection=route==='developer-logs'?'developer-logs':route==='setup'?'setup':isPrimaryRoute?route:workspaceNavigationKey(secondaryPage||route);
+ const navigationSelection=state.attachmentWorkspace?.open?'artifacts':['developer-logs','setup','remoteInbox'].includes(route)?route:isPrimaryRoute?route:workspaceNavigationKey(secondaryPage||route);
+ const selectNavigation=useCallback((key:string)=>{
+  setNavigationMoreOpen(false);
+  if(key==='artifacts'){
+   // Outcomes cover the current workspace; closing them must reveal that same route.
+   setWorkOpen(false);setCommandOpen(false);
+   if(can('attachmentWorkspace.open'))run('attachmentWorkspace.open');
+  }else if(key==='setup')openSetup();
+  else navigate(key);
+ },[can,run,openSetup,navigate]);
  const workNav:WorkNavItem[]=useMemo(()=>[
-  {key:'chat',label:'对话',icon:RiChatAiLine,group:'日常'},
-  {key:'tasks',label:'任务',icon:RiLayoutGridLine,group:'日常',count:attentionTasks.length||undefined},
+  {key:'chat',label:'对话',icon:MessageSquare,group:'常用'},
+  {key:'tasks',label:'任务',icon:CalendarDays,group:'常用',status:attentionTasks.length?`${attentionTasks.length} 项需要处理`:undefined},
+  {key:'devices',label:'设备',icon:Monitor,group:'常用'},
+  {key:'artifacts',label:'成果',icon:Layers,group:'常用',disabled:!can('attachmentWorkspace.open')},
+  {key:'memory',label:'记忆',icon:Brain,group:'常用'},
+  {key:'skills',label:'能力',icon:Sparkles,group:'常用'},
   {key:'remoteInbox',label:'通知',icon:RiNotification3Line,group:'日常',count:Number(state.remoteInbox?.unread||0)||undefined},
   {key:'projects',label:'项目',icon:RiFolderLine,group:'日常'},
-  {key:'memory',label:'记忆',icon:RiBookOpenLine,group:'工作区'},
   {key:'automation',label:'自动化',icon:RiCalendarCheckLine,group:'工作区'},
   {key:'teams',label:'团队',icon:RiTeamLine,group:'工作区'},
-  {key:'skills',label:'技能与工具',icon:RiToolsLine,group:'工作区'},
-  {key:'devices',label:'设备',icon:RiComputerLine,group:'工作区'},
   {key:'media',label:'媒体',icon:RiImage2Line,group:'工作区'},
-  {key:'model-settings',label:'AI 接入',icon:RiChatAiLine,group:'偏好'},
+  {key:'model-settings',label:'账号与模型',icon:UserRound,group:'偏好'},
   ...(can('setup.read')?[{key:'setup',label:'准备中心',icon:RiCheckboxCircleLine,group:'偏好'}]:[]),
   {key:'settings',label:'设置',icon:RiSettings4Line,group:'偏好'},
    {key:'developer-logs',label:'开发诊断',icon:RiTerminalBoxLine,group:'偏好'}
  ],[attentionTasks.length,state.remoteInbox?.unread,can]);
+ const primaryWorkNav=workNav.filter(item=>item.group==='常用');
+ const additionalWorkNav=workNav.filter(item=>item.group!=='常用'&&!['model-settings','settings'].includes(item.key));
  const workCommands:WorkCommand[]=useMemo(()=>[
-  ...workNav.map(item=>({id:item.key,group:item.group||'功能',title:item.label,icon:item.icon,onSelect:()=>item.key==='setup'?openSetup():navigate(item.key)})),
+  ...workNav.filter(item=>!item.disabled).map(item=>({id:item.key,group:item.group||'功能',title:item.label,description:item.key==='skills'?'技能与工具':item.key==='model-settings'?'AI 接入':undefined,icon:item.icon,onSelect:()=>selectNavigation(item.key)})),
   {id:'history',group:'日常',title:'任务历史',icon:RiHistoryLine,onSelect:()=>navigate('history')},
   ...conversations.map(c=>({id:`conversation:${c.id}`,group:'已加载的对话',title:c.title||'未命名对话',description:timeLabel(c.updatedAt),icon:RiChatAiLine,onSelect:()=>selectConversation(c.id)})),
   ...projects.map(p=>({id:`project:${p.id}`,group:'已加载的项目',title:p.name,icon:RiFolderLine,onSelect:()=>{navigate('projects');if(can('projects.select'))run('projects.select',{id:p.id})}}))
- ],[workNav,conversations,projects,navigate,openSetup,selectConversation,can,run]);
+ ],[workNav,conversations,projects,navigate,selectNavigation,selectConversation,can,run]);
  useEffect(()=>{if(!currentFileKey||!state.fileReady||fileAdoption.holdsDraft())return;setFileDrafts(previous=>{const old=previous[currentFileKey];const version=Number(state.fileVersion||0),content=String(state.fileContent||''),baseline=String(state.fileBaseline||'');if(!old)return {...previous,[currentFileKey]:{text:content,baseline,version,dirty:content!==baseline}};if(old.submitted!==undefined&&content===old.submitted&&version!==old.version){
    // The native saving snapshot arrives asynchronously. A newer local edit can
    // already exist when this earlier save is acknowledged; only its baseline moved.
@@ -711,32 +728,43 @@ export default function App(){
    <header className={`pw-drawer-header${commandOpen?' pw-search-header':''}`}>
     {commandOpen&&<IconButton icon={RiArrowLeftLine} aria-label="返回导航" onClick={()=>setCommandOpen(false)}/>}
     {desktopNavigation?<h2>{navigationTitle}</h2>:<Drawer.Title>{navigationTitle}</Drawer.Title>}
-     {!desktopNavigation&&<><Drawer.Description id="pw-work-description" className="pw-sr-only">继续最近对话，或进入工作区、AI 接入和设置。</Drawer.Description><Drawer.Close asChild><IconButton icon={RiCloseLine} aria-label="关闭导航"/></Drawer.Close></>}
+    {desktopNavigation&&!commandOpen&&<IconButton icon={effectiveCompact?PanelLeftOpen:PanelLeftClose} aria-label={effectiveCompact?'展开导航':'收起导航'} aria-expanded={!effectiveCompact} title={effectiveCompact?'展开导航':'收起导航'} onClick={()=>setNavigationCompact(value=>!value)}/>}
+    {!desktopNavigation&&<><Drawer.Description id="pw-work-description" className="pw-sr-only">搜索或继续最近对话，进入任务、设备、成果、记忆、能力及更多工作区。</Drawer.Description><Drawer.Close asChild><IconButton icon={RiCloseLine} aria-label="关闭导航"/></Drawer.Close></>}
    </header>
    {!commandOpen&&<div className="pw-navigation-actions">
-    {can('conversation.new')&&<Button variant="secondary" leadingIcon={RiAddLine} title="新对话" disabled={!!state.chatSubmitting} onClick={()=>{navigate('chat');run('conversation.new')}}>新对话</Button>}
-    <IconButton ref={workSearch} icon={RiSearchLine} aria-label="搜索工作" title="搜索工作" data-testid="work_search" onClick={()=>{setCommandScope('all');setCommandOpen(true)}}/>
+    <Button ref={conversationSearch} variant="ghost" className="pw-navigation-search-trigger" leadingIcon={Search} aria-label="搜索对话" title="搜索对话" onClick={()=>{setCommandScope('conversations');setCommandOpen(true)}}>搜索对话</Button>
+    {can('conversation.new')&&<Button variant="ghost" className="pw-navigation-new" leadingIcon={SquarePen} aria-label="新对话" title="新对话" disabled={!!state.chatSubmitting} onClick={()=>{navigate('chat');run('conversation.new')}}>新对话</Button>}
    </div>}
    <div className={`pw-drawer-body ${commandOpen?'pw-navigation-search':''}`}>
     {commandOpen?<CommandMenu key={commandScope} commands={commandScope==='conversations'?workCommands.filter(item=>item.id.startsWith('conversation:')):workCommands} conversationOnly={commandScope==='conversations'} onClose={()=>setCommandOpen(false)}/>:<>
+     <WorkSidebar items={primaryWorkNav} label="常用工作区" compact={effectiveCompact} hideGroupLabels selected={navigationSelection} onNavigate={selectNavigation}/>
+     <UNSAFE_PortalProvider getContainer={()=>desktopNavigation?document.body:navigationDrawer.current??document.body}>
+     <PopoverTrigger isOpen={navigationMoreOpen} onOpenChange={setNavigationMoreOpen}>
+      <Button ref={workSearch} variant="ghost" className="pw-navigation-more" leadingIcon={MoreHorizontal} aria-label={Number(state.remoteInbox?.unread||0)>0?'更多工作区，有未读通知':'更多工作区'} title="更多工作区" data-has-unread={Number(state.remoteInbox?.unread||0)>0||undefined} data-selected={additionalWorkNav.some(item=>item.key===navigationSelection)||undefined}>更多工作区</Button>
+      <Popover className="pw-navigation-more-popover" dialogClassName="pw-navigation-more-dialog" aria-label="更多工作区" placement="bottom start" boundaryElement={desktopNavigation?undefined:navigationDrawer.current??undefined}>
+       <Button variant="ghost" className="pw-navigation-global-search" leadingIcon={Search} data-testid="work_search" onClick={()=>{setNavigationMoreOpen(false);setCommandScope('all');setCommandOpen(true)}}>搜索全部工作</Button>
+       <WorkSidebar items={additionalWorkNav} label="更多工作区" hideGroupLabels selected={navigationSelection} onNavigate={selectNavigation}/>
+      </Popover>
+     </PopoverTrigger>
+     </UNSAFE_PortalProvider>
      <section className="pw-work-recent" aria-label="最近对话">
-      {[{label:'置顶对话',items:recentWork.filter(c=>Number(c.pinOrder)>0)},{label:'最近对话',items:recentWork.filter(c=>!(Number(c.pinOrder)>0))}].filter(group=>group.items.length>0).map(group=><div className="pw-conversation-group" key={group.label}>
+      {[{label:'置顶',items:recentWork.filter(c=>Number(c.pinOrder)>0)},{label:'最近',items:recentWork.filter(c=>!(Number(c.pinOrder)>0))}].filter(group=>group.items.length>0).map(group=><div className="pw-conversation-group" key={group.label}>
        <div className="pw-section-heading"><h3>{group.label}</h3></div>
-       <div className="pw-recent-work">{group.items.map(c=><div className="pw-conversation-row" key={c.id}><Button variant="ghost" aria-current={c.id===state.conversationId&&route==='chat'?'page':undefined} className={c.id===state.conversationId&&route==='chat'?'is-current':''} onClick={()=>selectConversation(c.id)}><span>{c.title||'未命名对话'}</span></Button>{can('conversation.organization.read')&&<IconButton icon={RiMoreLine} aria-label={`整理对话：${c.title||'未命名对话'}`} onClick={()=>setOrganizationTarget(c.id)}/>}</div>)}</div>
+       <div className="pw-recent-work">{group.items.map(c=><div className="pw-conversation-row" key={c.id}><Button variant="ghost" leadingIcon={MessageSquare} title={c.title||'未命名对话'} aria-current={c.id===state.conversationId&&route==='chat'?'page':undefined} className={c.id===state.conversationId&&route==='chat'?'is-current':''} onClick={()=>selectConversation(c.id)}><span>{c.title||'未命名对话'}</span></Button>{can('conversation.organization.read')&&<IconButton icon={MoreHorizontal} aria-label={`整理对话：${c.title||'未命名对话'}`} onClick={()=>setOrganizationTarget(c.id)}/>}</div>)}</div>
       </div>)}
-      <Button ref={conversationSearch} variant="ghost" className="pw-all-conversations" leadingIcon={RiSearchLine} trailingIcon={RiArrowRightSLine} onClick={()=>{setCommandScope('conversations');setCommandOpen(true)}}>查找对话</Button>
      </section>
-      <WorkSidebar items={workNav.filter(item=>!['settings','model-settings','developer-logs'].includes(item.key)&&(item.key!=='chat'||effectiveCompact||!recentWork.some(c=>c.id===state.conversationId)))} label="工作区" compact={effectiveCompact} onCompactChange={desktopNavigation?setNavigationCompact:undefined} selected={navigationSelection} onNavigate={key=>key==='setup'?openSetup():navigate(key)}/>
     </>}
    </div>
    {!commandOpen&&<footer className="pw-navigation-footer">
-    {can('attachmentWorkspace.open')&&<Button variant="ghost" className="pw-navigation-files" leadingIcon={RiFileLine} title="文件与成果" onClick={()=>{setWorkOpen(false);run('attachmentWorkspace.open')}}>文件与成果</Button>}
-     <WorkSidebar items={workNav.filter(item=>['model-settings','settings','developer-logs'].includes(item.key))} label="AI 接入与设置" compact={effectiveCompact} hideGroupLabels selected={navigationSelection} onNavigate={key=>key==='setup'?openSetup():navigate(key)}/>
+    <div className="pw-navigation-account">
+     <Button variant="ghost" leadingIcon={UserRound} aria-label="账号与模型" title="账号与模型" aria-current={navigationSelection==='model-settings'?'page':undefined} onClick={()=>selectNavigation('model-settings')}>账号与模型</Button>
+     <IconButton icon={Settings} aria-label="设置" title="设置" aria-current={navigationSelection==='settings'?'page':undefined} onClick={()=>selectNavigation('settings')}/>
+    </div>
    </footer>}
  </>;
  const allWork=!desktopNavigation&&<Drawer.Portal>
   <Drawer.Overlay className="pw-overlay pw-navigation-overlay"/>
-  <Drawer.Content className="pw-drawer pw-work-drawer pw-navigation-drawer" aria-describedby="pw-work-description" onEscapeKeyDown={event=>{if(commandOpen){event.preventDefault();if(!event.isComposing&&event.keyCode!==229)setCommandOpen(false)}}} onCloseAutoFocus={event=>{if(taskOpen)event.preventDefault();else if(route==='chat'&&chatMenuTrigger.current){event.preventDefault();chatMenuTrigger.current.focus()}}}>
+  <Drawer.Content ref={navigationDrawer} className="pw-drawer pw-work-drawer pw-navigation-drawer" aria-describedby="pw-work-description" onEscapeKeyDown={event=>{if(navigationMoreOpen){event.preventDefault();setNavigationMoreOpen(false)}else if(commandOpen){event.preventDefault();if(!event.isComposing&&event.keyCode!==229)setCommandOpen(false)}}} onCloseAutoFocus={event=>{if(taskOpen)event.preventDefault();else if(route==='chat'&&chatMenuTrigger.current){event.preventDefault();chatMenuTrigger.current.focus()}}}>
    {navigationContent}
   </Drawer.Content>
  </Drawer.Portal>;

@@ -30,8 +30,8 @@
 .pw-redesign .pw-priority-decisions .ui-dic__card { border-radius: 16px; }
 .pw-navigation-drawer .pw-work-recent .pw-section-heading { margin-top: 2px; }
 .pw-navigation-drawer .pw-recent-work .pw-conversation-row > .is-current {
-  background: var(--pw-surface);
-  box-shadow: 0 2px 8px -5px rgb(0 0 0 / 7%);
+  background: var(--pw-inset);
+  box-shadow: none;
 }
 .pw-navigation-drawer .pw-work-sidebar[data-motion-nav] .pw-nav-item > a[aria-current="page"] {
   background: transparent !important;
@@ -48,10 +48,10 @@
     gap: 12px;
   }
   .pw-desktop-navigation {
-    flex-basis: 248px;
-    width: 248px;
-    border-radius: 20px;
-    background: var(--pw-inset);
+    flex-basis: 280px;
+    width: 280px;
+    border-radius: 28px;
+    background: var(--pw-surface);
     transition: width 280ms cubic-bezier(.22,.68,0,1.02), flex-basis 280ms cubic-bezier(.22,.68,0,1.02);
   }
   .pw-redesign .pw-main-workspace {
@@ -60,98 +60,39 @@
     isolation: isolate;
   }
   .pw-redesign .pw-main-workspace .pw-app-header { background: transparent; }
-  .pw-desktop-navigation .pw-navigation-actions {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 2px;
-    padding: 4px 14px 10px;
-  }
-  .pw-desktop-navigation .pw-navigation-actions > :is(.button-press-motion, [data-pw-icon-button]) {
-    flex: none;
-    width: 100%;
-    min-height: 48px;
-    height: 48px;
-    justify-content: flex-start;
-    padding: 11px 12px;
-    border-radius: 12px;
-    overflow: hidden;
-    box-shadow: none;
-  }
-  .pw-desktop-navigation .pw-navigation-actions > :is(.button-press-motion, [data-pw-icon-button]) > svg { width: 19px; height: 19px; flex: none; }
-  .pw-desktop-navigation .pw-navigation-actions > :is(.button-press-motion, [data-pw-icon-button]):first-child {
-    background: var(--pw-surface);
-    color: var(--pw-ink);
-  }
-  .pw-desktop-navigation .pw-navigation-actions > :is(.button-press-motion, [data-pw-icon-button]) > span { transition: opacity 180ms ease; }
-  .pw-desktop-navigation .pw-navigation-actions > :is(.button-press-motion, [data-pw-icon-button])[aria-label]::after {
-    content: attr(aria-label);
-    font-size: 14px;
-    line-height: 22px;
-    white-space: nowrap;
-    margin-left: 8px;
-  }
-  .pw-desktop-navigation .pw-nav-compact-toggle { margin-top: 0; }
-  .pw-desktop-navigation .pw-navigation-footer {
-    padding-top: 4px;
-    /* Header/actions use 176px; reserve another 64px for an unclipped 48px
-     * primary target plus body padding. Taller windows retain the 50% cap. */
-    max-height: clamp(64px, calc(100% - 240px), 50%);
-  }
-  .pw-desktop-navigation[data-compact="true"] { flex-basis: 76px; width: 76px; }
-  .pw-desktop-navigation[data-compact="true"] .pw-drawer-header { padding-inline: 16px; }
+  .pw-desktop-navigation .pw-navigation-actions > .button-press-motion > span { transition: opacity 180ms ease; }
+  .pw-desktop-navigation[data-compact="true"] { flex-basis: 80px; width: 80px; }
+  .pw-desktop-navigation[data-compact="true"] .pw-drawer-header { padding-inline: 18px; }
   .pw-desktop-navigation[data-compact="true"] .pw-drawer-header h2 {
-    font-size: 0;
-    white-space: nowrap;
+    position: absolute;
+    width: 1px;
+    height: 1px;
     overflow: hidden;
-    text-overflow: clip;
-    letter-spacing: 0;
+    clip-path: inset(50%);
   }
-  .pw-desktop-navigation[data-compact="true"] .pw-drawer-header h2::after { content: 'PW'; font-size: 13px; font-weight: 600; }
-  .pw-desktop-navigation[data-compact="true"] .pw-navigation-actions > :is(.button-press-motion, [data-pw-icon-button]) > span,
-  .pw-desktop-navigation[data-compact="true"] .pw-navigation-actions > :is(.button-press-motion, [data-pw-icon-button])[aria-label]::after {
-    width: 0;
-    opacity: 0;
-    margin: 0;
+  .pw-desktop-navigation[data-compact="true"] :is(.pw-navigation-actions, .pw-drawer-body) { padding-inline: 16px; }
+  .pw-desktop-navigation[data-compact="true"] :is(.pw-navigation-actions > .button-press-motion, .pw-navigation-more, .pw-nav-item a) { width: 48px; padding-inline: 13px; gap: 0; }
+  .pw-desktop-navigation[data-compact="true"] :is(.pw-navigation-actions > .button-press-motion, .pw-navigation-more, .pw-navigation-account > .button-press-motion:first-child) > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
     overflow: hidden;
+    clip-path: inset(50%);
   }
   .pw-desktop-navigation[data-compact="true"] .pw-work-recent { display: none; }
-  .pw-desktop-navigation[data-compact="true"] .pw-navigation-tools h3 > button {
-    position: relative;
-    width: 48px;
-    min-width: 48px;
-    overflow: hidden;
-  }
-  .pw-desktop-navigation[data-compact="true"] .pw-navigation-tools h3 > button > span {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-  }
-  .pw-desktop-navigation[data-compact="true"] .pw-navigation-tools h3 > button > svg:last-child { display: none; }
-  .pw-desktop-navigation[data-compact="true"] .pw-navigation-tools .pw-work-sidebar { padding-left: 0; }
-  .pw-desktop-navigation[data-compact="true"] .pw-navigation-tools :is([role="region"], [role="group"][aria-labelledby]) > div > .button-press-motion {
-    width: 48px;
-    min-height: 48px;
-    padding-inline: 12px;
-    overflow: hidden;
-    justify-content: flex-start;
-  }
-  .pw-desktop-navigation[data-compact="true"] .pw-navigation-tools :is([role="region"], [role="group"][aria-labelledby]) > div > .button-press-motion > span {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-  }
+  .pw-desktop-navigation[data-compact="true"] .pw-navigation-more[data-has-unread="true"]::after { position: absolute; top: 10px; right: 8px; }
+  .pw-desktop-navigation[data-compact="true"] .pw-navigation-footer { padding-inline: 12px; }
+  .pw-desktop-navigation[data-compact="true"] .pw-navigation-account { flex-direction: column; }
+  .pw-desktop-navigation[data-compact="true"] .pw-navigation-account > .button-press-motion:first-child { width: 48px; padding-inline: 13px; }
 }
 
 /* Below this height, independent scroll panes cannot each contain a complete
  * target. One rail scroll keeps primary entries, tools and settings reachable. */
-@media (min-width: 1024px) and (max-height: 340px) {
-  .pw-desktop-navigation { overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; }
-  .pw-desktop-navigation .pw-drawer-body { flex: none; overflow: visible; }
-  .pw-desktop-navigation .pw-navigation-footer { max-height: none; overflow: visible; }
+@media (max-height: 480px) {
+  .pw-work-drawer.pw-navigation-drawer,
+  .pw-desktop-navigation.pw-navigation-drawer { overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; }
+  .pw-navigation-drawer .pw-drawer-body:not(.pw-navigation-search) { flex: none; overflow: visible; }
+  .pw-navigation-drawer .pw-navigation-footer { overflow: visible; }
 }
 
 :root.dark .pw-redesign {
