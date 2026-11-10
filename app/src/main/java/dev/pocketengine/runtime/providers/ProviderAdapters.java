@@ -22,9 +22,30 @@ public final class ProviderAdapters {
     /** Encode already-validated native reasoning options only. This is not capability
      * evidence or request admission: ModelRequestPolicy retains those checks before
      * projection. No credentials, route choice, retries or mutable capability state. */
+    /** Converts a reviewed switch into the exact selected family's request field. */
+    public static void projectReasoning(ModelConfig config, ReasoningOptions options, JSONObject wire) throws Exception {
+        if (options.mode() == ReasoningOptions.Mode.OPENAI_SWITCH) {
+            String style = dev.pocketengine.runtime.models.ModelReasoningProfiles.switchWire(config.model);
+            if (style.equals("enable_thinking")) wire.put("enable_thinking", options.level().equals("enabled"));
+            else if (style.equals("thinking_type"))
+                wire.put("thinking", new JSONObject().put("type", options.level()));
+            else throw new IllegalArgumentException("unsupported_thinking_switch");
+            return;
+        }
+        if (options.mode() == ReasoningOptions.Mode.ANTHROPIC_SWITCH) {
+            String style = dev.pocketengine.runtime.models.ModelReasoningProfiles.switchWire(config.model);
+            if (style.isEmpty()) throw new IllegalArgumentException("unsupported_thinking_switch");
+            wire.put("thinking", new JSONObject().put("type",
+                    style.equals("thinking_adaptive") && options.level().equals("enabled") ? "adaptive" : options.level()));
+            return;
+        }
+        projectReasoning(config.provider, options, wire);
+    }
+
     public static void projectReasoning(String provider,ReasoningOptions options,JSONObject wire)throws Exception {
         switch (options.mode()) {
             case DEFAULT: break;
+            case OPENAI_SWITCH, ANTHROPIC_SWITCH -> throw new IllegalArgumentException("thinking_switch_requires_model_identity");
             case OPENAI_EFFORT:
                 if (provider.equals("openai_chat")) wire.put("reasoning_effort", options.level());
                 else wire.put("reasoning", new JSONObject().put("effort", options.level()));

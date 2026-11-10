@@ -456,6 +456,11 @@ public final class ModelConnectionService {
                         ? Set.of("low","medium","high") : Set.of("minimal","low","medium","high");
                 default -> throw new IllegalArgumentException("此模型协议尚未接入可声明的推理强度");
             };
+            if ((config.provider.equals("openai_chat") || config.provider.equals("anthropic"))
+                    && !ModelReasoningProfiles.switchWire(model).isEmpty()) {
+                java.util.HashSet<String> expanded=new java.util.HashSet<>(allowed);
+                expanded.add("enabled");expanded.add("disabled");allowed=Set.copyOf(expanded);
+            }
             ModelCatalog.ModelKey key=new ModelCatalog.ModelKey(expected,ModelBinding.modelId(model));
             catalog.bind(expected);
             ModelCatalog.View before=catalog.get(key,MAX_CATALOG_AGE_MILLIS);

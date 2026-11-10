@@ -56,7 +56,7 @@ public final class ModelRequestPolicy {
             if (toolContext && facts.toolCalls().known && !facts.toolCalls().value)
                 throw new Rejected("tool_capability_unsupported", "该模型已明确声明不支持工具调用，本次尚未发送。");
             checkContext(config, messages, tools, facts, images);
-            dev.pocketengine.runtime.providers.ProviderAdapters.projectReasoning(config.provider, config.reasoning, wire);
+            dev.pocketengine.runtime.providers.ProviderAdapters.projectReasoning(config, config.reasoning, wire);
             return projectCompatibility(config, messages, tools, wire);
         }
         if (images) requireTrue(facts.imageInput(), "image_capability", "当前精确模型的图像输入能力未知或不支持；请在模型页核对。");
@@ -104,7 +104,7 @@ public final class ModelRequestPolicy {
             wire.put(field.value == ModelFacts.ChatOutputParameter.MAX_TOKENS ? "max_tokens" : "max_completion_tokens", config.maxOutputTokens);
         }
         validateReasoning(config, facts);
-        dev.pocketengine.runtime.providers.ProviderAdapters.projectReasoning(config.provider,config.reasoning,wire);
+        dev.pocketengine.runtime.providers.ProviderAdapters.projectReasoning(config,config.reasoning,wire);
         return projectCompatibility(config,messages,tools,wire);
     }
 
@@ -135,6 +135,8 @@ public final class ModelRequestPolicy {
         requireTrue(facts.reasoning(), "reasoning_capability", "该模型推理能力未知或不支持，不能发送额外推理设置。");
         boolean matchingProtocol = switch (options.mode()) {
             case OPENAI_EFFORT -> config.provider.equals("openai_chat") || config.provider.equals("openai_responses");
+            case OPENAI_SWITCH -> config.provider.equals("openai_chat") && !ModelReasoningProfiles.switchWire(config.model).isEmpty();
+            case ANTHROPIC_SWITCH -> config.provider.equals("anthropic") && !ModelReasoningProfiles.switchWire(config.model).isEmpty();
             case ANTHROPIC_ADAPTIVE, ANTHROPIC_BUDGET -> config.provider.equals("anthropic") || config.usesBedrock();
             case GEMINI_LEVEL, GEMINI_BUDGET -> config.provider.equals("gemini");
             default -> false;

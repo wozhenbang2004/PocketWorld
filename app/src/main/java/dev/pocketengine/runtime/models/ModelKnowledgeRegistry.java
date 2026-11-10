@@ -120,8 +120,14 @@ final class ModelKnowledgeRegistry {
             inferred.put(Field.REASONING, Fact.known(entry.reasoning, Source.PUBLIC_REGISTRY, reference, index.updatedAt));
         if (entry.reasoning && !facts.reasoningLevels().known) {
             List<String> levels = entry.effort;
-            if (levels.isEmpty() && entry.toggle && ModelReasoningProfiles.supportsThinkingSwitch(binding, modelId))
-                levels = List.of("disabled", "enabled");
+            if (entry.toggle && ModelReasoningProfiles.supportsThinkingSwitch(binding, modelId)
+                    && !levels.contains("none")) {
+                List<String> expanded = new ArrayList<>();
+                expanded.add("disabled");
+                expanded.addAll(levels);
+                if (levels.isEmpty()) expanded.add("enabled");
+                levels = expanded;
+            }
             if (!levels.isEmpty())
                 inferred.put(Field.REASONING_LEVELS, Fact.known(levels, Source.PUBLIC_REGISTRY, reference, index.updatedAt));
         }
