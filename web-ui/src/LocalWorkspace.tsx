@@ -2,11 +2,13 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { IconAdd, IconArrowLeft, IconChevronRight, IconFolder, IconRefresh, IconTerminal } from './icons';
 import { Accordion, AccordionItem, Button, CheckboxField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import TerminalSurface from './TerminalSurface';
+import { bridge } from './bridge';
 import { localReceiptPollable, projectExecutionShouldRead } from './project-execution';
 import './local-workspace.css';
 
 type Data = Record<string, any>;
 type Run = (action: string, args?: Data) => Promise<any>;
+const ownerWindow = () => { const view = bridge.getState().view as Data; return [bridge.getDocumentEpoch(), view.section, view.taskId, view.resumeRevision].join('|'); };
 const rows = (value: any): Data[] => Array.isArray(value) ? value : [];
 const identity = (task: Data) => ({ taskId: task.taskId || task.id, runId: task.runId || task.raw?.runId, epoch: task.epoch || task.raw?.coordinatorEpoch, executionId: task.executionId || task.id });
 const statusLabel = (value: any) => ({ running: '运行中', completed: '已完成', failed: '已结束，需核对', stopped: '已停止', unknown: '结果待核对', reconciling: '结果待核对', paused: '已暂停', pending: '等待回执', observed: '已取得回执', not_dispatched: '未发送' } as Record<string, string>)[String(value)] || value || '状态待核对';
@@ -23,22 +25,23 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
   const [columns, setColumns] = useState('80'), [height, setHeight] = useState('24'), [stopReview, setStopReview] = useState(false), [stopRequested, setStopRequested] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [prepareAttempted, setPrepareAttempted] = useState(false);
   const [visible, setVisible] = useState(() => document.visibilityState === 'visible');
-  const entered = useRef(false), alive = useRef(true), viewHandle = useRef(''), reviewHandle = useRef('');
+  const entered = useRef<object | null>(null), alive = useRef(true), viewHandle = useRef(''), reviewHandle = useRef('');
   const readingRoot = useRef<HTMLElement>(null), readingPositions = useRef<Record<string, number>>({}), previousPresentation = useRef('setup');
   const activePanel = useRef(panel); activePanel.current = panel;
   const presentation = panel === 'setup' ? 'setup' : view ? `screen:${view.handle}` : `session:${original?.executionId || ''}`;
   const rememberPosition = () => { readingPositions.current[presentation] = readingRoot.current?.closest<HTMLElement>('.pw-secondary-scroll')?.scrollTop || 0; };
   const changePanel = (next: 'setup' | 'session') => { if (busy || review || stopReview || next === panel) return; rememberPosition(); setPanel(next); };
   const invoke = async (name: string, args: Data = {}, accept?: (value: Data) => void) => {
-    if (entered.current) return; entered.current = true; setBusy(true); setError('');
+    if (entered.current || document.hidden) return;
+    const token = {}, owner = ownerWindow(); entered.current = token; setBusy(true); setError('');
+    const current = () => alive.current && entered.current === token && !document.hidden && ownerWindow() === owner;
     try {
       const result = await run(name, args);
-      if (alive.current) accept?.(result);
+      if (current()) { accept?.(result); return result; }
       else if ((name === 'local.terminal.open' || name === 'local.terminal.review') && result?.handle) void run('local.terminal.close', { handle: result.handle }).catch(() => {});
-      return result;
     }
-    catch (failure) { if (alive.current) setError(failure instanceof Error ? failure.message : String(failure)); throw failure; }
-    finally { entered.current = false; if (alive.current) setBusy(false); }
+    catch (failure) { if (current()) setError(failure instanceof Error ? failure.message : String(failure)); throw failure; }
+    finally { if (entered.current === token) { entered.current = null; if (alive.current) setBusy(false); } }
   };
   const closeViewer = () => {
     rememberPosition(); const handle = viewHandle.current; viewHandle.current = ''; setView(null); setOutput(null);
@@ -48,7 +51,19 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
     const handle = reviewHandle.current; reviewHandle.current = ''; setReview(null); setAcknowledged(false);
     if (handle) void run('local.terminal.close', { handle }).catch(() => {});
   };
-  useEffect(() => { alive.current = true; return () => { alive.current = false; const handle = viewHandle.current || reviewHandle.current; if (handle) void run('local.terminal.close', { handle }).catch(() => {}); }; }, []);
+  useEffect(() => {
+    alive.current = true; let owner = ownerWindow();
+    const retire = () => {
+      const handles = [viewHandle.current, reviewHandle.current]; viewHandle.current = ''; reviewHandle.current = ''; entered.current = null;
+      // The native owner also retires these handles on background/window changes.
+      // Keep the original execution and input draft; reopening only observes it.
+      if (alive.current) { setView(null); setOutput(null); setReview(null); setAcknowledged(false); setStopReview(false); setBusy(false); setError(''); }
+      for (const handle of handles) if (handle) void run('local.terminal.close', { handle }).catch(() => {});
+    };
+    const inspect = () => { const next = ownerWindow(); if (next !== owner || document.hidden) { owner = next; retire(); } setVisible(!document.hidden); };
+    const unsubscribe = bridge.subscribe(inspect); document.addEventListener('visibilitychange', inspect); window.addEventListener('pagehide', retire);
+    return () => { alive.current = false; retire(); unsubscribe(); document.removeEventListener('visibilitychange', inspect); window.removeEventListener('pagehide', retire); };
+  }, []);
   useEffect(() => {
     setReviewExpired(false);
     if (!review) return;
@@ -57,11 +72,6 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
     const timer = window.setTimeout(() => setReviewExpired(true), remaining);
     return () => window.clearTimeout(timer);
   }, [review?.handle, review?.expiresAt]);
-  useEffect(() => {
-    const changed = () => setVisible(document.visibilityState === 'visible');
-    document.addEventListener('visibilitychange', changed);
-    return () => document.removeEventListener('visibilitychange', changed);
-  }, []);
   useEffect(() => {
     registerTransientBack(() => {
       if (stopReview) { if (!busy) setStopReview(false); return true; }
