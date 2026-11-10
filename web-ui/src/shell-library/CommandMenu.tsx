@@ -1,12 +1,12 @@
 /* Affect command behavior + BeUI a866cb2 morphing-search geometry and active-result
  * layout. The host owns its existing drawer: no second portal or focus trap. */
-import {useEffect,useId,useRef,useState,type ComponentType} from 'react';
+import {useEffect,useId,useRef,useState,type ComponentType,type ReactNode} from 'react';
 import {LayoutGroup,motion,useReducedMotion} from 'motion/react';
 import {RiSearchLine,RiCommandLine} from '@remixicon/react';
 import {EASE_OUT,SPRING_LAYOUT} from './beui-adapted/ease';
 import './beui-adapted/interactions.css';
 export type WorkCommand={id:string;group:string;title:string;description?:string;icon?:ComponentType<{className?:string;'aria-hidden'?:boolean|'true'|'false'}>;onSelect:()=>void};
-export function CommandMenu({commands,onClose,conversationOnly=false}:{commands:WorkCommand[];onClose?:()=>void;conversationOnly?:boolean}){
+export function CommandMenu({commands,onClose,conversationOnly=false,footer}:{commands:WorkCommand[];onClose?:()=>void;conversationOnly?:boolean;footer?:ReactNode}){
  const commandId=useId();const[query,setQuery]=useState(''),[active,setActive]=useState(0);const reduce=useReducedMotion();
  const input=useRef<HTMLInputElement>(null);
  const list=commands.filter(x=>[x.group,x.title,x.description||''].join(' ').toLocaleLowerCase().includes(query.toLocaleLowerCase()));
@@ -32,6 +32,6 @@ export function CommandMenu({commands,onClose,conversationOnly=false}:{commands:
  <CommandIcon className="pw-command-icon" aria-hidden/><span className="pw-command-copy"><span className="pw-command-title">{x.title}</span>{x.description&&<span className="pw-command-description">{x.description}</span>}</span><span className="afa-push"/>
  </motion.button></div>})}
  {!list.length&&<p className="afa-empty">{conversationOnly?'没有匹配的已加载对话。':'没有匹配的已加载工作或功能。'}</p>}
- </motion.div><footer>{conversationOnly?'仅搜索当前已加载的对话':'搜索当前已加载范围'}</footer>
+ </motion.div><footer onKeyDown={event=>event.stopPropagation()}>{footer??(conversationOnly?'仅搜索当前已加载的对话':'搜索当前已加载范围')}</footer>
  </motion.section></LayoutGroup>
 }

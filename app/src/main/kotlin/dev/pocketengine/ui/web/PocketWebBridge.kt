@@ -211,7 +211,7 @@ internal class PocketWebBridge(
         val commands: Set<String> = linkedSetOf(
             "app.ready", "app.refresh", "notice.dismiss", "notice.task.close", "error.dismiss", "execution.read", "execution.review", "execution.confirm",
             "composer.edit", "composer.send", "composer.mode", "composer.intent", "composer.reading", "composer.query", "composer.retry", "composer.returnPending",
-            "chat.cancel", "ownerWork.input", "ownerWork.control", "message.origin", "conversation.new", "conversation.select", "conversation.reader.open", "conversation.reader.close", "conversation.reader.earlier", "conversation.reader.refresh", "conversation.reader.position", "conversation.reader.select", "conversation.reader.attachment",
+            "chat.cancel", "ownerWork.input", "ownerWork.control", "message.origin", "conversation.new", "conversation.select", "conversation.directory", "conversation.reader.open", "conversation.reader.close", "conversation.reader.earlier", "conversation.reader.refresh", "conversation.reader.position", "conversation.reader.select", "conversation.reader.attachment",
             "attachments.pick", "attachments.openPicker", "attachments.closePicker", "attachments.toggle", "attachments.remove", "attachments.open", "sources.open", "sources.read", "sources.close",
             "quickVoice.start", "quickVoice.save", "quickVoice.close",
             "skillDraft.open", "skillDraft.read", "skillDraft.source", "skillDraft.confirm", "skillDraft.cancel", "skillDraft.query", "skillDraft.close", "voice.start", "voice.stop", "voice.review", "voice.accept", "voice.discard", "speech.speak", "speech.stop", "speech.taskAnnouncements", "speech.stopTaskAnnouncement",
@@ -576,6 +576,12 @@ internal class PocketWebBridge(
                     .put("taskId", requiredString(args, "taskId")).put("runId", requiredString(args, "runId"))
                     .put("epoch", requiredInt(args, "epoch"))
                 controller.cancelChatFromWeb(expected) { result, error -> complete(id, result, error) }
+                return
+            }
+            if (action == "conversation.directory") {
+                checkedPayload(args, setOf("cursor"))
+                require(section == null && taskViewId == null && controller.webPrivateOwnerVisible()) { "请回到私人工作台查找对话" }
+                controller.readConversationDirectory(requiredString(args, "cursor", true)) { result, error -> complete(id, result, error) }
                 return
             }
             if (action == "ownerWork.input") {

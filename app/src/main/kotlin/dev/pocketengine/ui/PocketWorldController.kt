@@ -2416,6 +2416,24 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun openAdvanced(panel: String = "settings") {
         activity.startActivity(MainActivity.advancedPanelIntent(activity, panel))
     }
+    /** Read only one page of original headers; opening it never switches the active draft. */
+    internal fun readConversationDirectory(cursor: String, done: (JSONObject?, String?) -> Unit) {
+        check(webPrivateOwnerVisible()) { "请回到私人工作台查找对话" }
+        require(cursor.length <= 4000) { "对话目录游标过长" }
+        val window = webWindowTicket()
+        try { io.execute {
+            val result = runCatching {
+                val assistant = app.features.module("assistant") as? dev.pocketengine.features.assistant.AssistantModule
+                    ?: error("私人历史宿主尚未准备")
+                assistant.listOriginalConversations(cursor, 20).put("bodyIncluded", false).put("executionAuthorized", false)
+            }
+            main.post {
+                if (closed) return@post
+                if (!webPrivateOwnerVisible() || webWindowTicket() != window) done(null, "对话目录窗口已变化，请重新打开")
+                else result.fold({ done(it, null) }, { done(null, message(it)) })
+            }
+        } } catch (failure: java.util.concurrent.RejectedExecutionException) { done(null, "界面已关闭，请重新打开对话目录") }
+    }
     var conversationReader by mutableStateOf<ConversationReadPage?>(null)
         private set
     private var conversationReadSequence=0L

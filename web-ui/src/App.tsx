@@ -14,6 +14,7 @@ import {bridge} from './bridge';
 import {usePocketSnapshot} from './usePocketSnapshot';
 import {foregroundConversationStream} from './conversation-stream';
 import {useConversationReading} from './useConversationReading';
+import {useConversationDirectory,ConversationDirectoryControls} from './useConversationDirectory';
 import {usePocketAppearance} from './usePocketAppearance';
 import {useClosingSnapshot,useMessageArrivals,useReviewFocus,useSurfaceEnter} from './library/surface-motion';
 import {chatCancelFeedback,chatCancelIdentity,chatCancelKey} from './chat-cancel';
@@ -165,6 +166,8 @@ export default function App(){
  const [organizationTarget,setOrganizationTarget]=useState<string|null>(null);
  const [commandScope,setCommandScope]=useState<'all'|'conversations'>('all');
  const [desktopNavigation,setDesktopNavigation]=useState(()=>window.matchMedia('(min-width: 1024px)').matches);
+ const conversationDirectory=useConversationDirectory(commandOpen&&(workOpen||desktopNavigation),can('conversation.directory'),`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}`);
+ const searchableConversations=[...new Map([...conversationDirectory.rows,...conversations].map(row=>[row.id,row])).values()];
  const [chatMenuOpen,setChatMenuOpen]=useState(false);const chatMenuTrigger=useRef<HTMLButtonElement>(null);
  const navigationReturnFocus=useRef<HTMLElement|null>(null);
  const [navigationMoreOpen,setNavigationMoreOpen]=useState(false);
@@ -618,9 +621,9 @@ export default function App(){
  const workCommands:WorkCommand[]=useMemo(()=>[
   ...workNav.filter(item=>!item.disabled).map(item=>({id:item.key,group:item.group||'功能',title:item.label,description:item.key==='skills'?'技能与工具':item.key==='model-settings'?'AI 接入':undefined,icon:item.icon,onSelect:()=>selectNavigation(item.key)})),
   {id:'history',group:'日常',title:'任务历史',icon:RiHistoryLine,onSelect:()=>navigate('history')},
-  ...conversations.map(c=>({id:`conversation:${c.id}`,group:'已加载的对话',title:c.title||'未命名对话',description:timeLabel(c.updatedAt),icon:RiChatAiLine,onSelect:()=>selectConversation(c.id)})),
+  ...searchableConversations.map(c=>({id:`conversation:${c.id}`,group:'已加载的对话',title:c.title||'未命名对话',description:timeLabel(c.updatedAt),icon:RiChatAiLine,onSelect:()=>selectConversation(c.id)})),
   ...projects.map(p=>({id:`project:${p.id}`,group:'已加载的项目',title:p.name,icon:RiFolderLine,onSelect:()=>{void navigate('projects',()=>{if(can('projects.select'))run('projects.select',{id:p.id})})}}))
- ],[workNav,conversations,projects,navigate,selectNavigation,selectConversation,can,run]);
+ ],[workNav,searchableConversations,projects,navigate,selectNavigation,selectConversation,can,run]);
  useEffect(()=>{if(!currentFileKey||!state.fileReady||fileAdoption.holdsDraft())return;setFileDrafts(previous=>{const old=previous[currentFileKey];const version=Number(state.fileVersion||0),content=String(state.fileContent||''),baseline=String(state.fileBaseline||'');if(!old)return {...previous,[currentFileKey]:{text:content,baseline,version,dirty:content!==baseline}};if(old.submitted!==undefined&&content===old.submitted&&version!==old.version){
    // The native saving snapshot arrives asynchronously. A newer local edit can
    // already exist when this earlier save is acknowledged; only its baseline moved.
@@ -839,7 +842,7 @@ export default function App(){
     {can('conversation.new')&&<Button variant="ghost" className="pw-navigation-new" leadingIcon={SquarePen} aria-label="新对话" title="新对话" disabled={!!state.chatSubmitting} onClick={()=>{void navigate('chat',()=>run('conversation.new'))}}>新对话</Button>}
    </div>}
    <div className={`pw-drawer-body ${commandOpen?'pw-navigation-search':''}`}>
-    {commandOpen?<CommandMenu key={commandScope} commands={commandScope==='conversations'?workCommands.filter(item=>item.id.startsWith('conversation:')):workCommands} conversationOnly={commandScope==='conversations'} onClose={()=>setCommandOpen(false)}/>:<>
+    {commandOpen?<CommandMenu key={commandScope} commands={commandScope==='conversations'?workCommands.filter(item=>item.id.startsWith('conversation:')):workCommands} conversationOnly={commandScope==='conversations'} footer={can('conversation.directory')?<ConversationDirectoryControls directory={conversationDirectory}/>:undefined} onClose={()=>setCommandOpen(false)}/>:<>
      <WorkSidebar items={primaryWorkNav} label="常用工作区" compact={effectiveCompact} hideGroupLabels selected={navigationSelection} onNavigate={selectNavigation}/>
      <UNSAFE_PortalProvider getContainer={()=>desktopNavigation?document.body:navigationDrawer.current??document.body}>
      <PopoverTrigger isOpen={navigationMoreOpen} onOpenChange={setNavigationMoreOpen}>
