@@ -3,7 +3,7 @@
  * Retains the tree, roving keyboard navigation and positioned duration track;
  * removes demo spans, simulated completion, cost arithmetic and timers. */
 import { useRef, useState } from 'react';
-import { RiArrowDownSLine, RiArrowRightSLine, RiCheckLine, RiCloseLine, RiCpuLine, RiInformationLine, RiLoader4Line, RiToolsLine } from '@remixicon/react';
+import { IconCheck, IconChevronDown, IconChevronRight, IconClose, IconCpu, IconInfo, IconLoading, IconTool } from '../../icons';
 import { IconButton } from '../../forms-library';
 import { durationLabel, nodeDurationLabel, traceBar, traceFailed, traceInProgress, traceKind, traceStatus, type TraceBounds, type TraceNode, type TraceRow } from '../../execution-trace';
 
@@ -23,8 +23,8 @@ export function TraceWaterfall({ rows, bounds, mode, selectedId, filtering, onTo
     <div role="tree" aria-label={mode === 'timeline' ? '执行轨迹时间轴' : '执行调用树'} className="pw-trace-tree">
       {rows.map((row, index) => {
         const node = row.node, bar = traceBar(node, bounds), ongoing = traceInProgress(node.status), failed = traceFailed(node);
-        const Kind = node.kind === 'model' ? RiCpuLine : node.kind === 'tool' ? RiToolsLine : RiInformationLine;
-        const State = failed ? RiCloseLine : ongoing ? RiLoader4Line : ['COMPLETED', 'SUCCESS', 'SUCCEEDED', 'DONE'].includes(node.status.toUpperCase()) ? RiCheckLine : RiInformationLine;
+        const Kind = node.kind === 'model' ? IconCpu : node.kind === 'tool' ? IconTool : IconInfo;
+        const State = failed ? IconClose : ongoing ? IconLoading : ['COMPLETED', 'SUCCESS', 'SUCCEEDED', 'DONE'].includes(node.status.toUpperCase()) ? IconCheck : IconInfo;
         return <div key={node.id} ref={element => { if (element) rowRefs.current.set(node.id, element); else rowRefs.current.delete(node.id); }}
           className="pw-trace-row" role="treeitem" aria-level={row.level + 1} aria-expanded={row.hasChildren ? row.expanded : undefined}
           aria-selected={selectedId === node.id} tabIndex={activeId === node.id ? 0 : -1} data-node-id={node.id}
@@ -43,7 +43,7 @@ export function TraceWaterfall({ rows, bounds, mode, selectedId, filtering, onTo
           }}>
           <div className="pw-trace-name" style={{ paddingInlineStart: Math.min(row.level, 5) * 12 }}>
             {row.hasChildren && !filtering ? <IconButton className="pw-trace-fold" size="small" tabIndex={-1}
-              icon={row.expanded ? RiArrowDownSLine : RiArrowRightSLine} aria-label={`${row.expanded ? '折叠' : '展开'} ${node.name}`}
+              icon={row.expanded ? IconChevronDown : IconChevronRight} aria-label={`${row.expanded ? '折叠' : '展开'} ${node.name}`}
               aria-expanded={row.expanded} onClick={() => onToggle(node.id)}/> : <span className="pw-trace-kind" aria-hidden="true"><Kind size={16}/></span>}
             <button type="button" tabIndex={-1} className="pw-trace-title" onClick={() => onSelect(node)} aria-label={`查看 ${node.name} 的调用详情`}>
               <span>{node.name}</span><small>{[node.kind === 'model' && node.model !== node.name ? node.model : null,

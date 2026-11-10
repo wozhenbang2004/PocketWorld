@@ -186,6 +186,10 @@
 .pw-composer-host.pw-squircle-composer .pw-composer-toolbar :is(.pw-conversation-model-chip, .pw-conversation-reasoning-chip):disabled {
   color: var(--pw-disabled);
 }
+.pw-composer-host.pw-squircle-composer .pw-composer-toolbar .afa-stop {
+  --color-accent-500: var(--pw-on-accent);
+  color: var(--pw-on-accent);
+}
 .pw-composer-host.pw-squircle-composer .pw-composer-toolbar :is(button, [data-pw-icon-button]):focus-visible {
   outline: 2px solid var(--pw-focus);
   outline-offset: -3px;
@@ -224,7 +228,7 @@
   padding: 9px;
   border-radius: 50%;
   background: transparent;
-  color: var(--pw-on-strong);
+  color: var(--pw-on-accent);
 }
 .pw-composer-host.pw-squircle-composer .pw-composer-toolbar .pw-press-material { border-radius: inherit; }
 .pw-composer-host.pw-squircle-composer .pw-composer-toolbar .pw-press-label { display: flex; align-items: center; justify-content: center; }

@@ -1,5 +1,7 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Accordion, AccordionItem, Button, RadioOptions } from './forms-library';
+import { PressButton } from './library';
+import { IconSpeaker } from './icons';
 
 type Data = Record<string, unknown>;
 type Props = { state: Data; supported: (action: string) => boolean; run: (action: string, args?: Record<string, unknown>) => Promise<unknown> };
@@ -39,7 +41,7 @@ export function systemSpeechSummary(speech: Data): string {
 }
 
 /** Capability metadata is not an offline guarantee or a new speech provider. */
-export function SystemSpeechSettings({ state, supported, run }: Props) {
+export function SystemSpeechSettings({ state, supported, run, children }: Props & { children?: ReactNode }) {
   const speech = object(state.systemSpeech);
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState('');
@@ -56,15 +58,23 @@ export function SystemSpeechSettings({ state, supported, run }: Props) {
     ? '当前系统声音声明需要网络。'
     : speech.ttsVoiceNetworkUse === 'declares_no_network_requirement'
       ? '当前系统声音声明无需网络，实际行为由系统引擎决定。'
-      : '当前声音的联网属性尚未确认。';
+      : '当前声音的联网属性尚未确认，系统语音引擎可能联网。';
   const needsData = speech.ttsStatus === 'language_data_missing' || speech.ttsStatus === 'language_unsupported';
-  return <section className="pw-system-speech-preference" aria-label="系统朗读">
-    <header className="pw-preference-heading"><h3>系统朗读</h3><p role="status">{systemSpeechSummary(speech)}</p></header>
+  const prepared = speech.ttsStatus === 'ready';
+  const preparing = speech.ttsStatus === 'initializing';
+  const prepareDisabled = pending || preparing || needsData || !supported('speech.prepare');
+  return <section className="pw-system-speech-preference pw-phone-preference-group" aria-label="系统朗读">
+    <header className="pw-preference-heading"><h3><IconSpeaker size={22}/>系统朗读</h3><p role="status">{systemSpeechSummary(speech)}</p></header>
     <div className="pw-form-actions">
-      <Button variant="secondary" disabled={pending || speech.ttsStatus === 'initializing' || needsData || !supported('speech.prepare')} onClick={() => { void perform('speech.prepare'); }}>准备中文朗读</Button>
-      <Button variant="secondary" disabled={pending || !supported('speech.openSettings')} onClick={() => { void perform('speech.openSettings'); }}>系统语音设置</Button>
+      {!prepared && !needsData && !state.speaking
+        ? <PressButton compact disabled={prepareDisabled} onClick={() => { void perform('speech.prepare'); }}>{preparing ? '正在准备…' : '准备中文朗读'}</PressButton>
+        : <Button variant="ghost" disabled={prepareDisabled} onClick={() => { void perform('speech.prepare'); }}>{prepared ? '重新准备朗读' : '准备中文朗读'}</Button>}
+      {needsData && !state.speaking
+        ? <PressButton compact disabled={pending || !supported('speech.openSettings')} onClick={() => { void perform('speech.openSettings'); }}>系统语音设置</PressButton>
+        : <Button variant="ghost" disabled={pending || !supported('speech.openSettings')} onClick={() => { void perform('speech.openSettings'); }}>系统语音设置</Button>}
     </div>
     <p className="pw-field-hint">{network}</p>
+    {children}
     {typeof speech.ttsEnginePackage === 'string' && speech.ttsEnginePackage && <Accordion variant="divided" className="pw-compact-disclosures"><AccordionItem id="speech-engine" title="语音引擎"><p className="pw-field-hint">{speech.ttsEnginePackage}{typeof speech.ttsVoiceName === 'string' && speech.ttsVoiceName ? ` · ${speech.ttsVoiceName}` : ''}</p></AccordionItem></Accordion>}
     {needsData && <p className="pw-field-hint">在系统中选择支持中文的引擎或安装中文资源后，重新打开应用再准备朗读。</p>}
     {message && <p className="pw-field-hint" role="status">{message}</p>}

@@ -1,4 +1,5 @@
-import { RiBarChartGroupedFill, RiEqualizerLine, RiErrorWarningLine, RiLoader4Line, RiQuestionLine, RiSparklingLine } from '@remixicon/react';
+import { RiBarChartGroupedFill } from '@remixicon/react';
+import { IconControls, IconError, IconHelp, IconLoading, IconSparkles } from './icons';
 import { nativeReasoning, type ReasoningValue } from './conversation-model-controls';
 
 const orderedLevels = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
@@ -12,8 +13,8 @@ export function ReasoningIndicator({ reasoning, loading = false, error = false }
   const value = nativeReasoning(reasoning), level = value ? orderedLevels.indexOf(value.level) + 1 : 0;
   const state = loading ? 'loading' : error ? 'error' : !value ? 'unknown' : value.mode === 'DEFAULT' ? 'default'
     : value.mode.endsWith('_BUDGET') ? 'budget' : level ? 'level' : 'custom';
-  const Icon = state === 'loading' ? RiLoader4Line : state === 'error' ? RiErrorWarningLine : state === 'unknown' ? RiQuestionLine
-    : state === 'default' ? RiSparklingLine : RiEqualizerLine;
+  const Icon = state === 'loading' ? IconLoading : state === 'error' ? IconError : state === 'unknown' ? IconHelp
+    : state === 'default' ? IconSparkles : IconControls;
   return <i className="pw-reasoning-indicator" data-reasoning-state={state} data-reasoning-level={state === 'level' ? level : undefined} aria-hidden="true">
     {state === 'level' ? <>
       <RiBarChartGroupedFill size={20} className="pw-reasoning-level-base" />

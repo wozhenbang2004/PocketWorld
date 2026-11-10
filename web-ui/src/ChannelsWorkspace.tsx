@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ChevronRight, MessageSquare, RefreshCw, Settings } from 'lucide-react';
+import { IconChat, IconChevronRight, IconRefresh, IconSettings } from './icons';
 import { Accordion, AccordionItem, Button, CheckboxField, SearchField, SelectField, SettingsDialog, TextField } from './forms-library';
 import { Tabs, TabList, Tab, TabPanel } from './shell-library';
 import './channels-workspace.css';
@@ -85,8 +85,8 @@ export default function ChannelsWorkspace({ state, data, supported, run, registe
   };
   return <section ref={root} className="pw-channels-workspace pw-depth-collaboration pw-settings-section">
     <header className="pw-channels-heading"><div><p className="pw-collaboration-eyebrow">接收状态 · {profiles.length} 个连接</p><strong className="pw-channels-status">{channelReceivingStatus(background)}</strong></div><div className="pw-form-actions">
-      <Button variant="ghost" leadingIcon={Settings} onClick={openConnections}>连接与接收</Button>
-      <Button variant="ghost" iconOnly leadingIcon={RefreshCw} aria-label="刷新真实状态" disabled={busy || !supported('channels.inspect')} onClick={() => act('channels.inspect')} />
+      <Button variant="ghost" leadingIcon={IconSettings} onClick={openConnections}>连接与接收</Button>
+      <Button variant="ghost" iconOnly leadingIcon={IconRefresh} aria-label="刷新真实状态" disabled={busy || !supported('channels.inspect')} onClick={() => act('channels.inspect')} />
     </div></header>
 
     {(receiving || background.foregroundActive || background.message) && <div className="pw-channels-receiving" aria-label="当前接收状态">
@@ -152,7 +152,7 @@ function ChannelConnections({ data, candidates, selected, select, supported, bus
     <div className="pw-form-actions"><Button disabled={busy || !supported('channels.loginStart')} onClick={() => openModal({ kind: 'login' })}>连接微信私聊</Button><Button variant="secondary" disabled={busy || !supported('channels.saveProfile')} onClick={() => openModal({ kind: 'profile', original: { id: crypto.randomUUID(), adding: true, provider: 'qq', name: '我的 QQ 机器人', enabled: true } })}>添加 QQ 官方机器人</Button></div>
     <section className="pw-channel-account-directory" aria-label="渠道账号"><header className="pw-collaboration-group-heading"><h3>渠道账号</h3><span>{profiles.length}</span></header><div className="pw-channels-account-list">{profiles.map(profile => {
       const connection = rows(object(data[profile.provider]).connections).find(row => row.profileId === profile.id);
-      return <Button className="pw-channels-link-row" key={profile.id} variant="ghost" disabled={busy} onClick={() => openAccount(profile.id)}><span className="pw-channels-account-icon" aria-hidden><MessageSquare size={20} /></span><span className="pw-channels-link-copy"><strong>{profile.name}</strong><small>{providerName(profile.provider)} · {['qq', 'weixin'].includes(profile.provider) ? channelConnectionStatus(profile.provider, connection) : profile.enabled ? '配置已启用' : '配置已停用'}</small></span><ChevronRight size={16} aria-hidden /></Button>;
+      return <Button className="pw-channels-link-row" key={profile.id} variant="ghost" disabled={busy} onClick={() => openAccount(profile.id)}><span className="pw-channels-account-icon" aria-hidden><IconChat size={20} /></span><span className="pw-channels-link-copy"><strong>{profile.name}</strong><small>{providerName(profile.provider)} · {['qq', 'weixin'].includes(profile.provider) ? channelConnectionStatus(profile.provider, connection) : profile.enabled ? '配置已启用' : '配置已停用'}</small></span><IconChevronRight size={16} aria-hidden /></Button>;
     })}</div></section>
     {!profiles.length && <p>还没有渠道账号。连接后，从自己的账号发送私聊，再在本机核对主人身份。</p>}
 
@@ -327,7 +327,7 @@ function ChannelInbox({ data, supported, run, connect, account, media }: { data:
     {inbox.length > 0 && <div className="pw-channels-inbox-tools"><SearchField fieldClassName="pw-collaboration-search" shape="rounded" aria-label="搜索本机渠道消息" placeholder="搜索消息或发送者" value={query} onChange={value => { setQuery(value); setLimit(12); }} />{profiles.length > 1 && <SelectField label="渠道账号" value={profileId} options={[{ id: '', label: '全部账号' }, ...profiles.map(profile => ({ id: profile.id, label: profile.name || profile.id }))]} onChange={value => { setProfileId(value); setLimit(12); }} />}</div>}
     <header className="pw-collaboration-group-heading"><h3>{query || profileId ? '匹配的本机消息' : '本机已接收'}</h3><span>{filtered.length} 条</span></header>
     {inbox.length > 0 && !filtered.length && <p className="pw-secondary-empty">没有匹配的消息。</p>}
-    {!inbox.length && <div className="pw-channels-empty"><MessageSquare size={26} aria-hidden /><p>最近消息会出现在这里</p><span>连接账号并明确开启接收后，从自己的账号发送一条私聊。</span><Button variant="secondary" onClick={connect}>查看连接与接收</Button></div>}
+    {!inbox.length && <div className="pw-channels-empty"><IconChat size={26} aria-hidden /><p>最近消息会出现在这里</p><span>连接账号并明确开启接收后，从自己的账号发送一条私聊。</span><Button variant="secondary" onClick={connect}>查看连接与接收</Button></div>}
     <Accordion className="pw-channels-records" allowsMultipleExpanded expandedKeys={expanded} onExpandedChange={keys => setExpanded(new Set(keys))}>
       {visible.map(event => <AccordionItem id={event.id} key={event.id} title={<span className="pw-channels-preview">{event.text || '媒体消息'}</span>} description={<span className="pw-channels-message-meta"><span>{profiles.find(profile => profile.id === event.profileId)?.name || '原连接'} · {event.kind === 'group' ? event.roomId : event.senderId}</span>{messageTime(event.receivedAt) && <time dateTime={new Date(event.receivedAt).toISOString()}>{messageTime(event.receivedAt)}</time>}</span>}>
         <div className="pw-channels-record-detail"><p className="pw-channels-body">{event.text || '媒体消息；正文为空不代表已读取媒体内容。'}</p>

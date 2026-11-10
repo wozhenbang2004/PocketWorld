@@ -2,6 +2,7 @@
 "use client";
 
 import { Fragment, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode, type Ref } from "react";
+import { IconCheck, IconCheckCircle, IconChevronLeft, IconChevronRight, IconClose, IconCopy, IconDislike, IconLike, IconRefresh, IconSpeaker } from "../../icons";
 
 /*
  * Message Actions (Clean) – the small bar under an AI chat message, in one self-contained file.
@@ -117,30 +118,6 @@ export function MessageText({ version, children, className }: { version: string 
     </div>
   );
 }
-
-/* ---------- Icons ---------- */
-
-const Glyph = ({ d, solid }: { d: string; solid?: boolean }) => (
-  <svg viewBox="0 0 16 16" className="ui-mac__glyph" data-solid={solid || undefined} aria-hidden="true">
-    <path d={d} />
-  </svg>
-);
-/** The speaker: a solid body with two thin sound waves */
-const Speaker = () => (
-  <svg viewBox="0 0 16 16" className="ui-mac__glyph" aria-hidden="true">
-    <path className="ui-mac__fill" d="M7.4 3.2a.6.6 0 0 1 1 .46v8.68a.6.6 0 0 1-1 .46L4.6 10.5H3A1.5 1.5 0 0 1 1.5 9V7A1.5 1.5 0 0 1 3 5.5h1.6l2.8-2.3Z" />
-    <path d="M10.6 6.2a2.6 2.6 0 0 1 0 3.6M12.4 4.4a5.2 5.2 0 0 1 0 7.2" />
-  </svg>
-);
-const icons = {
-  copy: "M5.5 2A1.5 1.5 0 0 0 4 3.5V4h5A3 3 0 0 1 12 7v5h.5a1.5 1.5 0 0 0 1.5-1.5v-7A1.5 1.5 0 0 0 12.5 2h-7ZM3.5 5A1.5 1.5 0 0 0 2 6.5v6A1.5 1.5 0 0 0 3.5 14H9a1.5 1.5 0 0 0 1.5-1.5v-6A1.5 1.5 0 0 0 9 5H3.5Z",
-  check: "M1.5 8a6.5 6.5 0 1 1 13 0 6.5 6.5 0 0 1-13 0Zm8.9-1.2a.5.5 0 0 0-.8-.6L7.44 9.23 6.35 8.15a.5.5 0 1 0-.7.7l1.5 1.5a.5.5 0 0 0 .76-.06l2.5-3.5Z",
-  tick: "M3.5 8.5 6.5 11.5 12.5 4.5",
-  redo: "M13 8a5 5 0 1 1-1.46-3.54M13 2.5v2.5h-2.5",
-  thumb: "M4.5 7v6.5H3a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1h1.5Zm1 6.5h5.95a1.5 1.5 0 0 0 1.47-1.2l.86-4.3A1.5 1.5 0 0 0 12.31 6.2H9.5l.42-2.08A1.4 1.4 0 0 0 7.3 3.1L5.5 6.8v6.7Z",
-  next: "M10.85 7.65a.5.5 0 0 1 0 .7L7.2 12a.5.5 0 0 1-.7-.7L9.79 8 6.5 4.7a.5.5 0 1 1 .7-.7l3.65 3.65Z",
-  close: "m4.5 4.5 7 7m0-7-7 7",
-};
 
 const DEFAULT_ACTIONS: MessageActionKey[] = ["copy", "regenerate", "feedback", "speak"];
 /** Known actions only, each once – an unknown key or a repeat would render a stray or doubled button */
@@ -325,10 +302,10 @@ export function MessageActions({
         children: (
           <span className="ui-mac__icon ui-mac__morph">
             <span className="ui-mac__layer" data-on={copied ? undefined : ""}>
-              <Glyph d={icons.copy} solid />
+              <IconCopy className="ui-mac__glyph" size={16} aria-hidden="true" />
             </span>
             <span className="ui-mac__layer ui-mac__layer--check" data-on={copied ? "" : undefined}>
-              <Glyph d={icons.check} solid />
+              <IconCheckCircle className="ui-mac__glyph" size={16} aria-hidden="true" />
             </span>
           </span>
         ),
@@ -345,7 +322,7 @@ export function MessageActions({
             children: (
               <span className="ui-mac__icon">
                 <span className="ui-mac__spin" key={spin} data-spin={spin ? "" : undefined}>
-                  <Glyph d={icons.redo} />
+                  <IconRefresh className="ui-mac__glyph" size={16} aria-hidden="true" />
                 </span>
               </span>
             ),
@@ -360,7 +337,7 @@ export function MessageActions({
                 disabled={index === 0}
                 onClick={() => goTo(index - 1)}
               >
-                <Glyph d={icons.next} solid />
+                <IconChevronLeft className="ui-mac__glyph" size={16} aria-hidden="true" />
               </button>
               <span className="ui-mac__count" aria-label={`Version ${fmt(index + 1)} of ${fmt(count)}`}>
                 <Swap id={String(index)} className="ui-mac__count-now">
@@ -377,7 +354,7 @@ export function MessageActions({
                 disabled={index >= count - 1}
                 onClick={() => goTo(index + 1)}
               >
-                <Glyph d={icons.next} solid />
+                <IconChevronRight className="ui-mac__glyph" size={16} aria-hidden="true" />
               </button>
             </span>
           </span>
@@ -394,7 +371,7 @@ export function MessageActions({
           onClick: thumbsUp,
           children: (
             <span className="ui-mac__icon ui-mac__thumb">
-              <Glyph d={icons.thumb} solid />
+              <IconLike className="ui-mac__glyph" size={16} aria-hidden="true" />
             </span>
           ),
         })}
@@ -409,7 +386,7 @@ export function MessageActions({
           refEl: downRef,
           children: (
             <span className="ui-mac__icon ui-mac__thumb">
-              <Glyph d={icons.thumb} solid />
+              <IconDislike className="ui-mac__glyph" size={16} aria-hidden="true" />
             </span>
           ),
         })}
@@ -424,7 +401,7 @@ export function MessageActions({
       children: (
         <span className="ui-mac__icon ui-mac__morph">
           <span className="ui-mac__layer" data-on={playing ? undefined : ""}>
-            <Speaker />
+            <IconSpeaker className="ui-mac__glyph" size={16} aria-hidden="true" />
           </span>
           <span className="ui-mac__layer ui-mac__eq" data-on={playing ? "" : undefined}>
             <i />
@@ -467,7 +444,7 @@ export function MessageActions({
                   What went wrong?
                 </span>
                 <button type="button" className="ui-mac__close" aria-label="Close feedback" onClick={closePanel}>
-                  <Glyph d={icons.close} />
+                  <IconClose className="ui-mac__glyph" size={16} aria-hidden="true" />
                 </button>
               </div>
               <div className="ui-mac__chips">
@@ -496,7 +473,7 @@ export function MessageActions({
                   <Swap id={sent ? "sent" : "send"}>
                     {sent ? (
                       <>
-                        <Glyph d={icons.tick} />
+                        <IconCheck className="ui-mac__glyph" size={14} aria-hidden="true" />
                         Thanks!
                       </>
                     ) : (
@@ -596,9 +573,7 @@ const css = /* css */ `
 .ui-mac__btn--copy[data-done] { color: var(--ui-mac-ok); }
 
 .ui-mac__icon { position: relative; display: grid; place-items: center; width: 16px; height: 16px; transition: transform 160ms var(--ui-mac-ease); }
-.ui-mac__glyph { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.1; stroke-linecap: round; stroke-linejoin: round; }
-.ui-mac__glyph[data-solid] { fill: currentColor; stroke: none; }
-.ui-mac__fill { fill: currentColor; stroke: none; }
+.ui-mac__glyph { width: 16px; height: 16px; }
 
 /* Two icons on top of each other – one blurs away while the other comes in */
 .ui-mac__morph { display: grid; }
@@ -611,8 +586,7 @@ const css = /* css */ `
 .ui-mac__btn[data-busy] { color: var(--ui-mac-ink); }
 .ui-mac__btn[data-busy] .ui-mac__spin { animation: ui-mac-spin 900ms linear infinite; }
 
-/* Thumbs: down is the same glyph turned upside down; a vote gives it a little pop */
-.ui-mac__btn--down .ui-mac__glyph { transform: scaleY(-1); }
+/* A vote gives its glyph a little pop. */
 .ui-mac__btn[aria-pressed="true"] .ui-mac__thumb { animation: ui-mac-pop 420ms var(--ui-mac-ease); }
 
 /* Read aloud: four bars in the accent blue that bounce while it plays */
@@ -637,7 +611,6 @@ const css = /* css */ `
 .ui-mac__versions[data-open] { grid-template-columns: 1fr; opacity: 1; transition: grid-template-columns 420ms var(--ui-mac-ease), opacity 320ms ease 100ms; }
 .ui-mac__versions-clip { display: flex; align-items: center; min-width: 0; overflow: hidden; padding-right: 2px; }
 .ui-mac__step { display: grid; flex: none; place-items: center; width: 20px; height: 28px; border-radius: 6px; color: var(--ui-mac-icon); transition: background-color 160ms ease, color 160ms ease, opacity 160ms ease; }
-.ui-mac__step[data-dir="prev"] .ui-mac__glyph { transform: scaleX(-1); }
 .ui-mac__step:hover:not(:disabled) { background: var(--ui-mac-wash); color: var(--ui-mac-ink); }
 .ui-mac__step:disabled { cursor: default; opacity: 0.45; }
 .ui-mac__count { display: inline-flex; align-items: center; gap: 2px; padding: 0 2px; font-size: 12px; line-height: 16px; color: var(--ui-mac-faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -670,7 +643,7 @@ const css = /* css */ `
 .ui-mac__send:hover:not(:disabled):not([data-sent]) { background: var(--ui-mac-solid-hover); }
 .ui-mac__send:disabled { cursor: default; opacity: 0.3; }
 .ui-mac__send[data-sent] { cursor: default; background: var(--ui-mac-ok-bg); color: var(--ui-mac-ok); }
-.ui-mac__send .ui-mac__glyph { width: 14px; height: 14px; stroke-width: 1.5; }
+.ui-mac__send .ui-mac__glyph { width: 14px; height: 14px; }
 .ui-mac__input { display: block; width: 100%; height: 32px; margin-top: 8px; padding: 0 10px; border: 0; border-radius: 6px; background: var(--ui-mac-card); box-shadow: var(--ui-mac-shadow); font: inherit; font-size: 13px; line-height: 20px; color: var(--ui-mac-ink); outline: none; }
 .ui-mac__input::placeholder { color: var(--ui-mac-faint); }
 

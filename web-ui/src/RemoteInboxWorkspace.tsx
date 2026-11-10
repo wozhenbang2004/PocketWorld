@@ -1,5 +1,5 @@
 import {useEffect,useMemo,useState,type ReactNode} from 'react';
-import {RiAlarmWarningLine,RiArrowRightUpLine,RiCheckLine,RiNotification3Line,RiRefreshLine,RiSettings4Line} from '@remixicon/react';
+import { IconArrowUpRight, IconAttention, IconCheck, IconNotification, IconRefresh, IconSettings } from './icons';
 import {Button,TextField} from './forms-library';
 import {bridge} from './bridge';
 import './remote-inbox.css';
@@ -60,8 +60,8 @@ export default function RemoteInboxWorkspace({state,navigationTrigger,onBack}: {
       <div><span className="pw-remote-overline">POCKETWORLD / INBOX</span><h1>通知</h1>
         <p>远程 Issue、PR 回复与服务事件。接收消息不会启动 Agent 或执行任务。</p></div>
       <div className="pw-remote-inbox-actions">
-        <Button variant="ghost" leadingIcon={RiRefreshLine} disabled={working||!state?.configured} onClick={()=>void act('remoteInbox.sync')}>同步</Button>
-        <Button variant="ghost" leadingIcon={RiSettings4Line} onClick={()=>setConfigOpen(value=>!value)}>配置</Button>
+        <Button variant="ghost" leadingIcon={IconRefresh} disabled={working||!state?.configured} onClick={()=>void act('remoteInbox.sync')}>同步</Button>
+        <Button variant="ghost" leadingIcon={IconSettings} onClick={()=>setConfigOpen(value=>!value)}>配置</Button>
       </div>
     </header>
     {state?.error&&<div role="alert" className="pw-remote-note is-error">{state.error}</div>}
@@ -100,10 +100,10 @@ export default function RemoteInboxWorkspace({state,navigationTrigger,onBack}: {
       <small>{Array.isArray(state?.events)?state.events.length:0} 条已保留</small>
     </div>
     <section className="pw-remote-list" aria-label="通知列表">
-      {entries.length===0?<div className="pw-remote-empty"><RiNotification3Line size={28}/><h2>没有{filter==='unread'?'未读':filter==='issues'?'开源 Issue ':''}通知</h2>
+      {entries.length===0?<div className="pw-remote-empty"><IconNotification size={28}/><h2>没有{filter==='unread'?'未读':filter==='issues'?'开源 Issue ':''}通知</h2>
         <p>{state?.configured?'服务有新事件后会自动出现在这里。':'配置服务后可接收来自 MergeAtlas 的 Issue 和 PR 消息。'}</p></div>
       :entries.map(item=><article key={item.seq} className="pw-remote-item" data-read={item.read?'true':'false'}>
-        <div className="pw-remote-icon">{item.priority==='attention'?<RiAlarmWarningLine size={18}/>:<RiNotification3Line size={18}/>}</div>
+        <div className="pw-remote-icon">{item.priority==='attention'?<IconAttention size={18}/>:<IconNotification size={18}/>}</div>
         <div className="pw-remote-item-main">
           <div className="pw-remote-meta"><span>{item.origin}</span><span>{when(item.created_at)}</span>
             {item.priority==='attention'&&<span className="pw-remote-urgent">优先关注</span>}
@@ -112,8 +112,8 @@ export default function RemoteInboxWorkspace({state,navigationTrigger,onBack}: {
           <h3>{item.title}</h3>
           {item.body&&<p>{item.body}</p>}
           <div className="pw-remote-item-actions">
-            {safeUrl(item.url)&&<Button variant="ghost" disabled={working} onClick={()=>void act('remoteInbox.open',{seq:item.seq})}>查看来源 <RiArrowRightUpLine size={14}/></Button>}
-            {!item.read&&<Button variant="ghost" disabled={working} onClick={()=>void act('remoteInbox.mark',{seq:item.seq})}><RiCheckLine size={14}/>标记已读</Button>}
+            {safeUrl(item.url)&&<Button variant="ghost" disabled={working} onClick={()=>void act('remoteInbox.open',{seq:item.seq})}>查看来源 <IconArrowUpRight size={14}/></Button>}
+            {!item.read&&<Button variant="ghost" disabled={working} onClick={()=>void act('remoteInbox.mark',{seq:item.seq})}><IconCheck size={14}/>标记已读</Button>}
           </div>
         </div>
       </article>)}

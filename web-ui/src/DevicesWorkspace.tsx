@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import './collaboration-depth.css';
 import { Accordion, AccordionItem, Button, CheckboxField, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { DeviceRequestScope, deviceConnectionLabel, deviceGrantInput, deviceHistoryLabel, deviceHistoryReceipt, deviceTaskDetails, deviceMethodLabels, deviceOperationLabels, deviceReceipt, deviceReview, deviceRows as rows, deviceSnapshot, deviceStrings as strings, deviceTaskRows, type DeviceData as Data } from './devices-workspace';
-import { ArrowLeft, ChevronRight, Monitor, Plus, RefreshCw, ShieldCheck, Smartphone } from 'lucide-react';
+import { IconAdd, IconArrowLeft, IconChevronRight, IconMonitor, IconPhone, IconRefresh, IconShieldCheck } from './icons';
 import { DesktopViewer } from './DesktopViewer';
 import { desktopScopes } from './desktop-viewer';
 import './devices-reading.css';
@@ -162,12 +162,12 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     <section ref={readingRoot} className="pw-settings-section pw-devices-reading pw-depth-collaboration" data-device-view={desktopOpen ? 'desktop' : peerId ? 'detail' : 'list'}>
       {(desktopOpen || peerId) && <header className="pw-device-heading">
         <div className="pw-device-heading-copy">
-          {peerId && !desktopOpen && <Button variant="ghost" className="pw-device-back" leadingIcon={ArrowLeft} disabled={busy} onClick={() => { setPeerId(''); setForm(''); setRaw(''); }}>所有设备</Button>}
+          {peerId && !desktopOpen && <Button variant="ghost" className="pw-device-back" leadingIcon={IconArrowLeft} disabled={busy} onClick={() => { setPeerId(''); setForm(''); setRaw(''); }}>所有设备</Button>}
           <h2 tabIndex={-1}>{desktopOpen ? '电脑桌面' : peer ? name(peer) : '设备详情'}</h2>
           {!desktopOpen && peer && <p>{peer.platform || '已配对设备'}</p>}
         </div>
         {!desktopOpen && <div className="pw-device-heading-actions">
-          <Button variant="ghost" iconOnly leadingIcon={RefreshCw} aria-label="刷新原设备状态" title="刷新原设备状态" disabled={busy} onClick={refresh} />
+          <Button variant="ghost" iconOnly leadingIcon={IconRefresh} aria-label="刷新原设备状态" title="刷新原设备状态" disabled={busy} onClick={refresh} />
         </div>}
       </header>}
       {desktopOpen && peer && <DesktopViewer key={peer.deviceId} peer={peer} supported={supported} run={run} onClose={() => setDesktopOpen(false)} />}
@@ -191,17 +191,17 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
             <header className="pw-device-section-heading pw-device-directory-heading">
               <h3>{peers.length ? `已配对设备 · ${peers.length} 台` : '配对设备'}</h3>
               <div className="pw-device-heading-actions">
-                <Button variant="ghost" iconOnly leadingIcon={RefreshCw} aria-label="刷新设备状态" title="刷新设备状态" disabled={busy} onClick={refresh} />
-                {peers.length > 0 && <Button leadingIcon={Plus} disabled={busy} onClick={() => { setForm('add'); setRaw(''); setAddress(''); }}>配对设备</Button>}
+                <Button variant="ghost" iconOnly leadingIcon={IconRefresh} aria-label="刷新设备状态" title="刷新设备状态" disabled={busy} onClick={refresh} />
+                {peers.length > 0 && <Button leadingIcon={IconAdd} disabled={busy} onClick={() => { setForm('add'); setRaw(''); setAddress(''); }}>配对设备</Button>}
               </div>
             </header>
             {(peers.length > 5 || query) && <SearchField className="pw-device-search" fieldClassName="pw-collaboration-search" shape="rounded" aria-label="搜索已配对设备" placeholder="搜索名称或设备" value={query} onChange={setQuery} />}
             {peers.length ? <div className="pw-device-directory">{peerSections.filter(section => section.peers.length > 0).map(section => <section className="pw-collaboration-group" key={section.id} aria-label={section.title}><header className="pw-collaboration-group-heading"><h3>{section.title}</h3><span>{section.peers.length} 台</span></header><div className="pw-device-list">
-              {section.peers.map(row => <Button key={row.deviceId} variant="ghost" className="pw-device-row" leadingIcon={/android|ios|phone/i.test(row.platform || '') ? Smartphone : Monitor} trailingIcon={ChevronRight} disabled={busy} aria-label={`查看 ${name(row)} 的设备与授权`} onClick={() => { rememberReadingPosition('list'); setPeerId(row.deviceId); setError(''); }}>
+              {section.peers.map(row => <Button key={row.deviceId} variant="ghost" className="pw-device-row" leadingIcon={/android|ios|phone/i.test(row.platform || '') ? IconPhone : IconMonitor} trailingIcon={IconChevronRight} disabled={busy} aria-label={`查看 ${name(row)} 的设备与授权`} onClick={() => { rememberReadingPosition('list'); setPeerId(row.deviceId); setError(''); }}>
                 <span className="pw-device-row-copy"><span className="pw-device-row-name">{name(row)}</span><span className="pw-device-row-status">{deviceConnectionLabel(row)}</span><small>{row.platform || '已配对设备'} · {deviceTaskRows(state.tasks, snapshot, row.deviceId).length} 项关联任务</small></span>
               </Button>)}
             </div></section>)}{query && !visiblePeers.length && <div className="pw-device-empty"><h3>没有匹配的设备</h3><p>换个名称搜索，或查看全部已配对设备。</p><Button variant="secondary" onClick={() => setQuery('')}>清除搜索</Button></div>}</div> : <div className="pw-device-empty">
-              <span className="pw-device-empty-icon" aria-hidden="true"><Monitor size={24} /><Smartphone size={19} /></span>
+              <span className="pw-device-empty-icon" aria-hidden="true"><IconMonitor size={24} /><IconPhone size={19} /></span>
               <h3>连接另一台设备</h3>
               <p>通过邀请配对手机或电脑，在这里查看连接与任务。</p>
               <Button variant={pairings.length ? 'secondary' : 'primary'} disabled={busy} onClick={() => { setForm('add'); setRaw(''); setAddress(''); }}>{pairings.length ? '配对其他设备' : '配对设备'}</Button>
@@ -210,7 +210,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
           <section className="pw-device-section" aria-label="本机接收">
             <header className="pw-device-section-heading"><h3>本机接收</h3></header>
             <Accordion className="pw-device-disclosures pw-device-local-settings">
-              <AccordionItem id="receiver" title="这台手机" description={receiverLabel} icon={Smartphone}>
+              <AccordionItem id="receiver" title="这台手机" description={receiverLabel} icon={IconPhone}>
                 <p>本机接收、双端身份与每项授权分别核对。连接状态不代表任务已经停止或完成。</p>
                 {local.receiverReason && <p>{local.receiverReason}</p>}
                 <Button variant="secondary" disabled={busy || !available(actions[local.receiverEnabled ? 'disable' : 'enable'])} onClick={() => actionReview(local.receiverEnabled ? 'receiver.disable' : 'receiver.enable')}>{local.receiverEnabled ? '核对并停用接收' : '核对并启用接收'}</Button>
@@ -227,18 +227,18 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
         {peerId && !peer && snapshot && <p className="pw-device-feedback" role="alert">这台设备不在当前读取页。保留原身份，请返回后刷新核对。</p>}
         {peer && <>
           <section className="pw-device-connection" aria-label="这台设备的连接状态">
-            <div className="pw-device-connection-heading"><Monitor size={20} aria-hidden="true" /><h3>{deviceConnectionLabel(peer)}</h3></div>
+            <div className="pw-device-connection-heading"><IconMonitor size={20} aria-hidden="true" /><h3>{deviceConnectionLabel(peer)}</h3></div>
             <p>{peer.connection?.state === 'ONLINE' ? peer.connection?.path === 'RELAY_WSS' ? '当前通过出站 WSS 中继连接。' : peer.connection?.path === 'DIRECT_TLS' ? '当前通过直连 TLS 通道连接。' : '已连接，传输路径仍待核对。' : '未确认的操作仍需查看执行结果，离线不代表停止。'}</p>
             {peer.connection?.unconfirmedTransportWrite === true && <p className="pw-device-inline-notice">有操作结果待确认，请查看原执行结果。</p>}
             {peer.revoked && <p>{peer.revocation?.peerAcknowledged === true ? '本机信任已撤销，对端已回执。' : '本机信任已撤销，对端仍未确认。'}</p>}
             <div className="pw-form-actions">
-              {desktopScopes(peer).length > 0 && <Button disabled={busy} leadingIcon={Monitor} onClick={() => { rememberReadingPosition('detail'); setDesktopOpen(true); }}>查看桌面</Button>}
+              {desktopScopes(peer).length > 0 && <Button disabled={busy} leadingIcon={IconMonitor} onClick={() => { rememberReadingPosition('detail'); setDesktopOpen(true); }}>查看桌面</Button>}
               {available(peer.actions?.connect) && <Button disabled={busy} onClick={() => actionReview('peer.connect', { deviceId: peer.deviceId })}>核对并连接</Button>}
               {available(peer.actions?.disconnect) && <Button variant="ghost" disabled={busy} onClick={() => actionReview('peer.disconnect', { deviceId: peer.deviceId })}>停止主动连接</Button>}
             </div>
           </section>
           <Accordion className="pw-device-disclosures">
-            <AccordionItem id="capabilities" title="能力与两端权限" description="查看范围，调整本机授予的权限" icon={ShieldCheck}>
+            <AccordionItem id="capabilities" title="能力与两端权限" description="查看范围，调整本机授予的权限" icon={IconShieldCheck}>
               {rows(peer.capabilitySnapshot?.capabilities).map(cap => <p key={cap.id}>{cap.id} · {peer.capabilitySnapshot?.validUntil <= Date.now() ? '读取已过期，请刷新' : cap.ready === true && cap.authorized === true ? '核对时可用' : cap.reason || '条件尚未就绪'}</p>)}
               <h4>允许这台设备在本机使用</h4>{rows(peer.grantScopes).map((scope, index) => <GrantScope key={index} scope={scope} />)}
               <h4>本机可在对端使用</h4>{rows(peer.receivedGrantScopes).map((scope, index) => <GrantScope key={index} scope={scope} />)}

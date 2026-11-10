@@ -1,0 +1,1023 @@
+{
+  "reference_comparison": [
+    {
+      "file": "solar-4401716/chat-round-dots.svg",
+      "source": "https://raw.githubusercontent.com/480-Design/Solar-Icon-Set/44017167688b49109d88ae6a98979b23d8950db0/icons/SVG/Bold%20Duotone/Messages%2C%20Conversation/Chat%20Round%20Dots.svg",
+      "reference_original": true,
+      "specimen_adaptation": "Only color normalized to currentColor; geometry and original opacity preserved."
+    },
+    {
+      "file": "solar-4401716/microphone.svg",
+      "source": "https://raw.githubusercontent.com/480-Design/Solar-Icon-Set/44017167688b49109d88ae6a98979b23d8950db0/icons/SVG/Bold%20Duotone/Video%2C%20Audio%2C%20Sound/Microphone.svg",
+      "reference_original": true,
+      "specimen_adaptation": "Only color normalized to currentColor; geometry and original opacity preserved."
+    },
+    {
+      "file": "solar-4401716/shield-check.svg",
+      "source": "https://raw.githubusercontent.com/480-Design/Solar-Icon-Set/44017167688b49109d88ae6a98979b23d8950db0/icons/SVG/Bold%20Duotone/Security/Shield%20Check.svg",
+      "reference_original": true,
+      "specimen_adaptation": "Only color normalized to currentColor; geometry and original opacity preserved."
+    },
+    {
+      "file": "solar-4401716/folder.svg",
+      "source": "https://raw.githubusercontent.com/480-Design/Solar-Icon-Set/44017167688b49109d88ae6a98979b23d8950db0/icons/SVG/Bold%20Duotone/Folders/Folder.svg",
+      "reference_original": true,
+      "specimen_adaptation": "Only color normalized to currentColor; geometry and original opacity preserved."
+    },
+    {
+      "file": "solar-4401716/settings.svg",
+      "source": "https://raw.githubusercontent.com/480-Design/Solar-Icon-Set/44017167688b49109d88ae6a98979b23d8950db0/icons/SVG/Bold%20Duotone/Settings%2C%20Fine%20Tuning/Settings.svg",
+      "reference_original": true,
+      "specimen_adaptation": "Only color normalized to currentColor; geometry and original opacity preserved."
+    },
+    {
+      "file": "solar-4401716/users-group-rounded.svg",
+      "source": "https://raw.githubusercontent.com/480-Design/Solar-Icon-Set/44017167688b49109d88ae6a98979b23d8950db0/icons/SVG/Bold%20Duotone/Users/Users%20Group%20Rounded.svg",
+      "reference_original": true,
+      "specimen_adaptation": "Only color normalized to currentColor; geometry and original opacity preserved."
+    },
+    {
+      "file": "hugeicons-28aee18/bubble-chat.svg",
+      "source": "https://raw.githubusercontent.com/hugeicons/hugeicons/28aee18eb297ee81942dac4e03e68cccce8a0613/icons/bubble-chat.svg",
+      "reference_original": true,
+      "specimen_adaptation": "Only color normalized to currentColor; geometry and original opacity preserved."
+    },
+    {
+      "file": "hugeicons-28aee18/mic-01.svg",
+      "source": "https://raw.githubusercontent.com/hugeicons/hugeicons/28aee18eb297ee81942dac4e03e68cccce8a0613/icons/mic-01.svg",
+      "reference_original": true,
+      "specimen_adaptation": "Only color normalized to currentColor; geometry and original opacity preserved."
+    },
+    {
+      "file": "hugeicons-28aee18/shield-01.svg",
+      "source": "https://raw.githubusercontent.com/hugeicons/hugeicons/28aee18eb297ee81942dac4e03e68cccce8a0613/icons/shield-01.svg",
+      "reference_original": true,
+      "specimen_adaptation": "Only color normalized to currentColor; geometry and original opacity preserved."
+    },
+    {
+      "file": "hugeicons-28aee18/folder-01.svg",
+      "source": "https://raw.githubusercontent.com/hugeicons/hugeicons/28aee18eb297ee81942dac4e03e68cccce8a0613/icons/folder-01.svg",
+      "reference_original": true,
+      "specimen_adaptation": "Only color normalized to currentColor; geometry and original opacity preserved."
+    },
+    {
+      "file": "hugeicons-28aee18/settings-01.svg",
+      "source": "https://raw.githubusercontent.com/hugeicons/hugeicons/28aee18eb297ee81942dac4e03e68cccce8a0613/icons/settings-01.svg",
+      "reference_original": true,
+      "specimen_adaptation": "Only color normalized to currentColor; geometry and original opacity preserved."
+    },
+    {
+      "file": "hugeicons-28aee18/user-group.svg",
+      "source": "https://raw.githubusercontent.com/hugeicons/hugeicons/28aee18eb297ee81942dac4e03e68cccce8a0613/icons/user-group.svg",
+      "reference_original": true,
+      "specimen_adaptation": "Only color normalized to currentColor; geometry and original opacity preserved."
+    },
+    {
+      "file": "phosphor-v2.0.8/microphone-duotone.svg",
+      "source": "https://raw.githubusercontent.com/phosphor-icons/core/v2.0.8/assets/duotone/microphone-duotone.svg",
+      "reference_original": true,
+      "specimen_adaptation": "Only color normalized to currentColor; geometry and original opacity preserved."
+    },
+    {
+      "file": "phosphor-v2.0.8/folder-duotone.svg",
+      "source": "https://raw.githubusercontent.com/phosphor-icons/core/v2.0.8/assets/duotone/folder-duotone.svg",
+      "reference_original": true,
+      "specimen_adaptation": "Only color normalized to currentColor; geometry and original opacity preserved."
+    },
+    {
+      "file": "phosphor-v2.0.8/users-duotone.svg",
+      "source": "https://raw.githubusercontent.com/phosphor-icons/core/v2.0.8/assets/duotone/users-duotone.svg",
+      "reference_original": true,
+      "specimen_adaptation": "Only color normalized to currentColor; geometry and original opacity preserved."
+    },
+    {
+      "file": "phosphor-v2.0.8/chat-circle-duotone.svg",
+      "source": "https://raw.githubusercontent.com/phosphor-icons/core/v2.0.8/assets/duotone/chat-circle-duotone.svg",
+      "reference_original": true,
+      "specimen_adaptation": "Only color normalized to currentColor; geometry and original opacity preserved."
+    },
+    {
+      "file": "phosphor-v2.0.8/shield-check-duotone.svg",
+      "source": "https://raw.githubusercontent.com/phosphor-icons/core/v2.0.8/assets/duotone/shield-check-duotone.svg",
+      "reference_original": true,
+      "specimen_adaptation": "Only color normalized to currentColor; geometry and original opacity preserved."
+    },
+    {
+      "file": "phosphor-v2.0.8/gear-six-duotone.svg",
+      "source": "https://raw.githubusercontent.com/phosphor-icons/core/v2.0.8/assets/duotone/gear-six-duotone.svg",
+      "reference_original": true,
+      "specimen_adaptation": "Only color normalized to currentColor; geometry and original opacity preserved."
+    },
+    {
+      "file": "phosphor-v2.0.8/speaker-high-duotone.svg",
+      "source": "https://raw.githubusercontent.com/phosphor-icons/core/v2.0.8/assets/duotone/speaker-high-duotone.svg",
+      "reference_original": true,
+      "specimen_adaptation": "Only color normalized to currentColor; geometry and original opacity preserved."
+    }
+  ],
+  "selected": {
+    "name": "Solar Icons",
+    "package": "@solar-icons/react",
+    "version": "2.3.5",
+    "code_license": "MIT",
+    "artwork_license": "CC-BY-4.0",
+    "creator": "480 Design",
+    "creator_url": "https://www.figma.com/community/file/1166831539721848736",
+    "react_source": "https://github.com/saoudi-h/solar-icons",
+    "docs": "https://solar-icons.dev/docs/v2",
+    "decision": "Project adoption based on the official SVG comparison; not user aesthetic approval.",
+    "adaptation": "Original package paths; currentColor inherits semantic product roles, 20px default optical size, 0.4 secondary opacity for overlapping team figures. Ordinary actions Linear, objects BoldDuotone, play/pause/stop/send Bold. Root SVG and source animations preserved.",
+    "icons": [
+      {
+        "semantic": "IconAdd",
+        "name": "add",
+        "style": "linear",
+        "export": "AddIcon",
+        "import": "@solar-icons/react/linear/add"
+      },
+      {
+        "semantic": "IconMinus",
+        "name": "minus",
+        "style": "linear",
+        "export": "MinusIcon",
+        "import": "@solar-icons/react/linear/minus"
+      },
+      {
+        "semantic": "IconClose",
+        "name": "close",
+        "style": "linear",
+        "export": "CloseIcon",
+        "import": "@solar-icons/react/linear/close"
+      },
+      {
+        "semantic": "IconCheck",
+        "name": "check",
+        "style": "linear",
+        "export": "CheckIcon",
+        "import": "@solar-icons/react/linear/check"
+      },
+      {
+        "semantic": "IconArrowLeft",
+        "name": "arrow-left",
+        "style": "linear",
+        "export": "ArrowLeftIcon",
+        "import": "@solar-icons/react/linear/arrow-left"
+      },
+      {
+        "semantic": "IconArrowRight",
+        "name": "arrow-right",
+        "style": "linear",
+        "export": "ArrowRightIcon",
+        "import": "@solar-icons/react/linear/arrow-right"
+      },
+      {
+        "semantic": "IconArrowUp",
+        "name": "arrow-up",
+        "style": "linear",
+        "export": "ArrowUpIcon",
+        "import": "@solar-icons/react/linear/arrow-up"
+      },
+      {
+        "semantic": "IconArrowDown",
+        "name": "arrow-down",
+        "style": "linear",
+        "export": "ArrowDownIcon",
+        "import": "@solar-icons/react/linear/arrow-down"
+      },
+      {
+        "semantic": "IconArrowUpRight",
+        "name": "arrow-right-up",
+        "style": "linear",
+        "export": "ArrowRightUpIcon",
+        "import": "@solar-icons/react/linear/arrow-right-up"
+      },
+      {
+        "semantic": "IconChevronDown",
+        "name": "alt-arrow-down",
+        "style": "linear",
+        "export": "AltArrowDownIcon",
+        "import": "@solar-icons/react/linear/alt-arrow-down"
+      },
+      {
+        "semantic": "IconChevronUp",
+        "name": "alt-arrow-up",
+        "style": "linear",
+        "export": "AltArrowUpIcon",
+        "import": "@solar-icons/react/linear/alt-arrow-up"
+      },
+      {
+        "semantic": "IconChevronLeft",
+        "name": "alt-arrow-left",
+        "style": "linear",
+        "export": "AltArrowLeftIcon",
+        "import": "@solar-icons/react/linear/alt-arrow-left"
+      },
+      {
+        "semantic": "IconChevronRight",
+        "name": "alt-arrow-right",
+        "style": "linear",
+        "export": "AltArrowRightIcon",
+        "import": "@solar-icons/react/linear/alt-arrow-right"
+      },
+      {
+        "semantic": "IconChevronUpDown",
+        "name": "sort-vertical",
+        "style": "linear",
+        "export": "SortVerticalIcon",
+        "import": "@solar-icons/react/linear/sort-vertical"
+      },
+      {
+        "semantic": "IconSort",
+        "name": "sort-from-top-to-bottom",
+        "style": "linear",
+        "export": "SortFromTopToBottomIcon",
+        "import": "@solar-icons/react/linear/sort-from-top-to-bottom"
+      },
+      {
+        "semantic": "IconUndo",
+        "name": "undo-left-round",
+        "style": "linear",
+        "export": "UndoLeftRoundIcon",
+        "import": "@solar-icons/react/linear/undo-left-round"
+      },
+      {
+        "semantic": "IconRedo",
+        "name": "undo-right-round",
+        "style": "linear",
+        "export": "UndoRightRoundIcon",
+        "import": "@solar-icons/react/linear/undo-right-round"
+      },
+      {
+        "semantic": "IconReturn",
+        "name": "arrow-to-down-left",
+        "style": "linear",
+        "export": "ArrowToDownLeftIcon",
+        "import": "@solar-icons/react/linear/arrow-to-down-left",
+        "usage_adaptation": "DesktopViewer Enter shortcut rotates this original path 90 degrees clockwise so its arrow points left; key behavior and visible Enter label are retained."
+      },
+      {
+        "semantic": "IconReply",
+        "name": "reply",
+        "style": "linear",
+        "export": "ReplyIcon",
+        "import": "@solar-icons/react/linear/reply"
+      },
+      {
+        "semantic": "IconExternalLink",
+        "name": "square-arrow-right-up",
+        "style": "linear",
+        "export": "SquareArrowRightUpIcon",
+        "import": "@solar-icons/react/linear/square-arrow-right-up"
+      },
+      {
+        "semantic": "IconSearch",
+        "name": "rounded-magnifier",
+        "style": "linear",
+        "export": "RoundedMagnifierIcon",
+        "import": "@solar-icons/react/linear/rounded-magnifier"
+      },
+      {
+        "semantic": "IconRefresh",
+        "name": "refresh",
+        "style": "linear",
+        "export": "RefreshIcon",
+        "import": "@solar-icons/react/linear/refresh"
+      },
+      {
+        "semantic": "IconLoading",
+        "name": "restart",
+        "style": "linear",
+        "export": "RestartIcon",
+        "import": "@solar-icons/react/linear/restart"
+      },
+      {
+        "semantic": "IconMore",
+        "name": "menu-dots",
+        "style": "linear",
+        "export": "MenuDotsIcon",
+        "import": "@solar-icons/react/linear/menu-dots"
+      },
+      {
+        "semantic": "IconMenu",
+        "name": "hamburger-menu",
+        "style": "linear",
+        "export": "HamburgerMenuIcon",
+        "import": "@solar-icons/react/linear/hamburger-menu"
+      },
+      {
+        "semantic": "IconGrip",
+        "name": "reorder",
+        "style": "linear",
+        "export": "ReorderIcon",
+        "import": "@solar-icons/react/linear/reorder"
+      },
+      {
+        "semantic": "IconCopy",
+        "name": "copy",
+        "style": "linear",
+        "export": "CopyIcon",
+        "import": "@solar-icons/react/linear/copy"
+      },
+      {
+        "semantic": "IconEdit",
+        "name": "pen",
+        "style": "linear",
+        "export": "PenIcon",
+        "import": "@solar-icons/react/linear/pen"
+      },
+      {
+        "semantic": "IconTrash",
+        "name": "trash-bin-minimalistic",
+        "style": "linear",
+        "export": "TrashBinMinimalisticIcon",
+        "import": "@solar-icons/react/linear/trash-bin-minimalistic"
+      },
+      {
+        "semantic": "IconShare",
+        "name": "share",
+        "style": "linear",
+        "export": "ShareIcon",
+        "import": "@solar-icons/react/linear/share"
+      },
+      {
+        "semantic": "IconLink",
+        "name": "link-round",
+        "style": "linear",
+        "export": "LinkRoundIcon",
+        "import": "@solar-icons/react/linear/link-round"
+      },
+      {
+        "semantic": "IconAttach",
+        "name": "paperclip",
+        "style": "linear",
+        "export": "PaperclipIcon",
+        "import": "@solar-icons/react/linear/paperclip"
+      },
+      {
+        "semantic": "IconPlay",
+        "name": "play",
+        "style": "bold",
+        "export": "PlayIcon",
+        "import": "@solar-icons/react/bold/play"
+      },
+      {
+        "semantic": "IconPause",
+        "name": "pause",
+        "style": "bold",
+        "export": "PauseIcon",
+        "import": "@solar-icons/react/bold/pause"
+      },
+      {
+        "semantic": "IconStop",
+        "name": "stop",
+        "style": "bold",
+        "export": "StopIcon",
+        "import": "@solar-icons/react/bold/stop"
+      },
+      {
+        "semantic": "IconNext",
+        "name": "skip-next",
+        "style": "linear",
+        "export": "SkipNextIcon",
+        "import": "@solar-icons/react/linear/skip-next"
+      },
+      {
+        "semantic": "IconSkipBack",
+        "name": "skip-previous",
+        "style": "linear",
+        "export": "SkipPreviousIcon",
+        "import": "@solar-icons/react/linear/skip-previous"
+      },
+      {
+        "semantic": "IconSeekBack",
+        "name": "rewind-10-seconds-back",
+        "style": "linear",
+        "export": "Rewind10SecondsBackIcon",
+        "import": "@solar-icons/react/linear/rewind-10-seconds-back"
+      },
+      {
+        "semantic": "IconSeekForward",
+        "name": "rewind-10-seconds-forward",
+        "style": "linear",
+        "export": "Rewind10SecondsForwardIcon",
+        "import": "@solar-icons/react/linear/rewind-10-seconds-forward"
+      },
+      {
+        "semantic": "IconSend",
+        "name": "arrow-up",
+        "style": "bold",
+        "export": "ArrowUpIcon",
+        "import": "@solar-icons/react/bold/arrow-up"
+      },
+      {
+        "semantic": "IconExpand",
+        "name": "maximize",
+        "style": "linear",
+        "export": "MaximizeIcon",
+        "import": "@solar-icons/react/linear/maximize"
+      },
+      {
+        "semantic": "IconCollapse",
+        "name": "minimize",
+        "style": "linear",
+        "export": "MinimizeIcon",
+        "import": "@solar-icons/react/linear/minimize"
+      },
+      {
+        "semantic": "IconDownload",
+        "name": "download-minimalistic",
+        "style": "linear",
+        "export": "DownloadMinimalisticIcon",
+        "import": "@solar-icons/react/linear/download-minimalistic"
+      },
+      {
+        "semantic": "IconUpload",
+        "name": "upload-minimalistic",
+        "style": "linear",
+        "export": "UploadMinimalisticIcon",
+        "import": "@solar-icons/react/linear/upload-minimalistic"
+      },
+      {
+        "semantic": "IconCloudUpload",
+        "name": "cloud-upload",
+        "style": "bold-duotone",
+        "export": "CloudUploadIcon",
+        "import": "@solar-icons/react/bold-duotone/cloud-upload"
+      },
+      {
+        "semantic": "IconCheckCircle",
+        "name": "check-circle",
+        "style": "bold-duotone",
+        "export": "CheckCircleIcon",
+        "import": "@solar-icons/react/bold-duotone/check-circle"
+      },
+      {
+        "semantic": "IconPauseCircle",
+        "name": "pause-circle",
+        "style": "bold-duotone",
+        "export": "PauseCircleIcon",
+        "import": "@solar-icons/react/bold-duotone/pause-circle"
+      },
+      {
+        "semantic": "IconError",
+        "name": "danger-circle",
+        "style": "bold-duotone",
+        "export": "DangerCircleIcon",
+        "import": "@solar-icons/react/bold-duotone/danger-circle"
+      },
+      {
+        "semantic": "IconWarning",
+        "name": "danger-triangle",
+        "style": "bold-duotone",
+        "export": "DangerTriangleIcon",
+        "import": "@solar-icons/react/bold-duotone/danger-triangle"
+      },
+      {
+        "semantic": "IconInfo",
+        "name": "info-circle",
+        "style": "bold-duotone",
+        "export": "InfoCircleIcon",
+        "import": "@solar-icons/react/bold-duotone/info-circle"
+      },
+      {
+        "semantic": "IconHelp",
+        "name": "question-circle",
+        "style": "bold-duotone",
+        "export": "QuestionCircleIcon",
+        "import": "@solar-icons/react/bold-duotone/question-circle"
+      },
+      {
+        "semantic": "IconLike",
+        "name": "like",
+        "style": "linear",
+        "export": "LikeIcon",
+        "import": "@solar-icons/react/linear/like"
+      },
+      {
+        "semantic": "IconDislike",
+        "name": "dislike",
+        "style": "linear",
+        "export": "DislikeIcon",
+        "import": "@solar-icons/react/linear/dislike"
+      },
+      {
+        "semantic": "IconCircle",
+        "name": "record",
+        "style": "linear",
+        "export": "RecordIcon",
+        "import": "@solar-icons/react/linear/record"
+      },
+      {
+        "semantic": "IconCommand",
+        "name": "command",
+        "style": "linear",
+        "export": "CommandIcon",
+        "import": "@solar-icons/react/linear/command"
+      },
+      {
+        "semantic": "IconKeyboard",
+        "name": "keyboard",
+        "style": "linear",
+        "export": "KeyboardIcon",
+        "import": "@solar-icons/react/linear/keyboard"
+      },
+      {
+        "semantic": "IconCursor",
+        "name": "cursor",
+        "style": "linear",
+        "export": "CursorIcon",
+        "import": "@solar-icons/react/linear/cursor"
+      },
+      {
+        "semantic": "IconCursorClick",
+        "name": "cursor-square",
+        "style": "linear",
+        "export": "CursorSquareIcon",
+        "import": "@solar-icons/react/linear/cursor-square"
+      },
+      {
+        "semantic": "IconTakeControl",
+        "name": "user-hand-up",
+        "style": "linear",
+        "export": "UserHandUpIcon",
+        "import": "@solar-icons/react/linear/user-hand-up"
+      },
+      {
+        "semantic": "IconChat",
+        "name": "chat-round-dots",
+        "style": "bold-duotone",
+        "export": "ChatRoundDotsIcon",
+        "import": "@solar-icons/react/bold-duotone/chat-round-dots"
+      },
+      {
+        "semantic": "IconNewChat",
+        "name": "pen-new-round",
+        "style": "linear",
+        "export": "PenNewRoundIcon",
+        "import": "@solar-icons/react/linear/pen-new-round"
+      },
+      {
+        "semantic": "IconFile",
+        "name": "file",
+        "style": "bold-duotone",
+        "export": "FileIcon",
+        "import": "@solar-icons/react/bold-duotone/file"
+      },
+      {
+        "semantic": "IconFileText",
+        "name": "file-text",
+        "style": "bold-duotone",
+        "export": "FileTextIcon",
+        "import": "@solar-icons/react/bold-duotone/file-text"
+      },
+      {
+        "semantic": "IconFileAdd",
+        "name": "file-add",
+        "style": "bold-duotone",
+        "export": "FileAddIcon",
+        "import": "@solar-icons/react/bold-duotone/file-add"
+      },
+      {
+        "semantic": "IconFileImage",
+        "name": "file-image",
+        "style": "bold-duotone",
+        "export": "FileImageIcon",
+        "import": "@solar-icons/react/bold-duotone/file-image"
+      },
+      {
+        "semantic": "IconFileSettings",
+        "name": "file-sliders",
+        "style": "bold-duotone",
+        "export": "FileSlidersIcon",
+        "import": "@solar-icons/react/bold-duotone/file-sliders"
+      },
+      {
+        "semantic": "IconFolder",
+        "name": "folder",
+        "style": "bold-duotone",
+        "export": "FolderIcon",
+        "import": "@solar-icons/react/bold-duotone/folder"
+      },
+      {
+        "semantic": "IconImage",
+        "name": "gallery",
+        "style": "bold-duotone",
+        "export": "GalleryIcon",
+        "import": "@solar-icons/react/bold-duotone/gallery"
+      },
+      {
+        "semantic": "IconMedia",
+        "name": "clapperboard-play",
+        "style": "bold-duotone",
+        "export": "ClapperboardPlayIcon",
+        "import": "@solar-icons/react/bold-duotone/clapperboard-play"
+      },
+      {
+        "semantic": "IconVideo",
+        "name": "videocamera",
+        "style": "bold-duotone",
+        "export": "VideocameraIcon",
+        "import": "@solar-icons/react/bold-duotone/videocamera"
+      },
+      {
+        "semantic": "IconMusic",
+        "name": "music-note-3",
+        "style": "bold-duotone",
+        "export": "MusicNote3Icon",
+        "import": "@solar-icons/react/bold-duotone/music-note-3"
+      },
+      {
+        "semantic": "IconMicrophone",
+        "name": "microphone",
+        "style": "bold-duotone",
+        "export": "MicrophoneIcon",
+        "import": "@solar-icons/react/bold-duotone/microphone"
+      },
+      {
+        "semantic": "IconSpeaker",
+        "name": "volume-loud",
+        "style": "bold-duotone",
+        "export": "VolumeLoudIcon",
+        "import": "@solar-icons/react/bold-duotone/volume-loud"
+      },
+      {
+        "semantic": "IconSpeakerOff",
+        "name": "volume-cross",
+        "style": "linear",
+        "export": "VolumeCrossIcon",
+        "import": "@solar-icons/react/linear/volume-cross"
+      },
+      {
+        "semantic": "IconCall",
+        "name": "phone-calling-rounded",
+        "style": "bold-duotone",
+        "export": "PhoneCallingRoundedIcon",
+        "import": "@solar-icons/react/bold-duotone/phone-calling-rounded"
+      },
+      {
+        "semantic": "IconSettings",
+        "name": "settings",
+        "style": "bold-duotone",
+        "export": "SettingsIcon",
+        "import": "@solar-icons/react/bold-duotone/settings"
+      },
+      {
+        "semantic": "IconControls",
+        "name": "tuning-2",
+        "style": "linear",
+        "export": "Tuning2Icon",
+        "import": "@solar-icons/react/linear/tuning-2"
+      },
+      {
+        "semantic": "IconPalette",
+        "name": "palette-round",
+        "style": "bold-duotone",
+        "export": "PaletteRoundIcon",
+        "import": "@solar-icons/react/bold-duotone/palette-round"
+      },
+      {
+        "semantic": "IconShieldCheck",
+        "name": "shield-check",
+        "style": "bold-duotone",
+        "export": "ShieldCheckIcon",
+        "import": "@solar-icons/react/bold-duotone/shield-check"
+      },
+      {
+        "semantic": "IconPrivacy",
+        "name": "shield-keyhole",
+        "style": "bold-duotone",
+        "export": "ShieldKeyholeIcon",
+        "import": "@solar-icons/react/bold-duotone/shield-keyhole"
+      },
+      {
+        "semantic": "IconEye",
+        "name": "eye",
+        "style": "bold-duotone",
+        "export": "EyeIcon",
+        "import": "@solar-icons/react/bold-duotone/eye"
+      },
+      {
+        "semantic": "IconObserve",
+        "name": "eye-scan",
+        "style": "bold-duotone",
+        "export": "EyeScanIcon",
+        "import": "@solar-icons/react/bold-duotone/eye-scan"
+      },
+      {
+        "semantic": "IconTeam",
+        "name": "users-group-rounded",
+        "style": "bold-duotone",
+        "export": "UsersGroupRoundedIcon",
+        "import": "@solar-icons/react/bold-duotone/users-group-rounded"
+      },
+      {
+        "semantic": "IconAccount",
+        "name": "user-rounded",
+        "style": "bold-duotone",
+        "export": "UserRoundedIcon",
+        "import": "@solar-icons/react/bold-duotone/user-rounded"
+      },
+      {
+        "semantic": "IconKey",
+        "name": "key-minimalistic",
+        "style": "bold-duotone",
+        "export": "KeyMinimalisticIcon",
+        "import": "@solar-icons/react/bold-duotone/key-minimalistic"
+      },
+      {
+        "semantic": "IconMemory",
+        "name": "brain",
+        "style": "bold-duotone",
+        "export": "BrainIcon",
+        "import": "@solar-icons/react/bold-duotone/brain"
+      },
+      {
+        "semantic": "IconDatabase",
+        "name": "database",
+        "style": "bold-duotone",
+        "export": "DatabaseIcon",
+        "import": "@solar-icons/react/bold-duotone/database"
+      },
+      {
+        "semantic": "IconMonitor",
+        "name": "monitor",
+        "style": "bold-duotone",
+        "export": "MonitorIcon",
+        "import": "@solar-icons/react/bold-duotone/monitor"
+      },
+      {
+        "semantic": "IconDevices",
+        "name": "monitor-smartphone",
+        "style": "bold-duotone",
+        "export": "MonitorSmartphoneIcon",
+        "import": "@solar-icons/react/bold-duotone/monitor-smartphone"
+      },
+      {
+        "semantic": "IconPhone",
+        "name": "smartphone",
+        "style": "bold-duotone",
+        "export": "SmartphoneIcon",
+        "import": "@solar-icons/react/bold-duotone/smartphone"
+      },
+      {
+        "semantic": "IconServer",
+        "name": "server-square",
+        "style": "bold-duotone",
+        "export": "ServerSquareIcon",
+        "import": "@solar-icons/react/bold-duotone/server-square"
+      },
+      {
+        "semantic": "IconCpu",
+        "name": "cpu",
+        "style": "bold-duotone",
+        "export": "CpuIcon",
+        "import": "@solar-icons/react/bold-duotone/cpu"
+      },
+      {
+        "semantic": "IconTerminal",
+        "name": "code-square",
+        "style": "bold-duotone",
+        "export": "CodeSquareIcon",
+        "import": "@solar-icons/react/bold-duotone/code-square"
+      },
+      {
+        "semantic": "IconCode",
+        "name": "code",
+        "style": "linear",
+        "export": "CodeIcon",
+        "import": "@solar-icons/react/linear/code"
+      },
+      {
+        "semantic": "IconText",
+        "name": "text-square",
+        "style": "linear",
+        "export": "TextSquareIcon",
+        "import": "@solar-icons/react/linear/text-square"
+      },
+      {
+        "semantic": "IconModel",
+        "name": "box",
+        "style": "bold-duotone",
+        "export": "BoxIcon",
+        "import": "@solar-icons/react/bold-duotone/box"
+      },
+      {
+        "semantic": "IconPlugin",
+        "name": "widget-add",
+        "style": "bold-duotone",
+        "export": "WidgetAddIcon",
+        "import": "@solar-icons/react/bold-duotone/widget-add"
+      },
+      {
+        "semantic": "IconPluginCatalog",
+        "name": "widget",
+        "style": "bold-duotone",
+        "export": "WidgetIcon",
+        "import": "@solar-icons/react/bold-duotone/widget"
+      },
+      {
+        "semantic": "IconMcp",
+        "name": "plug-circle",
+        "style": "bold-duotone",
+        "export": "PlugCircleIcon",
+        "import": "@solar-icons/react/bold-duotone/plug-circle"
+      },
+      {
+        "semantic": "IconBook",
+        "name": "book",
+        "style": "bold-duotone",
+        "export": "BookIcon",
+        "import": "@solar-icons/react/bold-duotone/book"
+      },
+      {
+        "semantic": "IconSkill",
+        "name": "book-bookmark",
+        "style": "bold-duotone",
+        "export": "BookBookmarkIcon",
+        "import": "@solar-icons/react/bold-duotone/book-bookmark"
+      },
+      {
+        "semantic": "IconLearning",
+        "name": "square-academic-cap",
+        "style": "bold-duotone",
+        "export": "SquareAcademicCapIcon",
+        "import": "@solar-icons/react/bold-duotone/square-academic-cap"
+      },
+      {
+        "semantic": "IconReview",
+        "name": "clipboard-check",
+        "style": "bold-duotone",
+        "export": "ClipboardCheckIcon",
+        "import": "@solar-icons/react/bold-duotone/clipboard-check"
+      },
+      {
+        "semantic": "IconEvidence",
+        "name": "documents-minimalistic",
+        "style": "bold-duotone",
+        "export": "DocumentsMinimalisticIcon",
+        "import": "@solar-icons/react/bold-duotone/documents-minimalistic"
+      },
+      {
+        "semantic": "IconArchive",
+        "name": "archive-down-minimalistic",
+        "style": "bold-duotone",
+        "export": "ArchiveDownMinimalisticIcon",
+        "import": "@solar-icons/react/bold-duotone/archive-down-minimalistic"
+      },
+      {
+        "semantic": "IconStorage",
+        "name": "ssd-square",
+        "style": "bold-duotone",
+        "export": "SsdSquareIcon",
+        "import": "@solar-icons/react/bold-duotone/ssd-square"
+      },
+      {
+        "semantic": "IconGoal",
+        "name": "target",
+        "style": "bold-duotone",
+        "export": "TargetIcon",
+        "import": "@solar-icons/react/bold-duotone/target"
+      },
+      {
+        "semantic": "IconGrid",
+        "name": "widget-4",
+        "style": "bold-duotone",
+        "export": "Widget4Icon",
+        "import": "@solar-icons/react/bold-duotone/widget-4"
+      },
+      {
+        "semantic": "IconList",
+        "name": "list",
+        "style": "linear",
+        "export": "ListIcon",
+        "import": "@solar-icons/react/linear/list"
+      },
+      {
+        "semantic": "IconListCheck",
+        "name": "checklist-minimalistic",
+        "style": "bold-duotone",
+        "export": "ChecklistMinimalisticIcon",
+        "import": "@solar-icons/react/bold-duotone/checklist-minimalistic"
+      },
+      {
+        "semantic": "IconLayers",
+        "name": "layers",
+        "style": "bold-duotone",
+        "export": "LayersIcon",
+        "import": "@solar-icons/react/bold-duotone/layers"
+      },
+      {
+        "semantic": "IconHistory",
+        "name": "history",
+        "style": "linear",
+        "export": "HistoryIcon",
+        "import": "@solar-icons/react/linear/history"
+      },
+      {
+        "semantic": "IconNotification",
+        "name": "bell",
+        "style": "bold-duotone",
+        "export": "BellIcon",
+        "import": "@solar-icons/react/bold-duotone/bell"
+      },
+      {
+        "semantic": "IconAttention",
+        "name": "bell-ring",
+        "style": "bold-duotone",
+        "export": "BellRingIcon",
+        "import": "@solar-icons/react/bold-duotone/bell-ring"
+      },
+      {
+        "semantic": "IconReminder",
+        "name": "alarm",
+        "style": "bold-duotone",
+        "export": "AlarmIcon",
+        "import": "@solar-icons/react/bold-duotone/alarm"
+      },
+      {
+        "semantic": "IconCalendar",
+        "name": "calendar-date",
+        "style": "bold-duotone",
+        "export": "CalendarDateIcon",
+        "import": "@solar-icons/react/bold-duotone/calendar-date"
+      },
+      {
+        "semantic": "IconCalendarCheck",
+        "name": "calendar-mark",
+        "style": "bold-duotone",
+        "export": "CalendarMarkIcon",
+        "import": "@solar-icons/react/bold-duotone/calendar-mark"
+      },
+      {
+        "semantic": "IconClock",
+        "name": "clock-circle",
+        "style": "linear",
+        "export": "ClockCircleIcon",
+        "import": "@solar-icons/react/linear/clock-circle"
+      },
+      {
+        "semantic": "IconSparkles",
+        "name": "stars-minimalistic",
+        "style": "bold-duotone",
+        "export": "StarsMinimalisticIcon",
+        "import": "@solar-icons/react/bold-duotone/stars-minimalistic"
+      },
+      {
+        "semantic": "IconStar",
+        "name": "star",
+        "style": "bold-duotone",
+        "export": "StarIcon",
+        "import": "@solar-icons/react/bold-duotone/star"
+      },
+      {
+        "semantic": "IconMoon",
+        "name": "moon",
+        "style": "bold-duotone",
+        "export": "MoonIcon",
+        "import": "@solar-icons/react/bold-duotone/moon"
+      },
+      {
+        "semantic": "IconQuote",
+        "name": "quote",
+        "style": "bold-duotone",
+        "export": "QuoteIcon",
+        "import": "@solar-icons/react/bold-duotone/quote"
+      },
+      {
+        "semantic": "IconTool",
+        "name": "toolbox",
+        "style": "bold-duotone",
+        "export": "ToolboxIcon",
+        "import": "@solar-icons/react/bold-duotone/toolbox"
+      },
+      {
+        "semantic": "IconSidebar",
+        "name": "sidebar-minimalistic",
+        "style": "linear",
+        "export": "SidebarMinimalisticIcon",
+        "import": "@solar-icons/react/linear/sidebar-minimalistic"
+      },
+      {
+        "semantic": "IconSidebarClose",
+        "name": "panel-left-close",
+        "style": "linear",
+        "export": "PanelLeftCloseIcon",
+        "import": "@solar-icons/react/linear/panel-left-close"
+      },
+      {
+        "semantic": "IconSidebarOpen",
+        "name": "panel-left-open",
+        "style": "linear",
+        "export": "PanelLeftOpenIcon",
+        "import": "@solar-icons/react/linear/panel-left-open"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "file": "src/ReasoningIndicator.tsx",
+      "source": "@remixicon/react@4.9.0 RiBarChartGroupedFill",
+      "reason": "Six exact bar intervals encode the six native reasoning levels; this is a state diagram, not an ordinary glyph."
+    }
+  ]
+}

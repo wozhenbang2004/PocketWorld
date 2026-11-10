@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { RiArrowDownSLine, RiBox3Line, RiCheckLine, RiCloseLine } from '@remixicon/react';
+import { IconCheck, IconChevronDown, IconClose, IconModel } from './icons';
 import { Button, IconButton } from './forms-library';
 import { Radio, RadioGroup } from './forms-library/boardui/components/base/radio/radio';
 import { Popover } from './shell-library';
@@ -192,7 +192,7 @@ function LegacyConversationModelControls({ state, can, act, onOpenModel, pickerS
 
   return <div className="pw-conversation-model-controls" aria-label="模型与推理">
     <Button ref={modelTrigger} variant="ghost" className="pw-conversation-model-chip" onClick={event => selectModel(event.currentTarget)} disabled={locked || loading} aria-label={`切换模型：${modelName}`} aria-haspopup="dialog" aria-expanded={pickerSection === 'models'} title={modelName}>
-      <RiBox3Line size={19} aria-hidden="true" /><span className="pw-conversation-model-chip-name">{modelName}</span><RiArrowDownSLine size={14} aria-hidden="true" />
+      <IconModel size={19} aria-hidden="true" /><span className="pw-conversation-model-chip-name">{modelName}</span><IconChevronDown size={14} aria-hidden="true" />
     </Button>
     <Button ref={reasoningTrigger} variant="ghost" className="pw-conversation-reasoning-chip" onClick={event => open ? closePanel() : openPanel(event.currentTarget)} disabled={locked || !state.modelName} aria-label={strengthLabel} aria-haspopup="dialog" aria-expanded={open} aria-busy={strengthReading || saving || undefined} title={strengthLabel}>
       <ReasoningIndicator reasoning={currentTarget?.reasoning || null} loading={strengthReading || saving} error={!!currentSummary?.error} /><span>推理</span>{effort && <><span aria-hidden="true">·</span><b>{effort}</b></>}
@@ -201,7 +201,7 @@ function LegacyConversationModelControls({ state, can, act, onOpenModel, pickerS
       placement="top start" offset={8} shouldFlip containerPadding={16} maxHeight={480} scrollRef={reasoningBody}
       isKeyboardDismissDisabled={saving || !!state.modelSelectionBusy} aria-label="推理强度"
       className="pw-conversation-picker-popover pw-conversation-reasoning-popover" dialogClassName="pw-conversation-picker-dialog">
-        <header className="pw-conversation-picker-header"><h2>推理强度</h2><IconButton icon={RiCloseLine} aria-label="关闭推理设置" onClick={closePanel} disabled={saving || !!state.modelSelectionBusy} /></header>
+        <header className="pw-conversation-picker-header"><h2>推理强度</h2><IconButton icon={IconClose} aria-label="关闭推理设置" onClick={closePanel} disabled={saving || !!state.modelSelectionBusy} /></header>
         <div ref={reasoningBody} className="pw-conversation-picker-body pw-conversation-reasoning-body">
           <p className="pw-model-selection-scope">{panelTarget?.modelId || modelName}</p>
           {loading ? <div className="pw-conversation-reasoning-loading" role="status" aria-busy="true"><ShimmerText>正在读取推理设置…</ShimmerText></div> : saving ? <p className="pw-conversation-reasoning-note" role="status">正在保存推理设置…</p> : session ? <>
@@ -210,7 +210,7 @@ function LegacyConversationModelControls({ state, can, act, onOpenModel, pickerS
                 const detail = choice.value.mode === 'DEFAULT' ? '服务默认' : choice.detail !== choice.value.level ? choice.detail : '';
                 return <Radio key={choice.id} value={choice.id} aria-label={`${choice.label}${choice.detail ? `，${choice.detail}` : ''}`} isDisabled={choice.readOnly} className="pw-conversation-reasoning-option pw-conversation-reasoning-draft">
                   <span className="pw-conversation-reasoning-copy"><b>{choice.label}</b>{detail && <small>{detail}</small>}</span>
-                  <RiCheckLine className="pw-conversation-reasoning-check" size={18} aria-hidden="true" data-selected={choiceId === choice.id || undefined} />
+                  <IconCheck className="pw-conversation-reasoning-check" size={18} aria-hidden="true" data-selected={choiceId === choice.id || undefined} />
                 </Radio>;
               })}
             </RadioGroup>

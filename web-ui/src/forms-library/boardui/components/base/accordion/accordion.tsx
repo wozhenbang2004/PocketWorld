@@ -10,7 +10,7 @@ import {
   Heading as AriaHeading,
 } from "react-aria-components";
 import type { DisclosureGroupProps as AriaDisclosureGroupProps, DisclosureProps as AriaDisclosureProps } from "react-aria-components";
-import { RiAddLine, RiArrowDownSLine } from "@remixicon/react";
+import { IconAdd, IconChevronDown } from '../../../../../icons';
 import { cx, sortCx } from "../../../utils/cx";
 import { useMotionAllowed } from "../../../../../library/core";
 
@@ -117,7 +117,7 @@ export function AccordionItem({
 }: AccordionItemProps) {
   const { variant, indicator } = useContext(AccordionContext);
   const allowed = useMotionAllowed();
-  const Indicator = indicator === "plus" ? RiAddLine : RiArrowDownSLine;
+  const Indicator = indicator === "plus" ? IconAdd : IconChevronDown;
 
   return (
     <AriaDisclosure

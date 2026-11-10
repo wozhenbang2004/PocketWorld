@@ -1,5 +1,5 @@
 import type {ReactNode,Ref} from 'react';
-import {RiChatNewLine,RiHistoryLine,RiLayoutGridLine,RiMoreLine,RiNotification3Line,RiSettings4Line,RiFolderLine} from '@remixicon/react';
+import { IconFolder, IconGrid, IconHistory, IconMore, IconNewChat, IconNotification, IconSettings } from './icons';
 import {Button,IconButton} from './forms-library';
 import {Popover,PopoverTrigger} from './shell-library';
 import './chat-navigation.css';
@@ -29,18 +29,18 @@ export function ChatNavigationMenu({title,navigationTrigger,isOpen,onOpenChange,
   {navigationTrigger}
   <h1 className="pw-chat-navigation-title" title={title}>{title}</h1>
   <PopoverTrigger isOpen={isOpen} onOpenChange={onOpenChange}>
-   <IconButton ref={triggerRef} icon={RiMoreLine} className="pw-chat-glass-trigger" aria-label={unread>0?`对话菜单，${unread} 条未读通知`:'对话菜单'} title="对话菜单" data-unread={unread>0||undefined}/>
+   <IconButton ref={triggerRef} icon={IconMore} className="pw-chat-glass-trigger" aria-label={unread>0?`对话菜单，${unread} 条未读通知`:'对话菜单'} title="对话菜单" data-unread={unread>0||undefined}/>
    <Popover aria-label="对话菜单" placement="bottom end" offset={8} className="pw-chat-glass-menu" dialogClassName="pw-chat-glass-dialog">
     <div className="pw-chat-menu-actions">
-     {onNewConversation&&<Button variant="ghost" leadingIcon={RiChatNewLine} disabled={submitting} onClick={()=>choose(onNewConversation)}>新对话</Button>}
-     <Button variant="ghost" leadingIcon={RiHistoryLine} onClick={()=>choose(onConversations)}>对话列表</Button>
-     {onOrganize&&<Button variant="ghost" leadingIcon={RiFolderLine} onClick={()=>choose(onOrganize)}>整理当前对话</Button>}
-     {onMemory&&<Button variant="ghost" leadingIcon={RiSettings4Line} onClick={()=>choose(onMemory)}>本对话的个人记忆</Button>}
+     {onNewConversation&&<Button variant="ghost" leadingIcon={IconNewChat} disabled={submitting} onClick={()=>choose(onNewConversation)}>新对话</Button>}
+     <Button variant="ghost" leadingIcon={IconHistory} onClick={()=>choose(onConversations)}>对话列表</Button>
+     {onOrganize&&<Button variant="ghost" leadingIcon={IconFolder} onClick={()=>choose(onOrganize)}>整理当前对话</Button>}
+     {onMemory&&<Button variant="ghost" leadingIcon={IconSettings} onClick={()=>choose(onMemory)}>本对话的个人记忆</Button>}
     </div>
     <div className="pw-chat-menu-actions">
-     <Button variant="ghost" leadingIcon={RiLayoutGridLine} onClick={()=>choose(onNavigation)}>工作区与导航</Button>
-     {onNotifications&&<Button variant="ghost" leadingIcon={RiNotification3Line} onClick={()=>choose(onNotifications)}><span>通知</span>{unread>0&&<small className="pw-chat-menu-unread">{unread>99?'99+':unread}</small>}</Button>}
-     <Button variant="ghost" leadingIcon={RiSettings4Line} onClick={()=>choose(onSettings)}>设置</Button>
+     <Button variant="ghost" leadingIcon={IconGrid} onClick={()=>choose(onNavigation)}>工作区与导航</Button>
+     {onNotifications&&<Button variant="ghost" leadingIcon={IconNotification} onClick={()=>choose(onNotifications)}><span>通知</span>{unread>0&&<small className="pw-chat-menu-unread">{unread>99?'99+':unread}</small>}</Button>}
+     <Button variant="ghost" leadingIcon={IconSettings} onClick={()=>choose(onSettings)}>设置</Button>
     </div>
    </Popover>
   </PopoverTrigger>

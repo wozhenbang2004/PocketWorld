@@ -4,7 +4,7 @@ import { Tabs, TabList, Tab, TabPanel } from './shell-library';
 import './task-process.css';
 import { TaskTrajectory } from './TaskTrajectory';
 import { Accordion, AccordionItem, Button, IconButton } from './forms-library';
-import { RiArrowLeftLine, RiArrowRightLine, RiRefreshLine } from '@remixicon/react';
+import { IconArrowLeft, IconArrowRight, IconRefresh } from './icons';
 import { getTaskEventHistory, getTaskOperations } from './task-presentation';
 import { taskAuditPage, taskHistoryIdentity, type AuditPage, type AuditSection, type TaskHeader } from './task-history';
 
@@ -62,9 +62,9 @@ export function TaskHistory({ task, canRead, canReadTrace = false, active = true
     <div className="pw-action-row pw-audit-navigation" aria-label={label + '翻页'}>
       {window.page && <span className="pw-muted pw-history-window">{window.earlier ? '较早记录' : '最近记录'}{window.page.hasMore ? ' · 尚有更早记录' : ' · 已到当前读取范围末尾'}</span>}
       <span className="pw-grow"/>
-      {window.canGoBack && <IconButton icon={RiArrowLeftLine} aria-label="较近记录" title="较近记录" disabled={window.busy || !canRead} onClick={window.newer}/>}
-      {window.page?.hasMore && <IconButton icon={RiArrowRightLine} aria-label="较早记录" title="较早记录" disabled={window.busy || !canRead} onClick={window.older}/>}
-      {canRead && (window.page ? <IconButton icon={RiRefreshLine} aria-label="重读最近记录" title="重读最近记录" disabled={window.busy} onClick={window.refresh}/> : <Button variant="ghost" leadingIcon={RiRefreshLine} disabled={window.busy} onClick={window.refresh}>读取原记录</Button>)}
+      {window.canGoBack && <IconButton icon={IconArrowLeft} aria-label="较近记录" title="较近记录" disabled={window.busy || !canRead} onClick={window.newer}/>}
+      {window.page?.hasMore && <IconButton icon={IconArrowRight} aria-label="较早记录" title="较早记录" disabled={window.busy || !canRead} onClick={window.older}/>}
+      {canRead && (window.page ? <IconButton icon={IconRefresh} aria-label="重读最近记录" title="重读最近记录" disabled={window.busy} onClick={window.refresh}/> : <Button variant="ghost" leadingIcon={IconRefresh} disabled={window.busy} onClick={window.refresh}>读取原记录</Button>)}
     </div>
     {window.busy && <p className="pw-muted" role="status">正在读取{label}…</p>}
     {window.page?.readLimited === true && <p className="pw-muted">部分正文超出当前读取范围。</p>}

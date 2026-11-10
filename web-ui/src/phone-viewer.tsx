@@ -4,7 +4,7 @@
  * License notice: ../THIRD-PARTY-NOTICES.md
  */
 import { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
-import { ArrowUpRight, Expand, LoaderCircle, Monitor, Pause, Play, RefreshCw, Square, X } from 'lucide-react';
+import { IconArrowUpRight, IconClose, IconExpand, IconLoading, IconMonitor, IconPause, IconPlay, IconRefresh, IconStop } from './icons';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Drawer } from './shell-library';
 import { Select, SelectItem } from './forms-library/boardui/components/base/select/select';
@@ -120,7 +120,7 @@ function statusLabel(task: PhoneViewerTask, feed: Feed): string {
 export function PhoneComputerEntry({ task, feed, expanded, onOpen }: { task: PhoneViewerTask; feed: Feed; expanded: boolean; onOpen: () => void }) {
   const label = statusLabel(task, feed);
   return <button type="button" className="pw-phone-viewer-entry" aria-label={`查看手机独立屏 · ${label}`} aria-haspopup="dialog" aria-expanded={expanded} onClick={onOpen}>
-    <Monitor size={13} aria-hidden="true" /><span>独立屏 · {label}</span><span className="pw-phone-viewer-dot" aria-hidden="true" data-live={feed.phase === 'live' && feed.visible} />
+    <IconMonitor size={13} aria-hidden="true" /><span>独立屏 · {label}</span><span className="pw-phone-viewer-dot" aria-hidden="true" data-live={feed.phase === 'live' && feed.visible} />
   </button>;
 }
 
@@ -143,7 +143,7 @@ function PhoneFrame({ task, feed, large = false }: { task: PhoneViewerTask; feed
       <img src={feed.frame.src} width={feed.frame.previewWidth} height={feed.frame.previewHeight} alt={`${task.title || '这次手机任务'}的独立屏画面`} draggable={false} />
       <figcaption><span>{delayed ? retained : task.status === 'paused' ? '执行已暂停 · 画面持续更新' : '画面持续更新'}</span><time dateTime={new Date(feed.frame.receivedAt).toISOString()}>收到于 {time}</time></figcaption>
     </> : <div className="pw-phone-viewer-placeholder" role="status">
-      {waiting && feed.visible ? <LoaderCircle size={26} className="pw-phone-viewer-spinner" aria-hidden="true" /> : <Monitor size={28} aria-hidden="true" />}
+      {waiting && feed.visible ? <IconLoading size={26} className="pw-phone-viewer-spinner" aria-hidden="true" /> : <IconMonitor size={28} aria-hidden="true" />}
       <strong>{title}</strong><p>{ended ? '本次查看中没有收到可保留的画面。' : quiet ? '打开查看器后继续读取这次任务的画面。' : '收到这次任务的真实画面后，会显示在这里。'}</p>
     </div>}
   </figure>;
@@ -160,11 +160,11 @@ type Controls = { busy: boolean; error: string; pause?: () => void; resume?: () 
 function PhoneControls({ task, feed, controls }: { task: PhoneViewerTask; feed: Feed; controls: Controls }) {
   return <>
     <div className="pw-phone-viewer-controls">
-      {!terminal(task) && feed.phase !== 'ended' && task.status === 'running' && controls.pause && <button type="button" className="pw-phone-viewer-button" disabled={controls.busy || !feed.visible} onClick={controls.pause}>{controls.busy ? <LoaderCircle size={16} className="pw-phone-viewer-spinner" aria-hidden="true" /> : <Pause size={16} aria-hidden="true" />}暂停执行</button>}
-      {!terminal(task) && feed.phase !== 'ended' && task.status === 'paused' && controls.resume && <button type="button" className="pw-phone-viewer-button pw-phone-viewer-button-primary" disabled={controls.busy || !feed.visible} onClick={controls.resume}>{controls.busy ? <LoaderCircle size={16} className="pw-phone-viewer-spinner" aria-hidden="true" /> : <Play size={16} aria-hidden="true" />}继续执行</button>}
-      {!terminal(task) && task.status !== 'stopping' && controls.stop && <button type="button" className="pw-phone-viewer-button" disabled={controls.busy || !feed.visible} onClick={controls.stop}><Square size={16} aria-hidden="true" />停止任务</button>}
-      {controls.openTask && <button type="button" className="pw-phone-viewer-button" disabled={controls.busy} onClick={controls.openTask}><ArrowUpRight size={16} aria-hidden="true" />{task.status === 'waiting' ? '处理待办' : task.status === 'error' ? '查看失败原因' : '查看任务'}</button>}
-      {!terminal(task) && feed.phase !== 'ended' && (feed.phase === 'error' || feed.phase === 'hidden' && feed.visible) && <button type="button" className="pw-phone-viewer-button" disabled={!feed.visible} onClick={feed.retry}><RefreshCw size={16} aria-hidden="true" />重新读取</button>}
+      {!terminal(task) && feed.phase !== 'ended' && task.status === 'running' && controls.pause && <button type="button" className="pw-phone-viewer-button" disabled={controls.busy || !feed.visible} onClick={controls.pause}>{controls.busy ? <IconLoading size={16} className="pw-phone-viewer-spinner" aria-hidden="true" /> : <IconPause size={16} aria-hidden="true" />}暂停执行</button>}
+      {!terminal(task) && feed.phase !== 'ended' && task.status === 'paused' && controls.resume && <button type="button" className="pw-phone-viewer-button pw-phone-viewer-button-primary" disabled={controls.busy || !feed.visible} onClick={controls.resume}>{controls.busy ? <IconLoading size={16} className="pw-phone-viewer-spinner" aria-hidden="true" /> : <IconPlay size={16} aria-hidden="true" />}继续执行</button>}
+      {!terminal(task) && task.status !== 'stopping' && controls.stop && <button type="button" className="pw-phone-viewer-button" disabled={controls.busy || !feed.visible} onClick={controls.stop}><IconStop size={16} aria-hidden="true" />停止任务</button>}
+      {controls.openTask && <button type="button" className="pw-phone-viewer-button" disabled={controls.busy} onClick={controls.openTask}><IconArrowUpRight size={16} aria-hidden="true" />{task.status === 'waiting' ? '处理待办' : task.status === 'error' ? '查看失败原因' : '查看任务'}</button>}
+      {!terminal(task) && feed.phase !== 'ended' && (feed.phase === 'error' || feed.phase === 'hidden' && feed.visible) && <button type="button" className="pw-phone-viewer-button" disabled={!feed.visible} onClick={feed.retry}><IconRefresh size={16} aria-hidden="true" />重新读取</button>}
     </div>
     {(feed.error || controls.error) && <p className="pw-phone-viewer-error" role="status">{controls.error || feed.error}</p>}
   </>;
@@ -173,10 +173,10 @@ function PhoneControls({ task, feed, controls }: { task: PhoneViewerTask; feed: 
 /** OpenMuse DesktopToolCard, adapted to the original phone run and a portrait-safe image. */
 export function PhoneViewerCard({ task, feed, controls, onExpand, tasks, onSelectTask }: Pick<PhoneViewerProps, 'task' | 'tasks' | 'onSelectTask'> & { feed: Feed; controls: Controls; onExpand: () => void }) {
   return <section className="pw-phone-viewer-card" aria-label="手机独立屏预览">
-    <header className="pw-phone-viewer-card-header"><span className="pw-phone-viewer-icon"><Monitor size={21} aria-hidden="true" /></span><div className="pw-phone-viewer-card-title"><strong>手机独立屏</strong><span title={task.title}>{task.title || '这次手机任务'}</span></div><span className="pw-phone-viewer-status" role="status">{statusLabel(task, feed)}</span></header>
+    <header className="pw-phone-viewer-card-header"><span className="pw-phone-viewer-icon"><IconMonitor size={21} aria-hidden="true" /></span><div className="pw-phone-viewer-card-title"><strong>手机独立屏</strong><span title={task.title}>{task.title || '这次手机任务'}</span></div><span className="pw-phone-viewer-status" role="status">{statusLabel(task, feed)}</span></header>
     <TaskSelector task={task} tasks={tasks} onSelectTask={onSelectTask} />
     <PhoneFrame task={task} feed={feed} />
-    <div className="pw-phone-viewer-card-actions"><PhoneControls task={task} feed={feed} controls={controls} /><button type="button" className="pw-phone-viewer-button pw-phone-viewer-expand" aria-haspopup="dialog" onClick={onExpand}><Expand size={16} aria-hidden="true" />展开独立屏</button></div>
+    <div className="pw-phone-viewer-card-actions"><PhoneControls task={task} feed={feed} controls={controls} /><button type="button" className="pw-phone-viewer-button pw-phone-viewer-expand" aria-haspopup="dialog" onClick={onExpand}><IconExpand size={16} aria-hidden="true" />展开独立屏</button></div>
   </section>;
 }
 
@@ -192,10 +192,10 @@ export function PhoneViewerSheet({ task, feed, controls, expanded, onExpandedCha
   const Title = compact ? Drawer.Title : Dialog.Title, Description = compact ? Drawer.Description : Dialog.Description;
   const contents = <>
     {compact && <Drawer.Handle className="pw-phone-viewer-handle" aria-label="拖动收起独立屏" />}
-    <header className="pw-phone-viewer-sheet-header"><div><Title className="pw-phone-viewer-sheet-title">手机独立屏</Title><Description id={descriptionId} className="pw-phone-viewer-description">{task.title || '查看这次手机任务的执行画面'}</Description></div><button type="button" className="pw-phone-viewer-close" aria-label="收起独立屏" onClick={() => onExpandedChange(false)}><X size={20} aria-hidden="true" /></button></header>
+    <header className="pw-phone-viewer-sheet-header"><div><Title className="pw-phone-viewer-sheet-title">手机独立屏</Title><Description id={descriptionId} className="pw-phone-viewer-description">{task.title || '查看这次手机任务的执行画面'}</Description></div><button type="button" className="pw-phone-viewer-close" aria-label="收起独立屏" onClick={() => onExpandedChange(false)}><IconClose size={20} aria-hidden="true" /></button></header>
     <div className="pw-phone-viewer-sheet-body">
       <TaskSelector task={task} tasks={tasks} onSelectTask={onSelectTask} />
-      <div className="pw-phone-viewer-sheet-status"><span className="pw-phone-viewer-icon"><Monitor size={24} aria-hidden="true" /></span><div><strong role="status">{statusLabel(task, feed)}</strong><p>{terminal(task) || feed.phase === 'ended' ? '这次任务已结束。画面仅保留于本次查看中。' : '画面来自这次任务的后台独立屏。'}</p></div></div>
+      <div className="pw-phone-viewer-sheet-status"><span className="pw-phone-viewer-icon"><IconMonitor size={24} aria-hidden="true" /></span><div><strong role="status">{statusLabel(task, feed)}</strong><p>{terminal(task) || feed.phase === 'ended' ? '这次任务已结束。画面仅保留于本次查看中。' : '画面来自这次任务的后台独立屏。'}</p></div></div>
       <div className="pw-phone-viewer-sheet-control-rail"><PhoneControls task={task} feed={feed} controls={controls} /></div>
       <PhoneFrame task={task} feed={feed} large />
       {!terminal(task) && feed.phase !== 'ended' && <p className="pw-phone-viewer-note">{task.status === 'waiting' ? '请回到任务处理待办，查看画面不会继续执行。' : task.status === 'paused' ? '任务保持暂停，点击继续执行才会恢复。' : task.status === 'stopping' ? '正在停止任务，保留最后收到的画面。' : '收起画面后，任务仍会在后台继续执行。'}</p>}

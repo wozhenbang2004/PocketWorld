@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { RiArrowLeftLine, RiCloseLine, RiCursorLine, RiRefreshLine, RiHistoryLine } from '@remixicon/react';
+import { IconArrowLeft, IconClose, IconCursor, IconHistory, IconRefresh } from './icons';
 import { bridge } from './bridge';
 import { Accordion, AccordionItem, Button, IconButton, SelectField } from './forms-library';
 import { ProgressCircle } from './library';
@@ -201,13 +201,13 @@ export function ProjectPreviewPane({ control, composer }: { control: ReturnType<
   return <section className="pw-preview-pane" aria-label="项目预览" aria-busy={!!busy}>
     <header className="pw-preview-heading"><div><h3>{choosing ? '打开固定版本' : fixed ? '任务固定版本' : '已采集预览'}</h3><p>{choosing ? choices?.entryPath || '选择包内入口' : view?.metadata.entryPath ? String(view.metadata.entryPath) : '原项目画面'}</p></div>{view?.selecting && <span className="pw-preview-selection-state">正在选择</span>}</header>
     {!choosing && <div className="pw-preview-actions">
-      <Button variant={view?.selecting ? 'primary' : 'secondary'} leadingIcon={RiCursorLine} size="small"
+      <Button variant={view?.selecting ? 'primary' : 'secondary'} leadingIcon={IconCursor} size="small"
         disabled={!view?.ready || !view.selectionAvailable && !view.selecting || !!busy || unknown || blocked || !can('projects.preview.mode')} aria-pressed={view?.selecting === true}
         onClick={() => control.action('projects.preview.mode', { enabled: !view?.selecting })}>{view?.selecting ? '退出选择' : '选择元素'}</Button>
       <span className="pw-grow"/>
-      {view && can('tasks.open') && <IconButton icon={RiHistoryLine} aria-label="核对原任务" title="核对原任务" disabled={!!busy} onClick={control.returnToPackageTask}/>}
-      <IconButton icon={RiRefreshLine} aria-label="重新载入预览" title="重新载入会使旧元素引用失效" disabled={!view || !!busy || unknown || !can('projects.preview.reload')} onClick={() => control.action('projects.preview.reload')}/>
-      <IconButton icon={RiCloseLine} aria-label="关闭预览" title="关闭后需要重新选择元素" disabled={!view || !!busy || unknown || !can('projects.preview.close')} onClick={() => control.action('projects.preview.close')}/>
+      {view && can('tasks.open') && <IconButton icon={IconHistory} aria-label="核对原任务" title="核对原任务" disabled={!!busy} onClick={control.returnToPackageTask}/>}
+      <IconButton icon={IconRefresh} aria-label="重新载入预览" title="重新载入会使旧元素引用失效" disabled={!view || !!busy || unknown || !can('projects.preview.reload')} onClick={() => control.action('projects.preview.reload')}/>
+      <IconButton icon={IconClose} aria-label="关闭预览" title="关闭后需要重新选择元素" disabled={!view || !!busy || unknown || !can('projects.preview.close')} onClick={() => control.action('projects.preview.close')}/>
     </div>}
     <div className="pw-preview-context">
       <p className="pw-muted">{choosing ? '只打开这次任务保存的版本，不构建或启动任务。' : view?.selecting ? '点选元素加入原草稿，不会执行页面按钮。' : fixed ? '固定包不会随当前项目的修改而更新。' : '开启元素选择后，可把画面位置加入原草稿。'}</p>
@@ -233,7 +233,7 @@ export function ProjectPreviewPane({ control, composer }: { control: ReturnType<
         <dl className="pw-preview-source-details"><dt>原任务</dt><dd>{view.taskId}</dd><dt>项目</dt><dd>{String(view.metadata.projectId || '')}</dd>{fixed && <><dt>原操作</dt><dd>{view.packageOperationId}</dd><dt>固定版本</dt><dd>{String(view.metadata.artifactId || '')}</dd><dt>归档摘要</dt><dd>{String(view.metadata.artifactSha256 || '')}</dd></>}</dl>
       </AccordionItem></Accordion>}
     <footer className="pw-preview-footer">
-      <Button variant="ghost" leadingIcon={RiArrowLeftLine} size="small" onClick={control.hide}>返回项目文件</Button>
+      <Button variant="ghost" leadingIcon={IconArrowLeft} size="small" onClick={control.hide}>返回项目文件</Button>
       {choosing && <Button variant="secondary" size="small" disabled={!!busy} onClick={control.returnToPackageTask}>返回原任务</Button>}
       {view && <Button variant="primary" size="small" disabled={!!busy || unknown || !can('projects.preview.return')} onClick={() => control.action('projects.preview.return')}>返回原对话</Button>}
     </footer>

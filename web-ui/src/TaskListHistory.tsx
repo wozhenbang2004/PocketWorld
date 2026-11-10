@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { bridge } from './bridge';
 import { Button, IconButton } from './forms-library';
-import { RiArrowLeftLine, RiArrowRightLine, RiSkipBackLine } from '@remixicon/react';
+import { IconArrowLeft, IconArrowRight, IconHistory } from './icons';
 import { currentTaskHeaders, taskHeaderPage, type TaskHeader, type TaskHeaderPage } from './task-history';
 
 type Window = { scope: string; cursor: string; prior: string[]; page: TaskHeaderPage };
@@ -47,9 +47,9 @@ export function TaskListHistoryControls({ history }: { history: ReturnType<typeo
     {(history.earlier || history.hasMore) && <div className="pw-action-row">
       <span className="pw-muted pw-history-window">{history.earlier ? '较早任务' : '最近任务'} · 仅搜索当前页</span>
       <span className="pw-grow"/>
-      {history.canGoBack && <Button variant="ghost" leadingIcon={RiArrowLeftLine} disabled={history.busy || !history.enabled} onClick={history.newer}>较近任务</Button>}
-      {history.hasMore && <Button variant="ghost" trailingIcon={RiArrowRightLine} disabled={history.busy || !history.enabled} onClick={history.older}>较早任务</Button>}
-      {history.earlier && <IconButton icon={RiSkipBackLine} aria-label="回到最近任务" title="回到最近任务" disabled={history.busy} onClick={history.reset}/>}
+      {history.canGoBack && <Button variant="ghost" leadingIcon={IconArrowLeft} disabled={history.busy || !history.enabled} onClick={history.newer}>较近任务</Button>}
+      {history.hasMore && <Button variant="ghost" trailingIcon={IconArrowRight} disabled={history.busy || !history.enabled} onClick={history.older}>较早任务</Button>}
+      {history.earlier && <IconButton icon={IconHistory} aria-label="回到最近任务" title="回到最近任务" disabled={history.busy} onClick={history.reset}/>}
     </div>}
   </section>;
 }

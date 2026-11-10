@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { RiArrowLeftLine, RiArrowRightSLine, RiCloseLine, RiFileTextLine, RiRefreshLine } from '@remixicon/react';
+import { IconArrowLeft, IconChevronRight, IconClose, IconFileText, IconRefresh } from './icons';
 import { bridge, type PocketSnapshot } from './bridge';
 import { usePocketAppearance } from './usePocketAppearance';
 import { Accordion, AccordionItem, Button } from './forms-library';
@@ -112,10 +112,10 @@ export default function BrowserSourceReader({ snapshot }: { snapshot: PocketSnap
     <Drawer.Portal>
       <Drawer.Content className="browser-reader" aria-describedby="browser-reader-description" onEscapeKeyDown={event => { event.preventDefault(); if (activeField) backToSource(); else close(); }}>
         <header className="browser-reader-toolbar">
-          <Button variant="ghost" iconOnly leadingIcon={RiArrowLeftLine} className="browser-reader-control" aria-label={activeField ? '返回原文' : '返回研究结果'} onClick={activeField ? backToSource : close} disabled={!state?.ready} />
-          <div className="browser-reader-location"><RiFileTextLine aria-hidden /><span>{activeField ? '字段依据' : '原文依据'}</span></div>
-          <Button variant="ghost" iconOnly leadingIcon={RiRefreshLine} className="browser-reader-control" aria-label="重读同一份保存原件" onClick={() => void refresh()} disabled={busy} />
-          <Button variant="ghost" iconOnly leadingIcon={RiCloseLine} className="browser-reader-control" aria-label="关闭原文，返回研究结果" onClick={close} disabled={!state?.ready} />
+          <Button variant="ghost" iconOnly leadingIcon={IconArrowLeft} className="browser-reader-control" aria-label={activeField ? '返回原文' : '返回研究结果'} onClick={activeField ? backToSource : close} disabled={!state?.ready} />
+          <div className="browser-reader-location"><IconFileText aria-hidden /><span>{activeField ? '字段依据' : '原文依据'}</span></div>
+          <Button variant="ghost" iconOnly leadingIcon={IconRefresh} className="browser-reader-control" aria-label="重读同一份保存原件" onClick={() => void refresh()} disabled={busy} />
+          <Button variant="ghost" iconOnly leadingIcon={IconClose} className="browser-reader-control" aria-label="关闭原文，返回研究结果" onClick={close} disabled={!state?.ready} />
         </header>
         <div className="browser-reader-scroll" ref={body} data-reader-view={activeField ? 'field' : 'source'} onScroll={rememberPosition}>
           <div className="browser-reader-page">
@@ -132,14 +132,14 @@ export default function BrowserSourceReader({ snapshot }: { snapshot: PocketSnap
               <div className="browser-reader-field-text">{activeField.text || '（原字段为空）'}</div>
               {activeField.headers.length > 0 && <section className="browser-reader-context"><h2>同时保存的表头</h2><p>{activeField.headers.join(' · ')}</p></section>}
               <p className="browser-reader-note">{activeField.partial ? '来自当时保存的内容片段，未自动补读网页。' : '来自当时交付模型并保存的范围，不代表全页或已核实。'}</p>
-              <Button variant="secondary" className="browser-reader-control" leadingIcon={RiArrowLeftLine} onClick={backToSource}>返回原文位置</Button>
+              <Button variant="secondary" className="browser-reader-control" leadingIcon={IconArrowLeft} onClick={backToSource}>返回原文位置</Button>
             </article> : <article className="browser-reader-content" aria-label="保存的原文">
               {source.projection?.mode === 'list' ? <ol className="browser-reader-list">{source.projection.rows.map(row => <li key={row.index} value={row.index + 1}>
-                <p>{row.text || '（原项为空）'}</p><Button variant="ghost" className="browser-reader-control browser-reader-field-link" trailingIcon={RiArrowRightSLine} data-reader-key={`item-${row.index}`} aria-label={`查看第 ${row.index + 1} 项的原字段`} onClick={() => row.fieldRef && void readField(row.fieldRef, `item-${row.index}`)} disabled={busy}>查看这一项</Button>
+                <p>{row.text || '（原项为空）'}</p><Button variant="ghost" className="browser-reader-control browser-reader-field-link" trailingIcon={IconChevronRight} data-reader-key={`item-${row.index}`} aria-label={`查看第 ${row.index + 1} 项的原字段`} onClick={() => row.fieldRef && void readField(row.fieldRef, `item-${row.index}`)} disabled={busy}>查看这一项</Button>
               </li>)}</ol> : source.projection?.mode === 'table' ? <div className="browser-reader-table-scroll" ref={table} onScroll={rememberPosition} role="region" aria-label="当时保存的表格，可横向滚动" tabIndex={0}><table><caption>按原行列顺序保存的字段</caption><tbody>{source.projection.rows.map(row => <tr key={row.index}>{row.cells?.map(cell => {
                 const Cell = cell.role === 'columnheader' || cell.role === 'rowheader' ? 'th' : 'td';
                 return <Cell key={cell.column} scope={cell.role === 'columnheader' ? 'col' : cell.role === 'rowheader' ? 'row' : undefined} colSpan={cell.colSpan} rowSpan={cell.rowSpan}>
-                  <p>{cell.text || '（空）'}</p><Button variant="ghost" className="browser-reader-control browser-reader-field-link" data-reader-key={`row-${row.index}-column-${cell.column}`} aria-label={`查看第 ${row.index + 1} 行第 ${cell.column + 1} 列原字段`} onClick={() => void readField(cell.fieldRef, `row-${row.index}-column-${cell.column}`)} disabled={busy}>字段依据<RiArrowRightSLine aria-hidden /></Button>
+                  <p>{cell.text || '（空）'}</p><Button variant="ghost" className="browser-reader-control browser-reader-field-link" data-reader-key={`row-${row.index}-column-${cell.column}`} aria-label={`查看第 ${row.index + 1} 行第 ${cell.column + 1} 列原字段`} onClick={() => void readField(cell.fieldRef, `row-${row.index}-column-${cell.column}`)} disabled={busy}>字段依据<IconChevronRight aria-hidden /></Button>
                 </Cell>;
               })}</tr>)}</tbody></table></div> : <div className="browser-reader-prose">{source.excerpt || '这份来源没有保存正文摘录。'}</div>}
               <footer className="browser-reader-source-note"><Accordion variant="divided"><AccordionItem id="capture-scope" title="这次保存的范围与出处" description="查看采集范围与安全地址"><p>{readerCoverage(source)}</p>{!!source.projection?.omittedRows && <p>已交付的行中另有 {source.projection.omittedRows} 行未保留在这份投影内。</p>}<p className="browser-reader-url">{source.safeUrl}</p>{source.urlQueryOmitted && <p>地址中的查询参数和片段已省略，正文与表头中的同一精确地址也以安全地址显示。</p>}<p>{source.projection && !source.projection.partial ? '另看现网页和制作只读配方仍在原结果面板中。' : '另看现网页仍在原结果面板中。'}</p></AccordionItem></Accordion></footer>

@@ -1,13 +1,13 @@
-/* Actual library styles, with neutral palette and bounded product host adaptations. */
+/* Actual library styles, with neutral surfaces, functional accent and bounded product host adaptations. */
 @import './library/adapted/affect-source.css';
 @import './library/adapted/agent-layout.css';
 .pw-library{font-family:inherit;min-width:0;color:#252525;color-scheme:light}
-.afa.pw-library{min-height:0;padding:0;display:block;font-size:14px;--afa-accent:#444;--afa-soft:#777;--afa-text:#666;--afa-line:#e5e5e5;--afa-shadow:0 1px 2px #00000006,0 5px 14px #00000008}
-.cb-demo.pw-library{max-width:none;margin:0;font-family:inherit;font-size:14px;--cb-blue:#444;--cb-blue-bg:#efefef;--cb-ok:#444;--cb-ok-bg:#efefef;--cb-warn:#444;--cb-warn-bg:#efefef;--cb-red:#333;--cb-red-bg:#efefef;--cb-muted:#777;--cb-line:#e5e5e5}
+.afa.pw-library{min-height:0;padding:0;display:block;font-size:14px;--afa-accent:var(--pw-accent);--afa-soft:#777;--afa-text:#666;--afa-line:#e5e5e5;--afa-shadow:0 1px 2px #00000006,0 5px 14px #00000008}
+.cb-demo.pw-library{max-width:none;margin:0;font-family:inherit;font-size:14px;--cb-blue:var(--pw-on-accent-soft);--cb-blue-bg:var(--pw-accent-soft);--cb-ok:#444;--cb-ok-bg:#efefef;--cb-warn:#444;--cb-warn-bg:#efefef;--cb-red:#333;--cb-red-bg:#efefef;--cb-muted:#777;--cb-line:#e5e5e5}
 .pw-library :is(h1,h2,h3,h4,strong,b){font-weight:500}
 .pw-library button,.pw-message-actions button{min-height:44px;touch-action:manipulation}
 .pw-library :is(.afa-iconbtn,.cb-icon-button),.pw-message-actions button{min-width:44px}
-.pw-library :is(button,input,textarea):focus-visible{outline:2px solid #777;outline-offset:3px}
+.pw-library :is(button,input,textarea):focus-visible{outline:2px solid var(--pw-focus);outline-offset:3px}
 .pw-library small{font-size:12px;line-height:18px}
 .pw-library .cb-card{max-width:none;animation:none}
 .pw-library :is(.afa-answer,.afa-composer,.afa-steering,.afa-handoff,.afa-findings){width:100%;max-width:none}
@@ -15,18 +15,19 @@
 .pw-agent-avatar canvas{display:block;max-width:100%;max-height:100%}
 /* Adapt the retained PW-37 press controller to a flat action surface.
  * The hit target and label stay fixed; feedback is a subtle tint and surface compression. */
-.pw-press{--press:0;--strain:0;position:relative;appearance:none;-webkit-appearance:none;isolation:isolate;max-width:100%;min-height:44px;margin:0;border:0!important;border-radius:10px;padding:0!important;background:transparent!important;color:#fff!important;font:inherit;text-align:center;outline-offset:4px;filter:none!important;transition:none;touch-action:manipulation;user-select:none;-webkit-tap-highlight-color:transparent;cursor:pointer}
+.pw-press{--press:0;--strain:0;position:relative;appearance:none;-webkit-appearance:none;isolation:isolate;max-width:100%;min-height:44px;margin:0;border:0!important;border-radius:10px;padding:0!important;background:transparent!important;color:var(--pw-on-accent)!important;font:inherit;text-align:center;outline-offset:4px;filter:none!important;transition:none;touch-action:manipulation;user-select:none;-webkit-tap-highlight-color:transparent;cursor:pointer}
 .pw-press>span{pointer-events:none}
 .pw-press-shadow,.pw-press-base,.pw-press-edge{display:none}
 .pw-press-front{display:flex;align-items:center;justify-content:center;position:relative;box-sizing:border-box;padding:10px 14px;border-radius:inherit;background:transparent;transform:none;transition:none;min-height:44px}
-.pw-press-material{position:absolute;inset:0;border-radius:inherit;background:var(--pw-strong,#262626);transform-origin:center;transform:translateY(calc(var(--press)*.7px)) scaleX(calc(1 - var(--press)*.02 + var(--strain)*.004)) scaleY(calc(1 - var(--press)*.035 - var(--strain)*.012));box-shadow:none;transition:background-color var(--pw-motion-feedback) var(--pw-ease-settle)}
-@media(hover:hover) and (pointer:fine){.pw-press:not(:disabled):hover .pw-press-material{background:color-mix(in srgb,var(--pw-strong,#262626) 94%,var(--pw-on-strong,#fff))}}
-.pw-press:not(:disabled)[data-state="pressed"] .pw-press-material{background:color-mix(in srgb,var(--pw-strong,#262626) 88%,var(--pw-on-strong,#fff))}
+.pw-press-material{position:absolute;inset:0;border-radius:inherit;background:var(--pw-accent);transform-origin:center;transform:translateY(calc(var(--press)*.7px)) scaleX(calc(1 - var(--press)*.02 + var(--strain)*.004)) scaleY(calc(1 - var(--press)*.035 - var(--strain)*.012));box-shadow:none;transition:background-color var(--pw-motion-feedback) var(--pw-ease-settle)}
+@media(hover:hover) and (pointer:fine){.pw-press:not(:disabled):hover .pw-press-material{background:var(--pw-accent-hover)}}
+.pw-press:not(:disabled)[data-state="pressed"] .pw-press-material{background:var(--pw-accent-pressed)}
 .pw-press-label{position:relative;display:flex;align-items:center;justify-content:center;gap:7px;font-size:14px;line-height:20px;font-weight:500;white-space:nowrap}
 .pw-press-compact{min-width:44px}
 .pw-press-compact .pw-press-front{padding:10px}
-.pw-press:disabled{cursor:default;opacity:.45}
-.pw-press:focus-visible{outline:2px solid #777}
+.pw-press:disabled{--pw-on-accent:var(--pw-disabled);cursor:default;opacity:.45}
+.pw-press:disabled .pw-press-material{background:var(--pw-selected)}
+.pw-press:focus-visible{outline:2px solid var(--pw-focus)}
 @media(prefers-reduced-motion:reduce){.pw-press .pw-press-material{transform:none;transition:none}}
 /* The source composer uses one surface. Its default editor/tool rows remain compact. */
 .pw-composer-host .afa-composer>.afa-card{border:0;border-radius:16px;background:var(--pw-inset,#f6f6f6);box-shadow:none}
@@ -39,7 +40,9 @@
 .pw-composer-host .afa-filechips{max-height:88px;overflow:auto;flex-wrap:wrap;margin-bottom:6px}
 .pw-composer-host .afa-filechips>span{max-width:100%;overflow-wrap:anywhere;white-space:normal}
 .pw-composer-host .afa-filechips button{min-width:32px;min-height:32px}
-.pw-composer-host .afa-stop{min-width:44px;min-height:44px;border:0!important;border-radius:10px;background:var(--pw-selected,#ededed)!important;color:var(--pw-ink,#333)}
+.pw-composer-host .afa-stop{min-width:44px;min-height:44px;border:0!important;border-radius:10px;background:var(--pw-accent)!important;color:var(--pw-on-accent)}
+@media(hover:hover) and (pointer:fine){.pw-composer-host .afa-stop:hover:not(:disabled){--pw-accent:var(--pw-accent-hover)}}
+.pw-composer-host .afa-stop:active:not(:disabled){--pw-accent:var(--pw-accent-pressed)}
 .pw-composer-host .afa-composerbottom{margin-top:4px;display:flex;flex-wrap:wrap;gap:4px}
 .pw-composer-status{padding:4px 6px;font-size:12px}
 .pw-answer-text{white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px;line-height:25px}

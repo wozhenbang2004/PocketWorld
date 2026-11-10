@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { RiCloseLine, RiArrowGoBackLine } from '@remixicon/react';
+import { IconClose, IconUndo } from './icons';
 import { bridge } from './bridge';
 import { Drawer } from './shell-library';
 import './knowledge-depth.css';
@@ -76,7 +76,7 @@ export function MemoryDraftReview({ target, onClose, onOpenMemory }: {
     <Drawer.Overlay className="pw-overlay" />
     <Drawer.Content className="pw-drawer pw-memory-draft-drawer" aria-describedby="memory-draft-description">
       <div className="pw-drawer-handle" />
-      <header className="pw-drawer-header"><div><Drawer.Title>{title}</Drawer.Title><Drawer.Description id="memory-draft-description">{undoPending ? '原保存已完成，请查询这次撤销的实际结果。' : saved || reverted || duplicate ? '查看这次修改的实际结果。' : '查看内容与来源，决定是否保存。'}</Drawer.Description></div><IconButton icon={RiCloseLine} aria-label="返回原回答" disabled={busy} onClick={close} /></header>
+      <header className="pw-drawer-header"><div><Drawer.Title>{title}</Drawer.Title><Drawer.Description id="memory-draft-description">{undoPending ? '原保存已完成，请查询这次撤销的实际结果。' : saved || reverted || duplicate ? '查看这次修改的实际结果。' : '查看内容与来源，决定是否保存。'}</Drawer.Description></div><IconButton icon={IconClose} aria-label="返回原回答" disabled={busy} onClick={close} /></header>
       <div className="pw-drawer-body pw-memory-draft-review pw-knowledge-workspace">
         {busy && <ShimmerText>正在读取记忆…</ShimmerText>}
         {error && <p className="pw-memory-draft-error" role="alert">{error}</p>}
@@ -89,7 +89,7 @@ export function MemoryDraftReview({ target, onClose, onOpenMemory }: {
           <div className="pw-action-row">
             {(saved || duplicate) && typeof record?.id === 'string' && value?.recordCurrent !== false && onOpenMemory && action !== 'forget' && <Button variant="secondary" disabled={busy} onClick={() => { onOpenMemory({ id: record.id, candidate: false }); onClose(); }}>查看记忆</Button>}
             {duplicate && !record && typeof candidate?.id === 'string' && onOpenMemory && <Button variant="secondary" disabled={busy} onClick={() => { onOpenMemory({ id: candidate.id, candidate: true }); onClose(); }}>查看待确认内容</Button>}
-            {saved && action === 'create' && undoAvailable && !undoPending && <Button variant="ghost" leadingIcon={RiArrowGoBackLine} disabled={busy} onClick={() => { void request('memoryDraft.undo', original, acceptOutcome, () => setUndoUncertain(true)); }}>撤销这次保存</Button>}
+            {saved && action === 'create' && undoAvailable && !undoPending && <Button variant="ghost" leadingIcon={IconUndo} disabled={busy} onClick={() => { void request('memoryDraft.undo', original, acceptOutcome, () => setUndoUncertain(true)); }}>撤销这次保存</Button>}
           </div>
         </section>}
         {proposal.reason && !saved && !reverted && !duplicate && <p>{proposal.reason}</p>}

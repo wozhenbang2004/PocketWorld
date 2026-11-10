@@ -2,6 +2,12 @@
  * adopted BoardUI .dark and product/source tokens. No filters touch media. */
 :root.dark {
   color-scheme: dark;
+  --pw-accent: #A9BCD6;
+  --pw-accent-hover: #BDCCE0;
+  --pw-accent-pressed: #91A9C8;
+  --pw-on-accent: #111821;
+  --pw-accent-soft: #252D3A;
+  --pw-on-accent-soft: #B9C9DF;
   --pw-canvas-chat: var(--pw-neutral-975);
   --pw-canvas-workspace: var(--pw-neutral-1000);
   --pw-canvas: var(--pw-canvas-workspace);
@@ -12,7 +18,7 @@
   --pw-floating-selected: var(--pw-neutral-800);
   --pw-floating-pressed: var(--pw-neutral-800);
   --pw-inset: var(--pw-neutral-900);
-  --pw-selection-surface: var(--pw-neutral-850);
+  --pw-selection-surface: var(--pw-accent-soft);
   --pw-selected: var(--pw-neutral-800);
   --pw-hover: var(--pw-neutral-850);
   --pw-pressed: var(--pw-neutral-800);
@@ -33,9 +39,9 @@
   --pw-strong: var(--pw-neutral-100);
   --pw-strong-hover: var(--pw-neutral-0);
   --pw-strong-pressed: var(--pw-neutral-200);
-  --pw-focus: var(--pw-neutral-300);
+  --pw-focus: var(--pw-accent);
   --pw-on-strong: var(--pw-neutral-975);
-  --ovio-on-accent: var(--pw-on-strong);
+  --ovio-on-accent: var(--pw-on-accent);
   --pw-shadow-input: none;
   --pw-composer-ambient: color-mix(in srgb, var(--pw-neutral-1000) 85%, transparent);
   --pw-composer-ambient-soft: color-mix(in srgb, var(--pw-neutral-1000) 40%, transparent);
@@ -94,24 +100,21 @@
 :root.dark :is(.pw-brand-mark, .pw-linked-task, .pw-priority-decisions .ui-dic__head) { color: var(--pw-ink); }
 :root.dark .pw-priority-decisions .ui-dic__btn:not(.ui-dic__btn--primary) { color: var(--pw-copy); }
 
-/* Product-specific primary overrides must retain the original inverse contrast. */
+/* Primary and destructive actions retain their own inverse roles. */
 :root.dark :is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown)
-  :is(.button-press-motion.bg-button-primary, .button-press-motion.bg-button-danger) {
+  .button-press-motion.bg-button-primary {
+  color: var(--pw-on-accent);
+}
+:root.dark :is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown)
+  .button-press-motion.bg-button-danger {
   color: var(--pw-on-strong);
 }
 :root.dark :is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown)
-  :is(.button-press-motion.bg-button-primary, .button-press-motion.bg-button-danger):disabled {
+  :is(.button-press-motion.bg-button-primary, .button-press-motion.bg-button-danger):is(:disabled, [aria-disabled="true"]) {
   color: var(--pw-disabled);
 }
-:root.dark :is(.pw-library .afa-primary, .pw-app .acc-btn-primary, .pw-drawer .acc-btn-primary) {
-  color: var(--pw-on-strong) !important;
-}
-:root.dark :is(.pw-app, .pw-drawer) .ui-dic {
-  --ui-dic-solid-hover: #bdbdbd;
-  --ui-dic-on-solid: var(--pw-on-strong);
-}
 :root.dark :is(button, a, input, textarea):focus-visible { outline-color: var(--pw-focus); }
-:root.dark .pw-radio-option .bg-control-indicator-background { background-color: var(--pw-on-strong); }
+:root.dark .pw-radio-option .bg-control-indicator-background { background-color: var(--pw-on-accent); }
 
 /* A modal close affordance stays secondary to its primary action in the dark palette. */
 :root.dark .pw-settings-dialog > header .pw-icon-action {

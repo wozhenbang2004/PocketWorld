@@ -1,7 +1,7 @@
 /** Adapted from Whaleness TrajectoryRow / TrajectoryTurnHeader (MIT, Chaofan Li).
  * The assistant's request entry remains separate from its message detail. */
 import { useEffect, useLayoutEffect, useRef } from 'react';
-import { RiArrowRightSLine, RiErrorWarningLine } from '@remixicon/react';
+import { IconChevronRight, IconError } from '../../icons';
 import { nodeDurationLabel, traceFailed, traceInProgress, traceRole, traceRoleLabel, traceStatus, traceTurns, type TraceEventRow, type TraceNode } from '../../execution-trace';
 
 export function TraceEventList({ rows, selectedId, highlightedId, locateTicket, onSelect, onHighlightEnd, complete }: {
@@ -37,8 +37,8 @@ export function TraceEventList({ rows, selectedId, highlightedId, locateTicket, 
             <span className="pw-trace-role-tag">{traceRoleLabel(node)}</span>
             <span className="pw-trace-event-name">{node.name}</span>
             <span className="pw-trace-event-sequence">#{node.sequence}</span>
-            <span className="pw-trace-event-meta">{failed && <RiErrorWarningLine size={11} aria-hidden="true"/>}{traceStatus(node.status)}<i aria-hidden="true">·</i>{nodeDurationLabel(measured)}{node.legacy && <><i aria-hidden="true">·</i>早先记录</>}</span>
-            <RiArrowRightSLine className="pw-trace-event-chevron" size={14} aria-hidden="true"/>
+            <span className="pw-trace-event-meta">{failed && <IconError size={11} aria-hidden="true"/>}{traceStatus(node.status)}<i aria-hidden="true">·</i>{nodeDurationLabel(measured)}{node.legacy && <><i aria-hidden="true">·</i>早先记录</>}</span>
+            <IconChevronRight className="pw-trace-event-chevron" size={14} aria-hidden="true"/>
           </button>
         </div>;
       })}

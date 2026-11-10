@@ -1,7 +1,8 @@
 /* PocketWorld semantic color contract · 2026-11-10
  * Keep the retained BoardUI/Affect/Vaul controls. This layer assigns color
  * by surface responsibility; it never clones native controls or task state.
- * Brand remains monochrome; only danger/warning use restrained semantic hues.
+ * Neutral surfaces carry content; blue-gray identifies focused actions and
+ * selection. Danger/warning retain their independent semantic hues.
  */
 :root {
   --pw-scrim: rgb(17 17 17 / 27%);
@@ -123,6 +124,9 @@
 .pw-redesign .pw-task-state-dot:is([data-state="failed"], [data-state="error"]) {
   background-color: var(--pw-danger);
 }
+.pw-redesign .pw-task-state-dot:is([data-state="running"], [data-state="preparing"], [data-state="verifying"]) {
+  background-color: var(--pw-accent);
+}
 
 /* Loading labels carry information; only the skeleton blocks may fade into
  * the canvas. Keep the retained source animations within readable ink roles. */
@@ -133,7 +137,7 @@
 .pw-thinking-loader.ui-tlc {
   --ui-tlc-text: var(--pw-copy);
   --ui-tlc-ink: var(--pw-ink);
-  --ui-tlc-accent: var(--pw-muted);
+  --ui-tlc-accent: var(--pw-accent);
   --ui-tlc-shine: var(--pw-ink);
   color: var(--pw-copy);
 }

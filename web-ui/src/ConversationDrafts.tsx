@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { bridge } from './bridge';
 import { Accordion, AccordionItem, Button } from './forms-library';
-import { RiRefreshLine } from '@remixicon/react';
+import { IconRefresh } from './icons';
 import type { ConversationDraftTarget } from './SkillDraftReview';
 
 type Draft = ConversationDraftTarget & { kind: 'skill' | 'memory'; title: string; apply: { status: string } };
@@ -36,7 +36,7 @@ export function ConversationDrafts({ taskId, open, refreshRevision = 0 }: { task
       {error && <p className="pw-error" role="alert">{error}</p>}{drafts && !drafts.length && <p className="pw-muted">本次读取窗口没有可核对的提案。</p>}
       <div className="pw-conversation-draft-list">{drafts?.map(draft => <Button variant="ghost" key={draft.runId + ':' + draft.operationId} onClick={() => open(draft)}><span className="pw-conversation-draft-copy"><b>{draft.title}</b><small>{status[draft.apply.status] || '状态待核对'}</small></span></Button>)}</div>
       {partial && <p className="pw-muted">这里是原记录中最近可核对的提案窗口；较早或暂不可读的项目没有计作已处理。</p>}
-      <Button variant="ghost" size="small" leadingIcon={RiRefreshLine} disabled={busy} onClick={() => { void load(); }}>{error ? '重新读取提案' : '刷新原提案状态'}</Button>
+      <Button variant="ghost" size="small" leadingIcon={IconRefresh} disabled={busy} onClick={() => { void load(); }}>{error ? '重新读取提案' : '刷新原提案状态'}</Button>
     </AccordionItem></Accordion>
   </section>;
 }

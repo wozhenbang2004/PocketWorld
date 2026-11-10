@@ -1,11 +1,13 @@
 // Adapted from the retained Affect library v3 common.tsx / ui.tsx primitives.
 import {useEffect,useRef,useState,useSyncExternalStore,type ReactNode} from 'react';
+import {IconSparkles,IconCheck,IconClose,IconChevronDown,IconSend,IconSearch,IconCopy,IconRefresh,IconMicrophone,IconAttach,IconPause,IconPlay,IconClock,IconFile,IconAdd,IconTrash,IconEdit,IconWarning} from '../icons';
 export function FrameA({children,className=''}:{children:ReactNode;className?:string}) {return <div className={`afa afa-clean pw-library ${className}`} data-theme="light">{children}</div>}
 export function FrameB({children,className=''}:{children:ReactNode;className?:string}) {return <div className={`cb-demo pw-library ${className}`} data-theme="light" data-variant="clean">{children}</div>}
 export function Card({children,className=''}:{children:ReactNode;className?:string}) {return <section className={`cb-card ${className}`}>{children}</section>}
+const libraryIcons:Record<string,typeof IconSparkles>={spark:IconSparkles,check:IconCheck,close:IconClose,chevron:IconChevronDown,arrow:IconSend,search:IconSearch,copy:IconCopy,refresh:IconRefresh,mic:IconMicrophone,attach:IconAttach,pause:IconPause,play:IconPlay,clock:IconClock,file:IconFile,plus:IconAdd,trash:IconTrash,edit:IconEdit,warn:IconWarning};
 export function Icon({name='spark',size=16}:{name?:string;size?:number}) {
- const paths:Record<string,string>={spark:'m12 2 2.4 7.6L22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4Z',check:'m5 12 4 4L19 6',close:'m6 6 12 12M18 6 6 18',chevron:'m8 10 4 4 4-4',arrow:'m12 19 0-14m-6 6 6-6 6 6',search:'m20 20-5-5M10 17a7 7 0 1 0 0-14 7 7 0 0 0 0 14',copy:'M8 8h12v12H8ZM4 15H3V3h12v1',refresh:'M20 7v5h-5M4 17v-5h5M19 11a7 7 0 0 0-12-5L4 9m16 6-3 3a7 7 0 0 1-12-5',mic:'M9 4a3 3 0 0 1 6 0v8a3 3 0 0 1-6 0ZM5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8',attach:'m9 15 7-7a3 3 0 0 0-4-4l-8 8a5 5 0 0 0 7 7l9-9',pause:'M8 5v14M16 5v14',play:'m8 4 12 8-12 8Z',clock:'M12 7v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0',file:'M6 2h8l4 4v16H6ZM14 2v5h4M9 12h6m-6 4h6',plus:'M12 4v16M4 12h16',trash:'M4 6h16M9 2h6m-9 4 1 15h10l1-15M10 10v7m4-7v7',edit:'m4 16 12-12 4 4-12 12H4ZM14 6l4 4',warn:'M12 3 2 21h20ZM12 9v5m0 3v1'};
- return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name]||paths.spark}/></svg>
+ const Glyph=libraryIcons[name]||IconSparkles;
+ return <Glyph size={size} aria-hidden="true"/>;
 }
 export function ToolButton({label,icon,onClick,disabled,active}:{label:string;icon?:string;onClick?:()=>void;disabled?:boolean;active?:boolean}) {return <button type="button" className={`afa-iconbtn ${active?'afa-active':''}`} aria-label={label} title={label} aria-pressed={active} onClick={onClick} disabled={disabled}><Icon name={icon}/></button>}
 export function Button({children,onClick,disabled,primary=false}:{children:ReactNode;onClick?:()=>void;disabled?:boolean;primary?:boolean}) {return <button type="button" className={`cb-button ${primary?'cb-primary':''}`} onClick={onClick} disabled={disabled}>{children}</button>}

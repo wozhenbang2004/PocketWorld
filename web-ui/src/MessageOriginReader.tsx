@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { RiCloseLine } from '@remixicon/react';
+import { IconClose } from './icons';
 import { bridge } from './bridge';
 import { Drawer } from './shell-library';
 import { Button, IconButton, SelectField } from './forms-library';
@@ -12,7 +12,7 @@ type Data = Record<string, any>;
 export function MessageOriginReader({ target, onClose }: { target: MessageOriginTarget; onClose: () => void }) {
   const [sourceMessageId, setSourceMessageId] = useState(target.sourceMessageIds[0] || '');
   return <Drawer.Root open onOpenChange={open => { if (!open) onClose(); }} shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay" /><Drawer.Content className="pw-drawer" aria-describedby="pw-message-origin-description" onCloseAutoFocus={event => { event.preventDefault(); if (target.returnFocus?.isConnected) target.returnFocus.focus({ preventScroll: true }); }}>
-    <div className="pw-drawer-handle" /><header className="pw-drawer-header"><div><Drawer.Title>这次答复的原请求</Drawer.Title><Drawer.Description id="pw-message-origin-description">查看当时交代的内容，关闭后回到原答复。</Drawer.Description></div><IconButton icon={RiCloseLine} aria-label="返回原答复" onClick={onClose} /></header>
+    <div className="pw-drawer-handle" /><header className="pw-drawer-header"><div><Drawer.Title>这次答复的原请求</Drawer.Title><Drawer.Description id="pw-message-origin-description">查看当时交代的内容，关闭后回到原答复。</Drawer.Description></div><IconButton icon={IconClose} aria-label="返回原答复" onClick={onClose} /></header>
     <div className="pw-drawer-body">
       {target.sourceMessageIds.length > 1 && <SelectField label="对应原请求" value={sourceMessageId} options={target.sourceMessageIds.map((id, index) => ({ id, label: `原请求 ${index + 1}` }))} onChange={id => { if (target.sourceMessageIds.includes(id)) setSourceMessageId(id); }} />}
       {sourceMessageId && <OriginalRequestPage key={sourceMessageId} conversationId={target.conversationId} messageId={target.messageId} sourceMessageId={sourceMessageId} />}

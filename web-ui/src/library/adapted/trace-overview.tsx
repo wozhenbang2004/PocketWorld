@@ -2,7 +2,7 @@
  * in library/upstream/whaleness. Retains the three lanes, order/duration weights,
  * horizontal scrolling and nearest-in-lane navigation; adds keyboard access. */
 import { useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
-import { RiTimeLine } from '@remixicon/react';
+import { IconClock } from '../../icons';
 import { Button } from '../../forms-library';
 import { durationLabel, traceFailed, traceInProgress, traceOverviewLayout, traceRoleLabel, traceStatus, type TraceEventRow, type TraceNode } from '../../execution-trace';
 
@@ -37,7 +37,7 @@ export function TraceOverview({ rows, mode, onModeChange, highlightedId, turnCou
   }
   return <section className="pw-trace-lanes" aria-label="轨迹总览" data-overview-mode={mode}>
     <header className="pw-trace-lanes-header">
-      <Button variant="ghost" leadingIcon={RiTimeLine} aria-pressed={mode === 'duration'} aria-label="按实际耗时展示总览" onClick={() => onModeChange(mode === 'order' ? 'duration' : 'order')}>{mode === 'duration' ? '时长' : '顺序'}</Button>
+      <Button variant="ghost" leadingIcon={IconClock} aria-pressed={mode === 'duration'} aria-label="按实际耗时展示总览" onClick={() => onModeChange(mode === 'order' ? 'duration' : 'order')}>{mode === 'duration' ? '时长' : '顺序'}</Button>
       <span><b>{turnCount}</b> Turns</span><span><b>{toolCount}</b> Calls</span>
       <span className="pw-trace-measured" title="已记录调用耗时之和；并行调用可能重叠，不等同于执行总历时">{durationLabel(entries.some(entry => entry.duration !== null) ? duration : null)}{unknown > 0 && entries.some(entry => entry.duration !== null) && <small>已测</small>}</span>
     </header>

@@ -1,6 +1,6 @@
 import {useEffect,useRef,useState} from 'react';
 import type {ReactNode} from 'react';
-import {RiArrowLeftLine,RiDownloadLine,RiFileCopyLine,RiPauseLine,RiPlayLine,RiRefreshLine} from '@remixicon/react';
+import { IconArrowLeft, IconCopy, IconDownload, IconPause, IconPlay, IconRefresh } from './icons';
 import {bridge} from './bridge';
 import {Button,CheckboxField,IconButton,SearchField} from './forms-library';
 import './developer-diagnostics.css';
@@ -196,15 +196,15 @@ export default function DeveloperDiagnosticsWorkspace({
     <header className="pw-developer-header">
       <div className="pw-developer-heading">
         {navigationTrigger}
-        <IconButton icon={RiArrowLeftLine} aria-label="返回" onClick={onBack}/>
+        <IconButton icon={IconArrowLeft} aria-label="返回" onClick={onBack}/>
         <div><h1>开发诊断</h1><p>实时运行日志 · 脱敏归档</p></div>
       </div>
       <div className="pw-developer-actions">
         <Button variant="ghost" size="small" onClick={()=>setFollow(value=>!value)}>
-          {follow?<><RiPauseLine size={15}/> 暂停跟随</>:<><RiPlayLine size={15}/> 继续跟随</>}
+          {follow?<><IconPause size={15}/> 暂停跟随</>:<><IconPlay size={15}/> 继续跟随</>}
         </Button>
         <Button variant="ghost" size="small" onClick={()=>{nextCursor.current=null;setEvents([]);setOlder(null);setHasOlder(false);setFollow(true);}}>
-          <RiRefreshLine size={15}/> 最新
+          <IconRefresh size={15}/> 最新
         </Button>
       </div>
     </header>
@@ -219,8 +219,8 @@ export default function DeveloperDiagnosticsWorkspace({
         placeholder="搜索代码、阶段或异常" aria-label="搜索当前显示的日志" clearLabel="清除搜索"/>
       <CheckboxField className="pw-developer-filter" isSelected={onlyErrors} onChange={setOnlyErrors}>只看错误</CheckboxField>
       <div className="pw-developer-actions">
-        <Button variant="secondary" size="small" disabled={!shown.length} onClick={copy}><RiFileCopyLine size={15}/> 一键复制</Button>
-        <Button variant="secondary" size="small" disabled={!windowId} onClick={exportAll}><RiDownloadLine size={15}/> 导出全部</Button>
+        <Button variant="secondary" size="small" disabled={!shown.length} onClick={copy}><IconCopy size={15}/> 一键复制</Button>
+        <Button variant="secondary" size="small" disabled={!windowId} onClick={exportAll}><IconDownload size={15}/> 导出全部</Button>
       </div>
     </section>
     {error&&<p className="pw-developer-error" role="alert">{error}</p>}

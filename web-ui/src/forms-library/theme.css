@@ -1,4 +1,5 @@
-/* BoardUI theme/typography source reused. Product adaptation: grayscale-only tokens and solid selection surfaces. */
+/* BoardUI theme/typography source reused. Product adaptation: neutral surfaces,
+ * one functional blue-gray accent and solid selection surfaces. */
 @import "./boardui/styles/theme.css";
 @import "./boardui/styles/typography.css";
 :root {
@@ -244,17 +245,17 @@
 --color-rose-800:#262626;
 --color-rose-900:#171717;
 --color-rose-950:#0a0a0a;
---color-accent-50:#f7f7f7;
---color-accent-100:#eeeeee;
---color-accent-200:#dedede;
---color-accent-300:#c8c8c8;
---color-accent-400:#999999;
---color-accent-500:#303030;
---color-accent-600:#252525;
---color-accent-700:#1c1c1c;
---color-accent-800:#161616;
---color-accent-900:#101010;
---color-accent-950:#080808;
+--color-accent-50:var(--pw-accent-soft);
+--color-accent-100:var(--pw-accent-soft);
+--color-accent-200:color-mix(in srgb,var(--pw-accent) 25%,var(--pw-surface));
+--color-accent-300:color-mix(in srgb,var(--pw-accent) 60%,var(--pw-surface));
+--color-accent-400:var(--pw-accent-hover);
+--color-accent-500:var(--pw-accent);
+--color-accent-600:var(--pw-accent-hover);
+--color-accent-700:var(--pw-accent-pressed);
+--color-accent-800:var(--pw-on-accent-soft);
+--color-accent-900:var(--pw-on-accent-soft);
+--color-accent-950:var(--pw-on-accent-soft);
 --font-inter:Inter,"Noto Sans SC",system-ui,sans-serif;--font-mono-source:"JetBrains Mono",ui-monospace,monospace;--font-weight-semibold:500;--font-weight-bold:500;
 }
 
@@ -296,4 +297,4 @@
 
 
 .pw-secondary [class*="bg-gradient"], .pw-secondary [class*="bg-linear"]{background-image:none!important;}
-.pw-secondary .from-accent-500,.pw-secondary .to-accent-600{background-color:var(--color-accent-600);}
+.pw-secondary .from-accent-500,.pw-secondary .to-accent-600{background-color:var(--pw-accent);}

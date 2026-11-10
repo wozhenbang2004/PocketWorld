@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import './collaboration-depth.css';
-import { ArrowLeft, ArrowUpRight, ChevronRight, FileText, Plus, RefreshCw, Settings2, ShieldCheck, Users } from 'lucide-react';
+import { IconAdd, IconArrowLeft, IconArrowUpRight, IconChevronRight, IconControls, IconFileText, IconRefresh, IconShieldCheck, IconTeam } from './icons';
 import { Accordion, AccordionItem, Button, CheckboxField, SearchField, SelectField, SettingsDialog, TextField } from './forms-library';
 import { Tabs, TabList, Tab, TabPanel } from './shell-library';
 import { acceptGroupDelivery, acceptGroupSnapshot, acceptGroupTask, confirmedGroupResult, groupCapabilities, groupDeliveryLabel, groupPolicyDraft, groupPolicyPayload, groupPresentation, groupQuotaFields, groupRows, groupTaskLabel, sameGroupVersion, type GroupData as Data } from './groups-workspace';
@@ -223,13 +223,13 @@ export function GroupsWorkspace({ state, data, run, supported, registerTransient
   return <section ref={root} className="pw-group-workspace pw-depth-collaboration" tabIndex={-1} data-group-view={viewKey}>
     <header className="pw-group-header" data-request-open={!!selectedRequest || undefined}>
       <div className="pw-group-heading">
-        {(groupId || editor) && <Button type="button" variant="ghost" iconOnly leadingIcon={ArrowLeft} disabled={busy} aria-label={editor ? '返回并保留草稿' : selectedRequest && tab === 'tasks' ? '返回请求列表' : '返回群列表'} onClick={back} />}
+        {(groupId || editor) && <Button type="button" variant="ghost" iconOnly leadingIcon={IconArrowLeft} disabled={busy} aria-label={editor ? '返回并保留草稿' : selectedRequest && tab === 'tasks' ? '返回请求列表' : '返回群列表'} onClick={back} />}
         <div>{group ? <><p className="pw-group-eyebrow">{providerName(group)}</p><h2>{group.name}</h2></> : <p className="pw-collaboration-directory-count">{groupRows(snapshot?.groups).length} 个群空间</p>}</div>
         {group && <span className="pw-group-state" data-enabled={group.enabled === true}>{group.enabled ? '服务已启用' : '服务已关闭'}</span>}
       </div>
       <div className="pw-group-tools">
-        <Button type="button" variant="ghost" iconOnly leadingIcon={RefreshCw} disabled={busy} aria-label="刷新原群记录" onClick={refresh} />
-        {!editor && !groupId && <Button type="button" leadingIcon={Plus} disabled={busy} onClick={openCreate}>新建群空间</Button>}
+        <Button type="button" variant="ghost" iconOnly leadingIcon={IconRefresh} disabled={busy} aria-label="刷新原群记录" onClick={refresh} />
+        {!editor && !groupId && <Button type="button" leadingIcon={IconAdd} disabled={busy} onClick={openCreate}>新建群空间</Button>}
       </div>
     </header>
     {group && <p className="pw-group-context">{groupRows(group.members).filter(member => member.enabled).length} 位已启用成员 · {requests.length} 项请求 · {group.visibility === 'members' ? '进度可按任务开放给群成员' : '任务进度仅发起人可见'}</p>}
@@ -237,17 +237,17 @@ export function GroupsWorkspace({ state, data, run, supported, registerTransient
       {error && <p className="pw-group-warning" role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
       {busy && <p className="pw-muted" role="status">正在读取原操作回执…</p>}
     </div>
-    {!snapshot && !busy && <div className="pw-group-empty"><Users aria-hidden /><h3>群记录尚未读取</h3><p>刷新群记录后继续。</p></div>}
+    {!snapshot && !busy && <div className="pw-group-empty"><IconTeam aria-hidden /><h3>群记录尚未读取</h3><p>刷新群记录后继续。</p></div>}
     {!editor && !groupId && <div className="pw-collaboration-directory" aria-label="群空间列表">
       <SearchField fieldClassName="pw-collaboration-search" shape="rounded" aria-label="搜索群空间" placeholder="搜索群名称或渠道" value={query} onChange={setQuery} />
       {groupSections.filter(section => section.rows.length > 0).map(section => <section className="pw-collaboration-group" key={section.id} aria-label={section.title}><header className="pw-collaboration-group-heading"><h3>{section.title}</h3><span>{section.rows.length}</span></header><div className="pw-group-collection">
       {section.rows.map(row => <Button key={row.id} data-group-object={row.id} type="button" variant="ghost" className="pw-group-object-row" disabled={busy} aria-label={`打开群空间：${row.name}`} onClick={() => chooseGroup(row)}>
-        <span className="pw-group-row-icon"><Users size={20} aria-hidden /></span>
+        <span className="pw-group-row-icon"><IconTeam size={20} aria-hidden /></span>
         <span className="pw-group-row-copy"><strong>{row.name}</strong><span>{providerName(row)} · {groupRows(row.members).filter(member => member.enabled).length} 位成员</span></span>
-        <span className="pw-group-row-end"><span>{groupRows(snapshot?.requests).filter(request => request.groupId === row.id).length} 项请求</span><ChevronRight size={17} aria-hidden /></span>
+        <span className="pw-group-row-end"><span>{groupRows(snapshot?.requests).filter(request => request.groupId === row.id).length} 项请求</span><IconChevronRight size={17} aria-hidden /></span>
       </Button>)}</div></section>)}
       {query && !visibleGroups.length && <p className="pw-secondary-empty">没有匹配的群空间。</p>}
-      {snapshot && groupRows(snapshot.groups).length === 0 && <div className="pw-group-empty"><Users aria-hidden /><h3>暂无群空间</h3><p>新建后添加成员与能力授权。</p></div>}
+      {snapshot && groupRows(snapshot.groups).length === 0 && <div className="pw-group-empty"><IconTeam aria-hidden /><h3>暂无群空间</h3><p>新建后添加成员与能力授权。</p></div>}
     </div>}
     {groupId && !group && !editor && <p className="pw-group-warning" role="alert">这个群空间当前未读取到，请刷新核对。</p>}
 
@@ -261,16 +261,16 @@ export function GroupsWorkspace({ state, data, run, supported, registerTransient
           {field('roomId', draft.conversationKind === 'qq_guild_channel' ? '原子频道 channel_id' : selectedConnection?.provider === 'qq' ? '原群 group_openid' : '原群 roomId', '填写原平台身份，群号或显示名称不能替代。')}
         </div>
         {connections.length === 0 && <p className="pw-group-warning">还没有可用的机器人连接。请先在渠道设置中配置 QQ 或可信 Webhook。</p>}
-        <p className="pw-group-scope"><ShieldCheck size={18} aria-hidden />新空间默认关闭。普通群与频道的成员、能力和授权范围相互独立。</p>
+        <p className="pw-group-scope"><IconShieldCheck size={18} aria-hidden />新空间默认关闭。普通群与频道的成员、能力和授权范围相互独立。</p>
       </>}
       {editor === 'member' && original && <>
         <div className="pw-group-form-grid">{field('displayName', '成员显示名称')}{field('senderId', '原平台成员身份', '使用原群事件中的 senderId。', !!draft.editingSenderId)}<SelectField label="成员角色" value={draft.role} onChange={value => change('role', value)} options={roles} isDisabled={busy} /></div>
         <CheckboxField isSelected={draft.enabled === true} onChange={value => change('enabled', value)} isDisabled={busy}>启用这位成员</CheckboxField>
-        <p className="pw-group-scope"><ShieldCheck size={18} aria-hidden />群管理员不能扩大工具权限。更改角色或启用状态会更新成员授权代次，旧任务需按原记录重新核对。</p>
+        <p className="pw-group-scope"><IconShieldCheck size={18} aria-hidden />群管理员不能扩大工具权限。更改角色或启用状态会更新成员授权代次，旧任务需按原记录重新核对。</p>
       </>}
       {editor === 'policy' && original && <>
         <div className="pw-group-policy-access"><CheckboxField isSelected={draft.enabled === true} onChange={value => change('enabled', value)} isDisabled={busy}>启用这个群空间的服务</CheckboxField><SelectField label="任务进度可见范围" value={draft.visibility} onChange={value => change('visibility', value)} options={[{ id: 'requester', label: '仅发起人' }, { id: 'members', label: '允许任务选择群成员可见' }]} isDisabled={busy} /></div>
-        <p className="pw-group-scope"><ShieldCheck size={18} aria-hidden />结果能否发到群里需逐项授权。当前渠道仅支持原群被动回复，未开放给群受众的结果不会改投私聊。</p>
+        <p className="pw-group-scope"><IconShieldCheck size={18} aria-hidden />结果能否发到群里需逐项授权。当前渠道仅支持原群被动回复，未开放给群受众的结果不会改投私聊。</p>
         <div className="pw-group-capabilities">{groupCapabilities.map(([capability, label]) => {
           const grant = groupRows(draft.grants).find(row => row.capability === capability), available = resources[capability] === true;
           return <section className="pw-group-capability" key={capability} aria-label={label}>
@@ -297,12 +297,12 @@ export function GroupsWorkspace({ state, data, run, supported, registerTransient
           <div className="pw-group-collection">{visibleRequests.map(reference => {
             const read = readings.current[identity(reference)], member = groupRows(group.members).find(row => row.senderId === reference.senderId);
             return <Button key={identity(reference)} data-group-object={identity(reference)} type="button" variant="ghost" className="pw-group-object-row pw-group-request-row" disabled={busy} aria-label={`读取群请求：${reference.goal || '原群请求'}`} onClick={() => inspectTask(reference)}>
-              <span className="pw-group-row-icon"><FileText size={19} aria-hidden /></span><span className="pw-group-row-copy"><strong>{reference.goal || '原群请求'}</strong><span>{member?.displayName || reference.senderId || '原群请求'} · {capabilityName(reference.capability)}</span><span>结果受众：{audienceName(reference.audience)}</span></span>
-              <span className="pw-group-row-end">{read?.known === true && <span className="pw-group-row-status">上次读取：{groupTaskLabel(read.task?.status)}</span>}<ChevronRight size={17} aria-hidden /></span>
+              <span className="pw-group-row-icon"><IconFileText size={19} aria-hidden /></span><span className="pw-group-row-copy"><strong>{reference.goal || '原群请求'}</strong><span>{member?.displayName || reference.senderId || '原群请求'} · {capabilityName(reference.capability)}</span><span>结果受众：{audienceName(reference.audience)}</span></span>
+              <span className="pw-group-row-end">{read?.known === true && <span className="pw-group-row-status">上次读取：{groupTaskLabel(read.task?.status)}</span>}<IconChevronRight size={17} aria-hidden /></span>
             </Button>;
           })}</div>
           {query && requests.length > 0 && !visibleRequests.length && <p className="pw-secondary-empty">没有匹配的群请求。</p>}
-          {requests.length === 0 && <div className="pw-group-empty"><FileText aria-hidden /><h3>群里的请求会出现在这里</h3><p>启用成员与能力后，从已认证的原群渠道发起。任务、审批和结果都沿用原记录。</p><div className="pw-group-actions"><Button type="button" variant="secondary" onClick={() => changeTab('members')}>查看群成员</Button><Button type="button" variant="ghost" onClick={() => changeTab('policy')}>查看已授权能力</Button></div></div>}
+          {requests.length === 0 && <div className="pw-group-empty"><IconFileText aria-hidden /><h3>群里的请求会出现在这里</h3><p>启用成员与能力后，从已认证的原群渠道发起。任务、审批和结果都沿用原记录。</p><div className="pw-group-actions"><Button type="button" variant="secondary" onClick={() => changeTab('members')}>查看群成员</Button><Button type="button" variant="ghost" onClick={() => changeTab('policy')}>查看已授权能力</Button></div></div>}
         </div>}
         {selectedRequest && <article className="pw-group-reading" aria-label="群请求详情">
           <header className="pw-group-reading-heading"><p className="pw-group-eyebrow">{capabilityName(selectedRequest.capability)} · {requestSender}</p><h3>{selectedRequest.goal || '原群任务'}</h3><p className="pw-group-task-status">{readState !== 'known' && task ? '上次读取：' : ''}{groupTaskLabel(task?.status)}</p></header>
@@ -312,8 +312,8 @@ export function GroupsWorkspace({ state, data, run, supported, registerTransient
           {(presentation?.approval?.message || task?.status === 'awaiting_user') && <p className="pw-group-warning" role="status">{presentation?.approval?.message || '这项任务等待主人处理，请进入原任务核对审批。'}</p>}
           {(presentation?.recovery?.message || ['reconciling', 'needs_confirmation'].includes(task?.status)) && <p className="pw-group-warning" role="status">{presentation?.recovery?.message || '执行效果待核对，请在原任务确认已有结果，不要重新提交。'}</p>}
 </div>
-          <section className="pw-group-request-controls" aria-label="原请求范围与操作">          <p className="pw-group-scope"><ShieldCheck size={18} aria-hidden />结果受众：{audienceName(selectedRequest.audience)}。{task?.resultPrivate === true ? '这份结果保持原私人范围，不提供群投递。' : '不会改投其他群或私聊。'}</p>
-          <div className="pw-group-actions"><Button type="button" trailingIcon={ArrowUpRight} disabled={busy} onClick={openTask}>打开原任务与审批</Button><Button type="button" variant="ghost" leadingIcon={RefreshCw} disabled={busy} onClick={() => inspectTask(selectedRequest)}>重新读取原状态</Button></div>
+          <section className="pw-group-request-controls" aria-label="原请求范围与操作">          <p className="pw-group-scope"><IconShieldCheck size={18} aria-hidden />结果受众：{audienceName(selectedRequest.audience)}。{task?.resultPrivate === true ? '这份结果保持原私人范围，不提供群投递。' : '不会改投其他群或私聊。'}</p>
+          <div className="pw-group-actions"><Button type="button" trailingIcon={IconArrowUpRight} disabled={busy} onClick={openTask}>打开原任务与审批</Button><Button type="button" variant="ghost" leadingIcon={IconRefresh} disabled={busy} onClick={() => inspectTask(selectedRequest)}>重新读取原状态</Button></div>
           <div className="pw-group-actions pw-group-run-actions">{task && ['paused', 'interrupted'].includes(task.status) && <Button type="button" variant="secondary" disabled={!canActOnTask} onClick={() => { void invoke('groups.reviewTask', { requestId: selectedRequest.requestId, intent: 'resume' }, receiveReview); }}>核对并继续原任务</Button>}{task && typeof task.runId === 'string' && task.coordinatorEpoch > 0 && !['completed', 'failed', 'cancelled'].includes(task.status) && <Button type="button" variant="ghost" disabled={!canActOnTask} onClick={() => { void invoke('groups.reviewTask', { requestId: selectedRequest.requestId, intent: 'cancel' }, receiveReview); }}>核对并停止原运行</Button>}</div>
           </section>
           <div className="pw-group-reading-layout"><div className="pw-group-reading-main">          {task?.summary && <section className="pw-group-result"><h4>任务摘要</h4><p className="pw-group-copy">{task.summary}</p></section>}
@@ -333,15 +333,15 @@ export function GroupsWorkspace({ state, data, run, supported, registerTransient
 </div><aside className="pw-group-reading-context" aria-label="原请求记录">          <Accordion className="pw-group-diagnostics"><AccordionItem id="request-identity" title="原始引用与运行信息" description="请求、任务、执行代次和投递编号"><dl className="pw-facts"><div><dt>原请求</dt><dd>{selectedRequest.requestId}</dd></div><div><dt>原任务</dt><dd>{selectedRequest.taskId}</dd></div><div><dt>原空间</dt><dd>{selectedRequest.spaceId}</dd></div><div><dt>原运行</dt><dd>{task?.runId || '尚未提供'}</dd></div><div><dt>执行代次</dt><dd>{task?.coordinatorEpoch ?? '尚未提供'}</dd></div><div><dt>任务版本</dt><dd>{task?.revision ?? '尚未提供'}</dd></div></dl>{requestDeliveries.map(delivery => <p className="pw-group-identifier" key={delivery.deliveryId}>投递 {delivery.deliveryId} · 产物 {delivery.outputId}{delivery.platformMessageId ? ` · 平台消息 ${delivery.platformMessageId}` : ''}</p>)}</AccordionItem></Accordion></aside></div>
         </article>}
       </TabPanel>
-      <TabPanel id="members"><section className="pw-group-members"><header className="pw-group-section-heading"><div><h3>谁能在群里发起请求</h3><p>成员角色与启用状态仅作用于这个群空间。</p></div><Button type="button" leadingIcon={Plus} disabled={busy} onClick={() => openMember()}>添加群成员</Button></header>
-        <div className="pw-group-collection">{groupRows(group.members).map(member => <Button key={member.senderId} type="button" variant="ghost" className="pw-group-object-row" disabled={busy} aria-label={`编辑群成员：${member.displayName}`} onClick={() => openMember(member)}><span className="pw-group-avatar" aria-hidden>{String(member.displayName || '?').slice(0, 1)}</span><span className="pw-group-row-copy"><strong>{member.displayName}</strong><span>{roles.find(role => role.id === member.role)?.label || '角色待核对'}</span></span><span className="pw-group-row-end"><span>{member.enabled ? '已启用' : '已停用'}</span><ChevronRight size={17} aria-hidden /></span></Button>)}</div>
+      <TabPanel id="members"><section className="pw-group-members"><header className="pw-group-section-heading"><div><h3>谁能在群里发起请求</h3><p>成员角色与启用状态仅作用于这个群空间。</p></div><Button type="button" leadingIcon={IconAdd} disabled={busy} onClick={() => openMember()}>添加群成员</Button></header>
+        <div className="pw-group-collection">{groupRows(group.members).map(member => <Button key={member.senderId} type="button" variant="ghost" className="pw-group-object-row" disabled={busy} aria-label={`编辑群成员：${member.displayName}`} onClick={() => openMember(member)}><span className="pw-group-avatar" aria-hidden>{String(member.displayName || '?').slice(0, 1)}</span><span className="pw-group-row-copy"><strong>{member.displayName}</strong><span>{roles.find(role => role.id === member.role)?.label || '角色待核对'}</span></span><span className="pw-group-row-end"><span>{member.enabled ? '已启用' : '已停用'}</span><IconChevronRight size={17} aria-hidden /></span></Button>)}</div>
         {groupRows(group.members).length === 0 && <p className="pw-group-reading-empty">还没有授权成员。添加成员后，对方才能通过原群渠道发起请求。</p>}
-        <p className="pw-group-scope"><ShieldCheck size={18} aria-hidden />群管理员可管理普通成员，不能扩大工具权限。</p>
+        <p className="pw-group-scope"><IconShieldCheck size={18} aria-hidden />群管理员可管理普通成员，不能扩大工具权限。</p>
       </section></TabPanel>
-      <TabPanel id="policy"><section className="pw-group-policy"><header className="pw-group-section-heading"><div><h3>群里可以做什么</h3><p>{group.enabled ? '群服务已启用' : '群服务已关闭'} · 进度{group.visibility === 'members' ? '可按任务对群成员可见' : '仅发起人可见'}</p></div><Button type="button" variant="secondary" leadingIcon={Settings2} disabled={busy} onClick={openPolicy}>编辑能力与额度</Button></header>
+      <TabPanel id="policy"><section className="pw-group-policy"><header className="pw-group-section-heading"><div><h3>群里可以做什么</h3><p>{group.enabled ? '群服务已启用' : '群服务已关闭'} · 进度{group.visibility === 'members' ? '可按任务对群成员可见' : '仅发起人可见'}</p></div><Button type="button" variant="secondary" leadingIcon={IconControls} disabled={busy} onClick={openPolicy}>编辑能力与额度</Button></header>
         <div className="pw-group-policy-list">{groupRows(group.grants).map(grant => <div className="pw-group-policy-row" key={grant.capability}><div><strong>{capabilityName(grant.capability)}</strong><p>{grant.allowGroupAudience ? '允许发回原群成员' : '仅原请求发起人受众'}</p></div><span>到期 {time(grant.expiresAt)}</span></div>)}</div>
         {groupRows(group.grants).length === 0 && <p className="pw-group-reading-empty">尚未授权任何能力。服务开启前，需要明确选择能力与结果受众。</p>}
-        <p className="pw-group-scope"><ShieldCheck size={18} aria-hidden />能力授权不代替每项原任务的审批。结果保持原受众，私人结果不会发回群里。</p>
+        <p className="pw-group-scope"><IconShieldCheck size={18} aria-hidden />能力授权不代替每项原任务的审批。结果保持原受众，私人结果不会发回群里。</p>
         <Accordion><AccordionItem id="saved-quota" title="任务与媒体额度" description={`全群每日 ${group.quota?.dailyTasks ?? '未设置'} 项任务 · 同时运行 ${group.quota?.maxConcurrent ?? '未设置'} 项`}><dl className="pw-facts">{groupQuotaFields.map(([key, label]) => <div key={key}><dt>{label}</dt><dd>{group.quota?.[key] ?? '尚未提供'}</dd></div>)}</dl><p className="pw-muted">模型额度是本地累计保守预留，不是服务商账单 token。</p></AccordionItem></Accordion>
       </section></TabPanel>
     </Tabs>}

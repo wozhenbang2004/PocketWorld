@@ -12,6 +12,7 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
+import { IconCheck, IconChevronDown, IconCopy, IconError, IconRefresh, IconTool } from "../../icons";
 
 /*
  * Tool Call Card (Clean) – one tool call of an AI agent, in a single self-contained file.
@@ -165,7 +166,7 @@ export function ToolCallCard({
         <span className="ui-tcc__status" key={status}>
           {status === "running" && <Spinner />}
           {status === "success" && (
-            <svg className="ui-tcc__ok" viewBox="0 0 16 16" aria-hidden="true">
+            <svg className="ui-tcc__ok" viewBox="0 0 16 16" fill="none" aria-hidden="true">
               <circle cx="8" cy="8" r="7" />
               <path d="M5.1 8.2 7.1 10.1 10.9 6" pathLength={1} />
             </svg>
@@ -187,10 +188,7 @@ export function ToolCallCard({
                 <p className="ui-tcc__error-text" dir="auto">{error ?? "本次调用失败。"}</p>
                 {onRetry && (
                   <button type="button" className="ui-tcc__retry" onClick={onRetry}>
-                    <svg viewBox="0 0 16 16" aria-hidden="true">
-                      <path d="M2.75 8a5.25 5.25 0 1 0 1.6-3.77" />
-                      <path d="M2.5 2.5v2.75h2.75" />
-                    </svg>
+                    <IconRefresh size={16} aria-hidden="true" />
                     重试
                   </button>
                 )}
@@ -369,20 +367,15 @@ function CopyButton({ text, label }: { text: string; label: string }) {
       title={copied ? "已复制" : `复制${label}`}
       onClick={() => copyText(text).then((ok) => ok && setCopied(true))}
     >
-      <svg className="ui-tcc__copy-icon" viewBox="0 0 16 16" aria-hidden="true">
-        <rect x="5.5" y="5.5" width="8.5" height="8.5" rx="2" />
-        <path d="M10.5 3.75v-.25A1.5 1.5 0 0 0 9 2H3.5A1.5 1.5 0 0 0 2 3.5V9a1.5 1.5 0 0 0 1.5 1.5h.25" />
-      </svg>
-      <svg className="ui-tcc__copy-done" viewBox="0 0 16 16" aria-hidden="true">
-        <path d="M3.5 8.4 6.6 11.3 12.5 4.9" pathLength={1} />
-      </svg>
+      <IconCopy className="ui-tcc__copy-icon" size={16} aria-hidden="true" />
+      <IconCheck className="ui-tcc__copy-done" size={16} aria-hidden="true" />
     </button>
   );
 }
 
 function Spinner() {
   return (
-    <svg className="ui-tcc__spinner" viewBox="0 0 16 16" aria-hidden="true">
+    <svg className="ui-tcc__spinner" viewBox="0 0 16 16" fill="none" aria-hidden="true">
       <circle cx="8" cy="8" r="6" />
       <path d="M8 2a6 6 0 0 1 6 6" />
     </svg>
@@ -390,28 +383,15 @@ function Spinner() {
 }
 
 function ErrorIcon() {
-  return (
-    <svg className="ui-tcc__err" viewBox="0 0 16 16" aria-hidden="true">
-      <circle cx="8" cy="8" r="7" />
-      <path d="M8 4.9v3.5M8 10.9v.1" />
-    </svg>
-  );
+  return <IconError className="ui-tcc__err" size={16} aria-hidden="true" />;
 }
 
 function Chevron() {
-  return (
-    <svg className="ui-tcc__chevron" viewBox="0 0 12 12" aria-hidden="true">
-      <path d="M3.5 5.25 6 7.75l2.5-2.5" />
-    </svg>
-  );
+  return <IconChevronDown className="ui-tcc__chevron" size={12} aria-hidden="true" />;
 }
 
 function WrenchIcon() {
-  return (
-    <svg viewBox="0 0 16 16">
-      <path d="M10.2 2.4a3.5 3.5 0 0 0-4.3 4.6L2.6 10.3a1.4 1.4 0 0 0 2 2L7.9 9a3.5 3.5 0 0 0 4.6-4.3l-2 2-1.6-.4-.4-1.6 1.7-2.3Z" />
-    </svg>
-  );
+  return <IconTool size={16} aria-hidden="true" />;
 }
 
 /* ---------- Helpers ---------- */
@@ -594,7 +574,7 @@ const css = /* css */ `
 }
 @media (hover: hover) {
   .ui-tcc__head:hover { background: var(--ui-tcc-wash-big); }
-  .ui-tcc__head:hover .ui-tcc__chevron { stroke: var(--ui-tcc-ink); }
+  .ui-tcc__head:hover .ui-tcc__chevron { color: var(--ui-tcc-ink); }
   .ui-tcc-group__head:hover { background: var(--ui-tcc-wash); color: var(--ui-tcc-ink); }
   .ui-tcc__copy:hover { background: var(--ui-tcc-wash-big); color: var(--ui-tcc-ink); }
   .ui-tcc__more:hover { color: var(--ui-tcc-ink); }
@@ -610,7 +590,7 @@ const css = /* css */ `
   height: 16px;
   color: var(--ui-tcc-icon);
 }
-.ui-tcc__icon > svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.ui-tcc__icon > svg { width: 16px; height: 16px; }
 
 .ui-tcc__main {
   display: flex;
@@ -653,27 +633,23 @@ const css = /* css */ `
   animation: ui-tcc-in 360ms var(--ui-tcc-ease) both;
 }
 .ui-tcc[data-status="error"] .ui-tcc__status { color: var(--ui-tcc-red); font-weight: 500; }
-.ui-tcc__status > svg { width: 14px; height: 14px; flex: none; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.ui-tcc__status > svg { width: 14px; height: 14px; flex: none; }
+.ui-tcc__spinner, .ui-tcc__ok { stroke-linecap: round; stroke-linejoin: round; }
 .ui-tcc__spinner circle { stroke: var(--ui-tcc-line); stroke-width: 1.6; }
 .ui-tcc__spinner path { stroke: var(--ui-tcc-accent); stroke-width: 1.6; }
 .ui-tcc__spinner { animation: ui-tcc-spin 800ms linear infinite; }
 /* Done: a solid blue dot whose white check draws itself */
 .ui-tcc__ok { animation: ui-tcc-pop 460ms cubic-bezier(0.34, 1.56, 0.64, 1) both; }
 .ui-tcc__ok circle { fill: var(--ui-tcc-accent); }
-.ui-tcc__ok path { stroke: #ffffff; stroke-width: 1.5; stroke-dasharray: 1; stroke-dashoffset: 1; animation: ui-tcc-draw 360ms var(--ui-tcc-ease) 160ms forwards; }
-.ui-tcc__err circle { fill: var(--ui-tcc-red); }
-.ui-tcc__err path { stroke: #ffffff; stroke-width: 1.6; stroke-linecap: round; }
+.ui-tcc__ok path { stroke: var(--ui-tcc-on-accent, #ffffff); stroke-width: 1.5; stroke-dasharray: 1; stroke-dashoffset: 1; animation: ui-tcc-draw 360ms var(--ui-tcc-ease) 160ms forwards; }
+.ui-tcc__err { color: var(--ui-tcc-red); }
 
 .ui-tcc__chevron {
   flex: none;
   width: 12px;
   height: 12px;
-  fill: none;
-  stroke: var(--ui-tcc-icon);
-  stroke-width: 1.2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  transition: transform 360ms var(--ui-tcc-ease), stroke 160ms ease;
+  color: var(--ui-tcc-icon);
+  transition: transform 360ms var(--ui-tcc-ease), color 160ms ease;
 }
 .ui-tcc[data-open] > .ui-tcc__head .ui-tcc__chevron,
 .ui-tcc-group[data-open] > .ui-tcc-group__head .ui-tcc__chevron { transform: rotate(180deg); }
@@ -736,15 +712,9 @@ const css = /* css */ `
   position: absolute;
   width: 16px;
   height: 16px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.4;
-  stroke-linecap: round;
-  stroke-linejoin: round;
   transition: opacity 200ms ease, transform 320ms var(--ui-tcc-ease), filter 200ms ease;
 }
-.ui-tcc__copy-icon rect { fill: currentColor; stroke: none; }
-.ui-tcc__copy-done { opacity: 0; transform: scale(0.6); filter: blur(2px); stroke-width: 1.7; }
+.ui-tcc__copy-done { opacity: 0; transform: scale(0.6); filter: blur(2px); }
 .ui-tcc__copy[data-copied] { color: var(--ui-tcc-accent); }
 .ui-tcc__copy[data-copied] .ui-tcc__copy-icon { opacity: 0; transform: scale(0.6); filter: blur(2px); }
 .ui-tcc__copy[data-copied] .ui-tcc__copy-done { opacity: 1; transform: none; filter: none; }
@@ -847,7 +817,7 @@ const css = /* css */ `
   cursor: pointer;
   transition: background-color 160ms ease;
 }
-.ui-tcc__retry svg { width: 16px; height: 16px; fill: none; stroke: var(--ui-tcc-icon); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.ui-tcc__retry svg { width: 16px; height: 16px; color: var(--ui-tcc-icon); }
 .ui-tcc__retry:active svg { transform: rotate(-60deg); transition: transform 200ms var(--ui-tcc-ease); }
 
 /* Group: one quiet line with the tool icons stacked on small white tiles, the cards below */
@@ -878,7 +848,7 @@ const css = /* css */ `
   animation: ui-tcc-pop 420ms var(--ui-tcc-ease) both;
 }
 .ui-tcc-group__stack .ui-tcc__icon + .ui-tcc__icon { margin-left: -4px; }
-.ui-tcc-group__stack .ui-tcc__icon > svg { width: 12px; height: 12px; stroke-width: 1.5; }
+.ui-tcc-group__stack .ui-tcc__icon > svg { width: 12px; height: 12px; }
 .ui-tcc-group__title {
   display: flex;
   align-items: baseline;

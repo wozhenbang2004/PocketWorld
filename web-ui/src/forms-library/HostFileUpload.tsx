@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { RiFileTextLine, RiUploadCloud2Line } from '@remixicon/react';
+import { IconCloudUpload, IconFileText } from '../icons';
 
 /** PW-36. Controlled adaptation of BoardUI FileUpload. The rounded progress
  * path, measured perimeter and content layers come from the source component.
@@ -30,7 +30,7 @@ export function HostFileUpload({ onChoose, status = 'idle', file, error, progres
       <svg className="pw-upload-ring" aria-hidden viewBox={`0 0 ${box.width} ${box.height}`} preserveAspectRatio="none"><rect x={1} y={1} width={Math.max(0, box.width - 2)} height={Math.max(0, box.height - 2)} rx={15} fill="none" stroke="currentColor" strokeWidth={1} />
         {hasProgress && <path d={ringPath(box.width, box.height, 1, 15)} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" pathLength={100} strokeDasharray={`${progress} 200`} />}
       </svg>
-      <span className="pw-upload-icon">{file ? <RiFileTextLine size={24} aria-hidden /> : <RiUploadCloud2Line size={24} aria-hidden />}</span>
+      <span className="pw-upload-icon">{file ? <IconFileText size={24} aria-hidden /> : <IconCloudUpload size={24} aria-hidden />}</span>
       <span className="pw-upload-title">{file?.name ?? label}</span>
       <span className="pw-upload-description">{statusDescription ?? (status === 'importing' ? '正在读取原文件…' : status === 'complete' ? '已收到导入回执' : status === 'unknown' ? '提交结果待核对，请勿重复导入' : file?.size != null ? formatFileSize(file.size) : '使用系统文件选择器，保留文件来源')}</span>
     </button>

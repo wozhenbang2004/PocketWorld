@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { RiCloseLine } from '@remixicon/react';
+import { IconClose } from './icons';
 import { bridge } from './bridge';
 import { Drawer } from './shell-library';
 import { Accordion, AccordionItem, Button, CheckboxField, IconButton } from './forms-library';
@@ -61,7 +61,7 @@ export function SkillDraftReview({ target, onClose }: { target: ConversationDraf
   const files = (side: 'before' | 'after'): Data[] => Array.isArray(review?.[side + 'Files']) ? review[side + 'Files'] : [];
   return <Drawer.Root open onOpenChange={open => { if (!open) close(); }} shouldScaleBackground={false}><Drawer.Portal>
     <Drawer.Overlay className="pw-overlay" /><Drawer.Content className="pw-drawer" aria-describedby="skill-draft-description">
-      <div className="pw-drawer-handle" /><header className="pw-drawer-header"><div><Drawer.Title>{proposal.name || '原对话技能提案'}</Drawer.Title><Drawer.Description id="skill-draft-description">核对原文件与候选文件后保存；保存后的技能保持停用，启用另行决定。</Drawer.Description></div><IconButton icon={RiCloseLine} aria-label="返回原回答" disabled={busy} onClick={close} /></header>
+      <div className="pw-drawer-handle" /><header className="pw-drawer-header"><div><Drawer.Title>{proposal.name || '原对话技能提案'}</Drawer.Title><Drawer.Description id="skill-draft-description">核对原文件与候选文件后保存；保存后的技能保持停用，启用另行决定。</Drawer.Description></div><IconButton icon={IconClose} aria-label="返回原回答" disabled={busy} onClick={close} /></header>
       <div className="pw-drawer-body pw-ecosystem-depth pw-eco-draft-body">
         {busy && <ShimmerText>正在核对原提案…</ShimmerText>}{error && <p className="pw-error" role="alert">{error}</p>}
         <div className="pw-eco-draft-state">{apply.status && <p role="status">{status[apply.status] || '原提案状态待核对'}</p>}{apply.message && <p>{apply.message}</p>}</div>

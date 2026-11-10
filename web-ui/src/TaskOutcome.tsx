@@ -1,6 +1,6 @@
 import { AIAnswer } from './library';
 import { Button, Accordion, AccordionItem } from './forms-library';
-import { RiArrowRightSLine, RiFileLine } from '@remixicon/react';
+import { IconChevronRight, IconFile } from './icons';
 import { getTaskOutcome } from './task-outcome';
 import { useEffect, useState } from 'react';
 import './task-reading.css';
@@ -38,7 +38,7 @@ export function TaskOutcome({ task, messages, onCopy, onOpenAttachment }: {
     {files.length > 0 && <section className="pw-outcome-deliverables" aria-label="关联答复中的附件">
       <div className="pw-reading-section-heading"><h4>关联答复中的附件</h4><span>{files.length} 个文件</span></div>
       <div className="pw-outcome-files">
-        {files.map(file => <Button key={String(file.id)} variant="secondary" className="pw-outcome-file" leadingIcon={RiFileLine} trailingIcon={RiArrowRightSLine}
+        {files.map(file => <Button key={String(file.id)} variant="secondary" className="pw-outcome-file" leadingIcon={IconFile} trailingIcon={IconChevronRight}
           disabled={!reply?.id || !onOpenAttachment || typeof file.sha256 !== 'string'}
           onClick={() => onOpenAttachment?.(reply!.id, String(file.id), String(file.sha256))}>
           <span className="pw-outcome-file-copy"><span>{typeof file.name === 'string' && file.name ? file.name : '查看附件'}</span>

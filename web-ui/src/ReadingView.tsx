@@ -1,6 +1,6 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { RiArrowLeftLine, RiFileCopyLine } from '@remixicon/react';
+import { IconArrowLeft, IconCopy } from './icons';
 import { MarkdownBody } from './library/MarkdownBody';
 import { ReadingContext, type ReadingDocument } from './reading-context';
 import './reading.css';
@@ -58,7 +58,7 @@ const ReadingPage = memo(function ReadingPage({ document: snapshot, active }: {
       <button type="button" disabled={copying} aria-label={selected ? '复制选中文字' : snapshot.kind === 'table' ? '复制表格' : '复制全文'}
         onPointerDown={event => event.preventDefault()}
         onClick={() => { void copy(selected || (mode === 'select' ? snapshot.text : snapshot.copyText ?? snapshot.text)).catch(() => {}); }}>
-        <RiFileCopyLine size={18} aria-hidden="true" /><span>{copying ? '复制中' : '复制'}</span>
+        <IconCopy size={18} aria-hidden="true" /><span>{copying ? '复制中' : '复制'}</span>
       </button>
     </div>
     <p className="pw-reading-feedback" role="status" aria-live="polite">{feedback || (mode === 'select' && selected ? `已选 ${Array.from(selected).length} 字` : '')}</p>
@@ -98,7 +98,7 @@ export function ReadingView({ documents, onBack }: { documents: ReadingDocument[
         onPointerDownOutside={event => event.preventDefault()}
         onCloseAutoFocus={event => { event.preventDefault(); if (closeFocus.current?.isConnected) closeFocus.current.focus({ preventScroll: true }); }}>
         <header className="pw-reading-header">
-          <button type="button" aria-label={documents.length > 1 ? '返回回复阅读' : '返回原工作'} onClick={onBack}><RiArrowLeftLine size={22} aria-hidden="true" /></button>
+          <button type="button" aria-label={documents.length > 1 ? '返回回复阅读' : '返回原工作'} onClick={onBack}><IconArrowLeft size={22} aria-hidden="true" /></button>
           <Dialog.Title>{current?.title}</Dialog.Title>
           <span>打开时的内容</span>
         </header>

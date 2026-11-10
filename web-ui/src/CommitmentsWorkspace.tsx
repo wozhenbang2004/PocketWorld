@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { RiAddLine, RiArrowLeftSLine, RiArrowRightSLine, RiRefreshLine, RiSettings3Line } from '@remixicon/react';
+import { IconAdd, IconChevronLeft, IconChevronRight, IconRefresh, IconSettings } from './icons';
 import { Accordion, AccordionItem, Button, CheckboxField, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { PressButton } from './library';
 import { Tabs, TabList, Tab, TabPanel } from './shell-library';
@@ -112,20 +112,20 @@ function CommitmentList({ state, supported, run, registerTransientBack, onEditin
     {uncertain && <div className="pw-followup-attention">{unknownControls}</div>}
     <div ref={collectionPanel} tabIndex={-1} className="pw-followup-collection" hidden={!!current}>
       <header className="pw-followup-heading"><div><h2>单项委托</h2></div><div className="pw-followup-heading-actions">
-        <Button variant="ghost" iconOnly leadingIcon={RiRefreshLine} aria-label="刷新原记录" disabled={busy} onClick={refresh} />
-        <Button variant="secondary" leadingIcon={RiAddLine} disabled={busy || uncertain || !snapshot.commitments || !supported('commitments.review')} onClick={() => openEditor(null)}>新增委托</Button>
+        <Button variant="ghost" iconOnly leadingIcon={IconRefresh} aria-label="刷新原记录" disabled={busy} onClick={refresh} />
+        <Button variant="secondary" leadingIcon={IconAdd} disabled={busy || uncertain || !snapshot.commitments || !supported('commitments.review')} onClick={() => openEditor(null)}>新增委托</Button>
       </div></header>
       <SearchField className="pw-secondary-search" aria-label="查找已读取的委托" placeholder="查找委托或要求" value={query} onChange={setQuery} />
       <div className="pw-knowledge-filters" role="group" aria-label="委托状态筛选">{[{ id: 'all', label: '全部' }, { id: 'open', label: '待跟进' }, { id: 'finished', label: '已结束' }].map(item => <Button key={item.id} variant="ghost" aria-pressed={filter === item.id} onClick={() => setFilter(item.id)}>{item.label}</Button>)}</div>
       <div className="pw-followup-list-heading"><CheckboxField isSelected={dueOnly} onChange={setDueOnly}>只看已到跟进时间</CheckboxField>{snapshot.commitments && <span>{records.length} 项</span>}</div>
-      {!snapshot.commitments ? <p className="pw-followup-empty" role="status">正在读取原委托…</p> : !records.length ? <div className="pw-followup-empty"><h3>{query || filter !== 'all' ? '没有匹配的委托' : dueOnly ? '还没有到期的委托' : '把需要跟进的事记在这里'}</h3><p>{query || filter !== 'all' || dueOnly ? '调整关键词或筛选后，其他委托仍保留在完整清单中。' : '设定目标和期限。保存后只跟进，不会自动执行手机任务。'}</p></div> : <div aria-label="原委托清单">{groups.map(group => <section key={group.id} className="pw-knowledge-directory-group" aria-label={group.label}><header className="pw-knowledge-group-heading"><h3>{group.label}</h3><span>{group.records.length}</span></header><div className="pw-followup-list">{group.records.map(row => <Button className="pw-followup-row" variant="ghost" key={row.id} data-commitment-id={row.id} trailingIcon={RiArrowRightSLine} aria-label={'查看目标与跟进：' + row.title} aria-description={[status(row.status), row.followUpDue === true ? '已到跟进时间' : '', '下次跟进 ' + time(row.followUpAt || row.dueAt)].filter(Boolean).join('；')} disabled={busy} onClick={() => read(row.id)}>
+      {!snapshot.commitments ? <p className="pw-followup-empty" role="status">正在读取原委托…</p> : !records.length ? <div className="pw-followup-empty"><h3>{query || filter !== 'all' ? '没有匹配的委托' : dueOnly ? '还没有到期的委托' : '把需要跟进的事记在这里'}</h3><p>{query || filter !== 'all' || dueOnly ? '调整关键词或筛选后，其他委托仍保留在完整清单中。' : '设定目标和期限。保存后只跟进，不会自动执行手机任务。'}</p></div> : <div aria-label="原委托清单">{groups.map(group => <section key={group.id} className="pw-knowledge-directory-group" aria-label={group.label}><header className="pw-knowledge-group-heading"><h3>{group.label}</h3><span>{group.records.length}</span></header><div className="pw-followup-list">{group.records.map(row => <Button className="pw-followup-row" variant="ghost" key={row.id} data-commitment-id={row.id} trailingIcon={IconChevronRight} aria-label={'查看目标与跟进：' + row.title} aria-description={[status(row.status), row.followUpDue === true ? '已到跟进时间' : '', '下次跟进 ' + time(row.followUpAt || row.dueAt)].filter(Boolean).join('；')} disabled={busy} onClick={() => read(row.id)}>
         <span className="pw-followup-row-copy"><span className="pw-followup-row-title">{row.title}</span><span className="pw-followup-row-meta">{status(row.status)}{row.followUpDue === true ? ' · 已到跟进时间' : ''}</span><small>下次跟进 {time(row.followUpAt || row.dueAt)}</small></span>
       </Button>)}</div></section>)}</div>}
-      <Button className="pw-followup-settings-link" variant="ghost" leadingIcon={RiSettings3Line} trailingIcon={RiArrowRightSLine} disabled={busy || uncertain || !snapshot.policy} onClick={openPolicy}><span>跟进设置<small>{snapshot.policy ? snapshot.policy.enabled ? '通知已启用' : '通知关闭' : '等待读取'}</small></span></Button>
+      <Button className="pw-followup-settings-link" variant="ghost" leadingIcon={IconSettings} trailingIcon={IconChevronRight} disabled={busy || uncertain || !snapshot.policy} onClick={openPolicy}><span>跟进设置<small>{snapshot.policy ? snapshot.policy.enabled ? '通知已启用' : '通知关闭' : '等待读取'}</small></span></Button>
 
     </div>
     {current && <section className="pw-followup-detail" aria-label="当前委托详情">
-      <Button className="pw-followup-back" variant="ghost" leadingIcon={RiArrowLeftSLine} disabled={busy} onClick={returnToList}>返回委托列表</Button>
+      <Button className="pw-followup-back" variant="ghost" leadingIcon={IconChevronLeft} disabled={busy} onClick={returnToList}>返回委托列表</Button>
       <header className="pw-followup-heading"><div><p className="pw-followup-eyebrow">{status(current.status)}</p><h2 ref={detailHeading} tabIndex={-1}>{current.title}</h2></div></header>
       <dl className="pw-followup-facts"><div><dt>期限</dt><dd>{time(current.dueAt)}</dd></div><div><dt>跟进时间</dt><dd>{time(current.followUpAt || current.dueAt)}</dd></div>{current.taskState && <div><dt>原任务状态</dt><dd>{current.taskState}</dd></div>}</dl>
       <div className="pw-followup-primary-actions">

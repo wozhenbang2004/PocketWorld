@@ -1,6 +1,6 @@
 "use client";
 
-import { RiMoreLine as Ellipsis } from "@remixicon/react";
+import { IconMore } from '../../icons';
 import {
   animate,
   motion,
@@ -557,7 +557,7 @@ function SwipeableListRow({
               "focus-visible:not-sr-only focus-visible:absolute focus-visible:right-3 focus-visible:top-1/2 focus-visible:h-8 focus-visible:w-8 focus-visible:-translate-y-1/2 focus-visible:ring-2 focus-visible:ring-ring",
             )}
           >
-            <Ellipsis aria-hidden className="h-4 w-4" />
+            <IconMore aria-hidden className="h-4 w-4" />
           </button>
         ) : null}
       </motion.div>

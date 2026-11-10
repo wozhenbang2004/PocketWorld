@@ -1,16 +1,9 @@
-import {
-  RiArrowLeftLine,
-  RiArrowLeftSLine,
-  RiArrowRightLine,
-  RiArrowRightSLine,
-  RiSidebarFoldLine,
-  RiSidebarUnfoldLine,
-} from "@remixicon/react";
+import { IconArrowLeft, IconArrowRight, IconChevronLeft, IconChevronRight, IconSidebarClose, IconSidebarOpen } from '../../../icons';
 
 /** Navigation glyphs mirror; logos, media controls and trend arrows do not. */
 const directionalIcons: ReadonlySet<unknown> = new Set([
-  RiArrowLeftLine, RiArrowLeftSLine, RiArrowRightLine, RiArrowRightSLine,
-  RiSidebarFoldLine, RiSidebarUnfoldLine,
+  IconArrowLeft, IconChevronLeft, IconArrowRight, IconChevronRight,
+  IconSidebarClose, IconSidebarOpen,
 ]);
 
 export function directionalIconClass(icon: unknown): string | undefined {

@@ -2,7 +2,7 @@
 
 import React from 'react'
 import * as AccordionPrimitive from '@radix-ui/react-accordion'
-import { ChevronRight } from 'lucide-react'
+import { IconChevronRight } from '../../../../icons';
 import { cva } from 'class-variance-authority'
 import { cn } from './lib/utils'
 import { treeKeyboardAction, treeTabStop, type TreeKeyboardItem } from './tree-keyboard'
@@ -617,7 +617,7 @@ const AccordionTrigger = React.forwardRef<
             )}
             {...props}
         >
-            <ChevronRight className="h-4 w-4 shrink-0 transition-transform duration-200 text-accent-foreground/50 mr-1" />
+            <IconChevronRight className="h-4 w-4 shrink-0 transition-transform duration-200 text-accent-foreground/50 mr-1" />
             {children}
         </AccordionPrimitive.Trigger>
     </AccordionPrimitive.Header>

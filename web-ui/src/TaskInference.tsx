@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { RiArrowLeftSLine, RiArrowRightSLine, RiRefreshLine } from '@remixicon/react';
+import { IconChevronLeft, IconChevronRight, IconRefresh } from './icons';
 import { bridge } from './bridge';
 import { Accordion, AccordionItem, Button } from './forms-library';
 import './task-reading.css';
@@ -116,7 +116,7 @@ export function TaskInference({ taskId }: { taskId: string }) {
     <header className="pw-usage-heading">
       <div>{current && <p className="pw-reading-eyebrow">模型调用与用量</p>}<h3>{current ? current.headline : '模型调用与用量'}</h3>
         {!current && <p className="pw-reading-note">按需读取此任务保留的调用与估算。</p>}</div>
-      <Button variant="ghost" leadingIcon={current ? RiRefreshLine : undefined} disabled={busy} aria-label={current ? '重新核对累计用量' : '查看累计模型调用与用量'} onClick={() => { void read(); }}>{busy ? '核对中…' : current ? '刷新' : '查看用量'}</Button>
+      <Button variant="ghost" leadingIcon={current ? IconRefresh : undefined} disabled={busy} aria-label={current ? '重新核对累计用量' : '查看累计模型调用与用量'} onClick={() => { void read(); }}>{busy ? '核对中…' : current ? '刷新' : '查看用量'}</Button>
     </header>
     {error && <div className="pw-usage-notice" role="alert"><p>{error}</p>{current && <p className="pw-reading-note">下方仍是上次成功读取的记录。</p>}</div>}
     {current && <>
@@ -150,8 +150,8 @@ export function TaskInference({ taskId }: { taskId: string }) {
             </AccordionItem>)}
           </Accordion> : <p className="pw-reading-note">这一页没有保留的调用记录；不代表实际未发生调用。</p>}
           {(current.cursor > 0 || current.nextCursor >= 0) && <nav className="pw-usage-pagination" aria-label="模型调用记录翻页">
-            {current.cursor > 0 && <Button variant="ghost" leadingIcon={RiArrowLeftSLine} disabled={busy} onClick={() => { void read(Math.max(0, current.cursor - 20)); }}>较近调用</Button>}
-            {current.nextCursor >= 0 && <Button variant="ghost" trailingIcon={RiArrowRightSLine} disabled={busy} onClick={() => { void read(current.nextCursor); }}>较早调用</Button>}
+            {current.cursor > 0 && <Button variant="ghost" leadingIcon={IconChevronLeft} disabled={busy} onClick={() => { void read(Math.max(0, current.cursor - 20)); }}>较近调用</Button>}
+            {current.nextCursor >= 0 && <Button variant="ghost" trailingIcon={IconChevronRight} disabled={busy} onClick={() => { void read(current.nextCursor); }}>较早调用</Button>}
           </nav>}
         </AccordionItem>
       </Accordion>

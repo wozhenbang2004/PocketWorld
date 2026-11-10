@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { RiCloseLine, RiListUnordered, RiRefreshLine, RiTimeLine } from '@remixicon/react';
+import { IconClock, IconClose, IconList, IconRefresh } from './icons';
 import { bridge } from './bridge';
 import { Accordion, AccordionItem, Button, IconButton, SearchField } from './forms-library';
 import { Select, SelectItem } from './forms-library/boardui/components/base/select/select';
@@ -244,7 +244,7 @@ function TraceDetails({ selection, page, complete, close, active }: { selection:
       <Drawer.Content className="pw-drawer pw-trace-detail" aria-describedby={descriptionId}>
         <Drawer.Handle aria-label="拖动调整详情高度"/>
         <header className="pw-drawer-header"><div><Drawer.Title>{node?.kind === 'model' ? 'Request' : node ? traceRoleLabel(node) : '记录详情'}{node?.sequence != null && <small>#{node.sequence}</small>}</Drawer.Title>
-          <Drawer.Description id={descriptionId}>{node ? `${node.name} · ${traceStatus(node.status)}` : '原任务的一次调用'}</Drawer.Description></div><IconButton icon={RiCloseLine} aria-label="关闭调用详情" onClick={close}/></header>
+          <Drawer.Description id={descriptionId}>{node ? `${node.name} · ${traceStatus(node.status)}` : '原任务的一次调用'}</Drawer.Description></div><IconButton icon={IconClose} aria-label="关闭调用详情" onClick={close}/></header>
         {node && selection && <Tabs selectedKey={tab} onSelectionChange={value => { setTab(String(value)); setSnap(.94); }} className="pw-trace-detail-tabs">
           <TabList aria-label="记录详情页签">{tabs.map(([id, label]) => <Tab id={id} key={id}>{label}</Tab>)}</TabList>
           <div className="pw-trace-detail-scroll" style={{ maxHeight: `calc(${typeof snap === 'number' ? snap * 100 : 94}dvh - 148px)` }} data-vaul-no-drag>
@@ -332,7 +332,7 @@ export function TaskTrajectory({ task, active, canRead, registerTransientBack }:
       </Select>
       <span className="pw-trace-read-status" role="status">{readWindow.busy ? <><Spinner size="xs" aria-hidden/>{readWindow.view?.backfilling ? '补齐中' : page ? '刷新中' : '读取中'}</>
         : readWindow.live ? <><span className="pw-trace-live-dot"/>实时</> : page ? '已读取' : ''}</span>
-      <IconButton icon={RiRefreshLine} aria-label="刷新执行轨迹" disabled={!readWindow.enabled || readWindow.busy} onClick={readWindow.refresh}/>
+      <IconButton icon={IconRefresh} aria-label="刷新执行轨迹" disabled={!readWindow.enabled || readWindow.busy} onClick={readWindow.refresh}/>
     </header>
     {!canRead && <p className="pw-trace-note">当前应用尚未开放这份轨迹读取，可在进展记录和工具调用中查看原记录。</p>}
     {readWindow.error && <div className="pw-trace-read-error" role="alert"><p>{readWindow.error}</p>{page && <small>下方保留已读取的轨迹。自动刷新已暂停，刷新后继续补齐。</small>}</div>}
@@ -341,7 +341,7 @@ export function TaskTrajectory({ task, active, canRead, registerTransientBack }:
       <div className="pw-trace-completeness" role="status"><span>{readWindow.view?.backfilling ? '正在补齐较早记录' : complete ? '当前快照已完整读取' : '当前为部分记录'} · {nodes.length} 条</span><span>{stats.models} 次请求{stats.failed ? ` · ${stats.failed} 条异常` : ''}</span></div>
       {stats.models > 0 && <dl className="pw-trace-token-summary" aria-label={complete ? '本次执行模型用量' : '已读取请求的部分用量'}><div><dt>输入 token</dt><dd>{aggregateLabel(stats.input)}</dd></div><div><dt>输出 token</dt><dd>{aggregateLabel(stats.output)}</dd></div></dl>}
       <div className="pw-trace-search-row"><SearchField aria-label="搜索执行轨迹" placeholder="搜索调用、模型、轮次" clearLabel="清空轨迹搜索" value={query} onChange={setQuery}/>
-        <IconButton icon={viewMode === 'intervals' ? RiListUnordered : RiTimeLine} aria-label={viewMode === 'intervals' ? '返回轮次列表' : '查看执行区间'} onClick={() => setViewMode(viewMode === 'intervals' ? 'events' : 'intervals')}/>
+        <IconButton icon={viewMode === 'intervals' ? IconList : IconClock} aria-label={viewMode === 'intervals' ? '返回轮次列表' : '查看执行区间'} onClick={() => setViewMode(viewMode === 'intervals' ? 'events' : 'intervals')}/>
         <Button variant={viewMode === 'steps' ? 'secondary' : 'ghost'} aria-label="查看执行步骤" aria-pressed={viewMode === 'steps'} onClick={() => setViewMode(viewMode === 'steps' ? 'events' : 'steps')}>步骤</Button>
       </div>
       <LiquidTabs className="pw-trace-filters" variant="minimal" tabs={['全部', '模型', '工具', '异常']} value={filters.indexOf(filter)} onValueChange={index => setFilter(filters[index])} label="轨迹筛选"/>

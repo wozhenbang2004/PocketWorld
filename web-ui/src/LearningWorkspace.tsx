@@ -4,7 +4,7 @@ import { ExperienceWorkspace, LearningObjectRow } from './ExperienceWorkspace';
 import { Accordion, AccordionItem, Button, CheckboxField, SearchField, SelectField, SettingsDialog } from './forms-library';
 import { AIAnswer } from './library';
 import { Tabs, TabList, Tab, TabPanel } from './shell-library';
-import { ArrowLeft, BookOpen, Plus, RefreshCw } from 'lucide-react';
+import { IconAdd, IconArrowLeft, IconBook, IconRefresh } from './icons';
 import './learning-workspace.css';
 import './knowledge-depth.css';
 
@@ -141,17 +141,17 @@ export function LearningWorkspace({ state, data, run, registerTransientBack, onR
       <ExperienceWorkspace state={state} data={data} run={run} registerTransientBack={registerExperienceBack} panel={panel} onNavigate={next => navigate(next)} />
       <TabPanel id="jobs" shouldForceMount hidden={panel !== 'jobs'} className="pw-learning-panel">
         <div hidden={view !== 'list'}>
-          <header className="pw-learning-heading"><div><h2>学习任务</h2></div><div className="pw-form-actions"><Button variant="ghost" iconOnly leadingIcon={RefreshCw} aria-label="刷新学习任务" disabled={busy} onClick={() => loadJobs()} /><Button leadingIcon={Plus} onClick={() => { focus.current = document.activeElement as HTMLElement; navigate('jobs', 'sources'); }}>整理新来源</Button></div></header>
+          <header className="pw-learning-heading"><div><h2>学习任务</h2></div><div className="pw-form-actions"><Button variant="ghost" iconOnly leadingIcon={IconRefresh} aria-label="刷新学习任务" disabled={busy} onClick={() => loadJobs()} /><Button leadingIcon={IconAdd} onClick={() => { focus.current = document.activeElement as HTMLElement; navigate('jobs', 'sources'); }}>整理新来源</Button></div></header>
           {sources.length > 0 && <LearningObjectRow title={`继续整理 · ${sources.length} 份所选来源`} detail="保留上次阅读与选择，尚未发送模型" onClick={() => navigate('jobs', 'sources')} />}
           <SearchField className="pw-secondary-search" aria-label="查找已读取的学习任务" placeholder="查找任务或来源" value={query} onChange={setQuery} />
           <div className="pw-knowledge-filters" role="group" aria-label="学习任务状态筛选">{[{ id: 'all', label: '全部' }, { id: 'open', label: '待处理与进行中' }, { id: 'finished', label: '已结束' }].map(item => <Button key={item.id} variant="ghost" aria-pressed={filter === item.id} onClick={() => setFilter(item.id)}>{item.label}</Button>)}</div>
-          {!jobs.length && <div className="pw-learning-empty"><BookOpen aria-hidden="true" /><h3>{loaded ? '还没有读取到学习任务' : '正在读取学习任务'}</h3><p>{loaded ? '整理一份已结束任务的来源即可开始。建立任务不会调用模型。' : '只读取已有记录，不会开始提炼。'}</p></div>}
+          {!jobs.length && <div className="pw-learning-empty"><IconBook aria-hidden="true" /><h3>{loaded ? '还没有读取到学习任务' : '正在读取学习任务'}</h3><p>{loaded ? '整理一份已结束任务的来源即可开始。建立任务不会调用模型。' : '只读取已有记录，不会开始提炼。'}</p></div>}
           {jobs.length > 0 && !visibleJobs.length && <p className="pw-secondary-empty" role="status">已读取的任务中没有匹配项。可以调整关键词或筛选。</p>}
           {jobGroups.map(group => <section key={group.id} className="pw-knowledge-directory-group" aria-label={group.label}><header className="pw-knowledge-group-heading"><h3>{group.label}</h3><span>{group.jobs.length}</span></header><div className="pw-learning-list">{group.jobs.map(job => <LearningObjectRow key={job.taskId} title={title(job)} detail={`${taskStatus(job.jobStatus || job.taskStatus)} · 已处理 ${job.job?.nextIndex ?? 0} / ${rows(job.job?.inputs).length} 份来源`} disabled={busy || unresolved && operation?.taskId !== job.taskId} selected={current?.taskId === job.taskId} onClick={() => { focus.current = document.activeElement as HTMLElement; if (current && current.taskId === job.taskId && !current.stale) showCurrent(); else selectJob(job.taskId); }} />)}</div></section>)}
           {cursor && <Button variant="ghost" disabled={busy} onClick={() => loadJobs(cursor)}>读取较早任务</Button>}
         </div>
         <div hidden={view !== 'sources'}>
-          <Button variant="ghost" leadingIcon={ArrowLeft} onClick={() => navigate('jobs', 'list')}>返回学习任务</Button>
+          <Button variant="ghost" leadingIcon={IconArrowLeft} onClick={() => navigate('jobs', 'list')}>返回学习任务</Button>
           <header className="pw-learning-heading"><div><h2>整理新来源</h2></div>{sources.length > 0 && <span className="pw-learning-caption">已选 {sources.length} / 20</span>}</header>
           <div className="pw-learning-source-picker"><SelectField label="选择原任务" value={taskId} options={ended.map(task => ({ id: task.id, label: task.goal || task.id, description: taskStatus(task.status) }))} isDisabled={busy} onChange={value => { setTaskId(value); setEpisode(null); setRetained(false); }} /><Button variant="secondary" disabled={busy || !selected?.raw?.runId || !selected?.raw?.coordinatorEpoch} onClick={() => { if (!selected) return; setRetained(false); void invoke('learning.episode.inspect', { taskId: selected.id, runId: selected.raw.runId, epoch: selected.raw.coordinatorEpoch }, setEpisode); }}>读取任务经过</Button></div>
           {!ended.length && <p className="pw-learning-caption">当前窗口没有可整理的已结束私人任务。</p>}
@@ -161,8 +161,8 @@ export function LearningWorkspace({ state, data, run, registerTransientBack, onR
           </div>
         </div>
         <div hidden={view !== 'job'}>
-          <Button variant="ghost" leadingIcon={ArrowLeft} onClick={() => navigate('jobs', 'list')}>返回学习任务</Button>
-          {current && <article className="pw-learning-reading"><header className="pw-learning-heading"><div><span className="pw-learning-eyebrow">来源学习任务</span><h2>{title(current)}</h2><p>{taskStatus(current.taskStatus)} · 已处理 {current.job?.nextIndex ?? 0} / {rows(current.job?.inputs).length} 份来源</p></div><Button variant="ghost" iconOnly leadingIcon={RefreshCw} aria-label="重新核对任务水位" disabled={busy} onClick={() => selectJob(current.taskId)} /></header>
+          <Button variant="ghost" leadingIcon={IconArrowLeft} onClick={() => navigate('jobs', 'list')}>返回学习任务</Button>
+          {current && <article className="pw-learning-reading"><header className="pw-learning-heading"><div><span className="pw-learning-eyebrow">来源学习任务</span><h2>{title(current)}</h2><p>{taskStatus(current.taskStatus)} · 已处理 {current.job?.nextIndex ?? 0} / {rows(current.job?.inputs).length} 份来源</p></div><Button variant="ghost" iconOnly leadingIcon={IconRefresh} aria-label="重新核对任务水位" disabled={busy} onClick={() => selectJob(current.taskId)} /></header>
             {current.stale && <p className="pw-learning-caution">当前显示上次读取的批次。原窗口已变化，请重新核对任务水位后再操作。</p>}
             <div className="pw-learning-next"><Button disabled={busy || running || current.stale || current.canContinue !== true} onClick={() => openReview('run')}>核对并继续原批次</Button><p className="pw-learning-caption">默认最多处理 3 份来源。提炼只形成待审候选，不会自动采用或启用技能。</p></div>
             <h3 className="pw-knowledge-section-heading">来源与批次</h3>

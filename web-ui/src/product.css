@@ -23,6 +23,13 @@
   --pw-neutral-950: #1C1C1C;
   --pw-neutral-975: #181818;
   --pw-neutral-1000: #111111;
+  /* Functional emphasis is separate from the neutral reading/navigation ink. */
+  --pw-accent: #526B8A;
+  --pw-accent-hover: #465D78;
+  --pw-accent-pressed: #3D506A;
+  --pw-on-accent: #FFFFFF;
+  --pw-accent-soft: #EAF0F7;
+  --pw-on-accent-soft: #405873;
   --pw-canvas-chat: var(--pw-neutral-25);
   --pw-canvas-workspace: var(--pw-neutral-50);
   --pw-canvas: var(--pw-canvas-workspace);
@@ -33,7 +40,7 @@
   --pw-floating-selected: var(--pw-neutral-200);
   --pw-floating-pressed: var(--pw-neutral-300);
   --pw-inset: var(--pw-neutral-100);
-  --pw-selection-surface: var(--pw-neutral-0);
+  --pw-selection-surface: var(--pw-accent-soft);
   --pw-selected: var(--pw-neutral-200);
   --pw-hover: var(--pw-neutral-100);
   --pw-pressed: var(--pw-neutral-300);
@@ -48,7 +55,7 @@
   --pw-strong-hover: var(--pw-neutral-850);
   --pw-strong-pressed: var(--pw-neutral-975);
   --pw-on-strong: var(--pw-neutral-0);
-  --pw-focus: var(--pw-neutral-800);
+  --pw-focus: var(--pw-accent);
   --pw-danger: #A03F39;
   --pw-danger-surface: #FBF0EE;
   --pw-danger-border: #E9C8C3;
@@ -82,9 +89,9 @@
   --font-sans: var(--pw-font);
   --font-mono-source: var(--pw-mono);
   --color-text-primary: var(--pw-ink);
-  --color-accent-400: var(--pw-strong-hover);
-  --color-accent-500: var(--pw-strong);
-  --color-accent-600: var(--pw-strong);
+  --color-accent-400: var(--pw-accent-hover);
+  --color-accent-500: var(--pw-accent);
+  --color-accent-600: var(--pw-accent-hover);
   --color-text-secondary: var(--pw-copy);
   --color-text-tertiary: var(--pw-muted);
   --color-text-placeholder: var(--pw-muted);
@@ -108,7 +115,7 @@
   --color-border-focus-ring: var(--pw-focus);
   --color-border-checkbox-default: var(--pw-control-edge);
   --color-border-checkbox-hover: var(--pw-focus);
-  --color-control-indicator-background: var(--pw-on-strong);
+  --color-control-indicator-background: var(--pw-on-accent);
   --color-separator-border: var(--pw-edge);
   --color-dropdown-item-hover-background: var(--pw-hover);
   --color-button-ghost-background: transparent;
@@ -122,7 +129,7 @@
   --color-background-tertiary-error: var(--pw-danger-surface);
   --color-border-error-default: var(--pw-danger-border);
   --color-text-error-placeholder: var(--pw-muted);
-  --color-tab-count-selected-background: var(--pw-selected);
+  --color-tab-count-selected-background: var(--pw-accent-soft);
   --color-segmented-control-background: var(--pw-inset);
   --color-segmented-control-selected-background: var(--pw-selection-surface);
   --radius-2lg: var(--pw-radius-control);
@@ -141,13 +148,15 @@
   --text-caption-1-medium--line-height: 18px;
   --text-caption-1-regular: 12px;
   --text-caption-1-regular--line-height: 18px;
-  --ovio-accent: var(--pw-strong);
-  --ovio-on-accent: var(--pw-on-strong);
+  --ovio-accent: var(--pw-accent);
+  --ovio-on-accent: var(--pw-on-accent);
   --ovio-off-ink: var(--pw-copy);
   --ovio-track: var(--pw-inset);
   --ovio-ink: var(--pw-ink);
   --ovio-font: var(--pw-font);
 }
+
+.pw-icon { flex-shrink: 0; vertical-align: middle; }
 
 @media (max-width: 359px) {
   :root { --pw-page-gutter: 16px; }
@@ -165,7 +174,7 @@
   --afa-ink: var(--pw-ink);
   --afa-text: var(--pw-copy);
   --afa-soft: var(--pw-muted);
-  --afa-accent: var(--pw-copy);
+  --afa-accent: var(--pw-accent);
   --afa-shadow: none;
   font: 14px/22px var(--pw-font);
 }
@@ -177,8 +186,8 @@
   --cb-muted: var(--pw-muted);
   --cb-line: var(--pw-edge);
   --cb-hover: var(--pw-inset);
-  --cb-blue: var(--pw-copy);
-  --cb-blue-bg: var(--pw-inset);
+  --cb-blue: var(--pw-on-accent-soft);
+  --cb-blue-bg: var(--pw-accent-soft);
   --cb-ok: var(--pw-success);
   --cb-ok-bg: var(--pw-success-surface);
   --cb-warn: var(--pw-warning);
@@ -194,8 +203,8 @@
   --acc-muted: var(--pw-muted);
   --acc-text: var(--pw-ink);
   --acc-edge: var(--pw-edge);
-  --acc-blue: var(--pw-copy);
-  --acc-blue-wash: var(--pw-inset);
+  --acc-blue: var(--pw-on-accent-soft);
+  --acc-blue-wash: var(--pw-accent-soft);
   --acc-shadow: none;
   font: 14px/22px var(--pw-font);
 }
@@ -208,7 +217,7 @@
   --au-hover: var(--pw-hover);
   --au-border: var(--pw-edge);
   --au-strong: var(--pw-strong);
-  --au-blue: var(--pw-copy);
+  --au-blue: var(--pw-accent);
   font: 14px/22px var(--pw-font);
 }
 .pw-library :is(.afa-label, .afa-eyebrow, .afa-status, .cb-status, small) {
@@ -237,23 +246,34 @@
   outline: 2px solid var(--pw-focus);
   outline-offset: 2px;
 }
-:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) .button-press-motion.bg-button-primary,
+:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) .button-press-motion.bg-button-primary {
+  background: var(--pw-accent);
+  color: var(--pw-on-accent);
+}
 :is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) .button-press-motion.bg-button-danger {
   background: var(--pw-strong);
   color: var(--pw-on-strong);
 }
 @media (hover: hover) and (pointer: fine) {
   :is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown)
-    :is(.button-press-motion.bg-button-primary, .button-press-motion.bg-button-danger):hover:not(:disabled, [aria-disabled="true"]) {
+    .button-press-motion.bg-button-primary:hover:not(:disabled, [aria-disabled="true"]) {
+    background: var(--pw-accent-hover);
+  }
+  :is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown)
+    .button-press-motion.bg-button-danger:hover:not(:disabled, [aria-disabled="true"]) {
     background: var(--pw-strong-hover);
   }
 }
 :is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown)
-  :is(.button-press-motion.bg-button-primary, .button-press-motion.bg-button-danger):active:not(:disabled, [aria-disabled="true"]) {
+  .button-press-motion.bg-button-primary:active:not(:disabled, [aria-disabled="true"]) {
+  background: var(--pw-accent-pressed);
+}
+:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown)
+  .button-press-motion.bg-button-danger:active:not(:disabled, [aria-disabled="true"]) {
   background: var(--pw-strong-pressed);
 }
-:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) .button-press-motion.bg-button-primary:disabled,
-:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) .button-press-motion.bg-button-danger:disabled {
+:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) .button-press-motion.bg-button-primary:is(:disabled, [aria-disabled="true"]),
+:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) .button-press-motion.bg-button-danger:is(:disabled, [aria-disabled="true"]) {
   background: var(--pw-selected);
   color: var(--pw-disabled);
   opacity: 1;
@@ -270,9 +290,40 @@
   outline: 2px solid var(--pw-focus);
   outline-offset: 2px;
 }
-.pw-library .afa-primary, :is(.pw-app, .pw-drawer) .acc-btn-primary {
-  background: var(--pw-strong) !important;
-  color: var(--pw-on-strong) !important;
+.pw-library :is(.afa-primary, .cb-primary) {
+  --afa-ink: var(--pw-accent);
+  --afa-bg: var(--pw-on-accent);
+  --cb-ink: var(--pw-accent);
+  --cb-bg: var(--pw-on-accent);
+}
+.pw-library :is(.afa-primary, .cb-primary):hover:not(:disabled) {
+  --afa-ink: var(--pw-accent-hover);
+  --cb-ink: var(--pw-accent-hover);
+}
+.pw-library :is(.afa-primary, .cb-primary):active:not(:disabled) {
+  --afa-ink: var(--pw-accent-pressed);
+  --cb-ink: var(--pw-accent-pressed);
+}
+.pw-library :is(.afa-primary, .cb-primary):disabled {
+  --afa-ink: var(--pw-selected);
+  --afa-bg: var(--pw-disabled);
+  --cb-ink: var(--pw-selected);
+  --cb-bg: var(--pw-disabled);
+}
+:is(.pw-app, .pw-drawer) .acc-btn-primary {
+  --acc-text: var(--pw-on-accent);
+  background: var(--pw-accent);
+  color: var(--acc-text) !important;
+}
+:is(.pw-app, .pw-drawer) .acc-btn-primary:hover:not(:disabled) {
+  background: var(--pw-accent-hover);
+}
+:is(.pw-app, .pw-drawer) .acc-btn-primary:active:not(:disabled) {
+  background: var(--pw-accent-pressed);
+}
+:is(.pw-app, .pw-drawer) .acc-btn-primary:disabled {
+  --acc-text: var(--pw-disabled);
+  background: var(--pw-selected);
 }
 .pw-library :is(.afa-btn, .afa-iconbtn):disabled {
   opacity: .5;
@@ -389,7 +440,7 @@
 /* Selected radio/checkbox layers keep source cross-fade/scale and check glyphs. */
 :is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) :is(.pw-radio-option, label:has(input[type="checkbox"])) :is(.bg-gradient-to-b, .bg-linear-to-b) {
   background-image: none;
-  background-color: var(--pw-strong);
+  background-color: var(--pw-accent);
   box-shadow: none;
 }
 :is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown)
@@ -397,6 +448,12 @@
   border: 1px solid var(--pw-control-edge);
   background-color: var(--pw-surface);
   box-shadow: none;
+}
+:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown)
+  :is(.pw-radio-option[data-disabled], label:has(input[type="checkbox"]:disabled)) {
+  --pw-accent: var(--pw-selected);
+  --pw-on-accent: var(--pw-disabled);
+  --color-control-indicator-background: var(--pw-on-accent);
 }
 
 /* Source popup surface is a stable BoardUI shared recipe, including portals. */
@@ -415,9 +472,12 @@
   font-size: 14px;
   line-height: 22px;
 }
-.shadow-dropdown :is([role="option"], [role="menuitemradio"], [role="menuitemcheckbox"])[data-selected] {
-  background: var(--pw-selected);
-  color: var(--pw-ink);
+.shadow-dropdown :is([role="option"], [role="menuitemradio"], [role="menuitemcheckbox"])[data-selected]:not([data-disabled]) {
+  --color-text-primary: var(--pw-on-accent-soft);
+  --color-foreground-icon-primary: var(--pw-on-accent-soft);
+  --color-foreground-icon-secondary: var(--pw-on-accent-soft);
+  background: var(--pw-accent-soft);
+  color: var(--pw-on-accent-soft);
   font-weight: 500;
 }
 .shadow-dropdown :is([role="option"], [role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"])[data-hovered]:not([data-selected], [data-disabled]) {
@@ -426,7 +486,7 @@
 .shadow-dropdown :is([role="option"], [role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"])[data-pressed]:not([data-disabled]) {
   background: var(--pw-pressed);
 }
-.shadow-dropdown :is([role="option"], [role="menuitem"])[data-disabled] {
+.shadow-dropdown :is([role="option"], [role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"])[data-disabled] {
   color: var(--pw-disabled);
 }
 
@@ -467,10 +527,11 @@
   --ui-tcc-wash: var(--pw-inset);
   --ui-tcc-wash-big: var(--pw-inset);
   --ui-tcc-code: var(--pw-inset);
-  --ui-tcc-accent: var(--pw-copy);
-  --ui-tcc-red: var(--pw-ink);
-  --ui-tcc-red-bg: var(--pw-inset);
-  --ui-tcc-red-line: var(--pw-edge);
+  --ui-tcc-accent: var(--pw-accent);
+  --ui-tcc-on-accent: var(--pw-on-accent);
+  --ui-tcc-red: var(--pw-danger);
+  --ui-tcc-red-bg: var(--pw-danger-surface);
+  --ui-tcc-red-line: var(--pw-danger-border);
   --ui-tcc-shadow: none;
   --ui-tcc-focus: var(--pw-focus);
   --ui-tcc-mono: var(--pw-mono);
@@ -486,12 +547,12 @@
   --ui-dic-muted: var(--pw-muted);
   --ui-dic-line: var(--pw-edge);
   --ui-dic-wash: var(--pw-inset);
-  --ui-dic-alert: var(--pw-copy);
+  --ui-dic-alert: var(--pw-accent);
   --ui-dic-ok: var(--pw-copy);
   --ui-dic-ok-bg: var(--pw-inset);
-  --ui-dic-solid: var(--pw-strong);
-  --ui-dic-solid-hover: #404040;
-  --ui-dic-on-solid: #fff;
+  --ui-dic-solid: var(--pw-accent);
+  --ui-dic-solid-hover: var(--pw-accent-hover);
+  --ui-dic-on-solid: var(--pw-on-accent);
   --ui-dic-shadow: none;
   --ui-dic-shadow-hover: none;
   --ui-dic-focus: var(--pw-focus);
@@ -505,6 +566,11 @@
   border-radius: var(--pw-radius-control);
   font-size: 14px;
   line-height: 22px;
+}
+:is(.pw-app, .pw-drawer) .ui-dic__btn--primary:disabled {
+  --ui-dic-solid: var(--pw-selected);
+  --ui-dic-solid-hover: var(--pw-selected);
+  --ui-dic-on-solid: var(--pw-disabled);
 }
 
 /* Source FilesBrowser art retains its shape and hover movement, with solid ink. */
@@ -671,7 +737,7 @@
 .pw-markdown blockquote { border: 0; border-radius: 8px; background: var(--pw-inset); padding: 8px 12px; }
 .pw-markdown-table th, .pw-markdown-table tbody tr:nth-child(even) { background: var(--pw-inset); }
 .pw-markdown hr { border: 0; margin-block: 24px; }
-.pw-press { color: var(--pw-on-strong) !important; }
+.pw-press { color: var(--pw-on-accent) !important; }
 
 /* Message actions inject their own source tokens; override on that component
  * itself so opening a menu cannot bring back a framed surface. */

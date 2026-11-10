@@ -2,7 +2,7 @@
 "use client";
 
 import { useState } from "react";
-import { RiArrowRightSLine } from "@remixicon/react";
+import { IconCheckCircle, IconChevronRight, IconWarning } from "../icons";
 import { Button } from "../forms-library";
 
 /*
@@ -94,7 +94,7 @@ export function DecisionInbox({ decisions, onDecide, className, heading, compact
                 </Button>
                 <div className="ui-dic__compact-actions">
                   {answered ? <span className="ui-dic__compact-done" role="status"><DoneIcon/><span dir="auto">{answered}</span></span> : <>
-                    <Button variant="ghost" className="ui-dic__next" trailingIcon={RiArrowRightSLine} disabled={s.pending} onClick={() => decide(d, "primary")}>{d.primary}</Button>
+                    <Button variant="ghost" className="ui-dic__next" trailingIcon={IconChevronRight} disabled={s.pending} onClick={() => decide(d, "primary")}>{d.primary}</Button>
                   </>}
                 </div>
                 {s.error && <p role="alert" className="ui-dic__compact-error">{s.error}</p>}
@@ -154,21 +154,9 @@ export function DecisionInbox({ decisions, onDecide, className, heading, compact
 
 /* ---------- Icons ---------- */
 
-// Solid glyphs – the cut-out mark takes the card color, so it works in dark mode too
-const AlertIcon = () => (
-  <svg className="ui-dic__glyph" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-    <path d="M6.7 2.3a1.5 1.5 0 0 1 2.6 0l5.4 9.4A1.5 1.5 0 0 1 13.4 14H2.6a1.5 1.5 0 0 1-1.3-2.3Z" fill="currentColor" />
-    <path className="ui-dic__cut" d="M8 5.8v3.2" strokeWidth="1.4" strokeLinecap="round" fill="none" />
-    <circle className="ui-dic__cut-dot" cx="8" cy="11.3" r="0.8" />
-  </svg>
-);
+const AlertIcon = () => <IconWarning className="ui-dic__glyph" size={16} aria-hidden="true" />;
 
-const DoneIcon = () => (
-  <svg className="ui-dic__glyph" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-    <circle cx="8" cy="8" r="6.5" fill="currentColor" />
-    <path className="ui-dic__cut" d="m5.3 8.2 1.8 1.8 3.6-3.8" fill="none" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-  </svg>
-);
+const DoneIcon = () => <IconCheckCircle className="ui-dic__glyph" size={16} aria-hidden="true" />;
 
 /* ---------- Styles ---------- */
 
@@ -217,8 +205,6 @@ const css = /* css */ `
 .ui-dic button:focus-visible { outline: 2px solid var(--ui-dic-focus); outline-offset: 1px; }
 
 .ui-dic__glyph { width: 16px; height: 16px; }
-.ui-dic__cut { stroke: var(--ui-dic-card); }
-.ui-dic__cut-dot { fill: var(--ui-dic-card); }
 
 /* The heading row at the top of the card: an amber mark while something waits, a green one when all is done */
 .ui-dic__head {

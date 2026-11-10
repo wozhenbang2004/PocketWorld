@@ -2,7 +2,7 @@
 // Parsing is delegated to those established libraries. The small remark plugin only
 // links citation markers in already-parsed text nodes to the provided source IDs.
 import {createContext,memo,useContext,useEffect,useMemo,useState,type ContextType,type ReactNode} from 'react';
-import {RiExpandDiagonalLine} from '@remixicon/react';
+import { IconExpand } from '../icons';
 import {ReadingContext} from '../reading-context';
 import ReactMarkdown,{defaultUrlTransform,type Components} from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -37,7 +37,7 @@ const components:Components={
    const {text,openReading}=useContext(MarkdownPresentationContext);const start=node?.position?.start.offset,end=node?.position?.end.offset;
    const tableSource=typeof start==='number'&&typeof end==='number'?text.slice(start>0?text.lastIndexOf('\n',start-1)+1:0,end):'';
    const content=<div className="pw-markdown-table" tabIndex={0} role="region" aria-label="表格，可横向滚动"><table>{children}</table></div>;
-   return openReading&&tableSource?<section className="pw-markdown-table-section"><header><span>表格</span><button type="button" className="pw-markdown-table-open" aria-label="展开表格" onClick={event=>openReading({kind:'table',title:'表格',text:tableSource,copyText:tableText(node),tableDocument:{markdown:text,offset:start!},returnFocus:event.currentTarget})}><RiExpandDiagonalLine size={16} aria-hidden="true"/>展开</button></header>{content}</section>:content;
+   return openReading&&tableSource?<section className="pw-markdown-table-section"><header><span>表格</span><button type="button" className="pw-markdown-table-open" aria-label="展开表格" onClick={event=>openReading({kind:'table',title:'表格',text:tableSource,copyText:tableText(node),tableDocument:{markdown:text,offset:start!},returnFocus:event.currentTarget})}><IconExpand size={16} aria-hidden="true"/>展开</button></header>{content}</section>:content;
   },
   input:({checked})=><span className="pw-markdown-checkbox" role="img" aria-label={checked?'文档内已勾选':'文档内未勾选'}>{checked&&<Icon name="check" size={12}/>}</span>,
   img:function MarkdownImage({src,alt}){const {resolveImage,onOpenLink}=useContext(MarkdownPresentationContext);const raw=typeof src==='string'?src:'';const resolved=resolveImage?.(raw);if(resolved&&(resolved.startsWith('blob:')||resolved.startsWith('data:image/')||resolved.startsWith('https://pocketengine.local/')))return <img src={resolved} alt={alt||''} loading="lazy"/>;const safe=safeMarkdownUrl(raw);return <span className="pw-markdown-image">图片：{alt||'未命名'}{safe&&onOpenLink&&<button type="button" onClick={()=>{void onOpenLink(safe)}}>打开图片来源</button>}</span>}

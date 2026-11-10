@@ -6,7 +6,7 @@
  */
 import {useId,type ComponentType,type ReactNode} from 'react';
 import {LayoutGroup,motion} from 'motion/react';
-import {RiSideBarFill} from '@remixicon/react';
+import { IconSidebar } from '../icons';
 import {useMotionAllowed} from '../library/core';
 import {motionTransition} from '../library/motion-tokens';
 import {useTemplateCopy} from './adapted/boardui/components/foundations/template-copy/template-copy';
@@ -132,7 +132,7 @@ export function WorkSidebar({items,selected,onNavigate,header,footer,label='工�
      </section>)}
     </nav>
     {onCompactChange && <button type="button" className="pw-nav-compact-toggle" aria-label={compact ? '展开导航' : '收起导航'} aria-expanded={!compact} title={compact ? '展开导航' : undefined} onClick={()=>onCompactChange(!compact)}>
-      <RiSideBarFill aria-hidden="true" className={compact ? 'pw-nav-compact-icon' : 'pw-nav-compact-icon is-expanded'}/>
+      <IconSidebar aria-hidden="true" className={compact ? 'pw-nav-compact-icon' : 'pw-nav-compact-icon is-expanded'}/>
       <Collapsible collapsed={compact} className="pw-nav-label"><span>收起导航</span></Collapsible>
     </button>}
     {footer}

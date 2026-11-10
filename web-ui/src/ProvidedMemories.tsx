@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { RiArrowLeftSLine, RiArrowRightSLine, RiCloseLine, RiRefreshLine } from '@remixicon/react';
+import { IconChevronLeft, IconChevronRight, IconClose, IconRefresh } from './icons';
 import { bridge } from './bridge';
 import { Drawer } from './shell-library';
 import { Button, IconButton } from './forms-library';
@@ -66,8 +66,8 @@ export function ProvidedMemories({ messageId, revision, onClose, onManage, regis
   return <Drawer.Root open onOpenChange={open => { if (!open) onClose(); }} shouldScaleBackground={false}><Drawer.Portal>
     <Drawer.Overlay className="pw-overlay"/><Drawer.Content className="pw-drawer pw-answer-sources" aria-describedby="provided-memory-description">
       <div className="pw-drawer-handle"/><header className="pw-drawer-header">
-        {selected && <IconButton icon={RiArrowLeftSLine} aria-label="返回本次记忆列表" disabled={busy} onClick={() => { setSelected(null); setSource(null); setError(''); }}/>}<div><Drawer.Title>{selected ? '这次提供的记忆' : '本次提供的记忆'}</Drawer.Title></div>
-        <IconButton icon={RiRefreshLine} aria-label="重新核对原记忆回执" disabled={busy} onClick={() => setRefresh(value => value + 1)}/><IconButton icon={RiCloseLine} aria-label="返回原回答" onClick={onClose}/>
+        {selected && <IconButton icon={IconChevronLeft} aria-label="返回本次记忆列表" disabled={busy} onClick={() => { setSelected(null); setSource(null); setError(''); }}/>}<div><Drawer.Title>{selected ? '这次提供的记忆' : '本次提供的记忆'}</Drawer.Title></div>
+        <IconButton icon={IconRefresh} aria-label="重新核对原记忆回执" disabled={busy} onClick={() => setRefresh(value => value + 1)}/><IconButton icon={IconClose} aria-label="返回原回答" onClick={onClose}/>
       </header>
       <Drawer.Description id="provided-memory-description" className="pw-source-description">这些条目曾提供给这条回答的模型请求；不代表模型逐条采用或证实内容。</Drawer.Description>
       <div className="pw-drawer-body">
@@ -75,7 +75,7 @@ export function ProvidedMemories({ messageId, revision, onClose, onManage, regis
         {receipt && !provided && <p className="pw-muted">这条回答的原生提供回执当前不可读，未用新的检索结果代替。</p>}
         {provided && !selected && <>
           {!records.length && <p className="pw-muted">这次请求没有提供已保存的记忆条目。</p>}
-          <div className="pw-source-list">{records.map(row => <Button key={row.id} variant="ghost" className="pw-source-row" trailingIcon={RiArrowRightSLine} disabled={busy || row.status !== 'current' || !row.readHandle} onClick={() => { setSelected(row); setSource(null); setError(''); }}><span className="pw-source-row-copy"><b>{row.status === 'current' ? row.text : statusLabel(row.status)}</b><small>{row.selectionReason === 'task_query_match' ? '与这次问题相关' : row.selectionReason === 'owner_core' ? '你设定的常用记忆' : row.selectionReason === 'owner_current' ? '当前个人背景' : '原回执未保留选入原因'} · {statusLabel(row.status)}</small></span></Button>)}</div>
+          <div className="pw-source-list">{records.map(row => <Button key={row.id} variant="ghost" className="pw-source-row" trailingIcon={IconChevronRight} disabled={busy || row.status !== 'current' || !row.readHandle} onClick={() => { setSelected(row); setSource(null); setError(''); }}><span className="pw-source-row-copy"><b>{row.status === 'current' ? row.text : statusLabel(row.status)}</b><small>{row.selectionReason === 'task_query_match' ? '与这次问题相关' : row.selectionReason === 'owner_core' ? '你设定的常用记忆' : row.selectionReason === 'owner_current' ? '当前个人背景' : '原回执未保留选入原因'} · {statusLabel(row.status)}</small></span></Button>)}</div>
           <div className="pw-action-row"><Button variant="ghost" onClick={onManage}>管理我的记忆</Button></div>
         </>}
         {selected && <>

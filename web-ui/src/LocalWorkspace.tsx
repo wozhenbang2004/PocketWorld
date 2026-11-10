@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ArrowLeft, ChevronRight, Folder, Plus, RefreshCw, Terminal } from 'lucide-react';
+import { IconAdd, IconArrowLeft, IconChevronRight, IconFolder, IconRefresh, IconTerminal } from './icons';
 import { Accordion, AccordionItem, Button, CheckboxField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import TerminalSurface from './TerminalSurface';
 import { localReceiptPollable, projectExecutionShouldRead } from './project-execution';
@@ -119,7 +119,7 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
   const resultUnknown = !!original && (!receipt || !/^(running|completed|failed|paused|stopped)$/.test(String(receipt.status)) || /^(unknown|prepared)$/.test(String(receipt.operationState)));
   const executionMessage = receipt?.message || receipt?.receipt?.message;
   return <section ref={readingRoot} className="pw-local-workspace pw-settings-section" data-local-view={panel}>
-    <header className="pw-local-heading"><div><h2>本机终端</h2></div>{onPrepareTools && <Button variant="secondary" trailingIcon={ChevronRight} onClick={onPrepareTools}>准备开发工具</Button>}</header>
+    <header className="pw-local-heading"><div><h2>本机终端</h2></div>{onPrepareTools && <Button variant="secondary" trailingIcon={IconChevronRight} onClick={onPrepareTools}>准备开发工具</Button>}</header>
     {error && <p role="alert" className="pw-local-feedback pw-secondary-error">{error}</p>}
     {knownResults['local.probe']?.message && <p className="pw-local-runtime-message" role="status">{knownResults['local.probe'].message}</p>}
     {legacyReceiptRecovery && <div className="pw-local-feedback" role="status"><p>{legacyReceiptRecovery.message || '原只读命令的恢复清单只用于核对既有记录。'}</p><p className="pw-field-hint">可读原记录 {legacyReceiptRecovery.readableOriginalRecords ?? '尚未返回'} 条 · 冷恢复待核 {legacyReceiptRecovery.coldUnconfirmedRecords ?? '尚未返回'} 条 · 保留的不可读原记录 {legacyReceiptRecovery.unreadableOriginalRecordsRetained ?? '尚未返回'} 条。</p>{(legacyReceiptRecovery.originalInventoryUnconfirmed || legacyReceiptRecovery.coldUnconfirmedRecords > 0) && <p className="pw-field-hint">{legacyReceiptRecovery.blockingScope === 'all_checkouts' ? '全部工作副本的原写入范围仍受阻止。' : '相关原工作副本仍保持占用。'}重新打开页面不证明进程已经退出，也不会恢复执行权限。</p>}</div>}
@@ -130,18 +130,18 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
     {uncertain && <div className="pw-local-feedback" role="status"><p>上一输入尚未核对，已停止继续输入。不会自动重发。</p>{view ? <Button variant="secondary" size="small" disabled={busy} onClick={queryInput}>核对原输入回执</Button> : original && <Button variant="secondary" size="small" disabled={busy} onClick={() => open(original)}>打开原终端核对</Button>}</div>}
     <div className="pw-local-layout">
       <nav className="pw-local-sessions" aria-label="本机终端">
-        <Button variant="ghost" className="pw-local-session-row pw-local-new" leadingIcon={Plus} aria-pressed={panel === 'setup'} disabled={busy} onClick={() => changePanel('setup')}>新建终端</Button>
+        <Button variant="ghost" className="pw-local-session-row pw-local-new" leadingIcon={IconAdd} aria-pressed={panel === 'setup'} disabled={busy} onClick={() => changePanel('setup')}>新建终端</Button>
         <div className="pw-local-session-label"><span>已有终端</span></div>
-        {original && !currentTask && <Button variant="ghost" className="pw-local-session-row" leadingIcon={Terminal} aria-pressed={panel === 'session'} disabled={busy} onClick={() => changePanel('session')}><span className="pw-local-session-copy"><strong>本次手动终端</strong><small>{statusLabel(currentStatus)}</small></span></Button>}
+        {original && !currentTask && <Button variant="ghost" className="pw-local-session-row" leadingIcon={IconTerminal} aria-pressed={panel === 'session'} disabled={busy} onClick={() => changePanel('session')}><span className="pw-local-session-copy"><strong>本次手动终端</strong><small>{statusLabel(currentStatus)}</small></span></Button>}
         {terminals.map(task => {
           const active = identity(task).taskId === original?.taskId && identity(task).executionId === original?.executionId;
-          return <Button variant="ghost" className="pw-local-session-row" leadingIcon={Terminal} key={task.id || task.taskId} aria-pressed={panel === 'session' && active} disabled={busy || (resultUnknown || uncertain) && !active} onClick={() => selectSession(task)}><span className="pw-local-session-copy"><strong>{task.goal || '手动终端'}</strong><small>{active ? statusLabel(currentStatus) : statusLabel(task.status || task.state)}</small></span></Button>;
+          return <Button variant="ghost" className="pw-local-session-row" leadingIcon={IconTerminal} key={task.id || task.taskId} aria-pressed={panel === 'session' && active} disabled={busy || (resultUnknown || uncertain) && !active} onClick={() => selectSession(task)}><span className="pw-local-session-copy"><strong>{task.goal || '手动终端'}</strong><small>{active ? statusLabel(currentStatus) : statusLabel(task.status || task.state)}</small></span></Button>;
         })}
         {!terminals.length && !original && <p className="pw-local-session-empty">还没有读取到终端记录。先选一个项目，准备你的工作副本。</p>}
       </nav>
       <div className="pw-local-main">
         <section className="pw-local-panel" data-local-panel="setup" hidden={panel !== 'setup'}>
-          <header className="pw-local-panel-heading pw-local-setup-heading"><h2 tabIndex={-1}>新建手动终端</h2><Button disabled={busy || resultUnknown || uncertain || !ready || Number(seconds) < 1 || Number(seconds) > 300 || !supported('local.terminal.review')} trailingIcon={ChevronRight} onClick={() => {
+          <header className="pw-local-panel-heading pw-local-setup-heading"><h2 tabIndex={-1}>新建手动终端</h2><Button disabled={busy || resultUnknown || uncertain || !ready || Number(seconds) < 1 || Number(seconds) > 300 || !supported('local.terminal.review')} trailingIcon={IconChevronRight} onClick={() => {
               if (activePanel.current !== 'setup' || entered.current || resultUnknown || uncertain) return;
               try { const environment = JSON.parse(env); if (!environment || Array.isArray(environment) || typeof environment !== 'object') throw new Error('环境变量需要 JSON 对象。');
                 if (view) closeViewer();
@@ -149,7 +149,7 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
               } catch (failure) { setError(failure instanceof Error ? failure.message : '请核对表单'); }
             }}>核对并准备终端</Button></header>
           <div className="pw-local-setup-step">
-            <h3><Folder size={17} aria-hidden />选择工作副本</h3>
+            <h3><IconFolder size={17} aria-hidden />选择工作副本</h3>
             <div className="pw-form-grid"><SelectField label="原项目" value={project} isDisabled={busy} options={[{ id: '', label: '选择已有项目' }, ...rows(state.projects).map(row => ({ id: row.id, label: row.name }))]} onChange={value => { if (!busy) { setProject(value); setCheckout(''); setSource(null); setPrepareAttempted(false); } }} />
               <SelectField label="私人工作副本" value={checkout} isDisabled={busy || !project} options={[{ id: '', label: '选择或准备副本' }, ...checkouts.map(row => ({ id: row.id, label: (row.name || '工作副本') + ' · ' + new Date(row.createdAt || 0).toLocaleString() }))]} onChange={value => { if (!busy) { setCheckout(value); setSource(null); } }} /></div>
             <div className="pw-form-actions"><Button variant="secondary" disabled={!selected || busy} onClick={() => { void invoke('local.describeCheckout', { projectId: project, checkoutId: checkout }, setSource).catch(() => {}); }}>{ready ? '重新核对副本版本' : '读取这个副本的实际版本'}</Button><Button variant="ghost" disabled={!project || busy || prepareAttempted} onClick={() => { if (activePanel.current !== 'setup' || entered.current || prepareAttempted) return; setPrepareAttempted(true); void invoke('local.prepareCheckout', { projectId: project }, result => { setCheckout(result.id); setSource(null); }).catch(() => {}); }}>准备新的私人副本</Button></div>
@@ -157,20 +157,20 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
             {ready ? <div className="pw-local-source" role="status"><span>{source.fileCount} 个源码文件 · {source.bytes} 字节</span><small>版本已读取，启动前仍会核对是否变化。</small></div> : <p className="pw-field-hint">{project ? '先读取所选副本的实际版本，才能审阅终端。' : '使用已有项目的私人副本，不直接改动原项目。'}</p>}
           </div>
           <div className="pw-local-setup-step" hidden={!ready}>
-            <h3><Terminal size={17} aria-hidden />设置这次终端</h3>
+            <h3><IconTerminal size={17} aria-hidden />设置这次终端</h3>
             <div className="pw-form-grid"><TextField label="副本中的工作目录" value={cwd} onChange={setCwd} isDisabled={busy} /><TextField label="最长运行秒数（1–300）" inputMode="numeric" value={seconds} isDisabled={busy} onChange={value => setSeconds(value.replace(/\D/g, '').slice(0, 3))} /></div>
             <Accordion className="pw-local-disclosures"><AccordionItem id="environment" title="环境变量" description={env.trim() === '{}' ? '可选，仅限普通配置值' : '已编辑普通环境变量，启动前会核对'}><TextAreaField label="普通环境变量（JSON 对象）" value={env} onChange={setEnv} isDisabled={busy} hint="例如 APP_LABEL；不能设置密钥或覆盖宿主运行环境。" /></AccordionItem></Accordion>
             <p className="pw-local-safety">终端操作可能修改私人副本，输入和输出会保留在原任务记录中。不支持密码等秘密输入。</p>
           </div>
         </section>
         <section className="pw-local-panel" data-local-panel="session" hidden={panel !== 'session'}>
-          <Button variant="ghost" size="small" className="pw-local-back" leadingIcon={ArrowLeft} disabled={busy} onClick={() => changePanel('setup')}>返回工作副本</Button>
+          <Button variant="ghost" size="small" className="pw-local-back" leadingIcon={IconArrowLeft} disabled={busy} onClick={() => changePanel('setup')}>返回工作副本</Button>
           <header className="pw-local-panel-heading"><span className="pw-local-eyebrow">{view ? '原终端屏幕' : '原任务记录'}</span><h2 tabIndex={-1}>{currentTask?.goal || '本次手动终端'}</h2></header>
           {original && <>
             <div className="pw-local-session-status"><span>{statusLabel(currentStatus)}</span>{executionMessage && <p role="status">{executionMessage}</p>}</div>
             <div className="pw-form-actions pw-local-session-actions">
-              {!view && <Button disabled={busy} leadingIcon={Terminal} onClick={() => open(original)}>打开原终端</Button>}
-              <Button variant="ghost" disabled={busy} leadingIcon={RefreshCw} onClick={() => { void invoke('local.terminal.query', original, setReceipt).catch(() => {}); }}>查询原执行</Button>
+              {!view && <Button disabled={busy} leadingIcon={IconTerminal} onClick={() => open(original)}>打开原终端</Button>}
+              <Button variant="ghost" disabled={busy} leadingIcon={IconRefresh} onClick={() => { void invoke('local.terminal.query', original, setReceipt).catch(() => {}); }}>查询原执行</Button>
               <Button variant="ghost" disabled={busy} onClick={() => setStopReview(true)}>停止这个原进程</Button>
             </div>
             {view ? <>
@@ -187,7 +187,7 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
                 {!uncertain && <Button variant="ghost" size="small" disabled={busy} onClick={queryInput}>核对原输入回执</Button>}
               </div></AccordionItem></Accordion>
               <Accordion className="pw-local-disclosures"><AccordionItem id="geometry" title="终端尺寸" description={`${columns} 列 × ${height} 行，调整也计入原输入动作`}><div className="pw-form-grid"><TextField label="列数（20–300）" value={columns} onChange={setColumns} inputMode="numeric" isDisabled={busy} /><TextField label="行数（5–120）" value={height} onChange={setHeight} inputMode="numeric" isDisabled={busy} /></div><Button variant="secondary" disabled={!canInput || !/^\d+$/.test(columns) || !/^\d+$/.test(height) || Number(columns) < 20 || Number(columns) > 300 || Number(height) < 5 || Number(height) > 120} onClick={() => send({ action: 'resize', columns: Number(columns), rows: Number(height) })}>调整原终端尺寸</Button></AccordionItem></Accordion>
-            </> : <div className="pw-local-closed"><Terminal size={24} aria-hidden /><p>打开原屏幕，继续查看输出。</p><small>查看不会新建进程，也不会自动发送输入。</small></div>}
+            </> : <div className="pw-local-closed"><IconTerminal size={24} aria-hidden /><p>打开原屏幕，继续查看输出。</p><small>查看不会新建进程，也不会自动发送输入。</small></div>}
             <Accordion className="pw-local-disclosures"><AccordionItem id="identity" title="执行来源与任务记录">{currentTask?.summary && <p className="pw-field-hint">{currentTask.summary}</p>}<dl className="pw-facts"><div><dt>任务</dt><dd>{original.taskId}</dd></div><div><dt>运行</dt><dd>{original.runId}</dd></div><div><dt>执行</dt><dd>{original.executionId}</dd></div><div><dt>代次</dt><dd>{original.epoch}</dd></div>{view?.metadata?.projectId && <div><dt>项目</dt><dd>{view.metadata.projectId}</dd></div>}{view?.metadata?.checkoutId && <div><dt>工作副本</dt><dd>{view.metadata.checkoutId}</dd></div>}</dl></AccordionItem></Accordion>
           </>}
         </section>

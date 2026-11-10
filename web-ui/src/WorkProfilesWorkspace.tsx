@@ -3,7 +3,7 @@ import { bridge } from './bridge';
 import { Accordion, AccordionItem, Button, CheckboxField, ObjectTable, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { PressButton } from './library';
 import { Tabs, TabList, Tab, TabPanel } from './shell-library';
-import { ArrowLeft, ChevronRight, FileSliders, RefreshCw } from 'lucide-react';
+import { IconArrowLeft, IconChevronRight, IconFileSettings, IconRefresh } from './icons';
 import './work-profiles-workspace.css';
 import { newProfile, profileAsset, profileModel, profileMutationReceipt, profilePluginTool, profileReferenceKey, profileRows, profileSaveInput, profileStartInput, profileStartReceipt, ProfileRequestGate, type ProfileData as Data } from './profile-contract';
 
@@ -183,21 +183,21 @@ export function WorkProfilesWorkspace({ state, supported, run, registerTransient
   const unavailableSources = Object.keys(sourceNames).filter(key => sections[key]?.available !== true).map(key => sourceNames[key]);
   return <section className="pw-settings-section pw-profiles-workspace">
     <header className="pw-profile-heading"><div><h2>已保存配置</h2></div><div className="pw-form-actions">
-      <Button variant="ghost" iconOnly leadingIcon={RefreshCw} aria-label="刷新原记录" disabled={busy} onClick={refresh} />
+      <Button variant="ghost" iconOnly leadingIcon={IconRefresh} aria-label="刷新原记录" disabled={busy} onClick={refresh} />
       <PressButton compact disabled={busy || !!unknown || !!editor && dirty} onClick={() => open()}>新建配置</PressButton>
     </div></header>
-    {editor && <div className="pw-profile-draft" aria-label="保留的工作配置草稿"><FileSliders size={20} aria-hidden /><div><strong>{draft?.name || '未命名配置'}</strong><p>{dirty ? '有未保存修改' : '编辑内容已保留'} · {editor.original ? `原修订 ${editor.original.revision}` : '新建草稿'}{draft?.restoredPendingReview ? ' · 恢复后待重新绑定' : ''}</p></div><Button variant="ghost" trailingIcon={ChevronRight} disabled={busy} onClick={resumeEditor}>继续编辑草稿</Button></div>}
+    {editor && <div className="pw-profile-draft" aria-label="保留的工作配置草稿"><IconFileSettings size={20} aria-hidden /><div><strong>{draft?.name || '未命名配置'}</strong><p>{dirty ? '有未保存修改' : '编辑内容已保留'} · {editor.original ? `原修订 ${editor.original.revision}` : '新建草稿'}{draft?.restoredPendingReview ? ' · 恢复后待重新绑定' : ''}</p></div><Button variant="ghost" trailingIcon={IconChevronRight} disabled={busy} onClick={resumeEditor}>继续编辑草稿</Button></div>}
     {startedTask && <Button variant="secondary" disabled={busy || !supported('tasks.open')} onClick={() => { void run('tasks.open', { id: startedTask }); }}>查看这次原任务与回执</Button>}{busy && mutation.current?.command === 'start' && <Button variant="secondary" onClick={() => { const operationId = mutation.current?.operationId; if (operationId) void run('profiles.stop', { operationId }).then(() => setNotice('已请求停止这次原任务，等待原结果。')).catch(failure => setError(String(failure))); }}>请求停止这次原任务</Button>}
     {unknownControls}{error && <p className="pw-profile-feedback" role="alert">{error}</p>}{notice && <p className="pw-profile-feedback" role="status">{notice}</p>}
     <ObjectTable label="已保存工作配置" rows={profileRows(snapshot.profiles)} getRowId={row => row.profileId} columns={[
       { id: 'name', label: '已保存配置', render: row => <div className="pw-object-title"><strong>{row.name}</strong><small>修订 {row.revision} · {row.restoredPendingReview ? '恢复后待重新绑定，不能执行' : `${Object.keys(row.modelPolicies || {}).length} 项模型用途`}</small></div>, sortValue: row => row.name },
-      { id: 'open', label: '编辑', render: row => <Button variant="ghost" trailingIcon={ChevronRight} aria-label={`打开工作配置：${row.name}`} disabled={busy || !!unknown || !!editor && dirty && editor.original?.profileId !== row.profileId} onClick={() => open(row)}>打开</Button> },
+      { id: 'open', label: '编辑', render: row => <Button variant="ghost" trailingIcon={IconChevronRight} aria-label={`打开工作配置：${row.name}`} disabled={busy || !!unknown || !!editor && dirty && editor.original?.profileId !== row.profileId} onClick={() => open(row)}>打开</Button> },
     ]} empty={snapshot.revision === undefined ? '正在读取工作配置' : '暂无工作配置'} />
     {editor && !editorOpen && dirty && <p className="pw-profile-caption">先继续上方草稿，或在编辑器中明确舍弃，再新建与切换。</p>}
     <SettingsDialog isOpen={editorOpen && !!editor && !review && !inspection} title={editor?.original ? `编辑 · ${editor.original.name}` : '新建工作配置'} onClose={pauseEditor}>
       {editor && draft && <div className="pw-profile-editor">
         <div className="pw-profile-identity"><TextField label="配置名称" value={draft.name} onChange={name => change({ ...draft, name })} isDisabled={locked} /></div>
-        <div className="pw-profile-source-bar" aria-label="当前来源窗口"><div><strong>{sourcesReady ? '本次来源窗口已读取' : '来源窗口待读取'}</strong><p>{editor.useCurrentProject ? '当前已选项目范围' : '默认资料范围'} · {editor.original ? `原修订 ${editor.original.revision}${editor.viewHandle ? ' 已核对' : ' 待重新核对'}` : '新建配置'}</p></div><Button variant="ghost" iconOnly leadingIcon={RefreshCw} aria-label="读取当前可用来源" title="读取当前可用来源" disabled={locked} onClick={() => loadChoices(editor.useCurrentProject)}/></div>
+        <div className="pw-profile-source-bar" aria-label="当前来源窗口"><div><strong>{sourcesReady ? '本次来源窗口已读取' : '来源窗口待读取'}</strong><p>{editor.useCurrentProject ? '当前已选项目范围' : '默认资料范围'} · {editor.original ? `原修订 ${editor.original.revision}${editor.viewHandle ? ' 已核对' : ' 待重新核对'}` : '新建配置'}</p></div><Button variant="ghost" iconOnly leadingIcon={IconRefresh} aria-label="读取当前可用来源" title="读取当前可用来源" disabled={locked} onClick={() => loadChoices(editor.useCurrentProject)}/></div>
         <div className="pw-profile-editor-scroll">
           {unknownControls}
           <div className="pw-profile-scope"><CheckboxField isSelected={editor.useCurrentProject} isDisabled={locked} onChange={useCurrentProject => { if (!editorCurrent()) return; release('choicesHandle', choices.choicesHandle); closeInspection(); closeReview(); setChoices({}); setEditor({ ...editor, useCurrentProject }); setRestoreAck(false); setMemberModel(''); }}>使用当前已选项目的资料范围</CheckboxField>
@@ -240,7 +240,7 @@ export function WorkProfilesWorkspace({ state, supported, run, registerTransient
         </div>
         <footer className="pw-profile-editor-footer">
           <p className="pw-profile-save-state" role="status">{unknown ? '原回执待核对，不能重复保存。' : conflict ? '原记录已有新修订，请先核对并明确合并。' : draft.restoredPendingReview ? '恢复后待重新绑定；普通保存不会解除此状态。' : dirty ? '有未保存修改' : '当前引用已保存'}</p>
-          <div className="pw-profile-primary-actions"><Button variant="ghost" leadingIcon={ArrowLeft} disabled={busy} onClick={pauseEditor}>返回配置列表</Button>
+          <div className="pw-profile-primary-actions"><Button variant="ghost" leadingIcon={IconArrowLeft} disabled={busy} onClick={pauseEditor}>返回配置列表</Button>
             {editor.original && !editor.viewHandle && <Button variant="secondary" disabled={busy} onClick={recheck}>重新核对原修订</Button>}
             <PressButton compact disabled={busy || !!unknown || !draft.name.trim() || !!editor.original && !editor.viewHandle} onClick={() => prepare('profiles.reviewSave')}>核对保存引用</PressButton>
             {draft.restoredPendingReview && <Button variant="secondary" disabled={busy || !!unknown || !editor.viewHandle || !sourcesReady || !restoreAck || !draft.modelPolicies.MAIN} onClick={() => prepare('profiles.reviewRebind')}>预检并审阅重新绑定</Button>}

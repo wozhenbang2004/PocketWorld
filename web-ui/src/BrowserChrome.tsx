@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
-import { RiArrowLeftLine, RiArrowRightLine, RiArrowGoBackLine, RiBookOpenLine, RiFileList2Line, RiMoreLine, RiRefreshLine, RiStackLine } from '@remixicon/react';
+import { IconArrowLeft, IconArrowRight, IconBook, IconFileText, IconLayers, IconMore, IconRefresh, IconChat } from './icons';
 import { bridge, type PocketSnapshot } from './bridge';
 import { Button, IconButton } from './forms-library';
 import { TextField, InputBase } from './forms-library/boardui/components/base/input/input';
@@ -180,7 +180,7 @@ export default function BrowserChrome({ snapshot }: { snapshot: PocketSnapshot }
         if (event.key === 'Enter' && (composing.current || event.nativeEvent.isComposing || event.keyCode === 229)) event.preventDefault();
         if (event.key === 'Escape' && !composing.current) { event.preventDefault(); cancelDraft(); }
       }}>
-      <IconButton icon={RiArrowGoBackLine} className="browser-chrome-control browser-chrome-return" aria-label="返回助手" title="返回助手" disabled={disabled('return_owner')} onClick={() => void act('return_owner')} />
+      <IconButton icon={IconChat} className="browser-chrome-control browser-chrome-return" aria-label="返回助手" title="返回助手" disabled={disabled('return_owner')} onClick={() => void act('return_owner')} />
       <TextField key={contextKey} className="browser-chrome-address" fieldClassName="browser-chrome-address-shell" inputClassName="browser-chrome-address-input"
         aria-label="地址或搜索词" aria-describedby="browser-chrome-status" type="text"
         value={currentDraft.value} onChange={updateDraft} isDisabled={!connected} isReadOnly={!!pending}
@@ -192,13 +192,13 @@ export default function BrowserChrome({ snapshot }: { snapshot: PocketSnapshot }
       <Button variant="ghost" type="submit" className="browser-chrome-control browser-chrome-open" disabled={disabled('navigate') || !currentDraft.value.trim()} title="打开地址或搜索">打开</Button>
     </form>
     <nav className="browser-chrome-actions" aria-label="网页导航与工具" hidden={keyboardVisible}>
-      <IconButton icon={RiArrowLeftLine} className="browser-chrome-control" aria-label="上一页" title="上一页" disabled={disabled('back')} onClick={() => void act('back')} />
-      <IconButton icon={RiArrowRightLine} className="browser-chrome-control" aria-label="下一页" title="下一页" disabled={disabled('forward')} onClick={() => void act('forward')} />
-      <IconButton icon={RiRefreshLine} className="browser-chrome-control" aria-label={state?.pageAvailable ? '刷新当前网页' : '重新打开网页'} title={state?.pageAvailable ? '刷新当前网页' : '重新打开网页'} disabled={disabled('reload')} onClick={() => void act('reload')} />
-      <span className="browser-chrome-tabs"><IconButton icon={RiStackLine} className="browser-chrome-control" aria-label={`管理标签页，当前 ${count} 个`} title={`管理 ${count} 个标签页`} disabled={disabled('tabs')} onClick={() => void act('tabs')} /><span className="browser-chrome-count" aria-hidden="true">{browserChromeTabCount(count)}</span></span>
-      <IconButton icon={RiBookOpenLine} className="browser-chrome-control" aria-label="打开研究任务" title="研究任务" disabled={disabled('research')} onClick={() => void act('research')} />
-      <IconButton icon={RiFileList2Line} className="browser-chrome-control" aria-label="查看研究来源" title="研究来源" disabled={disabled('sources')} onClick={() => void act('sources')} />
-      <IconButton icon={RiMoreLine} className="browser-chrome-control" aria-label="更多浏览选项和状态" title="更多浏览选项和状态" disabled={disabled('more')} onClick={() => void act('more')} />
+      <IconButton icon={IconArrowLeft} className="browser-chrome-control" aria-label="上一页" title="上一页" disabled={disabled('back')} onClick={() => void act('back')} />
+      <IconButton icon={IconArrowRight} className="browser-chrome-control" aria-label="下一页" title="下一页" disabled={disabled('forward')} onClick={() => void act('forward')} />
+      <IconButton icon={IconRefresh} className="browser-chrome-control" aria-label={state?.pageAvailable ? '刷新当前网页' : '重新打开网页'} title={state?.pageAvailable ? '刷新当前网页' : '重新打开网页'} disabled={disabled('reload')} onClick={() => void act('reload')} />
+      <span className="browser-chrome-tabs"><IconButton icon={IconLayers} className="browser-chrome-control" aria-label={`管理标签页，当前 ${count} 个`} title={`管理 ${count} 个标签页`} disabled={disabled('tabs')} onClick={() => void act('tabs')} /><span className="browser-chrome-count" aria-hidden="true">{browserChromeTabCount(count)}</span></span>
+      <IconButton icon={IconBook} className="browser-chrome-control" aria-label="打开研究任务" title="研究任务" disabled={disabled('research')} onClick={() => void act('research')} />
+      <IconButton icon={IconFileText} className="browser-chrome-control" aria-label="查看研究来源" title="研究来源" disabled={disabled('sources')} onClick={() => void act('sources')} />
+      <IconButton icon={IconMore} className="browser-chrome-control" aria-label="更多浏览选项和状态" title="更多浏览选项和状态" disabled={disabled('more')} onClick={() => void act('more')} />
     </nav>
     <div id="browser-chrome-status" className="browser-chrome-status" data-notice={nativeUnconfirmed ? 'unconfirmed' : notice?.kind} role={nativeUnconfirmed || notice ? 'alert' : 'status'} aria-live={nativeUnconfirmed || notice ? 'assertive' : 'polite'} aria-atomic="true" title={status}>
       {loading ? <ShimmerText>{status}</ShimmerText> : <span>{status}</span>}

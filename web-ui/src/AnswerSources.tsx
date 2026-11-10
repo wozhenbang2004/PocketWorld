@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { RiArrowLeftLine, RiArrowRightSLine, RiCloseLine, RiFileTextLine, RiRefreshLine } from '@remixicon/react';
+import { IconArrowLeft, IconChevronRight, IconClose, IconFileText, IconRefresh } from './icons';
 import { bridge } from './bridge';
 import { Drawer } from './shell-library';
 import { Button, IconButton } from './forms-library';
@@ -58,10 +58,10 @@ export function AnswerSources({ target, revision, onClose }: { target: AnswerSou
   return <Drawer.Root open onOpenChange={open => { if (!open) onClose(); }} shouldScaleBackground={false}><Drawer.Portal>
     <Drawer.Overlay className="pw-overlay" /><Drawer.Content className="pw-drawer pw-answer-sources" aria-describedby="answer-source-description">
       <div className="pw-drawer-handle" /><header className="pw-drawer-header">
-        {selected && <IconButton icon={RiArrowLeftLine} aria-label="返回来源列表" onClick={list} />}
+        {selected && <IconButton icon={IconArrowLeft} aria-label="返回来源列表" onClick={list} />}
         <div><Drawer.Title>{selected ? current && detail?.context?.title || selected.title || '原保留内容' : '回答来源'}</Drawer.Title></div>
-        <IconButton icon={RiRefreshLine} aria-label="重新核对原来源" title="重新核对原来源" disabled={busy} onClick={() => setRefresh(value => value + 1)} />
-        <IconButton icon={RiCloseLine} aria-label="返回原回答" onClick={onClose} />
+        <IconButton icon={IconRefresh} aria-label="重新核对原来源" title="重新核对原来源" disabled={busy} onClick={() => setRefresh(value => value + 1)} />
+        <IconButton icon={IconClose} aria-label="返回原回答" onClick={onClose} />
       </header>
       <Drawer.Description id="answer-source-description" className="pw-source-description">仅显示这次回答前保留的来源，不代表逐项采用或已经核实。</Drawer.Description>
       <div ref={body} className="pw-drawer-body" data-source-view={result ? viewKey : undefined} onScroll={event => {
@@ -72,11 +72,11 @@ export function AnswerSources({ target, revision, onClose }: { target: AnswerSou
         {error && <p className="pw-error" role="alert">{error}</p>}
         {result && !current && <p className="pw-muted">{result.reason || '原来源已不可读；未用当前页面或其他任务内容代替。'}</p>}
         {current && !selected && <>{!entries.length && <p className="pw-muted">这个保留窗口没有可准确关联的来源；普通链接没有被当作来源证明。</p>}<div className="pw-source-list">{entries.map((entry, index) => entry.status === 'available' && entry.sourceHandle ?
-          <Button variant="ghost" className="pw-source-row" key={entry.sourceHandle} data-source-key={sourceKey(entry)} leadingIcon={RiFileTextLine} trailingIcon={RiArrowRightSLine} aria-label={`查看原保留内容：${entry.title || '原来源'}`} onClick={() => {
+          <Button variant="ghost" className="pw-source-row" key={entry.sourceHandle} data-source-key={sourceKey(entry)} leadingIcon={IconFileText} trailingIcon={IconChevronRight} aria-label={`查看原保留内容：${entry.title || '原来源'}`} onClick={() => {
             if (body.current) positions.current.set(viewKey, body.current.scrollTop);
             setSelected({ handle: entry.sourceHandle, key: sourceKey(entry), title: entry.title || '原来源' }); setOffset(0); setPrevious([]);
           }}><span className="pw-source-row-copy"><b>{entry.title || '原来源'}</b>{entry.label && <small>{entry.label}</small>}</span></Button> :
-          <div className="pw-source-unavailable" key={entry.sourceHandle || index}><RiFileTextLine size={20} aria-hidden="true"/><div><h3>{entry.title || '原来源'}</h3>{entry.label && <p>{entry.label}</p>}<p className="pw-muted">{entry.reason || '此来源当前不可读'}</p></div></div>
+          <div className="pw-source-unavailable" key={entry.sourceHandle || index}><IconFileText size={20} aria-hidden="true"/><div><h3>{entry.title || '原来源'}</h3>{entry.label && <p>{entry.label}</p>}<p className="pw-muted">{entry.reason || '此来源当前不可读'}</p></div></div>
         )}</div><div className="pw-action-row pw-source-pagination">{cursor > 0 && <Button variant="ghost" onClick={() => setCursor(value => Math.max(0, value - 20))}>上一组来源</Button>}{Number.isInteger(result.nextCursor) && result.nextCursor >= 0 && <Button variant="secondary" onClick={() => setCursor(result.nextCursor)}>下一组来源</Button>}</div><p className="pw-muted">仅覆盖原执行当前保留的记录，不等于完整历史。</p></>}
         {current && selected && <>{detail?.context?.url && <p className="pw-source-url">{detail.context.url}</p>}{result.frame?.status === 'retained' && ['image/png', 'image/jpeg', 'image/webp'].includes(result.frame.mimeType) && typeof result.frame.imageBase64 === 'string' ? <img className="pw-task-image" alt="与原观察关联的保留屏帧" src={'data:' + result.frame.mimeType + ';base64,' + result.frame.imageBase64} /> : result.frame?.reason && <p className="pw-muted">{result.frame.reason}</p>}<div className="pw-source-copy" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{detail?.body || '没有可显示的原保留文本。'}</div><nav className="pw-source-read-navigation" aria-label="来源原文分段">{range && <p>原文本 {range.offset}–{Number(range.offset || 0) + Number(range.chars || 0)} / {range.totalChars} 字符</p>}<div className="pw-action-row">{previous.length > 0 && <Button variant="ghost" onClick={() => { setOffset(previous.at(-1)!); setPrevious(value => value.slice(0, -1)); }}>上一段</Button>}{Number.isInteger(detail?.nextOffset) && detail.nextOffset >= 0 && <Button variant="secondary" onClick={() => { setPrevious(value => [...value, offset]); setOffset(detail.nextOffset); }}>下一段</Button>}</div></nav></>}
       </div>

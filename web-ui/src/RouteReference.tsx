@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { RiCloseLine } from '@remixicon/react';
+import { IconClose } from './icons';
 import { bridge } from './bridge';
 import { usePocketSnapshot } from './usePocketSnapshot';
 import { Drawer } from './shell-library';
@@ -53,7 +53,7 @@ export function RouteReference({ target, onClose }: { target: RouteReferenceTarg
   </section>;
   return <Drawer.Root open onOpenChange={open => { if (!open && !busy) onClose(); }} shouldScaleBackground={false}><Drawer.Portal>
     <Drawer.Overlay className="pw-overlay" /><Drawer.Content className="pw-drawer pw-route-reference" aria-describedby="route-reference-description">
-      <div className="pw-drawer-handle" /><header className="pw-drawer-header"><div><Drawer.Title>路线参考</Drawer.Title><Drawer.Description id="route-reference-description">核对并交换导航结构。目标与每步条件需要在本机重新观察，这里不会执行路线。</Drawer.Description></div><IconButton icon={RiCloseLine} aria-label="返回原任务" disabled={busy} onClick={onClose} /></header>
+      <div className="pw-drawer-handle" /><header className="pw-drawer-header"><div><Drawer.Title>路线参考</Drawer.Title><Drawer.Description id="route-reference-description">核对并交换导航结构。目标与每步条件需要在本机重新观察，这里不会执行路线。</Drawer.Description></div><IconButton icon={IconClose} aria-label="返回原任务" disabled={busy} onClick={onClose} /></header>
       <div className="pw-drawer-body pw-route-reference-body">
         {busy && <ShimmerText>正在核对原路线参考…</ShimmerText>}{(error || state.error) && <p className="pw-error" role="alert">{error || state.error}</p>}{state.notice && <p role="status">{state.notice}</p>}
         {!opening && !state.open && <p>原参考窗口已关闭，请返回任务后重新打开。</p>}

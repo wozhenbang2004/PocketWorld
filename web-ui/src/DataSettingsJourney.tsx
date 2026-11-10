@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { RiArrowLeftLine, RiArrowRightSLine } from '@remixicon/react';
+import { IconArrowLeft, IconChevronRight } from './icons';
 import { Button } from './forms-library';
 import type { ButtonProps } from './forms-library/boardui/components/base/buttons/button';
 
@@ -32,14 +32,14 @@ export function useDataSettingsJourney(initial = 'list') {
 }
 
 export function DataOperationRow({ id, title, detail, icon, onOpen, disabled = false }: { id: string; title: string; detail: string; icon?: ButtonProps['leadingIcon']; onOpen: (id: string) => void; disabled?: boolean }) {
-  return <Button variant="ghost" className="pw-domain-link pw-data-operation-row h-auto whitespace-normal" leadingIcon={icon} trailingIcon={RiArrowRightSLine} data-operation-entry={id} disabled={disabled} onClick={() => onOpen(id)}>
+  return <Button variant="ghost" className="pw-domain-link pw-data-operation-row h-auto whitespace-normal" leadingIcon={icon} trailingIcon={IconChevronRight} data-operation-entry={id} disabled={disabled} onClick={() => onOpen(id)}>
     <span><span>{title}</span><small>{detail}</small></span>
   </Button>;
 }
 
 export function DataOperationHeading({ title, parent, description, onBack, children }: { title: string; parent: string; description: string; onBack: () => void; children?: ReactNode }) {
   return <header className="pw-data-operation-heading">
-    <Button variant="ghost" leadingIcon={RiArrowLeftLine} onClick={onBack}>返回{parent}</Button>
+    <Button variant="ghost" leadingIcon={IconArrowLeft} onClick={onBack}>返回{parent}</Button>
     <div tabIndex={-1} data-operation-heading><h2>{title}</h2>{description&&<p>{description}</p>}</div>
     {children}
   </header>;

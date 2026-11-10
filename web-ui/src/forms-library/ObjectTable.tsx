@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { flexRender, getCoreRowModel, getSortedRowModel, useReactTable, type ColumnDef, type SortingState } from '@tanstack/react-table';
-import { RiArrowDownSLine } from '@remixicon/react';
+import { IconChevronDown } from '../icons';
 import { Table, TableBody, TableCell, TableColumn, TableHeader, TableRow } from './boardui/components/base/table/table';
 
 /** PW-35. Product-controlled adaptation of BoardUI DataTableExample.
@@ -23,7 +23,7 @@ export function ObjectTable<T extends object>({ label, rows, columns, getRowId, 
     <Table aria-label={label} size="sm" selectionMode="none" onRowAction={onRowOpen ? key => { const row = table.getRowModel().rows.find(x => x.id === String(key)); if (row) onRowOpen(row.original); } : undefined}>
       <TableHeader>{table.getFlatHeaders().map(header => <TableColumn key={header.id} id={header.id} isRowHeader={header.index === 0} className={columns[header.index]?.secondary ? 'pw-secondary-column' : undefined}>
         {header.column.getCanSort() ? <button type="button" className="pw-table-sort" onClick={header.column.getToggleSortingHandler()}>
-          {flexRender(header.column.columnDef.header, header.getContext())}<RiArrowDownSLine size={16} aria-hidden className={header.column.getIsSorted() === 'asc' ? 'pw-sort-ascending' : ''} />
+          {flexRender(header.column.columnDef.header, header.getContext())}<IconChevronDown size={16} aria-hidden className={header.column.getIsSorted() === 'asc' ? 'pw-sort-ascending' : ''} />
         </button> : flexRender(header.column.columnDef.header, header.getContext())}
       </TableColumn>)}</TableHeader>
       <TableBody renderEmptyState={() => <p className="pw-table-empty">{empty}</p>}>

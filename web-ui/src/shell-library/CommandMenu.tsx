@@ -2,7 +2,7 @@
  * layout. The host owns its existing drawer: no second portal or focus trap. */
 import {useEffect,useId,useRef,useState,type ComponentType,type ReactNode} from 'react';
 import {LayoutGroup,motion,useReducedMotion} from 'motion/react';
-import {RiSearchLine,RiCommandLine} from '@remixicon/react';
+import { IconCommand, IconSearch } from '../icons';
 import {EASE_OUT,SPRING_LAYOUT} from './beui-adapted/ease';
 import './beui-adapted/interactions.css';
 export type WorkCommand={id:string;group:string;title:string;description?:string;icon?:ComponentType<{className?:string;'aria-hidden'?:boolean|'true'|'false'}>;onSelect:()=>void};
@@ -23,9 +23,9 @@ export function CommandMenu({commands,onClose,conversationOnly=false,footer}:{co
  if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();setActive((activeIndex+(e.key==='ArrowDown'?1:-1)+Math.max(1,list.length))%Math.max(1,list.length));}
  if(e.key==='Enter'&&list[activeIndex]){e.preventDefault();choose(list[activeIndex])}
  }}>
- <motion.div className="afa-commandinput" layout={!reduce}><RiSearchLine size={18}/><input ref={input} autoFocus role="combobox" aria-label={conversationOnly?'搜索已加载对话':'搜索已加载工作与功能'} aria-expanded="true" aria-controls={`${commandId}-commands`} aria-activedescendant={list.length?`${commandId}-${activeIndex}`:undefined} placeholder={conversationOnly?'搜索对话标题…':'搜索已加载的工作与功能…'} value={query} onChange={e=>{setQuery(e.target.value);setActive(0)}}/><kbd>↵</kbd></motion.div>
+ <motion.div className="afa-commandinput" layout={!reduce}><IconSearch size={18}/><input ref={input} autoFocus role="combobox" aria-label={conversationOnly?'搜索已加载对话':'搜索已加载工作与功能'} aria-expanded="true" aria-controls={`${commandId}-commands`} aria-activedescendant={list.length?`${commandId}-${activeIndex}`:undefined} placeholder={conversationOnly?'搜索对话标题…':'搜索已加载的工作与功能…'} value={query} onChange={e=>{setQuery(e.target.value);setActive(0)}}/><kbd>↵</kbd></motion.div>
  <motion.div className="afa-commandlist" id={`${commandId}-commands`} role="listbox" aria-label={conversationOnly?'对话':'工作与功能'} layout={!reduce} initial={reduce?false:{opacity:0,y:6}} animate={{opacity:1,y:0}} transition={reduce?{duration:0}:{duration:.16,ease:EASE_OUT}}>
- {list.map((x,i)=>{const CommandIcon=x.icon||RiCommandLine;return <div key={x.id}>
+ {list.map((x,i)=>{const CommandIcon=x.icon||IconCommand;return <div key={x.id}>
  {i===0||list[i-1].group!==x.group?<div className="afa-label">{x.group}</div>:null}
  <motion.button layout={reduce?false:'position'} transition={reduce?{duration:0}:SPRING_LAYOUT} type="button" id={`${commandId}-${i}`} role="option" tabIndex={-1} aria-selected={i===activeIndex} className={i===activeIndex?'afa-hover':''} onMouseEnter={()=>setActive(i)} onClick={()=>choose(x)}>
  {i===activeIndex&&<motion.span className="pw-morph-active" layoutId="active-result" transition={reduce?{duration:0}:SPRING_LAYOUT} aria-hidden/>}

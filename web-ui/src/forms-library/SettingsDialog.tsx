@@ -2,7 +2,7 @@ import { useId, useLayoutEffect, useRef, type ReactNode, type SyntheticEvent } f
 import { createPortal } from 'react-dom';
 import { AnimatePresence, animate, motion, useMotionValue, usePresence } from 'motion/react';
 import { FocusScope } from 'react-aria';
-import { RiCloseLine } from '@remixicon/react';
+import { IconClose } from '../icons';
 import { useMotionAllowed } from '../library/core';
 import { motionTransition } from '../library/motion-tokens';
 
@@ -69,7 +69,7 @@ function SettingsSurface({ title, onClose, children, className = '', closeLabel 
         onKeyDown={event => {
           if (present && event.key === 'Escape' && !event.defaultPrevented && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); event.stopPropagation(); onClose(); }
         }}>
-        <header><h2 id={titleId}>{title}</h2><button type="button" className="pw-icon-action" aria-label={closeLabel} onClick={() => { if (present) onClose(); }}><RiCloseLine aria-hidden size={20} /></button></header>
+        <header><h2 id={titleId}>{title}</h2><button type="button" className="pw-icon-action" aria-label={closeLabel} onClick={() => { if (present) onClose(); }}><IconClose aria-hidden size={20} /></button></header>
         <div className="pw-settings-dialog-content">{children}</div>
       </motion.div>
     </FocusScope>

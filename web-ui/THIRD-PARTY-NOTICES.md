@@ -4,6 +4,8 @@ Attribution applies to actual reused source files and their later adaptations. R
 
 ## Provenance distinctions
 
+- Product interface icons use **Solar Icons by 480 Design**, via `@solar-icons/react@2.3.5` maintained by Hakim Saoudi. The icon artwork is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), with the [original design source](https://www.figma.com/community/file/1166831539721848736); the React adapter is MIT. PocketWorld preserves the packaged geometry, adapts color and optical size, and uses 0.4 secondary opacity for the overlapping team figures. Both upstream license notices are included in the packaged license inventory. The six-bar reasoning-level diagram retains its existing Remix source because its exact geometry encodes six native levels.
+
 - Affect official free components are pinned to `flohoeller/affectui` commit `37b91fa302dea59e28ce1eb2ba7acd7ce23296be` and retain the MIT notice below.
 - The library-maintained Affect Pro-preview studies are independent implementations, not an official paid-source distribution. Vendor-free-source MIT notices are not asserted as a license to vendor Pro source. Copied upstream free portions retain their own notices.
 - BoardUI old Git source is pinned to `ec5c5eb3e29c2441be63b9422cd54f411ef23466`. Later official free components are preserved in public registry JSON captured on 2026-11-01. Local overlay compatibility changes are identified separately; those files are not claimed byte-identical to the old Git pin.

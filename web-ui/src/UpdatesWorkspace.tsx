@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { RiArrowLeftLine, RiDownloadLine, RiRefreshLine } from '@remixicon/react';
+import { IconArrowLeft, IconDownload, IconRefresh } from './icons';
 import { bridge, type PocketSnapshot } from './bridge';
 import { Accordion, AccordionItem, Button, IconButton, StretchSwitch } from './forms-library';
 import { ProgressBar } from './library';
@@ -98,7 +98,7 @@ export default function UpdatesWorkspace({ snapshot }: { snapshot: PocketSnapsho
 
   return <main className="pw-app pw-secondary pw-updates" aria-label="应用更新">
     <header className="pw-secondary-header pw-updates-header">
-      <IconButton icon={RiArrowLeftLine} aria-label="返回设置" disabled={locked} onClick={() => void run('updates.close')} />
+      <IconButton icon={IconArrowLeft} aria-label="返回设置" disabled={locked} onClick={() => void run('updates.close')} />
       <h1>应用更新</h1>
     </header>
     <div className="pw-updates-scroll">
@@ -113,7 +113,7 @@ export default function UpdatesWorkspace({ snapshot }: { snapshot: PocketSnapsho
           {(working || !data) && <ProgressBar aria-label={data?.message || '读取更新状态'} value={progress} isIndeterminate={!measured} showValueLabel={measured} className="pw-updates-progress" />}
           {transfer && <p className="pw-updates-caption pw-updates-transfer">{transfer}</p>}
           {primary && <div className="pw-updates-actions">
-            <Button disabled={locked} variant={cancellable && !needsRead ? 'secondary' : 'primary'} leadingIcon={primary.action === 'updates.download' ? RiDownloadLine : primary.action === 'updates.check' || primary.action === 'updates.read' ? RiRefreshLine : undefined} onClick={() => void run(primary.action)}>{pending === primary.action ? '请稍候…' : primary.label}</Button>
+            <Button disabled={locked} variant={cancellable && !needsRead ? 'secondary' : 'primary'} leadingIcon={primary.action === 'updates.download' ? IconDownload : primary.action === 'updates.check' || primary.action === 'updates.read' ? IconRefresh : undefined} onClick={() => void run(primary.action)}>{pending === primary.action ? '请稍候…' : primary.label}</Button>
             {data?.release && !working && !needsRead && <Button variant="ghost" disabled={locked} onClick={() => void run('updates.check')}>检查新版本</Button>}
           </div>}
           {data?.packageReady && <p className="pw-updates-caption">安装仍需你在 Android 系统窗口确认；返回本页不会自动安装。</p>}

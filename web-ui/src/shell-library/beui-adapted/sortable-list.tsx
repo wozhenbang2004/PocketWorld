@@ -1,6 +1,6 @@
 "use client";
 
-import { RiDraggable as GripVertical, RiArrowGoBackLine as Undo2 } from "@remixicon/react";
+import { IconGrip, IconUndo } from '../../icons';
 import {
   type HTMLMotionProps,
   Reorder,
@@ -385,7 +385,7 @@ export function SortableListHandle({
         ...style,
       }}
     >
-      {children ?? <GripVertical size={18} aria-hidden="true" />}
+      {children ?? <IconGrip size={18} aria-hidden="true" />}
     </button>
   );
 }
@@ -423,7 +423,7 @@ export function SortableListUndo({
     >
       {children ?? (
         <>
-          <Undo2 size={13} aria-hidden="true" /> 恢复目录顺序
+          <IconUndo size={13} aria-hidden="true" /> 恢复目录顺序
         </>
       )}
     </button>

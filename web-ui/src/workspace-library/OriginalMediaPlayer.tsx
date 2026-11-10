@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Slider, SliderThumb, SliderTrack } from 'react-aria-components';
-import { RiForward10Line, RiMusic2Line, RiPauseFill, RiPlayFill, RiReplay10Line, RiVolumeMuteLine, RiVolumeUpLine } from '@remixicon/react';
+import { IconMusic, IconPause, IconPlay, IconSeekBack, IconSeekForward, IconSpeaker, IconSpeakerOff } from '../icons';
 import { IconButton } from '../forms-library';
 import './workspace-media.css';
 
@@ -46,7 +46,7 @@ export function OriginalMediaPlayer({ url, kind, name, onError }: { url: string;
   return <section className="pw-original-player hg-player" aria-label={`${kind === 'audio' ? '音频' : '视频'}播放器：${name}`}>
     {kind === 'video' ? <video ref={node => { media.current = node; }} playsInline preload="metadata" src={url} {...events} /> : <audio ref={node => { media.current = node; }} preload="metadata" src={url} {...events} />}
     <div className="hg-player-content" data-stack="true">
-      {kind === 'audio' && <span className="hg-cover" aria-hidden="true"><RiMusic2Line size={28} /></span>}
+      {kind === 'audio' && <span className="hg-cover" aria-hidden="true"><IconMusic size={28} /></span>}
       <div className="hg-player-side">
         <div className="hg-player-names"><strong>{name}</strong><span>{waiting ? '正在缓冲…' : playing ? '正在播放原件' : '固定原件'}</span></div>
         <div className="hg-player-progress">
@@ -56,10 +56,10 @@ export function OriginalMediaPlayer({ url, kind, name, onError }: { url: string;
           <div className="hg-player-times"><span>{clock(time)}</span><span>{duration ? clock(duration) : '时长待读取'}</span></div>
         </div>
         <div className="hg-player-controls">
-          <IconButton icon={RiReplay10Line} aria-label="后退 10 秒" disabled={!duration} onClick={() => seek(time - 10)} />
-          <IconButton icon={playing ? RiPauseFill : RiPlayFill} className="hg-player-play" aria-label={playing ? '暂停原件' : '播放原件'} aria-pressed={playing} onClick={() => void toggle()} />
-          <IconButton icon={RiForward10Line} aria-label="前进 10 秒" disabled={!duration} onClick={() => seek(time + 10)} />
-          <IconButton icon={muted ? RiVolumeMuteLine : RiVolumeUpLine} aria-label={muted ? '取消静音' : '静音'} aria-pressed={muted} onClick={() => { if (media.current) media.current.muted = !media.current.muted; }} />
+          <IconButton icon={IconSeekBack} aria-label="后退 10 秒" disabled={!duration} onClick={() => seek(time - 10)} />
+          <IconButton icon={playing ? IconPause : IconPlay} className="hg-player-play" aria-label={playing ? '暂停原件' : '播放原件'} aria-pressed={playing} onClick={() => void toggle()} />
+          <IconButton icon={IconSeekForward} aria-label="前进 10 秒" disabled={!duration} onClick={() => seek(time + 10)} />
+          <IconButton icon={muted ? IconSpeakerOff : IconSpeaker} aria-label={muted ? '取消静音' : '静音'} aria-pressed={muted} onClick={() => { if (media.current) media.current.muted = !media.current.muted; }} />
         </div>
         {problem && <p className="pw-player-problem" role="alert">{problem}</p>}
       </div>

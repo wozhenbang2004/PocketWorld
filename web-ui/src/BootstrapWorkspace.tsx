@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { RiArrowRightLine, RiRefreshLine } from '@remixicon/react';
+import { IconArrowRight, IconRefresh } from './icons';
 import { bridge, type PocketSnapshot } from './bridge';
 import { usePocketAppearance } from './usePocketAppearance';
 import { Accordion, AccordionItem, Button, CheckboxField, ObjectTable, SettingsDialog } from './forms-library';
@@ -156,7 +156,7 @@ export default function BootstrapWorkspace({ snapshot }: { snapshot: PocketSnaps
       {view && <dl className="pw-bootstrap-facts"><div><dt>当前阶段</dt><dd>{activities[view.activity || ''] || stages[view.stage]}{view.module && ` · ${moduleLabels[view.module] || '组件'}`}</dd></div><div><dt>{preparationFailed ? '启动检查' : '任务状态核对'}</dt><dd>{preparationFailed && view.recovery === 'failed' ? '尚未完成' : recoveries[view.recovery]}</dd></div></dl>}
       {outcome && restored && <RestorationSummary value={restored} />}
       <div className="pw-form-actions">
-        {view?.retryAvailable && supported('bootstrap.retry') && <Button disabled={locked || view.state === 'initializing'} onClick={retryBootstrap} leadingIcon={RiRefreshLine}>{maintenance?.originalRetryAvailable ? '重新核对原数据库' : '重新核对并启动'}</Button>}
+        {view?.retryAvailable && supported('bootstrap.retry') && <Button disabled={locked || view.state === 'initializing'} onClick={retryBootstrap} leadingIcon={IconRefresh}>{maintenance?.originalRetryAvailable ? '重新核对原数据库' : '重新核对并启动'}</Button>}
         {repairAllowed(view, 'repair.preserve') && supported('repair.preserve') && <Button disabled={locked} onClick={() => run('repair.preserve', { expectedGeneration: view!.generation, requestId: newRequest(), repairId: maintenance?.repairId ?? null }, true)}>先保全原件</Button>}
         <Button variant="secondary" disabled={!connected || busy || !supported('bootstrap.read')} onClick={readOriginal}>{busy ? '正在读取原回执…' : unknown ? '只读核对原操作' : '读取当前状态'}</Button>
       </div>
@@ -173,7 +173,7 @@ export default function BootstrapWorkspace({ snapshot }: { snapshot: PocketSnaps
       <dl className="pw-bootstrap-facts"><div><dt>保全校验</dt><dd>{maintenance.preservationVerified ? '已通过本次原生校验' : '尚未确认，不能替换'}</dd></div><div><dt>当前记录</dt><dd>{phaseLabels[maintenance.phase] || '请按原记录的下一步核对'}</dd></div></dl>
       {repairModeAllowed(view, 'verified_copy') && <CheckboxField isSelected={includeContent} isDisabled={locked} onChange={setIncludeContent}>包含原对话文字，在本机读取并准备恢复审阅</CheckboxField>}
       {repairAllowed(view, 'repair.review') && <div className="pw-form-actions">
-        {repairModeAllowed(view, 'verified_copy') && <Button disabled={locked || !includeContent || !maintenance.preservationVerified || !supported('repair.review')} onClick={() => openReview('verified_copy')} trailingIcon={RiArrowRightLine}>审阅恢复对话文字</Button>}
+        {repairModeAllowed(view, 'verified_copy') && <Button disabled={locked || !includeContent || !maintenance.preservationVerified || !supported('repair.review')} onClick={() => openReview('verified_copy')} trailingIcon={IconArrowRight}>审阅恢复对话文字</Button>}
         {repairModeAllowed(view, 'empty_database') && <Button variant="secondary" disabled={locked || !maintenance.preservationVerified || !supported('repair.review')} onClick={() => openReview('empty_database')}>审阅建立空库</Button>}
       </div>}
       {repairModeAllowed(view, 'verified_copy') && <p className="pw-muted">先在隔离副本中核验所选对话文字。超过当前恢复上限或校验失败时，原件与保全副本仍保留，不会自动改为建立空库。</p>}
