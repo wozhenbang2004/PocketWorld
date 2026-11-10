@@ -15,6 +15,11 @@ on:
         description: GitHub Release run ID whose immutable APK should be captured
         required: true
         type: string
+      capture_group:
+        description: Capture all pages or only the unsaved forms and popovers
+        type: choice
+        default: all
+        options: [all, forms]
 
 # Separate workflow and concurrency group: capture never holds the release queue
 # or becomes a dependency of APK, delta preparation or publication.
@@ -77,6 +82,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           SOURCE_RELEASE_RUN_ID: ${{ github.event.workflow_run.id || inputs.release_run_id }}
           SOURCE_RELEASE_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          CAPTURE_GROUP: ${{ inputs.capture_group || 'all' }}
         run: python3 -B tools/ci/capture-ui-screenshots.py
       - name: Upload PNGs, gallery and capture diagnostics
         id: screenshots
@@ -100,3 +106,4 @@ jobs:
             if [ -n "$SCREENSHOTS_URL" ]; then printf '\n[Download screenshot package](%s)\n' "$SCREENSHOTS_URL"; fi
             echo 'This workflow is independent of APK and delta publication.'
           } >> "$GITHUB_STEP_SUMMARY"
+
