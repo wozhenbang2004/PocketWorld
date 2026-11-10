@@ -139,7 +139,9 @@ public final class ApiTurnStream {
             case "gemini": state = new Gemini(sink,usage); break;
             default: throw invalid("AST-L140-1");
         }
-        Sse parser = new Sse(input, control);
+        // Responses done/completed frames repeat the accumulated output. Keep them within
+        // the unchanged whole-stream budget instead of rejecting a valid long answer at EOF.
+        Sse parser = new Sse(input, control, "openai_responses".equals(protocol) ? MAX_BYTES : MAX_EVENT_BYTES);
         for (int count = 0; count < MAX_EVENTS; count++) {
             control.check();
             Frame frame = parser.next();
@@ -716,9 +718,10 @@ public final class ApiTurnStream {
     private static final class Sse {
         private final InputStream input;
         private final RunControl control;
+        private final int maxEventBytes;
         private int total, eventBytes;
         private boolean skipLf, first = true;
-        Sse(InputStream input, RunControl control) { this.input = new BufferedInputStream(input, 8192); this.control = control; }
+        Sse(InputStream input, RunControl control, int maxEventBytes) { this.input = new BufferedInputStream(input, 8192); this.control = control; this.maxEventBytes = maxEventBytes; }
         Frame next() throws Exception {
             eventBytes = 0; String event = ""; StringBuilder data = new StringBuilder(); boolean hasData = false;
             while (true) {
@@ -740,7 +743,7 @@ public final class ApiTurnStream {
             while (true) {
                 int value = input.read();
                 if (value < 0) return null; // An unterminated SSE event never reaches the decoder.
-                if (++total > MAX_BYTES || ++eventBytes > MAX_EVENT_BYTES) throw tooLarge();
+                if (++total > MAX_BYTES || ++eventBytes > maxEventBytes) throw tooLarge();
                 if (skipLf) { skipLf = false; if (value == '\n') continue; }
                 if (value == '\r') { skipLf = true; break; }
                 if (value == '\n') break;
