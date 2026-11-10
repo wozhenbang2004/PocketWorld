@@ -18,7 +18,9 @@ export function teamPhoneTargetLabel(device: Data | undefined, targets: unknown)
 export function teamEditorMember(member: Data): Data {
   const runner = member.runner || 'model';
   return { id: member.id, name: member.name, role: member.role, model: member.model || '', runner,
-    ...(runner === 'phone_agent' ? { device: { ...member.device }, assignment: member.assignment || '', dependsOn: [...(member.dependsOn || [])] }
+    assignment: runner === 'phone_agent' ? member.assignment || '' : member.assignment && member.assignment !== member.role ? member.assignment : '',
+    dependsOn: [...(member.dependsOn || [])],
+    ...(runner === 'phone_agent' ? { device: { ...member.device } }
       : runner !== 'model' ? { device: { profileId: member.device?.profileId || '', environmentId: member.device?.environmentId || '' },
         modeId: member.modeId || '', externalExecutionRiskAcknowledged: member.externalExecutionRiskAcknowledged === true } : {}) };
 }

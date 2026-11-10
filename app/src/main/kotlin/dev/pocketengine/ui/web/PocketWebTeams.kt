@@ -230,13 +230,22 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                             candidate.optString("kind") == device.optString("kind") && (local || candidate.optString("targetDeviceId") == device.optString("targetDeviceId"))
                         }
                         require(knownTarget || previous?.optJSONObject("device")?.toString() == device.toString()) { "手机目标已变化，请刷新团队配置" }
-                        captured.put("device", JSONObject(device.toString())).put("assignment", text(member, "assignment", 2000).trim())
-                        val dependencies = member.optJSONArray("dependsOn") ?: JSONArray()
-                        require((0 until dependencies.length()).all { dependencies.opt(it) is String } && dependencies.length() <= 3) { "前置成员必须来自这次团队" }
-                        captured.put("dependsOn", JSONArray(dependencies.toString())); captured.remove("phoneScope")
+                        captured.put("device", JSONObject(device.toString())); captured.remove("phoneScope")
                         captured.remove("modeId"); captured.remove("externalExecutionRiskAcknowledged")
                     } else if (previous?.optString("runner") != "model") {
                         captured.put("device", "phone"); captured.remove("phoneScope"); captured.remove("assignment"); captured.remove("modeId"); captured.remove("externalExecutionRiskAcknowledged"); captured.put("dependsOn", JSONArray())
+                    }
+                    // Every runner uses the same original assignment/dependency graph.
+                    // An explicitly blank non-phone assignment follows the edited role;
+                    // omitted fields from older clients still preserve their saved plan.
+                    if (member.has("assignment") || runner == "phone_agent") {
+                        val assignment = text(member, "assignment", 2000, runner != "phone_agent").trim()
+                        if (assignment.isEmpty()) captured.remove("assignment") else captured.put("assignment", assignment)
+                    }
+                    if (member.has("dependsOn") || runner == "phone_agent") {
+                        val dependencies = if (member.has("dependsOn")) member.optJSONArray("dependsOn") ?: error("前置成员必须是列表") else JSONArray()
+                        require((0 until dependencies.length()).all { dependencies.opt(it) is String } && dependencies.length() <= 3) { "前置成员必须来自这次团队" }
+                        captured.put("dependsOn", JSONArray(dependencies.toString()))
                     }
                     captured.remove("writeFiles"); captured.remove("remoteProduction")
                     if (mode == "produce") {
