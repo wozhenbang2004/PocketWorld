@@ -42,7 +42,7 @@ export function TokenBudgetsWorkspace({ taskId = '', supported, registerTransien
     return () => { unsubscribe(); document.removeEventListener('visibilitychange', changed); window.removeEventListener('pagehide', hidden); };
   }, []);
   const discard = () => { setReview(null); setAck(false); if (windowId.current) void bridge.command('tokenBudgets.discard', { windowId: windowId.current }).catch(() => {}); };
-  useEffect(() => { onEditingChange?.(busy || !!editor || !!review); return () => onEditingChange?.(false); }, [busy, editor, review, onEditingChange]);
+  useEffect(() => { onEditingChange?.(busy || !!editor || !!review || uncertain); return () => onEditingChange?.(false); }, [busy, editor, review, uncertain, onEditingChange]);
   useEffect(() => {
     registerTransientBack?.(() => { if (busy) return true; if (review) { discard(); return true; } if (editor) { setEditor(null); return true; } return false; });
     return () => registerTransientBack?.(null);

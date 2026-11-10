@@ -12,8 +12,8 @@ public final class TaskInferencePresentation {
     public record Counter(String name,String text){}
     public record Group(String title,String route,String semantics,List<Counter> counters){}
     public record Call(String id,String purpose,String status,String route,String binding,long at,List<Counter> counters,List<String> pricing,List<String> failure,boolean apiKey){}
-    public record Context(String title,List<String> lines,long at,boolean attention){}
-    public record Snapshot(String headline,String coverage,List<String> money,List<String> warnings,List<Group> groups,List<Call> calls,Context context,boolean hasAccount){}
+    public record Context(String title,List<String> lines,long at,boolean attention,JSONObject details){}
+    public record Snapshot(String headline,String coverage,List<String> money,List<String> warnings,List<Group> groups,List<Call> calls,Context context,boolean hasAccount,JSONObject metrics){}
 
     public static Snapshot fromTask(JSONObject task)throws Exception {
         String taskId=task.optString("id");if(blank(taskId))throw new IllegalArgumentException("missing_task_identity");
@@ -73,7 +73,7 @@ public final class TaskInferencePresentation {
                     "run "+label(context.optString("runId"),"未知")+" · epoch "+context.optInt("epoch"),positive(receipt.opt("finishedAt"),receipt.opt("startedAt")),immutable(counters),pricing(receipt),failure(receipt),"api_key".equals(route.optString("kind"))));
         }
         String coverage=scope+" 仅此原任务当前保留的原生调用记录，不是全应用或服务账单；无记录不等于实际用量为 0。token来自实际原回执，估价只用冻结价目；实际账单和套餐剩余量：未知。"+(readAt>0?" 核对时间："+priceTime(readAt)+"。之后的新调用需刷新。":"");
-        return new Snapshot(headline,coverage,money(projection.getJSONObject("money")),immutable(warnings),immutable(groups),immutable(calls),context(task,events),account);
+        return new Snapshot(headline,coverage,money(projection.getJSONObject("money")),immutable(warnings),immutable(groups),immutable(calls),context(task,events),account,UsageSummary.fromReceipts(receipts));
     }
     private static List<String> failure(JSONObject receipt){
         if("COMPLETED".equals(receipt.optString("outcome")))return List.of();
@@ -119,11 +119,11 @@ public final class TaskInferencePresentation {
         // A final blocked result is newer than the last successfully sent request.
         if("awaiting_user".equals(task.optString("status"))&&unavailable!=null){
             lines.add("整理未能安全发布；没有自动重试。原件能否读取仍须按当前来源核对。");lines.add("原因："+label(unavailable.optString("status"),"未知"));
-            return new Context("上下文整理等待核对",immutable(lines),0,true);
+            return new Context("上下文整理等待核对",immutable(lines),0,true,new JSONObject());
         }
         if("awaiting_user".equals(task.optString("status"))&&blocked!=null)latest=blocked;
         else if("awaiting_user".equals(task.optString("status"))&&"summary".equals(task.optString("taskProjection")))
-            return new Context("原请求等待核对",List.of("需读取原任务核对最新上下文状态，不使用旧请求检查代替。"),0,true);
+            return new Context("原请求等待核对",List.of("需读取原任务核对最新上下文状态，不使用旧请求检查代替。"),0,true,new JSONObject());
         else if(task.has("contextBudgetCheck")){
             // Summary snapshots and bounded detail windows share the same native check.
             // Explicitly unavailable projections must not fall back to an older event.
@@ -146,7 +146,7 @@ public final class TaskInferencePresentation {
             if(sameContextRun(task,row)){event=row;latest=row.optJSONObject("receipt");}
             break;
         }
-        if(latest==null)return new Context("尚无保留的上下文检查记录",List.of("不从累计服务用量推断当前占窗，也不猜模型窗口。"),0,false);
+        if(latest==null)return new Context("尚无保留的上下文检查记录",List.of("不从累计服务用量推断当前占窗，也不猜模型窗口。"),0,false,new JSONObject());
         Long bytes=nonnegative(object(latest,"after").opt("canonicalUtf8Bytes")),limit=nonnegative(latest.opt("maxCanonicalBytes"));
         if(bytes!=null&&limit!=null)lines.add("本地请求序列化："+bytes+" / "+limit+" 字节。");
         boolean known=Boolean.TRUE.equals(latest.opt("modelWindowKnown"));
@@ -165,7 +165,19 @@ public final class TaskInferencePresentation {
         lines.add("这是当时请求的检查记录，不证明当前路由、摘要或来源仍然有效。");
         String status=latest.optString("status");boolean attention=!status.isEmpty()&&!"ready".equals(status);
         if(attention)lines.add("检查状态："+label(status,"未知")+"；不会在此继续执行或重试。");
-        return new Context(attention?"上下文检查需处理":"最近一次请求的本地检查",immutable(lines),event==null||latest==blocked?0:positive(event.opt("at"),event.opt("timestamp")),attention);
+        return new Context(attention?"上下文检查需处理":"最近一次请求的本地检查",immutable(lines),event==null||latest==blocked?0:positive(event.opt("at"),event.opt("timestamp")),attention,contextDetails(latest));
+    }
+    private static JSONObject contextDetails(JSONObject source)throws Exception{
+        JSONObject details=new JSONObject();
+        for(String key:new String[]{"modelContextTokens","inputLimitTokens","outputReserveTokens","safetyReserveTokens","providerReportedInputTokens"}){
+            Long value=nonnegative(source.opt(key));details.put(key,value==null?JSONObject.NULL:value);
+        }
+        for(String key:new String[]{"modelWindowKnown","summaryProjectionUsed","providerUsageUsed","tokenizerExact"})if(source.opt(key) instanceof Boolean)details.put(key,source.get(key));
+        Long input=nonnegative(object(source,"after").opt("estimatedInputTokens"));
+        details.put("after",new JSONObject().put("estimatedInputTokens",input==null?JSONObject.NULL:input));
+        JSONObject breakdown=dev.pocketengine.runtime.context.ContextBreakdown.publicView(source.optJSONObject("breakdown"));
+        if(breakdown!=null)details.put("breakdown",breakdown);
+        return details;
     }
     private static boolean sameContextRun(JSONObject task,JSONObject check){
         Long epoch=nonnegative(task.opt("coordinatorEpoch"));String run=task.optString("runId");

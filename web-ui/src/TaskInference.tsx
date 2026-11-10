@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { IconChevronLeft, IconChevronRight, IconRefresh } from './icons';
 import { bridge } from './bridge';
 import { Accordion, AccordionItem, Button } from './forms-library';
+import { ContextBreakdown } from './ContextBreakdown';
+import { readContextBreakdown } from './composer-context-metric';
 import './task-reading.css';
 
 type Data = Record<string, any>;
@@ -14,6 +16,36 @@ function Counters({ values }: { values: any }) {
 }
 function Lines({ values }: { values: any }) {
   return <div className="pw-usage-lines">{list(values).map((line, index) => <p key={index}>{line}</p>)}</div>;
+}
+
+const measuredNumber = (value: unknown): number | null => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
+function NativeCount({ label, value }: { label: string; value: any }) {
+  const tokens = measuredNumber(value?.knownSubtotal), unknown = measuredNumber(value?.unknownCalls), partial = measuredNumber(value?.partialCalls);
+  const knownOnly = (unknown !== null && unknown > 0) || value?.overflow === true;
+  return <div><dt>{knownOnly ? `已知${label}` : label}</dt><dd>{tokens === null || value?.overflow === true ? <span className="pw-usage-missing">{value?.overflow === true ? '无法汇总' : '未上报'}</span> : tokens.toLocaleString('zh-CN')}</dd>
+    {partial !== null && partial > 0 && <small>{partial.toLocaleString('zh-CN')} 次尚非最终计数</small>}
+  </div>;
+}
+
+/** All totals and the token-weighted cache ratio are native receipt projections.
+ * Do not re-sum raw provider fields in the renderer. */
+function UsageSummary({ value }: { value: Data }) {
+  const normalized = value.normalized, cache = value.cache;
+  if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized)) return null;
+  const rate = typeof cache?.rate === 'number' && Number.isFinite(cache.rate) && cache.rate >= 0 && cache.rate <= 1 ? cache.rate : null;
+  const eligible = measuredNumber(cache?.eligibleCalls), unknown = measuredNumber(cache?.unknownCalls), partial = measuredNumber(cache?.partialCalls);
+  const percent = rate === null ? null : new Intl.NumberFormat('zh-CN', { style: 'percent', maximumFractionDigits: 1 }).format(rate);
+  return <section className="pw-usage-summary" aria-label="本任务累计 Token 与缓存">
+    <dl className="pw-usage-primary-counts"><NativeCount label="输入 Token" value={normalized.input}/><NativeCount label="输出 Token" value={normalized.output}/></dl>
+    <div className="pw-usage-cache"><header><span>输入缓存命中率</span><strong>{percent ?? '未上报'}</strong></header>
+      {rate !== null && <div className="pw-usage-cache-meter" role="meter" aria-label="可核对输入 Token 的缓存读取比例" aria-valuemin={0} aria-valuemax={100} aria-valuenow={rate * 100} aria-valuetext={percent!}><i style={{ width: `${rate * 100}%` }}/></div>}
+      <p>{rate === null ? '未取得完整的输入与缓存读取计数。' : `按 Token 加权${eligible === null ? '' : ` · ${eligible.toLocaleString('zh-CN')} 次可核对调用`}`}
+        {unknown !== null && unknown > 0 ? ` · ${unknown.toLocaleString('zh-CN')} 次未纳入比例` : ''}
+        {partial !== null && partial > 0 ? ` · ${partial.toLocaleString('zh-CN')} 次尚非最终计数` : ''}</p>
+    </div>
+    <dl className="pw-usage-secondary-counts"><NativeCount label="缓存读取" value={normalized.cacheRead}/><NativeCount label="缓存写入" value={normalized.cacheWrite}/><NativeCount label="推理 Token" value={normalized.reasoning}/></dl>
+    <p className="pw-reading-note">输入包含已归一化的缓存读写；缓存与推理为分项，不再次加到输入／输出。缓存命中也不减少上下文占用。</p>
+  </section>;
 }
 
 /** A readable view over the native quote. Exact decimal strings are never rounded or summed here. */
@@ -112,6 +144,7 @@ export function TaskInference({ taskId }: { taskId: string }) {
   // Keep records tied to this task even during a prop change before effect cleanup.
   const current = value?.taskId === taskId ? value : null;
   const groups = list(current?.groups), calls = list(current?.calls);
+  const composition = readContextBreakdown(current?.context?.details?.breakdown);
   return <section className="pw-task-inference pw-task-reading" aria-label="原任务模型调用与用量" aria-busy={busy}>
     <header className="pw-usage-heading">
       <div>{current && <p className="pw-reading-eyebrow">模型调用与用量</p>}<h3>{current ? current.headline : '模型调用与用量'}</h3>
@@ -120,6 +153,7 @@ export function TaskInference({ taskId }: { taskId: string }) {
     </header>
     {error && <div className="pw-usage-notice" role="alert"><p>{error}</p>{current && <p className="pw-reading-note">下方仍是上次成功读取的记录。</p>}</div>}
     {current && <>
+      <UsageSummary value={current}/>
       <p className="pw-usage-coverage">{current.coverage}</p>
       {list(current.warnings).length > 0 && <aside className="pw-usage-notice" aria-label="用量记录提醒"><Lines values={current.warnings}/></aside>}
       <Accordion variant="divided" className="pw-reading-disclosures pw-usage-sections" defaultExpandedKeys={current.context?.attention ? ['native-usage-context'] : []}>
@@ -127,8 +161,10 @@ export function TaskInference({ taskId }: { taskId: string }) {
           <Lines values={current.money}/>
           <p className="pw-reading-note">历史估算沿原冻结价目保留。实际账单和套餐剩余量未观察；服务冷却时间不是套餐重置时间。</p>
         </AccordionItem>
-        <AccordionItem id="native-usage-context" title={current.context?.title || '原上下文信息'} description={current.context?.attention ? '需要核对' : '保留的请求检查记录'}>
-          <Lines values={current.context?.lines}/>
+        <AccordionItem id="native-usage-context" title={current.context?.title || '原上下文信息'} description={current.context?.attention ? '需要核对' : '内容构成与窗口预算'}>
+          {composition ? <><ContextBreakdown value={composition} identity={`${taskId}:${current.context?.at}`}/>
+            <Accordion variant="divided" className="pw-reading-disclosures"><AccordionItem id="native-usage-context-receipt" title="原请求检查" headingLevel={4}><Lines values={current.context?.lines}/></AccordionItem></Accordion>
+          </> : <Lines values={current.context?.lines}/>}
         </AccordionItem>
         <AccordionItem id="native-usage-groups" title="模型与用途分组" description={`${groups.length} 组 · 保留原服务计数口径`}>
           {groups.length ? <Accordion variant="divided" className="pw-reading-disclosures pw-usage-records">

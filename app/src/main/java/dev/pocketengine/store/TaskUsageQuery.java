@@ -54,12 +54,15 @@ final class TaskUsageQuery {
     }
     static JSONObject trends(SQLiteDatabase db,UsageTrendProjection.Query query,RunControl control)throws Exception {
         control.check();JSONArray receipts=new JSONArray();int rows=0,bytes=0,scopeExcluded=0,oversized=0;boolean limited=false;
+        java.util.Map<String,JSONObject> headers=new java.util.LinkedHashMap<>();
         String sql="SELECT e.task_id,e.event_order,e.body_bytes,t.ui_header FROM task_events e JOIN tasks t ON t.task_id=e.task_id WHERE e.event_type='inference_receipt' AND t.updated_at>=? ORDER BY t.updated_at DESC,e.task_id,e.event_order DESC LIMIT "+(MAX_ROWS+1);
         try(Cursor cursor=db.rawQuery(sql,new String[]{Long.toString(query.fromInclusive())})){
             while(cursor.moveToNext()){
                 control.check();if(rows==MAX_ROWS){limited=true;break;}rows++;
                 String header=cursor.getString(3);if(header==null||header.length()>32768){scopeExcluded++;continue;}
-                if(!privateHeader(new JSONObject(header))){scopeExcluded++;continue;}
+                JSONObject verified=new JSONObject(header);
+                if(!privateHeader(verified)||!cursor.getString(0).equals(verified.optString("id"))){scopeExcluded++;continue;}
+                headers.putIfAbsent(cursor.getString(0),new JSONObject().put("conversationId",verified.optString("conversationId")).put("goal",verified.optString("goal")));
                 long size=cursor.getLong(2);if(size<0||size>MAX_RECEIPT_BYTES){oversized++;continue;}
                 if(bytes+size>MAX_BYTES){limited=true;break;}
                 try(Cursor body=db.rawQuery("SELECT event_json FROM task_events WHERE task_id=? AND event_order=?",new String[]{cursor.getString(0),Long.toString(cursor.getLong(1))})){
@@ -71,7 +74,7 @@ final class TaskUsageQuery {
                 }
             }
         }
-        control.check();return UsageTrendProjection.fromReceipts(receipts,query).put("rowsExamined",rows).put("sourceBytes",bytes)
+        control.check();return UsageTrendProjection.fromReceipts(receipts,query,headers).put("rowsExamined",rows).put("sourceBytes",bytes)
                 .put("scopeExcludedRows",scopeExcluded).put("oversizedRows",oversized).put("queryLimited",limited||oversized>0)
                 .put("maxRows",MAX_ROWS).put("maxSourceBytes",MAX_BYTES).put("sourceReadAt",System.currentTimeMillis());
     }

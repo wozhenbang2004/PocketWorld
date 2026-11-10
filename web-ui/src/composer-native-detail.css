@@ -1,12 +1,15 @@
 /* Native context and permission details. Composer geometry belongs to
  * composer-squircle.css; a sheet has one continuous scrolling body. */
-.pw-context-meter-detail { display: grid; gap: 16px; min-width: 0; color: var(--pw-copy); font: 400 13px/21px var(--pw-font); }
+.pw-context-meter-detail { display: grid; gap: 22px; min-width: 0; color: var(--pw-copy); font: 400 13px/21px var(--pw-font); }
+.pw-settings-dialog.pw-context-dialog { width: min(100%, 480px); }
 .pw-context-meter-source { display: flex; align-items: center; gap: 8px; color: var(--pw-muted); }
-.pw-context-meter-overview { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
-.pw-context-meter-overview > div { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.pw-context-meter-overview span { color: var(--pw-muted); font-size: 12px; }
-.pw-context-meter-overview strong { color: var(--pw-ink); font: 500 22px/32px var(--pw-font); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.pw-context-meter-overview small { color: var(--pw-copy); font-size: 12px; font-weight: 400; }
+.pw-context-draft { display: grid; gap: 5px; padding: 12px 14px; border-radius: 13px; background: var(--pw-inset); }
+.pw-context-draft > div { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.pw-context-draft span { margin-right: auto; color: var(--pw-copy); font-size: 13px; }
+.pw-context-draft strong { color: var(--pw-ink); font: 500 15px/22px var(--pw-font); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.pw-context-draft p, .pw-context-draft small { color: var(--pw-muted); font: 400 12px/19px var(--pw-font); }
+.pw-context-summary-state { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 5px 12px; color: var(--pw-copy); font-size: 12px; }
+.pw-context-summary-state strong { color: var(--pw-ink); font-weight: 500; font-variant-numeric: tabular-nums; }
 .pw-context-meter-breakdown { display: grid; gap: 14px; padding-block: 4px 10px; }
 .pw-context-meter-detail [class~="group/item"] { border: 0; box-shadow: none; }
 .pw-context-meter-detail [slot="trigger"] { min-height: 44px; padding-inline: 0; }

@@ -1213,3 +1213,30 @@ DSH-Go 确有 Claude OAuth 桥接：[固定版本的 AuthBridge](https://github.
 本批编译不等于 Android 真机体验通过。沿原发布产物做当前界面观察或交付用户体验；旧截图及批准设计只作参照，不冒充本批界面证据。
 
 本批沿原截图采集脚本更新已变化的记忆入口，补充真实个人设置、空记忆及未提交新增表单的只读截图路径；不填写资料、不切换开关、不提交表单、不注入对象，不增加断言或功能通过门禁。新建/撤销/来源及模型行为的持久化旅程须按实际使用结果另行确认。
+# 2026-11-10 · 用量与上下文工作台
+
+本轮接管“接管优化界面对话”。用户原话：“把这个软件的关于用量统计，token统计……上下文统计……重做”“展示你每天用了多少 token”“这个上下文占用它有什么构成呢……系统提示词啊，工具啊……缓存的命中率”“希望你做一个深度的定制”。精确消息 ID 未提供；当前接管从 main `46acfec2` 开始，独立工作副本保留同期界面、动效与手机能力改动。既有未完成的逐页视觉反馈继续保留，本节仅闭合用量与上下文相关范围。
+
+## 本轮采用的设计与数据合同
+
+| 要求 | 正式落点与依据 | 完成判断 |
+| --- | --- | --- |
+| USG-01 每日实际用量 | 同一物理调用账本生成 7/30/90 个本地自然日的趋势；总量、输入、输出、缓存读取可切换；点选日期查看读数，缺记录日明确标记。 | 不从当前分页消息反推全局消耗；重试/压缩/失败保留原调用身份。 |
+| USG-02 可解释的构成 | `UsageWorkspace` 分模型、用途及有可核对归属的会话查看；输入/输出、推理、缓存读/写分开呈现。 | 输入含缓存时不再加一次；输出含推理时不再加一次。 |
+| USG-03 缓存效率 | 缓存命中率使用同一可比较样本的缓存读取总数 ÷ 完整输入总数；标明未知与未结束样本。 | 不平均每次请求百分比，不把缓存未命中伪装成缓存写入，不从命中率推订阅余额。 |
+| USG-04 当前上下文 | 沿既有细空心圆环与受控详情入口，显示请求占用/模型窗口/输出预留；分段条和明细解释系统提示词、工具定义、记忆与能力参考、摘要、历史、本轮输入、工具结果、图片与协议预留。 | 保留会话、run、epoch 身份；累计消耗与当前请求分开；草稿单列；缓存仍占窗口；混合参考不冒称纯记忆。 |
+| USG-05 估算透明 | 构成按真实请求组装时同一估计口径生成；provider 校准总量与本地构成无法精确对应时分开说明。 | 不用正比摊派伪造 provider 实报分项，不给未知窗口制造百分比。 |
+| USG-06 统一入口 | 设置中的“用量统计”和 AI 接入里的“用量统计”使用同一工作台；概览、调用记录、预算按任务分层，诊断仍为低频独立披露。 | 不复制两套账本，不把统计页缩成日志列表，不再堆多个等权空卡片。 |
+| USG-07 真实边界 | 保留未知、部分小计、来源、读取上限及更新时间；API 冻结价估算与套餐用量分开。 | 没有费用数据不显示免费/0；没有记录不宣称实际用量为零。 |
+
+视觉继续采用已确认组件及现行中性灰、低饱和蓝强调色：Affect Usage Meter 的紧凑总量/日期柱状条/联动读数结构，Context Window / Compact Breakdown 的构成披露，现有 BoardUI 选择器与 Accordion、Ovio LiquidTabs、Josh 按压及 Motion。原代码入口是 `src/shell-library/upstream/affect/src/demos/components-a/inputs.tsx`（UsageMeter）与既有 `src/library/context.tsx`、`src/library/adapted/`，来源身份沿现存 provenance 保留；原演示数据、订阅额度和时间模拟不进入生产组件。当前组合是本轮采用方案，未冒称用户已认可新版本。
+
+首屏只保留一组 Token 总量与输入/输出读数、时间范围和趋势；缓存与模型/用途分析按阅读顺序排列，辅助口径折叠。低对比工作底色承载少量白色语义分组，不逐行套卡；数字用等宽位，长模型名允许换行，触屏点击与键盘方向键均能查看日期，减少动态偏好沿既有组件生效。来源与估算边界放在相关数字附近，长技术回执继续在明细层。
+
+参考依据：OpenAI [Prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching)、[Codex 状态与用量命令](https://learn.chatgpt.com/docs/developer-commands)；Claude [缓存字段](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)、[流式累计字段](https://platform.claude.com/docs/en/build-with-claude/streaming)、[上下文](https://code.claude.com/docs/en/context-window)；DSH-Go `8f31b2ed` 的 `usage_state.dart` / `usage_sheet.dart`；AionUI `e108b6b5` 的 `ContextUsageIndicator.tsx`。产品逻辑参考不等于复制第三方产品源代码。新增审美系统已从 Space 当前页面读取；正式 Skill 的待合并状态仍按原页记录，不在本任务覆盖其 HEAD。
+
+验证边界：不编写或运行任何测试，不用 fixture、模拟宿主或旧截图冒充新版本效果；不在本地构建 APK。只做必要源码/类型核对与独立只读审查，交付沿既有 main 的无测试发布流水线。远端构建、APK 及真实设备体验在取得对应证据后追加。
+
+本批只读交叉审查修正了重复“继续”等同文消息的本轮/历史归类、午夜夏令时的自然日边界、窄屏四项指标选择器宽度，以及窗口失效后旧结果的显示。密集趋势增加 44×48 的前后日期按钮；预算的编辑、审阅、提交中与待确认结果均参与切页保护，核对仍走原设置读取入口。失败/取消调用的部分计数不再标成“未结束”。这些是源码层面的修正，当前 Android 视觉、触摸与真实回执旅程尚未体验。
+
+集成静态核对：前端、原生投影和上下文详情已在同一主线工作副本整合；`node web-ui/node_modules/typescript/bin/tsc --noEmit -p web-ui/tsconfig.json` 与 `git diff --check origin/main..HEAD` 均退出 0。实际采用的上下文参考还包括 `src/shell-library/upstream/affect/src/demos/components-b/metrics.tsx` 和 `components-b/context.tsx`；归档 `0e69029b` 为已认可的公开预览独立实现，未冒称 Affect Pro 原码。Gemini 标准 GenerateContent 的完整输出仅在可信总量与输入可比较时按差额归一化，推理分项仍可未知，来源在投影中保留。

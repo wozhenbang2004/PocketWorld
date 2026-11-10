@@ -67,7 +67,7 @@ public final class ContextCompactor {
                     // validate fresh originals before any separately charged SUMMARY call.
                     ownerInputRebuilt=true;continue;
                 }
-                before=active.plan.project(visible,sourceMap,summary.text);
+                before=active.plan.project(visible,sourceMap,summary.text,budget::displaySummary);
                 try{return withEvidence(budget.request(before,tools,selected),generated);}
                 catch(RunContextBudget.Blocked full){if(!"budget_exceeded".equals(full.status))throw full;}
             }
@@ -114,7 +114,7 @@ public final class ContextCompactor {
             requirePlanning(planning,turn);
             ModelConfig actualSummary=ModelGateway.actualConfigForReceipt(summarySelection,terminal[0]);
             frozen.check(original);SummaryDraft actual=SummaryDraft.completed(frozen,answer,terminal[0],actualSummary);
-            JSONArray projected=plan.project(visible,sourceMap,actual.text);
+            JSONArray projected=plan.project(visible,sourceMap,actual.text,budget::displaySummary);
             if(projected.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length>=before.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length)throw new CompactionPlan.Unavailable("summary_made_no_progress");
             RunContextBudget.Projection checked=null;
             try{checked=budget.request(projected,tools,selected);}

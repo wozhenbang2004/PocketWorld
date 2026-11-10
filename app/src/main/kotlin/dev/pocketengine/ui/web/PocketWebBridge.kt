@@ -224,7 +224,7 @@ internal class PocketWebBridge(
             "tasks.refresh", "tasks.open", "tasks.close", "tasks.stop", "tasks.review", "tasks.confirm", "tasks.approve", "tasks.resolve", "tasks.resume", "tasks.scope", "tasks.plan.enter", "tasks.answerQuestion", "tasks.answerQuestionChoice", "tasks.deleteScreenshot", "privacy.screenshots.read", "privacy.screenshots.save",
             "projects.refresh", "projects.select", "projects.create", "projects.open", "projects.newFile", "projects.edit", "projects.save", "projects.close", "projects.history", "projects.revision", "projects.useRevision", "projects.retry",
             "settings.reviewModelTransport", "settings.saveLocalObservation", "settings.openSystem", "settings.openBrowser", "settings.openAppUpdates",
-            "connections.enter", "connections.leave", "models.snapshot", "models.review", "models.select", "models.connection.add", "models.connection.edit", "models.connection.test", "models.connection.select", "devices.snapshot", "history.read", "usage.read", "usage.task", "usage.close", "usage.reestimate", "trace.read", "trace.detail", "trace.close",
+            "connections.enter", "connections.leave", "models.snapshot", "models.review", "models.select", "models.connection.add", "models.connection.edit", "models.connection.test", "models.connection.select", "devices.snapshot", "history.read", "usage.read", "usage.task", "usage.trends", "usage.trends.close", "usage.close", "usage.reestimate", "trace.read", "trace.detail", "trace.close",
             "phone.prepare", "phone.start", "phone.query", "phone.draft.edit", "phone.pause", "phone.resume", "phone.stop", "phone.deadline", "background.refresh", "background.discover", "background.cancel", "background.close", "background.pair", "background.connect", "background.mainScreen", "background.selectMainScreen",
             "queued.open", "queued.refresh", "queued.close", "queued.edit", "queued.change", "queued.save", "queued.editor.close",
             "accounts.beginLogin", "accounts.cancelLogin", "accounts.openAuthorization", "accounts.select", "accounts.refresh", "accounts.models", "accounts.retryPlanUsage", "accounts.model.review", "accounts.model.select", "accounts.logout.review", "accounts.logout.confirm", "accounts.setEnabled", "accounts.refreshAuthorization", "accounts.reauthorize", "accounts.acknowledgePlanWelcome", "accounts.manageUsage",
@@ -568,6 +568,14 @@ internal class PocketWebBridge(
             }
             if (action == "trace.close") { checkedPayload(args, emptySet()); trajectory.clear(); complete(id, JSONObject().put("closed", true), null); return }
             if (action == "usage.task") { checkedPayload(args, setOf("taskId", "cursor")); inference.read(requiredString(args, "taskId"), requiredInt(args, "cursor")) { result, error -> complete(id, result, error) }; return }
+            if (action == "usage.trends.close") { checkedPayload(args, emptySet()); inference.clearTrends(); complete(id, JSONObject().put("closed", true), null); return }
+            if (action == "usage.trends") {
+                checkedPayload(args, setOf("fromInclusive", "toExclusive", "zoneId"))
+                val window = captureWindow()
+                inference.trends(requiredLong(args, "fromInclusive"), requiredLong(args, "toExclusive"), requiredString(args, "zoneId"),
+                    { !closed && acceptsWindow(window) && controller.webPrivateOwnerVisible() }) { result, error -> complete(id, result, error) }
+                return
+            }
             if (action == "usage.read") {
                 checkedPayload(args, setOf("cursor"))
                 controller.openNativeInferenceHistory()

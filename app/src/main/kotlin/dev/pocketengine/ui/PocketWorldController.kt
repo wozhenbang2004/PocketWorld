@@ -3971,6 +3971,28 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
 
     /** Original receipt query only; closing the panel cancels the read and never a task. */
+    internal fun readInferenceTrends(query: dev.pocketengine.runtime.usage.UsageTrendProjection.Query, current: () -> Boolean, done: (JSONObject?, String?) -> Unit): () -> Unit {
+        val read = dev.pocketengine.core.RunControl()
+        if (closed || !webPrivateOwnerVisible() || !current()) { done(null, "请在原私人页面读取用量"); return { read.cancel() } }
+        val ticket = webWindowTicket()
+        val host = app.nativeDiagnostics()
+        val owner = host.openOwnerWindow().also { it.setForeground(true) }
+        fun valid() = !closed && webPrivateOwnerVisible() && webWindowTicket() == ticket && current()
+        read.setAuthorityCheck { check(valid()) { "原用量页面已变化" } }
+        try { io.execute {
+            val result = runCatching {
+                read.check(); host.trends(owner, query, read).also { read.check() }
+            }
+            owner.close()
+            main.post {
+                if (!valid() || read.isCancelled) done(null, "原用量页面已变化，请重新读取")
+                else result.fold({ done(it, null) }, { done(null, message(it)) })
+            }
+        } } catch (failure: Exception) { owner.close(); done(null, message(failure)) }
+        return { read.cancel(); owner.close() }
+    }
+
+    /** Original receipt query only; closing the panel cancels the read and never a task. */
     internal fun readTaskInferenceUsage(task: JSONObject, done: (dev.pocketengine.runtime.usage.TaskInferencePresentation.Snapshot?, String?) -> Unit): () -> Unit {
         val read = dev.pocketengine.core.RunControl()
         if (closed || !privateWorkspaceView()) { done(null, "请在原私人任务中核对用量"); return { read.cancel() } }

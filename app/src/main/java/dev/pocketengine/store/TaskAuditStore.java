@@ -283,7 +283,7 @@ public final class TaskAuditStore {
                 ||"owner_work".equals(task.optString("executionRole"))||task.optString("runId").isEmpty()
                 ||task.optInt("coordinatorEpoch")<=0||"awaiting_user".equals(task.optString("status")))return null;
         String id=task.getString("id");
-        try(Cursor row=db.rawQuery("SELECT CASE WHEN body_bytes BETWEEN 0 AND 16384 AND length(CAST(event_json AS BLOB))<=16384 THEN event_json END FROM task_events WHERE task_id=? AND event_type='context_budget' ORDER BY event_order DESC LIMIT 1",new String[]{id})){
+        try(Cursor row=db.rawQuery("SELECT CASE WHEN body_bytes BETWEEN 0 AND 32768 AND length(CAST(event_json AS BLOB))<=32768 THEN event_json END FROM task_events WHERE task_id=? AND event_type='context_budget' ORDER BY event_order DESC LIMIT 1",new String[]{id})){
             if(!row.moveToFirst()||row.isNull(0))return null;
             JSONObject event;
             try{event=new JSONObject(row.getString(0));}catch(org.json.JSONException unreadable){return null;}
@@ -293,9 +293,11 @@ public final class TaskAuditStore {
                     ||task.getInt("coordinatorEpoch")!=event.getLong("epoch"))return null;
             JSONObject original=event.optJSONObject("receipt");if(original==null)return null;
             JSONObject receipt=new JSONObject(),after=original.optJSONObject("after");
-            for(String key:new String[]{"modelContextTokens","inputLimitTokens","outputReserveTokens"})copyContextNumber(original,receipt,key);
+            for(String key:new String[]{"modelContextTokens","inputLimitTokens","outputReserveTokens","safetyReserveTokens","providerReportedInputTokens"})copyContextNumber(original,receipt,key);
             if(after!=null){JSONObject counts=new JSONObject();copyContextNumber(after,counts,"estimatedInputTokens");receipt.put("after",counts);}
-            for(String key:new String[]{"modelWindowKnown","summaryProjectionUsed"})if(original.opt(key) instanceof Boolean)receipt.put(key,original.get(key));
+            for(String key:new String[]{"modelWindowKnown","summaryProjectionUsed","providerUsageUsed","tokenizerExact"})if(original.opt(key) instanceof Boolean)receipt.put(key,original.get(key));
+            JSONObject breakdown=dev.pocketengine.runtime.context.ContextBreakdown.publicView(original.optJSONObject("breakdown"));
+            if(breakdown!=null)receipt.put("breakdown",breakdown);
             Object status=original.opt("status");if(status instanceof String&&((String)status).length()<=80)receipt.put("status",status);
             JSONObject check=new JSONObject().put("format","pocketworld.context-budget-check.v1").put("taskId",id)
                     .put("runId",event.getString("runId")).put("epoch",event.getLong("epoch")).put("receipt",receipt);

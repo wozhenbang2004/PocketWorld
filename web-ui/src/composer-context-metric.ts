@@ -4,6 +4,44 @@ const rows = (value: unknown): Row[] => Array.isArray(value) ? value.map(row).fi
 const id = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 240;
 const count = (value: unknown): number | null => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
 
+export type ContextPart = { id: string; label: string; tokens: number | null; bytes: number | null; messages: number | null; images: number | null };
+export type ContextComposition = {
+  parts: ContextPart[];
+  estimatedInputTokens: number | null;
+  localInputTokens: number | null;
+  providerInputTokens: number | null;
+  providerAdjustmentTokens: number | null;
+  additive: boolean;
+  partsAgree: boolean;
+};
+const contextLabels: Record<string, string> = {
+  system: '系统提示词', tools: '工具定义', reference: '记忆与能力参考', memory: '记忆', summary: '上下文摘要',
+  history: '对话历史', current_input: '本轮输入', tool_results: '工具结果', attachments: '图片与视觉输入', overhead: '协议与估算预留',
+};
+
+/** Validate a body-free native breakdown. Arithmetic here only checks chart geometry;
+ * it never generates billing counters or assigns measured tokens to a category. */
+export function readContextBreakdown(value: unknown): ContextComposition | null {
+  const source = row(value);
+  if (source?.format !== 'pocketworld.context-breakdown.v1' || source.source !== 'local_estimate' || source.tokenizerExact !== false ||
+      !Array.isArray(source.components) || source.components.length === 0 || source.components.length > 16) return null;
+  const seen = new Set<string>(), parts: ContextPart[] = [];
+  for (const raw of source.components) {
+    const part = row(raw), key = part?.id;
+    if (typeof key !== 'string' || !Object.hasOwn(contextLabels, key) || seen.has(key)) return null;
+    seen.add(key);
+    parts.push({ id: key, label: contextLabels[key], tokens: count(part?.estimatedTokens), bytes: count(part?.bytes),
+      messages: count(part?.messages), images: count(part?.images) });
+  }
+  const localInputTokens = count(source.localEstimatedInputTokens), estimatedInputTokens = count(source.estimatedInputTokens);
+  const sum = parts.every(part => part.tokens !== null) ? parts.reduce((total, part) => total + part.tokens!, 0) : null;
+  const partsAgree = sum !== null && Number.isSafeInteger(sum) && localInputTokens !== null && sum === localInputTokens;
+  const adjustment = source.providerAdjustmentTokens;
+  return { parts, estimatedInputTokens, localInputTokens, providerInputTokens: count(source.providerReportedInputTokens),
+    providerAdjustmentTokens: typeof adjustment === 'number' && Number.isSafeInteger(adjustment) ? adjustment : null,
+    additive: source.additive === true && partsAgree && estimatedInputTokens === localInputTokens, partsAgree };
+}
+
 export type ContextMetric = {
   available: boolean;
   reason: string;
@@ -17,10 +55,12 @@ export type ContextMetric = {
   inputPercent: number | null;
   summaryUsed: boolean;
   attention: boolean;
+  beforeInputTokens: number | null;
+  breakdown: ContextComposition | null;
 };
 const unavailable = (reason: string, taskId: string | null = null): ContextMetric => ({ available: false, reason, taskId, at: null,
   inputTokens: null, inputLimit: null, windowTokens: null, outputReserve: null, windowPercent: null, inputPercent: null,
-  summaryUsed: false, attention: false });
+  summaryUsed: false, attention: false, beforeInputTokens: null, breakdown: null });
 
 /** Read only native request checks already present in PocketWebState.task.raw.
  * This is a historical display projection, not a tokenizer, admission decision,
@@ -91,14 +131,25 @@ export function composerContextMetric(snapshot: unknown, composerKey: string | u
   if (!receipt) return unavailable('尚无保留的上下文检查记录，不从累计用量推算。', taskId);
   const inputTokens = count(row(receipt.after)?.estimatedInputTokens), inputLimit = count(receipt.inputLimitTokens);
   const windowTokens = count(receipt.modelContextTokens), outputReserve = count(receipt.outputReserveTokens);
-  if (receipt.modelWindowKnown !== true || inputTokens === null || inputLimit === null || inputLimit <= 0 ||
+  const candidateBreakdown = readContextBreakdown(receipt.breakdown);
+  const breakdown = candidateBreakdown?.estimatedInputTokens === inputTokens ? candidateBreakdown : null;
+  const beforeInputTokens = count(row(receipt.before)?.estimatedInputTokens);
+  const summaryUsed = receipt.summaryProjectionUsed === true;
+  const attention = typeof receipt.status === 'string' && receipt.status !== '' && receipt.status !== 'ready';
+  // A missing window prevents a percentage, not reading a retained input count.
+  if (receipt.modelWindowKnown !== true)
+    return { ...unavailable('上次请求保留了本地估算，模型窗口尚未核对，暂不显示占比。', taskId),
+      available: inputTokens !== null, inputTokens, at, breakdown, beforeInputTokens, summaryUsed, attention };
+  if (inputTokens === null || inputLimit === null || inputLimit <= 0 ||
       windowTokens === null || windowTokens <= 0 || outputReserve === null || inputLimit > windowTokens || outputReserve > windowTokens - inputLimit)
-    return { ...unavailable('模型窗口、图像预算或原检查数据未能完整核对。', taskId), at };
-  return { available: true, reason: '最近一次请求的本地保守估算，不含尚未发送的草稿；不是服务实际计数。', taskId, at,
+    return { ...unavailable('模型窗口、图像预算或原检查数据未能完整核对。', taskId), at, breakdown, beforeInputTokens, summaryUsed, attention };
+  return { available: true, reason: receipt.providerUsageUsed === true ?
+      '依据服务输入采样与后续内容估算占用；构成仍是独立本地估算，草稿尚未计入。' :
+      '最近一次请求的本地保守估算，不含尚未发送的草稿；不是服务实际计数。', taskId, at,
     inputTokens, inputLimit, windowTokens, outputReserve,
     windowPercent: inputTokens / windowTokens * 100, inputPercent: inputTokens / inputLimit * 100,
-    summaryUsed: receipt.summaryProjectionUsed === true,
-    attention: inputTokens > inputLimit || typeof receipt.status === 'string' && receipt.status !== '' && receipt.status !== 'ready' };
+    summaryUsed, beforeInputTokens, breakdown,
+    attention: inputTokens > inputLimit || attention };
 }
 
 /** A live, text-only draft estimate, not an input-token billing value or an authorization decision.

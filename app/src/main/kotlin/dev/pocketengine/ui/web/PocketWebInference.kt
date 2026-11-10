@@ -9,7 +9,19 @@ import org.json.JSONObject
 internal class PocketWebInference(private val controller: PocketWorldController) {
     private var cancel: (() -> Unit)? = null
     private var generation = 0L
-    fun clear() { generation++; cancel?.invoke(); cancel = null }
+    private var trendsCancel: (() -> Unit)? = null
+    @Volatile private var trendsGeneration = 0L
+    fun clearTrends() { trendsGeneration++; trendsCancel?.invoke(); trendsCancel = null }
+    fun clear() { generation++; cancel?.invoke(); cancel = null; clearTrends() }
+    fun trends(from: Long, until: Long, zone: String, current: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
+        val query = dev.pocketengine.runtime.usage.UsageTrendProjection.Query(from, until, zone)
+        check(controller.webPrivateOwnerVisible() && current()) { "请在本机私人页面查看用量" }
+        clearTrends(); val request = trendsGeneration
+        trendsCancel = controller.readInferenceTrends(query, { request == trendsGeneration && current() }) { result, error ->
+            if (request != trendsGeneration || !controller.webPrivateOwnerVisible() || !current()) { done(null, "原用量页面已变化，请重新读取"); return@readInferenceTrends }
+            trendsCancel = null; done(result, error)
+        }
+    }
     fun read(taskId: String, cursor: Int, done: (JSONObject?, String?) -> Unit) {
         require(cursor in 0..100000) { "调用记录窗口无效" }
         check(controller.webPrivateOwnerVisible()) { "请在原私人任务查看用量" }
@@ -27,7 +39,9 @@ internal class PocketWebInference(private val controller: PocketWorldController)
         val calls = value.calls(); val end = minOf(cursor + 20, calls.size)
         return JSONObject().put("taskId", task).put("headline", value.headline()).put("coverage", value.coverage())
             .put("money", JSONArray(value.money())).put("warnings", JSONArray(value.warnings())).put("hasAccount", value.hasAccount())
-            .put("context", JSONObject().put("title", value.context().title()).put("lines", JSONArray(value.context().lines())).put("at", value.context().at()).put("attention", value.context().attention()))
+            .put("normalized", value.metrics().getJSONObject("normalized")).put("cache", value.metrics().getJSONObject("cache"))
+            .put("attempts", value.metrics().getInt("attempts")).put("outcomes", value.metrics().getJSONObject("outcomes"))
+            .put("context", JSONObject().put("title", value.context().title()).put("lines", JSONArray(value.context().lines())).put("at", value.context().at()).put("attention", value.context().attention()).put("details", value.context().details()))
             .put("groups", JSONArray().also { out -> value.groups().forEach { out.put(JSONObject().put("title", it.title()).put("route", it.route()).put("semantics", it.semantics()).put("counters", counters(it.counters()))) } })
             .put("calls", JSONArray().also { out -> calls.drop(cursor).take(20).forEach { out.put(JSONObject().put("id", it.id()).put("purpose", it.purpose()).put("status", it.status()).put("route", it.route()).put("binding", it.binding()).put("at", it.at()).put("apiKey", it.apiKey()).put("counters", counters(it.counters())).put("pricing", JSONArray(it.pricing())).put("failure", JSONArray(it.failure()))) } })
             .put("cursor", cursor).put("nextCursor", if (end < calls.size) end else -1).put("retainedCallCount", calls.size).put("readOnly", true).put("executionAuthorized", false)

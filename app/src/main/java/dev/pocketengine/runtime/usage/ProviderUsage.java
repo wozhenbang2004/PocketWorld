@@ -34,6 +34,7 @@ public final class ProviderUsage {
         private final String protocol;
         private final Map<Counter,Count> counts=new LinkedHashMap<>();
         private final Map<String,Count> media=new LinkedHashMap<>();
+        private final Map<String,Count> cacheWriteDetails=new LinkedHashMap<>();
         private final Set<String> invalid=new LinkedHashSet<>();
         private boolean observed;
         private String reportedModel,finishReason;private JSONObject providerMeasures=new JSONObject();
@@ -52,7 +53,7 @@ public final class ProviderUsage {
                     count(usage,"prompt_tokens",Counter.INPUT,"usage.prompt_tokens",stage);
                     count(usage,"completion_tokens",Counter.OUTPUT,"usage.completion_tokens",stage);
                     count(usage,"total_tokens",Counter.TOTAL,"usage.total_tokens",stage);
-                    detail(usage,"prompt_tokens_details","cached_tokens",Counter.CACHE_READ,stage);
+                    chatCacheRead(usage,stage);
                     // OpenRouter-compatible documented extension; absent never means zero.
                     detail(usage,"prompt_tokens_details","cache_write_tokens",Counter.CACHE_WRITE,stage);
                     detail(usage,"completion_tokens_details","reasoning_tokens",Counter.REASONING,stage);
@@ -62,6 +63,8 @@ public final class ProviderUsage {
                     count(usage,"output_tokens",Counter.OUTPUT,"usage.output_tokens",stage);
                     count(usage,"total_tokens",Counter.TOTAL,"usage.total_tokens",stage);
                     detail(usage,"input_tokens_details","cached_tokens",Counter.CACHE_READ,stage);
+                    detail(usage,"input_tokens_details","cache_write_tokens",Counter.CACHE_WRITE,stage);
+                    responseCacheWriteDetails(usage,stage);
                     detail(usage,"output_tokens_details","reasoning_tokens",Counter.REASONING,stage);
                     break;
                 case "openai_realtime_transcription":
@@ -100,6 +103,35 @@ public final class ProviderUsage {
                 default:throw new AssertionError();
             }
         }
+        private void chatCacheRead(JSONObject usage,Stage stage){
+            JSONObject details=usage.optJSONObject("prompt_tokens_details");
+            detail(usage,"prompt_tokens_details","cached_tokens",Counter.CACHE_READ,stage);
+            if(!usage.has("prompt_cache_hit_tokens"))return;
+            if(details==null||!details.has("cached_tokens")||details.isNull("cached_tokens")){
+                count(usage,"prompt_cache_hit_tokens",Counter.CACHE_READ,"usage.prompt_cache_hit_tokens",stage);return;
+            }
+            // Two documented aliases describe the same bytes. Conflicting reports
+            // are unknown, not two caches to sum or an arbitrary preferred answer.
+            try{
+                long nested=new BigDecimal(details.get("cached_tokens").toString()).longValueExact();
+                Object raw=usage.get("prompt_cache_hit_tokens");if(!(raw instanceof Number))throw new ArithmeticException();
+                long top=new BigDecimal(raw.toString()).longValueExact();
+                if(top<0||nested<0||top!=nested)throw new ArithmeticException();
+                invalid.remove("usage.prompt_cache_hit_tokens");
+            }catch(Exception conflict){counts.remove(Counter.CACHE_READ);invalid.add("usage.prompt_cache_hit_tokens");}
+        }
+        private void responseCacheWriteDetails(JSONObject usage,Stage stage){
+            JSONObject input=usage.optJSONObject("input_tokens_details"),details=input==null?null:input.optJSONObject("cache_write_tokens_details");
+            if(details==null)return;
+            for(String key:new String[]{"ttl_30m_tokens","ttl_12h_tokens"}){
+                if(!details.has(key))continue;String path="usage.input_tokens_details.cache_write_tokens_details."+key;
+                if(details.isNull(key)){cacheWriteDetails.remove(key);invalid.remove(path);continue;}
+                try{Object raw=details.get(key);if(!(raw instanceof Number))throw new ArithmeticException();
+                    long value=new BigDecimal(raw.toString()).longValueExact();if(value<0)throw new ArithmeticException();
+                    cacheWriteDetails.put(key,new Count(value,path,stage));invalid.remove(path);
+                }catch(Exception malformed){cacheWriteDetails.remove(key);invalid.add(path);}
+            }
+        }
         private void duration(JSONObject usage,Stage stage){
             try{Object raw=usage.opt("seconds");if(!(raw instanceof Number))throw new ArithmeticException();BigDecimal value=new BigDecimal(raw.toString());if(value.signum()<0||value.precision()>24||value.scale()<-6||value.scale()>6)throw new ArithmeticException();
                 providerMeasures.put("AUDIO_SECONDS",new JSONObject().put("value",value).put("unit","seconds").put("source","provider_reported").put("sourcePath","usage.seconds").put("stage",stage.name()).put("notConvertedToTokensOrMoney",true));invalid.remove("usage.seconds");
@@ -132,6 +164,9 @@ public final class ProviderUsage {
             for(Map.Entry<Counter,Count> entry:counts.entrySet()){
                 Count count=entry.getValue();entry.setValue(new Count(count.value,count.sourcePath,Stage.FINAL,count.observedAt));
             }
+            for(Map.Entry<String,Count> entry:cacheWriteDetails.entrySet()){
+                Count count=entry.getValue();entry.setValue(new Count(count.value,count.sourcePath,Stage.FINAL,count.observedAt));
+            }
         }
         public synchronized Map<Counter,Count> counts(){return Collections.unmodifiableMap(new LinkedHashMap<>(counts));}
         public synchronized JSONObject toJson()throws Exception{
@@ -143,8 +178,9 @@ public final class ProviderUsage {
                         .put("sourcePath",JSONObject.NULL).put("observedAt",JSONObject.NULL).put("stage",JSONObject.NULL):value.json());
             }
             JSONArray bad=new JSONArray();for(String path:invalid)bad.put(path);
+            JSONObject writeDetails=new JSONObject();for(var entry:cacheWriteDetails.entrySet())writeDetails.put(entry.getKey(),entry.getValue().json());
             JSONObject mediaValues=new JSONObject();if(protocol.startsWith("openai_realtime"))for(String key:new String[]{"INPUT_TEXT","INPUT_AUDIO","OUTPUT_TEXT","OUTPUT_AUDIO"}){Count count=media.get(key);mediaValues.put(key,count==null?new JSONObject().put("value",JSONObject.NULL).put("source","unknown"):count.json());}
-            return new JSONObject().put("providerMeasures",new JSONObject(providerMeasures.toString())).put("mediaCounters",mediaValues).put("protocol",protocol).put("reported",observed).put("counters",values).put("invalidFields",bad)
+            return new JSONObject().put("providerMeasures",new JSONObject(providerMeasures.toString())).put("mediaCounters",mediaValues).put("cacheWriteDetails",writeDetails).put("protocol",protocol).put("reported",observed).put("counters",values).put("invalidFields",bad)
                     .put("finishReason",finishReason==null?JSONObject.NULL:finishReason)
                     .put("inputIncludesCacheRead",!exclusiveCacheInput)
                     .put("inputIncludesCacheWrite",!exclusiveCacheInput)

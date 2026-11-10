@@ -19,6 +19,46 @@ public final class RunContextBudget {
     private final ProviderUsageAnchor usage=new ProviderUsageAnchor();
     private final Map<JSONObject,String> hostObservations = new IdentityHashMap<>();
     private final Map<JSONObject,String> projectedObservations = new IdentityHashMap<>();
+    private final Map<JSONObject,String> displayOrigins = new IdentityHashMap<>();
+    private final Map<ContextWindow.Plan,Map<Integer,String>> displayPlans = new java.util.WeakHashMap<>();
+
+    /** Request-local display provenance; never serialized into messages or used for admission. */
+    public void beginDisplayProjection(JSONArray history,String currentInput){
+        displayOrigins.clear();displayPlans.clear();
+        JSONObject latest=null;
+        for(int i=0;i<history.length();i++){
+            JSONObject row=history.optJSONObject(i);
+            if(row!=null&&"user".equals(row.optString("role"))&&!row.optBoolean("hostObservation")&&
+                    (row.has("ownerMessageId")||row.optBoolean("ownerRecallFeedback")||currentInput!=null&&currentInput.equals(row.opt("content"))))latest=row;
+        }
+        if(latest!=null)displayOrigins.put(latest,"current_input");
+    }
+    public JSONObject displayReference(JSONObject row){displayOrigins.put(row,"reference");return row;}
+    public void displaySummary(JSONObject row){displayOrigins.put(row,"summary");}
+    public void displayProjected(JSONArray original,JSONArray projected){
+        if(original.length()!=projected.length())return;
+        for(int i=0;i<original.length();i++){
+            JSONObject source=original.optJSONObject(i),target=projected.optJSONObject(i);String category=displayOrigins.get(source);
+            if(category!=null&&target!=null&&source.optString("role").equals(target.optString("role"))
+                    &&sameContent(source.opt("content"),target.opt("content")))displayOrigins.put(target,category);
+        }
+    }
+    /** Carry only display labels by the exact selected plan's retained indexes. */
+    public JSONArray displayMessages(Projection projection)throws org.json.JSONException{
+        JSONArray result=projection.plan().messages();Map<Integer,String> labels=displayPlans.get(projection.plan());
+        if(labels!=null)for(var entry:labels.entrySet()){
+            JSONObject row=result.optJSONObject(entry.getKey());if(row!=null)displayOrigins.put(row,entry.getValue());
+        }
+        return result;
+    }
+    private void rememberDisplayPlan(JSONArray messages,ContextWindow.Plan plan){
+        Set<Integer> removed=new java.util.HashSet<>();for(ContextWindow.Removed row:plan.removed)removed.add(row.index());
+        Map<Integer,String> labels=new LinkedHashMap<>();int retained=0;
+        for(int i=0;i<messages.length();i++)if(!removed.contains(i)){
+            String category=displayOrigins.get(messages.optJSONObject(i));if(category!=null)labels.put(retained,category);retained++;
+        }
+        displayPlans.put(plan,labels);
+    }
     private record ReadProof(String function,String content,String signature){}
     private final Map<JSONObject,ReadProof> committedReads=new IdentityHashMap<>(),projectedReads=new IdentityHashMap<>();
     private static final Set<String> READ_BATCH_TOOLS=Set.of("phone_observe","phone_query","phone_extract","browser_task_observe","browser_task_read_public");
@@ -84,6 +124,7 @@ public final class RunContextBudget {
         projectedObservations.clear();
         projectedReads.clear();
         if (original.length() != projected.length()) return;
+        displayProjected(original,projected);
         for (int i = 0; i < original.length(); i++) {
             JSONObject source = original.optJSONObject(i), target = projected.optJSONObject(i);
             String proof = hostObservations.get(source);
@@ -174,6 +215,10 @@ public final class RunContextBudget {
             JSONObject diagnostics = plan.diagnostics().put("boundary", boundary).put("metadata", selected.diagnostics())
                     .put("retentionPolicy",removedReadBatch?"host_proven_duplicate_observations_and_read_batches_only":"host_proven_duplicate_observations_only")
                     .put("toolResultsAutomaticallyEvicted", removedReadBatch).put("summariesGenerated", false);
+            if(boundary.equals("request")&&plan.after!=null)try{
+                rememberDisplayPlan(messages,plan);
+                diagnostics.put("breakdown",ContextBreakdown.from(messages,tools,selected.limits,plan,displayOrigins));
+            }catch(Exception unavailable){diagnostics.put("breakdownUnavailable",true);}
             if (!plan.canSend()) throw new Blocked(plan.status, boundary, diagnostics);
             return new Projection(plan, diagnostics);
         } catch (Blocked blocked) { throw blocked; }

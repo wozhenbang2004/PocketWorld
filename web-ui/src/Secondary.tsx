@@ -1,4 +1,5 @@
 import { ModelDiagnosticsWorkspace } from './ModelDiagnosticsWorkspace';
+import { UsageWorkspace } from './UsageWorkspace';
 import { AICenter, type AIServicePreset } from './AICenter';
 import SkillsWorkspace from './SkillsWorkspace';
 import { CapabilitiesWorkspace } from './CapabilitiesWorkspace';
@@ -1440,7 +1441,7 @@ const COMMON_SETTINGS = [
   { id: 'phone:execution', title: '系统权限', detail: '界面读取、任务通知与无线调试', icon: IconShieldCheck },
   { id: 'phone:observation', title: '观察与隐私', detail: '本地取图、OCR 与截图留存', icon: IconPrivacy },
   { id: 'background', title: '后台运行', detail: '助手连接、独立屏幕与音频', icon: IconPhone },
-  { id: 'usage', title: '模型调用记录', detail: '查看实际调用与用量', icon: IconFileText },
+  { id: 'usage', title: '用量统计', detail: '每日 Token、缓存与调用明细', icon: IconFileText },
   { id: 'archives', title: '备份与迁移', detail: '导出或恢复原数据', icon: IconArchive },
   { id: 'storage', title: '项目存储', detail: '占用与清理审阅', icon: IconStorage },
   { id: 'updates', title: '应用更新', detail: '检查新版本与管理下载', icon: IconRefresh },
@@ -1609,7 +1610,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
   const modelDraftKey = modelView.kind + ':' + (modelView.kind === 'add' ? 'new' : recordId(editConnection || {}));
   const phoneTitle = ({ appearance: '外观与字体', speech: '语音与朗读', execution: '系统权限', observation: '观察与隐私', browser: '浏览器' } as Data)[phoneView];
   const pageTitle = page === 'capabilities' ? '能力与工具' : workspace?.key === 'tools' && domain ? domain.title : isAIPage ? 'AI 接入'
-    : workspace?.title || settingsGroup?.title || (page === 'settings' || page === 'connections' ? '设置' : isPhonePage ? phoneTitle || '手机能力' : page === 'background' ? '后台运行' : page === 'history' ? '任务历史' : page === 'usage' ? '模型调用记录' : page === 'archives' ? '备份与迁移' : page === 'storage' ? '项目存储' : domain?.title || 'PocketWorld');
+    : workspace?.title || settingsGroup?.title || (page === 'settings' || page === 'connections' ? '设置' : isPhonePage ? phoneTitle || '手机能力' : page === 'background' ? '后台运行' : page === 'history' ? '任务历史' : page === 'usage' ? '用量统计' : page === 'archives' ? '备份与迁移' : page === 'storage' ? '项目存储' : domain?.title || 'PocketWorld');
   const settingsEntries = COMMON_SETTINGS.filter(item => item.id !== 'setup' || !!onOpenSetup).map(item => ({ ...item, searchText: item.detail, detail: settingsEntryDetail(item.id, state) }));
   const filtered = settingsEntries.filter(item => (item.title + item.detail + item.searchText).toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const viewKey = page + (isModelPage ? ':' + modelView.kind + ':' + (modelView.id || '') : '');
@@ -1659,12 +1660,13 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
                 return <ModelSettings key={draftKey} state={state} connection={row} preset={preset} supported={supported} run={run} adding={!row} draft={modelDrafts.current[draftKey]} onDraftChange={value => { if (value) modelDrafts.current[draftKey] = value; else delete modelDrafts.current[draftKey]; }} onInspect={close} onSaved={saved} registerTransientBack={registerBack} />;
               }}
               renderAccounts={(accountId, adding, registerBack) => <AccountsWorkspace key={accountId || 'new-account'} state={state} data={{ ...object(object(state.features).accounts), ...object(object(state.ownerSnapshots).accounts) }} supported={supported} run={run} registerTransientBack={registerBack} onlyAccountId={accountId} startAdding={adding} />}
-              renderTools={registerBack => <section className="pw-model-connection-tools"><TokenBudgetsWorkspace supported={supported} registerTransientBack={registerBack} /><ModelDiagnosticsWorkspace state={state} supported={supported} /></section>}
+              renderTools={registerBack => <UsageWorkspace supported={supported} records={<HistoryPage usage supported={supported} run={run}/>} renderBudget={onEditingChange => <TokenBudgetsWorkspace supported={supported} registerTransientBack={registerBack} onEditingChange={onEditingChange}/>} diagnostics={<ModelDiagnosticsWorkspace state={state} supported={supported}/>}/>}
               renderProxy={registerBack => <ProxyWorkspace state={state} run={run} registerTransientBack={registerBack} />} />
           : page === 'phone' ? <PhoneSettings state={state} supported={supported} run={run} navigate={navigate} registerTransientBack={registerTransientBack} initialView={phonePresentation.current} onViewChange={view => { phonePresentation.current = view; }} />
           : isPhonePage ? <PhoneSettings key={page} state={state} supported={supported} run={run} navigate={navigate} registerTransientBack={registerTransientBack} initialView={phoneView} direct />
           : page === 'background' ? <BackgroundSettings state={state} supported={supported} run={run} onReturn={onReturnToSetup || returnToPhone} returnLabel={onReturnToSetup ? '准备中心' : '手机能力'} registerTransientBack={registerTransientBack} />
-          : page === 'history' || page === 'usage' ? <HistoryPage key={page} usage={page === 'usage'} supported={supported} run={run} />
+          : page === 'usage' ? <UsageWorkspace supported={supported} records={<HistoryPage usage supported={supported} run={run}/>} renderBudget={onEditingChange => <TokenBudgetsWorkspace supported={supported} registerTransientBack={registerTransientBack} onEditingChange={onEditingChange}/>}/>
+          : page === 'history' ? <HistoryPage key={page} usage={false} supported={supported} run={run} />
           : page === 'archives' || page === 'storage' ? <DataManagement key={page} kind={page} data={object(page === 'archives' ? state.ownerArchives : state.projectStorage)} supported={supported} run={run} registerTransientBack={registerTransientBack} navigate={navigate} />
           : domain ? <DomainPage key={page === 'local' ? page + ':' + (navigationRevision || 0) : page} domain={page} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} candidateTarget={candidateTarget} onReviewCandidate={target => navigate('memoryReview', target)} onOpenModels={() => navigate('model-settings')} onNavigate={navigate} onPrepareTools={onOpenSetup?()=>onOpenSetup('tools'):undefined} onOpenProjects={onOpenProjects} initialProjectId={initialProjectId} localDraft={localDraft} onLocalDraftChange={onLocalDraftChange} alreadyShownError={error || domainError} />
           : <Empty>此页面暂不可用，请从导航重新打开。</Empty>}

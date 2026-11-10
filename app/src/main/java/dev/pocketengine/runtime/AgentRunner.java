@@ -597,13 +597,14 @@ public final class AgentRunner {
                 withdrawHistoricalImages(screens,history,control);
                 // Keep current native control facts separate from untrusted memory/extension/recovery data.
                 // Both are request-only projections; neither is a new owner message or an execution grant.
+                contextBudget.beginDisplayProjection(history,clean(recallIntent,config));
                 if(!nativeReference.isEmpty()||!nativePlanningReference.isEmpty()){
                     requestHistory=new JSONArray();int insertAt=history.length();
                     for(int i=history.length()-1;i>=0;i--)if(history.getJSONObject(i).optString("role").equals("user")){insertAt=i;break;}
                     for(int i=0;i<=history.length();i++){
                         if(i==insertAt){
                             if(!nativePlanningReference.isEmpty())requestHistory.put(new JSONObject().put("role","system").put("content",nativePlanningReference));
-                            if(!nativeReference.isEmpty())requestHistory.put(RecoveryProjection.hostReference(nativeReference));
+                            if(!nativeReference.isEmpty())requestHistory.put(contextBudget.displayReference(RecoveryProjection.hostReference(nativeReference)));
                         }
                         if(i<history.length())requestHistory.put(history.getJSONObject(i));
                     }
@@ -640,15 +641,17 @@ public final class AgentRunner {
                         continue modelTurns;
                     }
                 }else projection=contextBudget.request(requestHistory, tools, config);
-                JSONArray finalRequestMessages=projection.plan().messages();
+                JSONArray finalRequestMessages=contextBudget.displayMessages(projection);
                 final dev.pocketengine.core.NativeReadContextRepair nativeRepair=capabilities==null?null:capabilities.nativeReadContextRepair(new JSONArray(finalRequestMessages.toString()),control);
                 try(dev.pocketengine.core.NativeReadContextRepair repair=nativeRepair){
                     if(repair!=null){
+                        JSONArray repairSource=finalRequestMessages;
                         finalRequestMessages=repair.consume(finalRequestMessages,control);
+                        contextBudget.displayProjected(repairSource,finalRequestMessages);
                         // One request-only replacement and one ordinary budget choice. Never another
                         // model, native read, checkpoint mutation or compaction/generation loop.
                         projection=contextBudget.request(finalRequestMessages,tools,config);
-                        finalRequestMessages=projection.plan().messages();repair.validateFinal(finalRequestMessages,control);
+                        finalRequestMessages=contextBudget.displayMessages(projection);repair.validateFinal(finalRequestMessages,control);
                         emit(taskId,"native_read_context","repaired","已用同一次已交付读取的完整安全内容重同步本次上下文；未重读网页或重放动作。",null,new JSONObject().put("requestOnly",true).put("checkpointChanged",false).put("newToolCalls",0).put("newModelCalls",0),config,sink);
                     }
                 }catch(RunContextBudget.Blocked budget){evidence.put("nativeReadContextRepair",new JSONObject().put("status","full_resync_budget_blocked").put("requestOnly",true).put("checkpointChanged",false));throw budget;}
@@ -797,7 +800,7 @@ public final class AgentRunner {
                                 checkpoint(taskId,journal,history,steps,latest,config,sink,contextBudget,repeatedTools);
                                 continue modelTurns;
                             }
-                            finalRequestMessages=projection.plan().messages();
+                            finalRequestMessages=contextBudget.displayMessages(projection);
                             emit(taskId,"model_recovery","running","接口报告上下文超限；已用原任务整理器保留原件整理一次，仅再请求一次。",null,projection.diagnostics(),config,sink);
                             // Usage views consume context_budget, not recovery events. Publish
                             // the replacement request's check instead of leaving the rejected one current.

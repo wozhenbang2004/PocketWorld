@@ -136,6 +136,7 @@ public final class ContextWindow {
                     .put("modelContextTokens", budget.tokenWindowKnown ? budget.contextTokens : JSONObject.NULL)
                     .put("inputLimitTokens", budget.tokenWindowKnown ? budget.inputLimit() : JSONObject.NULL)
                     .put("outputReserveTokens", budget.tokenWindowKnown ? budget.outputReserve : JSONObject.NULL)
+                    .put("safetyReserveTokens", budget.tokenWindowKnown ? budget.safetyReserve : JSONObject.NULL)
                     .put("maxCanonicalBytes", budget.maxCanonicalBytes)
                     .put("modelWindowKnown", budget.tokenWindowKnown)
                     .put("estimateMethod", usage==null?"serialized_utf8_byte_charge_plus_host_image_reserve":"provider_input_anchor_plus_conservative_tail_bytes_and_reserve")
