@@ -39,7 +39,19 @@ PW-M21使用不可交互的测量节点，真实textarea从不为测量置零。
 
 PW-M22稳定Press事件订阅，只有仍持有输入才因按钮blur/disabled取消；隐藏、窗口失焦、卸载与减动效变化仍强制归位。Ovio保存实际播放的L/R/scale采样，按WAAPI currentTime对同一采样段插值并带出分段速度，保留步进world的零连续速度语义与已有文字裁切。PW-M23只覆盖已启用左导航且无snap/nested的路径，关闭/打开触摸与Content pointer共用position，采样真实手指坐标；指针接管保留真实Content输入，文档开启手势仍沿既有inert边界。PW-M24明确包括代码块原位状态，任务结果/保留结果/关联回复、当前消息和历史窗口均复用既有成功反馈；文件路径、整份文件复制仍保留全局成功提示，原错误传递不变。
 
-本地类型编译`npm run typecheck --prefix web-ui`（仅`tsc --noEmit`）exit0；未写跑测试。随后无损合入同期主线`46acfec2`的听写回原浮层修正及`ce247455`的用量/上下文洞察，未覆盖这些改动；相关ContextMeter仍使用既有独立详情层，composer两表面的border:0尺寸契约保持。最终生产构建在此集成版本执行。独立只读交叉审查已核对输入区、Press、Ovio与左导航，root另读完整集合/导航/反馈集成路径，当前范围未留源码可证阻断；未移动的pointer松手、lostcapture重入、受控关闭和相同Content的Presence均已按代码核对。正式构建和发布证据待补，源码核查不能替代真机体验。
+本地类型编译`npm run typecheck --prefix web-ui`（仅`tsc --noEmit`）exit0；未写跑测试。随后无损合入同期主线`46acfec2`的听写回原浮层修正及`ce247455`的用量/上下文洞察，未覆盖这些改动；相关ContextMeter仍使用既有独立详情层，composer两表面的border:0尺寸契约保持。最终生产构建在此集成版本执行。独立只读交叉审查已核对输入区、Press、Ovio与左导航，root另读完整集合/导航/反馈集成路径，当前范围未留源码可证阻断；未移动的pointer松手、lostcapture重入、受控关闭和相同Content的Presence均已按代码核对。正式构建和发布证据见下文，源码核查不能替代真机体验。
+
+### 最终集成与构建回执
+
+发布前主线新增`28e97f05`的用量样式隔离修正，已再次无损合入；仅为该区域重命名类及对应选择器，没有覆盖同期源码。最终本批提交为[`94fa87098d6b5caf384dfe5c0cd00af88e827ff2`](https://github.com/wozhenbang2004/PocketWorld/commit/94fa87098d6b5caf384dfe5c0cd00af88e827ff2)，父提交`28e97f0544722945fae27805bc38d83eee2e5cf0`，tree `6410dd83c7f0fa49d30e6710ab4ed575793731b6`。远端tree与本地最终构建用`81c009eba5172645dc3fd8422724f1ceac96a0f1`完全一致，发布后独立fetch并diff确认，无force覆盖。
+
+截至北京时间2026-11-10 22:59，最终`npm run build --prefix web-ui`完成字体准备、许可清单、TypeScript、Vite生产构建与224项随包资源核对，exit0。新增MIT许可已实际进入打包清单，原码及包内许可均1078 bytes、SHA-256 `2c2a938456c54cab1c4ecd38ea08230c063d9f1a478fc30ec5b172682f9fb1b1`。既有client-only许可正文缺项和大chunk提示仍在，没有把它们写成本轮性能结果。未编写、运行任何测试；截图工作流保持skipped。
+
+正式[发布v0.1.95](https://github.com/wozhenbang2004/PocketWorld/releases/tag/v0.1.95)于北京时间**2026-11-10 23:06:52**完成，应用版本**0.4.1095 / 1095**。[流程42839457166](https://github.com/wozhenbang2004/PocketWorld/actions/runs/42839457166)的build、prepare、publish均success，精确源码与release target均为`94fa87098d6b5caf384dfe5c0cd00af88e827ff2`。云端Web构建再次完成224项资源核对；后续assembleDebug、签名、ZIP对齐/CRC、随包Web清单/hash、原生ABI/目录hash及显示助手DEX完整性核对均完成。
+
+[正式APK](https://github.com/wozhenbang2004/PocketWorld/releases/download/v0.1.95/986e030ef7dcdc1f7c88b89e33731148f05578a613345b857cdc64bcce5732c0-app-1095.apk)为148,480,693 bytes，SHA-256 `986e030ef7dcdc1f7c88b89e33731148f05578a613345b857cdc64bcce5732c0`；正式release资产digest、文件名与大小均和构建身份回执一致。已取回轻量证据artifact `13775851255`，176,681 bytes，归档SHA-256 `0da4cf7dc5f4016b6e1371fdf04260cf60ba45be279f3ff39c91122952290014`。APK包内应用版本与上列相同，稳定项目证书SHA-256仍为`b58e014e2a2e49b2e85ebd5b47a034a28cb0d313d71f379a5208d21afe388e58`。
+
+**本批PW-M20–PW-M24的实现、交叉源码审阅、生产构建和正式发布已完成；Android实际触摸/键盘、中文长文光标与换行、帧率和用户反馈对应的具体卡顿位置仍未体验/未定位。** 没有写或运行测试，没有把作者网页演示当PocketWorld真实体验，也没有把实施授权记成审美认可。FilesBrowser大集合的全量五组投影仍是后续范围；桌面连续Tooltip与来源图片/工具栏形变保留候选。此交付没有宣称全产品流畅度已验收。后续应在当前正式APK中从实际反馈操作继续，不重做已完成覆盖或凭候选效果改变实时媒体输入几何。
 
 ## 第二次深化 · 从覆盖推进到受力、形态与阶段接续
 
