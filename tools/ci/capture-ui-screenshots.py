@@ -320,6 +320,24 @@ def screenshot(slug, title, *, tree=None, requested_path=None, destination_obser
     save_report()
 
 
+def wait_for_page_surface(timeout=30):
+    """Wait for two readable page snapshots; an empty tree is not a closed drawer."""
+    deadline = time.monotonic() + timeout
+    settled = 0
+    tree = None
+    while time.monotonic() < deadline:
+        tree = layout()
+        if visible_labels(tree) and not find_target(tree, "关闭导航") and not find_target(tree, "工作区与导航"):
+            settled += 1
+            if settled >= 2:
+                time.sleep(2)
+                return tree
+        else:
+            settled = 0
+        time.sleep(1)
+    return tree
+
+
 def navigation():
     tree = wait_for_controls("关闭文件工作区", "关闭导航", "打开导航", "对话菜单", "工作区与导航",
                              "暂时跳过准备", "以后再说")
@@ -361,10 +379,11 @@ def capture_screens(apk):
     REPORT["hostConfigurationSignalObserved"] = "host source=library-web" in logs
     REPORT["initialAccessibilityContentObserved"] = any(find_target(tree, label, prefix=label == "对话菜单")
                                                        for label in ("暂时跳过准备", "以后再说", "对话菜单", "打开导航"))
-    screenshot("first-launch", "首次启动的实际界面", tree=tree)
-    if tap("暂时跳过准备", tree) or tap("以后再说", tree):
+    if tap("以后再说", tree) or tap("暂时跳过准备", tree):
         tree = wait_for_controls("对话菜单", "打开导航", timeout=30)
         screenshot("workroom", "点按跳过准备后的实际界面", tree=tree)
+    else:
+        screenshot("first-launch", "首次启动的实际界面", tree=tree)
     tree = wait_for_controls("对话菜单", "打开导航", timeout=10)
     if tap("对话菜单", tree, prefix=True):
         tree = wait_for_controls("工作区与导航")
@@ -399,12 +418,8 @@ def capture_screens(apk):
             REPORT["unavailable"].append(" → ".join(path) + "：当前页面未找到唯一可见且可用的入口。")
             continue
         # Observe the real drawer leaving before taking the destination image.
-        deadline = time.monotonic() + 15
-        tree = layout()
-        while find_target(tree, "关闭导航") and time.monotonic() < deadline:
-            time.sleep(1)
-            tree = layout()
-        if not find_target(tree, "关闭导航"):
+        tree = wait_for_page_surface()
+        if visible_labels(tree) and not find_target(tree, "关闭导航"):
             tree = read_layout((markers[-1],))
         observed = all(marker in visible_labels(tree) for marker in markers) and not find_target(tree, "关闭导航")
         screenshot(slug, "点按“" + " → ".join(path) + "”后的实际界面", tree=tree,
