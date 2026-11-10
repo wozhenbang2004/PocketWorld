@@ -45,8 +45,28 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build-artifacts/ui-screenshots
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends libpulse0
+          # The runner's HTTP Azure mirror can stall every index request. Use
+          # official HTTPS Ubuntu indexes for this command only; retain archive
+          # signature verification and leave the runner's global sources alone.
+          if ! dpkg-query -W -f='${Status}' libpulse0 2>/dev/null | grep -q '^install ok installed$'; then
+            cat > "$RUNNER_TEMP/pocketworld-screenshot.sources" <<'SOURCES'
+          Types: deb
+          URIs: https://archive.ubuntu.com/ubuntu
+          Suites: noble noble-updates noble-security
+          Components: main universe
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          SOURCES
+            APT_OPTIONS=(
+              -o "Dir::Etc::sourcelist=$RUNNER_TEMP/pocketworld-screenshot.sources"
+              -o "Dir::Etc::sourceparts=-"
+              -o "Acquire::Languages=none"
+              -o "Acquire::http::Timeout=20"
+              -o "Acquire::https::Timeout=20"
+              -o "Acquire::Retries=1"
+            )
+            sudo timeout 240 apt-get "${APT_OPTIONS[@]}" update
+            sudo timeout 180 apt-get "${APT_OPTIONS[@]}" install --yes --no-install-recommends libpulse0
+          fi
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           set +o pipefail
           yes | "$SDKMANAGER" --licenses > /dev/null
