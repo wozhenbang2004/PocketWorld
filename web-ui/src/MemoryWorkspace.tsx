@@ -81,6 +81,19 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, initialCan
     setSelection(value); readHandle.current = value.readHandle; const record = value.candidate || value.record;
     setDraft(record?.text || ''); setDraftMeta({ layer: record?.layer || 'fact', reason: record?.reason || '', applicability: record?.applicability || '', confidence: String(record?.confidence ?? 0.5) }); setReason(''); setAttempted(false); setNotice(origin ? `已定位“${origin.sourceTitle}”的原候选。批次登记修订 ${origin.revision}，当前修订 ${record?.revision ?? '未知'}；请按当前内容核对。` : '');
   }); };
+  const refreshSelection = (id: string, isCandidate: boolean) => {
+    // Re-read storage after a write rather than keep an unusable, stale revision.
+    // This also serves uncertain outcomes without repeating the mutation.
+    void invoke('knowledge.snapshot', {}, value => {
+      setSnapshot(value); setScopeName(value.scopeName || ''); setHistory(null); setCapacity(null);
+      clearConsolidation();
+    }).then(value => {
+      if (!value || !alive.current) return;
+      const current = rows(value[isCandidate ? 'candidates' : 'records']).find(row => row.id === id);
+      if (current) choose(current, isCandidate);
+      else { closeRecord(); setNotice('当前记录已不在此范围中，列表已重新读取。'); }
+    });
+  };
   const prepare = (operation: string, extra: Data = {}) => { void invoke('knowledge.review', { readHandle: readHandle.current, operation, ...extra }, openReview); };
   const toggleConsolidation = (row: Data, checked: boolean) => {
     if (!checked) { const old = consolidation.find(item => item.record.id === row.id); if (old) { closeHandle(old.readHandle); selectedHandles.current = selectedHandles.current.filter(id => id !== old.readHandle); } setConsolidation(old => old.filter(item => item.record.id !== row.id)); return; }
@@ -90,7 +103,10 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, initialCan
   const confirm = () => {
     const frozen = review; if (!frozen) return; const handle = reviewHandle.current; reviewHandle.current = ''; setReview(null); setAcknowledged(false);
     if (frozen.operation === 'consolidation') { void invoke('knowledge.consolidation.start', { reviewHandle: handle }, setOperation); return; }
-    setAttempted(true); void invoke('knowledge.confirm', { reviewHandle: handle }, () => setNotice('已收到原处理回执，请重新读取原记录核对。'));
+    const id = frozen.before?.id, isCandidate = selection?.candidateSelected === true;
+    setAttempted(true); void invoke('knowledge.confirm', { reviewHandle: handle }, () => setNotice('操作已完成，正在读取当前状态。')).then(value => {
+      if (value && alive.current && id) refreshSelection(id, isCandidate);
+    });
   };
   const record = selection?.candidate || selection?.record, candidate = selection?.candidateSelected === true;
   useLayoutEffect(() => {
@@ -162,7 +178,7 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, initialCan
         {candidate && <><Accordion variant="divided" className="pw-compact-disclosures"><AccordionItem id="memory-reject" title="拒绝这条候选"><TextField label="拒绝理由" value={reason} onChange={setReason} maxLength={1000} isDisabled={busy} /><Button variant="ghost" disabled={busy || !reason.trim()} onClick={() => prepare('reject', { reason })}>核对并拒绝候选</Button></AccordionItem></Accordion><Accordion variant="divided" className="pw-compact-disclosures" expandedKeys={assertionOpen ? ['assertion'] : []} onExpandedChange={keys => setAssertionOpen(keys.has('assertion'))}><AccordionItem id="assertion" title="主体、关系与时间">{assertionOpen && <MemoryAssertionFields key={selection.readHandle} readHandle={selection.readHandle} candidate={record} run={run} onReview={openReview} />}</AccordionItem></Accordion></>}
       </>}
       {!attempted && candidate && ['accepted', 'rejected', 'invalidated'].includes(record?.status) && <div className="pw-form-actions">{record.status === 'rejected' && <Button variant="secondary" disabled={busy} onClick={() => prepare('reconsider')}>重新考虑这一条拒绝项</Button>}<Button variant="ghost" disabled={busy} onClick={() => prepare('archive')}>核对并清理终态候选正文</Button></div>}
-      {attempted && <p className="pw-muted">这一次提交已结束或结果待核对。请重新读取原记录查看现状；没有自动重发。</p>}
+      {attempted && <div className="pw-form-actions"><p className="pw-muted">本次提交已结束或结果待核对。重新读取只查询当前状态，不会重复提交。</p><Button variant="secondary" disabled={busy} onClick={() => refreshSelection(record.id, candidate)}>重新读取当前状态</Button></div>}
     </section>}
     <SettingsDialog isOpen={!!review} onClose={() => { if (!busy) closeReview(); }} title={operationLabel[review?.operation] || '核对记忆修改'}><div className="pw-knowledge-review">
       {review?.operation === 'consolidation' ? <><p>向开始时的当前模型发送以下原记忆，归纳为待审候选。原记忆保留；不会自动采用新候选。</p>{rows(review.records).map(row => <p key={row.id} className="pw-reading-copy">{row.text}</p>)}</> : <><p className="pw-muted">确认只应用到刚才读取的原版本。</p><h3>原内容</h3><p className="pw-reading-copy">{review?.before?.text}</p>{review?.afterText && <><h3>修改后</h3><p className="pw-reading-copy">{review.afterText}</p></>}{review?.reason && <p>理由：{review.reason}</p>}{review?.assertion && <p>主体：{review.assertion.subject?.label || '主人'} · {review.assertion.kind} · {review.assertion.predicate} · {review.assertion.object}。此修改继续留在待审候选。</p>}</>}
