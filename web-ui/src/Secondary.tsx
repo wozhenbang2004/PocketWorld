@@ -56,7 +56,7 @@ import { ACCOUNT_RECEIPT_ACTIONS, accountActionReceipt, accountLoginArguments, a
  * A command acknowledgement is never treated as a saved setting or approval.
  */
 type Data = Record<string, any>;
-type Snapshot = { state?: Data; view?: { resumeRevision?: number; taskId?: string | null }; composer?: Data | null; capabilities?: { commands?: string[] } };
+type Snapshot = { state?: Data; view?: { section?: string | null; resumeRevision?: number; taskId?: string | null }; composer?: Data | null; capabilities?: { commands?: string[] } };
 type BackHandlerRegistration = (handler: (() => boolean) | null) => void;
 type Props = { route: string; onBack: () => void; snapshot: Snapshot; registerBackHandler?: BackHandlerRegistration; navigationTrigger?: ReactNode; navigationRevision?: number; onNavigationPageChange?: (page: string) => void; onOpenSetup?: (capability?: SetupCapability) => void; onReturnToSetup?: () => void };
 type Run = (action: string, args?: Data) => Promise<any>;
