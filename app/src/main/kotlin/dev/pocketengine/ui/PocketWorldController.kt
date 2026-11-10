@@ -784,9 +784,16 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     fun setChatSendMode(mode:String,key:String,viewEpoch:Int) { if(composerDraft?.key==key&&chatViewEpoch==viewEpoch&&mode in setOf("queue","steer")) editComposerSelection(mode,state.selectedChatAttachments) }
     fun openChatAttachmentPicker() {
-        if(composerDraft==null){state=state.copy(error="请等待原私聊草稿读取完成");return}
-        attachmentComposerKey=composerDraft?.key;attachmentComposerEpoch=chatViewEpoch
-        val model=try { state.chatActiveTurn?.let { app.chatInputModel(it) } ?: app.settings.get().publicJson() } catch (_:Exception) { JSONObject() }
+        val draft=composerDraft ?: run{state=state.copy(error="请等待原私聊草稿读取完成");return}
+        if(!refreshCurrentConversationTurn())return
+        val model=try {
+            state.chatActiveTurn?.let { app.chatInputModel(it).also { current ->
+                check(current.optBoolean("available")) { "原回复正在收尾，请稍后重新选择附件" }
+            } } ?: app.conversationInputModel(if(draft.conversationId.isNotBlank())
+                dev.pocketengine.runtime.models.ConversationModelPreferences.conversation(draft.conversationId)
+                else dev.pocketengine.runtime.models.ConversationModelPreferences.draft(draft.key))
+        } catch(error:Exception) { state=state.copy(error=message(error));return }
+        attachmentComposerKey=draft.key;attachmentComposerEpoch=chatViewEpoch
         state=state.copy(chatAttachmentPickerOpen=true,chatAttachmentModel=model)
         feature("attachments","list")
     }

@@ -54,6 +54,11 @@ public final class EngineApplication extends Application implements dev.pocketen
         JSONObject target=conversationModels().snapshot(scope).optJSONObject("target");
         return (target==null?settings.get():captureConversationTarget(target,false)).maxSteps;
     }
+    /** Read-only composer metadata from the selected conversation or unbound draft, without account discovery. */
+    public JSONObject conversationInputModel(String scope)throws Exception {
+        JSONObject target=conversationModels().snapshot(scope).optJSONObject("target");
+        return (target==null?settings.get():captureConversationTarget(target,false)).publicJson();
+    }
     /** Native admission reads a conversation reference once; an active task retains its original config. */
     public ModelConfig captureConversationModel(String conversationId,String clientMessageId)throws Exception {
         settings.modelSelection().requireAvailable();
