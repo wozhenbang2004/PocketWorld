@@ -1,6 +1,7 @@
 package dev.pocketengine.ui.web
 
 import android.os.SystemClock
+import dev.pocketengine.features.assistant.OwnerComposerState
 import dev.pocketengine.ui.PocketWorldController
 import java.util.UUID
 import org.json.JSONObject
@@ -39,20 +40,37 @@ internal class PocketWebVoiceInput(
                     .put("phone", phone).put("recovered", recovered).put("expiresInMs", 120000)
             }
             "voice.accept", "voice.discard" -> {
-                val reviewed = voiceReviews.remove(requiredString(args, "reviewHandle")) ?: error("原听写审阅已关闭或已使用")
+                val handle = requiredString(args, "reviewHandle")
+                val reviewed = voiceReviews[handle] ?: error("原听写审阅已关闭或已使用")
                 require(SystemClock.elapsedRealtime() < reviewed.expires && reviewed.phone == phoneComposer.intent && reviewed.epoch == controller.composerViewEpoch) { "原听写输入窗口已变化" }
                 val draft = controller.composerDraft
                 if (reviewed.phone) require(phoneComposer.draftRevision == reviewed.phoneRevision) { "手机目标草稿已变化，请重新核对听写" }
                 else require(draft != null && draft.key == reviewed.key && draft.revision == reviewed.draftRevision) { "原私聊草稿已变化，请重新核对听写" }
+                val editedText = if (action == "voice.accept") requiredString(args, "text") else ""
+                if (action == "voice.accept") {
+                    require(editedText.length <= 4000) { "听写文字最多4000字，请缩短后再采用；原听写仍保留" }
+                    if (!reviewed.phone) {
+                        val original = draft!!.text
+                        // Both Java draft owners use String.trim(), not Kotlin's wider Unicode trim.
+                        val acceptedLength = editedText.trim { it <= ' ' }.length
+                        val mergedLength = acceptedLength + if (original.isEmpty() || !reviewed.recovered && original.isBlank()) 0 else original.length + 1
+                        // acceptDraft consumes the ASR text; editComposerText cannot recover it
+                        // if the destination rejects an over-capacity append afterwards.
+                        require(mergedLength <= OwnerComposerState.MAX_TEXT) { "合并后超过聊天草稿容量，请先缩短原输入或听写；两份文字仍保留" }
+                    }
+                }
+                // A local validation failure keeps the same review editable. Once an
+                // adoption/discard is attempted, retain the existing one-shot semantics.
+                voiceReviews.remove(handle)
                 if (reviewed.recovered) {
                     require(draft?.voiceInputId == reviewed.inputId) { "原保留听写已变化" }
                     if (action == "voice.discard") controller.discardRecoveredComposerVoice(reviewed.key, reviewed.draftRevision)
-                    else controller.useRecoveredComposerVoice(reviewed.key, reviewed.draftRevision, requiredString(args, "text"))
+                    else controller.useRecoveredComposerVoice(reviewed.key, reviewed.draftRevision, editedText)
                 } else {
                     require(controller.state.voiceInput.optString("inputId") == reviewed.inputId && controller.canReviewVoiceDraft(reviewed.phone)) { "原听写结果已变化" }
                     if (action == "voice.discard") controller.discardVoiceDraft(reviewed.inputId)
                     else {
-                        val accepted = controller.useVoiceDraft(reviewed.inputId, requiredString(args, "text"), reviewed.phone) ?: error("听写文字未被原输入接受")
+                        val accepted = controller.useVoiceDraft(reviewed.inputId, editedText, reviewed.phone) ?: error("听写文字未被原输入接受")
                         if (reviewed.phone) phoneComposer.appendVoice(accepted)
                         else {
                             val original = controller.composerDraft ?: error("原私聊草稿已关闭")
