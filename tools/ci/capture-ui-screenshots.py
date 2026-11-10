@@ -351,6 +351,10 @@ def navigation():
     controls = ("关闭文件工作区", "关闭导航", "打开导航", "对话菜单", "工作区与导航",
                 "暂时跳过准备", "以后再说")
     tree = read_layout()
+    if tree is None or not any(node.get("package") == PACKAGE for node in tree.iter("node")):
+        # Never swipe a launcher or the Android notification shade while looking
+        # for app navigation. Preserve the real failure instead of leaving the app.
+        return tree
     # Some real pages (for example the notification inbox) scroll their own
     # navigation header off-screen. Restore it through touch before looking
     # for a drawer button; waiting cannot make an off-screen button visible.
@@ -467,9 +471,18 @@ def capture_route(path, slug, markers=(), *, dialog=False, scroll=True):
     if dialog:
         # These scenarios only open forms/popovers. Do not save, send, pair,
         # install, authorize, toggle policy, request a model or create records.
-        adb("shell", "input", "keyevent", "KEYCODE_BACK")
-        REPORT["actions"].append({"action": "dismiss", "path": list(path), "saved": False})
-        time.sleep(1)
+        tree = read_layout()
+        closed = next((label for label in (
+            "关闭设置", "关闭执行权限", "关闭模型选择", "关闭推理设置",
+            "关闭文件工作区", "关闭", "取消", "返回上一级", "返回"
+        ) if tap(label, tree)), None)
+        # Android Back can leave the Activity while a WebView modal is still
+        # open. Prefer its actual close control; an uncloseable surface remains
+        # explicitly partial rather than pretending it was dismissed.
+        REPORT["actions"].append({"action": "dismiss", "path": list(path),
+                                  "control": closed, "saved": False})
+        if closed is None and not any(find_target(tree, label) for label in ("打开导航", "对话菜单")):
+            REPORT["unavailable"].append(" → ".join(path) + "：未找到明确关闭入口，未发送系统返回。")
 
 
 def capture_catalog():
@@ -546,6 +559,12 @@ def capture_catalog():
         (("媒体", "服务配置"), "media-configuration"),
         (("设置", "应用更新"), "application-updates"),
     ]
+    group = os.environ.get("CAPTURE_GROUP", "all") or "all"
+    if group not in ("all", "forms"):
+        raise RuntimeError("Unsupported screenshot capture group")
+    if group == "forms":
+        pages, subpages = [], []
+    REPORT["coverage"]["group"] = group
     REPORT["coverage"]["plannedPaths"] = [["输入区", "切换此对话模型："], ["输入区", "推理强度："], ["设置", "准备中心"]] + [list(path) for path, *_ in pages + subpages + forms]
     save_report()
     for path, slug, markers in pages:
@@ -654,5 +673,6 @@ if __name__ == "__main__":
         if EMULATOR_LOG is not None:
             EMULATOR_LOG.close()
         save_report()
+
 
 
