@@ -20,7 +20,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /** Owner presentation for the original TeamsModule. No worker, grant or execution state lives here. */
 internal class PocketWebTeams(private val controller: PocketWorldController) {
-    private data class Reading(val kind: String, val original: String, val expires: Long)
+    private data class Reading(val kind: String, val original: String)
     private data class Review(val command: String, val input: String, val expires: Long, val phonePage: TeamPhoneHost.Page? = null, val phoneReview: TeamPhoneHost.Review? = null, val productionSources: String? = null)
     private data class PhonePage(val original: TeamPhoneHost.Page, val definition: String, val input: String, val expires: Long)
     @Volatile private var generation = 0L
@@ -59,14 +59,16 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
     private fun captureSnapshot(value: JSONObject): JSONObject = JSONObject(value.toString()).put("productionSources", productionSources())
     private fun reading(handle: String, kind: String, consume: Boolean = false): JSONObject {
         val original = if (consume) readings.remove(handle) else readings[handle]
-        check(original != null && original.kind == kind && original.expires > SystemClock.elapsedRealtime()) { "原团队读取已关闭或过期，请重新读取" }
+        check(original != null && original.kind == kind) { "原团队读取已关闭，请重新读取" }
         return JSONObject(original.original)
     }
     private fun view(kind: String, value: JSONObject): JSONObject {
-        readings.entries.removeAll { it.value.expires <= SystemClock.elapsedRealtime() }
         while (readings.size >= 24) readings.remove(readings.keys.first())
         val handle = UUID.randomUUID().toString()
-        readings[handle] = Reading(kind, value.toString(), SystemClock.elapsedRealtime() + 120_000)
+        // Reading/editing is bound to the visible native window, not a timer.
+        // clear()/closeReading retire it; mutations still compare the original
+        // definition or run/member generations before accepting any change.
+        readings[handle] = Reading(kind, value.toString())
         val result = JSONObject().put("kind", kind).put("viewHandle", handle).put(kind, PocketWebState.publicValue(value))
         if (kind == "run") {
             result.put("messages", PocketWebState.publicValue(JSONArray(teamConversationRows(value))))
