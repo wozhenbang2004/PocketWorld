@@ -1331,7 +1331,7 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
             if(kind.isEmpty())throw new SecurityException("实际答复引用了非本队原消息");JSONArray rows=call.turn.run.json.getJSONArray(kind.equals("peer")?"mailbox":"inbox");
             for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(!id.equals(row.getString("id")))continue;JSONArray deliveries=row.getJSONArray("deliveries");boolean matched=false;
                 for(int d=0;d<deliveries.length();d++){JSONObject delivery=deliveries.getJSONObject(d);if(call.turn.id.equals(delivery.optString("turnId"))&&call.researchTaskId.equals(delivery.optString("researchTaskId"))&&call.memberId.equals(delivery.optString("memberId"))&&delivery.optString("state").equals("claimed")){delivery.put("state","consumed").put("consumedAt",System.currentTimeMillis());matched=true;changed=true;}}
-                if(matched){if(kind.equals("peer"))row.put("status","consumed").put("consumedByTurnId",call.turn.id);else{JSONArray by=row.getJSONArray("consumedBy");if(!contains(by,call.memberId))by.put(call.memberId);row.put("status",row.optString("targetMemberId").equals("*")?"partially_consumed":"consumed");}}
+                if(matched){if(kind.equals("peer"))row.put("status","consumed").put("consumedByTurnId",call.turn.id);else{JSONArray by=row.getJSONArray("consumedBy");if(!contains(by,call.memberId))by.put(call.memberId);refreshFeedbackStatus(call.turn.run,row);}}
             }
         }
         if(changed)save(call.turn.run);
@@ -1410,7 +1410,7 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
     private void consumeFeedback(Turn turn,boolean success)throws Exception{
         String id=roster(turn.run).getJSONObject(turn.index).getString("id");JSONArray inbox=turn.run.json.getJSONArray("inbox");
         for(int i=0;i<inbox.length();i++){
-            JSONObject letter=inbox.getJSONObject(i);if(letter.optBoolean("nativeAssignmentInput"))continue;
+            JSONObject letter=inbox.getJSONObject(i);if(letter.optBoolean("nativeAssignmentInput")||letter.optString("status").equals("historical"))continue;
             JSONArray deliveries=letter.getJSONArray("deliveries");boolean delivered=false;
             for(int d=0;d<deliveries.length();d++){
                 JSONObject item=deliveries.getJSONObject(d);
@@ -1419,15 +1419,23 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
                     item.put("state",success?"consumed":"failed");delivered=true;
                 }
             }
-            if(delivered&&success&&!contains(letter.getJSONArray("consumedBy"),id))letter.getJSONArray("consumedBy").put(id);
-            int expected=letter.optString("targetMemberId").equals("*")?roster(turn.run).length():1;
-            letter.put("status",letter.getJSONArray("consumedBy").length()>=expected?"consumed":letter.getJSONArray("consumedBy").length()>0?"partially_consumed":"pending");
+            if(!delivered)continue;
+            if(success&&!contains(letter.getJSONArray("consumedBy"),id))letter.getJSONArray("consumedBy").put(id);
+            refreshFeedbackStatus(turn.run,letter);
         }
+    }
+    // Refresh only after a real delivery transition; unrelated members must not rewrite this row.
+    private static void refreshFeedbackStatus(Run run,JSONObject letter)throws Exception{
+        if(letter.optBoolean("nativeAssignmentInput")||letter.optString("status").equals("historical"))return;
+        JSONArray consumed=letter.getJSONArray("consumedBy"),deliveries=letter.getJSONArray("deliveries");
+        int expected=letter.optString("targetMemberId").equals("*")?roster(run).length():1;boolean delivering=false;
+        for(int d=0;d<deliveries.length();d++)if(deliveries.getJSONObject(d).optString("state").equals("claimed")){delivering=true;break;}
+        letter.put("status",consumed.length()>=expected?"consumed":consumed.length()>0?"partially_consumed":delivering?"delivering":"pending");
     }
     private static boolean contains(JSONArray values,String value){for(int i=0;i<values.length();i++)if(value.equals(values.optString(i)))return true;return false;}
     private static JSONArray pendingFeedbackIds(Run run,String memberId)throws Exception{JSONArray ids=new JSONArray(),inbox=run.json.getJSONArray("inbox");for(int i=0;i<inbox.length();i++){JSONObject letter=inbox.getJSONObject(i);if(!letter.optBoolean("nativeAssignmentInput")&&(letter.optString("targetMemberId").equals("*")||letter.optString("targetMemberId").equals(memberId))&&!contains(letter.getJSONArray("consumedBy"),memberId))ids.put(letter.getString("id"));}return ids;}
     private static JSONArray pendingPeerIds(Run run,String memberId)throws Exception{JSONArray ids=new JSONArray(),mailbox=run.json.getJSONArray("mailbox");for(int i=0;i<mailbox.length();i++){JSONObject letter=mailbox.getJSONObject(i);if(memberId.equals(letter.getString("targetMemberId"))&&!letter.optString("status").equals("consumed"))ids.put(letter.getString("id"));}return ids;}
-    private void pauseMember(Run run,JSONObject member)throws Exception{String id=member.getString("id");RunControl child=run.children.get(id);if(child!=null)child.cancel();member.put("paused",true).put("generation",member.optInt("generation")+1);int next=unfinishedRound(run,member);if(next>0){progress(member,next).put("status","paused");member.put("status","paused");}JSONArray inbox=run.json.getJSONArray("inbox");for(int i=0;i<inbox.length();i++){JSONObject letter=inbox.getJSONObject(i);JSONArray deliveries=letter.getJSONArray("deliveries");for(int d=0;d<deliveries.length();d++){JSONObject delivery=deliveries.getJSONObject(d);if(id.equals(delivery.optString("memberId"))&&delivery.optString("state").equals("claimed"))delivery.put("state","interrupted");}if(!contains(letter.getJSONArray("consumedBy"),id)&&letter.optString("status").equals("delivering"))letter.put("status","pending");}
+    private void pauseMember(Run run,JSONObject member)throws Exception{String id=member.getString("id");RunControl child=run.children.get(id);if(child!=null)child.cancel();member.put("paused",true).put("generation",member.optInt("generation")+1);int next=unfinishedRound(run,member);if(next>0){progress(member,next).put("status","paused");member.put("status","paused");}JSONArray inbox=run.json.getJSONArray("inbox");for(int i=0;i<inbox.length();i++){JSONObject letter=inbox.getJSONObject(i);JSONArray deliveries=letter.getJSONArray("deliveries");boolean interrupted=false;for(int d=0;d<deliveries.length();d++){JSONObject delivery=deliveries.getJSONObject(d);if(id.equals(delivery.optString("memberId"))&&delivery.optString("state").equals("claimed")){delivery.put("state","interrupted");interrupted=true;}}if(interrupted)refreshFeedbackStatus(run,letter);}
         JSONArray mailbox=run.json.getJSONArray("mailbox");for(int i=0;i<mailbox.length();i++){JSONObject letter=mailbox.getJSONObject(i);if(!id.equals(letter.getString("targetMemberId"))||letter.optString("status").equals("consumed"))continue;letter.put("status","unread");JSONArray deliveries=letter.getJSONArray("deliveries");for(int d=0;d<deliveries.length();d++)if(deliveries.getJSONObject(d).optString("state").equals("claimed"))deliveries.getJSONObject(d).put("state","interrupted");}
     }
     private void invalidateDependents(Run run,String changed,Set<String> visited)throws Exception {
