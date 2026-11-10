@@ -10,10 +10,11 @@ const ownerWindow = () => { const view = bridge.getState().view as Data; return 
 
 export function ProjectLivePreview({ taskId, run, nativeVisible = true, onBackChange }: { taskId: string; run: Run; nativeVisible?: boolean; onBackChange?: (handler: (() => boolean) | null) => void }) {
   const [view, setView] = useState<Data | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState('');
+  const [, refreshWindow] = useState(0);
   const currentPage = useRef<Data | null>(null), alive = useRef(true), generation = useRef(0), active = useRef(false), viewport = useRef<HTMLDivElement>(null);
   const owner = useRef(ownerWindow()), displayed = useRef(nativeVisible); displayed.current = nativeVisible;
   const version = generation.current;
-  const close = () => { const page = currentPage.current; currentPage.current = null; generation.current++; active.current = false; setView(null); setBusy(false); if (page) void run('projectLive.close', { pageHandle: page.pageHandle }).catch(() => {}); };
+  const close = () => { const page = currentPage.current; currentPage.current = null; generation.current++; active.current = false; if (alive.current) { setView(null); setBusy(false); refreshWindow(value => value + 1); } if (page) void run('projectLive.close', { pageHandle: page.pageHandle }).catch(() => {}); };
   const request = async (action: string, args: Data = {}) => {
     if (!alive.current || active.current || version !== generation.current || document.hidden) return;
     const page = currentPage.current, epoch = generation.current, window = ownerWindow();
@@ -27,12 +28,12 @@ export function ProjectLivePreview({ taskId, run, nativeVisible = true, onBackCh
     finally { if (epoch === generation.current) { active.current = false; if (alive.current) setBusy(false); } }
   };
   useEffect(() => {
-    alive.current = true; owner.current = ownerWindow();
+    alive.current = true; owner.current = ownerWindow(); setView(null); setBusy(false); setError(''); refreshWindow(value => value + 1);
     const inspect = () => { const current = ownerWindow(); if (current !== owner.current || document.hidden) { owner.current = current; close(); } };
     const unsubscribe = bridge.subscribe(inspect); document.addEventListener('visibilitychange', inspect); window.addEventListener('pagehide', close);
     return () => { alive.current = false; close(); unsubscribe(); document.removeEventListener('visibilitychange', inspect); window.removeEventListener('pagehide', close); };
   }, [taskId]);
-  useEffect(() => { if (!view || !view.starting && !view.mounted) return; const timer = setTimeout(() => { void request('projectLive.read'); }, view.starting ? 160 : 1200); return () => clearTimeout(timer); }, [view, busy]);
+  useEffect(() => { if (!view || busy || error || !nativeVisible || document.hidden || !view.starting && !view.mounted) return; const timer = setTimeout(() => { void request('projectLive.read'); }, view.starting ? 160 : 1200); return () => clearTimeout(timer); }, [view, busy, error, nativeVisible]);
   useEffect(() => { onBackChange?.(() => { if (!currentPage.current) return false; close(); return true; }); return () => onBackChange?.(null); }, [onBackChange]);
   useLayoutEffect(() => {
     if (!view?.mounted) return;
@@ -61,9 +62,10 @@ export function ProjectLivePreview({ taskId, run, nativeVisible = true, onBackCh
     return () => { disposed = true; cancelAnimationFrame(frame); resize?.disconnect(); overlays.disconnect(); window.removeEventListener('resize', schedule); window.removeEventListener('scroll', schedule, true); document.removeEventListener('focusin', schedule); window.visualViewport?.removeEventListener('resize', schedule); window.visualViewport?.removeEventListener('scroll', schedule); send(false); };
   }, [view?.mounted, view?.pageHandle, nativeVisible]);
   return <section className="pw-project-live"><div className="pw-section-heading"><div><h3>手机项目运行页面</h3><p className="pw-muted">连接原任务已运行的开发服务。</p></div><Button variant="secondary" disabled={busy || !nativeVisible} onClick={() => { if (view) close(); else void request('projectLive.open'); }}>{view ? '关闭页面' : '查看原开发服务'}</Button></div>
-    {view && <>{rows(view.services).map(service => <section className="pw-project-live-service" key={service.serviceHandle}><div><strong>已运行的开发服务</strong><small>原执行 {service.executionId}</small>{service.sourceGeneration != null && <p className="pw-field-hint">已批准的源码代次 {service.sourceGeneration}；配置、依赖与新文件仍由原任务核对。</p>}</div><Button variant="secondary" disabled={busy || view.starting || !nativeVisible} onClick={() => void request('projectLive.show', { serviceHandle: service.serviceHandle })}>{view.starting ? '正在连接开发服务…' : '打开运行页面'}</Button></section>)}{!rows(view.services).length && <p>原任务当前没有可连接的已运行开发服务。请先核对原构建与运行回执。</p>}
+    {view && <><Button variant="ghost" disabled={busy || !nativeVisible} onClick={() => void request('projectLive.read')}>刷新服务状态</Button>{rows(view.services).map(service => <section className="pw-project-live-service" key={service.serviceHandle}><div><strong>已运行的开发服务</strong><small>原执行 {service.executionId}</small>{service.sourceGeneration != null && <p className="pw-field-hint">已批准的源码代次 {service.sourceGeneration}；配置、依赖与新文件仍由原任务核对。</p>}</div><Button variant="secondary" disabled={busy || view.starting || !nativeVisible} onClick={() => void request('projectLive.show', { serviceHandle: service.serviceHandle })}>{view.starting ? '正在连接开发服务…' : '打开运行页面'}</Button></section>)}{!rows(view.services).length && <p>原任务当前没有可连接的已运行开发服务。请先核对原构建与运行回执。</p>}
       {view.mounted && <><div ref={viewport} className="pw-remote-preview-viewport" aria-label="原手机项目隔离运行页面" /><div className="pw-form-actions"><Button variant="ghost" disabled={busy || !nativeVisible} onClick={() => void request('projectLive.reload')}>刷新这个原页面</Button></div></>}
       {view.observed && <Accordion><AccordionItem title="原连接与页面范围"><p>本次实际观察了原服务的 HTTP 与 WebSocket；这不代表业务验收通过。</p><p>页面随获准的源码更新。要保留这个版本，请通过原任务构建并收集固定成果。</p><p>页面使用独立临时资料，不接入应用权限或浏览器账号。离页、切后台会关闭此预览；是否停止服务仍以原任务回执为准。</p><p style={{ overflowWrap: 'anywhere' }}>源码摘要：{view.observed.sourceDigest}</p></AccordionItem></Accordion>}
     </>}{(error || view?.error) && <p role="alert">{error || view?.error}</p>}
   </section>;
 }
+

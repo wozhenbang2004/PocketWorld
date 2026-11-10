@@ -35,7 +35,7 @@ export function RemoteTaskPreview({ taskId, enabled }: { taskId: string; enabled
   }, [taskId]);
   useEffect(() => { if (!view) return; return registerOverlayBack(close); }, [view?.pageHandle]);
   useEffect(() => { if (view) return holdRemoteReads(); }, [view?.pageHandle]);
-  useEffect(() => { if (!view || !view.starting && !view.mounted) return; const timer = setTimeout(() => { void request('remotePreview.read'); }, 1000); return () => clearTimeout(timer); }, [view, pending]);
+  useEffect(() => { if (!view || pending || error || review || document.hidden || !view.starting && !view.mounted) return; const timer = setTimeout(() => { void request('remotePreview.read'); }, 1000); return () => clearTimeout(timer); }, [view, pending, error, review]);
   useLayoutEffect(() => {
     if (!view?.mounted) return;
     const pageHandle = view.pageHandle, owner = ownerWindow(); let frame = 0, disposed = false, last = '';
@@ -69,6 +69,7 @@ export function RemoteTaskPreview({ taskId, enabled }: { taskId: string; enabled
       </>}
       {view?.mounted && <><div ref={viewport} className="pw-remote-preview-viewport" aria-label="原生隔离开发页面" /><p className="pw-field-hint">仅原隧道页面和同端口 WebSocket；其他来源或端口会拒绝。页面脚本会运行。</p></>}
       {(view?.starting || view?.mounted || view?.hostTaskId) && <div className="pw-form-actions"><Button variant="secondary" disabled={!!pending} onClick={() => void request('remotePreview.stop')}>断开本机隧道</Button>{view?.hostTaskId && <Button variant="ghost" disabled={!!pending} onClick={() => void request('remotePreview.openTask')}>查看原隧道任务与关闭回执</Button>}</div>}
+      {view && <Button variant="ghost" disabled={!!pending} onClick={() => void request('remotePreview.read')}>刷新预览状态</Button>}
       {(error || view?.error) && <p className="pw-field-error" role="alert">{error || view?.error}</p>}
       {view?.receipt && <p className="pw-field-hint">原隧道回执：{view.receipt.status || (view.receipt.forwardingEstablished ? '已建立转发' : '转发尚未确认')}。断开本机隧道不代表远端服务停止。</p>}
     </div></SettingsDialog>
@@ -78,3 +79,4 @@ export function RemoteTaskPreview({ taskId, enabled }: { taskId: string; enabled
     }}><p>原电脑任务 {reviewedInput.previewSource?.taskId}<br />原 job {reviewedInput.previewSource?.jobId}</p><p>SSH {reviewedProfile.host} → 127.0.0.1:{reviewedInput.remotePort}<br />本机随机回环端口，保留 {reviewedInput.timeoutSeconds} 秒。</p><p>请核对这是原项目的机器与服务。网页脚本及同端口 WebSocket 会运行；其他本机 App 可能访问本机端口。离页、后台或到期会断开本隧道，远端服务继续状态需另行核对。</p></RemoteActionReview>}
   </>;
 }
+
