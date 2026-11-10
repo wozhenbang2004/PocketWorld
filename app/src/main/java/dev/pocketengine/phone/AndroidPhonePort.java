@@ -467,7 +467,13 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
             }
         }
         if (selected == null) throw new PhoneFailure("node_unavailable", "找不到目标节点，请重新观察。");
-        validateTarget(service,expected,control,selected);
+        AccessibilityForest.Ref requested=selected;
+        validateTarget(service,expected,control,requested);
+        if("phone_click_node".equals(tool)) {
+            selected=expected.tree.forest.clickTarget(requested);
+            if(selected==null)throw new PhoneFailure("not_clickable","目标及其原父级没有声明点击操作。");
+            if(selected!=requested)validateTarget(service,expected,control,selected);
+        }
         AccessibilityNodeInfo node = AccessibilityForest.resolve(service, Display.DEFAULT_DISPLAY, selected);
         if (node == null) throw new PhoneFailure("stale_node", "目标节点已失效，请重新观察。");
         AccessibilityNodeInfo readbackIdentity=null;
@@ -487,12 +493,17 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
                 if(node.isPassword())throw new PhoneFailure("requires_user","不自动操作密码节点。");
                 int action="forward".equals(direction)?AccessibilityNodeInfo.ACTION_SCROLL_FORWARD:AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD;
                 if(!node.isScrollable()||node.getActionList().stream().noneMatch(a->a.getId()==action))throw new PhoneFailure("not_scrollable","目标未声明此方向的原生滚动动作。");
-            } else if (!node.isClickable()) throw new PhoneFailure("not_clickable", "目标未声明可点击，请重新观察并选择其他目标。");
+            } else if (!AccessibilityForest.supportsClick(node)) throw new PhoneFailure("not_clickable", "目标未声明可点击，请重新观察并选择其他目标。");
             // Recheck this exact target's relevant context after resolve/refresh, not an unrelated ticker.
             Tree sensitiveContext=validateTarget(service,expected,control,selected);
             if (!node.refresh() || !AccessibilityForest.matches(selected,node))
                 throw new PhoneFailure("stale_node", "目标节点发生变化，请重新观察。");
             requireUnlocked(service);
+            if(requested!=selected) {
+                if(!expected.tree.forest.sameTarget(requested,sensitiveContext.forest))
+                    throw new PhoneFailure("stale_node","原点击文字或图标已变化，请重新观察。");
+                NativeSensitiveStep.requireNode(sensitiveContext.forest,requested,tool,control,expected.revision);
+            }
             NativeSensitiveStep.requireNode(sensitiveContext.forest,selected,tool,control,expected.revision);
             boolean accepted;
             if("phone_scroll_node".equals(tool)) {

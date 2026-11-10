@@ -28,6 +28,7 @@ public final class AccessibilityForest {
         public final int[] path;
         public final String identity, nativeIdentity;
         public final boolean editable, focused;
+        private final boolean enabled, clickable;
         private final Rect bounds;
         private final boolean visible;
         private final int drawingOrder;
@@ -36,6 +37,7 @@ public final class AccessibilityForest {
         private Ref(AccessibilityNodeInfo node,int windowId,int[] path,String identity,List<String> lineage){
             this.windowId=windowId;this.path=path.clone();this.identity=identity;this.nativeIdentity=nativeIdentity(node);
             editable=node.isEditable();focused=node.isFocused();visible=node.isVisibleToUser();drawingOrder=node.getDrawingOrder();
+            enabled=node.isEnabled();clickable=supportsClick(node);
             bounds=new Rect();node.getBoundsInScreen(bounds);ancestors=new ArrayList<>(lineage);
             boolean password=node.isPassword();sensitive=new NativeSensitiveStep.Facts(password?null:node.getText(),password?null:node.getContentDescription(),password?null:node.getHintText(),password?"":relatedLabel(node),String.valueOf(node.getViewIdResourceName()),String.valueOf(node.getPackageName()),String.valueOf(node.getClassName()),node.isEditable(),node.isChecked());
         }
@@ -121,7 +123,7 @@ public final class AccessibilityForest {
                     .put("description",password?"":body(node.getContentDescription(),local))
                     .put("hint",password?"":body(node.getHintText(),local)).put("labelledBy",password?"":body(relatedLabel(node),local)).put("packageName",limited(node.getPackageName(),250))
                     .put("className",limited(node.getClassName(),200)).put("resourceId",limited(node.getViewIdResourceName(),400)).put("role",role(node))
-                    .put("clickable",node.isClickable()).put("editable",node.isEditable()).put("enabled",node.isEnabled())
+                    .put("clickable",supportsClick(node)).put("editable",node.isEditable()).put("enabled",node.isEnabled())
                     .put("visible",node.isVisibleToUser()).put("password",password).put("checked",node.isChecked())
                     .put("selected",node.isSelected()).put("focused",node.isFocused()).put("scrollable",node.isScrollable())
                     .put("bounds",new JSONObject().put("left",normal(bounds.left,width)).put("top",normal(bounds.top,height))
@@ -190,6 +192,19 @@ public final class AccessibilityForest {
         if(!coveringWindows(expected,before).isEmpty()||!fresh.coveringWindows(actual,after).isEmpty())return false;
         return relevantNodes(expected).equals(fresh.relevantNodes(actual));
     }
+    /** Resolve a label/icon through its original native ancestry, never by text or a different window. */
+    public Ref clickTarget(Ref requested) {
+        if(requested==null||!requested.visible||!requested.enabled)return null;
+        for(int depth=requested.path.length;depth>=0;depth--)for(Ref candidate:refs.values()) {
+            if(candidate.windowId==requested.windowId&&candidate.path.length==depth&&prefix(candidate.path,requested.path)
+                    &&candidate.visible&&candidate.enabled&&candidate.clickable)return candidate;
+        }
+        return null;
+    }
+    /** Virtual accessibility controls may advertise ACTION_CLICK without the clickable flag. */
+    public static boolean supportsClick(AccessibilityNodeInfo node) {
+        return node.isClickable()||node.getActionList().stream().anyMatch(action->action.getId()==AccessibilityNodeInfo.ACTION_CLICK);
+    }
     /** A refreshed native handle still has to be the saved source, not an identical replacement at that path. */
     public static boolean matches(Ref ref,AccessibilityNodeInfo node) {
         return ref!=null&&node!=null&&ref.nativeIdentity.equals(nativeIdentity(node))&&ref.identity.equals(identity(node));
@@ -233,7 +248,7 @@ public final class AccessibilityForest {
             String part=identityPart(value);s.append(part.length()).append(':').append(part);
         }
         return s.append('|').append(node.getWindowId()).append('|').append(r.toShortString()).append('|').append(node.getChildCount())
-                .append('|').append(node.isVisibleToUser()).append('|').append(node.isEnabled()).append('|').append(node.isClickable())
+                .append('|').append(node.isVisibleToUser()).append('|').append(node.isEnabled()).append('|').append(supportsClick(node))
                 .append('|').append(node.isEditable()).append('|').append(node.isFocused()).append('|').append(node.isPassword())
                 .append('|').append(node.isChecked()).append('|').append(node.isSelected()).append('|').append(node.isScrollable()).toString();
     }

@@ -544,7 +544,13 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
             AccessibilityForest.Ref ref=expected.tree.forest.refs.get(nodeId);
             if(nodeId.isEmpty()&&"phone_type".equals(tool))for(AccessibilityForest.Ref candidate:expected.tree.forest.refs.values())if(candidate.focused&&candidate.editable){if(ref!=null)return failure("ambiguous_input","请指定后台输入框节点。");ref=candidate;}
             if(ref==null)return failure("stale_node","后台目标节点已失效。");
-            validateTarget(expected,ref,control);
+            AccessibilityForest.Ref requested=ref;
+            validateTarget(expected,requested,control);
+            if("phone_click_node".equals(tool)) {
+                ref=expected.tree.forest.clickTarget(requested);
+                if(ref==null)return failure("not_clickable","后台目标及其原父级没有声明点击操作。");
+                if(ref!=requested)validateTarget(expected,ref,control);
+            }
             AccessibilityNodeInfo target=AccessibilityForest.resolve(PhoneAccessibilityService.get(),displayId,ref);
             if(target==null)return failure("stale_node","后台目标节点已失效。");
             AccessibilityNodeInfo readbackIdentity=null;
@@ -554,11 +560,15 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
                 if(privateInput&&!isOwner(control))return failure("requires_user","私密输入需要当前机主接管。");
                 if(privateInput){JSONObject rejected=privateInputRejection(target);if(rejected!=null)return rejected;}
                 if("phone_type".equals(tool)&&!target.isEditable())return failure("not_editable","该后台节点不可输入。");
-                if("phone_click_node".equals(tool)&&!target.isClickable())return failure("not_clickable","请换用可点击节点或画面坐标。");
+                if("phone_click_node".equals(tool)&&!AccessibilityForest.supportsClick(target))return failure("not_clickable","请换用可点击节点或画面坐标。");
                 int scrollAction="forward".equals(args.optString("direction"))?AccessibilityNodeInfo.ACTION_SCROLL_FORWARD:AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD;
                 if("phone_scroll_node".equals(tool)&&(!target.isScrollable()||target.getActionList().stream().noneMatch(a->a.getId()==scrollAction)))return failure("not_scrollable","该后台节点未声明此方向滚动。");
                 Tree sensitiveContext=validateTarget(expected,ref,control);
                 if(!target.refresh()||!AccessibilityForest.matches(ref,target))return failure("stale_node","后台目标节点已变化。");
+                if(requested!=ref) {
+                    if(!expected.tree.forest.sameTarget(requested,sensitiveContext.forest))return failure("stale_node","原后台点击文字或图标已变化，请重新观察。");
+                    if(!isOwner(control))NativeSensitiveStep.requireNode(sensitiveContext.forest,requested,tool,control,expected.revision);
+                }
                 if(!isOwner(control))NativeSensitiveStep.requireNode(sensitiveContext.forest,ref,tool,control,expected.revision);
                 Bundle inputArguments=null;if("phone_type".equals(tool)){inputArguments=new Bundle();inputArguments.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,text);if(!privateInput)readbackIdentity=AccessibilityNodeInfo.obtain(target);}
                 refreshObservationGeometry(expected,control);
