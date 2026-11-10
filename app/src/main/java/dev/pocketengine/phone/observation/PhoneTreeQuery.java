@@ -141,7 +141,7 @@ public final class PhoneTreeQuery {
             if(!included)continue;
             // Original display/window/path and complete native identity survive unrelated node-ID shifts.
             JSONObject state=new JSONObject();
-            for(String key:new String[]{"windowId","path","identityFingerprint","resourceId","className","role","text","description","enabled","visible","password","clickable","editable","checked","selected","focused","scrollable","bounds"})
+            for(String key:new String[]{"windowId","path","identityFingerprint","resourceId","className","role","text","description","enabled","visible","password","clickable","editable","checked","selected","focused","scrollable","scrollDirections","bounds"})
                 if(node.has(key))state.put(key,node.get(key));
             byte[] bytes=state.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
             digest.update(Integer.toString(bytes.length).getBytes(java.nio.charset.StandardCharsets.US_ASCII));digest.update((byte)':');digest.update(bytes);

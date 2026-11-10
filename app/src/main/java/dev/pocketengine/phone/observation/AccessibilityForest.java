@@ -125,7 +125,8 @@ public final class AccessibilityForest {
                     .put("className",limited(node.getClassName(),200)).put("resourceId",limited(node.getViewIdResourceName(),400)).put("role",role(node))
                     .put("clickable",supportsClick(node)).put("editable",supportsSetText(node)).put("enabled",node.isEnabled())
                     .put("visible",node.isVisibleToUser()).put("password",password).put("checked",node.isChecked())
-                    .put("selected",node.isSelected()).put("focused",node.isFocused()).put("scrollable",node.isScrollable())
+                    .put("selected",node.isSelected()).put("focused",node.isFocused()).put("scrollable",supportsScroll(node))
+                    .put("scrollDirections",scrollDirections(node))
                     .put("bounds",new JSONObject().put("left",normal(bounds.left,width)).put("top",normal(bounds.top,height))
                             .put("right",normal(bounds.right,width)).put("bottom",normal(bounds.bottom,height)));
             nodes.put(record);
@@ -209,6 +210,21 @@ public final class AccessibilityForest {
     public static boolean supportsSetText(AccessibilityNodeInfo node) {
         return node.isEditable()||node.getActionList().stream().anyMatch(action->action.getId()==AccessibilityNodeInfo.ACTION_SET_TEXT);
     }
+    /** Native action declarations also describe virtual lists that omit the scrollable flag. */
+    public static boolean supportsScroll(AccessibilityNodeInfo node) {
+        return node.isScrollable()||supportsScroll(node,AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+                ||supportsScroll(node,AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD);
+    }
+    public static boolean supportsScroll(AccessibilityNodeInfo node,int action) {
+        return (action==AccessibilityNodeInfo.ACTION_SCROLL_FORWARD||action==AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)
+                &&node.getActionList().stream().anyMatch(candidate->candidate.getId()==action);
+    }
+    private static JSONArray scrollDirections(AccessibilityNodeInfo node) {
+        JSONArray directions=new JSONArray();
+        if(supportsScroll(node,AccessibilityNodeInfo.ACTION_SCROLL_FORWARD))directions.put("forward");
+        if(supportsScroll(node,AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD))directions.put("backward");
+        return directions;
+    }
     /** A refreshed native handle still has to be the saved source, not an identical replacement at that path. */
     public static boolean matches(Ref ref,AccessibilityNodeInfo node) {
         return ref!=null&&node!=null&&ref.nativeIdentity.equals(nativeIdentity(node))&&ref.identity.equals(identity(node));
@@ -254,7 +270,9 @@ public final class AccessibilityForest {
         return s.append('|').append(node.getWindowId()).append('|').append(r.toShortString()).append('|').append(node.getChildCount())
                 .append('|').append(node.isVisibleToUser()).append('|').append(node.isEnabled()).append('|').append(supportsClick(node))
                 .append('|').append(node.isEditable()).append('|').append(supportsSetText(node)).append('|').append(node.isFocused()).append('|').append(node.isPassword())
-                .append('|').append(node.isChecked()).append('|').append(node.isSelected()).append('|').append(node.isScrollable()).toString();
+                .append('|').append(node.isChecked()).append('|').append(node.isSelected()).append('|').append(node.isScrollable())
+                .append('|').append(supportsScroll(node,AccessibilityNodeInfo.ACTION_SCROLL_FORWARD))
+                .append('|').append(supportsScroll(node,AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)).toString();
     }
     /** Platform labelFor relation, not a guessed match to another window's text. Read only on bounded workers. */
     private static String relatedLabel(AccessibilityNodeInfo node){
@@ -287,7 +305,7 @@ public final class AccessibilityForest {
         if(supportsSetText(node))return "input";if(cls.contains("checkbox"))return "checkbox";if(cls.contains("radiobutton"))return "radio";
         if(cls.contains("switch"))return "switch";if(cls.contains("button"))return "button";if(cls.contains("webview"))return "web";
         if(cls.contains("list")||cls.contains("recyclerview")||cls.contains("grid"))return "list";
-        if(node.isScrollable())return "scroll";if(cls.contains("image"))return "image";if(cls.contains("text"))return "text";return "container";
+        if(supportsScroll(node))return "scroll";if(cls.contains("image"))return "image";if(cls.contains("text"))return "text";return "container";
     }
 }
 

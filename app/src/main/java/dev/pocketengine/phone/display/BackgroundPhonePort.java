@@ -562,7 +562,7 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
                 if("phone_type".equals(tool)&&!AccessibilityForest.supportsSetText(target))return failure("not_editable","该后台节点不可输入。");
                 if("phone_click_node".equals(tool)&&!AccessibilityForest.supportsClick(target))return failure("not_clickable","请换用可点击节点或画面坐标。");
                 int scrollAction="forward".equals(args.optString("direction"))?AccessibilityNodeInfo.ACTION_SCROLL_FORWARD:AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD;
-                if("phone_scroll_node".equals(tool)&&(!target.isScrollable()||target.getActionList().stream().noneMatch(a->a.getId()==scrollAction)))return failure("not_scrollable","该后台节点未声明此方向滚动。");
+                if("phone_scroll_node".equals(tool)&&!AccessibilityForest.supportsScroll(target,scrollAction))return failure("not_scrollable","该后台节点未声明此方向滚动。");
                 Tree sensitiveContext=validateTarget(expected,ref,control);
                 if(!target.refresh()||!AccessibilityForest.matches(ref,target))return failure("stale_node","后台目标节点已变化。");
                 if(requested!=ref) {

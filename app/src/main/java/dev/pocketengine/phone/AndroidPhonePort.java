@@ -492,7 +492,7 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
             } else if("phone_scroll_node".equals(tool)) {
                 if(node.isPassword())throw new PhoneFailure("requires_user","不自动操作密码节点。");
                 int action="forward".equals(direction)?AccessibilityNodeInfo.ACTION_SCROLL_FORWARD:AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD;
-                if(!node.isScrollable()||node.getActionList().stream().noneMatch(a->a.getId()==action))throw new PhoneFailure("not_scrollable","目标未声明此方向的原生滚动动作。");
+                if(!AccessibilityForest.supportsScroll(node,action))throw new PhoneFailure("not_scrollable","目标未声明此方向的原生滚动动作。");
             } else if (!AccessibilityForest.supportsClick(node)) throw new PhoneFailure("not_clickable", "目标未声明可点击，请重新观察并选择其他目标。");
             // Recheck this exact target's relevant context after resolve/refresh, not an unrelated ticker.
             Tree sensitiveContext=validateTarget(service,expected,control,selected);
