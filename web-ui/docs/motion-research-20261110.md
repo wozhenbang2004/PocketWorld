@@ -35,6 +35,21 @@ PW-M25–PW-M28均已落实。独立只读交叉审查核对了纯读取白名�
 
 发布前主线新增`8f232f1ae14b77ab4512a9352b3959d0e7b21d82`的用量导航及上下文详情改动，已无损rebase保留；相关ComposerContextMeter仍为独立详情窗口，没有改变本批两个selector的状态归属。最终生产构建对合并后的整棵源码执行。
 
+### 本批正式交付 · v0.1.97
+
+北京时间2026-11-11 07:37，模型与推理入口响应修正已随[v0.1.97](https://github.com/wozhenbang2004/PocketWorld/releases/tag/v0.1.97)发布。对应[源码提交](https://github.com/wozhenbang2004/PocketWorld/commit/d2a3d41f8c64a23ce2aaecd8d0dedcd3dd31a5a8)为`d2a3d41f8c64a23ce2aaecd8d0dedcd3dd31a5a8`，tree为`d1424e50f9697aa066825a8e9bf79ce9f4623241`，与整合后本地生产构建的源码树一致。随后并发主线新增的项目工作区功能已保留，不把后续文档提交或主线HEAD冒充本APK的源码身份。
+
+| 交付项 | 实际证据 |
+| --- | --- |
+| CI | [run 42922916773](https://github.com/wozhenbang2004/PocketWorld/actions/runs/42922916773)，build、prepare、publish均success；TypeScript/Web构建、Android assembleDebug完成。 |
+| 安装包 | `dev.pocketengine`，versionName `0.4.1097`，versionCode `1097`，arm64-v8a，最低Android API 30；148,484,789 bytes。 |
+| APK SHA-256 | `90f5e34eb5f17225c838d28a9d5fc2fcaed574257bb4fb9ea00e1e0a1d45bd96`；发布资产digest及大小与同次构建的apk-identity、SHA256SUMS一致。 |
+| 签名 | CI的apksigner记录为Verifies，v3为true；证书SHA-256 `b58e014e2a2e49b2e85ebd5b47a034a28cb0d313d71f379a5208d21afe388e58`，保持项目既有签名。 |
+| 包内容 | CI完成ZIP对齐/CRC、精确Web清单与哈希、native ABI/catalog及display helper DEX完整性核对；这些是打包检查，不是设备运行结果。 |
+| 独立取回 | 已下载并读取同次轻量构建证据`pocketworld-debug-arm64-234-1`，artifact `13812463372`，ZIP SHA-256 `7c0f651d5f3246ee973915d62b4708bfb678ab1a7a24f403d415e68852c84ca9`与服务端digest一致。 |
+
+[直接下载本批APK](https://github.com/wozhenbang2004/PocketWorld/releases/download/v0.1.97/90f5e34eb5f17225c838d28a9d5fc2fcaed574257bb4fb9ea00e1e0a1d45bd96-app-1097.apk)。本次没有编写或运行测试；构建回执的`device_install_or_runtime_test`明确为`not performed`。PW-M25–PW-M28的代码、独立源码复核、构建及发布身份已闭合；Android实际点击延迟、连续开关、键盘弹起/收起及流畅度仍待真实体验，不以本记录宣称用户反馈已完全解决。体验关注同一聊天中的模型/推理打开与选择、带键盘返回，以及后台任务进行时再次打开的连续性。
+
 ## 第三次深化 · 连续操作、测量成本与手势接管
 
 用户原话：“还是有一些地方不流畅。对吧？还是有些地方你可以再深入的优化研究一些动画。你可以再深入地看一下我们审美库。对，或者是以及网络上的，社区上的，对吧，那些关于动画的一些有创意的，好吧”。来源为本聊天当前消息，精确消息ID与发送时刻不可取得；本批记录于北京时间2026-11-10 22:36，承接此前“全部交给你”的实施及主线发布授权。用户未提供具体卡顿页面、录屏、设备或安装版本，不能据此断言反馈来自v0.1.92，也不能将源码推导当成真机复现。
