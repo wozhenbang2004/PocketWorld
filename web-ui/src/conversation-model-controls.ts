@@ -85,7 +85,7 @@ export function reasoningChoices(facts: ModelControlRecord, provider: string, cu
   const choices: ReasoningChoice[] = [{ id: reasoningId(defaultReasoning), label: '自动', detail: '沿用接口默认设置', value: defaultReasoning }];
   const mode = namedMode(provider), levels = record(facts.REASONING_LEVELS);
   const budget = provider === 'gemini' && geminiBudgetModel(modelId);
-  const budgets: Record<string, number> = { low: 512, medium: 2048, high: 4096 };
+  const budgets: Record<string, number> = { low: 512, medium: 1536, high: 3072 };
   if (mode && facts.REASONING?.known === true && facts.REASONING?.value === true && levels.known === true && Array.isArray(levels.value)) {
     for (const level of new Set(levels.value.filter((item: any): item is string => typeof item === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(item)))) {
       if (budget) {
