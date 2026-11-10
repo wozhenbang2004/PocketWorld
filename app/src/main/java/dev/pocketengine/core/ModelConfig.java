@@ -109,7 +109,12 @@ public final class ModelConfig {
     public ModelConfig withNativeCatalog(ModelBinding binding,ReasoningOptions reasoning,int imageTokenReserve){return new ModelConfig(this,binding,reasoning,imageTokenReserve,true);}
     /** Native identity only; this does not assert any model capability or enable directory enforcement. */
     public ModelConfig withApiConnection(ModelBinding binding){return new ModelConfig(this,binding,ReasoningOptions.DEFAULT,0,false);}
-    private ModelConfig retainCatalog(ModelConfig next){if(usesBedrock())next=next.withBedrockSession(bedrockRegion,awsSession);next=next.withProviderCompatibility(compatibility).withLocalObservation(localCaptureAllowed,localOcrAllowed).withRoutePlan(routePlan).withPurposePlans(purposePlans);return capabilityBinding==null?next:catalogEnforced?next.withNativeCatalog(capabilityBinding,reasoning,imageTokenReserve):next.withApiConnection(capabilityBinding);}
+    /** Exact owner-reviewed effort on an otherwise identity-only API route. Not a full-catalog grant. */
+    public ModelConfig withReviewedReasoning(ModelBinding binding,ReasoningOptions options){
+        if(usesBedrock()||options==null)throw new IllegalArgumentException("reviewed_reasoning_requires_api_connection");
+        return new ModelConfig(this,binding,options,0,false);
+    }
+    private ModelConfig retainCatalog(ModelConfig next){if(usesBedrock())next=next.withBedrockSession(bedrockRegion,awsSession);next=next.withProviderCompatibility(compatibility).withLocalObservation(localCaptureAllowed,localOcrAllowed).withRoutePlan(routePlan).withPurposePlans(purposePlans);return capabilityBinding==null?next:catalogEnforced?next.withNativeCatalog(capabilityBinding,reasoning,imageTokenReserve):next.withReviewedReasoning(capabilityBinding,reasoning);}
     public boolean usesBedrock(){return BEDROCK_PROVIDER.equals(provider);}
     private ModelConfig(ModelConfig source,String region,AwsSessionCredentials session){
         if(!source.usesBedrock()||source.usesAccount()||!source.apiKey.isEmpty()||!source.cleartextConsent.isEmpty()||source.catalogEnforced)
