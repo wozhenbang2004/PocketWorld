@@ -45,7 +45,7 @@ public final class ProviderAdapters {
     public static void projectReasoning(String provider,ReasoningOptions options,JSONObject wire)throws Exception {
         switch (options.mode()) {
             case DEFAULT: break;
-            case OPENAI_SWITCH, ANTHROPIC_SWITCH -> throw new IllegalArgumentException("thinking_switch_requires_model_identity");
+            case OPENAI_SWITCH, ANTHROPIC_SWITCH: throw new IllegalArgumentException("thinking_switch_requires_model_identity");
             case OPENAI_EFFORT:
                 if (provider.equals("openai_chat")) wire.put("reasoning_effort", options.level());
                 else wire.put("reasoning", new JSONObject().put("effort", options.level()));

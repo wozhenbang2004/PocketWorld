@@ -220,7 +220,8 @@ final class ModelKnowledgeRegistry {
         // refresh does not require an application update.
         Map<String, Provider> providers = new LinkedHashMap<>();
         int count = 0;
-        for (String providerId : root.keySet()) {
+        for (java.util.Iterator<String> keys = root.keys(); keys.hasNext();) {
+            String providerId = keys.next();
             JSONObject provider = root.optJSONObject(providerId);
             JSONObject models = provider == null ? null : provider.optJSONObject("models");
             if (models == null || providerId.length() > 100) continue;
@@ -232,7 +233,8 @@ final class ModelKnowledgeRegistry {
                     apiHost = uri.getHost().toLowerCase(Locale.ROOT);
             } catch (IllegalArgumentException ignored) { }
             Map<String, Entry> entries = new HashMap<>();
-            for (String modelId : models.keySet()) {
+            for (java.util.Iterator<String> keys = models.keys(); keys.hasNext();) {
+                String modelId = keys.next();
                 if (modelId.isEmpty() || modelId.length() > 300) continue;
                 JSONObject row = models.optJSONObject(modelId);
                 if (row == null || !row.has("reasoning") || !(row.opt("reasoning") instanceof Boolean)) continue;
