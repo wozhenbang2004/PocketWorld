@@ -76,12 +76,21 @@ public final class ProjectMemoryNamespaces {
     public synchronized JSONObject handleForOwner(Selection selected,String command,JSONObject input)throws Exception {
         boolean hasSources;synchronized(local){requireCurrent(selected);hasSources=book.projectSourcesForOwner(selected).length()>0;}
         if(hasSources)synchronizeOriginalSources();
+        if("correctReviewed".equals(command)){
+            if(sourceBridge==null)throw new UnsupportedOperationException("项目记忆纠正尚未连接原上下文清理宿主");
+            JSONObject value=input==null?new JSONObject():input;rejectNamespaceArguments(value);
+            return sourceBridge.correctProjectReviewed(this,selected,value.getString("id"),SourceRef.integer(value,"expectedRevision",1),value.getString("text"));
+        }
         if("forgetReviewed".equals(command)&&sourceBridge!=null){JSONObject value=input==null?new JSONObject():input;rejectNamespaceArguments(value);return sourceBridge.forgetProjectReviewed(this,selected,value.getString("id"),SourceRef.integer(value,"expectedRevision",1));}
         synchronized(local){requireCurrent(selected);JSONObject result=book.projectForOwner(selected,command,input==null?new JSONObject():input);if("snapshot".equals(command))result.put("taskContextSupported",sourceBridge!=null).put("taskContextMode","explicit_native_project_only");return result;}
     }
     /** Original Bridge calls back on the same native facade admission; no reverse facade wait. */
     public JSONObject forgetWithRetirementForHost(Selection selected,String id,long revision,MemoryBook.BeforeForget receipt)throws Exception{
         if(!Thread.holdsLock(this))throw new SecurityException("项目遗忘须沿原facade准入，不接受JSON来源标记");synchronized(local){requireCurrent(selected);return book.forgetProjectWithRetirement(selected,id,revision,receipt);}
+    }
+    public JSONObject correctWithRetirementForHost(Selection selected,String id,long revision,String text,MemoryBook.BeforeForget receipt)throws Exception{
+        if(!Thread.holdsLock(this))throw new SecurityException("项目纠正须沿原facade准入，不接受JSON来源标记");
+        synchronized(local){requireCurrent(selected);return book.correctProjectWithRetirement(selected,id,revision,text,receipt);}
     }
     /** A separate explicit native task-start action freezes current formal records/spans once.
      * Closing the management page does not revoke an already bound run; consent/RunControl do. */

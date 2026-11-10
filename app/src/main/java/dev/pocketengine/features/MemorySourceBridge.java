@@ -212,6 +212,16 @@ public final class MemorySourceBridge {
         JSONObject result;synchronized(tasks){result=nativeScope.forgetWithRetirementForHost(selected,id,revision,removed->{retired[0]=tasks.invalidateProjectMemoryContexts(selected,removed);JSONArray ids=retired[0].getJSONArray("taskIds");for(int i=0;i<ids.length();i++)host.clearTaskWorkingMemory(ids.getString(i));});}
         return result.put("contextRetirement",retired[0]==null?new JSONObject():retired[0]).put("executionAuthorized",false);
     }
+    /** Correct only the selected project, retiring the old revision from already bound runs. */
+    public synchronized JSONObject correctProjectReviewed(dev.pocketengine.features.memory.ProjectMemoryNamespaces nativeScope,dev.pocketengine.features.memory.ProjectMemoryNamespaces.Selection selected,String id,long revision,String text)throws Exception{
+        EngineModule original=host.module("memory");if(!Thread.holdsLock(nativeScope)||!(original instanceof MemoryModule)||!((MemoryModule)original).ownsProjectNamespacesForHost(nativeScope))throw new SecurityException("项目纠正不是原Book/Bridge的native准入");
+        final JSONObject[] retired={null};JSONObject result;
+        synchronized(tasks){result=nativeScope.correctWithRetirementForHost(selected,id,revision,text,removed->{
+            retired[0]=tasks.invalidateProjectMemoryContexts(selected,removed);JSONArray ids=retired[0].getJSONArray("taskIds");
+            for(int i=0;i<ids.length();i++)host.clearTaskWorkingMemory(ids.getString(i));
+        });}
+        return result.put("contextRetirement",retired[0]==null?new JSONObject():retired[0]).put("executionAuthorized",false);
+    }
     public synchronized JSONObject correctReviewed(JSONObject scope,String id,long revision,String text)throws Exception{
         EngineModule module=host.module("memory");if(!(module instanceof MemoryModule))throw new IllegalStateException("记忆模块暂不可用");MemoryModule memory=(MemoryModule)module;
         reconcilePending(scope,memory);return mutate(scope,memory,false,"owner_correction",receipt->memory.correctReviewed(scope,id,revision,text,receipt));

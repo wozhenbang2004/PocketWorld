@@ -2174,6 +2174,9 @@ public final class MemoryBook {
     synchronized JSONObject forgetProjectWithRetirement(ProjectMemoryNamespaces.Selection selected,String id,long revision,BeforeForget receipt)throws Exception{
         selected.requireBook(this);return forgetReviewed(new ProjectScope(selected.projectId()),id,revision,receipt);
     }
+    synchronized JSONObject correctProjectWithRetirement(ProjectMemoryNamespaces.Selection selected,String id,long revision,String text,BeforeForget receipt)throws Exception{
+        selected.requireBook(this);return correctReviewed(new ProjectScope(selected.projectId()),id,revision,text,receipt,System.currentTimeMillis());
+    }
     synchronized ProjectMemoryAccess.Consent captureProjectConsentForOwner(ProjectMemoryNamespaces.Selection selected)throws Exception{
         selected.requireBook(this);Scope scope=Scope.from(new ProjectScope(selected.projectId()));Set<String> live=retrievalActiveIds(scope,System.currentTimeMillis());JSONArray refs=new JSONArray(),spans=new JSONArray();Set<SourceRef> seen=new HashSet<>();
         for(JSONObject row:records.values())if(scope.matches(row)&&live.contains(row.getString("id"))){
@@ -2263,7 +2266,7 @@ public final class MemoryBook {
         ProjectMemoryNamespaces.rejectNamespaceArguments(input);
         long now=System.currentTimeMillis();JSONObject result;
         switch(command){
-            case "snapshot":return new JSONObject().put("available",true).put("scope",new JSONObject(scope.toString())).put("records",list(scope)).put("candidates",listCandidates(scope)).put("cognitionRevision",cognitionRevision(scope)).put("automaticLearning",false).put("taskContextSupported",false).put("nativeCapabilities",new JSONObject().put("acceptCandidate",true).put("candidateCapacity",true).put("listCandidateHistory",true).put("archiveCandidates",true).put("reconsiderRejected",true).put("forgetReviewed",true).put("openSource",true).put("projectModelConsolidation",false)).put("executionAuthorized",false);
+            case "snapshot":return new JSONObject().put("available",true).put("scope",new JSONObject(scope.toString())).put("records",list(scope)).put("candidates",listCandidates(scope)).put("cognitionRevision",cognitionRevision(scope)).put("automaticLearning",false).put("taskContextSupported",false).put("nativeCapabilities",new JSONObject().put("acceptCandidate",true).put("candidateCapacity",true).put("listCandidateHistory",true).put("archiveCandidates",true).put("reconsiderRejected",true).put("forgetReviewed",true).put("correctReviewed",true).put("openSource",true).put("projectModelConsolidation",false)).put("executionAuthorized",false);
             case "list":return new JSONObject().put("records",list(scope));
             case "search":return new JSONObject().put("records",search(scope,input.optString("query"),Math.max(1,Math.min(100,input.optInt("limit",20)))));
             case "searchHistory":{
