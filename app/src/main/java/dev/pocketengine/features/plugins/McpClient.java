@@ -4,7 +4,6 @@ import dev.pocketengine.core.RunControl;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.PushbackInputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
@@ -93,9 +92,9 @@ public final class McpClient implements AutoCloseable, dev.pocketengine.features
         try{
             control.check();try(Response response=call.execute()){
                 if(response.code()!=200||response.body()==null||!response.header("Content-Type","").split(";",2)[0].trim().equalsIgnoreCase("text/event-stream"))throw new McpException("订阅服务未返回SSE；未假定已订阅，未自动重连");
-                headers(response,false);PushbackInputStream in=new PushbackInputStream(response.body().byteStream(),1);int[] budget={0};int messages=0;StringBuilder data=new StringBuilder();String event="";boolean first=true;
+                headers(response,false);SseLines in=new SseLines(response.body().byteStream());int messages=0;StringBuilder data=new StringBuilder();String event="";boolean first=true;
                 while(true){
-                    String line=line(in,budget,control);if(line==null)return subscription.result("transport_closed");
+                    String line=in.read(control);if(line==null)return subscription.result("transport_closed");
                     if(first){first=false;if(line.startsWith("\ufeff"))line=line.substring(1);}
                     if(line.isEmpty()){
                         if(data.length()>0){if(++messages>MAX_MESSAGES)throw new McpException("订阅事件超过范围");if(event.isEmpty()||event.equals("message")){subscription.accept(parse(data.toString()));if(subscription.hasUpdates()||subscription.complete())return subscription.result(subscription.complete()?"server_closed":"selected_update");}}
@@ -535,10 +534,10 @@ public final class McpClient implements AutoCloseable, dev.pocketengine.features
         return envelope;
     }
     private JSONObject sse(InputStream input,String expected,RunControl control,boolean promptRead)throws Exception {
-        PushbackInputStream in=new PushbackInputStream(input,1);StringBuilder data=new StringBuilder();String event="";
-        int[] budget={0};int messages=0;boolean first=true;
+        SseLines in=new SseLines(input);StringBuilder data=new StringBuilder();String event="";
+        int messages=0;boolean first=true;
         while(true){
-            String line=line(in,budget,control);if(line==null)throw new McpException("MCP SSE在匹配结果前断开；未自动恢复或重发");
+            String line=in.read(control);if(line==null)throw new McpException("MCP SSE在匹配结果前断开；未自动恢复或重发");
             if(first){first=false;if(line.startsWith("\ufeff"))line=line.substring(1);}
             if(line.isEmpty()){
                 if(data.length()>0){
@@ -557,14 +556,21 @@ public final class McpClient implements AutoCloseable, dev.pocketengine.features
             // id/retry are not used: this bounded adapter deliberately does not resume streams.
         }
     }
-    private static String line(PushbackInputStream in,int[] budget,RunControl control)throws Exception {
-        ByteArrayOutputStream out=new ByteArrayOutputStream();
-        while(true){
-            control.check();int b=in.read();if(b<0)return out.size()==0?null:decode(out.toByteArray());
-            if(++budget[0]>MAX_BYTES)throw new McpException("MCP SSE回复超过256KiB");
-            if(b=='\n')return decode(out.toByteArray());
-            if(b=='\r'){int next=in.read();if(next>=0&&next!='\n')in.unread(next);else if(next=='\n'&&++budget[0]>MAX_BYTES)throw new McpException("MCP SSE回复超过256KiB");return decode(out.toByteArray());}
-            if(out.size()>=65536)throw new McpException("MCP SSE单行超过64KiB");out.write(b);
+    /** CR is already a complete SSE line ending. Do not await a future byte to consume
+     * an optional LF: a server may keep the connection open after delivering the result. */
+    private static final class SseLines {
+        private final InputStream in;private int bytes;private boolean afterCr;
+        SseLines(InputStream in){this.in=in;}
+        String read(RunControl control)throws Exception {
+            ByteArrayOutputStream out=new ByteArrayOutputStream();
+            while(true){
+                control.check();int b=in.read();if(b<0)return out.size()==0?null:decode(out.toByteArray());
+                if(++bytes>MAX_BYTES)throw new McpException("MCP SSE回复超过256KiB");
+                if(afterCr){afterCr=false;if(b=='\n')continue;}
+                if(b=='\n')return decode(out.toByteArray());
+                if(b=='\r'){afterCr=true;return decode(out.toByteArray());}
+                if(out.size()>=65536)throw new McpException("MCP SSE单行超过64KiB");out.write(b);
+            }
         }
     }
     private static String read(InputStream input,int limit,RunControl control)throws Exception {

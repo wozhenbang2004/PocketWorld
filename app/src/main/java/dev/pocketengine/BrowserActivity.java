@@ -102,7 +102,7 @@ public final class BrowserActivity extends ComponentActivity {
         final String id;final WebView view;final BrowserProfileRegistry.Session profile;final boolean taskCreated;BrowserFrameObserver readObserver;dev.pocketengine.browser.BrowserNetworkWitness networkWitness;BrowserNativeNetwork nativeNetwork;
         volatile String nativeOperationId="";volatile CompletableFuture<JSONObject> nativeCall;
         volatile BrowserPopupRoute popup;String popupOpenerId="";Runnable popupCancel;android.app.AlertDialog popupConfirmation;BrowserPopupRoute.Request popupRequest;String popupRequestUrl="",popupRequestDocument="";long popupRequestNavigation;
-        volatile BrowserTaskSpace.Tab taskOwner;BrowserTaskSpace handoffSpace;JSONObject handoffIdentity;BrowserTaskSpace.Gate taskGate;volatile long navigation;boolean loading;String observationId,observationUrl;long observationAt;
+        volatile BrowserTaskSpace.Tab taskOwner;BrowserTaskSpace handoffSpace;JSONObject handoffIdentity;BrowserTaskSpace.Gate taskGate;volatile long navigation;boolean loading;String observationId,observationUrl;
         Page(String id,WebView view,BrowserProfileRegistry.Session profile,BrowserTaskSpace.Tab owner){this.id=id;this.view=view;this.profile=profile;taskCreated=owner!=null;taskOwner=owner;}
     }
     private BrowserChromeController browserChrome;
@@ -146,7 +146,6 @@ public final class BrowserActivity extends ComponentActivity {
     private final BrowserNetworkDebugging networkDebugging=new BrowserNetworkDebugging(WebView::setWebContentsDebuggingEnabled);
     private final BrowserLease lease=new BrowserLease();
     private final String pageKey="__pocketWorld_"+UUID.randomUUID().toString().replace("-","");
-    private long observationAt;
     private CompletableFuture<JSONObject> pending;
     private boolean pendingMutation;
     private final Handler leaseTimers=new Handler(Looper.getMainLooper());
@@ -323,7 +322,7 @@ public final class BrowserActivity extends ComponentActivity {
                 }
                 return null;
             }
-            @Override public void onPageStarted(WebView view,String url,android.graphics.Bitmap icon){Page page=page(view);if(page==null)return;closePopupChildrenForOwner(page);if(page.popupRequest!=null&&(!url.equals(page.popupRequestUrl)||page.popup.originAdmitted(url))){closePopupForOwner(page,true);return;}cancelPageDialog(page,BrowserPageDialog.Reason.CONTEXT_CHANGED);cancelSiteRequest(page,false);deniedSiteRequests.values().removeIf(request->request.page==page);page.navigation++;closeNativeNetwork(page);if(page.networkWitness!=null)page.networkWitness.documentChanged();if(page.readObserver!=null)page.readObserver.documentStarted();if(page.popupRequest!=null){page.popupRequestNavigation=page.navigation;page.popupRequestDocument=page.readObserver.documentIdentityForNative();}page.loading=true;page.observationId=null;page.observationUrl=null;page.observationAt=0;if(page.taskOwner!=null)page.taskOwner.space().navigationChangedNative(page.id);if(page.taskOwner!=null)try{page.taskOwner.space().pageStartedNative(page.id,url);}catch(Exception ignored){}if(view!=web)return;navigation=page.navigation;cancelFileChooser();invalidateObservation();failPending("网页已跳转，请重新观察");loading=true;chromeProgress=0;setChromeNotice("正在加载网页…");setChromeAddress(url);updateNavigation();}
+            @Override public void onPageStarted(WebView view,String url,android.graphics.Bitmap icon){Page page=page(view);if(page==null)return;closePopupChildrenForOwner(page);if(page.popupRequest!=null&&(!url.equals(page.popupRequestUrl)||page.popup.originAdmitted(url))){closePopupForOwner(page,true);return;}cancelPageDialog(page,BrowserPageDialog.Reason.CONTEXT_CHANGED);cancelSiteRequest(page,false);deniedSiteRequests.values().removeIf(request->request.page==page);page.navigation++;closeNativeNetwork(page);if(page.networkWitness!=null)page.networkWitness.documentChanged();if(page.readObserver!=null)page.readObserver.documentStarted();if(page.popupRequest!=null){page.popupRequestNavigation=page.navigation;page.popupRequestDocument=page.readObserver.documentIdentityForNative();}page.loading=true;page.observationId=null;page.observationUrl=null;if(page.taskOwner!=null)page.taskOwner.space().navigationChangedNative(page.id);if(page.taskOwner!=null)try{page.taskOwner.space().pageStartedNative(page.id,url);}catch(Exception ignored){}if(view!=web)return;navigation=page.navigation;cancelFileChooser();invalidateObservation();failPending("网页已跳转，请重新观察");loading=true;chromeProgress=0;setChromeNotice("正在加载网页…");setChromeAddress(url);updateNavigation();}
             @Override public void onPageFinished(WebView view,String url){Page page=page(view);if(page==null)return;page.loading=false;if(page.taskOwner!=null)try{page.taskOwner.space().pageLoadedNative(page.id,url,view.getTitle());}catch(Exception ignored){}if(page.taskOwner==null)recordOwnerHistory(page,false);if(page.popup!=null&&page.handoffSpace!=null)try{page.handoffSpace.ownerPopupNavigatedNative(page.id);}catch(Exception ignored){}if(view!=web)return;loading=false;setChromeNotice("网页已载入");setChromeAddress(url);updateNavigation();}
             @Override public void onReceivedError(WebView view,WebResourceRequest request,WebResourceError error){if(view!=web)return;if(request.isForMainFrame()){loading=false;setChromeNotice("网页加载失败，请检查地址或网络。");}}
             @Override public void onReceivedSslError(WebView view,SslErrorHandler handler,SslError error){handler.cancel();if(view!=web)return;loading=false;setChromeNotice("证书验证失败，已停止加载。");}
@@ -500,9 +499,9 @@ public final class BrowserActivity extends ComponentActivity {
     }
     private void selectPage(Page target){
         if(activePage==target)return;cancelPageDialog(activePage,BrowserPageDialog.Reason.OWNER_LEFT);cancelSiteRequest(activePage,false);cancelFileChooser();if(downloadDialog!=null){downloadDialog.dismiss();downloadDialog=null;}failPending("已切换页面，原操作回执待核对");
-        if(activePage!=null){activePage.navigation=navigation;activePage.loading=loading;activePage.observationId=observationId;activePage.observationUrl=observationUrl;activePage.observationAt=observationAt;activePage.view.setVisibility(View.GONE);activePage.view.onPause();}
+        if(activePage!=null){activePage.navigation=navigation;activePage.loading=loading;activePage.observationId=observationId;activePage.observationUrl=observationUrl;activePage.view.setVisibility(View.GONE);activePage.view.onPause();}
         activePage=target;web=target==null?null:target.view;navigation=target==null?0:target.navigation;loading=target!=null&&target.loading;
-        observationId=target==null?null:target.observationId;observationUrl=target==null?null:target.observationUrl;observationAt=target==null?0:target.observationAt;
+        observationId=target==null?null:target.observationId;observationUrl=target==null?null:target.observationUrl;
         if(target!=null){target.view.setVisibility(View.VISIBLE);target.view.onResume();setChromeAddress(target.view.getUrl()==null?"":target.view.getUrl());}updateNavigation();
     }
     public JSONObject tabsForOwner()throws Exception {
@@ -760,11 +759,13 @@ public final class BrowserActivity extends ComponentActivity {
                     String script=dev.pocketengine.browser.BrowserFormControls.observationScript(pageKey,observed);
                     evaluateInFrame(actionFrame,script,value->{
                         if(!callbackCurrent(result,epoch,version,observedWeb))return;
-                        try{JSONObject observedPage=decoded(value);if(actionFrame!=null){if(!observedPage.has("elements"))throw new IllegalStateException("frame观察未返回动作目标");actionFrame.put("url",observedPage.getString("url"));observedPage.put("actionFrame",actionFrame).put("url",observedWeb.getUrl());}observationId=observed;observationUrl=actionFrame==null?observedPage.optString("url"):actionFrame.getString("url");observationAt=android.os.SystemClock.elapsedRealtime();observedPage.remove("_nativeInputViewport");if(actionFrame==null)try{observedPage.put("_nativeInputViewport",inputPagePin(activePage));}catch(Exception unavailable){}observedPage.put("observationId",observed).put("navigation",version).put("untrustedPageContent",true).put("expiresInMs",20000).put("profileId",profileSession.profileId).put("profileRevision",profileSession.profileRevision).put("browserSessionId",profileSession.sessionId);result.complete(observedPage);}catch(Exception malformed){result.completeExceptionally(new IllegalStateException("无法读取网页内容"));}finally{clearPending(result);}
+                        try{JSONObject observedPage=decoded(value);if(actionFrame!=null){if(!observedPage.has("elements"))throw new IllegalStateException("frame观察未返回动作目标");actionFrame.put("url",observedPage.getString("url"));observedPage.put("actionFrame",actionFrame).put("url",observedWeb.getUrl());}observationId=observed;observationUrl=actionFrame==null?observedPage.optString("url"):actionFrame.getString("url");observedPage.remove("_nativeInputViewport");if(actionFrame==null)try{observedPage.put("_nativeInputViewport",inputPagePin(activePage));}catch(Exception unavailable){}observedPage.put("observationId",observed).put("navigation",version).put("untrustedPageContent",true).put("freshness","latest_observation_current_document").put("profileId",profileSession.profileId).put("profileRevision",profileSession.profileRevision).put("browserSessionId",profileSession.sessionId);result.complete(observedPage);}catch(Exception malformed){result.completeExceptionally(new IllegalStateException("无法读取网页内容"));}finally{clearPending(result);}
                     },result);return;
                 }
+                // Model/owner wait time does not stale an unchanged page. The original latest
+                // observation, document, mutation observer and exact target still gate dispatch.
                 case "click":case "type":case "set_date":case "focus":case "press":case "select_option":case "set_checked":case "scroll":{
-                    if(loading||observationId==null||!observationId.equals(args.optString("observationId"))||android.os.SystemClock.elapsedRealtime()-observationAt>20_000L)throw new IllegalStateException("网页观察已过期，请重新观察");
+                    if(loading||observationId==null||!observationId.equals(args.optString("observationId")))throw new IllegalStateException("网页观察已过期，请重新观察");
                     final long version=navigation;final WebView actedWeb=web;final String expected=observationUrl;final String observed=observationId;
                     final boolean form=dev.pocketengine.browser.BrowserFormControls.command(command)||dev.pocketengine.browser.BrowserTextControls.command(command);final String formToken=form?UUID.randomUUID().toString():null;
                     String actionScript=dev.pocketengine.browser.BrowserDomAction.script(command,args,expected,observed,pageKey,formToken);
@@ -798,7 +799,7 @@ public final class BrowserActivity extends ComponentActivity {
         BrowserSiteMode.resize(source.view,args,current,entered,result);
     }
     private void executeNativeInput(JSONObject args,CompletableFuture<JSONObject> result,long epoch)throws Exception {
-        BrowserNativeInput.validate(args);if(loading||observationId==null||!observationId.equals(args.optString("observationId"))||android.os.SystemClock.elapsedRealtime()-observationAt>20_000L||args.has("_nativeActionFrame"))throw new BrowserTaskSpace.StalePage("原生输入需要原主文档的最新普通动作观察");
+        BrowserNativeInput.validate(args);if(loading||observationId==null||!observationId.equals(args.optString("observationId"))||args.has("_nativeActionFrame"))throw new BrowserTaskSpace.StalePage("原生输入需要原主文档的最新普通动作观察");
         final Page source=activePage;final WebView originalWeb=web;final String observed=observationId,expected=observationUrl,token=UUID.randomUUID().toString();final BrowserTaskSpace.Gate gate=source.taskGate;final RunControl original=source.taskOwner.space().originalControl;final long pause=original.pauseRevision();
         final BrowserNativeInput.Check current=originalInputPage(source,args,epoch);final JSONObject viewport=new JSONObject(args.getJSONObject("_nativeInputViewport").toString());
         BrowserNativeInput.Check geometryCurrent=()->{current.check();if(!viewport.toString().equals(inputPagePin(source).toString()))throw new BrowserTaskSpace.StalePage("原生输入的实际视口、滚动或缩放已变化");if(args.getString("action").equals("key")&&!originalWeb.hasFocus())throw new BrowserTaskSpace.StalePage("按键只能送给原已聚焦WebView");};
@@ -941,7 +942,7 @@ public final class BrowserActivity extends ComponentActivity {
     }
     private void failPending(String reason){if(pending!=null&&!pending.isDone()){if(pendingMutation)pending.complete(unknownReceipt(reason));else pending.completeExceptionally(new IllegalStateException(reason));}pending=null;pendingMutation=false;}
     private void clearPending(CompletableFuture<JSONObject> result){if(pending==result){pending=null;pendingMutation=false;}}
-    private void invalidateObservation(){observationId=null;observationUrl=null;observationAt=0;if(activePage!=null){activePage.observationId=null;activePage.observationUrl=null;activePage.observationAt=0;}}
+    private void invalidateObservation(){observationId=null;observationUrl=null;if(activePage!=null){activePage.observationId=null;activePage.observationUrl=null;}}
     private static JSONObject unknownReceipt(String reason){return json("accepted",JSONObject.NULL,"verified",false,"status","unknown","code","action_result_unknown","message",reason);}
     private static JSONObject decoded(String value)throws Exception{return new JSONObject(new org.json.JSONTokener(value).nextValue().toString());}
     /** This object owns one actual JsResult, not a page-supplied command or an approval grant. */
@@ -1090,7 +1091,7 @@ public final class BrowserActivity extends ComponentActivity {
             throw new SecurityException("请先处理原任务网页的未决操作");
         if(artifactUpload!=null&&(artifactUpload.active()||artifactUpload.inputRequested()&&!artifactUpload.chooserSeen()))
             throw new SecurityException("上次文件控件请求仍需核对，请主人处理或重新打开原页面；不会把迟到的选择器接到新文件");
-        if(observationId==null||!observationId.equals(args.optString("observationId"))||android.os.SystemClock.elapsedRealtime()-observationAt>20_000L)
+        if(observationId==null||!observationId.equals(args.optString("observationId")))
             throw new BrowserTaskSpace.StalePage("上传控件观察已过期，请重新读取原网页");
         final BrowserTaskSpace.Tab tab=source.taskOwner;final BrowserTaskSpace.Gate gate=source.taskGate;
         final long version=navigation;final String document=source.readObserver.documentIdentityForNative(),url=sourceView.getUrl(),observed=observationId;
