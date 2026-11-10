@@ -1583,7 +1583,9 @@ public final class MemoryBook {
     }
     /** Recheck the frozen rows; never silently swap in a different version or query result. */
     synchronized void requireHistoricalSnapshotCurrent(JSONObject scope,JSONObject snapshot,MemoryAudienceSelection audience)throws Exception {
-        Scope identity=Scope.from(scope),selectedScope=Scope.from(snapshot.getJSONObject("scope"));
+        // The caller's native scope is the authority; the serialized result scope is only
+        // metadata to match against it. A project result cannot retain ProjectScope's class.
+        Scope identity=Scope.from(scope),selectedScope=Scope.stored(snapshot.getJSONObject("scope"));
         if(!identity.ownerId.equals(selectedScope.ownerId)||!identity.spaceId.equals(selectedScope.spaceId)
                 ||!"retained_history".equals(snapshot.optString("readMode"))||!snapshot.optBoolean("readOnlyHistory")||snapshot.optBoolean("activeRecall"))throw new SecurityException("历史记忆读取不属于原任务范围");
         JSONArray selected=snapshot.getJSONArray("records");if(selected.length()>MAX_CONTEXT_RECORDS)throw new SecurityException("历史记忆读取超出原预算");
