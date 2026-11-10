@@ -63,6 +63,18 @@ internal object PocketWebState {
 
     fun snapshot(controller: PocketWorldController): JSONObject {
         val state = controller.state
+        // Both lists expose the same task fields. Project each task once per
+        // snapshot, without retaining mutable source JSON between publications.
+        val tasks = JSONArray()
+        val ownerWork = JSONArray()
+        state.tasks.forEach { row ->
+            val projected = task(row)
+            tasks.put(projected)
+            if (row.raw.optString("executionRole") == "owner_work" &&
+                row.raw.optString("actorId") == "owner" && row.raw.optString("spaceId") == "private") {
+                ownerWork.put(projected)
+            }
+        }
         val data = JSONObject()
             .put("quickPanelVoice", publicValue(controller.quickPanelVoice))
             .put("taskAnnouncements", publicValue(controller.taskAnnouncementState))
@@ -84,10 +96,8 @@ internal object PocketWebState {
             .put("activePhoneTaskIds", JSONArray(state.activePhoneTaskIds))
             .put("maximumActiveBackgroundPhoneRuns", state.maximumActiveBackgroundPhoneRuns)
             .put("foregroundTaskId", state.foregroundTaskId ?: JSONObject.NULL)
-            .put("tasks", JSONArray().also { out -> state.tasks.forEach { out.put(task(it)) } })
-            .put("ownerWork", JSONArray().also { out -> state.tasks.filter {
-                it.raw.optString("executionRole") == "owner_work" && it.raw.optString("actorId") == "owner" && it.raw.optString("spaceId") == "private"
-            }.forEach { out.put(task(it)) } })
+            .put("tasks", tasks)
+            .put("ownerWork", ownerWork)
             .put("taskListNextCursor", controller.taskListNextCursor)
             .put("conversations", JSONArray().also { out -> state.conversations.forEach { row ->
                 val original = controller.conversationOrganizationItem(row)
