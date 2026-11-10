@@ -809,35 +809,44 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
     }
 
     private <T> T onMainRead(OwnerScreenContext.ReadCheck check, MainCall<T> call) throws Exception {
-        // Preserve a completed UI callback's real native receipt after entry.
-        // Blocking tree reads instead use PhoneReadGate's post-read currentness fence.
+        // A queued callback can be withdrawn without an unknown native effect.
+        // Once it enters, preserve its receipt or keep the conservative unknown result.
         long deadline = SystemClock.uptimeMillis() + MAIN_WAIT_MS;
-        java.util.concurrent.atomic.AtomicBoolean entered=new java.util.concurrent.atomic.AtomicBoolean();
+        java.util.concurrent.atomic.AtomicInteger entry=new java.util.concurrent.atomic.AtomicInteger();
         FutureTask<T> task = new FutureTask<>(() -> {
             check.check();
-            if (SystemClock.uptimeMillis() > deadline) throw new PhoneFailure("main_timeout", "手机操作调度超时。");
+            if (SystemClock.uptimeMillis() > deadline || !entry.compareAndSet(0,1))
+                throw new PhoneFailure("main_timeout", "手机界面调度已超时，未派发操作；请重新观察。");
             MAIN_DEADLINE.set(deadline);
-            entered.set(true); // Diagnostic only; each action keeps its own original dispatch guard.
             try { return call.run(); } finally { MAIN_DEADLINE.remove(); }
         });
-        main.post(task);
+        if(!main.post(task)) {
+            entry.compareAndSet(0,2);task.cancel(false);
+            throw new PhoneFailure("main_timeout","手机界面未接收调度，未派发操作。");
+        }
         try {
             while (true) {
                 if(task.isDone())return task.get();
                 try{check.check();}catch(Exception changed){
-                    // A completed callback owns its real receipt; pause cannot
-                    // rewrite an accepted action to not-dispatched afterwards.
+                    // Withdrawal and callback entry share one CAS. A callback
+                    // cannot start later after a not-dispatched result was returned.
+                    boolean withdrawn=entry.compareAndSet(0,2);
                     if(task.isDone())return task.get();
-                    if(entered.get())throw new PhoneFailure("dispatch_unknown","原生界面请求已入场但回执尚未确认；已停止后续操作，不会自动重放。");
+                    if(!withdrawn)throw new PhoneFailure("dispatch_unknown","原生界面请求已入场但回执尚未确认；已停止后续操作，不会自动重放。");
                     throw changed;
                 }
                 long left = deadline - SystemClock.uptimeMillis();
-                if (left <= 0) throw new PhoneFailure("dispatch_unknown", "手机请求超时，执行状态未知。请重新观察，勿盲目重试。");
+                if (left <= 0) {
+                    boolean withdrawn=entry.compareAndSet(0,2);
+                    if(task.isDone())return task.get();
+                    if(withdrawn)throw new PhoneFailure("main_timeout","手机界面调度已超时，未派发操作；请等界面恢复后重新观察。");
+                    throw new PhoneFailure("dispatch_unknown","手机请求已入场但回执超时，请核对原操作，勿盲目重试。");
+                }
                 try { return task.get(Math.min(100, left), TimeUnit.MILLISECONDS); }
                 catch (TimeoutException retryWait) { }
             }
         } catch (ExecutionException error) { throw unwrap(error); }
-        finally { task.cancel(false); }
+        finally { entry.compareAndSet(0,2);task.cancel(false); }
     }
 
     private static <T> T await(CompletableFuture<T> result, RunControl control, long timeout) throws Exception {
