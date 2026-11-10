@@ -7,7 +7,8 @@ export type SetupPermission = 'accessibility' | 'notifications' | 'microphone' |
 export type SetupPreferences = { step: SetupStep; capabilities: SetupCapability[]; status: SetupStatus };
 export type SetupRead = {
   version: 1; revision: number; preferences: SetupPreferences;
-  model: { configured: boolean; label: string; tested: boolean; testing?: boolean; message?: string };
+  model: { configured: boolean; label: string; tested: boolean; testing?: boolean; message?: string;
+    availability?: 'unconfigured' | 'unavailable'; details?: string };
   permissions: { accessibility: boolean | null; notifications: boolean | null; microphone: boolean | null; batteryExempt: boolean | null; vendorBackgroundVisited: boolean | null };
   speech: { available: boolean | null; networkUse: string };
 };
@@ -54,7 +55,9 @@ export function readSetup(value: unknown): SetupRead {
     version: 1, revision: row.revision,
     preferences: { step: preferences.step, status: preferences.status, capabilities: setupCapabilities.filter(id => preferences.capabilities.includes(id)) },
     model: { configured: model.configured === true, label: text(model.label), tested: model.configured === true && model.tested === true,
-      testing: model.testing === true, message: text(model.message) },
+      testing: model.testing === true, message: text(model.message),
+      availability: model.availability === 'unconfigured' || model.availability === 'unavailable' ? model.availability : undefined,
+      details: text(model.details) },
     permissions: { accessibility: observed(permissions.accessibility), notifications: observed(permissions.notifications),
       microphone: observed(permissions.microphone), batteryExempt: observed(permissions.batteryExempt), vendorBackgroundVisited: observed(permissions.vendorBackgroundVisited) },
     speech: { available: observed(speech.available), networkUse: text(speech.networkUse) || 'unknown' },
@@ -72,7 +75,7 @@ export function setupSaveConfirmed(before: SetupRead, next: SetupPreferences, va
   return actual;
 }
 export function permissionLabel(value: boolean | null): string { return value === true ? '已允许' : value === false ? '未允许' : '待检查'; }
-export function setupModelLabel(value: SetupRead['model']): string { return value.tested ? '文本连接测试通过' : value.configured ? '已选择 · 尚未测试' : '尚未连接模型'; }
+export function setupModelLabel(value: SetupRead['model']): string { return value.testing ? '正在测试文本连接' : value.availability === 'unavailable' ? '模型状态待核对' : value.tested ? '文本连接测试通过' : value.configured ? '已选择 · 尚未测试' : '尚未连接模型'; }
 export function speechNetworkLabel(value: string): string {
   if (value === 'requires_network') return '系统服务需要网络';
   if (value === 'declares_no_network_requirement') return '系统服务声明无需网络，仍需实际听写验证';

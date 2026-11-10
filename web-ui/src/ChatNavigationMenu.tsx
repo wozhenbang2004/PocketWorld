@@ -1,7 +1,7 @@
 import type {ReactNode,Ref} from 'react';
 import {RiChatNewLine,RiHistoryLine,RiLayoutGridLine,RiMoreLine,RiNotification3Line,RiSettings4Line,RiFolderLine} from '@remixicon/react';
 import {Button,IconButton} from './forms-library';
-import {Popover,PopoverHeader,PopoverTrigger} from './shell-library';
+import {Popover,PopoverTrigger} from './shell-library';
 import './chat-navigation.css';
 
 type ChatNavigationMenuProps={
@@ -29,8 +29,7 @@ export function ChatNavigationMenu({title,navigationTrigger,isOpen,onOpenChange,
   <h1 className="pw-chat-navigation-title" title={title}>{title}</h1>
   <PopoverTrigger isOpen={isOpen} onOpenChange={onOpenChange}>
    <IconButton ref={triggerRef} icon={RiMoreLine} className="pw-chat-glass-trigger" aria-label={unread>0?`对话菜单，${unread} 条未读通知`:'对话菜单'} title="对话菜单" data-unread={unread>0||undefined}/>
-   <Popover placement="bottom end" offset={8} className="pw-chat-glass-menu" dialogClassName="pw-chat-glass-dialog">
-    <PopoverHeader title={title} className="pw-chat-menu-heading"/>
+   <Popover aria-label="对话菜单" placement="bottom end" offset={8} className="pw-chat-glass-menu" dialogClassName="pw-chat-glass-dialog">
     <div className="pw-chat-menu-actions">
      {onNewConversation&&<Button variant="ghost" leadingIcon={RiChatNewLine} disabled={submitting} onClick={()=>choose(onNewConversation)}>新对话</Button>}
      <Button variant="ghost" leadingIcon={RiHistoryLine} onClick={()=>choose(onConversations)}>对话列表</Button>

@@ -22,6 +22,10 @@
   background: var(--pw-surface);
   color: var(--pw-ink);
 }
+.pw-redesign:is([data-route="tasks"], [data-route="projects"]) .pw-main-workspace,
+.pw-redesign:is([data-route="tasks"], [data-route="projects"]) .pw-app-header {
+  background: var(--pw-canvas);
+}
 .pw-redesign .pw-desktop-navigation,
 .pw-work-drawer {
   background: var(--pw-surface);

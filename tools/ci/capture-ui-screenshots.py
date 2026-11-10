@@ -514,8 +514,6 @@ def capture_catalog():
     forms = [
         (("对话", "执行权限"), "composer-permissions"),
         (("对话", "输入方式与选项"), "composer-options"),
-        (("对话", "选择模型"), "composer-model-picker"),
-        (("对话", "推理强度："), "composer-reasoning"),
         (("对话", "查看上下文："), "composer-context"),
         (("项目", "新项目"), "project-new"),
         (("团队", "新建团队"), "team-new"),
@@ -526,7 +524,7 @@ def capture_catalog():
         (("媒体", "服务配置"), "media-configuration"),
         (("设置", "应用更新"), "application-updates"),
     ]
-    REPORT["coverage"]["plannedPaths"] = [list(path) for path, *_ in pages + subpages + forms]
+    REPORT["coverage"]["plannedPaths"] = [["输入区", "切换此对话模型："], ["输入区", "推理强度："], ["设置", "准备中心"]] + [list(path) for path, *_ in pages + subpages + forms]
     save_report()
     for path, slug, markers in pages:
         capture_route(path, slug, markers)
@@ -561,6 +559,25 @@ def capture_screens(apk):
         screenshot("workroom", "点按跳过准备后的实际界面", tree=tree)
     else:
         screenshot("first-launch", "首次启动的实际界面", tree=tree)
+    # Inspect the real composer menus. A fresh install may expose only the
+    # model empty state; never configure a fake model to enable reasoning.
+    for label, close_label, slug, title in (
+        ("切换此对话模型：", "关闭模型选择", "model-picker", "此对话的模型选择"),
+        ("推理强度：", "关闭推理设置", "reasoning-picker", "此对话的推理强度"),
+    ):
+        tree = read_layout()
+        if not tap(label, tree, prefix=True):
+            REPORT["unavailable"].append(title + "：当前入口未启用或不可见，保留实际配置状态。")
+            continue
+        tree = wait_for_controls(close_label, timeout=15)
+        if slug == "model-picker":
+            tree = read_layout(("添加你的第一个 AI 服务",))
+        observed = find_target(tree, close_label) is not None
+        screenshot(slug, "点按输入区入口后的" + title, tree=tree,
+                   requested_path=[label], destination_observed=observed)
+        if not tap(close_label, tree):
+            REPORT["unavailable"].append(title + "：关闭入口不可用，按系统返回恢复页面。")
+            adb("shell", "input", "keyevent", "KEYCODE_BACK")
     tree = wait_for_controls("对话菜单", "打开导航", timeout=10)
     if tap("对话菜单", tree, prefix=True):
         tree = wait_for_controls("工作区与导航")
@@ -571,6 +588,7 @@ def capture_screens(apk):
         screenshot("navigation-unavailable", "尝试打开导航后的实际状态", tree=menu)
         return
     screenshot("navigation", "当前可访问树已显示关闭导航入口的侧栏", tree=menu)
+    capture_route(("设置", "准备中心"), "setup", ("准备中心", "可选能力"), dialog=True, scroll=False)
     capture_catalog()
 
 

@@ -163,16 +163,27 @@ class SetupCoordinator(activity: Activity, private val app: EngineApplication) :
     }
 
     private fun modelState(): JSONObject {
-        val result = JSONObject().put("configured", false).put("label", "尚未配置模型").put("tested", false).put("testing", false)
+        val result = JSONObject().put("configured", false).put("label", "").put("tested", false).put("testing", false)
             .put("visionVerified", false).put("toolsVerified", false)
         var selected: ModelConfig? = null
         try {
+            selected = capture(validate = false).config
+            result.put("label", safeMessage(selected.model, selected).take(240))
+            // A fresh, identity-free API selection is a next step, not a failed
+            // connection. Source/revision checks above still reject revoked data.
+            if (selected.provider == ModelConfig.DEFAULT_PROVIDER && selected.baseUrl.isEmpty() &&
+                selected.model.isEmpty() && selected.apiKey.isEmpty() && selected.accountModel == null &&
+                selected.capabilityBinding == null && selected.routePlan == null && !selected.catalogEnforced) {
+                lastModelFailure = null
+                return result.put("availability", "unconfigured")
+            }
             val captured = capture()
             lastModelFailure = null
             selected = captured.config
             val accountAvailable = !selected.usesAccount() || ModelGateway.accountModelAvailableForDisplay(selected.accountModel)
             result.put("configured", accountAvailable).put("label", safeMessage(selected.model, selected).take(240))
-            if (!accountAvailable) return result.put("message", "已选账号模型，但当前账号授权或模型资料尚未确认；请回模型页核对。")
+            if (!accountAvailable) return result.put("availability", "unavailable")
+                .put("message", "已选账号模型，但当前账号授权或模型资料尚未确认；请回模型页核对。")
             val active = running.get()
             val evidence = preferences.modelEvidence(captured.fingerprint, active?.snapshot?.fingerprint == captured.fingerprint)
             evidence.keys().forEach { key -> result.put(key, evidence.get(key)) }
@@ -185,7 +196,9 @@ class SetupCoordinator(activity: Activity, private val app: EngineApplication) :
             val message = safeFailure(failure, selected)
             if (message != lastModelFailure) RuntimeDiagnostics.event("diagnostics", "unconfirmed", "SETUP_MODEL_STATE_UNAVAILABLE", null, failure)
             lastModelFailure = message
-            result.put("message", message)
+            result.put("availability", "unavailable")
+                .put("message", "请到模型页检查当前连接，或刷新后重新核对。")
+                .put("details", message)
         }
         return result
     }

@@ -297,11 +297,14 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, r
   const permissionAction = (kind: SetupPermission, value: boolean | null, label = '前往设置') => <Button variant="secondary" disabled={locked || !can('setup.permission')} onClick={() => permission(kind)}>{value === true ? '查看设置' : label}</Button>;
   const modelSection = data && <section className="pw-setup-model" aria-label="模型连接准备">
     <div className="pw-setup-model-summary"><RiBox3Line size={24} aria-hidden="true"/><SetupRow title={data.model.label || '账号与服务'} status={setupModelLabel(data.model)}/></div>
-    {data.model.message && <p className="pw-setup-copy" role="status">{data.model.message}</p>}
-    <Button className="pw-setup-model-action" variant={data.model.configured ? 'secondary' : 'primary'} trailingIcon={RiArrowRightSLine} disabled={locked || !!preparation.working} onClick={() => void navigate('connections')}>{data.model.configured ? '管理模型' : '连接模型'}</Button>
-    {data.model.configured && <Accordion className="pw-setup-model-check"><AccordionItem id="setup-model-check" title="检查文本连接" description={data.model.testing ? '正在测试文本连接…' : undefined}>
+    {data.model.message && <p className="pw-setup-copy" role={data.model.availability === 'unavailable' ? 'alert' : 'status'}>{data.model.message}</p>}
+    <Button className="pw-setup-model-action" variant={data.model.configured ? 'secondary' : 'primary'} trailingIcon={RiArrowRightSLine} disabled={locked || !!preparation.working} onClick={() => void navigate('connections')}>{data.model.availability === 'unavailable' ? '检查模型' : data.model.configured ? '管理模型' : '连接模型'}</Button>
+    {(data.model.configured || data.model.details) && <Accordion className="pw-setup-model-check">
+      {data.model.details && <AccordionItem id="setup-model-details" title="查看状态详情"><pre>{data.model.details}</pre></AccordionItem>}
+      {data.model.configured && <AccordionItem id="setup-model-check" title="检查文本连接" description={data.model.testing ? '正在测试文本连接…' : undefined}>
       <div className="pw-setup-model-test"><p>会向当前服务发送一次测试请求，可能产生用量。工具与图像能力需分别测试。</p><Button variant="secondary" disabled={locked || !!data.model.testing || !can('setup.model.test')} onClick={() => void command('setup.model.test')}>{working === 'setup.model.test' || data.model.testing ? '正在测试文本连接…' : '测试文本连接'}</Button></div>
-    </AccordionItem></Accordion>}
+      </AccordionItem>}
+    </Accordion>}
   </section>;
 
   return <section className="pw-setup-workspace" aria-label={mode === 'onboarding' ? '首次使用准备' : '准备中心'} data-setup-step={step} data-setup-mode={mode}>
@@ -328,7 +331,7 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, r
               </div>;
             })}</div>
           </>}
-          {stage === 'finish' && <><div className="pw-setup-intro"><h2 ref={heading} tabIndex={-1}>确认当前准备状态</h2><p>未完成的项目会保留，之后可从准备中心继续。</p></div><div className="pw-setup-review"><SetupRow title={data.model.label || '文字对话'} status={setupModelLabel(data.model)} action={<Button variant="ghost" aria-label="调整模型" disabled={locked} onClick={() => void move('model')}>调整</Button>}/>{capabilities.map(id => <SetupRow key={id} title={capabilityCopy[id].title} status={capabilitySummary(id)} action={<Button variant="ghost" aria-label={`调整${capabilityCopy[id].title}`} disabled={locked} onClick={() => { setExpanded(id); void move('capabilities'); }}>调整</Button>}/>)}</div>{!data.model.configured && <p className="pw-setup-copy">尚未连接模型，进入应用后仍可继续设置。</p>}{runtimePreparing(preparation.view) && <p className="pw-setup-copy">开发工具仍在准备，进入应用后可回到这里查看进度或停止。</p>}</>}
+          {stage === 'finish' && <><div className="pw-setup-intro"><h2 ref={heading} tabIndex={-1}>确认当前准备状态</h2><p>未完成的项目会保留，之后可从准备中心继续。</p></div><div className="pw-setup-review"><SetupRow title={data.model.label || '文字对话'} status={setupModelLabel(data.model)} action={<Button variant="ghost" aria-label="调整模型" disabled={locked} onClick={() => void move('model')}>调整</Button>}/>{capabilities.map(id => <SetupRow key={id} title={capabilityCopy[id].title} status={capabilitySummary(id)} action={<Button variant="ghost" aria-label={`调整${capabilityCopy[id].title}`} disabled={locked} onClick={() => { setExpanded(id); void move('capabilities'); }}>调整</Button>}/>)}</div>{!data.model.configured && <p className="pw-setup-copy">进入应用后，可从 AI 接入继续设置模型。</p>}{runtimePreparing(preparation.view) && <p className="pw-setup-copy">开发工具仍在准备，进入应用后可回到这里查看进度或停止。</p>}</>}
           <div className="pw-setup-utilities">
             {(stage === 'model' || mode === 'center') && <Button variant="ghost" trailingIcon={RiArrowRightSLine} disabled={locked || !!preparation.working} onClick={() => void navigate('appearance')}>外观与字体</Button>}
             {!needsRead && <Button variant="ghost" leadingIcon={RiRefreshLine} aria-label="刷新准备状态" disabled={loading || !!working || !readable} onClick={() => void load()}>{loading ? '正在刷新…' : '刷新状态'}</Button>}

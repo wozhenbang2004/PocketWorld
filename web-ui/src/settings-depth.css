@@ -188,7 +188,7 @@
 /* Preferences are directly editable destinations. Daily work has its own
  * navigation, so Settings no longer acts as the app's hidden feature menu. */
 .pw-secondary-refactor .pw-settings-preferences{display:block;max-width:900px;margin-inline:auto}
-.pw-settings-preferences>.pw-secondary-search{max-width:none;margin:0 0 var(--pw-gap-section)}
+.pw-settings-preferences>.pw-secondary-search{max-width:none;margin:0 0 var(--pw-gap-section);--pw-shadow-input:none}
 .pw-settings-categories{display:grid;grid-template-columns:minmax(0,1fr);gap:24px;align-items:start}
 .pw-settings-category{min-width:0}
 .pw-secondary-refactor .pw-settings-category>h2{margin:0 0 8px;padding-inline:4px;font-size:13px;line-height:22px;font-weight:500;color:var(--pw-copy)}

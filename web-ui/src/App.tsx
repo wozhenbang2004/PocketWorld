@@ -884,7 +884,7 @@ export default function App(){
  const activeTaskStatus=({attention:'待处理',running:'进行中',ended:'已结束'} as Record<string,string>)[filter];
  const hasTaskFilters=filter!=='all'||!!taskQuery;
  const showTaskTools=taskHistory.tasks.length>0||hasTaskFilters||taskFiltersOpen||taskHistory.hasMore||taskHistory.earlier;
- const tasksPage=<main className="pw-page pw-tasks-page pw-depth-tasks">
+ const tasksPage=<main className="pw-page pw-tasks-page pw-depth-tasks" data-tools={showTaskTools}>
     {showTaskTools&&<div className="pw-task-collection-tools">
      <div className="pw-task-status-filters" role="group" aria-label="任务筛选">{[{id:'all',label:'全部'},{id:'attention',label:'待处理'},{id:'running',label:'进行中'},{id:'ended',label:'已结束'}].map(option=><Button key={option.id} variant="ghost" aria-pressed={filter===option.id} onClick={()=>setFilter(option.id)}>{option.label}</Button>)}</div>
      <div className="pw-task-filters-reveal" data-open={taskFiltersOpen} inert={!taskFiltersOpen} aria-hidden={!taskFiltersOpen}><div className="pw-disclosure-clip"><section id="pw-task-filters" className="pw-task-filters" aria-label="搜索与筛选任务">
@@ -921,7 +921,7 @@ export default function App(){
       <TabPanel id="preview" className="pw-project-preview-panel"><ProjectPreviewPane control={projectPreview} composer={composer}/></TabPanel>
     </Tabs>)}
 
-  </section>:projects.length>0?<section className="pw-project-library" aria-label="项目目录"><header><h2>你的项目</h2>{can('projects.create')&&<Button variant="secondary" leadingIcon={RiAddLine} onClick={()=>openCreate('project')}>新项目</Button>}</header><div>{projects.map(project=><Button key={project.id} variant="ghost" className="pw-project-library-row" leadingIcon={RiFolderLine} trailingIcon={RiArrowRightSLine} disabled={!can('projects.select')} onClick={()=>run('projects.select',{id:project.id})}>{project.name}</Button>)}</div></section>:<div className="pw-empty"><RiFolderLine size={27}/><h3>还没有项目</h3>{can('projects.create')&&<Button variant="secondary" leadingIcon={RiAddLine} onClick={()=>openCreate('project')}>新项目</Button>}</div>}
+  </section>:projects.length>0?<section className="pw-project-library" aria-label="项目目录"><header><h2>你的项目</h2>{can('projects.create')&&<Button variant="secondary" leadingIcon={RiAddLine} onClick={()=>openCreate('project')}>新项目</Button>}</header><div>{projects.map(project=><Button key={project.id} variant="ghost" className="pw-project-library-row" leadingIcon={RiFolderLine} trailingIcon={RiArrowRightSLine} disabled={!can('projects.select')} onClick={()=>run('projects.select',{id:project.id})}>{project.name}</Button>)}</div></section>:!ready?<p className="pw-muted" role="status">正在读取项目…</p>:<div className="pw-empty pw-project-empty"><RiFolderLine size={26} aria-hidden="true"/><h3>从一个项目开始</h3><p>把文件、编辑和预览放在一起，随时接着做。</p>{can('projects.create')&&<Button variant="primary" leadingIcon={RiAddLine} onClick={()=>openCreate('project')}>新建项目</Button>}</div>}
  </main>;
  return <ReadingContext.Provider value={openReading}><Drawer.Root open={workOpen&&!desktopNavigation} onOpenChange={changeNavigation} direction="left" autoFocus shouldScaleBackground={false}>
  <div className="pw-app pw-redesign" data-navigation={desktopNavigation?'sidebar':'drawer'} data-route={route} data-file-open={!!state.filePath||undefined} data-vaul-drawer-wrapper=""><Toaster/>

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { RiArrowLeftSLine, RiArrowRightSLine, RiRefreshLine } from '@remixicon/react';
+import { RiArrowLeftSLine, RiArrowRightSLine, RiNotification3Line, RiRefreshLine } from '@remixicon/react';
 import './knowledge-depth.css';
 import './reminder-workspace.css';
 import { PressButton } from './library/press';
@@ -108,6 +108,14 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
   const attentionReceipts = receipts.filter(receipt => ['delivery_unknown', 'blocked_notifications', 'awaiting_user'].includes(receipt.status));
   const visibleRules = rules.filter(rule => [rule.title, rule.goal, rule.schedule?.zone].join(' ').toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
     .filter(rule => filter === 'all' || (filter === 'enabled' ? rule.enabled === true : rule.enabled !== true));
+  const hasFilters = Boolean(query.trim()) || filter !== 'all';
+  const showDirectoryTools = rules.length > 0 || hasFilters;
+  const emptyDirectory = hasRules && !rules.length && !hasFilters && !reading && !readingError && !pending && !error && !receiptsBusy && !receiptsError;
+  const showReceiptHistory = receipts.length > 0 || receiptsBusy || Boolean(receiptsError) || !receiptsReady || uncertain || Boolean(submission);
+  const clearFilters = () => { setQuery(''); setFilter('all'); };
+  const newReminder = <PressButton compact disabled={pending || reading || readingError || !hasRules || !supported('automation.reviewSchedule')} onClick={() => open('create')}>新建提醒</PressButton>;
+  const refreshButton = <Button variant="ghost" iconOnly leadingIcon={RiRefreshLine} aria-label="刷新提醒与发生记录" disabled={reading || receiptsBusy || !supported('automation.list')} onClick={() => { void refresh().catch(() => {}); }} />;
+  const emptyResults = <div className="pw-reminder-no-results" role="status"><p>没有符合条件的提醒。</p><Button variant="secondary" onClick={clearFilters}>清除筛选</Button></div>;
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1);
   const afterTomorrow = new Date(tomorrow); afterTomorrow.setDate(tomorrow.getDate() + 1);
@@ -120,7 +128,7 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
   return <div ref={root} className="pw-reminder-workspace pw-knowledge-workspace">
     <section className="pw-settings-section" aria-label="提醒规则">
       {selectedRule && <Button variant="ghost" leadingIcon={RiArrowLeftSLine} disabled={pending} onClick={() => setSelectedId('')}>返回提醒列表</Button>}
-      <header className="pw-followup-heading"><div><h2 ref={heading} tabIndex={-1}>{selectedRule ? selectedRule.title || '未命名提醒' : '提醒与主动任务'}</h2></div>{!selectedRule && <div className="pw-followup-heading-actions"><Button variant="ghost" iconOnly leadingIcon={RiRefreshLine} aria-label="刷新记录" disabled={reading || receiptsBusy || !supported('automation.list')} onClick={() => { void refresh().catch(() => {}); }} /><PressButton compact disabled={pending || reading || readingError || !hasRules || !supported('automation.reviewSchedule')} onClick={() => open('create')}>新建提醒</PressButton></div>}</header>
+      {selectedRule ? <header className="pw-followup-heading"><div><h2 ref={heading} tabIndex={-1}>{selectedRule.title || '未命名提醒'}</h2></div>{refreshButton}</header> : !emptyDirectory && <div className="pw-reminder-directory-toolbar">{hasRules && rules.length > 0 && <p>{rules.length} 条提醒</p>}<div className="pw-reminder-directory-actions">{refreshButton}{newReminder}</div></div>}
       {notice && <p className="pw-field-hint" role="status">{notice}</p>}
       {uncertain && <p className="pw-field-hint">本页保留未确认提交，暂不开放再次写入。请核对已有提醒与原回执后重新进入页面。</p>}
       {error && <p className="pw-field-error" role="alert">{error}</p>}
@@ -133,7 +141,7 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
           {attentionReceipts.map(receipt => <section key={receipt.id}><h4>{receipt.title || '原发生记录'}</h4>{receiptTiming(receipt)}</section>)}
         </AccordionItem></Accordion>
       </section>}
-      {!selectedRule && <div className="pw-reminder-plan-tools"><header className="pw-reminder-plan-heading"><h3>提醒计划</h3>{hasRules && <span>{rules.length} 项</span>}</header><SearchField className="pw-secondary-search" aria-label="查找已读取的提醒" placeholder="查找提醒或目标" value={query} onChange={setQuery} /><div className="pw-knowledge-filters" role="group" aria-label="提醒状态筛选">{[{ id: 'all', label: '全部' }, { id: 'enabled', label: '已启用' }, { id: 'disabled', label: '暂停与结束' }].map(item => <Button key={item.id} variant="ghost" aria-pressed={filter === item.id} onClick={() => setFilter(item.id)}>{item.label}</Button>)}</div></div>}
+      {!selectedRule && showDirectoryTools && <div className="pw-reminder-plan-tools"><SearchField className="pw-secondary-search" aria-label="查找已读取的提醒" placeholder="搜索提醒" value={query} onChange={setQuery} /><div className="pw-knowledge-filters" role="group" aria-label="提醒状态筛选">{[{ id: 'all', label: '全部' }, { id: 'enabled', label: '已启用' }, { id: 'disabled', label: '暂停与结束' }].map(item => <Button key={item.id} variant="ghost" aria-pressed={filter === item.id} onClick={() => setFilter(item.id)}>{item.label}</Button>)}</div></div>}
       {reading ? <p className="pw-secondary-empty" role="status">正在读取原提醒清单…</p> : readingError ? <p className="pw-field-error" role="alert">原提醒清单未读成功，请刷新核对。{String(state.moduleErrors['automation.list'])}</p> : !hasRules ? <p className="pw-secondary-empty">尚未读取原提醒清单，请刷新核对。</p> : rules.length ? selectedRule ? [selectedRule].map(rule => {
         const availability = reminderRuleState(rule, Date.now());
         return <article key={rule.id} className="pw-reminder-record"><header className="pw-knowledge-object-state"><span>{rule.enabled ? '已启用' : availability.exhausted ? '安排已结束' : '已暂停'}</span><span>{types.find(type => type.id === rule.schedule?.type)?.label || '原时间安排'}{rule.schedule?.zone ? ' · ' + rule.schedule.zone : ''}</span></header>
@@ -148,7 +156,7 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
           <Accordion variant="divided" className="pw-compact-disclosures"><AccordionItem id="reminder-metadata" title="调度详情与版本" description={`${types.find(type => type.id === rule.schedule?.type)?.label || '原时间安排'} · ${rule.schedule?.zone || '以手机原记录为准'}`}>
           <dl className="pw-facts"><div><dt>时间安排</dt><dd>{types.find(type => type.id === rule.schedule?.type)?.label || '暂不支持的格式'}{rule.schedule?.expression ? ' · ' + rule.schedule.expression : ''}{rule.schedule?.zone ? ' · ' + rule.schedule.zone : ''}</dd></div><div><dt>规则版本</dt><dd>{rule.revision}</dd></div>{rule.nextAt > 0 && rule.nextAt !== rule.scheduledAt && <div><dt>下次检查</dt><dd>{date(rule.nextAt)}</dd></div>}</dl><Button variant="ghost" disabled={pending || !supported('automation.reviewRule')} onClick={() => { void prepare('automation.reviewRule', { id: rule.id, revision: rule.revision, command: 'delete' }); }}>删除</Button></AccordionItem></Accordion>
         </article>;
-      }) : <>{!visibleRules.length && <p className="pw-secondary-empty" role="status">当前筛选下没有提醒。需要核对的结果仍保留在上方。</p>}{ruleGroups.map(group => <section key={group.id} className="pw-knowledge-directory-group pw-reminder-plan-group" aria-label={group.label}><header className="pw-knowledge-group-heading"><h3>{group.label}</h3><span>{group.rules.length}</span></header><div className="pw-reminder-rules pw-followup-list">{group.rules.map(rule => {
+      }) : <>{!visibleRules.length && emptyResults}{ruleGroups.map(group => <section key={group.id} className="pw-knowledge-directory-group pw-reminder-plan-group" aria-label={group.label}><header className="pw-knowledge-group-heading"><h3>{group.label}</h3><span>{group.rules.length}</span></header><div className="pw-reminder-rules pw-followup-list">{group.rules.map(rule => {
         const availability = reminderRuleState(rule, Date.now());
         const plannedAt = rule.scheduledAt || rule.nextAt;
         const plannedDate = rule.enabled && availability.sourceCurrent && !availability.exhausted && Number.isFinite(plannedAt) && plannedAt > 0 ? new Date(plannedAt) : null;
@@ -158,15 +166,16 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
           <span className="pw-reminder-rule-layout"><span className="pw-reminder-rule-time" aria-hidden="true"><strong>{plannedDate ? plannedDate.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }) : '—'}</strong><small>{plannedDate ? plannedDate.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric', ...(plannedDate.getFullYear() !== new Date().getFullYear() ? { year: 'numeric' } : {}) }) : !availability.sourceCurrent ? '待核对' : availability.exhausted ? '已结束' : '无安排'}</small></span>
           <span className="pw-reminder-rule-row-copy"><strong>{rule.title || '未命名提醒'}</strong><small>{schedule} · {status}</small>{!availability.sourceCurrent && <small className="pw-reminder-rule-warning">来源有变化，需核对</small>}{availability.sourceCurrent && rule.enabled && !availability.exhausted && !plannedDate && <small>下次时间待核对</small>}</span></span>
         </Button>;
-      })}</div></section>)}</> : <p className="pw-secondary-empty">还没有提醒。新建后先核对手机提供的计划时间，再确认保存。</p>}
+      })}</div></section>)}</> : emptyDirectory ? <div className="pw-reminder-directory-empty"><RiNotification3Line size={28} aria-hidden="true"/><h2>还没有提醒</h2><p>安排要记得的事，创建前会先核对时间。</p><div className="pw-form-actions">{newReminder}<Button variant="ghost" leadingIcon={RiRefreshLine} disabled={reading || receiptsBusy || !supported('automation.list')} onClick={() => { void refresh().catch(() => {}); }}>重新读取</Button></div></div> : pending ? <p className="pw-field-hint" role="status">{uncertain ? '原提交结果尚待核对，请刷新已有提醒与发生记录。' : '正在处理原提醒请求，请等待原操作回执。'}</p> : hasFilters && !error && !receiptsBusy && !receiptsError ? emptyResults : null}
     </section>
     {receiptsError && <p className="pw-field-error" role="alert">{String(receiptsError)}</p>}
-    <Accordion variant="divided" className="pw-compact-disclosures"><AccordionItem id="reminder-receipts" title="最近投递" description={receiptsReady ? `已读取 ${receipts.length} 条原发生记录` : '按需读取原投递与任务结果'}>
+    {showReceiptHistory && <Accordion variant="divided" className="pw-compact-disclosures"><AccordionItem id="reminder-receipts" title="最近投递" description={receiptsBusy ? '正在读取发生记录…' : receiptsError ? '本次读取未完成' : receipts.length ? `${receipts.length} 条原发生记录` : '核对原投递与任务结果'}>
     <section className="pw-settings-section" aria-label="原发生与投递回执"><header className="pw-section-heading"><p>发生、投递与原任务完成分开。准备会建立或定位原手机目标，仍须你确认执行。未知结果只核对原记录，不会重发。</p></header>
-      {receiptsBusy ? <p className="pw-secondary-empty" role="status">正在读取原发生记录…</p> : receiptsError ? <p className="pw-field-error" role="alert">{String(receiptsError)}</p> : !receiptsReady ? <p className="pw-secondary-empty">尚未读取原发生记录，请刷新核对。</p> : receipts.length ? receipts.slice(0, receiptLimit).map(receipt => receiptRow(receipt)) : <p className="pw-secondary-empty">暂无发生记录。</p>}
+      <Button variant="ghost" leadingIcon={RiRefreshLine} disabled={receiptsBusy || !supported('automation.receipts')} onClick={() => { void run('automation.receipts').catch(failure => setError(failure instanceof Error ? failure.message : String(failure))); }}>重新读取发生记录</Button>
+      {receiptsBusy ? <p className="pw-secondary-empty" role="status">正在读取原发生记录…</p> : receiptsError ? <p className="pw-field-hint">本次读取未完成，请重新核对原记录。</p> : !receiptsReady ? <p className="pw-secondary-empty">尚未读取原发生记录，请刷新核对。</p> : receipts.length ? receipts.slice(0, receiptLimit).map(receipt => receiptRow(receipt)) : uncertain || submission ? <p className="pw-field-hint">原提交尚待核对，请先重新读取记录。</p> : <p className="pw-secondary-empty">暂无发生记录。</p>}
       {!receiptsBusy && !receiptsError && receipts.length > receiptLimit && <Button variant="secondary" onClick={() => setReceiptLimit(value => value + 10)}>显示更早记录</Button>}
     </section>
-    </AccordionItem></Accordion>
+    </AccordionItem></Accordion>}
     <SettingsDialog isOpen={Boolean(editor || review)} title={review ? review.command === 'save' ? '核对提醒计划' : review.command === 'delete' ? '删除这个提醒？' : review.enabled ? '启用这个提醒？' : '暂停这个提醒？' : editor?.intent === 'edit' ? '编辑提醒' : editor?.intent === 'reschedule' ? '重新安排提醒' : '新建提醒'} onClose={() => { if (review) { generation.current++; setReview(null); } else close(); }}><div className={'pw-knowledge-dialog' + (review ? '' : ' pw-knowledge-edit-dialog')}>
       {review ? <>
         <p>{review.rule?.title}</p><p className="pw-field-hint">{review.intent === 'reschedule' ? '来源规则版本：' + editor?.original?.revision + '，将新建独立提醒。' : review.rule?.revision ? '原规则版本：' + review.rule.revision : '将新建独立提醒。'}</p>{review.rule?.kind === 'phone_goal' && <p className="pw-receipt-copy">手机任务目标：{review.rule.goal}</p>}
