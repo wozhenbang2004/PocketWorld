@@ -66,7 +66,16 @@ public final class McpStdioClient implements AutoCloseable {
             JSONObject arguments=PluginArguments.snapshot(supplied),actual=McpData.find(tools(),reviewedTool.getString("name"));
             if(actual==null||!McpJson.digest(actual).equals(reviewedTool.getString("descriptorDigest")))throw new IllegalStateException("MCP stdio tool declaration changed; a new review is required");
             JSONObject diagnostics=PluginRules.diagnoseMcpArguments(arguments,actual.getJSONObject("inputSchema"));if(!diagnostics.getBoolean("valid"))throw new IllegalArgumentException("MCP stdio arguments do not match the current reviewed schema");
-            JSONObject result=rpc("tools/call",new JSONObject().put("name",actual.getString("name")).put("arguments",arguments));resultReceived=true;return capture==null?McpData.result(result,""):capture.result(result,"");
+            JSONObject result;
+            try{result=rpc("tools/call",new JSONObject().put("name",actual.getString("name")).put("arguments",arguments));}
+            catch(RemoteError failure){
+                // Only this matching tools/call error is its received result. Discovery/list
+                // failures above still mean the tool was not sent. Never replay either case.
+                resultReceived=true;
+                return new JSONObject().put("isError",true).put("protocolError",failure.error)
+                    .put("content",new JSONArray()).put("untrusted",true).put("instructionsAreData",true);
+            }
+            resultReceived=true;return capture==null?McpData.result(result,""):capture.result(result,"");
         }catch(RpcFailure failure){throw new McpClient.CallFailure(failure.toolMayHaveDispatched,!valid,failure.getMessage());}
         catch(dev.pocketengine.features.memory.ToolOutputCapture.OutputSourceUnavailable blocked){throw blocked;}
         catch(Exception failure){throw new McpClient.CallFailure(resultReceived,!valid,resultReceived?"MCP stdio returned a tool result but native projection/capture failed; never replay":"MCP stdio tool was not sent; check the original installation, declaration and arguments");}
@@ -104,11 +113,23 @@ public final class McpStdioClient implements AutoCloseable {
                     continue;
                 }
                 if(!(envelope.opt("id") instanceof String)||!id.equals(envelope.getString("id"))||envelope.has("result")==envelope.has("error"))throw new IllegalArgumentException("MCP stdio reply does not match the original request");
-                if(envelope.has("error"))throw new IllegalStateException("MCP stdio server returned a protocol error; request was not replayed");
+                if(envelope.has("error")){remaining(until);throw remoteError(envelope.getJSONObject("error"));}
                 JSONObject result=envelope.getJSONObject("result");remaining(until);return result;
             }
             throw new IllegalStateException("MCP stdio RPC exceeded 128 messages");
-        }catch(Exception failure){if(!mainAcknowledged&&failure instanceof InputFailure&&!((InputFailure)failure).mayHaveDispatched)entered=false;valid=false;invalidateChannel();throw new RpcFailure(toolMethod&&entered,"MCP stdio protocol/write/reply failed; no reconnect or automatic replay",failure);}
+        }catch(RemoteError failure){throw failure;}
+        catch(Exception failure){if(!mainAcknowledged&&failure instanceof InputFailure&&!((InputFailure)failure).mayHaveDispatched)entered=false;valid=false;invalidateChannel();throw new RpcFailure(toolMethod&&entered,"MCP stdio protocol/write/reply failed; no reconnect or automatic replay",failure);}
+    }
+    private static RemoteError remoteError(JSONObject error)throws Exception {
+        java.math.BigDecimal code=PluginRules.decimal(error.opt("code"));
+        if(code==null||!PluginRules.integer(code)||code.compareTo(java.math.BigDecimal.valueOf(Integer.MIN_VALUE))<0||code.compareTo(java.math.BigDecimal.valueOf(Integer.MAX_VALUE))>0||!(error.opt("message") instanceof String))throw new IllegalArgumentException("MCP stdio error response is malformed");
+        String message=(String)McpData.scrub(error.getString("message"),"",0);
+        if(message.length()>4096)message=message.substring(0,4096);
+        return new RemoteError(new JSONObject().put("code",code.intValueExact()).put("message",message).put("dataOmitted",error.has("data")));
+    }
+    private static final class RemoteError extends Exception {
+        final JSONObject error;
+        RemoteError(JSONObject error){super("MCP stdio JSON-RPC error ("+error.optInt("code")+"): "+error.optString("message"));this.error=error;}
     }
     private static final class InputFailure extends Exception {final boolean mayHaveDispatched;InputFailure(boolean value){mayHaveDispatched=value;}}
     private static final class RpcFailure extends Exception {final boolean toolMayHaveDispatched;RpcFailure(boolean value,String message,Throwable cause){super(message,cause);toolMayHaveDispatched=value;}}
@@ -116,3 +137,4 @@ public final class McpStdioClient implements AutoCloseable {
     private IllegalStateException invalidate(String message){valid=false;invalidateChannel();return new IllegalStateException(message);}
     @Override public void close(){closed=true;valid=false;invalidateChannel();}
 }
+
