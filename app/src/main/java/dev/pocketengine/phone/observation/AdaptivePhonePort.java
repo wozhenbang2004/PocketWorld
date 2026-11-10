@@ -154,8 +154,13 @@ public final class AdaptivePhonePort implements PhonePort {
                 if(!result.optBoolean("ok")){ObservationReport.annotateFailure(result);retainSafetyFence(result);}
             }
             if(write&&Boolean.TRUE.equals(result.opt("accepted"))&&!unknown){
-                JSONObject fresh=readOnlyTree(control);result.put("freshObservationAvailable",fresh.optBoolean("ok"));
-                if(fresh.optBoolean("ok"))result.put("afterObservationId",fresh.getString("observationId"));
+                try{
+                    JSONObject fresh=readOnlyTree(control);result.put("freshObservationAvailable",fresh.optBoolean("ok"));
+                    if(fresh.optBoolean("ok"))result.put("afterObservationId",fresh.getString("observationId"));
+                    else result.put("postActionObservation",new JSONObject().put("status","unavailable_after_dispatch")
+                            .put("reason",fresh.optString("error",fresh.optString("code","observation_unavailable")))
+                            .put("dispatchReceiptPreserved",true).put("automaticReplayAllowed",false));
+                }catch(Exception unavailable){result=retainDispatchReceipt(result,unavailable);}
             }
             return result.put("verifiedBusinessSuccess",false).put("automaticReplayAllowed",false);
         }catch(NativeSensitiveStep.OwnerRequired owner){synchronized(this){clearReferences();}throw owner;}
@@ -328,16 +333,28 @@ public final class AdaptivePhonePort implements PhonePort {
             if(result.has("accepted")&&result.isNull("accepted")){reconciliationRequired=true;return ObservationReport.annotateFailure(result).put("targetRef",target).put("automaticReplayAllowed",false);}}
         result.put("targetRef",target).put("beforeTreeFingerprint",before).put("verified",false).put("verifiedBusinessSuccess",false).put("automaticReplayAllowed",false).put("mechanism","accessibility_action_scroll_"+args.getString("direction"));
         if(!Boolean.TRUE.equals(result.opt("accepted")))return result;
-        JSONObject fresh=null;long until=System.nanoTime()+1_250_000_000L;
-        for(int i=0;i<6;i++){
-            control.check();if(control.isPaused()||control.pauseRevision()!=revision)return result.put("freshObservationAvailable",false).put("effect","unavailable_after_pause");
-            fresh=readOnlyTree(control);if(!fresh.optBoolean("ok")||!before.equals(fresh.optString("treeFingerprint"))||System.nanoTime()>=until)break;
-            long wake=Math.min(until,System.nanoTime()+250_000_000L);while(System.nanoTime()<wake){control.check();if(control.isPaused()||control.pauseRevision()!=revision)return result.put("freshObservationAvailable",false).put("effect","unavailable_after_pause");Thread.sleep(Math.max(1,Math.min(50,(wake-System.nanoTime())/1_000_000L)));}
-        }
-        if(fresh==null||!fresh.optBoolean("ok"))return result.put("freshObservationAvailable",false).put("effect","not_observed");
-        JSONObject actual=null;for(JSONObject n:PhoneTreeExtract.index(fresh).values())if(n.getInt("windowId")==target.getInt("windowId")&&n.getJSONArray("path").toString().equals(target.getJSONArray("path").toString())){actual=n;break;}
-        result.put("afterObservationId",fresh.getString("observationId")).put("afterTreeFingerprint",fresh.optString("treeFingerprint")).put("freshObservationAvailable",true).put("effect",before.equals(fresh.optString("treeFingerprint"))?"no_change_observed":"tree_changed_not_business_proof");
-        if(actual!=null)result.put("observation",PhoneTreeExtract.actionObservation(fresh,actual.getString("id")));return result;
+        try{
+            JSONObject fresh=null;long until=System.nanoTime()+1_250_000_000L;
+            for(int i=0;i<6;i++){
+                control.check();if(control.isPaused()||control.pauseRevision()!=revision)return result.put("freshObservationAvailable",false).put("effect","unavailable_after_pause");
+                fresh=readOnlyTree(control);if(!fresh.optBoolean("ok")||!before.equals(fresh.optString("treeFingerprint"))||System.nanoTime()>=until)break;
+                long wake=Math.min(until,System.nanoTime()+250_000_000L);while(System.nanoTime()<wake){control.check();if(control.isPaused()||control.pauseRevision()!=revision)return result.put("freshObservationAvailable",false).put("effect","unavailable_after_pause");Thread.sleep(Math.max(1,Math.min(50,(wake-System.nanoTime())/1_000_000L)));}
+            }
+            if(fresh==null||!fresh.optBoolean("ok"))return result.put("freshObservationAvailable",false).put("effect","not_observed");
+            JSONObject actual=null;for(JSONObject n:PhoneTreeExtract.index(fresh).values())if(n.getInt("windowId")==target.getInt("windowId")&&n.getJSONArray("path").toString().equals(target.getJSONArray("path").toString())){actual=n;break;}
+            result.put("afterObservationId",fresh.getString("observationId")).put("afterTreeFingerprint",fresh.optString("treeFingerprint")).put("freshObservationAvailable",true).put("effect",before.equals(fresh.optString("treeFingerprint"))?"no_change_observed":"tree_changed_not_business_proof");
+            if(actual!=null)result.put("observation",PhoneTreeExtract.actionObservation(fresh,actual.getString("id")));return result;
+        }catch(Exception unavailable){return retainDispatchReceipt(result,unavailable).put("effect","not_observed_after_dispatch");}
+    }
+
+    /** An observation failure cannot erase the receipt of an already accepted physical action. */
+    private JSONObject retainDispatchReceipt(JSONObject result,Exception unavailable)throws Exception {
+        synchronized(this){clearReferences();}
+        boolean interrupted=unavailable instanceof InterruptedException;
+        if(interrupted)Thread.currentThread().interrupt();
+        return result.put("freshObservationAvailable",false).put("postActionObservation",new JSONObject()
+                .put("status","unavailable_after_dispatch").put("reason",interrupted?"observation_interrupted":"observation_failed")
+                .put("dispatchReceiptPreserved",true).put("verifiedBusinessSuccess",false).put("automaticReplayAllowed",false));
     }
 
     /** The waiting loop owns no monitor, task state or execution journal. */
@@ -457,7 +474,7 @@ public final class AdaptivePhonePort implements PhonePort {
                 dev.pocketengine.phone.PhoneUiSignals feed=null;if(source instanceof NativePhoneSignals)try{feed=((NativePhoneSignals)source).uiSignals(control);}catch(Exception unavailable){}
                 try{PhoneActionEffects.Result after=PhoneActionEffects.await(before,targetWindow,()->readOnlyTree(control),control,revision,feed,PhoneActionEffects.REAL);result.put("actionEffects",after.evidence);
                     JSONObject observed=after.evidence.optJSONObject("observed");if(observed!=null)result.put("actionFeedback",observed.optString("status").equals("change_observed")?"已观察到界面变化；不代表业务完成。":"当前可读树未显示确定变化；这不证明动作没发生，勿原样重发。");
-                }catch(Exception unavailable){if(unavailable instanceof InterruptedException)Thread.currentThread().interrupt();result.put("actionEffects",new JSONObject().put("stability","unavailable_after_dispatch").put("verifiedBusinessSuccess",false).put("automaticReplayAllowed",false));}
+                }catch(Exception unavailable){retainDispatchReceipt(result,unavailable);result.put("actionEffects",new JSONObject().put("stability","unavailable_after_dispatch").put("verifiedBusinessSuccess",false).put("automaticReplayAllowed",false));}
             }else result.put("actionEffects",new JSONObject().put("stability",result.has("accepted")&&result.isNull("accepted")?"unknown_dispatch_not_replayed":Boolean.TRUE.equals(result.opt("accepted"))?"before_tree_unavailable":"not_accepted").put("verifiedBusinessSuccess",false).put("automaticReplayAllowed",false));
             JSONObject readback=result.optJSONObject("delayedTextReadback");if(readback==null)readback=result.optJSONObject("nativeTextReadback");if(readback!=null&&readback.optString("status").equals("exact_match"))result.put("actionFeedback","原生同一输入节点已回读，文字与所输内容精确一致（验证阶段见回执）；仍不代表业务完成。");
             return result.put("verifiedBusinessSuccess",false);
@@ -544,6 +561,9 @@ public final class AdaptivePhonePort implements PhonePort {
     }
 
     private Decision choose(JSONObject observation, Need need, RunControl control) throws Exception {
+        return choose(observation,need,control,true);
+    }
+    private Decision choose(JSONObject observation, Need need, RunControl control,boolean allowOcr) throws Exception {
         String blocked = authority(control);
         if (blocked != null) return AdaptiveObservationPolicy.blocked(blocked);
         if (observation.optInt("displayId", -1) != scope.displayId || !scope.sessionId.equals(observation.optString("sessionId")))
@@ -564,7 +584,7 @@ public final class AdaptivePhonePort implements PhonePort {
         Evidence evidence = new Evidence(binding, sources.optBoolean("treeAvailable"), observation.optBoolean("truncated"),
                 sources.optInt("usefulNodes"), sources.optBoolean("imageIncluded"),
                 "display_has_no_frame".equals(observation.optString("screenState")), at,sources.optBoolean("treeAdequate"));
-        return policy.decide(expected, evidence, need, Health.READY, localCaptureAllowed, localOcrAllowed, imageCeiling, visionAvailable, ocrAvailable(),
+        return policy.decide(expected, evidence, need, Health.READY, localCaptureAllowed, localOcrAllowed, imageCeiling, visionAvailable, allowOcr&&ocrAvailable(),
                 control.isPaused(), control.isCancelled(), uptime.getAsLong(), MAX_AGE_MS);
     }
     private JSONObject deliver(JSONObject observation, Decision decision, RunControl control) throws Exception {
@@ -581,9 +601,25 @@ public final class AdaptivePhonePort implements PhonePort {
             return failed;
         }
         JSONObject out = new JSONObject(observation.toString());
+        out.remove("ocrFallback");
         if (decision.request == Request.OCR) {
             JSONObject recognized = recognize(out, control);
-            if (!recognized.optBoolean("ok")) { clearReferences(); return recognized; }
+            if (!recognized.optBoolean("ok")) {
+                String reason=recognized.optString("error");
+                boolean recoverable=java.util.Set.of("ocr_unavailable","ocr_no_text","ocr_limit_exceeded").contains(reason);
+                // Reuse this exact authorized image. Failed OCR does not make a visual page
+                // unusable, and must not trigger another capture or any physical action.
+                Decision visual=recoverable&&localCaptureAllowed&&imageCeiling&&visionAvailable&&ObservationReport.hasImage(out)
+                        ?choose(out,Need.TARGET_MISSING,control,false):null;
+                if(visual==null){clearReferences();return recognized;}
+                if(visual.request!=Request.VISION)return deliver(out,visual,control);
+                textTargets.clear();ocrSensitive=null;out.remove("ocr");
+                out.getJSONObject("observationSources").put("ocrTextIncluded",false).put("ocrReason",reason)
+                        .put("imageReason","local_ocr_unavailable_visual_fallback");
+                out.put("ocrFallback",new JSONObject().put("reason",reason).put("request","vision")
+                        .put("sameObservation",true).put("newCapture",false).put("automaticReplayAllowed",false));
+                decision=visual;
+            }
         }
         if (decision.request != Request.VISION) {
             stripImage(out);
@@ -596,7 +632,7 @@ public final class AdaptivePhonePort implements PhonePort {
         out.put("observationBinding", bindingJson(latestBinding)).put("observationDecision", new JSONObject()
                 .put("request", decision.request.name().toLowerCase(java.util.Locale.ROOT)).put("reason", decision.reason)
                 .put("visionAvailable", visionAvailable).put("ocrAvailable", ocrAvailable())
-                .put("ocrReason", ocrAvailable() ? "mounted_local_engine" : "engine_not_installed")
+                .put("ocrReason", out.has("ocrFallback")?out.getJSONObject("ocrFallback").getString("reason"):ocrAvailable() ? "mounted_local_engine" : "engine_not_installed")
                 .put("localCaptureAllowed",localCaptureAllowed).put("localOcrAllowed",localOcrAllowed).put("ocrTextMayBeSentToModel",true).put("uploadImageAllowed",imageCeiling).put("screenshotsAllowed", imageCeiling).put("automaticReplayAllowed", false));
         latest = new JSONObject(out.toString()); pendingNeed = Need.AUTOMATIC; consecutiveScreenChanges = 0;
         if(practice!=null)practice.observation(out);

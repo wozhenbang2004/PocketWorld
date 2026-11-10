@@ -10,8 +10,12 @@ import android.graphics.Color;
 import android.graphics.PixelFormat;
 import android.graphics.Rect;
 import android.graphics.drawable.GradientDrawable;
+import android.hardware.display.DisplayManager;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
+import android.util.SparseArray;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
@@ -23,7 +27,9 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import dev.pocketengine.core.RunControl;
@@ -31,10 +37,43 @@ import dev.pocketengine.EngineApplication;
 
 /** Owner controls and access to the foreground display; no application-overlay permission. */
 public final class PhoneAccessibilityService extends AccessibilityService {
+    private static final Object INSTANCE_LOCK = new Object();
+    private static final long WINDOW_MAP_REFRESH_MS = 250;
+    private static final long WINDOW_MAP_TTL_MS = 1_000;
+    private static final int MAX_MAPPED_WINDOWS = 128;
+    // A stuck Binder read keeps this single process-wide slot; reconnecting must not spawn
+    // replacement workers that accumulate behind uninterruptible platform calls.
+    private static final java.util.concurrent.ScheduledThreadPoolExecutor WINDOW_READER = windowReader();
+    private static java.util.concurrent.ScheduledThreadPoolExecutor windowReader() {
+        var reader=new java.util.concurrent.ScheduledThreadPoolExecutor(1,work->{
+            Thread thread=new Thread(work,"pocket-accessibility-window-map");thread.setDaemon(true);return thread;
+        });
+        reader.setRemoveOnCancelPolicy(true);return reader;
+    }
     private static volatile PhoneAccessibilityService instance;
     private final String observationSessionId = java.util.UUID.randomUUID().toString();
     private final Handler main = new Handler(Looper.getMainLooper());
-    private final PhoneUiSignals changeSignals=new PhoneUiSignals(observationSessionId,android.os.SystemClock::uptimeMillis);
+    // INSTANCE_LOCK guards feed publication and ownership; platform reads stay outside it.
+    private final Map<Integer,PhoneUiSignals> displaySignals = new LinkedHashMap<>();
+    private final Map<Integer,Integer> windowDisplays = new LinkedHashMap<>();
+    private boolean signalsClosed;
+    private boolean windowMapReadScheduled;
+    private long signalSerial,nextWindowMapRead,windowMapExpires,windowMapRevision;
+    private java.util.concurrent.ScheduledFuture<?> windowMapRead;
+    private DisplayManager signalDisplays;
+    private final DisplayManager.DisplayListener displayListener = new DisplayManager.DisplayListener() {
+        @Override public void onDisplayAdded(int displayId) { }
+        @Override public void onDisplayChanged(int displayId) { }
+        @Override public void onDisplayRemoved(int displayId) {
+            synchronized (INSTANCE_LOCK) {
+                if (instance != PhoneAccessibilityService.this || signalsClosed) return;
+                PhoneUiSignals old = displaySignals.remove(displayId);
+                if (old != null) old.close();
+                windowDisplays.entrySet().removeIf(entry -> entry.getValue() == displayId);
+                windowMapExpires = 0;++windowMapRevision;
+            }
+        }
+    };
     private final Set<Object> captureHides = new HashSet<>();
     private LinearLayout controls;
     private TextView status;
@@ -50,7 +89,22 @@ public final class PhoneAccessibilityService extends AccessibilityService {
     public static PhoneAccessibilityService get() { return instance; }
     /** A new service instance invalidates all observations from the previous connection. */
     public String observationSessionId() { return observationSessionId; }
-    public PhoneUiSignals uiSignals(){return changeSignals;}
+    public PhoneUiSignals uiSignals(){return uiSignals(Display.DEFAULT_DISPLAY);}
+    /** Stable per-display hints; only unattributed changes conservatively invalidate every feed. */
+    public PhoneUiSignals uiSignals(int displayId) {
+        if (displayId < 0) throw new IllegalArgumentException("A native display id is required");
+        synchronized (INSTANCE_LOCK) {
+            PhoneUiSignals feed = displaySignals.get(displayId);
+            if (feed == null) {
+                String session = displayId == Display.DEFAULT_DISPLAY ? observationSessionId
+                        : observationSessionId + ":display:" + displayId + ":" + ++signalSerial;
+                feed = new PhoneUiSignals(session,SystemClock::uptimeMillis);
+                if (instance == this && !signalsClosed) displaySignals.put(displayId,feed);
+            }
+            if (instance != this || signalsClosed) feed.close();
+            return feed;
+        }
+    }
 
     /** An absent root is different from lost permission or a locked device. */
     public String observationSafetyFailure() {
@@ -65,9 +119,125 @@ public final class PhoneAccessibilityService extends AccessibilityService {
         return null;
     }
 
-    @Override protected void onServiceConnected() { instance = this; }
-    @Override public void onAccessibilityEvent(AccessibilityEvent event) { if(event!=null)changeSignals.record(event.getWindowId()); }
+    @Override protected void onServiceConnected() {
+        PhoneAccessibilityService previous;
+        synchronized (INSTANCE_LOCK) {
+            if (signalsClosed) return;
+            previous = instance;
+            if (previous != null && previous != this) previous.closeSignalFeedsLocked();
+            instance = this;
+            uiSignals();
+        }
+        if (previous != null && previous != this) previous.unregisterSignalDisplays();
+        if (signalDisplays == null) try {
+            DisplayManager displays = getSystemService(DisplayManager.class);
+            if (displays != null) {
+                displays.registerDisplayListener(displayListener,main);
+                signalDisplays = displays;
+            }
+        } catch (RuntimeException unavailable) { /* Service teardown still closes every feed. */ }
+    }
+    @Override public void onAccessibilityEvent(AccessibilityEvent event) {
+        if (event == null || instance != this) return;
+        int displayId = eventDisplay(event);
+        synchronized (INSTANCE_LOCK) {
+            if (instance != this || signalsClosed) return;
+            // Only native consumers create feeds. Unrelated display traffic retains no state.
+            if (displayId >= 0) {
+                PhoneUiSignals feed = displaySignals.get(displayId);
+                if (feed != null) feed.record(event.getEventType()==AccessibilityEvent.TYPE_WINDOWS_CHANGED?-1:event.getWindowId());
+            } else {
+                // Unattributed change is uncertainty, not evidence of any display's ownership.
+                // Fence every existing observation until a later fresh read resolves its scene.
+                for (PhoneUiSignals feed : displaySignals.values()) feed.record(-1);
+            }
+        }
+    }
     @Override public void onInterrupt() { }
+
+    /** API 33 carries display identity. Earlier/unknown events require a known window mapping. */
+    private int eventDisplay(AccessibilityEvent event) {
+        int directDisplay = Build.VERSION.SDK_INT >= 33 ? event.getDisplayId() : Display.INVALID_DISPLAY;
+        int windowId = event.getWindowId();
+        long now = SystemClock.uptimeMillis();
+        synchronized (INSTANCE_LOCK) {
+            if (instance != this || signalsClosed) return Display.INVALID_DISPLAY;
+            Integer known = now < windowMapExpires ? windowDisplays.get(windowId) : null;
+            boolean windowsChanged = event.getEventType() == AccessibilityEvent.TYPE_WINDOWS_CHANGED;
+            if (windowsChanged) {
+                windowDisplays.clear();
+                windowMapExpires = 0;++windowMapRevision;
+            }
+            if (directDisplay >= 0) return directDisplay;
+            if (windowId < 0) return Display.INVALID_DISPLAY;
+            if (windowsChanged && (event.getWindowChanges() & AccessibilityEvent.WINDOWS_CHANGE_REMOVED) != 0)
+                return known == null ? Display.INVALID_DISPLAY : known;
+            if (!windowsChanged && known != null) return known;
+            scheduleWindowMapReadLocked(now);
+            return Display.INVALID_DISPLAY;
+        }
+    }
+
+    private void scheduleWindowMapReadLocked(long now) {
+        if (windowMapReadScheduled || signalsClosed || instance != this) return;
+        windowMapReadScheduled = true;
+        try {
+            windowMapRead=WINDOW_READER.schedule(this::refreshWindowMap,Math.max(0,nextWindowMapRead-now),
+                    java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.RejectedExecutionException closed) { windowMapReadScheduled = false; }
+    }
+
+    private void refreshWindowMap() {
+        final long revision;
+        synchronized (INSTANCE_LOCK) {
+            if (instance != this || signalsClosed) {windowMapReadScheduled=false;return;}
+            revision=windowMapRevision;nextWindowMapRead=SystemClock.uptimeMillis()+WINDOW_MAP_REFRESH_MS;
+        }
+        Map<Integer,Integer> mapped = new LinkedHashMap<>();
+        SparseArray<List<AccessibilityWindowInfo>> windows = null;
+        try {
+            // Metadata only, at most four refreshes per second on systems lacking event display ids.
+            windows = getWindowsOnAllDisplays();
+            if (windows != null) for (int i=0;i<windows.size();i++) {
+                int displayId = windows.keyAt(i);
+                List<AccessibilityWindowInfo> group = windows.valueAt(i);
+                if (displayId < 0 || group == null) continue;
+                for (AccessibilityWindowInfo window : group) {
+                    if (window == null || window.getId() < 0) continue;
+                    int id = window.getId();
+                    Integer previous = mapped.get(id);
+                    if (previous != null && previous != displayId) mapped.put(id,Display.INVALID_DISPLAY);
+                    else if (previous == null && mapped.size() < MAX_MAPPED_WINDOWS) mapped.put(id,displayId);
+                }
+            }
+        } catch (RuntimeException unavailable) { mapped.clear(); }
+        finally {
+            if (windows != null) for (int i=0;i<windows.size();i++) {
+                List<AccessibilityWindowInfo> group = windows.valueAt(i);
+                if (group != null) for (AccessibilityWindowInfo window : group) if (window != null) try {window.recycle();}
+                    catch (RuntimeException recycled) { /* Do not leave the bounded worker permanently pending. */ }
+            }
+        }
+        synchronized (INSTANCE_LOCK) {
+            windowMapReadScheduled=false;
+            if (instance != this || signalsClosed || revision != windowMapRevision) return;
+            windowDisplays.clear();windowDisplays.putAll(mapped);
+            windowMapExpires = SystemClock.uptimeMillis()+WINDOW_MAP_TTL_MS;
+        }
+    }
+
+    private void closeSignalFeedsLocked() {
+        signalsClosed = true;
+        for (PhoneUiSignals feed : displaySignals.values()) feed.close();
+        windowDisplays.clear();windowMapExpires = 0;++windowMapRevision;
+        if(windowMapRead!=null){windowMapRead.cancel(true);windowMapRead=null;}
+    }
+
+    private void unregisterSignalDisplays() {
+        DisplayManager displays = signalDisplays;signalDisplays = null;
+        if (displays != null) try { displays.unregisterDisplayListener(displayListener); }
+        catch (RuntimeException unavailable) { /* Closed feeds reject late callbacks. */ }
+    }
 
     @Override public boolean onUnbind(Intent intent) {
         disconnect();
@@ -80,9 +250,13 @@ public final class PhoneAccessibilityService extends AccessibilityService {
     }
 
     private void disconnect() {
-        boolean wasCurrent=instance==this;
-        if (wasCurrent) instance = null;
-        changeSignals.close();
+        boolean wasCurrent;
+        synchronized (INSTANCE_LOCK) {
+            wasCurrent = instance == this;
+            if (wasCurrent) instance = null;
+            closeSignalFeedsLocked();
+        }
+        unregisterSignalDisplays();
         if(wasCurrent)dev.pocketengine.phone.setup.PhoneSetupModule.onAccessibilityDisconnected();
         if (control != null) control.cancel();
         if (quickPanel != null) quickPanel.close();

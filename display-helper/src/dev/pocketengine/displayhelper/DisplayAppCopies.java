@@ -17,6 +17,7 @@ final class DisplayAppCopies {
         Target target=resolve(context,display,exact);int wanted=exact.getInt("userId");String pkg=exact.getString("packageName");
         gate.check();gate.requireAppFree(pkg,wanted);gate.check();target=resolve(context,display,exact);gate.check();
         if(android.os.SystemClock.uptimeMillis()>=exact.getLong("referenceExpiresAtUptimeMs"))throw new SecurityException("app_copy_reference_expired");
+        gate.entering();
         try{target.launcher.startMainActivity(target.component,target.user,null,ActivityOptions.makeBasic().setLaunchDisplayId(display).toBundle());}
         catch(android.content.ActivityNotFoundException|SecurityException refused){return new JSONObject().put("ok",false).put("accepted",false).put("error","app_copy_platform_refused").put("automaticProfileFallback",false);}
         catch(Exception unknown){return new JSONObject().put("ok",false).put("accepted",JSONObject.NULL).put("error","app_copy_outcome_unknown").put("requiresReconciliation",true).put("automaticReplayAllowed",false);}

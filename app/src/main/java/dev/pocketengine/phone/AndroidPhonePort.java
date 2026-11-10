@@ -47,6 +47,7 @@ import dev.pocketengine.phone.observation.NativeSensitiveStep;
 import dev.pocketengine.phone.observation.NativeOcrTapPort;
 import dev.pocketengine.phone.observation.OcrTextTarget;
 import dev.pocketengine.phone.observation.NativePhoneEntry;
+import dev.pocketengine.phone.observation.NativeNodeActionReceipt;
 import dev.pocketengine.phone.observation.PhoneReadGate;
 
 /** A single foreground-display executor. References are data, never retained Android nodes. */
@@ -137,7 +138,7 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
         CompletableFuture<String> completion=new CompletableFuture<>();java.util.concurrent.atomic.AtomicBoolean listening=new java.util.concurrent.atomic.AtomicBoolean(true);
         try{
             boolean accepted=onMain(control,expected.revision,()->{
-                validateReference(service,expected,control);GestureDescription.Builder builder=new GestureDescription.Builder();
+                validateReference(service,expected,control);GestureDescription.Builder builder=new GestureDescription.Builder().setDisplayId(Display.DEFAULT_DISPLAY);
                 for(int i=0;i<paths.length();i++){
                     JSONArray points=paths.getJSONArray(i);Path path=new Path();float previousX=0,previousY=0;
                     for(int j=0;j<points.length();j++){
@@ -153,10 +154,10 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
                 return NativePhoneEntry.call(control,expected.revision,admission,()->{
                     Long deadline=MAIN_DEADLINE.get();if(deadline!=null&&SystemClock.uptimeMillis()>deadline)throw new PhoneFailure("dispatch_unknown","原生手势入场超时。");
                     requireUiUnchanged(service,validated);clearReferences();
-                    return service.dispatchGesture(builder.build(),new AccessibilityService.GestureResultCallback(){
+                    return dispatchGesture(service,builder.build(),new AccessibilityService.GestureResultCallback(){
                         @Override public void onCompleted(GestureDescription gesture){if(listening.get())completion.complete("completed");}
                         @Override public void onCancelled(GestureDescription gesture){if(listening.get())completion.complete("cancelled");}
-                    },main);
+                    });
                 });
             });
             if(!accepted)return receipt(false,"gesture_rejected").put("cancelSupported",false);
@@ -293,7 +294,7 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
             if (includeImage && image == null) result.put("imageUnavailable", true).put("imageUnavailableReason", imageReason);
             dev.pocketengine.phone.observation.InstalledAppEvidence.attach(context,result);
             if (image != null) {
-                for (String key : new String[]{"imageBase64", "imageMimeType", "imageWidth", "imageHeight"})
+                for (String key : new String[]{"imageBase64", "imageMimeType", "imageWidth", "imageHeight", "capturedAtUptimeMs"})
                     result.put(key, image.json.get(key));
             }
             after.forest.attach(result);
@@ -309,7 +310,7 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
         workerOnly();dev.pocketengine.phone.observation.NativeTreeScrollPort.validate(args);if(admission==null)return failure("host_authority_required","节点滚动必须由原prepared操作准入。");control.check();
         if(control.isPaused())return failure("task_paused","原执行已暂停，未滚动。");
         try{Snapshot expected=requireReference(args,control);PhoneAccessibilityService service=requireService();
-            return onNodeWorker(service,control,expected.revision,()->nodeAction(service,expected,control,"phone_scroll_node",args.getString("nodeId"),null,admission,args.getString("direction")));
+            return nodeAction(service,expected,control,"phone_scroll_node",args.getString("nodeId"),null,admission,args.getString("direction"));
         }catch(NativeSensitiveStep.OwnerRequired owner){clearReferences();throw owner;}
         catch(NativePhoneEntry.Refused refused){clearReferences();return failure("paused_or_changed",refused.getMessage());}
         catch(PhoneFailure refused){clearReferences();JSONObject out=failure(refused.code,refused.getMessage());if(ObservationSafety.unknownEffect(refused.code))out.put("accepted",JSONObject.NULL);return out;}
@@ -339,9 +340,12 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
                         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                         requireUnlocked(service);
                         guard(service, control, revision);
-                        clearReferences();
-                        service.startActivity(intent);
-                        return receipt(true, "launch_requested");
+                        return NativePhoneEntry.call(control,revision,()->guard(service,control,revision),()->{
+                            guard(service,control,revision);clearReferences();
+                            try{service.startActivity(intent);}
+                            catch(RuntimeException unknown){throw new PhoneFailure("action_unknown","启动请求的系统回执未知，请核对当前应用；不会自动重试。");}
+                            return receipt(true,"launch_requested");
+                        });
                     });
                 }
                 case "phone_back":
@@ -352,10 +356,14 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
                         validateReference(service,expected,control);
                         requireUnlocked(service);
                         guard(service, control, expected.revision);requireUiUnchanged(service,validated);
-                        clearReferences();
-                        boolean accepted = service.performGlobalAction("phone_back".equals(name)
-                                ? AccessibilityService.GLOBAL_ACTION_BACK : AccessibilityService.GLOBAL_ACTION_HOME);
-                        return receipt(accepted, "global_action_requested");
+                        return NativePhoneEntry.call(control,expected.revision,()->guard(service,control,expected.revision),()->{
+                            requireUiUnchanged(service,validated);clearReferences();
+                            boolean accepted;
+                            try{accepted=service.performGlobalAction("phone_back".equals(name)
+                                    ? AccessibilityService.GLOBAL_ACTION_BACK : AccessibilityService.GLOBAL_ACTION_HOME);}
+                            catch(RuntimeException unknown){throw new PhoneFailure("action_unknown","导航请求的系统回执未知，请核对当前页面；不会自动重试。");}
+                            return receipt(accepted,"global_action_requested");
+                        });
                     });
                 }
                 case "phone_click_node":
@@ -365,7 +373,7 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
                             ? string(args, "nodeId", 100, false) : optionalString(args, "nodeId", 100);
                     String text = "phone_type".equals(name) ? string(args, "text", 12_000, true) : null;
                     dev.pocketengine.phone.observation.DelayedInputReadback delayed=new dev.pocketengine.phone.observation.DelayedInputReadback();
-                    JSONObject receipt=onNodeWorker(service,control, expected.revision, () -> nodeAction(service, expected, control, name, nodeId, text,null,null,delayed));
+                    JSONObject receipt=nodeAction(service,expected,control,name,nodeId,text,null,null,delayed);
                     return delayed.attach(receipt);
                 }
                 case "phone_tap":
@@ -381,7 +389,9 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
             clearReferences();return failure("paused_or_changed",refused.getMessage());
         } catch (PhoneFailure failure) {
             clearReferences();
-            return failure(failure.code, failure.getMessage());
+            JSONObject result=failure(failure.code,failure.getMessage());
+            if(ObservationSafety.unknownEffect(failure.code))result.put("accepted",JSONObject.NULL);
+            return result;
         } catch (SecurityException failure) {
             clearReferences();
             return failure("permission_denied", "系统未允许此操作。");
@@ -455,6 +465,19 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
         return nodeAction(service,expected,control,tool,id,text,admission,direction,null);
     }
     private JSONObject nodeAction(PhoneAccessibilityService service,Snapshot expected,RunControl control,String tool,String id,String text,NativePhoneEntry.Admission admission,String direction,dev.pocketengine.phone.observation.DelayedInputReadback delayed)throws Exception {
+        JSONObject base=receipt(true,"node_action_requested");
+        if("phone_type".equals(tool))base.put("nativeTextReadback",dev.pocketengine.phone.observation.PhoneActionEffects.unavailableReadback("native_readback_unavailable_after_dispatch"))
+                .put("delayedTextReadback",dev.pocketengine.phone.observation.PhoneActionEffects.unavailableReadback("delayed_native_readback_unavailable"));
+        NativeNodeActionReceipt acknowledgement=new NativeNodeActionReceipt(base);
+        try{return onNodeWorker(service,control,expected.revision,()->nodeActionOnWorker(service,expected,control,tool,id,text,admission,direction,delayed,acknowledgement));}
+        catch(Exception unavailable){
+            JSONObject retained=acknowledgement.afterReadFailure("node_followup_unavailable");
+            if(retained==null)throw unavailable;
+            if(unavailable instanceof InterruptedException)Thread.currentThread().interrupt();
+            clearReferences();return retained;
+        }
+    }
+    private JSONObject nodeActionOnWorker(PhoneAccessibilityService service,Snapshot expected,RunControl control,String tool,String id,String text,NativePhoneEntry.Admission admission,String direction,dev.pocketengine.phone.observation.DelayedInputReadback delayed,NativeNodeActionReceipt acknowledgement)throws Exception {
         validateReference(service,expected,control);
         AccessibilityForest.Ref selected = null;
         if (id != null) selected = expected.tree.forest.refs.get(id);
@@ -509,17 +532,17 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
             if("phone_scroll_node".equals(tool)) {
                 final AccessibilityNodeInfo selectedNode=node;int action="forward".equals(direction)?AccessibilityNodeInfo.ACTION_SCROLL_FORWARD:AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD;
                 guard(service,control,expected.revision);
-                accepted=NativePhoneEntry.call(control,expected.revision,java.util.Objects.requireNonNull(admission),()->{PhoneReadGate.markEffectEntered();clearReferences();return selectedNode.performAction(action);});
+                accepted=NativePhoneEntry.call(control,expected.revision,java.util.Objects.requireNonNull(admission),()->{PhoneReadGate.markEffectEntered();clearReferences();return acknowledgement.record(selectedNode.performAction(action));});
             } else if ("phone_type".equals(tool)) {
                 if (node.isPassword()) throw new PhoneFailure("password_input_refused", "密码输入请由用户手动完成。");
                 Bundle arguments = new Bundle();
                 arguments.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text);
                 readbackIdentity=AccessibilityNodeInfo.obtain(node);
                 guard(service, control, expected.revision);
-                accepted = NativePhoneEntry.call(control,expected.revision,()->guard(service,control,expected.revision),()->{PhoneReadGate.markEffectEntered();clearReferences();return node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments);});
+                accepted = NativePhoneEntry.call(control,expected.revision,()->guard(service,control,expected.revision),()->{PhoneReadGate.markEffectEntered();clearReferences();return acknowledgement.record(node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments));});
             } else {
                 guard(service, control, expected.revision);
-                accepted = NativePhoneEntry.call(control,expected.revision,()->guard(service,control,expected.revision),()->{PhoneReadGate.markEffectEntered();clearReferences();return node.performAction(AccessibilityNodeInfo.ACTION_CLICK);});
+                accepted = NativePhoneEntry.call(control,expected.revision,()->guard(service,control,expected.revision),()->{PhoneReadGate.markEffectEntered();clearReferences();return acknowledgement.record(node.performAction(AccessibilityNodeInfo.ACTION_CLICK));});
             }
             // AccessibilityInteractionClient also returns false when the remote action's
             // callback times out or its Binder connection is lost after dispatch.
@@ -531,7 +554,7 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
                 final AccessibilityNodeInfo retained=AccessibilityNodeInfo.obtain(node),identity=AccessibilityNodeInfo.obtain(readbackIdentity);final AccessibilityForest.Ref original=selected;
                 delayed.schedule(main,reads.executor(),()->readTextAfterInput(service,retained,identity,original,text,control,expected.revision),()->{retained.recycle();identity.recycle();});
             }
-            return returned;
+            acknowledgement.update(returned);return returned;
         } finally { if(readbackIdentity!=null)readbackIdentity.recycle();node.recycle(); }
     }
 
@@ -580,6 +603,7 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
             path.moveTo(startX, startY);
             if (swipe) path.lineTo(endX, endY);
             GestureDescription description = new GestureDescription.Builder()
+                    .setDisplayId(Display.DEFAULT_DISPLAY)
                     .addStroke(new GestureDescription.StrokeDescription(path, 0, duration)).build();
             requireUnlocked(service);
             if (!screen.same(screen(service))) throw new PhoneFailure("stale_observation", "屏幕尺寸发生变化，请重新观察。");
@@ -589,10 +613,10 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
                 if(deadline!=null&&SystemClock.uptimeMillis()>deadline)throw new PhoneFailure("dispatch_unknown","手机请求超时，请核对原操作。");
                 if(PhoneAccessibilityService.get()!=service)throw new PhoneFailure("service_disconnected","无障碍服务已变化。");
                 requireUiUnchanged(service,validated);clearReferences();
-                return service.dispatchGesture(description, new AccessibilityService.GestureResultCallback() {
+                return dispatchGesture(service,description,new AccessibilityService.GestureResultCallback() {
                     @Override public void onCompleted(GestureDescription gesture) { completion.complete("completed"); }
                     @Override public void onCancelled(GestureDescription gesture) { completion.complete("cancelled"); }
-                }, main);
+                });
             });
         });
         if (!accepted) return receipt(false, "gesture_rejected");
@@ -602,11 +626,18 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
                     .put("verified", false).put("state", "gesture_cancelled").put("error", "gesture_cancelled")
                     .put("message", "系统已接收手势，但手势已取消。请重新观察。"));
             return receipt(true, "gesture_" + state);
-        } catch (TimeoutException timeout) {
+        } catch (Exception unavailable) {
+            if(unavailable instanceof InterruptedException)Thread.currentThread().interrupt();
             return ObservationReport.annotateFailure(new JSONObject().put("ok", false).put("accepted", true).put("verified", false)
                     .put("state", "gesture_completion_unknown").put("error", "gesture_completion_unknown")
+                    .put("requiresReconciliation",true).put("automaticReplayAllowed",false).put("cancelSupported",false)
                     .put("message", "系统已接收手势，但未收到完成回调。请重新观察，勿盲目重试。"));
         }
+    }
+
+    private boolean dispatchGesture(PhoneAccessibilityService service,GestureDescription description,AccessibilityService.GestureResultCallback callback)throws PhoneFailure {
+        try{return service.dispatchGesture(description,callback,main);}
+        catch(RuntimeException unknown){throw new PhoneFailure("action_unknown","手势请求的系统回执未知，请核对原页面；不会自动重试。");}
     }
 
     private CapturedImage capture(PhoneAccessibilityService service, RunControl control, long revision) throws Exception {
@@ -619,6 +650,7 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
         if (spacing > 0) sleepRead(check, spacing);
         Object hideToken = new Object();
         CompletableFuture<AccessibilityService.ScreenshotResult> result = new CompletableFuture<>();
+        java.util.concurrent.atomic.AtomicLong requestedAt=new java.util.concurrent.atomic.AtomicLong();
         Runnable restore = () -> service.restoreAfterCapture(hideToken);
         boolean consumed = false;
         try {
@@ -632,6 +664,7 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
                         requireUnlocked(service);
                         check.check();
                         lastScreenshotRequest = SystemClock.uptimeMillis();
+                        requestedAt.set(lastScreenshotRequest);
                         service.takeScreenshot(Display.DEFAULT_DISPLAY, Runnable::run,
                                 new AccessibilityService.TakeScreenshotCallback() {
                             @Override public void onSuccess(AccessibilityService.ScreenshotResult screenshot) {
@@ -657,7 +690,7 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
             try { screenshot = await(result, check, 5_000); }
             catch (TimeoutException timeout) { throw new PhoneFailure("screenshot_timeout", "截图超时，请重新观察。"); }
             consumed = true;
-            return encode(screenshot, check);
+            return encode(screenshot, check, requestedAt.get());
         } finally {
             // Cancel before draining: a late callback then owns and closes its own HardwareBuffer.
             if (!consumed && !result.cancel(false) && !result.isCompletedExceptionally()) {
@@ -668,10 +701,13 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
         }
     }
 
-    private CapturedImage encode(AccessibilityService.ScreenshotResult screenshot, OwnerScreenContext.ReadCheck check) throws Exception {
+    private CapturedImage encode(AccessibilityService.ScreenshotResult screenshot, OwnerScreenContext.ReadCheck check,long requestedAt) throws Exception {
         Bitmap hardware = null, software = null, scaled = null;
         try (HardwareBuffer buffer = screenshot.getHardwareBuffer()) {
             check.check();
+            long capturedAt=screenshot.getTimestamp();
+            if(requestedAt<=0||capturedAt<requestedAt||capturedAt>SystemClock.uptimeMillis())
+                throw new PhoneFailure("screenshot_stale_frame","系统返回的截图不属于当前请求，请重新观察。");
             hardware = Bitmap.wrapHardwareBuffer(buffer, screenshot.getColorSpace());
             if (hardware == null) throw new PhoneFailure("screenshot_unavailable", "无法读取系统截图。");
             int fullWidth = hardware.getWidth(), fullHeight = hardware.getHeight();
@@ -705,7 +741,7 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
                 throw new PhoneFailure("screenshot_unavailable", "无法编码截图。");
             check.check();
             JSONObject image = new JSONObject().put("imageBase64", Base64.encodeToString(bytes.toByteArray(), Base64.NO_WRAP))
-                    .put("imageMimeType", "image/jpeg").put("imageWidth", width).put("imageHeight", height);
+                    .put("imageMimeType", "image/jpeg").put("imageWidth", width).put("imageHeight", height).put("capturedAtUptimeMs",capturedAt);
             return new CapturedImage(image, digest, fullWidth, fullHeight);
         } finally {
             if (scaled != null && scaled != software) scaled.recycle();
@@ -794,6 +830,7 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
     private <T>T onNodeWorker(PhoneAccessibilityService service,RunControl control,long revision,MainCall<T> call)throws Exception {
         try{return reads.call(()->guard(service,control,revision),call::run);}
         catch(PhoneReadGate.Unavailable unavailable){
+            if(unavailable.getCause() instanceof InterruptedException)Thread.currentThread().interrupt();
             if("native_effect_unknown".equals(unavailable.code))
                 throw new PhoneFailure("dispatch_unknown","手机请求等待超时，已入场动作可能未知；旧引用已停用，不会自动重试。");
             throw new PhoneFailure(unavailable.code,"页面读取尚未完成，未派发动作；请等原读取结束后重新观察。");

@@ -610,7 +610,7 @@ public final class DisplayModule implements EngineModule {
                 if(run.released||!matches(run.state,originalSession,originalDisplay))throw new SecurityException("原后台帧返回时会话已变化");
                 dev.pocketengine.displayhelper.DisplayGeometry incoming=dev.pocketengine.displayhelper.DisplayGeometry.read(frame);
                 requireGeometryAdvance(run.state,incoming);
-                if(incoming!=null){JSONObject next=new JSONObject(run.state.toString());incoming.writeTo(next,frame.optBoolean("geometryReady"));run.state=next.put("captureAvailable",!frame.optBoolean("empty"));}
+                if(incoming!=null){JSONObject next=new JSONObject(run.state.toString());incoming.writeTo(next,frame.optBoolean("geometryReady"));run.state=next.put("captureAvailable",!frame.optBoolean("empty")&&!frame.optBoolean("framePending"));}
             }
             return;
         }
@@ -620,7 +620,7 @@ public final class DisplayModule implements EngineModule {
         requireGeometryAdvance(state,incoming);
         if(incoming!=null){
             JSONObject next=new JSONObject(state.toString());incoming.writeTo(next,frame.optBoolean("geometryReady"));
-            state=next.put("captureAvailable",!frame.optBoolean("empty"));
+            state=next.put("captureAvailable",!frame.optBoolean("empty")&&!frame.optBoolean("framePending"));
         }
     }
     private static void requireGeometryAdvance(JSONObject previous,dev.pocketengine.displayhelper.DisplayGeometry incoming) {
@@ -723,7 +723,7 @@ public final class DisplayModule implements EngineModule {
     }
     static void requireOk(JSONObject result){if(!result.optBoolean("ok"))throw new IllegalStateException(result.optString("message","后台请求未成功"));}
     private static JSONObject publicState(JSONObject input)throws Exception {
-        JSONObject out=new JSONObject();for(String key:new String[]{"sessionActive","displayId","sessionId","width","height","density","sdk","requestedPackageName","backgroundOnly","focusIsolationRequested","displayFlagsConfirmed","recoveryRequired","frameMetadataOnly","imeIsolation","imeReason","inputInjectionAvailable","captureAvailable","geometryTracking","geometryReady","geometryGeneration","rotation","captureWidth","captureHeight"})if(input.has(key))out.put(key,input.get(key));return out;
+        JSONObject out=new JSONObject();for(String key:new String[]{"sessionActive","displayId","sessionId","width","height","density","sdk","requestedPackageName","backgroundOnly","focusIsolationRequested","displayFlagsConfirmed","recoveryRequired","frameMetadataOnly","frameTimestampSupported","imeIsolation","imeReason","imePolicy","displayKeepAlive","displayKeepAliveReason","inputInjectionAvailable","captureAvailable","geometryTracking","geometryReady","geometryGeneration","rotation","captureWidth","captureHeight"})if(input.has(key))out.put(key,input.get(key));return out;
     }
     private static String randomHex(int count){byte[] data=new byte[count];new SecureRandom().nextBytes(data);StringBuilder result=new StringBuilder();for(byte b:data)result.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return result.toString();}
 }

@@ -116,7 +116,11 @@ public final class PhoneTreeCapabilityPort implements CapabilityPort {
                 JSONObject record=null;if("advance".equals(args.optString("action"))){JSONArray operations=tasks.get(binding.taskId,false).getJSONArray("operations");for(int i=0;i<operations.length();i++){JSONObject op=operations.getJSONObject(i);if(args.getString("afterOperationId").equals(op.optString("operationId"))){if(record!=null||!binding.runId.equals(op.optString("runId"))||!NativeTreeScrollPort.TOOL.equals(op.optString("tool")))return PhoneTreeExtract.unavailable("scroll_receipt_not_in_original_run");record=new JSONObject(op.toString());}}if(record==null)return PhoneTreeExtract.unavailable("scroll_receipt_not_in_original_run");}
                 result=phone.collectTree(args,record,control);
             }else result=PhoneTreeQuery.QUERY.equals(name)?phone.queryTree(args,control):phone.conditionWait(args,control);
-            check(name,control);return result;
+            try{check(name,control);}catch(Exception stopped){
+                if(result==null)throw stopped;
+                throw new CapabilityPort.ReceiptAfterStop(control,result,stopped);
+            }
+            return result;
         }catch(SecurityException stale){if(NativeTreeScrollPort.TOOL.equals(name)||PhoneExtensionTools.NAMES.contains(name)&&PhoneExtensionTools.writes(name))throw stale;return PhoneTreeExtract.unavailable("original_tree_or_scroll_authority_changed");}
     }
     private JSONObject prepareSequence(JSONObject args,String parentOperation,RunControl control)throws Exception {

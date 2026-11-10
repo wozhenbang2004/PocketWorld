@@ -9,7 +9,7 @@ import org.json.JSONObject;
 /** Read-only post-action evidence. It cannot dispatch, retry, prepare an operation or declare business success. */
 public final class PhoneActionEffects {
     public static final int MAX_SAMPLES=16;
-    public static final long WAIT_MS=2200,STABLE_MS=250,POLL_MS=200;
+    public static final long WAIT_MS=2200,STABLE_MS=250,EVENT_QUIET_MS=400,POLL_MS=200;
     private PhoneActionEffects() { }
     @FunctionalInterface public interface Reader {JSONObject read()throws Exception;}
     public interface Timing {long now();void pause(long milliseconds,RunControl control,long revision,PhoneUiSignals feed,PhoneUiSignals.Stamp stamp,Set<Integer> windows)throws Exception;}
@@ -31,19 +31,55 @@ public final class PhoneActionEffects {
     }
     public static JSONObject unavailableReadback(String reason)throws Exception{return new JSONObject().put("status","unavailable").put("reason",reason).put("exactMatch",JSONObject.NULL).put("text",JSONObject.NULL).put("verifiedBusinessSuccess",false);}
     public static Result await(JSONObject before,Integer targetWindow,Reader reader,RunControl control,long revision,PhoneUiSignals feed,Timing timing)throws Exception {
-        Set<Integer> windows=targetWindow==null?Set.of():Set.of(targetWindow);long started=timing.now(),deadline=started+WAIT_MS,stableSince=-1;String previous=null;JSONObject latest=null;int samples=0;String state="deadline";
+        long started=timing.now(),deadline=started+WAIT_MS,stableSince=-1,lastSignalChange=started;
+        String previous=null;JSONObject latest=null;int samples=0;String state="deadline";
         if(!readable(before))return new Result(summary("before_tree_unavailable",0,0,false,null),null);
-        try{signature(before,targetWindow);}catch(Exception malformed){return new Result(summary("before_window_path_unavailable",0,0,false,null),null);}
+        final String beforeSignature;Set<Integer> windows=new LinkedHashSet<>();
+        try{
+            beforeSignature=signature(before,targetWindow);
+            if(targetWindow!=null)windows.add(targetWindow);
+            else for(JSONObject node:nodes(before,null).values())windows.add(node.getInt("windowId"));
+        }catch(Exception malformed){return new Result(summary("before_window_path_unavailable",0,0,false,null),null);}
+        PhoneUiSignals.Stamp stamp=feed==null?null:feed.snapshot(windows);
+        boolean sawChange=false;
         while(samples<MAX_SAMPLES){control.check();if(control.isPaused()||control.pauseRevision()!=revision){state="paused_or_changed";break;}
+            if(stamp!=null&&stamp.closed){state="service_signal_closed";break;}
             latest=reader.read();samples++;if(!readable(latest)){state="observation_unavailable";break;}
-            String signature=signature(latest,targetWindow);long now=timing.now();if(signature.equals(previous)){if(stableSince>=0&&now-stableSince>=STABLE_MS){state="stable_observed_scope";break;}}else{previous=signature;stableSince=now;}
-            if(now>=deadline)break;PhoneUiSignals.Stamp stamp=feed==null?null:feed.snapshot(windows);if(stamp!=null&&stamp.closed){state="service_signal_closed";break;}
+            // A dialog or destination window created by this action is part of its result.
+            // Continue listening to that window instead of only the old target's events.
+            JSONArray visibleWindows=latest.optJSONArray("windows");
+            if(visibleWindows!=null)for(int i=0;i<visibleWindows.length()&&i<32;i++){
+                JSONObject window=visibleWindows.optJSONObject(i);if(window!=null&&window.optInt("windowId",-1)>=0)windows.add(window.getInt("windowId"));
+            }
+            String signature=signature(latest,targetWindow);long now=timing.now();
+            if(feed!=null){
+                PhoneUiSignals.Stamp current=feed.snapshot(windows);
+                // Signal clocks can have a different origin. Measure quiet time on this wait's
+                // monotonic clock after seeing a generation change, including changes during a read.
+                if(!current.same(stamp))lastSignalChange=now;
+                stamp=current;
+                if(stamp.closed){state="service_signal_closed";break;}
+            }
+            boolean changed=!signature.equals(beforeSignature);sawChange|=changed;
+            if(latest.optBoolean("changedDuringRead"))stableSince=-1;
+            else if(!signature.equals(previous)||stableSince<0)stableSince=now;
+            previous=signature;
+            boolean stable=stableSince>=0&&now-stableSince>=STABLE_MS;
+            boolean quiet=feed==null||now-lastSignalChange>=EVENT_QUIET_MS;
+            // An unchanged quiet tree may only mean the app has not reacted yet. Keep the
+            // bounded observation window; never turn this absence of evidence into a retry.
+            if(changed&&stable&&quiet){state="stable_observed_scope";break;}
+            if(now>=deadline)break;
             timing.pause(Math.min(POLL_MS,deadline-now),control,revision,feed,stamp,windows);
             long minimumWake=Math.min(deadline,now+150);if(timing.now()<minimumWake)timing.pause(minimumWake-timing.now(),control,revision,null,null,windows);
         }
         if(samples>=MAX_SAMPLES&&state.equals("deadline")&&timing.now()<deadline)state="sample_limit";
         JSONObject difference=latest!=null&&readable(latest)?diff(before,latest,targetWindow):null;
-        JSONObject evidence=summary(state,samples,Math.max(0,timing.now()-started),feed!=null,difference).put("scope",targetWindow==null?"selected_display":"target_window_and_window_stack");if(targetWindow!=null)evidence.put("windowId",targetWindow);
+        long finished=timing.now();
+        JSONObject evidence=summary(state,samples,Math.max(0,finished-started),feed!=null,difference)
+                .put("changeObservedDuringWait",sawChange).put("treeStableForMs",stableSince<0?0:Math.max(0,finished-stableSince))
+                .put("eventQuietForMs",feed==null?JSONObject.NULL:Math.max(0,finished-lastSignalChange))
+                .put("scope",targetWindow==null?"selected_display":"target_window_and_window_stack");if(targetWindow!=null)evidence.put("windowId",targetWindow);
         return new Result(evidence,latest);
     }
     private static JSONObject summary(String state,int samples,long elapsed,boolean events,JSONObject diff)throws Exception {

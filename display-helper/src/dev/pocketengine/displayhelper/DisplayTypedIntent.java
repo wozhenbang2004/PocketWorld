@@ -23,7 +23,7 @@ import org.json.JSONObject;
 
 /** A closed, typed Intent protocol. No raw Intent URI, arbitrary component/extra or shell command. */
 final class DisplayTypedIntent {
-    interface Gate {void check()throws Exception;void requireAppFree(String packageName,int userId)throws Exception;}
+    interface Gate {void check()throws Exception;void requireAppFree(String packageName,int userId)throws Exception;default void entering()throws Exception{}}
     static JSONObject dispatch(Context context,int display,JSONObject request,Gate gate)throws Exception {
         if(display<=0)throw new SecurityException("background_display_required");
         Intent intent=requireTarget(context,request);JSONObject target=request.getJSONObject("target");
@@ -32,6 +32,7 @@ final class DisplayTypedIntent {
         // The request travelled through the original admitted IPC call. Recheck native
         // install/profile/routing facts after that gate, immediately before entry.
         intent=requireTarget(context,request);gate.check();
+        gate.entering();
         try{context.startActivity(intent,ActivityOptions.makeBasic().setLaunchDisplayId(display).toBundle());}
         catch(android.content.ActivityNotFoundException|SecurityException refused){return new JSONObject().put("ok",false).put("accepted",false).put("code","background_intent_platform_refused").put("automaticFallback",false);}
         catch(Exception unknown){return new JSONObject().put("ok",false).put("accepted",JSONObject.NULL).put("code","background_intent_outcome_unknown").put("automaticReplayAllowed",false).put("requiresReconciliation",true).put("verifiedBusinessSuccess",false);}

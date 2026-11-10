@@ -1257,7 +1257,21 @@ public final class AgentRunner {
                             if(routes!=null)routes.disableLearning();
                             break;
                         }
-                        latest = observe(taskId, config, control, toolSink,planning,turnPlanning);
+                        try {
+                            latest = observe(taskId, config, control, toolSink,planning,turnPlanning);
+                        } catch (Exception postReadFailure) {
+                            // The current action's real receipt is already committed. Only the
+                            // remaining model calls are known not to have entered dispatch.
+                            if (index+1<calls.length()) try {
+                                appendUnissuedReplies(history,calls,index+1,failure("batch_tail_not_dispatched","原动作回执已保留；动作后观察未完成，本批后续调用尚未派发，没有重放。").put("accepted",false).put("nativeDispatched",false).put("effectStatus","not_dispatched"),config);
+                                checkpoint(taskId,journal,history,steps,latest,config,toolSink,contextBudget,repeatedTools);
+                            } catch (Exception settlementFailure) {
+                                postReadFailure.addSuppressed(settlementFailure);
+                                evidence.put("batchTailCheckpointFailed",true);
+                            }
+                            // Preserve cancellation, planning and condition-wait classification.
+                            throw postReadFailure;
+                        }
                         evidence = latest;
                         observed = true;
                         if (!latest.optBoolean("ok", true)) {

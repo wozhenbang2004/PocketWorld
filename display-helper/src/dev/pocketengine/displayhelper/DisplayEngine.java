@@ -10,6 +10,7 @@ import android.graphics.PixelFormat;
 import android.graphics.Point;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
+import android.hardware.input.InputManager;
 import android.media.Image;
 import android.media.ImageReader;
 import android.os.Build;
@@ -64,10 +65,13 @@ final class DisplayEngine {
     private int requiredDisplayFlags;
     private String packageName="";
     private String imeState="unknown",imeReason="display_not_created";
+    private final DisplayKeepAlive keepAlive=new DisplayKeepAlive();
     private final AtomicLong frameGeneration=new AtomicLong();
     private final Object frameLock=new Object();
     private volatile byte[] latestPixels;
     private volatile long frameAt;
+    private volatile long frameTimestampNanos;
+    private volatile long frameNotBeforeNanos;
     private long lastFrameConsumed;
     private volatile boolean framePending;
     private ImageReader scheduledFrameReader;
@@ -127,8 +131,11 @@ final class DisplayEngine {
         else if("intent".equals(cmd)||"launch_copy".equals(cmd))result=onMain(()->{
             valid(current);if(activeTouch!=null||gesturePaths.active())throw new Failure("gesture_in_flight","原触摸尚未结束，未打开应用。",false);
             DisplayTypedIntent.Gate gate=new DisplayTypedIntent.Gate(){public void check()throws Exception{valid(current);dispatchDeadline();}
+                public void entering(){markFrameBoundary();}
                 public void requireAppFree(String pkg,int user)throws Exception{if(!DisplayAppOwnership.free(taskTopology.read(),pkg,user,current.display()))throw new Failure("app_user_busy_or_unknown","同一App资料的完整占用不能排除，未抢占其他屏幕。",false);}};
+            long previousBoundary=frameNotBeforeNanos;
             JSONObject answer="intent".equals(cmd)?DisplayTypedIntent.dispatch(context,current.display(),request,gate):DisplayAppCopies.launch(context,current.display(),request,gate);
+            if(Boolean.FALSE.equals(answer.opt("accepted")))frameNotBeforeNanos=previousBoundary;
             if(Boolean.TRUE.equals(answer.opt("accepted")))packageName=request.has("target")?request.getJSONObject("target").getString("packageName"):request.getString("packageName");return answer;
         });
         else if("gesture".equals(cmd)){
@@ -164,7 +171,11 @@ final class DisplayEngine {
                         result.add(new OwnerTaskTransfer.Task(id,at,user,((ComponentName)base).flattenToString(),token,(int[])type.getField("childTaskIds").get(root)));
                     }return result;
                 }
-                public void move(int root,int target)throws Exception {valid(current);dispatchDeadline();Class.forName("android.app.IActivityTaskManager").getMethod("moveRootTaskToDisplay",int.class,int.class).invoke(service(),root,target);}
+                public void move(int root,int target)throws Exception {
+                    valid(current);dispatchDeadline();
+                    Method move=Class.forName("android.app.IActivityTaskManager").getMethod("moveRootTaskToDisplay",int.class,int.class);
+                    Object manager=service();markFrameBoundary();move.invoke(manager,root,target);
+                }
             },current.display());
             try{
                 if(command.equals("owner_handoff_prepare"))return ownerTransfer.prepare(SystemClock.uptimeMillis());
@@ -184,7 +195,9 @@ final class DisplayEngine {
                     .put("displayId",lease==null?JSONObject.NULL:lease.display()).put("sessionId",lease==null?JSONObject.NULL:lease.session())
                     .put("width",width).put("height",height).put("density",density).put("requestedPackageName",packageName)
                     .put("focusIsolationRequested",lease!=null).put("displayFlagsConfirmed",lease!=null&&displayIsValid(lease))
-                    .put("imeIsolation",imeState).put("imeReason",imeReason).put("inputInjectionAvailable",inject!=null&&setDisplay!=null).put("captureAvailable",lease==null?JSONObject.NULL:latestPixels!=null).put("deviceVerified",false);
+                    .put("imeIsolation",imeState).put("imeReason",imeReason).put("imePolicy","local_display")
+                    .put("displayKeepAlive",keepAlive.state()).put("displayKeepAliveReason",keepAlive.reason())
+                    .put("frameTimestampSupported",true).put("inputInjectionAvailable",inject!=null&&setDisplay!=null).put("captureAvailable",lease==null?JSONObject.NULL:frameReady(0)).put("deviceVerified",false);
             return geometry==null?result:geometry.writeTo(result,geometryReady);
         });
     }
@@ -201,6 +214,7 @@ final class DisplayEngine {
                 prepareInput();
                 int flags=DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC|DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY
                         |flag("VIRTUAL_DISPLAY_FLAG_TRUSTED")|flag("VIRTUAL_DISPLAY_FLAG_SUPPORTS_TOUCH")
+                        |flag("VIRTUAL_DISPLAY_FLAG_OWN_DISPLAY_GROUP")
                         |flag("VIRTUAL_DISPLAY_FLAG_ROTATES_WITH_CONTENT")
                         |flag("VIRTUAL_DISPLAY_FLAG_DESTROY_CONTENT_ON_REMOVAL")|flag("VIRTUAL_DISPLAY_FLAG_OWN_FOCUS")|flag("VIRTUAL_DISPLAY_FLAG_STEAL_TOP_FOCUS_DISABLED");
                 reader=ImageReader.newInstance(w,h,PixelFormat.RGBA_8888,3);
@@ -213,10 +227,13 @@ final class DisplayEngine {
                 if(!display.getDisplay().isValid()||(display.getDisplay().getFlags()&requiredDisplayFlags)!=requiredDisplayFlags||!destroysContentOnRemoval(display.getDisplay()))throw new Failure("focus_isolation_unavailable","系统未提供所需的后台隔离，不启动后台任务。",false);
                 configureIme(display.getDisplay().getDisplayId());
                 lease=new LeasePolicy(UUID.randomUUID().toString(),display.getDisplay().getDisplayId(),SystemClock.uptimeMillis(),600_000);
+                keepAlive.configure(display.getDisplay());
                 synchronizeGeometry(lease,false);
                 displayManager.registerDisplayListener(geometryListener,main);geometryListenerRegistered=true;
                 return geometry.writeTo(ok().put("sessionId",lease.session()).put("displayId",lease.display())
-                        .put("frameMetadataOnly",true).put("backgroundOnly",true).put("focusIsolationRequested",true).put("displayFlagsConfirmed",true).put("imeIsolation",imeState).put("imeReason",imeReason).put("inputInjectionAvailable",inject!=null&&setDisplay!=null).put("captureAvailable",JSONObject.NULL).put("deviceVerified",false),geometryReady);
+                        .put("frameMetadataOnly",true).put("frameTimestampSupported",true).put("backgroundOnly",true).put("focusIsolationRequested",true).put("displayFlagsConfirmed",true).put("imeIsolation",imeState).put("imeReason",imeReason).put("imePolicy","local_display")
+                        .put("displayKeepAlive",keepAlive.state()).put("displayKeepAliveReason",keepAlive.reason())
+                        .put("inputInjectionAvailable",inject!=null&&setDisplay!=null).put("captureAvailable",JSONObject.NULL).put("deviceVerified",false),geometryReady);
             }catch(Exception failure){release();throw failure;}
         });
     }
@@ -231,7 +248,7 @@ final class DisplayEngine {
         long generation=previous==null||changedEvent||geometryReady||!actual.sameConfiguration(previous)
                 ?geometryGeneration.incrementAndGet():previous.generation;
         DisplayGeometry next=actual.withGeneration(generation);
-        synchronized(frameLock){geometry=next;geometryReady=false;latestPixels=null;frameAt=0;framePending=true;frameGeneration.incrementAndGet();}
+        synchronized(frameLock){geometry=next;geometryReady=false;latestPixels=null;frameAt=0;frameTimestampNanos=0;frameNotBeforeNanos=System.nanoTime();framePending=true;frameGeneration.incrementAndGet();}
         main.removeCallbacks(trailingFrame);scheduledFrameReader=null;lastFrameConsumed=0;
         cancelForGeometry(expected);
         if(activeTouch!=null||gesturePaths.active())throw new Failure("geometry_unavailable","旋转后原触摸取消尚未确认，请核对或释放原副屏；不会继续输入。",false);
@@ -274,7 +291,7 @@ final class DisplayEngine {
         synchronized(frameLock){
             if(geometryReady&&geometry!=null)geometry=geometry.withGeneration(geometryGeneration.incrementAndGet());
             if(geometryReady||latestPixels!=null)frameGeneration.incrementAndGet();
-            geometryReady=false;latestPixels=null;frameAt=0;framePending=true;
+            geometryReady=false;latestPixels=null;frameAt=0;frameTimestampNanos=0;framePending=true;
         }
         LeasePolicy original=lease;if(original!=null)cancelForGeometry(original);
     }
@@ -282,7 +299,7 @@ final class DisplayEngine {
         return onMain(()->{
             DisplayGeometry current=synchronizeGeometry(original,false);
             long expectedFrame=request.optLong("frameGeneration",-1);
-            if(framePending||expectedFrame<0||expectedFrame!=frameGeneration.get())throw new Failure("stale_observation","后台画面已变化，请重新观察。",false);
+            if(!frameReady(0)||expectedFrame<0||expectedFrame!=frameGeneration.get())throw new Failure("stale_observation","后台画面已变化，请重新观察。",false);
             if(request.has("geometryGeneration")&&request.optLong("geometryGeneration",-1)!=current.generation)
                 throw new Failure("stale_observation","后台屏已旋转或改变尺寸，请重新观察。",false);
             return current;
@@ -315,9 +332,11 @@ final class DisplayEngine {
             return;
         }
         main.removeCallbacks(trailingFrame);scheduledFrameReader=null;
-        boolean acquired=false,published=false;
+        boolean acquired=false,published=false,olderFrame=false;
         try(Image image=source.acquireLatestImage()){
             if(image==null)return;acquired=true;lastFrameConsumed=now;
+            long timestamp=image.getTimestamp();
+            if(timestamp<=0)return;
             var crop=image.getCropRect();
             if(crop==null||crop.left!=0||crop.top!=0||crop.right!=capturedGeometry.captureWidth
                     ||crop.bottom!=capturedGeometry.captureHeight||captureTransform(image)!=0)return;
@@ -327,12 +346,15 @@ final class DisplayEngine {
             if(!capturedGeometry.sameConfiguration(readOwnedGeometry(capturedGeometry.generation))){synchronizeGeometry(lease,false);return;}
             synchronized(frameLock){
                 if(source!=reader||!geometryReady||!capturedGeometry.sameObservation(geometry))return;
-                if(!java.util.Arrays.equals(latestPixels,pixels)){latestPixels=pixels;frameGeneration.incrementAndGet();}frameAt=SystemClock.uptimeMillis();published=true;
+                if(timestamp<frameTimestampNanos){olderFrame=true;return;}
+                boolean afterAction=frameTimestampNanos<=frameNotBeforeNanos&&timestamp>frameNotBeforeNanos;
+                if(afterAction||!java.util.Arrays.equals(latestPixels,pixels)){latestPixels=pixels;frameGeneration.incrementAndGet();}
+                frameTimestampNanos=timestamp;frameAt=TimeUnit.NANOSECONDS.toMillis(timestamp);published=true;
             }
         }catch(Exception ignored){acquired=true;}
         finally{
             if(source==reader)synchronized(frameLock){
-                if(acquired&&!published){latestPixels=null;frameAt=0;frameGeneration.incrementAndGet();}
+                if(acquired&&!published&&!olderFrame){latestPixels=null;frameAt=0;frameTimestampNanos=0;frameGeneration.incrementAndGet();}
                 framePending=!geometryReady;
             }
         }
@@ -340,24 +362,21 @@ final class DisplayEngine {
     private JSONObject frame(LeasePolicy expected,JSONObject request)throws Exception {
         if(request.has("includeImage")&&!(request.opt("includeImage") instanceof Boolean))
             throw new Failure("invalid_arguments","includeImage 必须是布尔值。",false);
+        long after=frameBoundary(request);
         DisplayGeometry original=onMain(()->synchronizeGeometry(expected,false));
         if(!request.optBoolean("includeImage",true)){
             valid(expected);
-            JSONObject result;
-            synchronized(frameLock){
-                if(!geometryReady||!original.sameObservation(geometry))throw new Failure("stale_observation","后台几何在读取期间变化，请重新观察。",false);
-                result=original.writeTo(ok().put("displayId",expected.display()).put("sessionId",expected.session())
-                        .put("frameGeneration",frameGeneration.get()).put("capturedAt",frameAt).put("framePending",framePending)
-                        .put("empty",latestPixels==null).put("imageIncluded",false).put("frameMetadataOnly",true).put("requestedPackageName",packageName),true);
-            }
+            JSONObject result=frameMetadata(expected,original,after);
             requireGeometry(expected,original);return result;
         }
         long until=SystemClock.uptimeMillis()+3000;
-        while((latestPixels==null||framePending)&&SystemClock.uptimeMillis()<until){valid(expected);Thread.sleep(40);}
-        requireGeometry(expected,original);byte[] pixels;long frame,captured;
+        while(!frameReady(after)&&SystemClock.uptimeMillis()<until){valid(expected);Thread.sleep(40);}
+        requireGeometry(expected,original);byte[] pixels;long frame,captured,timestamp;
         synchronized(frameLock){
             if(latestPixels==null&&geometryReady&&original.sameObservation(geometry))throw new Failure("frame_unavailable","后台屏暂未产生画面，请先打开应用再观察。",false);
-            if(framePending||!geometryReady||!original.sameObservation(geometry))throw new Failure("frame_pending","后台画面正在更新，请重新观察。",false);pixels=latestPixels;frame=frameGeneration.get();captured=frameAt;
+            if(!geometryReady||!original.sameObservation(geometry))throw new Failure("frame_pending","后台画面正在更新，请重新观察。",false);
+            if(!frameReady(after))return frameMetadata(expected,original,after).put("imageUnavailableReason","waiting_for_post_action_frame");
+            pixels=latestPixels;frame=frameGeneration.get();captured=frameAt;timestamp=frameTimestampNanos;
         }
         if(pixels==null)throw new Failure("frame_unavailable","后台屏暂未产生画面，请先打开应用再观察。",false);
         
@@ -365,11 +384,39 @@ final class DisplayEngine {
         try{
             bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(pixels));ByteArrayOutputStream jpeg=new ByteArrayOutputStream();
             if(!bitmap.compress(Bitmap.CompressFormat.JPEG,75,jpeg))throw new Failure("frame_encoding","后台屏图片编码失败。",false);
-            requireGeometry(expected,original);return original.writeTo(ok().put("displayId",expected.display()).put("sessionId",expected.session())
+            requireGeometry(expected,original);
+            synchronized(frameLock){
+                if(timestamp<=Math.max(after,frameNotBeforeNanos))return frameMetadata(expected,original,after).put("framePending",true).put("imageUnavailableReason","action_during_capture");
+                return original.writeTo(ok().put("displayId",expected.display()).put("sessionId",expected.session())
                     .put("imageBase64",Base64.encodeToString(jpeg.toByteArray(),Base64.NO_WRAP)).put("imageMimeType","image/jpeg")
-                    .put("frameGeneration",frame).put("capturedAt",captured).put("framePending",false).put("empty",false)
+                    .put("frameGeneration",frame).put("capturedAt",captured).put("frameTimestampNanos",timestamp)
+                    .put("frameTimestampSupported",true).put("framePending",false).put("empty",false)
                     .put("imageIncluded",true).put("requestedPackageName",packageName),true);
+            }
         }finally{bitmap.recycle();}
+    }
+    private JSONObject frameMetadata(LeasePolicy expected,DisplayGeometry original,long after)throws Exception {
+        synchronized(frameLock){
+            if(!geometryReady||!original.sameObservation(geometry))throw new Failure("stale_observation","后台几何在读取期间变化，请重新观察。",false);
+            return original.writeTo(ok().put("displayId",expected.display()).put("sessionId",expected.session())
+                    .put("frameGeneration",frameGeneration.get()).put("capturedAt",frameAt).put("frameTimestampNanos",frameTimestampNanos)
+                    .put("frameTimestampSupported",true).put("framePending",!frameReady(after))
+                    .put("empty",latestPixels==null).put("imageIncluded",false).put("frameMetadataOnly",true).put("requestedPackageName",packageName),true);
+        }
+    }
+    private void markFrameBoundary(){synchronized(frameLock){frameNotBeforeNanos=System.nanoTime();}}
+    private boolean frameReady(long after){
+        synchronized(frameLock){return geometryReady&&!framePending&&latestPixels!=null
+                &&frameTimestampNanos>Math.max(after,frameNotBeforeNanos);}
+    }
+    private static long frameBoundary(JSONObject request)throws Failure {
+        if(!request.has("afterTimestampNanos"))return 0;
+        Object raw=request.opt("afterTimestampNanos");
+        try{
+            if(!(raw instanceof Number))throw new ArithmeticException();
+            long value=new java.math.BigDecimal(raw.toString()).longValueExact();
+            if(value<0)throw new ArithmeticException();return value;
+        }catch(NumberFormatException|ArithmeticException invalid){throw new Failure("invalid_arguments","画面源时间戳必须是非负整数。",false);}
     }
     /** Latest compositor pixels only. Unlike observation, this read never waits for a new frame
      * or synchronizes/recreates geometry, cancels a gesture, changes a lease, or visits display zero. */
@@ -384,14 +431,14 @@ final class DisplayEngine {
             valid(expected);DisplayGeometry value=geometry;
             return value!=null&&geometryReady&&value.sameConfiguration(readOwnedGeometry(value.generation))?value:null;
         });
-        byte[] pixels;long generation,captured;DisplayGeometry metadata;
+        byte[] pixels;long generation,captured,timestamp;DisplayGeometry metadata;
         synchronized(frameLock){
-            generation=frameGeneration.get();captured=frameAt;metadata=geometry;
-            pixels=original!=null&&geometryReady&&original.sameObservation(metadata)?latestPixels:null;
+            generation=frameGeneration.get();captured=frameAt;timestamp=frameTimestampNanos;metadata=geometry;
+            pixels=original!=null&&frameReady(0)&&original.sameObservation(metadata)?latestPixels:null;
         }
         if(pixels==null)return previewMetadata(metadata,generation,captured,"pending");
         if(generation==after){
-            if(!previewGeometryCurrent(expected,original))return previewPending(expected);
+            if(!previewFrameCurrent(expected,original,timestamp))return previewPending(expected);
             return previewMetadata(original,generation,captured,"unchanged");
         }
         int[] size=previewSize(original);
@@ -401,15 +448,15 @@ final class DisplayEngine {
             preview=Bitmap.createScaledBitmap(source,size[0],size[1],true);
             ByteArrayOutputStream jpeg=new ByteArrayOutputStream();
             if(!preview.compress(Bitmap.CompressFormat.JPEG,65,jpeg))throw new Failure("frame_encoding","后台屏预览编码失败。",false);
-            if(!previewGeometryCurrent(expected,original))return previewPending(expected);
+            if(!previewFrameCurrent(expected,original,timestamp))return previewPending(expected);
             return previewMetadata(original,generation,captured,"ready").put("imageBase64",Base64.encodeToString(jpeg.toByteArray(),Base64.NO_WRAP));
         }finally{if(preview!=null&&preview!=source)preview.recycle();source.recycle();}
     }
-    private boolean previewGeometryCurrent(LeasePolicy expected,DisplayGeometry original)throws Exception {
+    private boolean previewFrameCurrent(LeasePolicy expected,DisplayGeometry original,long timestamp)throws Exception {
         return onMain(()->{
             valid(expected);
             if(!geometryReady||!original.sameObservation(geometry)||!original.sameConfiguration(readOwnedGeometry(original.generation)))return false;
-            return true;
+            synchronized(frameLock){return timestamp>frameNotBeforeNanos;}
         });
     }
     private JSONObject previewPending(LeasePolicy expected)throws Exception {
@@ -439,9 +486,14 @@ final class DisplayEngine {
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_MULTIPLE_TASK);
         onMain(()->{
             valid(expected);
+            if(activeTouch!=null||gesturePaths.active())throw new Failure("gesture_in_flight","原触摸尚未结束，未打开应用。",false);
             android.app.ActivityOptions options=android.app.ActivityOptions.makeBasic().setLaunchDisplayId(expected.display());
             if(!DisplayAppOwnership.free(taskTopology.read(),pkg,context.getApplicationInfo().uid/100000,expected.display()))throw new Failure("app_user_busy_or_unknown","同一App资料的完整任务占用不能排除，未移动或打开应用。",false);
-            dispatchDeadline();context.startActivity(intent,options.toBundle());packageName=pkg;return null;
+            dispatchDeadline();long previousBoundary=frameNotBeforeNanos;markFrameBoundary();
+            try{context.startActivity(intent,options.toBundle());}
+            catch(android.content.ActivityNotFoundException|SecurityException refused){frameNotBeforeNanos=previousBoundary;throw refused;}
+            catch(Exception unknown){throw new Failure("action_unknown","应用启动回执未确认，请核对原副屏，不会自动重复启动。",true);}
+            packageName=pkg;return null;
         });
         return receipt().put("packageName",pkg);
     }
@@ -538,11 +590,17 @@ final class DisplayEngine {
         catch(Exception unconfirmed){return "cancel_unconfirmed";}
     }
     private JSONObject key(LeasePolicy expected,JSONObject request)throws Exception {
-        DisplayGeometry original=inputGeometry(expected,request);
         int code=request.optInt("keyCode",-1);
         if(code!=KeyEvent.KEYCODE_BACK)throw new Failure("unsupported_key","后台模式仅支持定向返回键，桌面操作不受支持。",false);
+        DisplayGeometry original=onMain(()->{
+            DisplayGeometry current=synchronizeGeometry(expected,false);
+            if(activeTouch!=null||gesturePaths.active())throw new Failure("gesture_in_flight","原触摸尚未结束，未派发返回键。",false);
+            if(request.has("geometryGeneration")&&request.optLong("geometryGeneration",-1)!=current.generation)
+                throw new Failure("stale_observation","后台屏已旋转或改变尺寸，请重新观察。",false);
+            return current;
+        });
         valid(expected);long time=SystemClock.uptimeMillis();
-        inject(expected,new KeyEvent(time,time,KeyEvent.ACTION_DOWN,code,0),request.getLong("frameGeneration"),null,original);
+        inject(expected,new KeyEvent(time,time,KeyEvent.ACTION_DOWN,code,0),-1,null,original);
         // A key UP has no coordinates and only ends this already admitted original key.
         try{inject(expected,new KeyEvent(time,SystemClock.uptimeMillis(),KeyEvent.ACTION_UP,code,0),-1);return receipt();}
         catch(Exception failure){throw new Failure("action_unknown","返回键已部分派发，请重新观察。",true);}
@@ -554,9 +612,9 @@ final class DisplayEngine {
     @SuppressLint("BlockedPrivateApi")
     private void prepareInput()throws Exception {
         requirePrivilegedEnvironment();
-        Class<?> type=Class.forName("android.hardware.input.InputManagerGlobal");
-        inputManager=type.getDeclaredMethod("getInstance").invoke(null);
-        inject=type.getDeclaredMethod("injectInputEvent",InputEvent.class,int.class);
+        inputManager=context.getSystemService(InputManager.class);
+        if(inputManager==null)throw new Failure("input_unavailable","系统未提供副屏输入服务。",false);
+        inject=InputManager.class.getMethod("injectInputEvent",InputEvent.class,int.class);
         setDisplay=InputEvent.class.getDeclaredMethod("setDisplayId",int.class);
     }
     // Focus uses actual Display flags; destroy-on-removal is a separate remove mode.
@@ -593,7 +651,7 @@ final class DisplayEngine {
         onMain(()->{valid(expected);
             if(!cleanup&&originalGeometry!=null)requireGeometry(expected,originalGeometry);
             if(touch!=null&&(activeTouch!=touch||lease!=touch.lease||display!=touch.display))throw new Failure("invalid_lease","原触摸或独立显示已变化，未继续输入。",false);
-            if(expectedFrame>=0&&(framePending||expectedFrame!=frameGeneration.get()))throw new Failure("stale_observation","后台画面在派发前已变化，请重新观察。",false);
+            if(expectedFrame>=0&&(!frameReady(0)||expectedFrame!=frameGeneration.get()))throw new Failure("stale_observation","后台画面在派发前已变化，请重新观察。",false);
             // Only these private single-pointer constructors cross queues. The worker may
             // recycle its original after an interrupted wait; the admitted main callback owns its copy.
             MotionEvent owned=queuedTouch?MotionEvent.obtain(downTime,eventTime,nativeAction,touchX,touchY,metaState):null;
@@ -603,6 +661,7 @@ final class DisplayEngine {
                 final Object result;
                 dispatchDeadline();
                 if(touch!=null&&touchAction==MotionEvent.ACTION_DOWN)touch.downAttempted=true;
+                markFrameBoundary();
                 try{result=inject.invoke(inputManager,actual,2);}
                 catch(java.lang.reflect.InvocationTargetException unknown){throw new Failure("action_unknown","系统输入回执异常，结果尚未确认，请核对后继续。",true);}
                 // WAIT_FOR_FINISHED false also represents Android TIMED_OUT, not proof of no input.
@@ -630,14 +689,28 @@ final class DisplayEngine {
                 &&(display.getDisplay().getFlags()&requiredDisplayFlags)==requiredDisplayFlags
                 &&destroysContentOnRemoval(display.getDisplay());
     }
-    void tick(){LeasePolicy current=lease;if(current!=null)try{onMain(()->{if(lease==current){if(current.expired(SystemClock.uptimeMillis())||!displayIsValid(current))release();else try{synchronizeGeometry(current,false);}catch(Exception unavailable){blockGeometry();}}return null;});}catch(Exception ignored){}}
+    void tick(){
+        LeasePolicy current=lease;
+        if(current==null)return;
+        try{onMain(()->{
+            if(lease!=current)return null;
+            if(current.expired(SystemClock.uptimeMillis())||!displayIsValid(current)){release();return null;}
+            try{
+                synchronizeGeometry(current,false);
+                android.app.KeyguardManager keyguard=context.getSystemService(android.app.KeyguardManager.class);
+                if(keyguard!=null&&!keyguard.isDeviceLocked()&&!keyguard.isKeyguardLocked())keepAlive.tick(display.getDisplay());
+            }catch(Exception unavailable){blockGeometry();}
+            return null;
+        });}catch(Exception ignored){}
+    }
     void close(){closed=true;try{onMain(()->{release();return null;});}catch(Exception ignored){ /* Process teardown also revokes its display token. */ }}
     private void release(){
         if(geometryListenerRegistered){displayManager.unregisterDisplayListener(geometryListener);geometryListenerRegistered=false;}
         LeasePolicy cancelling=lease;if(cancelling!=null)gesturePaths.cancelLease(cancelling,event->{inject(cancelling,event,-1);return true;});
         ownerTransfer=null;taskTopology.clear();
+        keepAlive.clear();
         main.removeCallbacks(trailingFrame);scheduledFrameReader=null;framePending=false;lastFrameConsumed=0;
-        LeasePolicy old=lease;activeTouch=null;if(old!=null)old.release();latestPixels=null;frameAt=0;packageName="";requiredDisplayFlags=0;geometry=null;geometryReady=false;
+        LeasePolicy old=lease;activeTouch=null;if(old!=null)old.release();latestPixels=null;frameAt=0;frameTimestampNanos=0;frameNotBeforeNanos=0;packageName="";requiredDisplayFlags=0;geometry=null;geometryReady=false;
         if(display!=null){display.release();display=null;}if(reader!=null){reader.close();reader=null;}
         // An unconfirmed CANCEL stays occupied until physical display teardown succeeds.
         // Keep the stopped original lease on a teardown failure so cleanup can be reconciled.
