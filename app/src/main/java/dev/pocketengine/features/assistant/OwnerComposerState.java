@@ -154,6 +154,13 @@ public final class OwnerComposerState {
         if(!drafts.containsKey(p.draftKey))throw new IllegalStateException("原草稿不可核对，未移除待核对身份");
         pending.remove(client);revision=increment(revision);return true;
     }
+    /** A direct native send result proves persistence was never attempted. Retain all editor bytes. */
+    public synchronized boolean rejectBeforeAdmission(String client,String conversation)throws Exception {
+        Pending p=pending.get(client);if(p==null)return false;
+        if(!p.conversationId.equals(conversation))throw new SecurityException("未发送回执不属于原输入对话");
+        if(!drafts.containsKey(p.draftKey))throw new IllegalStateException("原草稿不可核对，未移除待核对身份");
+        pending.remove(client);revision=increment(revision);return true;
+    }
     /** Caller supplies an already validated native ACK, never an LLM/tool self-reported success. */
     public synchronized Acknowledgement acknowledge(String client,String conversation)throws Exception {
         Pending p=pending.get(client);if(p==null)return new Acknowledgement(false,false,false,activeKey,activeKey);

@@ -923,10 +923,48 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             }
         }
     }
-    fun queryChatSubmission(client:String) { if(client.isNotBlank()) feature("assistant","getSubmission",JSONObject().put("clientMessageId",client)) }
+    // In-process native proof only; restored pending entries still require their original receipt.
+    private val notSentChatReceipts=mutableMapOf<String,JSONObject>()
+    private val clearingNotSentChat=mutableSetOf<String>()
+    fun queryChatSubmission(client:String) {
+        if(notSentChatReceipts.containsKey(client)){clearNotSentChat(client);return}
+        if(client.isNotBlank())feature("assistant","getSubmission",JSONObject().put("clientMessageId",client))
+    }
+    private fun clearNotSentChat(client:String) {
+        val receipt=notSentChatReceipts[client]?:return
+        val model=ownerComposer?:return
+        val original=model.pending(client)?:run{notSentChatReceipts.remove(client);return}
+        if(!clearingNotSentChat.add(client))return
+        io.execute {
+            val cleanup=runCatching{app.conversationModels().rejectSubmission(client,original.conversationId)}
+            main.post {
+                clearingNotSentChat.remove(client)
+                if(closed)return@post
+                if(submittingChatClient==client)submittingChatClient=null
+                state=state.copy(chatSubmitting=submittingChatClient!=null)
+                cleanup.fold({
+                    try {
+                        if(model.rejectBeforeAdmission(client,original.conversationId)){publishComposer();scheduleComposerSave()}
+                        notSentChatReceipts.remove(client)
+                        state=state.copy(chatReceipts=state.chatReceipts-client,notice=null,
+                            error=receipt.optString("error","消息未发送")+"；草稿已保留，修正后可以重新发送。")
+                    } catch(error:Exception){state=state.copy(error=message(error))}
+                },{failure->state=state.copy(error="本条确定未发送，草稿仍保留；清理模型回执失败，可再次查询或点击发送重试清理："+message(failure))})
+            }
+        }
+    }
     private fun receiveChatAcknowledgement(result:JSONObject,expectedClient:String?,query:Boolean=false) {
         val client=result.optString("clientMessageId");if(client.isBlank()||expectedClient!=null&&client!=expectedClient)return
         val original=ownerComposer?.pending(client)
+        if(result.optString("status")=="not_sent") {
+            if(query||expectedClient!=client||original==null||result.opt("notAdmitted")!=true||
+                result.opt("reconciliationRequired")!=false||result.optString("reason")!="before_message_commit"||
+                result.optString("conversationId")!=original.conversationId||
+                !ChatInputRules.receiptMatchesOriginal(result,original.conversationId,original.originalTarget()))return
+            notSentChatReceipts[client]=JSONObject(result.toString())
+            clearNotSentChat(client)
+            return
+        }
         if(original!=null&&!ChatInputRules.receiptMatchesOriginal(result,original.conversationId,original.originalTarget())){
             val own=submittingChatClient==client;if(own)submittingChatClient=null
             state=state.copy(chatSubmitting=if(own)false else state.chatSubmitting,notice="原输入回执的任务或对话不一致；草稿与原身份仍保留，请查询原回执")

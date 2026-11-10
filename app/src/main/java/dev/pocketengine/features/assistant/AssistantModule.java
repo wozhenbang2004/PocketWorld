@@ -452,6 +452,8 @@ public final class AssistantModule implements EngineModule {
                 if(!fingerprint.equals(prior.getString("requestFingerprint"))||!requested.isEmpty()&&!requested.equals(prior.getString("conversationId")))throw new IllegalArgumentException("同一个clientMessageId不能提交不同内容");
                 return copy(prior.getJSONObject("ack")).put("duplicate",true);
             }
+            boolean messageWriteAttempted=false;
+            try {
             var existing=liveTurns.get(requested);
             DevelopmentTurn retained=existing==null?developmentTurns.get(requested):null;
             boolean resuming=retained!=null,starting=existing==null&&!resuming;
@@ -486,6 +488,7 @@ public final class AssistantModule implements EngineModule {
                 AttachmentRequestProjection projection=attachmentProjection;
                 if(selections.length()>0&&projection==null)throw new IllegalStateException("真实附件请求投影尚未安装");
                 final JSONArray immutableRefs=projection==null?new JSONArray():projection.select(selections,config,live);
+                messageWriteAttempted=true;
                 saved=commit(()->{
                     JSONObject conversation;
                     if(requested.isEmpty()){
@@ -545,6 +548,17 @@ public final class AssistantModule implements EngineModule {
             }else context.emit(id(),copy(ack).put("phase","queued"));
             RuntimeDiagnostics.event("message_admission",starting?"accepted":"queued","INPUT_RECORDED",live,null);
             return ack;
+            }catch(Exception failure){
+                // Once persistence is attempted, retain the existing query-only reconciliation path.
+                // Before that boundary this invocation cannot have admitted or dispatched a message.
+                if(messageWriteAttempted||projectStart!=null)throw failure;
+                RuntimeDiagnostics.event("message_admission","not_sent","INPUT_NOT_PERSISTED",null,failure);
+                JSONObject rejected=new JSONObject().put("status","not_sent").put("clientMessageId",client)
+                        .put("conversationId",requested).put("notAdmitted",true).put("reconciliationRequired",false)
+                        .put("reason","before_message_commit").put("error",failure.toString());
+                for(String key:new String[]{"taskId","runId","epoch"})if(input.has(key))rejected.put(key,input.get(key));
+                return rejected;
+            }
         }
     }
     private void resourceState(JSONObject binding,RunControl original,String state)throws Exception{
