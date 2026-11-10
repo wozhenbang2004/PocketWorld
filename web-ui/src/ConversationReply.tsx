@@ -1,7 +1,7 @@
 import {useLayoutEffect,useRef} from 'react';
 import {IconChevronRight} from './icons';
 import {Button} from './forms-library';
-import {ThinkingLoader,ProgressCircle} from './library';
+import {ReplyPhaseStatus,type ReplyActivityState} from './library/adapted/reply-activity';
 import {useDocumentVisible} from './library/core';
 import {MotionDisclosure} from './library/journey-motion';
 import {messageReplyContext,type WorkIdentity} from './conversation-work';
@@ -43,7 +43,19 @@ export function useReplyRows<M extends SavedReply>(conversation:string,messages:
  return rows;
 }
 
-type ReplyPhase={label:string;thinking:boolean;busy:boolean};
+type ReplyPhase={label:string;state:ReplyActivityState};
+
+/** Stream completion is a provisional model result, never a saved answer or a
+ * task success. Failed attempts may arrive before the first text delta. */
+export function replyActivityPhase(draft:ConversationStream|null,resourceState:string|undefined,activity:string):ReplyPhase{
+ const hasText=!!draft?.text.trim();
+ if(draft?.failed)return {state:'error',label:hasText?'生成中断 · 草稿已保留':'生成中断 · 尚未生成回复'};
+ if(resourceState==='queued')return {state:'waiting',label:'等待执行'};
+ if(resourceState==='retained')return {state:'waiting',label:'等待补充'};
+ if(resourceState==='stopping')return {state:'stopping',label:'正在停止'};
+ if(draft?.turnEnded)return {state:'settling',label:hasText?`回复草稿 · ${activity||'正在整理结果'}`:`本轮生成已结束 · ${activity||'等待后续处理'}`};
+ return hasText?{state:'replying',label:'正在回复'}:{state:'thinking',label:activity||'正在处理这次回复'};
+}
 /** Only the closing label is retained; actions and activity stop immediately. */
 export function ReplyActivity({phase,onProcess}:{phase:ReplyPhase|null;onProcess?:()=>void}){
  const previous=useRef<ReplyPhase|null>(null);if(phase)previous.current=phase;
@@ -51,8 +63,8 @@ export function ReplyActivity({phase,onProcess}:{phase:ReplyPhase|null;onProcess
  if(!shown)return null;
  return <MotionDisclosure open={!!phase} className="pw-reply-phase">
   <header className="pw-stream-status">
-   <span className="pw-stream-activity" role={phase?'status':undefined}>
-    {shown.thinking?<ThinkingLoader phase={shown.label} done={!phase} doneLabel={shown.label}/>:<>{phase?.busy&&<ProgressCircle isIndeterminate size="sm" aria-label="正在回复"/>}<span>{shown.label}</span></>}
+   <span className="pw-stream-activity">
+    <ReplyPhaseStatus label={shown.label} state={shown.state} active={!!phase}/>
    </span>
    <Button variant="ghost" size="small" aria-label="查看当前回复的执行过程" disabled={!phase||!onProcess} onClick={phase?onProcess:undefined} hidden={!onProcess&&!!phase}>查看过程<IconChevronRight size={15} aria-hidden="true"/></Button>
   </header>

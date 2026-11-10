@@ -1,0 +1,14 @@
+/* Affect UI 37b91fa thinking-loader-clean, plain/sm geometry and eight rays.
+ * The source's label and width choreography is controlled in reply-activity.tsx.
+ * No shimmer, automatic phase timer or success check belongs to this draft row. */
+.pw-reply-phase .pw-stream-activity {min-width:0;max-width:100%;flex:1 1 140px;}
+.pw-reply-status {display:inline-flex;align-items:center;gap:6px;min-width:0;max-width:100%;color:inherit;font:inherit;line-height:20px;vertical-align:middle;}
+.pw-reply-status-icon {position:relative;display:grid;place-items:center;flex:none;width:14px;height:14px;}
+.pw-reply-status-icon svg {display:block;width:100%;height:100%;overflow:visible;}
+.pw-reply-status-spinner line {stroke:currentColor;stroke-width:1.1;stroke-linecap:round;opacity:.55;}
+.pw-reply-status[data-motion] .pw-reply-status-spinner line {animation:pw-reply-status-ray 800ms linear infinite;}
+.pw-reply-status-text {position:relative;display:block;min-width:0;height:20px;overflow:hidden;}
+.pw-reply-status-label {position:absolute;top:0;inset-inline-start:0;max-width:100%;line-height:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.pw-reply-status-outgoing {pointer-events:none;}
+@keyframes pw-reply-status-ray {from{opacity:1}to{opacity:.2}}
+@media(prefers-reduced-motion:reduce){.pw-reply-status,.pw-reply-status *{animation:none!important;transition:none!important;}.pw-reply-status-outgoing{display:none;}}

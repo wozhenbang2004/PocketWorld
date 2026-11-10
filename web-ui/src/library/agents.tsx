@@ -11,7 +11,7 @@ const stateOf=(a:any)=>String(a?.status??a?.state??'unknown');
 function avatarState(a:any){const s=stateOf(a);return ({running:'working',working:'working',done:'complete',completed:'complete',success:'complete',failed:'error',waiting_approval:'waiting',awaiting_owner_approval:'waiting',returned:'idle',unknown:'waiting'} as Record<string,string>)[s]||s}
 function TreeChildren({open,root=false,children,onLayout}:{open:boolean;root?:boolean;children:ReactNode;onLayout:()=>void}){
  useLayoutEffect(onLayout,[open,onLayout]);
- return <MotionDisclosure open={open}><div role="group" className={'cb-tree-children '+(root?'cb-tree-level1':'')}>{children}</div></MotionDisclosure>;
+ return <MotionDisclosure open={open} resize={false}><div role="group" className={'cb-tree-children '+(root?'cb-tree-level1':'')}>{children}</div></MotionDisclosure>;
 }
 export function AgentTree({data,title,onAction,className=''}:DataPanelProps){
  const roots=Array.isArray(data)?data:data?.root?[data.root]:data?.tree?[data.tree]:Array.isArray(data?.roots)?data.roots:records(data);

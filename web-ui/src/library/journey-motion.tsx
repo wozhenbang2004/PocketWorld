@@ -1,12 +1,45 @@
-// Business wiring for the retained Affect FLIP / disclosure and Reaction Bar
-// item-arrival patterns. The current data and DOM remain the only authority.
+// Affect / Reaction Bar collection geometry combined with Ovio's retained
+// spring-generator -> WAAPI handoff. Data and current DOM remain authoritative.
 import {useEffect,useLayoutEffect,useRef,type HTMLAttributes,type ReactNode,type RefObject} from 'react';
+import {calcGeneratorDuration,spring} from 'motion';
 import {useMotionAllowed} from './core';
-import {cssEase,motionDuration,motionEase} from './motion-tokens';
+import {cssEase,motionDuration,motionEase,motionTransition} from './motion-tokens';
+export {MotionDisclosure} from './motion-disclosure';
 
 type ItemBox={node:HTMLElement;left:number;top:number;width:number;height:number};
 type CollectionSnapshot={identity:string;enabled:boolean;items:Map<string,ItemBox>};
 type CollectionOptions={selector?:string;active?:boolean;enter?:boolean;layout?:boolean};
+type CollectionRun={animation:Animation;frames:Keyframe[];x?:ReturnType<typeof spring>;y?:ReturnType<typeof spring>};
+type VisibleOffset={x:number;y:number;vx:number;vy:number;opacity?:string};
+
+/** getComputedTiming().progress includes the effect easing. These locally
+ * authored frames use equal offsets and linear interpolation between frames,
+ * so they remain sampleable even after React replaces a cross-group DOM node. */
+function detachedFrame(run:CollectionRun){
+ const progress=run.animation.effect?.getComputedTiming().progress??0;
+ const position=Math.max(0,Math.min(1,progress))*(run.frames.length-1);
+ const first=run.frames[Math.floor(position)],last=run.frames[Math.ceil(position)],mix=position-Math.floor(position);
+ const from=String(first.translate||'0 0').split(/\s+/),to=String(last.translate||'0 0').split(/\s+/);
+ const coordinate=(axis:number)=>{const a=parseFloat(from[axis])||0,b=parseFloat(to[axis])||0;return a+(b-a)*mix};
+ return {x:coordinate(0),y:coordinate(1),opacity:first.opacity===undefined?undefined:String(Number(first.opacity)+(Number(last.opacity)-Number(first.opacity))*mix)};
+}
+
+/** Ovio use-liquid.ts samples physical generators for compositor playback and
+ * carries their instantaneous velocity into the next target. Keep that mechanism
+ * here, without Ovio's capsule squash. Individual translate leaves the source
+ * button's press/scale transform in its own control. */
+function collectionMove(x:number,y:number,vx:number,vy:number){
+ const options={...motionTransition.layout,restDelta:.3,restSpeed:8};
+ const gx=spring({...options,keyframes:[x,0],velocity:vx});
+ const gy=spring({...options,keyframes:[y,0],velocity:vy});
+ const duration=Math.min(650,Math.max(calcGeneratorDuration(gx),calcGeneratorDuration(gy)));
+ const step=1000/60,count=Math.max(2,Math.ceil(duration/step)+1);
+ const frames:Keyframe[]=Array.from({length:count},(_,index)=>{
+  const last=index===count-1,time=Math.min(duration,index*step);
+  return {translate:`${last?0:gx.next(time).value}px ${last?0:gy.next(time).value}px`};
+ });
+ return {frames,duration:(count-1)*step,x:gx,y:gy};
+}
 
 /** Stable business IDs connect groups as well as neighbors. Owner, query, page
  * window and history changes belong in identity; use active=false while reading
@@ -14,10 +47,10 @@ type CollectionOptions={selector?:string;active?:boolean;enter?:boolean;layout?:
 export function useCollectionMotion(root:RefObject<HTMLElement|null>,identity:string,revision:string,{selector='[data-motion-key]',active=true,enter=true,layout=true}:CollectionOptions={}){
  const allowed=useMotionAllowed();
  const previous=useRef<CollectionSnapshot|null>(null);
- const playing=useRef(new Map<HTMLElement,Animation>());
+ const playing=useRef(new Map<HTMLElement,CollectionRun>());
  const current=useRef({identity,enabled:active&&allowed,selector});
  current.current={identity,enabled:active&&allowed,selector};
- const cancel=()=>{playing.current.forEach(animation=>animation.cancel());playing.current.clear()};
+ const cancel=()=>{playing.current.forEach(run=>run.animation.cancel());playing.current.clear()};
  const measure=()=>{
   const container=root.current,items=new Map<string,ItemBox>();
   if(!container)return items;
@@ -37,52 +70,59 @@ export function useCollectionMotion(root:RefObject<HTMLElement|null>,identity:st
   if(!container){cancel();previous.current=null;return}
   // Read the visible translation before cancelling an interrupted FLIP. Its
   // recorded natural box supplies the old position even after React relayout.
-  const offsets=new Map<HTMLElement,{x:number;y:number;opacity?:string}>();
-  playing.current.forEach((animation,node)=>{
-   if(animation.playState!=='running'||!node.isConnected)return;
-   const style=getComputedStyle(node),transform=style.transform;
-   const opacity=(animation.effect as KeyframeEffect|null)?.getKeyframes().some(frame=>frame.opacity!==undefined)?style.opacity:undefined;
-   let x=0,y=0;
-   if(transform&&transform!=='none'){
-    const matrix=new DOMMatrixReadOnly(transform);x=matrix.m41;y=matrix.m42;
-   }
-   offsets.set(node,{x,y,opacity});
+  const offsets=new Map<HTMLElement,VisibleOffset>();
+  playing.current.forEach((run,node)=>{
+   const {animation}=run;
+   if(animation.playState!=='running')return;
+   const time=typeof animation.currentTime==='number'?animation.currentTime:0;
+   const style=node.isConnected?getComputedStyle(node):null;
+   const sampled=style?null:detachedFrame(run);
+   const opacity=style?(run.frames[0].opacity===undefined?undefined:style.opacity):sampled?.opacity;
+   const translate=style?.translate.split(/\s+/);
+   // Moving to another real group can replace this DOM node. Its retained
+   // generator still describes the same object's frame and momentum.
+   const x=translate?parseFloat(translate[0])||0:sampled?.x||0;
+   const y=translate?parseFloat(translate[1])||0:sampled?.y||0;
+   offsets.set(node,{x,y,vx:run.x?.velocity?.(time)??0,vy:run.y?.velocity?.(time)??0,opacity});
   });
   cancel();
   const items=measure();
   previous.current={identity,enabled:active&&allowed,items};
-  if(!active||!allowed||!before?.enabled||before.identity!==identity)return;
+  if(!active||!allowed||!before?.enabled||before.identity!==identity||container.closest('[data-pw-surface-enter]'))return;
   const bounds=container.getBoundingClientRect();
   const viewportTop=Math.max(0,bounds.top),viewportBottom=Math.min(window.innerHeight,bounds.bottom);
-  const finish=(node:HTMLElement,animation:Animation)=>{
-   if(playing.current.get(node)!==animation)return;
-   playing.current.delete(node);animation.cancel();
+  const finish=(node:HTMLElement,run:CollectionRun)=>{
+   if(playing.current.get(node)!==run)return;
+   playing.current.delete(node);run.animation.cancel();
    if(!playing.current.size)remember();
   };
   items.forEach((last,id)=>{
    const rect=last.node.getBoundingClientRect();
    if(rect.bottom<viewportTop||rect.top>viewportBottom)return;
    const first=before.items.get(id);
-   let frames:Keyframe[]|null=null,duration:number=motionDuration.layout;
+   let frames:Keyframe[]|null=null,duration:number=motionDuration.enter;
+   let generators:Pick<CollectionRun,'x'|'y'>={},physical=false;
    if(first&&layout){
     const offset=offsets.get(first.node);
     const x=first.left+(offset?.x||0)-last.left,y=first.top+(offset?.y||0)-last.top;
     // Paging and distant/offscreen objects do not fly through the viewport.
-    if((Math.abs(x)>.5||Math.abs(y)>.5)&&Math.abs(x)<Math.max(80,bounds.width)&&Math.abs(y)<Math.min(420,window.innerHeight*.7)){
-     frames=[{transform:`translate(${x}px,${y}px)`},{transform:'translate(0,0)'}];
+    if((Math.abs(x)>.5||Math.abs(y)>.5||Math.abs(offset?.vx||0)>8||Math.abs(offset?.vy||0)>8)&&Math.abs(x)<Math.max(80,bounds.width)&&Math.abs(y)<Math.min(420,window.innerHeight*.7)){
+     const move=collectionMove(x,y,offset?.vx||0,offset?.vy||0);
+     frames=move.frames;duration=move.duration;generators={x:move.x,y:move.y};physical=true;
     }
    }else if(!first&&enter){
-    frames=[{opacity:0,transform:'translateY(5px)'},{opacity:1,transform:'translateY(0)'}];duration=motionDuration.enter;
+    frames=[{opacity:0,translate:'0 5px'},{opacity:1,translate:'0 0'}];
    }
    const opacity=first?offsets.get(first.node)?.opacity:undefined;
    if(opacity!==undefined&&Number(opacity)<1){
     if(!frames){frames=[{},{}];duration=motionDuration.enter}
-    frames[0].opacity=opacity;frames[1].opacity=1;
+    frames.forEach((frame,index)=>{const progress=Math.min(1,duration*index/(frames!.length-1)/motionDuration.feedback);frame.opacity=Number(opacity)+(1-Number(opacity))*progress});
    }
    if(!frames)return;
-   const animation=last.node.animate(frames,{duration,easing:cssEase(motionEase.settle)});
-   animation.id='pw-collection-change';playing.current.set(last.node,animation);
-   animation.onfinish=()=>finish(last.node,animation);
+   const animation=last.node.animate(frames,{duration,easing:physical?'linear':cssEase(motionEase.settle)});
+   const run:CollectionRun={animation,frames,...generators};
+   animation.id='pw-collection-change';playing.current.set(last.node,run);
+   animation.onfinish=()=>finish(last.node,run);
   });
  },[root,identity,revision,selector,active,allowed,enter,layout]);
  useEffect(()=>{
@@ -97,15 +137,6 @@ export function useCollectionMotion(root:RefObject<HTMLElement|null>,identity:st
   observer.observe(container);
   return()=>{document.removeEventListener('scroll',scroll,true);window.removeEventListener('resize',settle);observer.disconnect();cancel()};
  },[root,identity,selector,active]);
-}
-
-/** Affect-style measured disclosure using one mounted content tree. Inert and
- * accessibility state change immediately, independently of the visual exit. */
-export function MotionDisclosure({open,children,className='',...props}:HTMLAttributes<HTMLDivElement>&{open:boolean;children:ReactNode}){
- const allowed=useMotionAllowed();
- return <div {...props} className={`pw-motion-disclosure ${className}`} data-open={open} data-motion-instant={!allowed||undefined} aria-hidden={!open} inert={!open}>
-  <div className="pw-motion-disclosure-content">{children}</div>
- </div>;
 }
 
 /** Local receipts stay in their original place; only the current content fades.

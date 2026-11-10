@@ -1,15 +1,39 @@
-/* Affect Files/Folder keeps its type illustration and object-level menu.
- * Selected state and versions now follow the same real file as list/tree. */
+/* Affect Files/Folder v3 (0e69029), screens/workspace.tsx: retain the file
+ * illustration, hierarchy and grid/list styles on one path-keyed object.
+ * Motion owns projection; the inner text/controls use position correction. */
 .pw-files { min-width: 0; width: 100%; max-width: 100%; }
 .pw-files .pw-files-toolbar > :first-child { flex: 1; width: 0; min-width: 0; }
-.pw-redesign .pw-files .au-sc-file-card { position: relative; min-width: 0; border-radius: 16px; overflow: hidden; border: 1px solid transparent; background: var(--pw-surface,#fff); color: var(--pw-ink,#242424); text-align: left; }
-.pw-files .au-sc-file-card > strong,.pw-files .au-sc-file-card > small { display: block; margin-inline: 12px; max-width: calc(100% - 24px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pw-files .au-sc-file-card > :last-child { margin-bottom: 10px; }
+.pw-redesign .pw-files .au-sc-file-card { position: relative; min-width: 0; overflow: visible; border: 1px solid transparent; background: var(--pw-surface,#fff); color: var(--pw-ink,#242424); text-align: left; }
+.pw-files .pw-file-copy { display: block; min-width: 0; }
+.pw-files .pw-file-copy > b,.pw-files .pw-file-copy > small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pw-files .pw-file-copy > [hidden] { display: none; }
+.pw-files .pw-file-menu { display: flex; flex: none; align-items: center; }
 .pw-redesign .pw-files .au-sc-file-card[aria-current="true"] { border-color: var(--pw-copy,#555); background: var(--pw-selected,#efefef); }
-.pw-files .au-sc-file-card:focus-visible { outline: 2px solid var(--pw-ink,#222); outline-offset: 3px; }
+.pw-files .pw-file-open:focus-visible { outline: 2px solid var(--pw-ink,#222); outline-offset: 3px; }
 .pw-files .au-sc-file-card .pw-file-card-version { margin-top: 4px; font-size: 10px; color: var(--pw-muted,#777); }
 .pw-files .pw-files-toolbar > .react-aria-SearchField { flex: 1; min-width: 0; }
 .pw-redesign .pw-files .pw-view-buttons button { color: var(--pw-ink,#242424); background: transparent; }
 .pw-redesign .pw-files .pw-view-buttons button[aria-pressed="true"] { background: var(--pw-selected,#efefef); }
 .pw-files .au-sc-file-grid { grid-template-columns: repeat(auto-fill,minmax(140px,1fr)); }
+.pw-redesign .pw-files[data-view="Grid"] .pw-file-object { display: block; margin: 0; padding: 0; border: 1px solid transparent; background: var(--pw-surface,#fff); }
+.pw-redesign .pw-files[data-view="Grid"] .pw-file-object[aria-current="true"] { border-color: var(--pw-copy,#555); background: var(--pw-selected,#efefef); }
+.pw-redesign .pw-files[data-view="Grid"] .pw-file-open { display: flex; flex-direction: column; align-items: stretch; gap: 0; width: 100%; min-height: 0; padding: 0; border-radius: inherit; }
+.pw-redesign .pw-files[data-view="Grid"] .pw-file-open:hover { background: transparent; }
+.pw-files[data-view="Grid"] .au-sc-file-preview { flex: none; width: 100%; }
+.pw-redesign .pw-files[data-view="Grid"] .pw-file-copy { padding: 9px 12px 10px; }
+.pw-redesign .pw-files[data-view="Grid"] .pw-file-copy > b { font-size: 13px; line-height: 20px; font-weight: 500; }
+.pw-redesign .pw-files[data-view="Grid"] .pw-file-copy > small { margin-top: 2px; font-size: 12px; line-height: 18px; color: var(--pw-muted,#777); }
+.pw-redesign .pw-files[data-view="Grid"] .pw-file-copy > .pw-file-card-version { margin-top: 4px; font-size: 10px; line-height: 16px; }
+.pw-files[data-view="Grid"] .pw-file-menu { position: absolute; top: 8px; right: 8px; }
+/* Preserve the source hover lift under the same Motion transform owner. */
+.pw-files .au-sc-file-card,.pw-files .au-sc-file-card:hover { transform: none; transition: none; }
+/* A baseline/scroll/pause must be readable in this frame, before projection's
+ * next layout pass finishes its current animation at the real DOM geometry. */
+.pw-files[data-motion-instant] [data-file-layout] { transform: none !important; }
+.pw-files[data-motion-instant] .pw-file-object { border-radius: 12px !important; }
+.pw-files[data-motion-instant][data-view="Grid"] .pw-file-object { border-radius: 16px !important; box-shadow: 0 2px 10px #00000005 !important; }
+@container(max-width:650px) {
+ .pw-redesign .pw-files[data-view="Grid"] .pw-file-copy > b { font-size: 11px; }
+ .pw-redesign .pw-files[data-view="Grid"] .pw-file-copy > small:not(.pw-file-card-version) { font-size: 10px; }
+}
 @media (max-width: 380px) { .pw-files .au-sc-file-grid { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; } }

@@ -36,23 +36,32 @@ export function useMotionLifecycle(){
 export function useSurfaceEnter(root:RefObject<HTMLElement|null>,identity:string,{selector=':scope > .pw-route-workspace, :scope > .pw-secondary',depth=0,active=true}:{selector?:string;depth?:number;active?:boolean}={}){
  const allowed=useMotionAllowed();
  const previous=useRef({identity,depth});const playing=useRef<Animation|null>(null);
+ const cancel=()=>{
+  const animation=playing.current;if(!animation)return;
+  const target=animation.effect instanceof KeyframeEffect?animation.effect.target:null;
+  if(target instanceof HTMLElement)target.removeAttribute('data-pw-surface-enter');
+  animation.cancel();playing.current=null;
+ };
  useLayoutEffect(()=>{
   const before=previous.current;previous.current={identity,depth};
-  if(!allowed||!active){playing.current?.cancel();playing.current=null;return}
+  if(!allowed||!active){cancel();return}
   if(before.identity===identity)return;
   const surface=selector?root.current?.querySelector<HTMLElement>(selector):root.current;
-  if(!surface){playing.current?.cancel();playing.current=null;return}
+  if(!surface){cancel();return}
   // A rapid second navigation starts at the visible frame of this surface.
   // Keep one live workspace: no outgoing editor, media or host subscription.
   const interrupted=playing.current?.playState==='running'&&playing.current.effect instanceof KeyframeEffect&&playing.current.effect.target===surface;
   const current=interrupted?getComputedStyle(surface):null;
   const start:Keyframe=current?{opacity:current.opacity,transform:current.transform}:{opacity:.65,transform:depth===before.depth?'translateY(6px)':`translateX(${depth<before.depth?-12:12}px)`};
-  playing.current?.cancel();
+  cancel();
+  // This current surface owns its entrance. Child collections/messages can
+  // present immediately instead of adding a second translation to the same fact.
+  surface.setAttribute('data-pw-surface-enter','');
   const animation=surface.animate([start,{opacity:1,transform:'translate(0,0)'}],arrivalTiming);
   animation.id='pw-surface-enter';playing.current=animation;
-  animation.onfinish=()=>{if(playing.current===animation){playing.current=null;animation.cancel()}};
+  animation.onfinish=()=>{if(playing.current===animation)cancel()};
  },[root,identity,selector,depth,active,allowed]);
- useEffect(()=>()=>playing.current?.cancel(),[]);
+ useEffect(()=>cancel,[]);
 }
 
 /** New tail IDs enter once; streaming updates, restored history and returning to
@@ -114,7 +123,7 @@ export function useMessageArrivals(root:RefObject<HTMLElement|null>,conversation
   if(arrivals.size)requested.current=null;
   const viewport=root.current?.getBoundingClientRect();
   root.current?.querySelectorAll<HTMLElement>('[data-message-id]').forEach(node=>{
-   if(!arrivals.has(node.dataset.messageId||'')||node.dataset.replyContinuing==='true')return;
+   if(!arrivals.has(node.dataset.messageId||'')||node.dataset.replyContinuing==='true'||node.closest('[data-pw-surface-enter]'))return;
    const bounds=node.getBoundingClientRect();
    if(viewport&&(bounds.bottom<viewport.top||bounds.top>viewport.bottom))return;
    const animation=node.animate(arrivalFrames,arrivalTiming);animation.id='pw-message-enter';playing.current.add(animation);

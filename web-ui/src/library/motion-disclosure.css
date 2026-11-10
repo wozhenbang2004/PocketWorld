@@ -1,0 +1,4 @@
+/* Affect MessageText's clipping outer / natural inner, without text clones. */
+.pw-motion-disclosure { display: block; min-width: 0; overflow: hidden; }
+.pw-motion-disclosure-content { display: flow-root; min-width: 0; }
+.pw-motion-disclosure[data-open="true"]:not([data-moving]) { overflow: visible; }

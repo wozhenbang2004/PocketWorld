@@ -1,5 +1,52 @@
 # PocketWorld 动效覆盖深化研究与实施记录 · 2026-11-10
 
+## 第二次深化 · 从覆盖推进到受力、形态与阶段接续
+
+用户原话：“我觉得还可以再深入地再做一下这些动画系统，好吧？你可以再挖掘一下我们审美库里面的一些东西，好吗？”来源为本聊天最新消息，精确消息ID与发送时刻不可取得；本批记录于北京时间2026-11-10 21:08。承接“去！全部交给你我相信你”的实施授权。PW-M1–PW-M14 的已发布结果继续保留，本轮不是重做覆盖或重新批准现有组件。
+
+本轮从主线 `b39b846809795ecf004939039e2ccb8000637da7` 开始。重新读取新版动效系统全部14章、控件状态相关段落与当前审美库主档，进一步追到具体的内容尺寸、原码受力和阶段切换。主档显示新系统正文已经保存，完整 Skill 合并仍 pending；没有把安装副本缺项当作库中不存在，也没有改写全局 Skill。
+
+### 本轮改变选择的新证据
+
+- 现有 `MotionDisclosure` 是 grid `0fr ↔ 1fr`；虽然已覆盖开关与中断清理，保持展开时的内容增高没有显式尺寸目标。批准的 Affect 官方 `message-actions-clean.tsx::MessageText` 用 `ResizeObserver` 测内部自然高度，再驱动外层高度；本轮取该测量关系，保持一棵真实内容树。
+- 现有文件列表与网格分别挂载不同 DOM；FLIP 只连接坐标，尺寸、文字与焦点没有同一对象的完整接续。沿批准 Affect Files/Folder 结构，把同一路径的真实控件保持为同一节点，再使用现有 Motion 的布局投影及文字位置校正。
+- 现有集合 FLIP 的中断保留位置，但重新使用固定时间曲线不继承速度。Ovio 固定源码的 `use-liquid.ts` 已明确采用“当前值 + generator.velocity → 新 spring → WAAPI 帧”的机制；本轮把该机制有界组合到已有 Affect/Reaction Bar 集合让位，位置和按钮自身按压各有属性归属。
+- Josh 已批准 comfort 版的受力是轻微横张、纵向压扁；当前薄材质适配主要横纵一起缩小。本轮恢复这个关系，并用现有物理弹簧接续快速释放/再按，不恢复被否定的配色或厚重外观。
+- 当前回复阶段在文字出现时卸载 ThinkingLoader，换成另一套图标/裸文字；原生 `ModelStreamPreview` 允许 `text=""` 直接收到 failed，而当前 `!hasText` 优先级会继续显示思考。沿批准 Affect Thinking Loader 的固定图标槽、标签接力及宽度测量，接入真实阶段并纠正该映射。
+- 精确依赖链为入口 `motion 12.42.2 → framer-motion 12.43.0 → motion-dom 12.43.0 → motion-utils 12.39.0`。当前官网新增内容不能代替锁文件；本地 spring 生成器对 duration/bounce 分支会清零初速度，本轮使用明确 stiffness/damping/mass，不把 visualDuration 当成速度接续保证，也不升级依赖。
+
+### 采用合同与停止边界
+
+| ID | 本轮正式落点 | 必须保留的可观察要求 |
+| --- | --- | --- |
+| PW-M15 实际尺寸披露 | Affect MessageText 测量关系；单树 MotionDisclosure | 展开中增高、收拢、快速反向接当前高度；内部文字不缩放；已完全展开的嵌套父层交还自然布局；关闭立即 inert，减少动态和隐藏直接合法落定。流式正文、活编辑器和原生预览不被新高度动画接管。 |
+| PW-M16 文件形态连续 | Affect Files/Folder + 当前 Motion layout | 同 path 列表/网格使用同一真实控件；外形/位置可追踪，文字/图标不随壳拉伸；选择、菜单、焦点保留；首次、查询或项目切换不重演整列。 |
+| PW-M17 集合运动接续与归属 | Affect/Reaction Bar FLIP + Ovio 物理生成器 | 同 ID 连续换位接可见位置和当前速度；不跨屏飞行、不复制活内容、不用 stagger 累积等待；列表位置与按钮受力分开，滚动/resize/关闭直接交还当前布局。父表面进场时不叠加另一层子项位移。 |
+| PW-M18 输入受力与释放 | Josh comfort；Ramotion Fluid Slider 已有适配 | 按压微横张纵压、释放/再按接续；命中目标与业务触发即时；取消/隐藏/失焦清理。滑块指针松开时回收数值气泡，键盘焦点仍保留值反馈；不更改真实值提交。 |
+| PW-M19 回复阶段接力 | Affect Thinking Loader 的固定槽/标签/测宽原码 | 同一答复等待→生成→调用结束/失败保持一行；只响应真实 phase，逐 token 不动；failed 优先，空文本失败不伪称草稿保留，turnEnded 不画成任务成功；历史/重进安静，旧标签只作无交互的短暂显示。 |
+
+保持 Solar 图标、低饱和蓝灰、当前侧栏和双层输入框，模型/推理/执行权限仍为独立锚定入口。本轮不引入新组件家族、不把数字动画当真实进度、不改变任务/回执协议；不写、不跑任何测试。完成后统一类型、正式构建、只读交叉审查与已授权发布，实际 Android 手感按当前可取得环境单列，不以构建代替验收。
+
+### 正式实现与源码审查
+
+PW-M15–PW-M19 已接入正式产品。`motion-disclosure.tsx` 从批准 MessageText 的自然内层测量关系适配，连续 height MotionValue 负责正常改目标，取消/宽度变化/焦点进入即时归位；TreeChildren 用 `resize={false}` 在完全展开后归还自然流。FilesBrowser 保持同 path 的 ContextMenuTrigger、按钮、文字与 FileArt，外壳 layout 与子层 position 校正分开；项目真实滚动容器仅标 `layoutScroll`，没有给原生预览的祖先增加 transform。每一投影层均记录在当前运动集合中，相关滚动会收束整组，而非只看壳是否结束。
+
+集合让位用固定 Ovio 源码的物理生成器和 WAAPI 采样机制。中断读取可见位置及 generator 速度；跨组导致旧节点已移除时，保留的实际帧结合 WAAPI 已含 easing 的进度继续还原位置与透明度。首次到达的淡入仍是时间曲线，不冒称物理惯性；后续位置让位才采用 spring。individual `translate` 与控件自己的按压 transform 分开。App 的表面进场标记让同次新对话/消息变化只保留一层空间入场；不是跨全树的通用编排事务。
+
+Josh 适配只改变 material，保留文字、44px 命中、薄材质和配色。按压/释放由持续的 press/strain 值接续；新物理参数属于产品适配，不声称逐帧等同原78/210ms脚本。FluidValueSlider 以 `isDragging || isFocusVisible` 区分触点与键盘；减少动态/隐藏时仅替换 aria-hidden 的气泡，Thumb 与真实 value owner 保持，`initial={false}` 直接落定。
+
+ReplyPhaseStatus 取 Affect 固定14px图标槽、纯显示旧标签和测宽关系；failed/queued/retained/stopping/turnEnded/实际文本决定当前阶段。空文本失败已按 native `ModelStreamPreview.kt` 的实际合法分支修正；调用结束不等于任务成功。流式 token 不重播，旧标签最多一份且 inert/aria-hidden；字体 ready/loadingdone 只重新拟合当前宽度。后台、离屏与减少动态不补播。
+
+三条独立只读审查分别覆盖披露、输入受力/滑块、回复阶段与集合/表面接续。发现并补齐了跨组首次入场丢失透明度、Slider仅改transition不能保证取消旧spring、字体迟到未重测以及文件子层结束晚于壳的收束范围；静态复核未留下本轮阻塞。没有编写或运行测试。北京时间2026-11-10 21:35，统一 `npm run typecheck --prefix web-ui`（仅 `tsc --noEmit`）完成；正式构建与发布继续在本节记录。最新用户原话已覆盖至本轮深化要求，没有新增未记录指令。
+
+### 实际参考观察与明确限制
+
+本轮亲自操作了库中精确 Josh neutral 已存交互（长按/释放、Space），查看 Ramotion 作者 GIF 的升起/回落原帧；打开 Affect 当前官方 Thinking Loader Clean 预览并 Reset，且查看保存的 Agent Chat、Reaction Bar、Vaul 图证。固定源码身份与当前官网运行 build 分开；未找到 Files/MessageText 的专门动图，不冒称这些新适配已实际看过效果。实现来源分别为 Affect 官方 `37b91fa`、批准独立 v3 `0e69029`、Ovio `81a1bcb`、Josh exact neutral SHA `11ed2af5…6a37cb7e` 与 Ramotion `98c787c`；原始字节及许可声明保持。
+
+Files 的现有 Motion projection 能保留当前位置/尺寸重新定向，但其进度重启时初速为零，**不声称二维速度连续**。文件集沿用完整 DOM，没有加入可见项裁剪或虚拟化，大数据量的实机帧率未验证。嵌套父子同时打开仍可能重新计算目标；高度夹取只作用于显示，不改内部物理速度。当前没有连接 Android 真机/模拟器，触屏、软键盘、实际帧率和个人手感仍未验收。NumberTicker、Yui540 和拖拽v3没有被悄悄接入：前者保留为具体候选，后两者本轮只取得有限材料，原批准/未验范围不扩张。
+
+下文是上一轮已完成的历史记录。
+
 ## 当前交付状态与研究边界
 
 **PW-M7–PW-M14 已完成正式产品源码集成，覆盖下文13组旅程，随 v0.1.86 发布。** 本次把等待、流式答复、任务分组、步骤树、对象列表、内部层级、局部回执和真实媒体区域接到统一的身份及中断规则。沿用已批准组件与当前动效底座，没有增加依赖或新组件家族。正式 Web 与 APK 构建、签名、包完整性核对和发布已完成；Android 视觉、触屏或用户手感尚未验收。
