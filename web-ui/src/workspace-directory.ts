@@ -1,6 +1,7 @@
 /** Presentation routes over the existing native workspaces.
  * Keep native section names and object identities in Secondary unchanged.
- * A workspace opens its real default page, never an extra tool directory.
+ * Presentation groups follow the user's work. Native owners and direct links
+ * stay unchanged; capability management has an explicit purpose-based entry.
  */
 export type WorkspaceKey = 'memory' | 'automation' | 'teams' | 'tools' | 'devices' | 'media';
 export type WorkspaceSection = {
@@ -24,7 +25,8 @@ export const WORKSPACE_SECTIONS: ReadonlyArray<WorkspaceSection> = [
     { route: 'groups', title: '群协作' },
     { route: 'channels', title: '消息渠道' },
   ] },
-  { key: 'tools', title: '技能与工具', route: 'skills', pages: [
+  { key: 'tools', title: '能力与工具', route: 'capabilities', pages: [
+    { route: 'capabilities', title: '能力与工具' },
     { route: 'skills', title: '技能' },
     { route: 'plugins', title: '插件', aliases: ['pluginCatalog'] },
     { route: 'mcp', title: 'MCP' },
@@ -45,7 +47,7 @@ export const WORKSPACE_SECTIONS: ReadonlyArray<WorkspaceSection> = [
 const legacyGroups: Readonly<Record<string, string>> = {
   'group:devices': 'devices',
   'group:memory': 'memory',
-  'group:extensions': 'skills',
+  'group:extensions': 'capabilities',
   'group:media': 'media',
   'group:work': 'group:data',
 };

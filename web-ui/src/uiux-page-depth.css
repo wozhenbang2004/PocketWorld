@@ -36,6 +36,8 @@
 .pw-task-overview-top .pw-task-identity > [role="progressbar"] { width: 14px; height: 14px; }
 .pw-task-overview-top .pw-owner-work-actions { display: flex; align-items: center; gap: var(--pw-gap-control); flex-wrap: wrap; margin: 0; }
 .pw-task-overview-top .pw-owner-work-actions > p { flex-basis: 100%; margin: 0; }
+.pw-task-source-links { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; margin-top: calc(-1 * var(--pw-gap-control)); }
+.pw-task-source-links > .button-press-motion { min-height: 44px; padding-inline: 0; color: var(--pw-accent); font-size: 13px; }
 .pw-task-body .pw-task-disclosures { margin-top: 0; }
 .pw-task-body .pw-task-overview { gap: var(--pw-gap-section); }
 .pw-task-body .pw-task-outcome.pw-task-reading { margin: 0; }

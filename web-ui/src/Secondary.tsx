@@ -1,6 +1,7 @@
 import { ModelDiagnosticsWorkspace } from './ModelDiagnosticsWorkspace';
 import { AICenter, type AIServicePreset } from './AICenter';
 import SkillsWorkspace from './SkillsWorkspace';
+import { CapabilitiesWorkspace } from './CapabilitiesWorkspace';
 import { BackgroundAudioSettings, BackgroundOwnerSettings, BackgroundChecks } from './BackgroundOwnerSettings';
 import ChannelsWorkspace from './ChannelsWorkspace';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
@@ -11,7 +12,7 @@ import ReminderWorkspace from './ReminderWorkspace';
 import ConnectionWorkspace from './ConnectionWorkspace';
 import { AppearanceSettings, SystemSpeechSettings } from './PresentationSettings';
 import { TypographySettings } from './TypographySettings';
-import {LocalWorkspace} from './LocalWorkspace';
+import {LocalWorkspace,type LocalWorkspaceDraft} from './LocalWorkspace';
 import {MemoryWorkspace} from './MemoryWorkspace';
 import {LearningWorkspace, type LearningCandidateTarget} from './LearningWorkspace';
 import {TeamsWorkspace} from './TeamsWorkspace';
@@ -55,7 +56,7 @@ import { ACCOUNT_RECEIPT_ACTIONS, accountActionReceipt, accountLoginArguments, a
 type Data = Record<string, any>;
 type Snapshot = { state?: Data; view?: { section?: string | null; resumeRevision?: number; taskId?: string | null }; composer?: Data | null; capabilities?: { commands?: string[] } };
 type BackHandlerRegistration = (handler: (() => boolean) | null) => void;
-type Props = { route: string; onBack: () => void; snapshot: Snapshot; registerBackHandler?: BackHandlerRegistration; navigationTrigger?: ReactNode; navigationRevision?: number; onNavigationPageChange?: (page: string) => void; onOpenSetup?: (capability?: SetupCapability) => void; onReturnToSetup?: () => void; onOpenProjects?: () => void };
+type Props = { route: string; onBack: () => void; snapshot: Snapshot; registerBackHandler?: BackHandlerRegistration; navigationTrigger?: ReactNode; navigationRevision?: number; onNavigationPageChange?: (page: string) => void; onOpenSetup?: (capability?: SetupCapability) => void; onReturnToSetup?: () => void; onOpenProjects?: () => void; originGoal?: string; returnLabel?: string; initialProjectId?: string; localDraft?: LocalWorkspaceDraft; onLocalDraftChange?: (draft: LocalWorkspaceDraft) => void };
 type Run = (action: string, args?: Data) => Promise<any>;
 const object = (value: any): Data => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 const list = (value: any): Data[] => Array.isArray(value) ? value.filter(x => x && typeof x === 'object' && !Array.isArray(x)) : [];
@@ -1160,7 +1161,7 @@ function McpWorkspace({ state, data, supported, run, registerTransientBack, erro
   </>;
 }
 
-function DomainPage({ domain, state, data, supported, run, registerTransientBack, candidateTarget, onReviewCandidate, onOpenModels, onNavigate, onPrepareTools, onOpenProjects, alreadyShownError }: { domain: string; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: BackHandlerRegistration; candidateTarget: LearningCandidateTarget | null; onReviewCandidate: (target: LearningCandidateTarget) => void; onOpenModels: () => void; onNavigate: (domain: 'plugins' | 'pluginCatalog' | 'mcp' | 'skills') => void; onPrepareTools?: () => void; onOpenProjects?: () => void; alreadyShownError?: string }) {
+function DomainPage({ domain, state, data, supported, run, registerTransientBack, candidateTarget, onReviewCandidate, onOpenModels, onNavigate, onPrepareTools, onOpenProjects, initialProjectId, localDraft, onLocalDraftChange, alreadyShownError }: { domain: string; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: BackHandlerRegistration; candidateTarget: LearningCandidateTarget | null; onReviewCandidate: (target: LearningCandidateTarget) => void; onOpenModels: () => void; onNavigate: (domain: 'plugins' | 'pluginCatalog' | 'mcp' | 'skills') => void; onPrepareTools?: () => void; onOpenProjects?: () => void; initialProjectId?: string; localDraft?: LocalWorkspaceDraft; onLocalDraftChange?: (draft: LocalWorkspaceDraft) => void; alreadyShownError?: string }) {
   const title = SECONDARY_DOMAINS.find(x => x.id === domain)?.title || '连接与能力';
   if (domain === 'accounts') return <AccountsWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'devices') return <DevicesWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} openModels={onOpenModels} />;
@@ -1179,7 +1180,7 @@ function DomainPage({ domain, state, data, supported, run, registerTransientBack
   if (domain === 'media') return <MediaWorkspace state={state} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'realtime') return <RealtimeWorkspace state={state} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'proxy') return <ProxyWorkspace state={state} run={run} registerTransientBack={registerTransientBack} />;
-  if (domain === 'local') return <LocalWorkspace state={state} data={data} run={run} supported={supported} registerTransientBack={registerTransientBack} onPrepareTools={onPrepareTools} onOpenProjects={onOpenProjects} />;
+  if (domain === 'local') return <LocalWorkspace state={state} data={data} initialProjectId={initialProjectId} draft={localDraft} onDraftChange={onLocalDraftChange} run={run} supported={supported} registerTransientBack={registerTransientBack} onPrepareTools={onPrepareTools} onOpenProjects={onOpenProjects} />;
   return <Card title={title}><Empty>尚未读取此能力的当前记录。</Empty></Card>;
 }
 
@@ -1481,7 +1482,7 @@ function settingsEntryDetail(id: string, state: Data): string {
   return '';
 }
 
-export default function Secondary({ route, onBack, snapshot, registerBackHandler, navigationTrigger, navigationRevision, onNavigationPageChange, onOpenSetup, onReturnToSetup, onOpenProjects }: Props) {
+export default function Secondary({ route, onBack, snapshot, registerBackHandler, navigationTrigger, navigationRevision, onNavigationPageChange, onOpenSetup, onReturnToSetup, onOpenProjects, originGoal, returnLabel, initialProjectId, localDraft, onLocalDraftChange }: Props) {
   const phonePresentation = useRef('list');
   const state: Data = { ...object(snapshot.state), webWorkspaceResumeRevision: Number(snapshot.view?.resumeRevision || 0), webWorkspaceTaskOpen: !!snapshot.view?.taskId, webWorkspaceSection: snapshot.view?.section };
   const commands = snapshot.capabilities?.commands || [];
@@ -1607,7 +1608,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
   const editConnection = modelView.id ? connection : modelConnectionRows(data).find(row => recordId(row) === text(object(data.connections).selectedConnectionId));
   const modelDraftKey = modelView.kind + ':' + (modelView.kind === 'add' ? 'new' : recordId(editConnection || {}));
   const phoneTitle = ({ appearance: '外观与字体', speech: '语音与朗读', execution: '系统权限', observation: '观察与隐私', browser: '浏览器' } as Data)[phoneView];
-  const pageTitle = isAIPage ? 'AI 接入'
+  const pageTitle = page === 'capabilities' ? '能力与工具' : workspace?.key === 'tools' && domain ? domain.title : isAIPage ? 'AI 接入'
     : workspace?.title || settingsGroup?.title || (page === 'settings' || page === 'connections' ? '设置' : isPhonePage ? phoneTitle || '手机能力' : page === 'background' ? '后台运行' : page === 'history' ? '任务历史' : page === 'usage' ? '模型调用记录' : page === 'archives' ? '备份与迁移' : page === 'storage' ? '项目存储' : domain?.title || 'PocketWorld');
   const settingsEntries = COMMON_SETTINGS.filter(item => item.id !== 'setup' || !!onOpenSetup).map(item => ({ ...item, searchText: item.detail, detail: settingsEntryDetail(item.id, state) }));
   const filtered = settingsEntries.filter(item => (item.title + item.detail + item.searchText).toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
@@ -1647,7 +1648,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
       {notice && <p className="pw-request-notice" role="status">{notice}</p>}
       {(error || domainError) && <p className="pw-field-error" role="alert">{error || domainError}</p>}
       <div className="pw-secondary-page" data-secondary-view={viewKey}>
-        {(page === 'settings' || page === 'connections') ? <div className="pw-settings-home pw-settings-preferences">
+        {page === 'capabilities' ? <CapabilitiesWorkspace state={state} onNavigate={navigate} onPrepare={onOpenSetup} /> : (page === 'settings' || page === 'connections') ? <div className="pw-settings-home pw-settings-preferences">
           <SearchField className="pw-secondary-search" data-input-size="medium" aria-label="搜索设置" placeholder="搜索设置" value={query} onChange={setQuery} shape="rounded" />
           {query.trim() ? <section className="pw-settings-results" aria-label="匹配的设置">{settingRows(filtered)}{filtered.length === 0 && <Empty>没有匹配的设置。</Empty>}</section>
             : <div className="pw-settings-categories">{SETTINGS_GROUPS.map(group => <section key={group.id} className="pw-settings-category" data-settings-group={group.id} aria-label={group.title}><h2>{group.title}</h2><div className="pw-settings-category-content">{settingRows(group.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}{group.id === 'privacy' && <div className="pw-settings-execution" aria-label="执行控制"><ExecutionControls state={state} supported={supported} run={run}/></div>}</div></section>)}</div>}
@@ -1665,13 +1666,13 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
           : page === 'background' ? <BackgroundSettings state={state} supported={supported} run={run} onReturn={onReturnToSetup || returnToPhone} returnLabel={onReturnToSetup ? '准备中心' : '手机能力'} registerTransientBack={registerTransientBack} />
           : page === 'history' || page === 'usage' ? <HistoryPage key={page} usage={page === 'usage'} supported={supported} run={run} />
           : page === 'archives' || page === 'storage' ? <DataManagement key={page} kind={page} data={object(page === 'archives' ? state.ownerArchives : state.projectStorage)} supported={supported} run={run} registerTransientBack={registerTransientBack} navigate={navigate} />
-          : domain ? <DomainPage key={page} domain={page} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} candidateTarget={candidateTarget} onReviewCandidate={target => navigate('memoryReview', target)} onOpenModels={() => navigate('model-settings')} onNavigate={navigate} onPrepareTools={onOpenSetup?()=>onOpenSetup('tools'):undefined} onOpenProjects={onOpenProjects} alreadyShownError={error || domainError} />
+          : domain ? <DomainPage key={page === 'local' ? page + ':' + (navigationRevision || 0) : page} domain={page} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} candidateTarget={candidateTarget} onReviewCandidate={target => navigate('memoryReview', target)} onOpenModels={() => navigate('model-settings')} onNavigate={navigate} onPrepareTools={onOpenSetup?()=>onOpenSetup('tools'):undefined} onOpenProjects={onOpenProjects} initialProjectId={initialProjectId} localDraft={localDraft} onLocalDraftChange={onLocalDraftChange} alreadyShownError={error || domainError} />
           : <Empty>此页面暂不可用，请从导航重新打开。</Empty>}
       </div>
     </div>;
   return <section className="pw-secondary pw-secondary-refactor" data-secondary-page={page} data-workspace={workspace?.key} aria-label={pageTitle}>
-    <header className="pw-secondary-header"><IconButton icon={IconArrowLeft} aria-label={isModelPage && hostSection === 'proxy' ? '返回 AI 接入' : isModelPage && modelView.kind !== 'list' ? modelBackLabel : '返回'} onClick={back} /><div><h1>{pageTitle}</h1></div>{!workspace && !['settings', 'connections', 'history', 'usage'].includes(page) && !(isAIPage && hostSection !== 'models') && <IconButton icon={IconRefresh} aria-label="刷新当前状态" title="刷新当前状态" disabled={!supported(refreshAction)} onClick={() => { void run(refreshAction, {}).catch(() => {}); }} />}{navigationTrigger}</header>
-    {workspace ? <Tabs className="pw-workspace-navigation" selectedKey={workspacePageForRoute(page)} onSelectionChange={key => switchWorkspacePage(String(key))}>
+    <header className="pw-secondary-header"><IconButton icon={IconArrowLeft} aria-label={isModelPage && hostSection === 'proxy' ? '返回 AI 接入' : isModelPage && modelView.kind !== 'list' ? modelBackLabel : '返回'} title={returnLabel} onClick={back} /><div><h1>{pageTitle}</h1>{originGoal && <p className="pw-workspace-origin" title={originGoal}>当前工作：{originGoal}</p>}</div>{!workspace && !['settings', 'connections', 'history', 'usage'].includes(page) && !(isAIPage && hostSection !== 'models') && <IconButton icon={IconRefresh} aria-label="刷新当前状态" title="刷新当前状态" disabled={!supported(refreshAction)} onClick={() => { void run(refreshAction, {}).catch(() => {}); }} />}{navigationTrigger}</header>
+    {workspace && workspace.key !== 'tools' ? <Tabs className="pw-workspace-navigation" selectedKey={workspacePageForRoute(page)} onSelectionChange={key => switchWorkspacePage(String(key))}>
       <TabList aria-label={workspace.title + '工作区'}>{workspace.pages.map(item => <Tab key={item.route} id={item.route}>{item.title}</Tab>)}</TabList>
       <TabPanel id={workspacePageForRoute(page) || workspace.route} className="pw-workspace-panel">{content}</TabPanel>
     </Tabs> : content}

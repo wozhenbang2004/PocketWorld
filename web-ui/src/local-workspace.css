@@ -5,6 +5,11 @@
 .pw-local-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--pw-gap-content,16px); margin: 0 0 var(--pw-gap-section,28px); }
 .pw-local-heading h2 { margin: 0; font-size: 22px; font-weight: 500; line-height: 32px; letter-spacing: -.035em; }
 .pw-local-heading p { margin: 5px 0 0; color: var(--pw-copy, #626262); font-size: 13px; line-height: 21px; }
+.pw-local-heading > div { min-width: 0; }
+.pw-local-heading .pw-local-project-context { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; font-size: 12px; line-height: 20px; }
+.pw-local-project-context > svg { flex: none; color: var(--pw-on-accent-soft); }
+.pw-local-project-context > span:first-of-type { color: var(--pw-on-accent-soft); overflow-wrap: anywhere; }
+.pw-local-project-context > span:last-of-type { color: var(--pw-muted); }
 .pw-local-heading > svg { color: var(--pw-copy, #626262); flex: none; }
 .pw-local-layout { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: var(--pw-gap-section,28px); align-items: start; }
 .pw-local-layout[data-has-sessions="false"] { grid-template-columns: minmax(0, 1fr); }

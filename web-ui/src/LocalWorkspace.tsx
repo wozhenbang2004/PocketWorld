@@ -9,15 +9,16 @@ import './local-workspace.css';
 type Data = Record<string, any>;
 type Run = (action: string, args?: Data) => Promise<any>;
 const ownerWindow = () => { const view = bridge.getState().view as Data; return [bridge.getDocumentEpoch(), view.section, view.taskId, view.resumeRevision].join('|'); };
+export type LocalWorkspaceDraft = { projectId: string; checkoutId: string; cwd: string; env: string; seconds: string };
 const rows = (value: any): Data[] => Array.isArray(value) ? value : [];
 const identity = (task: Data) => ({ taskId: task.taskId || task.id, runId: task.runId || task.raw?.runId, epoch: task.epoch || task.raw?.coordinatorEpoch, executionId: task.executionId || task.id });
 const statusLabel = (value: any) => ({ running: '运行中', completed: '已完成', failed: '已结束，需核对', stopped: '已停止', unknown: '结果待核对', reconciling: '结果待核对', paused: '已暂停', pending: '等待回执', observed: '已取得回执', not_dispatched: '未发送' } as Record<string, string>)[String(value)] || value || '状态待核对';
 
 /** BoardUI's retained fields, disclosure and navigation-row composition around
  * the original local checkout/PTY workflow. No replacement terminal or authority. */
-export function LocalWorkspace({ state, data, run, supported, registerTransientBack, onPrepareTools, onOpenProjects }: { state: Data; data: Data; run: Run; supported: (name: string) => boolean; registerTransientBack: (handler: (() => boolean) | null) => void; onPrepareTools?: () => void; onOpenProjects?: () => void }) {
-  const [project, setProject] = useState(''), [checkout, setCheckout] = useState(''), [source, setSource] = useState<Data | null>(null);
-  const [cwd, setCwd] = useState('.'), [env, setEnv] = useState('{}'), [seconds, setSeconds] = useState('300');
+export function LocalWorkspace({ state, data, run, supported, registerTransientBack, onPrepareTools, onOpenProjects, initialProjectId, draft, onDraftChange }: { state: Data; data: Data; run: Run; supported: (name: string) => boolean; registerTransientBack: (handler: (() => boolean) | null) => void; onPrepareTools?: () => void; onOpenProjects?: () => void; initialProjectId?: string; draft?: LocalWorkspaceDraft; onDraftChange?: (draft: LocalWorkspaceDraft) => void }) {
+  const [project, setProject] = useState(draft?.projectId ?? ''), [checkout, setCheckout] = useState(draft?.checkoutId ?? ''), [source, setSource] = useState<Data | null>(null);
+  const [cwd, setCwd] = useState(draft?.cwd ?? '.'), [env, setEnv] = useState(draft?.env ?? '{}'), [seconds, setSeconds] = useState(draft?.seconds ?? '300');
   const [review, setReview] = useState<Data | null>(null), [acknowledged, setAcknowledged] = useState(false), [original, setOriginal] = useState<Data | null>(null), [receipt, setReceipt] = useState<Data | null>(null);
   const [view, setView] = useState<Data | null>(null), [output, setOutput] = useState<Data | null>(null), [input, setInput] = useState(''), [uncertain, setUncertain] = useState(false);
   const [inputReceipt, setInputReceipt] = useState<Data | null>(null), [panel, setPanel] = useState<'setup' | 'session'>('setup');
@@ -26,11 +27,16 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [prepareAttempted, setPrepareAttempted] = useState(false);
   const [visible, setVisible] = useState(() => document.visibilityState === 'visible');
   const entered = useRef<object | null>(null), alive = useRef(true), viewHandle = useRef(''), reviewHandle = useRef('');
+  // An existing draft includes a deliberately cleared choice. Navigation may
+  // suggest a project only for a new form, never overwrite that user choice.
+  const projectSelectionTouched = useRef(draft !== undefined), initialProjectApplied = useRef(false);
+  const restoredSource = useRef(draft?.projectId && draft.checkoutId ? { projectId: draft.projectId, checkoutId: draft.checkoutId } : null);
   const readingRoot = useRef<HTMLElement>(null), readingPositions = useRef<Record<string, number>>({}), previousPresentation = useRef('setup');
   const activePanel = useRef(panel); activePanel.current = panel;
   const presentation = panel === 'setup' ? 'setup' : view ? `screen:${view.handle}` : `session:${original?.executionId || ''}`;
   const rememberPosition = () => { readingPositions.current[presentation] = readingRoot.current?.closest<HTMLElement>('.pw-secondary-scroll')?.scrollTop || 0; };
   const changePanel = (next: 'setup' | 'session') => { if (busy || review || stopReview || next === panel) return; rememberPosition(); setPanel(next); };
+  useEffect(() => { onDraftChange?.({ projectId: project, checkoutId: checkout, cwd, env, seconds }); }, [project, checkout, cwd, env, seconds, onDraftChange]);
   const invoke = async (name: string, args: Data = {}, accept?: (value: Data) => void) => {
     if (entered.current || document.hidden) return;
     const token = {}, owner = ownerWindow(); entered.current = token; setBusy(true); setError('');
@@ -140,8 +146,35 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
   const currentStatus = output?.nativeStatus || receipt?.status || currentTask?.status;
   const resultUnknown = !!original && (!receipt || !/^(running|completed|failed|paused|stopped)$/.test(String(receipt.status)) || /^(unknown|prepared)$/.test(String(receipt.operationState)));
   const executionMessage = receipt?.message || receipt?.receipt?.message;
+  const selectedProject = projectRows.find(row => row.id === project);
+  const canDescribeCheckout = supported('local.describeCheckout');
+  const sourceWindow = ownerWindow();
+  useEffect(() => {
+    const restored = restoredSource.current;
+    if (!restored) return;
+    if (project !== restored.projectId || checkout !== restored.checkoutId) { restoredSource.current = null; return; }
+    if (!visible || panel !== 'setup' || busy || entered.current || original || view || review || uncertain || unresolvedJobs.length || legacyNeedsAttention || !selected || !canDescribeCheckout) return;
+    // Secondary enters its native section asynchronously. Keep the restoration
+    // pending until this new window owns Local, then acquire its current source.
+    const nativeView = bridge.getState().view as Data;
+    if (document.hidden || nativeView.section !== 'local' || nativeView.taskId) return;
+    // Restore only form values. The actual checkout version is read in this
+    // new native window; no old digest, review or terminal handle survives.
+    restoredSource.current = null;
+    void invoke('local.describeCheckout', restored, setSource).catch(() => {});
+  }, [project, checkout, visible, panel, busy, original, view, review, uncertain, unresolvedJobs.length, legacyNeedsAttention, !!selected, canDescribeCheckout, sourceWindow]);
+  const preparationBlocked = busy || !!review || stopReview || resultUnknown || uncertain || unresolvedJobs.length > 0 || !!legacyNeedsAttention || prepareAttempted && !selected;
+  useEffect(() => {
+    // Navigation supplies a suggestion, never a checkout or execution binding.
+    // Wait for the exact real option, and leave any user choice or original
+    // session/review/unknown receipt in charge of this workspace.
+    if (initialProjectApplied.current || projectSelectionTouched.current || !initialProjectId || project || checkout || source || original || view || review || uncertain || entered.current || busy || prepareAttempted || panel !== 'setup' || unresolvedJobs.length || legacyNeedsAttention) return;
+    if (!projectRows.some(row => row.id === initialProjectId)) return;
+    initialProjectApplied.current = true;
+    setProject(initialProjectId);
+  }, [initialProjectId, state.projects, project, checkout, source, original, view, review, uncertain, busy, prepareAttempted, panel, unresolvedJobs.length, legacyNeedsAttention]);
   return <section ref={readingRoot} className="pw-local-workspace pw-settings-section" data-local-view={panel}>
-    <header className="pw-local-heading"><div><h2>本机终端</h2></div>{onPrepareTools && <Button variant="secondary" trailingIcon={IconChevronRight} onClick={onPrepareTools}>准备开发工具</Button>}</header>
+    <header className="pw-local-heading"><div><h2>本机终端</h2>{panel === 'setup' && selectedProject && <p className="pw-local-project-context"><IconFolder size={16} aria-hidden /><span>{selectedProject.name}</span><span>私人工作副本</span></p>}</div>{panel === 'setup' && onPrepareTools && <Button variant="secondary" trailingIcon={IconChevronRight} disabled={preparationBlocked} onClick={() => { if (activePanel.current !== 'setup' || entered.current || preparationBlocked) return; onDraftChange?.({ projectId: project, checkoutId: checkout, cwd, env, seconds }); onPrepareTools(); }}>准备开发工具</Button>}</header>
     {error && <p role="alert" className="pw-local-feedback pw-secondary-error">{error}</p>}
     {knownResults['local.probe']?.message && <p className="pw-local-runtime-message" role="status">{knownResults['local.probe'].message}</p>}
     {legacyNeedsAttention && legacySummary}
@@ -172,8 +205,8 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
             }}>核对并准备终端</Button></header>
           <div className="pw-local-setup-step">
             <h3><IconFolder size={17} aria-hidden />选择工作副本</h3>
-            <div className="pw-form-grid"><SelectField label="原项目" value={project} isDisabled={busy} options={[{ id: '', label: '选择已有项目' }, ...projectRows.map(row => ({ id: row.id, label: row.name })), ...(project && !projectRows.some(row => row.id === project) ? [{ id: project, label: '原项目暂未在当前清单中' }] : [])]} onChange={value => { if (!busy) { setProject(value); setCheckout(''); setSource(null); setPrepareAttempted(false); } }} />
-              <SelectField label="私人工作副本" value={checkout} isDisabled={busy || !project} options={[{ id: '', label: '选择或准备副本' }, ...checkouts.map(row => ({ id: row.id, label: (row.name || '工作副本') + ' · ' + new Date(row.createdAt || 0).toLocaleString() }))]} onChange={value => { if (!busy) { setCheckout(value); setSource(null); } }} /></div>
+            <div className="pw-form-grid"><SelectField label="原项目" value={project} isDisabled={busy} options={[{ id: '', label: '选择已有项目' }, ...projectRows.map(row => ({ id: row.id, label: row.name })), ...(project && !projectRows.some(row => row.id === project) ? [{ id: project, label: '原项目暂未在当前清单中' }] : [])]} onChange={value => { if (!busy) { projectSelectionTouched.current = true; setProject(value); setCheckout(''); setSource(null); setPrepareAttempted(false); } }} />
+              <SelectField label="私人工作副本" value={checkout} isDisabled={busy || !project} options={[{ id: '', label: '选择或准备副本' }, ...checkouts.map(row => ({ id: row.id, label: (row.name || '工作副本') + ' · ' + new Date(row.createdAt || 0).toLocaleString() })), ...(checkout && !checkouts.some(row => row.id === checkout) ? [{ id: checkout, label: '原工作副本暂未在当前清单中' }] : [])]} onChange={value => { if (!busy) { setCheckout(value); setSource(null); } }} /></div>
             <div className="pw-form-actions"><Button variant="secondary" disabled={!selected || busy} onClick={() => { void invoke('local.describeCheckout', { projectId: project, checkoutId: checkout }, setSource).catch(() => {}); }}>{ready ? '重新核对副本版本' : '读取这个副本的实际版本'}</Button><Button variant="ghost" disabled={!project || busy || prepareAttempted} onClick={() => { if (activePanel.current !== 'setup' || entered.current || prepareAttempted) return; setPrepareAttempted(true); void invoke('local.prepareCheckout', { projectId: project }, result => { setCheckout(result.id); setSource(null); }).catch(() => {}); }}>准备新的私人副本</Button></div>
             {prepareAttempted && <p className="pw-local-inline-notice" role="status">本次已请求准备副本。请核对真实副本列表；回执不明时不重复准备。</p>}
             {ready ? <div className="pw-local-source" role="status"><span>{source.fileCount} 个源码文件 · {source.bytes} 字节</span><small>版本已读取，启动前仍会核对是否变化。</small></div> : <p className="pw-field-hint">{project ? '先读取所选副本的实际版本，才能审阅终端。' : '使用已有项目的私人副本，不直接改动原项目。'}</p>}

@@ -44,6 +44,16 @@ export function ownerWorkIdentity(task: unknown): WorkIdentity | null {
 
 export const workIdentityKey = (value: WorkIdentity) => JSON.stringify([value.taskId, value.runId, value.epoch]);
 
+/** Navigation only. Returning to a conversation grants no permission to continue
+ * a task; its current owner/run and controls must still be read by the host. */
+export function privateTaskConversationId(task: unknown): string | null {
+  const row = object(task), raw = object(row?.raw);
+  if (!row || !raw || raw.id !== row.id || raw.actorId !== 'owner' || raw.spaceId !== 'private') return null;
+  const phone = phoneConversationId(row);
+  if (phone) return phone;
+  return id(raw.conversationId) ? raw.conversationId : null;
+}
+
 /** A background run never owns the main composer stop button or its thinking indicator. */
 export function foregroundConversationTurn(state: Data): Data | null {
   const value = object(Object.hasOwn(state, 'foregroundTurn') ? state.foregroundTurn : state.chatActiveTurn);
