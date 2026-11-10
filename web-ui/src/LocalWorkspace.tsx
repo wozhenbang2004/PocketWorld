@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowLeft, ChevronRight, Folder, Plus, RefreshCw, Terminal } from 'lucide-react';
 import { Accordion, AccordionItem, Button, CheckboxField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import TerminalSurface from './TerminalSurface';
-import { localReceiptPollable } from './project-execution';
+import { localReceiptPollable, projectExecutionShouldRead } from './project-execution';
 import './local-workspace.css';
 
 type Data = Record<string, any>;
@@ -79,7 +79,8 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
     }).catch(() => {});
   };
   useEffect(() => {
-    if (panel !== 'session' || !view?.handle || busy || error || output?.terminal || !localReceiptPollable(String(output?.nativeStatus || '')) || !visible) return;
+    // Process completion does not mean every bounded page of its logs was read.
+    if (panel !== 'session' || !view?.handle || busy || error || !output || !projectExecutionShouldRead(output) || !visible) return;
     const handle = view.handle;
     const timer = window.setTimeout(() => { if (document.visibilityState === 'visible' && activePanel.current === 'session' && viewHandle.current === handle) void invoke('local.terminal.read', { handle }, value => { if (viewHandle.current === handle) { setOutput(value); if (typeof value.inputUncertain === 'boolean') setUncertain(value.inputUncertain); } }).catch(() => {}); }, 1200);
     return () => window.clearTimeout(timer);
@@ -176,7 +177,7 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
               <div className="pw-local-screen-toolbar"><span>{view.metadata?.workingDirectory || '原工作目录'}</span><div><Button variant="ghost" size="small" disabled={busy} onClick={() => { void invoke('local.terminal.read', { handle: view.handle }, value => { setOutput(value); if (value.inputUncertain) setUncertain(true); }).catch(() => {}); }}>读取原屏幕</Button><Button variant="ghost" size="small" disabled={busy} onClick={closeViewer}>关闭视图</Button></div></div>
               <div className="pw-local-screen"><TerminalSurface key={view.handle} frame={output?.screen || null} /></div>
               <p className="pw-field-hint">关闭视图只结束查看，原进程按原时限继续。</p>
-              {output?.terminal && <p className="pw-local-inline-notice" role="status">原进程已返回终态；资源释放：{output.resourcesReleased ? '已确认' : '尚未确认'}。</p>}
+              {output?.terminal && <p className="pw-local-inline-notice" role="status">原进程已返回终态；资源释放：{output.resourcesReleased ? '已确认' : '尚未确认'}。{output.hasMore && '后续原日志仍待读取。'}</p>}
               {view.metadata?.observingOnly && <p className="pw-local-inline-notice">当前为只读观察，不会取得新的输入授权。</p>}
               <Accordion className="pw-local-disclosures"><AccordionItem id="local-input-tools" title="终端输入" description={output?.terminal?'进程已结束，保留的输入仍可查看':'普通输入、控制键与原输入回执'}><div className="pw-local-input">
                 <TextAreaField label="普通终端输入" value={input} onChange={setInput} hint="发送一行会在末尾加入换行。不要输入密码、令牌等秘密。" />
