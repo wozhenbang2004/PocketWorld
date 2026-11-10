@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { RiArrowLeftSLine, RiArrowRightSLine, RiRefreshLine } from '@remixicon/react';
-import './memory-reading.css';
+import { RiArrowLeftSLine, RiArrowRightSLine, RiBrainLine, RiRefreshLine, RiSearchLine } from '@remixicon/react';
 import './knowledge-depth.css';
+import './memory-reading.css';
 import { Tabs, TabList, Tab, TabPanel } from './shell-library';
 import { Accordion, AccordionItem, Button, CheckboxField, IconButton, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { MemoryAssertionFields } from './MemoryAssertionFields';
@@ -121,8 +121,12 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, initialCan
       selectionPanel.current?.focus({ preventScroll: true });
     }
   }, [initialCandidate?.id, selection?.candidate?.id]);
-  const list = rows(snapshot?.[tab]).filter(row => [row.text, row.title, row.name, layer(row.layer)].join(' ').toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
+  const collection = rows(snapshot?.[tab]);
+  const hasFilters = !!query.trim() || filter !== 'all';
+  const pendingCandidates = rows(snapshot?.candidates).filter(row => row.status === 'pending').length;
+  const list = collection.filter(row => [row.text, row.title, row.name, layer(row.layer)].join(' ').toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
     .filter(row => filter === 'all' || (filter === 'core' ? row.core === true : filter === 'inactive' ? row.active === false : filter === 'pending' ? row.status === 'pending' : row.status !== 'pending'));
+  const canConsolidate = list.filter(eligible).length >= 2;
   const groupKey = (row: Data) => tab === 'candidates' ? row.status === 'pending' ? 'pending' : 'processed' : row.active === false ? 'inactive' : row.core ? 'core' : row.layer in layers ? row.layer : 'other';
   const groups = (tab === 'candidates' ? ['pending', 'processed'] : ['core', ...Object.keys(layers), 'other', 'inactive'])
     .map(key => ({ key, label: ({ core: '核心记忆', pending: '等待审阅', processed: '已处理候选', inactive: '已停用', other: '其他内容', ...layers } as Data)[key], records: list.filter(row => groupKey(row) === key) }))
@@ -134,15 +138,23 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, initialCan
   return <div className="pw-memory-workspace pw-knowledge-workspace">
     {error && error !== alreadyShownError && <p className="pw-secondary-error" role="alert">{error}</p>}{notice && <p className="pw-field-hint" role="status">{notice}</p>}{busy && <p className="pw-muted">正在核对原回执…</p>}
     <section ref={collectionPanel} className="pw-memory-collection" aria-label="记忆管理" hidden={!!selection}>
-      <header className="pw-knowledge-heading pw-knowledge-directory-heading"><div><h2>记忆</h2><p className="pw-detail-location">{scopeName || (busy ? '正在核对记忆范围' : '记忆范围尚未确认')}</p></div><IconButton className="pw-utility-icon" icon={RiRefreshLine} aria-label="重新读取记忆" title="重新读取记忆" disabled={busy} onClick={() => load()} /></header>
-      <Tabs selectedKey={tab} onSelectionChange={value => { setTab(String(value)); setFilter('all'); closeRecord(); }} className="pw-team-tabs">
-        <TabList aria-label="记忆视图"><Tab id="records" isDisabled={busy}>已保存</Tab><Tab id="candidates" isDisabled={busy}>待审候选</Tab><Tab id="history" isDisabled={busy}>旧事与来源</Tab></TabList>
+      <Tabs selectedKey={tab} onSelectionChange={value => { setTab(String(value)); setFilter('all'); closeRecord(); }} className="pw-team-tabs pw-memory-tabs">
+        <TabList aria-label="记忆视图"><Tab id="records" isDisabled={busy}>已保存</Tab><Tab id="candidates" isDisabled={busy}>待审阅</Tab><Tab id="history" isDisabled={busy}>旧事与来源</Tab></TabList>
         <TabPanel id={tab}>
+      <header className="pw-memory-scope-heading"><p className="pw-detail-location">{scopeName || (busy ? '正在核对记忆范围' : '记忆范围尚未确认')}</p><IconButton className="pw-utility-icon" icon={RiRefreshLine} aria-label="重新读取记忆" title="重新读取记忆" disabled={busy} onClick={() => load()} /></header>
       {tab === 'history' ? <MemoryHistoryWorkspace key={namespace + ':' + String(!!snapshot)} scopeKey={namespace + ':' + String(snapshot?.cognitionRevision || '')} run={run} registerTransientBack={registerHistoryBack} /> : <>
-      <SearchField className="pw-secondary-search" data-input-size="medium" aria-label="筛选当前读取的记忆" placeholder="查找记忆" value={query} onChange={setQuery} />
-      <div className="pw-knowledge-filters" role="group" aria-label="记忆状态筛选">{filters.map(item => <Button key={item.id} variant="ghost" aria-pressed={filter === item.id} onClick={() => setFilter(item.id)}>{item.label}</Button>)}</div>
-      {snapshot && !list.length && <p className="pw-secondary-empty">当前范围与筛选条件下没有记录。</p>}
-      <div className="pw-memory-list-heading"><p>{snapshot ? `当前读取 ${list.length} 条` : busy ? '正在读取原记忆…' : namespace ? '尚未读取记忆，请重新读取。' : '尚未读取记忆，请先重新选择范围。'}</p>{tab === 'records' && <Button variant="ghost" disabled={busy || running} onClick={() => { if (selectingConsolidation) clearConsolidation(); setSelectingConsolidation(value => !value); }}>{selectingConsolidation ? '退出多选' : '选择记忆归纳'}</Button>}</div>
+      {snapshot && (collection.length > 0 || hasFilters) && <div className="pw-memory-tools">
+        <SearchField className="pw-secondary-search" data-input-size="medium" aria-label="筛选当前读取的记忆" placeholder={tab === 'candidates' ? '查找候选' : '查找记忆'} clearLabel="清除搜索" value={query} onChange={setQuery} />
+        <SelectField className="pw-memory-filter" label="记忆状态筛选" value={filter} options={filters} onChange={setFilter} />
+      </div>}
+      {snapshot && !list.length && <section className="pw-memory-empty" aria-label={hasFilters ? '没有匹配结果' : tab === 'candidates' ? '暂无待审候选' : '暂无已保存记忆'}>
+        {hasFilters ? <RiSearchLine aria-hidden="true" /> : <RiBrainLine aria-hidden="true" />}
+        <h3>{hasFilters ? '没有匹配的记忆' : tab === 'candidates' ? '还没有待审候选' : '还没有保存的记忆'}</h3>
+        <p>{hasFilters ? '试试其他关键词，或清除当前筛选。' : tab === 'candidates' ? '有新的记忆候选时，会在这里等待你审阅。' : pendingCandidates ? '有待审阅的候选，确认采用后会出现在这里。' : '在对话中提出需要记住的信息，之后在这里查看与整理。'}</p>
+        {hasFilters ? <Button variant="secondary" onClick={() => { setQuery(''); setFilter('all'); }}>清除筛选</Button> : tab === 'records' && pendingCandidates > 0 ? <Button disabled={busy} onClick={() => { setTab('candidates'); setQuery(''); setFilter('pending'); }}>查看待审候选</Button> : null}
+      </section>}
+      {!snapshot && !busy && <p className="pw-memory-unread">{namespace ? '尚未读取记忆，请重新读取。' : '尚未读取记忆，请先重新选择范围。'}</p>}
+      {(list.length > 0 || selectingConsolidation) && <div className="pw-memory-list-heading"><p>{snapshot ? `已读取 ${list.length} 条` : '正在读取记忆…'}</p>{tab === 'records' && (canConsolidate || selectingConsolidation) && <Button variant="ghost" disabled={busy || running} onClick={() => { if (selectingConsolidation) clearConsolidation(); setSelectingConsolidation(value => !value); }}>{selectingConsolidation ? '退出多选' : '归纳记忆'}</Button>}</div>}
       {selectingConsolidation && tab === 'records' && <div className="pw-form-actions pw-memory-selection-actions" role="region" aria-label="本次记忆归纳选择"><span>已选 {consolidation.length} 条</span><Button variant="secondary" disabled={busy || running || consolidation.length < 2} onClick={() => { void invoke('knowledge.consolidation.review', { readHandles: consolidation.map(item => item.readHandle) }, openReview); }}>核对所选记忆与模型调用</Button><Button variant="ghost" disabled={busy || running || !consolidation.length} onClick={clearConsolidation}>清空本次选择</Button></div>}
       {groups.map(group => <section className="pw-knowledge-directory-group" key={group.key} aria-label={group.label}><header className="pw-knowledge-group-heading"><h3>{group.label}</h3><span>{group.records.length}</span></header><div className="pw-memory-list">{group.records.map(row => <article className="pw-memory-list-item" key={row.id}>
         <Button variant="ghost" className="pw-memory-row" data-memory-id={row.id} trailingIcon={RiArrowRightSLine} disabled={busy} onClick={() => choose(row, tab === 'candidates')} aria-label={`读取原版本与来源：${(row.text || row.title || '未命名内容').split('\n')[0].slice(0, 100)}`} aria-description={[layer(row.layer), row.core ? '核心记忆' : '', recordStatus(row.status) || '', row.active === false ? '已停用' : ''].filter(Boolean).join('；')}>
@@ -152,11 +164,11 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, initialCan
       </article>)}</div></section>)}
       {operation && <section className="pw-source-record"><h3>这次原归纳</h3><p>{running ? '正在处理所选原版本，尚未确认形成候选。' : operation.error || (operation.result?.outcome === 'existing_candidate_barrier' ? '相同来源已有原候选处理记录，没有再次生成。请刷新候选核对。' : '原候选回执已取得。请刷新候选，阅读后再决定是否采用。')}</p><div className="pw-form-actions"><Button variant="ghost" disabled={busy} onClick={() => { const handle = operation.operationHandle; void invoke('knowledge.consolidation.query', { operationHandle: handle }, value => setOperation({ ...value, operationHandle: handle })); }}>核对原结果</Button>{running && <Button variant="secondary" disabled={stopping} onClick={() => { setStopping(true); void run('knowledge.consolidation.stop', { operationHandle: operation.operationHandle }).then(() => setNotice('已收到原停止请求回执，请核对原结果。')).catch(failure => setError(failure.message)).finally(() => setStopping(false)); }}>停止这次原归纳</Button>}</div></section>}
       </>}
-      <Accordion variant="divided" className="pw-compact-disclosures"><AccordionItem id="memory-scope" title="范围与容量">
+      <Accordion variant="divided" className="pw-compact-disclosures pw-memory-scope"><AccordionItem id="memory-scope" title="范围与容量">
         <div className="pw-form-actions"><Button variant="ghost" disabled={busy || running} onClick={() => { void invoke('knowledge.namespaces', {}, value => setNamespaces(rows(value.choices))); }}>读取可用项目范围</Button><Button variant="ghost" disabled={busy} onClick={() => { void invoke('knowledge.capacity', {}, setCapacity); }}>候选容量</Button><Button variant="ghost" disabled={busy} onClick={() => { void invoke('knowledge.history', {}, setHistory); }}>已清理候选记录</Button></div>
         <SelectField label="本次查看范围" value={namespace} isDisabled={busy || running} options={[{ id: 'private', label: '主人全局 · 私人' }, ...(namespace && namespace !== 'private' && !namespaces.some(row => row.choiceHandle === namespace) ? [{ id: namespace, label: scopeName || '当前项目', disabled: true }] : []), ...namespaces.map(row => ({ id: row.choiceHandle, label: row.name || row.title || row.projectId }))]} onChange={value => { void changeNamespace(value); }} />
         {capacity && <p>候选容量：{capacity.candidatesUsed ?? '未知'} / {capacity.candidateLimit ?? '未知'}。清理终态候选只移除候选正文，不删除正式记忆。</p>}
-        {history && (rows(history.history).length ? <Accordion variant="divided">{rows(history.history).map(row => <AccordionItem key={row.id} id={row.id} title={row.outcome === 'forgotten' ? '已遗忘的候选' : recordStatus(row.outcome) || '候选处理记录'} description={typeof row.archivedAt === 'number' ? new Date(row.archivedAt).toLocaleString() : '清理时间未记录'}><p className="pw-muted">候选正文已清理，仅保留处理结果与去重记录。查看不会再次采用。</p><p className="pw-detail-location">候选编号：{row.id}</p>{row.acceptedRecordId && <p className="pw-detail-location">对应正式记忆：{row.acceptedRecordId}</p>}</AccordionItem>)}</Accordion> : <p className="pw-muted">当前范围没有已清理的候选记录。尚未清理的采用、拒绝或失效项可在“待审候选”的“已处理”中查看。</p>)}
+        {history && (rows(history.history).length ? <Accordion variant="divided">{rows(history.history).map(row => <AccordionItem key={row.id} id={row.id} title={row.outcome === 'forgotten' ? '已遗忘的候选' : recordStatus(row.outcome) || '候选处理记录'} description={typeof row.archivedAt === 'number' ? new Date(row.archivedAt).toLocaleString() : '清理时间未记录'}><p className="pw-muted">候选正文已清理，仅保留处理结果与去重记录。查看不会再次采用。</p><p className="pw-detail-location">候选编号：{row.id}</p>{row.acceptedRecordId && <p className="pw-detail-location">对应正式记忆：{row.acceptedRecordId}</p>}</AccordionItem>)}</Accordion> : <p className="pw-muted">当前范围没有已清理的候选记录。尚未清理的采用、拒绝或失效项可在“待审阅”的“已处理”中查看。</p>)}
       </AccordionItem></Accordion>
         </TabPanel>
       </Tabs>

@@ -21,6 +21,21 @@
 .pw-phone-detail > .pw-settings-links { width: 100%; }
 .pw-phone-detail .pw-domain-link { min-height: 60px; }
 .pw-phone-detail .pw-detail-status { font-size: 13px; line-height: 1.6; margin: 0; }
+/* System destinations are grouped by the capability the user is enabling. */
+.pw-phone-permissions{gap:24px}
+.pw-phone-permissions>.pw-detail-status{font-size:13px;line-height:22px;color:var(--pw-copy);padding-inline:4px}
+.pw-secondary-refactor .pw-phone-permission-group>h2{font-size:13px;line-height:22px;font-weight:500;color:var(--pw-copy);margin:0 0 8px;padding-inline:4px}
+.pw-phone-permission-group>.pw-settings-links{padding:4px 16px;background:var(--pw-surface);border-radius:20px}
+.pw-phone-permission-group .pw-domain-link{min-height:64px;padding:12px 0;gap:12px}
+.pw-phone-permission-group .pw-domain-link>svg{width:20px;height:20px;color:var(--pw-copy);flex:none}
+.pw-phone-permission-group .pw-domain-link>svg:last-child{width:16px;height:16px}
+.pw-phone-workspace .pw-domain-link>span>.pw-phone-permission-copy{display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:12px}
+.pw-phone-permission-copy>span{flex:1;min-width:0}
+.pw-phone-permission-copy>small{flex:none;white-space:nowrap;text-align:end}
+.pw-phone-permission-help{padding:0 16px;background:var(--pw-surface);border-radius:20px}
+.pw-phone-permission-help button[slot="trigger"]{color:var(--pw-copy);min-height:56px;padding-block:12px}
+.pw-phone-permission-help button[slot="trigger"]>span>span:first-child{font-size:13px;line-height:22px;color:var(--pw-copy)}
+.pw-phone-permission-help .pw-field-hint{margin:0}
 .pw-phone-workspace .pw-stretch-label { font-size: 16px; line-height: 24px; }
 .pw-phone-workspace .pw-stretch-hint, .pw-phone-workspace .pw-field-hint { font-size: 13px; line-height: 21px; }
 .pw-phone-preference-section { display: flex; flex-direction: column; gap: var(--pw-gap-control,12px); margin-top: var(--pw-gap-control,12px); }

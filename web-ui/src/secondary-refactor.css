@@ -348,7 +348,7 @@
 
 /* Shared work is selected as an object, then read at full width. Administrative
  * actions stay in that object's detail instead of repeating on every row. */
-.pw-secondary-refactor .pw-team-tabs { gap: var(--pw-gap-section); }
+.pw-secondary-refactor .pw-team-tabs:not(.pw-memory-tabs) { gap: var(--pw-gap-section); }
 .pw-secondary-refactor .pw-object-list { padding-top: 4px; }
 .pw-secondary-refactor .pw-object-row {
   display: flex;

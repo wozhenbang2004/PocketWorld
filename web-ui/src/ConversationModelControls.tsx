@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { RiArrowDownSLine, RiBox3Line, RiCloseLine } from '@remixicon/react';
+import { RiArrowDownSLine, RiBox3Line, RiCheckLine, RiCloseLine } from '@remixicon/react';
 import { Button, IconButton } from './forms-library';
 import { Radio, RadioGroup } from './forms-library/boardui/components/base/radio/radio';
 import { Popover } from './shell-library';
@@ -206,9 +206,15 @@ function LegacyConversationModelControls({ state, can, act, onOpenModel, pickerS
           <p className="pw-model-selection-scope">{panelTarget?.modelId || modelName}</p>
           {loading ? <div className="pw-conversation-reasoning-loading" role="status" aria-busy="true"><ShimmerText>正在读取推理设置…</ShimmerText></div> : saving ? <p className="pw-conversation-reasoning-note" role="status">正在保存推理设置…</p> : session ? <>
             <RadioGroup aria-label="可用推理强度" value={choiceId} onChange={setChoiceId} isDisabled={locked} className="pw-conversation-reasoning-options">
-              {session.choices.map(choice => <Radio key={choice.id} value={choice.id} isDisabled={choice.readOnly} className="pw-conversation-reasoning-option"><span><b>{choice.label}</b>{choice.detail && <small>{choice.detail}</small>}</span></Radio>)}
+              {session.choices.map(choice => {
+                const detail = choice.value.mode === 'DEFAULT' ? '服务默认' : choice.detail !== choice.value.level ? choice.detail : '';
+                return <Radio key={choice.id} value={choice.id} aria-label={`${choice.label}${choice.detail ? `，${choice.detail}` : ''}`} isDisabled={choice.readOnly} className="pw-conversation-reasoning-option pw-conversation-reasoning-draft">
+                  <span className="pw-conversation-reasoning-copy"><b>{choice.label}</b>{detail && <small>{detail}</small>}</span>
+                  <RiCheckLine className="pw-conversation-reasoning-check" size={18} aria-hidden="true" data-selected={choiceId === choice.id || undefined} />
+                </Radio>;
+              })}
             </RadioGroup>
-            <p className="pw-conversation-reasoning-note">{session.choices.filter(choice => !choice.readOnly).length < 2 ? reasoningAvailability(session.route === 'account' ? session.review.catalogFacts?.facts || {} : session.target.facts) : '用于之后开始的任务。'}</p>
+            {session.choices.filter(choice => !choice.readOnly).length < 2 && <p className="pw-conversation-reasoning-note">{reasoningAvailability(session.route === 'account' ? session.review.catalogFacts?.facts || {} : session.target.facts)}</p>}
           </> : notice ? <><p className="pw-conversation-reasoning-current">当前推理 <b>{reasoningLabel(panelTarget?.reasoning || null) || '尚未读取'}</b></p><p className="pw-conversation-reasoning-note">{notice}</p></> : null}
           {error && <p className="pw-conversation-reasoning-error" role="alert">{error}</p>}
         </div>

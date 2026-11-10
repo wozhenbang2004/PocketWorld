@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { RiArrowDownSLine, RiBox3Line } from '@remixicon/react';
+import { RiArrowDownSLine, RiBox3Line, RiCheckLine } from '@remixicon/react';
 import { Menu, MenuItem, Text } from 'react-aria-components';
 import { Button } from './forms-library';
-import { RadioDot } from './forms-library/boardui/components/base/radio/radio';
 import { MENU_ITEM, MENU_ITEMS_CONTAINER } from './forms-library/boardui/components/base/dropdown/menu-styles';
 import { ShimmerText } from './library';
 import { geminiBudgetModel, nativeReasoning, reasoningAvailability, reasoningChoices, reasoningLabel, type ReasoningValue } from './conversation-model-controls';
@@ -211,14 +210,17 @@ export function ScopedConversationReasoningPanel({ state, can, act, disabled = f
   };
   const onlyServiceDefault = review?.choices.length === 1 && review.choices[0].value.mode === 'DEFAULT';
   return <section className="pw-scoped-reasoning-panel" aria-label="此对话推理设置">
-    <p className="pw-model-selection-scope">{preference.inherited === true ? '沿用默认 · ' : '此对话 · '}{conversationModelName(state) || '尚未选择模型'}</p>
+    <p className="pw-model-selection-scope">{conversationModelName(state) || '尚未选择模型'}</p>
     {loading ? <div role="status" aria-busy="true"><ShimmerText>正在读取推理设置…</ShimmerText></div> : review?.restriction ? <p className="pw-conversation-reasoning-note">{review.restriction}</p> : review && <>
       {onlyServiceDefault ? <div className="pw-conversation-reasoning-default"><strong>自动</strong><p>{mayDeclare ? '可为当前模型设置低、中、高等档位。' : reasoningAvailability(record(review.facts))}</p></div>
         : <Menu aria-label="可用推理强度" selectionMode="single" selectedKeys={choice ? [choice] : []} disallowEmptySelection shouldCloseOnSelect={false} autoFocus onAction={id => void apply(String(id))} className={`${MENU_ITEMS_CONTAINER} pw-conversation-reasoning-options`}>
-          {review.choices.map((item: Row) => <MenuItem key={item.id} id={item.id} textValue={item.label} isDisabled={locked || needsRead || item.readOnly} className={`${MENU_ITEM} pw-conversation-reasoning-option`}>
-            <RadioDot selected={choice === item.id} size="md" />
-            <span><span><Text slot="label"><b>{item.label}</b></Text>{item.detail && <Text slot="description"><small>{item.detail}</small></Text>}</span></span>
-          </MenuItem>)}
+          {review.choices.map((item: Row) => {
+            const detail = item.value.mode === 'DEFAULT' ? '服务默认' : item.detail !== item.value.level ? item.detail : '';
+            return <MenuItem key={item.id} id={item.id} textValue={item.label} aria-label={`${item.label}${item.detail ? `，${item.detail}` : ''}`} isDisabled={locked || needsRead || item.readOnly} className={`${MENU_ITEM} pw-conversation-reasoning-option`}>
+              <span className="pw-conversation-reasoning-copy"><Text slot="label"><b>{item.label}</b></Text>{detail && <Text slot="description"><small>{detail}</small></Text>}</span>
+              <RiCheckLine className="pw-conversation-reasoning-check" size={18} aria-hidden="true" data-selected={choice === item.id || undefined} />
+            </MenuItem>;
+          })}
         </Menu>}
       {mayDeclare && !editingLevels && <Button variant="ghost" size="small" className="pw-reasoning-levels-trigger" disabled={locked || needsRead} onClick={() => setEditingLevels(true)}>{customLevelsSaved ? '调整自定义档位' : '自定义档位'}</Button>}
       {mayDeclare && editingLevels && <section className="pw-reasoning-levels-editor" aria-label="手动声明推理档位">

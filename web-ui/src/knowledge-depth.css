@@ -24,15 +24,8 @@
  * to its own trigger so an expanded ancestor cannot flip a collapsed child. */
 :is(.pw-knowledge-workspace, .pw-knowledge-dialog) button[slot=trigger][aria-expanded=false] > svg:last-child { rotate: 0deg; }
 :is(.pw-knowledge-workspace, .pw-knowledge-dialog) button[slot=trigger][aria-expanded=true] > svg:last-child { rotate: 180deg; }
-.pw-knowledge-workspace .pw-memory-list { padding-inline: 0; }
-.pw-knowledge-workspace .pw-memory-row > span { width: 100%; min-width: 0; flex: 1 1 auto; justify-content: flex-start; }
-.pw-knowledge-workspace .pw-memory-row-copy { width: 100%; min-width: 0; flex: 1 1 auto; }
 .pw-memory-history .pw-memory-row { text-align: left; }
 .pw-memory-history .pw-memory-row-copy { text-align: left; }
-.pw-knowledge-workspace .pw-memory-document { border-radius: 0; background: transparent; box-shadow: none; padding: 0; }
-.pw-memory-workspace .pw-memory-detail-header { gap: var(--pw-gap-control); margin-bottom: var(--pw-gap-section); }
-.pw-memory-workspace .pw-memory-detail-header h2 { font-size: 20px; line-height: 29px; font-weight: 550; margin: 0; }
-.pw-memory-workspace .pw-memory-reading > .pw-knowledge-status { margin-bottom: var(--pw-gap-section); }
 .pw-memory-history > .pw-selection-field { max-width: 420px; }
 .pw-memory-history .pw-knowledge-conflict { margin-top: 24px; }
 .pw-memory-history .pw-knowledge-conflict h3 { font-size: 15px; line-height: 24px; font-weight: 550; margin: 0 0 8px; }
@@ -140,7 +133,6 @@
 @media (max-width: 560px) {
   .pw-knowledge-heading h2 { font-size: 20px; line-height: 29px; }
   .pw-knowledge-search-actions > button { max-width: 112px; padding-inline: 12px; }
-  .pw-memory-workspace .pw-memory-document { padding: 0; }
   .pw-reminder-workspace .pw-followup-heading-actions { width: auto; justify-content: flex-end; }
 }
 
@@ -153,22 +145,18 @@
 .pw-knowledge-edit-dialog > .pw-form-grid > * { flex-shrink: 0; }
 .pw-knowledge-edit-dialog > .pw-knowledge-edit-actions { flex: none; justify-content: flex-end; gap: var(--pw-gap-control); margin: 0; padding: var(--pw-gap-content) var(--pw-page-gutter) max(var(--pw-gap-content), env(safe-area-inset-bottom)); background: var(--pw-surface, #fff); box-shadow: 0 -5px 14px color-mix(in srgb, var(--pw-ink, #222) 3%, transparent); }
 .pw-knowledge-edit-dialog > .pw-knowledge-edit-actions > button { min-height: 48px; }
-.pw-memory-workspace .pw-memory-selection-actions { position: sticky; top: 0; z-index: 2; gap: var(--pw-gap-control); margin: 0 0 var(--pw-gap-content); padding: var(--pw-gap-related) 0; background: var(--pw-canvas, #f7f7f7); }
-.pw-memory-selection-actions > span { font-size: 12px; color: var(--pw-copy, #646464); }
-.pw-memory-workspace .pw-memory-decisions { margin: var(--pw-gap-content) 0 var(--pw-gap-section); }
 .pw-learning-workspace .pw-learning-selection-actions { margin: var(--pw-gap-control) 0 var(--pw-gap-content); }
 .pw-learning-workspace .pw-learning-selection-actions > button { white-space: normal; height: auto; min-height: 48px; }
 .pw-learning-workspace .pw-learning-selection > ul { max-height: min(320px, 44dvh); overflow: auto; overscroll-behavior: contain; }
 
 /* Collections share a flat directory: local filters, then meaningful groups.
  * The controls remain the retained BoardUI/React Aria components. */
-.pw-knowledge-workspace .pw-knowledge-directory-heading,
 .pw-knowledge-workspace :is(.pw-learning-heading, .pw-followup-heading) { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--pw-gap-control); margin: 0 0 var(--pw-gap-section); }
-.pw-knowledge-workspace :is(.pw-knowledge-directory-heading, .pw-learning-heading, .pw-followup-heading) > div:first-child { min-width: 0; flex: 1 1 180px; }
+.pw-knowledge-workspace :is(.pw-learning-heading, .pw-followup-heading) > div:first-child { min-width: 0; flex: 1 1 180px; }
 .pw-knowledge-workspace :is(.pw-learning-heading, .pw-followup-heading) h2 { font-size: 20px; line-height: 29px; font-weight: 600; }
 .pw-knowledge-workspace :is(.pw-learning-heading, .pw-followup-heading) .pw-form-actions { flex: 0 0 auto; }
 .pw-knowledge-workspace :is(button:not([role=tab]), [role=tab], .pw-utility-icon) { min-height: 48px; }
-.pw-knowledge-workspace :is(.pw-learning-heading, .pw-followup-heading, .pw-knowledge-directory-heading) button[aria-label] { min-width: 48px; }
+.pw-knowledge-workspace :is(.pw-learning-heading, .pw-followup-heading) button[aria-label] { min-width: 48px; }
 .pw-knowledge-workspace .pw-secondary-search { margin: 12px 0 0; }
 .pw-knowledge-filters { display: flex; gap: var(--pw-gap-related); margin: var(--pw-gap-control) 0 var(--pw-gap-content); max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; scrollbar-width: none; }
 .pw-knowledge-filters > button { flex: none; padding: 10px 14px; font-size: 13px; line-height: 20px; border-radius: 12px; color: var(--pw-copy); }
@@ -177,12 +165,11 @@
 .pw-knowledge-group-heading { display: flex; align-items: baseline; justify-content: space-between; gap: var(--pw-gap-control); margin: 0 0 var(--pw-gap-related); }
 .pw-knowledge-group-heading h3 { margin: 0; font-size: 13px; line-height: 22px; font-weight: 600; color: var(--pw-copy); }
 .pw-knowledge-group-heading > span { font-size: 13px; line-height: 22px; color: var(--pw-copy); font-variant-numeric: tabular-nums; }
-.pw-knowledge-workspace .pw-knowledge-directory-group :is(.pw-memory-list, .pw-learning-list, .pw-followup-list) { padding: 0; background: transparent; border-radius: 0; box-shadow: none; }
-.pw-knowledge-directory-group :is(.pw-memory-list-item, .pw-followup-row, .pw-learning-object) + :is(.pw-memory-list-item, .pw-followup-row, .pw-learning-object) { border-top: 1px solid var(--pw-hairline); }
-.pw-knowledge-workspace .pw-knowledge-directory-group :is(.pw-memory-row, .pw-learning-object, .pw-followup-row) { padding: var(--pw-gap-content) 0; min-height: 72px; border-radius: 0; }
-.pw-knowledge-workspace :is(.pw-memory-row-copy strong, .pw-learning-object-copy strong, .pw-followup-row-title) { display: block; font-size: 16px; line-height: 25px; font-weight: 600; white-space: normal; overflow-wrap: anywhere; }
-.pw-knowledge-workspace :is(.pw-memory-row-copy small, .pw-learning-object-copy small, .pw-followup-row-meta, .pw-followup-row-copy small) { display: block; font-size: 13px; line-height: 22px; color: var(--pw-copy); white-space: normal; overflow: visible; -webkit-line-clamp: unset; }
-.pw-knowledge-workspace .pw-memory-row-copy > .pw-knowledge-row-preview { font-size: 14px; line-height: 23px; font-weight: 400; color: var(--pw-copy); -webkit-line-clamp: 2; }
+.pw-knowledge-workspace .pw-knowledge-directory-group :is(.pw-learning-list, .pw-followup-list) { padding: 0; background: transparent; border-radius: 0; box-shadow: none; }
+.pw-knowledge-directory-group :is(.pw-followup-row, .pw-learning-object) + :is(.pw-followup-row, .pw-learning-object) { border-top: 1px solid var(--pw-hairline); }
+.pw-knowledge-workspace .pw-knowledge-directory-group :is(.pw-learning-object, .pw-followup-row) { padding: var(--pw-gap-content) 0; min-height: 72px; border-radius: 0; }
+.pw-knowledge-workspace :is(.pw-learning-object-copy strong, .pw-followup-row-title) { display: block; font-size: 16px; line-height: 25px; font-weight: 600; white-space: normal; overflow-wrap: anywhere; }
+.pw-knowledge-workspace :is(.pw-learning-object-copy small, .pw-followup-row-meta, .pw-followup-row-copy small) { display: block; font-size: 13px; line-height: 22px; color: var(--pw-copy); white-space: normal; overflow: visible; -webkit-line-clamp: unset; }
 .pw-knowledge-workspace :is(.pw-learning-verbatim, .pw-reading-copy, .pw-followup-goal) { font-size: 16px; line-height: 1.8; }
 .pw-knowledge-workspace :is(.pw-learning-caption, .pw-learning-eyebrow, .pw-followup-facts dt, .pw-followup-facts dd) { font-size: 13px; line-height: 22px; }
 .pw-knowledge-workspace .pw-learning-next { display: flex; flex-wrap: wrap; align-items: center; gap: var(--pw-gap-control) var(--pw-gap-content); margin: var(--pw-gap-content) 0 var(--pw-gap-section); padding-bottom: var(--pw-gap-content); }

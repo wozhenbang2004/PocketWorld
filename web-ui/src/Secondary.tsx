@@ -6,7 +6,7 @@ import ChannelsWorkspace from './ChannelsWorkspace';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import {
   RiAddLine, RiArrowLeftLine, RiArrowRightSLine, RiCheckLine, RiComputerLine, RiDatabase2Line,
-  RiFileList3Line, RiKey2Line, RiLink, RiMicLine, RiPuzzle2Line, RiRefreshLine,
+  RiFileList3Line, RiKey2Line, RiLink, RiMicLine, RiNotification3Line, RiPuzzle2Line, RiRefreshLine,
   RiSettings3Line, RiShieldCheckLine, RiSmartphoneLine, RiTeamLine,
 } from '@remixicon/react';
 import { bridge } from './bridge';
@@ -122,12 +122,12 @@ function SourceRecord({ item, titleKeys = ['name', 'title', 'goal', 'label', 'id
     {children}
   </article>;
 }
-function CapabilityAction({ action, supported, run, args = {}, children, primary = false, disabled = false, row = false }: { action: string; supported: (action: string) => boolean; run: Run; args?: Data; children: ReactNode; primary?: boolean; disabled?: boolean; row?: boolean }) {
+function CapabilityAction({ action, supported, run, args = {}, children, primary = false, disabled = false, row = false, icon }: { action: string; supported: (action: string) => boolean; run: Run; args?: Data; children: ReactNode; primary?: boolean; disabled?: boolean; row?: boolean; icon?: typeof RiKey2Line }) {
   const [waiting, setWaiting] = useState(false);
   const click = async () => { setWaiting(true); try { await run(action, args); } catch { /* The page keeps the real error visible. */ } finally { setWaiting(false); } };
   const inactive = disabled || waiting || !supported(action);
   return primary ? <PressButton compact disabled={inactive} onClick={click} title={!supported(action) ? '当前页面尚未开放此操作' : undefined}>{waiting ? '处理中…' : children}</PressButton>
-    : <Button variant={row ? "ghost" : "secondary"} className={row ? "pw-domain-link h-auto whitespace-normal" : undefined} trailingIcon={row ? RiArrowRightSLine : undefined} disabled={inactive} onClick={click} title={!supported(action) ? '当前页面尚未开放此操作' : undefined}>{waiting ? '处理中…' : children}</Button>;
+    : <Button variant={row ? "ghost" : "secondary"} className={row ? "pw-domain-link h-auto whitespace-normal" : undefined} leadingIcon={icon} trailingIcon={row ? RiArrowRightSLine : undefined} disabled={inactive} onClick={click} title={!supported(action) ? '当前页面尚未开放此操作' : undefined}>{waiting ? '处理中…' : children}</Button>;
 }
 
 type ModelDraft = { name: string; url: string; model: string; provider: string; bedrockRegion: string; expiresAt: string; screenshots: boolean; supportsImageInput: boolean; maxOutputTokens: string; compatibility: CompatibilityDraft };
@@ -597,17 +597,19 @@ function PhoneSettings({ state, supported, run, navigate, registerTransientBack,
       <div className="pw-phone-app-entry"><CapabilityAction row action="settings.openAppUpdates" supported={supported} run={run}><span><span>应用更新</span><small>检查新版本与管理下载</small></span></CapabilityAction></div>
     </> : !direct && <DataOperationHeading title={sections[journey.view]?.title || '手机能力'} parent="手机能力" description="" onBack={() => journey.open('list')}/>}
     {(state.speaking || readout.active) && <section className="pw-phone-live-audio" aria-label="当前朗读"><span role="status">{state.speaking ? '正在朗读回复' : '正在播报任务状态'}</span><div>{state.speaking && <CapabilityAction action="speech.stop" supported={supported} run={run}>停止朗读</CapabilityAction>}{readout.active && <CapabilityAction action="speech.stopTaskAnnouncement" args={{ readoutId: readout.readoutId }} supported={supported} run={run}>停止这次状态提示</CapabilityAction>}</div></section>}
-    {journey.view === 'execution' && <section className="pw-phone-detail" aria-label="执行权限与连接">
+    {journey.view === 'execution' && <section className="pw-phone-detail pw-phone-permissions" aria-label="执行权限与连接">
       <p className="pw-detail-status" role="status">{first(ready, ['message', 'summary', 'status'], '尚未核对执行能力')}</p>
-      <div className="pw-settings-links">
+      <section className="pw-phone-permission-group" aria-label="手机操作"><h2>手机操作</h2><div className="pw-settings-links">
         {[
           ['accessibility', '界面读取与主屏控制', flag(state.accessibilityEnabled, '已连接', '未连接')],
           ['notifications', '任务通知', flag(state.notificationsEnabled)],
-          ['wireless', '无线调试系统设置', '打开这台手机的系统页面'],
-        ].map(([section, title, current]) => <CapabilityAction key={section} row action="settings.openSystem" args={{ section }} supported={supported} run={run}><span><span>{title}</span><small>{current}</small></span></CapabilityAction>)}
-        <Button variant="ghost" trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" disabled={!supported('settings.openSystem')} onClick={() => navigate('background')}><span><span>后台连接与授权</span><small>本机配对、连接和实际能力检查</small></span></Button>
-      </div>
-      <p className="pw-field-hint">系统授权与连接不会自动开始任务。返回原目标后再核对本次执行范围。</p>
+        ].map(([section, title, current]) => <CapabilityAction key={section} row icon={section === 'accessibility' ? RiSmartphoneLine : RiNotification3Line} action="settings.openSystem" args={{ section }} supported={supported} run={run}><span className="pw-phone-permission-copy"><span>{title}</span><small>{current}</small></span></CapabilityAction>)}
+      </div></section>
+      <section className="pw-phone-permission-group" aria-label="后台连接"><h2>后台连接</h2><div className="pw-settings-links">
+        <CapabilityAction row icon={RiLink} action="settings.openSystem" args={{ section: 'wireless' }} supported={supported} run={run}><span className="pw-phone-permission-copy"><span>无线调试</span><small>前往设置</small></span></CapabilityAction>
+        <Button variant="ghost" leadingIcon={RiComputerLine} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" disabled={!supported('settings.openSystem')} onClick={() => navigate('background')}><span><span>后台连接与授权</span><small>配对、连接与能力检查</small></span></Button>
+      </div></section>
+      <Accordion className="pw-phone-permission-help"><AccordionItem id="system-permission-scope" title="授权如何生效"><p className="pw-field-hint">系统授权与连接不会自动开始任务。返回原目标后再核对本次执行范围。</p></AccordionItem></Accordion>
     </section>}
     {journey.view === 'observation' && <section className="pw-phone-detail" aria-label="本地观察与截图">
       {!observationKnown && <p className="pw-field-hint" role="status">尚未读取观察设置，请刷新当前状态后再更改。</p>}
@@ -802,15 +804,16 @@ function HistoryPage({ usage, supported, run }: { usage: boolean; supported: (ac
     return result;
   }, []);
   return <Card className="pw-history-workspace">
-    <header className="pw-history-toolbar"><span>{read ? `当前窗口 · ${items.length} 条记录` : '原记录窗口'}</span><Button variant="secondary" leadingIcon={RiRefreshLine} disabled={busy || !supported(action)} onClick={() => load(true)}>刷新记录</Button></header>
-    <p className="pw-history-context">{usage ? '保留的实际调用摘要；不是全部账单或余额，也不产生执行权限。' : '原任务与原回执；打开历史不会重放执行。'}</p>
+    <header className="pw-history-toolbar"><span>{read && items.length ? `最近记录 · ${items.length} 条` : '最近记录'}</span><Button variant="ghost" leadingIcon={RiRefreshLine} disabled={busy || !supported(action)} onClick={() => load(true)}>{busy ? '读取中…' : error ? '重新读取' : '刷新'}</Button></header>
     {error && <p className="pw-field-error" role="alert">{error}</p>}
-    {busy && <p className="pw-field-hint" aria-live="polite">正在读取原记录…</p>}
-    {!read && !busy && <Empty>尚未读取原记录。</Empty>}
-    {read && items.length === 0 && <Empty>{usage ? '当前窗口没有保留的独立调用记录；不代表服务用量为 0。' : '当前窗口没有任务记录。'}</Empty>}
-    <div className="pw-settings-record-list">{groups.map(group => <section key={group.key} className="pw-history-date-group" aria-label={group.label}><h2>{group.label}<span>{group.rows.length} 条</span></h2>{group.rows.map(row => <CapabilityAction key={recordId(row)} row action="tasks.open" args={{ id: recordId(row) }} supported={supported} run={run}><span className="pw-history-record-content"><span className="pw-history-record-heading"><strong>{first(row, ['goal', 'title', 'id'], '原任务')}</strong><em className="pw-settings-record-status" data-record-status={text(row.status || row.state)}>{statusText(row.status || row.state)}</em></span><small>{[timeText(row.updatedAt), first(row, ['source', 'executionMode'])].filter(Boolean).join(' · ')}</small></span></CapabilityAction>)}</section>)}</div>
+    {busy && <p className="pw-field-hint" role="status">正在更新记录…</p>}
+    {!read && !busy && !error && <div className="pw-history-empty"><RiFileList3Line aria-hidden="true" /><h2>尚未读取记录</h2><p>{supported(action) ? '刷新后查看保留的记录。' : '当前版本暂不支持读取这些记录。'}</p></div>}
+    {read && !busy && !error && items.length === 0 && <div className="pw-history-empty"><RiFileList3Line aria-hidden="true" /><h2>{usage ? '暂无调用记录' : '暂无任务记录'}</h2><p>{usage ? '当前窗口还没有保留的模型调用。' : '任务运行后，可以在这里回看保留的过程与结果。'}</p></div>}
+    {error && items.length > 0 && <p className="pw-field-hint">下方保留上次读取的记录。</p>}
+    {groups.length > 0 && <div className="pw-settings-record-list">{groups.map(group => <section key={group.key} className="pw-history-date-group" aria-label={group.label}><h2>{group.label}<span>{group.rows.length} 条</span></h2><div className="pw-history-record-group">{group.rows.map(row => <CapabilityAction key={recordId(row)} row action="tasks.open" args={{ id: recordId(row) }} supported={supported} run={run}><span className="pw-history-record-content"><span className="pw-history-record-heading"><strong>{first(row, ['goal', 'title', 'id'], '原任务')}</strong><em className="pw-settings-record-status" data-record-status={text(row.status || row.state)}>{statusText(row.status || row.state)}</em></span><small>{[timeText(row.updatedAt), first(row, ['source', 'executionMode'])].filter(Boolean).join(' · ')}</small></span></CapabilityAction>)}</div></section>)}</div>}
     {more && items.length < 160 && <Button variant="secondary" disabled={busy} onClick={() => load(false)}>读取较早窗口</Button>}
     {items.length >= 160 && <p className="pw-field-hint">已到本次 160 条显示上限；原记录仍保留，刷新可回到最近窗口。</p>}
+    <Accordion variant="divided" className="pw-history-help"><AccordionItem id="record-coverage" title="记录说明"><p className="pw-history-context">{usage ? '这里只展示当前窗口保留的调用摘要。完整用量和账单请以服务方为准；没有记录不代表用量为 0。' : '这里只展示当前窗口保留的任务。打开记录可以查看原任务与回执，不会重新执行。'}</p></AccordionItem></Accordion>
   </Card>;
 }
 
@@ -1584,7 +1587,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
     return () => registerBackHandler?.(null);
   }, [registerBackHandler]);
   const back = () => { if (!consumeBack()) onBack(); };
-  const settingRows = (entries: Array<{ id: string; title: string; detail: string; icon: typeof RiKey2Line }>) => <div className="pw-settings-links">{entries.map(item => <Button key={item.id} variant="ghost" leadingIcon={item.icon} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" disabled={item.id === 'updates' && !supported('settings.openAppUpdates')} onClick={() => { if (item.id === 'updates') { void run('settings.openAppUpdates', {}).catch(() => {}); } else if (item.id === 'setup') onOpenSetup?.(); else navigate(item.id); }}><span className="pw-settings-row-copy"><span>{item.title}</span>{item.detail && <small>{item.detail}</small>}</span></Button>)}</div>;
+  const settingRows = (entries: Array<{ id: string; title: string; detail: string; icon: typeof RiKey2Line }>) => <div className="pw-settings-links">{entries.map(item => <Button key={item.id} variant="ghost" leadingIcon={item.icon} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" disabled={item.id === 'updates' && !supported('settings.openAppUpdates')} onClick={() => { if (item.id === 'updates') { void run('settings.openAppUpdates', {}).catch(() => {}); } else if (item.id === 'setup') onOpenSetup?.(); else navigate(item.id); }}><span className="pw-settings-row-copy" data-inline-status={!!item.detail && item.detail.length <= 12}><span>{item.title}</span>{item.detail && <small>{item.detail}</small>}</span></Button>)}</div>;
   const refreshAction = page === 'background' ? 'background.refresh' : isModelPage ? 'models.snapshot' : page === 'memory' ? 'memory.list' : 'app.refresh';
   const content = <div className="pw-secondary-scroll" ref={scroll}>
       {notice && <p className="pw-request-notice" role="status">{notice}</p>}
@@ -1593,7 +1596,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
         {(page === 'settings' || page === 'connections') ? <div className="pw-settings-home pw-settings-preferences">
           <SearchField className="pw-secondary-search" data-input-size="medium" aria-label="搜索设置" placeholder="搜索设置" value={query} onChange={setQuery} shape="rounded" />
           {query.trim() ? <section className="pw-settings-results" aria-label="匹配的设置">{settingRows(filtered)}{filtered.length === 0 && <Empty>没有匹配的设置。</Empty>}</section>
-            : <div className="pw-settings-categories">{SETTINGS_GROUPS.map(group => <section key={group.id} className="pw-settings-category" data-settings-group={group.id} aria-label={group.title}><h2>{group.title}</h2>{settingRows(group.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}{group.id === 'privacy' && <div className="pw-settings-execution" aria-label="执行控制"><ExecutionControls state={state} supported={supported} run={run}/></div>}</section>)}</div>}
+            : <div className="pw-settings-categories">{SETTINGS_GROUPS.map(group => <section key={group.id} className="pw-settings-category" data-settings-group={group.id} aria-label={group.title}><h2>{group.title}</h2><div className="pw-settings-category-content">{settingRows(group.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}{group.id === 'privacy' && <div className="pw-settings-execution" aria-label="执行控制"><ExecutionControls state={state} supported={supported} run={run}/></div>}</div></section>)}</div>}
         </div> : settingsGroup ? <section className="pw-settings-group-page">{settingRows(settingsGroup.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}</section>
           : isAIPage ? <AICenter key={page + ':' + (navigationRevision || 0)} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} initialView={page === 'proxy' ? 'proxy' : 'main'} onHostSectionChange={setModelHostSection}
               renderEditor={(row, preset, close, saved, registerBack) => {
@@ -1613,7 +1616,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
       </div>
     </div>;
   return <section className="pw-secondary pw-secondary-refactor" data-secondary-page={page} data-workspace={workspace?.key} aria-label={pageTitle}>
-    <header className="pw-secondary-header"><IconButton icon={RiArrowLeftLine} aria-label={isModelPage && hostSection === 'proxy' ? '返回 AI 接入' : isModelPage && modelView.kind !== 'list' ? modelBackLabel : '返回'} onClick={back} /><div><h1>{pageTitle}</h1></div>{!workspace && !(isAIPage && hostSection !== 'models') && <IconButton icon={RiRefreshLine} aria-label="刷新当前状态" title="刷新当前状态" disabled={!supported(refreshAction)} onClick={() => { void run(refreshAction, {}).catch(() => {}); }} />}{navigationTrigger}</header>
+    <header className="pw-secondary-header"><IconButton icon={RiArrowLeftLine} aria-label={isModelPage && hostSection === 'proxy' ? '返回 AI 接入' : isModelPage && modelView.kind !== 'list' ? modelBackLabel : '返回'} onClick={back} /><div><h1>{pageTitle}</h1></div>{!workspace && !['settings', 'connections', 'history', 'usage'].includes(page) && !(isAIPage && hostSection !== 'models') && <IconButton icon={RiRefreshLine} aria-label="刷新当前状态" title="刷新当前状态" disabled={!supported(refreshAction)} onClick={() => { void run(refreshAction, {}).catch(() => {}); }} />}{navigationTrigger}</header>
     {workspace ? <Tabs className="pw-workspace-navigation" selectedKey={workspacePageForRoute(page)} onSelectionChange={key => switchWorkspacePage(String(key))}>
       <TabList aria-label={workspace.title + '工作区'}>{workspace.pages.map(item => <Tab key={item.route} id={item.route}>{item.title}</Tab>)}</TabList>
       <TabPanel id={workspacePageForRoute(page) || workspace.route} className="pw-workspace-panel">{content}</TabPanel>

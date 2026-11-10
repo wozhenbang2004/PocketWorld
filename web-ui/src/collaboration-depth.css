@@ -221,33 +221,7 @@
  .pw-team-editor-footer{padding:var(--pw-gap-content) var(--pw-page-gutter) max(var(--pw-gap-content),env(safe-area-inset-bottom))}
 }
 
-/* Existing device and remote layouts, outside this page-family change. */
-/* Devices: local receiving and pending pairing stay above the object directory. */
-.pw-devices-reading.pw-depth-collaboration{font-size:16px;line-height:1.7}
-.pw-devices-reading.pw-depth-collaboration :is(button,[role='tab']){min-height:48px}
-.pw-devices-reading.pw-depth-collaboration :is(input,textarea,[role='combobox']){font-size:16px}
-.pw-devices-reading.pw-depth-collaboration .pw-device-heading h2{font-size:20px;line-height:1.5;font-weight:600}
-.pw-devices-reading.pw-depth-collaboration .pw-device-heading-actions button{min-width:48px}
-.pw-device-directory-count{font-size:13px;line-height:1.7;color:var(--pw-copy);margin:0}
-.pw-device-directory{display:grid;gap:var(--pw-gap-section);min-width:0;margin-top:var(--pw-gap-section)}
-.pw-devices-reading.pw-depth-collaboration .pw-collaboration-group-heading>h3{font-size:13px;line-height:1.6;color:var(--pw-copy);font-weight:600}
-.pw-devices-reading.pw-depth-collaboration .pw-device-row{min-height:72px;border-bottom:1px solid var(--collab-line);border-radius:0;padding-block:12px}
-.pw-devices-reading.pw-depth-collaboration .pw-device-row-name{font-size:16px;font-weight:600;line-height:1.5}
-.pw-devices-reading.pw-depth-collaboration :is(.pw-device-row-status,.pw-device-row small,.pw-device-footnote){font-size:13px;line-height:1.65}
-.pw-devices-reading.pw-depth-collaboration .pw-device-local-settings{margin-bottom:var(--pw-gap-section)}
-
-.pw-devices-reading.pw-depth-collaboration :is(.pw-device-list,.pw-device-task-list,.pw-device-disclosures,.pw-device-empty,.pw-device-connection,.pw-device-attention){background:transparent;border-radius:0;box-shadow:none}
-.pw-devices-reading.pw-depth-collaboration .pw-device-heading{margin-bottom:var(--pw-gap-section)}
-.pw-devices-reading.pw-depth-collaboration .pw-device-list{padding:0}
-.pw-devices-reading.pw-depth-collaboration .pw-device-row{padding-inline:0}
-.pw-devices-reading.pw-depth-collaboration .pw-device-row>span{display:flex;justify-content:flex-start;width:100%;min-width:0;flex:1 1 auto}
-.pw-devices-reading.pw-depth-collaboration .pw-device-row-copy{flex:1 1 auto}
-.pw-devices-reading.pw-depth-collaboration .pw-device-connection{padding:0;margin-bottom:var(--pw-gap-section);border:0}
-.pw-devices-reading.pw-depth-collaboration .pw-device-disclosures{padding:0;margin:0 0 var(--pw-gap-section)}
-.pw-devices-reading.pw-depth-collaboration .pw-device-task-list{padding:0}
-.pw-devices-reading.pw-depth-collaboration .pw-device-task{padding:16px 0}
-.pw-devices-reading.pw-depth-collaboration .pw-device-section{margin-bottom:var(--pw-gap-section)}
-.pw-device-review .pw-facts{background:transparent;border-radius:0;padding:0}
+/* Device composition is owned by devices-reading.css. */
 /* Remote sessions: attention/inputs and observation are distinct common regions. */
 .pw-remote-workspace.pw-depth-collaboration{gap:var(--pw-gap-section);padding-block:0 var(--pw-gap-section)}
 .pw-remote-workspace.pw-depth-collaboration>.pw-section-heading{align-items:flex-start;gap:var(--pw-gap-content)}
@@ -267,12 +241,6 @@
 @media(min-width:800px){
  .pw-remote-work-layout:has(.pw-remote-primary:not(:empty)){grid-template-columns:minmax(0,1.4fr) minmax(260px,1fr);gap:var(--pw-gap-section)}
  .pw-remote-context{padding-left:0;border:0}
- .pw-devices-reading.pw-depth-collaboration[data-device-view='detail']{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(260px,1fr);gap:var(--pw-gap-section);align-items:start}
- .pw-devices-reading.pw-depth-collaboration[data-device-view='detail']>.pw-device-heading{grid-column:1/-1;margin-bottom:0}
- .pw-devices-reading.pw-depth-collaboration[data-device-view='detail']>.pw-device-connection{grid-column:2;grid-row:2;margin:0}
- .pw-devices-reading.pw-depth-collaboration[data-device-view='detail']>.pw-device-disclosures{grid-column:2;grid-row:3 / span 2;padding-left:0}
- .pw-devices-reading.pw-depth-collaboration[data-device-view='detail']>.pw-device-tasks{grid-column:1;grid-row:2 / span 3}
- .pw-devices-reading.pw-depth-collaboration[data-device-view='detail']>.pw-device-local-settings{grid-column:1/-1}
 }
 @media(max-width:600px){
  .pw-remote-workspace.pw-depth-collaboration .pw-form-actions{gap:var(--pw-gap-control)}

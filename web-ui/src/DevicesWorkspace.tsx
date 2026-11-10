@@ -160,24 +160,23 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
 
   return <>
     <section ref={readingRoot} className="pw-settings-section pw-devices-reading pw-depth-collaboration" data-device-view={desktopOpen ? 'desktop' : peerId ? 'detail' : 'list'}>
-      <header className="pw-device-heading">
+      {(desktopOpen || peerId) && <header className="pw-device-heading">
         <div className="pw-device-heading-copy">
           {peerId && !desktopOpen && <Button variant="ghost" className="pw-device-back" leadingIcon={ArrowLeft} disabled={busy} onClick={() => { setPeerId(''); setForm(''); setRaw(''); }}>所有设备</Button>}
-          {desktopOpen || peerId ? <h2 tabIndex={-1}>{desktopOpen ? '电脑桌面' : peer ? name(peer) : '设备详情'}</h2> : <p className="pw-device-directory-count">{peers.length} 台已配对设备</p>}
+          <h2 tabIndex={-1}>{desktopOpen ? '电脑桌面' : peer ? name(peer) : '设备详情'}</h2>
           {!desktopOpen && peer && <p>{peer.platform || '已配对设备'}</p>}
         </div>
         {!desktopOpen && <div className="pw-device-heading-actions">
           <Button variant="ghost" iconOnly leadingIcon={RefreshCw} aria-label="刷新原设备状态" title="刷新原设备状态" disabled={busy} onClick={refresh} />
-          {!peerId && (!snapshot || peers.length > 0) && <Button leadingIcon={Plus} disabled={busy} onClick={() => { setForm('add'); setRaw(''); setAddress(''); }}>配对设备</Button>}
         </div>}
-      </header>
+      </header>}
       {desktopOpen && peer && <DesktopViewer key={peer.deviceId} peer={peer} supported={supported} run={run} onClose={() => setDesktopOpen(false)} />}
       {desktopOpen && !peer && <p role="alert">设备状态已变化。<Button variant="secondary" onClick={() => setDesktopOpen(false)}>返回设备</Button></p>}
       {!desktopOpen && <>
         {error && <p className="pw-device-feedback" role="alert">{error}</p>}
         {notice && <p className="pw-device-feedback" role="status">{notice}</p>}
         {busy && <p role="status" className="pw-device-loading">正在读取原设备回执…</p>}
-        {!snapshot && !busy && <div className="pw-device-empty"><h3>设备状态待读取</h3><Button variant="secondary" onClick={refresh}>读取设备状态</Button></div>}
+        {!snapshot && !busy && <div className="pw-device-empty"><h3>尚未读取设备状态</h3><p>读取后查看已配对设备与连接状态。</p><Button variant="secondary" onClick={refresh}>读取设备状态</Button></div>}
         {snapshot && !peerId && <>
           {pairings.length > 0 && <section className="pw-device-section" aria-label="等待核对的原配对">
             <header className="pw-device-section-heading"><h3>配对待确认</h3><span>{pairings.length} 项</span></header>
@@ -188,31 +187,41 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               </article>)}
             </div>
           </section>}
-        {snapshot && !peerId && <Accordion className="pw-device-disclosures pw-device-local-settings">
-          <AccordionItem id="receiver" title="这台手机" description={receiverLabel} icon={Smartphone}>
-            <p>本机接收、双端身份与每项授权分别核对。连接状态不代表任务已经停止或完成。</p>
-            {local.receiverReason && <p>{local.receiverReason}</p>}
-            <Button variant="secondary" disabled={busy || !available(actions[local.receiverEnabled ? 'disable' : 'enable'])} onClick={() => actionReview(local.receiverEnabled ? 'receiver.disable' : 'receiver.enable')}>{local.receiverEnabled ? '核对并停用接收' : '核对并启用接收'}</Button>
-            {!available(actions[local.receiverEnabled ? 'disable' : 'enable']) && <p>{actions[local.receiverEnabled ? 'disable' : 'enable']?.reason}</p>}
-          </AccordionItem>
-          {(rows(snapshot.pairingOffersToRecover).length > 0 || rows(snapshot.committedPairingsToRecover).length > 0) && <AccordionItem id="recover" title="核对已有配对结果" description="找回已提交的结果，不重新授权">
-            <p>只读取双方已确认的原结果，不重做配对、不延长旧权限。</p>
-            {rows(snapshot.pairingOffersToRecover).map(row => <div className="pw-device-history-entry" key={row.inviteId}><p>原邀请 {row.inviteId}</p><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => openRecovery(row, false)}>读取已提交结果</Button>{row.abandonAvailable === true && <Button variant="ghost" disabled={busy} onClick={() => { void invoke('devices.reviewAbandonment', { inviteId: row.inviteId }, acceptReview); }}>核对并放弃本机待配对</Button>}</div></div>)}
-            {rows(snapshot.committedPairingsToRecover).map(row => <div className="pw-device-history-entry" key={row.inviteId}><p>为原设备 {row.peerDeviceId} 提供已提交结果</p><Button variant="secondary" disabled={busy || row.recoveryState !== 'available'} onClick={() => openRecovery(row, true)}>开启原结果只读窗口</Button></div>)}
-          </AccordionItem>}
-        </Accordion>}
           <section className="pw-device-section" aria-label="已配对设备">
-            {peers.length > 0 && <SearchField fieldClassName="pw-collaboration-search" shape="rounded" aria-label="搜索已配对设备" placeholder="搜索名称或设备" value={query} onChange={setQuery} />}
+            <header className="pw-device-section-heading pw-device-directory-heading">
+              <h3>{peers.length ? `已配对设备 · ${peers.length} 台` : '配对设备'}</h3>
+              <div className="pw-device-heading-actions">
+                <Button variant="ghost" iconOnly leadingIcon={RefreshCw} aria-label="刷新设备状态" title="刷新设备状态" disabled={busy} onClick={refresh} />
+                {peers.length > 0 && <Button leadingIcon={Plus} disabled={busy} onClick={() => { setForm('add'); setRaw(''); setAddress(''); }}>配对设备</Button>}
+              </div>
+            </header>
+            {(peers.length > 5 || query) && <SearchField className="pw-device-search" fieldClassName="pw-collaboration-search" shape="rounded" aria-label="搜索已配对设备" placeholder="搜索名称或设备" value={query} onChange={setQuery} />}
             {peers.length ? <div className="pw-device-directory">{peerSections.filter(section => section.peers.length > 0).map(section => <section className="pw-collaboration-group" key={section.id} aria-label={section.title}><header className="pw-collaboration-group-heading"><h3>{section.title}</h3><span>{section.peers.length} 台</span></header><div className="pw-device-list">
               {section.peers.map(row => <Button key={row.deviceId} variant="ghost" className="pw-device-row" leadingIcon={/android|ios|phone/i.test(row.platform || '') ? Smartphone : Monitor} trailingIcon={ChevronRight} disabled={busy} aria-label={`查看 ${name(row)} 的设备与授权`} onClick={() => { rememberReadingPosition('list'); setPeerId(row.deviceId); setError(''); }}>
                 <span className="pw-device-row-copy"><span className="pw-device-row-name">{name(row)}</span><span className="pw-device-row-status">{deviceConnectionLabel(row)}</span><small>{row.platform || '已配对设备'} · {deviceTaskRows(state.tasks, snapshot, row.deviceId).length} 项关联任务</small></span>
               </Button>)}
-            </div></section>)}{query && !visiblePeers.length && <p className="pw-secondary-empty">没有匹配的设备。</p>}</div> : <div className="pw-device-empty">
+            </div></section>)}{query && !visiblePeers.length && <div className="pw-device-empty"><h3>没有匹配的设备</h3><p>换个名称搜索，或查看全部已配对设备。</p><Button variant="secondary" onClick={() => setQuery('')}>清除搜索</Button></div>}</div> : <div className="pw-device-empty">
               <span className="pw-device-empty-icon" aria-hidden="true"><Monitor size={24} /><Smartphone size={19} /></span>
-              <h3>尚未配对设备</h3>
-              <p>使用另一台设备的短时邀请，或从这台手机创建邀请。配对前，你会核对两端指纹和准确权限。</p>
-              <Button disabled={busy} onClick={() => { setForm('add'); setRaw(''); setAddress(''); }}>配对第一台设备</Button>
+              <h3>连接另一台设备</h3>
+              <p>通过邀请配对手机或电脑，在这里查看连接与任务。</p>
+              <Button variant={pairings.length ? 'secondary' : 'primary'} disabled={busy} onClick={() => { setForm('add'); setRaw(''); setAddress(''); }}>{pairings.length ? '配对其他设备' : '配对设备'}</Button>
             </div>}
+          </section>
+          <section className="pw-device-section" aria-label="本机接收">
+            <header className="pw-device-section-heading"><h3>本机接收</h3></header>
+            <Accordion className="pw-device-disclosures pw-device-local-settings">
+              <AccordionItem id="receiver" title="这台手机" description={receiverLabel} icon={Smartphone}>
+                <p>本机接收、双端身份与每项授权分别核对。连接状态不代表任务已经停止或完成。</p>
+                {local.receiverReason && <p>{local.receiverReason}</p>}
+                <Button variant="secondary" disabled={busy || !available(actions[local.receiverEnabled ? 'disable' : 'enable'])} onClick={() => actionReview(local.receiverEnabled ? 'receiver.disable' : 'receiver.enable')}>{local.receiverEnabled ? '核对并停用接收' : '核对并启用接收'}</Button>
+                {!available(actions[local.receiverEnabled ? 'disable' : 'enable']) && <p>{actions[local.receiverEnabled ? 'disable' : 'enable']?.reason}</p>}
+              </AccordionItem>
+              {(rows(snapshot.pairingOffersToRecover).length > 0 || rows(snapshot.committedPairingsToRecover).length > 0) && <AccordionItem id="recover" title="核对已有配对结果" description="找回已提交的结果，不重新授权">
+                <p>只读取双方已确认的原结果，不重做配对、不延长旧权限。</p>
+                {rows(snapshot.pairingOffersToRecover).map(row => <div className="pw-device-history-entry" key={row.inviteId}><p>原邀请 {row.inviteId}</p><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => openRecovery(row, false)}>读取已提交结果</Button>{row.abandonAvailable === true && <Button variant="ghost" disabled={busy} onClick={() => { void invoke('devices.reviewAbandonment', { inviteId: row.inviteId }, acceptReview); }}>核对并放弃本机待配对</Button>}</div></div>)}
+                {rows(snapshot.committedPairingsToRecover).map(row => <div className="pw-device-history-entry" key={row.inviteId}><p>为原设备 {row.peerDeviceId} 提供已提交结果</p><Button variant="secondary" disabled={busy || row.recoveryState !== 'available'} onClick={() => openRecovery(row, true)}>开启原结果只读窗口</Button></div>)}
+              </AccordionItem>}
+            </Accordion>
           </section>
         </>}
         {peerId && !peer && snapshot && <p className="pw-device-feedback" role="alert">这台设备不在当前读取页。保留原身份，请返回后刷新核对。</p>}
@@ -276,7 +285,10 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
           </div>
           {tasks.length > 40 && <p className="pw-device-footnote">当前展示前 40 项原设备任务。</p>}
         </section>}
-        {snapshot && <p className="pw-device-footnote">原状态读取于 {time(snapshot.capturedAt)}{snapshot.hasMorePeers || snapshot.hasMorePendingPairings || snapshot.hasMoreTaskActions ? ' · 当前展示有界读取页，更多记录需从原对象继续核对。' : ''}</p>}
+        {snapshot && <Accordion className="pw-device-read-details"><AccordionItem id="device-read-details" title="读取详情" description={snapshot.hasMorePeers || snapshot.hasMorePendingPairings || snapshot.hasMoreTaskActions ? '还有记录未展开' : undefined}>
+          <p className="pw-device-footnote">状态读取于 {time(snapshot.capturedAt)}</p>
+          {(snapshot.hasMorePeers || snapshot.hasMorePendingPairings || snapshot.hasMoreTaskActions) && <p className="pw-device-footnote">当前展示有界读取页，更多记录需从原对象继续核对。</p>}
+        </AccordionItem></Accordion>}
       </>}
     </section>
     <SettingsDialog isOpen={!!form} onClose={() => { clearSensitive(true); refresh(); }} title={form === 'relay' ? '临时中继租约' : form === 'connection' ? '更新原设备连接地址' : form.startsWith('recovery') ? '核对原配对结果' : '配对你的另一台设备'}><div className="pw-collaboration-dialog" data-collaboration-kind="DevicesWorkspace">
