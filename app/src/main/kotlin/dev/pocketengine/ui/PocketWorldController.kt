@@ -2362,8 +2362,9 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun canReadConversationWindow(page:ConversationReadPage)=!closed&&privateWorkspaceView()&&conversationReader?.window==page.window&&conversationReader?.conversation==page.conversation
     fun openConversationReader(id:String) {
         if(id.isBlank()||id.length>240||!privateWorkspaceView())return
-        if(id==state.conversationId){closeConversationReader();return}
-        val saved=runCatching{ownerComposer?.readingConversation(id)}.getOrNull()
+        // Reading the active conversation is independent of its live composer anchor.
+        // Closing this overlay must not move the underlying chat or its draft.
+        val saved=if(id==state.conversationId)null else runCatching{ownerComposer?.readingConversation(id)}.getOrNull()
         conversationReader=ConversationReadPage(++conversationReadSequence,id,state.conversations.find{it.id==id}?.title.orEmpty(),saved?.key,index=saved?.scrollIndex?:0,offset=saved?.scrollOffset?:0,anchor=saved?.anchorMessage.orEmpty(),notice=if(saved==null)"本次阅读位置只在当前窗口保留；没有覆盖其他草稿。" else null)
         persistOwnerComposer();readConversationWindow(false)
     }
@@ -2388,7 +2389,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         if(page.readingKey!=null)runCatching{ownerComposer?.reading(page.readingKey,index,offset,anchor,page.messages.lastOrNull()?.id.orEmpty(),false);persistOwnerComposer()}
     }
     fun closeConversationReader(){conversationReader=null;++conversationReadSequence}
-    fun switchFromConversationReader(window:Long){val page=conversationReader?:return;if(page.window!=window||state.chatSubmitting)return;closeConversationReader();openConversation(page.conversation)}
+    fun switchFromConversationReader(window:Long){val page=conversationReader?:return;if(page.window!=window||state.chatSubmitting)return;closeConversationReader();if(page.conversation!=state.conversationId)openConversation(page.conversation)}
     fun openReaderAttachment(window:Long,message:String,reference:UiChatAttachment){
         val page=conversationReader?:return;if(page.window!=window||!canReadConversationWindow(page))return
         openPrivateAttachment(reference){conversationReader?.let{canReadConversationWindow(it)&&it.window==window&&it.messages.any{row->row.id==message&&row.attachments.any{file->attachmentOpenKey(file)==attachmentOpenKey(reference)}}}==true}

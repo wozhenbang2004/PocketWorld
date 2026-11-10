@@ -211,7 +211,7 @@ internal class PocketWebBridge(
         val commands: Set<String> = linkedSetOf(
             "app.ready", "app.refresh", "notice.dismiss", "notice.task.close", "error.dismiss", "execution.read", "execution.review", "execution.confirm",
             "composer.edit", "composer.send", "composer.mode", "composer.intent", "composer.reading", "composer.query", "composer.retry", "composer.returnPending",
-            "chat.cancel", "ownerWork.input", "ownerWork.control", "message.origin", "conversation.new", "conversation.select", "conversation.reader.close", "conversation.reader.earlier", "conversation.reader.refresh", "conversation.reader.position", "conversation.reader.select", "conversation.reader.attachment",
+            "chat.cancel", "ownerWork.input", "ownerWork.control", "message.origin", "conversation.new", "conversation.select", "conversation.reader.open", "conversation.reader.close", "conversation.reader.earlier", "conversation.reader.refresh", "conversation.reader.position", "conversation.reader.select", "conversation.reader.attachment",
             "attachments.pick", "attachments.openPicker", "attachments.closePicker", "attachments.toggle", "attachments.remove", "attachments.open", "sources.open", "sources.read", "sources.close",
             "quickVoice.start", "quickVoice.save", "quickVoice.close",
             "skillDraft.open", "skillDraft.read", "skillDraft.source", "skillDraft.confirm", "skillDraft.cancel", "skillDraft.query", "skillDraft.close", "voice.start", "voice.stop", "voice.review", "voice.accept", "voice.discard", "speech.speak", "speech.stop", "speech.taskAnnouncements", "speech.stopTaskAnnouncement",
@@ -940,6 +940,12 @@ internal class PocketWebBridge(
             }
             "conversation.new" -> { leaveTask(); leaveConnection(); reviews.clear(); phoneComposer.clearReviews(); controller.newConversation() }
             "conversation.select" -> { leaveTask(); leaveConnection(); reviews.clear(); phoneComposer.clearReviews(); controller.openConversation(requiredString(args, "id")) }
+            "conversation.reader.open" -> {
+                require(section == null && taskViewId == null && controller.webPrivateOwnerVisible()) { "请回到原对话查看历史" }
+                val conversation = requiredString(args, "conversationId")
+                require(conversation == controller.state.conversationId) { "原对话已切换，请重新打开历史" }
+                controller.openConversationReader(conversation)
+            }
             "conversation.reader.close" -> { requireConversationReader(args, closing = true); controller.closeConversationReader() }
             "conversation.reader.earlier" -> { requireConversationReader(args); controller.loadEarlierConversationReader() }
             "conversation.reader.refresh" -> { requireConversationReader(args); controller.refreshConversationReader() }
