@@ -55,12 +55,24 @@ export function AnswerSources({ target, revision, onClose }: { target: AnswerSou
   const entries: Data[] = Array.isArray(result?.entries) ? result.entries : [];
   const detail = result?.detail, range = detail?.readRange, current = result?.status === 'current';
   const list = () => { returnFocus.current = selected?.key || null; setSelected(null); setOffset(0); setPrevious([]); };
+  const reload = () => {
+    if (error) {
+      // Native retires source windows on background/navigation. Retrying their
+      // old handles cannot recover; reopen the same answer and select fresh pins.
+      const id = windowId.current; windowId.current = '';
+      if (id) void bridge.command('sources.close', { windowId: id }).catch(() => {});
+      returnFocus.current = selected?.key || null;
+      setSelected(null); setCursor(0); setOffset(0); setPrevious([]);
+    }
+    setRefresh(value => value + 1);
+  };
+  const refreshLabel = error ? '重新打开原来源列表' : '重新核对原来源';
   return <Drawer.Root open onOpenChange={open => { if (!open) onClose(); }} shouldScaleBackground={false}><Drawer.Portal>
     <Drawer.Overlay className="pw-overlay" /><Drawer.Content className="pw-drawer pw-answer-sources" aria-describedby="answer-source-description">
       <div className="pw-drawer-handle" /><header className="pw-drawer-header">
         {selected && <IconButton icon={IconArrowLeft} aria-label="返回来源列表" onClick={list} />}
         <div><Drawer.Title>{selected ? current && detail?.context?.title || selected.title || '原保留内容' : '回答来源'}</Drawer.Title></div>
-        <IconButton icon={IconRefresh} aria-label="重新核对原来源" title="重新核对原来源" disabled={busy} onClick={() => setRefresh(value => value + 1)} />
+        <IconButton icon={IconRefresh} aria-label={refreshLabel} title={refreshLabel} disabled={busy} onClick={reload} />
         <IconButton icon={IconClose} aria-label="返回原回答" onClick={onClose} />
       </header>
       <Drawer.Description id="answer-source-description" className="pw-source-description">仅显示这次回答前保留的来源，不代表逐项采用或已经核实。</Drawer.Description>
