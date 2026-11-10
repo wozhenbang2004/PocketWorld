@@ -347,7 +347,7 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
                 case "phone_back":
                 case "phone_home": {
                     Snapshot expected = requireReference(args, control);
-                    PhoneUiSignals.Stamp validated=validateForUi(service,expected,control,true);
+                    PhoneUiSignals.Stamp validated=validateNavigationForUi(service,expected,control);
                     return onMain(control, expected.revision, () -> {
                         validateReference(service,expected,control);
                         requireUnlocked(service);
@@ -752,6 +752,22 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
             throw new PhoneFailure("dispatch_unknown", "手机请求超时，执行状态未知。请重新观察，勿盲目重试。");
         if (control.isPaused() || control.pauseRevision() != revision) throw new PhoneFailure("paused_or_changed", "任务曾暂停，请重新观察。");
         if (PhoneAccessibilityService.get() != service) throw new PhoneFailure("service_disconnected", "无障碍服务已断开。");
+    }
+
+    /** Back/Home target the current window, not a particular node or its text. */
+    private PhoneUiSignals.Stamp validateNavigationForUi(PhoneAccessibilityService service,Snapshot expected,RunControl control)throws Exception {
+        return onTreeRead(()->guard(service,control,expected.revision),()->{
+            PhoneUiSignals.Stamp before=service.uiSignals().snapshot(java.util.Collections.emptySet());
+            validateReference(service,expected,control);
+            Tree fresh=readTree(service);
+            // Preserve display, focused/active windows and modal/IME topology.
+            // A clock, text update or bounded node traversal does not change the
+            // navigation destination while this exact window layout stays current.
+            if(!expected.tree.sameWindowLayout(fresh))
+                throw new PhoneFailure("stale_observation","导航窗口、焦点或屏幕已变化，请重新观察。");
+            validateReference(service,expected,control);
+            requireUiUnchanged(service,before);return before;
+        });
     }
 
     private PhoneUiSignals.Stamp validateForUi(PhoneAccessibilityService service,Snapshot expected,RunControl control,boolean needsTree)throws Exception {
