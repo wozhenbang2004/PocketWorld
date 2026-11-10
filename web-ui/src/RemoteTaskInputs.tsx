@@ -59,6 +59,7 @@ export function RemoteInputFlow({ taskId, continuation = false, prepared, visibl
     {view?.registered && <p className="pw-field-hint">原任务已登记，目标与原件范围不会改绑；未知结果只查询原编号，不重传 body 或重建 job。</p>}
     {selected.length > 0 && <><p>已核对 {selected.length} 个原件 · {selected.reduce((sum, file) => sum + Number(file.bytes || 0), 0)} 字节</p>{selected.map(file => <p key={file.attachmentId}>{file.name} · {file.bytes} 字节 · {file.mimeType}</p>)}<Button variant="secondary" disabled={!canReview} onClick={() => { setConfirmClosed(''); void act('review'); }}>{view?.registered ? '重新核对原范围' : '核对目标与外传范围'}</Button></>}
     <p role="status">{view?.message || '正在读取原生范围…'}</p>{typeof view?.fileIndex === 'number' && view.fileIndex >= 0 && <p className="pw-field-hint">第 {view.fileIndex + 1} 个文件已写入传输 {view.writtenBytes} 字节，尚不等于远端 hash 已核对。</p>}
+    {view && <Button variant="ghost" disabled={pending.includes('inspect')} onClick={() => void act('inspect')}>{pending.includes('inspect') ? '正在读取传输状态…' : '刷新传输状态'}</Button>}
     {receiver.phase && <><p>远端阶段：{receiver.phase} · 已核 hash {receiver.verifiedBytes || 0} / {receiver.bytes || 0} 字节</p><p className="pw-field-hint">{receiver.workerStarted ? '原 worker 报告已启动，后续审批与结果在原任务查看。' : '尚无原 worker 已启动回执，ready 前不会启动。'}</p></>}
     {view?.registered && <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => void act('query')}>查询原 job，不重发</Button><Button variant="secondary" disabled={pending.includes('cancel')} onClick={() => void act('cancel')}>请求停止本次原任务</Button><Button variant="ghost" disabled={pending.includes('openTask') || busy} onClick={() => void act('openTask')}>打开原任务与成果</Button></div>}
     {error && <p className="pw-field-error" role="alert">{error}</p>}{unknown && <p className="pw-field-hint">本次效果待核对，请查询原记录；不会自动重复发送原件。</p>}
@@ -82,3 +83,4 @@ export function RemoteTaskInputActions({ snapshot, enabled, onReturn }: { snapsh
   const close = () => { setMode(null); onReturn(); };
   return <><div className="pw-form-actions">{snapshot.canContinue && <Button variant="secondary" disabled={!enabled || !snapshot.fresh} onClick={() => setMode('continuation')}>选择新文件，在原会话继续</Button>}{snapshot.task?.remoteInputScope && <Button variant="ghost" disabled={!enabled} onClick={() => setMode('original')}>原私人附件暂存与传输回执</Button>}</div>{mode && <RemoteInputFlow taskId={snapshot.taskId} continuation={mode === 'continuation'} close={close} />}</>;
 }
+

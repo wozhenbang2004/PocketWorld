@@ -78,7 +78,12 @@ internal class PocketWebRemoteInputs(
         val operation = action.removePrefix("remoteInputs."); val expected = fields[operation] ?: error("未知原附件操作")
         keys(args, expected + setOf("pageHandle", "viewHandle"))
         val original = page ?: error("原附件页面已关闭")
-        require(current(original) && text(args, "pageHandle") == original.window && text(args, "viewHandle") == original.viewHandle) { "原附件范围已变化，请重新读取" }
+        // A lost response may have advanced viewHandle. Reading this same live
+        // page must recover its current handle without replaying the old action.
+        // Every state-changing action still requires the exact latest view.
+        val presentedView = text(args, "viewHandle")
+        require(current(original) && text(args, "pageHandle") == original.window &&
+            (operation == "inspect" || presentedView == original.viewHandle)) { "原附件范围已变化，请重新读取" }
         val snapshot = original.snapshot ?: error("请先读取原附件范围")
         if (operation == "openTask") {
             require(snapshot.optBoolean("registered")) { "原任务尚未登记" }
@@ -99,3 +104,4 @@ internal class PocketWebRemoteInputs(
         execute(original, nativeCommands.getValue(operation), input, done)
     }
 }
+
