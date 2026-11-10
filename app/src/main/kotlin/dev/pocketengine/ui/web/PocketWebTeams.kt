@@ -281,7 +281,10 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                     snapshot.optJSONObject("productionSources") ?: error("请先读取原文件来源目录"), productionSources())
                 val input = JSONObject().put("id", old?.getString("id") ?: UUID.randomUUID().toString()).put("name", text(args, "name", 80).trim())
                     .put("mode", mode).put("leaderId", leader).put("members", members).put("expectedDefinition", old?.toString() ?: "")
-                input.put("discussionFormat", if (mode == "debate") old?.optString("discussionFormat")?.takeIf { it.isNotBlank() } ?: TeamEvidenceDiscussion.FORMAT else "classic")
+                // Only an existing debate retains its discussion protocol. Other
+                // modes store "classic" as a placeholder, not a debate choice.
+                val previousDiscussion = old?.takeIf { it.optString("mode") == "debate" }?.optString("discussionFormat")?.takeIf { it.isNotBlank() }
+                input.put("discussionFormat", if (mode == "debate") previousDiscussion ?: TeamEvidenceDiscussion.FORMAT else "classic")
                 if (input.optString("discussionFormat") == TeamEvidenceDiscussion.FORMAT) require(members.length() >= 2 && members.objects().all { it.optString("runner") == "model" && it.optJSONArray("dependsOn")?.length() == 0 }) { "证据讨论至少需要两名独立模型成员" }
                 deliver(review("save", input), null)
             }

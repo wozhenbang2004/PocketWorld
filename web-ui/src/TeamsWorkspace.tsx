@@ -375,7 +375,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
     return externalReady[member.id] ? '' : '核对这名成员的执行器';
   };
   const incompleteMembers = rows(editor?.members).filter(member => !!editorMemberIssue(member));
-  const evidenceDebate = editor?.mode === 'debate' && (!definition?.discussionFormat || definition.discussionFormat !== 'classic');
+  const evidenceDebate = editor?.mode === 'debate' && !(definition?.mode === 'debate' && definition.discussionFormat === 'classic');
   const discussionError = evidenceDebate && (rows(editor?.members).length < 2 || rows(editor?.members).some(member => member.runner !== 'model' || rows(member.dependsOn).length > 0))
     ? '取证与讨论需要至少两名独立的分析成员。电脑、手机或有前置依赖的分工请使用“共同工作”。' : '';
   let editorPayload: Data | null = null, productionError = '';
