@@ -7,8 +7,8 @@ import { RiCloseLine } from '@remixicon/react';
  * Source: upstream/components/application/settings/settings-modal.tsx.source.
  * Demo profile, billing rail, fake Saved toast and local setting writes removed.
  */
-export function SettingsDialog({ isOpen, title, onClose, children }: {
-  isOpen: boolean; title: string; onClose: () => void; children: ReactNode;
+export function SettingsDialog({ isOpen, title, onClose, children, className = '', closeLabel = '关闭设置' }: {
+  isOpen: boolean; title: string; onClose: () => void; children: ReactNode; className?: string; closeLabel?: string;
 }) {
   const titleId = useId();
   const [mounted, setMounted] = useState(isOpen);
@@ -50,9 +50,9 @@ export function SettingsDialog({ isOpen, title, onClose, children }: {
   }, [isOpen, onClose]);
   if (!mounted) return null;
   return createPortal(<div className="pw-settings-layer" data-visible={visible} inert={!isOpen}>
-    <button className="pw-settings-backdrop" type="button" aria-label="关闭设置" tabIndex={-1} onClick={onClose} />
-    <div ref={panel} className="pw-settings-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
-      <header><h2 id={titleId}>{title}</h2><button type="button" className="pw-icon-action" aria-label="关闭设置" onClick={onClose}><RiCloseLine aria-hidden size={20} /></button></header>
+    <button className="pw-settings-backdrop" type="button" aria-label={closeLabel} tabIndex={-1} onClick={onClose} />
+    <div ref={panel} className={`pw-settings-dialog ${className}`} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
+      <header><h2 id={titleId}>{title}</h2><button type="button" className="pw-icon-action" aria-label={closeLabel} onClick={onClose}><RiCloseLine aria-hidden size={20} /></button></header>
       <div className="pw-settings-dialog-content">{children}</div>
     </div>
   </div>, document.body);

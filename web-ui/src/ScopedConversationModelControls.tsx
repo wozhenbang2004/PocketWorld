@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { RiArrowDownSLine, RiBox3Line } from '@remixicon/react';
+import { Menu, MenuItem, Text } from 'react-aria-components';
 import { Button } from './forms-library';
-import { Radio, RadioGroup } from './forms-library/boardui/components/base/radio/radio';
+import { RadioDot } from './forms-library/boardui/components/base/radio/radio';
+import { MENU_ITEM, MENU_ITEMS_CONTAINER } from './forms-library/boardui/components/base/dropdown/menu-styles';
 import { ShimmerText } from './library';
 import { geminiBudgetModel, nativeReasoning, reasoningAvailability, reasoningChoices, reasoningLabel, type ReasoningValue } from './conversation-model-controls';
 import { conversationModelName, conversationModelStamp, conversationSelectionReceipt } from './conversation-model-selection';
@@ -34,8 +36,8 @@ function savedReasoningCurrent(preference: Row, reviewed: Row, intended: Row): b
   return native.modelRoute === 'account' && target.kind === 'account' && canonical(target.nativeRef) === canonical(native.nativeRef);
 }
 
-/** Each composer chip opens its own focused sheet. Only native values are summarized. */
-export function ScopedConversationModelControls({ state, can, act, onOpenModel, disabled = false }: ConversationModelControlsProps) {
+/** Each composer chip opens its own anchored picker. Only native values are summarized. */
+export function ScopedConversationModelControls({ state, can, act, onOpenModel, pickerSection = null, disabled = false }: ConversationModelControlsProps) {
   const [summary, setSummary] = useState<{ stamp: string; reasoning: ReasoningValue | null; status: 'loading' | 'ready' | 'error' } | null>(null);
   const [summaryAttempt, setSummaryAttempt] = useState(0);
   const preference = record(state.conversationModel), target = record(preference.target), stamp = conversationModelStamp(state);
@@ -64,10 +66,10 @@ export function ScopedConversationModelControls({ state, can, act, onOpenModel, 
   const strengthLabel = loading ? '推理强度：读取中' : failed ? '推理强度：重试'
     : reasoning ? `推理强度：${reasoningLabel(reasoning)}` : target.kind === 'group' ? '推理强度：由模型组设置' : '推理强度：自动';
   return <div className="pw-conversation-model-controls" aria-label="此对话的模型与推理">
-    <Button variant="ghost" className="pw-conversation-model-chip" onClick={() => onOpenModel('models')} disabled={locked} aria-label={`切换此对话模型：${modelName}`} title={modelName}>
+    <Button variant="ghost" className="pw-conversation-model-chip" onClick={event => onOpenModel('models', event.currentTarget)} disabled={locked} aria-label={`切换此对话模型：${modelName}`} aria-haspopup="dialog" aria-expanded={pickerSection === 'models'} title={modelName}>
       <RiBox3Line size={19} aria-hidden="true" /><span className="pw-conversation-model-chip-name">{modelName}</span><RiArrowDownSLine size={14} aria-hidden="true" />
     </Button>
-    <Button variant="ghost" className="pw-conversation-reasoning-chip" onClick={() => { if (failed) setSummaryAttempt(attempt => attempt + 1); onOpenModel('reasoning'); }} disabled={locked || !conversationModelName(state)} aria-label={strengthLabel} aria-busy={loading || undefined} title={strengthLabel}>
+    <Button variant="ghost" className="pw-conversation-reasoning-chip" onClick={event => { if (failed) setSummaryAttempt(attempt => attempt + 1); onOpenModel('reasoning', event.currentTarget); }} disabled={locked || !conversationModelName(state)} aria-label={strengthLabel} aria-haspopup="dialog" aria-expanded={pickerSection === 'reasoning'} aria-busy={loading || undefined} title={strengthLabel}>
       <ReasoningIndicator reasoning={reasoning} loading={loading} error={failed} /><span>推理</span>{effort && <><span aria-hidden="true">·</span><b>{effort}</b></>}
     </Button>
   </div>;
@@ -75,9 +77,10 @@ export function ScopedConversationModelControls({ state, can, act, onOpenModel, 
 
 type ReasoningPanelProps = Pick<ConversationModelControlsProps, 'state' | 'can' | 'act' | 'disabled'> & {
   onSelectionPending: (pending: boolean) => void;
+  onSelected?: () => void;
 };
 /** A changed reasoning choice consumes one original scoped review. */
-export function ScopedConversationReasoningPanel({ state, can, act, disabled = false, onSelectionPending }: ReasoningPanelProps) {
+export function ScopedConversationReasoningPanel({ state, can, act, disabled = false, onSelectionPending, onSelected }: ReasoningPanelProps) {
   const [loading, setLoading] = useState(false), [saving, setSaving] = useState(false);
   const [review, setReview] = useState<Row | null>(null), [choice, setChoice] = useState(''), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const [needsRead, setNeedsRead] = useState(false), [savedReasoning, setSavedReasoning] = useState<Row | null>(null);
@@ -85,7 +88,7 @@ export function ScopedConversationReasoningPanel({ state, can, act, disabled = f
   const [refreshAfterDeclaration, setRefreshAfterDeclaration] = useState(false);
   const alive = useRef(false), pending = useRef(false), reads = useRef(0), started = useRef(false), hasWindow = useRef(false);
   const confirmed = useRef<Row | null>(null);
-  const latest = useRef({ state, act, onSelectionPending }); latest.current = { state, act, onSelectionPending };
+  const latest = useRef({ state, act, onSelectionPending, onSelected }); latest.current = { state, act, onSelectionPending, onSelected };
   const preference = record(state.conversationModel), current = conversationModelStamp(state), previous = useRef(current), previousScope = useRef(preference.scopeKey);
   const locked = disabled || saving || busy(state);
   const retire = () => { reads.current++; setReview(null); setLoading(false); if (hasWindow.current) { hasWindow.current = false; void latest.current.act('models.conversation.close').catch(() => {}); } };
@@ -150,14 +153,22 @@ export function ScopedConversationReasoningPanel({ state, can, act, disabled = f
     if (Date.now() >= review.expiresAt || review.originalStamp !== conversationModelStamp(latest.current.state)) { setReview(null); setNeedsRead(true); setError('此对话模型已变化或审阅已过期，请重新读取。'); return; }
     const originalScope = review.scopeKey, originalRevision = review.revision, request = ++reads.current, original = review;
     pending.current = true; setSaving(true); setError(''); setNotice(''); latest.current.onSelectionPending(true);
+    let selectionSaved = false;
     try {
       const receipt = await latest.current.act('models.conversation.reasoning', { reviewHandle: original.reviewHandle, reasoning: selected.value });
       const saved = conversationSelectionReceipt(receipt, originalScope, originalRevision), latestPreference = record(latest.current.state.conversationModel);
       if (!alive.current || request !== reads.current || latestPreference.scopeKey !== originalScope) return;
       if (![originalRevision, saved.revision].includes(latestPreference.revision) || !savedReasoningCurrent(saved, original, selected.value)) throw new Error('此对话的模型参数保存结果待核对，请重新读取。');
       confirmed.current = saved; setReview(null); setNeedsRead(true); setChoice(id); setSavedReasoning(record(saved.target).reasoning); setNotice('推理已保存');
+      selectionSaved = true;
     } catch (failure) { if (alive.current && request === reads.current && record(latest.current.state.conversationModel).scopeKey === originalScope) { confirmed.current = null; setReview(null); setNeedsRead(true); setError(`保存结果待核对。${failure instanceof Error ? failure.message : ''} 没有自动重试，请重新读取。`); } }
-    finally { pending.current = false; latest.current.onSelectionPending(false); if (alive.current && request === reads.current) setSaving(false); }
+    finally {
+      pending.current = false; latest.current.onSelectionPending(false);
+      if (alive.current && request === reads.current) {
+        setSaving(false);
+        if (selectionSaved && record(latest.current.state.conversationModel).scopeKey === originalScope) latest.current.onSelected?.();
+      }
+    }
   };
   const manualProvider = String(review?.nativeSelection?.provider || '');
   const manuallyDeclared = record(record(review?.facts).REASONING_LEVELS);
@@ -203,7 +214,12 @@ export function ScopedConversationReasoningPanel({ state, can, act, disabled = f
     <p className="pw-model-selection-scope">{preference.inherited === true ? '沿用默认 · ' : '此对话 · '}{conversationModelName(state) || '尚未选择模型'}</p>
     {loading ? <div role="status" aria-busy="true"><ShimmerText>正在读取推理设置…</ShimmerText></div> : review?.restriction ? <p className="pw-conversation-reasoning-note">{review.restriction}</p> : review && <>
       {onlyServiceDefault ? <div className="pw-conversation-reasoning-default"><strong>自动</strong><p>{mayDeclare ? '可为当前模型设置低、中、高等档位。' : reasoningAvailability(record(review.facts))}</p></div>
-        : <RadioGroup aria-label="可用推理强度" value={choice} onChange={id => void apply(id)} isDisabled={locked || needsRead} className="pw-conversation-reasoning-options">{review.choices.map((item: Row) => <Radio key={item.id} value={item.id} isDisabled={item.readOnly} className="pw-conversation-reasoning-option"><span><b>{item.label}</b>{item.detail && <small>{item.detail}</small>}</span></Radio>)}</RadioGroup>}
+        : <Menu aria-label="可用推理强度" selectionMode="single" selectedKeys={choice ? [choice] : []} disallowEmptySelection shouldCloseOnSelect={false} autoFocus onAction={id => void apply(String(id))} className={`${MENU_ITEMS_CONTAINER} pw-conversation-reasoning-options`}>
+          {review.choices.map((item: Row) => <MenuItem key={item.id} id={item.id} textValue={item.label} isDisabled={locked || needsRead || item.readOnly} className={`${MENU_ITEM} pw-conversation-reasoning-option`}>
+            <RadioDot selected={choice === item.id} size="md" />
+            <span><span><Text slot="label"><b>{item.label}</b></Text>{item.detail && <Text slot="description"><small>{item.detail}</small></Text>}</span></span>
+          </MenuItem>)}
+        </Menu>}
       {mayDeclare && !editingLevels && <Button variant="ghost" size="small" className="pw-reasoning-levels-trigger" disabled={locked || needsRead} onClick={() => setEditingLevels(true)}>{customLevelsSaved ? '调整自定义档位' : '自定义档位'}</Button>}
       {mayDeclare && editingLevels && <section className="pw-reasoning-levels-editor" aria-label="手动声明推理档位">
         <p>选择这个模型实际支持的档位。保存后可在上方切换。</p>

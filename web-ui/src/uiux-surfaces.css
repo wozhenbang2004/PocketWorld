@@ -104,3 +104,9 @@
 :root[data-pw-motion-paused="true"] .pw-desktop-navigation { transition: none; }
 
 /* Actual user decisions occupy one quiet line, not a persistent work card. */
+/* Single-field creation is a short decision in the retained BoardUI Dialog. */
+.pw-settings-dialog.pw-create-dialog { width: 420px; }
+.pw-create-dialog > .pw-settings-dialog-content { padding-top: 8px; padding-bottom: 20px; }
+.pw-create-form { display: flex; flex-direction: column; gap: 24px; min-width: 0; }
+.pw-create-form > footer { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+.pw-create-form > footer > button { min-width: 80px; min-height: 44px; }

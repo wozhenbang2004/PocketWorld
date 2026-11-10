@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { RiArrowDownSLine, RiBox3Line, RiCloseLine } from '@remixicon/react';
 import { Button, IconButton } from './forms-library';
 import { Radio, RadioGroup } from './forms-library/boardui/components/base/radio/radio';
-import { Drawer } from './shell-library';
+import { Popover } from './shell-library';
 import { ShimmerText } from './library';
 import { accountModelCatalog, accountModelReadRequest, accountModelReviewRequest } from './composer-account-models';
 import { accountReasoningReview, apiReasoningReview, currentReasoningTarget, modelRevision,
@@ -16,7 +16,8 @@ export type ConversationModelControlsProps = {
   state: ModelControlRecord;
   can: (action: string) => boolean;
   act: (action: string, args?: ModelControlRecord) => Promise<any>;
-  onOpenModel: (section?: 'models' | 'reasoning') => void;
+  onOpenModel: (section?: 'models' | 'reasoning', anchor?: HTMLButtonElement) => void;
+  pickerSection?: 'models' | 'reasoning' | null;
   disabled?: boolean;
   registerBackHandler?: (handler: (() => boolean) | null) => void;
 };
@@ -25,18 +26,19 @@ const nativeBusy = (state: ModelControlRecord) => !!(state.modelSelectionBusy ||
 const message = (failure: unknown, fallback: string) => failure instanceof Error ? failure.message : fallback;
 
 /** Compact conversation controls; every edit retains the original native model review. */
-export function ConversationModelControls({ state, can, act, onOpenModel, disabled = false, registerBackHandler }: ConversationModelControlsProps) {
+export function ConversationModelControls({ state, can, act, onOpenModel, pickerSection = null, disabled = false, registerBackHandler }: ConversationModelControlsProps) {
   return can('models.conversation.review')
-    ? <ScopedConversationModelControls state={state} can={can} act={act} onOpenModel={onOpenModel} disabled={disabled} registerBackHandler={registerBackHandler} />
-    : <LegacyConversationModelControls state={state} can={can} act={act} onOpenModel={onOpenModel} disabled={disabled} registerBackHandler={registerBackHandler} />;
+    ? <ScopedConversationModelControls state={state} can={can} act={act} onOpenModel={onOpenModel} pickerSection={pickerSection} disabled={disabled} registerBackHandler={registerBackHandler} />
+    : <LegacyConversationModelControls state={state} can={can} act={act} onOpenModel={onOpenModel} pickerSection={pickerSection} disabled={disabled} registerBackHandler={registerBackHandler} />;
 }
-function LegacyConversationModelControls({ state, can, act, onOpenModel, disabled = false, registerBackHandler }: ConversationModelControlsProps) {
+function LegacyConversationModelControls({ state, can, act, onOpenModel, pickerSection = null, disabled = false, registerBackHandler }: ConversationModelControlsProps) {
   const [open, setOpen] = useState(false), [loading, setLoading] = useState(false), [saving, setSaving] = useState(false);
   const [error, setError] = useState(''), [notice, setNotice] = useState('');
   const [session, setSession] = useState<ReasoningReview | null>(null), [choiceId, setChoiceId] = useState('');
   const [panelTarget, setPanelTarget] = useState<ReasoningTarget | null>(null);
   const [summary, setSummary] = useState<{ stamp: string; target: ReasoningTarget | null; error: string; loading: boolean }>({ stamp: '', target: null, error: '', loading: false });
   const mounted = useRef(false), isOpen = useRef(false), pending = useRef(false), reads = useRef(0), summaries = useRef(0), accountWindow = useRef('');
+  const modelTrigger = useRef<HTMLButtonElement>(null), reasoningTrigger = useRef<HTMLButtonElement>(null), reasoningBody = useRef<HTMLDivElement>(null);
   const latest = useRef({ state, can, act, onOpenModel, disabled }); latest.current = { state, can, act, onOpenModel, disabled };
   const stamp = selectionStamp(state), observedStamp = useRef(stamp), canRead = can('models.snapshot'), busy = nativeBusy(state);
   const locked = disabled || busy || saving;
@@ -136,13 +138,15 @@ function LegacyConversationModelControls({ state, can, act, onOpenModel, disable
       }
     } finally { if (mounted.current && original === reads.current) setLoading(false); }
   };
-  const openPanel = () => {
+  const openPanel = (anchor?: HTMLButtonElement) => {
     if (latest.current.disabled || nativeBusy(latest.current.state) || pending.current || isOpen.current) return;
+    if (anchor) reasoningTrigger.current = anchor;
+    reasoningTrigger.current?.focus({ preventScroll: true });
     isOpen.current = true; setOpen(true); void readReasoning();
   };
-  const selectModel = () => {
+  const selectModel = (anchor?: HTMLButtonElement) => {
     if (locked || pending.current) return;
-    closePanel(); latest.current.onOpenModel();
+    closePanel(); latest.current.onOpenModel('models', anchor || modelTrigger.current || undefined);
   };
   const applyReasoning = async () => {
     if (locked || loading || pending.current || !session) return;
@@ -187,17 +191,19 @@ function LegacyConversationModelControls({ state, can, act, onOpenModel, disable
     : effort ? `推理强度：${reasoningLabel(currentTarget?.reasoning || null)}` : '推理强度：尚未读取';
 
   return <div className="pw-conversation-model-controls" aria-label="模型与推理">
-    <Button variant="ghost" className="pw-conversation-model-chip" onClick={selectModel} disabled={locked || loading} aria-label={`切换模型：${modelName}`} title={modelName}>
+    <Button ref={modelTrigger} variant="ghost" className="pw-conversation-model-chip" onClick={event => selectModel(event.currentTarget)} disabled={locked || loading} aria-label={`切换模型：${modelName}`} aria-haspopup="dialog" aria-expanded={pickerSection === 'models'} title={modelName}>
       <RiBox3Line size={19} aria-hidden="true" /><span className="pw-conversation-model-chip-name">{modelName}</span><RiArrowDownSLine size={14} aria-hidden="true" />
     </Button>
-    <Drawer.Root open={open} onOpenChange={next => next ? openPanel() : closePanel()} dismissible={!saving && !state.modelSelectionBusy} shouldScaleBackground={false}>
-      <Drawer.Trigger asChild><Button variant="ghost" className="pw-conversation-reasoning-chip" disabled={locked || !state.modelName} aria-label={strengthLabel} aria-busy={strengthReading || saving || undefined} title={strengthLabel}>
-        <ReasoningIndicator reasoning={currentTarget?.reasoning || null} loading={strengthReading || saving} error={!!currentSummary?.error} /><span>推理</span>{effort && <><span aria-hidden="true">·</span><b>{effort}</b></>}
-      </Button></Drawer.Trigger>
-      <Drawer.Portal><Drawer.Overlay className="pw-overlay" /><Drawer.Content className="pw-drawer pw-conversation-reasoning-drawer" aria-describedby="pw-conversation-reasoning-model">
-        <div className="pw-drawer-handle" />
-        <header className="pw-conversation-reasoning-header"><div><Drawer.Title>推理强度</Drawer.Title><Drawer.Description id="pw-conversation-reasoning-model">{panelTarget?.modelId || modelName}</Drawer.Description></div><IconButton icon={RiCloseLine} aria-label="关闭推理设置" onClick={closePanel} disabled={saving || !!state.modelSelectionBusy} /></header>
-        <div className="pw-conversation-reasoning-body">
+    <Button ref={reasoningTrigger} variant="ghost" className="pw-conversation-reasoning-chip" onClick={event => open ? closePanel() : openPanel(event.currentTarget)} disabled={locked || !state.modelName} aria-label={strengthLabel} aria-haspopup="dialog" aria-expanded={open} aria-busy={strengthReading || saving || undefined} title={strengthLabel}>
+      <ReasoningIndicator reasoning={currentTarget?.reasoning || null} loading={strengthReading || saving} error={!!currentSummary?.error} /><span>推理</span>{effort && <><span aria-hidden="true">·</span><b>{effort}</b></>}
+    </Button>
+    <Popover triggerRef={reasoningTrigger} isOpen={open} onOpenChange={next => next ? openPanel() : closePanel()}
+      placement="top start" offset={8} shouldFlip containerPadding={16} maxHeight={480} scrollRef={reasoningBody}
+      isKeyboardDismissDisabled={saving || !!state.modelSelectionBusy} aria-label="推理强度"
+      className="pw-conversation-picker-popover pw-conversation-reasoning-popover" dialogClassName="pw-conversation-picker-dialog">
+        <header className="pw-conversation-picker-header"><h2>推理强度</h2><IconButton icon={RiCloseLine} aria-label="关闭推理设置" onClick={closePanel} disabled={saving || !!state.modelSelectionBusy} /></header>
+        <div ref={reasoningBody} className="pw-conversation-picker-body pw-conversation-reasoning-body">
+          <p className="pw-model-selection-scope">{panelTarget?.modelId || modelName}</p>
           {loading ? <div className="pw-conversation-reasoning-loading" role="status" aria-busy="true"><ShimmerText>正在读取推理设置…</ShimmerText></div> : saving ? <p className="pw-conversation-reasoning-note" role="status">正在保存推理设置…</p> : session ? <>
             <RadioGroup aria-label="可用推理强度" value={choiceId} onChange={setChoiceId} isDisabled={locked} className="pw-conversation-reasoning-options">
               {session.choices.map(choice => <Radio key={choice.id} value={choice.id} isDisabled={choice.readOnly} className="pw-conversation-reasoning-option"><span><b>{choice.label}</b>{choice.detail && <small>{choice.detail}</small>}</span></Radio>)}
@@ -208,9 +214,8 @@ function LegacyConversationModelControls({ state, can, act, onOpenModel, disable
         </div>
         <footer className="pw-conversation-reasoning-actions">
           <Button variant="ghost" onClick={closePanel} disabled={saving || !!state.modelSelectionBusy}>{session ? '取消' : '关闭'}</Button>
-          {error ? <Button variant="secondary" onClick={() => void readReasoning()} disabled={locked || loading}>重新读取</Button> : notice ? <Button variant="secondary" onClick={selectModel} disabled={locked}>选择模型</Button> : <Button onClick={() => void applyReasoning()} disabled={locked || loading || !canApply}>{saving ? '正在保存…' : '应用'}</Button>}
+          {error ? <Button variant="secondary" onClick={() => void readReasoning()} disabled={locked || loading}>重新读取</Button> : notice ? <Button variant="secondary" onClick={() => selectModel()} disabled={locked}>选择模型</Button> : <Button onClick={() => void applyReasoning()} disabled={locked || loading || !canApply}>{saving ? '正在保存…' : '应用'}</Button>}
         </footer>
-      </Drawer.Content></Drawer.Portal>
-    </Drawer.Root>
+    </Popover>
   </div>;
 }

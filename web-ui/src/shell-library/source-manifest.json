@@ -482,7 +482,7 @@
       "id": "PW-19",
       "source": "upstream/boardui-registry/popover.json / saved official registry increment 2026-11-01 MIT",
       "adapter": "adapted/boardui/components/base/popover/popover.tsx",
-      "renderedAt": "App: composer input intent, queue/steer semantics, per-message source/actions",
+      "renderedAt": "App: composer input intent, queue/steer semantics, per-message source/actions; anchored conversation model/reasoning pickers (including legacy reasoning)",
       "hostFields": [
         "chatBusy",
         "chatSendMode",
@@ -496,13 +496,13 @@
         "speech.speak",
         "speech.stop"
       ],
-      "controlledChanges": "Original registry source; aliases localized; controlled real actions, no fixture data",
+      "controlledChanges": "Original registry source; aliases localized; controlled real actions, no fixture data. 2026-11-10: composer selection uses standalone modal-focus Popover without a visual scrim, anchored to the actual chip, with existing placement/flip behavior; forward maxHeight, scrollRef and isKeyboardDismissDisabled for bounded body scrolling and pending dismissal guards. Source upstream remains unchanged. Scoped reasoning rows reuse BoardUI menu styles and RadioDot with React Aria Menu action semantics; arrow navigation does not submit, and confirmed writes control dismissal.",
       "status": {
         "sourceCopied": true,
         "adapted": true,
         "usedInFeature": true,
         "hostWiring": "implemented; not runtime verified",
-        "compile": "pending GitHub CI",
+        "compile": "TypeScript and Vite build passed locally 2026-11-10; GitHub CI pending",
         "visualInteraction": "not verified"
       }
     },

@@ -129,9 +129,9 @@ export function AIModelPicker({ state, can, act, scope = 'conversation', onSelec
     return prepared.kind === 'api' ? favorite ? apiModelFavorite(prepared.value, api, latest.current.state.modelSelectionRevision) : apiModelSelection(prepared.value, api, latest.current.state.modelSelectionRevision)
       : accountModelSelection(prepared.value, latest.current.state.modelSelectionRevision, draft);
   };
-  const saved = (result: Data, request: number, favorite: boolean) => {
+  const saved = (result: Data, request: number, favorite: boolean): boolean => {
     if (result?.status !== 'saved') throw new Error('保存结果待核对，请重新读取。');
-    if (!alive.current || request !== generation.current) return;
+    if (!alive.current || request !== generation.current) return false;
     if (scope === 'conversation' && !favorite && result.preference) {
       const current = latest.current.state.conversationModel;
       if (current?.scopeKey !== result.preference.scopeKey || ![result.preference.revision - 1, result.preference.revision].includes(current?.revision)) throw new Error('此对话的选择已变化，请重新读取。');
@@ -139,7 +139,15 @@ export function AIModelPicker({ state, can, act, scope = 'conversation', onSelec
     confirmed.current = favorite ? { favorite: true, sourceRevision: state.modelSelectionRevision } : result.preference || {};
     setReview(null); setGroupReview(null); setApi(null); setAccount(null); setGroups([]); setNeedsRead(true);
     setNotice(favorite ? '收藏已更新' : '模型已保存');
-    if (!favorite) latest.current.onSelected?.();
+    return !favorite;
+  };
+  const settleSelection = (request: number, selected: boolean) => {
+    pending.current = false;
+    latest.current.onSelectionPending(false);
+    if (!alive.current || request !== generation.current) return;
+    setWriting(false);
+    // Only a confirmed selection may close the caller, after its write lock clears.
+    if (selected) latest.current.onSelected?.();
   };
   const unknown = (failure: unknown, request: number) => {
     if (!alive.current || request !== generation.current) return;
@@ -152,41 +160,43 @@ export function AIModelPicker({ state, can, act, scope = 'conversation', onSelec
     const result = favorite ? await latest.current.act('models.api.favorite', args) : latest.current.onSelectTarget ? await latest.current.onSelectTarget({ kind: prepared.kind, args, selectionRevision: latest.current.state.modelSelectionRevision,
       modelId: String(prepared.kind === 'api' ? model.modelId : value.modelId), sourceLabel: String(prepared.kind === 'api' ? model.connectionName || model.connectionId : value.accountLabel || value.accountId) })
       : await latest.current.act(prepared.kind === 'api' ? 'models.api.select' : 'models.accounts.select', args);
-    saved(result, request, favorite);
+    return saved(result, request, favorite);
   };
   const choose = async (kind: 'api' | 'account', id: string) => {
     if (locked || needsRead || pending.current || scope === 'conversation' && !onSelectTarget) return;
     const request = ++generation.current, stamp = context(state);
     pending.current = true; setWriting(true); setError(''); setNotice(''); latest.current.onSelectionPending(true);
-    let dispatched = false;
+    let dispatched = false, selected = false;
     try {
       const prepared = await prepare(kind, id, request, stamp);
       if (!prepared || !currentRequest(request, stamp)) return;
       const draft = accountOptions(prepared.value);
       selection(prepared, draft); dispatched = true;
-      await selectReviewed(prepared, draft, request);
+      selected = await selectReviewed(prepared, draft, request);
     } catch (failure) { if (dispatched) unknown(failure, request); else if (alive.current && request === generation.current) { setError(failure instanceof Error ? failure.message : '模型暂不可选择，请重新读取。'); setNeedsRead(true); } }
-    finally { pending.current = false; latest.current.onSelectionPending(false); if (alive.current && request === generation.current) setWriting(false); }
+    finally { settleSelection(request, selected); }
   };
   const write = async (favorite = false) => {
     if (!review || locked || needsRead || pending.current) return;
     try { selection(review, options, favorite); } catch (failure) { setReview(null); setNeedsRead(true); setError((failure as Error).message); return; }
     const request = ++generation.current; pending.current = true; setWriting(true); setError(''); setNotice(''); latest.current.onSelectionPending(true);
-    try { await selectReviewed(review, options, request, favorite); }
+    let selected = false;
+    try { selected = await selectReviewed(review, options, request, favorite); }
     catch (failure) { unknown(failure, request); }
-    finally { pending.current = false; latest.current.onSelectionPending(false); if (alive.current && request === generation.current) setWriting(false); }
+    finally { settleSelection(request, selected); }
   };
   const selectGroup = async (original: Data) => {
     if (locked || needsRead || pending.current || scope === 'conversation' && !onSelectTarget) return;
     if (!original.groupId || !Number.isSafeInteger(original.revision) || original.revision < 1) { setError('模型组已变化，请重新读取。'); return; }
     const request = ++generation.current;
     pending.current = true; setWriting(true); setError(''); setNotice(''); latest.current.onSelectionPending(true);
+    let selected = false;
     try {
       const args = { groupId: original.groupId, expectedRevision: original.revision };
       const result = onSelectTarget ? await onSelectTarget({ kind: 'group', args, selectionRevision: state.modelSelectionRevision, modelId: original.name, sourceLabel: '模型组' }) : await act('models.groups.select', args);
-      saved(result, request, false);
+      selected = saved(result, request, false);
     } catch (failure) { unknown(failure, request); }
-    finally { pending.current = false; latest.current.onSelectionPending(false); if (alive.current && request === generation.current) setWriting(false); }
+    finally { settleSelection(request, selected); }
   };
   const reset = async () => {
     const preference = state.conversationModel;
@@ -194,6 +204,7 @@ export function AIModelPicker({ state, can, act, scope = 'conversation', onSelec
     if (context(state) !== context(latest.current.state)) return;
     const originalScope = preference.scopeKey, originalRevision = preference.revision, request = ++generation.current;
     pending.current = true; setWriting(true); setError(''); setNotice(''); latest.current.onSelectionPending(true);
+    let selected = false;
     try {
       const value = await latest.current.act('models.conversation.reset', { expectedPreferenceRevision: originalRevision, expectedSelectionRevision: state.modelSelectionRevision });
       const cleared = conversationSelectionReceipt(value, originalScope, originalRevision), current = latest.current.state.conversationModel;
@@ -201,8 +212,9 @@ export function AIModelPicker({ state, can, act, scope = 'conversation', onSelec
       if (![originalRevision, cleared.revision].includes(current.revision) || cleared.inherited !== true || cleared.target != null) throw new Error('恢复默认的结果待核对，请重新读取。');
       confirmed.current = cleared; setReview(null); setGroupReview(null); setApi(null); setAccount(null); setGroups([]); setNeedsRead(true);
       setNotice('已恢复使用默认模型');
+      selected = true;
     } catch (failure) { if (latest.current.state.conversationModel?.scopeKey === originalScope) unknown(failure, request); }
-    finally { pending.current = false; latest.current.onSelectionPending(false); if (alive.current && request === generation.current) setWriting(false); }
+    finally { settleSelection(request, selected); }
   };
   const currentRevision = state.modelSelectionRevision, q = query.trim().toLocaleLowerCase();
   const visibleGroups = filter === 'all' ? groups.filter(group => [group.name, group.groupId].some(value => String(value || '').toLocaleLowerCase().includes(q))) : [];
