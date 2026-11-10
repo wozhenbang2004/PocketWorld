@@ -6,10 +6,10 @@ import type { WorkflowData } from './affect-workflow-data';
 import './affect-workflows.css';
 
 /** PromptLibraryDemo list/search/detail composition; all entries and actions come from SkillBook. */
-export function SkillLibrary({ skills, query, onQuery, disabled, loaded, onOpen, checkingSources, selectedIds, onToggle, filters, hideHeading = false, directOpen = false }: {
+export function SkillLibrary({ skills, query, onQuery, disabled, loaded, onOpen, checkingSources, selectedIds, onToggle, filters, hideHeading = false, directOpen = false, showTools = true, emptyContent }: {
   skills: WorkflowData[]; query: string; onQuery: (query: string) => void; disabled: boolean; loaded: boolean;
   onOpen: (id: string) => void; checkingSources: boolean; selectedIds: string[]; onToggle: (skill: WorkflowData, selected: boolean) => void;
-  filters?: ReactNode; hideHeading?: boolean; directOpen?: boolean;
+  filters?: ReactNode; hideHeading?: boolean; directOpen?: boolean; showTools?: boolean; emptyContent?: ReactNode;
 }) {
   const [activeId, setActiveId] = useState('');
   const filtered = skills.filter(row => skillMatches(row, query));
@@ -18,8 +18,7 @@ export function SkillLibrary({ skills, query, onQuery, disabled, loaded, onOpen,
     <div className="pw-affect-library-layout">
       <aside className="pw-affect-library-list">
         {!hideHeading && <div className="pw-affect-library-heading"><strong>技能库</strong><span>{skills.length} 项</span></div>}
-        <SearchField aria-label="查找已登记技能" value={query} onChange={onQuery} placeholder="名称、来源或能力" />
-        {filters}
+        {showTools && <><SearchField aria-label="查找已登记技能" value={query} onChange={onQuery} placeholder="搜索技能" />{filters}</>}
         <div className="pw-affect-library-options" aria-label="已登记技能">
           {filtered.map(row => <div className="pw-affect-library-entry" key={row.id}>
             <button type="button" data-skill-id={row.id} aria-pressed={directOpen ? undefined : active?.id === row.id} aria-label={directOpen ? `阅读技能：${row.name || '未命名技能'}` : undefined} disabled={disabled} onClick={() => directOpen ? onOpen(row.id) : setActiveId(row.id)}>
@@ -29,7 +28,7 @@ export function SkillLibrary({ skills, query, onQuery, disabled, loaded, onOpen,
             </button>
             {checkingSources && row.gitSource && !row.origin && <CheckboxField isSelected={selectedIds.includes(row.id)} isDisabled={disabled || (!selectedIds.includes(row.id) && selectedIds.length >= 8)} onChange={checked => onToggle(row, checked)}>加入来源检查</CheckboxField>}
           </div>)}
-          {loaded && !filtered.length && <p className="pw-affect-empty">{skills.length ? '没有匹配的技能，试试名称或来源。' : '尚未登记技能。可从上方导入。'}</p>}
+          {loaded && !filtered.length && (emptyContent ?? <p className="pw-affect-empty">{skills.length ? '没有匹配的技能，试试名称或来源。' : '尚未登记技能。可从上方导入。'}</p>)}
           {!loaded && <p className="pw-affect-empty">正在读取技能清单…</p>}
         </div>
       </aside>

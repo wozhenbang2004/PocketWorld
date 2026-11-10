@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
-import { RiArrowLeftLine, RiArrowRightLine, RiArrowRightSLine, RiCheckLine, RiCloseLine, RiComputerLine, RiMicLine, RiMoonLine, RiRefreshLine, RiSmartphoneLine } from '@remixicon/react';
+import { RiArrowLeftLine, RiArrowRightLine, RiArrowRightSLine, RiBox3Line, RiCheckLine, RiCloseLine, RiComputerLine, RiMicLine, RiMoonLine, RiRefreshLine, RiSmartphoneLine } from '@remixicon/react';
 import { Accordion, AccordionItem, Button, CheckboxField } from './forms-library';
 import { ProgressBar } from './library';
 import { backgroundConnection } from './forms-library/host-contracts';
 import { bridge, type PocketSnapshot } from './bridge';
 import { permissionLabel, readSetup, readSetupRuntime, readSetupRuntimeReview, runtimeCancelInput, runtimeLogText, runtimePreparing, runtimeProgressLabel,
-  runtimePhaseLabel, runtimeStatusLabel, setupBytes, setupCapabilities, setupDetails, setupModelLabel, setupObject, setupSaveConfirmed, setupSaveInput, setupSteps,
+  runtimePhaseLabel, runtimeStatusLabel, setupBytes, setupCapabilities, setupDetails, setupModelLabel, setupObject, setupSaveConfirmed, setupSaveInput,
   speechNetworkLabel, type SetupCapability, type SetupPermission, type SetupPreferences, type SetupRead, type SetupRuntime, type SetupRuntimeReview, type SetupStep } from './setup-contract';
 import './shell-library/affect-workflows.css';
 import './setup.css';
@@ -28,7 +28,12 @@ const capabilityCopy = {
   voice: { title: '语音输入', description: '使用这台手机的系统听写', icon: RiMicLine },
   background: { title: '后台继续工作', description: '任务通知与后台运行设置', icon: RiMoonLine },
 } satisfies Record<SetupCapability, { title: string; description: string; icon: typeof RiSmartphoneLine }>;
-const stepTitles: Record<SetupStep, string> = { welcome: '开始', model: '模型', capabilities: '用途', finish: '确认' };
+const setupStages = ['model', 'capabilities', 'finish'] as const;
+type SetupStage = typeof setupStages[number];
+const stageTitles: Record<SetupStage, string> = { model: '模型', capabilities: '能力', finish: '确认' };
+// Keep all native preference values readable. The former welcome page now owns
+// the same real connection task as model, without another introductory stop.
+const setupStage = (step: SetupStep): SetupStage => step === 'welcome' ? 'model' : step;
 const failureText = (failure: unknown) => failure instanceof Error ? failure.message : String(failure || '操作暂未完成，请刷新后核对。');
 type SetupCommand = (action: string, args?: Record<string, unknown>) => Promise<unknown>;
 
@@ -36,11 +41,11 @@ type SetupCommand = (action: string, args?: Record<string, unknown>) => Promise<
  * 0e69029b). Its step/body/review/footer structure is reused; native preferences
  * replace demo state and timers. BoardUI owns every actionable control. */
 function SetupSteps({ step, disabled, onStep }: { step: SetupStep; disabled: boolean; onStep: (step: SetupStep) => void }) {
-  const current = setupSteps.indexOf(step);
+  const stage = setupStage(step), current = setupStages.indexOf(stage);
   return <ol className="pw-affect-workflow pw-affect-stepnav pw-setup-steps" aria-label="使用准备步骤">
-    {setupSteps.map((id, index) => <li key={id} data-reached={index <= current} aria-current={id === step ? 'step' : undefined}>
-      <Button variant="ghost" className="pw-setup-step" disabled={disabled || index >= current} onClick={() => onStep(id)} aria-label={`返回${stepTitles[id]}步骤`}>
-        <span className="pw-setup-step-number" aria-hidden="true">{index < current ? <RiCheckLine size={15}/> : index + 1}</span><span>{stepTitles[id]}</span>
+    {setupStages.map((id, index) => <li key={id} data-reached={index <= current} aria-current={id === stage ? 'step' : undefined}>
+      <Button variant="ghost" className="pw-setup-step" disabled={disabled || index >= current} onClick={() => onStep(id)} aria-label={`${index < current ? '返回' : ''}${stageTitles[id]}步骤`}>
+        <span className="pw-setup-step-number" aria-hidden="true">{index < current ? <RiCheckLine size={14}/> : index + 1}</span><span>{stageTitles[id]}</span>
       </Button>
     </li>)}
   </ol>;
@@ -194,6 +199,7 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, r
   const heading = useRef<HTMLHeadingElement>(null), stepBody = useRef<HTMLDivElement>(null), back = useRef<() => boolean>(() => false);
   const reducedMotion = useReducedMotion(), can = (action: string) => snapshot.capabilities.commands.includes(action);
   const capabilities = data?.preferences.capabilities || [], locked = !entered || loading || !!working || needsRead;
+  const stage = setupStage(step), previousStep = stage === 'finish' ? 'capabilities' : stage === 'capabilities' ? 'model' : null;
   const resumeRevision = setupObject(snapshot.view).resumeRevision;
   const preparation = useRuntimePreparation(entered && !!data && (capabilities.includes('tools') || expanded === 'tools'), can, resumeRevision, run, runtimeTaskId);
   const connection = backgroundConnection(setupObject(setupObject(snapshot.state.features).display), snapshot.state.activeTaskId, Array.isArray(snapshot.state.moduleBusy) ? snapshot.state.moduleBusy : []);
@@ -277,42 +283,42 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, r
   back.current = () => {
     if (pending.current || preparation.working) return true;
     if (preparation.review) { preparation.dismissReview(); return true; }
-    if (step === 'capabilities' && expanded) { setExpanded(null); return true; }
-    if (mode === 'onboarding' && setupSteps.indexOf(step) > 0) { void move(setupSteps[setupSteps.indexOf(step) - 1]); return true; }
+    if (stage === 'capabilities' && expanded) { setExpanded(null); return true; }
+    if (mode === 'onboarding' && previousStep) { void move(previousStep); return true; }
     return false;
   };
   const capabilitySummary = (id: SetupCapability) => {
     if (!data) return '待检查';
-    if (id === 'phone') return data.permissions.accessibility === true ? `界面读取已允许 · ${phoneConnection}` : '需要界面读取权限';
+    if (id === 'phone') return data.permissions.accessibility === true ? `界面读取已允许 · ${phoneConnection}` : data.permissions.accessibility === false ? '需要界面读取权限' : '界面读取权限待检查';
     if (id === 'tools') return preparation.view ? runtimeStatusLabel(preparation.view) : '尚未检查工具';
     if (id === 'voice') return data.speech.available === false ? '系统语音服务不可用' : data.speech.available === true && data.permissions.microphone === true ? '系统服务可用 · 尚未实际听写' : '需要检查系统服务与麦克风';
-    return data.permissions.notifications === true ? '任务通知已允许' : '任务通知尚未允许';
+    return data.permissions.notifications === true ? '任务通知已允许' : data.permissions.notifications === false ? '任务通知尚未允许' : '任务通知权限待检查';
   };
   const permissionAction = (kind: SetupPermission, value: boolean | null, label = '前往设置') => <Button variant="secondary" disabled={locked || !can('setup.permission')} onClick={() => permission(kind)}>{value === true ? '查看设置' : label}</Button>;
   const modelSection = data && <section className="pw-setup-model" aria-label="模型连接准备">
-    <SetupRow title={data.model.label || '连接你的模型'} status={setupModelLabel(data.model)} action={<Button variant={data.model.configured ? 'secondary' : 'primary'} trailingIcon={RiArrowRightSLine} disabled={locked} onClick={() => void navigate('connections')}>{data.model.configured ? '管理模型' : '连接模型'}</Button>}/>
-    {data.model.message && <p className="pw-setup-copy">{data.model.message}</p>}
-    {data.model.configured && <div className="pw-setup-model-test"><Button variant="secondary" disabled={locked || !!data.model.testing || !can('setup.model.test')} onClick={() => void command('setup.model.test')}>{working === 'setup.model.test' || data.model.testing ? '正在测试文本连接…' : '测试文本连接'}</Button><p>会向当前服务发送一次测试请求，可能产生用量。工具与图像能力需分别测试。</p></div>}
+    <div className="pw-setup-model-summary"><RiBox3Line size={24} aria-hidden="true"/><SetupRow title={data.model.label || '账号与服务'} status={setupModelLabel(data.model)}/></div>
+    {data.model.message && <p className="pw-setup-copy" role="status">{data.model.message}</p>}
+    <Button className="pw-setup-model-action" variant={data.model.configured ? 'secondary' : 'primary'} trailingIcon={RiArrowRightSLine} disabled={locked || !!preparation.working} onClick={() => void navigate('connections')}>{data.model.configured ? '管理模型' : '连接模型'}</Button>
+    {data.model.configured && <Accordion className="pw-setup-model-check"><AccordionItem id="setup-model-check" title="检查文本连接" description={data.model.testing ? '正在测试文本连接…' : undefined}>
+      <div className="pw-setup-model-test"><p>会向当前服务发送一次测试请求，可能产生用量。工具与图像能力需分别测试。</p><Button variant="secondary" disabled={locked || !!data.model.testing || !can('setup.model.test')} onClick={() => void command('setup.model.test')}>{working === 'setup.model.test' || data.model.testing ? '正在测试文本连接…' : '测试文本连接'}</Button></div>
+    </AccordionItem></Accordion>}
   </section>;
 
-  return <section className="pw-setup-workspace" aria-label={mode === 'onboarding' ? '首次使用准备' : '准备中心'} data-setup-step={step}>
-    <header className="pw-setup-header"><div><p>{mode === 'onboarding' ? '首次使用' : '随时继续准备'}</p><h1>准备中心</h1></div>
-      <div><Button variant="ghost" iconOnly leadingIcon={RiRefreshLine} aria-label="刷新准备状态" disabled={loading || !!working || !readable} onClick={() => void load()}/>
-        <Button variant="ghost" iconOnly leadingIcon={RiCloseLine} aria-label={mode === 'onboarding' ? '暂时跳过准备' : '关闭准备中心'} disabled={!!working || !!preparation.working} onClick={() => mode === 'onboarding' ? void finish(true) : onClose()}/></div>
+  return <section className="pw-setup-workspace" aria-label={mode === 'onboarding' ? '首次使用准备' : '准备中心'} data-setup-step={step} data-setup-mode={mode}>
+    <header className="pw-setup-header"><h1>{mode === 'onboarding' ? '开始使用' : '准备中心'}</h1>
+      <Button variant="ghost" iconOnly leadingIcon={RiCloseLine} className="pw-setup-close" aria-label={mode === 'onboarding' ? '暂时跳过准备' : '关闭准备中心'} title={mode === 'onboarding' ? '稍后再设置' : '关闭'} disabled={!!working || !!preparation.working || mode === 'onboarding' && !!data && (loading || needsRead)} onClick={() => mode === 'onboarding' && data ? void finish(true) : onClose()}/>
     </header>
     {mode === 'onboarding' && <SetupSteps step={step} disabled={locked || !data} onStep={next => void move(next)}/>}
-    {!data ? <div className="pw-setup-loading"><h2>{readable ? '正在读取本机状态' : '准备中心暂不可用'}</h2><p>{readable ? '模型、权限和工具准备会分别显示。' : '当前宿主未提供准备入口，请更新应用。'}</p>{error && <p role="alert" className="pw-setup-error">{error}</p>}<Button variant="secondary" disabled={loading || !readable} onClick={() => void load()}>重新读取</Button><Button variant="ghost" onClick={onClose}>返回应用</Button></div> : <>
+    {!data ? <div className="pw-setup-loading"><h2>{readable ? '正在读取本机状态' : '准备中心暂不可用'}</h2><p>{readable ? '模型、权限和工具准备会分别显示。' : '当前宿主未提供准备入口，请更新应用。'}</p>{error && <p role="alert" className="pw-setup-error">{error}</p>}<Button variant="secondary" disabled={loading || !readable} onClick={() => void load()}>重新读取</Button></div> : <>
       <div className="pw-setup-body" ref={stepBody}>
-        <motion.div className="pw-setup-stage" key={step} initial={reducedMotion ? false : { opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reducedMotion ? 0 : .22, ease: [.22, 1, .36, 1] }}>
-          {step === 'welcome' && <><div className="pw-setup-intro"><h2 ref={heading} tabIndex={-1}>先连接模型，再选择想做的事</h2><p>文字对话只需模型连接。手机操作、开发工具和语音都可以按需准备。</p></div><div className="pw-setup-welcome-summary"><SetupRow title="模型" status={setupModelLabel(data.model)}/><SetupRow title="其他能力" status="由你选择，随时可以回来调整"/></div><Button variant="ghost" trailingIcon={RiArrowRightSLine} disabled={locked} onClick={() => void navigate('appearance')}>外观与字体</Button></>}
-          {step === 'model' && <><div className="pw-setup-intro"><h2 ref={heading} tabIndex={-1}>连接一个模型</h2><p>添加服务并选择模型，也可以使用已有账号。返回这里继续准备。</p></div>{modelSection}</>}
-          {step === 'capabilities' && <><div className="pw-setup-intro"><h2 ref={heading} tabIndex={-1}>{mode === 'onboarding' ? '还想用它做什么？' : '准备你需要的能力'}</h2><p>只选需要的用途；选择本身不会申请权限或下载工具。</p></div>{mode === 'center' && modelSection}
+        <motion.div className="pw-setup-stage" key={stage} initial={reducedMotion ? false : { opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reducedMotion ? 0 : .22, ease: [.22, 1, .36, 1] }}>
+          {stage === 'model' && <><div className="pw-setup-intro"><h2 ref={heading} tabIndex={-1}>先连接一个模型</h2><p>添加模型服务，或登录已有账号。</p></div>{modelSection}<p className="pw-setup-next-hint">手机操作、开发工具与语音可在下一步选择，也能稍后设置。</p></>}
+          {stage === 'capabilities' && <>{mode === 'center' && <div className="pw-setup-center-model"><h2>模型</h2>{modelSection}</div>}<div className="pw-setup-intro"><h2 ref={heading} tabIndex={-1}>{mode === 'onboarding' ? '还想用它做什么？' : '可选能力'}</h2><p>按需选用，不会自动申请权限或下载工具。</p></div>
             <div className="pw-setup-capabilities">{setupCapabilities.map(id => {
-              const copy = capabilityCopy[id], Icon = copy.icon, open = expanded === id;
-              return <div className="pw-setup-capability" key={id} data-selected={capabilities.includes(id)} data-expanded={open}>
-                <div className="pw-setup-capability-row"><Icon size={21} aria-hidden="true"/><CheckboxField className="pw-setup-choice" isSelected={capabilities.includes(id)} isDisabled={locked} onChange={selected => void selectCapability(id, selected)}><span><strong>{copy.title}</strong><small>{copy.description}</small></span></CheckboxField>
+              const copy = capabilityCopy[id], Icon = copy.icon, open = expanded === id, selected = capabilities.includes(id);
+              return <div className="pw-setup-capability" key={id} data-selected={selected} data-expanded={open}>
+                <div className="pw-setup-capability-row"><Icon size={21} aria-hidden="true"/><CheckboxField className="pw-setup-choice" isSelected={selected} isDisabled={locked} onChange={value => void selectCapability(id, value)}><span><strong>{copy.title}</strong><small>{copy.description}</small>{selected && <small className="pw-setup-capability-status">{capabilitySummary(id)}</small>}</span></CheckboxField>
                   <Button variant="ghost" iconOnly leadingIcon={RiArrowRightSLine} className="pw-setup-expand" aria-label={`${open ? '收起' : '查看'}${copy.title}准备`} aria-expanded={open} aria-controls={`setup-${id}`} disabled={!!working || !!preparation.working} onClick={() => { preparation.dismissReview(); setExpanded(open ? null : id); }}/></div>
-                {capabilities.includes(id) && <p className="pw-setup-capability-status">{capabilitySummary(id)}</p>}
                 <motion.div id={`setup-${id}`} className="pw-setup-capability-reveal" initial={false} animate={{ height: open ? 'auto' : 0, opacity: open ? 1 : 0 }} transition={{ duration: reducedMotion ? 0 : .22, ease: [.22, 1, .36, 1] }} inert={!open} aria-hidden={!open}><div className="pw-setup-capability-content">
                   {id === 'phone' && <><SetupRow title="界面读取与主屏控制" status={permissionLabel(data.permissions.accessibility)} action={permissionAction('accessibility', data.permissions.accessibility)}/><SetupRow title="后台独立屏" status={phoneConnection} action={<Button variant="secondary" disabled={locked} onClick={() => void navigate('background')}>连接与检查</Button>}/><p className="pw-setup-copy">授权、助手连接和实际操作是不同状态。完成连接后，可在检查页试验读取、点击与输入。</p></>}
                   {id === 'tools' && <RuntimePreparation preparation={preparation} can={can} blocked={locked}/>}
@@ -322,13 +328,17 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, r
               </div>;
             })}</div>
           </>}
-          {step === 'finish' && <><div className="pw-setup-intro"><h2 ref={heading} tabIndex={-1}>看看现在准备到了哪里</h2><p>未完成的项目会保留，之后可从准备中心继续。</p></div><div className="pw-setup-review"><SetupRow title="文字对话" status={setupModelLabel(data.model)} action={<Button variant="ghost" disabled={locked} onClick={() => void move('model')}>调整</Button>}/>{capabilities.map(id => <SetupRow key={id} title={capabilityCopy[id].title} status={capabilitySummary(id)} action={<Button variant="ghost" disabled={locked} onClick={() => { setExpanded(id); void move('capabilities'); }}>继续准备</Button>}/>)}</div>{!data.model.configured && <p className="pw-setup-copy">尚未连接模型，进入应用后仍可继续设置。</p>}{runtimePreparing(preparation.view) && <p className="pw-setup-copy">开发工具仍在准备，进入应用后可回到这里查看进度或停止。</p>}</>}
+          {stage === 'finish' && <><div className="pw-setup-intro"><h2 ref={heading} tabIndex={-1}>确认当前准备状态</h2><p>未完成的项目会保留，之后可从准备中心继续。</p></div><div className="pw-setup-review"><SetupRow title={data.model.label || '文字对话'} status={setupModelLabel(data.model)} action={<Button variant="ghost" aria-label="调整模型" disabled={locked} onClick={() => void move('model')}>调整</Button>}/>{capabilities.map(id => <SetupRow key={id} title={capabilityCopy[id].title} status={capabilitySummary(id)} action={<Button variant="ghost" aria-label={`调整${capabilityCopy[id].title}`} disabled={locked} onClick={() => { setExpanded(id); void move('capabilities'); }}>调整</Button>}/>)}</div>{!data.model.configured && <p className="pw-setup-copy">尚未连接模型，进入应用后仍可继续设置。</p>}{runtimePreparing(preparation.view) && <p className="pw-setup-copy">开发工具仍在准备，进入应用后可回到这里查看进度或停止。</p>}</>}
+          <div className="pw-setup-utilities">
+            {(stage === 'model' || mode === 'center') && <Button variant="ghost" trailingIcon={RiArrowRightSLine} disabled={locked || !!preparation.working} onClick={() => void navigate('appearance')}>外观与字体</Button>}
+            {!needsRead && <Button variant="ghost" leadingIcon={RiRefreshLine} aria-label="刷新准备状态" disabled={loading || !!working || !readable} onClick={() => void load()}>{loading ? '正在刷新…' : '刷新状态'}</Button>}
+          </div>
         </motion.div>
-        {error && <p role="alert" className="pw-setup-error">{error}</p>}{needsRead && <Button variant="secondary" disabled={loading || !!working} onClick={() => void load()}>刷新并核对</Button>}{notice && <p role="status" className="pw-setup-notice">{notice}</p>}
+        {(error || needsRead || notice) && <div className="pw-setup-feedback">{error && <p role="alert" className="pw-setup-error">{error}</p>}{needsRead && <Button variant="secondary" disabled={loading || !!working} onClick={() => void load()}>刷新并核对</Button>}{notice && <p role="status" className="pw-setup-notice">{notice}</p>}</div>}
       </div>
       <footer className="pw-setup-footer">
-        {mode === 'onboarding' && step !== 'welcome' ? <Button variant="ghost" leadingIcon={RiArrowLeftLine} disabled={locked || !!preparation.working} onClick={() => void move(setupSteps[setupSteps.indexOf(step) - 1])}>上一步</Button> : <Button variant="ghost" disabled={!!working || !!preparation.working || needsRead} onClick={() => mode === 'onboarding' ? void finish(true) : onClose()}>{mode === 'onboarding' ? '以后再说' : '返回'}</Button>}
-        {step === 'finish' || mode === 'center' ? <Button disabled={locked || !!preparation.working} onClick={() => void finish(false)}>{working === 'save' ? '正在保存…' : mode === 'center' ? '完成' : '进入应用'}</Button> : <Button trailingIcon={RiArrowRightLine} disabled={locked || !!preparation.working} onClick={() => void move(setupSteps[setupSteps.indexOf(step) + 1])}>{step === 'welcome' ? '开始准备' : step === 'model' && !data.model.configured ? '稍后连接，继续' : step === 'capabilities' ? '查看准备状态' : '继续'}</Button>}
+        {mode === 'onboarding' && previousStep && <Button variant="ghost" leadingIcon={RiArrowLeftLine} disabled={locked || !!preparation.working} onClick={() => void move(previousStep)}>上一步</Button>}
+        {stage === 'finish' || mode === 'center' ? <Button className="pw-setup-next" disabled={locked || !!preparation.working} onClick={() => void finish(false)}>{working === 'save' ? '正在保存…' : mode === 'center' ? '完成' : '进入应用'}</Button> : <Button className="pw-setup-next" variant={stage === 'model' && !data.model.configured ? 'secondary' : 'primary'} trailingIcon={RiArrowRightLine} disabled={locked || !!preparation.working} onClick={() => void move(stage === 'model' ? 'capabilities' : 'finish')}>{stage === 'model' && !data.model.configured ? '稍后连接，继续' : stage === 'capabilities' ? '查看准备状态' : '继续'}</Button>}
       </footer>
     </>}
   </section>;

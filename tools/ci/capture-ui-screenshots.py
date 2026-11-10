@@ -221,35 +221,81 @@ def layout():
         return None
 
 
-def find_target(tree, label):
-    if tree is None:
+def visible_bounds(node):
+    if node.get("package") != PACKAGE or node.get("visible-to-user") == "false":
         return None
-    for node in tree.iter("node"):
-        if (node.get("package") != PACKAGE or node.get("enabled") == "false" or
-                label not in (node.get("text"), node.get("content-desc"))):
-            continue
-        bounds = re.fullmatch(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", node.get("bounds", ""))
-        if bounds:
-            left, top, right, bottom = map(int, bounds.groups())
-            if 0 <= left < right <= 1080 and 0 <= top < bottom <= 2220:
-                return (left + right) // 2, (top + bottom) // 2
+    bounds = re.fullmatch(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", node.get("bounds", ""))
+    if bounds:
+        left, top, right, bottom = map(int, bounds.groups())
+        if 0 <= left < right <= 1080 and 0 <= top < bottom <= 2220 and min(right - left, bottom - top) >= 24:
+            return left, top, right, bottom
     return None
 
 
+def visible_labels(tree):
+    if tree is None:
+        return []
+    return list(dict.fromkeys(label for node in tree.iter("node") if visible_bounds(node)
+                             for label in (node.get("text"), node.get("content-desc")) if label))
+
+
+def read_layout(expected=(), *, attempts=4):
+    # WebView may expose an empty first accessibility snapshot after it is visible.
+    tree = None
+    for attempt in range(attempts):
+        tree = layout()
+        labels = visible_labels(tree)
+        if labels and (not expected or any(label == item or label.startswith(item + "，")
+                                          for label in labels for item in expected)):
+            break
+        if attempt + 1 < attempts:
+            time.sleep(1)
+    return tree
+
+
+def find_target(tree, label, *, prefix=False):
+    if tree is None:
+        return None
+    parents = {child: parent for parent in tree.iter() for child in parent}
+    points = set()
+    for node in tree.iter("node"):
+        names = (node.get("text", ""), node.get("content-desc", ""))
+        if not visible_bounds(node) or not any(name == label or prefix and name.startswith(label) for name in names):
+            continue
+        # Text can be a child of the button. Ignore headings, disabled controls,
+        # clipped/offscreen nodes and ambiguous duplicate actions.
+        chain = []
+        target = node
+        while target is not None and target.get("package") == PACKAGE:
+            if target.get("enabled") == "false" or not visible_bounds(target):
+                chain = []
+                break
+            chain.append(target)
+            if target.get("class") == "android.webkit.WebView":
+                break
+            target = parents.get(target)
+        target = next((item for item in chain if item.get("clickable") == "true"
+                       and item.get("class") != "android.webkit.WebView"), None)
+        if target is not None:
+            left, top, right, bottom = visible_bounds(target)
+            points.add(((left + right) // 2, (top + bottom) // 2))
+    return next(iter(points)) if len(points) == 1 else None
+
+
 def wait_for_controls(*labels, timeout=20):
-    """Wait for actual accessible controls, including WebView's first tree refresh."""
+    """Wait for the current accessible actions, including WebView's first refresh."""
     deadline = time.monotonic() + timeout
     tree = None
     while time.monotonic() < deadline:
         tree = layout()
-        if any(find_target(tree, label) for label in labels):
+        if any(find_target(tree, label, prefix=label == "对话菜单") for label in labels):
             return tree
         time.sleep(1)
     return tree
 
 
-def tap(label, tree=None):
-    point = find_target(tree if tree is not None else layout(), label)
+def tap(label, tree=None, *, prefix=False):
+    point = find_target(tree if tree is not None else read_layout(), label, prefix=prefix)
     if point is None:
         return False
     adb("shell", "input", "tap", str(point[0]), str(point[1]))
@@ -258,37 +304,37 @@ def tap(label, tree=None):
     return True
 
 
-def screenshot(slug, title):
+def screenshot(slug, title, *, tree=None, requested_path=None, destination_observed=None):
     path = OUTPUT / f"{len(REPORT['screens']) + 1:02d}-{slug}.png"
     with path.open("wb") as output:
         result = subprocess.run([str(ADB), "-s", SERIAL, "exec-out", "screencap", "-p"],
                                 stdout=output, stderr=subprocess.PIPE, timeout=20)
     if result.returncode or path.stat().st_size == 0:
         raise RuntimeError("Android could not produce the requested PNG")
-    REPORT["screens"].append({"file": path.name, "title": title, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+    screen = {"file": path.name, "title": title, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    if tree is not None:
+        screen["observedLabels"] = visible_labels(tree)
+    if requested_path is not None:
+        screen.update(requestedPath=requested_path, destinationObserved=destination_observed)
+    REPORT["screens"].append(screen)
     save_report()
 
 
 def navigation():
-    tree = wait_for_controls("关闭导航", "打开导航", "对话菜单", "工作区与导航",
-                             "暂时跳过准备", "以后再说", "关闭文件工作区")
-    # Outcomes are a real modal over the current workspace, not a route with its
-    # own navigation button. Close that read-only surface before the next page.
+    tree = wait_for_controls("关闭文件工作区", "关闭导航", "打开导航", "对话菜单", "工作区与导航",
+                             "暂时跳过准备", "以后再说")
     if tap("关闭文件工作区", tree):
-        tree = wait_for_controls("关闭导航", "打开导航", "对话菜单")
+        tree = wait_for_controls("关闭导航", "打开导航", "对话菜单", "工作区与导航")
     if find_target(tree, "关闭导航"):
         return tree
-    # Fresh installs start in the real onboarding page. Use its own skip action,
-    # never a preferences write or an edge swipe (Android interprets that as Back).
-    if find_target(tree, "以后再说") or find_target(tree, "暂时跳过准备"):
-        if tap("以后再说", tree) or tap("暂时跳过准备", tree):
-            tree = wait_for_controls("对话菜单", "打开导航", timeout=30)
+    # The initial snapshot may have arrived before the real preparation controls.
+    if tap("以后再说", tree) or tap("暂时跳过准备", tree):
+        tree = wait_for_controls("对话菜单", "打开导航", timeout=30)
     if tap("打开导航", tree):
         return wait_for_controls("关闭导航")
-    # The chat surface deliberately keeps navigation inside its overflow menu.
     if tap("工作区与导航", tree):
         return wait_for_controls("关闭导航")
-    if tap("对话菜单", tree):
+    if tap("对话菜单", tree, prefix=True):
         tree = wait_for_controls("工作区与导航")
     if tap("工作区与导航", tree):
         return wait_for_controls("关闭导航")
@@ -309,47 +355,62 @@ def capture_screens(apk):
     (OUTPUT / "webview-provider.txt").write_text(adb("shell", "dumpsys", "webviewupdate", check=False))
     (OUTPUT / "install.txt").write_text(adb("install", "-t", str(apk), timeout=120))
     (OUTPUT / "launch.txt").write_text(adb("shell", "am", "start", "-W", "-n", PACKAGE + "/.ui.ComposeActivity", timeout=60))
-    # The installed renderer logs "host source=library-web", not "ready".
-    # Its log is diagnostic only; real UI controls determine when navigation can start.
-    initial = wait_for_controls("以后再说", "暂时跳过准备", "对话菜单", "打开导航", timeout=90)
+    tree = wait_for_controls("暂时跳过准备", "以后再说", "对话菜单", "打开导航", timeout=90)
     logs = adb("logcat", "-d", "-s", "PocketWebUi:I", "*:S", timeout=15, check=False)
-    REPORT["rendererHostSignalObserved"] = "host source=library-web" in logs
-    REPORT["initialAccessibilityContentObserved"] = any(
-        find_target(initial, label) for label in ("以后再说", "暂时跳过准备", "对话菜单", "打开导航"))
-    time.sleep(2)
-    if tap("以后再说", initial) or tap("暂时跳过准备", initial):
-        wait_for_controls("对话菜单", "打开导航", timeout=30)
-        screenshot("workroom", "从首次准备返回的对话界面")
-    else:
-        screenshot("first-launch", "首次启动的实际界面")
+    # This is the host's configuration log, not proof that the renderer is ready.
+    REPORT["hostConfigurationSignalObserved"] = "host source=library-web" in logs
+    REPORT["initialAccessibilityContentObserved"] = any(find_target(tree, label, prefix=label == "对话菜单")
+                                                       for label in ("暂时跳过准备", "以后再说", "对话菜单", "打开导航"))
+    screenshot("first-launch", "首次启动的实际界面", tree=tree)
+    if tap("暂时跳过准备", tree) or tap("以后再说", tree):
+        tree = wait_for_controls("对话菜单", "打开导航", timeout=30)
+        screenshot("workroom", "点按跳过准备后的实际界面", tree=tree)
     tree = wait_for_controls("对话菜单", "打开导航", timeout=10)
-    if tap("对话菜单", tree):
-        wait_for_controls("工作区与导航")
-        screenshot("chat-menu", "真实对话菜单")
+    if tap("对话菜单", tree, prefix=True):
+        tree = wait_for_controls("工作区与导航")
+        screenshot("chat-menu", "点按对话菜单后的实际界面", tree=tree)
     menu = navigation()
     if not find_target(menu, "关闭导航"):
         REPORT["unavailable"].append("导航未能打开；保留启动/阻塞界面，不注入状态绕过。")
-        screenshot("navigation-unavailable", "尝试打开导航后的实际状态")
+        screenshot("navigation-unavailable", "尝试打开导航后的实际状态", tree=menu)
         return
-    screenshot("navigation", "实际导航抽屉")
-    destinations = [("任务", "tasks"), ("设备", "devices"), ("成果", "artifacts"),
-                    ("记忆", "memory"), ("能力", "capabilities"), ("团队", "teams"),
-                    ("项目", "projects"), ("自动化", "automation"),
-                    ("账号与模型", "models"), ("设置", "settings")]
-    for label, slug in destinations:
+    screenshot("navigation", "当前可访问树已显示关闭导航入口的侧栏", tree=menu)
+    destinations = [(("任务",), "tasks", ("任务",)), (("设备",), "devices", ("设备连接",)),
+                    (("记忆",), "memory", ("记忆",)), (("能力",), "capabilities", ("技能与工具",)),
+                    (("团队",), "teams", ("团队",)), (("成果",), "artifacts", ("文件与成果",)),
+                    (("项目",), "projects", ("项目",)), (("自动化",), "automation", ("自动化",)),
+                    (("设置",), "settings", ("设置",)),
+                    (("设置", "AI 接入"), "models", ("AI 接入", "服务与账号"))]
+    for path, slug, markers in destinations:
         tree = navigation()
-        if not find_target(tree, label) and tap("更多工作区", tree):
-            tree = wait_for_controls(label, timeout=15)
-        if tap(label, tree):
-            # Wait for the drawer to close instead of photographing its exit animation.
-            deadline = time.monotonic() + 15
-            while time.monotonic() < deadline:
-                if not find_target(layout(), "关闭导航"):
-                    break
-                time.sleep(1)
-            screenshot(slug, label + "入口打开后的实际界面")
-        else:
-            REPORT["unavailable"].append(label + "：当前新安装界面未找到可用入口。")
+        if not find_target(tree, "关闭导航"):
+            REPORT["unavailable"].append(" → ".join(path) + "：未取得当前侧栏入口，未继续点击。")
+            continue
+        label = path[0]
+        if not find_target(tree, label) and tap("更多工作区", tree, prefix=True):
+            tree = read_layout((label,))
+        clicked = tap(label, tree)
+        for label in path[1:]:
+            if not clicked:
+                break
+            tree = read_layout((label,))
+            clicked = tap(label, tree, prefix=True)
+        if not clicked:
+            REPORT["unavailable"].append(" → ".join(path) + "：当前页面未找到唯一可见且可用的入口。")
+            continue
+        # Observe the real drawer leaving before taking the destination image.
+        deadline = time.monotonic() + 15
+        tree = layout()
+        while find_target(tree, "关闭导航") and time.monotonic() < deadline:
+            time.sleep(1)
+            tree = layout()
+        if not find_target(tree, "关闭导航"):
+            tree = read_layout((markers[-1],))
+        observed = all(marker in visible_labels(tree) for marker in markers) and not find_target(tree, "关闭导航")
+        screenshot(slug, "点按“" + " → ".join(path) + "”后的实际界面", tree=tree,
+                   requested_path=list(path), destination_observed=bool(observed))
+        if not observed:
+            REPORT["unavailable"].append(" → ".join(path) + "：已点按入口，但未从当前可见标题确认目标页面。")
 
 
 def main():
@@ -368,7 +429,7 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-        REPORT["captureStatus"] = "finished; see individual screens and unavailable destinations"
+        REPORT["captureStatus"] = "partial; see unavailable destinations" if REPORT["unavailable"] else "finished; inspect the actual screens"
     except Exception as failure:
         REPORT["captureStatus"] = "capture could not finish"
         REPORT["error"] = f"{type(failure).__name__}: {failure}"

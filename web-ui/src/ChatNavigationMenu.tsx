@@ -1,4 +1,4 @@
-import type {Ref} from 'react';
+import type {ReactNode,Ref} from 'react';
 import {RiChatNewLine,RiHistoryLine,RiLayoutGridLine,RiMoreLine,RiNotification3Line,RiSettings4Line,RiFolderLine} from '@remixicon/react';
 import {Button,IconButton} from './forms-library';
 import {Popover,PopoverHeader,PopoverTrigger} from './shell-library';
@@ -6,6 +6,7 @@ import './chat-navigation.css';
 
 type ChatNavigationMenuProps={
  title:string;
+ navigationTrigger:ReactNode;
  isOpen:boolean;
  onOpenChange:(open:boolean)=>void;
  triggerRef:Ref<HTMLButtonElement>;
@@ -21,10 +22,11 @@ type ChatNavigationMenuProps={
 
 /** The retained BoardUI/React Aria popover owns focus, placement and dismissal.
  * This only relocates navigation; actions still use the existing host paths. */
-export function ChatNavigationMenu({title,isOpen,onOpenChange,triggerRef,submitting,unread,onNewConversation,onConversations,onNavigation,onOrganize,onNotifications,onSettings}:ChatNavigationMenuProps){
+export function ChatNavigationMenu({title,navigationTrigger,isOpen,onOpenChange,triggerRef,submitting,unread,onNewConversation,onConversations,onNavigation,onOrganize,onNotifications,onSettings}:ChatNavigationMenuProps){
  const choose=(action:()=>void)=>{onOpenChange(false);action()};
  return <nav className="pw-chat-navigation" aria-label="对话操作">
-  <h1 className="pw-sr-only">{title}</h1>
+  {navigationTrigger}
+  <h1 className="pw-chat-navigation-title" title={title}>{title}</h1>
   <PopoverTrigger isOpen={isOpen} onOpenChange={onOpenChange}>
    <IconButton ref={triggerRef} icon={RiMoreLine} className="pw-chat-glass-trigger" aria-label={unread>0?`对话菜单，${unread} 条未读通知`:'对话菜单'} title="对话菜单" data-unread={unread>0||undefined}/>
    <Popover placement="bottom end" offset={8} className="pw-chat-glass-menu" dialogClassName="pw-chat-glass-dialog">

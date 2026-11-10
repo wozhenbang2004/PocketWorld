@@ -1,18 +1,23 @@
-import { RiFileImageLine } from '@remixicon/react';
+import { RiArrowRightSLine, RiFileImageLine, RiFileLine } from '@remixicon/react';
 import { Button } from '../forms-library';
 import { exactFileTarget, fileBytes, type FileJson } from '../attachment-workspace';
-import { MediaCarousel } from './MediaCarousel';
+
+const fileTypes: Record<string, string> = {
+  'application/pdf': 'PDF', 'text/plain': '文本', 'text/markdown': 'Markdown', 'application/json': 'JSON', 'application/zip': 'ZIP',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'Word 文档',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'Excel 表格',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'PowerPoint 演示文稿',
+};
 
 export function AttachmentFileCollection({ label, files, busy, choosing, onSelect }: { label: string; files: FileJson[]; busy: boolean; choosing: boolean; onSelect: (target: FileJson) => void }) {
   if (!files.length) return null;
-  const images = files.filter(file => String(file.mimeType).startsWith('image/'));
-  const carousel = images.length >= 2;
-  const remaining = carousel ? files.filter(file => !images.includes(file)) : files;
   return <section className="pw-outcome-files" aria-label={label}>
-    {carousel ? <MediaCarousel label={label} items={images.map((item, index) => {
-      const target = exactFileTarget(item);
-      return { id: `${item.id}:${item.sha256}:${index}`, content: <Button variant="ghost" className="pw-file-collection-card" disabled={busy || !target} onClick={() => target && onSelect(target)}><span className="pw-collection-icon" aria-hidden="true"><RiFileImageLine size={44} /></span><strong>{item.name || '图片原件'}</strong><small>图片原件 · {fileBytes(item.size ?? item.sizeBytes)}</small><small>{target ? choosing ? '选择这个来源' : '打开固定原件' : '原文件或版本当前不可用'}</small></Button> };
-    })} /> : <h3>{label}</h3>}
-    {remaining.map((item, index) => { const target = exactFileTarget(item); return <button type="button" key={`${item.id}:${item.sha256}:${index}`} disabled={busy || !target} onClick={() => target && onSelect(target)}><span><strong>{item.name || '原文件'}</strong><small>{target ? `${item.mimeType || '文件'} · ${fileBytes(item.size ?? item.sizeBytes)}` : '原文件或版本当前不可用'}</small></span><span>{choosing ? '关联' : '查看'}</span></button>; })}
+    <h3>{label}</h3>
+    <div className="pw-file-collection-list">{files.map((item, index) => {
+      const target = exactFileTarget(item), mime = String(item.mimeType || ''), size = item.size ?? item.sizeBytes;
+      const type = fileTypes[mime] || (mime.startsWith('image/') ? '图片' : mime.startsWith('video/') ? '视频' : mime.startsWith('audio/') ? '音频' : mime || '文件');
+      const action = choosing ? '选择来源' : '查看版本';
+      return <Button key={`${item.id}:${item.sha256}:${index}`} variant="ghost" className="pw-file-collection-row" leadingIcon={mime.startsWith('image/') ? RiFileImageLine : RiFileLine} trailingIcon={RiArrowRightSLine} aria-label={`${action}：${item.name || '原文件'}`} disabled={busy || !target} onClick={() => target && onSelect(target)}><span className="pw-file-collection-copy"><strong>{item.name || '原文件'}</strong><small>{type} · {typeof size === 'number' && Number.isFinite(size) ? fileBytes(size) : '大小未记录'}</small>{!target && <small>原文件或版本当前不可用</small>}</span><span className="pw-file-collection-action">{target ? action : '不可用'}</span></Button>;
+    })}</div>
   </section>;
 }

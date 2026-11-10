@@ -22,7 +22,15 @@
 .pw-attachment-object-heading { display: grid; gap: var(--pw-gap-related,8px); }
 .pw-attachment-object-heading h2,.pw-file-library-header h2 { margin: 0; font-size: 20px; font-weight: 550; line-height: 1.4; letter-spacing: -.025em; }
 .pw-attachment-object-heading > p { margin: 0; font-size: 12px; }
-.pw-attachment-library-scope { display: block; margin-bottom: 6px; font-size: 12px; color: var(--pw-muted); }
+.pw-attachment-library-scope { display: block; margin: 0; font-size: 13px; line-height: 22px; color: var(--pw-copy); }
+.pw-file-library { display: flex; flex-direction: column; gap: 24px; }
+.pw-file-library-header { min-height: 44px; }
+.pw-drawer.pw-file-workspace .pw-file-library-actions { margin: 0; gap: 12px; }
+.pw-file-library-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; max-width: 440px; padding: 16px 0 24px; }
+.pw-file-library-empty > svg { box-sizing: content-box; padding: 14px; margin-bottom: 8px; border-radius: 20px; color: var(--pw-copy); background: var(--pw-inset); }
+.pw-file-library-empty > h2 { margin: 0; font-size: 20px; line-height: 28px; font-weight: 600; letter-spacing: -.02em; }
+.pw-file-library-empty > p { margin: 0; max-width: 36ch; font-size: 15px; line-height: 24px; color: var(--pw-copy); }
+.pw-drawer.pw-file-workspace .pw-file-library-empty > .pw-file-library-actions { margin-top: 16px; }
 .pw-drawer.pw-file-workspace .pw-comparison-toolbar h3 { display: none; }
 .pw-drawer.pw-file-workspace .pw-outcome-file-detail { gap: var(--pw-gap-content,16px); }
 .pw-drawer.pw-file-workspace .pw-outcome-file-detail > .pw-action-row { margin: 0; padding-bottom: var(--pw-gap-control,12px); gap: var(--pw-gap-control,12px); }
@@ -32,8 +40,20 @@
 .pw-attachment-tools button[slot="trigger"] > span > span:first-child { font-size: 13px; font-weight: 500; }
 .pw-attachment-tools button[slot="trigger"] > span > span + span { font-size: 12px; }
 .pw-attachment-tools [role="region"] section { display: grid; gap: 12px; padding-bottom: 12px; }
-.pw-drawer.pw-file-workspace .pw-outcome-files > h3 { margin: 0 0 12px; font-size: 12px; color: var(--pw-muted); font-weight: 400; }
+.pw-drawer.pw-file-workspace .pw-outcome-files { margin: 0; gap: 8px; }
+.pw-drawer.pw-file-workspace .pw-outcome-files > h3 { margin: 0 0 4px; font-size: 13px; line-height: 22px; color: var(--pw-copy); font-weight: 500; }
 .pw-drawer.pw-file-workspace .pw-outcome-files > button { min-height: 64px; padding: var(--pw-gap-control,12px) 0; border-bottom: 0; }
+.pw-file-collection-list { min-width: 0; padding: 0 16px; border-radius: 20px; background: var(--pw-surface); }
+.pw-file-collection-list > .pw-file-collection-row { width: 100%; min-width: 0; min-height: 76px; height: auto; gap: 12px; padding: 16px 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; color: var(--pw-ink); text-align: start; white-space: normal; }
+.pw-file-collection-list > .pw-file-collection-row + .pw-file-collection-row { border-top: 1px solid var(--pw-edge); }
+.pw-file-collection-list > .pw-file-collection-row:disabled { opacity: .55; cursor: default; }
+.pw-file-collection-row > span { display: flex; flex: 1; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; padding: 0; white-space: normal; }
+.pw-file-collection-row > svg { flex: none; color: var(--pw-copy); }
+.pw-file-collection-row > svg:last-child { width: 16px; height: 16px; }
+.pw-file-collection-row .pw-file-collection-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; align-items: flex-start; }
+.pw-file-collection-copy > strong { font-size: 16px; line-height: 24px; font-weight: 550; overflow-wrap: anywhere; }
+.pw-file-collection-copy > small { margin-top: 4px; font-size: 13px; line-height: 21px; color: var(--pw-copy); overflow-wrap: anywhere; }
+.pw-file-collection-action { flex: none; font-size: 13px; line-height: 22px; font-weight: 400; white-space: nowrap; color: var(--pw-copy); }
 .pw-original-file > header h3 { margin: 0; font-size: 18px; font-weight: 550; line-height: 1.45; }
 .pw-original-file > header p { margin: var(--pw-gap-related,8px) 0 0; font-size: 12px; }
 .pw-original-file > .pw-action-row { padding-block: 0; gap: var(--pw-gap-control,12px); }

@@ -1,13 +1,27 @@
-/* A compact floating control, not a replacement header band. Native insets stay
- * authoritative. Only initial content clears the control; that space scrolls
- * away with the conversation. The material is CSS, not Apple's native glass. */
+/* Existing navigation and conversation actions share a compact title row.
+ * Native insets stay authoritative; the conversation remains the main surface. */
 .pw-chat-navigation {
- position: absolute;
- top: 7px;
- right: max(14px,env(safe-area-inset-right,0px));
+ position: relative;
+ flex: none;
+ min-height: 58px;
+ padding: 7px max(14px,env(safe-area-inset-right,0px)) 7px max(14px,env(safe-area-inset-left,0px));
  z-index: 6;
+ display: grid;
+ grid-template-columns: 44px minmax(0,1fr) 44px;
+ align-items: center;
+ gap: 12px;
 }
-.pw-chat-navigation .pw-chat-glass-trigger {
+.pw-chat-navigation-title {
+ min-width: 0;
+ margin: 0;
+ overflow: hidden;
+ text-overflow: ellipsis;
+ white-space: nowrap;
+ color: var(--pw-ink);
+ font: 550 15px/24px var(--pw-font);
+ text-align: center;
+}
+.pw-app .pw-chat-navigation .pw-chat-glass-trigger {
  width: 44px;
  height: 44px;
  min-width: 44px;
@@ -31,7 +45,7 @@
  background: var(--pw-ink);
  box-shadow: 0 0 0 2px var(--pw-surface);
 }
-.pw-chat-navigation .pw-chat-glass-trigger[aria-expanded="true"] {
+.pw-app .pw-chat-navigation .pw-chat-glass-trigger[aria-expanded="true"] {
  background: var(--pw-selected);
 }
 .pw-chat-glass-menu {
@@ -71,23 +85,23 @@
 .pw-chat-menu-actions > .button-press-motion:hover:not(:disabled) { background: var(--pw-selected); }
 .pw-chat-menu-unread { margin-left: auto; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--pw-copy); }
 @supports ((backdrop-filter: blur(16px)) or (-webkit-backdrop-filter: blur(16px))) {
- .pw-chat-navigation .pw-chat-glass-trigger,
+ .pw-app .pw-chat-navigation .pw-chat-glass-trigger,
  .pw-chat-glass-menu {
   background: linear-gradient(145deg,rgb(255 255 255 / 84%),rgb(255 255 255 / 58%));
   -webkit-backdrop-filter: blur(18px) saturate(1.25);
   backdrop-filter: blur(18px) saturate(1.25);
  }
- :root.dark .pw-chat-navigation .pw-chat-glass-trigger,
+ :root.dark .pw-app .pw-chat-navigation .pw-chat-glass-trigger,
  :root.dark .pw-chat-glass-menu { background: linear-gradient(145deg,rgb(52 52 54 / 88%),rgb(34 34 36 / 72%)); }
 }
-:root.dark .pw-chat-navigation .pw-chat-glass-trigger { box-shadow: 0 4px 18px rgb(0 0 0 / 24%), inset 0 1px 1px rgb(255 255 255 / 18%), inset 0 -1px 2px rgb(0 0 0 / 20%); }
+:root.dark .pw-app .pw-chat-navigation .pw-chat-glass-trigger { box-shadow: 0 4px 18px rgb(0 0 0 / 24%), inset 0 1px 1px rgb(255 255 255 / 18%), inset 0 -1px 2px rgb(0 0 0 / 20%); }
 :root.dark .pw-chat-glass-menu { box-shadow: 0 12px 40px rgb(0 0 0 / 32%), inset 0 1px 1px rgb(255 255 255 / 14%); }
 @media (prefers-reduced-transparency: reduce), (forced-colors: active) {
- .pw-chat-navigation .pw-chat-glass-trigger,
+ .pw-app .pw-chat-navigation .pw-chat-glass-trigger,
  .pw-chat-glass-menu,
- :root.dark .pw-chat-navigation .pw-chat-glass-trigger,
+ :root.dark .pw-app .pw-chat-navigation .pw-chat-glass-trigger,
  :root.dark .pw-chat-glass-menu { background: var(--pw-surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
 }
 @media (prefers-reduced-motion: reduce) {
- .pw-chat-navigation .pw-chat-glass-trigger { transition: none; }
+ .pw-app .pw-chat-navigation .pw-chat-glass-trigger { transition: none; }
 }

@@ -51,9 +51,10 @@
 
 /* Library first: import and source maintenance are explicit actions, while
  * search, filters and the original skill entries stay together. */
-.pw-skill-workspace.pw-ecosystem-depth .pw-skill-directory-heading{flex-wrap:wrap;gap:var(--pw-gap-control);margin:0 0 var(--pw-gap-section)}
+.pw-skill-workspace.pw-ecosystem-depth .pw-skill-directory-heading{align-items:center;flex-wrap:wrap;gap:var(--pw-gap-control);margin:0 0 16px}
+.pw-skill-workspace.pw-ecosystem-depth .pw-skill-directory-heading .pw-skill-directory-count{margin:0;font-size:13px;line-height:22px;color:var(--pw-copy)}
 .pw-skill-directory-heading .pw-skill-heading-actions{display:flex;align-items:center;gap:var(--pw-gap-related);flex:none}
-.pw-skill-directory-heading .pw-skill-heading-actions>button{min-height:48px}
+.pw-skill-directory-heading .pw-skill-heading-actions>button{min-height:44px}
 .pw-skill-library-menu{display:flex;flex-direction:column;gap:2px;padding:2px}
 .pw-skill-library-menu>button{justify-content:flex-start;min-height:48px}
 .pw-skill-workspace.pw-ecosystem-depth .pw-affect-library-list{padding-top:0}
@@ -61,13 +62,25 @@
 .pw-skill-workspace.pw-ecosystem-depth [data-library-mode="directory"] .pw-affect-library-layout{grid-template-columns:minmax(0,1fr)}
 .pw-skill-workspace.pw-ecosystem-depth [data-library-mode="directory"] .pw-affect-library-list{border-bottom:0}
 .pw-skill-workspace.pw-ecosystem-depth [data-library-mode="directory"] .pw-affect-library-options{max-height:none;overflow:visible;gap:0}
+.pw-skill-workspace.pw-ecosystem-depth [data-library-mode="directory"] .pw-affect-library-options:has(.pw-affect-library-entry){padding:0 16px;border-radius:20px;background:var(--pw-surface)}
 .pw-skill-workspace.pw-ecosystem-depth [data-library-mode="directory"] .pw-affect-library-entry+.pw-affect-library-entry{border-top:1px solid var(--pw-edge)}
-.pw-skill-workspace.pw-ecosystem-depth [data-library-mode="directory"] .pw-affect-library-entry>button{padding:var(--pw-gap-content) 0;border-radius:0}
-.pw-skill-directory-controls{margin-block:var(--pw-gap-control) var(--pw-gap-content)}
+.pw-skill-workspace.pw-ecosystem-depth [data-library-mode="directory"] .pw-affect-library-entry>button{min-height:76px;gap:12px;padding:16px 0;border-radius:0}
+.pw-skill-workspace.pw-ecosystem-depth [data-library-mode="directory"] .pw-affect-library-entry strong{font-size:16px;line-height:24px;font-weight:550;overflow-wrap:anywhere}
+.pw-skill-workspace.pw-ecosystem-depth [data-library-mode="directory"] .pw-affect-library-entry small{font-size:13px;line-height:21px;overflow-wrap:anywhere}
+.pw-skill-workspace.pw-ecosystem-depth [data-library-mode="directory"] .pw-affect-tag{padding:0;background:transparent;color:var(--pw-copy);font-size:13px;line-height:22px;font-weight:400}
+.pw-skill-directory-controls{margin-block:12px 24px}
 .pw-skill-directory-controls .pw-eco-filters{margin:0;gap:var(--pw-gap-related)}
-.pw-skill-directory-controls .pw-eco-filters>button{padding-inline:11px}
+.pw-skill-directory-controls .pw-eco-filters>button{min-height:44px;padding-inline:14px;font-size:14px}
 .pw-skill-batch-mode{display:flex;align-items:center;justify-content:space-between;gap:var(--pw-gap-control);margin-top:var(--pw-gap-control);font-size:13px;color:var(--pw-copy)}
 .pw-skill-batch-mode>button{font-size:13px}
+.pw-skill-workspace .pw-skill-directory-empty{display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:24px 0 16px;max-width:440px}
+.pw-skill-workspace .pw-skill-directory-empty>svg{box-sizing:content-box;padding:14px;margin-bottom:8px;color:var(--pw-copy);background:var(--pw-inset);border-radius:20px}
+.pw-skill-workspace .pw-skill-directory-empty :is(h2,h3){margin:0;font-size:20px;line-height:28px;font-weight:600;letter-spacing:-.02em}
+.pw-skill-workspace .pw-skill-directory-empty>p{margin:0;max-width:36ch;font-size:15px;line-height:24px;color:var(--pw-copy)}
+.pw-skill-workspace .pw-skill-directory-empty>.pw-form-actions{margin:16px 0 0;gap:12px}
+.pw-skill-workspace .pw-skill-directory-empty>.pw-form-actions>button{min-height:44px}
+.pw-skill-workspace .pw-skill-directory-empty>button{margin-top:8px;min-height:44px}
+.pw-skill-workspace .pw-skill-directory-no-results{padding-block:16px 24px}
 .pw-skill-workspace.pw-ecosystem-depth .pw-skill-detail-actions{justify-content:space-between;gap:var(--pw-gap-control);margin:0 0 var(--pw-gap-content)}
 .pw-skill-workspace.pw-ecosystem-depth .pw-skill-detail>.pw-eco-object-heading{margin-bottom:var(--pw-gap-section)}
 .pw-skill-workspace.pw-ecosystem-depth .pw-eco-reading-aside>.pw-eco-status-strip{display:grid;grid-template-columns:1fr;gap:var(--pw-gap-control);margin:0 0 var(--pw-gap-section);padding:0;background:none}
@@ -76,7 +89,5 @@
 .pw-skill-import-workspace .pw-skill-disclosures{margin:0;border:0}
 .pw-skill-import-workspace .pw-source-record{min-width:0}
 @media(max-width:760px){
- .pw-skill-workspace.pw-ecosystem-depth .pw-affect-library-options{max-height:340px}
- .pw-skill-workspace.pw-ecosystem-depth .pw-skill-directory-heading h2{font-size:20px;line-height:29px}
  .pw-skill-directory-heading .pw-skill-heading-actions>button:first-child{padding-inline:12px}
 }
