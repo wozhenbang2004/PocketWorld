@@ -33,7 +33,7 @@ const defaultReasoning: ReasoningValue = { mode: 'DEFAULT', level: '', budgetTok
 const levelLabels: Record<string, string> = { minimal: '最小', low: '低', medium: '中', high: '高', xhigh: '极高', max: '最高' };
 export function reasoningLabel(value: ReasoningValue | null, compact = false): string {
   if (!value) return '';
-  if (value.mode === 'DEFAULT') return compact ? '默认' : '服务默认';
+  if (value.mode === 'DEFAULT') return '自动';
   if (value.mode.endsWith('_BUDGET')) return compact ? '预算' : `预算 ${value.budgetTokens.toLocaleString()} tokens`;
   return levelLabels[value.level] || value.level;
 }
@@ -72,7 +72,7 @@ export function currentReasoningTarget(value: any): ReasoningTarget {
 
 /** Choices come only from this exact model's native facts. No provider-wide strength presets. */
 export function reasoningChoices(facts: ModelControlRecord, provider: string, current: ReasoningValue): ReasoningChoice[] {
-  const choices: ReasoningChoice[] = [{ id: reasoningId(defaultReasoning), label: '服务默认', detail: '由模型服务决定', value: defaultReasoning }];
+  const choices: ReasoningChoice[] = [{ id: reasoningId(defaultReasoning), label: '自动', detail: '沿用接口默认设置', value: defaultReasoning }];
   const mode = namedMode(provider), levels = record(facts.REASONING_LEVELS);
   if (mode && facts.REASONING?.known === true && facts.REASONING?.value === true && levels.known === true && Array.isArray(levels.value)) {
     for (const level of new Set(levels.value.filter((item: any): item is string => typeof item === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(item)))) {
@@ -85,7 +85,7 @@ export function reasoningChoices(facts: ModelControlRecord, provider: string, cu
   return choices;
 }
 export function reasoningAvailability(facts: ModelControlRecord): string {
-  return facts.REASONING?.known === true && facts.REASONING.value === false ? '这个模型不提供推理强度选项。' : '这个模型尚未声明可选的推理强度。';
+  return facts.REASONING?.known === true && facts.REASONING.value === false ? '此模型不支持调整思考强度。' : '暂时没有可直接使用的档位。';
 }
 export function sameAccountTarget(value: any, target: ReasoningTarget): boolean {
   const snapshot = record(record(value).accountSnapshot), ref = target.selection.nativeRef;
