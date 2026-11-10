@@ -12,6 +12,7 @@ import {MarkdownBody} from './MarkdownBody';
 import {ProgressCircle} from './adapted/boardui-progress';
 import {ComposerContextMeter} from '../ComposerContextMeter';
 import {SmoothComposerSurface} from './SmoothComposerSurface';
+import {createTextareaMeasure} from './adapted/textarea-measure';
 import {composerHasPayload} from '../composer-send-policy';
 import {cssEase,motionDuration,motionEase,motionTransition} from './motion-tokens';
 
@@ -88,21 +89,13 @@ function ComposerAttachments({files,onRemove}:{files:NonNullable<ChatComposerPro
  </motion.div>;
 }
 
-function sizeComposerEditor(editor:HTMLTextAreaElement|null,allowed:boolean,animation:RefObject<Animation|null>,lastTarget:RefObject<number>){
- if(!editor)return;
- const currentHeight=editor.getBoundingClientRect().height;
- const style=getComputedStyle(editor);
- const lineHeight=parseFloat(style.lineHeight)||24;
- const verticalPadding=(parseFloat(style.paddingTop)||0)+(parseFloat(style.paddingBottom)||0);
- const minimum=Math.max(48,lineHeight+verticalPadding,parseFloat(style.minHeight)||0);
- const maximum=Math.max(minimum,parseFloat(style.maxHeight)||144);
- // Measure intrinsic content without cancelling an in-flight growth on every
- // keystroke. An important measurement wins over the current WAAPI height.
- editor.style.setProperty('height','0px','important');
- const height=editor.value?editor.scrollHeight:minimum;
- const target=Math.min(maximum,Math.max(minimum,height));
- editor.style.setProperty('height',`${target}px`);
- editor.style.overflowY=height>maximum?'auto':'hidden';
+function sizeComposerEditor(measurement:ReturnType<typeof createTextareaMeasure>,allowed:boolean,animation:RefObject<Animation|null>,lastTarget:RefObject<number>){
+ const size=measurement.measure();
+ if(!size){if(!allowed){animation.current?.cancel();animation.current=null}return}
+ const {target,overflow,currentHeight}=size,editor=measurement.editor;
+ const overflowY=overflow?'auto':'hidden';
+ if(editor.style.overflowY!==overflowY)editor.style.overflowY=overflowY;
+ if(lastTarget.current!==target)editor.style.setProperty('height',`${target}px`);
  if(!allowed){animation.current?.cancel();animation.current=null;lastTarget.current=target;return}
  if(lastTarget.current===target)return;
  const hadLayout=lastTarget.current>0;lastTarget.current=target;
@@ -116,24 +109,35 @@ function sizeComposerEditor(editor:HTMLTextAreaElement|null,allowed:boolean,anim
 export function ChatComposer({value,onChange,onSend,onStop,busy,submitting,disabled,placeholder='输入目标，或补充上下文…',attachments=[],onRemoveAttachment,onAttach,onVoice,listening,voiceStatus,onDiscardVoice,modelName,onSelectModel,toolbar,controls,contextStatus,contextPercent,children,status,label='工作输入',composerKey,className='',sendDisabled=false,sendLabel}:ChatComposerProps&{sendDisabled?:boolean;sendLabel?:string}){
  const editor=useRef<HTMLTextAreaElement>(null);
  const allowed=useMotionAllowed(),resizeAnimation=useRef<Animation|null>(null),editorHeight=useRef(0);
- const editorOwner=useRef(composerKey);
+ const editorOwner=useRef(composerKey),measurement=useRef<ReturnType<typeof createTextareaMeasure>|null>(null);
  useLayoutEffect(()=>{
-  if(!editor.current){resizeAnimation.current?.cancel();resizeAnimation.current=null;editorHeight.current=0;return}
-  if(editorOwner.current!==composerKey){editorOwner.current=composerKey;resizeAnimation.current?.cancel();resizeAnimation.current=null;editorHeight.current=0}
-  sizeComposerEditor(editor.current,allowed,resizeAnimation,editorHeight);
+  if(editorOwner.current!==composerKey||measurement.current?.editor!==editor.current){
+   editorOwner.current=composerKey;
+   resizeAnimation.current?.cancel();resizeAnimation.current=null;editorHeight.current=0;
+   measurement.current?.destroy();measurement.current=null;
+  }
+  if(!editor.current)return;
+  measurement.current??=createTextareaMeasure(editor.current);
+  sizeComposerEditor(measurement.current,allowed,resizeAnimation,editorHeight);
  },[value,listening,composerKey,allowed]);
- useEffect(()=>()=>resizeAnimation.current?.cancel(),[]);
+ useEffect(()=>()=>{resizeAnimation.current?.cancel();measurement.current?.destroy();measurement.current=null},[]);
  useLayoutEffect(()=>{
   const el=editor.current;
-  if(!el||typeof ResizeObserver==='undefined')return;
-  let width=el.clientWidth;
-  const observer=new ResizeObserver(()=>{
-   if(el.clientWidth===width)return;
-   width=el.clientWidth;
-   sizeComposerEditor(el,false,resizeAnimation,editorHeight);
+  if(!el)return;
+  let width=-1,disposed=false;
+  const resize=()=>{if(!disposed&&measurement.current?.editor===el)sizeComposerEditor(measurement.current,false,resizeAnimation,editorHeight)};
+  const observer=typeof ResizeObserver==='undefined'?null:new ResizeObserver(entries=>{
+   const entry=entries.find(entry=>entry.target===el);if(!entry)return;
+   const nextWidth=entry.borderBoxSize[0]?.inlineSize??entry.contentRect.width;
+   if(nextWidth===width)return;
+   width=nextWidth;
+   resize();
   });
-  observer.observe(el);
-  return()=>observer.disconnect();
+  observer?.observe(el);
+  const fonts=el.ownerDocument.fonts;
+  fonts?.addEventListener('loadingdone',resize);
+  void fonts?.ready.then(resize);
+  return()=>{disposed=true;observer?.disconnect();fonts?.removeEventListener('loadingdone',resize)};
  },[listening,composerKey]);
  const hasContent=composerHasPayload(value,attachments.length);
  const canSend=!disabled&&!submitting&&!sendDisabled&&hasContent;

@@ -240,6 +240,26 @@
       "path": "upstream/affect-library/src/demos/components-b/fidelity.css.source.txt",
       "source": "library reconstruction@0e69029; not official Pro source",
       "sha256": "287a7b43dfa919fde2167706b49c340d103f8e0d50a48e9a26b733f83d0d8b7a"
+    },
+    {
+      "path": "upstream/react-textarea-autosize/LICENSE",
+      "source": "Andarist/react-textarea-autosize@ed1894cd8611d99fbea1c47adcf6ee522b1030fd / 8.5.9 / MIT, Copyright (c) 2013 Andrey Popp",
+      "sha256": "2c2a938456c54cab1c4ecd38ea08230c063d9f1a478fc30ec5b172682f9fb1b1"
+    },
+    {
+      "path": "upstream/react-textarea-autosize/calculateNodeHeight.ts.source.txt",
+      "source": "Andarist/react-textarea-autosize@ed1894cd8611d99fbea1c47adcf6ee522b1030fd / 8.5.9 / MIT, Copyright (c) 2013 Andrey Popp",
+      "sha256": "79079d615ae89863f332f1bcec36be5f21257d09e443ec5c0fa2123459d34b0b"
+    },
+    {
+      "path": "upstream/react-textarea-autosize/forceHiddenStyles.ts.source.txt",
+      "source": "Andarist/react-textarea-autosize@ed1894cd8611d99fbea1c47adcf6ee522b1030fd / 8.5.9 / MIT, Copyright (c) 2013 Andrey Popp",
+      "sha256": "ce0a81345f7de59975b582822adc254dc41cda526bd294ed30761a6940ce7cfc"
+    },
+    {
+      "path": "upstream/react-textarea-autosize/getSizingData.ts.source.txt",
+      "source": "Andarist/react-textarea-autosize@ed1894cd8611d99fbea1c47adcf6ee522b1030fd / 8.5.9 / MIT, Copyright (c) 2013 Andrey Popp",
+      "sha256": "8563dbd5e2fe026288783912edda63357285b7c26e83f99d03e2c39763cad03e"
     }
   ],
   "motionRefactor20261110": {
@@ -292,5 +312,18 @@
       "adaptation": "Retain fixed icon slot, current/leaving pure labels and measured label width. Native failed/queued/retained/stopping/turnEnded/text control the actual phase; remove demonstration clocks and automatic success. Empty failed drafts are not labelled thinking or saved drafts; streamed tokens do not replay."
     },
     "evidence": "../../docs/motion-research-20261110.md, second-depth section. Source inspection, reference observation, formal build and unverified Android handfeel are recorded separately."
+  },
+  "motionFlow20261110": {
+    "scope": "PW-M20–PW-M24: reduce repeated layout sampling and preserve current motion across input and business-state transitions. No new visual family or npm dependency. Android handfeel is not inferred from source review.",
+    "composer": {
+      "source": "Andarist/react-textarea-autosize 8.5.9, ed1894cd8611d99fbea1c47adcf6ee522b1030fd / MIT; actual getSizingData, calculateNodeHeight, forceHiddenStyles retained unmodified under upstream/react-textarea-autosize",
+      "adapter": "adapted/textarea-measure.ts",
+      "changes": "Per-editor inert probe instead of module singleton; copy current typography, wrapping and box geometry; preserve product CSS pixel/rem min/max rather than upstream minRows/maxRows; clear copied text immediately, destroy on owner/editor change; Chromium target omits Firefox double assignment/read. Existing Affect textarea and its height animation remain authoritative. SmoothComposerSurface updates only SVG geometry on size changes instead of setting React state every frame."
+    },
+    "continuity": "Collection, Press, Ovio and navigation integration details and actual evidence are recorded in ../../docs/motion-research-20261110.md. New adaptations are not user aesthetic approval.",
+    "collection": "Retained Affect / Reaction Bar + Ovio adapters: disabled and idle scroll paths skip whole-list reads; RO notification epochs coalesce stable natural baselines; dirty revisions settle immediately; shared geometry is read before animation writes. Existing identity, opacity and velocity ownership remain.",
+    "pressAndTabs": "Josh approved neutral adaptation preserves legitimate recovery after business disable or button blur; held input still cancels. Ovio 81a1bcb adaptation samples retained WAAPI frames using actual playback time, preserving current edge and squash pose; no new capsule design.",
+    "navigation": "Retained Vaul 3e97aac6 approved left navigation extension unifies opening touch and existing Content pointer gestures under one position owner. Real recent clientX samples remain separate from drawer translation. Only enabled left, non-snap, non-nested navigation uses this path.",
+    "feedback": "Retained Affect official MessageActions 37b91fa and current Markdown code blocks keep their own successful-copy feedback; App avoids a second success toast on those consumers. Other copy entries and existing errors retain their feedback."
   }
 }

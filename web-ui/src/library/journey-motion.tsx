@@ -48,26 +48,51 @@ export function useCollectionMotion(root:RefObject<HTMLElement|null>,identity:st
  const allowed=useMotionAllowed();
  const previous=useRef<CollectionSnapshot|null>(null);
  const playing=useRef(new Map<HTMLElement,CollectionRun>());
+ const geometry=useRef({dirty:false,epoch:0,frame:0});
  const current=useRef({identity,enabled:active&&allowed,selector});
  current.current={identity,enabled:active&&allowed,selector};
  const cancel=()=>{playing.current.forEach(run=>run.animation.cancel());playing.current.clear()};
- const measure=()=>{
-  const container=root.current,items=new Map<string,ItemBox>();
-  if(!container)return items;
-  const origin=container.getBoundingClientRect();
+ const cancelBaseline=()=>{cancelAnimationFrame(geometry.current.frame);geometry.current.frame=0};
+ const measure=(container:HTMLElement)=>{
+  const items=new Map<string,ItemBox>(),bounds=container.getBoundingClientRect();
+  const scrollLeft=container.scrollLeft,scrollTop=container.scrollTop;
   container.querySelectorAll<HTMLElement>(current.current.selector).forEach(node=>{
    const id=node.dataset.motionKey;
    if(!id||items.has(id)||node.closest('[inert],[hidden]'))return;
    const rect=node.getBoundingClientRect();
    if(!rect.width||!rect.height)return;
-   items.set(id,{node,left:rect.left-origin.left+container.scrollLeft,top:rect.top-origin.top+container.scrollTop,width:rect.width,height:rect.height});
+   items.set(id,{node,left:rect.left-bounds.left+scrollLeft,top:rect.top-bounds.top+scrollTop,width:rect.width,height:rect.height});
   });
-  return items;
+  return {items,bounds,scrollTop};
  };
- const remember=()=>{previous.current={identity:current.current.identity,enabled:current.current.enabled,items:measure()}};
+ const queueBaseline=()=>{
+  const state=geometry.current;state.dirty=true;state.epoch++;
+  if(state.frame||!current.current.enabled)return;
+  let epoch=state.epoch,quietFrames=0;
+  const settle=()=>{
+   state.frame=0;
+   const container=root.current;
+   if(!container||!current.current.enabled)return;
+   if(epoch!==state.epoch){epoch=state.epoch;quietFrames=0}else quietFrames++;
+   // RO delivers after animation-frame callbacks. Two quiet frames let a
+   // continuing height animation invalidate this probe before any item reads.
+   if(quietFrames<2){state.frame=requestAnimationFrame(settle);return}
+   // The final collection animation schedules another probe. Never capture
+   // its visual translate as the next natural layout baseline.
+   if(playing.current.size)return;
+   previous.current={identity:current.current.identity,enabled:true,items:measure(container).items};
+   state.dirty=false;
+  };
+  state.frame=requestAnimationFrame(settle);
+ };
  useLayoutEffect(()=>{
   const container=root.current,before=previous.current;
-  if(!container){cancel();previous.current=null;return}
+  if(!container||!active||!allowed){
+   cancel();cancelBaseline();geometry.current.dirty=false;previous.current=null;return;
+  }
+  // A disclosure, viewport resize or nested scroll owns these changing boxes.
+  // Real revisions remain immediate; motion resumes from a settled baseline.
+  if(geometry.current.dirty){cancel();queueBaseline();return}
   // Read the visible translation before cancelling an interrupted FLIP. Its
   // recorded natural box supplies the old position even after React relayout.
   const offsets=new Map<HTMLElement,VisibleOffset>();
@@ -86,19 +111,19 @@ export function useCollectionMotion(root:RefObject<HTMLElement|null>,identity:st
    offsets.set(node,{x,y,vx:run.x?.velocity?.(time)??0,vy:run.y?.velocity?.(time)??0,opacity});
   });
   cancel();
-  const items=measure();
-  previous.current={identity,enabled:active&&allowed,items};
-  if(!active||!allowed||!before?.enabled||before.identity!==identity||container.closest('[data-pw-surface-enter]'))return;
-  const bounds=container.getBoundingClientRect();
-  const viewportTop=Math.max(0,bounds.top),viewportBottom=Math.min(window.innerHeight,bounds.bottom);
+  const {items,bounds,scrollTop}=measure(container),viewportHeight=window.innerHeight;
+  previous.current={identity,enabled:true,items};
+  if(!before?.enabled||before.identity!==identity||container.closest('[data-pw-surface-enter]'))return;
+  const viewportTop=Math.max(0,bounds.top),viewportBottom=Math.min(viewportHeight,bounds.bottom);
   const finish=(node:HTMLElement,run:CollectionRun)=>{
    if(playing.current.get(node)!==run)return;
    playing.current.delete(node);run.animation.cancel();
-   if(!playing.current.size)remember();
+   if(!playing.current.size)queueBaseline();
   };
+  const plans:Array<{node:HTMLElement;frames:Keyframe[];duration:number;physical:boolean}&Pick<CollectionRun,'x'|'y'>>=[];
   items.forEach((last,id)=>{
-   const rect=last.node.getBoundingClientRect();
-   if(rect.bottom<viewportTop||rect.top>viewportBottom)return;
+   const top=last.top+bounds.top-scrollTop;
+   if(top+last.height<viewportTop||top>viewportBottom)return;
    const first=before.items.get(id);
    let frames:Keyframe[]|null=null,duration:number=motionDuration.enter;
    let generators:Pick<CollectionRun,'x'|'y'>={},physical=false;
@@ -106,7 +131,7 @@ export function useCollectionMotion(root:RefObject<HTMLElement|null>,identity:st
     const offset=offsets.get(first.node);
     const x=first.left+(offset?.x||0)-last.left,y=first.top+(offset?.y||0)-last.top;
     // Paging and distant/offscreen objects do not fly through the viewport.
-    if((Math.abs(x)>.5||Math.abs(y)>.5||Math.abs(offset?.vx||0)>8||Math.abs(offset?.vy||0)>8)&&Math.abs(x)<Math.max(80,bounds.width)&&Math.abs(y)<Math.min(420,window.innerHeight*.7)){
+    if((Math.abs(x)>.5||Math.abs(y)>.5||Math.abs(offset?.vx||0)>8||Math.abs(offset?.vy||0)>8)&&Math.abs(x)<Math.max(80,bounds.width)&&Math.abs(y)<Math.min(420,viewportHeight*.7)){
      const move=collectionMove(x,y,offset?.vx||0,offset?.vy||0);
      frames=move.frames;duration=move.duration;generators={x:move.x,y:move.y};physical=true;
     }
@@ -119,24 +144,45 @@ export function useCollectionMotion(root:RefObject<HTMLElement|null>,identity:st
     frames.forEach((frame,index)=>{const progress=Math.min(1,duration*index/(frames!.length-1)/motionDuration.feedback);frame.opacity=Number(opacity)+(1-Number(opacity))*progress});
    }
    if(!frames)return;
-   const animation=last.node.animate(frames,{duration,easing:physical?'linear':cssEase(motionEase.settle)});
+   plans.push({node:last.node,frames,duration,physical,...generators});
+  });
+  // All geometry and interrupted values are read before starting new effects.
+  plans.forEach(({node,frames,duration,physical,...generators})=>{
+   const animation=node.animate(frames,{duration,easing:physical?'linear':cssEase(motionEase.settle)});
    const run:CollectionRun={animation,frames,...generators};
-   animation.id='pw-collection-change';playing.current.set(last.node,run);
-   animation.onfinish=()=>finish(last.node,run);
+   animation.id='pw-collection-change';playing.current.set(node,run);
+   animation.onfinish=()=>finish(node,run);
   });
  },[root,identity,revision,selector,active,allowed,enter,layout]);
  useEffect(()=>{
-  const container=root.current;if(!container)return;
-  const settle=()=>{cancel();remember()};
-  const scroll=(event:Event)=>{const target=event.target;if(target===document||target instanceof Node&&(container.contains(target)||target.contains(container)))settle()};
+  const container=root.current;if(!container||!active||!allowed)return;
+  const settle=()=>{if(!current.current.enabled)return;cancel();queueBaseline()};
+  const scroll=(event:Event)=>{
+   if(!current.current.enabled)return;
+   const target=event.target;
+   if(target!==document&&(!(target instanceof Node)||!container.contains(target)&&!target.contains(container)))return;
+   if(playing.current.size){settle();return}
+   // Own/ancestor scrolling cancels out in root-relative coordinates. A nested
+   // scroller can move descendants within the root: invalidate without scanning
+   // on idle scroll; the next real revision will establish a quiet baseline.
+   if(target instanceof Node&&target!==container&&container.contains(target)){
+    geometry.current.dirty=true;geometry.current.epoch++;
+   }
+  };
   // Scrolling has its own owner. Never counter-animate an intentional scroll or
   // a keyboard/viewport resize with a stale collection position.
   document.addEventListener('scroll',scroll,true);
   window.addEventListener('resize',settle);
-  const observer=new ResizeObserver(()=>{if(!playing.current.size)remember()});
+  let width:number|undefined,height:number|undefined;
+  const observer=new ResizeObserver(entries=>{
+   if(!current.current.enabled)return;
+   const size=entries[0]?.contentRect;
+   if(!size||size.width===width&&size.height===height)return;
+   width=size.width;height=size.height;queueBaseline();
+  });
   observer.observe(container);
-  return()=>{document.removeEventListener('scroll',scroll,true);window.removeEventListener('resize',settle);observer.disconnect();cancel()};
- },[root,identity,selector,active]);
+  return()=>{document.removeEventListener('scroll',scroll,true);window.removeEventListener('resize',settle);observer.disconnect();cancelBaseline();cancel()};
+ },[root,identity,selector,active,allowed]);
 }
 
 /** Local receipts stay in their original place; only the current content fades.

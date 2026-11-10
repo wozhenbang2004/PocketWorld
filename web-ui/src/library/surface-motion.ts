@@ -120,7 +120,8 @@ export function useMessageArrivals(root:RefObject<HTMLElement|null>,conversation
    const known=new Set(baseline);
    arrivals=new Set(currentIds.slice(tailIndex+1).filter(id=>id&&!known.has(id)));
   }
-  if(arrivals.size)requested.current=null;
+  if(!arrivals.size)return;
+  requested.current=null;
   const viewport=root.current?.getBoundingClientRect();
   root.current?.querySelectorAll<HTMLElement>('[data-message-id]').forEach(node=>{
    if(!arrivals.has(node.dataset.messageId||'')||node.dataset.replyContinuing==='true'||node.closest('[data-pw-surface-enter]'))return;

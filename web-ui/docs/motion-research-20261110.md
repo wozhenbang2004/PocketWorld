@@ -1,5 +1,46 @@
 # PocketWorld 动效覆盖深化研究与实施记录 · 2026-11-10
 
+## 第三次深化 · 连续操作、测量成本与手势接管
+
+用户原话：“还是有一些地方不流畅。对吧？还是有些地方你可以再深入的优化研究一些动画。你可以再深入地看一下我们审美库。对，或者是以及网络上的，社区上的，对吧，那些关于动画的一些有创意的，好吧”。来源为本聊天当前消息，精确消息ID与发送时刻不可取得；本批记录于北京时间2026-11-10 22:36，承接此前“全部交给你”的实施及主线发布授权。用户未提供具体卡顿页面、录屏、设备或安装版本，不能据此断言反馈来自v0.1.92，也不能将源码推导当成真机复现。
+
+本批以main `d02f27ca248481c5e74f68667b1ebe3daee2164f` 为基线。重新读取审美库主档、动效系统14章及相关批准原码，结合作者原站、固定源码和浏览器官方资料研究。采用的视觉与任务结构继续沿Solar、低饱和蓝灰、现有侧栏及双层输入框；本批不新增皮肤或组件家族。研究流保持开放，新机会和本次确定修改分开。
+
+### 已确认的源码机制与采用合同
+
+| ID | 证据、采用机制与正式落点 | 本批可观察要求及边界 |
+| --- | --- | --- |
+| PW-M20 集合测量与让位 | `journey-motion.tsx`滚动无条件全表测量、RO在子披露变高时反复扫描、逐项二次读后立即写。沿现有Affect/Reaction Bar集合及Ovio物理机制减少扫描、读写分相。 | 空闲滚动不反复扫描；连续尺寸变化不逐帧全表测量；真正集合revision仍按稳定ID接续，脏基线安全落定；减少动态、隐藏、离屏及表面进场不补播。保持当前运动参数，不把未测的650ms上限当已证实根因。 |
+| PW-M21 输入区自然尺寸 | 可见textarea每次输入先写height=0再读取scrollHeight；圆角背景RO每帧setState。适配MIT `react-textarea-autosize`固定原码的隔离测量关系，保留Affect现有输入组件。 | 输入不临时压扁真实编辑器；测量节点不可交互、无焦点，读后清空文本并随owner卸载清理；多行增长/收缩与现有144px上限一致。圆角SVG直接跟随真实尺寸，不经逐帧React状态。 |
+| PW-M22 按压与选择连续 | Josh批准版松手后blur不会重复move；当前effect随disabled重建会jump截断恢复。Ovio中断用墙钟而非实际WAAPI时钟。 | 业务立即提交/disabled；已合法松手的短恢复可完成，仍在按压时失焦/取消立即释放。后台/卸载直接落定。快速Tab改选从真实播放时刻取位置与速度，保留已有裁切文字与底片同步。 |
+| PW-M23 导航手势接管 | Vaul左抽屉可中断，补偿后的pointerStart又用于释放速度，可能把抽屉既有位移算成手指运动；开启与关闭手势分别采用不同settle规则。 | 分开手指样本与抽屉位置；左导航双向释放使用同一位置owner和有方向的近期速度，轻触不制造速度。命令关闭、底部审批抽屉与snap points保持原契约；减少动态、取消、隐藏和宽度变化合法收束。 |
+| PW-M24 反馈归属 | 批准Affect MessageActions已经await复制后在原位Copy→Check并读屏通知；Markdown代码块也有复制状态，App却额外弹全局成功toast。 | 当前消息、历史消息与代码块的复制成功由原位反馈承接；没有原位反馈的入口仍使用全局提示。失败继续传递原错误，绝不在复制完成前显示成功。 |
+
+社区创意另作具体对照：Emil原站的clip-path Tabs和MIT配方已追源；现有Ovio已经具有覆盖label与裁切同步，不能把重复机制包装成新增。连续工具提示探索的“首个等待、组内后续立即”正在对照Affect消息操作，是否采用由真实入口及交互归属决定。StackBlitz `use-stick-to-bottom`读到固定源码，其弹簧尾随、70px重新附着与本产品原生阅读锚点契约不同，本批保留作参考，不为增加动态替换当前阅读状态。
+
+不编写、不运行任何测试，不新增mock、fixture或合成基准。统一源码交叉审阅、类型编译和生产构建；CI只构建打包发布。当前环境无adb、无KVM；Android实际帧率、键盘/触屏手感及用户反馈对应位置仍未验证。停止条件是本表有界实现完成、编译构建及非覆盖式主线集成通过、发布产物身份核对；不把此条件改写为全产品流畅度已验收。
+
+### 库外研究如何改变本轮选择
+
+| 原始来源与实际阅读 | 当前判断与适配边界 |
+| --- | --- |
+| [react-textarea-autosize](https://github.com/Andarist/react-textarea-autosize/tree/ed1894cd8611d99fbea1c47adcf6ee522b1030fd)，8.5.9 / MIT；实际读`getSizingData`、`calculateNodeHeight`、`forceHiddenStyles`、入口与字体监听，三份核心原码和许可随项目保留 | ADAPT测量算法，继续使用原Affect编辑器。原库的单例改为每editor归属，测量后清空文本；保留字体、换行、box sizing与产品CSS上限`max(144px, 9rem)`，不引入minRows/maxRows新API或新npm依赖。Chromium目标不带Firefox重复赋值读高分支。 |
+| [Emil Good vs Great](https://emilkowal.ski/ui/good-vs-great-animations)、[The Magic of Clip Path](https://emilkowal.ski/ui/the-magic-of-clip-path#tabs-transition)；实际操作作者两组Tabs和0.2x慢速，读网页Tabs原码；另读[作者MIT配方715c1807](https://github.com/emilkowalski/skills/blob/715c1807e08c497cfd1dc4feb450a2a3300ef2a9/skills/animate/RECIPES.md) | REFERENCE核对：裁切覆盖层让文字和底片同步，当前Ovio已具备，改进真实播放时基即可。配方pin不冒充网页演示build。配方中duration/bounce和绝对平均速度的简例不能直接替代当前Motion物理参数与末段有方向采样；本轮以实际安装源码和产品中断契约为准。 |
+| [Radix Tooltip固定源码](https://github.com/radix-ui/primitives/blob/eb3a2b7091293e27df8f9ba906632d8daa3d81a3/packages/react/tooltip/src/tooltip.tsx)，package1.4.1 / MIT；读前600行、package与LICENSE，结合Emil连续提示配方 | REFERENCE候选：首次等待、同Provider短窗口内后续立即，排除touch、focus即开、明确aria-describedby。当前消息操作通常只有1–2个图标，主要收益在桌面；本批不为它增加交互协调层。现有Affect提示的aria-hidden关系仍需单独补全，不能声称已有完整tooltip语义。 |
+| [StackBlitz use-stick-to-bottom](https://github.com/stackblitz-labs/use-stick-to-bottom/blob/8d6a19a0ca6ab632830588073e6a29312a06a088/src/useStickToBottom.ts)，1.1.6 / MIT；完整读实际hook与近期问题线索 | REFERENCE：弹簧跟随与用户主动打断值得保留，但70px自动重新附着、全局选区事件及仅观察内容尺寸不等同PocketWorld原生阅读锚点和容器resize契约。当前历史阅读与明确发送定位继续由原owner决定，本批不替换。 |
+| [Jakub Shared Layout](https://jakub.kr/work/shared-layout-animations#other-examples)原站实际展开NFT图片、Escape关闭；[Rauno Craft](https://rauno.me/craft)的[Spatial Tooltip](https://cdn.rauno.me/spatial-tooltip.mp4#t=0.01)与[Toolbar Morph](https://cdn.rauno.me/toolbar-cmdk.mp4#t=0.01)实际观看作者媒体 | 候选：来源图片展开成预览、紧凑工具入口延展为命令层。Jakub操作证明该演示的开关关系，关闭后AX焦点落WebArea，不能称焦点恢复通过；Rauno是原作者录像而非亲自操作组件。未取得对应完整组件源码、构建pin或媒体分发许可，本批不复制，也不套到真实坐标输入的手机/桌面原生画面。 |
+| [web.dev布局读写分相](https://web.dev/articles/avoid-large-complex-layouts-and-layout-thrashing)、[MDN Animation.currentTime](https://developer.mozilla.org/en-US/docs/Web/API/Animation/currentTime)、[ResizeObserver](https://developer.mozilla.org/en-US/docs/Web/API/ResizeObserver) | 用于解释确定存在的同步扫描与播放时基差异。删除冗余读取/逐项读写交错，不宣称每次几何读取必定触发完整重排，也没有把源码检查写成性能trace。 |
+
+### 正式实现与审查检查点
+
+PW-M20的RO只记录通知尺寸与epoch，连续两帧安静后才重建一次自然基线；持续披露/内部滚动期间真正revision直接采用当前DOM，业务不等待。自身/祖先idle滚动不扫集合，旧播放被用户接管时只安排一次基线。可见范围复用已读坐标，全部计划完成后再启动动画；空消息arrival提前返回。FilesBrowser的全量五组layout投影没有在本批改为不确定的动态layout开关，大集合范围收敛保留后续项。
+
+PW-M21使用不可交互的测量节点，真实textarea从不为测量置零。当前计算高度先于写入探针读取，快速改目标接当前可见高度；未变目标不重启动画。字体ready/loadingdone、编辑器宽度变化即时重新拟合，旧owner的回调有身份/销毁守卫。连续圆角直接用RO给出的分数CSS尺寸更新viewBox/path，当前两个表面均border:0；初始/窗口变化保留测量fallback，避免逐帧React状态和整数尺寸步进。
+
+PW-M22稳定Press事件订阅，只有仍持有输入才因按钮blur/disabled取消；隐藏、窗口失焦、卸载与减动效变化仍强制归位。Ovio保存实际播放的L/R/scale采样，按WAAPI currentTime对同一采样段插值并带出分段速度，保留步进world的零连续速度语义与已有文字裁切。PW-M23只覆盖已启用左导航且无snap/nested的路径，关闭/打开触摸与Content pointer共用position，采样真实手指坐标；指针接管保留真实Content输入，文档开启手势仍沿既有inert边界。PW-M24明确包括代码块原位状态，任务结果/保留结果/关联回复、当前消息和历史窗口均复用既有成功反馈；文件路径、整份文件复制仍保留全局成功提示，原错误传递不变。
+
+本地类型编译`npm run typecheck --prefix web-ui`（仅`tsc --noEmit`）exit0；未写跑测试。随后无损合入同期主线`46acfec2`的听写回原浮层修正及`ce247455`的用量/上下文洞察，未覆盖这些改动；相关ContextMeter仍使用既有独立详情层，composer两表面的border:0尺寸契约保持。最终生产构建在此集成版本执行。独立只读交叉审查已核对输入区、Press、Ovio与左导航，root另读完整集合/导航/反馈集成路径，当前范围未留源码可证阻断；未移动的pointer松手、lostcapture重入、受控关闭和相同Content的Presence均已按代码核对。正式构建和发布证据待补，源码核查不能替代真机体验。
+
 ## 第二次深化 · 从覆盖推进到受力、形态与阶段接续
 
 用户原话：“我觉得还可以再深入地再做一下这些动画系统，好吧？你可以再挖掘一下我们审美库里面的一些东西，好吗？”来源为本聊天最新消息，精确消息ID与发送时刻不可取得；本批记录于北京时间2026-11-10 21:08。承接“去！全部交给你我相信你”的实施授权。PW-M1–PW-M14 的已发布结果继续保留，本轮不是重做覆盖或重新批准现有组件。

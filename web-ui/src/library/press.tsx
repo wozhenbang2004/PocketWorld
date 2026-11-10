@@ -1,6 +1,6 @@
 // PW-37: port of the user's approved Josh neutral adaptation, not an unrelated button.
 // Original tutorial and approved source retained in upstream/josh. No MIT claim.
-import {useEffect,useRef} from 'react';
+import {useEffect,useLayoutEffect,useRef} from 'react';
 import {animate,useMotionValue} from 'motion/react';
 import type {PressButtonProps} from './types';
 
@@ -13,6 +13,11 @@ export function PressButton({label,icon,compact=false,children,className='',disa
  const ref=useRef<HTMLButtonElement>(null);
  const press=useMotionValue(0);
  const strain=useMotionValue(0);
+ const cancelHeld=useRef<()=>void>(()=>{});
+
+ useLayoutEffect(()=>{
+  if(disabled)cancelHeld.current();
+ },[disabled]);
 
  useEffect(()=>{
   const button=ref.current;
@@ -61,8 +66,12 @@ export function PressButton({label,icon,compact=false,children,className='',disa
    reset();
    if(typeof previous==='number'&&button.hasPointerCapture(previous))button.releasePointerCapture(previous);
   };
+  // A submitted action can disable or blur its button immediately after release.
+  // Keep that legitimate recovery; only a still-held input needs cancelling.
+  const cancelActive=()=>{if(owner!==null)cancel()};
+  cancelHeld.current=cancelActive;
   const downPointer=(e:PointerEvent)=>{
-   if(disabled||!e.isPrimary||e.button!==0||owner!==null)return;
+   if(button.disabled||!e.isPrimary||e.button!==0||owner!==null)return;
    suppressClick=false;
    owner=e.pointerId;
    inside=true;
@@ -85,7 +94,7 @@ export function PressButton({label,icon,compact=false,children,className='',disa
   const cancelPointer=(e:PointerEvent)=>{if(owner===e.pointerId)cancel()};
   const keydown=(e:KeyboardEvent)=>{
    if(e.key==='Escape'){cancel();return}
-   if(disabled||![' ','Enter'].includes(e.key))return;
+   if(button.disabled||![' ','Enter'].includes(e.key))return;
    e.preventDefault();
    if(e.repeat||owner!==null)return;
    suppressClick=false;
@@ -114,11 +123,12 @@ export function PressButton({label,icon,compact=false,children,className='',disa
   button.addEventListener('keydown',keydown);
   button.addEventListener('keyup',keyup);
   button.addEventListener('click',click,true);
-  button.addEventListener('blur',cancel);
+  button.addEventListener('blur',cancelActive);
   window.addEventListener('blur',cancel);
   document.addEventListener('visibilitychange',visibility);
   reduced.addEventListener('change',changed);
   return()=>{
+   cancelHeld.current=()=>{};
    cancel();
    stopPress();
    stopStrain();
@@ -130,12 +140,12 @@ export function PressButton({label,icon,compact=false,children,className='',disa
    button.removeEventListener('keydown',keydown);
    button.removeEventListener('keyup',keyup);
    button.removeEventListener('click',click,true);
-   button.removeEventListener('blur',cancel);
+   button.removeEventListener('blur',cancelActive);
    window.removeEventListener('blur',cancel);
    document.removeEventListener('visibilitychange',visibility);
    reduced.removeEventListener('change',changed);
   };
- },[disabled,press,strain]);
+ },[press,strain]);
 
  return <button {...props} ref={ref} type={props.type||'button'} disabled={disabled} className={`pw-press ${compact?'pw-press-compact':''} ${className}`}><span className="pw-press-shadow" aria-hidden="true"/><span className="pw-press-base" aria-hidden="true"/><span className="pw-press-edge" aria-hidden="true"/><span className="pw-press-front"><span className="pw-press-material" aria-hidden="true"/><span className="pw-press-label" data-label>{icon}{children??label}</span></span></button>
 }

@@ -29,6 +29,18 @@ Inter, Noto Sans SC, and JetBrains Mono are obtained unmodified from `google/fon
 
 `scripts/collect-licenses.mjs` records the actual installed production dependency closure and copies original legal files into `public/licenses/`. It records package versions, package-lock integrity, source metadata and file hashes. Missing license declarations or text are explicitly listed rather than assigned an invented license. Explicit build-source packages can be included when their source is emitted into CSS or assets; unrelated development tools are not collected.
 
+## Textarea intrinsic measurement
+
+The existing Affect composer uses a measurement-only adaptation of
+[react-textarea-autosize 8.5.9](https://github.com/Andarist/react-textarea-autosize/tree/ed1894cd8611d99fbea1c47adcf6ee522b1030fd),
+pinned to `ed1894cd8611d99fbea1c47adcf6ee522b1030fd`, MIT, Copyright (c) 2013 Andrey Popp.
+Exact `getSizingData`, `calculateNodeHeight`, `forceHiddenStyles` sources and the
+full MIT license are retained in `src/library/upstream/react-textarea-autosize/`.
+The license is included in the packaged source notices. The adapter preserves
+the current editor and CSS size limits, owns an inert measuring node per editor,
+clears its value after each measurement, and removes it on owner changes. It
+does not install the upstream React component or replace the adopted visual UI.
+
 ## Text comparison algorithm
 
 The existing Affect-derived file comparison surface uses jsdiff (the pinned

@@ -23,15 +23,36 @@ export type Liquid = {
   snap?: number;
 };
 
+type PillFrame = { left: number; right: number; scale: number };
 type Run = {
-  gL: ReturnType<typeof spring>;
-  gR: ReturnType<typeof spring>;
-  t0: number;
+  frames: PillFrame[];
+  dt: number;
+  stepped: boolean;
   anims: Animation[];
 };
 
 /** Longest a move may take, in ms, whatever the springs say. */
 const MAX = 1500;
+
+function currentFrame(run: Run) {
+  // The native animation may still be pending, or the page may have been busy
+  // since it started. Its playback time, not a second wall clock, owns the pose.
+  const animation = run.anims[0];
+  const time = animation?.currentTime;
+  const frame = Math.max(0, Math.min(run.frames.length - 1, (typeof time === "number" ? time : 0) / run.dt));
+  const index = Math.floor(frame);
+  const from = run.frames[index];
+  const to = run.frames[Math.min(index + 1, run.frames.length - 1)];
+  const mix = run.stepped ? 1 : frame - index;
+  const velocity = run.stepped || animation?.pending || typeof time !== "number" ? 0 : 1000 / run.dt;
+  return {
+    left: from.left + (to.left - from.left) * mix,
+    right: from.right + (to.right - from.right) * mix,
+    scale: from.scale + (to.scale - from.scale) * mix,
+    vL: (to.left - from.left) * velocity,
+    vR: (to.right - from.right) * velocity,
+  };
+}
 
 /**
  * Moves the indicator between tabs. Both edge springs are sampled up front and played as native
@@ -103,18 +124,19 @@ export function useLiquid({
 
     const { W, H } = s;
     const tab = W / count;
-    const now = performance.now();
     // Start from where the edges are: mid-move, sampled with their velocity; at rest, the old tab.
     let L0 = prev * tab;
     let R0 = (prev + 1) * tab;
     let vL = 0;
     let vR = 0;
+    let scale0: number | undefined;
     if (s.run) {
-      const t = now - s.run.t0;
-      L0 = s.run.gL.next(t).value;
-      R0 = s.run.gR.next(t).value;
-      vL = s.run.gL.velocity?.(t) ?? 0;
-      vR = s.run.gR.velocity?.(t) ?? 0;
+      const current = currentFrame(s.run);
+      L0 = current.left;
+      R0 = current.right;
+      vL = current.vL;
+      vR = current.vR;
+      scale0 = current.scale;
     }
     const L1 = index * tab;
     const R1 = (index + 1) * tab;
@@ -141,14 +163,16 @@ export function useLiquid({
     const middle: Keyframe[] = [];
     const squash: Keyframe[] = [];
     const clip: Keyframe[] = [];
+    const samples: PillFrame[] = [];
     for (let k = 0; k < frames; k++) {
       const t = Math.min(duration, k * dt);
       // The last frame lands exactly on the resting pill, grid or not.
       const last = k === frames - 1;
-      const L = last ? L1 : snap(gL.next(t).value);
-      const R = last ? R1 : Math.max(L + H, snap(gR.next(t).value));
+      const L = last ? L1 : k === 0 ? L0 : snap(gL.next(t).value);
+      const R = last ? R1 : k === 0 ? R0 : Math.max(L + H, snap(gR.next(t).value));
       // Thinner the further it stretches, never below 80% of its height.
-      const sy = Math.max(0.8, 1 - liquid.squash * Math.max(0, (R - L) / tab - 1));
+      const sy = k === 0 && scale0 !== undefined ? scale0 : Math.max(0.8, 1 - liquid.squash * Math.max(0, (R - L) / tab - 1));
+      samples.push({ left: L, right: R, scale: sy });
       const inset = (H * (1 - sy)) / 2;
       const radius = liquid.round ? (H / 2) * sy : 0;
       leftCap.push({ transform: `translateX(${L}px)`, easing });
@@ -173,7 +197,7 @@ export function useLiquid({
 
     // The new run takes over before the old one is dropped, so no frame shows neither.
     s.run?.anims.forEach((a) => a.cancel());
-    const run: Run = { gL, gR, t0: now, anims };
+    const run: Run = { frames: samples, dt, stepped: !!liquid.fps, anims };
     s.run = run;
     if (pieces.current) pieces.current.style.visibility = "visible";
     if (rest.current) rest.current.style.visibility = "hidden";

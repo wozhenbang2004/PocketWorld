@@ -290,6 +290,11 @@ export function Root({
     if (!isVertical(direction) && !canDragHorizontally(event.target, drawerRef.current)) return;
     if (isVertical(direction) && openTime.current && Date.now() - openTime.current.getTime() < drawerDuration()) return;
 
+    if (navigationSwipe.enabled) {
+      navigationSwipe.startPointer(event);
+      return;
+    }
+
     const currentTranslate = drawerRef.current ? getTranslate(drawerRef.current, direction) ?? 0 : 0;
     const overlayOpacity = overlayRef.current ? getComputedStyle(overlayRef.current).opacity : '1';
     navigationSwipe.interrupt();
@@ -396,6 +401,11 @@ export function Root({
   }
 
   function onDrag(event: React.PointerEvent<HTMLDivElement>) {
+    const navigationDrag = navigationSwipe.dragPointer(event);
+    if (navigationDrag !== null) {
+      onDragProp?.(event, navigationDrag);
+      return;
+    }
     if (!drawerRef.current || navigationSwipe.tracking.current) {
       return;
     }
@@ -642,6 +652,16 @@ export function Root({
   }
 
   function onRelease(event: React.PointerEvent<HTMLDivElement> | null) {
+    const navigationRelease = navigationSwipe.releasePointer(event);
+    if (navigationRelease) {
+      if (navigationRelease.dragged) {
+        setJustReleased(true);
+        if (releaseTimer.current) clearTimeout(releaseTimer.current);
+        releaseTimer.current = setTimeout(() => setJustReleased(false), 200);
+      }
+      if (event) onReleaseProp?.(event, navigationRelease.open);
+      return;
+    }
     if (navigationSwipe.tracking.current) return;
     if (!isDragging || !drawerRef.current) return;
 
@@ -1084,7 +1104,7 @@ export const Content = React.forwardRef<HTMLDivElement, ContentProps>(function (
       }}
       onPointerMove={(event) => {
         lastKnownPointerEventRef.current = event;
-        if (handleOnly || navigationSwipe?.tracking.current) return;
+        if (handleOnly || navigationSwipe?.tracking.current && !navigationSwipe.ownsPointer(event.pointerId)) return;
         rest.onPointerMove?.(event);
         if (!pointerStartRef.current) return;
         const yPosition = event.pageY - pointerStartRef.current.y;

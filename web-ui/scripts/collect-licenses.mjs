@@ -146,6 +146,7 @@ for (const filename of [
   'src/forms-library/upstream/uiux/RAMOTION-LICENSE',
   'src/workspace-library/upstream/ovio/LICENSE',
   'src/workspace-library/upstream/stageshow/LICENSE',
+  'src/library/upstream/react-textarea-autosize/LICENSE',
 ]) {
   try {
     const bytes = await readFile(path.join(root, filename));

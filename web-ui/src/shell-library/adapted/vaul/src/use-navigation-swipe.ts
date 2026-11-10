@@ -6,6 +6,7 @@ import { getTranslate } from './helpers';
 
 type Sample = { x: number; time: number };
 type Gesture = {
+  kind: 'touch' | 'pointer';
   id: number;
   startX: number;
   startY: number;
@@ -31,6 +32,19 @@ const INTERACTIVE =
   'input,textarea,select,button,a,label,summary,audio,video,iframe,[role="button"],[role="slider"],[role="tab"],[contenteditable]:not([contenteditable="false"]),[data-vaul-no-drag]';
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
+function sample(current: Gesture, x: number) {
+  const time = performance.now();
+  current.samples = current.samples.filter((point) => time - point.time <= 100);
+  current.samples.push({ x, time });
+  current.x = x;
+}
+
+function releaseVelocity(current: Gesture) {
+  const first = current.samples[0];
+  const last = current.samples[current.samples.length - 1];
+  return last.time > first.time ? ((last.x - first.x) / (last.time - first.time)) * 1000 : 0;
+}
+
 /** Horizontal dragging must yield to controls, text selection and horizontal scrollers. */
 export function canDragHorizontally(target: EventTarget | null, boundary?: HTMLElement | null) {
   if (!(target instanceof HTMLElement) || target.closest(INTERACTIVE) || window.getSelection()?.toString()) return false;
@@ -42,7 +56,8 @@ export function canDragHorizontally(target: EventTarget | null, boundary?: HTMLE
 }
 
 /**
- * Extends Vaul's existing left drawer with a document-owned opening gesture.
+ * Extends Vaul's existing left drawer with document-owned opening and Content
+ * pointer gestures. Both hand the same position to the release spring.
  * The same Radix Content stays mounted while Motion settles it; visual presence
  * never delays the controlled open state or creates a second navigation tree.
  */
@@ -55,6 +70,8 @@ export function useNavigationSwipe(options: Options) {
   const tracking = React.useRef(false);
   const gesture = React.useRef<Gesture | null>(null);
   const width = React.useRef(0);
+  const measuredDrawer = React.useRef<HTMLDivElement | null>(null);
+  const resizeObserver = React.useRef<ResizeObserver | null>(null);
   const position = React.useRef<MotionValue<number> | null>(null);
   if (!position.current) position.current = motionValue(0);
   const animation = React.useRef<{ stop: () => void } | null>(null);
@@ -85,24 +102,48 @@ export function useNavigationSwipe(options: Options) {
     if (overlayRef.current) overlayRef.current.style.opacity = `${width.current ? 1 + x / width.current : 0}`;
   }
 
-  function ownMotion() {
+  function ownMotion(measure = false) {
     const { drawerRef, overlayRef } = optionsRef.current;
-    width.current = drawerRef.current?.getBoundingClientRect().width || width.current;
+    const drawer = drawerRef.current;
+    if (drawer && (measure || drawer !== measuredDrawer.current || !width.current)) {
+      width.current = drawer.getBoundingClientRect().width || width.current;
+      if (drawer !== measuredDrawer.current) {
+        resizeObserver.current?.disconnect();
+        measuredDrawer.current = drawer;
+        resizeObserver.current = new ResizeObserver(([entry]) => {
+          if (!entry || entry.target !== measuredDrawer.current) return;
+          const nextWidth = entry.borderBoxSize[0]?.inlineSize ?? drawer.getBoundingClientRect().width;
+          if (!nextWidth || Math.abs(nextWidth - width.current) < 0.5) return;
+          width.current = nextWidth;
+          converge();
+        });
+        resizeObserver.current.observe(drawer);
+      }
+    }
     for (const node of [drawerRef.current, overlayRef.current]) {
       if (!node) continue;
       // The open-state marker prevents CSS entry from restarting after the spring.
-      node.setAttribute('data-vaul-gesture', '');
-      node.setAttribute('data-vaul-navigation-swipe', '');
+      if (!node.hasAttribute('data-vaul-gesture')) node.setAttribute('data-vaul-gesture', '');
+      if (!node.hasAttribute('data-vaul-navigation-swipe')) node.setAttribute('data-vaul-navigation-swipe', '');
     }
+  }
+
+  function releaseCapture(current: Gesture | null) {
+    const drawer = optionsRef.current.drawerRef.current;
+    if (current?.kind === 'pointer' && drawer?.hasPointerCapture(current.id)) drawer.releasePointerCapture(current.id);
   }
 
   function finish(open: boolean) {
     stopAnimation();
+    ownMotion(true);
     position.current!.jump(open ? 0 : -width.current);
     renderPosition(position.current!.get());
     if (open) {
       optionsRef.current.drawerRef.current?.removeAttribute('data-vaul-navigation-swipe');
       optionsRef.current.overlayRef.current?.removeAttribute('data-vaul-navigation-swipe');
+    } else {
+      resizeObserver.current?.disconnect();
+      measuredDrawer.current = null;
     }
     // A closing surface keeps the no-animation marker until Radix unmounts it.
     keepPresent(false);
@@ -110,11 +151,13 @@ export function useNavigationSwipe(options: Options) {
 
   function settle(open: boolean, velocity = 0, updateOpen = true, phase?: 'enter' | 'exit') {
     const hadGesture = tracking.current;
+    const current = gesture.current;
     tracking.current = false;
     setIsTracking(false);
     gesture.current = null;
+    releaseCapture(current);
     stopAnimation();
-    ownMotion();
+    ownMotion(true);
     keepPresent(true);
     if (!open) {
       focusRequested.current = false;
@@ -143,7 +186,7 @@ export function useNavigationSwipe(options: Options) {
     ownMotion();
     if (!width.current) return;
     const base = current.base ?? -width.current;
-    position.current!.jump(clamp(base + current.x - current.startX, -width.current, 0));
+    position.current!.jump(clamp(base + (current.claimed ? current.x - current.startX : 0), -width.current, 0));
     renderPosition(position.current!.get());
   }
 
@@ -151,7 +194,7 @@ export function useNavigationSwipe(options: Options) {
     const currentOptions = optionsRef.current;
     if (!currentOptions.enabled || !currentOptions.isOpen || !currentOptions.drawerRef.current) return;
     const current = gesture.current;
-    if (current?.claimed) {
+    if (current && (current.claimed || current.kind === 'pointer')) {
       showGesture(current);
       if (current.released) settle(current.released.open, current.released.velocity);
     } else if (pendingEnter.current) {
@@ -165,18 +208,93 @@ export function useNavigationSwipe(options: Options) {
 
   function abort(immediate = false) {
     const current = gesture.current;
-    gesture.current = null;
-    if (!current?.claimed) return;
+    if (!current) return;
+    if (!current.claimed && current.kind === 'touch') {
+      gesture.current = null;
+      return;
+    }
+    // Cancelling an in-drawer gesture returns to the existing open navigation.
+    // An uncommitted opening swipe still returns to its original closed state.
+    const open = current.kind === 'pointer' && optionsRef.current.isOpen;
     if (immediate) {
+      gesture.current = null;
       tracking.current = false;
       setIsTracking(false);
-      skipReturnFocus.current = true;
+      releaseCapture(current);
+      skipReturnFocus.current = !open;
       shouldFocus.current = false;
       focusRequested.current = false;
-      optionsRef.current.onClose();
-      finish(false);
+      if (!open) optionsRef.current.onClose();
+      finish(open);
     } else {
-      settle(false, 0);
+      settle(open, 0);
+    }
+  }
+
+  function startPointer(event: React.PointerEvent<HTMLDivElement>) {
+    const currentOptions = optionsRef.current;
+    const drawer = currentOptions.drawerRef.current;
+    if (!currentOptions.enabled || !currentOptions.isOpen || !drawer || !event.isPrimary || gesture.current) return;
+    const base = getTranslate(drawer, 'left') ?? 0;
+    stopAnimation();
+    ownMotion(true);
+    pendingEnter.current = false;
+    shouldFocus.current = false;
+    focusRequested.current = false;
+    skipReturnFocus.current = false;
+    gesture.current = {
+      kind: 'pointer', id: event.pointerId, startX: event.clientX, startY: event.clientY,
+      x: event.clientX, claimed: false, base,
+      samples: [{ x: event.clientX, time: performance.now() }],
+    };
+    tracking.current = true;
+    // Content must remain an input target for its captured pointer. The inert
+    // state is reserved for the document-owned opening touch outside Content.
+    drawer.setPointerCapture(event.pointerId);
+    keepPresent(true);
+    showGesture(gesture.current);
+  }
+
+  function ownsPointer(id: number) {
+    return gesture.current?.kind === 'pointer' && gesture.current.id === id;
+  }
+
+  function dragPointer(event: React.PointerEvent<HTMLDivElement>) {
+    const current = gesture.current;
+    if (!current || !ownsPointer(event.pointerId)) return null;
+    if (window.getSelection()?.toString()) {
+      abort();
+      return 0;
+    }
+    sample(current, event.clientX);
+    current.claimed ||= Math.abs(current.x - current.startX) >= (event.pointerType === 'touch' ? 10 : 2);
+    if (current.claimed && event.cancelable) event.preventDefault();
+    showGesture(current);
+    return width.current ? -position.current!.get() / width.current : 0;
+  }
+
+  function releasePointer(event: React.PointerEvent<HTMLDivElement> | null) {
+    const current = gesture.current;
+    if (!current || current.kind !== 'pointer' || event && !ownsPointer(event.pointerId)) return null;
+    const dragged = current.claimed && !!event;
+    let open = true, velocity = 0;
+    if (dragged && event) {
+      sample(current, event.clientX);
+      showGesture(current);
+      velocity = releaseVelocity(current);
+      // A recent reversal reopens even after crossing the distance threshold.
+      const close = velocity < -400 || (velocity <= 250 && -position.current!.get() >= Math.max(48, width.current * 0.25));
+      open = !close;
+    }
+    settle(open, velocity);
+    return { open, dragged };
+  }
+
+  function converge() {
+    if (tracking.current) abort(true);
+    else {
+      gesture.current = null;
+      if (presentRef.current) finish(optionsRef.current.isOpen);
     }
   }
 
@@ -215,13 +333,13 @@ export function useNavigationSwipe(options: Options) {
   React.useEffect(() => {
     if (!options.enabled) return;
     const area = options.area;
-    const sample = (current: Gesture, x: number) => {
-      const time = performance.now();
-      current.samples = current.samples.filter((point) => time - point.time <= 100);
-      current.samples.push({ x, time });
-      current.x = x;
-    };
     const onStart = (event: TouchEvent) => {
+      // A touch inside the open drawer also produces Pointer Events. Its
+      // captured pointer already owns this gesture; do not start a second one.
+      if (gesture.current?.kind === 'pointer') {
+        if (event.touches.length !== 1) abort();
+        return;
+      }
       if (gesture.current) {
         abort();
         return;
@@ -237,6 +355,7 @@ export function useNavigationSwipe(options: Options) {
       if (document.querySelector('[role="dialog"]:not([data-state="closed"]),[role="alertdialog"],[aria-modal="true"]:not([data-state="closed"])')) return;
       const touch = event.touches[0];
       gesture.current = {
+        kind: 'touch',
         id: touch.identifier,
         startX: touch.clientX,
         startY: touch.clientY,
@@ -248,7 +367,7 @@ export function useNavigationSwipe(options: Options) {
     };
     const onMove = (event: TouchEvent) => {
       const current = gesture.current;
-      if (!current) return;
+      if (!current || current.kind !== 'touch') return;
       if (event.touches.length !== 1 || window.getSelection()?.toString()) {
         abort();
         return;
@@ -267,6 +386,7 @@ export function useNavigationSwipe(options: Options) {
         const drawer = optionsRef.current.drawerRef.current;
         current.base = drawer ? getTranslate(drawer, 'left') : null;
         stopAnimation();
+        ownMotion(true);
         current.claimed = true;
         tracking.current = true;
         setIsTracking(true);
@@ -281,7 +401,7 @@ export function useNavigationSwipe(options: Options) {
     };
     const onEnd = (event: TouchEvent) => {
       const current = gesture.current;
-      if (!current) return;
+      if (!current || current.kind !== 'touch') return;
       const touch = Array.from(event.changedTouches).find((item) => item.identifier === current.id);
       if (!touch) return;
       if (!current.claimed) {
@@ -290,9 +410,7 @@ export function useNavigationSwipe(options: Options) {
       }
       if (event.cancelable) event.preventDefault();
       sample(current, touch.clientX);
-      const first = current.samples[0];
-      const last = current.samples[current.samples.length - 1];
-      const velocity = last.time > first.time ? ((last.x - first.x) / (last.time - first.time)) * 1000 : 0;
+      const velocity = releaseVelocity(current);
       const distance = Math.max(0, (current.base ?? -width.current) + current.x - current.startX + width.current);
       // A deliberate reversal cancels even after crossing the distance threshold.
       const open = velocity > 400 || (velocity >= -250 && distance >= Math.max(48, width.current * 0.25));
@@ -306,13 +424,6 @@ export function useNavigationSwipe(options: Options) {
       if (window.getSelection()?.toString()) abort();
     };
     const onCancel = () => abort();
-    const converge = () => {
-      if (tracking.current) abort(true);
-      else {
-        gesture.current = null;
-        if (presentRef.current) finish(optionsRef.current.isOpen);
-      }
-    };
     const onVisibility = () => {
       if (document.hidden) converge();
     };
@@ -327,6 +438,7 @@ export function useNavigationSwipe(options: Options) {
     document.addEventListener('selectionchange', onSelection);
     document.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('resize', converge);
+    window.addEventListener('blur', converge);
     preference.addEventListener('change', converge);
     return () => {
       document.removeEventListener('touchstart', onStart, true);
@@ -337,10 +449,15 @@ export function useNavigationSwipe(options: Options) {
       document.removeEventListener('selectionchange', onSelection);
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('resize', converge);
+      window.removeEventListener('blur', converge);
       preference.removeEventListener('change', converge);
       stopAnimation();
+      resizeObserver.current?.disconnect();
+      measuredDrawer.current = null;
+      const current = gesture.current;
       gesture.current = null;
       tracking.current = false;
+      releaseCapture(current);
     };
   }, [options.enabled, options.area]);
 
@@ -352,6 +469,10 @@ export function useNavigationSwipe(options: Options) {
     isTracking,
     tracking,
     syncContent,
+    startPointer,
+    ownsPointer,
+    dragPointer,
+    releasePointer,
     deferAutoFocus(event: Event) {
       if (!tracking.current) return;
       shouldFocus.current = optionsRef.current.autoFocus && !event.defaultPrevented;
@@ -372,9 +493,11 @@ export function useNavigationSwipe(options: Options) {
     },
     cancelGesture() {
       if (!tracking.current) return;
+      const current = gesture.current;
       tracking.current = false;
       setIsTracking(false);
       gesture.current = null;
+      releaseCapture(current);
       skipReturnFocus.current = true;
       shouldFocus.current = false;
       focusRequested.current = false;
