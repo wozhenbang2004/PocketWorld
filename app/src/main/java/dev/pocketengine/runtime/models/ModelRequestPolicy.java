@@ -29,7 +29,8 @@ public final class ModelRequestPolicy {
         catch (InterruptedException stopped) { throw stopped; }
         catch (Exception unavailable) { throw new Rejected("catalog_state_unavailable", "当前精确模型能力状态无法读取，请回模型页核对；没有改用旧能力。", unavailable); }
         if (config.usesBedrock() && current != source) throw new Rejected("catalog_host_changed", "原模型宿主已变化，请回模型页核对当前连接。");
-        if (view == null && !config.catalogEnforced) return null; // Native host still checked this exact enabled connection.
+        if (view == null && !config.catalogEnforced && config.reasoning.mode() == ReasoningOptions.Mode.DEFAULT)
+            return null; // Native host still checked this exact enabled connection.
         if (view == null || !view.key().binding().equals(config.capabilityBinding) || !view.key().modelId().equals(config.model))
             throw new Rejected("stale_model_binding", "模型连接、密钥或安装版本已变化，请回模型页核对；没有换号或换模型。");
         return view;
@@ -46,6 +47,18 @@ public final class ModelRequestPolicy {
         if (view == null) return projectCompatibility(config,messages,tools,wire); // Identity-only profiles still enforce reviewed wire limits.
         ModelFacts facts = view.facts();
         boolean images = hasImages(messages), toolContext = nativeFunctionHistory || tools != null && tools.length() > 0 || hasToolHistory(messages);
+        if (!config.catalogEnforced) {
+            // Exact owner-reviewed reasoning on an identity-only API route must not turn unknown
+            // tool/image/chat-token facts into a mandatory full-catalog prerequisite.
+            validateOutput(config, facts);
+            if (images && facts.imageInput().known && !facts.imageInput().value)
+                throw new Rejected("image_capability_unsupported", "该模型已明确声明不支持图像输入，本次尚未发送。");
+            if (toolContext && facts.toolCalls().known && !facts.toolCalls().value)
+                throw new Rejected("tool_capability_unsupported", "该模型已明确声明不支持工具调用，本次尚未发送。");
+            checkContext(config, messages, tools, facts, images);
+            dev.pocketengine.runtime.providers.ProviderAdapters.projectReasoning(config.provider, config.reasoning, wire);
+            return projectCompatibility(config, messages, tools, wire);
+        }
         if (images) requireTrue(facts.imageInput(), "image_capability", "当前精确模型的图像输入能力未知或不支持；请在模型页核对。");
         if (toolContext) requireTrue(facts.toolCalls(), "tool_capability", "当前精确模型的工具调用能力未知或不支持；请在模型页核对，历史工具结果不会被删除。");
         validateOutput(config, facts);
