@@ -183,7 +183,13 @@ final class QuickPanelCoordinator implements AutoCloseable, QuickPanelSurface.Ac
                     return;
                 } catch (Exception failed) {
                     draftReady = failed instanceof IllegalArgumentException;
-                    synchronized (draftState) { draftSaveQueued = false; }
+                    synchronized (draftState) {
+                        // A newer edit may already have corrected this rejected text.
+                        // Keep the coalesced save alive only for local validation failures;
+                        // storage uncertainty and revision conflicts must still stop it.
+                        if (draftReady && !text.equals(latestNote)) continue;
+                        draftSaveQueued = false;
+                    }
                     main.post(() -> { if (!closed) surface.draftFailure(detail(failed, "草稿保存未确认；请保留当前输入，未发送。")); });
                     return;
                 }
