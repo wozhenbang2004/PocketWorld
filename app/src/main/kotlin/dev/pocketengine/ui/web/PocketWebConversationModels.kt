@@ -15,7 +15,7 @@ internal class PocketWebConversationModels(
     private val ownerCurrent: () -> Boolean
 ) : AutoCloseable {
     private data class Review(val owner: Pair<Triple<Long, Int, Long>, Long>, val scope: String,
-        val revision: Long, val selectionRevision: Long, val expires: Long, val generation: Long, val target: String)
+        val revision: Long, val selectionRevision: Long, val expires: Long, val generation: Long, val target: String, val ownerRevision: Long)
     private val gate = Any()
     private val reviews = LinkedHashMap<String, Review>()
     private val activeReviews = LinkedHashSet<GatewayCall>()
@@ -24,7 +24,7 @@ internal class PocketWebConversationModels(
     @Volatile private var closed = false
     companion object {
         val COMMANDS = setOf("models.conversation.snapshot", "models.conversation.review", "models.conversation.reasoning",
-            "models.conversation.group", "models.conversation.reset", "models.conversation.close")
+            "models.conversation.group", "models.conversation.reset", "models.conversation.close", "models.conversation.reasoning.declare")
     }
     fun clear() { synchronized(gate) { generation++; reviews.clear(); activeReviews.forEach { it.cancel() }; activeReviews.clear() } }
     override fun close() { closed = true; clear() }
@@ -67,7 +67,7 @@ internal class PocketWebConversationModels(
                         reviews.entries.removeAll { it.value.expires <= SystemClock.elapsedRealtime() }
                         check(reviews.size < 8) { "请关闭原参数窗口后重新读取" }
                         reviews[handle] = Review(window, scope, review.getLong("revision"), before.revision(), SystemClock.elapsedRealtime() + 120_000,
-                            originalGeneration, review.getJSONObject("targetForReview").toString())
+                            originalGeneration, review.getJSONObject("targetForReview").toString(), review.optLong("reasoningOwnerRevision", -1))
                     }
                     review.remove("targetForReview")
                     review.put("reviewHandle", handle).put("expiresInMs", 120_000).put("selectionRevision", before.revision())
@@ -78,6 +78,43 @@ internal class PocketWebConversationModels(
                     else result.fold({ done(PocketWebState.publicValue(it) as JSONObject, null, "not_accepted") }, { done(null, it.message ?: "此对话参数暂不可读取", "not_accepted") })
                 }
             }); return
+        }
+        if (action == "models.conversation.reasoning.declare") {
+            fields(args, "reviewHandle", "levels")
+            val reviewed = synchronized(gate) { reviews.remove(args.getString("reviewHandle")) }
+                ?: error("原推理审阅已使用或失效，请重新读取")
+            check(reviewed.owner == window && reviewed.scope == scope && reviewed.generation == generation &&
+                reviewed.expires > SystemClock.elapsedRealtime()) { "原对话推理审阅已过期" }
+            val target = JSONObject(reviewed.target)
+            check(target.getString("kind") == "api" && reviewed.ownerRevision >= 0) { "此模型不支持手动声明推理档位" }
+            val binding = dev.pocketengine.runtime.models.ModelBinding.fromJson(target.getJSONObject("binding"))
+            check(binding.connectionId() == target.getString("connectionId")) { "原推理来源绑定已变化" }
+            val raw = args.getJSONArray("levels")
+            require(raw.length() <= 8) { "推理档位数量过多" }
+            val levels = (0 until raw.length()).map { index ->
+                val level = raw.opt(index)
+                require(level is String && level.length in 1..32) { "推理档位必须是有效名称" }
+                level
+            }
+            val previous = ReasoningOptions.fromJson(target.getJSONObject("reasoning"))
+            check(previous.mode() == ReasoningOptions.Mode.DEFAULT || previous.level() in levels) {
+                "当前对话已使用一个档位，请先切换到服务默认再移除它"
+            }
+            val service = controller.nativeModelConnections() ?: error("模型来源尚未准备")
+            controller.runModelSelectionWrite(reviewed.selectionRevision, {
+                check(current() && scope == controller.conversationModelScope() &&
+                    controller.conversationModelPreference().getLong("revision") == reviewed.revision) {
+                    "原对话或推理设置已变化，请重新读取"
+                }
+                service.declareConnectionReasoning(binding, target.getLong("connectionRevision"),
+                    target.getString("modelId"), reviewed.ownerRevision, levels)
+            }) { result ->
+                controller.modelConnectionChanged()
+                if (!current()) done(null, "原对话窗口已变化，请核对当前模型配置；没有重试", "outcome_unknown")
+                else result.fold({ done(PocketWebState.publicValue(it) as JSONObject, null, "not_accepted") },
+                    { done(null, it.message ?: "推理档位保存结果待核对，请重新读取", "outcome_unknown") })
+            }
+            return
         }
         val expected: Long
         val selectionRevision: Long
