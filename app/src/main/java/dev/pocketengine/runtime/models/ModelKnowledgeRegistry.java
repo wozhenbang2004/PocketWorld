@@ -77,7 +77,7 @@ final class ModelKnowledgeRegistry {
         }
     }
 
-    JSONObject status() {
+    JSONObject status() throws org.json.JSONException {
         Index value = index;
         return new JSONObject().put("available", value.modelCount > 0)
                 .put("models", value.modelCount).put("providers", value.providers.size())
