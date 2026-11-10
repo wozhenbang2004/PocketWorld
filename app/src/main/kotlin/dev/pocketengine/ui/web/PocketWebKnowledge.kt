@@ -97,14 +97,24 @@ internal class PocketWebKnowledge(private val controller: PocketWorldController)
                 } }
             }
             "knowledge.assertion.prepare" -> {
-                fields(args, "readHandle", "query"); val original = readSelection(text(args, "readHandle")); check(original.getBoolean("candidate") && row(original).optString("status") == "pending")
+                fields(args, "readHandle", "query", "retainHandles"); val original = readSelection(text(args, "readHandle")); check(original.getBoolean("candidate") && row(original).optString("status") == "pending")
                 val query = args.optString("query"); require(query.length <= 160)
+                val retained = linkedMapOf<String, Pin>()
+                val retainedHandles = if (args.has("retainHandles")) args.getJSONArray("retainHandles") else JSONArray()
+                require(retainedHandles.length() <= 2)
+                for (i in 0 until retainedHandles.length()) {
+                    val id = retainedHandles.getString(i); require(!retained.containsKey(id))
+                    val identity = selected(identities, id)
+                    check(MemoryLearningReviewGuard.sameReview(row(original), row(identity.getJSONObject("original"))))
+                    retained[id] = identities.getValue(id)
+                }
                 current(original, done) { call("memoryReview", "prepareAssertionReview", target(original).put("revision", row(original).getLong("revision")).put("query", query), done) { result ->
                     check(result.opt("formalMemorySaved") == false && result.opt("sourceProofIssued") == false && result.opt("executionAuthorized") == false && MemoryLearningReviewGuard.sameReview(row(original), result.optJSONObject("candidate")))
                     val values = result.getJSONArray("identities")
-                    // Match the native page bound so every displayed identity keeps its
-                    // original-version handle. Owner, scope and expiry checks stay unchanged.
-                    for (i in 0 until values.length()) { val identity = values.getJSONObject(i); identity.put("choiceHandle", pin(identities, JSONObject().put("original", original).put("selection", identity.getJSONObject("selection")), MemoryAssertionReview.MAX_IDENTITIES)) }
+                    // A new search replaces its old choices, not the two selected endpoints.
+                    // Retained pins keep their original scope, candidate revision and expiry.
+                    identities.clear(); identities.putAll(retained)
+                    for (i in 0 until values.length()) { val identity = values.getJSONObject(i); identity.put("choiceHandle", pin(identities, JSONObject().put("original", original).put("selection", identity.getJSONObject("selection")), MemoryAssertionReview.MAX_IDENTITIES + retained.size)) }
                     result
                 } }
             }

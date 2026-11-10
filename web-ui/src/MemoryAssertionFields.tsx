@@ -43,7 +43,16 @@ function EditableAssertionFields({ readHandle, candidate, run, onReview }: Edita
   const alive = useRef(true);
   const load = async () => {
     setBusy(true); setPrepared(false); setError('');
-    try { const result = await run('knowledge.assertion.prepare', { readHandle, query }); if (alive.current) { setIdentities(result.identities || []); setMore(result.hasMoreIdentities === true); setPrepared(true); } }
+    const retained = identities.filter(row => row.choiceHandle === subject || row.choiceHandle === target);
+    try {
+      const result = await run('knowledge.assertion.prepare', { readHandle, query, retainHandles: retained.map(row => row.choiceHandle) });
+      if (alive.current) {
+        // Keep the selected endpoints while searching for the other end of a relation.
+        const combined = [...retained, ...(result.identities || [])];
+        setIdentities(combined.filter((row, index) => combined.findIndex(other => other.id === row.id && other.type === row.type && other.label === row.label) === index));
+        setMore(result.hasMoreIdentities === true); setPrepared(true);
+      }
+    }
     catch (failure) { if (alive.current) setError(failure instanceof Error ? failure.message : String(failure)); }
     finally { if (alive.current) setBusy(false); }
   };
