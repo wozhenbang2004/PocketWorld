@@ -33,9 +33,11 @@ export function sameRemoteScope(first: unknown, second: unknown): boolean {
   const a = remoteObject(first), b = remoteObject(second), keys = Object.keys(a);
   return keys.length > 0 && keys.length === Object.keys(b).length && keys.every(key => Object.hasOwn(b, key) && a[key] === b[key]);
 }
-export function remoteEditor(snapshot: RemoteData, id: string, mode = 'next_turn'): RemoteEditor {
-  const scope = remoteObject(snapshot.draftScopes)[mode];
-  return { id, revision: 0, mode, text: '', scope: scope ? { ...scope } : null };
+export function remoteEditor(snapshot: RemoteData, id: string, mode?: string): RemoteEditor {
+  const scopes = remoteObject(snapshot.draftScopes);
+  const selected = mode ?? (scopes.next_turn ? 'next_turn' : scopes.steer ? 'steer' : 'next_turn');
+  const scope = scopes[selected];
+  return { id, revision: 0, mode: selected, text: '', scope: scope ? { ...scope } : null };
 }
 export function savedRemoteEditor(draft: RemoteData): RemoteEditor {
   return { id: draft.id, revision: draft.revision, mode: draft.mode, text: draft.text || '', scope: { ...remoteObject(draft.scope) } };
@@ -77,3 +79,4 @@ export function remoteProgress(snapshot: RemoteData, filter: string) {
   const children = [...new Map(rows.filter(row => row.source.kind === 'child').map(row => [row.source.key, row.source])).values()];
   return { progress, children, visible: rows.filter(row => filter === '*' || row.source.key === filter) };
 }
+

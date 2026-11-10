@@ -77,6 +77,13 @@ export function RemoteDraftEditor({ snapshot, busy, active = true, run }: { snap
   useEffect(() => {
     const saved = rows(snapshot.inputDrafts).find(row => row.id === editor.id);
     if (saved && saved.text === editor.text && saved.mode === editor.mode && saved.revision > editor.revision && saved.targetCurrent === true) edit(savedRemoteEditor(saved));
+    else if (!saved && editor.revision === 0 && !editor.scope && snapshot.fresh === true && !snapshot.teamRemoteWriter && !snapshot.configurationOnly) {
+      // Opening may precede the first protocol observation. Attach only a new,
+      // never-bound editor; an existing scope must not follow a different turn.
+      const scopes = object(snapshot.draftScopes);
+      const initial = remoteEditor(snapshot, editor.id, scopes[editor.mode] ? editor.mode : undefined);
+      if (initial.scope) edit({ ...initial, text: editor.text });
+    }
   }, [snapshot]);
   const state = remoteDraftState(snapshot, editor), delivery = object(snapshot.inputDelivery), currentTurn = object(delivery.currentTurn), nextTurn = object(delivery.nextTurn);
   const captured = { ...editor }, review = snapshot.reviewId, window = snapshot.windowHandle;
@@ -227,3 +234,4 @@ export function RemoteManagedSessionsWorkspace() {
     </>}
   </section>;
 }
+
