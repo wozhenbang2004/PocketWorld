@@ -827,8 +827,11 @@ if(runs.size()+archived.size()>=RETAINED_RUN_LIMIT)throw new IllegalStateExcepti
     }
     public synchronized JSONObject resume(String id,String memberId,ModelConfig config,EvidenceFactory evidence,ExternalMemberFactory external)throws Exception{return resumeSelected(id,memberId,config,evidence,external,null);}
     private JSONObject resumeSelected(String id,String memberId,ModelConfig config,EvidenceFactory evidence,ExternalMemberFactory external,dev.pocketengine.store.TaskStore.TeamResearchWakeAdmission wake)throws Exception{
+        return resumeSelected(id,memberId,config,evidence,external,wake,false);
+    }
+    private JSONObject resumeSelected(String id,String memberId,ModelConfig config,EvidenceFactory evidence,ExternalMemberFactory external,dev.pocketengine.store.TaskStore.TeamResearchWakeAdmission wake,boolean useQueuedMessages)throws Exception{
         Run run=required(id);
-        if(run.phoneApproval!=null&&!run.children.isEmpty()&&phoneFactory!=null){
+        if(!useQueuedMessages&&run.phoneApproval!=null&&!run.children.isEmpty()&&phoneFactory!=null){
             boolean all=memberId==null||memberId.isEmpty();phoneFactory.resume(id,all?null:memberId);
             for(int i=0;i<roster(run).length();i++){JSONObject slot=roster(run).getJSONObject(i);if(all||memberId.equals(slot.getString("id"))){RunControl child=run.children.get(slot.getString("id"));if(child!=null)child.resume();slot.put("paused",false).put("status",child==null?slot.optString("status"):"running");}}
             run.paused=false;run.control.resume();run.json.put("status","running").put("phase","members");activity(run,"phone_resumed","继续同一原手机运行，未创建新run或追加预算",all?null:memberId);save(run);return JsonFiles.copy(run.json);
@@ -840,7 +843,14 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
         // An automatic transition never replaces a concurrently stopped/paused control.
         // Explicit owner resume retains its existing renewal behavior.
         if(wake!=null){if(run.control==null||run.control.isCancelled()||run.control.isPaused()||run.paused||all||member(run,memberId).optBoolean("paused"))throw new SecurityException("原研究控制已暂停或停止，自动消息不能续审新控制");}
-        else if(run.control==null||run.control.isCancelled()){run.control=new RunControl();run.generation++;run.json.put("generation",run.generation);}run.paused=false;run.config=config;run.evidenceFactory=evidence;run.externalFactory=external;
+        // Do not retire completed work or pause its dependents until the same
+        // resume admission has accepted the model, execution state and budget.
+        if(useQueuedMessages){
+            JSONObject target=member(run,memberId);int from=unfinishedRound(run,target);if(from<1)from=plannedRounds(run);
+            resetFrom(run,target,from);pauseMember(run,target);invalidateDependents(run,memberId,new java.util.HashSet<>());
+            run.json.put("summaryStale",true);activity(run,"owner_mail_delivery","主人明确继续该成员以使用待处理补充与成员消息",memberId);
+        }
+        if(wake==null&&(run.control==null||run.control.isCancelled())){run.control=new RunControl();run.generation++;run.json.put("generation",run.generation);}run.paused=false;run.config=config;run.evidenceFactory=evidence;run.externalFactory=external;
         for(int i=0;i<roster(run).length();i++){JSONObject member=roster(run).getJSONObject(i);if(!member.optBoolean("exited")&&(all||memberId.equals(member.getString("id")))){run.researchWakes.remove(member.getString("id"));RunControl previousChild=run.children.get(member.getString("id"));if(previousChild!=null)previousChild.cancel();member.put("paused",false).put("generation",member.optInt("generation")+1).put("ownerContinuationGeneration",member.optInt("generation"));int next=unfinishedRound(run,member);if(researchEnabled(run)){for(int r=1;r<=plannedRounds(run);r++)if(!progress(member,r).optString("status").equals("completed")){next=r;break;}}if(next<1&&run.json.optString("mode").equals("produce")&&member.optString("status").equals("failed"))next=plannedRounds(run);if(next>0){progress(member,next).put("status","queued");member.put("status","queued");}}}
         if(wake!=null){wake.scheduled(run.generation,member(run,memberId).getInt("generation"));run.researchWakes.put(memberId,wake);}
         run.json.put("status","queued").put("phase","queued").put("summary","继续原团队任务，沿用原剩余额度；不会自动增加调用或工具预算");
@@ -853,7 +863,7 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
         if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态工作项请在原任务中核对并继续准确工作项，不按成员最近轮次猜assignment");
         if(run.json.optString("status").equals("cancelled")||run.children.containsKey(memberId)||member.optString("status").matches("running|awaiting_approval"))throw new IllegalStateException("成员仍在运行、等待授权或任务已停止");
         boolean unread=pendingFeedbackIds(run,memberId).length()>0||pendingPeerIds(run,memberId).length()>0;if(!unread)throw new IllegalStateException("该成员没有待使用的补充或成员消息");
-        int from=unfinishedRound(run,member);if(from<1)from=plannedRounds(run);resetFrom(run,member,from);pauseMember(run,member);invalidateDependents(run,memberId,new java.util.HashSet<>());run.json.put("summaryStale",true);activity(run,"owner_mail_delivery","主人明确继续该成员以使用待处理补充与成员消息",memberId);return resume(id,memberId,config,evidence,external);
+        return resumeSelected(id,memberId,config,evidence,external,null,true);
     }
     private static String revisionRequestHash(String command,JSONObject input)throws Exception {
         JSONObject request=new JSONObject().put("command",command);for(String key:new String[]{"runId","assignmentId","memberId","revisionRequestId","text","expectedFrozenRunId","expectedArtifactsHash"})request.put(key,input.getString(key));
