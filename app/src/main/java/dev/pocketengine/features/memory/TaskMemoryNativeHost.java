@@ -49,7 +49,7 @@ public final class TaskMemoryNativeHost {
             case "readTaskNativeOutputAudit":allowed=Set.of("taskId","runId","sourceId","revision","offset","maxChars");break;
             case "readConversationHistoryCitation":allowed=Set.of("callerTaskId","callerRunId","conversationId","sourceJump","taskSource");break;
             case "readTaskMemoryReceipt":break;
-            case "readTaskMemorySource":allowed.addAll(Set.of("id","expectedRevision","sourceRef","receiptId"));break;
+            case "readTaskMemorySource":allowed.addAll(Set.of("id","expectedRevision","sourceRef","receiptId","offset","maxChars"));break;
             case "listTaskMemoryReplacements":allowed.addAll(Set.of("id","expectedRevision","receiptId"));break;
             case "correctTaskMemoryReviewed":allowed.addAll(Set.of("id","expectedRevision","receiptId","text"));break;
             case "forgetTaskMemoryReviewed":allowed.addAll(Set.of("id","expectedRevision","receiptId"));break;
@@ -107,7 +107,9 @@ public final class TaskMemoryNativeHost {
             TaskMemoryUse use=use();
             if("readTaskMemoryReceipt".equals(command))return use.readTaskMemoryReceipt(authenticated,receipt,fence);
             String id=payload.getString("id");long revision=SourceRef.integer(payload,"expectedRevision",1);
-            if("readTaskMemorySource".equals(command))return use.readTaskMemorySource(authenticated,receipt,id,revision,SourceRef.fromJson(payload.getJSONObject("sourceRef")),fence);
+            if("readTaskMemorySource".equals(command))return use.readTaskMemorySource(authenticated,receipt,id,revision,SourceRef.fromJson(payload.getJSONObject("sourceRef")),
+                    payload.has("offset")?Math.toIntExact(SourceRef.integer(payload,"offset",0)):0,
+                    payload.has("maxChars")?Math.toIntExact(SourceRef.integer(payload,"maxChars",1)):24000,fence,null);
             JSONObject current=use.readTaskMemoryReceipt(authenticated,receipt,fence);requireReviewed(current,payload,id,revision);
             if("listTaskMemoryReplacements".equals(command))return use.listTaskMemoryReplacements(authenticated,receipt,id,revision,fence);
             // Source synchronization and the review-to-write interval share the native source fence.

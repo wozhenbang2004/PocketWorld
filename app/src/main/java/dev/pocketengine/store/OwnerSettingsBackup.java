@@ -23,6 +23,29 @@ import org.json.JSONObject;
 /** Public portable definitions and deterministic remapping. SettingsStore owns the only writer. */
 public final class OwnerSettingsBackup {
     private OwnerSettingsBackup() { }
+    private static final List<String> PERSONAL_FIELDS=List.of("nickname","addressAs","about","avatarDataUrl","language","response_detail","conclusionFirst","includeExamples","instructions","operation_pace","initiative");
+    /** Old archives carry exactly two preferences. New archives carry the complete personal profile. */
+    public static JSONObject checkedPreferences(JSONObject preferences)throws Exception {
+        if(preferences==null)throw new SecurityException("归档缺少个人资料与偏好");
+        List<String> fields=preferences.length()==2?List.of("response_detail","operation_pace"):PERSONAL_FIELDS;
+        if(preferences.length()!=fields.size())throw new SecurityException("归档个人字段不完整");
+        OwnerConfigurationBackupSections.fields(preferences,fields.toArray(new String[0]));
+        JSONObject checked=new JSONObject();
+        for(String field:fields){
+            Object value=SettingsStore.checkedPersonalValue(preferences,field);
+            if(!value.equals(preferences.get(field)))throw new SecurityException("归档个人字段不是原保存格式："+field);
+            checked.put(field,value);
+        }
+        return checked;
+    }
+    /** Review the actual portable fields without forwarding the avatar's encoded bytes to a receipt. */
+    public static JSONObject preferencesPreview(JSONObject preferences)throws Exception {
+        JSONObject values=checkedPreferences(preferences);JSONArray fields=new JSONArray();
+        for(String field:PERSONAL_FIELDS)if(values.has(field))fields.put(field);
+        Object avatar=values.remove("avatarDataUrl");
+        return new JSONObject().put("fields",fields).put("values",values).put("completePersonalProfile",fields.length()==PERSONAL_FIELDS.size())
+                .put("avatarIncluded",avatar!=null).put("avatarConfigured",avatar instanceof String&&!((String)avatar).isEmpty());
+    }
     public static JSONObject api(String sourceId,String name,ModelConfig configuration)throws Exception {
         ModelBinding binding=configuration.capabilityBinding;
         JSONObject config=new JSONObject().put("provider",configuration.provider).put("baseUrl",configuration.baseUrl)
@@ -38,9 +61,7 @@ public final class OwnerSettingsBackup {
     public static JSONObject checked(JSONObject section)throws Exception {
         JSONObject exact=OwnerConfigurationBackupSections.checked("settings",section),content=exact.getJSONObject("content");
         OwnerConfigurationBackupSections.fields(content,"preferences","apiConnections","modelGroups","workProfiles","sourcePurposeBindings");
-        JSONObject preferences=content.getJSONObject("preferences");OwnerConfigurationBackupSections.fields(preferences,"response_detail","operation_pace");
-        if(!Set.of("concise","standard","detailed").contains(preferences.getString("response_detail"))
-                ||!Set.of("fast","standard","careful").contains(preferences.getString("operation_pace")))throw new SecurityException("归档回复/节奏偏好不受支持");
+        checkedPreferences(content.getJSONObject("preferences"));
         JSONArray api=content.getJSONArray("apiConnections"),groups=content.getJSONArray("modelGroups"),profiles=content.getJSONArray("workProfiles");
         if(api.length()>ApiConnectionProfile.MAX_CONNECTIONS||groups.length()>ModelGroup.MAX_GROUPS||profiles.length()>WorkProfile.MAX_PROFILES)throw new SecurityException("设置归档条目数量超限");
         Set<String> seen=new HashSet<>();for(int i=0;i<api.length();i++)if(!seen.add(checkedApi(api.getJSONObject(i)).getString("sourceId")))throw new SecurityException("归档API身份重复");
@@ -124,7 +145,7 @@ public final class OwnerSettingsBackup {
             WorkProfile restored=WorkProfile.fromJson(next.put("restoredPendingReview",true).put("restoredReferences",history));restoredProfiles.put(restored.toJson());rows.put(identity("profile",old.id,restored.id));
         }
         return new JSONObject().put("apiConnections",restoredApi).put("modelGroups",restoredGroups).put("workProfiles",restoredProfiles)
-                .put("rows",rows).put("requiresRecreation",pending).put("preferences",content.getJSONObject("preferences"));
+                .put("rows",rows).put("requiresRecreation",pending).put("preferences",checkedPreferences(content.getJSONObject("preferences")));
     }
     private static JSONObject identity(String kind,String source,String id)throws Exception{return new JSONObject().put("kind",kind).put("sourceId",source).put("id",id);}
     private static String mappedApi(Map<String,String> mapping,String action,String source)throws Exception{return mapping.containsKey(source)?mapping.get(source):id(action,"unavailable",source);}

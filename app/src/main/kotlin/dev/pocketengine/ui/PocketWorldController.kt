@@ -345,11 +345,41 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                         val candidates = app.nativeOwnerWorkflows.memory("listCandidates", JSONObject()).getJSONArray("candidates")
                         JSONObject().put("current", personalRows(projection.getJSONArray("current")))
                             .put("candidates", personalRows(candidates, pendingOnly = true))
-                            .put("pendingConflicts", personalRows(projection.getJSONArray("pendingConflicts"))).put("available", true)
+                            .put("pendingConflicts", personalRows(projection.getJSONArray("pendingConflicts")))
+                            .put("history", personalRows(projection.optJSONArray("history") ?: JSONArray())).put("complete", true).put("available", true)
                     }
                     JSONObject().put("profile", profile)
+                        .put("policy", app.personalMemoryControlsForOwner()).put("agentPreferences", app.settings.agentPreferences())
                         .put("memories", memory.getOrNull() ?: JSONObject().put("current", JSONArray()).put("candidates", JSONArray()).put("pendingConflicts", JSONArray()).put("available", false))
                         .put("memoryError", memory.exceptionOrNull()?.let(::message) ?: "")
+                }
+                "memoryControls" -> app.personalMemoryControlsForOwner()
+                "memoryReading", "memoryLearning" -> {
+                    val revision = input.opt("expectedRevision")
+                    require((revision is Int || revision is Long) && (revision as Number).toLong() >= 0 && input.opt("enabled") is Boolean) { "请刷新记忆设置后保存" }
+                    if (command == "memoryReading") app.setPersonalMemoryReadingForOwner((revision as Number).toLong(), input.getBoolean("enabled"))
+                    else {
+                        require(input.opt("maxUserSourcesPerTask") is Int && input.opt("confirmedModelUse") is Boolean) { "请核对原自动提炼范围" }
+                        app.setAutomaticUserLearningPolicy((revision as Number).toLong(), input.getBoolean("enabled"), input.getInt("maxUserSourcesPerTask"), input.getBoolean("confirmedModelUse"))
+                        JSONObject().put("saved", true).put("persisted", true).put("controls", app.personalMemoryControlsForOwner())
+                    }
+                }
+                "preferenceControl" -> {
+                    val revision = input.opt("expectedRevision")
+                    require((revision is Int || revision is Long) && (revision as Number).toLong() > 0 && input.opt("enabled") is Boolean) { "请刷新偏好后保存" }
+                    val before = app.settings.agentPreferences()
+                    app.settings.saveAgentPreferences(input.getBoolean("enabled"), before.getString("response_detail"), before.getString("operation_pace"), (revision as Number).toLong())
+                    JSONObject().put("saved", true).put("persisted", true).put("profile", app.settings.personalProfile()).put("agentPreferences", app.settings.agentPreferences())
+                }
+                "conversationRead", "conversationSave" -> {
+                    val conversation = input.getString("conversationId")
+                    check(conversation.isNotEmpty() && conversation == state.conversationId) { "请返回原私人对话设置记忆" }
+                    if (command == "conversationRead") app.conversationPersonalMemoryForOwner(conversation)
+                    else {
+                        val revision = input.opt("expectedRevision")
+                        require((revision is Int || revision is Long) && (revision as Number).toLong() >= 0 && input.opt("enabled") is Boolean) { "请刷新此对话的原记忆设置" }
+                        app.setConversationPersonalMemoryForOwner(conversation, (revision as Number).toLong(), input.getBoolean("enabled"))
+                    }
                 }
                 "save" -> {
                     val revision = input.opt("expectedRevision")
@@ -370,7 +400,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     internal fun requestPersonalMemory(command: String, payload: JSONObject, original: JSONObject?, current: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
         val input = JSONObject(payload.toString())
         val frozen = original?.let { JSONObject(it.toString()) }
-        require(command in setOf("get", "getCandidate", "openSource", "correctReviewed", "forgetReviewed", "setCore", "acceptCandidate", "rejectCandidate")) { "请在原记忆工作区完成此审核操作" }
+        require(command in setOf("get", "getCandidate", "openSource", "correctReviewed", "forgetReviewed", "setCore", "acceptCandidate", "rejectCandidate", "createPersonalNote", "retractCreatedReviewed")) { "请在原记忆工作区完成此审核操作" }
         requestPersonalOwner(current, done, memoryChanged = command !in setOf("get", "getCandidate", "openSource")) {
             var reviewed: JSONObject? = null
             if (frozen != null) {
@@ -383,16 +413,37 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 check(MemoryLearningReviewGuard.sameReview(before, actual)) { "这条个人记忆、来源或修订已变化，请重新读取" }
                 if (command != "openSource") check(input.optString("id") == before.getString("id")) { "不能替换原个人记忆" }
                 reviewed = actual
-            } else check(command == "get" || command == "getCandidate") { "请先读取并核对原个人记忆" }
+            } else check(command in setOf("get", "getCandidate", "createPersonalNote")) { "请先读取并核对原个人记忆" }
             if (command == "openSource") {
                 val refs = reviewed!!.optJSONArray("sourceRefs") ?: JSONArray()
                 val reference = dev.pocketengine.features.memory.SourceRef.fromJson(input)
                 check((0 until refs.length()).any { reference == dev.pocketengine.features.memory.SourceRef.fromJson(refs.getJSONObject(it)) }) { "来源不属于这条个人记忆的原版本" }
                 app.nativeOwnerWorkflows.source(input)
             } else {
-                val result = app.nativeOwnerWorkflows.memory(command, input)
+                val result = try { app.nativeOwnerWorkflows.memory(command, input) }
+                catch (duplicate: dev.pocketengine.features.memory.MemoryBook.PersonalMemoryDuplicateException) {
+                    val existing = duplicate.existingRecord()
+                    val candidate = duplicate.existingCandidate()
+                    JSONObject().put("duplicate", true).put("saved", false).put("status", "already_saved")
+                        .put("record", existing ?: JSONObject.NULL).put("candidate", candidate ?: JSONObject.NULL)
+                        .put("message", if (existing != null) "已经记住这条内容" else "已有相同待确认内容")
+                }
+                catch (preference: dev.pocketengine.features.memory.PersonalMemorySemantics.PreferenceSettingRequiredException) {
+                    JSONObject().put("saved", false).put("status", "settings_required").put("undoAvailable", false)
+                        .put("preferenceKey", preference.preferenceKey()).put("settingsSection", preference.settingsSection()).put("message", preference.message)
+                }
                 result.optJSONObject("record")?.let(::requirePersonalMemory)
                 result.optJSONObject("candidate")?.let(::requirePersonalMemory)
+                result.optJSONObject("candidate")?.optJSONObject("assertion")?.let { assertion ->
+                    val related = JSONArray()
+                    val projection = app.nativeOwnerWorkflows.memory("cognitionProjection", JSONObject().put("subjectId", "owner"))
+                    val rows = personalRows(projection.getJSONArray("current"))
+                    for (index in 0 until rows.length()) {
+                        val record = rows.getJSONObject(index); val other = record.optJSONObject("assertion") ?: continue
+                        if (assertion.optString("predicate") == other.optString("predicate") && assertion.optString("condition") == other.optString("condition")) related.put(record)
+                    }
+                    result.put("relatedRecords", related)
+                }
                 // Native retirement may also affect derivations about other subjects. Keep the
                 // operation's real count, while returning only this selected row's source receipt.
                 result.optJSONArray("removedRefs")?.let { refs ->
@@ -417,7 +468,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     private fun personalRows(rows: JSONArray, pendingOnly: Boolean = false): JSONArray = JSONArray().also { out ->
         for (index in 0 until rows.length()) {
             val row = rows.getJSONObject(index)
-            if (isPersonalMemory(row) && (!pendingOnly || row.optString("status") == "pending")) out.put(row)
+            if (isPersonalMemory(row) && (!pendingOnly || row.optString("status") == "pending")) out.put(JSONObject(row.toString()).put("topic", dev.pocketengine.features.memory.PersonalMemorySemantics.topicOf(row)))
         }
     }
     private fun requestPersonalOwner(current: () -> Boolean, done: (JSONObject?, String?) -> Unit, requirePrivate: Boolean = true, memoryChanged: Boolean = false, work: () -> JSONObject) {
@@ -1195,6 +1246,15 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         if (closed) throw java.util.concurrent.RejectedExecutionException()
         control.check()
         return app.nativeOwnerWorkflows.answerSources(request, control)
+    }
+    /** Resolve the original answer in the visible native conversation, never a caller-supplied receipt. */
+    internal fun webAnswerMemoryReference(messageId: String): JSONObject {
+        check(webPrivateOwnerVisible()) { "请回到原私人对话" }
+        val message = state.messages.singleOrNull { it.id == messageId && it.role == "assistant" }
+            ?: error("原回答已不在当前对话，请重新打开原回答")
+        val reference = message.memoryReference ?: error("这条回答没有可核对的记忆提供回执")
+        check(message.taskId == reference.optString("taskId")) { "原回答与记忆回执不一致" }
+        return JSONObject(reference.toString())
     }
     fun preparePluginRuntime() {
         if (closed || pluginRuntime.optString("status") == "preparing") return

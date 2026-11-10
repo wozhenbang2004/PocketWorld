@@ -37,6 +37,17 @@ public final class MemoryModule implements EngineModule {
     public JSONObject automaticLearningPolicy()throws Exception{return automaticLearning.snapshot();}
     public JSONObject setAutomaticLearningPolicyForOwner(long revision,boolean enabled,int maximum)throws Exception{return automaticLearning.setForOwner(revision,enabled,maximum);}
     public AutomaticMemoryPolicy automaticLearningPolicyForHost(){return automaticLearning;}
+    public JSONObject personalMemoryControlsForOwner()throws Exception{return automaticLearning.controlsSnapshot();}
+    public JSONObject setPersonalMemoryReadingForOwner(long revision,boolean enabled)throws Exception{return automaticLearning.setReadForOwner(revision,enabled);}
+    public boolean personalMemoryReadingEnabled()throws Exception{return automaticLearning.readingEnabled();}
+    public JSONObject savePersonalNoteForOwner(JSONObject scope,String text,Long expiresAt)throws Exception{
+        JSONObject result=new JSONObject().put("record",book.savePersonalNoteForOwner(scope,text,"fact",expiresAt,System.currentTimeMillis()));
+        context.emit(id(),new JSONObject().put("event","memory_changed").put("snapshot",snapshot()));return result;
+    }
+    public JSONObject retractCreatedReviewed(JSONObject scope,String id,long revision,MemoryBook.BeforeForget receipt)throws Exception{
+        JSONObject result=book.retractCreatedReviewed(scope,id,revision,receipt,System.currentTimeMillis());
+        context.emit(id(),new JSONObject().put("event","memory_changed").put("snapshot",snapshot()));return result;
+    }
 
     /** Native owner archive UI only; intentionally absent from handle/model command routes. */
     public JSONObject ownerExperienceBarriers(JSONObject scope)throws Exception{return book.ownerExperienceBarriers(scope);}

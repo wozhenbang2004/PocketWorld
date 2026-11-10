@@ -47,6 +47,7 @@ public final class AutomaticUserLearningHost {
         Objects.requireNonNull(eventFence);if(Thread.holdsLock(tasks))throw new IllegalStateException("原话读取必须在原任务提交锁外");eventFence.check();
         JSONObject selected=policy.snapshot();if(!selected.getBoolean("enabled"))return outcome("automatic_mode_disabled");
         JSONObject actual=tasks.get(originalTaskId,false);if(!eligible(actual))return outcome("not_successful_original_owner_task");SourceTask source=new SourceTask(actual);
+        if(!assistant.personalMemoryEnabled(source.conversation))return outcome("conversation_personal_memory_disabled");
         int maximum=selected.getInt("maxUserSourcesPerTask");JSONArray adopted=actual.optJSONArray("ownerInputs"),inputs=new JSONArray();Map<SourceRef,Boolean> seen=new LinkedHashMap<>();int skipped=0;
         // Newest adopted user messages first. Bound local source IO even with a long retained mailbox.
         for(int i=adopted==null?-1:adopted.length()-1,inspected=0;i>=0&&inputs.length()<maximum&&inspected<20;i--,inspected++){

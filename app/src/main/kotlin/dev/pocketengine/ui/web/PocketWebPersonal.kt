@@ -12,18 +12,21 @@ internal class PocketWebPersonal(private val controller: PocketWorldController) 
     private data class Pin(val body: String, val owner: Any, val expires: Long)
     private val reads = linkedMapOf<String, Pin>()
     private val reviews = linkedMapOf<String, Pin>()
+    private val receipts = linkedMapOf<String, Pin>()
     private val avatar = PocketWebPersonalAvatar(controller)
     @Volatile private var generation = 0L
 
     companion object {
         val COMMANDS = setOf(
             "profile.identity", "profile.snapshot", "profile.save", "profile.avatar.pick", "profile.avatar.result", "profile.avatar.close", "profile.memory.get",
-            "profile.memory.review", "profile.memory.confirm", "profile.memory.source", "profile.memory.close"
+            "profile.memory.review", "profile.memory.createReview", "profile.memory.confirm", "profile.memory.source", "profile.memory.close",
+            "profile.memory.query", "profile.memory.undo", "profile.memory.controls", "profile.memory.reading", "profile.memory.learning",
+            "profile.preferences.control", "profile.conversation.read", "profile.conversation.save"
         )
     }
 
-    fun clear() { generation++; reads.clear(); reviews.clear(); avatar.clear() }
-    fun background() { generation++; reads.clear(); reviews.clear(); avatar.background() }
+    fun clear() { generation++; reads.clear(); reviews.clear(); receipts.clear(); avatar.clear() }
+    fun background() { generation++; reads.clear(); reviews.clear(); receipts.clear(); avatar.background() }
     private fun fields(value: JSONObject, vararg allowed: String) {
         require(value.keys().asSequence().all { it in allowed }) { "个人资料操作含不适用字段" }
     }
@@ -45,6 +48,21 @@ internal class PocketWebPersonal(private val controller: PocketWorldController) 
         return JSONObject(pin.body)
     }
     private fun row(original: JSONObject): JSONObject = original.getJSONObject(if (original.getBoolean("candidate")) "candidateRecord" else "record")
+    private fun prepare(review: JSONObject): String {
+        val handle = pin(reviews, review)
+        while (receipts.size >= 24) receipts.remove(receipts.keys.first())
+        receipts[handle] = reviews.getValue(handle).copy(body = JSONObject().put("status", "not_submitted").put("review", review).toString())
+        return handle
+    }
+    private fun recordReceipt(handle: String, status: String, result: JSONObject) {
+        val old = receipts[handle] ?: return
+        val body = JSONObject(old.body).put("status", status).put("result", result)
+        receipts[handle] = old.copy(body = body.toString())
+    }
+    private fun receiptView(handle: String, receipt: JSONObject): JSONObject {
+        val result = receipt.optJSONObject("result")?.let { JSONObject(it.toString()) } ?: JSONObject().put("undoAvailable", false)
+        return result.put("status", receipt.getString("status")).put("receiptHandle", handle)
+    }
     private fun callProfile(command: String, args: JSONObject, done: (JSONObject?, String?) -> Unit, project: (JSONObject) -> JSONObject = { it }) {
         val request = generation
         controller.requestPersonalProfile(command, args, { request == generation }) { result, error ->
@@ -74,6 +92,20 @@ internal class PocketWebPersonal(private val controller: PocketWorldController) 
                 fields(args)
                 callProfile(if (action == "profile.identity") "identity" else "snapshot", args, done)
             }
+            "profile.memory.controls" -> { fields(args); callProfile("memoryControls", args, done) }
+            "profile.memory.reading", "profile.preferences.control" -> {
+                fields(args, "expectedRevision", "enabled")
+                callProfile(if (action == "profile.memory.reading") "memoryReading" else "preferenceControl", args, done)
+            }
+            "profile.memory.learning" -> {
+                fields(args, "expectedRevision", "enabled", "maxUserSourcesPerTask", "confirmedModelUse")
+                callProfile("memoryLearning", args, done)
+            }
+            "profile.conversation.read", "profile.conversation.save" -> {
+                if (action == "profile.conversation.read") fields(args, "conversationId") else fields(args, "conversationId", "expectedRevision", "enabled")
+                text(args, "conversationId")
+                callProfile(if (action == "profile.conversation.read") "conversationRead" else "conversationSave", args, done)
+            }
             "profile.save" -> {
                 fields(args, "expectedRevision", "section", "values")
                 val expected = args.opt("expectedRevision")
@@ -90,8 +122,18 @@ internal class PocketWebPersonal(private val controller: PocketWorldController) 
                 callMemory(if (candidate) "getCandidate" else "get", JSONObject().put("id", text(args, "id")), null, done) { result ->
                     val original = JSONObject().put("candidate", candidate)
                         .put(if (candidate) "candidateRecord" else "record", result.getJSONObject(if (candidate) "candidate" else "record"))
+                    result.optJSONArray("relatedRecords")?.let { original.put("relatedRecords", it) }
                     result.put("readHandle", pin(reads, original)).put("candidateSelected", candidate)
                 }
+            }
+            "profile.memory.createReview" -> {
+                fields(args, "text", "expiresAt")
+                val content = text(args, "text", 4000).trim()
+                val expires = args.opt("expiresAt")
+                require(expires == null || expires == JSONObject.NULL || (expires is Int || expires is Long) && (expires as Number).toLong() > System.currentTimeMillis()) { "请选择未来的有效期" }
+                val payload = JSONObject().put("text", content).put("expiresAt", expires ?: JSONObject.NULL)
+                val handle = prepare(JSONObject().put("command", "createPersonalNote").put("payload", payload))
+                done(JSONObject().put("reviewHandle", handle).put("receiptHandle", handle).put("operation", "create").put("changeKind", "add").put("afterText", content).put("expiresAt", expires ?: JSONObject.NULL), null)
             }
             "profile.memory.source" -> {
                 fields(args, "readHandle", "index", "offset")
@@ -140,28 +182,80 @@ internal class PocketWebPersonal(private val controller: PocketWorldController) 
                     val checked = if (candidate) MemoryLearningReviewGuard.payload(command, before, before, payload)
                         else if (operation == "forget") MemoryLearningReviewGuard.forgetPayload(before, before) else payload
                     val review = JSONObject().put("original", original).put("command", command).put("payload", checked)
-                    JSONObject().put("reviewHandle", pin(reviews, review)).put("operation", operation).put("before", before)
+                    val handle = prepare(review)
+                    JSONObject().put("reviewHandle", handle).put("receiptHandle", handle).put("operation", operation).put("before", before)
+                        .put("relatedRecords", original.optJSONArray("relatedRecords") ?: JSONArray()).put("changeKind", if (operation == "correct") "update" else "add")
                         .put("afterText", checked.optString("text")).put("core", checked.opt("core"))
                         .put("reason", checked.optString("reason")).put("executionAuthorized", false)
                 }
             }
             "profile.memory.confirm" -> {
                 fields(args, "reviewHandle")
-                val review = selected(reviews, text(args, "reviewHandle"), consume = true)
-                val original = review.getJSONObject("original")
-                val before = row(original)
+                val handle = text(args, "reviewHandle")
+                check(selected(receipts, handle).getString("status") == "not_submitted") { "原操作已提交，请查询回执" }
+                val review = selected(reviews, handle, consume = true)
+                val original = review.optJSONObject("original")
+                val before = original?.let(::row)
                 val command = review.getString("command")
                 val payload = review.getJSONObject("payload")
+                recordReceipt(handle, "unknown", JSONObject().put("undoAvailable", false).put("message", "原操作已提交，等待真实回执；未自动重发"))
                 callMemory(command, payload, original, done) { result ->
-                    if (original.getBoolean("candidate") || command == "forgetReviewed") {
+                    if (result.optString("status") == "settings_required" && result.opt("saved") == false) {
+                        result.put("undoAvailable", false)
+                        recordReceipt(handle, "settings_required", result)
+                        return@callMemory receiptView(handle, selected(receipts, handle))
+                    }
+                    if (result.optBoolean("duplicate")) {
+                        result.put("undoAvailable", false)
+                        recordReceipt(handle, "already_saved", result)
+                        return@callMemory receiptView(handle, selected(receipts, handle))
+                    }
+                    if (command == "createPersonalNote") {
+                        val record = result.getJSONObject("record")
+                        check(record.getLong("revision") == 1L && record.getString("text") == payload.getString("text")) { "新增记忆的原回执不完整，请查询；没有重发" }
+                    } else if (original!!.getBoolean("candidate") || command == "forgetReviewed") {
                         check(MemoryLearningReviewGuard.validMutationResult(command, payload, result)) { "原操作效果未完整核对，请刷新；没有自动重发" }
                     } else {
                         val updated = result.getJSONObject("record")
-                        check(updated.getString("id") == before.getString("id") && MemoryLearningReviewGuard.revision(updated) == Math.addExact(MemoryLearningReviewGuard.revision(before), 1)) { "原个人记忆保存回执未完整核对，请重新读取" }
+                        check(updated.getString("id") == before!!.getString("id") && MemoryLearningReviewGuard.revision(updated) == Math.addExact(MemoryLearningReviewGuard.revision(before), 1)) { "原个人记忆保存回执未完整核对，请重新读取" }
                         if (command == "correctReviewed") check(updated.getString("text") == payload.getString("text")) { "原个人记忆正文与保存回执不一致" }
                         if (command == "setCore") check(updated.getBoolean("core") == payload.getBoolean("core")) { "原个人记忆重要标记未确认" }
                     }
-                    result
+                    result.put("undoAvailable", command in setOf("createPersonalNote", "acceptCandidate") && result.optJSONObject("record")?.optLong("revision") == 1L)
+                    recordReceipt(handle, "saved", result)
+                    receiptView(handle, selected(receipts, handle))
+                }
+            }
+            "profile.memory.query" -> {
+                fields(args, "receiptHandle")
+                val handle = text(args, "receiptHandle"); val receipt = selected(receipts, handle)
+                val result = receiptView(handle, receipt); val saved = result.optJSONObject("record")
+                if (receipt.getString("status") != "saved" || !result.optBoolean("undoAvailable") || saved == null) { done(result, null); return }
+                callMemory("get", JSONObject().put("id", saved.getString("id")), null, { actual, error ->
+                    runCatching {
+                        selected(receipts, handle)
+                        val current = actual?.optJSONObject("record")
+                        val unchanged = error == null && current != null && MemoryLearningReviewGuard.sameReview(saved, current)
+                        result.put("undoAvailable", unchanged)
+                        if (!unchanged) result.put("undoUnavailableReason", "这条记忆已变化或不可用，保留原保存回执，不覆盖后续修改")
+                        recordReceipt(handle, "saved", result)
+                        done(PocketWebState.publicValue(result) as JSONObject, null)
+                    }.onFailure { done(null, it.message ?: "原回执窗口已关闭") }
+                })
+            }
+            "profile.memory.undo" -> {
+                fields(args, "receiptHandle")
+                val handle = text(args, "receiptHandle"); val receipt = selected(receipts, handle)
+                val result = receiptView(handle, receipt)
+                check(receipt.getString("status") == "saved" && result.optBoolean("undoAvailable")) { "此操作没有当前可撤销的新增记录" }
+                val saved = result.getJSONObject("record")
+                val original = JSONObject().put("candidate", false).put("record", saved)
+                recordReceipt(handle, "unknown", JSONObject(result.toString()).put("undoAvailable", false).put("message", "撤销已提交，等待原回执；未重复撤销"))
+                callMemory("retractCreatedReviewed", JSONObject().put("id", saved.getString("id")).put("expectedRevision", saved.getLong("revision")), original, done) { actual ->
+                    check(actual.optInt("deleted") > 0) { "撤销尚未确认，请查询原回执" }
+                    actual.put("undoAvailable", false).put("record", saved)
+                    recordReceipt(handle, "reverted", actual)
+                    receiptView(handle, selected(receipts, handle))
                 }
             }
             "profile.memory.close" -> {

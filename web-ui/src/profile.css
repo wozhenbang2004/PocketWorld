@@ -160,6 +160,43 @@
 .pw-profile-dialog p { margin: 0; color: var(--pw-copy, #555); font-size: 14px; line-height: 24px; }
 .pw-profile-dialog .pw-profile-review-text { padding: 14px; border-radius: 14px; background: var(--pw-inset, #eee); color: var(--pw-ink, #181818); white-space: pre-wrap; overflow-wrap: anywhere; }
 .pw-profile-dialog .pw-profile-actions { justify-content: flex-end; }
+.pw-profile-collection-tools { display: grid; gap: 14px; margin-bottom: 28px; }
+.pw-profile-memory-search { margin-bottom: 18px; }
+.pw-profile-collection-tools .pw-profile-memory-search { margin-bottom: 0; }
+.pw-profile-memory-search .pw-profile-input { width: 100%; min-height: 48px; padding: 9px 12px; }
+.pw-profile-memory-search input { min-width: 0; font-size: 14px; }
+.pw-profile-collection-nav { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.pw-profile-collection-nav button { border: 0; box-shadow: none; border-radius: 12px; }
+.pw-profile-collection-nav button[aria-pressed="true"] { background: var(--pw-inset, #eee); color: var(--pw-ink, #181818); }
+.pw-profile-topic-select { display: grid; grid-template-columns: 1fr minmax(140px, 60%); align-items: center; gap: 12px; }
+.pw-profile-topic-select .pw-field-label { color: var(--pw-copy, #555); font-size: 13px; }
+.pw-profile-topic-select .pw-select-trigger { min-height: 44px; border: 0; border-radius: 12px; background: var(--pw-inset, #eee); box-shadow: none; }
+.pw-profile-list-hint, .pw-profile-preference-priority { margin: 0; color: var(--pw-copy, #555); font-size: 13px; line-height: 23px; overflow-wrap: anywhere; }
+.pw-profile-memory-group > .pw-profile-list-hint { margin: -3px 0 15px; }
+.pw-profile-memory-list + .pw-profile-list-hint { margin-top: 15px; }
+.pw-profile-collection-footer { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; margin-top: 28px; }
+.pw-profile-collection-footer button, .pw-profile-inline-link { min-height: 44px; padding-inline: 7px; border: 0; box-shadow: none; background: transparent; color: var(--pw-copy, #555); font-size: 13px; }
+.pw-profile-collection-footer .pw-profile-refresh { margin-top: 0; }
+.pw-profile-inline-link { justify-self: start; margin-left: -7px; }
+.pw-profile-form > .pw-profile-intro { margin-bottom: 0; }
+.pw-profile-memory-controls .pw-stretch-setting { align-items: flex-start; gap: 20px; padding-block: 0; }
+.pw-profile-memory-controls .pw-stretch-setting > div { min-width: 0; flex: 1; }
+.pw-profile-memory-controls .pw-stretch-label { display: block; font-size: 15px; font-weight: 550; }
+.pw-profile-memory-controls .pw-stretch-hint { display: block; margin-top: 7px; color: var(--pw-copy, #555); font-size: 13px; line-height: 23px; overflow-wrap: anywhere; }
+.pw-profile-memory-controls .pw-stretch-hit { flex: none; margin-top: -7px; }
+.pw-profile-memory-feedback { display: grid; gap: 7px; padding: 13px 15px; }
+.pw-profile-memory-feedback p { margin: 0; font-size: 12px; line-height: 21px; }
+.pw-profile-receipt-heading { display: flex; align-items: center; gap: 8px; color: var(--pw-ink, #181818); }
+.pw-profile-receipt-heading svg { flex: none; }
+.pw-profile-memory-feedback .pw-profile-actions { margin-left: -7px; gap: 3px 7px; }
+.pw-profile-memory-feedback .pw-profile-actions button { padding-inline: 8px; font-size: 12px; }
+.pw-profile-memory-meta { margin: -9px 0 0; font-size: 12px; line-height: 21px; color: var(--pw-muted, #686868); overflow-wrap: anywhere; }
+.pw-profile-memory-comparison { display: grid; gap: 14px; }
+.pw-profile-memory-comparison h2, .pw-profile-memory-comparison h3 { margin: 0; color: var(--pw-copy, #555); font-size: 13px; line-height: 22px; font-weight: 550; }
+.pw-profile-memory-comparison section { padding: 14px; border: 0; border-radius: 14px; background: var(--pw-inset, #eee); }
+.pw-profile-memory-comparison section p { margin: 8px 0 0; font-size: 14px; line-height: 25px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pw-profile-memory-comparison .pw-profile-candidate-copy { font-size: 14px; line-height: 25px; }
+.pw-profile-empty > button { margin-block: 11px 4px; border: 0; border-radius: 12px; box-shadow: none; }
 @media (min-width: 900px) {
   .pw-profile-header { padding-inline: 24px; }
   .pw-profile-content { padding-top: 28px; }

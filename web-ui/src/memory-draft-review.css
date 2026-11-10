@@ -1,0 +1,15 @@
+/* The existing Vaul review and BoardUI controls retain the personal reading rhythm. */
+.pw-memory-draft-review { gap: 18px; }
+.pw-memory-draft-review button, .pw-memory-draft-confirmation button { min-height: 44px; }
+.pw-memory-draft-review .pw-memory-draft-result { margin: 0; font-size: 13px; line-height: 22px; color: var(--pw-copy, #555); }
+.pw-memory-draft-review .pw-memory-draft-error { margin: 0; padding: 12px 14px; border-radius: 12px; color: var(--pw-danger); background: var(--pw-danger-surface); font-size: 13px; line-height: 23px; }
+.pw-memory-draft-review .pw-memory-draft-comparison { gap: 16px; }
+.pw-memory-draft-review .pw-memory-draft-comparison .pw-source-record { padding: 16px; border: 0; border-radius: 15px; background: var(--pw-inset, #eee); }
+.pw-memory-draft-review .pw-memory-draft-comparison h3 { margin: 0 0 9px; font-size: 13px; line-height: 22px; color: var(--pw-copy, #555); font-weight: 550; }
+.pw-memory-draft-review .pw-reading-copy { margin: 0; font-size: 15px; line-height: 27px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pw-memory-draft-review .pw-memory-draft-effect { margin: 0; font-size: 13px; line-height: 23px; color: var(--pw-copy, #555); }
+.pw-memory-draft-receipt { display: grid; gap: 13px; }
+.pw-memory-draft-source { margin-top: 12px; padding: 14px; border: 0; border-radius: 14px; background: var(--pw-inset, #eee); }
+.pw-memory-draft-source h4 { margin: 0 0 8px; font-size: 13px; line-height: 22px; font-weight: 550; }
+.pw-memory-draft-source .pw-reading-copy { font-size: 13px; line-height: 24px; }
+.pw-memory-draft-confirmation .pw-action-row { gap: 10px; }

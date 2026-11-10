@@ -39,7 +39,7 @@ public final class MemorySourceBridge {
         public SourceRef.State resolve(MemoryBook.Scope scope,String kind,String id)throws Exception{return MemorySourceBridge.this.resolve(scope,kind,id);}
         public void requireUserSaid(JSONObject assertion,String exactText)throws Exception {
             if(!exactText.equals(assertion.getString("object")))throw new SecurityException("user_said只能保留确切原句，摘要/推断必须另标类型");JSONArray spans=assertion.getJSONArray("evidenceSpans");if(spans.length()!=1)throw new SecurityException("主人原话须有唯一确切原消息span");JSONObject span=spans.getJSONObject(0);SourceRef ref=SourceRef.fromJson(span.getJSONObject("sourceRef"));if(!"message".equals(ref.kind))throw new SecurityException("文件、网页与任务摘要不是主人原发言");
-            tasks.conversationRepository().requireUserSaidSpan(ref,span.getInt("offset"),span.getInt("chars"),span.getString("sha256"),assertion.getString("object"),assertion.isNull("assertedAt")?null:assertion.getLong("assertedAt"));
+            tasks.conversationRepository().requireUserSaidSpan(ref,span.getInt("offset"),span.getInt("chars"),span.getString("sha256"),assertion.getString("object"),assertion.isNull("assertedAt")?null:assertion.getLong("assertedAt"),assertion);
         }
     };}
     public void prepareSourceHead(String kind,String sourceId,dev.pocketengine.core.RunControl control)throws Exception{
@@ -206,6 +206,12 @@ public final class MemorySourceBridge {
         EngineModule module=host.module("memory");if(!(module instanceof MemoryModule))throw new IllegalStateException("记忆模块暂不可用");MemoryModule memory=(MemoryModule)module;
         reconcilePending(scope,memory);return mutate(scope,memory,true,receipt->memory.forgetReviewed(scope,id,revision,receipt));
     }
+    /** Retract this new record and its record-derived references; independent facts sharing
+     * the original message remain live. The owner did not ask to forget the source itself. */
+    public synchronized JSONObject retractCreatedReviewed(JSONObject scope,String id,long revision)throws Exception{
+        EngineModule module=host.module("memory");if(!(module instanceof MemoryModule memory))throw new IllegalStateException("记忆模块暂不可用");
+        reconcilePending(scope,memory);return mutate(scope,memory,false,"owner_correction",null,false,receipt->memory.retractCreatedReviewed(scope,id,revision,receipt));
+    }
     /** Native owner namespace use only; private task identity and global source key are unchanged. */
     public synchronized JSONObject forgetProjectReviewed(dev.pocketengine.features.memory.ProjectMemoryNamespaces nativeScope,dev.pocketengine.features.memory.ProjectMemoryNamespaces.Selection selected,String id,long revision)throws Exception{
         EngineModule original=host.module("memory");if(!Thread.holdsLock(nativeScope)||!(original instanceof MemoryModule)||!((MemoryModule)original).ownsProjectNamespacesForHost(nativeScope))throw new SecurityException("项目遗忘不是原Book/Bridge的native准入");final JSONObject[] retired={null};
@@ -270,6 +276,9 @@ public final class MemorySourceBridge {
         return mutate(scope,memory,eraseSnapshots,cause,null,mutation);
     }
     private JSONObject mutate(JSONObject scope,MemoryModule memory,boolean eraseSnapshots,String cause,SourceRef reviewedAssertionSource,Mutation mutation)throws Exception{
+        return mutate(scope,memory,eraseSnapshots,cause,reviewedAssertionSource,true,mutation);
+    }
+    private JSONObject mutate(JSONObject scope,MemoryModule memory,boolean eraseSnapshots,String cause,SourceRef reviewedAssertionSource,boolean retireOriginalSources,Mutation mutation)throws Exception{
         final java.util.List<String> cleanups=new java.util.ArrayList<>();
         final JSONObject[] contextRetirement={null};
         try{
@@ -278,7 +287,7 @@ public final class MemorySourceBridge {
                 host.clearWorkingMemory(scope);
                 contextRetirement[0]=tasks.invalidateMemoryContexts(MemoryBook.Scope.from(scope),removed);
                 AssistantModule conversation=assistant;
-                if(conversation!=null&&"owner".equals(scope.optString("ownerId"))&&"private".equals(scope.optString("spaceId")))contextRetirement[0].put("conversationReferencesRetired",conversation.retireMemoryContexts(retiredConversationSources(removed,reviewedAssertionSource),cause));
+                if(conversation!=null&&"owner".equals(scope.optString("ownerId"))&&"private".equals(scope.optString("spaceId")))contextRetirement[0].put("conversationReferencesRetired",conversation.retireMemoryContexts(retireOriginalSources?retiredConversationSources(removed,reviewedAssertionSource):new JSONArray(),cause));
                 JSONArray bounded=boundedCleanupRefs(scope,removed,eraseSnapshots);
                 // TaskStore deliberately bounds journal arrays. Every batch must be
                 // durable before returning to MemoryBook's single atomic mutation.

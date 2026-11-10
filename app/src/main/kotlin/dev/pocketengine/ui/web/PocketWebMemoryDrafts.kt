@@ -13,13 +13,15 @@ internal class PocketWebMemoryDrafts(private val controller: PocketWorldControll
     private data class Window(val id: String, val review: NativeConversationMemoryDraftHost.Review, val owner: Any, val control: RunControl)
     private val main = Handler(Looper.getMainLooper())
     @Volatile private var window: Window? = null
+    @Volatile private var selectorControl: RunControl? = null
     @Volatile private var generation = 0L
     private var busy = false
 
-    companion object { val COMMANDS = setOf("memoryDraft.open", "memoryDraft.source", "memoryDraft.confirm", "memoryDraft.cancel", "memoryDraft.query", "memoryDraft.close") }
+    companion object { val COMMANDS = setOf("memoryDraft.open", "memoryDraft.source", "memoryDraft.confirm", "memoryDraft.cancel", "memoryDraft.query", "memoryDraft.undo", "memoryDraft.close") }
 
     fun clear() {
         ++generation; busy = false
+        selectorControl?.cancel(); selectorControl = null
         val old = window; window = null; old?.control?.cancel()
         if (old != null) runCatching { controller.runPluginCatalogWork(Runnable { old.review.close() }) }
     }
@@ -30,23 +32,31 @@ internal class PocketWebMemoryDrafts(private val controller: PocketWorldControll
     private fun epoch(args: JSONObject): Int { val value = args.opt("epoch"); require(value is Int && value > 0) { "原提案执行代次无效" }; return value }
     private fun current(value: Window) = window === value && controller.webPrivateOwnerVisible() && controller.webWindowTicket() == value.owner && !value.control.isCancelled
     private fun selection(args: JSONObject) { fields(args, "taskId", "runId", "epoch", "operationId", "proposalDigest") }
-    private fun presentation(row: JSONObject) = JSONObject().put("proposal", row.getJSONObject("proposal")).put("apply", row.getJSONObject("apply"))
+    private fun presentation(row: JSONObject): JSONObject {
+        val result = JSONObject().put("proposal", row.getJSONObject("proposal")).put("apply", row.getJSONObject("apply"))
+        for (key in arrayOf("status", "undo", "receipt", "record", "recordCurrent", "undoAvailable", "undoUnavailableReason", "duplicate", "existingCandidate", "queryOriginalReceipt", "originalEffectUnconfirmed", "message", "replayAllowed")) {
+            if (row.has(key)) result.put(key, row.get(key))
+        }
+        return result
+    }
 
     fun dispatch(action: String, args: JSONObject, done: (JSONObject?, String?) -> Unit) {
         check(controller.webPrivateOwnerVisible()) { "请回到原私人回答审阅记忆提案" }
         if (action == "memoryDraft.close") { fields(args, "handle"); if (window?.id == text(args, "handle")) clear(); done(JSONObject().put("closed", true), null); return }
         check(!busy) { "请等待原审阅回执" }
-        if (action == "memoryDraft.open" || action == "memoryDraft.query") {
+        if (action == "memoryDraft.open" || action == "memoryDraft.query" || action == "memoryDraft.undo") {
             selection(args)
             val task = text(args, "taskId"); val run = text(args, "runId"); val epoch = epoch(args); val operation = text(args, "operationId")
             val digest = text(args, "proposalDigest", 64); require(digest.matches(Regex("[a-f0-9]{64}")))
-            clear(); val request = generation; val owner = controller.webWindowTicket(); busy = true
+            clear(); val request = generation; val owner = controller.webWindowTicket(); val control = RunControl(); selectorControl = control; busy = true
             controller.runPluginCatalogWork(Runnable {
                 var acquired: NativeConversationMemoryDraftHost.Review? = null
                 val answer = runCatching {
                     check(controller.webPrivateOwnerVisible() && controller.webWindowTicket() == owner && generation == request)
+                    control.check()
                     val host = controller.conversationMemoryDraftHost()
-                    val row = host.queryForOwner(task, run, epoch, operation)
+                    val row = if (action == "memoryDraft.undo") host.undoForOwner(task, run, epoch, operation, digest, control)
+                        else host.queryForOwner(task, run, epoch, operation)
                     check(row.getJSONObject("proposal").getString("proposalDigest") == digest) { "原提案内容已变化" }
                     val result = presentation(row)
                     if (action == "memoryDraft.open" && row.getJSONObject("apply").getString("status") == "pending_owner") {
@@ -56,12 +66,14 @@ internal class PocketWebMemoryDrafts(private val controller: PocketWorldControll
                     result
                 }
                 main.post {
-                    if (request != generation || !controller.webPrivateOwnerVisible() || controller.webWindowTicket() != owner) { acquired?.close(); done(null, "原记忆审阅窗口已变化，未接入迟到内容"); return@post }
+                    if (request != generation || !controller.webPrivateOwnerVisible() || controller.webWindowTicket() != owner) { acquired?.close(); control.cancel(); done(null, "原记忆审阅窗口已变化，请查询原操作结果，不要重复提交"); return@post }
+                    if (selectorControl === control) selectorControl = null
                     busy = false
                     answer.fold({ result ->
-                        acquired?.let { native -> Window(UUID.randomUUID().toString(), native, owner, RunControl()).also { window = it; result.put("handle", it.id) } }
+                        acquired?.let { native -> Window(UUID.randomUUID().toString(), native, owner, control).also { window = it; result.put("handle", it.id) } }
+                        if (acquired == null) control.cancel()
                         done(PocketWebState.publicValue(result) as JSONObject, null)
-                    }, { acquired?.close(); done(null, it.message ?: "原记忆草稿暂不可读取") })
+                    }, { acquired?.close(); control.cancel(); done(null, it.message ?: "原记忆草稿暂不可读取") })
                 }
             }); return
         }

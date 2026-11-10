@@ -425,7 +425,8 @@ public final class TaskStore {
     public synchronized boolean skillProposalsEligible(String id)throws Exception {
         JSONObject task=get(id,false);return task!=null&&"owner".equals(task.optString("actorId"))&&"private".equals(task.optString("spaceId"))&&"assistant".equals(task.optString("kind"))&&!task.has("origin")&&!task.optString("conversationId").isBlank();
     }
-    public synchronized boolean memoryProposalsEligible(String id)throws Exception{JSONObject task=get(id,false);return skillProposalsEligible(id)&&!task.has("projectMemoryRead")&&!task.has("developmentContext");}
+    public synchronized boolean memoryProposalsEligible(String id)throws Exception{JSONObject task=get(id,false);return skillProposalsEligible(id)&&!task.has("projectMemoryRead")&&!task.has("developmentContext")&&conversationRepository.personalMemoryControls(task.getString("conversationId")).getBoolean("enabled");}
+    private void requireConversationMemoryEnabled(JSONObject task)throws Exception{if(!conversationRepository.personalMemoryControls(task.getString("conversationId")).getBoolean("enabled"))throw new SecurityException("此对话已关闭个人记忆，不能提交新的记忆或偏好");}
     private JSONObject requireSkillProposalCurrentTask(String id,String run,int epoch)throws Exception {
         JSONObject task=required(id);requirePrivateOwner(task);if(!"assistant".equals(task.optString("kind"))||task.has("origin")||!run.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch")||task.optString("conversationId").isBlank())throw new SecurityException("对话草稿不属于原私人会话执行");return task;
     }
@@ -440,7 +441,7 @@ public final class TaskStore {
     public synchronized void requireSkillProposalPrepared(String id,String run,int epoch,String operation,JSONObject arguments,RunControl original)throws Exception {requireConversationProposalPrepared(ConversationDraftKind.SKILL,id,run,epoch,operation,arguments,original);}
     public synchronized void requireMemoryProposalPrepared(String id,String run,int epoch,String operation,JSONObject arguments,RunControl original)throws Exception {requireConversationProposalPrepared(ConversationDraftKind.MEMORY,id,run,epoch,operation,arguments,original);}
     private void requireConversationProposalPrepared(ConversationDraftKind kind,String id,String run,int epoch,String operation,JSONObject arguments,RunControl original)throws Exception {
-        requireSkillProposalCurrentTask(id,run,epoch);if(original==null||!original.matchesHostRun(id,run,epoch))throw new SecurityException("对话草稿缺少原运行控制器");checkCapability(id,run,epoch,kind.tool,original);
+        JSONObject task=requireSkillProposalCurrentTask(id,run,epoch);if(kind==ConversationDraftKind.MEMORY)requireConversationMemoryEnabled(task);if(original==null||!original.matchesHostRun(id,run,epoch))throw new SecurityException("对话草稿缺少原运行控制器");checkCapability(id,run,epoch,kind.tool,original);
         if(hasUnresolvedExcept(id,operation))throw new SecurityException("其他原动作尚未核对，不能创建对话草稿");
         try(Cursor row=db.rawQuery("SELECT arguments,state FROM operations WHERE task_id=? AND run_id=? AND operation_id=? AND tool=?",new String[]{id,run,operation,kind.tool})){
             if(!row.moveToFirst()||!"prepared".equals(row.getString(1))||!capabilityFingerprint(arguments).equals(capabilityFingerprint(new JSONObject(row.getString(0)))))throw new SecurityException("对话草稿参数或原 prepared 状态已变化");
@@ -458,7 +459,7 @@ public final class TaskStore {
      * retirement SQL must commit before MemoryBook file writes; an outer SQL transaction
      * would undo the retirement after the file changed. The mutation may retire its own source. */
     public synchronized <T>T withMemoryProposalSourceCurrent(String id,String run,int epoch,String conversation,JSONArray selected,java.util.concurrent.Callable<T> action)throws Exception {
-        if(db.inTransaction())throw new SecurityException("原记忆来源核对不能包在可回滚的外层事务内");preparedConversationUserRefs(id,run,epoch,conversation,selected);return action.call();
+        if(db.inTransaction())throw new SecurityException("原记忆来源核对不能包在可回滚的外层事务内");requireConversationMemoryEnabled(requireSkillProposalCurrentTask(id,run,epoch));preparedConversationUserRefs(id,run,epoch,conversation,selected);return action.call();
     }
     /** Audit reads retain the exact original run and operation even after source withdrawal. */
     public synchronized JSONObject skillProposalForOwner(String id,String run,int epoch,String operation)throws Exception{return conversationProposalForOwner(ConversationDraftKind.SKILL,id,run,epoch,operation);}
@@ -471,7 +472,16 @@ public final class TaskStore {
             JSONObject arguments=new JSONObject(row.getString(0)),receipt=new JSONObject(row.getString(2)),proposal=receipt.getJSONObject(kind.proposalKey);
             if(!kind.format.equals(proposal.optString("format"))||!id.equals(proposal.optString("taskId"))||!run.equals(proposal.optString("runId"))||epoch!=proposal.optInt("epoch")||!operation.equals(proposal.optString("operationId"))||!task.optString("conversationId").equals(proposal.optString("conversationId"))||!kind.digest(arguments).equals(proposal.optString("proposalDigest"))||!arguments.getString("action").equals(proposal.optString("action")))throw new SecurityException("原提案内容或身份不可核对");
             JSONObject apply=receipt.optJSONObject(kind.applyKey);if(apply==null)apply=new JSONObject().put("status","pending_owner").put("replayAllowed",false);
-            return new JSONObject().put("taskId",id).put("runId",run).put("epoch",epoch).put("operationId",operation).put("conversationId",task.getString("conversationId")).put("arguments",arguments).put("proposal",proposal).put("apply",apply).put("executionAuthorized",false);
+            JSONObject result=new JSONObject().put("taskId",id).put("runId",run).put("epoch",epoch).put("operationId",operation).put("conversationId",task.getString("conversationId")).put("arguments",arguments).put("proposal",proposal).put("apply",apply).put("executionAuthorized",false);
+            if(kind==ConversationDraftKind.MEMORY){
+                JSONObject undo=receipt.optJSONObject("memoryDraftUndo");if(receipt.has("memoryDraftUndo")&&undo==null)throw new SecurityException("原撤销记录不可核对，不能重新领取");
+                if(undo!=null){
+                    if(!id.equals(undo.optString("taskId"))||!run.equals(undo.optString("runId"))||epoch!=undo.optInt("epoch")||!operation.equals(undo.optString("operationId"))
+                            ||!proposal.getString("proposalDigest").equals(undo.optString("proposalDigest"))||!Boolean.FALSE.equals(undo.opt("replayAllowed"))||!Boolean.FALSE.equals(undo.opt("executionAuthorized")))throw new SecurityException("原撤销身份不可核对");
+                    TaskExecutionScope.exactLong(undo,"claimedAt",1,Long.MAX_VALUE);dev.pocketengine.features.memory.ConversationMemoryReceipt.requireUndo(proposal,apply,undo);
+                }
+                result.put("undo",undo==null?new JSONObject().put("status","not_requested").put("replayAllowed",false):undo);
+            }return result;
         }
     }
     private void saveConversationProposalApply(ConversationDraftKind kind,String id,String run,String operation,JSONObject apply)throws Exception {
@@ -482,7 +492,7 @@ public final class TaskStore {
     public synchronized boolean claimMemoryProposalApplyForOwner(String id,String run,int epoch,String operation,String proposalDigest,String reviewDigest)throws Exception{return claimConversationProposalApply(ConversationDraftKind.MEMORY,id,run,epoch,operation,proposalDigest,reviewDigest);}
     private boolean claimConversationProposalApply(ConversationDraftKind kind,String id,String run,int epoch,String operation,String proposalDigest,String reviewDigest)throws Exception {
         if(db.inTransaction()||!reviewDigest.matches("[a-f0-9]{64}"))throw new SecurityException("原确认必须独立提交确定的审阅身份");
-        db.beginTransaction();try{requireSkillProposalCurrentTask(id,run,epoch);JSONObject current=conversationProposalForOwner(kind,id,run,epoch,operation);if(!proposalDigest.equals(current.getJSONObject("proposal").getString("proposalDigest")))throw new SecurityException("原提案已变化");if(!"pending_owner".equals(current.getJSONObject("apply").getString("status"))){db.setTransactionSuccessful();return false;}
+        db.beginTransaction();try{JSONObject task=requireSkillProposalCurrentTask(id,run,epoch);if(kind==ConversationDraftKind.MEMORY)requireConversationMemoryEnabled(task);JSONObject current=conversationProposalForOwner(kind,id,run,epoch,operation);if(!proposalDigest.equals(current.getJSONObject("proposal").getString("proposalDigest")))throw new SecurityException("原提案已变化");if(!"pending_owner".equals(current.getJSONObject("apply").getString("status"))){db.setTransactionSuccessful();return false;}
             saveConversationProposalApply(kind,id,run,operation,new JSONObject().put("status","applying_unknown").put("proposalDigest",proposalDigest).put("reviewDigest",reviewDigest).put("claimedAt",System.currentTimeMillis()).put("accepted",JSONObject.NULL).put("replayAllowed",false));db.setTransactionSuccessful();return true;
         }finally{db.endTransaction();}
     }
@@ -499,6 +509,40 @@ public final class TaskStore {
             String previous=apply.getString("status");if(java.util.Set.of("saved","rejected","cancelled").contains(previous)){if(!previous.equals(phase))throw new SecurityException("原保存终态不能由迟到回执覆盖");db.setTransactionSuccessful();return;}
             if(!java.util.Set.of("applying_unknown","unknown").contains(previous))throw new SecurityException("原确认尚未领取，不能直接报告保存");
             JSONObject saved=new JSONObject(result.toString()).put("claimedAt",apply.getLong("claimedAt"));saveConversationProposalApply(kind,id,run,operation,saved);db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
+    }
+    /** A second outcome on the same original operation, never a replay of its saved create. */
+    public synchronized boolean claimMemoryProposalUndoForOwner(String id,String run,int epoch,String operation,String proposalDigest)throws Exception {
+        if(db.inTransaction())throw new SecurityException("原撤销领取必须独立落盘");
+        db.beginTransaction();try{
+            JSONObject current=conversationProposalForOwner(ConversationDraftKind.MEMORY,id,run,epoch,operation),proposal=current.getJSONObject("proposal");
+            if(!proposalDigest.equals(proposal.getString("proposalDigest")))throw new SecurityException("原记忆提案已变化");
+            JSONObject target=dev.pocketengine.features.memory.ConversationMemoryReceipt.createdRecordForUndo(proposal,current.getJSONObject("apply"));
+            if(!"not_requested".equals(current.getJSONObject("undo").getString("status"))){db.setTransactionSuccessful();return false;}
+            JSONObject claim=new JSONObject().put("taskId",id).put("runId",run).put("epoch",epoch).put("operationId",operation).put("proposalDigest",proposalDigest)
+                    .put("action","create").put("status","undoing_unknown").put("record",target).put("claimedAt",System.currentTimeMillis())
+                    .put("undone",JSONObject.NULL).put("mutationApplied",JSONObject.NULL).put("undoAvailable",false).put("replayAllowed",false).put("executionAuthorized",false);
+            saveMemoryProposalUndo(id,run,operation,claim);db.setTransactionSuccessful();return true;
+        }finally{db.endTransaction();}
+    }
+    private void saveMemoryProposalUndo(String id,String run,String operation,JSONObject undo)throws Exception {
+        JSONObject receipt;try(Cursor row=db.rawQuery("SELECT receipt FROM operations WHERE task_id=? AND run_id=? AND operation_id=? AND tool='memory_propose' AND state='receipt'",new String[]{id,run,operation})){
+            if(!row.moveToFirst()||row.isNull(0))throw new SecurityException("原记忆提案回执已变化");receipt=new JSONObject(row.getString(0));
+        }
+        receipt.put("memoryDraftUndo",undo);ContentValues values=new ContentValues();values.put("receipt",receipt.toString());
+        if(db.update("operations",values,"task_id=? AND run_id=? AND operation_id=? AND tool='memory_propose' AND state='receipt'",new String[]{id,run,operation})!=1)throw new SecurityException("原撤销阶段未能落盘");
+    }
+    public synchronized void recordMemoryProposalUndoForOwner(String id,String run,int epoch,String operation,String proposalDigest,JSONObject result)throws Exception {
+        db.beginTransaction();try{
+            JSONObject current=conversationProposalForOwner(ConversationDraftKind.MEMORY,id,run,epoch,operation),proposal=current.getJSONObject("proposal"),undo=current.getJSONObject("undo");String phase=result.getString("status");
+            if(!proposalDigest.equals(proposal.getString("proposalDigest"))||!proposalDigest.equals(undo.optString("proposalDigest"))||!proposalDigest.equals(result.optString("proposalDigest"))
+                    ||!id.equals(result.optString("taskId"))||!run.equals(result.optString("runId"))||epoch!=result.optInt("epoch")||!operation.equals(result.optString("operationId"))
+                    ||!java.util.Set.of("reverted","rejected","unknown").contains(phase)||!Boolean.FALSE.equals(result.opt("replayAllowed"))||!Boolean.FALSE.equals(result.opt("executionAuthorized")))throw new SecurityException("撤销回执不是原动作");
+            dev.pocketengine.features.memory.ConversationMemoryReceipt.requireUndo(proposal,current.getJSONObject("apply"),result);
+            String previous=undo.getString("status");
+            if(java.util.Set.of("reverted","rejected").contains(previous)){if(!previous.equals(phase))throw new SecurityException("原撤销终态不能由迟到结果覆盖");db.setTransactionSuccessful();return;}
+            if(!java.util.Set.of("undoing_unknown","unknown").contains(previous))throw new SecurityException("原撤销尚未领取，不能直接报告删除");
+            saveMemoryProposalUndo(id,run,operation,new JSONObject(result.toString()).put("claimedAt",undo.getLong("claimedAt")));db.setTransactionSuccessful();
         }finally{db.endTransaction();}
     }
     public synchronized JSONObject cancelSkillProposalForOwner(String id,String run,int epoch,String operation,String proposalDigest)throws Exception{return cancelConversationProposal(ConversationDraftKind.SKILL,id,run,epoch,operation,proposalDigest);}

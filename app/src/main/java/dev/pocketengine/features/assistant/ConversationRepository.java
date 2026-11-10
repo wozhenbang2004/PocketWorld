@@ -43,6 +43,9 @@ public final class ConversationRepository {
      * become a user utterance by copying the same words or assigning itself a source label. */
     public void requireUserSaidSpan(SourceRef ref,int offset,int chars,String sha,String claimed)throws Exception {requireUserSaidSpan(ref,offset,chars,sha,claimed,null);}
     public void requireUserSaidSpan(SourceRef ref,int offset,int chars,String sha,String claimed,Long assertedAt)throws Exception {
+        requireUserSaidSpan(ref,offset,chars,sha,claimed,assertedAt,null);
+    }
+    public void requireUserSaidSpan(SourceRef ref,int offset,int chars,String sha,String claimed,Long assertedAt,JSONObject assertion)throws Exception {
         if(!healthy||!active()||!"message".equals(ref.kind)||!"owner".equals(ref.ownerId)||!"private".equals(ref.spaceId)||offset<0||chars<1||chars>24000)throw new SecurityException("原主人发言证明不可用");
         CancellationSignal signal=new CancellationSignal();long started=System.nanoTime();var deadline=DEADLINES.schedule(signal::cancel,500,java.util.concurrent.TimeUnit.MILLISECONDS);
         try(Cursor row=db.rawQuery("SELECT s.role,s.revision,s.deleted,s.retired_through,s.context_retired,coalesce(c.deleted,1),m.body,m.body_bytes,m.body_sha,m.revision,m.at_ms FROM assistant_sources s JOIN meta a ON a.key='assistant_history_generation' AND a.value=s.generation LEFT JOIN assistant_conversations c ON c.generation=s.generation AND c.conversation_id=s.conversation_id LEFT JOIN assistant_messages m ON m.generation=s.generation AND m.source_id=s.source_id WHERE s.source_id=? AND m.body_bytes<=1048576 LIMIT 1",new String[]{ref.sourceId},signal)){
@@ -50,6 +53,7 @@ public final class ConversationRepository {
             if(assertedAt!=null&&(row.isNull(10)||row.getLong(10)!=assertedAt))throw new SecurityException("陈述时间不是原消息实际时间，未知不能补为今天");
             String text=row.getString(6);long end=(long)offset+chars;if(end>text.length()||offset>0&&Character.isLowSurrogate(text.charAt(offset))&&Character.isHighSurrogate(text.charAt(offset-1))||end<text.length()&&Character.isLowSurrogate(text.charAt((int)end))&&Character.isHighSurrogate(text.charAt((int)end-1)))throw new SecurityException("主人原话范围不完整");
             byte[] bytes=text.getBytes(StandardCharsets.UTF_8);String span=text.substring(offset,(int)end);if(bytes.length!=row.getLong(7)||!("sha256:"+shaBytes(bytes)).equals(row.getString(8))||!shaBytes(span.getBytes(StandardCharsets.UTF_8)).equals(sha)||!span.equals(claimed))throw new SecurityException("主人原话、hash或声称文字不一致，不能把推断当明确原话");
+            if(assertion!=null&&"owner".equals(assertion.optString("subjectId"))&&"owner".equals(assertion.optString("subjectType")))dev.pocketengine.features.memory.PersonalMemoryAttribution.requireOwnerClaim(text,offset,chars,assertion);
             if(!healthy||signal.isCanceled()||System.nanoTime()-started>500_000_000L)throw new SecurityException("原作者/原话证明超时，未采用模型自报标签");
         }finally{deadline.cancel(false);}
     }
@@ -542,11 +546,27 @@ public final class ConversationRepository {
     private void saveMessage(String gen,String conversation,JSONObject message,long importedSequence)throws Exception{
         String id=message.getString("id");JSONObject state=source(gen,id);if(state==null||state.getBoolean("deleted")||!conversation.equals(state.getString("conversationId"))||integer(message,"revision",1)!=state.getLong("revision")||!message.getString("role").equals(state.getString("role")))throw new SecurityException("原消息/来源修订不一致，未保存副本");
         JSONObject meta=new JSONObject(message.toString());String body=meta.getString("content");if(!StandardCharsets.UTF_8.newEncoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT).onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT).canEncode(body))throw new IllegalArgumentException("原文含不完整Unicode字符，未隐式替换后保存");byte[] bodyBytes=body.getBytes(StandardCharsets.UTF_8);meta.remove("content");meta.remove("ownerOriginalLocator");long sequence=importedSequence;
-        try(Cursor row=db.rawQuery("SELECT sequence FROM assistant_messages WHERE generation=? AND source_id=? LIMIT 1",new String[]{gen,id})){if(row.moveToFirst())sequence=row.getLong(0);}
+        boolean existing=false;
+        try(Cursor row=db.rawQuery("SELECT sequence,meta_json FROM assistant_messages WHERE generation=? AND source_id=? LIMIT 1",new String[]{gen,id})){if(row.moveToFirst()){existing=true;sequence=row.getLong(0);if(new JSONObject(row.getString(1)).optBoolean("personalMemoryExcluded"))meta.put("personalMemoryExcluded",true);}}
+        if(!existing&&importedSequence<0&&"user".equals(message.getString("role"))&&gen.equals(activeGeneration())&&!personalMemoryControls(header(conversation)).getBoolean("enabled"))meta.put("personalMemoryExcluded",true);
         if(sequence<0)try(Cursor row=db.rawQuery("SELECT max(n)+1 FROM (SELECT coalesce(max(sequence),0) n FROM assistant_messages WHERE generation=? AND conversation_id=? UNION ALL SELECT coalesce(max(sequence),0) n FROM assistant_import_records WHERE generation=? AND conversation_id=?)",new String[]{gen,conversation,gen,conversation})){row.moveToFirst();sequence=row.getLong(0);}
         ContentValues v=new ContentValues();v.put("generation",gen);v.put("source_id",id);v.put("conversation_id",conversation);v.put("sequence",sequence);v.put("revision",state.getLong("revision"));v.put("body",body);v.put("body_bytes",bodyBytes.length);v.put("body_sha","sha256:"+shaBytes(bodyBytes));v.put("meta_json",meta.toString());Object at=message.opt("at");if(at instanceof Byte||at instanceof Short||at instanceof Integer||at instanceof Long)v.put("at_ms",((Number)at).longValue());else v.putNull("at_ms");db.insertWithOnConflict("assistant_messages",null,v,SQLiteDatabase.CONFLICT_REPLACE);ConversationOrganization.changed(db,gen);
     }
     public boolean exists(String conversation)throws Exception{try(Cursor row=db.rawQuery("SELECT 1 FROM assistant_conversations WHERE generation=? AND conversation_id=? AND deleted=0 LIMIT 1",new String[]{activeGeneration(),conversation})){return row.moveToFirst();}}
+    /** Owner controls live in the existing conversation header, not a second preference store. */
+    public JSONObject personalMemoryControls(String conversation)throws Exception{return read(()->personalMemoryControls(header(conversation)));}
+    private static JSONObject personalMemoryControls(JSONObject header)throws Exception{
+        Object enabled=header.opt("personalMemoryEnabled"),revision=header.opt("personalMemoryRevision");
+        if(enabled!=null&&!(enabled instanceof Boolean)||revision!=null&&(!(revision instanceof Integer||revision instanceof Long)||((Number)revision).longValue()<0))throw new IllegalStateException("此对话的个人记忆设置不可核对");
+        return new JSONObject().put("conversationId",header.getString("conversationId")).put("enabled",enabled==null||Boolean.TRUE.equals(enabled)).put("revision",revision==null?0:((Number)revision).longValue());
+    }
+    public JSONObject setPersonalMemoryForOwner(String conversation,long revision,boolean enabled)throws Exception{
+        return transaction(()->{JSONObject header=header(conversation),before=personalMemoryControls(header);
+            if(revision<0||revision!=before.getLong("revision"))throw new IllegalStateException("此对话的个人记忆设置已变化，请刷新后保存");
+            header.put("personalMemoryEnabled",enabled).put("personalMemoryRevision",Math.addExact(revision,1));saveConversation(header);
+            return personalMemoryControls(header).put("saved",true).put("persisted",true);
+        });
+    }
     public JSONObject header(String conversation)throws Exception{try(Cursor size=db.rawQuery("SELECT length(CAST(header_json AS BLOB)) FROM assistant_conversations WHERE generation=? AND conversation_id=? AND deleted=0 LIMIT 1",new String[]{activeGeneration(),conversation})){if(size.moveToFirst()&&size.getLong(0)>MAX_BYTES)throw new ReadLimited("original_conversation_header_exceeds_inline_budget");}try(Cursor row=db.rawQuery("SELECT header_json FROM assistant_conversations WHERE generation=? AND conversation_id=? AND deleted=0 LIMIT 1",new String[]{activeGeneration(),conversation})){if(!row.moveToFirst())throw new IllegalArgumentException("对话不存在");return new JSONObject(row.getString(0));}}
     public JSONObject list(String cursor,int limit)throws Exception{
         if(limit<1||limit>20)throw new IllegalArgumentException("会话分页最多20条");JSONObject pos=decode(cursor);List<String> args=new ArrayList<>();args.add(activeGeneration());String where="generation=? AND deleted=0";

@@ -149,21 +149,43 @@ public final class SettingsStore {
     public synchronized JSONObject agentPreferences()throws Exception {
         requireConfirmed();return new JSONObject().put("enabled",prefs.getBoolean("allowAgentPreferences",false))
                 .put("revision",prefs.getLong("agentPreferencesRevision",1)).put("response_detail",prefs.getString("agentResponseDetail","standard"))
-                .put("operation_pace",prefs.getString("agentOperationPace","standard"));
+                .put("operation_pace",prefs.getString("agentOperationPace","standard"))
+                .put("language",prefs.getString("personalLanguage","auto"))
+                .put("conclusionFirst",prefs.getBoolean("personalConclusionFirst",false))
+                .put("includeExamples",prefs.getBoolean("personalIncludeExamples",false))
+                .put("initiative",prefs.getString("personalInitiative","balanced"));
     }
     public synchronized JSONObject saveAgentPreferences(boolean enabled,String detail,String pace,long expectedRevision)throws Exception {
         JSONObject old=agentPreferences();if(old.getLong("revision")!=expectedRevision)throw new SecurityException("偏好已由主人改变，请刷新原设置");
-        requireAgentPreference("response_detail",detail);requireAgentPreference("operation_pace",pace);long next=Math.addExact(expectedRevision,1);
+        validateAgentPreference("response_detail",detail);validateAgentPreference("operation_pace",pace);long next=Math.addExact(expectedRevision,1);
         commitConfirmed(prefs.edit().putBoolean("allowAgentPreferences",enabled).putString("agentResponseDetail",detail).putString("agentOperationPace",pace).putLong("agentPreferencesRevision",next));
         return new JSONObject().put("previous",old).put("current",agentPreferences()).put("reversible",true);
     }
-    public synchronized JSONObject setAgentPreference(String key,String value,long expectedRevision)throws Exception {
-        requireAgentPreference(key,value);JSONObject old=agentPreferences();if(!old.getBoolean("enabled"))throw new SecurityException("主人尚未开启对话修改可逆偏好");
-        return saveAgentPreferences(true,key.equals("response_detail")?value:old.getString("response_detail"),key.equals("operation_pace")?value:old.getString("operation_pace"),expectedRevision);
+    public synchronized JSONObject setAgentPreference(String key,Object value,long expectedRevision)throws Exception {
+        validateAgentPreference(key,value);JSONObject old=agentPreferences();if(!old.getBoolean("enabled"))throw new SecurityException("主人尚未开启对话修改可逆偏好");
+        if(expectedRevision<1||old.getLong("revision")!=expectedRevision)throw new SecurityException("偏好已由主人改变，请刷新原设置");
+        SharedPreferences.Editor edit=prefs.edit();editPersonalValues(edit,new JSONObject().put(key,value));
+        commitConfirmed(edit.putLong("agentPreferencesRevision",Math.addExact(expectedRevision,1)),false);
+        return new JSONObject().put("previous",old).put("current",agentPreferences()).put("reversible",true);
     }
-    private static void requireAgentPreference(String key,String value){
-        boolean valid=key.equals("response_detail")?java.util.Set.of("concise","standard","detailed").contains(value):key.equals("operation_pace")&&java.util.Set.of("fast","standard","careful").contains(value);
-        if(!valid)throw new IllegalArgumentException("仅可修改白名单回复详略或普通操作节奏，值须来自当前选项");
+    /** Shared by the native store and its bounded model tool; identity and free-form instructions are absent. */
+    public static void validateAgentPreference(String key,Object value){
+        boolean valid=key!=null&&switch(key){
+            case "language"->value instanceof String&&java.util.Set.of("auto","zh-CN","en","ja").contains(value);
+            case "response_detail"->value instanceof String&&java.util.Set.of("concise","standard","detailed").contains(value);
+            case "operation_pace"->value instanceof String&&java.util.Set.of("fast","standard","careful").contains(value);
+            case "initiative"->value instanceof String&&java.util.Set.of("requested","balanced","proactive").contains(value);
+            case "conclusionFirst","includeExamples"->value instanceof Boolean;
+            default->false;
+        };
+        if(!valid)throw new IllegalArgumentException("仅可修改允许的交流与做事偏好，值和类型须来自当前选项");
+    }
+    public static JSONObject agentPreferenceChoices()throws Exception {
+        return new JSONObject().put("language",new JSONArray(new String[]{"auto","zh-CN","en","ja"}))
+                .put("response_detail",new JSONArray(new String[]{"concise","standard","detailed"}))
+                .put("conclusionFirst",new JSONArray().put(false).put(true)).put("includeExamples",new JSONArray().put(false).put(true))
+                .put("operation_pace",new JSONArray(new String[]{"fast","standard","careful"}))
+                .put("initiative",new JSONArray(new String[]{"requested","balanced","proactive"}));
     }
 
     /** The owner's own settings share the existing preference revision and two original keys.
@@ -204,38 +226,48 @@ public final class SettingsStore {
             default->throw new IllegalArgumentException("请选择资料、交流偏好或做事偏好");
         };
         if(values==null||values.length()==0)throw new IllegalArgumentException("没有待保存的资料或偏好");
-        SharedPreferences.Editor edit=prefs.edit();
         for(var fields=values.keys();fields.hasNext();){
-            String field=fields.next();
-            if(!allowed.contains(field))throw new IllegalArgumentException("只能保存当前分组中的资料或偏好");
+            if(!allowed.contains(fields.next()))throw new IllegalArgumentException("只能保存当前分组中的资料或偏好");
+        }
+        SharedPreferences.Editor edit=prefs.edit();editPersonalValues(edit,values);
+        commitConfirmed(edit.putLong("agentPreferencesRevision",Math.addExact(expectedRevision,1)),false);
+        return new JSONObject().put("saved",true).put("persisted",true).put("profile",personalProfile());
+    }
+    /** The same field rules apply to owner edits and portable definitions; no revision or opt-in is portable. */
+    static Object checkedPersonalValue(JSONObject values,String field)throws Exception {
+        return switch(field){
+            case "nickname","addressAs"->personalText(values,field,80);
+            case "about"->personalText(values,field,2000);
+            case "avatarDataUrl"->personalAvatar(values);
+            case "instructions"->personalText(values,field,4000);
+            case "language","response_detail","operation_pace","initiative"->{String value=personalText(values,field,32);validateAgentPreference(field,value);yield value;}
+            case "conclusionFirst","includeExamples"->{Object value=values.opt(field);validateAgentPreference(field,value);yield value;}
+            default->throw new IllegalArgumentException("不支持的个人设置");
+        };
+    }
+    private static void editPersonalValues(SharedPreferences.Editor edit,JSONObject values)throws Exception {
+        for(var fields=values.keys();fields.hasNext();){
+            String field=fields.next();Object value=checkedPersonalValue(values,field);
             switch(field){
-                case "nickname"->edit.putString("personalNickname",personalText(values,field,80));
-                case "addressAs"->edit.putString("personalAddressAs",personalText(values,field,80));
-                case "about"->edit.putString("personalAbout",personalText(values,field,2000));
-                case "avatarDataUrl"->edit.putString("personalAvatarDataUrl",personalAvatar(values));
-                case "language"->edit.putString("personalLanguage",personalChoice(values,field,java.util.Set.of("auto","zh-CN","en","ja")));
-                case "response_detail"->{String value=personalText(values,field,32);requireAgentPreference(field,value);edit.putString("agentResponseDetail",value);}
-                case "conclusionFirst"->edit.putBoolean("personalConclusionFirst",personalBoolean(values,field));
-                case "includeExamples"->edit.putBoolean("personalIncludeExamples",personalBoolean(values,field));
-                case "instructions"->edit.putString("personalInstructions",personalText(values,field,4000));
-                case "operation_pace"->{String value=personalText(values,field,32);requireAgentPreference(field,value);edit.putString("agentOperationPace",value);}
-                case "initiative"->edit.putString("personalInitiative",personalChoice(values,field,java.util.Set.of("requested","balanced","proactive")));
+                case "nickname"->edit.putString("personalNickname",(String)value);
+                case "addressAs"->edit.putString("personalAddressAs",(String)value);
+                case "about"->edit.putString("personalAbout",(String)value);
+                case "avatarDataUrl"->edit.putString("personalAvatarDataUrl",(String)value);
+                case "language"->edit.putString("personalLanguage",(String)value);
+                case "response_detail"->edit.putString("agentResponseDetail",(String)value);
+                case "conclusionFirst"->edit.putBoolean("personalConclusionFirst",(Boolean)value);
+                case "includeExamples"->edit.putBoolean("personalIncludeExamples",(Boolean)value);
+                case "instructions"->edit.putString("personalInstructions",(String)value);
+                case "operation_pace"->edit.putString("agentOperationPace",(String)value);
+                case "initiative"->edit.putString("personalInitiative",(String)value);
                 default->throw new IllegalArgumentException("不支持的个人设置");
             }
         }
-        commitConfirmed(edit.putLong("agentPreferencesRevision",Math.addExact(expectedRevision,1)),false);
-        return new JSONObject().put("saved",true).put("persisted",true).put("profile",personalProfile());
     }
     private static String personalText(JSONObject values,String field,int maximum)throws Exception {
         Object raw=values.opt(field);
         if(!(raw instanceof String)||((String)raw).length()>maximum||((String)raw).indexOf('\u0000')>=0)throw new IllegalArgumentException("个人设置字段无效或超过长度限制："+field);
         return ((String)raw).trim();
-    }
-    private static String personalChoice(JSONObject values,String field,java.util.Set<String> choices)throws Exception {
-        String value=personalText(values,field,32);if(!choices.contains(value))throw new IllegalArgumentException("请选择当前支持的偏好选项："+field);return value;
-    }
-    private static boolean personalBoolean(JSONObject values,String field)throws Exception {
-        Object value=values.opt(field);if(!(value instanceof Boolean))throw new IllegalArgumentException("请明确选择偏好开关："+field);return (Boolean)value;
     }
     private static String personalAvatar(JSONObject values)throws Exception {
         String value=personalText(values,"avatarDataUrl",300000);if(value.isEmpty())return value;
@@ -881,8 +913,8 @@ public final class SettingsStore {
                 ModelBinding binding=apiCatalogBinding();if(binding!=null)legacy=legacy.withNativeCatalog(binding,ReasoningOptions.fromJson(new JSONObject(prefs.getString("modelReasoning",ReasoningOptions.DEFAULT.toJson().toString()))),prefs.getInt("modelImageTokenReserve",0));
                 connections.put(OwnerSettingsBackup.api(binding==null?"legacy-api":binding.connectionId(),"原API连接",legacy));
             }
-            JSONObject groups=modelGroupsDocument(),preferences=agentPreferences();
-            JSONObject content=new JSONObject().put("preferences",new JSONObject().put("response_detail",preferences.getString("response_detail")).put("operation_pace",preferences.getString("operation_pace")))
+            JSONObject groups=modelGroupsDocument(),preferences=personalProfile();preferences.remove("revision");
+            JSONObject content=new JSONObject().put("preferences",OwnerSettingsBackup.checkedPreferences(preferences))
                     .put("apiConnections",connections).put("modelGroups",groups.getJSONArray("groups")).put("workProfiles",workProfilesDocument().getJSONArray("profiles")).put("sourcePurposeBindings",groups.getJSONObject("purposeBindings"));
             for(String[] exclusion:new String[][]{{"credentials","API密钥、SecretVault、OAuth账号会话与登录状态不导出。"},{"currentSelections","当前模型选择、用途绑定和轻量路由不自动应用到新设备；归档保留原用途引用供核对。"},{"devicePermissions","HTTP明文许可、图像上传/本机观察、任务播报与对话改偏好开关不恢复为开启。"},{"installedAuthorities","插件/扩展安装审批、设备配对、目标信任和旧任务许可不恢复；工作配置保留待重新绑定的原引用。"}})omitted.put(new JSONObject().put("id",exclusion[0]).put("reason",exclusion[1]));
             original.checkpoint();return OwnerSettingsBackup.checked(OwnerConfigurationBackupSections.create("settings",content,omitted));
@@ -904,10 +936,13 @@ public final class SettingsStore {
         JSONArray conflicts=new JSONArray();
         for(int i=0;i<added.length();i++){JSONObject row=added.getJSONObject(i);if(api!=null&&api.rows.containsKey(row.getJSONObject("config").getJSONObject("capabilityBinding").getString("connectionId")))throw new SecurityException("原设置恢复身份已存在，请查询原动作");if(api!=null)for(ApiConnectionProfile local:api.rows.values())if(local.name.equals(row.getString("name")))conflicts.put(new JSONObject().put("kind","api").put("name",local.name).put("existingId",local.id()));}
         for(String kind:new String[]{"modelGroups","workProfiles"}){JSONArray incoming=plan.getJSONArray(kind),existing=kind.equals("modelGroups")?groups:work;for(int i=0;i<incoming.length();i++)for(int n=0;n<existing.length();n++){String key=kind.equals("modelGroups")?"groupId":"profileId";if(incoming.getJSONObject(i).getString(key).equals(existing.getJSONObject(n).getString(key)))throw new SecurityException("原设置恢复身份已存在，请查询原动作");if(incoming.getJSONObject(i).getString("name").equals(existing.getJSONObject(n).getString("name")))conflicts.put(new JSONObject().put("kind",kind).put("name",incoming.getJSONObject(i).getString("name")).put("existingId",existing.getJSONObject(n).getString(key)));}}
-        return new JSONObject().put("counts",new JSONObject().put("apiConnections",added.length()).put("modelGroups",plan.getJSONArray("modelGroups").length()).put("workProfiles",plan.getJSONArray("workProfiles").length()).put("preferences",2))
+        JSONObject personal=OwnerSettingsBackup.preferencesPreview(plan.getJSONObject("preferences"));
+        return new JSONObject().put("counts",new JSONObject().put("apiConnections",added.length()).put("modelGroups",plan.getJSONArray("modelGroups").length()).put("workProfiles",plan.getJSONArray("workProfiles").length()).put("preferences",personal.getJSONArray("fields").length()))
                 .put("sameNameConflicts",conflicts).put("mergeMode","new_disabled_identities").put("identities",plan.getJSONArray("rows")).put("requiresRecreation",plan.getJSONArray("requiresRecreation"))
                 .put("restoredEnabled",false).put("restoresSecrets",false).put("workProfilesRequireRebinding",true).put("currentModelSelectionChanged",false).put("purposeBindingsChanged",false)
-                .put("preferences",plan.getJSONObject("preferences")).put("agentPreferenceEditingEnabled",false);
+                .put("preferences",personal.getJSONObject("values")).put("preferenceFields",personal.getJSONArray("fields"))
+                .put("completePersonalProfile",personal.getBoolean("completePersonalProfile")).put("avatarIncluded",personal.getBoolean("avatarIncluded")).put("avatarConfigured",personal.getBoolean("avatarConfigured"))
+                .put("agentPreferenceEditingEnabled",false);
     }
     /** The reservation is acquired at owner confirmation, before FeatureHost submits its original worker. */
     public OwnerConfigurationBackupSections.Review reviewBackupForOwner(JSONObject selected,String action,RunControl original)throws Exception {
@@ -935,7 +970,8 @@ public final class SettingsStore {
                     java.util.List<String> stale=new java.util.ArrayList<>();origins.keys().forEachRemaining(key->{if(!live.contains(key))stale.add(key);});for(String key:stale)origins.remove(key);
                     String digest=section.getString("sectionDigest");JSONArray identities=plan.getJSONArray("rows");for(int i=0;i<identities.length();i++){JSONObject row=identities.getJSONObject(i);origins.put(archiveOriginKey(row),OwnerConfigurationBackupSections.receipt(action,digest,row.getString("kind")+":"+row.getString("sourceId")));}
                     origins.put("preferences",OwnerConfigurationBackupSections.receipt(action,digest,"preferences"));if(origins.length()>97||origins.toString().getBytes(StandardCharsets.UTF_8).length>65536)throw new SecurityException("设置恢复来源记录超限");
-                    JSONObject preferences=plan.getJSONObject("preferences");edit.putString("ownerConfigurationArchiveOrigins",origins.toString()).putBoolean("allowAgentPreferences",false).putString("agentResponseDetail",preferences.getString("response_detail")).putString("agentOperationPace",preferences.getString("operation_pace")).putLong("agentPreferencesRevision",Math.addExact(prefs.getLong("agentPreferencesRevision",1),1));
+                    editPersonalValues(edit,plan.getJSONObject("preferences"));
+                    edit.putString("ownerConfigurationArchiveOrigins",origins.toString()).putBoolean("allowAgentPreferences",false).putLong("agentPreferencesRevision",Math.addExact(prefs.getLong("agentPreferencesRevision",1),1));
                     original.checkpoint();commitConfirmed(edit);return queryBackupForOwner(section,action,original);
                 }});}finally{original.removeCancelAction(cancellation);accepted.close();}
             }

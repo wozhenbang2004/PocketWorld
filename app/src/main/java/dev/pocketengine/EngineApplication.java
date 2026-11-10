@@ -2202,9 +2202,9 @@ public final class EngineApplication extends Application implements dev.pocketen
             combined=new dev.pocketengine.features.remote.RemoteTaskCapabilities(combined,tasks,features,(dev.pocketengine.features.remote.RemoteModule)remoteExecution,id,run,epoch,original);
         combined=dev.pocketengine.phone.observation.PhoneTextTargetCapabilityPort.bindIfAvailable(combined,tasks,binding,original,selectedPhone,features::emitApproval);
         combined=dev.pocketengine.phone.observation.PhoneTreeCapabilityPort.bindIfAvailable(combined,tasks,binding,original,selectedPhone);
-        if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))&&"private".equals(task.optString("spaceId")))
-            combined=new dev.pocketengine.features.capabilities.AgentPreferencePort(settings,combined,binding,authority,original);
-        try{combined=bindRawTaskEvidence(combined,task,extensionBinding,original,inference);if(browserTaskHost!=null)combined=browserTaskHost.wrapIfRequested(binding,original,combined,outputCapture,selectedPhone);CapabilityPort exposed=pluginHost.bind(combined,extensionBinding,original);if(planRequest!=null&&planRequest.optString("executor").equals("workspace"))exposed=new dev.pocketengine.features.automation.PlanWorkspacePort(exposed,planRequest.getJSONObject("verification"),this::readAutomationArtifact,args->tasks.approveAutomationArtifactFreeze(id,run,args));if(outputCapture!=null)exposed=new dev.pocketengine.features.memory.ToolOutputSourcePort(exposed,outputCapture,original);exposed=dev.pocketengine.features.teams.TeamBudgetPort.forRoundParent(exposed,tasks,id,run,epoch,original);if(!tasks.ownerQuestionContinuationActive(id,run,epoch,original)&&!tasks.approvedCapabilityContinuationActive(id,run,epoch,original))tasks.authorizeTools(id,run,toolNames(exposed.tools()));if(personalPermissionScope)exposed=new dev.pocketengine.features.capabilities.ToolPermissionPolicyPort(exposed,tasks,binding,()->settings.getEffectivePermissionPolicy(permissionConversation),settings::permissionPolicyRevision,inference,features::emitApproval,selectedPhone!=null);return withExecutionPlanning(id,original,exposed);}
+        try{combined=bindRawTaskEvidence(combined,task,extensionBinding,original,inference);
+            if("owner".equals(task.optString("actorId"))&&"private".equals(task.optString("spaceId")))combined=new dev.pocketengine.features.capabilities.AgentPreferencePort(settings,combined,binding,authority,original,()->task.optJSONObject("origin")==null&&personalContextEnabled(task),()->personalContextEnabled(task)&&learningJobMemory().personalMemoryReadingEnabled(),projectMemory!=null);
+            if(browserTaskHost!=null)combined=browserTaskHost.wrapIfRequested(binding,original,combined,outputCapture,selectedPhone);CapabilityPort exposed=pluginHost.bind(combined,extensionBinding,original);if(planRequest!=null&&planRequest.optString("executor").equals("workspace"))exposed=new dev.pocketengine.features.automation.PlanWorkspacePort(exposed,planRequest.getJSONObject("verification"),this::readAutomationArtifact,args->tasks.approveAutomationArtifactFreeze(id,run,args));if(outputCapture!=null)exposed=new dev.pocketengine.features.memory.ToolOutputSourcePort(exposed,outputCapture,original);exposed=dev.pocketengine.features.teams.TeamBudgetPort.forRoundParent(exposed,tasks,id,run,epoch,original);if(!tasks.ownerQuestionContinuationActive(id,run,epoch,original)&&!tasks.approvedCapabilityContinuationActive(id,run,epoch,original))tasks.authorizeTools(id,run,toolNames(exposed.tools()));if(personalPermissionScope)exposed=new dev.pocketengine.features.capabilities.ToolPermissionPolicyPort(exposed,tasks,binding,()->settings.getEffectivePermissionPolicy(permissionConversation),settings::permissionPolicyRevision,inference,features::emitApproval,selectedPhone!=null);return withExecutionPlanning(id,original,exposed);}
         catch(Exception failure){combined.close();throw failure;}
     }
     /** Original conversation audit only. The selected native call/run is not the newest
@@ -3982,6 +3982,25 @@ public final class EngineApplication extends Application implements dev.pocketen
     }
     /** Native owner screen only. Deliberately absent from feature/model tool routes. */
     public JSONObject automaticUserLearningPolicy()throws Exception{return learningJobMemory().automaticLearningPolicy();}
+    public JSONObject personalMemoryControlsForOwner()throws Exception{return learningJobMemory().personalMemoryControlsForOwner();}
+    public synchronized JSONObject setPersonalMemoryReadingForOwner(long revision,boolean enabled)throws Exception{
+        JSONObject receipt=learningJobMemory().setPersonalMemoryReadingForOwner(revision,enabled);
+        features.clearWorkingMemory(new JSONObject().put("ownerId","owner").put("spaceId","private"));
+        return receipt;
+    }
+    public JSONObject conversationPersonalMemoryForOwner(String conversation)throws Exception{
+        EngineModule module=features.module("assistant");if(!(module instanceof dev.pocketengine.features.assistant.AssistantModule))throw new IllegalStateException("原对话暂不可用");
+        return ((dev.pocketengine.features.assistant.AssistantModule)module).personalMemoryControlsForOwner(conversation);
+    }
+    public synchronized JSONObject setConversationPersonalMemoryForOwner(String conversation,long revision,boolean enabled)throws Exception{
+        EngineModule module=features.module("assistant");if(!(module instanceof dev.pocketengine.features.assistant.AssistantModule))throw new IllegalStateException("原对话暂不可用");
+        JSONObject receipt=((dev.pocketengine.features.assistant.AssistantModule)module).setPersonalMemoryForOwner(conversation,revision,enabled);
+        features.clearWorkingMemory(new JSONObject().put("ownerId","owner").put("spaceId","private"));
+        return receipt;
+    }
+    private boolean personalContextEnabled(JSONObject task)throws Exception{
+        String conversation=task.optString("conversationId");return conversation.isEmpty()||conversationPersonalMemoryForOwner(conversation).getBoolean("enabled");
+    }
     public synchronized JSONObject setAutomaticUserLearningPolicy(long expectedRevision,boolean enabled,int maximum,boolean confirmedModelUse)throws Exception{
         if(enabled&&!confirmedModelUse)throw new SecurityException("请明确同意把有限真实主人原话交给当前模型生成待审候选");
         JSONObject selected=learningJobMemory().setAutomaticLearningPolicyForOwner(expectedRevision,enabled,maximum);

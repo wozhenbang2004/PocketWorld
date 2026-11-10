@@ -133,6 +133,14 @@ public final class NativeOwnerWorkflows {
         MemoryModule module=memory();JSONObject scope=ownerScope();host.synchronizeMemory(scope);
         switch(command){
             case "snapshot":return memorySnapshot();
+            case "createPersonalNote":{
+                for(var keys=payload.keys();keys.hasNext();)if(!Set.of("text","expiresAt").contains(keys.next()))throw new SecurityException("手工记忆只能提交正文与有效期");
+                Object raw=payload.get("text");if(!(raw instanceof String)||((String)raw).trim().isEmpty()||((String)raw).length()>4000)throw new IllegalArgumentException("请输入1至4000字记忆");
+                Long expires=payload.has("expiresAt")&&!payload.isNull("expiresAt")?positiveVersion(payload,"expiresAt"):null;
+                if(expires!=null&&expires<=System.currentTimeMillis())throw new IllegalArgumentException("请选择未来的有效期");
+                return module.savePersonalNoteForOwner(scope,((String)raw).trim(),expires);
+            }
+            case "retractCreatedReviewed":return sources.retractCreatedReviewed(scope,payload.getString("id"),positiveVersion(payload,"expectedRevision"));
             case "getParentRecord":{
                 JSONObject result=module.handle("get",new JSONObject().put("scope",scope).put("id",payload.getString("id")));
                 if(positiveVersion(payload,"revision")!=result.getJSONObject("record").getLong("revision"))throw new IllegalStateException("父记忆版本已变化，请重新读取当前候选来源");return result;

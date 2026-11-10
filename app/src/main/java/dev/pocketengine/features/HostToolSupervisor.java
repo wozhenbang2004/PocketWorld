@@ -33,6 +33,7 @@ public final class HostToolSupervisor implements CapabilityPort {
     private boolean admittedWorkingMemory;
     private String referenceQuery="",admittedReferences="";
     private long admittedMemoryRevision;
+    private String admittedPersonalMemory="";
     private dev.pocketengine.features.memory.TaskMemoryUse taskMemory;
     private dev.pocketengine.features.memory.TaskMemoryUse.Selection memorySelection;
     private final Map<String,dev.pocketengine.features.memory.TaskMemoryUse.Selection> toolMemorySelections=new LinkedHashMap<>();
@@ -277,6 +278,7 @@ public final class HostToolSupervisor implements CapabilityPort {
         return result;
     }
     @Override public boolean responseCurrent(RunControl original)throws Exception{
+        if(!admittedPersonalMemory.equals(TaskStore.capabilityFingerprint(personalMemoryState(tasks.get(taskId,false)))))return false;
         ownerWorkReadValidation();
         validateToolMemorySelections(original);
         if(workProfile!=null)try{workProfile.checkCurrent();}catch(Exception withdrawn){original.check();return false;}
@@ -293,6 +295,7 @@ public final class HostToolSupervisor implements CapabilityPort {
         return nativeDevicePort!=null&&nativeDevicePort.supports(tool)&&nativeDevicePort.stepReadSourceCurrent(tool,receipt,original);
     }
     @Override public void beforeModelRequest(String requestId,JSONArray messages,RunControl original)throws Exception{
+        if(!admittedPersonalMemory.equals(TaskStore.capabilityFingerprint(personalMemoryState(tasks.get(taskId,false)))))throw new dev.pocketengine.runtime.ModelGateway.RequestRefreshRequired();
         ownerWorkReadValidation();
         if(workProfile!=null)workProfile.checkCurrent();host.checkTeamResearchParentInputs(taskId,runId,epoch,original);
         validateToolMemorySelections(original);
@@ -355,17 +358,35 @@ public final class HostToolSupervisor implements CapabilityPort {
         }
         routes.clear();routes.putAll(next);
     }
-    @Override public JSONArray tools()throws Exception {refreshNativeDeviceRoutes();refreshPluginRoutes();JSONArray result=new JSONArray();for(Tool tool:routes.values())result.put(new JSONObject(tool.definition.toString()));if(nativeDevicePort!=null){JSONArray device=nativeDevicePort.tools();for(int i=0;i<device.length();i++){JSONObject definition=device.getJSONObject(i);if(routes.containsKey(definition.getJSONObject("function").getString("name")))throw new SecurityException("扩展和原native设备工具命名冲突");result.put(definition);}}return result;}
+    private JSONObject personalMemoryState(JSONObject task)throws Exception{
+        EngineModule memory=host.module("memory");JSONObject reading=memory instanceof dev.pocketengine.features.memory.MemoryModule?((dev.pocketengine.features.memory.MemoryModule)memory).personalMemoryControlsForOwner().getJSONObject("reading"):new JSONObject().put("enabled",false).put("revision",0);
+        JSONObject state=new JSONObject().put("projectScope",projectMemory!=null).put("readingEnabled",reading.getBoolean("enabled")).put("readingRevision",reading.getLong("revision")).put("conversationEnabled",true).put("conversationRevision",0);
+        String conversation=task==null?"":task.optString("conversationId");EngineModule assistant=host.module("assistant");
+        if(!conversation.isEmpty()&&assistant instanceof dev.pocketengine.features.assistant.AssistantModule){
+            JSONObject controls=((dev.pocketengine.features.assistant.AssistantModule)assistant).personalMemoryControlsForOwner(conversation);
+            state.put("conversationId",conversation).put("conversationEnabled",controls.getBoolean("enabled")).put("conversationRevision",controls.getLong("revision"));
+        }return state;
+    }
+    private static boolean readingAllowed(JSONObject policy){return policy.optBoolean("projectScope")||policy.optBoolean("readingEnabled")&&policy.optBoolean("conversationEnabled");}
+    private boolean memoryToolAllowed(String name)throws Exception{
+        if(name==null||!name.startsWith("memory_")||taskId==null||projectMemory!=null)return true;
+        JSONObject policy=personalMemoryState(tasks.get(taskId,false));
+        if(!policy.getBoolean("conversationEnabled"))return false;
+        return name.equals("memory_propose")||name.equals("memory_draft_sources")||policy.getBoolean("readingEnabled");
+    }
+    @Override public JSONArray tools()throws Exception {refreshNativeDeviceRoutes();refreshPluginRoutes();JSONArray result=new JSONArray();for(Tool tool:routes.values())if(memoryToolAllowed(tool.definition.getJSONObject("function").getString("name")))result.put(new JSONObject(tool.definition.toString()));if(nativeDevicePort!=null){JSONArray device=nativeDevicePort.tools();for(int i=0;i<device.length();i++){JSONObject definition=device.getJSONObject(i);if(routes.containsKey(definition.getJSONObject("function").getString("name")))throw new SecurityException("扩展和原native设备工具命名冲突");result.put(definition);}}return result;}
     @Override public JSONObject contextSnapshot(String query)throws Exception{
         JSONObject task=tasks.get(taskId,false);
         if(task==null||!runId.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch")||!"owner".equals(task.optString("actorId"))||!"private".equals(task.optString("spaceId"))||task.optBoolean("cancelRequested")||!task.optString("status").matches("preparing|running|queued"))throw new SecurityException("参考上下文的宿主任务身份已失效");
+        JSONObject personalPolicy=personalMemoryState(task);boolean personalReading=readingAllowed(personalPolicy);
         host.synchronizeMemory(privateScope());
         EngineModule module=host.module("memory");JSONObject snapshot=new JSONObject();
-        if(module instanceof dev.pocketengine.features.memory.MemoryModule){
+        if(personalReading&&module instanceof dev.pocketengine.features.memory.MemoryModule){
             boolean ownerContext=projectMemory==null&&task.optJSONObject("origin")==null;
             if(taskMemory!=null&&memoryFence!=null){memorySelection=ownerContext?taskMemory.prepareOwnerTaskRecall(privateScope(),memoryTask,query,16,12000,memoryFence):taskMemory.prepareTaskRecall(privateScope(),memoryTask,query,16,12000,memoryFence);snapshot=memorySelection.snapshot();}
             else snapshot=ownerContext?((dev.pocketengine.features.memory.MemoryModule)module).ownerContextSnapshot(privateScope(),query,16,12000):((dev.pocketengine.features.memory.MemoryModule)module).contextSnapshot(privateScope(),query,16,12000);
         }
+        else {memorySelection=null;synchronized(toolMemorySelections){toolMemorySelections.clear();historicalMemorySelections.clear();toolMemoryGeneration++;}}
         StringBuilder reference=new StringBuilder(snapshot.optString("context"));
         ownerWorkReferences=new LinkedHashMap<>();
         if(projectMemory==null&&workProfile==null&&task.optJSONObject("origin")==null&&!task.has("workProfileRef")&&!task.has("workProfileIntent")&&!task.has("developmentContext")&&!task.has("teamWriteScope")&&"assistant".equals(task.optString("kind"))&&!task.optString("conversationId").isEmpty()){
@@ -405,7 +426,7 @@ public final class HostToolSupervisor implements CapabilityPort {
             }
         }
         JSONArray memoryVersions=new JSONArray(),skillVersions=new JSONArray();JSONObject admittedSkillScope=null,admittedSkillAssetScope=null;
-        if(module instanceof dev.pocketengine.features.memory.MemoryModule){
+        if(personalReading&&module instanceof dev.pocketengine.features.memory.MemoryModule){
             if(projectMemory!=null)memoryVersions=projectMemory.currentRecordVersions();else{
                 JSONArray rows=module.handle("list",new JSONObject().put("scope",privateScope())).getJSONArray("records");
                 for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(row.optBoolean("active"))memoryVersions.put(new JSONObject().put("id",row.getString("id")).put("revision",row.getLong("revision")));}
@@ -422,7 +443,7 @@ public final class HostToolSupervisor implements CapabilityPort {
         }
         // Full live version identities only: validation is not limited to the query's top matches,
         // contains no memory/Skill body, and is consumed by the runner, not injected as instructions.
-        JSONObject validation=new JSONObject().put("memory",memoryVersions).put("historicalMemory",historicalReferenceValidation()).put("skills",skillVersions);snapshot.put("referenceValidation",validation);
+        JSONObject validation=new JSONObject().put("memory",memoryVersions).put("historicalMemory",historicalReferenceValidation()).put("skills",skillVersions).put("personalMemory",personalPolicy);snapshot.put("referenceValidation",validation);
         if(snapshot.optJSONObject("ownerContext")!=null)validation.put("ownerContextRevision",snapshot.getJSONObject("ownerContext").getString("revision"));
         JSONArray workReads=ownerWorkReadValidation();if(workReads.length()>0)validation.put("ownerWorkResults",workReads);
         if(admittedSkillAssetScope!=null)validation.put("skillScopeFingerprint",dev.pocketengine.features.skills.SkillSourcePolicy.scopeFingerprint(admittedSkillAssetScope));
@@ -433,7 +454,7 @@ public final class HostToolSupervisor implements CapabilityPort {
             reference.append(guidance.getString("context"));snapshot.put("workProfileInstructionRefs",guidance.getJSONArray("references"));
         }
         if(admittedSkillScope!=null)((SkillsModule)skills).requireTaskScopeForHost(tasks.get(taskId,false),admittedSkillScope);
-        referenceQuery=query;admittedReferences=TaskStore.capabilityFingerprint(validation);admittedMemoryRevision=host.memoryContextRevision();
+        referenceQuery=query;admittedReferences=TaskStore.capabilityFingerprint(validation);admittedMemoryRevision=host.memoryContextRevision();admittedPersonalMemory=TaskStore.capabilityFingerprint(personalPolicy);
         snapshot.remove("records");return snapshot.put("context",reference.toString()).put("authority","lower_priority_reference_data").put("executionAuthorized",false);
     }
     /** Native owner-selected task guidance only. Same SkillBook reader/currentness and original
@@ -456,10 +477,11 @@ public final class HostToolSupervisor implements CapabilityPort {
         skills.requireTaskScopeForHost(tasks.get(taskId,false),scope);workProfile.checkCurrent();return new JSONObject().put("context",prefix+bodies).put("references",metadata);
     }
     private static dev.pocketengine.runtime.ModelGateway.GatewayException instructionWindowExceeded(){return new dev.pocketengine.runtime.ModelGateway.GatewayException("所选任务指导全文超过原参考窗口，尚未派发；请减少指导引用或在原来源缩减文档后重新审阅。没有截断、跳过指令或扩大总上下文预算。");}
-    @Override public boolean supports(String name){return routes.containsKey(name)||nativeDevicePort!=null&&nativeDevicePort.supports(name);}
+    @Override public boolean supports(String name){try{return memoryToolAllowed(name)&&(routes.containsKey(name)||nativeDevicePort!=null&&nativeDevicePort.supports(name));}catch(Exception unavailable){return false;}}
     @Override public boolean sideEffecting(String name){if(nativeDevicePort!=null&&nativeDevicePort.supports(name))return nativeDevicePort.sideEffecting(name);Tool tool=routes.get(name);return tool==null||tool.write;}
     @Override public void validate(String name,JSONObject arguments)throws Exception{validate(name,arguments,null);}
     private void validate(String name,JSONObject arguments,dev.pocketengine.features.controlplane.WorkProfileToolSelection.PreparedTool profileCheck)throws Exception{
+        if(!memoryToolAllowed(name))throw new SecurityException("当前记忆读取或本对话个人记忆已关闭");
         if(name!=null&&name.matches("device_invoke_tool|device_delegate_goal|device_operation_get")&&nativeDeviceRoutes!=null){refreshNativeDeviceRoutes();if(nativeDevicePort==null||!nativeDevicePort.supports(name))throw new CapabilityPort.Unavailable();nativeDevicePort.validate(name,arguments);return;}
         Tool tool=routes.get(name);if(tool==null)throw new SecurityException("本任务没有该工具路由");
         if(tool.preset!=null&&!pluginCurrent(name,tool))throw new CapabilityPort.Unavailable();

@@ -19,7 +19,7 @@ internal class PocketWebMemoryHistory(private val controller: PocketWorldControl
     companion object {
         val COMMANDS = setOf("memoryHistory.open", "memoryHistory.close", "memoryHistory.search", "memoryHistory.record",
             "memoryHistory.cognition", "memoryHistory.source", "memoryHistory.review", "memoryHistory.conflict.review", "memoryHistory.confirm",
-            "taskMemory.search", "taskMemory.task", "taskMemory.receipt", "taskMemory.source", "taskMemory.source.focus", "taskMemory.replacements",
+            "taskMemory.search", "taskMemory.task", "taskMemory.answer", "taskMemory.receipt", "taskMemory.source", "taskMemory.source.focus", "taskMemory.replacements",
             "taskMemory.review", "taskMemory.confirm", "taskMemory.focus")
         private fun fields(value: JSONObject, vararg names: String) {
             require(value.keys().asSequence().all { it in names }) { "原来源参数包含未接入字段" }
@@ -223,8 +223,18 @@ internal class PocketWebMemoryHistory(private val controller: PocketWorldControl
                     } catch (failure: Exception) { done(null, failure.message) }
                 }
             }
+            "taskMemory.answer" -> {
+                fields(args, "sessionHandle", "messageId")
+                val session = session(args, "taskMemory"); retire(session)
+                val messageId = text(args, "messageId")
+                val reference = controller.webAnswerMemoryReference(messageId)
+                val original = JSONObject().put("taskId", reference.getString("taskId"))
+                    .put("messageId", messageId).put("binding", binding(reference))
+                done(JSONObject().put("taskHandle", pin(session, "task", original)).put("referenceAvailable", true), null)
+            }
             "taskMemory.receipt" -> {
                 fields(args, "taskHandle"); val (session, original) = selected(args, "taskHandle", "task"); val binding = original.optJSONObject("binding") ?: error("此原任务没有提供给模型的记忆凭据；不会用新检索代替")
+                if (original.has("messageId")) check(binding(controller.webAnswerMemoryReference(original.getString("messageId"))).toString() == binding.toString()) { "原回答的记忆引用已变化" }
                 call(session, "readTaskMemoryReceipt", binding, done) { value ->
                     val receipt = checkedReceipt(value); val frozen = copy(receipt)
                     rows(receipt.getJSONArray("records")).forEach { row -> row.put("readHandle", pinTaskRecord(session, JSONObject().put("receipt", frozen).put("record", copy(row)))) }
@@ -238,7 +248,13 @@ internal class PocketWebMemoryHistory(private val controller: PocketWorldControl
             "taskMemory.source" -> {
                 fields(args, "readHandle", "index", "offset"); val (session, original) = selected(args, "readHandle", "task-record")
                 val refs = original.getJSONObject("record").optJSONArray("sourceRefs") ?: JSONArray(); val source = copy(refs.getJSONObject(index(args, "index", refs.length()))); val offset = offset(args)
-                taskCurrent(session, original, done) { receipt, row -> call(session, "readTaskMemorySource", TaskMemoryEvidenceGuard.reviewed(receipt, row).put("sourceRef", source), done) { sourcePage(it, offset) } }
+                taskCurrent(session, original, done) { receipt, row ->
+                    call(session, "readTaskMemorySource", TaskMemoryEvidenceGuard.reviewed(receipt, row).put("sourceRef", source).put("offset", offset).put("maxChars", 8000), done) { value ->
+                        if (value.optString("status") == "current") check(value.optJSONObject("readRange")?.optInt("offset", -1) == offset && value.getString("text").length <= 8000) { "原文读取范围与本次选择不一致" }
+                        val next = value.opt("nextOffset")
+                        copy(value).put("offset", offset).put("hasMore", next is Number && next.toLong() > offset).put("sourceReadLimited", false)
+                    }
+                }
             }
             "taskMemory.source.focus" -> {
                 fields(args, "readHandle", "index"); val (session, original) = selected(args, "readHandle", "task-record")

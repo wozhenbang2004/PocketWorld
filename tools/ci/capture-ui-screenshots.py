@@ -453,7 +453,7 @@ def capture_route(path, slug, markers=(), *, dialog=False, scroll=True):
     # a bridge navigation request. Wait for the requested destination's actual
     # heading, not just two non-empty old snapshots.
     destination = {
-        "任务": ("任务",), "设备": ("设备连接",), "记忆": ("记忆工作区",),
+        "任务": ("任务",), "设备": ("设备连接",), "记忆": ("个人记忆",),
         "能力": ("技能与工具",), "团队": ("团队工作区",), "成果": ("文件与成果",),
         "项目": ("切换项目",), "自动化": ("自动化工作区",), "设置": ("设置",),
         "通知": ("远程通知中心",), "媒体": ("媒体工作区",),
@@ -533,9 +533,11 @@ def capture_catalog():
         (("设备", "电脑"), "devices-computer"),
         (("设备", "SSH"), "devices-ssh"),
         (("设备", "本机开发"), "devices-local"),
-        (("记忆", "待审阅"), "memory-pending"),
-        (("记忆", "旧事与来源"), "memory-history"),
-        (("记忆", "学习与经验"), "memory-learning"),
+        (("记忆", "记忆设置"), "personal-memory-settings"),
+        (("记忆", "过去的记忆"), "personal-memory-history"),
+        (("记忆", "项目记忆与更多管理", "待审阅"), "memory-pending"),
+        (("记忆", "项目记忆与更多管理", "旧事与来源"), "memory-history"),
+        (("记忆", "项目记忆与更多管理", "学习与经验"), "memory-learning"),
         (("能力", "插件"), "tools-plugins"),
         (("能力", "插件", "打开我的插件目录"), "plugins-catalog"),
         (("能力", "插件", "JS 扩展"), "plugins-js"),
@@ -562,6 +564,10 @@ def capture_catalog():
     ]
     # No form submission or credential entry is part of a screenshot path.
     forms = [
+        (("我的，个人资料与偏好", "编辑资料"), "personal-profile-edit"),
+        (("我的，个人资料与偏好", "交流偏好"), "personal-communication"),
+        (("我的，个人资料与偏好", "做事偏好"), "personal-behavior"),
+        (("记忆", "记住一件事"), "personal-memory-create"),
         (("对话", "执行权限"), "composer-permissions"),
         (("对话", "输入方式与选项"), "composer-options"),
         (("对话", "查看上下文："), "composer-context"),

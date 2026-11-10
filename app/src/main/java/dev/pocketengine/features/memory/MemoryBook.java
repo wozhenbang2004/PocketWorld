@@ -63,6 +63,7 @@ public final class MemoryBook {
     private boolean hierarchicalFormat;
     private boolean recordBarrierFormat;
     private boolean supersessionFormat;
+    private boolean candidateExpiryFormat;
     private MemoryRetrievalBackend retrieval;
 
     public MemoryBook(File file)throws Exception {this(file,null);}
@@ -74,7 +75,8 @@ public final class MemoryBook {
             if(file.length()>8_000_000)throw new IllegalStateException("记忆文件过大，请先导出检查");
             JSONObject stored=new JSONObject(new String(Files.readAllBytes(file.toPath()),StandardCharsets.UTF_8));
             long version=stored.has("version")?SourceRef.integer(stored,"version",1):1;
-            if(version<1||version>10)throw new IllegalStateException("不支持的记忆版本，未覆盖原文件");
+            if(version<1||version>11)throw new IllegalStateException("不支持的记忆版本，未覆盖原文件");
+            candidateExpiryFormat=version>=11;
             namespaceFormat=version>=10;appKnowledgeFormat=version>=8;assertionFormat=version>=9;
             archiveFormat=version>=7;
             learningFormat=version>=3;hierarchicalFormat=version>=4;recordBarrierFormat=version>=5;supersessionFormat=version>=6;
@@ -113,6 +115,7 @@ public final class MemoryBook {
                     for(int j=0;j<refs.length();j++)if(!sources.containsKey(SourceRef.fromJson(refs.getJSONObject(j)).key()))
                         throw new IllegalStateException("记忆来源状态缺失，未覆盖原文件");
                     restored.put("sourceRefs",refs);
+                    if(restored.has("expiresAt"))restored.put("expiresAt",checkedExpiry(restored.opt("expiresAt")));
                     if(restored.has("archiveOnly")||restored.has("importedFrom"))MemoryArchive.checkRestoredRecord(restored);
                     checkSupersessionMetadata(restored,version);MemoryAssertion.checkStored(restored,version);MemoryLearningRationale.checkStored(restored);
                     if(restored.has("identityParentIds")&&version<9)throw new IllegalStateException("身份来源依赖缺少原生格式保护");checkedIdentityParents(restored,false);
@@ -157,7 +160,7 @@ public final class MemoryBook {
                 if(blocked.blocked(original,type,0))continue; // Keep exact ACK/lineage, never allocate its withdrawn body.
                 JSONObject restored=new JSONObject().put("id",id).put("ownerId",scope.ownerId).put("spaceId",scope.spaceId).put("revision",1L).put("layer",original.getString("layer")).put("text",original.getString("text"))
                         .put("source",type.equals("record")?"主人从档案恢复的可读记录（旧来源未核对）":"主人从档案恢复的候选原文（不进入活动待审队列）").put("confidence",original.getDouble("confidence"))
-                        .put("core",false).put("sourceIds",new JSONArray()).put("sourceRefs",new JSONArray()).put("expiresAt",JSONObject.NULL).put("createdAt",now).put("updatedAt",now).put("formation","archive_restore").put("archiveOnly",true)
+                        .put("core",false).put("sourceIds",new JSONArray()).put("sourceRefs",new JSONArray()).put("expiresAt",checkedExpiry(original.opt("expiresAt"))).put("createdAt",now).put("updatedAt",now).put("formation","archive_restore").put("archiveOnly",true)
                         .put("importedFrom",new JSONObject().put("archiveImportId",nativeImportId).put("originalId",original.getString("id")).put("sectionDigest",digest).put("originalType",type))
                         .put("archiveEvidence",new JSONObject().put("originalType",type).put("original",evidence));
                 MemoryArchive.checkRestoredRecord(restored);records.put(id,restored);
@@ -197,6 +200,23 @@ public final class MemoryBook {
 
     public synchronized JSONObject save(JSONObject scope,JSONObject input,long now)throws Exception {
         return save(scope,input,now,false,false);
+    }
+    /** A duplicate is a navigation result for the native owner, never a new create receipt. */
+    public static final class PersonalMemoryDuplicateException extends IllegalStateException {
+        private final String record,candidate;
+        private PersonalMemoryDuplicateException(JSONObject record,JSONObject candidate){
+            super(record!=null?"已经记住了相同内容，请查看已有记忆":"已有相同内容的候选，请查看原候选");
+            this.record=record==null?null:record.toString();this.candidate=candidate==null?null:candidate.toString();
+        }
+        public JSONObject existingRecord()throws Exception{return record==null?null:new JSONObject(record);}
+        public JSONObject existingCandidate()throws Exception{return candidate==null?null:new JSONObject(candidate);}
+    }
+    /** Native explicit personal form only. Ordinary save/import/update keep their contracts. */
+    public synchronized JSONObject savePersonalNoteForOwner(JSONObject authenticatedScope,String text,String layer,Long expiresAt,long now)throws Exception {
+        Scope scope=MemoryArchive.ownerScope(authenticatedScope);JSONObject draft=PersonalMemorySemantics.ownerNote(text,layer,expiresAt,now);
+        JSONObject existing=personalRecordDuplicate(scope,draft,now,true);if(existing!=null)throw new PersonalMemoryDuplicateException(viewRecord(existing),null);
+        JSONObject candidate=personalCandidateDuplicate(scope,draft,null,now,true,true);if(candidate!=null)throw new PersonalMemoryDuplicateException(null,copy(candidate));
+        return save(authenticatedScope,draft,now,false,false,true);
     }
     /** Automatic extraction/import must use this entry, with real external evidence (direct or inherited). */
     public synchronized JSONObject importFromSources(JSONObject scope,JSONObject input,long now)throws Exception {
@@ -256,7 +276,7 @@ public final class MemoryBook {
         if(learningCandidates.size()>=MAX_LEARNING_CANDIDATES)throw new IllegalStateException("学习候选及完整审阅历史已达到200条，请先清理终态历史");
         String id=UUID.randomUUID().toString();
         JSONObject value=content.put("id",id).put("ownerId",scope.ownerId).put("spaceId",scope.spaceId)
-                .put("sourceRefs",refs).put("recordRefs",parents).put("expiresAt",snapshot.get("expiresAt"))
+                .put("sourceRefs",refs).put("recordRefs",parents).put("expiresAt",earlierExpiry(content.opt("expiresAt"),snapshot.opt("expiresAt")))
                 .put("formation","consolidation").put("status","pending").put("revision",1L)
                 .put("dedupKey",key).put("contentKey",key).put("validationStatus","unverified").put("createdAt",now).put("updatedAt",now);
         Map<String,JSONObject> beforeCandidates=new LinkedHashMap<>(learningCandidates);boolean previousFormat=hierarchicalFormat;
@@ -302,7 +322,7 @@ public final class MemoryBook {
         }
         JSONObject snapshot=consolidationSnapshot(value,value.getJSONArray("recordRefs"),now);
         if(!sameRefs(snapshot.getJSONArray("sourceRefs"),value.getJSONArray("sourceRefs")))throw new IllegalStateException("归纳的继承来源已变化，请重新提炼");
-        if(snapshot.optLong("expiresAt",Long.MAX_VALUE)!=value.optLong("expiresAt",Long.MAX_VALUE))throw new IllegalStateException("归纳来源有效期已变化，请重新提炼");
+        if(value.optLong("expiresAt",Long.MAX_VALUE)>snapshot.optLong("expiresAt",Long.MAX_VALUE))throw new IllegalStateException("归纳不能延长原来源有效期，请重新提炼");
     }
     private static boolean sameRefs(JSONArray a,JSONArray b)throws Exception {
         Set<SourceRef> left=new HashSet<>(),right=new HashSet<>();
@@ -386,6 +406,7 @@ public final class MemoryBook {
         String key=candidateKey(content,refs);if(appRevision!=null)key=TaskMemoryUse.digest(key+appRevision.toString());JSONObject duplicate=findCandidate(scope,key,null);
         // Retries must not reopen a rejection, overwrite a review edit, or duplicate acceptance.
         if(duplicate!=null)return copy(duplicate);
+        if(appRevision==null){duplicate=personalCandidateDuplicate(scope,content,null,now);if(duplicate!=null)return copy(duplicate);}
         if(appRevision!=null)for(JSONObject pending:learningCandidates.values()){
             JSONObject app=pending.optJSONObject("appKnowledge");if(scope.matches(pending)&&"pending".equals(pending.optString("status"))&&app!=null&&appRevision.getString("packageName").equals(app.optString("packageName"))&&appRevision.getString("appVersion").equals(app.optString("appVersion"))&&appRevision.getString("baseId").equals(app.optString("baseId"))&&appRevision.getLong("baseRevision")==app.optLong("baseRevision"))throw new IllegalStateException("此 App 基线已有待审修订，请先接受或拒绝");
         }
@@ -398,7 +419,7 @@ public final class MemoryBook {
         if(appRevision!=null){value.put("appKnowledge",copy(appRevision));appKnowledgeFormat=true;archiveFormat=true;}
         Map<String,JSONObject> before=new LinkedHashMap<>(records),beforeSources=new LinkedHashMap<>(sources),beforeCandidates=new LinkedHashMap<>(learningCandidates);
         sources.clear();sources.putAll(nextSources);removeInvalidSources();invalidateLearningCandidates(now);
-        if(value.has("assertion"))assertionFormat=true;learningCandidates.put(id,value);persistOrRollback(before,beforeSources,beforeCandidates);
+        if(value.has("assertion"))assertionFormat=true;if(!value.isNull("expiresAt"))candidateExpiryFormat=true;learningCandidates.put(id,value);persistOrRollback(before,beforeSources,beforeCandidates);
         return copy(value);
     }
 
@@ -422,12 +443,13 @@ public final class MemoryBook {
         // Keep the exact source lineage, but do not invent replacement typed meaning from prose.
         if(old.has("assertion")&&!changes.has("assertion")&&!old.getString("text").equals(content.getString("text")))content.remove("assertion");
         MemoryAssertion.requireEvidence(content.optJSONObject("assertion"),old.getJSONArray("sourceRefs"));requireAssertionSourceProof(content);if(old.has("appKnowledge"))checkAppDraft(content);JSONArray refs=old.getJSONArray("sourceRefs");verifyCandidateSources(scope,old,now);
+        if(old.has("recordRefs")){JSONObject parents=parentSnapshot(authenticatedScope,old.getJSONArray("recordRefs"),now,"assertion_review".equals(old.optString("formation"))?1:2);content.put("expiresAt",earlierExpiry(content.opt("expiresAt"),parents.opt("expiresAt")));}
         String key=candidateKey(content,refs,old.optJSONArray("recordRefs"));if(old.has("appKnowledge"))key=TaskMemoryUse.digest(key+old.getJSONObject("appKnowledge").toString());
         if(findCandidate(scope,key,id)!=null)throw new IllegalStateException("相同来源已有这条候选，请审阅已有候选");
         JSONObject value=copy(old);if(!content.has("assertion"))value.remove("assertion");for(java.util.Iterator<String> fields=content.keys();fields.hasNext();){String field=fields.next();value.put(field,content.get(field));}
         value.put("contentKey",key).put("revision",Math.addExact(revision,1)).put("updatedAt",now);
         Map<String,JSONObject> beforeCandidates=new LinkedHashMap<>(learningCandidates);
-        if(value.has("assertion"))assertionFormat=true;learningCandidates.put(id,value);persistOrRollback(new LinkedHashMap<>(records),new LinkedHashMap<>(sources),beforeCandidates);
+        if(value.has("assertion"))assertionFormat=true;if(!value.isNull("expiresAt"))candidateExpiryFormat=true;learningCandidates.put(id,value);persistOrRollback(new LinkedHashMap<>(records),new LinkedHashMap<>(sources),beforeCandidates);
         return copy(value);
     }
     /** Native identity selection only. Inherit exact donor dependencies through the original
@@ -485,13 +507,15 @@ public final class MemoryBook {
             return new JSONObject().put("candidate",copy(old)).put("record",copy(require(scope,old.getString("acceptedRecordId"))));
         }
         requirePending(old,revision);JSONArray refs=old.getJSONArray("sourceRefs");verifyCandidateSources(scope,old,now);
+        if(expiryTime(old.opt("expiresAt"))<=now)throw new IllegalStateException("这条候选已过有效期，请先核对并修改期限");
+        JSONObject duplicate=personalRecordDuplicate(scope,old,now);if(duplicate!=null)throw new PersonalMemoryDuplicateException(viewRecord(duplicate),null);
         if(records.size()>=MAX_RECORDS)throw new IllegalStateException("记忆已达到1000条，请先整理或删除");
         String recordId=UUID.randomUUID().toString();
         JSONObject record=new JSONObject().put("id",recordId).put("ownerId",scope.ownerId).put("spaceId",scope.spaceId)
                 .put("layer",old.getString("layer")).put("text",old.getString("text"))
                 .put("source","机主审阅接受的学习候选（内容与程序效果未经独立核实）")
                 .put("confidence",old.getDouble("confidence")).put("sourceIds",new JSONArray()).put("sourceRefs",new JSONArray(refs.toString()))
-                .put("core",false).put("revision",1).put("expiresAt",JSONObject.NULL).put("createdAt",now).put("updatedAt",now)
+                .put("core",false).put("revision",1).put("expiresAt",checkedExpiry(old.opt("expiresAt"))).put("createdAt",now).put("updatedAt",now)
                 .put("formation","reviewed_learning").put("learningCandidateId",id).put("validationStatus","unverified")
                 .put("applicability",old.getString("applicability"));
         requireAssertionSourceProof(old);if(old.has("assertion")){record.put("assertion",MemoryAssertion.checked(old.getJSONObject("assertion")));assertionFormat=true;}
@@ -577,6 +601,7 @@ public final class MemoryBook {
                     .put("revision",Math.addExact(old.getLong("revision"),1)).put("archivedAt",now);
             if("accepted".equals(status))marker.put("acceptedRecordId",old.getString("acceptedRecordId"));
             if(old.has("recordRefs"))marker.put("recordRefs",old.getJSONArray("recordRefs")).put("expiresAt",old.opt("expiresAt")==null?JSONObject.NULL:old.get("expiresAt")).put("formation",old.optString("formation","consolidation"));
+            else if(old.has("expiresAt"))marker.put("expiresAt",checkedExpiry(old.opt("expiresAt")));
             if(old.has("identityParentIds"))marker.put("identityParentIds",old.getJSONArray("identityParentIds"));
             markers.put(id,marker);
         }
@@ -600,7 +625,7 @@ public final class MemoryBook {
         if(old==null||!scope.matches(old))throw new IllegalArgumentException("当前空间没有这条拒绝记录");
         if(revision<1||revision!=old.getLong("revision"))throw new IllegalStateException("拒绝记录已改变，请刷新后再重新考虑");
         if(!"rejected".equals(old.getString(archived?"outcome":"status")))throw new IllegalStateException("只有拒绝项可以明确重新考虑");
-        JSONObject reconsidered=copy(draft);if(old.has("assertion")&&!reconsidered.has("assertion"))reconsidered.put("assertion",copy(old.getJSONObject("assertion")));
+        JSONObject reconsidered=copy(draft);if(old.has("assertion")&&!reconsidered.has("assertion"))reconsidered.put("assertion",copy(old.getJSONObject("assertion")));if(old.has("expiresAt")&&!reconsidered.has("expiresAt"))reconsidered.put("expiresAt",old.get("expiresAt"));
         JSONObject content=checkedDraft(reconsidered);JSONArray refs=old.getJSONArray("sourceRefs");MemoryAssertion.requireEvidence(content.optJSONObject("assertion"),refs);requireAssertionSourceProof(content);verifyCandidateSources(scope,old,now);
         if(!candidateKey(content,refs,old.optJSONArray("recordRefs")).equals(old.getString("contentKey")))throw new IllegalArgumentException("重新考虑必须对应最后审阅内容，不能借此释放其他拒绝项");
         if(archived&&learningCandidates.size()>=MAX_LEARNING_CANDIDATES)throw new IllegalStateException("待审区已满，请先清理终态历史");
@@ -611,7 +636,7 @@ public final class MemoryBook {
         if(old.has("recordRefs"))value.put("recordRefs",old.getJSONArray("recordRefs")).put("expiresAt",old.get("expiresAt")).put("formation",old.optString("formation","consolidation"));
         if(old.has("identityParentIds"))value.put("identityParentIds",old.getJSONArray("identityParentIds"));
         Map<String,JSONObject> beforeCandidates=new LinkedHashMap<>(learningCandidates),beforeHistory=new LinkedHashMap<>(candidateHistory);
-        candidateHistory.remove(id);learningCandidates.put(id,value);
+        candidateHistory.remove(id);learningCandidates.put(id,value);if(!value.has("recordRefs")&&!value.isNull("expiresAt"))candidateExpiryFormat=true;
         persistOrRollback(new LinkedHashMap<>(records),new LinkedHashMap<>(sources),beforeCandidates,beforeHistory,false);
         return copy(value);
     }
@@ -642,7 +667,7 @@ public final class MemoryBook {
     }
     private static void checkDraftKeys(JSONObject draft){
         if(draft==null)throw new IllegalArgumentException("必须提供学习候选内容");
-        for(java.util.Iterator<String> keys=draft.keys();keys.hasNext();){String key=keys.next();if(!Set.of("text","layer","reason","applicability","confidence","assertion").contains(key))
+        for(java.util.Iterator<String> keys=draft.keys();keys.hasNext();){String key=keys.next();if(!Set.of("text","layer","reason","applicability","confidence","assertion","expiresAt").contains(key))
             throw new IllegalArgumentException("候选正文不能设置身份、来源或审阅权限字段："+key); }
     }
     /** Native workflow may validate an actual model draft before journaling it. No save or grant. */
@@ -657,8 +682,16 @@ public final class MemoryBook {
             throw new IllegalArgumentException("候选可信度应为0至1的数字");
         JSONObject content=new JSONObject().put("layer",layer).put("text",candidateText(draft,"text",1,4000))
                 .put("reason",candidateText(draft,"reason",1,MAX_CANDIDATE_REASON_CHARS)).put("applicability",applicability).put("confidence",((Number)confidence).doubleValue());
-        if(draft.has("assertion"))content.put("assertion",MemoryAssertion.checked(draft.getJSONObject("assertion")));return content;
+        if(draft.has("assertion"))content.put("assertion",MemoryAssertion.checked(draft.getJSONObject("assertion")));
+        if(draft.has("expiresAt"))content.put("expiresAt",checkedExpiry(draft.opt("expiresAt")));return content;
     }
+    public static Object checkedExpiry(Object value){
+        if(value==null||value==JSONObject.NULL)return JSONObject.NULL;
+        if(!(value instanceof Number)||!Double.isFinite(((Number)value).doubleValue())||((Number)value).longValue()<=0||((Number)value).doubleValue()!=((Number)value).longValue())throw new IllegalArgumentException("有效期应为正整数毫秒时间戳，清空请传null");
+        return ((Number)value).longValue();
+    }
+    private static long expiryTime(Object value){Object checked=checkedExpiry(value);return checked==JSONObject.NULL?Long.MAX_VALUE:((Number)checked).longValue();}
+    private static Object earlierExpiry(Object requested,Object inherited){long value=Math.min(expiryTime(requested),expiryTime(inherited));return value==Long.MAX_VALUE?JSONObject.NULL:value;}
     private static String candidateText(JSONObject value,String field,int minimum,int maximum){
         Object text=value.opt(field);if(!(text instanceof String))throw new IllegalArgumentException(field+"必须为文字");
         return bounded((String)text,minimum,maximum,field);
@@ -666,7 +699,7 @@ public final class MemoryBook {
     private static JSONObject draftOf(JSONObject candidate)throws Exception {
         JSONObject draft=new JSONObject().put("text",candidate.getString("text")).put("layer",candidate.getString("layer"))
                 .put("reason",candidate.getString("reason")).put("applicability",candidate.getString("applicability")).put("confidence",candidate.get("confidence"));
-        if(candidate.has("assertion"))draft.put("assertion",copy(candidate.getJSONObject("assertion")));return draft;
+        if(candidate.has("assertion"))draft.put("assertion",copy(candidate.getJSONObject("assertion")));if(candidate.has("expiresAt"))draft.put("expiresAt",checkedExpiry(candidate.opt("expiresAt")));return draft;
     }
     private static String candidateKey(JSONObject draft,JSONArray refs)throws Exception {
         return candidateKey(draft,refs,null);
@@ -675,7 +708,8 @@ public final class MemoryBook {
         List<String> identities=new ArrayList<>();
         for(int i=0;i<refs.length();i++){SourceRef ref=SourceRef.fromJson(refs.getJSONObject(i));identities.add(new JSONArray().put(ref.key()).put(ref.revision).toString());}
         identities.sort(String::compareTo);
-        // Reason/confidence changes do not manufacture a new hypothesis; source order is immaterial.
+        // Reason/confidence/expiry changes do not manufacture a new hypothesis or reopen a
+        // rejection. The full native review digest and revision still pin the shown expiry.
         String identity=new JSONArray().put(draft.getString("layer")).put(draft.getString("text"))
                 .put(draft.getString("applicability")).put(new JSONArray(identities)).toString();
         if(draft.has("assertion"))identity=new JSONArray().put(identity).put(dev.pocketengine.features.local.project.ProjectSources.canonical(draft.getJSONObject("assertion"))).toString();
@@ -692,6 +726,32 @@ public final class MemoryBook {
         for(JSONObject value:candidateHistory.values())if(scope.matches(value)&&!value.optString("id").equals(excluding)
                 &&(key.equals(value.optString("dedupKey"))||key.equals(value.optString("contentKey"))))return value;
         return null;
+    }
+    private JSONObject personalRecordDuplicate(Scope scope,JSONObject proposed,long now)throws Exception {
+        return personalRecordDuplicate(scope,proposed,now,false);
+    }
+    private JSONObject personalRecordDuplicate(Scope scope,JSONObject proposed,long now,boolean nativeOwnerNoteDraft)throws Exception {
+        if(!"owner".equals(scope.ownerId)||!"private".equals(scope.spaceId)||!PersonalMemorySemantics.ownerAssertion(proposed.optJSONObject("assertion")))return null;
+        PersonalMemorySemantics.requirePersonalMemory(proposed);
+        Set<String> active=retrievalActiveIds(scope,now);
+        for(JSONObject row:records.values())if(scope.matches(row)&&active.contains(row.optString("id"))&&!row.has("appKnowledge")&&PersonalMemorySemantics.sameMeaning(row,proposed,nativeOwnerNoteDraft))return row;
+        return null;
+    }
+    private JSONObject personalCandidateDuplicate(Scope scope,JSONObject proposed,String excluding,long now)throws Exception {
+        return personalCandidateDuplicate(scope,proposed,excluding,now,false);
+    }
+    private JSONObject personalCandidateDuplicate(Scope scope,JSONObject proposed,String excluding,long now,boolean pendingOnly)throws Exception {
+        return personalCandidateDuplicate(scope,proposed,excluding,now,pendingOnly,false);
+    }
+    private JSONObject personalCandidateDuplicate(Scope scope,JSONObject proposed,String excluding,long now,boolean pendingOnly,boolean nativeOwnerNoteDraft)throws Exception {
+        if(!"owner".equals(scope.ownerId)||!"private".equals(scope.spaceId)||!PersonalMemorySemantics.ownerAssertion(proposed.optJSONObject("assertion")))return null;
+        PersonalMemorySemantics.requirePersonalMemory(proposed);
+        for(JSONObject row:learningCandidates.values()){
+            if(!scope.matches(row)||row.optString("id").equals(excluding)||row.has("recordRefs")||row.has("appKnowledge")||"invalidated".equals(row.optString("status"))
+                    ||pendingOnly&&!"pending".equals(row.optString("status"))
+                    ||expiryTime(row.opt("expiresAt"))<=now||!PersonalMemorySemantics.sameMeaning(row,proposed,nativeOwnerNoteDraft)||!candidateInvalidation(row).isEmpty())continue;
+            try{verifyCandidateSources(scope,row,now);}catch(InterruptedException cancelled){throw cancelled;}catch(Exception unavailable){continue;}return row;
+        }return null;
     }
     private static boolean suppressesKey(JSONObject value,String key){
         JSONArray keys=value.optJSONArray("suppressedKeys");for(int i=0;keys!=null&&i<keys.length();i++)if(key.equals(keys.optString(i)))return true;return false;
@@ -764,6 +824,8 @@ public final class MemoryBook {
             if(!id.matches("[0-9a-f-]{36}")||learningCandidates.containsKey(id)||!Set.of("pending","accepted","rejected","invalidated").contains(status))
                 throw new IllegalStateException("学习候选身份或状态无效，未覆盖原文件");
             long revision=SourceRef.integer(value,"revision",1);SourceRef.integer(value,"createdAt",0);SourceRef.integer(value,"updatedAt",0);
+            if(value.has("expiresAt"))value.put("expiresAt",checkedExpiry(value.opt("expiresAt")));
+            if(!value.has("recordRefs")&&!value.isNull("expiresAt")&&version<11)throw new IllegalStateException("候选有效期缺少安全格式版本，未忽略期限");
             JSONArray refs=checkedRefs(scope,value.get("sourceRefs"));
             if(value.has("recordRefs")){if(version<4)throw new IllegalStateException("归纳候选必须使用v4以上格式");checkedRecordRefs(value.getJSONArray("recordRefs"),"assertion_review".equals(value.optString("formation"))?1:2);}
             if(value.has("identityParentIds")&&version<9)throw new IllegalStateException("身份候选缺少原生格式保护");checkedIdentityParents(value,true);
@@ -808,6 +870,7 @@ public final class MemoryBook {
                     ||!"archived".equals(value.getString("status"))||!Set.of("accepted","rejected","forgotten").contains(outcome))
                 throw new IllegalStateException("候选去重标记身份或状态无效，未覆盖原文件");
             SourceRef.integer(value,"revision",3);SourceRef.integer(value,"archivedAt",0);
+            if(value.has("expiresAt"))value.put("expiresAt",checkedExpiry(value.opt("expiresAt")));
             JSONArray refs=checkedRefs(scope,value.get("sourceRefs"));
             if(value.has("recordRefs")){if(!hierarchicalFormat)throw new IllegalStateException("归纳去重标记必须使用v4格式");checkConsolidationMetadata(value);}
             if(value.has("identityParentIds")&&version<9)throw new IllegalStateException("身份去重标记缺少原生格式保护");checkedIdentityParents(value,true);
@@ -852,9 +915,7 @@ public final class MemoryBook {
         if(!origin.equals(s.spaceId))throw new IllegalArgumentException("跨空间材料不能自动写入此记忆空间");
         double confidence=input.optDouble("confidence",old==null?1:old.optDouble("confidence",1));
         if(!Double.isFinite(confidence)||confidence<0||confidence>1)throw new IllegalArgumentException("可信度应为0至1");
-        Object expiry=input.has("expiresAt")?input.opt("expiresAt"):old==null?JSONObject.NULL:old.opt("expiresAt");
-        if(expiry!=null&&expiry!=JSONObject.NULL&&(!(expiry instanceof Number)||((Number)expiry).longValue()<=0||((Number)expiry).doubleValue()!=((Number)expiry).longValue()))
-            throw new IllegalArgumentException("有效期应为正整数时间戳，清空请传null");
+        Object expiry=checkedExpiry(input.has("expiresAt")?input.opt("expiresAt"):old==null?JSONObject.NULL:old.opt("expiresAt"));
         String id=old==null?UUID.randomUUID().toString():old.getString("id");
         JSONArray sourceIds=input.optJSONArray("sourceIds");
         if(sourceIds==null)sourceIds=old==null?new JSONArray():old.optJSONArray("sourceIds");
@@ -1171,6 +1232,57 @@ public final class MemoryBook {
         Set<String> removed=forgetTargets(identity,id,evidence);JSONArray refs=removalRefs(identity,removed);
         receipt.record(new JSONArray(refs.toString())); // Failure aborts before memory/forget barriers change.
         return new JSONObject().put("deleted",forget(scope,id)).put("removedRefs",refs);
+    }
+    /** Native undo of an unchanged new personal record. This retires record dependencies only:
+     * the source's other memories, source revision and global forgottenThrough stay intact. */
+    public synchronized JSONObject retractCreatedReviewed(JSONObject authenticatedScope,String id,long expectedRevision,BeforeForget receipt,long now)throws Exception {
+        checkLearningTime(now);Scope scope=MemoryArchive.ownerScope(authenticatedScope);JSONObject created=reviewedRecord(scope,id,expectedRevision);
+        if(expectedRevision!=1||receipt==null||created.optBoolean("archiveOnly")||created.has("appKnowledge")||created.has("supersedes")
+                ||!("reviewed_learning".equals(created.optString("formation"))||"explicit_save".equals(created.optString("formation"))&&PersonalMemorySemantics.MANUAL_SOURCE.equals(created.optString("source"))))
+            throw new SecurityException("只能撤销这次尚未修改的新个人记忆；其他内容请使用纠正或遗忘");
+        Set<String> removed=retractTargets(scope,id);JSONArray refs=removalRefs(scope,removed);
+        retractBarriers(scope,removed); // Check capacity before retiring a model context.
+        receipt.record(new JSONArray(refs.toString()));reviewedRecord(scope,id,expectedRevision);
+        if(!removed.equals(retractTargets(scope,id))||!refs.toString().equals(removalRefs(scope,removed).toString()))throw new IllegalStateException("撤销期间记忆或派生版本发生变化，请刷新");
+        Map<String,JSONObject> barriers=retractBarriers(scope,removed); // Preserve any unrelated native callback changes.
+        Map<String,JSONObject> beforeRecords=new LinkedHashMap<>(records),beforeCandidates=new LinkedHashMap<>(learningCandidates),beforeHistory=new LinkedHashMap<>(candidateHistory),beforeBarriers=new LinkedHashMap<>(recordForgetBarriers);
+        boolean previousBarrierFormat=recordBarrierFormat;
+        try{
+            recordForgetBarriers.clear();recordForgetBarriers.putAll(barriers);recordBarrierFormat=true;
+            for(String target:removed)records.remove(target);
+            for(var entry:learningCandidates.entrySet()){
+                JSONObject old=entry.getValue();if(!scope.matches(old)||!"accepted".equals(old.optString("status"))||!removed.contains(old.optString("acceptedRecordId")))continue;
+                JSONObject rejected=copy(old).put("status","rejected").put("rejectionReason","主人撤销刚记住的内容")
+                        .put("rejectedFromRevision",old.getLong("revision")).put("revision",Math.addExact(old.getLong("revision"),1)).put("updatedAt",now);
+                rejected.remove("acceptedRecordId");rejected.remove("acceptedFromRevision");entry.setValue(rejected);
+            }
+            for(var entry:candidateHistory.entrySet()){
+                JSONObject old=entry.getValue();if(!scope.matches(old)||!"accepted".equals(old.optString("outcome"))||!removed.contains(old.optString("acceptedRecordId")))continue;
+                JSONObject marker=copy(old).put("outcome","rejected").put("revision",Math.addExact(old.getLong("revision"),1)).put("archivedAt",now);marker.remove("acceptedRecordId");entry.setValue(marker);
+            }
+            invalidateLearningCandidates(now);persist();
+            return new JSONObject().put("retracted",true).put("deleted",removed.size()).put("removedRefs",refs)
+                    .put("originalSourcesRetained",true).put("sourceForgetFloorChanged",false).put("executionAuthorized",false);
+        }catch(Exception failed){records.clear();records.putAll(beforeRecords);learningCandidates.clear();learningCandidates.putAll(beforeCandidates);candidateHistory.clear();candidateHistory.putAll(beforeHistory);recordForgetBarriers.clear();recordForgetBarriers.putAll(beforeBarriers);recordBarrierFormat=previousBarrierFormat;throw failed;}
+    }
+    private Map<String,JSONObject> retractBarriers(Scope scope,Set<String> removed)throws Exception {
+        Map<String,JSONObject> barriers=new LinkedHashMap<>(recordForgetBarriers);
+        for(String target:removed){JSONObject row=require(scope,target);String key=recordSourceKey(scope,target);JSONObject old=barriers.get(key);
+            barriers.put(key,new JSONObject().put("ownerId",scope.ownerId).put("spaceId",scope.spaceId).put("recordId",target)
+                    .put("forgottenThrough",Math.max(row.getLong("revision"),old==null?0:old.getLong("forgottenThrough"))));}
+        if(barriers.size()>MAX_RECORDS)throw new IllegalStateException("记忆撤销屏障已达上限，未丢弃旧记录保护");return barriers;
+    }
+    private Set<String> retractTargets(Scope scope,String id)throws Exception {
+        Set<String> removed=new LinkedHashSet<>();removed.add(id);boolean changed;
+        do{
+            changed=false;ArchiveBodyBarriers blocked=archiveBodyBarriers(sources,null);
+            for(String target:removed){JSONObject row=require(scope,target);blocked.record(new JSONObject().put("ownerId",scope.ownerId).put("spaceId",scope.spaceId).put("recordId",target).put("forgottenThrough",row.getLong("revision")),true);}
+            for(JSONObject row:records.values())if(scope.matches(row)&&!removed.contains(row.getString("id"))){
+                boolean dependent=row.optBoolean("archiveOnly")&&blocked.blocked(row,"record",0);JSONArray parents=row.optJSONArray("sourceIds");
+                for(int i=0;!dependent&&parents!=null&&i<parents.length();i++)dependent=removed.contains(parents.getString(i));
+                if(dependent){removed.add(row.getString("id"));changed=true;}
+            }
+        }while(changed);return removed;
     }
     private JSONArray removalRefs(Scope identity,Set<String> removed)throws Exception {
         JSONArray refs=new JSONArray();for(String target:removed){JSONObject row=records.get(target);if(row!=null){
@@ -1711,25 +1823,24 @@ public final class MemoryBook {
                 hits.put(viewRecord(records.get(candidate.id)).put("retrievalEvidence",new JSONObject().put("path",MemorySemanticRecall.pathRefs(semantic,candidate))
                         .put("role","relevance_path_not_causal_or_truth_proof").put("originalEvidenceRead",false)));
         }
-        List<JSONObject> retrieved=new ArrayList<>();Set<String> retrievedIds=new HashSet<>(),ownerOnly=new HashSet<>();
+        List<JSONObject> retrieved=new ArrayList<>();
         for(int i=0;i<hits.length();i++){
             JSONObject hit=hits.getJSONObject(i);
-            if(!coreIds.contains(hit.getString("id"))){retrieved.add(hit);retrievedIds.add(hit.getString("id"));}
+            if(!coreIds.contains(hit.getString("id")))retrieved.add(hit);
         }
         JSONObject owner=personal?ownerContextState(s,audience,now):null;
-        if(owner!=null){JSONArray current=owner.getJSONArray("current");for(int i=0;i<current.length();i++){JSONObject row=current.getJSONObject(i);String id=row.getString("id");if(active.contains(id)&&!coreIds.contains(id)&&retrievedIds.add(id)){retrieved.add(row);ownerOnly.add(id);}}}
         List<JSONObject> candidates=new ArrayList<>(core);candidates.addAll(retrieved);Map<String,JSONObject> admitted=new LinkedHashMap<>();
-        // Owner fallback may contain the whole formal projection. Check each source below,
-        // then revalidate the projection after packing, without recomputing it N times here.
+        // The personal projection is used for currentness, never as a whole-profile recall fallback.
+        // Supply only explicit core records and matches for the current question.
         Set<String> ownerActive=personal?activeIds(System.currentTimeMillis()):null;
         for(JSONObject candidate:candidates){
             JSONObject current=records.get(candidate.getString("id"));
             if(current==null||current.getLong("revision")!=candidate.getLong("revision")||!(personal?ownerActive:activeIds(System.currentTimeMillis())).contains(candidate.getString("id"))||!retrievalSourcesLive(candidate,new LinkedHashMap<>()))continue;
             boolean isCore=coreIds.contains(candidate.getString("id"));
-            JSONObject record=viewRecord(candidate).put("active",true).put("core",isCore).put("selection",isCore?"core":"retrieved").put("selectionReason",isCore?"owner_core":ownerOnly.contains(candidate.getString("id"))?"owner_current":"task_query_match");
+            JSONObject record=viewRecord(candidate).put("active",true).put("core",isCore).put("selection",isCore?"core":"retrieved").put("selectionReason",isCore?"owner_core":"task_query_match");
             admitted.put(record.getString("id"),record);
         }
-        String notice=owner==null?"":"主人当前认知来自同一份正式记忆；条件和有效时间须一并理解，历史与计划不作为当前事实。\n";
+        String notice=owner==null?"":"仅提供主人设为常用或与当前问题匹配的记忆；条件和有效时间须一并理解，历史与计划不作为当前事实。\n";
         if(owner!=null&&owner.getInt("pendingConflictGroups")>0)notice+="主人当前认知有"+owner.getInt("pendingConflictGroups")+"组待核对差异，候选没有代替当前事实。\n";
         JSONObject packed=MemoryRecallBudget.pack(core,retrieved,admitted,boundedLimit,boundedChars,CONTEXT_HEADER+notice,queryTruncated,lexicalQuery.length(),retrieval.status().getString("backend"),personal);
         if(owner!=null&&boundedLimit>0&&owner.getInt("pendingConflictGroups")>0&&packed.getString("context").isEmpty()&&notice.length()<=boundedChars){packed.put("context",notice);packed.getJSONObject("selectionDiagnostics").put("charsUsed",notice.length());}
@@ -2117,7 +2228,7 @@ public final class MemoryBook {
         File temporary=new File(file.getPath()+".new");
         // v3 makes older binaries fail closed instead of silently discarding review/rejection state.
         // A legacy-only book retains its v2 write contract until learning is actually used.
-        boolean withRetention=assertionFormat||archiveFormat||retentionFormat||enableRetention||hierarchicalFormat||recordBarrierFormat||!candidateHistory.isEmpty();
+        boolean withRetention=candidateExpiryFormat||assertionFormat||archiveFormat||retentionFormat||enableRetention||hierarchicalFormat||recordBarrierFormat||!candidateHistory.isEmpty();
         boolean withLearning=learningFormat||!learningCandidates.isEmpty()||withRetention;
         // Drop keys only when a durable source registry entry now prevents that old proposal.
         // Stage this compaction until the same atomic replacement succeeds, including on forget.
@@ -2139,11 +2250,11 @@ public final class MemoryBook {
         Map<String,JSONObject> nextAssertionFences=new LinkedHashMap<>(assertionFences);
         for(JSONObject row:records.values())if(row.has("assertion")&&!row.optBoolean("archiveOnly")&&!"imagined".equals(row.getJSONObject("assertion").getString("kind"))){String key=MemoryAssertion.keyDigest(row);nextAssertionFences.put(key,MemoryAssertion.mergeFence(nextAssertionFences.get(key),row));}
         if(nextAssertionFences.size()>MAX_SOURCES)throw new IllegalStateException("事实当前性屏障达到10000条，未淘汰旧遗忘保护");
-        JSONObject state=new JSONObject().put("version",namespaceFormat?10:assertionFormat?9:appKnowledgeFormat?8:archiveFormat?7:supersessionFormat?6:recordBarrierFormat?5:hierarchicalFormat?4:withLearning?3:2).put("records",new JSONArray(records.values())).put("sources",new JSONArray(sources.values()));
-        if(namespaceFormat)state.put("namespaceSourceFences",new JSONArray(namespaceSourceFences.values()));
-        if(assertionFormat)state.put("assertionFences",new JSONArray(nextAssertionFences.values()));
-        if(recordBarrierFormat||archiveFormat||assertionFormat)state.put("recordForgetBarriers",new JSONArray(retainedBarriers.values()));
-        if(archiveFormat||assertionFormat)state.put("archiveImports",new JSONArray(archiveImports.values()));
+        JSONObject state=new JSONObject().put("version",candidateExpiryFormat?11:namespaceFormat?10:assertionFormat?9:appKnowledgeFormat?8:archiveFormat?7:supersessionFormat?6:recordBarrierFormat?5:hierarchicalFormat?4:withLearning?3:2).put("records",new JSONArray(records.values())).put("sources",new JSONArray(sources.values()));
+        if(namespaceFormat||candidateExpiryFormat)state.put("namespaceSourceFences",new JSONArray(namespaceSourceFences.values()));
+        if(assertionFormat||candidateExpiryFormat)state.put("assertionFences",new JSONArray(nextAssertionFences.values()));
+        if(recordBarrierFormat||archiveFormat||assertionFormat||candidateExpiryFormat)state.put("recordForgetBarriers",new JSONArray(retainedBarriers.values()));
+        if(archiveFormat||assertionFormat||candidateExpiryFormat)state.put("archiveImports",new JSONArray(archiveImports.values()));
         if(withLearning)state.put("learningVersion",withRetention?2:1).put("learningCandidates",new JSONArray(learningCandidates.values()));
         if(withRetention)state.put("candidateHistory",new JSONArray(retainedHistory.values()));
         byte[] bytes=state.toString().getBytes(StandardCharsets.UTF_8);
@@ -2250,7 +2361,7 @@ public final class MemoryBook {
         Map<String,JSONObject> before=new LinkedHashMap<>(records);boolean oldArchive=archiveFormat,oldNamespace=namespaceFormat,oldAssertion=assertionFormat;JSONArray mappings=new JSONArray(),metadata=new JSONArray();long now=System.currentTimeMillis();ArchiveBodyBarriers blocked=archiveBodyBarriers(sources,archive);
         JSONObject receipt=new JSONObject().put("format",ProjectMemoryArchive.IMPORT_FORMAT).put("archiveImportId",action).put("sectionDigest",digest).put("ownerId",target.ownerId).put("spaceId",target.spaceId).put("originalSpaceId",placement.sourceSpace).put("archiveSha256",placement.archiveSha).put("projectPhaseId",placement.map.originalPhaseId()).put("importedAt",now).put("mappings",mappings).put("sourceEvidence",archive.getJSONArray("sources")).put("recordForgetEvidence",archive.getJSONArray("recordForgetBarriers")).put("candidateMetadata",metadata).put("candidateHistoryEvidence",archive.getJSONArray("candidateHistory")).put("priorImports",archive.getJSONArray("priorImports")).put("namespaceSourceEvidence",archive.getJSONArray("namespaceSourceFences")).put("counts",archive.getJSONObject("counts"));
         try{
-            for(String type:java.util.List.of("record","candidate")){JSONArray rows=archive.getJSONArray(type.equals("record")?"records":"learningCandidates");for(int i=0;i<rows.length();i++){JSONObject original=rows.getJSONObject(i);if(!original.has("text")){metadata.put(copy(original));continue;}String id=UUID.randomUUID().toString();mappings.put(new JSONObject().put("originalId",original.getString("id")).put("originalType",type).put("newId",id));if(blocked.blocked(original,type,0))continue;JSONObject evidence=copy(original);evidence.remove("text");JSONObject restored=new JSONObject().put("id",id).put("ownerId",target.ownerId).put("spaceId",target.spaceId).put("revision",1L).put("layer",original.getString("layer")).put("text",original.getString("text")).put("source","主人从项目备份恢复的只读档案（原来源未重新授权）").put("confidence",original.getDouble("confidence")).put("core",false).put("sourceIds",new JSONArray()).put("sourceRefs",new JSONArray()).put("expiresAt",JSONObject.NULL).put("createdAt",now).put("updatedAt",now).put("formation","archive_restore").put("archiveOnly",true).put("importedFrom",new JSONObject().put("archiveImportId",action).put("originalId",original.getString("id")).put("sectionDigest",digest).put("originalType",type)).put("archiveEvidence",new JSONObject().put("originalType",type).put("original",evidence));ProjectMemoryArchive.checkRestoredRecord(restored);records.put(id,restored);}}
+            for(String type:java.util.List.of("record","candidate")){JSONArray rows=archive.getJSONArray(type.equals("record")?"records":"learningCandidates");for(int i=0;i<rows.length();i++){JSONObject original=rows.getJSONObject(i);if(!original.has("text")){metadata.put(copy(original));continue;}String id=UUID.randomUUID().toString();mappings.put(new JSONObject().put("originalId",original.getString("id")).put("originalType",type).put("newId",id));if(blocked.blocked(original,type,0))continue;JSONObject evidence=copy(original);evidence.remove("text");JSONObject restored=new JSONObject().put("id",id).put("ownerId",target.ownerId).put("spaceId",target.spaceId).put("revision",1L).put("layer",original.getString("layer")).put("text",original.getString("text")).put("source","主人从项目备份恢复的只读档案（原来源未重新授权）").put("confidence",original.getDouble("confidence")).put("core",false).put("sourceIds",new JSONArray()).put("sourceRefs",new JSONArray()).put("expiresAt",checkedExpiry(original.opt("expiresAt"))).put("createdAt",now).put("updatedAt",now).put("formation","archive_restore").put("archiveOnly",true).put("importedFrom",new JSONObject().put("archiveImportId",action).put("originalId",original.getString("id")).put("sectionDigest",digest).put("originalType",type)).put("archiveEvidence",new JSONObject().put("originalType",type).put("original",evidence));ProjectMemoryArchive.checkRestoredRecord(restored);records.put(id,restored);}}
             ProjectMemoryArchive.checkImportMetadata(receipt,0);archiveImports.put(action,receipt);archiveFormat=true;namespaceFormat=true;assertionFormat=true;retireBlockedArchiveBodies();persist();return archiveResult(receipt,false).put("readGrantIssued",false).put("consentRestored",false).put("originalSpaceId",placement.sourceSpace).put("spaceId",target.spaceId);
         }catch(Exception failed){records.clear();records.putAll(before);archiveImports.remove(action);archiveFormat=oldArchive;namespaceFormat=oldNamespace;assertionFormat=oldAssertion;throw failed;}
     }

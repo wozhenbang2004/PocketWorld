@@ -14,6 +14,8 @@ public final class TaskMemoryHistory {
     public static JSONObject dependency(JSONObject validation)throws Exception{
         JSONArray memory=validation==null?null:validation.optJSONArray("memory");
         if(memory==null)return null;JSONObject identity=new JSONObject().put("memory",memory);
+        if(validation.has("personalMemory"))identity.put("personalMemory",validation.getJSONObject("personalMemory"));
+        if(validation.has("personalProfileRevision"))identity.put("personalProfileRevision",validation.getLong("personalProfileRevision"));
         if(validation.has("ownerContextRevision")){
             Object owner=validation.get("ownerContextRevision");if(!(owner instanceof String)||!((String)owner).matches("[a-f0-9]{64}"))throw new SecurityException("主人上下文版本须来自原生认知投影");
             identity.put("ownerContextRevision",owner);
@@ -47,6 +49,8 @@ public final class TaskMemoryHistory {
     /** Retires derived reference bodies; native facts, effect receipts, owner input and calls survive. */
     public static int retire(JSONArray history,JSONObject validation,boolean allAssistant)throws Exception{
         int changed=0;Map<String,String> calls=new HashMap<>();
+        JSONObject personal=validation==null?null:validation.optJSONObject("personalMemory");
+        boolean personalDisabled=personal!=null&&(!personal.optBoolean("readingEnabled")||!personal.optBoolean("conversationEnabled"));
         for(int i=0;history!=null&&i<history.length();i++){
             JSONObject row=history.getJSONObject(i);String role=row.optString("role");JSONArray tools=row.optJSONArray("tool_calls");
             if(retireObservationProjection(row))changed++;
@@ -60,7 +64,10 @@ public final class TaskMemoryHistory {
                 }
                 for(int j=0;tools!=null&&j<tools.length();j++){JSONObject call=tools.getJSONObject(j);calls.put(call.getString("id"),call.getJSONObject("function").optString("name"));}
             }
-            if(allAssistant&&"tool".equals(role)&&isReference(calls.get(row.optString("tool_call_id")))){
+            String referencedTool=calls.get(row.optString("tool_call_id"));
+            boolean privateReference=personalDisabled&&referencedTool!=null&&referencedTool.startsWith("memory_")
+                    &&(!personal.optBoolean("projectScope")||!java.util.Set.of("memory_search","memory_recall").contains(referencedTool));
+            if("tool".equals(role)&&isReference(referencedTool)&&(allAssistant||privateReference)){
                 String retired=dev.pocketengine.core.ToolOutcome.project(new JSONObject().put("ok",false).put("code","reference_expired").put("message",RETIRED).put("untrustedReference",true)).toString();
                 if(!retired.equals(row.optString("content"))){row.put("content",retired);row.remove("toolOutputCapture");changed++;}
             }

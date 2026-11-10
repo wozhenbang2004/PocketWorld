@@ -43,7 +43,9 @@ public final class LearningAssertionDraft {
         if(!draft.has("assertion"))return MemoryBook.checkedLearningDraft(draft);
         JSONObject assertion=checkedAssertion(claim,draft.optString("text"),source,sourceText);
         if(assertion==null)draft.remove("assertion");else draft.put("assertion",assertion);
-        return MemoryBook.checkedLearningDraft(draft);
+        JSONObject checked=MemoryBook.checkedLearningDraft(draft);
+        if(source!=null&&"owner".equals(source.ownerId)&&"private".equals(source.spaceId)&&!PersonalMemorySemantics.preferenceKey(checked).isEmpty())return null;
+        return checked;
     }
     /** The same exact-source contract for an existing record correction, whose layer and
      * applicability already belong to the original Book rather than a new candidate. */
@@ -61,6 +63,7 @@ public final class LearningAssertionDraft {
         if(!"owner".equals(claim.optString("subjectId"))||!"owner".equals(claim.optString("subjectType"))){
             return null;
         }
+        PersonalMemoryAttribution.requireOwnerClaim(sourceText,(int)offset,quote.length(),claim);
         JSONObject assertion=new JSONObject(claim.toString());assertion.remove("quote");assertion.remove("offset");
         assertion.put("version",MemoryAssertion.VERSION).put("assertedAt",JSONObject.NULL)
                 .put("evidenceSpans",new JSONArray().put(new JSONObject().put("sourceRef",source.toJson()).put("offset",offset).put("chars",quote.length()).put("sha256",TaskMemoryUse.digest(quote))));
@@ -73,6 +76,7 @@ public final class LearningAssertionDraft {
                 +"quote必须逐字摘自来源text，offset是其UTF-16起点；不要返回version、assertedAt、evidenceSpans、SourceRef或权限字段，这些只由宿主提供。"
                 +"user_said只能用于真实用户原句且text/object/quote完全相同；摘要、推断或转述必须另标kind，虚构标imagined。主体指事实描述的对象，不是说话人；只有明确描述主人本人的事实才用subjectId=owner、subjectType=owner。"
                 +"尚未发生或尚未完成的计划摘要也标imagined，保留原文中的计划含义；日期已经过去不证明行动发生，不得自动改为现实事实或实际结果。原话中的计划也只是说过这句话的证据。"
+                +"个人中心已有六项默认设置：language（回答语言）、response_detail（回复详略）、conclusionFirst（先给结论）、includeExamples（结合例子）、operation_pace（操作节奏）、initiative（主动建议）。明确对应这些无条件长期默认值的要求应在原设置中修改，不再提炼成同义preference记忆；不能在此提炼流程修改设置。仅本轮要求不记为长期默认。若同一来源还有其他稳定背景，仍可只提炼那项背景；只有设置要求时返回null，不因此跳过整批其他来源。条件性偏好或无法可靠对应上述字段的内容仍可保留为待审候选，不猜设置键或值。"
                 +"第三人、同名人或主体不明时不要猜主人或创建稳定身份，省略assertion并在普通候选中保留原来的描述和未知。所有输出只是待主人审阅的候选，不能宣称已保存、确认或验证。";
     }
 }

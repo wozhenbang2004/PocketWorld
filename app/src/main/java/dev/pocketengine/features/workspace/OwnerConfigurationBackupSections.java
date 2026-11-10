@@ -48,15 +48,17 @@ public final class OwnerConfigurationBackupSections {
     private static boolean validAction(String action){return action!=null&&action.matches("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}");}
     /** Preview never forwards skill bodies or the entire raw section to a UI bridge. */
     public static JSONObject preview(String kind,JSONObject selected)throws Exception {
-        JSONObject section=checked(kind,selected),content=section.getJSONObject("content"),counts=new JSONObject();JSONArray entries=new JSONArray();
+        JSONObject section=checked(kind,selected),content=section.getJSONObject("content"),counts=new JSONObject(),personal=null;JSONArray entries=new JSONArray();
         if(kind.equals("settings")){
+            personal=dev.pocketengine.store.OwnerSettingsBackup.preferencesPreview(content.getJSONObject("preferences"));counts.put("preferences",personal.getJSONArray("fields").length());
             for(String field:new String[]{"apiConnections","modelGroups","workProfiles"})counts.put(field,content.getJSONArray(field).length());
             JSONArray api=content.getJSONArray("apiConnections");for(int i=0;i<api.length();i++){JSONObject row=api.getJSONObject(i),config=row.getJSONObject("configuration");entries.put(new JSONObject().put("kind","api").put("sourceId",row.getString("sourceId")).put("name",row.getString("name")).put("provider",config.getString("provider")).put("baseUrl",config.getString("baseUrl")).put("model",config.getString("model")).put("bedrockRegion",config.optString("bedrockRegion")));}
             for(String field:new String[]{"modelGroups","workProfiles"}){JSONArray rows=content.getJSONArray(field);for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);entries.put(new JSONObject().put("kind",field).put("sourceId",row.getString(field.equals("modelGroups")?"groupId":"profileId")).put("name",row.getString("name")));}}
         }else{
             JSONArray rows=content.getJSONArray(kind.equals("skills")?"packages":"rules");counts.put(kind,rows.length());for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i),entry=new JSONObject().put("sourceId",row.getString("sourceId"));for(String field:kind.equals("skills")?new String[]{"name","digest","projectBindingRequired"}:new String[]{"title","kind","goal","schedule"})entry.put(field,row.get(field));entries.put(entry);}
         }
-        return new JSONObject().put("counts",counts).put("entries",entries).put("omitted",section.getJSONArray("omitted")).put("restoredActive",false).put("secretsIncluded",false).put("requiresNewBindingAndApproval",true);
+        JSONObject preview=new JSONObject().put("counts",counts).put("entries",entries).put("omitted",section.getJSONArray("omitted")).put("restoredActive",false).put("secretsIncluded",false).put("requiresNewBindingAndApproval",true);
+        if(personal!=null)preview.put("personalSettings",personal);return preview;
     }
     public static JSONObject result(JSONArray rows)throws Exception {boolean complete=true;for(int i=0;i<rows.length();i++)complete&=rows.getJSONObject(i).optBoolean("found");return new JSONObject().put("rows",rows).put("found",complete).put("status",complete?"completed":"unknown").put("readOnly",true).put("replayAllowed",false).put("activePermissionsRestored",false);}
 }
