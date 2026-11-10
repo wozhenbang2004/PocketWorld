@@ -61,8 +61,8 @@ export function ScopedConversationModelControls({ state, can, act, onOpenModel, 
   const reasoning = inherited ? currentSummary?.reasoning || null
     : preference.inherited === false && ['api', 'account'].includes(target.kind) ? nativeReasoning(target.reasoning) : null;
   const effort = reasoningLabel(reasoning, true), loading = inherited && currentSummary?.status === 'loading', failed = inherited && currentSummary?.status === 'error';
-  const strengthLabel = loading ? '推理强度：正在读取' : failed ? '推理强度：读取失败，点按重新读取'
-    : reasoning ? `推理强度：${reasoningLabel(reasoning)}` : target.kind === 'group' ? '推理强度：由模型组候选设置决定' : '推理强度：尚未读取';
+  const strengthLabel = loading ? '推理强度：读取中' : failed ? '推理强度：重试'
+    : reasoning ? `推理强度：${reasoningLabel(reasoning)}` : target.kind === 'group' ? '推理强度：由模型组设置' : '推理强度：自动';
   return <div className="pw-conversation-model-controls" aria-label="此对话的模型与推理">
     <Button variant="ghost" className="pw-conversation-model-chip" onClick={() => onOpenModel('models')} disabled={locked} aria-label={`切换此对话模型：${modelName}`} title={modelName}>
       <RiBox3Line size={19} aria-hidden="true" /><span className="pw-conversation-model-chip-name">{modelName}</span><RiArrowDownSLine size={14} aria-hidden="true" />
@@ -193,7 +193,7 @@ export function ScopedConversationReasoningPanel({ state, can, act, disabled = f
   return <section className="pw-scoped-reasoning-panel" aria-label="此对话推理设置">
     <p className="pw-model-selection-scope">{preference.inherited === true ? '沿用默认 · ' : '此对话 · '}{conversationModelName(state) || '尚未选择模型'}</p>
     {loading ? <div role="status" aria-busy="true"><ShimmerText>正在读取推理设置…</ShimmerText></div> : review?.restriction ? <p className="pw-conversation-reasoning-note">{review.restriction}</p> : review && <>
-      {onlyServiceDefault ? <div className="pw-conversation-reasoning-default"><strong>服务默认</strong><p>{mayDeclare ? '接口未提供可选档位，可以按此模型的实际能力自行设置。' : reasoningAvailability(record(review.facts))}</p></div>
+      {onlyServiceDefault ? <div className="pw-conversation-reasoning-default"><strong>自动</strong><p>{mayDeclare ? '可为当前模型设置低、中、高等档位。' : reasoningAvailability(record(review.facts))}</p></div>
         : <RadioGroup aria-label="可用推理强度" value={choice} onChange={id => void apply(id)} isDisabled={locked || needsRead} className="pw-conversation-reasoning-options">{review.choices.map((item: Row) => <Radio key={item.id} value={item.id} isDisabled={item.readOnly} className="pw-conversation-reasoning-option"><span><b>{item.label}</b>{item.detail && <small>{item.detail}</small>}</span></Radio>)}</RadioGroup>}
       {mayDeclare && !editingLevels && <Button variant="ghost" size="small" className="pw-reasoning-levels-trigger" disabled={locked || needsRead} onClick={() => setEditingLevels(true)}>{customLevelsSaved ? '调整可用档位' : '设置可用档位'}</Button>}
       {mayDeclare && editingLevels && <section className="pw-reasoning-levels-editor" aria-label="手动声明推理档位">
