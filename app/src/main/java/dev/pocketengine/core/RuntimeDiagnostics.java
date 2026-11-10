@@ -33,7 +33,7 @@ public final class RuntimeDiagnostics {
     /** The one wire vocabulary for both live records and restored records. */
     public enum Stage {
         BOOTSTRAP, LOGIN, ACCOUNT_REFRESH, MODEL_CATALOG, MODEL_PREPARE, MESSAGE_ADMISSION,
-        MODEL_REQUEST, TOOL_EXECUTION, RUN_SETTLEMENT, WEBVIEW, DIAGNOSTICS;
+        MODEL_REQUEST, TOOL_EXECUTION, RUN_SETTLEMENT, RUNTIME_SETUP, WEBVIEW, DIAGNOSTICS;
         private final String wireValue = name().toLowerCase(Locale.ROOT);
         public String wireValue() { return wireValue; }
         private static Stage parse(String value) {

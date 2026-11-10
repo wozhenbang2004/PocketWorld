@@ -1059,7 +1059,9 @@ public final class EngineApplication extends Application implements dev.pocketen
         EngineModule development=addModule("local",()->new dev.pocketengine.features.local.LocalModule(context,workspace));
         if(development instanceof dev.pocketengine.features.local.LocalModule&&assistant instanceof dev.pocketengine.features.assistant.AssistantModule){
             var local=(dev.pocketengine.features.local.LocalModule)development;
-            try{runtimeSetup=new dev.pocketengine.features.local.runtime.RuntimeSetupHost(tasks,local.managedRuntimeSetupForHost(),new java.io.File(getFilesDir(),"runtime-owner"),this::runtimeSetupChanged);}
+            // Android may alias /data/user/0 to /data/data. Resolve only the framework root;
+            // RuntimeFiles must still reject substituted runtime-owner/runtime-setup children.
+            try{runtimeSetup=new dev.pocketengine.features.local.runtime.RuntimeSetupHost(tasks,local.managedRuntimeSetupForHost(),new java.io.File(getFilesDir().getCanonicalFile(),"runtime-owner"),this::runtimeSetupChanged);}
             catch(Exception unavailable){runtimeSetupFailure=unavailable.getMessage()==null?"本机工具准备宿主不可用":unavailable.getMessage();RuntimeDiagnostics.event("runtime_setup","failed","HOST_UNAVAILABLE",null,unavailable);}
             ownerPreviewReferences=new dev.pocketengine.features.local.preview.ProjectPreviewReferences(tasks,local);
             ((dev.pocketengine.features.assistant.AssistantModule)assistant).setPreviewReferences(ownerPreviewReferences);
