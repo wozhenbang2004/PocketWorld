@@ -406,6 +406,10 @@ internal class PocketWebBridge(
             }
             pendingCommands[id] = identity
             ownsRequest = true
+            retiredWorkspaceCleanup(action, args)?.let { result ->
+                complete(id, result, null)
+                return
+            }
             if (action in PocketWebSetup.COMMANDS) {
                 setupPages.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }
                 return
@@ -1383,6 +1387,36 @@ internal class PocketWebBridge(
     private fun requireTask(id: String): UiTask = controller.state.tasks.firstOrNull { it.id == id } ?: error("原任务不在当前读取窗口，请刷新后重新打开")
     private fun leaveTask() { phoneViewer.clear(); localPages.clear(); setupPages.clear(); tokenBudgets.clear(); profilePages.clear(); composerModels.clear(); taskViewId = null; controller.closeWebTaskView(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); commandFence.invalidate(); taskReviewGeneration++; taskPage?.let(controller::leaveGroupTask); taskPage = null }
     private fun leaveConnection() { phoneViewer.clear(); controller.webChannels.clear(); controller.webSkills.clear(); commandFence.invalidate(); ++domainGeneration; modelReviews.clear(); automation.clear(); mcpImports.clear(); executionReviews.clear(); sourceReader.clear(); messageQuotes.clear(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); connectionPages.clear(); teamPages.clear(); groupPages.clear(); mediaPages.clear(); realtimePages.clear(); proxyPages.clear(); planPages.clear(); commitmentPages.clear(); tokenBudgets.clear(); profilePages.clear(); devicePages.clear(); pluginPages.clear(); localPages.clear(); setupPages.clear(); accountWorkspace.invalidate(); composerModels.clear(); aiSources.clear(); conversationModels.clear(); deviceWindow?.close(); deviceWindow = null; section?.let { if (it == "memory") controller.leaveOwnerDomain("memoryReview") else if (it in ownerDomains) controller.leaveOwnerDomain(it) }; section?.takeIf { it == "archives" || it == "storage" }?.let(dataPages::close); section = null }
+    /**
+     * Navigation already disposes these workspace handles in leaveConnection().
+     * React unmount cleanup may arrive after that transition. Acknowledge only
+     * these disposal commands without dispatching them into the next workspace.
+     */
+    private fun retiredWorkspaceCleanup(action: String, args: JSONObject): JSONObject? {
+        val expectedSection = when (action) {
+            "skills.close" -> "skills"
+            "devices.discard" -> "devices"
+            "plugins.close" -> "plugins"
+            "profiles.discard" -> "workProfiles"
+            "channels.close" -> "channels"
+            else -> return null
+        }
+        val stillOpen = if (action == "plugins.close") section == "plugins" || section == "pluginCatalog"
+            else section == expectedSection
+        if (stillOpen) return null
+        val allowed = when (action) {
+            "skills.close" -> setOf("handle")
+            "devices.discard" -> setOf("viewHandle")
+            "plugins.close" -> setOf("pageRequestId")
+            "profiles.discard" -> setOf("viewHandle", "reviewHandle", "choicesHandle", "preflightHandle")
+            else -> emptySet()
+        }
+        checkedPayload(args, allowed)
+        args.keys().asSequence().forEach { requiredString(args, it) }
+        if (action == "plugins.close") requiredString(args, "pageRequestId")
+        return JSONObject().put("closed", false).put("alreadyClosed", true)
+    }
+
     private fun requireSection(expected: String) { require(section == expected) { "原能力窗口已关闭，请重新进入" } }
     private fun requireComposer(args: JSONObject, optional: Boolean = false) {
         val draft = controller.composerDraft ?: error("原输入尚未恢复")
