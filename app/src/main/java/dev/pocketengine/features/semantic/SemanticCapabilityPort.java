@@ -184,6 +184,9 @@ public final class SemanticCapabilityPort implements CapabilityPort {
         if(accepted&&discovery.request.clock())out.put("requiresPause",true).put("requiresOwnerVerification",true).put("clockStateVerified",false)
                 .put("deviceTimeZone",target.identity().getString("deviceTimeZone")).put("receiverMayApplyImmediately",true)
                 .put("message","已发送一次时钟请求，请在目标App核对闹钟或计时器。它可能已立即生效；显示界面不保证另有确认。尚未核实实际设置结果，不会自动重发。");
+        if(accepted&&discovery.request.kind.equals("alarm")&&result.optJSONObject("nextAlarmClock")!=null)
+            out.put("nextAlarmClock",SemanticJson.copy(result.getJSONObject("nextAlarmClock")))
+                    .put("alarmEvidenceScope","仅观察当前Android用户由系统公开的下一次闹钟；变化不能归因于本请求，未变化也不能证明闹钟未创建，请主人核对具体时间、重复星期和震动设置");
         if(accepted&&(discovery.request.kind.equals("app_link")||discovery.request.kind.equals("share_text")))out.put("requiresPause",true).put("requiresOwnerCompletion",true).put("receiverMayActImmediately",true)
                 .put("externalDeliveryVerified",false).put("automaticContinuation",false)
                 .put("message","已请求把固定入口内容交给选定App；接收方可能立即处理，启动不等于业务完成或消息已发送。后续交主人核验，不会自动点发送、重开或回落其他App。");

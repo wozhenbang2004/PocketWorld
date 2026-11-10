@@ -46,6 +46,7 @@ public final class AdaptivePhonePort implements PhonePort {
     private String safetyPause;
     private int consecutiveScreenChanges;
     private PhoneTreeCollection.State collection;
+    private PhoneTextCollection.State textCollection;
     private final java.util.concurrent.atomic.AtomicBoolean actionEffectInFlight=new java.util.concurrent.atomic.AtomicBoolean();
     private final java.util.Map<String,OcrTextTarget> textTargets=new java.util.LinkedHashMap<>();
     private NativeSensitiveStep.OcrEvidence ocrSensitive;
@@ -119,6 +120,7 @@ public final class AdaptivePhonePort implements PhonePort {
         boolean write=PhoneExtensionTools.writes(tool);
         boolean opening=tool.equals("phone_launch_app_copy")||tool.equals("phone_practice_target");
         boolean listing=tool.equals("phone_list_app_copies");
+        final JSONObject beforeEffect;final long effectRevision;
         synchronized(this){
             String blocked=authority(control);if(blocked!=null)return failure(blocked,"原手机任务控制已变化。");
             if(reconciliationRequired||safetyPause!=null)return failure(reconciliationRequired?"reconciliation_required":safetyPause,"先核对原操作和权限。");
@@ -132,6 +134,7 @@ public final class AdaptivePhonePort implements PhonePort {
                 if(!current(observation,control))return failure("stale_observation","本地风险读取期间原手势观察已变化。");
                 if(ocrSensitive!=null){JSONArray paths=args.getJSONArray("paths");for(int i=0;i<paths.length();i++){JSONArray points=paths.getJSONArray(i);for(int j=1;j<points.length();j++){JSONArray a=points.getJSONArray(j-1),b=points.getJSONArray(j);ocrSensitive.requireCoordinate(a.getInt(0),a.getInt(1),b.getInt(0),b.getInt(1),true,control,control.pauseRevision());}}}
             }
+            beforeEffect=write?effectSnapshot(latest):null;effectRevision=control.pauseRevision();
         }
         if(tool.equals("phone_practice_frame_check"))return practiceFrame(control);
         if(tool.equals("phone_event"))return waitNativeEvent(args,control);
@@ -155,7 +158,13 @@ public final class AdaptivePhonePort implements PhonePort {
             }
             if(write&&Boolean.TRUE.equals(result.opt("accepted"))&&!unknown){
                 try{
-                    JSONObject fresh=readOnlyTree(control);result.put("freshObservationAvailable",fresh.optBoolean("ok"));
+                    JSONObject fresh;
+                    if(beforeEffect!=null){
+                        dev.pocketengine.phone.PhoneUiSignals feed=source instanceof NativePhoneSignals?((NativePhoneSignals)source).uiSignals(control):null;
+                        PhoneActionEffects.Result settled=PhoneActionEffects.await(beforeEffect,null,()->readOnlyTree(control),control,effectRevision,feed,PhoneActionEffects.REAL,visualReader(beforeEffect,control));
+                        result.put("actionEffects",settled.evidence);fresh=settled.observation==null?readOnlyTree(control):settled.observation;
+                    }else fresh=readOnlyTree(control);
+                    result.put("freshObservationAvailable",fresh.optBoolean("ok"));
                     if(fresh.optBoolean("ok"))result.put("afterObservationId",fresh.getString("observationId"));
                     else result.put("postActionObservation",new JSONObject().put("status","unavailable_after_dispatch")
                             .put("reason",fresh.optString("error",fresh.optString("code","observation_unavailable")))
@@ -222,14 +231,14 @@ public final class AdaptivePhonePort implements PhonePort {
             if(original==null||original.optBoolean("password")||!original.optBoolean("scrollable"))return failure("not_a_wheel","需要原树内可滚动的精确滚轮节点。");
         }
         JSONObject scroll=new JSONObject().put("observationId",args.getString("observationId")).put("nodeId",args.getString("nodeId")).put("direction",args.getString("direction"));
-        JSONObject result=scrollNode(scroll,control,admission);String value=null;
+        JSONObject result=scrollNode(scroll,control,admission);JSONObject valueEvidence=null;
         synchronized(this){
             if(Boolean.TRUE.equals(result.opt("accepted"))&&latest!=null&&packageName.equals(latest.optString("packageName")))for(JSONObject n:PhoneTreeExtract.index(latest).values()){
-                if(!n.optBoolean("password")&&n.optInt("windowId",-1)==original.optInt("windowId",-2)&&n.optJSONArray("path")!=null&&n.getJSONArray("path").toString().equals(original.getJSONArray("path").toString())&&n.optString("resourceId").equals(original.optString("resourceId"))&&n.optString("role").equals(original.optString("role"))){value=n.optString("text");if(value.isEmpty())value=null;break;}
+                if(!n.optBoolean("password")&&n.optInt("windowId",-1)==original.optInt("windowId",-2)&&n.optJSONArray("path")!=null&&n.getJSONArray("path").toString().equals(original.getJSONArray("path").toString())&&n.optString("structuralFingerprint").equals(original.optString("structuralFingerprint"))&&n.optString("resourceId").equals(original.optString("resourceId"))&&n.optString("role").equals(original.optString("role"))){valueEvidence=PhoneWheelValue.read(latest,n);break;}
             }
         }
-        boolean reached=value!=null&&value.equals(args.getString("value"));
-        return result.put("target",args.getString("value")).put("actualValue",value==null?JSONObject.NULL:value).put("reached",reached).put("status",reached?"target_observed":value==null?"unreadable":"partial").put("stepsPerformed",result.has("accepted")&&result.isNull("accepted")?JSONObject.NULL:Boolean.TRUE.equals(result.opt("accepted"))?1:0).put("verifiedBusinessSuccess",false);
+        String value=valueEvidence!=null&&valueEvidence.optBoolean("readable")?valueEvidence.getString("value"):null;boolean reached=value!=null&&value.equals(args.getString("value"));
+        return result.put("target",args.getString("value")).put("actualValue",value==null?JSONObject.NULL:value).put("valueEvidence",valueEvidence==null?JSONObject.NULL:valueEvidence).put("reached",reached).put("status",reached?"target_observed":value==null?"unreadable":"partial").put("stepsPerformed",result.has("accepted")&&result.isNull("accepted")?JSONObject.NULL:Boolean.TRUE.equals(result.opt("accepted"))?1:0).put("verifiedBusinessSuccess",false);
     }
     @Override public synchronized void clearReferences() {
         latest = null; latestBinding = null; textTargets.clear();ocrSensitive=null;source.clearReferences();
@@ -262,7 +271,11 @@ public final class AdaptivePhonePort implements PhonePort {
                     && ObservationReport.isCaptureUnavailable(image.optString("imageUnavailableReason"))
                     && freshSources != null && freshSources.optBoolean("treeAvailable") && freshSources.optInt("usefulNodes") > 0)
                 decision = AdaptiveObservationPolicy.retainTreeAfterImageFailure(decision);
-            if (decision.requestsImage()) return failure("image_unavailable", "没有取得真实图片，无法继续视觉定位。");
+            if (decision.requestsImage()) {
+                JSONObject failed=failure("image_unavailable", "没有取得真实图片，无法继续视觉定位。").put("imageUnavailableReason",image.optString("imageUnavailableReason"));
+                if(image.optJSONObject("visualEvidence")!=null)failed.put("visualEvidence",new JSONObject(image.getJSONObject("visualEvidence").toString()));
+                return failed;
+            }
             return deliver(image, decision, control);
         }
         return deliver(nodes, decision, control);
@@ -294,6 +307,7 @@ public final class AdaptivePhonePort implements PhonePort {
                 collection=PhoneTreeCollection.start(args,latest,collectionScope(control),uptime.getAsLong());return collection.result();
             }
             selected=collection;if(selected==null||!selected.id.equals(args.getString("cursorId")))return failure("cursor_unavailable","游标不属于此原执行；重启或新采集后不能恢复旧游标。");
+            if(action.equals("read")&&(args.has("offset")||args.has("limit")))return selected.readStored(collectionScope(control),uptime.getAsLong(),args.optInt("offset",0),args.optInt("limit",80));
             JSONObject stopped=selected.scopeCheck(collectionScope(control),uptime.getAsLong());if(stopped!=null)return stopped;
             if(action.equals("finish"))return selected.stop("explicit_stop");if(selected.stopped())return selected.result();
             if(reconciliationRequired)return selected.stop("operation_result_unknown");if(safetyPause!=null)return selected.stop("display_or_permission_unavailable");
@@ -311,7 +325,50 @@ public final class AdaptivePhonePort implements PhonePort {
             JSONObject stopped=selected.scopeCheck(collectionScope(control),uptime.getAsLong());if(stopped!=null)return stopped;
             if(!fresh.optBoolean("ok"))return selected.stop("observation_unavailable");return selected.refresh(fresh);}
     }
-    private String collectionScope(RunControl control)throws Exception {return dev.pocketengine.store.TaskStore.capabilityFingerprint(scopeJson().put("pauseRevision",control.pauseRevision()));}
+    private String collectionScope(RunControl control)throws Exception {return dev.pocketengine.store.TaskStore.capabilityFingerprint(scopeJson().put("pauseRevision",control.pauseRevision()).put("appPolicyRevision",appPolicyRevision()));}
+    public JSONObject collectText(JSONObject args,JSONObject originalScroll,RunControl control)throws Exception {
+        PhoneTextCollection.validate(args);String action=args.getString("action");final PhoneTextCollection.State selected;
+        synchronized(this){
+            String blocked=authority(control);if(blocked!=null)return failure(blocked,"原手机范围已变化，文字采集停止。");
+            if(reconciliationRequired||safetyPause!=null)return failure(reconciliationRequired?"reconciliation_required":safetyPause,"先核对原操作和显示权限。");
+            if(action.equals("start")){
+                if(!current(args.getString("observationId"),control))return failure("stale_observation","采集需要当前观察。");
+                JSONObject target=PhoneTreeExtract.index(latest).get(args.getString("containerId"));if(target==null)return failure("container_unavailable","没有当前容器。");
+                selected=new PhoneTextCollection.State(args,latest,target,collectionScope(control),uptime.getAsLong());textCollection=selected;
+            }else{
+                selected=textCollection;if(selected==null||!selected.id.equals(args.getString("cursorId")))return failure("cursor_unavailable","文字游标不属于此原执行。");
+                if(action.equals("read")&&!args.has("observationId"))return selected.readStored(collectionScope(control),uptime.getAsLong(),args.optInt("offset",0),args.optInt("limit",100));
+                selected.requireScope(collectionScope(control),uptime.getAsLong());
+                if(action.equals("finish"))return selected.stop("explicit_stop");
+                if(selected.stopped())return selected.result(0,100);
+                if(action.equals("advance"))selected.requireScroll(originalScroll);
+                if(args.has("observationId")&&!current(args.getString("observationId"),control))return failure("stale_observation","刷新文字游标需要当前观察。");
+            }
+        }
+        JSONObject actual=textCollectionPage(selected,control);
+        synchronized(this){
+            if(textCollection!=selected)return failure("cursor_replaced","原文字游标已替换。");
+            String blocked=authority(control);if(blocked!=null)return selected.stop("scope_changed");
+            selected.requireScope(collectionScope(control),uptime.getAsLong());
+            if(actual==null||!actual.optBoolean("ok"))return selected.stop(actual==null?"observation_unavailable":actual.optString("error","observation_unavailable"));
+            return selected.accept(actual,originalScroll,action.equals("read"));
+        }
+    }
+    private JSONObject textCollectionPage(PhoneTextCollection.State selected,RunControl control)throws Exception {
+        final boolean useOcr;
+        synchronized(this){
+            String blocked=authority(control);if(blocked!=null||latest==null)return failure(blocked==null?"stale_observation":blocked,"当前文字页面不可用。");
+            JSONObject target=selected.target(latest);
+            useOcr=selected.source.equals("ocr")||selected.source.equals("auto")&&!PhoneTextCollection.nativeTextAvailable(latest,target);
+            if(!useOcr){JSONObject nativeText=new JSONObject(latest.toString());nativeText.remove("ocr");return nativeText;}
+            if(!localCaptureAllowed||!localOcrAllowed||!ocrAvailable())return failure("ocr_unavailable","本地文字识别未授权或尚不可用。");
+            if(latest.optJSONObject("ocr")!=null&&!latest.optBoolean("changedDuringRead"))return new JSONObject(latest.toString());
+            if(ObservationReport.hasImage(latest)&&!latest.optBoolean("changedDuringRead")){
+                JSONObject recognized=recognize(latest,control);if(recognized.optBoolean("ok"))return new JSONObject(latest.toString());return recognized;
+            }
+        }
+        return readOnlyOcr(control);
+    }
     /** One original prepared native scroll followed only by bounded metadata/tree reads. */
     public JSONObject scrollNode(JSONObject args,RunControl control,NativePhoneEntry.Admission admission)throws Exception {
         NativeTreeScrollPort.validate(args);final JSONObject target;final String before;final long revision;
@@ -334,10 +391,15 @@ public final class AdaptivePhonePort implements PhonePort {
         result.put("targetRef",target).put("beforeTreeFingerprint",before).put("verified",false).put("verifiedBusinessSuccess",false).put("automaticReplayAllowed",false).put("mechanism","accessibility_action_scroll_"+args.getString("direction"));
         if(!Boolean.TRUE.equals(result.opt("accepted")))return result;
         try{
-            JSONObject fresh=null;long until=System.nanoTime()+1_250_000_000L;
-            for(int i=0;i<6;i++){
+            JSONObject fresh=null;long until=System.nanoTime()+2_500_000_000L,stableSince=-1;String previous=null;
+            for(int i=0;i<12;i++){
                 control.check();if(control.isPaused()||control.pauseRevision()!=revision)return result.put("freshObservationAvailable",false).put("effect","unavailable_after_pause");
-                fresh=readOnlyTree(control);if(!fresh.optBoolean("ok")||!before.equals(fresh.optString("treeFingerprint"))||System.nanoTime()>=until)break;
+                fresh=readOnlyTree(control);if(!fresh.optBoolean("ok"))break;
+                long now=System.nanoTime();String signature=fresh.optString("treeFingerprint");
+                if(fresh.optBoolean("changedDuringRead"))stableSince=-1;
+                else if(!signature.equals(previous)||stableSince<0)stableSince=now;
+                previous=signature;
+                if(!before.equals(signature)&&stableSince>=0&&now-stableSince>=400_000_000L||now>=until)break;
                 long wake=Math.min(until,System.nanoTime()+250_000_000L);while(System.nanoTime()<wake){control.check();if(control.isPaused()||control.pauseRevision()!=revision)return result.put("freshObservationAvailable",false).put("effect","unavailable_after_pause");Thread.sleep(Math.max(1,Math.min(50,(wake-System.nanoTime())/1_000_000L)));}
             }
             if(fresh==null||!fresh.optBoolean("ok"))return result.put("freshObservationAvailable",false).put("effect","not_observed");
@@ -433,6 +495,70 @@ public final class AdaptivePhonePort implements PhonePort {
         requireSequenceCurrent(state,state.initialObservation,control);return scopeJson();
     }
     public long sequenceUptime(){return uptime.getAsLong();}
+    /** Native route/plan checks use retained source coverage, never the presentation projection. */
+    public synchronized JSONObject currentNativeTree(String observationId,RunControl control)throws Exception {
+        String blocked=authority(control);
+        if(blocked!=null||reconciliationRequired||safetyPause!=null||!source.isConnected()||!current(observationId,control))throw new SecurityException("native_tree_snapshot_changed");
+        JSONObject actual=new JSONObject(latest.toString());stripImage(actual);actual.remove("ocr");return actual;
+    }
+
+    public synchronized PhoneBoundedOperation.State prepareBounded(String tool,JSONObject args,RunControl control)throws Exception {
+        String blocked=authority(control);
+        if(blocked!=null||reconciliationRequired||safetyPause!=null||!source.isConnected()||!current(args.getString("observationId"),control))
+            throw new SecurityException("bounded_phone_current_observation_required");
+        return PhoneBoundedOperation.prepare(tool,args,latest,uptime.getAsLong());
+    }
+    public synchronized void requireBoundedCurrent(PhoneBoundedOperation.State state,String observationId,RunControl control)throws Exception {
+        String blocked=authority(control);
+        if(blocked!=null||reconciliationRequired||safetyPause!=null||!source.isConnected()||latest==null)throw new SecurityException("bounded_phone_stopped");
+        state.requireScope(latest,uptime.getAsLong());
+        if(observationId!=null&&!current(observationId,control)||!state.started()&&!current(state.initialObservation,control))throw new SecurityException("bounded_phone_observation_changed");
+    }
+    public synchronized JSONObject boundedIdentity(PhoneBoundedOperation.State state,RunControl control)throws Exception {
+        requireBoundedCurrent(state,state.initialObservation,control);return scopeJson();
+    }
+    public JSONObject resolveBounded(PhoneBoundedOperation.State state,RunControl control)throws Exception {
+        synchronized(this){requireBoundedCurrent(state,null,control);if(!state.started())state.start(latest.getString("observationId"));}
+        JSONObject fresh=readOnlyTree(control);
+        if(fresh==null||!fresh.optBoolean("ok"))throw new SecurityException("bounded_phone_observation_unavailable");
+        if(state.needsOcr(fresh)&&localCaptureAllowed&&localOcrAllowed&&ocrAvailable()){
+            JSONObject recognized=readOnlyOcr(control);
+            if(recognized.optBoolean("ok"))fresh=recognized;
+            else{
+                // OCR failure contributes no invented value; restore an actionable current tree.
+                fresh=readOnlyTree(control);
+                if(!fresh.optBoolean("ok"))throw new SecurityException("bounded_phone_observation_unavailable");
+            }
+        }
+        synchronized(this){requireBoundedCurrent(state,fresh.getString("observationId"),control);}
+        return fresh;
+    }
+    private JSONObject readOnlyOcr(RunControl control)throws Exception {
+        return readOnlyOcr(control,true);
+    }
+    private JSONObject readOnlyOcr(RunControl control,boolean retryChangingFrame)throws Exception {
+        final long revision;
+        synchronized(this){String blocked=authority(control);if(blocked!=null||reconciliationRequired||safetyPause!=null)return failure(blocked==null?"phone_read_unavailable":blocked,"当前手机读取已停止。");
+            if(!localCaptureAllowed||!localOcrAllowed||!ocrAvailable())return failure("ocr_unavailable","本地图片识别未授权或不可用。");
+            revision=control.pauseRevision();clearReferences();}
+        JSONObject observed=source.observe(true,control);
+        synchronized(this){
+            if(observed==null||!observed.optBoolean("ok"))return observed==null?failure("empty_observation","未取得当前图片。"):rejectedObservation(observed);
+            Decision decision=choose(observed,Need.TARGET_MISSING,control);
+            if(revision!=control.pauseRevision()||decision.request!=Request.OCR)return failure("ocr_observation_unavailable","未取得当前原显示可用的授权图片。");
+            if(observed.optBoolean("changedDuringRead")){clearReferences();if(!retryChangingFrame)return failure("ocr_geometry_changed","截图期间页面仍在变化，未将文字绑定到当前容器。");}
+            else {
+                JSONObject recognized=recognize(observed,control);if(!recognized.optBoolean("ok")){clearReferences();return recognized;}
+                stripImage(observed);observed.getJSONObject("observationSources").put("imageIncluded",false).put("imageReason","local_ocr_text_only");
+                latestBinding=scope.observation(observed.getString("observationId"),revision);
+                observed.put("observationBinding",bindingJson(latestBinding)).put("observationDecision",new JSONObject().put("request","ocr").put("reason","explicit_read_only_text_collection"));
+                latest=new JSONObject(observed.toString());return observed;
+            }
+        }
+        long until=System.nanoTime()+250_000_000L;
+        while(System.nanoTime()<until){control.check();if(control.isPaused()||control.pauseRevision()!=revision)throw new SecurityException("ocr_read_scope_changed");Thread.sleep(Math.max(1,Math.min(50,(until-System.nanoTime())/1_000_000L)));}
+        return readOnlyOcr(control,false);
+    }
 
     /** Host-mediated help signal only; it never authorizes or repeats the failed business action. */
     public synchronized JSONObject requestUpgrade(String observationId, Need need, RunControl control) throws Exception {
@@ -472,7 +598,7 @@ public final class AdaptivePhonePort implements PhonePort {
             // is held across event waits, and no error here converts accepted input into a replay.
             if(Boolean.TRUE.equals(result.opt("accepted"))&&!ObservationSafety.unknownEffect(result.optString("error",result.optString("code")))&&!result.optString("status").equals("unknown")&&before!=null){
                 dev.pocketengine.phone.PhoneUiSignals feed=null;if(source instanceof NativePhoneSignals)try{feed=((NativePhoneSignals)source).uiSignals(control);}catch(Exception unavailable){}
-                try{PhoneActionEffects.Result after=PhoneActionEffects.await(before,targetWindow,()->readOnlyTree(control),control,revision,feed,PhoneActionEffects.REAL);result.put("actionEffects",after.evidence);
+                try{PhoneActionEffects.Result after=PhoneActionEffects.await(before,targetWindow,()->readOnlyTree(control),control,revision,feed,PhoneActionEffects.REAL,visualReader(before,control));result.put("actionEffects",after.evidence);
                     JSONObject observed=after.evidence.optJSONObject("observed");if(observed!=null)result.put("actionFeedback",observed.optString("status").equals("change_observed")?"已观察到界面变化；不代表业务完成。":"当前可读树未显示确定变化；这不证明动作没发生，勿原样重发。");
                 }catch(Exception unavailable){retainDispatchReceipt(result,unavailable);result.put("actionEffects",new JSONObject().put("stability","unavailable_after_dispatch").put("verifiedBusinessSuccess",false).put("automaticReplayAllowed",false));}
             }else result.put("actionEffects",new JSONObject().put("stability",result.has("accepted")&&result.isNull("accepted")?"unknown_dispatch_not_replayed":Boolean.TRUE.equals(result.opt("accepted"))?"before_tree_unavailable":"not_accepted").put("verifiedBusinessSuccess",false).put("automaticReplayAllowed",false));
@@ -481,7 +607,17 @@ public final class AdaptivePhonePort implements PhonePort {
         }finally{actionEffectInFlight.set(false);}
     }
     private static JSONObject effectSnapshot(JSONObject source)throws Exception {
-        if(source==null)return null;JSONObject out=new JSONObject();for(String key:new String[]{"ok","observationId","packageName","installedApp","displayId","sessionId","pauseRevision","nodes","windows","truncated","treeCoverage","observationSources","treeFingerprint"})if(source.has(key))out.put(key,source.get(key));return new JSONObject(out.toString());
+        if(source==null)return null;JSONObject out=new JSONObject();for(String key:new String[]{"ok","observationId","packageName","installedApp","displayId","sessionId","pauseRevision","nodes","windows","truncated","treeCoverage","observationSources","treeFingerprint","visualEvidence","observationDecision"})if(source.has(key))out.put(key,source.get(key));return new JSONObject(out.toString());
+    }
+    private PhoneActionEffects.VisualReader visualReader(JSONObject before,RunControl control){
+        if(!localCaptureAllowed||!(source instanceof NativePhoneVisualSignals)||before==null)return null;
+        JSONObject sources=before.optJSONObject("observationSources"),decision=before.optJSONObject("observationDecision");
+        boolean visual=before.has("visualEvidence")||sources==null||sources.optInt("usefulNodes")<3
+                ||decision!=null&&java.util.Set.of("vision","ocr").contains(decision.optString("request"));
+        if(!visual)return null;
+        final long revision=control.pauseRevision();
+        return ()->{synchronized(this){String blocked=authority(control);if(blocked!=null||reconciliationRequired||safetyPause!=null||control.pauseRevision()!=revision)throw new SecurityException("visual_observation_authority_changed");}
+            return ((NativePhoneVisualSignals)source).readVisualEvidence(control);};
     }
     private JSONObject executeBound(String tool,JSONObject args,RunControl control,NativePhoneEntry.Admission admission)throws Exception {
         String blocked = authority(control);
@@ -637,7 +773,7 @@ public final class AdaptivePhonePort implements PhonePort {
                 .put("localCaptureAllowed",localCaptureAllowed).put("localOcrAllowed",localOcrAllowed).put("ocrTextMayBeSentToModel",true).put("uploadImageAllowed",imageCeiling).put("screenshotsAllowed", imageCeiling).put("automaticReplayAllowed", false));
         latest = new JSONObject(out.toString()); pendingNeed = Need.AUTOMATIC; consecutiveScreenChanges = 0;
         if(practice!=null)practice.observation(out);
-        return out;
+        return PhoneTreeQuery.modelObservation(out);
     }
     private boolean ocrAvailable() { return ocr != null && ocr.available(); }
     private static boolean imageCoordinatesAvailable(JSONObject observation) {

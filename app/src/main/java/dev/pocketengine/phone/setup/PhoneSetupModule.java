@@ -75,6 +75,9 @@ public final class PhoneSetupModule implements EngineModule {
             else context.android.registerReceiver(unlockReceiver, unlock);
             lifecycleSignalsRegistered = true;
         } catch (RuntimeException unavailable) { lifecycleSignalsRegistered = false; }
+        // A cold process can start after the boot/unlock broadcast. Queue the same consent-
+        // checked connection inspection once the module has finished publishing its state.
+        main.postAtTime(() -> recoverAfterLifecycle(() -> { }), this, SystemClock.uptimeMillis());
     }
 
     static PhoneSetupModule current() { return instance; }
@@ -282,11 +285,14 @@ public final class PhoneSetupModule implements EngineModule {
             JSONObject before = recovery.snapshot();
             long revision = before.getLong("revision");
             recovery.restore(() -> !closed && context.executionAllowed());
-            if (!recovery.consentCurrent(revision) || closed) lastConnectionOutcome = "consent_required";
+            if (Thread.currentThread().isInterrupted()) lastConnectionOutcome = "recovery_interrupted";
+            else if (!recovery.consentCurrent(revision) || closed) lastConnectionOutcome = "consent_required";
             else if (!recovery.snapshot().optBoolean("userUnlocked")) lastConnectionOutcome = "owner_unlock_required";
             else synchronized (display) {
                 JSONObject state = display.snapshot();
                 if (state.optBoolean("taskOwned") || state.optBoolean("bootstrapBusy")) lastConnectionOutcome = "original_task_owns_connection";
+                else if (state.optBoolean("helperConnected")) lastConnectionOutcome = state.optBoolean("recoveryRequired") || state.optBoolean("releasePending")
+                        ? "original_session_requires_owner_review" : "original_helper_authenticated";
                 else if (!state.optBoolean("configured")) lastConnectionOutcome = "owner_setup_required";
                 else if (!recovery.consentCurrent(revision) || closed) lastConnectionOutcome = "consent_required";
                 else try {

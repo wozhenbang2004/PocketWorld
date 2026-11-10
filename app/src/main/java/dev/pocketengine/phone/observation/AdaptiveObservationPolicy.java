@@ -80,8 +80,8 @@ public final class AdaptiveObservationPolicy {
             return decision(Request.REOBSERVE, "observation_expired", expected);
         if (observed.emptyDisplay && observed.usefulNodes == 0 && !observed.actualImage)
             return decision(Request.EMPTY_DISPLAY, "display_has_no_frame", expected);
-        if (need == Need.AUTOMATIC && observed.treeAvailable && !observed.treeTruncated && observed.usefulNodes > 0 && observed.treeAdequate)
-            return decision(Request.NODES, "tree_sufficient", expected);
+        if (need == Need.AUTOMATIC && observed.treeAvailable && observed.usefulNodes > 0 && (observed.treeAdequate||observed.treeTruncated))
+            return decision(Request.NODES, observed.treeTruncated?"partial_tree_visible_targets":"tree_sufficient", expected);
         String cause = need != Need.AUTOMATIC ? need.name().toLowerCase(java.util.Locale.ROOT)
                 : !observed.treeAvailable ? "tree_unavailable" : observed.treeTruncated ? "tree_truncated" : observed.usefulNodes==0?"no_useful_nodes":"tree_partial";
         // Even a retained image cannot override the owner's disabled screenshots setting.

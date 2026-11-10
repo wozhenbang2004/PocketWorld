@@ -51,7 +51,7 @@ import dev.pocketengine.phone.observation.NativeNodeActionReceipt;
 import dev.pocketengine.phone.observation.PhoneReadGate;
 
 /** A single foreground-display executor. References are data, never retained Android nodes. */
-public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.pocketengine.phone.observation.NativeTreeScrollPort,dev.pocketengine.phone.observation.NativePhoneSignals,dev.pocketengine.phone.observation.NativePhoneExtensions {
+public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.pocketengine.phone.observation.NativeTreeScrollPort,dev.pocketengine.phone.observation.NativePhoneSignals,dev.pocketengine.phone.observation.NativePhoneVisualSignals,dev.pocketengine.phone.observation.NativePhoneExtensions {
     private static final int MAX_TEXT = 400;
     private static final long MAIN_WAIT_MS = 5_000;
     private static final ThreadLocal<Long> MAIN_DEADLINE = new ThreadLocal<>();
@@ -60,6 +60,7 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
     private final AtomicReference<Snapshot> reference = new AtomicReference<>();
     private final PhoneReadGate reads = new PhoneReadGate();
     private volatile long lastScreenshotRequest;
+    private final dev.pocketengine.displayhelper.FrameVisualEvidence visualFrames=new dev.pocketengine.displayhelper.FrameVisualEvidence();
     private volatile boolean lastIncludeImage;
     private final dev.pocketengine.phone.setup.AndroidAppCopies appCopies;
     private final dev.pocketengine.phone.access.PhoneOwnerPackages.Probe clipboardOwners;
@@ -71,6 +72,29 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
         appCopies=new dev.pocketengine.phone.setup.AndroidAppCopies(this.context,Display.DEFAULT_DISPLAY);
     }
     @Override public PhoneUiSignals uiSignals(RunControl control)throws Exception {control.check();if(control.isPaused())return null;PhoneAccessibilityService service=requireService();requireUnlocked(service);return service.uiSignals();}
+    @Override public synchronized JSONObject readVisualEvidence(RunControl control)throws Exception {
+        workerOnly();long revision=control.pauseRevision();PhoneAccessibilityService service=requireService();
+        guard(service,control,revision);
+        try{return onTreeRead(()->guard(service,control,revision),()->{
+            AccessibilityServiceInfo info=service.getServiceInfo();
+            if(info==null||(info.getCapabilities()&AccessibilityServiceInfo.CAPABILITY_CAN_TAKE_SCREENSHOT)==0)
+                return new JSONObject().put("status","unavailable").put("reason","screenshot_permission_denied");
+            long spacing=1000-(SystemClock.uptimeMillis()-lastScreenshotRequest);
+            if(spacing>0)return new JSONObject().put("status","deferred").put("reason","capture_spacing").put("nextSampleAfterMs",spacing);
+            Screen before=screen(service);
+            CapturedImage captured=capture(service,()->guard(service,control,revision),false);
+            if(!before.same(screen(service))||captured.fullWidth!=before.width||captured.fullHeight!=before.height)
+                throw new PhoneFailure("screen_changed","主屏在画面采样期间变化，请重新观察。");
+            guard(service,control,revision);
+            return new JSONObject(captured.json.getJSONObject("visualEvidence").toString())
+                    .put("displayId",Display.DEFAULT_DISPLAY).put("sessionId",service.observationSessionId()).put("pauseRevision",revision)
+                    .put("sourceFrameFresh",true).put("framePending",false).put("observedAtNanos",System.nanoTime()).put("source","accessibility_screenshot")
+                    .put("nextSampleAfterMs",Math.max(1,1000-(SystemClock.uptimeMillis()-lastScreenshotRequest)));
+        });}catch(PhoneFailure unavailable){
+            if(!ObservationReport.isCaptureUnavailable(unavailable.code))throw unavailable;
+            return new JSONObject().put("status","unavailable").put("reason",unavailable.code).put("sourceFrameFresh",false);
+        }
+    }
     @Override public boolean isConnected() { return PhoneAccessibilityService.get() != null; }
     @Override public void clearReferences() { reference.set(null); }
 
@@ -135,7 +159,7 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
             for(int i=0;i<paths.length();i++){JSONArray points=paths.getJSONArray(i);for(int j=1;j<points.length();j++){JSONArray a=points.getJSONArray(j-1),b=points.getJSONArray(j);NativeSensitiveStep.requireCoordinate(fresh.forest,a.getInt(0),a.getInt(1),b.getInt(0),b.getInt(1),true,control,expected.revision);}}
             requireUiUnchanged(service,before);return before;
         });
-        CompletableFuture<String> completion=new CompletableFuture<>();java.util.concurrent.atomic.AtomicBoolean listening=new java.util.concurrent.atomic.AtomicBoolean(true);
+        CompletableFuture<String> completion=new CompletableFuture<>();java.util.concurrent.atomic.AtomicBoolean listening=new java.util.concurrent.atomic.AtomicBoolean(true),dispatchAccepted=new java.util.concurrent.atomic.AtomicBoolean();
         try{
             boolean accepted=onMain(control,expected.revision,()->{
                 validateReference(service,expected,control);GestureDescription.Builder builder=new GestureDescription.Builder().setDisplayId(Display.DEFAULT_DISPLAY);
@@ -154,22 +178,23 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
                 return NativePhoneEntry.call(control,expected.revision,admission,()->{
                     Long deadline=MAIN_DEADLINE.get();if(deadline!=null&&SystemClock.uptimeMillis()>deadline)throw new PhoneFailure("dispatch_unknown","原生手势入场超时。");
                     requireUiUnchanged(service,validated);clearReferences();
-                    return dispatchGesture(service,builder.build(),new AccessibilityService.GestureResultCallback(){
+                    boolean dispatched=dispatchGesture(service,builder.build(),new AccessibilityService.GestureResultCallback(){
                         @Override public void onCompleted(GestureDescription gesture){if(listening.get())completion.complete("completed");}
                         @Override public void onCancelled(GestureDescription gesture){if(listening.get())completion.complete("cancelled");}
                     });
+                    if(dispatched)dispatchAccepted.set(true);return dispatched;
                 });
             });
             if(!accepted)return receipt(false,"gesture_rejected").put("cancelSupported",false);
             String state;
-            try{state=await(completion,control,duration+3500L);}
+            try{state=await(completion,()->guard(service,control,expected.revision),duration+3500L);}
             catch(Exception unknown){
-                if(unknown instanceof InterruptedException)Thread.currentThread().interrupt();
-                return ObservationReport.annotateFailure(new JSONObject().put("ok",false).put("accepted",true).put("error","gesture_completion_unknown").put("state","completion_unknown").put("cancelSupported",false).put("subsequentStepsStopped",true).put("requiresReconciliation",true).put("automaticReplayAllowed",false));
+                return acceptedGestureReadFailure(completion,unknown);
             }
             if(!"completed".equals(state))return ObservationReport.annotateFailure(new JSONObject().put("ok",false).put("accepted",true).put("error","gesture_cancelled").put("state","gesture_cancelled").put("cancelSupported",false).put("requiresPostconditionCheck",true).put("automaticReplayAllowed",false));
             return receipt(true,"gesture_completed").put("cancelSupported",false).put("requiresPostconditionCheck",true);
-        }finally{listening.set(false);completion.cancel(false);}
+        }catch(Exception unavailable){if(dispatchAccepted.get())return acceptedGestureReadFailure(completion,unavailable);throw unavailable;}
+        finally{listening.set(false);completion.cancel(false);}
     }
 
     /** Read-only owner preview. It never installs action references or touches the task's physical port. */
@@ -258,17 +283,20 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
             CapturedImage image = null;
             boolean changedDuringRead = false;
             String imageReason = "not_requested";
+            JSONObject visualEvidence=null;
             // Retry a window/geometry transition once. Text updates may retain the
             // latest tree and contextual pixels, but never authorize coordinates.
             for (int attempt = 0; attempt < (includeImage ? 2 : 1); attempt++) {
                 if (attempt > 0) sleepRead(() -> guard(service, control, revision), 180);
                 Tree before = onTreeRead(() -> guard(service,control,revision), () -> readTree(service));
                 image = null;
+                visualEvidence=null;
                 if (includeImage) {
                     try { image = capture(service, control, revision); imageReason = "accessibility_screenshot"; }
                     catch (PhoneFailure unavailable) {
                         if (!ObservationReport.isCaptureUnavailable(unavailable.code)) throw unavailable;
                         imageReason = unavailable.code;
+                        visualEvidence=unavailable.visualEvidence;
                     }
                 }
                 after = includeImage ? onTreeRead(() -> guard(service,control,revision), () -> readTree(service)) : before;
@@ -294,9 +322,9 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
             if (includeImage && image == null) result.put("imageUnavailable", true).put("imageUnavailableReason", imageReason);
             dev.pocketengine.phone.observation.InstalledAppEvidence.attach(context,result);
             if (image != null) {
-                for (String key : new String[]{"imageBase64", "imageMimeType", "imageWidth", "imageHeight", "capturedAtUptimeMs"})
+                for (String key : new String[]{"imageBase64", "imageMimeType", "imageWidth", "imageHeight", "capturedAtUptimeMs", "visualEvidence"})
                     result.put(key, image.json.get(key));
-            }
+            }else if(visualEvidence!=null)result.put("visualEvidence",visualEvidence);
             after.forest.attach(result);
             reference.set(snapshot);
             return ObservationReport.attach(result, after.available, after.available ? "accessibility_tree" : "no_accessible_root",
@@ -451,7 +479,7 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
             throw new PhoneFailure("stale_observation","页面引用已过期，请重新观察。");
     }
     private Tree validateTarget(PhoneAccessibilityService service,Snapshot expected,RunControl control,AccessibilityForest.Ref target)throws Exception {
-        validateReference(service,expected,control);Tree fresh=readTree(service);
+        validateReference(service,expected,control);Tree fresh=readTree(service,target);
         if(!expected.tree.screen.same(fresh.screen)||!expected.tree.forest.sameTarget(target,fresh.forest))
             throw new PhoneFailure("stale_node","目标、祖先、窗口或遮挡已变化，请重新观察。");
         validateReference(service,expected,control);return fresh;
@@ -590,7 +618,9 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
             throw new PhoneFailure("stale_observation", "当前画面像素已改变，未提交手势。请重新观察。");
         PhoneUiSignals.Stamp validated=validateForUi(service,expected,control,false,args,swipe);
         CompletableFuture<String> completion = new CompletableFuture<>();
-        boolean accepted = onMain(control, expected.revision, () -> {
+        java.util.concurrent.atomic.AtomicBoolean dispatchAccepted=new java.util.concurrent.atomic.AtomicBoolean();
+        final boolean accepted;
+        try{accepted = onMain(control, expected.revision, () -> {
             validateReference(service,expected,control);
             Screen screen = expected.tree.screen;
             float startX = pixel(x1, screen.width), startY = pixel(y1, screen.height);
@@ -613,26 +643,33 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
                 if(deadline!=null&&SystemClock.uptimeMillis()>deadline)throw new PhoneFailure("dispatch_unknown","手机请求超时，请核对原操作。");
                 if(PhoneAccessibilityService.get()!=service)throw new PhoneFailure("service_disconnected","无障碍服务已变化。");
                 requireUiUnchanged(service,validated);clearReferences();
-                return dispatchGesture(service,description,new AccessibilityService.GestureResultCallback() {
+                boolean dispatched=dispatchGesture(service,description,new AccessibilityService.GestureResultCallback() {
                     @Override public void onCompleted(GestureDescription gesture) { completion.complete("completed"); }
                     @Override public void onCancelled(GestureDescription gesture) { completion.complete("cancelled"); }
                 });
+                if(dispatched)dispatchAccepted.set(true);return dispatched;
             });
-        });
+        });}catch(Exception unavailable){if(dispatchAccepted.get())return acceptedGestureReadFailure(completion,unavailable);throw unavailable;}
         if (!accepted) return receipt(false, "gesture_rejected");
         try {
-            String state = await(completion, control, duration + 3500L);
+            String state = await(completion, ()->guard(service,control,expected.revision), duration + 3500L);
             if ("cancelled".equals(state)) return ObservationReport.annotateFailure(new JSONObject().put("ok", false).put("accepted", true)
                     .put("verified", false).put("state", "gesture_cancelled").put("error", "gesture_cancelled")
                     .put("message", "系统已接收手势，但手势已取消。请重新观察。"));
             return receipt(true, "gesture_" + state);
         } catch (Exception unavailable) {
-            if(unavailable instanceof InterruptedException)Thread.currentThread().interrupt();
-            return ObservationReport.annotateFailure(new JSONObject().put("ok", false).put("accepted", true).put("verified", false)
-                    .put("state", "gesture_completion_unknown").put("error", "gesture_completion_unknown")
-                    .put("requiresReconciliation",true).put("automaticReplayAllowed",false).put("cancelSupported",false)
-                    .put("message", "系统已接收手势，但未收到完成回调。请重新观察，勿盲目重试。"));
+            return acceptedGestureReadFailure(completion,unavailable);
         }
+    }
+
+    private JSONObject acceptedGestureReadFailure(CompletableFuture<String> completion,Exception unavailable)throws Exception {
+        if(unavailable instanceof InterruptedException)Thread.currentThread().interrupt();
+        if("completed".equals(completion.getNow(null)))return receipt(true,"gesture_completed").put("requiresPause",true)
+                .put("postActionObservation","unavailable").put("dispatchReceiptPreserved",true).put("cancelSupported",false).put("automaticReplayAllowed",false);
+        return ObservationReport.annotateFailure(new JSONObject().put("ok",false).put("accepted",true).put("verified",false)
+                .put("state","gesture_completion_unknown").put("error","gesture_completion_unknown").put("cancelSupported",false)
+                .put("subsequentStepsStopped",true).put("dispatchReceiptPreserved",true).put("requiresReconciliation",true).put("automaticReplayAllowed",false)
+                .put("message","系统已接收手势，但完成结果尚未确认。请核对原页面，勿重放动作。"));
     }
 
     private boolean dispatchGesture(PhoneAccessibilityService service,GestureDescription description,AccessibilityService.GestureResultCallback callback)throws PhoneFailure {
@@ -645,6 +682,9 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
     }
 
     private CapturedImage capture(PhoneAccessibilityService service, OwnerScreenContext.ReadCheck check) throws Exception {
+        return capture(service,check,true);
+    }
+    private CapturedImage capture(PhoneAccessibilityService service, OwnerScreenContext.ReadCheck check,boolean includeImage) throws Exception {
         // The platform may throttle screenshots. Space our requests; never retry a gesture on capture failure.
         long spacing = 1_000 - (SystemClock.uptimeMillis() - lastScreenshotRequest);
         if (spacing > 0) sleepRead(check, spacing);
@@ -690,7 +730,7 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
             try { screenshot = await(result, check, 5_000); }
             catch (TimeoutException timeout) { throw new PhoneFailure("screenshot_timeout", "截图超时，请重新观察。"); }
             consumed = true;
-            return encode(screenshot, check, requestedAt.get());
+            return encode(screenshot, check, requestedAt.get(),service.observationSessionId(),includeImage);
         } finally {
             // Cancel before draining: a late callback then owns and closes its own HardwareBuffer.
             if (!consumed && !result.cancel(false) && !result.isCompletedExceptionally()) {
@@ -701,7 +741,7 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
         }
     }
 
-    private CapturedImage encode(AccessibilityService.ScreenshotResult screenshot, OwnerScreenContext.ReadCheck check,long requestedAt) throws Exception {
+    private CapturedImage encode(AccessibilityService.ScreenshotResult screenshot, OwnerScreenContext.ReadCheck check,long requestedAt,String session,boolean includeImage) throws Exception {
         Bitmap hardware = null, software = null, scaled = null;
         try (HardwareBuffer buffer = screenshot.getHardwareBuffer()) {
             check.check();
@@ -715,6 +755,11 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
                 throw new PhoneFailure("screenshot_too_large", "屏幕图像超过安全处理范围。");
             software = hardware.copy(Bitmap.Config.ARGB_8888, false);
             if (software == null) throw new PhoneFailure("screenshot_unavailable", "无法转换系统截图。");
+            final Bitmap sampled=software;
+            JSONObject visual=visualFrames.record(session,fullWidth,fullHeight,capturedAt*1_000_000L,sampled::getPixel)
+                    .put("sourceFrameFresh",true).put("framePending",false).put("source","accessibility_screenshot");
+            check.check();
+            if(!includeImage)return new CapturedImage(new JSONObject().put("visualEvidence",visual),null,fullWidth,fullHeight);
             MessageDigest comparison = MessageDigest.getInstance("SHA-256");
             int[] pixels = new int[fullWidth];
             byte[] row = new byte[fullWidth * 4];
@@ -732,7 +777,7 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
                 }
                 comparison.update(row);
             }
-            if(!visualContent)throw new PhoneFailure("screenshot_blank_frame","截图没有可用于视觉定位的内容；保留当前可读节点，请等待页面产生画面。");
+            if(!visualContent)throw new PhoneFailure("screenshot_blank_frame","截图没有可用于视觉定位的内容；保留当前可读节点，请等待页面产生画面。",visual.put("allPixelsBlack",true));
             String digest = Base64.encodeToString(comparison.digest(), Base64.NO_WRAP);
             float factor = Math.min(1f, 1280f / Math.max(software.getWidth(), software.getHeight()));
             int width = Math.max(1, Math.round(software.getWidth() * factor));
@@ -744,7 +789,7 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
                 throw new PhoneFailure("screenshot_unavailable", "无法编码截图。");
             check.check();
             JSONObject image = new JSONObject().put("imageBase64", Base64.encodeToString(bytes.toByteArray(), Base64.NO_WRAP))
-                    .put("imageMimeType", "image/jpeg").put("imageWidth", width).put("imageHeight", height).put("capturedAtUptimeMs",capturedAt);
+                    .put("imageMimeType", "image/jpeg").put("imageWidth", width).put("imageHeight", height).put("capturedAtUptimeMs",capturedAt).put("visualEvidence",visual);
             return new CapturedImage(image, digest, fullWidth, fullHeight);
         } finally {
             if (scaled != null && scaled != software) scaled.recycle();
@@ -754,12 +799,16 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
     }
 
     private Tree readTree(PhoneAccessibilityService service) throws Exception {
+        return readTree(service,null);
+    }
+    private Tree readTree(PhoneAccessibilityService service,AccessibilityForest.Ref target) throws Exception {
         PhoneReadGate.checkCurrent();
         if (service != PhoneAccessibilityService.get()) throw new PhoneFailure("service_disconnected", "请先启用 PocketEngine 无障碍服务。");
         requireUnlocked(service);
         Screen screen = screen(service);
-        AccessibilityForest forest=AccessibilityForest.read(service,Display.DEFAULT_DISPLAY,screen.width,screen.height,
-                () -> { PhoneReadGate.checkCurrent();if(service!=PhoneAccessibilityService.get())throw new PhoneFailure("service_disconnected","无障碍服务已变化。"); requireUnlocked(service); });
+        AccessibilityForest.Check check=() -> { PhoneReadGate.checkCurrent();if(service!=PhoneAccessibilityService.get())throw new PhoneFailure("service_disconnected","无障碍服务已变化。"); requireUnlocked(service); };
+        AccessibilityForest forest=target==null?AccessibilityForest.read(service,Display.DEFAULT_DISPLAY,screen.width,screen.height,check)
+                :AccessibilityForest.readForTarget(service,Display.DEFAULT_DISPLAY,screen.width,screen.height,target,check);
         return new Tree(screen,forest);
     }
 
@@ -958,7 +1007,9 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
     private interface MainCall<T> { T run() throws Exception; }
     private static final class PhoneFailure extends Exception {
         final String code;
-        PhoneFailure(String code, String message) { super(message); this.code = code; }
+        final JSONObject visualEvidence;
+        PhoneFailure(String code, String message) { this(code,message,null); }
+        PhoneFailure(String code, String message,JSONObject visualEvidence) { super(message); this.code = code; this.visualEvidence=visualEvidence; }
     }
     private static final class Screen {
         final int width, height, rotation;

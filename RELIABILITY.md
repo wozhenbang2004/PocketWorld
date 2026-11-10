@@ -3,6 +3,22 @@
 This is the shared maintenance contract for the native execution path and its diagnostics.
 It does not grant execution authority and must not become a second task or account store.
 
+## Phone capability completion — 2026-11-10
+
+Active owner requirements: “研究 mika dshgo 和我们 pocketworld phone use 能力的差异 细节差异然后去彻底实现对齐改进”, followed by “还差什么就继续彻底实现啊只要是会影响到正常功能的”. The continuation covers concrete normal-task blockers after v0.1.71: complex-page target coverage, long UI waits, bounded target search and picker convergence, OCR/text collection, visual settling, current-profile launch ownership and observable alarm/recovery state.
+
+`TaskStore`, the original `AgentRunner` and its `RunControl` remain the only execution authority. `phone_find` and `phone_prepare_wheel` produce run-local bounded native plans: each child action uses the original argument validation, permission/approval, prepared operation, journal settlement and cancellation gates. A fresh read may finish the plan early; an accepted action is never inferred from a step count, and an unknown effect never advances the plan. Restart does not restore plan authority.
+
+Complete native trees remain adapter-local. The model receives bounded projections with explicit coverage, while queries can search the retained text. A partial unrelated window does not invalidate a completely revalidated target window; partial coverage cannot establish absence or whole-page stability. Text collection retains page provenance and explicit overlap, and paginated delivery does not claim that the first result contains the whole collection. Collection cursors expire with their original run, pause and application-policy scope.
+
+The normal tree budget is 2048 nodes with depth 96; target-window revalidation may inspect 4096 nodes with depth 128. Standalone waits allow 60 seconds with cancellation-aware backoff. Search and picker plans allow at most 30 physical steps, while both collection modes retain at most 30 pages and 1000 rows or text segments within 256 KiB. These bounds do not prove that an entire app page or list was observed.
+
+Extraction returns every delivered row/field reference with its actual ancestors, under a 120 KiB result budget, and supports same-observation offset pagination. Route learning, unique-target checks and replay conditions consult the corresponding adapter-local source snapshot; presentation clipping must neither invalidate complete native evidence nor make omitted nodes disappear from uniqueness checks. Historical collection pages contain evidence only and cannot replace current action references. Oversized retained rows and long escaped or multilingual text must still advance pagination without silently dropping content.
+
+OCR values tied to tree geometry reject a screenshot that changed during capture; recovery permits one bounded read-only retry and no repeated input. Visual settling uses authorized local pixel statistics and actual source-frame timestamps, including sparse-tree pages; it does not establish business success. Alarm observations report only what the current profile's next-alarm API exposes. Accessibility recovery waits only for an already authorized service connection, and ordinary background launch retains exact package/profile ownership while allowing a bounded resource wait.
+
+Current validation policy for this delivery is source review and `git diff --check`, followed by the existing remote compilation, signing, packaging and publishing workflow. No tests are added or run, including CI/E2E, and no local build is performed. Older verification recipes below describe historical work and do not override this owner instruction. Compilation and release evidence do not establish real-device or OEM runtime behavior.
+
 ## Boundaries that must stay separate
 
 | Boundary | Authority | Required behavior |

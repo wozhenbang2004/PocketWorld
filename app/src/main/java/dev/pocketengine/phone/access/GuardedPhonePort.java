@@ -8,7 +8,7 @@ import java.util.Set;
 import org.json.JSONObject;
 
 /** No content is read to decide permission. Live checks also run at the original native dispatch fence. */
-public final class GuardedPhonePort implements PhonePort,NativeOcrTapPort,NativeTreeScrollPort,NativePhoneSignals,NativePhoneExtensions {
+public final class GuardedPhonePort implements PhonePort,NativeOcrTapPort,NativeTreeScrollPort,NativePhoneSignals,NativePhoneExtensions,NativePhoneVisualSignals {
     private final PhonePort inner;private final PhoneAccessPolicy policy;private final PhoneOwnerPackages.Probe owners;private final int nativeUser;
     private volatile long referenceRevision=-1;private volatile RunControl referenceControl;
     private final ThreadLocal<Boolean> probing=new ThreadLocal<>();
@@ -63,6 +63,10 @@ public final class GuardedPhonePort implements PhonePort,NativeOcrTapPort,Native
         PhoneAccessPolicy.State state=policy.current();PhoneOwnerPackages actual=owners.read(control);state.require(actual,PhoneAccessPolicy.Use.AUTOMATION);
         PhoneUiSignals signals=inner instanceof NativePhoneSignals?((NativePhoneSignals)inner).uiSignals(control):null;
         control.check();if(state.revision()!=policy.current().revision()||!referencePolicyCurrent())throw new PhoneAccessPolicy.Denied("app_policy_changed");return signals;
+    }
+    @Override public JSONObject readVisualEvidence(RunControl control)throws Exception {
+        if(!(inner instanceof NativePhoneVisualSignals))return new JSONObject().put("status","unavailable").put("reason","visual_sampling_unsupported");
+        return guarded(control,false,false,null,live->((NativePhoneVisualSignals)inner).readVisualEvidence(control));
     }
     @Override public JSONObject extension(String tool,JSONObject arguments,RunControl control,NativePhoneEntry.Admission admission)throws Exception {
         if(!(inner instanceof NativePhoneExtensions))throw new SecurityException("native_extension_unavailable");

@@ -157,6 +157,11 @@ public final class AndroidSemanticPlatform implements SemanticPlatform {
                 .put("profileSerial",profileSerial()).put("appPolicyRevision",new dev.pocketengine.phone.access.AndroidPhoneAccessStore(context).current().revision());
     }
     @Override public JSONObject dispatch(SemanticRequest request,Target target,RunControl control,Admission admission) throws Exception {
+        NextAlarmEvidence alarm=NextAlarmEvidence.forRequest(context,request,target);
+        JSONObject result=dispatchIntent(request,target,control,admission,alarm);
+        return alarm==null?result:alarm.afterDispatch(result,control,admission);
+    }
+    private JSONObject dispatchIntent(SemanticRequest request,Target target,RunControl control,Admission admission,NextAlarmEvidence alarm) throws Exception {
         if(Looper.myLooper()==Looper.getMainLooper())return notDispatched("worker_required",false);
         final long admittedPauseRevision=control.pauseRevision();
         SemanticDispatchGate gate=new SemanticDispatchGate();CountDownLatch done=new CountDownLatch(1);AtomicReference<JSONObject> receipt=new AtomicReference<>();
@@ -174,6 +179,7 @@ public final class AndroidSemanticPlatform implements SemanticPlatform {
                     // This is the actual call boundary, after all queued work. The closure retains
                     // the original TaskStore operation, control, service identity and package snapshot.
                     requireService(control);admission.check();requireAppAccess(target);invalidatePhoneReferences.run();requireService(control);
+                    if(alarm!=null)alarm.captureBefore();
                     control.dispatchAtPauseRevision(admittedPauseRevision,()->{
                         requireClockContext(request,target);requireAppAccess(target);
                         if(!gate.enter()) {receipt.set(notDispatched("semantic_queue_cancelled",false));return;}

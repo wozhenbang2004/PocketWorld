@@ -52,7 +52,7 @@
         <activity android:name=".phone.diagnostics.PhonePracticeActivity" android:exported="false" android:excludeFromRecents="true" android:windowSoftInputMode="adjustResize" android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout"/>
         <receiver android:name=".phone.setup.PhoneSetupReceiver" android:exported="false"/>
         <receiver android:name=".phone.setup.PhoneRecoveryReceiver" android:exported="false">
-            <intent-filter><action android:name="android.intent.action.BOOT_COMPLETED"/></intent-filter>
+            <intent-filter><action android:name="android.intent.action.BOOT_COMPLETED"/><action android:name="android.intent.action.MY_PACKAGE_REPLACED"/></intent-filter>
         </receiver>
         <activity android:name=".MainActivity" android:exported="false" android:windowSoftInputMode="adjustResize"/>
         <activity android:name=".BrowserActivity" android:exported="false" android:windowSoftInputMode="adjustResize"/>

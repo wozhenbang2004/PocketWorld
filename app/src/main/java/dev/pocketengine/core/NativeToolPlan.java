@@ -7,7 +7,7 @@ import org.json.JSONObject;
 /** A short, one-use native plan. It supplies no approval, grant, execution loop or restored authority. */
 public final class NativeToolPlan implements AutoCloseable {
     public enum Tool {
-        CLICK_NODE("phone_click_node"),TYPE("phone_type"),SCROLL_NODE("phone_scroll_node"),CONDITION_WAIT("phone_condition_wait"),
+        CLICK_NODE("phone_click_node"),TYPE("phone_type"),SCROLL_NODE("phone_scroll_node"),WHEEL_STEP("phone_set_wheel"),CONDITION_WAIT("phone_condition_wait"),
         BROWSER_OBSERVE("browser_task_observe"),BROWSER_CLICK("browser_task_click"),BROWSER_TYPE("browser_task_type"),BROWSER_SCROLL("browser_task_scroll"),BROWSER_WAIT("browser_task_wait");
         public final String name;Tool(String name){this.name=name;}
         public boolean requiresMatched(){return this==CONDITION_WAIT||this==BROWSER_WAIT;}
@@ -24,15 +24,22 @@ public final class NativeToolPlan implements AutoCloseable {
     /** Native result only: fixed tool and actual current observation/node arguments, not model authority. */
     public static final class Resolved {
         private final Tool tool;private final String json,observation;private final RunControl.AuthorityCheck current;
+        private Resolved(JSONObject completion,RunControl.AuthorityCheck current)throws Exception {
+            this.tool=null;this.current=Objects.requireNonNull(current);observation=null;
+            if(completion==null||completion.has("imageBase64")||completion.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length>131072)throw new IllegalArgumentException("native_sequence_completion_invalid");
+            json=completion.toString();
+        }
+        /** A read result that ends a bounded native plan; it cannot dispatch or restore an operation. */
+        public static Resolved complete(JSONObject observation,RunControl.AuthorityCheck current)throws Exception{return new Resolved(observation,current);}
         public Resolved(Tool tool,JSONObject actualArguments,RunControl.AuthorityCheck current)throws Exception{this(tool,actualArguments,null,current);}
         public Resolved(Tool tool,JSONObject actualArguments,JSONObject actualFreshObservation,RunControl.AuthorityCheck current)throws Exception{
             this.tool=Objects.requireNonNull(tool);this.current=Objects.requireNonNull(current);Objects.requireNonNull(actualArguments);
-            Set<String> keys=switch(tool){case CLICK_NODE->Set.of("observationId","nodeId");case TYPE->Set.of("observationId","nodeId","text");case SCROLL_NODE->Set.of("observationId","nodeId","direction");case CONDITION_WAIT->Set.of("observationId","kind","selector","timeoutMs","stableForMs");
+            Set<String> keys=switch(tool){case CLICK_NODE->Set.of("observationId","nodeId");case TYPE->Set.of("observationId","nodeId","text");case SCROLL_NODE->Set.of("observationId","nodeId","direction");case WHEEL_STEP->Set.of("observationId","nodeId","direction","value");case CONDITION_WAIT->Set.of("observationId","kind","selector","timeoutMs","stableForMs");
                 case BROWSER_OBSERVE->Set.of("tabId");case BROWSER_CLICK->Set.of("tabId","observationId","ref");case BROWSER_TYPE->Set.of("tabId","observationId","ref","text");case BROWSER_SCROLL->Set.of("tabId","observationId","dy");case BROWSER_WAIT->Set.of("tabId","condition","value","target","timeoutMs");};
             var names=actualArguments.keys();while(names.hasNext())if(!keys.contains(names.next()))throw new IllegalArgumentException("native_sequence_argument_not_allowed");
             boolean browser=tool.name.startsWith("browser_task_"),unreferenced=tool==Tool.BROWSER_OBSERVE||tool==Tool.BROWSER_WAIT;
             if(actualArguments.toString().length()>16000||!unreferenced&&actualArguments.optString("observationId").isEmpty()||browser&&actualArguments.optString("tabId").isEmpty())throw new IllegalArgumentException("native_sequence_arguments_invalid");
-            if(actualFreshObservation==null){if(tool==Tool.CLICK_NODE||tool==Tool.TYPE||tool==Tool.BROWSER_CLICK||tool==Tool.BROWSER_TYPE||tool==Tool.BROWSER_SCROLL)throw new IllegalArgumentException("native_sequence_fresh_tree_required");observation=null;}
+            if(actualFreshObservation==null){if(tool==Tool.CLICK_NODE||tool==Tool.TYPE||tool==Tool.WHEEL_STEP||tool==Tool.BROWSER_CLICK||tool==Tool.BROWSER_TYPE||tool==Tool.BROWSER_SCROLL)throw new IllegalArgumentException("native_sequence_fresh_tree_required");observation=null;}
             else{if(!actualArguments.getString("observationId").equals(actualFreshObservation.optString("observationId"))||actualFreshObservation.has("imageBase64")||actualFreshObservation.has("image_url")||actualFreshObservation.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length>131072)throw new IllegalArgumentException("native_sequence_fresh_tree_invalid");observation=actualFreshObservation.toString();}
             json=actualArguments.toString();
         }
@@ -46,10 +53,11 @@ public final class NativeToolPlan implements AutoCloseable {
     }
     private final String parentTool,parentOperation;private final RunControl original;private final RunIdentity identity;private final long pause;
     private final int count;private final Resolver resolver;private final RunControl.AuthorityCheck current;
-    private boolean taken,closed,resolving;private int next;
+    private boolean taken,closed,resolving;private int next;private String completion;
     private NativeToolPlan(String parentTool,String parentOperation,RunControl original,RunIdentity identity,int count,Resolver resolver,RunControl.AuthorityCheck current)throws Exception{
-        boolean allowed=identity instanceof Identity&&java.util.Set.of("phone_prepare_sequence","phone_replay_route").contains(parentTool)||identity instanceof BrowserIdentity&&"browser_task_prepare_sequence".equals(parentTool);
-        if(!allowed||parentOperation==null||parentOperation.isEmpty()||parentOperation.length()>200||count<1||count>4)throw new IllegalArgumentException("native_sequence_invalid");
+        boolean bounded=bounded(parentTool);
+        boolean allowed=identity instanceof Identity&&(java.util.Set.of("phone_prepare_sequence","phone_replay_route").contains(parentTool)||bounded)||identity instanceof BrowserIdentity&&"browser_task_prepare_sequence".equals(parentTool);
+        if(!allowed||parentOperation==null||parentOperation.isEmpty()||parentOperation.length()>200||count<1||count>(bounded?31:4))throw new IllegalArgumentException("native_sequence_invalid");
         this.parentTool=parentTool;this.parentOperation=parentOperation;this.original=Objects.requireNonNull(original);this.identity=Objects.requireNonNull(identity);this.count=count;this.resolver=Objects.requireNonNull(resolver);this.current=Objects.requireNonNull(current);pause=original.pauseRevision();require(original);
     }
     public static NativeToolPlan capture(String parentTool,String parentOperationId,RunControl original,Identity identity,int count,Resolver resolver,RunControl.AuthorityCheck current)throws Exception{return new NativeToolPlan(parentTool,parentOperationId,original,identity,count,resolver,current);}
@@ -65,6 +73,7 @@ public final class NativeToolPlan implements AutoCloseable {
     public Step next(RunControl actual)throws Exception{
         require(actual);final int index;synchronized(this){if(!taken||closed||resolving)throw new SecurityException("native_sequence_not_available");if(next>=count)return null;index=next++;resolving=true;}
         try{Resolved resolved=Objects.requireNonNull(resolver.resolve(index,actual));require(actual);
+            if(resolved.tool==null){if(!bounded(parentTool))throw new SecurityException("native_sequence_completion_not_allowed");resolved.current.check();require(actual);synchronized(this){completion=resolved.json;next=count;}return null;}
             if((identity instanceof BrowserIdentity)!=resolved.tool.name.startsWith("browser_task_"))throw new SecurityException("native_sequence_tool_identity_mismatch");
             Step step=new Step(index,resolved);step.requireCurrent(actual);return step;}
         catch(Exception unavailable){close();throw unavailable;}
@@ -72,5 +81,7 @@ public final class NativeToolPlan implements AutoCloseable {
     }
     public int size(){return count;}
     public String parentTool(){return parentTool;}
+    public synchronized JSONObject completion()throws Exception{return completion==null?null:new JSONObject(completion);}
+    private static boolean bounded(String tool){return "phone_find".equals(tool)||"phone_prepare_wheel".equals(tool);}
     @Override public synchronized void close(){closed=true;}
 }

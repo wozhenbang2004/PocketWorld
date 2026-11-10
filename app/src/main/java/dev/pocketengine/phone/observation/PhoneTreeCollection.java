@@ -8,20 +8,22 @@ import org.json.JSONObject;
 /** One bounded in-memory read cursor of the original phone adapter, not an executor or durable journal. */
 public final class PhoneTreeCollection {
     public static final String TOOL="phone_collect";
-    public static final int MAX_PAGES=10, MAX_BYTES=24*1024;
-    public static final long TTL_MS=120_000;
+    public static final int MAX_PAGES=30, MAX_ROWS=1000, MAX_BYTES=256*1024;
+    public static final long TTL_MS=600_000;
     private PhoneTreeCollection() { }
     public static void validate(JSONObject args)throws Exception {
         String action=PhoneTreeExtract.text(args,"action",10);
         if(action.equals("start")){
             PhoneTreeExtract.keys(args,"action","observationId","containerId","rowSelector","fields","maxPages","maxRows","direction","stopSelector");
             JSONObject spec=new JSONObject(args.toString());for(String key:new String[]{"action","maxPages","maxRows","direction","stopSelector"})spec.remove(key);spec.put("limit",PhoneTreeExtract.MAX_ROWS);PhoneTreeExtract.validate(spec);
-            PhoneTreeExtract.integer(args,"maxPages",6,1,MAX_PAGES);PhoneTreeExtract.integer(args,"maxRows",60,1,PhoneTreeExtract.MAX_ROWS);
+            PhoneTreeExtract.integer(args,"maxPages",6,1,MAX_PAGES);PhoneTreeExtract.integer(args,"maxRows",200,1,MAX_ROWS);
             if(!Set.of("forward","backward").contains(PhoneTreeExtract.text(args,"direction",10)))throw new IllegalArgumentException("需要明确滚动方向");
             if(args.has("stopSelector")){PhoneTreeExtract.selector(args.getJSONObject("stopSelector"));if(args.getJSONObject("stopSelector").length()==0)throw new IllegalArgumentException("停止条件不能为空");}
         }else if(Set.of("advance","read","finish").contains(action)){
-            PhoneTreeExtract.keys(args,"action","cursorId","afterOperationId");PhoneTreeExtract.text(args,"cursorId",100);
+            PhoneTreeExtract.keys(args,"action","cursorId","afterOperationId","offset","limit");PhoneTreeExtract.text(args,"cursorId",100);
             if(action.equals("advance"))PhoneTreeExtract.text(args,"afterOperationId",100);else if(args.has("afterOperationId"))throw new IllegalArgumentException("此命令不接受动作回执");
+            if(!action.equals("read")&&(args.has("offset")||args.has("limit")))throw new IllegalArgumentException("分页参数仅用于read");
+            PhoneTreeExtract.integer(args,"offset",0,0,MAX_ROWS);PhoneTreeExtract.integer(args,"limit",80,1,100);
         }else throw new IllegalArgumentException("未知采集命令");
     }
     public static final class State {
@@ -37,7 +39,7 @@ public final class PhoneTreeCollection {
         private int pages;
         private boolean possibleGap;
         private State(JSONObject args,JSONObject observation,String scope,long now)throws Exception {
-            this.scope=scope;created=now;direction=args.getString("direction");maxPages=args.optInt("maxPages",6);maxRows=args.optInt("maxRows",60);packageName=observation.optString("packageName");
+            this.scope=scope;created=now;direction=args.getString("direction");maxPages=args.optInt("maxPages",6);maxRows=args.optInt("maxRows",200);packageName=observation.optString("packageName");
             spec=new JSONObject(args.toString());for(String key:new String[]{"action","maxPages","maxRows","direction","stopSelector"})spec.remove(key);spec.put("limit",PhoneTreeExtract.MAX_ROWS);
             stopSelector=args.optJSONObject("stopSelector")==null?null:new JSONObject(args.getJSONObject("stopSelector").toString());
             JSONObject container=PhoneTreeExtract.index(observation).get(args.getString("containerId"));if(container==null)throw new IllegalArgumentException("采集容器不存在");anchor=anchor(container);
@@ -50,6 +52,12 @@ public final class PhoneTreeCollection {
         public boolean stopped(){return !stopped.isEmpty();}
         public JSONObject scopeCheck(String nativeScope,long now)throws Exception {
             if(!scope.equals(nativeScope))return stop("scope_or_pause_changed");if(now<created||now-created>TTL_MS)return stop("cursor_expired");return null;
+        }
+        public JSONObject readStored(String nativeScope,long now,int offset,int limit)throws Exception {
+            if(!scope.equals(nativeScope))return PhoneTreeExtract.unavailable("collection_scope_changed");
+            if(now<created||now-created>TTL_MS)stopped="cursor_expired";
+            JSONObject out=result(offset,limit);out.remove("observation");out.remove("nextScroll");out.remove("nextScrollRef");
+            return out.put("historicalEvidenceOnly",true);
         }
         public JSONObject stop(String reason)throws Exception {if(stopped.isEmpty())stopped=reason;return result();}
         public JSONObject stopAfterScroll(String reason,JSONObject originalRecord)throws Exception {rememberScroll(originalRecord);return stop(reason);}
@@ -78,7 +86,7 @@ public final class PhoneTreeCollection {
             if(!packageName.equals(observation.optString("packageName"))){stopped="app_changed";return null;}
             JSONObject current=null;for(JSONObject node:PhoneTreeExtract.index(observation).values())if(same(anchor,anchor(node))){if(current!=null){stopped="ambiguous_container";return null;}current=node;}
             if(current==null){stopped="container_changed";return null;}
-            spec.put("observationId",observation.getString("observationId")).put("containerId",current.getString("id"));return PhoneTreeExtract.extract(observation,spec);
+            spec.put("observationId",observation.getString("observationId")).put("containerId",current.getString("id"));return PhoneTreeExtract.extractRows(observation,spec);
         }
         private void accept(JSONObject observation,String operation)throws Exception {
             JSONObject extracted=extractPage(observation);if(extracted==null)return;
@@ -114,9 +122,18 @@ public final class PhoneTreeCollection {
             JSONArray subset=new JSONArray(),all=extracted.getJSONArray("rows");for(int i=0;i<all.length();i++){subset.put(all.get(i));if(subset.toString().getBytes(StandardCharsets.UTF_8).length>4096){subset.remove(subset.length()-1);break;}}
             return new JSONObject().put("observationId",observation.getString("observationId")).put("rows",subset).put("visibleRows",all.length()).put("evidenceRowsOmitted",all.length()-subset.length()).put("notMergedOrDeduplicated",true);
         }
-        public JSONObject result()throws Exception {
+        public JSONObject result()throws Exception {return result(0,80);}
+        public JSONObject result(int offset,int limit)throws Exception {
+            if(offset<0||offset>rows.length()||limit<1||limit>100)return PhoneTreeExtract.unavailable("collection_range_unavailable");
+            JSONArray visible=new JSONArray();int next=offset;
+            // A retained row is bounded by extraction; its added provenance must not stall pagination.
+            while(next<rows.length()&&visible.length()<limit){
+                visible.put(rows.get(next));int bytes=visible.toString().getBytes(StandardCharsets.UTF_8).length;
+                if(bytes>48*1024&&visible.length()>1){visible.remove(visible.length()-1);break;}next++;
+                if(bytes>48*1024)break;
+            }
             JSONObject result=PhoneTreeExtract.base().put("ok",true).put("status",stopped()?"stopped":"needs_scroll").put("cursorId",id).put("restartPersistence","none_cursor_expires_on_process_or_run_restart")
-                    .put("stoppedBecause",stopped.isEmpty()?JSONObject.NULL:stopped).put("partial",true).put("wholeListComplete",false).put("rows",new JSONArray(rows.toString())).put("rowCount",rows.length()).put("pagesInspected",pages).put("scrollOperations",operations.size())
+                    .put("stoppedBecause",stopped.isEmpty()?JSONObject.NULL:stopped).put("partial",true).put("wholeListComplete",false).put("rows",visible).put("rowCount",rows.length()).put("returnedRows",visible.length()).put("offset",offset).put("nextOffset",next<rows.length()?next:JSONObject.NULL).put("pagesInspected",pages).put("scrollOperations",operations.size())
                     .put("sources",new JSONArray(sources.toString())).put("overlapEvidence",new JSONArray(overlaps.toString())).put("possibleSkippedRows",possibleGap).put("expiresAfterMs",TTL_MS).put("maxPages",maxPages).put("maxRows",maxRows);
             if(unmerged!=null)result.put("unmergedViewport",new JSONObject(unmerged.toString()));if(lastScroll!=null)result.put("lastScrollReceipt",new JSONObject(lastScroll.toString()));
             if(!stopped()&&latest!=null)result.put("nextScroll",expectedScroll()).put("nextScrollRef",PhoneTreeExtract.ref(PhoneTreeExtract.index(latest).get(spec.getString("containerId"))));

@@ -25,7 +25,9 @@ public final class BackgroundSemanticPlatform implements SemanticPlatform {
         };
         gate.check();JSONObject spec=new JSONObject().put("kind",request.kind).put("parameters",request.parameters()).put("target",identity).put("route",target.route)
                 .put("userId",nativeUser).put("profileSerial",profileSerial());
-        return phone.dispatchSemantic(spec,control,gate::check);
+        NextAlarmEvidence alarm=NextAlarmEvidence.forRequest(context,request,target);
+        JSONObject result=phone.dispatchSemantic(spec,control,()->{gate.check();if(alarm!=null)alarm.captureBefore();});
+        return alarm==null?result:alarm.afterDispatch(result,control,gate);
     }
     private long profileSerial()throws Exception {
         android.os.UserManager users=context.getSystemService(android.os.UserManager.class);

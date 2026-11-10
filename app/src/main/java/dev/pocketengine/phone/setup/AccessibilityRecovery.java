@@ -6,6 +6,7 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.os.UserManager;
+import android.os.SystemClock;
 import android.provider.Settings;
 import dev.pocketengine.phone.PhoneAccessibilityService;
 import java.util.ArrayList;
@@ -18,11 +19,13 @@ import org.json.JSONObject;
 /** Revocable reconciliation of a previously enabled service. Never grants a system permission
  * or replays a task. Settings.Secure.putString has no conditional-update argument:
  * rewriting its whole value can lose another service's concurrent change. Only the system
- * settings UI may change registrations; this class keeps and reconciles legacy undo evidence. */
+ * settings UI may change registrations; this class waits for a current registration to bind
+ * and reconciles legacy undo evidence. */
 public final class AccessibilityRecovery {
     private static final String PERMISSION = "android.permission.WRITE_SECURE_SETTINGS";
     private static final Object CONSENT_LOCK = new Object();
     private static final AtomicBoolean RESTORING = new AtomicBoolean();
+    private static final long CONNECTION_WAIT_MS = 2_500L;
     interface Platform {
         boolean unlocked();
         boolean permitted();
@@ -111,22 +114,40 @@ public final class AccessibilityRecovery {
             if (!consentCurrent(consentRevision)) return outcome("consent_required", false);
             if (!platform.unlocked()) return outcome("owner_unlock_required", false);
             requireCurrent(consentRevision, current);
-            if (platform.connected()) return outcome("already_connected", true);
             if (preferences.getBoolean("compensationPending", false)) return outcome("recovery_pending_owner_action", false);
-            if (!preferences.getBoolean("accessibilityPreviouslyEnabled", false)) return outcome("initial_accessibility_authorization_required", false);
             // A system-wide switch turned off by the owner is not an invitation to turn it on again.
             if (platform.enabled() != 1) return outcome("owner_accessibility_disabled", false);
 
             List<String> entries = read();
             // An absent entry may be a later owner revocation. Earlier consent cannot distinguish
-            // that from an OEM clearing it, so only rebind a registration that is still present.
-            if (!contains(entries, own)) return outcome("owner_accessibility_disabled", false);
+            // that from an OEM clearing it, so only wait on a registration that is still present.
+            if (!contains(entries, own)) return outcome(preferences.getBoolean("accessibilityPreviouslyEnabled", false)
+                    ? "owner_accessibility_disabled" : "initial_accessibility_authorization_required", false);
+            synchronized (CONSENT_LOCK) {
+                requireCurrent(consentRevision, current);
+                if (!preferences.getBoolean("accessibilityPreviouslyEnabled", false)
+                        && !preferences.edit().putBoolean("accessibilityPreviouslyEnabled", true).commit())
+                    throw new IllegalStateException("recovery_observation_save_failed");
+            }
+            if (platform.connected()) return outcome("already_connected", true);
+            long deadline = SystemClock.elapsedRealtime() + CONNECTION_WAIT_MS;
+            while (SystemClock.elapsedRealtime() < deadline) {
+                requireCurrent(consentRevision, current);
+                if (platform.enabled() != 1 || !contains(read(), own)) return outcome("owner_accessibility_disabled", false);
+                if (platform.connected()) return outcome("system_reconnected", true);
+                Thread.sleep(Math.min(100L, Math.max(1L, deadline - SystemClock.elapsedRealtime())));
+            }
             requireCurrent(consentRevision, current);
+            if (platform.enabled() != 1 || !contains(read(), own)) return outcome("owner_accessibility_disabled", false);
+            if (platform.connected()) return outcome("system_reconnected", true);
             // A fresh read plus putString is not a conditional system update.
             // Do not remove/re-add our entry, even with WRITE_SECURE_SETTINGS.
             return outcome("owner_settings_required", true);
         } catch (SecurityException revoked) {
             return outcome("recovery_consent_revoked", false);
+        } catch (InterruptedException stopped) {
+            Thread.currentThread().interrupt();
+            return outcome("recovery_interrupted", false);
         } catch (Exception unavailable) {
             return outcome("platform_refused", false);
         }

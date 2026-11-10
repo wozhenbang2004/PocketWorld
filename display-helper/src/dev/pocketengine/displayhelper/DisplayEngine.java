@@ -67,6 +67,7 @@ final class DisplayEngine {
     private String imeState="unknown",imeReason="display_not_created";
     private final DisplayKeepAlive keepAlive=new DisplayKeepAlive();
     private final AtomicLong frameGeneration=new AtomicLong();
+    private final FrameVisualEvidence visualFrames=new FrameVisualEvidence();
     private final Object frameLock=new Object();
     private volatile byte[] latestPixels;
     private volatile long frameAt;
@@ -347,6 +348,10 @@ final class DisplayEngine {
             synchronized(frameLock){
                 if(source!=reader||!geometryReady||!capturedGeometry.sameObservation(geometry))return;
                 if(timestamp<frameTimestampNanos){olderFrame=true;return;}
+                visualFrames.record(lease.session()+":"+capturedGeometry.generation,capturedGeometry.width,capturedGeometry.height,timestamp,(x,y)->{
+                    int at=(y*capturedGeometry.width+x)*4;
+                    return (pixels[at+3]&255)<<24|(pixels[at]&255)<<16|(pixels[at+1]&255)<<8|(pixels[at+2]&255);
+                });
                 boolean afterAction=frameTimestampNanos<=frameNotBeforeNanos&&timestamp>frameNotBeforeNanos;
                 if(afterAction||!java.util.Arrays.equals(latestPixels,pixels)){latestPixels=pixels;frameGeneration.incrementAndGet();}
                 frameTimestampNanos=timestamp;frameAt=TimeUnit.NANOSECONDS.toMillis(timestamp);published=true;
@@ -371,12 +376,13 @@ final class DisplayEngine {
         }
         long until=SystemClock.uptimeMillis()+3000;
         while(!frameReady(after)&&SystemClock.uptimeMillis()<until){valid(expected);Thread.sleep(40);}
-        requireGeometry(expected,original);byte[] pixels;long frame,captured,timestamp;
+        requireGeometry(expected,original);byte[] pixels;long frame,captured,timestamp;JSONObject visual;
         synchronized(frameLock){
             if(latestPixels==null&&geometryReady&&original.sameObservation(geometry))throw new Failure("frame_unavailable","后台屏暂未产生画面，请先打开应用再观察。",false);
             if(!geometryReady||!original.sameObservation(geometry))throw new Failure("frame_pending","后台画面正在更新，请重新观察。",false);
             if(!frameReady(after))return frameMetadata(expected,original,after).put("imageUnavailableReason","waiting_for_post_action_frame");
             pixels=latestPixels;frame=frameGeneration.get();captured=frameAt;timestamp=frameTimestampNanos;
+            visual=visualFrames.snapshot();
         }
         if(pixels==null)throw new Failure("frame_unavailable","后台屏暂未产生画面，请先打开应用再观察。",false);
         
@@ -390,7 +396,8 @@ final class DisplayEngine {
                 synchronized(frameLock){
                     if(latestPixels!=pixels||frameTimestampNanos!=timestamp||frameGeneration.get()!=frame||!frameReady(after))
                         return frameMetadata(expected,original,after).put("framePending",true).put("imageUnavailableReason","frame_pending");
-                    return frameMetadata(expected,original,after).put("imageUnavailableReason","frame_blank");
+                    JSONObject result=frameMetadata(expected,original,after).put("imageUnavailableReason","frame_blank");
+                    JSONObject facts=result.optJSONObject("visualEvidence");if(facts!=null)facts.put("allPixelsBlack",true);return result;
                 }
             }
             if(!bitmap.compress(Bitmap.CompressFormat.JPEG,75,jpeg))throw new Failure("frame_encoding","后台屏图片编码失败。",false);
@@ -401,17 +408,21 @@ final class DisplayEngine {
                     .put("imageBase64",Base64.encodeToString(jpeg.toByteArray(),Base64.NO_WRAP)).put("imageMimeType","image/jpeg")
                     .put("frameGeneration",frame).put("capturedAt",captured).put("frameTimestampNanos",timestamp)
                     .put("frameTimestampSupported",true).put("framePending",false).put("empty",false)
-                    .put("imageIncluded",true).put("requestedPackageName",packageName),true);
+                    .put("imageIncluded",true).put("requestedPackageName",packageName).put("visualEvidence",visual),true);
             }
         }finally{bitmap.recycle();}
     }
     private JSONObject frameMetadata(LeasePolicy expected,DisplayGeometry original,long after)throws Exception {
         synchronized(frameLock){
             if(!geometryReady||!original.sameObservation(geometry))throw new Failure("stale_observation","后台几何在读取期间变化，请重新观察。",false);
-            return original.writeTo(ok().put("displayId",expected.display()).put("sessionId",expected.session())
+            JSONObject result=original.writeTo(ok().put("displayId",expected.display()).put("sessionId",expected.session())
                     .put("frameGeneration",frameGeneration.get()).put("capturedAt",frameAt).put("frameTimestampNanos",frameTimestampNanos)
                     .put("frameTimestampSupported",true).put("framePending",!frameReady(after))
                     .put("empty",latestPixels==null).put("imageIncluded",false).put("frameMetadataOnly",true).put("requestedPackageName",packageName),true);
+            JSONObject visual=visualFrames.snapshot();
+            if(latestPixels!=null&&visual!=null&&visual.optLong("frameTimestampNanos",-1)==frameTimestampNanos)
+                result.put("visualEvidence",visual.put("sourceFrameFresh",frameReady(after)).put("framePending",!frameReady(after)).put("source","display_surface_frame"));
+            return result;
         }
     }
     private void markFrameBoundary(){synchronized(frameLock){frameNotBeforeNanos=System.nanoTime();}}
@@ -495,8 +506,8 @@ final class DisplayEngine {
     private JSONObject launch(LeasePolicy expected,JSONObject request)throws Exception {
         String pkg=request.optString("packageName");
         if(!pkg.matches("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+")||pkg.length()>250)throw new Failure("invalid_package","应用包名无效。",false);
-        // Only the caller-provided known main-screen package is a hint; shell independently checks foreground tasks.
-        if(mainScreenUses(pkg))throw new Failure("main_screen_conflict","该应用正在主屏使用，后台不会抢占。",false);
+        int user=context.getApplicationInfo().uid/100000;
+        if(integer(request,"userId",0,21474,user)!=user)throw new Failure("unsupported_host_profile","普通启动的宿主资料与原助手不匹配，未回落到其他账号。",false);
         Intent intent=context.getPackageManager().getLaunchIntentForPackage(pkg);
         if(intent==null)throw new Failure("app_unavailable","没有找到可启动的应用。",false);
         android.content.pm.ActivityInfo info=intent.resolveActivityInfo(context.getPackageManager(),0);
@@ -506,19 +517,14 @@ final class DisplayEngine {
             valid(expected);
             if(activeTouch!=null||gesturePaths.active())throw new Failure("gesture_in_flight","原触摸尚未结束，未打开应用。",false);
             android.app.ActivityOptions options=android.app.ActivityOptions.makeBasic().setLaunchDisplayId(expected.display());
-            if(!DisplayAppOwnership.free(taskTopology.read(),pkg,context.getApplicationInfo().uid/100000,expected.display()))throw new Failure("app_user_busy_or_unknown","同一App资料的完整任务占用不能排除，未移动或打开应用。",false);
+            if(!DisplayAppOwnership.free(taskTopology.read(),pkg,user,expected.display()))throw new Failure("app_user_busy_or_unknown","同一App资料的完整任务占用不能排除，未移动或打开应用。",false);
             dispatchDeadline();long previousBoundary=frameNotBeforeNanos;markFrameBoundary();
             try{context.startActivity(intent,options.toBundle());}
             catch(android.content.ActivityNotFoundException|SecurityException refused){frameNotBeforeNanos=previousBoundary;throw refused;}
             catch(Exception unknown){throw new Failure("action_unknown","应用启动回执未确认，请核对原副屏，不会自动重复启动。",true);}
             packageName=pkg;return null;
         });
-        return receipt().put("packageName",pkg);
-    }
-    private boolean mainScreenUses(String pkg)throws Exception {
-        String dump=taskDump();
-        try{return PrimaryAppGuard.uses(dump,pkg);}
-        catch(IllegalArgumentException unsupported){throw new Failure("task_probe_failed","当前系统任务格式不受支持，未启动应用。",false);}
+        return receipt().put("packageName",pkg).put("requestedUserId",user).put("automaticProfileFallback",false);
     }
     /** Configure only the helper-owned display. Unsupported/unknown IME never inherits focus readiness. */
     private void configureIme(int displayId){probeIme(displayId,true);}

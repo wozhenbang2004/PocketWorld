@@ -35,7 +35,7 @@ final class PhoneSessionPreparation {
                     PhonePort physical=null;DisplayModule preparing=null;
                     try {
                         current(app,id,run,epoch,mode,control,revision,owner,ownerPreparation);
-                        PhoneReadiness.requireStart(app.phoneReadiness(),mode);
+                        PhoneReadiness.awaitStart(app::phoneReadiness,mode,()->current(app,id,run,epoch,mode,control,revision,owner,ownerPreparation));
                         if(!app.phoneReadiness().getJSONObject("taskNotifications").optBoolean("ready"))
                             throw new SecurityException("手机操作需要可见任务通知和停止入口");
                         String session;int display;

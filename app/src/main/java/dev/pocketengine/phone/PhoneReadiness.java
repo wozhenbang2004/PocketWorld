@@ -6,6 +6,7 @@ import org.json.JSONObject;
 /** Readiness from native facts only. Inspecting it never grants permission, captures a screen or starts a task. */
 public final class PhoneReadiness {
     public static final String TASK_CHANNEL = "phone_execution";
+    private static final long CONNECTION_WAIT_MS = 2_500L;
     private PhoneReadiness() { }
 
     public static JSONObject evaluate(JSONObject facts) throws Exception {
@@ -71,6 +72,40 @@ public final class PhoneReadiness {
             }
         }
         throw new IllegalStateException("手机操作条件暂不可核对，请重新检查");
+    }
+
+    /** Allow an already enabled service to finish binding inside the original preparation. */
+    public static JSONObject awaitStart(java.util.concurrent.Callable<JSONObject> source, String mode,
+                                        dev.pocketengine.core.RunControl.AuthorityCheck current) throws Exception {
+        java.util.Objects.requireNonNull(source);java.util.Objects.requireNonNull(current);
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(CONNECTION_WAIT_MS);
+        while (true) {
+            current.check();
+            JSONObject readiness = source.call();
+            current.check();
+            if (!connectionPending(readiness, mode) || System.nanoTime() >= deadline) {
+                requireStart(readiness, mode);
+                return readiness;
+            }
+            Thread.sleep(Math.min(50L, Math.max(1L, java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()))));
+        }
+    }
+    private static boolean connectionPending(JSONObject readiness, String mode) throws Exception {
+        String group = "main_screen".equals(mode) ? "mainPreparation" : "background".equals(mode) ? "backgroundPreparation" : "";
+        JSONObject preparation = readiness == null ? null : readiness.optJSONObject(group);
+        JSONArray checks = preparation == null ? null : preparation.optJSONArray("checks");
+        if (checks == null) return false;
+        boolean connecting = false;
+        for (int i = 0; i < checks.length(); i++) {
+            JSONObject check = checks.getJSONObject(i);
+            if ("ready".equals(check.optString("state"))) continue;
+            String id = check.optString("id");
+            if ("serviceConnected".equals(id)) {
+                if (!"accessibility_not_connected".equals(check.optString("code"))) return false;
+                connecting = true;
+            } else if (!"windowContent".equals(id) && !"interactiveWindows".equals(id) && !"gestureCapability".equals(id)) return false;
+        }
+        return connecting;
     }
 
     private static JSONObject notifications(JSONObject facts, boolean beforeStart) throws Exception {
