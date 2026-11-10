@@ -170,7 +170,7 @@ public final class ModelCapabilityAdapters implements CapabilityPort {
                 .put("requiresPause",true).put("message","上次创建后执行状态已变化，请由主人核对后继续原任务。");
         JSONObject original=new JSONObject((input==null?new JSONObject():input).toString());Object supplied=original.opt("_hostOperationId");original.remove("_hostOperationId");
         String operationId="";if(supplied!=null){if(!(supplied instanceof String))throw new SecurityException("宿主operation无效");operationId=(String)supplied;CapabilityDescriptor.uuid(operationId);}
-        JSONObject args=route.normalize(original);
+        JSONObject args=ToolApprovalPermit.normalizeArguments(binding,route,original,control);
         if(route.journalRequired){if(operationId.isEmpty())throw new SecurityException("需要原AgentRunner登记的operation");authority.requirePrepared(operationId,name,original);if(reconciliationRequired||entered.contains(operationId))return CapabilityResults.uncertain(route,operationId,null);}
         else if(!operationId.isEmpty())throw new SecurityException("读取不能携带另一个operation");
         checkResource(route);
@@ -248,4 +248,3 @@ public final class ModelCapabilityAdapters implements CapabilityPort {
     private void checkResource(CapabilityDescriptor descriptor)throws Exception {if(descriptor.feature.equals("browser"))browser.check();else if(descriptor.feature.equals("ssh"))ssh.check();}
     private static EngineModule requireModule(EngineModule module,String id){Objects.requireNonNull(module);if(!id.equals(module.id()))throw new IllegalArgumentException("原生模块身份不符");return module;}
 }
-
