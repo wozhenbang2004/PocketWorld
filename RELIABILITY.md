@@ -31,6 +31,8 @@ Large pending approvals use the original SQL snapshot to read one complete curre
 
 Current validation policy for this delivery is source review and `git diff --check`, followed by the existing remote compilation, signing, packaging and publishing workflow. No tests are added or run, including CI/E2E, and no local build is performed. Older verification recipes below describe historical work and do not override this owner instruction. Compilation and release evidence do not establish real-device or OEM runtime behavior.
 
+Delivery checkpoint: [v0.1.85](https://github.com/wozhenbang2004/PocketWorld/releases/tag/v0.1.85) was published on 2026-11-10 at 19:49:59 Asia/Shanghai from `4f50c7b60974279ddac2ccfff9c4d0dabb5f00c1`. [Release run 42809559410](https://github.com/wozhenbang2004/PocketWorld/actions/runs/42809559410) completed build, prepare and publish successfully. The APK is 148132394 bytes with SHA-256 `a8d5a8365111c8e844d3960dd1520668494ae750bf1be5e3d86361439715a068`. The first actual compilation exposed a cross-package validation-method visibility error; the released source fixes that visibility without changing original-control, run or pause validation. Real-device experience and cross-project comparative performance remain unverified.
+
 ## Boundaries that must stay separate
 
 | Boundary | Authority | Required behavior |
