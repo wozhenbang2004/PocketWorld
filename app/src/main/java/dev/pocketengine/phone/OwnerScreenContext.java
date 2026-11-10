@@ -170,12 +170,14 @@ public final class OwnerScreenContext implements AutoCloseable {
 
     /** Recheck immediately before the native host's separately fenced durable input write. */
     public void validate(Preview selected) throws Exception {
-        check();
+        if (closed.get()) throw new Failure("capture_cancelled", "已取消本次画面");
+        checkTarget();
         if (selected == null || selected != preview || selected.target != target || selected.isClosed()
                 || !sourceIdentity.same(selected.source) || selected.pauseRevision != revision)
             throw new Failure("stale_capture", "预览不属于当前原任务，请重新选择");
-        long age = uptime.getAsLong() - selected.observedAtUptimeMs;
-        if (age < 0 || age > MAX_AGE_MS) throw new Failure("capture_expired", "画面预览已过期，请重新选择");
+        // This is fixed owner-selected reference material, not an actionable live
+        // observation. Reading/editing it does not expire its pixels or text.
+        // Target authority, sharing policy and cancellation are still checked.
     }
 
     private void checkTarget() throws Exception {

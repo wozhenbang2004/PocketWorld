@@ -123,20 +123,26 @@ final class QuickPanelCoordinator implements AutoCloseable, QuickPanelSurface.Ac
         if (previous != null) previous.close(); surface.ready();
     }
 
-    @Override public void send(String note) {
+    @Override public void send(String note) { submit(note, true); }
+    @Override public void sendText(String note) { submit(note, false); }
+
+    private void submit(String note, boolean withScreen) {
         final OwnerScreenContext local; final OwnerScreenContext.Preview selected;
         synchronized (captureState) {
             local = capture; selected = preview;
-            if (closed || !draftReady || audioWorking || voiceHandoffPreparing || sending || local == null || selected == null || clientMessageId != null) return;
+            if (closed || !draftReady || audioWorking || voiceHandoffPreparing || sending || preparingCapture || clientMessageId != null
+                    || withScreen && (local == null || selected == null) || !withScreen && local != null) return;
         }
         if (note.length() > 1500) { surface.error("补充说明最多1500字，请编辑后再发送。"); return; }
+        if (!withScreen && note.isBlank()) { surface.error("请先填写补充说明。"); return; }
         clientMessageId = UUID.randomUUID().toString(); sending = true;
         synchronized (captureState) { submitting = true; }
         final String client = clientMessageId; surface.sending();
         worker.execute(() -> {
             try {
                 drafts.prepareSubmission(note, client);
-                JSONObject receipt = host.submitOwnerScreenContext(local, selected, client, note);
+                JSONObject receipt = withScreen ? host.submitOwnerScreenContext(local, selected, client, note)
+                        : host.submitOwnerTextContext(new JSONObject(expected.toString()), client, note);
                 main.post(() -> { if (!closed && client.equals(clientMessageId)) receive(receipt); });
             } catch (OwnerScreenContextHost.Rejected refused) {
                 try {
@@ -289,13 +295,8 @@ final class QuickPanelCoordinator implements AutoCloseable, QuickPanelSurface.Ac
             try {
                 QuickPanelDraftStore.State saved = drafts.saveNote(note);
                 draftSaved = true;
-                offered = QuickPanelVoiceHandoff.offer(drafts,saved,expected,taskId -> {
-                    // Reuse the existing original task/control check. Opening it reads no screen.
-                    try (OwnerScreenContext checked = host.openOwnerScreenContext(new JSONObject(expected.toString()))) {
-                        if (!(service.getApplication() instanceof dev.pocketengine.EngineApplication app)) throw new SecurityException("原快捷补充宿主已变化");
-                        return app.tasks.getForUi(taskId,false);
-                    }
-                },() -> main.post(() -> {
+                offered = QuickPanelVoiceHandoff.offer(drafts,saved,expected,
+                        taskId -> host.ownerTextContextTarget(new JSONObject(expected.toString())),() -> main.post(() -> {
                     if (closed) return;
                     voiceHandoffAccepted = true; close();
                 }));

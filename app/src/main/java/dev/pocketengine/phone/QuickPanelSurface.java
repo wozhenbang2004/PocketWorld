@@ -31,6 +31,7 @@ final class QuickPanelSurface implements AutoCloseable {
         void capture(boolean includeScreenshot);
         void cancelPreview();
         void send(String note);
+        default void sendText(String note) { throw new UnsupportedOperationException("原任务未提供文字补充"); }
         void queryReceipt();
         void noteChanged(String note);
         void clearDraft();
@@ -64,7 +65,7 @@ final class QuickPanelSurface implements AutoCloseable {
     private Bitmap image;
     private EditText noteInput;
     private AlertDialog noteDialog;
-    private String draftStatus = "草稿只保存在本机，不会自动发送。";
+    private String draftStatus = "";
     private LinearLayout body, footer;
     private boolean audioSupported, audioBusy;
     private org.json.JSONObject audioState;
@@ -112,12 +113,12 @@ final class QuickPanelSurface implements AutoCloseable {
     }
 
     void loadingDraft() { mainOnly(); draftWritable = false; phase = Phase.LOADING; message = null; render(); }
-    void restoreDraft(String text) { mainOnly(); draftWritable = true; note = text; noteReviewedFor = null; phase = Phase.READY; message = text.isEmpty() ? null : "已恢复这个原任务的未发送说明；请重新捕获并核对来源后再发送。"; render(); }
+    void restoreDraft(String text) { mainOnly(); draftWritable = true; note = text; noteReviewedFor = null; phase = Phase.READY; message = text.isEmpty() ? null : "已恢复未发送说明。"; render(); }
     void draftUnavailable(String detail) { mainOnly(); phase = Phase.BLOCKED; message = detail; expanded = true; render(); }
-    void draftNotice(String detail) { mainOnly(); draftStatus = detail; TextView shown = root.findViewWithTag("quick_panel_draft_status"); if (shown != null) shown.setText(detail); if (noteDialog != null) { TextView editorStatus = noteDialog.findViewById(android.R.id.message); if (editorStatus != null) editorStatus.setText(detail); } }
+    void draftNotice(String detail) { mainOnly(); draftStatus = detail; TextView shown = root.findViewWithTag("quick_panel_draft_status"); if (shown != null) { shown.setText(detail); shown.setVisibility(detail.isBlank() ? View.GONE : View.VISIBLE); } if (noteDialog != null) { TextView editorStatus = noteDialog.findViewById(android.R.id.message); if (editorStatus != null) { editorStatus.setText(detail); editorStatus.setVisibility(detail.isBlank() ? View.GONE : View.VISIBLE); } } }
     void draftFailure(String detail) { mainOnly(); draftWritable = false; draftNotice(detail); Button send = root.findViewWithTag("quick_panel_send"); if (send != null) send.setEnabled(false); Button capture = root.findViewWithTag("quick_panel_capture"); if (capture != null) capture.setEnabled(false); Button voice = root.findViewWithTag("quick_panel_voice"); if (voice != null) voice.setEnabled(false); }
-    void draftStored() { mainOnly(); boolean blocked = !draftWritable; draftWritable = true; draftNotice("已保存这个原任务的本机草稿；收起或关闭后可继续编辑。"); if (blocked && noteDialog == null) render(); }
-    void draftCleared() { mainOnly(); note = ""; noteReviewedFor = null; draftStatus = "本机未发送说明已清除；没有撤回任何已登记输入。"; render(); }
+    void draftStored() { mainOnly(); boolean blocked = !draftWritable; draftWritable = true; draftNotice(""); if (blocked && noteDialog == null) render(); }
+    void draftCleared() { mainOnly(); note = ""; noteReviewedFor = null; draftStatus = ""; render(); }
     void capturing() { mainOnly(); clearPreview(); phase = Phase.CAPTURING; message = null; expanded = true; render(); }
     void preview(PreviewContent content) { mainOnly(); if (preview != content) clearPreview(); preview = content; phase = Phase.REVIEW; message = null; expanded = true; render(); }
     void sending() { mainOnly(); phase = Phase.SENDING; message = null; render(); }
@@ -197,12 +198,12 @@ final class QuickPanelSurface implements AutoCloseable {
             } else if (phase == Phase.SAVED) {
                 body.addView(text(message, 14, UiAppearance.foreground(context)));
                 footer.addView(button("查看原任务", actions::openOriginalTask, true));
-                footer.addView(button("再补充一份页面", () -> { phase = Phase.READY; render(); }, false));
+                footer.addView(button("继续补充", () -> { phase = Phase.READY; message = null; render(); }, false));
             } else if (preview != null) {
                 renderPreview();
             } else {
                 if (message != null) body.addView(text(message, 13, UiAppearance.warning(context)));
-                body.addView(text("先切到需要的 App。仅在你点下方按钮时读取手机主屏，不会持续监看。", 13, UiAppearance.secondary(context)));
+                body.addView(text("可直接发送文字；需要附带页面时，再切到目标 App 捕获。", 13, UiAppearance.secondary(context)));
                 renderDraftActions();
                 CheckBox screenshot = new CheckBox(context); screenshot.setText("这次同时捕获截图"); screenshot.setTextSize(13);
                 screenshot.setMinHeight(dp(48)); screenshot.setChecked(includeScreenshot); screenshot.setOnCheckedChangeListener((v, checked) -> includeScreenshot = checked); body.addView(screenshot);
@@ -256,8 +257,8 @@ final class QuickPanelSurface implements AutoCloseable {
         editor.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE);
         editor.setHint("原任务的未发送说明"); editor.setContentDescription("原任务本机草稿；编辑、保存和关闭都不发送"); editor.setTag("quick_panel_note");
         LinearLayout content = new LinearLayout(context); content.setOrientation(LinearLayout.VERTICAL); content.setPadding(dp(16), dp(4), dp(16), dp(8));
-        content.addView(text(expected == null ? "原任务说明；发送前仍需重新捕获并核对页面来源。" : "来源 · " + expected.appLabel + "。核对说明与这份捕获一致，再点“保存说明”；不会发送或重新捕获。", 12, UiAppearance.secondary(context))); content.addView(editor);
-        TextView status = text(draftStatus, 12, UiAppearance.secondary(context)); status.setId(android.R.id.message); content.addView(status);
+        content.addView(text(expected == null ? "只补充文字，不读取屏幕；保存后由你发送。" : "来源 · " + expected.appLabel + "。这份说明将与已捕获的页面一起发送。", 12, UiAppearance.secondary(context))); content.addView(editor);
+        TextView status = text(draftStatus, 12, UiAppearance.secondary(context)); status.setId(android.R.id.message); status.setVisibility(draftStatus.isBlank() ? View.GONE : View.VISIBLE); content.addView(status);
         ScrollView scroll = new ScrollView(context); scroll.addView(content);
         AlertDialog dialog = new AlertDialog.Builder(context).setTitle("补充说明").setView(scroll).setPositiveButton("保存说明", null).setNegativeButton("收起，保留草稿", null).create();
         noteDialog = dialog; noteInput = editor;
@@ -266,14 +267,14 @@ final class QuickPanelSurface implements AutoCloseable {
             public void onTextChanged(CharSequence value, int start, int before, int count) { }
             public void afterTextChanged(android.text.Editable value) {
                 if (noteInput != editor || noteDialog != dialog) return;
-                note = value.toString(); noteReviewedFor = null; draftNotice("正在保存本机草稿…"); actions.noteChanged(note);
-                if (note.length() > 1500) editor.setError("发送说明最多1500字；草稿仍保留，请缩短后发送。");
+                note = value.toString(); noteReviewedFor = null; actions.noteChanged(note);
+                editor.setError(note.length() > 1500 ? "发送说明最多1500字；请缩短后发送。" : null);
             }
         };
         editor.addTextChangedListener(watcher);
         dialog.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY);
         dialog.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE | WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE);
-        dialog.setOnDismissListener(ignored -> { editor.removeTextChangedListener(watcher); clearNoteEditor(dialog, editor); });
+        dialog.setOnDismissListener(ignored -> { boolean refresh = noteDialog == dialog; editor.removeTextChangedListener(watcher); clearNoteEditor(dialog, editor); if (refresh && attached && !hidden) render(); });
         try {
             dialog.show(); dialog.getWindow().setLayout(Math.max(1, Math.min(dp(380), context.getResources().getDisplayMetrics().widthPixels - dp(24))), -2);
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
@@ -292,19 +293,26 @@ final class QuickPanelSurface implements AutoCloseable {
         InputMethodManager ime = context.getSystemService(InputMethodManager.class);
         if (ime != null && editor.getWindowToken() != null) ime.hideSoftInputFromWindow(editor.getWindowToken(), 0);
         editor.setText(""); editor.clearFocus();
-        Button send = root.findViewWithTag("quick_panel_send"); if (send != null) send.setEnabled(canSendNote() && preview != null && (!preview.text.isBlank() || image != null) && (preview.imageBytes == null || image != null));
+        Button send = root.findViewWithTag("quick_panel_send"); if (send != null) send.setEnabled(preview == null
+                ? draftWritable && !audioBusy && !note.isBlank() && note.length() <= 1500
+                : canSendNote() && (!preview.text.isBlank() || image != null) && (preview.imageBytes == null || image != null));
         if (noteInput == editor) noteInput = null;
         if (noteDialog == expected) noteDialog = null;
     }
 
     private void renderDraftActions() {
+        if (!note.isBlank()) {
+            TextView pending = text(note, 14, UiAppearance.foreground(context)); pending.setTextIsSelectable(true); body.addView(pending);
+            Button send = button("发送说明", () -> actions.sendText(note), true); send.setTag("quick_panel_send");
+            send.setEnabled(draftWritable && !audioBusy && note.length() <= 1500); footer.addView(send);
+        }
         Button edit = button(note.isEmpty() ? "添加未发送说明" : "编辑未发送说明（" + note.length() + "字）", this::editNote, false);
         edit.setTag("quick_panel_edit_note"); footer.addView(edit); renderDraftStatus();
         renderVoiceAction();
         if (!note.isEmpty()) footer.addView(button("清除未发送说明", actions::clearDraft, false));
     }
     private void renderDraftStatus() {
-        TextView status = text(draftStatus, 12, UiAppearance.secondary(context)); status.setTag("quick_panel_draft_status"); body.addView(status);
+        TextView status = text(draftStatus, 12, UiAppearance.secondary(context)); status.setTag("quick_panel_draft_status"); status.setVisibility(draftStatus.isBlank() ? View.GONE : View.VISIBLE); body.addView(status);
     }
     private void renderVoiceAction() {
         Button voice = button("语音补充说明", actions::voice, false);

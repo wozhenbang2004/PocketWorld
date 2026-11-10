@@ -2090,6 +2090,70 @@ public final class EngineApplication extends Application implements dev.pocketen
             throw new dev.pocketengine.phone.OwnerScreenContextHost.Rejected(failure.getMessage()==null?"内容未登记，请核对原任务":failure.getMessage(),failure);
         }
     }
+    /** Text/voice draft navigation needs the original task, not access to its screen. */
+    @Override public JSONObject ownerTextContextTarget(JSONObject expected)throws Exception {
+        String id=expected.getString("taskId"),run=expected.getString("runId");int epoch=expected.getInt("epoch");
+        RunControl original=retainedTaskControl(id);
+        JSONObject task=tasks.ownerScreenContextTarget(id,run,epoch,original);
+        if(expected.has("executionMode")&&!expected.getString("executionMode").equals(task.getString("executionMode")))
+            throw new SecurityException("原任务执行位置已变化");
+        if("assistant".equals(task.getString("kind")))requireScreenContextAssistant(id,run,epoch,original);
+        if(original!=retainedTaskControl(id))throw new SecurityException("原任务输入控制器已变化");
+        original.check();return task;
+    }
+    /** Explicit native text supplementation shares the original mailbox, without reading any screen. */
+    @Override public JSONObject submitOwnerTextContext(JSONObject expected,String client,String note)throws Exception {
+        boolean admissionStarted=false;
+        try {
+            if(expected==null||client==null||!client.matches("[a-fA-F0-9-]{36}")||note==null||note.isBlank()||note.length()>1500)
+                throw new IllegalArgumentException("请填写1至1500字的补充说明");
+            String id=expected.getString("taskId"),run=expected.getString("runId");int epoch=expected.getInt("epoch");
+            RunControl original=retainedTaskControl(id);
+            JSONObject task=tasks.ownerScreenContextTarget(id,run,epoch,original);
+            if(expected.has("executionMode")&&!expected.getString("executionMode").equals(task.getString("executionMode")))
+                throw new SecurityException("原任务执行位置已变化");
+            boolean phone="phone".equals(task.getString("kind"));
+            ModelConfig model=phone?config(id):requireScreenContextAssistant(id,run,epoch,original).config;
+            if(model==null)throw new SecurityException("原任务模型不可核对");
+            String text=model.redactSensitive(note);
+            if(phone) {
+                Runnable replan=null;
+                synchronized(this) {synchronized(tasks) {
+                    if(original!=retainedTaskControl(id))throw new SecurityException("原任务输入控制器已变化");
+                    task=tasks.ownerScreenContextTarget(id,run,epoch,original);
+                    if(expected.has("executionMode")&&!expected.getString("executionMode").equals(task.getString("executionMode")))
+                        throw new SecurityException("原任务执行位置已变化");
+                    JSONArray rows=task.optJSONArray("ownerInputs");
+                    for(int i=0;rows!=null&&i<rows.length();i++) {
+                        JSONObject prior=rows.getJSONObject(i);
+                        if(!client.equals(prior.optString("clientMessageId")))continue;
+                        admissionStarted=true;
+                        if(!run.equals(prior.optString("acceptedRunId"))||epoch!=prior.optInt("acceptedEpoch")
+                                ||!text.equals(prior.optString("content"))||prior.optJSONArray("attachments")!=null&&prior.getJSONArray("attachments").length()>0)
+                            throw new SecurityException("同一发送身份不能更换补充内容，请查询原回执");
+                        return tasks.phoneOwnerInputReceipt(id,run,epoch,client);
+                    }
+                    tasks.openPhoneOwnerInputMailbox(id,run,epoch,original);
+                    JSONObject message=json("id",java.util.UUID.randomUUID().toString(),"clientMessageId",client,"content",text,"attachments",new JSONArray());
+                    admissionStarted=true;
+                    JSONObject accepted=tasks.appendPhoneOwnerInput(id,run,epoch,message,original);
+                    if(!accepted.optBoolean("duplicate"))replan=original.prepareModelReplan(id,run,epoch);
+                }}
+                if(replan!=null)replan.run();
+                JSONObject receipt=tasks.phoneOwnerInputReceipt(id,run,epoch,client);pushTask(id);return receipt;
+            }
+            EngineModule assistant=features.module("assistant");
+            if(!(assistant instanceof dev.pocketengine.features.assistant.AssistantModule))throw new IllegalStateException("原会话输入宿主未准备");
+            JSONObject input=json("message",text,"clientMessageId",client,"mode","steer","conversationId",task.getString("conversationId"),
+                    "taskId",id,"runId",run,"epoch",epoch,"attachments",new JSONArray());
+            admissionStarted=true;return assistant.handle("send",input);
+        } catch(dev.pocketengine.core.OwnerInputNotAdmittedException refused) {
+            throw new dev.pocketengine.phone.OwnerScreenContextHost.Rejected(refused.getMessage(),refused);
+        } catch(Exception failure) {
+            if(admissionStarted)throw failure;
+            throw new dev.pocketengine.phone.OwnerScreenContextHost.Rejected(failure.getMessage()==null?"说明未登记，请核对原任务":failure.getMessage(),failure);
+        }
+    }
     /** Exact old ACK query remains available after cancellation or a later attempt. */
     @Override public JSONObject ownerScreenContextReceipt(JSONObject expected,String client)throws Exception {
         String id=expected.getString("taskId"),run=expected.getString("runId");int epoch=expected.getInt("epoch");
