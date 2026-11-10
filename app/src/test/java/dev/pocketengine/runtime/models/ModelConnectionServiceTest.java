@@ -122,19 +122,42 @@ public final class ModelConnectionServiceTest {
         assertThrows(ModelRequestPolicy.Rejected.class,()->service.captureConnectionModel(id,revision,"remote-model",512,new ReasoningOptions(ReasoningOptions.Mode.OPENAI_EFFORT,"high",0),0));
         assertEquals("manual-model",settings.get().model);assertEquals(0,inferences.get());
     }
+    @Test public void manualEffortDeclarationEnablesOneExactLegacyApiModelWithoutInventingOtherCapabilities()throws Exception {
+        JSONObject source=source("手动推理档位","remote-model");String id=source.getString("id");long revision=source.getLong("revision");
+        ModelBinding binding=ModelBinding.fromJson(source.getJSONObject("binding"));
+        long ownerRevision=service.reviewConnectionModel(id,revision,"remote-model").getJSONObject("model").getLong("ownerRevision");
+        assertThrows(ModelRequestPolicy.Rejected.class,()->service.captureConnectionModel(id,revision,"remote-model",512,
+                new ReasoningOptions(ReasoningOptions.Mode.OPENAI_EFFORT,"high",0),0));
+        JSONObject receipt=service.declareConnectionReasoning(binding,revision,"remote-model",ownerRevision,List.of("low","medium","high"));
+        assertEquals("saved",receipt.getString("status"));
+        assertEquals("OWNER_OVERRIDE",receipt.getJSONObject("facts").getJSONObject("REASONING_LEVELS").getString("source"));
+        assertThrows(IllegalStateException.class,()->service.declareConnectionReasoning(binding,revision,"remote-model",ownerRevision,List.of("high")));
+        ReasoningOptions high=new ReasoningOptions(ReasoningOptions.Mode.OPENAI_EFFORT,"high",0);
+        ModelConfig captured=service.captureConnectionModel(id,revision,"remote-model",512,high,0);
+        assertFalse(captured.catalogEnforced);assertEquals(high,captured.reasoning);
+        ModelConfig copy=captured.withStepCeiling(20).withModel("remote-model");
+        assertFalse(copy.catalogEnforced);assertEquals(high,copy.reasoning);
+        assertEquals("OK",ModelGateway.complete(captured,messages(),null,new RunControl()).getString("content"));
+        assertEquals("high",inference.getString("reasoning_effort"));assertEquals(1,inferences.get());
+        assertThrows(ModelRequestPolicy.Rejected.class,()->service.captureConnectionModel(id,revision,"remote-model",512,
+                new ReasoningOptions(ReasoningOptions.Mode.OPENAI_EFFORT,"xhigh",0),0));
+        long next=receipt.getLong("ownerRevision");
+        service.declareConnectionReasoning(binding,revision,"remote-model",next,List.of());
+        assertThrows(ModelRequestPolicy.Rejected.class,()->service.captureConnectionModel(id,revision,"remote-model",512,high,0));
+    }
     @Test public void draftCatalogUsesTemporaryIdentityAndLeavesSavedSourcesAndCacheUntouched()throws Exception {
         String before=settings.apiConnectionsSnapshot().toString();String selected=settings.get().model;
         JSONObject result=service.previewConnectionCatalog("",0,new JSONObject().put("baseUrl",base()).put("provider","openai_chat").put("model",""),new RunControl());
         assertEquals("succeeded",result.getString("status"));assertEquals("remote-model",result.getJSONArray("models").getJSONObject(0).getString("modelId"));assertFalse(result.getBoolean("saved"));assertFalse(result.getBoolean("selectionChanged"));
         assertFalse(result.toString().contains("draft-key-"));assertEquals(before,settings.apiConnectionsSnapshot().toString());assertEquals(selected,settings.get().model);assertFalse(Files.exists(cache));assertEquals(1,modelCalls.get());assertEquals(0,inferences.get());
     }
-    @Test public void strictCaptureOnlyStrengthensExactNativeBindingAndCannotSurviveDisableReenable()throws Exception {
+    @Test public void reasoningOnlyCapturePreservesLegacyCapabilitiesAndCannotSurviveDisableReenable()throws Exception {
         JSONObject source=source("原生能力","");String id=source.getString("id");long revision=source.getLong("revision");
         settings.configureApiCatalog(id,revision,ModelBinding.Format.OPENROUTER,URI.create(base()+"/models"));revision++;
         modelBody=richModel().toString();service.refreshConnection(id,revision,new RunControl());
         assertFalse(service.captureConnectionModel(id,revision,"remote-model",512,ReasoningOptions.DEFAULT,0).supportsImageInput);
         ModelConfig captured=service.captureConnectionModel(id,revision,"remote-model",512,new ReasoningOptions(ReasoningOptions.Mode.OPENAI_EFFORT,"high",0),0);
-        assertTrue(captured.catalogEnforced);assertTrue(captured.supportsImageInput);assertFalse(settings.apiConnectionMetadata(id,revision).configuration.catalogEnforced);assertTrue(settings.matchesApiCatalogRoute(captured));assertSame(captured,settings.currentForCaptured(captured));
+        assertFalse(captured.catalogEnforced);assertFalse(captured.supportsImageInput);assertFalse(settings.apiConnectionMetadata(id,revision).configuration.catalogEnforced);assertTrue(settings.matchesApiCatalogRoute(captured));assertSame(captured,settings.currentForCaptured(captured));
         long reviewedRevision=revision;
         assertThrows(IllegalArgumentException.class,()->service.selectConnectionModel(id,reviewedRevision,"remote-model",512,new ReasoningOptions(ReasoningOptions.Mode.OPENAI_EFFORT,"high",0),0));
         assertFalse(settings.apiConnectionMetadata(id,revision).configuration.catalogEnforced);assertEquals("manual-model",settings.get().model);
