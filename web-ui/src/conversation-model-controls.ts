@@ -30,11 +30,15 @@ export function nativeReasoning(value: any): ReasoningValue | null {
   return null;
 }
 const defaultReasoning: ReasoningValue = { mode: 'DEFAULT', level: '', budgetTokens: 0 };
-const levelLabels: Record<string, string> = { minimal: '最小', low: '低', medium: '中', high: '高', xhigh: '极高', max: '最高' };
+const levelLabels: Record<string, string> = { none: '关闭', minimal: '最小', low: '低', medium: '中', high: '高', xhigh: '极高', max: '最高' };
 export function reasoningLabel(value: ReasoningValue | null, compact = false): string {
   if (!value) return '';
   if (value.mode === 'DEFAULT') return '自动';
-  if (value.mode.endsWith('_BUDGET')) return compact ? '预算' : `预算 ${value.budgetTokens.toLocaleString()} tokens`;
+  if (value.mode.endsWith('_BUDGET')) {
+    if (value.budgetTokens === -1) return '动态';
+    if (value.budgetTokens === 0) return '关闭';
+    return compact ? `${value.budgetTokens.toLocaleString()}` : `思考预算 ${value.budgetTokens.toLocaleString()} tokens`;
+  }
   return levelLabels[value.level] || value.level;
 }
 function namedMode(provider: string): string {
@@ -70,14 +74,30 @@ export function currentReasoningTarget(value: any): ReasoningTarget {
   return { route, modelId, provider, identity, selection, reasoning, restriction, facts };
 }
 
-/** Choices come only from this exact model's native facts. No provider-wide strength presets. */
-export function reasoningChoices(facts: ModelControlRecord, provider: string, current: ReasoningValue): ReasoningChoice[] {
+/** Gemini 2.5 uses thinkingBudget, not Gemini 3's thinkingLevel. */
+export function geminiBudgetModel(model: string): boolean {
+  return /^(?:models\\/)?gemini-2\\.5-(?:pro|flash|flash-lite)(?:-(?:[0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{8}))?$/.test(model);
+}
+
+/** Choices are attached to exact native facts and never guessed from the API URL.
+ * Gemini 2.5's qualitative labels are PocketWorld budget presets, not wire enum values. */
+export function reasoningChoices(facts: ModelControlRecord, provider: string, current: ReasoningValue, modelId = '', maxOutputTokens = 0): ReasoningChoice[] {
   const choices: ReasoningChoice[] = [{ id: reasoningId(defaultReasoning), label: '自动', detail: '沿用接口默认设置', value: defaultReasoning }];
   const mode = namedMode(provider), levels = record(facts.REASONING_LEVELS);
+  const budget = provider === 'gemini' && geminiBudgetModel(modelId);
+  const budgets: Record<string, number> = { low: 512, medium: 2048, high: 4096 };
   if (mode && facts.REASONING?.known === true && facts.REASONING?.value === true && levels.known === true && Array.isArray(levels.value)) {
     for (const level of new Set(levels.value.filter((item: any): item is string => typeof item === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(item)))) {
-      const value = { mode, level: String(level), budgetTokens: 0 };
-      choices.push({ id: reasoningId(value), label: levelLabels[String(level)] || String(level), detail: levelLabels[String(level)] ? String(level) : undefined, value });
+      if (budget) {
+        const tokens = budgets[level];
+        // Keep room for the visible answer. The native policy checks the budget again.
+        if (!tokens || !Number.isSafeInteger(maxOutputTokens) || tokens >= maxOutputTokens) continue;
+        const value: ReasoningValue = { mode: 'GEMINI_BUDGET', level: '', budgetTokens: tokens };
+        choices.push({ id: reasoningId(value), label: levelLabels[level] || level, detail: `预算 ${tokens.toLocaleString()} tokens`, value });
+      } else {
+        const value: ReasoningValue = { mode, level: String(level), budgetTokens: 0 };
+        choices.push({ id: reasoningId(value), label: levelLabels[String(level)] || String(level), detail: levelLabels[String(level)] ? String(level) : undefined, value });
+      }
     }
   }
   const currentId = reasoningId(current);
@@ -98,7 +118,7 @@ function expiry(review: ModelControlRecord, now: number): number {
 export function apiReasoningReview(target: ReasoningTarget, review: ModelControlRecord, revision: any, now = Date.now()): ReasoningReview {
   if (target.route !== 'api_key' || target.restriction || !target.reasoning || !modelRevision(revision) || !text(review.reviewHandle) || review.modelId !== target.modelId ||
     !same(nativeReasoning(review.reasoning), target.reasoning) || review.outputTokens !== target.selection.maxOutputTokens || review.imageTokenReserve !== target.selection.imageTokenReserve) throw new Error('原模型或推理设置已变化，请重新读取。');
-  return { route: 'api_key', revision, target, review, choices: reasoningChoices(target.facts, target.provider, target.reasoning), currentId: reasoningId(target.reasoning), expiresAt: expiry(review, now) };
+  return { route: 'api_key', revision, target, review, choices: reasoningChoices(target.facts, target.provider, target.reasoning, target.modelId, Number(target.selection.maxOutputTokens)), currentId: reasoningId(target.reasoning), expiresAt: expiry(review, now) };
 }
 export function accountReasoningReview(target: ReasoningTarget, review: ModelControlRecord, revision: any, now = Date.now()): ReasoningReview {
   const options = record(review.options), ref = record(target.selection.nativeRef);

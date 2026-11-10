@@ -3,7 +3,7 @@ import { RiArrowDownSLine, RiBox3Line } from '@remixicon/react';
 import { Button } from './forms-library';
 import { Radio, RadioGroup } from './forms-library/boardui/components/base/radio/radio';
 import { ShimmerText } from './library';
-import { nativeReasoning, reasoningAvailability, reasoningChoices, reasoningLabel, type ReasoningValue } from './conversation-model-controls';
+import { geminiBudgetModel, nativeReasoning, reasoningAvailability, reasoningChoices, reasoningLabel, type ReasoningValue } from './conversation-model-controls';
 import { conversationModelName, conversationModelStamp, conversationSelectionReceipt } from './conversation-model-selection';
 import type { ConversationModelControlsProps } from './ConversationModelControls';
 import { ReasoningIndicator } from './ReasoningIndicator';
@@ -109,9 +109,11 @@ export function ScopedConversationReasoningPanel({ state, can, act, disabled = f
       }
       const selected = nativeReasoning(value.nativeSelection?.reasoning);
       if (!selected) throw new Error('原模型参数尚未读取。');
-      const provider = String(value.nativeSelection?.provider || ''), choices = reasoningChoices(record(value.facts), provider, selected);
-      const fact = record(record(value.facts).REASONING_LEVELS), available = reasoningCandidates[provider] || [];
-      setDeclaredLevels(fact.source === 'OWNER_OVERRIDE' && fact.known === true && Array.isArray(fact.value)
+      const provider = String(value.nativeSelection?.provider || ''), modelId = String(value.nativeSelection?.model || '');
+      const choices = reasoningChoices(record(value.facts), provider, selected, modelId, Number(value.nativeSelection?.maxOutputTokens));
+      const fact = record(record(value.facts).REASONING_LEVELS), available = provider === 'gemini' && geminiBudgetModel(modelId)
+        ? ['low', 'medium', 'high'] : reasoningCandidates[provider] || [];
+      setDeclaredLevels(fact.known === true && Array.isArray(fact.value)
         ? fact.value.filter((level: any) => available.includes(level)) : ['low', 'medium', 'high'].filter(level => available.includes(level)));
       setEditingLevels(false);
       setReview({ ...value, choices, originalStamp: original, expiresAt: Date.now() + value.expiresInMs }); setNeedsRead(false);
@@ -155,7 +157,8 @@ export function ScopedConversationReasoningPanel({ state, can, act, disabled = f
     finally { pending.current = false; latest.current.onSelectionPending(false); if (alive.current && request === reads.current) setSaving(false); }
   };
   const manualProvider = String(review?.nativeSelection?.provider || '');
-  const availableLevels = reasoningCandidates[manualProvider] || [];
+  const availableLevels = manualProvider === 'gemini' && geminiBudgetModel(String(review?.nativeSelection?.model || ''))
+    ? ['low', 'medium', 'high'] : reasoningCandidates[manualProvider] || [];
   const mayDeclare = !!review && !review.restriction && availableLevels.length > 0 &&
     Number.isSafeInteger(review.reasoningOwnerRevision) && review.reasoningOwnerRevision >= 0 &&
     review.nativeSelection?.modelRoute === 'api_key' && can('models.conversation.reasoning.declare');
@@ -195,7 +198,7 @@ export function ScopedConversationReasoningPanel({ state, can, act, disabled = f
     {loading ? <div role="status" aria-busy="true"><ShimmerText>正在读取推理设置…</ShimmerText></div> : review?.restriction ? <p className="pw-conversation-reasoning-note">{review.restriction}</p> : review && <>
       {onlyServiceDefault ? <div className="pw-conversation-reasoning-default"><strong>自动</strong><p>{mayDeclare ? '可为当前模型设置低、中、高等档位。' : reasoningAvailability(record(review.facts))}</p></div>
         : <RadioGroup aria-label="可用推理强度" value={choice} onChange={id => void apply(id)} isDisabled={locked || needsRead} className="pw-conversation-reasoning-options">{review.choices.map((item: Row) => <Radio key={item.id} value={item.id} isDisabled={item.readOnly} className="pw-conversation-reasoning-option"><span><b>{item.label}</b>{item.detail && <small>{item.detail}</small>}</span></Radio>)}</RadioGroup>}
-      {mayDeclare && !editingLevels && <Button variant="ghost" size="small" className="pw-reasoning-levels-trigger" disabled={locked || needsRead} onClick={() => setEditingLevels(true)}>{customLevelsSaved ? '调整可用档位' : '设置可用档位'}</Button>}
+      {mayDeclare && !editingLevels && <Button variant="ghost" size="small" className="pw-reasoning-levels-trigger" disabled={locked || needsRead} onClick={() => setEditingLevels(true)}>{customLevelsSaved ? '调整自定义档位' : '自定义档位'}</Button>}
       {mayDeclare && editingLevels && <section className="pw-reasoning-levels-editor" aria-label="手动声明推理档位">
         <p>选择这个模型实际支持的档位。保存后可在上方切换。</p>
         <div className="pw-reasoning-levels-choices">{availableLevels.map(level =>
