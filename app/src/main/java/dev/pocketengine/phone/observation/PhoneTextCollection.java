@@ -55,7 +55,7 @@ public final class PhoneTextCollection {
         public JSONObject readStored(String current,long now,int offset,int limit)throws Exception {
             if(!scope.equals(current))throw new SecurityException("text_collection_scope_changed");
             if(now<created||now-created>TTL_MS)stopped="cursor_expired";
-            JSONObject out=result(offset,limit);out.remove("observation");out.remove("nextScroll");out.remove("nextAction");out.remove("refreshCursorBeforeScroll");
+            JSONObject out=result(offset,limit);out.remove("observation");out.remove("nextScroll");out.remove("nextScrollRegion");out.remove("nextAction");out.remove("refreshCursorBeforeScroll");
             return out.put("historicalEvidenceOnly",true);
         }
         public JSONObject target(JSONObject actual)throws Exception {
@@ -67,8 +67,13 @@ public final class PhoneTextCollection {
             if(stopped()||latest==null||record==null||!"receipt".equals(record.optString("state")))throw new SecurityException("text_collection_original_receipt_required");
             String operation=record.getString("operationId"),tool=record.optString("tool");JSONObject receipt=record.getJSONObject("receipt"),args=record.getJSONObject("arguments");
             if(operations.contains(operation)||!Boolean.TRUE.equals(receipt.opt("accepted"))||!latest.getString("observationId").equals(args.optString("observationId")))throw new SecurityException("text_collection_scroll_receipt_changed");
-            if(NativeTreeScrollPort.TOOL.equals(tool)){
+            if(NativeTreeScrollPort.TOOL.equals(tool)||PhoneRegionGesture.TOOL.equals(tool)){
                 if(!container.getString("id").equals(args.optString("nodeId"))||!direction.equals(args.optString("direction")))throw new SecurityException("text_collection_wrong_scroll_target");
+                if(PhoneRegionGesture.TOOL.equals(tool)){
+                    JSONObject gesture=receipt.optJSONObject("gesture");JSONArray paths=gesture==null?null:gesture.optJSONArray("paths");
+                    if(paths==null||paths.length()!=1)throw new SecurityException("text_collection_region_evidence_unavailable");
+                    requirePath(paths.getJSONArray(0));
+                }
             }else if("phone_swipe".equals(tool)){
                 requirePath(new JSONArray().put(new JSONArray().put(args.getInt("x1")).put(args.getInt("y1"))).put(new JSONArray().put(args.getInt("x2")).put(args.getInt("y2"))));
             }else if("phone_gesture".equals(tool)){
@@ -113,7 +118,8 @@ public final class PhoneTextCollection {
             if(latest!=null&&!stopped()){
                 out.put("observation",PhoneTreeExtract.actionObservation(latest,container.getString("id")));
                 if(container.optBoolean("scrollable"))out.put("nextScroll",new JSONObject().put("observationId",latest.getString("observationId")).put("nodeId",container.getString("id")).put("direction",direction));
-                else out.put("nextAction","observe_with_image_then_explicit_scroll").put("refreshCursorBeforeScroll",true);
+                else out.put("nextScrollRegion",new JSONObject().put("observationId",latest.getString("observationId")).put("nodeId",container.getString("id")).put("direction",direction).put("axis","vertical"))
+                        .put("nextAction","phone_scroll_region_requires_local_capture").put("refreshCursorBeforeScroll",false);
             }
             return out;
         }

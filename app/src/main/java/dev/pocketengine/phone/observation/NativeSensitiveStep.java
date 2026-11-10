@@ -99,6 +99,28 @@ public final class NativeSensitiveStep {
         if(target==null)throw new IllegalStateException("native_sensitive_target_missing");
         refuse(nodeReason(fresh,target,ref,"phone_type".equals(tool)),control,revision);
     }
+
+    /** Keyboard activation and editing retain the same human-only boundaries as the actual focused node. */
+    public static void requireKey(AccessibilityForest fresh,AccessibilityForest.Ref focus,int key,RunControl control,long revision)throws Exception {
+        if(!dev.pocketengine.displayhelper.PhoneKeyCodes.allowed(key))throw new IllegalArgumentException("unsupported_phone_key");
+        requireOwnerUpdateWindow(control,revision);
+        boolean activate=dev.pocketengine.displayhelper.PhoneKeyCodes.mayActivate(key);
+        boolean edit=key==android.view.KeyEvent.KEYCODE_DEL||key==android.view.KeyEvent.KEYCODE_FORWARD_DEL||key==android.view.KeyEvent.KEYCODE_SPACE;
+        if(!activate&&!edit)return;
+        if(activate&&packageInstaller(fresh.packageName))refuse(Reason.PERMISSION_ELEVATION,control,revision);
+        if(focus==null)throw new IllegalStateException("native_key_focus_required");
+        JSONObject target=null;
+        for(int i=0;i<fresh.nodes.length();i++){JSONObject candidate=fresh.nodes.getJSONObject(i);
+            if(candidate.optInt("windowId",-1)==focus.windowId&&samePath(candidate.optJSONArray("path"),focus.path)){target=candidate;break;}}
+        if(target==null)throw new IllegalStateException("native_sensitive_target_missing");
+        if(target.optBoolean("password"))refuse(Reason.LOGIN_CODE,control,revision);
+        if(focus.editable)refuse(nodeReason(fresh,target,focus,true),control,revision);
+        if(activate){
+            refuse(nodeReason(fresh,target,focus,false),control,revision);
+            // Enter can submit an editor's form without clicking its confirmation button.
+            if(focus.editable&&!focus.sensitive.ordinaryInput)refuse(context(fresh,target),control,revision);
+        }
+    }
     private static Reason nodeReason(AccessibilityForest forest,JSONObject target,AccessibilityForest.Ref ref,boolean typing){
         Facts facts=ref.sensitive;Reason nearby=context(forest,target),reason=typing?facts.type:facts.click;
         // A small unnamed clickable container can own its nearby noninteractive text child;

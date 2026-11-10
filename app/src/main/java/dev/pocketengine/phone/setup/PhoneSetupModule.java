@@ -13,6 +13,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.EngineModule;
 import dev.pocketengine.features.FeatureContext;
 import dev.pocketengine.phone.display.DisplayModule;
@@ -24,6 +25,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
 import org.json.JSONObject;
 
 /** Native owner setup only. Its commands must never be registered as model, channel or remote tools. */
@@ -44,6 +46,10 @@ public final class PhoneSetupModule implements EngineModule {
     private final Object pairingLock = new Object();
     private final AtomicBoolean recoveryQueued = new AtomicBoolean();
     private final AtomicBoolean recoveryRunning = new AtomicBoolean();
+    private final Object recoveryLock = new Object();
+    private final Object recoveryCallbacks = new Object();
+    private volatile RecoveryWork recoveryWork;
+    private volatile long ownerStoppedRevision = -1;
     private final PhoneRecoveryReceiver unlockReceiver = new PhoneRecoveryReceiver();
     private boolean lifecycleSignalsRegistered;
     private PendingIntent replyIntent, cancelIntent;
@@ -69,6 +75,8 @@ public final class PhoneSetupModule implements EngineModule {
         instance = this;
         IntentFilter unlock = new IntentFilter(Intent.ACTION_USER_UNLOCKED);
         unlock.addAction(Intent.ACTION_USER_PRESENT);
+        unlock.addAction(Intent.ACTION_SCREEN_OFF);
+        unlock.addAction(Intent.ACTION_USER_BACKGROUND);
         try {
             // USER_UNLOCKED is registered-receiver-only on Android; a manifest filter never receives it.
             if (Build.VERSION.SDK_INT >= 33) context.android.registerReceiver(unlockReceiver, unlock, Context.RECEIVER_NOT_EXPORTED);
@@ -87,6 +95,7 @@ public final class PhoneSetupModule implements EngineModule {
         JSONObject audio;
         try { audio=AndroidPhoneAudioRecovery.get(context.android).snapshot().put("available",true); }
         catch(Exception unavailable) { audio=new JSONObject().put("available",false); }
+        RecoveryWork activeRecovery = recoveryWork;
         synchronized (pairingLock) {
             JSONObject entry = pairing.snapshot();
             if (!entry.optBoolean("active") && "awaiting_owner_code".equals(lastPairingOutcome)) {
@@ -95,12 +104,25 @@ public final class PhoneSetupModule implements EngineModule {
             }
             return new JSONObject().put("pairing", entry.put("lastOutcome", lastPairingOutcome))
                     .put("recovery", recovery.snapshot().put("connectionOutcome", lastConnectionOutcome)
-                            .put("busy", recoveryRunning.get()).put("unlockSignalsAvailable", lifecycleSignalsRegistered))
+                            .put("busy", recoveryRunning.get() || recoveryQueued.get())
+                            .put("retryScheduled", activeRecovery != null && activeRecovery.scheduled)
+                            .put("attemptsStopped", ownerStoppedRevision == recovery.currentRevision())
+                            .put("unlockSignalsAvailable", lifecycleSignalsRegistered))
                     .put("audioRecovery",audio).put("modelCommandsAvailable", false);
         }
     }
 
     @Override public JSONObject handle(String command, JSONObject input) throws Exception {
+        if ("recovery.registration.consent".equals(command)) throw new SecurityException("owner_recovery_window_required");
+        return handleOwner(command, input, () -> true);
+    }
+
+    public JSONObject handleForOwner(String command, JSONObject input, BooleanSupplier ownerCurrent) throws Exception {
+        if (!ownerCurrent.getAsBoolean()) throw new SecurityException("owner_recovery_window_changed");
+        return handleOwner(command, input, ownerCurrent);
+    }
+
+    private JSONObject handleOwner(String command, JSONObject input, BooleanSupplier ownerCurrent) throws Exception {
         requireOpen();
         if (input == null) input = new JSONObject();
         switch (command) {
@@ -108,9 +130,20 @@ public final class PhoneSetupModule implements EngineModule {
             case "pairing.begin": return begin(input);
             case "pairing.cancel": cancel(input.optString(SESSION, null)); return snapshot();
             case "recovery.consent":
-                recovery.setConsent(input.getBoolean("enabled"), input.getLong("expectedRevision"));
+                recovery.setConsent(input.getBoolean("enabled"), input.getLong("expectedRevision"), ownerCurrent);
+                stopRecovery();
                 return snapshot();
-            case "recovery.restore": return restoreConnection();
+            case "recovery.registration.consent":
+                recovery.setRegistrationConsent(input.getBoolean("enabled"), input.getLong("expectedRevision"),
+                        input.getString("scope"), ownerCurrent);
+                stopRecovery();
+                return snapshot();
+            case "recovery.restore":
+                context.requireExecutionEnabled();
+                if (!ownerCurrent.getAsBoolean()) throw new SecurityException("owner_recovery_window_changed");
+                ownerStoppedRevision = -1;
+                recoverAfterLifecycle(() -> { });
+                return snapshot();
             case "recovery.compensate":
                 recovery.compensate();
                 return snapshot();
@@ -263,50 +296,165 @@ public final class PhoneSetupModule implements EngineModule {
         if (module != null) module.recoverAfterLifecycle(() -> { });
     }
 
-    void recoverAfterLifecycle(Runnable finished) {
-        if (closed || !context.executionAllowed() || recoveryRunning.get() || !recoveryQueued.compareAndSet(false, true)) { finished.run(); return; }
-        final long consentRevision;
-        try { consentRevision = recovery.snapshot().getLong("revision"); }
-        catch (Exception unavailable) { recoveryQueued.set(false); finished.run(); return; }
-        try {
-            worker.execute(() -> {
-                try { if (!closed && recovery.consentCurrent(consentRevision)) restoreConnection(); }
-                catch (Exception unavailable) { emit("phone_recovery_unavailable"); }
-                finally { recoveryQueued.set(false); finished.run(); }
-            });
-        } catch (RuntimeException unavailable) { recoveryQueued.set(false); finished.run(); }
+    /** A real binding resets an exhausted repair budget through the same native worker. */
+    public static void onAccessibilityConnected() {
+        PhoneSetupModule module = current();
+        if (module != null) module.recoverAfterLifecycle(() -> { });
     }
 
-    private JSONObject restoreConnection() throws Exception {
-        context.requireExecutionEnabled();
-        if (!recoveryRunning.compareAndSet(false, true)) return snapshot();
+    void recoverAfterLifecycle(Runnable finished) {
+        if (closed || instance != this || !context.executionAllowed()) { finished.run(); return; }
+        final long revision = recovery.currentRevision();
+        if (ownerStoppedRevision == revision) { finished.run(); return; }
+        RecoveryWork original;
+        synchronized (recoveryLock) {
+            if (closed || recoveryWork != null) { finished.run(); return; }
+            original = new RecoveryWork(revision);
+            recoveryWork = original;
+            original.control.onCancel(() -> {
+                synchronized (recoveryLock) {
+                    if (recoveryWork == original) {
+                        recoveryWork = null;
+                        main.removeCallbacksAndMessages(recoveryCallbacks);
+                        recoveryQueued.set(false);
+                    }
+                    if (original.thread != null) original.thread.interrupt();
+                }
+            });
+        }
+        enqueueRecovery(original, finished);
+    }
+
+    private void enqueueRecovery(RecoveryWork original, Runnable finished) {
+        synchronized (recoveryLock) {
+            if (recoveryWork != original || original.control.isCancelled() || closed) { finished.run(); return; }
+            original.scheduled = false;
+            recoveryQueued.set(true);
+        }
         try {
-            requireOpen();
-            JSONObject before = recovery.snapshot();
-            long revision = before.getLong("revision");
-            recovery.restore(() -> !closed && context.executionAllowed());
-            if (Thread.currentThread().isInterrupted()) lastConnectionOutcome = "recovery_interrupted";
-            else if (!recovery.consentCurrent(revision) || closed) lastConnectionOutcome = "consent_required";
-            else if (!recovery.snapshot().optBoolean("userUnlocked")) lastConnectionOutcome = "owner_unlock_required";
-            else synchronized (display) {
-                JSONObject state = display.snapshot();
-                if (state.optBoolean("taskOwned") || state.optBoolean("bootstrapBusy")) lastConnectionOutcome = "original_task_owns_connection";
-                else if (state.optBoolean("helperConnected")) lastConnectionOutcome = state.optBoolean("recoveryRequired") || state.optBoolean("releasePending")
-                        ? "original_session_requires_owner_review" : "original_helper_authenticated";
-                else if (!state.optBoolean("configured")) lastConnectionOutcome = "owner_setup_required";
-                else if (!recovery.consentCurrent(revision) || closed) lastConnectionOutcome = "consent_required";
-                else try {
-                    // Only the original selected backend's authenticated status. Never start/grant/switch/release here.
-                    JSONObject actual = display.handle("connect", new JSONObject());
-                    lastConnectionOutcome = recovery.consentCurrent(revision) && !closed && actual.optBoolean("helperConnected")
-                            ? actual.optBoolean("recoveryRequired") || actual.optBoolean("releasePending")
-                                ? "original_session_requires_owner_review" : "original_helper_authenticated"
-                            : "connection_unconfirmed";
-                } catch (Exception unavailable) { lastConnectionOutcome = "owner_connection_check_required"; }
+            worker.execute(() -> {
+                JSONObject result = null;
+                synchronized (recoveryLock) {
+                    if (recoveryWork == original) recoveryQueued.set(false);
+                    original.thread = Thread.currentThread();
+                }
+                try {
+                    if (!recoveryCurrent(original)) return;
+                    if (!original.admitted) {
+                        context.admitResourceExecution(original.control);
+                        original.admitted = true;
+                    }
+                    original.control.check();
+                    original.checks++;
+                    recoveryRunning.set(true);
+                    result = restoreConnection(original);
+                } catch (Exception unavailable) {
+                    if (recoveryWork == original) lastConnectionOutcome = "owner_connection_check_required";
+                } finally {
+                    String outcome = result == null ? "" : result.optString("lastOutcome");
+                    boolean eligible = result != null && recoveryCurrent(original) && original.checks < 6
+                            && ("registered_waiting_for_binding".equals(outcome) || "recovery_backoff".equals(outcome))
+                            && result.optBoolean("registrationRestoreAvailable") && !result.optBoolean("accessibilityConnected")
+                            && result.optBoolean("accessibilityEnabled")
+                            && result.optInt("rebindAttempts") < result.optInt("rebindAttemptLimit", 3);
+                    boolean retry = false;
+                    synchronized (recoveryLock) {
+                        original.thread = null;
+                        recoveryRunning.set(false);
+                        if (recoveryWork == original) {
+                            retry = eligible && !original.control.isCancelled() && !closed
+                                    && ownerStoppedRevision != original.revision && recovery.currentRevision() == original.revision;
+                            if (retry) {
+                                long delay = Math.max(250L, Math.min(30_000L, result.optLong("retryAfterMillis", 0)));
+                                original.scheduled = main.postAtTime(() -> enqueueRecovery(original, () -> { }),
+                                        recoveryCallbacks, SystemClock.uptimeMillis() + delay);
+                                retry = original.scheduled;
+                            }
+                            if (!retry) recoveryWork = null;
+                        }
+                    }
+                    if (!retry) original.control.cancel();
+                    // The original single setup worker may next handle a pairing request.
+                    Thread.interrupted();
+                    finished.run();
+                    emit("phone_recovery_checked");
+                }
+            });
+        } catch (RuntimeException unavailable) {
+            synchronized (recoveryLock) {
+                if (recoveryWork == original) { recoveryWork = null; recoveryQueued.set(false); }
             }
-        } finally { recoveryRunning.set(false); }
-        emit("phone_recovery_checked");
-        return snapshot();
+            original.control.cancel();
+            finished.run();
+        }
+    }
+
+    private boolean recoveryCurrent(RecoveryWork original) {
+        if (recoveryWork != original || ownerStoppedRevision == original.revision
+                || closed || instance != this || !context.executionAllowed()
+                || !recovery.consentCurrent(original.revision)) return false;
+        try { original.control.check(); return true; }
+        catch (Exception stopped) { return false; }
+    }
+
+    void stopRecovery() {
+        RecoveryWork original;
+        synchronized (recoveryLock) {
+            original = recoveryWork;
+            recoveryWork = null;
+            recoveryQueued.set(false);
+            main.removeCallbacksAndMessages(recoveryCallbacks);
+        }
+        if (original != null) original.control.cancel();
+    }
+
+    /** Stop the captured recovery immediately; persistence follows on the existing owner queue. */
+    public void stopRecoveryForOwner(long expectedRevision, BooleanSupplier ownerCurrent) {
+        RecoveryWork original;
+        synchronized (recoveryLock) {
+            if (expectedRevision != recovery.currentRevision() || !ownerCurrent.getAsBoolean()) return;
+            ownerStoppedRevision = expectedRevision;
+            original = recoveryWork;
+        }
+        if (original != null && original.revision == expectedRevision) original.control.cancel();
+    }
+
+    private JSONObject restoreConnection(RecoveryWork original) throws Exception {
+        requireOpen();
+        JSONObject result = recovery.restore(() -> recoveryCurrent(original));
+        String connection;
+        if (Thread.currentThread().isInterrupted()) connection = "recovery_interrupted";
+        else if (!recoveryCurrent(original)) connection = "consent_required";
+        else if (!result.optBoolean("userUnlocked")) connection = "owner_unlock_required";
+        else synchronized (display) {
+            JSONObject state = display.snapshot();
+            if (state.optBoolean("taskOwned") || state.optBoolean("bootstrapBusy")) connection = "original_task_owns_connection";
+            else if (state.optBoolean("helperConnected")) connection = state.optBoolean("recoveryRequired") || state.optBoolean("releasePending")
+                    ? "original_session_requires_owner_review" : "original_helper_authenticated";
+            else if (!state.optBoolean("configured")) connection = "owner_setup_required";
+            else if (!recoveryCurrent(original)) connection = "consent_required";
+            else try {
+                // Only the original selected backend's authenticated status. Never start/grant/switch/release here.
+                JSONObject actual = display instanceof DisplayModule nativeDisplay
+                        ? nativeDisplay.connect(original.control) : display.handle("connect", new JSONObject());
+                connection = recoveryCurrent(original) && actual.optBoolean("helperConnected")
+                        ? actual.optBoolean("recoveryRequired") || actual.optBoolean("releasePending")
+                            ? "original_session_requires_owner_review" : "original_helper_authenticated"
+                        : "connection_unconfirmed";
+            } catch (Exception unavailable) { connection = "owner_connection_check_required"; }
+        }
+        if (recoveryWork == original) lastConnectionOutcome = connection;
+        return result;
+    }
+
+    private static final class RecoveryWork {
+        final long revision;
+        final RunControl control = new RunControl();
+        Thread thread;
+        boolean admitted;
+        volatile boolean scheduled;
+        int checks;
+        RecoveryWork(long revision) { this.revision = revision; }
     }
 
     private void emit(String event) {
@@ -318,8 +466,9 @@ public final class PhoneSetupModule implements EngineModule {
 
     private void requireOpen() { if (closed) throw new SecurityException("phone_setup_closed"); }
     @Override public void close() {
+        closed = true;
+        stopRecovery();
         synchronized (pairingLock) {
-            closed = true;
             pairing.cancel();
             cancelNotice();
             main.removeCallbacksAndMessages(this);

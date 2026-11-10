@@ -109,7 +109,7 @@ public final class SetupPreferences {
     }
 
     private static String permissionKind(String kind) {
-        if (!Set.of("notifications", "microphone").contains(kind)) throw new IllegalArgumentException("无效的系统权限请求");
+        if (!Set.of("notifications", "microphone", "calendar").contains(kind)) throw new IllegalArgumentException("无效的系统权限请求");
         return kind;
     }
 

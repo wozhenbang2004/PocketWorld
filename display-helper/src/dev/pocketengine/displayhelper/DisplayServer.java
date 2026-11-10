@@ -65,6 +65,7 @@ public final class DisplayServer implements AutoCloseable {
                 reply=new JSONObject().put("ok",false).put("error",known!=null?known.code:route!=null?route.code:"platform_unavailable")
                         .put("message",known!=null?known.getMessage():route!=null?route.getMessage():"系统不支持此后台屏操作，未回落主屏。")
                         .put("accepted",known!=null&&known.dispatched?JSONObject.NULL:false).put("verified",false);
+                if(known!=null&&known.keyCleanup!=null)reply.put("keyCleanup",known.keyCleanup).put("automaticReplayAllowed",false);
             }
             reply.put("requestId",request.optString("requestId"));
             DisplayWire.write(new DataOutputStream(connection.getOutputStream()),reply.toString(),8*1024*1024);

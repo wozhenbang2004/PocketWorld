@@ -13270,6 +13270,28 @@ public final class TaskStore {
     /** Live source-presence predicate for candidate admission; never loads audit bodies or performs vault I/O. */
     public synchronized boolean hasAttachmentInputs(String id)throws Exception{return TaskAttachmentInputs.hasAny(read(id));}
 
+    /** Complete disclosure of one original pending approval. Ordinary task review still uses
+     * getForUi's unchanged core bound; this projection permits only the original approval path. */
+    public synchronized JSONObject pendingCapabilityApprovalForUi(String id,String run,int epoch,long updatedAt,
+                                                                  String approvalId,RunControl readControl)throws Exception{
+        if(id==null||id.isBlank()||id.length()>128||run==null||run.isBlank()||run.length()>128||epoch<1
+                ||approvalId!=null&&approvalId.length()>128)throw new IllegalArgumentException("原审批读取身份无效");
+        readControl.check();boolean ownsTransaction=!db.inTransaction();if(ownsTransaction)db.beginTransactionNonExclusive();
+        try{
+            JSONObject task=TaskAuditStore.pendingApproval(db,id,run,epoch,approvalId,readControl);requirePrivateOwner(task);
+            if(task.optLong("updatedAt",-1)!=updatedAt)throw new SecurityException("原任务在审批读取前已变化，请重新核对");
+            String conversation=task.optString("conversationId");
+            if(!conversation.isEmpty()&&(conversationRepository==null||!conversationRepository.exists(conversation)))
+                throw new SecurityException("原审批会话来源已不可用");
+            if(ownerWorkForUi(task)!=task||phoneOwnerQuestionForUi(task)!=task)throw new SecurityException("原审批来源已撤回或暂不可核对");
+            JSONObject approval=task.getJSONArray("approvals").getJSONObject(0);
+            if(approval.optJSONObject("capability")==null||approval.optJSONObject("arguments")==null)
+                throw new SecurityException("原审批的完整参数或范围不可读");
+            task.put("hasUnresolvedOperations",hasUnresolved(id)).put("historyHasUnconfirmedOperations",hasUnconfirmedForUi(id));
+            readControl.check();if(ownsTransaction)db.setTransactionSuccessful();return task;
+        }finally{if(ownsTransaction)db.endTransaction();}
+    }
+
     public synchronized JSONObject getForUi(String id,boolean image)throws Exception{
         JSONObject result;boolean limited;
         try(Cursor row=db.rawQuery("SELECT CASE WHEN length(CAST(document AS BLOB))<=262144 THEN document END,ui_header,length(CAST(document AS BLOB)) FROM tasks WHERE task_id=?",new String[]{id})){

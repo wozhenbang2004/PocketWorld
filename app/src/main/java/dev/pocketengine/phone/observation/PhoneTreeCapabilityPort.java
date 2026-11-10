@@ -22,6 +22,7 @@ public final class PhoneTreeCapabilityPort implements CapabilityPort {
     private final PhonePort phone;
     private volatile boolean closed;
     private volatile long turnAppPolicyRevision;
+    private AdaptivePhonePort boundedAdapter;
     private record PreparedSequence(String operation,NativeToolPlan plan) { }
     private final java.util.concurrent.atomic.AtomicReference<PreparedSequence> sequence=new java.util.concurrent.atomic.AtomicReference<>();
     private final java.util.Set<String> attemptedScrolls=java.util.concurrent.ConcurrentHashMap.newKeySet();
@@ -63,8 +64,11 @@ public final class PhoneTreeCapabilityPort implements CapabilityPort {
         add(out,PhoneTreeQuery.WAIT,"只读等待当前显示的present/absent/stable条件，最多60秒；轮询随等待延长而降频，暂停和取消立即生效，超时不代表业务失败。parentId需原observationId；父域变化即拒，absent/stable不以残缺树判满足。stable非空selector需至少1个目标且目标集合/子树持续稳定；空selector才等完整场景稳定。",wait,new JSONArray().put("kind").put("selector").put("timeoutMs"));
         JSONObject fieldSelector=new JSONObject().put("type","object").put("additionalProperties",false).put("properties",new JSONObject().put("text",string(400)).put("resourceId",string(400)).put("role",string(400)));
         JSONObject direction=new JSONObject().put("type","string").put("enum",new JSONArray().put("forward").put("backward"));
-        add(out,PhoneBoundedOperation.FIND,"在当前明确的可滚动容器里查找selector；找到即返回当前目标，最多30次原生滚动。每一步均由原Runner独立准备、审批、记录和读取，目标/应用/暂停变化或无进展即停止。仅查找，不点击匹配项；未找到不证明整列表不存在。一个batch最多准备一个有界操作。",new JSONObject().put("observationId",string(100)).put("containerId",string(100)).put("selector",fieldSelector).put("direction",direction).put("maxScrolls",number(1,30)),new JSONArray().put("observationId").put("containerId").put("selector").put("direction"));
-        add(out,PhoneBoundedOperation.WHEEL,"把当前滚轮选到目标值：优先原生可编辑字段，否则沿明确方向逐步滚动，每次读取实际选中值；原树读不到时可用已授权本地OCR。最多30步，已到目标则不派发动作；歧义、无进展、页面变化即结束。每步经过原Runner独立审批和回执，值可见不等于表单已提交。",new JSONObject().put("observationId",string(100)).put("nodeId",string(100)).put("value",string(100)).put("direction",direction).put("maxSteps",number(1,30)),new JSONArray().put("observationId").put("nodeId").put("value").put("direction"));
+        add(out,PhoneBoundedOperation.FIND,"在当前固定原生容器逐屏查找，source=auto/tree/ocr；纯text选择器可用本地OCR，resourceId/role仍需原生证据。scrollMode=auto优先系统滚动，无进展或未暴露滚动时可用已授权本地画面内的容器滑动；axis默认vertical可选horizontal。最多30次，每步原Runner独立审批、回执和回读。找到即返回真实树或OCR来源，不点击；未找到不证明不存在，一个batch最多一个有界操作。",new JSONObject().put("observationId",string(100)).put("containerId",string(100)).put("selector",fieldSelector).put("direction",direction).put("maxScrolls",number(1,30))
+                .put("source",new JSONObject().put("type","string").put("enum",new JSONArray(new String[]{"auto","tree","ocr"})))
+                .put("scrollMode",new JSONObject().put("type","string").put("enum",new JSONArray(new String[]{"auto","native","gesture"})))
+                .put("axis",new JSONObject().put("type","string").put("enum",new JSONArray(new String[]{"vertical","horizontal"}))),new JSONArray().put("observationId").put("containerId").put("selector").put("direction"));
+        add(out,PhoneBoundedOperation.WHEEL,"把当前单列滚轮选到目标值：优先唯一原生输入框，其次系统滚动；自绘列可按实际可见项/行距拖拽并读回调整方向和距离。method=auto/native/drag，拖拽仅使用已授权本地当前画面/OCR，不上传截图。最多30步，已到目标不动作；多列、不可读、持续无进展或页面变化即结束。每步原Runner独立审批与回执，选值不代表提交。",new JSONObject().put("observationId",string(100)).put("nodeId",string(100)).put("value",string(100)).put("direction",direction).put("maxSteps",number(1,30)).put("method",new JSONObject().put("type","string").put("enum",new JSONArray(new String[]{"auto","native","drag"}))),new JSONArray().put("observationId").put("nodeId").put("value").put("direction"));
         JSONObject field=new JSONObject().put("type","object").put("additionalProperties",false).put("required",new JSONArray().put("name").put("selector")).put("properties",new JSONObject().put("name",string(40)).put("selector",fieldSelector).put("attribute",new JSONObject().put("type","string").put("enum",new JSONArray().put("text").put("description").put("label").put("checked").put("selected"))).put("multiple",new JSONObject().put("type","boolean")));
         JSONObject fields=new JSONObject().put("type","array").put("minItems",1).put("maxItems",8).put("items",field);
         JSONObject extract=new JSONObject().put("observationId",string(100)).put("containerId",string(100)).put("rowSelector",fieldSelector).put("fields",fields).put("limit",number(1,80)).put("offset",number(0,2048));
@@ -123,7 +127,7 @@ public final class PhoneTreeCapabilityPort implements CapabilityPort {
                 }finally{scrolling.set(false);}
             }else if(PhoneTreeExtract.TOOL.equals(name))result=DeferredPhoneSession.require(phone,control).extractTree(args,control);
             else if(PhoneTreeCollection.TOOL.equals(name)||PhoneTextCollection.TOOL.equals(name)){
-                JSONObject record=null;if("advance".equals(args.optString("action"))){JSONArray operations=tasks.get(binding.taskId,false).getJSONArray("operations");for(int i=0;i<operations.length();i++){JSONObject op=operations.getJSONObject(i);if(args.getString("afterOperationId").equals(op.optString("operationId"))){boolean scroll=NativeTreeScrollPort.TOOL.equals(op.optString("tool"))||PhoneTextCollection.TOOL.equals(name)&&java.util.Set.of("phone_swipe","phone_gesture").contains(op.optString("tool"));if(record!=null||!binding.runId.equals(op.optString("runId"))||!scroll)return PhoneTreeExtract.unavailable("scroll_receipt_not_in_original_run");record=new JSONObject(op.toString());}}if(record==null)return PhoneTreeExtract.unavailable("scroll_receipt_not_in_original_run");}
+                JSONObject record=null;if("advance".equals(args.optString("action"))){JSONArray operations=tasks.get(binding.taskId,false).getJSONArray("operations");for(int i=0;i<operations.length();i++){JSONObject op=operations.getJSONObject(i);if(args.getString("afterOperationId").equals(op.optString("operationId"))){boolean scroll=NativeTreeScrollPort.TOOL.equals(op.optString("tool"))||PhoneTextCollection.TOOL.equals(name)&&java.util.Set.of("phone_swipe","phone_gesture",PhoneRegionGesture.TOOL).contains(op.optString("tool"));if(record!=null||!binding.runId.equals(op.optString("runId"))||!scroll)return PhoneTreeExtract.unavailable("scroll_receipt_not_in_original_run");record=new JSONObject(op.toString());}}if(record==null)return PhoneTreeExtract.unavailable("scroll_receipt_not_in_original_run");}
                 result=PhoneTextCollection.TOOL.equals(name)?DeferredPhoneSession.require(phone,control).collectText(args,record,control):DeferredPhoneSession.require(phone,control).collectTree(args,record,control);
             }else result=PhoneTreeQuery.QUERY.equals(name)?DeferredPhoneSession.require(phone,control).queryTree(args,control):DeferredPhoneSession.require(phone,control).conditionWait(args,control);
             try{check(name,control);}catch(Exception stopped){
@@ -157,7 +161,7 @@ public final class PhoneTreeCapabilityPort implements CapabilityPort {
         control.check();if(control.isPaused())throw new SecurityException("原树工具已暂停");
     }
     private JSONObject prepareBounded(String tool,JSONObject args,String parentOperation,RunControl control)throws Exception {
-        AdaptivePhonePort adapter=DeferredPhoneSession.require(phone,control);PhoneBoundedOperation.State state=adapter.prepareBounded(tool,args,control);
+        AdaptivePhonePort adapter=DeferredPhoneSession.require(phone,control);PhoneBoundedOperation.State state=adapter.prepareBounded(tool,args,control);boundedAdapter=adapter;
         android.os.UserHandle user=android.os.Process.myUserHandle();JSONObject anchor=adapter.boundedIdentity(state,control);
         NativeToolPlan.Identity identity=new NativeToolPlan.Identity(binding.taskId,binding.runId,binding.epoch,anchor.getInt("displayId"),anchor.getString("sessionId"),user.toString(),state.initialObservation);
         RunControl.AuthorityCheck current=()->{nativeHookControl(control);if(!user.equals(android.os.Process.myUserHandle()))throw new SecurityException("bounded_phone_user_changed");adapter.requireBoundedCurrent(state,null,control);};
@@ -185,10 +189,10 @@ public final class PhoneTreeCapabilityPort implements CapabilityPort {
     @Override public JSONObject prepareTurn(String query,int round,int steps,RunControl control)throws Exception{check(PhoneTreeQuery.QUERY,control);turnAppPolicyRevision=DeferredPhoneSession.policyRevision(phone);JSONObject turn=existing.prepareTurn(query,round,steps,control);return turn.put("tools",PhoneExtensionTools.append(appendTools(turn.getJSONArray("tools"))));}
     @Override public boolean responseCurrent(RunControl control)throws Exception{check(PhoneTreeQuery.QUERY,control);return turnAppPolicyRevision==DeferredPhoneSession.policyRevision(phone)&&existing.responseCurrent(control);}
     @Override public JSONObject beforeTool(String name,JSONObject args,RunControl control)throws Exception{if(owns(name))check(name,control);return existing.beforeTool(name,args,control);}
-    @Override public void afterTool(String name,JSONObject args,JSONObject receipt,RunControl control)throws Exception{existing.afterTool(name,args,receipt,control);}
+    @Override public void afterTool(String name,JSONObject args,JSONObject receipt,RunControl control)throws Exception{existing.afterTool(name,args,receipt,control);if(boundedAdapter!=null)boundedAdapter.settledBounded(name,args,receipt,control);}
     @Override public void beforeModelRequest(String id,JSONArray messages,RunControl control)throws Exception{check(PhoneTreeQuery.QUERY,control);existing.beforeModelRequest(id,messages,control);}
     @Override public JSONObject afterModelResponse(String id,String answer,RunControl control)throws Exception{check(PhoneTreeQuery.QUERY,control);return existing.afterModelResponse(id,answer,control);}
     @Override public void modelRequestAbandoned(String id)throws Exception{existing.modelRequestAbandoned(id);}
-    @Override public void endRun(RunControl control)throws Exception{PreparedSequence pending=sequence.getAndSet(null);if(pending!=null)pending.plan.close();existing.endRun(control);}
+    @Override public void endRun(RunControl control)throws Exception{PreparedSequence pending=sequence.getAndSet(null);if(pending!=null)pending.plan.close();boundedAdapter=null;existing.endRun(control);}
     @Override public void close(){if(closed)return;closed=true;PreparedSequence pending=sequence.getAndSet(null);if(pending!=null)pending.plan.close();existing.close();}
 }

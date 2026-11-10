@@ -24,7 +24,9 @@ public final class SemanticModule implements EngineModule {
     @Override public String id() {return "semantic";}
     @Override public JSONObject snapshot() throws Exception {
         return new JSONObject().put("id",id()).put("commands",new JSONArray(new String[]{"status"})).put("intentDiscoveryImplemented",true)
-                .put("adapters",new JSONArray(new String[]{"web","app_link","share_text","show_alarms","map_search","dial","email_draft","calendar_draft","alarm","timer"}))
+                .put("adapters",new JSONArray(new String[]{"web","app_link","share_text","show_alarms","map_search","dial","email_draft","calendar_draft","calendar_list","calendar_batch","alarm","timer"}))
+                .put("calendar",CalendarProviderSemanticPlatform.permissions(context.android).put("batchLimit",50).put("batchBytesLimit",131072)
+                        .put("perBatchApproval",true).put("readbackImplemented",true).put("automaticReplayAllowed",false))
                 .put("clock",new JSONObject().put("permissionGranted",context.android.checkSelfPermission(AndroidSemanticPlatform.CLOCK_PERMISSION)==PackageManager.PERMISSION_GRANTED)
                         .put("deviceTimeZone",java.util.TimeZone.getDefault().getID()).put("receiverMayApplyImmediately",true).put("actualClockStateVerified",false))
                 .put("dispatchScope","original_owner_phone_exact_display").put("backgroundIntentDispatch",true).put("crossProfileSemanticDispatch",false)
@@ -51,7 +53,7 @@ public final class SemanticModule implements EngineModule {
                 &&deferred.matchesHostScope(binding.taskId,binding.runId,binding.epoch)
                 &&deferred.originalControl()==originalControl&&deferred.executionMode().equals(task.optString("executionMode")))
             return new SemanticCapabilityPort(existing,originalControl,new SemanticTaskAuthority(tasks,binding,approvalEvents),
-                    new DeferredSemanticPlatform(context.android,deferred),true,retainRun(binding,originalControl));
+                    new CalendarProviderSemanticPlatform(context.android,new DeferredSemanticPlatform(context.android,deferred)),true,retainRun(binding,originalControl));
         PhoneAccessibilityService service=PhoneAccessibilityService.get();
         boolean dispatch=binding.allowWrites&&"phone".equals(task.optString("kind"))&&"main_screen".equals(task.optString("executionMode"))
                 &&service!=null&&selectedPhone!=null&&selectedPhone.isConnected();
@@ -62,6 +64,7 @@ public final class SemanticModule implements EngineModule {
                 &&physical instanceof dev.pocketengine.phone.display.BackgroundPhonePort&&selectedPhone.isConnected();
         SemanticPlatform platform=background?new BackgroundSemanticPlatform(context.android,(dev.pocketengine.phone.display.BackgroundPhonePort)physical,new dev.pocketengine.phone.access.AndroidPhoneAccessStore(context.android)):
                 new AndroidSemanticPlatform(context.android,dispatch?service:null,dispatch?selectedPhone::clearReferences:null);
+        platform=new CalendarProviderSemanticPlatform(context.android,platform);
         dispatch|=background;
         SemanticTaskAuthority authority=new SemanticTaskAuthority(tasks,binding,approvalEvents);
         if(!dispatch)return new SemanticCapabilityPort(existing,originalControl,authority,platform,false);

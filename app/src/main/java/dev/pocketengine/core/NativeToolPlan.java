@@ -7,7 +7,7 @@ import org.json.JSONObject;
 /** A short, one-use native plan. It supplies no approval, grant, execution loop or restored authority. */
 public final class NativeToolPlan implements AutoCloseable {
     public enum Tool {
-        CLICK_NODE("phone_click_node"),TYPE("phone_type"),SCROLL_NODE("phone_scroll_node"),WHEEL_STEP("phone_set_wheel"),CONDITION_WAIT("phone_condition_wait"),
+        CLICK_NODE("phone_click_node"),TYPE("phone_type"),SCROLL_NODE("phone_scroll_node"),SCROLL_REGION("phone_scroll_region"),WHEEL_STEP("phone_set_wheel"),CONDITION_WAIT("phone_condition_wait"),
         BROWSER_OBSERVE("browser_task_observe"),BROWSER_CLICK("browser_task_click"),BROWSER_TYPE("browser_task_type"),BROWSER_SCROLL("browser_task_scroll"),BROWSER_WAIT("browser_task_wait");
         public final String name;Tool(String name){this.name=name;}
         public boolean requiresMatched(){return this==CONDITION_WAIT||this==BROWSER_WAIT;}
@@ -34,12 +34,12 @@ public final class NativeToolPlan implements AutoCloseable {
         public Resolved(Tool tool,JSONObject actualArguments,RunControl.AuthorityCheck current)throws Exception{this(tool,actualArguments,null,current);}
         public Resolved(Tool tool,JSONObject actualArguments,JSONObject actualFreshObservation,RunControl.AuthorityCheck current)throws Exception{
             this.tool=Objects.requireNonNull(tool);this.current=Objects.requireNonNull(current);Objects.requireNonNull(actualArguments);
-            Set<String> keys=switch(tool){case CLICK_NODE->Set.of("observationId","nodeId");case TYPE->Set.of("observationId","nodeId","text");case SCROLL_NODE->Set.of("observationId","nodeId","direction");case WHEEL_STEP->Set.of("observationId","nodeId","direction","value");case CONDITION_WAIT->Set.of("observationId","kind","selector","timeoutMs","stableForMs");
+            Set<String> keys=switch(tool){case CLICK_NODE->Set.of("observationId","nodeId");case TYPE->Set.of("observationId","nodeId","text");case SCROLL_NODE->Set.of("observationId","nodeId","direction");case SCROLL_REGION->Set.of("observationId","nodeId","direction","axis");case WHEEL_STEP->Set.of("observationId","nodeId","direction","value","method");case CONDITION_WAIT->Set.of("observationId","kind","selector","timeoutMs","stableForMs");
                 case BROWSER_OBSERVE->Set.of("tabId");case BROWSER_CLICK->Set.of("tabId","observationId","ref");case BROWSER_TYPE->Set.of("tabId","observationId","ref","text");case BROWSER_SCROLL->Set.of("tabId","observationId","dy");case BROWSER_WAIT->Set.of("tabId","condition","value","target","timeoutMs");};
             var names=actualArguments.keys();while(names.hasNext())if(!keys.contains(names.next()))throw new IllegalArgumentException("native_sequence_argument_not_allowed");
             boolean browser=tool.name.startsWith("browser_task_"),unreferenced=tool==Tool.BROWSER_OBSERVE||tool==Tool.BROWSER_WAIT;
             if(actualArguments.toString().length()>16000||!unreferenced&&actualArguments.optString("observationId").isEmpty()||browser&&actualArguments.optString("tabId").isEmpty())throw new IllegalArgumentException("native_sequence_arguments_invalid");
-            if(actualFreshObservation==null){if(tool==Tool.CLICK_NODE||tool==Tool.TYPE||tool==Tool.WHEEL_STEP||tool==Tool.BROWSER_CLICK||tool==Tool.BROWSER_TYPE||tool==Tool.BROWSER_SCROLL)throw new IllegalArgumentException("native_sequence_fresh_tree_required");observation=null;}
+            if(actualFreshObservation==null){if(tool==Tool.CLICK_NODE||tool==Tool.TYPE||tool==Tool.WHEEL_STEP||tool==Tool.SCROLL_REGION||tool==Tool.BROWSER_CLICK||tool==Tool.BROWSER_TYPE||tool==Tool.BROWSER_SCROLL)throw new IllegalArgumentException("native_sequence_fresh_tree_required");observation=null;}
             else{if(!actualArguments.getString("observationId").equals(actualFreshObservation.optString("observationId"))||actualFreshObservation.has("imageBase64")||actualFreshObservation.has("image_url")||actualFreshObservation.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length>131072)throw new IllegalArgumentException("native_sequence_fresh_tree_invalid");observation=actualFreshObservation.toString();}
             json=actualArguments.toString();
         }

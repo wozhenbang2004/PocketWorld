@@ -101,6 +101,11 @@ export function BackgroundOwnerSettings({ state, supported, run, registerBack }:
   const idle = available && !connection.taskOwned && !connection.busy && !pending;
   const canForget = connection.supported && connection.wirelessAvailable && connection.identityPresent && idle && !connection.displayBarrier && supported('background.adb.forget');
   const recoveryAvailable = available && typeof recovery.consent === 'boolean' && Number.isSafeInteger(recovery.revision) && recovery.revision >= 0;
+  const registrationAvailable = recoveryAvailable && typeof recovery.registrationRestoreConsent === 'boolean'
+    && recovery.registrationConsentScope === 'restore_own_accessibility_registration';
+  const registrationCanEnable = registrationAvailable && recovery.consent === true && recovery.secureSettingsGranted === true
+    && recovery.userUnlocked === true && recovery.systemRegistered === true && recovery.accessibilityEnabled === true;
+  const recoverySaving = busyKeys.includes('phone_setup.recovery.consent') || busyKeys.includes('phone_setup.recovery.registration.consent');
   useEffect(() => { if (!copies.some(row => row.selectionHandle === selected)) setSelected(''); }, [owner.apps, selected]);
   useEffect(() => { if (!modeChosen.current) setMode(['wireless_adb', 'shizuku', 'adb'].includes(connection.backend) ? connection.backend : 'wireless_adb'); }, [connection.backend]);
   useEffect(() => { registerBack(forget ? () => { setForget(false); return true; } : null); return () => registerBack(null); }, [forget, registerBack]);
@@ -133,9 +138,23 @@ export function BackgroundOwnerSettings({ state, supported, run, registerBack }:
         {object(state.moduleResults)['display.clipboard.restore'] && <p className="pw-field-hint" role="status">{object(object(state.moduleResults)['display.clipboard.restore']).clipboardRestored === true ? '原剪贴板记录已处理；后来复制的新内容会保留，本次没有重新粘贴。' : '尚未确认复原，请保持应用在前台后核对原记录。'}</p>}
       </AccordionItem>
       <AccordionItem id="background-recovery" title="断连与重启后的恢复">
-        <p className="pw-field-hint">只核对已选连接。界面读取断连时保留系统登记，由你在系统设置中重新启用。</p>
-        <StretchSwitch label="允许恢复原连接" checked={recovery.consent === true} disabled={!recoveryAvailable || !!pending || busyKeys.includes('phone_setup.recovery.consent') || !supported('background.recovery.consent')} onChange={enabled => { if (recoveryAvailable) void act('background.recovery.consent', { enabled, expectedRevision: recovery.revision }); }} />
-        <p className="pw-field-hint" role="status">{recoveryOutcome(recovery.lastOutcome)}</p>
+        <p className="pw-field-hint">分别选择原连接核对和服务登记恢复。恢复连接后，原任务仍由你另行处理。</p>
+        <StretchSwitch label="允许恢复原连接" checked={recovery.consent === true}
+          description="核对已选连接并等待系统重新绑定；此开关本身不允许改写无障碍服务登记。"
+          disabled={!recoveryAvailable || !!pending || recoverySaving || !supported('background.recovery.consent')}
+          onChange={enabled => { if (recoveryAvailable) void act('background.recovery.consent', { enabled, expectedRevision: recovery.revision }); }} />
+        <StretchSwitch label="允许重绑定本应用的无障碍服务" checked={recovery.registrationRestoreConsent === true}
+          description="默认关闭。只有系统写设置权限已授予时，才允许在失连后短暂移除并重新登记 PocketWorld。只处理本应用；关闭后停止后续尝试。"
+          disabled={!registrationAvailable || !!pending || recoverySaving || !supported('background.recovery.registration.consent')
+            || (recovery.registrationRestoreConsent !== true && !registrationCanEnable)}
+          onChange={enabled => { if (registrationAvailable && (!enabled || registrationCanEnable)) void act('background.recovery.registration.consent',
+            { enabled, expectedRevision: recovery.revision, scope: 'restore_own_accessibility_registration' }); }} />
+        <p className="pw-field-hint">{recovery.secureSettingsGranted === true ? '系统写设置权限已授予；仍需单独打开上面的重绑定开关。' : '系统写设置权限尚未授予，自动重绑定不可用。应用不会自动申请或授予这项权限，仍可在系统无障碍设置中手动恢复。'}</p>
+        {registrationAvailable && recovery.registrationRestoreConsent !== true && recovery.consent === true && recovery.secureSettingsGranted === true && !registrationCanEnable
+          && <p className="pw-field-hint">请先解锁设备，并在系统无障碍设置中明确启用 PocketWorld；本项不会代替首次启用，也不会覆盖后来关闭的选择。</p>}
+        <p className="pw-field-hint" role="status">{typeof recovery.message === 'string' ? recovery.message : recoveryOutcome(recovery.lastOutcome)}</p>
+        {recovery.retryScheduled === true && <p className="pw-field-hint">正在有限退避等待，最多尝试 {recovery.rebindAttemptLimit || 3} 次。可直接关闭恢复停止后续尝试。</p>}
+        {recovery.registrationRestorePending === true && <p className="pw-field-hint">本次临时移除留下了待核对记录；不会在重启后凭旧记录自动加回。请打开系统无障碍设置核对本应用，再读取原记录。</p>}
         {recovery.connectionOutcome && recovery.connectionOutcome !== 'not_requested' && <p className="pw-field-hint">{connectionRecoveryOutcome(recovery.connectionOutcome)}</p>}
         {recovery.unlockSignalsAvailable === false && <p className="pw-field-hint">系统未提供当前解锁监听，请在此手动核对。</p>}
         <div className="pw-form-actions">{button('background.recovery.restore', '现在核对原连接', !recoveryAvailable || recovery.consent !== true || recovery.busy)}{recovery.compensationPending === true && button('background.recovery.compensate', '核对旧恢复记录', !recoveryAvailable || recovery.busy)}{recovery.needsOwnerAction === true && button('settings.openSystem', '打开系统无障碍设置', recovery.busy, { section: 'accessibility' })}</div>

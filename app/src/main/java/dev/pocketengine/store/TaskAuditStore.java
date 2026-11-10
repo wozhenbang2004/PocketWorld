@@ -4,6 +4,8 @@ import android.content.ContentValues;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.util.JsonToken;
+import android.util.JsonReader;
+import dev.pocketengine.core.RunControl;
 import java.io.IOException;
 import java.io.Reader;
 import java.io.StringWriter;
@@ -23,6 +25,132 @@ public final class TaskAuditStore {
     private static final int MAX_HEADER_BYTES=32768, MAX_NATIVE_EVENT_BYTES=1048576;
     private static final Set<String> HEADER_FIELDS=Set.of("id","goal","kind","executionMode","actorId","spaceId","status","summary","feature","command","conversationId","runId","coordinatorEpoch","createdAt","updatedAt","cancelRequested","groupStateRevision","channelStateRevision","voiceStateRevision","origin","developmentContext","sshSelection","teamAssignment","parentTaskId","parentRunId","nativeExecutionMode","nativeInference","ownerNotification","resourceState");
     private TaskAuditStore(){}
+
+    // The full calendar request and the repeated, escaped Provider identity can exceed
+    // the ordinary task-core window. This bound applies only to one exact approval.
+    private static final int APPROVAL_BYTES=1048576, APPROVAL_CONTEXT_BYTES=65536;
+    private static final Set<String> APPROVAL_CONTEXT_FIELDS=Set.of("executionScope","executionRole","ownerWork","ownerWorkControlState","workProfileRef","workProfileIntent","ownerPhoneQuestionHold","ownerInputMailbox","ownerPhoneQuestionNotice","sourceLearningJob","ownerRuntimeSetup","ownerLocalTerminal","ownerBackupUpload","ownerStorageCleanup","ownerArchivePhase","ownerGit","ownerGitImport","ownerGitPublication","ownerMcpDiscovery");
+
+    /** One complete pending approval, read from the same task document snapshot. The small
+     * index is navigation only; neither it nor a summary can authorize a positive decision. */
+    static JSONObject pendingApproval(SQLiteDatabase db,String task,String expectedRun,int expectedEpoch,
+                                      String requested,RunControl control)throws Exception {
+        if(!db.inTransaction())throw new IllegalStateException("审批读取缺少原事务快照");
+        long bytes;JSONObject context;
+        try(Cursor row=db.rawQuery("SELECT length(CAST(document AS BLOB)),CASE WHEN length(CAST(ui_header AS BLOB))<=32768 THEN ui_header END FROM tasks WHERE task_id=?",new String[]{task})){
+            if(!row.moveToFirst()||row.isNull(1))throw new IllegalStateException("原任务摘要不可核对");
+            bytes=row.getLong(0);if(bytes<0||bytes>67_108_864)throw new IllegalStateException("原审批所在文档超出本次有界读取范围");
+            context=new JSONObject(row.getString(1));
+        }
+        for(String key:HEADER_FIELDS)if(!"goal".equals(key)&&!"summary".equals(key))context.remove(key);
+        for(String key:APPROVAL_CONTEXT_FIELDS)context.remove(key);
+        JSONObject identities=new JSONObject();JSONArray candidates=new JSONArray();java.util.Set<String> rootKeys=new java.util.HashSet<>();
+        long deadline=android.os.SystemClock.elapsedRealtime()+10_000L;
+        ApprovalBudget contextBudget=new ApprovalBudget(APPROVAL_CONTEXT_BYTES);
+        try(JsonReader in=approvalReader(db,task,control,deadline)){
+            in.beginObject();while(in.hasNext()){
+                String key=in.nextName();
+                if(!rootKeys.add(key))throw new IllegalStateException("原任务包含重复字段，不能生成审批投影");
+                if("approvals".equals(key)){
+                    in.beginArray();int position=0;
+                    while(in.hasNext()){
+                        if(position>=100)throw new IllegalStateException("原审批记录超过范围");
+                        JSONObject entry=new JSONObject().put("position",position++);java.util.Set<String> fields=new java.util.HashSet<>();
+                        in.beginObject();while(in.hasNext()){
+                            String field=in.nextName();if(!fields.add(field))throw new IllegalStateException("原审批包含重复字段");
+                            if(Set.of("id","runId","state","expiresAt").contains(field))entry.put(field,approvalValue(in,new ApprovalBudget(1024),0));
+                            else in.skipValue();
+                        }in.endObject();candidates.put(entry);
+                    }in.endArray();
+                }else if(HEADER_FIELDS.contains(key)||APPROVAL_CONTEXT_FIELDS.contains(key)){
+                    // Long task prose stays in its existing bounded header. Native identities,
+                    // source gates and the execution scope must be read without clipping.
+                    if("goal".equals(key)||"summary".equals(key)){in.skipValue();continue;}
+                    Object value=approvalValue(in,contextBudget,0);context.put(key,value);identities.put(key,value);
+                }else in.skipValue();
+            }in.endObject();if(in.peek()!=JsonToken.END_DOCUMENT)throw new IllegalStateException("原任务正文尚未完整读取");
+        }
+        if(!(identities.opt("actorId") instanceof String)||!(identities.opt("spaceId") instanceof String)
+                ||!(identities.opt("status") instanceof String)||!task.equals(approvalString(identities,"id"))
+                ||!expectedRun.equals(approvalString(identities,"runId"))
+                ||expectedEpoch!=approvalInteger(identities,"coordinatorEpoch",1,Integer.MAX_VALUE))
+            throw new SecurityException("原审批任务或执行代次已变化");
+        approvalInteger(identities,"updatedAt",1,Long.MAX_VALUE);
+        JSONArray ids=new JSONArray();int selected=-1;String selectedId=null;java.util.Set<String> unique=new java.util.HashSet<>();long now=System.currentTimeMillis();
+        for(int i=0;i<candidates.length();i++){
+            JSONObject row=candidates.getJSONObject(i);String id=approvalString(row,"id");
+            if(id.isBlank()||id.length()>128||!unique.add(id))throw new SecurityException("原审批身份不可唯一核对");
+            if(!expectedRun.equals(approvalString(row,"runId"))||!"pending".equals(approvalString(row,"state"))
+                    ||approvalInteger(row,"expiresAt",1,Long.MAX_VALUE)<=now)continue;
+            ids.put(id);if((requested==null||requested.isEmpty())?selected<0:requested.equals(id)){selected=row.getInt("position");selectedId=id;}
+        }
+        if(selected<0)throw new IllegalStateException("没有这项当前待处理的原审批，请重新核对任务");
+        JSONObject approval=null;
+        try(JsonReader in=approvalReader(db,task,control,deadline)){
+            in.beginObject();while(in.hasNext()){
+                if(!"approvals".equals(in.nextName())){in.skipValue();continue;}
+                in.beginArray();int position=0;while(in.hasNext()){
+                    if(position++!=selected){in.skipValue();continue;}
+                    JSONObject item=new JSONObject();ApprovalBudget budget=new ApprovalBudget(APPROVAL_BYTES);in.beginObject();
+                    while(in.hasNext()){
+                        String key=in.nextName();
+                        // capabilityKey is an internal canonical duplicate, not disclosure.
+                        if("capabilityKey".equals(key)){in.skipValue();continue;}
+                        budget.take(key);item.put(key,approvalValue(in,budget,0));
+                    }in.endObject();approval=item;
+                }in.endArray();
+            }in.endObject();if(in.peek()!=JsonToken.END_DOCUMENT)throw new IllegalStateException("原审批正文尚未完整读取");
+        }
+        if(approval==null||!selectedId.equals(approvalString(approval,"id"))||!expectedRun.equals(approvalString(approval,"runId"))
+                ||!"pending".equals(approvalString(approval,"state"))||approvalInteger(approval,"expiresAt",1,Long.MAX_VALUE)<=System.currentTimeMillis()
+                ||utf8(approval.toString())>APPROVAL_BYTES)throw new SecurityException("原审批正文已过期或未完整读取");
+        control.check();context.put("approvals",new JSONArray().put(approval)).put("events",new JSONArray()).put("operations",new JSONArray())
+                .put("taskCoreBytes",bytes).put("taskCoreReadLimited",true).put("taskProjection","approval_only")
+                .put("auditBodyIncluded",false).put("executionAuthorized",false)
+                .put("capabilityApprovalRead",new JSONObject().put("format","pocketworld.capability-approval-read.v1")
+                        .put("approvalId",selectedId).put("pendingApprovalIds",ids).put("approvalComplete",true)
+                        .put("approvalBytes",utf8(approval.toString())).put("approvalByteLimit",APPROVAL_BYTES));
+        if(utf8(context.toString())>APPROVAL_BYTES+APPROVAL_CONTEXT_BYTES+32768)throw new IllegalStateException("原审批投影超过有界窗口");
+        return context;
+    }
+
+    private static String approvalString(JSONObject value,String key)throws Exception{
+        Object found=value.get(key);if(!(found instanceof String))throw new SecurityException("原审批身份字段不是完整字符串");return(String)found;
+    }
+    private static long approvalInteger(JSONObject value,String key,long minimum,long maximum)throws Exception{
+        Object found=value.get(key);if(!(found instanceof Integer)&&!(found instanceof Long))throw new SecurityException("原审批版本或期限不是准确整数");
+        long number=((Number)found).longValue();if(number<minimum||number>maximum)throw new SecurityException("原审批版本或期限超出范围");return number;
+    }
+
+    private static JsonReader approvalReader(SQLiteDatabase db,String task,RunControl control,long deadline){
+        // The canonical duplicate is encoded as a JSON string in the source document,
+        // so its escapes may take twice the selected item's disclosure budget.
+        Reader source=new SqlDocumentReader(db,task,APPROVAL_BYTES*2+1024);
+        return new JsonReader(new Reader(){
+            public int read(char[] target,int offset,int count)throws IOException{
+                try{control.check();if(android.os.SystemClock.elapsedRealtime()>deadline)throw new IOException("原审批读取窗口已到期，请重新读取");}
+                catch(InterruptedException stopped){throw new IOException("原审批读取已停止",stopped);}
+                return source.read(target,offset,count);
+            }
+            public void close()throws IOException{source.close();}
+        });
+    }
+    private static final class ApprovalBudget{
+        int left;ApprovalBudget(int limit){left=limit;}
+        void take(String text)throws IOException{left-=text.getBytes(StandardCharsets.UTF_8).length+8;if(left<0)throw new IOException("原审批字段超出完整读取窗口，未裁剪或允许批准");}
+    }
+    private static Object approvalValue(JsonReader in,ApprovalBudget budget,int depth)throws Exception{
+        if(depth>28)throw new IOException("原审批嵌套过深，未裁剪正文");
+        switch(in.peek()){
+            case BEGIN_OBJECT:{JSONObject out=new JSONObject();in.beginObject();while(in.hasNext()){String key=in.nextName();budget.take(key);if(out.has(key))throw new IOException("原审批字段重复");out.put(key,approvalValue(in,budget,depth+1));}in.endObject();return out;}
+            case BEGIN_ARRAY:{JSONArray out=new JSONArray();in.beginArray();while(in.hasNext()){budget.take("");out.put(approvalValue(in,budget,depth+1));}in.endArray();return out;}
+            case STRING:{String text=in.nextString();budget.take(text);return text;}
+            case NUMBER:{String value=in.nextString();budget.take(value);Object parsed=new JSONTokener(value).nextValue();if(!(parsed instanceof Number)||parsed instanceof Double&&!Double.isFinite((Double)parsed))throw new IOException("原审批数字不可完整读取");return parsed;}
+            case BOOLEAN:{boolean value=in.nextBoolean();budget.take("");return value;}
+            case NULL:in.nextNull();budget.take("");return JSONObject.NULL;
+            default:throw new IOException("原审批JSON不可读");
+        }
+    }
 
     public static void createSchema(SQLiteDatabase db){
         addColumn(db,"audit_format","INTEGER NOT NULL DEFAULT 0");
@@ -355,19 +483,19 @@ public final class TaskAuditStore {
         public void flush()throws IOException{flushChunk(false);}public void close()throws IOException{flushChunk(true);}
     }
     private abstract static class SqlReader extends Reader{
-        final SQLiteDatabase db;final String task;final boolean boundScalars;long start=1;String chunk="";int offset;boolean ended,inString,escaped;int tokenChars;
-        SqlReader(SQLiteDatabase db,String task){this(db,task,true);}SqlReader(SQLiteDatabase db,String task,boolean boundScalars){this.db=db;this.task=task;this.boundScalars=boundScalars;}abstract String select();abstract String[] args();
+        final SQLiteDatabase db;final String task;final int scalarLimit;long start=1;String chunk="";int offset;boolean ended,inString,escaped;int tokenChars;
+        SqlReader(SQLiteDatabase db,String task){this(db,task,true);}SqlReader(SQLiteDatabase db,String task,boolean boundScalars){this(db,task,boundScalars?MAX_NATIVE_EVENT_BYTES:0);}SqlReader(SQLiteDatabase db,String task,int scalarLimit){this.db=db;this.task=task;this.scalarLimit=scalarLimit;}abstract String select();abstract String[] args();
         public int read(char[] target,int off,int len)throws IOException{
-            if(len==0)return 0;if(offset==chunk.length()&&!ended)try(Cursor row=db.rawQuery(select(),args())){if(!row.moveToFirst())throw new IOException("原任务迁移行已消失");chunk=row.getString(0);offset=0;if(chunk.isEmpty())ended=true;else{if(boundScalars)checkTokens(chunk);start+=chunk.codePointCount(0,chunk.length());}}catch(Exception failed){throw new IOException("原任务分块读取失败，未切换权威",failed);}
+            if(len==0)return 0;if(offset==chunk.length()&&!ended)try(Cursor row=db.rawQuery(select(),args())){if(!row.moveToFirst())throw new IOException("原任务迁移行已消失");chunk=row.getString(0);offset=0;if(chunk.isEmpty())ended=true;else{if(scalarLimit>0)checkTokens(chunk);start+=chunk.codePointCount(0,chunk.length());}}catch(Exception failed){throw new IOException("原任务分块读取失败，未切换权威",failed);}
             if(ended)return -1;int count=Math.min(len,chunk.length()-offset);chunk.getChars(offset,offset+count,target,off);offset+=count;return count;
         }
         private void checkTokens(String value)throws IOException{
-            for(int i=0;i<value.length();i++){char c=value.charAt(i);if(inString){if(++tokenChars>MAX_NATIVE_EVENT_BYTES)throw new IOException("旧任务单个JSON值超过迁移上限，原文事务保留");if(escaped)escaped=false;else if(c=='\\')escaped=true;else if(c=='"'){inString=false;tokenChars=0;}}else if(c=='"'){inString=true;tokenChars=0;}else if(c==','||c==':'||c=='{'||c=='}'||c=='['||c==']'||Character.isWhitespace(c))tokenChars=0;else if(++tokenChars>MAX_NATIVE_EVENT_BYTES)throw new IOException("旧任务单个JSON token过大，原文事务保留");}
+            for(int i=0;i<value.length();i++){char c=value.charAt(i);if(inString){if(++tokenChars>scalarLimit)throw new IOException("旧任务单个JSON值超过读取上限，原文保留");if(escaped)escaped=false;else if(c=='\\')escaped=true;else if(c=='"'){inString=false;tokenChars=0;}}else if(c=='"'){inString=true;tokenChars=0;}else if(c==','||c==':'||c=='{'||c=='}'||c=='['||c==']'||Character.isWhitespace(c))tokenChars=0;else if(++tokenChars>scalarLimit)throw new IOException("旧任务单个JSON token过大，原文保留");}
         }
         public void close(){}
     }
     private static final class SqlDocumentReader extends SqlReader{
-        SqlDocumentReader(SQLiteDatabase db,String task){super(db,task);}SqlDocumentReader(SQLiteDatabase db,String task,boolean boundScalars){super(db,task,boundScalars);}String select(){return "SELECT substr(document,?,4096) FROM tasks WHERE task_id=?";}String[] args(){return new String[]{Long.toString(start),task};}
+        SqlDocumentReader(SQLiteDatabase db,String task){super(db,task);}SqlDocumentReader(SQLiteDatabase db,String task,boolean boundScalars){super(db,task,boundScalars);}SqlDocumentReader(SQLiteDatabase db,String task,int scalarLimit){super(db,task,scalarLimit);}String select(){return "SELECT substr(document,?,4096) FROM tasks WHERE task_id=?";}String[] args(){return new String[]{Long.toString(start),task};}
     }
     private static final class SqlEventReader extends SqlReader{
         final long order;SqlEventReader(SQLiteDatabase db,String task,long order){super(db,task);this.order=order;}SqlEventReader(SQLiteDatabase db,String task,long order,boolean boundScalars){super(db,task,boundScalars);this.order=order;}String select(){return "SELECT substr(event_json,?,4096) FROM task_events WHERE task_id=? AND event_order=?";}String[] args(){return new String[]{Long.toString(start),task,Long.toString(order)};}

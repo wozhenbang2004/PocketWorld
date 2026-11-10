@@ -1040,7 +1040,7 @@ public final class AgentRunner {
                     }
                     // Device preparation is itself deferred until a validated, policy-admitted
                     // phone call. Rejections and ordinary chat/web/local calls never open a screen.
-                    if(phone instanceof DeferredPhoneSession deferred&&!deferred.initialized()&&usesPhysicalPhone(name)){
+                    if(phone instanceof DeferredPhoneSession deferred&&!deferred.initialized()&&usesPhysicalPhone(name,args)){
                         try{deferred.requireAdapter(control);}
                         catch(RunControl.ConditionWaitException waiting){throw waiting;}
                         catch(InterruptedException stopped){throw stopped;}
@@ -1173,7 +1173,7 @@ public final class AgentRunner {
                         }
                         catch(dev.pocketengine.phone.observation.NativeSensitiveStep.OwnerRequired owner) {
                             // A native, original-control-bound refusal BEFORE this child effect, not JSON permission.
-                            if(!java.util.Set.of("phone_click_node","phone_type","phone_tap","phone_swipe","phone_click_text","phone_scroll_node","phone_set_wheel").contains(name)||!owner.belongsTo(control,dispatchRevision))throw owner;
+                            if(!java.util.Set.of("phone_click_node","phone_type","phone_tap","phone_swipe","phone_click_text","phone_scroll_node","phone_scroll_region","phone_set_wheel","phone_press_key").contains(name)||!owner.belongsTo(control,dispatchRevision))throw owner;
                             nativeOwnerRequired=owner;receipt=owner.notDispatchedReceipt();batchContinuation.stopSequenceAndObservations();
                         }
                         if(activeStep!=null&&activePlan!=null&&receipt!=null&&Boolean.FALSE.equals(receipt.opt("accepted")))nativeSequenceProgress.get(activePlan).notDispatched(activeStep.index);
@@ -1855,7 +1855,8 @@ public final class AgentRunner {
 
     private static void coordinate(JSONObject args, String key) throws Exception { integer(args, key, 0, 1000); }
 
-    private static boolean usesPhysicalPhone(String name){
+    private static boolean usesPhysicalPhone(String name,JSONObject args){
+        if("semantic_discover".equals(name)&&args!=null&&java.util.Set.of("calendar_list","calendar_batch").contains(args.optString("kind")))return false;
         return "semantic_discover".equals(name)||name!=null&&name.startsWith("phone_")&&!java.util.Set.of("phone_wait","phone_request_user",
                 PhoneRouteSession.LIST,PhoneRouteSession.FORGET).contains(name)&&!RecentScreenHistory.supports(name);
     }

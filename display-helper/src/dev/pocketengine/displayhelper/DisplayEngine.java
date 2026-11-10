@@ -21,6 +21,8 @@ import android.util.Base64;
 import android.util.DisplayMetrics;
 import android.view.InputEvent;
 import android.view.KeyEvent;
+import android.view.KeyCharacterMap;
+import android.view.InputDevice;
 import android.view.MotionEvent;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -81,9 +83,17 @@ final class DisplayEngine {
         if(source!=null)consumeFrame(source);
     };
     private Object inputManager;
-    private Method inject,setDisplay;
+    private Method inject,injectTarget,setDisplay;
     // Owned only on main, including cleanup. A stale worker cannot cancel a replacement sequence.
     private TouchSequence activeTouch;
+    private volatile KeySequence activeKey;
+    private static final class KeySequence {
+        final LeasePolicy lease;final VirtualDisplay display;final int displayId,uid,code,source;final long downTime;
+        boolean downAttempted,downAccepted,upAttempted,upAccepted;
+        KeySequence(LeasePolicy lease,VirtualDisplay display,int uid,int code,int source,long downTime){
+            this.lease=lease;this.display=display;this.displayId=lease.display();this.uid=uid;this.code=code;this.source=source;this.downTime=downTime;
+        }
+    }
     private static final class TouchSequence {
         final LeasePolicy lease;final VirtualDisplay display;final long downTime;final DisplayGeometry geometry;
         volatile boolean downAttempted,downAccepted,upAccepted,cancelAccepted,cancelAttempted;
@@ -121,6 +131,8 @@ final class DisplayEngine {
         LeasePolicy current=lease;
         if(current==null||!current.accepts(request.optString("sessionId"),request.optInt("displayId",-1),SystemClock.uptimeMillis()))
             throw new Failure("invalid_lease","后台显示会话已结束，请重新建立。",false);
+        if(activeKey!=null&&cmd.matches("launch|launch_copy|intent|gesture|tap|swipe|key|owner_handoff_.*"))
+            throw new Failure("key_release_unconfirmed","原按键释放尚未确认，请核对或释放原副屏，未派发后续输入。",false);
         JSONObject result;
         if(ownerTransfer!=null&&ownerTransfer.blocksInput()&&cmd.matches("launch|launch_copy|intent|gesture|tap|swipe|key"))throw new Failure("owner_handoff_active","应用由主人在主屏接管，未派发副屏输入。",false);
         if(cmd.startsWith("owner_handoff_"))result=ownerHandoff(current,request,cmd);
@@ -130,7 +142,7 @@ final class DisplayEngine {
         else if("preview_frame".equals(cmd))result=previewFrame(current,request);
         else if("launch".equals(cmd))result=launch(current,request);
         else if("intent".equals(cmd)||"launch_copy".equals(cmd))result=onMain(()->{
-            valid(current);if(activeTouch!=null||gesturePaths.active())throw new Failure("gesture_in_flight","原触摸尚未结束，未打开应用。",false);
+            valid(current);if(activeTouch!=null||activeKey!=null||gesturePaths.active())throw new Failure("gesture_in_flight","原输入尚未结束，未打开应用。",false);
             DisplayTypedIntent.Gate gate=new DisplayTypedIntent.Gate(){public void check()throws Exception{valid(current);dispatchDeadline();}
                 public void entering(){markFrameBoundary();}
                 public void requireAppFree(String pkg,int user)throws Exception{if(!DisplayAppOwnership.free(taskTopology.read(),pkg,user,current.display()))throw new Failure("app_user_busy_or_unknown","同一App资料的完整占用不能排除，未抢占其他屏幕。",false);}};
@@ -142,7 +154,7 @@ final class DisplayEngine {
         else if("gesture".equals(cmd)){
             long generation=request.optLong("frameGeneration",-1);
             DisplayGeometry original=inputGeometry(current,request);
-            result=gesturePaths.run(current,request,original.width,original.height,()->{valid(current);requireGeometry(current,original);if(activeTouch!=null)throw new Failure("gesture_in_flight","原单指动作未结束。",false);},event->{inject(current,event,event.getActionMasked()==MotionEvent.ACTION_DOWN?generation:-1,null,original);return true;});
+            result=gesturePaths.run(current,request,original.width,original.height,()->{valid(current);requireGeometry(current,original);if(activeTouch!=null||activeKey!=null)throw new Failure("gesture_in_flight","原输入动作未结束。",false);},event->{inject(current,event,event.getActionMasked()==MotionEvent.ACTION_DOWN?generation:-1,null,original);return true;});
         }
         else if("apps".equals(cmd))result=apps();
         else if("audio.get".equals(cmd)||"audio.set".equals(cmd)){
@@ -252,7 +264,7 @@ final class DisplayEngine {
         synchronized(frameLock){geometry=next;geometryReady=false;latestPixels=null;frameAt=0;frameTimestampNanos=0;frameNotBeforeNanos=System.nanoTime();framePending=true;frameGeneration.incrementAndGet();}
         main.removeCallbacks(trailingFrame);scheduledFrameReader=null;lastFrameConsumed=0;
         cancelForGeometry(expected);
-        if(activeTouch!=null||gesturePaths.active())throw new Failure("geometry_unavailable","旋转后原触摸取消尚未确认，请核对或释放原副屏；不会继续输入。",false);
+        if(activeTouch!=null||activeKey!=null||gesturePaths.active())throw new Failure("geometry_unavailable","旋转后原输入结束尚未确认，请核对或释放原副屏；不会继续输入。",false);
         ImageReader replacement=null;
         try{
             replacement=ImageReader.newInstance(next.captureWidth,next.captureHeight,PixelFormat.RGBA_8888,3);
@@ -284,6 +296,7 @@ final class DisplayEngine {
         catch(IllegalArgumentException unsupported){throw new Failure("geometry_unavailable","系统返回的副屏尺寸不可安全捕获，未继续输入。",false);}
     }
     private void cancelForGeometry(LeasePolicy original) {
+        KeySequence key=activeKey;if(key!=null&&key.lease==original)releaseKey(key);
         TouchSequence touch=activeTouch;
         if(touch!=null&&touch.lease==original)cancelTouch(touch,false);
         gesturePaths.cancelLease(original,event->{inject(original,event,-1);return true;});
@@ -515,7 +528,7 @@ final class DisplayEngine {
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_MULTIPLE_TASK);
         onMain(()->{
             valid(expected);
-            if(activeTouch!=null||gesturePaths.active())throw new Failure("gesture_in_flight","原触摸尚未结束，未打开应用。",false);
+            if(activeTouch!=null||activeKey!=null||gesturePaths.active())throw new Failure("gesture_in_flight","原输入尚未结束，未打开应用。",false);
             android.app.ActivityOptions options=android.app.ActivityOptions.makeBasic().setLaunchDisplayId(expected.display());
             if(!DisplayAppOwnership.free(taskTopology.read(),pkg,user,expected.display()))throw new Failure("app_user_busy_or_unknown","同一App资料的完整任务占用不能排除，未移动或打开应用。",false);
             dispatchDeadline();long previousBoundary=frameNotBeforeNanos;markFrameBoundary();
@@ -572,7 +585,7 @@ final class DisplayEngine {
         long start=SystemClock.uptimeMillis();
         TouchSequence touch=onMain(()->{
             valid(expected);requireGeometry(expected,original);
-            if(activeTouch!=null||gesturePaths.active())throw new Failure("gesture_in_flight","原触摸尚未结束，请核对或释放原副屏后再操作。",false);
+            if(activeTouch!=null||activeKey!=null||gesturePaths.active())throw new Failure("gesture_in_flight","原输入尚未结束，请核对或释放原副屏后再操作。",false);
             activeTouch=new TouchSequence(expected,display,start,original);return activeTouch;
         });
         try{
@@ -614,11 +627,12 @@ final class DisplayEngine {
         catch(Exception unconfirmed){return "cancel_unconfirmed";}
     }
     private JSONObject key(LeasePolicy expected,JSONObject request)throws Exception {
+        if(request.has("key"))return focusedKey(expected,request);
         int code=request.optInt("keyCode",-1);
         if(code!=KeyEvent.KEYCODE_BACK)throw new Failure("unsupported_key","后台模式仅支持定向返回键，桌面操作不受支持。",false);
         DisplayGeometry original=onMain(()->{
             DisplayGeometry current=synchronizeGeometry(expected,false);
-            if(activeTouch!=null||gesturePaths.active())throw new Failure("gesture_in_flight","原触摸尚未结束，未派发返回键。",false);
+            if(activeTouch!=null||activeKey!=null||gesturePaths.active())throw new Failure("gesture_in_flight","原输入尚未结束，未派发返回键。",false);
             if(request.has("geometryGeneration")&&request.optLong("geometryGeneration",-1)!=current.generation)
                 throw new Failure("stale_observation","后台屏已旋转或改变尺寸，请重新观察。",false);
             return current;
@@ -628,6 +642,79 @@ final class DisplayEngine {
         // A key UP has no coordinates and only ends this already admitted original key.
         try{inject(expected,new KeyEvent(time,SystemClock.uptimeMillis(),KeyEvent.ACTION_UP,code,0),-1);return receipt();}
         catch(Exception failure){throw new Failure("action_unknown","返回键已部分派发，请重新观察。",true);}
+    }
+
+    private JSONObject focusedKey(LeasePolicy expected,JSONObject request)throws Exception {
+        final int code;
+        try{code=PhoneKeyCodes.require(request.getString("key"));}
+        catch(Exception invalid){throw new Failure("unsupported_key","按键不在固定键盘范围内，未派发。",false);}
+        if(integer(request,"keyCode",0,1000,-1)!=code)throw new Failure("invalid_argument","按键名称与原生键码不一致。",false);
+        DisplayGeometry original=inputGeometry(expected,request);long frame=request.getLong("frameGeneration");
+        return onMain(()->{
+            valid(expected);requireGeometry(expected,original);
+            if(activeTouch!=null||activeKey!=null||gesturePaths.active())throw new Failure("gesture_in_flight","原输入尚未结束，未派发按键。",false);
+            int uid=keyTargetUid(expected,request);
+            long time=SystemClock.uptimeMillis();int source=InputDevice.SOURCE_KEYBOARD;
+            if(code>=KeyEvent.KEYCODE_DPAD_UP&&code<=KeyEvent.KEYCODE_DPAD_CENTER)source|=InputDevice.SOURCE_DPAD;
+            KeySequence sequence=new KeySequence(expected,display,uid,code,source,time);activeKey=sequence;
+            Exception failure=null;String cleanup;
+            try{
+                KeyEvent down=new KeyEvent(time,time,KeyEvent.ACTION_DOWN,code,0,0,KeyCharacterMap.VIRTUAL_KEYBOARD,0,KeyEvent.FLAG_FROM_SYSTEM,source);
+                inject(expected,down,frame,null,original,uid,sequence);
+            }catch(Exception unavailable){failure=unavailable;}
+            finally{cleanup=releaseKey(sequence);}
+            if(failure!=null&&!sequence.downAttempted)throw failure;
+            if(failure!=null||!sequence.downAccepted||!sequence.upAccepted)
+                throw new Failure("action_unknown","原按键已尝试派发，结果尚未确认；释放只结束原按键，不证明业务成功。",true,null,cleanup);
+            return receipt().put("key",request.getString("key")).put("keyCode",code).put("backend","display_targeted_key")
+                    .put("targetPackageName",request.getString("targetPackageName")).put("targetUserId",request.getInt("targetUserId"))
+                    .put("keyCleanup",cleanup).put("ackKind","native_input_finished").put("processingConfirmed",false)
+                    .put("requiresPostconditionCheck",true).put("automaticReplayAllowed",false);
+        });
+    }
+
+    /** At most one UP for a DOWN attempt, including lease cancellation. This cannot admit a new key or display. */
+    private String releaseKey(KeySequence original){
+        if(Looper.myLooper()!=main.getLooper())throw new IllegalStateException("key_cleanup_requires_main");
+        if(original.upAccepted)return "up_accepted_not_business_proof";
+        if(activeKey!=original||lease!=original.lease||display!=original.display)return "not_attempted_original_sequence_or_display_gone";
+        if(!original.downAttempted){activeKey=null;return "not_needed_down_not_attempted";}
+        if(original.upAttempted)return "up_unconfirmed";
+        try{
+            android.view.Display physical=original.display.getDisplay();
+            if(physical==null||!physical.isValid()||physical.getDisplayId()!=original.displayId)return "not_attempted_original_display_gone";
+            KeyEvent up=new KeyEvent(original.downTime,SystemClock.uptimeMillis(),KeyEvent.ACTION_UP,original.code,0,0,
+                    KeyCharacterMap.VIRTUAL_KEYBOARD,0,KeyEvent.FLAG_FROM_SYSTEM,original.source);
+            setDisplay.invoke(up,original.displayId);
+            // Expiry/stop forbids new input, but must not strand a key already attempted on this exact lease.
+            original.upAttempted=true;markFrameBoundary();
+            original.upAccepted=Boolean.TRUE.equals(injectTarget.invoke(inputManager,up,2,original.uid));
+            if(original.upAccepted){activeKey=null;return "up_accepted_not_business_proof";}
+        }catch(Exception unconfirmed){ /* Retain the occupied sequence until its original display is released. */ }
+        return "up_unconfirmed";
+    }
+
+    /** The host supplies an observed task/profile; the privileged endpoint resolves and enforces its actual UID. */
+    @SuppressLint("BlockedPrivateApi")
+    private int keyTargetUid(LeasePolicy expected,JSONObject request)throws Exception {
+        String pkg=request.optString("targetPackageName");int user=integer(request,"targetUserId",0,21474,-1),task=integer(request,"targetTaskId",0,Integer.MAX_VALUE,-1);
+        if(!pkg.matches("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)*"))throw new Failure("key_target_unavailable","原按键目标身份无效，未派发。",false);
+        JSONObject topology=taskTopology.read();
+        if(!"observed".equals(topology.optString("status"))||!topology.optBoolean("complete"))throw new Failure("key_target_unavailable","不能确认原应用任务身份，未派发。",false);
+        JSONArray tasks=topology.optJSONArray("tasks");boolean found=false;
+        for(int i=0;tasks!=null&&i<tasks.length();i++){JSONObject row=tasks.getJSONObject(i);
+            if(row.optInt("taskId",-1)==task){
+                if(found||row.optInt("displayId",-1)!=expected.display()||row.optInt("androidUserId",-1)!=user||!pkg.equals(row.optString("packageName")))throw new Failure("key_target_changed","原按键应用或Android资料已变化，未派发。",false);
+                found=true;
+            }
+        }
+        if(!found||!DisplayAppOwnership.free(topology,pkg,user,expected.display()))throw new Failure("key_target_changed","原按键任务已迁移或资料占用不能确认，未派发。",false);
+        try{
+            if(injectTarget==null)injectTarget=InputManager.class.getMethod("injectInputEvent",InputEvent.class,int.class,int.class);
+            Object resolved=android.content.pm.PackageManager.class.getMethod("getPackageUidAsUser",String.class,int.class).invoke(context.getPackageManager(),pkg,user);
+            if(!(resolved instanceof Integer)||((Integer)resolved)<0||((Integer)resolved)/100000!=user)throw new IllegalStateException("profile_uid_mismatch");
+            return(Integer)resolved;
+        }catch(Exception unsupported){throw new Failure("key_target_unsupported","当前系统没有可核验的定向按键入口，未回退到全局输入。",false);}
     }
     // Only Main's app_process or our Shizuku UserService instantiates this class;
     // neither is the normal app process. UID/SDK/shell attribution are checked
@@ -664,6 +751,9 @@ final class DisplayEngine {
         inject(expected,event,expectedFrame,touch,touch==null?null:touch.geometry);
     }
     private void inject(LeasePolicy expected,InputEvent event,long expectedFrame,TouchSequence touch,DisplayGeometry originalGeometry)throws Exception {
+        inject(expected,event,expectedFrame,touch,originalGeometry,-1,null);
+    }
+    private void inject(LeasePolicy expected,InputEvent event,long expectedFrame,TouchSequence touch,DisplayGeometry originalGeometry,int targetUid,KeySequence key)throws Exception {
         final MotionEvent motion=touch==null?null:(MotionEvent)event;
         if(motion!=null&&motion.getPointerCount()!=1)throw new Failure("unsupported_motion","此后台入口只接受原单指触摸，尚未派发。",false);
         final int touchAction=motion==null?-1:motion.getActionMasked(),nativeAction=motion==null?0:motion.getAction();
@@ -675,6 +765,8 @@ final class DisplayEngine {
         onMain(()->{valid(expected);
             if(!cleanup&&originalGeometry!=null)requireGeometry(expected,originalGeometry);
             if(touch!=null&&(activeTouch!=touch||lease!=touch.lease||display!=touch.display))throw new Failure("invalid_lease","原触摸或独立显示已变化，未继续输入。",false);
+            if(key!=null&&(activeKey!=key||lease!=key.lease||display!=key.display))throw new Failure("invalid_lease","原按键或独立显示已变化，未继续输入。",false);
+            if(activeKey!=null&&activeKey!=key&&!cleanup)throw new Failure("key_release_unconfirmed","原按键释放尚未确认，未派发后续输入。",false);
             if(expectedFrame>=0&&(!frameReady(0)||expectedFrame!=frameGeneration.get()))throw new Failure("stale_observation","后台画面在派发前已变化，请重新观察。",false);
             // Only these private single-pointer constructors cross queues. The worker may
             // recycle its original after an interrupted wait; the admitted main callback owns its copy.
@@ -686,10 +778,12 @@ final class DisplayEngine {
                 dispatchDeadline();
                 if(touch!=null&&touchAction==MotionEvent.ACTION_DOWN)touch.downAttempted=true;
                 markFrameBoundary();
-                try{result=inject.invoke(inputManager,actual,2);}
+                if(key!=null)key.downAttempted=true;
+                try{result=targetUid<0?inject.invoke(inputManager,actual,2):injectTarget.invoke(inputManager,actual,2,targetUid);}
                 catch(java.lang.reflect.InvocationTargetException unknown){throw new Failure("action_unknown","系统输入回执异常，结果尚未确认，请核对后继续。",true);}
                 // WAIT_FOR_FINISHED false also represents Android TIMED_OUT, not proof of no input.
                 if(!Boolean.TRUE.equals(result))throw new Failure("action_unknown","系统输入结果未确认，请核对原操作；不会自动重发。",true);
+                if(key!=null)key.downAccepted=true;
                 if(touch!=null){
                     touch.x=touchX;touch.y=touchY;
                     if(touchAction==MotionEvent.ACTION_DOWN)touch.downAccepted=true;
@@ -729,6 +823,7 @@ final class DisplayEngine {
     }
     void close(){closed=true;try{onMain(()->{release();return null;});}catch(Exception ignored){ /* Process teardown also revokes its display token. */ }}
     private void release(){
+        KeySequence key=activeKey;if(key!=null)releaseKey(key);
         if(geometryListenerRegistered){displayManager.unregisterDisplayListener(geometryListener);geometryListenerRegistered=false;}
         LeasePolicy cancelling=lease;if(cancelling!=null)gesturePaths.cancelLease(cancelling,event->{inject(cancelling,event,-1);return true;});
         ownerTransfer=null;taskTopology.clear();
@@ -738,7 +833,7 @@ final class DisplayEngine {
         if(display!=null){display.release();display=null;}if(reader!=null){reader.close();reader=null;}
         // An unconfirmed CANCEL stays occupied until physical display teardown succeeds.
         // Keep the stopped original lease on a teardown failure so cleanup can be reconciled.
-        if(old!=null)gesturePaths.releaseLease(old);lease=null;
+        if(old!=null)gesturePaths.releaseLease(old);activeKey=null;lease=null;
     }
     private int flag(String name)throws Exception {return DisplayManager.class.getDeclaredField(name).getInt(null);}
     private <T>T onMain(java.util.concurrent.Callable<T> call)throws Exception {
@@ -771,7 +866,8 @@ final class DisplayEngine {
     }
     static JSONObject ok()throws Exception{return new JSONObject().put("ok",true);}
     private JSONObject receipt()throws Exception{return ok().put("accepted",true).put("verified",false).put("displayId",lease==null?-1:lease.display()).put("message","后台输入请求已接收，请重新观察结果。");}
-    static final class Failure extends Exception {final String code;final boolean dispatched;final String pointerCleanup;
+    static final class Failure extends Exception {final String code;final boolean dispatched;final String pointerCleanup,keyCleanup;
         Failure(String code,String message,boolean dispatched){this(code,message,dispatched,null);}
-        Failure(String code,String message,boolean dispatched,String pointerCleanup){super(message);this.code=code;this.dispatched=dispatched;this.pointerCleanup=pointerCleanup;}}
+        Failure(String code,String message,boolean dispatched,String pointerCleanup){this(code,message,dispatched,pointerCleanup,null);}
+        Failure(String code,String message,boolean dispatched,String pointerCleanup,String keyCleanup){super(message);this.code=code;this.dispatched=dispatched;this.pointerCleanup=pointerCleanup;this.keyCleanup=keyCleanup;}}
 }

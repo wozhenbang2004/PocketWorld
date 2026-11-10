@@ -47,6 +47,8 @@ public final class AdaptivePhonePort implements PhonePort {
     private int consecutiveScreenChanges;
     private PhoneTreeCollection.State collection;
     private PhoneTextCollection.State textCollection;
+    private PhoneBoundedOperation.State boundedOperation;
+    private String localFrameObservation;
     private final java.util.concurrent.atomic.AtomicBoolean actionEffectInFlight=new java.util.concurrent.atomic.AtomicBoolean();
     private final java.util.Map<String,OcrTextTarget> textTargets=new java.util.LinkedHashMap<>();
     private NativeSensitiveStep.OcrEvidence ocrSensitive;
@@ -142,6 +144,7 @@ public final class AdaptivePhonePort implements PhonePort {
         if(write&&!actionEffectInFlight.compareAndSet(false,true))return failure("original_action_in_flight","原手机动作仍在进行。");
         try{
             if(tool.equals("phone_set_wheel"))return wheelStep(args,control,admission);
+            if(tool.equals(PhoneRegionGesture.TOOL))return regionStep(args,control,admission);
             JSONObject result;
             if(tool.equals("phone_clear_text")){
                 JSONObject text=new JSONObject().put("observationId",args.getString("observationId")).put("nodeId",args.getString("nodeId")).put("text","");
@@ -225,23 +228,128 @@ public final class AdaptivePhonePort implements PhonePort {
         }
     }
     private JSONObject wheelStep(JSONObject args,RunControl control,NativePhoneEntry.Admission admission)throws Exception {
-        final JSONObject original;final String packageName;
+        final JSONObject original,anchor;final PhoneBoundedOperation.State state;
         synchronized(this){
-            original=PhoneTreeExtract.index(latest).get(args.getString("nodeId"));packageName=latest.optString("packageName");
-            if(original==null||original.optBoolean("password")||!original.optBoolean("scrollable"))return failure("not_a_wheel","需要原树内可滚动的精确滚轮节点。");
+            original=new JSONObject(latest.toString());anchor=PhoneRegionGesture.node(original,args.getString("nodeId"));state=boundedOperation;
         }
-        JSONObject scroll=new JSONObject().put("observationId",args.getString("observationId")).put("nodeId",args.getString("nodeId")).put("direction",args.getString("direction"));
-        JSONObject result=scrollNode(scroll,control,admission);JSONObject valueEvidence=null;
+        JSONObject beforeValue=PhoneWheelValue.read(original,anchor);
+        if(beforeValue.optBoolean("readable")&&PhoneWheelValue.matches(beforeValue.optString("value"),args.getString("value")))
+            return new JSONObject().put("ok",true).put("accepted",false).put("status","target_already_observed").put("reached",true)
+                    .put("actualValue",beforeValue.getString("value")).put("valueEvidence",beforeValue).put("stepsPerformed",0)
+                    .put("verifiedBusinessSuccess",false).put("automaticReplayAllowed",false);
+        String method=args.optString("method","auto");boolean drag=method.equals("drag")||method.equals("auto")&&!PhoneRegionGesture.nativeScrollAvailable(anchor,args.getString("direction"));
+        JSONObject result;
+        if(drag){
+            JSONObject actual=localFrameFor(original,anchor,control),wheel;
+            if(!actual.optBoolean("ok"))return actual;
+            wheel=PhoneRegionGesture.sameTarget(actual,original,anchor);
+            JSONObject plan;
+            synchronized(this){plan=state==null?null:state.plannedDrag(args);}
+            if(plan==null||!plan.getJSONObject("gesture").getString("observationId").equals(actual.getString("observationId")))
+                plan=PhoneWheelDrag.plan(actual,wheel,args.getString("value"),args.getString("direction"),state==null?null:state.previousDrag(args));
+            if(!plan.optBoolean("available"))return failure("wheel_drag_unavailable","当前滚轮的选中值或单列几何不足，未派发拖拽。")
+                    .put("accepted",false).put("dragEvidence",plan);
+            synchronized(this){if(state!=null&&state==boundedOperation)state.dispatchedDrag(args,plan);}
+            result=dispatchLocalGesture(plan.getJSONObject("gesture"),actual,control,admission)
+                    .put("method","drag").put("dragEvidence",plan).put("requestedObservationId",args.getString("observationId"));
+        }else{
+            if(!anchor.optBoolean("scrollable"))return failure("not_a_wheel","当前目标未暴露原生滚动；可选择已授权的单列拖拽。").put("accepted",false);
+            JSONObject scroll=new JSONObject().put("observationId",args.getString("observationId")).put("nodeId",args.getString("nodeId")).put("direction",args.getString("direction"));
+            result=scrollNode(scroll,control,admission).put("method","native_scroll");
+        }
+        JSONObject valueEvidence=null;
+        if(Boolean.TRUE.equals(result.opt("accepted"))&&!unknownEffect(result)){
+            try{
+                JSONObject actual;
+                synchronized(this){actual=latest==null?null:new JSONObject(latest.toString());}
+                if(actual!=null){
+                    JSONObject wheel=PhoneRegionGesture.sameTarget(actual,original,anchor);valueEvidence=PhoneWheelValue.read(actual,wheel);
+                    if(!valueEvidence.optBoolean("readable")&&localCaptureAllowed&&localOcrAllowed&&ocrAvailable()){
+                        JSONObject recognized=readOnlyLocalFrame(control,true,true);
+                        if(recognized.optBoolean("ok"))valueEvidence=PhoneWheelValue.read(recognized,PhoneRegionGesture.sameTarget(recognized,original,anchor));
+                    }
+                }
+            }catch(Exception unavailable){retainDispatchReceipt(result,unavailable);}
+        }
+        String value=valueEvidence!=null&&valueEvidence.optBoolean("readable")?valueEvidence.getString("value"):null;
+        boolean reached=value!=null&&PhoneWheelValue.matches(value,args.getString("value"));
+        return result.put("target",args.getString("value")).put("actualValue",value==null?JSONObject.NULL:value)
+                .put("valueEvidence",valueEvidence==null?JSONObject.NULL:valueEvidence).put("reached",reached)
+                .put("status",reached?"target_observed":value==null?"unreadable":"partial")
+                .put("stepsPerformed",result.has("accepted")&&result.isNull("accepted")?JSONObject.NULL:Boolean.TRUE.equals(result.opt("accepted"))?1:0)
+                .put("verifiedBusinessSuccess",false).put("automaticReplayAllowed",false);
+    }
+
+    private JSONObject regionStep(JSONObject args,RunControl control,NativePhoneEntry.Admission admission)throws Exception {
+        final JSONObject original,anchor;
+        synchronized(this){original=new JSONObject(latest.toString());anchor=PhoneRegionGesture.node(original,args.getString("nodeId"));}
+        JSONObject actual=localFrameFor(original,anchor,control);if(!actual.optBoolean("ok"))return actual;
+        JSONObject target=PhoneRegionGesture.sameTarget(actual,original,anchor);
+        JSONObject gesture=PhoneRegionGesture.plan(actual,target,args.getString("direction"),args.optString("axis","vertical"));
+        return dispatchLocalGesture(gesture,actual,control,admission).put("method","native_container_gesture")
+                .put("container",PhoneTreeExtract.ref(target)).put("containerBounds",target.getJSONObject("bounds"))
+                .put("requestedObservationId",args.getString("observationId")).put("gesture",gesture);
+    }
+
+    private JSONObject localFrameFor(JSONObject original,JSONObject anchor,RunControl control)throws Exception {
         synchronized(this){
-            if(Boolean.TRUE.equals(result.opt("accepted"))&&latest!=null&&packageName.equals(latest.optString("packageName")))for(JSONObject n:PhoneTreeExtract.index(latest).values()){
-                if(!n.optBoolean("password")&&n.optInt("windowId",-1)==original.optInt("windowId",-2)&&n.optJSONArray("path")!=null&&n.getJSONArray("path").toString().equals(original.getJSONArray("path").toString())&&n.optString("structuralFingerprint").equals(original.optString("structuralFingerprint"))&&n.optString("resourceId").equals(original.optString("resourceId"))&&n.optString("role").equals(original.optString("role"))){valueEvidence=PhoneWheelValue.read(latest,n);break;}
+            if(control.isPaused()||control.pauseRevision()!=original.getLong("pauseRevision"))throw new SecurityException("native_region_pause_changed");
+            if(original.has("appPolicyRevision")&&original.getLong("appPolicyRevision")!=appPolicyRevision())throw new SecurityException("native_region_policy_changed");
+            if(!localCaptureAllowed)return failure("local_capture_disabled","容器滑动需要主人允许本地取图。").put("accepted",false);
+            if(current(original.getString("observationId"),control)&&imageCoordinatesAvailable(latest)
+                    &&(original.getString("observationId").equals(localFrameObservation)||ObservationReport.hasImage(latest))){
+                prepareCoordinateSensitiveEvidence(control);return new JSONObject(latest.toString());
             }
         }
-        String value=valueEvidence!=null&&valueEvidence.optBoolean("readable")?valueEvidence.getString("value"):null;boolean reached=value!=null&&value.equals(args.getString("value"));
-        return result.put("target",args.getString("value")).put("actualValue",value==null?JSONObject.NULL:value).put("valueEvidence",valueEvidence==null?JSONObject.NULL:valueEvidence).put("reached",reached).put("status",reached?"target_observed":value==null?"unreadable":"partial").put("stepsPerformed",result.has("accepted")&&result.isNull("accepted")?JSONObject.NULL:Boolean.TRUE.equals(result.opt("accepted"))?1:0).put("verifiedBusinessSuccess",false);
+        JSONObject actual=readOnlyLocalFrame(control,true,true);
+        if(!actual.optBoolean("ok"))return actual.put("accepted",false);
+        if(control.isPaused()||control.pauseRevision()!=original.getLong("pauseRevision"))throw new SecurityException("native_region_pause_changed");
+        if(original.has("appPolicyRevision")&&original.getLong("appPolicyRevision")!=appPolicyRevision())throw new SecurityException("native_region_policy_changed");
+        PhoneRegionGesture.sameTarget(actual,original,anchor);return actual;
+    }
+
+    private JSONObject dispatchLocalGesture(JSONObject gesture,JSONObject before,RunControl control,NativePhoneEntry.Admission admission)throws Exception {
+        PhoneExtensionTools.validate("phone_gesture",gesture);final long revision=before.getLong("pauseRevision");
+        synchronized(this){
+            String blocked=authority(control);
+            if(blocked!=null||control.pauseRevision()!=revision||before.has("appPolicyRevision")&&before.getLong("appPolicyRevision")!=appPolicyRevision()
+                    ||!localCaptureAllowed||!current(gesture.getString("observationId"),control)||!imageCoordinatesAvailable(latest)
+                    ||!gesture.getString("observationId").equals(localFrameObservation)&&!ObservationReport.hasImage(latest))
+                return failure(blocked==null?"native_local_frame_unavailable":blocked,"原本地画面已变化，未派发滑动。").put("accepted",false);
+            if(ocrSensitive!=null){JSONArray paths=gesture.getJSONArray("paths");for(int i=0;i<paths.length();i++){
+                JSONArray points=paths.getJSONArray(i);for(int j=1;j<points.length();j++){
+                    JSONArray a=points.getJSONArray(j-1),b=points.getJSONArray(j);
+                    ocrSensitive.requireCoordinate(a.getInt(0),a.getInt(1),b.getInt(0),b.getInt(1),true,control,revision);
+                }
+            }}
+        }
+        if(!(source instanceof NativePhoneExtensions))return failure("native_extension_unavailable","原物理端口没有容器手势能力。").put("accepted",false);
+        admission.check();JSONObject result;
+        try{result=((NativePhoneExtensions)source).extension("phone_gesture",gesture,control,admission);}
+        catch(NativeSensitiveStep.OwnerRequired owner){synchronized(this){clearReferences();}throw owner;}
+        catch(InterruptedException stopped){throw stopped;}
+        catch(Exception unknown){result=new JSONObject().put("ok",false).put("accepted",JSONObject.NULL).put("error","action_unknown");}
+        if(result==null)result=new JSONObject().put("ok",false).put("accepted",JSONObject.NULL).put("error","action_unknown");
+        boolean unknown=unknownEffect(result);
+        synchronized(this){clearReferences();if(unknown)reconciliationRequired=true;if(!result.optBoolean("ok")){ObservationReport.annotateFailure(result);retainSafetyFence(result);}}
+        if(Boolean.TRUE.equals(result.opt("accepted"))&&!unknown){
+            try{
+                dev.pocketengine.phone.PhoneUiSignals feed=source instanceof NativePhoneSignals?((NativePhoneSignals)source).uiSignals(control):null;
+                PhoneActionEffects.Result settled=PhoneActionEffects.await(effectSnapshot(before),null,()->readOnlyTree(control),control,revision,feed,PhoneActionEffects.REAL,visualReader(before,control));
+                result.put("actionEffects",settled.evidence);JSONObject fresh=settled.observation;
+                result.put("freshObservationAvailable",fresh!=null&&fresh.optBoolean("ok"));
+                if(fresh!=null&&fresh.optBoolean("ok"))result.put("afterObservationId",fresh.getString("observationId"));
+            }catch(Exception unavailable){retainDispatchReceipt(result,unavailable);}
+        }
+        return result.put("inputObservationId",gesture.getString("observationId")).put("geometrySource","native_target_and_local_frame")
+                .put("imageUploaded",false).put("verifiedBusinessSuccess",false).put("automaticReplayAllowed",false);
+    }
+    private static boolean unknownEffect(JSONObject result){
+        return result.has("accepted")&&result.isNull("accepted")||result.optBoolean("requiresReconciliation")
+                ||ObservationSafety.unknownEffect(result.optString("error",result.optString("code")));
     }
     @Override public synchronized void clearReferences() {
-        latest = null; latestBinding = null; textTargets.clear();ocrSensitive=null;source.clearReferences();
+        latest = null; latestBinding = null;localFrameObservation=null;textTargets.clear();ocrSensitive=null;source.clearReferences();
         // Clearing references cannot reconcile a possibly dispatched operation.
     }
     @Override public synchronized JSONObject observe(boolean includeImage, RunControl control) throws Exception {
@@ -506,7 +614,10 @@ public final class AdaptivePhonePort implements PhonePort {
         String blocked=authority(control);
         if(blocked!=null||reconciliationRequired||safetyPause!=null||!source.isConnected()||!current(args.getString("observationId"),control))
             throw new SecurityException("bounded_phone_current_observation_required");
-        return PhoneBoundedOperation.prepare(tool,args,latest,uptime.getAsLong());
+        boundedOperation=PhoneBoundedOperation.prepare(tool,args,latest,uptime.getAsLong());return boundedOperation;
+    }
+    public synchronized void settledBounded(String tool,JSONObject args,JSONObject receipt,RunControl control)throws Exception {
+        if(authority(control)==null&&boundedOperation!=null)boundedOperation.settled(tool,args,receipt);
     }
     public synchronized void requireBoundedCurrent(PhoneBoundedOperation.State state,String observationId,RunControl control)throws Exception {
         String blocked=authority(control);
@@ -522,13 +633,20 @@ public final class AdaptivePhonePort implements PhonePort {
         JSONObject fresh=readOnlyTree(control);
         if(fresh==null||!fresh.optBoolean("ok"))throw new SecurityException("bounded_phone_observation_unavailable");
         if(state.needsOcr(fresh)&&localCaptureAllowed&&localOcrAllowed&&ocrAvailable()){
-            JSONObject recognized=readOnlyOcr(control);
+            JSONObject recognized=readOnlyLocalFrame(control,true,true);
             if(recognized.optBoolean("ok"))fresh=recognized;
             else{
                 // OCR failure contributes no invented value; restore an actionable current tree.
                 fresh=readOnlyTree(control);
                 if(!fresh.optBoolean("ok"))throw new SecurityException("bounded_phone_observation_unavailable");
             }
+        }
+        boolean frameNeeded=state.needsLocalFrame(fresh),frameCurrent;
+        synchronized(this){frameCurrent=fresh.optString("observationId").equals(localFrameObservation);}
+        if(frameNeeded&&!frameCurrent&&localCaptureAllowed){
+            JSONObject frame=readOnlyLocalFrame(control,state.needsOcr(fresh),true);
+            if(frame.optBoolean("ok"))fresh=frame;
+            else{fresh=readOnlyTree(control);if(!fresh.optBoolean("ok"))throw new SecurityException("bounded_phone_observation_unavailable");}
         }
         synchronized(this){requireBoundedCurrent(state,fresh.getString("observationId"),control);}
         return fresh;
@@ -552,12 +670,55 @@ public final class AdaptivePhonePort implements PhonePort {
                 stripImage(observed);observed.getJSONObject("observationSources").put("imageIncluded",false).put("imageReason","local_ocr_text_only");
                 latestBinding=scope.observation(observed.getString("observationId"),revision);
                 observed.put("observationBinding",bindingJson(latestBinding)).put("observationDecision",new JSONObject().put("request","ocr").put("reason","explicit_read_only_text_collection"));
-                latest=new JSONObject(observed.toString());return observed;
+                latest=new JSONObject(observed.toString());localFrameObservation=imageCoordinatesAvailable(observed)?observed.getString("observationId"):null;return observed;
             }
         }
         long until=System.nanoTime()+250_000_000L;
         while(System.nanoTime()<until){control.check();if(control.isPaused()||control.pauseRevision()!=revision)throw new SecurityException("ocr_read_scope_changed");Thread.sleep(Math.max(1,Math.min(50,(until-System.nanoTime())/1_000_000L)));}
         return readOnlyOcr(control,false);
+    }
+
+    /** Local pixels stay in the physical port. This native-derived geometry never enables arbitrary model coordinates. */
+    private JSONObject readOnlyLocalFrame(RunControl control,boolean recognizeText,boolean retryChangingFrame)throws Exception {
+        final long revision;
+        synchronized(this){
+            String blocked=authority(control);
+            if(blocked!=null||reconciliationRequired||safetyPause!=null)return failure(blocked==null?"phone_read_unavailable":blocked,"原手机读取已停止。");
+            if(!localCaptureAllowed)return failure("local_capture_disabled","容器滑动需要主人允许本地取图。");
+            revision=control.pauseRevision();clearReferences();
+        }
+        JSONObject actual=source.observe(true,control);boolean changing=false;
+        synchronized(this){
+            String blocked=authority(control);long now=uptime.getAsLong(),at=actual==null?-1:actual.optLong("observedAtUptimeMs",-1);
+            if(actual==null||!actual.optBoolean("ok"))return actual==null?failure("empty_observation","没有取得本地画面。"):rejectedObservation(actual);
+            if(blocked!=null||revision!=control.pauseRevision()||actual.optLong("pauseRevision",-1)!=revision
+                    ||actual.optInt("displayId",-1)!=scope.displayId||!scope.sessionId.equals(actual.optString("sessionId"))
+                    ||actual.optString("observationId").isEmpty()||at<0||now<at||now-at>MAX_AGE_MS||actual.optJSONObject("observationSources")==null){
+                clearReferences();return failure(blocked==null?"stale_observation":blocked,"本地画面的原显示和执行身份已变化。");
+            }
+            if(!ObservationReport.hasImage(actual)){clearReferences();return failure("image_unavailable","未取得可核对的本地真实画面。").put("imageUnavailableReason",actual.optString("imageUnavailableReason"));}
+            changing=!imageCoordinatesAvailable(actual);
+            if(changing)clearReferences();
+            else{
+                if(recognizeText||localOcrAllowed&&ocrAvailable()){
+                    if(localOcrAllowed&&ocrAvailable()){
+                        JSONObject recognized=recognize(actual,control);
+                        if(!recognized.optBoolean("ok")){textTargets.clear();ocrSensitive=null;actual.remove("ocr");actual.put("localOcrReason",recognized.optString("error","ocr_unavailable"));}
+                    }else actual.put("localOcrReason","local_ocr_not_authorized_or_unavailable");
+                }
+                blocked=authority(control);now=uptime.getAsLong();
+                if(blocked!=null||revision!=control.pauseRevision()||now<at||now-at>MAX_AGE_MS){clearReferences();return failure(blocked==null?"stale_observation":blocked,"本地画面读取后原任务已变化。");}
+                stripImage(actual);actual.getJSONObject("observationSources").put("imageIncluded",false).put("imageReason","native_local_geometry_only");
+                latestBinding=scope.observation(actual.getString("observationId"),revision);
+                actual.put("observationBinding",bindingJson(latestBinding)).put("observationDecision",new JSONObject()
+                        .put("request",actual.has("ocr")?"ocr":"nodes").put("reason","native_local_geometry").put("imageUploaded",false));
+                localFrameObservation=actual.getString("observationId");latest=new JSONObject(actual.toString());return actual;
+            }
+        }
+        if(!retryChangingFrame)return failure("screen_changed","画面仍在变化，未派发滑动。");
+        long until=System.nanoTime()+250_000_000L;
+        while(System.nanoTime()<until){control.check();if(control.isPaused()||control.pauseRevision()!=revision)throw new SecurityException("local_frame_scope_changed");Thread.sleep(Math.max(1,Math.min(50,(until-System.nanoTime())/1_000_000L)));}
+        return readOnlyLocalFrame(control,recognizeText,false);
     }
 
     /** Host-mediated help signal only; it never authorizes or repeats the failed business action. */
@@ -758,6 +919,7 @@ public final class AdaptivePhonePort implements PhonePort {
                 decision=visual;
             }
         }
+        boolean retainedLocalFrame=localCaptureAllowed&&ObservationReport.hasImage(out)&&imageCoordinatesAvailable(out);
         if (decision.request != Request.VISION) {
             stripImage(out);
             JSONObject sources = out.getJSONObject("observationSources");
@@ -771,7 +933,7 @@ public final class AdaptivePhonePort implements PhonePort {
                 .put("visionAvailable", visionAvailable).put("ocrAvailable", ocrAvailable())
                 .put("ocrReason", out.has("ocrFallback")?out.getJSONObject("ocrFallback").getString("reason"):ocrAvailable() ? "mounted_local_engine" : "engine_not_installed")
                 .put("localCaptureAllowed",localCaptureAllowed).put("localOcrAllowed",localOcrAllowed).put("ocrTextMayBeSentToModel",true).put("uploadImageAllowed",imageCeiling).put("screenshotsAllowed", imageCeiling).put("automaticReplayAllowed", false));
-        latest = new JSONObject(out.toString()); pendingNeed = Need.AUTOMATIC; consecutiveScreenChanges = 0;
+        latest = new JSONObject(out.toString());localFrameObservation=retainedLocalFrame?out.getString("observationId"):null;pendingNeed = Need.AUTOMATIC; consecutiveScreenChanges = 0;
         if(practice!=null)practice.observation(out);
         return PhoneTreeQuery.modelObservation(out);
     }

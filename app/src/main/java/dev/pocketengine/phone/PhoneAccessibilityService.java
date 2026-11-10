@@ -52,6 +52,8 @@ public final class PhoneAccessibilityService extends AccessibilityService {
     }
     private static volatile PhoneAccessibilityService instance;
     private final String observationSessionId = java.util.UUID.randomUUID().toString();
+    private final java.util.concurrent.atomic.AtomicLong keyFocusRevision = new java.util.concurrent.atomic.AtomicLong();
+    private volatile PhoneInputMethod phoneInputMethod;
     private final Handler main = new Handler(Looper.getMainLooper());
     // INSTANCE_LOCK guards feed publication and ownership; platform reads stay outside it.
     private final Map<Integer,PhoneUiSignals> displaySignals = new LinkedHashMap<>();
@@ -92,6 +94,11 @@ public final class PhoneAccessibilityService extends AccessibilityService {
     public static PhoneAccessibilityService get() { return instance; }
     /** A new service instance invalidates all observations from the previous connection. */
     public String observationSessionId() { return observationSessionId; }
+    public long keyFocusRevision(){return keyFocusRevision.get();}
+    PhoneInputMethod phoneInputMethod(){return phoneInputMethod;}
+    @Override public android.accessibilityservice.InputMethod onCreateInputMethod(){
+        phoneInputMethod=new PhoneInputMethod(this);keyFocusRevision.incrementAndGet();return phoneInputMethod;
+    }
     public PhoneUiSignals uiSignals(){return uiSignals(Display.DEFAULT_DISPLAY);}
     /** Stable per-display hints; only unattributed changes conservatively invalidate every feed. */
     public PhoneUiSignals uiSignals(int displayId) {
@@ -139,9 +146,13 @@ public final class PhoneAccessibilityService extends AccessibilityService {
                 signalDisplays = displays;
             }
         } catch (RuntimeException unavailable) { /* Service teardown still closes every feed. */ }
+        dev.pocketengine.phone.setup.PhoneSetupModule.onAccessibilityConnected();
     }
     @Override public void onAccessibilityEvent(AccessibilityEvent event) {
         if (event == null || instance != this) return;
+        int type=event.getEventType();
+        if(type==AccessibilityEvent.TYPE_VIEW_FOCUSED||type==AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED||type==AccessibilityEvent.TYPE_WINDOWS_CHANGED
+                ||type==AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED)keyFocusRevision.incrementAndGet();
         int displayId = eventDisplay(event);
         synchronized (INSTANCE_LOCK) {
             if (instance != this || signalsClosed) return;

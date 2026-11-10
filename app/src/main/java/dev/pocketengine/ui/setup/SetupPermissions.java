@@ -22,6 +22,7 @@ import org.json.JSONObject;
 final class SetupPermissions {
     private static final int MICROPHONE_REQUEST = 7251;
     private static final int NOTIFICATION_REQUEST = 7252;
+    private static final int CALENDAR_REQUEST = 7253;
     private final Activity activity;
     private final SetupPreferences preferences;
 
@@ -34,6 +35,9 @@ final class SetupPermissions {
         return new JSONObject().put("accessibility", observe(this::accessibility))
                 .put("notifications", observe(this::notifications))
                 .put("microphone", observe(() -> granted(Manifest.permission.RECORD_AUDIO)))
+                .put("calendarRead", observe(() -> granted(Manifest.permission.READ_CALENDAR)))
+                .put("calendarWrite", observe(() -> granted(Manifest.permission.WRITE_CALENDAR)))
+                .put("calendar", observe(() -> granted(Manifest.permission.READ_CALENDAR) && granted(Manifest.permission.WRITE_CALENDAR)))
                 .put("batteryExempt", observe(() -> {
                     PowerManager manager = activity.getSystemService(PowerManager.class);
                     if (manager == null) throw new IllegalStateException("power_manager_unavailable");
@@ -79,6 +83,19 @@ final class SetupPermissions {
                     }
                 } else { openAppDetails(); entry = "app_details"; }
                 break;
+            case "calendar":
+                if (!granted(Manifest.permission.READ_CALENDAR) || !granted(Manifest.permission.WRITE_CALENDAR)) {
+                    boolean blocked = preferences.permissionRequested(kind)
+                            && (!granted(Manifest.permission.READ_CALENDAR) && !activity.shouldShowRequestPermissionRationale(Manifest.permission.READ_CALENDAR)
+                            || !granted(Manifest.permission.WRITE_CALENDAR) && !activity.shouldShowRequestPermissionRationale(Manifest.permission.WRITE_CALENDAR));
+                    if (blocked) { openAppDetails(); entry = "app_details"; }
+                    else {
+                        preferences.markPermissionRequested(kind);
+                        activity.requestPermissions(new String[]{Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR}, CALENDAR_REQUEST);
+                        entry = "permission_request";
+                    }
+                } else { openAppDetails(); entry = "app_details"; }
+                break;
             case "battery":
                 // The user chooses the exemption in Android's own list; no automatic exemption request.
                 activity.startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
@@ -94,6 +111,7 @@ final class SetupPermissions {
                 .put("grantVerified", false)
                 .put("message", "vendorBackground".equals(kind)
                         ? "已打开应用详情；请按手机提供的入口核对自启动或后台运行。这里只记录访问，无法代替厂商开关的实际状态。"
+                        : "calendar".equals(kind) ? "已请求打开日历授权；返回后会重新读取实际权限。授权不会创建事件，每批写入仍需确认准确日历与完整事件。"
                         : "已请求打开系统授权；返回后会重新读取实际状态。授权麦克风不会自动录音。");
     }
 

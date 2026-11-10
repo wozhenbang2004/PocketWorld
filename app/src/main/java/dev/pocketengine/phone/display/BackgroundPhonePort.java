@@ -19,6 +19,7 @@ import dev.pocketengine.phone.observation.AccessibilityForest;
 import dev.pocketengine.phone.observation.ObservationSafety;
 import dev.pocketengine.phone.observation.NativePhoneEntry;
 import dev.pocketengine.phone.observation.NativeNodeActionReceipt;
+import dev.pocketengine.phone.observation.NativeKeyFocus;
 import dev.pocketengine.phone.observation.PhoneReadGate;
 import dev.pocketengine.phone.observation.NativeSensitiveStep;
 import java.util.UUID;
@@ -256,7 +257,9 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
             if(Boolean.TRUE.equals(result.opt("accepted")))result.put("helperAuthenticated",module.isConnected()).put("imeIsolation",module.session(sessionId,displayId).optString("imeIsolation"));
         }else{
             Observation expected=current;if(expected==null||expected.control!=control||!expected.id.equals(args.optString("observationId"))||expected.revision!=revision)return failure("stale_observation","扩展动作需要当前副屏观察。");
-            if("phone_paste_text".equals(tool)){
+            if("phone_press_key".equals(tool)){
+                result=pressKey(service,expected,args.getString("key"),before,control,admission);
+            }else if("phone_paste_text".equals(tool)){
                 AccessibilityForest.Ref ref=expected.tree.forest.refs.get(args.getString("nodeId"));if(ref==null)return failure("stale_node","原输入目标已变化。");
                 result=dev.pocketengine.phone.observation.AccessibilityPasteInput.paste(service,service,displayId,ref,args.getString("text"),control,revision,()->{requireObservationGeometry(expected);admission.check();},()->{
                     Tree fresh=validateTarget(expected,ref,control);NativeSensitiveStep.requireNode(fresh.forest,ref,"phone_type",control,revision);
@@ -272,6 +275,46 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
         }
         return Boolean.TRUE.equals(result.opt("accepted"))||result.has("accepted")&&result.isNull("accepted")?verifyLanding(result,before,control,revision):result;
     }
+
+    private JSONObject pressKey(PhoneAccessibilityService service,Observation expected,String key,JSONObject ownership,RunControl control,NativePhoneEntry.Admission admission)throws Exception {
+        int code=dev.pocketengine.displayhelper.PhoneKeyCodes.require(key);
+        final BackgroundKeyPreparation original;
+        try{original=onTreeRead(control,expected.revision,()->prepareKey(service,expected,code,control));}
+        catch(NativeKeyFocus.Unavailable unavailable){return failure(unavailable.code,unavailable.getMessage()).put("supported",false);}
+        catch(PhoneFailure unavailable){return failure(unavailable);}
+        NativeProfile profile=profile(ownership,original.focus.packageName,displayId);
+        if(profile==null||profile.tasks.size()!=1)return failure("key_profile_unverifiable","无法确认焦点所属的唯一原应用任务与Android资料，未派发按键。").put("supported",false);
+        JSONObject frame=request("frame",new JSONObject().put("includeImage",false),control,expected.revision);
+        if(!frame.optBoolean("ok")||!sameSession(frame)||frame.optBoolean("empty")||frame.optBoolean("framePending")||frame.optLong("frameGeneration",-1)<0)
+            return failure("key_frame_pending","当前副屏尚无稳定的原显示器帧，未派发按键。");
+        requireGeometryIdentity(expected.geometry,expected.width,expected.height,frame);requireObservationGeometry(expected);
+        JSONObject payload=inputIdentity(new JSONObject().put("key",key).put("keyCode",code)
+                .put("targetPackageName",original.focus.packageName).put("targetUserId",profile.user).put("targetTaskId",profile.tasks.iterator().next()),expected)
+                .put("frameGeneration",frame.getLong("frameGeneration"));
+        try{
+            return module.requestAdmitted("key",payload,control,expected.revision,sessionId,displayId,()->{
+                admission.check();
+                BackgroundKeyPreparation fresh=onTreeRead(control,expected.revision,()->prepareKey(service,expected,code,control));
+                if(fresh.focus.windowId!=original.focus.windowId||!fresh.focus.packageName.equals(original.focus.packageName))throw new NativeKeyFocus.Unavailable("key_focus_changed");
+                guard(control,expected.revision);requireObservationGeometry(expected);
+                if(fresh.ui.closed||!fresh.ui.same(service.uiSignals(displayId).snapshot(java.util.Collections.emptySet())))throw new NativeKeyFocus.Unavailable("key_focus_changed");
+            });
+        }catch(NativePhoneEntry.Refused refused){return failure("paused_or_changed",refused.getMessage());}
+        finally{clearReferences();}
+    }
+    private BackgroundKeyPreparation prepareKey(PhoneAccessibilityService service,Observation expected,int code,RunControl control)throws Exception {
+        guard(control,expected.revision);requireObservationGeometry(expected);
+        if(expected.service!=service||service!=PhoneAccessibilityService.get()||expected.control!=control)throw new NativeKeyFocus.Unavailable("key_focus_changed");
+        dev.pocketengine.phone.PhoneUiSignals.Stamp stamp=service.uiSignals(displayId).snapshot(java.util.Collections.emptySet());
+        NativeKeyFocus focus=NativeKeyFocus.from(expected.tree.forest,displayId,code);
+        Tree fresh=focus.node==null?tree():validateTarget(expected,focus.node,control);
+        if(!expected.tree.forest.sameWindowLayout(fresh.forest))throw new NativeKeyFocus.Unavailable("key_focus_changed");
+        NativeSensitiveStep.requireKey(fresh.forest,focus.node,code,control,expected.revision);focus.verify(service,displayId,false);
+        guard(control,expected.revision);requireObservationGeometry(expected);
+        if(stamp.closed||!stamp.same(service.uiSignals(displayId).snapshot(java.util.Collections.emptySet())))throw new NativeKeyFocus.Unavailable("key_focus_changed");
+        return new BackgroundKeyPreparation(focus,stamp);
+    }
+    private record BackgroundKeyPreparation(NativeKeyFocus focus,dev.pocketengine.phone.PhoneUiSignals.Stamp ui) { }
     @Override public void clearReferences(){current=null;}
     /** Record the actual accessibility input boundary, never the time an observation is read. */
     private void noteNativeInput(){long entered=System.nanoTime();nativeFrameAfterNanos.accumulateAndGet(entered,Math::max);clearReferences();}

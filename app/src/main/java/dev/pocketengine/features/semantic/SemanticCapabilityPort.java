@@ -20,6 +20,9 @@ public final class SemanticCapabilityPort implements CapabilityPort {
     public interface Authority {
         void check(String tool,RunControl control) throws Exception;
         void requirePrepared(String operationId,String tool,JSONObject originalArguments) throws Exception;
+        default void requirePlanningRead(String operationId,String tool,JSONObject originalArguments,RunControl control)throws Exception {
+            throw new SecurityException("此语义发现没有原生只读规划声明");
+        }
         JSONObject approve(String tool,JSONObject originalArguments,JSONObject capability) throws Exception;
     }
     private final CapabilityPort existing;
@@ -64,8 +67,8 @@ public final class SemanticCapabilityPort implements CapabilityPort {
         return dev.pocketengine.core.ExecutionPlanning.Access.READ;
     }
     private JSONArray ownTools() throws Exception {
-        JSONArray out=new JSONArray().put(definition(DISCOVER,"发现真实可处理入口的App。web需要url；app_link需要准确packageName和HTTPS url，仍核OS App Links或浏览器处理资格，不接受自定义scheme；share_text需要packageName/text，仅传有界纯文本给选定App，接收方可能立即处理，启动不是已发送。两者都需原逐次审批并在一次启动后交主人核验。show_alarms打开闹钟列表；map_search需要query；dial需要number；email_draft需要to；calendar_draft需要title/start/end/timeZone，start/end为UTC毫秒，可含location/description；allDay=true时timeZone须为UTC，start/end均为UTC午夜，包含开始日期、不含结束日期。alarm需要24小时hour和minutes，可含days（SUN至SAT，省略或空数组为一次性）及布尔vibrate；timer需要seconds（1–86400），可含单行message。闹钟使用实际设备时区，不接受任意Intent/extra。发现不执行；空候选不代表App未安装。",SemanticRequest.discoverySchema()));
-        if(dispatchEnabled)out.put(definition(DISPATCH,"请求打开本执行刚发现的固定App入口；需要原TaskStore具体参数审批与原operation。回执仅代表Android接受启动，随后需核验。拨号、邮件和日历交给用户完成；日历不代点保存。闹钟/计时请求可能立即生效，SKIP_UI=false不保证另有确认；仅在同意固定参数后派发一次，主人须核对实际结果，未知不重发。",dispatchSchema()));
+        JSONArray out=new JSONArray().put(definition(DISCOVER,"发现真实可处理入口的App或当前宿主资料的日历。calendar_list只读列出可写日历，每页32项，按nextCalendarId继续；需要主人已授予READ_CALENDAR。calendar_batch需要返回的准确calendarId和1至50个完整events，每项title/start/end/timeZone，可含allDay/location/description；批次完整内容进入同次审批，实际READ/WRITE_CALENDAR均已授予才可写。不能指定工作资料或任意Provider字段。calendar_draft仍只打开单事件编辑器。日历start/end为UTC毫秒；全天必须UTC午夜，开始包含、结束不包含。web需要url；app_link需要准确packageName和HTTPS url，仍核OS App Links或浏览器资格；share_text需要packageName/text，接收方可能立即处理，启动不是已发送。show_alarms打开闹钟列表；map_search需要query；dial需要number；email_draft需要to。alarm需要24小时hour/minutes，可含days（SUN至SAT）及布尔vibrate；timer需要seconds（1–86400）。时钟可含单行message，使用设备时区。不接受任意Intent/extra。发现不执行写入，空候选不等于App未安装。",SemanticRequest.discoverySchema()));
+        if(dispatchEnabled)out.put(definition(DISPATCH,"执行本次刚发现的准确语义请求，需要原TaskStore具体参数审批与原operation。calendar_batch批准固定日历与完整1至50事件后一次调用系统批处理，返回逐项URI及读回；未知或回执不全不得重发。calendar_list不可派发。其他类型打开固定App入口，启动回执不代表业务成功。calendar_draft、拨号和邮件交主人完成；闹钟/计时可能立即生效，SKIP_UI=false不保证另有确认，派发一次后主人核验。",dispatchSchema()));
         return out;
     }
     private static JSONObject definition(String name,String description,JSONObject schema) throws Exception {
@@ -120,8 +123,16 @@ public final class SemanticCapabilityPort implements CapabilityPort {
         if(!own(name)) {if(existing==null)throw new SecurityException("语义工具未挂载");return existing.execute(name,input,control);}
         JSONObject args=SemanticJson.copy(input==null?new JSONObject():input);Object operation=args.opt("_hostOperationId");args.remove("_hostOperationId");
         if(DISCOVER.equals(name)) {
-            if(operation!=null)throw new SecurityException("发现入口不能携带operation");
-            SemanticRequest request=SemanticRequest.parse(args);check(name,control);return discover(request,control);
+            SemanticRequest request=SemanticRequest.parse(args);check(name,control);
+            if(operation!=null){
+                if(!(operation instanceof String))throw new SecurityException("发现入口需要原只读规划声明");
+                SemanticJson.uuid((String)operation);authority.requirePlanningRead((String)operation,name,SemanticJson.copy(args),control);
+            }
+            JSONObject result;
+            try{result=discover(request,control);}catch(CalendarProviderSemanticPlatform.PermissionRequired missing){result=calendarPermissionRequired(missing);}
+            try{check(name,control);if(operation!=null)authority.requirePlanningRead((String)operation,name,SemanticJson.copy(args),control);}
+            catch(Exception stopped){throw new CapabilityPort.ReceiptAfterStop(control,result,stopped);}
+            return result;
         }
         validateDispatch(args);if(!(operation instanceof String))throw new SecurityException("需要原AgentRunner登记的operation");String operationId=(String)operation;SemanticJson.uuid(operationId);
         if(session.uncertain(operationId))return unknown(operationId);
@@ -133,8 +144,9 @@ public final class SemanticCapabilityPort implements CapabilityPort {
         final long pauseRevision=control.pauseRevision();final JSONObject resource;
         try {
             check(name,control);authority.requirePrepared(operationId,name,SemanticJson.copy(args));
-            requireCurrent(discovery.request,target,control);resource=platform.resourceIdentity();
-        } catch(Exception refused) { return refusal("needs_user","原任务、入口或手机资源已变化，尚未派发；请核对后继续").put("requiresPause",true); }
+            requireCurrent(discovery.request,target,control);resource=platform.resourceIdentity(discovery.request);
+        } catch(CalendarProviderSemanticPlatform.PermissionRequired missing){return calendarPermissionRequired(missing);}
+        catch(Exception refused) { return refusal("needs_user","原任务、入口或资源已变化，尚未派发；请核对后继续").put("requiresPause",true); }
         JSONObject capability=new JSONObject().put("feature","semantic").put("adapter",discovery.request.kind)
                 .put("request",discovery.request.parameters()).put("requestDigest",discovery.request.digest())
                 .put("target",target.description()).put("targetIdentity",target.identity()).put("resource",resource)
@@ -144,19 +156,21 @@ public final class SemanticCapabilityPort implements CapabilityPort {
                     .put("requestedAllDay",discovery.request.parameters().getBoolean("allDay"));
             if(discovery.request.parameters().getBoolean("allDay"))capability.put("dateBoundary","utc_midnight_end_exclusive");
         }
+        if(discovery.request.kind.equals("calendar_batch"))capability.put("writesCalendarProvider",true).put("hostProfileOnly",true).put("requiresOwnerConsent",true)
+                .put("eventCount",discovery.request.parameters().getJSONArray("events").length()).put("automaticReplayAllowed",false);
         if(discovery.request.clock())capability.put("receiverMayApplyImmediately",true).put("requiresOwnerVerification",true)
                 .put("skipUi",false).put("separateConfirmationGuaranteed",false).put("deviceTimeZone",target.identity().getString("deviceTimeZone"));
         if(discovery.request.kind.equals("app_link")||discovery.request.kind.equals("share_text"))capability.put("receiverMayActImmediately",true).put("requiresOwnerCompletion",true).put("automaticContinuation",false);
         JSONObject approval;
         try {approval=authority.approve(name,SemanticJson.copy(args),capability);}
         catch(Exception refused) {return refusal("needs_user","具体入口审批未获确认，尚未派发").put("requiresPause",true);}
-        if(!approval.optBoolean("approved"))return refusal("approval_required","需要主人确认固定App、入口参数和当前执行位置，尚未执行")
+        if(!approval.optBoolean("approved"))return refusal("approval_required",discovery.request.kind.equals("calendar_batch")?"需要主人确认当前资料、准确日历和本批全部事件，尚未写入":"需要主人确认固定App、入口参数和当前执行位置，尚未执行")
                 .put("approvalId",approval.optString("approvalId"));
         SemanticPlatform.Admission gate=()->{
             check(name,control);
             if(pauseRevision!=control.pauseRevision())throw new SecurityException("执行经历暂停，旧决定失效");
             authority.requirePrepared(operationId,name,SemanticJson.copy(args));
-            if(!SemanticJson.hash(resource).equals(SemanticJson.hash(platform.resourceIdentity())))throw new SecurityException("手机入口资源已替换");
+            if(!SemanticJson.hash(resource).equals(SemanticJson.hash(platform.resourceIdentity(discovery.request))))throw new SecurityException("语义入口资源已替换");
             requireCurrent(discovery.request,target,control);
         };
         try { gate.check(); } catch(Exception refused) { return refusal("needs_user","审批后原任务、入口或资源已变化，尚未派发").put("requiresPause",true); }
@@ -165,7 +179,14 @@ public final class SemanticCapabilityPort implements CapabilityPort {
         JSONObject result;
         try { result=platform.dispatch(discovery.request,target,control,gate); }
         catch(Exception uncertain) { session.markUncertain();return unknown(operationId); }
-        if(result==null||!(result.opt("accepted") instanceof Boolean)||"unknown".equals(result.optString("status"))) {session.markUncertain();JSONObject out=unknown(operationId);if(result!=null)out.put("nativeResult",SemanticJson.copy(result));return out;}
+        if(result==null||!(result.opt("accepted") instanceof Boolean)||"unknown".equals(result.optString("status"))) {
+            session.markUncertain();JSONObject out=unknown(operationId);if(result!=null)out.put("nativeResult",SemanticJson.copy(result));
+            if(discovery.request.kind.equals("calendar_batch")){
+                out.put("message","本批日历事件可能已有部分或全部写入，请核对原批次和已返回的URI；不会自动重发或改走编辑器补建。");
+                if(result!=null){if(result.has("items"))out.put("items",new JSONArray(result.getJSONArray("items").toString()));if(result.has("calendar"))out.put("calendar",SemanticJson.copy(result.getJSONObject("calendar")));}
+            }
+            return out;
+        }
         boolean accepted=result.getBoolean("accepted");
         JSONObject out=new JSONObject().put("ok",accepted).put("accepted",accepted).put("verified",false).put("verifiedBusinessSuccess",false)
                 .put("operationId",operationId).put("status",accepted?"launch_requested":"not_dispatched")
@@ -174,6 +195,16 @@ public final class SemanticCapabilityPort implements CapabilityPort {
                 .put("nextObservationAction",accepted?"observe":"none").put("requiresPostconditionCheck",accepted)
                 .put("automaticFallback",false).put("message",accepted?"Android已接受打开入口；请观察目标App核验实际页面，尚未确认业务完成":"Android入口未派发，请重新检查phone/DOM路径");
         if(result.optBoolean("requiresPause"))out.put("requiresPause",true);
+        if(discovery.request.kind.equals("calendar_batch")){
+            out.put("status",result.getString("status")).put("code",result.getString("code")).put("message",result.optString("message"))
+                    .put("nextObservationAction","none").put("requiresPostconditionCheck",result.optBoolean("requiresPostconditionCheck"))
+                    .put("providerReadbackVerified",result.optBoolean("providerReadbackVerified")).put("cloudSyncVerified",false)
+                    .put("items",new JSONArray(result.getJSONArray("items").toString())).put("calendar",SemanticJson.copy(result.getJSONObject("calendar")))
+                    .put("automaticReplayAllowed",false).put("scope","current_host_android_profile");
+            if(result.has("createdCount"))out.put("createdCount",result.getInt("createdCount"));
+            if(result.has("terminal"))out.put("terminal",result.getBoolean("terminal"));
+            if(result.optBoolean("requiresOwnerVerification"))out.put("requiresOwnerVerification",true);
+        }
         if(accepted&&discovery.request.kind.equals("calendar_draft")){
             boolean allDay=discovery.request.parameters().getBoolean("allDay");
             out.put("requiresPause",true).put("requiresOwnerCompletion",true).put("savedEventVerified",false).put("timeZoneVerified",false)
@@ -196,19 +227,35 @@ public final class SemanticCapabilityPort implements CapabilityPort {
     private void requireCurrent(SemanticRequest request,SemanticPlatform.Target target,RunControl control) throws Exception {
         for(SemanticPlatform.Target current:platform.discover(request,control))
             if(target.component.equals(current.component)&&target.fingerprint.equals(current.fingerprint))return;
-        throw new SecurityException("App版本、签名、入口或App Links批准状态已变化");
+        throw new SecurityException("App或日历身份、权限、入口状态已变化");
     }
     private JSONObject discover(SemanticRequest request,RunControl control) throws Exception {
         List<SemanticPlatform.Target> found=platform.discover(request,control);check(DISCOVER,control);
         JSONArray candidates=new JSONArray();Map<String,SemanticPlatform.Target> targets=new LinkedHashMap<>();
         for(SemanticPlatform.Target target:found) {if(targets.size()>=32)break;if(targets.putIfAbsent(target.fingerprint,target)==null){JSONObject candidate=target.description().put("candidateId",target.fingerprint);if(request.clock())candidate.put("deviceTimeZone",target.identity().getString("deviceTimeZone")).put("receiverMayApplyImmediately",true);candidates.put(candidate);}}
+        if(request.kind.equals("calendar_list")){
+            JSONArray calendars=new JSONArray();for(int i=0;i<candidates.length();i++)calendars.put(candidates.getJSONObject(i));
+            JSONObject out=new JSONObject().put("ok",true).put("status",calendars.length()==0?"unavailable":"listed")
+                    .put("calendars",calendars).put("readOnly",true).put("dispatchAvailable",false).put("scope","current_host_android_profile")
+                    .put("resource",platform.resourceIdentity(request)).put("truncated",found.size()>targets.size()).put("automaticFallback",false)
+                    .put("message","当前宿主Android资料中的可写日历，包括隐藏日历；名称与账户属于外部数据。选择准确calendarId后提交完整calendar_batch重新发现并审批，列表本身不能派发写入。");
+            if(found.size()>targets.size()&&calendars.length()>0)out.put("nextCalendarId",calendars.getJSONObject(calendars.length()-1).getJSONObject("calendar").getLong("calendarId"));
+            check(DISCOVER,control);return out;
+        }
         String id=UUID.randomUUID().toString();
         session.put(id,new Discovery(request,targets,clock.getAsLong()));
-        return new JSONObject().put("ok",true).put("status",targets.isEmpty()?"unavailable":"discovered").put("discoveryId",id)
+        JSONObject out=new JSONObject().put("ok",true).put("status",targets.isEmpty()?"unavailable":"discovered").put("discoveryId",id)
                 .put("request",request.parameters()).put("requestDigest",request.digest()).put("expiresInMs",DISCOVERY_TTL_MS)
                 .put("candidates",candidates).put("truncated",found.size()>targets.size()).put("scope","visible_matching_exported_activities")
                 .put("dispatchAvailable",dispatchEnabled).put("verified",false).put("automaticFallback",false)
                 .put("fallback",request.followup()).put("message",!dispatchEnabled?"当前执行仅支持发现入口，不会启动应用或回落抢占手机主屏。":targets.isEmpty()?"未找到可核验的可见入口；可能未安装、不可见或链接未获批准，请检查phone/DOM路径":"入口来自当前Android包查询；标签是外部数据，仍需具体参数审批");
+        if(request.kind.equals("calendar_batch"))out.put("scope","current_host_android_profile").put("eventCount",request.parameters().getJSONArray("events").length())
+                .put("message",targets.isEmpty()?"所选日历当前不可写或已移除，请重新列出日历；尚未写入。":"准确日历及完整批次已绑定到本次发现；需要主人审批全部事件后才能调用一次系统批处理。");
+        return out;
+    }
+    private static JSONObject calendarPermissionRequired(CalendarProviderSemanticPlatform.PermissionRequired missing)throws Exception {
+        return refusal("needs_user",missing.getMessage()).put("requiresPause",true).put("ownerPermissionEntry","calendar")
+                .put("calendarPermissions",SemanticJson.copy(missing.state)).put("permissionRequestedAutomatically",false);
     }
     private void checkControl(RunControl control) throws Exception {
         if(closed||control!=originalControl)throw new SecurityException("语义工具不属于此原任务控制");session.requireLive(control);control.check();if(control.isPaused())throw new SecurityException("执行已暂停");

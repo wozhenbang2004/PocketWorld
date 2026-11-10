@@ -63,21 +63,31 @@ public final class SemanticRequest {
                 action="android.intent.action.SENDTO";data="mailto:"+encode(to).replace("%40","@");break;
             case "calendar_draft": {
                 SemanticJson.keys(p,Set.of("kind","title","start","end","timeZone","allDay","location","description"));
-                String title=SemanticJson.text(p,"title",200,false),zone=SemanticJson.text(p,"timeZone",80,false);
-                if(title.matches("(?s).*[\\p{Cntrl}].*")||!ZoneId.getAvailableZoneIds().contains(zone))
-                    throw new IllegalArgumentException("日历草稿需要单行标题和明确的IANA时区，例如Asia/Shanghai或UTC");
-                long start=calendarTime(p,"start"),end=calendarTime(p,"end");
-                if(end<=start)throw new IllegalArgumentException("日历草稿结束时间必须晚于开始时间");
-                boolean allDay=booleanValue(p,"allDay",false);
-                if(allDay&&(!"UTC".equals(zone)||start%DAY_MS!=0||end%DAY_MS!=0))
-                    throw new IllegalArgumentException("全天日历须使用UTC时区与UTC午夜毫秒；start包含开始日期，end是不包含的结束日期");
-                if(!p.has("location"))p.put("location","");if(!p.has("description"))p.put("description","");
-                if(SemanticJson.text(p,"location",500,true).matches("(?s).*[\\p{Cntrl}].*"))
-                    throw new IllegalArgumentException("日历地点需要单行文字");
-                SemanticJson.text(p,"description",4000,true);p.put("start",start).put("end",end).put("allDay",allDay);
+                normalizeCalendarEvent(p);
                 // Fixed public CalendarContract values. Android construction uses the public
                 // constants; caller-supplied content URIs, calendar IDs and extras are forbidden.
                 action="android.intent.action.INSERT";data="content://com.android.calendar/events";break;
+            }
+            case "calendar_list":
+                SemanticJson.keys(p,Set.of("kind","afterCalendarId"));
+                p.put("afterCalendarId",p.has("afterCalendarId")?calendarId(p,"afterCalendarId",0):0L);
+                action="";data="content://com.android.calendar/calendars";break;
+            case "calendar_batch": {
+                SemanticJson.keys(p,Set.of("kind","calendarId","events"));p.put("calendarId",calendarId(p,"calendarId",1));
+                Object raw=p.opt("events");
+                if(!(raw instanceof JSONArray)||((JSONArray)raw).length()<1||((JSONArray)raw).length()>50)
+                    throw new IllegalArgumentException("日历批次需要1至50个完整事件");
+                JSONArray events=(JSONArray)raw,normalized=new JSONArray();
+                for(int i=0;i<events.length();i++){
+                    if(!(events.get(i) instanceof JSONObject))throw new IllegalArgumentException("日历批次每项必须是事件对象");
+                    JSONObject event=SemanticJson.copy(events.getJSONObject(i));
+                    SemanticJson.keys(event,Set.of("title","start","end","timeZone","allDay","location","description"));
+                    normalizeCalendarEvent(event);normalized.put(event);
+                }
+                p.put("events",normalized);
+                if(p.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length>131072)
+                    throw new IllegalArgumentException("单次日历批次内容超过128KiB，请减少本批事件或描述后重新确认");
+                action="";data="content://com.android.calendar/events";break;
             }
             case "alarm":
                 SemanticJson.keys(p,Set.of("kind","hour","minutes","message","days","vibrate"));
@@ -123,6 +133,29 @@ public final class SemanticRequest {
         if(!p.has("message"))p.put("message","");if(SemanticJson.text(p,"message",120,true).matches("(?s).*[\\p{Cntrl}].*"))throw new IllegalArgumentException("时钟提示需要不超过120字的单行文字");
     }
     public boolean clock(){return kind.equals("alarm")||kind.equals("timer");}
+    public boolean calendarProvider(){return kind.equals("calendar_list")||kind.equals("calendar_batch");}
+    private static void normalizeCalendarEvent(JSONObject p)throws Exception {
+        String title=SemanticJson.text(p,"title",200,false),zone=SemanticJson.text(p,"timeZone",80,false);
+        if(title.matches("(?s).*[\\p{Cntrl}].*")||!ZoneId.getAvailableZoneIds().contains(zone))
+            throw new IllegalArgumentException("日历事件需要单行标题和明确的IANA时区，例如Asia/Shanghai或UTC");
+        long start=calendarTime(p,"start"),end=calendarTime(p,"end");
+        if(end<=start)throw new IllegalArgumentException("日历事件结束时间必须晚于开始时间");
+        boolean allDay=booleanValue(p,"allDay",false);
+        if(allDay&&(!"UTC".equals(zone)||start%DAY_MS!=0||end%DAY_MS!=0))
+            throw new IllegalArgumentException("全天日历须使用UTC时区与UTC午夜毫秒；start包含开始日期，end是不包含的结束日期");
+        if(!p.has("location"))p.put("location","");if(!p.has("description"))p.put("description","");
+        if(SemanticJson.text(p,"location",500,true).matches("(?s).*[\\p{Cntrl}].*"))throw new IllegalArgumentException("日历地点需要单行文字");
+        SemanticJson.text(p,"description",4000,true);p.put("start",start).put("end",end).put("allDay",allDay);
+    }
+    private static long calendarId(JSONObject p,String key,long minimum) {
+        Object value=p.opt(key);
+        try {
+            if(!(value instanceof Number))throw new ArithmeticException("not a number");
+            long id=new BigDecimal(value.toString()).longValueExact();
+            if(id<minimum||id>9_007_199_254_740_991L)throw new ArithmeticException("outside exact ID range");
+            return id;
+        }catch(NumberFormatException|ArithmeticException invalid){throw new IllegalArgumentException("日历标识必须是当前资料发现结果中的整数："+key);}
+    }
     private static long calendarTime(JSONObject p,String key) {
         Object value=p.opt(key);
         if(!(value instanceof Number))throw new IllegalArgumentException("日历时间需为UTC毫秒整数："+key);
@@ -135,10 +168,10 @@ public final class SemanticRequest {
     public JSONObject parameters() throws Exception { return SemanticJson.copy(parameters); }
     public String digest() throws Exception { return SemanticJson.hash(parameters); }
     public String followup() {
-        return switch(kind) { case "web"->"phone_observe_or_authorized_browser_dom";case "app_link","share_text"->"owner_verifies_target_app_no_automatic_continuation";case "dial","email_draft","calendar_draft"->"owner_completes_in_target_app";case "alarm","timer"->"owner_verifies_clock_in_target_app";default->"phone_observe"; };
+        return switch(kind) { case "calendar_list"->"select_calendar_and_discover_exact_batch";case "calendar_batch"->"read_back_created_event_uris_no_replay";case "web"->"phone_observe_or_authorized_browser_dom";case "app_link","share_text"->"owner_verifies_target_app_no_automatic_continuation";case "dial","email_draft","calendar_draft"->"owner_completes_in_target_app";case "alarm","timer"->"owner_verifies_clock_in_target_app";default->"phone_observe"; };
     }
     static JSONObject discoverySchema() throws Exception {
-        JSONObject p=new JSONObject().put("kind",new JSONObject().put("type","string").put("enum",new JSONArray(new String[]{"web","app_link","share_text","show_alarms","map_search","dial","email_draft","calendar_draft","alarm","timer"})));
+        JSONObject p=new JSONObject().put("kind",new JSONObject().put("type","string").put("enum",new JSONArray(new String[]{"web","app_link","share_text","show_alarms","map_search","dial","email_draft","calendar_draft","calendar_list","calendar_batch","alarm","timer"})));
         p.put("packageName",new JSONObject().put("type","string").put("maxLength",250)).put("text",new JSONObject().put("type","string").put("maxLength",10000));
         for(String key:new String[]{"url","query","number","to","subject","body"})
             p.put(key,new JSONObject().put("type","string").put("maxLength",key.equals("body")?4000:key.equals("url")?2048:key.equals("query")?500:key.equals("number")?32:key.equals("to")?254:200));
@@ -148,6 +181,17 @@ public final class SemanticRequest {
         for(String key:new String[]{"start","end"})p.put(key,new JSONObject().put("type","integer").put("minimum",0).put("maximum",253402300799999L)
                 .put("description",key.equals("start")?"calendar_draft开始UTC毫秒；全天须为开始日期的UTC午夜，包含此日期。":"calendar_draft结束UTC毫秒；全天须为结束日期的UTC午夜，不包含此日期。"));
         p.put("allDay",new JSONObject().put("type","boolean").put("description","仅calendar_draft；默认false。true要求start/end均为UTC午夜且timeZone=UTC；一天日程的end是次日午夜。"));
+        JSONObject eventProperties=new JSONObject();
+        for(String key:new String[]{"title","start","end","timeZone","allDay","location","description"})eventProperties.put(key,new JSONObject(p.getJSONObject(key).toString()));
+        eventProperties.getJSONObject("timeZone").put("description","事件IANA时区；allDay=true时必须为UTC。");
+        eventProperties.getJSONObject("start").put("description","开始UTC毫秒；全天为包含日期的UTC午夜。");
+        eventProperties.getJSONObject("end").put("description","结束UTC毫秒；全天为不包含日期的UTC午夜。");
+        eventProperties.getJSONObject("allDay").put("description","默认false；全天必须使用UTC午夜边界，结束日期不包含。");
+        p.put("calendarId",new JSONObject().put("type","integer").put("minimum",1).put("maximum",9_007_199_254_740_991L).put("description","仅calendar_batch：calendar_list在当前宿主Android资料返回的准确calendarId；不得推测其他资料ID。"))
+                .put("afterCalendarId",new JSONObject().put("type","integer").put("minimum",0).put("maximum",9_007_199_254_740_991L).put("description","仅calendar_list分页；首批省略，后续使用上次返回的nextCalendarId。"))
+                .put("events",new JSONObject().put("type","array").put("minItems",1).put("maxItems",50)
+                        .put("items",new JSONObject().put("type","object").put("properties",eventProperties).put("required",new JSONArray(new String[]{"title","start","end","timeZone"})).put("additionalProperties",false))
+                        .put("description","仅calendar_batch：1至50个单次事件，完整批次最多128KiB；逐项参数全部进入同次审批。重复日期需展开为明确事件，不接受RRULE或任意Provider字段。"));
         p.put("hour",new JSONObject().put("type","integer").put("minimum",0).put("maximum",23))
                 .put("minutes",new JSONObject().put("type","integer").put("minimum",0).put("maximum",59))
                 .put("seconds",new JSONObject().put("type","integer").put("minimum",1).put("maximum",86400))

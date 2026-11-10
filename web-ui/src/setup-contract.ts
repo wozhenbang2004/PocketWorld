@@ -3,13 +3,13 @@ export const setupCapabilities = ['phone', 'tools', 'voice', 'background'] as co
 export type SetupStep = typeof setupSteps[number];
 export type SetupCapability = typeof setupCapabilities[number];
 export type SetupStatus = 'new' | 'in_progress' | 'completed' | 'skipped';
-export type SetupPermission = 'accessibility' | 'notifications' | 'microphone' | 'battery' | 'vendorBackground';
+export type SetupPermission = 'accessibility' | 'notifications' | 'microphone' | 'calendar' | 'battery' | 'vendorBackground';
 export type SetupPreferences = { step: SetupStep; capabilities: SetupCapability[]; status: SetupStatus };
 export type SetupRead = {
   version: 1; revision: number; preferences: SetupPreferences;
   model: { configured: boolean; label: string; tested: boolean; testing?: boolean; message?: string;
     availability?: 'unconfigured' | 'unavailable'; details?: string };
-  permissions: { accessibility: boolean | null; notifications: boolean | null; microphone: boolean | null; batteryExempt: boolean | null; vendorBackgroundVisited: boolean | null };
+  permissions: { accessibility: boolean | null; notifications: boolean | null; microphone: boolean | null; calendar: boolean | null; calendarRead: boolean | null; calendarWrite: boolean | null; batteryExempt: boolean | null; vendorBackgroundVisited: boolean | null };
   speech: { available: boolean | null; networkUse: string };
 };
 
@@ -59,7 +59,8 @@ export function readSetup(value: unknown): SetupRead {
       availability: model.availability === 'unconfigured' || model.availability === 'unavailable' ? model.availability : undefined,
       details: text(model.details) },
     permissions: { accessibility: observed(permissions.accessibility), notifications: observed(permissions.notifications),
-      microphone: observed(permissions.microphone), batteryExempt: observed(permissions.batteryExempt), vendorBackgroundVisited: observed(permissions.vendorBackgroundVisited) },
+      microphone: observed(permissions.microphone), calendar: observed(permissions.calendar), calendarRead: observed(permissions.calendarRead), calendarWrite: observed(permissions.calendarWrite),
+      batteryExempt: observed(permissions.batteryExempt), vendorBackgroundVisited: observed(permissions.vendorBackgroundVisited) },
     speech: { available: observed(speech.available), networkUse: text(speech.networkUse) || 'unknown' },
   };
 }

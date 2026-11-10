@@ -29,7 +29,7 @@ internal class PocketWebBackground(
             "background.audio.set", "background.audio.restore",
             "background.apps.read", "background.apps.set",
             "background.clipboard.consent", "background.clipboard.restore",
-            "background.recovery.consent", "background.recovery.restore", "background.recovery.compensate",
+            "background.recovery.consent", "background.recovery.registration.consent", "background.recovery.restore", "background.recovery.compensate",
             "background.pairing.begin", "background.pairing.cancel",
             "background.shizuku.permission", "background.shizuku.start", "background.shizuku.stop",
             "background.adb.setup", "background.adb.check", "background.adb.forget", "background.release",
@@ -138,6 +138,19 @@ internal class PocketWebBackground(
                 val recovery = controller.state.feature("phone_setup").optJSONObject("recovery") ?: error("请先读取原连接恢复设置")
                 val expected = revision(); require(expected == recovery.optLong("revision", -1) && "phone_setup.recovery.consent" !in controller.state.moduleBusy) { "原连接恢复设置已变化，请刷新后重新核对" }
                 controller.phoneSetup("recovery.consent", JSONObject().put("enabled", flag("enabled")).put("expectedRevision", expected))
+            }
+            "background.recovery.registration.consent" -> {
+                keys("enabled", "expectedRevision", "scope")
+                val recovery = controller.state.feature("phone_setup").optJSONObject("recovery") ?: error("请先读取原服务登记恢复设置")
+                val expected = revision(); val enabled = flag("enabled")
+                require(expected == recovery.optLong("revision", -1) && recovery.opt("registrationRestoreConsent") is Boolean
+                    && "phone_setup.recovery.registration.consent" !in controller.state.moduleBusy) { "原服务登记恢复设置已变化，请刷新后重新核对" }
+                require(string("scope") == dev.pocketengine.phone.setup.AccessibilityRecovery.REGISTRATION_SCOPE) { "请明确选择恢复本应用服务登记" }
+                if (enabled) require(recovery.optBoolean("consent") && recovery.optBoolean("secureSettingsGranted")
+                    && recovery.optBoolean("userUnlocked") && recovery.optBoolean("systemRegistered")
+                    && recovery.optBoolean("accessibilityEnabled")) { "请先在系统中启用本应用服务，并核对已经授予的安全系统设置权限" }
+                controller.phoneSetup("recovery.registration.consent", JSONObject().put("enabled", enabled)
+                    .put("expectedRevision", expected).put("scope", dev.pocketengine.phone.setup.AccessibilityRecovery.REGISTRATION_SCOPE))
             }
             "background.recovery.restore", "background.recovery.compensate" -> {
                 keys(); val command = action.removePrefix("background.")

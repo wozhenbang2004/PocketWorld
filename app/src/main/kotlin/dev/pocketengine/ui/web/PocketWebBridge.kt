@@ -31,12 +31,18 @@ internal class PocketWebTaskReviews(private val now: () -> Long = SystemClock::e
     private data class Reviewed(val task: UiTask, val identity: String, val actions: Set<String>, val expires: Long, val positiveApprovalIds: Set<String>)
     private val entries = linkedMapOf<String, Reviewed>()
 
-    fun create(task: UiTask, actions: Set<String>, positiveApprovalIds: Set<String> = emptySet()): String {
+    fun create(task: UiTask, actions: Set<String>, positiveApprovalIds: Set<String> = emptySet(), bindingTask: UiTask = task): String {
+        if (bindingTask !== task) {
+            require(task.raw.optString("taskProjection") == "approval_only" && actions.all { it == "tasks.approve" } &&
+                task.id == bindingTask.id && task.status == bindingTask.status && task.updatedAt == bindingTask.updatedAt &&
+                task.raw.getString("runId") == bindingTask.raw.getString("runId") &&
+                task.raw.getInt("coordinatorEpoch") == bindingTask.raw.getInt("coordinatorEpoch")) { "原审批投影与任务窗口不一致" }
+        }
         entries.entries.removeAll { it.value.expires <= now() }
         while (entries.size >= 24) entries.remove(entries.keys.first())
         val copy = task.copy(raw = JSONObject(task.raw.toString()))
         val handle = UUID.randomUUID().toString()
-        entries[handle] = Reviewed(copy, identity(copy), actions.toSet(), now() + 120_000L, positiveApprovalIds.toSet())
+        entries[handle] = Reviewed(copy, identity(if (bindingTask === task) copy else bindingTask), actions.toSet(), now() + 120_000L, positiveApprovalIds.toSet())
         return handle
     }
 
@@ -635,17 +641,19 @@ internal class PocketWebBridge(
                 return
             }
             if (action == "tasks.review") {
+                checkedPayload(args, setOf("id", "approvalId"))
                 val taskId = requiredString(args, "id")
+                val approvalId = if (args.has("approvalId")) requiredString(args, "approvalId").also { require(it.length <= 128) } else null
                 require(taskViewId == taskId && controller.webUiCanInteract()) { "请重新打开这个原任务的审阅窗口" }
                 requireTask(taskId)
                 val generation = taskReviewGeneration
                 val document = documentId
                 val navigation = Triple(controller.state.requestedTaskRevision, controller.state.requestedProjectRevision, controller.state.requestedConnectionRevision)
-                taskActions.read(taskId, { closed }, {
-                    generation == taskReviewGeneration && document == documentId &&
+                taskActions.read(taskId, approvalId, { closed }, {
+                    taskViewId == taskId && controller.webUiCanInteract() && generation == taskReviewGeneration && document == documentId &&
                         navigation == Triple(controller.state.requestedTaskRevision, controller.state.requestedProjectRevision, controller.state.requestedConnectionRevision)
                 }) { result, error ->
-                    complete(id, result, error)
+                    complete(id, result, error, retainValue = result?.has("capabilityApprovalRead") != true)
                     if (error == null) publishState()
                 }
                 return

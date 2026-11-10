@@ -9,6 +9,7 @@ public interface SemanticPlatform {
     interface Admission { void check() throws Exception; }
     List<Target> discover(SemanticRequest request,RunControl control) throws Exception;
     JSONObject resourceIdentity() throws Exception;
+    default JSONObject resourceIdentity(SemanticRequest request)throws Exception{return resourceIdentity();}
     JSONObject dispatch(SemanticRequest request,Target target,RunControl control,Admission admission) throws Exception;
 
     final class Target {
@@ -21,6 +22,7 @@ public interface SemanticPlatform {
             description=new JSONObject().put("component",component).put("packageName",identity.getString("packageName"))
                     .put("label",safe).put("route",route).put("fingerprint",fingerprint).put("labelIsUntrusted",true);
             for(String key:new String[]{"userId","profileSerial","uid"})if(identity.has(key))description.put(key,identity.get(key));
+            if(identity.has("calendar"))description.put("calendar",SemanticJson.copy(identity.getJSONObject("calendar"))).put("scope","current_host_android_profile");
         }
         public JSONObject identity() throws Exception { return SemanticJson.copy(identity); }
         public JSONObject description() throws Exception { return SemanticJson.copy(description); }

@@ -19,6 +19,7 @@ import android.os.SystemClock;
 import android.util.Base64;
 import android.util.DisplayMetrics;
 import android.view.Display;
+import android.view.KeyEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 
 import org.json.JSONArray;
@@ -48,7 +49,9 @@ import dev.pocketengine.phone.observation.NativeOcrTapPort;
 import dev.pocketengine.phone.observation.OcrTextTarget;
 import dev.pocketengine.phone.observation.NativePhoneEntry;
 import dev.pocketengine.phone.observation.NativeNodeActionReceipt;
+import dev.pocketengine.phone.observation.NativeKeyFocus;
 import dev.pocketengine.phone.observation.PhoneReadGate;
+import dev.pocketengine.displayhelper.PhoneKeyCodes;
 
 /** A single foreground-display executor. References are data, never retained Android nodes. */
 public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.pocketengine.phone.observation.NativeTreeScrollPort,dev.pocketengine.phone.observation.NativePhoneSignals,dev.pocketengine.phone.observation.NativePhoneVisualSignals,dev.pocketengine.phone.observation.NativePhoneExtensions {
@@ -118,6 +121,7 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
                 JSONObject result=practiceTarget.launch(control,()->{guard(service,control,revision);admission.check();});clearReferences();return result;
             }
             Snapshot expected=requireReference(args,control);
+            if(tool.equals("phone_press_key"))return pressKey(service,expected,args.getString("key"),control,admission);
             if(tool.equals("phone_paste_text")){
                 if(clipboardOwners==null)return failure("clipboard_profile_identity_unavailable","无法证明目标与原剪贴板属于同一Android资料，未执行粘贴。").put("supported",false);
                 AccessibilityForest.Ref ref=expected.tree.forest.refs.get(args.getString("nodeId"));
@@ -134,10 +138,112 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
             if(tool.equals("phone_gesture"))return gesturePaths(service,expected,args,control,admission);
             return failure("native_extension_unavailable","此原生端口不支持该扩展。");
         }catch(NativeSensitiveStep.OwnerRequired owner){clearReferences();throw owner;}
+        catch(NativeKeyFocus.Unavailable unavailable){clearReferences();return failure(unavailable.code,unavailable.getMessage()).put("supported",false);}
         catch(NativePhoneEntry.Refused refused){clearReferences();return failure("paused_or_changed",refused.getMessage());}
         catch(PhoneFailure refused){clearReferences();JSONObject result=failure(refused.code,refused.getMessage());if(ObservationSafety.unknownEffect(refused.code))result.put("accepted",JSONObject.NULL);return result;}
         catch(InterruptedException stopped){clearReferences();throw stopped;}
     }
+
+    private JSONObject pressKey(PhoneAccessibilityService service,Snapshot expected,String key,RunControl control,NativePhoneEntry.Admission admission)throws Exception {
+        int code=PhoneKeyCodes.require(key),global=keyGlobalAction(code);
+        KeyPreparation prepared=onTreeRead(()->guard(service,control,expected.revision),()->prepareKey(service,expected,code,control));
+        if(!prepared.imeEnter&&global<0&&(android.os.Build.VERSION.SDK_INT<33||prepared.focus.node==null||!prepared.focus.node.editable))
+            return failure("unsupported_key","此平台或当前焦点没有可定向使用的公开按键入口，未派发。").put("supported",false).put("key",key);
+        String backend=prepared.imeEnter?"accessibility_ime_enter":global>=0?"accessibility_global_key":"accessibility_input_connection";
+        JSONObject accepted=receipt(true,"key_requested").put("key",key).put("keyCode",code).put("backend",backend)
+                .put("ackKind","native_system_acceptance").put("processingConfirmed",false).put("requiresPostconditionCheck",true)
+                .put("displayId",Display.DEFAULT_DISPLAY).put("sessionId",service.observationSessionId()).put("automaticReplayAllowed",false);
+        JSONObject unknown=failure("action_unknown","按键已尝试派发，但平台没有提供可靠回执；请核对当前页面，不会自动重发。")
+                .put("accepted",JSONObject.NULL).put("requestAttempted",true).put("key",key).put("keyCode",code).put("backend",backend)
+                .put("ackKind","accessibility_input_connection".equals(backend)?"input_connection_unconfirmed":"native_result_unconfirmed")
+                .put("processingConfirmed",false).put("requiresReconciliation",true).put("automaticReplayAllowed",false)
+                .put("displayId",Display.DEFAULT_DISPLAY).put("sessionId",service.observationSessionId());
+        if("accessibility_input_connection".equals(backend))unknown.put("keyCleanup","up_requested_same_connection_unconfirmed");
+        NativeNodeActionReceipt acknowledgement=new NativeNodeActionReceipt(accepted);
+        java.util.concurrent.atomic.AtomicBoolean attempted=new java.util.concurrent.atomic.AtomicBoolean();
+        try{
+            if(prepared.imeEnter)return onNodeWorker(service,control,expected.revision,()->{
+                KeyPreparation fresh=prepareKey(service,expected,code,control);
+                if(!fresh.imeEnter)throw new NativeKeyFocus.Unavailable("key_action_changed");
+                AccessibilityNodeInfo node=AccessibilityForest.resolve(service,Display.DEFAULT_DISPLAY,fresh.focus.node);
+                try{
+                    if(node==null||!node.refresh()||!node.isFocused()||!AccessibilityForest.matches(fresh.focus.node,node))throw new NativeKeyFocus.Unavailable("key_focus_changed");
+                    boolean result=NativePhoneEntry.call(control,expected.revision,admission,()->{
+                        guard(service,control,expected.revision);requireUnlocked(service);requireKeyFence(service,fresh);
+                        PhoneReadGate.markEffectEntered();attempted.set(true);clearReferences();
+                        return acknowledgement.record(node.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.getId()));
+                    });
+                    return result?accepted:unknown;
+                }finally{if(node!=null)node.recycle();}
+            });
+            return onMain(control,expected.revision,()->{
+                validateReference(service,expected,control);requireKeyFence(service,prepared);
+                PhoneInputMethod.Token editor=null;
+                if(global<0){
+                    PhoneInputMethod method=service.phoneInputMethod();
+                    if(method==null||method!=expected.inputMethod||service.getInputMethod()!=method
+                            ||(editor=method.current(prepared.focus.packageName,expected.inputRevision))==null)
+                        return failure("unsupported_key","当前原生输入法连接不可用或已变化，未派发按键。").put("supported",false).put("key",key);
+                }
+                final PhoneInputMethod.Token originalEditor=editor;
+                return NativePhoneEntry.call(control,expected.revision,admission,()->{
+                    guard(service,control,expected.revision);requireUnlocked(service);requireKeyFence(service,prepared);
+                    if(originalEditor!=null&&!originalEditor.current())throw new NativeKeyFocus.Unavailable("key_editor_changed");
+                    attempted.set(true);clearReferences();
+                    if(global>=0)return acknowledgement.record(service.performGlobalAction(global))?accepted:unknown;
+                    // The public API hides remote transport errors and has no acceptance callback.
+                    originalEditor.send(code);return unknown;
+                });
+            });
+        }catch(Exception failure){
+            JSONObject retained=acknowledgement.afterReadFailure("key_followup_unavailable");
+            if(failure instanceof InterruptedException)Thread.currentThread().interrupt();
+            if(retained!=null)return retained;
+            if(attempted.get())return new JSONObject(unknown.toString()).put("requiresPause",true);
+            throw failure;
+        }
+    }
+
+    private KeyPreparation prepareKey(PhoneAccessibilityService service,Snapshot expected,int code,RunControl control)throws Exception {
+        validateReference(service,expected,control);
+        PhoneUiSignals.Stamp stamp=service.uiSignals().snapshot(java.util.Collections.emptySet());long focusRevision=service.keyFocusRevision();
+        NativeKeyFocus focus=NativeKeyFocus.from(expected.tree.forest,Display.DEFAULT_DISPLAY,code);
+        Tree fresh=focus.node==null?readTree(service):validateTarget(service,expected,control,focus.node);
+        if(!expected.tree.sameWindowLayout(fresh))throw new NativeKeyFocus.Unavailable("key_focus_changed");
+        NativeSensitiveStep.requireKey(fresh.forest,focus.node,code,control,expected.revision);
+        boolean imeEnter=false;
+        if(focus.node!=null){
+            AccessibilityNodeInfo node=AccessibilityForest.resolve(service,Display.DEFAULT_DISPLAY,focus.node);
+            try{
+                if(node==null||!node.refresh()||!node.isFocused()||!AccessibilityForest.matches(focus.node,node))throw new NativeKeyFocus.Unavailable("key_focus_changed");
+                Rect bounds=new Rect();node.getBoundsInScreen(bounds);
+                if(Rect.intersects(bounds,onMain(control,expected.revision,service::controlsBounds)))throw new PhoneFailure("controls_overlap","当前焦点被任务控制条遮挡，请重新观察。");
+                imeEnter=(code==KeyEvent.KEYCODE_ENTER||code==KeyEvent.KEYCODE_NUMPAD_ENTER)&&focus.node.editable
+                        &&node.getActionList().stream().anyMatch(action->action.getId()==AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.getId());
+            }finally{if(node!=null)node.recycle();}
+        }
+        boolean global=keyGlobalAction(code)>=0&&!imeEnter;
+        focus.verify(service,Display.DEFAULT_DISPLAY,global,!global&&!imeEnter&&android.os.Build.VERSION.SDK_INT>=33);
+        validateReference(service,expected,control);KeyPreparation prepared=new KeyPreparation(focus,stamp,focusRevision,imeEnter);
+        requireKeyFence(service,prepared);return prepared;
+    }
+    private static void requireKeyFence(PhoneAccessibilityService service,KeyPreparation prepared)throws Exception {
+        requireUiUnchanged(service,prepared.ui);
+        if(service.keyFocusRevision()!=prepared.focusRevision)throw new NativeKeyFocus.Unavailable("key_focus_changed");
+    }
+    private static int keyGlobalAction(int code){
+        if(code==KeyEvent.KEYCODE_BACK)return AccessibilityService.GLOBAL_ACTION_BACK;
+        if(android.os.Build.VERSION.SDK_INT<33)return -1;
+        return switch(code){
+            case KeyEvent.KEYCODE_DPAD_UP -> AccessibilityService.GLOBAL_ACTION_DPAD_UP;
+            case KeyEvent.KEYCODE_DPAD_DOWN -> AccessibilityService.GLOBAL_ACTION_DPAD_DOWN;
+            case KeyEvent.KEYCODE_DPAD_LEFT -> AccessibilityService.GLOBAL_ACTION_DPAD_LEFT;
+            case KeyEvent.KEYCODE_DPAD_RIGHT -> AccessibilityService.GLOBAL_ACTION_DPAD_RIGHT;
+            case KeyEvent.KEYCODE_DPAD_CENTER -> AccessibilityService.GLOBAL_ACTION_DPAD_CENTER;
+            default -> -1;
+        };
+    }
+    private record KeyPreparation(NativeKeyFocus focus,PhoneUiSignals.Stamp ui,long focusRevision,boolean imeEnter) { }
 
     private void requireClipboardProfile(String packageName,RunControl control)throws Exception {
         dev.pocketengine.phone.access.PhoneOwnerPackages owners;
@@ -1037,10 +1143,14 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
         final Tree tree;
         final RunControl control;
         final long revision;
+        final PhoneInputMethod inputMethod;
+        final long inputRevision;
         final String imageDigest;
         final int imageWidth,imageHeight;
         Snapshot(PhoneAccessibilityService service, Tree tree, RunControl control, long revision, CapturedImage image) {
             this.service = service; this.tree = tree; this.control = control; this.revision = revision;
+            this.inputMethod=android.os.Build.VERSION.SDK_INT>=33?service.phoneInputMethod():null;
+            this.inputRevision=inputMethod==null?-1:inputMethod.revision();
             this.imageDigest = image == null ? null : image.digest;
             this.imageWidth=image==null?0:image.json.optInt("imageWidth");this.imageHeight=image==null?0:image.json.optInt("imageHeight");
         }

@@ -261,6 +261,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     private val taskReviewReads = mutableMapOf<String, (UiTask?, String?) -> Unit>()
     private var wirelessSettingsLaunched = false
     private val phoneSetupViewRevision = java.util.concurrent.atomic.AtomicLong()
+    private val phoneRecoveryCommandRevision = java.util.concurrent.atomic.AtomicLong()
     private val phoneOwnerAppsRequest = java.util.concurrent.atomic.AtomicLong()
     private val phoneOwnerAppPicker = dev.pocketengine.phone.setup.OwnerPhoneApps(app)
     internal var phoneOwnerApps by mutableStateOf<List<dev.pocketengine.phone.setup.OwnerPhoneApps.Selection>>(emptyList())
@@ -3128,22 +3129,32 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         feature("display", command)
     }
     internal fun phoneSetup(command: String, input: JSONObject = JSONObject()) {
-        if (command !in setOf("status", "pairing.begin", "pairing.cancel", "recovery.consent", "recovery.restore", "recovery.compensate")) return
+        if (command !in setOf("status", "pairing.begin", "pairing.cancel", "recovery.consent", "recovery.registration.consent", "recovery.restore", "recovery.compensate")) return
         if (!privateWorkspaceView() || "phone_setup.$command" in state.moduleBusy) return
         if (command != "pairing.cancel" && (!webPrivateOwnerVisible() || !state.backgroundSetupOpen)) return
         val key = "phone_setup.$command"
         val id = UUID.randomUUID().toString()
         val view = phoneSetupViewRevision.get(); val window = webWindowTicket()
         val captured = JSONObject(input.toString())
+        val recoveryCommand = command.startsWith("recovery.")
+        val recoveryRevision = if (recoveryCommand) phoneRecoveryCommandRevision.incrementAndGet() else phoneRecoveryCommandRevision.get()
+        val ownerCurrent = java.util.function.BooleanSupplier { command == "pairing.cancel" || webPrivateOwnerVisible()
+            && state.backgroundSetupOpen && view == phoneSetupViewRevision.get() && window == webWindowTicket()
+            && (!recoveryCommand || recoveryRevision == phoneRecoveryCommandRevision.get()) }
+        if (command in setOf("recovery.consent", "recovery.registration.consent") && captured.opt("enabled") == false) {
+            (app.features.module("phone_setup") as? dev.pocketengine.phone.setup.PhoneSetupModule)
+                ?.stopRecoveryForOwner(captured.getLong("expectedRevision"), ownerCurrent)
+        }
         state = state.copy(moduleBusy = state.moduleBusy + key, moduleErrors = state.moduleErrors - key)
         pending[id] = Pair(key, captured)
         // Use the existing owner I/O queue for this small setup surface. FeatureHost's four workers
         // could otherwise execute a queued cancellation before its earlier begin.
         try { io.execute {
             val result = runCatching {
-                if (command != "pairing.cancel") check(webPrivateOwnerVisible() && state.backgroundSetupOpen && view == phoneSetupViewRevision.get() && window == webWindowTicket()) { "原手机设置窗口已变化，未执行排队操作" }
+                check(ownerCurrent.getAsBoolean()) { "原手机设置窗口已变化，未执行排队操作" }
                 val module = app.features.module("phone_setup") ?: error("原手机设置模块尚未挂载")
-                module.handle(command, captured)
+                if (module is dev.pocketengine.phone.setup.PhoneSetupModule) module.handleForOwner(command, captured, ownerCurrent)
+                else module.handle(command, captured)
             }
             runCatching { app.features.sendState() }
             main.post {
@@ -3833,9 +3844,14 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     /** Read the original detailed task before a Web review handle can be issued. */
     internal fun readTaskForReview(id: String, complete: (UiTask?, String?) -> Unit) =
         readTaskForWeb(id, true, { true }, complete)
-    private fun readTaskForWeb(id: String, requireComplete: Boolean, current: () -> Boolean, complete: (UiTask?, String?) -> Unit) {
+    /** A large task can disclose one exact approval without becoming a complete result review. */
+    internal fun readTaskForActionReview(id: String, approvalId: String?, current: () -> Boolean, complete: (UiTask?, String?) -> Unit) =
+        readTaskForWeb(id, true, current, complete, true, approvalId)
+    private fun readTaskForWeb(id: String, requireComplete: Boolean, current: () -> Boolean, complete: (UiTask?, String?) -> Unit,
+                               allowApprovalProjection: Boolean = false, approvalId: String? = null) {
         if (closed) { complete(null, "原任务读取窗口已关闭"); return }
         if (id.isBlank()) { complete(null, "原任务身份缺失"); return }
+        val ownerWindow = if (allowApprovalProjection) webWindowTicket() else null
         val requestId = UUID.randomUUID().toString()
         taskReviewReads[requestId] = complete
         fun finish(task: UiTask?, error: String?) {
@@ -3844,12 +3860,21 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         try {
             io.execute {
                 try {
-                    check(!closed) { "原任务读取窗口已关闭" }
+                    check(!closed && current()) { "原任务读取窗口已关闭" }
                     val result = app.dispatchOwnerAction("getTask", JSONObject().put("taskId", id))
                     val task = result?.optJSONObject("task") ?: result?.takeIf { it.has("id") }
                         ?: throw IllegalStateException("未取得原任务的完整核对信息")
                     require(task.optString("id") == id) { "读取结果不属于原任务" }
-                    if (requireComplete) {
+                    val approval = if (allowApprovalProjection && (task.optBoolean("taskCoreReadLimited") || approvalId != null)) {
+                        check(webPrivateOwnerVisible() && webWindowTicket() == ownerWindow && current()) { "请在原私人任务窗口核对审批" }
+                        val read = dev.pocketengine.core.RunControl.forOriginalRecovery(id, task.getString("runId"), task.getInt("coordinatorEpoch"))
+                        read.setAuthorityCheck {
+                            check(!closed && webPrivateOwnerVisible() && webWindowTicket() == ownerWindow && current()) { "原审批读取窗口已关闭" }
+                        }
+                        app.tasks.pendingCapabilityApprovalForUi(id, task.getString("runId"), task.getInt("coordinatorEpoch"),
+                            task.getLong("updatedAt"), approvalId, read).also { read.check() }
+                    } else null
+                    if (requireComplete && approval == null) {
                         check(task.optString("taskProjection") != "summary") { "原任务只返回了摘要，请重新读取核对信息" }
                         check(!task.optBoolean("taskCoreReadLimited")) { "当前任务内容较多，本次只读到摘要，未取得完整成果，不能确认结果。请返回查看原任务记录。" }
                     }
@@ -3862,12 +3887,20 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                             mergeTask(detail)
                             val selected = state.tasks.firstOrNull { it.id == id }
                                 ?: throw IllegalStateException("原任务不在当前读取窗口，请重新打开")
-                            if (requireComplete) {
+                            if (requireComplete && approval == null) {
                                 check(selected.raw.optString("taskProjection") != "summary") { "原任务已更新，请重新读取完整核对信息" }
                                 check(!selected.raw.optBoolean("taskCoreReadLimited")) { "当前任务内容较多，本次只读到摘要，未取得完整成果，不能确认结果。请返回查看原任务记录。" }
                             }
+                            if (approval != null) {
+                                check(webPrivateOwnerVisible() && webWindowTicket() == ownerWindow &&
+                                    selected.raw.optString("runId") == approval.getString("runId") &&
+                                    selected.raw.optInt("coordinatorEpoch", -1) == approval.getInt("coordinatorEpoch") &&
+                                    selected.updatedAt == approval.getLong("updatedAt")) { "原审批任务已变化，请重新核对" }
+                            }
                             state = state.copy(taskActionErrors = state.taskActionErrors - id)
-                            selected
+                            // Preserve the ordinary task state. Only the consumed approval handle
+                            // retains this complete item; it cannot confirm a truncated result.
+                            if (approval == null) selected else taskFromJson(approval)
                         }
                         result.fold({ finish(it, null) }, { finish(null, message(it)) })
                     }

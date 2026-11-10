@@ -80,9 +80,9 @@ internal class PocketWebTaskActions(
     }
 
     /** tasks.open only schedules a read. A review handle requires the actual complete native result. */
-    fun read(taskId: String, closed: () -> Boolean, current: () -> Boolean, complete: (JSONObject?, String?) -> Unit) {
-        controller.readTaskForReview(taskId) { task, error ->
-            if (closed()) return@readTaskForReview
+    fun read(taskId: String, approvalId: String?, closed: () -> Boolean, current: () -> Boolean, complete: (JSONObject?, String?) -> Unit) {
+        controller.readTaskForActionReview(taskId, approvalId, { !closed() && current() }) { task, error ->
+            if (closed()) return@readTaskForActionReview
             if (!current()) {
                 complete(null, "原任务窗口已关闭，请重新打开后核对")
             } else if (error != null || task == null) {
@@ -91,7 +91,11 @@ internal class PocketWebTaskActions(
                 val captured = task.copy(raw = JSONObject(task.raw.toString()))
                 fun finish(approvals: JSONArray) {
                     if (!current()) complete(null, "原任务窗口已关闭，请重新打开后核对")
-                    else complete(review(captured, approvals, reviews, controller.state.activeTaskId, canUseTaskControls(captured)), null)
+                    else {
+                        val binding = if (captured.raw.optString("taskProjection") == "approval_only")
+                            controller.state.tasks.firstOrNull { it.id == captured.id } ?: throw IllegalStateException("原审批任务窗口已关闭") else captured
+                        complete(review(captured, approvals, reviews, controller.state.activeTaskId, canUseTaskControls(captured), binding), null)
+                    }
                 }
                 try {
                     if (pendingCapabilityApprovals(captured).any(PocketWebApprovals::needsOriginalPlan)) {
@@ -123,7 +127,28 @@ internal class PocketWebTaskActions(
         val DECISIONS = setOf("tasks.plan.enter", "tasks.resume", "tasks.approve", "tasks.confirm", "tasks.resolve", "tasks.scope")
 
         /** Only original native task facts and original plan reads can add review actions. */
-        fun review(task: UiTask, approvalViews: JSONArray, reviews: PocketWebTaskReviews, activeTaskId: String?, canUseTaskControls: Boolean): JSONObject {
+        fun review(task: UiTask, approvalViews: JSONArray, reviews: PocketWebTaskReviews, activeTaskId: String?, canUseTaskControls: Boolean, bindingTask: UiTask = task): JSONObject {
+            if (task.raw.optString("taskProjection") == "approval_only") {
+                val read = task.raw.getJSONObject("capabilityApprovalRead")
+                val original = pendingCapabilityApprovals(task).singleOrNull()
+                    ?: error("原审批已到期或未完整读取，请重新核对")
+                require(read.optString("format") == "pocketworld.capability-approval-read.v1" && read.opt("approvalComplete") == true &&
+                    read.getString("approvalId") == original.getString("id") && approvalViews.length() == 1 &&
+                    approvalViews.getJSONObject(0).getString("id") == original.getString("id")) { "原审批正文尚未完整取得" }
+                val actions = if (canUseTaskControls && !specialOwnerTask(task)) setOf("tasks.approve") else emptySet()
+                val positive = approvalViews.objects().filter { it.optJSONObject("webReview")?.optBoolean("canApprove") == true }
+                    .map { it.getString("id") }.toSet()
+                // The selected native item remains in the handle. The ordinary task stays
+                // bounded and keeps its original UI binding; do not duplicate this body there.
+                val display = bindingTask.copy(raw = JSONObject(bindingTask.raw.toString()).apply { remove("approvals") })
+                val result = JSONObject().put("expiresInMs", 120_000).put("task", PocketWebState.task(display, images = true))
+                    .put("capabilityApprovalRead", PocketWebState.publicValue(read))
+                    .put("approvalExecutionScope", PocketWebState.publicValue(task.raw.optJSONObject("executionScope")))
+                    .put("actions", JSONArray().also { out -> actions.forEach { out.put(JSONObject().put("action", it).put("label", "审阅操作授权")) } })
+                    .put("approvals", PocketWebState.publicValue(approvalViews)).put("unresolvedOperations", JSONArray())
+                check(result.toString().toByteArray(Charsets.UTF_8).size <= 4 * 1024 * 1024) { "完整审批展示超过本次窗口，尚未提供批准入口" }
+                return result.put("reviewHandle", reviews.create(task, actions, positive, bindingTask))
+            }
             val allowed = linkedMapOf<String, String>()
             val special = specialOwnerTask(task)
             val unknown = unresolvedForReview(task)
