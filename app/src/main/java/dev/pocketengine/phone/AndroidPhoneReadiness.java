@@ -6,12 +6,14 @@ import android.app.KeyguardManager;
 import android.app.NotificationChannel;
 import android.app.NotificationChannelGroup;
 import android.app.NotificationManager;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.hardware.display.DisplayManager;
 import android.os.Build;
 import android.os.PowerManager;
 import android.os.SystemClock;
+import android.provider.Settings;
 import android.view.Display;
 import dev.pocketengine.phone.display.DisplayModule;
 import org.json.JSONObject;
@@ -25,6 +27,7 @@ public final class AndroidPhoneReadiness {
         JSONObject facts = new JSONObject().put("checkedAtUptimeMs", SystemClock.uptimeMillis());
         PhoneAccessibilityService service = PhoneAccessibilityService.get();
         facts.put("serviceConnected", service != null).put("mainServiceSessionId", service == null ? JSONObject.NULL : service.observationSessionId());
+        fact(facts, "serviceEnabled", () -> serviceEnabled(context));
         AccessibilityServiceInfo info = null;
         if (service != null) try { info = service.getServiceInfo(); } catch (RuntimeException ignored) { }
         final AccessibilityServiceInfo permissions = info;
@@ -87,6 +90,16 @@ public final class AndroidPhoneReadiness {
                     .put("gestureCapability", JSONObject.NULL).put("screenshotCapability", JSONObject.NULL).put("ownerControlsVisible", false);
         }
         return PhoneReadiness.evaluate(facts);
+    }
+    private static Boolean serviceEnabled(Context context) throws Exception {
+        int accessibility = Settings.Secure.getInt(context.getContentResolver(), Settings.Secure.ACCESSIBILITY_ENABLED);
+        if (accessibility == 0) return false;
+        if (accessibility != 1) return null;
+        String enabled = Settings.Secure.getString(context.getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+        if (enabled == null) return null;
+        ComponentName own = new ComponentName(context, PhoneAccessibilityService.class);
+        for (String entry : enabled.split(":")) if (own.equals(ComponentName.unflattenFromString(entry))) return true;
+        return false;
     }
     private static void fact(JSONObject facts, String key, Probe probe) throws Exception {
         Object value; try { value = probe.read(); } catch (Exception unknown) { value = JSONObject.NULL; }

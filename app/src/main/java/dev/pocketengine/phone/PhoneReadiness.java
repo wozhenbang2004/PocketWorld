@@ -10,7 +10,7 @@ public final class PhoneReadiness {
 
     public static JSONObject evaluate(JSONObject facts) throws Exception {
         JSONObject main = group(facts, new String[][]{
-                {"serviceConnected", "accessibility_disconnected", "accessibility", "请连接界面读取服务"},
+                {"serviceConnected"},
                 {"windowContent", "window_content_permission_missing", "accessibility", "请允许系统界面节点读取"},
                 {"interactiveWindows", "interactive_windows_permission_missing", "accessibility", "请恢复窗口读取权限"},
                 {"deviceUnlocked", "screen_locked", "unlock", "请手动解锁手机"},
@@ -19,8 +19,9 @@ public final class PhoneReadiness {
         });
         JSONObject screenshot = copy(main);
         add(screenshot, check(facts, "screenshotCapability", "screenshot_permission_missing", "accessibility", "请允许系统截图读取"));
-        JSONObject execution = copy(main);
-        add(execution, check(facts, "gestureCapability", "gesture_permission_missing", "accessibility", "请恢复手机操作权限"));
+        JSONObject preparation = copy(main);
+        add(preparation, check(facts, "gestureCapability", "gesture_permission_missing", "accessibility", "请恢复手机操作权限"));
+        JSONObject execution = copy(preparation);
         JSONObject notifications = notifications(facts, false), notificationStart = notifications(facts, true);
         JSONObject stop = alternative(facts, "ownerControlsVisible", notifications);
         add(execution, new JSONObject().put("id", "stopControl").put("state", stop.getString("state"))
@@ -29,7 +30,7 @@ public final class PhoneReadiness {
         JSONObject background = group(facts, new String[][]{
                 {"backgroundSupported", "background_android_unsupported", "main_screen_choice", "独立后台屏需要 Android 14 或以上"},
                 {"backgroundConnected", "background_helper_unavailable", "background_setup", "请连接独立后台助手"},
-                {"serviceConnected", "accessibility_disconnected", "accessibility", "请连接后台界面读取服务"},
+                {"serviceConnected"},
                 {"windowContent", "window_content_permission_missing", "accessibility", "请允许系统界面节点读取"},
                 {"interactiveWindows", "interactive_windows_permission_missing", "accessibility", "请恢复窗口读取权限"},
                 {"deviceUnlocked", "screen_locked", "unlock", "请手动解锁手机"},
@@ -44,13 +45,32 @@ public final class PhoneReadiness {
                 .put("checkedAtUptimeMs", facts.optLong("checkedAtUptimeMs", -1))
                 .put("mainServiceSessionId", facts.opt("mainServiceSessionId") == null ? JSONObject.NULL : facts.opt("mainServiceSessionId"))
                 .put("mainDisplayId", 0).put("mainObservation", main).put("mainScreenshot", screenshot)
-                .put("mainExecution", execution).put("taskNotifications", notifications).put("taskNotificationsForStart", notificationStart)
+                .put("mainPreparation", preparation).put("mainExecution", execution).put("taskNotifications", notifications).put("taskNotificationsForStart", notificationStart)
                 .put("stopControl", stop).put("backgroundPreparation", background).put("backgroundExecution", backgroundExecution)
                 .put("backgroundInput",group(facts,new String[][]{{"backgroundInput","background_input_unavailable","background_setup","后台输入注入尚未证实可用"}}))
                 .put("backgroundCapture",group(facts,new String[][]{{"backgroundCapture","background_capture_unavailable","background_setup","后台真实取帧尚未证实可用"}}))
                 .put("backgroundIme",group(facts,new String[][]{{"backgroundIme","background_ime_unavailable","background_setup","独立输入法隔离尚未证实可用；不会使用主屏输入法回落"}}))
                 .put("backgroundSessionId", facts.opt("backgroundSessionId") == null ? JSONObject.NULL : facts.opt("backgroundSessionId"))
                 .put("backgroundDisplayId", facts.optInt("backgroundDisplayId", -1)).put("mainScreenFallback", false);
+    }
+
+    /** Fresh native admission check; task-owned controls and background sessions are created after preparation. */
+    public static void requireStart(JSONObject readiness, String mode) throws Exception {
+        String group;
+        if ("main_screen".equals(mode)) group = "mainPreparation";
+        else if ("background".equals(mode)) group = "backgroundPreparation";
+        else throw new IllegalArgumentException("请选择主屏或独立后台屏模式");
+        JSONObject preparation = readiness == null ? null : readiness.optJSONObject(group);
+        if (preparation != null && preparation.optBoolean("ready") && "ready".equals(preparation.optString("state"))) return;
+        JSONArray checks = preparation == null ? null : preparation.optJSONArray("checks");
+        if (checks != null) for (int i = 0; i < checks.length(); i++) {
+            JSONObject check = checks.getJSONObject(i);
+            if (!"ready".equals(check.optString("state"))) {
+                String message = check.optString("message");
+                if (!message.isEmpty()) throw new IllegalStateException(message);
+            }
+        }
+        throw new IllegalStateException("手机操作条件暂不可核对，请重新检查");
     }
 
     private static JSONObject notifications(JSONObject facts, boolean beforeStart) throws Exception {
@@ -78,8 +98,26 @@ public final class PhoneReadiness {
     }
     private static JSONObject group(JSONObject facts, String[][] requirements) throws Exception {
         JSONObject out = new JSONObject().put("checks", new JSONArray()).put("ready", true).put("state", "ready");
-        for (String[] row : requirements) add(out, check(facts, row[0], row[1], row[2], row[3]));
+        for (String[] row : requirements) add(out, "serviceConnected".equals(row[0]) ? serviceConnection(facts) : check(facts, row[0], row[1], row[2], row[3]));
         return out;
+    }
+    private static JSONObject serviceConnection(JSONObject facts) throws Exception {
+        Object enabled = facts.opt("serviceEnabled"), connected = facts.opt("serviceConnected");
+        String state, code, action, message;
+        // Revocation can precede the old service instance's disconnect callback.
+        if (Boolean.FALSE.equals(enabled)) {
+            state = "blocked"; code = "accessibility_disabled"; action = "accessibility";
+            message = "请先在系统无障碍设置中开启“口袋世界 手机操作”服务";
+        } else if (Boolean.TRUE.equals(connected)) {
+            state = "ready"; code = ""; action = ""; message = "";
+        } else if (Boolean.TRUE.equals(enabled) && Boolean.FALSE.equals(connected)) {
+            state = "blocked"; code = "accessibility_not_connected"; action = "accessibility";
+            message = "系统已开启手机操作无障碍服务，但服务尚未连接；请稍后重试，若仍未连接，请在系统无障碍设置中关闭后重新开启该服务";
+        } else {
+            state = "unknown"; code = "accessibility_state_unknown"; action = "accessibility";
+            message = "手机操作无障碍服务状态暂不可核对，请检查系统无障碍设置后重试";
+        }
+        return new JSONObject().put("id", "serviceConnected").put("state", state).put("code", code).put("action", action).put("message", message);
     }
     private static JSONObject check(JSONObject facts, String key, String code, String action, String message) throws Exception {
         String state = state(facts.opt(key));

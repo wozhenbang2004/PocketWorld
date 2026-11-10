@@ -7,7 +7,7 @@ public final class ObservationSafety {
         if (code == null) return false;
         switch (code) {
             case "permission_denied": case "service_disconnected": case "screen_locked":
-            case "task_paused": case "paused_or_changed": case "screenshots_disabled":
+            case "task_paused": case "paused_or_changed": case "screenshots_disabled": case "local_capture_disabled":
             case "visual_engines_unavailable": case "screenshot_secure_window":
             case "display_unavailable": case "display_lost": case "wrong_display":
             case "geometry_unavailable":

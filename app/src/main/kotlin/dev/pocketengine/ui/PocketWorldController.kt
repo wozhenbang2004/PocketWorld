@@ -2627,7 +2627,12 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 return false
             }
         }
-        try{voiceInput.claimMessageId(voiceTarget(true),voiceOwnerAuthority())}catch(error:Exception){state=state.copy(error=message(error));return false}
+        try {
+            val readiness = app.phoneReadiness()
+            state = state.copy(phoneReadiness = PhoneReadinessState.parse(readiness))
+            dev.pocketengine.phone.PhoneReadiness.requireStart(readiness, mode)
+            voiceInput.claimMessageId(voiceTarget(true),voiceOwnerAuthority())
+        } catch(error:Exception) { state=state.copy(error=message(error));return false }
         return true
     }
     fun startPhone(goal: String, mode: String, completed: ((JSONObject?, String?) -> Unit)? = null): Boolean =

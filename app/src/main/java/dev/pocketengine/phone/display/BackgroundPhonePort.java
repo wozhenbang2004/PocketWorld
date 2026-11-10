@@ -153,8 +153,27 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
     }
     /** Native metadata is read on the original session; window content is not used for identity. */
     public dev.pocketengine.phone.access.PhoneOwnerPackages ownerPackages(RunControl control)throws Exception {
-        var identities=dev.pocketengine.phone.access.PhoneOwnerPackages.fromOwnership(landing(control,control.pauseRevision()),"owned");
-        return dev.pocketengine.phone.access.PhoneWindowPackages.read(PhoneAccessibilityService.get(),displayId,identities,control::check);
+        long revision=control.pauseRevision();guard(control,revision);
+        PhoneAccessibilityService service=PhoneAccessibilityService.get();
+        var unknown=new dev.pocketengine.phone.access.PhoneOwnerPackages(java.util.Set.of(),false);
+        JSONObject before=ownerPackageFacts(control,revision);if(before==null)return unknown;
+        var observed=dev.pocketengine.phone.access.PhoneWindowPackages.readOwnedDisplay(service,displayId,before,()->guard(control,revision));
+        if(observed.known()&&observed.owners().isEmpty()){
+            // Empty access is a live bootstrap read, never a cached permission for a later app.
+            JSONObject after=ownerPackageFacts(control,revision);
+            if(!dev.pocketengine.phone.access.PhoneOwnerPackages.provesEmptyOwnedDisplay(after,displayId))return unknown;
+        }
+        guard(control,revision);
+        if(service==null||service!=PhoneAccessibilityService.get()||service.observationSafetyFailure()!=null)return unknown;
+        return observed;
+    }
+    private JSONObject ownerPackageFacts(RunControl control,long revision)throws Exception {
+        JSONObject reply=request("ownership",new JSONObject(),control,revision);guard(control,revision);
+        Object selected=reply.opt("displayId");JSONObject facts=reply.optJSONObject("ownership");
+        JSONArray primary=facts==null?null:facts.optJSONArray("primary");
+        if(!Boolean.TRUE.equals(reply.opt("ok"))||!sameSession(reply)||!(selected instanceof Number)
+                ||((Number)selected).doubleValue()!=displayId||primary==null||primary.length()==0)return null;
+        return facts;
     }
     private boolean appFree(String pkg,int user,RunControl control,long revision)throws Exception {
         JSONObject facts=landing(control,revision),topology=facts.optJSONObject("taskTopology");
@@ -351,13 +370,13 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
                 // A newly created display may have no frame until an app is launched. This is
                 // an actual empty-display observation, not a screenshot or a fabricated page.
                 Tree empty=onTreeRead(control,revision,()->tree());JSONObject session=module.session(sessionId,displayId);
-                if(!before.signature.equals(empty.signature))return failure("screen_changed","后台页面在观察期间变化，请重新观察。");
                 requireTreeGeometry(before,session);requireTreeGeometry(empty,session);
                 guard(control,revision);Observation observed=new Observation(empty,-1,revision,session.optInt("width",720),session.optInt("height",1280),control,false);
                 checkGeometry(observed.geometry,observed.width,observed.height,observed.displayRevision);current=observed;
                 JSONObject emptyFrame=new JSONObject().put("ok",true).put("observationId",observed.id).put("displayId",displayId).put("sessionId",sessionId)
                         .put("executionMode","background").put("observedAt",System.currentTimeMillis()).put("screenWidth",observed.width).put("screenHeight",observed.height)
-                        .put("packageName",empty.packageName).put("nodes",empty.nodes).put("imageUnavailable",true)
+                        .put("packageName",empty.packageName).put("nodes",empty.nodes).put("imageUnavailable",true).put("imageUnavailableReason","frame_unavailable")
+                        .put("changedDuringRead",!before.signature.equals(empty.signature)).put("coordinateActionsAvailable",false)
                         .put("screenState","display_has_no_frame").put("truncated",empty.truncated)
                         .put("message","独立显示已建立，尚未产生画面。请先列出并打开应用；目前没有可用于坐标操作的图片。");
                 emptyFrame.put("observedAtUptimeMs",observed.at).put("pauseRevision",revision);
@@ -368,30 +387,34 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
                 cached=new JSONObject(emptyFrame.toString());return emptyFrame;
             }
             if(frame.optInt("displayId",-1)!=displayId||!sessionId.equals(frame.optString("sessionId")))return failure("wrong_display","后台画面身份不匹配。");
-            if(includeImage&&frame.optBoolean("framePending"))return failure("frame_pending","后台帧仍在更新，请重新观察。");
+            boolean imageIncluded=includeImage&&!frame.optBoolean("framePending")&&!frame.optBoolean("empty");
             Tree after=onTreeRead(control,revision,()->tree());
-            if(includeImage&&!before.signature.equals(after.signature))return failure("screen_changed","后台页面在观察期间变化，请重新观察。");
+            boolean changedDuringRead=!before.signature.equals(after.signature);
+            if(imageIncluded&&!before.forest.sameWindowLayout(after.forest))return failure("screen_changed","后台窗口在截图期间变化，请重新观察。");
             JSONObject state=module.session(sessionId,displayId);
             requireTreeGeometry(before,frame);requireTreeGeometry(after,frame);requireTreeGeometry(after,state);
             if(frame.optInt("width")<=0||frame.optInt("height")<=0||frame.optLong("frameGeneration",-1)<0
                     ||frame.optInt("width")!=state.optInt("width")||frame.optInt("height")!=state.optInt("height"))return failure("invalid_frame","后台画面尺寸或代次无效。");
             guard(control,revision);
-            Observation observed=new Observation(after,frame.optLong("frameGeneration",-1),revision,frame.getInt("width"),frame.getInt("height"),control,includeImage);
+            boolean coordinatesAvailable=imageIncluded&&!changedDuringRead;
+            Observation observed=new Observation(after,frame.optLong("frameGeneration",-1),revision,frame.getInt("width"),frame.getInt("height"),control,coordinatesAvailable);
             JSONObject out=new JSONObject().put("ok",true).put("observationId",observed.id).put("displayId",displayId).put("sessionId",sessionId)
                     .put("executionMode","background").put("observedAt",System.currentTimeMillis()).put("observedAtUptimeMs",observed.at).put("pauseRevision",revision).put("capturedAtUptimeMs",frame.optLong("capturedAt"))
                     .put("screenWidth",observed.width).put("screenHeight",observed.height)
                     .put("packageName",after.packageName.isEmpty()?frame.optString("packageName"):after.packageName)
                     .put("requestedPackageName",frame.optString("requestedPackageName")).put("frameGeneration",observed.frame)
-                    .put("frameMetadataOnly",!includeImage).put("framePending",frame.optBoolean("framePending")).put("frameEmpty",frame.optBoolean("empty")).put("nodes",after.nodes).put("coordinateSpace","0..1000").put("truncated",after.truncated);
+                    .put("frameMetadataOnly",!imageIncluded).put("framePending",frame.optBoolean("framePending")).put("frameEmpty",frame.optBoolean("empty")).put("nodes",after.nodes).put("coordinateSpace","0..1000").put("truncated",after.truncated)
+                    .put("changedDuringRead",changedDuringRead).put("coordinateActionsAvailable",coordinatesAvailable);
             if(observed.geometry!=null)observed.geometry.writeTo(out,true);
             if(frame.optBoolean("empty"))out.put("screenState","display_has_no_frame").put("imageUnavailable",true);
+            String imageReason=imageIncluded?"display_surface_frame":includeImage?(frame.optBoolean("framePending")?"frame_pending":"frame_unavailable"):"not_requested_frame_generation_only";
+            if(includeImage&&!imageIncluded)out.put("imageUnavailable",true).put("imageUnavailableReason",imageReason);
             module.attachInstalledAppEvidence(out);
             after.forest.attach(out);
-            if(includeImage)out.put("imageBase64",frame.getString("imageBase64")).put("imageMimeType",frame.optString("imageMimeType","image/jpeg"))
+            if(imageIncluded)out.put("imageBase64",frame.getString("imageBase64")).put("imageMimeType",frame.optString("imageMimeType","image/jpeg"))
                     .put("imageWidth",observed.width).put("imageHeight",observed.height);
-            if(includeImage&&!ObservationReport.hasImage(out))return failure("invalid_frame","后台助手没有返回有效的图片字节。");
-            ObservationReport.attach(out,after.available,after.available?"accessibility_tree":"no_accessible_root",includeImage,
-                    includeImage?"display_surface_frame":"not_requested_frame_generation_only");
+            if(imageIncluded&&!ObservationReport.hasImage(out))return failure("invalid_frame","后台助手没有返回有效的图片字节。");
+            ObservationReport.attach(out,after.available,after.available?"accessibility_tree":"no_accessible_root",imageIncluded,imageReason);
             attachObservedProfile(out,profileBefore,landing(control,revision),displayId);
             checkGeometry(observed.geometry,observed.width,observed.height,observed.displayRevision);
             current=observed;cached=new JSONObject(out.toString());return out;

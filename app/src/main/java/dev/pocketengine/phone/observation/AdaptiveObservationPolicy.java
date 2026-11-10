@@ -94,6 +94,10 @@ public final class AdaptiveObservationPolicy {
     }
 
     private static Decision decision(Request request, String reason, Binding binding) { return new Decision(request, reason, binding); }
+    static Decision retainTreeAfterImageFailure(Decision checked) {
+        if (!checked.requestsImage()) throw new IllegalArgumentException("Observation must pass the capture admission checks");
+        return decision(Request.NODES, "image_unavailable_tree_retained", checked.binding);
+    }
     static Decision blocked(String reason) { return new Decision(Request.PAUSE, reason, null); }
     static String required(String value) {
         if (value == null || value.isEmpty() || value.length() > 250) throw new IllegalArgumentException("Missing observation identity");

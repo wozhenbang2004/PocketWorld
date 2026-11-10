@@ -256,29 +256,42 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
             PhoneAccessibilityService service = requireService();
             Tree after = null;
             CapturedImage image = null;
-            // Retry the complete read once after a transient capture-time tree change.
-            // Never publish an older tree or pixel reference, and never replay a device action.
+            boolean changedDuringRead = false;
+            String imageReason = "not_requested";
+            // Retry a window/geometry transition once. Text updates may retain the
+            // latest tree and contextual pixels, but never authorize coordinates.
             for (int attempt = 0; attempt < (includeImage ? 2 : 1); attempt++) {
                 if (attempt > 0) sleepRead(() -> guard(service, control, revision), 180);
                 Tree before = onTreeRead(() -> guard(service,control,revision), () -> readTree(service));
-                image = includeImage ? capture(service, control, revision) : null;
+                image = null;
+                if (includeImage) {
+                    try { image = capture(service, control, revision); imageReason = "accessibility_screenshot"; }
+                    catch (PhoneFailure unavailable) {
+                        if (!ObservationReport.isCaptureUnavailable(unavailable.code)) throw unavailable;
+                        imageReason = unavailable.code;
+                    }
+                }
                 after = includeImage ? onTreeRead(() -> guard(service,control,revision), () -> readTree(service)) : before;
-                boolean changed = !before.sameScreen(after)
-                        || image != null && (image.fullWidth != after.screen.width || image.fullHeight != after.screen.height);
-                if (!changed) break;
+                changedDuringRead = !before.sameScreen(after);
+                boolean mixedWindow = image != null && (!before.sameWindowLayout(after)
+                        || image.fullWidth != after.screen.width || image.fullHeight != after.screen.height);
+                if (!mixedWindow) break;
                 if (attempt == 0 && includeImage) continue;
                 throw new PhoneFailure("screen_changed", "页面在截图观察期间持续变化，请等页面稳定后重新观察。");
             }
             control.check();
             if (control.isPaused() || control.pauseRevision() != revision || service != PhoneAccessibilityService.get())
                 throw new PhoneFailure("observation_expired", "任务状态已改变，请重新观察。");
-            Snapshot snapshot = new Snapshot(service, after, control, revision, image);
+            boolean coordinatesAvailable = image != null && !changedDuringRead;
+            Snapshot snapshot = new Snapshot(service, after, control, revision, coordinatesAvailable ? image : null);
             JSONObject result = new JSONObject().put("ok", true).put("observationId", snapshot.id)
                     .put("packageName", after.packageName).put("screenWidth", after.screen.width)
                     .put("screenHeight", after.screen.height).put("nodes", after.jsonNodes)
                     .put("truncated", after.incomplete).put("displayId", Display.DEFAULT_DISPLAY)
                     .put("sessionId", service.observationSessionId()).put("executionMode", "main")
-                    .put("observedAtUptimeMs", snapshot.created).put("pauseRevision", revision);
+                    .put("observedAtUptimeMs", snapshot.created).put("pauseRevision", revision)
+                    .put("changedDuringRead", changedDuringRead).put("coordinateActionsAvailable", coordinatesAvailable);
+            if (includeImage && image == null) result.put("imageUnavailable", true).put("imageUnavailableReason", imageReason);
             dev.pocketengine.phone.observation.InstalledAppEvidence.attach(context,result);
             if (image != null) {
                 for (String key : new String[]{"imageBase64", "imageMimeType", "imageWidth", "imageHeight"})
@@ -287,7 +300,7 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
             after.forest.attach(result);
             reference.set(snapshot);
             return ObservationReport.attach(result, after.available, after.available ? "accessibility_tree" : "no_accessible_root",
-                    image != null, image != null ? "accessibility_screenshot" : "not_requested");
+                    image != null, imageReason);
         } catch (PhoneFailure failure) { return failure(failure.code, failure.getMessage()); }
         catch (SecurityException failure) { return failure("permission_denied", "系统未允许读取当前页面。"); }
         catch (RuntimeException failure) { return failure("platform_error", "Android 未能读取当前页面，请重新观察。"); }
@@ -883,6 +896,7 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
             signature=forest.signature;jsonNodes=forest.nodes;incomplete=forest.truncated;available=forest.available;
         }
         boolean sameScreen(Tree other){return available==other.available&&screen.same(other.screen)&&signature.equals(other.signature);}
+        boolean sameWindowLayout(Tree other){return screen.same(other.screen)&&forest.sameWindowLayout(other.forest);}
     }
     private static final class Snapshot {
         final String id = UUID.randomUUID().toString();

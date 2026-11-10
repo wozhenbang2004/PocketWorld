@@ -72,10 +72,10 @@ public final class AccessibilityForest {
                 record.put("bounds",new JSONObject().put("left",normal(windowBounds.left,width)).put("top",normal(windowBounds.top,height))
                         .put("right",normal(windowBounds.right,width)).put("bottom",normal(windowBounds.bottom,height)));
                 if(window.getType()==AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY){
-                    out.windowIdentities.put(window.getId(),new WindowIdentity(record.toString(),window.getLayer(),windowBounds,null));continue;
+                    out.windowIdentities.put(window.getId(),new WindowIdentity(record.toString(),window.getType(),window.getLayer(),windowBounds,null));continue;
                 }
                 out.mark(record.toString());AccessibilityNodeInfo root=window.getRoot();
-                out.windowIdentities.put(window.getId(),new WindowIdentity(record.toString(),window.getLayer(),windowBounds,root==null?null:nativeIdentity(root)));
+                out.windowIdentities.put(window.getId(),new WindowIdentity(record.toString(),window.getType(),window.getLayer(),windowBounds,root==null?null:nativeIdentity(root)));
                 try {
                     record.put("rootAvailable",root!=null);
                     if(root==null){localReasons.add("no_accessible_root");out.mark("no_accessible_root");}
@@ -157,6 +157,20 @@ public final class AccessibilityForest {
             PhoneReadGate.checkCurrent();return node;
         }catch(Exception|Error stopped){if(node!=null)node.recycle();throw stopped;}
     }
+    /** Capture coherence only; node actions still require exact target revalidation. */
+    public boolean sameWindowLayout(AccessibilityForest fresh) {
+        if(fresh==null||omittedWindows>0||fresh.omittedWindows>0||available!=fresh.available
+                ||windowId!=fresh.windowId||!packageName.equals(fresh.packageName))return false;
+        int beforeCount=0,afterCount=0;
+        for(Map.Entry<Integer,WindowIdentity> entry:windowIdentities.entrySet()){
+            WindowIdentity before=entry.getValue();
+            if(before.type==AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY)continue;
+            beforeCount++;WindowIdentity after=fresh.windowIdentities.get(entry.getKey());
+            if(after==null||!before.same(after))return false;
+        }
+        for(WindowIdentity after:fresh.windowIdentities.values())if(after.type!=AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY)afterCount++;
+        return beforeCount==afterCount;
+    }
     /**
      * Exact saved path, source identity and relevant geometry only. No lookup by
      * label and no permission from a changed full-frame generation. A sibling
@@ -208,8 +222,8 @@ public final class AccessibilityForest {
         return node.getWindowId()+":"+node.hashCode()+":"+identityPart(unique);
     }
     private static final class WindowIdentity {
-        final String facts,nativeRoot;final int layer;final Rect bounds;
-        WindowIdentity(String facts,int layer,Rect bounds,String root){this.facts=facts;this.layer=layer;this.bounds=new Rect(bounds);nativeRoot=root;}
+        final String facts,nativeRoot;final int type,layer;final Rect bounds;
+        WindowIdentity(String facts,int type,int layer,Rect bounds,String root){this.facts=facts;this.type=type;this.layer=layer;this.bounds=new Rect(bounds);nativeRoot=root;}
         boolean same(WindowIdentity other){return facts.equals(other.facts)&&bounds.equals(other.bounds)&&java.util.Objects.equals(nativeRoot,other.nativeRoot);}
     }
     public static String identity(AccessibilityNodeInfo node){

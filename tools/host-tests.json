@@ -508,6 +508,33 @@
     "robolectric": true,
     "description": "Original native delivered-cursor/currentness/cancel gates and semantic/source/delta/settle regressions; explicit post-step runs emitted production programs on loopback Chromium, not Android WebView/provider/device acceptance."
   },
+  "phone-adaptive-observation": {
+    "class": "dev.pocketengine.phone.observation.AdaptivePhonePortTest",
+    "additionalClasses": [
+      "dev.pocketengine.phone.observation.AdaptiveObservationPolicyTest",
+      "dev.pocketengine.phone.observation.ObservationReportTest"
+    ],
+    "helpers": [],
+    "description": "Node-first observation, capture-only failures and coordinate authority; synthetic native evidence, no device acceptance."
+  },
+  "phone-readiness": {
+    "class": "dev.pocketengine.phone.PhoneReadinessTest",
+    "additionalClasses": [
+      "dev.pocketengine.phone.AndroidPhoneReadinessTest"
+    ],
+    "helpers": [],
+    "robolectric": true,
+    "description": "Native phone preparation and execution readiness, accessibility enablement versus connection, and notification permission probes. No device or system-setting mutation claim."
+  },
+  "phone-empty-display": {
+    "class": "dev.pocketengine.phone.display.PhoneEmptyDisplayAccessNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.phone.access.GuardedPhonePortTest"
+    ],
+    "helpers": [],
+    "robolectric": true,
+    "description": "Original background owner probe and per-App gate for authenticated empty displays, complete task topology, original session/service continuity and subsequent denied reads/input. Android windows/helper transport and content consumer are explicit fixtures; no physical-device or UI acceptance."
+  },
   "phone-observation-boundaries": {
     "class": "dev.pocketengine.phone.display.PhoneObservationBoundariesNativeTest",
     "additionalClasses": [

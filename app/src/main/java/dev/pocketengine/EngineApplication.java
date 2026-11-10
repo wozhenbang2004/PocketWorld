@@ -1598,11 +1598,7 @@ public final class EngineApplication extends Application implements dev.pocketen
         if(goal==null||goal.isEmpty()||goal.length()>4000)throw new IllegalArgumentException("请填写 1–4000 字的手机任务目标");
         if(!consent)throw new IllegalStateException("开始前请确认屏幕与可见文字会发送到所配置的模型");
         if(!"main_screen".equals(executionMode)&&!"background".equals(executionMode))throw new IllegalArgumentException("请选择主屏或独立后台屏模式");
-        if("main_screen".equals(executionMode)&&PhoneAccessibilityService.get()==null)throw new IllegalStateException("请先开启 PocketEngine 手机操作无障碍服务");
-        if("background".equals(executionMode)){
-            NotificationManager manager=getSystemService(NotificationManager.class);if(manager==null||!manager.areNotificationsEnabled())throw new IllegalStateException("后台手机任务需要开启任务通知，以便随时停止");
-            EngineModule display=features.module("display");if(!(display instanceof dev.pocketengine.phone.display.DisplayModule)||!((dev.pocketengine.phone.display.DisplayModule)display).isConnected())throw new IllegalStateException("请先在连接中心连接后台助手；不会改为主屏执行");
-        }
+        dev.pocketengine.phone.PhoneReadiness.requireStart(phoneReadiness(),executionMode);
     }
     public synchronized String startOwnedPhonePractice(String mode,boolean consent,JSONObject requested)throws Exception {
         long deadline=System.currentTimeMillis()+300_000L;int tools=40,models=40;

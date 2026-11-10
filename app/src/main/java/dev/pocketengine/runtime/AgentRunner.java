@@ -1905,7 +1905,7 @@ public final class AgentRunner {
 
     public static JSONArray tools() throws Exception {
         JSONArray result = new JSONArray();
-        addTool(result, "phone_observe", "重新读取当前页面和截图，获取新的observationId与节点。", new JSONObject(), new String[]{});
+        addTool(result, "phone_observe", "优先读取当前页面节点，必要且获准时补充截图，获取新的observationId。截图不可用时仍可返回当前节点；changedDuringRead为true的图片仅供理解，坐标操作需要重新观察。", new JSONObject(), new String[]{});
         addTool(result, "phone_list_apps", "列出可打开的真实应用及packageName。", new JSONObject(), new String[]{});
         addTool(result, "phone_launch_app", "通过真实包名打开应用。", properties("packageName", "string"), new String[]{"packageName"});
         addTool(result, "phone_click_node", "点击最新观察中的节点。", properties("observationId", "string", "nodeId", "string"), new String[]{"observationId", "nodeId"});

@@ -126,7 +126,7 @@ public final class AdaptivePhonePort implements PhonePort {
             if(!opening&&!listing&&!current(observation,control))return failure("stale_observation","扩展工具需要当前原观察。");
             if(tool.equals("phone_dialog"))return PhoneDialogEvidence.read(latest);
             if(tool.equals("phone_gesture")){
-                if(!imageCeiling||!ObservationReport.hasImage(latest))return failure("coordinate_unverifiable","复杂手势需要已发送模型的当前真实图片。");
+                if(!imageCeiling||!ObservationReport.hasImage(latest)||!imageCoordinatesAvailable(latest))return failure("coordinate_unverifiable","复杂手势需要已发送模型的当前稳定图片，请重新观察。");
                 prepareCoordinateSensitiveEvidence(control);
                 if(!current(observation,control))return failure("stale_observation","本地风险读取期间原手势观察已变化。");
                 if(ocrSensitive!=null){JSONArray paths=args.getJSONArray("paths");for(int i=0;i<paths.length();i++){JSONArray points=paths.getJSONArray(i);for(int j=1;j<points.length();j++){JSONArray a=points.getJSONArray(j-1),b=points.getJSONArray(j);ocrSensitive.requireCoordinate(a.getInt(0),a.getInt(1),b.getInt(0),b.getInt(1),true,control,control.pauseRevision());}}}
@@ -251,6 +251,11 @@ public final class AdaptivePhonePort implements PhonePort {
             if (image == null) return failure("empty_observation", "手机没有返回图片观察。");
             if (!image.optBoolean("ok")) return rejectedObservation(image);
             decision = choose(image, need, control);
+            JSONObject freshSources = image.optJSONObject("observationSources");
+            if (decision.requestsImage() && image.optBoolean("imageUnavailable")
+                    && ObservationReport.isCaptureUnavailable(image.optString("imageUnavailableReason"))
+                    && freshSources != null && freshSources.optBoolean("treeAvailable") && freshSources.optInt("usefulNodes") > 0)
+                decision = AdaptiveObservationPolicy.retainTreeAfterImageFailure(decision);
             if (decision.requestsImage()) return failure("image_unavailable", "没有取得真实图片，无法继续视觉定位。");
             return deliver(image, decision, control);
         }
@@ -474,9 +479,9 @@ public final class AdaptivePhonePort implements PhonePort {
         if (!withoutObservation && "empty_display".equals(latest.getJSONObject("observationDecision").optString("request")))
             return failure("coordinate_unverifiable", "独立显示尚无画面，请先列出并打开应用。");
         boolean coordinate = "phone_tap".equals(tool) || "phone_swipe".equals(tool);
-        if (coordinate && (!imageCeiling || latest == null || !ObservationReport.hasImage(latest))) {
+        if (coordinate && (!imageCeiling || latest == null || !ObservationReport.hasImage(latest) || !imageCoordinatesAvailable(latest))) {
             pendingNeed = Need.TARGET_MISSING;
-            return failure("coordinate_unverifiable", "尚未向模型提供当前真实图片，未派发坐标；请先升级观察。");
+            return failure("coordinate_unverifiable", "当前图片缺失或页面在截图期间变化，未派发坐标；请重新观察。");
         }
         if(coordinate){
             // Reuse only the already-authorized, actually delivered image. No new capture or upload.
@@ -493,6 +498,7 @@ public final class AdaptivePhonePort implements PhonePort {
                 if(!(source instanceof NativeOcrTapPort)||selected==null||!selected.matches(control,args.optString("observationId"),control.pauseRevision()))
                     result=failure("stale_text_target","文字目标不属于当前原生OCR观察，请重新观察。");
                 else if(!localCaptureAllowed||!localOcrAllowed)result=failure("local_capture_disabled","本轮未允许本地取图/OCR，尚未派发文字点击。");
+                else if(!imageCoordinatesAvailable(latest))result=failure("coordinate_unverifiable","页面在截图期间变化，未派发文字点击；请重新观察。");
                 else result=((NativeOcrTapPort)source).tapOcrText(selected,control,admission);
             }else result = source.execute(tool, args, control);
         }
@@ -582,7 +588,7 @@ public final class AdaptivePhonePort implements PhonePort {
             stripImage(out);
             JSONObject sources = out.getJSONObject("observationSources");
             sources.put("imageIncluded", false);
-            if (decision.request == Request.NODES) sources.put("imageReason", "nodes_preferred");
+            if (decision.request == Request.NODES && !out.optBoolean("imageUnavailable")) sources.put("imageReason", "nodes_preferred");
             if (decision.request == Request.OCR) sources.put("imageReason", "local_ocr_text_only");
         }
         latestBinding = scope.observation(out.getString("observationId"), out.getLong("pauseRevision"));
@@ -596,6 +602,9 @@ public final class AdaptivePhonePort implements PhonePort {
         return out;
     }
     private boolean ocrAvailable() { return ocr != null && ocr.available(); }
+    private static boolean imageCoordinatesAvailable(JSONObject observation) {
+        return observation != null && !observation.optBoolean("changedDuringRead") && observation.optBoolean("coordinateActionsAvailable", true);
+    }
 
     private JSONObject recognize(JSONObject observation, RunControl control) throws Exception {
         if (!localCaptureAllowed || !localOcrAllowed || !ocrAvailable() || !ObservationReport.hasImage(observation))

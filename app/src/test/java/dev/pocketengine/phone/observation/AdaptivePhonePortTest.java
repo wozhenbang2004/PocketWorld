@@ -60,7 +60,7 @@ public class AdaptivePhonePortTest {
     @Test public void screenshotSettingAndExplicitNodeOnlyRequestAreBothCeilings() throws Exception {
         for(boolean configured:new boolean[]{false,true}){
             Fixture f=new Fixture(observation("nodes",0,false));AdaptivePhonePort p=port(f,configured,true);
-            JSONObject out=p.observe(false,control());error(out,"screenshots_disabled");assertTrue(out.getBoolean("requiresPause"));
+            JSONObject out=p.observe(false,control());error(out,configured?"visual_engines_unavailable":"local_capture_disabled");assertTrue(out.getBoolean("requiresPause"));
             assertEquals(Arrays.asList(false),f.includes);assertFalse(out.has("imageBase64"));
         }
     }
@@ -79,6 +79,37 @@ public class AdaptivePhonePortTest {
         Fixture f=new Fixture(a,b);JSONObject out=port(f,true,true).observe(true,control());
         assertEquals(0,out.getJSONArray("nodes").length());assertTrue(ObservationReport.hasImage(out));
         assertFalse(out.getJSONObject("observationSources").getBoolean("ocrAvailable"));
+    }
+    @Test public void unavailableScreenshotRetainsFreshPartialTreeWithoutClaimingCoverage() throws Exception {
+        JSONObject first=observation("before",2,false).put("truncated",true);
+        JSONObject fresh=observation("after",2,false).put("truncated",true)
+                .put("imageUnavailable",true).put("imageUnavailableReason","screenshot_unavailable");
+        Fixture f=new Fixture(first,fresh);AdaptivePhonePort p=port(f,true,true);RunControl c=control();
+        JSONObject result=p.observe(true,c);
+        assertTrue(result.toString(),result.optBoolean("ok"));assertEquals("after",result.getString("observationId"));
+        assertTrue(result.getBoolean("truncated"));assertFalse(result.getJSONObject("observationSources").getBoolean("treeAdequate"));
+        assertEquals("nodes",result.getJSONObject("observationDecision").getString("request"));
+        assertEquals("image_unavailable_tree_retained",result.getJSONObject("observationDecision").getString("reason"));
+        assertFalse(result.has("imageBase64"));assertEquals(Arrays.asList(false,true),f.includes);
+        error(p.execute("phone_tap",args("after"),c),"coordinate_unverifiable");assertEquals(0,f.executions);
+    }
+    @Test public void missingImageAndMissingNodesDoNotInventAUsableObservation() throws Exception {
+        JSONObject unavailable=observation("after",0,false).put("imageUnavailable",true).put("imageUnavailableReason","frame_pending");
+        Fixture f=new Fixture(observation("before",0,false),unavailable);
+        JSONObject result=port(f,true,true).observe(true,control());error(result,"image_unavailable");assertEquals(0,f.executions);
+    }
+    @Test public void capturePermissionFailureCannotUsePartialTreeAsAFallback() throws Exception {
+        Fixture f=new Fixture(observation("before",2,false).put("truncated",true),
+                new JSONObject().put("ok",false).put("error","permission_denied"));
+        JSONObject result=port(f,true,true).observe(true,control());error(result,"permission_denied");assertTrue(result.getBoolean("requiresPause"));assertEquals(0,f.executions);
+    }
+    @Test public void changingTreeImageCanBeReadButCannotAuthorizeCoordinates() throws Exception {
+        JSONObject changing=observation("pixels",1,true).put("changedDuringRead",true).put("coordinateActionsAvailable",false);
+        Fixture f=new Fixture(observation("first",1,false),observation("upgrade",1,false),changing);
+        AdaptivePhonePort p=port(f,true,true);RunControl c=control();p.observe(true,c);
+        JSONObject result=p.requestUpgrade("first",Need.TARGET_MISSING,c);
+        assertTrue(result.toString(),result.optBoolean("ok"));assertTrue(result.getBoolean("changedDuringRead"));
+        assertTrue(ObservationReport.hasImage(result));error(p.execute("phone_tap",args("pixels"),c),"coordinate_unverifiable");assertEquals(0,f.executions);
     }
     @Test public void knownRejectedActionUpgradesObservationButDoesNotRepeatAction() throws Exception {
         for(boolean coded:new boolean[]{true,false}) {

@@ -7,6 +7,11 @@ import org.json.JSONObject;
 /** Native evidence only. IDs and metadata never count as image pixels or OCR text. */
 public final class ObservationReport {
     private ObservationReport() { }
+    /** Only image acquisition failures may retain an independently refreshed tree. */
+    public static boolean isCaptureUnavailable(String code) {
+        return java.util.Set.of("screenshot_unavailable","screenshot_timeout","screenshot_throttled",
+                "screenshot_secure_window","screenshot_too_large","frame_pending","frame_unavailable").contains(code);
+    }
     public static JSONObject attach(JSONObject observation, boolean treeAvailable, String treeReason,
                                     boolean imageIncluded, String imageReason) throws Exception {
         return attach(observation, treeAvailable, treeReason, imageIncluded, imageReason, false);

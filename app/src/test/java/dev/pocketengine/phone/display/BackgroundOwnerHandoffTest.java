@@ -20,12 +20,24 @@ public final class BackgroundOwnerHandoffTest {
         static String expectedTask="original-task";static boolean loseNextMain,failBeforeMain,staleBeforeMain;
         @Implementation protected void __constructor__(FeatureContext ignored){}
         @Implementation protected void __constructor__(FeatureContext ignored,DisplayModule.AdbFactory factory,DisplayModule.Configuration configuration,DisplayModule.StatusProbe probe){}
+        @Implementation protected void __constructor__(FeatureContext ignored,DisplayModule.AdbFactory factory,DisplayModule.Configuration configuration,DisplayModule.StatusProbe probe,DisplayModule.Exchange exchange){}
         @Implementation protected boolean hasSession(){return true;}
+        @Implementation protected boolean hasSession(String sessionId,int displayId){return "original-session".equals(sessionId)&&displayId==9;}
         @Implementation protected boolean isConnected(){return true;}
         @Implementation protected boolean ownedBy(String task){return task.equals(expectedTask);}
+        @Implementation protected boolean ownedBy(String task,String sessionId,int displayId){return ownedBy(task)&&hasSession(sessionId,displayId);}
         @Implementation protected JSONObject session()throws Exception{return new JSONObject().put("sessionId","original-session").put("displayId",9).put("sessionActive",true);}
+        @Implementation protected JSONObject session(String sessionId,int displayId)throws Exception {
+            if(!hasSession(sessionId,displayId))throw new SecurityException("fixture session changed");
+            return session();
+        }
+        @Implementation protected JSONObject refreshSession(String sessionId,int displayId,RunControl control,long revision,boolean owner)throws Exception {
+            control.check();if(control.pauseRevision()!=revision||control.isPaused()!=owner)throw new ShellBridgeClient.StaleRequestException();
+            return session(sessionId,displayId);
+        }
         @Implementation protected JSONObject request(String command,JSONObject payload,RunControl control,long revision,boolean owner)throws Exception {
             assertTrue(owner);assertTrue(control.isPaused());assertEquals(control.pauseRevision(),revision);control.check();calls++;
+            session(payload.getString("sessionId"),payload.getInt("displayId"));
             if(command.equals("owner_handoff_main")&&staleBeforeMain){staleBeforeMain=false;throw new ShellBridgeClient.StaleRequestException();}
             if(command.equals("owner_handoff_main")&&failBeforeMain){failBeforeMain=false;throw new java.io.IOException("transport unknown before fixture received request");}
             if(command.equals("owner_handoff_prepare")){state="prepared";plans++;nonce=plans==1?"native-plan":"native-plan-"+plans;}

@@ -1,12 +1,21 @@
 package dev.pocketengine;
 
+import android.Manifest;
+import android.accessibilityservice.AccessibilityService;
+import android.accessibilityservice.AccessibilityServiceInfo;
+import android.app.NotificationManager;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.database.sqlite.SQLiteDatabase;
+import android.provider.Settings;
+import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.FeatureContext;
 import dev.pocketengine.features.FeatureHost;
 import dev.pocketengine.features.assistant.AssistantModule;
 import dev.pocketengine.features.memory.SourceRef;
 import dev.pocketengine.phone.PhoneAccessibilityService;
+import dev.pocketengine.phone.PhoneReadiness;
+import dev.pocketengine.phone.display.DisplayModule;
 import dev.pocketengine.runtime.models.ModelConnectionService;
 import dev.pocketengine.runtime.models.ConversationModelPreferences;
 import dev.pocketengine.runtime.models.ModelCatalog;
@@ -40,9 +49,9 @@ import org.robolectric.annotation.SQLiteMode;
 import static org.junit.Assert.*;
 import static org.robolectric.Shadows.shadowOf;
 
-/** Real Engine/SQL admission. Accessibility, service execution and startup are explicit fixture boundaries. */
+/** Real Engine/SQL admission and native readiness probes. Android service capabilities, helper status and execution are fixture boundaries. */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk=35,manifest=Config.NONE,application=EngineApplication.class,shadows={ConversationPhoneStartNativeTest.PresentationBoundary.class,ConversationPhoneStartNativeTest.AccessibilityBoundary.class})
+@Config(sdk=35,manifest=Config.NONE,application=EngineApplication.class,shadows={ConversationPhoneStartNativeTest.PresentationBoundary.class,ConversationPhoneStartNativeTest.AccessibilityBoundary.class,ConversationPhoneStartNativeTest.NativePermissions.class,ConversationPhoneStartNativeTest.BackgroundBoundary.class})
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 public final class ConversationPhoneStartNativeTest {
     @Implements(EngineApplication.class)
@@ -51,9 +60,23 @@ public final class ConversationPhoneStartNativeTest {
         @Implementation protected void pushTask(String id){}
     }
     @Implements(PhoneAccessibilityService.class)
-    public static final class AccessibilityBoundary {
+    public static final class AccessibilityBoundary extends NativePermissions {
         static PhoneAccessibilityService connected;
         @Implementation protected static PhoneAccessibilityService get(){return connected;}
+    }
+    @Implements(AccessibilityService.class)
+    public static class NativePermissions extends org.robolectric.shadows.ShadowAccessibilityService {
+        static AccessibilityServiceInfo permissions;
+        @Implementation protected AccessibilityServiceInfo getServiceInfo(){return permissions;}
+    }
+    @Implements(DisplayModule.class)
+    public static final class BackgroundBoundary {
+        @Implementation protected void __constructor__(FeatureContext ignored){}
+        @Implementation protected boolean isConnected(){return true;}
+        @Implementation protected JSONObject snapshot()throws Exception{return new JSONObject().put("helperConnected",true).put("readyForTask",false).put("sessionId",JSONObject.NULL).put("displayId",-1);}
+        @Implementation protected void pinOwner(RunControl ignored){}
+        @Implementation protected void unpinOwner(RunControl ignored){}
+        @Implementation protected void close(){}
     }
     private static final class Queue extends AbstractExecutorService {
         final List<Runnable> pending=new ArrayList<>();boolean closed;
@@ -85,14 +108,23 @@ public final class ConversationPhoneStartNativeTest {
         });
         ((ExecutorService)field(EngineApplication.class,"capabilityWorkers").get(app)).shutdownNow();queue=new Queue();field(EngineApplication.class,"capabilityWorkers").set(app,queue);
         AccessibilityBoundary.connected=new PhoneAccessibilityService();
+        NativePermissions.permissions=new AccessibilityServiceInfo();
+        NativePermissions.permissions.flags=AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS;
+        field(AccessibilityServiceInfo.class,"mCapabilities").setInt(NativePermissions.permissions,
+                AccessibilityServiceInfo.CAPABILITY_CAN_RETRIEVE_WINDOW_CONTENT|AccessibilityServiceInfo.CAPABILITY_CAN_PERFORM_GESTURES);
+        Settings.Secure.putInt(app.getContentResolver(),Settings.Secure.ACCESSIBILITY_ENABLED,1);
+        Settings.Secure.putString(app.getContentResolver(),Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,new ComponentName(app,PhoneAccessibilityService.class).flattenToString());
+        shadowOf(app).grantPermissions(Manifest.permission.POST_NOTIFICATIONS);
+        shadowOf(app.getSystemService(NotificationManager.class)).setNotificationsEnabled(true);
     }
     @After public void close()throws Exception {
         AccessibilityBoundary.connected=null;queue.shutdownNow();app.features.close();
         ((SQLiteDatabase)field(TaskStore.class,"db").get(app.tasks)).close();
     }
     private EngineApplication.ConversationPhoneStartReview review()throws Exception {
-        return app.prepareConversationPhoneStart("original-conversation","查看已确认的目标","main_screen",new JSONObject().put("scopeMinutes",30).put("toolLimit",7).put("modelCallLimit",9));
+        return review("main_screen");
     }
+    private EngineApplication.ConversationPhoneStartReview review(String mode)throws Exception{return app.prepareConversationPhoneStart("original-conversation","查看已确认的目标",mode,scope());}
     private JSONObject start(EngineApplication.ConversationPhoneStartReview review)throws Exception{return app.startConversationPhone(review,true,()->true,id->{});}
     private static JSONObject scope()throws Exception{return new JSONObject().put("scopeMinutes",30).put("toolLimit",7).put("modelCallLimit",9);}
     private JSONObject draftChoice(String model)throws Exception {
@@ -215,6 +247,61 @@ public final class ConversationPhoneStartNativeTest {
         AccessibilityBoundary.connected=new PhoneAccessibilityService();var next=review();
         assertNotEquals(first.view().getString("requestId"),next.view().getString("requestId"));
         assertTrue(start(next).getBoolean("admitted"));assertNull(app.tasks.get(first.view().getString("requestId"),false));
+    }
+    @Test public void windowPermissionRevokedAfterReviewRejectsBeforeTaskAllocation()throws Exception {
+        var review=review();PhoneReadiness.requireStart(app.phoneReadiness(),"main_screen");NativePermissions.permissions.flags=0;
+        int[] allocations={0};
+        var rejected=assertThrows(EngineApplication.ConversationPhoneStartRejected.class,()->app.startConversationPhone(review,true,()->true,id->allocations[0]++));
+        assertTrue(rejected.getMessage(),rejected.getMessage().contains("窗口"));
+        assertEquals(0,allocations[0]);assertNull(app.tasks.get(review.view().getString("requestId"),false));
+        assertNull(shadowOf(app).getNextStartedService());
+    }
+    @Test public void draftGesturePermissionRevokedAfterReviewRejectsBeforeTaskAllocation()throws Exception {
+        var review=draftReview(ConversationModelPreferences.draft("revoked-gesture"),"main_screen");
+        PhoneReadiness.requireStart(app.phoneReadiness(),"main_screen");
+        field(AccessibilityServiceInfo.class,"mCapabilities").setInt(NativePermissions.permissions,AccessibilityServiceInfo.CAPABILITY_CAN_RETRIEVE_WINDOW_CONTENT);
+        int[] allocations={0};
+        var rejected=assertThrows(EngineApplication.DraftPhoneStartRejected.class,()->app.startDraftPhone(review,true,()->true,id->allocations[0]++));
+        assertTrue(rejected.getMessage(),rejected.getMessage().contains("操作权限"));
+        assertEquals(0,allocations[0]);assertEquals(0,app.tasks.list().length());assertNull(shadowOf(app).getNextStartedService());
+    }
+    @Test public void disabledSettingAfterReviewRejectsEvenBeforeTheOldServiceDisconnects()throws Exception {
+        var review=review();PhoneReadiness.requireStart(app.phoneReadiness(),"main_screen");
+        Settings.Secure.putInt(app.getContentResolver(),Settings.Secure.ACCESSIBILITY_ENABLED,0);
+        int[] allocations={0};
+        assertThrows(EngineApplication.ConversationPhoneStartRejected.class,()->app.startConversationPhone(review,true,()->true,id->allocations[0]++));
+        assertNotNull(AccessibilityBoundary.connected);assertEquals(0,allocations[0]);
+        assertNull(app.tasks.get(review.view().getString("requestId"),false));assertNull(shadowOf(app).getNextStartedService());
+    }
+    @Test public void connectedHelperDoesNotAdmitBackgroundWhenEnabledAccessibilityIsDisconnected()throws Exception {
+        app.features.register(new DisplayModule(new FeatureContext(app,app.settings,new SecretVault(app),event->{})));
+        var review=review("background");PhoneReadiness.requireStart(app.phoneReadiness(),"background");AccessibilityBoundary.connected=null;
+        int[] allocations={0};
+        var rejected=assertThrows(EngineApplication.ConversationPhoneStartRejected.class,()->app.startConversationPhone(review,true,()->true,id->allocations[0]++));
+        assertTrue(rejected.getMessage(),rejected.getMessage().contains("已开启"));
+        assertTrue(rejected.getMessage(),rejected.getMessage().contains("未连接"));
+        assertEquals(0,allocations[0]);assertNull(app.tasks.get(review.view().getString("requestId"),false));
+        assertNull(shadowOf(app).getNextStartedService());
+    }
+    @Test public void backgroundCanPrepareBeforeItsSessionAndNotificationChannelAreCreated()throws Exception {
+        app.features.register(new DisplayModule(new FeatureContext(app,app.settings,new SecretVault(app),event->{})));
+        assertNull(app.getSystemService(NotificationManager.class).getNotificationChannel(PhoneReadiness.TASK_CHANNEL));
+        JSONObject readiness=app.phoneReadiness();
+        assertTrue(readiness.toString(),readiness.getJSONObject("backgroundPreparation").getBoolean("ready"));
+        assertFalse(readiness.getJSONObject("backgroundExecution").getBoolean("ready"));
+        assertTrue(start(review("background")).getBoolean("admitted"));assertNotNull(shadowOf(app).getNextStartedService());
+    }
+    @Test public void mainCanPrepareBeforeItsNativeStopControlsAppear()throws Exception {
+        shadowOf(app.getSystemService(NotificationManager.class)).setNotificationsEnabled(false);
+        assertFalse(app.phoneReadiness().getJSONObject("stopControl").getBoolean("ready"));
+        assertTrue(start(review()).getBoolean("admitted"));assertNotNull(shadowOf(app).getNextStartedService());
+    }
+    @Test public void backgroundNotificationPermissionRevokedAfterReviewRejectsBeforeAllocation()throws Exception {
+        app.features.register(new DisplayModule(new FeatureContext(app,app.settings,new SecretVault(app),event->{})));
+        var review=review("background");PhoneReadiness.requireStart(app.phoneReadiness(),"background");shadowOf(app).denyPermissions(Manifest.permission.POST_NOTIFICATIONS);
+        int[] allocations={0};
+        assertThrows(EngineApplication.ConversationPhoneStartRejected.class,()->app.startConversationPhone(review,true,()->true,id->allocations[0]++));
+        assertEquals(0,allocations[0]);assertNull(app.tasks.get(review.view().getString("requestId"),false));assertNull(shadowOf(app).getNextStartedService());
     }
     @Test public void selectionChangeAtAllocationLeavesOnlyTheOriginalQueryableCreation()throws Exception {
         var review=review();String id=review.view().getString("requestId");

@@ -53,7 +53,8 @@ public final class PhoneObservationBoundariesNativeTest {
     private static volatile boolean noTree;
     private static final AtomicInteger helperMutations=new AtomicInteger();
     private static volatile CountDownLatch entered,release;
-    private static volatile boolean extraWindow,inlineCover,blockAction,animateEveryRead,unrelatedWindow,extraOverlay,blockGlobalReceipt;
+    private static volatile boolean extraWindow,inlineCover,blockAction,animateEveryRead,unrelatedWindow,extraOverlay,blockGlobalReceipt,windowAppearsDuringFrame;
+    private static volatile int screenshotFailure;
     private static AccessibilityNodeInfo root,target,ticker;
     private static View rootView,targetView,tickerView;
     private static volatile JSONObject topology;
@@ -70,6 +71,7 @@ public final class PhoneObservationBoundariesNativeTest {
         @Implementation protected Rect controlsBounds(){return new Rect();}
     }
     @Implements(android.accessibilityservice.AccessibilityService.class) public static class NativeWindows extends org.robolectric.shadows.ShadowAccessibilityService {
+        @Implementation protected void takeScreenshot(int displayId,java.util.concurrent.Executor executor,android.accessibilityservice.AccessibilityService.TakeScreenshotCallback callback){executor.execute(()->callback.onFailure(screenshotFailure));}
         @Implementation protected boolean performGlobalAction(int action){actions.incrementAndGet();if(pauseOnAction!=null)pauseOnAction.pause();if(blockGlobalReceipt){entered.countDown();try{if(!release.await(3,TimeUnit.SECONDS))throw new AssertionError("fixture release deadline");}catch(InterruptedException stopped){Thread.currentThread().interrupt();}}return true;}
         @Implementation protected SparseArray<List<AccessibilityWindowInfo>> getWindowsOnAllDisplays() {
             if(Looper.myLooper()==Looper.getMainLooper())mainReads.incrementAndGet();
@@ -93,10 +95,13 @@ public final class PhoneObservationBoundariesNativeTest {
     @Implements(DisplayModule.class) public static final class Helper {
         @Implementation protected void __constructor__(FeatureContext ignored){}
         @Implementation protected void __constructor__(FeatureContext ignored,DisplayModule.AdbFactory factory,DisplayModule.Configuration configuration,DisplayModule.StatusProbe probe){}
+        @Implementation protected void __constructor__(FeatureContext ignored,DisplayModule.AdbFactory factory,DisplayModule.Configuration configuration,DisplayModule.StatusProbe probe,DisplayModule.Exchange exchange){}
         @Implementation protected boolean hasSession(){return true;}
+        @Implementation protected boolean hasSession(String sessionId,int displayId){return "original-bg".equals(sessionId)&&displayId==helperDisplay;}
         @Implementation protected boolean isConnected(){return true;}
         @Implementation protected void connect(RunControl control){}
         @Implementation protected boolean ownedBy(String task){return task.equals("task");}
+        @Implementation protected boolean ownedBy(String task,String sessionId,int displayId){return ownedBy(task)&&hasSession(sessionId,displayId);}
         @Implementation protected void attachInstalledAppEvidence(JSONObject ignored){}
         @Implementation protected android.content.Context hostContext(){return RuntimeEnvironment.getApplication();}
         @Implementation protected JSONObject session()throws Exception {
@@ -105,11 +110,28 @@ public final class PhoneObservationBoundariesNativeTest {
                     .put("displayFlagsConfirmed",true).put("frameMetadataOnly",true).put("imeIsolation","available");
             return helperGeometry==null?session:helperGeometry.writeTo(session,true);
         }
+        @Implementation protected JSONObject session(String sessionId,int displayId)throws Exception {
+            if(!hasSession(sessionId,displayId))throw new SecurityException("fixture session changed");
+            return session();
+        }
+        @Implementation protected JSONObject refreshSession(String sessionId,int displayId,RunControl control,long revision,boolean owner)throws Exception {
+            control.check();if(control.pauseRevision()!=revision||control.isPaused()!=owner)throw new ShellBridgeClient.StaleRequestException();
+            return session(sessionId,displayId);
+        }
+        @Implementation protected JSONObject requestAdmitted(String command,JSONObject args,RunControl control,long revision,String sessionId,int displayId,dev.pocketengine.phone.observation.NativePhoneEntry.Admission admission)throws Exception {
+            session(sessionId,displayId);admission.check();
+            return request(command,new JSONObject(args.toString()).put("sessionId",sessionId).put("displayId",displayId),control,revision,false);
+        }
+        @Implementation protected JSONObject requestOcrTap(JSONObject args,RunControl control,long revision,String sessionId,int displayId,dev.pocketengine.phone.observation.NativePhoneEntry.Admission admission)throws Exception {
+            return requestAdmitted("tap",args,control,revision,sessionId,displayId,admission);
+        }
         @Implementation protected JSONObject request(String command,JSONObject args,RunControl control,long revision,boolean owner)throws Exception {
             control.check();assertEquals(control.pauseRevision(),revision);assertEquals(owner,control.isPaused());
+            session(args.getString("sessionId"),args.getInt("displayId"));
             if("ownership".equals(command))return new JSONObject().put("ok",true).put("ownership",new JSONObject(topology.toString()));
             if(command.equals("tap")||command.equals("swipe")){helperMutations.incrementAndGet();actions.incrementAndGet();return new JSONObject().put("ok",true).put("accepted",true).put("verified",false);}
             assertEquals("frame",command);
+            if(windowAppearsDuringFrame)extraWindow=true;
             JSONObject frame=new JSONObject().put("ok",true).put("sessionId","original-bg").put("displayId",helperDisplay).put("width",320).put("height",470)
                     .put("frameGeneration",frameGeneration).put("framePending",frameGeneration>1).put("empty",false).put("capturedAt",10);
             if(helperGeometry!=null)helperGeometry.writeTo(frame,true);
@@ -117,7 +139,7 @@ public final class PhoneObservationBoundariesNativeTest {
         }
     }
     @Before public void start()throws Exception {
-        reads.set(0);actions.set(0);mainReads.set(0);helperMutations.set(0);noTree=false;display=0;blockAt=-1;entered=new CountDownLatch(1);release=new CountDownLatch(1);extraWindow=false;inlineCover=false;blockAction=false;animateEveryRead=false;unrelatedWindow=false;extraOverlay=false;blockGlobalReceipt=false;frameGeneration=1;pauseOnAction=null;helperDisplay=9;helperGeometry=null;
+        reads.set(0);actions.set(0);mainReads.set(0);helperMutations.set(0);noTree=false;display=0;blockAt=-1;entered=new CountDownLatch(1);release=new CountDownLatch(1);extraWindow=false;inlineCover=false;blockAction=false;animateEveryRead=false;unrelatedWindow=false;extraOverlay=false;blockGlobalReceipt=false;windowAppearsDuringFrame=false;screenshotFailure=android.accessibilityservice.AccessibilityService.ERROR_TAKE_SCREENSHOT_INTERNAL_ERROR;frameGeneration=1;pauseOnAction=null;helperDisplay=9;helperGeometry=null;
         service=Robolectric.buildService(PhoneAccessibilityService.class).create().get();Field instance=PhoneAccessibilityService.class.getDeclaredField("instance");instance.setAccessible(true);instance.set(null,service);
         rootView=new View(RuntimeEnvironment.getApplication());targetView=new View(RuntimeEnvironment.getApplication());tickerView=new View(RuntimeEnvironment.getApplication());buildTree(false);
         topology=facts("owner.reader",11,9,false);
@@ -149,6 +171,11 @@ public final class PhoneObservationBoundariesNativeTest {
         return future.get(1,TimeUnit.SECONDS);
     }
     private JSONObject observe(PhonePort port,RunControl control)throws Exception {JSONObject value=complete(caller.submit(()->port.observe(false,control)));assertTrue(value.toString(),value.optBoolean("ok"));return value;}
+    private JSONObject capture(PhonePort port,RunControl control)throws Exception {
+        Future<JSONObject> pending=caller.submit(()->port.observe(true,control));long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);
+        while(!pending.isDone()&&System.nanoTime()<until){Shadows.shadowOf(Looper.getMainLooper()).idleFor(20,TimeUnit.MILLISECONDS);Thread.sleep(2);}
+        return pending.get(1,TimeUnit.SECONDS);
+    }
     private static JSONObject click(JSONObject observed)throws Exception {
         JSONArray nodes=observed.getJSONArray("nodes");String id="";for(int i=0;i<nodes.length();i++)if("fixed".equals(nodes.getJSONObject(i).optString("text")))id=nodes.getJSONObject(i).getString("id");assertFalse(id.isEmpty());
         return new JSONObject().put("observationId",observed.getString("observationId")).put("nodeId",id);
@@ -182,6 +209,44 @@ public final class PhoneObservationBoundariesNativeTest {
         PhonePort port=background();RunControl run=control();JSONObject observed=observe(port,run);ticker.setText("00:02");frameGeneration=99;animateEveryRead=true;
         JSONObject receipt=complete(caller.submit(()->port.execute("phone_click_node",click(observed),run)));assertTrue(receipt.toString(),receipt.optBoolean("accepted"));assertEquals(1,actions.get());assertFalse(run.isPaused());
         JSONObject next=observe(port,run);receipt=complete(caller.submit(()->port.execute("phone_click_node",click(next),run)));assertTrue(receipt.toString(),receipt.optBoolean("accepted"));assertEquals(2,actions.get());
+    }
+    @Test public void backgroundCaptureRetainsChangingTextButRequiresFreshPixelsForCoordinates()throws Exception {
+        BackgroundPhonePort port=background();RunControl run=control();animateEveryRead=true;
+        JSONObject observed=capture(port,run);
+        assertTrue(observed.toString(),observed.optBoolean("ok"));assertTrue(observed.getBoolean("changedDuringRead"));
+        assertTrue(dev.pocketengine.phone.observation.ObservationReport.hasImage(observed));assertFalse(observed.getBoolean("coordinateActionsAvailable"));
+        JSONObject receipt=complete(caller.submit(()->port.execute("phone_click_node",click(observed),run)));
+        assertTrue(receipt.toString(),receipt.optBoolean("accepted"));assertEquals(1,actions.get());
+        JSONObject next=capture(port,run);
+        JSONObject point=new JSONObject().put("observationId",next.getString("observationId")).put("x",200).put("y",140);
+        JSONObject refused=complete(caller.submit(()->port.execute("phone_tap",point,run)));
+        assertFalse(refused.toString(),refused.optBoolean("accepted"));assertEquals(0,helperMutations.get());assertEquals(1,actions.get());assertFalse(run.isPaused());
+    }
+    @Test public void backgroundPendingFrameKeepsCurrentTreeAndDoesNotPublishStalePixels()throws Exception {
+        BackgroundPhonePort port=background();RunControl run=control();frameGeneration=2;
+        JSONObject observed=capture(port,run);
+        assertTrue(observed.toString(),observed.optBoolean("ok"));assertFalse(observed.has("imageBase64"));
+        assertEquals("frame_pending",observed.getString("imageUnavailableReason"));assertFalse(observed.getBoolean("coordinateActionsAvailable"));
+        JSONObject receipt=complete(caller.submit(()->port.execute("phone_click_node",click(observed),run)));
+        assertTrue(receipt.toString(),receipt.optBoolean("accepted"));assertEquals(1,actions.get());assertEquals(0,helperMutations.get());
+    }
+    @Test public void aNewWindowDuringBackgroundCaptureStillRejectsTheMixedObservation()throws Exception {
+        BackgroundPhonePort port=background();RunControl run=control();windowAppearsDuringFrame=true;
+        JSONObject observed=capture(port,run);
+        assertFalse(observed.toString(),observed.optBoolean("ok"));assertEquals("screen_changed",observed.getString("error"));assertEquals(0,actions.get());
+    }
+    @Test public void foregroundScreenshotFailureKeepsFreshNodesWithoutPretendingAnImageExists()throws Exception {
+        PhonePort port=foreground();RunControl run=control();
+        JSONObject observed=capture(port,run);
+        assertTrue(observed.toString(),observed.optBoolean("ok"));assertFalse(observed.has("imageBase64"));
+        assertEquals("screenshot_unavailable",observed.getString("imageUnavailableReason"));assertFalse(observed.getBoolean("coordinateActionsAvailable"));
+        JSONObject receipt=complete(caller.submit(()->port.execute("phone_click_node",click(observed),run)));
+        assertTrue(receipt.toString(),receipt.optBoolean("accepted"));assertEquals(1,actions.get());
+    }
+    @Test public void foregroundCapturePermissionLossNeverBecomesANodeOnlySuccess()throws Exception {
+        PhonePort port=foreground();RunControl run=control();screenshotFailure=android.accessibilityservice.AccessibilityService.ERROR_TAKE_SCREENSHOT_NO_ACCESSIBILITY_ACCESS;
+        JSONObject observed=capture(port,run);
+        assertFalse(observed.toString(),observed.optBoolean("ok"));assertEquals("permission_denied",observed.getString("error"));assertEquals(0,actions.get());
     }
     @Test public void exactReplacementMoveAncestorAndNewCoverEachRefuseOldTarget()throws Exception {
         for(int mode=0;mode<6;mode++) {
