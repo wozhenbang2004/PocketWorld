@@ -3,6 +3,7 @@ package dev.pocketengine.ui.web
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.view.Choreographer
 import dev.pocketengine.core.ModelConfig
 import dev.pocketengine.core.RuntimeDiagnostics
 import dev.pocketengine.features.devices.NativeDeviceWorkspaceHost
@@ -123,6 +124,12 @@ internal class PocketWebBridge(
     @Volatile private var closed = false
     private var revision = 0L
     private var lastState: String? = null
+    private val choreographer by lazy { Choreographer.getInstance() }
+    private var statePublicationScheduled = false
+    private val statePublication = Choreographer.FrameCallback {
+        statePublicationScheduled = false
+        publishStateNow()
+    }
     private var section: String? = null
     private var taskPage: String? = null
     private var taskViewId: String? = null
@@ -250,6 +257,7 @@ internal class PocketWebBridge(
         if (closed) return
         closed = true
         started = false
+        cancelStatePublication()
         presentation.close()
         background.clear()
         remoteInbox.close()
@@ -289,6 +297,7 @@ internal class PocketWebBridge(
     /** Synchronously invalidate queued commands and short-lived owner review handles. */
     fun invalidatePresentation(documentReplaced: Boolean) {
         check(Looper.myLooper() == Looper.getMainLooper())
+        cancelStatePublication()
         commandFence.invalidate()
         phoneViewer.clear()
         background.clear()
@@ -304,6 +313,25 @@ internal class PocketWebBridge(
     }
 
     private fun publishState(force: Boolean = false) {
+        if (closed || !started) return
+        // Commands and draft persistence still run immediately. Only their display
+        // projection is coalesced, before building or serializing the full snapshot.
+        if (force) {
+            cancelStatePublication()
+            publishStateNow(true)
+        } else if (!statePublicationScheduled) {
+            statePublicationScheduled = true
+            choreographer.postFrameCallback(statePublication)
+        }
+    }
+
+    private fun cancelStatePublication() {
+        if (!statePublicationScheduled) return
+        choreographer.removeFrameCallback(statePublication)
+        statePublicationScheduled = false
+    }
+
+    private fun publishStateNow(force: Boolean = false) {
         if (closed || !started) return
         var projection: JSONObject? = null
         snapshotObserver.observeReads {
