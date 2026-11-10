@@ -71,7 +71,20 @@ final class QuickPanelDraftStore {
     }
 
     State accepted(String client) throws Exception {
-        synchronized (DISK) { requirePending(client); return save("", ""); }
+        synchronized (DISK) {
+            if (!healthy && current != null && client != null && !client.isEmpty() && client.equals(current.pendingClient)) {
+                // The original host has confirmed this send again. Reconcile only the local
+                // cleanup that failed; never reopen submission or overwrite a newer draft.
+                State stored = read();
+                State cleared = new State(Math.addExact(current.revision, 1), "", "");
+                if (cleared.same(stored)) {
+                    current = stored; healthy = true; return current;
+                }
+                if (!current.same(stored)) throw new IllegalStateException("原草稿已变化，未覆盖新内容；请核对已登记回执");
+                healthy = true;
+            }
+            requirePending(client); return save("", "");
+        }
     }
 
     State rejectedBeforeDispatch(String client) throws Exception {
