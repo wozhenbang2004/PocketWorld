@@ -7,19 +7,29 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.pm.PackageInfo;
 import android.content.pm.ServiceInfo;
+import android.content.pm.Signature;
 import android.os.Process;
+import android.os.SystemClock;
+import android.os.UserManager;
 import android.provider.Settings;
 import android.service.notification.NotificationListenerService;
 import android.service.notification.StatusBarNotification;
 import dev.pocketengine.features.EngineModule;
 import dev.pocketengine.features.FeatureContext;
+import dev.pocketengine.core.CapabilityPort;
+import dev.pocketengine.core.EventSink;
+import dev.pocketengine.core.RunControl;
+import dev.pocketengine.features.capabilities.ModelCapabilityAdapters;
+import dev.pocketengine.store.TaskStore;
+import java.util.ArrayList;
 import java.util.Set;
 import java.util.function.Consumer;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-/** Private owner preview ingress. Generic commands cannot grant, read, export or execute it. */
+/** Owner-selected preview ingress. Model delivery is a separate original-task approval. */
 public final class NotificationsModule implements EngineModule {
     /** Implemented by the one Application; the listener never constructs a second feature host. */
     public interface Host { NotificationsModule notificationsModule(); }
@@ -33,7 +43,8 @@ public final class NotificationsModule implements EngineModule {
     private OwnerNotificationListenerService listener;
     private NotificationInbox.Lease lease;
     private String state="disabled";
-    private boolean closed, cleanupUnconfirmed;
+    private volatile boolean closed;
+    private boolean cleanupUnconfirmed;
     private long rejectedPreviews;
 
     public NotificationsModule(FeatureContext context){this(context.android,payload->context.emit("notifications",payload));}
@@ -52,6 +63,70 @@ public final class NotificationsModule implements EngineModule {
         // No JSON owner=true/private scope/grant field can cross this boundary.
         throw new SecurityException("通知仅可在本机可见的主人界面审阅；群聊、模型和通用功能命令不能读取或授权");
     }
+    /** Mount only on the existing private phone run. This does not enable notification access. */
+    public CapabilityPort bind(CapabilityPort existing,TaskStore tasks,ModelCapabilityAdapters.Binding binding,RunControl originalControl,EventSink approvalEvents)throws Exception {
+        if(closed)throw new IllegalStateException("通知模块已关闭");
+        JSONObject task=tasks.get(binding.taskId,false);
+        if(!NotificationTaskAuthority.eligible(task,binding.allowWrites))return existing;
+        if(binding.originalControl()!=originalControl||!originalControl.matchesHostRun(binding.taskId,binding.runId,binding.epoch)
+                ||!binding.runId.equals(task.optString("runId"))||binding.epoch!=task.optInt("coordinatorEpoch"))throw new SecurityException("通知等待需要原任务执行绑定");
+        return new NotificationTaskCapabilityPort(existing,originalControl,new NotificationTaskAuthority(tasks,binding,approvalEvents),this);
+    }
+    static final class TaskSource {
+        final NotificationInbox.Lease lease;
+        final String packageName,identity;
+        TaskSource(NotificationInbox.Lease lease,String packageName,JSONObject identity){this.lease=lease;this.packageName=packageName;this.identity=identity.toString();}
+        JSONObject description()throws Exception{return new JSONObject(identity);}
+    }
+    static final class TaskSourceUnavailable extends Exception {
+        TaskSourceUnavailable(String message){super(message);}
+    }
+    /** Body-free source identity for the exact owner approval; never a reading grant. */
+    synchronized TaskSource taskSource(String packageName)throws Exception {
+        reconcilePlatform();
+        if(closed||!policyPersistenceHealthy||!inbox.enabled()||!inbox.current(lease)||!inbox.accepts(lease,packageName)||!declared()||!accessGranted())
+            throw new TaskSourceUnavailable("请在通知设置允许这个应用的预览并连接系统监听，再审批原任务的单次通知等待");
+        if(packageName.equals(app.getPackageName()))throw new TaskSourceUnavailable("本应用的任务通知不能作为通知等待输入");
+        try{
+            UserManager users=app.getSystemService(UserManager.class);
+            int user=dev.pocketengine.phone.setup.AndroidAppCopies.id(Process.myUserHandle());
+            long serial=users==null?-1:users.getSerialNumberForUser(Process.myUserHandle());
+            if(user<0||serial<0||!users.isUserUnlocked())throw new TaskSourceUnavailable("当前宿主 Android 资料未解锁或身份不可核验");
+            PackageManager pm=app.getPackageManager();PackageInfo pkg=pm.getPackageInfo(packageName,PackageManager.GET_SIGNING_CERTIFICATES);
+            if(pkg.applicationInfo==null||!pkg.applicationInfo.enabled||pkg.applicationInfo.uid<0||pkg.applicationInfo.uid/100000!=user||pm.isPackageSuspended(packageName)||pkg.signingInfo==null)
+                throw new TaskSourceUnavailable("当前资料的通知应用身份或可用状态不可核验");
+            Signature[] signers=pkg.signingInfo.getApkContentsSigners();
+            if(signers==null||signers.length==0)throw new TaskSourceUnavailable("通知应用签名不可核验");
+            ArrayList<String> certificates=new ArrayList<>();
+            for(Signature signer:signers){byte[] digest=java.security.MessageDigest.getInstance("SHA-256").digest(signer.toByteArray());StringBuilder encoded=new StringBuilder();for(byte value:digest)encoded.append(String.format(java.util.Locale.ROOT,"%02x",value&255));certificates.add(encoded.toString());}
+            certificates.sort(String::compareTo);
+            JSONObject identity=new JSONObject().put("packageName",packageName).put("uid",pkg.applicationInfo.uid).put("userId",user).put("profileSerial",serial)
+                    .put("versionCode",pkg.getLongVersionCode()).put("firstInstallTime",pkg.firstInstallTime).put("lastUpdateTime",pkg.lastUpdateTime).put("certificates",new JSONArray(certificates))
+                    .put("consentRevision",inbox.revision()).put("connectionId",lease.connectionId).put("scope","current_host_android_profile");
+            return new TaskSource(lease,packageName,identity);
+        }catch(PackageManager.NameNotFoundException|RuntimeException unavailable){throw new TaskSourceUnavailable("通知应用或资料身份不可读取，请在本机确认后重试");}
+    }
+    synchronized void requireTaskSource(TaskSource expected)throws Exception {
+        TaskSource current=taskSource(expected.packageName);
+        if(expected.lease!=current.lease||!TaskStore.capabilityFingerprint(expected.description()).equals(TaskStore.capabilityFingerprint(current.description())))
+            throw new TaskSourceUnavailable("通知连接、授权范围、应用安装或资料已变化；旧的等待不能继续");
+    }
+    synchronized NotificationInbox.Wait beginTaskWait(TaskSource source,NotificationWaitRequest request,long taskDeadlineAt)throws Exception {
+        requireTaskSource(source);long duration=Math.min(request.timeoutMs,taskDeadlineAt-System.currentTimeMillis());
+        if(duration<=0)throw new TaskSourceUnavailable("原任务期限已到，不能开始新的通知等待");
+        long now=SystemClock.elapsedRealtime();return inbox.beginWait(source.lease,request,now,now+duration);
+    }
+    synchronized JSONObject taskWaitMatch(TaskSource source,NotificationInbox.Wait waiting)throws Exception {
+        requireTaskSource(source);NotificationInbox.Notice notice=inbox.matched(waiting,SystemClock.elapsedRealtime());
+        if(notice==null)return null;
+        return envelope(notice).put("audience","original_owner_phone_task").put("consentRevision",source.lease.revision)
+                .put("connectionId",source.lease.connectionId).put("observedWhileWaiting",true).put("historyReplay",false);
+    }
+    synchronized void awaitTaskWaitChange(NotificationInbox.Wait waiting,long millis)throws InterruptedException {
+        // Polling bounds cancellation and source checks; no callback may start or resume a run.
+        long remaining=waiting.deadline-SystemClock.elapsedRealtime();if(remaining>0)wait(Math.max(1,Math.min(Math.min(millis,remaining),200)));
+    }
+    synchronized void endTaskWait(NotificationInbox.Wait waiting){inbox.closeWait(waiting);}
     public synchronized JSONObject ownerState(Activity activity)throws Exception {
         requireVisibleOwner(activity);reconcilePlatform();return metadata().put("packages",new JSONArray(inbox.packages()));
     }
@@ -154,14 +229,17 @@ public final class NotificationsModule implements EngineModule {
         return new JSONObject().put("id",id()).put("status",state).put("enabled",inbox.enabled()).put("listenerConnected",inbox.connected()).put("systemAccessGranted",accessGranted()).put("serviceDeclared",declared())
                 .put("consentRevision",inbox.revision()).put("sequence",inbox.sequence()).put("evicted",inbox.evicted()).put("rejectedPreviews",rejectedPreviews)
                 .put("cleanupUnconfirmed",cleanupUnconfirmed).put("defaultEnabled",false).put("restartRequiresOwnerConfirmation",false).put("restoredConsent",restoredConsent).put("policyPersistenceHealthy",policyPersistenceHealthy).put("fullMessageHistory",false).put("automaticExecution",false).put("groupAccess",false)
+                .put("taskWaitImplemented",true).put("taskWaitRequiresSeparateOwnerApproval",true).put("taskWaitMaxMillis",NotificationWaitRequest.MAX_TIMEOUT_MS)
                 .put("maxActive",NotificationInbox.MAX_ACTIVE).put("retentionMillis",NotificationInbox.RETENTION_MILLIS).put("commands",new JSONArray());
     }
     private static JSONObject envelope(NotificationInbox.Notice notice)throws Exception {
         return new JSONObject().put("source","android_notification_preview").put("trust","low").put("authority","none").put("audience","owner_private").put("notificationRef",notice.ref).put("version",notice.version)
                 .put("kind",notice.kind).put("packageName",notice.packageName).put("postedAt",notice.content.postedAt).put("observedElapsedMillis",notice.observedAt).put("triggerCandidate",notice.triggerCandidate)
-                .put("preview",new JSONObject().put("title",notice.content.title).put("text",notice.content.text).put("channelId",notice.content.channel).put("category",notice.content.category).put("ongoing",notice.content.ongoing))
+                .put("preview",new JSONObject().put("title",notice.content.title).put("text",notice.content.text).put("channelId",notice.content.channel).put("category",notice.content.category).put("ongoing",notice.content.ongoing)
+                        .put("titleTruncated",notice.content.titleTruncated).put("textTruncated",notice.content.textTruncated).put("channelIdTruncated",notice.content.channelTruncated).put("categoryTruncated",notice.content.categoryTruncated)
+                        .put("titleLimitUtf16",512).put("textLimitUtf16",2048).put("isFullMessage",false))
                 .put("isMessageHistory",false).put("identityVerifiedFromContent",false).put("mayExecute",false);
     }
-    private void changed(){try{events.accept(new JSONObject().put("kind","notification_state_changed").put("consentRevision",inbox.revision()).put("sequence",inbox.sequence()).put("status",state));}catch(RuntimeException|org.json.JSONException ignored){}}
+    private synchronized void changed(){notifyAll();try{events.accept(new JSONObject().put("kind","notification_state_changed").put("consentRevision",inbox.revision()).put("sequence",inbox.sequence()).put("status",state));}catch(RuntimeException|org.json.JSONException ignored){}}
     @Override public synchronized void close(){if(closed)return;closed=true;inbox.disconnect(lease);releaseListener();state="closed";changed();}
 }

@@ -10661,6 +10661,42 @@ public final class TaskStore {
         if(policy!=null)row.put("policyDecision",policy);approvals.put(row);task.put("approvals",approvals);write(task);
         return new JSONObject().put("approved",policy!=null).put("approvalId",approval).put("state",policy==null?"pending":"consumed");
     }
+    /** Read-only preflight; each original child operation still reserves and spends its own budget. */
+    public synchronized void requirePhoneAppRestartBudget(String id,String run,int epoch,RunControl original,int remaining)throws Exception {
+        if(remaining<1||remaining>2||original==null||!original.matchesHostRun(id,run,epoch)||original.isPaused())throw new SecurityException("原冷启动运行或预算检查无效");
+        original.check();db.beginTransaction();
+        try{
+            checkCapabilityCurrent(id,run,epoch,"phone_prepare_cold_start");JSONObject task=required(id);requirePrivateOwner(task);
+            if(!"phone".equals(task.optString("kind"))||!task.optString("executionMode").matches("main_screen|background")
+                    ||task.has("origin")&&!task.isNull("origin")||task.has("workProfileRef")||task.has("workProfileIntent"))throw new SecurityException("原应用操作不属于当前私人手机任务");
+            requireExecutionGrantCurrent(task,run,epoch);JSONObject permission=grant(run),scope=task.optJSONObject("executionScope");
+            if(permission.optInt("remainingOperations")<remaining||scope!=null&&scope.getInt("toolLimit")-scope.getInt("toolsUsed")-deviceTasks.heldBudget(id,run,false)<remaining)
+                throw new IllegalStateException("冷启动前须保留停止及重新打开应用的原操作额度；没有补充或预消费预算");
+            original.check();if(original.isPaused())throw new SecurityException("原冷启动已暂停");db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
+    }
+    /** Read-only check of one consumed cold-start review. It never consumes again or creates a child-operation permit. */
+    public synchronized void requireConsumedPhoneAppApproval(String id,String run,int epoch,String approvalId,JSONObject originalArgs,JSONObject capability,RunControl original)throws Exception {
+        if(original==null||!original.matchesHostRun(id,run,epoch)||original.isPaused())throw new SecurityException("原应用操作控制已变化");
+        original.check();db.beginTransaction();
+        try{
+            checkCapabilityCurrent(id,run,epoch,"phone_prepare_cold_start");JSONObject task=required(id);requirePrivateOwner(task);
+            if(!"phone".equals(task.optString("kind"))||!task.optString("executionMode").matches("main_screen|background")
+                    ||task.has("origin")&&!task.isNull("origin")||task.has("workProfileRef")||task.has("workProfileIntent"))throw new SecurityException("原应用操作不属于当前私人手机任务");
+            JSONArray approvals=task.optJSONArray("approvals");JSONObject found=null;
+            for(int i=0;approvals!=null&&i<approvals.length();i++){
+                JSONObject row=approvals.getJSONObject(i);if(!approvalId.equals(row.optString("id")))continue;
+                if(found!=null)throw new SecurityException("原应用审批身份不唯一");found=row;
+            }
+            if(found==null||!run.equals(found.optString("runId"))||!"phone_prepare_cold_start".equals(found.optString("tool"))
+                    ||!"consumed".equals(found.optString("state"))||found.optLong("expiresAt")<=System.currentTimeMillis()
+                    ||!capabilityFingerprint(originalArgs).equals(found.optString("argumentsHash"))
+                    ||!canonical(capability).equals(found.optString("capabilityKey"))||!capability.optBoolean("requiresOwnerConsent")
+                    ||found.has("policyDecision"))throw new SecurityException("原完整冷启动审批已失效或不是本次准确对象");
+            original.check();if(original.isPaused()||!original.matchesHostRun(id,run,epoch))throw new SecurityException("原应用操作已暂停或换代");
+            db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
+    }
     /** Native owner-authored instructions for a separate tool reviewer; tool/page text is not authority. */
     public synchronized JSONObject toolPermissionContext(String id,String run,int epoch,RunControl original)throws Exception{
         checkExtensionRun(id,run,epoch,original);JSONObject task=required(id);

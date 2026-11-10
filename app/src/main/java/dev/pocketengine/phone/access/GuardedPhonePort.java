@@ -15,6 +15,13 @@ public final class GuardedPhonePort implements PhonePort,NativeOcrTapPort,Native
     public GuardedPhonePort(PhonePort inner,PhoneAccessPolicy policy,PhoneOwnerPackages.Probe owners,int nativeUser){this.inner=java.util.Objects.requireNonNull(inner);this.policy=java.util.Objects.requireNonNull(policy);this.owners=java.util.Objects.requireNonNull(owners);if(nativeUser<0||nativeUser>99999)throw new IllegalArgumentException("native_user_required");this.nativeUser=nativeUser;}
     public PhonePort physicalPort(){return inner;}
     public long policyRevision(){return policy.current().revision();}
+    /** Native finite app control only: exact target permission, without reading a replacement foreground app. */
+    public void requireAppControlTarget(String packageName,int userId,RunControl original)throws Exception {
+        original.check();if(original.isPaused()||!original.phoneSurfaceActive())throw new SecurityException("original_app_control_stopped");
+        PhoneAccessPolicy.State captured=policy.current();
+        captured.require(Set.of(new AppCopyKey(packageName,userId)),true,PhoneAccessPolicy.Use.AUTOMATION);
+        original.check();if(captured.revision()!=policy.current().revision()||!policy.current().available()||!inner.isConnected())throw new PhoneAccessPolicy.Denied("app_policy_changed");
+    }
     public boolean referencePolicyCurrent(){PhoneAccessPolicy.State current=policy.current();return current.available()&&(referenceRevision<0||referenceRevision==current.revision());}
     @Override public boolean isConnected(){return policy.current().available()&&inner.isConnected();}
     @Override public void clearReferences(){referenceRevision=-1;referenceControl=null;inner.clearReferences();}

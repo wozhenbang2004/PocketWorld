@@ -9,6 +9,7 @@ import org.json.JSONObject;
 public final class ToolApprovalPermit {
     public interface Current { void check()throws Exception; }
     private static final ThreadLocal<ToolApprovalPermit> ACTIVE=new ThreadLocal<>();
+    private static final ThreadLocal<NativeOwnerReview> NATIVE_REVIEW=new ThreadLocal<>();
     private final Object owner;
     private final String task,run,tool,argumentsHash;
     private final RunControl control;
@@ -24,6 +25,42 @@ public final class ToolApprovalPermit {
     }
     static void clear(Object owner){ToolApprovalPermit active=ACTIVE.get();if(active!=null&&active.owner==owner)ACTIVE.remove();}
     static JSONObject exact(JSONObject arguments)throws Exception{JSONObject result=new JSONObject(arguments.toString());result.remove("_hostOperationId");return result;}
+    /** One outer beforeTool invocation only. This routing scope never creates an approval permit. */
+    static final class NativeOwnerReview implements AutoCloseable {
+        private final ModelCapabilityAdapters.Binding binding;
+        private final String tool,argumentsHash;
+        private final RunControl control;
+        private final long pause;
+        private boolean requested,closed;
+        private NativeOwnerReview(ModelCapabilityAdapters.Binding binding,String tool,JSONObject arguments,RunControl control)throws Exception {
+            binding.check(control);this.binding=binding;this.tool=tool;this.control=control;pause=control.pauseRevision();
+            argumentsHash=TaskStore.capabilityFingerprint(exact(arguments));
+        }
+        private void check()throws Exception {
+            if(closed||NATIVE_REVIEW.get()!=this)throw new SecurityException("原生主人审批路由已离开原调用");
+            binding.check(control);if(control.pauseRevision()!=pause)throw new SecurityException("原生主人审批路由经历暂停，不能继续旧调用");
+        }
+        boolean requested()throws Exception{check();return requested;}
+        @Override public void close(){closed=true;if(NATIVE_REVIEW.get()==this)NATIVE_REVIEW.remove();}
+    }
+    static NativeOwnerReview nativeOwnerReview(ModelCapabilityAdapters.Binding binding,String tool,JSONObject arguments,RunControl control)throws Exception {
+        if(NATIVE_REVIEW.get()!=null)throw new SecurityException("不能嵌套替换原生主人审批路由");
+        NativeOwnerReview review=new NativeOwnerReview(binding,tool,arguments,control);NATIVE_REVIEW.set(review);return review;
+    }
+    /**
+     * Native wrappers call only from beforeTool when execute must require an exact protected owner
+     * review or recheck the consumed parent review. This is not a model field, approval or grant.
+     * Without an outer policy invocation the wrapper simply retains its ordinary native review.
+     */
+    public static void requireNativeOwnerReview(ModelCapabilityAdapters.Binding binding,String tool,JSONObject arguments,RunControl original)throws Exception {
+        binding.check(original);NativeOwnerReview review=NATIVE_REVIEW.get();if(review==null)return;
+        review.check();
+        if(review.control!=original||!review.binding.taskId.equals(binding.taskId)||!review.binding.runId.equals(binding.runId)
+                ||review.binding.epoch!=binding.epoch||!review.tool.equals(tool)
+                ||!review.argumentsHash.equals(TaskStore.capabilityFingerprint(exact(arguments))))
+            throw new SecurityException("原生主人审批路由不属于当前准确调用");
+        review.requested=true;
+    }
     /** Only the mounted native descriptor may bind its validated defaults to the exact reviewed call. */
     static JSONObject normalizeArguments(ModelCapabilityAdapters.Binding binding,CapabilityDescriptor route,JSONObject original,RunControl control)throws Exception{
         JSONObject normalized=route.normalize(original);ToolApprovalPermit active=ACTIVE.get();

@@ -15,10 +15,12 @@ public final class PhoneBoundedOperation {
 
     public static void validate(String tool,JSONObject args)throws Exception {
         if(!supports(tool))throw new IllegalArgumentException("bounded_phone_tool_unknown");
-        PhoneTreeExtract.keys(args,FIND.equals(tool)?new String[]{"observationId","containerId","selector","direction","maxScrolls","source","scrollMode","axis"}
-                :new String[]{"observationId","nodeId","value","direction","maxSteps","method"});
+        PhoneTreeExtract.keys(args,FIND.equals(tool)?new String[]{"observationId","containerId","regionId","selector","direction","maxScrolls","source","scrollMode","axis"}
+                :new String[]{"observationId","nodeId","regionId","value","direction","maxSteps","method"});
         PhoneTreeExtract.text(args,"observationId",100);
-        PhoneTreeExtract.text(args,FIND.equals(tool)?"containerId":"nodeId",100);
+        String nativeKey=FIND.equals(tool)?"containerId":"nodeId";
+        if(args.has(nativeKey)==args.has("regionId"))throw new IllegalArgumentException("exactly_one_phone_region_required");
+        PhoneTreeExtract.text(args,args.has("regionId")?"regionId":nativeKey,100);
         if(!Set.of("forward","backward").contains(PhoneTreeExtract.text(args,"direction",10)))throw new IllegalArgumentException("bounded_phone_direction_invalid");
         PhoneTreeExtract.integer(args,FIND.equals(tool)?"maxScrolls":"maxSteps",12,1,MAX_STEPS);
         if(FIND.equals(tool)){
@@ -28,8 +30,11 @@ public final class PhoneBoundedOperation {
             option(args,"scrollMode","auto",Set.of("auto","native","gesture"));
             option(args,"axis","vertical",Set.of("vertical","horizontal"));
             if("ocr".equals(args.optString("source"))&&!PhoneTargetSearch.canUseOcr(selector))throw new IllegalArgumentException("ocr_find_requires_text_only_selector");
+            if(args.has("regionId")&&(!PhoneTargetSearch.canUseOcr(selector)||"tree".equals(args.optString("source"))||"native".equals(args.optString("scrollMode"))))
+                throw new IllegalArgumentException("visual_find_requires_ocr_and_gesture");
         }else{
             PhoneTreeExtract.text(args,"value",100);option(args,"method","auto",Set.of("auto","native","drag"));
+            if(args.has("regionId")&&"native".equals(args.optString("method")))throw new IllegalArgumentException("visual_wheel_requires_drag");
         }
     }
     private static String option(JSONObject args,String key,String fallback,Set<String> allowed)throws Exception {
@@ -43,15 +48,24 @@ public final class PhoneBoundedOperation {
         private final JSONObject selector;
         private final int window,maxSteps;
         private final long created,pause,appPolicyRevision;
+        private final PhoneVisualRegion visualRegion;
         private String previous="",lastMethod="",pendingTool="";
         private boolean started,typed,pendingSettled=true,gestureFallback;
+        private int acceptedSteps;
         private JSONObject pendingArgs,pendingDrag,previousDrag;
 
-        private State(String tool,JSONObject args,JSONObject actual,long now)throws Exception {
+        private State(String tool,JSONObject args,JSONObject actual,long now,PhoneVisualRegion region)throws Exception {
             validate(tool,args);this.tool=tool;initialObservation=actual.getString("observationId");
             if(!initialObservation.equals(args.getString("observationId")))throw new SecurityException("bounded_phone_start_changed");
-            JSONObject node=PhoneRegionGesture.node(actual,args.getString(FIND.equals(tool)?"containerId":"nodeId"));
-            structure=node.getString("structuralFingerprint");window=node.getInt("windowId");path=node.getJSONArray("path").toString();
+            visualRegion=region;
+            if(args.has("regionId")){
+                if(region==null||!region.id.equals(args.getString("regionId")))throw new SecurityException("visual_region_unavailable");
+                region.requireScope(actual,now);structure="";window=-1;path="";
+            }else{
+                if(region!=null)throw new SecurityException("visual_region_argument_mismatch");
+                JSONObject node=PhoneRegionGesture.node(actual,args.getString(FIND.equals(tool)?"containerId":"nodeId"));
+                structure=node.getString("structuralFingerprint");window=node.getInt("windowId");path=node.getJSONArray("path").toString();
+            }
             scope=PhoneTreeSequence.scope(actual);packageName=actual.optString("packageName");
             if(packageName.isEmpty())throw new SecurityException("bounded_phone_app_unknown");
             direction=args.getString("direction");target=args.optString("value");selector=args.optJSONObject("selector")==null?null:new JSONObject(args.getJSONObject("selector").toString());
@@ -61,12 +75,14 @@ public final class PhoneBoundedOperation {
 
         public int stepLimit(){return maxSteps+1;}
         public boolean wheel(){return WHEEL.equals(tool);}
+        boolean visual(){return visualRegion!=null;}
         public boolean started(){return started;}
         public void start(String observation){if(started||!initialObservation.equals(observation))throw new SecurityException("bounded_phone_start_changed");started=true;}
         public void requireScope(JSONObject actual,long now)throws Exception {
             if(actual==null||now<created||now-created>TTL_MS||pause!=actual.optLong("pauseRevision",-1)
                     ||appPolicyRevision!=actual.optLong("appPolicyRevision",-1)
                     ||!scope.equals(PhoneTreeSequence.scope(actual))||!packageName.equals(actual.optString("packageName")))throw new SecurityException("bounded_phone_scope_changed");
+            if(visualRegion!=null)visualRegion.requireScope(actual,now);
         }
         public JSONObject targetNode(JSONObject actual)throws Exception {
             JSONObject found=null;for(JSONObject node:PhoneTreeExtract.index(actual).values())
@@ -85,6 +101,7 @@ public final class PhoneBoundedOperation {
             return gestureFallback;
         }
         public boolean needsOcr(JSONObject actual)throws Exception {
+            if(visual())return true;
             JSONObject node=targetNode(actual);
             if(!wheel())return PhoneTargetSearch.needsOcr(actual,node,selector,source);
             JSONObject reading=PhoneWheelValue.read(actual,node);
@@ -92,6 +109,7 @@ public final class PhoneBoundedOperation {
             return !reading.optBoolean("readable")||gesture(actual,node)&&!reading.optBoolean("columnReady");
         }
         public boolean needsLocalFrame(JSONObject actual)throws Exception {
+            if(visual())return true;
             JSONObject node=targetNode(actual);
             if(wheel()){
                 JSONObject reading=PhoneWheelValue.read(actual,node);
@@ -104,9 +122,14 @@ public final class PhoneBoundedOperation {
         /** Called only after the original Runner has saved this exact child receipt. It supplies no execution authority. */
         public void settled(String name,JSONObject args,JSONObject receipt)throws Exception {
             if(pendingArgs==null||!pendingTool.equals(name)||!sameArguments(pendingArgs,args))return;
-            pendingSettled=receipt!=null&&Boolean.TRUE.equals(receipt.opt("accepted"))&&receipt.optBoolean("ok")
+            boolean accepted=receipt!=null&&Boolean.TRUE.equals(receipt.opt("accepted"))&&receipt.optBoolean("ok")
                     &&!receipt.optBoolean("requiresReconciliation")&&!ObservationSafety.unknownEffect(receipt.optString("error",receipt.optString("code")));
-            if(pendingSettled&&pendingDrag!=null)previousDrag=new JSONObject(pendingDrag.getJSONObject("attempt").toString());
+            boolean alreadyReached=receipt!=null&&"phone_set_wheel".equals(name)&&receipt.optBoolean("ok")&&receipt.optBoolean("terminal")
+                    &&"completed".equals(receipt.optString("status"))&&Boolean.FALSE.equals(receipt.opt("actionDispatched"))
+                    &&receipt.optBoolean("reached")&&receipt.optInt("stepsPerformed",-1)==0&&!receipt.has("accepted")&&!receipt.optBoolean("requiresReconciliation");
+            if(!pendingSettled&&accepted)acceptedSteps++;
+            pendingSettled=accepted||alreadyReached;
+            if(accepted&&pendingDrag!=null)previousDrag=new JSONObject(pendingDrag.getJSONObject("attempt").toString());
         }
         JSONObject plannedDrag(JSONObject args)throws Exception {
             return pendingDrag!=null&&pendingArgs!=null&&pendingTool.equals("phone_set_wheel")&&sameArguments(pendingArgs,args)
@@ -124,6 +147,7 @@ public final class PhoneBoundedOperation {
         }
 
         public NativeToolPlan.Resolved resolve(int index,JSONObject actual,long now,RunControl.AuthorityCheck current)throws Exception {
+            if(visual())return resolveVisual(index,actual,now,current);
             requireScope(actual,now);JSONObject node=targetNode(actual),evidence;
             if(index>0&&!pendingSettled)return finish("original_receipt_unavailable",index,new JSONObject(),current);
             if(!wheel()){
@@ -168,13 +192,40 @@ public final class PhoneBoundedOperation {
             pendingTool=next.name;pendingArgs=new JSONObject(args.toString());pendingSettled=false;
             return new NativeToolPlan.Resolved(next,args,PhoneTreeExtract.actionObservation(actual,args.getString("nodeId")),current);
         }
+        private NativeToolPlan.Resolved resolveVisual(int index,JSONObject actual,long now,RunControl.AuthorityCheck current)throws Exception {
+            requireScope(actual,now);visualRegion.requireFrame(actual,now);
+            if(index>0&&!pendingSettled)return finish("original_receipt_unavailable",index,new JSONObject(),current);
+            JSONObject evidence=wheel()?PhoneWheelValue.summary(PhoneWheelValue.visualColumn(actual,visualRegion.bounds()))
+                    .put("target",target).put("observationId",actual.getString("observationId")).put("observation",visualRegion.actionObservation(actual))
+                    :PhoneTargetSearch.readVisual(actual,visualRegion,selector);
+            if(wheel()&&evidence.optBoolean("readable")&&PhoneWheelValue.matches(evidence.optString("value"),target))
+                return finish("target_observed",index,evidence.put("reached",true),current);
+            if(!wheel()){
+                if(!evidence.optBoolean("ok"))return finish("observation_unavailable",index,evidence,current);
+                if(evidence.optInt("total")>0)return finish("target_found",index,evidence.put("found",true),current);
+            }
+            if(index>=maxSteps)return finish("step_limit",index,evidence,current);
+            String progress=wheel()?"value:"+evidence.optString("value"):PhoneTargetSearch.visualFingerprint(actual,visualRegion.bounds());
+            if(!wheel()&&index>0&&progress.equals(previous))return finish("no_progress_observed",index,evidence,current);
+            previous=progress;pendingDrag=null;
+            JSONObject args=new JSONObject().put("observationId",actual.getString("observationId")).put("regionId",visualRegion.id).put("direction",direction);
+            NativeToolPlan.Tool next;
+            if(wheel()){
+                next=NativeToolPlan.Tool.WHEEL_STEP;args.put("value",target).put("method","drag");
+                pendingDrag=PhoneWheelDrag.planVisual(actual,visualRegion.bounds(),visualRegion.id,target,direction,previousDrag);
+                if(!pendingDrag.optBoolean("available"))return finish("drag_unavailable",index,evidence.put("drag",pendingDrag),current);
+            }else{next=NativeToolPlan.Tool.SCROLL_REGION;args.put("axis",axis);}
+            lastMethod="gesture";pendingTool=next.name;pendingArgs=new JSONObject(args.toString());pendingSettled=false;
+            return new NativeToolPlan.Resolved(next,args,visualRegion.actionObservation(actual),current);
+        }
         private NativeToolPlan.Resolved finish(String status,int steps,JSONObject evidence,RunControl.AuthorityCheck current)throws Exception {
-            JSONObject result=new JSONObject().put("ok",true).put("status",status).put("tool",tool).put("stepsPerformed",steps)
+            JSONObject result=new JSONObject().put("ok",true).put("status",status).put("tool",tool).put("stepsPerformed",acceptedSteps).put("stepsResolved",steps)
                     .put("found",FIND.equals(tool)&&"target_found".equals(status)).put("reached",WHEEL.equals(tool)&&"target_observed".equals(status))
                     .put("partial",!Set.of("target_found","target_observed").contains(status)).put("wholeListComplete",false)
                     .put("verifiedBusinessSuccess",false).put("automaticReplayAllowed",false).put("evidence",evidence);
             return NativeToolPlan.Resolved.complete(result,current);
         }
     }
-    public static State prepare(String tool,JSONObject args,JSONObject actual,long now)throws Exception{return new State(tool,args,actual,now);}
+    public static State prepare(String tool,JSONObject args,JSONObject actual,long now)throws Exception{return new State(tool,args,actual,now,null);}
+    static State prepare(String tool,JSONObject args,JSONObject actual,long now,PhoneVisualRegion region)throws Exception{return new State(tool,args,actual,now,region);}
 }

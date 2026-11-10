@@ -2279,6 +2279,9 @@ public final class EngineApplication extends Application implements dev.pocketen
         EngineModule semantic=features.module("semantic");
         if(semantic instanceof dev.pocketengine.features.semantic.SemanticModule)
             combined=((dev.pocketengine.features.semantic.SemanticModule)semantic).bind(combined,tasks,binding,original,selectedPhone,features::emitApproval);
+        EngineModule notifications=features.module("notifications");
+        if(notifications instanceof dev.pocketengine.features.notifications.NotificationsModule module)
+            combined=module.bind(combined,tasks,binding,original,features::emitApproval);
         if(!(planRequest!=null&&planRequest.optString("executor").equals("workspace"))) {
             EngineModule configuredMedia=features.module("media");if(configuredMedia instanceof dev.pocketengine.media.MediaModule)combined=new dev.pocketengine.media.MediaTaskCapabilities(combined,tasks,(dev.pocketengine.media.MediaModule)configuredMedia,features::originalMediaForOwner,id,run,epoch,original,documents);
         }
@@ -2287,6 +2290,9 @@ public final class EngineApplication extends Application implements dev.pocketen
             combined=new dev.pocketengine.features.remote.RemoteTaskCapabilities(combined,tasks,features,(dev.pocketengine.features.remote.RemoteModule)remoteExecution,id,run,epoch,original);
         combined=dev.pocketengine.phone.observation.PhoneTextTargetCapabilityPort.bindIfAvailable(combined,tasks,binding,original,selectedPhone,features::emitApproval);
         combined=dev.pocketengine.phone.observation.PhoneTreeCapabilityPort.bindIfAvailable(combined,tasks,binding,original,selectedPhone);
+        EngineModule appDisplay=features.module("display");
+        if(appDisplay instanceof dev.pocketengine.phone.display.DisplayModule module)
+            combined=dev.pocketengine.phone.appcontrol.PhoneAppCapabilityPort.bindIfAvailable(combined,tasks,binding,original,selectedPhone,module);
         try{combined=bindRawTaskEvidence(combined,task,extensionBinding,original,inference);
             if("owner".equals(task.optString("actorId"))&&"private".equals(task.optString("spaceId")))combined=new dev.pocketengine.features.capabilities.AgentPreferencePort(settings,combined,binding,authority,original,()->task.optJSONObject("origin")==null&&personalContextEnabled(task),()->personalContextEnabled(task)&&learningJobMemory().personalMemoryReadingEnabled(),projectMemory!=null);
             if(browserTaskHost!=null)combined=browserTaskHost.wrapIfRequested(binding,original,combined,outputCapture,selectedPhone);CapabilityPort exposed=pluginHost.bind(combined,extensionBinding,original);if(planRequest!=null&&planRequest.optString("executor").equals("workspace"))exposed=new dev.pocketengine.features.automation.PlanWorkspacePort(exposed,planRequest.getJSONObject("verification"),this::readAutomationArtifact,args->tasks.approveAutomationArtifactFreeze(id,run,args));if(outputCapture!=null)exposed=new dev.pocketengine.features.memory.ToolOutputSourcePort(exposed,outputCapture,original);exposed=dev.pocketengine.features.teams.TeamBudgetPort.forRoundParent(exposed,tasks,id,run,epoch,original);if(!tasks.ownerQuestionContinuationActive(id,run,epoch,original)&&!tasks.approvedCapabilityContinuationActive(id,run,epoch,original))tasks.authorizeTools(id,run,toolNames(exposed.tools()));if(personalPermissionScope)exposed=new dev.pocketengine.features.capabilities.ToolPermissionPolicyPort(exposed,tasks,binding,()->settings.getEffectivePermissionPolicy(permissionConversation),settings::permissionPolicyRevision,inference,features::emitApproval,selectedPhone!=null);return withExecutionPlanning(id,original,exposed);}
@@ -4060,7 +4066,7 @@ public final class EngineApplication extends Application implements dev.pocketen
         if(modelStreams!=null)modelStreams.clear(id,owner,"run_closed");if(pluginHost!=null)pluginHost.release(id,owner);
         if(features!=null){
             EngineModule semantic=features.module("semantic");if(semantic instanceof dev.pocketengine.features.semantic.SemanticModule module)module.releaseRun(owner);
-            EngineModule display=features.module("display");if(display instanceof dev.pocketengine.phone.display.DisplayModule module)module.unpinOwner(owner);
+            EngineModule display=features.module("display");if(display instanceof dev.pocketengine.phone.display.DisplayModule module){module.releaseAppControlRun(owner);module.unpinOwner(owner);}
         }
         String resource=phoneResourceToken(id);if(resource!=null)resources.releasePhone(resource);
         BackgroundRun background=backgroundRuns.get(id);

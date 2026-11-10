@@ -62,6 +62,10 @@ final class DisplaySessionRegistry implements AutoCloseable {
             return inventory();
         }
         if("primary_ownership".equals(command))return metadata.handle(request);
+        if(DisplayAppControl.supports(command)&&request.optInt("displayId",-1)==0){
+            if(owner==null||findOwner(owner)!=null||exactSession(request).isEmpty())throw failure("original_primary_run_required");
+            return owner.write(metadata.handle(request));
+        }
         if(command.startsWith("audio_recovery.")){
             synchronized(this){
                 // Also blocks entries whose creation or physical release has not been reconciled.

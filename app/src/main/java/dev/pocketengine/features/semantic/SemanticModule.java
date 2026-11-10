@@ -24,9 +24,11 @@ public final class SemanticModule implements EngineModule {
     @Override public String id() {return "semantic";}
     @Override public JSONObject snapshot() throws Exception {
         return new JSONObject().put("id",id()).put("commands",new JSONArray(new String[]{"status"})).put("intentDiscoveryImplemented",true)
-                .put("adapters",new JSONArray(new String[]{"web","app_link","share_text","show_alarms","map_search","dial","email_draft","calendar_draft","calendar_list","calendar_batch","alarm","timer"}))
+                .put("adapters",new JSONArray(new String[]{"web","app_link","share_text","show_alarms","map_search","dial","email_draft","calendar_draft","calendar_list","calendar_events","calendar_batch","calendar_update","calendar_delete","alarm","timer"}))
                 .put("calendar",CalendarProviderSemanticPlatform.permissions(context.android).put("batchLimit",50).put("batchBytesLimit",131072)
-                        .put("perBatchApproval",true).put("readbackImplemented",true).put("automaticReplayAllowed",false))
+                        .put("perBatchApproval",true).put("exactEventUpdateDelete",true).put("recurrence",true).put("eventReadRangeDays",31)
+                        .put("workProfileReadOnly",true).put("crossProfileWrites",false).put("workProfilePolicyRequired",true)
+                        .put("readbackImplemented",true).put("automaticReplayAllowed",false))
                 .put("clock",new JSONObject().put("permissionGranted",context.android.checkSelfPermission(AndroidSemanticPlatform.CLOCK_PERMISSION)==PackageManager.PERMISSION_GRANTED)
                         .put("deviceTimeZone",java.util.TimeZone.getDefault().getID()).put("receiverMayApplyImmediately",true).put("actualClockStateVerified",false))
                 .put("dispatchScope","original_owner_phone_exact_display").put("backgroundIntentDispatch",true).put("crossProfileSemanticDispatch",false)

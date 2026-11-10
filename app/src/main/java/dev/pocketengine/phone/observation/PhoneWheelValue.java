@@ -20,6 +20,10 @@ final class PhoneWheelValue {
     static JSONObject read(JSONObject observation,JSONObject wheel)throws Exception {
         return summary(column(observation,wheel));
     }
+    static JSONObject visualColumn(JSONObject observation,JSONObject bounds)throws Exception {
+        if(!validBox(bounds)||observation.optJSONObject("ocr")==null)return unavailable("visual_wheel_ocr_unavailable");
+        return ocrColumn(observation,observation.getJSONObject("ocr"),bounds,null,"");
+    }
 
     static JSONObject summary(JSONObject column)throws Exception {
         JSONObject result=new JSONObject().put("readable",column.optBoolean("readable"))

@@ -69,9 +69,31 @@ public final class SemanticRequest {
                 action="android.intent.action.INSERT";data="content://com.android.calendar/events";break;
             }
             case "calendar_list":
-                SemanticJson.keys(p,Set.of("kind","afterCalendarId"));
+                SemanticJson.keys(p,Set.of("kind","afterCalendarId","profile"));calendarProfile(p);
                 p.put("afterCalendarId",p.has("afterCalendarId")?calendarId(p,"afterCalendarId",0):0L);
                 action="";data="content://com.android.calendar/calendars";break;
+            case "calendar_events": {
+                SemanticJson.keys(p,Set.of("kind","calendarId","start","end","afterEventId","profile"));calendarProfile(p);
+                p.put("calendarId",calendarId(p,"calendarId",1)).put("afterEventId",p.has("afterEventId")?calendarId(p,"afterEventId",0):0L);
+                long begin=calendarTime(p,"start"),finish=calendarTime(p,"end");
+                if(finish<=begin||finish-begin>31*DAY_MS)throw new IllegalArgumentException("事件发现需要不超过31天的明确UTC毫秒范围，结束边界不含");
+                p.put("start",begin).put("end",finish);action="";data="content://com.android.calendar/instances/when";break;
+            }
+            case "calendar_update":
+            case "calendar_delete": {
+                SemanticJson.keys(p,kind.equals("calendar_update")?Set.of("kind","eventRef","event","recurrenceScope"):Set.of("kind","eventRef","recurrenceScope"));
+                SemanticJson.uuid(SemanticJson.text(p,"eventRef",36,false));
+                String scope=SemanticJson.text(p,"recurrenceScope",6,false);
+                if(!scope.equals("event")&&!scope.equals("series"))throw new IllegalArgumentException("日历修改必须明确recurrenceScope为event或series；series影响整个重复系列");
+                if(kind.equals("calendar_update")){
+                    if(!(p.opt("event") instanceof JSONObject))throw new IllegalArgumentException("日历更新需要完整event对象");
+                    JSONObject event=SemanticJson.copy(p.getJSONObject("event"));
+                    for(String key:new String[]{"allDay","location","description"})if(!event.has(key))throw new IllegalArgumentException("日历更新需要完整字段以免误清原内容："+key);
+                    SemanticJson.keys(event,Set.of("title","start","end","timeZone","allDay","location","description","rrule"));
+                    normalizeCalendarEvent(event);normalizeRecurrence(event);p.put("event",event);
+                }
+                action="";data="content://com.android.calendar/events";break;
+            }
             case "calendar_batch": {
                 SemanticJson.keys(p,Set.of("kind","calendarId","events"));p.put("calendarId",calendarId(p,"calendarId",1));
                 Object raw=p.opt("events");
@@ -81,8 +103,8 @@ public final class SemanticRequest {
                 for(int i=0;i<events.length();i++){
                     if(!(events.get(i) instanceof JSONObject))throw new IllegalArgumentException("日历批次每项必须是事件对象");
                     JSONObject event=SemanticJson.copy(events.getJSONObject(i));
-                    SemanticJson.keys(event,Set.of("title","start","end","timeZone","allDay","location","description"));
-                    normalizeCalendarEvent(event);normalized.put(event);
+                    SemanticJson.keys(event,Set.of("title","start","end","timeZone","allDay","location","description","rrule"));
+                    normalizeCalendarEvent(event);normalizeRecurrence(event);normalized.put(event);
                 }
                 p.put("events",normalized);
                 if(p.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length>131072)
@@ -133,7 +155,19 @@ public final class SemanticRequest {
         if(!p.has("message"))p.put("message","");if(SemanticJson.text(p,"message",120,true).matches("(?s).*[\\p{Cntrl}].*"))throw new IllegalArgumentException("时钟提示需要不超过120字的单行文字");
     }
     public boolean clock(){return kind.equals("alarm")||kind.equals("timer");}
-    public boolean calendarProvider(){return kind.equals("calendar_list")||kind.equals("calendar_batch");}
+    public boolean calendarProvider(){return calendarRead()||calendarWrite();}
+    public boolean calendarRead(){return kind.equals("calendar_list")||kind.equals("calendar_events");}
+    public boolean calendarWrite(){return kind.equals("calendar_batch")||calendarMutation();}
+    public boolean calendarMutation(){return kind.equals("calendar_update")||kind.equals("calendar_delete");}
+    public boolean workCalendar(){return calendarRead()&&"work".equals(parameters.optString("profile"));}
+    private static void calendarProfile(JSONObject p)throws Exception {
+        if(!p.has("profile"))p.put("profile","host");
+        String profile=SemanticJson.text(p,"profile",4,false);
+        if(!profile.equals("host")&&!profile.equals("work"))throw new IllegalArgumentException("日历资料只能是host或经系统企业日历许可的work只读资料");
+    }
+    private static void normalizeRecurrence(JSONObject event)throws Exception {
+        if(event.has("rrule"))event.put("rrule",CalendarRecurrence.normalize(SemanticJson.text(event,"rrule",1024,true),event));
+    }
     private static void normalizeCalendarEvent(JSONObject p)throws Exception {
         String title=SemanticJson.text(p,"title",200,false),zone=SemanticJson.text(p,"timeZone",80,false);
         if(title.matches("(?s).*[\\p{Cntrl}].*")||!ZoneId.getAvailableZoneIds().contains(zone))
@@ -168,10 +202,10 @@ public final class SemanticRequest {
     public JSONObject parameters() throws Exception { return SemanticJson.copy(parameters); }
     public String digest() throws Exception { return SemanticJson.hash(parameters); }
     public String followup() {
-        return switch(kind) { case "calendar_list"->"select_calendar_and_discover_exact_batch";case "calendar_batch"->"read_back_created_event_uris_no_replay";case "web"->"phone_observe_or_authorized_browser_dom";case "app_link","share_text"->"owner_verifies_target_app_no_automatic_continuation";case "dial","email_draft","calendar_draft"->"owner_completes_in_target_app";case "alarm","timer"->"owner_verifies_clock_in_target_app";default->"phone_observe"; };
+        return switch(kind) { case "calendar_list"->"select_calendar_and_discover_events_or_exact_batch";case "calendar_events"->"use_current_event_ref_for_exact_update_or_delete";case "calendar_batch","calendar_update","calendar_delete"->"read_back_exact_calendar_write_no_replay";case "web"->"phone_observe_or_authorized_browser_dom";case "app_link","share_text"->"owner_verifies_target_app_no_automatic_continuation";case "dial","email_draft","calendar_draft"->"owner_completes_in_target_app";case "alarm","timer"->"owner_verifies_clock_in_target_app";default->"phone_observe"; };
     }
     static JSONObject discoverySchema() throws Exception {
-        JSONObject p=new JSONObject().put("kind",new JSONObject().put("type","string").put("enum",new JSONArray(new String[]{"web","app_link","share_text","show_alarms","map_search","dial","email_draft","calendar_draft","calendar_list","calendar_batch","alarm","timer"})));
+        JSONObject p=new JSONObject().put("kind",new JSONObject().put("type","string").put("enum",new JSONArray(new String[]{"web","app_link","share_text","show_alarms","map_search","dial","email_draft","calendar_draft","calendar_list","calendar_events","calendar_batch","calendar_update","calendar_delete","alarm","timer"})));
         p.put("packageName",new JSONObject().put("type","string").put("maxLength",250)).put("text",new JSONObject().put("type","string").put("maxLength",10000));
         for(String key:new String[]{"url","query","number","to","subject","body"})
             p.put(key,new JSONObject().put("type","string").put("maxLength",key.equals("body")?4000:key.equals("url")?2048:key.equals("query")?500:key.equals("number")?32:key.equals("to")?254:200));
@@ -181,17 +215,28 @@ public final class SemanticRequest {
         for(String key:new String[]{"start","end"})p.put(key,new JSONObject().put("type","integer").put("minimum",0).put("maximum",253402300799999L)
                 .put("description",key.equals("start")?"calendar_draft开始UTC毫秒；全天须为开始日期的UTC午夜，包含此日期。":"calendar_draft结束UTC毫秒；全天须为结束日期的UTC午夜，不包含此日期。"));
         p.put("allDay",new JSONObject().put("type","boolean").put("description","仅calendar_draft；默认false。true要求start/end均为UTC午夜且timeZone=UTC；一天日程的end是次日午夜。"));
+        p.put("rrule",new JSONObject().put("type","string").put("maxLength",1024)
+                .put("description","calendar_batch/events及calendar_update/event的可选RFC5545 RRULE。支持DAILY/WEEKLY/MONTHLY/YEARLY、INTERVAL、COUNT或UNTIL、BYDAY、BYMONTHDAY、BYMONTH、BYSETPOS、WKST；UNTIL为UTC yyyyMMddTHHmmssZ，全天为yyyyMMdd。COUNT与UNTIL互斥。更新省略则保留原RRULE，明确空串才清除；已有RDATE/EXDATE等不被清除。"));
         JSONObject eventProperties=new JSONObject();
-        for(String key:new String[]{"title","start","end","timeZone","allDay","location","description"})eventProperties.put(key,new JSONObject(p.getJSONObject(key).toString()));
+        for(String key:new String[]{"title","start","end","timeZone","allDay","location","description","rrule"})eventProperties.put(key,new JSONObject(p.getJSONObject(key).toString()));
         eventProperties.getJSONObject("timeZone").put("description","事件IANA时区；allDay=true时必须为UTC。");
         eventProperties.getJSONObject("start").put("description","开始UTC毫秒；全天为包含日期的UTC午夜。");
         eventProperties.getJSONObject("end").put("description","结束UTC毫秒；全天为不包含日期的UTC午夜。");
-        eventProperties.getJSONObject("allDay").put("description","默认false；全天必须使用UTC午夜边界，结束日期不包含。");
-        p.put("calendarId",new JSONObject().put("type","integer").put("minimum",1).put("maximum",9_007_199_254_740_991L).put("description","仅calendar_batch：calendar_list在当前宿主Android资料返回的准确calendarId；不得推测其他资料ID。"))
+        eventProperties.getJSONObject("allDay").put("description","创建时默认false；更新必须明确。全天必须使用UTC午夜边界，结束日期不包含。");
+        p.remove("rrule");
+        p.put("calendarId",new JSONObject().put("type","integer").put("minimum",1).put("maximum",9_007_199_254_740_991L).put("description","calendar_batch或calendar_events：calendar_list在对应资料返回的准确calendarId；写入仅限宿主资料。"))
                 .put("afterCalendarId",new JSONObject().put("type","integer").put("minimum",0).put("maximum",9_007_199_254_740_991L).put("description","仅calendar_list分页；首批省略，后续使用上次返回的nextCalendarId。"))
                 .put("events",new JSONObject().put("type","array").put("minItems",1).put("maxItems",50)
                         .put("items",new JSONObject().put("type","object").put("properties",eventProperties).put("required",new JSONArray(new String[]{"title","start","end","timeZone"})).put("additionalProperties",false))
-                        .put("description","仅calendar_batch：1至50个单次事件，完整批次最多128KiB；逐项参数全部进入同次审批。重复日期需展开为明确事件，不接受RRULE或任意Provider字段。"));
+                        .put("description","仅calendar_batch：1至50个单次或RRULE重复事件，完整批次最多128KiB；逐项参数全部进入同次审批，不接受任意Provider字段。"));
+        p.put("profile",new JSONObject().put("type","string").put("enum",new JSONArray(new String[]{"host","work"})).put("description","仅calendar_list/calendar_events；默认host。work使用Android企业日历只读URI，须工作资料管理员允许本App且用户开启跨资料日历；不会获得写权限。"))
+                .put("afterEventId",new JSONObject().put("type","integer").put("minimum",0).put("maximum",9_007_199_254_740_991L).put("description","仅calendar_events分页；使用上页nextEventId，保持相同calendarId/profile/start/end。每页至多32个事件系列。"))
+                .put("eventRef",new JSONObject().put("type","string").put("maxLength",36).put("description","仅calendar_update/calendar_delete：本原任务刚从host calendar_events收到的eventRef；ID、旧运行或工作资料结果不能替代。"))
+                .put("recurrenceScope",new JSONObject().put("type","string").put("enum",new JSONArray(new String[]{"event","series"})).put("description","更新或删除必须提供：普通事件/已有单次例外为event，重复主事件为series，影响整个系列，不能将实例时间误当单次修改。"))
+                .put("event",new JSONObject().put("type","object").put("properties",new JSONObject(eventProperties.toString())).put("required",new JSONArray(new String[]{"title","start","end","timeZone","allDay","location","description"})).put("additionalProperties",false)
+                        .put("description","仅calendar_update：更新后的完整基本内容；省略rrule保留原重复规则，提醒、参与人及未请求字段不改。allDay/location/description必须明确提供，需保留原内容时传原值。"));
+        p.getJSONObject("start").put("description","calendar_draft开始或calendar_events查询开始，UTC毫秒；事件查询最多31天。");
+        p.getJSONObject("end").put("description","calendar_draft结束或calendar_events查询结束，UTC毫秒；查询结束边界不含。");
         p.put("hour",new JSONObject().put("type","integer").put("minimum",0).put("maximum",23))
                 .put("minutes",new JSONObject().put("type","integer").put("minimum",0).put("maximum",59))
                 .put("seconds",new JSONObject().put("type","integer").put("minimum",1).put("maximum",86400))

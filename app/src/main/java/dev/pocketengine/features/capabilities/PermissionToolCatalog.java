@@ -22,6 +22,9 @@ public final class PermissionToolCatalog {
         phone=dev.pocketengine.phone.observation.PhoneExtensionTools.append(phone);
         phone=dev.pocketengine.phone.observation.PhoneTextTargetCapabilityPort.appendTools(phone);
         catalog.definitions(phone,"phone",true);
+        catalog.definitions(new JSONArray().put(dev.pocketengine.features.notifications.NotificationTaskCapabilityPort.definition()),"phone",true);
+        catalog.names("phone","读取原显示已授权应用的实际状态，准确冷启动须原主人完整审批；不提供任意系统命令。","phone_app_state","phone_prepare_cold_start");
+        catalog.names("phone","仅原准确冷启动审批的两步内部操作；不能单独取得执行权，禁止任一步会阻止开始完整冷启动。","phone_force_stop_app","phone_restart_app");
         catalog.definitions(dev.pocketengine.runtime.history.RecentScreenHistory.tools(),"phone",true);
         catalog.names("phone","需要对应手机观察或路线会话；规则不会启用这些会话。","phone_observation_help",
                 dev.pocketengine.runtime.routes.PhoneRouteSession.LIST,dev.pocketengine.runtime.routes.PhoneRouteSession.REPLAY,dev.pocketengine.runtime.routes.PhoneRouteSession.FORGET);

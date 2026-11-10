@@ -17,6 +17,7 @@ final class NotificationInbox {
     static final long RETENTION_MILLIS=15*60_000L;
     private final LinkedHashMap<String,Notice> active=new LinkedHashMap<>();
     private final List<Change> changes=new ArrayList<>();
+    private final List<Wait> waits=new ArrayList<>();
     private Set<String> packages=Collections.emptySet();
     private String revision=UUID.randomUUID().toString();
     private Lease connection;
@@ -38,10 +39,17 @@ final class NotificationInbox {
         final String title,text,channel,category;
         final long postedAt;
         final boolean ongoing;
+        final boolean titleTruncated,textTruncated,channelTruncated,categoryTruncated;
         Content(String title,String text,String channel,String category,long postedAt,boolean ongoing){
-            this.title=clip(title,512);this.text=clip(text,2048);this.channel=clip(channel,256);this.category=clip(category,80);this.postedAt=postedAt;this.ongoing=ongoing;
+            this(title,text,channel,category,postedAt,ongoing,false,false);
         }
-        boolean same(Content other){return title.equals(other.title)&&text.equals(other.text)&&channel.equals(other.channel)&&category.equals(other.category)&&ongoing==other.ongoing;}
+        Content(String title,String text,String channel,String category,long postedAt,boolean ongoing,boolean titleTruncated,boolean textTruncated){
+            this.title=clip(title,512);this.text=clip(text,2048);this.channel=clip(channel,256);this.category=clip(category,80);this.postedAt=postedAt;this.ongoing=ongoing;
+            this.titleTruncated=titleTruncated||title!=null&&title.length()>512;this.textTruncated=textTruncated||text!=null&&text.length()>2048;
+            channelTruncated=channel!=null&&channel.length()>256;categoryTruncated=category!=null&&category.length()>80;
+        }
+        boolean same(Content other){return title.equals(other.title)&&text.equals(other.text)&&channel.equals(other.channel)&&category.equals(other.category)&&ongoing==other.ongoing
+                &&postedAt==other.postedAt&&titleTruncated==other.titleTruncated&&textTruncated==other.textTruncated&&channelTruncated==other.channelTruncated&&categoryTruncated==other.categoryTruncated;}
     }
     static final class Notice {
         final String ref,packageName,kind;
@@ -58,6 +66,17 @@ final class NotificationInbox {
         final int reason;
         final boolean triggerCandidate;
         Change(String ref,String kind,long version,long at,int reason,boolean triggerCandidate){this.ref=ref;this.kind=kind;this.version=version;this.at=at;this.reason=reason;this.triggerCandidate=triggerCandidate;}
+    }
+    /** A live callback cursor owned by one original tool call; never serialized or resumed. */
+    static final class Wait {
+        final Lease lease;
+        final NotificationWaitRequest request;
+        final long afterSequence,startedAt,deadline;
+        private Notice match;
+        private boolean closed;
+        Wait(Lease lease,NotificationWaitRequest request,long afterSequence,long startedAt,long deadline){
+            this.lease=lease;this.request=request;this.afterSequence=afterSequence;this.startedAt=startedAt;this.deadline=deadline;
+        }
     }
 
     synchronized void restore(Policy policy){
@@ -76,16 +95,16 @@ final class NotificationInbox {
     }
     synchronized void disable(String expectedRevision){checkRevision(expectedRevision);invalidate();}
     synchronized void revoke(){invalidate();}
-    private void invalidate(){enabled=false;packages=Collections.emptySet();connection=null;active.clear();changes.clear();revision=UUID.randomUUID().toString();sequence=0;evicted=0;}
+    private void invalidate(){closeWaits();enabled=false;packages=Collections.emptySet();connection=null;active.clear();changes.clear();revision=UUID.randomUUID().toString();sequence=0;evicted=0;}
     synchronized Lease connect(){
         if(!enabled)throw new SecurityException("通知读取尚未由本机主人开启");
         // Every connection starts a new baseline. A previous callback can never populate it.
-        active.clear();changes.clear();connection=new Lease(revision);return connection;
+        closeWaits();active.clear();changes.clear();connection=new Lease(revision);return connection;
     }
     synchronized boolean current(Lease lease){return enabled&&lease!=null&&lease==connection&&revision.equals(lease.revision);}
     synchronized boolean accepts(Lease lease,String pkg){return current(lease)&&packages.contains(pkg);}
     synchronized boolean disconnect(Lease lease){
-        if(!current(lease))return false;connection=null;active.clear();changes.clear();return true;
+        if(!current(lease))return false;closeWaits();connection=null;active.clear();changes.clear();return true;
     }
     synchronized boolean posted(Lease lease,String key,String pkg,Content content,boolean baseline,long now){
         if(!accepts(lease,pkg)||key==null||key.isEmpty()||key.length()>4096)return false;
@@ -94,7 +113,12 @@ final class NotificationInbox {
         String kind=previous==null?(baseline?"baseline":"posted"):"updated";
         // Baseline completion must not turn a live event into a replay trigger.
         boolean trigger=!baseline;long version=++sequence;
-        active.remove(ref);active.put(ref,new Notice(ref,pkg,kind,version,now,trigger,content));
+        Notice next=new Notice(ref,pkg,kind,version,now,trigger,content);active.remove(ref);active.put(ref,next);
+        for(Wait waiting:waits){
+            if(waiting.match!=null&&(waiting.match.ref.equals(ref)||active.get(waiting.match.ref)!=waiting.match))waiting.match=null;
+            if(!waiting.closed&&waiting.lease==lease&&now>=waiting.startedAt&&now<=waiting.deadline&&version>waiting.afterSequence
+                    &&waiting.match==null&&waiting.request.matches(next))waiting.match=next;
+        }
         if(!baseline)record(new Change(ref,kind,version,now,0,trigger));
         while(active.size()>MAX_ACTIVE){Iterator<Notice> it=active.values().iterator();Notice oldest=it.next();it.remove();evicted++;record(new Change(oldest.ref,"evicted",++sequence,now,0,false));}
         return true;
@@ -110,6 +134,20 @@ final class NotificationInbox {
         if(previous==null)return false;record(new Change(ref,"removed",++sequence,now,reason,false));return true;
     }
     synchronized void expire(long now){prune(now);}
+    synchronized Wait beginWait(Lease lease,NotificationWaitRequest request,long now,long deadline){
+        if(!accepts(lease,request.packageName)||deadline<=now||deadline-now>NotificationWaitRequest.MAX_TIMEOUT_MS)throw new SecurityException("通知等待来源或期限已变化");
+        if(waits.size()>=16)throw new IllegalStateException("当前通知等待数量已达上限");
+        Wait waiting=new Wait(lease,request,sequence,now,deadline);waits.add(waiting);return waiting;
+    }
+    synchronized Notice matched(Wait waiting,long now){
+        if(waiting==null||waiting.closed||!waits.contains(waiting)||!current(waiting.lease)||now<waiting.startedAt)throw new SecurityException("原通知等待已失效");
+        prune(now);Notice candidate=waiting.match;
+        // A removed, replaced or evicted preview is no longer available for delivery.
+        if(candidate!=null&&active.get(candidate.ref)!=candidate){waiting.match=null;candidate=null;}
+        return candidate;
+    }
+    synchronized void closeWait(Wait waiting){if(waiting==null)return;waits.remove(waiting);waiting.closed=true;waiting.match=null;}
+    private void closeWaits(){for(Wait waiting:waits){waiting.closed=true;waiting.match=null;}waits.clear();}
     synchronized List<Notice> active(long now){prune(now);return new ArrayList<>(active.values());}
     synchronized List<Change> changes(long now){prune(now);return new ArrayList<>(changes);}
     synchronized Notice reviewed(String expectedRevision,String ref,long version,long now){

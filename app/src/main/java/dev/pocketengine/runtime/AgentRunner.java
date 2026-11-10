@@ -900,7 +900,7 @@ public final class AgentRunner {
                 }
                 if (calls.length() > 8) throw new ModelGateway.GatewayException("模型一次请求了过多手机动作，请更换模型或缩短目标。");
                 validateCalls(calls);
-                int preparedPlans=0;for(int i=0;i<calls.length();i++)if(java.util.Set.of("phone_prepare_sequence","browser_task_prepare_sequence",PhoneRouteSession.REPLAY,"phone_find","phone_prepare_wheel").contains(calls.getJSONObject(i).getJSONObject("function").optString("name"))&&++preparedPlans>1)throw new ModelGateway.GatewayException("每批只能准备一个原生有界操作；尚未执行本批动作。");
+                int preparedPlans=0;for(int i=0;i<calls.length();i++)if(java.util.Set.of("phone_prepare_sequence","browser_task_prepare_sequence",PhoneRouteSession.REPLAY,"phone_find","phone_prepare_wheel","phone_prepare_cold_start").contains(calls.getJSONObject(i).getJSONObject("function").optString("name"))&&++preparedPlans>1)throw new ModelGateway.GatewayException("每批只能准备一个原生有界操作；尚未执行本批动作。");
                 JSONObject assistant = new JSONObject().put("role", "assistant").put("tool_calls", safeArray(calls, config, false)).put("nativeTraceCallId",nativeRequest[0]);
                 if(nativeApprovedResponse)assistant.put("nativeApprovalContinuation",response.getString("nativeApprovalId"));
                 if(memoryDependency!=null)assistant.put("memoryContext",memoryDependency);if(memoryReference!=null)assistant.put("memoryReference",memoryReference);
@@ -1149,7 +1149,7 @@ public final class AgentRunner {
                         }
                         if(activeStep!=null)activeStep.requireCurrent(control);
                         requirePlanningCurrent(planning,turnPlanning);
-                        JSONObject dispatched=args;if(capabilities!=null&&capabilities.supports(name)&&(planningRead.pending()||openOperation!=null||imageRequired||"phone_prepare_sequence".equals(name)||dev.pocketengine.phone.observation.PhoneBoundedOperation.supports(name)))dispatched=new JSONObject(args.toString()).put("_hostOperationId",planningRead.pending()?planningRead.operationId():openOperation==null?call.getString("id"):openOperation);
+                        JSONObject dispatched=args;if(capabilities!=null&&capabilities.supports(name)&&(planningRead.pending()||openOperation!=null||imageRequired||"phone_prepare_sequence".equals(name)||"phone_prepare_cold_start".equals(name)||dev.pocketengine.phone.observation.PhoneBoundedOperation.supports(name)))dispatched=new JSONObject(args.toString()).put("_hostOperationId",planningRead.pending()?planningRead.operationId():openOperation==null?call.getString("id"):openOperation);
                         // This is only progress over this native plan, never a tool grant or a new receipt.
                         if(activeStep!=null&&activePlan!=null)nativeSequenceProgress.get(activePlan).dispatchEntered(activeStep.index);
                         long dispatchRevision=control.pauseRevision();
@@ -1268,6 +1268,12 @@ public final class AgentRunner {
                             else{RuntimeDiagnostics.event("tool_execution","unconfirmed","IMAGE_OBSERVATION_MISSING",control,null);emit(taskId,"tool_observation","failed","未取得可交付的实际图片，本轮没有附图。",name,null,config,toolSink);}
                         }
                         dev.pocketengine.core.NativeToolPlan proposed=routes!=null&&PhoneRouteSession.REPLAY.equals(name)?routes.take(nativeOperation,control):capabilities==null?null:capabilities.takeToolPlan(name,nativeOperation,control);
+                        if(proposed!=null&&"phone_prepare_cold_start".equals(name)&&proposed.size()>executionStepCeiling(config,journal)-steps){
+                            int requiredSteps=proposed.size();proposed.close();batchContinuation.stopSequenceAndObservations();
+                            evidence.put("nativeSequenceNotDispatched",true).put("requiredSteps",requiredSteps)
+                                    .put("remainingSteps",Math.max(0,executionStepCeiling(config,journal)-steps)).put("automaticReplayAllowed",false);
+                            return finish(taskId,"awaiting_user","原任务剩余步骤不足以完成停止和重新打开应用，尚未关闭应用；请审阅原任务额度后从当前现场重新准备。",evidence,steps,config,toolSink);
+                        }
                         if(proposed!=null){nativePlans.add(proposed);nativeSequenceProgress.put(proposed,new NativeSequenceProgress(nativeOperation,toolTrace.id(),proposed.size()));if(activePlan!=null)throw new SecurityException("native_sequence_nested_plan_forbidden");try{proposed.consume(name,nativeOperation,control);activePlan=proposed;}catch(Exception stale){proposed.close();control.check();batchContinuation.stopSequenceAndObservations();emit(taskId,"native_sequence","failed","短序列的现场已改变，未派发其中动作。",name,failure("native_sequence_not_dispatched","请按当前现场重新规划。").put("accepted",false),config,toolSink);}}
                     }
                     if (DeferredPhoneSession.initialized(phone)&&control.phoneSurfaceActive()&&(changesScreen(name) || "phone_wait".equals(name))) {
@@ -1340,6 +1346,11 @@ public final class AgentRunner {
                         checkpoint(taskId,journal,history,steps,latest,config,sink,contextBudget,repeatedTools);
                     }
                     activePlan.close();break;
+                }
+                if(activeStep.tool==dev.pocketengine.core.NativeToolPlan.Tool.APP_FORCE_STOP&&executionStepCeiling(config,journal)-steps<2){
+                    activePlan.close();evidence.put("nativeSequenceNotDispatched",true).put("requiredSteps",2)
+                            .put("remainingSteps",Math.max(0,executionStepCeiling(config,journal)-steps)).put("automaticReplayAllowed",false);
+                    return finish(taskId,"awaiting_user","停止应用前核对发现原任务步骤不足以重新打开，尚未关闭应用；请审阅原额度。",evidence,steps,config,sink);
                 }
                 if(steps>=executionStepCeiling(config,journal)){activePlan.close();return finish(taskId,"needs_confirmation","已达到本次操作步数上限；短序列余下步骤未派发。",nativeStepLimitEvidence(evidence,control),steps,config,sink);}
                 JSONObject fresh=activeStep.observation();if(fresh!=null){latest=fresh;evidence=fresh;appendCapturedObservation(history,fresh,config,contextBudget,screens,control);}
@@ -1612,7 +1623,7 @@ public final class AgentRunner {
     private boolean intentEffecting(String name){
         if(RunOutcomeTools.supports(name)||RecentScreenHistory.supports(name))return false;
         if(PhoneRouteSession.supports(name))return !PhoneRouteSession.LIST.equals(name);
-        if("phone_prepare_sequence".equals(name)||"browser_task_prepare_sequence".equals(name)||dev.pocketengine.phone.observation.PhoneBoundedOperation.supports(name))return true;
+        if("phone_prepare_sequence".equals(name)||"phone_prepare_cold_start".equals(name)||"browser_task_prepare_sequence".equals(name)||dev.pocketengine.phone.observation.PhoneBoundedOperation.supports(name))return true;
         return capabilities!=null&&capabilities.supports(name)?capabilities.sideEffecting(name):sideEffecting(name);
     }
     private void requireIntentImageInput(OwnerIntent intent,ModelConfig config)throws Exception {
@@ -1859,12 +1870,13 @@ public final class AgentRunner {
     private static void coordinate(JSONObject args, String key) throws Exception { integer(args, key, 0, 1000); }
 
     private static boolean usesPhysicalPhone(String name,JSONObject args){
-        if("semantic_discover".equals(name)&&args!=null&&java.util.Set.of("calendar_list","calendar_batch").contains(args.optString("kind")))return false;
+        if("semantic_discover".equals(name)&&args!=null&&java.util.Set.of("calendar_list","calendar_events","calendar_batch","calendar_update","calendar_delete").contains(args.optString("kind")))return false;
         return "semantic_discover".equals(name)||name!=null&&name.startsWith("phone_")&&!java.util.Set.of("phone_wait","phone_request_user",
-                PhoneRouteSession.LIST,PhoneRouteSession.FORGET).contains(name)&&!RecentScreenHistory.supports(name);
+                "phone_notification_wait",PhoneRouteSession.LIST,PhoneRouteSession.FORGET).contains(name)&&!RecentScreenHistory.supports(name);
     }
 
     private static boolean changesScreen(String name) {
+        if(java.util.Set.of("phone_notification_wait","phone_visual_region","phone_app_state","phone_prepare_cold_start","phone_force_stop_app","phone_list_app_copies","phone_dialog","phone_event").contains(name))return false;
         return !RunOutcomeTools.supports(name)&&!dev.pocketengine.phone.observation.PhoneTreeQuery.supports(name)&&!dev.pocketengine.phone.observation.PhoneBoundedOperation.supports(name)&&!dev.pocketengine.phone.observation.PhoneTextCollection.TOOL.equals(name) && !"phone_list_apps".equals(name) && !"phone_observe".equals(name) && !"phone_observation_help".equals(name) && !"phone_request_user".equals(name);
     }
 

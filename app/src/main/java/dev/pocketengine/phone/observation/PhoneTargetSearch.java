@@ -31,9 +31,20 @@ final class PhoneTargetSearch {
             if("ocr".equals(source))return PhoneTreeExtract.unavailable("find_ocr_unavailable");
             return nativeResult.put("ocrFallbackAvailable",false).put("ocrReason",actual.optString("localOcrReason","local_ocr_unavailable"));
         }
+        return readOcr(actual,container.getJSONObject("bounds"),selector,PhoneTreeExtract.actionObservation(actual,container.getString("id")))
+                .put("nativeMatchCount",nativeResult.optInt("total")).put("coverage","recognized_text_in_current_native_container");
+    }
+    static JSONObject readVisual(JSONObject actual,PhoneVisualRegion region,JSONObject selector)throws Exception {
+        if(!canUseOcr(selector))throw new IllegalArgumentException("visual_find_requires_text_only_selector");
+        return readOcr(actual,region.bounds(),selector,region.actionObservation(actual))
+                .put("coverage","recognized_text_in_current_visual_region").put("visualRegion",region.reference());
+    }
+    private static JSONObject readOcr(JSONObject actual,JSONObject bounds,JSONObject selector,JSONObject observation)throws Exception {
+        JSONObject ocr=actual.optJSONObject("ocr");
+        if(ocr==null||actual.optBoolean("changedDuringRead"))return PhoneTreeExtract.unavailable("find_ocr_unavailable");
         int width=ocr.optInt("rasterWidth"),height=ocr.optInt("rasterHeight");
         if(width<=0||height<=0||!actual.getString("observationId").equals(ocr.optString("observationId")))return PhoneTreeExtract.unavailable("find_ocr_source_changed");
-        JSONObject bounds=container.getJSONObject("bounds");String needle=selector.getString("text").toLowerCase(Locale.ROOT);
+        String needle=selector.getString("text").toLowerCase(Locale.ROOT);
         JSONArray matches=new JSONArray(),lines=ocr.optJSONArray("lines"),words=ocr.optJSONArray("words");int total=0;
         Set<Integer> matchedLines=new HashSet<>();
         for(int i=0;lines!=null&&i<lines.length();i++){
@@ -59,13 +70,12 @@ final class PhoneTargetSearch {
             total++;if(matches.length()<40)matches.put(new JSONObject(word.toString()).put("source","ocr_word")
                     .put("evidenceOnly",true).put("nodeId",JSONObject.NULL).put("actionNodeId",JSONObject.NULL).put("recognitionMayBeWrong",true));
         }
-        JSONObject observation=PhoneTreeExtract.actionObservation(actual,container.getString("id"));
         return PhoneTreeExtract.base().put("ok",true).put("status","read").put("source","ocr")
                 .put("observationId",actual.getString("observationId")).put("matches",matches).put("total",total).put("returned",matches.length())
                 .put("truncated",ocr.optBoolean("truncated")||total>matches.length()).put("partial",true).put("selectionComplete",false)
-                .put("coverage","recognized_text_in_current_native_container").put("recognitionMayBeWrong",true)
+                .put("recognitionMayBeWrong",true)
                 .put("coordinateSpace",ocr.optString("coordinateSpace")).put("rasterWidth",width).put("rasterHeight",height)
-                .put("observation",observation).put("nativeMatchCount",nativeResult.optInt("total"));
+                .put("observation",observation);
     }
 
     static String fingerprint(JSONObject actual,JSONObject container)throws Exception {
@@ -87,6 +97,22 @@ final class PhoneTargetSearch {
             JSONObject word=words.getJSONObject(i);
             if(inside(word.getJSONArray("boundsPixels"),container.getJSONObject("bounds"),ocr.getInt("rasterWidth"),ocr.getInt("rasterHeight")))
                 values.put(new JSONObject().put("ocrWord",word.getString("text")).put("boundsPixels",word.getJSONArray("boundsPixels")));
+        }
+        return dev.pocketengine.store.TaskStore.capabilityFingerprint(new JSONObject().put("content",values));
+    }
+    static String visualFingerprint(JSONObject actual,JSONObject bounds)throws Exception {
+        JSONObject ocr=actual.optJSONObject("ocr");JSONArray values=new JSONArray();
+        if(ocr==null||!actual.optString("observationId").equals(ocr.optString("observationId")))return "";
+        int width=ocr.optInt("rasterWidth"),height=ocr.optInt("rasterHeight");if(width<=0||height<=0)return "";
+        JSONArray lines=ocr.optJSONArray("lines");
+        for(int i=0;lines!=null&&i<lines.length();i++){
+            JSONObject line=lines.getJSONObject(i);
+            if(inside(line.getJSONArray("boundsPixels"),bounds,width,height))values.put(new JSONObject().put("text",line.getString("text")).put("boundsPixels",line.getJSONArray("boundsPixels")));
+        }
+        JSONArray words=ocr.optJSONArray("words");
+        for(int i=0;words!=null&&i<words.length();i++){
+            JSONObject word=words.getJSONObject(i);
+            if(inside(word.getJSONArray("boundsPixels"),bounds,width,height))values.put(new JSONObject().put("ocrWord",word.getString("text")).put("boundsPixels",word.getJSONArray("boundsPixels")));
         }
         return dev.pocketengine.store.TaskStore.capabilityFingerprint(new JSONObject().put("content",values));
     }

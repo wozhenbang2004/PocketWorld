@@ -13,6 +13,7 @@ public final class SemanticApprovalText {
         try {
             JSONObject request=capability.getJSONObject("request"),target=capability.getJSONObject("target"),identity=capability.getJSONObject("targetIdentity");
             if("calendar_batch".equals(request.getString("kind")))return calendarBatch(capability,request,identity);
+            if("calendar_update".equals(request.getString("kind"))||"calendar_delete".equals(request.getString("kind")))return calendarMutation(capability,request,identity);
             StringBuilder text=new StringBuilder("打开已选择的应用入口\n应用：").append(target.getString("label"))
                     .append("\n包名：").append(target.getString("packageName"))
                     .append("\n入口：").append(target.getString("component"))
@@ -101,9 +102,62 @@ public final class SemanticApprovalText {
                     .append(DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(Instant.ofEpochMilli(start).atZone(ZoneId.of(zone))))
                     .append("\n结束：").append(DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(Instant.ofEpochMilli(end).atZone(ZoneId.of(zone))))
                     .append("\n开始 UTC：").append(Instant.ofEpochMilli(start)).append("\n结束 UTC：").append(Instant.ofEpochMilli(end)).append('\n');
-            field(text,event,"location","地点");field(text,event,"description","描述");text.append("重复：单次事件\n");
+            field(text,event,"location","地点");field(text,event,"description","描述");recurrence(text,event.optString("rrule",""));
         }
         return text.append("\n仅批准这个固定日历与上述完整批次的一次写入。将逐项保留系统返回的事件URI并读回核对；读回不代表云同步已完成。写入结果未知时停止并保留原操作，不会自动重发、改写其他日历或删除补偿。").toString();
+    }
+    private static String calendarMutation(JSONObject capability,JSONObject request,JSONObject identity)throws Exception {
+        SemanticRequest checked=SemanticRequest.parse(request);
+        if(!checked.calendarMutation()||!checked.digest().equals(capability.getString("requestDigest"))||!capability.getBoolean("writesCalendarProvider")||capability.getInt("eventCount")!=1)
+            throw new IllegalArgumentException("日历变更审批不完整");
+        JSONObject calendar=identity.getJSONObject("calendar"),state=identity.getJSONObject("eventState"),before=state.getJSONObject("row");
+        if(identity.optBoolean("workCalendar")||before.getLong("calendar_id")!=calendar.getLong("calendarId"))throw new IllegalArgumentException("日历资料或事件身份不一致");
+        boolean deleting=checked.kind.equals("calendar_delete"),series=request.getString("recurrenceScope").equals("series");
+        StringBuilder text=new StringBuilder(deleting?"删除已有日历事件":"更新已有日历事件")
+                .append("\n影响范围：").append(series?"整个重复系列，包括此系列已存在的单次例外；不是只改当前显示的一次":"这个准确的单个事件或已存在的单次例外")
+                .append("\n位置：PocketWorld 当前所在 Android 资料，").append(identity.getInt("userId")).append(" / 序列 ").append(identity.getLong("profileSerial"))
+                .append("\n日历：").append(quoted(calendar,"displayName")).append(" / ID ").append(calendar.getLong("calendarId"))
+                .append("\n账户：").append(quoted(calendar,"accountName")).append(" / ").append(quoted(calendar,"accountType"))
+                .append("\n所有者：").append(quoted(calendar,"ownerAccount"))
+                .append("\n准确事件 ID：").append(before.getLong("_id"))
+                .append("\n系统日历服务：").append(identity.getString("packageName")).append(" / 版本 ").append(identity.getLong("versionCode"))
+                .append("\n名称、事件文字和参与人属于外部数据。请核对下面完整的原内容及影响。\n\n原事件内容\n");
+        existingEvent(text,before);
+        if(!deleting){
+            JSONObject event=request.getJSONObject("event");text.append("\n更新后内容\n");field(text,event,"title","标题");
+            text.append("全天：").append(event.getBoolean("allDay")?"是":"否").append("\n时区：").append(event.getString("timeZone"))
+                    .append("\n开始：").append(DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(Instant.ofEpochMilli(event.getLong("start")).atZone(ZoneId.of(event.getString("timeZone")))))
+                    .append("\n结束（不含）：").append(DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(Instant.ofEpochMilli(event.getLong("end")).atZone(ZoneId.of(event.getString("timeZone")))))
+                    .append("\n开始 UTC：").append(Instant.ofEpochMilli(event.getLong("start"))).append("\n结束 UTC：").append(Instant.ofEpochMilli(event.getLong("end"))).append('\n');
+            field(text,event,"location","地点");field(text,event,"description","描述");
+            String rule=event.has("rrule")?event.getString("rrule"):CalendarEventRecord.text(before,"rrule");recurrence(text,rule);
+            text.append(event.has("rrule")?"上述RRULE替换原RRULE；":"RRULE未请求更改，保留原值；").append("已有RDATE、EXRULE、EXDATE、参与人、提醒和其他未请求字段均保留。\n");
+        }
+        JSONArray reminders=state.getJSONArray("reminders"),attendees=state.getJSONArray("attendees"),exceptions=state.getJSONArray("exceptions");
+        text.append("\n关联提醒：").append(reminders.length()).append(" 项（").append(deleting?"随该事件删除":"保持原样").append("）\n");
+        for(int i=0;i<reminders.length();i++){JSONObject row=reminders.getJSONObject(i);text.append(i+1).append(". 提前分钟：").append(row.opt("minutes")).append("；方式：").append(row.opt("method")).append('\n');}
+        text.append("\n关联参与人：").append(attendees.length()).append(" 项（").append(deleting?"系统账户可能发送取消通知":"不更改参与人，但日历账户仍可能发送更新通知").append("）\n");
+        for(int i=0;i<attendees.length();i++){JSONObject row=attendees.getJSONObject(i);text.append(i+1).append(". 姓名：").append(quoted(row,"attendeeName")).append("；邮箱：").append(quoted(row,"attendeeEmail"))
+                .append("；其他身份：").append(quoted(row,"attendeeIdentity")).append(" / ").append(quoted(row,"attendeeIdNamespace"))
+                .append("；关系：").append(row.opt("attendeeRelationship")).append("；类型：").append(row.opt("attendeeType")).append("；状态：").append(row.opt("attendeeStatus")).append('\n');}
+        text.append("\n已有系列例外：").append(exceptions.length()).append(" 项（").append(deleting?"本次删除范围包括这些例外；同步完成情况另行核对":"保持原例外记录，不能据此改变它们的独立内容").append("）\n");
+        for(int i=0;i<exceptions.length();i++){text.append("\n例外 ").append(i+1).append("\n");existingEvent(text,exceptions.getJSONObject(i));}
+        return text.append(deleting?"\n批准后直接删除上述准确事件及其所述范围，可能同步到其他设备并取消参与人的日程；不会另开编辑器确认，不提供自动补建或撤销。":"\n批准后直接更新上述准确事件及明确字段，可能同步到其他设备；不会另开编辑器确认。")
+                .append("系统调用前会重新核对日历、事件和关联记录版本；任一变化均需重新读取、重新批准。仅允许这次固定操作，保留原事件URI及实际回执；未知结果停止核对，不会自动重发。").toString();
+    }
+    private static void existingEvent(StringBuilder text,JSONObject row)throws Exception {
+        String[][] fields={{"_id","事件 ID"},{"title","标题"},{"eventTimezone","开始时区"},{"eventEndTimezone","结束时区"},{"duration","重复事件时长"},
+                {"eventLocation","地点"},{"description","描述"},{"rrule","RRULE重复规则"},{"rdate","额外重复日期RDATE"},{"exrule","排除规则EXRULE"},{"exdate","排除日期EXDATE"},{"organizer","组织者"}};
+        for(String[] field:fields){text.append(field[1]).append('：');Object value=row.opt(field[0]);text.append(value==null||value==JSONObject.NULL?"未提供":value instanceof String?JSONObject.quote((String)value):value).append('\n');}
+        text.append("全天：").append(row.getInt("allDay")!=0?"是":"否").append("\n开始 UTC：").append(Instant.ofEpochMilli(row.getLong("dtstart")))
+                .append("\n结束 UTC：").append(row.isNull("dtend")?"由重复时长确定":Instant.ofEpochMilli(row.getLong("dtend"))).append('\n');
+        if(!row.isNull("originalInstanceTime"))text.append("原重复实例 UTC：").append(Instant.ofEpochMilli(row.getLong("originalInstanceTime"))).append('\n');
+    }
+    private static void recurrence(StringBuilder text,String rule){
+        if(rule.isEmpty()){text.append("RRULE：未设置（已有RDATE会单独保留）\n");return;}
+        String frequency=rule.contains("FREQ=DAILY")?"按天":rule.contains("FREQ=WEEKLY")?"按周":rule.contains("FREQ=MONTHLY")?"按月":rule.contains("FREQ=YEARLY")?"按年":"按原规则";
+        text.append("重复：").append(frequency).append("\n完整重复规则：").append(rule).append('\n');
+        if(!rule.contains("COUNT=")&&!rule.contains("UNTIL="))text.append("重复结束：未设结束次数或日期，持续重复。\n");
     }
     private static String quoted(JSONObject object,String key)throws Exception{return object.isNull(key)?"未提供":JSONObject.quote(object.getString(key));}
     private static boolean booleanValue(JSONObject request,String key,boolean fallback)throws Exception {

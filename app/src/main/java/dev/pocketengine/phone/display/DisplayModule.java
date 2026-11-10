@@ -42,6 +42,7 @@ public final class DisplayModule implements EngineModule {
         RunSession(RunControl.HostRunIdentity owner,RunControl control){this.owner=owner;this.control=control;this.pinned=control!=null;}
     }
     private final java.util.concurrent.ConcurrentHashMap<RunControl.HostRunIdentity,RunSession> runSessions=new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.LinkedHashMap<RunControl.HostRunIdentity,dev.pocketengine.phone.appcontrol.PhoneAppRunSession> appControlRuns=new java.util.LinkedHashMap<>();
     private final java.util.concurrent.ConcurrentHashMap<String,Integer> releasedSessions=new java.util.concurrent.ConcurrentHashMap<>();
     private volatile int helperSessionRouting;
     private volatile String message="手机控制尚未启用。跟随内置引导完成系统授权，无需电脑或另装应用。";
@@ -269,6 +270,43 @@ public final class DisplayModule implements EngineModule {
         requireOk(answer);return answer.getJSONObject("ownership");
     }
     public android.content.Context hostContext(){return context.android;}
+    /** Retains references across original owner review/port reconstruction; never restores execution. */
+    public synchronized dev.pocketengine.phone.appcontrol.PhoneAppRunSession appControlSession(RunControl original) {
+        if(original==null||!original.hasHostRun()||original.recoveryOnly())throw new SecurityException("original_app_run_required");
+        appControlRuns.values().removeIf(dev.pocketengine.phone.appcontrol.PhoneAppRunSession::ended);
+        var identity=original.hostRunIdentity();var current=appControlRuns.get(identity);
+        if(current!=null){current.requireLive(original);return current;}
+        while(appControlRuns.size()>=16)appControlRuns.remove(appControlRuns.keySet().iterator().next()).close();
+        var created=new dev.pocketengine.phone.appcontrol.PhoneAppRunSession(original);appControlRuns.put(identity,created);return created;
+    }
+    /** Terminal native cleanup only; awaiting an owner decision does not release this original reference set. */
+    public synchronized void releaseAppControlRun(RunControl original) {
+        var values=appControlRuns.values().iterator();while(values.hasNext()){var value=values.next();if(value.originalControl==original){values.remove();value.close();}}
+        if(original!=null&&original.hasHostRun()&&context.android.getApplicationContext() instanceof dev.pocketengine.EngineApplication app){
+            var identity=original.hostRunIdentity();app.resources.phoneApps().releaseOwner(identity.taskId()+"/"+identity.runId()+"/"+identity.epoch());
+        }
+    }
+    /** Typed finite helper lane. The caller supplies a native-verified original phone scope, never model JSON. */
+    public JSONObject appControl(String command,JSONObject payload,JSONObject scope,RunControl original,
+            dev.pocketengine.phone.observation.NativePhoneEntry.Admission admission)throws Exception {
+        if(!java.util.Set.of("app_state","app_restart_check","app_restart_stop","app_restart_launch").contains(command)||original==null||admission==null||!original.hasHostRun()||!isConnected())throw new SecurityException("app_control_helper_unavailable");
+        original.check();long revision=scope.getLong("pauseRevision");
+        if(original.isPaused()||original.pauseRevision()!=revision||!original.matchesHostRun(scope.getString("taskId"),scope.getString("runId"),scope.getInt("epoch")))throw new SecurityException("original_app_control_changed");
+        admission.check();var identity=original.hostRunIdentity();int display=scope.getInt("displayId");String session=scope.getString("sessionId");
+        JSONObject args=new JSONObject(payload.toString()).put("displayId",display).put("sessionId",session).put("pauseRevision",revision)
+                .put("ownerTaskId",identity.taskId()).put("ownerRunId",identity.runId()).put("ownerEpoch",identity.epoch());
+        JSONObject result;
+        if(display>0){
+            RunSession run=requireRun(original);if(!runReady(run)||!matches(run.state,session,display))throw new SecurityException("original_app_display_changed");
+            result=requestAdmitted(command,args,original,revision,session,display,admission);
+        }else if(display==0){
+            if(hasSession(original)||session.isBlank()||session.length()>200)throw new SecurityException("original_primary_app_scope_required");
+            result=call(command,args,original,revision,false,admission);
+        }else throw new SecurityException("original_app_display_required");
+        if(result.optBoolean("ok")&&(!identity.taskId().equals(result.optString("ownerTaskId"))||!identity.runId().equals(result.optString("ownerRunId"))||identity.epoch()!=result.optInt("ownerEpoch",-1)))throw new SecurityException("original_app_receipt_run_mismatch");
+        if(result.optBoolean("ok")&&result.has("displayId")&&(result.getInt("displayId")!=display||!session.equals(result.optString("sessionId"))))throw new SecurityException("original_app_receipt_display_mismatch");
+        return result;
+    }
     public JSONObject connect(RunControl control)throws Exception {
         if(control!=null&&control.hasHostRun())return connectRun(requireRun(control),control,control.pauseRevision(),false);
         try{
@@ -685,6 +723,7 @@ public final class DisplayModule implements EngineModule {
     }
     @Override public void close(){
         bootstrapEpoch++;
+        synchronized(this){for(var session:appControlRuns.values())session.close();appControlRuns.clear();}
         for(RunSession run:new java.util.ArrayList<>(runSessions.values()))try{
             JSONObject original=run.state;if(original.optInt("displayId",-1)>0)releaseSession(original.getString("sessionId"),original.getInt("displayId"));
         }catch(Exception ignored){/* Retain unknown cleanup until the helper is stopped. */}

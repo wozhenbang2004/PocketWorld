@@ -147,6 +147,14 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
     private JSONObject pressKey(PhoneAccessibilityService service,Snapshot expected,String key,RunControl control,NativePhoneEntry.Admission admission)throws Exception {
         int code=PhoneKeyCodes.require(key),global=keyGlobalAction(code);
         KeyPreparation prepared=onTreeRead(()->guard(service,control,expected.revision),()->prepareKey(service,expected,code,control));
+        if(code==KeyEvent.KEYCODE_TAB||code==KeyEvent.KEYCODE_MOVE_HOME||code==KeyEvent.KEYCODE_MOVE_END){
+            JSONObject result=focusedNodeKey(service,expected,key,code,control,admission);
+            if(result!=null)return result;
+        }
+        if(android.os.Build.VERSION.SDK_INT>=33&&PhoneKeyEdit.supports(code)&&prepared.focus.node!=null&&prepared.focus.node.editable){
+            JSONObject result=focusedEditorEdit(service,expected,key,code,control,admission);
+            if(result!=null)return result;
+        }
         if(!prepared.imeEnter&&global<0&&(android.os.Build.VERSION.SDK_INT<33||prepared.focus.node==null||!prepared.focus.node.editable))
             return failure("unsupported_key","此平台或当前焦点没有可定向使用的公开按键入口，未派发。").put("supported",false).put("key",key);
         String backend=prepared.imeEnter?"accessibility_ime_enter":global>=0?"accessibility_global_key":"accessibility_input_connection";
@@ -180,6 +188,7 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
                 validateReference(service,expected,control);requireKeyFence(service,prepared);
                 PhoneInputMethod.Token editor=null;
                 if(global<0){
+                    prepared.focus.verify(service,Display.DEFAULT_DISPLAY,false,true);
                     PhoneInputMethod method=service.phoneInputMethod();
                     if(method==null||method!=expected.inputMethod||service.getInputMethod()!=method
                             ||(editor=method.current(prepared.focus.packageName,expected.inputRevision))==null)
@@ -204,6 +213,122 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
         }
     }
 
+    /** Use the editor's declared native focus/selection actions instead of an unacknowledged key pair. */
+    private JSONObject focusedNodeKey(PhoneAccessibilityService service,Snapshot expected,String key,int code,RunControl control,NativePhoneEntry.Admission admission)throws Exception {
+        JSONObject accepted=receipt(true,"key_action_accepted").put("key",key).put("keyCode",code)
+                .put("backend","accessibility_focused_node").put("ackKind","native_system_acceptance")
+                .put("processingConfirmed",false).put("requiresPostconditionCheck",true).put("automaticReplayAllowed",false);
+        NativeNodeActionReceipt acknowledgement=new NativeNodeActionReceipt(accepted);
+        java.util.concurrent.atomic.AtomicBoolean attempted=new java.util.concurrent.atomic.AtomicBoolean();
+        try{return onNodeWorker(service,control,expected.revision,()->{
+            KeyPreparation fresh=prepareKey(service,expected,code,control);if(fresh.focus.node==null)return null;
+            Tree tree=validateTarget(service,expected,control,fresh.focus.node);
+            AccessibilityNodeInfo focused=AccessibilityForest.resolve(service,Display.DEFAULT_DISPLAY,fresh.focus.node),target=null;
+            try{
+                if(focused==null||!focused.refresh()||!focused.isFocused()||!AccessibilityForest.matches(fresh.focus.node,focused))throw new NativeKeyFocus.Unavailable("key_focus_changed");
+                AccessibilityForest.Ref targetRef=fresh.focus.node;Bundle arguments=null;int action;int wanted=-1;
+                if(code==KeyEvent.KEYCODE_TAB){
+                    target=focused.focusSearch(android.view.View.FOCUS_FORWARD);
+                    if(target==null||target.equals(focused)||target.getWindowId()!=fresh.focus.windowId||!target.isFocusable()
+                            ||!target.isVisibleToUser()||!target.isEnabled()||!hasAction(target,AccessibilityNodeInfo.ACTION_FOCUS))return null;
+                    targetRef=null;
+                    for(AccessibilityForest.Ref candidate:tree.forest.refs.values())if(candidate.windowId==fresh.focus.windowId&&AccessibilityForest.matches(candidate,target)){
+                        if(targetRef!=null)throw new NativeKeyFocus.Unavailable("key_focus_ambiguous");targetRef=candidate;
+                    }
+                    if(targetRef==null)return null;
+                    validateTarget(service,expected,control,targetRef);action=AccessibilityNodeInfo.ACTION_FOCUS;
+                }else{
+                    target=focused;
+                    if(!target.isEditable()||target.isPassword()||!hasAction(target,AccessibilityNodeInfo.ACTION_SET_SELECTION))return null;
+                    CharSequence text=target.isShowingHintText()?"":target.getText();if(text==null)text="";
+                    // Single-line editors have an exact Home/End position; wrapped/multiline behavior stays with the actual key path.
+                    if(target.isMultiLine()||text.length()>PhoneKeyEdit.MAX_TEXT||text.toString().indexOf('\n')>=0||text.toString().indexOf('\r')>=0)return null;
+                    wanted=code==KeyEvent.KEYCODE_MOVE_HOME?0:text.length();
+                    if(target.getTextSelectionStart()==wanted&&target.getTextSelectionEnd()==wanted)
+                        return new JSONObject().put("ok",true).put("status","completed").put("terminal",true).put("actionDispatched",false)
+                                .put("postconditionAlreadySatisfied",true).put("key",key).put("processingConfirmed",true).put("automaticReplayAllowed",false);
+                    arguments=new Bundle();arguments.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT,wanted);arguments.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT,wanted);
+                    action=AccessibilityNodeInfo.ACTION_SET_SELECTION;
+                }
+                Rect bounds=new Rect();target.getBoundsInScreen(bounds);
+                if(Rect.intersects(bounds,onMain(control,expected.revision,service::controlsBounds)))throw new PhoneFailure("controls_overlap","按键目标被任务控制条遮挡，请重新观察。");
+                if(!target.refresh()||!AccessibilityForest.matches(targetRef,target))throw new NativeKeyFocus.Unavailable("key_focus_changed");
+                final AccessibilityNodeInfo destination=target;final Bundle input=arguments;
+                boolean result=NativePhoneEntry.call(control,expected.revision,admission,()->{
+                    guard(service,control,expected.revision);requireUnlocked(service);requireKeyFence(service,fresh);
+                    PhoneReadGate.markEffectEntered();attempted.set(true);clearReferences();return acknowledgement.record(destination.performAction(action,input));
+                });
+                if(!result)return keyEditUnknown(key,"accessibility_focused_node");
+                boolean observed=target.refresh()&&target.isFocused()&&(code==KeyEvent.KEYCODE_TAB
+                        ||target.getTextSelectionStart()==wanted&&target.getTextSelectionEnd()==wanted);
+                JSONObject receipt=new JSONObject(accepted.toString()).put("processingConfirmed",observed)
+                        .put("postcondition",code==KeyEvent.KEYCODE_TAB?"native_next_input_focus":"single_line_cursor_boundary")
+                        .put("postconditionObserved",observed);
+                acknowledgement.update(receipt);return receipt;
+            }finally{if(target!=null&&target!=focused)target.recycle();if(focused!=null)focused.recycle();}
+        });}catch(Exception unavailable){
+            JSONObject retained=acknowledgement.afterReadFailure("key_followup_unavailable");
+            if(unavailable instanceof InterruptedException)Thread.currentThread().interrupt();
+            if(retained!=null)return retained;if(attempted.get())return keyEditUnknown(key,"accessibility_focused_node");throw unavailable;
+        }
+    }
+    private static boolean hasAction(AccessibilityNodeInfo node,int action){return node.getActionList().stream().anyMatch(value->value.getId()==action);}
+
+    /** Editing APIs have no transport ACK; confirm the exact text AND cursor through the same native editor. */
+    private JSONObject focusedEditorEdit(PhoneAccessibilityService service,Snapshot expected,String key,int code,RunControl control,NativePhoneEntry.Admission admission)throws Exception {
+        JSONObject confirmed=receipt(true,"key_edit_observed").put("key",key).put("keyCode",code).put("backend","accessibility_editor_edit")
+                .put("ackKind","exact_editor_postcondition").put("processingConfirmed",true).put("postconditionObserved",true)
+                .put("keyPairSent",false).put("automaticReplayAllowed",false);
+        NativeNodeActionReceipt acknowledgement=new NativeNodeActionReceipt(confirmed);
+        java.util.concurrent.atomic.AtomicBoolean attempted=new java.util.concurrent.atomic.AtomicBoolean();
+        try{return onNodeWorker(service,control,expected.revision,()->{
+            KeyPreparation fresh=prepareKey(service,expected,code,control);if(fresh.focus.node==null)return null;
+            PhoneInputMethod.Token connection=onMain(control,expected.revision,()->{
+                PhoneInputMethod method=service.phoneInputMethod();
+                return method==null||method!=expected.inputMethod||service.getInputMethod()!=method?null:method.current(fresh.focus.packageName,expected.inputRevision);
+            });
+            if(connection==null)return null;
+            AccessibilityNodeInfo node=AccessibilityForest.resolve(service,Display.DEFAULT_DISPLAY,fresh.focus.node),identity=null;
+            try{
+                if(node==null||!node.refresh()||!AccessibilityForest.matches(fresh.focus.node,node))throw new NativeKeyFocus.Unavailable("key_focus_changed");
+                PhoneKeyEdit edit=PhoneKeyEdit.prepare(code,node,connection);if(edit==null)return null;
+                if(edit.unchanged())return new JSONObject().put("ok",true).put("status","completed").put("terminal",true).put("actionDispatched",false)
+                        .put("postconditionAlreadySatisfied",true).put("key",key).put("processingConfirmed",true).put("automaticReplayAllowed",false);
+                validateTarget(service,expected,control,fresh.focus.node);requireKeyFence(service,fresh);
+                if(!node.refresh()||!edit.beforeMatches(node)||!connection.current())throw new NativeKeyFocus.Unavailable("key_editor_changed");
+                identity=AccessibilityNodeInfo.obtain(node);
+                NativePhoneEntry.call(control,expected.revision,admission,()->{
+                    guard(service,control,expected.revision);requireUnlocked(service);requireKeyFence(service,fresh);
+                    if(!edit.canDispatch(connection))throw new NativeKeyFocus.Unavailable("key_editor_changed");
+                    PhoneReadGate.markEffectEntered();attempted.set(true);clearReferences();edit.perform(connection);return null;
+                });
+                for(int read=0;read<2;read++){
+                    guard(service,control,expected.revision);requireUnlocked(service);
+                    if(!connection.current()||!node.refresh()||!node.equals(identity)||!node.isFocused()||node.isPassword())break;
+                    AccessibilityNodeInfo scoped=AccessibilityForest.resolve(service,Display.DEFAULT_DISPLAY,fresh.focus.node);
+                    boolean same;try{same=scoped!=null&&scoped.equals(node);}finally{if(scoped!=null)scoped.recycle();}
+                    if(!same)break;
+                    if(edit.confirmed(connection,node)){
+                        guard(service,control,expected.revision);acknowledgement.record(true);
+                        return new JSONObject(confirmed.toString()).put("selectionStart",edit.cursor).put("selectionEnd",edit.cursor)
+                                .put("displayId",Display.DEFAULT_DISPLAY).put("sessionId",service.observationSessionId());
+                    }
+                    if(read==0)Thread.sleep(80);
+                }
+                return keyEditUnknown(key,"accessibility_editor_edit").put("keyPairSent",false);
+            }finally{if(identity!=null)identity.recycle();if(node!=null)node.recycle();}
+        });}catch(Exception unavailable){
+            JSONObject retained=acknowledgement.afterReadFailure("key_followup_unavailable");
+            if(unavailable instanceof InterruptedException)Thread.currentThread().interrupt();
+            if(retained!=null)return retained;if(attempted.get())return keyEditUnknown(key,"accessibility_editor_edit").put("keyPairSent",false);throw unavailable;
+        }
+    }
+    private static JSONObject keyEditUnknown(String key,String backend)throws Exception {
+        return failure("action_unknown","未确认原输入操作的准确结果，请核对当前编辑器；不会自动重发。")
+                .put("accepted",JSONObject.NULL).put("requestAttempted",true).put("key",key).put("backend",backend)
+                .put("processingConfirmed",false).put("requiresReconciliation",true).put("automaticReplayAllowed",false);
+    }
+
     private KeyPreparation prepareKey(PhoneAccessibilityService service,Snapshot expected,int code,RunControl control)throws Exception {
         validateReference(service,expected,control);
         PhoneUiSignals.Stamp stamp=service.uiSignals().snapshot(java.util.Collections.emptySet());long focusRevision=service.keyFocusRevision();
@@ -223,7 +348,8 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
             }finally{if(node!=null)node.recycle();}
         }
         boolean global=keyGlobalAction(code)>=0&&!imeEnter;
-        focus.verify(service,Display.DEFAULT_DISPLAY,global,!global&&!imeEnter&&android.os.Build.VERSION.SDK_INT>=33);
+        boolean nodeKey=code==KeyEvent.KEYCODE_TAB||code==KeyEvent.KEYCODE_MOVE_HOME||code==KeyEvent.KEYCODE_MOVE_END;
+        focus.verify(service,Display.DEFAULT_DISPLAY,global,!global&&!imeEnter&&!nodeKey&&android.os.Build.VERSION.SDK_INT>=33);
         validateReference(service,expected,control);KeyPreparation prepared=new KeyPreparation(focus,stamp,focusRevision,imeEnter);
         requireKeyFence(service,prepared);return prepared;
     }

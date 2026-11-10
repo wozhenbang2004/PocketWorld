@@ -78,7 +78,16 @@ public final class ToolPermissionPolicyPort implements CapabilityPort {
         boolean effecting=PHONE_EFFECTS.contains(name)||existing.sideEffecting(name);
         CapabilityApprovalPolicy.Decision choice=policy.decisionFor(name,effecting);
         if(choice==CapabilityApprovalPolicy.Decision.DENY)return refusal("tool_policy_denied","此工具已被你的精确规则禁止："+name);
-        JSONObject prior=existing.beforeTool(name,supplied,original);if(prior!=null)return prior;
+        if("phone_prepare_cold_start".equals(name))for(String stage:new String[]{"phone_force_stop_app","phone_restart_app"})
+            if(policy.decisionFor(stage,true)==CapabilityApprovalPolicy.Decision.DENY)
+                return refusal("tool_policy_denied","完整冷启动中的工具已被你的精确规则禁止，尚未关闭应用："+stage);
+        try(ToolApprovalPermit.NativeOwnerReview nativeReview=ToolApprovalPermit.nativeOwnerReview(binding,name,supplied,original)){
+            JSONObject prior=existing.beforeTool(name,supplied,original);if(prior!=null)return prior;
+            current(original);
+            // ASK/REVIEW use the more specific owner review; ALLOW never replaces it.
+            // The leaf still checks its full capability or consumed parent approval at dispatch.
+            if(nativeReview.requested())return null;
+        }
         if(choice==CapabilityApprovalPolicy.Decision.NATIVE)return null;
         JSONObject schema=definition(name);
         if(schema==null)return choice==CapabilityApprovalPolicy.Decision.ALLOW?null:refusal("approval_required","当前没有此工具的原生定义，未绕过专用审批："+name);

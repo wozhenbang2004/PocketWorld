@@ -12,15 +12,21 @@ public final class PhoneWheelDrag {
 
     /** previousAttempt may only come from this run's settled, accepted, known-effect action. */
     public static JSONObject plan(JSONObject actual,JSONObject wheel,String target,String direction,JSONObject previousAttempt)throws Exception {
+        return planColumn(actual,PhoneWheelValue.column(actual,wheel),nodeKey(wheel),wheel.optBoolean("enabled",true),target,direction,previousAttempt);
+    }
+    static JSONObject planVisual(JSONObject actual,JSONObject bounds,String regionId,String target,String direction,JSONObject previousAttempt)throws Exception {
+        return planColumn(actual,PhoneWheelValue.visualColumn(actual,bounds),"visual_region:"+regionId,true,target,direction,previousAttempt);
+    }
+    private static JSONObject planColumn(JSONObject actual,JSONObject column,String nodeKey,boolean enabled,String target,String direction,JSONObject previousAttempt)throws Exception {
         if(target==null||target.isBlank()||target.length()>100||!("forward".equals(direction)||"backward".equals(direction)))throw new IllegalArgumentException("wheel_drag_arguments_invalid");
-        JSONObject column=PhoneWheelValue.column(actual,wheel),reading=PhoneWheelValue.summary(column);
-        if(!wheel.optBoolean("enabled",true))return unavailable("wheel_disabled",reading);
+        JSONObject reading=PhoneWheelValue.summary(column);
+        if(!enabled)return unavailable("wheel_disabled",reading);
         if(!reading.optBoolean("readable"))return unavailable(reading.optString("reason","value_unavailable"),reading);
         String value=reading.getString("value");
         if(PhoneWheelValue.matches(value,target))return unavailable("target_observed",reading).put("reached",true);
         if(actual.optBoolean("changedDuringRead"))return unavailable("wheel_geometry_changed",reading);
         if(!column.optBoolean("columnReady"))return unavailable(column.optString("columnReason","column_unavailable"),reading);
-        String observationId=actual.getString("observationId"),scope=PhoneTreeSequence.scope(actual),nodeKey=nodeKey(wheel);
+        String observationId=actual.getString("observationId"),scope=PhoneTreeSequence.scope(actual);
         if(nodeKey.isEmpty())return unavailable("wheel_native_anchor_unavailable",reading);
         if(previousAttempt!=null){
             if(!scope.equals(previousAttempt.optString("scope"))||!nodeKey.equals(previousAttempt.optString("nodeKey"))

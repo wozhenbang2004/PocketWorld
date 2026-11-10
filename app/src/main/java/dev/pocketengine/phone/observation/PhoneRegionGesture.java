@@ -37,7 +37,10 @@ final class PhoneRegionGesture {
     }
 
     static JSONObject plan(JSONObject observation,JSONObject node,String direction,String axis)throws Exception {
-        JSONObject b=bounds(node);boolean horizontal="horizontal".equals(axis),forward="forward".equals(direction);
+        return planBounds(observation,bounds(node),direction,axis);
+    }
+    static JSONObject planBounds(JSONObject observation,JSONObject b,String direction,String axis)throws Exception {
+        boolean horizontal="horizontal".equals(axis),forward="forward".equals(direction);
         int left=b.getInt("left"),right=b.getInt("right"),top=b.getInt("top"),bottom=b.getInt("bottom");
         int extent=horizontal?right-left:bottom-top,cross=horizontal?bottom-top:right-left;
         if(extent<60||cross<24)throw new IllegalArgumentException("native_region_too_small");
