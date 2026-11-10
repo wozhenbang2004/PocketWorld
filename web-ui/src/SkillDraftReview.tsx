@@ -18,7 +18,12 @@ export function SkillDraftReview({ target, onClose }: { target: ConversationDraf
   const [previous, setPrevious] = useState<number[]>([]), [provided, setProvided] = useState<Set<string>>(new Set());
   const handle = useRef(''), alive = useRef(true), entered = useRef(false);
   const original = { taskId: target.taskId, runId: target.runId, epoch: target.epoch, operationId: target.operationId, proposalDigest: target.proposalDigest };
+  const clearReviewState = () => {
+    setSelected(null); setPage(null); setSource(null); setPrevious([]); setProvided(new Set());
+    setAllRead(false); setAcknowledged(false);
+  };
   const applyResult = (result: Data) => {
+    clearReviewState(); setAttempted(false);
     setValue(result); handle.current = result.handle || ''; setAllRead(result.review?.allFilePagesProvided === true);
   };
   useEffect(() => {
@@ -31,7 +36,11 @@ export function SkillDraftReview({ target, onClose }: { target: ConversationDraf
   }, []);
   const request = async (name: string, args: Data, accept: (result: Data) => void) => {
     if (entered.current || busy) return; entered.current = true; setBusy(true); setError('');
-    try { const result = await bridge.command(name, args); if (alive.current) accept(result); }
+    try {
+      const result = await bridge.command(name, args);
+      if (alive.current) accept(result);
+      else if (name === 'skillDraft.open' && result?.handle) void bridge.command('skillDraft.close', { handle: result.handle }).catch(() => {});
+    }
     catch (failure) { if (alive.current) setError(failure instanceof Error ? failure.message : String(failure)); }
     finally { entered.current = false; if (alive.current) setBusy(false); }
   };
@@ -47,6 +56,7 @@ export function SkillDraftReview({ target, onClose }: { target: ConversationDraf
   const close = () => { if (!busy) onClose(); };
   const review = value?.review, proposal = value?.proposal || review?.proposal || {}, apply = value?.apply || (value?.status ? value : {});
   const pending = apply.status === 'pending_owner' && !!review && !!handle.current && !attempted;
+  const canReopen = apply.status === 'pending_owner' && !review && !handle.current;
   const status: Record<string, string> = { pending_owner: '待你审阅', saved: '已保存为独立技能', cancelled: '已放弃原提案', rejected: '本次未保存', unknown: '保存结果待核对', applying_unknown: '原保存结果待核对' };
   const files = (side: 'before' | 'after'): Data[] => Array.isArray(review?.[side + 'Files']) ? review[side + 'Files'] : [];
   return <Drawer.Root open onOpenChange={open => { if (!open) close(); }} shouldScaleBackground={false}><Drawer.Portal>
@@ -66,7 +76,11 @@ export function SkillDraftReview({ target, onClose }: { target: ConversationDraf
           <Accordion variant="divided" className="pw-eco-draft-provenance"><AccordionItem id="draft-provenance" title="提案来源与保存范围"><p>提案正文由助手整理；来源限于这次原执行已准备并核对的主人消息，不代表整个会话。</p><p>原始来源条数：{Array.isArray(review.sourceRefs) ? review.sourceRefs.length : 0}。{review.skillScope?.projectId ? '仅在原项目范围。' : '私人主人范围。'}</p><p>保存不授予能力权限。所需权限保持原技能策略；后续执行仍单独核对。</p><section className="pw-eco-draft-sources"><h3>原提案消息</h3><div className="pw-action-row">{(Array.isArray(review.sourceRefs) ? review.sourceRefs : []).map((ref: Data, index: number) => <Button key={ref.sourceId + ':' + ref.revision} variant="ghost" disabled={busy || attempted || !handle.current} onClick={() => { void request('skillDraft.source', { handle: handle.current, index, offset: 0 }, setSource); }}>来源 {index + 1} · 修订 {ref.revision}</Button>)}</div>{source && <><h4>{source.title}</h4><pre className="pw-source-copy" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{source.text}</pre><p className="pw-muted">原文 {source.offset}–{source.nextOffset} / {source.totalChars} 字符</p>{source.hasMore && <Button variant="ghost" disabled={busy || attempted} onClick={() => { void request('skillDraft.source', { handle: handle.current, index: source.index, offset: source.nextOffset }, setSource); }}>继续读取原文</Button>}</>}</section></AccordionItem></Accordion>
           {pending && <section className="pw-eco-draft-decision"><p className="pw-muted">{allRead ? '前后全部文件已按页提供；请核对内容后作出决定。' : '请逐份展开前后文件并读到末页，之后才能保存。'}</p><CheckboxField isSelected={acknowledged} onChange={setAcknowledged}>我已核对全部文件，理解这是独立保存并保持停用的技能</CheckboxField><div className="pw-action-row"><Button disabled={busy || !allRead || !acknowledged} onClick={() => { const id = handle.current; setAttempted(true); void request('skillDraft.confirm', { handle: id }, result => { handle.current = ''; setValue({ proposal, apply: result }); }); }}>保存这份技能，保持停用</Button><Button variant="secondary" disabled={busy} onClick={() => { const id = handle.current; setAttempted(true); void request('skillDraft.cancel', { handle: id }, result => { handle.current = ''; setValue(result); }); }}>放弃这个原提案</Button></div></section>}
         </>}
-        {(!pending || attempted || error) && <Button variant="ghost" disabled={busy} onClick={() => { void request('skillDraft.query', original, result => { handle.current = ''; setValue(result); setSelected(null); setPage(null); }); }}>查询原保存结果</Button>}
+        {canReopen ? <Button variant="secondary" disabled={busy} onClick={() => { void request('skillDraft.open', original, applyResult); }}>重新打开审阅</Button>
+          : (!pending || attempted || error) && <Button variant="ghost" disabled={busy} onClick={() => { void request('skillDraft.query', original, result => {
+            const id = handle.current; handle.current = ''; setValue(result); clearReviewState();
+            if (id) void bridge.command('skillDraft.close', { handle: id }).catch(() => {});
+          }); }}>查询原保存结果</Button>}
       </div>
     </Drawer.Content>
   </Drawer.Portal></Drawer.Root>;
