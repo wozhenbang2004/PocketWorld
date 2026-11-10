@@ -4,6 +4,7 @@ import { DecisionInbox } from './shell-library/DecisionInbox';
 import { conversationWorkActionLabel } from './conversation-work';
 import { getRecentTaskProgress, taskNeedsAttention, taskNeedsReconciliation } from './task-presentation';
 import './project-workspace-overview.css';
+import type { ReactNode } from 'react';
 
 export type ProjectWorkspaceTask = {
   id: string;
@@ -23,6 +24,7 @@ export type ProjectWorkspaceOverviewProps = {
   onOpenPreview: () => void;
   onOpenTerminal: () => void;
   canPreview: boolean;
+  startContent?: ReactNode;
 };
 
 const activeStates = new Set(['queued', 'preparing', 'running', 'verifying', 'pausing', 'stopping', 'cancelling']);
@@ -47,7 +49,7 @@ const updatedDate = (task: ProjectWorkspaceTask) => {
  * MIT DecisionInbox. The approved Agent Run image informs work/decision/result
  * hierarchy; it is not a claim to Affect Pro source. All task records and routes
  * come from the host. This view neither starts work nor settles a decision. */
-export function ProjectWorkspaceOverview({ project, tasks, canOpenTask, onOpenTask, onOpenFiles, onOpenPreview, onOpenTerminal, canPreview }: ProjectWorkspaceOverviewProps) {
+export function ProjectWorkspaceOverview({ project, tasks, canOpenTask, onOpenTask, onOpenFiles, onOpenPreview, onOpenTerminal, canPreview, startContent }: ProjectWorkspaceOverviewProps) {
   // Browsing a project is not execution context. Only a native development
   // context associates a task; names, selected projects and goals never do.
   const work = tasks.filter(task => Boolean(project.id) && task.raw?.developmentContext?.projectId === project.id)
@@ -83,10 +85,10 @@ export function ProjectWorkspaceOverview({ project, tasks, canOpenTask, onOpenTa
   return <section className="pw-project-overview" aria-label={`${project.name}的项目工作`}>
     <header className="pw-project-overview-heading">
       <h2>项目工作</h2>
-      <p>仅显示当前已读取、明确属于这个项目的任务。</p>
     </header>
     <div className="pw-project-overview-layout">
       <div className="pw-project-overview-work">
+        {startContent}
         {attention.length > 0 && <section className="pw-project-work-group pw-project-work-attention" aria-label="需要你处理">
           <h3><IconAttention size={17} aria-hidden />需要你处理</h3>
           {canOpenTask ? <DecisionInbox key={project.id} compact className="pw-project-decisions" heading="需要你处理" decisions={attention.map(item => ({ id: item.task.id, title: item.task.goal || '项目任务', detail: [item.status, item.detail].filter(Boolean).join(' · '), primary: item.action, secondary: '查看任务' }))} onDecide={decision => onOpenTask(decision.id)} />
@@ -96,7 +98,8 @@ export function ProjectWorkspaceOverview({ project, tasks, canOpenTask, onOpenTa
         {recent.length > 0 && <section className="pw-project-work-group" aria-label="最近的项目结果"><h3>最近结果</h3><ol className="pw-project-work-list">{recent.slice(0, 3).map(renderTask)}</ol>
           {recent.length > 3 && <Accordion key={project.id} className="pw-project-work-history"><AccordionItem id="earlier-project-results" title="更早记录" description={`本次已读取的其余 ${recent.length - 3} 项`}><ol className="pw-project-work-list">{recent.slice(3).map(renderTask)}</ol></AccordionItem></Accordion>}
         </section>}
-        {!work.length && <div className="pw-project-work-empty"><IconFolder size={28} aria-hidden /><h3>先看看项目内容</h3><p>当前读取范围内没有这个项目的关联任务。打开文件查看已有内容，需要手动操作时，再准备私人工作副本。</p></div>}
+        {!work.length && <div className="pw-project-work-empty">{startContent ? <p>这个项目的任务和结果会留在这里。</p> : <><IconFolder size={28} aria-hidden /><h3>先看看项目内容</h3><p>当前读取范围内没有这个项目的关联任务。打开文件查看已有内容，需要手动操作时，再准备私人工作副本。</p></>}</div>}
+        {work.length > 0 && <p className="pw-project-work-unavailable">以上为本次已读取的项目任务。</p>}
         {work.length > 0 && !canOpenTask && <p className="pw-project-work-unavailable" role="status">当前宿主暂不支持打开任务记录。</p>}
       </div>
       <aside className="pw-project-overview-tools" aria-label="项目内容与操作">

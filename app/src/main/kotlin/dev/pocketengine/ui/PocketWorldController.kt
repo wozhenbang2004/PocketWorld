@@ -1386,6 +1386,42 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val checkout = projectWorkbench.checkout(project) ?: throw IllegalStateException("请选择原项目的真实副本")
         return app.reviewOwnerWorkProfileProject(project, checkout, projectWorkbench.agent(checkout).runtimeId.value)
     }
+    private fun projectWorkHost(project: String): dev.pocketengine.features.local.LocalModule {
+        check(!closed && webPrivateOwnerVisible() && state.projectId == project && state.filePath == null && state.projects.any { it.id == project }) { "请回到这份原私人项目" }
+        return app.features.module("local") as? dev.pocketengine.features.local.LocalModule ?: error("本机项目宿主尚未准备")
+    }
+    internal fun projectWorkSources(project: String): JSONObject {
+        val local = projectWorkHost(project)
+        val checkouts = org.json.JSONArray()
+        local.snapshot().getJSONArray("checkouts").objects().filter { it.optString("projectId") == project && !it.has("teamProjectCopy") }.forEach {
+            checkouts.put(projectWorkCheckout(it))
+        }
+        return JSONObject().put("project", JSONObject().put("id", project).put("name", state.projects.first { it.id == project }.name))
+            .put("checkouts", checkouts).put("runtimes", local.projectRuntimesForOwner())
+    }
+    internal fun prepareProjectWorkCheckout(project: String, current: () -> Boolean): JSONObject {
+        val local = projectWorkHost(project)
+        check(current()) { "原项目准备窗口已关闭，未创建副本" }
+        return projectWorkCheckout(local.handle("prepare", JSONObject().put("projectId", project)))
+    }
+    private fun projectWorkCheckout(value: JSONObject): JSONObject = JSONObject().put("id", value.getString("id"))
+        .put("projectId", value.getString("projectId")).put("name", value.optString("name"))
+        .put("createdAt", value.optLong("createdAt")).put("fileCount", value.optJSONArray("files")?.length() ?: 0)
+    internal fun reviewProjectWorkProfile(project: String, checkout: String, runtime: String): dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection {
+        val local = projectWorkHost(project)
+        val actual = local.projectCheckoutForHost(checkout)
+        check(actual.getString("projectId") == project && !actual.has("teamProjectCopy")) { "请选择这份项目的私人工作副本" }
+        return app.reviewOwnerWorkProfileProject(project, checkout, runtime)
+    }
+    internal fun createdWorkProfileIntentTask(selection: dev.pocketengine.features.controlplane.NativeWorkProfileHost.Selection, control: dev.pocketengine.core.RunControl): String? {
+        val id = selection.ownerIntentTaskId(control) ?: return null
+        val task = app.tasks.get(id, false) ?: return null
+        val intent = task.optJSONObject("workProfileIntent") ?: return null
+        val definition = intent.optJSONObject("definition") ?: return null
+        return id.takeIf { task.optString("actorId") == "owner" && task.optString("spaceId") == "private" &&
+            intent.optString("taskId") == id && definition.optString("profileId") == selection.profile().id &&
+            definition.optLong("revision") == selection.profile().revision }
+    }
     fun startOwnerWorkProfileProject(goal: String, selected: dev.pocketengine.features.controlplane.NativeWorkProfileHost.Selection,
         control: dev.pocketengine.core.RunControl, project: dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection,
         complete: (Result<JSONObject>) -> Unit) {

@@ -14,12 +14,15 @@ import org.json.JSONObject
 import java.util.UUID
 
 /** Definitions and explicitly reviewed starts share the original native sources, Settings CAS and typed task admission. */
-internal class PocketWebProfiles(private val controller: PocketWorldController, private val ownerCurrent: () -> Boolean) {
+internal class PocketWebProfiles(private val controller: PocketWorldController, private val ownerCurrent: () -> Boolean,
+    private val projectScope: ((JSONObject) -> ProjectOwnerWorkflows.ProfileProjectSelection)? = null,
+    private val startCompleted: ((String, JSONObject) -> Unit)? = null) {
     private data class Reading(val definition: String, val expires: Long)
     private data class Choices(val project: ProjectOwnerWorkflows.ProfileProjectSelection?, val expires: Long)
     private data class Inspected(val handle: String, val review: NativeWorkProfileHost.Review, val control: RunControl,
         val definition: String, val choicesHandle: String, val project: ProjectOwnerWorkflows.ProfileProjectSelection?, val expires: Long)
     private data class Start(val inspected: Inspected, val goal: String)
+    private data class Starting(val control: RunControl, var selection: NativeWorkProfileHost.Selection? = null)
     private data class Reviewed(val command: String, val definition: String, val original: String?, val expires: Long,
         val rebind: NativeWorkProfileHost.RestoredReview? = null, val start: Start? = null)
     private val lock = Any()
@@ -31,19 +34,25 @@ internal class PocketWebProfiles(private val controller: PocketWorldController, 
     private val reviews = linkedMapOf<String, Reviewed>()
     private val observations = linkedSetOf<RunControl>()
     private var inspected: Inspected? = null
-    private val starting = linkedMapOf<String, RunControl>()
+    private val starting = linkedMapOf<String, Starting>()
     // Bounded public receipts only. Clearing a window never forgets an already-entered save's outcome.
     private val results = linkedMapOf<String, JSONObject>()
     companion object {
         val COMMANDS = setOf("profiles.snapshot", "profiles.read", "profiles.choices", "profiles.reviewSave", "profiles.reviewRemove",
             "profiles.reviewRebind", "profiles.preflight", "profiles.reviewStart", "profiles.confirm", "profiles.stop", "profiles.result", "profiles.discard")
+        private val PROJECT_COMMANDS = setOf("profiles.snapshot", "profiles.read", "profiles.choices", "profiles.preflight",
+            "profiles.reviewStart", "profiles.confirm", "profiles.stop", "profiles.result", "profiles.discard")
     }
+    /** Only for the immediate synchronous confirm catch: registration precedes all scheduling and survives clear(). */
+    fun startWasRegistered(id: String): Boolean = synchronized(lock) { results.containsKey(id) || starting.containsKey(id) }
     fun clear() {
         val old: NativeWorkProfileHost.Page?
         val cancelling: List<RunControl>
         synchronized(lock) {
             generation++; old = page; page = null; readings.clear(); choices.clear()
-            cancelling = (observations + listOfNotNull(inspected?.control) + reviews.values.mapNotNull { it.start?.inspected?.control } + starting.values)
+            // Project starts keep their original admission check; closing must not race a newly bound run with cancel().
+            val unboundStarts = if (projectScope == null) starting.values.map { it.control } else emptyList()
+            cancelling = (observations + listOfNotNull(inspected?.control) + reviews.values.mapNotNull { it.start?.inspected?.control } + unboundStarts)
                 .filterNot { it.hasHostRun() }.distinct()
             inspected = null; reviews.clear(); observations.clear()
             results.values.filter { it.optString("status") == "queued" }.forEach { it.put("status", "not_entered") }
@@ -106,9 +115,12 @@ internal class PocketWebProfiles(private val controller: PocketWorldController, 
             .also { if (native != null) it.put("nativeReview", public(native.view())) }
     }
     fun dispatch(action: String, args: JSONObject, done: (JSONObject?, String?) -> Unit) {
+        require(projectScope == null || action in PROJECT_COMMANDS) { "项目工作入口只能选用已保存配置" }
         check(ownerCurrent() && controller.webPrivateOwnerVisible()) { "请返回前台私人工作配置页" }
-        val ticket = generation; val window = controller.webWindowTicket()
-        fun current() = ticket == generation && window == controller.webWindowTicket() && ownerCurrent() && controller.webPrivateOwnerVisible()
+        // A project start may change the fallback active run while its owner remains in this project.
+        fun ownerWindow(): Any = if (projectScope == null) controller.webWindowTicket() else controller.webPhoneViewerWindowTicket()
+        val ticket = generation; val window = ownerWindow()
+        fun current() = ticket == generation && window == ownerWindow() && ownerCurrent() && controller.webPrivateOwnerVisible()
         if (action == "profiles.discard") {
             fields(args, "viewHandle", "reviewHandle", "choicesHandle", "preflightHandle")
             if (args.length() == 0) clear() else {
@@ -155,10 +167,11 @@ internal class PocketWebProfiles(private val controller: PocketWorldController, 
                 work { val actual = owner.snapshot().getJSONArray("profiles").objects().singleOrNull { it.optString("profileId") == id } ?: error("原工作配置不存在，请核对清单"); view(actual) }
             }
             "profiles.choices" -> {
-                fields(args, "useCurrentProject"); require(args.opt("useCurrentProject") is Boolean)
-                val useCurrentProject = args.getBoolean("useCurrentProject")
+                if (projectScope == null) { fields(args, "useCurrentProject"); require(args.opt("useCurrentProject") is Boolean) }
+                else fields(args, "projectId", "checkoutId", "runtimeId")
+                val useCurrentProject = projectScope != null || args.getBoolean("useCurrentProject")
                 work { observation ->
-                    val project = if (useCurrentProject) controller.reviewWorkProfileProject() else null
+                    val project = projectScope?.invoke(args) ?: if (useCurrentProject) controller.reviewWorkProfileProject() else null
                     val values = owner.choices(observation, project); observation.checkpoint()
                     synchronized(lock) {
                         choices.entries.removeAll { it.value.expires <= SystemClock.elapsedRealtime() }; while (choices.size >= 8) choices.remove(choices.keys.first())
@@ -223,40 +236,65 @@ internal class PocketWebProfiles(private val controller: PocketWorldController, 
             "profiles.confirm" -> {
                 val id = text(args, "reviewHandle")
                 val selected = synchronized(lock) { reviews[id] } ?: error("原工作配置审阅已使用或关闭，请先核对结果")
+                require(projectScope == null || selected.start != null) { "项目工作入口不能修改工作配置" }
                 if (selected.start != null) { fields(args, "reviewHandle", "consent"); require(args.opt("consent") == true) { "请明确核对这次原任务的目标、配置修订与项目范围" } }
                 else fields(args, "reviewHandle")
                 check(selected.expires > SystemClock.elapsedRealtime()) { "原工作配置审阅已过期" }
                 synchronized(lock) {
                     check(reviews.remove(id) === selected) { "原工作配置审阅已变化" }
-                    while (results.size >= 32) results.remove(results.keys.first())
+                    while (results.size >= 32) {
+                        val retired = if (projectScope == null) results.keys.first() else results.entries.firstOrNull {
+                            it.value.optString("status") in setOf("completed", "not_entered") || it.value.optBoolean("taskCreated")
+                        }?.key ?: error("请先核对已有项目启动回执")
+                        results.remove(retired)
+                    }
                     results[id] = JSONObject().put("operationId", id).put("status", "queued")
                 }
                 val start = selected.start
                 if (start != null) {
                     val original = start.inspected; val control = original.control
-                    synchronized(lock) { starting[id] = control }
+                    val pending = Starting(control)
+                    synchronized(lock) { starting[id] = pending }
                     val complete: (Result<JSONObject>) -> Unit = { outcome ->
                         var receipt: JSONObject? = null; var failure: String? = null
                         outcome.fold({ value -> receipt = JSONObject().put("confirmed", true).put("operationId", id).put("command", "start")
                             .put("profileId", JSONObject(original.definition).getString("profileId")).put("revision", JSONObject(original.definition).getLong("revision"))
                             .put("result", public(value)) }, { failure = it.message ?: "原任务结果尚未确认，请核对任务记录" })
-                        synchronized(lock) {
+                        val finalValue = synchronized(lock) {
                             starting.remove(id)
-                            results[id] = JSONObject().put("operationId", id).put("status", if (receipt != null) "completed" else "unknown")
-                                .put("receipt", receipt).put("error", failure).also { value -> control.hostRunIdentity()?.let { value.put("taskId", it.taskId()) } }
+                            // The whole start has returned. A null original intent proves it never reached task metadata;
+                            // an existing intent remains unknown even when its SQL commit cannot yet be verified.
+                            val noIntent = pending.selection?.let { selected ->
+                                runCatching { selected.ownerIntentTaskId(control) == null }.getOrDefault(false)
+                            } ?: true
+                            val notEntered = receipt == null && !control.hasHostRun() && noIntent
+                            val value = (results[id]?.let { JSONObject(it.toString()) } ?: JSONObject())
+                                .put("operationId", id).put("command", "start").put("final", true)
+                                .put("status", if (receipt != null) "completed" else if (notEntered) "not_entered" else "unknown")
+                                .put("receipt", receipt).put("error", failure).also { value -> originalTask(value, pending) }
+                            // Retired project history must not grow the bounded cache again when a long run finishes.
+                            if (projectScope == null || results.containsKey(id)) results[id] = value
+                            JSONObject(value.toString())
                         }
-                        main.post { if (current()) done(receipt, failure) }
+                        startCompleted?.invoke(id, finalValue)
+                        if (projectScope == null) main.post { if (current()) done(receipt, failure) }
                     }
                     try { controller.runWorkProfileWork(Runnable {
                         try {
                             control.checkpoint(); check(current()) { "原工作配置页面已关闭，未启动" }
                             currentRecord(owner, JSONObject(original.definition)); original.project?.checkCurrent()
                             val selection = owner.select(original.review, original.review.digest, control)
-                            synchronized(lock) { results[id]?.put("status", "entered") }
+                            synchronized(lock) { pending.selection = selection; results[id]?.put("status", "entered") }
                             if (original.project != null) controller.startOwnerWorkProfileProject(start.goal, selection, control, original.project, complete)
                             else controller.startOwnerWorkProfile(start.goal, selection, control, complete)
                         } catch (failure: Exception) { complete(Result.failure(failure)) }
-                    }) } catch (failure: Exception) { complete(Result.failure(failure)) }
+                    }) } catch (failure: Exception) {
+                        synchronized(lock) { results[id]?.put("status", "not_entered") }; complete(Result.failure(failure))
+                    }
+                    if (projectScope != null) {
+                        val accepted = synchronized(lock) { JSONObject(results.getValue(id).toString()) }
+                        done(accepted.put("command", "start").put("replayAllowed", false), null)
+                    }
                     return
                 }
                 work(id) { observation ->
@@ -275,17 +313,28 @@ internal class PocketWebProfiles(private val controller: PocketWorldController, 
             "profiles.stop" -> {
                 fields(args, "operationId"); val id = text(args, "operationId")
                 val control = synchronized(lock) { starting[id] } ?: error("本次启动已返回，请从原任务查看结果或明确停止")
-                controller.runWorkProfileControl(Runnable { control.cancel(); main.post { if (current()) done(JSONObject().put("operationId", id).put("stopRequested", true).put("verified", false), null) } })
+                controller.runWorkProfileControl(Runnable { control.control.cancel(); main.post { if (current()) done(JSONObject().put("operationId", id).put("stopRequested", true).put("verified", false), null) } })
             }
             "profiles.result" -> {
                 fields(args, "operationId"); val id = text(args, "operationId")
                 work {
-                    val result = synchronized(lock) { results[id]?.let { JSONObject(it.toString()) } } ?: JSONObject().put("operationId", id).put("status", "unknown")
-                    synchronized(lock) { starting[id]?.hostRunIdentity()?.let { result.put("taskId", it.taskId()) } }
-                    result.put("snapshot", public(owner.snapshot())).put("readOnly", true).put("replayAllowed", false)
+                    val result = synchronized(lock) {
+                        val value = results[id]?.let { JSONObject(it.toString()) } ?: JSONObject().put("operationId", id).put("status", "unknown")
+                        starting[id]?.let { originalTask(value, it) }
+                        if (projectScope != null && results.containsKey(id)) results[id] = JSONObject(value.toString())
+                        value
+                    }
+                    if (projectScope == null) result.put("snapshot", public(owner.snapshot()))
+                    result.put("readOnly", true).put("replayAllowed", false)
                 }
             }
             else -> error("尚未接入的工作配置操作")
         }
+    }
+    private fun originalTask(value: JSONObject, pending: Starting) {
+        val run = pending.control.hostRunIdentity()
+        val task = run?.taskId() ?: pending.selection?.let { runCatching { controller.createdWorkProfileIntentTask(it, pending.control) }.getOrNull() }
+        value.put("taskCreated", value.optBoolean("taskCreated") || task != null).put("admitted", value.optBoolean("admitted") || run != null)
+        if (task != null) value.put("taskId", task)
     }
 }

@@ -554,6 +554,11 @@ public final class NativeWorkProfileHost {
         public JSONObject snapshot() throws Exception { return resolution.view().put("definition", profile().toJson()); }
         public WorkProfile profile() { return resolution.profile(); }
         public Map<String, ModelConfig> models() { return resolution.models(); }
+        /** Original pending-intent identity only; callers verify its committed task before showing it. */
+        public synchronized String ownerIntentTaskId(RunControl control) {
+            if (control != original) throw new SecurityException("work_profile_control_mismatch");
+            return intentTask;
+        }
         public void checkCurrent(RunControl observation) throws Exception {
             if (observation != original) throw new SecurityException("work_profile_control_mismatch");observation.check();
             WorkProfileResolver.Sources bound=boundScopeSources;if(bound!=null)WorkProfileResolver.requireStoredSkillScope(resolution.view(),bound,observation);
