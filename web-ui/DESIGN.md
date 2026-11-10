@@ -32,6 +32,8 @@ PW-I6 / UIX-05：已实际读取审美库[九色板研究](https://chatgpt.com/s
 
 当前环境未提供 adb/emulator；最新主线已将两个CI采图job设为禁用，沿用户现行边界保留。旧截图包与上述图标色样均不能关闭 PW-I1–I6 的当前应用视觉验收。本批代码已实现并构建，正式APK发布与修后实图状态在此继续增量记录。
 
+北京时间18:52:23，正式提交 `424bbad98f254426d74f4a03290f619d703b51ac` 已发布为 [v0.1.80](https://github.com/wozhenbang2004/PocketWorld/releases/tag/v0.1.80)，应用内 `0.4.1080 / 1080`。[发布运行42801775827](https://github.com/wozhenbang2004/PocketWorld/actions/runs/42801775827) 的 build、prepare、publish 全部成功。已回读轻量构建artifact `13756707008` 中的APK身份、版本和签名记录，源码树 `be1fb82e75e4f98042cedbeaa0b358d679df3db9` 与本地构建内容一致，223个Web资源核对完成；正式下载APK为148013610字节，GitHub资产digest与构建记录同为 `d197a734bdab257a99ae16916240ce17485ebd576eacd2b4698d13e92ff6416d`。稳定签名证书保持原项目身份。没有运行测试或新采图；对应截图run `42801783965` 为skipped，不能称视觉通过。PW-I1–I6 当前状态为“实现与正式发布完成，当前APK实机观感及用户审美反馈待确认”。
+
 ## 2026-11-10 动效系统重构
 
 用户原话：“结合我们审美库给我们的 pocketworld 的动画系统重构，不过好像其实本来就没啥动画我们 pocketworld”。本次对话，北京时间2026-11-10，精确消息ID不可取得。从主线 `f393050a` 独立实施，保留同期六页重做、用户侧栏、个人中心、手机能力及聊天材质。
@@ -93,6 +95,8 @@ root 负责统一设计、Secondary/数据页/后台页面与全局提示及最�
 北京时间16:19:39，本批 `9ef9033a` 已随集成提交 `00f242a5` 正式发布为 [v0.1.69](https://github.com/wozhenbang2004/PocketWorld/releases/tag/v0.1.69)，APK 内部版本 `0.4.1069 / 1069`。[发布运行42780634630](https://github.com/wozhenbang2004/PocketWorld/actions/runs/42780634630) 的 build、prepare、publish 均成功；原生 Kotlin/Java 编译、稳定签名、包内资源与发布远端字节均已核对。APK SHA-256 为 `dda72601c3f778c13b3ef46af901997f763bff3011fcc7c1f5df42de4df822c1`。原 `9ef9033a` 与中间 `6fb8fb59` 的 pending 构建被较新主线替换，没有将其算作构建通过；最终产物以 `00f242a5` 身份为准。
 
 截至北京时间16:21，[对应实际 APK 采图运行42780642082](https://github.com/wozhenbang2004/PocketWorld/actions/runs/42780642082) 仍在执行且无截图 artifact。当前状态为“六页实现已发布，修后视觉与实际交互未验收”，不以签名/编译或旧截图关闭 PW-P1–8。下一确切动作是读取该 run 的 capture/identity 与实际 PNG，先比对备份、存储、外观、后台和应用更新，再明确团队 definition 等未到达范围；不创建团队或模型样例充当用户真实内容。此次没有写或运行测试。
+
+同日后续补证：上述run已于16:48:43完成，artifact `13747882821`。root回读 `apk-identity.json` / `capture.json` 并实际查看54备份、53存储、46外观、50/51后台上下屏、74应用更新、10团队；独立只读分支另看群/渠道空态及未保存的新建表单。身份与 `00f242a5` / build `42780634630` / 上述APK哈希一致；Android 15模拟器1080×2220、density440、浅色，capture仍为partial。五个设置页的白色语义组、主次操作、字体预览与收起说明已真实可见，所看区域无明显水平溢出或相互遮挡；更新已进入共同Web呈现，图片有返回箭头。团队仅空目录，没有用户原图中的已保存definition对象，因此PW-P1启动页仍未验。未实际操作配对、清理、备份、字体保存或系统安装，也未获得用户对新版审美的认可。本证据属于1069旧版，不证明本轮Solar、蓝灰强调色、语音与隐私页或新动效的实际效果。
 
 ## 2026-11-10 全屏右滑打开侧栏
 
