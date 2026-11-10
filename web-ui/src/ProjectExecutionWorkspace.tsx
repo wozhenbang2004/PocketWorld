@@ -31,7 +31,11 @@ export function ProjectExecutionWorkspace({ task, operation, active = true, run 
     if (alive.current) { setView(null); setBusy(''); setAccepted(false); setStopReview(false); setPainted(''); updateWindow(value => value + 1); }
     if (old?.handle) void run('local.execution.close', { handle: old.handle }).catch(() => {});
   };
-  const apply = (value: Data) => { currentPage.current = value; setView(value); if (value.metadata?.inputUncertain || value.output?.inputUncertain) { live.current.uncertain = true; setUncertain(true); } };
+  const apply = (value: Data) => {
+    currentPage.current = value; setView(value);
+    const waiting = value.metadata?.inputUncertain === true || value.output?.inputUncertain === true;
+    if (waiting || value.metadata?.inputUncertain === false && value.output?.inputUncertain === false) { live.current.uncertain = waiting; setUncertain(waiting); }
+  };
   const request = async (action: string, args: Data = {}) => {
     if (!current() || pending.current) return;
     const opening = action === 'local.execution.open', prior = currentPage.current;
@@ -51,7 +55,12 @@ export function ProjectExecutionWorkspace({ task, operation, active = true, run 
         if (opening) { setColumns(String(value.metadata.columns)); setHeight(String(value.metadata.rows)); live.current.uncertain = value.metadata.inputUncertain === true || value.output.inputUncertain === true; setUncertain(live.current.uncertain); setInputReceipt(null); live.current.stopRequested = stopped.has(originalKey) || value.stopRequested === true; setStopRequested(live.current.stopRequested); }
       } else if (action === 'local.execution.input' || action === 'local.execution.inputReceipt') {
         setInputReceipt(value);
-        if (value.nativeInputSettled === true) { live.current.uncertain = false; setUncertain(false); const old = currentPage.current; if (old) apply({ ...old, metadata: { ...old.metadata, inputUncertain: false, pendingInputCount: 0 }, output: { ...old.output, inputUncertain: false } }); }
+        const waiting = typeof value.inputUncertain === 'boolean' ? value.inputUncertain : value.nativeInputSettled === true ? false : null;
+        if (waiting !== null) {
+          live.current.uncertain = waiting; setUncertain(waiting);
+          const old = currentPage.current;
+          if (old) apply({ ...old, metadata: { ...old.metadata, inputUncertain: waiting, ...(!waiting ? { pendingInputCount: 0 } : {}) }, output: { ...old.output, inputUncertain: waiting } });
+        }
       } else if (action === 'local.execution.stop') setStopReceipt(value);
       return value;
     } catch (failure) { if (opening && acquired?.handle && currentPage.current?.handle !== acquired.handle) void run('local.execution.close', { handle: acquired.handle }).catch(() => {}); if (valid()) setError(failure instanceof Error ? failure.message : String(failure)); }
@@ -119,3 +128,4 @@ export function ProjectExecutionWorkspace({ task, operation, active = true, run 
     <SettingsDialog isOpen={stopReview} title="停止这个原项目进程？" onClose={() => { live.current.stopReview = false; setStopReview(false); }}><p>只停止当前核对的原执行，已写入的副本和原日志保留。</p><p className="pw-field-hint">{metadata.taskId} · {metadata.runId} · {metadata.executionId}</p><div className="pw-form-actions"><Button variant="secondary" onClick={() => { live.current.stopReview = false; setStopReview(false); }}>返回</Button><Button variant="danger" disabled={!!busy || !active} onClick={() => { if (!current() || pending.current || !live.current.stopReview || live.current.stopRequested || currentPage.current?.handle !== view?.handle) return; live.current.stopRequested = true; live.current.stopReview = false; stopped.add(originalKey); if (stopped.size > 64) stopped.delete(stopped.values().next().value!); setStopRequested(true); setStopReview(false); void request('local.execution.stop'); }}>确认停止原进程一次</Button></div></SettingsDialog>
   </AccordionItem></Accordion>;
 }
+

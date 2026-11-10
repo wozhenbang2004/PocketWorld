@@ -18,7 +18,9 @@ export function projectExecutionCanInput(metadata: ProjectExecutionData, output:
 }
 
 export function projectExecutionShouldRead(output: ProjectExecutionData) {
-  return !output.logIncompleteTail && (output.terminal === true ? output.hasMore === true : ['queued', 'starting', 'preparing', 'running', 'stopping'].includes(output.nativeStatus));
+  // A writer can still be completing the last record. Keep observing the same
+  // cursor while its process is live; an incomplete tail is not an end marker.
+  return output.terminal === true ? output.hasMore === true : ['queued', 'starting', 'preparing', 'running', 'stopping'].includes(output.nativeStatus);
 }
 
 /** Same display-only rule as native LocalWorkbenchGuard.pollable. Cold unknown receipts never recover execution or a polling loop. */
@@ -32,3 +34,4 @@ export function projectExecutionActivity(activity: ProjectExecutionData, executi
   const input = ({ delivered: ' 原输入已取得字节 ACK，未证明程序已经处理。', not_dispatched: ' 上次原输入确认未发送。', unknown: ' 原输入结果待核，只查询原操作，不重发。' } as Record<string, string>)[activity.input?.state] || '';
   return phase + state + input;
 }
+
