@@ -11520,6 +11520,9 @@ public final class TaskStore {
                 }
             }else{
                 JSONObject oldRoute=new JSONObject(old.getJSONObject("route").toString()),newRoute=new JSONObject(next.getJSONObject("route").toString());oldRoute.remove("responseModel");newRoute.remove("responseModel");oldRoute.remove("historyDigest");newRoute.remove("historyDigest");
+                // Response correlation arrives after STARTED; it does not change the selected route.
+                // Terminal-to-terminal equality below still checks the original complete receipt.
+                oldRoute.remove("providerRequestId");newRoute.remove("providerRequestId");
                 if(!canonical(old.getJSONObject("context")).equals(canonical(next.getJSONObject("context")))||!canonical(oldRoute).equals(canonical(newRoute))||old.getLong("startedAt")!=receipt.startedAt)throw new SecurityException("不能替换原模型调用的归属或连接");
                 if(old.has("tokenBudget"))next.put("tokenBudget",new JSONObject(old.getJSONObject("tokenBudget").toString()));
                 if(!"STARTED".equals(old.getString("outcome"))){JSONObject prior=new JSONObject(old.toString());prior.remove("at");prior.remove("seq");if(starting||canonical(prior).equals(canonical(next))){db.setTransactionSuccessful();return;}throw new SecurityException("本次模型调用已有不同终态计量");}
