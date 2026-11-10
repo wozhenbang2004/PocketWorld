@@ -1,20 +1,20 @@
 /* Native context and permission details. Composer geometry belongs to
- * composer-squircle.css; a sheet has one continuous scrolling body. */
-.pw-context-meter-detail { display: grid; gap: 22px; min-width: 0; color: var(--pw-copy); font: 400 13px/21px var(--pw-font); }
-.pw-settings-dialog.pw-context-dialog { width: min(100%, 480px); }
-.pw-context-meter-source { display: flex; align-items: center; gap: 8px; color: var(--pw-muted); }
-.pw-context-draft { display: grid; gap: 5px; padding: 12px 14px; border-radius: 13px; background: var(--pw-inset); }
-.pw-context-draft > div { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
-.pw-context-draft span { margin-right: auto; color: var(--pw-copy); font-size: 13px; }
-.pw-context-draft strong { color: var(--pw-ink); font: 500 15px/22px var(--pw-font); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.pw-context-draft p, .pw-context-draft small { color: var(--pw-muted); font: 400 12px/19px var(--pw-font); }
+ * composer-squircle.css; each dialog has one continuous scrolling body. */
+.pw-context-meter-detail { display: grid; gap: 20px; min-width: 0; color: var(--pw-copy); font: 400 13px/21px var(--pw-font); }
+.pw-settings-dialog.pw-context-dialog { width: min(100%, 440px); }
+.pw-context-meter-source { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--pw-muted); }
+.pw-context-draft { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 5px 12px; padding-block: 0 16px; border-bottom: 1px solid var(--pw-hairline); }
+.pw-context-draft > span { display: grid; gap: 2px; color: var(--pw-copy); font-size: 13px; }
+.pw-context-draft small { display: block; color: var(--pw-muted); font: 400 11px/18px var(--pw-font); }
+.pw-context-draft > strong { min-width: 0; color: var(--pw-copy); font: 500 13px/21px var(--pw-font); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .pw-context-summary-state { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 5px 12px; color: var(--pw-copy); font-size: 12px; }
 .pw-context-summary-state strong { color: var(--pw-ink); font-weight: 500; font-variant-numeric: tabular-nums; }
 .pw-context-meter-breakdown { display: grid; gap: 14px; padding-block: 4px 10px; }
 .pw-context-meter-detail [class~="group/item"] { border: 0; box-shadow: none; }
-.pw-context-meter-detail [slot="trigger"] { min-height: 44px; padding-inline: 0; }
-.pw-context-meter-detail [slot="trigger"] .text-headline-medium { font-size: 13px; font-weight: 500; }
-.pw-context-meter-attention { color: var(--pw-ink); font-weight: 500; }
+.pw-context-meter-detail [slot="trigger"] { min-height: 44px; padding: 10px 0; }
+.pw-context-meter-detail [slot="trigger"] .text-headline-medium { color: var(--pw-muted); font: 500 13px/21px var(--pw-font); }
+.pw-context-meter-detail .pw-context-accounting { margin-top: -8px; }
+.pw-context-meter-attention { color: var(--pw-warning); font-weight: 500; }
 .pw-context-meter-detail dl { display: grid; gap: 10px; margin: 0; }
 .pw-context-meter-detail dl > div { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 4px 16px; }
 .pw-context-meter-detail dt { color: var(--pw-muted); }

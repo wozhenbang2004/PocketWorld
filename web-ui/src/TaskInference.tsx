@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { IconChevronLeft, IconChevronRight, IconRefresh } from './icons';
 import { bridge } from './bridge';
 import { Accordion, AccordionItem, Button } from './forms-library';
-import { ContextBreakdown } from './ContextBreakdown';
+import { ContextBreakdown, ContextMeasurementDetails } from './ContextBreakdown';
 import { readContextBreakdown } from './composer-context-metric';
+import { rateLabel } from './usage-metrics';
 import './task-reading.css';
 
 type Data = Record<string, any>;
@@ -34,17 +35,18 @@ function UsageSummary({ value }: { value: Data }) {
   if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized)) return null;
   const rate = typeof cache?.rate === 'number' && Number.isFinite(cache.rate) && cache.rate >= 0 && cache.rate <= 1 ? cache.rate : null;
   const eligible = measuredNumber(cache?.eligibleCalls), unknown = measuredNumber(cache?.unknownCalls), partial = measuredNumber(cache?.partialCalls);
-  const percent = rate === null ? null : new Intl.NumberFormat('zh-CN', { style: 'percent', maximumFractionDigits: 1 }).format(rate);
+  const percent = rate === null ? null : rateLabel(rate);
   return <section className="pw-usage-summary" aria-label="本任务累计 Token 与缓存">
+    <dl className="pw-usage-total-count"><NativeCount label="本任务累计 Token" value={normalized.total}/></dl>
     <dl className="pw-usage-primary-counts"><NativeCount label="输入 Token" value={normalized.input}/><NativeCount label="输出 Token" value={normalized.output}/></dl>
-    <div className="pw-usage-cache"><header><span>输入缓存命中率</span><strong>{percent ?? '未上报'}</strong></header>
-      {rate !== null && <div className="pw-usage-cache-meter" role="meter" aria-label="可核对输入 Token 的缓存读取比例" aria-valuemin={0} aria-valuemax={100} aria-valuenow={rate * 100} aria-valuetext={percent!}><i style={{ width: `${rate * 100}%` }}/></div>}
-      <p>{rate === null ? '未取得完整的输入与缓存读取计数。' : `按 Token 加权${eligible === null ? '' : ` · ${eligible.toLocaleString('zh-CN')} 次可核对调用`}`}
+    <Accordion variant="divided" className="pw-usage-token-detail"><AccordionItem id="native-usage-token-detail" headingLevel={4}
+      title={<span className="pw-usage-cache-title"><span>缓存与推理</span><strong>{percent === null ? '命中率未上报' : `命中 ${percent}`}</strong></span>}>
+      <dl className="pw-usage-secondary-counts"><NativeCount label="缓存读取" value={normalized.cacheRead}/><NativeCount label="缓存写入" value={normalized.cacheWrite}/><NativeCount label="推理 Token" value={normalized.reasoning}/></dl>
+      <p className="pw-reading-note">{rate === null ? '未取得完整的输入与缓存读取计数。' : `命中率按 Token 加权${eligible === null ? '' : ` · ${eligible.toLocaleString('zh-CN')} 次可核对调用`}`}
         {unknown !== null && unknown > 0 ? ` · ${unknown.toLocaleString('zh-CN')} 次未纳入比例` : ''}
         {partial !== null && partial > 0 ? ` · ${partial.toLocaleString('zh-CN')} 次尚非最终计数` : ''}</p>
-    </div>
-    <dl className="pw-usage-secondary-counts"><NativeCount label="缓存读取" value={normalized.cacheRead}/><NativeCount label="缓存写入" value={normalized.cacheWrite}/><NativeCount label="推理 Token" value={normalized.reasoning}/></dl>
-    <p className="pw-reading-note">输入包含已归一化的缓存读写；缓存与推理为分项，不再次加到输入／输出。缓存命中也不减少上下文占用。</p>
+      <p className="pw-reading-note">缓存读写已包含在输入中，推理已包含在输出中。命中缓存的内容仍占上下文。</p>
+    </AccordionItem></Accordion>
   </section>;
 }
 
@@ -163,7 +165,7 @@ export function TaskInference({ taskId }: { taskId: string }) {
         </AccordionItem>
         <AccordionItem id="native-usage-context" title={current.context?.title || '原上下文信息'} description={current.context?.attention ? '需要核对' : '内容构成与窗口预算'}>
           {composition ? <><ContextBreakdown value={composition} identity={`${taskId}:${current.context?.at}`}/>
-            <Accordion variant="divided" className="pw-reading-disclosures"><AccordionItem id="native-usage-context-receipt" title="原请求检查" headingLevel={4}><Lines values={current.context?.lines}/></AccordionItem></Accordion>
+            <Accordion variant="divided" className="pw-reading-disclosures"><AccordionItem id="native-usage-context-receipt" title="原请求与计量详情" headingLevel={4}><ContextMeasurementDetails value={composition}/><Lines values={current.context?.lines}/></AccordionItem></Accordion>
           </> : <Lines values={current.context?.lines}/>}
         </AccordionItem>
         <AccordionItem id="native-usage-groups" title="模型与用途分组" description={`${groups.length} 组 · 保留原服务计数口径`}>
