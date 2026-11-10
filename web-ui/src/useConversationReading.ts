@@ -17,6 +17,17 @@ const atEnd = (node: HTMLElement) => node.scrollHeight - node.clientHeight - nod
 const messageId = (message?: Message, index = 0) => message ? message.id || `${message.role}:${message.at}:${index}` : '';
 const rows = (node: HTMLElement) => Array.from(node.querySelectorAll<HTMLElement>('[data-message-index]'));
 const contentTop = (node: HTMLElement, row: HTMLElement) => row.getBoundingClientRect().top - node.getBoundingClientRect().top - node.clientTop + node.scrollTop;
+// Messages are vertically ordered. Finding the first row below the viewport top
+// must not measure every preceding answer on each scroll event in a long thread.
+function readingRow(items: HTMLElement[], viewportTop: number) {
+  let start = 0, end = items.length;
+  while (start < end) {
+    const middle = start + Math.floor((end - start) / 2);
+    if (items[middle].getBoundingClientRect().bottom > viewportTop) end = middle;
+    else start = middle + 1;
+  }
+  return items[Math.min(start, items.length - 1)];
+}
 
 /** Preserve user intent before content grows. Measuring the new bottom gap after
  * a long reply renders incorrectly treats that growth as the user scrolling up.
@@ -36,10 +47,10 @@ export function useConversationReading({ scroll, active, conversationId, compose
     const current = window.current, node = scroll.current;
     if (!current?.ready || !node?.isConnected || node.dataset.conversationId !== current.conversationId) return;
     const items = rows(node), viewportTop = node.getBoundingClientRect().top + node.clientTop;
-    const row = items.find(item => item.getBoundingClientRect().bottom > viewportTop) || items.at(-1);
+    const row = readingRow(items, viewportTop);
     const index = Number(row?.dataset.messageIndex || 0);
     current.reading = { ...current.reading, top: node.scrollTop, index,
-      offset: row ? Math.max(0, Math.round(node.scrollTop - contentTop(node, row))) : 0,
+      offset: row ? Math.max(0, Math.round(viewportTop - row.getBoundingClientRect().top)) : 0,
       anchor: row?.dataset.messageId || '', observed: latest.current.lastId };
     positions.current.set(current.key, { ...current.reading });
   }, [scroll]);
