@@ -66,16 +66,20 @@ public final class ProjectMemoryNamespaces {
         JSONObject current;try{current=facts(selected.checkout);}catch(Exception unavailable){active.set(null);throw unavailable;}
         if(!selected.project.equals(current.getString("projectId"))||!selected.revision.equals(current.getString("revision"))){active.set(null);throw new SecurityException("原项目/副本身份已变化，旧记忆选择已失效，请重新选择");}
     }
-    private static JSONObject ownerScope()throws Exception{return new JSONObject().put("ownerId","owner").put("spaceId","private");}
-    private void synchronizeOriginalSources()throws Exception{
+    private void synchronizeOriginalSources(Selection selected)throws Exception{
         if(sourceBridge==null)throw new UnsupportedOperationException("项目文件来源尚未连接原来源清理宿主；未回退全局或创建替代宿主");
         // Original Bridge -> original Book/Tasks cleanup receipt; never acquire Tasks from inside
         // a Local/Book monitor or silently retire global records without their original journal.
-        sourceBridge.synchronize(ownerScope());
+        sourceBridge.synchronizeProject(this,selected);
+    }
+    /** Called only by the original source bridge while this native selection remains admitted. */
+    public JSONArray sourcesForSynchronizationForHost(Selection selected)throws Exception{
+        if(!Thread.holdsLock(this))throw new SecurityException("项目来源须沿当前原生选择读取");
+        synchronized(local){requireCurrent(selected);return book.projectSourcesForOwner(selected);}
     }
     public synchronized JSONObject handleForOwner(Selection selected,String command,JSONObject input)throws Exception {
         boolean hasSources;synchronized(local){requireCurrent(selected);hasSources=book.projectSourcesForOwner(selected).length()>0;}
-        if(hasSources)synchronizeOriginalSources();
+        if(hasSources)synchronizeOriginalSources(selected);
         if("correctReviewed".equals(command)){
             if(sourceBridge==null)throw new UnsupportedOperationException("项目记忆纠正尚未连接原上下文清理宿主");
             JSONObject value=input==null?new JSONObject():input;rejectNamespaceArguments(value);
@@ -97,13 +101,13 @@ public final class ProjectMemoryNamespaces {
     public synchronized ProjectMemoryAccess.Consent captureTaskConsentForOwner(Selection selected)throws Exception{
         if(sourceBridge==null)throw new UnsupportedOperationException("项目run记忆尚未接原撤回/上下文退休宿主");
         boolean hasSources;synchronized(local){requireCurrent(selected);hasSources=book.projectSourcesForOwner(selected).length()>0;}
-        if(hasSources)synchronizeOriginalSources();synchronized(local){requireCurrent(selected);return book.captureProjectConsentForOwner(selected);}
+        if(hasSources)synchronizeOriginalSources(selected);synchronized(local){requireCurrent(selected);return book.captureProjectConsentForOwner(selected);}
     }
     /** Body-free archive admission only; no whole-project export or read consent. */
     public synchronized void requireArchiveSelectionForOwner(Selection selected)throws Exception{synchronized(local){requireCurrent(selected);selected.requireBook(book);}}
     /** Explicit selected project only; the private/global owner archive remains unchanged. */
     public synchronized JSONObject archiveForOwner(Selection selected)throws Exception{
-        boolean hasSources;synchronized(local){requireCurrent(selected);hasSources=book.projectSourcesForOwner(selected).length()>0;}if(hasSources)synchronizeOriginalSources();synchronized(local){requireCurrent(selected);return book.projectArchiveForOwner(selected);}
+        boolean hasSources;synchronized(local){requireCurrent(selected);hasSources=book.projectSourcesForOwner(selected).length()>0;}if(hasSources)synchronizeOriginalSources(selected);synchronized(local){requireCurrent(selected);return book.projectArchiveForOwner(selected);}
     }
     /** Original archive confirmation and settled project map authorize passive placement only.
      * No management Selection or live task read Consent is issued by restoration. */
@@ -124,7 +128,7 @@ public final class ProjectMemoryNamespaces {
     /** Project review never delegates a SourceRef to the unscoped global owner source page. */
     public synchronized JSONObject readFileSourceForOwner(Selection selected,SourceRef ref)throws Exception{
         synchronized(local){requireCurrent(selected);book.requireProjectSourceUseForOwner(selected,ref);}
-        synchronizeOriginalSources();sourceBridge.prepareSourceHead(ref.kind,ref.sourceId,null);
+        synchronizeOriginalSources(selected);sourceBridge.prepareSourceHead(ref.kind,ref.sourceId,null);
         synchronized(local){requireCurrent(selected);book.requireProjectSourceUseForOwner(selected,ref);}
         dev.pocketengine.features.KnowledgeLearningWorkflow.SourceDocument document=sourceBridge.read(ref);
         if(document==null||!ref.equals(document.ref))throw new SecurityException("原项目来源不可读或已变化");
@@ -140,7 +144,7 @@ public final class ProjectMemoryNamespaces {
     /** Explicit native source selection. This stages an exact excerpt for owner review; no model
      * call, automatic acceptance, task context, source alias or new SourceLearningJob is created. */
     public synchronized JSONObject proposeFileForOwner(Selection selected,String path,int version,String revisionId,String sha256,int offset,int chars)throws Exception{
-        synchronized(local){requireCurrent(selected);}synchronizeOriginalSources();
+        synchronized(local){requireCurrent(selected);}synchronizeOriginalSources(selected);
         SourceRef original;String excerpt;
         synchronized(local){
             requireCurrent(selected);if(offset<0||chars<1||chars>4000)throw new IllegalArgumentException("项目原文范围须为1–4000个UTF-16字符");
@@ -157,7 +161,7 @@ public final class ProjectMemoryNamespaces {
         }
         // A source may have changed during IO. First retire its old global/project dependants
         // through the original Bridge receipt, then Book verifies the same pinned ref again.
-        synchronizeOriginalSources();
+        synchronizeOriginalSources(selected);
         synchronized(local){requireCurrent(selected);return book.proposeProjectFileForOwner(selected,original,excerpt);}
     }
     private JSONObject facts(String checkoutId)throws Exception {

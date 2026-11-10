@@ -160,7 +160,28 @@ public final class MemorySourceBridge {
         if(assistant==null){EngineModule registered=host.module("assistant");if(registered instanceof AssistantModule)bindAssistant((AssistantModule)registered);}
         EngineModule module=host.module("memory");if(!(module instanceof MemoryModule))return;MemoryModule memory=(MemoryModule)module;
         reconcilePending(scope,memory);
-        JSONArray sources=memory.sourceRefsForSynchronization(scope);Map<String,SourceRef> refs=new LinkedHashMap<>();
+        synchronizeSources(scope,memory,memory.sourceRefsForSynchronization(scope));
+        SkillsModule skills=skills();if(skills!=null)skills.reconcileExperiences(scope);
+        // A reviewed reminder may reference an original USER message without any formal
+        // memory row. Its original source/receipt still needs revocation before source
+        // synchronization can report completion; no unindexed message is added to Book.
+        MemoryBook.Scope identity=MemoryBook.Scope.from(scope);
+        if("owner".equals(identity.ownerId)&&"private".equals(identity.spaceId)){
+            EngineModule automation=host.module("automation");if(automation instanceof dev.pocketengine.features.automation.AutomationModule schedules)schedules.reconcileNativeScheduleSources();
+        }
+    }
+    /** Native project operations prepare only their retained sources, not unrelated private data.
+     * Changed sources still retire every affected reference through the original cleanup host. */
+    public synchronized void synchronizeProject(dev.pocketengine.features.memory.ProjectMemoryNamespaces nativeScope,dev.pocketengine.features.memory.ProjectMemoryNamespaces.Selection selected)throws Exception{
+        EngineModule original=host.module("memory");
+        if(!Thread.holdsLock(nativeScope)||!(original instanceof MemoryModule memory)||!memory.ownsProjectNamespacesForHost(nativeScope))throw new SecurityException("项目来源同步不是原Book/Bridge的native准入");
+        if(assistant==null){EngineModule registered=host.module("assistant");if(registered instanceof AssistantModule)bindAssistant((AssistantModule)registered);}
+        JSONObject scope=new JSONObject().put("ownerId","owner").put("spaceId","private");
+        reconcilePending(scope,memory);
+        synchronizeSources(scope,memory,nativeScope.sourcesForSynchronizationForHost(selected));
+    }
+    private void synchronizeSources(JSONObject scope,MemoryModule memory,JSONArray sources)throws Exception{
+        Map<String,SourceRef> refs=new LinkedHashMap<>();
         for(int i=0;i<sources.length();i++){
             SourceRef ref=SourceRef.fromJson(sources.getJSONObject(i));String key=new JSONArray().put(ref.ownerId).put(ref.spaceId).put(ref.kind).put(ref.sourceId).toString();SourceRef old=refs.get(key);if(old==null||ref.revision<old.revision)refs.put(key,ref);
         }
@@ -193,13 +214,6 @@ public final class MemorySourceBridge {
             if(actual==null||actual.ref.revision<ref.revision)throw new IllegalStateException("记忆来源尚未完成对账，未发送可能过时的上下文");
             if(actual.deleted)mutate(scope,memory,false,receipt->memory.sourceDeleted(scope,actual.ref,receipt));
             else if(actual.ref.revision>ref.revision)mutate(scope,memory,false,receipt->memory.sourceUpdated(scope,actual.ref,receipt));
-        }
-        SkillsModule skills=skills();if(skills!=null)skills.reconcileExperiences(scope);
-        // A reviewed reminder may reference an original USER message without any formal
-        // memory row. Its original source/receipt still needs revocation before source
-        // synchronization can report completion; no unindexed message is added to Book.
-        if("owner".equals(identity.ownerId)&&"private".equals(identity.spaceId)){
-            EngineModule automation=host.module("automation");if(automation instanceof dev.pocketengine.features.automation.AutomationModule schedules)schedules.reconcileNativeScheduleSources();
         }
     }
     public synchronized JSONObject forgetReviewed(JSONObject scope,String id,long revision)throws Exception{
