@@ -36,10 +36,10 @@ public final class AccessibilityForest {
         final NativeSensitiveStep.Facts sensitive;
         private Ref(AccessibilityNodeInfo node,int windowId,int[] path,String identity,List<String> lineage){
             this.windowId=windowId;this.path=path.clone();this.identity=identity;this.nativeIdentity=nativeIdentity(node);
-            editable=node.isEditable();focused=node.isFocused();visible=node.isVisibleToUser();drawingOrder=node.getDrawingOrder();
+            editable=supportsSetText(node);focused=node.isFocused();visible=node.isVisibleToUser();drawingOrder=node.getDrawingOrder();
             enabled=node.isEnabled();clickable=supportsClick(node);
             bounds=new Rect();node.getBoundsInScreen(bounds);ancestors=new ArrayList<>(lineage);
-            boolean password=node.isPassword();sensitive=new NativeSensitiveStep.Facts(password?null:node.getText(),password?null:node.getContentDescription(),password?null:node.getHintText(),password?"":relatedLabel(node),String.valueOf(node.getViewIdResourceName()),String.valueOf(node.getPackageName()),String.valueOf(node.getClassName()),node.isEditable(),node.isChecked());
+            boolean password=node.isPassword();sensitive=new NativeSensitiveStep.Facts(password?null:node.getText(),password?null:node.getContentDescription(),password?null:node.getHintText(),password?"":relatedLabel(node),String.valueOf(node.getViewIdResourceName()),String.valueOf(node.getPackageName()),String.valueOf(node.getClassName()),editable,node.isChecked());
         }
     }
     public final JSONArray nodes=new JSONArray(), windows=new JSONArray();
@@ -123,7 +123,7 @@ public final class AccessibilityForest {
                     .put("description",password?"":body(node.getContentDescription(),local))
                     .put("hint",password?"":body(node.getHintText(),local)).put("labelledBy",password?"":body(relatedLabel(node),local)).put("packageName",limited(node.getPackageName(),250))
                     .put("className",limited(node.getClassName(),200)).put("resourceId",limited(node.getViewIdResourceName(),400)).put("role",role(node))
-                    .put("clickable",supportsClick(node)).put("editable",node.isEditable()).put("enabled",node.isEnabled())
+                    .put("clickable",supportsClick(node)).put("editable",supportsSetText(node)).put("enabled",node.isEnabled())
                     .put("visible",node.isVisibleToUser()).put("password",password).put("checked",node.isChecked())
                     .put("selected",node.isSelected()).put("focused",node.isFocused()).put("scrollable",node.isScrollable())
                     .put("bounds",new JSONObject().put("left",normal(bounds.left,width)).put("top",normal(bounds.top,height))
@@ -205,6 +205,10 @@ public final class AccessibilityForest {
     public static boolean supportsClick(AccessibilityNodeInfo node) {
         return node.isClickable()||node.getActionList().stream().anyMatch(action->action.getId()==AccessibilityNodeInfo.ACTION_CLICK);
     }
+    /** Virtual editors may advertise ACTION_SET_TEXT without setting the editable flag. */
+    public static boolean supportsSetText(AccessibilityNodeInfo node) {
+        return node.isEditable()||node.getActionList().stream().anyMatch(action->action.getId()==AccessibilityNodeInfo.ACTION_SET_TEXT);
+    }
     /** A refreshed native handle still has to be the saved source, not an identical replacement at that path. */
     public static boolean matches(Ref ref,AccessibilityNodeInfo node) {
         return ref!=null&&node!=null&&ref.nativeIdentity.equals(nativeIdentity(node))&&ref.identity.equals(identity(node));
@@ -249,7 +253,7 @@ public final class AccessibilityForest {
         }
         return s.append('|').append(node.getWindowId()).append('|').append(r.toShortString()).append('|').append(node.getChildCount())
                 .append('|').append(node.isVisibleToUser()).append('|').append(node.isEnabled()).append('|').append(supportsClick(node))
-                .append('|').append(node.isEditable()).append('|').append(node.isFocused()).append('|').append(node.isPassword())
+                .append('|').append(node.isEditable()).append('|').append(supportsSetText(node)).append('|').append(node.isFocused()).append('|').append(node.isPassword())
                 .append('|').append(node.isChecked()).append('|').append(node.isSelected()).append('|').append(node.isScrollable()).toString();
     }
     /** Platform labelFor relation, not a guessed match to another window's text. Read only on bounded workers. */
@@ -280,9 +284,10 @@ public final class AccessibilityForest {
     private static int normal(int value,int size){return Math.max(0,Math.min(1000,Math.round(value*1000f/Math.max(1,size))));}
     private static String role(AccessibilityNodeInfo node){
         String cls=limited(node.getClassName(),200).toLowerCase(java.util.Locale.ROOT);
-        if(node.isEditable())return "input";if(cls.contains("checkbox"))return "checkbox";if(cls.contains("radiobutton"))return "radio";
+        if(supportsSetText(node))return "input";if(cls.contains("checkbox"))return "checkbox";if(cls.contains("radiobutton"))return "radio";
         if(cls.contains("switch"))return "switch";if(cls.contains("button"))return "button";if(cls.contains("webview"))return "web";
         if(cls.contains("list")||cls.contains("recyclerview")||cls.contains("grid"))return "list";
         if(node.isScrollable())return "scroll";if(cls.contains("image"))return "image";if(cls.contains("text"))return "text";return "container";
     }
 }
+

@@ -488,7 +488,7 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
                 throw new PhoneFailure("controls_overlap", "目标被任务控制条遮挡，请手动移动页面后重新观察。");
             if ("phone_type".equals(tool)) {
                 if (node.isPassword()) throw new PhoneFailure("password_input_refused", "密码输入请由用户手动完成。");
-                if (!node.isEditable()) throw new PhoneFailure("not_editable", "目标不是可编辑输入框。");
+                if (!AccessibilityForest.supportsSetText(node)) throw new PhoneFailure("not_editable", "目标不是可编辑输入框。");
             } else if("phone_scroll_node".equals(tool)) {
                 if(node.isPassword())throw new PhoneFailure("requires_user","不自动操作密码节点。");
                 int action="forward".equals(direction)?AccessibilityNodeInfo.ACTION_SCROLL_FORWARD:AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD;
@@ -537,7 +537,7 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
 
     private JSONObject readTextAfterInput(PhoneAccessibilityService service,AccessibilityNodeInfo node,AccessibilityNodeInfo identity,AccessibilityForest.Ref ref,String wanted,RunControl control,long revision)throws Exception {
         try{guard(service,control,revision);requireUnlocked(service);
-            if(identity==null||!node.refresh()||!node.equals(identity)||node.getWindowId()!=ref.windowId||!node.isEditable()||!java.util.Objects.equals(node.getViewIdResourceName(),identity.getViewIdResourceName())||!String.valueOf(node.getClassName()).equals(String.valueOf(identity.getClassName()))||!String.valueOf(node.getPackageName()).equals(String.valueOf(identity.getPackageName())))return dev.pocketengine.phone.observation.PhoneActionEffects.unavailableReadback("original_native_node_unavailable");
+            if(identity==null||!node.refresh()||!node.equals(identity)||node.getWindowId()!=ref.windowId||!AccessibilityForest.supportsSetText(node)||!java.util.Objects.equals(node.getViewIdResourceName(),identity.getViewIdResourceName())||!String.valueOf(node.getClassName()).equals(String.valueOf(identity.getClassName()))||!String.valueOf(node.getPackageName()).equals(String.valueOf(identity.getPackageName())))return dev.pocketengine.phone.observation.PhoneActionEffects.unavailableReadback("original_native_node_unavailable");
             AccessibilityNodeInfo scoped=AccessibilityForest.resolve(service,Display.DEFAULT_DISPLAY,ref);try{if(scoped==null||!scoped.equals(node))return dev.pocketengine.phone.observation.PhoneActionEffects.unavailableReadback("original_display_window_path_unavailable");}finally{if(scoped!=null&&scoped!=node&&scoped!=identity)scoped.recycle();}
             if(node.isPassword())return dev.pocketengine.phone.observation.PhoneActionEffects.inputReadback(null,null,true);
             JSONObject value=dev.pocketengine.phone.observation.PhoneActionEffects.inputReadback(node.getText(),wanted,false);guard(service,control,revision);
@@ -937,3 +937,4 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
         }
     }
 }
+

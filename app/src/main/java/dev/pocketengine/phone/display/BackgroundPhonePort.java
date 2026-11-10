@@ -559,7 +559,7 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
                 if(target.isPassword()&&!privateInput)return failure("requires_user","密码内容请由机主通过私密输入处理。");
                 if(privateInput&&!isOwner(control))return failure("requires_user","私密输入需要当前机主接管。");
                 if(privateInput){JSONObject rejected=privateInputRejection(target);if(rejected!=null)return rejected;}
-                if("phone_type".equals(tool)&&!target.isEditable())return failure("not_editable","该后台节点不可输入。");
+                if("phone_type".equals(tool)&&!AccessibilityForest.supportsSetText(target))return failure("not_editable","该后台节点不可输入。");
                 if("phone_click_node".equals(tool)&&!AccessibilityForest.supportsClick(target))return failure("not_clickable","请换用可点击节点或画面坐标。");
                 int scrollAction="forward".equals(args.optString("direction"))?AccessibilityNodeInfo.ACTION_SCROLL_FORWARD:AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD;
                 if("phone_scroll_node".equals(tool)&&(!target.isScrollable()||target.getActionList().stream().noneMatch(a->a.getId()==scrollAction)))return failure("not_scrollable","该后台节点未声明此方向滚动。");
@@ -591,7 +591,7 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
         return delayed.attach(actionReceipt);
     }
     private JSONObject readTextAfterInput(AccessibilityNodeInfo node,AccessibilityNodeInfo identity,AccessibilityForest.Ref ref,String wanted,Observation observed,RunControl control,long revision)throws Exception {
-        try{guard(control,revision);checkGeometry(observed.geometry,observed.width,observed.height,observed.displayRevision);if(identity==null||!node.refresh()||!node.equals(identity)||node.getWindowId()!=ref.windowId||!node.isEditable()||!java.util.Objects.equals(node.getViewIdResourceName(),identity.getViewIdResourceName())||!String.valueOf(node.getClassName()).equals(String.valueOf(identity.getClassName()))||!String.valueOf(node.getPackageName()).equals(String.valueOf(identity.getPackageName())))return dev.pocketengine.phone.observation.PhoneActionEffects.unavailableReadback("original_native_node_unavailable");
+        try{guard(control,revision);checkGeometry(observed.geometry,observed.width,observed.height,observed.displayRevision);if(identity==null||!node.refresh()||!node.equals(identity)||node.getWindowId()!=ref.windowId||!AccessibilityForest.supportsSetText(node)||!java.util.Objects.equals(node.getViewIdResourceName(),identity.getViewIdResourceName())||!String.valueOf(node.getClassName()).equals(String.valueOf(identity.getClassName()))||!String.valueOf(node.getPackageName()).equals(String.valueOf(identity.getPackageName())))return dev.pocketengine.phone.observation.PhoneActionEffects.unavailableReadback("original_native_node_unavailable");
             PhoneAccessibilityService service=PhoneAccessibilityService.get();if(service==null)return dev.pocketengine.phone.observation.PhoneActionEffects.unavailableReadback("service_disconnected");AccessibilityNodeInfo scoped=AccessibilityForest.resolve(service,displayId,ref);try{if(scoped==null||!scoped.equals(node))return dev.pocketengine.phone.observation.PhoneActionEffects.unavailableReadback("original_display_window_path_unavailable");}finally{if(scoped!=null&&scoped!=node&&scoped!=identity)scoped.recycle();}
             if(node.isPassword())return dev.pocketengine.phone.observation.PhoneActionEffects.inputReadback(null,null,true);JSONObject value=dev.pocketengine.phone.observation.PhoneActionEffects.inputReadback(node.getText(),wanted,false);guard(control,revision);
             return value.put("phase","immediate_after_dispatch").put("observedAtUptimeMs",SystemClock.uptimeMillis()).put("mechanism","refresh_same_accessibility_node").put("windowId",ref.windowId).put("path",new JSONArray(ref.path)).put("displayId",displayId).put("sessionId",sessionId).put("evidenceOnly",true);
@@ -753,7 +753,7 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
     }
     private static int integer(JSONObject input,String key,int min,int max){Object value=input.opt(key);if(!(value instanceof Number))throw new IllegalArgumentException();double n=((Number)value).doubleValue();if(!Double.isFinite(n)||n!=Math.rint(n)||n<min||n>max)throw new IllegalArgumentException();return(int)n;}
     static JSONObject privateInputRejection(AccessibilityNodeInfo target)throws Exception {
-        return target.isPassword()&&target.isEditable()?null:failure("requires_user","当前私密输入仅支持密码控件；普通明文输入框请由机主自行处理后再继续。");
+        return target.isPassword()&&AccessibilityForest.supportsSetText(target)?null:failure("requires_user","当前私密输入仅支持密码控件；普通明文输入框请由机主自行处理后再继续。");
     }
     private static JSONObject failure(String error,String message)throws Exception{return ObservationReport.annotateFailure(new JSONObject().put("ok",false).put("error",error).put("message",message).put("accepted",false).put("verified",false));}
     private static JSONObject failure(PhoneFailure blocked)throws Exception {JSONObject out=failure(blocked.code,blocked.getMessage());if(blocked.evidence!=null)out.put("displayLanding",blocked.evidence).put("requiresUser",true);return out;}
@@ -771,3 +771,4 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
         Observation(Tree tree,long frame,long revision,int width,int height,RunControl control,boolean imageIncluded){this.tree=tree;this.frame=frame;this.revision=revision;this.width=width;this.height=height;this.control=control;this.service=PhoneAccessibilityService.get();this.imageIncluded=imageIncluded;this.geometry=tree.geometry;this.displayRevision=tree.displayRevision;}}
     private static final class OwnerPermit {final String taskId;final RunControl control;final long revision;OwnerPermit(String taskId,RunControl control,long revision){this.taskId=taskId;this.control=control;this.revision=revision;}}
 }
+
