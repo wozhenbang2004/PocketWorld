@@ -26,7 +26,8 @@ public final class BrowserTextControls {
         String current="(e.isContentEditable?e.textContent:('value' in e?String(e.value):null))";
         String effect;
         if(command.equals("focus"))effect="e.focus({preventScroll:true});";
-        else if(command.equals("press"))effect="e.dispatchEvent(new KeyboardEvent('keydown',{key:"+JSONObject.quote(args.getString("key"))+",bubbles:true,cancelable:true}));e.dispatchEvent(new KeyboardEvent('keyup',{key:"+JSONObject.quote(args.getString("key"))+",bubbles:true,cancelable:true}));";
+        // Keyboard events cross the original node's shadow boundary, while remaining untrusted.
+        else if(command.equals("press"))effect="e.dispatchEvent(new KeyboardEvent('keydown',{key:"+JSONObject.quote(args.getString("key"))+",bubbles:true,cancelable:true,composed:true}));e.dispatchEvent(new KeyboardEvent('keyup',{key:"+JSONObject.quote(args.getString("key"))+",bubbles:true,cancelable:true,composed:true}));";
         // Match input's shadow-boundary propagation without claiming a trusted native event.
         else effect="if(e.isContentEditable)e.textContent="+wanted+";else{const setter=Object.getOwnPropertyDescriptor(e instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value').set;setter.call(e,"+wanted+");}e.dispatchEvent(new Event('input',{bubbles:true,composed:true}));e.dispatchEvent(new Event('change',{bubbles:true}));";
         String noop=command.equals("focus")?"(e.getRootNode().activeElement||document.activeElement)===e":command.equals("press")?"false":current+"==="+wanted;
