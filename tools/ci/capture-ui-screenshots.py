@@ -271,7 +271,11 @@ def screenshot(slug, title):
 
 def navigation():
     tree = wait_for_controls("关闭导航", "打开导航", "对话菜单", "工作区与导航",
-                             "暂时跳过准备", "以后再说")
+                             "暂时跳过准备", "以后再说", "关闭文件工作区")
+    # Outcomes are a real modal over the current workspace, not a route with its
+    # own navigation button. Close that read-only surface before the next page.
+    if tap("关闭文件工作区", tree):
+        tree = wait_for_controls("关闭导航", "打开导航", "对话菜单")
     if find_target(tree, "关闭导航"):
         return tree
     # Fresh installs start in the real onboarding page. Use its own skip action,
