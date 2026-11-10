@@ -40,6 +40,8 @@ public final class PlanWorkspacePort implements CapabilityPort {
         return new JSONObject().put("context","本目标只授权项目 "+standard.getString("projectId")+" 的文件操作。可读所选项目，写入与冻结仅限 "+standard.getString("path")+"。结果需冻结为本任务的正式文件成果，第一行必须为："+standard.getString("requiredHeading")+"；最少 "+standard.getLong("minBytes")+" UTF-8 字节。冻结成功后结束本次工作，原生宿主会读真实文件核验。具体敏感写入仍使用原任务的审批。").put("verification",new JSONObject(standard.toString()));
     }
     @Override public void beginRun(String goal,RunControl control)throws Exception{original.beginRun(goal,control);}
+    @Override public void prepareTurnSurface(RunControl control)throws Exception{original.prepareTurnSurface(control);}
+    @Override public void admitCapabilities(dev.pocketengine.core.CapabilitySnapshot snapshot,RunControl control)throws Exception{original.admitCapabilities(snapshot,control);}
     @Override public JSONObject prepareTurn(String query,int round,int steps,RunControl control)throws Exception{JSONObject turn=original.prepareTurn(query,round,steps,control);turn.put("tools",filter(turn.getJSONArray("tools"))).put("reference",contextSnapshot(query));return turn;}
     @Override public boolean responseCurrent(RunControl control)throws Exception{return original.responseCurrent(control);}
     @Override public boolean stepReadSourceCurrent(String tool,JSONObject receipt,RunControl control)throws Exception{return original.stepReadSourceCurrent(tool,receipt,control);}

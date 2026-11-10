@@ -59,29 +59,39 @@ final class MemorySemanticRecall {
         }
         List<String> ordered=new ArrayList<>(fused.keySet());ordered.sort(Comparator.<String>comparingInt(id->exact.contains(id)?0:1)
                 .thenComparing(Comparator.<String>comparingDouble(fused::get).reversed()).thenComparing(id->id));
-        Map<String,Candidate> selected=new LinkedHashMap<>();List<Candidate> frontier=new ArrayList<>();boolean limited=ordered.size()>MAX_CANDIDATES;int seeds=0,visits=0;
+        Map<String,Candidate> selected=new LinkedHashMap<>();List<Candidate> frontier=new ArrayList<>();Set<String> visited=new HashSet<>();boolean limited=false;int seeds=0,visits=0;
         for(String id:ordered){
             Candidate candidate=new Candidate(rows.get(id),seedPaths.get(id),fused.get(id),exact.contains(id));
-            if(selected.size()<MAX_CANDIDATES)selected.put(id,candidate);
-            if(seeds<MAX_SEEDS){frontier.add(candidate);seeds++;}
+            // Narrowing must happen before top-k: unrelated layers, entities or dates
+            // must not consume all result slots and hide a later matching memory.
+            if(plan.constraints().matches(rows.get(id))){
+                if(selected.size()<MAX_CANDIDATES)selected.put(id,candidate);else limited=true;
+            }
+            // A nonmatching seed may still connect to a matching fact. It remains a
+            // checked path dependency, not a returned record or a broader audience.
+            if(seeds<MAX_SEEDS){frontier.add(candidate);visited.add(id);seeds++;}
         }
         for(int hop=1;hop<=plan.constraints().maxHops&&!frontier.isEmpty();hop++){
             List<Candidate> next=new ArrayList<>();
             for(Candidate parent:frontier){
                 Set<String> adjacent=new LinkedHashSet<>();for(String entity:identities(rows.get(parent.id)))adjacent.addAll(byEntity.getOrDefault(entity,List.of()));
                 for(String id:adjacent){
-                    if(id.equals(parent.id)||parent.path.contains(id))continue;
+                    if(id.equals(parent.id)||parent.path.contains(id)||visited.contains(id))continue;
                     if(visits>=MAX_LINK_VISITS){limited=true;break;}visits++;
-                    if(selected.containsKey(id))continue;
-                    if(selected.size()>=MAX_CANDIDATES){limited=true;break;}
+                    visited.add(id);
                     List<String> path=new ArrayList<>(parent.path);path.add(id);
-                    Candidate candidate=new Candidate(rows.get(id),path,parent.score*.7d,false);selected.put(id,candidate);next.add(candidate);
+                    Candidate candidate=new Candidate(rows.get(id),path,parent.score*.7d,false);
+                    if(!selected.containsKey(id)&&plan.constraints().matches(rows.get(id))){
+                        if(selected.size()>=MAX_CANDIDATES){limited=true;break;}
+                        selected.put(id,candidate);
+                    }
+                    next.add(candidate);
                 }
                 if(visits>=MAX_LINK_VISITS||selected.size()>=MAX_CANDIDATES)break;
             }
             frontier=next;if(visits>=MAX_LINK_VISITS||selected.size()>=MAX_CANDIDATES)break;
         }
-        List<Candidate> result=new ArrayList<>();for(Candidate candidate:selected.values())if(plan.constraints().matches(rows.get(candidate.id)))result.add(candidate);
+        List<Candidate> result=new ArrayList<>(selected.values());
         result.sort(Comparator.<Candidate>comparingInt(c->c.exact?0:1).thenComparing(Comparator.comparingDouble((Candidate c)->c.score).reversed()).thenComparing(c->c.id));
         return new Result(result,rows,visits,seeds,limited);
     }

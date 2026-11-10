@@ -52,7 +52,6 @@ import dev.pocketengine.phone.observation.PhoneReadGate;
 /** A single foreground-display executor. References are data, never retained Android nodes. */
 public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.pocketengine.phone.observation.NativeTreeScrollPort,dev.pocketengine.phone.observation.NativePhoneSignals,dev.pocketengine.phone.observation.NativePhoneExtensions {
     private static final int MAX_TEXT = 400;
-    private static final long REFERENCE_LIFETIME_MS = 20_000;
     private static final long MAIN_WAIT_MS = 5_000;
     private static final ThreadLocal<Long> MAIN_DEADLINE = new ThreadLocal<>();
     private final Context context;
@@ -412,11 +411,13 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
                 .put("truncated", visited < found.size());
     }
 
+    // A model turn may legitimately take longer than a screen capture. Keep the
+    // latest reference until replacement/pause, and re-read its exact native
+    // target or pixels before dispatch instead of expiring it while the model thinks.
     private Snapshot requireReference(JSONObject args, RunControl control) throws Exception {
         String id = string(args, "observationId", 100, false);
         Snapshot current = reference.get();
         if (current == null || !current.id.equals(id) || current.control != control
-                || SystemClock.uptimeMillis() - current.created > REFERENCE_LIFETIME_MS
                 || current.revision != control.pauseRevision())
             throw new PhoneFailure("stale_observation", "页面引用已过期，请重新观察。");
         return current;
@@ -436,8 +437,7 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
 
     private void validateReference(PhoneAccessibilityService service,Snapshot expected,RunControl control)throws Exception {
         guard(service,control,expected.revision);requireUnlocked(service);
-        if(reference.get()!=expected||expected.service!=service||expected.control!=control
-                ||SystemClock.uptimeMillis()-expected.created>REFERENCE_LIFETIME_MS)
+        if(reference.get()!=expected||expected.service!=service||expected.control!=control)
             throw new PhoneFailure("stale_observation","页面引用已过期，请重新观察。");
     }
     private Tree validateTarget(PhoneAccessibilityService service,Snapshot expected,RunControl control,AccessibilityForest.Ref target)throws Exception {
@@ -510,7 +510,11 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
                 guard(service, control, expected.revision);
                 accepted = NativePhoneEntry.call(control,expected.revision,()->guard(service,control,expected.revision),()->{PhoneReadGate.markEffectEntered();clearReferences();return node.performAction(AccessibilityNodeInfo.ACTION_CLICK);});
             }
-            JSONObject returned=receipt(accepted, "node_action_requested");
+            // AccessibilityInteractionClient also returns false when the remote action's
+            // callback times out or its Binder connection is lost after dispatch.
+            if(!accepted)return failure("action_unknown","系统未确认原节点操作结果，请核对原页面；不会自动重试。")
+                    .put("accepted",JSONObject.NULL).put("nativeActionResult",false).put("requiresReconciliation",true);
+            JSONObject returned=receipt(true, "node_action_requested");
             if(accepted&&"phone_type".equals(tool))returned.put("nativeTextReadback",readTextAfterInput(service,node,readbackIdentity,selected,text,control,expected.revision));
             if(accepted&&"phone_type".equals(tool)&&delayed!=null){
                 final AccessibilityNodeInfo retained=AccessibilityNodeInfo.obtain(node),identity=AccessibilityNodeInfo.obtain(readbackIdentity);final AccessibilityForest.Ref original=selected;

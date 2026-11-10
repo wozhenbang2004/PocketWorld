@@ -15,6 +15,7 @@ import static dev.pocketengine.phone.observation.AdaptiveObservationPolicy.*;
 /** One native-host run's observation adapter; it owns no task journal, grant, or scheduler. */
 public final class AdaptivePhonePort implements PhonePort {
     public static final String CLICK_TEXT="phone_click_text";
+    // Bounds collection/OCR latency, not the following model inference turn.
     private static final long MAX_AGE_MS = 20_000;
     public static final class Scope {
         public final String taskId, runId, sessionId;
@@ -685,7 +686,11 @@ public final class AdaptivePhonePort implements PhonePort {
         if (latest == null || latestBinding == null || !latestBinding.observationId.equals(id)
                 || latestBinding.pauseRevision != control.pauseRevision()) return false;
         long now = uptime.getAsLong(), at = latest.optLong("observedAtUptimeMs", -1);
-        return now >= at && now - at <= MAX_AGE_MS;
+        // This is the latest delivered observation of this original run/revision,
+        // not a guarantee that the screen stayed still. Native ports re-read the
+        // exact target/pixels before any effect. An inference over 20 seconds must
+        // not force an endless observe -> inference -> expired loop.
+        return at >= 0 && now >= at;
     }
     private JSONObject rejectedObservation(JSONObject result) throws Exception {
         String code = result.optString("error", result.optString("code"));

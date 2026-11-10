@@ -110,13 +110,17 @@ public final class RemoteTaskCapabilities implements CapabilityPort {
     }
     @Override public JSONObject prepareTurn(String query,int round,int steps,RunControl control)throws Exception {current(READ,control);JSONObject result=existing.prepareTurn(query,round,steps,control);JSONArray list=result.optJSONArray("tools");if(list==null)list=existing.tools();list=new JSONArray(list.toString());for(int i=0;i<definitions.length();i++)list.put(new JSONObject(definitions.getJSONObject(i).toString()));return result.put("tools",list);}
     @Override public void beginRun(String goal,RunControl control)throws Exception{current(READ,control);existing.beginRun(goal,control);}
+    @Override public void prepareTurnSurface(RunControl control)throws Exception{current(READ,control);existing.prepareTurnSurface(control);current(READ,control);}
     @Override public void admitCapabilities(CapabilitySnapshot snapshot,RunControl control)throws Exception{current(READ,control);existing.admitCapabilities(snapshot,control);}
     @Override public JSONObject contextSnapshot(String query)throws Exception{return existing.contextSnapshot(query);}
     @Override public boolean responseCurrent(RunControl control)throws Exception{current(READ,control);return existing.responseCurrent(control);}
+    @Override public boolean stepReadSourceCurrent(String name,JSONObject receipt,RunControl control)throws Exception{current(READ,control);return !own(name)&&existing.stepReadSourceCurrent(name,receipt,control);}
     @Override public JSONObject beforeTool(String name,JSONObject args,RunControl control)throws Exception{current(READ,control);return own(name)?null:existing.beforeTool(name,args,control);}
     @Override public void afterTool(String name,JSONObject args,JSONObject result,RunControl control)throws Exception{current(READ,control);existing.afterTool(name,args,result,control);}
     @Override public dev.pocketengine.core.NativeToolObservation.Requirement observationRequirement(String name,JSONObject args,RunControl control)throws Exception{current(READ,control);return own(name)?dev.pocketengine.core.NativeToolObservation.Requirement.NONE:existing.observationRequirement(name,args,control);}
     @Override public dev.pocketengine.core.NativeToolObservation takeToolObservation(String name,String operation,RunControl control)throws Exception{current(READ,control);return own(name)?null:existing.takeToolObservation(name,operation,control);}
+    @Override public dev.pocketengine.core.NativeToolPlan takeToolPlan(String name,String operation,RunControl control)throws Exception{current(READ,control);return own(name)?null:existing.takeToolPlan(name,operation,control);}
+    @Override public dev.pocketengine.core.NativeReadContextRepair nativeReadContextRepair(JSONArray messages,RunControl control)throws Exception{current(READ,control);return existing.nativeReadContextRepair(messages,control);}
     @Override public void beforeModelRequest(String requestId,JSONArray messages,RunControl control)throws Exception{current(READ,control);existing.beforeModelRequest(requestId,messages,control);}
     @Override public JSONObject afterModelResponse(String requestId,String answerId,RunControl control)throws Exception{current(READ,control);return existing.afterModelResponse(requestId,answerId,control);}
     @Override public void modelRequestAbandoned(String requestId)throws Exception{existing.modelRequestAbandoned(requestId);}

@@ -149,6 +149,7 @@ public final class PhoneTreeCapabilityPort implements CapabilityPort {
         if(!sequence.compareAndSet(pending,null))throw new SecurityException("短序列已交付或释放");return pending.plan;
     }
     @Override public dev.pocketengine.core.NativeReadContextRepair nativeReadContextRepair(JSONArray messages,RunControl control)throws Exception {nativeHookControl(control);return existing.nativeReadContextRepair(messages,control);}
+    @Override public boolean stepReadSourceCurrent(String tool,JSONObject receipt,RunControl control)throws Exception {nativeHookControl(control);return !owns(tool)&&existing.stepReadSourceCurrent(tool,receipt,control);}
     @Override public JSONObject contextSnapshot(String query)throws Exception{return existing.contextSnapshot(query);}
     @Override public void beginRun(String goal,RunControl control)throws Exception{check(PhoneTreeQuery.QUERY,control);existing.beginRun(goal,control);}
     @Override public void prepareTurnSurface(RunControl control)throws Exception {check(PhoneTreeQuery.QUERY,control);existing.prepareTurnSurface(control);}

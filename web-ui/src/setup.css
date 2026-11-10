@@ -6,7 +6,7 @@
 .pw-setup-header > div:last-child { display:flex; align-items:center; gap:2px; }
 .pw-setup-header h1 { font-size:19px; font-weight:600; letter-spacing:-.025em; line-height:1.35; margin:0; }
 .pw-setup-header p { font-size:12px; line-height:1.5; color:var(--pw-muted); margin:0 0 2px; }
-.pw-setup-workspace button { min-height:48px; height:auto; }
+.pw-setup-workspace button, .pw-setup-workspace button.button-press-motion { min-height:48px; height:auto; }
 .pw-setup-workspace button:focus-visible, .pw-setup-choice[data-focus-visible] { box-shadow:0 2px 16px color-mix(in srgb,var(--pw-ink) 24%,transparent); outline:none; }
 .pw-setup-workspace button > span { white-space:normal; overflow-wrap:anywhere; }
 .pw-setup-steps.pw-affect-stepnav { flex:none; grid-template-columns:repeat(4,minmax(0,1fr)); margin:0 auto; padding:4px 20px 14px; width:min(100%,720px); gap:4px; --aw-blue:var(--pw-ink); --aw-copy:var(--pw-muted); }

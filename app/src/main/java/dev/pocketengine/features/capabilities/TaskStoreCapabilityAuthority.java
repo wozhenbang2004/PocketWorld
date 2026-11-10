@@ -19,8 +19,10 @@ public final class TaskStoreCapabilityAuthority implements ModelCapabilityAdapte
         policy.requireNotDenied(tool.name);
         JSONObject result=tasks.requireCapabilityApproval(binding.taskId,binding.runId,tool.name,args,capability);
         if(!result.optBoolean("approved"))approvals.emit(new JSONObject().put("taskId",binding.taskId).put("runId",binding.runId)
-                .put("approvalId",result.optString("approvalId")).put("tool",tool.name).put("capability",capability)
-                .put("arguments",tool.redactedArguments(args)).put("message","需要主人确认本次参数和固定能力身份；尚未执行。"));
+                .put("approvalId",result.optString("approvalId")).put("approvalState",result.optString("state","pending")).put("tool",tool.name).put("capability",capability)
+                .put("arguments",tool.redactedArguments(args)).put("message","denied".equals(result.optString("state"))
+                        ?"主人已拒绝本次参数和固定能力身份；尚未执行，该审批不能再次确认。"
+                        :"需要主人确认本次参数和固定能力身份；尚未执行。"));
         return result;
     }
     @Override public void requirePrepared(String operationId,String tool,JSONObject originalArgs)throws Exception {

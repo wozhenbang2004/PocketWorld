@@ -117,14 +117,33 @@ public final class ModelCapabilityAdapters implements CapabilityPort {
     }
     private void add(CapabilityDescriptor descriptor){if(!"write".equals(descriptor.effect)||binding.allowWrites)routes.put(descriptor.name,descriptor);}
     public JSONArray descriptors()throws Exception {JSONArray out=new JSONArray();for(CapabilityDescriptor route:routes.values())out.put(route.metadata().put("requiresApproval",authority.requiresApproval(route)));return out;}
-    @Override public JSONArray tools()throws Exception {JSONArray out=new JSONArray();if(existing!=null){JSONArray previous=existing.tools();for(int i=0;i<previous.length();i++)out.put(new JSONObject(previous.getJSONObject(i).toString()));}for(CapabilityDescriptor route:routes.values())out.put(route.definition());return out;}
+    @Override public JSONArray tools()throws Exception {return appendTools(existing==null?new JSONArray():existing.tools());}
+    private JSONArray appendTools(JSONArray offered)throws Exception {
+        JSONArray out=new JSONArray(offered.toString());Set<String> names=new java.util.HashSet<>();
+        for(int i=0;i<out.length();i++)names.add(out.getJSONObject(i).getJSONObject("function").getString("name"));
+        for(CapabilityDescriptor route:routes.values()){
+            if(!names.add(route.name))throw new SecurityException("既存能力工具与leaf名称冲突："+route.name);
+            out.put(route.definition());
+        }
+        return out;
+    }
     @Override public void beginRun(String goal,RunControl control)throws Exception{binding.check(control);if(existing!=null)existing.beginRun(goal,control);}
+    @Override public void prepareTurnSurface(RunControl control)throws Exception{binding.check(control);if(existing!=null)existing.prepareTurnSurface(control);binding.check(control);}
     @Override public void admitCapabilities(dev.pocketengine.core.CapabilitySnapshot snapshot,RunControl control)throws Exception{binding.check(control);if(existing!=null)existing.admitCapabilities(snapshot,control);}
+    @Override public JSONObject prepareTurn(String query,int round,int steps,RunControl control)throws Exception {
+        binding.check(control);
+        JSONObject turn=existing==null?new JSONObject().put("tools",new JSONArray()).put("reference",new JSONObject())
+                :new JSONObject(existing.prepareTurn(query,round,steps,control).toString());
+        turn.put("tools",appendTools(turn.getJSONArray("tools")));binding.check(control);return turn;
+    }
     @Override public JSONObject beforeTool(String name,JSONObject args,RunControl control)throws Exception{binding.check(control);return routes.containsKey(name)||existing==null?null:existing.beforeTool(name,args,control);}
     @Override public void afterTool(String name,JSONObject arguments,JSONObject receipt,RunControl control)throws Exception{binding.check(control);if(existing!=null)existing.afterTool(name,arguments,receipt,control);}
     @Override public boolean responseCurrent(RunControl control)throws Exception{binding.check(control);return existing==null||existing.responseCurrent(control);}
+    @Override public boolean stepReadSourceCurrent(String name,JSONObject receipt,RunControl control)throws Exception{binding.check(control);return !routes.containsKey(name)&&existing!=null&&existing.stepReadSourceCurrent(name,receipt,control);}
     @Override public dev.pocketengine.core.NativeToolObservation.Requirement observationRequirement(String name,JSONObject args,RunControl control)throws Exception{binding.check(control);return routes.containsKey(name)||existing==null?dev.pocketengine.core.NativeToolObservation.Requirement.NONE:existing.observationRequirement(name,args,control);}
     @Override public dev.pocketengine.core.NativeToolObservation takeToolObservation(String name,String operation,RunControl control)throws Exception{binding.check(control);return routes.containsKey(name)||existing==null?null:existing.takeToolObservation(name,operation,control);}
+    @Override public dev.pocketengine.core.NativeToolPlan takeToolPlan(String name,String operation,RunControl control)throws Exception{binding.check(control);return routes.containsKey(name)||existing==null?null:existing.takeToolPlan(name,operation,control);}
+    @Override public dev.pocketengine.core.NativeReadContextRepair nativeReadContextRepair(JSONArray messages,RunControl control)throws Exception{binding.check(control);return existing==null?null:existing.nativeReadContextRepair(messages,control);}
     @Override public void beforeModelRequest(String requestId,JSONArray messages,RunControl control)throws Exception{binding.check(control);if(existing!=null)existing.beforeModelRequest(requestId,messages,control);}
     @Override public JSONObject afterModelResponse(String requestId,String answerId,RunControl control)throws Exception{binding.check(control);return existing==null?null:existing.afterModelResponse(requestId,answerId,control);}
     @Override public void modelRequestAbandoned(String requestId)throws Exception{if(existing!=null)existing.modelRequestAbandoned(requestId);}
@@ -163,7 +182,10 @@ public final class ModelCapabilityAdapters implements CapabilityPort {
         if(authority.requiresApproval(route)){
             JSONObject approval=authority.approve(route,new JSONObject(args.toString()),capability);
             if(!approval.optBoolean("approved"))return new JSONObject().put("ok",false).put("accepted",false).put("code","approval_required")
-                    .put("approvalId",approval.optString("approvalId")).put("message","需要主人确认本次具体参数与能力身份，尚未执行。");
+                    .put("approvalId",approval.optString("approvalId")).put("approvalState",approval.optString("state","pending"))
+                    .put("message","denied".equals(approval.optString("state"))
+                            ?"主人已拒绝本次具体参数与能力身份，尚未执行；该审批不能再次确认。"
+                            :"需要主人确认本次具体参数与能力身份，尚未执行。");
         }
         binding.check(control);authority.check(name,control);checkResource(route);
         if(route.journalRequired){authority.requirePrepared(operationId,name,original);synchronized(entered){if(entered.contains(operationId))return CapabilityResults.uncertain(route,operationId,null);if(entered.size()>=1000)throw new IllegalStateException("本执行调用数量超限");entered.add(operationId);}}

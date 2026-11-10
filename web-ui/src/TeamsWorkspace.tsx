@@ -102,6 +102,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
   const acceptReading = (next: Data) => {
     rememberView();
     release(currentReading.current); setReading(next);
+    if (next.kind === 'run' && next.run?.id) setCatalog(old => ({ ...old, runs: [next.run, ...rows(old.runs).filter(value => value.id !== next.run.id)] }));
     if (next.kind === 'run' && next.run?.id !== currentReading.current?.run?.id) {
       const saved = messageInputs.current.get(next.run.id);
       setComposeOpen(!!saved?.replyId); setRecipient(saved?.recipient ?? next.run.leaderId ?? ''); setReplyId(saved?.replyId || ''); setMode(saved?.mode || 'discussion');
@@ -171,6 +172,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
   const changed = !!current && latest.id === current.id && (latest.generation !== current.generation || latest.revision > current.revision);
   const members = rows(current?.members), messages = rows(reading?.messages);
   const workItems = rows(object(current?.workPlan).items);
+  const hasWorkPlan = !!current?.workPlan;
   const reply = messages.find(message => message.messageId === replyId);
   const draftKey = `${current?.id || ''}:${recipient}:${replyId}:${mode}`, text = drafts[draftKey] || '';
   const canMutate = !!current && !!reading?.viewHandle && !busy && !changed && current.status !== 'cancelled' && !uncertain;
@@ -257,7 +259,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
     </article>}
     {current && <article className="pw-team-reading pw-team-run"><header className="pw-object-toolbar"><div><h2 tabIndex={-1}>{current.goal || current.teamName}</h2><p className="pw-detail-status">{status(current.status)}{current.phase ? ` · ${current.phase}` : ''}</p></div>{refreshReading}</header>
       {changed && <p role="status">有新的运行记录。刷新后再发送补充或操作，当前阅读位置保留。</p>}
-      <div className="pw-team-run-controls">{reading?.taskId && <Button variant="secondary" trailingIcon={RiExternalLinkLine} onClick={() => void run('tasks.open', { id: reading.taskId }).catch(() => {})}>查看原任务与审批</Button>}<div className="pw-form-actions"><IconButton className="pw-utility-icon" icon={RiPauseLine} aria-label="暂停全队" title="暂停全队" disabled={!canMutate} onClick={() => control('pause')} /><IconButton className="pw-utility-icon" icon={RiPlayLine} aria-label="沿原额度继续" title="沿原额度继续" disabled={!canMutate} onClick={() => control('resume')} /><Button variant="ghost" disabled={!canMutate} onClick={() => reviewResult({ operation: 'cancel', viewHandle: reading!.viewHandle, runId: current.id })}>停止这次协作</Button></div></div>
+      <div className="pw-team-run-controls">{reading?.taskId && <Button variant="secondary" trailingIcon={RiExternalLinkLine} onClick={() => void run('tasks.open', { id: reading.taskId }).catch(() => {})}>查看原任务与审批</Button>}<div className="pw-form-actions"><IconButton className="pw-utility-icon" icon={RiPauseLine} aria-label="暂停全队" title="暂停全队" disabled={!canMutate} onClick={() => control('pause')} /><IconButton className="pw-utility-icon" icon={RiPlayLine} aria-label="沿原额度继续" title="沿原额度继续" disabled={!canMutate || hasWorkPlan} onClick={() => control('resume')} /><Button variant="ghost" disabled={!canMutate} onClick={() => reviewResult({ operation: 'cancel', viewHandle: reading!.viewHandle, runId: current.id })}>停止这次协作</Button></div></div>
+      {hasWorkPlan && <p className="pw-field-hint">继续工作或使用待处理消息时，请在原任务中核对具体工作项；不会按成员猜测要继续的分工。</p>}
       {pendingQuestions.length > 0 && <div className="pw-collaboration-attention" role="status"><div><strong>{pendingQuestions.length} 条问题等待你的回答</strong><span>回答会留在这次原协作中</span></div><Button variant="ghost" trailingIcon={RiArrowRightSLine} onClick={() => { const question = root.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(pendingQuestions[0].messageId)}"]`); question?.focus({ preventScroll: true }); question?.scrollIntoView({ block: 'start' }); }}>查看原问题</Button></div>}
       <div className="pw-team-run-layout"><div className="pw-team-main">
       {current.summary && <section className="pw-team-summary" aria-label="团队当前结果"><h3 className="pw-team-section-title">当前成果</h3>{current.summaryStale && <p className="pw-muted">这份总结待更新</p>}<AIAnswer text={current.summary} /></section>}
@@ -295,7 +298,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
                 {model && <p className="pw-muted">模型：{model}</p>}
                 {member.acceptance && <p>验收：{member.acceptance}</p>}
                 {!!rows(member.dependsOn).length && <p>前置：{member.dependsOn.map(name).join('、')}</p>}
-                <div className="pw-form-actions">{member.phoneTask?.taskId && <Button variant="ghost" onClick={() => void run('tasks.open', { id: member.phoneTask.taskId }).catch(() => {})}>查看手机任务与结果</Button>}<Button variant="ghost" disabled={!canMutate || member.exited} onClick={() => control('pause', member.id)}>暂停该成员</Button><Button variant="ghost" disabled={!canMutate || member.exited} onClick={() => control('resume', member.id)}>继续该成员</Button><Button variant="ghost" disabled={!canMutate || member.exited} onClick={() => control('continueMessages', member.id)}>使用该成员的待处理消息</Button></div>
+                <div className="pw-form-actions">{member.phoneTask?.taskId && <Button variant="ghost" onClick={() => void run('tasks.open', { id: member.phoneTask.taskId }).catch(() => {})}>查看手机任务与结果</Button>}<Button variant="ghost" disabled={!canMutate || member.exited} onClick={() => control('pause', member.id)}>暂停该成员</Button><Button variant="ghost" disabled={!canMutate || member.exited || hasWorkPlan} onClick={() => control('resume', member.id)}>继续该成员</Button><Button variant="ghost" disabled={!canMutate || member.exited || hasWorkPlan} onClick={() => control('continueMessages', member.id)}>使用该成员的待处理消息</Button></div>
               </div>
             </AccordionItem>;
           })}
@@ -353,12 +356,12 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
               : { runner, device: undefined, assignment: undefined, dependsOn: undefined, modeId: undefined, externalExecutionRiskAcknowledged: undefined })} />
           {member.runner === 'phone_agent' ? <>
             <SelectField label="在哪台手机上工作" value={targetKey} options={targetOptions} isDisabled={busy} onChange={key => { const target = phoneTargets.find(value => teamPhoneTargetKey(value) === key); if (target) updateMember(member.id, { device: teamPhoneDevice(target) }); }} hint="应用范围与预算在每次启动前核对。" />
-            <TextAreaField label="具体分工" value={member.assignment || ''} onChange={value => updateMember(member.id, { assignment: value })} isDisabled={busy} />
+            <TextAreaField label="具体分工" value={member.assignment || ''} onChange={value => updateMember(member.id, { assignment: value })} maxLength={2000} isDisabled={busy} />
             <Accordion variant="divided" className="pw-compact-disclosures"><AccordionItem id={`phone-dependencies-${member.id}`} title="先等待哪些成员完成">{rows(editor.members).filter(row => row.id !== member.id).map(row => <CheckboxField key={row.id} isSelected={(member.dependsOn || []).includes(row.id)} isDisabled={busy} onChange={selected => updateMember(member.id, { dependsOn: selected ? [...(member.dependsOn || []), row.id] : (member.dependsOn || []).filter((id: string) => id !== row.id) })}>{row.name || row.id}</CheckboxField>)}<p className="pw-field-hint">不选择前置成员时，可与其他独立分工同时开始。</p></AccordionItem></Accordion>
           </> : external ? <TeamHarnessFields member={member} profiles={computerProfiles} run={run} disabled={busy} productionMode={editor.mode === 'produce' ? member.production?.sourceMode || 'snapshot' : undefined} onChange={changes => updateMember(member.id, changes)} onReady={ready => setExternalReady(old => old[member.id] === ready ? old : { ...old, [member.id]: ready })} />
             : <TextField label="模型 ID，留空沿用主模型" value={member.model} onChange={value => updateMember(member.id, { model: value })} isDisabled={busy || !!original?.modelTarget} />}
           {editor.mode === 'produce' && <TeamProductionFields member={member} sources={object(catalog.productionSources)} disabled={busy} onChange={changes => updateMember(member.id, changes)} />}
-          <Button variant="ghost" disabled={busy || editor.members.length <= 1} onClick={() => { const next = rows(editor.members).filter(row => row.id !== member.id); setEditor({ ...editor, members: next, leaderId: editor.leaderId === member.id ? next[0].id : editor.leaderId }); }}>移除此成员</Button>
+          <Button variant="ghost" disabled={busy || editor.members.length <= 1} onClick={() => { const next = rows(editor.members).filter(row => row.id !== member.id).map(row => Array.isArray(row.dependsOn) ? { ...row, dependsOn: row.dependsOn.filter((id: string) => id !== member.id) } : row); setEditor({ ...editor, members: next, leaderId: editor.leaderId === member.id ? next[0].id : editor.leaderId }); }}>移除此成员</Button>
         </section></AccordionItem>;
       })}</Accordion>
       <Button variant="ghost" disabled={busy || editor.members.length >= 4} onClick={() => setEditor({ ...editor, members: [...editor.members, blankMember(`member-${crypto.randomUUID().slice(0, 8)}`, editor.members.length)] })}>添加成员</Button>

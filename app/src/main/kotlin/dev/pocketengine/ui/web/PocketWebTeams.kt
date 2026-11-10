@@ -229,10 +229,11 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                             candidate.optString("kind") == device.optString("kind") && (local || candidate.optString("targetDeviceId") == device.optString("targetDeviceId"))
                         }
                         require(knownTarget || previous?.optJSONObject("device")?.toString() == device.toString()) { "手机目标已变化，请刷新团队配置" }
-                        captured.put("device", JSONObject(device.toString())).put("assignment", text(member, "assignment", 8000).trim())
+                        captured.put("device", JSONObject(device.toString())).put("assignment", text(member, "assignment", 2000).trim())
                         val dependencies = member.optJSONArray("dependsOn") ?: JSONArray()
                         require((0 until dependencies.length()).all { dependencies.opt(it) is String } && dependencies.length() <= 3) { "前置成员必须来自这次团队" }
                         captured.put("dependsOn", JSONArray(dependencies.toString())); captured.remove("phoneScope")
+                        captured.remove("modeId"); captured.remove("externalExecutionRiskAcknowledged")
                     } else if (previous?.optString("runner") != "model") {
                         captured.put("device", "phone"); captured.remove("phoneScope"); captured.remove("assignment"); captured.remove("modeId"); captured.remove("externalExecutionRiskAcknowledged"); captured.put("dependsOn", JSONArray())
                     }
@@ -246,6 +247,13 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                         else require(!member.has("remoteProduction")) { "本机模型不能继承电脑制作范围" }
                     } else require(!member.has("writeFiles") && !member.has("remoteProduction")) { "只有项目文件协作可设置文件制作范围" }
                     members.put(AgentSlot.normalize(captured, index))
+                }
+                // Removing a saved member also removes its original dependency edges.
+                // Unknown supplied identities still reach the original graph validator.
+                val removedIds = old?.optJSONArray("members").objects().map { it.getString("id") }.toSet() - ids
+                members.objects().forEach { member ->
+                    val dependencies = member.getJSONArray("dependsOn")
+                    member.put("dependsOn", JSONArray((0 until dependencies.length()).map { dependencies.getString(it) }.filterNot { it in removedIds }))
                 }
                 val leader = text(args, "leaderId", 64); require(leader in ids)
                 TeamsModule.validateDefinitionMembers(members)

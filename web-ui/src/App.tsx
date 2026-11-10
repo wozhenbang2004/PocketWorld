@@ -10,6 +10,8 @@ import {useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState} from 'rea
 import {RiArrowLeftLine,RiArrowRightSLine,RiArrowDownSLine,RiChatAiLine,RiCloseLine,RiCodeSSlashLine,RiFileLine,RiFolderLine,RiHistoryLine,RiLayoutGridLine,RiMenuLine,RiMoreLine,RiPlayLine,RiRefreshLine,RiSearchLine,RiSettings4Line,RiTeamLine,RiTerminalBoxLine,RiToolsLine,RiAddLine,RiInformationLine,RiCheckboxCircleLine,RiPauseCircleLine,RiErrorWarningLine,RiTimeLine,RiDoubleQuotesL,RiLinksLine,RiBookOpenLine,RiCalendarCheckLine,RiComputerLine,RiImage2Line,RiChatNewLine,RiNotification3Line,RiShieldCheckLine,RiBox3Line} from '@remixicon/react';
 import {bridge} from './bridge';
 import {usePocketSnapshot} from './usePocketSnapshot';
+import {foregroundConversationStream} from './conversation-stream';
+import {useConversationReading} from './useConversationReading';
 import {usePocketAppearance} from './usePocketAppearance';
 import {useClosingSnapshot,useMessageArrivals,useReviewFocus,useSurfaceEnter} from './library/surface-motion';
 import {chatCancelFeedback,chatCancelIdentity,chatCancelKey} from './chat-cancel';
@@ -207,7 +209,7 @@ export default function App(){
  const [modelPickerSection,setModelPickerSection]=useState<'models'|'reasoning'>('models'),[modelPickerPresentation,setModelPickerPresentation]=useState<AIModelPickerPresentation>({query:'',filter:'all'});const modelPickerScope=useRef(state.conversationModel?.scopeKey);
  const finishModelPicker=()=>{modelWindow.current++;modelWriting.current=false;setModelPickerOpen(false);setModelSelectPending(false)};
  useEffect(()=>{if(modelPickerScope.current!==state.conversationModel?.scopeKey){finishModelPicker();setModelPickerPresentation({query:'',filter:'all'})}modelPickerScope.current=state.conversationModel?.scopeKey},[state.conversationModel?.scopeKey]);
- const [voiceReview,setVoiceReview]=useState<any>(null),[voiceText,setVoiceText]=useState(''),[voicePending,setVoicePending]=useState(false);const [voiceOptionsOpen,setVoiceOptionsOpen]=useState(false),[permissionOptionsOpen,setPermissionOptionsOpen]=useState(false),[messageMenu,setMessageMenu]=useState<string|null>(null),[expandedCalls,setExpandedCalls]=useState<Record<string,boolean>>({}),[hasNewReplies,setHasNewReplies]=useState(false);
+ const [voiceReview,setVoiceReview]=useState<any>(null),[voiceText,setVoiceText]=useState(''),[voicePending,setVoicePending]=useState(false);const [voiceOptionsOpen,setVoiceOptionsOpen]=useState(false),[permissionOptionsOpen,setPermissionOptionsOpen]=useState(false),[messageMenu,setMessageMenu]=useState<string|null>(null),[expandedCalls,setExpandedCalls]=useState<Record<string,boolean>>({});
  const [permissionPending,setPermissionPending]=useState(false);const permissionWriting=useRef(false),permissionConversation=useRef(state.conversationId);
  const permissionExit=useReviewFocus(permissionOptionsOpen);
  const permissionSaving=useCallback((pending:boolean)=>{permissionWriting.current=pending;setPermissionPending(pending)},[]);
@@ -216,8 +218,10 @@ export default function App(){
  const voiceReviewLive=useRef(voiceReview),voiceWriting=useRef(false);voiceReviewLive.current=voiceReview;
  const voiceExit=useReviewFocus(!!voiceReview);
  const workspace=useRef<HTMLDivElement>(null);
- const scroll=useRef<HTMLDivElement>(null),lastConversation=useRef<string|null>(null),scrollPositions=useRef(new Map<string,number>()),pendingReading=useRef<ReturnType<typeof setTimeout>|null>(null),observedMessages=useRef(''),readingEpoch=useRef(0);
- const rememberChatPosition=useCallback(()=>{const node=scroll.current;if(!node?.isConnected)return;const id=node.dataset.conversationId;if(id===undefined)return;scrollPositions.current.set(id,node.scrollTop)},[]);
+ const scroll=useRef<HTMLDivElement>(null);
+ const conversationStream=foregroundConversationStream(state);
+ const streamMarker=conversationStream?`${conversationStream.requestId}:${conversationStream.generation}:${conversationStream.sequence}`:'';
+ const {content:chatContent,hasNewReplies,saveReading,rememberChatPosition,goToLatest,stopFollowing}=useConversationReading({scroll,active:route==='chat',conversationId:String(state.conversationId||''),composer,messages,streamMarker,paused:readingDocuments.length>0});
  const openReading=useCallback((document:ReadingSnapshot)=>{rememberChatPosition();const entry={...document,key:++readingSerial.current};setReadingDocuments(previous=>[...previous,entry])},[rememberChatPosition]);
  const activeTask=tasks.find(x=>x.id===state.activeTaskId);const activePhoneIdentity=phoneRunIdentity(activeTask);const selectedTask=tasks.find(x=>x.id===taskId);const currentProject=projects.find(x=>x.id===state.projectId);const currentConversation=conversations.find(x=>x.id===state.conversationId);
  const chatOwner=`${composer.key||''}:${composer.epoch??''}`;const chatDraft=useNativeDraft(chatOwner,String(composer.text||''),composer.revision);const phoneOwner=`phone:${phoneDraft.epoch??''}`;const phoneText=useNativeDraft(phoneOwner,String(phoneDraft.text||''),phoneDraft.revision);
@@ -432,32 +436,10 @@ export default function App(){
  useEffect(()=>{document.documentElement.dataset.pocketUi=ready?'ready':'connecting';},[ready]);
  useEffect(()=>{if(phoneDraft.phone===true)setIntent(phoneDraft.mode==='main_screen'?'main_screen':'background');else if(phoneDraft.phone===false)setIntent('chat');},[phoneDraft.phone,phoneDraft.mode]);
  useEffect(()=>{if(route==='projects'&&can('projects.refresh'))run('projects.refresh');else if(route==='tasks'&&can('tasks.refresh'))run('tasks.refresh');},[route,can,run]);
- useLayoutEffect(()=>{
-  if(route!=='chat')return;const node=scroll.current;if(!node?.isConnected)return;
-  const id=String(state.conversationId||''),last=messages.at(-1),marker=last?`${last.id||last.at}:${last.content.length}`:'';
-  const saved=scrollPositions.current.get(id),sameConversation=lastConversation.current===id,previousMarker=observedMessages.current;
-  readingEpoch.current++;lastConversation.current=id;observedMessages.current=marker;
-  // Restore before paint. A returning conversation owns its reading position even
-  // if another route received a fresh snapshot of the same messages.
-  node.scrollTop=saved??node.scrollHeight;
-  if(!sameConversation)setHasNewReplies(false);else if(saved!==undefined&&previousMarker!==marker)setHasNewReplies(true);
-  return()=>{readingEpoch.current++;if(node.isConnected&&node.dataset.conversationId===id)scrollPositions.current.set(id,node.scrollTop)};
- },[state.conversationId,route]);
  useLayoutEffect(()=>{if(!taskOpen)return;const node=taskScroll.current;if(node)node.scrollTop=taskReading.current.get(`${taskId}:${taskLayer}`)??0},[taskOpen,taskId,taskLayer]);
  useEffect(()=>{setFileQuery('');setFileDisplayOpen(false);setProjectPickerOpen(false)},[state.projectId]);
- useEffect(()=>{
-  if(route!=='chat')return;const node=scroll.current;if(!node?.isConnected)return;
-  const last=messages.at(-1),marker=last?`${last.id||last.at}:${last.content.length}`:'';
-  if(marker===observedMessages.current)return;
-  const nearEnd=node.scrollHeight-node.clientHeight-node.scrollTop<96,firstMessages=observedMessages.current==='';observedMessages.current=marker;
-  if(readingDocuments.length||!nearEnd&&!firstMessages){setHasNewReplies(true);return}
-  const epoch=readingEpoch.current,frame=requestAnimationFrame(()=>{if(node.isConnected&&scroll.current===node&&readingEpoch.current===epoch)node.scrollTop=node.scrollHeight});
-  setHasNewReplies(false);return()=>cancelAnimationFrame(frame);
- },[messages,route,readingDocuments.length]);
  useSurfaceEnter(workspace,route);
  useMessageArrivals(scroll,String(state.conversationId||''),messages.map((message,index)=>message.id||`${message.role}:${message.at}:${index}`),route==='chat');
- const saveReading=()=>{const node=scroll.current;if(!node?.isConnected)return;const conversation=String(state.conversationId||'');scrollPositions.current.set(conversation,node.scrollTop);if(pendingReading.current)clearTimeout(pendingReading.current);const key=draftKey,top=node.scrollTop;const rows=Array.from(node.querySelectorAll<HTMLElement>('[data-message-index]'));const first=rows.find(row=>row.offsetTop+row.offsetHeight>top);const index=Number(first?.dataset.messageIndex||0);const msg=messages[index];const args={key,index,offset:Math.max(0,Math.round(top-(first?.offsetTop||0))),anchor:msg?.id||'',observed:messages.at(-1)?.id||'',unread:hasNewReplies};pendingReading.current=setTimeout(()=>{if(can('composer.reading'))run('composer.reading',args)},180);};
- useEffect(()=>()=>{if(pendingReading.current)clearTimeout(pendingReading.current)},[]);
  const openVoiceReview=()=>{if(!can('voice.review'))return;voiceExit.captureReturnFocus(workspace.current?.querySelector<HTMLElement>('textarea[aria-label="工作输入"]')||null);setVoicePending(true);void act('voice.review',{phone:intent!=='chat'}).then(value=>{setVoiceReview(value);setVoiceText(value.text||'')}).catch(error=>setLocalError(error.message)).finally(()=>setVoicePending(false));};
  const submitVoiceReview=(command:'voice.accept'|'voice.discard')=>{
   const reviewed=voiceReviewLive.current;if(!reviewed||voiceWriting.current||voicePending)return;
@@ -598,7 +580,7 @@ export default function App(){
   }).catch(()=>{}).finally(()=>{createPending.current.delete(original);if(createWindow.current===original)setCreateBusy(false)});
  };
 
- const openReplyOrigin=(message:Message,sourceMessageId:string)=>{const source=Array.from(scroll.current?.querySelectorAll<HTMLElement>('[data-message-id]')||[]).find(element=>element.dataset.messageId===sourceMessageId);if(source){source.scrollIntoView({block:'center',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});source.focus({preventScroll:true});return;}if(message.id&&can('message.origin'))setMessageOrigin({messageId:message.id,sourceMessageId});else setLocalStatus('原请求不在当前阅读窗口，请重新读取原答复。');};
+ const openReplyOrigin=(message:Message,sourceMessageId:string)=>{const source=Array.from(scroll.current?.querySelectorAll<HTMLElement>('[data-message-id]')||[]).find(element=>element.dataset.messageId===sourceMessageId);if(source){stopFollowing();source.scrollIntoView({block:'center',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});source.focus({preventScroll:true});return;}if(message.id&&can('message.origin'))setMessageOrigin({messageId:message.id,sourceMessageId});else setLocalStatus('原请求不在当前阅读窗口，请重新读取原答复。');};
  const openSource=(message:Message)=>{if(can('sources.open')&&message.id&&message.retainedSources)setSourceSelection({messageId:message.id});else setLocalStatus('这条回答没有可核对的原来源身份。');};
  useEffect(()=>{setMessageQuoteTarget(null)},[draftKey,draftEpoch,intent]);
  const openQuote=(message:Message)=>{if(intent==='chat'&&!state.chatSubmitting&&draftKey&&can('messageQuote.open')&&message.quoteAvailable&&message.id&&Number.isSafeInteger(message.sourceRevision)&&Number(message.sourceRevision)>0)setMessageQuoteTarget({messageId:message.id,sourceRevision:Number(message.sourceRevision),key:draftKey,epoch:draftEpoch});else setLocalStatus('原消息或草稿已变化，请重新核对后引用。');};
@@ -760,7 +742,7 @@ export default function App(){
  </Drawer.Portal>;
  const renderTaskRow=(t:Task)=><Button variant="ghost" key={t.id} className="pw-task-row" data-task-id={t.id} data-task-status={t.status} onClick={()=>openTask(t.id)}><span className="pw-task-row-status">{running(t)?<ProgressCircle aria-label={labelStatus(t.status)} isIndeterminate size="sm"/>:t.status==='completed'?<RiCheckboxCircleLine size={20} aria-hidden="true"/>:t.status==='failed'?<RiErrorWarningLine size={20} aria-hidden="true"/>:['paused','interrupted'].includes(t.status)?<RiPauseCircleLine size={20} aria-hidden="true"/>:<RiTimeLine size={20} aria-hidden="true"/>}</span><span className="pw-task-row-copy"><b title={t.goal}>{t.goal}</b>{t.summary&&t.summary!==t.goal&&<span className="pw-task-row-summary">{t.summary}</span>}<span className="pw-task-row-meta"><span>{labelStatus(t.status)}</span>{!!t.updatedAt&&<time>{timeLabel(t.updatedAt)}</time>}</span></span><RiArrowRightSLine size={18} aria-hidden="true"/></Button>;
  const chatPage=<main className={`pw-chat-workspace${ready&&!messages.length?' pw-chat-empty':''}`}>
-  <div ref={scroll} className="pw-conversation-scroll" data-conversation-id={String(state.conversationId||'')} onScroll={saveReading} aria-label="当前对话消息">
+  <div ref={scroll} className="pw-conversation-scroll" data-conversation-id={String(state.conversationId||'')} onScroll={saveReading} aria-label="当前对话消息"><div ref={chatContent} className="pw-conversation-content">
    {!ready?<div className="pw-start"><AgentAvatar agentId="main" state="idle" size={40}/><ShimmerText>正在恢复当前工作</ShimmerText><div className="pw-loading-copy" aria-hidden="true"><Skeleton width="68%" height={13}/><Skeleton width="92%" height={13}/><Skeleton width="80%" height={13}/></div></div>:!messages.length?<div className="pw-start pw-chat-start">
     <div className="pw-start-heading"><h2>从一个想法开始</h2><p>问个问题，或把想做的事交给我。</p></div>
     {!composerModelName?<Button variant="secondary" leadingIcon={RiAddLine} onClick={()=>openModelPicker()}>{channelPhoneModel?'连接渠道默认模型':'选择模型，开始对话'}</Button>:<div className="pw-start-actions" aria-label="开始一件事">
@@ -805,13 +787,14 @@ export default function App(){
 
     </article>;
    })}</div>}
+   {conversationStream&&<div className="pw-message-stream"><article className="pw-message pw-message-assistant" aria-label="当前回复草稿" aria-busy={!conversationStream.turnEnded}><header role="status">{conversationStream.failed?'这次生成已中断 · 内容尚未定稿':conversationStream.turnEnded?'正在处理这次回复 · 内容尚未定稿':'正在生成 · 内容尚未定稿'}</header><AIAnswer text={conversationStream.text} busy={!conversationStream.turnEnded} showActions={false}/>{conversationStream.truncated&&<p className="pw-muted">仅预览前 32,768 个字符，完整结果以正式回复为准。</p>}</article></div>}
    {chatPhoneTask&&!taskOpen&&<div className="pw-conversation-phone-viewer">{phoneViewerFor(chatPhoneTask,true)}</div>}
    <ConversationWork tasks={conversationWork} labelStatus={labelStatus} canOpen={can('tasks.open')} onOpen={task=>openTask(task.id,attention(task)&&can('tasks.review')?'review':'overview')}/>
    {state.chatBusy&&<div className="pw-current-thinking"><div className="pw-current-activity"><ThinkingLoader phase={conversationActivity}/></div>{can('tasks.open')&&<Button variant="ghost" size="small" aria-label="查看当前回复的执行过程" onClick={()=>openTask(state.chatActiveTurn.taskId,'process')}>查看过程<RiArrowRightSLine size={15} aria-hidden="true"/></Button>}</div>}
    {pendingSteeringItems.length>0&&<AgentSteering data={{items:pendingSteeringItems}}/>}
-  </div>
+  </div></div>
   <div className="pw-composer-region">
-   {hasNewReplies&&<Button variant="secondary" className="pw-new-replies" onClick={()=>{scroll.current?.scrollTo({top:scroll.current.scrollHeight,behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});setHasNewReplies(false)}}>有新回复 · 回到最新</Button>}
+   {hasNewReplies&&<Button variant="secondary" className="pw-new-replies" onClick={goToLatest}>有新回复 · 回到最新</Button>}
    {conversationAttention&&<Button variant="ghost" className="pw-chat-attention" data-task-id={conversationAttention.id} trailingIcon={RiArrowRightSLine} aria-label={`${can('tasks.review')?taskActionLabel(conversationAttention):'查看任务'}：${conversationAttention.goal}`} disabled={taskOpening} onClick={()=>openTask(conversationAttention.id,can('tasks.review')?'review':'overview')}><span className="pw-chat-attention-copy"><small>{can('tasks.review')?taskActionLabel(conversationAttention):'查看任务'}</small><b>{conversationAttention.goal}</b></span></Button>}
    {intent==='chat'&&workTarget&&<div className="pw-owner-work-target" role="status"><span>补充给：<strong>{workTarget.goal}</strong>{!workTargetCurrent&&' · 原任务状态已变化，请重新核对'}</span><Button variant="ghost" size="small" onClick={()=>setWorkTarget(null)}>回到对话</Button></div>}
    {intent==='chat'&&<ComposerSourceReferences key={`${draftKey}:${draftEpoch}`} composer={composer} disabled={!!state.chatSubmitting||!can('composer.source.remove')}/>}

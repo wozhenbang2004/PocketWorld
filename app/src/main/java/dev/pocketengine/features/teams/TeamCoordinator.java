@@ -846,13 +846,14 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
         run.json.put("status","queued").put("phase","queued").put("summary","继续原团队任务，沿用原剩余额度；不会自动增加调用或工具预算");
         if(run.json.optString("mode").equals("produce")&&assignmentFactory!=null)assignmentFactory.ownerBudgetChanged(JsonFiles.copy(run.json));activity(run,"resumed",all?"全队继续":"指定成员继续",all?null:memberId);save(run);schedule(run);return JsonFiles.copy(run.json);
     }
-    /** Native owner action: unread peer mail never silently wakes a completed member or replays an external operation. */
+    /** Native owner action: queued owner/peer messages never silently wake a completed member or replay an external operation. */
     public synchronized JSONObject continueMessages(String id,String memberId,long expectedRevision,int expectedMemberGeneration,ModelConfig config,EvidenceFactory evidence,ExternalMemberFactory external)throws Exception {
         Run run=required(id);JSONObject member=member(run,memberId);if(member.optBoolean("exited"))throw new SecurityException("原成员已退出，不唤醒旧消息");
         if(run.json.optLong("revision")!=expectedRevision||member.optInt("generation")!=expectedMemberGeneration)throw new IllegalStateException("成员状态已改变，请刷新后继续");
+        if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态工作项请在原任务中核对并继续准确工作项，不按成员最近轮次猜assignment");
         if(run.json.optString("status").equals("cancelled")||run.children.containsKey(memberId)||member.optString("status").matches("running|awaiting_approval"))throw new IllegalStateException("成员仍在运行、等待授权或任务已停止");
-        boolean unread=false;JSONArray mailbox=run.json.getJSONArray("mailbox");for(int i=0;i<mailbox.length();i++){JSONObject letter=mailbox.getJSONObject(i);if(memberId.equals(letter.getString("targetMemberId"))&&!letter.optString("status").equals("consumed"))unread=true;}if(!unread)throw new IllegalStateException("该成员没有待使用的成员消息");
-        int from=unfinishedRound(run,member);if(from<1)from=plannedRounds(run);resetFrom(run,member,from);pauseMember(run,member);invalidateDependents(run,memberId,new java.util.HashSet<>());run.json.put("summaryStale",true);activity(run,"owner_mail_delivery","主人明确继续该成员以使用待处理消息",memberId);return resume(id,memberId,config,evidence,external);
+        boolean unread=pendingFeedbackIds(run,memberId).length()>0||pendingPeerIds(run,memberId).length()>0;if(!unread)throw new IllegalStateException("该成员没有待使用的补充或成员消息");
+        int from=unfinishedRound(run,member);if(from<1)from=plannedRounds(run);resetFrom(run,member,from);pauseMember(run,member);invalidateDependents(run,memberId,new java.util.HashSet<>());run.json.put("summaryStale",true);activity(run,"owner_mail_delivery","主人明确继续该成员以使用待处理补充与成员消息",memberId);return resume(id,memberId,config,evidence,external);
     }
     private static String revisionRequestHash(String command,JSONObject input)throws Exception {
         JSONObject request=new JSONObject().put("command",command);for(String key:new String[]{"runId","assignmentId","memberId","revisionRequestId","text","expectedFrozenRunId","expectedArtifactsHash"})request.put(key,input.getString(key));

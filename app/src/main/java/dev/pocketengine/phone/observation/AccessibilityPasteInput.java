@@ -60,11 +60,17 @@ public final class AccessibilityPasteInput {
                 },()->{
                     AndroidClipboardRecovery.requireOwnerAllowed(context,clipboardRevision);
                     PhoneReadGate.markEffectEntered();invalidate.run();
-                    if(!target.isFocused()&&!target.performAction(AccessibilityNodeInfo.ACTION_FOCUS))return false;
+                    // A false node-action result may be a missing remote callback. Stop
+                    // this sequence and let the existing recovery path retain uncertainty.
+                    if(!target.isFocused()&&!target.performAction(AccessibilityNodeInfo.ACTION_FOCUS))
+                        throw new IllegalStateException("clipboard_focus_result_unknown");
                     Bundle range=new Bundle();range.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT,0);
                     range.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT,before.length());
-                    if(!before.isEmpty()&&!target.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION,range))return false;
-                    return target.performAction(AccessibilityNodeInfo.ACTION_PASTE);
+                    if(!before.isEmpty()&&!target.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION,range))
+                        throw new IllegalStateException("clipboard_selection_result_unknown");
+                    if(!target.performAction(AccessibilityNodeInfo.ACTION_PASTE))
+                        throw new IllegalStateException("clipboard_paste_result_unknown");
+                    return true;
                 });
             });
             if(Boolean.TRUE.equals(result.opt("accepted"))){

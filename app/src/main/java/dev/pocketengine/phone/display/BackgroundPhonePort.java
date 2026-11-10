@@ -231,7 +231,7 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
             clearReferences();result=practiceTarget.launch(control,()->{guard(control,revision);admission.check();});
             if(Boolean.TRUE.equals(result.opt("accepted")))result.put("helperAuthenticated",module.isConnected()).put("imeIsolation",module.session(sessionId,displayId).optString("imeIsolation"));
         }else{
-            Observation expected=current;if(expected==null||expected.control!=control||!expected.id.equals(args.optString("observationId"))||expected.revision!=revision||SystemClock.uptimeMillis()-expected.at>120000)return failure("stale_observation","扩展动作需要当前副屏观察。");
+            Observation expected=current;if(expected==null||expected.control!=control||!expected.id.equals(args.optString("observationId"))||expected.revision!=revision)return failure("stale_observation","扩展动作需要当前副屏观察。");
             if("phone_paste_text".equals(tool)){
                 AccessibilityForest.Ref ref=expected.tree.forest.refs.get(args.getString("nodeId"));if(ref==null)return failure("stale_node","原输入目标已变化。");
                 result=dev.pocketengine.phone.observation.AccessibilityPasteInput.paste(service,service,displayId,ref,args.getString("text"),control,revision,()->{requireObservationGeometry(expected);admission.check();},()->{
@@ -325,7 +325,7 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
         beginOwner(taskId,control);
         try{
             worker();JSONObject ime=imeUnavailable(control);if(ime!=null)return ime;Observation observation=current;
-            if(observation==null||observation.control!=control||!observation.id.equals(args.optString("observationId"))||SystemClock.uptimeMillis()-observation.at>120_000
+            if(observation==null||observation.control!=control||!observation.id.equals(args.optString("observationId"))
                     ||observation.revision!=control.pauseRevision())return failure("stale_observation","输入节点引用已失效，请重新观察");
             refreshSession(control,observation.revision);ime=imeUnavailable(control);if(ime!=null)return ime;
             JSONObject before=beforeLanding(control,observation.revision);JSONObject result=nodeAction("phone_type",args,observation,control,text);return Boolean.TRUE.equals(result.opt("accepted"))||result.has("accepted")&&result.isNull("accepted")?verifyLanding(result,before,control,observation.revision):result;
@@ -448,7 +448,7 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
                 return request("launch",new JSONObject().put("packageName",pkg),control,revision);
             }
             Observation observation=current;
-            if(observation==null||observation.control!=control||!observation.id.equals(args.optString("observationId"))||SystemClock.uptimeMillis()-observation.at>120_000
+            if(observation==null||observation.control!=control||!observation.id.equals(args.optString("observationId"))
                     ||observation.revision!=control.pauseRevision())return failure("stale_observation","后台页面引用已过期，请重新观察。");
             guard(control,observation.revision);
             if("phone_home".equals(tool))return failure("unsupported_tool","后台模式没有主屏桌面；请直接打开指定应用。");
@@ -505,8 +505,8 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
     @Override public synchronized JSONObject scrollNode(JSONObject args,RunControl control,NativePhoneEntry.Admission admission)throws Exception {
         worker();JSONObject ime=imeUnavailable(control);if(ime!=null)return ime;dev.pocketengine.phone.observation.NativeTreeScrollPort.validate(args);if(admission==null)return failure("host_authority_required","后台节点滚动须原prepared操作。");control.check();
         try{Observation expected=current;
-            if(control.isPaused()||expected==null||expected.control!=control||!expected.id.equals(args.getString("observationId"))||expected.revision!=control.pauseRevision()||SystemClock.uptimeMillis()-expected.at>120_000)return failure("stale_observation","后台滚动需要此原执行当前树引用。");
-            guard(control,expected.revision);JSONObject before=beforeLanding(control,expected.revision);JSONObject result=nodeAction("phone_scroll_node",args,expected,control,null,admission);return Boolean.TRUE.equals(result.opt("accepted"))?verifyLanding(result,before,control,expected.revision):result;
+            if(control.isPaused()||expected==null||expected.control!=control||!expected.id.equals(args.getString("observationId"))||expected.revision!=control.pauseRevision())return failure("stale_observation","后台滚动需要此原执行当前树引用。");
+            guard(control,expected.revision);JSONObject before=beforeLanding(control,expected.revision);JSONObject result=nodeAction("phone_scroll_node",args,expected,control,null,admission);return Boolean.TRUE.equals(result.opt("accepted"))||result.has("accepted")&&result.isNull("accepted")?verifyLanding(result,before,control,expected.revision):result;
         }catch(NativeSensitiveStep.OwnerRequired owner){clearReferences();throw owner;}
         catch(NativePhoneEntry.Refused refused){clearReferences();return failure("paused_or_changed",refused.getMessage());}
         catch(PhoneFailure refused){clearReferences();JSONObject out=failure(refused);if(ObservationSafety.unknownEffect(refused.code))out.put("accepted",JSONObject.NULL);return out;}
@@ -565,8 +565,13 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
                 guard(control,expected.revision);final Bundle exactArguments=inputArguments;
                 NativePhoneEntry.Admission exact=()->{guard(control,expected.revision);requireObservationGeometry(expected);if(admission!=null)admission.check();};
                 boolean accepted=NativePhoneEntry.call(control,expected.revision,isOwner(control),exact,()->{PhoneReadGate.markEffectEntered();clearReferences();return "phone_type".equals(tool)?target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT,exactArguments):target.performAction("phone_scroll_node".equals(tool)?scrollAction:AccessibilityNodeInfo.ACTION_CLICK);});
-                JSONObject returned=new JSONObject().put("ok",accepted).put("accepted",accepted).put("verified",false).put("displayId",displayId).put("sessionId",sessionId)
-                        .put("message",accepted?(privateInput?"主人私密输入请求已接收，请核对目标界面。":"后台节点请求已接收，请重新观察。"):"后台节点未接受请求。");
+                // The Android false result includes a missing remote callback, not only
+                // a proven refusal. Keep the original display and stop potential replay.
+                if(!accepted)return failure("action_unknown","系统未确认原后台节点操作结果，请核对原副屏；不会自动重试。")
+                        .put("accepted",JSONObject.NULL).put("nativeActionResult",false).put("requiresReconciliation",true)
+                        .put("displayId",displayId).put("sessionId",sessionId);
+                JSONObject returned=new JSONObject().put("ok",true).put("accepted",true).put("verified",false).put("displayId",displayId).put("sessionId",sessionId)
+                        .put("message",privateInput?"主人私密输入请求已接收，请核对目标界面。":"后台节点请求已接收，请重新观察。");
                 if(accepted&&"phone_type".equals(tool))returned.put("nativeTextReadback",privateInput?dev.pocketengine.phone.observation.PhoneActionEffects.inputReadback(null,null,true):readTextAfterInput(target,readbackIdentity,ref,text,expected,control,expected.revision));
                 if(accepted&&"phone_type".equals(tool)&&!privateInput){final AccessibilityNodeInfo retained=AccessibilityNodeInfo.obtain(target),identity=AccessibilityNodeInfo.obtain(readbackIdentity);final AccessibilityForest.Ref original=ref;
                     delayed.schedule(main,reads.executor(),()->readTextAfterInput(retained,identity,original,text,expected,control,expected.revision),()->{retained.recycle();identity.recycle();});}
@@ -582,10 +587,12 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
             return value.put("phase","immediate_after_dispatch").put("observedAtUptimeMs",SystemClock.uptimeMillis()).put("mechanism","refresh_same_accessibility_node").put("windowId",ref.windowId).put("path",new JSONArray(ref.path)).put("displayId",displayId).put("sessionId",sessionId).put("evidenceOnly",true);
         }catch(Exception unavailable){return dev.pocketengine.phone.observation.PhoneActionEffects.unavailableReadback("native_readback_unavailable_after_dispatch");}
     }
+    // Model latency does not revoke the latest ref. The original display,
+    // geometry, source node and covering context are re-read before dispatch.
     private Tree validateTarget(Observation expected,AccessibilityForest.Ref ref,RunControl control)throws Exception {
         guard(control,expected.revision);requireObservationGeometry(expected);Tree fresh=tree();
         if(current!=expected||expected.control!=control||expected.service!=PhoneAccessibilityService.get()
-                ||SystemClock.uptimeMillis()-expected.at>120_000||!expected.tree.forest.sameTarget(ref,fresh.forest))
+                ||!expected.tree.forest.sameTarget(ref,fresh.forest))
             throw new PhoneFailure("stale_node","后台目标、祖先、窗口或遮挡已变化，请重新观察。");
         requireObservationGeometry(expected);guard(control,expected.revision);return fresh;
     }

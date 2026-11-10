@@ -90,6 +90,7 @@ public final class SemanticCapabilityPort implements CapabilityPort {
     }
     @Override public JSONObject contextSnapshot(String query) throws Exception { return existing==null?new JSONObject():existing.contextSnapshot(query); }
     @Override public void beginRun(String goal,RunControl control) throws Exception { checkControl(control);if(existing!=null)existing.beginRun(goal,control); }
+    @Override public void prepareTurnSurface(RunControl control)throws Exception {checkControl(control);if(existing!=null)existing.prepareTurnSurface(control);checkControl(control);}
     @Override public void admitCapabilities(dev.pocketengine.core.CapabilitySnapshot snapshot,RunControl control) throws Exception { checkControl(control);if(existing!=null)existing.admitCapabilities(snapshot,control); }
     @Override public JSONObject prepareTurn(String query,int round,int steps,RunControl control) throws Exception {
         checkControl(control);turnPauseRevision=control.pauseRevision();
@@ -99,8 +100,11 @@ public final class SemanticCapabilityPort implements CapabilityPort {
     @Override public boolean responseCurrent(RunControl control) throws Exception {
         checkControl(control);return turnPauseRevision==control.pauseRevision()&&(existing==null||existing.responseCurrent(control));
     }
+    @Override public boolean stepReadSourceCurrent(String name,JSONObject receipt,RunControl control)throws Exception{checkControl(control);return !own(name)&&existing!=null&&existing.stepReadSourceCurrent(name,receipt,control);}
     @Override public dev.pocketengine.core.NativeToolObservation.Requirement observationRequirement(String name,JSONObject args,RunControl control)throws Exception{checkControl(control);return own(name)||existing==null?dev.pocketengine.core.NativeToolObservation.Requirement.NONE:existing.observationRequirement(name,args,control);}
     @Override public dev.pocketengine.core.NativeToolObservation takeToolObservation(String name,String operation,RunControl control)throws Exception{checkControl(control);return own(name)||existing==null?null:existing.takeToolObservation(name,operation,control);}
+    @Override public dev.pocketengine.core.NativeToolPlan takeToolPlan(String name,String operation,RunControl control)throws Exception{checkControl(control);return own(name)||existing==null?null:existing.takeToolPlan(name,operation,control);}
+    @Override public dev.pocketengine.core.NativeReadContextRepair nativeReadContextRepair(JSONArray messages,RunControl control)throws Exception{checkControl(control);return existing==null?null:existing.nativeReadContextRepair(messages,control);}
     @Override public void beforeModelRequest(String requestId,JSONArray messages,RunControl control)throws Exception{checkControl(control);if(existing!=null)existing.beforeModelRequest(requestId,messages,control);}
     @Override public JSONObject afterModelResponse(String requestId,String answerId,RunControl control)throws Exception{checkControl(control);return existing==null?null:existing.afterModelResponse(requestId,answerId,control);}
     @Override public void modelRequestAbandoned(String requestId)throws Exception{if(existing!=null)existing.modelRequestAbandoned(requestId);}
