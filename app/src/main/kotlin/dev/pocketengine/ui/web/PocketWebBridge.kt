@@ -210,7 +210,7 @@ internal class PocketWebBridge(
         val commands: Set<String> = linkedSetOf(
             "app.ready", "app.refresh", "notice.dismiss", "notice.task.close", "error.dismiss", "execution.read", "execution.review", "execution.confirm",
             "composer.edit", "composer.send", "composer.mode", "composer.intent", "composer.reading", "composer.query", "composer.retry", "composer.returnPending",
-            "chat.cancel", "ownerWork.input", "ownerWork.control", "message.origin", "conversation.new", "conversation.select", "conversation.reader.close", "conversation.reader.earlier", "conversation.reader.refresh",
+            "chat.cancel", "ownerWork.input", "ownerWork.control", "message.origin", "conversation.new", "conversation.select", "conversation.reader.close", "conversation.reader.earlier", "conversation.reader.refresh", "conversation.reader.position", "conversation.reader.select", "conversation.reader.attachment",
             "attachments.pick", "attachments.openPicker", "attachments.closePicker", "attachments.toggle", "attachments.remove", "attachments.open", "sources.open", "sources.read", "sources.close",
             "quickVoice.start", "quickVoice.save", "quickVoice.close",
             "skillDraft.open", "skillDraft.read", "skillDraft.source", "skillDraft.confirm", "skillDraft.cancel", "skillDraft.query", "skillDraft.close", "voice.start", "voice.stop", "voice.review", "voice.accept", "voice.discard", "speech.speak", "speech.stop", "speech.taskAnnouncements", "speech.stopTaskAnnouncement",
@@ -924,9 +924,27 @@ internal class PocketWebBridge(
             }
             "conversation.new" -> { leaveTask(); leaveConnection(); reviews.clear(); phoneComposer.clearReviews(); controller.newConversation() }
             "conversation.select" -> { leaveTask(); leaveConnection(); reviews.clear(); phoneComposer.clearReviews(); controller.openConversation(requiredString(args, "id")) }
-            "conversation.reader.close" -> controller.closeConversationReader()
-            "conversation.reader.earlier" -> controller.loadEarlierConversationReader()
-            "conversation.reader.refresh" -> controller.refreshConversationReader()
+            "conversation.reader.close" -> { requireConversationReader(args, closing = true); controller.closeConversationReader() }
+            "conversation.reader.earlier" -> { requireConversationReader(args); controller.loadEarlierConversationReader() }
+            "conversation.reader.refresh" -> { requireConversationReader(args); controller.refreshConversationReader() }
+            "conversation.reader.position" -> {
+                val page = requireConversationReader(args)
+                val index = requiredInt(args, "index"); val offset = requiredInt(args, "offset")
+                require(index >= 0 && index < page.messages.size && offset >= 0) { "原阅读位置不可核对" }
+                controller.saveConversationReading(page.window, index, offset)
+            }
+            "conversation.reader.select" -> {
+                val page = requireConversationReader(args)
+                require(!controller.state.chatSubmitting) { "请等待原输入回执后再切换对话" }
+                controller.switchFromConversationReader(page.window)
+            }
+            "conversation.reader.attachment" -> {
+                val page = requireConversationReader(args)
+                val message = requiredString(args, "messageId")
+                val file = page.messages.firstOrNull { it.id == message }?.attachments?.firstOrNull { it.id == requiredString(args, "id") && it.sha256 == requiredString(args, "sha256") }
+                    ?: error("原附件不属于这份阅读窗口")
+                controller.openReaderAttachment(page.window, message, file)
+            }
             "attachments.pick" -> { requireComposer(args, optional = true); controller.pickAttachments() }
             "attachments.openPicker" -> { requireComposer(args, optional = true); controller.openChatAttachmentPicker() }
             "attachments.closePicker" -> controller.closeChatAttachmentPicker()
@@ -1036,13 +1054,18 @@ internal class PocketWebBridge(
             "background.pair" -> controller.pairWireless(requiredString(args, "host"), requiredInt(args, "port"), requiredString(args, if (args.has("pairingCode")) "pairingCode" else "code"))
             "background.connect" -> controller.connectWireless(requiredString(args, "host"), requiredInt(args, "port"), if (args.has("pairingPort")) requiredInt(args, "pairingPort") else null)
             "background.mainScreen", "background.selectMainScreen" -> controller.selectMainScreenCompatibility()
-            "queued.open" -> controller.openQueuedOwnerInputs(requiredString(args, "taskId"), requiredString(args, "conversationId"))
-            "queued.refresh" -> controller.refreshQueuedOwnerInputs()
-            "queued.close" -> controller.closeQueuedOwnerInputs()
-            "queued.edit" -> controller.openQueuedOwnerInputEditor(requiredString(args, "messageId"), args.optBoolean("withdrawn"))
-            "queued.change" -> { if (args.has("text")) controller.editQueuedOwnerInputText(requiredString(args, "text", true)); if (args.has("mode")) controller.editQueuedOwnerInputMode(requiredString(args, "mode")) }
-            "queued.save" -> controller.saveQueuedOwnerInput()
-            "queued.editor.close" -> controller.closeQueuedOwnerInputEditor()
+            "queued.open" -> {
+                require(section == null && taskViewId == null && controller.webPrivateOwnerVisible() && controller.queuedInputsPage?.saving != true) { "请回到原对话管理排队消息" }
+                val conversation = requiredString(args, "conversationId")
+                require(conversation == controller.state.conversationId) { "原对话已变化，未打开其他对话的队列" }
+                controller.openQueuedOwnerInputs(requiredString(args, "taskId"), conversation)
+            }
+            "queued.refresh" -> { requireQueuedWindow(args); controller.refreshQueuedOwnerInputs() }
+            "queued.close" -> { requireQueuedWindow(args, closing = true); controller.closeQueuedOwnerInputs() }
+            "queued.edit" -> { requireQueuedWindow(args); controller.openQueuedOwnerInputEditor(requiredString(args, "messageId"), requiredBoolean(args, "withdrawn")) }
+            "queued.change" -> { requireQueuedWindow(args, editor = true); if (args.has("text")) controller.editQueuedOwnerInputText(requiredString(args, "text", true)); if (args.has("mode")) controller.editQueuedOwnerInputMode(requiredString(args, "mode")) }
+            "queued.save" -> { requireQueuedWindow(args, editor = true); controller.saveQueuedOwnerInput() }
+            "queued.editor.close" -> { requireQueuedWindow(args, editor = true, closing = true); controller.closeQueuedOwnerInputEditor() }
             "accounts.openAuthorization" -> { requireSection("accounts"); controller.openAccountAuthorization(requiredString(args, "sessionId")) }
             "accounts.manageUsage" -> { requireSection("accounts"); checkedPayload(args, emptySet()); controller.openChatGptUsage() }
             "memory.list", "memory.search" -> { requireSection("memory"); return accepted(controller.requestFeature("memory", action.substringAfter('.'), checkedPayload(args, setOf("query", "cursor", "layer", "limit")))) }
@@ -1357,6 +1380,22 @@ internal class PocketWebBridge(
         val state = controller.state
         require(state.projectId == requiredString(args, "projectId") && state.filePath == checkedPath(args) && state.fileVersion == requiredInt(args, "version")) { "原项目文件或版本已变化，编辑草稿仍保留，请重新核对" }
     }
+    private fun requireConversationReader(args: JSONObject, closing: Boolean = false): dev.pocketengine.ui.ConversationReadPage {
+        val page = controller.conversationReader ?: error("原历史阅读窗口已关闭")
+        require(page.window == requiredLong(args, "window") && page.conversation == requiredString(args, "conversationId") && (closing || controller.canReadConversationWindow(page))) { "原历史阅读窗口已变化，请重新打开" }
+        return page
+    }
+    /** A delayed click can never edit or close the next queue/editor window. */
+    private fun requireQueuedWindow(args: JSONObject, editor: Boolean = false, closing: Boolean = false) {
+        val page = controller.queuedInputsPage ?: error("原排队消息窗口已关闭")
+        require(page.window == requiredLong(args, "window") && page.task == requiredString(args, "taskId") && page.conversation == requiredString(args, "conversationId")) { "原排队消息窗口已变化，请重新打开" }
+        require(!page.saving) { "请等待原修改回执" }
+        if (!closing) require(section == null && taskViewId == null && controller.webPrivateOwnerVisible() && controller.queuedInputWindowCurrent && page.conversation == controller.state.conversationId) { "原对话窗口已变化，请重新打开排队消息" }
+        if (editor) {
+            val edit = page.editor ?: error("原消息编辑窗口已关闭")
+            require(edit.message == requiredString(args, "messageId") && edit.queueRevision == requiredLong(args, "queueRevision") && edit.messageRevision == requiredLong(args, "messageRevision")) { "原消息版本已变化，请重新读取后修改" }
+        }
+    }
     private fun checkedPath(args: JSONObject): String = requiredString(args, "path").also { path -> require(!path.startsWith('/') && !path.contains('\u0000') && path.split('/').none { it == ".." }) { "文件路径不属于当前项目" } }
     private fun accepted(requestId: String? = null): JSONObject = JSONObject().put("accepted", true).also { if (requestId != null) it.put("requestId", requestId) }
     private fun checkedPayload(args: JSONObject, allowed: Set<String>): JSONObject {
@@ -1380,3 +1419,4 @@ internal class PocketWebBridge(
         val value = args.opt(name); require(value is Boolean) { "缺少有效开关参数 $name" }; return value
     }
 }
+

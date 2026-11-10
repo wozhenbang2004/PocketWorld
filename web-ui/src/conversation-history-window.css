@@ -1,0 +1,9 @@
+/* Read-only history uses the existing message and Vaul sheet sources. */
+.pw-conversation-history-window { height: 94dvh; }
+.pw-history-window-messages { flex: 1; display: flex; flex-direction: column; gap: 22px; overflow-anchor: none; }
+.pw-history-window-message { flex: none; min-width: 0; overflow-wrap: anywhere; }
+.pw-history-window-message.pw-message-user { align-self: flex-end; max-width: 92%; }
+.pw-history-window-message .pw-user-text { margin: 0; }
+.pw-history-window-message .afa-answer { border: 0; box-shadow: none; background: transparent; padding: 0; }
+.pw-history-window-message .afa-answerbody { padding: 0; }
+.pw-history-window-messages > button { align-self: center; flex: none; min-height: 44px; }

@@ -1,0 +1,12 @@
+/* Existing Vaul sheet / BoardUI controls; queue state has one reading surface. */
+.pw-queued-inputs-drawer { max-height: 90dvh; }
+.pw-queued-inputs-body { display: flex; flex-direction: column; gap: 14px; }
+.pw-queued-inputs-tools { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--pw-copy); font-size: 13px; }
+.pw-queued-inputs-list { display: grid; gap: 24px; list-style: none; padding: 0; margin: 0; }
+.pw-queued-inputs-list li { display: grid; gap: 7px; min-width: 0; }
+.pw-queued-inputs-list p,.pw-queued-original { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; line-height: 1.65; }
+.pw-queued-inputs-list small { color: var(--pw-copy); font-size: 12px; line-height: 20px; }
+.pw-queued-input-editor { display: grid; gap: 18px; }
+.pw-queued-input-editor > button { justify-self: end; min-height: 44px; }
+.pw-queued-inputs-drawer .pw-action-row > button { min-height: 44px; }
+.pw-message-queue-action { min-height: 40px; font-size: 12px; }
