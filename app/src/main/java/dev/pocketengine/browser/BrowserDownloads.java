@@ -93,7 +93,14 @@ public final class BrowserDownloads {
     }
     public synchronized JSONArray list()throws Exception{JSONArray array=new JSONArray();for(JSONObject record:records.values())array.put(copy(record));return array;}
     public synchronized JSONObject status(String id)throws Exception{return copy(required(id));}
-    public synchronized JSONObject cancel(String id)throws Exception{JSONObject record=required(id);AtomicBoolean cancellation=cancellations.get(id);if(cancellation!=null){cancellation.set(true);HttpURLConnection active=connections.get(id);if(active!=null)active.disconnect();record.put("status","stopping");persist();}return copy(record);}
+    public synchronized JSONObject cancel(String id)throws Exception{
+        JSONObject record=required(id);AtomicBoolean cancellation=cancellations.get(id);
+        // Terminal receipts are published before the worker removes its active entry in finally.
+        if(cancellation!=null&&record.optString("status").matches("queued|running|stopping")){
+            cancellation.set(true);HttpURLConnection active=connections.get(id);if(active!=null)active.disconnect();record.put("status","stopping");persist();
+        }
+        return copy(record);
+    }
     public synchronized JSONArray list(String profileId)throws Exception{JSONArray array=new JSONArray();for(JSONObject record:records.values())if(profileId.equals(record.optString("profileId",BrowserLease.PROFILE)))array.put(copy(record));return array;}
     public synchronized JSONObject status(String id,String profileId)throws Exception{requireProfile(id,profileId);return status(id);}
     public synchronized JSONObject cancel(String id,String profileId)throws Exception{requireProfile(id,profileId);return cancel(id);}
