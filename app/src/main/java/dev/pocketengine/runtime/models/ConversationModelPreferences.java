@@ -18,7 +18,9 @@ public final class ConversationModelPreferences {
     private static final int MAX_BYTES = 2 * 1024 * 1024;
     private static final int MAX_SCOPES = 4096, MAX_PENDING = 256;
     private final Path file;
-    private JSONObject observed;
+    // Transactions load a new root and publish it only after the atomic save.
+    // Published roots stay read-only, so warm presentation reads do not wait for fsync.
+    private volatile JSONObject observed;
 
     public ConversationModelPreferences(Path file) { this.file = file.toAbsolutePath(); }
 
@@ -50,10 +52,15 @@ public final class ConversationModelPreferences {
 
     /** Read local metadata only; the caller resolves and validates this source at task admission. */
     public JSONObject snapshot(String key) throws Exception {
-        synchronized (PROCESS_LOCK) {
-            if (observed == null) observed = load();
-            return project(scope(key), observed.getJSONObject("scopes").optJSONObject(key));
+        String checkedScope = scope(key);
+        JSONObject current = observed;
+        if (current == null) {
+            synchronized (PROCESS_LOCK) {
+                current = observed;
+                if (current == null) observed = current = load();
+            }
         }
+        return project(checkedScope, current.getJSONObject("scopes").optJSONObject(checkedScope));
     }
 
     public JSONObject save(String key, long expectedRevision, JSONObject target) throws Exception {

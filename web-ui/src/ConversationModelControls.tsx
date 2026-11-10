@@ -199,7 +199,7 @@ function LegacyConversationModelControls({ state, can, act, onOpenModel, pickerS
     </Button>
     <Popover triggerRef={reasoningTrigger} isOpen={open} onOpenChange={next => next ? openPanel() : closePanel()}
       placement="top start" offset={8} shouldFlip containerPadding={16} maxHeight={480} scrollRef={reasoningBody}
-      isKeyboardDismissDisabled={saving || !!state.modelSelectionBusy} aria-label="推理强度"
+      isKeyboardDismissDisabled={saving || !!state.modelSelectionBusy} aria-label="推理强度" motionProfile="quick"
       className="pw-conversation-picker-popover pw-conversation-reasoning-popover" dialogClassName="pw-conversation-picker-dialog">
         <header className="pw-conversation-picker-header"><h2>推理强度</h2><IconButton icon={IconClose} aria-label="关闭推理设置" onClick={closePanel} disabled={saving || !!state.modelSelectionBusy} /></header>
         <div ref={reasoningBody} className="pw-conversation-picker-body pw-conversation-reasoning-body">

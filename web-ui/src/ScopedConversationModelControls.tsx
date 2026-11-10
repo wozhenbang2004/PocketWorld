@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { IconCheck, IconChevronDown, IconModel } from './icons';
 import { Menu, MenuItem, Text } from 'react-aria-components';
 import { Button } from './forms-library';
@@ -75,33 +75,68 @@ export function ScopedConversationModelControls({ state, can, act, onOpenModel, 
 }
 
 type ReasoningPanelProps = Pick<ConversationModelControlsProps, 'state' | 'can' | 'act' | 'disabled'> & {
+  active?: boolean;
   onSelectionPending: (pending: boolean) => void;
   onSelected?: () => void;
 };
 /** A changed reasoning choice consumes one original scoped review. */
-export function ScopedConversationReasoningPanel({ state, can, act, disabled = false, onSelectionPending, onSelected }: ReasoningPanelProps) {
-  const [loading, setLoading] = useState(false), [saving, setSaving] = useState(false);
+export function ScopedConversationReasoningPanel({ state, can, act, disabled = false, active = true, onSelectionPending, onSelected }: ReasoningPanelProps) {
+  const [loading, setLoading] = useState(true), [saving, setSaving] = useState(false);
   const [review, setReview] = useState<Row | null>(null), [choice, setChoice] = useState(''), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const [needsRead, setNeedsRead] = useState(false), [savedReasoning, setSavedReasoning] = useState<Row | null>(null);
   const [editingLevels, setEditingLevels] = useState(false), [declaredLevels, setDeclaredLevels] = useState<string[]>([]);
   const [refreshAfterDeclaration, setRefreshAfterDeclaration] = useState(false);
   const alive = useRef(false), pending = useRef(false), reads = useRef(0), started = useRef(false), hasWindow = useRef(false);
-  const confirmed = useRef<Row | null>(null);
-  const latest = useRef({ state, act, onSelectionPending, onSelected }); latest.current = { state, act, onSelectionPending, onSelected };
+  const confirmed = useRef<Row | null>(null), handingOff = useRef(false);
+  const displayedModelName = useRef(conversationModelName(state));
+  if (active && !pending.current && !handingOff.current) displayedModelName.current = conversationModelName(state);
+  const writeOwner = useRef<{ request: number; onPending: (pending: boolean) => void; onSelected?: () => void } | null>(null);
+  const latest = useRef({ state, act, active, onSelectionPending, onSelected }); latest.current = { state, act, active, onSelectionPending, onSelected };
   const preference = record(state.conversationModel), current = conversationModelStamp(state), previous = useRef(current), previousScope = useRef(preference.scopeKey);
-  const locked = disabled || saving || busy(state);
-  const retire = () => { reads.current++; setReview(null); setLoading(false); if (hasWindow.current) { hasWindow.current = false; void latest.current.act('models.conversation.close').catch(() => {}); } };
-  useEffect(() => { alive.current = true; return () => { alive.current = false; reads.current++; if (hasWindow.current) void latest.current.act('models.conversation.close').catch(() => {}); }; }, []);
+  const scopeCurrent = () => previousScope.current === record(latest.current.state.conversationModel).scopeKey;
+  const interactive = () => alive.current && latest.current.active && !handingOff.current && scopeCurrent();
+  const isNativeBusy = busy(state), locked = !active || handingOff.current || !scopeCurrent() || disabled || saving || isNativeBusy;
+  const accepts = (request: number) => alive.current && latest.current.active && request === reads.current;
+  const beginWrite = (request: number) => {
+    pending.current = true;
+    writeOwner.current = { request, onPending: latest.current.onSelectionPending, onSelected: latest.current.onSelected };
+    writeOwner.current.onPending(true);
+  };
+  const releaseWrite = (request?: number) => {
+    const owner = writeOwner.current;
+    if (!owner || request !== undefined && owner.request !== request) return null;
+    writeOwner.current = null; pending.current = false; owner.onPending(false);
+    return owner;
+  };
+  const closeWindow = async () => {
+    if (!hasWindow.current) return;
+    // Native close clears the current review generation. Relinquish ownership
+    // before dispatch so an old exit/unmount never closes a later opening.
+    hasWindow.current = false;
+    await latest.current.act('models.conversation.close');
+  };
+  const retire = () => { reads.current++; releaseWrite(); setReview(null); setLoading(false); void closeWindow().catch(() => {}); };
+  useLayoutEffect(() => {
+    alive.current = active;
+    if (active) {
+      started.current = false; confirmed.current = null; handingOff.current = false; setSaving(false); setLoading(true); setRefreshAfterDeclaration(false);
+      previous.current = current; previousScope.current = preference.scopeKey;
+    }
+    return () => {
+      alive.current = false; reads.current++; releaseWrite();
+      void closeWindow().catch(() => {});
+    };
+  }, [active]);
   const read = async (keepNotice = false) => {
-    if (pending.current || busy(latest.current.state)) return;
+    if (!interactive() || pending.current || busy(latest.current.state)) return;
     const request = ++reads.current, original = conversationModelStamp(latest.current.state);
     started.current = true; confirmed.current = null; setLoading(true); setReview(null); setError(''); if (!keepNotice) { setNotice(''); setSavedReasoning(null); }
     try {
-      if (hasWindow.current) await latest.current.act('models.conversation.close');
-      if (!alive.current || request !== reads.current) return;
+      await closeWindow();
+      if (!accepts(request)) return;
       hasWindow.current = true;
       const value = await latest.current.act('models.conversation.review');
-      if (!alive.current || request !== reads.current) return;
+      if (!accepts(request)) return;
       if (original !== conversationModelStamp(latest.current.state) || !reviewCurrent(record(value), latest.current.state) ||
           typeof value?.reviewHandle !== 'string' || !value.reviewHandle.trim() || !Number.isSafeInteger(value.expiresInMs) || value.expiresInMs <= 0 || value.expiresInMs > 120_000)
         throw new Error('原对话模型审阅已变化，请重新读取。');
@@ -123,49 +158,54 @@ export function ScopedConversationReasoningPanel({ state, can, act, disabled = f
       setEditingLevels(false);
       setReview({ ...value, choices, originalStamp: original, expiresAt: Date.now() + value.expiresInMs }); setNeedsRead(false);
       setChoice(choices.find(item => canonical(item.value) === canonical(selected))?.id || '');
-    } catch (failure) { if (alive.current && request === reads.current) { setNeedsRead(true); setError(failure instanceof Error ? failure.message : '推理设置暂不可读取。'); } }
-    finally { if (alive.current && request === reads.current) setLoading(false); }
+    } catch (failure) { if (accepts(request)) { setNeedsRead(true); setError(failure instanceof Error ? failure.message : '推理设置暂不可读取。'); } }
+    finally { if (accepts(request)) setLoading(false); }
   };
   useEffect(() => {
+    if (!active) return;
     if (previousScope.current !== preference.scopeKey) {
-      retire(); confirmed.current = null; setSaving(false); setNotice(''); setSavedReasoning(null); setNeedsRead(true); setError('对话已切换，请重新读取模型。');
+      retire(); confirmed.current = null; handingOff.current = false; setSaving(false); setNotice(''); setSavedReasoning(null); setNeedsRead(true); setError('对话已切换，请重新读取模型。');
     } else if (refreshAfterDeclaration && !pending.current && !busy(state)) {
       setRefreshAfterDeclaration(false); void read(true);
     } else if (!pending.current && !busy(state) && confirmed.current && preference.revision === confirmed.current.revision) {
-      void read(true);
+      // The caller is closing after the confirmed receipt; do not create a new
+      // review window during that handoff. Inline consumers may stay and reread.
+      if (!latest.current.onSelected) void read(true);
     } else if (!started.current && !busy(state)) {
       void read();
     } else if (previous.current !== current && !pending.current && !confirmed.current) {
       retire(); setNeedsRead(true); setError(old => old || '此对话模型已变化，请重新读取。');
     }
     previousScope.current = preference.scopeKey; previous.current = current;
-  }, [current, state.modelSelectionBusy, saving, refreshAfterDeclaration]);
+  }, [active, current, isNativeBusy, saving, refreshAfterDeclaration]);
   useEffect(() => {
-    if (!review || saving) return;
-    const timer = window.setTimeout(() => { setReview(null); setNeedsRead(true); setError('原推理审阅已过期，请重新读取。'); }, Math.max(0, review.expiresAt - Date.now()));
+    if (!active || !review || saving || handingOff.current) return;
+    const timer = window.setTimeout(() => { if (!latest.current.active || handingOff.current) return; setReview(null); setNeedsRead(true); setError('原推理审阅已过期，请重新读取。'); }, Math.max(0, review.expiresAt - Date.now()));
     return () => window.clearTimeout(timer);
-  }, [review, saving]);
+  }, [active, review, saving]);
   const changedChoice = (id: string) => review?.choices.find((item: Row) => item.id === id && !item.readOnly && canonical(item.value) !== canonical(nativeReasoning(review.nativeSelection?.reasoning)));
   const apply = async (id: string) => {
     const selected = changedChoice(id);
-    if (pending.current || locked || loading || needsRead || !review || review.restriction || !selected || !can('models.conversation.reasoning')) return;
+    if (!interactive() || pending.current || locked || loading || needsRead || !review || review.restriction || !selected || !can('models.conversation.reasoning')) return;
     if (Date.now() >= review.expiresAt || review.originalStamp !== conversationModelStamp(latest.current.state)) { setReview(null); setNeedsRead(true); setError('此对话模型已变化或审阅已过期，请重新读取。'); return; }
     const originalScope = review.scopeKey, originalRevision = review.revision, request = ++reads.current, original = review;
-    pending.current = true; setSaving(true); setError(''); setNotice(''); latest.current.onSelectionPending(true);
+    beginWrite(request); setSaving(true); setError(''); setNotice('');
     let selectionSaved = false;
     try {
       const receipt = await latest.current.act('models.conversation.reasoning', { reviewHandle: original.reviewHandle, reasoning: selected.value });
       const saved = conversationSelectionReceipt(receipt, originalScope, originalRevision), latestPreference = record(latest.current.state.conversationModel);
-      if (!alive.current || request !== reads.current || latestPreference.scopeKey !== originalScope) return;
+      if (!accepts(request) || latestPreference.scopeKey !== originalScope) return;
       if (![originalRevision, saved.revision].includes(latestPreference.revision) || !savedReasoningCurrent(saved, original, selected.value)) throw new Error('此对话的模型参数保存结果待核对，请重新读取。');
-      confirmed.current = saved; setReview(null); setNeedsRead(true); setChoice(id); setSavedReasoning(record(saved.target).reasoning); setNotice('推理已保存');
+      confirmed.current = saved; setChoice(id);
+      if (writeOwner.current?.onSelected) handingOff.current = true;
+      else { setReview(null); setNeedsRead(true); setSavedReasoning(record(saved.target).reasoning); setNotice('推理已保存'); }
       selectionSaved = true;
-    } catch (failure) { if (alive.current && request === reads.current && record(latest.current.state.conversationModel).scopeKey === originalScope) { confirmed.current = null; setReview(null); setNeedsRead(true); setError(`保存结果待核对。${failure instanceof Error ? failure.message : ''} 没有自动重试，请重新读取。`); } }
+    } catch (failure) { if (accepts(request) && record(latest.current.state.conversationModel).scopeKey === originalScope) { confirmed.current = null; setReview(null); setNeedsRead(true); setError(`保存结果待核对。${failure instanceof Error ? failure.message : ''} 没有自动重试，请重新读取。`); } }
     finally {
-      pending.current = false; latest.current.onSelectionPending(false);
-      if (alive.current && request === reads.current) {
+      const owner = releaseWrite(request);
+      if (owner && accepts(request)) {
         setSaving(false);
-        if (selectionSaved && record(latest.current.state.conversationModel).scopeKey === originalScope) latest.current.onSelected?.();
+        if (selectionSaved && record(latest.current.state.conversationModel).scopeKey === originalScope) owner.onSelected?.();
       }
     }
   };
@@ -180,7 +220,7 @@ export function ScopedConversationReasoningPanel({ state, can, act, disabled = f
     review.nativeSelection?.modelRoute === 'api_key' && can('models.conversation.reasoning.declare');
   const customLevelsSaved = record(record(review?.facts).REASONING_LEVELS).source === 'OWNER_OVERRIDE';
   const declare = async (levels: string[]) => {
-    if (!mayDeclare || locked || loading || needsRead || pending.current || !review) return;
+    if (!interactive() || !mayDeclare || locked || loading || needsRead || pending.current || !review) return;
     if (Date.now() >= review.expiresAt || review.originalStamp !== conversationModelStamp(latest.current.state)) {
       setReview(null); setNeedsRead(true); setError('此对话模型已变化，请重新读取。'); return;
     }
@@ -188,29 +228,29 @@ export function ScopedConversationReasoningPanel({ state, can, act, disabled = f
       setError('请核对所选档位。'); return;
     }
     const original = review, request = ++reads.current;
-    pending.current = true; setSaving(true); setError(''); setNotice(''); latest.current.onSelectionPending(true);
+    beginWrite(request); setSaving(true); setError(''); setNotice('');
     try {
       const receipt = await latest.current.act('models.conversation.reasoning.declare', {
         reviewHandle: original.reviewHandle, levels,
       });
-      if (!alive.current || request !== reads.current || record(latest.current.state.conversationModel).scopeKey !== original.scopeKey) return;
+      if (!accepts(request) || record(latest.current.state.conversationModel).scopeKey !== original.scopeKey) return;
       if (receipt?.status !== 'saved' || receipt?.modelId !== original.nativeSelection?.model ||
           !Number.isSafeInteger(receipt?.ownerRevision)) throw new Error('模型的可用档位保存回执不可核对。');
       setReview(null); setEditingLevels(false); setNeedsRead(true); setNotice('档位已保存');
       setRefreshAfterDeclaration(true);
     } catch (failure) {
-      if (alive.current && request === reads.current) {
+      if (accepts(request)) {
         setReview(null); setNeedsRead(true);
         setError(`档位保存结果待核对：${failure instanceof Error ? failure.message : '请重新读取。'}`);
       }
     } finally {
-      pending.current = false; latest.current.onSelectionPending(false);
-      if (alive.current && request === reads.current) setSaving(false);
+      const owner = releaseWrite(request);
+      if (owner && accepts(request)) setSaving(false);
     }
   };
   const onlyServiceDefault = review?.choices.length === 1 && review.choices[0].value.mode === 'DEFAULT';
   return <section className="pw-scoped-reasoning-panel" aria-label="此对话推理设置">
-    <p className="pw-model-selection-scope">{conversationModelName(state) || '尚未选择模型'}</p>
+    <p className="pw-model-selection-scope">{displayedModelName.current || '尚未选择模型'}</p>
     {loading ? <div role="status" aria-busy="true"><ShimmerText>正在读取推理设置…</ShimmerText></div> : review?.restriction ? <p className="pw-conversation-reasoning-note">{review.restriction}</p> : review && <>
       {onlyServiceDefault ? <div className="pw-conversation-reasoning-default"><strong>自动</strong><p>{mayDeclare ? '可为当前模型设置低、中、高等档位。' : reasoningAvailability(record(review.facts))}</p></div>
         : <Menu aria-label="可用推理强度" selectionMode="single" selectedKeys={choice ? [choice] : []} disallowEmptySelection shouldCloseOnSelect={false} autoFocus onAction={id => void apply(String(id))} className={`${MENU_ITEMS_CONTAINER} pw-conversation-reasoning-options`}>
@@ -238,7 +278,7 @@ export function ScopedConversationReasoningPanel({ state, can, act, disabled = f
         </div>
       </section>}
     </>}
-    {saving && <p role="status" aria-busy="true" className="pw-model-selection-status">正在保存推理…</p>}
+    {(saving || handingOff.current) && <p role="status" aria-busy={saving || undefined} className="pw-model-selection-status">{handingOff.current ? '推理已保存' : '正在保存推理…'}</p>}
     {notice && <p role="status" className="pw-model-selection-status">{notice}</p>}
     {savedReasoning && !review && !loading && <p className="pw-conversation-reasoning-current">当前推理 <b>{reasoningLabel(nativeReasoning(savedReasoning))}</b></p>}
     {error && <p role="alert" className="pw-conversation-reasoning-error">{error}</p>}

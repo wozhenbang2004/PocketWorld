@@ -99,6 +99,8 @@ export interface PopoverProps
   className?: string;
   /** Classes on the inner dialog; `p-0` suits menu-like rows that pad themselves. */
   dialogClassName?: string;
+  /** Frequent text selectors keep the source scale/opacity motion without blur. */
+  motionProfile?: "default" | "quick";
   children: ReactNode | ((renderProps: DialogRenderProps) => ReactNode);
 }
 
@@ -109,6 +111,7 @@ export function Popover({
   "aria-label": ariaLabel,
   className,
   dialogClassName,
+  motionProfile = "default",
   children,
   ...props
 }: PopoverProps) {
@@ -130,7 +133,12 @@ export function Popover({
         "z-110 w-80 max-w-[calc(100vw-32px)]",
         "rounded-[20px] border border-border-button-default bg-background-primary-default p-1.5 shadow-dropdown",
         "origin-(--trigger-anchor-point)",
-        allowed ? [
+        allowed ? motionProfile === "quick" ? [
+          "transition-[opacity,scale] duration-150 ease-(--pw-ease-enter)",
+          "data-[exiting]:duration-100 data-[exiting]:ease-(--pw-ease-exit)",
+          "data-[entering]:opacity-0 data-[exiting]:opacity-0",
+          "data-[entering]:scale-95 data-[exiting]:scale-95",
+        ].join(" ") : [
           "transition-[opacity,scale,filter] duration-(--pw-motion-enter) ease-(--pw-ease-enter)",
           "data-[exiting]:duration-(--pw-motion-exit) data-[exiting]:ease-(--pw-ease-exit)",
           "data-[entering]:opacity-0 data-[exiting]:opacity-0",

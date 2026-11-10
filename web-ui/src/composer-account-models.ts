@@ -27,8 +27,10 @@ function unavailable(row: AccountModelRecord, now: number): string {
 export function accountModelAccountRows(value: any, revision: any, now = Date.now()) {
   const projection = object(value);
   if (!accountModelProjectionCurrent(projection, revision)) return [];
-  return rows(object(projection.accountSnapshot).accounts).filter(row => text(row.id)).map(row => {
-    const reason = singleAccount(projection, row.id) ? unavailable(row, now) : '账号记录有重复，请重新读取';
+  const accounts = rows(object(projection.accountSnapshot).accounts), counts = new Map<any, number>();
+  for (const row of accounts) counts.set(row.id, (counts.get(row.id) || 0) + 1);
+  return accounts.filter(row => text(row.id)).map(row => {
+    const reason = counts.get(row.id) === 1 ? unavailable(row, now) : '账号记录有重复，请重新读取';
     return { id: row.id as string, name: text(row.label) || 'ChatGPT 账号', description: text(row.plan || row.planName) || '读取此账号的可用模型', disabled: !!reason, reason };
   });
 }
@@ -40,9 +42,11 @@ export function accountModelReadRequest(value: any, revision: any, accountId: st
 export function accountModelCatalog(value: any, revision: any) {
   const projection = object(value), catalog = object(projection.catalog), row = singleAccount(projection, text(catalog.accountId));
   if (!accountModelProjectionCurrent(projection, revision) || !row || !exactVersion(catalog.accountVersion) || row.version !== catalog.accountVersion) return null;
-  const models = rows(catalog.models).filter(model => {
+  const candidates = rows(catalog.models), counts = new Map<any, number>();
+  for (const model of candidates) counts.set(model.id, (counts.get(model.id) || 0) + 1);
+  const models = candidates.filter(model => {
     const ref = object(model.nativeRef);
-    return !!text(model.id) && rows(catalog.models).filter(other => other.id === model.id).length === 1 &&
+    return !!text(model.id) && counts.get(model.id) === 1 &&
       ref.provider === 'chatgpt_plan' && ref.accountId === catalog.accountId && ref.accountVersion === catalog.accountVersion && ref.modelId === model.id;
   });
   return { accountId: catalog.accountId as string, accountVersion: catalog.accountVersion as number, accountLabel: text(row.label) || 'ChatGPT 账号', models };

@@ -325,5 +325,13 @@
     "pressAndTabs": "Josh approved neutral adaptation preserves legitimate recovery after business disable or button blur; held input still cancels. Ovio 81a1bcb adaptation samples retained WAAPI frames using actual playback time, preserving current edge and squash pose; no new capsule design.",
     "navigation": "Retained Vaul 3e97aac6 approved left navigation extension unifies opening touch and existing Content pointer gestures under one position owner. Real recent clientX samples remain separate from drawer translation. Only enabled left, non-snap, non-nested navigation uses this path.",
     "feedback": "Retained Affect official MessageActions 37b91fa and current Markdown code blocks keep their own successful-copy feedback; App avoids a second success toast on those consumers. Other copy entries and existing errors retain their feedback."
+  },
+  "selectorResponse20261111": {
+    "scope": "PW-M25–PW-M28: model and reasoning picker response. Existing BoardUI/React Aria design, no new visual family or dependency; source review does not establish Android latency.",
+    "source": "BoardUI official registry capture 2026-11-01, popover TSX SHA-256 b712f37a2153d42ee40ad7ec329f184ef0ab3186cd7c7f3fd111047a26ff178e; react-aria-components 1.17.0; React 19.2.6. Original source and manifest remain under shell-library.",
+    "adapter": "../ConversationModelPicker.tsx; ../shell-library/adapted/boardui/components/base/popover/popover.tsx",
+    "changes": "Local provider owns transient picker state with unchanged children; scoped consumers preserve trigger semantics and native preview visibility. Existing source Popover gains a quick scale/opacity transition for model/reasoning controls (150ms enter, 100ms exit) without surface blur. Aria retains the full exiting body, while active/window generations retire interactions and requests immediately.",
+    "data": "Independent catalog reads dispatch together into the existing native IO queue; one validated API projection plus linear account duplicate counting. Pure local presentation responses do not request another complete app projection; warm model preference presentation reads the last atomically saved immutable snapshot.",
+    "evidence": "../../docs/motion-research-20261110.md; exact source review and build/release status recorded there. No tests or synthetic host, no claim of current Android handfeel or user aesthetic acceptance."
   }
 }

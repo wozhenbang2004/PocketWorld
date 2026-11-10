@@ -214,6 +214,14 @@ internal class PocketWebBridge(
     companion object {
         private val ownerDomains = setOf("memoryReview", "taskMemory", "mcp", "accounts", "learning", "groups", "channelMedia")
         private val connectionSections = setOf("setup", "profile", "devices", "models", "accounts", "remote", "ssh", "local", "memory", "memoryReview", "automation", "commitments", "channels", "skills", "learning", "plugins", "pluginCatalog", "mcp", "teams", "groups", "media", "realtime", "proxy", "workProfiles")
+        // Their result contains the local projection; user selection and business state are unchanged.
+        // Account catalog reads and conversation reviews may renew a grant and
+        // deliberately retain the normal state publication path.
+        private val localModelPresentationCommands = setOf(
+            "models.api.open", "models.api.review", "models.api.close",
+            "models.accounts.open", "models.accounts.review", "models.accounts.close",
+            "models.groups.snapshot", "models.conversation.snapshot", "models.conversation.close"
+        )
         val commands: Set<String> = linkedSetOf(
             "app.ready", "app.refresh", "notice.dismiss", "notice.task.close", "error.dismiss", "execution.read", "execution.review", "execution.confirm",
             "composer.edit", "composer.send", "composer.mode", "composer.intent", "composer.reading", "composer.query", "composer.retry", "composer.returnPending",
@@ -729,19 +737,28 @@ internal class PocketWebBridge(
                 aiSources.dispatch(action, args) { result, error, code -> complete(id, result, error, code); publishState() }; return
             }
             if (action in PocketWebAiGroups.COMMANDS) {
-                aiGroups.dispatch(action, args) { result, error, code -> complete(id, result, error, code); publishState() }; return
+                aiGroups.dispatch(action, args) { result, error, code ->
+                    complete(id, result, error, code)
+                    if (action !in localModelPresentationCommands) publishState()
+                }; return
             }
             if (action in PocketWebPermissionPolicy.COMMANDS) {
                 check(section == null && taskViewId == null) { "请回到私人对话设置执行权限" }
                 complete(id, PocketWebPermissionPolicy.dispatch(controller, action, args), null); publishState(); return
             }
             if (action in PocketWebConversationModels.COMMANDS) {
-                conversationModels.dispatch(action, args) { result, error, code -> complete(id, result, error, code); publishState() }; return
+                conversationModels.dispatch(action, args) { result, error, code ->
+                    complete(id, result, error, code)
+                    if (action !in localModelPresentationCommands) publishState()
+                }; return
             }
             if (action in PocketWebComposerModels.COMMANDS) {
                 if (action.startsWith("models.conversation.")) check(section == null && taskViewId == null) { "请回到原私人对话选择模型" }
 
-                composerModels.dispatch(action, args) { result, error, code -> complete(id, result, error, code); publishState() }; return
+                composerModels.dispatch(action, args) { result, error, code ->
+                    complete(id, result, error, code)
+                    if (action !in localModelPresentationCommands) publishState()
+                }; return
             }
             if (action in PocketWebRealtime.COMMANDS) {
                 requireSection("realtime"); realtimePages.dispatch(action, args) { result, error -> complete(id, result, error, "outcome_unknown"); publishState() }; return
