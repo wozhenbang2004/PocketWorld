@@ -78,6 +78,9 @@ public final class PhoneAccessibilityService extends AccessibilityService {
     private LinearLayout controls;
     private TextView status;
     private Button pause;
+    private Button controlGrip;
+    private LinearLayout controlDetails;
+    private PhoneControlOverlayPosition controlPosition;
     private RunControl control;
     private Runnable cancellation;
     private EngineApplication ownerApp;
@@ -154,6 +157,13 @@ public final class PhoneAccessibilityService extends AccessibilityService {
         }
     }
     @Override public void onInterrupt() { }
+    @Override public void onConfigurationChanged(android.content.res.Configuration configuration) {
+        super.onConfigurationChanged(configuration);
+        if (controls != null && controlPosition != null) {
+            PhoneControlOverlayPosition position = controlPosition;
+            controls.post(position::keepVisible);
+        }
+    }
 
     /** API 33 carries display identity. Earlier/unknown events require a known window mapping. */
     private int eventDisplay(AccessibilityEvent event) {
@@ -276,20 +286,35 @@ public final class PhoneAccessibilityService extends AccessibilityService {
             ownerControls=bound;
             LinearLayout panel = new LinearLayout(this);
             panel.setOrientation(LinearLayout.VERTICAL);
-            panel.setPadding(dp(12), dp(8), dp(12), dp(8));
+            panel.setPadding(dp(4), dp(4), dp(4), dp(4));
             GradientDrawable background = new GradientDrawable();
-            background.setColor(Color.WHITE);
+            background.setColor(dev.pocketengine.ui.UiAppearance.surface(this));
             background.setCornerRadius(dp(16));
-            background.setStroke(dp(1), 0xffd8d8d8);
+            background.setStroke(dp(1), dev.pocketengine.ui.UiAppearance.outline(this));
             panel.setBackground(background);
             panel.setElevation(dp(4));
+            LinearLayout details = new LinearLayout(this);
+            details.setOrientation(LinearLayout.VERTICAL);
+            details.setPadding(dp(8), dp(4), dp(8), dp(4));
+            details.setVisibility(View.GONE);
+            controlDetails = details;
             status = new TextView(this);
-            status.setTextColor(0xff202020);
+            status.setTextColor(dev.pocketengine.ui.UiAppearance.foreground(this));
             status.setTextSize(14);
-            status.setMaxLines(2);
+            status.setMaxLines(3);
+            status.setMaxWidth(Math.max(1, Math.min(dp(280), getResources().getDisplayMetrics().widthPixels - dp(32))));
             status.setText(runControl.isPaused() ? "已请求暂停，返回应用查看状态" : shortText(goal, 100));
-            panel.addView(status);
+            details.addView(status);
             LinearLayout actions = new LinearLayout(this);
+            actions.setGravity(Gravity.CENTER_VERTICAL);
+            Button grip = button("任务 ▾");
+            controlGrip = grip;
+            grip.setContentDescription("拖动可移动手机任务控制条；点击展开操作");
+            grip.setOnClickListener(v -> {
+                boolean expand = details.getVisibility() != View.VISIBLE;
+                details.setVisibility(expand ? View.VISIBLE : View.GONE);
+                grip.setText(expand ? "任务 ▴" : "任务 ▾");
+            });
             pause = button(runControl.isPaused() ? "继续" : "暂停");
             pause.setOnClickListener(v -> {
                 bound.toggle();
@@ -308,32 +333,41 @@ public final class PhoneAccessibilityService extends AccessibilityService {
                     try { startActivity(launch); } catch (RuntimeException ignored) { }
                 }
             });
+            actions.addView(grip);
             actions.addView(pause);
             actions.addView(stop);
-            actions.addView(back);
             panel.addView(actions);
-            Button supplement = button("补充其他 App 页面");
+            LinearLayout more = new LinearLayout(this);
+            more.addView(back);
+            Button supplement = button("补充任务");
             supplement.setOnClickListener(v -> {
                 try {
-                    if (!bound.view(goal).current || !runControl.isPaused()) throw new IllegalStateException("先暂停原主屏任务，再选择需要的页面");
-                    org.json.JSONObject task = app.tasks.get(taskId, false);
-                    if (task == null) throw new IllegalStateException("原任务暂不可核对");
-                    showQuickPanel(new org.json.JSONObject().put("taskId", taskId).put("runId", task.getString("runId")).put("epoch", task.getInt("coordinatorEpoch")));
+                    if (!bound.pause()) return;
+                    refreshOwnerControls(bound,goal);
+                    var original = runControl.hostRunIdentity();
+                    if (original == null) throw new IllegalStateException("原任务暂不可核对");
+                    if (showQuickPanel(new org.json.JSONObject().put("taskId", taskId).put("runId", original.runId()).put("epoch", original.epoch()))) {
+                        details.setVisibility(View.GONE); grip.setText("任务 ▾");
+                    }
                 } catch (Exception unavailable) { app.error(unavailable.getMessage() == null ? "请回原任务重新打开快捷补充" : unavailable.getMessage()); }
             });
-            panel.addView(supplement);
+            more.addView(supplement); details.addView(more); panel.addView(details);
             controls = panel;
             WindowManager.LayoutParams layout = new WindowManager.LayoutParams(
                     WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
                     WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                     WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
                     PixelFormat.TRANSLUCENT);
-            layout.gravity = Gravity.TOP | Gravity.END;
+            layout.gravity = Gravity.TOP | Gravity.LEFT;
             layout.x = dp(8);
             layout.y = dp(48);
             layout.setTitle("PocketEngine task controls");
+            PhoneControlOverlayPosition position = new PhoneControlOverlayPosition(panel, layout);
+            controlPosition = position;
+            grip.setOnTouchListener(position);
             try {
                 getSystemService(WindowManager.class).addView(panel, layout);
+                panel.post(position::keepVisible);
                 updateVisibility();
             } catch (RuntimeException unavailable) {
                 removeControls();
@@ -360,6 +394,7 @@ public final class PhoneAccessibilityService extends AccessibilityService {
         pause.setText(state.paused?"继续":"暂停");
         pause.setEnabled(state.canToggle);
         status.setText(shortText(state.message,140));
+        if(controlGrip!=null)controlGrip.setContentDescription("拖动可移动手机任务控制条；点击"+(controlDetails!=null&&controlDetails.getVisibility()==View.VISIBLE?"收起":"展开")+"操作。"+state.message);
     }
 
     public void hideControls() { runOnMain(this::removeControls); }
@@ -403,11 +438,14 @@ public final class PhoneAccessibilityService extends AccessibilityService {
     private Button button(String label) {
         Button b = new Button(this);
         b.setText(label);
-        b.setTextColor(0xff202020);
+        b.setTextColor(dev.pocketengine.ui.UiAppearance.foreground(this));
+        b.setBackgroundTintList(android.content.res.ColorStateList.valueOf(dev.pocketengine.ui.UiAppearance.surfaceVariant(this)));
         b.setTextSize(13);
         b.setAllCaps(false);
         b.setMinWidth(0);
         b.setMinimumWidth(0);
+        b.setMinHeight(dp(48));
+        b.setMinimumHeight(dp(48));
         b.setPadding(dp(10), 0, dp(10), 0);
         return b;
     }
@@ -427,6 +465,9 @@ public final class PhoneAccessibilityService extends AccessibilityService {
         controls = null;
         status = null;
         pause = null;
+        controlGrip = null;
+        controlDetails = null;
+        controlPosition = null;
     }
 
     // Called only on main. Tokens let timeout/late callback cleanup remain idempotent.
