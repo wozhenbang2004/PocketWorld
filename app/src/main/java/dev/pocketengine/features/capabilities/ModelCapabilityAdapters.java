@@ -47,7 +47,7 @@ public final class ModelCapabilityAdapters implements CapabilityPort {
         }
         /** Original native identity only; obtaining it does not grant a tool or operation. */
         public RunControl originalControl(){return control;}
-        void check(RunControl supplied)throws Exception {
+        public void check(RunControl supplied)throws Exception {
             if(supplied!=control||!control.matchesHostRun(taskId,runId,epoch))throw new SecurityException("不能替换宿主执行控制");
             control.check();if(control.isPaused())throw new SecurityException("任务已暂停，不能派发新能力调用");
         }
