@@ -147,7 +147,7 @@ public final class TeamPhoneHost implements TeamCoordinator.PhoneFactory {
     @Override public JSONObject execute(TeamCoordinator.PhoneCall call,RunControl original,Consumer<JSONObject> progress)throws Exception {
         call.checkCurrent();Binding binding=call.approval().requireMember(call.memberId);call.approval().requireRun(call.teamRunId);
         JSONObject task=tasks.deviceTasks().prepareTeamPhone(call,binding,original);String id=task.getString("id");
-        if(!task.optString("runId").isEmpty())return receipt(task).put("queryOnly",true).put("summary",task.optString("summary","此原手机分工已有执行，只核对原任务，不创建第二次运行"));
+        if(!task.optString("runId").isEmpty())return receipt(task).put("queryOnly",true).put("goalMatches",call.goal().equals(task.optString("goal"))).put("summary",task.optString("summary","此原手机分工已有执行，只核对原任务，不创建第二次运行"));
         if(binding.remote())try(var window=devices.taskScopeHost().open(id)){
             var choice=new NativeDeviceTaskScopeHost.RouteChoice(binding.option.id,binding.tools,binding.models,binding.expires,binding.tools,binding.models,List.of(),NativeDeviceTaskScopeHost.ContextChoice.GOAL_ONLY);
             window.confirm(window.review(new NativeDeviceTaskScopeHost.Selection(List.of(choice))));
