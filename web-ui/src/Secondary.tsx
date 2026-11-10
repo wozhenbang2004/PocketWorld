@@ -1460,7 +1460,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
   const run: Run = async (action, args = {}) => {
     if (!supported(action)) throw new Error('当前页面尚未开放此操作。');
     const current = generation.current;
-    const teamWindow = action.startsWith('teams.') ? {
+    const teamWindow = action.startsWith('teams.') || action.startsWith('teamEvidence.') ? {
       documentEpoch: bridge.getDocumentEpoch(), resumeRevision: Number(object(bridge.getState().view).resumeRevision || 0),
     } : null;
     const ownsPresentation = () => {
@@ -1620,3 +1620,4 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
     </Tabs> : content}
   </section>;
 }
+

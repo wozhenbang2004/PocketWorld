@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { bridge } from './bridge';
 import './collaboration-depth.css';
 import { Accordion, AccordionItem, Button, CheckboxField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { emptyTeamEvidence, teamEvidenceSelection, TeamEvidenceConsent, type TeamEvidenceDraft } from './team-evidence';
@@ -7,8 +8,8 @@ type Data = Record<string, any>;
 type Run = (action: string, args?: Data) => Promise<any>;
 const rows = (value: any): Data[] => Array.isArray(value) ? value : [];
 
-export function TeamEvidenceWorkspace({ runId, members, run, disabled = false, onBackChange }: {
-  runId: string; members: Data[]; run: Run; disabled?: boolean; onBackChange?: (handler: (() => boolean) | null) => void;
+export function TeamEvidenceWorkspace({ runId, members, run, disabled = false, active = true, windowRevision = 0, onBackChange }: {
+  runId: string; members: Data[]; run: Run; disabled?: boolean; active?: boolean; windowRevision?: number; onBackChange?: (handler: (() => boolean) | null) => void;
 }) {
   const activeMembers = members.filter(member => !member.exited);
   const [expanded, setExpanded] = useState(false), [memberId, setMemberId] = useState(activeMembers[0]?.id || '');
@@ -18,33 +19,46 @@ export function TeamEvidenceWorkspace({ runId, members, run, disabled = false, o
   const [busy, setBusy] = useState(false), [acknowledged, setAcknowledged] = useState(false), [notice, setNotice] = useState(''), [error, setError] = useState('');
   const pageHandle = useRef(''), reviewHandle = useRef(''), generation = useRef(0), alive = useRef(true), entered = useRef(false);
   const consent = useRef(new TeamEvidenceConsent()), shownReview = useRef<Data | null>(null);
+  const nativeWindow = useRef({ active, revision: windowRevision });
+  const ownsNativeWindow = () => {
+    const view = bridge.getState().view as Data | undefined;
+    return view?.section === 'teams' && !view.taskId;
+  };
+  const release = (action: string, key: string, handle: string) => {
+    // Native navigation already closes retired material windows. Cleanup must
+    // not publish an old-window error into a newer task or team page.
+    if (handle && ownsNativeWindow()) void bridge.command(action, { [key]: handle }).catch(() => {});
+  };
   shownReview.current = review;
   const version = generation.current, confirmTicket = consent.current.capture();
   const closeReview = () => {
     const handle = reviewHandle.current; reviewHandle.current = ''; consent.current.clear(); shownReview.current = null;
     setReview(null); setAcknowledged(false);
-    if (handle) void run('teamEvidence.cancelReview', { reviewHandle: handle }).catch(() => {});
+    release('teamEvidence.cancelReview', 'reviewHandle', handle);
   };
   const closePage = () => {
     generation.current++; entered.current = false; closeReview(); const handle = pageHandle.current; pageHandle.current = '';
-    if (handle) void run('teamEvidence.close', { pageHandle: handle }).catch(() => {});
+    release('teamEvidence.close', 'pageHandle', handle);
     setPage(null); setFiles([]); setFileChoices({}); setProject(''); setDraft(emptyTeamEvidence()); setBusy(false);
   };
   const invoke = async (action: string, args: Data, accept?: (value: Data) => void) => {
     const ticket = version;
-    if (!alive.current || ticket !== generation.current || entered.current || disabled) return;
+    if (!alive.current || ticket !== generation.current || entered.current || disabled || !active || !ownsNativeWindow()) return;
+    const epoch = bridge.getDocumentEpoch(), revision = Number((bridge.getState().view as Data | undefined)?.resumeRevision || 0);
+    const current = () => alive.current && ticket === generation.current && ownsNativeWindow()
+      && epoch === bridge.getDocumentEpoch() && revision === Number((bridge.getState().view as Data | undefined)?.resumeRevision || 0);
     entered.current = true; setBusy(true); setError('');
     try {
       const result = await run(action, args);
-      if (alive.current && ticket === generation.current) { accept?.(result); return result; }
-      if (result?.pageHandle) void run('teamEvidence.close', { pageHandle: result.pageHandle }).catch(() => {});
-      if (result?.reviewHandle) void run('teamEvidence.cancelReview', { reviewHandle: result.reviewHandle }).catch(() => {});
-    } catch (failure) { if (alive.current && ticket === generation.current) setError(failure instanceof Error ? failure.message : String(failure)); }
+      if (current()) { accept?.(result); return result; }
+      if (result?.pageHandle) release('teamEvidence.close', 'pageHandle', result.pageHandle);
+      if (result?.reviewHandle) release('teamEvidence.cancelReview', 'reviewHandle', result.reviewHandle);
+    } catch (failure) { if (current()) setError(failure instanceof Error ? failure.message : String(failure)); }
     finally { if (ticket === generation.current) { entered.current = false; if (alive.current) setBusy(false); } }
   };
   const load = () => {
     if (entered.current || !memberId || disabled || version !== generation.current) return;
-    const previous = pageHandle.current; pageHandle.current = ''; if (previous) void run('teamEvidence.close', { pageHandle: previous }).catch(() => {});
+    const previous = pageHandle.current; pageHandle.current = ''; release('teamEvidence.close', 'pageHandle', previous);
     closeReview(); setPage(null); setFiles([]); setFileChoices({}); setProject(''); setDraft(emptyTeamEvidence());
     void invoke('teamEvidence.open', { runId, memberId }, value => { pageHandle.current = value.pageHandle; setPage(value); setNotice(''); });
   };
@@ -76,10 +90,19 @@ export function TeamEvidenceWorkspace({ runId, members, run, disabled = false, o
   const identities = activeMembers.map(member => [member.id, member.identityRevision, member.runner, member.model, member.memberModelSelection]);
   useEffect(() => { closePage(); setMemberId(activeMembers.some(member => member.id === memberId) ? memberId : activeMembers[0]?.id || ''); }, [runId, JSON.stringify(identities)]);
   useEffect(() => {
+    const previous = nativeWindow.current;
+    nativeWindow.current = { active, revision: windowRevision };
+    if (previous.active === active && previous.revision === windowRevision) return;
+    // A task overlay retires native material handles even though React keeps
+    // this workspace mounted. Returning never reuses or confirms that scope.
+    closePage(); setError('');
+    if (active && expanded) setNotice('已回到团队，请重新读取成员资料目录。未确认的选择没有保存。');
+  }, [active, windowRevision]);
+  useEffect(() => {
     alive.current = true;
     const hidden = () => { if (document.visibilityState !== 'visible') closePage(); };
     document.addEventListener('visibilitychange', hidden);
-    return () => { alive.current = false; generation.current++; const page = pageHandle.current, review = reviewHandle.current; pageHandle.current = ''; reviewHandle.current = ''; consent.current.clear(); if (review) void run('teamEvidence.cancelReview', { reviewHandle: review }).catch(() => {}); if (page) void run('teamEvidence.close', { pageHandle: page }).catch(() => {}); document.removeEventListener('visibilitychange', hidden); };
+    return () => { alive.current = false; generation.current++; const page = pageHandle.current, review = reviewHandle.current; pageHandle.current = ''; reviewHandle.current = ''; consent.current.clear(); release('teamEvidence.cancelReview', 'reviewHandle', review); release('teamEvidence.close', 'pageHandle', page); document.removeEventListener('visibilitychange', hidden); };
   }, []);
   useEffect(() => { onBackChange?.(() => { if (busy) return true; if (review) { closeReview(); return true; } if (expanded) { closePage(); setExpanded(false); return true; } return false; }); return () => onBackChange?.(null); }, [busy, review, expanded, onBackChange]);
   const catalogue = page?.catalogue || {};
@@ -90,7 +113,7 @@ export function TeamEvidenceWorkspace({ runId, members, run, disabled = false, o
       <p className="pw-field-hint">共同目标与发给团队的消息沿原协作共享。个人记忆、原文、技能、附件与项目文件在这里逐项选择，再确认给所列成员。</p>
       <section className="pw-team-evidence-recipient" aria-label="资料接收成员"><SelectField label="核对哪名成员" value={memberId} options={activeMembers.map(member => ({ id: member.id, label: member.name || member.id }))} isDisabled={busy || disabled} onChange={value => { closePage(); setMemberId(value); }} />
       <Button variant="secondary" disabled={busy || disabled || !memberId} onClick={load}>{page ? '重新读取原目录与范围' : '读取原成员资料目录'}</Button></section>
-      {busy && <p className="pw-muted" role="status">正在核对原目录与范围…</p>}{error && <p className="pw-secondary-error" role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
+      {busy && <p className="pw-muted" role="status">正在核对原目录与范围…</p>}{error && !review && <p className="pw-secondary-error" role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
       {page && <>
         <section className="pw-team-evidence-current-state" aria-label="当前资料范围"><header className="pw-collaboration-group-heading"><h3>当前范围</h3><span>修订 {page.current?.revision ?? '未知'}</span></header><p>{page.current?.state === 'active' ? '已分享给这名成员' : page.current?.state === 'revoked' ? '后续读取已撤回' : '尚未分享资料'}</p>
         <Accordion className="pw-team-evidence-current"><AccordionItem title="已分享的准确版本与来源"><EvidenceScope scope={page.current} />{page.current?.state === 'active' && <div className="pw-form-actions"><Button variant="ghost" disabled={busy || disabled} onClick={() => { closeReview(); void invoke('teamEvidence.renew', { pageHandle: page.pageHandle }, showReview); }}>续审相同材料与检查点</Button><Button variant="ghost" disabled={busy || disabled} onClick={() => { closeReview(); void invoke('teamEvidence.revoke.review', { pageHandle: page.pageHandle }, showReview); }}>核对撤回此成员资料</Button></div>}</AccordionItem></Accordion></section>
@@ -124,6 +147,7 @@ export function TeamEvidenceWorkspace({ runId, members, run, disabled = false, o
       </>}
     </div>}
     <SettingsDialog isOpen={!!review} onClose={() => { if (!busy) closeReview(); }} title={review?.operation === 'revoke' ? '撤回后续资料读取' : review?.scope === 'current_members' ? '核对本次当前成员与同一资料范围' : '核对本成员读取范围'}><div className="pw-collaboration-dialog" data-collaboration-kind="TeamEvidenceWorkspace">
+      {error && <p className="pw-secondary-error" role="alert">{error}</p>}
       {review?.scope === 'current_members' ? <>{rows(review.review?.members).map(target => <section key={target.memberId}><h3>{members.find(member => member.id === target.memberId)?.name || target.memberId}</h3><EvidenceScope scope={target.review} /></section>)}<p>仅这次列出的成员收到同一显选范围，未来新增身份不会继承。</p></> : <><h3>{members.find(member => member.id === memberId)?.name || memberId}</h3><EvidenceScope scope={review?.review} /></>}
       <p>{review?.operation === 'revoke' ? '撤回后续读取与答案接纳资格。已经提供给模型的历史内容如实保留。' : review?.review?.reviewMode === 'renew_identical_materials' ? '重新核对相同材料，保留原研究检查点与已用次数；旧票据失效，没有自动继续。' : '只分享所示准确资料，不增加写入、执行或模型与工具预算；空集合不会回退为默认私人范围。'}</p>
       <CheckboxField isSelected={acknowledged} onChange={acknowledge} isDisabled={busy}>我确认这次所列成员与准确资料范围</CheckboxField>
@@ -145,3 +169,4 @@ function EvidenceScope({ scope }: { scope: Data | null | undefined }) {
     {scope.expiresAt && <p>有效至 {new Date(scope.expiresAt).toLocaleString('zh-CN')}</p>}
   </div>;
 }
+

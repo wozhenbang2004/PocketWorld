@@ -424,7 +424,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
           })}
         </Accordion>
       </section>
-      <div data-team-section="materials" tabIndex={-1}><TeamEvidenceWorkspace key={current.id} runId={current.id} members={members} run={run} disabled={!canMutate} onBackChange={handler => { materialBack.current = handler; }} /></div>
+      <div data-team-section="materials" tabIndex={-1}><TeamEvidenceWorkspace key={current.id} runId={current.id} members={members} run={run} disabled={!canMutate} active={workspaceActive} windowRevision={Number(state.webWorkspaceResumeRevision || 0)} onBackChange={handler => { materialBack.current = handler; }} /></div>
       {!!workItems.length && <section className="pw-team-overview" aria-label="这次协作的工作项">
         <h3 className="pw-team-section-title">工作项 <span>{workItems.length}</span></h3>
         <Accordion key={`${current.id}:items`} variant="divided" className="pw-team-disclosures" allowsMultipleExpanded expandedKeys={new Set(expandedItems[current.id] || [])}
@@ -506,4 +506,5 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
     </div></SettingsDialog>
   </section>;
 }
+
 
