@@ -2024,6 +2024,10 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         quickPanelVoiceAuthority(session).check()
         check(inputId == voiceInput.snapshot().optString("inputId") && voiceInput.canReview(session.voiceTarget(chatViewEpoch.toLong()))) { "请先核对本次最终听写文字" }
         require(text.isNotBlank() && text.length <= 4000) { "请核对1至4000字的听写文字" }
+        val originalDraft = session.snapshot()
+        val originalNote = originalDraft.getString("note")
+        val appendLimit = (originalDraft.getInt("draftLimit") - originalNote.length - if (originalNote.isEmpty()) 0 else 1).coerceAtLeast(0)
+        require(text.length <= appendLimit) { "原草稿剩余容量只够追加${appendLimit}字，请缩短本次文字；尚未写入" }
         quickPanelVoice = JSONObject(quickPanelVoice!!.toString()).put("saving", true).put("saveAttempted", true)
         io.execute {
             val saved = runCatching { session.appendReviewed(text) }

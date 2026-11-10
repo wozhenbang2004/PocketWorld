@@ -13,6 +13,8 @@ export function QuickPanelVoiceDraft({ handoff, input, run }: { handoff: Data; i
   const saved = handoff.receipt?.saved === true;
   const recording = same && input.active === true;
   const stopping = recording && input.phase === 'stopping';
+  const originalNote = String(handoff.note || '');
+  const appendLimit = Math.max(0, Math.min(4000, Number(handoff.draftLimit ?? 8192) - originalNote.length - (originalNote ? 1 : 0)));
   const identity = JSON.stringify([handoff.handoffId, input.inputId]);
   const documentEpoch = bridge.getDocumentEpoch();
   const current = useRef(identity), alive = useRef(true), generation = useRef(0), entered = useRef(false), saveEntered = useRef(false), awaiting = useRef(false);
@@ -75,7 +77,7 @@ export function QuickPanelVoiceDraft({ handoff, input, run }: { handoff: Data; i
     if (!alive.current || current.current !== identity || bridge.getDocumentEpoch() !== documentEpoch || entered.current || currentPolicy.current.busy) return;
     if (name === 'quickVoice.close' && awaiting.current && lastAction.current === name) return;
     if (name !== 'quickVoice.close' && (currentPolicy.current.locked || awaiting.current)) return;
-    if (name === 'quickVoice.save' && (!currentPolicy.current.final || saveEntered.current || !text.trim() || text.length > 4000)) return;
+    if (name === 'quickVoice.save' && (!currentPolicy.current.final || saveEntered.current || !text.trim() || text.length > appendLimit)) return;
     if (name === 'voice.stop' && (!currentPolicy.current.recording || currentPolicy.current.stopping)) return;
     if (name === 'quickVoice.start' && (currentPolicy.current.recording || currentPolicy.current.final || currentPolicy.current.otherInput)) return;
     if (name === 'quickVoice.save') { saveEntered.current = true; setAttempted(true); }
@@ -145,6 +147,7 @@ export function QuickPanelVoiceDraft({ handoff, input, run }: { handoff: Data; i
           {!same && otherInput && <p className="pw-error" role="alert">另一份听写尚未处理，不能从这里开始或停止它。</p>}
           {resourceUnknown && <p className="pw-error" role="alert">音频资源释放尚未确认，不能再次录音或追加。请核对系统采集状态。</p>}
           {needsReview && <TextAreaField label="本次最终文字，可修改" value={text} onChange={value => { if (!locked && value.length <= 4000) setText(value); }} isDisabled={locked} maxLength={4000} rows={4} autoResize maxRows={8} resize="none" />}
+          {!saveAttempted && final && text.length > appendLimit && <p className="pw-error" role="alert">{appendLimit > 0 ? `原草稿剩余容量只够追加${appendLimit}字；请缩短本次文字后再保存。尚未追加，可以继续编辑。` : '原草稿已满，尚未追加。请保留本次文字，回原浮层缩短原说明后再补充。'}</p>}
           {saveAttempted && !busy && <p className="pw-voice-policy">请回原浮层核对是否已追加；这里不会重复保存。</p>}
           {!final && !recording && !handoff.closed && !saveAttempted && !resourceUnknown && !otherInput && <p className="pw-voice-policy">使用设备系统听写，可能联网；权限和识别结果以系统回执为准。</p>}
           {waiting && !busy && !saveAttempted && <p className="pw-voice-policy" role="status">已提交本次操作，等待系统状态更新；没有重发。</p>}
@@ -156,7 +159,7 @@ export function QuickPanelVoiceDraft({ handoff, input, run }: { handoff: Data; i
         <div className="pw-voice-draft-actions">
           <Button variant="ghost" disabled={busy} onClick={close}>{saved ? '完成' : '关闭听写'}</Button>
           {!saved && !final && !handoff.closed && !saveAttempted && !otherInput && <Button disabled={locked || stopping} onClick={() => { void action(recording ? 'voice.stop' : 'quickVoice.start', recording ? {} : { handoffId: handoff.handoffId }); }}>{stopping ? '等待音频释放' : recording ? '结束本次听写' : '开始系统听写'}</Button>}
-          {!saved && final && !saveAttempted && <Button disabled={locked || !text.trim()} onClick={() => { void action('quickVoice.save', { handoffId: handoff.handoffId, inputId: input.inputId, text }); }}>追加到原浮层草稿</Button>}
+          {!saved && final && !saveAttempted && <Button disabled={locked || !text.trim() || text.length > appendLimit} onClick={() => { void action('quickVoice.save', { handoffId: handoff.handoffId, inputId: input.inputId, text }); }}>追加到原浮层草稿</Button>}
         </div>
       </>}
       {error && <p className="pw-error" role="alert">{error}</p>}
