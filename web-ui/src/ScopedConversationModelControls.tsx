@@ -17,7 +17,7 @@ const reasoningCandidates: Record<string, string[]> = {
   anthropic: ['low', 'medium', 'high', 'xhigh', 'max'],
   gemini: ['minimal', 'low', 'medium', 'high'],
 };
-const effortNames: Record<string, string> = { none: '关闭', minimal: '最小', low: '低', medium: '中', high: '高', xhigh: '极高', max: '最高' };
+const effortNames: Record<string, string> = { enabled: '开启', disabled: '关闭', none: '关闭', minimal: '最小', low: '低', medium: '中', high: '高', xhigh: '极高', max: '最高' };
 const canonical = (value: any): string => JSON.stringify(value && typeof value === 'object' ? Array.isArray(value) ? value.map(item => JSON.parse(canonical(item))) : Object.fromEntries(Object.keys(value).sort().map(key => [key, JSON.parse(canonical(value[key]))])) : value ?? null);
 function reviewCurrent(value: Row, state: Row): boolean {
   const preference = record(state.conversationModel), target = record(preference.target), native = record(value.nativeSelection);
@@ -111,8 +111,11 @@ export function ScopedConversationReasoningPanel({ state, can, act, disabled = f
       if (!selected) throw new Error('原模型参数尚未读取。');
       const provider = String(value.nativeSelection?.provider || ''), modelId = String(value.nativeSelection?.model || '');
       const choices = reasoningChoices(record(value.facts), provider, selected, modelId, Number(value.nativeSelection?.maxOutputTokens));
-      const fact = record(record(value.facts).REASONING_LEVELS), available = provider === 'gemini' && geminiBudgetModel(modelId)
+      const fact = record(record(value.facts).REASONING_LEVELS);
+      const protocolLevels = provider === 'gemini' && geminiBudgetModel(modelId)
         ? ['low', 'medium', 'high'] : reasoningCandidates[provider] || [];
+      const available = [...protocolLevels, ...((Array.isArray(fact.value) ? fact.value : []) as string[])
+        .filter(level => ['enabled', 'disabled'].includes(level) && !protocolLevels.includes(level))];
       setDeclaredLevels(fact.known === true && Array.isArray(fact.value)
         ? fact.value.filter((level: any) => available.includes(level)) : ['low', 'medium', 'high'].filter(level => available.includes(level)));
       setEditingLevels(false);
@@ -157,8 +160,11 @@ export function ScopedConversationReasoningPanel({ state, can, act, disabled = f
     finally { pending.current = false; latest.current.onSelectionPending(false); if (alive.current && request === reads.current) setSaving(false); }
   };
   const manualProvider = String(review?.nativeSelection?.provider || '');
-  const availableLevels = manualProvider === 'gemini' && geminiBudgetModel(String(review?.nativeSelection?.model || ''))
+  const manuallyDeclared = record(record(review?.facts).REASONING_LEVELS);
+  const protocolLevels = manualProvider === 'gemini' && geminiBudgetModel(String(review?.nativeSelection?.model || ''))
     ? ['low', 'medium', 'high'] : reasoningCandidates[manualProvider] || [];
+  const availableLevels = [...protocolLevels, ...((Array.isArray(manuallyDeclared.value) ? manuallyDeclared.value : []) as string[])
+    .filter(level => ['enabled', 'disabled'].includes(level) && !protocolLevels.includes(level))];
   const mayDeclare = !!review && !review.restriction && availableLevels.length > 0 &&
     Number.isSafeInteger(review.reasoningOwnerRevision) && review.reasoningOwnerRevision >= 0 &&
     review.nativeSelection?.modelRoute === 'api_key' && can('models.conversation.reasoning.declare');

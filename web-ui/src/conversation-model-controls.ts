@@ -25,12 +25,13 @@ export function nativeReasoning(value: any): ReasoningValue | null {
   const item = record(value), mode = text(item.mode), level = text(item.level), budget = item.budgetTokens;
   if (typeof budget !== 'number' || !Number.isSafeInteger(budget) || budget < -1 || budget > 2_147_483_647) return null;
   if (mode === 'DEFAULT') return level === '' && budget === 0 ? { mode, level, budgetTokens: budget } : null;
+  if (mode === 'OPENAI_SWITCH' || mode === 'ANTHROPIC_SWITCH') return ['enabled', 'disabled'].includes(level) && budget === 0 ? { mode, level, budgetTokens: budget } : null;
   if (['OPENAI_EFFORT', 'ANTHROPIC_ADAPTIVE', 'GEMINI_LEVEL'].includes(mode)) return /^[A-Za-z0-9_-]{1,64}$/.test(level) && budget === 0 ? { mode, level, budgetTokens: budget } : null;
   if (mode === 'ANTHROPIC_BUDGET' || mode === 'GEMINI_BUDGET') return !level && budget >= (mode === 'ANTHROPIC_BUDGET' ? 1024 : -1) ? { mode, level, budgetTokens: budget } : null;
   return null;
 }
 const defaultReasoning: ReasoningValue = { mode: 'DEFAULT', level: '', budgetTokens: 0 };
-const levelLabels: Record<string, string> = { none: '关闭', minimal: '最小', low: '低', medium: '中', high: '高', xhigh: '极高', max: '最高' };
+const levelLabels: Record<string, string> = { enabled: '开启', disabled: '关闭', none: '关闭', minimal: '最小', low: '低', medium: '中', high: '高', xhigh: '极高', max: '最高' };
 export function reasoningLabel(value: ReasoningValue | null, compact = false): string {
   if (!value) return '';
   if (value.mode === 'DEFAULT') return '自动';
@@ -95,7 +96,12 @@ export function reasoningChoices(facts: ModelControlRecord, provider: string, cu
         const value: ReasoningValue = { mode: 'GEMINI_BUDGET', level: '', budgetTokens: tokens };
         choices.push({ id: reasoningId(value), label: levelLabels[level] || level, detail: `预算 ${tokens.toLocaleString()} tokens`, value });
       } else {
-        const value: ReasoningValue = { mode, level: String(level), budgetTokens: 0 };
+        const modeForLevel = level === 'enabled' || level === 'disabled'
+          ? provider === 'openai_chat' ? 'OPENAI_SWITCH'
+            : provider === 'anthropic' ? 'ANTHROPIC_SWITCH' : ''
+          : mode;
+        if (!modeForLevel) continue;
+        const value: ReasoningValue = { mode: modeForLevel, level: String(level), budgetTokens: 0 };
         choices.push({ id: reasoningId(value), label: levelLabels[String(level)] || String(level), detail: levelLabels[String(level)] ? String(level) : undefined, value });
       }
     }
