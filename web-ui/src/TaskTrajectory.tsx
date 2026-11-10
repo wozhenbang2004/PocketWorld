@@ -9,6 +9,7 @@ import { TraceWaterfall } from './library/adapted/trace-waterfall';
 import { TraceOverview } from './library/adapted/trace-overview';
 import { TraceEventList } from './library/adapted/trace-event-list';
 import { ExecutionSteps } from './library/execution';
+import { useSurfaceEnter } from './library/surface-motion';
 import { MarkdownBody } from './library/MarkdownBody';
 import { traceSteps } from './trace-stepper';
 import { durationLabel, executionTraceDetail, executionTracePage, mergeTraceNodes, nodeDurationLabel, tokenLabel, traceBody, traceBounds, traceCount,
@@ -298,10 +299,12 @@ export function TaskTrajectory({ task, active, canRead, registerTransientBack }:
   const [selectedRun, setSelectedRun] = useState(''), [filter, setFilter] = useState<TraceFilter>('all'), [query, setQuery] = useState('');
   const [viewMode, setViewMode] = useState<'events' | 'intervals' | 'steps'>('events'), [overviewMode, setOverviewMode] = useState<'order' | 'duration'>('order');
   const [intervalMode, setIntervalMode] = useState<'timeline' | 'tree'>('timeline'), [folded, setFolded] = useState<Set<string>>(new Set());
+  const [stepDisclosure, setStepDisclosure] = useState<{scope: string; values: Map<string, boolean>}>({scope: '', values: new Map()});
+  const currentView = useRef<HTMLDivElement>(null);
   const [selection, setSelection] = useState<Selection | null>(null), [highlighted, setHighlighted] = useState<string | null>(null), [locateTicket, setLocateTicket] = useState(0);
   const readWindow = useTraceWindow(task, selectedRun, active, canRead, documentEpoch), page = readWindow.view?.page;
   const identity = taskHistoryIdentity(task), complete = readWindow.view?.complete === true;
-  useEffect(() => { setSelectedRun(''); setSelection(null); setFolded(new Set()); setQuery(''); setFilter('all'); setHighlighted(null); }, [identity, documentEpoch]);
+  useEffect(() => { setSelectedRun(''); setSelection(null); setFolded(new Set()); setStepDisclosure({scope: '', values: new Map()}); setQuery(''); setFilter('all'); setHighlighted(null); }, [identity, documentEpoch]);
   useEffect(() => { if (!active) setSelection(null); }, [active]);
   useEffect(() => { if (page) setSelection(previous => previous && (previous.runId !== page.runId || previous.epoch !== page.epoch) ? null : previous); }, [page?.runId, page?.epoch]);
   const close = useCallback(() => setSelection(null), []), endHighlight = useCallback(() => setHighlighted(null), []);
@@ -313,12 +316,29 @@ export function TaskTrajectory({ task, active, canRead, registerTransientBack }:
   }, [active, selected, close, registerTransientBack]);
   // Discard an expired selection once the full replacement snapshot is known.
   useEffect(() => { if (selected && complete && !page?.nodes.some(node => node.id === selected.node.id)) close(); }, [selected, complete, page, close]);
-  const chooseRun = (key: string) => { if (key === selectedRun) return; setSelectedRun(key); setSelection(null); setHighlighted(null); setFolded(new Set()); };
+  const chooseRun = (key: string) => { if (key === selectedRun) return; setSelectedRun(key); setSelection(null); setHighlighted(null); setFolded(new Set()); setStepDisclosure({scope: '', values: new Map()}); };
   const toggle = (id: string) => setFolded(current => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   const nodes = page?.nodes || [];
   const events = useMemo(() => traceEvents(nodes), [page?.nodes]);
   const filteredEvents = useMemo(() => events.filter(row => traceEventMatches(row, filter, query)), [events, filter, query]);
-  const steps = useMemo(() => viewMode === 'steps' ? traceSteps(nodes, folded, filter, query) : [], [page?.nodes, folded, filter, query, viewMode]);
+  const stepScope = `${identity}:${page?.runId || ''}:${page?.epoch ?? ''}:${documentEpoch}`;
+  const stepFolded = useMemo(() => {
+    const overrides = stepDisclosure.scope === stepScope ? stepDisclosure.values : new Map<string, boolean>();
+    const byId = new Map(nodes.map(node => [node.id, node])), activeBranches = new Set<string>();
+    for (const node of nodes) {
+      // Completed branches settle into a summary. Running, unresolved and failed
+      // descendants keep their real ancestor chain visible until user choice.
+      if (!traceInProgress(node.status) && !traceFailed(node) && !node.effectPending &&
+          !['UNKNOWN', 'NEEDS_CONFIRMATION', 'AWAITING_USER'].includes(node.status.toUpperCase())) continue;
+      let current: TraceNode | undefined = node;
+      const seen = new Set<string>();
+      while (current && !seen.has(current.id)) { seen.add(current.id); activeBranches.add(current.id); current = current.parentId ? byId.get(current.parentId) : undefined; }
+    }
+    return new Set(nodes.filter(node => overrides.has(node.id) ? !overrides.get(node.id) : !activeBranches.has(node.id)).map(node => node.id));
+  }, [page?.nodes, stepDisclosure, stepScope]);
+  const toggleStep = (id: string) => setStepDisclosure(current => ({scope: stepScope, values: new Map(current.scope === stepScope ? current.values : []).set(id, stepFolded.has(id))}));
+  const steps = useMemo(() => viewMode === 'steps' ? traceSteps(nodes, stepFolded, filter, query) : [], [page?.nodes, stepFolded, filter, query, viewMode]);
+  useSurfaceEnter(currentView, `${identity}:${page?.runId || ''}:${page?.epoch ?? ''}:${viewMode}:${intervalMode}`, {selector: '', active: active && readWindow.enabled && !!page});
   const stats = traceSummary(nodes), filtering = filter !== 'all' || query.trim() !== '';
   const select = (node: TraceNode) => { if (page) setSelection({ node, taskId: task.id, runId: page.runId, epoch: page.epoch, documentEpoch }); };
   const locate = (node: TraceNode) => { setQuery(''); setFilter('all'); setViewMode('events'); setHighlighted(node.id); setLocateTicket(value => value + 1); };
@@ -346,14 +366,14 @@ export function TaskTrajectory({ task, active, canRead, registerTransientBack }:
       </div>
       <LiquidTabs className="pw-trace-filters" variant="minimal" tabs={['全部', '模型', '工具', '异常']} value={filters.indexOf(filter)} onValueChange={index => setFilter(filters[index])} label="轨迹筛选"/>
       {page.limited && <p className="pw-trace-note pw-trace-read-limit">原记录有部分内容未包含；即使已读到分页末尾，仍不是完整记录。</p>}
-      {viewMode === 'events' ? filteredEvents.length ? <TraceEventList rows={filteredEvents} selectedId={selected?.node.id || null} highlightedId={highlighted} locateTicket={locateTicket} onHighlightEnd={endHighlight} onSelect={select} complete={complete}/>
+      <div ref={currentView} className="pw-trace-current-view">{viewMode === 'events' ? filteredEvents.length ? <TraceEventList rows={filteredEvents} selectedId={selected?.node.id || null} highlightedId={highlighted} locateTicket={locateTicket} onHighlightEnd={endHighlight} onSelect={select} complete={complete}/>
         : <div className="pw-trace-empty"><p>{filtering ? '已读取记录中没有匹配项。' : readWindow.live ? '正在等待原执行产生轨迹…' : '这次执行没有已保存的调用轨迹。'}</p>{filtering && <Button variant="ghost" onClick={() => { setFilter('all'); setQuery(''); }}>清除筛选</Button>}</div>
         : viewMode === 'intervals' ? <><div className="pw-trace-interval-controls"><p className="pw-trace-note">原始父子关系和实际执行区间</p><Button variant="ghost" onClick={() => setIntervalMode(intervalMode === 'timeline' ? 'tree' : 'timeline')}>{intervalMode === 'timeline' ? '调用树' : '时间轴'}</Button></div>
           <TraceWaterfall rows={traceRows(nodes, folded, filter, query)} bounds={traceBounds(nodes)} mode={intervalMode} selectedId={selected?.node.id || null} filtering={filtering} onToggle={toggle} onSelect={select}/></>
           : <><p className="pw-trace-note">按原记录的父子层级展开；连线不代表执行依赖或完成进度。</p>
-            {steps.length ? <ExecutionSteps steps={steps} scope={`${identity}:${page.runId}:${page.epoch}:${documentEpoch}`} active={active && readWindow.enabled}
-              onSelect={id => { const node = nodes.find(value => value.id === id); if (node) select(node); }} onToggle={filtering ? undefined : toggle}/>
-              : <div className="pw-trace-empty"><p>{filtering ? '已读取记录中没有匹配项。' : readWindow.live ? '正在等待原执行产生轨迹…' : '这次执行没有已保存的调用轨迹。'}</p>{filtering && <Button variant="ghost" onClick={() => { setFilter('all'); setQuery(''); }}>清除筛选</Button>}</div>}</>}
+            {steps.length ? <ExecutionSteps steps={steps} scope={`${identity}:${page.runId}:${page.epoch}:${documentEpoch}`} active={active && readWindow.enabled && !readWindow.view?.backfilling}
+              onSelect={id => { const node = nodes.find(value => value.id === id); if (node) select(node); }} onToggle={filtering ? undefined : toggleStep}/>
+              : <div className="pw-trace-empty"><p>{filtering ? '已读取记录中没有匹配项。' : readWindow.live ? '正在等待原执行产生轨迹…' : '这次执行没有已保存的调用轨迹。'}</p>{filtering && <Button variant="ghost" onClick={() => { setFilter('all'); setQuery(''); }}>清除筛选</Button>}</div>}</>}</div>
       <p className="pw-trace-note pw-trace-timing-note">轮次来自原执行记录；总览的累计耗时包含并行重叠。缺失的计时、用量与正文保持可见。</p>
     </>}
     {!page && canRead && !readWindow.busy && !readWindow.error && <p className="pw-trace-note">打开此页后读取原任务轨迹。</p>}

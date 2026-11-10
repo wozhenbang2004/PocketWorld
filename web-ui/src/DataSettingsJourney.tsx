@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { IconArrowLeft, IconChevronRight } from './icons';
 import { Button } from './forms-library';
 import type { ButtonProps } from './forms-library/boardui/components/base/buttons/button';
+import { useSurfaceEnter } from './library/surface-motion';
 
 /** Presentation-only navigation over the original native data workspace.
  * BoardUI settings rows keep operation discovery separate from its review.
@@ -12,6 +13,7 @@ export function useDataSettingsJourney(initial = 'list') {
   const positions = useRef(new Map<string, number>());
   const returnTo = useRef('');
   const previous = useRef(initial);
+  useSurfaceEnter(root, view, { selector: '', depth: view === 'list' ? 0 : 1 });
   const open = (next: string) => {
     const scroller = root.current?.closest('.pw-secondary-scroll');
     positions.current.set(view, scroller?.scrollTop || 0);

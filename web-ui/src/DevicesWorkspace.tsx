@@ -5,6 +5,8 @@ import { DeviceRequestScope, deviceConnectionLabel, deviceGrantInput, deviceHist
 import { IconAdd, IconArrowLeft, IconChevronRight, IconMonitor, IconPhone, IconRefresh, IconShieldCheck } from './icons';
 import { DesktopViewer } from './DesktopViewer';
 import { desktopScopes } from './desktop-viewer';
+import { useSurfaceEnter } from './library/surface-motion';
+import { MotionFeedback, useCollectionMotion } from './library/journey-motion';
 import './devices-reading.css';
 
 type Run = (action: string, args?: Data) => Promise<any>;
@@ -155,6 +157,12 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     { id: 'other', title: '未连接或待核对', peers: visiblePeers.filter(peer => !peer.revoked && peer.connection?.state !== 'ONLINE') },
     { id: 'revoked', title: '已撤销信任', peers: visiblePeers.filter(peer => peer.revoked) },
   ];
+  const deviceView = desktopOpen ? 'desktop' : peerId ? `detail:${peerId}` : 'list';
+  // The media viewport keeps its real geometry; only directory/detail surfaces move.
+  useSurfaceEnter(readingRoot, deviceView, { selector: '', depth: desktopOpen ? 2 : peerId ? 1 : 0, active: !desktopOpen && !!snapshot });
+  useCollectionMotion(readingRoot, JSON.stringify([state.webWorkspaceResumeRevision, peerId, query.trim()]),
+    JSON.stringify([peerSections.map(section => [section.id, section.peers.map(row => row.deviceId)]), pairings.map(row => [row.candidateId || row.inviteId, row.state]), tasks.slice(0, 40).map(task => [task.id, task.status])]),
+    { active: !desktopOpen && !!snapshot });
   const receiverLabel = local.receiverEnabled === true ? local.listenerReady === true ? '本机接收通道已启动' : '接收已启用，通道仍待就绪' : local.receiverEnabled === false ? '设备接收未启用' : '接收状态尚未确认';
   const taskLabels: Record<string, string> = { queued: '等待执行', preparing: '准备中', running: '执行中', pausing: '正在暂停', paused: '已暂停', stopping: '正在停止', verifying: '正在核对', needs_confirmation: '成果待确认', awaiting_user: '待你处理', waiting_user: '待你处理', waiting_approval: '等待授权', awaiting_approval: '等待授权', waiting_permission: '等待授权', interrupted: '已中断', completed: '已完成', failed: '未完成', cancelled: '已停止', canceled: '已停止', stopped: '已停止', reconciling: '结果待核对', reconciliation_required: '结果待核对', unknown: '结果待核对' };
 
@@ -173,15 +181,15 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
       {desktopOpen && peer && <DesktopViewer key={peer.deviceId} peer={peer} supported={supported} run={run} onClose={() => setDesktopOpen(false)} />}
       {desktopOpen && !peer && <p role="alert">设备状态已变化。<Button variant="secondary" onClick={() => setDesktopOpen(false)}>返回设备</Button></p>}
       {!desktopOpen && <>
-        {error && <p className="pw-device-feedback" role="alert">{error}</p>}
-        {notice && <p className="pw-device-feedback" role="status">{notice}</p>}
-        {busy && <p role="status" className="pw-device-loading">正在读取原设备回执…</p>}
+        {error && <MotionFeedback identity={error} className="pw-device-feedback" role="alert">{error}</MotionFeedback>}
+        {notice && <MotionFeedback identity={notice} className="pw-device-feedback" role="status">{notice}</MotionFeedback>}
+        {busy && <MotionFeedback identity="reading" role="status" className="pw-device-loading">正在读取原设备回执…</MotionFeedback>}
         {!snapshot && !busy && <div className="pw-device-empty"><h3>尚未读取设备状态</h3><p>读取后查看已配对设备与连接状态。</p><Button variant="secondary" onClick={refresh}>读取设备状态</Button></div>}
         {snapshot && !peerId && <>
           {pairings.length > 0 && <section className="pw-device-section" aria-label="等待核对的原配对">
             <header className="pw-device-section-heading"><h3>配对待确认</h3><span>{pairings.length} 项</span></header>
             <div className="pw-device-attention">
-              {pairings.map(candidate => <article className="pw-device-pairing" key={candidate.candidateId || candidate.inviteId}>
+              {pairings.map(candidate => <article className="pw-device-pairing" key={candidate.candidateId || candidate.inviteId} data-motion-key={`pairing:${candidate.candidateId || candidate.inviteId}`}>
                 <div><h4>{candidate.label || '原设备配对'}</h4><p>{candidate.state === 'waiting_remote_confirmation' ? '等待另一台设备确认' : candidate.state === 'confirmed_for_mtls' ? '身份已确认，等待完成握手' : candidate.state === 'paired' ? '配对回执已产生，请核对当前信任' : '等待本机核对'}</p></div>
                 <Button variant="secondary" disabled={busy || candidate.advanceAvailable !== true && candidate.reviewAvailable !== true && !['', 'pending_owner_confirmation'].includes(candidate.state || '')} onClick={() => { void invoke(candidate.advanceAvailable ? 'devices.advancePairing' : 'devices.reviewPairing', { candidateId: candidate.candidateId || candidate.inviteId }, candidate.advanceAvailable ? () => setNotice('已查询原配对状态，未重新发起配对。') : acceptReview); }}>{candidate.advanceAvailable ? '查询原配对进度' : '审阅范围与双端身份'}</Button>
               </article>)}
@@ -197,7 +205,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
             </header>
             {(peers.length > 5 || query) && <SearchField className="pw-device-search" fieldClassName="pw-collaboration-search" shape="rounded" aria-label="搜索已配对设备" placeholder="搜索名称或设备" value={query} onChange={setQuery} />}
             {peers.length ? <div className="pw-device-directory">{peerSections.filter(section => section.peers.length > 0).map(section => <section className="pw-collaboration-group" key={section.id} aria-label={section.title}><header className="pw-collaboration-group-heading"><h3>{section.title}</h3><span>{section.peers.length} 台</span></header><div className="pw-device-list">
-              {section.peers.map(row => <Button key={row.deviceId} variant="ghost" className="pw-device-row" leadingIcon={/android|ios|phone/i.test(row.platform || '') ? IconPhone : IconMonitor} trailingIcon={IconChevronRight} disabled={busy} aria-label={`查看 ${name(row)} 的设备与授权`} onClick={() => { rememberReadingPosition('list'); setPeerId(row.deviceId); setError(''); }}>
+              {section.peers.map(row => <Button key={row.deviceId} data-motion-key={`peer:${row.deviceId}`} variant="ghost" className="pw-device-row" leadingIcon={/android|ios|phone/i.test(row.platform || '') ? IconPhone : IconMonitor} trailingIcon={IconChevronRight} disabled={busy} aria-label={`查看 ${name(row)} 的设备与授权`} onClick={() => { rememberReadingPosition('list'); setPeerId(row.deviceId); setError(''); }}>
                 <span className="pw-device-row-copy"><span className="pw-device-row-name">{name(row)}</span><span className="pw-device-row-status">{deviceConnectionLabel(row)}</span><small>{row.platform || '已配对设备'} · {deviceTaskRows(state.tasks, snapshot, row.deviceId).length} 项关联任务</small></span>
               </Button>)}
             </div></section>)}{query && !visiblePeers.length && <div className="pw-device-empty"><h3>没有匹配的设备</h3><p>换个名称搜索，或查看全部已配对设备。</p><Button variant="secondary" onClick={() => setQuery('')}>清除搜索</Button></div>}</div> : <div className="pw-device-empty">
@@ -227,7 +235,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
         {peerId && !peer && snapshot && <p className="pw-device-feedback" role="alert">这台设备不在当前读取页。保留原身份，请返回后刷新核对。</p>}
         {peer && <>
           <section className="pw-device-connection" aria-label="这台设备的连接状态">
-            <div className="pw-device-connection-heading"><IconMonitor size={20} aria-hidden="true" /><h3>{deviceConnectionLabel(peer)}</h3></div>
+            <MotionFeedback identity={JSON.stringify([peer.deviceId, peer.connection?.state, peer.revoked])} initial={false} className="pw-device-connection-heading" role="status"><IconMonitor size={20} aria-hidden="true" /><h3>{deviceConnectionLabel(peer)}</h3></MotionFeedback>
             <p>{peer.connection?.state === 'ONLINE' ? peer.connection?.path === 'RELAY_WSS' ? '当前通过出站 WSS 中继连接。' : peer.connection?.path === 'DIRECT_TLS' ? '当前通过直连 TLS 通道连接。' : '已连接，传输路径仍待核对。' : '未确认的操作仍需查看执行结果，离线不代表停止。'}</p>
             {peer.connection?.unconfirmedTransportWrite === true && <p className="pw-device-inline-notice">有操作结果待确认，请查看原执行结果。</p>}
             {peer.revoked && <p>{peer.revocation?.peerAcknowledged === true ? '本机信任已撤销，对端已回执。' : '本机信任已撤销，对端仍未确认。'}</p>}
@@ -261,7 +269,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
             {tasks.slice(0, 40).map(task => {
               const controls = snapshot?.taskActions?.[task.id] || {}, request = controls.resumeRequest;
               const details = taskDetails[task.id], links = rows(details?.history?.links);
-              return <article className="pw-device-task" key={task.id}>
+              return <article className="pw-device-task" key={task.id} data-motion-key={`task:${task.id}`}>
                 <header><h4>{task.goal || '原设备任务'}</h4><span>{taskLabels[task.status] || task.status || '状态待读取'}</span></header>
                 {task.summary && <p className="pw-device-task-summary">{task.summary}</p>}
                 <div className="pw-form-actions">

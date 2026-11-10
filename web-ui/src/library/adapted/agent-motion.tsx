@@ -2,27 +2,49 @@
 // Product handoff routes retain measured endpoints; a narrow layout uses an
 // outside gutter so a connection never runs through another agent card.
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import {useMotionAllowed} from '../core';
 
 export const motionEase='cubic-bezier(0.32, 0.72, 0.24, 1)';
-type Box={left:number;top:number;width:number;height:number};
-const box=(el:Element):Box=>{const r=el.getBoundingClientRect();return{left:r.left,top:r.top,width:r.width,height:r.height}};
-const reduced=()=>typeof window!=='undefined'&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+type Box={left:number;top:number;width:number;height:number;node:HTMLElement};
 
-/** Actual FLIP: last layout rects are inverted, then play to their new positions. */
+/** Affect FLIP with the current visible frame retained when a new fact arrives. */
 export function useFlipLayout(root:RefObject<HTMLElement|null>,revision:string,duration=420){
-  const previous=useRef(new Map<string,Box>());
-  const animations=useRef<Animation[]>([]);
-  const capture=()=>{const el=root.current;if(!el)return;const map=new Map<string,Box>();el.querySelectorAll<HTMLElement>('[data-flip-id]').forEach(node=>{const key=node.dataset.flipId;if(key)map.set(key,box(node))});previous.current=map};
-  useLayoutEffect(()=>{
-    const el=root.current;if(!el)return;
-    animations.current.forEach(a=>a.cancel());animations.current=[];
-    const next=new Map<string,Box>();
+  const allowed=useMotionAllowed(),previous=useRef(new Map<string,Box>()),captured=useRef(false);
+  const animations=useRef(new Map<HTMLElement,Animation>());
+  const cancel=()=>{animations.current.forEach(animation=>animation.cancel());animations.current.clear()};
+  const measure=()=>{
+    const el=root.current,map=new Map<string,Box>();if(!el)return map;const origin=el.getBoundingClientRect();
     el.querySelectorAll<HTMLElement>('[data-flip-id]').forEach(node=>{
-      const key=node.dataset.flipId;if(!key)return;const last=box(node);next.set(key,last);const first=previous.current.get(key);
-      if(!reduced()&&first){const x=first.left-last.left,y=first.top-last.top;if(Math.abs(x)>.4||Math.abs(y)>.4){const a=node.animate([{transform:`translate(${x}px, ${y}px)`},{transform:'translate(0px, 0px)'}],{duration,easing:motionEase});animations.current.push(a)}}
-    });previous.current=next;
-  },[root,revision,duration]);
-  useEffect(()=>()=>animations.current.forEach(a=>a.cancel()),[]);
+      const key=node.dataset.flipId;if(!key||node.closest('[inert],[hidden]'))return;const rect=node.getBoundingClientRect();
+      if(rect.width&&rect.height)map.set(key,{left:rect.left-origin.left+el.scrollLeft,top:rect.top-origin.top+el.scrollTop,width:rect.width,height:rect.height,node});
+    });return map;
+  };
+  const capture=()=>{previous.current=measure();captured.current=true};
+  useLayoutEffect(()=>{
+    const first=previous.current,offsets=new Map<HTMLElement,{x:number;y:number}>();
+    if(!captured.current)animations.current.forEach((animation,node)=>{
+      if(animation.playState!=='running'||!node.isConnected)return;const style=getComputedStyle(node).transform;
+      if(style&&style!=='none'){const matrix=new DOMMatrixReadOnly(style);offsets.set(node,{x:matrix.m41,y:matrix.m42})}
+    });
+    cancel();const next=measure();previous.current=next;captured.current=false;
+    if(!allowed)return;
+    next.forEach((last,key)=>{
+      const before=first.get(key);if(!before)return;const offset=offsets.get(before.node);
+      const x=before.left+(offset?.x||0)-last.left,y=before.top+(offset?.y||0)-last.top;
+      if(Math.abs(x)>.4||Math.abs(y)>.4){
+        const animation=last.node.animate([{transform:`translate(${x}px,${y}px)`},{transform:'translate(0,0)'}],{duration,easing:motionEase});
+        animations.current.set(last.node,animation);
+        animation.onfinish=()=>{if(animations.current.get(last.node)===animation){animations.current.delete(last.node);animation.cancel();if(!animations.current.size)previous.current=measure()}};
+      }
+    });
+  },[root,revision,duration,allowed]);
+  useEffect(()=>{
+    const el=root.current;if(!el)return;
+    const settle=()=>{cancel();previous.current=measure();captured.current=false};
+    const observer=new ResizeObserver(()=>{if(!animations.current.size)previous.current=measure()});observer.observe(el);
+    el.addEventListener('scroll',settle,true);window.addEventListener('resize',settle);
+    return()=>{observer.disconnect();el.removeEventListener('scroll',settle,true);window.removeEventListener('resize',settle);cancel()};
+  },[root]);
   return capture;
 }
 
@@ -36,7 +58,7 @@ function roundedOrthogonal(a:{x:number;y:number},b:{x:number;y:number},vertical=
 }
 /** The endpoints come from live DOM rectangles, including the current FLIP frame. */
 export function MeasuredConnectors({root,edges,revision,className=''}:{root:RefObject<HTMLElement|null>;edges:Connector[];revision:string;className?:string}){
-  const[paths,setPaths]=useState<Drawn[]>([]);const currentEdges=useRef(edges);useEffect(()=>{currentEdges.current=edges},[edges]);const signature=edges.map(x=>`${x.id}:${x.from}:${x.to}:${x.kind}:${x.tone}:${x.active}:${x.exiting}`).join('|');
+  const allowed=useMotionAllowed();const[paths,setPaths]=useState<Drawn[]>([]);const currentEdges=useRef(edges);useEffect(()=>{currentEdges.current=edges},[edges]);const signature=edges.map(x=>`${x.id}:${x.from}:${x.to}:${x.kind}:${x.tone}:${x.active}:${x.exiting}`).join('|');
   useEffect(()=>{
     const container=root.current;if(!container)return;
     let raf=0,until=performance.now()+760;let cancelled=false;
@@ -64,10 +86,10 @@ export function MeasuredConnectors({root,edges,revision,className=''}:{root:RefO
         else if(edge.kind==='vertical'){d=roundedOrthogonal({x:f.left+f.width/2,y:f.top+f.height},{x:t.left,y:t.top+t.height/2},true)}
         else{const a={x:f.left+f.width,y:f.top+f.height/2},b={x:t.left,y:t.top+t.height/2};if(edge.kind==='flow'){const c=Math.max(16,(b.x-a.x)*.55);d=`M${a.x} ${a.y}C${a.x+c} ${a.y} ${b.x-c} ${b.y} ${b.x} ${b.y}`}else d=roundedOrthogonal(a,b)}
         next.push({...edge,d});
-      }setPaths(old=>JSON.stringify(old)===JSON.stringify(next)?old:next);if(!reduced()&&performance.now()<until)raf=requestAnimationFrame(measure);
+      }setPaths(old=>JSON.stringify(old)===JSON.stringify(next)?old:next);if(allowed&&performance.now()<until)raf=requestAnimationFrame(measure);
     };
     measure();const observer=new ResizeObserver(()=>{until=performance.now()+760;cancelAnimationFrame(raf);raf=requestAnimationFrame(measure)});observer.observe(container);container.querySelectorAll<HTMLElement>('[data-link-node]').forEach(n=>observer.observe(n));
     return()=>{cancelled=true;cancelAnimationFrame(raf);observer.disconnect()};
-  },[root,signature,revision]);
+  },[root,signature,revision,allowed]);
   return <svg className={'cb-measured-links '+className} aria-hidden="true">{paths.map(edge=><g key={edge.id} data-tone={edge.tone||'muted'} data-active={edge.active||undefined} data-exiting={edge.exiting||undefined}><path key={edge.kind==='flow'?edge.id+edge.tone+edge.active:edge.id} pathLength="1" d={edge.d} className="cb-link-base" style={{animationDelay:`${edge.delay||0}ms`}}/>{edge.active&&!edge.exiting&&<path pathLength="100" d={edge.d} className="cb-link-beam"/>}</g>)}</svg>;
 }

@@ -85,7 +85,7 @@ export function DecisionInbox({ decisions, onDecide, className, heading, compact
             const s = state[d.id] ?? { open: !d.collapsed };
             const answered = d.resolved;
             if (compact) return (
-              <div key={d.id} className="ui-dic__compact-item" data-task-id={d.id} data-answered={answered ? true : undefined} aria-busy={s.pending || undefined}>
+              <div key={d.id} className="ui-dic__compact-item" data-task-id={d.id} data-motion-key={d.id} data-answered={answered ? true : undefined} aria-busy={s.pending || undefined}>
                 <Button variant="ghost" className="ui-dic__compact-open" disabled={s.pending || Boolean(answered)} aria-label={`${d.secondary}：${d.title}`} onClick={() => decide(d, "secondary")}>
                   <span className="ui-dic__compact-copy">
                     <span className="ui-dic__title" dir="auto" title={d.title}>{d.title}</span>
@@ -101,7 +101,7 @@ export function DecisionInbox({ decisions, onDecide, className, heading, compact
               </div>
             );
             return (
-              <div key={d.id} className="ui-dic__row" data-task-id={d.id} data-gone={undefined}>
+              <div key={d.id} className="ui-dic__row" data-task-id={d.id} data-motion-key={d.id} data-gone={undefined}>
                 <div className="ui-dic__row-inner">
                   <div className="ui-dic__item" data-open={s.open || undefined} data-answered={answered ? true : undefined}>
                     {s.open ? (

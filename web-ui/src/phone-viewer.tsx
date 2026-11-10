@@ -9,6 +9,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { Drawer } from './shell-library';
 import { Select, SelectItem } from './forms-library/boardui/components/base/select/select';
 import { bridge } from './bridge';
+import { MotionFeedback, useCollectionMotion } from './library/journey-motion';
 import { PhoneViewerConnection, phoneViewerKey, type PhonePreviewFrame, type PhoneViewerIdentity, type PhoneViewerState, type PhoneViewerTask } from './phone-viewer-protocol';
 import './phone-viewer.css';
 import './browser-depth.css';
@@ -120,7 +121,7 @@ function statusLabel(task: PhoneViewerTask, feed: Feed): string {
 export function PhoneComputerEntry({ task, feed, expanded, onOpen }: { task: PhoneViewerTask; feed: Feed; expanded: boolean; onOpen: () => void }) {
   const label = statusLabel(task, feed);
   return <button type="button" className="pw-phone-viewer-entry" aria-label={`查看手机独立屏 · ${label}`} aria-haspopup="dialog" aria-expanded={expanded} onClick={onOpen}>
-    <IconMonitor size={13} aria-hidden="true" /><span>独立屏 · {label}</span><span className="pw-phone-viewer-dot" aria-hidden="true" data-live={feed.phase === 'live' && feed.visible} />
+    <IconMonitor size={13} aria-hidden="true" /><MotionFeedback as="span" identity={JSON.stringify([phoneViewerKey(task), task.status, feed.phase, feed.visible])} initial={false}>独立屏 · {label}</MotionFeedback><span className="pw-phone-viewer-dot" aria-hidden="true" data-live={feed.phase === 'live' && feed.visible} />
   </button>;
 }
 
@@ -139,13 +140,16 @@ function PhoneFrame({ task, feed, large = false }: { task: PhoneViewerTask; feed
   const retained = ended ? '任务已结束 · 最后画面' : quiet ? '预览已暂停 · 上一帧' : '画面暂未更新 · 上一帧';
   const time = feed.frame ? new Date(feed.frame.receivedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
   return <figure className={`pw-phone-viewer-frame${large ? ' pw-phone-viewer-frame-large' : ''}`} data-retained={!!feed.frame && delayed}>
-    {feed.frame ? <>
-      <img src={feed.frame.src} width={feed.frame.previewWidth} height={feed.frame.previewHeight} alt={`${task.title || '这次手机任务'}的独立屏画面`} draggable={false} />
-      <figcaption><span>{delayed ? retained : task.status === 'paused' ? '执行已暂停 · 画面持续更新' : '画面持续更新'}</span><time dateTime={new Date(feed.frame.receivedAt).toISOString()}>收到于 {time}</time></figcaption>
-    </> : <div className="pw-phone-viewer-placeholder" role="status">
-      {waiting && feed.visible ? <IconLoading size={26} className="pw-phone-viewer-spinner" aria-hidden="true" /> : <IconMonitor size={28} aria-hidden="true" />}
-      <strong>{title}</strong><p>{ended ? '本次查看中没有收到可保留的画面。' : quiet ? '打开查看器后继续读取这次任务的画面。' : '收到这次任务的真实画面后，会显示在这里。'}</p>
-    </div>}
+    <div className="pw-phone-viewer-image">
+      {feed.frame ? <img src={feed.frame.src} width={feed.frame.previewWidth} height={feed.frame.previewHeight} alt={`${task.title || '这次手机任务'}的独立屏画面`} draggable={false} /> :
+        <MotionFeedback identity={title} initial={false} className="pw-phone-viewer-placeholder" role="status">
+          {waiting && feed.visible ? <IconLoading size={26} className="pw-phone-viewer-spinner" aria-hidden="true" /> : <IconMonitor size={28} aria-hidden="true" />}
+          <strong>{title}</strong><p>{ended ? '本次查看中没有收到可保留的画面。' : quiet ? '打开查看器后继续读取这次任务的画面。' : '收到这次任务的真实画面后，会显示在这里。'}</p>
+        </MotionFeedback>}
+    </div>
+    <figcaption aria-hidden={!feed.frame} data-empty={!feed.frame || undefined}>{feed.frame && <>
+      <span>{delayed ? retained : task.status === 'paused' ? '执行已暂停 · 画面持续更新' : '画面持续更新'}</span><time dateTime={new Date(feed.frame.receivedAt).toISOString()}>收到于 {time}</time>
+    </>}</figcaption>
   </figure>;
 }
 
@@ -158,22 +162,26 @@ function TaskSelector({ task, tasks, onSelectTask }: Pick<PhoneViewerProps, 'tas
 
 type Controls = { busy: boolean; error: string; pause?: () => void; resume?: () => void; stop?: () => void; openTask?: () => void };
 function PhoneControls({ task, feed, controls }: { task: PhoneViewerTask; feed: Feed; controls: Controls }) {
+  const root = useRef<HTMLDivElement>(null);
+  const execution = !terminal(task) && feed.phase !== 'ended' ? task.status === 'running' && controls.pause
+    ? { action: controls.pause, label: '暂停执行', Icon: IconPause } : task.status === 'paused' && controls.resume
+    ? { action: controls.resume, label: '继续执行', Icon: IconPlay } : null : null;
+  useCollectionMotion(root, phoneViewerKey(task), JSON.stringify([task.status, feed.phase, !!execution, !!controls.stop, !!controls.openTask]), { active: feed.visible });
   return <>
-    <div className="pw-phone-viewer-controls">
-      {!terminal(task) && feed.phase !== 'ended' && task.status === 'running' && controls.pause && <button type="button" className="pw-phone-viewer-button" disabled={controls.busy || !feed.visible} onClick={controls.pause}>{controls.busy ? <IconLoading size={16} className="pw-phone-viewer-spinner" aria-hidden="true" /> : <IconPause size={16} aria-hidden="true" />}暂停执行</button>}
-      {!terminal(task) && feed.phase !== 'ended' && task.status === 'paused' && controls.resume && <button type="button" className="pw-phone-viewer-button pw-phone-viewer-button-primary" disabled={controls.busy || !feed.visible} onClick={controls.resume}>{controls.busy ? <IconLoading size={16} className="pw-phone-viewer-spinner" aria-hidden="true" /> : <IconPlay size={16} aria-hidden="true" />}继续执行</button>}
-      {!terminal(task) && task.status !== 'stopping' && controls.stop && <button type="button" className="pw-phone-viewer-button" disabled={controls.busy || !feed.visible} onClick={controls.stop}><IconStop size={16} aria-hidden="true" />停止任务</button>}
-      {controls.openTask && <button type="button" className="pw-phone-viewer-button" disabled={controls.busy} onClick={controls.openTask}><IconArrowUpRight size={16} aria-hidden="true" />{task.status === 'waiting' ? '处理待办' : task.status === 'error' ? '查看失败原因' : '查看任务'}</button>}
-      {!terminal(task) && feed.phase !== 'ended' && (feed.phase === 'error' || feed.phase === 'hidden' && feed.visible) && <button type="button" className="pw-phone-viewer-button" disabled={!feed.visible} onClick={feed.retry}><IconRefresh size={16} aria-hidden="true" />重新读取</button>}
+    <div ref={root} className="pw-phone-viewer-controls">
+      {execution && <button type="button" data-motion-key="execution" className={`pw-phone-viewer-button${task.status === 'paused' ? ' pw-phone-viewer-button-primary' : ''}`} disabled={controls.busy || !feed.visible} onClick={execution.action}>{controls.busy ? <IconLoading size={16} className="pw-phone-viewer-spinner" aria-hidden="true" /> : <execution.Icon size={16} aria-hidden="true" />}{execution.label}</button>}
+      {!terminal(task) && task.status !== 'stopping' && controls.stop && <button type="button" data-motion-key="stop" className="pw-phone-viewer-button" disabled={controls.busy || !feed.visible} onClick={controls.stop}><IconStop size={16} aria-hidden="true" />停止任务</button>}
+      {controls.openTask && <button type="button" data-motion-key="task" className="pw-phone-viewer-button" disabled={controls.busy} onClick={controls.openTask}><IconArrowUpRight size={16} aria-hidden="true" />{task.status === 'waiting' ? '处理待办' : task.status === 'error' ? '查看失败原因' : '查看任务'}</button>}
+      {!terminal(task) && feed.phase !== 'ended' && (feed.phase === 'error' || feed.phase === 'hidden' && feed.visible) && <button type="button" data-motion-key="retry" className="pw-phone-viewer-button" disabled={!feed.visible} onClick={feed.retry}><IconRefresh size={16} aria-hidden="true" />重新读取</button>}
     </div>
-    {(feed.error || controls.error) && <p className="pw-phone-viewer-error" role="status">{controls.error || feed.error}</p>}
+    {(feed.error || controls.error) && <MotionFeedback identity={controls.error || feed.error} className="pw-phone-viewer-error" role="status">{controls.error || feed.error}</MotionFeedback>}
   </>;
 }
 
 /** OpenMuse DesktopToolCard, adapted to the original phone run and a portrait-safe image. */
 export function PhoneViewerCard({ task, feed, controls, onExpand, tasks, onSelectTask }: Pick<PhoneViewerProps, 'task' | 'tasks' | 'onSelectTask'> & { feed: Feed; controls: Controls; onExpand: () => void }) {
   return <section className="pw-phone-viewer-card" aria-label="手机独立屏预览">
-    <header className="pw-phone-viewer-card-header"><span className="pw-phone-viewer-icon"><IconMonitor size={21} aria-hidden="true" /></span><div className="pw-phone-viewer-card-title"><strong>手机独立屏</strong><span title={task.title}>{task.title || '这次手机任务'}</span></div><span className="pw-phone-viewer-status" role="status">{statusLabel(task, feed)}</span></header>
+    <header className="pw-phone-viewer-card-header"><span className="pw-phone-viewer-icon"><IconMonitor size={21} aria-hidden="true" /></span><div className="pw-phone-viewer-card-title"><strong>手机独立屏</strong><span title={task.title}>{task.title || '这次手机任务'}</span></div><MotionFeedback as="span" identity={JSON.stringify([phoneViewerKey(task), task.status, feed.phase, feed.visible])} initial={false} className="pw-phone-viewer-status" role="status">{statusLabel(task, feed)}</MotionFeedback></header>
     <TaskSelector task={task} tasks={tasks} onSelectTask={onSelectTask} />
     <PhoneFrame task={task} feed={feed} />
     <div className="pw-phone-viewer-card-actions"><PhoneControls task={task} feed={feed} controls={controls} /><button type="button" className="pw-phone-viewer-button pw-phone-viewer-expand" aria-haspopup="dialog" onClick={onExpand}><IconExpand size={16} aria-hidden="true" />展开独立屏</button></div>
@@ -195,7 +203,7 @@ export function PhoneViewerSheet({ task, feed, controls, expanded, onExpandedCha
     <header className="pw-phone-viewer-sheet-header"><div><Title className="pw-phone-viewer-sheet-title">手机独立屏</Title><Description id={descriptionId} className="pw-phone-viewer-description">{task.title || '查看这次手机任务的执行画面'}</Description></div><button type="button" className="pw-phone-viewer-close" aria-label="收起独立屏" onClick={() => onExpandedChange(false)}><IconClose size={20} aria-hidden="true" /></button></header>
     <div className="pw-phone-viewer-sheet-body">
       <TaskSelector task={task} tasks={tasks} onSelectTask={onSelectTask} />
-      <div className="pw-phone-viewer-sheet-status"><span className="pw-phone-viewer-icon"><IconMonitor size={24} aria-hidden="true" /></span><div><strong role="status">{statusLabel(task, feed)}</strong><p>{terminal(task) || feed.phase === 'ended' ? '这次任务已结束。画面仅保留于本次查看中。' : '画面来自这次任务的后台独立屏。'}</p></div></div>
+      <div className="pw-phone-viewer-sheet-status"><span className="pw-phone-viewer-icon"><IconMonitor size={24} aria-hidden="true" /></span><MotionFeedback identity={JSON.stringify([phoneViewerKey(task), task.status, feed.phase, feed.visible])} initial={false}><strong role="status">{statusLabel(task, feed)}</strong><p>{terminal(task) || feed.phase === 'ended' ? '这次任务已结束。画面仅保留于本次查看中。' : '画面来自这次任务的后台独立屏。'}</p></MotionFeedback></div>
       <div className="pw-phone-viewer-sheet-control-rail"><PhoneControls task={task} feed={feed} controls={controls} /></div>
       <PhoneFrame task={task} feed={feed} large />
       {!terminal(task) && feed.phase !== 'ended' && <p className="pw-phone-viewer-note">{task.status === 'waiting' ? '请回到任务处理待办，查看画面不会继续执行。' : task.status === 'paused' ? '任务保持暂停，点击继续执行才会恢复。' : task.status === 'stopping' ? '正在停止任务，保留最后收到的画面。' : '收起画面后，任务仍会在后台继续执行。'}</p>}

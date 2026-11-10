@@ -45,7 +45,7 @@
 @media (max-width: 380px) {
   .pw-redesign .pw-file-tabs [role="tab"] { padding-inline: 9px; }
   .pw-file-save-bar { flex-wrap: wrap; }
-  .pw-file-save-bar > span { flex: 1; }
+  .pw-file-save-bar > :is(span,.pw-file-save-state) { flex: 1; }
 }
 @media (prefers-reduced-motion: reduce) {
   .pw-redesign .pw-project-tabs *, .pw-redesign .pw-file-tabs * { transition-duration: 0s; }
@@ -75,5 +75,5 @@
 .pw-project-file-editor .pw-version-number { font-size: 13px; }
 .pw-project-file-editor .pw-file-version-row small { font-size: 12px; }
 .pw-project-file-editor .pw-file-save-bar { gap: var(--pw-gap-control); margin-top: 0; }
-.pw-project-file-editor .pw-file-save-bar > span { min-width: 0; font-size: 12px; overflow-wrap: anywhere; }
+.pw-project-file-editor .pw-file-save-bar > :is(span,.pw-file-save-state) { min-width: 0; font-size: 12px; overflow-wrap: anywhere; }
 .pw-project-file-editor .pw-file-save-bar > button { max-width: 52%; }

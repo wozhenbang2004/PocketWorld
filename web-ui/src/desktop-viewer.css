@@ -62,4 +62,4 @@
 @keyframes pw-desktop-spin { to { transform: rotate(360deg); } }
 @media (max-width: 380px) { .pw-desktop-source > span:first-of-type { max-width: 112px; } .pw-desktop-toolbar { gap: var(--pw-gap-related,8px); } .pw-desktop-control-actions { gap: 4px; } .pw-desktop-scope-label { display: none; } }
 @media (orientation: landscape) and (max-height: 500px) { .pw-desktop-viewer.is-expanded .pw-desktop-heading { padding-bottom: 3px; } .pw-desktop-viewer.is-expanded .pw-desktop-toolbar { padding-top: 4px; } .pw-desktop-viewer.is-expanded .pw-desktop-hint { display: none; } }
-@media (prefers-reduced-motion: reduce) { .pw-desktop-viewer button:active:not(:disabled) { transform: none; } .pw-desktop-spin { animation-duration: 2.5s; } }
+@media (prefers-reduced-motion: reduce) { .pw-desktop-viewer button:active:not(:disabled) { transform: none; } .pw-desktop-spin { animation: none; } }

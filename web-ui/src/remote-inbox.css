@@ -43,3 +43,5 @@
 .pw-remote-footnote{margin-top:4px}
 @media(max-width:480px){.pw-remote-receiver{align-items:flex-start;flex-direction:column}}
 @media(prefers-reduced-motion:reduce){.pw-remote-dot.is-connected{animation:none}}
+
+.pw-remote-status > .pw-remote-count{flex:0 0 auto;display:block}

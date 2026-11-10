@@ -20,6 +20,13 @@ export type ConversationStream = {
 /** Read-only projection of the native ephemeral draft. It never becomes a message,
  * a completion receipt, or input to a subsequent model request. */
 export function foregroundConversationStream(state: Data): ConversationStream | null {
+  const draft = foregroundConversationDraft(state);
+  return draft?.text.trim() ? draft : null;
+}
+
+/** The same native request can own the waiting surface before its first token.
+ * An empty draft is presentation identity, never a saved assistant message. */
+export function foregroundConversationDraft(state: Data): ConversationStream | null {
   const turn = foregroundConversationTurn(state);
   if (!turn || ['queued', 'retained', 'stopping'].includes(turn.resourceState)) return null;
   const task = Array.isArray(state.tasks) ? state.tasks.find((row: Data) => row.id === turn.taskId) : null;
@@ -30,7 +37,7 @@ export function foregroundConversationStream(state: Data): ConversationStream | 
       || draft.taskId !== turn.taskId || draft.runId !== turn.runId || draft.epoch !== turn.epoch
       || typeof draft.requestId !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(draft.requestId)
       || !positive(draft.generation) || !positive(draft.sequence) || typeof draft.text !== 'string'
-      || !draft.text.trim() || draft.text.length > 32768 || typeof draft.turnEnded !== 'boolean'
+      || draft.text.length > 32768 || typeof draft.turnEnded !== 'boolean'
       || typeof draft.failed !== 'boolean' || typeof draft.truncated !== 'boolean') return null;
   return { taskId: draft.taskId, runId: draft.runId, epoch: draft.epoch, requestId: draft.requestId,
     generation: draft.generation, sequence: draft.sequence, text: draft.text,

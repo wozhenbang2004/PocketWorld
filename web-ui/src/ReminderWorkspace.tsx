@@ -2,6 +2,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { IconChevronLeft, IconChevronRight, IconNotification, IconRefresh } from './icons';
 import './knowledge-depth.css';
 import './reminder-workspace.css';
+import { useSurfaceEnter } from './library/surface-motion';
+import { MotionFeedback, useCollectionMotion } from './library/journey-motion';
 import { PressButton } from './library/press';
 import { WheelTimeField } from './forms-library/uiux/WheelTimeField';
 import { Accordion, AccordionItem, Button, CheckboxField, SearchField, SelectField, SettingsDialog, StretchSwitch, TextAreaField, TextField } from './forms-library';
@@ -29,15 +31,26 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
   const [query, setQuery] = useState(''), [filter, setFilter] = useState('all');
   const selectedRule = rules.find(rule => rule.id === selectedId) || null;
   const root = useRef<HTMLDivElement | null>(null), heading = useRef<HTMLHeadingElement | null>(null);
-  const listPosition = useRef(0), rowOrigin = useRef<HTMLElement | null>(null);
-  const chooseRule = (id: string) => { listPosition.current = root.current?.closest('.pw-secondary-scroll')?.scrollTop || 0; rowOrigin.current = document.activeElement as HTMLElement; setSelectedId(id); };
-  useLayoutEffect(() => { const scroller = root.current?.closest('.pw-secondary-scroll'); if (selectedRule) { if (scroller) scroller.scrollTop = 0; heading.current?.focus({ preventScroll: true }); } else if (rowOrigin.current) { if (scroller) scroller.scrollTop = listPosition.current; rowOrigin.current.focus({ preventScroll: true }); } }, [selectedRule?.id]);
+  const listPosition = useRef(0), returnRule = useRef(''), returnIndex = useRef(0), previousRule = useRef<string | undefined>(undefined);
+  const chooseRule = (id: string) => { listPosition.current = root.current?.closest('.pw-secondary-scroll')?.scrollTop || 0; returnRule.current = id; returnIndex.current = Array.from(root.current?.querySelectorAll<HTMLElement>('[data-reminder-id]') || []).findIndex(row => row.dataset.reminderId === id); setSelectedId(id); };
+  useSurfaceEnter(root, selectedRule ? `rule:${selectedRule.id}` : 'list', { selector: ':scope > .pw-settings-section', depth: selectedRule ? 1 : 0, active: hasRules });
   const [advanced, setAdvanced] = useState(false), [receiptLimit, setReceiptLimit] = useState(10);
   const generation = useRef(0), mounted = useRef(true), locked = useRef(false);
   const busy = ['automation.save', 'automation.setEnabled', 'automation.delete'].some(key => (state.moduleBusy || []).includes(key));
   const reading = (state.moduleBusy || []).includes('automation.list');
   const readingError = Boolean(state.moduleErrors?.['automation.list']);
   const pending = requesting || busy || Boolean(submission) || uncertain;
+  useLayoutEffect(() => {
+    const changed = previousRule.current !== selectedRule?.id; previousRule.current = selectedRule?.id;
+    const scroller = root.current?.closest('.pw-secondary-scroll');
+    if (selectedRule) { if (!changed) return; if (scroller) scroller.scrollTop = 0; heading.current?.focus({ preventScroll: true }); }
+    else if (returnRule.current && !reading) {
+      if (scroller) scroller.scrollTop = listPosition.current;
+      const entries = Array.from(root.current?.querySelectorAll<HTMLElement>('[data-reminder-id]:not(:disabled)') || []);
+      const target = entries.find(row => row.dataset.reminderId === returnRule.current) || entries[Math.min(Math.max(0, returnIndex.current), entries.length - 1)];
+      (target || root.current)?.focus({ preventScroll: true }); returnRule.current = '';
+    }
+  }, [selectedRule?.id, reading]);
   const refresh = async () => { await Promise.all([run('automation.list'), run('automation.receipts')]); };
   const close = () => { generation.current++; setEditor(null); setReview(null); setError(''); setAdvanced(false); };
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; generation.current++; }; }, []);
@@ -98,12 +111,12 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
   const receiptTiming = (receipt: Data) => <dl className="pw-reminder-receipt-facts">
     {receipt.occurrenceAt > 0 && <><div><dt>计划时间</dt><dd>{date(receipt.occurrenceAt)}</dd></div><div><dt>领取延后</dt><dd>{Math.max(0, (receipt.claimedAt || receipt.occurrenceAt) - receipt.occurrenceAt) / 1000} 秒</dd></div></>}
   </dl>;
-  const receiptRow = (receipt: Data, showTiming = true) => <article key={receipt.id} className="pw-reminder-record pw-reminder-result" data-reminder-receipt-id={receipt.id}>
+  const receiptRow = (receipt: Data, showTiming = true) => <article key={receipt.id} className="pw-reminder-record pw-reminder-result" data-reminder-receipt-id={receipt.id} data-motion-key={`${showTiming ? 'history' : 'attention'}:${receipt.id}`}>
     <header><h3>{receipt.title || '原发生记录'}</h3><span className="pw-reminder-result-state">{receipt.status === 'delivery_unknown' ? '投递未知' : receipt.status === 'awaiting_user' ? '等待你查看' : receipt.status === 'blocked_notifications' ? '通知受阻' : receipt.status}</span></header>
     {receipt.message && <p className="pw-reminder-result-message">{receipt.message}</p>}
     {receipt.goalState && <p className="pw-reminder-result-goal">原任务：{goalState(receipt.goalState.state)}</p>}
     {showTiming && receiptTiming(receipt)}
-    {receipt.kind === 'phone_goal' && ['awaiting_user', 'blocked_notifications'].includes(receipt.status) && <div className="pw-form-actions"><Button variant="secondary" disabled={!supported('automation.prepareOccurrence')} onClick={() => { void run('automation.prepareOccurrence', { occurrenceId: receipt.id }).catch(failure => setError(failure instanceof Error ? failure.message : String(failure))); }}>准备原手机任务（不执行）</Button></div>}
+    {receipt.kind === 'phone_goal' && ['awaiting_user', 'blocked_notifications'].includes(receipt.status) && <div className="pw-form-actions"><Button variant="secondary" disabled={receiptsBusy || !!receiptsError || !supported('automation.prepareOccurrence')} onClick={() => { void run('automation.prepareOccurrence', { occurrenceId: receipt.id }).catch(failure => setError(failure instanceof Error ? failure.message : String(failure))); }}>准备原手机任务（不执行）</Button></div>}
   </article>;
   const attentionReceipts = receipts.filter(receipt => ['delivery_unknown', 'blocked_notifications', 'awaiting_user'].includes(receipt.status));
   const visibleRules = rules.filter(rule => [rule.title, rule.goal, rule.schedule?.zone].join(' ').toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
@@ -125,13 +138,20 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
   };
   const ruleGroups = [{ id: 'source', label: '来源需核对' }, { id: 'today', label: '今天与待发生' }, { id: 'tomorrow', label: '明天' }, { id: 'later', label: '之后' }, { id: 'unknown', label: '下次时间待核对' }, { id: 'paused', label: '已暂停' }, { id: 'ended', label: '安排已结束' }]
     .map(group => ({ ...group, rules: visibleRules.filter(rule => ruleGroup(rule) === group.id).sort((a, b) => (a.nextAt || 0) - (b.nextAt || 0)) })).filter(group => group.rules.length > 0);
-  return <div ref={root} className="pw-reminder-workspace pw-knowledge-workspace">
+  const collectionActive = !editor && !review && !state.webWorkspaceTaskOpen;
+  useCollectionMotion(root, JSON.stringify([selectedRule?.id || 'list', query.trim(), filter, state.webWorkspaceResumeRevision]), JSON.stringify([
+    ruleGroups.map(group => [group.id, group.rules.map(rule => [rule.id, rule.revision, rule.nextAt])]), notice, error,
+  ]), { selector: '[data-reminder-id]', active: hasRules && collectionActive });
+  useCollectionMotion(root, JSON.stringify([selectedRule?.id || 'list', receiptLimit, state.webWorkspaceResumeRevision]), JSON.stringify(receipts.map(receipt => [receipt.id, receipt.status])), {
+    selector: '[data-reminder-receipt-id]', active: receiptsReady && !receiptsBusy && collectionActive,
+  });
+  return <div ref={root} className="pw-reminder-workspace pw-knowledge-workspace" tabIndex={-1}>
     <section className="pw-settings-section" aria-label="提醒规则">
       {selectedRule && <Button variant="ghost" leadingIcon={IconChevronLeft} disabled={pending} onClick={() => setSelectedId('')}>返回提醒列表</Button>}
       {selectedRule ? <header className="pw-followup-heading"><div><h2 ref={heading} tabIndex={-1}>{selectedRule.title || '未命名提醒'}</h2></div>{refreshButton}</header> : !emptyDirectory && <div className="pw-reminder-directory-toolbar">{hasRules && rules.length > 0 && <p>{rules.length} 条提醒</p>}<div className="pw-reminder-directory-actions">{refreshButton}{newReminder}</div></div>}
-      {notice && <p className="pw-field-hint" role="status">{notice}</p>}
+      {notice && <MotionFeedback identity={notice} className="pw-field-hint" role="status">{notice}</MotionFeedback>}
       {uncertain && <p className="pw-field-hint">本页保留未确认提交，暂不开放再次写入。请核对已有提醒与原回执后重新进入页面。</p>}
-      {error && <p className="pw-field-error" role="alert">{error}</p>}
+      {error && <MotionFeedback identity={error} className="pw-field-error" role="alert">{error}</MotionFeedback>}
       {!selectedRule && receiptsReady && attentionReceipts.length > 0 && <section className="pw-reminder-attention" aria-label="需要核对的提醒结果">
         <header className="pw-reminder-attention-heading"><div><h3>需要你核对</h3><span>{attentionReceipts.length}</span></div><Button variant="ghost" disabled={receiptsBusy || !supported('automation.receipts')} onClick={() => { void run('automation.receipts').catch(failure => setError(failure instanceof Error ? failure.message : String(failure))); }}>{receiptsBusy ? '核对中…' : '核对结果'}</Button></header>
         {receiptsError && <p className="pw-field-error" role="alert">本次核对未成功，以下保留上次读取的结果。</p>}
@@ -142,7 +162,9 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
         </AccordionItem></Accordion>
       </section>}
       {!selectedRule && showDirectoryTools && <div className="pw-reminder-plan-tools"><SearchField className="pw-secondary-search" aria-label="查找已读取的提醒" placeholder="搜索提醒" value={query} onChange={setQuery} /><div className="pw-knowledge-filters" role="group" aria-label="提醒状态筛选">{[{ id: 'all', label: '全部' }, { id: 'enabled', label: '已启用' }, { id: 'disabled', label: '暂停与结束' }].map(item => <Button key={item.id} variant="ghost" aria-pressed={filter === item.id} onClick={() => setFilter(item.id)}>{item.label}</Button>)}</div></div>}
-      {reading ? <p className="pw-secondary-empty" role="status">正在读取原提醒清单…</p> : readingError ? <p className="pw-field-error" role="alert">原提醒清单未读成功，请刷新核对。{String(state.moduleErrors['automation.list'])}</p> : !hasRules ? <p className="pw-secondary-empty">尚未读取原提醒清单，请刷新核对。</p> : rules.length ? selectedRule ? [selectedRule].map(rule => {
+      {reading && hasRules && <MotionFeedback identity="refreshing" className="pw-field-hint" role="status">正在更新提醒清单，保留已读取的内容…</MotionFeedback>}
+      {readingError && hasRules && <MotionFeedback identity={String(state.moduleErrors['automation.list'])} className="pw-field-error" role="alert">这次读取未完成。保留上次内容，请刷新核对后再操作。</MotionFeedback>}
+      {!hasRules ? reading ? <p className="pw-secondary-empty" role="status">正在读取原提醒清单…</p> : readingError ? <p className="pw-field-error" role="alert">原提醒清单未读成功，请刷新核对。{String(state.moduleErrors['automation.list'])}</p> : <p className="pw-secondary-empty">尚未读取原提醒清单，请刷新核对。</p> : rules.length ? selectedRule ? [selectedRule].map(rule => {
         const availability = reminderRuleState(rule, Date.now());
         return <article key={rule.id} className="pw-reminder-record"><header className="pw-knowledge-object-state"><span>{rule.enabled ? '已启用' : availability.exhausted ? '安排已结束' : '已暂停'}</span><span>{types.find(type => type.id === rule.schedule?.type)?.label || '原时间安排'}{rule.schedule?.zone ? ' · ' + rule.schedule.zone : ''}</span></header>
           <p className="pw-knowledge-next-time">{availability.exhausted ? '这次安排已到期或已有发生记录；原结果仍以回执为准。' : rule.nextAt > 0 ? '计划时间：' + date(rule.scheduledAt || rule.nextAt) : '已暂停或安排已结束'}</p>
@@ -152,9 +174,9 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
           {availability.exhausted && Object.hasOwn(rule, 'nativeOrigin') && <p>此提醒来自原对话；请在原对话重新明确提出安排，未复制旧来源。</p>}
           {availability.exhausted && !Object.hasOwn(rule, 'nativeOrigin') && rule.manualOriginVersion !== 1 && <p>此旧提醒的手建来源尚未确认，请从空白明确新建，未复制旧目标。</p>}
           {!availability.editable && <p>此日历格式或版本暂不支持编辑；可暂停保留原记录，或核对后删除。</p>}
-          <div className="pw-form-actions">{availability.canReschedule && <Button variant="secondary" disabled={pending} onClick={() => open('reschedule', rule)}>重新安排</Button>}<Button disabled={pending || !availability.canEdit} onClick={() => open('edit', rule)}>编辑</Button><Button variant="secondary" disabled={pending || !availability.canToggle || !supported('automation.reviewRule')} onClick={() => { void prepare('automation.reviewRule', { id: rule.id, revision: rule.revision, command: 'setEnabled', enabled: !rule.enabled }); }}>{rule.enabled ? '暂停提醒' : '启用提醒'}</Button></div>
+          <div className="pw-form-actions">{availability.canReschedule && <Button variant="secondary" disabled={pending || reading || readingError} onClick={() => open('reschedule', rule)}>重新安排</Button>}<Button disabled={pending || reading || readingError || !availability.canEdit} onClick={() => open('edit', rule)}>编辑</Button><Button variant="secondary" disabled={pending || reading || readingError || !availability.canToggle || !supported('automation.reviewRule')} onClick={() => { void prepare('automation.reviewRule', { id: rule.id, revision: rule.revision, command: 'setEnabled', enabled: !rule.enabled }); }}>{rule.enabled ? '暂停提醒' : '启用提醒'}</Button></div>
           <Accordion variant="divided" className="pw-compact-disclosures"><AccordionItem id="reminder-metadata" title="调度详情与版本" description={`${types.find(type => type.id === rule.schedule?.type)?.label || '原时间安排'} · ${rule.schedule?.zone || '以手机原记录为准'}`}>
-          <dl className="pw-facts"><div><dt>时间安排</dt><dd>{types.find(type => type.id === rule.schedule?.type)?.label || '暂不支持的格式'}{rule.schedule?.expression ? ' · ' + rule.schedule.expression : ''}{rule.schedule?.zone ? ' · ' + rule.schedule.zone : ''}</dd></div><div><dt>规则版本</dt><dd>{rule.revision}</dd></div>{rule.nextAt > 0 && rule.nextAt !== rule.scheduledAt && <div><dt>下次检查</dt><dd>{date(rule.nextAt)}</dd></div>}</dl><Button variant="ghost" disabled={pending || !supported('automation.reviewRule')} onClick={() => { void prepare('automation.reviewRule', { id: rule.id, revision: rule.revision, command: 'delete' }); }}>删除</Button></AccordionItem></Accordion>
+          <dl className="pw-facts"><div><dt>时间安排</dt><dd>{types.find(type => type.id === rule.schedule?.type)?.label || '暂不支持的格式'}{rule.schedule?.expression ? ' · ' + rule.schedule.expression : ''}{rule.schedule?.zone ? ' · ' + rule.schedule.zone : ''}</dd></div><div><dt>规则版本</dt><dd>{rule.revision}</dd></div>{rule.nextAt > 0 && rule.nextAt !== rule.scheduledAt && <div><dt>下次检查</dt><dd>{date(rule.nextAt)}</dd></div>}</dl><Button variant="ghost" disabled={pending || reading || readingError || !supported('automation.reviewRule')} onClick={() => { void prepare('automation.reviewRule', { id: rule.id, revision: rule.revision, command: 'delete' }); }}>删除</Button></AccordionItem></Accordion>
         </article>;
       }) : <>{!visibleRules.length && emptyResults}{ruleGroups.map(group => <section key={group.id} className="pw-knowledge-directory-group pw-reminder-plan-group" aria-label={group.label}><header className="pw-knowledge-group-heading"><h3>{group.label}</h3><span>{group.rules.length}</span></header><div className="pw-reminder-rules pw-followup-list">{group.rules.map(rule => {
         const availability = reminderRuleState(rule, Date.now());
@@ -162,7 +184,7 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
         const plannedDate = rule.enabled && availability.sourceCurrent && !availability.exhausted && Number.isFinite(plannedAt) && plannedAt > 0 ? new Date(plannedAt) : null;
         const status = rule.enabled ? '已启用' : availability.exhausted ? '安排已结束' : '已暂停';
         const schedule = types.find(type => type.id === rule.schedule?.type)?.label || '原时间安排';
-        return <Button key={rule.id} variant="ghost" className="pw-reminder-rule-row" data-reminder-id={rule.id} trailingIcon={IconChevronRight} disabled={pending} onClick={() => chooseRule(rule.id)} aria-label={`查看提醒：${rule.title || '未命名提醒'}`} aria-description={`${status} · ${schedule} · ${!availability.sourceCurrent ? '来源有变化，需核对' : rule.nextAt > 0 ? `计划 ${date(plannedAt)}` : '没有下一次安排'}`}>
+        return <Button key={rule.id} variant="ghost" className="pw-reminder-rule-row" data-reminder-id={rule.id} data-motion-key={`rule:${rule.id}`} trailingIcon={IconChevronRight} disabled={pending || reading || readingError} onClick={() => chooseRule(rule.id)} aria-label={`查看提醒：${rule.title || '未命名提醒'}`} aria-description={`${status} · ${schedule} · ${!availability.sourceCurrent ? '来源有变化，需核对' : rule.nextAt > 0 ? `计划 ${date(plannedAt)}` : '没有下一次安排'}`}>
           <span className="pw-reminder-rule-layout"><span className="pw-reminder-rule-time" aria-hidden="true"><strong>{plannedDate ? plannedDate.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }) : '—'}</strong><small>{plannedDate ? plannedDate.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric', ...(plannedDate.getFullYear() !== new Date().getFullYear() ? { year: 'numeric' } : {}) }) : !availability.sourceCurrent ? '待核对' : availability.exhausted ? '已结束' : '无安排'}</small></span>
           <span className="pw-reminder-rule-row-copy"><strong>{rule.title || '未命名提醒'}</strong><small>{schedule} · {status}</small>{!availability.sourceCurrent && <small className="pw-reminder-rule-warning">来源有变化，需核对</small>}{availability.sourceCurrent && rule.enabled && !availability.exhausted && !plannedDate && <small>下次时间待核对</small>}</span></span>
         </Button>;
@@ -197,7 +219,7 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
           {advanced && <>{calendar && <><StretchSwitch label="不存在的当地时间跳过" checked={draft.skipGap} onChange={value => change('skipGap', value)} disabled={pending} /><StretchSwitch label="重复时间选择较晚一次" checked={draft.laterOverlap} onChange={value => change('laterOverlap', value)} disabled={pending} /></>}{draft.type !== 'once' && <><SelectField label="错过安排时间时" value={draft.misfire} onChange={value => change('misfire', value)} isDisabled={pending} options={[{ id: 'skip', label: '跳过旧实例，只处理最新一次' }, { id: 'coalesce', label: '合并错过的实例为一次' }, { id: 'catch_up', label: '按原安排逐次补处理' }]} />{draft.misfire === 'catch_up' && <TextField label="本轮最多补处理次数（1–20）" inputMode="numeric" value={draft.maxCatchUp} onChange={value => change('maxCatchUp', value.replace(/\D/g, '').slice(0, 2))} isDisabled={pending} />}<SelectField label="原任务仍未结束时" value={draft.overlap} onChange={value => change('overlap', value)} isDisabled={pending} options={[{ id: 'buffer_one', label: '保留一个待处理实例' }, { id: 'skip', label: '跳过新实例' }, { id: 'allow', label: '允许并行，仍各自需要原任务授权' }]} /></>}</>}
           </AccordionItem></Accordion>
         </div>
-        {error && <p className="pw-field-error" role="alert">{error}</p>}
+        {error && <MotionFeedback identity={error} className="pw-field-error" role="alert">{error}</MotionFeedback>}
         {(submission || requesting) && <p className="pw-field-hint" role="status">{requesting ? '正在核对或登记请求…' : '请求已登记，等待原操作回执。'}</p>}
         <div className="pw-form-actions pw-knowledge-edit-actions"><Button variant="secondary" onClick={close}>{pending ? '关闭并核对记录' : '取消'}</Button><PressButton compact disabled={pending || reading || readingError || !originalCurrent || !supported('automation.reviewSchedule')} onClick={preview}>核对提醒计划</PressButton></div>
       </>}

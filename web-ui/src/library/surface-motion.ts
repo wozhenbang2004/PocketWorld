@@ -114,7 +114,7 @@ export function useMessageArrivals(root:RefObject<HTMLElement|null>,conversation
   if(arrivals.size)requested.current=null;
   const viewport=root.current?.getBoundingClientRect();
   root.current?.querySelectorAll<HTMLElement>('[data-message-id]').forEach(node=>{
-   if(!arrivals.has(node.dataset.messageId||''))return;
+   if(!arrivals.has(node.dataset.messageId||'')||node.dataset.replyContinuing==='true')return;
    const bounds=node.getBoundingClientRect();
    if(viewport&&(bounds.bottom<viewport.top||bounds.top>viewport.bottom))return;
    const animation=node.animate(arrivalFrames,arrivalTiming);animation.id='pw-message-enter';playing.current.add(animation);

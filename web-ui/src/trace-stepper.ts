@@ -15,7 +15,7 @@ function stepState(node: TraceNode): string {
   return 'unknown';
 }
 
-/** One row per real node, with native parent depth and the existing trace filter semantics.
+/** One retained row per real node, with native parent depth and the existing trace filter semantics.
  * No synthetic plan, completion estimate, merged request or clock-derived latency.
  * Native validation rejects cycles; the defensive fallback keeps malformed relations
  * visible as unverified roots rather than dropping an entire component of the graph. */
@@ -35,7 +35,12 @@ export function traceSteps(nodes: readonly TraceNode[], folded: ReadonlySet<stri
     path.forEach(id => checked.add(id));
   }
   const safe = nodes.map(node => cyclic.has(node.id) ? { ...node, parentId: null } : node);
-  return traceRows(safe, folded, filter, query).map(row => {
+  // Keep folded descendants in the tree so the source grid can close around
+  // their existing controls. Filtering still retains only matching nodes and
+  // their real ancestors; hidden descendants are made inert by the adapter.
+  const filtering = filter !== 'all' || query.trim() !== '';
+  const roots: Step[] = [], parents: Step[] = [];
+  for (const row of traceRows(safe, new Set(), filter, query)) {
     const node = byId.get(row.node.id)!, duration = traceDuration(node);
     const label = [traceRoleLabel(node), traceStatus(node.status),
       node.effectPending ? '动作效果待确认' : null,
@@ -43,8 +48,14 @@ export function traceSteps(nodes: readonly TraceNode[], folded: ReadonlySet<stri
       duration === null ? '耗时未记录' : null,
       cyclic.has(node.id) ? '父子关系待核对' : row.missingParent ? `父记录未读入：${node.parentId}` : null,
       row.context ? '筛选上下文' : null].filter(Boolean).join(' · ');
-    return { id: node.id, title: node.name, status: stepState(node), statusLabel: label,
+    const step: Step = { id: node.id, title: node.name, status: stepState(node), statusLabel: label,
       ...(duration === null ? {} : { durationMs: duration, durationLabel: durationLabel(duration) }),
-      depth: row.level, hasChildren: row.hasChildren, expanded: row.expanded, canToggle: filter === 'all' && !query.trim(), context: row.context };
-  });
+      depth: row.level, hasChildren: row.hasChildren, expanded: row.hasChildren && (filtering || !folded.has(node.id)),
+      canToggle: !filtering, context: row.context, children: [] };
+    parents.length = row.level;
+    const parent = parents.at(-1);
+    if (parent) parent.children!.push(step); else roots.push(step);
+    parents.push(step);
+  }
+  return roots;
 }

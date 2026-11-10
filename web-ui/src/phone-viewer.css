@@ -95,3 +95,16 @@
 @media (prefers-reduced-motion: reduce) {
   .pw-phone-viewer-spinner, .pw-phone-viewer-overlay, .pw-phone-viewer-sheet { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* Reserve the same image box before the first decoded frame. Real frames are
+ * swapped directly; only nearby status and controls receive UI transitions. */
+.pw-phone-viewer-image { position: relative; height: 320px; }
+.pw-phone-viewer-frame .pw-phone-viewer-image > img { height: 100%; }
+.pw-phone-viewer-image > .pw-phone-viewer-placeholder { height: 100%; min-height: 0; box-sizing: border-box; }
+.pw-phone-viewer-frame figcaption { box-sizing: border-box; min-height: 35px; }
+.pw-phone-viewer-frame figcaption[data-empty] { visibility: hidden; }
+.pw-phone-viewer-frame-large .pw-phone-viewer-image { height: min(58vh, 600px); height: min(58dvh, 600px); }
+@media (max-width: 599px) {
+  .pw-phone-viewer-image { height: min(320px, 42vh); height: min(320px, 42dvh); }
+  .pw-phone-viewer-frame-large .pw-phone-viewer-image { height: min(54vh, 600px); height: min(54dvh, 600px); }
+}

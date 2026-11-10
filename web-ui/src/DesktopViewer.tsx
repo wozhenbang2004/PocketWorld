@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { IconAdd, IconArrowDown, IconArrowLeft, IconArrowRight, IconArrowUp, IconCheck, IconChevronDown, IconClose, IconCollapse, IconCursor, IconCursorClick, IconExpand, IconKeyboard, IconLoading, IconMinus, IconMonitor, IconMore, IconRefresh, IconReturn, IconSend, IconTakeControl } from './icons';
 import { DesktopViewerConnection, desktopScopes, desktopText, type DesktopInput, type DesktopRecord, type DesktopRun, type DesktopViewerState } from './desktop-viewer';
+import { MotionFeedback } from './library/journey-motion';
 import './desktop-viewer.css';
 
 const idle: DesktopViewerState = { phase: 'idle', session: null, frameReady: false, frameIssue: null, controlPending: false, inputPending: false, inputUncertain: false, controlExpired: false, error: '' };
@@ -14,6 +15,7 @@ export function DesktopViewer({ peer, supported, run, onClose }: { peer: Desktop
   const [scopeKey, setScopeKey] = useState(first?.key || ''), [state, setState] = useState<DesktopViewerState>(idle);
   const [zoom, setZoom] = useState(1), [expanded, setExpanded] = useState(false), [keyboard, setKeyboard] = useState(false), [more, setMore] = useState(false);
   const [draft, setDraft] = useState(''), [textError, setTextError] = useState(''), [videoError, setVideoError] = useState(''), [clickMode, setClickMode] = useState<'left' | 'double' | 'right'>('left');
+  const zoomFrame = useRef(0);
   const video = useRef<HTMLVideoElement>(null), viewport = useRef<HTMLDivElement>(null), textarea = useRef<HTMLTextAreaElement>(null);
   const connection = useRef<DesktopViewerConnection | null>(null), runRef = useRef(run), mounted = useRef(false), composing = useRef(false), zoomRef = useRef(zoom);
   const pointers = useRef(new Map<number, Touch>()), pinch = useRef<{ distance: number; zoom: number } | null>(null), pinched = useRef(false);
@@ -104,6 +106,13 @@ export function DesktopViewer({ peer, supported, run, onClose }: { peer: Desktop
     return () => surface.removeEventListener('wheel', wheel);
   }, []);
 
+  useLayoutEffect(() => {
+    // A control panel or full-screen change establishes new hit geometry. A
+    // gesture begun in the old viewport cannot finish as a remote click.
+    pointers.current.clear(); pinch.current = null; pinched.current = false;
+  }, [expanded, keyboard, more, state.session?.streamId]);
+  useEffect(() => () => { cancelAnimationFrame(zoomFrame.current); pointers.current.clear(); }, []);
+
   const reconnect = () => { if (scope && hostReady) { setClickMode('left'); setTextError(''); void connection.current?.open(peer.deviceId, scope); } };
   const send = (input: DesktopInput) => { setTextError(''); void connection.current?.input(input); };
   const point = (x: number, y: number) => { const element = video.current; return element && connection.current?.point(x, y, element.getBoundingClientRect(), element.videoWidth, element.videoHeight); };
@@ -112,7 +121,8 @@ export function DesktopViewer({ peer, supported, run, onClose }: { peer: Desktop
     const centerX = surface ? (surface.scrollLeft + surface.clientWidth / 2) / before : 0;
     const centerY = surface ? (surface.scrollTop + surface.clientHeight / 2) / before : 0;
     zoomRef.current = value; setZoom(value);
-    requestAnimationFrame(() => { if (surface) { surface.scrollLeft = Math.max(0, centerX * value - surface.clientWidth / 2); surface.scrollTop = Math.max(0, centerY * value - surface.clientHeight / 2); } });
+    cancelAnimationFrame(zoomFrame.current);
+    zoomFrame.current = requestAnimationFrame(() => { if (surface) { surface.scrollLeft = Math.max(0, centerX * value - surface.clientWidth / 2); surface.scrollTop = Math.max(0, centerY * value - surface.clientHeight / 2); } });
   };
   const pointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.pointerType !== 'touch' && event.button !== 0 && event.button !== 2) return;
@@ -170,39 +180,39 @@ export function DesktopViewer({ peer, supported, run, onClose }: { peer: Desktop
     </header>
 
     <div ref={viewport} className={`pw-desktop-screen${canInput ? ' has-control' : ''}${zoom > 1 ? ' is-zoomed' : ''}`} style={{ aspectRatio: `${state.session?.width || 16} / ${state.session?.height || 10}` }}
-      onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={event => pointers.current.delete(event.pointerId)} onContextMenu={event => event.preventDefault()}>
+      onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={event => pointers.current.delete(event.pointerId)} onLostPointerCapture={event => pointers.current.delete(event.pointerId)} onContextMenu={event => event.preventDefault()}>
       <div className="pw-desktop-video-size" style={{ width: `${zoom * 100}%`, height: `${zoom * 100}%` }}><video ref={video} autoPlay playsInline muted aria-label="远程电脑实时画面" /></div>
-      {state.phase !== 'live' && <div className="pw-desktop-overlay" aria-live="polite">
+      {state.phase !== 'live' && <MotionFeedback identity={state.phase} initial={false} className="pw-desktop-overlay" aria-live="polite">
         {busy ? <><IconLoading className="pw-desktop-spin" size={24} /><span>{status}</span></> : <><IconMonitor size={28} strokeWidth={1.4} /><span>{!hostReady ? '请更新手机端以开启桌面观看' : !scope?.available ? scope?.reason || '请在电脑上授权桌面观看' : state.phase === 'disconnected' ? '正在恢复画面' : '电脑桌面'}</span>{hostReady && scope?.available && state.phase !== 'disconnected' && <button type="button" className="pw-desktop-primary" onClick={reconnect}><IconRefresh size={15} />{state.phase === 'failed' ? '重新连接' : '连接桌面'}</button>}</>}
-      </div>}
+      </MotionFeedback>}
     </div>
 
     <div className="pw-desktop-toolbar">
-      <div className="pw-desktop-status" role="status">{busy || state.controlPending || state.inputPending ? <IconLoading size={14} className="pw-desktop-spin" aria-hidden="true" /> : <span className={`pw-desktop-status-dot${connected && state.frameReady ? ' is-live' : ''}`} />}<span>{status}</span></div>
-      <div className="pw-desktop-control-actions">
+      <MotionFeedback identity={status} initial={false} className="pw-desktop-status" role="status">{busy || state.controlPending || state.inputPending ? <IconLoading size={14} className="pw-desktop-spin" aria-hidden="true" /> : <span className={`pw-desktop-status-dot${connected && state.frameReady ? ' is-live' : ''}`} />}<span>{status}</span></MotionFeedback>
+      <MotionFeedback identity={human ? 'human' : 'watching'} initial={false} className="pw-desktop-control-actions">
         {human ? <button type="button" className="pw-desktop-primary" disabled={state.controlPending || state.inputPending} onClick={() => { setClickMode('left'); void connection.current?.control('release'); }}><IconCheck size={16} />交还控制</button> : <button type="button" className="pw-desktop-primary" disabled={!connected || otherHuman || !state.frameReady || state.controlPending || state.inputPending || state.inputUncertain} title={otherHuman ? '另一窗口交还控制后可申请' : undefined} onClick={() => void connection.current?.control('take')}><IconTakeControl size={16} />我来操作</button>}
         <button type="button" className="pw-desktop-icon" aria-label="打开远程键盘" aria-pressed={keyboard} title="远程键盘" disabled={!human} onClick={() => setKeyboard(value => !value)}><IconKeyboard size={19} /></button>
         <button type="button" className="pw-desktop-icon" aria-label="更多桌面操作" aria-expanded={more} title="更多操作" onClick={() => setMore(value => !value)}><IconMore size={19} /></button>
-      </div>
+      </MotionFeedback>
     </div>
-    {(state.error || textError || videoError) && <div className="pw-desktop-error" role="alert"><span>{textError || state.error || videoError}</span>{state.inputUncertain && <button type="button" onClick={reconnect} disabled={state.controlPending || state.inputPending}>重新连接核对</button>}</div>}
+    {(state.error || textError || videoError) && <MotionFeedback identity={textError || state.error || videoError} className="pw-desktop-error" role="alert"><span>{textError || state.error || videoError}</span>{state.inputUncertain && <button type="button" onClick={reconnect} disabled={state.controlPending || state.inputPending}>重新连接核对</button>}</MotionFeedback>}
     {connected && state.frameIssue && !state.inputUncertain && <p className="pw-desktop-hint">{state.frameIssue === 'unavailable' ? '当前连接无法核对画面，只能观看。请更新手机端和电脑端后重新连接。' : '暂时无法核对画面，已停用电脑操作。可以继续观看，或重新连接后再试。'}</p>}
     {human && connected && !state.inputUncertain && !state.frameIssue && <p className="pw-desktop-hint">{state.controlExpired ? '请先交还控制，再重新接管。' : clickMode === 'double' ? '轻点画面执行一次双击' : clickMode === 'right' ? '轻点画面执行右键' : zoom > 1 ? '拖动画面查看 · 轻点操作' : '轻点点击 · 长按右键 · 滑动滚动'}</p>}
 
-    {more && <div className="pw-desktop-more" aria-label="桌面工具">
+    {more && <MotionFeedback identity="tools" className="pw-desktop-more" aria-label="桌面工具">
       <div className="pw-desktop-zoom"><button type="button" onClick={() => setViewZoom(zoom - .5)} aria-label="缩小桌面" disabled={zoom <= 1}><IconMinus size={17} /></button><button type="button" onClick={() => setViewZoom(1)} aria-label="还原桌面大小">{Math.round(zoom * 100)}%</button><button type="button" onClick={() => setViewZoom(zoom + .5)} aria-label="放大桌面" disabled={zoom >= 3}><IconAdd size={17} /></button></div>
       <button type="button" disabled={!canInput} aria-pressed={clickMode === 'double'} onClick={() => setClickMode(mode => mode === 'double' ? 'left' : 'double')}><IconCursorClick size={16} />双击</button>
       <button type="button" disabled={!canInput} aria-pressed={clickMode === 'right'} onClick={() => setClickMode(mode => mode === 'right' ? 'left' : 'right')}><IconCursor size={16} />右键</button>
       <div className="pw-desktop-scroll"><button type="button" disabled={!canInput} onClick={() => send({ kind: 'scroll', direction: 'up', amount: 3, by: 'line' })} aria-label="向上滚动电脑"><IconArrowUp size={16} /></button><button type="button" disabled={!canInput} onClick={() => send({ kind: 'scroll', direction: 'down', amount: 3, by: 'line' })} aria-label="向下滚动电脑"><IconArrowDown size={16} /></button><button type="button" disabled={!canInput} onClick={() => send({ kind: 'scroll', direction: 'left', amount: 3, by: 'line' })} aria-label="向左滚动电脑"><IconArrowLeft size={16} /></button><button type="button" disabled={!canInput} onClick={() => send({ kind: 'scroll', direction: 'right', amount: 3, by: 'line' })} aria-label="向右滚动电脑"><IconArrowRight size={16} /></button></div>
       <button type="button" onClick={reconnect} disabled={!hostReady || !scope?.available || busy}><IconRefresh size={15} />重连</button>
-    </div>}
+    </MotionFeedback>}
 
-    {keyboard && <div className="pw-desktop-keyboard">
+    {keyboard && <MotionFeedback identity="keyboard" className="pw-desktop-keyboard">
       <div className="pw-desktop-shortcuts" aria-label="电脑快捷键"><button type="button" disabled={!canInput} onClick={() => send({ kind: 'press_key', key: 'escape' })}>Esc</button><button type="button" disabled={!canInput} onClick={() => send({ kind: 'press_key', key: 'tab' })}>Tab</button><button type="button" disabled={!canInput} onClick={() => send({ kind: 'press_key', key: 'enter' })}><IconReturn size={14} style={{transform: 'rotate(90deg)'}} />Enter</button>{['A', 'C', 'V', 'Z'].map(key => <button key={key} type="button" disabled={!canInput} onClick={() => send({ kind: 'hotkey', keys: ['CTRL', key] })}>Ctrl+{key}</button>)}</div>
       <form className="pw-desktop-text" onSubmit={event => { event.preventDefault(); void submitText(); }}>
         <label className="pw-desktop-sr" htmlFor="desktop-text-input">发送到电脑的文字</label><textarea id="desktop-text-input" ref={textarea} value={draft} rows={2} disabled={!human || state.inputUncertain} placeholder="在手机输入，发送到电脑…" onChange={event => { setDraft(event.target.value); setTextError(''); }} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing && !composing.current) { event.preventDefault(); void submitText(); } }} />
         <button type="submit" className="pw-desktop-primary" disabled={!canInput || !draft} aria-label="发送文字到电脑" title="发送文字">{state.inputPending ? <IconLoading className="pw-desktop-spin" size={17} /> : <IconSend size={17} />}</button>
       </form>
-    </div>}
+    </MotionFeedback>}
   </section>;
 }

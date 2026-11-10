@@ -4,6 +4,7 @@ import { bridge, type PocketSnapshot } from './bridge';
 import { Button, IconButton } from './forms-library';
 import { TextField, InputBase } from './forms-library/boardui/components/base/input/input';
 import { ShimmerText } from './library';
+import { MotionFeedback } from './library/journey-motion';
 import { usePocketAppearance } from './usePocketAppearance';
 import {
   BROWSER_CHROME_INPUT_LIMIT, browserChromeActionAvailable, browserChromeActionPayload,
@@ -200,9 +201,9 @@ export default function BrowserChrome({ snapshot }: { snapshot: PocketSnapshot }
       <IconButton icon={IconFileText} className="browser-chrome-control" aria-label="查看研究来源" title="研究来源" disabled={disabled('sources')} onClick={() => void act('sources')} />
       <IconButton icon={IconMore} className="browser-chrome-control" aria-label="更多浏览选项和状态" title="更多浏览选项和状态" disabled={disabled('more')} onClick={() => void act('more')} />
     </nav>
-    <div id="browser-chrome-status" className="browser-chrome-status" data-notice={nativeUnconfirmed ? 'unconfirmed' : notice?.kind} role={nativeUnconfirmed || notice ? 'alert' : 'status'} aria-live={nativeUnconfirmed || notice ? 'assertive' : 'polite'} aria-atomic="true" title={status}>
+    <MotionFeedback identity={JSON.stringify([state?.windowId, nativeUnconfirmed, notice?.kind, notice?.text, connected, pending, state?.loading])} initial={false} id="browser-chrome-status" className="browser-chrome-status" data-notice={nativeUnconfirmed ? 'unconfirmed' : notice?.kind} role={nativeUnconfirmed || notice ? 'alert' : 'status'} aria-live={nativeUnconfirmed || notice ? 'assertive' : 'polite'} aria-atomic="true" title={status}>
       {loading ? <ShimmerText>{status}</ShimmerText> : <span>{status}</span>}
-    </div>
+    </MotionFeedback>
     {connected && state?.loading && <div className="browser-chrome-progress" role="progressbar" aria-label="网页加载进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={browserChromeProgress(state.progress)}><span style={{ transform: `scaleX(${browserChromeProgress(state.progress) / 100})` }} /></div>}
   </section>;
 }

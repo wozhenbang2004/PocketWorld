@@ -2,7 +2,8 @@ import {useEffect,useRef,useState} from 'react';
 import { IconArrowLeft, IconClose, IconRefresh } from './icons';
 import {Button,IconButton,RadioOptions,TextAreaField} from './forms-library';
 import {Drawer} from './shell-library';
-import {useClosingSnapshot} from './library/surface-motion';
+import {useClosingSnapshot,useSurfaceEnter} from './library/surface-motion';
+import {MotionFeedback,useCollectionMotion} from './library/journey-motion';
 import './conversation-queued-inputs.css';
 
 type Json=Record<string,any>;
@@ -17,6 +18,10 @@ export function ConversationQueuedInputs({page,can,act,registerBack}:Props){
  const exit=useClosingSnapshot(page),shown:Json=exit.display??{};
  const [pending,setPending]=useState(false),[error,setError]=useState('');
  const live=useRef(page),sending=useRef(false);live.current=page;
+ const body=useRef<HTMLDivElement>(null);
+ const identity=JSON.stringify([shown.window,shown.editor?.message,shown.editor?.queueRevision]);
+ useSurfaceEnter(body,identity,{selector:'',depth:shown.editor?1:0,active:!!page&&shown.current===true});
+ useCollectionMotion(body,identity,JSON.stringify((Array.isArray(shown.items)?shown.items:[]).map((row:Json)=>[row.messageId,row.queueState,row.editable])),{active:!!page&&shown.current===true&&!shown.reading&&!shown.readingMessage&&!shown.editor});
  const invoke=async(action:string,args:Json)=>{
   if(sending.current)return;
   const original=live.current?.window;sending.current=true;setPending(true);setError('');
@@ -30,13 +35,13 @@ export function ConversationQueuedInputs({page,can,act,registerBack}:Props){
  return <Drawer.Root open={!!page} onOpenChange={open=>{if(!open)close()}} dismissible={!pending&&!page?.saving} shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay"/><Drawer.Content className="pw-drawer pw-queued-inputs-drawer" aria-describedby="pw-queued-description" inert={!page} onCloseAutoFocus={exit.onCloseAutoFocus} onEscapeKeyDown={event=>{if(page?.editor){event.preventDefault();back()}}}>
   <div className="pw-drawer-handle"/>
   <header className="pw-drawer-header">{shown?.editor&&<IconButton icon={IconArrowLeft} aria-label="返回排队消息" disabled={pending||!!page?.saving} onClick={back}/>}<div><Drawer.Title>{shown?.editor?(shown.editor.withdrawn?'撤回这条消息':'调整排队消息'):'排队消息'}</Drawer.Title><Drawer.Description id="pw-queued-description">只调整尚未被任务接手的输入，不会重发消息或扩大任务范围。</Drawer.Description></div><IconButton icon={IconClose} aria-label="关闭排队消息" disabled={pending||!!page?.saving} onClick={close}/></header>
-  <div className="pw-drawer-body pw-queued-inputs-body">
-   {(error||shown?.error)&&<p className="pw-error" role="alert">{error||shown?.error}</p>}
-   {shown?.notice&&<p className="pw-muted" role="status">{shown.notice}</p>}
+  <div ref={body} className="pw-drawer-body pw-queued-inputs-body">
+   {(error||shown?.error)&&<MotionFeedback identity={error||shown?.error} className="pw-error" role="alert">{error||shown?.error}</MotionFeedback>}
+   {shown?.notice&&<MotionFeedback identity={shown.notice} className="pw-muted" role="status">{shown.notice}</MotionFeedback>}
    {shown?.current===false&&<p className="pw-error" role="alert">原对话窗口已变化，请关闭后重新打开排队消息。</p>}
    {shown?.editor?<QueueEditor key={`${shown.window}:${shown.editor.message}:${shown.editor.queueRevision}`} page={shown} disabled={!page||shown.current!==true||pending||shown.saving||!!shown.error} can={can} act={act} onPending={setPending} sending={sending} onError={setError}/>:<>
     <div className="pw-queued-inputs-tools"><span role="status">{shown?.reading?'正在读取原队列':shown?.readingMessage?'正在读取原消息':'原任务的输入记录'}</span><IconButton icon={IconRefresh} aria-label="刷新排队消息" disabled={!page||shown?.current!==true||pending||!!shown?.reading||!!shown?.readingMessage||!can('queued.refresh')} onClick={()=>{if(page)void invoke('queued.refresh',binding(page))}}/></div>
-    <ol className="pw-queued-inputs-list">{Array.isArray(shown?.items)&&shown.items.map((row:Json)=><li key={row.messageId}>
+    <ol className="pw-queued-inputs-list">{Array.isArray(shown?.items)&&shown.items.map((row:Json)=><li key={row.messageId} data-motion-key={row.messageId}>
      <small>{queueStatus(row)}</small><p>{row.content||'仅附件消息'}{row.contentTruncated&&'…'}</p>
      {(row.attachmentCount>0||row.sourceReferenceCount>0||row.previewReferenceCount>0)&&<small>{[row.attachmentCount>0?`${row.attachmentCount} 个附件`:'',row.sourceReferenceCount>0?`${row.sourceReferenceCount} 处原文引用`:'',row.previewReferenceCount>0?`${row.previewReferenceCount} 处预览引用`:''].filter(Boolean).join(' · ')}</small>}
      {row.editable===true&&<div className="pw-action-row"><Button variant="ghost" disabled={!page||shown.current!==true||pending||shown.reading||!!shown.readingMessage||!can('queued.edit')} onClick={()=>{if(page)void invoke('queued.edit',{...binding(page),messageId:row.messageId,withdrawn:false})}}>调整内容与时机</Button><Button variant="ghost" disabled={!page||shown.current!==true||pending||shown.reading||!!shown.readingMessage||!can('queued.edit')} onClick={()=>{if(page)void invoke('queued.edit',{...binding(page),messageId:row.messageId,withdrawn:true})}}>撤回</Button></div>}

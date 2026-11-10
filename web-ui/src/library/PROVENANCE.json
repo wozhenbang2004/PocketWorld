@@ -249,5 +249,23 @@
     "composer": "Retain the actual controlled textarea, attachment identities and commands. Measured editor/attachment height and presence keep changes continuous; closing controls are inert and settle on dynamic reduced motion/background. No duplicate editor, fake upload progress or delayed command is introduced.",
     "surfaces": "Animate one current page and genuinely new message IDs; history hydration, stream token changes and returning to a conversation do not replay. First-send intent is bound only through an observed native pending ID and matching real receipt/submission.",
     "verification": "Source review; formal build and current Android interaction status are recorded in DESIGN.md. Source reuse does not imply user acceptance of this adaptation."
+  },
+  "motionCoverage20261110": {
+    "scope": "PW-M7–PW-M14 product journey integration. No new dependencies or source-family substitution; current native business state remains authoritative.",
+    "adapters": [
+      "journey-motion.tsx",
+      "../ConversationReply.tsx",
+      "context.tsx",
+      "agents.tsx",
+      "feedback.tsx",
+      "execution-stepper.js",
+      "adapted/agent-motion.tsx"
+    ],
+    "collection": "Bounded adaptation of retained Affect measured FLIP in adapted/agent-motion.tsx, combined with the approved independent Reaction Bar v1 item-arrival pattern. Stable real IDs, current position/opacity retargeting, related-scroll settling, hydration identity and lifecycle cleanup; no live exit clones.",
+    "disclosure": "Retains the adopted Affect single content-tree grid disclosure. Closed content is inert immediately; current receipts use only opacity and cannot delay native cleanup.",
+    "reply": "Same keyed render row only when native task/run/coordinatorEpoch/request/answer identity agrees; no text matching, synthetic saved reply or duplicate editor. Continued body does not replay new-message arrival.",
+    "steps": "Continues the approved independent Nick archive adaptation already retained in execution-stepper.js, not author original code. Nested real trace children and stable node reconciliation replace demo rebuild/timer behavior; source archive and upstream bytes are unchanged.",
+    "media": "Embla 8.6.0 retained; touch cancellation, reInit, visibility and reduced-motion settling added around the existing engine. Real phone/video/native-preview instances and authoritative input geometry remain unchanged by layout motion.",
+    "evidence": "../../docs/motion-research-20261110.md records the approved-reference boundaries, exact source reading, implementation map, build status and unverified Android experience. Implementation authorization is not visual acceptance."
   }
 }

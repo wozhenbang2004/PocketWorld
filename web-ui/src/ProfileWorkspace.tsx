@@ -3,6 +3,7 @@ import { IconAccount, IconAdd, IconArrowLeft, IconArrowUpRight, IconChat, IconCh
 import { Accordion, AccordionItem, Button, IconButton, SearchField, SelectField, SettingsDialog, StretchSwitch, TextAreaField, TextField } from './forms-library';
 import { Radio, RadioGroup } from './forms-library/boardui/components/base/radio/radio';
 import { useSurfaceEnter } from './library/surface-motion';
+import { MotionFeedback, useCollectionMotion } from './library/journey-motion';
 import './profile.css';
 
 type Data = Record<string, any>;
@@ -169,7 +170,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   const previousPresentation = useRef(presentationKey);
   const livePresentation = useRef(presentationKey);
   livePresentation.current = presentationKey;
-  useSurfaceEnter(scroller, view, {selector: ':scope > .pw-profile-content', depth: view === 'home' ? 0 : ['memory', 'memory-new', 'memory-settings'].includes(view) ? 2 : 1});
+  useSurfaceEnter(scroller, JSON.stringify([view, view === 'memory' ? selection?.id : null]), {selector: ':scope > .pw-profile-content', depth: view === 'home' ? 0 : ['memory', 'memory-new', 'memory-settings'].includes(view) ? 2 : 1, active: loaded && enteredProfile});
   const canEnter = supported('connections.enter'), canRead = supported('profile.snapshot'), canSave = supported('profile.save');
   const locked = !!pending;
   const formLocked = locked || avatarPicking || !canSave;
@@ -182,6 +183,11 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   const topics = [...new Map(activeMemories.map(row => [topicOf(row).id, topicOf(row)])).values()];
   const visibleCandidates = pendingCandidates.filter(searched);
   const historyRows = memories.history.filter(searched);
+  useCollectionMotion(scroller, JSON.stringify([presentationKey, view, searchText, topic, showCandidates]), JSON.stringify([
+    visibleMemories.map(row => [row.id, row.revision, topicOf(row).id]),
+    visibleCandidates.map(row => [row.id, row.status]), historyRows.map(row => [row.id, row.revision]),
+    notice, error, feedback?.value.status, feedback?.needsQuery,
+  ]), { active: loaded && enteredProfile && memoryAvailable });
 
   const closeHandle = (handle: string) => { if (handle && supportedRef.current('profile.memory.close')) void runRef.current('profile.memory.close', { handle }).catch(() => {}); };
   const closeAvatar = () => {
@@ -727,7 +733,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
         : view === 'memories' || view === 'memory-history' ? <IconButton icon={IconSettings} aria-label="记忆设置" title="记忆设置" disabled={locked} onClick={openMemorySettings} />
           : view === 'home' ? <IconButton icon={IconSettings} aria-label="隐私与数据设置" title="隐私与数据" onClick={() => guarded(onSettings)} /> : <span />;
   const entry = (id: string, title: string, description: string, icon: typeof IconChat, open: () => void, badge?: ReactNode) => <Button variant="ghost" className="pw-profile-entry" leadingIcon={icon} trailingIcon={IconChevronRight} onClick={open} disabled={!loaded || locked} data-profile-entry={id}><span className="pw-profile-entry-copy"><strong>{title}</strong><small>{description}</small></span>{badge}</Button>;
-  const memoryRow = (row: Data, candidate: boolean) => <Button key={(candidate ? 'candidate:' : 'memory:') + row.id} variant="ghost" className="pw-profile-memory-row" trailingIcon={IconChevronRight} data-personal-memory={string(row.id)} disabled={locked || !supported('profile.memory.get')} onClick={() => openMemory(row, candidate)}><span><strong>{string(row.text || row.title) || '未命名记忆'}</strong><small>{[memoryOrigin(row, candidate), memoryDates(row)].filter(Boolean).join(' · ')}</small></span></Button>;
+  const memoryRow = (row: Data, candidate: boolean) => <Button key={(candidate ? 'candidate:' : 'memory:') + row.id} variant="ghost" className="pw-profile-memory-row" trailingIcon={IconChevronRight} data-personal-memory={string(row.id)} data-motion-key={(candidate ? 'candidate:' : 'memory:') + row.id} disabled={locked || !supported('profile.memory.get')} onClick={() => openMemory(row, candidate)}><span><strong>{string(row.text || row.title) || '未命名记忆'}</strong><small>{[memoryOrigin(row, candidate), memoryDates(row)].filter(Boolean).join(' · ')}</small></span></Button>;
 
   return <section className="pw-profile-workspace pw-route-workspace" data-profile-view={view} aria-label={headingLabel}>
     <header className="pw-profile-header"><IconButton icon={IconArrowLeft} aria-label={view === 'home' ? '返回' : '返回上一级'} onClick={requestBack} /><h1 ref={heading} tabIndex={-1}>{headingLabel}</h1>{headerSave}</header>
@@ -735,9 +741,9 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
       <div className="pw-profile-content">
         {!canEnter && <div className="pw-profile-empty"><IconAccount aria-hidden="true" /><h2>个人资料暂不可用</h2><p>请更新应用后重新打开。</p></div>}
         {canEnter && !loaded && <div className="pw-profile-loading" role="status">{locked || !enteredProfile || !canRead ? '正在打开个人资料…' : '个人资料尚未读取。'}{!locked && <Button variant="ghost" leadingIcon={IconRefresh} onClick={refresh}>重新读取</Button>}</div>}
-        {error && <div className="pw-profile-feedback is-error" role="alert"><p>{error}</p>{!locked && <Button variant="ghost" size="small" leadingIcon={IconRefresh} onClick={view === 'memory' ? reloadMemory : view === 'memory-settings' ? openMemorySettings : refresh}>读取最新{view === 'memory' ? '记忆' : view === 'memory-settings' ? '设置' : '资料'}</Button>}</div>}
-        {notice && <p className="pw-profile-feedback" role="status">{['已保存', '记忆已删除', '已记住', '已忽略', '当前内容已核对'].includes(notice) && <IconCheck size={15} aria-hidden="true" />}{notice}</p>}
-        {feedbackVisible && feedback && <section className="pw-profile-feedback pw-profile-memory-feedback" role="status">
+        {error && <MotionFeedback identity={error} className="pw-profile-feedback is-error" role="alert"><p>{error}</p>{!locked && <Button variant="ghost" size="small" leadingIcon={IconRefresh} onClick={view === 'memory' ? reloadMemory : view === 'memory-settings' ? openMemorySettings : refresh}>读取最新{view === 'memory' ? '记忆' : view === 'memory-settings' ? '设置' : '资料'}</Button>}</MotionFeedback>}
+        {notice && <MotionFeedback identity={notice} className="pw-profile-feedback" role="status">{['已保存', '记忆已删除', '已记住', '已忽略', '当前内容已核对'].includes(notice) && <IconCheck size={15} aria-hidden="true" />}{notice}</MotionFeedback>}
+        {feedbackVisible && feedback && <MotionFeedback identity={JSON.stringify([feedback.operation, feedback.targetId, feedback.value.status, feedback.needsQuery, feedback.value.undoAvailable])} className="pw-profile-feedback pw-profile-memory-feedback" role="status">
           <div className="pw-profile-receipt-heading">{!feedback.needsQuery && ['saved', 'reverted'].includes(feedback.value.status) && <IconCheck size={16} aria-hidden="true" />}<span>{feedbackLabel(feedback)}</span></div>
           {feedback.value.undoUnavailableReason && <p>{string(feedback.value.undoUnavailableReason)}</p>}
           <div className="pw-profile-actions">
@@ -746,8 +752,8 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
             {!feedback.needsQuery && feedback.value.status === 'saved' && feedback.value.undoAvailable === true && ['create', 'accept'].includes(feedback.operation) && supported('profile.memory.undo') && <Button variant="ghost" size="small" leadingIcon={IconUndo} disabled={locked} onClick={() => guarded(() => readReceipt(true))}>撤销这次保存</Button>}
             {(feedback.needsQuery || ['unknown', 'conflict'].includes(feedback.value.status)) && <Button variant="secondary" size="small" leadingIcon={IconRefresh} disabled={locked || !supported('profile.memory.query')} onClick={() => readReceipt()}>查询这次修改</Button>}
           </div>
-        </section>}
-        {locked && loaded && <p className="pw-profile-working" role="status">{pending}…</p>}
+        </MotionFeedback>}
+        {locked && loaded && <MotionFeedback identity={pending} className="pw-profile-working" role="status">{pending}…</MotionFeedback>}
         {avatarPicking && !locked && <p className="pw-profile-working" role="status">正在等候所选头像…</p>}
         {loaded && profile && view === 'home' && <>
           <section className="pw-profile-identity" aria-label="个人资料"><Avatar profile={profile} large /><div><h2>{profile.nickname || '我的资料'}</h2>{profile.addressAs && profile.addressAs !== profile.nickname && <p>称呼我为 {profile.addressAs}</p>}<Button variant="ghost" size="small" className="pw-profile-edit-link" onClick={() => openEditor('identity')}>编辑资料<IconChevronRight size={15} aria-hidden="true" /></Button></div></section>
@@ -756,7 +762,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
             {entry('behavior', '做事偏好', [selectedLabel(paceOptions, profile.operation_pace), selectedLabel(initiativeOptions, profile.initiative)].filter(Boolean).join(' · '), IconControls, () => openEditor('behavior'))}
             {entry('memories', '个人记忆', pendingCandidates.length ? `${pendingCandidates.length} 条待确认 · 查看和修正` : 'AI 对我的了解', IconSparkles, () => { setEditor(null); go('memories'); }, pendingCandidates.length > 0 ? <span className="pw-profile-unread" aria-label={`${pendingCandidates.length} 条待确认`} /> : undefined)}
           </div>
-          {memoryAvailable && activeMemories.length > 0 && <section className="pw-profile-home-memories" aria-label="个人记忆预览">{activeMemories.slice(0, 2).map(row => <Button key={row.id} variant="ghost" className="pw-profile-home-memory" trailingIcon={IconChevronRight} disabled={locked || !supported('profile.memory.get')} onClick={() => openMemory(row, false)}><span><strong>{string(row.text || row.title) || '未命名记忆'}</strong><small>{memoryOrigin(row)}</small></span></Button>)}</section>}
+          {memoryAvailable && activeMemories.length > 0 && <section className="pw-profile-home-memories" aria-label="个人记忆预览">{activeMemories.slice(0, 2).map(row => <Button key={row.id} data-motion-key={`memory:${row.id}`} variant="ghost" className="pw-profile-home-memory" trailingIcon={IconChevronRight} disabled={locked || !supported('profile.memory.get')} onClick={() => openMemory(row, false)}><span><strong>{string(row.text || row.title) || '未命名记忆'}</strong><small>{memoryOrigin(row)}</small></span></Button>)}</section>}
           <Button variant="ghost" className="pw-profile-data-entry" leadingIcon={IconShieldCheck} trailingIcon={IconChevronRight} disabled={locked} onClick={() => guarded(onSettings)}>隐私与数据</Button>
         </>}
         {editor && currentSection && <>

@@ -3,6 +3,7 @@ import { IconArrowLeft, IconClose, IconCursor, IconHistory, IconRefresh } from '
 import { bridge } from './bridge';
 import { Accordion, AccordionItem, Button, IconButton, SelectField } from './forms-library';
 import { ProgressCircle } from './library';
+import { MotionFeedback } from './library/journey-motion';
 import { packagePreviewMatches, previewReturned, previewViewport, projectPreviewState, samePreviewWindow, type PackagePreviewChoices, type ProjectPreviewState, type PreviewWindow } from './project-preview';
 import './project-preview.css';
 
@@ -198,7 +199,7 @@ export function ProjectPreviewPane({ control, composer }: { control: ReturnType<
   const problem = error || view?.error;
   const choices = control.choices, choosing = !!choices && !view;
   const fixed = view?.metadata.origin === 'fixed_workspace_project_artifact';
-  return <section className="pw-preview-pane" aria-label="项目预览" aria-busy={!!busy}>
+  return <section className="pw-preview-pane" data-motion-native-surface="project-preview" aria-label="项目预览" aria-busy={!!busy}>
     <header className="pw-preview-heading"><div><h3>{choosing ? '打开固定版本' : fixed ? '任务固定版本' : '已采集预览'}</h3><p>{choosing ? choices?.entryPath || '选择包内入口' : view?.metadata.entryPath ? String(view.metadata.entryPath) : '原项目画面'}</p></div>{view?.selecting && <span className="pw-preview-selection-state">正在选择</span>}</header>
     {!choosing && <div className="pw-preview-actions">
       <Button variant={view?.selecting ? 'primary' : 'secondary'} leadingIcon={IconCursor} size="small"
@@ -209,13 +210,13 @@ export function ProjectPreviewPane({ control, composer }: { control: ReturnType<
       <IconButton icon={IconRefresh} aria-label="重新载入预览" title="重新载入会使旧元素引用失效" disabled={!view || !!busy || unknown || !can('projects.preview.reload')} onClick={() => control.action('projects.preview.reload')}/>
       <IconButton icon={IconClose} aria-label="关闭预览" title="关闭后需要重新选择元素" disabled={!view || !!busy || unknown || !can('projects.preview.close')} onClick={() => control.action('projects.preview.close')}/>
     </div>}
-    <div className="pw-preview-context">
+    <MotionFeedback identity={JSON.stringify([sessionId, view?.ready, view?.selecting, view?.selectionAvailable, problem, unknown, choosing])} initial={false} className="pw-preview-context">
       <p className="pw-muted">{choosing ? '只打开这次任务保存的版本，不构建或启动任务。' : view?.selecting ? '点选元素加入原草稿，不会执行页面按钮。' : fixed ? '固定包不会随当前项目的修改而更新。' : '开启元素选择后，可把画面位置加入原草稿。'}</p>
 
       {view && !view.selectionAvailable && <p className="pw-muted" role="status">{view.selectionUnavailableReason || '暂未确认原来源仍可用于元素选择。'}{fixed ? ' 历史画面仍可查看，发送时还会重新核对来源。' : ''}</p>}
       {problem && <p className="pw-error" role="alert">{problem}</p>}
       {unknown && <p className="pw-muted">原操作结果待核对，没有重发。请返回后核对原预览与草稿。</p>}
-    </div>
+    </MotionFeedback>
     {choosing && choices ? <section className="pw-preview-entry" aria-label="固定包入口">
       {choices.mode === 'web_output' ? <div><p className="pw-field-hint">清单声明的 HTML 入口</p><p className="pw-preview-entry-path">{choices.entryPath}</p></div> : choices.entryChoices.length ?
         <SelectField label="固定包中的 HTML 入口" value={control.selectedEntry} onChange={control.setSelectedEntry} options={choices.entryChoices.map(path => ({ id: path, label: path }))} isDisabled={!!busy || unknown || blocked} /> :
@@ -228,7 +229,7 @@ export function ProjectPreviewPane({ control, composer }: { control: ReturnType<
     </section> : <div ref={viewport} className="pw-preview-viewport" aria-label="原生隔离预览画面" data-preview-session={sessionId || undefined}>
       {!view?.ready && <div className="pw-preview-placeholder">{busy || view && !problem ? <><ProgressCircle isIndeterminate size="sm" aria-label="正在打开已采集预览"/><p>正在打开已采集预览…</p></> : <p>{problem ? '原文件和草稿仍保留。' : '当前项目没有可用的已采集预览。'}</p>}</div>}
     </div>}
-    {view && <p className="pw-preview-draft-status" role="status">{count > 0 ? `草稿中有 ${count} 处元素引用，尚未发送` : '选择的元素会留在原对话草稿中'}</p>}
+    {view && <MotionFeedback identity={`${sessionId}:${count}`} initial={false} className="pw-preview-draft-status" role="status">{count > 0 ? `草稿中有 ${count} 处元素引用，尚未发送` : '选择的元素会留在原对话草稿中'}</MotionFeedback>}
     {view && <Accordion variant="divided"><AccordionItem id="opened-package-source" title="来源与原任务" headingLevel={4}>
         <dl className="pw-preview-source-details"><dt>原任务</dt><dd>{view.taskId}</dd><dt>项目</dt><dd>{String(view.metadata.projectId || '')}</dd>{fixed && <><dt>原操作</dt><dd>{view.packageOperationId}</dd><dt>固定版本</dt><dd>{String(view.metadata.artifactId || '')}</dd><dt>归档摘要</dt><dd>{String(view.metadata.artifactSha256 || '')}</dd></>}</dl>
       </AccordionItem></Accordion>}

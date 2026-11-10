@@ -4,11 +4,15 @@ import {IconCheck,IconEvidence} from '../icons';
 import type {DataPanelProps} from './types';
 import {FrameA,FrameB,Icon,Button,statusLabel,records,textOf,labelOf} from './core';
 import {AgentAvatar} from './identity';
+import {MotionDisclosure} from './journey-motion';
 import {MeasuredConnectors,useFlipLayout,type Connector} from './adapted/agent-motion';
 const branchActive=(a:any):boolean=>['running','working','needs_approval','waiting_approval','failed','error'].includes(String(a?.status??a?.state))||(a?.children||[]).some(branchActive);
 const stateOf=(a:any)=>String(a?.status??a?.state??'unknown');
 function avatarState(a:any){const s=stateOf(a);return ({running:'working',working:'working',done:'complete',completed:'complete',success:'complete',failed:'error',waiting_approval:'waiting',awaiting_owner_approval:'waiting',returned:'idle',unknown:'waiting'} as Record<string,string>)[s]||s}
-function TreeChildren({open,root=false,children,onLayout}:{open:boolean;root?:boolean;children:ReactNode;onLayout:()=>void}){const[present,setPresent]=useState(open);useEffect(()=>{if(open){const frame=requestAnimationFrame(()=>{setPresent(true);onLayout()});return()=>cancelAnimationFrame(frame)}const timer=setTimeout(()=>{setPresent(false);onLayout()},280);return()=>clearTimeout(timer)},[open,onLayout]);return open||present?<div role="group" className={'cb-tree-children '+(root?'cb-tree-level1':'')} data-closing={!open} aria-hidden={!open} inert={!open}>{children}</div>:null}
+function TreeChildren({open,root=false,children,onLayout}:{open:boolean;root?:boolean;children:ReactNode;onLayout:()=>void}){
+ useLayoutEffect(onLayout,[open,onLayout]);
+ return <MotionDisclosure open={open}><div role="group" className={'cb-tree-children '+(root?'cb-tree-level1':'')}>{children}</div></MotionDisclosure>;
+}
 export function AgentTree({data,title,onAction,className=''}:DataPanelProps){
  const roots=Array.isArray(data)?data:data?.root?[data.root]:data?.tree?[data.tree]:Array.isArray(data?.roots)?data.roots:records(data);
  const[fold,setFold]=useState<string[]>([]);const known=useRef(new Set<string>());const[epoch,setEpoch]=useState(0);const layout=useRef<HTMLDivElement>(null);const version=JSON.stringify(roots);const revision=fold.join('|')+':'+epoch+':'+version;const capture=useFlipLayout(layout,revision);const changed=useCallback(()=>setEpoch(v=>v+1),[]);const edges:Connector[]=[];const flat:any[]=[];

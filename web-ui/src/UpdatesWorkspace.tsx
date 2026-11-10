@@ -3,6 +3,7 @@ import { IconArrowLeft, IconDownload, IconRefresh } from './icons';
 import { bridge, type PocketSnapshot } from './bridge';
 import { Accordion, AccordionItem, Button, IconButton, StretchSwitch } from './forms-library';
 import { ProgressBar } from './library';
+import { MotionFeedback, useCollectionMotion } from './library/journey-motion';
 import { usePocketAppearance } from './usePocketAppearance';
 
 type UpdatesState = {
@@ -25,6 +26,7 @@ export default function UpdatesWorkspace({ snapshot }: { snapshot: PocketSnapsho
   const [error, setError] = useState('');
   const [needsRead, setNeedsRead] = useState(false);
   const [suspended, setSuspended] = useState(document.visibilityState === 'hidden');
+  const version = useRef<HTMLElement>(null);
   const mounted = useRef(true), sequence = useRef(0), lastEpoch = useRef(epoch);
   const operation = useRef<UpdateAction | null>(null);
   const live = useRef({ data, epoch }); live.current = { data, epoch };
@@ -96,6 +98,10 @@ export default function UpdatesWorkspace({ snapshot }: { snapshot: PocketSnapsho
   const progress = measured ? Math.min(100, Math.max(0, data.downloadedBytes * 100 / data.totalBytes)) : undefined;
   const transfer = data?.release && data.delivery ? `${data.delivery}${data.totalBytes > 0 ? ` · ${megabytes(data.downloadedBytes)} / ${megabytes(data.totalBytes)}` : ''}` : '';
 
+  useCollectionMotion(version, JSON.stringify([epoch, data?.windowId]),
+    JSON.stringify([data?.release?.versionCode, data?.phase, !!error, data?.awaitingSystem, primary?.action, pending, !!transfer]),
+    { active: connected, enter: false });
+
   return <main className="pw-app pw-secondary pw-updates" aria-label="应用更新">
     <header className="pw-secondary-header pw-updates-header">
       <IconButton icon={IconArrowLeft} aria-label="返回设置" disabled={locked} onClick={() => void run('updates.close')} />
@@ -103,19 +109,19 @@ export default function UpdatesWorkspace({ snapshot }: { snapshot: PocketSnapsho
     </header>
     <div className="pw-updates-scroll">
       <div className="pw-updates-content">
-        <section className="pw-updates-group pw-updates-version" aria-label="版本与更新状态">
+        <section ref={version} className="pw-updates-group pw-updates-version" aria-label="版本与更新状态">
           <p className="pw-updates-caption">当前版本</p>
           <p className="pw-updates-installed">{data?.installedVersion || '正在读取当前版本…'}</p>
-          {data?.release && <div className="pw-updates-release"><h2>新版本 {data.release.versionName}</h2><p className="pw-updates-caption">完整安装包 {megabytes(data.release.bytes)}</p></div>}
-          <p className={`pw-updates-message${data?.phase === 'failed' ? ' pw-field-error' : ''}`} role={data?.phase === 'failed' ? 'alert' : 'status'}>{data?.message || '正在读取更新状态…'}</p>
-          {error && <p className="pw-field-error pw-updates-error" role="alert">{error}</p>}
-          {data?.awaitingSystem && <p className="pw-updates-caption" role="status">请完成或取消原系统窗口，返回后再核对当前状态。</p>}
-          {(working || !data) && <ProgressBar aria-label={data?.message || '读取更新状态'} value={progress} isIndeterminate={!measured} showValueLabel={measured} className="pw-updates-progress" />}
-          {transfer && <p className="pw-updates-caption pw-updates-transfer">{transfer}</p>}
-          {primary && <div className="pw-updates-actions">
+          {data?.release && <div className="pw-updates-release" data-motion-key="release"><h2>新版本 {data.release.versionName}</h2><p className="pw-updates-caption">完整安装包 {megabytes(data.release.bytes)}</p></div>}
+          <MotionFeedback identity={data?.phase || 'reading'} initial={false} data-motion-key="message" className={`pw-updates-message${data?.phase === 'failed' ? ' pw-field-error' : ''}`} role={data?.phase === 'failed' ? 'alert' : 'status'}>{data?.message || '正在读取更新状态…'}</MotionFeedback>
+          {error && <MotionFeedback identity={error} className="pw-field-error pw-updates-error" role="alert" data-motion-key="error">{error}</MotionFeedback>}
+          {data?.awaitingSystem && <MotionFeedback identity="system-handoff" className="pw-updates-caption" role="status" data-motion-key="system-handoff">请完成或取消原系统窗口，返回后再核对当前状态。</MotionFeedback>}
+          {(working || !data) && <div data-motion-key="progress"><ProgressBar aria-label={data?.message || '读取更新状态'} value={progress} isIndeterminate={!measured} showValueLabel={measured} className="pw-updates-progress" /></div>}
+          {transfer && <p className="pw-updates-caption pw-updates-transfer" data-motion-key="transfer">{transfer}</p>}
+          {primary && <MotionFeedback identity={`${primary.action}:${pending === primary.action}`} initial={false} className="pw-updates-actions" data-motion-key="actions" aria-busy={pending !== null}>
             <Button disabled={locked} variant={cancellable && !needsRead ? 'secondary' : 'primary'} leadingIcon={primary.action === 'updates.download' ? IconDownload : primary.action === 'updates.check' || primary.action === 'updates.read' ? IconRefresh : undefined} onClick={() => void run(primary.action)}>{pending === primary.action ? '请稍候…' : primary.label}</Button>
             {data?.release && !working && !needsRead && <Button variant="ghost" disabled={locked} onClick={() => void run('updates.check')}>检查新版本</Button>}
-          </div>}
+          </MotionFeedback>}
           {data?.packageReady && <p className="pw-updates-caption">安装仍需你在 Android 系统窗口确认；返回本页不会自动安装。</p>}
         </section>
 

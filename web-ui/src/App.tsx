@@ -12,7 +12,9 @@ import {UNSAFE_PortalProvider} from 'react-aria/PortalProvider';
 
 import {bridge} from './bridge';
 import {usePocketSnapshot} from './usePocketSnapshot';
-import {foregroundConversationStream} from './conversation-stream';
+import {foregroundConversationDraft} from './conversation-stream';
+import {ReplyActivity,useReplyRows} from './ConversationReply';
+import {MotionFeedback,useCollectionMotion} from './library/journey-motion';
 import {useConversationReading} from './useConversationReading';
 import {useConversationDirectory,ConversationDirectoryControls} from './useConversationDirectory';
 import {usePocketAppearance} from './usePocketAppearance';
@@ -122,7 +124,7 @@ function Receipt({receipt}:{receipt:Json}){
  if(!['failed','rejected','unconfirmed','unknown','pending','withdrawn'].includes(status))return null;
  const labels:Record<string,string>={failed:'发送未确认',rejected:'未发送',unconfirmed:'结果待确认',unknown:'结果待确认',pending:'正在确认',withdrawn:'已撤回'};
  const detail=receipt.message||receipt.reason;
- return <div className="pw-input-receipt" role="status"><span>{labels[status]}</span>{detail&&<small>{detail}</small>}</div>;
+ return <MotionFeedback identity={`${status}:${detail||''}`} className="pw-input-receipt" role="status"><span>{labels[status]}</span>{detail&&<small>{detail}</small>}</MotionFeedback>;
 }
 
 export default function App(){
@@ -192,6 +194,7 @@ export default function App(){
  const [phoneViewerExpanded,setPhoneViewerExpanded]=useState(false),[phoneViewedTaskId,setPhoneViewedTaskId]=useState<string|null>(null);
  useEffect(()=>{setPhoneViewerExpanded(false)},[state.conversationId,route,taskId,taskOpen]);
  const projectScroll=useRef<HTMLElement>(null),projectListTop=useRef(new Map<string,number>());
+ const taskList=useRef<HTMLElement>(null),taskFocus=useRef<{id:string;node:HTMLElement}|null>(null);
  const projectFileBack=useRef<(()=>boolean)|null>(null);const registerProjectFileBack=useCallback((handler:(()=>boolean)|null)=>{projectFileBack.current=handler},[]);
  const [projectViews,setProjectViews]=useState<Record<string,{query:string;view:'files'|'tree'|'grid';expanded:string[];selected:string}>>({});
  const projectView=projectViews[String(state.projectId||'')]||{query:'',view:'files' as const,expanded:[],selected:''};
@@ -272,7 +275,9 @@ export default function App(){
  const voiceExit=useReviewFocus(!!voiceReview);
  const workspace=useRef<HTMLDivElement>(null);
  const scroll=useRef<HTMLDivElement>(null);
- const conversationStream=foregroundConversationStream(state);
+ const conversationDraft=foregroundConversationDraft(state);
+ const conversationStream=conversationDraft?.text.trim()?conversationDraft:null;
+ const replyRows=useReplyRows(String(state.conversationId||''),messages,conversationDraft,foregroundTurn as WorkIdentity|null,route==='chat'&&commands.length>0);
  const streamMarker=conversationStream?`${conversationStream.requestId}:${conversationStream.generation}:${conversationStream.sequence}`:'';
  const {content:chatContent,hasNewReplies,saveReading,rememberChatPosition,goToLatest,stopFollowing}=useConversationReading({scroll,active:route==='chat',conversationId:String(state.conversationId||''),composer,messages,streamMarker,paused:readingDocuments.length>0||!!messageOriginTarget||!!state.conversationReader||!!state.queuedInputsPage});
  const openReading=useCallback((document:ReadingSnapshot)=>{rememberChatPosition();const entry={...document,key:++readingSerial.current};setReadingDocuments(previous=>[...previous,entry])},[rememberChatPosition]);
@@ -462,7 +467,7 @@ export default function App(){
  useEffect(()=>{if(route==='projects'&&can('projects.refresh'))run('projects.refresh');else if(route==='tasks'&&can('tasks.refresh'))run('tasks.refresh');},[route,can,run]);
  useLayoutEffect(()=>{if(!taskOpen)return;const node=taskScroll.current;if(node)node.scrollTop=taskReading.current.get(`${taskId}:${taskLayer}`)??0},[taskOpen,taskId,taskLayer]);
  useEffect(()=>{setFileQuery('');setFileDisplayOpen(false);setProjectPickerOpen(false)},[state.projectId]);
- useSurfaceEnter(workspace,route==='chat'?`${route}:${state.conversationId||''}`:route==='projects'?`${route}:${state.filePath||''}`:route);
+ useSurfaceEnter(workspace,route==='chat'?`${route}:${state.conversationId||''}`:route==='projects'?`${route}:${state.filePath||''}`:route,{active:route!=='devices'&&!(route==='projects'&&projectPreview.expanded&&!state.filePath)});
  useSurfaceEnter(taskScroll,`${taskId}:${taskLayer}`,{selector:'',depth:taskLayer==='overview'?0:1,active:taskOpen});
  const markMessageArrival=useMessageArrivals(scroll,String(state.conversationId||''),messages.map((message,index)=>message.id||`${message.role}:${message.at}:${index}`),route==='chat',{
   owner:chatOwner,
@@ -550,6 +555,14 @@ export default function App(){
  };
  const taskHistory=useTaskListHistory(tasks,String(state.taskListNextCursor||''),String(state.conversationId||''),route==='tasks'&&can('history.read'));
  const filteredTasks=taskHistory.tasks.filter(t=>(filter==='all'||filter==='attention'&&attention(t)||filter==='running'&&running(t)||filter==='ended'&&terminal(t))&&[t.goal,t.summary||'',t.id].join(' ').toLocaleLowerCase().includes(taskQuery.toLocaleLowerCase()));
+ const taskMotionRevision=JSON.stringify([endedExpanded,filteredTasks.map(task=>[task.id,task.status,task.goal,task.summary,attention(task)])]);
+ useCollectionMotion(taskList,JSON.stringify([state.conversationId,filter,taskQuery,taskHistory.earlier]),taskMotionRevision,{active:route==='tasks'&&ready&&!taskHistory.busy});
+ useLayoutEffect(()=>{
+  const previous=taskFocus.current;if(route!=='tasks'||!previous||previous.node.isConnected||document.activeElement!==document.body)return;
+  const row=Array.from(taskList.current?.querySelectorAll<HTMLElement>('[data-task-id]')||[]).find(node=>node.dataset.taskId===previous.id);
+  const target=row?.matches('button:not(:disabled)')?row:row?.querySelector<HTMLElement>('button:not(:disabled)')||taskList.current?.querySelector<HTMLElement>('button:not(:disabled)');
+  target?.focus({preventScroll:true});taskFocus.current=null;
+ },[route,taskMotionRevision]);
  const attentionTasks=tasks.filter(attention);
  const navigationSelection=state.attachmentWorkspace?.open?'artifacts':['developer-logs','setup','remoteInbox','profile'].includes(route)?route:isPrimaryRoute?route:workspaceNavigationKey(secondaryPage||route);
  const selectNavigation=useCallback((key:string)=>{
@@ -838,19 +851,29 @@ export default function App(){
    {navigationContent}
   </Drawer.Content>
  </Drawer.Portal>;
- const renderTaskRow=(t:Task)=><Button variant="ghost" key={t.id} className="pw-task-row" data-task-id={t.id} data-task-status={t.status} onClick={()=>openTask(t.id)}><span className="pw-task-row-status">{running(t)?<ProgressCircle aria-label={labelStatus(t.status)} isIndeterminate size="sm"/>:t.status==='completed'?<IconCheckCircle size={20} aria-hidden="true"/>:t.status==='failed'?<IconError size={20} aria-hidden="true"/>:['paused','interrupted'].includes(t.status)?<IconPauseCircle size={20} aria-hidden="true"/>:<IconClock size={20} aria-hidden="true"/>}</span><span className="pw-task-row-copy"><b title={t.goal}>{t.goal}</b>{t.summary&&t.summary!==t.goal&&<span className="pw-task-row-summary">{t.summary}</span>}<span className="pw-task-row-meta"><span>{labelStatus(t.status)}</span>{!!t.updatedAt&&<time>{timeLabel(t.updatedAt)}</time>}</span></span><IconChevronRight size={18} aria-hidden="true"/></Button>;
- const chatPage=<main className={`pw-chat-workspace${ready&&!messages.length?' pw-chat-empty':''}`}>
+ const renderTaskRow=(t:Task)=><Button variant="ghost" key={t.id} className="pw-task-row" data-motion-key={t.id} data-task-id={t.id} data-task-status={t.status} onClick={()=>openTask(t.id)}><span className="pw-task-row-status">{running(t)?<ProgressCircle aria-label={labelStatus(t.status)} isIndeterminate size="sm"/>:t.status==='completed'?<IconCheckCircle size={20} aria-hidden="true"/>:t.status==='failed'?<IconError size={20} aria-hidden="true"/>:['paused','interrupted'].includes(t.status)?<IconPauseCircle size={20} aria-hidden="true"/>:<IconClock size={20} aria-hidden="true"/>}</span><span className="pw-task-row-copy"><b title={t.goal}>{t.goal}</b>{t.summary&&t.summary!==t.goal&&<span className="pw-task-row-summary">{t.summary}</span>}<span className="pw-task-row-meta"><MotionFeedback as="span" identity={t.status} initial={false}>{labelStatus(t.status)}</MotionFeedback>{!!t.updatedAt&&<time>{timeLabel(t.updatedAt)}</time>}</span></span><IconChevronRight size={18} aria-hidden="true"/></Button>;
+ const chatPage=<main className={`pw-chat-workspace${ready&&!messages.length&&!foregroundTurn?' pw-chat-empty':''}`}>
   {!desktopNavigation&&<ChatNavigationMenu title={messages.length?currentTitle:'PocketWorld'} navigationTrigger={navigationTrigger} isOpen={chatMenuOpen} onOpenChange={setChatMenuOpen} triggerRef={chatMenuTrigger} submitting={!!state.chatSubmitting} unread={can('remoteInbox.state')?Number(state.remoteInbox?.unread||0):0} onNewConversation={can('conversation.new')?()=>run('conversation.new'):undefined} onConversations={()=>{navigationReturnFocus.current=chatMenuTrigger.current;setCommandScope('conversations');setCommandOpen(true);setWorkOpen(true)}} onNavigation={()=>{navigationReturnFocus.current=chatMenuTrigger.current;setCommandOpen(false);setWorkOpen(true)}} onOrganize={currentConversation&&can('conversation.organization.read')?()=>setOrganizationTarget(currentConversation.id):undefined} onMemory={state.conversationId&&can('profile.conversation.read')?()=>setConversationMemoryOpen(true):undefined} onNotifications={can('remoteInbox.state')?()=>navigate('remoteInbox'):undefined} onSettings={()=>navigate('settings')}/>}
   <div ref={scroll} className="pw-conversation-scroll" data-conversation-id={String(state.conversationId||'')} onScroll={saveReading} aria-label="当前对话消息"><div ref={chatContent} className="pw-conversation-content">
    {ready&&messages.length>0&&state.conversationId&&can('conversation.reader.open')&&<Button variant="ghost" size="small" leadingIcon={IconHistory} onClick={()=>run('conversation.reader.open',{conversationId:state.conversationId})}>浏览对话记录</Button>}
-   {!ready?<div className="pw-start"><AgentAvatar agentId="main" state="idle" size={40}/><ShimmerText>正在恢复当前工作</ShimmerText><div className="pw-loading-copy" aria-hidden="true"><Skeleton width="68%" height={13}/><Skeleton width="92%" height={13}/><Skeleton width="80%" height={13}/></div></div>:!messages.length?<div className="pw-start pw-chat-start">
+   {!ready?<div className="pw-start"><AgentAvatar agentId="main" state="idle" size={40}/><ShimmerText>正在恢复当前工作</ShimmerText><div className="pw-loading-copy" aria-hidden="true"><Skeleton width="68%" height={13}/><Skeleton width="92%" height={13}/><Skeleton width="80%" height={13}/></div></div>:!messages.length&&!foregroundTurn?<div className="pw-start pw-chat-start">
     <div className="pw-start-heading"><h2>想做点什么？</h2><p>{composerModelName?'聊聊想法，或交给我一件事。':'先连接模型，再开始对话。'}</p></div>
     {!composerModelName?<Button variant="primary" className="pw-start-model" leadingIcon={IconModel} trailingIcon={IconChevronRight} disabled={!ready||modelSelectionLocked} aria-haspopup="dialog" aria-expanded={modelPickerOpen&&modelPickerSection==="models"} onClick={()=>openModelPicker("models")}>{channelPhoneModel?'连接渠道默认模型':'选择模型'}</Button>:<div className="pw-start-actions" aria-label="开始一件事">
      {can('attachments.openPicker')&&<Button variant="secondary" leadingIcon={IconFile} disabled={!!state.chatSubmitting} onClick={()=>{changeIntent('chat');run('attachments.openPicker')}}>处理文件</Button>}
      {can('phone.prepare')&&<Button variant="secondary" leadingIcon={IconMonitor} onClick={()=>{changeIntent('background');workspace.current?.querySelector<HTMLTextAreaElement>('.pw-composer-row textarea')?.focus()}}>手机操作</Button>}
      <Button variant="secondary" leadingIcon={IconTool} onClick={()=>navigate('skills')}>使用技能</Button>
     </div>}
-   </div>:<div className="pw-message-stream">{messages.map((m,index)=>{
+   </div>:null}
+   {ready&&replyRows.length>0&&<div className="pw-message-stream">{replyRows.map(row=>{
+    if(row.kind==='live'){
+     const draft=row.draft,hasText=!!draft?.text.trim();
+     return <article key={row.key} className="pw-message pw-message-assistant" aria-label={hasText?'当前回复草稿':'正在处理当前回复'} aria-busy={!!foregroundTurn}>
+      <ReplyActivity phase={{thinking:!hasText,busy:hasText&&!draft?.failed&&!draft?.turnEnded,label:!hasText?conversationActivity||'正在处理这次回复':draft?.failed?'生成中断 · 草稿已保留':draft?.turnEnded?`回复草稿 · ${conversationActivity||'正在整理结果'}`:'正在回复'}} onProcess={can('tasks.open')&&foregroundTurn?()=>openTask(foregroundTurn.taskId,'process'):undefined}/>
+      <CitedAnswer continuous text={draft?.text||''} busy={hasText&&!draft?.turnEnded} onCopyCode={copyText}/>
+      {draft?.truncated&&<p className="pw-muted">仅预览前 32,768 个字符，完整结果以正式回复为准。</p>}
+     </article>;
+    }
+    const {message:m,index}=row;
     const id=m.id||`${m.role}:${m.at}:${index}`,refs=sourceRefs(m);
     const phoneResult=messagePhoneResult(m),taskResult=messageTaskResult(m),replyContext=messageReplyContext(m);
     const linked=tasks.find(t=>t.id===(m.taskId||m.submission?.taskId));
@@ -859,11 +882,12 @@ export default function App(){
     const completedFeedback=linkedFeedback&&conversationTaskCompact(linkedFeedback);
     const traceInMenu=!!(phoneResult||taskResult||linkedFeedback&&!completedFeedback);
     const canQuote=intent==='chat'&&m.quoteAvailable&&can('messageQuote.open')&&can('messageQuote.stage')&&can('messageQuote.close');
-    return <article key={id} tabIndex={-1} data-message-index={index} data-message-id={id} className={`pw-message pw-message-${m.role}`} aria-label={m.role==='assistant'?(phoneResult||taskResult?'任务结果':'助手回复'):'你的消息'}>
-     {m.role==='assistant'?(refs.length?<CitedAnswer text={m.content} onCopyCode={copyText} sources={refs as any} onOpenSource={()=>openSource(m)}/>:<AIAnswer text={m.content} onCopyCode={copyText} busy={false} showActions={false}/>):m.content?<div className="pw-user-text">{m.content}</div>:null}
+    return <article key={row.key} tabIndex={-1} data-message-index={index} data-message-id={id} data-reply-continuing={row.continued||undefined} className={`pw-message pw-message-${m.role}`} aria-label={m.role==='assistant'?(phoneResult||taskResult?'任务结果':'助手回复'):'你的消息'}>
+     {m.role==='assistant'&&<ReplyActivity phase={null}/>}
+     {m.role==='assistant'?<CitedAnswer continuous text={m.content} onCopyCode={copyText} sources={refs as any} onOpenSource={()=>openSource(m)}/>:m.content?<div className="pw-user-text">{m.content}</div>:null}
      {asArray<Json>(m.attachments).length>0&&<div className="pw-message-files">{asArray<Json>(m.attachments).map(file=><Button key={file.id||file.name} variant="secondary" size="small" leadingIcon={IconFile} disabled={!can('attachments.open')||!file.sha256||!!state.attachmentOpens?.[`${file.id}:${file.sha256}`]?.checking} onClick={()=>run('attachments.open',{messageId:m.id,id:file.id,sha256:file.sha256})}>{file.name||'原附件'}</Button>)}</div>}
      {m.submission&&<Receipt receipt={m.submission}/>}
-     <div className="pw-message-footer">
+     <MotionFeedback className="pw-message-footer" identity={`${id}:${m.submission?.status||'saved'}:${refs.map(source=>source.id).join(',')}`} initial={row.continued}>
      {m.role==='user'&&m.submission?.status==='queued'&&m.submission?.taskId&&can('queued.open')&&<Button variant="ghost" className="pw-message-queue-action" leadingIcon={IconClock} onClick={()=>run('queued.open',{taskId:m.submission!.taskId,conversationId:state.conversationId})}>已入队 · 查看或调整</Button>}
      {linkedFeedback&&(attention(linkedFeedback)||linkedFeedback.status==='failed')&&<Button variant="ghost" className="pw-message-work-action" leadingIcon={completedFeedback?IconCheckCircle:attention(linkedFeedback)||linkedFeedback.status==='failed'?IconError:IconClock} aria-label={`查看任务详情：${linkedFeedback.goal}`} title={linkedFeedback.goal} disabled={!can('tasks.open')} onClick={()=>openTask(linkedFeedback.id,attention(linkedFeedback)&&can('tasks.review')?'review':'overview')}><span className="pw-message-work-status">{labelStatus(linkedFeedback.status)}</span><span className="pw-message-work-next">{attention(linkedFeedback)?taskActionLabel(linkedFeedback):linkedFeedback.status==='failed'?'查看失败原因':terminal(linkedFeedback)?'查看详情':'查看进展'}<IconChevronRight size={15} aria-hidden="true"/></span></Button>}
      {(m.content||m.role==='assistant'||canQuote||(m.retainedSources&&can('sources.open')))&&<div className="pw-message-tools">
@@ -886,14 +910,12 @@ export default function App(){
        </div></Popover>
       </PopoverTrigger>
      </div>}
-     </div>
+     </MotionFeedback>
 
     </article>;
    })}</div>}
-   {conversationStream&&<div className="pw-message-stream"><article className="pw-message pw-message-assistant" aria-label="当前回复草稿" aria-busy={!conversationStream.turnEnded}><header className="pw-stream-status"><span className="pw-stream-activity" role="status">{!conversationStream.turnEnded&&!conversationStream.failed&&<ProgressCircle isIndeterminate size="sm" aria-label="正在回复"/>}<span>{conversationStream.failed?'生成中断 · 草稿已保留':conversationStream.turnEnded?'回复草稿':'正在回复'}</span></span>{state.chatBusy&&!conversationStream.turnEnded&&!conversationStream.failed&&can('tasks.open')&&<Button variant="ghost" size="small" aria-label="查看当前回复的执行过程" onClick={()=>openTask(state.chatActiveTurn.taskId,'process')}>查看过程<IconChevronRight size={15} aria-hidden="true"/></Button>}</header><AIAnswer text={conversationStream.text} busy={!conversationStream.turnEnded} showActions={false}/>{conversationStream.truncated&&<p className="pw-muted">仅预览前 32,768 个字符，完整结果以正式回复为准。</p>}</article></div>}
    {chatPhoneTask&&!taskOpen&&<div className="pw-conversation-phone-viewer">{phoneViewerFor(chatPhoneTask,true)}</div>}
-   <ConversationWork tasks={conversationWork} labelStatus={labelStatus} canOpen={can('tasks.open')} onOpen={task=>openTask(task.id,attention(task)&&can('tasks.review')?'review':'overview')}/>
-   {state.chatBusy&&(!conversationStream||conversationStream.turnEnded||conversationStream.failed)&&<div className="pw-current-thinking"><div className="pw-current-activity"><ThinkingLoader phase={conversationActivity}/></div>{can('tasks.open')&&<Button variant="ghost" size="small" aria-label="查看当前回复的执行过程" onClick={()=>openTask(state.chatActiveTurn.taskId,'process')}>查看过程<IconChevronRight size={15} aria-hidden="true"/></Button>}</div>}
+   <ConversationWork identity={String(state.conversationId||'')} onEmptyFocus={()=>workspace.current?.querySelector<HTMLTextAreaElement>('.pw-composer-row textarea:not(:disabled)')?.focus({preventScroll:true})} tasks={conversationWork} labelStatus={labelStatus} canOpen={can('tasks.open')} onOpen={task=>openTask(task.id,attention(task)&&can('tasks.review')?'review':'overview')}/>
   </div></div>
   <div className="pw-composer-region">
    {hasNewReplies&&<Button variant="secondary" className="pw-new-replies" onClick={goToLatest}>有新回复 · 回到最新</Button>}
@@ -908,7 +930,7 @@ export default function App(){
  const activeTaskStatus=({attention:'待处理',running:'进行中',ended:'已结束'} as Record<string,string>)[filter];
  const hasTaskFilters=filter!=='all'||!!taskQuery;
  const showTaskTools=taskHistory.tasks.length>0||hasTaskFilters||taskFiltersOpen||taskHistory.hasMore||taskHistory.earlier;
- const tasksPage=<main className="pw-page pw-tasks-page pw-depth-tasks" data-tools={showTaskTools}>
+ const tasksPage=<main ref={taskList} className="pw-page pw-tasks-page pw-depth-tasks" data-tools={showTaskTools} onFocusCapture={event=>{const node=event.target as HTMLElement,id=node.closest<HTMLElement>('[data-task-id]')?.dataset.taskId;taskFocus.current=id?{node,id}:null}} onBlurCapture={event=>{if(event.relatedTarget instanceof HTMLElement&&!event.currentTarget.contains(event.relatedTarget))taskFocus.current=null}}>
     {showTaskTools&&<div className="pw-task-collection-tools">
      <div className="pw-task-status-filters" role="group" aria-label="任务筛选">{[{id:'all',label:'全部'},{id:'attention',label:'待处理'},{id:'running',label:'进行中'},{id:'ended',label:'已结束'}].map(option=><Button key={option.id} variant="ghost" aria-pressed={filter===option.id} onClick={()=>setFilter(option.id)}>{option.label}</Button>)}</div>
      <div className="pw-task-filters-reveal" data-open={taskFiltersOpen} inert={!taskFiltersOpen} aria-hidden={!taskFiltersOpen}><div className="pw-disclosure-clip"><section id="pw-task-filters" className="pw-task-filters" aria-label="搜索与筛选任务">
@@ -930,9 +952,10 @@ export default function App(){
  const projectListBusy=asArray<string>(state.moduleBusy).includes('workspace.list')||packageOpening;
  const projectListInput=obj(obj(state.moduleResultInputs)['workspace.list']);
  const projectListError=projectListInput.projectId===state.projectId?String(obj(state.moduleErrors)['workspace.list']||''):'';
+ useCollectionMotion(projectScroll,JSON.stringify(['projects',state.projectId]),JSON.stringify(projects.map(project=>[project.id,project.name])),{selector:'.pw-project-library-row',active:route==='projects'&&ready&&!state.filePath&&!projectPreview.expanded&&!packageOpening});
  const projectFiles=<>{(files.length>0||!!fileQuery)&&<><div className="pw-project-tools"><SearchField value={fileQuery} onChange={setFileQuery} aria-label="搜索当前项目文件" placeholder="搜索文件"/><PopoverTrigger isOpen={fileDisplayOpen} onOpenChange={setFileDisplayOpen}><IconButton icon={fileView==='tree'?IconFolder:IconGrid} aria-label="文件显示方式" title="文件显示方式"/><Popover aria-label="文件显示方式"><PopoverHeader title="文件显示"/><RadioOptions label="显示方式" value={fileView} onChange={value=>{setFileView(value as 'files'|'tree'|'grid');setFileDisplayOpen(false)}} options={[{id:'files',label:'文件列表'},{id:'tree',label:'目录层级'},{id:'grid',label:'网格'}]}/><Button variant="ghost" leadingIcon={IconTerminal} onClick={()=>{setFileDisplayOpen(false);navigate('local')}}>运行与工具</Button></Popover></PopoverTrigger>{can('projects.newFile')&&<IconButton icon={IconAdd} aria-label="新文件" title="新文件" onClick={()=>openCreate('file')}/>}</div>
-      <div className="pw-project-list-caption"><span>{fileQuery?`匹配 ${shownFiles.length} 个文件`:`${files.length} 个文件`}</span>{fileQuery&&<Button variant="ghost" size="small" onClick={()=>setFileQuery('')}>清空搜索</Button>}{can('projects.refresh')&&<IconButton icon={IconRefresh} size="small" aria-label="重新读取项目文件" onClick={()=>run('projects.refresh')}/>}</div>
-      </>}<div className="pw-project-objects">{!ready||projectListBusy?<p className="pw-muted" role="status">正在读取项目文件…</p>:projectListError?<div className="pw-empty pw-project-empty" role="alert"><h3>无法读取文件</h3><p>{projectListError}</p>{can('projects.refresh')&&<Button variant="secondary" leadingIcon={IconRefresh} onClick={()=>run('projects.refresh')}>重新读取</Button>}</div>:!shownFiles.length?<div className="pw-empty pw-project-empty"><IconFolder size={26} aria-hidden="true"/><h3>{fileQuery?'没有匹配的文件':'暂无列出的文件'}</h3><p>{fileQuery?'换个关键词，或清空搜索返回文件列表。':'从一个新文件开始，也可以重新读取当前项目。'}</p>{fileQuery?<Button variant="secondary" onClick={()=>setFileQuery('')}>清空搜索</Button>:<><div className="pw-action-row">{can('projects.newFile')&&<Button variant="primary" leadingIcon={IconAdd} onClick={()=>openCreate('file')}>新建文件</Button>}{can('projects.refresh')&&<Button variant="ghost" leadingIcon={IconRefresh} onClick={()=>run('projects.refresh')}>重新读取</Button>}</div><Button variant="ghost" leadingIcon={IconTerminal} onClick={()=>navigate('local')}>运行与工具</Button></>}</div>:fileView==='tree'?<TreeView aria-label="项目文件" key={state.projectId} className="pw-file-tree" data={treeData(shownFiles)} selectedItemId={projectView.selected||undefined} expandedIds={projectView.expanded} onExpandedChange={expanded=>updateProjectView({expanded})} onSelectChange={file=>{if(file&&!file.children)openProjectFile(file.id)}}/>:<FilesBrowser files={shownFiles as any} showToolbar={false} view={fileView==='grid'?'Grid':'List'} onViewChange={view=>setFileView(view==='Grid'?'grid':'files')} onCopyPath={path=>{void copyText(path).catch(()=>{})}} selectedPath={projectView.selected} onOpen={file=>openProjectFile(file.path)}/>}</div></>;
+      <div className="pw-project-list-caption"><MotionFeedback as="span" identity={`${projectListBusy}:${fileQuery}:${shownFiles.length}`} initial={false} role="status">{projectListBusy?'正在刷新 · ':''}{fileQuery?`匹配 ${shownFiles.length} 个文件`:`${files.length} 个文件`}</MotionFeedback>{fileQuery&&<Button variant="ghost" size="small" onClick={()=>setFileQuery('')}>清空搜索</Button>}{can('projects.refresh')&&<IconButton icon={IconRefresh} size="small" aria-label="重新读取项目文件" onClick={()=>run('projects.refresh')}/>}</div>
+      </>}<div className="pw-project-objects" aria-busy={projectListBusy||undefined}>{!ready||packageOpening||projectListBusy&&!files.length?<p className="pw-muted" role="status">正在读取项目文件…</p>:projectListError?<div className="pw-empty pw-project-empty" role="alert"><h3>无法读取文件</h3><p>{projectListError}</p>{can('projects.refresh')&&<Button variant="secondary" leadingIcon={IconRefresh} onClick={()=>run('projects.refresh')}>重新读取</Button>}</div>:!shownFiles.length?<div className="pw-empty pw-project-empty"><IconFolder size={26} aria-hidden="true"/><h3>{fileQuery?'没有匹配的文件':'暂无列出的文件'}</h3><p>{fileQuery?'换个关键词，或清空搜索返回文件列表。':'从一个新文件开始，也可以重新读取当前项目。'}</p>{fileQuery?<Button variant="secondary" onClick={()=>setFileQuery('')}>清空搜索</Button>:<><div className="pw-action-row">{can('projects.newFile')&&<Button variant="primary" leadingIcon={IconAdd} onClick={()=>openCreate('file')}>新建文件</Button>}{can('projects.refresh')&&<Button variant="ghost" leadingIcon={IconRefresh} onClick={()=>run('projects.refresh')}>重新读取</Button>}</div><Button variant="ghost" leadingIcon={IconTerminal} onClick={()=>navigate('local')}>运行与工具</Button></>}</div>:fileView==='tree'?<TreeView aria-label="项目文件" key={state.projectId} className="pw-file-tree" data={treeData(shownFiles)} selectedItemId={projectView.selected||undefined} expandedIds={projectView.expanded} onExpandedChange={expanded=>updateProjectView({expanded})} onSelectChange={file=>{if(file&&!file.children)openProjectFile(file.id)}}/>:<FilesBrowser identity={JSON.stringify([state.projectId,fileQuery.trim().toLocaleLowerCase()])} files={shownFiles as any} showToolbar={false} view={fileView==='grid'?'Grid':'List'} onViewChange={view=>setFileView(view==='Grid'?'grid':'files')} onCopyPath={path=>{void copyText(path).catch(()=>{})}} selectedPath={projectView.selected} onOpen={file=>openProjectFile(file.path)}/>}</div></>;
  const projectsPage=<main ref={projectScroll} className={`pw-page pw-projects-page ${state.filePath?'pw-project-file-open':''}`} data-preview-open={projectPreview.expanded&&!state.filePath||undefined} onScroll={event=>{if(!state.filePath&&!projectPreview.expanded)projectListTop.current.set(String(state.projectId||''),event.currentTarget.scrollTop)}}>
   {packageOpening&&<ProgressBar label="正在读取这次任务的固定包" isIndeterminate showValueLabel={false} size="sm"/>}
   {state.filePath?<ProjectFileEditor key={currentFileKey} path={state.filePath} version={Number(state.fileVersion||0)} draft={fileDraft} state={state} conflict={fileConflict} mode={fileMode} setMode={setFileMode} can={can} edit={editFile} save={saveFile} readHistory={()=>run('projects.history',fileIdentity)} readRevision={revision=>run('projects.revision',{...fileIdentity,revision})} retry={()=>run('projects.retry',{projectId:state.projectId,path:state.filePath})} copy={()=>{if(fileDraft)void copyText(fileDraft.text).catch(()=>{})}} adoption={fileAdoption} registerBack={registerProjectFileBack}/>:currentProject?<section className="pw-project-work" aria-label="当前项目工作区">
@@ -945,7 +968,7 @@ export default function App(){
       <TabPanel id="preview" className="pw-project-preview-panel"><ProjectPreviewPane control={projectPreview} composer={composer}/></TabPanel>
     </Tabs>)}
 
-  </section>:projects.length>0?<section className="pw-project-library" aria-label="项目目录"><header><h2>你的项目</h2>{can('projects.create')&&<Button variant="secondary" leadingIcon={IconAdd} onClick={()=>openCreate('project')}>新项目</Button>}</header><div>{projects.map(project=><Button key={project.id} variant="ghost" className="pw-project-library-row" leadingIcon={IconFolder} trailingIcon={IconChevronRight} disabled={!can('projects.select')} onClick={()=>run('projects.select',{id:project.id})}>{project.name}</Button>)}</div></section>:!ready?<p className="pw-muted" role="status">正在读取项目…</p>:<div className="pw-empty pw-project-empty"><IconFolder size={26} aria-hidden="true"/><h3>从一个项目开始</h3><p>把文件、编辑和预览放在一起，随时接着做。</p>{can('projects.create')&&<Button variant="primary" leadingIcon={IconAdd} onClick={()=>openCreate('project')}>新建项目</Button>}</div>}
+  </section>:projects.length>0?<section className="pw-project-library" aria-label="项目目录"><header><h2>你的项目</h2>{can('projects.create')&&<Button variant="secondary" leadingIcon={IconAdd} onClick={()=>openCreate('project')}>新项目</Button>}</header><div>{projects.map(project=><Button key={project.id} variant="ghost" className="pw-project-library-row" data-motion-key={project.id} leadingIcon={IconFolder} trailingIcon={IconChevronRight} disabled={!can('projects.select')} onClick={()=>run('projects.select',{id:project.id})}>{project.name}</Button>)}</div></section>:!ready?<p className="pw-muted" role="status">正在读取项目…</p>:<div className="pw-empty pw-project-empty"><IconFolder size={26} aria-hidden="true"/><h3>从一个项目开始</h3><p>把文件、编辑和预览放在一起，随时接着做。</p>{can('projects.create')&&<Button variant="primary" leadingIcon={IconAdd} onClick={()=>openCreate('project')}>新建项目</Button>}</div>}
  </main>;
  return <ReadingContext.Provider value={openReading}><Drawer.Root swipeToOpen={!desktopNavigation} open={workOpen&&!desktopNavigation} onOpenChange={changeNavigation} direction="left" autoFocus shouldScaleBackground={false}>
  <div className="pw-app pw-redesign" data-navigation={desktopNavigation?'sidebar':'drawer'} data-route={route} data-file-open={!!state.filePath||undefined} data-vaul-drawer-wrapper=""><Toaster theme={state.appearance?.dark===true?'dark':'light'}/>
