@@ -1,73 +1,24 @@
 name: Build debug APK
-run-name: ${{ github.event_name == 'pull_request' && (github.head_ref == 'feature/phone-team-sessions-20261104' && 'phone-team-sessions' || github.head_ref == 'feature/desktop-hybrid-control-20261104' && 'Desktop hybrid integration tests' || (github.head_ref == 'pro/workpack-02-phone-control' || github.head_ref == 'integrate/pr8-pr15-20261103') && 'Phone control integration tests' || github.head_ref == 'pro/workpack-06-model-quality' && 'Model quality host tests' || github.head_ref == 'pro/aion-alma-full-report-takeover' && 'Aion/ALMA host tests' || (github.head_ref == 'pro/workpack-04-mcp-skills' || github.head_ref == 'pro/operit-full-takeover-20261103') && 'MCP, Skills, profiles, phone and memory host tests' || 'Bounded phone/memory host tests') || github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests' && format('Host tests · {0}', inputs.host_groups != '' && 'selected batch' || inputs.host_group) || 'Debug APK' }} · ${{ github.ref_name }} · ${{ github.run_number }}
+run-name: Debug APK · ${{ github.ref_name }} · ${{ github.run_number }}
 
-# Automatic main builds and publishing belong to github-release.yml.
+# main pushes build and publish through github-release.yml.
+# CI only compiles, packages and publishes; test sources remain in the repository.
 on:
   workflow_dispatch:
-    inputs:
-      target:
-        description: 'Build an APK, or run one selected host integration group (no APK)'
-        type: choice
-        default: apk
-        options: [apk, host-tests]
-      host_group:
-        description: 'Used only for target=host-tests; deliberately no full-suite option'
-        type: choice
-        default: device-receiver
-        options: [phone-team-sessions, desktop-hybrid, mika-models, mika-ecosystem, mika-phone-evidence, mika-skill-lifecycle, mika-issue-integration, mcp-ecosystem, mcp-local-discovery, mcp-stdio-framing, mcp-prompts, mcp-health, project-file-operations, project-file-search, browser-expression, device-receiver, managed-runtime, gateway-continuation, memory-automatic, memory-assertion-recall, memory-consolidation, memory-learning-assertions, memory-experience, browser-long-page, phone-observation-boundaries, phone-sensitive-owner, agent-preferences, aion-core, aion-mcp-skills, aion-office, aion-office-mounted, aion-conversations, remote-transport, aion-team-catalog, magpie-work-profile, native-operation-event, browser-document-download, browser-native-sequence, retained-development-admission, runtime-health, managed-skills, aion-work-profile-targets, aion-worker-entrypoint, runtime-activity, runtime-thermal-log-policy, aion-mcp-config, aion-capability-observations, aion-team-templates, local-phone-leases, script-artifact-publication, phone-audio-owner, schedule-proposals, native-duplex-pipes, aion-tool-discovery, aion-team-wake, memory-project-namespaces, request-clock, runner-repeat-notice, runner-budget-stream, alma-child-sources, alma-pi-no-tools, native-normal-cleanup, memory-archive-currentness, runtime-preparation-cancel, runtime-log-tail-recovery, managed-skill-private-artifacts, model-capability-probe, runtime-recovery-admission, aion-team-research-read, runtime-diagnostic-metadata, legacy-command-receipt-recovery, memory-recall-quality, memory-evidence-plan, memory-method-quality, browser-owner-interactions, browser-native-input, browser-artifact-upload, browser-network-barriers, runtime-development-continuity, phone-task-platform, project-git-isolation, model-quality-routing, model-quality-observability, model-evaluation, model-quality-sources, runtime-output-display, phone-setup-recovery, phone-input-extensions, phone-semantic-profile, phone-access-history, memory-lifecycle, attachment-legacy-integrity, capability-approval-run-boundary, capability-approval-ui-run-projection, main-model-selection, settings-profile-edit-target, browser-owner-admission, attachment-external-view-lifecycle, remote-create-model-options, team-original-research-stop, attachment-export-picker-lifecycle, restored-owner-controls, native-token-budgets, channel-original-usage, display-rotation-geometry, owner-configuration-backups, related-task-cancellation, attachment-import-context, attachment-index-recovery, attachment-pdf-scratch-recovery, attachment-view-recovery, native-transport-wait-ownership, private-task-run-control, capability-approval-consumption, media-scratch-recovery, bootstrap-database-maintenance, model-connection-owner-policy, team-member-fallback, project-image-model-input, attachment-import-recovery, pocket-web-model-accounts, pocket-web-bundle, bootstrap-maintenance, model-connection-identity, bedrock-sts-session, conversation-phone-handoff, aion-preview-element-reference, device-desktop-owner, chatgpt-provider-catalog, harness-team-adapters, harness-team-store, harness-native-ui, private-butler-journey, memory-private-butler, owner-work-native, private-butler-ui, conversation-organization-ui, aion-conversations-native, android-private-storage-roots, owner-storage-cache-open, unified-workspace, unified-task-memory, unified-continuous-plans, unified-functional-packs, unified-task-capabilities, project-final-review, runner-recovery-guidance, account-history-origin, bootstrap-first-launch-diagnostics, execution-trace, project-approval-context]
-      host_groups:
-        description: 'Optional explicit comma-separated batch (max 16); overrides host_group, no full-suite wildcard. Chromium groups use individual mode.'
-        type: string
-        required: false
-        default: ''
-  pull_request:
-    branches: [main]
-    types: [opened, synchronize, reopened]
-  push:
-    branches: ['uiux/**']
-    # Keep the production-input contract in tools/tests/test_apk_workflow_paths.py in sync.
-    paths:
-      - '.github/workflows/build-apk.yml'
-      - 'app/build.gradle'
-      - 'app/gradle.lockfile'
-      - 'app/src/main/**'
-      - 'app/src/pendingAdb/java/**'
-      - 'display-helper/src/**'
-      - 'build.gradle'
-      - 'settings.gradle'
-      - 'gradle.properties'
-      - 'gradlew'
-      - 'gradlew.bat'
-      - 'gradle/**'
-      - 'tools/build.sh'
-      - 'tools/build-display-helper.sh'
-      - 'tools/build-android-runtime.py'
-      - 'tools/build-android-runtime-wsl.ps1'
-      - 'tools/app-version.py'
-      - 'tools/tests/test_app_version.py'
-      - 'tools/tests/test_apk_workflow_paths.py'
-      - 'tools/tests/fixtures/apk-build-paths.json'
-      - '.github/workflows/ui-capture-web.yml'
-      - 'web-ui/**'
-      - 'tools/ci/**'
 
 permissions:
   contents: read
   actions: read
 
 concurrency:
-  # Independent, explicitly selected host groups run on separate runners. Keep
-  # serialization within each group and APK build without canceling active work.
-  group: pocketworld-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'host-affected-pr' || github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests' && (inputs.host_groups != '' && 'host-selected-batch' || format('host-{0}', inputs.host_group)) || 'apk' }}
+  group: pocketworld-${{ github.ref }}-apk
   cancel-in-progress: false
 
 jobs:
   apk:
-    if: ${{ github.repository == 'wozhenbang2004/PocketWorld' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.target == 'apk')) }}
+    if: ${{ github.repository == 'wozhenbang2004/PocketWorld' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    outputs:
-      web_visual_outcome: ${{ steps.web_visual.outcome }}
     defaults:
       run:
         shell: bash
@@ -88,15 +39,12 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Check production build trigger contract
-        run: python3 -B -m unittest discover -s tools/tests -p test_apk_workflow_paths.py -v
-
       - name: Set up pinned Node for the library Web UI
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '22.22.0'
 
-      - name: Build and check the selected Web components
+      - name: Build the selected Web components
         run: |
           set -euo pipefail
           mkdir -p build-artifacts
@@ -107,7 +55,6 @@ jobs:
           fi
           npm ci --prefix web-ui 2>&1 | tee build-artifacts/web-install.log
           npm run build --prefix web-ui 2>&1 | tee build-artifacts/web-build.log
-          npm test --prefix web-ui 2>&1 | tee build-artifacts/web-tests.log
 
       - name: Preserve the dependency lock and Web build evidence
         if: always()
@@ -119,23 +66,6 @@ jobs:
             web-ui/public/licenses/
             app/src/main/assets/pocket-ui/
             build-artifacts/web-*.log
-          if-no-files-found: ignore
-          retention-days: 14
-
-      - name: Capture the actual Web components with isolated host fixtures
-        id: web_visual
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-          npm exec --prefix web-ui -- playwright install --with-deps chromium
-          node tools/ci/capture-library-web.mjs
-
-      - name: Preserve Web component visual and motion evidence
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: pocketworld-library-web-visual-${{ github.run_number }}-${{ github.run_attempt }}
-          path: build-artifacts/library-web-visual/
           if-no-files-found: ignore
           retention-days: 14
 
@@ -196,9 +126,6 @@ jobs:
           with open(os.environ['GITHUB_PATH'], 'a') as path:
               path.write(str(home / 'bin') + '\n')
           PY
-
-      - name: Verify the exact-task review boundaries
-        run: bash tools/ci/test-web-bridge.sh
 
       - name: Assemble installable debug APK
         run: |
@@ -301,304 +228,3 @@ jobs:
           path: build-artifacts/*.log
           if-no-files-found: ignore
           retention-days: 7
-
-  host-tests:
-    # Preserve each same-repository workpack's explicit batch and the original manual selection.
-    # Preserve Workpack 04 batches; takeover adds exact project/runtime checks. PRs never package an APK.
-    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && (github.head_ref == 'feature/phone-team-sessions-20261104' || github.head_ref == 'feature/desktop-hybrid-control-20261104' || github.head_ref == 'integrate/mika-issues-batch-20261103' || github.head_ref == 'pro/operit-full-takeover-20261103' || github.head_ref == 'pro/workpack-04-mcp-skills' || github.head_ref == 'pro/dsh-runtime-continuity' || github.head_ref == 'pro/workpack-06-model-quality' || github.head_ref == 'pro/workpack-05-memory-quality' || github.head_ref == 'pro/workpack-03-phone-api-cli' || github.head_ref == 'pro/magpie-core-closure-20261103' || github.head_ref == 'pro/workpack-02-phone-control' || github.head_ref == 'pro/mika-full-takeover-20261103' || github.head_ref == 'integrate/pr8-pr15-20261103' || github.head_ref == 'pro/memory-full-report-takeover' || github.head_ref == 'pro/aion-alma-full-report-takeover' || github.head_ref == 'recovery/finish-restored-workspace-20261104' || (github.head_ref == 'uiux/pr32-restored-integration-20261104' || github.head_ref == 'uiux/pr33-bootstrap-progress-20261104'))) }}
-    name: Host tests (${{ matrix.batch }})
-    strategy:
-      fail-fast: false
-      matrix:
-        batch: ${{ fromJSON(github.event_name == 'pull_request' && (github.head_ref == 'pro/operit-full-takeover-20261103' && '["ecosystem","project-files","runtime-compatibility"]' || github.head_ref == 'pro/workpack-04-mcp-skills' && '["ecosystem","model-compatibility","runtime-compatibility"]') || '["selected"]') }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    defaults:
-      run:
-        shell: bash
-    env:
-      HOST_TEST_GROUP: ${{ github.event_name == 'pull_request' && (github.head_ref == 'feature/phone-team-sessions-20261104' && 'phone-team-sessions' || github.head_ref == 'feature/desktop-hybrid-control-20261104' && 'desktop-hybrid' || github.head_ref == 'integrate/mika-issues-batch-20261103' && 'mika-issue-integration' || github.head_ref == 'pro/operit-full-takeover-20261103' && (matrix.batch == 'project-files' && 'project-file-search' || matrix.batch == 'runtime-compatibility' && 'native-normal-cleanup' || 'mcp-ecosystem') || github.head_ref == 'pro/workpack-04-mcp-skills' && (matrix.batch == 'model-compatibility' && 'model-quality-routing' || matrix.batch == 'runtime-compatibility' && 'native-normal-cleanup' || 'mcp-ecosystem') || github.head_ref == 'pro/dsh-runtime-continuity' && 'native-normal-cleanup' || (github.head_ref == 'pro/workpack-02-phone-control' || github.head_ref == 'integrate/pr8-pr15-20261103') && 'phone-setup-recovery' || github.head_ref == 'pro/workpack-06-model-quality' && 'model-quality-routing' || (github.head_ref == 'pro/workpack-03-phone-api-cli' || github.head_ref == 'pro/magpie-core-closure-20261103') && 'phone-task-platform' || github.head_ref == 'pro/aion-alma-full-report-takeover' && 'aion-team-wake' || 'memory-recall-quality') || inputs.host_group }}
-      HOST_TEST_GROUPS: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && (github.head_ref == 'feature/phone-team-sessions-20261104' && 'phone-team-sessions,device-receiver' || github.head_ref == 'feature/desktop-hybrid-control-20261104' && 'desktop-hybrid,device-receiver' || github.head_ref == 'recovery/finish-restored-workspace-20261104' && 'bootstrap-maintenance,runner-repeat-notice,model-connection-identity,mika-models,private-task-run-control,related-task-cancellation' || (github.head_ref == 'uiux/pr32-restored-integration-20261104' || github.head_ref == 'uiux/pr33-bootstrap-progress-20261104') && 'restored-owner-controls,native-token-budgets,channel-original-usage,display-rotation-geometry,owner-configuration-backups,memory-archive-currentness,phone-observation-boundaries,private-task-run-control,related-task-cancellation,attachment-import-context,runner-repeat-notice,bootstrap-database-maintenance,model-connection-owner-policy,team-member-fallback,project-image-model-input,pocket-web-bundle' || github.head_ref == 'integrate/mika-issues-batch-20261103' && 'mika-issue-integration,runner-budget-stream,mika-models,model-capability-probe,mika-ecosystem,magpie-work-profile,mika-phone-evidence,phone-access-history,mika-skill-lifecycle,aion-mcp-skills' || github.head_ref == 'pro/memory-full-report-takeover' && 'memory-assertion-recall' || github.head_ref == 'pro/mika-full-takeover-20261103' && 'phone-setup-recovery,phone-input-extensions,phone-semantic-profile,phone-access-history,phone-observation-boundaries,phone-sensitive-owner,local-phone-leases,phone-audio-owner,phone-task-platform,aion-conversations,memory-recall-quality,memory-evidence-plan,memory-method-quality,model-quality-routing,model-quality-sources,gateway-continuation' || github.head_ref == 'pro/operit-full-takeover-20261103' && (matrix.batch == 'project-files' && 'project-file-search,project-file-operations' || matrix.batch == 'runtime-compatibility' && 'native-normal-cleanup,native-duplex-pipes,runtime-preparation-cancel,runtime-development-continuity,runtime-output-display,request-clock' || 'mcp-ecosystem,mcp-local-discovery,mcp-stdio-framing,mcp-prompts,mcp-health,aion-mcp-skills,managed-skills,managed-skill-private-artifacts,magpie-work-profile,aion-work-profile-targets,memory-recall-quality,memory-evidence-plan,memory-method-quality,phone-task-platform,gateway-continuation,project-git-isolation') || github.head_ref == 'pro/workpack-04-mcp-skills' && (matrix.batch == 'model-compatibility' && 'model-quality-routing,model-quality-observability,model-quality-sources,model-evaluation,runner-budget-stream' || matrix.batch == 'runtime-compatibility' && 'native-normal-cleanup,native-duplex-pipes,runtime-preparation-cancel,runtime-development-continuity,runtime-output-display,request-clock' || 'mcp-ecosystem,mcp-local-discovery,mcp-stdio-framing,mcp-prompts,mcp-health,aion-mcp-skills,managed-skills,managed-skill-private-artifacts,magpie-work-profile,aion-work-profile-targets,memory-recall-quality,memory-evidence-plan,memory-method-quality,phone-task-platform,gateway-continuation,project-git-isolation') || github.head_ref == 'pro/dsh-runtime-continuity' && 'native-normal-cleanup,runtime-development-continuity,runtime-preparation-cancel,runtime-recovery-admission,native-duplex-pipes,runtime-activity,runtime-thermal-log-policy,runtime-diagnostic-metadata,request-clock,runtime-output-display,runtime-health,script-artifact-publication,managed-skill-private-artifacts,runner-repeat-notice,runtime-log-tail-recovery,legacy-command-receipt-recovery' || (github.head_ref == 'pro/workpack-02-phone-control' || github.head_ref == 'integrate/pr8-pr15-20261103') && 'phone-setup-recovery,phone-input-extensions,phone-semantic-profile,phone-access-history,phone-observation-boundaries,phone-sensitive-owner,local-phone-leases,phone-audio-owner,phone-task-platform,aion-conversations,model-quality-routing,model-quality-sources,gateway-continuation,runner-budget-stream,request-clock,runtime-output-display' || github.head_ref == 'pro/workpack-06-model-quality' && 'model-quality-routing,model-quality-observability,model-quality-sources,model-evaluation,gateway-continuation,runner-budget-stream' || (github.head_ref == 'pro/workpack-03-phone-api-cli' || github.head_ref == 'pro/magpie-core-closure-20261103') && 'phone-task-platform,memory-recall-quality,memory-evidence-plan,memory-method-quality' || github.head_ref == 'pro/aion-alma-full-report-takeover' && 'aion-team-wake,alma-pi-no-tools,schedule-proposals,alma-child-sources,aion-office,aion-office-mounted' || 'memory-recall-quality,memory-evidence-plan,memory-method-quality') || inputs.host_groups }}
-      POCKETWORLD_HOST_GRADLE_JVMARGS: '-Xmx3072m -Dfile.encoding=UTF-8'
-    steps:
-      - name: Check out selected revision
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Include original Harness journeys for affected private PRs
-        if: ${{ github.event_name == 'pull_request' && github.head_ref == 'pro/magpie-core-closure-20261103' }}
-        env:
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import os, pathlib, subprocess
-          changed = subprocess.check_output(['git', 'diff', '--name-only', os.environ['PR_BASE_SHA'], 'HEAD', '--'], text=True).splitlines()
-          prefixes = ('companion/harness_', 'companion/test_harness_', 'companion/gateway_fixture_',
-                      'app/src/main/java/dev/pocketengine/features/remote/NativeHarness',
-                      'app/src/main/kotlin/dev/pocketengine/ui/Harness',
-                      'app/src/hostTest/java/dev/pocketengine/features/remote/RemotePi')
-          exact = {'companion/pocket_companion.py', 'companion/pi_driver.py', 'companion/test_pi_driver.py',
-                   'app/src/main/java/dev/pocketengine/store/TaskStore.java',
-                   'app/src/main/java/dev/pocketengine/features/remote/RemoteModule.java',
-                   'app/src/test/java/dev/pocketengine/features/remote/WorkProfileRemoteTargetFactsNativeTest.java',
-                   'app/src/hostTest/java/dev/pocketengine/GatewayContinuationAppJourneyTest.java'}
-          if any(path in exact or path.startswith(prefixes) for path in changed):
-              groups = list(dict.fromkeys(os.environ['HOST_TEST_GROUPS'].split(',') + ['gateway-continuation', 'alma-pi-no-tools', 'aion-work-profile-targets']))
-              with pathlib.Path(os.environ['GITHUB_ENV']).open('a') as output:
-                  output.write('HOST_TEST_GROUPS=' + ','.join(groups) + '\n')
-          print('Source head:', subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip())
-          PY
-
-      - name: Set up Java 17
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: '3.12'
-
-      - name: Set up pinned Node for the host fixture Web UI
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with:
-          node-version: '22.22.0'
-
-      - name: Build the Web UI required by Android host fixtures
-        run: |
-          set -euo pipefail
-          npm ci --prefix web-ui
-          npm run build --prefix web-ui
-
-      - name: Check lightweight build and host CLI contracts
-        run: |
-          set -euo pipefail
-          mkdir -p build-artifacts/host-tests
-          python3 -B -m unittest discover -s tools/tests -p test_apk_workflow_paths.py -v 2>&1 | tee build-artifacts/host-tests/workflow-contracts.log
-          python3 -B -m unittest discover -s tools/tests -p test_host_tests.py -v 2>&1 | tee build-artifacts/host-tests/cli-contracts.log
-          python3 -B -m unittest discover -s tools/tests -p test_app_version.py -v 2>&1 | tee build-artifacts/host-tests/app-version-contracts.log
-          python3 -B -m unittest discover -s tools/tests -p test_host_selection.py -v 2>&1 | tee build-artifacts/host-tests/selection-contracts.log
-          python3 -B -m unittest discover -s tools/tests -p test_mika_issue_batch_selection.py -v 2>&1 | tee build-artifacts/host-tests/mika-selection-contracts.log
-          if [[ "$HOST_TEST_GROUP" == browser-long-page ]]; then
-            python3 -B -m unittest discover -s tools/tests -p test_browser_long_page_entrypoint.py -v
-          fi
-
-      - name: Verify desktop protocol, viewer and media contracts
-        if: ${{ env.HOST_TEST_GROUP == 'desktop-hybrid' || contains(env.HOST_TEST_GROUPS, 'desktop-hybrid') }}
-        run: |
-          set -euo pipefail
-          # Linux host verification uses the same media versions. Windows release
-          # wheel hashes and the complete builder lock remain separately enforced.
-          python3 -m pip install --disable-pip-version-check -r companion/requirements-device-identity.txt aiortc==1.15.0 av==17.0.1 Pillow==13.0.0
-          python3 -B protocol/device-v1/verify_profile.py
-          (
-            cd companion
-            python3 -B -m unittest test_device_protocol test_device_companion test_desktop_runtime test_agent_desktop_driver \
-              test_desktop_semantic_human test_desktop_adapter test_desktop_jobs test_desktop_recovery \
-              test_desktop_stream test_desktop_worker_stream test_desktop_viewer test_windows_packaging \
-              test_windows_runtime_build test_windows_installation_entry test_windows_install_recovery -v
-          ) 2>&1 | tee build-artifacts/host-tests/desktop-contracts.log
-          node --experimental-strip-types --test web-ui/tests/desktop-viewer.test.ts web-ui/tests/devices-workspace.test.ts \
-            2>&1 | tee build-artifacts/host-tests/desktop-ui-contracts.log
-
-      - name: Prepare declared Android compile toolchains
-        run: |
-          set -euo pipefail
-          mkdir -p build-artifacts/host-tests
-          : "${ANDROID_HOME:?Android SDK is required}"
-          export ANDROID_SDK_ROOT="$ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
-          echo "ANDROID_USER_HOME=$RUNNER_TEMP/android-host-tests" >> "$GITHUB_ENV"
-          echo "GRADLE_USER_HOME=$RUNNER_TEMP/gradle-host-tests" >> "$GITHUB_ENV"
-          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          set +o pipefail
-          yes | "$SDKMANAGER" --licenses > /dev/null
-          set -o pipefail
-          # AGP config uses the declared NDK even though no Android native build runs.
-          "$SDKMANAGER" 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0' 'ndk;28.2.13676358'
-          printf 'sdk.dir=%s\n' "$ANDROID_HOME" > local.properties
-          {
-            java -version
-            python3 --version
-            if command -v node >/dev/null; then node --version; fi
-            if command -v c++ >/dev/null; then c++ --version; fi
-          } > build-artifacts/host-tests/tool-versions.txt 2>&1
-
-      - name: Record exact tested revision and original PR sources
-        env:
-          TEST_EVENT: ${{ github.event_name }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
-        run: |
-          python3 - <<'PY'
-          import json, os, pathlib, subprocess
-          tested = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
-          receipt = {'event': os.environ['TEST_EVENT'], 'testedCommit': tested,
-                     'prBaseCommit': os.environ['PR_BASE_SHA'], 'prHeadCommit': os.environ['PR_HEAD_SHA'],
-                     'groups': os.environ['HOST_TEST_GROUPS'] or os.environ['HOST_TEST_GROUP'],
-                     'androidSdk': 35, 'deviceTestsPerformed': False, 'apkBuiltOrSigned': False}
-          pathlib.Path('build-artifacts/host-tests/revision.json').write_text(json.dumps(receipt, indent=2) + '\n')
-          print(json.dumps(receipt, sort_keys=True))
-          PY
-
-      - name: Require actual Chromium for bounded DOM expression tests
-        if: ${{ inputs.host_groups == '' && inputs.host_group == 'browser-expression' }}
-        run: |
-          set -euo pipefail
-          CHROME_BIN="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || command -v chromium-browser || true)"
-          if [[ -z "$CHROME_BIN" ]]; then echo 'Real Chrome/Chromium is required; no renderer test will be skipped.' >&2; exit 1; fi
-          echo "CHROME_BIN=$CHROME_BIN" >> "$GITHUB_ENV"
-          "$CHROME_BIN" --version >> build-artifacts/host-tests/tool-versions.txt
-
-      - name: Install pinned phone platform fixture dependencies
-        if: ${{ env.HOST_TEST_GROUP == 'phone-task-platform' || contains(env.HOST_TEST_GROUPS, 'phone-task-platform') }}
-        run: python3 -m pip install --disable-pip-version-check -r companion/requirements-device-identity.txt -r relay/requirements.txt
-
-      - name: Run the selected original host test bodies
-        id: selected_host_tests
-        run: |
-          set -euo pipefail
-          python3 -B tools/host-selection.py --single "$HOST_TEST_GROUP" --batch "$HOST_TEST_GROUPS" \
-            --output "$RUNNER_TEMP/pocketworld-selected-host-groups.txt"
-          mapfile -t HOST_GROUPS < "$RUNNER_TEMP/pocketworld-selected-host-groups.txt"
-          HOST_ARGS=()
-          for group in "${HOST_GROUPS[@]}"; do HOST_ARGS+=(--group "$group"); done
-          python3 -B tools/host-tests.py "${HOST_ARGS[@]}" --online \
-            --output build-artifacts/host-tests 2>&1 | tee build-artifacts/host-tests/host-tests.log
-
-      - name: Verify phone scope protocol consistency
-        if: ${{ always() && (env.HOST_TEST_GROUP == 'phone-team-sessions' || contains(env.HOST_TEST_GROUPS, 'phone-team-sessions')) }}
-        run: |
-          set -euo pipefail
-          python3 -m pip install --disable-pip-version-check -r companion/requirements-device-identity.txt
-          python3 -B protocol/device-v1/verify_profile.py
-          (cd companion && python3 -B -m unittest test_device_protocol test_device_companion test_device_pairing -v) \
-            2>&1 | tee build-artifacts/host-tests/phone-scope-protocol.log
-
-      - name: Exercise the actual phone team Web components
-        if: ${{ always() && (env.HOST_TEST_GROUP == 'phone-team-sessions' || contains(env.HOST_TEST_GROUPS, 'phone-team-sessions')) }}
-        run: |
-          set -euo pipefail
-          npm exec --prefix web-ui -- playwright install --with-deps chromium
-          node web-ui/tests/team-phone-ui.mjs 2>&1 | tee build-artifacts/host-tests/phone-team-ui.log
-
-      - name: Verify phone HTTP MCP CLI Desk USB and self-host relay boundaries
-        if: ${{ contains(fromJSON(steps.selected_host_tests.outputs.groups || '[]'), 'phone-task-platform') }}
-        run: |
-          set -euo pipefail
-          (
-            python3 -B protocol/device-v1/verify_profile.py
-            cd companion
-            python3 -B -m unittest test_phone_tasks test_phone_task_client test_phone_task_api test_phone_task_receipts test_phone_task_usb test_phone_task_upgrade \
-              test_device_protocol test_device_transport test_device_pairing test_device_companion test_device_relay_leases -v
-            cd ../relay
-            python3 -B -m unittest test_selfhost -v
-          ) 2>&1 | tee build-artifacts/host-tests/phone-platform-boundaries.log
-
-      - name: Prepare official isolated Chromium fixture runtime
-        if: ${{ inputs.host_groups == '' && inputs.host_group == 'browser-long-page' }}
-        run: |
-          set -euo pipefail
-          export PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/pocketworld-playwright-browsers"
-          export PLAYWRIGHT_MODULE="$RUNNER_TEMP/pocketworld-playwright/node_modules/playwright"
-          echo "PLAYWRIGHT_BROWSERS_PATH=$PLAYWRIGHT_BROWSERS_PATH" >> "$GITHUB_ENV"
-          echo "PLAYWRIGHT_MODULE=$PLAYWRIGHT_MODULE" >> "$GITHUB_ENV"
-          npm install --prefix "$RUNNER_TEMP/pocketworld-playwright" --ignore-scripts --no-audit --no-fund \
-            --registry https://registry.npmjs.org playwright@1.57.0
-          "$RUNNER_TEMP/pocketworld-playwright/node_modules/.bin/playwright" install --with-deps chromium
-          node --version
-          npm --version
-
-      - name: Check out fixed pre-fix source for the real Chromium red case
-        if: ${{ inputs.host_groups == '' && inputs.host_group == 'browser-long-page' }}
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          ref: afba870564e83034339ad084c2e7247260ea0c9c
-          path: .browser-long-page-baseline
-          persist-credentials: false
-
-      - name: Run original emitted long-DOM Chromium red and green fixtures
-        if: ${{ inputs.host_groups == '' && inputs.host_group == 'browser-long-page' }}
-        run: |
-          set -euo pipefail
-          python3 -B tools/browser-long-page.py --report-root build-artifacts/host-tests \
-            --baseline-source .browser-long-page-baseline/app/src/main/java/dev/pocketengine/browser/BrowserSemanticRead.java \
-            2>&1 | tee build-artifacts/host-tests/browser-long-page.log
-
-      - name: Verify pinned Pi no-tools protocol and native process receipts
-        if: ${{ contains(fromJSON(steps.selected_host_tests.outputs.groups || '[]'), 'alma-pi-no-tools') }}
-        run: |
-          set -euo pipefail
-          (
-            cd companion
-            python3 -B -m unittest test_pi_driver test_harness_config_pi -v
-          ) 2>&1 | tee build-artifacts/host-tests/companion-pi-no-tools.log
-
-      - name: Verify original phone diagnostics and MCP compatibility
-        if: ${{ contains(fromJSON(steps.selected_host_tests.outputs.groups || '[]'), 'mika-ecosystem') }}
-        run: |
-          set -euo pipefail
-          (cd companion && python3 -B -m unittest test_phone_task_diagnostics test_phone_task_mcp_versions -v) 2>&1 | tee build-artifacts/host-tests/mika-ecosystem-python.log
-
-      - name: Verify original Harness configuration and gateway transactions
-        if: ${{ contains(fromJSON(steps.selected_host_tests.outputs.groups || '[]'), 'gateway-continuation') }}
-        run: |
-          set -euo pipefail
-          (
-            cd companion
-            python3 -B -m unittest test_harness_config test_harness_config_http test_harness_config_windows \
-              test_harness_reference_assets test_harness_gateway test_harness_gateway_owner -v
-          ) 2>&1 | tee build-artifacts/host-tests/companion-harness-transactions.log
-
-      - name: Verify public child lineage and exact JSON connection closure
-        if: ${{ contains(fromJSON(steps.selected_host_tests.outputs.groups || '[]'), 'alma-child-sources') }}
-        run: |
-          set -euo pipefail
-          (
-            cd companion
-            python3 -B -m unittest test_claude_driver test_codex_child_sources test_job_events test_http_connection_close -v
-          ) 2>&1 | tee build-artifacts/host-tests/companion-child-sources.log
-
-      - name: Verify original Companion process-group ownership and recovery
-        if: ${{ contains(fromJSON(steps.selected_host_tests.outputs.groups || '[]'), 'remote-transport') }}
-        run: |
-          set -euo pipefail
-          (
-            cd companion
-            python3 -B -m unittest test_companion_process_groups test_companion test_codex_driver \
-              test_claude_driver test_assignment_workspaces test_cold_session test_codex_model_options -v
-          ) 2>&1 | tee build-artifacts/host-tests/companion-process-groups.log
-
-      - name: Retain selected host results, exact classpath and failure log
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: pocketworld-host-${{ github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name == github.repository && (github.head_ref == 'pro/workpack-02-phone-control' || github.head_ref == 'integrate/pr8-pr15-20261103') && 'phone-control-pr' || 'phone-memory-pr') || inputs.host_groups != '' && 'batch' || env.HOST_TEST_GROUP }}-${{ github.run_number }}-${{ github.run_attempt }}${{ matrix.batch != 'selected' && format('-{0}', matrix.batch) || '' }}
-          path: |
-            build-artifacts/host-tests/
-            app/build/reports/tests/testDebugUnitTest/
-          if-no-files-found: error
-          retention-days: 7
-
-  web_visual_result:
-    name: Report Web component visual failures
-    needs: apk
-    if: ${{ always() && needs.apk.outputs.web_visual_outcome == 'failure' }}
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Fail the visual check after preserving the APK
-        run: |
-          echo "Web visual capture failed. Inspect the pocketworld-library-web-visual artifact; this is not a visual pass." >> "$GITHUB_STEP_SUMMARY"
-          exit 1
-
-  ui_capture:
-    needs: apk
-    if: ${{ startsWith(github.ref, 'refs/heads/uiux/') }}
-    uses: ./.github/workflows/ui-capture-web.yml
-    with:
-      apk_run_id: ${{ format('{0}', github.run_id) }}

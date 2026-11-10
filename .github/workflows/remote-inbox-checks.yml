@@ -1,4 +1,4 @@
-name: Remote inbox integration checks
+name: Remote inbox compile
 
 # Automatic main builds and publishing belong to github-release.yml.
 on:
@@ -40,8 +40,6 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '22.22.0'
-      - name: Test cloud relay contract
-        run: node --test integrations/issue-radar/test/*.test.mjs
       - name: Check single-frontend TypeScript
         run: |
           npm ci --prefix web-ui

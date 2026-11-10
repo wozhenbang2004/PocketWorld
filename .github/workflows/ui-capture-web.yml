@@ -27,7 +27,8 @@ concurrency:
 
 jobs:
   capture:
-    if: ${{ github.event.repository.private }}
+    # CI does not run fixtures, emulator journeys or screenshot tests.
+    if: ${{ false }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     defaults:

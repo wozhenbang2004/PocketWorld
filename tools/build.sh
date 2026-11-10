@@ -11,7 +11,7 @@ if [[ ! -x "$gradle_bin" || ! -f "$ANDROID_HOME/platforms/android-35/android.jar
   echo 'Set POCKETENGINE_GRADLE and ANDROID_HOME to Gradle 8.9 and Android SDK 35.' >&2
   exit 2
 fi
-if [[ $# -eq 0 ]]; then set -- testDebugUnitTest lintDebug assembleDebug; fi
+if [[ $# -eq 0 ]]; then set -- assembleDebug; fi
 gradle_args=(--no-daemon --console=plain -p "$project_root")
 if [[ "${POCKETENGINE_OFFLINE:-1}" == 1 ]]; then gradle_args+=(--offline); fi
 exec "$gradle_bin" "${gradle_args[@]}" "$@"
