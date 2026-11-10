@@ -419,7 +419,7 @@ public final class SettingsStore {
             resolved=resolved.withStepCeiling(captured.maxSteps).withCleartextConsent(captured.cleartextConsent).withOwnerImageInput(captured.supportsImageInput)
                     .withProviderCompatibility(captured.compatibility).withLocalObservation(captured.localCaptureAllowed,captured.localOcrAllowed)
                     .withRoutePlan(captured.routePlan).withPurposePlans(captured.purposePlans);
-            return captured.catalogEnforced?resolved.withNativeCatalog(captured.capabilityBinding,captured.reasoning,captured.imageTokenReserve):resolved.withApiConnection(captured.capabilityBinding);
+            return captured.catalogEnforced?resolved.withNativeCatalog(captured.capabilityBinding,captured.reasoning,captured.imageTokenReserve):resolved.withReviewedReasoning(captured.capabilityBinding,captured.reasoning);
         }
         ModelConfig live=getApiKeyConfig();requireBedrockCredentials(live);
         if(captured.usesBedrock())throw new SecurityException("Bedrock 请求缺少已保存的原连接身份");
