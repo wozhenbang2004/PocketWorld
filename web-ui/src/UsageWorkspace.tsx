@@ -68,7 +68,7 @@ function DailyChart({ report, days, metric, selected, onSelect }: { report: Usag
 
 function CacheEfficiency({ value }: { value: UsageSummary }) {
   const cache = value.cache, known = cache.rate !== null;
-  return <section className="pw-usage-cache" aria-label="缓存效率">
+  return <section className="pw-usage-efficiency" aria-label="缓存效率">
     <header className="pw-usage-section-heading"><div><h3>缓存效率</h3><p>输入 Token 中从缓存读取的比例</p></div><strong>{rateLabel(cache.rate)}</strong></header>
     <div className="pw-usage-cache-track" role="img" aria-label={known ? `已报告输入的 ${rateLabel(cache.rate)} 来自缓存` : '缓存命中率未报告'} data-unknown={!known || undefined}>
       {known && <i style={{ width: `${cache.rate! * 100}%` }} />}
