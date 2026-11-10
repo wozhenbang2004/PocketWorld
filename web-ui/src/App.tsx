@@ -100,7 +100,7 @@ const terminal=(t:Task)=>['completed','failed','cancelled','canceled','stopped']
 function phoneViewerTask(task?:Task):PhoneViewerTask|null{
  const raw=task?.raw,identity=phoneRunIdentity(task);
  if(!task||!raw||!identity||raw.id!==task.id||raw.kind!=='phone'||raw.actorId!=='owner'||raw.spaceId!=='private'||task.executionMode!=='background'||raw.origin&&raw.origin.kind!=='team_phone')return null;
- return {...identity,title:task.goal,status:terminal(task)||task.status==='interrupted'?'ended':running(task)?'running':'paused'};
+ return {...identity,title:task.goal,statusLabel:labelStatus(task.status),status:terminal(task)||task.status==='interrupted'?(task.status==='failed'?'error':'ended'):task.status==='stopping'?'stopping':task.status==='paused'?'paused':['queued','preparing','running','verifying'].includes(task.status)?'running':'waiting'};
 }
 const taskBinding=(t?:Task|null)=>t?[t.id,t.updatedAt,t.raw?.runId,t.raw?.coordinatorEpoch,t.raw?.revision,t.raw?.resultReviewDigest,t.raw?.executionScope?.revision,t.raw?.executionScope?.executionPhase,t.raw?.executionScope?.planRevision,t.raw?.executionScope?.planArtifactRef,t.raw?.executionScope?.planHash].join(':'):'';
 const timeLabel=(value:any)=>typeof value==='number'&&value>0?new Date(value).toLocaleString('zh-CN',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';
@@ -717,7 +717,9 @@ export default function App(){
   const target=phoneViewerTask(task);if(!target||!can('phone.viewer.open')||!can('phone.viewer.frame')||!can('phone.viewer.close'))return null;
   return <PhoneViewer key={`${task.id}:${target.runId}:${target.epoch}`} task={target} expanded={phoneViewerExpanded} onExpandedChange={setPhoneViewerExpanded} nativeVisible={!phoneViewerObscured&&(conversation?!taskOpen:taskOpen&&taskLayer==='overview')}
    tasks={conversation?conversationViewerTasks.map(item=>phoneViewerTask(item)!):undefined} onSelectTask={conversation?(selected)=>{setPhoneViewedTaskId(selected.taskId)}:undefined}
-   onPause={running(task)&&can('phone.pause')?identity=>act('phone.pause',identity):undefined} onResume={task.status==='paused'&&can('phone.resume')?identity=>act('phone.resume',identity):undefined}/>;
+   onPause={task.status==='running'&&can('phone.pause')?identity=>act('phone.pause',identity):undefined} onResume={task.status==='paused'&&can('phone.resume')?identity=>act('phone.resume',identity):undefined}
+   onStop={!terminal(task)&&task.status!=='interrupted'&&task.status!=='stopping'&&can('phone.stop')?identity=>act('phone.stop',identity):undefined}
+   onOpenTask={can('tasks.open')?identity=>{setPhoneViewerExpanded(false);if(!conversation&&taskOpen&&openedTaskId.current===identity.taskId){showTaskLayer('overview');if(attention(task)&&can('tasks.review')&&!reviewPending)loadTaskReview(identity.taskId)}else openTask(identity.taskId,attention(task)&&can('tasks.review')?'review':'overview')}:undefined}/>;
  };
  const taskReviewBody=(task:Task)=>{
   const progress=getRecentTaskProgress(task);
@@ -1029,4 +1031,3 @@ export default function App(){
  <ReadingView documents={readingDocuments} onBack={closeReading}/>
  </div></Drawer.Root></ReadingContext.Provider>;
 }
-

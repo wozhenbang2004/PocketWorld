@@ -4,7 +4,7 @@
  * License notice: ../THIRD-PARTY-NOTICES.md
  */
 import { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
-import { Expand, LoaderCircle, Monitor, Pause, Play, RefreshCw, X } from 'lucide-react';
+import { ArrowUpRight, Expand, LoaderCircle, Monitor, Pause, Play, RefreshCw, Square, X } from 'lucide-react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Drawer } from './shell-library';
 import { Select, SelectItem } from './forms-library/boardui/components/base/select/select';
@@ -23,6 +23,8 @@ export type PhoneViewerProps = {
   nativeVisible?: boolean;
   onPause?: (identity: PhoneViewerIdentity) => void | Promise<unknown>;
   onResume?: (identity: PhoneViewerIdentity) => void | Promise<unknown>;
+  onStop?: (identity: PhoneViewerIdentity) => void | Promise<unknown>;
+  onOpenTask?: (identity: PhoneViewerIdentity) => void;
   tasks?: readonly PhoneViewerTask[];
   onSelectTask?: (task: PhoneViewerTask) => void;
 };
@@ -103,12 +105,15 @@ export function usePhoneViewerFeed(task: PhoneViewerTask, enabled: boolean, nati
 
 type Feed = ReturnType<typeof usePhoneViewerFeed>;
 function statusLabel(task: PhoneViewerTask, feed: Feed): string {
-  if (terminal(task) || feed.phase === 'ended') return task.status === 'error' ? '任务出现问题' : '任务已结束';
-  if (feed.phase === 'error') return '预览暂时中断';
-  if (task.status === 'paused') return '执行已暂停';
+  if (terminal(task)) return task.statusLabel || (task.status === 'error' ? '任务出现问题' : '任务已结束');
+  if (task.status === 'stopping') return task.statusLabel || '正在停止';
+  if (task.status === 'waiting') return task.statusLabel || '待你处理';
+  if (task.status === 'paused') return task.statusLabel || '执行已暂停';
+  if (feed.phase === 'ended') return '本次画面已结束';
+  if (feed.phase === 'error') return `${task.statusLabel || '任务执行中'} · 预览中断`;
   if (!feed.visible || feed.phase === 'idle' || feed.phase === 'hidden') return '点击查看';
   if (feed.phase === 'opening' || feed.phase === 'waiting') return '正在读取画面';
-  return '连续预览';
+  return task.statusLabel || '连续预览';
 }
 
 /** OpenMuse ComputerEntry: quiet centered capsule with a text-labelled status dot. */
@@ -148,15 +153,17 @@ function TaskSelector({ task, tasks, onSelectTask }: Pick<PhoneViewerProps, 'tas
   const root = useRef<HTMLDivElement>(null), [container, setContainer] = useState<Element>();
   useLayoutEffect(() => { setContainer(root.current?.closest('[role="dialog"]') || undefined); }, [tasks?.length]);
   if (!onSelectTask || !tasks || tasks.length < 2) return null;
-  return <div ref={root} className="pw-phone-viewer-select"><span className="pw-field-label">查看任务</span><Select aria-label="查看任务" selectedKey={phoneViewerKey(task)} popoverContainer={container} triggerClassName="pw-select-trigger" onSelectionChange={key => { const next = tasks.find(item => phoneViewerKey(item) === key); if (next) onSelectTask(next); }}>{tasks.map(item => <SelectItem key={phoneViewerKey(item)} id={phoneViewerKey(item)} textValue={item.title || '手机任务'}><span>{item.title || '手机任务'}{item.status === 'paused' ? ' · 已暂停' : item.status === 'ended' ? ' · 已结束' : ''}</span></SelectItem>)}</Select></div>;
+  return <div ref={root} className="pw-phone-viewer-select"><span className="pw-field-label">查看任务</span><Select aria-label="查看任务" selectedKey={phoneViewerKey(task)} popoverContainer={container} triggerClassName="pw-select-trigger" onSelectionChange={key => { const next = tasks.find(item => phoneViewerKey(item) === key); if (next) onSelectTask(next); }}>{tasks.map(item => <SelectItem key={phoneViewerKey(item)} id={phoneViewerKey(item)} textValue={item.title || '手机任务'}><span>{item.title || '手机任务'}{item.statusLabel ? ` · ${item.statusLabel}` : item.status === 'paused' ? ' · 已暂停' : item.status === 'ended' ? ' · 已结束' : ''}</span></SelectItem>)}</Select></div>;
 }
 
-type Controls = { busy: boolean; error: string; pause?: () => void; resume?: () => void };
+type Controls = { busy: boolean; error: string; pause?: () => void; resume?: () => void; stop?: () => void; openTask?: () => void };
 function PhoneControls({ task, feed, controls }: { task: PhoneViewerTask; feed: Feed; controls: Controls }) {
   return <>
     <div className="pw-phone-viewer-controls">
       {!terminal(task) && feed.phase !== 'ended' && task.status === 'running' && controls.pause && <button type="button" className="pw-phone-viewer-button" disabled={controls.busy || !feed.visible} onClick={controls.pause}>{controls.busy ? <LoaderCircle size={16} className="pw-phone-viewer-spinner" aria-hidden="true" /> : <Pause size={16} aria-hidden="true" />}暂停执行</button>}
       {!terminal(task) && feed.phase !== 'ended' && task.status === 'paused' && controls.resume && <button type="button" className="pw-phone-viewer-button pw-phone-viewer-button-primary" disabled={controls.busy || !feed.visible} onClick={controls.resume}>{controls.busy ? <LoaderCircle size={16} className="pw-phone-viewer-spinner" aria-hidden="true" /> : <Play size={16} aria-hidden="true" />}继续执行</button>}
+      {!terminal(task) && task.status !== 'stopping' && controls.stop && <button type="button" className="pw-phone-viewer-button" disabled={controls.busy || !feed.visible} onClick={controls.stop}><Square size={16} aria-hidden="true" />停止任务</button>}
+      {controls.openTask && <button type="button" className="pw-phone-viewer-button" disabled={controls.busy} onClick={controls.openTask}><ArrowUpRight size={16} aria-hidden="true" />{task.status === 'waiting' ? '处理待办' : task.status === 'error' ? '查看失败原因' : '查看任务'}</button>}
       {!terminal(task) && feed.phase !== 'ended' && (feed.phase === 'error' || feed.phase === 'hidden' && feed.visible) && <button type="button" className="pw-phone-viewer-button" disabled={!feed.visible} onClick={feed.retry}><RefreshCw size={16} aria-hidden="true" />重新读取</button>}
     </div>
     {(feed.error || controls.error) && <p className="pw-phone-viewer-error" role="status">{controls.error || feed.error}</p>}
@@ -191,7 +198,7 @@ export function PhoneViewerSheet({ task, feed, controls, expanded, onExpandedCha
       <div className="pw-phone-viewer-sheet-status"><span className="pw-phone-viewer-icon"><Monitor size={24} aria-hidden="true" /></span><div><strong role="status">{statusLabel(task, feed)}</strong><p>{terminal(task) || feed.phase === 'ended' ? '这次任务已结束。画面仅保留于本次查看中。' : '画面来自这次任务的后台独立屏。'}</p></div></div>
       <div className="pw-phone-viewer-sheet-control-rail"><PhoneControls task={task} feed={feed} controls={controls} /></div>
       <PhoneFrame task={task} feed={feed} large />
-      {!terminal(task) && feed.phase !== 'ended' && <p className="pw-phone-viewer-note">收起画面后，任务仍会在后台继续执行。</p>}
+      {!terminal(task) && feed.phase !== 'ended' && <p className="pw-phone-viewer-note">{task.status === 'waiting' ? '请回到任务处理待办，查看画面不会继续执行。' : task.status === 'paused' ? '任务保持暂停，点击继续执行才会恢复。' : task.status === 'stopping' ? '正在停止任务，保留最后收到的画面。' : '收起画面后，任务仍会在后台继续执行。'}</p>}
     </div>
   </>;
   const restoreFocus = (event: Event) => { if (returnFocus.current?.isConnected) { event.preventDefault(); returnFocus.current.focus(); } };
@@ -199,7 +206,7 @@ export function PhoneViewerSheet({ task, feed, controls, expanded, onExpandedCha
     : <Dialog.Root open={expanded} onOpenChange={onExpandedChange}><Dialog.Portal><Dialog.Overlay className="pw-phone-viewer-overlay" /><Dialog.Content className="pw-phone-viewer-sheet" aria-describedby={descriptionId} onCloseAutoFocus={restoreFocus}>{contents}</Dialog.Content></Dialog.Portal></Dialog.Root>;
 }
 
-export function PhoneViewer({ task, expanded: controlledExpanded, onExpandedChange, card = true, entry = true, nativeVisible = true, onPause, onResume, tasks, onSelectTask }: PhoneViewerProps) {
+export function PhoneViewer({ task, expanded: controlledExpanded, onExpandedChange, card = true, entry = true, nativeVisible = true, onPause, onResume, onStop, onOpenTask, tasks, onSelectTask }: PhoneViewerProps) {
   const [localExpanded, setLocalExpanded] = useState(false);
   const expanded = controlledExpanded ?? localExpanded;
   const changeExpanded = (value: boolean) => { if (controlledExpanded === undefined) setLocalExpanded(value); onExpandedChange?.(value); };
@@ -220,7 +227,7 @@ export function PhoneViewer({ task, expanded: controlledExpanded, onExpandedChan
     catch (error) { if (valid()) setAction({ key, busy: false, error: error instanceof Error ? error.message : '任务操作未能确认，请核对原任务。' }); }
     finally { if (actionInFlight.current === expected) actionInFlight.current = null; }
   };
-  const controls: Controls = { busy: action.key === key && action.busy, error: action.key === key ? action.error : '', pause: onPause ? () => void act(onPause) : undefined, resume: onResume ? () => void act(onResume) : undefined };
+  const controls: Controls = { busy: action.key === key && action.busy, error: action.key === key ? action.error : '', pause: onPause ? () => void act(onPause) : undefined, resume: onResume ? () => void act(onResume) : undefined, stop: onStop ? () => void act(onStop) : undefined, openTask: onOpenTask ? () => { changeExpanded(false); onOpenTask(identityOf(task)); } : undefined };
   const open = () => { if (document.activeElement instanceof HTMLElement) returnFocus.current = document.activeElement; changeExpanded(true); };
   return <div className="pw-phone-viewer" data-phone-viewer-task={task.taskId} data-phone-viewer-run={task.runId} data-phone-viewer-epoch={task.epoch}>
     {entry && <PhoneComputerEntry task={task} feed={feed} expanded={expanded} onOpen={open} />}

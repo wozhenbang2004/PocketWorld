@@ -2,7 +2,8 @@
 export type PhoneViewerIdentity = { taskId: string; runId: string; epoch: number };
 export type PhoneViewerTask = PhoneViewerIdentity & {
   title?: string;
-  status: 'running' | 'paused' | 'ended' | 'error';
+  status: 'running' | 'paused' | 'waiting' | 'stopping' | 'ended' | 'error';
+  statusLabel?: string;
 };
 export type PhoneViewerSession = PhoneViewerIdentity & { viewerId: string };
 export type PhoneDisplayIdentity = { sessionId: string; displayId: number };
