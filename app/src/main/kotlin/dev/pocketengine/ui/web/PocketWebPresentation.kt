@@ -24,6 +24,8 @@ internal class PocketWebPresentation(
     @Volatile private var active = false
     private var saving = false
     private var error: String? = null
+    // A transient page role, not a saved preference or execution capability.
+    private var canvasRole = "chat"
     private val preferenceListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (key == UiAppearance.KEY || key == UiTypography.KEY) main.post { refreshAppearance() }
     }
@@ -33,7 +35,7 @@ internal class PocketWebPresentation(
     }
 
     companion object {
-        val COMMANDS = setOf("settings.appearance", "settings.typography", "speech.prepare", "speech.openSettings")
+        val COMMANDS = setOf("settings.canvas", "settings.appearance", "settings.typography", "speech.prepare", "speech.openSettings")
     }
 
     fun start() {
@@ -42,11 +44,11 @@ internal class PocketWebPresentation(
         active = true
         preferences.registerOnSharedPreferenceChangeListener(preferenceListener)
         activity.application.registerComponentCallbacks(configurationListener)
-        UiAppearance.window(activity)
     }
 
     fun snapshot(): JSONObject = JSONObject()
         .put("mode", UiAppearance.mode(preferences)).put("dark", UiAppearance.dark(activity))
+        .put("canvas", canvasRole)
         .put("typography", UiTypography.snapshot(preferences))
         .put("saving", saving).put("error", error ?: JSONObject.NULL)
 
@@ -54,7 +56,7 @@ internal class PocketWebPresentation(
 
     private fun refreshAppearance() {
         if (!active || activity.isDestroyed || activity.isFinishing) return
-        UiAppearance.window(activity)
+        // PocketWebHost applies the same snapshot to its WebView, inset padding and window.
         changed()
     }
 
@@ -62,6 +64,16 @@ internal class PocketWebPresentation(
         check(Looper.myLooper() == Looper.getMainLooper())
         check(active && !activity.isDestroyed && !activity.isFinishing) { "原设置窗口已关闭" }
         when (action) {
+            "settings.canvas" -> {
+                require(args.keys().asSequence().toSet() == setOf("role")) { "画布展示参数不完整" }
+                val role = args.opt("role")
+                require(role is String && role in setOf("chat", "workspace")) { "未知的画布展示类型" }
+                if (canvasRole != role) {
+                    canvasRole = role
+                    changed()
+                }
+                done(JSONObject().put("canvas", canvasRole), null)
+            }
             "settings.appearance" -> {
                 require(args.keys().asSequence().toSet() == setOf("mode")) { "外观设置参数不完整" }
                 val mode = args.opt("mode")

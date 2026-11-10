@@ -1,11 +1,5 @@
 /* Decorative surfaces use the product's border tokens. Semantic paths, progress
  * rings and focus indicators retain the styles owned by their components. */
-:root,
-:root.dark {
-  --pw-edge: transparent;
-  --pw-edge-hover: transparent;
-  --pw-divider: transparent;
-}
 html[data-pocket-native-insets="true"] {
   --pocket-inset-top: 0px;
   --pocket-inset-bottom: 0px;
@@ -27,9 +21,9 @@ html[data-pocket-native-insets="true"] .pw-task-footer { padding-bottom: 12px; }
 /* This fallback is deliberately low-specificity. A control may provide its own
  * focus treatment without fighting an application-wide !important rule. */
 :where(.pw-app, .pw-drawer, .shadow-dropdown) :where(button, a, input, textarea, select, [tabindex]):focus-visible {
-  outline: 2px solid transparent;
+  outline: 2px solid var(--pw-focus);
   outline-offset: 2px;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pw-focus) 24%, transparent);
+  box-shadow: none;
 }
 @media (forced-colors: active) {
   :where(.pw-app, .pw-drawer, .shadow-dropdown) :where(button, a, input, textarea, select, [tabindex]):focus-visible {

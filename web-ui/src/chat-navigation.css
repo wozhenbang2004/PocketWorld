@@ -30,9 +30,9 @@
  border: 0;
  border-radius: 50%;
  color: var(--pw-ink);
- background: var(--pw-surface);
- box-shadow: 0 3px 14px rgb(0 0 0 / 5%), inset 0 1px 1px rgb(255 255 255 / 88%);
- transition: background-color 150ms ease, box-shadow 150ms ease;
+ background: transparent;
+ box-shadow: none;
+ transition: background-color 150ms ease;
 }
 .pw-chat-glass-trigger[data-unread]::after {
  content: '';
@@ -43,10 +43,14 @@
  top: 7px;
  border-radius: 50%;
  background: var(--pw-ink);
- box-shadow: 0 0 0 2px var(--pw-surface);
+ box-shadow: 0 0 0 2px var(--pw-canvas-chat);
 }
-.pw-app .pw-chat-navigation .pw-chat-glass-trigger[aria-expanded="true"] {
+.pw-app .pw-chat-navigation .pw-chat-glass-trigger:is([aria-expanded="true"], [data-pressed], :active) {
  background: var(--pw-selected);
+}
+.pw-app .pw-chat-navigation .pw-chat-glass-trigger:is(:focus-visible, [data-focus-visible]) {
+ outline: 2px solid var(--pw-focus);
+ outline-offset: -3px;
 }
 .pw-chat-glass-menu.shadow-dropdown {
  width: 248px;
@@ -58,7 +62,7 @@
  border: 0;
  border-radius: 20px;
  color: var(--pw-ink);
- background: var(--pw-surface);
+ background: var(--pw-floating);
  box-shadow: var(--pw-shadow-floating);
 }
 .pw-chat-glass-menu .pw-chat-glass-dialog { gap: 10px; padding: 2px; }
@@ -80,22 +84,14 @@
 }
 .pw-chat-menu-actions > .button-press-motion > span { flex: 1; min-width: 0; padding: 0; justify-content: flex-start; gap: 10px; white-space: normal; text-align: start; }
 .pw-chat-menu-actions > .button-press-motion:disabled { opacity: .45; }
-.pw-chat-menu-actions > .button-press-motion:hover:not(:disabled) { background: var(--pw-selected); }
+.pw-chat-menu-actions > .button-press-motion:hover:not(:disabled) { background: var(--pw-floating-hover); }
+.pw-chat-menu-actions > .button-press-motion:is(:active, [data-pressed]):not(:disabled) { background: var(--pw-floating-selected); }
 .pw-chat-menu-unread { margin-left: auto; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--pw-copy); }
-@supports ((backdrop-filter: blur(16px)) or (-webkit-backdrop-filter: blur(16px))) {
- .pw-app .pw-chat-navigation .pw-chat-glass-trigger {
-  background: linear-gradient(145deg,rgb(255 255 255 / 84%),rgb(255 255 255 / 58%));
-  -webkit-backdrop-filter: blur(18px) saturate(1.25);
-  backdrop-filter: blur(18px) saturate(1.25);
- }
- :root.dark .pw-app .pw-chat-navigation .pw-chat-glass-trigger { background: linear-gradient(145deg,rgb(52 52 54 / 88%),rgb(34 34 36 / 72%)); }
+@media (hover: hover) and (pointer: fine) {
+ .pw-app .pw-chat-navigation .pw-chat-glass-trigger:hover:not(:disabled):not([aria-expanded="true"]):not(:active) { background: var(--pw-hover); }
 }
-:root.dark .pw-app .pw-chat-navigation .pw-chat-glass-trigger { box-shadow: 0 4px 18px rgb(0 0 0 / 24%), inset 0 1px 1px rgb(255 255 255 / 18%), inset 0 -1px 2px rgb(0 0 0 / 20%); }
-@media (prefers-reduced-transparency: reduce), (forced-colors: active) {
- .pw-app .pw-chat-navigation .pw-chat-glass-trigger,
- .pw-chat-glass-menu,
- :root.dark .pw-app .pw-chat-navigation .pw-chat-glass-trigger,
- :root.dark .pw-chat-glass-menu { background: var(--pw-surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
+@media (forced-colors: active) {
+ .pw-app .pw-chat-navigation .pw-chat-glass-trigger:is(:focus-visible, [data-focus-visible]) { outline-color: Highlight; }
 }
 @media (prefers-reduced-motion: reduce) {
  .pw-app .pw-chat-navigation .pw-chat-glass-trigger { transition: none; }

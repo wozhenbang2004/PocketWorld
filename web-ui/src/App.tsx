@@ -660,6 +660,40 @@ export default function App(){
  };
  const taskActionLabel=(task:Task)=>conversationWorkActionLabel(task);
  const showTaskReview=()=>refreshReview();
+ // Match the existing full-window layer breakpoints, rather than coloring native
+ // safe areas from a route hidden behind a file or reading workspace.
+ const [canvasLayers,setCanvasLayers]=useState(()=>({
+  files:window.matchMedia('(max-width: 640px)').matches,
+  reading:!window.matchMedia('(min-width: 760px) and (min-height: 600px)').matches,
+ }));
+ useEffect(()=>{
+  const files=window.matchMedia('(max-width: 640px)'),reading=window.matchMedia('(min-width: 760px) and (min-height: 600px)');
+  const update=()=>setCanvasLayers(previous=>{
+   const next={files:files.matches,reading:!reading.matches};
+   return previous.files===next.files&&previous.reading===next.reading?previous:next;
+  });
+  update();[files,reading].forEach(query=>query.addEventListener('change',update));
+  return()=>[files,reading].forEach(query=>query.removeEventListener('change',update));
+ },[]);
+ const canvasRole=readingDocuments.length>0&&canvasLayers.reading?'chat':
+  desktopNavigation||(state.attachmentWorkspace?.open&&canvasLayers.files)?'workspace':route==='chat'?'chat':'workspace';
+ const canvasSupported=can('settings.canvas'),canvasResume=Number(obj(snapshot?.view).resumeRevision||0);
+ useEffect(()=>{
+  let active=true;
+  const sync=()=>{
+   if(!active||document.hidden||!canvasSupported)return;
+   // A newer route/foreground render cancels a pending presentation-only send.
+   void Promise.resolve().then(()=>{
+    if(!active||document.hidden||bridge.getDocumentEpoch()!==personalDocumentEpoch)return;
+    return bridge.command('settings.canvas',{role:canvasRole});
+   }).catch(()=>{
+    // Native resume/document rebinding or the next visible layer resynchronizes.
+    // Keep rejected display requests out of business errors and retry loops.
+   });
+  };
+  sync();document.addEventListener('visibilitychange',sync);
+  return()=>{active=false;document.removeEventListener('visibilitychange',sync)};
+ },[canvasRole,canvasSupported,personalDocumentEpoch,canvasResume]);
  const phoneViewerObscured=!!(state.conversationReader||state.queuedInputsPage||permissionOptionsOpen||organizationTarget||state.attachmentWorkspace?.open||workOpen||commandOpen||projectPickerOpen||fileDisplayOpen||newProjectOpen||newFileOpen||modelPickerOpen||phoneReview||voiceReview||state.chatAttachmentPickerOpen||messageQuoteTarget||sourceSelection||skillDraftTarget||memoryDraftTarget||routeReferenceTarget||state.quickPanelVoice||readingDocuments.length);
  const phoneViewerFor=(task:Task,conversation=false)=>{
   const target=phoneViewerTask(task);if(!target||!can('phone.viewer.open')||!can('phone.viewer.frame')||!can('phone.viewer.close'))return null;

@@ -35,6 +35,7 @@ import androidx.webkit.WebViewFeature
 import dev.pocketengine.core.RuntimeDiagnostics
 import dev.pocketengine.ui.ComposeActivity
 import dev.pocketengine.ui.PocketWorldController
+import dev.pocketengine.ui.UiAppearance
 import java.io.ByteArrayInputStream
 import org.json.JSONObject
 
@@ -67,7 +68,7 @@ internal class PocketWebHost private constructor(
             PocketWebHost(activity, endpoint, readerFailure = failed, ownsSystemInsets = false)
     }
 
-    val view = FrameLayout(activity).apply { setBackgroundColor(Color.rgb(245, 245, 245)) }
+    val view = FrameLayout(activity)
     private val main = Handler(Looper.getMainLooper())
     private val web = WebView(activity)
     private var closed = false
@@ -85,6 +86,8 @@ internal class PocketWebHost private constructor(
     private var readerBackTimeout: Runnable? = null
     private val readerStartupTimeout = Runnable { if (!readerBound && bridge.canInteract()) failReader() }
     private val bridge = endpoint(::send)
+    private var canvasRole = if (bridge.surface == "business") "chat" else "workspace"
+    private var appliedBackgroundColor: Int? = null
     private var bundle: PocketWebBundle? = null
     private val loader = WebViewAssetLoader.Builder().setDomain(HOST)
         .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(activity)).build()
@@ -269,7 +272,7 @@ internal class PocketWebHost private constructor(
             orientation = android.widget.LinearLayout.VERTICAL
             val dark = dev.pocketengine.ui.UiAppearance.dark(activity)
             val ink = if (dark) Color.rgb(232, 232, 232) else Color.rgb(36, 36, 36)
-            setBackgroundColor(if (dark) Color.rgb(18, 18, 18) else Color.rgb(245, 245, 245))
+            setBackgroundColor(UiAppearance.canvas(activity, canvasRole))
             val space = (20 * activity.resources.displayMetrics.density).toInt()
             setPadding(space, space, space, space)
             fun recoveryButton(label: String, action: () -> Unit) = android.widget.Button(activity).apply {
@@ -302,15 +305,25 @@ internal class PocketWebHost private constructor(
     }
 
     private fun applyWorkspaceBackground() {
-        val color = if (dev.pocketengine.ui.UiAppearance.dark(activity)) Color.rgb(18, 18, 18) else Color.rgb(245, 245, 245)
+        val ownsWindow = ownsSystemInsets && activity is ComposeActivity
+        val color = if (ownsWindow) UiAppearance.canvas(activity, canvasRole)
+            else if (UiAppearance.dark(activity)) Color.rgb(18, 18, 18) else Color.rgb(245, 245, 245)
+        if (appliedBackgroundColor == color) return
+        appliedBackgroundColor = color
         view.setBackgroundColor(color)
         if (!webDestroyed) web.setBackgroundColor(color)
+        if (ownsWindow) UiAppearance.window(activity, canvasRole)
     }
 
     private fun send(message: JSONObject) {
         if (closed) return
         if (Looper.myLooper() != Looper.getMainLooper()) { main.post { send(message) }; return }
         if (message.optString("kind") == "state") {
+            if (bridge.surface == "business") {
+                val role = message.optJSONObject("snapshot")?.optJSONObject("state")
+                    ?.optJSONObject("appearance")?.optString("canvas")
+                if (role == "chat" || role == "workspace") canvasRole = role
+            }
             applyWorkspaceBackground()
             // This is part of every initial/replayed snapshot, not a one-shot JS event.
             // Embedded browser surfaces share BrowserActivity's native inset owner.
@@ -383,7 +396,10 @@ internal class PocketWebHost private constructor(
         }
     }
 
-    fun resume() { if (!closed) { bridge.foreground(true); if (!webDestroyed) web.onResume(); view.requestApplyInsets(); main.post {
+    fun resume() { if (!closed) {
+        appliedBackgroundColor = null
+        applyWorkspaceBackground()
+        bridge.foreground(true); if (!webDestroyed) web.onResume(); view.requestApplyInsets(); main.post {
         if (!closed && !documentFence.isRejected()) {
             if (documentLoaded) documentToken = documentFence.loaded()
             sendConfiguration()

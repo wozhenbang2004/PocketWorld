@@ -105,7 +105,7 @@
 .pw-start-heading { display: grid; gap: 8px; }
 .pw-start h2 { margin: 0; max-width: 100%; color: var(--pw-ink); font: 550 25px/1.45 var(--pw-font); letter-spacing: -.025em; text-wrap: balance; }
 .pw-start p { margin: 0; max-width: 320px; color: var(--pw-copy); font: 400 14px/23px var(--pw-font); }
-.pw-start .pw-start-model.button-press-motion { min-height: 44px; height: auto; padding: 10px 14px; gap: 9px; border: 0; border-radius: 14px; background: var(--pw-surface); box-shadow: none; color: var(--pw-ink); font: 500 14px/22px var(--pw-font); }
+.pw-start .pw-start-model.button-press-motion { min-height: 44px; height: auto; padding: 10px 14px; gap: 9px; border: 0; border-radius: 14px; background: var(--pw-inset); box-shadow: none; color: var(--pw-ink); font: 500 14px/22px var(--pw-font); }
 .pw-start .pw-start-model.button-press-motion > span { padding: 0; }
 .pw-start .pw-start-model.button-press-motion > svg { width: 18px; height: 18px; }
 .pw-start-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; max-width: 100%; margin: 0 0 0 -10px; }

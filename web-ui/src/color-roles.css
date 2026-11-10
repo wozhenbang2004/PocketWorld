@@ -1,4 +1,4 @@
-/* PocketWorld semantic color contract · 2026-11-08
+/* PocketWorld semantic color contract · 2026-11-10
  * Keep the retained BoardUI/Affect/Vaul controls. This layer assigns color
  * by surface responsibility; it never clones native controls or task state.
  * Brand remains monochrome; only danger/warning use restrained semantic hues.
@@ -12,19 +12,21 @@
   --pw-divider: var(--pw-edge);
 }
 
-/* A quiet canvas, readable work surface, and identifiable temporary sheets. */
+/* Page roles share a scale, not an identical background. */
 .pw-redesign,
 .pw-secondary {
   color: var(--pw-ink);
   background: var(--pw-canvas);
 }
 .pw-redesign .pw-main-workspace {
-  background: var(--pw-surface);
+  background: var(--pw-canvas-workspace);
   color: var(--pw-ink);
 }
-.pw-redesign:is([data-route="tasks"], [data-route="projects"]) .pw-main-workspace,
-.pw-redesign:is([data-route="tasks"], [data-route="projects"]) .pw-app-header {
-  background: var(--pw-canvas);
+.pw-redesign[data-route="chat"] {
+  --pw-canvas: var(--pw-canvas-chat);
+}
+.pw-redesign[data-route="chat"] .pw-main-workspace {
+  background: var(--pw-canvas-chat);
 }
 .pw-redesign .pw-desktop-navigation,
 .pw-work-drawer {
@@ -33,11 +35,14 @@
 }
 .pw-redesign .pw-app-header,
 .pw-secondary .pw-secondary-header {
-  background: var(--pw-surface);
-  border-bottom: 1px solid var(--pw-divider);
+  background: var(--pw-canvas);
+  border: 0;
 }
 .pw-secondary .pw-secondary-scroll {
   background: var(--pw-canvas);
+}
+.pw-drawer.pw-file-workspace {
+  background: var(--pw-canvas-workspace);
 }
 .pw-redesign .pw-app-header h1,
 .pw-secondary .pw-secondary-header h1 {
@@ -76,12 +81,27 @@
 
 /* Popovers use a raised plane; the composer surface belongs to composer-squircle.css. */
 :is(.pw-create-drawer, .pw-model-drawer, .pw-settings-dialog) {
-  background: var(--pw-surface);
+  background: var(--pw-floating);
   border-color: var(--pw-edge);
   box-shadow: var(--pw-shadow-sheet);
 }
 .pw-overlay {
   background: var(--pw-scrim);
+}
+.shadow-dropdown,
+.pw-settings-dialog {
+  --pw-inset: var(--pw-floating-inset);
+  --pw-hover: var(--pw-floating-hover);
+  --pw-selected: var(--pw-floating-selected);
+  --color-dropdown-item-hover-background: var(--pw-floating-hover);
+  --color-background-primary-hover: var(--pw-floating-hover);
+  --color-background-primary-active: var(--pw-floating-selected);
+  --color-button-ghost-hover: var(--pw-floating-hover);
+  --color-button-ghost-active: var(--pw-floating-selected);
+  background: var(--pw-floating);
+}
+@media (min-width: 1024px) {
+  .pw-redesign[data-navigation="sidebar"] { background: var(--pw-canvas-workspace); }
 }
 
 /* Failure/warning are semantic exceptions, never the product accent. */
@@ -107,8 +127,8 @@
   outline-offset: 3px;
 }
 @media (prefers-contrast: more) {
-  :root:not(.dark) { --pw-edge: #979795; --pw-edge-hover: #707070; --pw-focus: #202020; }
-  :root.dark { --pw-edge: #888888; --pw-edge-hover: #AAAAAA; --pw-focus: #FFFFFF; }
+  :root:not(.dark) { --pw-edge: var(--pw-neutral-500); --pw-edge-hover: var(--pw-neutral-700); --pw-focus: var(--pw-neutral-975); }
+  :root.dark { --pw-edge: var(--pw-neutral-400); --pw-edge-hover: var(--pw-neutral-300); --pw-focus: var(--pw-neutral-0); }
 }
 @media (prefers-reduced-motion: reduce) {
   .pw-redesign :is(.pw-task-row.button-press-motion, .pw-file-open),

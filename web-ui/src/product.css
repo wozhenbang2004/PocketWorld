@@ -6,27 +6,51 @@
 :root {
   --pw-font: var(--pw-font-ui, var(--font-ui, system-ui, sans-serif));
   --pw-mono: var(--pw-font-code, var(--font-code, ui-monospace, monospace));
-  --pw-canvas: #F6F6F6;
-  --pw-surface: #FFFFFF;
-  --pw-inset: #EEEEEE;
-  --pw-selected: #E6E6E6;
-  --pw-hover: #EBEBEB;
-  --pw-edge: #E7E7E5;
-  --pw-edge-hover: #CECECB;
-  --pw-ink: #181818;
-  --pw-copy: #555555;
-  --pw-muted: #686868;
-  --pw-disabled: #888888;
-  --pw-strong: #242424;
-  --pw-on-strong: #FFFFFF;
-  --pw-focus: #555555;
+  /* One neutral scale; page roles decide which parts should contrast. */
+  --pw-neutral-0: #FFFFFF;
+  --pw-neutral-25: #FCFCFC;
+  --pw-neutral-50: #F6F6F6;
+  --pw-neutral-100: #F1F1F1;
+  --pw-neutral-200: #E6E6E6;
+  --pw-neutral-300: #C4C4C4;
+  --pw-neutral-350: #B5B5B5;
+  --pw-neutral-400: #949494;
+  --pw-neutral-500: #646464;
+  --pw-neutral-600: #555555;
+  --pw-neutral-700: #444444;
+  --pw-neutral-800: #303030;
+  --pw-neutral-850: #262626;
+  --pw-neutral-900: #242424;
+  --pw-neutral-950: #1C1C1C;
+  --pw-neutral-975: #181818;
+  --pw-neutral-1000: #111111;
+  --pw-canvas-chat: var(--pw-neutral-25);
+  --pw-canvas-workspace: var(--pw-neutral-50);
+  --pw-canvas: var(--pw-canvas-workspace);
+  --pw-surface: var(--pw-neutral-0);
+  --pw-floating: var(--pw-neutral-0);
+  --pw-floating-inset: var(--pw-neutral-100);
+  --pw-floating-hover: var(--pw-neutral-100);
+  --pw-floating-selected: var(--pw-neutral-200);
+  --pw-inset: var(--pw-neutral-100);
+  --pw-selected: var(--pw-neutral-200);
+  --pw-hover: var(--pw-neutral-100);
+  --pw-edge: transparent;
+  --pw-edge-hover: transparent;
+  --pw-ink: var(--pw-neutral-975);
+  --pw-copy: var(--pw-neutral-600);
+  --pw-muted: var(--pw-neutral-500);
+  --pw-disabled: var(--pw-neutral-400);
+  --pw-strong: var(--pw-neutral-900);
+  --pw-on-strong: var(--pw-neutral-0);
+  --pw-focus: var(--pw-neutral-700);
   --pw-danger: #A03F39;
   --pw-danger-surface: #FBF0EE;
   --pw-danger-border: #E9C8C3;
   --pw-warning: #80561F;
   --pw-warning-surface: #FAF4E9;
-  --pw-success: #424242;
-  --pw-success-surface: #F0F0EE;
+  --pw-success: var(--pw-neutral-700);
+  --pw-success-surface: var(--pw-neutral-100);
   /* One spacing language across navigation, reading and management screens.
    * Dense editors and native viewports retain their own bounded geometry. */
   --pw-gap-related: 8px;
@@ -37,9 +61,11 @@
   --pw-control-target: 44px;
   --pw-radius-control: 14px;
   --pw-radius-popover: 20px;
-  --pw-shadow-input: 0 2px 6px -2px rgb(0 0 0 / 3%), 0 12px 26px -10px rgb(0 0 0 / 7%);
-  --pw-shadow-surface: 0 2px 7px -3px rgb(0 0 0 / 3%), 0 11px 27px -12px rgb(0 0 0 / 7%);
-  --pw-shadow-floating: 0 10px 36px -12px rgb(0 0 0 / 17%);
+  --pw-shadow-input: 0 1px 2px rgb(0 0 0 / 3%), 0 6px 20px rgb(0 0 0 / 3.5%);
+  --pw-shadow-input-shape: drop-shadow(0 1px 2px rgb(0 0 0 / 2%)) drop-shadow(0 4px 10px rgb(0 0 0 / 3%));
+  --pw-shadow-surface: none;
+  --pw-shadow-indicator: 0 1px 3px rgb(0 0 0 / 5%);
+  --pw-shadow-floating: 0 2px 6px rgb(0 0 0 / 3%), 0 12px 32px -8px rgb(0 0 0 / 14%);
   --pw-shadow-sheet: 0 20px 54px -20px rgb(0 0 0 / 20%);
 
   /* BoardUI semantic aliases also reach its portaled menus. */
@@ -59,7 +85,7 @@
   --color-foreground-icon-tertiary: var(--pw-muted);
   --color-background-full: var(--pw-surface);
   --color-background-primary-default: var(--pw-surface);
-  --color-background-primary-hover: var(--pw-inset);
+  --color-background-primary-hover: var(--pw-hover);
   --color-background-primary-active: var(--pw-selected);
   --color-background-primary-disabled: var(--pw-inset);
   --color-background-secondary-default: var(--pw-inset);
@@ -71,9 +97,9 @@
   --color-border-button-active: transparent;
   --color-border-focus-ring: var(--pw-focus);
   --color-separator-border: var(--pw-edge);
-  --color-dropdown-item-hover-background: var(--pw-selected);
+  --color-dropdown-item-hover-background: var(--pw-hover);
   --color-button-ghost-background: transparent;
-  --color-button-ghost-hover: var(--pw-inset);
+  --color-button-ghost-hover: var(--pw-hover);
   --color-button-ghost-active: var(--pw-selected);
   --color-button-ghost-foreground: var(--pw-copy);
   --color-button-ghost-disabled: transparent;
@@ -85,7 +111,7 @@
   --color-text-error-placeholder: var(--pw-muted);
   --color-tab-count-selected-background: var(--pw-selected);
   --color-segmented-control-background: var(--pw-inset);
-  --color-segmented-control-selected-background: var(--pw-surface);
+  --color-segmented-control-selected-background: var(--pw-floating);
   --radius-2lg: var(--pw-radius-control);
   --shadow-xs: none;
   --shadow-card: none;

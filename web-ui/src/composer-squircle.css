@@ -3,8 +3,8 @@
  * Keep the context rail quiet; its real hit area sits above the editing surface. */
 .pw-composer-host.pw-squircle-composer {
   --pw-composer-hit: 44px;
-  --pw-composer-rail: color-mix(in srgb, var(--pw-ink) 7%, var(--pw-canvas));
-  --pw-composer-shadow: 0 3px 8px -5px rgb(0 0 0 / 9%), 0 14px 28px -16px rgb(0 0 0 / 12%);
+  --pw-composer-rail: var(--pw-inset);
+  --pw-composer-shadow: var(--pw-shadow-input);
   min-width: 0;
   width: 100%;
 }
@@ -65,6 +65,8 @@
   height: 22px;
   border-radius: 11px;
   background: var(--pw-selected);
+  outline: 2px solid var(--pw-focus);
+  outline-offset: 2px;
   transform: translateX(-50%);
 }
 .pw-composer-host.pw-squircle-composer .pw-context-meter-button[data-attention] { color: var(--pw-warning); }
@@ -100,15 +102,11 @@
   display: block;
   overflow: visible;
   pointer-events: none;
-  filter: drop-shadow(0 2px 4px rgb(0 0 0 / 2%)) drop-shadow(0 8px 14px rgb(0 0 0 / 4%));
-  transition: filter 180ms ease;
+  filter: var(--pw-shadow-input-shape);
 }
 .pw-composer-host.pw-squircle-composer .pw-continuous-surface path { fill: var(--pw-surface); }
 .pw-composer-host.pw-squircle-composer .pw-continuous-surface[data-tone="context"] { filter: none; }
 .pw-composer-host.pw-squircle-composer .pw-continuous-surface[data-tone="context"] path { fill: var(--pw-composer-rail); }
-.pw-composer-host.pw-squircle-composer .pw-composer-card:focus-within > .pw-continuous-surface {
-  filter: drop-shadow(0 2px 5px rgb(0 0 0 / 3%)) drop-shadow(0 10px 16px rgb(0 0 0 / 5%));
-}
 .pw-composer-host.pw-squircle-composer .pw-composer-row { min-width: 0; width: 100%; margin-bottom: 2px; }
 .pw-composer-host.pw-squircle-composer .pw-composer-row > textarea {
   box-sizing: border-box;
@@ -134,7 +132,7 @@
   scrollbar-width: thin;
 }
 .pw-composer-host.pw-squircle-composer .pw-composer-row > textarea:focus-visible { outline: none; background: transparent; box-shadow: none; }
-.pw-composer-host.pw-squircle-composer .pw-composer-row > textarea::placeholder { color: var(--pw-muted); opacity: .86; }
+.pw-composer-host.pw-squircle-composer .pw-composer-row > textarea::placeholder { color: var(--pw-muted); opacity: 1; }
 .pw-composer-host.pw-squircle-composer .pw-composer-toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -180,7 +178,8 @@
   box-shadow: none;
 }
 .pw-composer-host.pw-squircle-composer .pw-composer-toolbar :is(button, [data-pw-icon-button]):focus-visible {
-  outline: none;
+  outline: 2px solid var(--pw-focus);
+  outline-offset: -3px;
   background: var(--pw-selected);
   box-shadow: none;
 }
@@ -276,10 +275,6 @@
 }
 .pw-composer-host.pw-squircle-composer .pw-composer-status {
   padding: 6px 12px 0; color: var(--pw-muted); font: 400 .75rem/1.5 var(--pw-font); overflow-wrap: anywhere;
-}
-:root.dark .pw-composer-host.pw-squircle-composer {
-  --pw-composer-rail: color-mix(in srgb, var(--pw-surface) 52%, var(--pw-inset));
-  --pw-composer-shadow: 0 12px 28px -14px rgb(0 0 0 / 22%);
 }
 @media (hover: hover) and (pointer: fine) {
   .pw-composer-host.pw-squircle-composer .pw-composer-toolbar :is(.pw-composer-intent > button, .afa-iconbtn, .afa-stop, .pw-conversation-model-chip, .pw-conversation-reasoning-chip):hover:not(:disabled) { background: var(--pw-hover); }

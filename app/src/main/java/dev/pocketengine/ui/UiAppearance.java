@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.res.Configuration;
+import android.graphics.drawable.ColorDrawable;
 import android.view.View;
 import dev.pocketengine.R;
 
@@ -19,6 +20,14 @@ public final class UiAppearance {
     public static boolean dark(Context context){String mode=mode(preferences(context));return "dark".equals(mode)||"system".equals(mode)&&(context.getResources().getConfiguration().uiMode&Configuration.UI_MODE_NIGHT_MASK)==Configuration.UI_MODE_NIGHT_YES;}
     public static int theme(Context context){return dark(context)?R.style.AppTheme_Dark:R.style.AppTheme_Light;}
     public static int surface(Context context){return dark(context)?0xff1c1c1c:0xffffffff;}
+    /** Only these bundled page roles may color the native safe area. */
+    public static int canvas(Context context,String role){
+        return switch(role){
+            case "chat" -> dark(context)?0xff181818:0xfffcfcfc;
+            case "workspace" -> dark(context)?0xff111111:0xfff6f6f6;
+            default -> throw new IllegalArgumentException("Unknown canvas role");
+        };
+    }
     public static int surfaceVariant(Context context){return dark(context)?0xff262626:0xfff1f1ef;}
     public static int foreground(Context context){return dark(context)?0xfff4f4f4:0xff181818;}
     public static int secondary(Context context){return dark(context)?0xffc4c4c4:0xff555555;}
@@ -28,7 +37,16 @@ public final class UiAppearance {
     public static int warning(Context context){return dark(context)?0xfff3aaa5:0xffa03f39;}
     /** Only native app chrome. Web documents, screenshots and media pixels retain their own colors. */
     public static void window(Activity activity){
-        activity.setTheme(theme(activity));int surface=surface(activity);activity.getWindow().setStatusBarColor(surface);activity.getWindow().setNavigationBarColor(surface);
+        windowColor(activity,surface(activity));
+    }
+    /** The main Web host owns its window and inset padding; embedded browser hosts do not. */
+    public static void window(Activity activity,String canvasRole){
+        int color=canvas(activity,canvasRole);
+        windowColor(activity,color);
+        activity.getWindow().setBackgroundDrawable(new ColorDrawable(color));
+    }
+    private static void windowColor(Activity activity,int color){
+        activity.setTheme(theme(activity));activity.getWindow().setStatusBarColor(color);activity.getWindow().setNavigationBarColor(color);
         View decor=activity.getWindow().getDecorView();int mask=View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
         decor.setSystemUiVisibility((decor.getSystemUiVisibility()&~mask)|(dark(activity)?0:mask));
     }

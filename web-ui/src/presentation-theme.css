@@ -2,29 +2,39 @@
  * adopted BoardUI .dark and product/source tokens. No filters touch media. */
 :root.dark {
   color-scheme: dark;
-  --pw-canvas: #111111;
-  --pw-surface: #1C1C1C;
-  --pw-inset: #262626;
-  --pw-selected: #303030;
-  --pw-hover: #292929;
+  --pw-canvas-chat: var(--pw-neutral-975);
+  --pw-canvas-workspace: var(--pw-neutral-1000);
+  --pw-canvas: var(--pw-canvas-workspace);
+  --pw-surface: var(--pw-neutral-950);
+  --pw-floating: var(--pw-neutral-850);
+  --pw-floating-inset: var(--pw-neutral-950);
+  --pw-floating-hover: var(--pw-neutral-800);
+  --pw-floating-selected: var(--pw-neutral-700);
+  --pw-inset: var(--pw-neutral-850);
+  --pw-selected: var(--pw-neutral-800);
+  --pw-hover: var(--pw-neutral-850);
   --pw-danger: #F3AAA5;
   --pw-danger-surface: #352523;
   --pw-danger-border: #74403C;
   --pw-warning: #F0C48A;
   --pw-warning-surface: #33291E;
-  --pw-success: #DEDEDE;
-  --pw-success-surface: #2B2B2B;
-  --pw-edge-hover: #484848;
-  --pw-edge: #353535;
-  --pw-ink: #F4F4F4;
-  --pw-copy: #C4C4C4;
-  --pw-muted: #B5B5B5;
-  --pw-disabled: #949494;
-  --pw-strong: #F3F3F3;
-  --pw-focus: #D5D5D5;
-  --pw-on-strong: #171717;
+  --pw-success: var(--pw-neutral-200);
+  --pw-success-surface: var(--pw-neutral-850);
+  --pw-edge-hover: transparent;
+  --pw-edge: transparent;
+  --pw-ink: var(--pw-neutral-100);
+  --pw-copy: var(--pw-neutral-300);
+  --pw-muted: var(--pw-neutral-350);
+  --pw-disabled: var(--pw-neutral-400);
+  --pw-strong: var(--pw-neutral-100);
+  --pw-focus: var(--pw-neutral-200);
+  --pw-on-strong: var(--pw-neutral-975);
   --ovio-on-accent: var(--pw-on-strong);
-  --pw-shadow-surface: 0 12px 36px -12px rgb(0 0 0 / 24%);
+  --pw-shadow-input: 0 1px 3px rgb(0 0 0 / 12%), 0 8px 22px -6px rgb(0 0 0 / 22%);
+  --pw-shadow-input-shape: drop-shadow(0 1px 2px rgb(0 0 0 / 10%)) drop-shadow(0 4px 10px rgb(0 0 0 / 16%));
+  --pw-shadow-surface: none;
+  --pw-shadow-indicator: 0 1px 3px rgb(0 0 0 / 18%);
+  --color-segmented-control-selected-background: var(--pw-selected);
   --pw-shadow-floating: 0 16px 48px -12px rgb(0 0 0 / 32%);
   --pw-shadow-sheet: 0 18px 64px -16px rgb(0 0 0 / 36%);
   --background: var(--pw-surface);
@@ -46,8 +56,7 @@
 
 /* Original product surfaces with fixed light fills. Geometry, typography,
  * source component animation and their media contents are unchanged. */
-:root.dark :is(.pw-app-header, .pw-secondary-header,
-  .pw-settings-dialog, .pw-drawer, .pw-work-drawer, .pw-task-drawer,
+:root.dark :is(.pw-drawer:where(:not(.pw-create-drawer):not(.pw-model-drawer):not(.pw-file-workspace)), .pw-work-drawer, .pw-task-drawer,
   .pw-task-header, .pw-task-footer, .pw-file-actions) {
   background: var(--pw-surface);
   color: var(--pw-ink);

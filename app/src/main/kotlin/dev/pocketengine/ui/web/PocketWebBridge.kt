@@ -783,6 +783,11 @@ internal class PocketWebBridge(
                 val review = executionReviews.consume(requiredString(args, "reviewHandle"))
                 controller.changeOwnerExecution(review.revision, review.enabled) { result, error -> complete(id, result, error, "outcome_unknown"); publishState() }; return
             }
+            if (action == "settings.canvas") {
+                // Pure window presentation is available to every foreground workspace.
+                // The document/window checks above still apply; no private data or preference is accessed.
+                presentation.dispatch(action, args) { result, error -> complete(id, result, error) }; return
+            }
             if (action in PocketWebPresentation.COMMANDS) {
                 check(controller.webPrivateOwnerVisible()) { "请在前台私人设置中操作外观与系统朗读" }
                 presentation.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }; return

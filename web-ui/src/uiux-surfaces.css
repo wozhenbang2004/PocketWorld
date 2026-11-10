@@ -96,11 +96,6 @@
   .pw-navigation-drawer .pw-navigation-footer { overflow: visible; }
 }
 
-:root.dark .pw-redesign {
-  --pw-shadow-input: 0 2px 8px -2px rgb(0 0 0 / 12%), 0 12px 26px -8px rgb(0 0 0 / 27%);
-  --pw-shadow-surface: 0 3px 12px -4px rgb(0 0 0 / 18%), 0 15px 32px -10px rgb(0 0 0 / 30%);
-}
-
 @media (prefers-reduced-motion: reduce) {
   .pw-desktop-navigation,
   .pw-desktop-navigation .pw-navigation-actions > :is(.button-press-motion, [data-pw-icon-button]) > span { transition: none; }
