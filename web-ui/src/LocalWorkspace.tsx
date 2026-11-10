@@ -21,6 +21,7 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
   const [inputReceipt, setInputReceipt] = useState<Data | null>(null), [panel, setPanel] = useState<'setup' | 'session'>('setup');
   const [columns, setColumns] = useState('80'), [height, setHeight] = useState('24'), [stopReview, setStopReview] = useState(false), [stopRequested, setStopRequested] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [prepareAttempted, setPrepareAttempted] = useState(false);
+  const [visible, setVisible] = useState(() => document.visibilityState === 'visible');
   const entered = useRef(false), alive = useRef(true), viewHandle = useRef(''), reviewHandle = useRef('');
   const readingRoot = useRef<HTMLElement>(null), readingPositions = useRef<Record<string, number>>({}), previousPresentation = useRef('setup');
   const activePanel = useRef(panel); activePanel.current = panel;
@@ -29,7 +30,12 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
   const changePanel = (next: 'setup' | 'session') => { if (busy || review || stopReview || next === panel) return; rememberPosition(); setPanel(next); };
   const invoke = async (name: string, args: Data = {}, accept?: (value: Data) => void) => {
     if (entered.current) return; entered.current = true; setBusy(true); setError('');
-    try { const result = await run(name, args); if (alive.current) accept?.(result); return result; }
+    try {
+      const result = await run(name, args);
+      if (alive.current) accept?.(result);
+      else if ((name === 'local.terminal.open' || name === 'local.terminal.review') && result?.handle) void run('local.terminal.close', { handle: result.handle }).catch(() => {});
+      return result;
+    }
     catch (failure) { if (alive.current) setError(failure instanceof Error ? failure.message : String(failure)); throw failure; }
     finally { entered.current = false; if (alive.current) setBusy(false); }
   };
@@ -42,6 +48,11 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
     if (handle) void run('local.terminal.close', { handle }).catch(() => {});
   };
   useEffect(() => { alive.current = true; return () => { alive.current = false; const handle = viewHandle.current || reviewHandle.current; if (handle) void run('local.terminal.close', { handle }).catch(() => {}); }; }, []);
+  useEffect(() => {
+    const changed = () => setVisible(document.visibilityState === 'visible');
+    document.addEventListener('visibilitychange', changed);
+    return () => document.removeEventListener('visibilitychange', changed);
+  }, []);
   useEffect(() => {
     registerTransientBack(() => {
       if (stopReview) { if (!busy) setStopReview(false); return true; }
@@ -68,11 +79,11 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
     }).catch(() => {});
   };
   useEffect(() => {
-    if (panel !== 'session' || !view?.handle || busy || error || output?.terminal || !localReceiptPollable(String(output?.nativeStatus || '')) || document.visibilityState !== 'visible') return;
+    if (panel !== 'session' || !view?.handle || busy || error || output?.terminal || !localReceiptPollable(String(output?.nativeStatus || '')) || !visible) return;
     const handle = view.handle;
-    const timer = window.setTimeout(() => { if (activePanel.current === 'session' && viewHandle.current === handle) void invoke('local.terminal.read', { handle }, value => { if (viewHandle.current === handle) { setOutput(value); if (value.inputUncertain) setUncertain(true); } }).catch(() => {}); }, 1200);
+    const timer = window.setTimeout(() => { if (document.visibilityState === 'visible' && activePanel.current === 'session' && viewHandle.current === handle) void invoke('local.terminal.read', { handle }, value => { if (viewHandle.current === handle) { setOutput(value); if (typeof value.inputUncertain === 'boolean') setUncertain(value.inputUncertain); } }).catch(() => {}); }, 1200);
     return () => window.clearTimeout(timer);
-  }, [panel, view?.handle, output, busy, error]);
+  }, [panel, view?.handle, output, busy, error, visible]);
   const selected = rows(data.checkouts).find(row => row.id === checkout && row.projectId === project);
   const checkouts = rows(data.checkouts).filter(row => row.projectId === project && !row.teamProjectCopy);
   const terminals = rows(state.tasks).filter(row => row.raw?.nativeExecutionMode === 'OWNER_LOCAL_TERMINAL' || row.raw?.ownerLocalTerminal);
@@ -84,10 +95,10 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
     setUncertain(true); const text = input;
     void invoke('local.terminal.input', { handle: view!.handle, ...payload }, result => {
       setInputReceipt(result); setUncertain(result.nativeInputSettled !== true);
-      if (payload.action === 'text' && result.nativeInputSettled && result.accepted) setInput(current => current === text ? '' : current);
+      if (payload.action === 'text' && payload.text === text + '\n' && result.nativeInputSettled && result.accepted) setInput(current => current === text ? '' : current);
     }).catch(() => {});
   };
-  const queryInput = () => { if (view) void invoke('local.terminal.inputReceipt', { handle: view.handle }, result => { setInputReceipt(result); if (result.nativeInputSettled === true) setUncertain(false); }).catch(() => {}); };
+  const queryInput = () => { if (view) void invoke('local.terminal.inputReceipt', { handle: view.handle }, result => { setInputReceipt(result); if (typeof result.inputUncertain === 'boolean') setUncertain(result.inputUncertain); else if (result.nativeInputSettled === true) setUncertain(false); }).catch(() => {}); };
   const selectSession = (task: Data) => {
     if (busy) return;
     const target = identity(task);
@@ -191,3 +202,4 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
     <SettingsDialog isOpen={stopReview} title="停止这个原终端进程？" onClose={() => { if (!busy) setStopReview(false); }}><div className="pw-local-review"><p>只请求停止所选原进程。已写入的副本内容和原日志保留；退出与资源回收以真实回执为准。</p><dl className="pw-facts"><div><dt>原任务</dt><dd>{original?.taskId}</dd></div><div><dt>原执行</dt><dd>{original?.executionId}</dd></div></dl><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => setStopReview(false)}>返回</Button><Button variant="danger" disabled={busy || !original} onClick={() => { if (activePanel.current !== 'session' || entered.current) return; setStopReview(false); setStopRequested(true); if (original) void invoke('local.terminal.stop', original, setReceipt).catch(() => {}); }}>停止这个原进程</Button></div></div></SettingsDialog>
   </section>;
 }
+
