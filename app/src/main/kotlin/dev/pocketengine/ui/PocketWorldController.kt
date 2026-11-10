@@ -4361,6 +4361,10 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 "get" -> {
                     if(requestId!=latestChatGet)return
                     val id = result.optString("conversationId")
+                    if (id.isNotBlank() && state.conversationId == id) {
+                        rememberOpenedConversation(result)
+                        state = state.copy(conversations = parseConversations(state.feature("assistant").optJSONArray("conversations")))
+                    }
                     if (id.isNotBlank() && state.conversationId == id) state = state.copy(conversationId = id, messages = result.optJSONArray("messages").objects().map { UiMessage(it.optString("role"), it.optString("content"), it.optLong("at"), it.optString("taskId").takeIf(String::isNotBlank), it.optString("id").takeIf(String::isNotBlank),it.optJSONObject("submission"),it.optJSONArray("attachments")?.length()?:0,it.optJSONArray("attachments").objects().mapNotNull(ChatInputRules::attachment), sourceRevision = if (it.optBoolean("importAssignedIdentity")) 0L else it.optLong("revision", 0), memoryReference = it.optJSONObject("memoryReference"), ownerOriginalLocator = if (it.optBoolean("importAssignedIdentity")) null else it.optJSONObject("ownerOriginalLocator"), phoneResult = UiPhoneResult.fromNativeMessage(it), replyContext = UiReplyContext.fromNativeMessage(it), taskResult = UiTaskResult.fromNativeMessage(it)) });resolveOriginalMessageAttachments(id)
                 }
                 "send" -> { receiveChatAcknowledgement(result,meta.second.optString("clientMessageId"));native("getFeatures") }
@@ -4471,7 +4475,9 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     internal val conversationOrganizationOwnerVisible get() = privateWorkspaceView()
     /** Metadata from the original native snapshot, not a model-supplied revision. */
     internal fun conversationOrganizationItem(row: UiConversation): dev.pocketengine.features.conversation.ConversationHistory.Item {
-        val original = state.feature("assistant").optJSONArray("conversations").objects().firstOrNull { it.optString("conversationId") == row.id }
+        val listed = state.feature("assistant").optJSONArray("conversations").objects().firstOrNull { it.optString("conversationId") == row.id }
+        val opened = openedConversationMetadata?.takeIf { row.id == state.conversationId && it.optString("conversationId") == row.id }
+        val original = if (opened != null && (listed == null || opened.optLong("organizationRevision", -1) > listed.optLong("organizationRevision", -1))) opened else listed
         return dev.pocketengine.features.conversation.ConversationHistory.Item(row.id, row.title, row.updatedAt, original?.optLong("pinOrder", 0) ?: 0, original?.optLong("organizationRevision", -1) ?: -1)
     }
     internal fun organizeConversation(id: String, revision: Long, title: String?, pinned: Boolean?, done: (JSONObject?, String?) -> Unit) {
@@ -4494,11 +4500,39 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             main.post {
                 state = state.copy(moduleBusy = state.moduleBusy - key)
                 if (!current()) { done(null, "原会话保存回执尚未在当前窗口确认，请重新核对原会话。"); return@post }
-                result.fold({ done(it, null) }, { done(null, "会话元数据已变化或保存结果未确认；请刷新后重新打开，不会自动重试。") })
+                result.fold({ value ->
+                    if (id == state.conversationId) {
+                        rememberOpenedConversation(value)
+                        state = state.copy(conversations = parseConversations(state.feature("assistant").optJSONArray("conversations")))
+                    }
+                    done(value, null)
+                }, { done(null, "会话元数据已变化或保存结果未确认；请刷新后重新打开，不会自动重试。") })
                 native("getFeatures")
             }
         } } catch (_: java.util.concurrent.RejectedExecutionException) { state = state.copy(moduleBusy = state.moduleBusy - key); done(null, "原界面已关闭，请重新打开。") }
     }
-    private fun parseConversations(array: org.json.JSONArray?): List<UiConversation> = array.objects().map { UiConversation(it.optString("conversationId"), it.optString("title"), it.optLong("updatedAt")) }
+    // A bounded recent list is not the identity of the conversation currently open.
+    // Keep only that one original header so older conversations retain their title and controls.
+    private var openedConversationMetadata: JSONObject? = null
+    private fun rememberOpenedConversation(value: JSONObject) {
+        val id = value.optString("conversationId")
+        if (id.isBlank() || id != state.conversationId) return
+        val original = value.optJSONObject("organization")?.takeIf { it.optString("conversationId") == id } ?: value
+        openedConversationMetadata = JSONObject().put("conversationId", id).put("title", original.optString("title"))
+            .put("updatedAt", original.optLong("updatedAt")).put("pinOrder", original.optLong("pinOrder", 0))
+            .put("organizationRevision", original.optLong("organizationRevision", -1))
+    }
+    private fun parseConversations(array: org.json.JSONArray?): List<UiConversation> {
+        val rows = array.objects().toMutableList()
+        val opened = openedConversationMetadata?.takeIf { it.optString("conversationId") == state.conversationId }
+        if (opened != null) {
+            val index = rows.indexOfFirst { it.optString("conversationId") == state.conversationId }
+            if (index < 0) rows.add(opened)
+            else if (rows[index].optLong("organizationRevision", -1) >= opened.optLong("organizationRevision", -1)) {
+                rememberOpenedConversation(rows[index])
+            } else rows[index] = opened
+        }
+        return rows.map { UiConversation(it.optString("conversationId"), it.optString("title"), it.optLong("updatedAt")) }
+    }
     private fun message(error: Throwable): String = error.message?.take(300) ?: "操作未完成，请检查连接和配置"
 }

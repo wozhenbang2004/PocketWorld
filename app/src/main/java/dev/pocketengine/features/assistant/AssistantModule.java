@@ -260,7 +260,11 @@ public final class AssistantModule implements EngineModule {
     @Override public JSONObject handle(String command,JSONObject input)throws Exception{
         switch(command){
             case "list":return durable()?historyRepository.read(()->historyRepository.list(input.optString("cursor"),input.optInt("limit",20))):new JSONObject().put("conversations",list());
-            case "get":return durable()?historyRepository.read(()->historyRepository.window(input.getString("conversationId"),input.optString("cursor"),input.optInt("limit",80))):findConversation(input.getString("conversationId"));
+            case "get":return durable()?historyRepository.read(()->{
+                String conversation=input.getString("conversationId");
+                return historyRepository.window(conversation,input.optString("cursor"),input.optInt("limit",80))
+                        .put("organization",historyRepository.ownerOrganization("getOrganization",new JSONObject().put("conversationId",conversation)));
+            }):findConversation(input.getString("conversationId"));
             case "send":return nativeInputHost==null?send(input):sendNative(input);
             case "getSubmission":return submission(input.getString("clientMessageId"));
             case "cancel":{
