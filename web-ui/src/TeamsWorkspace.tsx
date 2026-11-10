@@ -237,6 +237,10 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
     setRecipient(nextRecipient); setMode(nextMode);
   };
   const name = (id: string) => members.find(member => member.id === id)?.name || id;
+  const pendingCount = (member: Data) => Number(member.unreadOwnerMessages || 0) + Number(member.unreadPeerMessages || 0);
+  const pendingMessageBusy = (member: Data) => ['running', 'awaiting_approval'].includes(member.status);
+  const recipientMember = members.find(member => member.id === recipient);
+  const recipientPending = recipientMember && !hasWorkPlan && !recipientMember.exited ? pendingCount(recipientMember) : 0;
   const reviewResult = (value: Data) => {
     if (value.operation === 'phone_scope') { setPhoneSelection(value); setPhoneChoices(Object.fromEntries(rows(value.view?.members).map(member => [member.memberId, teamPhoneChoice()]))); }
     else { setReview(value); setAcknowledged(false); }
@@ -434,6 +438,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
       {reply?.kind !== 'assignment_question' && <SelectField label="补充方式" value={mode} options={[{ id: 'discussion', label: '讨论补充' }, { id: 'queue', label: '排入下一安全工作点' }, ...(canChangeRequirements && !replyId ? [{ id: 'feedback', label: '修改要求并暂停' }] : [])]} onChange={changeMessageMode} isDisabled={busy || !!uncertain} />}
       <TextAreaField label={reply?.kind === 'assignment_question' ? '回答这条原问题' : '发给所选成员'} value={text} onChange={value => setDrafts(old => ({ ...old, [draftKey]: value }))} maxLength={4000} showCount isDisabled={busy || !!uncertain} hint={mode === 'feedback' ? '保存新要求并暂停受影响成员，确认后再继续。不会扩大权限或追加预算。' : '消息会排队，不打断成员。已结束的成员需在成员详情中选择“使用待处理消息”。'} />
       <PressButton label={reply?.kind === 'assignment_question' ? '保存原回答' : mode === 'feedback' ? '核对并暂停补充' : '发送补充'} disabled={!canMutate || !text.trim() || text.length > 4000 || !recipient} onClick={send} />
+      {mode !== 'feedback' && !replyId && recipientPending > 0 && <div className="pw-form-actions"><p className="pw-field-hint">{name(recipient)}有 {recipientPending} 条已排队消息尚未确认消费。{recipientMember && !pendingMessageBusy(recipientMember) ? '继续只使用已保存的消息，不提交当前草稿或追加额度。' : '成员正在工作或等待授权，消息保留在原队列。'}</p>{recipientMember && !pendingMessageBusy(recipientMember) && <Button variant="secondary" disabled={!canMutate} onClick={() => control('continueMessages', recipient)}>使用已排队消息继续</Button>}</div>}
       {uncertain && <p role="status">这条原消息仍待核对，草稿保留，不会重复发送。刷新原记录后仍可暂停或停止团队。</p>}
       </section>
       </AccordionItem></Accordion>
@@ -448,7 +453,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
             const assignment = activeItems.length ? `正在做：${activeItems.map(item => label(item.title)).filter(Boolean).join('、')}` : label(member.assignment || member.role);
             return <AccordionItem key={member.id} id={member.id} className="pw-team-member" data-team-member-id={member.id}
               title={<span className="pw-team-member-name">{member.name}{member.id === current.leaderId && <small>负责人</small>}</span>}
-              description={<><span className="pw-team-member-meta" title={model || undefined}>{[model, member.exited ? '已退出' : status(member.status)].filter(Boolean).join(' · ')}</span>{assignment && <span className="pw-team-member-task">{assignment}</span>}</>}>
+              description={<><span className="pw-team-member-meta" title={model || undefined}>{[model, member.exited ? '已退出' : status(member.status), !hasWorkPlan && !member.exited && pendingCount(member) > 0 ? `${pendingCount(member)} 条待处理消息` : ''].filter(Boolean).join(' · ')}</span>{assignment && <span className="pw-team-member-task">{assignment}</span>}</>}>
               <div className="pw-team-expanded-copy">
                 <p>{member.assignment || member.role}</p>
                 {member.runner === 'phone_agent' && <p className="pw-muted">{teamPhoneTargetLabel(member.device, phoneTargets)}</p>}
@@ -456,7 +461,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
                 {model && <p className="pw-muted">模型：{model}</p>}
                 {member.acceptance && <p>验收：{member.acceptance}</p>}
                 {!!rows(member.dependsOn).length && <p>前置：{member.dependsOn.map(name).join('、')}</p>}
-                <div className="pw-form-actions">{member.phoneTask?.taskId && <Button variant="ghost" onClick={() => void run('tasks.open', { id: member.phoneTask.taskId }).catch(() => {})}>查看手机任务与结果</Button>}<Button variant="ghost" disabled={!canControl || member.exited} onClick={() => control('pause', member.id)}>暂停该成员</Button><Button variant="ghost" disabled={!canMutate || member.exited || hasWorkPlan} onClick={() => control('resume', member.id)}>继续该成员</Button><Button variant="ghost" disabled={!canMutate || member.exited || hasWorkPlan} onClick={() => control('continueMessages', member.id)}>使用该成员的待处理消息</Button></div>
+                <div className="pw-form-actions">{member.phoneTask?.taskId && <Button variant="ghost" onClick={() => void run('tasks.open', { id: member.phoneTask.taskId }).catch(() => {})}>查看手机任务与结果</Button>}<Button variant="ghost" disabled={!canControl || member.exited} onClick={() => control('pause', member.id)}>暂停该成员</Button><Button variant="ghost" disabled={!canMutate || member.exited || hasWorkPlan} onClick={() => control('resume', member.id)}>继续该成员</Button>{!hasWorkPlan && !member.exited && pendingCount(member) > 0 && <Button variant="ghost" disabled={!canMutate || pendingMessageBusy(member)} onClick={() => control('continueMessages', member.id)}>使用 {pendingCount(member)} 条待处理消息继续</Button>}</div>
               </div>
             </AccordionItem>;
           })}
