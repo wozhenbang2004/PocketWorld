@@ -1,8 +1,8 @@
 import {useEffect,useRef,useState} from 'react';
 import type {ReactNode} from 'react';
-import { IconArrowLeft, IconCopy, IconDownload, IconPause, IconPlay, IconRefresh } from './icons';
+import { IconArchive, IconArrowLeft, IconCopy, IconDownload, IconPause, IconPlay, IconRefresh } from './icons';
 import {bridge} from './bridge';
-import {Button,CheckboxField,IconButton,SearchField} from './forms-library';
+import {Accordion,AccordionItem,Button,CheckboxField,IconButton,SearchField} from './forms-library';
 import './developer-diagnostics.css';
 
 type Event = {eventId:string;time:number;stage:string;outcome:string;code:string;durationMs?:number;taskId?:string;exceptionTypes?:string[];frames?:string[]};
@@ -195,53 +195,53 @@ export default function DeveloperDiagnosticsWorkspace({
   return <main className="pw-developer-logs" aria-label="开发诊断">
     <header className="pw-developer-header">
       <div className="pw-developer-heading">
-        {navigationTrigger}
         <IconButton icon={IconArrowLeft} aria-label="返回" onClick={onBack}/>
         <div><h1>开发诊断</h1><p>实时运行日志 · 脱敏归档</p></div>
       </div>
-      <div className="pw-developer-actions">
-        <Button variant="ghost" size="small" onClick={()=>setFollow(value=>!value)}>
-          {follow?<><IconPause size={15}/> 暂停跟随</>:<><IconPlay size={15}/> 继续跟随</>}
-        </Button>
-        <Button variant="ghost" size="small" onClick={()=>{nextCursor.current=null;setEvents([]);setOlder(null);setHasOlder(false);setFollow(true);}}>
-          <IconRefresh size={15}/> 最新
-        </Button>
-      </div>
+      {navigationTrigger}
     </header>
     <div className="pw-developer-stats">
-      <i className="pw-developer-live-dot"/>{follow?'实时更新':'视图已暂停'} · {storage?.enabled?'深度归档中':'基础诊断常开'}
-      <span>{storage?bytesLabel(storage.bytes):'…'} / {storage?.capacityMiB||512} MB</span>
-      <span>{storage?.segments||0} 个片段</span>
-      <span>屏幕缓存 {events.length} 条</span>
+      <i className="pw-developer-live-dot" aria-hidden data-following={!!windowId&&!!storage&&follow}/>
+      <span>{!storage&&error?'日志状态尚未取得':!windowId?'诊断窗口待连接':!follow?'视图已暂停':!storage?'正在读取日志':'跟随最新日志'}</span>
+      {storage&&<span>{storage.enabled?'深度归档中':'基础诊断常开'}</span>}
     </div>
     <section className="pw-developer-controls">
       <SearchField className="pw-developer-search" data-input-size="medium" value={query} onChange={setQuery}
         placeholder="搜索代码、阶段或异常" aria-label="搜索当前显示的日志" clearLabel="清除搜索"/>
       <CheckboxField className="pw-developer-filter" isSelected={onlyErrors} onChange={setOnlyErrors}>只看错误</CheckboxField>
-      <div className="pw-developer-actions">
-        <Button variant="secondary" size="small" disabled={!shown.length} onClick={copy}><IconCopy size={15}/> 一键复制</Button>
-        <Button variant="secondary" size="small" disabled={!windowId} onClick={exportAll}><IconDownload size={15}/> 导出全部</Button>
-      </div>
     </section>
     {error&&<p className="pw-developer-error" role="alert">{error}</p>}
     {notice&&<p className="pw-developer-note" role="status">{notice}</p>}
+    {Boolean(storage?.writeFailures||storage?.rejectedRows)&&
+      <p className="pw-developer-note">写入失败 {storage?.writeFailures||0} · 过滤异常记录 {storage?.rejectedRows||0}</p>}
     <section className="pw-developer-console" aria-label="日志控制台">
-      <div className="pw-developer-console-top"><span>RUNTIME / JSONL</span>
-        {hasOlder&&<Button variant="ghost" size="small" disabled={!windowId||busy} onClick={loadOlder}>加载更早</Button>}
+      <div className="pw-developer-console-top">
+        <div className="pw-developer-console-meta"><span>运行日志{storage?` · ${shown.length} 条`:''}</span>
+          {hasOlder&&<Button variant="ghost" size="small" disabled={!windowId||busy} onClick={loadOlder}>加载更早</Button>}
+        </div>
+        <div className="pw-developer-actions pw-developer-console-actions">
+          <Button variant="ghost" iconOnly leadingIcon={follow?IconPause:IconPlay} aria-label={follow?'暂停跟随日志':'继续跟随日志'} title={follow?'暂停跟随日志':'继续跟随日志'} onClick={()=>setFollow(value=>!value)}/>
+          <Button variant="ghost" iconOnly leadingIcon={IconRefresh} aria-label="读取最新日志" title="读取最新日志" onClick={()=>{nextCursor.current=null;setEvents([]);setOlder(null);setHasOlder(false);setFollow(true);}}/>
+          <Button variant="ghost" iconOnly leadingIcon={IconCopy} aria-label="复制当前日志" title="复制当前日志" disabled={!shown.length} onClick={copy}/>
+          <Button variant="ghost" iconOnly leadingIcon={IconDownload} aria-label="导出全部归档" title="导出全部归档" disabled={!windowId} onClick={exportAll}/>
+        </div>
       </div>
-      <pre ref={viewport} role="log" aria-live="off">{shown.length?shown.map(formatEvent).join('\n'):'当前没有匹配的日志，等待新的诊断事件…'}</pre>
+      <pre ref={viewport} role="log" aria-live="off">{shown.length?shown.map(formatEvent).join('\n'):!storage?error?'日志暂未读到，请查看上方提示。':!windowId?'诊断窗口尚未连接。':!follow?'视图已暂停，继续跟随后读取日志。':'正在读取诊断日志…':query||onlyErrors?'当前条件下没有匹配的日志。':'暂无诊断事件，等待新的日志…'}</pre>
     </section>
+    <Accordion className="pw-developer-storage" defaultExpandedKeys={[]}>
+    <AccordionItem id="developer-archive" title="归档与保留" icon={IconArchive} description={storage?`${storage.enabled?'深度归档已开启':'深度归档已关闭'} · ${bytesLabel(storage.bytes)} / ${storage.capacityMiB>=1024?storage.capacityMiB/1024+' GB':storage.capacityMiB+' MB'}`:error?'归档状态尚未取得':!windowId?'连接诊断窗口后读取':!follow?'继续跟随后读取归档状态':'正在读取本机归档状态…'}>
     <footer className="pw-developer-footer">
       <CheckboxField className="pw-developer-capture" isSelected={storage?.enabled===true} isDisabled={!windowId||captureBusy}
         onChange={selected=>void toggleCapture(selected)}>深度日志归档</CheckboxField>
       <small>默认关闭深度写盘，基础诊断始终运行。开启后持续保存大量脱敏运行事件；关闭只停止新增归档，不删除现有记录。</small>
+      {storage&&<small>本机已保留 {storage.segments} 个归档片段，占用 {bytesLabel(storage.bytes)}。</small>}
       <span>保留容量</span>
       {[256,512,1024,2048].map(miB=><Button key={miB} variant="secondary" aria-pressed={storage?.capacityMiB===miB}
         className={storage?.capacityMiB===miB?'active':''} disabled={!windowId||busy}
         onClick={()=>void setCapacity(miB)}>{miB>=1024?miB/1024+' GB':miB+' MB'}</Button>)}
       <small>开启归档时超过容量只轮换最早的完整片段；屏幕最多显示 600 条。导出全部仅包含已归档历史，不包含系统 Logcat 的其他应用日志。</small>
-      {Boolean(storage?.writeFailures||storage?.rejectedRows)&&
-        <small>写入失败 {storage?.writeFailures||0} · 过滤异常记录 {storage?.rejectedRows||0}</small>}
     </footer>
+    </AccordionItem>
+    </Accordion>
   </main>;
 }

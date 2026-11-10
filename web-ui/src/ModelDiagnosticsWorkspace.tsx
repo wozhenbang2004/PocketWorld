@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { bridge } from './bridge';
+import { IconChevronDown, IconFileText } from './icons';
 import { DiagnosticWorkflowSteps, ProbeObservationCard, RuntimeAttemptChain } from './shell-library/affect-workflows';
 import { Accordion, AccordionItem, Button, CheckboxField, SettingsDialog } from './forms-library';
 
@@ -56,7 +57,7 @@ export function ModelDiagnosticsWorkspace({ state, supported }: Props) {
     } catch (failure) { if (current()) setCopyStatus(failure instanceof Error ? failure.message : '复制未完成，请选择日志文字后复制。'); }
   }
   return <section className="pw-model-diagnostics">
-    <Button variant="ghost" aria-expanded={expanded} aria-controls="pw-model-diagnostics-body" disabled={!available || pending} onClick={() => { if (expanded) { setExpanded(false); setReview(null); setLogs(null); setCopyStatus(''); setStage('select'); void invoke('modelDiagnostics.close'); } else void invoke('modelDiagnostics.open'); }}>诊断与运行日志</Button>
+    <Button variant="ghost" className="pw-model-diagnostics-entry" leadingIcon={IconFileText} trailingIcon={IconChevronDown} aria-expanded={expanded} aria-controls="pw-model-diagnostics-body" disabled={!available || pending} onClick={() => { if (expanded) { setExpanded(false); setReview(null); setLogs(null); setCopyStatus(''); setStage('select'); void invoke('modelDiagnostics.close'); } else void invoke('modelDiagnostics.open'); }}><span className="pw-model-diagnostics-entry-copy"><strong>诊断与运行日志</strong><small>{pending ? '正在核对诊断状态…' : '查看本机运行记录，按需核对连接。'}</small></span></Button>
     {expanded && <div id="pw-model-diagnostics-body" className="pw-model-diagnostics-body">
       <div className="pw-diagnostics-workbench"><section className="pw-diagnostics-logs"><h3>最近运行记录</h3>
       <div className="pw-form-actions"><Button variant="secondary" disabled={!ready || pending || !supported('modelDiagnostics.logs')} onClick={() => { setCopyStatus(''); void invoke('modelDiagnostics.logs').then(result => { if (result && Array.isArray(result.events)) setLogs(result); }); }}>读取最近日志</Button>{logs && <Button variant="secondary" disabled={!ready || pending} onClick={() => { void copyLogs(); }}>复制日志</Button>}</div>

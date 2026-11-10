@@ -11,7 +11,7 @@
 .pw-plugin-review-copy .pw-facts { margin-top: 0; }
 .pw-plugin-definition, .pw-plugin-source { margin: 0; padding: var(--pw-gap-content); border-radius: 12px; background: var(--pw-inset); color: var(--pw-ink); font: 13px/1.7 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 2; overflow: auto; max-width: 100%; max-height: 420px; }
 .pw-plugin-source { max-height: min(52dvh, 480px); min-height: 140px; }
-.pw-plugin-source:focus-visible { outline: 2px solid #666; outline-offset: 3px; }
+.pw-plugin-source:focus-visible { outline: 2px solid var(--pw-accent); outline-offset: 3px; }
 .pw-plugin-diff { display: flex; flex-direction: column; gap: 8px; font-size: 13px; line-height: 21px; }
 .pw-plugin-diff p { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: var(--pw-gap-control); margin: 0; overflow-wrap: anywhere; }
 .pw-plugin-diff span { color: var(--pw-copy); }
@@ -21,3 +21,57 @@
 .pw-ecosystem-depth .pw-plugin-runtime > div:first-child :is(h3, p) { margin: 0; }
 :root.dark .pw-plugin-runtime { border-bottom-color: #3a3a3a; }
 @media (max-width: 480px) { .pw-plugin-diff p { grid-template-columns: minmax(0, 1fr); gap: var(--pw-gap-related); } }
+
+/* The retained Affect collection keeps tools with populated collections. BoardUI
+   actions and Solar object marks carry the first-use state in the same surface. */
+.pw-plugins-workspace.pw-ecosystem-depth .pw-eco-workspace-heading { gap: 12px 16px; margin-bottom: 16px; }
+.pw-plugins-workspace.pw-ecosystem-depth .pw-eco-workspace-heading h2 { font-size: 20px; line-height: 28px; }
+.pw-plugins-workspace.pw-ecosystem-depth .pw-plugin-collection { min-width: 0; margin-top: 16px; }
+.pw-plugins-workspace .pw-plugin-collection-tools { display: flex; flex-direction: column; gap: 12px; }
+.pw-plugins-workspace .pw-plugin-collection-tools .pw-eco-filters { margin: 0; }
+:is(.pw-plugins-workspace, .pw-functional-packs).pw-ecosystem-depth .pw-plugin-empty {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 16px;
+  margin: 0;
+  padding: 24px;
+  border-radius: 16px;
+  background: var(--pw-surface);
+  min-width: 0;
+}
+.pw-plugin-empty .pw-plugin-object-icon { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 13px; background: var(--pw-accent-soft); color: var(--pw-on-accent-soft); }
+:is(.pw-plugins-workspace, .pw-functional-packs).pw-ecosystem-depth .pw-plugin-empty h3 { margin: 0 0 6px; font-size: 16px; line-height: 24px; font-weight: 600; }
+:is(.pw-plugins-workspace, .pw-functional-packs).pw-ecosystem-depth .pw-plugin-empty p { margin: 0; max-width: 46ch; font-size: 13px; line-height: 21px; color: var(--pw-copy); overflow-wrap: anywhere; }
+.pw-plugin-empty > button, .pw-plugin-empty > .pw-form-actions { grid-column: 2; justify-self: start; max-width: 100%; margin: 0; }
+.pw-plugin-empty > button { white-space: normal; }
+.pw-plugins-workspace .pw-plugin-filter-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; padding: 16px 0; }
+.pw-plugins-workspace .pw-plugin-filter-empty p { margin: 0; color: var(--pw-copy); font-size: 13px; line-height: 21px; }
+.pw-plugins-workspace.pw-ecosystem-depth .pw-plugin-runtime { margin: 24px 0 0; padding: 16px 0 0; border: 0; border-top: 1px solid var(--pw-edge); gap: 16px; align-items: flex-start; }
+.pw-plugins-workspace.pw-ecosystem-depth .pw-plugin-runtime > div:first-child { gap: 6px; }
+.pw-plugins-workspace.pw-ecosystem-depth .pw-plugin-runtime h3 { font-size: 16px; line-height: 24px; font-weight: 600; }
+.pw-plugins-workspace.pw-ecosystem-depth .pw-plugin-runtime p { font-size: 13px; line-height: 21px; }
+.pw-plugins-workspace.pw-ecosystem-depth .pw-eco-catalog-source { margin: 16px 0 0; padding: 20px; border-radius: 16px; background: var(--pw-surface); }
+.pw-plugins-workspace.pw-ecosystem-depth .pw-eco-catalog-source .pw-form-actions { gap: 8px 12px; }
+
+.pw-functional-packs.pw-ecosystem-depth { display: flex; flex-direction: column; gap: 16px; margin-top: 16px; }
+.pw-functional-packs.pw-ecosystem-depth > :is(.pw-field-hint, .pw-field-error, .pw-eco-record-list) { margin: 0; }
+.pw-functional-packs.pw-ecosystem-depth .pw-pack-toolbar { justify-content: flex-end; gap: 8px; margin: 0; }
+.pw-functional-packs .pw-pack-toolbar > button:first-child:not([aria-label]) { margin-inline-end: auto; }
+.pw-functional-packs.pw-ecosystem-depth .pw-pack-current { display: flex; flex-direction: column; align-items: stretch; gap: 16px; padding: 20px; margin: 0; border: 0; border-radius: 16px; background: var(--pw-surface); }
+.pw-functional-packs.pw-ecosystem-depth .pw-pack-current h3 { margin: 0; font-size: 16px; line-height: 24px; font-weight: 600; }
+.pw-functional-packs.pw-ecosystem-depth .pw-pack-current > p { margin: 0; color: var(--pw-copy); font-size: 13px; line-height: 21px; }
+.pw-functional-packs.pw-ecosystem-depth .pw-pack-current > .pw-form-actions { margin: 0; }
+.pw-functional-packs .pw-pack-management { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding-top: 16px; border-top: 1px solid var(--pw-edge); }
+.pw-functional-packs .pw-pack-management-link { justify-content: flex-start; gap: 12px; min-width: 0; min-height: 64px; padding: 12px; white-space: normal; text-align: start; }
+.pw-functional-packs .pw-pack-management-link > svg { flex: none; color: var(--pw-copy); }
+.pw-functional-packs .pw-pack-management-link > svg:first-child { color: var(--pw-accent); }
+.pw-functional-packs .pw-pack-management-link > span { flex: 1; min-width: 0; justify-content: flex-start; }
+.pw-functional-packs .pw-pack-link-copy { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; }
+.pw-functional-packs .pw-pack-link-copy strong { font-size: 16px; line-height: 24px; font-weight: 500; }
+.pw-functional-packs .pw-pack-link-copy small { color: var(--pw-copy); font-size: 13px; line-height: 21px; overflow-wrap: anywhere; }
+:is(.pw-plugins-workspace, .pw-functional-packs) :is(.pw-plugin-empty, .pw-plugin-filter-empty, .pw-pack-toolbar) button { min-height: 44px; }
+@media (max-width: 600px) {
+  :is(.pw-plugins-workspace, .pw-functional-packs).pw-ecosystem-depth .pw-plugin-empty { padding: 20px 16px; column-gap: 12px; }
+  .pw-plugins-workspace.pw-ecosystem-depth .pw-eco-catalog-source, .pw-functional-packs.pw-ecosystem-depth .pw-pack-current { padding: 16px; }
+  .pw-functional-packs .pw-pack-management { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+}

@@ -3,7 +3,7 @@ import { bridge } from './bridge';
 import { Accordion, AccordionItem, Button, CheckboxField, ObjectTable, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { PressButton } from './library';
 import { Tabs, TabList, Tab, TabPanel } from './shell-library';
-import { IconArrowLeft, IconChevronRight, IconFileSettings, IconRefresh } from './icons';
+import { IconAdd, IconArrowLeft, IconChevronRight, IconFileSettings, IconRefresh } from './icons';
 import './work-profiles-workspace.css';
 import { newProfile, profileAsset, profileModel, profileMutationReceipt, profilePluginTool, profileReferenceKey, profileRows, profileSaveInput, profileStartInput, profileStartReceipt, ProfileRequestGate, type ProfileData as Data } from './profile-contract';
 
@@ -34,6 +34,7 @@ function SourceStatus({ section, children }: { section?: Data; children: ReactNo
 /** Real native owner definitions, using the already adopted BoardUI controls and modal. */
 export function WorkProfilesWorkspace({ state, supported, run, registerTransientBack }: Props) {
   const [snapshot, setSnapshot] = useState<Data>({ profiles: [] }), [editor, setEditor] = useState<Editor | null>(() => retained.editor ? { ...clone(retained.editor), viewHandle: '' } : null);
+  const [snapshotStatus, setSnapshotStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [choices, setChoices] = useState<Data>({}), [review, setReview] = useState<Data | null>(null), [inspection, setInspection] = useState<Data | null>(null), [conflict, setConflict] = useState<Data | null>(null);
   const [unknown, setUnknown] = useState<Data | null>(() => retained.unknown), [unknownRead, setUnknownRead] = useState<Data | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState(''), [ack, setAck] = useState(false), [restoreAck, setRestoreAck] = useState(false), [member, setMember] = useState(''), [memberModel, setMemberModel] = useState('');
@@ -51,11 +52,11 @@ export function WorkProfilesWorkspace({ state, supported, run, registerTransient
   const release = (key: string, value?: string) => { if (value) void bridge.command('profiles.discard', { [key]: value }).catch(() => {}); };
   const closeInspection = () => { release('preflightHandle', inspection?.preflightHandle); setInspection(null); };
   const closeReview = () => { release('reviewHandle', currentReview.current?.reviewHandle); currentReview.current = null; setReview(null); setAck(false); };
-  const acceptSnapshot = (value: Data) => { if (!Array.isArray(value?.profiles)) throw new Error('原工作配置清单未完整返回。'); setSnapshot(value); };
+  const acceptSnapshot = (value: Data) => { if (!Array.isArray(value?.profiles)) throw new Error('原工作配置清单未完整返回。'); setSnapshot(value); setSnapshotStatus('ready'); };
   const invoke = async (action: string, input: Data, accept: (value: Data) => void, originalMutation: Data | null = null) => {
     if (!nativeActive()) return false;
     const ticket = gate.current.begin(originalMutation?.operationId || null); if (ticket === null) return false;
-    setBusy(true); setError(''); if (originalMutation) mutation.current = originalMutation;
+    setBusy(true); setError(''); if (action === 'profiles.snapshot') setSnapshotStatus('loading'); if (originalMutation) mutation.current = originalMutation;
     try {
       if (!supported(action)) throw new Error('当前宿主尚未接通这项工作配置操作。');
       const value = await run(action, input);
@@ -64,6 +65,7 @@ export function WorkProfilesWorkspace({ state, supported, run, registerTransient
     } catch (failure) {
       if (alive.current && gate.current.owns(ticket)) {
         setError(failure instanceof Error ? failure.message : String(failure));
+        if (action === 'profiles.snapshot') setSnapshotStatus('error');
         if (originalMutation) { gate.current.markUnknown(originalMutation.operationId); currentUnknown.current = originalMutation; setUnknown(originalMutation); setUnknownRead(null); }
       }
     } finally { if (gate.current.finish(ticket) && alive.current) { mutation.current = null; setBusy(false); } }
@@ -181,22 +183,30 @@ export function WorkProfilesWorkspace({ state, supported, run, registerTransient
   const referenceCount = draft ? ['instructionRefs', 'skillRefs', 'pluginRefs', 'extensionRefs', 'targetBindings'].reduce((count, field) => count + profileRows(draft[field]).length, 0) : 0;
   const sourceNames: Data = { skills: '指令与技能', plugins: '插件', extensions: '扩展', teams: '团队模板' };
   const unavailableSources = Object.keys(sourceNames).filter(key => sections[key]?.available !== true).map(key => sourceNames[key]);
+  const profiles = profileRows(snapshot.profiles);
+  const firstConfiguration = snapshotStatus === 'ready' && !profiles.length && !editor && !unknown;
   return <section className="pw-settings-section pw-profiles-workspace">
-    <header className="pw-profile-heading"><div><h2>已保存配置</h2></div><div className="pw-form-actions">
+    <header className="pw-profile-heading"><div><h2>工作配置</h2></div><div className="pw-form-actions">
       <Button variant="ghost" iconOnly leadingIcon={IconRefresh} aria-label="刷新原记录" disabled={busy} onClick={refresh} />
-      <PressButton compact disabled={busy || !!unknown || !!editor && dirty} onClick={() => open()}>新建配置</PressButton>
+      {!firstConfiguration && <PressButton compact disabled={busy || !!unknown || !!editor && dirty} onClick={() => open()}>新建配置</PressButton>}
     </div></header>
     {editor && <div className="pw-profile-draft" aria-label="保留的工作配置草稿"><IconFileSettings size={20} aria-hidden /><div><strong>{draft?.name || '未命名配置'}</strong><p>{dirty ? '有未保存修改' : '编辑内容已保留'} · {editor.original ? `原修订 ${editor.original.revision}` : '新建草稿'}{draft?.restoredPendingReview ? ' · 恢复后待重新绑定' : ''}</p></div><Button variant="ghost" trailingIcon={IconChevronRight} disabled={busy} onClick={resumeEditor}>继续编辑草稿</Button></div>}
     {startedTask && <Button variant="secondary" disabled={busy || !supported('tasks.open')} onClick={() => { void run('tasks.open', { id: startedTask }); }}>查看这次原任务与回执</Button>}{busy && mutation.current?.command === 'start' && <Button variant="secondary" onClick={() => { const operationId = mutation.current?.operationId; if (operationId) void run('profiles.stop', { operationId }).then(() => setNotice('已请求停止这次原任务，等待原结果。')).catch(failure => setError(String(failure))); }}>请求停止这次原任务</Button>}
     {unknownControls}{error && <p className="pw-profile-feedback" role="alert">{error}</p>}{notice && <p className="pw-profile-feedback" role="status">{notice}</p>}
-    <ObjectTable label="已保存工作配置" rows={profileRows(snapshot.profiles)} getRowId={row => row.profileId} columns={[
+    {profiles.length > 0 ? <ObjectTable label="已保存工作配置" rows={profiles} getRowId={row => row.profileId} columns={[
       { id: 'name', label: '已保存配置', render: row => <div className="pw-object-title"><strong>{row.name}</strong><small>修订 {row.revision} · {row.restoredPendingReview ? '恢复后待重新绑定，不能执行' : `${Object.keys(row.modelPolicies || {}).length} 项模型用途`}</small></div>, sortValue: row => row.name },
       { id: 'open', label: '编辑', render: row => <Button variant="ghost" trailingIcon={IconChevronRight} aria-label={`打开工作配置：${row.name}`} disabled={busy || !!unknown || !!editor && dirty && editor.original?.profileId !== row.profileId} onClick={() => open(row)}>打开</Button> },
-    ]} empty={snapshot.revision === undefined ? '正在读取工作配置' : '暂无工作配置'} />
+    ]} /> : snapshotStatus === 'loading' ? <p className="pw-profile-list-status" role="status">正在读取工作配置…</p>
+      : snapshotStatus === 'error' ? <p className="pw-profile-list-status">配置清单暂未读到，请刷新后重试。</p>
+      : firstConfiguration && <div className="pw-profile-directory-empty">
+        <span className="pw-profile-directory-icon"><IconFileSettings size={26} aria-hidden /></span>
+        <div><h3>还没有工作配置</h3><p>保存常用模型、资料与工具的组合，下次开始任务时直接选用。</p></div>
+        <Button leadingIcon={IconAdd} disabled={busy} onClick={() => open()}>新建配置</Button>
+      </div>}
     {editor && !editorOpen && dirty && <p className="pw-profile-caption">先继续上方草稿，或在编辑器中明确舍弃，再新建与切换。</p>}
     <SettingsDialog isOpen={editorOpen && !!editor && !review && !inspection} title={editor?.original ? `编辑 · ${editor.original.name}` : '新建工作配置'} onClose={pauseEditor}>
       {editor && draft && <div className="pw-profile-editor">
-        <div className="pw-profile-identity"><TextField label="配置名称" value={draft.name} onChange={name => change({ ...draft, name })} isDisabled={locked} /></div>
+        <div className="pw-work-profile-identity"><TextField label="配置名称" value={draft.name} onChange={name => change({ ...draft, name })} isDisabled={locked} /></div>
         <div className="pw-profile-source-bar" aria-label="当前来源窗口"><div><strong>{sourcesReady ? '本次来源窗口已读取' : '来源窗口待读取'}</strong><p>{editor.useCurrentProject ? '当前已选项目范围' : '默认资料范围'} · {editor.original ? `原修订 ${editor.original.revision}${editor.viewHandle ? ' 已核对' : ' 待重新核对'}` : '新建配置'}</p></div><Button variant="ghost" iconOnly leadingIcon={IconRefresh} aria-label="读取当前可用来源" title="读取当前可用来源" disabled={locked} onClick={() => loadChoices(editor.useCurrentProject)}/></div>
         <div className="pw-profile-editor-scroll">
           {unknownControls}

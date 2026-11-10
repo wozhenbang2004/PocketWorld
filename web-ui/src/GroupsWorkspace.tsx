@@ -213,7 +213,10 @@ export function GroupsWorkspace({ state, data, run, supported, registerTransient
   const searchKey = groupId || 'groups', query = queries[searchKey] || '';
   const setQuery = (value: string) => setQueries(previous => ({ ...previous, [searchKey]: value }));
   const matches = (values: any[]) => values.filter(Boolean).join(' ').toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
-  const visibleGroups = groupRows(snapshot?.groups).filter(row => matches([row.name, providerName(row), row.roomId]));
+  const groups = groupRows(snapshot?.groups);
+  const visibleGroups = groups.filter(row => matches([row.name, providerName(row), row.roomId]));
+  const firstGroup = !!snapshot && !groups.length && !query;
+  const connectionRequired = !!snapshot && !connections.some(row => row.enabled === true);
   const groupSections = [
     { id: 'enabled', title: '已启用的群', rows: visibleGroups.filter(row => row.enabled === true) },
     { id: 'disabled', title: '尚未启用', rows: visibleGroups.filter(row => row.enabled !== true) },
@@ -224,12 +227,12 @@ export function GroupsWorkspace({ state, data, run, supported, registerTransient
     <header className="pw-group-header" data-request-open={!!selectedRequest || undefined}>
       <div className="pw-group-heading">
         {(groupId || editor) && <Button type="button" variant="ghost" iconOnly leadingIcon={IconArrowLeft} disabled={busy} aria-label={editor ? '返回并保留草稿' : selectedRequest && tab === 'tasks' ? '返回请求列表' : '返回群列表'} onClick={back} />}
-        <div>{group ? <><p className="pw-group-eyebrow">{providerName(group)}</p><h2>{group.name}</h2></> : <p className="pw-collaboration-directory-count">{groupRows(snapshot?.groups).length} 个群空间</p>}</div>
+        <div>{group ? <><p className="pw-group-eyebrow">{providerName(group)}</p><h2>{group.name}</h2></> : <h2>群空间</h2>}</div>
         {group && <span className="pw-group-state" data-enabled={group.enabled === true}>{group.enabled ? '服务已启用' : '服务已关闭'}</span>}
       </div>
       <div className="pw-group-tools">
         <Button type="button" variant="ghost" iconOnly leadingIcon={IconRefresh} disabled={busy} aria-label="刷新原群记录" onClick={refresh} />
-        {!editor && !groupId && <Button type="button" leadingIcon={IconAdd} disabled={busy} onClick={openCreate}>新建群空间</Button>}
+        {!editor && !groupId && !firstGroup && <Button type="button" leadingIcon={IconAdd} disabled={busy} onClick={openCreate}>新建群空间</Button>}
       </div>
     </header>
     {group && <p className="pw-group-context">{groupRows(group.members).filter(member => member.enabled).length} 位已启用成员 · {requests.length} 项请求 · {group.visibility === 'members' ? '进度可按任务开放给群成员' : '任务进度仅发起人可见'}</p>}
@@ -239,28 +242,28 @@ export function GroupsWorkspace({ state, data, run, supported, registerTransient
     </div>
     {!snapshot && !busy && <div className="pw-group-empty"><IconTeam aria-hidden /><h3>群记录尚未读取</h3><p>刷新群记录后继续。</p></div>}
     {!editor && !groupId && <div className="pw-collaboration-directory" aria-label="群空间列表">
-      <SearchField fieldClassName="pw-collaboration-search" shape="rounded" aria-label="搜索群空间" placeholder="搜索群名称或渠道" value={query} onChange={setQuery} />
+      {(groups.length > 0 || !!query) && <SearchField fieldClassName="pw-collaboration-search" shape="rounded" aria-label="搜索群空间" placeholder="搜索群名称或渠道" value={query} onChange={setQuery} />}
       {groupSections.filter(section => section.rows.length > 0).map(section => <section className="pw-collaboration-group" key={section.id} aria-label={section.title}><header className="pw-collaboration-group-heading"><h3>{section.title}</h3><span>{section.rows.length}</span></header><div className="pw-group-collection">
       {section.rows.map(row => <Button key={row.id} data-group-object={row.id} type="button" variant="ghost" className="pw-group-object-row" disabled={busy} aria-label={`打开群空间：${row.name}`} onClick={() => chooseGroup(row)}>
         <span className="pw-group-row-icon"><IconTeam size={20} aria-hidden /></span>
         <span className="pw-group-row-copy"><strong>{row.name}</strong><span>{providerName(row)} · {groupRows(row.members).filter(member => member.enabled).length} 位成员</span></span>
         <span className="pw-group-row-end"><span>{groupRows(snapshot?.requests).filter(request => request.groupId === row.id).length} 项请求</span><IconChevronRight size={17} aria-hidden /></span>
       </Button>)}</div></section>)}
-      {query && !visibleGroups.length && <p className="pw-secondary-empty">没有匹配的群空间。</p>}
-      {snapshot && groupRows(snapshot.groups).length === 0 && <div className="pw-group-empty"><IconTeam aria-hidden /><h3>暂无群空间</h3><p>新建后添加成员与能力授权。</p></div>}
+      {snapshot && query && !visibleGroups.length && <div className="pw-group-empty"><h3>没有匹配的群空间</h3><p>换个名称或渠道试试，也可以清除搜索。</p><Button type="button" variant="ghost" onClick={() => setQuery('')}>清除搜索</Button></div>}
+      {firstGroup && <div className="pw-group-directory-empty"><span className="pw-group-directory-icon"><IconTeam size={26} aria-hidden /></span><div><h3>还没有群空间</h3><p>把群消息、成员和协作任务放在一起，按群设置能力与授权。</p></div><Button type="button" leadingIcon={IconAdd} disabled={busy} onClick={openCreate}>新建群空间</Button></div>}
     </div>}
     {groupId && !group && !editor && <p className="pw-group-warning" role="alert">这个群空间当前未读取到，请刷新核对。</p>}
 
     {editor && <form className="pw-group-editor" aria-label={editorTitle} onSubmit={event => { event.preventDefault(); if (formReady) requestReview(); }}>
       <header className="pw-group-section-heading"><div><h3>{editorTitle}</h3></div></header>
       {editor === 'create' && <>
+        {connectionRequired && <div className="pw-group-create-prerequisite"><IconTeam size={24} aria-hidden /><div><h4>{connections.length ? '先启用一个机器人连接' : '先添加一个机器人连接'}</h4><p>{connections.length ? '当前机器人连接均未启用。' : '当前尚未配置 QQ 或可信 Webhook 连接。'}请在上方「消息渠道」的「连接与接收」中{connections.length ? '启用连接' : '添加连接'}，再选择要关联的群。</p></div></div>}
         <div className="pw-group-form-grid">{field('name', '群空间名称')}
-          <SelectField label="机器人连接" value={draft.accountId} onChange={value => { closeReview(); setDraft(old => ({ ...old, accountId: value, conversationKind: 'group', conversationParentId: '', roomId: '' })); }} options={connections.map(row => ({ id: row.id, label: `${row.name || row.id} · ${row.provider}`, disabled: row.enabled !== true }))} isDisabled={busy} hint="使用已配置的 QQ 或可信 Webhook 连接。" />
+          <SelectField label="机器人连接" value={draft.accountId} onChange={value => { closeReview(); setDraft(old => ({ ...old, accountId: value, conversationKind: 'group', conversationParentId: '', roomId: '' })); }} options={connections.map(row => ({ id: row.id, label: `${row.name || row.id} · ${row.provider}`, disabled: row.enabled !== true }))} isDisabled={busy || connectionRequired} hint="使用已配置的 QQ 或可信 Webhook 连接。" />
           <SelectField label="群场景" value={draft.conversationKind} onChange={value => { closeReview(); setDraft(old => ({ ...old, conversationKind: value, conversationParentId: '', roomId: '' })); }} options={[{ id: 'group', label: '普通群' }, { id: 'qq_guild_channel', label: 'QQ 频道子频道', disabled: selectedConnection?.provider !== 'qq' || selectedConnection?.qqGuildEnabled !== true }]} isDisabled={busy || !draft.accountId} />
           {draft.conversationKind === 'qq_guild_channel' && field('conversationParentId', '原频道 guild_id')}
           {field('roomId', draft.conversationKind === 'qq_guild_channel' ? '原子频道 channel_id' : selectedConnection?.provider === 'qq' ? '原群 group_openid' : '原群 roomId', '填写原平台身份，群号或显示名称不能替代。')}
         </div>
-        {connections.length === 0 && <p className="pw-group-warning">还没有可用的机器人连接。请先在渠道设置中配置 QQ 或可信 Webhook。</p>}
         <p className="pw-group-scope"><IconShieldCheck size={18} aria-hidden />新空间默认关闭。普通群与频道的成员、能力和授权范围相互独立。</p>
       </>}
       {editor === 'member' && original && <>

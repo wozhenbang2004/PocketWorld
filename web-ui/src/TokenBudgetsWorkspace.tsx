@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { bridge } from './bridge';
+import { IconControls } from './icons';
 import { Accordion, AccordionItem, Button, CheckboxField, SettingsDialog, TextField } from './forms-library';
 import { OwnerWorkspaceRequest } from './commitment-contract';
 import { tokenBudgetCount, tokenBudgetCurrentPolicy, tokenBudgetDraft, tokenBudgetRebasedDraft, tokenBudgetReview, tokenBudgetReviewInput, tokenBudgetSaved, tokenBudgetSnapshot, type TokenBudgetDraft } from './token-budget-contract';
@@ -90,7 +91,7 @@ export function TokenBudgetsWorkspace({ taskId = '', supported, registerTransien
   const editorCurrent = !!editor && !!actualPolicy && !!windowId.current && actualPolicy.revision === editor.revision;
   const unknownControls = uncertain && <div><p>原保存结果尚未确认。草稿保留，请读取当前设置并明确核对；不会自动重复保存。</p>{actualPolicy && <p>当前保存：{actualPolicy.enabled ? `${tokenBudgetCount(actualPolicy.limit)} token 上限` : '上限未启用'} · 版本 {actualPolicy.revision}</p>}<div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => { void read(); }}>读取原设置核对结果</Button><Button variant="secondary" disabled={busy || !readAfterUnknown} onClick={acknowledgeRead}>原设置已核对，返回编辑</Button></div></div>;
 
-  return <section className="pw-token-budgets" aria-label={taskId ? '原任务 token 预算' : '本机 token 预算'}><header className="pw-budget-heading"><div><h3>{taskId ? '原任务 token 预算' : '本机 token 预算'}</h3></div>
+  return <section className="pw-token-budgets" aria-label={taskId ? '原任务 token 预算' : '本机 token 预算'}><header className="pw-budget-heading"><div className="pw-budget-title"><IconControls size={22} aria-hidden /><div><h3>{taskId ? '原任务 token 预算' : '本机 token 预算'}</h3><p>查看已记录用量与预留，按需设置后续调用上限。</p></div></div>
     <Button variant="secondary" disabled={busy || !available} onClick={() => { void read(); }}>{busy ? '正在核对…' : snapshot ? '重新读取预算' : '读取原预算'}</Button></header>
     {!available && <p>当前原生版本尚未提供预算设置入口。</p>}{notice && <p role="status">{notice}</p>}{error && <p role="alert">{error}</p>}{unknownControls}
     {snapshot && <><p>{snapshot.unknownMeaning}</p>{taskId ? <div>{snapshot.task?.budget ? <><h4>{snapshot.task.goal || '原任务'}</h4><BudgetFacts budget={snapshot.task.budget} />{snapshot.task.editable ? <Button variant="secondary" disabled={busy || uncertain} onClick={() => edit('task', snapshot.task.ownerTaskId, '原任务累计预算', snapshot.task.budget)}>调整原任务累计上限</Button> : <p>此调用归原父任务预算，请回父任务调整。</p>}</> : <p>此任务尚无原累计执行范围。已有用量仍在原回执中；请先从任务范围设置核对原任务。</p>}</div> : <>

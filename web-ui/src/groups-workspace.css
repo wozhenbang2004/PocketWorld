@@ -31,6 +31,15 @@
 .pw-group-feedback { display: grid; gap: 8px; font-size: 13px; line-height: 1.65; }
 .pw-group-feedback:has(> *) { padding: 0 0 var(--pw-gap-content); }
 .pw-group-collection { display: grid; gap: 2px; }
+.pw-group-directory-empty { display: grid; justify-items: start; align-content: start; gap: var(--pw-gap-content); padding: var(--pw-gap-section); border-radius: 24px; background: var(--pw-surface); }
+.pw-group-directory-icon { display: grid; place-items: center; width: 52px; height: 52px; border-radius: 16px; background: var(--pw-accent-soft); color: var(--pw-on-accent-soft); }
+.pw-group-directory-empty h3 { font-size: 20px; line-height: 28px; font-weight: 600; letter-spacing: -.02em; }
+.pw-group-directory-empty p { margin-top: 8px; max-width: 36ch; font-size: 13px; line-height: 21px; color: var(--group-muted); overflow-wrap: anywhere; }
+.pw-group-directory-empty > button, .pw-group-empty > button { min-height: 44px; justify-self: start; }
+.pw-group-create-prerequisite { display: flex; align-items: flex-start; gap: 12px; padding: var(--pw-gap-content); border-radius: 16px; background: var(--pw-accent-soft); color: var(--pw-on-accent-soft); }
+.pw-group-create-prerequisite > svg { flex: 0 0 auto; margin-top: 2px; }
+.pw-group-create-prerequisite h4 { font-size: 16px; line-height: 24px; font-weight: 600; }
+.pw-group-create-prerequisite p { margin-top: 4px; font-size: 13px; line-height: 21px; overflow-wrap: anywhere; }
 .pw-group-workspace button.pw-group-object-row {
   display: block;
   width: 100%;

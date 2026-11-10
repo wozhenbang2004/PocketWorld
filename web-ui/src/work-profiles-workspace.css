@@ -18,10 +18,16 @@
 .pw-profiles-workspace .pw-object-title strong { font-weight: 500; }
 .pw-profile-feedback { margin: 10px 0; font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; white-space: pre-wrap; }
 .pw-profile-feedback[role="alert"] { padding: 11px 13px; border: 0; border-radius: 11px; background: var(--pw-inset, #efefef); }
+.pw-profile-list-status { margin: 0; padding-block: var(--pw-gap-section); font-size: 13px; line-height: 21px; color: var(--pw-copy); }
+.pw-profile-directory-empty { display: grid; justify-items: start; align-content: start; gap: var(--pw-gap-content); padding: var(--pw-gap-section); border-radius: 24px; background: var(--pw-surface); }
+.pw-profile-directory-icon { display: grid; place-items: center; width: 52px; height: 52px; border-radius: 16px; background: var(--pw-accent-soft); color: var(--pw-on-accent-soft); }
+.pw-profile-directory-empty h3 { margin: 0; font-size: 20px; line-height: 28px; font-weight: 600; letter-spacing: -.02em; }
+.pw-profile-directory-empty p { margin: 8px 0 0; max-width: 36ch; font-size: 13px; line-height: 21px; color: var(--pw-copy); overflow-wrap: anywhere; }
+.pw-profile-directory-empty > button { min-height: 44px; }
 .pw-settings-dialog:has(.pw-profile-editor) { width: min(720px, calc(100vw - var(--pw-page-gutter) - var(--pw-page-gutter))); }
 .pw-settings-dialog-content:has(> .pw-profile-editor) { display: flex; padding: 0; overflow: hidden; min-height: 0; }
 .pw-profile-editor { display: flex; flex-direction: column; min-height: 0; max-height: calc(100dvh - 110px); min-width: 0; width: 100%; color: var(--pw-ink, #292929); }
-.pw-profile-identity { flex: none; padding: var(--pw-gap-content) var(--pw-page-gutter) 0; margin-bottom: var(--pw-gap-content); }
+.pw-work-profile-identity { flex: none; padding: var(--pw-gap-content) var(--pw-page-gutter) 0; margin-bottom: var(--pw-gap-content); }
 .pw-profile-source-bar { flex: none; padding: var(--pw-gap-control) var(--pw-page-gutter); background: var(--pw-inset, #efefef); }
 .pw-profile-source-bar > button { flex: none; font-size: 12px; }
 .pw-profile-editor-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: var(--pw-gap-content) var(--pw-page-gutter) var(--pw-gap-section); }

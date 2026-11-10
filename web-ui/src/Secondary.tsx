@@ -55,7 +55,7 @@ import { ACCOUNT_RECEIPT_ACTIONS, accountActionReceipt, accountLoginArguments, a
 type Data = Record<string, any>;
 type Snapshot = { state?: Data; view?: { section?: string | null; resumeRevision?: number; taskId?: string | null }; composer?: Data | null; capabilities?: { commands?: string[] } };
 type BackHandlerRegistration = (handler: (() => boolean) | null) => void;
-type Props = { route: string; onBack: () => void; snapshot: Snapshot; registerBackHandler?: BackHandlerRegistration; navigationTrigger?: ReactNode; navigationRevision?: number; onNavigationPageChange?: (page: string) => void; onOpenSetup?: (capability?: SetupCapability) => void; onReturnToSetup?: () => void };
+type Props = { route: string; onBack: () => void; snapshot: Snapshot; registerBackHandler?: BackHandlerRegistration; navigationTrigger?: ReactNode; navigationRevision?: number; onNavigationPageChange?: (page: string) => void; onOpenSetup?: (capability?: SetupCapability) => void; onReturnToSetup?: () => void; onOpenProjects?: () => void };
 type Run = (action: string, args?: Data) => Promise<any>;
 const object = (value: any): Data => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 const list = (value: any): Data[] => Array.isArray(value) ? value.filter(x => x && typeof x === 'object' && !Array.isArray(x)) : [];
@@ -1065,15 +1065,16 @@ function AccountsWorkspace({ state, data, supported, run, registerTransientBack,
   </>;
 }
 
-function McpWorkspace({ state, data, supported, run, registerTransientBack }: { state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: BackHandlerRegistration }) {
+function McpWorkspace({ state, data, supported, run, registerTransientBack, error }: { state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: BackHandlerRegistration; error?: string }) {
   const [review, setReview] = useState<Data | null>(null), [selected, setSelected] = useState<string[]>([]);
   const [detail, setDetail] = useState<Data | null>(null), [busy, setBusy] = useState(false);
+  const [adding, setAdding] = useState(false);
   const [entryMode, setEntryMode] = useState('address');
   const [direct, setDirect] = useState({ name: '', endpoint: '', protocolVersion: '2026-07-28' });
   const alive = useRef(true), view = useRef(0);
   const closeReview = () => { view.current++; setReview(null); };
   useEffect(() => { alive.current = true; return () => { alive.current = false; view.current++; }; }, []);
-  useEffect(() => { registerTransientBack(review ? () => { if (!busy) closeReview(); return true; } : detail ? () => { setDetail(null); return true; } : null); return () => registerTransientBack(null); }, [review, detail, busy, registerTransientBack]);
+  useEffect(() => { registerTransientBack(review ? () => { if (!busy) closeReview(); return true; } : detail ? () => { setDetail(null); return true; } : adding ? () => { if (!busy) setAdding(false); return true; } : null); return () => registerTransientBack(null); }, [review, detail, adding, busy, registerTransientBack]);
   const responses = object(object(state.ownerResponses).mcp), picked = object(responses.pickConfig), config = object(object(picked.result).config);
   const progress = object(state.mcpImport), phase = text(progress.phase), pending = Array.isArray(state.ownerPending) ? state.ownerPending : [];
   const writing = busy || ['mcp.installMcp', 'mcp.setEnabledReviewed', 'mcp.setToolGrantReviewed'].some(key => pending.includes(key));
@@ -1086,13 +1087,13 @@ function McpWorkspace({ state, data, supported, run, registerTransientBack }: { 
     if (writing || preparing || choosing || phase === 'unknown') return;
     closeReview(); setBusy(true);
     try { await run('mcp.discoverDirect', direct); }
-    catch { /* The shared page displays the native failure. */ }
+    catch { /* The shared failure is also rendered inside the active dialog. */ }
     finally { if (alive.current) setBusy(false); }
   };
   const openReview = async (action: string, args: Data, kind: string) => {
     const original = ++view.current; setBusy(true);
     try { const receipt = object(await run(action, args)); if (alive.current && original === view.current) { setSelected([]); setReview({ ...receipt, kind }); } }
-    catch { /* The shared page displays the native failure. */ }
+    catch { /* The shared failure is also rendered inside the active dialog. */ }
     finally { if (alive.current) setBusy(false); }
   };
   const confirm = async () => {
@@ -1100,26 +1101,37 @@ function McpWorkspace({ state, data, supported, run, registerTransientBack }: { 
     const original = review; setBusy(true);
     try {
       await run(original.kind === 'install' ? 'mcp.installImport' : original.kind === 'grant' ? 'mcp.confirmGrant' : 'mcp.confirmEnabled', { reviewHandle: original.reviewHandle, ...(original.kind === 'install' ? { tools: selected } : {}) });
-      if (alive.current) { closeReview(); setDetail(null); }
+      if (alive.current) { closeReview(); setDetail(null); if (original.kind === 'install') setAdding(false); }
     } catch { if (alive.current) closeReview(); }
     finally { if (alive.current) setBusy(false); }
   };
   const installed = list(data.plugins), currentDetail = detail && installed.find(item => item.id === detail.id && item.installationId === detail.installationId);
+  const loaded = hasRows(data, ['plugins']);
+  const hasDraft = !(phase === 'installed' && previewMatchesInput) && !!(direct.name || direct.endpoint || picked.ok === true || phase && !['idle', 'installed'].includes(phase));
   const progressCopy: Record<string, string> = { discovering: '正在读取服务声明，等待原发现回执…', discovered: '工具发现完成，可以打开预览。', installing: '原安装正在保存，等待实际回执…', installed: '安装已保存，保持停用；工具权限需要逐项核对。', unknown: '安装结果待核对，请刷新已安装列表；不会自动重新安装。', stale: '原发现已变化或过期，请重新核对配置。', failed: '原发现未完成，请查看回执后核对服务。' };
   return <>
-    <Card className="pw-mcp-workspace" title="已安装的服务" description="打开服务，核对工具与当前权限。">
-      <Collection data={data} keys={['plugins']} label="已安装服务">{row => <>
+    <Card className="pw-mcp-workspace">
+      <header className="pw-settings-object-heading"><div><h2>MCP 服务</h2><p>接入外部工具，按需核对每项权限。</p></div>{installed.length > 0 && !hasDraft && <Button leadingIcon={IconAdd} disabled={writing} onClick={() => setAdding(true)}>添加服务</Button>}</header>
+      {!loaded ? <p className="pw-secondary-empty" role="status">尚未取得服务清单，请使用右上角刷新重新读取。</p> : installed.length === 0 ? <div className="pw-mcp-empty"><IconMcp size={30} aria-hidden /><h3>连接你的工具服务</h3><p>填写服务地址或导入配置，先查看提供的工具，再决定安装与授权。</p>{!hasDraft && <Button leadingIcon={IconAdd} disabled={writing} onClick={() => setAdding(true)}>添加 MCP 服务</Button>}</div> : <Collection data={data} keys={['plugins']} label="已安装服务">{row => <>
         <Facts items={[[ '版本', object(row.manifest).version ], ['状态', row.enabled ? '已启用' : '已停用'], ['服务状态', row.mcpStatus]]} />
         <div className="pw-form-actions"><Button variant="secondary" disabled={writing || !supported('mcp.read')} onClick={async () => { const original = ++view.current; try { const receipt = object(await run('mcp.read', { id: row.id, installationId: row.installationId })); if (alive.current && original === view.current) setDetail(receipt); } catch {} }}>查看工具与权限</Button><Button variant="secondary" disabled={writing || !supported('mcp.reviewEnabled')} onClick={() => openReview('mcp.reviewEnabled', { id: row.id, installationId: row.installationId, enabled: !row.enabled }, 'enable')}>{row.enabled ? '核对并停用' : '核对并启用'}</Button></div>
-      </>}</Collection>
-      <Accordion variant="divided" className="pw-mcp-import" defaultExpandedKeys={!list(data.plugins).length || picked.ok === true || phase && phase !== 'idle' ? ['mcp-import'] : []}><AccordionItem id="mcp-import" title="添加 MCP 服务" description="填写服务地址，或导入已有配置">
-      <RadioOptions label="添加方式" value={entryMode} onChange={value => { closeReview(); setEntryMode(value); }} isDisabled={writing || preparing || choosing} options={[{ id: 'address', label: '填写地址' }, { id: 'file', label: '导入配置' }]} />
+      </>}</Collection>}
+      {hasDraft && <div className="pw-mcp-draft"><IconMcp size={22} aria-hidden /><div><strong>{text(activeConfig.name) || direct.name || text(config.name) || '待添加的 MCP 服务'}</strong><p>{phase === 'discovered' ? '已读取工具声明，等待核对' : phase === 'unknown' ? '原安装结果尚未确认' : '已保留本次输入与发现记录'}</p></div><Button variant="secondary" trailingIcon={IconChevronRight} disabled={writing} onClick={() => setAdding(true)}>继续添加</Button></div>}
+      {phase && phase !== 'idle' && <p className="pw-receipt-copy" role="status">{progressCopy[phase] || text(progress.message)}</p>}
+      {preparing && <CapabilityAction action="mcp.cancel" args={{ operationId: progress.operationId }} supported={supported} run={run}>取消原发现</CapabilityAction>}
+      {[['启停', object(progress.enableReceipt)], ['工具权限', object(progress.grantReceipt)]].map(([label, raw]) => { const receipt = object(raw); return receipt.requestId ? <p key={text(label)} className="pw-receipt-copy" role="status">{text(label)}：{receipt.status === 'saved' ? '原安装的更改已保存。' : receipt.status === 'pending' ? '等待原操作回执…' : '结果待核对，请刷新原安装。'}</p> : null; })}
+    </Card>
+    <SettingsDialog isOpen={adding && !review} title="添加 MCP 服务" closeLabel="返回服务列表" onClose={() => { if (!writing) setAdding(false); }}>
+      <div className="pw-mcp-editor">
+      <RadioOptions className="pw-mcp-entry-mode" label="添加方式" value={entryMode} onChange={value => { closeReview(); setEntryMode(value); }} isDisabled={writing || preparing || choosing} options={[{ id: 'address', label: '填写地址' }, { id: 'file', label: '导入配置' }]} />
       {entryMode === 'address' ? <>
         <div className="pw-form-grid">
-          <TextField label="服务名称" value={direct.name} onChange={name => setDirect(value => ({ ...value, name }))} maxLength={80} isDisabled={writing || preparing || choosing} />
-          <TextField label="HTTPS 服务地址" value={direct.endpoint} onChange={endpoint => setDirect(value => ({ ...value, endpoint }))} maxLength={2000} autoComplete="off" isDisabled={writing || preparing || choosing} hint="填写服务提供的 MCP 端点，不要把令牌或密码放进地址。" />
-          <SelectField label="协议版本" value={direct.protocolVersion} onChange={protocolVersion => setDirect(value => ({ ...value, protocolVersion }))} isDisabled={writing || preparing || choosing} options={[{ id: '2026-07-28', label: '2026-07-28' }, { id: '2025-11-25', label: '2025-11-25' }]} />
+          <TextField label="服务名称" placeholder="给这个服务起个名字" value={direct.name} onChange={name => setDirect(value => ({ ...value, name }))} maxLength={80} isDisabled={writing || preparing || choosing} />
+          <TextField label="HTTPS 服务地址" placeholder="https://example.com/mcp" value={direct.endpoint} onChange={endpoint => setDirect(value => ({ ...value, endpoint }))} maxLength={2000} autoComplete="off" isDisabled={writing || preparing || choosing} hint="填写服务提供的 MCP 端点，不要把令牌或密码放进地址。" />
         </div>
+        <Accordion variant="divided"><AccordionItem id="mcp-connection-options" title="连接选项" description={`协议 ${direct.protocolVersion}`}>
+          <SelectField label="协议版本" value={direct.protocolVersion} onChange={protocolVersion => setDirect(value => ({ ...value, protocolVersion }))} isDisabled={writing || preparing || choosing} options={[{ id: '2026-07-28', label: '2026-07-28' }, { id: '2025-11-25', label: '2025-11-25' }]} />
+        </AccordionItem></Accordion>
         <div className="pw-form-actions"><Button disabled={writing || preparing || choosing || phase === 'unknown' || !supported('mcp.discoverDirect') || !direct.name.trim() || !direct.endpoint.trim()} onClick={discoverDirect}>发现服务工具</Button></div>
       </> : <>
         <HostFileUpload label="选择 MCP 配置" onChoose={() => { closeReview(); void run('mcp.pickConfig', {}).catch(() => {}); }} disabled={writing || preparing || !supported('mcp.pickConfig') || choosing} status={choosing ? 'importing' : picked.ok === false ? 'error' : 'idle'} statusDescription="系统选择器读取不含凭据的 JSON 配置，上限 64 KB" error={picked.ok === false ? text(picked.error) : undefined} />
@@ -1127,12 +1139,14 @@ function McpWorkspace({ state, data, supported, run, registerTransientBack }: { 
       </>}
       <p className="pw-field-hint">发现只读取服务声明；安装不会调用工具，也不会自动启用或授权。</p>
       {phase === 'discovered' && <div className="pw-selected-object"><h3>本次发现</h3><Facts items={[[ '服务', activeConfig.name ], ['地址', activeConfig.endpoint ], ['协议版本', activeConfig.protocolVersion ]]} />{!previewMatchesInput && <p className="pw-field-hint">输入已变化，请重新发现后再安装。</p>}<Button variant="secondary" disabled={writing || preparing || choosing || !previewMatchesInput || !supported('mcp.reviewImport')} onClick={() => openReview('mcp.reviewImport', {}, 'install')}>核对工具并安装</Button></div>}
-      </AccordionItem></Accordion>
-      {phase !== 'idle' && <p className="pw-receipt-copy" role="status">{progressCopy[phase] || text(progress.message)}</p>}
+      {phase && phase !== 'idle' && <p className="pw-receipt-copy" role="status">{progressCopy[phase] || text(progress.message)}</p>}
       {preparing && <CapabilityAction action="mcp.cancel" args={{ operationId: progress.operationId }} supported={supported} run={run}>取消原发现</CapabilityAction>}
-      {[['启停', object(progress.enableReceipt)], ['工具权限', object(progress.grantReceipt)]].map(([label, raw]) => { const receipt = object(raw); return receipt.requestId ? <p key={text(label)} className="pw-receipt-copy" role="status">{text(label)}：{receipt.status === 'saved' ? '原安装的更改已保存。' : receipt.status === 'pending' ? '等待原操作回执…' : '结果待核对，请刷新原安装。'}</p> : null; })}
-    </Card>
+      {error && <p className="pw-field-error" role="alert">{error}</p>}
+      <Button variant="ghost" leadingIcon={IconArrowLeft} disabled={writing} onClick={() => setAdding(false)}>保留输入并返回</Button>
+      </div>
+    </SettingsDialog>
     <SettingsDialog isOpen={detail !== null} title="当前安装的工具与权限" onClose={() => setDetail(null)}>{detail && <>
+      {error && <p className="pw-field-error" role="alert">{error}</p>}
       <Facts items={[[ '服务', object(detail.manifest).name || detail.id ], ['版本', object(detail.manifest).version ]]} />
       {!currentDetail && <p role="alert" className="pw-field-error">原安装已变化，请关闭后刷新。</p>}
       {list(object(detail.manifest).tools).map(tool => { const granted = Array.isArray(currentDetail?.grants) && currentDetail.grants.includes('tool:' + tool.name); return <SourceRecord key={text(tool.name)} item={tool}><Facts items={[[ '地址', tool.endpoint ], ['权限', granted ? '已允许' : '未允许']]} /><Button variant="secondary" disabled={!currentDetail || writing || !supported('mcp.reviewGrant')} onClick={() => openReview('mcp.reviewGrant', { id: detail.id, installationId: detail.installationId, grantsDigest: currentDetail?.grantsDigest, tool: tool.name, granted: !granted }, 'grant')}>{granted ? '核对并撤销权限' : '核对并允许工具'}</Button></SourceRecord>; })}
@@ -1146,7 +1160,7 @@ function McpWorkspace({ state, data, supported, run, registerTransientBack }: { 
   </>;
 }
 
-function DomainPage({ domain, state, data, supported, run, registerTransientBack, candidateTarget, onReviewCandidate, onOpenModels, onNavigate, onPrepareTools, alreadyShownError }: { domain: string; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: BackHandlerRegistration; candidateTarget: LearningCandidateTarget | null; onReviewCandidate: (target: LearningCandidateTarget) => void; onOpenModels: () => void; onNavigate: (domain: 'plugins' | 'pluginCatalog' | 'mcp' | 'skills') => void; onPrepareTools?: () => void; alreadyShownError?: string }) {
+function DomainPage({ domain, state, data, supported, run, registerTransientBack, candidateTarget, onReviewCandidate, onOpenModels, onNavigate, onPrepareTools, onOpenProjects, alreadyShownError }: { domain: string; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: BackHandlerRegistration; candidateTarget: LearningCandidateTarget | null; onReviewCandidate: (target: LearningCandidateTarget) => void; onOpenModels: () => void; onNavigate: (domain: 'plugins' | 'pluginCatalog' | 'mcp' | 'skills') => void; onPrepareTools?: () => void; onOpenProjects?: () => void; alreadyShownError?: string }) {
   const title = SECONDARY_DOMAINS.find(x => x.id === domain)?.title || '连接与能力';
   if (domain === 'accounts') return <AccountsWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'devices') return <DevicesWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} openModels={onOpenModels} />;
@@ -1157,7 +1171,7 @@ function DomainPage({ domain, state, data, supported, run, registerTransientBack
   if (domain === 'workProfiles') return <WorkProfilesWorkspace state={state} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'commitments') return <CommitmentsWorkspace state={state} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'channels') return <ChannelsWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
-  if (domain === 'mcp') return <McpWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
+  if (domain === 'mcp') return <McpWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} error={alreadyShownError} />;
   if (domain === 'skills') return <SkillsWorkspace state={state} run={run} registerTransientBack={registerTransientBack} onPrepareTools={onPrepareTools} />;
   if (domain === 'plugins' || domain === 'pluginCatalog') return <PluginsWorkspace mode={domain} state={state} supported={supported} run={run} registerTransientBack={registerTransientBack} onNavigate={onNavigate} />;
   if (domain === 'teams') return <TeamsWorkspace state={state} run={run} registerTransientBack={registerTransientBack} alreadyShownError={alreadyShownError} />;
@@ -1165,7 +1179,7 @@ function DomainPage({ domain, state, data, supported, run, registerTransientBack
   if (domain === 'media') return <MediaWorkspace state={state} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'realtime') return <RealtimeWorkspace state={state} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'proxy') return <ProxyWorkspace state={state} run={run} registerTransientBack={registerTransientBack} />;
-  if (domain === 'local') return <LocalWorkspace state={state} data={data} run={run} supported={supported} registerTransientBack={registerTransientBack} onPrepareTools={onPrepareTools} />;
+  if (domain === 'local') return <LocalWorkspace state={state} data={data} run={run} supported={supported} registerTransientBack={registerTransientBack} onPrepareTools={onPrepareTools} onOpenProjects={onOpenProjects} />;
   return <Card title={title}><Empty>尚未读取此能力的当前记录。</Empty></Card>;
 }
 
@@ -1467,7 +1481,7 @@ function settingsEntryDetail(id: string, state: Data): string {
   return '';
 }
 
-export default function Secondary({ route, onBack, snapshot, registerBackHandler, navigationTrigger, navigationRevision, onNavigationPageChange, onOpenSetup, onReturnToSetup }: Props) {
+export default function Secondary({ route, onBack, snapshot, registerBackHandler, navigationTrigger, navigationRevision, onNavigationPageChange, onOpenSetup, onReturnToSetup, onOpenProjects }: Props) {
   const phonePresentation = useRef('list');
   const state: Data = { ...object(snapshot.state), webWorkspaceResumeRevision: Number(snapshot.view?.resumeRevision || 0), webWorkspaceTaskOpen: !!snapshot.view?.taskId, webWorkspaceSection: snapshot.view?.section };
   const commands = snapshot.capabilities?.commands || [];
@@ -1651,7 +1665,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
           : page === 'background' ? <BackgroundSettings state={state} supported={supported} run={run} onReturn={onReturnToSetup || returnToPhone} returnLabel={onReturnToSetup ? '准备中心' : '手机能力'} registerTransientBack={registerTransientBack} />
           : page === 'history' || page === 'usage' ? <HistoryPage key={page} usage={page === 'usage'} supported={supported} run={run} />
           : page === 'archives' || page === 'storage' ? <DataManagement key={page} kind={page} data={object(page === 'archives' ? state.ownerArchives : state.projectStorage)} supported={supported} run={run} registerTransientBack={registerTransientBack} navigate={navigate} />
-          : domain ? <DomainPage key={page} domain={page} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} candidateTarget={candidateTarget} onReviewCandidate={target => navigate('memoryReview', target)} onOpenModels={() => navigate('model-settings')} onNavigate={navigate} onPrepareTools={onOpenSetup?()=>onOpenSetup('tools'):undefined} alreadyShownError={error || domainError} />
+          : domain ? <DomainPage key={page} domain={page} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} candidateTarget={candidateTarget} onReviewCandidate={target => navigate('memoryReview', target)} onOpenModels={() => navigate('model-settings')} onNavigate={navigate} onPrepareTools={onOpenSetup?()=>onOpenSetup('tools'):undefined} onOpenProjects={onOpenProjects} alreadyShownError={error || domainError} />
           : <Empty>此页面暂不可用，请从导航重新打开。</Empty>}
       </div>
     </div>;

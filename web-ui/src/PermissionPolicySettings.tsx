@@ -60,8 +60,8 @@ export function PermissionPolicySettings({conversationId,act,onPendingChange,chi
    {usesAiReview&&<p className="pw-permission-hint">AI 会独立判断操作是否符合当前要求，可能误判，并产生额外模型调用。</p>}
    <p className="pw-permission-hint">所有模式均不扩大系统权限或任务范围，原生高风险接管要求仍有效。</p>
   </div>
-  <Accordion variant="divided" className="pw-permission-rules" defaultExpandedKeys={['permission-catalog']}>
-  <AccordionItem id="permission-catalog" title={`工具目录${catalog?` · ${catalog.tools.length} 项`:''}`}>
+  <Accordion variant="divided" className="pw-permission-rules" defaultExpandedKeys={[]}>
+  <AccordionItem id="permission-catalog" title={`工具目录${catalog?` · ${catalog.tools.length} 项`:''}`} description={catalog?'按名称或用途查找，按需设置独立规则':catalogError?'目录暂不可用，已配置规则仍可编辑':'正在读取本机工具目录…'}>
    <p className="pw-permission-hint">按名称或用途找工具，点选后设置规则。目录不是本次任务的可用工具清单，设置不会启用未挂载能力。</p>
    <TextField label="搜索工具" value={query} onChange={setQuery} placeholder="手机、记忆、搜索、browser…"/>
    {!catalog&&<p className="pw-permission-hint" role={catalogError?'alert':'status'}>{catalogError?`目录暂不可用：${catalogError}。仍可查看或手动添加规则。`:'读取本机工具目录…'}</p>}

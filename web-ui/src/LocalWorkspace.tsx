@@ -13,7 +13,7 @@ const statusLabel = (value: any) => ({ running: '运行中', completed: '已完�
 
 /** BoardUI's retained fields, disclosure and navigation-row composition around
  * the original local checkout/PTY workflow. No replacement terminal or authority. */
-export function LocalWorkspace({ state, data, run, supported, registerTransientBack, onPrepareTools }: { state: Data; data: Data; run: Run; supported: (name: string) => boolean; registerTransientBack: (handler: (() => boolean) | null) => void; onPrepareTools?: () => void }) {
+export function LocalWorkspace({ state, data, run, supported, registerTransientBack, onPrepareTools, onOpenProjects }: { state: Data; data: Data; run: Run; supported: (name: string) => boolean; registerTransientBack: (handler: (() => boolean) | null) => void; onPrepareTools?: () => void; onOpenProjects?: () => void }) {
   const [project, setProject] = useState(''), [checkout, setCheckout] = useState(''), [source, setSource] = useState<Data | null>(null);
   const [cwd, setCwd] = useState('.'), [env, setEnv] = useState('{}'), [seconds, setSeconds] = useState('300');
   const [review, setReview] = useState<Data | null>(null), [acknowledged, setAcknowledged] = useState(false), [original, setOriginal] = useState<Data | null>(null), [receipt, setReceipt] = useState<Data | null>(null);
@@ -112,6 +112,9 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
   const runtimes = rows(data.projectRuntimes?.runtimes || data.projectRuntimes);
   const inventory = knownResults['local.listJobs'] || data;
   const legacyReceiptRecovery = inventory.legacyReceiptRecovery || knownResults['local.probe']?.legacyReceiptRecovery || data.legacyReceiptRecovery;
+  const legacyNeedsAttention = legacyReceiptRecovery && (legacyReceiptRecovery.originalInventoryUnconfirmed || legacyReceiptRecovery.coldUnconfirmedRecords > 0 || legacyReceiptRecovery.unreadableOriginalRecordsRetained > 0);
+  const legacySummary = legacyReceiptRecovery && <div className="pw-local-feedback" role="status"><p>{legacyReceiptRecovery.message || '原只读命令的恢复清单只用于核对既有记录。'}</p><p className="pw-field-hint">可读原记录 {legacyReceiptRecovery.readableOriginalRecords ?? '尚未返回'} 条 · 冷恢复待核 {legacyReceiptRecovery.coldUnconfirmedRecords ?? '尚未返回'} 条 · 保留的不可读原记录 {legacyReceiptRecovery.unreadableOriginalRecordsRetained ?? '尚未返回'} 条。</p>{(legacyReceiptRecovery.originalInventoryUnconfirmed || legacyReceiptRecovery.coldUnconfirmedRecords > 0) && <p className="pw-field-hint">{legacyReceiptRecovery.blockingScope === 'all_checkouts' ? '全部工作副本的原写入范围仍受阻止。' : '相关原工作副本仍保持占用。'}重新打开页面不证明进程已经退出，也不会恢复执行权限。</p>}</div>;
+  const projectRows = rows(state.projects), hasSetupSource = projectRows.length > 0 || !!project;
   const jobs: Data[] = [...rows(inventory.jobs).map(row => ({ ...row, backendLabel: '本机' })), ...rows(inventory.termuxJobs).map(row => ({ ...row, backendLabel: 'Termux' }))];
   const unresolvedJobs = jobs.filter(row => /unknown|uncertain/.test(String(row.status || row.state || '')));
   const inputBytes = new TextEncoder().encode(input + '\n').length;
@@ -122,14 +125,14 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
     <header className="pw-local-heading"><div><h2>本机终端</h2></div>{onPrepareTools && <Button variant="secondary" trailingIcon={IconChevronRight} onClick={onPrepareTools}>准备开发工具</Button>}</header>
     {error && <p role="alert" className="pw-local-feedback pw-secondary-error">{error}</p>}
     {knownResults['local.probe']?.message && <p className="pw-local-runtime-message" role="status">{knownResults['local.probe'].message}</p>}
-    {legacyReceiptRecovery && <div className="pw-local-feedback" role="status"><p>{legacyReceiptRecovery.message || '原只读命令的恢复清单只用于核对既有记录。'}</p><p className="pw-field-hint">可读原记录 {legacyReceiptRecovery.readableOriginalRecords ?? '尚未返回'} 条 · 冷恢复待核 {legacyReceiptRecovery.coldUnconfirmedRecords ?? '尚未返回'} 条 · 保留的不可读原记录 {legacyReceiptRecovery.unreadableOriginalRecordsRetained ?? '尚未返回'} 条。</p>{(legacyReceiptRecovery.originalInventoryUnconfirmed || legacyReceiptRecovery.coldUnconfirmedRecords > 0) && <p className="pw-field-hint">{legacyReceiptRecovery.blockingScope === 'all_checkouts' ? '全部工作副本的原写入范围仍受阻止。' : '相关原工作副本仍保持占用。'}重新打开页面不证明进程已经退出，也不会恢复执行权限。</p>}</div>}
+    {legacyNeedsAttention && legacySummary}
     {unresolvedJobs.map((row, index) => <p className="pw-local-feedback" key={row.id || row.operationId || index}>{row.backendLabel}原操作 {row.operationId || row.id}：{row.message || row.summary || '结果尚未确认，请读取原运行回执，不要重复执行。'}</p>)}
     {original && resultUnknown && <div className="pw-local-feedback" role="status"><p>原执行结果待核对。请查询这条记录，不要重复启动。</p><Button variant="ghost" size="small" disabled={busy} onClick={() => { void invoke('local.terminal.query', original, setReceipt).catch(() => {}); }}>查询原执行</Button></div>}
     {original && stopRequested && <div className="pw-local-feedback" role="status"><p>{output?.terminal ? `原进程已返回终态；资源释放：${output.resourcesReleased ? '已确认' : '尚未确认'}。` : '已请求停止原进程，退出与资源回收仍以真实回执为准。'}</p><Button variant="ghost" size="small" disabled={busy} onClick={() => { void invoke('local.terminal.query', original, setReceipt).catch(() => {}); }}>查询停止结果</Button></div>}
     {panel === 'setup' && original && !resultUnknown && <p className="pw-local-runtime-message" role="status">原终端：{statusLabel(currentStatus)}{executionMessage ? ` · ${executionMessage}` : ''}</p>}
     {uncertain && <div className="pw-local-feedback" role="status"><p>上一输入尚未核对，已停止继续输入。不会自动重发。</p>{view ? <Button variant="secondary" size="small" disabled={busy} onClick={queryInput}>核对原输入回执</Button> : original && <Button variant="secondary" size="small" disabled={busy} onClick={() => open(original)}>打开原终端核对</Button>}</div>}
-    <div className="pw-local-layout">
-      <nav className="pw-local-sessions" aria-label="本机终端">
+    <div className="pw-local-layout" data-has-sessions={terminals.length > 0 || !!original}>
+      {(terminals.length > 0 || original) && <nav className="pw-local-sessions" aria-label="本机终端">
         <Button variant="ghost" className="pw-local-session-row pw-local-new" leadingIcon={IconAdd} aria-pressed={panel === 'setup'} disabled={busy} onClick={() => changePanel('setup')}>新建终端</Button>
         <div className="pw-local-session-label"><span>已有终端</span></div>
         {original && !currentTask && <Button variant="ghost" className="pw-local-session-row" leadingIcon={IconTerminal} aria-pressed={panel === 'session'} disabled={busy} onClick={() => changePanel('session')}><span className="pw-local-session-copy"><strong>本次手动终端</strong><small>{statusLabel(currentStatus)}</small></span></Button>}
@@ -137,10 +140,10 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
           const active = identity(task).taskId === original?.taskId && identity(task).executionId === original?.executionId;
           return <Button variant="ghost" className="pw-local-session-row" leadingIcon={IconTerminal} key={task.id || task.taskId} aria-pressed={panel === 'session' && active} disabled={busy || (resultUnknown || uncertain) && !active} onClick={() => selectSession(task)}><span className="pw-local-session-copy"><strong>{task.goal || '手动终端'}</strong><small>{active ? statusLabel(currentStatus) : statusLabel(task.status || task.state)}</small></span></Button>;
         })}
-        {!terminals.length && !original && <p className="pw-local-session-empty">还没有读取到终端记录。先选一个项目，准备你的工作副本。</p>}
-      </nav>
+      </nav>}
       <div className="pw-local-main">
         <section className="pw-local-panel" data-local-panel="setup" hidden={panel !== 'setup'}>
+          {!hasSetupSource ? <div className="pw-local-project-empty"><IconFolder size={30} aria-hidden /><h2 tabIndex={-1}>{Array.isArray(state.projects) ? '从一个项目开始' : '先读取你的项目'}</h2><p>本机终端在项目的私人工作副本中运行。先前往项目创建或选择内容，再回来准备副本。</p>{onOpenProjects && <Button leadingIcon={IconFolder} disabled={busy} onClick={onOpenProjects}>前往项目</Button>}</div> : <>
           <header className="pw-local-panel-heading pw-local-setup-heading"><h2 tabIndex={-1}>新建手动终端</h2><Button disabled={busy || resultUnknown || uncertain || !ready || Number(seconds) < 1 || Number(seconds) > 300 || !supported('local.terminal.review')} trailingIcon={IconChevronRight} onClick={() => {
               if (activePanel.current !== 'setup' || entered.current || resultUnknown || uncertain) return;
               try { const environment = JSON.parse(env); if (!environment || Array.isArray(environment) || typeof environment !== 'object') throw new Error('环境变量需要 JSON 对象。');
@@ -150,7 +153,7 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
             }}>核对并准备终端</Button></header>
           <div className="pw-local-setup-step">
             <h3><IconFolder size={17} aria-hidden />选择工作副本</h3>
-            <div className="pw-form-grid"><SelectField label="原项目" value={project} isDisabled={busy} options={[{ id: '', label: '选择已有项目' }, ...rows(state.projects).map(row => ({ id: row.id, label: row.name }))]} onChange={value => { if (!busy) { setProject(value); setCheckout(''); setSource(null); setPrepareAttempted(false); } }} />
+            <div className="pw-form-grid"><SelectField label="原项目" value={project} isDisabled={busy} options={[{ id: '', label: '选择已有项目' }, ...projectRows.map(row => ({ id: row.id, label: row.name })), ...(project && !projectRows.some(row => row.id === project) ? [{ id: project, label: '原项目暂未在当前清单中' }] : [])]} onChange={value => { if (!busy) { setProject(value); setCheckout(''); setSource(null); setPrepareAttempted(false); } }} />
               <SelectField label="私人工作副本" value={checkout} isDisabled={busy || !project} options={[{ id: '', label: '选择或准备副本' }, ...checkouts.map(row => ({ id: row.id, label: (row.name || '工作副本') + ' · ' + new Date(row.createdAt || 0).toLocaleString() }))]} onChange={value => { if (!busy) { setCheckout(value); setSource(null); } }} /></div>
             <div className="pw-form-actions"><Button variant="secondary" disabled={!selected || busy} onClick={() => { void invoke('local.describeCheckout', { projectId: project, checkoutId: checkout }, setSource).catch(() => {}); }}>{ready ? '重新核对副本版本' : '读取这个副本的实际版本'}</Button><Button variant="ghost" disabled={!project || busy || prepareAttempted} onClick={() => { if (activePanel.current !== 'setup' || entered.current || prepareAttempted) return; setPrepareAttempted(true); void invoke('local.prepareCheckout', { projectId: project }, result => { setCheckout(result.id); setSource(null); }).catch(() => {}); }}>准备新的私人副本</Button></div>
             {prepareAttempted && <p className="pw-local-inline-notice" role="status">本次已请求准备副本。请核对真实副本列表；回执不明时不重复准备。</p>}
@@ -162,6 +165,7 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
             <Accordion className="pw-local-disclosures"><AccordionItem id="environment" title="环境变量" description={env.trim() === '{}' ? '可选，仅限普通配置值' : '已编辑普通环境变量，启动前会核对'}><TextAreaField label="普通环境变量（JSON 对象）" value={env} onChange={setEnv} isDisabled={busy} hint="例如 APP_LABEL；不能设置密钥或覆盖宿主运行环境。" /></AccordionItem></Accordion>
             <p className="pw-local-safety">终端操作可能修改私人副本，输入和输出会保留在原任务记录中。不支持密码等秘密输入。</p>
           </div>
+          </>}
         </section>
         <section className="pw-local-panel" data-local-panel="session" hidden={panel !== 'session'}>
           <Button variant="ghost" size="small" className="pw-local-back" leadingIcon={IconArrowLeft} disabled={busy} onClick={() => changePanel('setup')}>返回工作副本</Button>
@@ -194,6 +198,7 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
       </div>
     </div>
     <Accordion className="pw-local-runtime pw-local-disclosures"><AccordionItem id="runtime" title="运行环境与历史回执" description={runtimes.length ? runtimes.map(row => row.name || row.id || row.runtimeId).join(' · ') : '本机、Termux 与已读取的原运行记录'}>
+      {!legacyNeedsAttention && legacySummary}
       <div className="pw-form-actions"><Button variant="secondary" disabled={busy || !supported('local.inspectRuntime')} onClick={() => { void invoke('local.inspectRuntime').catch(() => {}); }}>核对运行时</Button><Button variant="secondary" disabled={busy || !supported('local.readReceipts')} onClick={() => { void invoke('local.readReceipts').catch(() => {}); }}>读取原运行回执</Button><Button variant="ghost" disabled={busy || !supported('local.termuxProbe')} onClick={() => { void invoke('local.termuxProbe').catch(() => {}); }}>核对 Termux</Button></div>
       {runtimes.map(row => <div className="pw-local-runtime-row" key={row.id || row.runtimeId}><h3>{row.name || row.id || row.runtimeId}</h3><p>{row.message || row.status || (row.available ? '当前可用' : '尚未确认可用')}</p></div>)}
       {Array.isArray(knownResults['local.probe']?.tools) && <p className="pw-field-hint">已发现工具：{knownResults['local.probe'].tools.map((tool: any) => typeof tool === 'string' ? tool : tool.name || tool.id).join('、') || '尚无'}</p>}

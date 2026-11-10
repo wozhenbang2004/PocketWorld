@@ -109,10 +109,10 @@
 }
 .pw-connection-attention p { margin: 6px 0 10px; }
 .pw-connection-attention h3 { font-size: 14px; line-height: 22px; }
-.pw-connection-empty { padding: 24px 0; border-radius: 0; background: transparent; }
-.pw-connection-empty > svg { color: var(--pw-copy, #626262); margin-bottom: 14px; }
-.pw-connection-empty h3 { font-size: 17px; line-height: 25px; }
-.pw-connection-empty p { margin: 8px 0 20px; color: var(--pw-copy, #626262); font-size: 13px; line-height: 22px; max-width: 48ch; }
+.pw-connection-empty { padding: 24px; border-radius: 20px; background: var(--pw-surface); }
+.pw-connection-empty > svg { padding: 10px; box-sizing: content-box; border-radius: 14px; color: var(--pw-on-accent-soft); background: var(--pw-accent-soft); margin-bottom: 16px; }
+.pw-connection-empty h3 { margin: 0; font-size: 20px; line-height: 28px; font-weight: 600; }
+.pw-connection-empty p { margin: 8px 0 20px; color: var(--pw-copy, #626262); font-size: 16px; line-height: 24px; max-width: 48ch; }
 .pw-connection-work-title { margin: 0 0 var(--pw-gap-content,16px); outline: none; }
 .pw-connection-work-title h3 { font-size: 17px; line-height: 25px; }
 .pw-remote-work, .pw-ssh-work { min-width: 0; outline: none; overflow-anchor: none; }

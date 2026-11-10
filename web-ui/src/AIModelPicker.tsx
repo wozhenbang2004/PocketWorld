@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { IconArrowLeft, IconCheck, IconChevronRight, IconInfo, IconRefresh, IconStar } from './icons';
+import { IconAdd, IconArrowLeft, IconCheck, IconChevronRight, IconInfo, IconModel, IconRefresh, IconStar } from './icons';
 import { Accordion, AccordionItem, Button, IconButton, SearchField, SelectField, TextField } from './forms-library';
 import { Tabs, Tab, TabList, TabPanel } from './shell-library';
 import { ShimmerText } from './library';
@@ -17,14 +17,14 @@ export type AIModelPickerPresentation = { query: string; filter: ApiModelFilter 
 export type AIModelPickerProps = {
   state: Data; can: (action: string) => boolean; act: Run; scope?: 'conversation' | 'default';
   onSelectTarget?: (target: AIModelTarget) => Promise<any>; onSelected?: () => void;
-  onSelectionPending: (pending: boolean) => void; onManage?: () => void;
+  onSelectionPending: (pending: boolean) => void; onManage?: () => void; onAddService?: () => void;
   presentationState?: AIModelPickerPresentation; onPresentationChange?: (value: AIModelPickerPresentation) => void;
 };
 const busy = (state: Data) => !!(state.modelSelectionBusy || state.chatSubmitting || state.phoneSubmitting || state.modelSaving || state.modelTesting);
 const accountOptions = (value: Data): AccountModelOptions => ({ reasoningEffort: String(value.options?.reasoningEffort || ''), outputReserve: String(value.options?.outputReserve ?? 4096), imageTokenReserve: String(value.options?.imageTokenReserve ?? 0) });
 
 /** One catalog. A row selects through its original native review; details are optional. */
-export function AIModelPicker({ state, can, act, scope = 'conversation', onSelectTarget, onSelected, onSelectionPending, onManage, presentationState, onPresentationChange }: AIModelPickerProps) {
+export function AIModelPicker({ state, can, act, scope = 'conversation', onSelectTarget, onSelected, onSelectionPending, onManage, onAddService, presentationState, onPresentationChange }: AIModelPickerProps) {
   const [api, setApi] = useState<Data | null>(null), [account, setAccount] = useState<Data | null>(null);
   const [groups, setGroups] = useState<Data[]>([]), [defaultGroup, setDefaultGroup] = useState<Data | null>(null), [groupReview, setGroupReview] = useState<Data | null>(null);
   const [review, setReview] = useState<ModelReview | null>(null);
@@ -239,21 +239,25 @@ export function AIModelPicker({ state, can, act, scope = 'conversation', onSelec
   try { if (review?.kind !== 'api') throw new Error(); selection(review, options, true); favoritable = true; } catch {}
   const allApiRows = apiModelRows(api, currentRevision);
   const catalogSize = allApiRows.length + groups.length + (catalog?.models.length || 0) + accounts.filter(row => row.id !== catalog?.accountId).length;
+  const hasCriteria = query.length > 0 || filter !== 'all';
+  const hasCollectionTools = catalogSize > 0 || hasCriteria;
   const filterTabs: { id: ApiModelFilter; label: string }[] = [
     { id: 'all', label: '全部' },
     ...(scope === 'default' || filter === 'favorites' || allApiRows.some(row => row.favorite) ? [{ id: 'favorites' as const, label: '收藏' }] : []),
     ...(scope === 'default' || filter === 'recent' || apiModelRows(api, currentRevision, 'recent').length > 0 ? [{ id: 'recent' as const, label: '最近使用' }] : []),
   ];
-  const showSearch = expandedTools.search || scope === 'default' || catalogSize > 6 || query.length > 0;
-  const showFilters = expandedTools.filters || scope === 'default' || filter !== 'all' || catalogSize > 6 && filterTabs.length > 1;
+  const showSearch = expandedTools.search || scope === 'default' && hasCollectionTools || catalogSize > 6 || query.length > 0;
+  const showFilters = expandedTools.filters || scope === 'default' && hasCollectionTools || filter !== 'all' || catalogSize > 6 && filterTabs.length > 1;
   useEffect(() => {
     // Once disclosed, keep a focused search or tab in place for this opening.
     if (showSearch && !expandedTools.search || showFilters && !expandedTools.filters)
       setExpandedTools({ search: showSearch, filters: showFilters });
   }, [showSearch, showFilters, expandedTools.search, expandedTools.filters]);
   const emptyAccountCatalog = !!catalog && catalog.models.length === 0;
+  const emptyCatalog = started.current && !loading && !needsRead && !error && !sourceErrors.length && catalogSize === 0 && !hasCriteria && !emptyAccountCatalog;
+  const addService = onAddService || onManage;
   const showRecovery = scope === 'default' || needsRead || !!error || sourceErrors.length > 0 || emptyAccountCatalog;
-  const showManage = !!onManage && (catalogSize > 0 || !!q || filter !== 'all' || showRecovery);
+  const showManage = !!onManage && !emptyCatalog && (catalogSize > 0 || hasCriteria || showRecovery);
   const catalogContent = <>
       {loading && <p className="pw-ai-loading" aria-busy="true"><ShimmerText>正在读取模型</ShimmerText></p>}
       {!needsRead && <div className="pw-ai-model-rows">
@@ -261,7 +265,13 @@ export function AIModelPicker({ state, can, act, scope = 'conversation', onSelec
         {apiRows.map(row => { const candidate: PickerModelIdentity = { kind: 'api', connectionId: row.connectionId, connectionRevision: row.connectionRevision, modelId: row.modelId }, selected = isSelected(candidate, !defaultGroup?.groupId && row.selected === true), sourceChanged = modelPickerSourceChanged(state, scope, candidate), source = row.connectionName || row.connectionId; return <div className="pw-ai-model-option" data-selected={selected || undefined} key={apiModelKey(row)}><Button variant="ghost" className="pw-ai-model-row" aria-label={`选择模型：${row.modelId}，${source}`} aria-pressed={selected} disabled={locked || !row.available || scope === 'conversation' && !onSelectTarget} onClick={() => { if (!selected || inherited || sourceChanged) void choose('api', apiModelKey(row)); }}><span className="pw-ai-row-copy"><strong>{row.modelId}</strong><small>{source}{row.available ? '' : ` · ${apiModelUnavailable(row)}`}</small>{sourceChanged && <small>来源信息已更新，可重新核对</small>}</span><span className="pw-ai-row-end">{row.favorite && <IconStar size={15} aria-label="已收藏" />}{selected && <IconCheck size={18} aria-label={selectionLabel} />}</span></Button><IconButton icon={IconInfo} aria-label={`查看模型详情：${row.modelId}，${source}`} disabled={locked} onClick={() => void inspect('api', apiModelKey(row))} /></div>; })}
         {accountRows.map(row => { const selected = isSelected({ kind: 'account', nativeRef: row.nativeRef }, !defaultGroup?.groupId && state.modelRoute === 'account' && selectedAccount?.accountId === catalog!.accountId && selectedAccount?.accountVersion === catalog!.accountVersion && selectedAccount?.modelId === row.id), name = row.displayName || row.id, source = `ChatGPT · ${catalog!.accountLabel}`; return <div className="pw-ai-model-option" data-selected={selected || undefined} key={`account:${catalog!.accountId}:${row.id}`}><Button variant="ghost" className="pw-ai-model-row" aria-label={`选择模型：${name}，${source}`} aria-pressed={selected} disabled={locked || scope === 'conversation' && !onSelectTarget} onClick={() => { if (!selected || inherited) void choose('account', row.id); }}><span className="pw-ai-row-copy"><strong>{name}</strong><small>{source}</small></span>{selected && <IconCheck size={18} aria-label={selectionLabel} />}</Button><IconButton icon={IconInfo} aria-label={`查看模型详情：${name}，${source}`} disabled={locked} onClick={() => void inspect('account', row.id)} /></div>; })}
         {accountSources.map(row => <Button key={`account-source:${row.id}`} variant="ghost" className="pw-ai-model-row" aria-label={`读取 ${row.name} 的可用模型${row.reason ? `，${row.reason}` : ''}`} disabled={locked || row.disabled} onClick={() => void readAccount(row.id)}><span className="pw-ai-row-copy"><strong>{row.name}</strong>{(scope === 'default' || row.reason) && <small>{row.reason || 'ChatGPT · 读取可用模型'}</small>}</span><IconChevronRight size={17} aria-hidden /></Button>)}
-        {!loading && !sourceErrors.length && !apiRows.length && !accountRows.length && !accountSources.length && !visibleGroups.length && <div className="pw-ai-empty"><h3>{q ? '没有匹配的模型' : filter === 'favorites' ? '还没有收藏模型' : filter === 'recent' ? '还没有成功使用记录' : emptyAccountCatalog ? '此账号暂无可用模型' : '添加你的第一个 AI 服务'}</h3><p>{q ? '试试模型名称或服务名称。' : filter === 'all' ? emptyAccountCatalog ? '重新读取目录，或在管理模型中查看账号状态。' : '连接 API 或登录账号后，模型会显示在这里。' : filter === 'favorites' ? '在 API 模型详情中收藏。' : '成功调用后会记录最近使用。'}</p>{filter === 'all' && !q && !emptyAccountCatalog && onManage && <Button onClick={onManage}>添加服务</Button>}</div>}
+        {started.current && !loading && !error && !sourceErrors.length && !apiRows.length && !accountRows.length && !accountSources.length && !visibleGroups.length && <div className="pw-ai-empty">
+          {!hasCriteria && <IconModel size={26} aria-hidden />}
+          <h3>{q ? '没有匹配的模型' : filter === 'favorites' ? '还没有收藏模型' : filter === 'recent' ? '还没有成功使用记录' : emptyAccountCatalog ? '此账号暂无可用模型' : '连接你的模型服务'}</h3>
+          <p>{q ? '试试模型名称或服务名称。' : filter === 'all' ? emptyAccountCatalog ? '重新读取目录，或在管理模型中查看账号状态。' : '添加 API 服务或登录 ChatGPT 账号，再选择要使用的模型。' : filter === 'favorites' ? '在 API 模型详情中收藏后，会显示在这里。' : '成功调用后会记录最近使用。'}</p>
+          {emptyCatalog && addService && <Button leadingIcon={IconAdd} disabled={locked || !!onAddService && !can('models.connections.add') && !can('accounts.beginLogin')} onClick={addService}>添加服务</Button>}
+          {hasCriteria && <Button variant="secondary" disabled={locked} onClick={() => present({ query: '', filter: 'all' })}>清除筛选</Button>}
+        </div>}
       </div>}
       {!!sourceErrors.length && <div role="status" className="pw-ai-feedback">{sourceErrors.map(message => <p key={message}>{message}</p>)}</div>}
   </>;

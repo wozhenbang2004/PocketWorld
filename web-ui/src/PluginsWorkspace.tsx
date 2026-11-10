@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { IconHistory, IconRefresh } from './icons';
+import { IconAdd, IconHistory, IconPlugin, IconPluginCatalog, IconRefresh, IconTerminal } from './icons';
 import { Accordion, AccordionItem, Button, CheckboxField, IconButton, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { Tab, TabList, TabPanel, Tabs } from './shell-library';
 import { FunctionalPacksWorkspace } from './FunctionalPacksWorkspace';
@@ -65,7 +65,10 @@ export function PluginsWorkspace({ mode, state, run, supported, registerTransien
   const selected = installed.find(row => row.id === selectedId), source = sources.find(row => row.id === sourceId);
   const unresolved = catalogUnknown(snapshot), locked = busy || needsQuery || unresolved || !foreground;
   const sourceStale = !!sourceOriginal && sourceOriginal.revision !== snapshot?.config?.revision;
-  const candidates = snapshot?.catalog?.source?.id === sourceId && (snapshot?.catalog?.kind === 'executable_js') === (catalogKind === 'js') ? pluginRows(snapshot?.catalog?.entries) : [];
+  const installedRead = Array.isArray(snapshot?.installed?.plugins), extensionsRead = Array.isArray(snapshot?.jsInstalled?.plugins), sourcesRead = Array.isArray(snapshot?.config?.sources);
+  const installedFiltering = installedQuery !== '' || installedFilter !== 'all';
+  const catalogMatchesSelection = snapshot?.catalog?.source?.id === sourceId && (snapshot?.catalog?.kind === 'executable_js') === (catalogKind === 'js');
+  const candidates = catalogMatchesSelection ? pluginRows(snapshot?.catalog?.entries) : [];
   const matches = (row: Data, query: string) => [row.id, row.name, row.manifest?.name, ...pluginRows(row.manifest?.tools || row.capabilities).map(tool => `${tool.name} ${tool.description || ''}`)].join(' ').toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
   const visibleInstalled = installed.filter(row => matches(row, installedQuery) && (installedFilter === 'all' || (installedFilter === 'enabled' ? row.enabled === true : row.enabled !== true)));
   const installedGroups = [{ id: 'disabled', label: '已停用', enabled: false }, { id: 'enabled', label: '已启用', enabled: true }].map(group => ({ ...group, records: visibleInstalled.filter(row => (row.enabled === true) === group.enabled) })).filter(group => group.records.length);
@@ -208,11 +211,24 @@ export function PluginsWorkspace({ mode, state, run, supported, registerTransien
     });
   };
 
-  const installedContent = <div className="pw-eco-record-list" aria-label="已安装声明插件">
-    <SearchField aria-label="查找已安装插件" placeholder="名称或工具" value={installedQuery} onChange={setInstalledQuery} />
-    <div className="pw-eco-filters" role="group" aria-label="插件启用状态">{[{ id: 'all', label: '全部' }, { id: 'enabled', label: '已启用' }, { id: 'disabled', label: '已停用' }].map(item => <Button key={item.id} variant="ghost" aria-pressed={installedFilter === item.id} onClick={() => setInstalledFilter(item.id)}>{item.label}</Button>)}</div>
-    {installed.length > 0 && !visibleInstalled.length && <p className="pw-eco-directory-empty" role="status">没有匹配的安装。可以换个关键词或状态。</p>}
-    {!installed.length && <p className="pw-secondary-empty">尚未安装声明插件。可添加声明，或从「我的插件目录」选择版本。</p>}
+  const collectionReady = !busy && !snapshot?.busy && !needsQuery && !unresolved;
+  const readSources = () => { discardReview(); void invoke('pluginCatalog.read', {}, value => { receive(value); }); };
+  const openJsCatalog = () => { if (mode === 'pluginCatalog') { discardReview(); setCatalogKind('js'); setTab('catalog'); } else onNavigate?.('pluginCatalog'); };
+  const navigateFromPacks = (domain: 'plugins' | 'skills') => { if (domain === 'plugins' && mode === 'plugins') { setTab('declaration'); queryInstalled(); } else onNavigate?.(domain); };
+  const workspaceTitle = tab === 'packs' ? '完整功能包' : tab === 'js' ? 'JS 扩展' : mode === 'plugins' ? '声明插件' : '我的插件目录';
+
+  const installedContent = <div className="pw-eco-record-list pw-plugin-collection" aria-label="已安装声明插件">
+    {(installed.length > 0 || installedFiltering) && <div className="pw-plugin-collection-tools">
+      <SearchField aria-label="查找已安装插件" placeholder="名称或工具" value={installedQuery} onChange={setInstalledQuery} />
+      <div className="pw-eco-filters" role="group" aria-label="插件启用状态">{[{ id: 'all', label: '全部' }, { id: 'enabled', label: '已启用' }, { id: 'disabled', label: '已停用' }].map(item => <Button key={item.id} variant="ghost" aria-pressed={installedFilter === item.id} onClick={() => setInstalledFilter(item.id)}>{item.label}</Button>)}</div>
+    </div>}
+    {installedRead && installedFiltering && !visibleInstalled.length && <div className="pw-plugin-filter-empty"><p role="status">没有符合当前条件的声明插件。</p><Button variant="secondary" onClick={() => { setInstalledQuery(''); setInstalledFilter('all'); }}>清除搜索与筛选</Button></div>}
+    {collectionReady && installedRead && !installed.length && !installedFiltering && <section className="pw-plugin-empty">
+      <span className="pw-plugin-object-icon"><IconPlugin size={24} /></span>
+      <div><h3>添加你的第一个插件</h3><p>通过插件连接工具。先添加声明，核对内容后再安装与授权。</p></div>
+      <Button leadingIcon={IconAdd} disabled={locked || !snapshot} onClick={() => { setEditor('manifest'); setError(''); }}>添加插件声明</Button>
+    </section>}
+    {collectionReady && !installedRead && <p className="pw-field-hint">尚未读到声明插件清单，请重新读取安装状态。</p>}
     {installedGroups.map(group => <section key={group.id} className="pw-eco-directory-group" aria-label={group.label}><header className="pw-eco-group-heading"><h3>{group.label}</h3><span>{group.records.length}</span></header>{group.records.map(row => <article className="pw-source-record pw-eco-record" key={row.installationId}>
       <header><h3>{row.manifest?.name || row.id}</h3><span>{row.enabled ? '已启用' : '已停用'} · {row.manifest?.version}</span></header>
       <p className="pw-eco-record-meta">{pluginRows(row.manifest?.tools).length} 个工具 · {strings(row.grants).length} 项授权</p>
@@ -228,35 +244,51 @@ export function PluginsWorkspace({ mode, state, run, supported, registerTransien
     </article>)}</section>)}
     {history && selected && history.id === selected.id && <section className="pw-selected-object"><h3>{selected.manifest?.name || selected.id} · 版本历史</h3><p className="pw-field-hint">保留最近三次被替换的声明。恢复创建新安装，保持停用，不带回旧凭据和授权。</p>{!pluginRows(history.versions).length && <p className="pw-secondary-empty">没有保留的历史版本。</p>}{pluginRows(history.versions).map(row => <article className="pw-source-record pw-eco-record" key={row.installationId}><header><h3>{row.manifest?.version}</h3><span>历史安装</span></header><p>{row.installationId}</p><div className="pw-form-actions"><Button variant="secondary" disabled={locked || history.currentInstallationId !== selected.installationId || history.currentStateRevision !== selected.stateRevision} onClick={() => restorePlugin(selected, row)}>核对恢复差异</Button></div></article>)}</section>}
   </div>;
-  const jsContent = <>
-    <div className="pw-plugin-runtime pw-eco-status-strip"><div><h3>JS 运行环境</h3><p className="pw-field-hint">{runtime.message || '先核对本机 WebView 与隔离能力。准备环境不会执行插件源码。'}</p></div><div className="pw-form-actions"><Button variant="secondary" disabled={busy || runtime.status === 'preparing'} onClick={() => { void invoke('pluginCatalog.prepareRuntime', {}, value => setRuntime(value)); }}>{runtime.prepared ? '重新核对环境' : runtime.status === 'preparing' ? '正在准备' : '准备运行环境'}</Button>{runtime.status === 'preparing' && <Button variant="ghost" disabled={busy} onClick={() => { void invoke('pluginCatalog.runtime', {}, value => setRuntime(value)); }}>查询准备结果</Button>}</div></div>
-    <SearchField aria-label="查找已安装扩展" placeholder="扩展名称或标识" value={jsQuery} onChange={setJsQuery} />
-    {extensions.length > 0 && !jsGroups.length && <p className="pw-eco-directory-empty" role="status">没有匹配的扩展。</p>}
-    {!extensions.length && <p className="pw-secondary-empty">尚未安装 JS 扩展。先在目录中阅读完整源码，再选择安装。</p>}
+  const jsContent = <div className="pw-plugin-collection">
+    {(extensions.length > 0 || jsQuery !== '') && <SearchField aria-label="查找已安装扩展" placeholder="扩展名称或标识" value={jsQuery} onChange={setJsQuery} />}
+    {extensionsRead && jsQuery !== '' && !jsGroups.length && <div className="pw-plugin-filter-empty"><p role="status">没有符合当前搜索的 JS 扩展。</p><Button variant="secondary" onClick={() => setJsQuery('')}>清除搜索</Button></div>}
+    {collectionReady && extensionsRead && !extensions.length && jsQuery === '' && <section className="pw-plugin-empty">
+      <span className="pw-plugin-object-icon"><IconTerminal size={24} /></span>
+      <div><h3>用扩展添加更多能力</h3><p>从插件目录选择扩展，阅读完整源码后再安装。批准与启用分别由你决定。</p></div>
+      {(mode === 'pluginCatalog' || onNavigate) && <Button leadingIcon={IconPluginCatalog} disabled={busy} onClick={openJsCatalog}>打开插件目录</Button>}
+    </section>}
+    {collectionReady && !extensionsRead && <p className="pw-field-hint">尚未读到 JS 扩展清单，请重新读取安装状态。</p>}
     {jsGroups.map(group => <section key={group.id} className="pw-eco-directory-group" aria-label={group.label}><header className="pw-eco-group-heading"><h3>{group.label}</h3><span>{group.records.length}</span></header>{group.records.map(row => <article className="pw-source-record pw-eco-record" key={row.installationId}><header><h3>{row.name || row.id}</h3><span>{row.enabled ? '已启用' : row.approved ? '已批准 · 未启用' : '未批准'} · {row.version}</span></header><p>{row.id}</p><div className="pw-form-actions"><Button variant="secondary" disabled={locked} onClick={() => readJs(row)}>阅读源码与权限</Button><Button variant="ghost" disabled={busy || unresolved} onClick={() => readJs(row, true)}>源码历史</Button></div>
       {jsHistory && jsHistory.id === row.id && <div className="pw-selected-object"><h4>保留的源码版本</h4><p className="pw-field-hint">只恢复可核验的原包，不恢复旧批准、启用状态或任务许可。</p>{!pluginRows(jsHistory.versions).length && <p className="pw-secondary-empty">没有保留的源码版本。</p>}{pluginRows(jsHistory.versions).map(version => <article className="pw-source-record" key={version.installationId}><header><h3>{version.version}</h3><span>{version.restorable ? '原包可核验' : '无法恢复'}</span></header><p>{version.message}</p><Facts rows={[["原安装", version.installationId], ["源码摘要", version.sourceSha256]]} /><div className="pw-form-actions"><Button variant="secondary" disabled={locked || version.restorable !== true} onClick={() => restoreJs(row, version)}>阅读并核对恢复</Button></div></article>)}</div>}
     </article>)}</section>)}
-  </>;
+    <section className="pw-plugin-runtime pw-eco-status-strip" aria-label="JS 运行环境"><div><h3>本机运行环境</h3><p className="pw-field-hint" role={runtime.status === 'preparing' ? 'status' : undefined}>{runtime.message || '运行前核对 WebView 与隔离能力。准备环境不会执行扩展源码。'}</p></div><div className="pw-form-actions"><Button variant="secondary" disabled={busy || runtime.status === 'preparing'} onClick={() => { void invoke('pluginCatalog.prepareRuntime', {}, value => setRuntime(value)); }}>{runtime.prepared ? '重新核对环境' : runtime.status === 'preparing' ? '正在准备' : '准备运行环境'}</Button>{runtime.status === 'preparing' && <Button variant="ghost" disabled={busy} onClick={() => { void invoke('pluginCatalog.runtime', {}, value => setRuntime(value)); }}>查询准备结果</Button>}</div></section>
+  </div>;
   const catalogContent = <>
-    <section className="pw-eco-catalog-source" aria-label="当前目录来源"><div className="pw-form-grid"><SelectField label="目录来源" options={sources.map(row => ({ id: row.id, label: row.label || row.id, description: row.enabled ? row.catalogUrl : '已停用' }))} value={sourceId} onChange={value => { discardReview(); setSourceId(value); }} isDisabled={busy} /><SelectField label="包类型" value={catalogKind} options={[{ id: 'declaration', label: '声明插件', description: '核对实际工具定义与版本差异' }, { id: 'js', label: 'JS 扩展', description: '下载并阅读完整源码' }]} onChange={value => { discardReview(); setCatalogKind(value); }} isDisabled={busy} /></div>
+    {collectionReady && sourcesRead && !sources.length && <section className="pw-plugin-empty">
+      <span className="pw-plugin-object-icon"><IconPluginCatalog size={24} /></span>
+      <div><h3>添加你的目录来源</h3><p>保存你选择的目录地址，再查看其中的插件与扩展版本。</p></div>
+      <Button leadingIcon={IconAdd} disabled={locked || !snapshot?.config?.revision} onClick={() => openSource()}>添加目录来源</Button>
+    </section>}
+    {collectionReady && !sourcesRead && <p className="pw-field-hint">尚未读到目录来源，请重新读取来源配置。</p>}
+    {sources.length > 0 && <section className="pw-eco-catalog-source" aria-label="当前目录来源"><div className="pw-form-grid"><SelectField label="目录来源" options={sources.map(row => ({ id: row.id, label: row.label || row.id, description: row.enabled ? row.catalogUrl : '已停用' }))} value={sourceId} onChange={value => { discardReview(); setSourceId(value); }} isDisabled={busy} /><SelectField label="包类型" value={catalogKind} options={[{ id: 'declaration', label: '声明插件', description: '核对实际工具定义与版本差异' }, { id: 'js', label: 'JS 扩展', description: '下载并阅读完整源码' }]} onChange={value => { discardReview(); setCatalogKind(value); }} isDisabled={busy} /></div>
     {source && <p className="pw-field-hint pw-plugin-url">{source.catalogUrl}{source.pinnedCatalogSha256 ? ' · 已固定目录摘要' : ''}</p>}
-    {!sources.length && <p className="pw-secondary-empty">添加你选择的目录来源，然后读取其中的明确版本。</p>}
-    <div className="pw-form-actions"><Button disabled={locked || !source?.enabled} onClick={() => { void invoke('pluginCatalog.refresh', { kind: catalogKind, sourceId }, value => { receive(value); }); }}>读取可选版本</Button><Button variant="secondary" disabled={locked || !snapshot?.config?.revision} onClick={() => openSource()}>添加来源</Button>{source && <Button variant="ghost" disabled={locked} onClick={() => openSource(source)}>编辑来源</Button>}<Button variant="ghost" disabled={busy} onClick={() => { discardReview(); void invoke('pluginCatalog.read', {}, value => { receive(value); }); }}>重读来源配置</Button></div>
-    </section><section className="pw-eco-record-list" aria-label="可选版本">{candidates.length > 0 && <p className="pw-field-hint">目录说明来自所选来源。下载后会核对准确包内容；版本由你选择。</p>}
-    {candidates.length > 0 && <SearchField aria-label="查找已读取的插件版本" placeholder="名称、标识或工具" value={catalogQuery} onChange={setCatalogQuery} />}
-    {candidates.length > 0 && !catalogGroups.length && <p className="pw-eco-directory-empty" role="status">当前来源中没有匹配的版本。</p>}
+    {source && !source.enabled && <p className="pw-field-hint">这个来源已停用。编辑来源并启用后可读取版本。</p>}
+    <div className="pw-form-actions"><Button disabled={locked || !source?.enabled} onClick={() => { void invoke('pluginCatalog.refresh', { kind: catalogKind, sourceId }, value => { receive(value); }); }}>读取可选版本</Button>{source && <Button variant="secondary" disabled={locked} onClick={() => openSource(source)}>编辑来源</Button>}<Button variant="ghost" leadingIcon={IconAdd} disabled={locked || !snapshot?.config?.revision} onClick={() => openSource()}>添加来源</Button></div>
+    </section>}<section className="pw-eco-record-list pw-plugin-collection" aria-label="可选版本">{candidates.length > 0 && <p className="pw-field-hint">目录说明来自所选来源。下载后会核对准确包内容；版本由你选择。</p>}
+    {(candidates.length > 0 || catalogQuery !== '') && <SearchField aria-label="查找已读取的插件版本" placeholder="名称、标识或工具" value={catalogQuery} onChange={setCatalogQuery} />}
+    {catalogQuery !== '' && !catalogGroups.length && <div className="pw-plugin-filter-empty"><p role="status">{collectionReady && snapshot?.status === 'ready' && catalogMatchesSelection ? '当前已读取的版本中没有匹配项。' : '请先读取当前来源与包类型的版本，再查看搜索结果。'}</p><Button variant="secondary" onClick={() => setCatalogQuery('')}>清除搜索</Button></div>}
     {catalogGroups.map(group => <section key={group.id} className="pw-eco-directory-group" aria-label={group.label}><header className="pw-eco-group-heading"><h3>{group.label}</h3><span>{group.records.length}</span></header>{group.records.map(entry => <article className="pw-source-record pw-eco-record" key={`${entry.id}:${entry.version}`}><header><h3>{entry.id}</h3><span>{entry.version}</span></header>{entry.currentVersion && <p>目录读取时已安装：{entry.currentVersion}</p>}{catalogKind === 'declaration' && <p>{pluginRows(entry.capabilities).map(tool => `${tool.name} · ${tool.effect === 'read' ? '读取' : '可能修改'}`).join('；')}</p>}{catalogKind === 'declaration' && entry.compatibilityResult?.compatible !== true && <p>此版本与当前设备或支持格式不兼容。</p>}<div className="pw-form-actions"><Button variant="secondary" disabled={locked || catalogKind === 'declaration' && entry.compatibilityResult?.compatible !== true} onClick={() => { void invoke('pluginCatalog.prepare', { kind: catalogKind, sourceId, id: entry.id, version: entry.version }, receiveCatalogReview); }}>{catalogKind === 'js' ? '下载并阅读源码' : '查看安装差异'}</Button></div></article>)}</section>)}
-    {snapshot?.status === 'ready' && snapshot.catalog?.source?.id === sourceId && !candidates.length && <p className="pw-secondary-empty">本次目录没有匹配的可选版本。可切换包类型后重新读取。</p>}</section>
+    {collectionReady && snapshot?.status === 'ready' && catalogMatchesSelection && !candidates.length && catalogQuery === '' && <p className="pw-secondary-empty">本次目录没有可选版本。可切换包类型后重新读取。</p>}</section>
   </>;
 
   return <div className="pw-plugins-workspace pw-ecosystem-depth">
     {error && <p className="pw-field-error" role="alert">{error}</p>}{notice && <div className="pw-request-notice" role="status"><p>{notice}</p>{followup && <div className="pw-form-actions">{followup === 'js' ? <Button variant="secondary" disabled={busy} onClick={() => setTab('js')}>查看已安装源码</Button> : onNavigate && <Button variant="secondary" disabled={busy} onClick={() => onNavigate(followup)}>{followup === 'mcp' ? '打开 MCP 工具' : '前往插件管理'}</Button>}</div>}</div>}
     <section className="pw-settings-section">
-      <div className="pw-section-heading pw-eco-workspace-heading"><div><h2>{mode === 'plugins' ? '已安装插件' : '我的插件目录'}</h2></div>
-      <div className="pw-form-actions"><IconButton icon={IconRefresh} aria-label={needsQuery || unresolved ? '查询当前实际安装' : '刷新安装状态'} title={needsQuery || unresolved ? '查询当前实际安装' : '刷新安装状态'} disabled={busy || !snapshot} onClick={queryInstalled}/>{mode === 'plugins' && tab === 'declaration' && <Button disabled={locked || !snapshot} onClick={() => { setEditor('manifest'); setError(''); }}>添加插件声明</Button>}{onNavigate && <Button variant="ghost" aria-label={mode === 'plugins' ? '打开我的插件目录' : '前往插件管理'} disabled={busy} onClick={() => onNavigate(mode === 'plugins' ? 'pluginCatalog' : 'plugins')}>{mode === 'plugins' ? '插件目录' : '已安装'}</Button>}{!snapshot && <Button variant="ghost" disabled={busy || !foreground} onClick={open}>重新读取</Button>}</div></div>
-      {busy && <p className="pw-field-hint" role="status">正在读取原生结果，请稍候…</p>}
+      <div className="pw-section-heading pw-eco-workspace-heading"><div><h2>{workspaceTitle}</h2></div>
+      <div className="pw-form-actions">
+        {(tab !== 'packs' || needsQuery || unresolved) && <IconButton icon={IconRefresh} aria-label={needsQuery || unresolved ? '查询当前实际安装' : tab === 'catalog' ? '重新读取来源配置' : '刷新安装状态'} title={needsQuery || unresolved ? '查询当前实际安装' : tab === 'catalog' ? '重新读取来源配置' : '刷新安装状态'} disabled={busy || !snapshot} onClick={tab === 'catalog' && !needsQuery && !unresolved ? readSources : queryInstalled} />}
+        {mode === 'plugins' && tab === 'declaration' && (installed.length > 0 || installedFiltering) && <Button leadingIcon={IconAdd} disabled={locked || !snapshot} onClick={() => { setEditor('manifest'); setError(''); }}>添加插件声明</Button>}
+        {onNavigate && tab !== 'packs' && (tab !== 'js' || extensions.length > 0 || jsQuery !== '') && <Button variant="ghost" aria-label={mode === 'plugins' ? '打开我的插件目录' : '前往插件管理'} disabled={busy} onClick={() => onNavigate(mode === 'plugins' ? 'pluginCatalog' : 'plugins')}>{mode === 'plugins' ? '插件目录' : '已安装插件'}</Button>}
+        {!snapshot && <Button variant="secondary" disabled={busy || !foreground} onClick={open}>重新读取</Button>}
+      </div></div>
+      {(busy || snapshot?.busy) && <p className="pw-field-hint" role="status">正在读取插件状态，请稍候…</p>}
       {needsQuery && !unresolved && <p className="pw-field-hint">上次操作已提交或审阅已失效。先读取当前安装，再继续新的操作。</p>}
-      {snapshot && <Tabs selectedKey={tab} onSelectionChange={key => { if (!busy) { discardReview(); setTab(String(key)); } }}><TabList aria-label="插件工作区">{mode === 'plugins' ? <Tab id="declaration">声明插件 · {installed.length}</Tab> : <Tab id="catalog">选择版本</Tab>}<Tab id="js">JS 扩展 · {extensions.length}</Tab><Tab id="packs">完整功能包</Tab></TabList>{mode === 'plugins' ? <TabPanel id="declaration">{installedContent}</TabPanel> : <TabPanel id="catalog">{catalogContent}</TabPanel>}<TabPanel id="js">{jsContent}</TabPanel><TabPanel id="packs">{tab === 'packs' && <FunctionalPacksWorkspace state={state} run={run} supported={supported} registerTransientBack={handler => { functionalPackBack.current = handler; }} onNavigate={onNavigate} />}</TabPanel></Tabs>}
+      {snapshot && <Tabs selectedKey={tab} onSelectionChange={key => { if (!busy) { discardReview(); setTab(String(key)); } }}><TabList aria-label="插件工作区">{mode === 'plugins' ? <Tab id="declaration">声明插件{installed.length > 0 ? ` · ${installed.length}` : ''}</Tab> : <Tab id="catalog">选择版本</Tab>}<Tab id="js">JS 扩展{extensions.length > 0 ? ` · ${extensions.length}` : ''}</Tab><Tab id="packs">完整功能包</Tab></TabList>{mode === 'plugins' ? <TabPanel id="declaration">{installedContent}</TabPanel> : <TabPanel id="catalog">{catalogContent}</TabPanel>}<TabPanel id="js">{jsContent}</TabPanel><TabPanel id="packs">{tab === 'packs' && <FunctionalPacksWorkspace state={state} run={run} supported={supported} registerTransientBack={handler => { functionalPackBack.current = handler; }} onNavigate={onNavigate ? navigateFromPacks : undefined} />}</TabPanel></Tabs>}
     </section>
     <SettingsDialog isOpen={!!review || !!editor} title={review ? operationTitle(review) : editor === 'source' ? editingSource ? '编辑目录来源' : '添加目录来源' : '添加插件声明'} onClose={() => { if (busy) return; if (review) discardReview(); else { setEditor(null); setToken(''); } }}>
       <div className="pw-plugins-workspace pw-plugin-dialog-body pw-ecosystem-depth pw-eco-review-body">

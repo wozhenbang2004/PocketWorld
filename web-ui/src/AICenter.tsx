@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { IconAccount, IconAdd, IconChevronRight, IconControls, IconKey, IconRefresh, IconServer } from './icons';
+import { IconAccount, IconAdd, IconChevronRight, IconControls, IconKey, IconLink, IconModel, IconRefresh, IconServer } from './icons';
 import { Accordion, AccordionItem, Button, SearchField, SettingsDialog, StretchSwitch, TextField } from './forms-library';
 import { Tabs, Tab, TabList, TabPanel } from './shell-library';
 import { AIModelPicker, type AIModelPickerPresentation } from './AIModelPicker';
@@ -186,17 +186,22 @@ export function AICenter({ state, data, supported, run, registerTransientBack, i
         {accountsError && <div className="pw-ai-feedback" role="status"><p>账号状态暂未更新。{accounts.length ? '保留上次读取的账号。' : '当前还不能确认已保存的账号。'}</p><Button variant="ghost" disabled={accountsLoading || busy} onClick={() => void loadAccounts()}>重新读取账号</Button></div>}
         <section className="pw-ai-utilities" aria-label="更多设置"><h3>更多设置</h3><div className="pw-ai-service-group-body"><Button variant="ghost" leadingIcon={IconServer} trailingIcon={IconChevronRight} className="pw-ai-utility-row pw-ai-proxy-link" disabled={busy} onClick={() => open({ kind: 'proxy' })}>本机 API</Button><Button variant="ghost" leadingIcon={IconControls} trailingIcon={IconChevronRight} className="pw-ai-utility-row" onClick={() => open({ kind: 'tools' })}>用量与诊断</Button></div></section>
       </>}
-      {tab === 'models' && <AIModelPicker state={state} can={supported} act={run} scope="default" presentationState={modelPresentation} onPresentationChange={setModelPresentation} onSelected={() => { setNotice('默认模型已保存，新对话将使用这项选择。'); setTab('services'); }} onSelectionPending={modelSelectionPending} />}
+      {tab === 'models' && <AIModelPicker state={state} can={supported} act={run} scope="default" presentationState={modelPresentation} onPresentationChange={setModelPresentation} onManage={() => changeTab('services')} onAddService={() => open({ kind: 'add' })} onSelected={() => { setNotice('默认模型已保存，新对话将使用这项选择。'); setTab('services'); }} onSelectionPending={modelSelectionPending} />}
       {tab === 'routing' && <AIModelGroups state={state} data={live} supported={supported} run={run} registerTransientBack={registerChildBack} />}
       </TabPanel>
     </Tabs> : <>
       <header className="pw-ai-detail-heading"><h2 tabIndex={view.kind === 'proxy' ? -1 : undefined} data-ai-proxy-heading={view.kind === 'proxy' ? '' : undefined}>{view.kind === 'proxy' ? '本机 API' : view.kind === 'add' ? '添加服务' : view.kind === 'openai' ? '连接 OpenAI' : view.kind === 'account' ? accountName || 'ChatGPT 账号' : view.kind === 'tools' ? '用量与诊断' : view.kind === 'edit' ? connection?.name || view.preset?.name || '服务配置' : connection?.name || '服务详情'}</h2></header>
       {view.kind === 'add' && <div className="pw-ai-brand-directory">
-        <ServiceOption title="OpenAI" detail="ChatGPT 账号或 API 密钥" onClick={() => open({ kind: 'openai' })} />
-        {presets.slice(1).map(preset => <ServiceOption key={preset.provider} title={preset.name.replace(' API', '')} detail={preset.provider === 'bedrock_anthropic' ? '云平台 · STS 临时凭据' : preset.provider === 'openai_chat' ? '第三方或本地网关 · 兼容 API' : preset.provider === 'anthropic' ? 'Claude API · 使用 API 密钥' : '官方 API · 使用 API 密钥'} onClick={() => open({ kind: 'edit', preset })} />)}
+        <section className="pw-ai-service-group" aria-label="账号与官方 API"><h3>账号与官方 API</h3><div className="pw-ai-service-group-body">
+          <ServiceOption title="OpenAI" detail="ChatGPT 账号或 API 密钥" icon={IconModel} onClick={() => open({ kind: 'openai' })} />
+          {presets.slice(1, 3).map(preset => <ServiceOption key={preset.provider} title={preset.name.replace(' API', '')} detail={preset.provider === 'anthropic' ? 'Claude API · 使用 API 密钥' : '官方 API · 使用 API 密钥'} onClick={() => open({ kind: 'edit', preset })} />)}
+        </div></section>
+        <section className="pw-ai-service-group" aria-label="网关与云平台"><h3>网关与云平台</h3><div className="pw-ai-service-group-body">
+          {presets.slice(3).map(preset => <ServiceOption key={preset.provider} title={preset.name} detail={preset.provider === 'bedrock_anthropic' ? '云平台 · STS 临时凭据' : '第三方或本地网关 · 兼容 API'} icon={preset.provider === 'bedrock_anthropic' ? IconServer : IconLink} onClick={() => open({ kind: 'edit', preset })} />)}
+        </div></section>
         <p className="pw-ai-muted">账号登录当前支持 ChatGPT。Claude 订阅尚未开放给本应用，Claude API 可通过密钥接入。</p>
       </div>}
-      {view.kind === 'openai' && <div className="pw-ai-brand-directory"><ServiceOption title="登录 ChatGPT" detail="使用账号可用的套餐模型" icon="account" onClick={() => open({ kind: 'account', adding: true })} /><ServiceOption title="添加 API 密钥" detail="连接自己的 OpenAI API 服务" onClick={() => open({ kind: 'edit', preset: presets[0] })} /></div>}
+      {view.kind === 'openai' && <div className="pw-ai-brand-directory"><div className="pw-ai-service-group-body"><ServiceOption title="登录 ChatGPT" detail="使用账号可用的套餐模型" icon={IconAccount} onClick={() => open({ kind: 'account', adding: true })} /><ServiceOption title="添加 API 密钥" detail="连接自己的 OpenAI API 服务" onClick={() => open({ kind: 'edit', preset: presets[0] })} /></div></div>}
       {view.kind === 'edit' && (view.id && !connection ? <p role="alert">这项服务已变化，请返回服务列表重新核对。</p> : renderEditor(connection, view.preset, back, saved, registerChildBack))}
       {view.kind === 'account' && renderAccounts(view.id, view.adding === true, registerChildBack)}
       {view.kind === 'tools' && renderTools(registerChildBack)}
@@ -232,7 +237,6 @@ export function AICenter({ state, data, supported, run, registerTransientBack, i
     </div>}</SettingsDialog>
   </section>;
 }
-function ServiceOption({ title, detail, icon = 'key', onClick }: { title: string; detail: string; icon?: 'key' | 'account'; onClick: () => void }) {
-  const Icon = icon === 'account' ? IconAccount : IconKey;
+function ServiceOption({ title, detail, icon: Icon = IconKey, onClick }: { title: string; detail: string; icon?: typeof IconKey; onClick: () => void }) {
   return <Button variant="ghost" className="pw-ai-service-row" onClick={onClick}><Icon size={20} aria-hidden /><span className="pw-ai-row-copy"><strong>{title}</strong><small>{detail}</small></span><IconChevronRight size={18} aria-hidden /></Button>;
 }
