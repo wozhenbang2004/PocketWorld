@@ -16,10 +16,11 @@ final class PhoneOwnerControls {
     private boolean ownsControl() {return original==app.control(taskId);}
     private boolean ownsRun()throws Exception {
         if(!ownsControl()||!original.hasHostRun())return false;
-        JSONObject task=app.tasks.get(taskId,false);
+        // The overlay needs the native run tuple, not the growing audit history.
+        JSONObject task=app.tasks.foregroundNotificationContextSnapshot(taskId);
         return task!=null&&"phone".equals(task.optString("kind"))&&"main_screen".equals(task.optString("executionMode"))
                 &&task.optString("status").matches("preparing|running|pausing|paused|awaiting_user|reconciling")
-                &&original.matchesHostRun(taskId,task.optString("runId"),task.optInt("coordinatorEpoch"));
+                &&original.matchesHostRun(taskId,task.optString("runId"),task.optInt("coordinatorEpoch"))&&ownsControl();
     }
     void toggle() {
         try {
@@ -48,14 +49,12 @@ final class PhoneOwnerControls {
         } catch(Exception unavailable) {original.cancel();app.error("已停止原执行控制，请返回应用核对任务记录");}
     }
     ViewState view(String goal) {
-        synchronized(app) {
-            try {
-                if(!ownsRun())return new ViewState(false,false,false,"原任务已结束或执行身份变化，请返回应用查看记录");
-                if(original.isCancelled())return new ViewState(true,false,false,"正在停止后续操作，已发生的动作不会撤回");
-                if(app.tasks.hasUnresolved(taskId))return new ViewState(true,original.isPaused(),!original.isPaused(),"动作结果待核对，请暂停并返回原任务确认后再继续");
-                return new ViewState(true,original.isPaused(),true,original.isPaused()?"已请求暂停；继续时会重新观察原任务":goal);
-            } catch(Exception unavailable) {return new ViewState(ownsControl(),original.isPaused(),false,"原任务状态暂不可核对，请返回应用");}
-        }
+        try {
+            if(!ownsRun())return new ViewState(false,false,false,"原任务已结束或执行身份变化，请返回应用查看记录");
+            if(original.isCancelled())return new ViewState(true,false,false,"正在停止后续操作，已发生的动作不会撤回");
+            if(app.tasks.hasUnresolved(taskId))return new ViewState(true,original.isPaused(),!original.isPaused(),"动作结果待核对，请暂停并返回原任务确认后再继续");
+            return new ViewState(true,original.isPaused(),true,original.isPaused()?"已请求暂停；继续时会重新观察原任务":goal);
+        } catch(Exception unavailable) {return new ViewState(ownsControl(),original.isPaused(),false,"原任务状态暂不可核对，请返回应用");}
     }
     static final class ViewState {
         final boolean current,paused,canToggle;
@@ -63,3 +62,4 @@ final class PhoneOwnerControls {
         ViewState(boolean current,boolean paused,boolean canToggle,String message){this.current=current;this.paused=paused;this.canToggle=canToggle;this.message=message;}
     }
 }
+
