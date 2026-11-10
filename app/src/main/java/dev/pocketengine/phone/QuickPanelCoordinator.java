@@ -35,6 +35,7 @@ final class QuickPanelCoordinator implements AutoCloseable, QuickPanelSurface.Ac
     private volatile boolean voiceHandoffPreparing;
     private QuickPanelVoiceHandoff.Offer voiceOffer;
     private boolean voiceHandoffAccepted;
+    private final Runnable voiceHandoffStateCheck = this::checkVoiceHandoff;
     private volatile boolean audioWorking;
 
     QuickPanelCoordinator(PhoneAccessibilityService service, OwnerScreenContextHost host,
@@ -310,6 +311,7 @@ final class QuickPanelCoordinator implements AutoCloseable, QuickPanelSurface.Ac
                                 .setAction(QuickPanelVoiceHandoff.ACTION)
                                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
                                 .putExtra(QuickPanelVoiceHandoff.TOKEN_EXTRA,selected.token));
+                        main.postDelayed(voiceHandoffStateCheck, 500L);
                     } catch (RuntimeException unavailable) {
                         selected.close();voiceOffer=null;voiceHandoffPreparing=false;
                         surface.error("前台听写窗口暂不可打开；原说明仍在本机，没有录音或发送。");
@@ -329,6 +331,14 @@ final class QuickPanelCoordinator implements AutoCloseable, QuickPanelSurface.Ac
         });
     }
 
+    private void checkVoiceHandoff() {
+        if (closed || !voiceHandoffPreparing || voiceOffer == null) return;
+        if (voiceOffer.reconcileUnavailable()) {
+            voiceOffer = null; voiceHandoffPreparing = false;
+            surface.error("前台听写交接未完成或已失效；原说明和捕获仍保留，没有自动录音或发送。请核对原任务后重新选择。");
+        } else main.postDelayed(voiceHandoffStateCheck, 500L);
+    }
+
     @Override public void close() {
         final OwnerScreenContext previous;
         synchronized (captureState) {
@@ -341,6 +351,7 @@ final class QuickPanelCoordinator implements AutoCloseable, QuickPanelSurface.Ac
         // cancel the original task or manufacture a second send; its receipt stays in TaskStore.
         if (previous != null) previous.close();
         if (!voiceHandoffAccepted && voiceOffer != null) voiceOffer.close();
+        main.removeCallbacks(voiceHandoffStateCheck);
         worker.shutdown();
         surface.close(); service.quickPanelClosed(this);
     }

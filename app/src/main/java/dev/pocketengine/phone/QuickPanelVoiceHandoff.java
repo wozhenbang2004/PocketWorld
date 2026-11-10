@@ -66,6 +66,17 @@ public final class QuickPanelVoiceHandoff {
             this.original=Objects.requireNonNull(original);this.onClaim=Objects.requireNonNull(onClaim);this.clock=Objects.requireNonNull(clock);offeredAt=clock.getAsLong();
         }
         boolean expired() { long age=clock.getAsLong()-offeredAt;return closed||age<0||age>OFFER_LIFETIME; }
+        /** The launching panel may recover a rejected or never-claimed handoff. It must
+         * not cancel a claim already checking the original task and draft. */
+        boolean reconcileUnavailable() {
+            synchronized (this) {
+                if (closed) return true;
+                if (claimed || !expired()) return false;
+                closed = true;
+            }
+            synchronized (OFFERS) { OFFERS.remove(token,this); }
+            return true;
+        }
         void requireOriginal() throws Exception {
             JSONObject task=original.read(expected.getString("taskId"));
             if (task==null || !expected.getString("taskId").equals(task.optString("id"))
