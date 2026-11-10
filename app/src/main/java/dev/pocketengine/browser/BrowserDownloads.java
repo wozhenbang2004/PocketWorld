@@ -117,12 +117,23 @@ public final class BrowserDownloads {
                 if(sessionWatch!=null)sessionWatch.close();final HttpURLConnection owned=connection;sessionWatch=fence==null?null:fence.watch(owned::disconnect);
                 check(cancellation,fence);synchronized(this){cheapCheck(cancellation,fence);connections.put(id,connection);}int code=connection.getResponseCode();
                 if(code==301||code==302||code==303||code==307||code==308){String location=connection.getHeaderField("Location");connection.disconnect();if(location==null||redirect==5)throw new IllegalStateException("下载重定向无效或次数过多");URI next=valid(uri.resolve(location).toString());if(!sameOrigin(initial,next))throw new SecurityException("下载跳转到另一站点，请在网页中重新确认下载；未转发登录凭据");uri=next;continue;}
-                if(code<200||code>=300)throw new IllegalStateException("下载服务返回HTTP "+code);
-                if(connection.getContentLengthLong()>AttachmentBook.MAX_FILE_BYTES)throw new IllegalArgumentException("此文件超过20MiB附件上限");
+                if(code!=HttpURLConnection.HTTP_OK||connection.getHeaderField("Content-Range")!=null)throw new IllegalStateException("下载服务未返回完整文件（HTTP "+code+"），未保存部分内容");
+                final long expectedBytes=connection.getContentLengthLong();
+                if(expectedBytes>AttachmentBook.MAX_FILE_BYTES)throw new IllegalArgumentException("此文件超过20MiB附件上限");
                 String type=connection.getContentType();if(type==null||type.isEmpty())type=mime;if(type!=null&&type.contains(";"))type=type.substring(0,type.indexOf(';')).trim();
                 JSONObject source=new JSONObject().put("kind","browser_download").put("downloadId",id).put("origin",origin(initial));synchronized(this){JSONObject record=required(id);for(String key:new String[]{"taskId","runId","epoch","profileId","profileRevision","browserSessionId","browserSpaceId","tabId","tabGeneration","operationId"})if(record.has(key))source.put(key,record.get(key));}
                 JSONObject imported;
-                try(InputStream stream=new FilterInputStream(connection.getInputStream()){@Override public int read(byte[] buffer,int offset,int length)throws java.io.IOException{checkTransfer();return super.read(buffer,offset,length);}@Override public int read()throws java.io.IOException{checkTransfer();return super.read();}private void checkTransfer()throws java.io.IOException{try{check(cancellation,fence);}catch(Exception stopped){throw new java.io.InterruptedIOException("下载原任务、页或会话已停止");}if(System.nanoTime()>=deadline)throw new java.net.SocketTimeoutException("下载总时限已到");}}){check(cancellation,fence);imported=attachments.book.importBytes(stream,name,type,source);}
+                try(InputStream stream=new FilterInputStream(connection.getInputStream()){
+                    private long received;
+                    @Override public int read(byte[] buffer,int offset,int length)throws java.io.IOException{checkTransfer();int count=super.read(buffer,offset,length);recordRead(count);return count;}
+                    @Override public int read()throws java.io.IOException{checkTransfer();int value=super.read();recordRead(value<0?-1:1);return value;}
+                    private void recordRead(int count)throws java.io.IOException{
+                        if(count<0){if(expectedBytes>=0&&received!=expectedBytes)throw new java.io.EOFException("下载内容提前结束，未保存不完整文件");return;}
+                        received+=count;
+                        if(expectedBytes>=0&&received>expectedBytes)throw new java.io.IOException("下载内容超过声明长度，未保存不一致文件");
+                    }
+                    private void checkTransfer()throws java.io.IOException{try{check(cancellation,fence);}catch(Exception stopped){throw new java.io.InterruptedIOException("下载原任务、页或会话已停止");}if(System.nanoTime()>=deadline)throw new java.net.SocketTimeoutException("下载总时限已到");}
+                }){check(cancellation,fence);imported=attachments.book.importBytes(stream,name,type,source);}
                 committed=imported;check(cancellation,fence);update(id,"downloaded",null,imported,updates);return;
             }
             throw new IllegalStateException("下载未取得文件");
