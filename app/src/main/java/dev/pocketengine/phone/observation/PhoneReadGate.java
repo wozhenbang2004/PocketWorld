@@ -60,12 +60,12 @@ public final class PhoneReadGate {
                 catch(TimeoutException waiting) { }
             }
         }catch(ExecutionException failed) {
-            Throwable cause=failed.getCause();if(ticket.effectEntered.get())throw new Unavailable("native_effect_unknown",cause);
+            Throwable cause=failed.getCause();if(ticket.abandon())throw new Unavailable("native_effect_unknown",cause);
             if(cause instanceof Exception)throw(Exception)cause;
             if(cause instanceof Error)throw(Error)cause;throw new IllegalStateException(cause);
         }catch(Exception stopped) {
-            if(ticket.effectEntered.get())throw new Unavailable("native_effect_unknown",stopped);throw stopped;
-        }finally { ticket.abandoned.set(true);result.cancel(false); }
+            if(ticket.abandon())throw new Unavailable("native_effect_unknown",stopped);throw stopped;
+        }finally { ticket.abandon();result.cancel(false); }
     }
     /** Non-blocking timer handoff. The supplied job owns releasing its retained node even on rejection. */
     public Executor executor() {
@@ -83,9 +83,12 @@ public final class PhoneReadGate {
     /** Inside the original NativePhoneEntry only: diagnostics, not admission or a second authority. */
     public static void markEffectEntered()throws Unavailable {
         Ticket ticket=ACTIVE.get();if(ticket==null)return;
-        // No authority callback or new lock under RunControl's native-entry monitor.
-        if(ticket.abandoned.get()||ticket.remainingMs()<=0)throw new Unavailable("tree_read_timeout");
-        ticket.effectEntered.set(true);
+        // Serialize only local admission diagnostics with abandonment. This lock
+        // never calls back into RunControl or Android, and never spans the effect.
+        synchronized(ticket) {
+            if(ticket.abandoned.get()||ticket.remainingMs()<=0)throw new Unavailable("tree_read_timeout");
+            ticket.effectEntered.set(true);
+        }
     }
     /** Called before/after every bounded traversal and immediately before native dispatch. */
     public static void checkCurrent()throws Exception {
@@ -96,6 +99,7 @@ public final class PhoneReadGate {
     private static final class Ticket {
         final Check check;final long deadline;final AtomicBoolean abandoned=new AtomicBoolean(),effectEntered=new AtomicBoolean();
         Ticket(Check check,long timeoutMs){this.check=check;deadline=System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(timeoutMs);}
+        synchronized boolean abandon(){abandoned.set(true);return effectEntered.get();}
         long remainingMs(){long left=deadline-System.nanoTime();return left<=0?0:Math.max(1,TimeUnit.NANOSECONDS.toMillis(left));}
     }
 }

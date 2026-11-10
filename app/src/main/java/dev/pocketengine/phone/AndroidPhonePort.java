@@ -794,8 +794,9 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
     private <T>T onNodeWorker(PhoneAccessibilityService service,RunControl control,long revision,MainCall<T> call)throws Exception {
         try{return reads.call(()->guard(service,control,revision),call::run);}
         catch(PhoneReadGate.Unavailable unavailable){
-            if("tree_read_busy".equals(unavailable.code))throw new PhoneFailure(unavailable.code,"系统仍有未返回的页面读取，未派发新动作。");
-            throw new PhoneFailure("dispatch_unknown","手机请求等待超时，已入场动作可能未知；旧引用已停用，不会自动重试。");
+            if("native_effect_unknown".equals(unavailable.code))
+                throw new PhoneFailure("dispatch_unknown","手机请求等待超时，已入场动作可能未知；旧引用已停用，不会自动重试。");
+            throw new PhoneFailure(unavailable.code,"页面读取尚未完成，未派发动作；请等原读取结束后重新观察。");
         }
     }
 

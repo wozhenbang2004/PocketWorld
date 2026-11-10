@@ -3,6 +3,8 @@ package dev.pocketengine.phone.observation;
 /** Shared, platform-independent failure semantics. Unknown effects always win over retry advice. */
 public final class ObservationSafety {
     private ObservationSafety() { }
+    // Bounded read congestion has no side effect. It can be observed again after
+    // the original worker returns; entered native effects remain unknown below.
     public static boolean requiresPause(String code) {
         if (code == null) return false;
         switch (code) {
@@ -15,7 +17,7 @@ public final class ObservationSafety {
             case "background_unavailable": case "metadata_only_unavailable": case "main_screen_conflict": case "identity_mismatch":
             case "observation_metadata_missing": case "image_unavailable":
             case "reconciliation_required": case "display_ownership_unknown":
-            case "tree_read_timeout": case "tree_read_busy": case "screen_unstable": return true;
+            case "screen_unstable": return true;
             default: return false;
         }
     }

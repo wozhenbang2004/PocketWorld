@@ -748,8 +748,11 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
     }
     private <T>T onNodeWorker(RunControl control,long revision,java.util.concurrent.Callable<T> action)throws Exception {
         try{return reads.call(()->guard(control,revision),action);}
-        catch(PhoneReadGate.Unavailable unavailable){throw new PhoneFailure("tree_read_busy".equals(unavailable.code)?unavailable.code:"action_unknown",
-                "副屏系统调用尚未返回，未重试；已入场动作可能未知，请核对原操作。");}
+        catch(PhoneReadGate.Unavailable unavailable){
+            if("native_effect_unknown".equals(unavailable.code))
+                throw new PhoneFailure("action_unknown","副屏已入场动作回执未知，请核对原操作；不会自动重试。");
+            throw new PhoneFailure(unavailable.code,"副屏读取尚未完成，未派发动作；请等原读取结束后重新观察。");
+        }
     }
     private static int integer(JSONObject input,String key,int min,int max){Object value=input.opt(key);if(!(value instanceof Number))throw new IllegalArgumentException();double n=((Number)value).doubleValue();if(!Double.isFinite(n)||n!=Math.rint(n)||n<min||n>max)throw new IllegalArgumentException();return(int)n;}
     static JSONObject privateInputRejection(AccessibilityNodeInfo target)throws Exception {
