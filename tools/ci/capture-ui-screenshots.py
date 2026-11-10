@@ -329,14 +329,16 @@ def screenshot(slug, title, *, tree=None, requested_path=None, destination_obser
     print(f"Captured {path.name}: {title}", flush=True)
 
 
-def wait_for_page_surface(timeout=30):
+def wait_for_page_surface(expected=(), timeout=30):
     """Wait for two readable page snapshots; an empty tree is not a closed drawer."""
     deadline = time.monotonic() + timeout
     settled = 0
     tree = None
     while time.monotonic() < deadline:
         tree = layout()
-        if visible_labels(tree) and not find_target(tree, "关闭导航") and not find_target(tree, "工作区与导航"):
+        labels = visible_labels(tree)
+        if (labels and all(marker in labels for marker in expected)
+                and not find_target(tree, "关闭导航") and not find_target(tree, "工作区与导航")):
             settled += 1
             if settled >= 2:
                 time.sleep(2)
@@ -447,6 +449,16 @@ def capture_route(path, slug, markers=(), *, dialog=False, scroll=True):
     # Every route starts from the real drawer. Never dispatch internal routes or
     # bridge commands; only inspect current accessible controls and tap them.
     print("Opening " + " → ".join(path), flush=True)
+    # A readable accessibility tree may still be the previous workspace after
+    # a bridge navigation request. Wait for the requested destination's actual
+    # heading, not just two non-empty old snapshots.
+    destination = {
+        "任务": ("任务",), "设备": ("设备连接",), "记忆": ("记忆工作区",),
+        "能力": ("技能与工具",), "团队": ("团队工作区",), "成果": ("文件与成果",),
+        "项目": ("切换项目",), "自动化": ("自动化工作区",), "设置": ("设置",),
+        "通知": ("远程通知中心",), "媒体": ("媒体工作区",),
+        "我的，个人资料与偏好": ("个人资料",), "开发诊断": ("开发诊断",),
+    }.get(path[0], ())
     tree = navigation()
     if not find_target(tree, "关闭导航"):
         REPORT["unavailable"].append(" → ".join(path) + "：当前导航未打开。")
@@ -459,7 +471,10 @@ def capture_route(path, slug, markers=(), *, dialog=False, scroll=True):
         if not tap(label, tree, prefix=True, first_equivalent=label == "新建团队"):
             REPORT["unavailable"].append(" → ".join(path) + "：未找到当前可用入口“" + label + "”。")
             return
-        tree = wait_for_page_surface() if index == 0 else read_layout()
+        tree = wait_for_page_surface(destination) if index == 0 else read_layout()
+        if index == 0 and destination and not all(marker in visible_labels(tree) for marker in destination):
+            REPORT["unavailable"].append(" → ".join(path) + "：点击后仍未观察到目标工作区，未操作旧页面。")
+            return
         if index == 0 and not find_target(tree, "关闭文件工作区"):
             # The product correctly preserves per-page reading positions. Each
             # capture starts at the real top again using touch, not injected state.
@@ -473,8 +488,8 @@ def capture_route(path, slug, markers=(), *, dialog=False, scroll=True):
         # install, authorize, toggle policy, request a model or create records.
         tree = read_layout()
         closed = next((label for label in (
-            "关闭设置", "关闭执行权限", "关闭模型选择", "关闭推理设置",
-            "关闭文件工作区", "关闭", "取消", "返回上一级", "返回"
+            "关闭准备中心", "关闭创建", "关闭设置", "关闭执行权限", "关闭模型选择", "关闭推理设置",
+            "关闭文件工作区", "关闭", "取消", "返回并保留草稿", "返回配置列表", "返回工作室", "返回上一级", "返回"
         ) if tap(label, tree)), None)
         # Android Back can leave the Activity while a WebView modal is still
         # open. Prefer its actual close control; an uncloseable surface remains
@@ -522,7 +537,7 @@ def capture_catalog():
         (("记忆", "旧事与来源"), "memory-history"),
         (("记忆", "学习与经验"), "memory-learning"),
         (("能力", "插件"), "tools-plugins"),
-        (("能力", "插件", "选择版本"), "plugins-catalog"),
+        (("能力", "插件", "打开我的插件目录"), "plugins-catalog"),
         (("能力", "插件", "JS 扩展"), "plugins-js"),
         (("能力", "插件", "完整功能包"), "plugins-packs"),
         (("能力", "MCP"), "tools-mcp"),
@@ -550,7 +565,7 @@ def capture_catalog():
         (("对话", "执行权限"), "composer-permissions"),
         (("对话", "输入方式与选项"), "composer-options"),
         (("对话", "查看上下文："), "composer-context"),
-        (("项目", "新项目"), "project-new"),
+        (("项目", "新建项目"), "project-new"),
         (("团队", "新建团队"), "team-new"),
         (("团队", "群协作", "新建群空间"), "group-new"),
         (("能力", "工作配置", "新建配置"), "profile-new"),
