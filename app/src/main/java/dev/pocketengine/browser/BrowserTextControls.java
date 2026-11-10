@@ -27,7 +27,8 @@ public final class BrowserTextControls {
         String effect;
         if(command.equals("focus"))effect="e.focus({preventScroll:true});";
         else if(command.equals("press"))effect="e.dispatchEvent(new KeyboardEvent('keydown',{key:"+JSONObject.quote(args.getString("key"))+",bubbles:true,cancelable:true}));e.dispatchEvent(new KeyboardEvent('keyup',{key:"+JSONObject.quote(args.getString("key"))+",bubbles:true,cancelable:true}));";
-        else effect="if(e.isContentEditable)e.textContent="+wanted+";else{const setter=Object.getOwnPropertyDescriptor(e instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value').set;setter.call(e,"+wanted+");}e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));";
+        // Match input's shadow-boundary propagation without claiming a trusted native event.
+        else effect="if(e.isContentEditable)e.textContent="+wanted+";else{const setter=Object.getOwnPropertyDescriptor(e instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value').set;setter.call(e,"+wanted+");}e.dispatchEvent(new Event('input',{bubbles:true,composed:true}));e.dispatchEvent(new Event('change',{bubbles:true}));";
         String noop=command.equals("focus")?"(e.getRootNode().activeElement||document.activeElement)===e":command.equals("press")?"false":current+"==="+wanted;
         return "const noOp="+noop+";state.textReadback={token:"+JSONObject.quote(token)+",node:e,kind:"+JSONObject.quote(command)+",desired:"+wanted+",controlType:e.type||'',editable:!!e.isContentEditable};if(!noOp){"+effect+"}";
     }
@@ -44,3 +45,4 @@ public final class BrowserTextControls {
         return out.put("status",kind.equals("press")?"synthetic_key_dispatched":matched?"form_state_read_back":"failed").put("code",kind.equals("press")?"synthetic_key_effect_not_guaranteed":matched?"form_target_state_met":"form_target_state_unmet").put("controlEvidence",evidence).put("automaticReplayAllowed",false).put("message",kind.equals("press")?"已向原聚焦节点派发一次合成按键并回读实际值；不保证站点响应，要求可信输入时请主人处理。":matched?"原字段延迟回读达到目标；不证明网站已保存。":"原字段延迟值未达到目标，没有再次输入；请核对原页。");
     }
 }
+
