@@ -11,6 +11,16 @@
  align-items: center;
  gap: 12px;
 }
+/* Adapt BoardUI ScrollFade's independent edge wash to the existing normal-flow
+ * header. The short fade stays outside the scroller and never receives input. */
+.pw-chat-navigation::after {
+ content: '';
+ position: absolute;
+ inset: 100% 0 auto;
+ height: 16px;
+ pointer-events: none;
+ background: linear-gradient(to bottom, var(--pw-canvas-chat), transparent);
+}
 .pw-chat-navigation-title {
  min-width: 0;
  margin: 0;
@@ -30,8 +40,8 @@
  border: 0;
  border-radius: 50%;
  color: var(--pw-ink);
- background: transparent;
- box-shadow: none;
+ background: var(--pw-floating);
+ box-shadow: var(--pw-shadow-navigation);
  transition: background-color 150ms ease;
 }
 .pw-chat-glass-trigger[data-unread]::after {

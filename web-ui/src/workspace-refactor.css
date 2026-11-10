@@ -22,6 +22,7 @@
 }
 .pw-conversation-scroll {
   position: relative;
+  z-index: 1;
   flex: 1;
   min-height: 0;
   min-width: 0;
@@ -115,6 +116,23 @@
 .pw-current-activity { flex: 1 1 160px; min-width: 0; }
 .pw-current-thinking > .button-press-motion { min-height: 44px; padding: 8px 0; gap: 4px; color: var(--pw-muted); font: 400 12px/20px var(--pw-font); }
 .pw-composer-region { position: relative; flex: none; width: 100%; max-width: var(--pw-conversation-width); min-width: 0; margin-inline: auto; padding: 8px 12px max(12px, var(--pw-composer-safe-bottom, env(safe-area-inset-bottom, 0px))); border: 0; }
+/* The GPT reference has an ambient field as well as a contact shadow. Anchor it
+ * to the actual composer, so attention/receipt rows do not move its centre.
+ * Isolate the ambient layer behind the composer; the scroller's higher layer
+ * keeps message text above the ambient field where it extends into the gutter. */
+.pw-composer-region > .pw-composer-host { position: relative; isolation: isolate; }
+.pw-composer-region > .pw-composer-host::before {
+  content: '';
+  position: absolute;
+  inset: -80px -64px -8px;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(ellipse 50% 54% at 50% 68%,
+    var(--pw-composer-ambient) 0%,
+    var(--pw-composer-ambient-soft) 52%,
+    transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent, #000 24px, #000 calc(100% - 32px), transparent);
+}
 .pw-new-replies { position: absolute; inset: auto 0 100%; z-index: 4; width: max-content; max-width: calc(100% - 24px); min-height: 44px; margin: 0 auto 8px; padding: 8px 14px; border: 0; border-radius: 999px; background: var(--pw-surface); color: var(--pw-ink); box-shadow: var(--pw-shadow-floating); font: 400 12px/20px var(--pw-font); white-space: normal; }
 .pw-chat-attention.button-press-motion { width: 100%; height: auto; min-height: 54px; margin-bottom: 8px; padding: 9px 14px; gap: 10px; border: 0; border-radius: 15px; background: var(--pw-surface); box-shadow: var(--pw-shadow-surface); justify-content: space-between; white-space: normal; text-align: start; }
 .pw-chat-attention.button-press-motion > span { flex: 1; min-width: 0; padding: 0; justify-content: flex-start; }
