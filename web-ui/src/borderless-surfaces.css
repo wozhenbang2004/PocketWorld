@@ -1,19 +1,14 @@
-/* User requirement: surfaces and spacing carry grouping; no persistent outline frames. */
+/* Decorative surfaces use the product's border tokens. Semantic paths, progress
+ * rings and focus indicators retain the styles owned by their components. */
 :root,
 :root.dark {
   --pw-edge: transparent;
   --pw-edge-hover: transparent;
   --pw-divider: transparent;
-  --pw-shadow-input: 0 4px 22px rgb(0 0 0 / 5%);
 }
 html[data-pocket-native-insets="true"] {
   --pocket-inset-top: 0px;
   --pocket-inset-bottom: 0px;
-}
-body *, body *::before, body *::after {
-  border-color: transparent !important;
-  --tw-ring-color: transparent;
-  --tw-inset-ring-color: transparent;
 }
 /* Preserve semantic separators through spacing rather than hairlines. */
 body :is(.pw-app-header, .pw-secondary-header, .pw-drawer, .pw-drawer-actions,
@@ -21,31 +16,25 @@ body :is(.pw-app-header, .pw-secondary-header, .pw-drawer, .pw-drawer-actions,
   .pw-pending-input, .pw-composer-region, .pw-form-group) {
   border: 0;
 }
-.pw-redesign .pw-app-header, .pw-secondary .pw-secondary-header {
+.pw-secondary .pw-secondary-header {
   min-height: 56px;
   padding-block: 6px;
   background: var(--pw-canvas);
   box-shadow: none;
 }
-.pw-conversation-model-controls { gap: 4px; }
-.pw-conversation-model-controls > button,
-.pw-conversation-model-controls .pw-conversation-reasoning-chip { min-height: 44px; }
-.pw-conversation-model-controls .pw-conversation-model-chip { gap: 6px; }
-.pw-conversation-model-controls .pw-conversation-reasoning-chip { gap: 6px; padding-inline: 10px; }
-.pw-redesign .pw-composer-region { padding-top: 8px; }
-html[data-pocket-native-insets="true"] .pw-app { padding-block: 0; }
-html[data-pocket-native-insets="true"] .pw-redesign .pw-composer-region { padding-bottom: 12px; }
+html[data-pocket-native-insets="true"] .pw-app { padding-block: 0; --pw-composer-safe-bottom: 0px; }
 html[data-pocket-native-insets="true"] .pw-drawer { padding-bottom: 12px; }
 html[data-pocket-native-insets="true"] .pw-task-drawer { padding-top: 0; padding-bottom: 0; }
 html[data-pocket-native-insets="true"] .pw-task-footer { padding-bottom: 12px; }
-/* Keyboard focus remains visible as an illuminated surface, without a stroked ring. */
-body :is(button, a, input, select, [tabindex]):focus-visible {
-  outline: none !important;
-  box-shadow: 0 2px 16px color-mix(in srgb, var(--pw-ink) 28%, transparent) !important;
+/* This fallback is deliberately low-specificity. A control may provide its own
+ * focus treatment without fighting an application-wide !important rule. */
+:where(.pw-app, .pw-drawer, .shadow-dropdown) :where(button, a, input, textarea, select, [tabindex]):focus-visible {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pw-focus) 24%, transparent);
 }
-body :is(textarea, input):focus-visible { background-color: var(--pw-inset); }
-body textarea:focus-visible { outline: none !important; }
-body :is([role="progressbar"], .pw-spinner) { border-top-color: currentColor !important; }
-@media (prefers-reduced-motion: reduce) {
-  .pw-conversation-model-controls * { transition: none; }
+@media (forced-colors: active) {
+  :where(.pw-app, .pw-drawer, .shadow-dropdown) :where(button, a, input, textarea, select, [tabindex]):focus-visible {
+    outline-color: Highlight;
+  }
 }

@@ -13,10 +13,15 @@ import {SmoothComposerSurface} from './SmoothComposerSurface';
 import {composerHasPayload} from '../composer-send-policy';
 function sizeComposerEditor(editor:HTMLTextAreaElement|null){
  if(!editor)return;
+ const style=getComputedStyle(editor);
+ const lineHeight=parseFloat(style.lineHeight)||24;
+ const verticalPadding=(parseFloat(style.paddingTop)||0)+(parseFloat(style.paddingBottom)||0);
+ const minimum=Math.max(48,lineHeight+verticalPadding,parseFloat(style.minHeight)||0);
+ const maximum=Math.max(minimum,parseFloat(style.maxHeight)||144);
  editor.style.height='0px';
- const height=editor.value?editor.scrollHeight:48;
- editor.style.height=`${Math.min(120,Math.max(48,height))}px`;
- editor.style.overflowY=height>120?'auto':'hidden';
+ const height=editor.value?editor.scrollHeight:minimum;
+ editor.style.height=`${Math.min(maximum,Math.max(minimum,height))}px`;
+ editor.style.overflowY=height>maximum?'auto':'hidden';
 }
 
 export function ChatComposer({value,onChange,onSend,onStop,busy,submitting,disabled,placeholder='输入目标，或补充上下文…',attachments=[],onRemoveAttachment,onAttach,onVoice,listening,voiceStatus,onDiscardVoice,modelName,onSelectModel,toolbar,controls,contextStatus,contextPercent,children,status,label='工作输入',composerKey,className='',sendDisabled=false,sendLabel}:ChatComposerProps&{sendDisabled?:boolean;sendLabel?:string}){
@@ -42,9 +47,8 @@ export function ChatComposer({value,onChange,onSend,onStop,busy,submitting,disab
   <section className="afa-composer" aria-label={label} data-composer-key={composerKey}>
    <div className="pw-composer-context-rail" aria-label="当前对话上下文">
     <SmoothComposerSurface radius={24} tone="context"/>
-    <span className="pw-composer-context-icons">{contextStatus}</span>
-    {contextStatus!==undefined&&contextPercent===undefined?<ComposerContextMeter composerKey={composerKey} draftText={value} attachmentCount={attachments.length}/>:<span className="pw-composer-context-usage" role="status" aria-label={measuredContext===null?'上下文占用暂无可核对数据':'上下文已使用 '+measuredContext+'%'} title={measuredContext===null?'上下文占用暂无可核对数据':'上下文占用 '+measuredContext+'%'}>
-     <i className="pw-composer-context-ring" aria-hidden="true"/>{measuredContext!==null&&<span>{measuredContext}%</span>}
+    {contextStatus!==undefined&&contextPercent===undefined?<ComposerContextMeter composerKey={composerKey} draftText={value} attachmentCount={attachments.length} contextStatus={contextStatus}/>:<span className="pw-composer-context-usage" data-available={measuredContext!==null} role="status" aria-label={measuredContext===null?'上下文占用暂无可核对数据':'上下文已使用 '+measuredContext+'%'} title={measuredContext===null?'上下文占用暂无可核对数据':'上下文占用 '+measuredContext+'%'}>
+     <svg className="pw-context-meter-ring" width="16" height="16" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.5" className="pw-context-meter-track"/>{measuredContext!==null&&measuredContext>0&&<circle cx="10" cy="10" r="7.5" className="pw-context-meter-value" pathLength="100" strokeDasharray={`${measuredContext} 100`} transform="rotate(-90 10 10)"/>}</svg>
     </span>}
    </div>
    <div className="afa-card pw-composer-card" data-has-text={hasText} data-has-attachments={attachments.length>0}>

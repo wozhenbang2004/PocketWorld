@@ -4,7 +4,7 @@
 .pw-library{font-family:inherit;min-width:0;color:#252525;color-scheme:light}
 .afa.pw-library{min-height:0;padding:0;display:block;font-size:14px;--afa-accent:#444;--afa-soft:#777;--afa-text:#666;--afa-line:#e5e5e5;--afa-shadow:0 1px 2px #00000006,0 5px 14px #00000008}
 .cb-demo.pw-library{max-width:none;margin:0;font-family:inherit;font-size:14px;--cb-blue:#444;--cb-blue-bg:#efefef;--cb-ok:#444;--cb-ok-bg:#efefef;--cb-warn:#444;--cb-warn-bg:#efefef;--cb-red:#333;--cb-red-bg:#efefef;--cb-muted:#777;--cb-line:#e5e5e5}
-.pw-library :is(h1,h2,h3,h4,strong,b){font-weight:500!important}
+.pw-library :is(h1,h2,h3,h4,strong,b){font-weight:500}
 .pw-library button,.pw-message-actions button{min-height:44px;touch-action:manipulation}
 .pw-library :is(.afa-iconbtn,.cb-icon-button),.pw-message-actions button{min-width:44px}
 .pw-library :is(button,input,textarea):focus-visible{outline:2px solid #777;outline-offset:3px}

@@ -9,8 +9,7 @@
 
 /* Reading and ordinary object rows remain one plane. Elevation identifies a
  * tool waiting for input, rather than wrapping every paragraph/list in cards. */
-.pw-redesign .pw-user-text { background: var(--pw-inset); }
-.pw-redesign :is(.pw-linked-task, .pw-conversation-phone-task).button-press-motion {
+.pw-redesign .pw-linked-task.button-press-motion {
   background: var(--pw-inset);
   box-shadow: none;
 }
@@ -21,8 +20,6 @@
   box-shadow: none;
 }
 .pw-redesign .pw-task-row.button-press-motion { border-radius: 12px; padding-inline: 10px; }
-.pw-redesign .pw-composer-region { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
-.pw-redesign .pw-chat-attention.button-press-motion,
 .pw-redesign .pw-priority-decisions .ui-dic__card {
   background: var(--pw-surface);
   box-shadow: var(--pw-shadow-surface);
@@ -107,25 +104,3 @@
 :root[data-pw-motion-paused="true"] .pw-desktop-navigation { transition: none; }
 
 /* Actual user decisions occupy one quiet line, not a persistent work card. */
-.pw-redesign .pw-chat-attention.button-press-motion {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  min-height: 40px;
-  width: 100%;
-  padding: 7px 10px;
-  border: 0;
-  border-radius: 12px;
-  background: transparent;
-  box-shadow: none;
-}
-.pw-redesign .pw-chat-attention .pw-chat-attention-copy {
-  display: flex;
-  align-items: baseline;
-  gap: 9px;
-  min-width: 0;
-  flex: 1;
-}
-.pw-redesign .pw-chat-attention .pw-chat-attention-copy small { white-space: nowrap; color: var(--pw-muted); }
-.pw-redesign .pw-chat-attention .pw-chat-attention-copy b { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-weight: 500; }

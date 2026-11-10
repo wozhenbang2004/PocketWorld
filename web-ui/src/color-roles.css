@@ -18,8 +18,7 @@
   color: var(--pw-ink);
   background: var(--pw-canvas);
 }
-.pw-redesign .pw-main-workspace,
-.pw-redesign .pw-chat-workspace {
+.pw-redesign .pw-main-workspace {
   background: var(--pw-surface);
   color: var(--pw-ink);
 }

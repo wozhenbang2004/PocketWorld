@@ -6,11 +6,11 @@
 :root {
   --pw-font: var(--pw-font-ui, var(--font-ui, system-ui, sans-serif));
   --pw-mono: var(--pw-font-code, var(--font-code, ui-monospace, monospace));
-  --pw-canvas: #F7F7F6;
+  --pw-canvas: #F6F6F6;
   --pw-surface: #FFFFFF;
-  --pw-inset: #F1F1EF;
-  --pw-selected: #E8E8E6;
-  --pw-hover: #EEEEEC;
+  --pw-inset: #EEEEEE;
+  --pw-selected: #E6E6E6;
+  --pw-hover: #EBEBEB;
   --pw-edge: #E7E7E5;
   --pw-edge-hover: #CECECB;
   --pw-ink: #181818;
@@ -178,6 +178,10 @@
   font-weight: 500;
   border: 0;
   box-shadow: none;
+}
+:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) .button-press-motion:focus-visible {
+  outline: 2px solid var(--pw-focus);
+  outline-offset: 2px;
 }
 :is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) .button-press-motion.bg-button-primary,
 :is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) .button-press-motion.bg-button-danger {
@@ -374,25 +378,6 @@
 }
 
 /* The retained composer is a quiet filled surface; focus stays perceptible. */
-:is(.pw-app, .pw-drawer) .pw-composer-region .pw-composer-host .afa-composer > .afa-card {
-  border: 0;
-  background: var(--pw-inset);
-  box-shadow: none;
-}
-:is(.pw-app, .pw-drawer) .pw-composer-region .pw-composer-host .afa-composer > .afa-card:focus-within {
-  background: var(--pw-selected);
-  box-shadow: none;
-}
-.pw-composer-host .afa-composer textarea {
-  color: var(--pw-ink);
-  font-family: var(--pw-font);
-  font-size: 15px;
-  line-height: 24px;
-}
-.pw-composer-host .afa-composer textarea::placeholder {
-  color: var(--pw-muted);
-  opacity: 1;
-}
 
 /* Affect official components use their own CSS variables, not a grayscale filter.
  * Surface fills carry grouping; state motion remains source-owned.
@@ -494,36 +479,6 @@
 .pw-app { background: var(--pw-surface); }
 .pw-app-header { min-height: 60px; height: auto; padding-block: 6px; }
 .pw-current-work h1 { font-size: 18px; line-height: 26px; font-weight: 600; }
-.pw-message-stream { padding: 24px 20px 28px; gap: 28px; }
-.pw-message > header { min-height: 32px; font-size: 13px; color: var(--pw-copy); }
-.pw-message-user { max-width: 90%; }
-.pw-user-text { border: 0; background: #f0f0f0; padding: 12px 16px; border-radius: 18px 18px 5px 18px; }
-.pw-message-assistant .afa-answerbody :is(p,li),
-.pw-user-text { font-size: 16px; line-height: 1.7; }
-.pw-message-assistant .afa-answerbody :is(ul,ol) { padding-inline-start: 22px; }
-.pw-message > header button { min-width: 48px; min-height: 48px; }
-.pw-message-assistant .afa-answer > footer { padding-top: 10px; }
-.pw-composer-region { padding: 8px 12px 12px; }
-.pw-composer-region .pw-composer-host .afa-composer > .afa-card {
-  padding: 12px 10px 8px;
-  border-radius: 22px;
-  border: 0;
-  background: var(--pw-inset);
-  box-shadow: none;
-}
-.pw-composer-host .afa-composer textarea { font-size: 16px; line-height: 26px; padding: 4px 6px 8px; }
-.pw-composer-region .pw-composer-host .afa-toolbar { gap: 2px; flex-wrap: wrap; }
-.pw-composer-region .pw-composer-host .pw-model-trigger {
-  max-width: min(32vw,148px); min-height: 48px; color: var(--pw-copy);
-  font-size: 13px !important; line-height: 20px !important;
-}
-.pw-composer-region .pw-composer-intent button,
-.pw-composer-region .afa-iconbtn { min-width: 48px; min-height: 48px; }
-.pw-composer-region .pw-press { min-width: 48px; min-height: 48px; }
-.pw-composer-region .pw-press-front { min-height: 44px; }
-.pw-start { margin-top: clamp(36px,10vh,84px); gap: 16px; }
-.pw-start h2 { font-size: 25px; line-height: 1.35; letter-spacing: -.025em; font-weight: 600; }
-.pw-start > p { color: var(--pw-copy); font-size: 15px; line-height: 1.65; }
 
 .pw-linked-task.button-press-motion {
   display: flex; justify-content: space-between; align-items: center; gap: 16px;
@@ -595,8 +550,6 @@
 .pw-project-objects .pw-file-open > span > small { color: var(--pw-muted); }
 
 @media(max-width:380px) {
-  .pw-message-stream { padding-inline: 16px; }
-  .pw-composer-region .pw-composer-host .pw-model-trigger { max-width: 112px; }
   .pw-linked-task.button-press-motion { padding-inline: 12px; gap: 8px; }
   .pw-linked-task-action { font-size: 12px; }
   .pw-outcome-document, .pw-outcome-conversation { padding: 0; }

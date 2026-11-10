@@ -54,17 +54,11 @@
   border-color: var(--pw-edge);
 }
 :root.dark .pw-redesign .pw-app-header { background: transparent; }
-:root.dark .pw-redesign :is(.pw-chat-workspace, .pw-workspace .pw-page) {
+:root.dark .pw-redesign .pw-workspace .pw-page {
   background: transparent;
   border-color: transparent;
 }
-:root.dark .pw-redesign .pw-user-text { background: var(--pw-inset); color: var(--pw-ink); }
 :root.dark .pw-redesign .pw-active-bar { background: transparent; }
-:root.dark .pw-redesign .pw-composer-region .pw-composer-host .afa-composer > .afa-card {
-  background: var(--pw-inset);
-  color: var(--pw-ink);
-  border-color: var(--pw-edge);
-}
 :root.dark :is(.pw-error, .pw-banner, .pw-banner-error, .pw-project-thumbnail,
   .pw-work-drawer .pw-work-search > button) {
   background: var(--pw-inset);
@@ -79,7 +73,6 @@
   .pw-task-header .pw-task-context, .pw-outcome-heading h3,
   .pw-priority-decisions .ui-dic__detail, .pw-secondary-header p,
   .pw-muted, .pw-current-work p, .pw-text-link) { color: var(--pw-muted); }
-:root.dark .pw-redesign .pw-start > p { color: var(--pw-copy); }
 :root.dark :is(.pw-brand-mark, .pw-linked-task, .pw-priority-decisions .ui-dic__head) { color: var(--pw-ink); }
 :root.dark .pw-priority-decisions .ui-dic__btn:not(.ui-dic__btn--primary) { color: var(--pw-copy); }
 

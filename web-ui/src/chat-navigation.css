@@ -1,19 +1,10 @@
 /* A compact floating control, not a replacement header band. Native insets stay
  * authoritative. Only initial content clears the control; that space scrolls
  * away with the conversation. The material is CSS, not Apple's native glass. */
-.pw-app[data-route="chat"][data-navigation="drawer"] .pw-main-workspace {
- background: var(--pw-surface);
-}
-.pw-app[data-route="chat"][data-navigation="drawer"] .pw-conversation-content {
- padding-top: 48px;
-}
-.pw-app[data-route="chat"][data-navigation="drawer"] .pw-message-stream {
- padding-top: 4px;
-}
 .pw-chat-navigation {
  position: absolute;
- top: 6px;
- right: max(12px,env(safe-area-inset-right,0px));
+ top: 7px;
+ right: max(14px,env(safe-area-inset-right,0px));
  z-index: 6;
 }
 .pw-chat-navigation .pw-chat-glass-trigger {
@@ -26,7 +17,7 @@
  border-radius: 50%;
  color: var(--pw-ink);
  background: var(--pw-surface);
- box-shadow: 0 4px 18px rgb(0 0 0 / 8%), inset 0 1px 1px rgb(255 255 255 / 90%), inset 0 -1px 2px rgb(0 0 0 / 7%);
+ box-shadow: 0 3px 14px rgb(0 0 0 / 5%), inset 0 1px 1px rgb(255 255 255 / 88%);
  transition: background-color 150ms ease, box-shadow 150ms ease;
 }
 .pw-chat-glass-trigger[data-unread]::after {

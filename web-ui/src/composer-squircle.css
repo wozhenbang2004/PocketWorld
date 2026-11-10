@@ -1,109 +1,192 @@
-/* One composer layout: full-width editing above one compact control row.
-   SmoothComposerSurface owns continuous background geometry; rounded corners
-   remain a fallback until its first measurement. */
-.pw-composer-host.pw-squircle-composer { min-width: 0; width: 100%; }
-.pw-composer-host.pw-squircle-composer .afa-composer { position: relative; width: 100%; isolation: isolate; }
+/* The retained Affect composer owns its surface, editor and action geometry.
+ * SmoothComposerSurface supplies the same continuous corners in WebViews.
+ * Keep the context rail quiet; its real hit area sits above the editing surface. */
+.pw-composer-host.pw-squircle-composer {
+  --pw-composer-hit: 44px;
+  --pw-composer-rail: color-mix(in srgb, var(--pw-ink) 7%, var(--pw-canvas));
+  --pw-composer-shadow: 0 3px 8px -5px rgb(0 0 0 / 9%), 0 14px 28px -16px rgb(0 0 0 / 12%);
+  min-width: 0;
+  width: 100%;
+}
+.pw-composer-host.pw-squircle-composer .afa-composer {
+  position: relative;
+  width: 100%;
+  padding-top: 22px;
+  isolation: isolate;
+}
 .pw-composer-host.pw-squircle-composer .pw-composer-context-rail {
-  position: relative; z-index: 0; width: 76%; max-width: 540px;
-  height: 38px; margin: 0 auto -16px; padding: 4px 16px 17px;
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  border: 0; border-radius: 24px 24px 12px 12px;
-  background: color-mix(in srgb, var(--pw-ink, #242424) 10%, var(--pw-canvas, #f7f7f6));
-  color: var(--pw-copy, #777); box-shadow: 0 2px 7px rgb(0 0 0 / 2%);
+  position: relative;
+  z-index: 0;
+  width: 64%;
+  min-width: 144px;
+  max-width: 320px;
+  height: 38px;
+  margin: 0 auto -16px;
+  padding: 0;
+  border: 0;
+  border-radius: 24px;
+  background: var(--pw-composer-rail);
+  color: var(--pw-copy);
+  box-shadow: none;
 }
-.pw-composer-host.pw-squircle-composer .pw-composer-context-icons {
-  display: flex; align-items: center; gap: 9px; flex: 0 0 auto; min-width: 0;
+.pw-composer-host.pw-squircle-composer .pw-composer-context-rail > .pw-context-meter-button {
+  position: absolute;
+  top: -22px;
+  left: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-width: var(--pw-composer-hit);
+  height: var(--pw-composer-hit);
+  min-height: var(--pw-composer-hit);
+  margin: 0;
+  padding: 22px 0 6px;
+  border: 0;
+  border-radius: 16px;
+  background: transparent;
+  color: inherit;
+  box-shadow: none;
+  cursor: pointer;
+  isolation: isolate;
 }
-.pw-composer-host.pw-squircle-composer .afa-composer > .pw-composer-context-rail > .pw-context-meter-button {
-  flex: 0 1 auto; min-width: 0; max-width: 100%;
+.pw-composer-host.pw-squircle-composer .pw-context-meter-button:focus-visible {
+  outline: none;
+  box-shadow: none;
 }
-.pw-composer-host.pw-squircle-composer .pw-context-meter-button > span { flex: none; }
+.pw-composer-host.pw-squircle-composer .pw-context-meter-button:focus-visible::before {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  z-index: -1;
+  width: 30px;
+  height: 22px;
+  border-radius: 11px;
+  background: var(--pw-selected);
+  transform: translateX(-50%);
+}
+.pw-composer-host.pw-squircle-composer .pw-context-meter-button[data-attention] { color: var(--pw-warning); }
 .pw-composer-host.pw-squircle-composer .pw-composer-context-usage {
-  display: flex; align-items: center; gap: 6px; margin-left: auto;
-  font: 500 11px/15px var(--pw-font); letter-spacing: 0; white-space: nowrap;
-  font-variant-numeric: tabular-nums;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
 }
-/* This is a semantic glyph, not a surface border. The borderless theme must
-   not erase it. An inset ring works on older WebViews without CSS masking. */
-.pw-composer-host.pw-squircle-composer .pw-composer-context-ring {
-  display: block; flex: 0 0 14px; width: 14px; height: 14px;
-  border: 0; border-radius: 50%; opacity: .86;
-  background: transparent; box-shadow: inset 0 0 0 1.65px currentColor;
+.pw-composer-host.pw-squircle-composer .pw-context-meter-ring { flex: none; fill: none; stroke-width: 1.8; }
+.pw-composer-host.pw-squircle-composer .pw-context-meter-track { stroke: currentColor; opacity: .3; }
+.pw-composer-host.pw-squircle-composer .pw-context-meter-value { stroke: currentColor; stroke-linecap: round; }
+.pw-composer-host.pw-squircle-composer [data-available="false"] .pw-context-meter-track { stroke-dasharray: 1.4 2.8; stroke-linecap: round; opacity: .65; }
+
+.pw-composer-host.pw-squircle-composer .afa-composer > .pw-composer-card {
+  position: relative;
+  z-index: 1;
+  padding: 8px;
+  border: 0;
+  border-radius: 30px;
+  background: var(--pw-surface);
+  box-shadow: var(--pw-composer-shadow);
 }
-.pw-composer-region .pw-composer-host.pw-squircle-composer .afa-composer > .afa-card.pw-composer-card,
-:root.dark .pw-composer-region .pw-composer-host.pw-squircle-composer .afa-composer > .afa-card.pw-composer-card {
-  position: relative; z-index: 1; padding: 8px;
-  border: 0 !important; outline: 0; border-radius: 30px;
-  background: var(--pw-surface, #fff);
-  box-shadow: 0 3px 8px -5px rgb(0 0 0 / 12%), 0 12px 30px -13px rgb(0 0 0 / 15%);
-  transition: box-shadow 230ms ease, background-color 230ms ease;
+.pw-composer-host.pw-squircle-composer .afa-composer > :is(.pw-composer-card, .pw-composer-context-rail)[data-continuous-shape="true"] {
+  background: transparent;
+  box-shadow: none;
+  isolation: isolate;
 }
-.pw-composer-region .pw-composer-host.pw-squircle-composer .afa-composer > .afa-card.pw-composer-card:focus-within {
-  border: 0 !important; outline: 0; background: var(--pw-surface, #fff);
-  box-shadow: 0 3px 10px -5px rgb(0 0 0 / 13%), 0 14px 34px -12px rgb(0 0 0 / 18%);
+.pw-composer-host.pw-squircle-composer .pw-continuous-surface {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  display: block;
+  overflow: visible;
+  pointer-events: none;
+  filter: drop-shadow(0 2px 4px rgb(0 0 0 / 2%)) drop-shadow(0 8px 14px rgb(0 0 0 / 4%));
+  transition: filter 180ms ease;
 }
-.pw-composer-host.pw-squircle-composer .pw-composer-row {
-  display: block; min-width: 0; width: 100%; min-height: 48px; margin-bottom: 2px;
+.pw-composer-host.pw-squircle-composer .pw-continuous-surface path { fill: var(--pw-surface); }
+.pw-composer-host.pw-squircle-composer .pw-continuous-surface[data-tone="context"] { filter: none; }
+.pw-composer-host.pw-squircle-composer .pw-continuous-surface[data-tone="context"] path { fill: var(--pw-composer-rail); }
+.pw-composer-host.pw-squircle-composer .pw-composer-card:focus-within > .pw-continuous-surface {
+  filter: drop-shadow(0 2px 5px rgb(0 0 0 / 3%)) drop-shadow(0 10px 16px rgb(0 0 0 / 5%));
 }
+.pw-composer-host.pw-squircle-composer .pw-composer-row { min-width: 0; width: 100%; margin-bottom: 2px; }
 .pw-composer-host.pw-squircle-composer .pw-composer-row > textarea {
-  box-sizing: border-box; display: block;
-  min-width: 0; width: 100%; max-width: 100%; min-height: 48px; max-height: 120px;
-  height: 48px; margin: 0; padding: 8px 8px 10px; border: 0 !important;
-  border-radius: 0; background: transparent !important;
-  color: var(--pw-ink, #242424); font: 400 16px/24px var(--pw-font);
-  resize: none; overflow-wrap: anywhere; overflow-y: auto; scrollbar-width: thin;
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  height: 3rem;
+  min-height: max(48px, 3rem);
+  max-height: max(144px, 9rem);
+  margin: 0;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  background: transparent;
+  color: var(--pw-ink);
+  box-shadow: none;
+  font: 400 1rem/1.5 var(--pw-font);
+  resize: none;
+  overflow-wrap: anywhere;
+  overflow-y: auto;
+  scrollbar-width: thin;
 }
-.pw-composer-host.pw-squircle-composer .pw-composer-row > textarea::placeholder {
-  color: var(--pw-muted, #999); opacity: .9;
-}
+.pw-composer-host.pw-squircle-composer .pw-composer-row > textarea:focus-visible { outline: none; background: transparent; box-shadow: none; }
+.pw-composer-host.pw-squircle-composer .pw-composer-row > textarea::placeholder { color: var(--pw-muted); opacity: .86; }
 .pw-composer-host.pw-squircle-composer .pw-composer-toolbar {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  min-width: 0; width: 100%; min-height: 44px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2px 0;
+  min-width: 0;
+  width: 100%;
+  min-height: var(--pw-composer-hit);
 }
-.pw-composer-host.pw-squircle-composer .pw-composer-leading,
-.pw-composer-host.pw-squircle-composer .pw-composer-trailing {
-  flex: 0 0 auto; display: flex; align-items: center; gap: 0;
-  min-width: 0; padding: 0; min-height: 44px;
+.pw-composer-host.pw-squircle-composer :is(.pw-composer-leading, .pw-composer-trailing, .pw-composer-intent, .afa-toolbar) {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0;
+  min-width: 0;
+  max-width: 100%;
+  min-height: var(--pw-composer-hit);
+  padding: 0;
 }
-.pw-composer-host.pw-squircle-composer .pw-composer-trailing { margin-inline-start: auto; }
-.pw-composer-host.pw-squircle-composer .pw-composer-controls {
-  flex: 0 0 auto; align-self: center; min-width: 0;
+.pw-composer-host.pw-squircle-composer .pw-composer-trailing { justify-content: flex-end; margin-inline-start: auto; }
+.pw-composer-host.pw-squircle-composer .pw-composer-controls { flex: 0 0 auto; align-self: center; min-width: 0; }
+.pw-composer-host.pw-squircle-composer .pw-composer-intent > .pw-grow { display: none; }
+.pw-composer-host.pw-squircle-composer .pw-conversation-model-controls { display: flex; flex-wrap: nowrap; gap: 0; min-width: 0; max-width: none; }
+.pw-composer-host.pw-squircle-composer .pw-composer-toolbar :is(.pw-composer-intent > button, .afa-iconbtn, .afa-stop, .pw-conversation-model-chip, .pw-conversation-reasoning-chip),
+.pw-composer-host.pw-squircle-composer .afa-recording .afa-iconbtn {
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  flex: 0 0 var(--pw-composer-hit);
+  width: var(--pw-composer-hit);
+  min-width: var(--pw-composer-hit);
+  max-width: var(--pw-composer-hit);
+  height: var(--pw-composer-hit);
+  min-height: var(--pw-composer-hit);
+  margin: 0;
+  padding: 12px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--pw-copy);
+  box-shadow: none;
 }
-.pw-composer-host.pw-squircle-composer .pw-composer-toolbar .afa-toolbar {
-  flex: 0 0 auto; display: flex; align-items: center; gap: 0;
-  min-width: 0; min-height: 44px; padding: 0; flex-wrap: nowrap;
+.pw-composer-host.pw-squircle-composer .pw-composer-toolbar :is(button, [data-pw-icon-button]):focus-visible {
+  outline: none;
+  background: var(--pw-selected);
+  box-shadow: none;
 }
-.pw-composer-host.pw-squircle-composer .pw-composer-toolbar .pw-composer-intent button,
-.pw-composer-host.pw-squircle-composer :is(.pw-composer-toolbar, .afa-recording) :is(.afa-iconbtn, .afa-stop) {
-  box-sizing: border-box; flex: 0 0 44px; width: 44px; height: 44px;
-  min-width: 44px; min-height: 44px;
-  margin: 0; padding: 12px !important; border: 0 !important; border-radius: 50%;
-  background: transparent !important; box-shadow: none !important;
-  color: var(--pw-copy, #505050);
-}
-.pw-composer-host.pw-squircle-composer .pw-composer-intent > button:first-child {
-  background: var(--pw-inset, #f2f2f2) !important; color: var(--pw-ink, #252525);
-}
-.pw-composer-host.pw-squircle-composer .pw-composer-intent button:hover,
-.pw-composer-host.pw-squircle-composer .afa-iconbtn:hover {
-  background: var(--pw-hover, #f5f5f5) !important;
-}
-.pw-composer-host.pw-squircle-composer .pw-composer-intent svg,
-.pw-composer-host.pw-squircle-composer .afa-toolbar svg { width: 20px; height: 20px; }
-.pw-composer-host.pw-squircle-composer .pw-conversation-model-controls {
-  gap: 0; display: flex; flex-wrap: nowrap; max-width: none;
-}
-.pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button:is(.pw-conversation-model-chip,.pw-conversation-reasoning-chip) {
-  box-sizing: border-box; display: flex; align-items: center; justify-content: center;
-  flex: 0 0 44px; min-width: 44px; max-width: 44px;
-  width: 44px; height: 44px; min-height: 44px;
-  padding: 0; border: 0; border-radius: 50%; box-shadow: none;
-  background: transparent; color: var(--pw-copy, #555);
-}
+.pw-composer-host.pw-squircle-composer .pw-composer-toolbar :is(.pw-composer-intent, .afa-toolbar) svg { width: 20px; height: 20px; }
+/* Keep BoardUI's label wrapper; only its text and secondary glyphs are hidden. */
 .pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button::before { display: none; }
-/* BoardUI Button wraps JSX children in its label span. Keep that wrapper:
-   hiding it also hides the model and reasoning SVGs. Only hide visual labels
-   and secondary glyphs; each button retains its native accessible name. */
 .pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button > span {
   display: flex; align-items: center; justify-content: center; gap: 0;
   flex: 0 0 auto; min-width: 0; padding: 0;
@@ -113,168 +196,106 @@
 .pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button > b,
 .pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button > svg:not(:first-child) { display: none; }
 .pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button > svg:first-child,
-.pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button > span > svg:first-child {
-  display: block; flex: none; width: 20px; height: 20px;
-}
-.pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button:hover:not(:disabled) {
-  background: var(--pw-hover, #f6f6f6);
-}
+.pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button > span > svg:first-child { display: block; flex: none; width: 20px; height: 20px; }
 .pw-composer-host.pw-squircle-composer .pw-composer-toolbar .pw-press {
-  box-sizing: border-box; flex: 0 0 44px; min-width: 44px; width: 44px; height: 44px;
-  min-height: 44px; padding: 2px !important; border-radius: 50%;
-  animation: pw-send-appear 180ms cubic-bezier(.2,.85,.2,1) both;
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  flex: 0 0 var(--pw-composer-hit);
+  width: var(--pw-composer-hit);
+  min-width: var(--pw-composer-hit);
+  height: var(--pw-composer-hit);
+  min-height: var(--pw-composer-hit);
+  border-radius: 50%;
+  animation: pw-send-appear 160ms cubic-bezier(.2,.8,.2,1) both;
 }
 .pw-composer-host.pw-squircle-composer .pw-composer-toolbar .pw-press-front {
-  box-sizing: border-box; min-height: 40px; height: 40px; padding: 10px; border-radius: 50%;
-  background: var(--pw-strong, #222); color: var(--pw-on-strong, #fff);
+  box-sizing: border-box;
+  width: 36px;
+  height: 36px;
+  min-height: 36px;
+  padding: 9px;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--pw-on-strong);
 }
 .pw-composer-host.pw-squircle-composer .pw-composer-toolbar .pw-press-material { border-radius: inherit; }
 .pw-composer-host.pw-squircle-composer .pw-composer-toolbar .pw-press-label { display: flex; align-items: center; justify-content: center; }
-.pw-composer-host.pw-squircle-composer .pw-composer-toolbar .pw-press-label svg { width: 20px; height: 20px; }
+.pw-composer-host.pw-squircle-composer .pw-composer-toolbar .pw-press-label svg { width: 18px; height: 18px; }
 .pw-composer-host.pw-squircle-composer .pw-composer-row .afa-recording {
-  display: flex; align-items: center; gap: 6px;
-  min-width: 0; min-height: 48px; width: 100%; padding-inline: 8px;
-  color: var(--pw-copy, #626262); font: 400 14px/20px var(--pw-font);
+  display: flex; align-items: center; gap: 8px;
+  min-width: 0; min-height: max(48px, 3rem); width: 100%; padding-inline: 12px;
+  color: var(--pw-copy); font: 400 .875rem/1.5 var(--pw-font);
 }
-.pw-composer-host.pw-squircle-composer .afa-recording > i { flex: 0 0 6px; background: var(--pw-muted, #737373); }
+.pw-composer-host.pw-squircle-composer .afa-recording > i { flex: 0 0 6px; background: var(--pw-muted); }
 .pw-composer-host.pw-squircle-composer .afa-recording > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+
 .pw-composer-host.pw-squircle-composer .afa-filechips {
-  display: flex; flex-wrap: wrap; gap: 7px; max-height: min(25dvh, 186px);
-  margin: 0 0 5px; padding: 8px 8px 6px; overflow: auto;
+  display: flex; flex-wrap: wrap; gap: 8px; max-height: min(25dvh, 186px);
+  margin: 0 0 4px; padding: 8px 10px 6px; overflow: auto;
 }
 .pw-composer-host.pw-squircle-composer .afa-filechips > .pw-composer-attachment {
   position: relative; display: flex; flex-direction: column; align-items: center;
   justify-content: center; width: 72px; max-width: 72px; min-width: 72px;
-  height: 70px; min-height: 70px; padding: 6px; gap: 3px;
-  border: 0; border-radius: 17px; background: var(--pw-inset, #f4f4f4);
-  box-shadow: none; color: var(--pw-copy, #555);
+  min-height: 72px; padding: 6px; gap: 4px;
+  border: 0; border-radius: 17px; background: var(--pw-inset);
+  box-shadow: none; color: var(--pw-copy);
 }
 .pw-composer-host.pw-squircle-composer .pw-composer-file-preview {
   position: relative; display: grid; place-items: center; width: 42px; height: 42px;
-  overflow: hidden; border-radius: 11px; color: var(--pw-copy, #555);
+  overflow: hidden; border-radius: 11px; color: var(--pw-copy);
 }
-.pw-composer-host.pw-squircle-composer .pw-composer-file-preview img {
-  display: block; width: 100%; height: 100%; object-fit: cover;
-}
+.pw-composer-host.pw-squircle-composer .pw-composer-file-preview img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .pw-composer-host.pw-squircle-composer .pw-composer-file-name {
   display: block; width: 100%; min-width: 0; max-width: 100%;
-  font: 400 10px/13px var(--pw-font); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font: 400 .6875rem/1.35 var(--pw-font); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   text-align: center;
 }
 .pw-composer-host.pw-squircle-composer .afa-filechips .pw-composer-attachment > button {
   position: absolute; top: -8px; right: -8px; z-index: 2; isolation: isolate;
-  display: grid; place-items: center; flex: none;
-  width: 44px; height: 44px; min-width: 44px; min-height: 44px;
+  display: grid; place-items: center;
+  width: var(--pw-composer-hit); height: var(--pw-composer-hit); min-width: var(--pw-composer-hit); min-height: var(--pw-composer-hit);
   padding: 0; border: 0; border-radius: 50%;
-  background: transparent; color: var(--pw-surface, #fff);
+  background: transparent; color: var(--pw-surface);
   font: 500 14px/1 var(--pw-font); box-shadow: none;
 }
 .pw-composer-host.pw-squircle-composer .afa-filechips .pw-composer-attachment > button::before {
   content: ''; position: absolute; inset: 12px; z-index: -1; border-radius: 50%;
-  background: var(--pw-copy, #777); box-shadow: 0 1px 3px rgb(0 0 0 / 9%);
+  background: var(--pw-copy);
 }
 .pw-composer-host.pw-squircle-composer .pw-composer-file-progress {
   position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible;
   pointer-events: none; transform: rotate(-90deg);
 }
-.pw-composer-host.pw-squircle-composer .pw-composer-file-progress circle {
-  fill: none; stroke-width: 2; stroke-linecap: round;
-}
+.pw-composer-host.pw-squircle-composer .pw-composer-file-progress circle { fill: none; stroke-width: 2; stroke-linecap: round; }
 .pw-composer-host.pw-squircle-composer .pw-composer-file-track { stroke: color-mix(in srgb, var(--pw-ink) 10%, transparent); }
-.pw-composer-host.pw-squircle-composer .pw-composer-file-value { stroke: var(--pw-copy, #666); transition: stroke-dashoffset 200ms ease; }
-/* Permission controls keep one content-sized sheet and their own compact rhythm. */
-.pw-drawer.pw-permission-drawer {
-  width: 100%; max-width: 560px; height: auto; max-height: min(82dvh, 760px);
-  margin-inline: auto; border: 0; background: var(--pw-surface, #fff);
-}
-.pw-permission-drawer > .pw-drawer-header { flex: none; padding: 12px 20px; border: 0; }
-.pw-permission-drawer > .pw-permission-sheet-body {
-  display: flex; flex-direction: column; gap: 12px; flex: 0 1 auto;
-  min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 20px 16px;
-}
-.pw-permission-sheet-body > * { flex: 0 0 auto; }
-.pw-permission-sheet-body .pw-composer-permission-detail { width: 100%; min-width: 0; max-width: none; }
-.pw-permission-sheet-body .pw-composer-permission-detail [slot="trigger"] { padding-inline: 0; }
-.pw-permission-sheet-body .pw-composer-permission-detail dl { margin-block: 8px; }
-.pw-permission-sheet-body .pw-composer-permission-note { max-width: none; padding: 8px 0; }
-.pw-permission-pending-review { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--pw-copy); font: 400 12px/18px var(--pw-font); }
-.pw-permission-pending-review > button { min-height: 44px; flex-shrink: 0; }
-.pw-permission-policy { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-.pw-permission-policy .pw-selection-field { min-width: 0; gap: 6px; }
-.pw-permission-policy .pw-field-label { color: var(--pw-copy); font: 500 12px/18px var(--pw-font); }
-.pw-permission-policy .pw-radio-option {
-  min-width: 0; min-height: 44px; padding: 8px 12px; gap: 10px;
-  border: 0; border-radius: 12px; background: transparent;
-}
-.pw-permission-policy .pw-radio-option[data-selected] { background: var(--pw-inset); }
-.pw-permission-policy .pw-radio-option[data-hovered]:not([data-disabled]) { background: var(--pw-hover); }
-.pw-permission-policy .pw-radio-option[data-focus-visible] { outline: 2px solid var(--pw-copy); outline-offset: -2px; }
-.pw-permission-policy .pw-radio-option > span:last-child { flex: 1; min-width: 0; }
-.pw-permission-policy .pw-option-copy { gap: 1px; }
-.pw-permission-policy .pw-option-copy > span { font: 400 14px/20px var(--pw-font); color: var(--pw-ink); }
-.pw-permission-policy .pw-option-copy > small { font: 400 12px/18px var(--pw-font); color: var(--pw-copy); }
-.pw-permission-scope .pw-selection-field { display: grid; grid-template-columns: 60px minmax(0, 1fr); align-items: center; gap: 8px; }
-.pw-permission-scope [role="radiogroup"] { display: flex; flex-direction: row; gap: 4px; min-width: 0; }
-.pw-permission-scope .pw-radio-option { flex: 1; justify-content: center; padding: 8px 6px; gap: 6px; }
-.pw-permission-scope .pw-option-copy > span { font-size: 13px; white-space: nowrap; }
-.pw-permission-scope > .pw-permission-hint { margin-top: 4px; }
-.pw-permission-modes [role="radiogroup"] { display: flex; flex-direction: column; gap: 4px; }
-.pw-permission-modes .pw-radio-option { min-height: 56px; }
-.pw-permission-modes > .pw-permission-hint { margin-top: 6px; }
-.pw-permission-hint,
-.pw-permission-inherited,
-.pw-permission-read-status,
-.pw-permission-notice,
-.pw-permission-error { margin: 0; color: var(--pw-muted); font: 400 12px/18px var(--pw-font); overflow-wrap: anywhere; }
-.pw-permission-rules [slot="trigger"] { min-height: 44px; padding: 10px 0; }
-.pw-permission-rules [slot="trigger"] .text-headline-medium { font: 500 14px/20px var(--pw-font); }
-.pw-permission-rules .pw-permission-hint,
-.pw-permission-inherited { margin-bottom: 8px; }
-.pw-permission-tool-rule { display: flex; flex-direction: column; align-items: stretch; gap: 2px; margin: 12px 0; }
-.pw-permission-tool-rule .pw-field-label { overflow-wrap: anywhere; }
-.pw-permission-tool-rule [role="radiogroup"] { display: flex; flex-direction: row; gap: 4px; }
-.pw-permission-tool-rule .pw-radio-option { flex: 1; justify-content: center; padding-inline: 8px; }
-.pw-permission-tool-rule > button { align-self: flex-end; min-height: 44px; }
-.pw-permission-add-rule { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px; margin: 12px 0; }
-.pw-permission-add-rule > :first-child { min-width: 0; width: 100%; }
-.pw-permission-add-rule > button { min-height: 44px; }
-.pw-permission-actions {
-  display: flex; flex-direction: column; gap: 8px;
-  padding: 10px 0 2px; background: var(--pw-surface, #fff);
-}
-.pw-permission-action-row { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
-.pw-permission-action-row > button { min-height: 44px; }
-.pw-permission-notice { color: var(--pw-copy); }
-.pw-permission-error,
-.pw-permission-read-status[role="alert"] { color: var(--pw-danger); }
-.pw-composer-permission-note {
-  max-width: 280px; padding: 4px 12px 10px; color: var(--pw-muted, #777);
-  font: 400 12px/1.65 var(--pw-font);
-}
-/* Retain the public model-picker/status slots for other composer consumers. */
+.pw-composer-host.pw-squircle-composer .pw-composer-file-value { stroke: var(--pw-copy); transition: stroke-dashoffset 180ms ease; }
 .pw-composer-host.pw-squircle-composer .pw-composer-model { display: flex; padding-inline: 8px; }
 .pw-composer-host.pw-squircle-composer .pw-composer-model .pw-model-trigger {
-  min-height: 44px; max-width: 100%; border: 0; background: transparent; box-shadow: none;
+  min-height: var(--pw-composer-hit); max-width: 100%; border: 0; background: transparent; box-shadow: none;
 }
 .pw-composer-host.pw-squircle-composer .pw-composer-status {
-  padding: 4px 10px 0; color: var(--pw-muted, #737373); font: 400 12px/18px var(--pw-font);
+  padding: 6px 12px 0; color: var(--pw-muted); font: 400 .75rem/1.5 var(--pw-font); overflow-wrap: anywhere;
+}
+:root.dark .pw-composer-host.pw-squircle-composer {
+  --pw-composer-rail: color-mix(in srgb, var(--pw-surface) 52%, var(--pw-inset));
+  --pw-composer-shadow: 0 12px 28px -14px rgb(0 0 0 / 22%);
+}
+@media (hover: hover) and (pointer: fine) {
+  .pw-composer-host.pw-squircle-composer .pw-composer-toolbar :is(.pw-composer-intent > button, .afa-iconbtn, .afa-stop, .pw-conversation-model-chip, .pw-conversation-reasoning-chip):hover:not(:disabled) { background: var(--pw-hover); }
+  .pw-composer-host.pw-squircle-composer .pw-context-meter-button:hover .pw-context-meter-track { opacity: .6; }
 }
 @supports (corner-shape: superellipse(2)) {
-  .pw-composer-host.pw-squircle-composer .pw-composer-context-rail,
-  .pw-composer-region .pw-composer-host.pw-squircle-composer .afa-composer > .afa-card.pw-composer-card,
-  .pw-composer-host.pw-squircle-composer .afa-filechips > .pw-composer-attachment,
-  .pw-composer-host.pw-squircle-composer .pw-composer-file-preview {
-    corner-shape: superellipse(2);
-  }
+  .pw-composer-host.pw-squircle-composer :is(.pw-composer-context-rail, .pw-composer-card, .pw-composer-attachment, .pw-composer-file-preview) { corner-shape: superellipse(2); }
 }
-@keyframes pw-send-appear { from { opacity: 0; transform: scale(.74); } to { opacity: 1; transform: scale(1); } }
-:root.dark .pw-composer-host.pw-squircle-composer .pw-composer-context-rail {
- background: color-mix(in srgb, var(--pw-surface, #222) 52%, var(--pw-inset, #303030));
- box-shadow: none;
+@media (forced-colors: active) {
+  .pw-composer-host.pw-squircle-composer .pw-continuous-surface path { fill: Canvas; stroke: CanvasText; stroke-width: 1; }
+  .pw-composer-host.pw-squircle-composer .pw-context-meter-button:focus-visible,
+  .pw-composer-host.pw-squircle-composer .pw-composer-toolbar button:focus-visible { outline: 2px solid Highlight; outline-offset: -2px; }
 }
+@keyframes pw-send-appear { from { opacity: 0; transform: scale(.88); } to { opacity: 1; transform: scale(1); } }
 @media (prefers-reduced-motion: reduce) {
- .pw-composer-host.pw-squircle-composer .pw-composer-toolbar .pw-press { animation: none; }
- .pw-composer-region .pw-composer-host.pw-squircle-composer .afa-composer > .afa-card.pw-composer-card,
- .pw-composer-host.pw-squircle-composer .pw-composer-file-value { transition: none; }
+  .pw-composer-host.pw-squircle-composer .pw-composer-toolbar .pw-press { animation: none; }
+  .pw-composer-host.pw-squircle-composer :is(.pw-continuous-surface, .pw-composer-file-value) { transition: none; }
 }
 :root[data-pw-motion-paused="true"] .pw-composer-host.pw-squircle-composer .pw-composer-toolbar .pw-press { animation: none; }

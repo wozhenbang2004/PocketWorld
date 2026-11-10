@@ -40,33 +40,9 @@
 .pw-task-body .pw-task-outcome.pw-task-reading { margin: 0; }
 
 /* Work is one related collection under the answer, not independent chat bubbles. */
-.pw-redesign .pw-conversation-work { width: min(100%,744px); max-width: 744px; margin: 12px auto 8px; padding: 0 20px 16px; }
-.pw-conversation-work .pw-work-heading { justify-content: flex-start; gap: 8px; min-height: 36px; margin-bottom: 2px; padding: 0; }
-.pw-work-heading h3 { margin: 0; font-size: 13px; line-height: 20px; font-weight: 600; color: var(--pw-copy); }
-.pw-work-count { font-size: 12px; font-variant-numeric: tabular-nums; }
-.pw-work-heading > button { margin-left: auto; min-height: 48px; }
-.pw-conversation-work ol { gap: 4px; border: 0; }
-.pw-conversation-work li + li { border: 0; }
-.pw-redesign .pw-conversation-work .pw-work-row.button-press-motion { width: 100%; min-width: 0; height: auto; min-height: 60px; padding: 10px 0; border-radius: 8px; background: transparent; box-shadow: none; }
-.pw-conversation-work .pw-work-row.button-press-motion > span { display: grid; grid-template-columns: 18px minmax(0,1fr) auto; align-items: center; gap: 10px; width: 100%; min-width: 0; padding: 0; }
-.pw-work-action { display: inline-flex; align-items: center; gap: 2px; color: var(--pw-copy); font-size: 12px; line-height: 20px; white-space: nowrap; }
-.pw-conversation-work [data-work-attention="true"] .pw-work-action { color: var(--pw-ink); font-weight: 500; }
-.pw-conversation-work .pw-work-copy { display: grid; gap: 4px; min-width: 0; }
-.pw-conversation-work .pw-work-copy b { font-size: 14px; line-height: 22px; font-weight: 500; overflow-wrap: anywhere; white-space: normal; }
-.pw-conversation-work .pw-work-copy small { font-size: 12px; line-height: 19px; }
 .pw-linked-task.button-press-motion > span { display: flex; gap: 14px; justify-content: space-between; width: 100%; min-width: 0; padding: 0; }
 .pw-linked-task-copy { flex: 1; min-width: 0; }
 .pw-linked-task-action { flex-shrink: 0; }
-.pw-chat-empty .pw-conversation-scroll { display: flex; flex-direction: column; }
-.pw-redesign .pw-chat-empty .pw-chat-start { align-items: flex-start; justify-content: flex-start; margin: auto; padding: 32px 20px 56px; width: min(100%,744px); gap: 24px; }
-.pw-start-heading { display: grid; gap: 10px; }
-.pw-redesign .pw-chat-start h2 { margin: 0; font-size: 26px; line-height: 1.4; letter-spacing: -.025em; font-weight: 550; text-align: start; }
-.pw-chat-start .pw-start-heading p { margin: 0; color: var(--pw-copy); font-size: 14px; line-height: 24px; }
-.pw-chat-start .pw-start-actions { display: flex; align-items: center; justify-content: flex-start; flex-wrap: wrap; gap: 8px; margin: 0; max-width: 100%; }
-.pw-chat-start .pw-start-actions .button-press-motion { min-height: 44px; padding: 10px; gap: 6px; border: 0; border-radius: 12px; background: var(--pw-inset); box-shadow: none; color: var(--pw-copy); font-size: 13px; font-weight: 400; }
-.pw-chat-start .pw-start-actions .button-press-motion:hover { background: var(--pw-selected); color: var(--pw-ink); }
-.pw-chat-start .pw-start-actions .button-press-motion > span { padding: 0; }
-.pw-chat-start .pw-start-actions svg { width: 18px; height: 18px; }
 .pw-redesign .pw-chat-title h1 { width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: start; font-size: 16px; line-height: 24px; font-weight: 600; letter-spacing: -.015em; }
 .pw-chat-title .pw-chat-title-trigger { width: 100%; min-width: 0; min-height: 44px; padding: 6px 4px; justify-content: flex-start; border: 0; border-radius: 10px; background: transparent; box-shadow: none; font: inherit; color: inherit; }
 .pw-chat-title-trigger > span { display: flex; align-items: center; gap: 5px; flex: 0 1 auto; min-width: 0; padding: 0; }
@@ -74,11 +50,6 @@
 .pw-chat-title-trigger svg { flex: none; color: var(--pw-muted); }
 .pw-redesign[data-route="chat"] .pw-app-header { gap: 4px; }
 .pw-redesign[data-route="chat"] .pw-app-header > button { width: 44px; min-width: 44px; height: 44px; min-height: 44px; }
-@media (max-width: 359px) {
- .pw-chat-start .pw-start-actions { gap: 6px; }
- .pw-chat-start .pw-start-actions .button-press-motion { padding-inline: 8px; gap: 5px; font-size: 12px; }
- .pw-chat-start .pw-start-actions svg { width: 16px; height: 16px; }
-}
 
 /* Bounded AppShell header and sheets keep reading and commit actions reachable. */
 .pw-primary-tools { display: flex; align-items: center; gap: 2px; flex: none; }
@@ -116,6 +87,5 @@
 }
 @media (max-width: 359px) {
  .pw-redesign .pw-depth-tasks { padding-inline: 16px; }
- .pw-redesign .pw-conversation-work { padding-inline: 16px; }
  .pw-task-status-filters { gap: 0; }
 }
