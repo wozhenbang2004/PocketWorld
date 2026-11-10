@@ -177,6 +177,9 @@
   color: var(--pw-copy);
   box-shadow: none;
 }
+.pw-composer-host.pw-squircle-composer .pw-composer-toolbar :is(.pw-conversation-model-chip, .pw-conversation-reasoning-chip):disabled {
+  color: var(--pw-disabled);
+}
 .pw-composer-host.pw-squircle-composer .pw-composer-toolbar :is(button, [data-pw-icon-button]):focus-visible {
   outline: 2px solid var(--pw-focus);
   outline-offset: -3px;
