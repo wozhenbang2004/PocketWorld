@@ -42,7 +42,7 @@ final class QuickPanelSurface implements AutoCloseable {
         void close();
     }
 
-    private enum Phase { LOADING, BLOCKED, READY, CAPTURING, REVIEW, SENDING, OPENING_VOICE, UNKNOWN, SAVED, ERROR }
+    private enum Phase { LOADING, BLOCKED, READY, CAPTURING, REVIEW, SENDING, OPENING_VOICE, CLEARING_DRAFT, UNKNOWN, SAVED, ERROR }
     private final Context context;
     private final WindowManager windows;
     private final Actions actions;
@@ -118,7 +118,9 @@ final class QuickPanelSurface implements AutoCloseable {
     void draftNotice(String detail) { mainOnly(); draftStatus = detail; TextView shown = root.findViewWithTag("quick_panel_draft_status"); if (shown != null) { shown.setText(detail); shown.setVisibility(detail.isBlank() ? View.GONE : View.VISIBLE); } if (noteDialog != null) { TextView editorStatus = noteDialog.findViewById(android.R.id.message); if (editorStatus != null) { editorStatus.setText(detail); editorStatus.setVisibility(detail.isBlank() ? View.GONE : View.VISIBLE); } } }
     void draftFailure(String detail) { mainOnly(); draftWritable = false; draftNotice(detail); Button send = root.findViewWithTag("quick_panel_send"); if (send != null) send.setEnabled(false); Button capture = root.findViewWithTag("quick_panel_capture"); if (capture != null) capture.setEnabled(false); Button voice = root.findViewWithTag("quick_panel_voice"); if (voice != null) voice.setEnabled(false); }
     void draftStored() { mainOnly(); boolean blocked = !draftWritable; draftWritable = true; draftNotice(""); if (blocked && noteDialog == null) render(); }
-    void draftCleared() { mainOnly(); note = ""; noteReviewedFor = null; draftStatus = ""; render(); }
+    void clearingDraft() { mainOnly(); phase = Phase.CLEARING_DRAFT; message = null; render(); }
+    void draftCleared() { mainOnly(); note = ""; noteReviewedFor = null; draftStatus = ""; phase = preview == null ? Phase.READY : Phase.REVIEW; render(); }
+    void draftClearFailed(String detail) { mainOnly(); draftWritable = false; phase = Phase.ERROR; message = detail; render(); }
     void capturing() { mainOnly(); clearPreview(); phase = Phase.CAPTURING; message = null; expanded = true; render(); }
     void preview(PreviewContent content) { mainOnly(); if (preview != content) clearPreview(); preview = content; phase = Phase.REVIEW; message = null; expanded = true; render(); }
     void sending() { mainOnly(); phase = Phase.SENDING; message = null; render(); }
@@ -159,7 +161,7 @@ final class QuickPanelSurface implements AutoCloseable {
         if (image != null) { image.recycle(); image = null; }
         root.setPadding(dp(expanded ? 12 : 4), dp(expanded ? 8 : 4), dp(expanded ? 12 : 4), dp(expanded ? 8 : 4));
         if (!expanded) {
-            String label = phase == Phase.UNKNOWN ? "待核对 · 原任务" : phase == Phase.SENDING ? "登记中 · 原任务" : phase == Phase.SAVED ? "已登记 · 原任务" : "补充原任务";
+            String label = phase == Phase.UNKNOWN ? "待核对 · 原任务" : phase == Phase.SENDING ? "登记中 · 原任务" : phase == Phase.CLEARING_DRAFT ? "清除中 · 原任务" : phase == Phase.SAVED ? "已登记 · 原任务" : "补充原任务";
             Button open = button(label, () -> { expanded = true; render(); }, false);
             open.setContentDescription(phase == Phase.READY ? "打开原任务快捷补充；尚未读取页面" : label + "；打开只查看原状态，不重新捕获或发送");
             root.addView(open);
@@ -184,10 +186,10 @@ final class QuickPanelSurface implements AutoCloseable {
             if (phase == Phase.LOADING || phase == Phase.BLOCKED) {
                 body.addView(text(phase == Phase.LOADING ? "正在读取这个原任务的本机草稿…" : message, 13, UiAppearance.secondary(context)));
                 footer.addView(button("查看原任务", actions::openOriginalTask, false));
-            } else if (phase == Phase.CAPTURING || phase == Phase.SENDING || phase == Phase.OPENING_VOICE) {
+            } else if (phase == Phase.CAPTURING || phase == Phase.SENDING || phase == Phase.OPENING_VOICE || phase == Phase.CLEARING_DRAFT) {
                 ProgressBar progress = new ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal);
                 progress.setIndeterminate(true); body.addView(progress, new LinearLayout.LayoutParams(-1, dp(4)));
-                body.addView(text(phase == Phase.CAPTURING ? "正在读取你刚才明确选择的手机主屏…" : phase == Phase.OPENING_VOICE ? "正在保留原说明并打开前台听写窗口。尚未录音或发送…" : "正在登记这份固定内容，未自动继续任务…", 13, UiAppearance.secondary(context)));
+                body.addView(text(phase == Phase.CAPTURING ? "正在读取你刚才明确选择的手机主屏…" : phase == Phase.OPENING_VOICE ? "正在保留原说明并打开前台听写窗口。尚未录音或发送…" : phase == Phase.CLEARING_DRAFT ? "正在清除未发送说明，完成前不会发送旧文字…" : "正在登记这份固定内容，未自动继续任务…", 13, UiAppearance.secondary(context)));
                 if (phase == Phase.CAPTURING) footer.addView(button("取消这次捕获", this::dismissPreview, false));
                 else footer.addView(button("查看原任务", actions::openOriginalTask, false));
             } else if (phase == Phase.UNKNOWN) {
@@ -325,7 +327,7 @@ final class QuickPanelSurface implements AutoCloseable {
         if(audioTarget!=null)body.addView(text(audioTarget,12,UiAppearance.secondary(context)));
         if(audioState!=null){String mode=audioState.optString("mode");String label=switch(mode){case "ignore" -> "静音（已读回）";case "allow" -> "允许播放（已读回）";case "deny" -> "系统拒绝播放（已读回）";case "foreground" -> "仅前台播放（已读回）";default -> "系统默认（已读回）";};body.addView(text(label,12,UiAppearance.foreground(context)));}
         body.addView(text(audioMessage==null?"读取当前目标后，可只静音这个 App，或明确将它设为原记录的声音模式。当前支持 user 0；不会调整手机总音量。":audioMessage,12,UiAppearance.secondary(context)));
-        boolean ready=!audioBusy&&phase!=Phase.CAPTURING&&phase!=Phase.SENDING&&phase!=Phase.OPENING_VOICE;
+        boolean ready=!audioBusy&&phase!=Phase.CAPTURING&&phase!=Phase.SENDING&&phase!=Phase.OPENING_VOICE&&phase!=Phase.CLEARING_DRAFT;
         if(audioReviewId!=null&&audioState!=null){
             final String review=audioReviewId;
             if(audioState.optBoolean("canMute")){Button mute=button("仅静音这个 App",()->actions.setAudio(review,true),false);mute.setTag("quick_panel_audio_mute");mute.setEnabled(ready);body.addView(mute);}
@@ -344,7 +346,7 @@ final class QuickPanelSurface implements AutoCloseable {
     }
 
     private void dismissPreview() {
-        if (phase == Phase.SENDING || phase == Phase.UNKNOWN || phase == Phase.OPENING_VOICE) return;
+        if (phase == Phase.SENDING || phase == Phase.UNKNOWN || phase == Phase.OPENING_VOICE || phase == Phase.CLEARING_DRAFT) return;
         actions.cancelPreview();
     }
 

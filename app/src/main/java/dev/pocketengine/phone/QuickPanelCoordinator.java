@@ -22,7 +22,7 @@ final class QuickPanelCoordinator implements AutoCloseable, QuickPanelSurface.Ac
     private volatile boolean draftReady;
     private boolean draftSaveQueued;
     private String latestNote = "";
-    private long editGeneration;
+    private boolean clearingDraft;
     private final Object captureState = new Object();
     private OwnerScreenContext capture;
     private OwnerScreenContext.Preview preview;
@@ -71,7 +71,7 @@ final class QuickPanelCoordinator implements AutoCloseable, QuickPanelSurface.Ac
     @Override public void capture(boolean includeScreenshot) {
         final int pending;
         synchronized (captureState) {
-            if (closed || !draftReady || audioWorking || voiceHandoffPreparing || sending || clientMessageId != null || preparingCapture || capture != null) return;
+            if (closed || !draftReady || clearingDraft || audioWorking || voiceHandoffPreparing || sending || clientMessageId != null || preparingCapture || capture != null) return;
             pending = ++request; preparingCapture = true;
         }
         surface.capturing();
@@ -117,7 +117,7 @@ final class QuickPanelCoordinator implements AutoCloseable, QuickPanelSurface.Ac
     @Override public void cancelPreview() {
         final OwnerScreenContext previous;
         synchronized (captureState) {
-            if (closed || voiceHandoffPreparing || sending || clientMessageId != null) return;
+            if (closed || clearingDraft || voiceHandoffPreparing || sending || clientMessageId != null) return;
             ++request; preparingCapture = false; previous = capture; capture = null; preview = null;
         }
         if (previous != null) previous.close(); surface.ready();
@@ -130,7 +130,7 @@ final class QuickPanelCoordinator implements AutoCloseable, QuickPanelSurface.Ac
         final OwnerScreenContext local; final OwnerScreenContext.Preview selected;
         synchronized (captureState) {
             local = capture; selected = preview;
-            if (closed || !draftReady || audioWorking || voiceHandoffPreparing || sending || preparingCapture || clientMessageId != null
+            if (closed || !draftReady || clearingDraft || audioWorking || voiceHandoffPreparing || sending || preparingCapture || clientMessageId != null
                     || withScreen && (local == null || selected == null) || !withScreen && local != null) return;
         }
         if (note.length() > 1500) { surface.error("补充说明最多1500字，请编辑后再发送。"); return; }
@@ -163,9 +163,8 @@ final class QuickPanelCoordinator implements AutoCloseable, QuickPanelSurface.Ac
     /** Coalesce typing into the existing bounded lifecycle worker; closing never discards queued saves. */
     @Override public void noteChanged(String note) {
         synchronized (draftState) {
-            if (closed || !draftReady || voiceHandoffPreparing || clientMessageId != null) return;
+            if (closed || !draftReady || clearingDraft || voiceHandoffPreparing || clientMessageId != null) return;
             latestNote = note;
-            editGeneration++;
             if (draftSaveQueued) return;
             draftSaveQueued = true;
         }
@@ -192,13 +191,15 @@ final class QuickPanelCoordinator implements AutoCloseable, QuickPanelSurface.Ac
     }
 
     @Override public void clearDraft() {
-        if (closed || !draftReady || voiceHandoffPreparing || sending || clientMessageId != null) return;
-        final long generation;
-        synchronized (draftState) { latestNote = ""; generation = ++editGeneration; }
+        if (closed || !draftReady || clearingDraft || voiceHandoffPreparing || sending || clientMessageId != null) return;
+        clearingDraft = true;
+        synchronized (draftState) { latestNote = ""; }
+        // Retain the old note until its durable clear is confirmed, but never allow it
+        // to be submitted or handed off while that asynchronous write is pending.
+        surface.clearingDraft();
         worker.execute(() -> {
-            synchronized (draftState) { if (generation != editGeneration) return; }
-            try { drafts.saveNote(""); main.post(() -> { if (!closed && clientMessageId == null) { synchronized (draftState) { if (generation != editGeneration) return; } surface.draftCleared(); } }); }
-            catch (Exception failed) { draftReady = false; main.post(() -> { if (!closed) surface.draftFailure(detail(failed, "原草稿清除未确认，未声称已清除。")); }); }
+            try { drafts.saveNote(""); main.post(() -> { if (!closed) { clearingDraft = false; surface.draftCleared(); } }); }
+            catch (Exception failed) { draftReady = false; main.post(() -> { if (!closed) { clearingDraft = false; surface.draftClearFailed(detail(failed, "原草稿清除未确认，未声称已清除。")); } }); }
         });
     }
 
@@ -264,7 +265,7 @@ final class QuickPanelCoordinator implements AutoCloseable, QuickPanelSurface.Ac
     @Override public void setAudio(String reviewId,boolean muted) { if(reviewId!=null&&!reviewId.isBlank())audio(reviewId,muted); }
     private void audio(String reviewId,boolean muted) {
         synchronized(captureState){
-            if(closed||audioWorking||sending||submitting||preparingCapture||voiceHandoffPreparing)return;
+            if(closed||clearingDraft||audioWorking||sending||submitting||preparingCapture||voiceHandoffPreparing)return;
             audioWorking=true;
         }
         surface.audioLoading(reviewId!=null);
@@ -283,7 +284,7 @@ final class QuickPanelCoordinator implements AutoCloseable, QuickPanelSurface.Ac
 
     @Override public void voice() {
         synchronized (captureState) {
-            if (closed || !draftReady || audioWorking || voiceHandoffPreparing || sending || submitting || preparingCapture || clientMessageId != null) return;
+            if (closed || !draftReady || clearingDraft || audioWorking || voiceHandoffPreparing || sending || submitting || preparingCapture || clientMessageId != null) return;
             voiceHandoffPreparing = true;
         }
         final String note;
