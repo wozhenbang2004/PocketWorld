@@ -19,7 +19,13 @@
 
 两路独立源码审阅覆盖页面往返和原生准入，已修正审阅过期被误记为未知、关闭发生在真实准备/启动之前无法恢复、双层有界回执丢失身份及晚回执降级、原生开窗与下一导航并发、读取失败无恢复入口、跨页晚到错误提示等具体问题。目标与选择按 projectId 留在 App，授权和审阅每次重新取得；草稿与回执仅在当前界面/Bridge 生命周期内保存，未实现进程死亡后的持久恢复。
 
-验证方式：源码与类型/编译核对、独立只读审阅、现有远端生产构建/签名/发布；不编写或运行测试，不恢复 CI 采图，不在本机打 APK。源码整合保留主线 `d2a3d41f` 的同期用量界面及模型入口优化。集成后的构建与正式交付回执将在本节补入；当前 Android 视觉、触感和真实启动旅程仍未体验。
+正式源码为 [`7a0016cb`](https://github.com/wozhenbang2004/PocketWorld/commit/7a0016cbf0a28400a09dd4f6640b6035a05ac8e0)，tree `670344e1fe9733ed85f6c836caf32d7258454393`；11 个文件、734 行新增/35 行删除。已保留同期用量界面、模型入口优化及其发布记录；整合后的 `npm run typecheck --prefix web-ui` 成功。远端源码 tree 与本地通过类型检查的 tree 完全一致。
+
+[v0.1.98](https://github.com/wozhenbang2004/PocketWorld/releases/tag/v0.1.98) 于北京时间 **2026-11-11 07:44:14** 正式发布，应用版本 **0.4.1098 / 1098**；[run 42924275775](https://github.com/wozhenbang2004/PocketWorld/actions/runs/42924275775) 的 build、prepare、publish 均 success，release 的 target commit 为上述源码。已完成 Web 生产构建、Android 编译、稳定项目签名、APK/包内资源完整性及发布文件回读核对。
+
+[正式 APK](https://github.com/wozhenbang2004/PocketWorld/releases/download/v0.1.98/976e07a40aa864858103aa1b9a2c860c817ecdbfd254966588038cd6e362ac36-app-1098.apk) 为 148,542,133 bytes，SHA-256 `976e07a40aa864858103aa1b9a2c860c817ecdbfd254966588038cd6e362ac36`。已取回公开 `release.json`，其 SHA-256 为 `8e3b99a1d7d2d0a1abbb1a6f81a35de7a4789f4424ba11ab6b82d46efcb674fc`；载荷的版本、包名、APK 大小与 hash 和正式资产一致。构建证据 artifact `13813248476` 已生成，归档 digest `d305df2d7e5ffb512f1fe37b252c4807350a29f2cb72490fed52514cb488981a`；本轮仅核对其元数据，未称已下载归档。
+
+本批完成 PW-R2 项目新任务入口的实现、源码审阅、构建与正式发布；下方 v0.1.92 记录中该入口“仍需接通”的待办由本节替代。体验入口是“项目 → 工作 → 填写目标/选择配置及副本 → 核对并开始 → 查看原任务”。未编写或运行测试，CI 采图继续停用，本机未构建 APK。**当前 Android 真机视觉、触感、实际启动与返回旅程仍未体验，用户审美认可未取得；PW-R5 及全产品重做的整体验收仍未关闭。**
 
 ## 2026-11-11 模型与推理入口响应
 
