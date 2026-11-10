@@ -21,6 +21,7 @@ export function QuickPanelVoiceDraft({ handoff, input, run }: { handoff: Data; i
   const [text, setText] = useState(final ? String(input.finalText || '') : '');
   const [error, setError] = useState(''), [pending, setPending] = useState(false), [waiting, setWaiting] = useState(false);
   const [attempted, setAttempted] = useState(false), [unknown, setUnknown] = useState(false), [invalidated, setInvalidated] = useState(false), [confirmClose, setConfirmClose] = useState(false);
+  const [closeAction, setCloseAction] = useState<'quickVoice.close' | 'quickVoice.return'>('quickVoice.close');
   const pendingStart = useRef<Data | null>(null);
   const [startFeedback, setStartFeedback] = useState('');
   const editedInput = useRef(final ? identity : ''), owner = useRef(handoff.handoffId), lastAction = useRef(''), currentPolicy = useRef<Data>({});
@@ -75,8 +76,9 @@ export function QuickPanelVoiceDraft({ handoff, input, run }: { handoff: Data; i
   currentPolicy.current = { busy, locked, final, recording, stopping, otherInput };
   const action = async (name: string, args: Data = {}) => {
     if (!alive.current || current.current !== identity || bridge.getDocumentEpoch() !== documentEpoch || entered.current || currentPolicy.current.busy) return;
-    if (name === 'quickVoice.close' && awaiting.current && lastAction.current === name) return;
-    if (name !== 'quickVoice.close' && (currentPolicy.current.locked || awaiting.current)) return;
+    const leaving = name === 'quickVoice.close' || name === 'quickVoice.return';
+    if (leaving && awaiting.current && lastAction.current === name) return;
+    if (!leaving && (currentPolicy.current.locked || awaiting.current)) return;
     if (name === 'quickVoice.save' && (!currentPolicy.current.final || saveEntered.current || !text.trim() || text.length > appendLimit)) return;
     if (name === 'voice.stop' && (!currentPolicy.current.recording || currentPolicy.current.stopping)) return;
     if (name === 'quickVoice.start' && (currentPolicy.current.recording || currentPolicy.current.final || currentPolicy.current.otherInput)) return;
@@ -103,10 +105,12 @@ export function QuickPanelVoiceDraft({ handoff, input, run }: { handoff: Data; i
       if (accepts()) { entered.current = false; setPending(false); }
     }
   };
-  const close = () => {
+  const close = (returnToPanel = false) => {
     if (busy || current.current !== identity || bridge.getDocumentEpoch() !== documentEpoch) return;
+    const name = returnToPanel ? 'quickVoice.return' : 'quickVoice.close';
+    setCloseAction(name);
     if (!saved && (recording || final || text.trim() || saveAttempted || waiting || unknown)) setConfirmClose(true);
-    else void action('quickVoice.close');
+    else void action(name, returnToPanel ? { handoffId: handoff.handoffId } : {});
   };
   const endStartWait = () => {
     if (!alive.current || current.current !== identity || bridge.getDocumentEpoch() !== documentEpoch ||
@@ -118,13 +122,13 @@ export function QuickPanelVoiceDraft({ handoff, input, run }: { handoff: Data; i
   const title = saved ? '已追加到原草稿' : saveAttempted ? (busy ? '正在追加本次文字' : '追加结果待核对')
     : resourceUnknown || unknown || invalidated ? '听写状态待核对' : handoff.closed ? '本次听写已关闭'
     : final ? '核对本次文字' : stopping ? '正在结束听写' : recording ? '正在听写' : '补充原浮层说明';
-  return <SettingsDialog isOpen title="原浮层语音补充" onClose={close}>
+  return <SettingsDialog isOpen title="原浮层语音补充" onClose={() => close()}>
     <div className="pw-voice-draft">
       {confirmClose ? <>
         <div className="pw-voice-stage"><h3>结束本次听写？</h3><p>{saveAttempted ? '追加结果请回原浮层核对。关闭不会重试追加。' : '关闭会舍弃尚未追加的本次听写文字。交接前的原说明仍保留，原任务不会取消。'}</p></div>
         <div className="pw-voice-draft-actions">
           <Button variant="secondary" disabled={busy} onClick={() => setConfirmClose(false)}>{final || text ? '返回核对' : '返回本次听写'}</Button>
-          <Button disabled={busy} onClick={() => { void action('quickVoice.close'); }}>{saveAttempted ? '关闭并回原浮层核对' : '舍弃本次听写并关闭'}</Button>
+          <Button disabled={busy} onClick={() => { void action(closeAction, closeAction === 'quickVoice.return' ? { handoffId: handoff.handoffId } : {}); }}>{closeAction === 'quickVoice.return' ? (saveAttempted ? '回原浮层核对' : '舍弃本次听写并回浮层') : '关闭听写'}</Button>
         </div>
       </> : <>
         <div className="pw-voice-stage" role="status"><h3>{title}</h3>
@@ -157,7 +161,8 @@ export function QuickPanelVoiceDraft({ handoff, input, run }: { handoff: Data; i
           </div>}
         </>}
         <div className="pw-voice-draft-actions">
-          <Button variant="ghost" disabled={busy} onClick={close}>{saved ? '完成' : '关闭听写'}</Button>
+          <Button variant="ghost" disabled={busy} onClick={() => close()}>关闭听写</Button>
+          <Button variant={saved ? 'primary' : 'secondary'} disabled={busy || invalidated} onClick={() => close(true)}>{saved ? '回原浮层继续补充' : saveAttempted || unknown ? '回原浮层核对' : '回原浮层'}</Button>
           {!saved && !final && !handoff.closed && !saveAttempted && !otherInput && <Button disabled={locked || stopping} onClick={() => { void action(recording ? 'voice.stop' : 'quickVoice.start', recording ? {} : { handoffId: handoff.handoffId }); }}>{stopping ? '等待音频释放' : recording ? '结束本次听写' : '开始系统听写'}</Button>}
           {!saved && final && !saveAttempted && <Button disabled={locked || !text.trim() || text.length > appendLimit} onClick={() => { void action('quickVoice.save', { handoffId: handoff.handoffId, inputId: input.inputId, text }); }}>追加到原浮层草稿</Button>}
         </div>

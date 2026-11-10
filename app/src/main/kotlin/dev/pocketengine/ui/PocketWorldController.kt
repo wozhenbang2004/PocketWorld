@@ -2046,6 +2046,19 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             }
         }
     }
+    internal fun returnQuickPanelVoice(handoffId: String) {
+        val original = quickPanelVoice ?: error("原听写窗口已关闭，请从原任务打开快捷补充")
+        check(original.optString("handoffId") == handoffId && !original.optBoolean("saving") && privateWorkspaceView()) { "原听写窗口已变化，请核对后再返回" }
+        val service = dev.pocketengine.phone.PhoneAccessibilityService.get()
+            ?: error("无障碍服务未连接；听写窗口仍保留，请连接服务后再返回浮层")
+        val target = JSONObject().put("taskId", original.getString("taskId"))
+            .put("runId", original.getString("runId")).put("epoch", original.getInt("epoch"))
+        // Reopen only the exact original run. Loading its durable draft never records,
+        // captures, sends or resumes a task. A refused return keeps this review intact.
+        check(service.showQuickPanel(target)) { "原浮层暂不可打开；听写窗口仍保留，请核对原任务状态或关闭已有浮层后重试" }
+        closeQuickPanelVoice()
+        state = state.copy(error = null, notice = "已返回原任务快捷浮层，正在读取已保存说明；没有发送或继续任务。")
+    }
     internal fun closeQuickPanelVoice() {
         ++quickPanelVoiceGeneration
         val id = voiceInput.snapshot().optString("inputId")
