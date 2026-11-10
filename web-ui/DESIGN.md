@@ -1297,3 +1297,6 @@ DSH-Go 确有 Claude OAuth 桥接：[固定版本的 AuthBridge](https://github.
 Affect 参考原码补齐为 `src/shell-library/upstream/affect/src/demos/components-b/context.tsx`（SHA-256 `66a0cdc06352c3225156ea00f9501ce7052ee769c090bf1bd68bd44f794707fe`）与 `metrics.tsx`（`6494eac2ef0fac93e15829a2b8d03099c662fc4fe816d6b4cd928a03e9c6bce9`），均为已批准归档完整原字节，仅保存来源，不运行演示。两次独立只读审查指出并确认修复了“统计失败封住预算/记录入口”和“90天图日期轴不随图滚动”；数据 owner/query、按日范围传递和现有 Button 包装结构已核对。
 
 当前 `node web-ui/node_modules/typescript/bin/tsc --noEmit -p web-ui/tsconfig.json` 与 `git diff --check` 成功。没有编写或运行任何测试，没有模拟宿主和本地 APK 构建。UIX-01 至 UIX-10 当前均为已实施、源码已核对、真实应用体验待核对；未将参考图或类型成功记成当前视觉通过。对应主线提交、无测试 CI 构建和安装包回执取得后记录于本节。
+
+
+正式发布回执：2026-11-10 23:29:29 UTC（Asia/Shanghai 2026-11-11 07:29），[v0.1.96](https://github.com/wozhenbang2004/PocketWorld/releases/tag/v0.1.96) 已发布，打包源码为 `8f232f1ae14b77ab4512a9352b3959d0e7b21d82`，源树 `ca31aef40b1794c47190e569a54d48d42d638433` 与本地核对树完全一致。[发布流水线 42922747470](https://github.com/wozhenbang2004/PocketWorld/actions/runs/42922747470) 的 build、prepare、publish 全部成功；Web 生产构建、Android 编译、签名、APK/资源完整性及差分发布完成，无测试执行。完整 APK 为148,484,789字节、SHA-256 `8245a5001a4d8f7185448bce0cf59e10e17a70b581bbd80af808c61c828bcf7c`；1095→1096差分1,686,871字节。当前真机视觉、触摸与完整返回体验尚未观察，本次记录只关闭实现、源码及构建发布，不将用户对上一版的否决自动改写成新版认可。体验入口：设置→用量统计→点日期/来源；对话输入框圆环→构成→全部分项。
