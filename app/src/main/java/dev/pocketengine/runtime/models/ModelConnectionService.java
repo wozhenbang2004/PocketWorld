@@ -432,6 +432,45 @@ public final class ModelConnectionService {
         }
     }
 
+    /**
+     * The owner may declare the reasoning-effort vocabulary for one exact API connection/model.
+     * A normal /models list has no universal reasoning schema. This does not probe the model,
+     * grant tool/image access, or claim that a third-party gateway accepts the declared levels.
+     */
+    public JSONObject declareConnectionReasoning(ModelBinding expected,long connectionRevision,String model,
+            long ownerRevision,java.util.List<String> levels)throws Exception{
+        synchronized(settings){
+            Objects.requireNonNull(expected);Objects.requireNonNull(levels);
+            ApiConnectionProfile profile=settings.apiConnectionMetadata(expected.connectionId(),connectionRevision);
+            ModelConfig config=profile.configuration;
+            if(!profile.enabled||!expected.equals(config.capabilityBinding))
+                throw new SecurityException("原推理来源或连接修订已变化，请重新读取");
+            Set<String> allowed=switch(config.provider){
+                case "openai_chat","openai_responses" -> Set.of("none","minimal","low","medium","high","xhigh","max");
+                case "anthropic" -> Set.of("low","medium","high","xhigh","max");
+                case "gemini" -> Set.of("minimal","low","medium","high");
+                default -> throw new IllegalArgumentException("此模型协议尚未接入可声明的推理强度");
+            };
+            ModelCatalog.ModelKey key=new ModelCatalog.ModelKey(expected,ModelBinding.modelId(model));
+            catalog.bind(expected);
+            ModelCatalog.View before=catalog.get(key,MAX_CATALOG_AGE_MILLIS);
+            if(before.ownerRevision()!=ownerRevision)throw new IllegalStateException("这项模型的能力设置已变化，请重新读取");
+            if(levels.size()>allowed.size()||new java.util.HashSet<>(levels).size()!=levels.size()
+                    ||levels.stream().anyMatch(level->!allowed.contains(level)))
+                throw new IllegalArgumentException("推理档位必须属于当前协议允许的候选集合，不能重复");
+            long saved=levels.isEmpty()
+                ?catalog.updateOwner(key,ownerRevision,Map.of(),
+                    Set.of(ModelFacts.Field.REASONING,ModelFacts.Field.REASONING_LEVELS))
+                :catalog.updateOwner(key,ownerRevision,Map.of(
+                    ModelFacts.Field.REASONING,ModelFacts.OwnerValue.known(true),
+                    ModelFacts.Field.REASONING_LEVELS,ModelFacts.OwnerValue.known(java.util.List.copyOf(levels))),
+                    Set.of());
+            ModelCatalog.View after=catalog.get(key,MAX_CATALOG_AGE_MILLIS);
+            return new JSONObject().put("status","saved").put("modelId",model)
+                .put("ownerRevision",saved).put("facts",after.facts().toJson());
+        }
+    }
+
     public JSONObject refreshMetadataSuggestion(ModelBinding expected,String model,String provider,RunControl control)throws Exception{
         final long selection,generation;
         synchronized(settings){requireMetadataSelection(expected,model);selection=settings.apiSelectionRevision();generation=metadataGeneration.incrementAndGet();}
