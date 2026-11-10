@@ -56,7 +56,15 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
         ?: error("这项原团队记录不在已读取窗口，请刷新")
     private fun productionSources(): JSONObject = PocketWebTeamProduction.sources(controller.state.feature("workspace").optJSONArray("artifacts"),
         controller.state.tasks.map { task -> JSONObject(task.raw.toString()).put("id", task.id).put("goal", task.goal) })
-    private fun captureSnapshot(value: JSONObject): JSONObject = JSONObject(value.toString()).put("productionSources", productionSources())
+    private fun captureSnapshot(value: JSONObject): JSONObject {
+        val current = value.optJSONArray("runs").objects()
+        val currentIds = current.map { it.getString("id") }.toSet()
+        // Archived rows are retained run summaries, not missing work. Put them
+        // in the same owner directory so readRun can open the original record.
+        // Prefer a hot row if the same identity is already present there.
+        val retained = current + value.optJSONArray("history").objects().filter { it.getString("id") !in currentIds }
+        return JSONObject(value.toString()).put("runs", JSONArray(retained)).put("productionSources", productionSources())
+    }
     private fun reading(handle: String, kind: String, consume: Boolean = false): JSONObject {
         val original = if (consume) readings.remove(handle) else readings[handle]
         check(original != null && original.kind == kind) { "原团队读取已关闭，请重新读取" }
