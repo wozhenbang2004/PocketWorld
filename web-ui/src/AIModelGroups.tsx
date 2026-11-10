@@ -89,10 +89,10 @@ export function AIModelGroups({ state, data, supported, run, registerTransientBa
           candidates: candidates.map(({ id: _id, ...row }) => row), attemptPolicy: { maxAttempts: switching ? Number(attempts) : 1, maxRouteSwitches: switching ? 1 : 0 } },
       }, '模型组已保存，尚未更改默认模型。')}>保存模型组</Button></div>
     </> : <>
-      <header className="pw-ai-section-heading"><h2>模型组</h2><Button leadingIcon={Plus} disabled={busy || unknown || !supported('models.groups.save')} onClick={() => void open({})}>新建</Button></header>
+      <header className="pw-ai-section-heading"><h2>模型组</h2>{groups.length > 0 && <Button leadingIcon={Plus} disabled={busy || unknown || !supported('models.groups.save')} onClick={() => void open({})}>新建</Button>}</header>
       <p className="pw-ai-muted">按候选顺序处理新任务，可单独开启失败切换。</p>
       {groups.length ? <div className="pw-ai-group-list">{groups.map(group => <section className="pw-ai-group" key={group.groupId}><Button variant="ghost" className="pw-ai-service-row" disabled={busy} onClick={() => void open(group)}><span className="pw-ai-row-copy"><strong>{group.name}</strong><small>{rows(group.candidates).length} 个候选 · {object(group.attemptPolicy).maxRouteSwitches === 1 ? '已开启失败切换' : '只使用首个可用候选'}</small></span><ChevronRight size={17} aria-hidden /></Button><div className="pw-ai-group-actions"><Button variant="ghost" disabled={busy || unknown || !supported('models.groups.select') || main.groupId === group.groupId && main.groupRevision === group.revision} onClick={() => void mutate('models.groups.select', { groupId: group.groupId, expectedRevision: group.revision }, '已设为新任务的默认模型组。')}>{main.groupId === group.groupId && main.groupRevision === group.revision ? '当前默认模型组' : '设为默认'}</Button><Button variant="ghost" disabled={busy || !supported('models.groups.delete')} onClick={() => setRemoving(group)}>删除</Button></div></section>)}</div>
-        : <div className="pw-ai-empty"><h3>按用途组合多个模型</h3><p>创建模型组，设置 API 候选顺序与失败切换。</p><Button disabled={!supported('models.groups.save')} onClick={() => void open({})}>新建模型组</Button></div>}
+        : <div className="pw-ai-empty"><h3>按用途组合多个模型</h3><p>创建模型组，设置 API 候选顺序与失败切换。</p><Button disabled={busy || unknown || !supported('models.groups.save')} onClick={() => void open({})}>新建模型组</Button></div>}
     </>}
     {error && <p className="pw-field-error" role="alert">{error}</p>}{notice && <p className="pw-ai-feedback" role="status">{notice}</p>}
     {unknown && <Button variant="secondary" disabled={busy} onClick={() => void read()}>读取模型组，核对原结果</Button>}

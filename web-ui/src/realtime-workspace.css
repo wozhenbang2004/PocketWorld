@@ -24,7 +24,8 @@
 .pw-realtime-audio-row + .pw-realtime-audio-row, .pw-realtime-controls + .pw-realtime-audio-row { margin-top: 10px; }
 .pw-realtime-audio-row > div { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .pw-realtime-session { margin: 14px 0 20px; }
-.pw-realtime-start, .pw-realtime-invitation { padding: var(--pw-gap-content,16px); border: 0; border-radius: 16px; background: var(--pw-surface,#fafafa); box-shadow: 0 2px 6px #00000003,0 12px 32px -14px #00000012; }
+.pw-realtime-start, .pw-realtime-invitation { padding: var(--pw-gap-content,16px); border: 0; border-radius: 16px; background: var(--pw-surface,#fafafa); box-shadow: none; }
+.pw-realtime-invitation { box-shadow: 0 2px 6px #00000003,0 12px 32px -14px #00000012; }
 .pw-realtime-start-copy, .pw-realtime-object-heading { display: flex; align-items: center; gap: 12px; }
 .pw-realtime-start-copy > div, .pw-realtime-object-heading > div { min-width: 0; }
 .pw-realtime-symbol { flex: none; display: grid; place-items: center; width: 42px; height: 42px; border-radius: 13px; background: var(--pw-inset,#efefef); color: var(--pw-copy,#626262); }

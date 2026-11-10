@@ -122,6 +122,7 @@ export function AccordionItem({
       {...props}
       className={cx("group/item data-[disabled]:opacity-50", styles.item[variant], className)}
     >
+      {({ isExpanded }) => <>
       <AriaHeading level={headingLevel} className="flex">
         <AriaButton
           slot="trigger"
@@ -142,10 +143,10 @@ export function AccordionItem({
           <Indicator
             aria-hidden
             className={cx(
-              "size-5 shrink-0 text-foreground-icon-tertiary transition-[rotate,color] duration-300 motion-reduce:transition-none",
+              "size-5 shrink-0 transition-[rotate,color] duration-300 motion-reduce:transition-none",
               EASE,
-              "group-hover/trigger:text-foreground-icon-secondary group-data-[expanded]/item:text-foreground-icon-primary",
-              indicator === "plus" ? "group-data-[expanded]/item:rotate-45" : "group-data-[expanded]/item:rotate-180",
+              isExpanded ? "text-foreground-icon-primary" : "text-foreground-icon-tertiary group-hover/trigger:text-foreground-icon-secondary",
+              isExpanded ? indicator === "plus" ? "rotate-45" : "rotate-180" : "rotate-0",
             )}
           />
         </AriaButton>
@@ -156,9 +157,8 @@ export function AccordionItem({
         <div
           className={cx(
             "text-body-regular text-text-secondary",
-            "opacity-0 transition-[opacity,translate,filter] duration-300 motion-reduce:transition-none",
-            "motion-safe:-translate-y-1 motion-safe:blur-[4px]",
-            "group-data-[expanded]/item:translate-y-0 group-data-[expanded]/item:opacity-100 group-data-[expanded]/item:blur-[0px]",
+            "transition-[opacity,translate,filter] duration-300 motion-reduce:transition-none",
+            isExpanded ? "translate-y-0 opacity-100 blur-[0px]" : "opacity-0 motion-safe:-translate-y-1 motion-safe:blur-[4px]",
             EASE,
             styles.content[variant],
           )}
@@ -166,6 +166,7 @@ export function AccordionItem({
           {children}
         </div>
       </AriaDisclosurePanel>
+      </>}
     </AriaDisclosure>
   );
 }

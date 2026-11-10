@@ -17,5 +17,7 @@
 .pw-plugin-diff span { color: var(--pw-copy); }
 .pw-plugin-runtime { padding: 18px 0; border-bottom: 1px solid #e8e8e8; }
 .pw-plugin-runtime h3 { font-size: 14px; font-weight: 500; }
+.pw-ecosystem-depth .pw-plugin-runtime > div:first-child { flex: 1 1 240px; flex-direction: column; gap: 4px; }
+.pw-ecosystem-depth .pw-plugin-runtime > div:first-child :is(h3, p) { margin: 0; }
 :root.dark .pw-plugin-runtime { border-bottom-color: #3a3a3a; }
 @media (max-width: 480px) { .pw-plugin-diff p { grid-template-columns: minmax(0, 1fr); gap: var(--pw-gap-related); } }

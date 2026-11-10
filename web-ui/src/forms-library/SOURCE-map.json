@@ -195,7 +195,8 @@
       "sha256": "762786dd6ba88e1df5311d2b80d9ea6ede93f2878dcda44357ef1b9905186312",
       "adapted": "boardui/components/base/accordion/accordion.tsx",
       "changes": [
-        "@/ aliases rewritten to relative module paths; runtime component behavior retained"
+        "@/ aliases rewritten to relative module paths; runtime component behavior retained",
+        "Indicator color/rotation and content reveal use the current Disclosure isExpanded render state so nested items do not inherit an ancestor's expanded styling; React Aria visibility, height, keyboard and ARIA behavior retained"
       ],
       "officialRegistry": {
         "snapshot": "vendor/boardui-registry-20261101/accordion.json",
