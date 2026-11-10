@@ -27,7 +27,7 @@ public final class ObservationReport {
             if (node == null || node.optBoolean("password") || !node.optBoolean("enabled", true) || !node.optBoolean("visible",true)) continue;
             // A clickable image/canvas without a label does not identify a semantic target.
             if (node.optBoolean("editable")
-                    || !node.optString("text").trim().isEmpty() || !node.optString("description").trim().isEmpty()) useful++;
+                    || hasOwnLabel(node)) useful++;
         }
         JSONObject quality=quality(observation,treeAvailable,useful);
         boolean actualImage = imageIncluded && hasImage(observation);
@@ -62,10 +62,15 @@ public final class ObservationReport {
                 .put("unlabeledActionableNodes",controls-labeled).put("unreadableActiveWindows",unreadable).put("blindRegions",blind)
                 .put("taskTargetCoverage","not_asserted").put("bodyTruncated",observation.optJSONObject("treeCoverage")!=null&&observation.getJSONObject("treeCoverage").optBoolean("bodyTruncated"));
     }
+    /** Native hints and labelFor relations name empty editors without image inference. */
+    private static boolean hasOwnLabel(JSONObject node){
+        for(String key:new String[]{"text","description","hint","labelledBy"})if(!node.optString(key).trim().isEmpty())return true;
+        return false;
+    }
     private static boolean hasLabel(JSONObject node,java.util.Map<String,JSONObject> nodes,java.util.Set<String> path){
         if(node.optBoolean("password")||!path.add(node.optString("id")))return false;
         try{
-            if(!node.optString("text").trim().isEmpty()||!node.optString("description").trim().isEmpty())return true;
+            if(hasOwnLabel(node))return true;
             JSONArray children=node.optJSONArray("children");if(children!=null)for(int i=0;i<children.length();i++){
                 JSONObject child=nodes.get(children.optString(i));if(child!=null&&hasLabel(child,nodes,path))return true;
             }

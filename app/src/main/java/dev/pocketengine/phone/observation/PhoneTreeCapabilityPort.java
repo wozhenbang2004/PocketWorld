@@ -56,7 +56,7 @@ public final class PhoneTreeCapabilityPort implements CapabilityPort {
                 .put("properties",new JSONObject().put("windowId",number(0,Integer.MAX_VALUE)).put("parentId",string(100))
                         .put("text",string(400)).put("resourceId",string(400)).put("role",string(400)));
         JSONObject query=new JSONObject().put("observationId",string(100)).put("selector",selector).put("limit",number(1,40));
-        add(out,PhoneTreeQuery.QUERY,"只读查询当前observationId的树。text为不区分大小写包含；resourceId/role精确匹配，parentId限定本观察父域。返回目标及可操作父节点与原ID，歧义不自动选择，不滚动。",query,new JSONArray().put("observationId").put("selector"));
+        add(out,PhoneTreeQuery.QUERY,"只读查询当前observationId的树。text在原生文字、内容描述、输入提示和关联标签中不区分大小写匹配；resourceId/role精确匹配，parentId限定本观察父域。返回目标及可操作父节点与原ID，歧义不自动选择，不滚动。",query,new JSONArray().put("observationId").put("selector"));
         JSONObject wait=new JSONObject().put("kind",new JSONObject().put("type","string").put("enum",new JSONArray().put("present").put("absent").put("stable")))
                 .put("selector",selector).put("timeoutMs",number(100,6000)).put("stableForMs",number(250,6000)).put("observationId",string(100));
         add(out,PhoneTreeQuery.WAIT,"只读等待当前显示的present/absent/stable条件。无截图/滚动/点击；250ms节制轮询，最多25次，超时不是业务失败。parentId需原observationId；父域变化即拒，absent/stable不以残缺树判满足。stable非空selector需至少1个目标且目标集合/子树持续稳定；空selector才等完整场景稳定。稳定不是业务完成。",wait,new JSONArray().put("kind").put("selector").put("timeoutMs"));

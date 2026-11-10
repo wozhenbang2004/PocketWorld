@@ -57,7 +57,7 @@ public final class PhoneTreeQuery {
             if(node.optBoolean("password")||!node.optBoolean("visible",true))continue;
             if(selector.has("windowId")&&node.optInt("windowId",-1)!=selector.getInt("windowId"))continue;
             if(!parent.isEmpty()&&!descendant(node,parent,nodes))continue;
-            if(selector.has("text")&&!contains(node.optString("text")+"\n"+node.optString("description"),selector.getString("text")))continue;
+            if(selector.has("text")&&!contains(node.optString("text")+"\n"+node.optString("description")+"\n"+node.optString("hint")+"\n"+node.optString("labelledBy"),selector.getString("text")))continue;
             if(selector.has("resourceId")&&!selector.getString("resourceId").equals(node.optString("resourceId")))continue;
             if(selector.has("role")&&!selector.getString("role").equals(node.optString("role")))continue;
             matched.add(node);
@@ -141,7 +141,7 @@ public final class PhoneTreeQuery {
             if(!included)continue;
             // Original display/window/path and complete native identity survive unrelated node-ID shifts.
             JSONObject state=new JSONObject();
-            for(String key:new String[]{"windowId","path","identityFingerprint","resourceId","className","role","text","description","enabled","visible","password","clickable","editable","checked","selected","focused","scrollable","scrollDirections","bounds"})
+            for(String key:new String[]{"windowId","path","identityFingerprint","resourceId","className","role","text","description","hint","labelledBy","enabled","visible","password","clickable","editable","checked","selected","focused","scrollable","scrollDirections","bounds"})
                 if(node.has(key))state.put(key,node.get(key));
             byte[] bytes=state.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
             digest.update(Integer.toString(bytes.length).getBytes(java.nio.charset.StandardCharsets.US_ASCII));digest.update((byte)':');digest.update(bytes);
@@ -151,7 +151,7 @@ public final class PhoneTreeQuery {
     private static boolean sameAnchor(JSONObject a,JSONObject b)throws Exception {
         JSONArray path=a.optJSONArray("path");
         if(path==null||a.optInt("windowId",-1)!=b.optInt("windowId",-1)||!path.toString().equals(String.valueOf(b.optJSONArray("path"))))return false;
-        for(String key:new String[]{"identityFingerprint","resourceId","className","role","text","description","password","bounds"})if(!String.valueOf(a.opt(key)).equals(String.valueOf(b.opt(key))))return false;
+        for(String key:new String[]{"identityFingerprint","resourceId","className","role","text","description","hint","labelledBy","password","bounds"})if(!String.valueOf(a.opt(key)).equals(String.valueOf(b.opt(key))))return false;
         return true;
     }
     private static JSONObject waitResult(String status,JSONObject selection,int reads,long started,String reason)throws Exception {
