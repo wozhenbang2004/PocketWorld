@@ -493,7 +493,7 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
             // Bounded read-only settling, then retain the baseline for later observations too.
             Thread.sleep(350);JSONObject after=landing(control,revision);String reason=DisplayLandingSafety.failure(before,after,displayId);
             evidence=new JSONObject().put("before",before).put("after",after).put("status",reason==null?"owned_display_observed":"unknown_requires_owner")
-                    .put("reason",reason==null?"original_owned_tasks_retained":reason).put("taskMigrationPerformed",false).put("automaticReplayAllowed",false);
+                    .put("reason",reason==null?"owned_display_topology_confirmed":reason).put("taskMigrationPerformed",false).put("automaticReplayAllowed",false);
             if(reason!=null){control.pause();clearReferences();receipt.put("requiresUser",true).put("message","动作已请求，但跨应用落点或主屏归属不能确认；已暂停原任务，不会移动或代点主屏应用。");}
             else landingBaseline=new JSONObject(after.toString());
         }catch(InterruptedException cancelled){Thread.currentThread().interrupt();throw cancelled;}catch(Exception unavailable){control.pause();clearReferences();evidence=new JSONObject().put("status","unknown_requires_owner").put("reason","post_action_task_probe_unavailable").put("automaticReplayAllowed",false);receipt.put("requiresUser",true);}

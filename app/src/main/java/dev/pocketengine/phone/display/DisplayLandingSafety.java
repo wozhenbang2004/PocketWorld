@@ -13,7 +13,10 @@ public final class DisplayLandingSafety {
             Map<Integer,JSONObject> next=tasks(after,display);
             if(before!=null)for(JSONObject original:tasks(before,display).values())if(original.getInt("displayId")==display) {
                 JSONObject actual=next.get(original.getInt("taskId"));
-                if(actual==null)return "original_owned_task_missing";
+                // Back/finish may legitimately remove the task. A complete all-display
+                // inventory proves it ended; migration still appears with another displayId.
+                // Keeping a vanished task in the baseline otherwise blocks every later resume.
+                if(actual==null)continue;
                 if(actual.getInt("displayId")!=display)return "original_owned_task_migrated";
                 for(String field:new String[]{"rootTaskId","androidUserId","component","rootIdentity"})
                     if(!original.get(field).equals(actual.get(field)))return "original_owned_task_identity_changed";
