@@ -356,6 +356,15 @@ def navigation():
     # for a drawer button; waiting cannot make an off-screen button visible.
     if not any(find_target(tree, label, prefix=label == "对话菜单") for label in controls):
         tree = scroll_to_top(tree)
+    # Profile and other detail views intentionally expose Back, not a drawer.
+    # Follow their visible controls rather than assuming every page has global
+    # navigation. This only leaves unchanged screens; forms are never submitted.
+    for _ in range(3):
+        if any(find_target(tree, label, prefix=label == "对话菜单") for label in controls):
+            break
+        if not any(tap(label, tree) for label in ("返回上一级", "返回对话", "返回")):
+            break
+        tree = read_layout()
     if not any(find_target(tree, label, prefix=label == "对话菜单") for label in controls):
         tree = wait_for_controls(*controls, timeout=5)
     if tap("关闭文件工作区", tree):
@@ -645,4 +654,5 @@ if __name__ == "__main__":
         if EMULATOR_LOG is not None:
             EMULATOR_LOG.close()
         save_report()
+
 
