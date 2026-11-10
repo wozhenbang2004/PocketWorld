@@ -119,12 +119,16 @@ public final class EngineApplication extends Application implements dev.pocketen
             config=nativeOwnerWorkflows.captureSavedModel(config.accountModel,config.reasoning,config.imageTokenReserve,config.maxOutputTokens,call);
         }
         call.check();
-        JSONObject nativeTarget=conversationTarget(config),facts=new JSONObject();
+        JSONObject nativeTarget=conversationTarget(config),facts=new JSONObject();long reasoningOwnerRevision=-1;
         if(config.routePlan==null||config.routePlan.groupRevision==0) {
             if(config.usesAccount()) {var account=nativeOwnerWorkflows.modelFactsForPreference(config.accountModel);if(account!=null)facts=account.facts.toJson();}
-            else facts=modelConnections.reviewConnectionModel(nativeTarget.getString("connectionId"),nativeTarget.getLong("connectionRevision"),config.model).getJSONObject("model").getJSONObject("facts");
+            else {
+                JSONObject model=modelConnections.reviewConnectionModel(nativeTarget.getString("connectionId"),nativeTarget.getLong("connectionRevision"),config.model).getJSONObject("model");
+                facts=model.getJSONObject("facts");reasoningOwnerRevision=model.getLong("ownerRevision");
+            }
         }
         return preference.put("targetForReview",nativeTarget).put("nativeSelection",config.publicJson()).put("facts",facts)
+                .put("reasoningOwnerRevision",reasoningOwnerRevision)
                 .put("restriction",nativeTarget.getString("kind").equals("group")?"模型组按各候选的原生参数执行，请在 AI 中心管理候选。":"");
     }
     public TaskStore tasks;
