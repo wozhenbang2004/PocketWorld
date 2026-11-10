@@ -48,7 +48,7 @@ public final class SettingsStore {
     SettingsStore(SharedPreferences prefs,ApiSecrets secrets) { this.prefs=java.util.Objects.requireNonNull(prefs);apiSecrets=secrets;synchronized(MODEL_SELECTIONS){modelSelection=MODEL_SELECTIONS.computeIfAbsent(prefs,ignored->new ModelSelectionCoordinator());} }
     public ModelSelectionCoordinator modelSelection(){return modelSelection;}
     public static final class PersistenceUncertain extends IllegalStateException {
-        PersistenceUncertain(){super("本机模型设置的写入结果不确定；请检查存储并重新启动应用后核对选择。没有把未确认的内存值当作保存成功。");}
+        PersistenceUncertain(){super("本机设置的写入结果不确定；请检查存储并重新启动应用后核对已保存内容。没有把未确认的内存值当作保存成功。");}
     }
     private void requireConfirmed(){synchronized(UNCERTAIN){if(UNCERTAIN.contains(prefs))throw new PersistenceUncertain();}}
     private void commitConfirmed(SharedPreferences.Editor edit){commitConfirmed(edit,true);}
@@ -164,6 +164,95 @@ public final class SettingsStore {
     private static void requireAgentPreference(String key,String value){
         boolean valid=key.equals("response_detail")?java.util.Set.of("concise","standard","detailed").contains(value):key.equals("operation_pace")&&java.util.Set.of("fast","standard","careful").contains(value);
         if(!valid)throw new IllegalArgumentException("仅可修改白名单回复详略或普通操作节奏，值须来自当前选项");
+    }
+
+    /** The owner's own settings share the existing preference revision and two original keys.
+     * Reading or saving them never opts in to model-writable settings or changes authority. */
+    public synchronized JSONObject personalProfile()throws Exception {
+        JSONObject original=agentPreferences();
+        return new JSONObject().put("revision",original.getLong("revision"))
+                .put("nickname",prefs.getString("personalNickname",""))
+                .put("addressAs",prefs.getString("personalAddressAs",""))
+                .put("about",prefs.getString("personalAbout",""))
+                .put("avatarDataUrl",prefs.getString("personalAvatarDataUrl",""))
+                .put("language",prefs.getString("personalLanguage","auto"))
+                .put("response_detail",original.getString("response_detail"))
+                .put("conclusionFirst",prefs.getBoolean("personalConclusionFirst",false))
+                .put("includeExamples",prefs.getBoolean("personalIncludeExamples",false))
+                .put("instructions",prefs.getString("personalInstructions",""))
+                .put("operation_pace",original.getString("operation_pace"))
+                .put("initiative",prefs.getString("personalInitiative","balanced"));
+    }
+    /** Small streaming-state identity. Image and prose are loaded on an explicit profile read. */
+    public synchronized JSONObject personalProfileSummary()throws Exception {
+        requireConfirmed();return new JSONObject().put("revision",prefs.getLong("agentPreferencesRevision",1))
+                .put("nickname",prefs.getString("personalNickname",""))
+                .put("addressAs",prefs.getString("personalAddressAs",""));
+    }
+    public synchronized JSONObject personalIdentity()throws Exception {
+        return personalProfileSummary().put("avatarDataUrl",prefs.getString("personalAvatarDataUrl",""));
+    }
+
+    /** Native private-owner UI only. A success receipt follows a confirmed disk commit. */
+    public synchronized JSONObject savePersonalProfile(String section,JSONObject values,long expectedRevision)throws Exception {
+        JSONObject before=personalProfile();
+        if(expectedRevision<1||before.getLong("revision")!=expectedRevision)throw new IllegalStateException("资料或偏好已改变，请刷新后再保存；当前编辑尚未覆盖已保存内容");
+        java.util.Set<String> allowed=switch(section){
+            case "identity"->java.util.Set.of("nickname","addressAs","about","avatarDataUrl");
+            case "communication"->java.util.Set.of("language","response_detail","conclusionFirst","includeExamples","instructions");
+            case "behavior"->java.util.Set.of("operation_pace","initiative");
+            default->throw new IllegalArgumentException("请选择资料、交流偏好或做事偏好");
+        };
+        if(values==null||values.length()==0)throw new IllegalArgumentException("没有待保存的资料或偏好");
+        SharedPreferences.Editor edit=prefs.edit();
+        for(var fields=values.keys();fields.hasNext();){
+            String field=fields.next();
+            if(!allowed.contains(field))throw new IllegalArgumentException("只能保存当前分组中的资料或偏好");
+            switch(field){
+                case "nickname"->edit.putString("personalNickname",personalText(values,field,80));
+                case "addressAs"->edit.putString("personalAddressAs",personalText(values,field,80));
+                case "about"->edit.putString("personalAbout",personalText(values,field,2000));
+                case "avatarDataUrl"->edit.putString("personalAvatarDataUrl",personalAvatar(values));
+                case "language"->edit.putString("personalLanguage",personalChoice(values,field,java.util.Set.of("auto","zh-CN","en","ja")));
+                case "response_detail"->{String value=personalText(values,field,32);requireAgentPreference(field,value);edit.putString("agentResponseDetail",value);}
+                case "conclusionFirst"->edit.putBoolean("personalConclusionFirst",personalBoolean(values,field));
+                case "includeExamples"->edit.putBoolean("personalIncludeExamples",personalBoolean(values,field));
+                case "instructions"->edit.putString("personalInstructions",personalText(values,field,4000));
+                case "operation_pace"->{String value=personalText(values,field,32);requireAgentPreference(field,value);edit.putString("agentOperationPace",value);}
+                case "initiative"->edit.putString("personalInitiative",personalChoice(values,field,java.util.Set.of("requested","balanced","proactive")));
+                default->throw new IllegalArgumentException("不支持的个人设置");
+            }
+        }
+        commitConfirmed(edit.putLong("agentPreferencesRevision",Math.addExact(expectedRevision,1)),false);
+        return new JSONObject().put("saved",true).put("persisted",true).put("profile",personalProfile());
+    }
+    private static String personalText(JSONObject values,String field,int maximum)throws Exception {
+        Object raw=values.opt(field);
+        if(!(raw instanceof String)||((String)raw).length()>maximum||((String)raw).indexOf('\u0000')>=0)throw new IllegalArgumentException("个人设置字段无效或超过长度限制："+field);
+        return ((String)raw).trim();
+    }
+    private static String personalChoice(JSONObject values,String field,java.util.Set<String> choices)throws Exception {
+        String value=personalText(values,field,32);if(!choices.contains(value))throw new IllegalArgumentException("请选择当前支持的偏好选项："+field);return value;
+    }
+    private static boolean personalBoolean(JSONObject values,String field)throws Exception {
+        Object value=values.opt(field);if(!(value instanceof Boolean))throw new IllegalArgumentException("请明确选择偏好开关："+field);return (Boolean)value;
+    }
+    private static String personalAvatar(JSONObject values)throws Exception {
+        String value=personalText(values,"avatarDataUrl",300000);if(value.isEmpty())return value;
+        String prefix;
+        if(value.startsWith("data:image/jpeg;base64,"))prefix="data:image/jpeg;base64,";
+        else if(value.startsWith("data:image/png;base64,"))prefix="data:image/png;base64,";
+        else if(value.startsWith("data:image/webp;base64,"))prefix="data:image/webp;base64,";
+        else throw new IllegalArgumentException("头像只接受本机 JPEG、PNG 或 WebP 图片");
+        String encoded=value.substring(prefix.length());
+        if(encoded.isEmpty()||encoded.length()%4!=0||!encoded.matches("[A-Za-z0-9+/]+={0,2}"))throw new IllegalArgumentException("头像图片编码无效");
+        byte[] bytes;
+        try{bytes=java.util.Base64.getDecoder().decode(encoded);}catch(IllegalArgumentException invalid){throw new IllegalArgumentException("头像图片编码无效");}
+        boolean jpeg=bytes.length>=3&&(bytes[0]&255)==255&&(bytes[1]&255)==216&&(bytes[2]&255)==255;
+        boolean png=bytes.length>=8&&(bytes[0]&255)==137&&bytes[1]==80&&bytes[2]==78&&bytes[3]==71&&bytes[4]==13&&bytes[5]==10&&bytes[6]==26&&bytes[7]==10;
+        boolean webp=bytes.length>=12&&bytes[0]==82&&bytes[1]==73&&bytes[2]==70&&bytes[3]==70&&bytes[8]==87&&bytes[9]==69&&bytes[10]==66&&bytes[11]==80;
+        if(!(prefix.contains("jpeg")&&jpeg||prefix.contains("png")&&png||prefix.contains("webp")&&webp))throw new IllegalArgumentException("头像格式与图片内容不一致");
+        return value;
     }
     private ModelConfig getSelected() throws Exception {
         requireConfirmed();

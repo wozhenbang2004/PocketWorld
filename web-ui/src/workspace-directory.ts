@@ -68,7 +68,7 @@ export function workspacePageForRoute(route: string): string | undefined {
 /** Uses actual App drawer keys, including the primary task workspace. */
 export function workspaceNavigationKey(route: string): string {
   const page = normalizeWorkspaceRoute(route);
-  if (['chat', 'tasks', 'projects'].includes(page)) return page;
+  if (['chat', 'tasks', 'projects', 'profile'].includes(page)) return page;
   if (page === 'history') return 'tasks';
   if (['models', 'model-settings', 'accounts', 'proxy'].includes(page)) return 'model-settings';
   return workspaceForRoute(page)?.route || 'settings';

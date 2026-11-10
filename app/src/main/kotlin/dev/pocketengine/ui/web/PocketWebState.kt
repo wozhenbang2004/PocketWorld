@@ -76,6 +76,7 @@ internal object PocketWebState {
             }
         }
         val data = JSONObject()
+            .put("personalProfile", controller.webPersonalProfileSummary() ?: JSONObject.NULL)
             .put("quickPanelVoice", publicValue(controller.quickPanelVoice))
             .put("taskAnnouncements", publicValue(controller.taskAnnouncementState))
             .put("taskAnnouncementSaving", controller.taskAnnouncementSaving)

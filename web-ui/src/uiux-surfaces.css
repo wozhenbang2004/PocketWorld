@@ -81,6 +81,10 @@
   .pw-desktop-navigation[data-compact="true"] .pw-navigation-footer { padding-inline: 12px; }
   .pw-desktop-navigation[data-compact="true"] .pw-navigation-account { flex-direction: column; }
   .pw-desktop-navigation[data-compact="true"] .pw-navigation-account > .button-press-motion:first-child { width: 48px; padding-inline: 13px; }
+  .pw-desktop-navigation[data-compact="true"] .pw-navigation-account > .pw-navigation-profile.button-press-motion { min-height: 48px; padding: 6px; }
+  .pw-desktop-navigation[data-compact="true"] .pw-navigation-account > .pw-navigation-profile.button-press-motion > span { position: static; width: 100%; height: auto; overflow: visible; clip-path: none; }
+  .pw-desktop-navigation[data-compact="true"] .pw-navigation-profile-content { justify-content: center; gap: 0; }
+  .pw-desktop-navigation[data-compact="true"] .pw-navigation-profile-copy { display: none; }
 }
 
 /* Below this height, independent scroll panes cannot each contain a complete

@@ -366,6 +366,14 @@ html[data-pocket-native-insets="true"] .pw-work-drawer.pw-navigation-drawer { pa
 .pw-navigation-account > [data-pw-icon-button] { flex: none; width: 44px; height: 44px; color: var(--pw-copy); }
 .pw-navigation-account > [data-pw-icon-button] > svg { width: 22px; height: 22px; stroke-width: 1.7; }
 .pw-navigation-account > [aria-current="page"] { background: var(--pw-selected) !important; }
+.pw-navigation-account > .pw-navigation-profile.button-press-motion { min-height: 60px; padding: 8px 10px; }
+.pw-navigation-account > .pw-navigation-profile.button-press-motion > span { display: block; width: 100%; min-width: 0; }
+.pw-navigation-profile-content { display: flex; align-items: center; gap: 12px; min-width: 0; text-align: start; }
+.pw-sidebar-avatar { display: grid; place-items: center; flex: 0 0 36px; width: 36px; height: 36px; border-radius: 50%; overflow: hidden; background: var(--pw-selected); color: var(--pw-copy); font-size: 16px; font-weight: 600; line-height: 1; }
+.pw-sidebar-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.pw-navigation-profile-copy { display: flex; flex: 1; flex-direction: column; gap: 3px; min-width: 0; }
+.pw-navigation-profile-copy strong { overflow: hidden; text-overflow: ellipsis; font-size: 15px; font-weight: 600; line-height: 21px; }
+.pw-navigation-profile-copy small { color: var(--pw-muted); font-size: 12px; font-weight: 400; line-height: 17px; }
 @supports (corner-shape: superellipse(2)) {
   .pw-navigation-drawer,
   .pw-navigation-drawer :is(.pw-navigation-search-trigger, .pw-nav-item a, .pw-nav-selection, .pw-navigation-account) { corner-shape: superellipse(2); }

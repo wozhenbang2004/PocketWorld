@@ -22,6 +22,7 @@ import dev.pocketengine.media.RealtimeSessionModule
 import dev.pocketengine.features.assistant.OwnerComposerState
 import dev.pocketengine.features.assistant.OwnerComposerStore
 import java.util.concurrent.Executors
+import org.json.JSONArray
 import org.json.JSONObject
 
 /** One native owner UI for the existing engine; backend events remain the source of truth. */
@@ -328,6 +329,120 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     internal fun webUiCanInteract(): Boolean = !closed && voiceForeground && !activity.isFinishing && !activity.isDestroyed
     internal fun webPrivateOwnerVisible(): Boolean = webUiCanInteract() && privateWorkspaceView()
     internal fun webMemoryScopeTicket(): Any = Pair(ownerEpochs["memoryReview"] ?: 0, memoryReviewScope)
+    /** Personal identity is intentionally independent of the memory workspace's namespace picker. */
+    internal fun webPersonalProfileSummary(): JSONObject? =
+        if (closed) null else runCatching { app.settings.personalProfileSummary() }.getOrNull()
+
+    internal fun requestPersonalProfile(command: String, payload: JSONObject, current: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
+        val input = JSONObject(payload.toString())
+        requestPersonalOwner(current, done, requirePrivate = command != "identity") {
+            when (command) {
+                "identity" -> JSONObject().put("profile", app.settings.personalIdentity())
+                "snapshot" -> {
+                    val profile = app.settings.personalProfile()
+                    val memory = runCatching {
+                        val projection = app.nativeOwnerWorkflows.memory("cognitionProjection", JSONObject().put("subjectId", "owner"))
+                        val candidates = app.nativeOwnerWorkflows.memory("listCandidates", JSONObject()).getJSONArray("candidates")
+                        JSONObject().put("current", personalRows(projection.getJSONArray("current")))
+                            .put("candidates", personalRows(candidates, pendingOnly = true))
+                            .put("pendingConflicts", personalRows(projection.getJSONArray("pendingConflicts"))).put("available", true)
+                    }
+                    JSONObject().put("profile", profile)
+                        .put("memories", memory.getOrNull() ?: JSONObject().put("current", JSONArray()).put("candidates", JSONArray()).put("pendingConflicts", JSONArray()).put("available", false))
+                        .put("memoryError", memory.exceptionOrNull()?.let(::message) ?: "")
+                }
+                "save" -> {
+                    val revision = input.opt("expectedRevision")
+                    require((revision is Int || revision is Long) && (revision as Number).toLong() > 0) { "请刷新个人资料的原版本后保存" }
+                    val receipt = app.settings.savePersonalProfile(input.getString("section"), input.getJSONObject("values"), (revision as Number).toLong())
+                    // A notification failure cannot turn a confirmed disk save into an invented
+                    // failure or cause an automatic repeat of the already committed write.
+                    runCatching { app.sendState() }
+                    receipt
+                }
+                else -> throw IllegalArgumentException("未知个人资料操作")
+            }
+        }
+    }
+
+    /** Reuse the native owner memory service, including source retirement and forget barriers.
+     * Caller JSON cannot select a project, another owner, or a different assertion subject. */
+    internal fun requestPersonalMemory(command: String, payload: JSONObject, original: JSONObject?, current: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
+        val input = JSONObject(payload.toString())
+        val frozen = original?.let { JSONObject(it.toString()) }
+        require(command in setOf("get", "getCandidate", "openSource", "correctReviewed", "forgetReviewed", "setCore", "acceptCandidate", "rejectCandidate")) { "请在原记忆工作区完成此审核操作" }
+        requestPersonalOwner(current, done, memoryChanged = command !in setOf("get", "getCandidate", "openSource")) {
+            var reviewed: JSONObject? = null
+            if (frozen != null) {
+                val candidate = frozen.getBoolean("candidate")
+                val before = frozen.getJSONObject(if (candidate) "candidateRecord" else "record")
+                requirePersonalMemory(before)
+                val actual = app.nativeOwnerWorkflows.memory(if (candidate) "getCandidate" else "get", JSONObject().put("id", before.getString("id")))
+                    .getJSONObject(if (candidate) "candidate" else "record")
+                requirePersonalMemory(actual)
+                check(MemoryLearningReviewGuard.sameReview(before, actual)) { "这条个人记忆、来源或修订已变化，请重新读取" }
+                if (command != "openSource") check(input.optString("id") == before.getString("id")) { "不能替换原个人记忆" }
+                reviewed = actual
+            } else check(command == "get" || command == "getCandidate") { "请先读取并核对原个人记忆" }
+            if (command == "openSource") {
+                val refs = reviewed!!.optJSONArray("sourceRefs") ?: JSONArray()
+                val reference = dev.pocketengine.features.memory.SourceRef.fromJson(input)
+                check((0 until refs.length()).any { reference == dev.pocketengine.features.memory.SourceRef.fromJson(refs.getJSONObject(it)) }) { "来源不属于这条个人记忆的原版本" }
+                app.nativeOwnerWorkflows.source(input)
+            } else {
+                val result = app.nativeOwnerWorkflows.memory(command, input)
+                result.optJSONObject("record")?.let(::requirePersonalMemory)
+                result.optJSONObject("candidate")?.let(::requirePersonalMemory)
+                // Native retirement may also affect derivations about other subjects. Keep the
+                // operation's real count, while returning only this selected row's source receipt.
+                result.optJSONArray("removedRefs")?.let { refs ->
+                    val selected = JSONArray()
+                    for (index in 0 until refs.length()) {
+                        val ref = refs.getJSONObject(index)
+                        if (ref.optString("recordId") == reviewed?.optString("id") && ref.optString("ownerId") == "owner" && ref.optString("spaceId") == "private") selected.put(ref)
+                    }
+                    result.put("removedRefs", selected)
+                }
+                result
+            }
+        }
+    }
+
+    private fun isPersonalMemory(row: JSONObject): Boolean {
+        val assertion = row.optJSONObject("assertion") ?: return false
+        return row.optString("ownerId") == "owner" && row.optString("spaceId") == "private" &&
+            assertion.optString("subjectId") == "owner" && assertion.optString("subjectType") == "owner" && MemoryLearningReviewGuard.revision(row) > 0
+    }
+    private fun requirePersonalMemory(row: JSONObject) { check(isPersonalMemory(row)) { "此记录没有明确的本人主体，不属于当前个人资料范围" } }
+    private fun personalRows(rows: JSONArray, pendingOnly: Boolean = false): JSONArray = JSONArray().also { out ->
+        for (index in 0 until rows.length()) {
+            val row = rows.getJSONObject(index)
+            if (isPersonalMemory(row) && (!pendingOnly || row.optString("status") == "pending")) out.put(row)
+        }
+    }
+    private fun requestPersonalOwner(current: () -> Boolean, done: (JSONObject?, String?) -> Unit, requirePrivate: Boolean = true, memoryChanged: Boolean = false, work: () -> JSONObject) {
+        fun permitted() = webUiCanInteract() && (!requirePrivate || privateWorkspaceView())
+        check(permitted() && current()) { "请在原本机窗口打开个人资料" }
+        val owner = webWindowTicket()
+        fun valid() = permitted() && webWindowTicket() == owner && current()
+        try {
+            io.execute {
+                val result = runCatching { check(valid()) { "个人资料窗口已变化，请重新打开" }; work() }
+                main.post {
+                    if (!valid()) done(null, "原个人资料窗口已变化；请重新读取当前状态，未自动重发操作")
+                    else result.fold({ receipt ->
+                        if (receipt.optBoolean("saved")) {
+                            runCatching { app.settings.agentPreferences() }.getOrNull()?.let { actual ->
+                                if (actual.optLong("revision") >= state.agentPreferences.optLong("revision")) state = state.copy(agentPreferences = actual)
+                            }
+                        }
+                        if (memoryChanged) state = state.copy(memoryRefreshRevision = state.memoryRefreshRevision + 1)
+                        done(receipt, null)
+                    }, { done(null, message(it)) })
+                }
+            }
+        } catch (failure: Exception) { done(null, message(failure)) }
+    }
     /** Preview reads never enter the model/action queue or hold the application monitor during helper I/O. */
     internal fun readPhonePreview(input: JSONObject, current: () -> Boolean, done: (JSONObject?, String?, String) -> Unit) {
         check(webPrivateOwnerVisible() && current()) { "请在原私人窗口查看手机画面" }

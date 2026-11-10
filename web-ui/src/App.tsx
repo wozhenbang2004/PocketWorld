@@ -28,6 +28,7 @@ import {AgentAvatar,PressButton,ChatComposer,AIAnswer,MessageActions,ToolCall,Th
 import {Button,IconButton,TextField,TextAreaField,SearchField,SelectField,RadioOptions,CheckboxField,Accordion,AccordionItem,SettingsDialog} from './forms-library';
 import {Drawer,PopoverTrigger,Popover,PopoverHeader,TreeView,WorkSidebar,CommandMenu,FilesBrowser,Tabs,TabList,Tab,TabPanel,DecisionInbox,PermissionReview,type WorkCommand,type WorkNavItem} from './shell-library';
 import Secondary from './Secondary';
+import ProfileWorkspace from './ProfileWorkspace';
 import DeveloperDiagnosticsWorkspace from './DeveloperDiagnosticsWorkspace';
 import {SetupWorkspace,type SetupDestination} from './SetupWorkspace';
 import {readSetup,type SetupCapability} from './setup-contract';
@@ -129,6 +130,22 @@ export default function App(){
  const commands=asArray<string>(snapshot?.capabilities?.commands);const commandKey=commands.join('\u0000');const commandSet=useMemo(()=>new Set(commands),[commandKey]);const can=useCallback((action:string)=>commandSet.has(action),[commandSet]);
  const messages=asArray<Message>(state.messages),tasks=asArray<Task>(state.tasks),projects=asArray<Project>(state.projects),files=asArray<Json>(state.files),conversations=asArray<Json>(state.conversations);
  const [route,setRoute]=useState('chat'),[workOpen,setWorkOpen]=useState(false),[commandOpen,setCommandOpen]=useState(false),[taskId,setTaskId]=useState<string|null>(null),[taskOpen,setTaskOpen]=useState(false),[filter,setFilter]=useState('all'),[taskQuery,setTaskQuery]=useState('');
+ const profileBeforeLeave=useRef<((next:()=>void)=>boolean)|null>(null);
+ const registerProfileBeforeLeave=useCallback((guard:((next:()=>void)=>boolean)|null)=>{profileBeforeLeave.current=guard},[]);
+ const profileOrigin=useRef({route:'chat',drawerOpen:false,scrollTop:0});
+ const profileRestoreScroll=useRef<number|null>(null);
+ const personalMetadata=obj(state.personalProfile);
+ const personalRevision=Number(personalMetadata.revision||0),personalDocumentEpoch=bridge.getDocumentEpoch();
+ const [personalIdentity,setPersonalIdentity]=useState<Json|null>(null);
+ useEffect(()=>{
+  let active=true;
+  if(!can('profile.identity')){setPersonalIdentity(null);return()=>{active=false}};
+  void bridge.command('profile.identity').then(value=>{const profile=obj(obj(value).profile);if(active&&Number(profile.revision)>=personalRevision)setPersonalIdentity(profile)}).catch(()=>{});
+  return()=>{active=false};
+ },[can,personalRevision,personalDocumentEpoch]);
+ const personalProfile=personalIdentity&&Number(personalIdentity.revision)>=personalRevision?personalIdentity:personalMetadata;
+ const personalName=String(personalProfile.nickname||personalProfile.addressAs||'我的').trim()||'我的';
+ const personalAvatar=typeof personalProfile.avatarDataUrl==='string'&&/^data:image\/(?:jpeg|png|webp);base64,/.test(personalProfile.avatarDataUrl)&&personalProfile.avatarDataUrl.length<=300000?personalProfile.avatarDataUrl:'';
  const [setupMode,setSetupMode]=useState<'onboarding'|'center'>('center'),[setupCapability,setSetupCapability]=useState<SetupCapability|undefined>(),[setupRuntimeTask,setSetupRuntimeTask]=useState<string|undefined>();
  const setupOrigin=useRef<{route:string;task?:{id:string;layer:TaskLayer}}>({route:'chat'}),setupReturnPending=useRef(false),setupAutoChecked=useRef(false);
  const historyWindowBack=useRef<(()=>boolean)|null>(null);
@@ -144,6 +161,11 @@ export default function App(){
  const [chatMenuOpen,setChatMenuOpen]=useState(false);const chatMenuTrigger=useRef<HTMLButtonElement>(null);
  const [navigationMoreOpen,setNavigationMoreOpen]=useState(false);
  const navigationDrawer=useRef<HTMLDivElement>(null);
+ useLayoutEffect(()=>{
+  if(!workOpen||profileRestoreScroll.current===null)return;
+  const frame=requestAnimationFrame(()=>{const body=navigationDrawer.current?.querySelector<HTMLElement>('.pw-drawer-body');if(body){body.scrollTop=profileRestoreScroll.current||0;profileRestoreScroll.current=null;}});
+  return()=>cancelAnimationFrame(frame);
+ },[workOpen]);
  useEffect(()=>{setChatMenuOpen(false)},[route,state.conversationId,desktopNavigation]);
  useEffect(()=>{setNavigationMoreOpen(false)},[route,state.conversationId,desktopNavigation,workOpen,commandOpen]);
  const [navigationCompact,setNavigationCompact]=useState(false);
@@ -335,14 +357,26 @@ export default function App(){
    document.removeEventListener('visibilitychange',reset);
   };
  },[desktopNavigation,workOpen,changeNavigation]);
- const navigate=useCallback((next:string)=>{setupReturnPending.current=false;rememberChatPosition();setWorkOpen(false);setCommandOpen(false);const closed=taskOpen?closeTask():Promise.resolve(true);navigationWindow.current++;setNavigationRevision(navigationWindow.current);setRoute(next);return closed;},[taskOpen,closeTask,rememberChatPosition]);
+ const navigate=useCallback((next:string,afterNavigate?:()=>void)=>{
+  const commit=()=>{
+   if(next==='profile'&&route!=='profile')profileOrigin.current={route:!['chat','tasks','projects','setup','remoteInbox','developer-logs'].includes(route)&&secondaryPage?secondaryPage:route,drawerOpen:workOpen,scrollTop:navigationDrawer.current?.querySelector<HTMLElement>('.pw-drawer-body')?.scrollTop||0};
+   setupReturnPending.current=false;rememberChatPosition();setWorkOpen(false);setCommandOpen(false);
+   const closed=taskOpen?closeTask():Promise.resolve(true);navigationWindow.current++;setNavigationRevision(navigationWindow.current);setRoute(next);afterNavigate?.();return closed;
+  };
+  if(route==='profile'&&next!=='profile'){
+   setWorkOpen(false);setCommandOpen(false);
+   if(profileBeforeLeave.current?.(()=>{void commit()}))return Promise.resolve(false);
+  }
+  return commit();
+ },[route,secondaryPage,workOpen,taskOpen,closeTask,rememberChatPosition]);
+ const returnFromProfile=()=>{const origin=profileOrigin.current;void navigate(origin.route==='profile'?'chat':origin.route,()=>{if(origin.drawerOpen&&!desktopNavigation){profileRestoreScroll.current=origin.scrollTop;setWorkOpen(true)}})};
  const openSetup=useCallback((capability?:SetupCapability,runtimeTaskId?:string)=>{
   setupOrigin.current={route:!isPrimaryRoute&&secondaryPage?secondaryPage:route,...(taskOpen&&taskId?{task:{id:taskId,layer:taskLayer}}:{})};
   setSetupMode('center');setSetupCapability(capability);setSetupRuntimeTask(runtimeTaskId);void navigate('setup');
  },[isPrimaryRoute,secondaryPage,route,taskOpen,taskId,taskLayer,navigate]);
  const navigateFromSetup=(destination:SetupDestination)=>{const target={connections:'model-settings',background:'background',appearance:'phone:appearance',local:'local'}[destination];void navigate(target);setupReturnPending.current=true;};
  const closeSetup=()=>{const origin=setupOrigin.current;setupReturnPending.current=false;void navigate(origin.route==='setup'?'chat':origin.route).then(closed=>{if(closed&&origin.task)void openTask(origin.task.id,origin.task.layer==='scope'?'scope':'review')});};
- const returnFromSecondary=()=>{if(setupReturnPending.current){void navigate('setup');return;}void navigate('chat');};
+ const returnFromSecondary=()=>{if(route==='profile'){returnFromProfile();return;}if(setupReturnPending.current){void navigate('setup');return;}void navigate('chat');};
  useEffect(()=>{
   if(!ready||!can('setup.read')||setupAutoChecked.current||route!=='chat'||taskOpen||foregroundTurn||state.activeTaskId)return;
   let active=true;const navigation=navigationWindow.current,documentEpoch=bridge.getDocumentEpoch();
@@ -377,7 +411,7 @@ export default function App(){
   return()=>{unsubscribe();document.removeEventListener('visibilitychange',invalidate)};
  },[invalidateContinuation]);
  const backFromTask=useCallback(()=>{if(capabilityBack.current?.()||livePreviewBack.current?.()||taskTransientBack.current?.())return;if(taskLayer!=='overview'){showTaskLayer('overview');return}closeTask()},[taskLayer,showTaskLayer,closeTask]);
- const selectConversation=useCallback((id:string)=>{navigate('chat');if(can('conversation.select'))run('conversation.select',{id});},[can,run,navigate]);
+ const selectConversation=useCallback((id:string)=>{void navigate('chat',()=>{if(can('conversation.select'))run('conversation.select',{id})});},[can,run,navigate]);
  const previewBlocked=!!(permissionOptionsOpen||organizationTarget||state.attachmentWorkspace?.open||phoneViewerExpanded||workOpen||commandOpen||taskOpen||projectPickerOpen||fileDisplayOpen||newProjectOpen||newFileOpen||modelPickerOpen||phoneReview||voiceReview||state.chatAttachmentPickerOpen||messageQuoteTarget||sourceSelection||skillDraftTarget||memoryDraftTarget||routeReferenceTarget||state.quickPanelVoice);
  const projectPreview=useProjectPreview({value:state.projectPreview,projectId:String(state.projectId||''),resumeRevision:Number(obj(snapshot?.view).resumeRevision||0),active:route==='projects'&&!state.filePath,blocked:previewBlocked,can,onReturned:()=>navigate('chat'),onPackageTask:(id,entry='process')=>openTask(id,entry)});
  const packageSequence=useRef(0),packageNavigation=useRef<PackageNavigation|null>(null);
@@ -442,8 +476,8 @@ export default function App(){
   previousRequestedTask.current=revision;
   openTask(id,'overview',snapshot?.view?.taskId===id);
  },[state.requestedTaskRevision,state.requestedTaskId,snapshot?.view?.taskId,tasks,can,openTask]);
- useEffect(()=>{const revision=Number(state.requestedProjectRevision||0);if(revision>previousRequestedProject.current){rememberChatPosition();setWorkOpen(false);setCommandOpen(false);setTaskOpen(false);setRoute('projects')}previousRequestedProject.current=revision;},[state.requestedProjectRevision,rememberChatPosition]);
- useEffect(()=>{const revision=Number(state.requestedConnectionRevision||0);if(revision>previousRequestedConnection.current&&state.requestedConnectionSection){rememberChatPosition();setWorkOpen(false);setCommandOpen(false);setTaskOpen(false);setRoute(state.requestedConnectionSection)}previousRequestedConnection.current=revision;},[state.requestedConnectionRevision,state.requestedConnectionSection,rememberChatPosition]);
+ useEffect(()=>{const revision=Number(state.requestedProjectRevision||0);if(revision>previousRequestedProject.current)void navigate('projects');previousRequestedProject.current=revision;},[state.requestedProjectRevision,navigate]);
+ useEffect(()=>{const revision=Number(state.requestedConnectionRevision||0);if(revision>previousRequestedConnection.current&&state.requestedConnectionSection)void navigate(state.requestedConnectionSection);previousRequestedConnection.current=revision;},[state.requestedConnectionRevision,state.requestedConnectionSection,navigate]);
  useEffect(()=>{bridge.setBackHandler(()=>{if(queuedInputsBack.current?.())return true;if(historyWindowBack.current?.())return true;if(navigationMoreOpen){setNavigationMoreOpen(false);return true}if(chatMenuOpen){setChatMenuOpen(false);return true}if(permissionOptionsOpen){closePermissionOptions();return true}if(attachmentBack.current?.())return true;if(phoneViewerExpanded){setPhoneViewerExpanded(false);return true}if(readingDocuments.length){closeReading();return true}if(messageQuoteTarget){setMessageQuoteTarget(null);return true}if(routeReferenceTarget){setRouteReferenceTarget(null);return true}if(skillDraftTarget){setSkillDraftTarget(null);return true}if(memoryDraftTarget){setMemoryDraftTarget(null);return true}if(sourceSelection){setSourceSelection(null);return true}if(messageMenu){setMessageMenu(null);return true}if(conversationControlsBack.current?.())return true;if(modelPickerOpen){if(modelWriting.current||state.modelSelectionBusy)return true;finishModelPicker();return true}if(state.chatAttachmentPickerOpen&&can('attachments.closePicker')){run('attachments.closePicker');return true}if(voiceReview){setVoiceReview(null);return true}if(phoneReview){if(!phoneReviewPending)setPhoneReview(null);return true}if(newProjectOpen||newFileOpen){closeCreate();return true}if(voiceOptionsOpen){setVoiceOptionsOpen(false);return true}if(commandOpen){setCommandOpen(false);return true}if(workOpen){setWorkOpen(false);return true}if(projectPickerOpen){setProjectPickerOpen(false);return true}if(fileDisplayOpen){setFileDisplayOpen(false);return true}if(taskOpen){backFromTask();return true}if(route==='tasks'&&taskFiltersOpen){setTaskFiltersOpen(false);return true}if(route==='projects'&&projectPreview.handleBack())return true;if(route==='projects'&&state.filePath){if(fileAdoption.isPending()||bridge.getState().state.fileSaving)return true;if(projectFileBack.current?.())return true;if(can('projects.close')&&!fileAdoption.pending){run('projects.close',fileIdentity);return true}return true}if(route!=='chat'){if(route!=='tasks'&&route!=='projects'&&secondaryBack.current?.())return true;if(route==='setup')closeSetup();else returnFromSecondary();return true}return false;});return()=>{bridge.setBackHandler(()=>false)};},[navigationMoreOpen,chatMenuOpen,permissionOptionsOpen,closePermissionOptions,phoneViewerExpanded,messageQuoteTarget,routeReferenceTarget,skillDraftTarget,memoryDraftTarget,sourceSelection,readingDocuments,closeReading,messageMenu,modelPickerOpen,modelSelectPending,state.modelSelectionBusy,voiceReview,phoneReview,phoneReviewPending,newProjectOpen,newFileOpen,voiceOptionsOpen,commandOpen,workOpen,projectPickerOpen,fileDisplayOpen,taskFiltersOpen,taskOpen,taskLayer,backFromTask,closeTask,route,state.filePath,state.chatAttachmentPickerOpen,fileIdentity,can,run,projectPreview,fileAdoption.pending]);
  useEffect(()=>{document.documentElement.dataset.pocketUi=ready?'ready':'connecting';},[ready]);
  useEffect(()=>{if(phoneDraft.phone===true)setIntent(phoneDraft.mode==='main_screen'?'main_screen':'background');else if(phoneDraft.phone===false)setIntent('chat');},[phoneDraft.phone,phoneDraft.mode]);
@@ -470,7 +504,7 @@ export default function App(){
  const send=()=>{if(!composerModelName){navigate('models');return}if(intent!=='chat'){preparePhone();return}if(!composerHasPayload(text,asArray<Json>(state.selectedChatAttachments).length)||!draftKey||previewRefsUnavailable)return;
   if(workTarget){if(!workTargetCurrent||!can('ownerWork.input'))return;setLocalStatus('');chatDraft.markSent();void act('ownerWork.input',{taskId:workTarget.taskId,runId:workTarget.runId,epoch:workTarget.epoch,clientMessageId:crypto.randomUUID(),message:text,mode:state.chatSendMode||'queue'}).then(receipt=>{if(['accepted','queued','consumed'].includes(receipt?.status))setWorkTarget(null)}).catch(()=>{});return;}
   if(!can('composer.send'))return;setLocalStatus('');chatDraft.markSent();run('composer.send',{key:draftKey,epoch:draftEpoch,text});};
- const targetWork=async(task:Task)=>{const identity=ownerWorkIdentity(task);if(!identity||task.raw?.controls?.canInput!==true||task.raw?.conversationId!==state.conversationId)return;const closed=taskOpen?await closeTask():true;if(!closed)return;setWorkTarget({...identity,goal:task.goal,conversationId:String(state.conversationId)});changeIntent('chat');setRoute('chat');};
+ const targetWork=async(task:Task)=>{const identity=ownerWorkIdentity(task);if(!identity||task.raw?.controls?.canInput!==true||task.raw?.conversationId!==state.conversationId)return;const closed=taskOpen?await closeTask():true;if(!closed)return;void navigate('chat',()=>{setWorkTarget({...identity,goal:task.goal,conversationId:String(state.conversationId)});changeIntent('chat')});};
  const controlWork=(task:Task,action:'cancel'|'continue')=>{const identity=ownerWorkIdentity(task);if(!identity||!can('ownerWork.control')||task.raw?.conversationId!==state.conversationId||task.raw?.controls?.[action==='cancel'?'canStop':'canContinue']!==true)return;const key=workIdentityKey(identity);if(workControlEntered.current.has(key)||workControls[key]?.unknown)return;workControlEntered.current.add(key);setWorkControls(old=>({...old,[key]:{pending:true,unknown:false,message:''}}));void act('ownerWork.control',{...identity,action},task.id).then(receipt=>{setWorkControls(old=>({...old,[key]:{pending:false,unknown:receipt?.status==='unknown',message:receipt?.message||(action==='cancel'?'已请求停止这件事，请以原任务状态为准。':'已提交继续原任务，请核对执行状态。')}}))}).catch(error=>{setWorkControls(old=>({...old,[key]:{pending:false,unknown:true,message:error instanceof Error?error.message:'原任务控制回执尚未确认，请先核对原任务。'}}))}).finally(()=>workControlEntered.current.delete(key));};
  useEffect(()=>{setWorkTarget(null)},[state.conversationId]);
  const changeIntent=(next:'chat'|'background'|'main_screen')=>{
@@ -533,7 +567,7 @@ export default function App(){
  const taskHistory=useTaskListHistory(tasks,String(state.taskListNextCursor||''),String(state.conversationId||''),route==='tasks'&&can('history.read'));
  const filteredTasks=taskHistory.tasks.filter(t=>(filter==='all'||filter==='attention'&&attention(t)||filter==='running'&&running(t)||filter==='ended'&&terminal(t))&&[t.goal,t.summary||'',t.id].join(' ').toLocaleLowerCase().includes(taskQuery.toLocaleLowerCase()));
  const attentionTasks=tasks.filter(attention);
- const navigationSelection=state.attachmentWorkspace?.open?'artifacts':['developer-logs','setup','remoteInbox'].includes(route)?route:isPrimaryRoute?route:workspaceNavigationKey(secondaryPage||route);
+ const navigationSelection=state.attachmentWorkspace?.open?'artifacts':['developer-logs','setup','remoteInbox','profile'].includes(route)?route:isPrimaryRoute?route:workspaceNavigationKey(secondaryPage||route);
  const selectNavigation=useCallback((key:string)=>{
   setNavigationMoreOpen(false);
   if(key==='artifacts'){
@@ -566,7 +600,7 @@ export default function App(){
   ...workNav.filter(item=>!item.disabled).map(item=>({id:item.key,group:item.group||'功能',title:item.label,description:item.key==='skills'?'技能与工具':item.key==='model-settings'?'AI 接入':undefined,icon:item.icon,onSelect:()=>selectNavigation(item.key)})),
   {id:'history',group:'日常',title:'任务历史',icon:RiHistoryLine,onSelect:()=>navigate('history')},
   ...conversations.map(c=>({id:`conversation:${c.id}`,group:'已加载的对话',title:c.title||'未命名对话',description:timeLabel(c.updatedAt),icon:RiChatAiLine,onSelect:()=>selectConversation(c.id)})),
-  ...projects.map(p=>({id:`project:${p.id}`,group:'已加载的项目',title:p.name,icon:RiFolderLine,onSelect:()=>{navigate('projects');if(can('projects.select'))run('projects.select',{id:p.id})}}))
+  ...projects.map(p=>({id:`project:${p.id}`,group:'已加载的项目',title:p.name,icon:RiFolderLine,onSelect:()=>{void navigate('projects',()=>{if(can('projects.select'))run('projects.select',{id:p.id})})}}))
  ],[workNav,conversations,projects,navigate,selectNavigation,selectConversation,can,run]);
  useEffect(()=>{if(!currentFileKey||!state.fileReady||fileAdoption.holdsDraft())return;setFileDrafts(previous=>{const old=previous[currentFileKey];const version=Number(state.fileVersion||0),content=String(state.fileContent||''),baseline=String(state.fileBaseline||'');if(!old)return {...previous,[currentFileKey]:{text:content,baseline,version,dirty:content!==baseline}};if(old.submitted!==undefined&&content===old.submitted&&version!==old.version){
    // The native saving snapshot arrives asynchronously. A newer local edit can
@@ -747,7 +781,7 @@ export default function App(){
    </header>
    {!commandOpen&&<div className="pw-navigation-actions">
     <Button ref={conversationSearch} variant="ghost" className="pw-navigation-search-trigger" leadingIcon={Search} aria-label="搜索对话" title="搜索对话" onClick={()=>{setCommandScope('conversations');setCommandOpen(true)}}>搜索对话</Button>
-    {can('conversation.new')&&<Button variant="ghost" className="pw-navigation-new" leadingIcon={SquarePen} aria-label="新对话" title="新对话" disabled={!!state.chatSubmitting} onClick={()=>{navigate('chat');run('conversation.new')}}>新对话</Button>}
+    {can('conversation.new')&&<Button variant="ghost" className="pw-navigation-new" leadingIcon={SquarePen} aria-label="新对话" title="新对话" disabled={!!state.chatSubmitting} onClick={()=>{void navigate('chat',()=>run('conversation.new'))}}>新对话</Button>}
    </div>}
    <div className={`pw-drawer-body ${commandOpen?'pw-navigation-search':''}`}>
     {commandOpen?<CommandMenu key={commandScope} commands={commandScope==='conversations'?workCommands.filter(item=>item.id.startsWith('conversation:')):workCommands} conversationOnly={commandScope==='conversations'} onClose={()=>setCommandOpen(false)}/>:<>
@@ -771,7 +805,7 @@ export default function App(){
    </div>
    {!commandOpen&&<footer className="pw-navigation-footer">
     <div className="pw-navigation-account">
-     <Button variant="ghost" leadingIcon={UserRound} aria-label="账号与模型" title="账号与模型" aria-current={navigationSelection==='model-settings'?'page':undefined} onClick={()=>selectNavigation('model-settings')}>账号与模型</Button>
+     <Button variant="ghost" className="pw-navigation-profile" aria-label={`${personalName}，个人资料与偏好`} title="个人资料与偏好" aria-current={route==='profile'?'page':undefined} disabled={!can('profile.snapshot')} onClick={()=>selectNavigation('profile')}><span className="pw-navigation-profile-content"><span className="pw-sidebar-avatar" aria-hidden="true">{personalAvatar?<img src={personalAvatar} alt=""/>:personalName==='我的'?<UserRound size={21}/>:Array.from(personalName)[0]}</span><span className="pw-navigation-profile-copy"><strong>{personalName}</strong><small>资料与偏好</small></span></span></Button>
      <IconButton icon={Settings} aria-label="设置" title="设置" aria-current={navigationSelection==='settings'?'page':undefined} onClick={()=>selectNavigation('settings')}/>
     </div>
    </footer>}
@@ -893,7 +927,7 @@ export default function App(){
    {route==='chat'&&can('conversation.new')?<IconButton icon={RiChatNewLine} aria-label="新建对话" title="新对话" disabled={!!state.chatSubmitting} onClick={()=>run('conversation.new')}/>:route==='tasks'?<div className="pw-primary-tools">{can('tasks.refresh')&&<IconButton icon={RiRefreshLine} aria-label="刷新任务" onClick={()=>{taskHistory.reset();run('tasks.refresh')}}/>}<IconButton icon={RiSearchLine} aria-label="搜索与筛选任务" aria-expanded={taskFiltersOpen} aria-controls="pw-task-filters" onClick={()=>setTaskFiltersOpen(value=>!value)}/></div>:route==='projects'&&(state.filePath||state.projectTaskReturn?.taskId)?navigationTrigger:<span className="pw-header-spacer" aria-hidden="true"/>}
   </header>}
   {(state.chatBusy&&!composerHasChatStop||activeTask&&!terminal(activeTask))&&<div className="pw-active-bar">{state.chatBusy&&!composerHasChatStop&&<span className="pw-inline-status"><ProgressCircle aria-label="当前对话执行状态" isIndeterminate size="sm"/>{state.chatActiveTurn?.resourceState==='queued'?'等待执行位置':state.chatActiveTurn?.resourceState==='retained'?'原任务等待补充':state.chatActiveTurn?.resourceState==='stopping'?'正在停止':'正在回复'}</span>}{activeTask&&!terminal(activeTask)&&<button type="button" onClick={()=>openTask(activeTask.id)}>{labelStatus(activeTask.status)} · {activeTask.goal}<RiArrowRightSLine size={14}/></button>}<span className="pw-grow"/>{currentCancelIdentity&&can('chat.cancel')&&!composerHasChatStop&&<Button variant="ghost" size="small" onClick={stopOriginalChat}>停止回复</Button>}{activeTask&&activePhoneIdentity&&activeTask.status==='running'&&can('phone.pause')&&<Button variant="ghost" size="small" onClick={()=>run('phone.pause',activePhoneIdentity)}>暂停手机任务</Button>}{activeTask&&activePhoneIdentity&&activeTask.status==='paused'&&can('phone.resume')&&<Button variant="ghost" size="small" onClick={()=>run('phone.resume',activePhoneIdentity)}>继续原任务</Button>}{activeTask&&!terminal(activeTask)&&can('phone.stop')&&<Button variant="ghost" size="small" onClick={()=>{if(activePhoneIdentity)run('phone.stop',activePhoneIdentity)}} disabled={!activePhoneIdentity||activeTask.status==='stopping'}>{activeTask.status==='stopping'?'正在停止':'停止手机任务'}</Button>}</div>}{currentCancelFeedback&&<div className={currentCancelFeedback.error?'pw-banner pw-banner-error':'pw-banner'} role={currentCancelFeedback.error?'alert':'status'}><p>{currentCancelFeedback.message}</p></div>}{(localError||state.error)&&<div className="pw-banner pw-banner-error" role="alert"><RiInformationLine size={17}/><p>{localError||state.error}</p>{localError&&<IconButton icon={RiCloseLine} aria-label="关闭这条操作提示" onClick={()=>setLocalError('')}/>}</div>}{Object.entries(obj(state.attachmentOpens)).filter(([,value])=>value.error).map(([key,value])=><div className="pw-banner pw-banner-error" role="alert" key={key}><p>{value.error}</p></div>)}{(localStatus||state.notice)&&<div className="pw-banner" role="status"><p>{localStatus||state.notice}</p>{localStatus&&<IconButton icon={RiCloseLine} aria-label="关闭这条提示" onClick={()=>setLocalStatus('')}/>}</div>}
-  {isPrimaryRoute?<div className="pw-workspace pw-route-workspace">{route==='chat'?chatPage:route==='tasks'?tasksPage:projectsPage}</div>:route==='remoteInbox'&&can('remoteInbox.state')?<div className="pw-workspace pw-route-workspace"><RemoteInboxWorkspace state={state.remoteInbox} navigationTrigger={navigationTrigger} onBack={()=>navigate('chat')}/></div>:route==='developer-logs'?<div className="pw-workspace pw-route-workspace"><DeveloperDiagnosticsWorkspace onBack={()=>navigate('chat')} navigationTrigger={navigationTrigger}/></div>:route==='setup'?<div className="pw-workspace pw-route-workspace"><SetupWorkspace key={`setup:${setupMode}:${setupCapability||''}:${setupRuntimeTask||''}`} snapshot={snapshot} mode={setupMode} initialCapability={setupCapability} runtimeTaskId={setupRuntimeTask} onNavigate={navigateFromSetup} onClose={closeSetup} registerBackHandler={registerSecondaryBack}/></div>:<Secondary route={route} onBack={returnFromSecondary} snapshot={snapshot} registerBackHandler={registerSecondaryBack} navigationTrigger={navigationTrigger} navigationRevision={navigationRevision} onNavigationPageChange={setSecondaryPage} onOpenSetup={can('setup.read')?openSetup:undefined} onReturnToSetup={setupReturnPending.current?returnFromSecondary:undefined}/> }
+  {isPrimaryRoute?<div className="pw-workspace pw-route-workspace">{route==='chat'?chatPage:route==='tasks'?tasksPage:projectsPage}</div>:route==='remoteInbox'&&can('remoteInbox.state')?<div className="pw-workspace pw-route-workspace"><RemoteInboxWorkspace state={state.remoteInbox} navigationTrigger={navigationTrigger} onBack={()=>navigate('chat')}/></div>:route==='developer-logs'?<div className="pw-workspace pw-route-workspace"><DeveloperDiagnosticsWorkspace onBack={()=>navigate('chat')} navigationTrigger={navigationTrigger}/></div>:route==='setup'?<div className="pw-workspace pw-route-workspace"><SetupWorkspace key={`setup:${setupMode}:${setupCapability||''}:${setupRuntimeTask||''}`} snapshot={snapshot} mode={setupMode} initialCapability={setupCapability} runtimeTaskId={setupRuntimeTask} onNavigate={navigateFromSetup} onClose={closeSetup} registerBackHandler={registerSecondaryBack}/></div>:route==='profile'?<div className="pw-workspace pw-route-workspace"><ProfileWorkspace state={state} presentationKey={`${personalDocumentEpoch}:${Number(snapshot?.view?.resumeRevision||0)}:${String(snapshot?.view?.taskId||'')}:${String(snapshot?.view?.section||'')}`} supported={can} run={bridge.command} onBack={returnFromProfile} onSettings={()=>{void navigate('group:data')}} registerBack={registerSecondaryBack} registerBeforeLeave={registerProfileBeforeLeave}/></div>:<Secondary route={route} onBack={returnFromSecondary} snapshot={snapshot} registerBackHandler={registerSecondaryBack} navigationTrigger={navigationTrigger} navigationRevision={navigationRevision} onNavigationPageChange={setSecondaryPage} onOpenSetup={can('setup.read')?openSetup:undefined} onReturnToSetup={setupReturnPending.current?returnFromSecondary:undefined}/> }
   </div>{allWork}
   <ConversationHistoryWindow page={state.conversationReader||null} submitting={!!state.chatSubmitting} can={can} act={act} registerBack={registerHistoryWindowBack}/>
   <ConversationQueuedInputs page={state.queuedInputsPage||null} can={can} act={act} registerBack={registerQueuedInputsBack}/>
