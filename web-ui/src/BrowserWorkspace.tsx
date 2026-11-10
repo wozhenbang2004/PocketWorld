@@ -105,7 +105,10 @@ export default function BrowserWorkspace({ snapshot }: { snapshot: PocketSnapsho
       setPending(command); setError('');
       return await bridge.command('browserWorkspace.action', payload);
     } catch (failure) { if (alive.current && live.current.context === context && (!request || sequence.current === request.id)) setError(failure instanceof Error ? failure.message : '操作结果尚未确认，请刷新原窗口。'); }
-    finally { if (request && inFlight.current === request) { inFlight.current = null; if (alive.current && live.current.context === context && sequence.current === request.id) setPending(''); } }
+    finally {
+      // Backgrounding invalidates result rendering, not cleanup owned by this request.
+      if (request && inFlight.current === request) { inFlight.current = null; if (alive.current && live.current.context === context) setPending(''); }
+    }
   }
   const sameDraftWindow = () => {
     const snapshot = bridge.getState(), actual = browserWorkspaceState(snapshot);
