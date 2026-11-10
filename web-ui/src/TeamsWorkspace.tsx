@@ -196,7 +196,32 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
   const definitionReady = workspaceActive && (!definition || !!reading?.viewHandle);
   const current = reading?.kind === 'run' ? object(reading.run) : null;
   const latest = current ? object(object(state.teamRuns)[current.id]) : {};
-  const changed = !!current && latest.id === current.id && (latest.generation !== current.generation || latest.revision > current.revision);
+  const changed = !!current && latest.id === current.id && (latest.generation > current.generation
+    || latest.generation === current.generation && latest.revision > current.revision);
+  useEffect(() => {
+    if (!changed || !workspaceActive || busy || editor || review || phoneSelection || backgrounded.current) return;
+    const runId = current!.id, originalHandle = reading?.viewHandle, generation = requestGeneration.current;
+    let retired = false;
+    const stillCurrent = () => !retired && alive.current && !backgrounded.current && ownsNativeWindow()
+      && generation === requestGeneration.current && currentReading.current?.run?.id === runId
+      && currentReading.current?.viewHandle === originalHandle;
+    // Coalesce progress events into one read without locking the user's draft.
+    // A foreground action/navigation retires this read, never the action itself.
+    const timer = setTimeout(() => {
+      if (!stillCurrent()) return;
+      void bridge.command('teams.readRun', { runId }).then(result => {
+        const next = object(object(result).reading);
+        if (!stillCurrent()) { release(next); return; }
+        if (next.run?.id !== runId || !next.viewHandle) {
+          release(next); throw new Error('原团队运行身份不匹配，请刷新记录');
+        }
+        acceptReading(next);
+      }).catch(failure => {
+        if (stillCurrent()) setError(failure instanceof Error ? failure.message : String(failure));
+      });
+    }, 250);
+    return () => { retired = true; clearTimeout(timer); };
+  }, [changed, current?.id, reading?.viewHandle, workspaceActive, busy, editor, review, phoneSelection]);
   const members = rows(current?.members), messages = rows(reading?.messages);
   const workItems = rows(object(current?.workPlan).items);
   const hasWorkPlan = !!current?.workPlan;
@@ -279,7 +304,11 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
       void invoke('teams.reviewPhoneStart', { phoneHandle, members }, reviewResult);
     } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
   };
-  const entries = rows(catalog[tab === 'runs' ? 'runs' : 'teams']).filter(row => `${row.goal || ''} ${row.name || ''} ${row.teamName || ''}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  const entries = rows(catalog[tab === 'runs' ? 'runs' : 'teams']).map(row => {
+    const live = object(object(state.teamRuns)[row.id]);
+    return tab === 'runs' && live.id === row.id && (live.generation > row.generation
+      || live.generation === row.generation && live.revision > row.revision) ? { ...row, ...live } : row;
+  }).filter(row => `${row.goal || ''} ${row.name || ''} ${row.teamName || ''}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const attentionStates = new Set(['awaiting_review', 'awaiting_input', 'awaiting_user', 'awaiting_approval', 'needs_confirmation', 'blocked_unknown', 'unknown', 'reconciling', 'blocked_dependency', 'failed', 'partial', 'interrupted']);
   const finishedStates = new Set(['completed', 'cancelled']);
   const directoryGroups = tab === 'teams' ? [{ id: 'definitions', title: '选择团队，开始一次协作', entries }] : [
@@ -348,7 +377,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
     </article>}
     {current && <article className="pw-team-reading pw-team-run"><header className="pw-object-toolbar"><div><h2 tabIndex={-1}>{current.goal || current.teamName}</h2><p className="pw-detail-status">{status(current.status)}{current.phase ? ` · ${current.phase}` : ''}</p></div>{refreshReading}</header>
       <nav className="pw-team-section-links" aria-label="这次协作的内容"><Button variant="ghost" onClick={() => jumpToRunSection('messages')}>沟通 · {messages.length}</Button><Button variant="ghost" onClick={() => jumpToRunSection('members')}>成员 · {members.length}</Button><Button variant="ghost" onClick={() => jumpToRunSection('materials')}>共享资料</Button><Button variant="secondary" disabled={!canMutate} onClick={() => jumpToRunSection('compose')}>给成员补充</Button></nav>
-      {changed && <p role="status">有新的运行记录。刷新后再发送补充或操作，当前阅读位置保留。</p>}
+      {changed && <p role="status">有新的运行记录，当前阅读位置和未发送内容保留。</p>}
       {workspaceActive && !busy && !reading?.viewHandle && <p role="status">请刷新运行记录后继续操作，未发送的补充保留。</p>}
       <div className="pw-team-run-controls">{reading?.taskId && <Button variant="secondary" trailingIcon={RiExternalLinkLine} onClick={() => void run('tasks.open', { id: reading.taskId }).catch(() => {})}>查看原任务与审批</Button>}<div className="pw-form-actions"><IconButton className="pw-utility-icon" icon={RiPauseLine} aria-label="暂停全队" title="暂停全队" disabled={!canControl} onClick={() => control('pause')} /><IconButton className="pw-utility-icon" icon={RiPlayLine} aria-label="沿原额度继续" title="沿原额度继续" disabled={!canMutate || hasWorkPlan} onClick={() => control('resume')} /><Button variant="ghost" disabled={!canControl} onClick={() => reviewResult({ operation: 'cancel', viewHandle: reading!.viewHandle, runId: current.id })}>停止这次协作</Button></div></div>
       {hasWorkPlan && <p className="pw-field-hint">继续工作或使用待处理消息时，请在原任务中核对具体工作项；不会按成员猜测要继续的分工。</p>}
@@ -477,3 +506,4 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
     </div></SettingsDialog>
   </section>;
 }
+
