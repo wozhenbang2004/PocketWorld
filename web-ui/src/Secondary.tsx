@@ -1426,7 +1426,7 @@ function settingsEntryDetail(id: string, state: Data): string {
 
 export default function Secondary({ route, onBack, snapshot, registerBackHandler, navigationTrigger, navigationRevision, onNavigationPageChange, onOpenSetup, onReturnToSetup }: Props) {
   const phonePresentation = useRef('list');
-  const state: Data = { ...object(snapshot.state), webWorkspaceResumeRevision: Number(snapshot.view?.resumeRevision || 0), webWorkspaceTaskOpen: !!snapshot.view?.taskId };
+  const state: Data = { ...object(snapshot.state), webWorkspaceResumeRevision: Number(snapshot.view?.resumeRevision || 0), webWorkspaceTaskOpen: !!snapshot.view?.taskId, webWorkspaceSection: snapshot.view?.section };
   const commands = snapshot.capabilities?.commands || [];
   const supported = (action: string) => commands.includes(action);
   const normalize = normalizeWorkspaceRoute;
@@ -1436,6 +1436,13 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
   // A new drawer/deep-link entry must not briefly mount the previous owner's
   // child while the effect below clears its local presentation trail.
   const page = entryChanged ? normalize(route) : storedPage;
+  // A retiring child's cleanup still holds its original run callback. Do not let
+  // that callback borrow the next page's generation and publish an error there.
+  const requestOwner = useRef({ route, revision: navigationRevision, page });
+  if (requestOwner.current.route !== route || requestOwner.current.revision !== navigationRevision || requestOwner.current.page !== page) {
+    requestOwner.current = { route, revision: navigationRevision, page };
+  }
+  const renderedOwner = requestOwner.current;
   const [candidateTarget, setCandidateTarget] = useState<LearningCandidateTarget | null>(null);
   const [modelView, setModelView] = useState<ModelView>({ kind: 'list' });
   const [modelHostSection, setModelHostSection] = useState<'models' | 'accounts' | 'proxy'>(normalize(route) === 'proxy' ? 'proxy' : 'models');
@@ -1451,13 +1458,24 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; generation.current++; }; }, []);
   const run: Run = async (action, args = {}) => {
     if (!supported(action)) throw new Error('当前页面尚未开放此操作。');
-    const current = generation.current; setError('');
+    const current = generation.current;
+    const teamWindow = action.startsWith('teams.') ? {
+      documentEpoch: bridge.getDocumentEpoch(), resumeRevision: Number(object(bridge.getState().view).resumeRevision || 0),
+    } : null;
+    const ownsPresentation = () => {
+      if (!mounted.current || requestOwner.current !== renderedOwner || generation.current !== current) return false;
+      if (!teamWindow) return true;
+      const view = object(bridge.getState().view);
+      return view.section === 'teams' && !view.taskId && teamWindow.documentEpoch === bridge.getDocumentEpoch()
+        && teamWindow.resumeRevision === Number(view.resumeRevision || 0);
+    };
+    if (ownsPresentation()) setError('');
     try {
       const value = await bridge.command(action, args);
-      if (mounted.current && generation.current === current && object(value).accepted === true) setNotice('已提交，结果尚未确认。');
+      if (ownsPresentation() && object(value).accepted === true) setNotice('已提交，结果尚未确认。');
       return value;
     } catch (failure) {
-      if (mounted.current && generation.current === current) setError(failure instanceof Error ? failure.message : String(failure));
+      if (ownsPresentation()) setError(failure instanceof Error ? failure.message : String(failure));
       throw failure;
     }
   };

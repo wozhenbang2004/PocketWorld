@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { bridge } from './bridge';
 import { RiAddLine, RiArrowLeftLine, RiArrowRightSLine, RiEditLine, RiExternalLinkLine, RiPauseLine, RiPlayLine, RiRefreshLine } from '@remixicon/react';
 import { Tabs, TabList, Tab, TabPanel } from './shell-library';
 import { Accordion, AccordionItem, Button, CheckboxField, IconButton, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
@@ -60,7 +61,12 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
   const backgrounded = useRef(document.visibilityState !== 'visible'), currentReview = useRef<Data | null>(null);
   const currentPhoneSelection = useRef<Data | null>(null);
   const materialBack = useRef<(() => boolean) | null>(null);
-  const lastResumeRevision = useRef(Number(state.webWorkspaceResumeRevision || 0));
+  const workspaceActive = state.webWorkspaceSection === 'teams' && !state.webWorkspaceTaskOpen;
+  const workspaceWindow = useRef({ active: false, revision: Number(state.webWorkspaceResumeRevision || 0) });
+  const ownsNativeWindow = () => {
+    const view = object(bridge.getState().view);
+    return view.section === 'teams' && !view.taskId;
+  };
   const root = useRef<HTMLElement>(null), positions = useRef(new Map<string, number>());
   const listSelection = useRef<Partial<Record<TeamTab, string>>>({});
   const messageInputs = useRef(new Map<string, MessageInput>()), startInputs = useRef(new Map<string, { goal: string; rounds: string }>());
@@ -95,12 +101,16 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
     return () => { cancelAnimationFrame(frame); scroll.removeEventListener('scroll', remember); };
   }, [viewKey]);
   const invoke = async (action: string, args: Data = {}, accept?: (result: Data) => void, rejected?: (failure: unknown) => void) => {
-    if (entered.current || backgrounded.current) return; entered.current = true; const generation = ++requestGeneration.current; setBusy(true); setError(''); setNotice('');
+    if (entered.current || backgrounded.current || !ownsNativeWindow()) return; entered.current = true; const generation = ++requestGeneration.current; setBusy(true); setError(''); setNotice('');
     try { const result = object(await run(action, args)); if (alive.current && generation === requestGeneration.current) accept?.(result); return result; }
     catch (failure) { if (alive.current && generation === requestGeneration.current) { setError(failure instanceof Error ? failure.message : String(failure)); rejected?.(failure); } }
     finally { if (generation === requestGeneration.current) { entered.current = false; if (alive.current) setBusy(false); } }
   };
-  const release = (value: Data | null, kind = 'viewHandle') => { if (value?.[kind]) void run('teams.closeReading', { [kind]: value[kind] }).catch(() => {}); };
+  const release = (value: Data | null, kind = 'viewHandle') => {
+    // Native leaveConnection already retires these handles. Cleanup is not a
+    // user operation and must not overwrite a successful read or an action error.
+    if (value?.[kind] && ownsNativeWindow()) void bridge.command('teams.closeReading', { [kind]: value[kind] }).catch(() => {});
+  };
   const acceptReading = (next: Data) => {
     rememberView();
     release(currentReading.current); setReading(next);
@@ -133,8 +143,9 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
   const switchTab = (value: TeamTab) => { if (busy) return; rememberView(); setTab(value); setError(''); setNotice(''); };
   const closeReview = () => { const original = currentReview.current; currentReview.current = null; release(original, 'reviewHandle'); setReview(null); setAcknowledged(false); };
   const closePhoneSelection = () => { const original = currentPhoneSelection.current; currentPhoneSelection.current = null; release(original, 'phoneHandle'); setPhoneSelection(null); };
-  useEffect(() => { alive.current = true; load(); return () => { alive.current = false; requestGeneration.current++; release(currentReading.current); release(currentReview.current, 'reviewHandle'); release(currentPhoneSelection.current, 'phoneHandle'); }; }, []);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; requestGeneration.current++; release(currentReading.current); release(currentReview.current, 'reviewHandle'); release(currentPhoneSelection.current, 'phoneHandle'); }; }, []);
   const restoreWorkspace = () => {
+    if (backgrounded.current || !ownsNativeWindow()) return;
     const original = currentReading.current, generation = ++requestGeneration.current;
     closeReview(); closePhoneSelection();
     entered.current = true; setBusy(true); setReview(null); setAcknowledged(false); setError('');
@@ -155,10 +166,18 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
   };
   useEffect(() => {
     const revision = Number(state.webWorkspaceResumeRevision || 0);
-    if (revision === lastResumeRevision.current) return;
-    lastResumeRevision.current = revision;
-    if (!backgrounded.current) restoreWorkspace();
-  }, [state.webWorkspaceResumeRevision]);
+    const previous = workspaceWindow.current;
+    workspaceWindow.current = { active: workspaceActive, revision };
+    if (!workspaceActive) {
+      if (previous.active) {
+        requestGeneration.current++; entered.current = false; setBusy(false);
+        closeReview(); closePhoneSelection(); setMemberProbes({}); setExternalReady({});
+        setReading(value => value ? { ...value, viewHandle: '' } : null);
+      }
+      return;
+    }
+    if (!previous.active || revision !== previous.revision) restoreWorkspace();
+  }, [workspaceActive, state.webWorkspaceResumeRevision]);
   useEffect(() => {
     const hide = () => {
       backgrounded.current = true; requestGeneration.current++; entered.current = false;
@@ -174,7 +193,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
   });
   useEffect(() => { registerTransientBack(() => { if (materialBack.current?.()) return true; if (busy) return true; if (review) { closeReview(); return true; } if (phoneSelection) { closePhoneSelection(); return true; } if (editor) { setEditor(null); return true; } if (reading) { back(); return true; } return false; }); return () => registerTransientBack(null); }, [reading, review, phoneSelection, editor, busy, registerTransientBack]);
   const definition = reading?.kind === 'definition' ? object(reading.definition) : null;
-  const definitionReady = !definition || !!reading?.viewHandle;
+  const definitionReady = workspaceActive && (!definition || !!reading?.viewHandle);
   const current = reading?.kind === 'run' ? object(reading.run) : null;
   const latest = current ? object(object(state.teamRuns)[current.id]) : {};
   const changed = !!current && latest.id === current.id && (latest.generation !== current.generation || latest.revision > current.revision);
@@ -183,7 +202,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
   const hasWorkPlan = !!current?.workPlan;
   const reply = messages.find(message => message.messageId === replyId);
   const draftKey = `${current?.id || ''}:${recipient}:${replyId}:${mode}`, text = drafts[draftKey] || '';
-  const canMutate = !!current && !!reading?.viewHandle && !busy && !changed && current.status !== 'cancelled' && !uncertain;
+  const canMutate = workspaceActive && !!current && !!reading?.viewHandle && !busy && !changed && current.status !== 'cancelled' && !uncertain;
   const name = (id: string) => members.find(member => member.id === id)?.name || id;
   const reviewResult = (value: Data) => {
     if (value.operation === 'phone_scope') { setPhoneSelection(value); setPhoneChoices(Object.fromEntries(rows(value.view?.members).map(member => [member.memberId, teamPhoneChoice()]))); }
@@ -280,8 +299,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
   if (editor) try { editorPayload = teamDefinitionPayload(editor, catalog); }
   catch (failure) { productionError = failure instanceof Error ? failure.message : String(failure); }
   const refreshReading = <IconButton className="pw-utility-icon" icon={RiRefreshLine} aria-label="刷新团队记录" title="刷新团队记录" disabled={busy} onClick={() => current ? readRun(current.id) : definition ? void invoke('teams.readDefinition', { id: definition.id }, acceptReading) : load()} />;
-  return <section ref={root} className="pw-team-workspace pw-depth-collaboration" data-team-layer={reading ? 'detail' : 'list'} data-team-view={viewKey}>
-    <div className="pw-team-loading">{busy && <ProgressBar aria-label="正在读取原团队回执" isIndeterminate showValueLabel={false} size="sm" />}</div>
+  return <section ref={root} className="pw-team-workspace pw-depth-collaboration" data-team-layer={reading ? 'detail' : 'list'} data-team-view={viewKey} inert={!workspaceActive} aria-busy={!workspaceActive || busy}>
+    <div className="pw-team-loading">{(!workspaceActive || busy) && <ProgressBar aria-label={workspaceActive ? '正在读取原团队回执' : '正在进入团队工作区'} isIndeterminate showValueLabel={false} size="sm" />}</div>
     {error && error !== alreadyShownError && !editor && !review && !phoneSelection && <p className="pw-secondary-error" role="alert">{error}</p>}{notice && <p className="pw-field-hint" role="status">{notice}</p>}
     {reading && <nav className="pw-team-location" aria-label="团队内导航"><Button variant="ghost" leadingIcon={RiArrowLeftLine} disabled={busy} onClick={back}>{current ? '返回协作记录' : '返回我的团队'}</Button><span>{current ? current.teamName || '这次协作' : '成员与启动'}</span></nav>}
     {!reading && <>
