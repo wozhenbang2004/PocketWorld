@@ -57,6 +57,10 @@ internal class PocketWebHost private constructor(
         private const val ENTRY = "https://$HOST${PREFIX}index.html"
         fun bootstrap(activity: ComposeActivity, app: dev.pocketengine.EngineApplication, saved: JSONObject?, ready: () -> Unit) =
             PocketWebHost(activity, { emit -> PocketWebBootstrap(activity, app, emit, ready) }, saved)
+        @JvmStatic
+        fun appUpdates(activity: dev.pocketengine.features.updates.AppUpdateActivity,
+            manager: dev.pocketengine.features.updates.AppUpdateManager) =
+            PocketWebHost(activity, { emit -> PocketWebAppUpdates(activity, manager, emit) })
         fun browserSourceReader(activity: dev.pocketengine.BrowserActivity, host: dev.pocketengine.browser.BrowserTaskHost,
             target: BrowserSourceReaderTarget, focused: () -> Boolean, dismiss: () -> Unit, failed: () -> Unit) =
             PocketWebHost(activity, { emit -> PocketWebBrowserSources(target, host, focused, emit, dismiss) }, readerFailure = failed)

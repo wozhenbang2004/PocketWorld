@@ -12,7 +12,7 @@ export function AppearanceSettings({ state, supported, run }: Props) {
   const [error, setError] = useState('');
   const mode = ['system', 'light', 'dark'].includes(String(appearance.mode)) ? String(appearance.mode) : '';
   return <section className="pw-appearance-preference" aria-label="界面外观">
-    <RadioOptions label="界面外观" value={mode} options={[
+    <RadioOptions className="pw-appearance-theme" label="界面外观" value={mode} options={[
       { id: 'system', label: '跟随系统' }, { id: 'light', label: '浅色' }, { id: 'dark', label: '深色' },
     ]} isDisabled={pending || appearance.saving === true || !mode || !supported('settings.appearance')}
       onChange={value => {

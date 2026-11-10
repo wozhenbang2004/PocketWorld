@@ -78,21 +78,23 @@ export function TypographySettings({ state, supported, run }: Props) {
 
   return <section className="pw-typography-settings" aria-label="字体设置">
     <div className="pw-typography-heading"><h3>字体</h3></div>
-    <div className="pw-typography-workbench"><div className="pw-typography-fields">
-      <SelectField label="中文" options={options(CHINESE_FONTS)} value={draft.chinese} onChange={value => change('chinese', value)} isDisabled={locked || !canSave} />
-      <SelectField label="英文与数字" options={options(LATIN_FONTS)} value={draft.latin} onChange={value => change('latin', value)} isDisabled={locked || !canSave} />
-      <SelectField label="代码与终端" options={options(CODE_FONTS)} value={draft.code} onChange={value => change('code', value)} isDisabled={locked || !canSave} />
-    </div>
-    <div className="pw-typography-preview" aria-label="所选字体预览" aria-busy={preview === 'loading'}>
-      {preview === 'loading' && <p className="pw-field-hint" role="status">正在准备所选字体…</p>}
-      {preview === 'error' && <div className="pw-typography-preview-error"><p className="pw-field-hint" role="status">字体预览暂未载入，当前选择已保留。</p><Button variant="ghost" size="small" onClick={() => setPreviewAttempt(value => value + 1)}>重试预览</Button></div>}
-      <div className="pw-typography-specimens" hidden={preview !== 'ready'}>
-        <p lang="zh-CN" className="pw-typography-sample-cjk" style={{ fontFamily: fonts.chinese, fontWeight: 400 }}>中文界面与阅读</p>
-        <p lang="en" className="pw-typography-sample-latin" style={{ fontFamily: fonts.ui, fontWeight: 400 }}>Interface · 0123456789</p>
-        <code className="pw-typography-sample-code" style={{ fontFamily: fonts.code, fontWeight: 400 }}>const goal = "你好";  // 0O 1Il</code>
+    <div className="pw-typography-workbench">
+      <div className="pw-typography-preview" aria-label="所选字体预览" aria-busy={preview === 'loading'}>
+        {preview === 'loading' && <p className="pw-field-hint" role="status">正在准备所选字体…</p>}
+        {preview === 'error' && <div className="pw-typography-preview-error"><p className="pw-field-hint" role="status">字体预览暂未载入，当前选择已保留。</p><Button variant="ghost" size="small" onClick={() => setPreviewAttempt(value => value + 1)}>重试预览</Button></div>}
+        <div className="pw-typography-specimens" hidden={preview !== 'ready'}>
+          <p lang="zh-CN" className="pw-typography-sample-cjk" style={{ fontFamily: fonts.chinese, fontWeight: 400 }}>中文界面与阅读</p>
+          <p lang="en" className="pw-typography-sample-latin" style={{ fontFamily: fonts.ui, fontWeight: 400 }}>Interface · 0123456789</p>
+          <code className="pw-typography-sample-code" style={{ fontFamily: fonts.code, fontWeight: 400 }}>const goal = "你好";  // 0O 1Il</code>
+        </div>
+      </div>
+      <div className="pw-typography-fields">
+        <SelectField compactValue label="中文" options={options(CHINESE_FONTS)} value={draft.chinese} onChange={value => change('chinese', value)} isDisabled={locked || !canSave} />
+        <SelectField compactValue label="英文与数字" options={options(LATIN_FONTS)} value={draft.latin} onChange={value => change('latin', value)} isDisabled={locked || !canSave} />
+        <SelectField compactValue label="代码与终端" options={options(CODE_FONTS)} value={draft.code} onChange={value => change('code', value)} isDisabled={locked || !canSave} />
       </div>
     </div>
-    </div><div className="pw-form-actions pw-typography-actions">
+    <div className="pw-form-actions pw-typography-actions">
       <Button disabled={locked || !canSave || !needsSave || preview !== 'ready'} onClick={() => { void save(); }}>{pending ? '正在保存…' : visibleError ? '重试保存' : '保存字体'}</Button>
       <Button variant="ghost" disabled={locked || !canSave || draftKey === typographyKey(DEFAULT_TYPOGRAPHY)} onClick={() => { setDraft({ ...DEFAULT_TYPOGRAPHY }); setSaved(null); setError(''); }}>恢复默认组合</Button>
     </div>

@@ -4308,7 +4308,14 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 "send" -> { receiveChatAcknowledgement(result,meta.second.optString("clientMessageId"));native("getFeatures") }
                 "getSubmission" -> { receiveChatAcknowledgement(result,meta.second.optString("clientMessageId"),true);native("getFeatures") }
             }
-            "display" -> { if (command == "setup") state = state.copy(setupCommands = (result.optJSONArray("setupCommands") ?: org.json.JSONArray()).let { array -> (0 until array.length()).map { array.optString(it) } }); if (result.has("message")) state = state.copy(notice = result.optString("message")) }
+            "display" -> {
+                if (command == "setup") state = state.copy(setupCommands = (result.optJSONArray("setupCommands") ?: org.json.JSONArray()).let { array -> (0 until array.length()).map { array.optString(it) } })
+                // Reading capability/setup metadata is not a cross-workspace notification.
+                // Its message remains in the display snapshot and original module result.
+                if (command !in setOf("status", "adb.status", "shizuku.status", "adb.discover", "setup") && result.has("message")) {
+                    state = state.copy(notice = result.optString("message"))
+                }
+            }
             "teams" -> {
                 if (isTeamRunResult(command, result)) mergeTeamRun(result)
                 if (command == "start") {

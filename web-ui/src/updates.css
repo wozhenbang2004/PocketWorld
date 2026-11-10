@@ -1,0 +1,53 @@
+/* PW-P6: existing BoardUI settings controls in the same bundled React frontend. */
+.pw-secondary.pw-updates {
+  height: 100dvh;
+  background: var(--pw-canvas-workspace);
+  color: var(--pw-ink);
+  font-size: 16px;
+  line-height: 1.55;
+}
+.pw-updates .pw-updates-header {
+  min-height: 68px;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--pw-canvas-workspace);
+}
+.pw-updates .pw-updates-header h1 {
+  margin: 0;
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 600;
+}
+.pw-updates .pw-updates-header button { width: 44px; min-width: 44px; height: 44px; }
+.pw-updates-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.pw-updates-content { display: grid; gap: 16px; max-width: 720px; margin-inline: auto; padding: 8px 16px 32px; }
+.pw-updates-group { min-width: 0; padding: 20px; border-radius: 20px; background: var(--pw-surface); }
+.pw-updates p { margin: 0; overflow-wrap: anywhere; }
+.pw-updates-version { display: grid; gap: 12px; }
+.pw-updates .pw-updates-caption { font-size: 13px; line-height: 20px; color: var(--pw-muted); }
+.pw-updates .pw-updates-installed { margin-top: -8px; font-size: 16px; font-weight: 500; }
+.pw-updates-release { display: grid; gap: 4px; padding-top: 8px; }
+.pw-updates-release h2 { margin: 0; font-size: 16px; line-height: 24px; font-weight: 600; }
+.pw-updates .pw-updates-message { font-size: 16px; line-height: 25px; }
+.pw-updates .pw-updates-error { font-size: 16px; line-height: 25px; }
+.pw-updates-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 4px; }
+.pw-updates .pw-updates-actions button,
+.pw-updates .pw-updates-notification button { min-height: 44px; height: auto; padding: 10px 16px; white-space: normal; font-size: 16px; line-height: 24px; }
+.pw-updates .pw-updates-progress { padding-block: 4px; }
+.pw-updates .pw-updates-progress [role="progressbar"] { color: var(--pw-ink); }
+.pw-updates .pw-updates-transfer { font-variant-numeric: tabular-nums; }
+.pw-updates .pw-stretch-setting { gap: 16px; padding: 0; }
+.pw-updates .pw-stretch-label { font-size: 16px; line-height: 24px; font-weight: 500; }
+.pw-updates .pw-stretch-hint { margin-top: 6px; font-size: 13px; line-height: 20px; color: var(--pw-muted); }
+.pw-updates .pw-stretch-hit { min-width: 44px; min-height: 44px; }
+.pw-updates-notification { display: grid; justify-items: start; gap: 10px; margin-top: 20px; }
+.pw-updates-details { padding-block: 8px; }
+.pw-updates .pw-updates-details button { min-height: 44px; }
+.pw-updates.pw-app .pw-updates-details [slot="trigger"] .text-headline-medium { font-size: 16px; line-height: 24px; }
+.pw-updates-details p { font-size: 13px; line-height: 21px; color: var(--pw-muted); }
+.pw-updates-details p + p { margin-top: 12px; }
+.pw-updates-notes { white-space: pre-wrap; }
+@media (max-width: 360px) {
+  .pw-updates-content { padding-inline: 12px; }
+  .pw-updates-group { padding-inline: 16px; }
+}

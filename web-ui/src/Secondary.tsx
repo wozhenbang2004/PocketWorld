@@ -7,7 +7,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNo
 import {
   RiAddLine, RiArrowLeftLine, RiArrowRightSLine, RiCheckLine, RiComputerLine, RiDatabase2Line,
   RiFileList3Line, RiKey2Line, RiLink, RiMicLine, RiNotification3Line, RiPuzzle2Line, RiRefreshLine,
-  RiSettings3Line, RiShieldCheckLine, RiSmartphoneLine, RiTeamLine,
+  RiSettings3Line, RiShieldCheckLine, RiSmartphoneLine, RiTeamLine, RiDownload2Line, RiUpload2Line,
 } from '@remixicon/react';
 import { bridge } from './bridge';
 import type {SetupCapability} from './setup-contract';
@@ -720,12 +720,13 @@ function BackgroundSettings({ state, supported, run, onReturn, returnLabel = '�
   const activeStep = connection.taskOwned || connection.helperConnected && !requiresCheck ? 3 : !connection.loaded || !connection.supported || !permissions ? 0 : connecting || requiresCheck ? 2 : 1;
   const blockedGroups = list(object(state.phoneReadiness).groups).filter(group => group.state === 'blocked').length;
   return <div className="pw-background-workspace" data-background-panel={panel}>
-    <header className="pw-background-heading"><p className="pw-model-eyebrow">手机后台助手</p><h2>{headline}</h2><p>{connection.screenEstablished ? '宿主已核验当前独立显示会话。' : connection.helperConnected ? '正式开始任务时才建立或核验独立显示会话。' : '设置只准备连接，不会自动开始原目标。'}</p>
+    <section className="pw-background-flow" aria-label="当前连接准备">
+    <header className="pw-background-heading"><h2>{headline}</h2>
       <p className="pw-background-backend">{({ wireless_adb: '手机内无线连接', shizuku: 'Shizuku 兼容连接', adb: '受信任电脑 ADB' } as Data)[connection.backend] || '连接方式尚未读取'}{connection.taskOwned ? ' · 原手机任务持有执行资源' : ''}</p>
     </header>
-    <ol className="pw-background-progress" aria-label="连接准备进度">{steps.map((step, index) => <li key={step.title} data-complete={step.done || undefined} aria-current={activeStep === index ? 'step' : undefined}><span aria-hidden="true">{step.done ? <RiCheckLine size={13}/> : index + 1}</span><span>{step.title}</span><span className="pw-sr-only">{step.done ? '已完成' : activeStep === index ? '当前步骤' : '待核对'}</span></li>)}</ol>
-    <div className="pw-background-status-actions"><CapabilityAction action="background.refresh" supported={supported} run={run}>刷新核对状态</CapabilityAction>{connection.taskOwned && state.activeTaskId && <CapabilityAction action="tasks.open" args={{ id: state.activeTaskId }} supported={supported} run={run}>回到原任务</CapabilityAction>}</div>
-    {text(adb.message) && <p className="pw-background-native-message" role="status">{text(adb.message)}</p>}
+    <ol className="pw-background-progress" aria-label="连接准备进度">{steps.map((step, index) => <li key={step.title} data-complete={step.done || undefined} aria-current={activeStep === index ? 'step' : undefined} title={step.title}><span aria-hidden="true">{step.done ? <RiCheckLine size={13}/> : index + 1}</span><span aria-hidden="true">{['系统准备', alternate ? '连接授权' : '本机配对', '连接核对', '返回目标'][index]}</span><span className="pw-sr-only">{step.title}，{step.done ? '已完成' : activeStep === index ? '当前步骤' : '待核对'}。{step.detail}</span></li>)}</ol>
+    {connection.taskOwned && state.activeTaskId && <div className="pw-background-status-actions"><CapabilityAction action="tasks.open" args={{ id: state.activeTaskId }} supported={supported} run={run} primary>回到原任务</CapabilityAction></div>}
+    {(connection.busy || requesting || awaiting || requiresCheck) && text(adb.message) && <p className="pw-background-native-message" role="status">{text(adb.message)}</p>}
     {requiresCheck && <p className="pw-background-attention" role="status">上次连接结果尚未确认。核对原助手，不要重复提交配对码。</p>}
     {awaiting && !connection.busy && <p className="pw-field-hint" role="status">请求已登记，正在等待实际连接回执。可刷新核对状态，请勿重复提交。</p>}
     {errors.map((message, index) => <p className="pw-field-error" role="alert" key={index}>{message}</p>)}
@@ -734,8 +735,8 @@ function BackgroundSettings({ state, supported, run, onReturn, returnLabel = '�
     <Tabs selectedKey={panel} onSelectionChange={key => selectPanel(key as 'setup' | 'checks')} className="pw-background-tabs">
       <TabList aria-label="后台连接内容"><Tab id="setup">连接设置</Tab><Tab id="checks" count={blockedGroups || undefined}>能力检查</Tab></TabList>
       <TabPanel id="setup">
-        {!permissions && <section className="pw-background-preparation"><h3>先核对系统准备</h3><p>界面读取与任务通知尚未全部开启。系统设置返回后刷新状态。</p><div className="pw-form-actions">{state.accessibilityEnabled !== true && <CapabilityAction action="settings.openSystem" args={{ section: 'accessibility' }} supported={supported} run={run}>设置界面读取权限</CapabilityAction>}{state.notificationsEnabled !== true && <CapabilityAction action="settings.openSystem" args={{ section: 'notifications' }} supported={supported} run={run}>允许任务通知</CapabilityAction>}</div></section>}
-    {!connection.taskOwned && connection.loaded && connection.supported && !alternate && !connected && <Card title={connecting ? '连接后台助手' : '与这台手机配对'} description={connecting ? '回到系统无线调试主页，读取连接端口。它与配对窗口的端口不同。' : '在开发者选项开启无线调试，打开“使用配对码配对设备”，保持当前窗口可见。'}>
+        {!permissions && <section className="pw-background-preparation"><h3>开启手机操作所需权限</h3><p>完成系统授权后返回，使用右上角刷新核对。</p><div className="pw-background-permission-status"><span>界面读取<b>{state.accessibilityEnabled === true ? '已连接' : '待开启'}</b></span><span>任务通知<b>{state.notificationsEnabled === true ? '已开启' : '待开启'}</b></span></div><div className="pw-form-actions">{state.accessibilityEnabled !== true && <CapabilityAction action="settings.openSystem" args={{ section: 'accessibility' }} supported={supported} run={run} primary>设置界面读取权限</CapabilityAction>}{state.notificationsEnabled !== true && <CapabilityAction action="settings.openSystem" args={{ section: 'notifications' }} supported={supported} run={run} primary={state.accessibilityEnabled === true}>允许任务通知</CapabilityAction>}</div></section>}
+    {(permissions || connecting || requiresCheck) && !connection.taskOwned && connection.loaded && connection.supported && !alternate && !connected && <Card title={connecting ? '连接后台助手' : '与这台手机配对'} description={connecting ? '回到系统无线调试主页，读取连接端口。它与配对窗口的端口不同。' : '在开发者选项开启无线调试，打开“使用配对码配对设备”，保持当前窗口可见。'}>
       {!connection.wirelessAvailable ? <Empty>此安装包尚未提供手机内无线配对能力。</Empty> : <>
         <div className="pw-form-actions"><Button variant="secondary" disabled={locked || !supported('settings.openSystem')} onClick={() => { setCode(''); void run('settings.openSystem', { section: 'wireless' }).catch(() => {}); }}>前往无线调试设置</Button><CapabilityAction action="background.discover" supported={supported} run={run} disabled={connection.taskOwned || pending.includes('display.adb.discover')}>查找本机服务</CapabilityAction></div>
         <div className="pw-background-endpoints">
@@ -756,8 +757,6 @@ function BackgroundSettings({ state, supported, run, onReturn, returnLabel = '�
     {connection.loaded && !connection.supported && <Card title="此系统使用主屏兼容模式" description="后台独立屏需要 Android 14 或以上；执行主屏任务时会切换应用并占用当前屏幕。"><Button variant="secondary" disabled={connection.taskOwned || connection.busy || !supported('background.selectMainScreen')} onClick={() => setMainScreenConsent(true)}>选择主屏兼容模式</Button></Card>}
 
         {(connected || connection.taskOwned || alternate) && <section className="pw-background-retained"><h3>{connection.taskOwned ? '继续核对原任务' : connected ? '助手连接已保留' : '保留当前兼容连接'}</h3><p>{connection.taskOwned ? '原任务仍持有执行资源，本页不会重建连接或开始另一项任务。' : connected ? '开始任务时还会核对输入、取帧和独立显示能力。' : '当前使用已选的 Shizuku 或电脑 ADB 路线。本页不会自动切换为无线配对。'}</p><Button variant="secondary" onClick={() => selectPanel('checks')}>查看实际能力检查</Button></section>}
-    <BackgroundOwnerSettings state={state} supported={supported} run={run} registerBack={handler => { ownerBack.current.advanced = handler; }} />
-
       </TabPanel>
       <TabPanel id="checks">    <Card title="本机能力检查" description="逐项来自当前系统检查。已连接仍需核对输入、取帧和输入法隔离能力；从系统设置返回后刷新。">
 
@@ -769,6 +768,11 @@ function BackgroundSettings({ state, supported, run, onReturn, returnLabel = '�
     <BackgroundChecks state={state} supported={supported} run={run} registerBack={handler => { ownerBack.current.checks = handler; }} />
 </TabPanel>
     </Tabs>
+    <p className="pw-background-scope-note">{connection.screenEstablished ? '已核验当前独立显示会话。' : connection.helperConnected ? '开始任务时会核对独立屏幕；这里不会自动开始任务。' : '这里只准备连接，完成后由你决定何时开始任务。'}</p>
+    </section>
+    <section className="pw-background-options" aria-label="连接与应用设置"><h3>连接与应用设置</h3><div className="pw-background-options-surface"><BackgroundOwnerSettings state={state} supported={supported} run={run} registerBack={handler => { ownerBack.current.advanced = handler; }} />
+      {(text(display.message) || text(adb.message)) && <Accordion variant="divided" className="pw-background-native-details"><AccordionItem id="background-native-state" title="连接说明与原状态">{Array.from(new Set([text(display.message), text(adb.message)].filter(Boolean))).map(message => <p key={message} className="pw-background-native-message">{message}</p>)}</AccordionItem></Accordion>}
+    </div></section>
     <section className="pw-background-preferences" aria-label="后台偏好"><h3>后台偏好</h3><BackgroundAudioSettings state={state} supported={supported} run={run} registerBack={handler => { ownerBack.current.audio = handler; }}/></section>
     <div className="pw-background-return"><Button variant={connection.helperConnected && !requiresCheck ? 'primary' : 'ghost'} onClick={() => { setCode(''); onReturn(); }}>{connection.helperConnected && !requiresCheck ? `助手已连接，返回${returnLabel}` : `返回${returnLabel}`}</Button></div>
     <SettingsDialog isOpen={mainScreenConsent} title="改用主屏兼容模式？" onClose={() => setMainScreenConsent(false)}><p>助手执行时会切换应用并占用当前屏幕。请先完成界面读取与任务通知授权；此处只选择模式，不会开始原目标。</p><div className="pw-form-actions"><Button variant="secondary" onClick={() => setMainScreenConsent(false)}>暂不使用</Button><CapabilityAction action="background.selectMainScreen" supported={supported} run={run} disabled={connection.taskOwned || connection.busy} primary>明确选择主屏模式</CapabilityAction></div></SettingsDialog>
@@ -1209,16 +1213,17 @@ function ArchiveWorkspace({ data, supported, run, registerTransientBack, navigat
   };
   return <div className="pw-data-workspace pw-archive-workspace" ref={journey.root} tabIndex={-1} data-data-view={journey.view}>
     <div className="pw-data-collection" hidden={journey.view !== 'list'}>
-      <p className="pw-reading-lead">带走你的数据，或从备份恢复。先选择一项操作。</p>
-      <div className="pw-settings-links pw-data-purpose-list">
-        <DataOperationRow id="create" title="创建备份" detail="选择范围，生成后加密导出" onOpen={journey.open} />
-        <DataOperationRow id="import" title="导入备份" detail="先预览内容，再逐分区恢复" onOpen={journey.open} />
-        <DataOperationRow id="snapshot" title="当前固定备份" detail={selection.selectionId ? bytesText(selection.archiveBytes) + ' · 本机缓存未加密' : '尚未读取或创建备份'} onOpen={journey.open} />
-      </div>
-      <Accordion variant="divided"><AccordionItem id="archive-more" title="更多备份方式与记录" description="WebDAV、原恢复记录"><div className="pw-settings-links">
-        <DataOperationRow id="webdav" title="加密 WebDAV 备份" detail={text(config.collection, '连接目录与独立远端版本')} onOpen={journey.open} />
-        <DataOperationRow id="result" title="查看恢复记录" detail="原结果、恢复的内容与原动作编号" onOpen={journey.open} />
-      </div></AccordionItem></Accordion>
+      <section className="pw-data-operation-group" aria-label="备份操作"><h2>保存与恢复</h2><div className="pw-settings-links pw-data-purpose-list">
+        <DataOperationRow id="create" title="创建备份" detail="选择内容，加密导出到自己的文件" icon={RiUpload2Line} onOpen={journey.open} />
+        <DataOperationRow id="import" title="导入备份" detail="先预览内容，再选择要恢复的分区" icon={RiDownload2Line} onOpen={journey.open} />
+      </div></section>
+      {selection.selectionId ? <section className="pw-data-operation-group" aria-label="当前备份"><h2>当前备份</h2><div className="pw-settings-links pw-data-purpose-list">
+        <DataOperationRow id="snapshot" title="继续查看这份备份" detail={bytesText(selection.archiveBytes) + ' · 本机缓存未加密'} icon={RiDatabase2Line} onOpen={journey.open} />
+      </div></section> : <p className="pw-data-empty-note">尚未读取或创建备份。完成后会在这里保留继续入口。</p>}
+      <section className="pw-data-operation-group pw-data-secondary" aria-label="其他备份与记录"><h2>其他备份与记录</h2><Accordion variant="divided" className="pw-data-disclosure-group"><AccordionItem id="archive-more" title="WebDAV 与恢复记录"><div className="pw-settings-links">
+        <DataOperationRow id="webdav" title="加密 WebDAV 备份" detail={text(config.collection, '连接目录与独立远端版本')} icon={RiLink} onOpen={journey.open} />
+        <DataOperationRow id="result" title="查看恢复记录" detail="继续核对已有恢复，不重复执行" icon={RiFileList3Line} onOpen={journey.open} />
+      </div></AccordionItem></Accordion></section>
     </div>
     {journey.view !== 'list' && <DataOperationHeading title={operationNames[journey.view][0]} parent="备份操作" description={operationNames[journey.view][1]} onBack={journey.back} />}
     {data.notice && <p className="pw-receipt-copy" role="status">{text(data.notice)}</p>}{data.error && <p className="pw-field-error" role="alert">{text(data.error)}</p>}
@@ -1316,13 +1321,16 @@ function StorageWorkspace({ data, supported, run, registerTransientBack, navigat
   };
   return <div className="pw-data-workspace pw-storage-workspace" ref={journey.root} tabIndex={-1} data-data-view={journey.view}>
     <div className="pw-data-collection" hidden={journey.view !== 'list'}>
-      <div className="pw-storage-capacity"><span>当前文件系统可用</span><strong>{bytesText(inventory.filesystemUsableBytes)}</strong><small>这是系统可用空间，不是可清理容量。</small></div>
-      <div className="pw-settings-links pw-data-purpose-list">
-        <DataOperationRow id="cleanup" title="查看占用与清理" detail={data.inventory ? '按目录选择，审阅后才删除' : '尚未读取实际目录占用'} onOpen={journey.open} />
-        <DataOperationRow id="caches" title="本机备份缓存" detail={cacheSummary} onOpen={journey.open} />
-        <DataOperationRow id="diagnostics" title="导出诊断快照" detail="先看完整内容，不会自动上传" onOpen={journey.open} />
-      </div>
-      <Accordion variant="divided"><AccordionItem id="storage-records" title="原清理记录" description="按原动作读取，保留结果未知状态"><DataOperationRow id="result" title="核对原清理结果" detail="恢复查看，不重放旧动作" onOpen={journey.open} /></AccordionItem></Accordion>
+      <section className="pw-storage-overview" aria-label="空间与清理">
+        <div className="pw-storage-capacity"><span>系统可用空间</span><strong>{bytesText(inventory.filesystemUsableBytes)}</strong><small>可用空间不等于可清理容量。</small></div>
+        <p>{data.inventory ? '查看各目录占用，选择后再核对删除范围。' : '目录占用尚未读取，可进入后查看。'}</p>
+        <Button className="pw-storage-primary" trailingIcon={RiArrowRightSLine} data-operation-entry="cleanup" onClick={() => journey.open('cleanup')}>查看占用与清理</Button>
+      </section>
+      <section className="pw-data-operation-group pw-data-secondary" aria-label="缓存与记录"><h2>缓存与记录</h2><div className="pw-settings-links pw-data-purpose-list">
+        <DataOperationRow id="caches" title="本机备份缓存" detail={cacheSummary} icon={RiDatabase2Line} onOpen={journey.open} />
+        <DataOperationRow id="diagnostics" title="导出诊断快照" detail="先预览，再保存；不会自动上传" icon={RiFileList3Line} onOpen={journey.open} />
+        <Accordion variant="divided" className="pw-data-records"><AccordionItem id="storage-records" title="原清理记录"><DataOperationRow id="result" title="核对原清理结果" detail="结果未知时不重复删除" onOpen={journey.open} /></AccordionItem></Accordion>
+      </div></section>
     </div>
     {journey.view !== 'list' && <DataOperationHeading title={operationNames[journey.view][0]} parent="存储操作" description={operationNames[journey.view][1]} onBack={journey.back} />}
     {data.notice && <p className="pw-receipt-copy" role="status">{text(data.notice)}</p>}{data.error && <p className="pw-field-error" role="alert">{text(data.error)}</p>}

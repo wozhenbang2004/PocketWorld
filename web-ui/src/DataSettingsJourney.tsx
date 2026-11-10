@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { RiArrowLeftLine, RiArrowRightSLine } from '@remixicon/react';
 import { Button } from './forms-library';
+import type { ButtonProps } from './forms-library/boardui/components/base/buttons/button';
 
 /** Presentation-only navigation over the original native data workspace.
  * BoardUI settings rows keep operation discovery separate from its review.
@@ -30,8 +31,8 @@ export function useDataSettingsJourney(initial = 'list') {
   return { view, root, open, back: () => { if (view === 'list') return false; open('list'); return true; } };
 }
 
-export function DataOperationRow({ id, title, detail, onOpen, disabled = false }: { id: string; title: string; detail: string; onOpen: (id: string) => void; disabled?: boolean }) {
-  return <Button variant="ghost" className="pw-domain-link pw-data-operation-row h-auto whitespace-normal" trailingIcon={RiArrowRightSLine} data-operation-entry={id} disabled={disabled} onClick={() => onOpen(id)}>
+export function DataOperationRow({ id, title, detail, icon, onOpen, disabled = false }: { id: string; title: string; detail: string; icon?: ButtonProps['leadingIcon']; onOpen: (id: string) => void; disabled?: boolean }) {
+  return <Button variant="ghost" className="pw-domain-link pw-data-operation-row h-auto whitespace-normal" leadingIcon={icon} trailingIcon={RiArrowRightSLine} data-operation-entry={id} disabled={disabled} onClick={() => onOpen(id)}>
     <span><span>{title}</span><small>{detail}</small></span>
   </Button>;
 }

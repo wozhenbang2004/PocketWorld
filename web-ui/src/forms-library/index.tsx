@@ -23,13 +23,14 @@ export interface SelectionFieldProps {
   isDisabled?: boolean; hint?: ReactNode; placeholder?: string; className?: string;
 }
 /** Controlled field composition around the actual BoardUI Select source. */
-export function SelectField({ label, options, value, onChange, isDisabled, hint, placeholder = '请选择', className }: SelectionFieldProps) {
+export function SelectField({ label, options, value, onChange, isDisabled, hint, placeholder = '请选择', className, compactValue = false }: SelectionFieldProps & { compactValue?: boolean }) {
   const hintId = useId();
   return <div className={`pw-selection-field ${className ?? ''}`}>
     <span className="pw-field-label">{label}</span>
     <Select aria-label={label} aria-describedby={hint ? hintId : undefined} selectedKey={value || null}
       onSelectionChange={key => { if (key != null) onChange(String(key)); }} isDisabled={isDisabled}
-      placeholder={placeholder} triggerClassName="pw-select-trigger" popoverClassName="pw-select-popover">
+      placeholder={placeholder} triggerClassName="pw-select-trigger" popoverClassName="pw-select-popover"
+      renderValue={compactValue ? options.find(option => option.id === value)?.label : undefined}>
       {options.map(option => <SelectItem key={option.id} id={option.id} textValue={option.label} isDisabled={option.disabled}>
         <span className="pw-option-copy"><span>{option.label}</span>{option.description && <small>{option.description}</small>}</span>
       </SelectItem>)}
@@ -47,8 +48,8 @@ export function ComboBoxField({ label, options, value, onChange, isDisabled, hin
     </ComboBoxItem>}
   </ComboBox>;
 }
-export function RadioOptions({ label, options, value, onChange, isDisabled = false }: SelectionFieldProps) {
-  return <div className="pw-selection-field"><span className="pw-field-label">{label}</span>
+export function RadioOptions({ label, options, value, onChange, isDisabled = false, className }: SelectionFieldProps) {
+  return <div className={`pw-selection-field ${className ?? ''}`}><span className="pw-field-label">{label}</span>
     <RadioGroup aria-label={label} value={value} onChange={onChange} isDisabled={isDisabled}>
       {options.map(option => <Radio key={option.id} value={option.id} isDisabled={option.disabled} className="pw-radio-option">
         <span className="pw-option-copy"><span>{option.label}</span>{option.description && <small>{option.description}</small>}</span>

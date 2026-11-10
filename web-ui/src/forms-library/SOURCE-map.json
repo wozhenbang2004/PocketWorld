@@ -283,6 +283,7 @@
   "styleAdaptation": [
     "BoardUI theme/typography retained; all hue ramps remapped to neutral values.",
     "Typography semibold/bold tokens constrained to 500 for this project.",
-    "Selection gradients removed in product scope; original layered glyph transitions retained."
+    "Selection gradients removed in product scope; original layered glyph transitions retained.",
+    "2026-11-10 management-page feedback: retained BoardUI Button rows form shared white task groups for backups/storage; existing Radio remains semantic and compact; SelectField optionally renders only the selected label via the upstream renderValue API. Font option descriptions remain in the original popup. Teams retain the original Textarea/Select and Josh action. App updates reuse the same bundled React controls and native manager, not a new control family. See DESIGN PW-P1–8 for scope and unverified visual states."
   ]
 }

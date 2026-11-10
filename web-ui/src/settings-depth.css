@@ -89,26 +89,20 @@
 .pw-backup-scope-groups{display:grid;gap:var(--pw-gap-section);margin-bottom:var(--pw-gap-section)}
 .pw-backup-scope-groups h3{font-size:13px;line-height:22px;font-weight:600;color:var(--pw-copy);margin-bottom:8px}
 .pw-backup-scope-groups .pw-selection-list{margin:0;gap:2px}
-.pw-secondary-refactor .pw-background-heading{margin:0 0 var(--pw-gap-section)}
-.pw-secondary-refactor .pw-background-heading h2{font-size:20px;line-height:28px;margin-block:0 var(--pw-gap-related);overflow-wrap:anywhere}
+.pw-secondary-refactor .pw-background-heading{margin:0 0 20px}
+.pw-secondary-refactor .pw-background-heading h2{font-size:20px;line-height:28px;margin-block:0 4px;overflow-wrap:anywhere}
 .pw-secondary-refactor .pw-background-status-actions{margin-bottom:var(--pw-gap-content)}
-.pw-secondary-refactor .pw-background-tabs{margin-top:var(--pw-gap-section)}
-.pw-secondary-refactor .pw-background-tabs [role="tabpanel"]{padding-top:var(--pw-gap-content)}
+.pw-secondary-refactor .pw-background-tabs{margin-top:0}
+.pw-secondary-refactor .pw-background-tabs [role="tabpanel"]{padding-top:12px}
 .pw-background-preferences{margin-top:var(--pw-gap-section)}
 .pw-background-preferences>.pw-settings-section{margin-bottom:0}
 .pw-secondary-refactor .pw-phone-overview{margin:0 0 var(--pw-gap-section)}
 .pw-secondary-refactor .pw-phone-detail>.pw-stretch-setting+.pw-stretch-setting{margin-top:var(--pw-gap-content)}
 .pw-secondary-refactor .pw-phone-preference-section{margin-top:var(--pw-gap-section)}
-.pw-appearance-preference{margin-bottom:var(--pw-gap-section)}
 .pw-preference-heading{margin-bottom:var(--pw-gap-content)}
 .pw-preference-heading h3{font-size:15px;line-height:24px;font-weight:600}
 .pw-preference-heading p{font-size:13px;line-height:22px;color:var(--pw-copy);margin:var(--pw-gap-related) 0 0}
 .pw-system-speech-preference .pw-form-actions{margin:0 0 12px}
-.pw-secondary-refactor .pw-typography-settings{border:0;padding-top:0}
-.pw-typography-workbench{display:grid;gap:16px;margin-top:0}
-.pw-secondary-refactor .pw-typography-fields{grid-template-columns:minmax(0,1fr);gap:var(--pw-gap-content)}
-.pw-secondary-refactor .pw-typography-preview{margin:0;padding:var(--pw-gap-content);background:var(--pw-surface);box-shadow:none;border-radius:12px;min-width:0}
-.pw-secondary-refactor .pw-typography-actions{margin-top:4px}
 @media(min-width:900px){
  .pw-settings-home{grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--pw-gap-section)}
  .pw-settings-home>.pw-secondary-search{grid-column:1 / -1;max-width:480px}
@@ -120,7 +114,6 @@
  .pw-backup-scope-groups{grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--pw-gap-section)}
  .pw-secondary-refactor .pw-model-form-section .pw-form-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--pw-gap-content) var(--pw-gap-section)}
  .pw-model-form-section .pw-form-grid>:last-child:nth-child(odd){grid-column:1 / -1}
- .pw-secondary-refactor .pw-typography-workbench{grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--pw-gap-section);align-items:start}
  .pw-secondary-refactor .pw-model-connection-detail,.pw-secondary-refactor .pw-model-detail{max-width:800px;margin-inline:auto}
  .pw-secondary-refactor .pw-phone-detail{max-width:800px;margin-inline:auto}
  .pw-secondary-refactor .pw-background-workspace{max-width:800px;margin-inline:auto}
@@ -151,7 +144,6 @@
 .pw-background-owner-preferences .pw-stretch-setting+.pw-stretch-setting{margin-top:var(--pw-gap-content)}
 .pw-secondary-refactor .pw-background-checks{margin-top:28px}
 .pw-background-checks .pw-preference-heading p{font-size:13px;line-height:22px}
-@media(min-width:720px){.pw-appearance-preference [role="radiogroup"]{display:flex;flex-direction:row;align-items:center;flex-wrap:wrap;gap:24px}}
 
 /* Long editors keep their task controls outside the reading surface. */
 .pw-secondary-refactor .pw-secondary-scroll:has(.pw-model-edit-layer){display:flex;flex-direction:column;overflow:hidden;padding-bottom:0}
@@ -171,9 +163,6 @@
 .pw-model-connection-tools .pw-budget-heading{margin:0;gap:8px}
 .pw-model-connection-tools .pw-model-diagnostics>button{width:100%;justify-content:flex-start;padding-inline:0;text-align:start}
 .pw-diagnostics-model{margin:0 0 8px;font-size:12px;line-height:20px;color:var(--pw-copy);overflow-wrap:anywhere}
-.pw-secondary-refactor .pw-typography-settings{gap:12px}
-.pw-secondary-refactor .pw-typography-preview{min-height:112px}
-.pw-secondary-refactor .pw-typography-sample-cjk,.pw-secondary-refactor .pw-typography-sample-latin{font-size:18px;line-height:26px}
 .pw-settings-dialog-content:has(>.pw-connection-profile-editor),.pw-settings-dialog-content:has(>.pw-budget-editor){display:flex;min-height:0;overflow:hidden;padding:0}
 .pw-connection-profile-editor-scroll{display:grid;align-content:start;gap:var(--pw-gap-section);flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:var(--pw-gap-content) var(--pw-page-gutter)}
 .pw-connection-profile-editor-footer,.pw-budget-editor-footer{flex:none;padding:var(--pw-gap-content) var(--pw-page-gutter);background:var(--pw-surface);box-shadow:none}

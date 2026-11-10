@@ -22,7 +22,19 @@ text wraps and reduced motion disables transitions. No upstream lab timers or
 fixture callbacks run in the product. The rest of the existing skill workflows
 (review, export, disable, source checks and handles) are unchanged.
 
-Validation is recorded with the integration handoff. Browser fixtures verify Web
+2026-11-10 management-page adaptation: `Secondary.tsx` and
+`phone-workspace.css` retain StepperForm's compact top-rule stage relationship
+for the four existing native connection phases. Actual permission, pairing and
+connection state supply completion/current markers; no demo timers or automatic
+advancement are used. The team definition form in `TeamsWorkspace.tsx` uses the
+same reviewed object-summary / form / one-primary-action relationship with the
+existing BoardUI fields and Josh button. The inspected original-site frame is
+`docs/evidence/components-a/source-stepper-review.jpg` in the retained archive.
+This is an adaptation of the already approved reference family, not a claim of
+official Pro source or new visual approval. Current build and APK observations
+are recorded under DESIGN PW-P1–8; no tests or fixture captures are added or run.
+
+Historical validation is recorded with the integration handoff. Browser fixtures verify Web
 presentation and command routing only; they do not establish Android device,
 native persistence, external API, model capability or billing results.
 

@@ -9,6 +9,7 @@ import BootstrapWorkspace from './BootstrapWorkspace';
 import BrowserSourceReader from './BrowserSourceReader';
 import BrowserChrome from './BrowserChrome';
 import BrowserWorkspace from './BrowserWorkspace';
+import UpdatesWorkspace from './UpdatesWorkspace';
 import { browserReaderSurface } from './reader-contract';
 import { bootstrapSurface } from './bootstrap-contract';
 import './fonts.css';
@@ -22,6 +23,7 @@ import './motion.css';
 import './uiux-surfaces.css';
 import './uiux-page-depth.css';
 import './color-roles.css';
+import './updates.css';
 import './setup.css';
 import './borderless-surfaces.css';
 import './composer-squircle.css';
@@ -85,10 +87,11 @@ function MountedApp() {
     });
     return () => { disposed = true; };
   }, []);
-  // Native fixed-origin configuration chooses this read-only surface, never URL parameters.
+  // Native fixed-origin configuration chooses the bundled surface, never URL parameters.
   if (browserReaderSurface(snapshot)) return <BrowserSourceReader snapshot={snapshot} />;
   if (snapshot.surface === 'browser_chrome' || snapshot.host?.surface === 'browser_chrome') return <BrowserChrome snapshot={snapshot} />;
   if (snapshot.surface === 'browser_workspace' || snapshot.host?.surface === 'browser_workspace') return <BrowserWorkspace snapshot={snapshot} />;
+  if (snapshot.surface === 'app_updates' || snapshot.host?.surface === 'app_updates') return <UpdatesWorkspace snapshot={snapshot} />;
   // A bootstrap command catalogue is not business readiness. Never mount normal
   // page effects until the native business endpoint has supplied its own state.
   return !snapshot.host?.connected || bootstrapSurface(snapshot) ? <BootstrapWorkspace snapshot={snapshot} /> : <App />;
