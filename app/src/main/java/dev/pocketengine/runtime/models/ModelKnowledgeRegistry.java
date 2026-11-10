@@ -233,8 +233,8 @@ final class ModelKnowledgeRegistry {
                     apiHost = uri.getHost().toLowerCase(Locale.ROOT);
             } catch (IllegalArgumentException ignored) { }
             Map<String, Entry> entries = new HashMap<>();
-            for (java.util.Iterator<String> keys = models.keys(); keys.hasNext();) {
-                String modelId = keys.next();
+            for (java.util.Iterator<String> modelKeys = models.keys(); modelKeys.hasNext();) {
+                String modelId = modelKeys.next();
                 if (modelId.isEmpty() || modelId.length() > 300) continue;
                 JSONObject row = models.optJSONObject(modelId);
                 if (row == null || !row.has("reasoning") || !(row.opt("reasoning") instanceof Boolean)) continue;
