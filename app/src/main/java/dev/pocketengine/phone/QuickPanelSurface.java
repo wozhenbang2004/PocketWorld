@@ -119,7 +119,7 @@ final class QuickPanelSurface implements AutoCloseable {
     void draftFailure(String detail) { mainOnly(); draftWritable = false; draftNotice(detail); Button send = root.findViewWithTag("quick_panel_send"); if (send != null) send.setEnabled(false); Button capture = root.findViewWithTag("quick_panel_capture"); if (capture != null) capture.setEnabled(false); Button voice = root.findViewWithTag("quick_panel_voice"); if (voice != null) voice.setEnabled(false); }
     void draftStored() { mainOnly(); boolean blocked = !draftWritable; draftWritable = true; draftNotice(""); if (blocked && noteDialog == null) render(); }
     void clearingDraft() { mainOnly(); phase = Phase.CLEARING_DRAFT; message = null; render(); }
-    void draftCleared() { mainOnly(); note = ""; noteReviewedFor = null; draftStatus = ""; phase = preview == null ? Phase.READY : Phase.REVIEW; render(); }
+    void draftCleared() { mainOnly(); draftWritable = true; note = ""; noteReviewedFor = null; draftStatus = ""; phase = preview == null ? Phase.READY : Phase.REVIEW; render(); }
     void draftClearFailed(String detail) { mainOnly(); draftWritable = false; phase = Phase.ERROR; message = detail; render(); }
     void capturing() { mainOnly(); clearPreview(); phase = Phase.CAPTURING; message = null; expanded = true; render(); }
     void preview(PreviewContent content) { mainOnly(); if (preview != content) clearPreview(); preview = content; phase = Phase.REVIEW; message = null; expanded = true; render(); }
