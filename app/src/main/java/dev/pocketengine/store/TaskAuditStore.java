@@ -276,8 +276,10 @@ public final class TaskAuditStore {
     /** Body-free display numbers survive summary snapshots and bounded event-window eviction.
      * Read only the latest indexed check, never search backwards for a usable older attempt. */
     public static JSONObject contextBudgetCheck(SQLiteDatabase db,JSONObject task)throws Exception{
-        if(!"assistant".equals(task.optString("kind"))||!"owner".equals(task.optString("actorId"))
-                ||!"private".equals(task.optString("spaceId"))||task.optString("conversationId").isEmpty()
+        // Standalone phone runs have no conversation, but their own usage page reads this check too.
+        boolean phone="phone".equals(task.optString("kind"));
+        if((!phone&&!"assistant".equals(task.optString("kind")))||!"owner".equals(task.optString("actorId"))
+                ||!"private".equals(task.optString("spaceId"))||(!phone&&task.optString("conversationId").isEmpty())
                 ||"owner_work".equals(task.optString("executionRole"))||task.optString("runId").isEmpty()
                 ||task.optInt("coordinatorEpoch")<=0||"awaiting_user".equals(task.optString("status")))return null;
         String id=task.getString("id");
