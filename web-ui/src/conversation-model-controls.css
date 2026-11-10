@@ -172,3 +172,12 @@
 .pw-scoped-reasoning-actions:empty { display: none; }
 .pw-scoped-reasoning-actions > button { min-height: 48px; }
 .pw-model-selection-running { flex: 0 0 auto; margin: 0; padding: 10px 20px calc(12px + env(safe-area-inset-bottom, 0px)); color: var(--pw-muted); font: 400 12px/19px var(--pw-font); }
+
+/* Explicit per-model API effort declaration: quiet text and compact, borderless choices. */
+.pw-scoped-reasoning-panel .pw-reasoning-levels-trigger { align-self: flex-start; min-height: 40px; padding: 6px 4px; font-size: 13px; color: var(--pw-copy); }
+.pw-reasoning-levels-editor { display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 4px 0 0; }
+.pw-reasoning-levels-editor > p { margin: 0; font: 400 12px/20px var(--pw-font); color: var(--pw-muted); }
+.pw-reasoning-levels-choices, .pw-reasoning-levels-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.pw-reasoning-levels-choices > button { flex: 0 0 auto; min-height: 38px; padding: 7px 12px; border: 0; border-radius: 12px; box-shadow: none; background: transparent; }
+.pw-reasoning-levels-choices > button[aria-pressed="true"] { background: var(--pw-inset); color: var(--pw-ink); font-weight: 600; }
+.pw-reasoning-levels-actions > button { min-height: 40px; border: 0; box-shadow: none; }
