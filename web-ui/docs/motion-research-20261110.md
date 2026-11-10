@@ -37,7 +37,19 @@ Josh 适配只改变 material，保留文字、44px 命中、薄材质和配色�
 
 ReplyPhaseStatus 取 Affect 固定14px图标槽、纯显示旧标签和测宽关系；failed/queued/retained/stopping/turnEnded/实际文本决定当前阶段。空文本失败已按 native `ModelStreamPreview.kt` 的实际合法分支修正；调用结束不等于任务成功。流式 token 不重播，旧标签最多一份且 inert/aria-hidden；字体 ready/loadingdone 只重新拟合当前宽度。后台、离屏与减少动态不补播。
 
-三条独立只读审查分别覆盖披露、输入受力/滑块、回复阶段与集合/表面接续。发现并补齐了跨组首次入场丢失透明度、Slider仅改transition不能保证取消旧spring、字体迟到未重测以及文件子层结束晚于壳的收束范围；静态复核未留下本轮阻塞。没有编写或运行测试。北京时间2026-11-10 21:35，统一 `npm run typecheck --prefix web-ui`（仅 `tsc --noEmit`）完成；正式构建与发布继续在本节记录。最新用户原话已覆盖至本轮深化要求，没有新增未记录指令。
+三条独立只读审查分别覆盖披露、输入受力/滑块、回复阶段与集合/表面接续。发现并补齐了跨组首次入场丢失透明度、Slider仅改transition不能保证取消旧spring、字体迟到未重测以及文件子层结束晚于壳的收束范围；另修正后置项目样式覆盖Grid白表面及选中边框的级联问题。静态复核未留下本轮阻塞。没有编写或运行测试。北京时间2026-11-10 21:35，统一 `npm run typecheck --prefix web-ui`（仅 `tsc --noEmit`）完成。最新用户原话已覆盖至本轮深化要求，没有新增未记录指令。
+
+### 最终集成、构建与发布
+
+已无损合入同期主线的手机、通知/日历、终端生命周期与产品旅程重做，最终父提交为 `f5abf458660aada2005f5845a4b0a586d1d2801d`。项目现在分工作、文件、预览三层；本轮保留 `projectPositionKey` 的分层阅读位置、新运行入口及任务来源返回。新增一次窄范围独立合并审查，确认并修正两个新结构带来的问题：预览 TabPanel 直接落定，防止祖先的 CSS translate 与原生兄弟预览层错位；桌面独立文件旁栏和项目外层分别标注 `layoutScroll`，没有给任一滚动根增加 layout/animate/transform。
+
+源码 `ad293be01d160fc9b667523fd4bcfa1ec9365b78` 已合入main，18个文件、631行新增/98行删除，tree `16c3e3b12d2c1d7dc7a6e6276c2f6b8ff34cdb30` 与本地完整构建所用 `7506da30c45b964758977ecb76ad1d37a7160a3e` 一致；发布后已独立fetch回读确认。截至北京时间21:46，最终 `npm run build --prefix web-ui` 完成字体准备、许可清单、TypeScript、Vite生产构建及223项随包资源完整性核对，exit 0，Node 24.22.1 / minimum WebView 111。既有client-only许可正文缺项和大chunk提示仍在，没有新增依赖或将其当成本轮性能已验收。
+
+正式[发布 v0.1.92](https://github.com/wozhenbang2004/PocketWorld/releases/tag/v0.1.92)于北京时间 **2026-11-10 21:55:07** 完成，应用内部版本 **0.4.1092 / 1092**。[run 42827500705](https://github.com/wozhenbang2004/PocketWorld/actions/runs/42827500705) 的 build / prepare / publish 均success，准确源码仍为 `ad293be01d160fc9b667523fd4bcfa1ec9365b78`。云端再次完成Web生产构建与223项资源核对，随后完成assembleDebug、稳定签名、ZIP对齐/CRC、Web清单/hash、原生ABI/catalog及显示助手DEX完整性核对。
+
+[正式APK](https://github.com/wozhenbang2004/PocketWorld/releases/download/v0.1.92/5bedc94a0cb31154097ea52ec6681dac6c96b2e4b2a2302494ec601c20e19cf3-app-1092.apk)：148,460,074 bytes；SHA-256 `5bedc94a0cb31154097ea52ec6681dac6c96b2e4b2a2302494ec601c20e19cf3`；`dev.pocketengine` / ARM64 / Android 11+。稳定证书SHA-256为 `b58e014e2a2e49b2e85ebd5b47a034a28cb0d313d71f379a5208d21afe388e58`。轻量构建回执artifact `13770321138` 已取回，ZIP SHA-256 `71ac9f46d2fa165daa4a031347a0a1a030db4c5d7c41584bec8227abba157d3f`；回执、包内版本、源码/tree、正式release目标及APK资产digest/大小逐项一致。1091→1092增量更新包亦随同发布。
+
+PW-M15–PW-M19 的源码、交叉审查、构建及发布已完成。当前没有Android真机/模拟器可连接，触屏、软键盘、实际帧率与个人手感仍未验收；没有把参考演示、源码或构建当作本版视觉通过。开发及CI没有编写或运行测试。实际体验可集中在“项目 → 文件 → 列表/网格切换”、展开中反向操作、连续按压、任务范围里的预算滑块释放，以及真实回复阶段变化；不为补状态制造假失败或模拟回执。
 
 ### 实际参考观察与明确限制
 
