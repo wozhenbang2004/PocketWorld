@@ -449,18 +449,20 @@ public final class ModelConnectionService {
             ModelConfig config=profile.configuration;
             if(!profile.enabled||!expected.equals(config.capabilityBinding))
                 throw new SecurityException("原推理来源或连接修订已变化，请重新读取");
-            Set<String> allowed=switch(config.provider){
+            Set<String> protocolAllowed=switch(config.provider){
                 case "openai_chat","openai_responses" -> Set.of("none","minimal","low","medium","high","xhigh","max");
                 case "anthropic" -> Set.of("low","medium","high","xhigh","max");
                 case "gemini" -> ModelReasoningProfiles.usesTokenBudget(model)
                         ? Set.of("low","medium","high") : Set.of("minimal","low","medium","high");
                 default -> throw new IllegalArgumentException("此模型协议尚未接入可声明的推理强度");
             };
-            if ((config.provider.equals("openai_chat") || config.provider.equals("anthropic"))
-                    && !ModelReasoningProfiles.switchWire(model).isEmpty()) {
-                java.util.HashSet<String> expanded=new java.util.HashSet<>(allowed);
+            boolean hasThinkingSwitch=(config.provider.equals("openai_chat") || config.provider.equals("anthropic"))
+                    && !ModelReasoningProfiles.switchWire(model).isEmpty();
+            Set<String> allowed;
+            if (hasThinkingSwitch) {
+                java.util.HashSet<String> expanded=new java.util.HashSet<>(protocolAllowed);
                 expanded.add("enabled");expanded.add("disabled");allowed=Set.copyOf(expanded);
-            }
+            } else allowed=protocolAllowed;
             ModelCatalog.ModelKey key=new ModelCatalog.ModelKey(expected,ModelBinding.modelId(model));
             catalog.bind(expected);
             ModelCatalog.View before=catalog.get(key,MAX_CATALOG_AGE_MILLIS);
