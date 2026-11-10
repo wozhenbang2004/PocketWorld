@@ -142,7 +142,38 @@ public final class TaskAuditStore {
     public static JSONObject header(SQLiteDatabase db,JSONObject task)throws Exception{
         JSONObject out=header(task),flags=new JSONObject();String id=task.getString("id");
         for(String type:new String[]{"memory_owner_consolidation","media_owner_prepared","browser_research_requested"})try(Cursor row=db.rawQuery("SELECT 1 FROM task_events WHERE task_id=? AND event_type=? LIMIT 1",new String[]{id,type})){flags.put(type,row.moveToFirst());}
+        JSONObject contextCheck=contextBudgetCheck(db,task);out.put("contextBudgetCheck",contextCheck==null?JSONObject.NULL:contextCheck);
         return out.put("nativeEventTypeFlags",flags).put("nativeTaskKind",out.optJSONObject("sourceLearningJob")!=null?"source_learning":flags.optBoolean("memory_owner_consolidation")?"memory_consolidation":flags.optBoolean("media_owner_prepared")?"media":out.optString("kind"));
+    }
+    /** Body-free display numbers survive summary snapshots and bounded event-window eviction.
+     * Read only the latest indexed check, never search backwards for a usable older attempt. */
+    public static JSONObject contextBudgetCheck(SQLiteDatabase db,JSONObject task)throws Exception{
+        if(!"assistant".equals(task.optString("kind"))||!"owner".equals(task.optString("actorId"))
+                ||!"private".equals(task.optString("spaceId"))||task.optString("conversationId").isEmpty()
+                ||"owner_work".equals(task.optString("executionRole"))||task.optString("runId").isEmpty()
+                ||task.optInt("coordinatorEpoch")<=0||"awaiting_user".equals(task.optString("status")))return null;
+        String id=task.getString("id");
+        try(Cursor row=db.rawQuery("SELECT CASE WHEN body_bytes BETWEEN 0 AND 16384 AND length(CAST(event_json AS BLOB))<=16384 THEN event_json END FROM task_events WHERE task_id=? AND event_type='context_budget' ORDER BY event_order DESC LIMIT 1",new String[]{id})){
+            if(!row.moveToFirst()||row.isNull(0))return null;
+            JSONObject event;
+            try{event=new JSONObject(row.getString(0));}catch(org.json.JSONException unreadable){return null;}
+            if(!"context_budget".equals(event.optString("type"))||!id.equals(event.optString("taskId"))
+                    ||!task.getString("runId").equals(event.optString("runId"))
+                    ||!(event.opt("epoch") instanceof Integer||event.opt("epoch") instanceof Long)
+                    ||task.getInt("coordinatorEpoch")!=event.getLong("epoch"))return null;
+            JSONObject original=event.optJSONObject("receipt");if(original==null)return null;
+            JSONObject receipt=new JSONObject(),after=original.optJSONObject("after");
+            for(String key:new String[]{"modelContextTokens","inputLimitTokens","outputReserveTokens"})copyContextNumber(original,receipt,key);
+            if(after!=null){JSONObject counts=new JSONObject();copyContextNumber(after,counts,"estimatedInputTokens");receipt.put("after",counts);}
+            for(String key:new String[]{"modelWindowKnown","summaryProjectionUsed"})if(original.opt(key) instanceof Boolean)receipt.put(key,original.get(key));
+            Object status=original.opt("status");if(status instanceof String&&((String)status).length()<=80)receipt.put("status",status);
+            JSONObject check=new JSONObject().put("format","pocketworld.context-budget-check.v1").put("taskId",id)
+                    .put("runId",event.getString("runId")).put("epoch",event.getLong("epoch")).put("receipt",receipt);
+            copyContextNumber(event,check,"at");copyContextNumber(event,check,"timestamp");return check;
+        }
+    }
+    private static void copyContextNumber(JSONObject from,JSONObject to,String key)throws Exception{
+        Object value=from.opt(key);if(value instanceof Integer||value instanceof Long)to.put(key,value);
     }
     /** The index narrows candidates, but is not the final classification authority:
      * legacy large-event metadata can retain an earlier duplicate type while the

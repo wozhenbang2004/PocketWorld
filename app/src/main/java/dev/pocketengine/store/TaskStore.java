@@ -12586,6 +12586,7 @@ public final class TaskStore {
     /** Shared capability runner events capture their admitted run, never the currently newest one. */
     public synchronized void event(String id,String runId,int epoch,JSONObject event)throws Exception{
         JSONObject task=read(id);if(task==null||!runId.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch"))return;
+        if("context_budget".equals(event.optString("type")))event=new JSONObject(event.toString()).put("taskId",id).put("runId",runId).put("epoch",epoch);
         applyEvent(task,event,true);
     }
     private void applyEvent(JSONObject task,JSONObject event,boolean currentRun)throws Exception{
@@ -13281,6 +13282,7 @@ public final class TaskStore {
         // hides their body. Limited cores already carry the native header's verified projection.
         if(!limited){result.remove("conversationPhoneLink");JSONObject link=TaskAuditStore.conversationPhoneLink(result);if(link!=null)result.put("conversationPhoneLink",link);}
         JSONObject sourceView=phoneOwnerQuestionForUi(result);if(sourceView!=result)return sourceView;
+        JSONObject contextCheck=TaskAuditStore.contextBudgetCheck(db,result);result.put("contextBudgetCheck",contextCheck==null?JSONObject.NULL:contextCheck);
         JSONObject events=TaskAuditStore.eventPage(db,id,"",32,65536),operations=TaskAuditStore.operationPage(db,id,"",24,65536);
         JSONArray eventBodies=new JSONArray(),operationBodies=new JSONArray(),eventRows=events.getJSONArray("entries"),operationRows=operations.getJSONArray("entries");
         for(int i=0;i<eventRows.length();i++){JSONObject row=eventRows.getJSONObject(i);if(row.optJSONObject("event")!=null)eventBodies.put(row.getJSONObject("event"));}

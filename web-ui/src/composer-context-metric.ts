@@ -59,16 +59,29 @@ export function composerContextMetric(snapshot: unknown, composerKey: string | u
   if (raw.status === 'awaiting_user' && row(evidence?.contextCompaction))
     return { ...unavailable('上下文整理等待核对，未将旧请求比例当作当前结果。', taskId), attention: true };
   let receipt: Row | null = null, at: number | null = null;
+  const projected = row(raw.contextBudgetCheck);
   if (raw.status === 'awaiting_user' && row(evidence?.contextBudget)) {
     receipt = row(evidence?.contextBudget);
+  } else if (raw.status === 'awaiting_user' && raw.taskProjection === 'summary') {
+    return { ...unavailable('原请求等待处理，需读取原任务核对最新上下文状态。', taskId), attention: true };
+  } else if (Object.hasOwn(raw, 'contextBudgetCheck')) {
+    if (!projected) return unavailable('尚无可核对的本次执行上下文检查，不使用较旧事件代替。', taskId);
+    if (projected.format !== 'pocketworld.context-budget-check.v1' || projected.taskId !== taskId ||
+        !id(projected.runId) || projected.runId !== raw.runId || count(projected.epoch) === null ||
+        Number(projected.epoch) <= 0 || projected.epoch !== raw.coordinatorEpoch)
+      return unavailable('最近上下文检查的原执行身份尚未核对。', taskId);
+    receipt = row(projected.receipt);
+    const observed = count(projected.at) ?? count(projected.timestamp);
+    at = observed !== null && observed > 0 && observed <= 8_640_000_000_000_000 ? observed : null;
   } else {
     const events = rows(raw.events);
     for (let index = events.length - 1; index >= 0; index--) {
       const event = events[index];
       if (event.type !== 'context_budget' || event.taskId !== taskId) continue;
       // A superseded attempt is not the current task's request check.
-      if (event.runId != null && event.runId !== raw.runId || event.epoch != null && event.epoch !== raw.coordinatorEpoch)
-        return unavailable('最近上下文记录属于旧执行代次。', taskId);
+      if (!id(event.runId) || event.runId !== raw.runId || count(event.epoch) === null ||
+          Number(event.epoch) <= 0 || event.epoch !== raw.coordinatorEpoch)
+        return unavailable('最近上下文记录缺少可核对的原执行身份。', taskId);
       receipt = row(event.receipt);
       const observed = count(event.at) ?? count(event.timestamp);
       at = observed !== null && observed > 0 && observed <= 8_640_000_000_000_000 ? observed : null;
