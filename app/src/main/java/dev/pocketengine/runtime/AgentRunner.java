@@ -674,6 +674,14 @@ public final class AgentRunner {
                     if(stepRouting.selectedLight())try{
                         RunContextBudget.Projection lightBudget=contextBudget.request(finalRequestMessages,tools,chosenConfig);
                         if(!lightBudget.plan().removed.isEmpty())chosenConfig=prepareRunModel(stepRouting.useMain("light_context_would_change_history"),control);
+                        else {
+                            JSONObject lightDiagnostics=lightBudget.diagnostics();
+                            // The exact same history may already contain a committed summary.
+                            // Keep its provenance, but report this selected model\'s own limits.
+                            for(String field:new String[]{"summariesGenerated","summaryProjectionUsed","summaryLayers","summaryDerivationDepth","summaryInputMode","summaryCallId","rawRetained","coveredIndexes","summaryTrust","rawReader"})
+                                if(projection.diagnostics().has(field))lightDiagnostics.put(field,projection.diagnostics().get(field));
+                            emit(taskId,"context_budget","running","已检查本次轻量候选请求的上下文安全上限。",null,lightDiagnostics,chosenConfig,sink);
+                        }
                     }catch(RunContextBudget.Blocked unavailable){chosenConfig=prepareRunModel(stepRouting.useMain("light_context_unavailable"),control);}
                     final ModelConfig requestConfig=chosenConfig;
                     if(stepRouting.enabled())emit(taskId,"model_route","running",stepRouting.selectedLight()?"本次已在原任务预算内选择轻量候选，仅接受明确只读步骤。":"本次使用原主候选。",null,stepRouting.diagnostics(),config,sink);
