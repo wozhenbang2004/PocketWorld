@@ -104,7 +104,7 @@ export function RemoteDraftEditor({ snapshot, busy, active = true, run }: { snap
     } catch (failure) { if (mounted.current && sameRemoteEditor(captured, live.current.editor)) setNotice(message(failure)); }
     finally { if (mounted.current) setPasting(false); }
   };
-  if (snapshot.configurationOnly || snapshot.teamRemoteWriter || snapshot.draftEditorAvailable === false || !rows(snapshot.inputDrafts).length && (delivery.protocolEvidenceReported !== true || !nextTurn.adapterMounted && !currentTurn.adapterMounted)) return null;
+  if (snapshot.configurationOnly || snapshot.teamRemoteWriter || !rows(snapshot.inputDrafts).length && (snapshot.draftEditorAvailable === false || delivery.protocolEvidenceReported !== true || !nextTurn.adapterMounted && !currentTurn.adapterMounted)) return null;
   return <section className="pw-remote-drafts" aria-label="原会话输入草稿">
     <div className="pw-section-heading"><h3>原会话输入草稿</h3><Button variant="ghost" size="small" disabled={busy || pasting || !active} onClick={() => edit(remoteEditor(snapshot, crypto.randomUUID()))}>新草稿</Button></div>
     <p className="pw-muted">保存和排队只写入本机。查询、重连或恢复页面不会自动发送；发送仍使用原会话配置。</p>

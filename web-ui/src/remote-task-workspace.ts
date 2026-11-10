@@ -57,8 +57,12 @@ export function remoteDraftState(snapshot: RemoteData, editor: RemoteEditor) {
   const validText = editor.text.trim().length > 0 && editor.text.length <= 12000 && !editor.text.includes('\0');
   const unchanged = !!saved && saved.text === editor.text && saved.mode === editor.mode && saved.revision === editor.revision;
   const available = editor.mode === 'steer' ? current.observedAvailable === true : next.observedAvailable === true && snapshot.canContinue === true;
+  // Withdrawal only retires this exact unsent local draft. A newer remote turn
+  // must not make old drafts impossible to remove from the bounded queue.
+  const canWithdraw = fresh && !snapshot.teamRemoteWriter && !!saved && saved.revision === editor.revision &&
+    saved.mode === editor.mode && ['draft', 'queued'].includes(saved.state) && sameRemoteScope(saved.scope, editor.scope);
   return { saved, sameTarget, fresh, validText, unchanged, canSave: sameTarget && fresh && validText,
-    canWithdraw: sameTarget && fresh && !!saved, canPaste: sameTarget && fresh,
+    canWithdraw, canPaste: sameTarget && fresh,
     canSend: sameTarget && fresh && unchanged && saved?.state === 'queued' && available };
 }
 export function appendRemoteClipboard(existing: string, value: unknown): string {
