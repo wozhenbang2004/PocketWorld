@@ -72,6 +72,7 @@
   display: flex;
   flex-direction: column;
   width: min(100%, 480px);
+  height: fit-content !important;
   max-height: min(620px, calc(100dvh - 24px));
   min-height: 0;
   padding: 0;
@@ -116,7 +117,17 @@
   border: 0;
   background: var(--pw-surface);
 }
-.pw-conversation-model-drawer[data-picker-section="reasoning"] { max-height: min(440px, calc(100dvh - 24px)); }
+.pw-conversation-model-drawer[data-picker-section="reasoning"] {
+  height: fit-content !important;
+  min-height: 0 !important;
+  max-height: min(76dvh, 520px);
+}
+.pw-conversation-model-drawer[data-picker-section="reasoning"] > .pw-model-selection-panel {
+  flex: 0 1 auto;
+  overflow-y: auto;
+  min-height: 0;
+  max-height: calc(76dvh - 78px);
+}
 .pw-conversation-model-drawer > .pw-drawer-header { flex: 0 0 auto; padding: 0 16px 8px; border: 0; }
 .pw-conversation-model-drawer > .pw-drawer-header h2 { margin: 0; font: 600 17px/24px var(--pw-font); }
 .pw-conversation-model-drawer > .pw-drawer-header > button { flex: 0 0 44px; width: 44px; height: 44px; min-height: 44px; }

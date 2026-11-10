@@ -88,6 +88,17 @@ export function conversationWorkNeedsAttention(task: Data): boolean {
   return taskNeedsAttention(task) || task.status === 'failed' && task.raw?.executionRole === 'owner_work' && task.raw?.controls?.canContinue === true;
 }
 
+/** Only unresolved decisions and uncertain external effects interrupt the composer.
+ * Routine goal confirmation, pauses and finished results live in task details. */
+export function conversationInlineAttention(task: Data): boolean {
+  if (taskNeedsReconciliation(task)) return true;
+  if (!id(task?.id)) return false;
+  const status = String(task.status || '');
+  if (['waiting_approval', 'awaiting_approval', 'waiting_permission', 'awaiting_user', 'waiting_user'].includes(status)) return true;
+  return Array.isArray(task.raw?.approvals) && task.raw.approvals.some((approval: Data) =>
+    ['pending', 'waiting'].includes(String(approval?.state || approval?.status || '')));
+}
+
 export function conversationWorkActionLabel(task: Data): string {
   if (taskNeedsReconciliation(task)) return '核对操作';
   if (task.status === 'needs_confirmation') return '核对结果';
