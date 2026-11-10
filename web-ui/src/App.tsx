@@ -310,16 +310,17 @@ export default function App(){
  const showTaskLayer=useCallback((next:TaskLayer)=>{rememberTaskPosition();setTaskLayer(next)},[rememberTaskPosition]);
  const closeTask=useCallback(()=>{rememberTaskPosition();invalidateContinuation();reviewWindow.current=null;reviewRequest.current++;openedTaskId.current=null;setTaskOpening(false);const closed=can('tasks.close')?act('tasks.close').then(()=>true,()=>false):Promise.resolve(false);setTaskOpen(false);setTaskLayer('overview');setReview(null);setReviewPending(false);setReviewSubmitted(false);setReviewReceipt('');setQuestionAnswer('');return closed;},[can,act,rememberTaskPosition,invalidateContinuation]);
  const changeNavigation=useCallback((open:boolean)=>{setWorkOpen(open);if(!open)setCommandOpen(false)},[]);
- // Open mobile navigation from the left half while preserving vertical and horizontal content scrolling.
+ // Open mobile navigation across the screen without taking over scrolling or text selection.
  useEffect(()=>{
   if(desktopNavigation||workOpen)return;
   let gesture:{id:number;x:number;y:number;horizontal:boolean}|null=null;
   const reset=()=>{gesture=null};
+  const cancelSelection=()=>{if(window.getSelection()?.toString())reset()};
   const start=(event:TouchEvent)=>{
    reset();
    if(event.touches.length!==1||document.hidden)return;
    const touch=event.touches[0],target=event.target;
-   if(touch.clientX>Math.min(window.innerWidth*0.5,280)||!(target instanceof Element)||!target.closest('.pw-app'))return;
+   if(!(target instanceof Element)||!target.closest('.pw-app'))return;
    if(target.closest('input,textarea,select,button,a,[role="slider"],[contenteditable="true"],[data-vaul-no-drag]')||document.querySelector('[role="dialog"][data-state="open"],[role="alertdialog"]')||window.getSelection()?.toString())return;
    for(let node:Element|null=target;node&&!node.classList.contains('pw-app');node=node.parentElement){
     if(node.scrollWidth>node.clientWidth+1&&/auto|scroll/.test(getComputedStyle(node).overflowX))return;
@@ -328,7 +329,7 @@ export default function App(){
   };
   const move=(event:TouchEvent)=>{
    if(!gesture)return;
-   if(event.touches.length!==1){reset();return}
+   if(event.touches.length!==1||window.getSelection()?.toString()){reset();return}
    const touch=Array.from(event.touches).find(item=>item.identifier===gesture!.id);
    if(!touch){reset();return}
    const dx=touch.clientX-gesture.x,dy=Math.abs(touch.clientY-gesture.y);
@@ -341,7 +342,7 @@ export default function App(){
   };
   const end=(event:TouchEvent)=>{
    const current=gesture;reset();
-   if(!current||!current.horizontal)return;
+   if(!current||!current.horizontal||window.getSelection()?.toString())return;
    const touch=Array.from(event.changedTouches).find(item=>item.identifier===current.id);
    if(!touch||touch.clientX-current.x<48||Math.abs(touch.clientY-current.y)>Math.max(32,(touch.clientX-current.x)/1.5))return;
    if(event.cancelable)event.preventDefault();
@@ -352,10 +353,13 @@ export default function App(){
   document.addEventListener('touchend',end,{passive:false});
   document.addEventListener('touchcancel',reset);
   document.addEventListener('visibilitychange',reset);
+  document.addEventListener('contextmenu',reset);
+  document.addEventListener('selectionchange',cancelSelection);
   return()=>{
    document.removeEventListener('touchstart',start);document.removeEventListener('touchmove',move);
    document.removeEventListener('touchend',end);document.removeEventListener('touchcancel',reset);
    document.removeEventListener('visibilitychange',reset);
+   document.removeEventListener('contextmenu',reset);document.removeEventListener('selectionchange',cancelSelection);
   };
  },[desktopNavigation,workOpen,changeNavigation]);
  const navigate=useCallback((next:string,afterNavigate?:()=>void)=>{
