@@ -10,7 +10,7 @@ public final class BrowserActionReceipt {
         JSONObject receipt=new JSONObject(raw.toString()),dom=receipt.optJSONObject("domEvidence");
         Object accepted=receipt.opt("accepted");
         String dispatch=Boolean.FALSE.equals(accepted)?"not_dispatched":Boolean.TRUE.equals(accepted)?"confirmed":"unknown";
-        if(Boolean.TRUE.equals(accepted)&&(BrowserFormControls.command(command)||command.matches("site_mode|resize|back|forward|reload"))&&receipt.optBoolean("noOp"))dispatch="not_needed";
+        if(Boolean.TRUE.equals(accepted)&&(BrowserFormControls.command(command)||BrowserTextControls.command(command)||command.matches("site_mode|resize|back|forward|reload"))&&receipt.optBoolean("noOp"))dispatch="not_needed";
         if("unknown".equals(receipt.optString("status")))dispatch="unknown";
         String mechanism;
         switch(command){case "click":mechanism="synthetic_dom_click";break;case "type":mechanism="dom_value_setter_and_synthetic_events";break;
@@ -25,7 +25,7 @@ public final class BrowserActionReceipt {
         if(dispatch.equals("not_dispatched")||dispatch.equals("not_needed"))effect="not_applicable";
         else if(dom!=null)effect=signals.length()>0?"changed_unattributable":"no_observable_change";
         JSONObject expected=args==null?null:args.optJSONObject("postcondition");String post="not_checked";
-        if(expected!=null&&dispatch.equals("confirmed")&&dom!=null&&expected.optString("kind").equals(dom.optString("postconditionKind"))
+        if(expected!=null&&(dispatch.equals("confirmed")||dispatch.equals("not_needed"))&&dom!=null&&expected.optString("kind").equals(dom.optString("postconditionKind"))
                 &&dom.optString("postcondition").matches("met|unmet"))post=dom.getString("postcondition");
         JSONObject detail=new JSONObject().put("schemaVersion",1).put("mechanism",mechanism)
                 .put("dispatch",new JSONObject().put("state",dispatch).put("nativeEntryObserved",entered)
