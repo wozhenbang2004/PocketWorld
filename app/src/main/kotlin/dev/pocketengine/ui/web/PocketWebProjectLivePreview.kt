@@ -54,7 +54,7 @@ internal class PocketWebProjectLivePreview(
     }
     init { container.addOnLayoutChangeListener(layoutChanged) }
     companion object {
-        val COMMANDS = setOf("projectLive.open", "projectLive.show", "projectLive.read", "projectLive.viewport", "projectLive.reload", "projectLive.close")
+        val COMMANDS = setOf("projectLive.open", "projectLive.show", "projectLive.read", "projectLive.refresh", "projectLive.viewport", "projectLive.reload", "projectLive.close")
         private fun fields(input: JSONObject, vararg names: String) { require(input.keys().asSequence().toSet() == names.toSet()) { "活页面参数不完整或包含替代范围" } }
         private fun text(input: JSONObject, key: String): String { val raw = input.opt(key); require(raw is String && raw.isNotBlank() && raw.length <= 200 && '\u0000' !in raw); return raw }
         private fun number(input: JSONObject, key: String): Double { val raw = input.opt(key); require(raw is Number); return raw.toDouble().also { require(it.isFinite() && kotlin.math.abs(it) <= 10_000_000) } }
@@ -119,6 +119,30 @@ internal class PocketWebProjectLivePreview(
                 return
             }
             "projectLive.read" -> { fields(input, "pageHandle"); sync(selected); done(view(selected), null) }
+            "projectLive.refresh" -> {
+                fields(input, "pageHandle"); val request = ++opening
+                readTask(selected.task) { task, error ->
+                    if (!current(selected) || request != opening) { done(null, "原活页面已变化，未应用迟到的服务目录"); return@readTask }
+                    if (task == null || error != null) { done(null, error ?: "原项目任务尚未取得"); return@readTask }
+                    runCatching {
+                        check(task.id == selected.task && task.raw.optString("actorId") == "owner" && task.raw.optString("spaceId") == "private" && task.raw.optJSONObject("origin") == null)
+                        check(task.raw.optJSONObject("developmentContext")?.optString("checkoutId") == selected.checkout) { "原任务工作副本已变化，请重新打开服务目录" }
+                        val previous = selected.services.map { (handle, body) -> handle to JSONObject(body) }
+                        val refreshed = linkedMapOf<String, String>()
+                        services(task, selected.checkout).forEach { service ->
+                            // Retain the same choice while its original execution is unchanged.
+                            val handle = previous.firstOrNull { (_, original) ->
+                                original.optString("operationId") == service.optString("operationId") && original.optString("runId") == service.optString("runId") &&
+                                    original.optJSONObject("receipt")?.optJSONObject("projectExecution")?.optInt("coordinatorEpoch") == service.optJSONObject("receipt")?.optJSONObject("projectExecution")?.optInt("coordinatorEpoch")
+                            }?.first ?: UUID.randomUUID().toString()
+                            refreshed[handle] = service.toString()
+                        }
+                        selected.services.clear(); selected.services.putAll(refreshed)
+                        sync(selected); check(current(selected)) { "原活页面窗口已关闭，请重新打开原任务" }; view(selected)
+                    }.fold({ done(it, null) }, { done(null, it.message ?: "原项目服务目录未刷新") }); changed()
+                }
+                return
+            }
             "projectLive.reload" -> { fields(input, "pageHandle"); checkNotNull(selected.observed).let(controller::checkProjectLivePreview); checkNotNull(selected.web).reload(); done(view(selected), null) }
             "projectLive.viewport" -> {
                 fields(input, "pageHandle", "visible", "rect", "viewportWidth", "viewportHeight"); val visible = input.get("visible"); require(visible is Boolean)
