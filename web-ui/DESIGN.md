@@ -36,7 +36,15 @@
 
 本批已修正的反例：把现有功能目录当信息架构标准、项目终端藏进文件显示菜单、普通消息假显示项目关联、跨会话任务没有来源入口、定向准备挤入全部设置、候选工具冒充必需清单、来源任务下预选无关的旧项目。此前75图逐张观察仍是旧版本诊断材料，不作为本批修后图证。
 
-当前证据：集成中保留main后续`76b1ab89`、`92d6fb1e`、`3fec1652`的团队/手机/浏览器修正。`npm run build --prefix web-ui`通过字体来源、许可证清单、TypeScript、Vite与223项打包资源完整性核对（北京时间21:35）；未执行或新增测试。只读交叉审阅修正了普通task-close递增resumeRevision导致导航中断、重建页面的返回焦点丢失、无关项目预选与终端外出准备丢表单四处问题。正式APK发布证据待续记。项目AI新任务启动仍需将真实工作副本/工作配置契约接通，当前只提供已有真实操作；二级业务内未提供稳定对象恢复接口的详情不宣称已恢复。全产品旅程重做及视觉验收尚未关闭，后续沿当前要求逐模块继续，而非把本批导航修正当作整个产品完成。
+### 实现、正式发布与未关闭项
+
+结构重做由提交[`f5abf458`](https://github.com/wozhenbang2004/PocketWorld/commit/f5abf458660aada2005f5845a4b0a586d1d2801d)合入main，16个文件、754行新增/207行删除；保留同期团队、手机、浏览器、上下文及本机终端owner窗口生命周期修正。本地整合后的`npm run build --prefix web-ui`完成字体来源核对、许可证清单生成、TypeScript、Vite与223项打包资源完整性核对。既有`client-only`缺许可正文和大chunk提示仍在，未冒称本批已解决。只读交叉审阅修正了task-close递增resumeRevision导致来源导航中断、历史阅读层挡住原对话输入、重建页面返回焦点丢失、无关项目预选和终端外出准备丢表单等问题。
+
+正式[发布v0.1.92](https://github.com/wozhenbang2004/PocketWorld/releases/tag/v0.1.92)于北京时间**2026-11-10 21:55:07**完成，应用版本**0.4.1092 / 1092**。交付源码为包含本批重做与后续动效的`ad293be01d160fc9b667523fd4bcfa1ec9365b78`，tree `16c3e3b12d2c1d7dc7a6e6276c2f6b8ff34cdb30`；已核对`f5abf458`为其祖先。[run 42827500705](https://github.com/wozhenbang2004/PocketWorld/actions/runs/42827500705)的build、prepare、publish均success。旧排队运行被后继版本替代，不另发较旧版本。
+
+[正式APK](https://github.com/wozhenbang2004/PocketWorld/releases/download/v0.1.92/5bedc94a0cb31154097ea52ec6681dac6c96b2e4b2a2302494ec601c20e19cf3-app-1092.apk)为148,460,074 bytes，SHA-256 `5bedc94a0cb31154097ea52ec6681dac6c96b2e4b2a2302494ec601c20e19cf3`。已取回轻量构建证据artifact `13770321138`，归档digest为`71ac9f46d2fa165daa4a031347a0a1a030db4c5d7c41584bec8227abba157d3f`；其中APK身份、包内版本与正式release资产大小/digest一致。稳定项目证书SHA-256仍为`b58e014e2a2e49b2e85ebd5b47a034a28cb0d313d71f379a5208d21afe388e58`。完成assembleDebug、签名、ZIP对齐/CRC、随包Web清单及hash、原生ABI/目录hash和显示助手DEX核对。
+
+未写、未运行任何测试，CI采图保持停用。**本批完成的是产品结构实现、交叉源码审阅、构建与正式发布；当前APK的真机视觉、交互手感和完整旅程仍未体验，用户审美认可未取得。** PW-R1/R3/R4的本批实现已发布；PW-R2的项目AI新任务启动仍需接通真实工作副本/工作配置契约，当前只提供已有真实操作；二级业务未提供稳定对象恢复接口的详情不宣称已恢复。PW-R5仍需当前APK图证和真实操作对照。全产品旅程重做及视觉验收尚未关闭，后续沿当前要求逐模块继续，不把本批导航与准备流程修正当作整个产品完成。
 
 ## 2026-11-10 动效再深化 · 已发布 v0.1.92，实际手感待体验
 
