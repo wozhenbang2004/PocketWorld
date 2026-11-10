@@ -1399,6 +1399,11 @@ public final class EngineApplication extends Application implements dev.pocketen
     }
     public synchronized boolean attachPort(String id,PhonePort port){RunControl owner=control(id);return owner!=null&&attachPort(id,port,owner);}
     public synchronized boolean attachPort(String id,PhonePort port,RunControl owner){if(owner==null||owner!=control(id)||owner.isCancelled())return false;BackgroundRun run=backgroundRuns.get(id);if(run!=null)run.port=port;else activePort=port;return true;}
+    /** Cleanup may follow cancellation; only the exact original binding can be cleared. */
+    synchronized void detachPhonePort(String id,PhonePort expected,RunControl original){
+        if(original==null||original!=control(id)||expected==null||phonePort(id)!=expected)return;
+        BackgroundRun run=backgroundRuns.get(id);if(run!=null)run.port=null;else activePort=null;
+    }
     public synchronized String start(String goal,boolean consent)throws Exception {
         return start(goal,consent,"main_screen");
     }

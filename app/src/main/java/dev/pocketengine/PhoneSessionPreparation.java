@@ -106,7 +106,7 @@ final class PhoneSessionPreparation {
             throw unknown;
         } finally {
             backgroundOwner.accept(null);
-            synchronized(app){if(app.control(id)==original&&app.phonePort(id)==physical)app.attachPort(id,null,original);}
+            app.detachPhonePort(id,physical,original);
             if(receipt.has("phoneResources"))app.tasks.event(id,new JSONObject(receipt.toString()).put("type","phone_resource_release")
                     .put("runId",run).put("coordinatorEpoch",epoch).put("phoneSessionCleanup",true));
         }
