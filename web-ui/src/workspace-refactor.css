@@ -133,6 +133,17 @@
     transparent 100%);
   mask-image: linear-gradient(to bottom, transparent, #000 24px, #000 calc(100% - 32px), transparent);
 }
+/* Finish the overflowing SVG shadow inside the existing bottom padding before
+ * the WebView meets the native canvas; keep the input and receipt rows clear. */
+.pw-composer-region::after {
+  content: '';
+  position: absolute;
+  inset: auto -64px 0;
+  height: max(12px, var(--pw-composer-safe-bottom, env(safe-area-inset-bottom, 0px)));
+  z-index: 2;
+  pointer-events: none;
+  background: linear-gradient(to bottom, transparent, var(--pw-canvas-chat) 90%);
+}
 .pw-new-replies { position: absolute; inset: auto 0 100%; z-index: 4; width: max-content; max-width: calc(100% - 24px); min-height: 44px; margin: 0 auto 8px; padding: 8px 14px; border: 0; border-radius: 999px; background: var(--pw-surface); color: var(--pw-ink); box-shadow: var(--pw-shadow-floating); font: 400 12px/20px var(--pw-font); white-space: normal; }
 .pw-chat-attention.button-press-motion { width: 100%; height: auto; min-height: 54px; margin-bottom: 8px; padding: 9px 14px; gap: 10px; border: 0; border-radius: 15px; background: var(--pw-surface); box-shadow: var(--pw-shadow-surface); justify-content: space-between; white-space: normal; text-align: start; }
 .pw-chat-attention.button-press-motion > span { flex: 1; min-width: 0; padding: 0; justify-content: flex-start; }
