@@ -508,8 +508,18 @@ internal class PocketWebBridge(
                 return
             }
             if (action == "tasks.open") {
-                checkedPayload(args, setOf("id", "requestNavigation"))
+                checkedPayload(args, setOf("id", "requestNavigation", "readerWindow", "readerConversationId", "readerMessageId"))
                 val taskId = requiredString(args, "id")
+                val fromReader = args.has("readerWindow") || args.has("readerConversationId") || args.has("readerMessageId")
+                if (fromReader) {
+                    val reader = controller.conversationReader ?: error("原历史阅读窗口已关闭")
+                    require(section == null && (taskViewId == null || taskViewId == taskId) && controller.canReadConversationWindow(reader) &&
+                        reader.window == requiredLong(args, "readerWindow") && reader.conversation == requiredString(args, "readerConversationId")) { "原历史阅读窗口已变化，请重新打开" }
+                    val row = reader.messages.firstOrNull { it.id == requiredString(args, "readerMessageId") }
+                        ?: error("原消息已不在这份阅读窗口")
+                    require(row.role == "assistant" && (row.sourceRevision > 0 || row.phoneResult != null || row.taskResult != null) &&
+                        (row.taskId == taskId || row.phoneResult?.taskId == taskId || row.taskResult?.taskId == taskId)) { "任务不属于这条原回复" }
+                }
                 val channelUsageVisible = section == "channels" && controller.webPrivateOwnerVisible() &&
                     controller.state.feature("channels").optJSONArray("inbox").objects().any { event ->
                         val reference = event.optJSONObject("latestInferenceReference")
@@ -527,9 +537,9 @@ internal class PocketWebBridge(
                 val preview = projectPreview?.snapshot()
                 val previewTaskVisible = controller.webPrivateOwnerVisible() && preview?.optString("taskId") == taskId &&
                     preview?.optJSONObject("metadata")?.optString("projectId") == controller.state.projectId
-                require(controller.state.tasks.any { it.id == taskId } || taskHistory.contains(taskId) || channelUsageVisible || phoneResultVisible || taskResultVisible || previewTaskVisible) { "请先重新读取这个原任务的历史窗口" }
+                require(fromReader || controller.state.tasks.any { it.id == taskId } || taskHistory.contains(taskId) || channelUsageVisible || phoneResultVisible || taskResultVisible || previewTaskVisible) { "请先重新读取这个原任务的历史窗口" }
                 val requestNavigation = if (args.has("requestNavigation")) requiredBoolean(args, "requestNavigation") else true
-                openOriginalTask(id, taskId, requestNavigation)
+                openOriginalTask(id, taskId, requestNavigation, keepConversationReader = fromReader && !requestNavigation)
                 return
             }
             if (action == "trace.read") {
@@ -1343,7 +1353,7 @@ internal class PocketWebBridge(
         }
     }
 
-    private fun openOriginalTask(requestId: String, taskId: String, requestNavigation: Boolean, returnSection: String? = section ?: taskReturnSection) {
+    private fun openOriginalTask(requestId: String, taskId: String, requestNavigation: Boolean, returnSection: String? = section ?: taskReturnSection, keepConversationReader: Boolean = false) {
         require(returnSection == null || returnSection in connectionSections) { "原工作页面已变化" }
         leaveTask(); leaveConnection(); reviews.clear()
         taskReturnSection = returnSection
@@ -1359,7 +1369,7 @@ internal class PocketWebBridge(
                 publishState()
             } else try {
                 if (isGroup(task)) taskPage = controller.enterGroupTask(task.id)
-                controller.completeWebTaskOpen(task.id, requestNavigation)
+                controller.completeWebTaskOpen(task.id, requestNavigation, keepConversationReader)
                 complete(requestId, JSONObject().put("taskId", task.id).put("readOnly", true).put("executionAuthorized", false), null)
                 publishState()
             } catch (failure: Exception) {

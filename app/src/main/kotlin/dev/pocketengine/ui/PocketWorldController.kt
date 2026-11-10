@@ -3817,9 +3817,9 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     internal var taskListNextCursor by mutableStateOf("")
         private set
     private var webTaskViewId: String? = null
-    internal fun completeWebTaskOpen(id: String, requestNavigation: Boolean) {
+    internal fun completeWebTaskOpen(id: String, requestNavigation: Boolean, keepConversationReader: Boolean = false) {
         webTaskViewId = id
-        closeConversationReader()
+        if (!keepConversationReader) closeConversationReader()
         if (requestNavigation) state = state.copy(requestedTaskId = id, requestedTaskRevision = state.requestedTaskRevision + 1)
     }
     internal fun closeWebTaskView() { webTaskViewId = null }

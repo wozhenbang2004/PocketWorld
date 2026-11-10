@@ -1,17 +1,18 @@
 import {useEffect,useLayoutEffect,useRef,useState} from 'react';
-import {RiCloseLine,RiFileLine,RiRefreshLine} from '@remixicon/react';
+import {RiCloseLine,RiFileLine,RiRefreshLine,RiToolsLine} from '@remixicon/react';
 import {Button,IconButton} from './forms-library';
 import {Drawer} from './shell-library';
-import {AIAnswer} from './library';
+import {AIAnswer,MessageActions} from './library';
 import {useClosingSnapshot} from './library/surface-motion';
 import './conversation-history-window.css';
 
 type Json=Record<string,any>;
 type Position={index:number;offset:number;anchor:string};
-type Props={page:Json|null;submitting:boolean;can:(action:string)=>boolean;act:(action:string,args?:Json)=>Promise<any>;registerBack:(handler:(()=>boolean)|null)=>void};
+export type ConversationHistoryTaskOrigin={readerWindow:number;readerConversationId:string;readerMessageId:string};
+type Props={page:Json|null;submitting:boolean;can:(action:string)=>boolean;act:(action:string,args?:Json)=>Promise<any>;registerBack:(handler:(()=>boolean)|null)=>void;onCopy:(text:string)=>Promise<unknown>;onOpenTask:(taskId:string,entry:'overview'|'process',origin:ConversationHistoryTaskOrigin)=>void};
 /** A second, read-only history window. The active composer stays with its original
  * submission until the owner explicitly switches after its receipt has settled. */
-export function ConversationHistoryWindow({page,submitting,can,act,registerBack}:Props){
+export function ConversationHistoryWindow({page,submitting,can,act,registerBack,onCopy,onOpenTask}:Props){
  const exit=useClosingSnapshot(page),shown:Json=exit.display??{};
  const scroll=useRef<HTMLDivElement>(null),live=useRef(page);live.current=page;
  const restored=useRef<number|null>(null),position=useRef<Position>({index:0,offset:0,anchor:''});
@@ -39,6 +40,22 @@ export function ConversationHistoryWindow({page,submitting,can,act,registerBack}
   catch(failure){if(live.current?.window===original.window)setError(failure instanceof Error?failure.message:'原历史暂不可读取，请重新打开。')}
   finally{sending.current=false;setPending(false)}
  };
+ const copy=async(text:string)=>{
+  const original=live.current;if(!original)throw new Error('原阅读窗口已关闭。');
+  try{await onCopy(text)}catch(failure){if(live.current?.window===original.window)setError(failure instanceof Error?failure.message:'复制未完成，请选择文字后复制。');throw failure}
+ };
+ const openLinkedTask=async(message:Json,entry:'overview'|'process')=>{
+  const original=live.current,taskId=message.phoneResult?.taskId||message.taskResult?.taskId||message.taskId;
+  if(!original||sending.current||!taskId||!can('tasks.open'))return;
+  sending.current=true;setPending(true);setError('');remember();
+  if(timer.current){clearTimeout(timer.current);timer.current=null}
+  try{
+   // Keep the native reading window in place while its task sheet is shown.
+   if(can('conversation.reader.position'))await act('conversation.reader.position',{window:original.window,conversationId:original.conversation,index:position.current.index,offset:position.current.offset});
+   if(live.current?.window===original.window)onOpenTask(String(taskId),entry,{readerWindow:original.window,readerConversationId:original.conversation,readerMessageId:message.id});
+  }catch(failure){if(live.current?.window===original.window)setError(failure instanceof Error?failure.message:'原任务暂不可读取。')}
+  finally{sending.current=false;setPending(false)}
+ };
  const back=()=>{if(!live.current)return false;if(!sending.current)void invoke('conversation.reader.close');return true};
  useEffect(()=>{registerBack(back);return()=>registerBack(null)});
  useEffect(()=>()=>{if(timer.current)clearTimeout(timer.current)},[]);
@@ -61,8 +78,15 @@ export function ConversationHistoryWindow({page,submitting,can,act,registerBack}
    {shown.hasMore&&!shown.limited&&<Button variant="ghost" disabled={!page||pending||shown.loading||!can('conversation.reader.earlier')} onClick={()=>void invoke('conversation.reader.earlier')}>查看更早消息</Button>}
    {shown.loading&&<p className="pw-muted" role="status">正在读取原消息…</p>}
    {rows.map((message,index)=><article key={message.id} className={`pw-history-window-message pw-message-${message.role}`} data-reader-index={index} data-reader-id={message.id} aria-label={message.role==='assistant'?'助手回复':'你的消息'}>
-    {message.role==='assistant'?<AIAnswer text={message.content} showActions={false}/>:<p className="pw-user-text">{message.content}</p>}
+    {message.role==='assistant'?<AIAnswer text={message.content} onCopyCode={copy} showActions={false}/>:<p className="pw-user-text">{message.content}</p>}
     {Array.isArray(message.attachments)&&message.attachments.length>0&&<div className="pw-message-files">{message.attachments.map((file:Json)=><Button key={`${file.id}:${file.sha256}`} variant="ghost" leadingIcon={RiFileLine} disabled={!page||pending||!can('conversation.reader.attachment')} onClick={()=>void invoke('conversation.reader.attachment',{messageId:message.id,id:file.id,sha256:file.sha256})}>{file.name||'原附件'}</Button>)}</div>}
+    <div className="pw-action-row">
+     {!!message.content&&<MessageActions onCopy={()=>copy(message.content)}/>}
+     {message.role==='assistant'&&(Number(message.sourceRevision)>0||message.phoneResult||message.taskResult)&&(message.phoneResult?.taskId||message.taskResult?.taskId||message.taskId)&&can('tasks.open')&&<>
+      <Button variant="ghost" size="small" disabled={!page||pending} onClick={()=>void openLinkedTask(message,'overview')}>任务详情</Button>
+      <Button variant="ghost" size="small" leadingIcon={RiToolsLine} disabled={!page||pending} onClick={()=>void openLinkedTask(message,'process')}>执行轨迹</Button>
+     </>}
+    </div>
    </article>)}
    {!shown.loading&&!shown.error&&!rows.length&&<p className="pw-muted">这份对话没有可读取的消息。</p>}
   </div>
