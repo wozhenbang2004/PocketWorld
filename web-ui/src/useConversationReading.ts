@@ -95,12 +95,16 @@ export function useConversationReading({ scroll, active, conversationId, compose
 
   const goToLatest = useCallback(() => {
     const current = window.current, node = scroll.current;
-    if (!current?.ready || !node?.isConnected) return;
+    if (!current) return;
     current.reading.following = true;
     current.reading.unread = false;
+    // Sending is an explicit return to the live tail, even while the original
+    // conversation history is still loading or the composer is changing epoch.
+    positions.current.set(current.key, { ...current.reading });
+    setHasNewReplies(false);
+    if (!current.ready || !node?.isConnected || node.dataset.conversationId !== current.conversationId) return;
     // Streaming must not race a smooth scroll's intermediate scroll events.
     node.scrollTop = node.scrollHeight;
-    setHasNewReplies(false);
     rememberChatPosition();
     persistReading();
   }, [scroll, rememberChatPosition, persistReading]);
