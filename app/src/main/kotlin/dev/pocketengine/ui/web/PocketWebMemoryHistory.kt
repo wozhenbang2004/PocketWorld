@@ -51,6 +51,18 @@ internal class PocketWebMemoryHistory(private val controller: PocketWorldControl
         check(current(session)); while (pins.size >= 240) pins.remove(pins.keys.first())
         val id = UUID.randomUUID().toString(); pins[id] = Pin(session, session.revision, kind, value.toString()); return id
     }
+    private fun pinTaskRecord(session: Session, value: JSONObject): String {
+        check(current(session))
+        val body = value.toString()
+        // Receipt polling reads the same frozen evidence repeatedly. Reuse only
+        // an exact read-only pin in this session/revision; never reuse reviews
+        // or extend the native owner/scope/expiry window.
+        val retained = pins.entries.firstOrNull { (_, pin) ->
+            pin.session === session && pin.revision == session.revision &&
+                pin.kind == "task-record" && pin.body == body
+        }
+        return retained?.key ?: pin(session, "task-record", value)
+    }
     private fun selected(args: JSONObject, key: String, vararg kinds: String, consume: Boolean = false): Pair<Session, JSONObject> {
         val id = text(args, key); val original = pins[id] ?: error("原选择已关闭，请重新读取")
         check(current(original.session) && original.revision == original.session.revision && original.kind in kinds) { "原选择或范围已变化，请重新读取" }
@@ -215,7 +227,7 @@ internal class PocketWebMemoryHistory(private val controller: PocketWorldControl
                 fields(args, "taskHandle"); val (session, original) = selected(args, "taskHandle", "task"); val binding = original.optJSONObject("binding") ?: error("此原任务没有提供给模型的记忆凭据；不会用新检索代替")
                 call(session, "readTaskMemoryReceipt", binding, done) { value ->
                     val receipt = checkedReceipt(value); val frozen = copy(receipt)
-                    rows(receipt.getJSONArray("records")).forEach { row -> row.put("readHandle", pin(session, "task-record", JSONObject().put("receipt", frozen).put("record", copy(row)))) }
+                    rows(receipt.getJSONArray("records")).forEach { row -> row.put("readHandle", pinTaskRecord(session, JSONObject().put("receipt", frozen).put("record", copy(row)))) }
                     receipt
                 }
             }

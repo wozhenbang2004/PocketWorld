@@ -22,15 +22,18 @@ export function MemoryHistoryWorkspace({ run, scopeKey, registerTransientBack, i
   const [draft, setDraft] = useState(''), [review, setReview] = useState<Data | null>(null), [acknowledged, setAcknowledged] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const window = useRef(new MemoryReadingWindow()), session = useRef(''), reviewHandle = useRef('');
+  const [version, setVersion] = useState(() => window.current.capture());
   const selectedRef = useRef<Data | null>(null), focus = useRef<HTMLElement | null>(null), reading = useRef<HTMLElement | null>(null);
   const collection = useRef<HTMLElement | null>(null), listPosition = useRef(0), returnFocus = useRef('');
   selectedRef.current = selected;
-  const version = window.current.capture();
   const closeHandle = (handle: string) => { if (handle) void run('memoryHistory.close', { handle }).catch(() => {}); };
   const closeReview = () => { closeHandle(reviewHandle.current); reviewHandle.current = ''; setReview(null); setAcknowledged(false); };
   const clearReading = () => { setSelected(null); selectedRef.current = null; setSource(null); setReplacements([]); setReplacement(''); setDraft(''); closeReview(); };
   const reset = () => {
     window.current.invalidate(); closeHandle(session.current); session.current = '';
+    // Even an already-empty view needs fresh handlers for this reading window.
+    // Otherwise React can skip every no-op reset and retain a retired ticket.
+    setVersion(window.current.capture());
     setBusy(false); setPage(null); setCognition(null); setTask(null); setReceipt(null); clearReading(); setError(''); setNotice('');
   };
   const invoke = async (action: string, args: Data, accept?: (value: Data) => void) => {
@@ -54,6 +57,7 @@ export function MemoryHistoryWorkspace({ run, scopeKey, registerTransientBack, i
   };
   const choose = (record: Data, identity = '') => {
     window.current.invalidate(); setBusy(false);
+    setVersion(window.current.capture());
     closeHandle(selectedRef.current?.readHandle || '');
     focus.current = document.activeElement as HTMLElement;
     returnFocus.current = identity || focus.current?.dataset.historyId || '';
@@ -93,6 +97,7 @@ export function MemoryHistoryWorkspace({ run, scopeKey, registerTransientBack, i
   };
   useEffect(() => {
     window.current.reopen();
+    setVersion(window.current.capture());
     return () => { window.current.close(); closeHandle(session.current); closeHandle(reviewHandle.current); session.current = ''; reviewHandle.current = ''; };
   }, []);
   useEffect(() => { reset(); }, [scopeKey]);
