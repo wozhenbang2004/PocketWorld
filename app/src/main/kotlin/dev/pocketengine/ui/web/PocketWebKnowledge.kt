@@ -1,5 +1,6 @@
 package dev.pocketengine.ui.web
 
+import dev.pocketengine.features.memory.MemoryAssertionReview
 import dev.pocketengine.ui.MemoryLearningReviewGuard
 import dev.pocketengine.ui.PocketWorldController
 import dev.pocketengine.ui.assertionReviewDate
@@ -26,7 +27,7 @@ internal class PocketWebKnowledge(private val controller: PocketWorldController)
     private fun fields(value: JSONObject, vararg keys: String) { require(value.keys().asSequence().all { it in keys }) { "原审核参数含不适用字段" } }
     private fun text(value: JSONObject, key: String, max: Int = 128): String { val s = value.opt(key); require(s is String && s.isNotBlank() && s.length <= max && '\u0000' !in s) { "请重新选择原记录" }; return s }
     private fun number(value: JSONObject, key: String): Long { val n = value.opt(key); require((n is Int || n is Long) && (n as Number).toLong() > 0) { "原修订无效" }; return (n as Number).toLong() }
-    private fun pin(book: MutableMap<String, Pin>, value: JSONObject): String { while (book.size >= 24) book.remove(book.keys.first()); val id = UUID.randomUUID().toString(); book[id] = Pin(value.toString(), controller.webWindowTicket(), controller.webMemoryScopeTicket(), System.currentTimeMillis() + 600_000); return id }
+    private fun pin(book: MutableMap<String, Pin>, value: JSONObject, capacity: Int = 24): String { while (book.size >= capacity) book.remove(book.keys.first()); val id = UUID.randomUUID().toString(); book[id] = Pin(value.toString(), controller.webWindowTicket(), controller.webMemoryScopeTicket(), System.currentTimeMillis() + 600_000); return id }
     private fun selected(book: MutableMap<String, Pin>, id: String, consume: Boolean = false): JSONObject { val value = book[id] ?: error("原审核窗口已关闭，请重新读取"); check(controller.webPrivateOwnerVisible() && value.owner == controller.webWindowTicket() && value.scope == controller.webMemoryScopeTicket() && value.expires >= System.currentTimeMillis()) { "原审核窗口已变化或过期" }; if (consume) book.remove(id); return JSONObject(value.body) }
     private fun call(domain: String, command: String, args: JSONObject, done: (JSONObject?, String?) -> Unit, project: (JSONObject) -> JSONObject = { it }) {
         val request = generation; val scope = controller.webMemoryScopeTicket()
@@ -59,7 +60,11 @@ internal class PocketWebKnowledge(private val controller: PocketWorldController)
                 })
             }
             "knowledge.namespaces" -> { fields(args); call("memoryReview", "namespaceChoices", JSONObject(), done) { result ->
-                choices.clear(); val rows = result.getJSONArray("choices"); for (i in 0 until rows.length()) rows.getJSONObject(i).put("choiceHandle", pin(choices, rows.getJSONObject(i))); result
+                choices.clear(); val rows = result.getJSONArray("choices")
+                // The native checkout catalogue can contain 40 choices. Keep the entire
+                // returned page selectable rather than evicting its first rows while pinning.
+                for (i in 0 until rows.length()) rows.getJSONObject(i).put("choiceHandle", pin(choices, rows.getJSONObject(i), maxOf(24, rows.length())))
+                result
             } }
             "knowledge.namespace" -> {
                 fields(args, "choiceHandle"); val choice = if (args.optString("choiceHandle").isBlank()) null else selected(choices, text(args, "choiceHandle"))
@@ -97,7 +102,9 @@ internal class PocketWebKnowledge(private val controller: PocketWorldController)
                 current(original, done) { call("memoryReview", "prepareAssertionReview", target(original).put("revision", row(original).getLong("revision")).put("query", query), done) { result ->
                     check(result.opt("formalMemorySaved") == false && result.opt("sourceProofIssued") == false && result.opt("executionAuthorized") == false && MemoryLearningReviewGuard.sameReview(row(original), result.optJSONObject("candidate")))
                     val values = result.getJSONArray("identities")
-                    for (i in 0 until values.length()) { val identity = values.getJSONObject(i); identity.put("choiceHandle", pin(identities, JSONObject().put("original", original).put("selection", identity.getJSONObject("selection")))) }
+                    // Match the native page bound so every displayed identity keeps its
+                    // original-version handle. Owner, scope and expiry checks stay unchanged.
+                    for (i in 0 until values.length()) { val identity = values.getJSONObject(i); identity.put("choiceHandle", pin(identities, JSONObject().put("original", original).put("selection", identity.getJSONObject("selection")), MemoryAssertionReview.MAX_IDENTITIES)) }
                     result
                 } }
             }
