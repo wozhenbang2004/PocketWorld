@@ -1,0 +1,79 @@
+name: UI screenshots
+run-name: UI screenshots · release ${{ github.event.workflow_run.id || inputs.release_run_id }}
+
+on:
+  workflow_run:
+    workflows: [GitHub Release]
+    types: [in_progress]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      release_run_id:
+        description: GitHub Release run ID whose immutable APK should be captured
+        required: true
+        type: string
+
+# Separate workflow and concurrency group: capture never holds the release queue
+# or becomes a dependency of APK, delta preparation or publication.
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: pocketworld-ui-screenshots-${{ github.event.workflow_run.id || inputs.release_run_id }}
+  cancel-in-progress: true
+
+jobs:
+  capture:
+    if: ${{ github.repository == 'wozhenbang2004/PocketWorld' && (github.event_name == 'workflow_dispatch' || github.event.workflow_run.head_repository.full_name == github.repository) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out the trusted screenshot tooling
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Prepare the official Android screenshot emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build-artifacts/ui-screenshots
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends libpulse0
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          set +o pipefail
+          yes | "$SDKMANAGER" --licenses > /dev/null
+          set -o pipefail
+          "$SDKMANAGER" 'platform-tools' 'emulator' 'system-images;android-35;google_apis;x86_64'
+      - name: Capture the installed APK without tests or seeded data
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SOURCE_RELEASE_RUN_ID: ${{ github.event.workflow_run.id || inputs.release_run_id }}
+          SOURCE_RELEASE_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+        run: python3 -B tools/ci/capture-ui-screenshots.py
+      - name: Upload PNGs, gallery and capture diagnostics
+        id: screenshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pocketworld-ui-screenshots-${{ github.event.workflow_run.id || inputs.release_run_id }}-${{ github.run_attempt }}
+          path: build-artifacts/ui-screenshots/
+          if-no-files-found: warn
+          retention-days: 14
+          compression-level: 0
+      - name: Link the downloadable screenshot package
+        if: always()
+        env:
+          SCREENSHOTS_URL: ${{ steps.screenshots.outputs.artifact-url }}
+        run: |
+          {
+            echo '## UI screenshots'
+            echo 'Real installed APK on a fresh Android emulator. No tests, fixtures, account credentials or seeded conversations.'
+            echo 'Open index.html in the downloaded package. capture.json lists captured screens, unavailable destinations and environment limits.'
+            if [ -n "$SCREENSHOTS_URL" ]; then printf '\n[Download screenshot package](%s)\n' "$SCREENSHOTS_URL"; fi
+            echo 'This workflow is independent of APK and delta publication.'
+          } >> "$GITHUB_STEP_SUMMARY"
