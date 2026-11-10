@@ -19,6 +19,14 @@ import org.json.JSONObject;
 public final class ConversationRepository {
     public static final class ReadLimited extends Exception {public ReadLimited(String reason){super(reason);}}
     public static final int MAX_ROWS=100,MAX_BYTES=1_048_576;
+    // A complete model answer shares the existing message window with source/receipt metadata.
+    private static final int MAX_REPLY_BYTES=MAX_BYTES/2;
+    static void requireReplyContent(String text){
+        if(text==null||text.isBlank())throw new IllegalArgumentException("模型没有返回文字答复");
+        if(!StandardCharsets.UTF_8.newEncoder().canEncode(text))throw new IllegalArgumentException("答复含不完整Unicode字符，未替换后保存");
+        if(text.length()>MAX_REPLY_BYTES||text.getBytes(StandardCharsets.UTF_8).length>MAX_REPLY_BYTES)
+            throw new IllegalArgumentException("完整答复超过单条消息的512KiB正文预算，原任务检查点仍保留");
+    }
     static final java.util.concurrent.ScheduledThreadPoolExecutor DEADLINES=deadlines();
     private static java.util.concurrent.ScheduledThreadPoolExecutor deadlines(){
         var timer=new java.util.concurrent.ScheduledThreadPoolExecutor(1,action->{Thread thread=new Thread(action,"original-history-read-deadline");thread.setDaemon(true);return thread;});
@@ -628,7 +636,8 @@ public final class ConversationRepository {
     JSONObject acceptQueuedOwnerReply(dev.pocketengine.store.TaskStore original,dev.pocketengine.store.TaskStore.QueuedOwnerReplySelection selected,
             String text,String digest)throws Exception{
         selected.requireMutationScope(original);if(monitor!=original)throw new SecurityException("不能替换原完成消息数据库宿主");
-        if(text==null||text.length()>24000||digest==null||digest.isEmpty())throw new IllegalArgumentException("原答复保存范围无效");
+        requireReplyContent(text);
+        if(digest==null||digest.isEmpty())throw new IllegalArgumentException("原答复摘要缺失");
         JSONObject indexed=sourceByReply(selected.completed.id);
         if(indexed!=null){
             JSONObject prior=message(selected.conversationId,indexed.getString("sourceId"));

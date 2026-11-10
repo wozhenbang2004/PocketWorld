@@ -626,7 +626,8 @@ public final class AssistantModule implements EngineModule {
                     ||!conversationId.equals(binding.optString("conversationId"))||!completed.taskId.equals(binding.optString("taskId"))
                     ||!expected.optString("taskId").equals(binding.optString("taskId"))||!expected.optString("runId").equals(binding.optString("runId"))||expected.optInt("epoch")!=binding.optInt("epoch")
                     ||!original.matchesHostRun(expected.optString("taskId"),expected.optString("runId"),expected.optInt("epoch")))throw new SecurityException("完成答复不属于原生当前对话和控制器");
-            if(blank(completed.text)||completed.text.length()>24000||completed.messageIds().size()>500)throw new IllegalArgumentException("完成答复超出本轮保存范围");
+            if(completed.messageIds().size()>500)throw new IllegalArgumentException("完成答复引用的消息数超出本轮保存范围");
+            ConversationRepository.requireReplyContent(completed.text);
             final ModelConfig captured=active.model;final String text=redact(completed.text,captured),digest=fingerprint(text,"native_completed_reply",new JSONArray());
             saved=commit(()->{
                 if(durable()){JSONObject indexed=historyRepository.sourceByReply(completed.id);if(indexed!=null){if(!digest.equals(indexed.optString("nativeReplyDigest"))||!expected.getString("runId").equals(indexed.optString("nativeRunId")))throw new SecurityException("完成答复身份不能更换内容或执行代次");return new JSONObject().put("duplicate",true).put("consumed",new JSONArray());}}
@@ -668,7 +669,8 @@ public final class AssistantModule implements EngineModule {
         synchronized(admission){
             if(migrationInProgress||historyTasks==null||!durable()||completed==null||captured==null||original==null)
                 throw new IllegalStateException("原完成答复或原生消息宿主尚不可核对");
-            if(blank(completed.text)||completed.text.length()>24000||completed.messageIds().size()>500)throw new IllegalArgumentException("完成答复超出本轮保存范围");
+            if(completed.messageIds().size()>500)throw new IllegalArgumentException("完成答复引用的消息数超出本轮保存范围");
+            ConversationRepository.requireReplyContent(completed.text);
             String text=redact(completed.text,captured),digest=fingerprint(text,"native_completed_reply",new JSONArray());
             synchronized(historyTasks){
                 saved=historyTasks.withQueuedOwnerReply(completed,original,selected->historyRepository.acceptQueuedOwnerReply(historyTasks,selected,text,digest));
@@ -707,7 +709,7 @@ public final class AssistantModule implements EngineModule {
             JSONArray request=conversationRequest(history,messageId);
             executorEntered=true;
             JSONObject response=executor==null?ModelGateway.complete(config,attachmentProjection==null?request:attachmentProjection.project(request,config,control),null,control):executor.execute(cid,goal,request,config,control);
-            control.check();retainedResult=response.optBoolean("developmentRetained");String answer=answer(response);if(blank(answer)||answer.length()>24000)throw new IllegalStateException("模型没有返回有界文字答复");
+            control.check();retainedResult=response.optBoolean("developmentRetained");String answer=answer(response);ConversationRepository.requireReplyContent(answer);
             JSONObject reply=commit(()->{JSONObject conversation=find(cid);JSONArray messages=conversation.getJSONArray("messages");
                 for(int i=messages.length()-1;i>=0;i--){JSONObject recorded=messages.getJSONObject(i);if(turn.getString("runId").equals(recorded.optString("nativeRunId"))&&turn.getString("taskId").equals(recorded.optString("taskId"))&&redact(answer,config).equals(recorded.optString("content")))return copy(recorded);}
                 JSONObject row=newMessage(cid,"assistant",answer,config);if(response.has("taskId"))row.put("taskId",response.getString("taskId"));copyMemoryReference(response,row);messages.put(row);trimMessages(conversation);conversation.put("updatedAt",System.currentTimeMillis());return copy(row);});
@@ -856,7 +858,8 @@ public final class AssistantModule implements EngineModule {
         migrationInvalidated=true;
         String conversationId=input.getString("conversationId"),messageId=input.getString("messageId");long revision=revision(input,"revision");String content=input.getString("content").trim();ModelConfig config=context.model();
         final JSONObject updated;synchronized(admission){idle(conversationId);updated=commit(()->{JSONObject conversation=find(conversationId),message=findMessage(conversation,messageId);requireNotQueuedMutation(conversationId,message);if(message.getLong("revision")!=revision)throw new IllegalStateException("消息已被修改，请刷新后重试");
-            int maximum=message.getString("role").equals("user")?12000:24000;if(content.isEmpty()||content.length()>maximum)throw new IllegalArgumentException("消息内容长度应为1至"+maximum+"字");
+            if(message.getString("role").equals("user")){if(content.isEmpty()||content.length()>12000)throw new IllegalArgumentException("消息内容长度应为1至12000字");}
+            else ConversationRepository.requireReplyContent(content);
             message.put("content",redact(content,config)).put("revision",revision+1).put("editedAt",System.currentTimeMillis());updateSource(message,conversationId,false,revision+1);conversation.put("updatedAt",System.currentTimeMillis());return copy(message);});}
         synchronizeSources();return new JSONObject().put("conversationId",conversationId).put("message",updated);
     }
