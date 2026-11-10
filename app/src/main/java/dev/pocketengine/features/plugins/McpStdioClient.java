@@ -25,13 +25,19 @@ public final class McpStdioClient implements AutoCloseable {
         JSONObject read(RunControl original,long waitMillis)throws Exception;
         void invalidate();
     }
-    private final Channel channel;private final RunControl original;private final LongSupplier clock;private final long rpcMillis,initializationMillis;
+    private final Channel channel;private final RunControl original;private final LongSupplier clock;private final long rpcMillis,initializationMillis,toolCallMillis;
     private final AtomicBoolean channelInvalidated=new AtomicBoolean();private final Runnable cancellation=this::close;
     private volatile boolean valid=true,initialized,closed,initializationAttempted;private JSONObject serverIdentity;
     public McpStdioClient(Channel channel,RunControl original){this(channel,original,System::nanoTime,MAX_RPC_MILLIS);}
-    McpStdioClient(Channel channel,RunControl original,LongSupplier clock,long rpcMillis){this(channel,original,clock,rpcMillis,rpcMillis);}
-    private McpStdioClient(Channel channel,RunControl original,LongSupplier clock,long rpcMillis,long initializationMillis){this.channel=Objects.requireNonNull(channel);this.original=Objects.requireNonNull(original);this.clock=Objects.requireNonNull(clock);if(rpcMillis<1||rpcMillis>MAX_RPC_MILLIS||initializationMillis<1||initializationMillis>McpLocalPackage.INITIALIZATION_MILLIS)throw new IllegalArgumentException("Invalid MCP RPC budget");this.rpcMillis=rpcMillis;this.initializationMillis=initializationMillis;original.onCancel(cancellation);}
-    static McpStdioClient forOriginalProgram(Channel channel,RunControl original,JSONObject originalScope)throws Exception{boolean preparation=originalScope.has(McpLocalPackage.PLAN);return new McpStdioClient(channel,original,System::nanoTime,MAX_RPC_MILLIS,preparation?Math.min(McpLocalPackage.INITIALIZATION_MILLIS,originalScope.getLong("timeoutMillis")):MAX_RPC_MILLIS);}
+    McpStdioClient(Channel channel,RunControl original,LongSupplier clock,long rpcMillis){this(channel,original,clock,rpcMillis,rpcMillis,rpcMillis);}
+    private McpStdioClient(Channel channel,RunControl original,LongSupplier clock,long rpcMillis,long initializationMillis,long toolCallMillis){this.channel=Objects.requireNonNull(channel);this.original=Objects.requireNonNull(original);this.clock=Objects.requireNonNull(clock);if(rpcMillis<1||rpcMillis>MAX_RPC_MILLIS||initializationMillis<1||initializationMillis>McpLocalPackage.INITIALIZATION_MILLIS||toolCallMillis<1||toolCallMillis>McpLocalInvocation.MAX_TIMEOUT_MILLIS)throw new IllegalArgumentException("Invalid MCP RPC budget");this.rpcMillis=rpcMillis;this.initializationMillis=initializationMillis;this.toolCallMillis=toolCallMillis;original.onCancel(cancellation);}
+    static McpStdioClient forOriginalProgram(Channel channel,RunControl original,JSONObject originalScope)throws Exception{
+        long budget=originalScope.getLong("timeoutMillis"),rpcBudget=Math.min(MAX_RPC_MILLIS,budget);
+        boolean preparation=originalScope.has(McpLocalPackage.PLAN);
+        // The owned native process still enforces the total admitted lifetime, including discovery.
+        // Waiting for a tool result must not impose the shorter handshake/stdin ACK deadline.
+        return new McpStdioClient(channel,original,System::nanoTime,rpcBudget,preparation?Math.min(McpLocalPackage.INITIALIZATION_MILLIS,budget):rpcBudget,budget);
+    }
     public boolean usable(){return initialized&&valid&&!closed;}
     public synchronized JSONObject serverIdentity()throws Exception{if(!usable())throw new IllegalStateException("MCP stdio session is not initialized");return McpData.copy(serverIdentity);}
     public synchronized String serverDigest()throws Exception{return McpJson.digest(serverIdentity());}
@@ -82,12 +88,12 @@ public final class McpStdioClient implements AutoCloseable {
     }
     private static String identityText(JSONObject object,String field)throws Exception{Object value=object.get(field);if(!(value instanceof String)||((String)value).isEmpty()||((String)value).length()>200)throw new IllegalArgumentException("MCP stdio server identity is invalid");StandardCharsets.UTF_8.newEncoder().encode(java.nio.CharBuffer.wrap((String)value));return (String)value;}
     private void current()throws Exception{if(!valid||closed)throw new IllegalStateException("MCP stdio session is invalid; it will not reconnect or replay");original.check();if(original.isPaused())throw new SecurityException("MCP original run is paused");}
-    private long remaining(long until)throws Exception{current();long left=until-clock.getAsLong();if(left<=0)throw new IllegalStateException("MCP stdio RPC exceeded its original time budget");return Math.max(1,Math.min(McpLocalPackage.INITIALIZATION_MILLIS,(left+999999)/1000000));}
+    private long remaining(long until)throws Exception{current();long left=until-clock.getAsLong();if(left<=0)throw new IllegalStateException("MCP stdio RPC exceeded its original time budget");return Math.max(1,Math.min(McpLocalInvocation.MAX_TIMEOUT_MILLIS,(left+999999)/1000000));}
     private void notifyInitialized()throws Exception{
         long until=clock.getAsLong()+rpcMillis*1000000;write(new JSONObject().put("jsonrpc","2.0").put("method","notifications/initialized"),until);
     }
     private void write(JSONObject envelope,long until)throws Exception {
-        // Package initialization may await its reply longer; the original stdin ACK ticket still has a 20-second ceiling.
+        // Initialization and tool responses may take longer; stdin ACKs retain their 20-second ceiling.
         byte[] frame=McpStdioFrames.encode(envelope);current();JSONObject receipt=channel.write(UUID.randomUUID().toString(),frame,original,Math.min(MAX_RPC_MILLIS,remaining(until)));
         if(receipt==null)throw new InputFailure(true);int written=receiptCount(receipt,"writtenBytes"),requested=receiptCount(receipt,"requestedBytes");if(requested!=frame.length||written<0||written>requested)throw new InputFailure(true);
         boolean noEffects=Boolean.FALSE.equals(receipt.opt("effectMayHaveOccurred"))&&written==0;
@@ -97,7 +103,7 @@ public final class McpStdioClient implements AutoCloseable {
     }
     private static int receiptCount(JSONObject receipt,String field)throws Exception{Object value=receipt.opt(field);if(!(value instanceof Number))throw new InputFailure(true);try{return new java.math.BigDecimal(value.toString()).intValueExact();}catch(NumberFormatException|ArithmeticException invalid){throw new InputFailure(true);}}
     private JSONObject rpc(String method,JSONObject params)throws Exception {
-        boolean toolMethod="tools/call".equals(method),entered=false,mainAcknowledged=false;long until=clock.getAsLong()+("initialize".equals(method)?initializationMillis:rpcMillis)*1000000;String id=UUID.randomUUID().toString();
+        boolean toolMethod="tools/call".equals(method),entered=false,mainAcknowledged=false;long until=clock.getAsLong()+("initialize".equals(method)?initializationMillis:toolMethod?toolCallMillis:rpcMillis)*1000000;String id=UUID.randomUUID().toString();
         try {
             current();JSONObject request=new JSONObject().put("jsonrpc","2.0").put("id",id).put("method",method).put("params",params);
             // Encoding is a definite pre-write check; after entering write, missing ACK/reply is unknown.
