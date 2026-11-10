@@ -10601,11 +10601,35 @@ public final class TaskStore {
             }
             if(runId.equals(a.optString("runId"))&&a.optLong("expiresAt")>now){
                 if(a.optString("state").equals("approved")){a.put("state","consumed");task.put("approvals",approvals);write(task);return new JSONObject().put("approved",true).put("approvalId",a.getString("id"));}
-                if(a.optString("state").equals("pending")||a.optString("state").equals("denied"))return new JSONObject().put("approved",false).put("approvalId",a.getString("id")).put("state",a.getString("state"));
+                if(a.optString("state").equals("denied"))return new JSONObject().put("approved",false).put("approvalId",a.getString("id")).put("state","denied");
+                if(a.optString("state").equals("pending")){
+                    JSONObject policy=dev.pocketengine.features.capabilities.ToolApprovalPermit.currentApproval(id,runId,tool,args,capability);
+                    if(policy==null)return new JSONObject().put("approved",false).put("approvalId",a.getString("id")).put("state","pending");
+                    a.put("state","consumed").put("policyDecision",policy);task.put("approvals",approvals);write(task);
+                    return new JSONObject().put("approved",true).put("approvalId",a.getString("id")).put("policyDecision",policy);
+                }
             }
         }
         if(approvals.length()>=100)throw new IllegalStateException("此任务审批记录已达上限");String approval=UUID.randomUUID().toString();
-        approvals.put(new JSONObject().put("id",approval).put("runId",runId).put("tool",tool).put("capability",approvalArguments(capability)).put("capabilityKey",capabilityKey).put("arguments",approvalArguments(args)).put("argumentsHash",hash).put("state","pending").put("expiresAt",now+300_000L));task.put("approvals",approvals);write(task);return new JSONObject().put("approved",false).put("approvalId",approval).put("state","pending");
+        JSONObject policy=dev.pocketengine.features.capabilities.ToolApprovalPermit.currentApproval(id,runId,tool,args,capability);
+        JSONObject row=new JSONObject().put("id",approval).put("runId",runId).put("tool",tool).put("capability",approvalArguments(capability)).put("capabilityKey",capabilityKey).put("arguments",approvalArguments(args)).put("argumentsHash",hash).put("state",policy==null?"pending":"consumed").put("expiresAt",now+300_000L);
+        if(policy!=null)row.put("policyDecision",policy);approvals.put(row);task.put("approvals",approvals);write(task);
+        return new JSONObject().put("approved",policy!=null).put("approvalId",approval).put("state",policy==null?"pending":"consumed");
+    }
+    /** Native owner-authored instructions for a separate tool reviewer; tool/page text is not authority. */
+    public synchronized JSONObject toolPermissionContext(String id,String run,int epoch,RunControl original)throws Exception{
+        checkExtensionRun(id,run,epoch,original);JSONObject task=required(id);
+        if(!task.optString("kind").matches("phone|assistant")||task.has("origin")&&!task.isNull("origin")
+                ||task.has("workProfileRef")||task.has("workProfileIntent")||task.has("teamAssignment")
+                ||task.has("teamWriteScope")||"owner_work".equals(task.optString("executionRole")))throw new SecurityException("此执行不使用私人对话审批策略");
+        JSONArray inputs=new JSONArray(),rows=task.optJSONArray("ownerInputs");
+        for(int i=0;rows!=null&&i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(OwnerInputQueue.withdrawn(row))continue;
+            if(row.opt("content") instanceof String)inputs.put(new JSONObject().put("messageId",row.optString("messageId")).put("content",row.getString("content")).put("mode",row.optString("mode")));}
+        JSONObject resources=new JSONObject();
+        for(String key:new String[]{"sshSelection","developmentContext","executionMode"})if(task.has(key))resources.put(key,task.get(key));
+        JSONObject result=new JSONObject().put("goal",task.optString("goal")).put("ownerInputs",inputs).put("boundResourceEvidence",approvalArguments(resources));
+        if(result.toString().length()>64000)throw new IllegalStateException("审批所需原始用户要求超出有界窗口，需人工确认");
+        return result;
     }
     /** Legacy native callers decide the currently stored original, never an approval from an older run. */
     public synchronized JSONObject decideCapabilityApproval(String id,String approvalId,boolean approved)throws Exception{

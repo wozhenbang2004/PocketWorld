@@ -75,13 +75,15 @@ public final class SettingsStore {
         if(local!=null)local=checkedPermissionPolicy(local);
         JSONObject effective=new JSONObject(global.toString());
         if(local!=null){
-            effective.put("mode",local.getString("mode"));
+            effective.put("mode",local.getString("mode")).put("instructions",local.getString("instructions"));
             JSONObject merged=effective.getJSONObject("tools"),rules=local.getJSONObject("tools");
             for(var keys=rules.keys();keys.hasNext();){String name=keys.next();merged.put(name,rules.getString(name));}
         }
         return new JSONObject().put("revision",prefs.getLong("permissionPolicyRevision",0))
             .put("global",global).put("conversation",local==null?JSONObject.NULL:local).put("effective",effective);
     }
+    /** Cheap native revocation fence, safe to check at each phone entry without rebuilding the policy. */
+    public synchronized long permissionPolicyRevision(){requireConfirmed();return prefs.getLong("permissionPolicyRevision",0L);}
     public synchronized JSONObject getEffectivePermissionPolicy(String conversationId) throws Exception {
         return permissionPolicySnapshot(conversationId).getJSONObject("effective");
     }
@@ -102,18 +104,7 @@ public final class SettingsStore {
         return permissionPolicySnapshot(conversationId);
     }
     private static JSONObject checkedPermissionPolicy(JSONObject input) throws Exception {
-        Object version=input.opt("version");
-        if(!(version instanceof Integer||version instanceof Long)||((Number)version).longValue()!=1)throw new IllegalArgumentException("不支持的权限设置版本");
-        String mode=input.getString("mode");
-        if(!java.util.Set.of("ask","controlled","auto").contains(mode))throw new IllegalArgumentException("请选择有效权限模式");
-        JSONObject rules=input.getJSONObject("tools"),copy=new JSONObject();
-        for(var keys=rules.keys();keys.hasNext();){
-            String name=keys.next(),decision=rules.getString(name);
-            if(!name.matches("(browser|ssh|attachments)_[A-Za-z0-9_]+")||!java.util.Set.of("allow","ask","deny").contains(decision))
-                throw new IllegalArgumentException("工具规则仅支持 browser_、ssh_、attachments_ 的精确工具名及允许/询问/禁止");
-            copy.put(name,decision);
-        }
-        return new JSONObject().put("version",1).put("mode",mode).put("tools",copy);
+        return dev.pocketengine.features.capabilities.CapabilityApprovalPolicy.normalize(input);
     }
 
     public synchronized ModelConfig get() throws Exception {

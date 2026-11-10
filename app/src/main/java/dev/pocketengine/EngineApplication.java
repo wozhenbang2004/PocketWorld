@@ -2164,14 +2164,14 @@ public final class EngineApplication extends Application implements dev.pocketen
         // Personal conversation preferences do not expand paired-device, team, channel,
         // or explicitly scoped work-profile authority.
         String permissionConversation=task.optString("conversationId");
-        boolean personalPermissionScope=!permissionConversation.isBlank()
+        boolean personalPermissionScope=task.optString("kind").matches("phone|assistant")
                 && "owner".equals(task.optString("actorId")) && "private".equals(task.optString("spaceId"))
                 && task.optJSONObject("origin")==null && !teamWriteOrigin(task)
-                && !task.has("workProfileRef") && !task.has("workProfileIntent");
-        var authority=personalPermissionScope
-                ? new dev.pocketengine.features.capabilities.TaskStoreCapabilityAuthority(tasks,binding,features::emitApproval,
-                        ()->settings.getEffectivePermissionPolicy(permissionConversation))
-                : new dev.pocketengine.features.capabilities.TaskStoreCapabilityAuthority(tasks,binding,features::emitApproval);
+                && !task.has("workProfileRef") && !task.has("workProfileIntent")
+                && !"owner_work".equals(task.optString("executionRole"));
+        // All ordinary personal tools now share the outer policy gate. Leaf approvals keep
+        // their exact native capability identity and consume only that gate's one-call permit.
+        var authority=new dev.pocketengine.features.capabilities.TaskStoreCapabilityAuthority(tasks,binding,features::emitApproval);
         dev.pocketengine.features.capabilities.ModelCapabilityAdapters.SshBinding selectedSsh=null;JSONObject sshSelection=task.optJSONObject("sshSelection");
         if(sshSelection!=null){
             EngineModule selected=features.module("ssh");if(!(selected instanceof dev.pocketengine.features.ssh.SshModule))throw new SecurityException("原SSH执行器不可用");var ssh=(dev.pocketengine.features.ssh.SshModule)selected;String account=sshSelection.getString("accountResource");
@@ -2196,7 +2196,7 @@ public final class EngineApplication extends Application implements dev.pocketen
         combined=dev.pocketengine.phone.observation.PhoneTreeCapabilityPort.bindIfAvailable(combined,tasks,binding,original,selectedPhone);
         if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))&&"private".equals(task.optString("spaceId")))
             combined=new dev.pocketengine.features.capabilities.AgentPreferencePort(settings,combined,binding,authority,original);
-        try{combined=bindRawTaskEvidence(combined,task,extensionBinding,original,inference);if(browserTaskHost!=null)combined=browserTaskHost.wrapIfRequested(binding,original,combined,outputCapture,selectedPhone);CapabilityPort exposed=pluginHost.bind(combined,extensionBinding,original);if(planRequest!=null&&planRequest.optString("executor").equals("workspace"))exposed=new dev.pocketengine.features.automation.PlanWorkspacePort(exposed,planRequest.getJSONObject("verification"),this::readAutomationArtifact,args->tasks.approveAutomationArtifactFreeze(id,run,args));if(outputCapture!=null)exposed=new dev.pocketengine.features.memory.ToolOutputSourcePort(exposed,outputCapture,original);exposed=dev.pocketengine.features.teams.TeamBudgetPort.forRoundParent(exposed,tasks,id,run,epoch,original);if(!tasks.ownerQuestionContinuationActive(id,run,epoch,original)&&!tasks.approvedCapabilityContinuationActive(id,run,epoch,original))tasks.authorizeTools(id,run,toolNames(exposed.tools()));return withExecutionPlanning(id,original,exposed);}
+        try{combined=bindRawTaskEvidence(combined,task,extensionBinding,original,inference);if(browserTaskHost!=null)combined=browserTaskHost.wrapIfRequested(binding,original,combined,outputCapture,selectedPhone);CapabilityPort exposed=pluginHost.bind(combined,extensionBinding,original);if(planRequest!=null&&planRequest.optString("executor").equals("workspace"))exposed=new dev.pocketengine.features.automation.PlanWorkspacePort(exposed,planRequest.getJSONObject("verification"),this::readAutomationArtifact,args->tasks.approveAutomationArtifactFreeze(id,run,args));if(outputCapture!=null)exposed=new dev.pocketengine.features.memory.ToolOutputSourcePort(exposed,outputCapture,original);exposed=dev.pocketengine.features.teams.TeamBudgetPort.forRoundParent(exposed,tasks,id,run,epoch,original);if(!tasks.ownerQuestionContinuationActive(id,run,epoch,original)&&!tasks.approvedCapabilityContinuationActive(id,run,epoch,original))tasks.authorizeTools(id,run,toolNames(exposed.tools()));if(personalPermissionScope)exposed=new dev.pocketengine.features.capabilities.ToolPermissionPolicyPort(exposed,tasks,binding,()->settings.getEffectivePermissionPolicy(permissionConversation),settings::permissionPolicyRevision,inference,features::emitApproval,selectedPhone!=null);return withExecutionPlanning(id,original,exposed);}
         catch(Exception failure){combined.close();throw failure;}
     }
     /** Original conversation audit only. The selected native call/run is not the newest
