@@ -56,6 +56,8 @@ def save_report():
     )
     notes = "".join("<li>" + html.escape(note) + "</li>" for note in REPORT["limitations"])
     unavailable = "".join("<li>" + html.escape(item) + "</li>" for item in REPORT["unavailable"])
+    excluded = "".join("<li>" + html.escape(item["area"] + "：" + item["requires"]) + "</li>"
+                       for item in REPORT.get("coverage", {}).get("notCovered", []))
     (OUTPUT / "index.html").write_text(
         '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width">'
         '<title>PocketWorld UI screenshots</title><style>body{font:16px system-ui;margin:24px;background:#eee;color:#222}'
@@ -64,6 +66,7 @@ def save_report():
         '<p>来自当前构建的真实 APK。不是测试结果，也不是已验收声明。</p><p>Source: ' +
         html.escape(str(REPORT.get("sourceCommit", "unavailable"))) + '</p><ul>' + notes + '</ul>' +
         ('<h2>未到达的页面</h2><ul>' + unavailable + '</ul>' if unavailable else '') +
+        ('<h2>需要真实对象或环境的未覆盖状态</h2><ul>' + excluded + '</ul>' if excluded else '') +
         '<main>' + cards + '</main><p><a href="capture.json">完整截图记录</a></p></html>'
     )
 
@@ -253,7 +256,7 @@ def read_layout(expected=(), *, attempts=4):
     return tree
 
 
-def find_target(tree, label, *, prefix=False):
+def find_target(tree, label, *, prefix=False, first_equivalent=False):
     if tree is None:
         return None
     parents = {child: parent for parent in tree.iter() for child in parent}
@@ -279,6 +282,10 @@ def find_target(tree, label, *, prefix=False):
         if target is not None:
             left, top, right, bottom = visible_bounds(target)
             points.add(((left + right) // 2, (top + bottom) // 2))
+    # Only opt in for duplicate controls whose source invokes the same action
+    # (the team empty state and toolbar both open the same unsaved editor).
+    if first_equivalent and points:
+        return min(points, key=lambda point: (point[1], point[0]))
     return next(iter(points)) if len(points) == 1 else None
 
 
@@ -294,8 +301,9 @@ def wait_for_controls(*labels, timeout=20):
     return tree
 
 
-def tap(label, tree=None, *, prefix=False):
-    point = find_target(tree if tree is not None else read_layout(), label, prefix=prefix)
+def tap(label, tree=None, *, prefix=False, first_equivalent=False):
+    point = find_target(tree if tree is not None else read_layout(), label, prefix=prefix,
+                        first_equivalent=first_equivalent)
     if point is None:
         return False
     adb("shell", "input", "tap", str(point[0]), str(point[1]))
@@ -359,6 +367,175 @@ def navigation():
     return tree
 
 
+def scroll_page(direction="down"):
+    # Stay inside the content area, away from Android's Back gesture edges.
+    start, end = (1810, 680) if direction == "down" else (680, 1810)
+    adb("shell", "input", "swipe", "840", str(start), "840", str(end), "450")
+    REPORT["actions"].append({"action": "scroll", "direction": direction,
+                              "source": "actual Android touch input"})
+    time.sleep(1)
+    return read_layout()
+
+
+def locate_control(label, *, first_equivalent=False):
+    tree = read_layout()
+    for attempt in range(5):
+        if find_target(tree, label, prefix=True, first_equivalent=first_equivalent):
+            return tree
+        if attempt == 4:
+            break
+        prior = visible_labels(tree)
+        tree = scroll_page()
+        if visible_labels(tree) == prior:
+            break
+    return tree
+
+
+def scroll_to_top(tree):
+    for _ in range(5):
+        prior = visible_labels(tree)
+        tree = scroll_page("up")
+        if visible_labels(tree) == prior:
+            break
+    return tree
+
+
+def capture_pages(slug, title, tree, path, markers=(), *, scroll=True):
+    labels = visible_labels(tree)
+    observed = bool(all(marker in labels for marker in markers) and not find_target(tree, "关闭导航")) if markers else None
+    screenshot(slug, title, tree=tree, requested_path=list(path), destination_observed=observed)
+    if observed is False or not labels:
+        REPORT["unavailable"].append(" → ".join(path) + "：已点按入口，但当前可访问内容未确认目标；请查看实际图片。")
+    if not scroll or not labels:
+        return
+    last = labels
+    for page in range(1, 5):
+        tree = scroll_page()
+        labels = visible_labels(tree)
+        if not labels or labels == last:
+            break
+        screenshot(f"{slug}-scroll-{page}", title + f" · 向下滚动 {page}", tree=tree,
+                   requested_path=list(path))
+        last = labels
+    else:
+        REPORT["unavailable"].append(" → ".join(path) + "：已保留首屏及 4 次滚动，未宣称无限长内容全部覆盖。")
+
+
+def capture_route(path, slug, markers=(), *, dialog=False, scroll=True):
+    # Every route starts from the real drawer. Never dispatch internal routes or
+    # bridge commands; only inspect current accessible controls and tap them.
+    tree = navigation()
+    if not find_target(tree, "关闭导航"):
+        REPORT["unavailable"].append(" → ".join(path) + "：当前导航未打开。")
+        return
+    if not find_target(tree, path[0], prefix=True) and tap("更多工作区", tree, prefix=True):
+        tree = read_layout()
+    for index, label in enumerate(path):
+        if index:
+            tree = locate_control(label, first_equivalent=label == "新建团队")
+        if not tap(label, tree, prefix=True, first_equivalent=label == "新建团队"):
+            REPORT["unavailable"].append(" → ".join(path) + "：未找到当前可用入口“" + label + "”。")
+            return
+        tree = wait_for_page_surface() if index == 0 else read_layout()
+        if index == 0:
+            # The product correctly preserves per-page reading positions. Each
+            # capture starts at the real top again using touch, not injected state.
+            tree = scroll_to_top(tree)
+    capture_pages(slug, " → ".join(path), tree, path, markers, scroll=scroll)
+    if dialog:
+        # These scenarios only open forms/popovers. Do not save, send, pair,
+        # install, authorize, toggle policy, request a model or create records.
+        adb("shell", "input", "keyevent", "KEYCODE_BACK")
+        REPORT["actions"].append({"action": "dismiss", "path": list(path), "saved": False})
+        time.sleep(1)
+
+
+def capture_catalog():
+    REPORT["coverage"] = {
+        "scope": "Real fresh-install navigation, available tabs, unsaved forms and scroll positions",
+        "notCovered": [
+            {"area": "有内容的对话、流式回复、工具调用、任务轨迹和审批", "requires": "真实模型配置与真实执行记录；不植入合成消息或任务"},
+            {"area": "已保存团队、群成员、记忆详情、项目文件、文件阅读编辑与预览", "requires": "真实用户对象或文件；本任务不创建占位内容"},
+            {"area": "主屏控制、独立屏、配对设备、SSH 与电脑终端", "requires": "真实设备连接及对应授权；不伪造连接状态"},
+            {"area": "登录后账号、媒体生成、实时通话与在线服务结果", "requires": "真实账号/服务及对应授权；本任务不登录或调用付费服务"},
+            {"area": "横屏、深色、键盘、运行中和错误状态的全部组合", "requires": "对应真实状态；本次仅当前浅色竖屏，不把页面截图当功能验收"},
+        ],
+    }
+    # Base pages include the genuinely empty state of this installation.
+    pages = [
+        (("任务",), "tasks", ("任务",)),
+        (("设备",), "devices", ("设备连接",)),
+        (("记忆",), "memory", ("记忆",)),
+        (("能力",), "capabilities", ("技能与工具",)),
+        (("团队",), "teams", ("团队",)),
+        (("成果",), "artifacts", ("文件与成果",)),
+        (("项目",), "projects", ("切换项目",)),
+        (("自动化",), "automation", ("自动化",)),
+        (("设置",), "settings", ("设置",)),
+        (("设置", "AI 接入"), "ai-services", ("AI 接入", "服务与账号")),
+        (("通知",), "notifications", ()),
+        (("媒体",), "media", ()),
+        (("我的，个人资料与偏好",), "profile", ("个人资料",)),
+        (("开发诊断",), "diagnostics", ("开发诊断",)),
+    ]
+    # Read-only subpages are reached via the same visible tabs a person uses.
+    subpages = [
+        (("设备", "电脑"), "devices-computer"),
+        (("设备", "SSH"), "devices-ssh"),
+        (("设备", "本机开发"), "devices-local"),
+        (("记忆", "待审阅"), "memory-pending"),
+        (("记忆", "旧事与来源"), "memory-history"),
+        (("记忆", "学习与经验"), "memory-learning"),
+        (("能力", "插件"), "tools-plugins"),
+        (("能力", "插件", "选择版本"), "plugins-catalog"),
+        (("能力", "插件", "JS 扩展"), "plugins-js"),
+        (("能力", "插件", "完整功能包"), "plugins-packs"),
+        (("能力", "MCP"), "tools-mcp"),
+        (("能力", "工作配置"), "tools-profiles"),
+        (("团队", "协作记录"), "team-runs"),
+        (("团队", "群协作"), "team-groups"),
+        (("团队", "消息渠道"), "team-channels"),
+        (("自动化", "委托与目标"), "automation-commitments"),
+        (("媒体", "实时通话"), "media-realtime"),
+        (("设置", "AI 接入", "模型"), "ai-models"),
+        (("设置", "AI 接入", "调度"), "ai-routing"),
+        (("设置", "AI 接入", "本机 API"), "ai-local-api"),
+        (("设置", "AI 接入", "用量与诊断"), "ai-usage"),
+        (("设置", "外观与字体"), "settings-appearance"),
+        (("设置", "语音与朗读"), "settings-speech"),
+        (("设置", "系统权限"), "settings-permissions"),
+        (("设置", "观察与隐私"), "settings-observation"),
+        (("设置", "后台运行"), "settings-background"),
+        (("设置", "模型调用记录"), "settings-usage"),
+        (("设置", "项目存储"), "settings-storage"),
+        (("设置", "备份与迁移"), "settings-backups"),
+    ]
+    # No form submission or credential entry is part of a screenshot path.
+    forms = [
+        (("对话", "执行权限"), "composer-permissions"),
+        (("对话", "输入方式与选项"), "composer-options"),
+        (("对话", "选择模型"), "composer-model-picker"),
+        (("对话", "推理强度："), "composer-reasoning"),
+        (("对话", "查看上下文："), "composer-context"),
+        (("项目", "新项目"), "project-new"),
+        (("团队", "新建团队"), "team-new"),
+        (("团队", "群协作", "新建群空间"), "group-new"),
+        (("能力", "工作配置", "新建配置"), "profile-new"),
+        (("自动化", "新建提醒"), "reminder-new"),
+        (("设置", "AI 接入", "添加服务"), "ai-add-service"),
+        (("媒体", "服务配置"), "media-configuration"),
+        (("设置", "应用更新"), "application-updates"),
+    ]
+    REPORT["coverage"]["plannedPaths"] = [list(path) for path, *_ in pages + subpages + forms]
+    save_report()
+    for path, slug, markers in pages:
+        capture_route(path, slug, markers)
+    for path, slug in subpages:
+        capture_route(path, slug)
+    for path, slug in forms:
+        capture_route(path, slug, dialog=True)
+
+
 def capture_screens(apk):
     wait_for_boot()
     for args in (("wm", "size", "1080x2220"), ("wm", "density", "440"),
@@ -394,38 +571,7 @@ def capture_screens(apk):
         screenshot("navigation-unavailable", "尝试打开导航后的实际状态", tree=menu)
         return
     screenshot("navigation", "当前可访问树已显示关闭导航入口的侧栏", tree=menu)
-    destinations = [(("任务",), "tasks", ("任务",)), (("设备",), "devices", ("设备连接",)),
-                    (("记忆",), "memory", ("记忆",)), (("能力",), "capabilities", ("技能与工具",)),
-                    (("团队",), "teams", ("团队",)), (("成果",), "artifacts", ("文件与成果",)),
-                    (("项目",), "projects", ("项目",)), (("自动化",), "automation", ("自动化",)),
-                    (("设置",), "settings", ("设置",)),
-                    (("设置", "AI 接入"), "models", ("AI 接入", "服务与账号"))]
-    for path, slug, markers in destinations:
-        tree = navigation()
-        if not find_target(tree, "关闭导航"):
-            REPORT["unavailable"].append(" → ".join(path) + "：未取得当前侧栏入口，未继续点击。")
-            continue
-        label = path[0]
-        if not find_target(tree, label) and tap("更多工作区", tree, prefix=True):
-            tree = read_layout((label,))
-        clicked = tap(label, tree)
-        for label in path[1:]:
-            if not clicked:
-                break
-            tree = read_layout((label,))
-            clicked = tap(label, tree, prefix=True)
-        if not clicked:
-            REPORT["unavailable"].append(" → ".join(path) + "：当前页面未找到唯一可见且可用的入口。")
-            continue
-        # Observe the real drawer leaving before taking the destination image.
-        tree = wait_for_page_surface()
-        if visible_labels(tree) and not find_target(tree, "关闭导航"):
-            tree = read_layout((markers[-1],))
-        observed = all(marker in visible_labels(tree) for marker in markers) and not find_target(tree, "关闭导航")
-        screenshot(slug, "点按“" + " → ".join(path) + "”后的实际界面", tree=tree,
-                   requested_path=list(path), destination_observed=bool(observed))
-        if not observed:
-            REPORT["unavailable"].append(" → ".join(path) + "：已点按入口，但未从当前可见标题确认目标页面。")
+    capture_catalog()
 
 
 def main():
