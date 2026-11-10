@@ -76,7 +76,7 @@ export function currentReasoningTarget(value: any): ReasoningTarget {
 
 /** Gemini 2.5 uses thinkingBudget, not Gemini 3's thinkingLevel. */
 export function geminiBudgetModel(model: string): boolean {
-  return /^(?:models\\/)?gemini-2\\.5-(?:pro|flash|flash-lite)(?:-(?:[0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{8}))?$/.test(model);
+  return /^(?:models[/])?gemini-2[.]5-(?:pro|flash|flash-lite)(?:-(?:[0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{8}))?$/.test(model);
 }
 
 /** Choices are attached to exact native facts and never guessed from the API URL.
