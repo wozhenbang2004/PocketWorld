@@ -46,6 +46,12 @@ public final class SemanticModule implements EngineModule {
         JSONObject task=tasks.get(binding.taskId,false);
         if(task==null||!binding.runId.equals(task.optString("runId"))||binding.epoch!=task.optInt("coordinatorEpoch")
                 ||!originalControl.hasHostRun()||!originalControl.matchesHostRun(binding.taskId,binding.runId,binding.epoch))throw new SecurityException("需要原任务执行绑定");
+        if(selectedPhone instanceof dev.pocketengine.phone.DeferredPhoneSession deferred
+                &&binding.allowWrites&&"phone".equals(task.optString("kind"))
+                &&deferred.matchesHostScope(binding.taskId,binding.runId,binding.epoch)
+                &&deferred.originalControl()==originalControl&&deferred.executionMode().equals(task.optString("executionMode")))
+            return new SemanticCapabilityPort(existing,originalControl,new SemanticTaskAuthority(tasks,binding,approvalEvents),
+                    new DeferredSemanticPlatform(context.android,deferred),true,retainRun(binding,originalControl));
         PhoneAccessibilityService service=PhoneAccessibilityService.get();
         boolean dispatch=binding.allowWrites&&"phone".equals(task.optString("kind"))&&"main_screen".equals(task.optString("executionMode"))
                 &&service!=null&&selectedPhone!=null&&selectedPhone.isConnected();

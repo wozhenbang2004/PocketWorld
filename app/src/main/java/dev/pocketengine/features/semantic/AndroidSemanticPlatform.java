@@ -109,8 +109,13 @@ public final class AndroidSemanticPlatform implements SemanticPlatform {
         if(request.clock()) {
             JSONObject p=request.parameters();Intent intent=new Intent(request.kind.equals("alarm")?AlarmClock.ACTION_SET_ALARM:AlarmClock.ACTION_SET_TIMER)
                     .putExtra(AlarmClock.EXTRA_SKIP_UI,false);
-            if(request.kind.equals("alarm"))intent.putExtra(AlarmClock.EXTRA_HOUR,p.getInt("hour")).putExtra(AlarmClock.EXTRA_MINUTES,p.getInt("minutes"));
-            else intent.putExtra(AlarmClock.EXTRA_LENGTH,p.getInt("seconds"));
+            if(request.kind.equals("alarm")){
+                intent.putExtra(AlarmClock.EXTRA_HOUR,p.getInt("hour")).putExtra(AlarmClock.EXTRA_MINUTES,p.getInt("minutes"));
+                JSONArray selected=p.getJSONArray("days");ArrayList<Integer> days=new ArrayList<>();
+                for(int i=0;i<selected.length();i++)days.add(java.util.Calendar.SUNDAY+SemanticRequest.WEEKDAYS.indexOf(selected.getString(i)));
+                if(!days.isEmpty())intent.putIntegerArrayListExtra(AlarmClock.EXTRA_DAYS,days);
+                if(p.has("vibrate"))intent.putExtra(AlarmClock.EXTRA_VIBRATE,p.getBoolean("vibrate"));
+            }else intent.putExtra(AlarmClock.EXTRA_LENGTH,p.getInt("seconds"));
             if(!p.getString("message").isEmpty())intent.putExtra(AlarmClock.EXTRA_MESSAGE,p.getString("message"));
             return intent;
         }
@@ -120,7 +125,7 @@ public final class AndroidSemanticPlatform implements SemanticPlatform {
                     .putExtra(CalendarContract.Events.TITLE,p.getString("title"))
                     .putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME,p.getLong("start"))
                     .putExtra(CalendarContract.EXTRA_EVENT_END_TIME,p.getLong("end"))
-                    .putExtra(CalendarContract.EXTRA_EVENT_ALL_DAY,false)
+                    .putExtra(CalendarContract.EXTRA_EVENT_ALL_DAY,p.getBoolean("allDay"))
                     .putExtra(CalendarContract.Events.EVENT_TIMEZONE,p.getString("timeZone"))
                     .putExtra(CalendarContract.Events.EVENT_END_TIMEZONE,p.getString("timeZone"))
                     .putExtra(CalendarContract.Events.EVENT_LOCATION,p.getString("location"))

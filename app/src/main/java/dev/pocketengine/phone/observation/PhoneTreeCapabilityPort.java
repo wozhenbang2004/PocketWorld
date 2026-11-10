@@ -5,6 +5,7 @@ import dev.pocketengine.core.CapabilitySnapshot;
 import dev.pocketengine.core.NativeToolObservation;
 import dev.pocketengine.core.NativeToolPlan;
 import dev.pocketengine.core.PhonePort;
+import dev.pocketengine.phone.DeferredPhoneSession;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.capabilities.ModelCapabilityAdapters;
 import dev.pocketengine.store.TaskStore;
@@ -18,7 +19,7 @@ public final class PhoneTreeCapabilityPort implements CapabilityPort {
     private final TaskStore tasks;
     private final ModelCapabilityAdapters.Binding binding;
     private final RunControl original;
-    private final AdaptivePhonePort phone;
+    private final PhonePort phone;
     private volatile boolean closed;
     private volatile long turnAppPolicyRevision;
     private record PreparedSequence(String operation,NativeToolPlan plan) { }
@@ -26,19 +27,19 @@ public final class PhoneTreeCapabilityPort implements CapabilityPort {
     private final java.util.Set<String> attemptedScrolls=java.util.concurrent.ConcurrentHashMap.newKeySet();
     private final java.util.concurrent.atomic.AtomicBoolean scrolling=new java.util.concurrent.atomic.AtomicBoolean();
     private final dev.pocketengine.features.capabilities.TaskStoreCapabilityAuthority authority;
-    private PhoneTreeCapabilityPort(CapabilityPort existing,TaskStore tasks,ModelCapabilityAdapters.Binding binding,RunControl original,AdaptivePhonePort phone){
+    private PhoneTreeCapabilityPort(CapabilityPort existing,TaskStore tasks,ModelCapabilityAdapters.Binding binding,RunControl original,PhonePort phone){
         this.existing=Objects.requireNonNull(existing);this.tasks=Objects.requireNonNull(tasks);this.binding=Objects.requireNonNull(binding);
         this.original=Objects.requireNonNull(original);this.phone=Objects.requireNonNull(phone);
-        turnAppPolicyRevision=phone.appPolicyRevision();
+        turnAppPolicyRevision=DeferredPhoneSession.policyRevision(phone);
         authority=new dev.pocketengine.features.capabilities.TaskStoreCapabilityAuthority(tasks,binding,event->{try{tasks.event(binding.taskId,binding.runId,binding.epoch,event);}catch(Exception failed){throw new IllegalStateException("原手机审批事件保存失败",failed);}});
         for(String name:new String[]{PhoneTreeQuery.QUERY,PhoneTreeQuery.WAIT,PhoneTreeExtract.TOOL,PhoneTreeCollection.TOOL,NativeTreeScrollPort.TOOL,PhoneTreeSequence.TOOL})if(existing.supports(name))throw new IllegalArgumentException("树工具名称重复");
         for(String name:PhoneExtensionTools.NAMES)if(existing.supports(name))throw new IllegalArgumentException("手机扩展工具名称重复");
     }
     public static CapabilityPort bindIfAvailable(CapabilityPort existing,TaskStore tasks,ModelCapabilityAdapters.Binding binding,RunControl original,PhonePort selected)throws Exception {
-        if(!(selected instanceof AdaptivePhonePort))return existing;
-        JSONObject task=tasks.get(binding.taskId,false);AdaptivePhonePort phone=(AdaptivePhonePort)selected;
+        if(!DeferredPhoneSession.adaptive(selected))return existing;
+        JSONObject task=tasks.get(binding.taskId,false);PhonePort phone=selected;
         if(task==null||!"phone".equals(task.optString("kind"))||!task.optString("executionMode").matches("main_screen|background")
-                ||!phone.matchesHostScope(binding.taskId,binding.runId,binding.epoch)||!phone.isConnected())return existing;
+                ||!DeferredPhoneSession.matches(phone,binding.taskId,binding.runId,binding.epoch)||!DeferredPhoneSession.declared(phone))return existing;
         original.check();if(original.isPaused()||!original.hasHostRun()||!original.matchesHostRun(binding.taskId,binding.runId,binding.epoch))throw new SecurityException("树工具需要原手机控制器");
         return new PhoneTreeCapabilityPort(existing,tasks,binding,original,phone);
     }
@@ -101,21 +102,21 @@ public final class PhoneTreeCapabilityPort implements CapabilityPort {
             if(PhoneExtensionTools.NAMES.contains(name)){
                 if(PhoneExtensionTools.writes(name)){
                     final String op=operation;authority.requirePrepared(op,name,args);if(!scrolling.compareAndSet(false,true))return PhoneTreeExtract.unavailable("original_phone_action_in_flight");
-                    try{if(attemptedScrolls.size()>=1000||!attemptedScrolls.add(op))return PhoneTreeExtract.unavailable("original_phone_action_already_attempted");result=phone.nativeExtension(name,args,control,()->{check(name,control);authority.requirePrepared(op,name,args);});result.put("operationId",op);}finally{scrolling.set(false);}
-                }else result=phone.nativeExtension(name,args,control,null);
+                    try{if(attemptedScrolls.size()>=1000||!attemptedScrolls.add(op))return PhoneTreeExtract.unavailable("original_phone_action_already_attempted");result=DeferredPhoneSession.require(phone,control).nativeExtension(name,args,control,()->{check(name,control);authority.requirePrepared(op,name,args);});result.put("operationId",op);}finally{scrolling.set(false);}
+                }else result=DeferredPhoneSession.require(phone,control).nativeExtension(name,args,control,null);
             }else if(PhoneTreeSequence.TOOL.equals(name)){result=prepareSequence(args,operation,control);}
             else if(NativeTreeScrollPort.TOOL.equals(name)){
                 final String op=operation;authority.requirePrepared(op,name,args);
                 if(!scrolling.compareAndSet(false,true))return PhoneTreeExtract.unavailable("original_scroll_in_flight");
                 try{
                     if(attemptedScrolls.size()>=1000||!attemptedScrolls.add(op))return PhoneTreeExtract.unavailable("original_scroll_already_attempted");
-                    result=phone.scrollNode(args,control,()->{check(name,control);authority.requirePrepared(op,name,args);});result.put("operationId",op);
+                    result=DeferredPhoneSession.require(phone,control).scrollNode(args,control,()->{check(name,control);authority.requirePrepared(op,name,args);});result.put("operationId",op);
                 }finally{scrolling.set(false);}
-            }else if(PhoneTreeExtract.TOOL.equals(name))result=phone.extractTree(args,control);
+            }else if(PhoneTreeExtract.TOOL.equals(name))result=DeferredPhoneSession.require(phone,control).extractTree(args,control);
             else if(PhoneTreeCollection.TOOL.equals(name)){
                 JSONObject record=null;if("advance".equals(args.optString("action"))){JSONArray operations=tasks.get(binding.taskId,false).getJSONArray("operations");for(int i=0;i<operations.length();i++){JSONObject op=operations.getJSONObject(i);if(args.getString("afterOperationId").equals(op.optString("operationId"))){if(record!=null||!binding.runId.equals(op.optString("runId"))||!NativeTreeScrollPort.TOOL.equals(op.optString("tool")))return PhoneTreeExtract.unavailable("scroll_receipt_not_in_original_run");record=new JSONObject(op.toString());}}if(record==null)return PhoneTreeExtract.unavailable("scroll_receipt_not_in_original_run");}
-                result=phone.collectTree(args,record,control);
-            }else result=PhoneTreeQuery.QUERY.equals(name)?phone.queryTree(args,control):phone.conditionWait(args,control);
+                result=DeferredPhoneSession.require(phone,control).collectTree(args,record,control);
+            }else result=PhoneTreeQuery.QUERY.equals(name)?DeferredPhoneSession.require(phone,control).queryTree(args,control):DeferredPhoneSession.require(phone,control).conditionWait(args,control);
             try{check(name,control);}catch(Exception stopped){
                 if(result==null)throw stopped;
                 throw new CapabilityPort.ReceiptAfterStop(control,result,stopped);
@@ -124,17 +125,17 @@ public final class PhoneTreeCapabilityPort implements CapabilityPort {
         }catch(SecurityException stale){if(NativeTreeScrollPort.TOOL.equals(name)||PhoneExtensionTools.NAMES.contains(name)&&PhoneExtensionTools.writes(name))throw stale;return PhoneTreeExtract.unavailable("original_tree_or_scroll_authority_changed");}
     }
     private JSONObject prepareSequence(JSONObject args,String parentOperation,RunControl control)throws Exception {
-        PhoneTreeSequence.State state=phone.prepareSequence(args,control);
+        PhoneTreeSequence.State state=DeferredPhoneSession.require(phone,control).prepareSequence(args,control);
         android.os.UserHandle user=android.os.Process.myUserHandle();String hostUserIdentity=user.toString();
         // The authoritative display/session tuple is native adapter state, never this task JSON.
-        JSONObject anchor=phone.resolveSequenceIdentity(state,control);
+        JSONObject anchor=DeferredPhoneSession.require(phone,control).resolveSequenceIdentity(state,control);
         NativeToolPlan.Identity identity=new NativeToolPlan.Identity(binding.taskId,binding.runId,binding.epoch,
                 anchor.getInt("displayId"),anchor.getString("sessionId"),hostUserIdentity,state.initialObservation);
-        RunControl.AuthorityCheck current=()->{nativeHookControl(control);if(!user.equals(android.os.Process.myUserHandle()))throw new SecurityException("原app进程user身份已变化");phone.requireSequenceCurrent(state,null,control);};
+        RunControl.AuthorityCheck current=()->{nativeHookControl(control);if(!user.equals(android.os.Process.myUserHandle()))throw new SecurityException("原app进程user身份已变化");DeferredPhoneSession.require(phone,control).requireSequenceCurrent(state,null,control);};
         NativeToolPlan plan=NativeToolPlan.capture(PhoneTreeSequence.TOOL,parentOperation,control,identity,state.size(),(index,originalControl)->{
-            current.check();JSONObject actual=phone.resolveSequenceStep(state,index,originalControl);
-            JSONObject actualArgs=state.resolve(index,actual,phone.sequenceUptime());String freshId=actual.getString("observationId");
-            return new NativeToolPlan.Resolved(state.tool(index),actualArgs,actual,()->{current.check();phone.requireSequenceCurrent(state,freshId,originalControl);});
+            current.check();JSONObject actual=DeferredPhoneSession.require(phone,control).resolveSequenceStep(state,index,originalControl);
+            JSONObject actualArgs=state.resolve(index,actual,DeferredPhoneSession.require(phone,control).sequenceUptime());String freshId=actual.getString("observationId");
+            return new NativeToolPlan.Resolved(state.tool(index),actualArgs,actual,()->{current.check();DeferredPhoneSession.require(phone,control).requireSequenceCurrent(state,freshId,originalControl);});
         },current);
         PreparedSequence old=sequence.getAndSet(new PreparedSequence(parentOperation,plan));if(old!=null)old.plan.close();
         return PhoneTreeExtract.base().put("ok",true).put("status","prepared_native_sequence").put("steps",state.size())
@@ -158,8 +159,8 @@ public final class PhoneTreeCapabilityPort implements CapabilityPort {
     @Override public void beginRun(String goal,RunControl control)throws Exception{check(PhoneTreeQuery.QUERY,control);existing.beginRun(goal,control);}
     @Override public void prepareTurnSurface(RunControl control)throws Exception {check(PhoneTreeQuery.QUERY,control);existing.prepareTurnSurface(control);}
     @Override public void admitCapabilities(CapabilitySnapshot snapshot,RunControl control)throws Exception{existing.admitCapabilities(snapshot,control);}
-    @Override public JSONObject prepareTurn(String query,int round,int steps,RunControl control)throws Exception{check(PhoneTreeQuery.QUERY,control);turnAppPolicyRevision=phone.appPolicyRevision();JSONObject turn=existing.prepareTurn(query,round,steps,control);return turn.put("tools",PhoneExtensionTools.append(appendTools(turn.getJSONArray("tools"))));}
-    @Override public boolean responseCurrent(RunControl control)throws Exception{check(PhoneTreeQuery.QUERY,control);return turnAppPolicyRevision==phone.appPolicyRevision()&&existing.responseCurrent(control);}
+    @Override public JSONObject prepareTurn(String query,int round,int steps,RunControl control)throws Exception{check(PhoneTreeQuery.QUERY,control);turnAppPolicyRevision=DeferredPhoneSession.policyRevision(phone);JSONObject turn=existing.prepareTurn(query,round,steps,control);return turn.put("tools",PhoneExtensionTools.append(appendTools(turn.getJSONArray("tools"))));}
+    @Override public boolean responseCurrent(RunControl control)throws Exception{check(PhoneTreeQuery.QUERY,control);return turnAppPolicyRevision==DeferredPhoneSession.policyRevision(phone)&&existing.responseCurrent(control);}
     @Override public JSONObject beforeTool(String name,JSONObject args,RunControl control)throws Exception{if(owns(name))check(name,control);return existing.beforeTool(name,args,control);}
     @Override public void afterTool(String name,JSONObject args,JSONObject receipt,RunControl control)throws Exception{existing.afterTool(name,args,receipt,control);}
     @Override public void beforeModelRequest(String id,JSONArray messages,RunControl control)throws Exception{check(PhoneTreeQuery.QUERY,control);existing.beforeModelRequest(id,messages,control);}

@@ -29,6 +29,7 @@ import dev.pocketengine.core.CapabilityPort;
 import dev.pocketengine.core.ExecutionPlan;
 import dev.pocketengine.core.ExecutionPlanning;
 import dev.pocketengine.phone.observation.AdaptivePhonePort;
+import dev.pocketengine.phone.DeferredPhoneSession;
 import dev.pocketengine.runtime.context.ContextBudgetPolicy;
 import dev.pocketengine.runtime.context.RunContextBudget;
 import dev.pocketengine.runtime.context.ContextCompactor;
@@ -449,11 +450,11 @@ public final class AgentRunner {
         PhoneRouteSession routes=null;
         java.util.concurrent.atomic.AtomicBoolean historyTurnPrepared=new java.util.concurrent.atomic.AtomicBoolean();
         RecentScreenHistory screens=phone==null||control==null?null:new RecentScreenHistory(control,()->{
-            if(phone instanceof AdaptivePhonePort)((AdaptivePhonePort)phone).requireHistoryCurrent(control);
+            DeferredPhoneSession.requireHistoryCurrent(phone,control);
             // Initial/resumed observation precedes admission of this turn's capability snapshot.
             // Physical phone authority stays live; only an already prepared reference can expire.
             if(historyTurnPrepared.get()&&capabilities!=null&&!capabilities.responseCurrent(control))throw new SecurityException("历史画面来源已撤回");
-        },()->System.nanoTime()/1_000_000,phone instanceof AdaptivePhonePort&&((AdaptivePhonePort)phone).appPolicyBound()?()->((AdaptivePhonePort)phone).appPolicyRevision():null);
+        },()->System.nanoTime()/1_000_000,DeferredPhoneSession.policyBound(phone)?()->DeferredPhoneSession.policyRevision(phone):null);
         java.util.List<String> recalledScreens=new java.util.ArrayList<>();
         ContextCompactor compactor=new ContextCompactor(journal,journal==null?null:journal.compaction(),runBudgets,requestProjection);
         long[] pauseSeen = new long[]{control == null ? 0 : control.pauseRevision()};
@@ -499,11 +500,11 @@ public final class AgentRunner {
             if(repeatedTools.stopRequired())return stopForProgressGuard(taskId,journal,history,steps,evidence,initialConfig,sink,contextBudget,repeatedTools);
             intent.update(latestOwnerRecallQuery(history,saved.optString("feedback").isEmpty()?goal:saved.optString("feedback")));
             if(routes!=null)routes.ownerBoundary(latestOwnerRecallQuery(history,saved.optString("feedback").isEmpty()?goal:saved.optString("feedback")));
-            if(intent.deviceReadAllowed()&&phone!=null&&!phone.isConnected())return finish(taskId,"awaiting_user","请先开启手机操作权限，再继续任务。",evidence,steps,initialConfig,sink);
+            if(intent.deviceReadAllowed()&&control.phoneSurfaceActive()&&DeferredPhoneSession.initialized(phone)&&!phone.isConnected())return finish(taskId,"awaiting_user","请先开启手机操作权限，再继续任务。",evidence,steps,initialConfig,sink);
             requireIntentImageInput(intent,initialConfig);
-            emit(taskId, "run", "running", intent.deviceReadAllowed()?(storedMessages == null ? "开始观察手机，准备执行目标。" : "正在恢复任务并重新观察手机。"):"正在按主人讨论范围准备答复；未读取设备。", null, intent.diagnostics(), initialConfig, sink);
+            emit(taskId, "run", "running", DeferredPhoneSession.initialized(phone)&&intent.deviceReadAllowed()?(storedMessages == null ? "开始观察手机，准备执行目标。" : "正在恢复任务并重新观察手机。"):"正在处理原目标；实际使用手机时才准备并读取原显示。", null, intent.diagnostics(), initialConfig, sink);
             if(phone!=null)phone.clearReferences();
-            JSONObject latest = phone==null||!intent.deviceReadAllowed()?new JSONObject().put("noDeviceObservation",true):observe(taskId, initialConfig, control, sink,planning);
+            JSONObject latest = !DeferredPhoneSession.initialized(phone)||!control.phoneSurfaceActive()||!intent.deviceReadAllowed()?new JSONObject().put("noDeviceObservation",true):observe(taskId, initialConfig, control, sink,planning);
             evidence = latest;
             if (!latest.optBoolean("ok", true)) return finish(taskId, "awaiting_user", latest.optString("message", "无法观察当前手机，请检查页面和操作权限后继续。"), evidence, steps, initialConfig, sink);
             appendCapturedObservation(history, latest, initialConfig, contextBudget,screens,control);
@@ -544,9 +545,9 @@ public final class AgentRunner {
                 if(repeatedTools.stopRequired())return stopForProgressGuard(taskId,journal,history,steps,latest,config,sink,contextBudget,repeatedTools);
                 intent.update(recallIntent);
                 if(routes!=null){routes.ownerBoundary(recallIntent);routes.requireCurrentSources(control);}
-                if(intent.deviceReadAllowed()&&phone!=null&&!phone.isConnected())return finish(taskId,"awaiting_user","请先开启手机操作权限，再继续任务。",evidence,steps,config,sink);
+                if(intent.deviceReadAllowed()&&control.phoneSurfaceActive()&&DeferredPhoneSession.initialized(phone)&&!phone.isConnected())return finish(taskId,"awaiting_user","请先开启手机操作权限，再继续任务。",evidence,steps,config,sink);
                 requireIntentImageInput(intent,config);
-                if(intent.deviceReadAllowed()&&phone!=null&&control.phoneSurfaceActive()&&latest.optBoolean("noDeviceObservation")){
+                if(intent.deviceReadAllowed()&&DeferredPhoneSession.initialized(phone)&&control.phoneSurfaceActive()&&latest.optBoolean("noDeviceObservation")){
                     latest=observe(taskId,config,control,sink,planning);evidence=latest;appendCapturedObservation(history,latest,config,contextBudget,screens,control);
                 }
                 final ExecutionPlanning.Snapshot turnPlanning=planning==null?null:planning.capture();
@@ -575,7 +576,7 @@ public final class AgentRunner {
                     nativePlanningReference=clean(meaning+currentPlanning,config);
                 }
                 JSONArray tools=phone==null||!control.phoneSurfaceActive()?new JSONArray():tools();
-                if(control.phoneSurfaceActive()&&phone instanceof AdaptivePhonePort)addTool(tools,"phone_observation_help","当前节点中找不到目标时请求新的观察；仅在本机允许且模型已配置图像输入能力时发送真实图片，不重试业务动作。",properties("observationId","string").put("reason",new JSONObject().put("type","string").put("enum",new JSONArray().put("target_missing"))),new String[]{"observationId","reason"});
+                if(control.phoneSurfaceActive()&&DeferredPhoneSession.adaptive(phone))addTool(tools,"phone_observation_help","当前节点中找不到目标时请求新的观察；仅在本机允许且模型已配置图像输入能力时发送真实图片，不重试业务动作。",properties("observationId","string").put("reason",new JSONObject().put("type","string").put("enum",new JSONArray().put("target_missing"))),new String[]{"observationId","reason"});
                 JSONArray outcomeTools=RunOutcomeTools.tools();for(int i=0;i<outcomeTools.length();i++)tools.put(outcomeTools.getJSONObject(i));
                 if(turnPlanning!=null){JSONArray planTools=ExecutionPlan.tools(turnPlanning.planning());for(int i=0;i<planTools.length();i++)tools.put(planTools.getJSONObject(i));}
                 if(routes!=null&&control.phoneSurfaceActive()){JSONArray routeTools=routes.tools();for(int i=0;i<routeTools.length();i++)tools.put(routeTools.getJSONObject(i));}
@@ -852,8 +853,8 @@ public final class AgentRunner {
                 if(memoryDependency!=null)evidence.put("memoryContext",memoryDependency);
                 if (calls == null || calls.length() == 0) {
                     if (answer.isEmpty()) throw new ModelGateway.GatewayException("模型没有返回文字或工具调用，请换用支持手机工具的模型。");
-                    emit(taskId, "verification", "running", intent.deviceReadAllowed()?"正在重新观察结果，等待你确认。":"已按讨论范围答复；没有读取或操作设备。", null, intent.diagnostics(), config, sink);
-                    evidence = phone==null||!intent.deviceReadAllowed()?new JSONObject().put("noDeviceObservation",true):observe(taskId, config, control, sink,planning,turnPlanning);
+                    emit(taskId, "verification", "running", intent.deviceReadAllowed()&&DeferredPhoneSession.initialized(phone)?"正在重新观察结果，等待你确认。":"正在根据本次实际工具结果整理答复。", null, intent.diagnostics(), config, sink);
+                    evidence = !DeferredPhoneSession.initialized(phone)||!control.phoneSurfaceActive()||!intent.deviceReadAllowed()?new JSONObject().put("noDeviceObservation",true):observe(taskId, config, control, sink,planning,turnPlanning);
                     requirePlanningCurrent(planning,turnPlanning);
                     evidence.put("modelSummary", clean(answer, config));
                     int finalAnswerIndex=history.length();JSONObject finalMessage=new JSONObject().put("role","assistant").put("content",clean(answer,config)).put("nativeTraceCallId",nativeRequest[0]);if(response.optJSONObject("provider_data")!=null)finalMessage.put("provider_data",safeJson(response.getJSONObject("provider_data"),config,false));history.put(finalMessage);
@@ -891,7 +892,7 @@ public final class AgentRunner {
                     requirePlanningCurrent(planning,turnPlanning);
                     RunControl.HostRunIdentity finalRun=control.hostRunIdentity();
                     if(finalRun!=null){evidence.put("nativeFinalAnswer",new JSONObject().put("format","pocketworld.runner-final-answer.v1").put("taskId",taskId).put("runId",finalRun.runId()).put("coordinatorEpoch",finalRun.epoch()).put("messageIndex",finalAnswerIndex).put("historyLength",history.length()).put("answerFingerprint",CompactionPlan.fingerprint(finalMessage.getString("content"))).put("inputBoundaryEmpty",true));if(routes!=null){JSONObject candidate=routes.candidate(control);if(candidate!=null)evidence.put("nativePhoneRoute",candidate);}checkpoint(taskId,journal,history,steps,evidence,config,sink,contextBudget,repeatedTools);}
-                    String verificationNotice = !intent.deviceReadAllowed()?"以下仅为讨论答复；没有读取或操作设备。":phone==null?"以下答复基于实际工具结果；外部效果仍以对应收据为准。":evidence.optBoolean("ok", true) ? "模型已结束操作，请核对当前页面。" : "结果页面暂时无法重新读取，请在手机上亲自确认。";
+                    String verificationNotice = !intent.deviceReadAllowed()?"以下仅为讨论答复；没有读取或操作设备。":!DeferredPhoneSession.initialized(phone)?"以下答复基于实际工具结果；本次未启用手机，外部效果仍以对应收据为准。":evidence.optBoolean("ok", true) ? "模型已结束操作，请核对当前页面。" : "结果页面暂时无法重新读取，请在手机上亲自确认。";
                     return finish(taskId, "needs_confirmation", verificationNotice + "\n" + clean(answer, config), evidence, steps, config, sink);
                 }
                 if (calls.length() > 8) throw new ModelGateway.GatewayException("模型一次请求了过多手机动作，请更换模型或缩短目标。");
@@ -979,7 +980,7 @@ public final class AgentRunner {
                         else if(RunOutcomeTools.supports(name))RunOutcomeTools.validate(name,args);
                         else if(PhoneRouteSession.supports(name)){if(routes==null||!control.phoneSurfaceActive())throw new IllegalArgumentException("route_unavailable");PhoneRouteSession.validate(name,args);}
                         else if(RecentScreenHistory.supports(name)){if(screens==null||!control.phoneSurfaceActive()||!config.sendScreenshots||!imageInputAvailable(config))throw new IllegalArgumentException("history_unavailable");RecentScreenHistory.validate(name,args);}
-                        else if(capabilities!=null&&capabilities.supports(name))capabilities.validate(name,args);else{if(phone==null||"phone_observation_help".equals(name)&&!(phone instanceof AdaptivePhonePort))throw new IllegalArgumentException("Unavailable tool");validate(name,args,latest);}
+                        else if(capabilities!=null&&capabilities.supports(name))capabilities.validate(name,args);else{if(phone==null||"phone_observation_help".equals(name)&&!(DeferredPhoneSession.adaptive(phone)))throw new IllegalArgumentException("Unavailable tool");validate(name,args,latest);}
                         // These records retain complete original arguments. Refuse text that the
                         // existing secret filter would change, rather than save a different plan
                         // or leak a known current credential into the original read ledger.
@@ -1035,6 +1036,25 @@ public final class AgentRunner {
                             checkpoint(taskId,journal,history,steps,latest,config,toolSink,contextBudget,repeatedTools);diagnosticToolReceipt(toolDiagnostic,receipt);emit(taskId,"tool",gateOutcome.eventStatus(),receipt.optString("message","工具被原生前置策略拒绝，尚未执行。"),name,receipt,config,toolSink);
                             if(needsStop){evidence=new JSONObject(receipt.toString());if(gateOutcome.requiresReconciliation())evidence.put("requiresReconciliation",true);return finish(taskId,"awaiting_user",receipt.optString("message","原任务需要主人处理或核对；本批余下调用没有派发。"),evidence,steps,config,toolSink);}
                             batchContinuation.stopSequenceAndObservations();if(stale||activeStep!=null)break;continue;
+                        }
+                    }
+                    // Device preparation is itself deferred until a validated, policy-admitted
+                    // phone call. Rejections and ordinary chat/web/local calls never open a screen.
+                    if(phone instanceof DeferredPhoneSession deferred&&!deferred.initialized()&&usesPhysicalPhone(name)){
+                        try{deferred.requireAdapter(control);}
+                        catch(RunControl.ConditionWaitException waiting){throw waiting;}
+                        catch(InterruptedException stopped){throw stopped;}
+                        catch(Exception unavailable){
+                            control.check();
+                            receipt=failure("phone_preparation_unavailable","本次手机调用尚未派发；"+DeferredPhoneSession.preparationMessage(unavailable,config))
+                                    .put("accepted",false).put("nativeDispatched",false).put("effectStatus","not_dispatched").put("requiresPause",true).put("automaticReplayAllowed",false);
+                            if(unavailable instanceof DeferredPhoneSession.PreparationFailure preparation)receipt.put("phonePreparation",preparation.evidence());
+                            history.put(toolResult(call,receipt,config));
+                            appendUnissuedReplies(history,calls,index+1,failure("batch_tail_not_dispatched","手机尚未准备完成；本批后续调用未派发，原任务及已有回执保留。").put("accepted",false).put("nativeDispatched",false).put("effectStatus","not_dispatched"),config);
+                            evidence=new JSONObject(receipt.toString());
+                            checkpoint(taskId,journal,history,steps,latest,config,toolSink,contextBudget,repeatedTools);
+                            diagnosticToolReceipt(toolDiagnostic,receipt);emit(taskId,"tool","awaiting_user",receipt.getString("message"),name,receipt,config,toolSink);
+                            return finish(taskId,"awaiting_user",receipt.getString("message"),evidence,steps,config,toolSink);
                         }
                     }
                     if(ExecutionPlan.supports(name)){
@@ -1107,7 +1127,7 @@ public final class AgentRunner {
                         observed = true;
                     } else if ("phone_observation_help".equals(name)) {
                         toolTrace.dispatchEntered();
-                        receipt=((AdaptivePhonePort)phone).requestUpgrade(args.getString("observationId"),AdaptiveObservationPolicy.Need.TARGET_MISSING,control);
+                        receipt=DeferredPhoneSession.require(phone,control).requestUpgrade(args.getString("observationId"),AdaptiveObservationPolicy.Need.TARGET_MISSING,control);
                         latest=receipt;evidence=receipt;observed=true;
                     } else if ("phone_wait".equals(name)) {
                         toolTrace.dispatchEntered();
@@ -1246,7 +1266,7 @@ public final class AgentRunner {
                         dev.pocketengine.core.NativeToolPlan proposed=routes!=null&&PhoneRouteSession.REPLAY.equals(name)?routes.take(nativeOperation,control):capabilities==null?null:capabilities.takeToolPlan(name,nativeOperation,control);
                         if(proposed!=null){nativePlans.add(proposed);nativeSequenceProgress.put(proposed,new NativeSequenceProgress(nativeOperation,toolTrace.id(),proposed.size()));if(activePlan!=null)throw new SecurityException("native_sequence_nested_plan_forbidden");try{proposed.consume(name,nativeOperation,control);activePlan=proposed;}catch(Exception stale){proposed.close();control.check();batchContinuation.stopSequenceAndObservations();emit(taskId,"native_sequence","failed","短序列的现场已改变，未派发其中动作。",name,failure("native_sequence_not_dispatched","请按当前现场重新规划。").put("accepted",false),config,toolSink);}}
                     }
-                    if (phone!=null&&control.phoneSurfaceActive()&&(changesScreen(name) || "phone_wait".equals(name))) {
+                    if (DeferredPhoneSession.initialized(phone)&&control.phoneSurfaceActive()&&(changesScreen(name) || "phone_wait".equals(name))) {
                         control.checkpoint();
                         if(control.pauseRevision()!=pauseSeen[0]){
                             withdrawHistoricalImages(screens,history,control);historyTurnPrepared.set(false);
@@ -1581,7 +1601,7 @@ public final class AgentRunner {
         return capabilities!=null&&capabilities.supports(name)?capabilities.sideEffecting(name):sideEffecting(name);
     }
     private void requireIntentImageInput(OwnerIntent intent,ModelConfig config)throws Exception {
-        if(intent.deviceReadAllowed()&&phone!=null&&config.usesAccount()&&config.sendScreenshots&&!ModelGateway.accountSupportsImageInput(config.accountModel)&&!(phone instanceof AdaptivePhonePort))throw new ModelGateway.GatewayException("所选 ChatGPT 账号模型没有当前授权版本的图片能力证据；请刷新目录并重新选择，或明确关闭截图使用节点文字模式。");
+        if(intent.deviceReadAllowed()&&phone!=null&&config.usesAccount()&&config.sendScreenshots&&!ModelGateway.accountSupportsImageInput(config.accountModel)&&!(DeferredPhoneSession.adaptive(phone)))throw new ModelGateway.GatewayException("所选 ChatGPT 账号模型没有当前授权版本的图片能力证据；请刷新目录并重新选择，或明确关闭截图使用节点文字模式。");
     }
 
     private static boolean sideEffecting(String name) {
@@ -1658,7 +1678,7 @@ public final class AgentRunner {
             emit(taskId, "run", "running", intent.deviceReadAllowed()?"已继续，正在重新观察当前页面。":"已继续讨论；未读取设备。", null, intent.diagnostics(), config, sink);
             if(!intent.deviceReadAllowed())return new JSONObject().put("noDeviceObservation",true);
             requireIntentImageInput(intent,config);
-            if(phone!=null&&control.phoneSurfaceActive())return observe(taskId, config, control, sink,planning);
+            if(DeferredPhoneSession.initialized(phone)&&control.phoneSurfaceActive())return observe(taskId, config, control, sink,planning);
             if(capabilities!=null&&capabilities.supports("browser_task_observe")){
                 // This native query returns data only for the exact owner-return nonce registered
                 // by BrowserTaskHost. Other pages and ordinary context queries cannot start a read.
@@ -1821,6 +1841,11 @@ public final class AgentRunner {
     }
 
     private static void coordinate(JSONObject args, String key) throws Exception { integer(args, key, 0, 1000); }
+
+    private static boolean usesPhysicalPhone(String name){
+        return "semantic_discover".equals(name)||name!=null&&name.startsWith("phone_")&&!java.util.Set.of("phone_wait","phone_request_user",
+                PhoneRouteSession.LIST,PhoneRouteSession.FORGET).contains(name)&&!RecentScreenHistory.supports(name);
+    }
 
     private static boolean changesScreen(String name) {
         return !RunOutcomeTools.supports(name)&&!dev.pocketengine.phone.observation.PhoneTreeQuery.supports(name) && !"phone_list_apps".equals(name) && !"phone_observe".equals(name) && !"phone_observation_help".equals(name) && !"phone_request_user".equals(name);

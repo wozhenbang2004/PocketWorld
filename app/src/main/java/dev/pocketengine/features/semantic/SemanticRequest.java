@@ -10,6 +10,8 @@ import org.json.JSONObject;
 
 /** Typed public Android entry points. There is deliberately no raw Intent or arbitrary extras API. */
 public final class SemanticRequest {
+    static final java.util.List<String> WEEKDAYS=java.util.List.of("SUN","MON","TUE","WED","THU","FRI","SAT");
+    private static final long DAY_MS=86_400_000L;
     public final String kind,action,data,host;
     private final JSONObject parameters;
 
@@ -60,23 +62,27 @@ public final class SemanticRequest {
                 SemanticJson.text(p,"body",4000,true);
                 action="android.intent.action.SENDTO";data="mailto:"+encode(to).replace("%40","@");break;
             case "calendar_draft": {
-                SemanticJson.keys(p,Set.of("kind","title","start","end","timeZone","location","description"));
+                SemanticJson.keys(p,Set.of("kind","title","start","end","timeZone","allDay","location","description"));
                 String title=SemanticJson.text(p,"title",200,false),zone=SemanticJson.text(p,"timeZone",80,false);
                 if(title.matches("(?s).*[\\p{Cntrl}].*")||!ZoneId.getAvailableZoneIds().contains(zone))
                     throw new IllegalArgumentException("日历草稿需要单行标题和明确的IANA时区，例如Asia/Shanghai或UTC");
                 long start=calendarTime(p,"start"),end=calendarTime(p,"end");
                 if(end<=start)throw new IllegalArgumentException("日历草稿结束时间必须晚于开始时间");
+                boolean allDay=booleanValue(p,"allDay",false);
+                if(allDay&&(!"UTC".equals(zone)||start%DAY_MS!=0||end%DAY_MS!=0))
+                    throw new IllegalArgumentException("全天日历须使用UTC时区与UTC午夜毫秒；start包含开始日期，end是不包含的结束日期");
                 if(!p.has("location"))p.put("location","");if(!p.has("description"))p.put("description","");
                 if(SemanticJson.text(p,"location",500,true).matches("(?s).*[\\p{Cntrl}].*"))
                     throw new IllegalArgumentException("日历地点需要单行文字");
-                SemanticJson.text(p,"description",4000,true);p.put("start",start).put("end",end);
+                SemanticJson.text(p,"description",4000,true);p.put("start",start).put("end",end).put("allDay",allDay);
                 // Fixed public CalendarContract values. Android construction uses the public
                 // constants; caller-supplied content URIs, calendar IDs and extras are forbidden.
                 action="android.intent.action.INSERT";data="content://com.android.calendar/events";break;
             }
             case "alarm":
-                SemanticJson.keys(p,Set.of("kind","hour","minutes","message"));
+                SemanticJson.keys(p,Set.of("kind","hour","minutes","message","days","vibrate"));
                 p.put("hour",clockInteger(p,"hour",0,23)).put("minutes",clockInteger(p,"minutes",0,59));
+                p.put("days",alarmDays(p));if(p.has("vibrate"))p.put("vibrate",booleanValue(p,"vibrate",false));
                 clockMessage(p);action="android.intent.action.SET_ALARM";data="";break;
             case "timer":
                 SemanticJson.keys(p,Set.of("kind","seconds","message"));
@@ -91,6 +97,23 @@ public final class SemanticRequest {
         if(!pkg.matches("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+"))throw new IllegalArgumentException("入口需要准确应用包名");return pkg;
     }
     private static String encode(String value) throws java.io.UnsupportedEncodingException { return URLEncoder.encode(value,"UTF-8").replace("+","%20"); }
+    private static boolean booleanValue(JSONObject p,String key,boolean fallback) {
+        if(!p.has(key))return fallback;Object value=p.opt(key);
+        if(!(value instanceof Boolean))throw new IllegalArgumentException("语义参数需要布尔值："+key);
+        return (Boolean)value;
+    }
+    private static JSONArray alarmDays(JSONObject p)throws Exception {
+        if(!p.has("days"))return new JSONArray();Object raw=p.opt("days");
+        if(!(raw instanceof JSONArray)||((JSONArray)raw).length()>7)throw new IllegalArgumentException("闹钟重复星期需要至多7项SUN至SAT字符串");
+        JSONArray supplied=(JSONArray)raw;Set<String> selected=new java.util.HashSet<>();
+        for(int i=0;i<supplied.length();i++){
+            Object value=supplied.get(i);if(!(value instanceof String)||((String)value).length()>16)throw new IllegalArgumentException("闹钟重复星期只能使用SUN至SAT字符串");
+            String day=((String)value).trim().toUpperCase(java.util.Locale.ROOT);
+            if(!WEEKDAYS.contains(day))throw new IllegalArgumentException("未知闹钟重复星期："+day);
+            selected.add(day);
+        }
+        JSONArray normalized=new JSONArray();for(String day:WEEKDAYS)if(selected.contains(day))normalized.put(day);return normalized;
+    }
     private static int clockInteger(JSONObject p,String key,int min,int max) {
         Object value=p.opt(key);if(!(value instanceof Number))throw new IllegalArgumentException("时钟参数需要范围内整数："+key);
         try{int n=new BigDecimal(value.toString()).intValueExact();if(n<min||n>max)throw new ArithmeticException("outside clock range");return n;}
@@ -121,11 +144,17 @@ public final class SemanticRequest {
             p.put(key,new JSONObject().put("type","string").put("maxLength",key.equals("body")?4000:key.equals("url")?2048:key.equals("query")?500:key.equals("number")?32:key.equals("to")?254:200));
         for(String key:new String[]{"title","timeZone","location","description"})
             p.put(key,new JSONObject().put("type","string").put("maxLength",key.equals("description")?4000:key.equals("location")?500:key.equals("timeZone")?80:200));
-        for(String key:new String[]{"start","end"})p.put(key,new JSONObject().put("type","integer").put("minimum",0).put("maximum",253402300799999L));
+        p.getJSONObject("timeZone").put("description","calendar_draft的明确IANA时区；allDay=true时必须为UTC。");
+        for(String key:new String[]{"start","end"})p.put(key,new JSONObject().put("type","integer").put("minimum",0).put("maximum",253402300799999L)
+                .put("description",key.equals("start")?"calendar_draft开始UTC毫秒；全天须为开始日期的UTC午夜，包含此日期。":"calendar_draft结束UTC毫秒；全天须为结束日期的UTC午夜，不包含此日期。"));
+        p.put("allDay",new JSONObject().put("type","boolean").put("description","仅calendar_draft；默认false。true要求start/end均为UTC午夜且timeZone=UTC；一天日程的end是次日午夜。"));
         p.put("hour",new JSONObject().put("type","integer").put("minimum",0).put("maximum",23))
                 .put("minutes",new JSONObject().put("type","integer").put("minimum",0).put("maximum",59))
                 .put("seconds",new JSONObject().put("type","integer").put("minimum",1).put("maximum",86400))
-                .put("message",new JSONObject().put("type","string").put("maxLength",120));
+                .put("message",new JSONObject().put("type","string").put("maxLength",120))
+                .put("days",new JSONObject().put("type","array").put("maxItems",7).put("items",new JSONObject().put("type","string").put("enum",new JSONArray(WEEKDAYS)))
+                        .put("description","仅alarm；重复星期SUN、MON、TUE、WED、THU、FRI、SAT。省略或空数组为一次性；输入会去重并按SUN至SAT排序后审批。"))
+                .put("vibrate",new JSONObject().put("type","boolean").put("description","仅alarm；明确请求开启或关闭震动，省略则不指定。实际设置仍须在目标App核验。"));
         return new JSONObject().put("type","object").put("properties",p).put("required",new JSONArray(new String[]{"kind"})).put("additionalProperties",false);
     }
 }

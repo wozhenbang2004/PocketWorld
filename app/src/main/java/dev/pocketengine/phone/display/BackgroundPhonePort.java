@@ -415,7 +415,7 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
                     .put("changedDuringRead",changedDuringRead).put("coordinateActionsAvailable",coordinatesAvailable);
             if(observed.geometry!=null)observed.geometry.writeTo(out,true);
             if(frame.optBoolean("empty"))out.put("screenState","display_has_no_frame").put("imageUnavailable",true);
-            String imageReason=imageIncluded?"display_surface_frame":includeImage?(framePending?"frame_pending":"frame_unavailable"):"not_requested_frame_generation_only";
+            String imageReason=imageIncluded?"display_surface_frame":includeImage?(framePending?"frame_pending":frame.optString("imageUnavailableReason","frame_unavailable")):"not_requested_frame_generation_only";
             if(includeImage&&!imageIncluded)out.put("imageUnavailable",true).put("imageUnavailableReason",imageReason);
             module.attachInstalledAppEvidence(out);
             after.forest.attach(out);
@@ -423,7 +423,13 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
                     .put("imageWidth",observed.width).put("imageHeight",observed.height);
             if(imageIncluded&&!ObservationReport.hasImage(out))return failure("invalid_frame","后台助手没有返回有效的图片字节。");
             ObservationReport.attach(out,after.available,after.available?"accessibility_tree":"no_accessible_root",imageIncluded,imageReason);
-            attachObservedProfile(out,profileBefore,landing(control,revision),displayId);
+            JSONObject profileAfter=landing(control,revision);
+            attachObservedProfile(out,profileBefore,profileAfter,displayId);
+            if(!imageIncluded&&before.nodes.length()==0&&after.nodes.length()==0&&after.packageName.isEmpty()
+                    &&dev.pocketengine.phone.access.PhoneOwnerPackages.provesEmptyOwnedDisplay(profileBefore,displayId)
+                    &&dev.pocketengine.phone.access.PhoneOwnerPackages.provesEmptyOwnedDisplay(profileAfter,displayId))
+                out.put("screenState","display_has_no_app").put("emptyDisplayVerified",true)
+                        .put("message","原独立显示尚无应用任务，可先列出并打开应用；当前没有可用于坐标操作的内容。");
             checkGeometry(observed.geometry,observed.width,observed.height,observed.displayRevision);
             current=observed;cached=new JSONObject(out.toString());return out;
         }catch(InterruptedException cancelled){throw cancelled;}

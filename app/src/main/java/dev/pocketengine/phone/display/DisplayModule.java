@@ -340,6 +340,18 @@ public final class DisplayModule implements EngineModule {
         connect(control);if(releasePending||state.optBoolean("recoveryRequired"))release();
         if(!state.optBoolean("sessionActive"))create(new JSONObject(),control);return snapshot();
     }
+    /** The original owner's explicit takeover can prepare an unused screen while the runner stays paused. */
+    public JSONObject prepareForOwner(RunControl original,long revision,dev.pocketengine.phone.observation.NativePhoneEntry.Admission admission)throws Exception {
+        java.util.Objects.requireNonNull(admission).check();original.check();
+        if(!original.isPaused()||original.pauseRevision()!=revision)throw new SecurityException("原接管暂停代次已变化");
+        pinOwner(original);RunSession run=requireRun(original);
+        synchronized(run){
+            connectRun(run,original,revision,true);admission.check();
+            if(runReady(run))return session(original);
+            if(run.created||run.released||run.creationPending||run.state.optBoolean("recoveryRequired"))throw new SecurityException("原后台显示需要核对，不能自动重建");
+            return createRun(new JSONObject(),run,revision,true,admission);
+        }
+    }
     private static RunControl.HostRunIdentity identity(RunControl control){
         if(control==null||control.hostRunIdentity()==null)throw new SecurityException("原任务运行身份缺失");
         return control.hostRunIdentity();
@@ -432,6 +444,9 @@ public final class DisplayModule implements EngineModule {
         acceptStatus(answer);return session(id,display);
     }
     private JSONObject createRun(JSONObject input,RunSession run)throws Exception {
+        return createRun(input,run,run.control.pauseRevision(),false,null);
+    }
+    private JSONObject createRun(JSONObject input,RunSession run,long revision,boolean ownerEntry,dev.pocketengine.phone.observation.NativePhoneEntry.Admission admission)throws Exception {
         if(requireRun(run.control)!=run||run.control.isCancelled())throw new SecurityException("原后台运行已停止");
         if(run.created||run.released||run.creationPending||run.state.optBoolean("sessionActive")||run.state.optBoolean("recoveryRequired"))throw new IllegalStateException("原运行已有后台显示或待核对记录");
         if(state.optBoolean("sessionActive")||releasePending)throw new IllegalStateException("请先释放原手动后台显示");
@@ -439,7 +454,7 @@ public final class DisplayModule implements EngineModule {
         JSONObject args=wireFor(run,input);args.remove("sessionId");args.remove("displayId");
         run.creationPending=true;
         try{
-            JSONObject answer=call("create",args,run.control);requireOk(answer);validateRunReply(run,answer);
+            JSONObject answer=call("create",args,run.control,revision,ownerEntry,admission);requireOk(answer);validateRunReply(run,answer);
             if(answer.optInt("displayId",-1)<=0||answer.optString("sessionId").isEmpty()||answer.isNull("sessionId"))throw new SecurityException("后台助手返回了无效显示");
             dev.pocketengine.displayhelper.DisplayGeometry.read(answer);
             run.state=withOwner(publicState(answer).put("sessionActive",true),run.owner);run.created=true;run.creationPending=false;

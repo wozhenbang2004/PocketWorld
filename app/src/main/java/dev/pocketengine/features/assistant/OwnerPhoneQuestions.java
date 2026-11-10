@@ -2,6 +2,7 @@ package dev.pocketengine.features.assistant;
 
 import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.core.PhonePort;
+import dev.pocketengine.phone.DeferredPhoneSession;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.assistant.notifications.OwnerQuestionReply;
 import dev.pocketengine.store.TaskExecutionScope;
@@ -23,17 +24,17 @@ public final class OwnerPhoneQuestions {
     @FunctionalInterface public interface Dispatch { void run()throws Exception; }
     private Held held;
     public static final class Held {
-        private final OwnerPhoneQuestions issuer;private final RunControl control;private final PhonePort physical;private final ModelConfig model;private final PhysicalOwner owner;
+        private final OwnerPhoneQuestions issuer;private final RunControl control;private final PhonePort physical;private final DeferredPhoneSession pending;private final ModelConfig model;private final PhysicalOwner owner;
         private final String task,run,request,holdId,grantFingerprint;private final int epoch;private final long revision,pauseRevision,generation,expiresAt;
         private Held(OwnerPhoneQuestions issuer,JSONObject task,JSONObject question,JSONObject grant,RunControl original,PhonePort physical,ModelConfig model,long generation,PhysicalOwner owner)throws Exception{
-            this.issuer=issuer;this.control=original;this.physical=physical;this.model=model;this.owner=owner;this.task=task.getString("id");run=task.getString("runId");epoch=task.getInt("coordinatorEpoch");request=question.getString("requestId");revision=question.getLong("waitRevision");
+            this.issuer=issuer;this.control=original;this.pending=physical instanceof DeferredPhoneSession?(DeferredPhoneSession)physical:null;this.physical=pending==null?physical:null;this.model=model;this.owner=owner;this.task=task.getString("id");run=task.getString("runId");epoch=task.getInt("coordinatorEpoch");request=question.getString("requestId");revision=question.getLong("waitRevision");
             pauseRevision=original.pauseRevision();this.generation=generation;expiresAt=grant.getLong("expiresAt");grantFingerprint=TaskStore.capabilityFingerprint(grant);holdId=UUID.randomUUID().toString();
         }
         public String taskId(){return task;}public String runId(){return run;}public int epoch(){return epoch;}public String requestId(){return request;}public long waitRevision(){return revision;}
         public long pauseRevision(){return pauseRevision;}public long waitGeneration(){return generation;}public long expiresAt(){return expiresAt;}public String grantFingerprint(){return grantFingerprint;}
-        public RunControl originalControl(){return control;}public PhonePort physicalPort(){return physical;}public ModelConfig capturedModel(){return model;}
-        public JSONObject view()throws Exception{return new JSONObject().put("format",HOLD).put("taskId",task).put("runId",run).put("epoch",epoch).put("requestId",request).put("waitRevision",revision).put("pauseRevision",pauseRevision).put("waitGeneration",generation).put("holdId",holdId).put("executionAuthorized",false);}
-        public void requireOriginal()throws Exception{if(!issuer.current(this)||control.isCancelled()||!control.isPaused()||control.pauseRevision()!=pauseRevision||!control.matchesHostRun(task,run,epoch))throw new SecurityException("原手机问题暂停控制已变化");owner.requireHeld(this);}
+        public RunControl originalControl(){return control;}public PhonePort physicalPort(){return physical;}public DeferredPhoneSession pendingSession(){return pending;}public ModelConfig capturedModel(){return model;}
+        public JSONObject view()throws Exception{return new JSONObject().put("format",HOLD).put("taskId",task).put("runId",run).put("epoch",epoch).put("requestId",request).put("waitRevision",revision).put("pauseRevision",pauseRevision).put("waitGeneration",generation).put("holdId",holdId).put("physicalDisplayHeld",physical!=null).put("phoneInitializationPending",pending!=null).put("executionAuthorized",false);}
+        public void requireOriginal()throws Exception{if(pending!=null)pending.requirePendingHold(control);if(!issuer.current(this)||control.isCancelled()||!control.isPaused()||control.pauseRevision()!=pauseRevision||!control.matchesHostRun(task,run,epoch))throw new SecurityException("原手机问题暂停控制已变化");owner.requireHeld(this);}
         public void requestContinuation()throws Exception{requireOriginal();owner.requestContinuation(this);}
         public boolean matches(String task,String run,int epoch,String request,long revision){return this.task.equals(task)&&this.run.equals(run)&&this.epoch==epoch&&this.request.equals(request)&&this.revision==revision;}
     }

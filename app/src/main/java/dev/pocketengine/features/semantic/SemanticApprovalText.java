@@ -38,14 +38,26 @@ public final class SemanticApprovalText {
                 case "calendar_draft":
                     field(text,request,"title","日历标题");
                     long start=request.getLong("start"),end=request.getLong("end");String zone=request.getString("timeZone");
-                    text.append("开始 UTC：").append(Instant.ofEpochMilli(start)).append("\n结束 UTC：").append(Instant.ofEpochMilli(end))
-                            .append("\n请求时区：").append(zone)
-                            .append("\n请求显示开始：").append(DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(Instant.ofEpochMilli(start).atZone(ZoneId.of(zone))))
-                            .append("\n请求显示结束：").append(DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(Instant.ofEpochMilli(end).atZone(ZoneId.of(zone)))).append('\n');
+                    if(booleanValue(request,"allDay",false)){
+                        text.append("全天：是\n开始日期（含）：").append(Instant.ofEpochMilli(start).atZone(ZoneId.of("UTC")).toLocalDate())
+                                .append("\n结束日期（不含）：").append(Instant.ofEpochMilli(end).atZone(ZoneId.of("UTC")).toLocalDate())
+                                .append("\n日期按UTC午夜传递，结束日期不计入此日程。\n");
+                    }else text.append("全天：否\n开始 UTC：").append(Instant.ofEpochMilli(start)).append("\n结束 UTC：").append(Instant.ofEpochMilli(end))
+                                .append("\n请求时区：").append(zone)
+                                .append("\n请求显示开始：").append(DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(Instant.ofEpochMilli(start).atZone(ZoneId.of(zone))))
+                                .append("\n请求显示结束：").append(DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(Instant.ofEpochMilli(end).atZone(ZoneId.of(zone)))).append('\n');
                     field(text,request,"location","地点");field(text,request,"description","描述");
                     text.append("打开日历编辑器；第三方可能自动保存或创建事件，退出不保证取消。实际显示时区可能不同，请核对目标、时间和保存结果。\n");break;
                 case "alarm":
                     text.append("闹钟时间：").append(String.format(java.util.Locale.ROOT,"%02d:%02d",request.getInt("hour"),request.getInt("minutes"))).append("（设备时区：").append(identity.getString("deviceTimeZone")).append("）\n");
+                    JSONArray days=request.has("days")?request.getJSONArray("days"):new JSONArray();text.append("重复星期：");
+                    if(days.length()==0)text.append("不重复（一次性）");
+                    for(int i=0;i<days.length();i++){
+                        if(i>0)text.append("、");String day=days.getString(i);
+                        String label=switch(day){case "SUN"->"周日";case "MON"->"周一";case "TUE"->"周二";case "WED"->"周三";case "THU"->"周四";case "FRI"->"周五";case "SAT"->"周六";default->throw new IllegalArgumentException("未知星期");};
+                        text.append(label).append("（").append(day).append('）');
+                    }
+                    text.append("\n震动：").append(request.has("vibrate")?booleanValue(request,"vibrate",false)?"开启":"关闭":"未指定，使用接收App默认行为").append('\n');
                     field(text,request,"message","提示");clockWarning(text);break;
                 case "timer":
                     text.append("计时长度：").append(request.getInt("seconds")).append("秒\n设备时区：").append(identity.getString("deviceTimeZone")).append('\n');
@@ -57,6 +69,10 @@ public final class SemanticApprovalText {
     }
     private static void field(StringBuilder text,JSONObject request,String key,String label)throws Exception {
         text.append(label).append('：').append(request.getString(key)).append('\n');
+    }
+    private static boolean booleanValue(JSONObject request,String key,boolean fallback)throws Exception {
+        if(!request.has(key))return fallback;Object value=request.get(key);
+        if(!(value instanceof Boolean))throw new IllegalArgumentException("入口布尔参数无效");return(Boolean)value;
     }
     private static void clockWarning(StringBuilder text){text.append("系统时钟请求可能立即创建或开始计时；会请求显示界面，但不保证接收App另有确认或退出可撤销。请仅在同意这些参数时批准，并在时钟App核对实际结果。\n");}
 }

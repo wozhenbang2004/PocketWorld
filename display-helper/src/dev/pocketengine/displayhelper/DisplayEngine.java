@@ -383,6 +383,16 @@ final class DisplayEngine {
         Bitmap bitmap=Bitmap.createBitmap(original.width,original.height,Bitmap.Config.ARGB_8888);
         try{
             bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(pixels));ByteArrayOutputStream jpeg=new ByteArrayOutputStream();
+            if(blackFrame(bitmap)){
+                requireGeometry(expected,original);
+                // Black pixels are not proof of FLAG_SECURE. Keep the real tree/metadata,
+                // but do not offer a content-free raster to OCR or coordinate selection.
+                synchronized(frameLock){
+                    if(latestPixels!=pixels||frameTimestampNanos!=timestamp||frameGeneration.get()!=frame||!frameReady(after))
+                        return frameMetadata(expected,original,after).put("framePending",true).put("imageUnavailableReason","frame_pending");
+                    return frameMetadata(expected,original,after).put("imageUnavailableReason","frame_blank");
+                }
+            }
             if(!bitmap.compress(Bitmap.CompressFormat.JPEG,75,jpeg))throw new Failure("frame_encoding","后台屏图片编码失败。",false);
             requireGeometry(expected,original);
             synchronized(frameLock){
@@ -405,6 +415,14 @@ final class DisplayEngine {
         }
     }
     private void markFrameBoundary(){synchronized(frameLock){frameNotBeforeNanos=System.nanoTime();}}
+    private static boolean blackFrame(Bitmap bitmap){
+        int[] row=new int[bitmap.getWidth()];
+        for(int y=0;y<bitmap.getHeight();y++){
+            bitmap.getPixels(row,0,row.length,0,y,row.length,1);
+            for(int pixel:row)if((pixel&0x00ffffff)!=0)return false;
+        }
+        return true;
+    }
     private boolean frameReady(long after){
         synchronized(frameLock){return geometryReady&&!framePending&&latestPixels!=null
                 &&frameTimestampNanos>Math.max(after,frameNotBeforeNanos);}

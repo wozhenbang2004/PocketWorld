@@ -718,11 +718,13 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
             MessageDigest comparison = MessageDigest.getInstance("SHA-256");
             int[] pixels = new int[fullWidth];
             byte[] row = new byte[fullWidth * 4];
+            boolean visualContent=false;
             for (int y = 0; y < fullHeight; y++) {
                 check.check();
                 software.getPixels(pixels, 0, fullWidth, 0, y, fullWidth, 1);
                 for (int x = 0; x < fullWidth; x++) {
                     int pixel = pixels[x], offset = x * 4;
+                    visualContent|=(pixel&0x00ffffff)!=0;
                     row[offset] = (byte) (pixel >>> 24);
                     row[offset + 1] = (byte) (pixel >>> 16);
                     row[offset + 2] = (byte) (pixel >>> 8);
@@ -730,6 +732,7 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
                 }
                 comparison.update(row);
             }
+            if(!visualContent)throw new PhoneFailure("screenshot_blank_frame","截图没有可用于视觉定位的内容；保留当前可读节点，请等待页面产生画面。");
             String digest = Base64.encodeToString(comparison.digest(), Base64.NO_WRAP);
             float factor = Math.min(1f, 1280f / Math.max(software.getWidth(), software.getHeight()));
             int width = Math.max(1, Math.round(software.getWidth() * factor));

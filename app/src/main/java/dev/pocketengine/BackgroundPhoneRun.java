@@ -9,6 +9,7 @@ import dev.pocketengine.core.PhonePort;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.core.RunOutcome;
 import dev.pocketengine.phone.AndroidPhonePort;
+import dev.pocketengine.phone.DeferredPhoneSession;
 import dev.pocketengine.phone.AndroidPhoneReadiness;
 import dev.pocketengine.phone.display.BackgroundPhonePort;
 import dev.pocketengine.phone.display.DisplayModule;
@@ -42,6 +43,7 @@ final class BackgroundPhoneRun {
     private volatile boolean destroyed,waitingForUser,deadlineReached;
     private volatile long ownerWaitGeneration;
     private volatile PhonePort heldPort;
+    private volatile DeferredPhoneSession phoneSession;
     private volatile BackgroundPhonePort taskBackgroundPort;
     private volatile ScheduledFuture<?> leaseWatch;
     private volatile String pendingDeviceApproval;
@@ -88,7 +90,8 @@ final class BackgroundPhoneRun {
         if(!matches(intent.getStringExtra("taskId"),run,epoch,ownerControl))return;
         if(deviceGoal!=null){String approval=intent.getStringExtra("deviceApprovalId");if(approval!=null&&!approval.isEmpty())pendingDeviceApproval=approval;}
         if(!waitingForUser||ownerControl.isPaused())return;
-        if(heldPort==null){ownerControl.pause();app.setStatus(runningId,"awaiting_user","原手机物理会话已不可核对，请停止并检查原任务；未创建替代执行",ownerControl);return;}
+        if(heldPort==null&&phoneSession!=null&&phoneSession.initialized())heldPort=phoneSession.physicalPort();
+        if(heldPort==null&&(phoneSession==null||!phoneSession.pending())){ownerControl.pause();app.setStatus(runningId,"awaiting_user","原手机物理会话已不可核对，请停止并检查原任务；未创建替代执行",ownerControl);return;}
         waitingForUser=false;++ownerWaitGeneration;lastStartId=startId;
         try{worker.execute(()->{if(deviceGoal!=null)runDeviceGoal(startId);else run(runningId,runningRunId,runningEpoch,runningGoal,runningConfig,ownerControl,startId,false);});}
         catch(java.util.concurrent.RejectedExecutionException closed){/* The owning shutdown path releases the exact held port. */}
@@ -142,7 +145,7 @@ final class BackgroundPhoneRun {
             if(deadlineReached||ownerControl.isCancelled())result=new RunOutcome("cancelled","原设备后台目标已停止后续派发；已有动作仍须核对",result.evidence);
             boolean wait=!ownerControl.isCancelled()&&result.status.matches("awaiting_user|paused")&&!app.tasks.hasUnresolved(runningId);
             if(wait){physical.clearReferences();try{result.evidence.put("audioRestore",background.restoreTaskAudio());}catch(Exception unknown){result.evidence.put("audioRestore",EngineApplication.json("status","audio_recovery_pending","pending",true));}}
-            else{JSONObject released=background.closeSession();result.evidence.put("displayRelease",released);background=null;taskBackgroundPort=null;}
+            else{JSONObject released=closeBackground(background);result.evidence.put("displayRelease",released);background=null;taskBackgroundPort=null;}
             var finished=deviceGoal.runnerFinished(result);
             if(result.status.equals("needs_confirmation")&&!ownerControl.isCancelled()){
                 synchronized(this){requireRetained();app.tasks.deviceTasks().recordGoalIdle(finished);ownerControl.pause();waitingForUser=true;++ownerWaitGeneration;pendingDeviceApproval=null;}
@@ -157,9 +160,9 @@ final class BackgroundPhoneRun {
             }
             finishAttempt(runningId,runningRunId,ownerControl,result,startId);
         }catch(Exception unavailable){
-            deviceGoal.runnerFailed();JSONObject evidence=new JSONObject();if(background!=null){try{evidence.put("displayRelease",background.closeSession());}catch(Exception unknown){/* Original cleanup remains unconfirmed. */}background=null;taskBackgroundPort=null;}
+            deviceGoal.runnerFailed();JSONObject evidence=new JSONObject();if(background!=null){try{evidence.put("displayRelease",closeBackground(background));}catch(Exception unknown){/* Original cleanup remains unconfirmed. */}background=null;taskBackgroundPort=null;}
             finishAttempt(runningId,runningRunId,ownerControl,new RunOutcome(ownerControl.isCancelled()?"cancelled":"awaiting_user","原设备后台目标已停止派发，请核对原屏幕、模型与授权；未换主屏或创建替代执行",evidence),startId);
-        }finally{if(background!=null)background.closeSession();releaseWakeLock();app.features.sendState();}
+        }finally{if(background!=null)closeBackground(background);releaseWakeLock();app.features.sendState();}
     }
     private void run(String id,String runId,int epoch,String goal,ModelConfig config,RunControl control,int startId,boolean manualOnly){
         run(id,runId,epoch,goal,config,control,startId,manualOnly,null);
@@ -169,7 +172,8 @@ final class BackgroundPhoneRun {
         if(requiredHold!=null)try{
             control.dispatchAtPauseRevision(requiredHold.pauseRevision(),()->{
                 if(destroyed||waitingForUser||heldPort!=requiredHold.physicalPort()||ownerControl!=control||!id.equals(runningId)||!runId.equals(runningRunId)||epoch!=runningEpoch
-                        ||requiredHold.capturedModel()!=runningConfig||ownerWaitGeneration!=requiredHold.waitGeneration()+1)
+                        ||requiredHold.capturedModel()!=runningConfig||ownerWaitGeneration!=requiredHold.waitGeneration()+1
+                        ||requiredHold.pendingSession()!=null&&requiredHold.pendingSession()!=phoneSession)
                     throw new SecurityException("原问题续接的物理口或暂停状态已变化，未创建替代执行");
                 continuationPort[0]=heldPort;heldPort=null;
             });
@@ -178,32 +182,32 @@ final class BackgroundPhoneRun {
         try{
             port=requiredHold==null?takeHeldPort():continuationPort[0];
             if(requiredHold!=null&&port!=requiredHold.physicalPort())throw new SecurityException("原问题物理口已释放，不能回落新建");
-            if(port instanceof BackgroundPhonePort)backgroundPort=(BackgroundPhonePort)port;
             requireRetained();
             PowerManager power=service.getSystemService(PowerManager.class);wakeLock=power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"PocketEngine:PhoneRun");wakeLock.setReferenceCounted(false);wakeLock.acquire(30_000L);
-            if(port==null&&"background".equals(app.mode(id))){
-                app.setStatus(id,"preparing","正在检查独立后台屏，不会改为主屏操作",control);
-                if(!(app.features.module("display") instanceof DisplayModule))throw new IllegalStateException("后台助手不可用");
-                DisplayModule display=(DisplayModule)app.features.module("display");display.prepare(control);backgroundPort=new BackgroundPhonePort(display,control);port=backgroundPort;
-            }else if(port==null)throw new SecurityException("原后台会话缺失，不会回落主屏");
-            if(backgroundPort!=null)backgroundPort.bindLifecycle(service,id,runId,epoch,control);
-            taskBackgroundPort=backgroundPort;
-            if(!app.attachPort(id,port,control)){if(backgroundPort!=null)backgroundPort.closeSession();throw new InterruptedException("Task stopped before phone admission");}
-            if(manualOnly){
-                JSONObject frame=port.observe(true,control);holdForOwner(id,port,control,new RunOutcome("paused","独立屏已由主人接管，可操作后交回原任务",frame));backgroundPort=null;return;
+            if(phoneSession==null){
+                if(port!=null)throw new SecurityException("原物理口缺少原延迟会话，不能重绑");
+                phoneSession=PhoneSessionPreparation.create(service,app,id,runId,epoch,goal,app.mode(id),config,control,
+                        background->taskBackgroundPort=background,()->{requireRetained();},teamAdmission);
+                app.retainDeferredPhoneSession(id,control,phoneSession);
             }
-            if(backgroundPort==null||!backgroundPort.isConnected())throw new SecurityException("原后台物理屏已变化，不会采用主屏或另一任务的屏幕");
-            JSONObject identity=backgroundPort.executionIdentity();String sessionId=identity.getString("sessionId");int displayId=identity.getInt("displayId");
-            PhonePort source=app.phoneAgentSource(id,control,port);
-            if(teamAdmission!=null)source=teamAdmission.scopedPhone(source);
-            if(teamAdmission!=null)teamAdmission.checkCurrent();
-            AdaptivePhonePort agentPort=new AdaptivePhonePort(source,new AdaptivePhonePort.Scope(id,runId,epoch,sessionId,displayId),config.localCaptureAllowed,config.localOcrAllowed,config.sendScreenshots,config.usesAccount()?dev.pocketengine.runtime.ModelGateway.accountSupportsImageInput(config.accountModel):config.supportsImageInput,android.os.SystemClock::uptimeMillis,app.localOcr);
-            if(teamAdmission==null)app.retainPhonePractice(id,control,agentPort);
+            DeferredPhoneSession agentPort=phoneSession;
+            if(!agentPort.matchesHostScope(id,runId,epoch)||agentPort.originalControl()!=control
+                    ||port!=null&&agentPort.physicalPort()!=port)throw new SecurityException("原延迟手机会话已变化");
+            if(manualOnly){
+                JSONObject frame=agentPort.observe(true,control);port=agentPort.physicalPort();
+                holdForOwner(id,port,control,new RunOutcome("paused","独立屏已由主人接管，可操作后交回原任务",frame));backgroundPort=null;return;
+            }
+            if(agentPort.readyAdapter()!=null&&teamAdmission==null)app.retainPhonePractice(id,control,agentPort.readyAdapter());
             dev.pocketengine.core.CapabilityPort capabilities=teamAdmission==null?app.capabilitiesForTask(id,control,agentPort):null;
-            app.setStatus(id,"running","正在观察原独立后台屏",control);
+            app.setStatus(id,"running","正在处理原任务；需要手机时才准备独立后台屏",control);
             RunOutcome result=new AgentRunner(agentPort,capabilities,dev.pocketengine.runtime.context.ContextBudgetPolicy.currentHostSource(),
                     teamAdmission==null?app.phoneOwnerProjection(id,control):null,teamAdmission==null?app.phoneOwnerInputs(id,runId,epoch,control):null).run(id,goal,config,control,event->app.record(id,event,control),
                     teamAdmission==null?app.journalForTask(id,runId,epoch,control,config):app.tasks.journal(id,runId,epoch,control));
+            port=agentPort.physicalPort();backgroundPort=port instanceof BackgroundPhonePort?(BackgroundPhonePort)port:null;
+            if(agentPort.cleanupUnconfirmed()){
+                result.evidence.put("phonePreparation",agentPort.initializationEvidence()).put("phoneResources",dev.pocketengine.phone.PhoneResourceDisposition.pending(id,runId,epoch));
+                if(!control.isCancelled())result=new RunOutcome("awaiting_user","原显示准备的释放仍待核对；没有派发应用动作，不会重建或切换显示。",result.evidence);
+            }
             app.snapshotPhonePractice(id,control,result.evidence);
             if(result.evidence.has("phonePractice"))result.evidence.put("practiceCleanup",dev.pocketengine.phone.diagnostics.PhonePracticeActivity.closeOriginal(control));
             if(deadlineReached)result=new RunOutcome("cancelled","已达到主人设定的原任务期限，停止后续派发；请检查已发生的动作与结果",result.evidence);
@@ -211,22 +215,30 @@ final class BackgroundPhoneRun {
             if(teamAdmission==null&&("awaiting_user".equals(result.status)||"paused".equals(result.status)&&control.conditionWait()==null)&&!control.isCancelled()){
                 holdForOwner(id,port,control,result);backgroundPort=null;return;
             }
-            if(backgroundPort!=null){JSONObject release=backgroundPort.closeSession();result.evidence.put("displayRelease",release);backgroundPort=null;
+            if(backgroundPort!=null){JSONObject release=closeBackground(backgroundPort);result.evidence.put("displayRelease",release);backgroundPort=null;
                 if(result.status.equals("paused")&&control.conditionWait()!=null&&!release.optBoolean("releaseConfirmed"))result=new RunOutcome("awaiting_user","原任务等待运行条件，但后台屏释放尚未核实；请先核对原会话",result.evidence);
             }
             finishAttempt(id,runId,control,result,startId);
         }catch(RunControl.ConditionWaitException waiting){
-            JSONObject evidence=new JSONObject();boolean cleanupConfirmed=true;if(backgroundPort!=null){try{JSONObject release=backgroundPort.closeSession();evidence.put("displayRelease",release);cleanupConfirmed=release.optBoolean("releaseConfirmed");}catch(Exception unknown){cleanupConfirmed=false;}backgroundPort=null;}
+            if(phoneSession!=null){port=phoneSession.physicalPort();backgroundPort=port instanceof BackgroundPhonePort?(BackgroundPhonePort)port:null;}
+            JSONObject evidence=new JSONObject();boolean cleanupConfirmed=PhoneSessionPreparation.cleanupConfirmed(app,phoneSession,id,runId,epoch,control,evidence);
+            if(backgroundPort!=null){try{JSONObject release=closeBackground(backgroundPort);evidence.put("displayRelease",release);cleanupConfirmed&=release.optBoolean("releaseConfirmed");}catch(Exception unknown){cleanupConfirmed=false;}backgroundPort=null;}
             finishAttempt(id,runId,control,new RunOutcome(control.isCancelled()?"cancelled":cleanupConfirmed?"paused":"awaiting_user",control.isCancelled()?"已停止后续操作":cleanupConfirmed?"运行条件暂不满足，已保留原任务与预算":"后台屏释放尚未核实，请先核对原会话",evidence),startId);
-        }catch(Exception ex){JSONObject evidence=new JSONObject();if(backgroundPort!=null){try{evidence.put("displayRelease",backgroundPort.closeSession());}catch(Exception ignored){}backgroundPort=null;}finishAttempt(id,runId,control,new RunOutcome(control.isCancelled()?"cancelled":"failed",control.isCancelled()?"已停止后续操作":safeMessage(ex),evidence),startId);}
-        finally{dev.pocketengine.phone.diagnostics.PhonePracticeActivity.requestCloseOriginal(control);app.releasePhonePractice(control);if(port instanceof AndroidPhonePort mainPort&&port!=heldPort)mainPort.closeExtensions();if(backgroundPort!=null)backgroundPort.closeSession();releaseWakeLock();app.features.sendState();}
+        }catch(Exception ex){
+            if(phoneSession!=null){port=phoneSession.physicalPort();backgroundPort=port instanceof BackgroundPhonePort?(BackgroundPhonePort)port:null;}
+            JSONObject evidence=new JSONObject();boolean cleanupConfirmed=PhoneSessionPreparation.cleanupConfirmed(app,phoneSession,id,runId,epoch,control,evidence);
+            if(backgroundPort!=null){try{JSONObject release=closeBackground(backgroundPort);evidence.put("displayRelease",release);cleanupConfirmed&=release.optBoolean("releaseConfirmed");}catch(Exception unknown){cleanupConfirmed=false;}backgroundPort=null;}
+            finishAttempt(id,runId,control,new RunOutcome(control.isCancelled()?"cancelled":cleanupConfirmed?"failed":"awaiting_user",control.isCancelled()?"已停止后续操作":cleanupConfirmed?safeMessage(ex):"原手机准备或释放尚未核实，请先核对原会话",evidence),startId);
+        }
+        finally{if(!waitingForUser&&phoneSession!=null)phoneSession.close();dev.pocketengine.phone.diagnostics.PhonePracticeActivity.requestCloseOriginal(control);app.releasePhonePractice(control);if(port instanceof AndroidPhonePort mainPort&&port!=heldPort)mainPort.closeExtensions();if(backgroundPort!=null)closeBackground(backgroundPort);releaseWakeLock();app.features.sendState();}
     }
     private void requireRetained()throws Exception{
         if(destroyed||finishing.get()||app.control(runningId)!=ownerControl||ownerControl.isCancelled())throw new InterruptedException("原后台执行已停止，未重新创建屏幕");
     }
     private void holdForOwner(String id,PhonePort port,RunControl control,RunOutcome outcome)throws Exception{
-        control.pause();port.clearReferences();
+        control.pause();if(port!=null)port.clearReferences();else if(phoneSession!=null)phoneSession.clearReferences();
         if(port instanceof BackgroundPhonePort)try{outcome.evidence.put("audioRestore",((BackgroundPhonePort)port).restoreTaskAudio());}catch(Exception pending){outcome.evidence.put("audioRestore",new JSONObject().put("status","audio_recovery_pending").put("pending",true));}
+        if(port==null&&phoneSession!=null)outcome.evidence.put("phoneSession",phoneSession.initializationEvidence());
         boolean unresolved=app.tasks.hasUnresolved(id);String status=unresolved?"reconciling":outcome.status;
         if(port instanceof BackgroundPhonePort){
             var original=control.hostRunIdentity();if(original==null||!original.taskId().equals(id))throw new SecurityException("original_phone_hold_required");
@@ -239,9 +251,9 @@ final class BackgroundPhoneRun {
             heldPort=port;waitingForUser=true;
             ++ownerWaitGeneration; // The same canonical task deadline remains supervised during owner handoff.
         }
-        try{app.retainOwnerPhoneQuestion(id,control,port,runningConfig,ownerWaitGeneration,ownerPhoneQuestionHost());}catch(Exception unavailable){/* Manual/approval/changed holds have no ordinary-answer authority. */}
+        try{app.retainOwnerPhoneQuestion(id,control,port==null?phoneSession:port,runningConfig,ownerWaitGeneration,ownerPhoneQuestionHost());}catch(Exception unavailable){/* Manual/approval/changed holds have no ordinary-answer authority. */}
         app.pushTask(id);
-        app.publish(EngineApplication.json("type","owner_takeover","taskId",id,"manualAllowed",!unresolved,"status",status));
+        app.publish(EngineApplication.json("type","owner_takeover","taskId",id,"manualAllowed",port!=null&&!unresolved,"status",status));
         main.post(this::cancelIfHeld);
     }
     private dev.pocketengine.features.assistant.OwnerPhoneQuestions.PhysicalOwner ownerPhoneQuestionHost(){
@@ -249,7 +261,8 @@ final class BackgroundPhoneRun {
             @Override public void requireHeld(dev.pocketengine.features.assistant.OwnerPhoneQuestions.Held expected)throws Exception{
                 if(destroyed||deviceGoal!=null||teamAdmission!=null||!waitingForUser||heldPort!=expected.physicalPort()
                         ||ownerControl!=expected.originalControl()||!expected.taskId().equals(runningId)||!expected.runId().equals(runningRunId)||expected.epoch()!=runningEpoch
-                        ||expected.waitGeneration()!=ownerWaitGeneration||expected.capturedModel()!=runningConfig)throw new SecurityException("原手机 service 持有会话已变化");
+                        ||expected.waitGeneration()!=ownerWaitGeneration||expected.capturedModel()!=runningConfig
+                        ||expected.pendingSession()!=null&&expected.pendingSession()!=phoneSession)throw new SecurityException("原手机 service 持有会话已变化");
             }
             @Override public void requestContinuation(dev.pocketengine.features.assistant.OwnerPhoneQuestions.Held expected)throws Exception{
                 requireHeld(expected);
@@ -297,13 +310,19 @@ final class BackgroundPhoneRun {
         },0,1,java.util.concurrent.TimeUnit.SECONDS);
     }
     private synchronized PhonePort takeHeldPort(){PhonePort port=heldPort;heldPort=null;return port;}
-    private JSONObject closeHeld(String id,String run,int epoch){return releaseOriginalPort(id,run,epoch,takeHeldPort());}
+    private JSONObject closeHeld(String id,String run,int epoch){PhonePort port=takeHeldPort();if(phoneSession!=null){phoneSession.close();if(port==null)port=phoneSession.physicalPort();}return releaseOriginalPort(id,run,epoch,port);}
+    private JSONObject closeBackground(BackgroundPhonePort port){
+        DeferredPhoneSession retained=phoneSession;
+        if(retained!=null&&retained.physicalPort()==port)try{return retained.releasePhysical();}
+            catch(Exception unknown){return EngineApplication.json("releaseConfirmed",false,"error","cleanup_unknown");}
+        return port.closeSession();
+    }
     private JSONObject releaseOriginalPort(String id,String run,int epoch,PhonePort port){
         JSONObject evidence=new JSONObject();
         try{
             if(port instanceof AndroidPhonePort mainPort){mainPort.closeExtensions();evidence.put("mainScreenExtensionsCleanupRequested",true);}
             if(port instanceof BackgroundPhonePort background){
-                JSONObject release=background.closeSession();evidence.put("displayRelease",release);
+                JSONObject release=closeBackground(background);evidence.put("displayRelease",release);
                 evidence.put("phoneResources",dev.pocketengine.phone.PhoneResourceDisposition.release(id,run,epoch,release));
             }
         }catch(Exception unknown){
@@ -312,7 +331,8 @@ final class BackgroundPhoneRun {
         return evidence;
     }
     private JSONObject closeHeldAsync(){
-        PhonePort port=takeHeldPort();String id=runningId,run=runningRunId;int epoch=runningEpoch;JSONObject pending=new JSONObject();
+        if(phoneSession!=null)phoneSession.close();
+        PhonePort held=takeHeldPort();PhonePort port=held==null&&phoneSession!=null?phoneSession.physicalPort():held;String id=runningId,run=runningRunId;int epoch=runningEpoch;JSONObject pending=new JSONObject();
         if(port==null){
             // An executing worker still owns this port and performs its existing finally/catch cleanup.
             // Record pending without starting a second release operation.

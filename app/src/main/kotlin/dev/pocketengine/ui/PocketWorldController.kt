@@ -2858,18 +2858,11 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         if (channelPhoneBlocked) { state = state.copy(error = "原渠道请求待核对或已取消；请清空草稿后另写本机新目标") ; return false }
         val channel = channelPhoneRequest
         if (channel != null && channel.optString("goal") != goal.trim()) { state = state.copy(error = "渠道原目标已改变，请先取消原请求；不会按私人新任务启动") ; return false }
-        if (mode == "background") {
-            val connection = backgroundConnectionState(state.feature("display"), state.activeTaskId, state.moduleBusy)
-            if (!connection.helperConnected || connection.busy || connection.requiresConnectionCheck) {
-                openBackgroundSetup()
-                state = state.copy(notice = if (connection.busy) "请等待本次连接与进程回收结束，再明确开始原目标" else "先启用并核对后台助手，再返回确认原目标；草稿仍保留")
-                return false
-            }
-        }
         try {
+            check(mode in setOf("main_screen", "background")) { "请选择主屏或独立后台屏模式" }
             val readiness = app.phoneReadiness()
             state = state.copy(phoneReadiness = PhoneReadinessState.parse(readiness))
-            dev.pocketengine.phone.PhoneReadiness.requireStart(readiness, mode)
+            check(readiness.getJSONObject("taskNotificationsForStart").optBoolean("ready")) { "请开启任务通知，以便随时停止原任务" }
             voiceInput.claimMessageId(voiceTarget(true),voiceOwnerAuthority())
         } catch(error:Exception) { state=state.copy(error=message(error));return false }
         return true
@@ -3510,8 +3503,49 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun takeOverInspection() {
         val taskId = state.inspectionTaskId ?: return
         if (state.inspectionBusy) return
+        val task = state.tasks.find { it.id == taskId }
+        val run = task?.raw?.optString("runId").orEmpty()
+        val epoch = task?.raw?.optInt("coordinatorEpoch", -1) ?: -1
+        if (task == null || !isPhoneTask(task) || run.isBlank() || epoch < 1) {
+            state = state.copy(inspectionManualAllowed = false, inspectionError = "原手机执行身份尚未读全，请刷新原任务")
+            return
+        }
+        val viewerEpoch = inspectionEpoch
+        val ownerWindow = webPhoneViewerWindowTicket()
+        val inline = phoneInlinePreview
+        val original = app.control(taskId)
+        val cancellationRequested = task.raw.optBoolean("cancelRequested")
+        fun ownerWindowCurrent() = webUiCanInteract() && viewerEpoch == inspectionEpoch && ownerWindow == webPhoneViewerWindowTicket()
+            && state.inspectionTaskId == taskId && state.tasks.any { it.id == taskId && it.raw.optString("runId") == run
+                && it.raw.optInt("coordinatorEpoch", -1) == epoch && it.raw.optBoolean("cancelRequested") == cancellationRequested }
+            && (inline == null || inlinePhonePreviewCurrent(inline))
         state = state.copy(inspectionBusy = true, inspectionManualAllowed = false, inspectionError = null)
-        native("takeoverTask", JSONObject().put("taskId", taskId))
+        try { controls.execute {
+            val preparation = runCatching<() -> Boolean> {
+                check(ownerWindowCurrent() && app.control(taskId) === original) { "原接管窗口或执行已变化" }
+                val pauseRevision = if (original != null) {
+                    check(original.matchesHostRun(taskId, run, epoch) && !original.isCancelled) { "原手机执行已变化" }
+                    app.pauseOriginalPhoneRun(taskId, run, epoch)
+                    original.pauseRevision()
+                } else -1L
+                val current: () -> Boolean = {
+                    ownerWindowCurrent() && (if (original == null) app.control(taskId) == null else
+                        app.control(taskId) === original && original.matchesHostRun(taskId, run, epoch)
+                            && !original.isCancelled && original.isPaused && original.pauseRevision() == pauseRevision)
+                }
+                check(current()) { "原接管暂停状态已变化" }
+                current
+            }
+            main.post {
+                if (closed || viewerEpoch != inspectionEpoch || state.inspectionTaskId != taskId) return@post
+                preparation.fold({ current ->
+                    try {
+                        check(current()) { "原接管窗口或暂停状态已变化" }
+                        native("takeoverTask", JSONObject().put("taskId", taskId).put("runId", run).put("epoch", epoch), originalOwnerCurrent = current)
+                    } catch (error: Exception) { state = state.copy(inspectionBusy = false, inspectionManualAllowed = false, inspectionError = message(error)) }
+                }, { error -> state = state.copy(inspectionBusy = false, inspectionManualAllowed = false, inspectionError = message(error)) })
+            }
+        } } catch (error: Exception) { state = state.copy(inspectionBusy = false, inspectionManualAllowed = false, inspectionError = message(error)) }
     }
     fun ownerPhoneHandoff(action: String) {
         val taskId = state.inspectionTaskId ?: return
@@ -3974,13 +4008,14 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val executionPlanOwnerAction = originalOwnerCurrent != null && (action == "enterTaskPlanning" || action == "approveCapability" &&
             listOf("expectedScopeRevision", "planRevision", "planArtifactRef", "planHash").all(input::has))
         val projectContinuationOwnerAction = originalOwnerCurrent != null && action == "continueDevelopmentTask"
+        val phoneTakeoverOwnerAction = action == "takeoverTask"
         val guardedOwnerAction = executionPlanOwnerAction || projectContinuationOwnerAction
         val taskAction = targetTask.takeIf { it.isNotBlank() && action in setOf("resumeTask", "continueDevelopmentTask", "stopTask", "approveCapability", "confirmResult", "resolveOperation", "updateTask", "reconcileExternalTask", "configureTaskExecutionScope", "enterTaskPlanning", "answerOwnerQuestion") }
         if (taskAction != null) state = state.copy(taskActionErrors = state.taskActionErrors - taskAction)
         val needsGroupOwner = action in setOf("resumeTask", "stopTask", "approveCapability", "confirmResult", "resolveOperation", "updateTask", "reconcileExternalTask") && state.tasks.any { it.id == targetTask && it.raw.optJSONObject("origin")?.optString("kind") == "group" }
         val groupWindow = if (needsGroupOwner && groupTaskId == targetTask) groupTaskWindow else null
         val reviewedInput = if (needsGroupOwner) JSONObject(input.toString()) else input
-        val urgent = action == "automationPlan" && input.optString("command") in setOf("pause", "resume", "cancel") || action in setOf("stopRun", "pauseRun", "resumeRun", "stopTask", "takeoverTask") || action == "featureRequest" && input.optString("command") in setOf("cancel", "release", "stop", "adb.cancel", "termux.cancel", "project.cancel", "project.stopService", "cancelJob", "steerJob", "getSteerMessage", "qq.stop", "weixin.stop", "weixin.login.cancel") || action == "featureRequest" && input.optString("feature") == "teams" && input.optString("command") in setOf("pause", "resume", "feedback", "continueMessages", "sendMessage", "answerAssignment")
+        val urgent = action == "automationPlan" && input.optString("command") in setOf("pause", "resume", "cancel") || action in setOf("stopRun", "pauseRun", "resumeRun", "stopTask") || action == "featureRequest" && input.optString("command") in setOf("cancel", "release", "stop", "adb.cancel", "termux.cancel", "project.cancel", "project.stopService", "cancelJob", "steerJob", "getSteerMessage", "qq.stop", "weixin.stop", "weixin.login.cancel") || action == "featureRequest" && input.optString("feature") == "teams" && input.optString("command") in setOf("pause", "resume", "feedback", "continueMessages", "sendMessage", "answerAssignment")
         (if (urgent) controls else io).execute {
             var createdPhoneTaskId: String? = null
             var enteredPhoneAdmission = false
@@ -4008,6 +4043,11 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                     else if (originalOwnerCurrent != null && action == "featureRequest") {
                         app.features.request(input, java.util.function.BooleanSupplier { originalOwnerCurrent() })
                         null
+                    } else if (phoneTakeoverOwnerAction) {
+                        // Helper preparation may wait; keep the application and stop queue free.
+                        val current = checkNotNull(originalOwnerCurrent)
+                        check(current()) { "原接管窗口或暂停状态已变化" }
+                        app.dispatchReviewedOwnerAction(action, input, java.util.function.BooleanSupplier { current() })
                     } else if (projectContinuationOwnerAction) {
                         // The original Assistant slot owns admission before Engine/SQL locks.
                         // Never enter that continuation while holding the generic app monitor.

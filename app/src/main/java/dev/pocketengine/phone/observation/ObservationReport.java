@@ -10,7 +10,7 @@ public final class ObservationReport {
     /** Only image acquisition failures may retain an independently refreshed tree. */
     public static boolean isCaptureUnavailable(String code) {
         return java.util.Set.of("screenshot_unavailable","screenshot_timeout","screenshot_throttled",
-                "screenshot_secure_window","screenshot_too_large","screenshot_stale_frame","frame_pending","frame_unavailable").contains(code);
+                "screenshot_secure_window","screenshot_too_large","screenshot_stale_frame","screenshot_blank_frame","frame_blank","frame_pending","frame_unavailable").contains(code);
     }
     public static JSONObject attach(JSONObject observation, boolean treeAvailable, String treeReason,
                                     boolean imageIncluded, String imageReason) throws Exception {

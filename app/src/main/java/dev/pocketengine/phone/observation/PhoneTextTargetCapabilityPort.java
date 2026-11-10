@@ -3,6 +3,7 @@ package dev.pocketengine.phone.observation;
 import dev.pocketengine.core.CapabilityPort;
 import dev.pocketengine.core.EventSink;
 import dev.pocketengine.core.PhonePort;
+import dev.pocketengine.phone.DeferredPhoneSession;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.capabilities.ModelCapabilityAdapters;
 import dev.pocketengine.features.capabilities.TaskStoreCapabilityAuthority;
@@ -18,21 +19,21 @@ public final class PhoneTextTargetCapabilityPort implements CapabilityPort {
     private final TaskStore tasks;
     private final ModelCapabilityAdapters.Binding binding;
     private final RunControl original;
-    private final AdaptivePhonePort phone;
+    private final PhonePort phone;
     private final TaskStoreCapabilityAuthority authority;
     private boolean closed;
     private PhoneTextTargetCapabilityPort(CapabilityPort existing,TaskStore tasks,ModelCapabilityAdapters.Binding binding,
-            RunControl original,AdaptivePhonePort phone,EventSink approvalEvents) {
+            RunControl original,PhonePort phone,EventSink approvalEvents) {
         this.existing=Objects.requireNonNull(existing);this.tasks=Objects.requireNonNull(tasks);this.binding=Objects.requireNonNull(binding);
         this.original=Objects.requireNonNull(original);this.phone=Objects.requireNonNull(phone);authority=new TaskStoreCapabilityAuthority(tasks,binding,approvalEvents);
         if(existing.supports(AdaptivePhonePort.CLICK_TEXT))throw new IllegalArgumentException("文字目标工具名称重复");
     }
     public static CapabilityPort bindIfAvailable(CapabilityPort existing,TaskStore tasks,ModelCapabilityAdapters.Binding binding,
             RunControl original,PhonePort selected,EventSink approvalEvents)throws Exception {
-        if(!(selected instanceof AdaptivePhonePort)||!binding.allowWrites)return existing;
-        AdaptivePhonePort phone=(AdaptivePhonePort)selected;JSONObject task=tasks.get(binding.taskId,false);
+        if(!DeferredPhoneSession.adaptive(selected)||!binding.allowWrites)return existing;
+        PhonePort phone=selected;JSONObject task=tasks.get(binding.taskId,false);
         if(task==null||!"phone".equals(task.optString("kind"))||!task.optString("executionMode").matches("main_screen|background")
-                ||!phone.matchesHostScope(binding.taskId,binding.runId,binding.epoch)||!phone.isConnected()||!phone.textTargetingAvailable())return existing;
+                ||!DeferredPhoneSession.matches(phone,binding.taskId,binding.runId,binding.epoch)||!DeferredPhoneSession.declared(phone)||!DeferredPhoneSession.textTargeting(phone))return existing;
         original.check();
         if(original.isPaused()||!original.hasHostRun()||!original.matchesHostRun(binding.taskId,binding.runId,binding.epoch))throw new SecurityException("文字目标需要原手机执行控制");
         return new PhoneTextTargetCapabilityPort(existing,tasks,binding,original,phone,approvalEvents);
@@ -70,7 +71,7 @@ public final class PhoneTextTargetCapabilityPort implements CapabilityPort {
         NativePhoneEntry.Admission admission=()->{check(control);authority.requirePrepared(operation,name,new JSONObject(args.toString()));};
         try{admission.check();}catch(Exception refused){return new JSONObject().put("ok",false).put("accepted",false).put("verified",false).put("code","needs_user")
                 .put("requiresPause",true).put("automaticReplayAllowed",false).put("message","原任务、权限或预留操作已变化，文字点击尚未派发。");}
-        return phone.tapTextTarget(args,control,admission).put("operationId",operation).put("verifiedBusinessSuccess",false);
+        return DeferredPhoneSession.require(phone,control).tapTextTarget(args,control,admission).put("operationId",operation).put("verifiedBusinessSuccess",false);
     }
     @Override public JSONObject contextSnapshot(String query)throws Exception{return existing.contextSnapshot(query);}
     @Override public void beginRun(String goal,RunControl control)throws Exception{check(control);existing.beginRun(goal,control);}

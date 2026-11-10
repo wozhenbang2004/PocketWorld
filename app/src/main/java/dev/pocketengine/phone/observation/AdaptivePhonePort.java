@@ -583,7 +583,8 @@ public final class AdaptivePhonePort implements PhonePort {
         sources = observation.getJSONObject("observationSources");
         Evidence evidence = new Evidence(binding, sources.optBoolean("treeAvailable"), observation.optBoolean("truncated"),
                 sources.optInt("usefulNodes"), sources.optBoolean("imageIncluded"),
-                "display_has_no_frame".equals(observation.optString("screenState")), at,sources.optBoolean("treeAdequate"));
+                "display_has_no_frame".equals(observation.optString("screenState"))
+                        ||"display_has_no_app".equals(observation.optString("screenState"))&&observation.optBoolean("emptyDisplayVerified"), at,sources.optBoolean("treeAdequate"));
         return policy.decide(expected, evidence, need, Health.READY, localCaptureAllowed, localOcrAllowed, imageCeiling, visionAvailable, allowOcr&&ocrAvailable(),
                 control.isPaused(), control.isCancelled(), uptime.getAsLong(), MAX_AGE_MS);
     }
