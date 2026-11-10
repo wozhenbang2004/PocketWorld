@@ -59,6 +59,13 @@ Android 主窗口、WebView 与安全区使用同一 `chat/workspace` 角色；�
 
 `npm run build --prefix web-ui` 已完成 TypeScript、Vite 生产构建与222个本地打包文件 receipt；最后显示层修正沿相同构建路径重打包，不运行任何测试。既存许可待核对与 Vite 大包提示保留。主线 `ce1b04c8` 的截图环境修复已无损合入。本批原生编译、安装包及同版本实图仍以随后实际 CI 产物为准；旧包仅提供改前观察，未把构建或源码复核当作视觉验收。
 
+### PW-C 批次发布与图证（v0.1.51）
+
+本批源码已进入 main [`46dc01a2`](https://github.com/wozhenbang2004/PocketWorld/commit/46dc01a274c059ac72e6a954eb424cd7a297d5c1)，远端 source tree `693425c324d0e778a5ca8d8b16b1d94905e16fce` 与本地已构建树一致。[Release run `42763156411`](https://github.com/wozhenbang2004/PocketWorld/actions/runs/42763156411) 的 Web 构建、Android 编译、稳定签名、包完整性核对、差分准备与发布全部成功。[v0.1.51](https://github.com/wozhenbang2004/PocketWorld/releases/tag/v0.1.51) 于 2026-11-10 05:42:55 UTC 发布，APK SHA-256 `9675a5df99905d6133831d709262e9a92305520ffcac3983e1a65f8e8fa26b5c`，完整包147,693,982字节。发布流程未运行测试。
+
+截至2026-11-10 05:50 UTC，同版本 [UI screenshots run `42763160079`](https://github.com/wozhenbang2004/PocketWorld/actions/runs/42763160079) 正在采集真实安装 APK；当前尚未把该包记为视觉已复看。系统栏、触摸/输入法、深色及已配置模型状态仍按实际取得的画面与体验分别记录。
+
+
 ## 2026-11-10 Pipeline 实图驱动的入口重做
 
 用户原话：“看 pipeline 有个截图包打出来了去深度研究然后深度重新设计重新做 uiux”。来源为本聊天，精确消息 ID 不可取得；本批记录于 2026-11-10 UTC。继续执行正式产品重设计与实现，沿用先前主线提交授权；不写、不跑任何测试。现有获准的独立 APK 截图流程只操作真实应用和采集画面，不注入状态、数据或回执。
