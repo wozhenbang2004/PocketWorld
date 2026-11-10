@@ -3,10 +3,12 @@
  * No reaction counts or participants are invented for a single-owner chat. */
 .pw-reaction-actions .ui-mac__bar { gap: 7px; flex-wrap: wrap; }
 .pw-reaction-actions .ui-mac__btn {
-  border: 0; border-radius: 999px; background: var(--pw-panel-soft, #f3f3f3);
-  color: var(--pw-muted, #777); touch-action: manipulation;
+  border: 0; border-radius: 999px; background: var(--pw-inset);
+  color: var(--pw-copy); touch-action: manipulation;
   transition: background .16s, color .16s, box-shadow .16s;
 }
-.pw-reaction-actions .ui-mac__btn:hover { box-shadow: inset 0 0 0 1px #0000000b; }
+.pw-reaction-actions .ui-mac__btn:hover:not(:disabled) { background: var(--pw-hover); box-shadow: none; }
+.pw-reaction-actions .ui-mac__btn:active:not(:disabled) { background: var(--pw-pressed); }
+.pw-reaction-actions .ui-mac__btn:disabled { color: var(--pw-disabled); }
 .pw-reaction-actions .ui-mac__btn:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
 @media (prefers-reduced-motion: reduce) { .pw-reaction-actions .ui-mac__btn { transition: none; } }

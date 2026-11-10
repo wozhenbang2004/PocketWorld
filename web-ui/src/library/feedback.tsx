@@ -6,7 +6,7 @@ import {Skeleton,ShimmerText} from './adapted/shimmer-loader';
 import {useReducedMotion} from './core';
 export {toast,Skeleton,ShimmerText};
 export {ProgressBar,ProgressCircle,ProgressTrack} from './adapted/boardui-progress';
-export function Toaster(props:ToasterProps){return <SourceToaster {...props} theme="light" richColors={false} position={props.position||'bottom-center'} offset={props.offset??'calc(env(safe-area-inset-bottom) + 112px)'} closeButton toastOptions={{...props.toastOptions,style:{background:'#ffffff',color:'#252525',border:'1px solid #dedede',boxShadow:'0 1px 2px #0000000a, 0 8px 24px #00000014',...props.toastOptions?.style}}}/>}
+export function Toaster(props:ToasterProps){return <SourceToaster {...props} className={`pw-toast-host ${props.className||''}`} richColors={false} position={props.position||'bottom-center'} offset={props.offset??'calc(env(safe-area-inset-bottom) + 112px)'} closeButton/>}
 export function ThinkingLoader({phase='正在处理',done=false,doneLabel='处理已结束',durationMs,className=''}:{phase?:string|number;phases?:string[];done?:boolean;doneLabel?:string;durationMs?:number;className?:string}){
  const text=typeof phase==='string'?phase:'正在处理';
  return <SourceThinkingLoader phases={[text]} phase={0} done={done} doneLabel={doneLabel} durationMs={durationMs} size="sm" variant="plain" className={`pw-thinking-loader ${className}`}/>

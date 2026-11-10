@@ -8,9 +8,9 @@
 .pw-remote-status,.pw-remote-receiver,.pw-remote-config{border:0;min-width:0}
 .pw-remote-status{display:flex;align-items:center;gap:var(--pw-gap-control);padding:var(--pw-gap-content);border-radius:20px;background:var(--pw-inset)}.pw-remote-status>div{min-width:0;flex:1;display:grid;gap:var(--pw-gap-related)}
 .pw-remote-status strong,.pw-remote-receiver strong{font-size:.9rem;font-weight:620}.pw-remote-status small{font-size:.74rem;color:var(--color-text-secondary,#777)}
-.pw-remote-dot{height:8px;width:8px;border-radius:100%;background:#aaa;box-shadow:0 0 0 4px rgba(127,127,127,.08);flex:0 0 auto}
-.pw-remote-dot.is-connected{background:#666;animation:pw-remote-breathe 2.1s ease-in-out infinite}
-@keyframes pw-remote-breathe{50%{opacity:.45;box-shadow:0 0 0 7px rgba(127,127,127,.07)}}
+.pw-remote-dot{height:8px;width:8px;border-radius:100%;background:var(--pw-disabled);box-shadow:0 0 0 4px var(--pw-selected);flex:0 0 auto}
+.pw-remote-dot.is-connected{background:var(--pw-copy);animation:pw-remote-breathe 2.1s ease-in-out infinite}
+@keyframes pw-remote-breathe{50%{opacity:.45;box-shadow:0 0 0 7px var(--pw-selected)}}
 .pw-remote-count{font-size:1.25rem;font-weight:670;font-variant-numeric:tabular-nums;white-space:nowrap}.pw-remote-count small{font-size:.7rem;font-weight:400}
 .pw-remote-receiver{display:flex;align-items:center;justify-content:space-between;gap:16px}
 .pw-remote-receiver>div{display:grid;gap:var(--pw-gap-related);min-width:0}
@@ -19,20 +19,19 @@
 .pw-remote-section-title span{font-size:.72rem;color:var(--color-text-tertiary,#888)}
 .pw-remote-config{display:grid;gap:var(--pw-gap-content)}.pw-remote-fields{display:grid;gap:var(--pw-gap-content)}
 .pw-remote-config-footer{display:grid;gap:var(--pw-gap-control)}
-.pw-remote-note{padding:10px 12px;font-size:.8rem;background:rgba(127,127,127,.065);border-radius:10px}
-.pw-remote-note.is-error{outline:1px solid rgba(210,75,75,.22)}
+.pw-remote-note{padding:10px 12px;font-size:.8rem;background:var(--pw-inset);color:var(--pw-copy);border-radius:10px}
+.pw-remote-note.is-error{background:var(--pw-danger-surface);color:var(--pw-danger)}
 .pw-remote-list-toolbar{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:var(--pw-gap-control)}
 .pw-remote-filters{display:flex;flex-wrap:wrap;gap:var(--pw-gap-related)}.pw-remote-filters [aria-pressed="true"]{background:var(--pw-selected)}
 .pw-remote-list-toolbar small{font-size:.72rem;color:var(--color-text-tertiary,#888)}
 .pw-remote-list{display:grid;gap:0;min-width:0}.pw-remote-empty{display:grid;place-content:center;justify-items:center;text-align:center;gap:10px;min-height:230px;color:var(--color-text-secondary,#777)}
 .pw-remote-empty h2{font-size:1rem;font-weight:600;margin:0}.pw-remote-empty p{font-size:.8rem;margin:0;line-height:1.6}
 .pw-remote-item{display:flex;gap:var(--pw-gap-control);padding:var(--pw-gap-content) 0;border:0}
-.pw-remote-item[data-read="true"]{opacity:.8}
-.pw-remote-icon{display:flex;align-items:center;justify-content:center;flex:0 0 32px;width:32px;height:32px;border-radius:10px;background:rgba(127,127,127,.07)}
+.pw-remote-icon{display:flex;align-items:center;justify-content:center;flex:0 0 32px;width:32px;height:32px;border-radius:10px;background:var(--pw-inset)}
 .pw-remote-item-main{min-width:0;flex:1;display:grid;gap:var(--pw-gap-related)}.pw-remote-item-main h3{font-size:16px;line-height:24px;font-weight:600;margin:0;overflow-wrap:anywhere}
 .pw-remote-item-main p{margin:0;font-size:.8rem;color:var(--color-text-secondary,#777);line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere}
 .pw-remote-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;color:var(--color-text-tertiary,#888);font-size:.7rem}
-.pw-remote-urgent,.pw-remote-unread{border-radius:50px;padding:2px 7px;background:rgba(127,127,127,.10);font-size:.65rem}
+.pw-remote-urgent,.pw-remote-unread{border-radius:50px;padding:2px 7px;background:var(--pw-selected);color:var(--pw-copy);font-size:.65rem}
 .pw-remote-unread{font-weight:600}
 .pw-remote-item-actions{margin-top:4px;gap:var(--pw-gap-control)}.pw-remote-item-actions a{display:inline-flex;align-items:center;min-height:var(--pw-control-target);gap:4px;font-size:13px;color:inherit;text-decoration:underline;text-underline-offset:3px}
 .pw-remote-footnote{margin-top:4px}

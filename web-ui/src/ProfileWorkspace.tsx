@@ -488,7 +488,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   const entry = (id: string, title: string, description: string, icon: typeof MessageCircle, open: () => void, badge?: ReactNode) => <Button variant="ghost" className="pw-profile-entry" leadingIcon={icon} trailingIcon={ChevronRight} onClick={open} disabled={!loaded || locked} data-profile-entry={id}><span className="pw-profile-entry-copy"><strong>{title}</strong><small>{description}</small></span>{badge}</Button>;
   const memoryRow = (row: Data, candidate: boolean) => <Button key={(candidate ? 'candidate:' : 'memory:') + row.id} variant="ghost" className="pw-profile-memory-row" trailingIcon={ChevronRight} data-personal-memory={string(row.id)} disabled={locked || !supported('profile.memory.get')} onClick={() => openMemory(row, candidate)}><span><strong>{string(row.text || row.title) || '未命名记忆'}</strong><small>{memoryOrigin(row, candidate)}</small></span></Button>;
 
-  return <section className="pw-profile-workspace pw-route-workspace" aria-label={view === 'memory' && selection?.candidate ? '确认记忆' : labels[view]}>
+  return <section className="pw-profile-workspace pw-route-workspace" data-profile-view={view} aria-label={view === 'memory' && selection?.candidate ? '确认记忆' : labels[view]}>
     <header className="pw-profile-header"><IconButton icon={ArrowLeft} aria-label={view === 'home' ? '返回' : '返回上一级'} onClick={requestBack} /><h1 ref={heading} tabIndex={-1}>{view === 'memory' && selection?.candidate ? '确认记忆' : labels[view]}</h1>{headerSave}</header>
     <div className="pw-profile-scroll" ref={scroller}>
       <div className="pw-profile-content">

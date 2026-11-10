@@ -32,6 +32,10 @@
 }
 .pw-profile-header > button:first-child,
 .pw-profile-header > button:last-child:not(.pw-profile-save) { width: 44px; height: 44px; border: 0; box-shadow: none; border-radius: 14px; }
+/* The personal landing page groups navigation on the management canvas.
+ * Editors keep their existing field surfaces and draft/return behavior. */
+.pw-profile-workspace[data-profile-view="home"],
+.pw-profile-workspace[data-profile-view="home"] > .pw-profile-header { background: var(--pw-canvas-workspace); }
 .pw-profile-header .pw-profile-save { min-width: 62px; height: 44px; padding: 0 15px; border: 0; border-radius: 12px; box-shadow: none; background: var(--pw-strong, #242424); color: var(--pw-on-strong, #fff); }
 .pw-profile-header .pw-profile-save:disabled { background: var(--pw-inset, #eee); color: var(--pw-muted, #686868); opacity: .6; }
 .pw-profile-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; scroll-padding-block: 16px; }
@@ -47,9 +51,13 @@
 .pw-profile-avatar img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .pw-profile-edit-link { margin-top: 1px; margin-left: -8px; padding: 8px; height: 44px; min-height: 44px; color: var(--pw-copy, #555); background: transparent; border: 0; box-shadow: none; font-size: 13px; }
 .pw-profile-edit-link > span { gap: 3px; }
-.pw-profile-menu { display: grid; gap: 12px; }
-.pw-profile-entry { display: flex; align-items: center; width: 100%; height: auto; min-height: 82px; padding: 17px 16px; gap: 14px; white-space: normal; text-align: left; border: 0; border-radius: 18px; background: var(--pw-inset, #eee); box-shadow: none; }
-.pw-profile-entry:hover { background: var(--pw-selected, #e6e6e6); }
+.pw-profile-menu { display: grid; gap: 0; padding: 4px; border-radius: 20px; background: var(--pw-surface); }
+.pw-profile-entry { display: flex; align-items: center; width: 100%; height: auto; min-height: 82px; padding: 17px 16px; gap: 14px; white-space: normal; text-align: left; border: 0; border-radius: 18px; background: transparent; box-shadow: none; }
+.pw-profile-menu .pw-profile-entry:active:not(:disabled) { background: var(--pw-pressed); }
+.pw-profile-menu .pw-profile-entry:disabled :is(strong, small, svg) { color: var(--pw-disabled); }
+@media (hover: hover) and (pointer: fine) {
+  .pw-profile-menu .pw-profile-entry:hover:not(:disabled, :active) { background: var(--pw-hover); }
+}
 .pw-profile-entry > span { display: flex; flex: 1; align-items: center; justify-content: flex-start; min-width: 0; flex-shrink: 1; gap: 8px; white-space: normal; }
 .pw-profile-entry > svg { width: 21px; height: 21px; color: var(--pw-copy, #555); flex: none; }
 .pw-profile-entry > svg:last-child { width: 17px; height: 17px; color: var(--pw-muted, #686868); }
@@ -138,6 +146,7 @@
 .pw-profile-loading { display: grid; justify-items: center; gap: 14px; padding: 45px 10px; color: var(--pw-copy, #555); font-size: 14px; }
 .pw-profile-feedback { display: flex; align-items: center; gap: 7px; margin: 0 0 18px; padding: 10px 12px; background: var(--pw-inset, #eee); border: 0; border-radius: 12px; color: var(--pw-copy, #555); font-size: 13px; line-height: 22px; overflow-wrap: anywhere; }
 .pw-profile-feedback.is-error { display: block; }
+.pw-profile-workspace .pw-profile-feedback.is-error { background: var(--pw-danger-surface); color: var(--pw-danger); }
 .pw-profile-feedback.is-error p { margin: 0; }
 .pw-profile-feedback.is-error button { margin: 5px 0 -3px -7px; }
 .pw-profile-working { margin: -4px 0 16px; color: var(--pw-muted, #686868); font-size: 12px; line-height: 20px; }

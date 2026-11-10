@@ -124,6 +124,47 @@
   background-color: var(--pw-danger);
 }
 
+/* Loading labels carry information; only the skeleton blocks may fade into
+ * the canvas. Keep the retained source animations within readable ink roles. */
+:is(.pw-app, .pw-secondary, .pw-drawer, .pw-settings-dialog, .shadow-dropdown, .browser-reader) .ui-shm-text {
+  --ui-shm-text: var(--pw-muted);
+  --ui-shm-text-glow: var(--pw-ink);
+}
+.pw-thinking-loader.ui-tlc {
+  --ui-tlc-text: var(--pw-copy);
+  --ui-tlc-ink: var(--pw-ink);
+  --ui-tlc-accent: var(--pw-muted);
+  --ui-tlc-shine: var(--pw-ink);
+  color: var(--pw-copy);
+}
+
+/* Sonner retains its queue, dismissal and motion; transient feedback shares
+ * the same floating plane, readable content and host appearance as menus. */
+.pw-toast-host[data-sonner-toaster][data-sonner-theme] {
+  --normal-bg: var(--pw-floating);
+  --normal-border: var(--pw-edge);
+  --normal-text: var(--pw-ink);
+  --normal-bg-hover: var(--pw-floating-hover);
+  --normal-border-hover: var(--pw-edge);
+  --gray2: var(--pw-floating-hover);
+  --gray5: var(--pw-edge);
+  font-family: var(--pw-font);
+}
+.pw-toast-host[data-sonner-toaster] [data-sonner-toast][data-styled="true"] {
+  border: 0;
+  box-shadow: var(--pw-shadow-floating);
+}
+.pw-toast-host[data-sonner-toaster] [data-sonner-toast] [data-description] {
+  color: var(--pw-copy);
+}
+.pw-toast-host[data-sonner-toaster] [data-sonner-toast][data-type="error"] [data-icon] {
+  color: var(--pw-danger);
+}
+.pw-toast-host[data-sonner-toaster] :is([data-sonner-toast], button):focus-visible {
+  outline: 2px solid var(--pw-focus);
+  outline-offset: 2px;
+}
+
 /* Accessibility is not negotiable for a minimalist palette. */
 :where(.pw-redesign, .pw-secondary) :is(button, a, input, textarea, select, [role="option"]):focus-visible {
   outline: 2px solid var(--pw-focus);
