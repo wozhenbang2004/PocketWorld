@@ -91,9 +91,12 @@ export function conversationWorkNeedsAttention(task: Data): boolean {
 /** Only unresolved decisions and uncertain external effects interrupt the composer.
  * Routine goal confirmation, pauses and finished results live in task details. */
 export function conversationInlineAttention(task: Data): boolean {
-  if (taskNeedsReconciliation(task)) return true;
   if (!id(task?.id)) return false;
   const status = String(task.status || '');
+  // A settled reply must never pin an old decision over the composer.
+  // Unconfirmed audit history remains accessible in the original task detail.
+  if (['completed', 'failed', 'cancelled', 'canceled', 'stopped'].includes(status)) return false;
+  if (taskNeedsReconciliation(task)) return true;
   if (['waiting_approval', 'awaiting_approval', 'waiting_permission', 'awaiting_user', 'waiting_user'].includes(status)) return true;
   return Array.isArray(task.raw?.approvals) && task.raw.approvals.some((approval: Data) =>
     ['pending', 'waiting'].includes(String(approval?.state || approval?.status || '')));
