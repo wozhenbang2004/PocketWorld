@@ -173,7 +173,7 @@ public final class ModelConnectionService {
     public ModelCatalog.View resolve(ModelConfig selected) throws Exception {
         synchronized(settings){
             if(!settings.matchesApiCatalogRoute(selected))throw new ModelRequestPolicy.Rejected("stale_model_credential","模型凭据与所选修订不匹配，请重新核对连接。");
-            if(!selected.catalogEnforced)return null;
+            if(!selected.catalogEnforced&&selected.reasoning.mode()==ReasoningOptions.Mode.DEFAULT)return null;
             catalog.bind(selected.capabilityBinding);
             return catalog.get(new ModelCatalog.ModelKey(selected.capabilityBinding,selected.model),MAX_CATALOG_AGE_MILLIS);
         }
@@ -360,8 +360,11 @@ public final class ModelConnectionService {
             if(imageTokenReserve<0||imageTokenReserve>2000000)throw new IllegalArgumentException("图片预留需在0–2000000之间");
             Objects.requireNonNull(reasoning);catalog.bind(binding);ModelCatalog.View view=catalog.get(key,MAX_CATALOG_AGE_MILLIS);
             if(view.endpointSupport()!=null&&!view.endpointSupport().supports(binding.protocol()))throw new IllegalStateException("此模型明确声明使用其他协议，请重新核对原连接");
-            boolean strict=current.catalogEnforced||reasoning.mode()!=ReasoningOptions.Mode.DEFAULT||imageTokenReserve>0;
-            if(current.usesBedrock()&&strict)throw new IllegalArgumentException("此 Bedrock 接入尚不支持目录推理参数，请保留默认参数");
+            // An explicit reasoning choice verifies the exact owner levels without enabling full
+            // catalog enforcement for unrelated tool, image and output fields.
+            boolean strict=current.catalogEnforced||imageTokenReserve>0;
+            if(current.usesBedrock()&&(strict||reasoning.mode()!=ReasoningOptions.Mode.DEFAULT))
+                throw new IllegalArgumentException("此 Bedrock 接入尚不支持目录推理参数，请保留默认参数");
             boolean image=current.model.equals(model)&&current.supportsImageInput;
             // Catalog evidence cannot silently become a durable manual owner declaration.
             if(strict)image=view.facts().imageInput().known&&Boolean.TRUE.equals(view.facts().imageInput().value);
@@ -370,7 +373,7 @@ public final class ModelConnectionService {
             if(current.usesBedrock())selected=selected.withBedrockSession(current.bedrockRegion,current.awsSession);
             selected=selected.withCleartextConsent(current.cleartextConsent).withOwnerImageInput(image).withLocalObservation(current.localCaptureAllowed,current.localOcrAllowed)
                     .withProviderCompatibility(current.model.equals(model)?current.compatibility:null);
-            selected=strict?selected.withNativeCatalog(binding,reasoning,imageTokenReserve):selected.withApiConnection(binding);
+            selected=strict?selected.withNativeCatalog(binding,reasoning,imageTokenReserve):selected.withReviewedReasoning(binding,reasoning);
             SettingsStore.validate(selected);ModelRequestPolicy.validateOutput(selected,view.facts());return selected;
         }
     }
