@@ -3,6 +3,7 @@ import { bridge } from './bridge';
 
 type Message = { id?: string; role: string; at?: number; content: string };
 type Reading = { top: number; index: number; offset: number; anchor: string; observed: string; following: boolean; unread: boolean };
+type ContentMarker = { count: number; lastId: string; content: string | undefined; stream: string };
 type NativeReading = { key?: string; epoch?: number; conversationId?: string; scrollIndex?: number; scrollOffset?: number; anchorMessage?: string; observedMessage?: string; newReplies?: boolean };
 type Options = {
   scroll: RefObject<HTMLDivElement | null>;
@@ -34,26 +35,36 @@ function readingRow(items: HTMLElement[], viewportTop: number) {
  * The native reading anchor is also restored after asynchronous history arrives. */
 export function useConversationReading({ scroll, active, conversationId, composer, messages, streamMarker, paused }: Options) {
   const content = useRef<HTMLDivElement>(null), positions = useRef(new Map<string, Reading>());
-  const window = useRef<{ key: string; draftKey: string; conversationId: string; ready: boolean; reading: Reading; marker: string } | null>(null);
+  const window = useRef<{ key: string; draftKey: string; conversationId: string; ready: boolean; reading: Reading; marker: ContentMarker | null } | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const messageRows = useRef<{ node: HTMLElement; items: HTMLElement[] } | null>(null);
+  // Article identity can change on a React commit, but scrolling and resizing do
+  // not replace those nodes. Share one collection until the next committed layout.
+  useLayoutEffect(() => { messageRows.current = null; });
+  const currentRows = useCallback((node: HTMLElement) => {
+    if (messageRows.current?.node === node) return messageRows.current.items;
+    const items = rows(node);
+    messageRows.current = { node, items };
+    return items;
+  }, []);
   const [hasNewReplies, setHasNewReplies] = useState(false);
   const key = conversationId || composer.key || '';
   const last = messages.at(-1), lastId = messageId(last, messages.length - 1);
-  const marker = JSON.stringify([messages.length, lastId, last?.content, streamMarker]);
+  const lastContent = last?.content;
   const latest = useRef({ lastId, paused });
   latest.current = { lastId, paused };
 
   const rememberChatPosition = useCallback(() => {
     const current = window.current, node = scroll.current;
     if (!current?.ready || !node?.isConnected || node.dataset.conversationId !== current.conversationId) return;
-    const items = rows(node), viewportTop = node.getBoundingClientRect().top + node.clientTop;
+    const items = currentRows(node), viewportTop = node.getBoundingClientRect().top + node.clientTop;
     const row = readingRow(items, viewportTop);
     const index = Number(row?.dataset.messageIndex || 0);
     current.reading = { ...current.reading, top: node.scrollTop, index,
       offset: row ? Math.max(0, Math.round(viewportTop - row.getBoundingClientRect().top)) : 0,
       anchor: row?.dataset.messageId || '', observed: latest.current.lastId };
     positions.current.set(current.key, { ...current.reading });
-  }, [scroll]);
+  }, [scroll, currentRows]);
 
   const persistReading = useCallback(() => {
     const current = window.current;
@@ -106,7 +117,7 @@ export function useConversationReading({ scroll, active, conversationId, compose
     const reading = saved ? { ...saved } : { top: 0, index: belongs ? Number(composer.scrollIndex || 0) : 0,
       offset: belongs ? Number(composer.scrollOffset || 0) : 0, anchor: belongs ? String(composer.anchorMessage || '') : '',
       observed: belongs ? String(composer.observedMessage || '') : '', following: !hasAnchor, unread: belongs && composer.newReplies === true };
-    window.current = { key, draftKey: String(composer.key || ''), conversationId, ready: false, reading, marker: '' };
+    window.current = { key, draftKey: String(composer.key || ''), conversationId, ready: false, reading, marker: null };
     setHasNewReplies(reading.unread);
     return () => { window.current = null; };
   }, [active, key, composer.key, composer.epoch, conversationId]);
@@ -117,11 +128,12 @@ export function useConversationReading({ scroll, active, conversationId, compose
     // Reopening the same conversation can also publish an empty loading snapshot.
     // Keep the original anchor until real history arrives, even after initialization.
     if (conversationId && messages.length === 0) { current.ready = false; return; }
+    const marker: ContentMarker = { count: messages.length, lastId, content: lastContent, stream: streamMarker };
     if (!current.ready) {
       const reading = current.reading;
       if (reading.following) node.scrollTop = node.scrollHeight;
       else {
-        const items = rows(node), anchor = items.find(row => row.dataset.messageId === reading.anchor);
+        const items = currentRows(node), anchor = items.find(row => row.dataset.messageId === reading.anchor);
         const row = anchor || items[Math.min(Math.max(0, reading.index), Math.max(0, items.length - 1))];
         node.scrollTop = row ? contentTop(node, row) + reading.offset : reading.top;
         reading.unread ||= !!reading.observed && reading.observed !== lastId;
@@ -134,7 +146,9 @@ export function useConversationReading({ scroll, active, conversationId, compose
       rememberChatPosition();
       return;
     }
-    const changed = current.marker !== marker;
+    const before = current.marker;
+    const changed = !before || before.count !== marker.count || before.lastId !== marker.lastId ||
+      before.content !== marker.content || before.stream !== marker.stream;
     current.marker = marker;
     if (current.reading.following && !paused) {
       node.scrollTop = node.scrollHeight;
@@ -146,7 +160,7 @@ export function useConversationReading({ scroll, active, conversationId, compose
       setHasNewReplies(true);
     }
     rememberChatPosition();
-  }, [active, key, composer.key, composer.epoch, conversationId, marker, paused, messages.length, lastId, streamMarker, scroll, rememberChatPosition]);
+  }, [active, key, composer.key, composer.epoch, conversationId, lastContent, paused, messages.length, lastId, streamMarker, scroll, currentRows, rememberChatPosition]);
 
   useEffect(() => {
     const node = scroll.current, body = content.current;
