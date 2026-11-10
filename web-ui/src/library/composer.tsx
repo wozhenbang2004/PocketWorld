@@ -1,8 +1,9 @@
 // PW-02/03/04/05: controlled ports of actual saved Affect library v3 JSX/CSS.
 // Source controls retained; the host separates full-width editing from its toolbar.
-import {useLayoutEffect,useRef,useState,type ReactNode} from 'react';
+import {forwardRef,useContext,useEffect,useLayoutEffect,useRef,useState,type ReactNode,type RefObject} from 'react';
+import {AnimatePresence,PresenceContext,animate,motion,useMotionValue,usePresence} from 'motion/react';
 import type {ChatComposerProps,ModelOption,DataPanelProps,Step} from './types';
-import {FrameA,FrameB,Card,Icon,ToolButton,statusLabel,records,textOf} from './core';
+import {FrameA,FrameB,Card,Icon,ToolButton,statusLabel,records,textOf,useMotionAllowed} from './core';
 import {PressButton} from './press';
 import {MessageActions} from './message';
 import {CitedAnswer} from './context';
@@ -11,22 +12,116 @@ import {ProgressCircle} from './adapted/boardui-progress';
 import {ComposerContextMeter} from '../ComposerContextMeter';
 import {SmoothComposerSurface} from './SmoothComposerSurface';
 import {composerHasPayload} from '../composer-send-policy';
-function sizeComposerEditor(editor:HTMLTextAreaElement|null){
+import {cssEase,motionDuration,motionEase,motionTransition} from './motion-tokens';
+
+// Each retained exit reads the live motion preference itself: its last parent
+// props are deliberately frozen by AnimatePresence until the exit completes.
+function useComposerPresence(lift=0){
+ const allowed=useMotionAllowed(),initial=useContext(PresenceContext)?.initial!==false;
+ const [present,safeToRemove]=usePresence(),remove=useRef(safeToRemove);
+ const opacity=useMotionValue(allowed&&initial?0:1),y=useMotionValue(allowed&&initial?lift:0);
+ useLayoutEffect(()=>{remove.current=safeToRemove},[safeToRemove]);
+ useLayoutEffect(()=>{
+  if(!allowed){opacity.jump(present?1:0);y.jump(0);if(!present)remove.current?.();return}
+  let cancelled=false;
+  const transition=present?motionTransition.enter:motionTransition.exit;
+  const animations=[animate(opacity,present?1:0,transition),animate(y,present?0:-lift,transition)];
+  void Promise.all(animations).then(()=>{if(!cancelled&&!present)remove.current?.()});
+  return()=>{cancelled=true;animations.forEach(animation=>animation.stop())};
+ },[allowed,present,lift,opacity,y]);
+ return {allowed,present,style:{opacity,y}};
+}
+
+const ComposerControl=forwardRef<HTMLSpanElement,{children:ReactNode}>(function ComposerControl({children},ref){
+ const {allowed,present,style}=useComposerPresence();
+ return <motion.span ref={ref} className="pw-composer-motion-control" layout={allowed?'position':false}
+  style={style} transition={allowed?motionTransition.layout:motionTransition.instant}
+  inert={!present} aria-hidden={!present||undefined}
+  onClickCapture={event=>{if(!present){event.preventDefault();event.stopPropagation()}}}>{children}</motion.span>;
+});
+
+function ComposerAttachment({file,onRemove}:{file:NonNullable<ChatComposerProps['attachments']>[number];onRemove?:ChatComposerProps['onRemoveAttachment']}){
+ const {allowed,present,style}=useComposerPresence(6);
+ const originalPreview=typeof file.thumbnailDataUrl==='string'?file.thumbnailDataUrl:typeof file.thumbnail==='string'?file.thumbnail:'';
+ const thumbnail=/^(data:image\/(?:jpeg|png|webp|gif);base64,|blob:)/i.test(originalPreview)?originalPreview:'';
+ const kind=String(file.mimeType||'').startsWith('image/')?'image':/\.(?:tsx?|jsx?|java|kt|py|go|rs|css|html|json|xml|yaml|yml|sh)$/i.test(file.name)?'code':'file';
+ const progress=typeof file.progressPercent==='number'&&Number.isFinite(file.progressPercent)&&file.progressPercent>=0&&file.progressPercent<100?Math.round(file.progressPercent):null;
+ return <motion.span role="listitem" className="pw-composer-attachment" data-kind={kind} layout={allowed?'position':false}
+  style={style} transition={allowed?motionTransition.layout:motionTransition.instant} inert={!present} aria-hidden={!present||undefined}>
+  <span className="pw-composer-file-preview">{thumbnail?<img src={thumbnail} alt="" loading="lazy"/>:<Icon name="file" size={21}/>}
+   {progress!==null&&<svg viewBox="0 0 48 48" className="pw-composer-file-progress" aria-label={'上传 '+progress+'%'}><circle cx="24" cy="24" r="21" className="pw-composer-file-track"/><circle cx="24" cy="24" r="21" className="pw-composer-file-value" strokeDasharray={String(2*Math.PI*21)} strokeDashoffset={String((1-progress/100)*2*Math.PI*21)}/></svg>}
+  </span>
+  <span className="pw-composer-file-name" title={file.name}>{file.name}</span>
+  {onRemove&&<button type="button" disabled={!present} aria-label={'移除 '+file.name} onClick={()=>{if(present)onRemove(file.id)}}>×</button>}
+ </motion.span>;
+}
+
+function ComposerAttachments({files,onRemove}:{files:NonNullable<ChatComposerProps['attachments']>;onRemove?:ChatComposerProps['onRemoveAttachment']}){
+ const allowed=useMotionAllowed(),initial=useContext(PresenceContext)?.initial!==false;
+ const [present,safeToRemove]=usePresence(),remove=useRef(safeToRemove),content=useRef<HTMLDivElement>(null);
+ const [height,setHeight]=useState(0),animatedHeight=useMotionValue(0),opacity=useMotionValue(allowed&&initial?0:1);
+ const measured=useRef(false);
+ useLayoutEffect(()=>{remove.current=safeToRemove},[safeToRemove]);
+ useLayoutEffect(()=>{
+  const node=content.current;if(!node)return;
+  const measure=()=>{
+   const next=node.getBoundingClientRect().height+(parseFloat(getComputedStyle(node).marginBottom)||0);
+   if(!measured.current){measured.current=true;if(!initial||!allowed)animatedHeight.jump(next)}
+   setHeight(next);
+  };
+  measure();const observer=new ResizeObserver(measure);observer.observe(node);return()=>observer.disconnect();
+ },[]);
+ useLayoutEffect(()=>{
+  const target=present?height:0;
+  if(!allowed){animatedHeight.jump(target);opacity.jump(present?1:0);if(!present)remove.current?.();return}
+  let cancelled=false;
+  const transition=present?motionTransition.settle:motionTransition.exit;
+  const animations=[animate(animatedHeight,target,transition),animate(opacity,present?1:0,transition)];
+  void Promise.all(animations).then(()=>{if(!cancelled&&!present)remove.current?.()});
+  return()=>{cancelled=true;animations.forEach(animation=>animation.stop())};
+ },[height,present,allowed,animatedHeight,opacity]);
+ return <motion.div className="pw-composer-attachments-reveal" inert={!present} aria-hidden={!present||undefined} style={{height:animatedHeight,opacity}}>
+  <div ref={content} className="afa-filechips" aria-label="已附加文件" role="list"><AnimatePresence initial={false}>
+   {files.map(file=><ComposerAttachment key={file.id} file={file} onRemove={present?onRemove:undefined}/>)}
+  </AnimatePresence></div>
+ </motion.div>;
+}
+
+function sizeComposerEditor(editor:HTMLTextAreaElement|null,allowed:boolean,animation:RefObject<Animation|null>,lastTarget:RefObject<number>){
  if(!editor)return;
+ const currentHeight=editor.getBoundingClientRect().height;
  const style=getComputedStyle(editor);
  const lineHeight=parseFloat(style.lineHeight)||24;
  const verticalPadding=(parseFloat(style.paddingTop)||0)+(parseFloat(style.paddingBottom)||0);
  const minimum=Math.max(48,lineHeight+verticalPadding,parseFloat(style.minHeight)||0);
  const maximum=Math.max(minimum,parseFloat(style.maxHeight)||144);
- editor.style.height='0px';
+ // Measure intrinsic content without cancelling an in-flight growth on every
+ // keystroke. An important measurement wins over the current WAAPI height.
+ editor.style.setProperty('height','0px','important');
  const height=editor.value?editor.scrollHeight:minimum;
- editor.style.height=`${Math.min(maximum,Math.max(minimum,height))}px`;
+ const target=Math.min(maximum,Math.max(minimum,height));
+ editor.style.setProperty('height',`${target}px`);
  editor.style.overflowY=height>maximum?'auto':'hidden';
+ if(!allowed){animation.current?.cancel();animation.current=null;lastTarget.current=target;return}
+ if(lastTarget.current===target)return;
+ const hadLayout=lastTarget.current>0;lastTarget.current=target;
+ animation.current?.cancel();animation.current=null;
+ if(!hadLayout||Math.abs(currentHeight-target)<1)return;
+ const next=editor.animate([{height:`${currentHeight}px`},{height:`${target}px`}],{duration:motionDuration.feedback,easing:cssEase(motionEase.settle)});
+ next.id='pw-composer-resize';animation.current=next;
+ next.onfinish=()=>{if(animation.current===next){animation.current=null;next.cancel()}};
 }
 
 export function ChatComposer({value,onChange,onSend,onStop,busy,submitting,disabled,placeholder='输入目标，或补充上下文…',attachments=[],onRemoveAttachment,onAttach,onVoice,listening,voiceStatus,onDiscardVoice,modelName,onSelectModel,toolbar,controls,contextStatus,contextPercent,children,status,label='工作输入',composerKey,className='',sendDisabled=false,sendLabel}:ChatComposerProps&{sendDisabled?:boolean;sendLabel?:string}){
  const editor=useRef<HTMLTextAreaElement>(null);
- useLayoutEffect(()=>{sizeComposerEditor(editor.current)},[value,listening,composerKey]);
+ const allowed=useMotionAllowed(),resizeAnimation=useRef<Animation|null>(null),editorHeight=useRef(0);
+ const editorOwner=useRef(composerKey);
+ useLayoutEffect(()=>{
+  if(!editor.current){resizeAnimation.current?.cancel();resizeAnimation.current=null;editorHeight.current=0;return}
+  if(editorOwner.current!==composerKey){editorOwner.current=composerKey;resizeAnimation.current?.cancel();resizeAnimation.current=null;editorHeight.current=0}
+  sizeComposerEditor(editor.current,allowed,resizeAnimation,editorHeight);
+ },[value,listening,composerKey,allowed]);
+ useEffect(()=>()=>resizeAnimation.current?.cancel(),[]);
  useLayoutEffect(()=>{
   const el=editor.current;
   if(!el||typeof ResizeObserver==='undefined')return;
@@ -34,7 +129,7 @@ export function ChatComposer({value,onChange,onSend,onStop,busy,submitting,disab
   const observer=new ResizeObserver(()=>{
    if(el.clientWidth===width)return;
    width=el.clientWidth;
-   sizeComposerEditor(el);
+   sizeComposerEditor(el,false,resizeAnimation,editorHeight);
   });
   observer.observe(el);
   return()=>observer.disconnect();
@@ -53,19 +148,7 @@ export function ChatComposer({value,onChange,onSend,onStop,busy,submitting,disab
    </div>
    <div className="afa-card pw-composer-card" data-has-text={hasText} data-has-attachments={attachments.length>0}>
     <SmoothComposerSurface/>
-    {attachments.length>0&&<div className="afa-filechips" aria-label="已附加文件" role="list">{attachments.map(f=>{
-     const originalPreview=typeof f.thumbnailDataUrl==='string'?f.thumbnailDataUrl:typeof f.thumbnail==='string'?f.thumbnail:'';
-     const thumbnail=/^(data:image\/(?:jpeg|png|webp|gif);base64,|blob:)/i.test(originalPreview)?originalPreview:'';
-     const kind=String(f.mimeType||'').startsWith('image/')?'image':/\.(?:tsx?|jsx?|java|kt|py|go|rs|css|html|json|xml|yaml|yml|sh)$/i.test(f.name)?'code':'file';
-     const progress=typeof f.progressPercent==='number'&&Number.isFinite(f.progressPercent)&&f.progressPercent>=0&&f.progressPercent<100?Math.round(f.progressPercent):null;
-     return <span key={f.id} role="listitem" className="pw-composer-attachment" data-kind={kind}>
-      <span className="pw-composer-file-preview">{thumbnail?<img src={thumbnail} alt="" loading="lazy"/>:<Icon name="file" size={21}/>}
-       {progress!==null&&<svg viewBox="0 0 48 48" className="pw-composer-file-progress" aria-label={'上传 '+progress+'%'}><circle cx="24" cy="24" r="21" className="pw-composer-file-track"/><circle cx="24" cy="24" r="21" className="pw-composer-file-value" strokeDasharray={String(2*Math.PI*21)} strokeDashoffset={String((1-progress/100)*2*Math.PI*21)}/></svg>}
-      </span>
-      <span className="pw-composer-file-name" title={f.name}>{f.name}</span>
-      {onRemoveAttachment&&<button type="button" aria-label={'移除 '+f.name} onClick={()=>onRemoveAttachment(f.id)}>×</button>}
-     </span>;
-    })}</div>}
+    <AnimatePresence key={`attachments:${composerKey}`} initial={false}>{attachments.length>0&&<ComposerAttachments key="attachments" files={attachments} onRemove={onRemoveAttachment}/>}</AnimatePresence>
     {onSelectModel&&<div className="pw-composer-model"><button type="button" className="afa-btn pw-model-trigger" onClick={onSelectModel}><Icon name="spark"/><span>{modelName||'选择模型'}</span><Icon name="chevron" size={12}/></button></div>}
     <div className="pw-composer-row">
      {listening?<div className="afa-recording" role="status"><i aria-hidden="true"/><span>{voiceStatus||'正在听写…'}</span>{onDiscardVoice&&<ToolButton label="取消本次听写" icon="close" onClick={onDiscardVoice}/>}</div>:<textarea ref={editor} rows={1} aria-label={label} enterKeyHint="enter" placeholder={placeholder} value={value} disabled={disabled} onChange={e=>onChange(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing&&e.nativeEvent.keyCode!==229&&(!matchMedia('(pointer: coarse)').matches||e.ctrlKey||e.metaKey)){e.preventDefault();if(canSend)onSend()}}}/>}
@@ -73,11 +156,13 @@ export function ChatComposer({value,onChange,onSend,onStop,busy,submitting,disab
     <div className="pw-composer-toolbar">
      {(toolbar||onAttach)&&<div className="pw-composer-leading">{toolbar}{onAttach&&<ToolButton label="添加附件" icon="plus" onClick={onAttach} disabled={submitting}/>}</div>}
      <div className="pw-composer-trailing">
-      {controls&&<div className="pw-composer-controls">{controls}</div>}
+      {controls&&<motion.div layout={allowed?'position':false} transition={allowed?motionTransition.layout:motionTransition.instant} className="pw-composer-controls">{controls}</motion.div>}
       <div className="afa-toolbar">
-       {onVoice&&!busy&&<ToolButton label={listening?'结束听写':'语音输入'} icon="mic" onClick={onVoice} disabled={disabled||submitting}/>}
-       {hasContent&&!listening&&<PressButton compact aria-label={submitting?'正在登记':sendLabel||(busy?'补充给当前工作':'发送')} disabled={!canSend} onClick={onSend}><Icon name="arrow" size={18}/></PressButton>}
-       {busy&&onStop&&<button type="button" className="afa-stop pw-stop-motion" onClick={onStop} aria-label="停止当前回复"><span className="pw-stop-ring" aria-hidden="true"><ProgressCircle isIndeterminate size="md" aria-label="当前回复状态"/></span><span className="pw-stop-mark" aria-hidden="true">■</span></button>}
+       <AnimatePresence key={`controls:${composerKey}`} initial={false} mode="popLayout">
+        {onVoice&&!busy&&<ComposerControl key="voice"><ToolButton label={listening?'结束听写':'语音输入'} icon="mic" onClick={onVoice} disabled={disabled||submitting}/></ComposerControl>}
+        {hasContent&&!listening&&<ComposerControl key="send"><PressButton compact aria-label={submitting?'正在登记':sendLabel||(busy?'补充给当前工作':'发送')} disabled={!canSend} onClick={onSend}><Icon name="arrow" size={18}/></PressButton></ComposerControl>}
+        {busy&&onStop&&<ComposerControl key="stop"><button type="button" className="afa-stop pw-stop-motion" onClick={onStop} aria-label="停止当前回复"><span className="pw-stop-ring" aria-hidden="true"><ProgressCircle isIndeterminate size="md" aria-label="当前回复状态"/></span><span className="pw-stop-mark" aria-hidden="true">■</span></button></ComposerControl>}
+       </AnimatePresence>
       </div>
      </div>
     </div>

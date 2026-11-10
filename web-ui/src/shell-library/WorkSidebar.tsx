@@ -7,7 +7,8 @@
 import {useId,type ComponentType,type ReactNode} from 'react';
 import {LayoutGroup,motion} from 'motion/react';
 import {RiSideBarFill} from '@remixicon/react';
-import {useReducedMotion} from '../library/core';
+import {useMotionAllowed} from '../library/core';
+import {motionTransition} from '../library/motion-tokens';
 import {useTemplateCopy} from './adapted/boardui/components/foundations/template-copy/template-copy';
 import {cx} from './adapted/boardui/utils/cx';
 import './navigation-motion.css';
@@ -84,7 +85,7 @@ function NavItem({
           className="pw-nav-selection"
           layoutId="pw-nav-selection"
           initial={false}
-          transition={reduceMotion ? {duration: 0} : {type: "spring", stiffness: 440, damping: 30, mass: .8}}
+          transition={reduceMotion ? motionTransition.instant : motionTransition.selection}
           aria-hidden="true"
         />
       )}
@@ -115,7 +116,7 @@ function NavItem({
 export type WorkNavItem={key:string;label:string;icon:IconComponent;count?:number;status?:string;group?:string;description?:string;disabled?:boolean};
 export function WorkSidebar({items,selected,onNavigate,header,footer,label='工作与功能',hideGroupLabels=false,compact=false,onCompactChange}:{items:WorkNavItem[];selected:string;onNavigate:(key:string)=>void;header?:ReactNode;footer?:ReactNode;label?:string;hideGroupLabels?:boolean;compact?:boolean;onCompactChange?:(compact:boolean)=>void}) {
  const navigationId=useId();
- const reduceMotion=useReducedMotion();
+ const reduceMotion=!useMotionAllowed();
  const groups=Array.from(new Set(items.map(x=>x.group||'工作')));
  return (
   <LayoutGroup id={navigationId}>

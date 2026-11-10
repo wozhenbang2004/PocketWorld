@@ -1,5 +1,6 @@
 import React from 'react';
 import { isSafari } from './browser';
+import { drawerDuration } from './motion';
 
 let previousBodyPosition: Record<string, string> | null = null;
 
@@ -132,9 +133,10 @@ export function usePositionFixed({
       !isStandalone && setPositionFixed();
 
       if (!modal) {
-        window.setTimeout(() => {
+        const restoreTimer = window.setTimeout(() => {
           restorePositionSetting();
-        }, 500);
+        }, drawerDuration());
+        return () => window.clearTimeout(restoreTimer);
       }
     } else {
       restorePositionSetting();

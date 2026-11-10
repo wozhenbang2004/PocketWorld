@@ -7,6 +7,27 @@
 .pw-work-sidebar[data-motion-nav] .pw-nav-item > a {
   position: relative;
   overflow: visible;
+  transition: background-color var(--pw-motion-feedback, 140ms) var(--pw-ease-settle, cubic-bezier(.22,1,.36,1));
+}
+
+/* The surface takes pressure; the label and its 48px target stay still. */
+.pw-work-sidebar[data-motion-nav] .pw-nav-item > a::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+  background: var(--pw-pressed, #dedede);
+  opacity: 0;
+  transform: scale(1);
+  pointer-events: none;
+  transition: opacity var(--pw-motion-feedback, 140ms) var(--pw-ease-settle, cubic-bezier(.22,1,.36,1)),
+    transform var(--pw-motion-release, 220ms) var(--pw-ease-settle, cubic-bezier(.22,1,.36,1));
+}
+.pw-work-sidebar[data-motion-nav] .pw-nav-item > a:active:not([aria-disabled="true"])::before {
+  opacity: 1;
+  transform: scale(.975);
+  transition-duration: var(--pw-motion-press, 80ms);
 }
 
 /* Scope the override to motion rows: legacy selected backgrounds must not obscure
@@ -35,7 +56,7 @@
 .pw-work-sidebar[data-motion-nav] nav h3:not(.pw-sr-only),
 .pw-work-sidebar[data-motion-nav] .pw-nav-item > small {
   position: relative;
-  z-index: 1;
+  z-index: 2;
 }
 .pw-work-sidebar .pw-nav-status {
   width: 5px;
@@ -52,7 +73,9 @@
   min-height: 48px;
 }
 .pw-work-sidebar[data-motion-nav] .pw-nav-label {
-  transition: max-width 280ms cubic-bezier(.22,.68,0,1.02), opacity 180ms ease, filter 180ms ease;
+  transition: max-width var(--pw-motion-layout, 280ms) var(--pw-ease-move, cubic-bezier(.42,0,.58,1)),
+    opacity var(--pw-motion-feedback, 140ms) var(--pw-ease-settle, cubic-bezier(.22,1,.36,1)),
+    filter var(--pw-motion-feedback, 140ms) var(--pw-ease-settle, cubic-bezier(.22,1,.36,1));
 }
 .pw-work-sidebar[data-motion-nav][data-compact="true"] .pw-nav-label,
 .pw-work-sidebar[data-motion-nav][data-compact="true"] .pw-nav-badge {
@@ -100,16 +123,19 @@
 }
 
 :root[data-pw-motion-paused="true"] .pw-work-sidebar[data-motion-nav] *,
+:root[data-pw-motion-paused="true"] .pw-work-sidebar[data-motion-nav] .pw-nav-item > a::before,
 :root[data-pw-motion-paused="true"] .pw-desktop-navigation {
   transition: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .pw-work-sidebar[data-motion-nav] .pw-nav-item > a,
+  .pw-work-sidebar[data-motion-nav] .pw-nav-item > a::before,
   .pw-work-sidebar[data-motion-nav] .pw-nav-content,
   .pw-work-sidebar[data-motion-nav] .pw-nav-content span,
   .pw-work-sidebar[data-motion-nav] .pw-nav-label,
   .pw-nav-compact-toggle {
     transition: none;
   }
+  .pw-work-sidebar[data-motion-nav] .pw-nav-item > a:active:not([aria-disabled="true"])::before { transform: none; }
 }

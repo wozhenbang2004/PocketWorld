@@ -1,14 +1,14 @@
 // Product wiring for the retained Ovio stage easing and Affect arrival/disclosure
 // patterns. Animate the current DOM only; never keep a second live workspace.
-import {useLayoutEffect,useRef,useState,type RefObject} from 'react';
-import {ease,motionTokens} from '../shell-library/adapted/ovio/lib/motion';
-import {useReducedMotion} from './core';
+import {useEffect,useLayoutEffect,useRef,useState,type RefObject} from 'react';
+import {useMotionAllowed} from './core';
+import {cssEase,motionDuration,motionEase} from './motion-tokens';
 
 const arrivalTiming:KeyframeAnimationOptions={
- duration:motionTokens.minimal.slow.duration*1000,
- easing:`cubic-bezier(${ease.stage.join(',')})`,
+ duration:motionDuration.enter,
+ easing:cssEase(motionEase.enter),
 };
-const arrivalFrames:Keyframe[]=[{opacity:0,transform:'translateY(6px)'},{opacity:1,transform:'translateY(0)'}];
+const arrivalFrames:Keyframe[]=[{opacity:0,transform:'translateY(10px)'},{opacity:1,transform:'translateY(0)'}];
 
 /** Suspend decorative CSS loops while the host document is in the background. */
 export function useMotionLifecycle(){
@@ -33,41 +33,96 @@ export function useMotionLifecycle(){
  },[]);
 }
 
-export function useSurfaceEnter(root:RefObject<HTMLElement|null>,identity:string){
- const reduce=useReducedMotion();const previous=useRef(identity);
+export function useSurfaceEnter(root:RefObject<HTMLElement|null>,identity:string,{selector=':scope > .pw-route-workspace, :scope > .pw-secondary',depth=0,active=true}:{selector?:string;depth?:number;active?:boolean}={}){
+ const allowed=useMotionAllowed();
+ const previous=useRef({identity,depth});const playing=useRef<Animation|null>(null);
  useLayoutEffect(()=>{
-  const changed=previous.current!==identity;previous.current=identity;
-  if(!changed||reduce||document.hidden)return;
-  const surface=root.current?.querySelector<HTMLElement>(':scope > .pw-route-workspace, :scope > .pw-secondary');
-  if(!surface)return;
-  const animation=surface.animate(arrivalFrames,arrivalTiming);animation.id='pw-surface-enter';
-  return()=>animation.cancel();
- },[root,identity,reduce]);
+  const before=previous.current;previous.current={identity,depth};
+  if(!allowed||!active){playing.current?.cancel();playing.current=null;return}
+  if(before.identity===identity)return;
+  const surface=selector?root.current?.querySelector<HTMLElement>(selector):root.current;
+  if(!surface){playing.current?.cancel();playing.current=null;return}
+  // A rapid second navigation starts at the visible frame of this surface.
+  // Keep one live workspace: no outgoing editor, media or host subscription.
+  const interrupted=playing.current?.playState==='running'&&playing.current.effect instanceof KeyframeEffect&&playing.current.effect.target===surface;
+  const current=interrupted?getComputedStyle(surface):null;
+  const start:Keyframe=current?{opacity:current.opacity,transform:current.transform}:{opacity:.65,transform:depth===before.depth?'translateY(6px)':`translateX(${depth<before.depth?-12:12}px)`};
+  playing.current?.cancel();
+  const animation=surface.animate([start,{opacity:1,transform:'translate(0,0)'}],arrivalTiming);
+  animation.id='pw-surface-enter';playing.current=animation;
+  animation.onfinish=()=>{if(playing.current===animation){playing.current=null;animation.cancel()}};
+ },[root,identity,selector,depth,active,allowed]);
+ useEffect(()=>()=>playing.current?.cancel(),[]);
 }
 
 /** New tail IDs enter once; streaming updates, restored history and returning to
  * a conversation retain the same readable nodes and existing scroll authority. */
-export function useMessageArrivals(root:RefObject<HTMLElement|null>,conversation:string,ids:readonly string[],active:boolean){
- const reduce=useReducedMotion();const signature=JSON.stringify(ids);
- const previous=useRef<{conversation:string;ids:string[];active:boolean}|null>(null);
+export type MessageArrivalDelivery={
+ owner:string;
+ /** Native pending IDs belonging to this currently selected composer draft. */
+ pendingClients:readonly string[];
+ receipts:readonly {clientMessageId:string;conversationId:string;status:string}[];
+ /** Native user-message IDs paired with their submission.clientMessageId. */
+ submissions:readonly {id:string;clientMessageId:string}[];
+};
+export function useMessageArrivals(root:RefObject<HTMLElement|null>,conversation:string,ids:readonly string[],active:boolean,delivery?:MessageArrivalDelivery){
+ const allowed=useMotionAllowed();const signature=JSON.stringify(ids);
+ const owner=delivery?.owner??conversation;
+ const deliverySignature=JSON.stringify(delivery?{pendingClients:delivery.pendingClients,receipts:delivery.receipts,submissions:delivery.submissions}:null);
+ const previous=useRef<{conversation:string;owner:string;ids:string[];active:boolean}|null>(null);
+ const requested=useRef<{conversation:string;owner:string;knownClients:Set<string>;client:string|null;migrated:boolean}|null>(null),playing=useRef(new Set<Animation>());
+ const cancelPlaying=()=>{playing.current.forEach(animation=>animation.cancel());playing.current.clear()};
  useLayoutEffect(()=>{
   const currentIds=JSON.parse(signature) as string[];
-  const before=previous.current;previous.current={conversation,ids:currentIds,active};
-  // Empty -> populated can be native history hydration, not a newly sent reply.
-  if(!before||!before.ids.length||before.conversation!==conversation||!before.active||!active||reduce||document.hidden)return;
-  const tail=before.ids.at(-1);
-  const tailIndex=tail?currentIds.indexOf(tail):-1;
-  // A replaced or paged window is not a new reply.
-  if(before.ids.length&&tailIndex<0)return;
-  const known=new Set(before.ids);
-  const arrivals=new Set(currentIds.slice(tailIndex+1).filter(id=>id&&!known.has(id)));
-  const animations:Animation[]=[];
+  const currentDelivery=JSON.parse(deliverySignature) as Omit<MessageArrivalDelivery,'owner'>|null;
+  const before=previous.current;previous.current={conversation,owner,ids:currentIds,active};
+  if(!before||!active||!allowed){requested.current=null;cancelPlaying();return}
+  if(!before.active)return;
+  const intent=requested.current;
+  // composer.send returns only a bridge acceptance, not the native message ACK.
+  // Bind a fresh native pending ID while its original draft still owns the UI.
+  if(intent&&!intent.client&&intent.owner===owner&&intent.conversation===conversation&&currentDelivery){
+   const clients=currentDelivery.pendingClients.filter(client=>client&&!intent.knownClients.has(client));
+   if(clients.length===1)intent.client=clients[0];
+   else if(clients.length>1)requested.current=null;
+  }
+  const request=requested.current;
+  const receipt=request?.client?currentDelivery?.receipts.find(receipt=>receipt.clientMessageId===request.client&&['accepted','queued','consumed'].includes(receipt.status)):undefined;
+  const changed=before.conversation!==conversation||before.owner!==owner;
+  if(changed){
+   cancelPlaying();
+   // A new draft's key AND epoch change after its first accepted send. Only the
+   // exact observed pending ID's receipt may carry presentation intent across it.
+   if(!request||request.migrated||request.conversation!==''||before.owner!==request.owner||before.conversation!==''||!conversation||receipt?.conversationId!==conversation){requested.current=null;return}
+   request.owner=owner;request.conversation=conversation;request.migrated=true;
+  }
+  const baseline=changed?[]:before.ids;
+  let arrivals:Set<string>;
+  if(!baseline.length){
+   // History hydration can race an explicit send. Animate only its real user row,
+   // never every row in an empty -> populated snapshot or an arbitrary new owner.
+   if(!request?.client||receipt?.conversationId!==conversation)return;
+   const submitted=new Set(currentDelivery?.submissions.filter(message=>message.clientMessageId===request.client).map(message=>message.id));
+   arrivals=new Set(currentIds.filter(id=>id&&submitted.has(id)));
+  }else{
+   const tail=baseline.at(-1),tailIndex=tail?currentIds.indexOf(tail):-1;
+   // A replaced or paged window is not a new reply.
+   if(tailIndex<0)return;
+   const known=new Set(baseline);
+   arrivals=new Set(currentIds.slice(tailIndex+1).filter(id=>id&&!known.has(id)));
+  }
+  if(arrivals.size)requested.current=null;
+  const viewport=root.current?.getBoundingClientRect();
   root.current?.querySelectorAll<HTMLElement>('[data-message-id]').forEach(node=>{
    if(!arrivals.has(node.dataset.messageId||''))return;
-   const animation=node.animate(arrivalFrames,arrivalTiming);animation.id='pw-message-enter';animations.push(animation);
+   const bounds=node.getBoundingClientRect();
+   if(viewport&&(bounds.bottom<viewport.top||bounds.top>viewport.bottom))return;
+   const animation=node.animate(arrivalFrames,arrivalTiming);animation.id='pw-message-enter';playing.current.add(animation);
+   animation.onfinish=()=>{playing.current.delete(animation);animation.cancel()};
   });
-  return()=>animations.forEach(animation=>animation.cancel());
- },[root,conversation,signature,active,reduce]);
+ },[root,conversation,owner,signature,deliverySignature,active,allowed]);
+ useEffect(()=>()=>cancelPlaying(),[]);
+ return ()=>{requested.current=delivery?{conversation,owner,knownClients:new Set(delivery.pendingClients),client:null,migrated:false}:null};
 }
 
 /** Controlled reviews open after a host response, without a Radix Trigger.

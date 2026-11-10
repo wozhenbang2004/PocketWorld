@@ -372,7 +372,8 @@
     "Source originals retained alongside adapters; no fixture data used",
     "Vaul 1.1.2 React 19 compatibility only: RefObject<HTMLDivElement | null> in context/use-snap-points; browser-compatible ReturnType<typeof setTimeout> replaces NodeJS.Timeout. Upstream source remains byte-identical.",
     "CI19 visual correction: ReviewCenter queue retains real source objects; mobile queue cards stack full title/description/status beside a fixed arrow, horizontal object scrolling and one-column detail. No content hidden or fixture settlement introduced.",
-    "Vaul style.css adapter syntax correction: pointer:fine rule targets the existing data-vaul-handle-hitarea span, whose touch target is expanded to 44px by the preceding base rule; remove stray colon from attribute selector to restore intended fine-pointer width/height 100%. This is not a pseudo-element. Upstream 1.1.2 raw remains unchanged."
+    "Vaul style.css adapter syntax correction: pointer:fine rule targets the existing data-vaul-handle-hitarea span, whose touch target is expanded to 44px by the preceding base rule; remove stray colon from attribute selector to restore intended fine-pointer width/height 100%. This is not a pseudo-element. Upstream 1.1.2 raw remains unchanged.",
+    "2026-11-10 motion integration: shared product tokens, interruptible selection and opt-in full-screen navigation swipe; original source copies and licenses remain intact. See DESIGN.md PW-M1–PW-M6 for source references and current verification boundaries."
   ],
   "usage": [
     {
@@ -399,7 +400,7 @@
         "attachments.openPicker",
         "attachments.closePicker"
       ],
-      "controlledChanges": "Source complete graph; no original drag/focus/scroll algorithm replacement; neutral product surfaces, shouldScaleBackground=false",
+      "controlledChanges": "Original source graph retained; neutral product surfaces, shouldScaleBackground=false. 2026-11-10: retained Vaul 1.1.2 and Radix focus/scroll/presence ownership; synchronized enter/exit timing with shared tokens and added an opt-in left navigation opening gesture using the existing Motion dependency. The same real drawer follows touch 1:1; release inherits measured velocity; controlled Back/cancel clears gesture authority immediately while presentation can finish. Other drawers keep their original drag path.",
       "status": {
         "sourceCopied": true,
         "adapted": true,
@@ -468,7 +469,7 @@
         "files"
       ],
       "hostActions": [],
-      "controlledChanges": "Original React Aria underline tabs; controlled real filters and local view",
+      "controlledChanges": "Original React Aria underline tabs; controlled real filters and local view 2026-11-10: retained BoardUI/React Aria selection, keyboard and panel association; MotionValues animate the existing indicator from its current position/width, while resize, scrolling and reduced/background state snap to actual geometry. Only the newly selected panel enters; outgoing panels are not retained.",
       "status": {
         "sourceCopied": true,
         "adapted": true,
@@ -496,7 +497,7 @@
         "speech.speak",
         "speech.stop"
       ],
-      "controlledChanges": "Original registry source; aliases localized; controlled real actions, no fixture data. 2026-11-10: composer selection uses standalone modal-focus Popover without a visual scrim, anchored to the actual chip, with existing placement/flip behavior; forward maxHeight, scrollRef and isKeyboardDismissDisabled for bounded body scrolling and pending dismissal guards. Source upstream remains unchanged. Scoped reasoning rows reuse BoardUI menu styles and RadioDot with React Aria Menu action semantics; arrow navigation does not submit, and confirmed writes control dismissal.",
+      "controlledChanges": "Original registry source; aliases localized; controlled real actions, no fixture data. 2026-11-10: composer selection uses standalone modal-focus Popover without a visual scrim, anchored to the actual chip, with existing placement/flip behavior; forward maxHeight, scrollRef and isKeyboardDismissDisabled for bounded body scrolling and pending dismissal guards. Source upstream remains unchanged. Scoped reasoning rows reuse BoardUI menu styles and RadioDot with React Aria Menu action semantics; arrow navigation does not submit, and confirmed writes control dismissal. 2026-11-10: retained BoardUI/React Aria trigger, placement and presence behavior; enter and exit consume shared role timings, and reduced-motion/background changes settle immediately.",
       "status": {
         "sourceCopied": true,
         "adapted": true,

@@ -3,6 +3,7 @@
 import { useDirection } from "../../foundations/direction/direction";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ComponentType, ReactNode, Ref } from "react";
+import { animate, motion, useMotionValue } from "motion/react";
 import {
   Tab as AriaTab,
   TabList as AriaTabList,
@@ -16,6 +17,8 @@ import type {
   TabsProps as AriaTabsProps,
 } from "react-aria-components";
 import { cx } from "../../../utils/cx";
+import { useMotionAllowed } from "../../../../../../library/core";
+import { motionTransition } from "../../../../../../library/motion-tokens";
 
 const useIsomorphicLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
 
@@ -65,31 +68,67 @@ export interface TabListProps<T extends object> extends AriaTabListProps<T> {
   ref?: Ref<HTMLDivElement>;
 }
 
-type Underline = { left: number; width: number };
+type Underline = { left: number; width: number; animate: boolean };
 
 export function TabList<T extends object>({ className, ref, ...props }: TabListProps<T>) {
   const direction = useDirection();
+  const allowed = useMotionAllowed();
   const wrapperRef = useRef<HTMLDivElement>(null);
   const [underline, setUnderline] = useState<Underline | null>(null);
+  const indicatorX = useMotionValue(0);
+  const indicatorWidth = useMotionValue(0);
+
+  useIsomorphicLayoutEffect(() => {
+    if (!underline) return;
+    if (!allowed || !underline.animate) {
+      indicatorX.jump(underline.left); indicatorWidth.jump(underline.width);
+      return;
+    }
+    const animations = [
+      animate(indicatorX, underline.left, motionTransition.selection),
+      animate(indicatorWidth, underline.width, motionTransition.selection),
+    ];
+    return () => animations.forEach(animation => animation.stop());
+  }, [underline, allowed, indicatorX, indicatorWidth]);
 
   useIsomorphicLayoutEffect(() => {
     const el = wrapperRef.current;
     if (!el) return;
-    const measure = () => {
+    let frame = 0, pendingSelection = false;
+    let previous: HTMLElement | null = null;
+    const observed = new Set<Element>();
+    const measure = (selectionChanged = false) => {
       const selected = el.querySelector<HTMLElement>("[role='tab'][data-selected]");
       if (selected) {
-        setUnderline({ left: selected.offsetLeft, width: selected.offsetWidth });
-      }
+        // Layout coordinates stay correct while a parent popover is scaled.
+        const list = selected.closest<HTMLElement>("[role='tablist']");
+        const next = { left: selected.offsetLeft - (list?.scrollLeft || 0), width: selected.offsetWidth, animate: selectionChanged && previous !== null && selected !== previous };
+        setUnderline(current => current && current.left === next.left && current.width === next.width ? current : next);
+      } else setUnderline(null);
+      previous = selected;
+    };
+    const schedule = (selectionChanged = false) => {
+      pendingSelection ||= selectionChanged;
+      if (frame) return;
+      frame = requestAnimationFrame(() => { frame = 0; measure(pendingSelection); pendingSelection = false; });
     };
     measure();
-    const ro = new ResizeObserver(measure);
+    const ro = new ResizeObserver(() => schedule());
     ro.observe(el);
     // Labels and fonts can change width without resizing the full tab strip.
-    const observeTabs = () => el.querySelectorAll("[role='tab']").forEach(tab => ro.observe(tab));
+    const observeTabs = () => {
+      const tabs = new Set(el.querySelectorAll("[role='tab']"));
+      for (const tab of observed) if (!tabs.has(tab)) { ro.unobserve(tab); observed.delete(tab); }
+      for (const tab of tabs) if (!observed.has(tab)) { ro.observe(tab); observed.add(tab); }
+    };
     observeTabs();
-    const mo = new MutationObserver(() => { observeTabs(); measure(); });
+    const mo = new MutationObserver(records => { observeTabs(); schedule(records.some(record => record.attributeName === "data-selected")); });
     mo.observe(el, { attributes: true, childList: true, characterData: true, subtree: true, attributeFilter: ["data-selected"] });
+    const scroll = () => schedule();
+    el.addEventListener("scroll", scroll, true);
     return () => {
+      cancelAnimationFrame(frame);
+      el.removeEventListener("scroll", scroll, true);
       mo.disconnect();
       ro.disconnect();
     };
@@ -108,12 +147,14 @@ export function TabList<T extends object>({ className, ref, ...props }: TabListP
         }
       />
       {underline && (
-        <span
+        <motion.span
           aria-hidden
-          className="pointer-events-none absolute bottom-0 left-0 h-0.5 bg-accent-600 transition-[transform,width] duration-200 ease"
+          data-pw-motion-indicator="true"
+          className="pointer-events-none absolute bottom-0 left-0 h-0.5 bg-accent-600"
           style={{
-            transform: `translateX(${underline.left}px)`,
-            width: underline.width,
+            transition: "none",
+            x: indicatorX,
+            width: indicatorWidth,
           }}
         />
       )}
@@ -181,6 +222,7 @@ export interface TabPanelProps extends AriaTabPanelProps {
 }
 
 export function TabPanel({ className, ref, ...props }: TabPanelProps) {
+  const allowed = useMotionAllowed();
   return (
     <AriaTabPanel
       ref={ref}
@@ -188,6 +230,11 @@ export function TabPanel({ className, ref, ...props }: TabPanelProps) {
       className={(state) =>
         cx(
           "outline-none focus-visible:rounded-sm focus-visible:ring-2 focus-visible:ring-border-focus-ring",
+          // React Aria owns the selected panel. Only the new surface enters;
+          // an outgoing panel never keeps a second business view alive.
+          allowed && !state.isExiting && !state.isInert
+            ? "transition-[opacity,translate] duration-(--pw-motion-enter) ease-(--pw-ease-settle) data-[entering]:opacity-0 data-[entering]:translate-y-1.5"
+            : "transition-none",
           typeof className === "function" ? className(state) : className,
         )
       }

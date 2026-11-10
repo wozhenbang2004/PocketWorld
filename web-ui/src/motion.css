@@ -1,19 +1,32 @@
-/* Ovio stage entry, Affect grid disclosure and the existing BoardUI activity
- * ring share the product's quiet motion. No business timer supplies progress. */
+/* Role timings shared by the existing source adaptations. Keep these values in
+ * step with library/motion-tokens.ts; animations never supply business progress. */
+:root {
+ --pw-motion-press:80ms;
+ --pw-motion-release:220ms;
+ --pw-motion-feedback:140ms;
+ --pw-motion-enter:220ms;
+ --pw-motion-exit:160ms;
+ --pw-motion-layout:280ms;
+ --pw-motion-drawer:320ms;
+ --pw-motion-drawer-exit:240ms;
+ --pw-ease-enter:cubic-bezier(0,0,.58,1);
+ --pw-ease-settle:cubic-bezier(.22,1,.36,1);
+ --pw-ease-exit:cubic-bezier(.42,0,1,1);
+ --pw-ease-move:cubic-bezier(.42,0,.58,1);
+}
 .pw-thinking-loader.ui-tlc {font-family:var(--font-ui);}
 .pw-task-filters-reveal {
  display:grid;grid-template-rows:0fr;opacity:0;visibility:hidden;
- transition:grid-template-rows 280ms cubic-bezier(.22,1,.36,1),opacity 180ms ease,visibility 0s 280ms;
+ transition:grid-template-rows var(--pw-motion-layout) var(--pw-ease-move),opacity var(--pw-motion-exit) var(--pw-ease-exit),visibility 0s var(--pw-motion-layout);
 }
 .pw-task-filters-reveal[data-open="true"] {
- grid-template-rows:1fr;opacity:1;visibility:visible;transition-delay:0s;
+ grid-template-rows:1fr;opacity:1;visibility:visible;transition-delay:0s;transition-timing-function:var(--pw-ease-move),var(--pw-ease-enter),linear;
 }
 .pw-disclosure-clip {min-height:0;overflow:hidden;}
 .pw-stop-motion {position:relative;isolation:isolate;}
 .pw-stop-ring {position:absolute;inset:0;display:grid;place-items:center;pointer-events:none;color:inherit;}
-.pw-stop-mark {position:relative;font-size:9px;line-height:1;animation:pw-stop-enter 160ms cubic-bezier(.2,.7,.2,1) both;}
-@keyframes pw-stop-enter {from{opacity:0;transform:scale(.65)}to{opacity:1;transform:scale(1)}}
-.pw-new-replies {animation:pw-reply-enter 180ms cubic-bezier(.2,.7,.2,1) both;}
+.pw-stop-mark {position:relative;font-size:9px;line-height:1;}
+.pw-new-replies {animation:pw-reply-enter var(--pw-motion-enter) var(--pw-ease-enter) both;}
 @keyframes pw-reply-enter {from{opacity:0;translate:0 4px}to{opacity:1;translate:0 0}}
 
 /* Only targets with a running infinite CSS loop receive this temporary marker.

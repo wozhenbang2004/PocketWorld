@@ -114,7 +114,7 @@ function treeData(files:Json[]){
 function useNativeDraft(owner:string,text:string,revision:any){
  const [value,setValue]=useState(text);const current=useRef({owner,dirty:false,value:text});const sent=useRef<string|null>(null);
  useEffect(()=>{const c=current.current;if(c.owner!==owner){current.current={owner,dirty:false,value:text};sent.current=null;setValue(text);return;}if(text===c.value){c.dirty=false;return;}if(!c.dirty||(sent.current!==null&&c.value===sent.current&&text==='')){c.value=text;c.dirty=false;sent.current=null;setValue(text);}},[owner,text,revision]);
- return {value,set:(next:string)=>{sent.current=null;current.current={owner,dirty:true,value:next};setValue(next)},markSent:()=>{sent.current=current.current.value},owner};
+ return {value:current.current.owner===owner?value:text,set:(next:string)=>{sent.current=null;current.current={owner,dirty:true,value:next};setValue(next)},markSent:()=>{sent.current=current.current.value},owner};
 }
 /** Only exceptional delivery states belong in the reading stream; successful receipts stay in native history. */
 function Receipt({receipt}:{receipt:Json}){
@@ -327,58 +327,6 @@ export default function App(){
  const showTaskLayer=useCallback((next:TaskLayer)=>{rememberTaskPosition();setTaskLayer(next)},[rememberTaskPosition]);
  const closeTask=useCallback(()=>{taskHistoryOrigin.current=null;rememberTaskPosition();invalidateContinuation();reviewWindow.current=null;reviewRequest.current++;openedTaskId.current=null;setTaskOpening(false);const closed=can('tasks.close')?act('tasks.close').then(()=>true,()=>false):Promise.resolve(false);setTaskOpen(false);setTaskLayer('overview');setReview(null);setReviewPending(false);setReviewSubmitted(false);setReviewReceipt('');setQuestionAnswer('');return closed;},[can,act,rememberTaskPosition,invalidateContinuation]);
  const changeNavigation=useCallback((open:boolean)=>{setWorkOpen(open);if(!open)setCommandOpen(false)},[]);
- // Open mobile navigation across the screen without taking over scrolling or text selection.
- useEffect(()=>{
-  if(desktopNavigation||workOpen)return;
-  let gesture:{id:number;x:number;y:number;horizontal:boolean}|null=null;
-  const reset=()=>{gesture=null};
-  const cancelSelection=()=>{if(window.getSelection()?.toString())reset()};
-  const start=(event:TouchEvent)=>{
-   reset();
-   if(event.touches.length!==1||document.hidden)return;
-   const touch=event.touches[0],target=event.target;
-   if(!(target instanceof Element)||!target.closest('.pw-app'))return;
-   if(target.closest('input,textarea,select,button,a,[role="slider"],[contenteditable="true"],[data-vaul-no-drag]')||document.querySelector('[role="dialog"][data-state="open"],[role="alertdialog"]')||window.getSelection()?.toString())return;
-   for(let node:Element|null=target;node&&!node.classList.contains('pw-app');node=node.parentElement){
-    if(node.scrollWidth>node.clientWidth+1&&/auto|scroll/.test(getComputedStyle(node).overflowX))return;
-   }
-   gesture={id:touch.identifier,x:touch.clientX,y:touch.clientY,horizontal:false};
-  };
-  const move=(event:TouchEvent)=>{
-   if(!gesture)return;
-   if(event.touches.length!==1||window.getSelection()?.toString()){reset();return}
-   const touch=Array.from(event.touches).find(item=>item.identifier===gesture!.id);
-   if(!touch){reset();return}
-   const dx=touch.clientX-gesture.x,dy=Math.abs(touch.clientY-gesture.y);
-   if(!gesture.horizontal){
-    if(dy>12&&dy>=Math.abs(dx)||dx< -12){reset();return}
-    if(dx<12||dx<dy*1.5)return;
-    gesture.horizontal=true;
-   }
-   if(event.cancelable)event.preventDefault();
-  };
-  const end=(event:TouchEvent)=>{
-   const current=gesture;reset();
-   if(!current||!current.horizontal||window.getSelection()?.toString())return;
-   const touch=Array.from(event.changedTouches).find(item=>item.identifier===current.id);
-   if(!touch||touch.clientX-current.x<48||Math.abs(touch.clientY-current.y)>Math.max(32,(touch.clientX-current.x)/1.5))return;
-   if(event.cancelable)event.preventDefault();
-   changeNavigation(true);
-  };
-  document.addEventListener('touchstart',start,{passive:true});
-  document.addEventListener('touchmove',move,{passive:false});
-  document.addEventListener('touchend',end,{passive:false});
-  document.addEventListener('touchcancel',reset);
-  document.addEventListener('visibilitychange',reset);
-  document.addEventListener('contextmenu',reset);
-  document.addEventListener('selectionchange',cancelSelection);
-  return()=>{
-   document.removeEventListener('touchstart',start);document.removeEventListener('touchmove',move);
-   document.removeEventListener('touchend',end);document.removeEventListener('touchcancel',reset);
-   document.removeEventListener('visibilitychange',reset);
-   document.removeEventListener('contextmenu',reset);document.removeEventListener('selectionchange',cancelSelection);
-  };
- },[desktopNavigation,workOpen,changeNavigation]);
  const navigate=useCallback((requested:string,afterNavigate?:()=>void)=>{
   const next=requested==='memory'?'profile':requested==='advanced-memory'?'memory':requested;
   const commit=()=>{
@@ -511,8 +459,14 @@ export default function App(){
  useEffect(()=>{if(route==='projects'&&can('projects.refresh'))run('projects.refresh');else if(route==='tasks'&&can('tasks.refresh'))run('tasks.refresh');},[route,can,run]);
  useLayoutEffect(()=>{if(!taskOpen)return;const node=taskScroll.current;if(node)node.scrollTop=taskReading.current.get(`${taskId}:${taskLayer}`)??0},[taskOpen,taskId,taskLayer]);
  useEffect(()=>{setFileQuery('');setFileDisplayOpen(false);setProjectPickerOpen(false)},[state.projectId]);
- useSurfaceEnter(workspace,route);
- useMessageArrivals(scroll,String(state.conversationId||''),messages.map((message,index)=>message.id||`${message.role}:${message.at}:${index}`),route==='chat');
+ useSurfaceEnter(workspace,route==='chat'?`${route}:${state.conversationId||''}`:route==='projects'?`${route}:${state.filePath||''}`:route);
+ useSurfaceEnter(taskScroll,`${taskId}:${taskLayer}`,{selector:'',depth:taskLayer==='overview'?0:1,active:taskOpen});
+ const markMessageArrival=useMessageArrivals(scroll,String(state.conversationId||''),messages.map((message,index)=>message.id||`${message.role}:${message.at}:${index}`),route==='chat',{
+  owner:chatOwner,
+  pendingClients:pendingInputs.filter(input=>input.draftKey===draftKey).map(input=>String(input.clientMessageId)),
+  receipts:Object.entries(obj(state.chatReceipts)).map(([clientMessageId,value])=>({clientMessageId,conversationId:String(obj(value).conversationId||''),status:String(obj(value).status||'')})),
+  submissions:messages.flatMap((message,index)=>message.role==='user'&&message.submission?.clientMessageId?[{id:message.id||`${message.role}:${message.at}:${index}`,clientMessageId:message.submission.clientMessageId}]:[]),
+ });
  const openVoiceReview=()=>{if(!can('voice.review'))return;voiceExit.captureReturnFocus(workspace.current?.querySelector<HTMLElement>('textarea[aria-label="工作输入"]')||null);setVoicePending(true);void act('voice.review',{phone:intent!=='chat'}).then(value=>{setVoiceReview(value);setVoiceText(value.text||'')}).catch(error=>setLocalError(error.message)).finally(()=>setVoicePending(false));};
  const submitVoiceReview=(command:'voice.accept'|'voice.discard')=>{
   const reviewed=voiceReviewLive.current;if(!reviewed||voiceWriting.current||voicePending)return;
@@ -530,7 +484,7 @@ export default function App(){
  useEffect(()=>{const receipt=phoneDraft.startReceipt;if(receipt&&['accepted','rejected','unknown'].includes(receipt.status)){const original=phoneStartReceipt(receipt);setPhoneStart(original);if(original.status!=='unknown'&&phoneReview&&phoneReview.reviewHandle===receipt.reviewHandle)setPhoneReview(null)}},[phoneDraft.startReceipt?.status,phoneDraft.startReceipt?.reviewHandle,phoneDraft.startReceipt?.requestId,phoneDraft.startReceipt?.taskId]);
  const send=()=>{if(!composerModelName){navigate('models');return}if(intent!=='chat'){preparePhone();return}if(!composerHasPayload(text,asArray<Json>(state.selectedChatAttachments).length)||!draftKey||previewRefsUnavailable)return;
   if(workTarget){if(!workTargetCurrent||!can('ownerWork.input'))return;setLocalStatus('');goToLatest();chatDraft.markSent();void act('ownerWork.input',{taskId:workTarget.taskId,runId:workTarget.runId,epoch:workTarget.epoch,clientMessageId:crypto.randomUUID(),message:text,mode:state.chatSendMode||'queue'}).then(receipt=>{if(['accepted','queued','consumed'].includes(receipt?.status))setWorkTarget(null)}).catch(()=>{});return;}
-  if(!can('composer.send'))return;setLocalStatus('');goToLatest();chatDraft.markSent();run('composer.send',{key:draftKey,epoch:draftEpoch,text});};
+  if(!can('composer.send'))return;setLocalStatus('');goToLatest();chatDraft.markSent();markMessageArrival();run('composer.send',{key:draftKey,epoch:draftEpoch,text});};
  const targetWork=async(task:Task)=>{const identity=ownerWorkIdentity(task);if(!identity||task.raw?.controls?.canInput!==true||task.raw?.conversationId!==state.conversationId)return;const closed=taskOpen?await closeTask():true;if(!closed)return;void navigate('chat',()=>{setWorkTarget({...identity,goal:task.goal,conversationId:String(state.conversationId)});changeIntent('chat')});};
  const controlWork=(task:Task,action:'cancel'|'continue')=>{const identity=ownerWorkIdentity(task);if(!identity||!can('ownerWork.control')||task.raw?.conversationId!==state.conversationId||task.raw?.controls?.[action==='cancel'?'canStop':'canContinue']!==true)return;const key=workIdentityKey(identity);if(workControlEntered.current.has(key)||workControls[key]?.unknown)return;workControlEntered.current.add(key);setWorkControls(old=>({...old,[key]:{pending:true,unknown:false,message:''}}));void act('ownerWork.control',{...identity,action},task.id).then(receipt=>{setWorkControls(old=>({...old,[key]:{pending:false,unknown:receipt?.status==='unknown',message:receipt?.message||(action==='cancel'?'已请求停止这件事，请以原任务状态为准。':'已提交继续原任务，请核对执行状态。')}}))}).catch(error=>{setWorkControls(old=>({...old,[key]:{pending:false,unknown:true,message:error instanceof Error?error.message:'原任务控制回执尚未确认，请先核对原任务。'}}))}).finally(()=>workControlEntered.current.delete(key));};
  useEffect(()=>{setWorkTarget(null)},[state.conversationId]);
@@ -988,7 +942,7 @@ export default function App(){
 
   </section>:projects.length>0?<section className="pw-project-library" aria-label="项目目录"><header><h2>你的项目</h2>{can('projects.create')&&<Button variant="secondary" leadingIcon={RiAddLine} onClick={()=>openCreate('project')}>新项目</Button>}</header><div>{projects.map(project=><Button key={project.id} variant="ghost" className="pw-project-library-row" leadingIcon={RiFolderLine} trailingIcon={RiArrowRightSLine} disabled={!can('projects.select')} onClick={()=>run('projects.select',{id:project.id})}>{project.name}</Button>)}</div></section>:!ready?<p className="pw-muted" role="status">正在读取项目…</p>:<div className="pw-empty pw-project-empty"><RiFolderLine size={26} aria-hidden="true"/><h3>从一个项目开始</h3><p>把文件、编辑和预览放在一起，随时接着做。</p>{can('projects.create')&&<Button variant="primary" leadingIcon={RiAddLine} onClick={()=>openCreate('project')}>新建项目</Button>}</div>}
  </main>;
- return <ReadingContext.Provider value={openReading}><Drawer.Root open={workOpen&&!desktopNavigation} onOpenChange={changeNavigation} direction="left" autoFocus shouldScaleBackground={false}>
+ return <ReadingContext.Provider value={openReading}><Drawer.Root swipeToOpen={!desktopNavigation} open={workOpen&&!desktopNavigation} onOpenChange={changeNavigation} direction="left" autoFocus shouldScaleBackground={false}>
  <div className="pw-app pw-redesign" data-navigation={desktopNavigation?'sidebar':'drawer'} data-route={route} data-file-open={!!state.filePath||undefined} data-vaul-drawer-wrapper=""><Toaster theme={state.appearance?.dark===true?'dark':'light'}/>
   {desktopNavigation&&<aside className="pw-desktop-navigation pw-navigation-drawer" data-compact={effectiveCompact?'true':'false'} aria-label="侧边工作导航" onKeyDown={event=>{if(commandOpen&&event.key==='Escape'&&!event.nativeEvent.isComposing&&event.nativeEvent.keyCode!==229){event.preventDefault();setCommandOpen(false)}}}>{navigationContent}</aside>}
   <div className="pw-main-workspace" ref={workspace}>

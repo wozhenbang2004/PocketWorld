@@ -196,7 +196,8 @@
       "adapted": "boardui/components/base/accordion/accordion.tsx",
       "changes": [
         "@/ aliases rewritten to relative module paths; runtime component behavior retained",
-        "Indicator color/rotation and content reveal use the current Disclosure isExpanded render state so nested items do not inherit an ancestor's expanded styling; React Aria visibility, height, keyboard and ARIA behavior retained"
+        "Indicator color/rotation and content reveal use the current Disclosure isExpanded render state so nested items do not inherit an ancestor's expanded styling; React Aria visibility, height, keyboard and ARIA behavior retained",
+        "2026-11-10: shared layout/enter/exit timings replace a single 300ms curve; content uses a small settle without blurred reading text, and reduced-motion/background state resolves immediately"
       ],
       "officialRegistry": {
         "snapshot": "vendor/boardui-registry-20261101/accordion.json",
@@ -219,7 +220,8 @@
       "sha256": "ac55bff6655cbf45fd98fb27505cb56b9805f56a4dcef9372207d3d0d97b26d4",
       "adapted": "SettingsDialog.tsx",
       "changes": [
-        "Controlled product adaptation; demo data and simulated mutation completion removed"
+        "Controlled product adaptation; demo data and simulated mutation completion removed",
+        "2026-11-10: existing Motion presence retains the single last body through exit; existing React Aria FocusScope handles containment and restoration on actual unmount; immediate inert/event guards, interruptible motion values and shared role timings replace the fixed 320ms unmount timer"
       ]
     },
     {
@@ -244,7 +246,10 @@
       "componentSource": "independent switch mechanism reproduction",
       "sha256": "1b75a3e0aa4f755c0eff19acd9f0aa5ad0cedc3f854bf86fb105951677fc395a",
       "adapted": "StretchSwitch.tsx",
-      "identity": "Library-approved independent mechanism reproduction, not Animate UI upstream source"
+      "identity": "Library-approved independent mechanism reproduction, not Animate UI upstream source",
+      "changes": [
+        "2026-11-10: retain the approved 300/25 spring and controlled setting value; suppress press stretch for reduced motion and settle immediately on background/blur without replaying a gesture"
+      ]
     },
     {
       "componentSource": "components/base/buttons/button.tsx",

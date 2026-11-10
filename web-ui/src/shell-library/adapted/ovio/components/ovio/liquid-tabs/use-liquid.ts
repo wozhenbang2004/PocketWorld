@@ -1,7 +1,8 @@
 "use client";
 
 import { calcGeneratorDuration, spring } from "motion";
-import { useLayoutEffect, useRef } from "react";
+import { useCallback, useLayoutEffect, useRef } from "react";
+import { useMotionAllowed } from "../../../../../../library/core";
 
 type Spring = { stiffness: number; damping: number };
 
@@ -59,39 +60,46 @@ export function useLiquid({
   const body = useRef<HTMLDivElement>(null);
   const capR = useRef<HTMLDivElement>(null);
   const labels = useRef<HTMLDivElement>(null);
-  const state = useRef({ from: index, W: 0, H: 0, run: null as Run | null });
+  const state = useRef({ from: index, count, W: 0, H: 0, run: null as Run | null });
+  const allowed = useMotionAllowed();
+  const settle = useCallback(() => {
+    if (rest.current) rest.current.style.visibility = "";
+    if (pieces.current) pieces.current.style.visibility = "hidden";
+    state.current.run?.anims.forEach((a) => a.cancel());
+    state.current.run = null;
+  }, []);
 
   // The row's size, for the pixel geometry the moving pieces need.
   useLayoutEffect(() => {
     const el = box.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => {
+    const measure = () => {
       const s = state.current;
+      // A width/font/viewport change invalidates the moving pill's pixel frames.
+      // The resting pill and labels already use the current proportional layout.
+      if (s.W !== el.clientWidth || s.H !== el.clientHeight || s.count !== count) settle();
       s.W = el.clientWidth;
       s.H = el.clientHeight;
+      s.count = count;
       if (body.current) body.current.style.width = `${s.W / count}px`;
       for (const cap of [capL.current, capR.current]) if (cap) cap.style.width = `${s.H}px`;
-    });
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [count]);
+  }, [count, settle]);
 
   useLayoutEffect(() => {
     const s = state.current;
     const prev = s.from;
     s.from = index;
-    if (prev === index) return;
-
-    const settle = () => {
-      if (rest.current) rest.current.style.visibility = "";
-      if (pieces.current) pieces.current.style.visibility = "hidden";
-      s.run?.anims.forEach((a) => a.cancel());
-      s.run = null;
-    };
-    if (reduced || !s.W) {
+    // Preferences and host visibility can change without a new selection.
+    if (reduced || !allowed || document.hidden || !s.W) {
       settle();
       return;
     }
+    if (prev === index) return;
 
     const { W, H } = s;
     const tab = W / count;
@@ -173,7 +181,7 @@ export function useLiquid({
       () => s.run === run && settle(),
       () => {},
     );
-  }, [index, count, liquid, reduced]);
+  }, [index, count, liquid, reduced, allowed, settle]);
 
   useLayoutEffect(() => {
     const s = state.current;

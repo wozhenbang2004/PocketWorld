@@ -57,5 +57,22 @@
     "fixture": "../../tests/navigation-shell-fixture.tsx",
     "browser_check": "../../tests/navigation-shell-ui.mjs",
     "boundary": "Local Chromium production-component mount verifies web layout and interaction; does not establish Android/WebView, IME, native route execution or OS lifecycle behavior"
+  },
+  "motion_refactor_20261110": {
+    "scope": "Existing sidebar selection, pressure surface and desktop label disclosure; retained Ovio liquid-tab lifecycle",
+    "implementation": [
+      "WorkSidebar.tsx",
+      "navigation-motion.css",
+      "../uiux-surfaces.css",
+      "adapted/ovio/components/ovio/liquid-tabs/use-liquid.ts",
+      "../library/motion-tokens.ts"
+    ],
+    "changes": [
+      "The retained Motion shared selection consumes the central 440/30/.8 selection spring and resolves immediately when hidden or reduced motion is requested.",
+      "Navigation pressure acts on a surface beneath stable labels and unchanged 48px row hit areas.",
+      "The existing 280px / 80px desktop rail, label caps, opacity and padding consume the same layout and feedback timing; expanded and compact final layout are preserved.",
+      "Ovio keeps its original separate leading and trailing springs and velocity-preserving interruption. Motion is settled to the selected proportional pill on resize, tab-count change, reduced-motion changes and document hiding."
+    ],
+    "validation": "Source review only in this subtask. No tests written or run. Integrated build and current Android visual/touch feedback are recorded by the parent delivery."
   }
 }

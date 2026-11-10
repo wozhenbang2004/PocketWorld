@@ -2,6 +2,7 @@ import { createRoot } from 'react-dom/client';
 import { useEffect } from 'react';
 import { MotionConfig } from 'motion/react';
 import { useMotionLifecycle } from './library/surface-motion';
+import { motionTransition } from './library/motion-tokens';
 import App from './App';
 import { bridge } from './bridge';
 import { usePocketSnapshot } from './usePocketSnapshot';
@@ -96,4 +97,4 @@ function MountedApp() {
   // page effects until the native business endpoint has supplied its own state.
   return !snapshot.host?.connected || bootstrapSurface(snapshot) ? <BootstrapWorkspace snapshot={snapshot} /> : <App />;
 }
-createRoot(element).render(<MotionConfig reducedMotion="user"><MountedApp /></MotionConfig>);
+createRoot(element).render(<MotionConfig reducedMotion="user" transition={motionTransition.enter}><MountedApp /></MotionConfig>);

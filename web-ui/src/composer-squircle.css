@@ -156,6 +156,12 @@
 }
 .pw-composer-host.pw-squircle-composer .pw-composer-trailing { justify-content: flex-end; margin-inline-start: auto; }
 .pw-composer-host.pw-squircle-composer .pw-composer-controls { flex: 0 0 auto; align-self: center; min-width: 0; }
+.pw-composer-host.pw-squircle-composer .afa-toolbar { position: relative; }
+.pw-composer-motion-control {
+  display: grid; place-items: center; flex: 0 0 var(--pw-composer-hit);
+  width: var(--pw-composer-hit); height: var(--pw-composer-hit);
+}
+.pw-composer-motion-control[inert] { pointer-events: none; }
 .pw-composer-host.pw-squircle-composer .pw-composer-intent > .pw-grow { display: none; }
 .pw-composer-host.pw-squircle-composer .pw-conversation-model-controls { display: flex; flex-wrap: nowrap; gap: 0; min-width: 0; max-width: none; }
 .pw-composer-host.pw-squircle-composer .pw-composer-toolbar :is(.pw-composer-intent > button, .afa-iconbtn, .afa-stop, .pw-conversation-model-chip, .pw-conversation-reasoning-chip),
@@ -209,7 +215,6 @@
   height: var(--pw-composer-hit);
   min-height: var(--pw-composer-hit);
   border-radius: 50%;
-  animation: pw-send-appear 160ms cubic-bezier(.2,.8,.2,1) both;
 }
 .pw-composer-host.pw-squircle-composer .pw-composer-toolbar .pw-press-front {
   box-sizing: border-box;
@@ -232,6 +237,7 @@
 .pw-composer-host.pw-squircle-composer .afa-recording > i { flex: 0 0 6px; background: var(--pw-muted); }
 .pw-composer-host.pw-squircle-composer .afa-recording > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 
+.pw-composer-attachments-reveal { overflow: hidden; min-width: 0; }
 .pw-composer-host.pw-squircle-composer .afa-filechips {
   display: flex; flex-wrap: wrap; gap: 8px; max-height: min(25dvh, 186px);
   margin: 0 0 4px; padding: 8px 10px 6px; overflow: auto;
@@ -271,7 +277,7 @@
 }
 .pw-composer-host.pw-squircle-composer .pw-composer-file-progress circle { fill: none; stroke-width: 2; stroke-linecap: round; }
 .pw-composer-host.pw-squircle-composer .pw-composer-file-track { stroke: color-mix(in srgb, var(--pw-ink) 10%, transparent); }
-.pw-composer-host.pw-squircle-composer .pw-composer-file-value { stroke: var(--pw-copy); transition: stroke-dashoffset 180ms ease; }
+.pw-composer-host.pw-squircle-composer .pw-composer-file-value { stroke: var(--pw-copy); transition: stroke-dashoffset var(--pw-motion-feedback) linear; }
 .pw-composer-host.pw-squircle-composer .pw-composer-model { display: flex; padding-inline: 8px; }
 .pw-composer-host.pw-squircle-composer .pw-composer-model .pw-model-trigger {
   min-height: var(--pw-composer-hit); max-width: 100%; border: 0; background: transparent; box-shadow: none;
@@ -291,9 +297,6 @@
   .pw-composer-host.pw-squircle-composer .pw-context-meter-button:focus-visible,
   .pw-composer-host.pw-squircle-composer .pw-composer-toolbar button:focus-visible { outline: 2px solid Highlight; outline-offset: -2px; }
 }
-@keyframes pw-send-appear { from { opacity: 0; transform: scale(.88); } to { opacity: 1; transform: scale(1); } }
 @media (prefers-reduced-motion: reduce) {
-  .pw-composer-host.pw-squircle-composer .pw-composer-toolbar .pw-press { animation: none; }
   .pw-composer-host.pw-squircle-composer :is(.pw-continuous-surface, .pw-composer-file-value) { transition: none; }
 }
-:root[data-pw-motion-paused="true"] .pw-composer-host.pw-squircle-composer .pw-composer-toolbar .pw-press { animation: none; }

@@ -49,7 +49,8 @@
     width: 280px;
     border-radius: 28px;
     background: var(--pw-surface);
-    transition: width 280ms cubic-bezier(.22,.68,0,1.02), flex-basis 280ms cubic-bezier(.22,.68,0,1.02);
+    transition: width var(--pw-motion-layout, 280ms) var(--pw-ease-move, cubic-bezier(.42,0,.58,1)),
+      flex-basis var(--pw-motion-layout, 280ms) var(--pw-ease-move, cubic-bezier(.42,0,.58,1));
   }
   .pw-redesign .pw-main-workspace {
     border-radius: 20px;
@@ -57,19 +58,33 @@
     isolation: isolate;
   }
   .pw-redesign .pw-main-workspace .pw-app-header { background: transparent; }
-  .pw-desktop-navigation .pw-navigation-actions > .button-press-motion > span { transition: opacity 180ms ease; }
-  .pw-desktop-navigation[data-compact="true"] { flex-basis: 80px; width: 80px; }
-  .pw-desktop-navigation[data-compact="true"] .pw-drawer-header { padding-inline: 18px; }
-  .pw-desktop-navigation[data-compact="true"] .pw-drawer-header h2 {
-    position: absolute;
-    width: 1px;
-    height: 1px;
+  .pw-desktop-navigation :is(.pw-drawer-header, .pw-navigation-actions, .pw-drawer-body, .pw-navigation-footer) {
+    transition: padding-inline var(--pw-motion-layout, 280ms) var(--pw-ease-move, cubic-bezier(.42,0,.58,1)),
+      gap var(--pw-motion-layout, 280ms) var(--pw-ease-move, cubic-bezier(.42,0,.58,1));
+  }
+  .pw-desktop-navigation .pw-drawer-header h2,
+  .pw-desktop-navigation :is(.pw-navigation-actions > .button-press-motion, .pw-navigation-more) > span,
+  .pw-desktop-navigation .pw-navigation-profile-copy {
+    max-width: 224px;
+    opacity: 1;
     overflow: hidden;
-    clip-path: inset(50%);
+    white-space: nowrap;
+    transition: max-width var(--pw-motion-layout, 280ms) var(--pw-ease-move, cubic-bezier(.42,0,.58,1)),
+      opacity var(--pw-motion-feedback, 140ms) var(--pw-ease-settle, cubic-bezier(.22,1,.36,1));
+  }
+  .pw-desktop-navigation[data-compact="true"] { flex-basis: 80px; width: 80px; }
+  .pw-desktop-navigation[data-compact="true"] .pw-drawer-header { padding-inline: 18px; gap: 0; }
+  .pw-desktop-navigation[data-compact="true"] .pw-drawer-header h2 {
+    max-width: 0;
+    opacity: 0;
   }
   .pw-desktop-navigation[data-compact="true"] :is(.pw-navigation-actions, .pw-drawer-body) { padding-inline: 16px; }
   .pw-desktop-navigation[data-compact="true"] :is(.pw-navigation-actions > .button-press-motion, .pw-navigation-more, .pw-nav-item a) { width: 48px; padding-inline: 13px; gap: 0; }
-  .pw-desktop-navigation[data-compact="true"] :is(.pw-navigation-actions > .button-press-motion, .pw-navigation-more, .pw-navigation-account > .button-press-motion:first-child) > span {
+  .pw-desktop-navigation[data-compact="true"] :is(.pw-navigation-actions > .button-press-motion, .pw-navigation-more) > span {
+    max-width: 0;
+    opacity: 0;
+  }
+  .pw-desktop-navigation[data-compact="true"] .pw-navigation-account > .button-press-motion:first-child > span {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -84,7 +99,7 @@
   .pw-desktop-navigation[data-compact="true"] .pw-navigation-account > .pw-navigation-profile.button-press-motion { min-height: 48px; padding: 6px; }
   .pw-desktop-navigation[data-compact="true"] .pw-navigation-account > .pw-navigation-profile.button-press-motion > span { position: static; width: 100%; height: auto; overflow: visible; clip-path: none; }
   .pw-desktop-navigation[data-compact="true"] .pw-navigation-profile-content { justify-content: center; gap: 0; }
-  .pw-desktop-navigation[data-compact="true"] .pw-navigation-profile-copy { display: none; }
+  .pw-desktop-navigation[data-compact="true"] .pw-navigation-profile-copy { max-width: 0; opacity: 0; flex: 0; }
 }
 
 /* Below this height, independent scroll panes cannot each contain a complete
@@ -98,9 +113,10 @@
 
 @media (prefers-reduced-motion: reduce) {
   .pw-desktop-navigation,
-  .pw-desktop-navigation .pw-navigation-actions > :is(.button-press-motion, [data-pw-icon-button]) > span { transition: none; }
+  .pw-desktop-navigation * { transition: none; }
 }
-:root[data-pw-motion-paused="true"] .pw-desktop-navigation { transition: none; }
+:root[data-pw-motion-paused="true"] .pw-desktop-navigation,
+:root[data-pw-motion-paused="true"] .pw-desktop-navigation * { transition: none; }
 
 /* Actual user decisions occupy one quiet line, not a persistent work card. */
 /* Single-field creation is a short decision in the retained BoardUI Dialog. */

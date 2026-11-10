@@ -1,6 +1,7 @@
 import React from 'react';
 import { set, isVertical } from './helpers';
-import { TRANSITIONS, VELOCITY_THRESHOLD } from './constants';
+import { VELOCITY_THRESHOLD } from './constants';
+import { drawerTransition } from './motion';
 import { useControllableState } from './use-controllable-state';
 import { DrawerDirection } from './types';
 
@@ -119,7 +120,7 @@ export function useSnapPoints({
       onSnapPointChange(newSnapPointIndex);
 
       set(drawerRef.current, {
-        transition: `transform ${TRANSITIONS.DURATION}s cubic-bezier(${TRANSITIONS.EASE.join(',')})`,
+        transition: drawerTransition('transform', 'settle'),
         transform: isVertical(direction) ? `translate3d(0, ${dimension}px, 0)` : `translate3d(${dimension}px, 0, 0)`,
       });
 
@@ -131,12 +132,12 @@ export function useSnapPoints({
         newSnapPointIndex < fadeFromIndex
       ) {
         set(overlayRef.current, {
-          transition: `opacity ${TRANSITIONS.DURATION}s cubic-bezier(${TRANSITIONS.EASE.join(',')})`,
+          transition: drawerTransition('opacity', 'settle'),
           opacity: '0',
         });
       } else {
         set(overlayRef.current, {
-          transition: `opacity ${TRANSITIONS.DURATION}s cubic-bezier(${TRANSITIONS.EASE.join(',')})`,
+          transition: drawerTransition('opacity', 'settle'),
           opacity: '1',
         });
       }
@@ -179,7 +180,7 @@ export function useSnapPoints({
 
     if (isOverlaySnapPoint) {
       set(overlayRef.current, {
-        transition: `opacity ${TRANSITIONS.DURATION}s cubic-bezier(${TRANSITIONS.EASE.join(',')})`,
+        transition: drawerTransition('opacity', 'settle'),
       });
     }
 

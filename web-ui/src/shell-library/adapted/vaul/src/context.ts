@@ -1,5 +1,6 @@
 import React from 'react';
 import { DrawerDirection } from './types';
+import type { NavigationSwipe } from './use-navigation-swipe';
 
 interface DrawerContextValue {
   drawerRef: React.RefObject<HTMLDivElement | null>;
@@ -32,6 +33,7 @@ interface DrawerContextValue {
   container?: HTMLElement | null;
   autoFocus?: boolean;
   shouldAnimate?: React.RefObject<boolean>;
+  navigationSwipe?: NavigationSwipe;
 }
 
 export const DrawerContext = React.createContext<DrawerContextValue>({

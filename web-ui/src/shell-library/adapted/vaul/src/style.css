@@ -1,9 +1,9 @@
 [data-vaul-drawer] {
   touch-action: none;
   will-change: transform;
-  transition: transform 0.5s cubic-bezier(0.32, 0.72, 0, 1);
-  animation-duration: 0.5s;
-  animation-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+  transition: transform var(--pw-motion-drawer, 320ms) var(--pw-ease-settle, cubic-bezier(0.22, 1, 0.36, 1));
+  animation-duration: var(--pw-motion-drawer, 320ms);
+  animation-timing-function: var(--pw-ease-enter, cubic-bezier(0, 0, 0.58, 1));
 }
 
 [data-vaul-drawer][data-vaul-snap-points='false'][data-vaul-drawer-direction='bottom'][data-state='open'] {
@@ -67,8 +67,8 @@
 }
 
 [data-vaul-overlay][data-vaul-snap-points='false'] {
-  animation-duration: 0.5s;
-  animation-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+  animation-duration: var(--pw-motion-drawer, 320ms);
+  animation-timing-function: var(--pw-ease-enter, cubic-bezier(0, 0, 0.58, 1));
 }
 [data-vaul-overlay][data-vaul-snap-points='false'][data-state='open'] {
   animation-name: fadeIn;
@@ -77,13 +77,30 @@
   animation-name: fadeOut;
 }
 
+[data-vaul-drawer][data-state='closed'],
+[data-vaul-overlay][data-state='closed'] {
+  animation-duration: var(--pw-motion-drawer-exit, 240ms);
+  animation-timing-function: var(--pw-ease-exit, cubic-bezier(0.42, 0, 1, 1));
+}
+
+/* A direct gesture replaces entry motion. Closed CSS states retain Radix exits. */
+[data-vaul-gesture][data-state='open'] {
+  animation: none !important;
+}
+
+/* Motion owns these frames; separate presence keeps the same Radix instance. */
+[data-vaul-navigation-swipe] {
+  animation: none !important;
+  transition: none !important;
+}
+
 [data-vaul-animate='false'] {
   animation: none !important;
 }
 
 [data-vaul-overlay][data-vaul-snap-points='true'] {
   opacity: 0;
-  transition: opacity 0.5s cubic-bezier(0.32, 0.72, 0, 1);
+  transition: opacity var(--pw-motion-drawer, 320ms) var(--pw-ease-settle, cubic-bezier(0.22, 1, 0.36, 1));
 }
 
 [data-vaul-overlay][data-vaul-snap-points='true'] {
@@ -177,6 +194,14 @@
   [data-vaul-handle-hitarea] {
     width: 100%;
     height: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-vaul-drawer],
+  [data-vaul-overlay] {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0s !important;
   }
 }
 

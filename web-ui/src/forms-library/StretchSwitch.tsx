@@ -22,7 +22,7 @@ export function StretchSwitch({ label, description, checked, onChange, disabled 
       thumb.current.style.transform = `translateX(${p.x}px)`;
       thumb.current.style.width = `${p.width}px`;
     };
-    const targets = () => { const width = pressed && !disabled && !busy ? 19 : 16; return [checked ? 28 - width : 0, width]; };
+    const targets = () => { const width = pressed && !disabled && !busy && !motion.matches && !document.hidden ? 19 : 16; return [checked ? 28 - width : 0, width]; };
     const step = (now: number) => {
       const dt = Math.min((now - p.previous) / 1000 || 1 / 60, 0.024); p.previous = now;
       const [tx, tw] = targets();
@@ -34,11 +34,13 @@ export function StretchSwitch({ label, description, checked, onChange, disabled 
     };
     const update = () => {
       cancelAnimationFrame(p.frame); p.frame = 0;
-      if (motion.matches) { [p.x, p.width] = targets(); p.xv = p.wv = 0; render(); }
+      if (motion.matches || document.hidden) { [p.x, p.width] = targets(); p.xv = p.wv = 0; render(); }
       else { p.previous = performance.now(); p.frame = requestAnimationFrame(step); }
     };
-    update(); motion.addEventListener('change', update);
-    return () => { cancelAnimationFrame(p.frame); p.frame = 0; motion.removeEventListener('change', update); };
+    const visibility = () => { if (document.hidden) setPressed(false); update(); };
+    const blur = () => setPressed(false);
+    update(); motion.addEventListener('change', update); document.addEventListener('visibilitychange', visibility); window.addEventListener('blur', blur);
+    return () => { cancelAnimationFrame(p.frame); p.frame = 0; motion.removeEventListener('change', update); document.removeEventListener('visibilitychange', visibility); window.removeEventListener('blur', blur); };
   }, [checked, pressed, disabled, busy]);
   return <div className="pw-stretch-setting">
     <div><span id={labelId} className="pw-stretch-label">{label}</span>{description && <span className="pw-stretch-hint">{description}</span>}</div>

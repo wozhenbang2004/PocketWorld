@@ -29,6 +29,7 @@ import {WorkProfilesWorkspace} from './WorkProfilesWorkspace';
 import {DevicesWorkspace} from './DevicesWorkspace';
 import {PluginsWorkspace} from './PluginsWorkspace';
 import { ModelPicker, PressButton } from './library';
+import { useSurfaceEnter } from './library/surface-motion';
 import { Tabs, TabList, Tab, TabPanel } from './shell-library';
 import {
   Accordion, AccordionItem, Button, CheckboxField, HostFileUpload,
@@ -1591,6 +1592,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
   const settingsEntries = COMMON_SETTINGS.filter(item => item.id !== 'setup' || !!onOpenSetup).map(item => ({ ...item, searchText: item.detail, detail: settingsEntryDetail(item.id, state) }));
   const filtered = settingsEntries.filter(item => (item.title + item.detail + item.searchText).toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const viewKey = page + (isModelPage ? ':' + modelView.kind + ':' + (modelView.id || '') : '');
+  useSurfaceEnter(scroll, viewKey, {selector: ':scope > .pw-secondary-page', depth: trail.current.length + modelTrail.current.length});
   const modelBrowseActive = ['list', 'catalog', 'model'].includes(modelView.kind);
   const modelParent = modelTrail.current.at(-1)?.kind;
   const modelBackLabel = modelParent === 'connections' ? '返回连接管理' : modelParent === 'connection' ? '返回连接详情' : modelParent === 'catalog' ? '返回模型目录' : '返回模型与连接';

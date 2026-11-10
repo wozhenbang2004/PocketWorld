@@ -15,6 +15,7 @@ import { TOOLTIP_CARETS } from "../tooltip/tooltip";
 import { useDirection } from "../../foundations/direction/direction";
 import { cx } from "../../../utils/cx";
 import { useDismissOnOutsidePress, useTriggerToggle } from "../../../utils/use-dismiss-on-outside-press";
+import { useMotionAllowed } from "../../../../../../library/core";
 
 /**
  * Popover — free-form content anchored to a trigger: a share link, a short
@@ -38,8 +39,8 @@ import { useDismissOnOutsidePress, useTriggerToggle } from "../../../utils/use-d
  * Surface: the composer permission popover's recipe, radius 20 with p-1.5,
  * 1px border/button/default, background/primary, shadow/dropdown. The
  * optional arrow is Tooltip's caret in the same colours. Motion is the menu
- * family's: 150ms fade, scale 0.95 and 2px blur in and out, grown from the
- * point nearest the trigger. Reduced motion keeps only the fade.
+ * family's scale 0.95 and 2px blur, grown from the point nearest the trigger.
+ * Product enter/exit timings are separate; reduced motion resolves immediately.
  */
 
 interface PopoverContextValue {
@@ -113,6 +114,7 @@ export function Popover({
 }: PopoverProps) {
   const context = useContext(PopoverContext);
   const direction = useDirection();
+  const allowed = useMotionAllowed();
 
   return (
     <AriaPopover
@@ -127,10 +129,14 @@ export function Popover({
       className={cx(
         "z-110 w-80 max-w-[calc(100vw-32px)]",
         "rounded-[20px] border border-border-button-default bg-background-primary-default p-1.5 shadow-dropdown",
-        "origin-(--trigger-anchor-point) transition-[opacity,scale,filter] duration-150 ease-out",
-        "data-[entering]:opacity-0 data-[exiting]:opacity-0",
-        "motion-safe:data-[entering]:scale-95 motion-safe:data-[entering]:blur-[2px]",
-        "motion-safe:data-[exiting]:scale-95 motion-safe:data-[exiting]:blur-[2px]",
+        "origin-(--trigger-anchor-point)",
+        allowed ? [
+          "transition-[opacity,scale,filter] duration-(--pw-motion-enter) ease-(--pw-ease-enter)",
+          "data-[exiting]:duration-(--pw-motion-exit) data-[exiting]:ease-(--pw-ease-exit)",
+          "data-[entering]:opacity-0 data-[exiting]:opacity-0",
+          "data-[entering]:scale-95 data-[entering]:blur-[2px]",
+          "data-[exiting]:scale-95 data-[exiting]:blur-[2px]",
+        ].join(" ") : "transition-none",
         className,
       )}
     >

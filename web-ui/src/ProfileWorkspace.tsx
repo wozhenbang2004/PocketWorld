@@ -2,8 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 import { ArrowLeft, ArrowUpRight, Check, ChevronRight, History, MessageCircle, Plus, RefreshCw, Settings, ShieldCheck, SlidersHorizontal, Sparkles, Trash2, Undo2, UserRound } from 'lucide-react';
 import { Accordion, AccordionItem, Button, IconButton, SearchField, SelectField, SettingsDialog, StretchSwitch, TextAreaField, TextField } from './forms-library';
 import { Radio, RadioGroup } from './forms-library/boardui/components/base/radio/radio';
-import { useReducedMotion } from './library/core';
-import { EASE_OUT } from './shell-library/beui-adapted/ease';
+import { useSurfaceEnter } from './library/surface-motion';
 import './profile.css';
 
 type Data = Record<string, any>;
@@ -170,7 +169,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   const previousPresentation = useRef(presentationKey);
   const livePresentation = useRef(presentationKey);
   livePresentation.current = presentationKey;
-  const reducedMotion = useReducedMotion();
+  useSurfaceEnter(scroller, view, {selector: ':scope > .pw-profile-content', depth: view === 'home' ? 0 : ['memory', 'memory-new', 'memory-settings'].includes(view) ? 2 : 1});
   const canEnter = supported('connections.enter'), canRead = supported('profile.snapshot'), canSave = supported('profile.save');
   const locked = !!pending;
   const formLocked = locked || avatarPicking || !canSave;
@@ -365,10 +364,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
     if (node) node.scrollTop = positions.current.get(view) || 0;
     const returnTarget = (view === 'memories' || view === 'memory-history') && returnMemory.current ? Array.from(node?.querySelectorAll<HTMLElement>('[data-personal-memory]') || []).find(item => item.dataset.personalMemory === returnMemory.current) : null;
     (returnTarget || heading.current)?.focus({ preventScroll: true });
-    if (!node || reducedMotion || document.hidden) return;
-    const animation = node.animate([{ opacity: .4, transform: 'translateY(5px)' }, { opacity: 1, transform: 'translateY(0)' }], { duration: 180, easing: `cubic-bezier(${EASE_OUT.join(',')})` });
-    return () => animation.cancel();
-  }, [view, reducedMotion]);
+  }, [view]);
 
   const beforeLeave: LeaveGuard = next => {
     if (busy.current) { setNotice('正在保存或读取，请稍候。'); return true; }

@@ -12,6 +12,7 @@ import {
 import type { DisclosureGroupProps as AriaDisclosureGroupProps, DisclosureProps as AriaDisclosureProps } from "react-aria-components";
 import { RiAddLine, RiArrowDownSLine } from "@remixicon/react";
 import { cx, sortCx } from "../../../utils/cx";
+import { useMotionAllowed } from "../../../../../library/core";
 
 /**
  * Accordion — stacked sections that expand in place: FAQs, settings groups,
@@ -28,9 +29,9 @@ import { cx, sortCx } from "../../../utils/cx";
  * FAQ's tray of cards), and `separated` (one bordered card per item).
  *
  * Motion follows the agent limits card and Tree View: the panel's height
- * eases open over 300ms on cubic-bezier(0.22, 1, 0.36, 1) while its content
- * fades in, drops 4px into place and sharpens from a 4px blur; the indicator
- * turns with it (a chevron flips, a plus turns into a close). React Aria
+ * follows the product layout timing while its content fades and settles by
+ * 4px; closing uses the shorter exit timing. The indicator turns with it
+ * (a chevron flips, a plus turns into a close). React Aria
  * measures the panel and exposes `--disclosure-panel-height`, so this is
  * all CSS. Reduced motion switches every transition off.
  */
@@ -39,7 +40,7 @@ type IconComponent = ComponentType<{ className?: string; "aria-hidden"?: boolean
 
 export type AccordionVariant = "divided" | "contained" | "separated";
 
-const EASE = "ease-[cubic-bezier(0.22,1,0.36,1)]";
+const EASE = "ease-(--pw-ease-move)";
 
 const styles = sortCx({
   group: {
@@ -115,6 +116,7 @@ export function AccordionItem({
   ...props
 }: AccordionItemProps) {
   const { variant, indicator } = useContext(AccordionContext);
+  const allowed = useMotionAllowed();
   const Indicator = indicator === "plus" ? RiAddLine : RiArrowDownSLine;
 
   return (
@@ -143,8 +145,8 @@ export function AccordionItem({
           <Indicator
             aria-hidden
             className={cx(
-              "size-5 shrink-0 transition-[rotate,color] duration-300 motion-reduce:transition-none",
-              EASE,
+              "size-5 shrink-0",
+              allowed ? "transition-[rotate,color] duration-(--pw-motion-layout) ease-(--pw-ease-settle)" : "transition-none",
               isExpanded ? "text-foreground-icon-primary" : "text-foreground-icon-tertiary group-hover/trigger:text-foreground-icon-secondary",
               isExpanded ? indicator === "plus" ? "rotate-45" : "rotate-180" : "rotate-0",
             )}
@@ -152,14 +154,14 @@ export function AccordionItem({
         </AriaButton>
       </AriaHeading>
       <AriaDisclosurePanel
-        className={cx("h-(--disclosure-panel-height) overflow-clip transition-[height] duration-300 motion-reduce:transition-none", EASE)}
+        className={cx("h-(--disclosure-panel-height) overflow-clip", allowed ? "transition-[height]" : "transition-none", isExpanded ? "duration-(--pw-motion-layout)" : "duration-(--pw-motion-exit)", EASE)}
       >
         <div
           className={cx(
             "text-body-regular text-text-secondary",
-            "transition-[opacity,translate,filter] duration-300 motion-reduce:transition-none",
-            isExpanded ? "translate-y-0 opacity-100 blur-[0px]" : "opacity-0 motion-safe:-translate-y-1 motion-safe:blur-[4px]",
-            EASE,
+            allowed ? "transition-[opacity,translate]" : "transition-none",
+            isExpanded ? "duration-(--pw-motion-enter) ease-(--pw-ease-enter)" : "duration-(--pw-motion-exit) ease-(--pw-ease-exit)",
+            isExpanded ? "translate-y-0 opacity-100" : allowed ? "opacity-0 -translate-y-1" : "opacity-0",
             styles.content[variant],
           )}
         >

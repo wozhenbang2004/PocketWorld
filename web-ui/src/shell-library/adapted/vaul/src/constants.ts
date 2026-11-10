@@ -1,6 +1,11 @@
+import { motionDuration, motionEase } from '../../../../library/motion-tokens';
+
 export const TRANSITIONS = {
-  DURATION: 0.5,
-  EASE: [0.32, 0.72, 0, 1],
+  DURATION: motionDuration.drawer / 1000,
+  EXIT_DURATION: motionDuration.drawerExit / 1000,
+  EASE: motionEase.enter,
+  EXIT_EASE: motionEase.exit,
+  SETTLE_EASE: motionEase.settle,
 };
 
 export const VELOCITY_THRESHOLD = 0.4;

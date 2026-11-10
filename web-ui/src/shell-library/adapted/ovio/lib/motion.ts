@@ -1,6 +1,7 @@
 "use client";
 
-import { useReducedMotion, type Transition } from "motion/react";
+import type { Transition } from "motion/react";
+import { useReducedMotion } from "../../../../library/core";
 
 /**
  * Ovio motion tokens. Each world moves for a different reason:

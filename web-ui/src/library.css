@@ -19,7 +19,7 @@
 .pw-press>span{pointer-events:none}
 .pw-press-shadow,.pw-press-base,.pw-press-edge{display:none}
 .pw-press-front{display:flex;align-items:center;justify-content:center;position:relative;box-sizing:border-box;padding:10px 14px;border-radius:inherit;background:transparent;transform:none;transition:none;min-height:44px}
-.pw-press-material{position:absolute;inset:0;border-radius:inherit;background:var(--pw-strong,#262626);transform-origin:center;transform:scale(calc(1 - var(--press)*.015));box-shadow:none;transition:background-color 120ms ease-out}
+.pw-press-material{position:absolute;inset:0;border-radius:inherit;background:var(--pw-strong,#262626);transform-origin:center;transform:translateY(calc(var(--press)*.7px)) scaleX(calc(1 - var(--press)*.02 + var(--strain)*.004)) scaleY(calc(1 - var(--press)*.035 - var(--strain)*.012));box-shadow:none;transition:background-color var(--pw-motion-feedback) var(--pw-ease-settle)}
 @media(hover:hover) and (pointer:fine){.pw-press:not(:disabled):hover .pw-press-material{background:color-mix(in srgb,var(--pw-strong,#262626) 94%,var(--pw-on-strong,#fff))}}
 .pw-press:not(:disabled)[data-state="pressed"] .pw-press-material{background:color-mix(in srgb,var(--pw-strong,#262626) 88%,var(--pw-on-strong,#fff))}
 .pw-press-label{position:relative;display:flex;align-items:center;justify-content:center;gap:7px;font-size:14px;line-height:20px;font-weight:500;white-space:nowrap}

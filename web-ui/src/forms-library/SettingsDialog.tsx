@@ -1,59 +1,77 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useId, useLayoutEffect, useRef, type ReactNode, type SyntheticEvent } from 'react';
 import { createPortal } from 'react-dom';
+import { AnimatePresence, animate, motion, useMotionValue, usePresence } from 'motion/react';
+import { FocusScope } from 'react-aria';
 import { RiCloseLine } from '@remixicon/react';
+import { useMotionAllowed } from '../library/core';
+import { motionTransition } from '../library/motion-tokens';
 
-/** PW-34. Controlled product port of BoardUI SettingsModal's two-phase
- * mount/visible animation, fixed title and separately scrolling content.
- * Source: upstream/components/application/settings/settings-modal.tsx.source.
- * Demo profile, billing rail, fake Saved toast and local setting writes removed.
- */
-export function SettingsDialog({ isOpen, title, onClose, children, className = '', closeLabel = '关闭设置' }: {
+type SettingsDialogProps = {
   isOpen: boolean; title: string; onClose: () => void; children: ReactNode; className?: string; closeLabel?: string;
-}) {
+};
+
+/** PW-34. Controlled port of BoardUI SettingsModal's fixed heading and
+ * separately scrolling content. Motion owns the real exit lifetime; the last
+ * rendered body remains in place when the caller clears a completed review.
+ * Source: upstream/components/application/settings/settings-modal.tsx.source.
+ */
+export function SettingsDialog({ isOpen, ...props }: SettingsDialogProps) {
+  return createPortal(<AnimatePresence>
+    {isOpen && <SettingsSurface key="settings" {...props} />}
+  </AnimatePresence>, document.body);
+}
+
+function SettingsSurface({ title, onClose, children, className = '', closeLabel = '关闭设置' }: Omit<SettingsDialogProps, 'isOpen'>) {
   const titleId = useId();
-  const [mounted, setMounted] = useState(isOpen);
-  const [visible, setVisible] = useState(false);
   const panel = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    let frame1 = 0, frame2 = 0;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    if (isOpen) {
-      setMounted(true);
-      frame1 = requestAnimationFrame(() => { frame2 = requestAnimationFrame(() => { setVisible(true); }); });
-    } else {
-      setVisible(false);
-      timer = setTimeout(() => setMounted(false), 320);
-    }
-    return () => { cancelAnimationFrame(frame1); cancelAnimationFrame(frame2); if (timer) clearTimeout(timer); };
-  }, [isOpen]);
-  // Focus after React has actually mounted the panel; animation frames can run
-  // before the deferred mount commits, especially on a busy WebView.
+  const [present, safeToRemove] = usePresence();
+  const remove = useRef(safeToRemove);
+  const allowed = useMotionAllowed();
+  const opacity = useMotionValue(allowed ? 0 : 1);
+  const scale = useMotionValue(allowed ? .97 : 1);
+  const y = useMotionValue(allowed ? 6 : 0);
+  useLayoutEffect(() => { remove.current = safeToRemove; }, [safeToRemove]);
+
   useLayoutEffect(() => {
-    if (!isOpen || !mounted || !panel.current) return;
-    const origin = document.activeElement as HTMLElement | null;
-    panel.current.focus({ preventScroll: true });
-    return () => { if (origin?.isConnected) origin.focus({ preventScroll: true }); };
-  }, [isOpen, mounted]);
-  useEffect(() => {
-    if (!isOpen) return;
-    const key = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { event.preventDefault(); onClose(); return; }
-      if (event.key !== 'Tab') return;
-      const targets = Array.from(panel.current?.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),textarea:not(:disabled),[href],[tabindex="0"]') ?? []).filter(x => x.getClientRects().length > 0);
-      const first = targets[0], last = targets[targets.length - 1];
-      if (!first) { event.preventDefault(); panel.current?.focus(); }
-      else if (event.shiftKey && (document.activeElement === first || !panel.current?.contains(document.activeElement))) { event.preventDefault(); last.focus(); }
-      else if (!event.shiftKey && (document.activeElement === last || !panel.current?.contains(document.activeElement))) { event.preventDefault(); first.focus(); }
-    };
-    document.addEventListener('keydown', key);
-    return () => document.removeEventListener('keydown', key);
-  }, [isOpen, onClose]);
-  if (!mounted) return null;
-  return createPortal(<div className="pw-settings-layer" data-visible={visible} inert={!isOpen}>
-    <button className="pw-settings-backdrop" type="button" aria-label={closeLabel} tabIndex={-1} onClick={onClose} />
-    <div ref={panel} className={`pw-settings-dialog ${className}`} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
-      <header><h2 id={titleId}>{title}</h2><button type="button" className="pw-icon-action" aria-label={closeLabel} onClick={onClose}><RiCloseLine aria-hidden size={20} /></button></header>
-      <div className="pw-settings-dialog-content">{children}</div>
-    </div>
-  </div>, document.body);
+    let cancelled = false;
+    if (!allowed) {
+      opacity.jump(present ? 1 : 0); scale.jump(1); y.jump(0);
+      if (!present) remove.current?.();
+      return;
+    }
+    const transition = present ? motionTransition.enter : motionTransition.exit;
+    // Retarget the existing values, including a reversal before exit finishes.
+    const animations = [
+      animate(opacity, present ? 1 : 0, transition),
+      animate(scale, present ? 1 : .97, transition),
+      animate(y, present ? 0 : 6, transition),
+    ];
+    void Promise.all(animations).then(() => {
+      if (!cancelled && !present) remove.current?.();
+    });
+    return () => { cancelled = true; animations.forEach(animation => animation.stop()); };
+  }, [allowed, present, opacity, scale, y]);
+
+  useLayoutEffect(() => {
+    if (present && panel.current && !panel.current.contains(document.activeElement)) panel.current.focus({ preventScroll: true });
+  }, [present]);
+
+  const blockClosed = (event: SyntheticEvent) => {
+    if (!present) { event.preventDefault(); event.stopPropagation(); }
+  };
+  return <div className="pw-settings-layer" data-visible={present} inert={!present}
+    onClickCapture={blockClosed} onPointerDownCapture={blockClosed} onKeyDownCapture={blockClosed} onSubmitCapture={blockClosed}>
+    <motion.button className="pw-settings-backdrop" style={{ opacity }} type="button" aria-label={closeLabel}
+      tabIndex={-1} onClick={() => { if (present) onClose(); }} />
+    <FocusScope contain={present} restoreFocus>
+      <motion.div ref={panel} style={{ opacity, scale, y }} className={`pw-settings-dialog ${className}`}
+        role="dialog" data-state={present ? 'open' : 'closed'} aria-modal="true" aria-labelledby={titleId} tabIndex={-1}
+        onKeyDown={event => {
+          if (present && event.key === 'Escape' && !event.defaultPrevented && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); event.stopPropagation(); onClose(); }
+        }}>
+        <header><h2 id={titleId}>{title}</h2><button type="button" className="pw-icon-action" aria-label={closeLabel} onClick={() => { if (present) onClose(); }}><RiCloseLine aria-hidden size={20} /></button></header>
+        <div className="pw-settings-dialog-content">{children}</div>
+      </motion.div>
+    </FocusScope>
+  </div>;
 }

@@ -241,5 +241,13 @@
       "source": "library reconstruction@0e69029; not official Pro source",
       "sha256": "287a7b43dfa919fde2167706b49c340d103f8e0d50a48e9a26b733f83d0d8b7a"
     }
-  ]
+  ],
+  "motionRefactor20261110": {
+    "scope": "Product integration of retained Affect composer/surfaces and the approved Josh press controller using installed Motion 12.42.2; no new dependency or source-family substitution.",
+    "reference": "Aesthetics library verified HEAD 20261110T051726Z-6f9a1718; motion-easing-kubai-20261106.md and state-continuity-stacked-20261106.md are design recipes, not imported upstream component code.",
+    "press": "Retain pointer/keyboard cancellation; shared press/release timing and material-only strain feedback keep label and hit geometry stable, with immediate background settling. The approved Josh neutral adaptation remains a tutorial adaptation; no SPDX license is inferred.",
+    "composer": "Retain the actual controlled textarea, attachment identities and commands. Measured editor/attachment height and presence keep changes continuous; closing controls are inert and settle on dynamic reduced motion/background. No duplicate editor, fake upload progress or delayed command is introduced.",
+    "surfaces": "Animate one current page and genuinely new message IDs; history hydration, stream token changes and returning to a conversation do not replay. First-send intent is bound only through an observed native pending ID and matching real receipt/submission.",
+    "verification": "Source review; formal build and current Android interaction status are recorded in DESIGN.md. Source reuse does not imply user acceptance of this adaptation."
+  }
 }
