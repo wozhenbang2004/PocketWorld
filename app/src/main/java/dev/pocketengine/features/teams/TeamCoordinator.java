@@ -583,9 +583,10 @@ if(runs.size()+archived.size()>=RETAINED_RUN_LIMIT)throw new IllegalStateExcepti
     public synchronized OriginalCancellation originalCancellation(String id)throws Exception{return new OriginalCancellation(required(id));}
     public synchronized JSONObject pause(String id,String memberId)throws Exception{
         Run run=required(id);boolean all=memberId==null||memberId.isEmpty();if(!all)member(run,memberId);
+        if(run.json.optString("status").equals("cancelled"))throw new IllegalStateException("该团队任务已停止");
         if(run.phoneApproval!=null&&!run.children.isEmpty()&&phoneFactory!=null){
             phoneFactory.pause(id,all?null:memberId);
-            for(int i=0;i<roster(run).length();i++){JSONObject slot=roster(run).getJSONObject(i);if(all||memberId.equals(slot.getString("id"))){RunControl child=run.children.get(slot.getString("id"));if(child!=null)child.pause();slot.put("paused",true).put("status","paused");}}
+            for(int i=0;i<roster(run).length();i++){JSONObject slot=roster(run).getJSONObject(i);if(!slot.optBoolean("exited")&&!done(slot.optString("status"))&&(all||memberId.equals(slot.getString("id")))){RunControl child=run.children.get(slot.getString("id"));if(child!=null)child.pause();slot.put("paused",true).put("status","paused");}}
             if(all){run.paused=true;run.control.pause();}run.json.put("status",all?"paused":"running").put("phase","paused");activity(run,"phone_paused","原手机运行已暂停，保留同一任务与执行代次",all?null:memberId);save(run);return JsonFiles.copy(run.json);
         }
         if(run.json.optString("status").equals("cancelled"))throw new IllegalStateException("该团队任务已停止");if(all||run.json.optString("phase").equals("synthesis")){run.paused=true;run.generation++;if(run.control!=null)run.control.cancel();run.json.put("generation",run.generation);}
@@ -831,10 +832,28 @@ if(runs.size()+archived.size()>=RETAINED_RUN_LIMIT)throw new IllegalStateExcepti
     }
     private JSONObject resumeSelected(String id,String memberId,ModelConfig config,EvidenceFactory evidence,ExternalMemberFactory external,dev.pocketengine.store.TaskStore.TeamResearchWakeAdmission wake,boolean useQueuedMessages)throws Exception{
         Run run=required(id);
+        if(run.json.optString("status").equals("cancelled"))throw new IllegalStateException("该团队任务已停止，不能恢复派发");
+        if(closed)throw new IllegalStateException("团队执行器已关闭");
         if(!useQueuedMessages&&run.phoneApproval!=null&&!run.children.isEmpty()&&phoneFactory!=null){
-            boolean all=memberId==null||memberId.isEmpty();phoneFactory.resume(id,all?null:memberId);
-            for(int i=0;i<roster(run).length();i++){JSONObject slot=roster(run).getJSONObject(i);if(all||memberId.equals(slot.getString("id"))){RunControl child=run.children.get(slot.getString("id"));if(child!=null)child.resume();slot.put("paused",false).put("status",child==null?slot.optString("status"):"running");}}
-            run.paused=false;run.control.resume();run.json.put("status","running").put("phase","members");activity(run,"phone_resumed","继续同一原手机运行，未创建新run或追加预算",all?null:memberId);save(run);return JsonFiles.copy(run.json);
+            boolean all=memberId==null||memberId.isEmpty();
+            if(!all&&member(run,memberId).optBoolean("exited"))throw new SecurityException("已退出成员不可恢复；同名新成员使用新ID");
+            phoneFactory.resume(id,all?null:memberId);
+            for(int i=0;i<roster(run).length();i++){
+                JSONObject slot=roster(run).getJSONObject(i);
+                if(slot.optBoolean("exited")||!(all||memberId.equals(slot.getString("id"))))continue;
+                RunControl child=run.children.get(slot.getString("id"));
+                slot.put("paused",false);
+                if(child!=null){child.resume();slot.put("status","running");}
+                else {
+                    int next=unfinishedRound(run,slot);
+                    if(next>0){progress(slot,next).put("status","queued");slot.put("status","queued");}
+                }
+            }
+            run.paused=false;run.control.resume();run.json.put("status","running").put("phase","members");activity(run,"phone_resumed","继续同一原手机运行，未创建新run或追加预算",all?null:memberId);save(run);
+            // Full-team pause ends the coordinator wait, but retains the phone
+            // child. Rejoin it before advancing dependencies or synthesizing.
+            if(run.executing)run.phoneResumePending=true;else schedule(run);
+            return JsonFiles.copy(run.json);
         }
 if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态工作项请使用原工作计划的精确继续，不按成员最近轮次猜assignment或追加预算");if(run.json.optString("status").equals("cancelled"))throw new IllegalStateException("该团队任务已停止，不能恢复派发");if(closed)throw new IllegalStateException("团队执行器已关闭");for(Run other:runs.values())if(other!=run&&active(other))throw new IllegalStateException("请先处理另一团队的活动任务");if(config==null||config.model.isEmpty())throw new IllegalStateException("请先配置模型");boolean all=memberId==null||memberId.isEmpty();if(!all&&member(run,memberId).optBoolean("exited"))throw new SecurityException("已退出成员不可恢复；同名新成员使用新ID");
         if(TeamEvidenceDiscussion.enabled(run.json)&&activeMemberCount(run)<2)throw new IllegalStateException("独立证据讨论至少需2名当前成员；请显式加入新身份，不让协调者扮演退出者");
@@ -922,7 +941,15 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
     private synchronized void schedule(Run run){if(run.enqueued||run.executing){run.reschedule=true;return;}run.enqueued=true;coordinator.execute(()->{
         int generation;RunControl owner;synchronized(this){run.enqueued=false;run.executing=true;generation=run.generation;owner=run.control;}
         ResearchIdleSource idle=null;
-        try{if(owner!=null&&!run.paused&&!owner.isCancelled())execute(run,generation,owner);}finally{synchronized(this){run.executing=false;if(run.reschedule&&!closed&&!run.paused&&run.control!=null&&!run.control.isCancelled()){run.reschedule=false;schedule(run);}else if(!closed&&owner!=null&&researchEnabled(run)&&!run.paused&&run.control==owner&&!owner.isCancelled()&&!owner.isPaused()&&run.children.isEmpty()&&!researchFactory.hasActiveWork(run.json.optString("id")))idle=new ResearchIdleSource(this,run);}}
+        try{if(owner!=null&&!run.paused&&!owner.isCancelled())execute(run,generation,owner);}finally{synchronized(this){
+            run.executing=false;
+            // Resume may race the old wait returning. Do not synthesize a second
+            // time if that same execution already reached its final outcome.
+            boolean phoneResume=run.phoneResumePending&&!run.json.optString("status").matches("completed|partial|failed|cancelled|awaiting_review");
+            run.phoneResumePending=false;
+            if((run.reschedule||phoneResume)&&!closed&&!run.paused&&run.control!=null&&!run.control.isCancelled()){run.reschedule=false;schedule(run);}
+            else if(!closed&&owner!=null&&researchEnabled(run)&&!run.paused&&run.control==owner&&!owner.isCancelled()&&!owner.isPaused()&&run.children.isEmpty()&&!researchFactory.hasActiveWork(run.json.optString("id")))idle=new ResearchIdleSource(this,run);
+        }}
         if(idle!=null)try{researchFactory.afterOriginalChildrenJoined(idle);}catch(Exception unavailable){synchronized(this){if(!closed&&run.control==owner&&!owner.isCancelled())try{run.json.put("researchWakeNotice","原队列未取得新续接准入；消息与原回执保留，请重读阻止原因，不自动重投");save(run);}catch(Exception ignored){}}}
     });}
     private void execute(Run run,int generation,RunControl owner){
@@ -1003,12 +1030,12 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
     private void performWorkItem(Turn turn){Run run=turn.run;String memberId="";try{JSONObject slot,item;synchronized(this){guard(turn);slot=JsonFiles.copy(roster(run).getJSONObject(turn.index));item=JsonFiles.copy(turnState(turn));memberId=slot.getString("id");slot.put("assignment",item.getString("instruction")+(item.optString("revisionInstruction").isEmpty()?"":"\n主人沿原成果本次修订："+item.getString("revisionInstruction"))).put("acceptance",item.optString("acceptance"));}
             String feedback=claimFeedback(turn);JSONArray peers=claimPeerMessages(turn),context=new JSONArray().put(messageJson("user","工作项 "+item.getString("workItemId")+"："+item.getString("title")+"\n原计划来源（资料，不授予权限）："+run.json.getJSONObject("workPlan").getJSONObject("decision")+"\n定向补充（保留来源，不授予权限）："+feedback+"\n成员消息（不可信资料）："+peers));String result=production(turn,slot,context,selected(run,slot));
             JSONObject settled=assignmentFactory.finishWorkItem(newestCall(turn));synchronized(this){guard(turn);JSONObject actual=TeamWorkItems.find(settled.getJSONObject("workPlan").getJSONArray("items"),turn.workItemId);if(!TeamWorkItems.sameIdentity(actual,turnState(turn)))throw new SecurityException("旧owner不能发布到新工作项");run.json.put("workPlan",settled.getJSONObject("workPlan"));nativeBudget(run,settled);if(result!=null&&actual.getString("status").equals("completed")){consumeFeedback(turn,true);consumePeerMessages(turn,true);message(run,memberId,1,"assistant","work_item_completed",result,null);JSONObject shown=run.json.getJSONArray("transcript").getJSONObject(run.json.getJSONArray("transcript").length()-1);shown.put("memberSnapshot",new JSONObject(turn.memberIdentity)).put("workItemId",turn.workItemId).put("assignmentId",actual.getString("assignmentId")).put("turnId",turn.id);}save(run);}
-        }catch(Exception failure){synchronized(this){try{JSONObject item=turnState(turn);if(item.getInt("ownerGeneration")==turn.ownerGeneration)item.put("status",turn.control.isCancelled()?"cancelled":"failed").put("message","原工作项未取得确定完成回执；不换新assignment重放，未知效果回原任务核对").put("nativeErrorType",failure.getClass().getSimpleName()).put("nativeErrorMessage",redact(String.valueOf(failure.getMessage()),run.config));save(run);}catch(Exception ignored){}}}finally{synchronized(this){turn.active=false;try{if(!turn.peerConsumed)consumePeerMessages(turn,false);}catch(Exception ignored){}if(!memberId.isEmpty()&&run.children.get(memberId)==turn.control)run.children.remove(memberId);}}}
+        }catch(Exception failure){synchronized(this){try{JSONObject item=turnState(turn);if(item.getInt("ownerGeneration")==turn.ownerGeneration)item.put("status",turn.control.isCancelled()?"cancelled":"failed").put("message","原工作项未取得确定完成回执；不换新assignment重放，未知效果回原任务核对").put("nativeErrorType",failure.getClass().getSimpleName()).put("nativeErrorMessage",redact(String.valueOf(failure.getMessage()),run.config));save(run);}catch(Exception ignored){}}}finally{synchronized(this){turn.active=false;try{if(!turn.peerConsumed)consumePeerMessages(turn,false);}catch(Exception ignored){}run.children.values().removeIf(child->child==turn.control);}}}
     private AssignmentCall newestCall(Turn turn){AssignmentCall actual=turn.assignmentCall;if(actual==null)throw new SecurityException("原工作项未登记真实assignment call");return actual;}
     private void executeRound(Run run,int round,int generation,RunControl owner)throws Exception {
         JSONArray previous;synchronized(this){pass(run,generation,owner);run.json.put("round",round);previous=JsonFiles.copy(run.json).getJSONArray("members");}
         while(true){
-            List<Future<?>> pending=new ArrayList<>();
+            List<Future<?>> pending=new ArrayList<>();boolean retained;
             synchronized(this){pass(run,generation,owner);
                 for(int i=0;i<roster(run).length();i++){
                     JSONObject member=roster(run).getJSONObject(i),state=progress(member,round);String status=state.optString("status");
@@ -1020,9 +1047,14 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
                     run.children.put(member.getString("id"),child);member.put("round",round).put("status","running");state.put("status","running").put("turnId",turn.id).put("generation",turn.memberGeneration).put("startedAt",System.currentTimeMillis());
                     pending.add(members.submit(()->{performMember(turn,run.config,previous,round);return null;}));
                 }
-                save(run);
+                retained=pending.isEmpty()&&!run.children.isEmpty();
+                if(!retained)save(run);
             }
-            if(pending.isEmpty())return;
+            if(pending.isEmpty()){
+                // A resumed phone run can still own children submitted by the
+                // previous coordinator pass. No new Future does not mean done.
+                if(retained){Thread.sleep(100);continue;}return;
+            }
             for(Future<?> future:pending)while(true){pass(run,generation,owner);try{future.get(100,TimeUnit.MILLISECONDS);break;}catch(java.util.concurrent.TimeoutException waiting){}catch(java.util.concurrent.ExecutionException ignored){break;}}
         }
     }
@@ -1048,7 +1080,7 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
         synchronized(this){guard(turn);JSONObject current=roster(run).getJSONObject(turn.index);if(discussionInput!=null){progress(current,round).put("unacceptedDiscussionOutput",text);save(run);JSONObject record=TeamEvidenceDiscussion.commit(run.json,memberId,round,turn.id,turn.memberGeneration,discussionInput,text);invalidateDiscussionAfter(run,round);progress(current,round).put("discussionRecord",record).remove("unacceptedDiscussionOutput");text=TeamEvidenceDiscussion.render(record);}current.put("status","completed").put("text",text);progress(current,round).put("status","completed").put("text",text).put("finishedAt",System.currentTimeMillis());message(run,memberId,round,"assistant","answer",text,null);run.json.getJSONArray("transcript").getJSONObject(run.json.getJSONArray("transcript").length()-1).put("memberSnapshot",new JSONObject(turn.memberIdentity));if(discussionInput!=null){JSONObject shown=run.json.getJSONArray("transcript").getJSONObject(run.json.getJSONArray("transcript").length()-1);shown.put("discussionStage",TeamEvidenceDiscussion.stage(round)).put("discussionRecordId",progress(current,round).getJSONObject("discussionRecord").getString("recordId"));}consumeFeedback(turn,true);consumePeerMessages(turn,true);activity(run,"member_completed","成员完成本轮真实产出",memberId);save(run);}
     }catch(InterruptedException stopped){synchronized(this){try{RunControl parent=run.control;JSONObject member=roster(run).getJSONObject(turn.index);if(parent!=null&&!parent.isCancelled()&&run.generation==turn.runGeneration&&member.optInt("generation")==turn.memberGeneration&&turn.control.isCancelled()){member.put("status","cancelled");progress(member,round).put("status","cancelled");message(run,member.getString("id"),round,"system","assignment_stopped","原成员执行已停止；实际动作与结果保留，未知效果仍需回原任务核对",null);save(run);}}catch(Exception unavailable){}}}
     catch(Exception failure){synchronized(this){try{guard(turn);JSONObject member=roster(run).getJSONObject(turn.index),state=progress(member,round);boolean uncertain=!state.optString("externalOperationId").isEmpty()&&!state.optBoolean("externalSettled");String status=uncertain?"blocked_unknown":"failed",reason=failure instanceof ContextLimitException?failure.getMessage():uncertain?"外部操作尚未取得可确认终态；保留原操作身份，继续只查询，不重新提交":"本轮模型、证据或执行端未返回有效结果；没有编造答案";member.put("status",status);state.put("status",status).put("message",reason).put("nativeErrorType",failure.getClass().getSimpleName()).put("nativeErrorMessage",redact(String.valueOf(failure.getMessage()),run.config));message(run,member.getString("id"),round,"system","error",reason,null);consumeFeedback(turn,false);save(run);}catch(Exception stale){}}}
-    finally{synchronized(this){turn.active=false;if(turn.researchOwner!=null){turn.researchOwner.removeCancelAction(turn.researchCancellation);run.researchTurns.remove(turn);}try{if(!turn.peerConsumed){consumePeerMessages(turn,false);save(run);}}catch(Exception ignored){}if(!memberId.isEmpty()&&run.children.get(memberId)==turn.control)run.children.remove(memberId);}}
+    finally{synchronized(this){turn.active=false;if(turn.researchOwner!=null){turn.researchOwner.removeCancelAction(turn.researchCancellation);run.researchTurns.remove(turn);}try{if(!turn.peerConsumed){consumePeerMessages(turn,false);save(run);}}catch(Exception ignored){}run.children.values().removeIf(child->child==turn.control);}}
     }
     private String phoneChild(Turn turn,JSONObject slot)throws Exception {
         if(phoneFactory==null)throw new SecurityException("原手机成员宿主未挂载");PhoneCall call=new PhoneCall(turn,slot);
@@ -1435,7 +1467,8 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
     private static String answer(JSONObject response,ModelConfig config)throws Exception{if(response.optJSONArray("tool_calls")!=null&&response.getJSONArray("tool_calls").length()>0)throw new IllegalArgumentException("团队总结不能继续执行工具");return TeamOutputText.received(redact(response.optString("content"),config),null);}
     private static String redact(String text,ModelConfig config){return config==null?text:config.redactSensitive(text);}
     @Override public synchronized void close(){closed=true;for(Run run:runs.values()){if(run.control!=null)run.control.cancel();for(RunControl child:run.children.values())child.cancel();}coordinator.shutdownNow();members.shutdownNow();}
-    private static final class Run{volatile TeamPhoneHost.Approval phoneApproval;final JSONObject json;volatile RunControl control;volatile ModelConfig config;volatile EvidenceFactory evidenceFactory;volatile ExternalMemberFactory externalFactory;final Map<String,TeamMemberModels.Selection> modelSelections=new LinkedHashMap<>();final Map<String,RunControl> children=new LinkedHashMap<>();final Set<Turn> researchTurns=new java.util.LinkedHashSet<>();final Map<String,dev.pocketengine.store.TaskStore.TeamResearchWakeAdmission> researchWakes=new LinkedHashMap<>();final java.util.concurrent.ConcurrentHashMap<String,Integer> memberVersions=new java.util.concurrent.ConcurrentHashMap<>();volatile int generation;volatile long nativeRevision;volatile boolean paused;boolean enqueued,executing,reschedule;Run(JSONObject json,RunControl control,ModelConfig config,EvidenceFactory evidence,ExternalMemberFactory external){this.json=json;this.control=control;this.config=config;this.evidenceFactory=evidence;this.externalFactory=external;this.generation=json.optInt("generation");nativeRevision=json.optLong("revision");JSONArray members=json.optJSONArray("members");for(int i=0;members!=null&&i<members.length();i++){JSONObject member=members.optJSONObject(i);if(member!=null)memberVersions.put(member.optString("id"),member.optInt("identityRevision",1));}}}
+    private static final class Run{volatile TeamPhoneHost.Approval phoneApproval;final JSONObject json;volatile RunControl control;volatile ModelConfig config;volatile EvidenceFactory evidenceFactory;volatile ExternalMemberFactory externalFactory;final Map<String,TeamMemberModels.Selection> modelSelections=new LinkedHashMap<>();final Map<String,RunControl> children=new LinkedHashMap<>();final Set<Turn> researchTurns=new java.util.LinkedHashSet<>();final Map<String,dev.pocketengine.store.TaskStore.TeamResearchWakeAdmission> researchWakes=new LinkedHashMap<>();final java.util.concurrent.ConcurrentHashMap<String,Integer> memberVersions=new java.util.concurrent.ConcurrentHashMap<>();volatile int generation;volatile long nativeRevision;volatile boolean paused;boolean enqueued,executing,reschedule,phoneResumePending;Run(JSONObject json,RunControl control,ModelConfig config,EvidenceFactory evidence,ExternalMemberFactory external){this.json=json;this.control=control;this.config=config;this.evidenceFactory=evidence;this.externalFactory=external;this.generation=json.optInt("generation");nativeRevision=json.optLong("revision");JSONArray members=json.optJSONArray("members");for(int i=0;members!=null&&i<members.length();i++){JSONObject member=members.optJSONObject(i);if(member!=null)memberVersions.put(member.optString("id"),member.optInt("identityRevision",1));}}}
     private static final class Turn{final Run run;final String id=UUID.randomUUID().toString();final JSONArray peerIds=new JSONArray();boolean peerConsumed;volatile boolean active=true;final int index,round,runGeneration,memberGeneration,ownerGeneration,itemRevision;final String workItemId;int requestOrdinal;volatile AssignmentCall assignmentCall;RunControl researchOwner;Runnable researchCancellation;final RunControl control;final String memberIdentity;Turn(Run run,int index,int round,int runGeneration,int memberGeneration,RunControl control)throws Exception{this(run,index,round,runGeneration,memberGeneration,control,null);}Turn(Run run,int index,int round,int runGeneration,int memberGeneration,RunControl control,JSONObject item)throws Exception{memberIdentity=memberSnapshot(roster(run).getJSONObject(index)).toString();this.run=run;this.index=index;this.round=round;this.runGeneration=runGeneration;this.memberGeneration=memberGeneration;this.control=control;workItemId=item==null?"":item.optString("workItemId");ownerGeneration=item==null?0:item.optInt("ownerGeneration");itemRevision=item==null?0:item.optInt("itemRevision");}}
     private static final class ContextLimitException extends IllegalArgumentException{ContextLimitException(String message){super(message);}}
 }
+
