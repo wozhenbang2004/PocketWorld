@@ -2,11 +2,11 @@
  * and SettingsDialog. One pale workspace surface; no replacement primitives.
  * The terminal screen remains the original xterm output, never a mock panel. */
 .pw-local-workspace.pw-settings-section { max-width: 1100px; min-width: 0; margin-bottom: 0; color: var(--pw-ink, #202020); }
-.pw-local-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 4px 0 22px; }
-.pw-local-heading h2 { margin: 0; font-size: 24px; font-weight: 500; line-height: 32px; letter-spacing: -.035em; }
+.pw-local-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--pw-gap-content,16px); margin: 0 0 var(--pw-gap-section,28px); }
+.pw-local-heading h2 { margin: 0; font-size: 22px; font-weight: 500; line-height: 32px; letter-spacing: -.035em; }
 .pw-local-heading p { margin: 5px 0 0; color: var(--pw-copy, #626262); font-size: 13px; line-height: 21px; }
 .pw-local-heading > svg { color: var(--pw-copy, #626262); flex: none; }
-.pw-local-layout { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 22px; align-items: start; }
+.pw-local-layout { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: var(--pw-gap-section,28px); align-items: start; }
 .pw-local-sessions { min-width: 0; padding-block: 4px; }
 .pw-local-workspace .pw-local-session-row { width: 100%; height: auto; min-height: 44px; padding: 10px; gap: 10px; justify-content: flex-start; border: 0; border-radius: 11px; background: transparent; box-shadow: none; text-align: start; white-space: normal; }
 .pw-local-workspace .pw-local-session-row + .pw-local-session-row { margin-top: 3px; }
@@ -16,23 +16,23 @@
 .pw-local-workspace .pw-local-session-row > span { min-width: 0; padding: 0; flex-shrink: 1; justify-content: flex-start; }
 .pw-local-session-copy { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
 .pw-local-session-copy strong { font-size: 13px; font-weight: 500; line-height: 21px; overflow-wrap: anywhere; }
-.pw-local-session-copy small { color: var(--pw-copy, #626262); font-size: 11px; font-weight: 400; line-height: 17px; }
+.pw-local-session-copy small { color: var(--pw-copy, #626262); font-size: 12px; font-weight: 400; line-height: 17px; }
 .pw-local-session-label { display: flex; flex-direction: column; gap: 3px; margin: 22px 10px 8px; color: var(--pw-copy, #626262); font-size: 12px; line-height: 19px; }
-.pw-local-session-label small { font-size: 11px; }
+.pw-local-session-label small { font-size: 12px; }
 .pw-local-session-empty { margin: 10px; color: var(--pw-copy, #626262); font-size: 12px; line-height: 21px; }
-.pw-local-main { min-width: 0; padding: 24px; border: 0; border-radius: 18px; background: var(--pw-surface, #fff); box-shadow: 0 2px 5px -2px rgb(0 0 0 / .025), 0 12px 26px -12px rgb(0 0 0 / .07); }
+.pw-local-main { min-width: 0; padding: var(--pw-gap-content,16px); border: 0; border-radius: 18px; background: var(--pw-surface, #fff); box-shadow: 0 2px 5px -2px rgb(0 0 0 / .025), 0 12px 26px -12px rgb(0 0 0 / .07); }
 .pw-local-workspace [hidden] { display: none !important; }
 .pw-local-panel { min-width: 0; }
-.pw-local-panel-heading { margin: 0 0 22px; }
-.pw-local-eyebrow { display: block; margin-bottom: 5px; color: var(--pw-copy, #626262); font-size: 11px; line-height: 18px; }
+.pw-local-panel-heading { margin: 0 0 var(--pw-gap-content,16px); }
+.pw-local-eyebrow { display: block; margin-bottom: 5px; color: var(--pw-copy, #626262); font-size: 12px; line-height: 18px; }
 .pw-local-panel-heading h2 { margin: 0; font-size: 20px; line-height: 29px; font-weight: 500; letter-spacing: -.025em; overflow-wrap: anywhere; }
 .pw-local-panel-heading h2:focus { outline: none; }
 .pw-local-panel-heading p { margin: 7px 0 0; color: var(--pw-copy, #626262); font-size: 13px; line-height: 22px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .pw-local-setup-step + .pw-local-setup-step { margin-top: 28px; }
 .pw-local-setup-step > h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 14px; font-size: 14px; font-weight: 500; line-height: 22px; }
 .pw-local-setup-step > h3 > svg { color: var(--pw-copy, #626262); }
-.pw-local-workspace .pw-form-grid { gap: 14px; }
-.pw-local-workspace .pw-form-actions { gap: 6px; margin: 12px 0 0; }
+.pw-local-workspace .pw-form-grid { gap: var(--pw-gap-content,16px); }
+.pw-local-workspace .pw-form-actions { gap: var(--pw-gap-control,12px); margin: var(--pw-gap-control,12px) 0 0; }
 .pw-local-workspace .pw-field-hint { margin: 8px 0 0; font-size: 12px; line-height: 20px; overflow-wrap: anywhere; }
 .pw-local-source { display: flex; flex-direction: column; gap: 3px; margin-top: 12px; padding: 12px 14px; background: var(--pw-canvas, #f5f5f5); border-radius: 10px; font-size: 13px; line-height: 21px; }
 .pw-local-source small { color: var(--pw-copy, #626262); font-size: 12px; line-height: 20px; }
@@ -53,13 +53,13 @@
 .pw-local-session-status > span { color: var(--pw-copy, #626262); }
 .pw-local-session-status p { margin: 6px 0 0; overflow-wrap: anywhere; }
 .pw-local-workspace .pw-local-session-actions { margin-bottom: 18px; }
-.pw-local-screen-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-block: 8px; }
+.pw-local-screen-toolbar { display: flex; align-items: center; justify-content: space-between; gap: var(--pw-gap-control,12px); padding-block: var(--pw-gap-related,8px); }
 .pw-local-screen-toolbar > span { min-width: 0; color: var(--pw-copy, #626262); font-family: var(--font-mono, monospace); font-size: 12px; overflow-wrap: anywhere; }
 .pw-local-screen-toolbar > div { display: flex; gap: 4px; flex: none; }
 .pw-local-screen { min-width: 0; overflow: hidden; border-radius: 10px; }
 .pw-local-input { margin-top: 22px; }
-.pw-local-input-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
-.pw-local-input-actions > small { margin-left: auto; color: var(--pw-copy, #626262); font-size: 11px; line-height: 19px; }
+.pw-local-input-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--pw-gap-control,12px); margin-top: var(--pw-gap-control,12px); }
+.pw-local-input-actions > small { margin-left: auto; color: var(--pw-copy, #626262); font-size: 12px; line-height: 19px; }
 .pw-local-closed { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin: 24px 0; padding: 22px 0; color: var(--pw-copy, #626262); }
 .pw-local-closed > svg { margin-bottom: 5px; }
 .pw-local-closed p { margin: 0; font-size: 14px; line-height: 23px; }
@@ -81,13 +81,13 @@
   .pw-local-workspace .pw-local-session-row + .pw-local-session-row { margin: 0; }
   .pw-local-session-label { display: none; }
   .pw-local-session-empty { margin: 0; align-self: center; flex: 1 0 190px; max-width: 300px; padding: 0 6px; }
-  .pw-local-main { padding: 20px; }
+  .pw-local-main { padding: var(--pw-gap-content,16px); }
   .pw-local-workspace .pw-form-grid { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 420px) {
   .pw-local-heading { margin-bottom: 16px; }
   .pw-local-heading h2 { font-size: 22px; line-height: 30px; }
-  .pw-local-main { padding: 18px 16px; border-radius: 15px; }
+  .pw-local-main { padding: var(--pw-gap-content,16px); border-radius: 16px; }
   .pw-local-panel-heading h2 { font-size: 19px; line-height: 28px; }
   .pw-local-screen-toolbar { align-items: flex-start; flex-direction: column; gap: 3px; }
   .pw-local-input-actions > small { flex-basis: 100%; margin: 2px 0 0; }
@@ -95,33 +95,33 @@
 
 /* One work surface, with output before secondary tools. Existing xterm and
  * BoardUI disclosures keep their identities through these layout changes. */
-.pw-local-workspace .pw-local-heading { margin-bottom: 16px; }
+.pw-local-workspace .pw-local-heading { margin-bottom: var(--pw-gap-section,28px); }
 .pw-local-workspace .pw-local-main { box-shadow: none; border-radius: 16px; }
-.pw-local-workspace .pw-local-panel-heading { margin-bottom: 20px; }
+.pw-local-workspace .pw-local-panel-heading { margin-bottom: var(--pw-gap-content,16px); }
 .pw-local-workspace .pw-local-setup-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; position: sticky; top: -1px; z-index: 2; padding-block: 8px 12px; background: var(--pw-surface, #fff); }
 .pw-local-setup-heading > button { flex: none; }
 .pw-local-workspace .pw-local-session-status { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 12px; margin: 0 0 16px; }
-.pw-local-workspace .pw-local-session-status > span { font-size: 11px; padding: 3px 8px; border-radius: 6px; background: var(--pw-inset); }
+.pw-local-workspace .pw-local-session-status > span { font-size: 12px; padding: 3px 8px; border-radius: 6px; background: var(--pw-inset); }
 .pw-local-workspace .pw-local-session-status > p { margin: 0; font-size: 12px; }
 .pw-local-workspace .pw-local-disclosures .pw-local-input { margin-top: 4px; }
 .pw-local-workspace .pw-local-source { background: transparent; border-radius: 0; padding: 12px 0 0; }
-.pw-local-workspace .pw-local-setup-step + .pw-local-setup-step { margin-top: 20px; padding-top: 20px; border-top: 1px solid color-mix(in srgb,var(--pw-ink) 6%,transparent); }
+.pw-local-workspace .pw-local-setup-step + .pw-local-setup-step { margin-top: var(--pw-gap-section,28px); padding-top: 0; border: 0; }
 .pw-local-workspace .pw-local-runtime { margin-top: 28px; }
-.pw-local-workspace .pw-local-runtime-row + .pw-local-runtime-row { border-top: 1px solid color-mix(in srgb,var(--pw-ink) 6%,transparent); }
+.pw-local-workspace .pw-local-runtime-row + .pw-local-runtime-row { border: 0; }
 .pw-project-execution .pw-local-screen-toolbar { align-items: center; margin-block: 4px 12px; }
 .pw-project-execution .pw-local-screen-toolbar > span { display: grid; gap: 3px; font-family: var(--font-code,monospace); }
 .pw-project-execution .pw-local-screen-toolbar strong { font-size: 13px; font-family: var(--font-ui); font-weight: 500; }
-.pw-project-execution .pw-local-screen-toolbar small { font-size: 11px; }
-.pw-project-execution .pw-execution-scope { margin: 0 0 16px; font-size: 11px; line-height: 1.75; color: var(--pw-muted); }
+.pw-project-execution .pw-local-screen-toolbar small { font-size: 12px; }
+.pw-project-execution .pw-execution-scope { margin: 0 0 16px; font-size: 12px; line-height: 1.75; color: var(--pw-muted); }
 .pw-project-execution .pw-local-screen { margin-bottom: 12px; }
 .pw-project-execution > * { border: 0; }
 .pw-project-execution .pw-local-input { margin-top: 4px; }
-.pw-project-execution .pw-field-hint { margin-block: 8px; font-size: 11px; line-height: 1.75; }
+.pw-project-execution .pw-field-hint { margin-block: 8px; font-size: 12px; line-height: 1.75; }
 .pw-project-execution .pw-local-inline-notice { margin-block: 12px; font-size: 12px; line-height: 1.75; }
 .pw-project-execution .pw-local-disclosures { margin-top: 20px; }
 .pw-project-execution button[slot="trigger"] { min-height: 48px; }
-@media(max-width:640px){.pw-local-workspace .pw-local-heading h2 { font-size: 20px; }.pw-local-workspace .pw-local-main { padding: 20px 18px; }.pw-local-workspace .pw-local-heading { margin-bottom: 20px; }.pw-project-execution .pw-local-screen-toolbar { flex-direction: row; align-items: center; }.pw-project-execution .pw-local-screen-toolbar > button { flex: none; }}
+@media(max-width:640px){.pw-local-workspace .pw-local-heading h2 { font-size: 20px; }.pw-local-workspace .pw-local-main { padding: var(--pw-gap-content,16px); }.pw-local-workspace .pw-local-heading { margin-bottom: var(--pw-gap-section,28px); }.pw-project-execution .pw-local-screen-toolbar { flex-direction: row; align-items: center; }.pw-project-execution .pw-local-screen-toolbar > button { flex: none; }}
 
-@media(max-width:520px){.pw-local-workspace .pw-local-setup-heading{align-items:flex-start;flex-direction:column;gap:10px}.pw-local-setup-heading > button{width:100%;justify-content:center}.pw-local-workspace .pw-local-panel-heading h2{font-size:18px;line-height:27px}}
+@media(max-width:520px){.pw-local-workspace .pw-local-setup-heading{align-items:flex-start;flex-direction:column;gap:var(--pw-gap-control,12px)}.pw-local-setup-heading > button{width:100%;justify-content:center}.pw-local-workspace .pw-local-panel-heading h2{font-size:18px;line-height:27px}}
 
 @media(min-width:761px){.pw-local-workspace .pw-local-sessions{max-height:min(64dvh,680px);overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable}}

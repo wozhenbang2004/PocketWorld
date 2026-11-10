@@ -2,14 +2,14 @@
 .pw-projects-page[data-preview-open="true"] { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 12px; }
 .pw-projects-page[data-preview-open="true"] .pw-project-work { display: flex; flex: 1; flex-direction: column; min-height: 0; }
 .pw-projects-page[data-preview-open="true"] .pw-project-tools { flex: none; }
-.pw-preview-pane { display: flex; flex: 1; flex-direction: column; min-height: 0; gap: 8px; padding-top: 8px; }
-.pw-preview-actions, .pw-preview-footer { display: flex; flex: none; align-items: center; gap: 8px; }
+.pw-preview-pane { display: flex; flex: 1; flex-direction: column; min-height: 0; gap: var(--pw-gap-control); padding-top: var(--pw-gap-related); overflow-y: auto; overscroll-behavior: contain; scroll-padding-block: 12px; }
+.pw-preview-actions, .pw-preview-footer { display: flex; flex: none; align-items: center; flex-wrap: wrap; gap: var(--pw-gap-related); }
 .pw-preview-actions > button { min-height: 44px; }
 .pw-preview-context { flex: none; }
 .pw-preview-context > p { margin: 0 0 5px; font-size: 12px; line-height: 1.5; }
 .pw-preview-context [data-slot="accordion-panel"] { max-height: 120px; overflow: auto; }
 .pw-preview-context .pw-error { margin-top: 4px; }
-.pw-preview-entry { display: flex; flex: 1; flex-direction: column; gap: 12px; min-height: 0; padding: 0 2px 8px; overflow: auto; overflow-anchor: none; }
+.pw-preview-entry { display: flex; flex: 1; flex-direction: column; gap: var(--pw-gap-content); min-height: 0; padding: 0 0 var(--pw-gap-related); overflow: auto; overflow-anchor: none; }
 .pw-preview-entry > * { flex: none; }
 .pw-preview-entry > h3 { margin: 0; font-size: 15px; }
 .pw-preview-entry > button { align-self: flex-start; }
@@ -17,15 +17,15 @@
 .pw-preview-viewport { position: relative; flex: 1; min-height: 48px; overflow: hidden; background: var(--pw-inset,#f5f5f5); }
 .pw-preview-placeholder { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 16px; color: var(--pw-copy,#666); font-size: 13px; text-align: center; }
 .pw-preview-footer { justify-content: space-between; padding-bottom: 4px; }
-.pw-preview-references { max-height: min(32dvh,240px); overflow: auto; overscroll-behavior: contain; margin: 0 4px 6px; }
+.pw-preview-references { max-height: min(32dvh,240px); overflow: auto; overscroll-behavior: contain; margin: 0; }
 .pw-preview-references h3 button { padding-block: 8px; }
-.pw-preview-reference-list { display: flex; flex-direction: column; gap: 10px; }
+.pw-preview-reference-list { display: flex; flex-direction: column; gap: var(--pw-gap-content); }
 .pw-preview-reference { min-width: 0; }
 .pw-preview-reference > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .pw-preview-reference > header strong { min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
 .pw-preview-quoted-text, .pw-preview-reference pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.6; }
 .pw-preview-reference pre { max-height: 180px; overflow: auto; margin-block: 8px; }
-.pw-preview-source-details { display: grid; grid-template-columns: 5em minmax(0,1fr); gap: 4px 8px; font-size: 11px; }
+.pw-preview-source-details { display: grid; grid-template-columns: 5em minmax(0,1fr); gap: var(--pw-gap-related) var(--pw-gap-control); font-size: 12px; }
 .pw-preview-source-details dd { margin: 0; overflow-wrap: anywhere; }
 .pw-preview-source-details dt { color: var(--pw-muted,#777); }
 @media (max-height: 440px) {
@@ -34,40 +34,38 @@
   .pw-preview-references { max-height: 24dvh; }
 }
 
-.pw-preview-heading { display: flex; flex: none; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.pw-preview-heading { display: flex; flex: none; align-items: flex-start; justify-content: space-between; gap: var(--pw-gap-control); }
 .pw-preview-heading > div { min-width: 0; }
 .pw-preview-heading h3 { font-size: 13px; line-height: 1.5; font-weight: 500; margin: 0; }
-.pw-preview-heading p { margin: 2px 0 0; overflow-wrap: anywhere; color: var(--pw-muted,#777); font-size: 11px; line-height: 1.5; }
+.pw-preview-heading p { margin: var(--pw-gap-related) 0 0; overflow-wrap: anywhere; color: var(--pw-muted,#777); font-size: 12px; line-height: 1.65; }
 .pw-preview-selection-state { flex: none; font-size: 11px; padding: 4px 7px; border-radius: 7px; background: var(--pw-inset,#ededed); }
-.pw-preview-draft-status { flex: none; margin: 0; color: var(--pw-muted,#777); font-size: 11px; line-height: 1.5; }
+.pw-preview-draft-status { flex: none; margin: 0; color: var(--pw-muted,#777); font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
 .pw-preview-pane .pw-preview-viewport { border-radius: 12px; box-shadow: 0 1px 8px #00000005; }
-.pw-preview-pane .pw-preview-context h4 button { min-height: 36px; padding-block: 5px; font-size: 12px; }
+.pw-preview-pane .pw-preview-context h4 button { min-height: var(--pw-control-target); padding-block: 8px; font-size: 12px; }
 .pw-preview-footer { flex-wrap: wrap; }
 .pw-preview-footer > button { min-height: 44px; }
 .pw-preview-pane .pw-preview-source-details { max-height: 120px; overflow: auto; }
 
 /* The single native viewport leads; source details follow the actual image.
  * ResizeObserver continues reporting this same node's final visible bounds. */
-.pw-preview-pane { gap: 12px; }
 .pw-preview-pane .pw-preview-heading h3 { font-size: 15px; font-weight: 550; }
-.pw-preview-pane .pw-preview-actions { gap: 6px; }
-.pw-preview-pane > .pw-preview-context { font-size: 11px; }
-.pw-preview-pane > .pw-preview-context p { font-size: 11px; line-height: 1.7; }
+.pw-preview-pane > .pw-preview-context { font-size: 12px; }
+.pw-preview-pane > .pw-preview-context p { font-size: 12px; line-height: 1.7; }
 .pw-preview-pane > .pw-preview-viewport { min-height: 180px; border-radius: 14px; box-shadow: none; }
 .pw-preview-pane > [data-orientation] { flex: none; }
 .pw-preview-pane > .pw-preview-draft-status { margin-top: 2px; }
 .pw-preview-pane > .pw-preview-footer { padding-top: 4px; }
-.pw-preview-pane > [data-orientation] button[slot="trigger"] { min-height: 40px; padding-block: 6px; font-size: 12px; }
+.pw-preview-pane > [data-orientation] button[slot="trigger"] { min-height: var(--pw-control-target); padding-block: 8px; font-size: 12px; }
 
 /* Fennel reference: source objects and the corresponding result share one
  * workspace. BoardUI controls and the one host viewport retain their owners. */
 @media (min-width: 1024px) {
-  .pw-project-connected-workspace { display: grid; grid-template-columns: minmax(0,1fr); flex: 1; gap: 18px; min-height: 0; }
-  .pw-project-connected-workspace[data-preview-open="true"] { grid-template-columns: minmax(240px,.8fr) minmax(420px,1.2fr); }
-  .pw-project-connected-workspace > .pw-project-files-pane { min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; padding-inline-end: 4px; }
-  .pw-project-connected-workspace > .pw-project-preview-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 18px; border-radius: 20px; background: var(--pw-surface,#fff); box-shadow: 0 1px 2px #00000003,0 12px 24px -18px #00000016; }
-  .pw-project-connected-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; margin-bottom: 12px; }
-  .pw-project-connected-header h2 { margin: 0; font-size: 14px; font-weight: 550; }
+  .pw-project-connected-workspace { display: grid; grid-template-columns: minmax(0,1fr); flex: 1; gap: var(--pw-gap-section); min-height: 0; }
+  .pw-project-connected-workspace[data-preview-open="true"] { grid-template-columns: minmax(0,.8fr) minmax(0,1.2fr); }
+  .pw-project-connected-workspace > .pw-project-files-pane { min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+  .pw-project-connected-workspace > .pw-project-preview-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: var(--pw-gap-content); border-radius: 20px; background: var(--pw-surface,#fff); box-shadow: 0 1px 2px #00000003,0 12px 24px -18px #00000016; }
+  .pw-project-connected-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--pw-gap-control); min-height: 48px; margin-bottom: var(--pw-gap-content); }
+  .pw-project-connected-header h2 { margin: 0; font-size: 16px; font-weight: 550; }
   .pw-project-connected-workspace .pw-preview-pane { padding-top: 0; }
   .pw-project-connected-workspace .pw-preview-context { max-height: 26dvh; overflow: auto; overscroll-behavior: contain; }
   .pw-project-connected-workspace .pw-preview-viewport { min-height: 160px; }

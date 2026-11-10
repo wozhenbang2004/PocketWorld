@@ -27,8 +27,16 @@
   --pw-warning-surface: #FAF4E9;
   --pw-success: #424242;
   --pw-success-surface: #F0F0EE;
-  --pw-radius-control: 10px;
-  --pw-radius-popover: 14px;
+  /* One spacing language across navigation, reading and management screens.
+   * Dense editors and native viewports retain their own bounded geometry. */
+  --pw-gap-related: 8px;
+  --pw-gap-control: 12px;
+  --pw-gap-content: 16px;
+  --pw-gap-section: 28px;
+  --pw-page-gutter: 20px;
+  --pw-control-target: 44px;
+  --pw-radius-control: 14px;
+  --pw-radius-popover: 20px;
   --pw-shadow-input: 0 2px 6px -2px rgb(0 0 0 / 3%), 0 12px 26px -10px rgb(0 0 0 / 7%);
   --pw-shadow-surface: 0 2px 7px -3px rgb(0 0 0 / 3%), 0 11px 27px -12px rgb(0 0 0 / 7%);
   --pw-shadow-floating: 0 10px 36px -12px rgb(0 0 0 / 17%);
@@ -102,6 +110,13 @@
   --ovio-font: var(--pw-font);
 }
 
+@media (max-width: 359px) {
+  :root { --pw-page-gutter: 16px; }
+}
+@media (min-width: 1024px) {
+  :root { --pw-page-gutter: 28px; }
+}
+
 /* Retained source tokens. Ordinary reading content is an open surface. */
 .afa.pw-library,
 :is(.pw-app, .pw-drawer) .pw-command {
@@ -169,7 +184,7 @@
 
 /* BoardUI buttons preserve their variants and source press response. */
 :is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) .button-press-motion {
-  min-height: 44px;
+  min-height: var(--pw-control-target);
   height: auto;
   border-radius: var(--pw-radius-control);
   font-family: var(--pw-font);

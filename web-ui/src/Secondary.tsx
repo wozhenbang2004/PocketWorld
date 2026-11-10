@@ -411,8 +411,9 @@ function ModelSettings({ state, connection, supported, run, adding = false, pres
         {testResult.inferenceReference?.taskId && <CapabilityAction action="tasks.open" supported={supported} run={run} args={{ id: testResult.inferenceReference.taskId }}>查看本次实际调用与用量</CapabilityAction>}
       </div>}
       {unknownTest && <div ref={outcomeNotice} className="pw-request-notice" role="status"><p>原测试结果待核对；本表单不会自动重试或再次发送。请先核对原调用与连接，再明确开始新的测试。</p><Button variant="secondary" onClick={onInspect}>返回核对连接</Button></div>}
+      {(formError || state.error) && <p role="alert" className="pw-field-error">{formError || text(state.error)}</p>}
       </div>
-      <footer className="pw-model-editor-footer">{(formError || state.error) && <p role="alert" className="pw-field-error">{formError || text(state.error)}</p>}<p className="pw-field-hint pw-model-test-cost">保存不会切换默认模型。推理测试可能产生费用。</p>
+      <footer className="pw-model-editor-footer"><p className="pw-field-hint pw-model-test-cost">保存不会切换默认模型。推理测试可能产生费用。</p>
       <div className="pw-form-actions pw-model-save-actions"><Button variant="ghost" disabled={requesting || state.modelSaving || state.modelTesting} onClick={onInspect}>取消</Button><Button variant="secondary" disabled={!form.model.trim() || stale || unknownSave || unknownTest || bedrockNeedsSave || policyNeedsSave || Boolean(policyError) || requesting || state.modelTesting || state.modelSelectionBusy || !supported('models.connection.test')} onClick={() => request('models.connection.test')}>{state.modelTesting ? '测试中…' : '测试推理'}</Button><PressButton compact disabled={stale || unknownSave || Boolean(policyError) || requesting || state.modelSaving || state.modelTesting || state.modelSelectionBusy || !supported(saveAction)} onClick={() => request(saveAction)}>{state.modelSaving ? '保存中…' : '保存服务'}</PressButton></div></footer>
     </section>
     <SettingsDialog isOpen={Boolean(transport)} title="允许这个明文模型连接？" onClose={clearSecret}>

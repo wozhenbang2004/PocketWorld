@@ -2,7 +2,7 @@ import {useEffect,useRef,useState} from 'react';
 import type {ReactNode} from 'react';
 import {RiArrowLeftLine,RiDownloadLine,RiFileCopyLine,RiPauseLine,RiPlayLine,RiRefreshLine} from '@remixicon/react';
 import {bridge} from './bridge';
-import {Button,IconButton} from './forms-library';
+import {Button,CheckboxField,IconButton,SearchField} from './forms-library';
 import './developer-diagnostics.css';
 
 type Event = {eventId:string;time:number;stage:string;outcome:string;code:string;durationMs?:number;taskId?:string;exceptionTypes?:string[];frames?:string[]};
@@ -215,9 +215,9 @@ export default function DeveloperDiagnosticsWorkspace({
       <span>屏幕缓存 {events.length} 条</span>
     </div>
     <section className="pw-developer-controls">
-      <input type="search" value={query} onChange={event=>setQuery(event.target.value)}
-        placeholder="搜索代码、阶段或异常" aria-label="搜索当前显示的日志"/>
-      <label><input type="checkbox" checked={onlyErrors} onChange={event=>setOnlyErrors(event.target.checked)}/> 只看错误</label>
+      <SearchField className="pw-developer-search" data-input-size="medium" value={query} onChange={setQuery}
+        placeholder="搜索代码、阶段或异常" aria-label="搜索当前显示的日志" clearLabel="清除搜索"/>
+      <CheckboxField className="pw-developer-filter" isSelected={onlyErrors} onChange={setOnlyErrors}>只看错误</CheckboxField>
       <div className="pw-developer-actions">
         <Button variant="secondary" size="small" disabled={!shown.length} onClick={copy}><RiFileCopyLine size={15}/> 一键复制</Button>
         <Button variant="secondary" size="small" disabled={!windowId} onClick={exportAll}><RiDownloadLine size={15}/> 导出全部</Button>
@@ -232,13 +232,13 @@ export default function DeveloperDiagnosticsWorkspace({
       <pre ref={viewport} role="log" aria-live="off">{shown.length?shown.map(formatEvent).join('\n'):'当前没有匹配的日志，等待新的诊断事件…'}</pre>
     </section>
     <footer className="pw-developer-footer">
-      <label className="pw-developer-capture"><input type="checkbox" checked={storage?.enabled===true} disabled={!windowId||captureBusy}
-        onChange={event=>void toggleCapture(event.target.checked)}/> 深度日志归档</label>
+      <CheckboxField className="pw-developer-capture" isSelected={storage?.enabled===true} isDisabled={!windowId||captureBusy}
+        onChange={selected=>void toggleCapture(selected)}>深度日志归档</CheckboxField>
       <small>默认关闭深度写盘，基础诊断始终运行。开启后持续保存大量脱敏运行事件；关闭只停止新增归档，不删除现有记录。</small>
       <span>保留容量</span>
-      {[256,512,1024,2048].map(miB=><button key={miB} type="button"
+      {[256,512,1024,2048].map(miB=><Button key={miB} variant="secondary" aria-pressed={storage?.capacityMiB===miB}
         className={storage?.capacityMiB===miB?'active':''} disabled={!windowId||busy}
-        onClick={()=>void setCapacity(miB)}>{miB>=1024?miB/1024+' GB':miB+' MB'}</button>)}
+        onClick={()=>void setCapacity(miB)}>{miB>=1024?miB/1024+' GB':miB+' MB'}</Button>)}
       <small>开启归档时超过容量只轮换最早的完整片段；屏幕最多显示 600 条。导出全部仅包含已归档历史，不包含系统 Logcat 的其他应用日志。</small>
       {Boolean(storage?.writeFailures||storage?.rejectedRows)&&
         <small>写入失败 {storage?.writeFailures||0} · 过滤异常记录 {storage?.rejectedRows||0}</small>}

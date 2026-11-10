@@ -1,64 +1,60 @@
-/* Retained BoardUI service controls and OpenMuse-style compact object rows.
+/* Composition around retained BoardUI service controls and object rows.
  * Native service, credential and review ownership remain in ProxyWorkspace. */
-.pw-proxy-workspace.pw-settings-section { max-width: 780px; min-width: 0; }
-.pw-proxy-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin: 4px 0 20px; }
-.pw-proxy-heading > div { min-width: 0; }
-.pw-proxy-heading h2 { font-size: 24px; line-height: 32px; font-weight: 500; letter-spacing: -.035em; margin: 0; }
-.pw-proxy-heading p { margin: 5px 0 0; color: var(--pw-copy,#626262); font-size: 13px; line-height: 21px; }
-.pw-proxy-service { border: 0; border-radius: 16px; padding: 22px; background: var(--pw-surface,#fff); box-shadow: 0 2px 6px -2px #00000006, 0 12px 24px -10px #0000000e; }
-.pw-proxy-service-title { display: flex; align-items: center; gap: 14px; }
-.pw-proxy-service-title > div { min-width: 0; }
-.pw-proxy-service-icon { display: grid; place-items: center; flex: none; width: 38px; height: 42px; color: var(--pw-copy,#626262); }
-.pw-proxy-eyebrow { margin: 0 0 3px; color: var(--pw-copy,#626262); font-size: 11px; line-height: 18px; }
-.pw-proxy-service-title h3 { margin: 0; font-size: 18px; line-height: 27px; font-weight: 500; letter-spacing: -.025em; }
-.pw-proxy-model { margin: 3px 0 0; font-size: 13px; line-height: 21px; color: var(--pw-copy,#626262); overflow-wrap: anywhere; }
-.pw-proxy-endpoint { margin-top: 18px; padding: 12px 14px; border-radius: 10px; background: var(--pw-canvas,#f5f5f5); }
-.pw-proxy-endpoint > span { color: var(--pw-copy,#626262); font-size: 11px; line-height: 18px; }
-.pw-proxy-endpoint p { margin: 4px 0 0; font-family: var(--font-mono,monospace); font-size: 13px; line-height: 22px; overflow-wrap: anywhere; }
-.pw-proxy-primary-action { margin-top: 20px; }
-.pw-proxy-primary-action > button { min-height: 44px; }
-.pw-proxy-primary-action > p, .pw-proxy-inline-note { margin: 10px 0 0; color: var(--pw-copy,#626262); font-size: 12px; line-height: 21px; overflow-wrap: anywhere; }
-.pw-proxy-inline-note[role="alert"] { color: var(--pw-ink,#292929); }
-.pw-proxy-feedback { margin: 0 0 14px; padding: 12px 14px; border-radius: 12px; background: var(--pw-inset,#ededed); font-size: 13px; line-height: 22px; overflow-wrap: anywhere; }
-.pw-proxy-feedback > p { margin: 0 0 8px; }
-.pw-proxy-workspace .pw-proxy-endpoints { margin-top: 12px; }
-.pw-proxy-workspace .pw-proxy-endpoints > * { border: 0; }
-.pw-proxy-workspace .pw-proxy-endpoints button[slot="trigger"] { padding-inline: 0; min-height: 44px; }
-.pw-proxy-workspace .pw-proxy-endpoints [role="region"] p { font-family: var(--font-mono,monospace); font-size: 12px; line-height: 21px; overflow-wrap: anywhere; }
-.pw-proxy-calls { margin-top: 26px; }
-.pw-proxy-calls > header { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; padding-inline: 2px; }
-.pw-proxy-calls h3 { font-size: 15px; line-height: 23px; font-weight: 500; margin: 0; }
-.pw-proxy-calls header p { margin: 4px 0 12px; color: var(--pw-copy,#626262); font-size: 12px; line-height: 20px; }
-.pw-proxy-calls header > svg { flex: none; color: var(--pw-copy,#626262); margin-top: 3px; }
-.pw-proxy-call-list { padding: 4px 10px; border-radius: 14px; background: var(--pw-surface,#fff); }
-.pw-proxy-workspace .pw-proxy-call-row { display: flex; width: 100%; min-height: 64px; height: auto; padding: 11px 6px; border: 0; background: transparent; box-shadow: none; justify-content: space-between; text-align: start; }
-.pw-proxy-call-row > span { justify-content: flex-start; flex: 1; min-width: 0; padding: 0; }
-.pw-proxy-call-row > span > span { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.pw-proxy-call-row strong { color: var(--pw-ink,#292929); font-size: 14px; font-weight: 500; line-height: 22px; white-space: normal; overflow-wrap: anywhere; }
-.pw-proxy-call-row small { color: var(--pw-copy,#626262); font-size: 11px; font-weight: 400; line-height: 18px; white-space: normal; overflow-wrap: anywhere; }
-.pw-proxy-empty { padding: 18px 2px; color: var(--pw-copy,#626262); }
-.pw-proxy-empty p { margin: 0 0 4px; font-size: 14px; line-height: 22px; color: var(--pw-ink,#292929); }
-.pw-proxy-empty > span { font-size: 12px; line-height: 20px; }
-@media (max-width: 420px) {
-  .pw-proxy-heading h2 { font-size: 22px; line-height: 30px; }
-  .pw-proxy-service { padding: 18px 16px; }
+.pw-proxy-workspace.pw-settings-section { display:flex; flex-direction:column; gap:var(--pw-gap-section); max-width:780px; min-width:0; }
+.pw-proxy-heading { display:flex; justify-content:space-between; align-items:flex-start; gap:var(--pw-gap-control); margin:0; }
+.pw-proxy-heading > div { display:grid; gap:var(--pw-gap-related); min-width:0; }
+.pw-proxy-workspace .pw-proxy-heading h2 { margin:0; font-size:20px; line-height:28px; font-weight:600; letter-spacing:-.025em; overflow-wrap:anywhere; }
+.pw-proxy-workspace .pw-proxy-heading p { margin:0; color:var(--pw-copy); font-size:13px; line-height:22px; }
+.pw-proxy-heading > button { flex:none; min-width:var(--pw-control-target); min-height:var(--pw-control-target); }
+.pw-proxy-service { display:flex; flex-direction:column; gap:var(--pw-gap-content); min-width:0; border:0; border-radius:16px; padding:var(--pw-gap-content); background:var(--pw-surface); box-shadow:none; }
+.pw-proxy-service-title { display:flex; align-items:center; gap:var(--pw-gap-control); }
+.pw-proxy-service-title > div { display:grid; gap:4px; min-width:0; }
+.pw-proxy-service-icon { display:grid; place-items:center; flex:none; width:var(--pw-control-target); height:var(--pw-control-target); color:var(--pw-copy); }
+.pw-proxy-workspace .pw-proxy-eyebrow { margin:0; color:var(--pw-copy); font-size:12px; line-height:20px; }
+.pw-proxy-service-title h3 { margin:0; font-size:16px; line-height:24px; font-weight:600; overflow-wrap:anywhere; }
+.pw-proxy-workspace .pw-proxy-model { margin:0; font-size:13px; line-height:22px; color:var(--pw-copy); overflow-wrap:anywhere; }
+.pw-proxy-endpoint { display:grid; gap:var(--pw-gap-related); min-width:0; margin:0; padding:0; border:0; border-radius:0; background:transparent; box-shadow:none; }
+.pw-proxy-endpoint > span { color:var(--pw-copy); font-size:12px; line-height:20px; }
+.pw-proxy-workspace .pw-proxy-endpoint > p { margin:0; font-family:var(--font-code,monospace); font-size:14px; line-height:23px; overflow-wrap:anywhere; }
+.pw-proxy-primary-action { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:var(--pw-gap-control) var(--pw-gap-content); margin:0; }
+.pw-proxy-primary-action > button { min-height:var(--pw-control-target); max-width:100%; white-space:normal; }
+.pw-proxy-workspace .pw-proxy-primary-action > p { flex:0 1 250px; margin:0; color:var(--pw-copy); font-size:12px; line-height:20px; overflow-wrap:anywhere; }
+.pw-proxy-workspace .pw-proxy-inline-note { margin:0; color:var(--pw-copy); font-size:13px; line-height:22px; overflow-wrap:anywhere; }
+.pw-proxy-workspace .pw-proxy-inline-note[role=alert] { color:var(--pw-ink); }
+.pw-proxy-workspace .pw-proxy-feedback { margin:0; padding:var(--pw-gap-control) var(--pw-gap-content); border-radius:12px; background:var(--pw-inset); font-size:13px; line-height:22px; overflow-wrap:anywhere; }
+.pw-proxy-workspace .pw-proxy-feedback > p { margin:0 0 var(--pw-gap-related); }
+.pw-proxy-client-config,.pw-proxy-token-actions { display:flex; flex-direction:column; gap:var(--pw-gap-content); min-width:0; padding-top:var(--pw-gap-control); }
+.pw-proxy-client-config > h3,.pw-proxy-token-actions > h3 { margin:0; font-size:15px; line-height:24px; font-weight:600; }
+.pw-proxy-client-config > button { align-self:flex-start; max-width:100%; white-space:normal; }
+.pw-proxy-token-actions > p { margin:0; font-size:13px; color:var(--pw-muted); line-height:22px; overflow-wrap:anywhere; }
+.pw-proxy-token-actions > .pw-form-actions { margin:0; gap:var(--pw-gap-control); }
+.pw-proxy-workspace .pw-proxy-endpoints { margin:0; }
+.pw-proxy-workspace .pw-proxy-endpoints > * { border:0; }
+.pw-proxy-workspace .pw-proxy-endpoints button[slot=trigger] { padding-inline:0; min-height:var(--pw-control-target); }
+.pw-proxy-workspace .pw-proxy-endpoints [role=region] p { margin:0 0 var(--pw-gap-related); font-family:var(--font-code,monospace); font-size:12px; line-height:21px; overflow-wrap:anywhere; }
+.pw-proxy-calls { min-width:0; margin:0; }
+.pw-proxy-calls > header { display:flex; justify-content:space-between; align-items:flex-start; gap:var(--pw-gap-control); padding:0; margin-bottom:var(--pw-gap-related); }
+.pw-proxy-calls > header > div { display:grid; gap:var(--pw-gap-related); min-width:0; }
+.pw-proxy-calls h3 { font-size:15px; line-height:24px; font-weight:600; margin:0; }
+.pw-proxy-workspace .pw-proxy-calls header p { margin:0; color:var(--pw-copy); font-size:13px; line-height:22px; }
+.pw-proxy-calls header > svg { flex:none; color:var(--pw-copy); margin-top:3px; }
+.pw-proxy-call-list { padding:0; background:transparent; }
+.pw-proxy-workspace .pw-proxy-call-row { display:flex; width:100%; min-height:72px; height:auto; padding:var(--pw-gap-control) 0; border:0; background:transparent; box-shadow:none; justify-content:space-between; text-align:start; }
+.pw-proxy-call-row > span { justify-content:flex-start; flex:1; min-width:0; padding:0; gap:var(--pw-gap-control); }
+.pw-proxy-call-row > span > span { display:flex; flex-direction:column; gap:4px; min-width:0; }
+.pw-proxy-call-row strong { color:var(--pw-ink); font-size:15px; font-weight:500; line-height:24px; white-space:normal; overflow-wrap:anywhere; }
+.pw-proxy-call-row small { color:var(--pw-copy); font-size:12px; font-weight:400; line-height:20px; white-space:normal; overflow-wrap:anywhere; }
+.pw-proxy-empty { display:grid; gap:var(--pw-gap-related); padding:var(--pw-gap-content) 0; color:var(--pw-copy); }
+.pw-proxy-workspace .pw-proxy-empty p { margin:0; font-size:14px; line-height:22px; color:var(--pw-ink); }
+.pw-proxy-empty > span { font-size:13px; line-height:22px; }
+.pw-proxy-setup { display:flex; flex-direction:column; gap:var(--pw-gap-section); min-width:0; }
+.pw-proxy-setup-context { margin:0; color:var(--pw-copy); font-size:13px; line-height:22px; overflow-wrap:anywhere; }
+.pw-proxy-setup-fields { display:flex; flex-direction:column; gap:var(--pw-gap-content); min-width:0; }
+.pw-proxy-setup-fields > .pw-muted { margin:0; font-size:12px; line-height:20px; }
+.pw-proxy-setup-footer { display:flex; justify-content:flex-end; padding:0; }
+.pw-proxy-setup-footer > button { min-height:var(--pw-control-target); white-space:normal; }
+@media(max-width:640px) {
+ .pw-proxy-primary-action { align-items:flex-start; flex-direction:column; }
+ .pw-proxy-workspace .pw-proxy-primary-action > p { flex-basis:auto; max-width:none; }
+ .pw-proxy-setup-footer > button { width:100%; }
 }
-
-/* The listening address and service state form one object. Protocol detail
- * stays in the source Accordion; startup retains a deliberate action footer. */
-.pw-proxy-workspace .pw-proxy-service { padding: 24px; border-radius: 16px; box-shadow: none; }
-.pw-proxy-workspace .pw-proxy-heading { margin-bottom: 28px; }
-.pw-proxy-workspace .pw-proxy-endpoint { padding: 16px 0 0; margin-top: 24px; background: transparent; border-radius: 0; }
-.pw-proxy-workspace .pw-proxy-endpoint > p { font-family: var(--font-code,monospace); font-size: 14px; }
-.pw-proxy-workspace .pw-proxy-primary-action { display: flex; align-items: center; justify-content: space-between; gap: 12px 20px; margin-top: 24px; }
-.pw-proxy-workspace .pw-proxy-primary-action > p { margin: 0; max-width: 250px; font-size: 11px; }
-.pw-proxy-workspace .pw-proxy-endpoints { margin-top: 24px; }
-.pw-proxy-workspace .pw-proxy-calls { margin-top: 32px; }
-.pw-proxy-workspace .pw-proxy-call-list { background: transparent; padding: 0; }
-.pw-proxy-workspace .pw-proxy-call-row { min-height: 64px; padding: 12px 4px; }
-.pw-proxy-setup { display: flex; flex-direction: column; gap: 24px; }
-.pw-proxy-setup-context { margin: 0; color: var(--pw-copy); font-size: 13px; line-height: 1.8; }
-.pw-proxy-setup-fields { display: flex; flex-direction: column; gap: 16px; }
-.pw-proxy-setup-fields > .pw-muted { margin-top: 4px; font-size: 11px; }
-.pw-proxy-setup-footer { display: flex; justify-content: flex-end; padding-top: 8px; }
-@media(max-width:640px){.pw-proxy-workspace .pw-proxy-service { padding: 20px 18px; }.pw-proxy-workspace .pw-proxy-heading h2 { font-size: 20px; }.pw-proxy-workspace .pw-proxy-primary-action { align-items: flex-start; flex-direction: column; }.pw-proxy-setup-footer > button { width: 100%; }}

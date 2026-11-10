@@ -65,7 +65,7 @@
   margin: -8px 0 4px;
 }
 .pw-secondary-refactor[data-workspace="memory"] .pw-memory-collection > .pw-knowledge-directory-heading .pw-detail-location { margin: 0; }
-.pw-secondary-refactor[data-workspace="memory"] .pw-knowledge-directory-group { margin-block: 18px; }
+.pw-secondary-refactor[data-workspace="memory"] .pw-knowledge-directory-group { margin-block: var(--pw-gap-section); }
 .pw-secondary-refactor[data-workspace="memory"] .pw-knowledge-filters { margin-bottom: 8px; }
 
 @media (min-width: 900px) {

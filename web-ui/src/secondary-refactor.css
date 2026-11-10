@@ -7,27 +7,26 @@
   font-family: var(--pw-font, sans-serif);
 }
 .pw-secondary-refactor .pw-secondary-header {
-  height: 56px;
-  min-height: 56px;
-  padding: 4px 16px;
-  gap: 8px;
+  height: auto;
+  min-height: 72px;
+  padding: 12px var(--pw-page-gutter);
+  gap: var(--pw-gap-control);
   background: var(--pw-canvas, #f5f5f5);
   border: 0;
 }
 .pw-secondary-refactor .pw-secondary-header h1 {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-size: 18px;
-  line-height: 24px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  font-size: 20px;
+  line-height: 28px;
 }
 .pw-secondary-refactor .pw-secondary-header > button {
   flex: none;
   min-width: 48px;
 }
 .pw-secondary-refactor .pw-secondary-scroll {
-  padding: 8px 16px max(24px, env(safe-area-inset-bottom));
-  scroll-padding-block: 12px 40px;
+  padding: var(--pw-gap-content) var(--pw-page-gutter) max(var(--pw-gap-section), env(safe-area-inset-bottom));
+  scroll-padding-block: 16px 40px;
 }
 .pw-secondary-refactor .pw-secondary-scroll:has(.pw-model-save-actions) {
   /* Keep keyboard-focused fields above the 72px actions and bottom inset. */
@@ -77,7 +76,7 @@
 .pw-secondary-refactor .pw-stretch-hit { width: 48px; height: 48px; min-width: 48px; }
 .pw-secondary-refactor :is(.pw-model-list, .pw-model-catalog)[hidden] { display: none; }
 .pw-secondary-refactor .pw-reading-lead {
-  margin: 12px 0 20px;
+  margin: 0 0 var(--pw-gap-section);
   color: var(--pw-copy, #555);
   font-size: 13px;
   line-height: 22px;
@@ -119,8 +118,8 @@
 .pw-secondary-refactor .pw-object-toolbar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin: 0 0 8px;
+  gap: var(--pw-gap-control);
+  margin: 0 0 var(--pw-gap-content);
 }
 .pw-secondary-refactor .pw-object-toolbar > :first-child:not(button) { flex: 1; min-width: 0; }
 .pw-secondary-refactor .pw-object-toolbar > .pw-utility-icon:last-child { margin-left: auto; }
@@ -349,7 +348,7 @@
 
 /* Shared work is selected as an object, then read at full width. Administrative
  * actions stay in that object's detail instead of repeating on every row. */
-.pw-secondary-refactor .pw-team-tabs { gap: 12px; }
+.pw-secondary-refactor .pw-team-tabs { gap: var(--pw-gap-section); }
 .pw-secondary-refactor .pw-object-list { padding-top: 4px; }
 .pw-secondary-refactor .pw-object-row {
   display: flex;
@@ -394,7 +393,7 @@
   line-height: 23px;
   font-weight: 400;
 }
-.pw-secondary-refactor .pw-team-reading { padding: 8px 0 24px; }
+.pw-secondary-refactor .pw-team-reading { padding: 0 0 var(--pw-gap-section); }
 .pw-secondary-refactor .pw-detail-location {
   margin: 0 0 12px;
   color: var(--pw-muted, #737373);

@@ -67,7 +67,7 @@
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 4px 8px;
+  gap: var(--pw-gap-related) var(--pw-gap-control);
   color: var(--pw-ink, #202020);
   font-size: 14px;
   font-weight: 500;
@@ -110,7 +110,7 @@
   flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
-  gap: 4px 12px;
+  gap: var(--pw-gap-related) var(--pw-gap-control);
   color: var(--pw-ink, #202020);
   font-size: 14px;
   font-weight: 500;
@@ -128,7 +128,7 @@
 }
 
 .pw-team-workspace .pw-team-expanded-copy {
-  padding: 0 10px;
+  padding: var(--pw-gap-related) 0 var(--pw-gap-content);
   color: var(--pw-copy, #555);
   font-size: 13px;
   line-height: 22px;
@@ -136,13 +136,13 @@
 }
 
 .pw-team-workspace .pw-team-expanded-copy > p {
-  margin: 6px 0;
+  margin: 0 0 var(--pw-gap-control);
   white-space: pre-wrap;
 }
 
 .pw-team-workspace .pw-team-expanded-copy .pw-form-actions {
-  margin-top: 8px;
-  gap: 4px 8px;
+  margin-top: var(--pw-gap-content);
+  gap: var(--pw-gap-control);
 }
 
 .pw-team-workspace .pw-team-expanded-copy .pw-form-actions > button {
@@ -160,7 +160,7 @@
 .pw-team-harness-fields {
   position: relative;
   display: grid;
-  gap: 12px;
+  gap: var(--pw-gap-content);
   min-width: 0;
 }
 .pw-team-harness-fields .pw-field-hint,

@@ -2,14 +2,14 @@
  * This domain groups an object, its next action, and its evidence. It does not
  * add a component system or override shared form/button implementations. */
 .pw-knowledge-workspace { min-width: 0; color: var(--pw-ink, #252525); }
-.pw-knowledge-heading { margin: 4px 0 16px; }
+.pw-knowledge-heading { margin: 0 0 var(--pw-gap-section); }
 .pw-knowledge-heading h2 { margin: 0; font-size: 20px; line-height: 29px; font-weight: 600; letter-spacing: -.02em; }
-.pw-knowledge-heading p { margin: 7px 0 0; color: var(--pw-copy, #646464); font-size: 13px; line-height: 22px; }
-.pw-knowledge-section { margin-block: 28px; }
+.pw-knowledge-heading p { margin: var(--pw-gap-related) 0 0; color: var(--pw-copy, #646464); font-size: 13px; line-height: 22px; }
+.pw-knowledge-section { margin-block: var(--pw-gap-section); }
 .pw-knowledge-section-heading, .pw-knowledge-evidence > h3 { margin: 0 0 10px; font-size: 14px; line-height: 23px; font-weight: 550; }
 .pw-knowledge-caption { font-size: 13px; line-height: 21px; color: var(--pw-copy, #646464); }
 .pw-knowledge-status { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 24px; color: var(--pw-copy, #646464); font-size: 13px; line-height: 21px; }
-.pw-knowledge-evidence { margin: 26px 0; }
+.pw-knowledge-evidence { margin: var(--pw-gap-section) 0; }
 .pw-knowledge-evidence .pw-form-actions { margin: 0; gap: 8px; }
 .pw-knowledge-evidence .pw-source-record { margin: 12px 0 0; border: 0; border-radius: 10px; padding: 14px; background: var(--pw-surface, #fff); }
 .pw-knowledge-notice, .pw-knowledge-conflict { padding: 14px 16px; background: var(--pw-inset, #eee); border: 0; border-radius: 10px; }
@@ -24,16 +24,15 @@
  * to its own trigger so an expanded ancestor cannot flip a collapsed child. */
 :is(.pw-knowledge-workspace, .pw-knowledge-dialog) button[slot=trigger][aria-expanded=false] > svg:last-child { rotate: 0deg; }
 :is(.pw-knowledge-workspace, .pw-knowledge-dialog) button[slot=trigger][aria-expanded=true] > svg:last-child { rotate: 180deg; }
-.pw-knowledge-workspace .pw-memory-list { padding-inline: 12px; }
+.pw-knowledge-workspace .pw-memory-list { padding-inline: 0; }
 .pw-knowledge-workspace .pw-memory-row > span { width: 100%; min-width: 0; flex: 1 1 auto; justify-content: flex-start; }
 .pw-knowledge-workspace .pw-memory-row-copy { width: 100%; min-width: 0; flex: 1 1 auto; }
 .pw-memory-history .pw-memory-row { text-align: left; }
 .pw-memory-history .pw-memory-row-copy { text-align: left; }
 .pw-knowledge-workspace .pw-memory-document { border-radius: 0; background: transparent; box-shadow: none; padding: 0; }
-.pw-memory-workspace .pw-memory-detail-header { gap: 12px; margin-bottom: 20px; }
+.pw-memory-workspace .pw-memory-detail-header { gap: var(--pw-gap-control); margin-bottom: var(--pw-gap-section); }
 .pw-memory-workspace .pw-memory-detail-header h2 { font-size: 20px; line-height: 29px; font-weight: 550; margin: 0; }
-.pw-memory-workspace .pw-memory-reading > .pw-knowledge-status { margin-bottom: 24px; }
-.pw-memory-workspace .pw-memory-decisions { margin: 18px 0 24px; }
+.pw-memory-workspace .pw-memory-reading > .pw-knowledge-status { margin-bottom: var(--pw-gap-section); }
 .pw-memory-history > .pw-selection-field { max-width: 420px; }
 .pw-memory-history .pw-knowledge-conflict { margin-top: 24px; }
 .pw-memory-history .pw-knowledge-conflict h3 { font-size: 15px; line-height: 24px; font-weight: 550; margin: 0 0 8px; }
@@ -42,9 +41,11 @@
 /* Portaled review and edit surfaces keep their own scope. Fields are not laid
  * across unrelated two-column cells by the older secondary form grid. */
 .pw-knowledge-dialog, .pw-knowledge-review { min-width: 0; font-size: 16px; line-height: 1.75; }
-.pw-knowledge-dialog .pw-form-grid { display: flex; flex-direction: column; gap: 16px; }
-.pw-knowledge-dialog .pw-knowledge-form-section { display: flex; flex-direction: column; gap: 12px; margin-block: 8px 20px; }
-.pw-knowledge-dialog .pw-knowledge-form-section > :is(h3, h4) { margin: 0 0 2px; font-size: 14px; line-height: 23px; font-weight: 550; }
+.pw-knowledge-dialog .pw-form-grid { display: flex; flex-direction: column; gap: var(--pw-gap-content); }
+.pw-knowledge-dialog .pw-knowledge-form-section { display: flex; flex-direction: column; gap: var(--pw-gap-content); margin: 0; }
+.pw-knowledge-dialog .pw-form-grid > .pw-knowledge-section-heading { margin: 0; }
+.pw-knowledge-dialog .pw-form-grid > :is(.pw-knowledge-form-section, .pw-knowledge-section-heading):not(:first-child) { margin-top: var(--pw-gap-control); }
+.pw-knowledge-dialog .pw-knowledge-form-section > :is(h3, h4) { margin: 0; font-size: 14px; line-height: 23px; font-weight: 550; }
 .pw-knowledge-dialog .pw-knowledge-form-section > p { margin: 0; color: var(--pw-copy, #646464); font-size: 12px; line-height: 21px; }
 .pw-knowledge-dialog > p, .pw-knowledge-review > p { margin: 0 0 18px; }
 .pw-knowledge-review h3 { font-size: 13px; line-height: 22px; font-weight: 550; margin: 24px 0 8px; }
@@ -53,17 +54,17 @@
 .pw-knowledge-dialog .pw-knowledge-summary { padding: 14px 16px; background: var(--pw-inset, #eee); border-radius: 10px; margin-bottom: 22px; }
 .pw-knowledge-dialog .pw-knowledge-summary strong { display: block; font-size: 15px; font-weight: 550; line-height: 24px; }
 .pw-knowledge-dialog .pw-knowledge-summary p { margin: 5px 0 0; font-size: 12px; line-height: 21px; color: var(--pw-copy, #646464); }
-.pw-knowledge-dialog .pw-form-actions { gap: 8px; margin-top: 20px; }
+.pw-knowledge-dialog .pw-form-actions { gap: var(--pw-gap-control); margin-top: var(--pw-gap-section); }
 .pw-knowledge-dialog .pw-form-actions > button { white-space: normal; height: auto; min-height: 48px; }
 
 /* The same mounted learning workspace distinguishes sources, the active batch,
  * a draft and a source skill without making every supporting paragraph a card. */
-.pw-learning-workspace .pw-learning-heading { margin: 6px 0 18px; }
+.pw-learning-workspace .pw-learning-heading { margin: 0 0 var(--pw-gap-section); }
 .pw-learning-workspace .pw-learning-list { box-shadow: none; }
 .pw-learning-workspace .pw-learning-object > span { display: flex; align-items: center; width: 100%; min-width: 0; flex: 1 1 auto; justify-content: flex-start; }
 .pw-learning-workspace .pw-learning-object-copy { width: 100%; min-width: 0; flex: 1 1 auto; }
 .pw-learning-workspace .pw-learning-chevron { margin-left: auto; flex: none; }
-.pw-learning-workspace .pw-learning-next { padding: 0 0 22px; margin: 18px 0 24px; border-bottom: 1px solid color-mix(in srgb, var(--pw-ink, #222) 9%, transparent); }
+.pw-learning-workspace .pw-learning-next { padding: 0 0 var(--pw-gap-content); margin: var(--pw-gap-content) 0 var(--pw-gap-section); border-bottom: 1px solid color-mix(in srgb, var(--pw-ink, #222) 9%, transparent); }
 .pw-learning-workspace .pw-learning-batches { margin-top: 24px; }
 .pw-learning-workspace .pw-learning-selection { box-shadow: none; }
 .pw-learning-workspace .pw-learning-draft { margin-top: 24px; }
@@ -73,11 +74,12 @@
 .pw-learning-workspace .pw-learning-conditions { margin-block: 24px; }
 .pw-learning-workspace .pw-learning-source-layout { min-width: 0; }
 .pw-learning-workspace .pw-learning-source-layout > * { min-width: 0; }
+.pw-learning-workspace .pw-learning-source-layout > .pw-learning-reading { padding-top: 0; }
 
 /* Plans/commitments use the retained list/detail surfaces; disclosures express
  * low-frequency maintenance, while status and authority warnings stay visible. */
-.pw-knowledge-workspace.pw-followup-workspace .pw-followup-primary-actions { position: sticky; top: 0; z-index: 2; gap: 8px; margin-block: 16px; padding-block: 10px; background: var(--pw-canvas, #fafafa); }
-.pw-knowledge-workspace.pw-followup-workspace .pw-followup-facts { margin-block: 20px 26px; }
+.pw-knowledge-workspace.pw-followup-workspace .pw-followup-primary-actions { position: sticky; top: 0; z-index: 2; gap: var(--pw-gap-control); margin-block: var(--pw-gap-content); padding-block: var(--pw-gap-related); background: var(--pw-canvas, #fafafa); }
+.pw-knowledge-workspace.pw-followup-workspace .pw-followup-facts { margin-block: var(--pw-gap-content) var(--pw-gap-section); }
 .pw-knowledge-workspace.pw-followup-workspace .pw-followup-step-body { padding-block: 12px 20px; }
 .pw-knowledge-workspace .pw-followup-row > span { width: 100%; min-width: 0; flex: 1 1 auto; justify-content: flex-start; }
 .pw-knowledge-workspace .pw-followup-row-copy { width: 100%; min-width: 0; flex: 1 1 auto; }
@@ -130,7 +132,7 @@
 .pw-memory-draft-confirmation { flex: none; margin: 0; padding: 16px 20px max(16px, env(safe-area-inset-bottom)); background: var(--pw-surface, #fff); border-top: 1px solid color-mix(in srgb, var(--pw-ink, #222) 10%, transparent); }
 .pw-memory-draft-confirmation .pw-action-row { gap: 8px; margin-top: 16px; }
 @media (min-width: 1000px) {
-  .pw-learning-workspace .pw-learning-source-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(250px, .55fr); gap: 30px; align-items: start; }
+  .pw-learning-workspace .pw-learning-source-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(250px, .55fr); gap: var(--pw-gap-section); align-items: start; }
   .pw-learning-workspace .pw-learning-source-layout .pw-learning-selection { margin-top: 0; }
   .pw-memory-draft-comparison { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .pw-memory-draft-comparison > :only-child { grid-column: 1 / -1; }
@@ -146,44 +148,44 @@
  * editor fields scroll. Review screens retain their complete content flow. */
 .pw-settings-dialog-content:has(> .pw-knowledge-edit-dialog) { display: flex; min-height: 0; padding: 0; overflow: hidden; }
 .pw-knowledge-edit-dialog { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; max-height: calc(100dvh - 112px); }
-.pw-knowledge-edit-dialog > p { flex: none; margin: 12px 18px 0; font-size: 12px; line-height: 20px; }
-.pw-knowledge-edit-dialog > .pw-form-grid { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 16px 18px; gap: 12px; }
+.pw-knowledge-edit-dialog > p { flex: none; margin: var(--pw-gap-control) var(--pw-page-gutter) 0; font-size: 13px; line-height: 22px; }
+.pw-knowledge-edit-dialog > .pw-form-grid { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: var(--pw-gap-content) var(--pw-page-gutter); gap: var(--pw-gap-content); }
 .pw-knowledge-edit-dialog > .pw-form-grid > * { flex-shrink: 0; }
-.pw-knowledge-edit-dialog > .pw-knowledge-edit-actions { flex: none; justify-content: flex-end; gap: 8px; margin: 0; padding: 12px 18px max(12px, env(safe-area-inset-bottom)); background: var(--pw-surface, #fff); box-shadow: 0 -5px 14px color-mix(in srgb, var(--pw-ink, #222) 3%, transparent); }
+.pw-knowledge-edit-dialog > .pw-knowledge-edit-actions { flex: none; justify-content: flex-end; gap: var(--pw-gap-control); margin: 0; padding: var(--pw-gap-content) var(--pw-page-gutter) max(var(--pw-gap-content), env(safe-area-inset-bottom)); background: var(--pw-surface, #fff); box-shadow: 0 -5px 14px color-mix(in srgb, var(--pw-ink, #222) 3%, transparent); }
 .pw-knowledge-edit-dialog > .pw-knowledge-edit-actions > button { min-height: 48px; }
-.pw-memory-workspace .pw-memory-selection-actions { position: sticky; top: 0; z-index: 2; gap: 8px; margin: 0 0 12px; padding: 10px 0; background: var(--pw-canvas, #f7f7f7); }
+.pw-memory-workspace .pw-memory-selection-actions { position: sticky; top: 0; z-index: 2; gap: var(--pw-gap-control); margin: 0 0 var(--pw-gap-content); padding: var(--pw-gap-related) 0; background: var(--pw-canvas, #f7f7f7); }
 .pw-memory-selection-actions > span { font-size: 12px; color: var(--pw-copy, #646464); }
-.pw-memory-workspace .pw-memory-decisions { margin: 16px 0; }
-.pw-learning-workspace .pw-learning-selection-actions { margin: 10px 0 14px; }
+.pw-memory-workspace .pw-memory-decisions { margin: var(--pw-gap-content) 0 var(--pw-gap-section); }
+.pw-learning-workspace .pw-learning-selection-actions { margin: var(--pw-gap-control) 0 var(--pw-gap-content); }
 .pw-learning-workspace .pw-learning-selection-actions > button { white-space: normal; height: auto; min-height: 48px; }
 .pw-learning-workspace .pw-learning-selection > ul { max-height: min(320px, 44dvh); overflow: auto; overscroll-behavior: contain; }
 
 /* Collections share a flat directory: local filters, then meaningful groups.
  * The controls remain the retained BoardUI/React Aria components. */
 .pw-knowledge-workspace .pw-knowledge-directory-heading,
-.pw-knowledge-workspace :is(.pw-learning-heading, .pw-followup-heading) { display: flex; align-items: center; justify-content: space-between; flex-wrap: nowrap; gap: 12px; margin: 0 0 20px; }
-.pw-knowledge-workspace :is(.pw-knowledge-directory-heading, .pw-learning-heading, .pw-followup-heading) > div:first-child { min-width: 0; flex: 1 1 0; }
+.pw-knowledge-workspace :is(.pw-learning-heading, .pw-followup-heading) { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--pw-gap-control); margin: 0 0 var(--pw-gap-section); }
+.pw-knowledge-workspace :is(.pw-knowledge-directory-heading, .pw-learning-heading, .pw-followup-heading) > div:first-child { min-width: 0; flex: 1 1 180px; }
 .pw-knowledge-workspace :is(.pw-learning-heading, .pw-followup-heading) h2 { font-size: 20px; line-height: 29px; font-weight: 600; }
 .pw-knowledge-workspace :is(.pw-learning-heading, .pw-followup-heading) .pw-form-actions { flex: 0 0 auto; }
 .pw-knowledge-workspace :is(button:not([role=tab]), [role=tab], .pw-utility-icon) { min-height: 48px; }
 .pw-knowledge-workspace :is(.pw-learning-heading, .pw-followup-heading, .pw-knowledge-directory-heading) button[aria-label] { min-width: 48px; }
 .pw-knowledge-workspace .pw-secondary-search { margin: 12px 0 0; }
-.pw-knowledge-filters { display: flex; gap: 6px; margin: 8px 0 16px; max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; scrollbar-width: none; }
+.pw-knowledge-filters { display: flex; gap: var(--pw-gap-related); margin: var(--pw-gap-control) 0 var(--pw-gap-content); max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; scrollbar-width: none; }
 .pw-knowledge-filters > button { flex: none; padding: 10px 14px; font-size: 13px; line-height: 20px; border-radius: 12px; color: var(--pw-copy); }
 .pw-knowledge-filters > button[aria-pressed=true] { color: var(--pw-ink); background: var(--pw-selected); }
-.pw-knowledge-directory-group { margin: 24px 0; min-width: 0; }
-.pw-knowledge-group-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 0 0 4px; }
+.pw-knowledge-directory-group { margin: var(--pw-gap-section) 0; min-width: 0; }
+.pw-knowledge-group-heading { display: flex; align-items: baseline; justify-content: space-between; gap: var(--pw-gap-control); margin: 0 0 var(--pw-gap-related); }
 .pw-knowledge-group-heading h3 { margin: 0; font-size: 13px; line-height: 22px; font-weight: 600; color: var(--pw-copy); }
 .pw-knowledge-group-heading > span { font-size: 13px; line-height: 22px; color: var(--pw-copy); font-variant-numeric: tabular-nums; }
 .pw-knowledge-workspace .pw-knowledge-directory-group :is(.pw-memory-list, .pw-learning-list, .pw-followup-list) { padding: 0; background: transparent; border-radius: 0; box-shadow: none; }
 .pw-knowledge-directory-group :is(.pw-memory-list-item, .pw-followup-row, .pw-learning-object) + :is(.pw-memory-list-item, .pw-followup-row, .pw-learning-object) { border-top: 1px solid var(--pw-hairline); }
-.pw-knowledge-workspace .pw-knowledge-directory-group :is(.pw-memory-row, .pw-learning-object, .pw-followup-row) { padding: 14px 2px; min-height: 72px; border-radius: 0; }
+.pw-knowledge-workspace .pw-knowledge-directory-group :is(.pw-memory-row, .pw-learning-object, .pw-followup-row) { padding: var(--pw-gap-content) 0; min-height: 72px; border-radius: 0; }
 .pw-knowledge-workspace :is(.pw-memory-row-copy strong, .pw-learning-object-copy strong, .pw-followup-row-title) { display: block; font-size: 16px; line-height: 25px; font-weight: 600; white-space: normal; overflow-wrap: anywhere; }
 .pw-knowledge-workspace :is(.pw-memory-row-copy small, .pw-learning-object-copy small, .pw-followup-row-meta, .pw-followup-row-copy small) { display: block; font-size: 13px; line-height: 22px; color: var(--pw-copy); white-space: normal; overflow: visible; -webkit-line-clamp: unset; }
 .pw-knowledge-workspace .pw-memory-row-copy > .pw-knowledge-row-preview { font-size: 14px; line-height: 23px; font-weight: 400; color: var(--pw-copy); -webkit-line-clamp: 2; }
 .pw-knowledge-workspace :is(.pw-learning-verbatim, .pw-reading-copy, .pw-followup-goal) { font-size: 16px; line-height: 1.8; }
 .pw-knowledge-workspace :is(.pw-learning-caption, .pw-learning-eyebrow, .pw-followup-facts dt, .pw-followup-facts dd) { font-size: 13px; line-height: 22px; }
-.pw-knowledge-workspace .pw-learning-next { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin: 18px 0 24px; padding-bottom: 20px; }
+.pw-knowledge-workspace .pw-learning-next { display: flex; flex-wrap: wrap; align-items: center; gap: var(--pw-gap-control) var(--pw-gap-content); margin: var(--pw-gap-content) 0 var(--pw-gap-section); padding-bottom: var(--pw-gap-content); }
 .pw-knowledge-workspace .pw-learning-next > p { flex: 1 1 240px; margin: 0; }
 .pw-knowledge-workspace .pw-learning-batches > li { position: relative; min-height: 76px; padding: 16px 12px; gap: 12px; }
 .pw-knowledge-workspace .pw-learning-batches > li + li::before { content: ''; position: absolute; top: -12px; left: 21px; height: 24px; width: 1px; background: var(--pw-hairline); }
@@ -194,8 +196,8 @@
 .pw-reminder-workspace .pw-reminder-record header { flex-wrap: wrap; gap: 4px 12px; }
 .pw-reminder-workspace .pw-reminder-record header h3 { flex: 1 1 180px; }
 .pw-reminder-workspace .pw-reminder-record header > span { flex: none; }
-.pw-reminder-workspace .pw-reminder-alerts { margin: 24px 0; }
-.pw-knowledge-empty-copy { margin: 22px 0; color: var(--pw-copy); font-size: 14px; line-height: 24px; }
+.pw-reminder-workspace .pw-reminder-alerts { margin: var(--pw-gap-section) 0; }
+.pw-knowledge-empty-copy { margin: var(--pw-gap-section) 0; color: var(--pw-copy); font-size: 14px; line-height: 24px; }
 .pw-knowledge-object-state { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; font-size: 13px; line-height: 22px; color: var(--pw-copy); }
 .pw-knowledge-object-state > strong { color: var(--pw-ink); font-weight: 600; }
 .pw-knowledge-next-time { margin: 12px 0 20px; font-size: 16px; line-height: 26px; }

@@ -160,14 +160,27 @@ export function ProjectPreviewPane({ control, composer }: { control: ReturnType<
     const send = (visible: boolean) => {
       if (bridge.getDocumentEpoch() !== epoch) return;
       const node = viewport.current, bounds = node?.getBoundingClientRect();
+      let rect = bounds ? { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height } : null;
+      const pane = node?.closest<HTMLElement>('.pw-preview-pane'), paneBounds = pane?.getBoundingClientRect();
+      // The native renderer is a sibling of this Web UI, so CSS scrolling does
+      // not clip it. Report only the part inside this same pane's client area.
+      if (rect && pane && paneBounds) {
+        const left = Math.max(rect.x, paneBounds.left + pane.clientLeft);
+        const top = Math.max(rect.y, paneBounds.top + pane.clientTop);
+        const right = Math.min(rect.x + rect.width, paneBounds.left + pane.clientLeft + pane.clientWidth);
+        const bottom = Math.min(rect.y + rect.height, paneBounds.top + pane.clientTop + pane.clientHeight);
+        rect = right > left && bottom > top ? { x: left, y: top, width: right - left, height: bottom - top } : null;
+      }
       const payload = previewViewport(sessionId, visible && !!node?.isConnected && !blocked && !document.hidden,
-        bounds ? { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height } : null, window.innerWidth, window.innerHeight);
+        rect, window.innerWidth, window.innerHeight);
       const encoded = JSON.stringify(payload); if (last === encoded) return; last = encoded;
       void bridge.command('projects.preview.viewport', payload).catch(() => { /* Native window invalidation also hides its renderer. */ });
     };
     const schedule = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(() => { if (!disposed) send(true); }); };
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(schedule);
     if (viewport.current) observer?.observe(viewport.current);
+    const pane = viewport.current?.closest<HTMLElement>('.pw-preview-pane');
+    if (pane) observer?.observe(pane);
     window.addEventListener('resize', schedule); window.addEventListener('scroll', schedule, true);
     window.visualViewport?.addEventListener('resize', schedule); window.visualViewport?.addEventListener('scroll', schedule);
     document.addEventListener('visibilitychange', schedule);

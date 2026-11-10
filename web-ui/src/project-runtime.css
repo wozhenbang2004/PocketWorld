@@ -1,20 +1,20 @@
 /* Existing BoardUI row/actions/disclosure and progress source. These views
  * observe one native owner; layout does not start tools or duplicate renderers. */
-.pw-project-live,.pw-project-runtime-health { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+.pw-project-live,.pw-project-runtime-health { display: flex; flex-direction: column; gap: var(--pw-gap-section); min-width: 0; }
 .pw-project-live > .pw-section-heading,.pw-project-runtime-health > .pw-section-heading { margin: 0; align-items: flex-start; gap: 16px; }
 .pw-project-live .pw-section-heading > div,.pw-project-runtime-health .pw-section-heading > div { min-width: 0; }
 .pw-project-live .pw-section-heading h3,.pw-project-runtime-health .pw-section-heading h3 { margin: 0; font-size: 16px; font-weight: 550; line-height: 1.5; }
-.pw-project-live .pw-section-heading p,.pw-project-runtime-health .pw-section-heading p { margin-top: 5px; font-size: 11px; }
+.pw-project-live .pw-section-heading p,.pw-project-runtime-health .pw-section-heading p { margin-top: var(--pw-gap-related); font-size: 12px; }
 .pw-project-live .pw-section-heading > button,.pw-project-runtime-health .pw-section-heading > button { flex: none; }
-.pw-project-live-service { display: flex; justify-content: space-between; align-items: center; gap: 12px 20px; padding-block: 4px 12px; }
-.pw-project-live-service > div { display: grid; gap: 5px; min-width: 0; }
+.pw-project-live-service { display: flex; justify-content: space-between; align-items: center; gap: var(--pw-gap-control) var(--pw-gap-content); }
+.pw-project-live-service > div { display: grid; gap: var(--pw-gap-related); min-width: 0; }
 .pw-project-live-service strong { font-size: 13px; font-weight: 500; }
-.pw-project-live-service small { font-size: 11px; color: var(--pw-muted); overflow-wrap: anywhere; }
-.pw-project-live-service .pw-field-hint { margin: 0; font-size: 11px; line-height: 1.75; color: var(--pw-muted); }
+.pw-project-live-service small { font-size: 12px; color: var(--pw-muted); overflow-wrap: anywhere; }
+.pw-project-live-service .pw-field-hint { margin: 0; font-size: 12px; line-height: 1.75; color: var(--pw-muted); }
 .pw-project-live-service > button { flex: none; }
 .pw-project-live .pw-remote-preview-viewport { min-height: min(46dvh,420px); border-radius: 14px; background: var(--pw-inset); }
 .pw-project-live > .pw-form-actions { margin: 0; }
-.pw-project-runtime-health [role="region"] p,.pw-project-live [role="region"] p { margin-block: 10px; font-size: 12px; line-height: 1.85; overflow-wrap: anywhere; }
-.pw-project-runtime-health [role="progressbar"] { margin-block: 18px; max-width: 420px; }
+.pw-project-runtime-health [role="region"] p,.pw-project-live [role="region"] p { margin-block: var(--pw-gap-control); font-size: 12px; line-height: 1.85; overflow-wrap: anywhere; }
+.pw-project-runtime-health [role="progressbar"] { margin-block: var(--pw-gap-content); max-width: 420px; }
 .pw-project-live button[slot="trigger"],.pw-project-runtime-health button[slot="trigger"] { padding-inline: 0; font-size: 12px; }
 @media(max-width:640px){.pw-project-live-service { flex-direction: column; align-items: flex-start; }.pw-project-live .pw-section-heading,.pw-project-runtime-health .pw-section-heading { flex-wrap: wrap; }.pw-project-live .pw-remote-preview-viewport { min-height: 280px; }}

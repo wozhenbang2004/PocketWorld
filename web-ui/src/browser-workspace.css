@@ -9,15 +9,15 @@
 .pw-browser-workspace-nav button[aria-current] { background: var(--pw-surface); box-shadow: 0 2px 10px #00000008; font-weight: 600; }
 .pw-browser-workspace-nav button:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 .pw-browser-workspace-scroll { flex: 1; min-width: 0; overflow: auto; padding: 24px clamp(16px, 4vw, 48px) max(28px, env(safe-area-inset-bottom)); }
-.pw-browser-workspace-scroll > section, .pw-browser-workspace-scroll > .pw-accordion { max-width: 850px; margin: 0 auto 24px; }
+.pw-browser-workspace-scroll > section, .pw-browser-workspace-scroll > .pw-accordion { max-width: 850px; margin: 0 auto var(--pw-gap-section,28px); }
 .pw-browser-workspace h2 { font-size: 20px; line-height: 1.45; font-weight: 600; margin: 0 0 12px; }
 .pw-browser-workspace h3 { font-size: 15px; line-height: 1.5; font-weight: 600; margin: 0 0 8px; }
 .pw-browser-workspace p { line-height: 1.65; overflow-wrap: anywhere; }
 .pw-browser-workspace .pw-reading-copy { white-space: pre-wrap; }
 .pw-browser-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.pw-browser-record { padding: 18px 0; border-bottom: 1px solid color-mix(in srgb, var(--pw-ink) 8%, transparent); }
+.pw-browser-record { padding: var(--pw-gap-content,16px) 0; border: 0; }
 .pw-browser-record[data-selected] > h3::after { content: ' · 当前'; color: var(--pw-muted); font-weight: 400; }
-.pw-browser-attention { padding: 18px 20px; background: var(--pw-canvas); border-radius: 12px; }
+.pw-browser-attention { padding: var(--pw-gap-content,16px); background: var(--pw-canvas); border-radius: 12px; }
 .pw-browser-workspace-code { max-height: 360px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.65 'JetBrains Mono', monospace; background: var(--pw-canvas); padding: 14px; border-radius: 8px; }
 .pw-browser-scope-fields { display: flex; flex-direction: column; gap: 14px; }
 .pw-browser-table-wrap { max-width: 100%; overflow-x: auto; }

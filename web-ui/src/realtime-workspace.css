@@ -1,7 +1,7 @@
 /* Conversation hierarchy uses the retained BoardUI controls and dialogs.
  * OpenMuse LinkRow's compact title/detail alignment informs supporting rows;
  * no new primitive, capture surface, transport or simulated call state. */
-.pw-realtime-workspace { min-width: 0; padding: 2px 2px 16px; color: var(--pw-ink,#292929); }
+.pw-realtime-workspace { min-width: 0; padding: 0 0 var(--pw-gap-content,16px); color: var(--pw-ink,#292929); }
 .pw-realtime-heading, .pw-realtime-live-heading, .pw-realtime-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .pw-realtime-heading { margin-bottom: 8px; }
 .pw-realtime-heading h2 { font-size: 20px; line-height: 1.4; letter-spacing: -.02em; font-weight: 500; }
@@ -18,13 +18,13 @@
 .pw-realtime-capture { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 8px 0; font-size: 12px; line-height: 1.6; }
 .pw-realtime-capture > span { display: inline-flex; align-items: center; gap: 5px; }
 .pw-realtime-capture svg { color: var(--pw-copy,#666); }
-.pw-realtime-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.pw-realtime-controls { display: flex; align-items: center; flex-wrap: wrap; gap: var(--pw-gap-control,12px); }
 .pw-secondary.pw-secondary-refactor .pw-realtime-controls > button { min-height: 44px; font-size: 12px; flex: 1 1 auto; }
 .pw-realtime-audio-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; font-size: 12px; }
 .pw-realtime-audio-row + .pw-realtime-audio-row, .pw-realtime-controls + .pw-realtime-audio-row { margin-top: 10px; }
 .pw-realtime-audio-row > div { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .pw-realtime-session { margin: 14px 0 20px; }
-.pw-realtime-start, .pw-realtime-invitation { padding: 18px; border: 0; border-radius: 16px; background: var(--pw-surface,#fafafa); box-shadow: 0 2px 6px #00000003,0 12px 32px -14px #00000012; }
+.pw-realtime-start, .pw-realtime-invitation { padding: var(--pw-gap-content,16px); border: 0; border-radius: 16px; background: var(--pw-surface,#fafafa); box-shadow: 0 2px 6px #00000003,0 12px 32px -14px #00000012; }
 .pw-realtime-start-copy, .pw-realtime-object-heading { display: flex; align-items: center; gap: 12px; }
 .pw-realtime-start-copy > div, .pw-realtime-object-heading > div { min-width: 0; }
 .pw-realtime-symbol { flex: none; display: grid; place-items: center; width: 42px; height: 42px; border-radius: 13px; background: var(--pw-inset,#efefef); color: var(--pw-copy,#626262); }
@@ -33,7 +33,7 @@
 .pw-realtime-start > button { margin-top: 16px; }
 .pw-realtime-invitation > p, .pw-realtime-session-detail p { font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
 .pw-realtime-endpoint { color: var(--pw-copy,#666); white-space: pre-wrap; }
-.pw-realtime-eyebrow { display: block; color: var(--pw-muted,#747474); font-size: 11px; line-height: 1.6; font-weight: 400; }
+.pw-realtime-eyebrow { display: block; color: var(--pw-muted,#747474); font-size: 12px; line-height: 1.6; font-weight: 400; }
 .pw-realtime-choices { display: flex; flex-direction: column; gap: 0; padding-block: 4px; }
 .pw-realtime-session-detail .pw-form-actions:empty { display: none; }
 .pw-realtime-voice { margin: 20px 0; }
@@ -50,16 +50,16 @@
 .pw-realtime-turn:first-child { padding-top: 2px; }
 .pw-realtime-turn > header { display: flex; flex-direction: column; gap: 3px; }
 .pw-realtime-turn h4 { margin: 0; font-size: 12px; line-height: 1.6; font-weight: 500; color: var(--pw-copy,#626262); }
-.pw-realtime-turn > header > span { font-size: 11px; line-height: 1.6; color: var(--pw-muted,#747474); }
+.pw-realtime-turn > header > span { font-size: 12px; line-height: 1.6; color: var(--pw-muted,#747474); }
 .pw-realtime-turn > .pw-reading-copy { margin: 8px 0; font-size: 15px; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; }
-.pw-realtime-workspace .pw-form-actions { gap: 6px; margin-top: 10px; }
+.pw-realtime-workspace .pw-form-actions { gap: var(--pw-gap-control,12px); margin-top: var(--pw-gap-control,12px); }
 .pw-realtime-workspace .pw-form-actions > button { white-space: normal; text-align: start; line-height: 1.5; }
 .pw-realtime-task-record { padding: 14px; border-radius: 12px; background: var(--pw-inset,#efefef); }
 .pw-realtime-task-record h4, .pw-realtime-saved h4, .pw-realtime-option h4 { margin: 0; font-size: 14px; line-height: 1.6; font-weight: 500; overflow-wrap: anywhere; }
 .pw-realtime-task-record > p { margin: 8px 0 0; font-size: 13px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
 .pw-realtime-task-record .pw-realtime-task-state { margin-top: 4px; font-size: 12px; color: var(--pw-copy,#626262); }
 .pw-realtime-empty { margin: 8px 0 14px; font-size: 13px; line-height: 1.7; color: var(--pw-copy,#666); }
-.pw-realtime-services { margin-top: 24px; }
+.pw-realtime-services { margin-top: var(--pw-gap-section,28px); }
 .pw-realtime-disclosures > * { border: 0; }
 .pw-realtime-disclosures [slot="trigger"] { gap: 10px; padding: 14px 0; }
 .pw-realtime-disclosures [slot="trigger"] > span > span:first-child { font-size: 13px; line-height: 1.55; font-weight: 500; }
@@ -78,7 +78,7 @@
   .pw-realtime-start, .pw-realtime-invitation { padding: 14px; }
   .pw-realtime-live { padding: 10px; }
   .pw-realtime-live-heading { flex-wrap: wrap; }
-  .pw-realtime-controls { gap: 5px; }
+  .pw-realtime-controls { gap: var(--pw-gap-related,8px); }
 }
 @media (prefers-reduced-motion: reduce) {
   .pw-realtime-disclosures * { transition-duration: 0s; }

@@ -17,8 +17,6 @@ body :is(.pw-app-header, .pw-secondary-header, .pw-drawer, .pw-drawer-actions,
   border: 0;
 }
 .pw-secondary .pw-secondary-header {
-  min-height: 56px;
-  padding-block: 6px;
   background: var(--pw-canvas);
   box-shadow: none;
 }

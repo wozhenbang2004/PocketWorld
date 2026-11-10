@@ -1,6 +1,6 @@
 /* Product composition of retained BoardUI fields/tabs and Affect file/diff surfaces. */
 .pw-redesign .pw-project-work { padding-top: 0; }
-.pw-redesign .pw-project-tabs, .pw-redesign .pw-file-tabs { gap: 14px; min-width: 0; }
+.pw-redesign .pw-project-tabs, .pw-redesign .pw-file-tabs { gap: var(--pw-gap-content); min-width: 0; }
 .pw-redesign .pw-project-tabs > div:first-child, .pw-redesign .pw-file-tabs > div:first-child { flex: none; }
 .pw-redesign .pw-project-tabs [role="tablist"], .pw-redesign .pw-file-tabs [role="tablist"] { border: 0; gap: 4px; }
 .pw-redesign .pw-project-tabs [role="tab"], .pw-redesign .pw-file-tabs [role="tab"] { min-height: 44px; padding: 10px 12px; color: var(--pw-copy,#656565); font-size: 13px; font-weight: 500; border-radius: 11px; }
@@ -8,14 +8,14 @@
 .pw-redesign .pw-project-tabs > div:first-child > span[aria-hidden], .pw-redesign .pw-file-tabs > div:first-child > span[aria-hidden] { display: none; }
 .pw-redesign .pw-project-tabs [role="tabpanel"], .pw-redesign .pw-file-tabs [role="tabpanel"] { outline-offset: 3px; min-width: 0; }
 .pw-redesign .pw-project-tools { margin: 0; }
-.pw-project-list-caption { display: flex; align-items: center; gap: 8px; min-height: 40px; color: var(--pw-muted,#777); font-size: 12px; margin: 2px 2px 4px; }
+.pw-project-list-caption { display: flex; align-items: center; gap: var(--pw-gap-related); min-height: 44px; color: var(--pw-muted,#777); font-size: 12px; margin: 0 0 var(--pw-gap-related); }
 .pw-project-list-caption > span { margin-right: auto; }
 .pw-redesign .pw-project-objects .pw-file-object { border: 0; padding: 0 6px; border-radius: 12px; margin-block: 2px; background: transparent; min-height: 58px; }
 .pw-redesign .pw-project-objects .pw-file-object[aria-current="true"], .pw-redesign .pw-project-objects .pw-file-object[data-open="true"] { background: var(--pw-inset,#ededed); }
 .pw-redesign .pw-file-miniature { opacity: .75; }
 .pw-redesign .pw-project-objects .au-sc-file-card { border: 0; border-radius: 14px; box-shadow: 0 2px 10px #00000005; }
-.pw-redesign .pw-file-workspace { display: flex; flex-direction: column; gap: 14px; min-height: 100%; }
-.pw-redesign .pw-file-workspace > .pw-file-heading { display: flex; gap: 10px; margin: 0; padding: 0 2px; align-items: flex-start; }
+.pw-redesign .pw-file-workspace { display: flex; flex-direction: column; gap: var(--pw-gap-content); min-height: 100%; }
+.pw-redesign .pw-file-workspace > .pw-file-heading { display: flex; gap: var(--pw-gap-control); margin: 0; padding: 0; align-items: flex-start; }
 .pw-redesign .pw-file-heading .pw-file-path { font-size: 13px; line-height: 1.6; color: var(--pw-ink,#333); margin: 0; }
 .pw-redesign .pw-file-heading p + p { margin: 3px 0 0; font-size: 12px; color: var(--pw-muted,#777); }
 .pw-file-dirty { color: var(--pw-copy,#555); }
@@ -25,7 +25,7 @@
 .pw-redesign .pw-file-tabs .pw-inline-diff { border: 0; border-radius: 12px; box-shadow: 0 1px 8px #00000005; }
 .pw-redesign .pw-file-tabs .pw-inline-diff footer { border: 0; padding: 8px 12px; }
 .pw-redesign .pw-file-tabs .pw-diff-columns > section + section { border: 0; }
-.pw-file-save-bar { position: sticky; bottom: -1px; z-index: 1; display: flex; flex: none; align-items: center; gap: 10px; justify-content: space-between; padding: 12px 2px max(12px,env(safe-area-inset-bottom)); background: var(--pw-bg,#f7f7f7); font-size: 12px; color: var(--pw-muted,#777); }
+.pw-file-save-bar { position: sticky; bottom: 0; z-index: 1; display: flex; flex: none; align-items: center; gap: var(--pw-gap-control); justify-content: space-between; padding: 16px 0 max(16px,env(safe-area-inset-bottom)); background: var(--pw-bg,#f7f7f7); font-size: 12px; color: var(--pw-muted,#777); }
 .pw-file-save-bar > button { flex: none; }
 .pw-file-subheading { display: flex; align-items: center; gap: 10px; justify-content: space-between; min-height: 44px; font-size: 12px; color: var(--pw-copy,#666); }
 .pw-file-subheading p { margin: 0; }
@@ -63,19 +63,19 @@
 
 /* The current file is the object; version tools and save share its reading
  * axis. Keep this editor independent of the attachment drawer's dimensions. */
-.pw-redesign .pw-project-file-editor { width: 100%; max-width: 100%; height: auto; margin: 0; padding-top: 0; border-top: 0; gap: 20px; min-width: 0; }
+.pw-redesign .pw-project-file-editor { width: 100%; max-width: 100%; height: auto; margin: 0; padding-top: 0; border-top: 0; gap: var(--pw-gap-section); min-width: 0; }
 .pw-project-file-editor .pw-file-name { margin: 0; font-size: 20px; line-height: 1.4; font-weight: 550; letter-spacing: -.025em; overflow-wrap: anywhere; }
 .pw-project-file-editor .pw-file-heading > div { min-width: 0; }
-.pw-project-file-editor .pw-file-heading .pw-file-path { margin-top: 4px; color: var(--pw-muted); font-size: 12px; }
-.pw-project-file-editor .pw-file-heading p:last-child { margin-top: 8px; font-size: 11px; }
+.pw-project-file-editor .pw-file-heading .pw-file-path { margin-top: var(--pw-gap-related); color: var(--pw-muted); font-size: 12px; }
+.pw-project-file-editor .pw-file-heading p:last-child { margin-top: var(--pw-gap-related); font-size: 12px; }
 .pw-redesign .pw-project-file-editor .pw-code-editor textarea { font-family: var(--font-code,"JetBrains Mono","Noto Sans SC",monospace) !important; min-height: min(55dvh,560px); }
-.pw-project-file-editor .pw-file-notice { padding: 16px; display: grid; gap: 10px; }
+.pw-project-file-editor .pw-file-notice { padding: var(--pw-gap-content); display: grid; gap: var(--pw-gap-control); }
 .pw-project-file-editor .pw-file-notice > p { margin: 0; font-size: 13px; }
 .pw-project-file-editor .pw-file-notice > button { justify-self: start; }
-.pw-project-file-editor .pw-file-subheading { margin-block: 4px 12px; }
+.pw-project-file-editor .pw-file-subheading { margin-block: 0 var(--pw-gap-control); }
 .pw-project-file-editor .pw-file-version-row > span { display: flex; justify-content: space-between; width: 100%; align-items: center; gap: 16px; padding: 0; }
 .pw-project-file-editor .pw-version-number { font-size: 13px; }
-.pw-project-file-editor .pw-file-version-row small { font-size: 11px; }
-.pw-project-file-editor .pw-file-save-bar { gap: 12px; margin-top: 4px; padding-block: 14px; }
-.pw-project-file-editor .pw-file-save-bar > span { min-width: 0; font-size: 11px; }
+.pw-project-file-editor .pw-file-version-row small { font-size: 12px; }
+.pw-project-file-editor .pw-file-save-bar { gap: var(--pw-gap-control); margin-top: 0; }
+.pw-project-file-editor .pw-file-save-bar > span { min-width: 0; font-size: 12px; overflow-wrap: anywhere; }
 .pw-project-file-editor .pw-file-save-bar > button { max-width: 52%; }

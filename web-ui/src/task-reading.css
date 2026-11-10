@@ -3,19 +3,19 @@
  * is unchanged. One result owns the reading surface; supporting records stay flat.
  * Scoped selectors deliberately outrank app/product/workspace CSS loaded later. */
 .pw-task-outcome.pw-task-reading {
-  gap: 16px;
+  gap: var(--pw-gap-section);
   min-width: 0;
 }
 .pw-task-reading .pw-outcome-document {
-  padding: 16px 18px 12px;
+  padding: 0;
   border: 0;
-  border-radius: 16px;
-  background: color-mix(in srgb, var(--pw-inset) 60%, var(--pw-surface));
-  box-shadow: var(--pw-shadow-surface);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 .pw-task-reading .pw-outcome-heading {
   align-items: center;
-  margin: 0 0 12px;
+  margin: 0 0 var(--pw-gap-content);
 }
 .pw-task-reading .pw-outcome-heading h3 {
   margin: 0;
@@ -29,18 +29,18 @@
   padding: 0;
 }
 .pw-task-outcome.pw-task-reading .afa-answerbody :is(p, li) {
-  font-size: 15px;
+  font-size: 16px;
   line-height: 1.75;
   color: var(--pw-ink);
 }
 .pw-task-outcome.pw-task-reading .afa-answer > footer {
-  margin: 10px 0 0;
+  margin: var(--pw-gap-control) 0 0;
   padding: 0;
   border: 0;
   min-height: 44px;
 }
 .pw-task-reading .pw-outcome-image {
-  margin: 14px 0 0;
+  margin: var(--pw-gap-content) 0 0;
   border: 0;
   border-radius: 10px;
   background: var(--pw-inset);
@@ -56,8 +56,8 @@
   align-items: baseline;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 4px 12px;
-  margin-bottom: 6px;
+  gap: var(--pw-gap-related) var(--pw-gap-control);
+  margin-bottom: var(--pw-gap-related);
 }
 .pw-task-reading .pw-reading-section-heading h4 {
   font-size: 13px;
@@ -70,16 +70,16 @@
   line-height: 19px;
   color: var(--pw-muted);
 }
-.pw-task-reading .pw-outcome-files { gap: 6px; margin: 0; }
+.pw-task-reading .pw-outcome-files { gap: var(--pw-gap-related); margin: 0; }
 .pw-task-reading .pw-outcome-file.button-press-motion {
-  min-height: 56px;
+  min-height: 64px;
   height: auto;
   width: 100%;
-  padding: 9px 12px;
-  gap: 10px;
+  padding: 12px 0;
+  gap: var(--pw-gap-control);
   border: 0;
-  border-radius: 11px;
-  background: var(--pw-inset);
+  border-radius: 14px;
+  background: transparent;
   box-shadow: none;
   text-align: start;
   white-space: normal;
@@ -96,7 +96,7 @@
   flex-direction: column;
   align-items: flex-start;
   min-width: 0;
-  gap: 2px;
+  gap: 4px;
   overflow-wrap: anywhere;
 }
 .pw-task-reading .pw-outcome-file-copy > small {
@@ -121,7 +121,7 @@
   color: var(--pw-copy);
   overflow-wrap: anywhere;
 }
-.pw-task-reading .pw-outcome-retention { margin: -4px 0 0; }
+.pw-task-reading .pw-outcome-retention { margin: 0; }
 .pw-task-reading .pw-reading-disclosures { min-width: 0; border: 0; }
 .pw-task-reading .pw-reading-disclosures > [class~="group/item"] {
   min-width: 0;
@@ -151,10 +151,10 @@
 }
 .pw-task-inference.pw-task-reading {
   min-width: 0;
-  margin-top: 16px;
-  padding: 14px 16px 4px;
+  margin-top: var(--pw-gap-section);
+  padding: var(--pw-gap-content);
   border: 0;
-  border-radius: 14px;
+  border-radius: 20px;
   background: var(--pw-inset);
   color: var(--pw-ink);
 }
@@ -173,17 +173,17 @@
   color: var(--pw-ink);
   overflow-wrap: anywhere;
 }
-.pw-task-reading .pw-usage-heading > .button-press-motion { flex: none; margin-top: -5px; }
+.pw-task-reading .pw-usage-heading > .button-press-motion { flex: none; }
 .pw-task-reading .pw-usage-coverage {
-  margin: 8px 0 4px;
+  margin: var(--pw-gap-related) 0 0;
   font-size: 12px;
   line-height: 20px;
   color: var(--pw-copy);
   overflow-wrap: anywhere;
 }
 .pw-task-reading .pw-usage-notice {
-  margin: 10px 0;
-  padding: 10px 12px;
+  margin: var(--pw-gap-content) 0;
+  padding: var(--pw-gap-control);
   border: 0;
   border-radius: 10px;
   background: var(--pw-surface);
@@ -192,12 +192,12 @@
   color: var(--pw-ink);
   overflow-wrap: anywhere;
 }
-.pw-task-reading .pw-usage-sections { margin-top: 6px; }
-.pw-task-reading .pw-usage-records { padding-inline: 8px; }
+.pw-task-reading .pw-usage-sections { margin-top: var(--pw-gap-content); }
+.pw-task-reading .pw-usage-records { padding-inline: 0; }
 .pw-task-reading .pw-usage-call-title {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
   overflow-wrap: anywhere;
 }
 .pw-task-reading .pw-usage-call-title > small {
@@ -216,8 +216,8 @@
 }
 .pw-task-reading .pw-usage-counters {
   display: grid;
-  gap: 7px;
-  margin: 12px 0;
+  gap: var(--pw-gap-related);
+  margin: var(--pw-gap-content) 0;
   font-size: 13px;
   line-height: 21px;
 }
@@ -242,7 +242,7 @@
   line-height: 20px;
   color: var(--pw-muted);
 }
-.pw-task-reading .pw-usage-lines { display: grid; gap: 7px; }
+.pw-task-reading .pw-usage-lines { display: grid; gap: var(--pw-gap-related); }
 .pw-task-reading .pw-usage-lines > p,
 .pw-task-reading .pw-usage-unavailable {
   margin: 0;
@@ -252,11 +252,11 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.pw-task-reading .pw-usage-lines + .pw-reading-note { margin-top: 10px; }
+.pw-task-reading .pw-usage-lines + .pw-reading-note { margin-top: var(--pw-gap-control); }
 .pw-task-reading .pw-usage-pricing { margin-top: 16px; }
 .pw-task-reading .pw-usage-pricing h5,
 .pw-task-reading .pw-usage-estimate h4 {
-  margin: 0 0 6px;
+  margin: 0 0 var(--pw-gap-related);
   font-size: 13px;
   font-weight: 500;
   line-height: 21px;
@@ -286,16 +286,13 @@
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 6px;
-  margin-top: 8px;
+  gap: var(--pw-gap-control);
+  margin-top: var(--pw-gap-content);
 }
 @media (hover: hover) and (pointer: fine) {
   .pw-task-reading .pw-outcome-file:hover:not(:disabled) { background: var(--pw-selected); }
 }
 @media (max-width: 380px) {
-  .pw-task-reading .pw-outcome-document { padding: 14px 12px 10px; }
-  .pw-task-inference.pw-task-reading { padding-inline: 12px; }
-  .pw-task-reading .pw-usage-records { padding-inline: 2px; }
-  .pw-task-reading .pw-usage-heading { gap: 6px; }
+  .pw-task-reading .pw-usage-heading { gap: var(--pw-gap-related); }
   .pw-task-reading .pw-usage-counters > div { grid-template-columns: 76px minmax(0, 1fr); gap: 8px; }
 }
