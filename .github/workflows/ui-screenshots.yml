@@ -4,7 +4,10 @@ run-name: UI screenshots · release ${{ github.event.workflow_run.id || inputs.r
 on:
   workflow_run:
     workflows: [GitHub Release]
-    types: [in_progress]
+    # requested fires once for a new release run; in_progress can be emitted
+    # again as release jobs start and would restart the same screenshot capture.
+    # A rerun can be captured explicitly with workflow_dispatch below.
+    types: [requested]
     branches: [main]
   workflow_dispatch:
     inputs:
