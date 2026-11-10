@@ -954,6 +954,7 @@ public final class EngineApplication extends Application implements dev.pocketen
     private void initializeModelConnections(){
         try{
             modelConnections=new dev.pocketengine.runtime.models.ModelConnectionService(settings,new java.io.File(getFilesDir(),"model-capabilities.json").toPath(),java.time.Clock.systemUTC());
+            modelConnections.refreshPublicIndexAsync();
             modelConnections.attachOwnerStore(tasks);
             modelConnections.install();
         }catch(Exception unavailable){

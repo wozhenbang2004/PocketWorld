@@ -14,8 +14,29 @@ import static dev.pocketengine.runtime.models.ModelFacts.*;
  * Priority: exact owner override > explicit provider catalog > local family hint
  * > unknown. A new model name must not inherit capabilities from a loose prefix.
  */
-final class ModelReasoningProfiles {
+public final class ModelReasoningProfiles {
     private ModelReasoningProfiles() { }
+
+    /** Specific wire controls depend on the model family, not on the URL shape. */
+    public static String switchWire(String model) {
+        String id = model.toLowerCase(java.util.Locale.ROOT);
+        while (id.contains("/")) id = id.substring(id.indexOf('/') + 1);
+        if (id.startsWith("qwen") || id.startsWith("qwq") || id.startsWith("qvq")) return "enable_thinking";
+        if (id.startsWith("glm-") || id.startsWith("deepseek-") || id.startsWith("kimi-")
+                || id.startsWith("moonshot-") || id.startsWith("doubao-") || id.startsWith("seed-"))
+            return "thinking_type";
+        if (id.startsWith("minimax-")) return "thinking_adaptive";
+        return "";
+    }
+
+    static boolean supportsThinkingSwitch(ModelBinding binding, String model) {
+        String style = switchWire(model);
+        return switch (binding.protocol()) {
+            case OPENAI_CHAT -> style.equals("enable_thinking") || style.equals("thinking_type");
+            case ANTHROPIC -> style.equals("thinking_adaptive") || style.equals("thinking_type");
+            default -> false;
+        };
+    }
 
     private static final List<String> EXTENDED = List.of("low", "medium", "high", "xhigh", "max");
     private static final List<String> WITH_NONE = List.of("none", "low", "medium", "high", "xhigh", "max");

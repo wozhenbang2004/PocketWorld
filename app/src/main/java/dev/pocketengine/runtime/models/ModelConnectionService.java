@@ -21,6 +21,7 @@ import org.json.JSONObject;
 /** One native owner workflow over retained API settings and the original catalog; never a model tool. */
 public final class ModelConnectionService {
     public static final long MAX_CATALOG_AGE_MILLIS = 6 * 60 * 60 * 1000L;
+    public void refreshPublicIndexAsync() { catalog.refreshPublicIndexAsync(); }
     private final SettingsStore settings;
     private final ModelCatalog catalog;
     private final CatalogHttpClient http;
@@ -210,7 +211,7 @@ public final class ModelConnectionService {
         synchronized(settings){
             ModelConfig current=settings.apiConfigForCatalog();ModelBinding binding=current.catalogEnforced?current.capabilityBinding:null;
             JSONObject out=new JSONObject().put("api",current.publicJson()).put("catalogAvailable",!current.usesBedrock()).put("catalogUnavailableReason",current.usesBedrock()?"Bedrock 当前使用明确的模型 ID，未接入模型目录":"").put("activeRoute",settings.selectedAccountModel()!=null?"account":"api_key")
-                    .put("modelGroups",settings.modelGroupsSnapshot()).put("catalogEnabled",binding!=null).put("connections",settings.apiConnectionsSnapshot()).put("maxCatalogAgeMillis",MAX_CATALOG_AGE_MILLIS).put("catalogTimeoutMillis",http.totalBudgetMillis())
+                    .put("modelGroups",settings.modelGroupsSnapshot()).put("catalogEnabled",binding!=null).put("connections",settings.apiConnectionsSnapshot()).put("publicModelIndex",catalog.publicIndexStatus()).put("maxCatalogAgeMillis",MAX_CATALOG_AGE_MILLIS).put("catalogTimeoutMillis",http.totalBudgetMillis())
                     .put("modelsEndpoint",binding==null?defaultEndpoint(current):binding.modelsEndpoint().toASCIIString())
                     .put("catalogFormat",binding==null?ModelCatalogRoutes.defaultFormat(current.provider).name():binding.format().name());
             out.put("probeSelectionRevision",settings.apiSelectionRevision());
@@ -264,7 +265,7 @@ public final class ModelConnectionService {
                     .put("models",models).put("catalogAvailable",!config.usesBedrock()).put("canRefresh",profile.enabled&&!config.usesBedrock())
                     .put("catalogUnavailableReason",config.usesBedrock()?"Bedrock 当前使用明确的模型 ID，未接入模型目录":"")
                     .put("modelsEndpoint",binding.modelsEndpoint().toASCIIString()).put("catalogFormat",binding.format().name())
-                    .put("maxCatalogAgeMillis",MAX_CATALOG_AGE_MILLIS).put("catalogTimeoutMillis",http.totalBudgetMillis()).put("selectionChanged",false);
+                    .put("publicModelIndex",catalog.publicIndexStatus()).put("maxCatalogAgeMillis",MAX_CATALOG_AGE_MILLIS).put("catalogTimeoutMillis",http.totalBudgetMillis()).put("selectionChanged",false);
             Attempt observed;synchronized(this){observed=connectionAttempts.get(connectionId);}
             out.put("refreshAttempt",observed!=null&&observed.sourceRevision==expectedRevision&&observed.binding.equals(binding)?new JSONObject().put("startedAtMillis",observed.started).put("status",observed.status).put("code",observed.code):JSONObject.NULL);
             return out;

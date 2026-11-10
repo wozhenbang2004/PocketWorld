@@ -29,6 +29,7 @@ public final class ModelCatalog {
     private static final int MAX_CACHE_BYTES = 16 * 1024 * 1024;
     private final Path file;
     private final Clock clock;
+    private final ModelKnowledgeRegistry publicIndex;
     private final Map<String, ModelBinding> active = new LinkedHashMap<>();
     private final Map<String, Long> generations = new LinkedHashMap<>();
     private Map<ModelBinding, CatalogHttpClient.Snapshot> snapshots = new LinkedHashMap<>();
@@ -63,11 +64,15 @@ public final class ModelCatalog {
     /** file must be an app-private, single-writer cache path, separate from SettingsStore/TaskStore. */
     public ModelCatalog(Path file, Clock clock) throws IOException {
         this.file = Objects.requireNonNull(file).toAbsolutePath();
+        publicIndex = new ModelKnowledgeRegistry(this.file.resolveSibling(this.file.getFileName().toString() + ".model-index.gz"), clock);
         this.clock = Objects.requireNonNull(clock);
         load();
     }
 
     Path selectionMetadataPath() { return file.resolveSibling(file.getFileName().toString() + ".model-preferences"); }
+    public void refreshPublicIndexAsync() { publicIndex.refreshIfDueAsync(); }
+    public JSONObject publicIndexStatus() { return publicIndex.status(); }
+
     Path thirdPartyMetadataPath() { return file.resolveSibling(file.getFileName().toString() + ".metadata-suggestions"); }
 
     /** Call from the native host's current config/account/install identity, including every revision. */
@@ -180,6 +185,7 @@ public final class ModelCatalog {
         if (snapshot != null && !fresh) facts = facts.expired();
         // Provider facts win when explicit; local family defaults fill only unknowns.
         // Owner declarations are applied afterward and always take precedence.
+        facts = publicIndex.enrich(key.binding(), key.modelId(), facts);
         facts = ModelReasoningProfiles.withFamilyDefaults(key.binding(), key.modelId(), facts);
         OwnerRecord owner = overrides.get(key);
         if (owner != null) facts = facts.withOverrides(owner.fields());
