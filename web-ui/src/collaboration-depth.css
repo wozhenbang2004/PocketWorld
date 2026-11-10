@@ -230,7 +230,7 @@
 .pw-remote-primary,.pw-remote-context{display:grid;gap:var(--pw-gap-section);min-width:0;align-content:start}
 .pw-remote-primary:empty{display:none}
 .pw-remote-workspace.pw-depth-collaboration :is(.pw-remote-drafts,.pw-remote-question){padding:0;background:transparent;border-radius:0;gap:var(--pw-gap-content);border:0}
-.pw-remote-request-details pre{max-height:240px;background:#f6f6f6;border-radius:8px;font-family:var(--font-code,monospace)}
+.pw-remote-request-details pre{max-height:240px;background:var(--pw-inset);color:var(--pw-ink);border-radius:8px;font-family:var(--font-code,monospace)}
 .pw-remote-workspace.pw-depth-collaboration .pw-remote-events{gap:0}
 .pw-remote-workspace.pw-depth-collaboration .pw-remote-events li{padding:var(--pw-gap-control) 0 var(--pw-gap-content) var(--pw-gap-content);gap:var(--pw-gap-related);background:transparent;border-radius:0;border-left:1px solid var(--collab-line)}
 .pw-remote-workspace.pw-depth-collaboration .pw-remote-events li:last-child{padding-bottom:4px}

@@ -4,7 +4,7 @@
 .pw-redesign .pw-project-tabs > div:first-child, .pw-redesign .pw-file-tabs > div:first-child { flex: none; }
 .pw-redesign .pw-project-tabs [role="tablist"], .pw-redesign .pw-file-tabs [role="tablist"] { border: 0; gap: 4px; }
 .pw-redesign .pw-project-tabs [role="tab"], .pw-redesign .pw-file-tabs [role="tab"] { min-height: 44px; padding: 10px 12px; color: var(--pw-copy,#656565); font-size: 13px; font-weight: 500; border-radius: 11px; }
-.pw-redesign .pw-project-tabs [role="tab"][data-selected], .pw-redesign .pw-file-tabs [role="tab"][data-selected] { color: var(--pw-ink,#292929); background: var(--pw-panel,#fff); box-shadow: 0 1px 5px #00000007; }
+.pw-redesign .pw-project-tabs [role="tab"][data-selected], .pw-redesign .pw-file-tabs [role="tab"][data-selected] { color: var(--pw-ink); background: var(--pw-selection-surface); box-shadow: var(--pw-shadow-surface); }
 .pw-redesign .pw-project-tabs > div:first-child > span[aria-hidden], .pw-redesign .pw-file-tabs > div:first-child > span[aria-hidden] { display: none; }
 .pw-redesign .pw-project-tabs [role="tabpanel"], .pw-redesign .pw-file-tabs [role="tabpanel"] { outline-offset: 3px; min-width: 0; }
 .pw-redesign .pw-project-tools { margin: 0; }
@@ -21,11 +21,11 @@
 .pw-file-dirty { color: var(--pw-copy,#555); }
 .pw-file-state-dot { flex: none; width: 6px; height: 6px; margin: 8px 3px 0; border-radius: 50%; background: currentColor; color: var(--pw-copy,#666); }
 .pw-redesign .pw-file-tabs { flex: 1; }
-.pw-redesign .pw-file-tabs .pw-code-editor textarea { min-height: min(52dvh,540px); padding: 14px; line-height: 1.8 !important; border: 0; box-shadow: none; background: var(--pw-panel,#fff); border-radius: 12px; }
+.pw-redesign .pw-file-tabs .pw-code-editor textarea { min-height: min(52dvh,540px); padding: 14px; line-height: 1.8 !important; border: 0; box-shadow: none; background: var(--pw-surface); border-radius: 12px; }
 .pw-redesign .pw-file-tabs .pw-inline-diff { border: 0; border-radius: 12px; box-shadow: 0 1px 8px #00000005; }
 .pw-redesign .pw-file-tabs .pw-inline-diff footer { border: 0; padding: 8px 12px; }
 .pw-redesign .pw-file-tabs .pw-diff-columns > section + section { border: 0; }
-.pw-file-save-bar { position: sticky; bottom: 0; z-index: 1; display: flex; flex: none; align-items: center; gap: var(--pw-gap-control); justify-content: space-between; padding: 16px 0 max(16px,env(safe-area-inset-bottom)); background: var(--pw-bg,#f7f7f7); font-size: 12px; color: var(--pw-muted,#777); }
+.pw-file-save-bar { position: sticky; bottom: 0; z-index: 1; display: flex; flex: none; align-items: center; gap: var(--pw-gap-control); justify-content: space-between; padding: 16px 0 max(16px,env(safe-area-inset-bottom)); background: var(--pw-canvas); font-size: 12px; color: var(--pw-muted,#777); }
 .pw-file-save-bar > button { flex: none; }
 .pw-file-subheading { display: flex; align-items: center; gap: 10px; justify-content: space-between; min-height: 44px; font-size: 12px; color: var(--pw-copy,#666); }
 .pw-file-subheading p { margin: 0; }
@@ -34,7 +34,7 @@
 .pw-file-version-row small { font-weight: 400; color: var(--pw-muted,#777); font-size: 12px; }
 .pw-file-revision { display: flex; flex-direction: column; gap: 12px; }
 .pw-file-revision > button { align-self: flex-start; }
-.pw-file-revision-content { margin: 0; padding: 14px; min-height: 140px; max-height: 52dvh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.8 "JetBrains Mono",ui-monospace,monospace; border-radius: 12px; background: var(--pw-panel,#fff); }
+.pw-file-revision-content { margin: 0; padding: 14px; min-height: 140px; max-height: 52dvh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.8 "JetBrains Mono",ui-monospace,monospace; border-radius: 12px; background: var(--pw-surface); }
 .pw-file-adoption-review, .pw-file-notice { border-radius: 12px; background: var(--pw-inset,#ededed); padding: 14px; font-size: 13px; line-height: 1.65; }
 .pw-file-adoption-review h3 { font-size: 14px; font-weight: 500; margin: 0 0 6px; }
 .pw-file-adoption-review p, .pw-file-notice p { margin: 0 0 10px; }
@@ -58,8 +58,6 @@
 .pw-inline-diff .pw-diff-columns del { color: var(--pw-copy,#555); text-decoration: line-through; }
 .pw-inline-diff .pw-diff-columns ins { color: var(--pw-ink,#242424); text-decoration: underline; }
 .pw-inline-diff .pw-diff-note { margin: 0; padding: 4px 12px 8px; color: var(--pw-copy,#555); font-size: 12px; line-height: 1.7; }
-
-:root.dark .pw-redesign .pw-file-workspace { --pw-panel: var(--pw-surface); --pw-bg: var(--pw-canvas); }
 
 /* The current file is the object; version tools and save share its reading
  * axis. Keep this editor independent of the attachment drawer's dimensions. */

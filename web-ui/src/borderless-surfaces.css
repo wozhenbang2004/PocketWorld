@@ -25,6 +25,19 @@ html[data-pocket-native-insets="true"] .pw-task-footer { padding-bottom: 12px; }
   outline-offset: 2px;
   box-shadow: none;
 }
+@media (prefers-contrast: more) {
+  :root:not(.dark), :root.dark { --pw-control-edge: var(--pw-ink); --pw-focus: var(--pw-ink); }
+  :is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown)
+    :is([data-input-size], .pw-combobox-field) > :is([role="group"], [role="presentation"]) {
+    outline: 1px solid var(--pw-control-edge);
+    outline-offset: 0;
+  }
+  :is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown)
+    :is([data-input-size], .pw-combobox-field) > :is([role="group"], [role="presentation"]):has(:focus-visible) {
+    outline: 2px solid var(--pw-focus);
+    outline-offset: 2px;
+  }
+}
 @media (forced-colors: active) {
   :where(.pw-app, .pw-drawer, .shadow-dropdown) :where(button, a, input, textarea, select, [tabindex]):focus-visible {
     outline-color: Highlight;

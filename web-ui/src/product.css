@@ -6,20 +6,19 @@
 :root {
   --pw-font: var(--pw-font-ui, var(--font-ui, system-ui, sans-serif));
   --pw-mono: var(--pw-font-code, var(--font-code, ui-monospace, monospace));
-  /* One neutral scale; page roles decide which parts should contrast. */
+  /* One neutral spectrum; page roles and interaction states choose from it. */
   --pw-neutral-0: #FFFFFF;
   --pw-neutral-25: #FCFCFC;
   --pw-neutral-50: #F6F6F6;
   --pw-neutral-100: #F1F1F1;
   --pw-neutral-200: #E6E6E6;
-  --pw-neutral-300: #C4C4C4;
-  --pw-neutral-350: #B5B5B5;
-  --pw-neutral-400: #949494;
-  --pw-neutral-500: #646464;
-  --pw-neutral-600: #555555;
-  --pw-neutral-700: #444444;
-  --pw-neutral-800: #303030;
-  --pw-neutral-850: #262626;
+  --pw-neutral-300: #D4D4D4;
+  --pw-neutral-400: #B5B5B5;
+  --pw-neutral-500: #888888;
+  --pw-neutral-600: #646464;
+  --pw-neutral-700: #555555;
+  --pw-neutral-800: #424242;
+  --pw-neutral-850: #303030;
   --pw-neutral-900: #242424;
   --pw-neutral-950: #1C1C1C;
   --pw-neutral-975: #181818;
@@ -32,25 +31,31 @@
   --pw-floating-inset: var(--pw-neutral-100);
   --pw-floating-hover: var(--pw-neutral-100);
   --pw-floating-selected: var(--pw-neutral-200);
+  --pw-floating-pressed: var(--pw-neutral-300);
   --pw-inset: var(--pw-neutral-100);
+  --pw-selection-surface: var(--pw-neutral-0);
   --pw-selected: var(--pw-neutral-200);
   --pw-hover: var(--pw-neutral-100);
+  --pw-pressed: var(--pw-neutral-300);
   --pw-edge: transparent;
   --pw-edge-hover: transparent;
+  --pw-control-edge: var(--pw-neutral-500);
   --pw-ink: var(--pw-neutral-975);
-  --pw-copy: var(--pw-neutral-600);
-  --pw-muted: var(--pw-neutral-500);
-  --pw-disabled: var(--pw-neutral-400);
+  --pw-copy: var(--pw-neutral-700);
+  --pw-muted: var(--pw-neutral-600);
+  --pw-disabled: var(--pw-neutral-500);
   --pw-strong: var(--pw-neutral-900);
+  --pw-strong-hover: var(--pw-neutral-850);
+  --pw-strong-pressed: var(--pw-neutral-975);
   --pw-on-strong: var(--pw-neutral-0);
-  --pw-focus: var(--pw-neutral-700);
+  --pw-focus: var(--pw-neutral-800);
   --pw-danger: #A03F39;
   --pw-danger-surface: #FBF0EE;
   --pw-danger-border: #E9C8C3;
   --pw-warning: #80561F;
   --pw-warning-surface: #FAF4E9;
-  --pw-success: var(--pw-neutral-700);
-  --pw-success-surface: var(--pw-neutral-100);
+  --pw-success: var(--pw-neutral-800);
+  --pw-success-surface: var(--pw-inset);
   /* One spacing language across navigation, reading and management screens.
    * Dense editors and native viewports retain their own bounded geometry. */
   --pw-gap-related: 8px;
@@ -61,11 +66,12 @@
   --pw-control-target: 44px;
   --pw-radius-control: 14px;
   --pw-radius-popover: 20px;
-  --pw-shadow-input: 0 1px 2px rgb(0 0 0 / 3%), 0 6px 20px rgb(0 0 0 / 3.5%);
-  --pw-shadow-input-shape: drop-shadow(0 1px 2px rgb(0 0 0 / 2%)) drop-shadow(0 4px 10px rgb(0 0 0 / 3%));
+  --pw-shadow-input: none;
+  --pw-shadow-composer: 0 1px 2px rgb(0 0 0 / 3%), 0 6px 20px rgb(0 0 0 / 3.5%);
+  --pw-shadow-composer-shape: drop-shadow(0 1px 2px rgb(0 0 0 / 2%)) drop-shadow(0 4px 10px rgb(0 0 0 / 3%));
   --pw-shadow-surface: none;
   --pw-shadow-indicator: 0 1px 3px rgb(0 0 0 / 5%);
-  --pw-shadow-floating: 0 2px 6px rgb(0 0 0 / 3%), 0 12px 32px -8px rgb(0 0 0 / 14%);
+  --pw-shadow-floating: 0 2px 8px -2px rgb(0 0 0 / 8%), 0 16px 40px -12px rgb(0 0 0 / 18%);
   --pw-shadow-sheet: 0 20px 54px -20px rgb(0 0 0 / 20%);
 
   /* BoardUI semantic aliases also reach its portaled menus. */
@@ -73,6 +79,7 @@
   --font-sans: var(--pw-font);
   --font-mono-source: var(--pw-mono);
   --color-text-primary: var(--pw-ink);
+  --color-accent-400: var(--pw-strong-hover);
   --color-accent-500: var(--pw-strong);
   --color-accent-600: var(--pw-strong);
   --color-text-secondary: var(--pw-copy);
@@ -86,21 +93,24 @@
   --color-background-full: var(--pw-surface);
   --color-background-primary-default: var(--pw-surface);
   --color-background-primary-hover: var(--pw-hover);
-  --color-background-primary-active: var(--pw-selected);
+  --color-background-primary-active: var(--pw-pressed);
   --color-background-primary-disabled: var(--pw-inset);
   --color-background-secondary-default: var(--pw-inset);
   --color-background-tertiary-default: var(--pw-inset);
-  --color-background-tertiary-hover: var(--pw-selected);
+  --color-background-tertiary-hover: var(--pw-hover);
   --color-input-disabled-background: var(--pw-inset);
   --color-border-button-default: var(--pw-edge);
   --color-border-button-hover: var(--pw-edge-hover);
   --color-border-button-active: transparent;
   --color-border-focus-ring: var(--pw-focus);
+  --color-border-checkbox-default: var(--pw-control-edge);
+  --color-border-checkbox-hover: var(--pw-focus);
+  --color-control-indicator-background: var(--pw-on-strong);
   --color-separator-border: var(--pw-edge);
   --color-dropdown-item-hover-background: var(--pw-hover);
   --color-button-ghost-background: transparent;
   --color-button-ghost-hover: var(--pw-hover);
-  --color-button-ghost-active: var(--pw-selected);
+  --color-button-ghost-active: var(--pw-pressed);
   --color-button-ghost-foreground: var(--pw-copy);
   --color-button-ghost-disabled: transparent;
   --color-button-ghost-disabled-foreground: var(--pw-disabled);
@@ -111,7 +121,7 @@
   --color-text-error-placeholder: var(--pw-muted);
   --color-tab-count-selected-background: var(--pw-selected);
   --color-segmented-control-background: var(--pw-inset);
-  --color-segmented-control-selected-background: var(--pw-floating);
+  --color-segmented-control-selected-background: var(--pw-selection-surface);
   --radius-2lg: var(--pw-radius-control);
   --shadow-xs: none;
   --shadow-card: none;
@@ -192,7 +202,7 @@
   --au-text: var(--pw-ink);
   --au-muted: var(--pw-muted);
   --au-subtle: var(--pw-inset);
-  --au-hover: var(--pw-selected);
+  --au-hover: var(--pw-hover);
   --au-border: var(--pw-edge);
   --au-strong: var(--pw-strong);
   --au-blue: var(--pw-copy);
@@ -204,7 +214,7 @@
 }
 .pw-library :is(.afa-popover, .afa-tooltip, .acc-popover) {
   border: 0;
-  background: var(--pw-inset);
+  background: var(--pw-floating);
   box-shadow: var(--pw-shadow-floating);
 }
 
@@ -227,7 +237,17 @@
 :is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) .button-press-motion.bg-button-primary,
 :is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) .button-press-motion.bg-button-danger {
   background: var(--pw-strong);
-  color: #fff;
+  color: var(--pw-on-strong);
+}
+@media (hover: hover) and (pointer: fine) {
+  :is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown)
+    :is(.button-press-motion.bg-button-primary, .button-press-motion.bg-button-danger):hover:not(:disabled, [aria-disabled="true"]) {
+    background: var(--pw-strong-hover);
+  }
+}
+:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown)
+  :is(.button-press-motion.bg-button-primary, .button-press-motion.bg-button-danger):active:not(:disabled, [aria-disabled="true"]) {
+  background: var(--pw-strong-pressed);
 }
 :is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) .button-press-motion.bg-button-primary:disabled,
 :is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) .button-press-motion.bg-button-danger:disabled {
@@ -249,7 +269,7 @@
 }
 .pw-library .afa-primary, :is(.pw-app, .pw-drawer) .acc-btn-primary {
   background: var(--pw-strong) !important;
-  color: #fff !important;
+  color: var(--pw-on-strong) !important;
 }
 .pw-library :is(.afa-btn, .afa-iconbtn):disabled {
   opacity: .5;
@@ -274,7 +294,10 @@
   color: var(--pw-copy);
 }
 :is(.pw-app, .pw-drawer, .pw-secondary, .pw-settings-dialog, .shadow-dropdown) [data-pw-icon-button]:hover {
-  background: var(--pw-inset);
+  background: var(--pw-hover);
+}
+:is(.pw-app, .pw-drawer, .pw-secondary, .pw-settings-dialog, .shadow-dropdown) [data-pw-icon-button]:active:not(:disabled) {
+  background: var(--pw-pressed);
 }
 :is(.pw-app, .pw-drawer, .pw-secondary, .pw-settings-dialog, .shadow-dropdown) [data-pw-icon-button]:focus-visible {
   outline: 2px solid var(--pw-focus);
@@ -297,10 +320,6 @@
   background: var(--pw-selected);
   box-shadow: none;
 }
-:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) :is([data-input-size], .pw-combobox-field) > :is([role="group"], [role="presentation"]):has(:focus-visible) {
-  outline: 2px solid var(--pw-focus);
-  outline-offset: 2px;
-}
 :is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) :is([data-input-size], .pw-combobox-field) :is(input, textarea) {
   font-family: var(--pw-font);
   font-size: 14px;
@@ -310,7 +329,13 @@
   outline: none;
 }
 :is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) :is([data-input-size], .pw-combobox-field) :is([role="group"], [role="presentation"])[data-invalid] {
-  background: var(--pw-selected);
+  background: var(--pw-danger-surface);
+  outline: 1px solid var(--pw-danger);
+  outline-offset: 0;
+}
+:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) :is([data-input-size], .pw-combobox-field) > :is([role="group"], [role="presentation"]):has(:focus-visible) {
+  outline: 2px solid var(--pw-focus);
+  outline-offset: 2px;
 }
 :is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) :is([data-input-size], .pw-combobox-field) :is([role="group"], [role="presentation"])[data-disabled] {
   border-color: var(--pw-edge);
@@ -359,15 +384,15 @@
   font: 400 14px/22px var(--pw-font);
 }
 /* Selected radio/checkbox layers keep source cross-fade/scale and check glyphs. */
-:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) :is(.pw-radio-option, label:has(input[type="checkbox"])) .bg-gradient-to-b {
+:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) :is(.pw-radio-option, label:has(input[type="checkbox"])) :is(.bg-gradient-to-b, .bg-linear-to-b) {
   background-image: none;
   background-color: var(--pw-strong);
   box-shadow: none;
 }
 :is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown)
   :is(.pw-radio-option, label:has(input[type="checkbox"])) .border-border-checkbox-default {
-  border: 0;
-  background-color: var(--pw-selected);
+  border: 1px solid var(--pw-control-edge);
+  background-color: var(--pw-surface);
   box-shadow: none;
 }
 
@@ -375,7 +400,7 @@
 .shadow-dropdown {
   border: 0;
   border-radius: var(--pw-radius-popover);
-  background-color: var(--pw-inset);
+  background-color: var(--pw-floating);
   box-shadow: var(--pw-shadow-floating);
   font-family: var(--pw-font);
   font-size: 14px;
@@ -391,6 +416,12 @@
   background: var(--pw-selected);
   color: var(--pw-ink);
   font-weight: 500;
+}
+.shadow-dropdown :is([role="option"], [role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"])[data-hovered]:not([data-selected], [data-disabled]) {
+  background: var(--pw-hover);
+}
+.shadow-dropdown :is([role="option"], [role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"])[data-pressed]:not([data-disabled]) {
+  background: var(--pw-pressed);
 }
 .shadow-dropdown :is([role="option"], [role="menuitem"])[data-disabled] {
   color: var(--pw-disabled);
@@ -622,7 +653,7 @@
   box-shadow: none;
 }
 .pw-drawer, .pw-settings-dialog { border: 0; background: var(--pw-surface); box-shadow: var(--pw-shadow-sheet); }
-:is(.pw-error, .pw-banner, .pw-banner-error, .pw-field-error, .pw-background-attention) {
+:is(.pw-banner:not(.pw-banner-error), .pw-background-attention) {
   border: 0;
   border-radius: 10px;
   background: var(--pw-inset);
@@ -671,5 +702,5 @@
   bottom: 4px;
   height: auto;
   border-radius: 9px;
-  background: var(--pw-inset);
+  background: var(--pw-selection-surface);
 }

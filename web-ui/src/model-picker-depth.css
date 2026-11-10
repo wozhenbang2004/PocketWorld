@@ -30,7 +30,7 @@
 .pw-drawer.pw-model-drawer :is(.pw-model-source, .pw-model-filter) [role="radiogroup"] { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px; padding: 3px; border: 0; border-radius: 15px; background: var(--pw-inset); }
 .pw-drawer.pw-model-drawer :is(.pw-model-source, .pw-model-filter) .pw-radio-option { display: flex; justify-content: center; min-width: 0; min-height: 44px; padding: 8px; border: 0; border-radius: 12px; color: var(--pw-copy); }
 .pw-drawer.pw-model-drawer :is(.pw-model-source, .pw-model-filter) .pw-radio-option > span[aria-hidden] { display: none; }
-.pw-drawer.pw-model-drawer :is(.pw-model-source, .pw-model-filter) .pw-radio-option[data-selected] { background: var(--pw-surface); color: var(--pw-ink); box-shadow: var(--pw-shadow-surface); }
+.pw-drawer.pw-model-drawer :is(.pw-model-source, .pw-model-filter) .pw-radio-option[data-selected] { background: var(--pw-selection-surface); color: var(--pw-ink); box-shadow: var(--pw-shadow-surface); }
 .pw-drawer.pw-model-drawer :is(.pw-model-source, .pw-model-filter) .pw-option-copy { text-align: center; font: 500 13px/20px var(--pw-font); overflow-wrap: anywhere; }
 .pw-drawer.pw-model-drawer .pw-model-filter { padding: 4px 0 12px; }
 .pw-drawer.pw-model-drawer .pw-model-filter [role="radiogroup"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }

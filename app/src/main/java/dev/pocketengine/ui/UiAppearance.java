@@ -19,6 +19,7 @@ public final class UiAppearance {
     }
     public static boolean dark(Context context){String mode=mode(preferences(context));return "dark".equals(mode)||"system".equals(mode)&&(context.getResources().getConfiguration().uiMode&Configuration.UI_MODE_NIGHT_MASK)==Configuration.UI_MODE_NIGHT_YES;}
     public static int theme(Context context){return dark(context)?R.style.AppTheme_Dark:R.style.AppTheme_Light;}
+    public static int canvas(Context context){return canvas(context,"workspace");}
     public static int surface(Context context){return dark(context)?0xff1c1c1c:0xffffffff;}
     /** Only these bundled page roles may color the native safe area. */
     public static int canvas(Context context,String role){
@@ -37,7 +38,7 @@ public final class UiAppearance {
     public static int warning(Context context){return dark(context)?0xfff3aaa5:0xffa03f39;}
     /** Only native app chrome. Web documents, screenshots and media pixels retain their own colors. */
     public static void window(Activity activity){
-        windowColor(activity,surface(activity));
+        windowColor(activity,canvas(activity));
     }
     /** The main Web host owns its window and inset padding; embedded browser hosts do not. */
     public static void window(Activity activity,String canvasRole){

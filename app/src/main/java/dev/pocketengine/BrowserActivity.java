@@ -158,7 +158,7 @@ public final class BrowserActivity extends ComponentActivity {
         if(chromeNavigationUnconfirmed)chromeOutcomeNotice="有一项浏览操作的回执未确认，请核对当前页与原任务；不会自动重试。";
         getOnBackPressedDispatcher().addCallback(this,new OnBackPressedCallback(true){@Override public void handleOnBackPressed(){handleBrowserBack();}});
         getWindow().setDecorFitsSystemWindows(false);UiAppearance.window(this);
-        LinearLayout page=new LinearLayout(this);page.setOrientation(LinearLayout.VERTICAL);page.setBackgroundColor(UiAppearance.surface(this));
+        LinearLayout page=new LinearLayout(this);page.setOrientation(LinearLayout.VERTICAL);page.setBackgroundColor(UiAppearance.canvas(this));
         page.setOnApplyWindowInsetsListener((view,insets)->{Insets bars=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout()),keyboard=insets.getInsets(WindowInsets.Type.ime());browserImeVisible=insets.isVisible(WindowInsets.Type.ime());if(browserChrome!=null)browserChrome.insetsChanged(browserImeVisible);view.setPadding(bars.left,bars.top,bars.right,Math.max(bars.bottom,keyboard.bottom));return insets;});
         page.setTag("browser_root");
         browserContainer=new android.widget.FrameLayout(this);try{profiles=BrowserProfiles.get(this);}catch(Exception unavailable){profileError="浏览器资料无法读取，请先核对设置";}createWebView();
@@ -1257,7 +1257,7 @@ public final class BrowserActivity extends ComponentActivity {
     }
     private void refreshChromeAppearance(){
         UiAppearance.window(this);View root=getWindow().getDecorView().findViewWithTag("browser_root");
-        if(root!=null){root.setBackgroundColor(UiAppearance.surface(this));colorNativeChrome(root);}if(browserChrome!=null){browserChrome.insetsChanged(browserImeVisible);browserChrome.refresh();}
+        if(root!=null){root.setBackgroundColor(UiAppearance.canvas(this));colorNativeChrome(root);}if(browserChrome!=null){browserChrome.insetsChanged(browserImeVisible);browserChrome.refresh();}
     }
     private void colorNativeChrome(View view){
         if(view instanceof WebView)return;

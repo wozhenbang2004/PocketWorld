@@ -45,9 +45,10 @@
  background: var(--pw-ink);
  box-shadow: 0 0 0 2px var(--pw-canvas-chat);
 }
-.pw-app .pw-chat-navigation .pw-chat-glass-trigger:is([aria-expanded="true"], [data-pressed], :active) {
+.pw-app .pw-chat-navigation .pw-chat-glass-trigger[aria-expanded="true"] {
  background: var(--pw-selected);
 }
+.pw-app .pw-chat-navigation .pw-chat-glass-trigger:is([data-pressed], :active):not(:disabled) { background: var(--pw-pressed); }
 .pw-app .pw-chat-navigation .pw-chat-glass-trigger:is(:focus-visible, [data-focus-visible]) {
  outline: 2px solid var(--pw-focus);
  outline-offset: -3px;
@@ -85,7 +86,7 @@
 .pw-chat-menu-actions > .button-press-motion > span { flex: 1; min-width: 0; padding: 0; justify-content: flex-start; gap: 10px; white-space: normal; text-align: start; }
 .pw-chat-menu-actions > .button-press-motion:disabled { opacity: .45; }
 .pw-chat-menu-actions > .button-press-motion:hover:not(:disabled) { background: var(--pw-floating-hover); }
-.pw-chat-menu-actions > .button-press-motion:is(:active, [data-pressed]):not(:disabled) { background: var(--pw-floating-selected); }
+.pw-chat-menu-actions > .button-press-motion:is(:active, [data-pressed]):not(:disabled) { background: var(--pw-floating-pressed); }
 .pw-chat-menu-unread { margin-left: auto; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--pw-copy); }
 @media (hover: hover) and (pointer: fine) {
  .pw-app .pw-chat-navigation .pw-chat-glass-trigger:hover:not(:disabled):not([aria-expanded="true"]):not(:active) { background: var(--pw-hover); }

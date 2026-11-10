@@ -93,11 +93,12 @@
   --pw-inset: var(--pw-floating-inset);
   --pw-hover: var(--pw-floating-hover);
   --pw-selected: var(--pw-floating-selected);
+  --pw-pressed: var(--pw-floating-pressed);
   --color-dropdown-item-hover-background: var(--pw-floating-hover);
   --color-background-primary-hover: var(--pw-floating-hover);
-  --color-background-primary-active: var(--pw-floating-selected);
+  --color-background-primary-active: var(--pw-floating-pressed);
   --color-button-ghost-hover: var(--pw-floating-hover);
-  --color-button-ghost-active: var(--pw-floating-selected);
+  --color-button-ghost-active: var(--pw-floating-pressed);
   background: var(--pw-floating);
 }
 @media (min-width: 1024px) {
@@ -105,16 +106,18 @@
 }
 
 /* Failure/warning are semantic exceptions, never the product accent. */
-.pw-redesign :is(.pw-error, .pw-banner-error),
-.pw-secondary .pw-error {
+:is(.pw-app, .pw-secondary, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) :is(.pw-error, .pw-banner-error) {
+  border: 0;
+  border-radius: 14px;
   background: var(--pw-danger-surface);
-  border-color: var(--pw-danger-border);
+  color: var(--pw-danger);
+  box-shadow: none;
+}
+:is(.pw-app, .pw-secondary, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) .pw-field-error {
+  background: transparent;
   color: var(--pw-danger);
 }
-.pw-redesign .pw-banner-error {
-  border-left: 3px solid var(--pw-danger);
-}
-:where(.pw-redesign, .pw-secondary) :is(.pw-field-error, [data-task-status="failed"], [data-task-status="error"]) {
+:where(.pw-app, .pw-secondary, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) :is([data-task-status="failed"], [data-task-status="error"]) {
   color: var(--pw-danger);
 }
 .pw-redesign .pw-task-state-dot:is([data-state="failed"], [data-state="error"]) {
@@ -125,10 +128,6 @@
 :where(.pw-redesign, .pw-secondary) :is(button, a, input, textarea, select, [role="option"]):focus-visible {
   outline: 2px solid var(--pw-focus);
   outline-offset: 3px;
-}
-@media (prefers-contrast: more) {
-  :root:not(.dark) { --pw-edge: var(--pw-neutral-500); --pw-edge-hover: var(--pw-neutral-700); --pw-focus: var(--pw-neutral-975); }
-  :root.dark { --pw-edge: var(--pw-neutral-400); --pw-edge-hover: var(--pw-neutral-300); --pw-focus: var(--pw-neutral-0); }
 }
 @media (prefers-reduced-motion: reduce) {
   .pw-redesign :is(.pw-task-row.button-press-motion, .pw-file-open),

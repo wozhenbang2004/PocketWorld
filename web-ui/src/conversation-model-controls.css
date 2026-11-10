@@ -112,7 +112,9 @@
 /* Model name, source and availability remain readable at narrow widths. */
 .pw-model-selection-picker .pw-ai-model-option { display: flex; align-items: center; gap: 0; min-width: 0; border: 0; border-radius: 14px; background: transparent; }
 .pw-model-selection-picker .pw-ai-model-option[data-selected] { background: var(--pw-selected); }
-.pw-model-selection-picker .pw-ai-model-option[data-selected] > .pw-ai-model-row:hover { background: transparent; }
+.pw-conversation-model-picker .pw-ai-model-option[data-selected] > .pw-ai-model-row { background: transparent; }
+.pw-conversation-model-picker .pw-ai-model-option > .pw-ai-model-row:active:not(:disabled) { background: var(--pw-pressed); }
+.pw-model-selection-picker .pw-ai-model-option[data-selected] > .pw-ai-model-row:hover:not(:active, [data-pressed]) { background: transparent; }
 .pw-model-selection-picker .pw-ai-model-option > .pw-ai-model-row { flex: 1 1 auto; min-width: 0; width: auto; min-height: 64px; padding: 11px 12px; border-radius: 14px; }
 .pw-model-selection-picker .pw-ai-model-option > button:last-child:not(.pw-ai-model-row) { flex: 0 0 44px; width: 44px; min-width: 44px; height: 44px; min-height: 44px; padding: 12px; border: 0; border-radius: 12px; color: var(--pw-muted); background: transparent; box-shadow: none; }
 .pw-model-selection-picker .pw-ai-model-option > button:last-child:not(.pw-ai-model-row):is(:hover, :focus-visible):not(:disabled) { background: var(--pw-hover); }

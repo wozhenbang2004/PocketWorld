@@ -6,36 +6,42 @@
   --pw-canvas-workspace: var(--pw-neutral-1000);
   --pw-canvas: var(--pw-canvas-workspace);
   --pw-surface: var(--pw-neutral-950);
-  --pw-floating: var(--pw-neutral-850);
+  --pw-floating: var(--pw-neutral-900);
   --pw-floating-inset: var(--pw-neutral-950);
-  --pw-floating-hover: var(--pw-neutral-800);
-  --pw-floating-selected: var(--pw-neutral-700);
-  --pw-inset: var(--pw-neutral-850);
+  --pw-floating-hover: var(--pw-neutral-850);
+  --pw-floating-selected: var(--pw-neutral-800);
+  --pw-floating-pressed: var(--pw-neutral-800);
+  --pw-inset: var(--pw-neutral-900);
+  --pw-selection-surface: var(--pw-neutral-850);
   --pw-selected: var(--pw-neutral-800);
   --pw-hover: var(--pw-neutral-850);
+  --pw-pressed: var(--pw-neutral-800);
   --pw-danger: #F3AAA5;
   --pw-danger-surface: #352523;
   --pw-danger-border: #74403C;
   --pw-warning: #F0C48A;
   --pw-warning-surface: #33291E;
   --pw-success: var(--pw-neutral-200);
-  --pw-success-surface: var(--pw-neutral-850);
+  --pw-success-surface: var(--pw-inset);
   --pw-edge-hover: transparent;
   --pw-edge: transparent;
-  --pw-ink: var(--pw-neutral-100);
+  --pw-control-edge: var(--pw-neutral-500);
+  --pw-ink: var(--pw-neutral-50);
   --pw-copy: var(--pw-neutral-300);
-  --pw-muted: var(--pw-neutral-350);
-  --pw-disabled: var(--pw-neutral-400);
+  --pw-muted: var(--pw-neutral-400);
+  --pw-disabled: var(--pw-neutral-500);
   --pw-strong: var(--pw-neutral-100);
-  --pw-focus: var(--pw-neutral-200);
+  --pw-strong-hover: var(--pw-neutral-0);
+  --pw-strong-pressed: var(--pw-neutral-200);
+  --pw-focus: var(--pw-neutral-300);
   --pw-on-strong: var(--pw-neutral-975);
   --ovio-on-accent: var(--pw-on-strong);
-  --pw-shadow-input: 0 1px 3px rgb(0 0 0 / 12%), 0 8px 22px -6px rgb(0 0 0 / 22%);
-  --pw-shadow-input-shape: drop-shadow(0 1px 2px rgb(0 0 0 / 10%)) drop-shadow(0 4px 10px rgb(0 0 0 / 16%));
+  --pw-shadow-input: none;
+  --pw-shadow-composer: 0 1px 3px rgb(0 0 0 / 12%), 0 8px 22px -6px rgb(0 0 0 / 22%);
+  --pw-shadow-composer-shape: drop-shadow(0 1px 2px rgb(0 0 0 / 10%)) drop-shadow(0 4px 10px rgb(0 0 0 / 16%));
   --pw-shadow-surface: none;
   --pw-shadow-indicator: 0 1px 3px rgb(0 0 0 / 18%);
-  --color-segmented-control-selected-background: var(--pw-selected);
-  --pw-shadow-floating: 0 16px 48px -12px rgb(0 0 0 / 32%);
+  --pw-shadow-floating: 0 2px 8px rgb(0 0 0 / 20%), 0 16px 40px -12px rgb(0 0 0 / 40%);
   --pw-shadow-sheet: 0 18px 64px -16px rgb(0 0 0 / 36%);
   --background: var(--pw-surface);
   --foreground: var(--pw-ink);
@@ -68,7 +74,7 @@
   border-color: transparent;
 }
 :root.dark .pw-redesign .pw-active-bar { background: transparent; }
-:root.dark :is(.pw-error, .pw-banner, .pw-banner-error, .pw-project-thumbnail,
+:root.dark :is(.pw-banner:not(.pw-banner-error), .pw-project-thumbnail,
   .pw-work-drawer .pw-work-search > button) {
   background: var(--pw-inset);
   color: var(--pw-ink);

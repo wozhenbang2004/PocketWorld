@@ -6,7 +6,7 @@
 .pw-task-collection-tools { position: sticky; top: 0; z-index: 2; margin: 0 0 var(--pw-gap-section); padding: 8px 0 12px; background: var(--pw-canvas); }
 .pw-task-status-filters { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 2px; padding: 3px; background: var(--pw-inset); border-radius: 14px; }
 .pw-redesign .pw-task-status-filters > button { height: auto; min-height: 48px; min-width: 0; padding: 8px 4px; border-radius: 11px; font-size: 13px; line-height: 20px; color: var(--pw-copy); }
-.pw-redesign .pw-task-status-filters > button[aria-pressed="true"] { color: var(--pw-ink); background: var(--pw-surface); box-shadow: var(--pw-shadow-surface); font-weight: 600; }
+.pw-redesign .pw-task-status-filters > button[aria-pressed="true"] { color: var(--pw-ink); background: var(--pw-selection-surface); box-shadow: var(--pw-shadow-surface); font-weight: 600; }
 .pw-task-status-filters > button > span { padding: 0; }
 .pw-depth-tasks .pw-task-filters { padding-top: var(--pw-gap-control); }
 .pw-depth-tasks .pw-task-list-tools > button { width: 48px; min-width: 48px; height: 48px; }

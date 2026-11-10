@@ -15,12 +15,11 @@
   overflow: hidden;
   border: 0;
   border-radius: 0;
-  background: var(--pw-canvas);
+  background: var(--pw-canvas-chat);
   color: var(--pw-ink);
   box-shadow: none;
   isolation: isolate;
 }
-.pw-app[data-route="chat"] .pw-main-workspace { background: var(--pw-canvas); }
 .pw-conversation-scroll {
   position: relative;
   flex: 1;
@@ -105,7 +104,7 @@
 .pw-start-heading { display: grid; gap: 8px; }
 .pw-start h2 { margin: 0; max-width: 100%; color: var(--pw-ink); font: 550 25px/1.45 var(--pw-font); letter-spacing: -.025em; text-wrap: balance; }
 .pw-start p { margin: 0; max-width: 320px; color: var(--pw-copy); font: 400 14px/23px var(--pw-font); }
-.pw-start .pw-start-model.button-press-motion { min-height: 44px; height: auto; padding: 10px 14px; gap: 9px; border: 0; border-radius: 14px; background: var(--pw-inset); box-shadow: none; color: var(--pw-ink); font: 500 14px/22px var(--pw-font); }
+.pw-start .pw-start-model.button-press-motion { min-height: 44px; height: auto; padding: 10px 14px; gap: 9px; border: 0; border-radius: 14px; box-shadow: none; font: 500 14px/22px var(--pw-font); }
 .pw-start .pw-start-model.button-press-motion > span { padding: 0; }
 .pw-start .pw-start-model.button-press-motion > svg { width: 18px; height: 18px; }
 .pw-start-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; max-width: 100%; margin: 0 0 0 -10px; }
@@ -348,7 +347,7 @@ html[data-pocket-native-insets="true"] .pw-work-drawer.pw-navigation-drawer { pa
 .pw-navigation-more > svg { width: 22px; height: 22px; flex: none; }
 .pw-navigation-more[data-selected="true"] { color: var(--pw-ink); background: var(--pw-inset); }
 .pw-navigation-more[data-has-unread="true"]::after { content: ''; width: 5px; height: 5px; margin-left: auto; flex: none; border-radius: 50%; background: var(--pw-copy); }
-.pw-navigation-more-popover { width: 252px; border: 0; background: var(--pw-surface); color: var(--pw-ink); box-shadow: var(--pw-shadow-sheet); overflow-y: auto; overscroll-behavior: contain; }
+.pw-navigation-more-popover { width: 252px; border: 0; background: var(--pw-floating); color: var(--pw-ink); box-shadow: var(--pw-shadow-floating); overflow-y: auto; overscroll-behavior: contain; }
 .pw-navigation-more-dialog { gap: 4px; padding: 4px; }
 .pw-navigation-more-dialog .pw-work-sidebar { padding: 0; gap: 0; }
 .pw-navigation-more-dialog .pw-work-sidebar nav section { margin: 0; }

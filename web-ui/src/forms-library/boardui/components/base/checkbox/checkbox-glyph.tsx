@@ -56,11 +56,11 @@ export function CheckboxGlyph({
     >
       <svg viewBox="0 0 16 16" fill="none" className={s.glyph}>
         {isIndeterminate ? (
-          <path d="M4.5 8H8H11.5" stroke="white" strokeWidth="2" strokeLinecap="round" />
+          <path d="M4.5 8H8H11.5" stroke="var(--color-control-indicator-background, white)" strokeWidth="2" strokeLinecap="round" />
         ) : isSelected ? (
           <path
             d="M4 7.7002L6.64645 10.3466C6.84171 10.5419 7.15829 10.5419 7.35355 10.3466L12 5.7002"
-            stroke="white"
+            stroke="var(--color-control-indicator-background, white)"
             strokeWidth="2"
             strokeLinecap="round"
             strokeLinejoin="round"

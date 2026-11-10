@@ -307,7 +307,7 @@ internal class PocketWebHost private constructor(
     private fun applyWorkspaceBackground() {
         val ownsWindow = ownsSystemInsets && activity is ComposeActivity
         val color = if (ownsWindow) UiAppearance.canvas(activity, canvasRole)
-            else if (UiAppearance.dark(activity)) Color.rgb(18, 18, 18) else Color.rgb(245, 245, 245)
+            else UiAppearance.canvas(activity)
         if (appliedBackgroundColor == color) return
         appliedBackgroundColor = color
         view.setBackgroundColor(color)

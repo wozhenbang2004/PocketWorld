@@ -47,7 +47,7 @@
 .pw-background-progress li { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; font-size: 12px; line-height: 1.5; color: var(--pw-muted,#777); }
 .pw-background-progress li > span:first-child { display: grid; place-items: center; width: 24px; height: 24px; background: var(--pw-inset,#ededed); border-radius: 8px; font-size: 12px; }
 .pw-background-progress li[aria-current="step"] { color: var(--pw-ink,#333); font-weight: 500; }
-.pw-background-progress li[aria-current="step"] > span:first-child { background: var(--pw-panel,#fff); box-shadow: 0 1px 5px #00000008; }
+.pw-background-progress li[aria-current="step"] > span:first-child { background: var(--pw-selection-surface); box-shadow: var(--pw-shadow-surface); }
 .pw-background-progress li[data-complete="true"] { color: var(--pw-copy,#555); }
 .pw-background-status-actions { display: flex; gap: var(--pw-gap-control,12px); flex-wrap: wrap; margin-bottom: 12px; }
 .pw-background-status-actions button { min-height: 48px; font-size: 13px; }
@@ -55,7 +55,7 @@
 .pw-secondary-refactor .pw-background-tabs { gap: var(--pw-gap-content,16px); margin-top: var(--pw-gap-section,28px); }
 .pw-secondary-refactor .pw-background-tabs [role="tablist"] { border: 0; gap: 4px; }
 .pw-secondary-refactor .pw-background-tabs [role="tab"] { min-height: 48px; padding: 10px 12px; border-radius: 11px; color: var(--pw-copy,#656565); font-size: 13px; }
-.pw-secondary-refactor .pw-background-tabs [role="tab"][data-selected] { background: var(--pw-panel,#fff); color: var(--pw-ink,#292929); box-shadow: 0 1px 5px #00000007; }
+.pw-secondary-refactor .pw-background-tabs [role="tab"][data-selected] { background: var(--pw-selection-surface); color: var(--pw-ink); box-shadow: var(--pw-shadow-surface); }
 .pw-secondary-refactor .pw-background-tabs [role="tab"] > span { color: inherit; }
 .pw-secondary-refactor .pw-background-tabs > div:first-child > span[aria-hidden] { display: none; }
 .pw-background-tabs [role="tabpanel"] { min-width: 0; }

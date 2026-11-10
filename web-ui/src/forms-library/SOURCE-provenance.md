@@ -7,3 +7,7 @@ Copyright Mertcan Dundar Esmergul / BoardUI. Original notices are retained.
 Some components are independent implementations or adaptations. No license for
 reference screenshots, videos, brand artwork, or non-free source is implied.
 See the retained upstream licenses and the project third-party notices.
+
+2026-11-10: the retained `CheckboxGlyph` tick and indeterminate paths now use
+the product-mapped `--color-control-indicator-background` instead of fixed white.
+Geometry, check drawing, state handling and the original source remain unchanged.

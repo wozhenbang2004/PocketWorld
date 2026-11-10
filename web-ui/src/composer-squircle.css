@@ -4,7 +4,7 @@
 .pw-composer-host.pw-squircle-composer {
   --pw-composer-hit: 44px;
   --pw-composer-rail: var(--pw-inset);
-  --pw-composer-shadow: var(--pw-shadow-input);
+  --pw-composer-shadow: var(--pw-shadow-composer);
   min-width: 0;
   width: 100%;
 }
@@ -102,7 +102,7 @@
   display: block;
   overflow: visible;
   pointer-events: none;
-  filter: var(--pw-shadow-input-shape);
+  filter: var(--pw-shadow-composer-shape);
 }
 .pw-composer-host.pw-squircle-composer .pw-continuous-surface path { fill: var(--pw-surface); }
 .pw-composer-host.pw-squircle-composer .pw-continuous-surface[data-tone="context"] { filter: none; }
