@@ -240,7 +240,7 @@ internal class PocketWebBridge(
             "projects.refresh", "projects.select", "projects.create", "projects.open", "projects.newFile", "projects.edit", "projects.save", "projects.close", "projects.history", "projects.revision", "projects.useRevision", "projects.retry",
             "settings.reviewModelTransport", "settings.saveLocalObservation", "settings.openSystem", "settings.openBrowser", "settings.openAppUpdates",
             "connections.enter", "connections.leave", "models.snapshot", "models.review", "models.select", "models.connection.add", "models.connection.edit", "models.connection.test", "models.connection.select", "devices.snapshot", "history.read", "usage.read", "usage.task", "usage.trends", "usage.trends.close", "usage.close", "usage.reestimate", "trace.read", "trace.detail", "trace.close",
-            "phone.prepare", "phone.start", "phone.query", "phone.draft.edit", "phone.pause", "phone.resume", "phone.stop", "phone.deadline", "background.refresh", "background.discover", "background.cancel", "background.close", "background.pair", "background.connect", "background.mainScreen", "background.selectMainScreen",
+            "phone.prepare", "phone.start", "phone.query", "phone.draft.edit", "phone.draft.fromMessage", "phone.pause", "phone.resume", "phone.stop", "phone.deadline", "background.refresh", "background.discover", "background.cancel", "background.close", "background.pair", "background.connect", "background.mainScreen", "background.selectMainScreen",
             "queued.open", "queued.refresh", "queued.close", "queued.edit", "queued.change", "queued.save", "queued.editor.close",
             "accounts.beginLogin", "accounts.cancelLogin", "accounts.openAuthorization", "accounts.select", "accounts.refresh", "accounts.models", "accounts.retryPlanUsage", "accounts.model.review", "accounts.model.select", "accounts.logout.review", "accounts.logout.confirm", "accounts.setEnabled", "accounts.refreshAuthorization", "accounts.reauthorize", "accounts.acknowledgePlanWelcome", "accounts.manageUsage",
             "memory.list", "memory.search", "memoryReview.list", "memoryReview.getCandidate", "memoryReview.capacity", "memoryReview.history", "memoryReview.openSource",
@@ -922,6 +922,14 @@ internal class PocketWebBridge(
             if (action == "models.select") { selectModel(id, args); return }
             if (action in PocketWebAccountCommands.COMMANDS) { accountOwnerCommand(id, action, args); return }
             if (action in PocketWebModelConnectionCommands.COMMANDS) { modelConnection(id, action, args); return }
+            if (action == "phone.draft.fromMessage") {
+                check(section == null && taskViewId == null) { "请回到原对话准备手机目标" }
+                val result = phoneComposer.stageOriginalMessage(args)
+                controller.dismissError()
+                voiceInput.clear()
+                controller.voiceInputTypeChanged(phoneComposer.intent)
+                complete(id, result, null); publishState(); return
+            }
             if (action == "phone.prepare") { phoneComposer.prepare(id, args); return }
             if (action == "phone.start") { phoneComposer.start(id, args); return }
             if (action == "phone.query") { phoneComposer.query(id, args); return }

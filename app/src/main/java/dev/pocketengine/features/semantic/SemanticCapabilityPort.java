@@ -315,7 +315,12 @@ public final class SemanticCapabilityPort implements CapabilityPort {
                 .put("request",request.parameters()).put("requestDigest",request.digest()).put("expiresInMs",DISCOVERY_TTL_MS)
                 .put("candidates",candidates).put("truncated",found.size()>targets.size()).put("scope","visible_matching_exported_activities")
                 .put("dispatchAvailable",dispatchEnabled).put("verified",false).put("automaticFallback",false)
-                .put("fallback",request.followup()).put("message",!dispatchEnabled?"当前执行仅支持发现入口，不会启动应用或回落抢占手机主屏。":targets.isEmpty()?"未找到可核验的可见入口；可能未安装、不可见或链接未获批准，请检查phone/DOM路径":"入口来自当前Android包查询；标签是外部数据，仍需具体参数审批");
+                .put("fallback",request.followup()).put("message",!dispatchEnabled?"当前对话只能发现入口；启动应用需在原对话准备并审阅手机任务，不会自动抢占手机主屏。":targets.isEmpty()?"未找到可核验的可见入口；可能未安装、不可见或链接未获批准，请检查phone/DOM路径":"入口来自当前Android包查询；标签是外部数据，仍需具体参数审批");
+        if(!dispatchEnabled&&!request.calendarProvider())out.put("dispatchUnavailableReason","phone_dispatch_not_bound")
+                .put("nextAction","review_original_phone_execution").put("requiresPhoneTaskReview",true).put("launchDispatched",false)
+                .put("message","这里只完成了入口发现，尚未打开应用。若当前是主人私人对话，可在最新主人消息的“消息操作与来源”菜单选择“准备手机任务”，核对完整目标并审阅执行位置与范围；只准备草稿，不会自动启动或发送。若已在手机任务中，请核对原任务的执行位置、连接及权限，不要另建任务绕过限制。");
+        if(request.kind.equals("share_text"))out.put("recipientSelected",false).put("externalDeliveryVerified",false)
+                .put("deliveryBoundary","share_entry_is_not_recipient_selection_or_message_delivery");
         if(request.calendarWrite())out.put("scope","current_host_android_profile").put("eventCount",request.kind.equals("calendar_batch")?request.parameters().getJSONArray("events").length():1)
                 .put("message",targets.isEmpty()?"所选日历或事件当前不可写、已改变或已移除，请重新发现；尚未写入。":"准确日历及完整事件已绑定到本次发现；需要主人审批创建内容或修改前后内容、删除范围，才能调用一次系统批处理。");
         return out;

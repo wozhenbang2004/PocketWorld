@@ -63,6 +63,33 @@ internal class PocketWebPhoneComposer(
         phoneDraft = text; phoneDraftRevision++; clearReviews()
     }
 
+    /** Owner-selected original text only. Staging never creates a task or grants phone access. */
+    fun stageOriginalMessage(args: JSONObject): JSONObject {
+        checkedPayload(args, setOf("conversationId", "messageId", "sourceRevision", "epoch", "revision"))
+        check(!isClosed() && controller.webPrivateOwnerVisible() && !controller.hasChannelPhoneOrigin) { "请回到原私人对话准备手机任务" }
+        check(requiredInt(args, "epoch") == presentationEpoch && requiredLong(args, "revision") == phoneDraftRevision) { "手机草稿已变化，原文字仍保留" }
+        val conversation = requiredString(args, "conversationId")
+        check(conversation == controller.state.conversationId && controller.composerDraft?.conversationId == conversation) { "原对话已切换，没有复制其他对话的消息" }
+        check(!controller.state.chatSubmitting && !controller.state.chatBusy && !controller.state.phoneSubmitting && controller.state.activeTaskId == null) { "请先等原回复结束或处理当前任务，没有开始第二次执行" }
+        check(phoneStartReceipt?.optString("status") !in setOf("pending", "unknown")) { "原手机启动结果待核对，请先查询原请求" }
+        val id = requiredString(args, "messageId")
+        val message = controller.state.messages.firstOrNull { it.id == id } ?: error("原消息已不在当前对话，请重新打开")
+        check(controller.state.messages.lastOrNull { it.role == "user" }?.id == id) { "请从最新主人请求准备手机任务，避免恢复已被后续要求替代的目标" }
+        check(message.role == "user" && message.sourceRevision > 0 && message.sourceRevision == requiredLong(args, "sourceRevision")
+            && message.ownerOriginalLocator?.optString("conversationId") == conversation) { "请从这段私人对话中的原主人消息准备手机任务" }
+        check(message.textOnlyHandoffEligible && message.attachmentCount == 0 && message.attachments.isEmpty() && message.attachmentFiles.isEmpty()) { "这条请求含附件或来源/预览引用，或尚未核实完整资料，不能只复制文字；请在手机目标中整理完整任务、联系人和内容" }
+        val goal = message.content.trim()
+        require(goal.isNotEmpty() && goal.length <= 4000) { "手机任务目标需为 1–4000 字；请自行整理完整目标，不会截断原请求" }
+        check(phoneDraft.isBlank() || phoneDraft.trim() == goal) { "已有另一份手机草稿，请先保留或处理；没有覆盖原文字" }
+        phoneDraft = goal
+        phoneDraftRevision++
+        phoneIntent = true
+        phoneStartReceipt = null
+        clearReviews()
+        return snapshot().put("staged", true).put("taskCreated", false).put("executionStarted", false)
+            .put("message", "原请求已放入手机目标草稿。核对完整目标、联系人和内容，再审阅执行位置与范围；尚未启动或发送。")
+    }
+
     fun prepare(id: String, args: JSONObject) {
         checkedPayload(args, setOf("goal", "mode", "epoch"))
         require(controller.webPrivateOwnerVisible() && requiredInt(args, "epoch") == presentationEpoch) { "原手机输入窗口已变化，请重新核对保留草稿" }
@@ -226,6 +253,9 @@ internal class PocketWebPhoneComposer(
     }
     private fun requiredInt(args: JSONObject, name: String): Int {
         val value = args.opt(name); require(value is Number && value.toDouble().isFinite() && value.toDouble() == value.toInt().toDouble()) { "缺少有效整数参数 $name" }; return value.toInt()
+    }
+    private fun requiredLong(args: JSONObject, name: String): Long {
+        val value = args.opt(name); require((value is Int || value is Long) && (value as Number).toLong() >= 0) { "缺少有效修订参数 $name" }; return (value as Number).toLong()
     }
     private fun requiredBoolean(args: JSONObject, name: String): Boolean {
         val value = args.opt(name); require(value is Boolean) { "缺少有效开关参数 $name" }; return value
