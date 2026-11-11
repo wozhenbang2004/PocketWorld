@@ -14,6 +14,7 @@ public final class ModelRequestPolicy {
     public static void installHostSource(Source nativeSource) { source = Objects.requireNonNull(nativeSource); }
 
     public static ModelCatalog.View resolve(ModelConfig config) throws Exception {
+        OfficialImageModelPurpose.requireConversation(config);
         if (config.usesBedrock()) {
             if (config.capabilityBinding == null || config.catalogEnforced || config.awsSession == null)
                 throw new Rejected("bedrock_saved_session_required", "请先保存原 Bedrock 连接与临时凭据，再从该连接发起请求。");

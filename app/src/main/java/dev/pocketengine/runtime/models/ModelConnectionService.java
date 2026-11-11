@@ -331,6 +331,7 @@ public final class ModelConnectionService {
             catalog.bind(binding);ModelCatalog.View view=catalog.get(new ModelCatalog.ModelKey(binding,model),MAX_CATALOG_AGE_MILLIS);
             boolean compatible=view.endpointSupport()==null||view.endpointSupport().supports(binding.protocol());
             String unavailable=!profile.enabled?"connection_disabled":!compatible?"catalog_protocol_mismatch":"";
+            if(unavailable.isEmpty()&&OfficialImageModelPurpose.imageOnly(config.provider,config.baseUrl,model))unavailable=OfficialImageModelPurpose.REASON;
             if(unavailable.isEmpty()&&config.usesBedrock())unavailable=profile.secretSlot.isEmpty()?"credential_not_configured":System.currentTimeMillis()>=profile.credentialExpiresAtEpochMillis?"credential_expired":"";
             JSONObject row=view.toJson().put("connectionId",connectionId).put("connectionName",profile.name).put("connectionRevision",profile.revision)
                     .put("provider",config.provider).put("available",unavailable.isEmpty()).put("unavailableReason",unavailable);
@@ -371,6 +372,7 @@ public final class ModelConnectionService {
             if(strict)image=view.facts().imageInput().known&&Boolean.TRUE.equals(view.facts().imageInput().value);
             else if(view.facts().imageInput().known&&!Boolean.TRUE.equals(view.facts().imageInput().value))image=false;
             ModelConfig selected=new ModelConfig(current.baseUrl,current.apiKey,model,current.sendScreenshots,current.maxSteps,current.requestTimeoutSeconds,current.provider,output);
+            OfficialImageModelPurpose.requireConversation(selected);
             if(current.usesBedrock())selected=selected.withBedrockSession(current.bedrockRegion,current.awsSession);
             selected=selected.withCleartextConsent(current.cleartextConsent).withOwnerImageInput(image).withLocalObservation(current.localCaptureAllowed,current.localOcrAllowed)
                     .withProviderCompatibility(current.model.equals(model)?current.compatibility:null);
@@ -505,6 +507,7 @@ public final class ModelConnectionService {
             if(current.compatibility!=null&&!current.model.equals(model))throw new IllegalArgumentException("此来源保留了当前模型专属的兼容设置，请在此对话选择其他模型；运行中的任务会继续使用原设置");
             ModelConfig selection=new ModelConfig(current.baseUrl,current.apiKey,model,current.sendScreenshots,current.maxSteps,current.requestTimeoutSeconds,current.provider,output)
                     .withCleartextConsent(current.cleartextConsent).withNativeCatalog(expected,reasoning,imageTokenReserve).withProviderCompatibility(current.model.equals(model)?current.compatibility:null);
+            OfficialImageModelPurpose.requireConversation(selection);
             ModelCatalog.View view=resolve(selection);if(view.endpointSupport()!=null&&!view.endpointSupport().supports(expected.protocol()))throw new IllegalStateException("此目录模型明确声明使用其他协议；请修改原连接的协议或手动核对模型，原配置仍保留。");ModelRequestPolicy.validateOutput(selection,view.facts());
             settings.selectCatalogModel(expected,model,output,reasoning,imageTokenReserve);
             return snapshot();
@@ -569,6 +572,7 @@ public final class ModelConnectionService {
                         else if("expired".equals(profile.optString("credentialStatus")))reason="credential_expired";
                     }
                     if(reason.isEmpty()&&view.endpointSupport()!=null&&!view.endpointSupport().supports(binding.protocol()))reason="catalog_protocol_mismatch";
+                    if(reason.isEmpty()&&OfficialImageModelPurpose.imageOnly(profile.getString("provider"),profile.getString("baseUrl"),model))reason=OfficialImageModelPurpose.REASON;
                     try{ModelTargetRef.exact(binding.connectionId(),model);}catch(IllegalArgumentException invalid){reason="model_reference_not_supported";}
                     ModelSelectionPreferences.Key key=new ModelSelectionPreferences.Key(binding.connectionId(),model);ModelSelectionPreferences.Entry pref=modelPreferences.get(key);
                     JSONObject row=new JSONObject().put("connectionId",binding.connectionId()).put("connectionName",profile.getString("name")).put("connectionRevision",profile.getLong("revision"))

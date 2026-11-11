@@ -266,8 +266,10 @@ export function MediaWorkspace({ state, run, registerTransientBack }: { state: D
 
     <SettingsDialog isOpen={settingsOpen && !review} title="媒体服务配置" onClose={closeSettings}>{settings && <div className="pw-media-settings">
       <p className="pw-media-note">配置只在核对后保存。关闭时保留非密钥草稿，密钥不会回填或留在草稿中。</p>{error && <p role="alert">{error}</p>}
+      <p className="pw-media-note">图片模型与对话主模型分开配置，密钥不会从聊天连接自动复制。配置图片服务后，也可在支持工具调用的对话模型聊天中请求生图，由媒体工具按原任务权限提交。</p>
       <SelectField label="服务类型" value={settings.provider} onChange={value => change('provider', value)} options={[{ id: 'openai_compatible', label: '兼容图片与语音 API' }, { id: 'comfyui', label: 'ComfyUI' }]} isDisabled={busy} />
       {field('baseUrl', '服务地址')}{field('apiKey', '服务密钥，留空保留相同服务原密钥', true)}
+      {settings.provider === 'openai_compatible' && <p className="pw-media-note">OpenAI 官方服务填写 https://api.openai.com/v1，图片模型可填写 gpt-image-1.5；不要填写 /responses 或 /images/generations 完整接口。GPT Image 使用默认图片响应，保持“兼容旧版 Base64 图片响应”关闭。模型能否使用仍以账号权限和实际服务回执为准。</p>}
       {settings.provider === 'comfyui' ? <>
         <div className="pw-media-settings-group"><h3>图片模板</h3><TextAreaField label="图片 API 模板 JSON（可选）" value={settings.workflowText} onChange={value => change('workflowText', value)} isDisabled={busy} rows={5} /><div className="pw-media-field-pair">{field('promptNodeId', '图片提示词节点 ID')}{field('promptInput', '图片提示词字段')}</div></div>
         <Accordion className="pw-media-disclosures"><AccordionItem id="media-video-template" title="视频模板" description={config.hasVideoWorkflow ? '已有模板，留空保存会清除' : '按需配置视频工作流'}><TextAreaField label="视频 API 模板 JSON（可选）" value={settings.videoWorkflowText} onChange={value => change('videoWorkflowText', value)} isDisabled={busy} rows={5} /><div className="pw-media-field-pair">{field('videoPromptNodeId', '视频提示词节点 ID')}{field('videoPromptInput', '视频提示词字段')}</div></AccordionItem></Accordion>

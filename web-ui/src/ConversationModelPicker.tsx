@@ -25,11 +25,11 @@ const VisibilityContext = createContext(false);
 const busy = (state: Row) => !!(state.chatSubmitting || state.phoneSubmitting || state.modelSaving || state.modelTesting || state.modelSelectionBusy);
 
 /** The existing BoardUI picker owns its transient state; App's children stay intact. */
-export function ConversationModelPickerProvider({ ref, state, can, act, disabled, active, channelPhoneModel, onChannelModel, onManage, children }: {
+export function ConversationModelPickerProvider({ ref, state, can, act, disabled, active, channelPhoneModel, onChannelModel, onManage, onOpenMedia, children }: {
   ref: Ref<ConversationModelPickerHandle>;
   state: Row; can: (action: string) => boolean; act: Run;
   disabled: boolean; active: boolean; channelPhoneModel: boolean;
-  onChannelModel: () => void; onManage: () => void; children: ReactNode;
+  onChannelModel: () => void; onManage: () => void; onOpenMedia?: () => void; children: ReactNode;
 }) {
   const [view, setView] = useState({ open: false, section: 'models' as Section, token: 0 });
   const [pending, setPending] = useState(false), [confirmed, setConfirmed] = useState(false);
@@ -38,8 +38,8 @@ export function ConversationModelPickerProvider({ ref, state, can, act, disabled
   const session = useRef({ open: false, token: 0, writing: false });
   const anchor = useRef<HTMLButtonElement>(null), body = useRef<HTMLDivElement>(null);
   const legacyBack = useRef<(() => boolean) | null>(null);
-  const latest = useRef({ state, disabled, active, channelPhoneModel, onChannelModel, onManage, can, act });
-  latest.current = { state, disabled, active, channelPhoneModel, onChannelModel, onManage, can, act };
+  const latest = useRef({ state, disabled, active, channelPhoneModel, onChannelModel, onManage, onOpenMedia, can, act });
+  latest.current = { state, disabled, active, channelPhoneModel, onChannelModel, onManage, onOpenMedia, can, act };
   const owner = useRef(state.conversationModel?.scopeKey);
 
   const finish = useCallback(() => {
@@ -101,6 +101,10 @@ export function ConversationModelPickerProvider({ ref, state, can, act, disabled
     // The caller captures its workspace/focus origin before leaving this layer.
     latest.current.onManage(); finish();
   };
+  const openMedia = () => {
+    if (!currentWindow() || session.current.writing || latest.current.state.modelSelectionBusy) return;
+    latest.current.onOpenMedia?.(); finish();
+  };
   const controls = useMemo<PickerContext>(() => ({
     state, can, act, disabled: disabled || busy(state) || pending, channelPhoneModel,
     section: view.open ? view.section : null, open, registerBack,
@@ -123,7 +127,7 @@ export function ConversationModelPickerProvider({ ref, state, can, act, disabled
           {view.section === 'models'
             ? <AIModelPicker key={`models:${view.token}`} state={state} can={can} act={act} scope="conversation" active={view.open}
                 onSelectTarget={selectTarget} onSelectionPending={selectionPending} onSelected={selected}
-                presentationState={presentation} onPresentationChange={setPresentation} onManage={manage} />
+                presentationState={presentation} onPresentationChange={setPresentation} onManage={manage} onOpenMedia={onOpenMedia ? openMedia : undefined} />
             : can('models.conversation.review') && <ScopedConversationReasoningPanel key={`reasoning:${view.token}`} state={state} can={can} act={act}
                 active={view.open} onSelectionPending={selectionPending} onSelected={selected} />}
         </div>

@@ -16,6 +16,7 @@ const publicCapability = (row: ApiModelRecord, key: ModelCapability): boolean =>
 export const apiModelCapability = (row: ApiModelRecord, key: ModelCapability): string => publicCapability(row, key)
   ? `${row.capabilityReference[key].value ? '支持' : '不支持'}（${row.capabilityReference.stale === true ? '缓存资料' : '公开资料'}）` : apiCapability(row[key]);
 export function apiModelCapabilityNote(row: ApiModelRecord, index: ApiModelRecord = {}): string {
+  if (row.unavailableReason === 'image_model_requires_media') return '图片输入不等于图片生成。此模型用于媒体创作，不用于对话推理；不会自动切换模型或复制连接密钥。';
   if (publicCapability(row, 'imageInput') || publicCapability(row, 'toolCalls')) return '能力信息补充自 models.dev，当前接入的实际支持可能不同。';
   if (booleanCapability(row.imageInput) && booleanCapability(row.toolCalls)) return '';
   if (['imageInput', 'toolCalls'].some(key => row[key]?.source === 'OWNER_OVERRIDE' && !booleanCapability(row[key]))) return '有能力被手动标记为待确认，可在模型设置中调整。';
@@ -25,7 +26,7 @@ export function apiModelCapabilityNote(row: ApiModelRecord, index: ApiModelRecor
 }
 export function apiModelUnavailable(row: ApiModelRecord): string {
   if (row.available === true) return '';
-  return ({ connection_disabled: '连接已停用', connection_unavailable: '原连接不可用', catalog_model_unavailable: '模型已不在原目录', catalog_protocol_mismatch: '此连接协议不适用于该模型', model_reference_not_supported: '此模型引用暂不支持' } as Record<string, string>)[row.unavailableReason] || '原连接或模型当前不可用';
+  return ({ connection_disabled: '连接已停用', connection_unavailable: '原连接不可用', catalog_model_unavailable: '模型已不在原目录', catalog_protocol_mismatch: '此连接协议不适用于该模型', image_model_requires_media: '生图专用，请到工作区 → 媒体配置图片模型', model_reference_not_supported: '此模型引用暂不支持' } as Record<string, string>)[row.unavailableReason] || '原连接或模型当前不可用';
 }
 export function apiModelProjectionCurrent(value: any, revision: any): boolean {
   const projection = object(value), rows = projection.models;

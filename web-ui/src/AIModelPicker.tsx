@@ -17,7 +17,7 @@ export type AIModelPickerPresentation = { query: string; filter: ApiModelFilter 
 export type AIModelPickerProps = {
   state: Data; can: (action: string) => boolean; act: Run; scope?: 'conversation' | 'default'; active?: boolean;
   onSelectTarget?: (target: AIModelTarget) => Promise<any>; onSelected?: () => void;
-  onSelectionPending: (pending: boolean) => void; onManage?: () => void; onAddService?: () => void;
+  onSelectionPending: (pending: boolean) => void; onManage?: () => void; onAddService?: () => void; onOpenMedia?: () => void;
   presentationState?: AIModelPickerPresentation; onPresentationChange?: (value: AIModelPickerPresentation) => void;
 };
 const busy = (state: Data) => !!(state.modelSelectionBusy || state.chatSubmitting || state.phoneSubmitting || state.modelSaving || state.modelTesting);
@@ -25,7 +25,7 @@ const accountOptions = (value: Data): AccountModelOptions => ({ reasoningEffort:
 const pickerDisplay = (value: Data): Data => ({ modelSelectionRevision: value.modelSelectionRevision, conversationModel: value.conversationModel, modelName: value.modelName, modelRoute: value.modelRoute });
 
 /** One catalog. A row selects through its original native review; details are optional. */
-export function AIModelPicker({ state, can, act, scope = 'conversation', active = true, onSelectTarget, onSelected, onSelectionPending, onManage, onAddService, presentationState, onPresentationChange }: AIModelPickerProps) {
+export function AIModelPicker({ state, can, act, scope = 'conversation', active = true, onSelectTarget, onSelected, onSelectionPending, onManage, onAddService, onOpenMedia, presentationState, onPresentationChange }: AIModelPickerProps) {
   const [api, setApi] = useState<Data | null>(null), [account, setAccount] = useState<Data | null>(null);
   const [groups, setGroups] = useState<Data[]>([]), [defaultGroup, setDefaultGroup] = useState<Data | null>(null), [groupReview, setGroupReview] = useState<Data | null>(null);
   const [review, setReview] = useState<ModelReview | null>(null);
@@ -333,6 +333,7 @@ export function AIModelPicker({ state, can, act, scope = 'conversation', active 
       {capabilityNote && <p className="pw-ai-muted">{capabilityNote}</p>}
       {review.kind === 'api' && capabilityNote && <div className="pw-ai-picker-actions">{api?.publicModelIndex?.refreshing === true && <Button variant="ghost" leadingIcon={IconRefresh} disabled={locked} onClick={() => void refresh()}>重新读取</Button>}{onManage && <Button variant="ghost" trailingIcon={IconChevronRight} disabled={locked} onClick={onManage}>管理模型</Button>}</div>}
       {review.kind === 'api' && !model.available && <p role="alert">{apiModelUnavailable(model)}</p>}
+      {review.kind === 'api' && model.unavailableReason === 'image_model_requires_media' && onOpenMedia && <div className="pw-ai-picker-actions"><Button variant="secondary" trailingIcon={IconChevronRight} disabled={locked} onClick={onOpenMedia}>打开媒体工作区</Button></div>}
       {review.kind === 'account' && <>
         {scope === 'default' && levels.length > 0 && <SelectField label="推理设置" value={options.reasoningEffort || 'service-default'} options={[{ id: 'service-default', label: '服务默认' }, ...levels.map(level => ({ id: level, label: level }))]} onChange={value => setOptions(old => ({ ...old, reasoningEffort: value === 'service-default' ? '' : value }))} isDisabled={locked} />}
         <Accordion><AccordionItem id="local-reserve" title="输入与输出预算"><TextField label="输出预留" inputMode="numeric" value={options.outputReserve} onChange={value => setOptions(old => ({ ...old, outputReserve: value.replace(/\D/g, '').slice(0, 5) }))} hint="128–32768 tokens，用于本地输入准入。" isDisabled={locked} /><TextField label="每张图片预留" inputMode="numeric" value={options.imageTokenReserve} onChange={value => setOptions(old => ({ ...old, imageTokenReserve: value.replace(/\D/g, '').slice(0, 7) }))} hint="0–2000000 tokens。" isDisabled={locked} /></AccordionItem></Accordion>
