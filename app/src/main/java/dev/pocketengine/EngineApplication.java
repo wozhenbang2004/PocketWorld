@@ -1220,7 +1220,12 @@ public final class EngineApplication extends Application implements dev.pocketen
             EngineModule shared=features.module("media");if(!(shared instanceof dev.pocketengine.media.MediaModule))throw new IllegalStateException("群媒体的原模块尚未就绪");
             java.io.File directory=new java.io.File(getFilesDir(),"groups");var artifacts=new dev.pocketengine.features.groups.host.GroupArtifactStore(directory);
             var transport=channels.groupBridge();var media=new dev.pocketengine.features.groups.host.GroupMediaService((dev.pocketengine.media.MediaModule)shared,dev.pocketengine.features.attachments.AttachmentRepository.get(this).book,artifacts,tasks);
-            var safe=new dev.pocketengine.features.groups.host.GroupSafeCapabilities.Services(artifacts,null,media);
+            var publicSearch=features.module("web") instanceof dev.pocketengine.features.web.WebSearchModule web
+                        ?new dev.pocketengine.features.groups.host.GroupPublicSearch(web,()->{
+                            try{return settings.webSearchSettings().getBoolean("groupSearchEnabled");}
+                            catch(Exception unavailable){return false;}
+                        }):null;
+                var safe=new dev.pocketengine.features.groups.host.GroupSafeCapabilities.Services(artifacts,publicSearch,media);
             var host=new dev.pocketengine.features.groups.host.GroupTaskHost(tasks,capabilityWorkers,capabilityControls,settings::get,safe,this::pushTask,this::error);
             var module=new dev.pocketengine.features.groups.GroupsModule(directory,transport,host,transport,groupOwnerWorkflows);
             groupOwnerWorkflows.bind(module);groupOwnerWorkflows.bindMaterials(host,tasks,channels,settings::get);transport.bindArtifacts(artifacts);transport.bind(module,capabilityWorkers);
@@ -1250,7 +1255,7 @@ public final class EngineApplication extends Application implements dev.pocketen
     }
     public JSONObject groupOwnerSnapshot()throws Exception{
         groupOwnerWorkflows.check();if(groups==null)throw new IllegalStateException("原生群任务宿主尚未就绪");JSONObject result=groups.ownerSnapshot();
-        JSONObject resources=json("public.answer",true,"public.search",false,"group.files",true,"media.video",false);
+        JSONObject resources=json("public.answer",true,"public.search",settings.webSearchSettings().getBoolean("groupSearchEnabled"),"group.files",true,"media.video",false);
         EngineModule module=features.module("media");if(module instanceof dev.pocketengine.media.MediaModule&&groupMediaService!=null){
             JSONObject snapshot=module.snapshot(),config=snapshot.getJSONObject("configuration");boolean compatible=snapshot.optBoolean("configured")&&config.optString("provider").equals("openai_compatible");
             boolean comfy=snapshot.optBoolean("configured")&&config.optString("provider").equals("comfyui")&&config.optBoolean("hasWorkflow");
