@@ -41,9 +41,8 @@ public final class WebResearchPipeline {
         if(queries.length()==0||queries.length()>MAX_QUERIES)throw new IllegalArgumentException("每次只能检索1至4条查询");
         Set<String> unique=new LinkedHashSet<>();
         for(int i=0;i<queries.length();i++){
-            String query=queries.getString(i);
-            if(query.isBlank()||query.length()>300||query.codePoints().anyMatch(Character::isISOControl)
-                    ||!unique.add(query.trim().toLowerCase(java.util.Locale.ROOT)))
+            String query=WebQueryGuard.requirePublic(queries.getString(i),300);
+            if(!unique.add(query.toLowerCase(java.util.Locale.ROOT)))
                 throw new IllegalArgumentException("研究查询词过长、重复或包含控制字符");
         }
         strictInteger(args,"maxPages",2,0,MAX_PAGES);
