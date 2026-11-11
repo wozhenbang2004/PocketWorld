@@ -43,6 +43,11 @@
 .pw-butler-work { min-width: 0; }
 .pw-butler-work-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; margin-bottom: 4px; }
 .pw-butler-work-heading > h2 { margin: 0; color: var(--pw-ink); font: 500 15px/24px var(--pw-font); }
+.pw-butler-work-group + .pw-butler-work-group { margin-top: 18px; }
+.pw-butler-group-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 32px; }
+.pw-butler-group-heading h3 { margin: 0; color: var(--pw-copy); font: 500 12px/20px var(--pw-font); }
+.pw-butler-group-heading > .button-press-motion { min-width: 44px; min-height: 44px; height: auto; padding: 8px 4px; color: var(--pw-copy); border: 0; background: transparent; box-shadow: none; font: 400 12px/20px var(--pw-font); }
+.pw-butler-group-heading > .button-press-motion > span { display: flex; align-items: center; gap: 2px; padding: 0; }
 .pw-butler-work-list { margin: 0; padding: 0; list-style: none; }
 .pw-butler-work-list > li { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .pw-butler-work .pw-butler-work-row { display: flex; flex: 1 1 auto; width: 100%; min-width: 0; min-height: 68px; height: auto; justify-content: flex-start; padding: 11px 4px; border: 0; border-radius: 12px; background: transparent; box-shadow: none; text-align: start; white-space: normal; }

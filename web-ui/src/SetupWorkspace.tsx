@@ -324,6 +324,7 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
     if (id === 'tools') return <RuntimePreparation preparation={preparation} can={can} blocked={locked}/>;
     if (id === 'phone') return <>
       <section className="pw-setup-purpose-group"><SetupRow title="界面读取与主屏控制" status={permissionLabel(data.permissions.accessibility)} action={permissionAction('accessibility', data.permissions.accessibility)}/><p className="pw-setup-copy">允许后，助手才能读取手机界面并执行你授权的操作。</p></section>
+      <section className="pw-setup-purpose-group"><SetupRow title="系统通知" status={permissionLabel(data.permissions.notifications)} action={permissionAction('notifications', data.permissions.notifications, '允许任务通知')}/><p className="pw-setup-copy">手机工作需要保留通知中的停止入口。请同时检查系统通知和手机任务通知类别，返回后重新核对准备情况。</p></section>
       <section className="pw-setup-purpose-group"><SetupRow title="后台独立屏" status={phoneConnection} action={<Button variant="secondary" disabled={locked} onClick={() => void navigate('background')}>连接与检查</Button>}/><p className="pw-setup-copy">需要在后台独立屏操作时，再连接手机助手。连接状态与实际操作能力分别核对。</p></section>
       <Accordion className="pw-setup-purpose-details"><AccordionItem id="setup-calendar" title="向日历添加事项" description={`读取${permissionLabel(data.permissions.calendarRead)} · 写入${permissionLabel(data.permissions.calendarWrite)}`}>
         <SetupRow title="日历访问" status={permissionLabel(data.permissions.calendar)} action={permissionAction('calendar', data.permissions.calendar, '允许日历访问')}/><p className="pw-setup-copy">用于读取当前手机资料中的可写日历，并在你确认准确日历与完整事件后创建。授权本身不会写入；每批最多 50 项，不会访问其他工作资料。</p>
@@ -334,7 +335,7 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
       <section className="pw-setup-purpose-group"><SetupRow title="麦克风" status={permissionLabel(data.permissions.microphone)} action={permissionAction('microphone', data.permissions.microphone, '允许麦克风')}/><p className="pw-setup-copy">回到对话后点语音按钮，核对听写文字再采用。这里使用系统语音服务。</p></section>
     </>;
     return <>
-      <section className="pw-setup-purpose-group"><SetupRow title="任务通知" status={permissionLabel(data.permissions.notifications)} action={permissionAction('notifications', data.permissions.notifications, '允许通知')}/><p className="pw-setup-copy">任务需要处理或有新结果时，通过通知提醒你。</p></section>
+      <section className="pw-setup-purpose-group"><SetupRow title="系统通知" status={permissionLabel(data.permissions.notifications)} action={permissionAction('notifications', data.permissions.notifications, '允许通知')}/><p className="pw-setup-copy">任务需要处理或有新结果时，通过通知提醒你。手机工作还需开启手机任务通知类别，以便随时停止。</p></section>
       <section className="pw-setup-purpose-group"><SetupRow title="电池优化" status={data.permissions.batteryExempt === true ? '已允许不受电池优化限制' : data.permissions.batteryExempt === false ? '仍受系统电池优化限制' : '待检查'} action={permissionAction('battery', data.permissions.batteryExempt)}/><SetupRow title="厂商后台设置" status={data.permissions.vendorBackgroundVisited === true ? '已打开设置 · 请以系统实际选择为准' : '按这台手机的设置检查'} action={permissionAction('vendorBackground', null)}/><p className="pw-setup-copy">系统或厂商仍可能暂停后台工作。打开过设置不代表已经允许。</p></section>
     </>;
   };

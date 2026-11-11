@@ -203,5 +203,66 @@
       "android_experience": "not run; root integration build and real user experience pending",
       "visual": "unverified: no screenshot automation or local APK executed"
     }
+  },
+  "work_continuity_20261111": {
+    "scope": "PW-U1–U7: recent private work, durable filtered directory, object search, purpose continuity, one project launcher, calendar plans and original reminder receipts",
+    "implementation": [
+      "../ButlerHome.tsx",
+      "../WorkDirectory.tsx",
+      "../WorkSearch.tsx",
+      "CommandMenu.tsx",
+      "../CapabilitiesWorkspace.tsx",
+      "../ProjectWorkLauncher.tsx",
+      "../PlansWorkspace.tsx",
+      "../ReminderWorkspace.tsx"
+    ],
+    "actual_sources_read": [
+      {
+        "source": "Retained BoardUI Tabs, Accordion and SearchField",
+        "commit": "ec5c5eb3e29c2441be63b9422cd54f411ef23466",
+        "paths": [
+          "adapted/boardui/components/base/tabs/tabs.tsx",
+          "../forms-library/upstream/components/base/accordion/accordion.tsx.source",
+          "../forms-library/upstream/components/base/search-field/search-field.tsx.source"
+        ],
+        "application": "Use existing production adapters. One project accordion contains manually activated, controlled tabs; force-mounted form panels preserve separate input while only the selected visible form owns its native window."
+      },
+      {
+        "source": "Retained Affect / BeUI CommandMenu adapter",
+        "path": "CommandMenu.tsx",
+        "application": "Keep original morphing search, listbox and shared active row. Add object-category controls within that surface; preserve append-page position and lock only the query during original-result opening. No new portal or focus trap."
+      },
+      {
+        "source": "Existing CalendarDateTimeFields with retained ncdai date/time selection",
+        "path": "../CalendarDateTimeFields.tsx",
+        "application": "Plans share reminder/calendar controls and the original java.time local-time resolver. No new date picker or scheduling authority."
+      },
+      {
+        "source": "Linear information architecture and collection controls",
+        "references": [
+          "https://linear.app/docs/filters",
+          "https://linear.app/docs/display-options"
+        ],
+        "library_reference": "references/uiux/assets/ia/linear-2026-header-view.png",
+        "read": "Official documentation and retained four-layer architecture reference image viewed. No claim of inspecting the current live Linear app.",
+        "application": "Scope/filter controls belong to the current collection and refine actual stored-object reads; original-object detail retains its own context. Product structure reference, no copied branded artwork or new saved-view feature."
+      },
+      {
+        "source": "React Aria and WAI-ARIA Tabs",
+        "references": [
+          "https://react-aria.adobe.com/Tabs",
+          "https://www.w3.org/WAI/ARIA/apg/patterns/tabs/examples/tabs-manual/"
+        ],
+        "application": "Controlled selectedKey and manual keyboard activation for project form modes, so arrow-key focus does not open a different native preparation window."
+      }
+    ],
+    "design_boundary": "New business composition of already adopted components; neutral canvas, blue-gray accent, compact type, original Drawer navigation and reduced-motion remain. Source use and implementation authorization are not aesthetic approval.",
+    "verification": {
+      "source": "Independent read-only cross-review of native scope, paging, withdrawn sources, search lifecycle, purpose routing, plan timing and project form lifetime; scoped defects corrected.",
+      "typescript": "Final root compilation recorded in DESIGN.md.",
+      "release": "Existing main release workflow only; actual run and release identify the source commit.",
+      "tests": "Not authored or executed. Screenshot workflow remains disabled; no local APK build.",
+      "android_and_visual": "Unverified on the current Android build; compile/source results do not establish touch, keyboard, accessibility, motion or aesthetic acceptance."
+    }
   }
 }

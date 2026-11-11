@@ -1,4 +1,6 @@
 .pw-project-start { min-width: 0; }
+.pw-project-start[hidden] { display: none; }
+.pw-project-start > .pw-project-start-caption { margin: 0 0 var(--pw-gap-content, 16px); }
 .pw-project-start-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .pw-project-start-heading h3 { margin: 0; color: var(--pw-ink); font-size: 15px; font-weight: 500; line-height: 24px; }
 .pw-project-start-form { display: grid; min-width: 0; gap: 16px; }

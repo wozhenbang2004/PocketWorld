@@ -3,9 +3,8 @@ import { Button, IconButton } from './forms-library';
 import { IconCheckCircle, IconChevronRight, IconClock, IconError, IconFolder, IconInfo, IconPauseCircle } from './icons';
 import { ProgressCircle } from './library';
 import { MotionFeedback, useCollectionMotion } from './library/journey-motion';
-import { conversationWorkActionLabel, conversationWorkNeedsAttention } from './conversation-work';
-import { getRecentTaskProgress, taskNeedsReconciliation } from './task-presentation';
-import { ownerWorkPresentation } from './owner-work-presentation';
+import { getRecentTaskProgress } from './task-presentation';
+import { isButlerHomeWork, workCollectionPresentation, type WorkCollectionFilter, type WorkCollectionGroup } from './work-collection';
 import './butler-home.css';
 
 export type ButlerHomeTask = {
@@ -27,23 +26,12 @@ export type ButlerHomeProps = {
   tasks: ButlerHomeTask[];
   canOpen: boolean;
   onOpen: (task: ButlerHomeTask) => void;
-  onAllWork: () => void;
+  onAllWork: (filter?: WorkCollectionFilter) => void;
   onArtifacts?: (task: ButlerHomeTask) => void;
   onScrollTop?: (top: number) => void;
   initialScrollTop?: number;
 };
 
-const activeStates = new Set(['queued', 'preparing', 'running', 'verifying', 'pausing', 'stopping', 'cancelling']);
-const endedStates = new Set(['completed', 'failed', 'cancelled', 'canceled', 'stopped']);
-const statusLabels: Record<string, string> = {
-  queued: '等待执行', preparing: '准备执行', running: '正在执行', verifying: '核对结果中',
-  pausing: '正在暂停', stopping: '正在停止', cancelling: '正在停止',
-  waiting_approval: '等待你的授权', awaiting_approval: '等待你的授权',
-  waiting_permission: '等待你的授权', awaiting_permission: '等待你的授权',
-  needs_confirmation: '结果等你核对', awaiting_user: '等你补充信息', waiting_user: '等你补充信息',
-  paused: '已暂停', interrupted: '已中断', completed: '已完成', failed: '本次未完成',
-  cancelled: '已停止', canceled: '已停止', stopped: '已停止',
-};
 const updatedAt = (task: ButlerHomeTask) => typeof task.updatedAt === 'number' && Number.isFinite(task.updatedAt) ? task.updatedAt : 0;
 
 /** Adapt the retained Affect AssistantHome / Composer composition around the
@@ -61,8 +49,7 @@ export function ButlerHome({ ready, modelReady, modelSetup, composer, preparatio
 
   // Keep the host's redacted goal/summary as supplied. Do not recover content
   // from another conversation, a generic task list or an unprojected source.
-  const work = (ready ? tasks : []).filter(task => Boolean(task.id) && task.raw?.id === task.id &&
-    task.raw.actorId === 'owner' && task.raw.spaceId === 'private' && task.raw.executionRole === 'owner_work')
+  const work = (ready ? tasks : []).filter(isButlerHomeWork)
     .sort((a, b) => updatedAt(b) - updatedAt(a))
     .filter(task => {
       if (seenTaskIds.has(task.id)) return false;
@@ -72,18 +59,21 @@ export function ButlerHome({ ready, modelReady, modelSetup, composer, preparatio
     .map(task => {
       const contextAvailable = task.raw?.contextAvailable !== false;
       const progress = contextAvailable ? getRecentTaskProgress(task) : null;
-      const handling = ownerWorkPresentation(task);
-      const reconciliation = taskNeedsReconciliation(task);
-      const attention = conversationWorkNeedsAttention(task) || handling?.needsAttention || !activeStates.has(task.status) && !endedStates.has(task.status);
+      const presentation = workCollectionPresentation(task), { handling } = presentation;
+      const attention = presentation.group === 'attention';
       const unknown = progress?.source === 'task' && progress.status === 'unknown';
-      const status = reconciliation ? '结果待核对' : unknown ? progress.stateLabel : handling && endedStates.has(task.status) ? handling.handlingLabel : attention && activeStates.has(task.status) ? '需要你处理' : statusLabels[task.status] || '状态待核对';
+      const status = presentation.label;
       const detail = !contextAvailable ? task.summary?.trim() || '' : unknown ? progress.detail : handling?.waitingForButler || handling?.needsAttention ? handling.reason : task.summary?.trim() || (progress && progress.source !== 'task' ? progress.detail || progress.title : '');
       return { task, attention, status, detail: detail === status || detail === task.goal ? '' : detail,
-        handling, busy: !attention && (activeStates.has(task.status) && task.status !== 'queued' || handling?.state === 'running'), action: conversationWorkActionLabel(task) };
+        handling, group: presentation.group, busy: presentation.busy, action: presentation.actionLabel };
     });
-  const attention = work.filter(item => item.attention), active = work.filter(item => !item.attention && (activeStates.has(item.task.status) || item.handling?.waitingForButler));
-  const recent = work.filter(item => !item.attention && !item.handling?.waitingForButler && endedStates.has(item.task.status));
-  const visible = [...attention.slice(0, 4), ...active.slice(0, 3), ...recent.slice(0, 3)];
+  const groups = ([
+    { id: 'attention', label: '需要你处理', limit: 4 },
+    { id: 'running', label: '正在推进', limit: 3 },
+    { id: 'ended', label: '近期结果', limit: 3 },
+  ] satisfies { id: WorkCollectionGroup; label: string; limit: number }[])
+    .map(group => ({ ...group, items: work.filter(item => item.group === group.id) })).filter(group => group.items.length > 0);
+  const visible = groups.flatMap(group => group.items.slice(0, group.limit));
   const revision = JSON.stringify([ready, canOpen, Boolean(onArtifacts), visible.map(({ task, attention: needsAttention, handling }) => [task.id, task.status, needsAttention, handling?.state, handling?.resultAvailable, handling?.delivered])]);
   useCollectionMotion(workRoot, 'butler:owner:private', revision, { active: ready, layout: false });
   const empty = ready && !work.length && !hasPreparations;
@@ -111,9 +101,9 @@ export function ButlerHome({ ready, modelReady, modelSetup, composer, preparatio
     if (target && !target.disabled) target.focus({ preventScroll: true });
   }, [revision]);
 
-  const renderTask = ({ task, attention: needsAttention, status, detail, busy, action, handling }: typeof work[number]) => {
+  const renderTask = ({ task, attention: needsAttention, status, detail, busy, action, handling, group }: typeof work[number]) => {
     const StatusIcon = ['paused', 'interrupted'].includes(task.status) ? IconPauseCircle : task.status === 'failed' ? IconError
-      : needsAttention ? IconInfo : task.status === 'completed' ? IconCheckCircle : IconClock;
+      : needsAttention ? IconInfo : group === 'ended' && task.status === 'completed' ? IconCheckCircle : IconClock;
     const date = new Date(updatedAt(task)), hasDate = updatedAt(task) > 0 && Number.isFinite(date.getTime());
     const artifactsAvailable = onArtifacts && task.raw?.contextAvailable !== false && (handling?.resultAvailable || handling?.delivered);
     return <li key={task.id} data-task-id={task.id} data-motion-key={task.id} data-task-state={task.status} data-attention={needsAttention || undefined}>
@@ -139,9 +129,14 @@ export function ButlerHome({ ready, modelReady, modelSetup, composer, preparatio
         {(!ready || work.length > 0) && <section ref={workRoot} className="pw-butler-work" aria-labelledby={workHeading} aria-busy={!ready}
           onFocusCapture={event => { const node = event.target as HTMLElement, id = node.closest<HTMLElement>('[data-task-id]')?.dataset.taskId; focused.current = id ? { node, id } : null; }}
           onBlurCapture={event => { const node = event.target as HTMLElement; if (event.relatedTarget instanceof Node ? !event.currentTarget.contains(event.relatedTarget) : node.isConnected && !node.closest('[inert],[hidden]') && !node.matches(':disabled')) focused.current = null; }}>
-          <header className="pw-butler-work-heading"><h2 id={workHeading}>最近工作</h2>{work.length > 0 && <Button ref={allWorkButton} variant="ghost" className="pw-butler-all-work" trailingIcon={IconChevronRight} onClick={onAllWork}>全部</Button>}</header>
+          <header className="pw-butler-work-heading"><h2 id={workHeading}>最近工作</h2>{work.length > 0 && <Button ref={allWorkButton} variant="ghost" className="pw-butler-all-work" trailingIcon={IconChevronRight} onClick={() => onAllWork('all')}>全部工作</Button>}</header>
           {!ready ? <p className="pw-butler-reading" role="status"><ProgressCircle isIndeterminate size="sm" aria-label="正在恢复工作记录" /><span>正在恢复工作记录…</span></p> : <>
-            <ol className="pw-butler-work-list">{visible.map(renderTask)}</ol>
+            {groups.map(group => <section key={group.id} className="pw-butler-work-group" aria-labelledby={`${workHeading}-${group.id}`}>
+              <header className="pw-butler-group-heading"><h3 id={`${workHeading}-${group.id}`}>{group.label}</h3>
+                {group.items.length > group.limit && <Button variant="ghost" size="small" onClick={() => onAllWork(group.id)} aria-label={`前往全部工作，查看其他${group.label}的工作`}>查看更多<IconChevronRight size={14} aria-hidden="true" /></Button>}
+              </header>
+              <ol className="pw-butler-work-list">{group.items.slice(0, group.limit).map(renderTask)}</ol>
+            </section>)}
             {!!work.length && !canOpen && <p className="pw-butler-work-note" role="status">当前暂时无法打开原任务记录。</p>}
           </>}
         </section>}

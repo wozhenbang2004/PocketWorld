@@ -10,6 +10,7 @@ import dev.pocketengine.ui.executionPlanDefinition
 import dev.pocketengine.ui.executionStepPatch
 import dev.pocketengine.ui.objects
 import org.json.JSONObject
+import java.time.Instant
 import java.time.ZoneId
 import java.util.UUID
 
@@ -51,6 +52,18 @@ internal class PocketWebPlans(private val controller: PocketWorldController) {
         return JSONObject().put("reviewHandle", handle).put("command", command).put("input", public(input)).also { if (plan != null) it.put("plan", public(plan)) }
     }
     private fun reference(plan: JSONObject) = JSONObject().put("id", plan.getString("id")).put("revision", plan.getLong("revision"))
+    private fun calendarDueAt(input: JSONObject, now: Long): Long? {
+        require(!input.has("date") || !input.has("delayMinutes")) { "具体日期与相对分钟只能选择一种" }
+        require(input.has("date") || listOf("time", "zone", "laterOverlap").none { input.has(it) }) { "请填写完整开始日期与时间" }
+        return if (input.has("date")) PocketWebFormTime.instant(input, now) else null
+    }
+    private fun withCalendar(review: JSONObject, input: JSONObject, at: Long?): JSONObject {
+        if (at != null) {
+            val local = Instant.ofEpochMilli(at).atZone(ZoneId.of(input.getString("zone")))
+            review.put("calendar", JSONObject().put("local", local.toLocalDateTime().toString()).put("zone", local.zone.id).put("offset", local.offset.id))
+        }
+        return review
+    }
     private fun draft(input: JSONObject, original: JSONObject? = null): ExecutionStepDraft {
         fields(input, "goal", "executor", "projectId", "path", "heading", "minimumBytes", "dependencies", "remoteWait", "businessWait")
         val dependencies = input.getJSONArray("dependencies"); require(dependencies.length() <= 50 && dependencies.objects().size == dependencies.length())
@@ -104,21 +117,27 @@ internal class PocketWebPlans(private val controller: PocketWorldController) {
                 deliver(JSONObject().put("closed", true), null)
             }
             "plans.reviewCreate" -> {
-                fields(args, "goal", "delayMinutes", "steps")
+                fields(args, "goal", "delayMinutes", "steps", "date", "time", "zone", "laterOverlap")
                 check(snapshot.has("plans")) { "请先读取原计划工作区" }
                 val rows = args.getJSONArray("steps"); require(rows.length() in 1..50 && rows.objects().size == rows.length())
-                val plan = executionPlanDefinition(text(args, "goal", 4000), rows.objects().map { draft(it) }, integer(args, "delayMinutes", 0, 525600).toString(), System.currentTimeMillis())
-                deliver(review("create", JSONObject().put("plan", plan), plan), null)
+                val now = System.currentTimeMillis(); val at = calendarDueAt(args, now)
+                val delay = if (at == null) integer(args, "delayMinutes", 0, 525600).toString() else "0"
+                val plan = executionPlanDefinition(text(args, "goal", 4000), rows.objects().map { draft(it) }, delay, now, at)
+                deliver(withCalendar(review("create", JSONObject().put("plan", plan), plan), args, at), null)
             }
             "plans.reviewStep" -> {
-                fields(args, "viewHandle", "stepId", "draft", "delayMinutes", "timingEdited")
+                fields(args, "viewHandle", "stepId", "draft", "delayMinutes", "timingEdited", "date", "time", "zone", "laterOverlap")
                 val plan = read(text(args, "viewHandle")); val id = text(args, "stepId")
                 val step = plan.getJSONArray("steps").objects().singleOrNull { it.optString("id") == id } ?: error("原步骤已不存在")
                 check(plan.optJSONObject("execution")?.optString("state") == "paused" && step.optString("taskId").isEmpty() && step.optJSONObject("taskAdmission") == null) { "只能修改暂停后尚未准入的原步骤" }
                 require(args.opt("timingEdited") is Boolean)
-                val patch = executionStepPatch(plan, step, draft(args.getJSONObject("draft"), step), integer(args, "delayMinutes", 0, 525600).toString(), args.getBoolean("timingEdited"), System.currentTimeMillis())
+                val timingEdited = args.getBoolean("timingEdited"); val now = System.currentTimeMillis()
+                require(timingEdited || !args.has("date") && listOf("time", "zone", "laterOverlap").none { args.has(it) }) { "修改开始时间前请明确选择新时间" }
+                val at = calendarDueAt(args, now)
+                val delay = if (at != null || !timingEdited && !args.has("delayMinutes")) "0" else integer(args, "delayMinutes", 0, 525600).toString()
+                val patch = executionStepPatch(plan, step, draft(args.getJSONObject("draft"), step), delay, timingEdited, now, at)
                 require(patch.length() > 0) { "没有修改，原授权与条件继续保留" }
-                deliver(review("editStep", reference(plan).put("stepId", id).put("stepRevision", step.getLong("revision")).put("patch", patch), plan), null)
+                deliver(withCalendar(review("editStep", reference(plan).put("stepId", id).put("stepRevision", step.getLong("revision")).put("patch", patch), plan), args, at), null)
             }
             "plans.reviewAction" -> {
                 fields(args, "viewHandle", "operation", "stepId")

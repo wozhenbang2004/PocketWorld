@@ -58,13 +58,14 @@ private fun executionStepDefinition(draft: ExecutionStepDraft, index: Int, due: 
 }
 
 /** Changing a goal must not reset its time, expiry, dependency set or executed history. */
-internal fun executionStepPatch(plan: JSONObject, original: JSONObject, draft: ExecutionStepDraft, minutes: String, timingEdited: Boolean, now: Long): JSONObject {
+internal fun executionStepPatch(plan: JSONObject, original: JSONObject, draft: ExecutionStepDraft, minutes: String, timingEdited: Boolean, now: Long, dueAt: Long? = null): JSONObject {
     val rows = plan.getJSONArray("steps")
     val index = (0 until rows.length()).firstOrNull { rows.getJSONObject(it).getString("id") == original.getString("id") }
         ?: throw IllegalArgumentException("此步骤已变化，请刷新后编辑")
     val previous = executionStepDefinition(executionStepDraft(plan, original), index, original.getLong("dueAt"))
     val delay = minutes.toLongOrNull(); require(delay != null && delay in 0..525600) { "开始时间应为 0–525600 分钟之后" }
-    val next = executionStepDefinition(draft, index, if (timingEdited) Math.addExact(now, delay * 60_000) else original.getLong("dueAt"))
+    if (timingEdited && dueAt != null) require(dueAt >= now && dueAt <= Math.addExact(now, 366L * 86_400_000)) { "请选择未来一年内的开始时间" }
+    val next = executionStepDefinition(draft, index, if (timingEdited) dueAt ?: Math.addExact(now, delay * 60_000) else original.getLong("dueAt"))
     val patch = JSONObject()
     for (key in listOf("title", "goal", "executor", "verification", "dependsOn", "dueAt", "remoteWait", "businessWait"))
         if (next.opt(key)?.toString() != previous.opt(key)?.toString()) patch.put(key, next.opt(key) ?: JSONObject.NULL)
@@ -72,11 +73,12 @@ internal fun executionStepPatch(plan: JSONObject, original: JSONObject, draft: E
 }
 
 /** A native editor drafts a definition; saving it cannot approve, start, or prove a result. */
-internal fun executionPlanDefinition(goal: String, steps: List<ExecutionStepDraft>, minutes: String, now: Long): JSONObject {
+internal fun executionPlanDefinition(goal: String, steps: List<ExecutionStepDraft>, minutes: String, now: Long, dueAt: Long? = null): JSONObject {
     require(goal.trim().isNotEmpty() && goal.trim().length <= 4000) { "请填写 1–4000 字的完整目标" }
     require(steps.size in 1..50) { "目标需要 1–50 个步骤" }
     val delay = minutes.toLongOrNull(); require(delay != null && delay in 0..525600) { "开始时间应为 0–525600 分钟之后" }
-    val due = Math.addExact(now, delay * 60_000); val rows = JSONArray()
+    if (dueAt != null) require(dueAt >= now && dueAt <= Math.addExact(now, 366L * 86_400_000)) { "请选择未来一年内的开始时间" }
+    val due = dueAt ?: Math.addExact(now, delay * 60_000); val rows = JSONArray()
     steps.forEachIndexed { index, draft ->
         rows.put(executionStepDefinition(draft, index, due))
     }

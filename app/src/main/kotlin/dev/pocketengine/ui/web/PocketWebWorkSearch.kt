@@ -21,7 +21,7 @@ internal class PocketWebWorkSearch(
     private val acceptsWindow: (PocketWebWindowTicket) -> Boolean,
     private val rememberTasks: (JSONObject) -> Unit
 ) {
-    companion object { val COMMANDS = setOf("work.search", "work.search.read", "work.capabilities", "webSearch.usage", "ownerWork.report.read") }
+    companion object { val COMMANDS = setOf("work.search", "work.search.read", "work.tasks.list", "work.capabilities", "webSearch.usage", "ownerWork.report.read") }
     private val main = Handler(Looper.getMainLooper())
     private val host get() = controller.nativeButlerHost()
     private val pending = mutableSetOf<RunControl>()
@@ -45,6 +45,15 @@ internal class PocketWebWorkSearch(
                                 host.tasks.ownerWorkReportForOwner(args, control)
                             }
                             "work.search" -> search(args, control)
+                            "work.tasks.list" -> {
+                                fields(args, setOf("query", "filter", "cursor", "limit"))
+                                val query = args.opt("query") as? String ?: error("请输入工作查找范围")
+                                val filter = args.opt("filter") as? String ?: error("请选择工作状态")
+                                require(query.length <= 500 && '\u0000' !in query && filter in setOf("all", "attention", "running", "ended")) { "工作查找范围无效" }
+                                val page = host.tasks.ownerWorkSearchPage(query, args.optString("cursor"), integer(args, "limit", 30, 8, 40), filter)
+                                JSONObject(page.toString()).put("format", "pocketworld.work-directory.v1")
+                                    .put("taskPage", page).put("modelCalled", false)
+                            }
                             // Internal tasks.open preflight: reread the selected original instead
                             // of treating the bounded navigation-ID cache as lasting authority.
                             "work.search.task" -> {
@@ -55,7 +64,10 @@ internal class PocketWebWorkSearch(
                                 val task = host.tasks.getForUi(id, false) ?: error("原工作已不存在，请返回核对")
                                 require(task.optString("id") == id && task.optString("actorId") == "owner" &&
                                     task.optString("spaceId") == "private" && task.optString("kind") != "inference") { "原工作不属于当前私人工作区" }
-                                check(task.optString("taskProjection") != "source_unavailable" && !task.optBoolean("sourceCurrentReadRequired")) { "原工作来源暂不可核对，请返回重新打开" }
+                                // The original source-filtered placeholder retains task
+                                // identity and stop controls. Opening it grants no input
+                                // or continuation; a nonempty query still matches only
+                                // the currently visible text below.
                                 require(args.has("expectedRunId") == args.has("expectedEpoch")) { "原整理记录身份不完整" }
                                 if (args.has("expectedRunId")) {
                                     val run = args.opt("expectedRunId") as? String ?: error("原整理记录身份缺失")
@@ -106,24 +118,33 @@ internal class PocketWebWorkSearch(
     }
 
     private fun search(args: JSONObject, control: RunControl): JSONObject {
-        fields(args, setOf("query", "cursor", "limit"))
+        fields(args, setOf("query", "cursor", "limit", "kind"))
         val query = args.opt("query") as? String ?: error("请输入查找文字")
         require(query.length <= 500 && '\u0000' !in query) { "查找文字请控制在 500 字以内" }
+        val kind = if (args.has("kind")) args.opt("kind") as? String ?: error("查找对象无效") else "all"
+        require(kind in setOf("all", "work", "conversation", "artifact", "project")) { "查找对象无效" }
         val normalized = normalize(query)
         val limit = integer(args, "limit", 24, 8, 40)
         require(limit in 8..40) { "查找每页数量无效" }
-        val count = limit / 4
-        val signature = digest(normalized)
+        val count = if (kind == "all") limit / 4 else limit
+        val signature = digest(normalized + "\n" + kind)
         val cursor = args.optString("cursor")
         require(cursor.length <= 16000) { "查找位置已失效，请重新查找" }
-        val position = if (cursor.isBlank()) JSONObject().put("v", 1).put("query", signature) else decode(cursor).also {
-            require(it.optInt("v") == 1 && it.optString("query") == signature) { "查询已变化，请重新查找" }
+        val position = if (cursor.isBlank()) JSONObject().put("v", 2).put("query", signature) else decode(cursor).also {
+            require(it.optInt("v") == 2 && it.optString("query") == signature) { "查询或对象已变化，请重新查找" }
+        }
+        val sources = when (kind) {
+            "work" -> setOf("tasks")
+            "conversation" -> setOf("titles", "originals")
+            "artifact" -> setOf("files")
+            "project" -> setOf("projects")
+            else -> setOf("tasks", "titles", "originals", "files", "projects")
         }
         val items = JSONArray()
         val notices = JSONArray()
         var taskPage: JSONObject? = null
         fun source(key: String, read: () -> Unit) {
-            if (position.optBoolean(key + "Done")) return
+            if (key !in sources || position.optBoolean(key + "Done")) return
             control.check()
             try { read() } catch (failure: InterruptedException) { throw failure }
             catch (failure: Exception) {
@@ -191,8 +212,9 @@ internal class PocketWebWorkSearch(
                 .put("title", clip(row.optString("name").ifBlank { "已保存的项目" }, 160)).put("updatedAt", timestamp(row))) }
             position.put("projects", page.second).put("projectsDone", page.second == null)
         }
-        val more = listOf("tasks", "titles", "originals", "files", "projects").any { !position.optBoolean(it + "Done") }
+        val more = sources.any { !position.optBoolean(it + "Done") }
         return JSONObject().put("items", items).put("nextCursor", if (more) encode(position) else "").put("notices", notices)
+            .put("kind", kind).put("query", query)
             .put("taskPage", taskPage).put("executionAuthorized", false).put("modelCalled", false)
             .put("coverage", "private_conversation_originals_task_summaries_file_metadata_and_project_names")
     }

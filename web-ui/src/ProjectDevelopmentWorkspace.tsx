@@ -6,9 +6,9 @@ import './local-workspace.css';
 import './project-development.css';
 
 type Data = Record<string, any>;
-type Props = { projectId: string; name: string; run: (action: string, args?: Data) => Promise<any>; can: (action: string) => boolean;
+type Props = { projectId: string; name: string; active: boolean; run: (action: string, args?: Data) => Promise<any>; can: (action: string) => boolean;
   onOpenTask: (id: string) => void; onPrepareTools: () => void; onConnectModel: () => void; onOpenTerminal: () => void;
-  registerBack: (handler: (() => boolean) | null) => void };
+  registerBack: (handler: (() => boolean) | null) => void; onInteractionBusyChange?: (busy: boolean) => void };
 const rows = (value: unknown): Data[] => Array.isArray(value) ? value : [];
 const ownerWindow = () => { const view = bridge.getState().view as Data; return [bridge.getDocumentEpoch(), view.section, view.taskId, view.resumeRevision].join('|'); };
 const unresolved = (value: Data | null) => !!value && ['pending', 'unknown', 'unconfirmed'].includes(value.status);
@@ -16,7 +16,7 @@ const failureText = (failure: unknown) => failure instanceof Error ? failure.mes
 
 /** Existing project checkout + original Assistant admission. No command is
  * approved here, and reopening never repeats a submission or copy creation. */
-export function ProjectDevelopmentWorkspace({ projectId, name, run, can, onOpenTask, onPrepareTools, onConnectModel, onOpenTerminal, registerBack }: Props) {
+export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can, onOpenTask, onPrepareTools, onConnectModel, onOpenTerminal, registerBack, onInteractionBusyChange }: Props) {
   const [view, setView] = useState<Data | null>(null), [goal, setGoal] = useState(''), [checkout, setCheckout] = useState('');
   const [source, setSource] = useState<Data | null>(null), [review, setReview] = useState<Data | null>(null), [submission, setSubmission] = useState<Data | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [expired, setExpired] = useState(false), [copyResult, setCopyResult] = useState<Data | null>(null);
@@ -24,19 +24,23 @@ export function ProjectDevelopmentWorkspace({ projectId, name, run, can, onOpenT
   const registerFilesBack = useCallback((handler: (() => boolean) | null) => { filesBack.current = handler; }, []);
   const alive = useRef(false), generation = useRef(0), entered = useRef<object | null>(null), handle = useRef(''), activeReview = useRef<Data | null>(null);
   const sourceAttempt = useRef(''), readAttempt = useRef(''), touched = useRef(false), draft = useRef({ goal: '', checkoutId: '' });
-  const latest = useRef({ run, can }); latest.current = { run, can }; activeReview.current = review;
+  const latest = useRef({ run, can, active }); latest.current = { run, can, active }; activeReview.current = review;
   const applySubmission = (receipt: Data) => { setSubmission(receipt); if (receipt.status === 'accepted') { setGoal(''); draft.current.goal = ''; } };
   const invoke = async (action: string, args: Data = {}, accept?: (value: Data) => void) => {
-    if (entered.current || document.hidden || !latest.current.can(action)) return;
+    if (!latest.current.active || entered.current || document.hidden || !latest.current.can(action)) return;
     const token = {}, window = ownerWindow(), sequence = generation.current;
     entered.current = token; setBusy(true); setError('');
-    const current = () => alive.current && entered.current === token && generation.current === sequence && ownerWindow() === window && !document.hidden;
-    try { const value = await latest.current.run(action, args); if (current()) { accept?.(value); return value as Data; } }
+    const current = () => alive.current && latest.current.active && entered.current === token && generation.current === sequence && ownerWindow() === window && !document.hidden;
+    try {
+      const value = await latest.current.run(action, args);
+      if (current()) { accept?.(value); return value as Data; }
+      if (action === 'projects.development.read' && value?.viewHandle) void latest.current.run('projects.development.close', { viewHandle: value.viewHandle }).catch(() => {});
+    }
     catch (failure) { if (current()) setError(failureText(failure)); }
     finally { if (entered.current === token) { entered.current = null; if (alive.current) setBusy(false); } }
   };
   const read = () => {
-    if (!entered.current && !document.hidden && latest.current.can('projects.development.read')) readAttempt.current = ownerWindow();
+    if (latest.current.active && !entered.current && !document.hidden && latest.current.can('projects.development.read')) readAttempt.current = ownerWindow();
     return invoke('projects.development.read', { projectId }, value => {
     if (value.projectId !== projectId || typeof value.viewHandle !== 'string') throw new Error('没有取得这个原项目的页面，请重新读取。');
     handle.current = value.viewHandle; setView(value); sourceAttempt.current = ''; setSource(null);
@@ -63,7 +67,7 @@ export function ProjectDevelopmentWorkspace({ projectId, name, run, can, onOpenT
     if (original && handle.current) void latest.current.run('projects.development.dismiss', { viewHandle: handle.current, reviewHandle: original.reviewHandle }).catch(() => {});
   };
   useEffect(() => {
-    registerBack(() => { if (filesBack.current?.()) return true; if (activeReview.current) { dismiss(); return true; } return false; });
+    registerBack(() => { if (!latest.current.active) return false; if (filesBack.current?.()) return true; if (entered.current) return true; if (activeReview.current) { dismiss(); return true; } return false; });
     return () => registerBack(null);
   }, [registerBack]);
   useEffect(() => {
@@ -74,19 +78,22 @@ export function ProjectDevelopmentWorkspace({ projectId, name, run, can, onOpenT
       if (alive.current) { setView(null); setReview(null); setSource(null); setBusy(false); setFilesOpen(false); }
       if (original) void latest.current.run('projects.development.close', { viewHandle: original }).catch(() => {});
     };
+    // Switching the start method retires its window, never its plain draft or
+    // the identity of a submitted operation. Returning performs a fresh read.
+    if (!active) { retire(); return () => { alive.current = false; }; }
     const inspect = () => {
       const next = ownerWindow();
       if (next !== owner || document.hidden) { owner = next; retire(); }
-      if (!document.hidden && !handle.current && !entered.current && readAttempt.current !== next && latest.current.can('projects.development.read')) void readRef.current();
+      if (latest.current.active && !document.hidden && !handle.current && !entered.current && readAttempt.current !== next && latest.current.can('projects.development.read')) void readRef.current();
     };
     const unsubscribe = bridge.subscribe(inspect); document.addEventListener('visibilitychange', inspect); window.addEventListener('pagehide', retire);
     void readRef.current();
     return () => { alive.current = false; retire(); unsubscribe(); document.removeEventListener('visibilitychange', inspect); window.removeEventListener('pagehide', retire); };
-  }, [projectId]);
+  }, [projectId, active]);
   const readable = can('projects.development.read');
-  useEffect(() => { if (readable && !handle.current) void readRef.current(); }, [readable]);
+  useEffect(() => { if (active && readable && !handle.current) void readRef.current(); }, [active, readable]);
   useEffect(() => {
-    if (!view || !checkout || busy || review || filesOpen || unresolved(submission)) return;
+    if (!active || !view || !checkout || busy || review || filesOpen || unresolved(submission)) return;
     const key = `${view.viewHandle}|${projectId}|${checkout}`;
     if (sourceAttempt.current === key) return;
     sourceAttempt.current = key; setSource(null);
@@ -95,14 +102,18 @@ export function ProjectDevelopmentWorkspace({ projectId, name, run, can, onOpenT
       if (value.projectId !== projectId || value.checkoutId !== checkout) throw new Error('源码不属于这个所选副本，请重新读取。');
       setSource(value);
     });
-  }, [view, checkout, busy, review, filesOpen, submission, projectId]);
+  }, [active, view, checkout, busy, review, filesOpen, submission, projectId]);
   useEffect(() => {
     setExpired(false); if (!review) return;
     const remaining = Number(review.expiresAt) - Date.now();
     if (!Number.isFinite(remaining) || remaining <= 0) { setExpired(true); return; }
     const timer = window.setTimeout(() => setExpired(true), remaining); return () => window.clearTimeout(timer);
   }, [review]);
-  const pending = unresolved(submission), disabled = busy || pending || !!review || filesOpen || !view || view.draftRecoveryRequired === true;
+  const pending = unresolved(submission), disabled = !active || busy || pending || !!review || filesOpen || !view || view.draftRecoveryRequired === true;
+  const copyUnconfirmed = copyResult?.unconfirmed === true || copyResult?.found === false && copyResult?.partial !== true
+    || !copyResult && !!view?.draft?.copyRequestId && view?.draft?.copyStatus !== 'ready';
+  const interactionBusy = active && (busy || pending || !!review || filesOpen || copyUnconfirmed);
+  useEffect(() => { onInteractionBusyChange?.(interactionBusy); return () => onInteractionBusyChange?.(false); }, [interactionBusy, onInteractionBusyChange]);
   const closeFiles = () => { setFilesOpen(false); sourceAttempt.current = ''; setSource(null); };
   const available = rows(view?.checkouts);
   const copy = (query: boolean) => {
@@ -117,13 +128,13 @@ export function ProjectDevelopmentWorkspace({ projectId, name, run, can, onOpenT
   };
   const start = () => {
     const selected = activeReview.current;
-    if (!selected || busy || expired || Number(selected.expiresAt) <= Date.now()) return;
+    if (!active || !selected || busy || expired || Number(selected.expiresAt) <= Date.now()) return;
     const marker = { projectId, checkoutId: selected.checkoutId, clientMessageId: selected.requestId, goal: selected.goal, status: 'unknown', message: '正在核对原输入回执。请勿重复开始。' };
     setSubmission(marker); setReview(null); activeReview.current = null;
     void invoke('projects.development.start', { viewHandle: handle.current, reviewHandle: selected.reviewHandle }, applySubmission);
   };
-  return <section className="pw-project-development pw-local-workspace pw-settings-section" aria-label="让 AI 开发这个项目">
-    <header className="pw-local-panel-heading"><h2>想让这个项目做什么？</h2><p>描述要做的新功能或要修的问题。先在私人副本里工作，再审阅结果是否导回项目。</p></header>
+  return <section hidden={!active} className="pw-project-development pw-local-workspace pw-settings-section" aria-label="使用默认模型开发项目">
+    <p className="pw-field-hint">使用默认模型，在私人副本中开发。结果由你审阅后再导回项目。</p>
     {error && <p className="pw-local-inline-notice" role="alert">{error}</p>}
     {!view ? <Button variant="secondary" disabled={busy || !readable} onClick={() => void read()}> {busy ? '正在读取原项目…' : '读取项目开发条件'} </Button> : <>
       {view.draftRecoveryRequired && <p className="pw-local-inline-notice" role="alert">{view.draftRecoveryMessage} 仍可查看下方原任务、文件和工具状态。请保留应用数据，从诊断记录定位草稿存储问题后恢复，不要清空数据或重复提交目标。</p>}

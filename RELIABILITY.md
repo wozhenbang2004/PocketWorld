@@ -3,6 +3,18 @@
 This is the shared maintenance contract for the native execution path and its diagnostics.
 It does not grant execution authority and must not become a second task or account store.
 
+## Daily work directory and continuation — 2026-11-11
+
+PW-U1–U7 in `web-ui/DESIGN.md` extend the existing private work presentation, not execution authority. `TaskOwnerSearch` reads the original source-filtered TaskStore headers through the existing keyset cursor. The cursor binds both normalized query and collection filter; each request scans at most 200 header/accounting records or yields after the existing 500 ms page boundary. Sparse matches retain a continuation cursor and never imply that all history was searched. Home counts remain explicitly recent and bounded.
+
+Directory classification uses the original current run, epoch and operation state to distinguish an in-flight prepared operation from an unresolved effect. The UI carries that distinction only across the same task/run/epoch/status/update/source identity, while current handling and controls remain native facts. Source withdrawal can leave `updatedAt` unchanged: each directory read therefore also retires scanned unavailable-source IDs before query filtering. Either source-filtered projection can remove old text; an equal-timestamp live summary cannot restore it. Every verified page is accepted immediately, even when a later page fails; retry retains the intended page depth and reading position. Directory opening rereads the original private task rather than depending on a bounded navigation-ID cache. An unavailable-source placeholder remains readable with its native stop controls, without restoring input, continuation or source content.
+
+Global search cursors also bind the selected object category. Opening a result retains the original object/version and owns only its current search/navigation/document window. Purpose selection changes the existing composer intent or opens the original object picker; it never writes a goal or starts execution. Project launcher mode/open state is presentation memory, while review handles and uncertain receipts remain owned by their original preparation paths.
+
+Calendar plan creation/editing resolves local date, time, zone and DST overlap choice once during native review and freezes the resulting `dueAt` in that review. Confirmation consumes that original input. Legacy relative-minute drafts remain readable, and editing a goal without changing timing preserves the original due time. Plan groups inspect the bound original task's actual pending/paused/unknown state; `bound_task` alone is not evidence of progress. Reminder details filter occurrences by their original rule ID before displaying any action.
+
+Implementation evidence is source inspection, independent review and the compile/release evidence recorded with PW-U1–U7. No tests or screenshot workflow are run and no local APK is built. Actual Android interaction, accessibility and visual quality remain separate, unverified evidence until experienced on the released build.
+
 ## Background phone preparation and failure presentation — 2026-11-11
 
 The owner reported “bug 一大堆”, supplied `PreparationFailure: 请先准备后台助手连接配置` from `connectForPreparation → connectRun → client`, and asked “实在不行你看看人家 mika dshgo 怎么做的呢”. The accompanying task screenshot showed an empty, ended viewer instead of the preparation failure. This repair covers that initialization path, its existing authorized connection recovery, and the original task's failure presentation. Existing instructions remain: no test authoring or execution, no local build, direct main delivery through the current remote build/release workflow.

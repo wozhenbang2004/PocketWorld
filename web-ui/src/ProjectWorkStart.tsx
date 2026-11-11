@@ -42,6 +42,8 @@ type Props = {
   onPrepareTools?: () => void;
   registerBack: (handler: (() => boolean) | null) => void;
   onReviewChange: (open: boolean) => void;
+  embedded?: boolean;
+  onInteractionBusyChange?: (busy: boolean) => void;
 };
 
 const taskIdentity = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9-]{36}$/.test(value);
@@ -51,18 +53,19 @@ const kindLabel = (kind: string, id: string) => kind === 'model' ? ({ MAIN: '主
   : ({ skill: '技能', instruction: '指令资料', plugin: '插件', extension: '扩展', team: '团队模板', target: '执行位置' }[kind] || '工作来源');
 
 /** Project form state belongs to App; this component owns only the current native window. */
-export function ProjectWorkStart({ project, draft, onChange, initiallyOpen, active, ownerRevision, supported, run, onOpenTask, onConfigure, onPrepareModel, onPrepareTools, registerBack, onReviewChange }: Props) {
+export function ProjectWorkStart({ project, draft, onChange, initiallyOpen, active, ownerRevision, supported, run, onOpenTask, onConfigure, onPrepareModel, onPrepareTools, registerBack, onReviewChange, embedded = false, onInteractionBusyChange }: Props) {
   const [snapshot, setSnapshot] = useState<Data | null>(null), [inspection, setInspection] = useState<Data | null>(null), [review, setReview] = useState<Data | null>(null);
   const [loading, setLoading] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState(''), [acknowledged, setAcknowledged] = useState(false), [reload, setReload] = useState(0);
   const [visible, setVisible] = useState(() => !document.hidden);
+  const activeRef = useRef(active && visible); activeRef.current = active && visible;
   const generation = useRef(0), windowId = useRef(''), pending = useRef(false), reviewRef = useRef(review), draftRef = useRef(draft), changeRef = useRef(onChange);
   draftRef.current = draft; changeRef.current = onChange; reviewRef.current = review;
-  const expanded = draft.expanded ?? initiallyOpen;
+  const expanded = embedded || (draft.expanded ?? initiallyOpen);
   const mounted = active && visible && (expanded || !!draft.operation);
   const patch = (next: Partial<ProjectWorkDraft>) => {
     const value = { ...draftRef.current, ...next }; draftRef.current = value; changeRef.current(value);
   };
-  const current = (ticket: number, id: string) => generation.current === ticket && windowId.current === id && !document.hidden;
+  const current = (ticket: number, id: string) => activeRef.current && generation.current === ticket && windowId.current === id && !document.hidden;
   const closeNative = (id: string) => { if (id) void bridge.command('projectWork.close', { windowId: id }).catch(() => {}); };
   const clearReview = () => { reviewRef.current = null; setReview(null); setAcknowledged(false); };
   const restartWindow = () => { clearReview(); setInspection(null); setReload(value => value + 1); };
@@ -80,7 +83,7 @@ export function ProjectWorkStart({ project, draft, onChange, initiallyOpen, acti
     pending.current = false; setBusy(false); clearReview(); setInspection(null); setSnapshot(null); setLoading(mounted); setError('');
     if (mounted) {
       void run('projectWork.open', { projectId: project.id }).then(value => {
-        if (generation.current !== ticket || document.hidden) { closeNative(value?.windowId); return; }
+        if (!activeRef.current || generation.current !== ticket || document.hidden) { closeNative(value?.windowId); return; }
         if (value?.projectId !== project.id || typeof value.windowId !== 'string' || !value.windowId || !Array.isArray(value.profiles) || !Array.isArray(value.checkouts) || !Array.isArray(value.runtimes)) throw new Error('项目准备信息没有完整返回，请重新读取。');
         windowId.current = value.windowId; setSnapshot(value); setLoading(false);
       }).catch(failure => { if (generation.current === ticket) { setError(failureText(failure)); setLoading(false); } });
@@ -97,7 +100,7 @@ export function ProjectWorkStart({ project, draft, onChange, initiallyOpen, acti
     if (!active) return false;
     if (reviewRef.current) { if (!pending.current) restartWindow(); return true; }
     if (pending.current) return true;
-    if (expanded) { closeForm(); return true; }
+    if (expanded && !embedded) { closeForm(); return true; }
     return false;
   };
   useEffect(() => { registerBack(() => back.current()); return () => registerBack(null); }, [registerBack]);
@@ -194,16 +197,19 @@ export function ProjectWorkStart({ project, draft, onChange, initiallyOpen, acti
   const needsLocalTools = runtime?.runtimeId === 'managed_process_v1' && runtime.canExecute === false;
   const unavailableSelection = (value: string, found: Data | undefined) => value && !found ? [{ id: value, label: '原选择已不可用，请重新选择', disabled: true }] : [];
   const operation = draft.operation;
+  const interactionBusy = active && (busy || loading || !!review || !!operation && ['queued', 'entered', 'unknown'].includes(operation.status));
+  useEffect(() => { onInteractionBusyChange?.(interactionBusy); return () => onInteractionBusyChange?.(false); }, [interactionBusy, onInteractionBusyChange]);
   const locked = busy || loading || !snapshot || !!operation;
   const ready = !locked && !!profile && profile.restoredPendingReview !== true && !!checkout && !!runtime && !!draft.goal.trim() && draft.goal.trim().length <= 4000 && !draft.goal.includes('\u0000');
   const failedSources = profileRows(inspection?.items).filter(item => item.included !== true);
   const referenceName = (id: string, rows: Data[], key: string) => rows.find(row => row[key] === id)?.name || id;
 
-  return <section className="pw-project-start" aria-label="开始项目工作">
-    <div className="pw-project-start-heading"><h3>{operation ? '这次工作' : '让 AI 接着做'}</h3>
+  return <section hidden={!active} className="pw-project-start" aria-label="使用工作配置开始项目工作">
+    {!embedded && <div className="pw-project-start-heading"><h3>{operation ? '这次工作' : '让 AI 接着做'}</h3>
       {!expanded && !operation && <Button variant="secondary" leadingIcon={IconAdd} data-workspace-entry="project-new-work" onClick={() => patch({ expanded: true })}>新工作</Button>}
       {expanded && !operation && <Button variant="ghost" size="small" disabled={busy} onClick={closeForm}>收起</Button>}
-    </div>
+    </div>}
+    {embedded && !operation && <p className="pw-project-start-caption">使用已保存的模型、资料与工具组合，在所选副本中工作。</p>}
     {expanded && !operation && <div className="pw-project-start-form">
       <TextAreaField label="这次想完成什么？" placeholder="描述目标、要修改的内容或期待的结果…" value={draft.goal} onChange={goal => changeSelection({ goal })} rows={3} autoResize maxRows={7} maxLength={4000} isDisabled={busy} className="pw-project-goal" />
       {loading ? <p className="pw-project-start-status" role="status">正在读取工作配置与项目副本…</p> : snapshot && <>

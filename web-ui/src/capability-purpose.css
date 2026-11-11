@@ -14,3 +14,16 @@
 .pw-capability-checks strong { font: 500 14px/22px var(--pw-font); color: var(--pw-ink); }
 .pw-capability-checks span { font: 400 13px/21px var(--pw-font); color: var(--pw-copy); overflow-wrap: anywhere; }
 .pw-capability-read-error { margin: 0; color: var(--pw-copy); font: 400 13px/22px var(--pw-font); }
+.pw-capability-next-steps { min-width: 0; }
+.pw-capability-next-steps > h4 { margin: 0 0 12px; color: var(--pw-copy); font: 550 13px/21px var(--pw-font); }
+.pw-capability-pending-checks { gap: 0; }
+.pw-capability-pending-checks > li { grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; padding-block: 12px; }
+.pw-capability-pending-checks > li:first-child { padding-top: 0; }
+.pw-capability-pending-checks > li:last-child { padding-bottom: 0; }
+.pw-capability-pending-checks > li > div { display: grid; min-width: 0; gap: 4px; }
+.pw-capability-pending-checks > li > button { min-height: 44px; max-width: 100%; white-space: normal; }
+.pw-capability-purpose-detail > .pw-action-row:empty { display: none; }
+@media (max-width: 420px) {
+  .pw-capability-pending-checks > li { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .pw-capability-pending-checks > li > button { justify-self: start; }
+}

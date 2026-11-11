@@ -1,0 +1,9 @@
+/* Bounded composition of retained BoardUI disclosure, tabs and original forms. */
+.pw-project-launcher { margin-top: 20px; min-width: 0; }
+.pw-project-launcher button[slot="trigger"] { min-height: 52px; padding-block: 12px; }
+.pw-project-launcher button[slot="trigger"] > span > span:first-child { font: 500 15px/24px var(--pw-font); }
+.pw-project-launcher button[slot="trigger"] > span > span + span { font: 400 12px/20px var(--pw-font); color: var(--pw-muted); }
+.pw-project-launcher [role="tablist"] { gap: 4px; flex-wrap: wrap; }
+.pw-project-launcher [role="tab"] { min-height: 44px; }
+.pw-project-launcher .pw-project-development, .pw-project-launcher .pw-project-start { margin: 0; padding: 0; box-shadow: none; background: transparent; }
+.pw-project-launcher [role="tabpanel"][hidden] { display: none; }

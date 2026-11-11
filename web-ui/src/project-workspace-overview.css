@@ -44,6 +44,8 @@
 .pw-project-work-empty h3 { margin: 0; font-size: 18px; line-height: 27px; font-weight: 500; letter-spacing: -.02em; }
 .pw-project-work-empty p { max-width: 48ch; margin: 8px 0 0; color: var(--pw-copy); font-size: 13px; line-height: 23px; overflow-wrap: anywhere; }
 .pw-project-work-unavailable { margin: 14px 4px 0; color: var(--pw-copy); font-size: 12px; line-height: 20px; }
+.pw-project-new-work { margin-top: var(--pw-gap-section, 28px); min-width: 0; }
+.pw-project-new-work:first-child { margin-top: 0; }
 .pw-project-overview-tools { min-width: 0; padding-top: 4px; }
 .pw-project-overview-tools h3 { margin-left: 10px; }
 .pw-project-overview .pw-project-tool-row { display: flex; width: 100%; height: auto; min-height: 64px; justify-content: flex-start; gap: 10px; padding: 10px; border: 0; border-radius: 12px; background: transparent; box-shadow: none; text-align: start; white-space: normal; }

@@ -61,6 +61,21 @@ internal object PocketWebState {
         .put("summary", row.summary).put("executionMode", row.executionMode).put("updatedAt", row.updatedAt)
         .put("raw", publicValue(row.raw, images))
 
+    /** Same private work relation as ownerWorkPresentation in the web view.
+     * A foreground assistant reply cannot join the home merely by completing. */
+    private fun homeWork(row: UiTask): Boolean {
+        val raw = row.raw
+        if (raw.optString("id") != row.id || raw.optString("actorId") != "owner" || raw.optString("spaceId") != "private") return false
+        if (raw.optString("executionRole") == "owner_work") return true
+        val result = raw.optJSONObject("resultHandling") ?: return false
+        val epoch = raw.opt("coordinatorEpoch")
+        val resultEpoch = result.opt("epoch")
+        return raw.opt("nativeResultHandling") == true && result.optString("format") == "pocketworld.owner-result-handling.v1" &&
+            result.optString("taskId") == row.id && raw.optString("runId").isNotBlank() && result.optString("runId") == raw.optString("runId") &&
+            (epoch is Int || epoch is Long) && (resultEpoch is Int || resultEpoch is Long) &&
+            raw.optLong("coordinatorEpoch") > 0 && result.optLong("epoch") == raw.optLong("coordinatorEpoch")
+    }
+
     fun snapshot(controller: PocketWorldController): JSONObject {
         val state = controller.state
         // Both lists expose the same task fields. Project each task once per
@@ -70,8 +85,7 @@ internal object PocketWebState {
         state.tasks.forEach { row ->
             val projected = task(row)
             tasks.put(projected)
-            if (row.raw.optString("executionRole") == "owner_work" &&
-                row.raw.optString("actorId") == "owner" && row.raw.optString("spaceId") == "private") {
+            if (homeWork(row)) {
                 ownerWork.put(projected)
             }
         }

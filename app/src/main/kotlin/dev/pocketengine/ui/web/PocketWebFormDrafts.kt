@@ -23,7 +23,7 @@ internal class PocketWebFormDrafts(context: Context) {
             "teams" to setOf("name", "nameEdited", "mode", "leaderId", "members", "goal", "rounds", "text"),
             "reminders" to setOf("title", "phone", "goal", "type", "minutes", "date", "time", "zone", "weekdays", "monthDay", "lastDay", "skipGap", "laterOverlap", "cron", "misfire", "overlap", "maxCatchUp"),
             "commitments" to setOf("title", "details", "taskId", "hours", "date", "time", "zone", "laterOverlap", "changeTiming"),
-            "plans" to setOf("goal", "delay", "steps", "timingEdited")
+            "plans" to setOf("goal", "delay", "steps", "timingEdited", "scheduleMode", "date", "time", "zone", "laterOverlap")
         )
         private val children = mapOf(
             "members" to setOf("id", "name", "role", "model", "runner", "modeId", "avatarShape", "assignment", "dependsOn", "device", "writeFiles", "production"),

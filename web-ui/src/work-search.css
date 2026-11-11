@@ -12,6 +12,9 @@
 .pw-work-search .pw-search-status p, .pw-work-search footer p { margin: 0; }
 .pw-work-search .pw-command footer { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; white-space: normal; }
 .pw-work-search .pw-search-notice { color: var(--pw-copy); font-size: 12px; line-height: 20px; }
+.pw-search-kind-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 4px 8px 8px; border-bottom: 1px solid var(--pw-selected); }
+.pw-search-kind-filters button { flex: 1 0 auto; min-height: 44px; padding-inline: 10px; font: 400 13px/20px var(--pw-font); color: var(--pw-copy); }
+.pw-search-kind-filters button[aria-pressed="true"] { color: var(--pw-accent); background: var(--pw-selection-surface); font-weight: 600; }
 .pw-search-original-body { display: flex; flex-direction: column; gap: 20px; overflow-anchor: none; }
 .pw-search-original-meta { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; color: var(--pw-copy); font: 400 12px/20px var(--pw-font); }
 .pw-search-original-body .pw-reading-copy { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 400 16px/1.8 var(--pw-font); }

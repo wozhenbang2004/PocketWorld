@@ -114,6 +114,8 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
   const receiptsError = state.moduleErrors?.['automation.receipts'];
   const receiptsReady = Array.isArray(state.moduleResults?.['automation.receipts']?.receipts);
   const receipts = array(state.moduleResults?.['automation.receipts']?.receipts).slice().reverse();
+  const visibleReceipts = selectedRule ? receipts.filter(receipt => receipt.ruleId === selectedRule.id) : receipts;
+  useEffect(() => { setReceiptLimit(10); }, [selectedRule?.id]);
   const draft = editor?.draft;
   const calendar = draft && ['daily', 'weekly', 'monthly', 'cron'].includes(draft.type);
   const receiptTiming = (receipt: Data) => <dl className="pw-reminder-receipt-facts">
@@ -134,7 +136,7 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
   const hasFilters = Boolean(query.trim()) || filter !== 'all';
   const showDirectoryTools = rules.length > 0 || hasFilters;
   const emptyDirectory = hasRules && !rules.length && !hasFilters && !reading && !readingError && !pending && !error && !receiptsBusy && !receiptsError;
-  const showReceiptHistory = receipts.length > 0 || receiptsBusy || Boolean(receiptsError) || !receiptsReady || uncertain || Boolean(submission);
+  const showReceiptHistory = !!selectedRule || visibleReceipts.length > 0 || receiptsBusy || Boolean(receiptsError) || !receiptsReady || uncertain || Boolean(submission);
   const clearFilters = () => { setQuery(''); setFilter('all'); };
   const newReminder = <PressButton compact disabled={pending || reading || readingError || !hasRules || !supported('automation.reviewSchedule')} onClick={() => open('create')}>新建提醒</PressButton>;
   const refreshButton = <Button variant="ghost" iconOnly leadingIcon={IconRefresh} aria-label="刷新提醒与发生记录" disabled={reading || receiptsBusy || !supported('automation.list')} onClick={() => { void refresh().catch(() => {}); }} />;
@@ -152,7 +154,7 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
   useCollectionMotion(root, JSON.stringify([selectedRule?.id || 'list', query.trim(), filter, state.webWorkspaceResumeRevision]), JSON.stringify([
     ruleGroups.map(group => [group.id, group.rules.map(rule => [rule.id, rule.revision, rule.nextAt])]), notice, error,
   ]), { selector: '[data-reminder-id]', active: hasRules && collectionActive });
-  useCollectionMotion(root, JSON.stringify([selectedRule?.id || 'list', receiptLimit, state.webWorkspaceResumeRevision]), JSON.stringify(receipts.map(receipt => [receipt.id, receipt.status])), {
+  useCollectionMotion(root, JSON.stringify([selectedRule?.id || 'list', receiptLimit, state.webWorkspaceResumeRevision]), JSON.stringify(visibleReceipts.map(receipt => [receipt.id, receipt.status])), {
     selector: '[data-reminder-receipt-id]', active: receiptsReady && !receiptsBusy && collectionActive,
   });
   return <div ref={root} className="pw-reminder-workspace pw-knowledge-workspace" tabIndex={-1}>
@@ -202,11 +204,11 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
       })}</div></section>)}</> : emptyDirectory ? <div className="pw-reminder-directory-empty"><IconNotification size={28} aria-hidden="true"/><h2>还没有提醒</h2><p>安排要记得的事，创建前会先核对时间。</p><div className="pw-form-actions">{newReminder}<Button variant="ghost" leadingIcon={IconRefresh} disabled={reading || receiptsBusy || !supported('automation.list')} onClick={() => { void refresh().catch(() => {}); }}>重新读取</Button></div></div> : pending ? <p className="pw-field-hint" role="status">{uncertain ? '原提交结果尚待核对，请刷新已有提醒与发生记录。' : '正在处理原提醒请求，请等待原操作回执。'}</p> : hasFilters && !error && !receiptsBusy && !receiptsError ? emptyResults : null}
     </section>
     {receiptsError && <p className="pw-field-error" role="alert">{String(receiptsError)}</p>}
-    {showReceiptHistory && <Accordion variant="divided" className="pw-compact-disclosures"><AccordionItem id="reminder-receipts" title="最近投递" description={receiptsBusy ? '正在读取发生记录…' : receiptsError ? '本次读取未完成' : receipts.length ? `${receipts.length} 条原发生记录` : '核对原投递与任务结果'}>
+    {showReceiptHistory && <Accordion key={selectedRule?.id || 'all-reminders'} variant="divided" className="pw-compact-disclosures"><AccordionItem id="reminder-receipts" title={selectedRule ? '这条提醒的发生记录' : '最近投递'} description={receiptsBusy ? '正在读取发生记录…' : receiptsError ? '本次读取未完成' : visibleReceipts.length ? `本次已读取 ${visibleReceipts.length} 条发生记录` : '核对原投递与任务结果'}>
     <section className="pw-settings-section" aria-label="原发生与投递回执"><header className="pw-section-heading"><p>发生、投递与原任务完成分开。准备会建立或定位原手机目标，仍须你确认执行。未知结果只核对原记录，不会重发。</p></header>
       <Button variant="ghost" leadingIcon={IconRefresh} disabled={receiptsBusy || !supported('automation.receipts')} onClick={() => { void run('automation.receipts').catch(failure => setError(failure instanceof Error ? failure.message : String(failure))); }}>重新读取发生记录</Button>
-      {receiptsBusy ? <p className="pw-secondary-empty" role="status">正在读取原发生记录…</p> : receiptsError ? <p className="pw-field-hint">本次读取未完成，请重新核对原记录。</p> : !receiptsReady ? <p className="pw-secondary-empty">尚未读取原发生记录，请刷新核对。</p> : receipts.length ? receipts.slice(0, receiptLimit).map(receipt => receiptRow(receipt)) : uncertain || submission ? <p className="pw-field-hint">原提交尚待核对，请先重新读取记录。</p> : <p className="pw-secondary-empty">暂无发生记录。</p>}
-      {!receiptsBusy && !receiptsError && receipts.length > receiptLimit && <Button variant="secondary" onClick={() => setReceiptLimit(value => value + 10)}>显示更早记录</Button>}
+      {receiptsBusy ? <p className="pw-secondary-empty" role="status">正在读取原发生记录…</p> : receiptsError ? <p className="pw-field-hint">本次读取未完成，请重新核对原记录。</p> : !receiptsReady ? <p className="pw-secondary-empty">尚未读取原发生记录，请刷新核对。</p> : visibleReceipts.length ? visibleReceipts.slice(0, receiptLimit).map(receipt => receiptRow(receipt)) : uncertain || submission ? <p className="pw-field-hint">原提交尚待核对，请先重新读取记录。</p> : <p className="pw-secondary-empty">{selectedRule ? '本次读取范围内没有这条提醒的发生记录。' : '本次读取范围内没有发生记录。'}</p>}
+      {!receiptsBusy && !receiptsError && visibleReceipts.length > receiptLimit && <Button variant="secondary" onClick={() => setReceiptLimit(value => value + 10)}>显示更早记录</Button>}
     </section>
     </AccordionItem></Accordion>}
     <SettingsDialog isOpen={Boolean(editor || review)} title={review ? review.command === 'save' ? '核对提醒计划' : review.command === 'delete' ? '删除这个提醒？' : review.enabled ? '启用这个提醒？' : '暂停这个提醒？' : editor?.intent === 'edit' ? '编辑提醒' : editor?.intent === 'reschedule' ? '重新安排提醒' : '新建提醒'} onClose={() => { if (review) { generation.current++; setReview(null); } else formDraft.guard(close); }}><div className={'pw-knowledge-dialog' + (review ? '' : ' pw-knowledge-edit-dialog')}>

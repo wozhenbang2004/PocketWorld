@@ -10681,7 +10681,10 @@ public final class TaskStore {
         JSONObject grant=grant(runId);executionScopeCurrent(task,runId,grant);grant.put("tools",clean);ContentValues v=new ContentValues();v.put("grant_json",grant.toString());db.update("runs",v,"run_id=?",new String[]{runId});
     }
     public synchronized JSONObject ownerWorkSearchPage(String query,String cursor,int limit)throws Exception {
-        return TaskOwnerSearch.search(this,query,cursor,limit);
+        return ownerWorkSearchPage(query,cursor,limit,"all");
+    }
+    public synchronized JSONObject ownerWorkSearchPage(String query,String cursor,int limit,String filter)throws Exception {
+        return TaskOwnerSearch.search(this,db,query,cursor,limit,filter);
     }
     public synchronized JSONObject ownerWebUsageForOwner(long from,long to,String zone,String cursor,RunControl control)throws Exception {
         return TaskWebUsage.read(db,from,to,zone,cursor,control);
