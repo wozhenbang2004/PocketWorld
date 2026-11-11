@@ -61,6 +61,9 @@ internal class PocketWebHost private constructor(
         fun appUpdates(activity: dev.pocketengine.features.updates.AppUpdateActivity,
             manager: dev.pocketengine.features.updates.AppUpdateManager) =
             PocketWebHost(activity, { emit -> PocketWebAppUpdates(activity, manager, emit) })
+        @JvmStatic
+        fun projectApk(activity: dev.pocketengine.features.local.project.ProjectApkInstallActivity) =
+            PocketWebHost(activity, { emit -> PocketWebProjectApk(activity, emit) })
         fun browserSourceReader(activity: dev.pocketengine.BrowserActivity, host: dev.pocketengine.browser.BrowserTaskHost,
             target: BrowserSourceReaderTarget, focused: () -> Boolean, dismiss: () -> Unit, failed: () -> Unit) =
             PocketWebHost(activity, { emit -> PocketWebBrowserSources(target, host, focused, emit, dismiss) }, readerFailure = failed)

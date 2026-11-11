@@ -11,6 +11,7 @@ public final class TeamMessageQuote {
                 .put("messageId", original.getString("messageId"))
                 .put("memberId", original.optString("memberId"))
                 .put("role", original.optString("role"))
+                .put("avatarShape", original.optJSONObject("memberSnapshot") == null ? "" : original.getJSONObject("memberSnapshot").optString("avatarShape"))
                 .put("name", original.optJSONObject("memberSnapshot") == null ? "" : original.getJSONObject("memberSnapshot").optString("name"));
     }
 

@@ -275,6 +275,8 @@ public final class ManagedProcessJobs implements AutoCloseable {
                         .put("exitCode",context.lastExit==null?-1:context.lastExit.exitCode)
                         .put("effectStatus",job.receipt.optBoolean("processDispatchAttempted")?"preparation_failed":"not_dispatched")
                         .put("error",failure.getMessage()==null?"runtime_preparation_failed":failure.getMessage())
+                        .put("preparationFailure",RuntimeHealth.failure(failure))
+                        .put("failedPreparationPhase",job.receipt.optString("preparationPhase","queued"))
                         .put("preparationPhase",unknown?"observation_unknown":"interrupted");
             }catch(Exception ignored){}}
         } finally {

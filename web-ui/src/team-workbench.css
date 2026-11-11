@@ -1,0 +1,45 @@
+/* Team workbench: AionUI's stable member focus and activity/message separation,
+ * adapted to PocketWorld's real shared run with the adopted BoardUI controls,
+ * GrokBot identity and Affect answer surfaces. No second chat or authority. */
+.pw-team-identity { display: inline-flex; align-items: center; gap: 10px; min-width: 0; text-align: start; }
+.pw-team-avatar { display: inline-flex; flex: 0 0 auto; overflow: hidden; }
+.pw-team-identity-copy { display: grid; gap: 2px; min-width: 0; }
+.pw-team-identity-copy > span { overflow-wrap: anywhere; font-weight: 600; line-height: 1.5; }
+.pw-team-identity-copy > small { color: var(--pw-copy); font-size: 12px; line-height: 1.5; font-weight: 400; overflow-wrap: anywhere; }
+.pw-team-roster-summary, .pw-team-roster-preview { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+.pw-team-workspace .pw-object-row-copy > .pw-team-roster-preview { display: flex; }
+.pw-team-roster-preview > span { display: inline-flex; align-items: center; gap: 4px; }
+.pw-team-workbench { min-width: 0; }
+.pw-team-workbench-bar { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.pw-team-workbench-bar > div { flex: 1 1 auto; min-width: 0; }
+.pw-team-workbench-bar > button { flex-shrink: 0; }
+.pw-team-workbench [role="tab"] { min-height: 44px; }
+.pw-team-workbench > [role="tabpanel"] { display: grid; gap: 24px; min-width: 0; }
+.pw-team-workbench > [role="tabpanel"][hidden], .pw-team-workbench > [data-team-materials-active="false"] { display: none; }
+.pw-team-progress-layout, .pw-team-progress-main, .pw-team-progress-summary { display: grid; align-content: start; gap: 24px; min-width: 0; }
+.pw-team-progress-summary { padding: 16px; background: var(--pw-surface); border-radius: 20px; }
+.pw-team-progress-empty { margin: 0; color: var(--pw-copy); font-size: 14px; line-height: 1.7; }
+.pw-team-workspace .pw-team-member-meta { margin-top: 4px; }
+.pw-team-action-list { display: grid; gap: 4px; padding: 16px; border-radius: 20px; background: var(--pw-surface); }
+.pw-team-workspace .pw-team-question-row { justify-content: flex-start; padding: 12px 0; min-width: 0; border-radius: 0; text-align: start; }
+.pw-team-question-row > span { display: grid; justify-items: start; gap: 8px; flex: 1 1 auto; min-width: 0; }
+.pw-team-question-preview { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; font-weight: 400; line-height: 1.7; overflow-wrap: anywhere; }
+.pw-team-member-filter { display: flex; gap: 8px; overflow-x: auto; padding: 2px 2px 8px; scrollbar-width: thin; }
+.pw-team-member-filter > button { flex: 0 0 auto; min-height: 44px; }
+.pw-team-workspace :is(.pw-team-member-filter, .pw-team-avatar-picker) button[aria-pressed="true"] { background: var(--pw-surface); box-shadow: inset 0 0 0 1px var(--pw-edge); }
+.pw-team-conversation-hint { margin: -16px 0 0; color: var(--pw-copy); font-size: 13px; line-height: 1.65; }
+.pw-team-message-heading h3 { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.pw-team-message-heading h3 > small { font-size: 13px; font-weight: 400; color: var(--pw-copy); }
+.pw-team-avatar-picker { display: grid; gap: 8px; }
+.pw-team-avatar-picker > div { display: flex; flex-wrap: wrap; gap: 8px; }
+.pw-team-avatar-picker button > span { display: flex; align-items: center; gap: 8px; }
+.pw-team-workspace .pw-team-editor-members .pw-team-identity { max-width: 100%; }
+@media (min-width: 1000px) {
+  .pw-team-progress-layout { grid-template-columns: minmax(280px, 1fr) minmax(0, 1.35fr); align-items: start; }
+}
+@media (max-width: 420px) {
+  .pw-team-workbench-bar { flex-wrap: wrap; }
+  .pw-team-workbench-bar > div { flex-basis: 100%; }
+  .pw-team-workbench-bar > button { margin-inline-start: auto; }
+  .pw-team-action-list, .pw-team-progress-summary { padding: 12px; }
+}

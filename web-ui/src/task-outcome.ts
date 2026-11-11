@@ -9,6 +9,8 @@ export interface TaskOutcome {
   text: string;
   source: 'evidence' | 'result-event' | 'task-summary' | 'none';
   image?: string;
+  remotePhoneSnapshot?: { image: string; deviceId: string; screenMode: 'main_screen' | 'background'; capturedAt: number; currentRun: boolean; width: number; height: number };
+  remotePhoneSnapshotStatus?: 'not_observed' | 'retention_disabled' | 'too_large' | 'save_unconfirmed' | 'saved';
   retained?: { text: string; image?: string };
   evidenceRunBound?: boolean;
   screenshot?: { imageId: string; state: string; currentRun: boolean; encrypted: boolean; legacyRetained: boolean; createdAt?: number; expiresAt?: number; readState: string; deletionPending: boolean };
@@ -59,6 +61,22 @@ export function getTaskOutcome(input: unknown, messages: unknown = [], now: numb
   } : undefined;
   const mayShowImage = !hasImageRecord || screenshot?.state === 'stored' && screenshot.readState !== 'unreadable';
   const image = mayShowImage && /^data:image\/(?:png|jpeg|webp);base64,[a-zA-Z0-9+/=\r\n]+$/.test(imageData) ? imageData : undefined;
+  const remote = row(imageRecord.remotePhoneSnapshot), deviceWork = row(raw.ownerDeviceWork);
+  const isDeviceWork = deviceWork.format === 'pocketworld.owner-device-work.v1' && deviceWork.requestId === id;
+  const hasPhoneScope = rows(row(raw.deviceSourceScope).routes).some(route => ['main_screen', 'background'].includes(text(row(route.resourceBinding).screenMode)));
+  const snapshotStatus = row(raw.remotePhoneSnapshotStatus);
+  const statusCurrent = snapshotStatus.format === 'pocketworld.owner-device-phone-snapshot-status.v1' && snapshotStatus.runId === runId && snapshotStatus.epoch === raw.coordinatorEpoch;
+  const remotePhoneSnapshotStatus: TaskOutcome['remotePhoneSnapshotStatus'] = isDeviceWork && hasPhoneScope
+    ? statusCurrent && ['retention_disabled', 'too_large', 'save_unconfirmed', 'saved'].includes(text(snapshotStatus.state))
+      ? snapshotStatus.state as TaskOutcome['remotePhoneSnapshotStatus'] : 'not_observed' : undefined;
+  const captureTime = finite(remote.capturedAt), width = finite(remote.imageWidthPx), height = finite(remote.imageHeightPx);
+  const remotePhoneSnapshot: TaskOutcome['remotePhoneSnapshot'] = image && imageOwned &&
+    isDeviceWork &&
+    remote.format === 'pocketworld.owner-device-phone-snapshot.v1' && remote.coordinateAuthority === false && remote.liveVideo === false &&
+    (remote.screenMode === 'main_screen' || remote.screenMode === 'background') && text(remote.targetDeviceId) &&
+    captureTime !== undefined && captureTime > 0 && width !== undefined && width > 0 && height !== undefined && height > 0
+    ? {image, deviceId: text(remote.targetDeviceId), screenMode: remote.screenMode, capturedAt: captureTime, currentRun: screenshot?.currentRun === true, width, height}
+    : undefined;
   const linked = rows(messages).filter(message => id && (text(message.taskId) || text(row(message.submission).taskId)) === id && message.role === 'assistant' &&
     (text(message.content).trim() || rows(message.attachments).some(file => typeof file.id === 'string' && file.id))).at(-1);
   const attachments = rows(linked?.attachments).filter(file => typeof file.id === 'string' && file.id);
@@ -66,10 +84,10 @@ export function getTaskOutcome(input: unknown, messages: unknown = [], now: numb
   const reply = linked && (replyText || attachments.length) ? {
     id: text(linked.id), text: replyText, at: finite(linked.at), attachments,
   } : undefined;
-  const retained = !useEvidence && (evidenceText || image) ? {text: evidenceText, ...(image ? {image} : {})} : undefined;
+  const retained = !useEvidence && (evidenceText || image && !remotePhoneSnapshot) ? {text: evidenceText, ...(image && !remotePhoneSnapshot ? {image} : {})} : undefined;
   return { text: output, source: useEvidence ? 'evidence' : latest ? 'result-event' : summary ? 'task-summary' : 'none', reply, ...(screenshot ? {screenshot} : {}),
     ...(useEvidence ? {evidenceRunBound: currentEvidence} : {}),
-    ...(image && useEvidence ? {image} : {}), ...(retained ? {retained} : {}),
+    ...(image && useEvidence && !remotePhoneSnapshot ? {image} : {}), ...(retained ? {retained} : {}), ...(remotePhoneSnapshot ? {remotePhoneSnapshot} : {}), ...(remotePhoneSnapshotStatus ? {remotePhoneSnapshotStatus} : {}),
     partial: evidence.modelSummaryTruncated === true || evidence.outputTruncated === true || evidence.diffTruncated === true ||
       raw.taskCoreReadLimited === true || hasPage && (!validPage || page.hasMore === true || page.readLimited === true ||
       rows(page.entries).some(entry => entry.status === 'read_limited')) };

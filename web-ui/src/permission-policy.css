@@ -1,0 +1,18 @@
+.pw-policy-workbench { min-width: 0; }
+.pw-policy-origin, .pw-policy-saved-rule { margin: 0; color: var(--pw-copy); font-size: 13px; line-height: 21px; overflow-wrap: anywhere; }
+.pw-policy-tools { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.pw-policy-tools > h3 { margin: 0; color: var(--pw-ink); font-size: 15px; line-height: 24px; font-weight: 600; }
+.pw-policy-tool-editor { display: flex; flex-direction: column; gap: 16px; padding-block: 8px; }
+.pw-policy-caution { margin: 0; color: var(--pw-ink); background: var(--pw-inset); border-radius: 12px; padding: 12px 14px; font-size: 13px; line-height: 22px; }
+.pw-policy-change-summary { display: flex; flex-direction: column; gap: 4px; color: var(--pw-ink); font-size: 13px; line-height: 21px; }
+.pw-policy-change-summary strong { font-weight: 600; }
+.pw-policy-change-summary span { color: var(--pw-copy); }
+.pw-policy-inheritance { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.pw-policy-leave { display: flex; flex-direction: column; gap: 20px; color: var(--pw-copy); font-size: 15px; line-height: 24px; }
+.pw-policy-leave > div { display: flex; flex-wrap: wrap; gap: 12px; justify-content: flex-end; }
+/* Save follows the task-scope children in the same scroller (PW-G5). */
+.pw-policy-workbench > .pw-permission-actions { position: static; display: flex; flex-direction: column; gap: 12px; }
+
+.pw-task-policy-editor { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.pw-task-policy-editor > h4 { margin: 0; color: var(--pw-ink); font-size: 15px; line-height: 24px; font-weight: 600; }
+.pw-task-policy-editor > p { margin: 0; color: var(--pw-copy); font-size: 13px; line-height: 21px; overflow-wrap: anywhere; }

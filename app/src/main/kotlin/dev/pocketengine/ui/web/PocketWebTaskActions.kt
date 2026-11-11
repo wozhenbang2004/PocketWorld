@@ -5,6 +5,7 @@ import dev.pocketengine.ui.MediaOwnerUi
 import dev.pocketengine.ui.PocketWorldController
 import dev.pocketengine.ui.UiTask
 import dev.pocketengine.ui.isPhoneTask
+import dev.pocketengine.ui.isOwnerPhoneControlTask
 import dev.pocketengine.ui.objects
 import dev.pocketengine.ui.pendingCapabilityApprovals
 import dev.pocketengine.ui.unresolvedOperations
@@ -173,6 +174,15 @@ internal class PocketWebTaskActions(
                     allowed["tasks.plan.enter"] = "进入只读规划"
                 }
             }
+            if (task.raw.has("ownerDeviceWork") && task.raw.optString("runId").isEmpty()) {
+                val scope = task.raw.optJSONObject("executionScope")
+                val selected = task.raw.optJSONObject("deviceSourceScope")
+                val ready = scope != null && selected != null && selected.optLong("parentScopeRevision") == scope.optLong("revision") &&
+                    selected.optString("goal") == task.goal && selected.optJSONArray("routes").objects().isNotEmpty() &&
+                    selected.optJSONArray("routes").objects().all { it.optLong("deadline") > System.currentTimeMillis() }
+                if (!ready) allowed.remove("tasks.resume") else if (allowed.containsKey("tasks.resume")) allowed["tasks.resume"] = "开始这项设备工作"
+                allowed.remove("tasks.plan.enter")
+            }
             val positiveApprovalIds = approvalViews.objects().filter { it.optJSONObject("webReview")?.optBoolean("canApprove") == true }
                 .map { it.optString("approvalId", it.optString("id")) }.filter { it.isNotBlank() }.toSet()
             val handle = reviews.create(task, allowed.keys, positiveApprovalIds)
@@ -186,7 +196,7 @@ internal class PocketWebTaskActions(
         }
 
         fun unresolvedForReview(task: UiTask): List<JSONObject> = unresolvedOperations(task).filterNot { it.optString("tool") in setOf("device_invoke_tool", "device_delegate_goal", "device_operation_get") }
-        fun specialOwnerTask(task: UiTask) = setOf("ownerRuntimeSetup", "ownerLocalTerminal", "ownerBackupUpload", "ownerStorageCleanup", "ownerArchivePhase", "ownerGit", "ownerGitImport", "ownerGitPublication", "ownerMcpDiscovery").any(task.raw::has) || MediaOwnerUi.isTask(task.raw) || task.raw.optJSONObject("sourceLearningJob") != null || task.raw.optJSONObject("nativeEventTypeFlags")?.optBoolean("memory_owner_consolidation") == true || task.raw.optJSONArray("events").objects().any { it.optString("type") == "memory_owner_consolidation" }
+        fun specialOwnerTask(task: UiTask) = isOwnerPhoneControlTask(task) || setOf("ownerRuntimeSetup", "ownerLocalTerminal", "ownerBackupUpload", "ownerStorageCleanup", "ownerArchivePhase", "ownerGit", "ownerGitImport", "ownerGitPublication", "ownerMcpDiscovery").any(task.raw::has) || MediaOwnerUi.isTask(task.raw) || task.raw.optJSONObject("sourceLearningJob") != null || task.raw.optJSONObject("nativeEventTypeFlags")?.optBoolean("memory_owner_consolidation") == true || task.raw.optJSONArray("events").objects().any { it.optString("type") == "memory_owner_consolidation" }
 
         fun runtimeSetupTask(task: UiTask) = task.raw.optJSONObject("ownerRuntimeSetup") != null &&
             task.raw.optString("kind") == "tool" && task.raw.optString("actorId") == "owner" &&

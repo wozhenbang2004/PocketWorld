@@ -11,6 +11,7 @@ import BrowserSourceReader from './BrowserSourceReader';
 import BrowserChrome from './BrowserChrome';
 import BrowserWorkspace from './BrowserWorkspace';
 import UpdatesWorkspace from './UpdatesWorkspace';
+import ProjectApkWorkspace from './ProjectApkWorkspace';
 import { browserReaderSurface } from './reader-contract';
 import { bootstrapSurface } from './bootstrap-contract';
 import './fonts.css';
@@ -92,6 +93,7 @@ function MountedApp() {
   if (browserReaderSurface(snapshot)) return <BrowserSourceReader snapshot={snapshot} />;
   if (snapshot.surface === 'browser_chrome' || snapshot.host?.surface === 'browser_chrome') return <BrowserChrome snapshot={snapshot} />;
   if (snapshot.surface === 'browser_workspace' || snapshot.host?.surface === 'browser_workspace') return <BrowserWorkspace snapshot={snapshot} />;
+  if (snapshot.surface === 'project_apk' || snapshot.host?.surface === 'project_apk') return <ProjectApkWorkspace snapshot={snapshot} />;
   if (snapshot.surface === 'app_updates' || snapshot.host?.surface === 'app_updates') return <UpdatesWorkspace snapshot={snapshot} />;
   // A bootstrap command catalogue is not business readiness. Never mount normal
   // page effects until the native business endpoint has supplied its own state.

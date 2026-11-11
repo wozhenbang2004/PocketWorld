@@ -68,7 +68,9 @@ public final class SemanticCapabilityPort implements CapabilityPort {
         if(arguments!=null){JSONObject checked=new JSONObject(arguments.toString());checked.remove("_hostOperationId");validate(name,checked);}
         return dev.pocketengine.core.ExecutionPlanning.Access.READ;
     }
-    private JSONArray ownTools() throws Exception {
+    private JSONArray ownTools() throws Exception { return catalogDefinitions(dispatchEnabled); }
+    /** Pure declared schemas only. Does not discover apps/calendars or touch a platform. */
+    public static JSONArray catalogDefinitions(boolean dispatchEnabled) throws Exception {
         JSONArray out=new JSONArray().put(definition(DISCOVER,"发现真实App入口或日历。calendar_list列出可读日历，每页32项，按nextCalendarId继续；accessLevel>=500才可直接写。calendar_events需要准确calendarId及start/end（最多31天、结束不含），按nextEventId继续，每页至多32个事件或系列，返回原任务5分钟内有效且未经历暂停的eventRef。calendar_update需要eventRef、完整event及recurrenceScope；calendar_delete需要eventRef/recurrenceScope。普通事件或已有例外用event，重复主事件用series，不能把实例时间当单次修改授权。calendar_batch需要准确calendarId和1至50个完整events，可有RRULE；日历写操作全部逐参数审批，实际READ/WRITE_CALENDAR均已授予才可写。calendar_list/calendar_events的profile默认host，可显式work查询Android企业日历只读资料，受管理员和系统设置限制；工作资料不生成可写eventRef，写入需走原任务中对应资料的日历App。calendar_draft仍只打开单事件编辑器。日历start/end为UTC毫秒；全天必须UTC午夜，开始包含、结束不包含。web需要url；app_link需要准确packageName和HTTPS url，仍核OS App Links或浏览器资格；share_text需要packageName/text，接收方可能立即处理，启动不是已发送。show_alarms打开闹钟列表；map_search需要query；dial需要number；email_draft需要to。alarm需要24小时hour/minutes，可含days（SUN至SAT）及布尔vibrate；timer需要seconds（1–86400）。时钟可含单行message，使用设备时区。不接受任意Intent/extra。发现不执行写入，空候选不等于App未安装。",SemanticRequest.discoverySchema()));
         if(dispatchEnabled)out.put(definition(DISPATCH,"执行本次刚发现的准确语义请求，需要原TaskStore具体参数审批与原operation。calendar_batch批准固定日历与完整1至50事件，calendar_update/calendar_delete批准准确事件的原内容及变化范围，再调用一次带原版本断言的系统批处理，返回URI及读回。日历approval_required且accepted=false后，主人批准并恢复原run时使用同一discoveryId/candidateId；重传完全相同的discover请求可在原审批仍有效且目标完整版本未变化时返回同一ID，不恢复旧eventRef、不延长有效期。未知、已派发或回执不全不得重发。calendar_list/calendar_events只读不可派发。其他类型打开固定App入口，启动回执不代表业务成功。calendar_draft、拨号和邮件交主人完成；闹钟/计时可能立即生效，SKIP_UI=false不保证另有确认，派发一次后主人核验。",dispatchSchema()));
         return out;

@@ -36,8 +36,11 @@ public final class RemoteAttentionNotifications {
     }
     /** Exported Activity extras navigate only after original SQL validation; no callback/control is revived. */
     public static boolean openRequestedTask(TaskStore tasks,Intent intent,Consumer<JSONObject> open){
+        return openRequestedTask(tasks,intent,open, ignored -> { });
+    }
+    public static boolean openRequestedTask(TaskStore tasks,Intent intent,Consumer<JSONObject> open,Consumer<String> unavailable){
         if(intent==null||!ACTION.equals(intent.getAction()))return false;String task=intent.getStringExtra("remoteAttentionTask"),fingerprint=intent.getStringExtra("remoteAttentionFingerprint");
         intent.setAction(null);intent.removeExtra("remoteAttentionTask");intent.removeExtra("remoteAttentionFingerprint");
-        try{if(task==null||!task.matches("[A-Za-z0-9_-]{1,80}")||fingerprint==null||!fingerprint.matches("[a-f0-9]{64}"))return true;open.accept(tasks.remoteAttentionLocator(task,fingerprint));}catch(Exception unavailable){/* Forged/stale/deleted locator cannot create owner authority. */}return true;
+        try{if(task==null||!task.matches("[A-Za-z0-9_-]{1,80}")||fingerprint==null||!fingerprint.matches("[a-f0-9]{64}"))throw new IllegalArgumentException();open.accept(tasks.remoteAttentionLocator(task,fingerprint));}catch(Exception missing){unavailable.accept("这条电脑任务提醒已过期、任务已删除或暂不可读取。没有批准或重发任何操作，请从任务列表重新查看。");}return true;
     }
 }

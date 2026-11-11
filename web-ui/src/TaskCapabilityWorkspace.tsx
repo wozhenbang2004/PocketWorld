@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import './ecosystem-depth.css';
 import { Accordion, AccordionItem, Button, CheckboxField, SettingsDialog } from './forms-library';
+import { PermissionPolicySettings, PermissionTargetRetired, type PermissionLeaveGuard } from './PermissionPolicySettings';
+import { TaskToolInventory } from './TaskToolInventory';
 import { TaskCapabilityConsent, taskCapabilityArtifactStatus, taskCapabilityDecision } from './task-capabilities';
 
 type Data = Record<string, any>;
@@ -17,21 +19,29 @@ const toolMaintenanceRoute = (need: Data): 'plugins' | 'mcp' | null => {
   return installation.manifest?.mcpSource || Array.isArray(definitions) && definitions.some((tool: Data) => tool?.kind === 'mcp') ? 'mcp' : 'plugins';
 };
 
-export function TaskCapabilityWorkspace({ taskId, run, exportState, onBackChange, onOpenTools }: { taskId: string; run: Run; exportState?: Data | null; onBackChange?: (handler: (() => boolean) | null) => void; onOpenTools?: (route?: 'skills' | 'plugins' | 'mcp') => void }) {
+export function TaskCapabilityWorkspace({ taskId, run, exportState, onBackChange, onOpenTools, registerBeforeLeave }: { taskId: string; run: Run; exportState?: Data | null; onBackChange?: (handler: (() => boolean) | null) => void; onOpenTools?: (route?: 'skills' | 'plugins' | 'mcp' | 'workProfiles') => void; registerBeforeLeave?: (guard: PermissionLeaveGuard | null) => void }) {
   const [expanded, setExpanded] = useState(false), [view, setView] = useState<Data | null>(null), [review, setReview] = useState<Data | null>(null);
   const [script, setScript] = useState<Data | null>(null), [file, setFile] = useState<Data | null>(null), [busy, setBusy] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
+  const root = useRef<HTMLElement>(null), policyPosition = useRef(0), policyWasOpen = useRef(false);
+  const [policy, setPolicy] = useState<Data | null>(null), [policyRetired, setPolicyRetired] = useState('');
+  const policyCurrent = useRef<Data | null>(null), policyGuard = useRef<PermissionLeaveGuard | null>(null), policyWriting = useRef(false), policyDead = useRef(false), policyQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const registerPolicyGuard = useCallback((guard: PermissionLeaveGuard | null) => { policyGuard.current = guard; }, []);
+  const policyPending = useCallback((pending: boolean) => { policyWriting.current = pending; }, []);
+  const inventoryBack = useRef<(() => boolean) | null>(null);
+  const registerInventoryBack = useCallback((back: (() => boolean) | null) => { inventoryBack.current = back; }, []);
   const generation = useRef(0), alive = useRef(true), working = useRef(false), page = useRef(''), reviewId = useRef('');
   const consent = useRef(new TaskCapabilityConsent()), shown = useRef<Data | null>(null); shown.current = review;
   const version = generation.current, confirmTicket = consent.current.capture();
   const closeReview = () => { const handle = reviewId.current; reviewId.current = ''; consent.current.clear(); shown.current = null; setReview(null); setScript(null); setAcknowledged(false); if (handle) void run('taskCapabilities.dismissReview', { reviewHandle: handle }).catch(() => {}); };
-  const close = () => { generation.current++; working.current = false; closeReview(); const handle = page.current; page.current = ''; if (handle) void run('taskCapabilities.close', { pageHandle: handle }).catch(() => {}); setView(null); setFile(null); setBusy(false); };
+  const close = () => { if (policyCurrent.current) { policyDead.current = true; setPolicyRetired('原任务能力窗口已关闭，这份草稿不能再提交。'); } generation.current++; working.current = false; closeReview(); const handle = page.current; page.current = ''; if (handle) void run('taskCapabilities.close', { pageHandle: handle }).catch(() => {}); setView(null); setFile(null); setBusy(false); };
   const invoke = async (action: string, args: Data, accept?: (value: Data) => void) => {
     if (!alive.current || version !== generation.current || working.current) return;
     const ticket = generation.current; working.current = true; setBusy(true); setError('');
     try { const value = await run(action, args); if (alive.current && ticket === generation.current) { accept?.(value); return value; }
       if (value?.pageHandle) void run('taskCapabilities.close', { pageHandle: value.pageHandle }).catch(() => {});
       if (value?.reviewHandle) void run('taskCapabilities.dismissReview', { reviewHandle: value.reviewHandle }).catch(() => {});
+      if (value?.policyHandle) void run('taskCapabilities.policy.close', { policyHandle: value.policyHandle }).catch(() => {});
     } catch (failure) { if (alive.current && ticket === generation.current) setError(failure instanceof Error ? failure.message : String(failure)); }
     finally { if (ticket === generation.current) { working.current = false; if (alive.current) setBusy(false); } }
   };
@@ -51,27 +61,74 @@ export function TaskCapabilityWorkspace({ taskId, run, exportState, onBackChange
       if (value.view) acceptView(value.view); closeReview();
     });
   };
+  const closePolicy = () => {
+    const selected = policyCurrent.current; policyCurrent.current = null; policyGuard.current = null; policyDead.current = false; setPolicy(null); setPolicyRetired('');
+    if (selected?.policyHandle) void run('taskCapabilities.policy.close', { policyHandle: selected.policyHandle }).catch(() => {});
+    if (selected && page.current) { const handle = page.current, ticket = generation.current; void policyQueue.current.then(() => { if (alive.current && page.current === handle && ticket === generation.current && !policyCurrent.current) load(); }); }
+  };
+  const leavePolicy = (next: () => void = closePolicy) => { if (policyWriting.current) return; if (!policyGuard.current?.(next)) next(); };
+  const openPolicy = (tool: string) => {
+    if (!page.current || policyCurrent.current) return;
+    void invoke('taskCapabilities.policy.open', { pageHandle: page.current, tool }, value => { policyPosition.current = root.current?.closest('.pw-task-body')?.scrollTop || 0; policyCurrent.current = value; policyDead.current = false; setPolicyRetired(''); setPolicy(value); });
+  };
+  const policyAct = (action: string, args: Data = {}): Promise<Data> => {
+    const selected = policyCurrent.current, ticket = generation.current;
+    const execute = async () => {
+      if (!selected || policyCurrent.current !== selected || ticket !== generation.current || !page.current || policyDead.current) throw new PermissionTargetRetired('原任务审批编辑窗口已关闭，不能继续提交。');
+      let result: Data;
+      if (action === 'permissions.catalog') result = await run('taskCapabilities.policy.catalog', { policyHandle: selected.policyHandle });
+      else if (action === 'permissions.snapshot') result = await run('taskCapabilities.policy.snapshot', { policyHandle: selected.policyHandle });
+      else if (action === 'permissions.save') result = await run('taskCapabilities.policy.save', { policyHandle: selected.policyHandle, global: args.global, policy: args.policy, expectedRevision: args.expectedRevision });
+      else throw new Error('此编辑页只处理原任务适用的审批规则。');
+      if (!alive.current || ticket !== generation.current || policyCurrent.current !== selected) throw new PermissionTargetRetired('原窗口已变化，保存结果请回原任务核对；没有自动再次提交。');
+      if (result.policyRetired === true) { const reason = String(result.message || '原任务编辑目标已失效，这份草稿不能再提交。'); policyDead.current = true; setPolicyRetired(reason); throw new PermissionTargetRetired(reason); }
+      if (action !== 'permissions.catalog' && ['taskId', 'runId', 'epoch', 'tool', 'conversationId'].some(key => result[key] !== selected[key])) { const reason = '原任务审批目标已变化，未采用这次读取结果。'; policyDead.current = true; setPolicyRetired(reason); throw new PermissionTargetRetired(reason); }
+      return result;
+    };
+    // Native task capabilities admit one read/write at a time. Queue reads, never retry writes.
+    const result = policyQueue.current.then(execute, execute); policyQueue.current = result.catch(() => undefined); return result;
+  };
   const original = (action: string, operation: Data) => { if (!page.current || version !== generation.current) return; void invoke(action, { pageHandle: page.current, operationHandle: operation.operationHandle }, value => { acceptView(value.view); setNotice(value.retrieved === true ? '已按原回执取回成果，没有重新提交脚本。' : '已核对原操作，没有重新提交。'); }); };
   const exported = exportState?.taskId === taskId ? exportState : null;
+  useLayoutEffect(() => {
+    if (policyWasOpen.current === !!policy) return; policyWasOpen.current = !!policy;
+    const node = root.current, scroller = node?.closest('.pw-task-body');
+    if (node && scroller) scroller.scrollTop = policy ? Math.max(0, scroller.scrollTop + node.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 8) : policyPosition.current;
+    node?.querySelector<HTMLElement>(policy ? '[data-task-policy-heading]' : '[data-task-policy-entry]')?.focus({ preventScroll: true });
+  }, [policy]);
   useEffect(() => { alive.current = true; return () => { alive.current = false; close(); }; }, [taskId]);
   useEffect(() => { const hidden = () => { if (document.visibilityState !== 'visible') close(); }; document.addEventListener('visibilitychange', hidden); return () => document.removeEventListener('visibilitychange', hidden); }, []);
-  useEffect(() => { onBackChange?.(() => { if (reviewId.current) { closeReview(); return true; } if (expanded) { close(); setExpanded(false); return true; } return false; }); return () => onBackChange?.(null); }, [expanded, onBackChange]);
+  useEffect(() => {
+    registerBeforeLeave?.(next => policyWriting.current || (policyCurrent.current ? policyGuard.current?.(next) || false : false));
+    return () => registerBeforeLeave?.(null);
+  }, [registerBeforeLeave]);
+  useEffect(() => { onBackChange?.(() => { if (reviewId.current) { closeReview(); return true; } if (policyCurrent.current) { leavePolicy(); return true; } if (inventoryBack.current?.()) return true; if (expanded) { close(); setExpanded(false); return true; } return false; }); return () => onBackChange?.(null); }, [expanded, onBackChange]);
 
-  return <section className="pw-task-capabilities pw-ecosystem-depth"><div className="pw-section-heading pw-eco-workspace-heading"><div><h3>任务脚本与工具</h3><p>核对这次执行，查看原回执与文件成果。</p></div><Button variant="secondary" disabled={busy} onClick={() => { if (expanded) { close(); setExpanded(false); } else { setExpanded(true); load(); } }}>{expanded ? '收起' : '查看'}</Button></div>
-    {expanded && <><div className="pw-form-actions"><Button variant="ghost" disabled={busy} onClick={load}>刷新原任务能力</Button></div>
+  return <section ref={root} aria-busy={busy} className="pw-task-capabilities pw-ecosystem-depth"><div className="pw-section-heading pw-eco-workspace-heading"><div><h3>任务脚本与工具</h3><p>核对这次执行，查看原回执与文件成果。</p></div><Button variant="secondary" disabled={busy} onClick={() => { if (expanded) { const collapse = () => { closePolicy(); close(); setExpanded(false); }; if (policyCurrent.current) leavePolicy(collapse); else collapse(); } else { setExpanded(true); load(); } }}>{expanded ? '收起' : '查看'}</Button></div>
+    {expanded && <>
+      {policy && <section className="pw-task-policy-editor" aria-label="原任务适用的审批规则">
+        <Button variant="ghost" onClick={() => leavePolicy()}>返回本轮工具</Button>
+        <h4 tabIndex={-1} data-task-policy-heading>{policy.conversationId ? '原任务所属对话的审批设置' : '原任务适用的全局审批设置'}</h4>
+        <p>{policy.tool} · 原执行 {policy.runId} / {policy.epoch}</p>
+        <p>这不是只给本任务的授权。保存所属对话规则会影响该对话的其他适用任务；保存全局规则会影响所有适用范围。已有原生限制不变，旧策略决策须重新核对，不会自动重跑。</p>
+        <PermissionPolicySettings conversationId={String(policy.conversationId || '')} conversationLabel="原任务所属对话" initialScope={policy.conversationId ? 'conversation' : 'global'} initialTool={String(policy.tool)} initialToolFromTask act={policyAct} registerBeforeLeave={registerPolicyGuard} onPendingChange={policyPending} unavailableReason={policyRetired}/>
+      </section>}
+      <div hidden={!!policy} style={policy ? { display: 'none' } : undefined}><div className="pw-form-actions"><Button variant="ghost" disabled={busy} onClick={load}>刷新原任务能力</Button></div>
       {view?.reviewPending && <section className="pw-eco-pending-review"><div><h4>待你核对本次脚本</h4><p>当前任务正在等你审阅脚本。打开此页不会批准执行。</p></div><Button disabled={busy} onClick={() => void invoke('taskCapabilities.review', { pageHandle: page.current }, showReview)}>审阅本次执行</Button></section>}{view?.capabilityPreparationMessage && <p>{view.capabilityPreparationMessage}</p>}
+      <TaskToolInventory key={`${taskId}:${view?.toolInventory?.runId || ''}`} inventory={view?.toolInventory} registerBack={registerInventoryBack} onEditPolicy={openPolicy} onOpenCatalog={onOpenTools ? () => onOpenTools() : undefined} onOpenProfiles={onOpenTools ? () => onOpenTools('workProfiles') : undefined} />
       <div className="pw-eco-capability-layout"><section className="pw-eco-executions"><div className="pw-eco-section-heading"><h4>执行与成果</h4><p>原回执和文件分开核对，取回不会重跑脚本。</p></div>{rows(view?.executions).map(operation => <section className="pw-eco-operation" key={operation.operationId}><h4>原任务脚本回执</h4><p>{receiptStatus(operation.receipt?.status || operation.state || '等待原回执')} · {taskCapabilityArtifactStatus(operation)}</p><p className="pw-field-hint">原操作 {operation.operationId}</p><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => original('taskCapabilities.receipt', operation)}>核对原回执</Button>{operation.artifactAvailability?.canRecheck === true && <Button variant="secondary" disabled={busy} onClick={() => original('taskCapabilities.retrieve', operation)}>取回原文件成果</Button>}</div>{operation.receipt?.output && <Accordion variant="divided"><AccordionItem title="读取原始输出"><pre className="pw-source-code">{String(operation.receipt.output)}</pre></AccordionItem></Accordion>}{rows(operation.receipt?.artifacts).map(artifact => <div className="pw-eco-artifact" key={artifact.artifactId}><p>{artifact.path} · {artifact.bytes} 字节</p><Button variant="ghost" disabled={busy} onClick={() => void invoke('taskCapabilities.artifact', { pageHandle: page.current, artifactHandle: artifact.artifactHandle }, value => setFile(value))}>读取原成果</Button><Button variant="secondary" disabled={busy || !!exported && ['waiting', 'selected', 'writing'].includes(exported.phase)} onClick={() => void invoke('taskCapabilities.export', { pageHandle: page.current, artifactHandle: artifact.artifactHandle }, () => setNotice('系统保存请求已发出，请完成或取消原文件选择。'))}>导出原成果</Button></div>)}</section>)}
       {!!file && <section><h4>{file.path}</h4><p className="pw-field-hint" style={{ overflowWrap: 'anywhere' }}>SHA-256：{file.sha256}</p><p>{file.bytes} 字节。文件内容来自原脚本，尚未导入项目或执行。</p></section>}
       </section><aside className="pw-eco-tool-needs"><div className="pw-eco-section-heading"><h4>相关技能的工具</h4><p>根据任务描述匹配的技能引用，是否使用仍以本次执行为准。</p></div>{rows(view?.pluginNeeds).map(need => {
         const maintenanceRoute = toolMaintenanceRoute(need);
         return <section className="pw-eco-tool" key={need.needHandle}><h4>{need.pluginId} · {need.tool}</h4>{need.installation ? <>
-          <p>复用已安装的服务 · {need.available ? '当前可用' : '可核对这项工具的设置'}</p>
+          <p>复用已安装的服务 · {need.available ? '当前配置已满足此技能引用，不代表本任务已接入' : '此技能引用的配置尚未满足'}</p>
           <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => void invoke('taskCapabilities.mcp.review', { pageHandle: page.current, needHandle: need.needHandle, change: 'grant', value: !(need.installation.grants || []).includes(`tool:${need.tool}`) }, showReview)}>{(need.installation.grants || []).includes(`tool:${need.tool}`) ? '审阅并撤销这个工具' : '审阅并允许这个工具'}</Button><Button variant="ghost" disabled={busy} onClick={() => void invoke('taskCapabilities.mcp.review', { pageHandle: page.current, needHandle: need.needHandle, change: 'enabled', value: need.installation.enabled !== true }, showReview)}>{need.installation.enabled ? '审阅并停用这个安装' : '审阅并启用这个安装'}</Button>
             {maintenanceRoute && onOpenTools && <Button variant="ghost" disabled={busy} onClick={() => onOpenTools(maintenanceRoute)}>管理这项工具的来源</Button>}
           </div>
         </> : <><p>相关技能引用了尚未安装的工具，可按需要添加。</p>{onOpenTools && <Button variant="secondary" disabled={busy} onClick={() => onOpenTools()}>查找相关工具</Button>}</>}</section>;
       })}
       </aside></div>{view && !view.reviewPending && !rows(view.executions).length && !rows(view.pluginNeeds).length && <p className="pw-muted">当前没有待审阅脚本、原执行记录或匹配到的工具引用。</p>}
+      </div>
     </>}{error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}{exported && <p role="status">{exported.error || (exported.phase === "exported" && exported.receipt?.status === "exported" ? `已按原 SHA-256 导出 ${exported.receipt.bytes} 字节，请在文件应用中查看。` : exported.phase === "cancelled" ? "原保存选择已取消，没有写入其他位置。" : exported.phase === "writing" ? "正在写入所选的原文件位置…" : "等待原系统保存选择；尚未确认文件已导出。")}</p>}
     <SettingsDialog isOpen={!!review} onClose={closeReview} title={review?.kind === 'script' ? '审阅本次脚本执行' : '审阅工具设置'}>{review && <div className="pw-ecosystem-depth pw-eco-review-body">
       {review.kind === 'script' ? <><p>本次批准只属于当前原任务、脚本版本、执行地点和参数。脚本内容与结果均需独立核对。</p><dl className="pw-facts"><div><dt>技能</dt><dd>{review.package?.name || review.package?.id} · 修订 {review.package?.revision}</dd></div><div><dt>脚本</dt><dd>{review.request?.scriptPath}</dd></div><div><dt>执行地点</dt><dd>{review.executionLocation === 'this_phone' ? '这台手机的原托管环境' : '原配置的执行端'}</dd></div><div><dt>最长时间</dt><dd>{review.request?.timeoutSeconds} 秒</dd></div><div><dt>读取范围</dt><dd>{names(review.request?.readPaths)}</dd></div><div><dt>写入范围</dt><dd>{names(review.request?.writePaths)}</dd></div><div><dt>成果范围</dt><dd>{names(review.request?.outputPaths)}</dd></div><div><dt>到期时间</dt><dd>{typeof review.expiresAt === 'number' ? new Date(review.expiresAt).toLocaleString() : '尚未取得'}</dd></div></dl><Accordion><AccordionItem title="准确参数与内容标识"><pre className="pw-source-code">{JSON.stringify({ argv: review.argv, cwd: review.cwd, planDigest: review.planDigest, scriptSha256: review.scriptSha256, resources: review.resources, request: review.request, backend: review.backend }, null, 2)}</pre></AccordionItem></Accordion><Button variant="secondary" disabled={busy} onClick={() => void invoke('taskCapabilities.script', { reviewHandle: review.reviewHandle }, value => { if (shown.current === review) setScript(value); })}>读取当前版本的脚本内容</Button>{script && <pre className="pw-source-code">{script.content}</pre>}</> : <><p>{review.pluginId} · {review.tool?.name}</p><p>{review.change === 'grant' ? review.value ? '只允许原安装的这一个工具。实际任务调用仍走原任务授权。' : '撤销原安装的这一个工具。' : review.value ? '启用此原安装；不会授予其他工具。' : '停用此原安装。'}</p><p>{review.tool?.description}</p><Accordion variant="divided"><AccordionItem title="工具参数与原始定义"><pre className="pw-source-code">{JSON.stringify(review.tool?.schema || review.tool?.inputSchema || {}, null, 2)}</pre></AccordionItem></Accordion></>}

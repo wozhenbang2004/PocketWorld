@@ -16,6 +16,8 @@ export function TaskOutcome({ task, messages, onCopy, onOpenAttachment }: {
   const [clock, setClock] = useState(Date.now);
   const outcome = getTaskOutcome(task, messages, Math.max(clock, Date.now()));
   const screenshot = outcome.screenshot;
+  const remotePhone = outcome.remotePhoneSnapshot;
+  const phoneStatus = outcome.remotePhoneSnapshotStatus;
   useEffect(() => {
     const expiry = screenshot?.expiresAt;
     if (!expiry || expiry <= Date.now()) return;
@@ -29,7 +31,7 @@ export function TaskOutcome({ task, messages, onCopy, onOpenAttachment }: {
   const root = useRef<HTMLElement>(null);
   const record = task && typeof task === 'object' ? task as Record<string, any> : {};
   const owner = JSON.stringify([record.id, record.raw?.runId, record.raw?.coordinatorEpoch]);
-  const revision = JSON.stringify([!!outcome.text, !!outcome.image, screenshot?.imageId, reply?.id, files.map(file => [file.id, file.sha256])]);
+  const revision = JSON.stringify([!!outcome.text, !!outcome.image, !!remotePhone, screenshot?.imageId, reply?.id, files.map(file => [file.id, file.sha256])]);
   useCollectionMotion(root, owner, revision, {layout: false});
   return <section ref={root} className="pw-task-outcome pw-task-reading" aria-label="任务结果依据" data-result-source={outcome.source}>
     <div className="pw-outcome-document">
@@ -37,6 +39,18 @@ export function TaskOutcome({ task, messages, onCopy, onOpenAttachment }: {
       {outcome.text ? <div data-motion-key="result-body"><AIAnswer text={outcome.text} onCopy={() => onCopy(outcome.text)} onCopyCode={onCopy}/></div>
         : <p className="pw-reading-note">{files.length ? '可先查看下方关联答复中的附件。' : '当前记录未提供可读取的结果正文。'}</p>}
       {outcome.image && <figure className="pw-outcome-image" data-motion-key={`image:${screenshot?.imageId || 'retained'}`}><img src={outcome.image} alt={imageLabel} loading="lazy" decoding="async"/><figcaption>{imageLabel}</figcaption></figure>}
+      {remotePhone && <figure className="pw-outcome-image" data-motion-key={`phone:${screenshot?.imageId}`}>
+        <img src={remotePhone.image} alt={`设备 ${remotePhone.deviceId.slice(-4)} 的${remotePhone.screenMode === 'background' ? '独立屏' : '主屏'}观察快照`} loading="lazy" decoding="async"/>
+        <figcaption>设备 {remotePhone.deviceId.slice(-4)} · {remotePhone.screenMode === 'background' ? '独立屏' : '主屏'} · {new Date(remotePhone.capturedAt).toLocaleString()} · {remotePhone.width} × {remotePhone.height}
+          <br/>{remotePhone.currentRun ? '本轮任务观察到的静态画面' : '较早执行保留的静态画面'}。不是实时视频，也不能点图操作；后续动作仍由原任务按已确认范围执行，图片不代表目标完成。</figcaption>
+      </figure>}
+      {phoneStatus && (phoneStatus !== 'saved' || !remotePhone) && <p className="pw-reading-note" role="status">{
+        phoneStatus === 'retention_disabled' ? '这次手机观察未保存：本机截图留存已关闭。已有历史图片不会因此变成实时画面。' :
+        phoneStatus === 'too_large' ? '这次手机观察超过本机截图的 4 MB 留存上限，未保存；已有历史图片仍按原期限保留。' :
+        phoneStatus === 'save_unconfirmed' ? '已取得手机观察，但本机加密保存尚未确认。请重新打开原任务核对；没有使用明文替代。' :
+        phoneStatus === 'saved' ? screenshot?.state === 'expired' || screenshot?.state === 'deleted' || screenshot?.readState === 'unreadable' ? '这份手机画面当前不可显示，具体留存状态见下方。' : '手机观察已保存；重新打开原任务可读取图片。' :
+        '本轮还没有可保存的手机观察画面。需要原任务执行带图观察、目标允许全屏捕获，并开启本机截图留存；不会为打开此页面额外抓图。'
+      }</p>}
       {outcome.partial && <MotionFeedback identity={`${owner}:partial`} className="pw-outcome-limit" role="status">部分结果记录尚未载入。</MotionFeedback>}
     </div>
 

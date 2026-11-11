@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import { TeamMemberIdentity } from './TeamMemberIdentity';
+import { teamMemberLabel } from './team-identity';
 import { bridge } from './bridge';
 import './collaboration-depth.css';
 import { Accordion, AccordionItem, Button, CheckboxField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
@@ -8,17 +10,19 @@ type Data = Record<string, any>;
 type Run = (action: string, args?: Data) => Promise<any>;
 const rows = (value: any): Data[] => Array.isArray(value) ? value : [];
 
-export function TeamEvidenceWorkspace({ runId, members, run, disabled = false, active = true, windowRevision = 0, onBackChange }: {
-  runId: string; members: Data[]; run: Run; disabled?: boolean; active?: boolean; windowRevision?: number; onBackChange?: (handler: (() => boolean) | null) => void;
+export function TeamEvidenceWorkspace({ runId, members, run, disabled = false, active = true, windowRevision = 0, onBackChange, onBeforeLeaveChange, onBusyChange }: {
+  runId: string; members: Data[]; run: Run; disabled?: boolean; active?: boolean; windowRevision?: number; onBackChange?: (handler: (() => boolean) | null) => void; onBeforeLeaveChange?: (handler: ((leave: () => void) => void) | null) => void; onBusyChange?: (busy: boolean) => void;
 }) {
-  const activeMembers = members.filter(member => !member.exited);
-  const [expanded, setExpanded] = useState(false), [memberId, setMemberId] = useState(activeMembers[0]?.id || '');
+  const scopeMembers = members;
+  const [expanded, setExpanded] = useState(false), [memberId, setMemberId] = useState(scopeMembers[0]?.id || '');
   const [page, setPage] = useState<Data | null>(null), [files, setFiles] = useState<Data[]>([]), [project, setProject] = useState('');
   const [fileChoices, setFileChoices] = useState<Record<string, Data>>({});
   const [draft, setDraft] = useState<TeamEvidenceDraft>(emptyTeamEvidence), [review, setReview] = useState<Data | null>(null);
   const [busy, setBusy] = useState(false), [acknowledged, setAcknowledged] = useState(false), [notice, setNotice] = useState(''), [error, setError] = useState('');
   const pageHandle = useRef(''), reviewHandle = useRef(''), generation = useRef(0), alive = useRef(true), entered = useRef(false);
   const consent = useRef(new TeamEvidenceConsent()), shownReview = useRef<Data | null>(null);
+  const [discardOpen, setDiscardOpen] = useState(false);
+  const pendingLeave = useRef<(() => void) | null>(null), savePending = useRef<{ memberId: string; name: string } | null>(null);
   const nativeWindow = useRef({ active, revision: windowRevision });
   const ownsNativeWindow = () => {
     const view = bridge.getState().view as Data | undefined;
@@ -39,7 +43,7 @@ export function TeamEvidenceWorkspace({ runId, members, run, disabled = false, a
   const closePage = () => {
     generation.current++; entered.current = false; closeReview(); const handle = pageHandle.current; pageHandle.current = '';
     release('teamEvidence.close', 'pageHandle', handle);
-    setPage(null); setFiles([]); setFileChoices({}); setProject(''); setDraft(emptyTeamEvidence()); setBusy(false);
+    setPage(null); setFiles([]); setFileChoices({}); setProject(''); setDraft(emptyTeamEvidence()); setBusy(false); setDiscardOpen(false); pendingLeave.current = null;
   };
   const invoke = async (action: string, args: Data, accept?: (value: Data) => void) => {
     const ticket = version;
@@ -53,14 +57,17 @@ export function TeamEvidenceWorkspace({ runId, members, run, disabled = false, a
       if (current()) { accept?.(result); return result; }
       if (result?.pageHandle) release('teamEvidence.close', 'pageHandle', result.pageHandle);
       if (result?.reviewHandle) release('teamEvidence.cancelReview', 'reviewHandle', result.reviewHandle);
-    } catch (failure) { if (current()) setError(failure instanceof Error ? failure.message : String(failure)); }
+    } catch (failure) { if (current()) {
+      if (action === 'teamEvidence.confirm') { closeReview(); setNotice('这次资料保存回执未确认。请重新读取原成员的当前范围，不要重发旧请求。'); }
+      setError(failure instanceof Error ? failure.message : String(failure));
+    } }
     finally { if (ticket === generation.current) { entered.current = false; if (alive.current) setBusy(false); } }
   };
   const load = () => {
     if (entered.current || !memberId || disabled || version !== generation.current) return;
     const previous = pageHandle.current; pageHandle.current = ''; release('teamEvidence.close', 'pageHandle', previous);
     closeReview(); setPage(null); setFiles([]); setFileChoices({}); setProject(''); setDraft(emptyTeamEvidence());
-    void invoke('teamEvidence.open', { runId, memberId }, value => { pageHandle.current = value.pageHandle; setPage(value); setNotice(''); });
+    void invoke('teamEvidence.open', { runId, memberId }, value => { pageHandle.current = value.pageHandle; setPage(value); const pending = savePending.current; setNotice(pending ? pending.memberId === memberId ? '已重新读取这名原成员的当前范围，请对照核对。没有重发旧保存请求。' : `${pending.name}的先前资料保存回执仍待核对，请读取该原成员；这里显示的是当前选择成员的范围。` : ''); if (pending?.memberId === memberId) savePending.current = null; });
   };
   const edit = (next: TeamEvidenceDraft) => { if (entered.current || disabled || version !== generation.current) return; generation.current++; closeReview(); setDraft(next); };
   const toggle = (key: 'records' | 'projectFiles', handle: string, checked: boolean) => edit({ ...draft, [key]: checked ? [...draft[key], handle] : draft[key].filter(value => value !== handle) });
@@ -78,17 +85,17 @@ export function TeamEvidenceWorkspace({ runId, members, run, disabled = false, a
     void invoke('teamEvidence.consent', { reviewHandle: review.reviewHandle, accepted }, value => { if (consent.current.current(ticket)) setAcknowledged(value.accepted === true); });
   };
   const confirm = () => {
-    if (!review || shownReview.current !== review || !acknowledged || !consent.current.confirm(confirmTicket)) return;
-    const handle = review.reviewHandle;
+    if (!review || shownReview.current !== review || !acknowledged || entered.current || disabled || !active || !ownsNativeWindow() || !consent.current.confirm(confirmTicket)) return;
+    const handle = review.reviewHandle; savePending.current = { memberId, name: members.find(member => member.id === memberId)?.name || memberId };
     void invoke('teamEvidence.confirm', { reviewHandle: handle }, value => {
       if (value.scopeSaved !== true) throw new Error('原范围保存尚未核对，请重新读取原成员。');
-      reviewHandle.current = ''; consent.current.clear(); setReview(null); setAcknowledged(false);
+      savePending.current = null; reviewHandle.current = ''; consent.current.clear(); setReview(null); setAcknowledged(false); setDraft(emptyTeamEvidence());
       setPage(previous => previous ? { ...previous, current: value.current } : previous);
       setNotice(review.operation === 'revoke' ? '已撤回后续资料读取。此前已经提供给模型的内容仍保留真实历史。' : '已收到原范围保存回执。新增成员不会继承；没有开始研究或追加执行预算。');
     });
   };
-  const identities = activeMembers.map(member => [member.id, member.identityRevision, member.runner, member.model, member.memberModelSelection]);
-  useEffect(() => { closePage(); setMemberId(activeMembers.some(member => member.id === memberId) ? memberId : activeMembers[0]?.id || ''); }, [runId, JSON.stringify(identities)]);
+  const identities = scopeMembers.map(member => [member.id, member.exited, member.identityRevision, member.runner, member.model, member.memberModelSelection]);
+  useEffect(() => { closePage(); setMemberId(scopeMembers.some(member => member.id === memberId) ? memberId : scopeMembers[0]?.id || ''); }, [runId, JSON.stringify(identities)]);
   useEffect(() => {
     const previous = nativeWindow.current;
     nativeWindow.current = { active, revision: windowRevision };
@@ -96,7 +103,7 @@ export function TeamEvidenceWorkspace({ runId, members, run, disabled = false, a
     // A task overlay retires native material handles even though React keeps
     // this workspace mounted. Returning never reuses or confirms that scope.
     closePage(); setError('');
-    if (active && expanded) setNotice('已回到团队，请重新读取成员资料目录。未确认的选择没有保存。');
+    if (active && expanded) setNotice(savePending.current ? `${savePending.current.name}的先前资料保存回执未确认，请重新读取该原成员当前范围后核对；没有自动重发。` : '已回到资料页，请重新读取原成员目录与当前范围。未提交的选择已放弃。');
   }, [active, windowRevision]);
   useEffect(() => {
     alive.current = true;
@@ -104,19 +111,44 @@ export function TeamEvidenceWorkspace({ runId, members, run, disabled = false, a
     document.addEventListener('visibilitychange', hidden);
     return () => { alive.current = false; generation.current++; const page = pageHandle.current, review = reviewHandle.current; pageHandle.current = ''; reviewHandle.current = ''; consent.current.clear(); release('teamEvidence.cancelReview', 'reviewHandle', review); release('teamEvidence.close', 'pageHandle', page); document.removeEventListener('visibilitychange', hidden); };
   }, []);
-  useEffect(() => { onBackChange?.(() => { if (busy) return true; if (review) { closeReview(); return true; } if (expanded) { closePage(); setExpanded(false); return true; } return false; }); return () => onBackChange?.(null); }, [busy, review, expanded, onBackChange]);
+  const dirty = draft.records.length + draft.sources.length + draft.skills.length + draft.resources.length + draft.projectFiles.length > 0 || !!draft.webOrigins.trim();
+  const requestLeave = (leave: () => void) => {
+    if (entered.current || busy) { setNotice('正在核对原资料回执，请完成后再离开。'); return; }
+    if (dirty || review) { pendingLeave.current = leave; setDiscardOpen(true); return; }
+    leave();
+  };
+  useEffect(() => {
+    onBusyChange?.(active && busy);
+    return () => onBusyChange?.(false);
+  }, [active, busy, onBusyChange]);
+  useEffect(() => {
+    onBeforeLeaveChange?.(active ? requestLeave : null);
+    return () => onBeforeLeaveChange?.(null);
+  }, [active, busy, dirty, review, onBeforeLeaveChange]);
+  useEffect(() => {
+    onBackChange?.(active ? () => {
+      if (entered.current || busy) return true;
+      if (discardOpen) { pendingLeave.current = null; setDiscardOpen(false); return true; }
+      if (review) { closeReview(); return true; }
+      if (expanded) { requestLeave(() => { closePage(); setExpanded(false); }); return true; }
+      return false;
+    } : null);
+    return () => onBackChange?.(null);
+  }, [active, busy, review, expanded, discardOpen, dirty, onBackChange]);
   const catalogue = page?.catalogue || {};
+  const revokeOnly = catalogue.revokeOnly === true || members.find(member => member.id === memberId)?.exited === true;
   const selectedCount = draft.records.length + draft.sources.length + draft.skills.length + draft.resources.length + draft.projectFiles.length + draft.webOrigins.split('\n').filter(site => site.trim()).length;
   return <section className="pw-team-overview pw-team-evidence" aria-label="成员资料范围">
-    <Button variant="ghost" aria-expanded={expanded} disabled={busy || disabled} onClick={() => { if (expanded) closePage(); setExpanded(!expanded); }}>{expanded ? '收起成员资料范围' : '成员能读哪些资料'}</Button>
+    <Button variant="ghost" aria-expanded={expanded} disabled={busy || disabled} onClick={() => { if (expanded) requestLeave(() => { closePage(); setExpanded(false); }); else setExpanded(true); }}>{expanded ? '收起成员资料范围' : '成员能读哪些资料'}</Button>
     {expanded && <div className="pw-team-evidence-content">
       <p className="pw-field-hint">共同目标与发给团队的消息沿原协作共享。个人记忆、原文、技能、附件与项目文件在这里逐项选择，再确认给所列成员。</p>
-      <section className="pw-team-evidence-recipient" aria-label="资料接收成员"><SelectField label="核对哪名成员" value={memberId} options={activeMembers.map(member => ({ id: member.id, label: member.name || member.id }))} isDisabled={busy || disabled} onChange={value => { closePage(); setMemberId(value); }} />
-      <Button variant="secondary" disabled={busy || disabled || !memberId} onClick={load}>{page ? '重新读取原目录与范围' : '读取原成员资料目录'}</Button></section>
+      <section className="pw-team-evidence-recipient" aria-label="资料接收成员"><SelectField label="核对哪名成员" value={memberId} options={scopeMembers.map(member => ({ id: member.id, label: `${teamMemberLabel(member, scopeMembers)}${member.exited ? " · 已退出，只可核对与撤回" : ""}` }))} isDisabled={busy || disabled} onChange={value => requestLeave(() => { closePage(); setMemberId(value); })} />
+      <Button variant="secondary" disabled={busy || disabled || !memberId} onClick={() => requestLeave(load)}>{page ? '重新读取原目录与范围' : '读取原成员资料目录'}</Button></section>
       {busy && <p className="pw-muted" role="status">正在核对原目录与范围…</p>}{error && !review && <p className="pw-secondary-error" role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
       {page && <>
-        <section className="pw-team-evidence-current-state" aria-label="当前资料范围"><header className="pw-collaboration-group-heading"><h3>当前范围</h3><span>修订 {page.current?.revision ?? '未知'}</span></header><p>{page.current?.state === 'active' ? '已分享给这名成员' : page.current?.state === 'revoked' ? '后续读取已撤回' : '尚未分享资料'}</p>
-        <Accordion className="pw-team-evidence-current"><AccordionItem title="已分享的准确版本与来源"><EvidenceScope scope={page.current} />{page.current?.state === 'active' && <div className="pw-form-actions"><Button variant="ghost" disabled={busy || disabled} onClick={() => { closeReview(); void invoke('teamEvidence.renew', { pageHandle: page.pageHandle }, showReview); }}>续审相同材料与检查点</Button><Button variant="ghost" disabled={busy || disabled} onClick={() => { closeReview(); void invoke('teamEvidence.revoke.review', { pageHandle: page.pageHandle }, showReview); }}>核对撤回此成员资料</Button></div>}</AccordionItem></Accordion></section>
+        <section className="pw-team-evidence-current-state" aria-label="当前资料范围"><header className="pw-collaboration-group-heading"><h3>当前范围</h3><span>修订 {page.current?.revision ?? '未知'}</span></header><p>{page.current?.state === 'active' ? revokeOnly ? '原资料范围保留，成员已退出执行' : '已分享给这名成员' : page.current?.state === 'revoked' ? '后续读取已撤回' : '尚未分享资料'}</p>
+        <Accordion className="pw-team-evidence-current"><AccordionItem title="已分享的准确版本与来源"><EvidenceScope scope={page.current} />{page.current?.state === 'active' && <div className="pw-form-actions">{!revokeOnly && <Button variant="ghost" disabled={busy || disabled} onClick={() => { closeReview(); void invoke('teamEvidence.renew', { pageHandle: page.pageHandle }, showReview); }}>续审相同材料与检查点</Button>}<Button variant="ghost" disabled={busy || disabled} onClick={() => { closeReview(); void invoke('teamEvidence.revoke.review', { pageHandle: page.pageHandle }, showReview); }}>核对撤回此成员资料</Button></div>}</AccordionItem></Accordion></section>
+        {revokeOnly ? <p className="pw-field-hint">这名成员已退出，只可核对或撤回原范围。已完成成果仍保留原作者，原范围到期、换版或撤回后不能再用于新回答；这里不会重新分享、续权或恢复成员。</p> : <>
         <header className="pw-collaboration-group-heading"><h3>待核对清单</h3><span>已选择 {selectedCount} 项</span></header><p className="pw-field-hint">下面的选择尚未生效。</p>
         <Accordion variant="divided" className="pw-compact-disclosures" allowsMultipleExpanded>
           <AccordionItem id="records" title="正式记忆" description={`已选 ${draft.records.length} · 可选 ${rows(catalogue.records).length} 个版本`}>
@@ -143,12 +175,13 @@ export function TeamEvidenceWorkspace({ runId, members, run, disabled = false, a
           </AccordionItem>}
         </Accordion>
         <footer className="pw-team-evidence-actions"><Button variant="secondary" disabled={busy || disabled} onClick={() => prepare('member')}>核对本成员的准确范围</Button><Button variant="ghost" disabled={busy || disabled} onClick={() => prepare('current_members')}>核对给当前成员共享</Button></footer>
-
+        </>}
       </>}
     </div>}
+    <SettingsDialog isOpen={discardOpen} title="放弃这次未提交的资料选择？" onClose={() => { pendingLeave.current = null; setDiscardOpen(false); }}><div className="pw-collaboration-dialog" data-collaboration-kind="TeamEvidenceWorkspace"><p>已保存的资料范围不受影响。离开后需要重新读取原目录，当前未提交的选择不会保留。</p><div className="pw-form-actions"><Button variant="secondary" onClick={() => { pendingLeave.current = null; setDiscardOpen(false); }}>继续选择</Button><Button onClick={() => { const leave = pendingLeave.current; pendingLeave.current = null; setDiscardOpen(false); setDraft(emptyTeamEvidence()); closeReview(); leave?.(); }}>放弃选择并离开</Button></div></div></SettingsDialog>
     <SettingsDialog isOpen={!!review} onClose={() => { if (!busy) closeReview(); }} title={review?.operation === 'revoke' ? '撤回后续资料读取' : review?.scope === 'current_members' ? '核对本次当前成员与同一资料范围' : '核对本成员读取范围'}><div className="pw-collaboration-dialog" data-collaboration-kind="TeamEvidenceWorkspace">
       {error && <p className="pw-secondary-error" role="alert">{error}</p>}
-      {review?.scope === 'current_members' ? <>{rows(review.review?.members).map(target => <section key={target.memberId}><h3>{members.find(member => member.id === target.memberId)?.name || target.memberId}</h3><EvidenceScope scope={target.review} /></section>)}<p>仅这次列出的成员收到同一显选范围，未来新增身份不会继承。</p></> : <><h3>{members.find(member => member.id === memberId)?.name || memberId}</h3><EvidenceScope scope={review?.review} /></>}
+      {review?.scope === 'current_members' ? <>{rows(review.review?.members).map(target => <section key={target.memberId}><h3><TeamMemberIdentity member={members.find(member => member.id === target.memberId) || { id: target.memberId, name: target.memberId }} /></h3><EvidenceScope scope={target.review} /></section>)}<p>仅这次列出的成员收到同一显选范围，未来新增身份不会继承。</p></> : <><h3><TeamMemberIdentity member={members.find(member => member.id === memberId) || { id: memberId, name: memberId }} /></h3><EvidenceScope scope={review?.review} /></>}
       <p>{review?.operation === 'revoke' ? '撤回后续读取与答案接纳资格。已经提供给模型的历史内容如实保留。' : review?.review?.reviewMode === 'renew_identical_materials' ? '重新核对相同材料，保留原研究检查点与已用次数；旧票据失效，没有自动继续。' : '只分享所示准确资料，不增加写入、执行或模型与工具预算；空集合不会回退为默认私人范围。'}</p>
       <CheckboxField isSelected={acknowledged} onChange={acknowledge} isDisabled={busy}>我确认这次所列成员与准确资料范围</CheckboxField>
       <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={closeReview}>返回核对</Button><Button disabled={busy || !acknowledged || disabled} onClick={confirm}>{review?.operation === 'revoke' ? '确认撤回' : '确认这一次范围'}</Button></div>

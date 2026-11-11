@@ -11,6 +11,7 @@ export function teamMessageDelivery(run: Data, row: Data): string {
   const native = assignments.flatMap(assignment => rows(assignment?.messages)).find(message => message.messageId === id);
   if (native) return ({ consumed: '原执行已确认消费', included: '已选入原输入，尚未确认消费', historical: '仅保留历史，没有唤醒旧任务' } as Record<string, string>)[native.state] || '已到原分工队列，等待安全工作点';
   const letter = [...rows(run.inbox), ...rows(run.mailbox)].find(item => item.id === id);
+  if (letter?.status === 'historical') return letter.notDeliveredReason === 'member_exited' ? '收件成员已退出，消息仅保留历史，没有转给其他成员' : '消息仅保留历史，没有唤醒旧任务';
   return ({ consumed: '已确认消费', delivering: '已纳入本轮输入，尚未确认消费', partially_consumed: '部分指定成员已消费',
     pending: '已定向排队，尚未进入模型', unread: '已定向排队，尚未进入模型' } as Record<string, string>)[letter?.status] || '';
 }

@@ -1,3 +1,5 @@
+import { teamAvatarShape } from './team-identity.ts';
+
 type Data = Record<string, any>;
 export type TeamPhoneChoice = { optionId: string; toolBudget: string; modelBudget: string; durationMinutes: string };
 const rows = (value: unknown): Data[] => Array.isArray(value) ? value : [];
@@ -17,7 +19,7 @@ export function teamPhoneTargetLabel(device: Data | undefined, targets: unknown)
 }
 export function teamEditorMember(member: Data): Data {
   const runner = member.runner || 'model';
-  return { id: member.id, name: member.name, role: member.role, model: member.model || '', runner,
+  return { id: member.id, name: member.name, avatarShape: teamAvatarShape(member), role: member.role, model: member.model || '', runner,
     assignment: runner === 'phone_agent' ? member.assignment || '' : member.assignment && member.assignment !== member.role ? member.assignment : '',
     dependsOn: [...(member.dependsOn || [])],
     ...(runner === 'phone_agent' ? { device: { ...member.device } }

@@ -43,13 +43,25 @@ export function deviceHistoryLabel(value: DeviceData | null): string {
   if (value.managementOnly === true) return value.stopped === true ? '执行端报告已停止，请继续查询原操作结果。' : value.requested === true ? '执行端已接受停止请求，仍待核对停止结果。' : '停止结果待核对，请查询原操作回执。';
   return value.unknown === true ? '执行效果仍未确认，保留原占用次数。' : '执行端已返回原操作回执，业务成果仍需核对。';
 }
+/** Navigation only. Opening a row obtains the complete original native task/review. */
+export function deviceWorkspaceTaskMode(value: unknown): 'manual_phone' | 'agent_device' | '' {
+  if (!object(value) || value.actorId !== 'owner' || value.spaceId !== 'private' || 'origin' in value) return '';
+  const nav = value.deviceWorkspaceNavigation;
+  const projected = object(nav) && nav.format === 'pocketworld.device-workspace-navigation.v1' && nav.readOnly === true && nav.executionAuthorized === false;
+  if (value.kind === 'tool' && value.nativeExecutionMode === 'OWNER_PHONE_CONTROL' && (value.ownerPhoneControl?.format === 'pocketworld.owner-phone-control.v1' || projected && nav.mode === 'manual_phone')) return 'manual_phone';
+  if (value.kind === 'assistant' && value.executionMode === 'capabilities' && (value.ownerDeviceWork?.format === 'pocketworld.owner-device-work.v1' || projected && nav.mode === 'agent_device')) return 'agent_device';
+  return '';
+}
 export function deviceTaskRows(tasks: unknown, snapshot: DeviceData | null, peerId = ''): DeviceData[] {
   const links = deviceRows(Array.isArray(snapshot?.taskLinks) ? snapshot.taskLinks : snapshot?.taskLinks?.links);
   const originals = deviceRows(tasks).filter(task => identity(task.id));
   const result = originals.filter(task => {
     const raw = object(task.raw) ? task.raw : {}, origin = object(raw.origin) ? raw.origin : {}, operations = deviceRows(raw.operations);
-    return peerId ? links.some(link => link.targetDeviceId === peerId && link.parentTaskId === task.id) || origin.kind === 'paired_device' && ['originDeviceId', 'callerDeviceId', 'targetDeviceId'].some(key => origin[key] === peerId) || operations.some(operation => typeof operation.tool === 'string' && operation.tool.startsWith('device_') && operation.arguments?.targetDeviceId === peerId)
-      : origin.kind === 'paired_device' || operations.some(operation => typeof operation.tool === 'string' && operation.tool.startsWith('device_')) || links.some(link => link.parentTaskId === task.id);
+    const prepared = deviceWorkspaceTaskMode(raw) !== '';
+    const selected = deviceRows(raw.deviceSourceScope?.routes);
+    const targets = deviceStrings(raw.deviceWorkspaceNavigation?.targetDeviceIds);
+    return peerId ? prepared && (selected.some(route => route.targetDeviceId === peerId) || targets.includes(peerId)) || links.some(link => link.targetDeviceId === peerId && link.parentTaskId === task.id) || origin.kind === 'paired_device' && ['originDeviceId', 'callerDeviceId', 'targetDeviceId'].some(key => origin[key] === peerId) || operations.some(operation => typeof operation.tool === 'string' && operation.tool.startsWith('device_') && operation.arguments?.targetDeviceId === peerId)
+      : prepared || origin.kind === 'paired_device' || operations.some(operation => typeof operation.tool === 'string' && operation.tool.startsWith('device_')) || links.some(link => link.parentTaskId === task.id);
   });
   for (const link of links) if (identity(link.parentTaskId) && (!peerId || link.targetDeviceId === peerId) && !result.some(task => task.id === link.parentTaskId)) result.push({ id: link.parentTaskId, goal: '原设备关联任务', raw: {}, summaryOnly: true });
   return result;

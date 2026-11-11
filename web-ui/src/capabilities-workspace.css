@@ -99,3 +99,12 @@
   .pw-capabilities-preparation { padding-inline: 12px; }
   .pw-capabilities-workspace .pw-data-operation-row.pw-domain-link { gap: 10px; }
 }
+
+.pw-capabilities-introduction { display: flex; flex-direction: column; gap: 8px; }
+.pw-capabilities-introduction > p:last-child { margin: 0; max-width: 52ch; color: var(--pw-copy); font-size: 13px; line-height: 21px; }
+.pw-capabilities-controls, .pw-capabilities-tool-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.pw-capabilities-workspace > .pw-policy-workbench { display: flex; flex-direction: column; gap: 24px; }
+.pw-capabilities-workspace > .pw-policy-workbench .pw-permission-action-row { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 12px; }
+
+.pw-capabilities-catalog-view { display: flex; flex-direction: column; gap: 24px; min-width: 0; }
+.pw-capabilities-catalog-view[hidden] { display: none; }

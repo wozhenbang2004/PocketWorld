@@ -12,6 +12,10 @@ public final class AgentSlot {
         String id=input.optString("id","member-"+index);if(!id.matches("[A-Za-z][A-Za-z0-9_-]{0,63}"))throw new IllegalArgumentException("成员ID无效");
         String runner=input.optString("runner","model");if(!runner.matches("model|phone_agent|kimi")&&!RemoteHarnessSelection.isTeamWorker(runner))throw new IllegalArgumentException("成员runner未识别");
         JSONObject slot=new JSONObject().put("id",id).put("name",JsonFiles.text(input,"name",48)).put("role",JsonFiles.text(input,"role",1200)).put("runner",runner);
+        String[] avatarShapes={"blob","pebble","squircle","egg"};
+        String avatarShape=input.optString("avatarShape",avatarShapes[Integer.remainderUnsigned(id.hashCode(),avatarShapes.length)]);
+        if(!java.util.Arrays.asList(avatarShapes).contains(avatarShape))throw new IllegalArgumentException("成员头像形态无效");
+        slot.put("avatarShape",avatarShape);
         if(RemoteHarnessSelection.isTeamWorker(runner)&&!runner.equals("codex_app_server")){if(!Boolean.TRUE.equals(input.opt("externalExecutionRiskAcknowledged")))throw new SecurityException("外部成员需明确确认实际工具权限、同用户执行风险及账号和费用边界");slot.put("externalExecutionRiskAcknowledged",true);}
         if(input.has("model")&&!input.optString("model").isEmpty())slot.put("model",JsonFiles.text(input,"model",200));
         if(input.has("modeId")&&!input.optString("modeId").isEmpty()){if(!RemoteHarnessSelection.isGenericWorker(runner))throw new SecurityException("仅实际握手的通用 Harness 接收模式选择");slot.put("modeId",JsonFiles.text(input,"modeId",200));}

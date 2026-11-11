@@ -129,6 +129,31 @@ export function runtimeStatusLabel(value: SetupRuntime): string {
   return ({ unavailable: '当前不可用', not_prepared: '尚未准备', ready: '工具已就绪', running: '正在准备', cancel_requested: '正在停止',
     cancelled: '已停止', failed: '准备失败', interrupted: '准备中断，需核对', blocked: '需要处理' })[value.status];
 }
+/** Display only the tools observed in this runtime, not project/tool approval. */
+export function runtimeToolSummary(value: SetupRuntime): { name: string; label: string; status: string }[] {
+  const tools = Array.isArray(value.runtime.tools) ? value.runtime.tools.map(setupObject) : [];
+  return [{ name: 'node', label: 'JavaScript / Web' }, { name: 'python3', label: 'Python' }, { name: 'git', label: 'Git' }].map(({ name, label }) => {
+    const tool = tools.find(entry => entry.name === name);
+    const installed = tool?.installed === true && (tool.probeVerified === true || tool.hashVerified === true);
+    const version = text(tool?.observedVersion || tool?.version).split(/\r?\n/, 1)[0].slice(0, 120);
+    return { name, label, status: installed ? `${version || '已安装'}${value.ready ? '' : ' · 运行条件待核对'}` : '尚未确认可用' };
+  });
+}
+/** Original-receipt guidance only. Never infers a network fault from an exit code
+ * or authorizes a retry while the original operation is still unresolved. */
+export function runtimeRecoveryHint(value: SetupRuntime): string {
+  if (value.status === 'interrupted' && !value.canRetry) return '先刷新核对原安装是否退出、资源是否释放。不要重复安装，也不要清除应用数据。';
+  const details = setupObject(value.operation?.error?.details), failure = setupObject(details.preparationFailure);
+  const category = text(failure.category);
+  if (category === 'network') return '连接恢复后再重新审阅准备。已下载内容会重新校验，可用的部分下载会续传；首次安装的系统依赖仍需联网。';
+  if (category === 'storage') return '先腾出手机存储空间，再重新审阅准备。可在存储管理中核对下载缓存；不要清除应用数据或删除原项目。';
+  if (category === 'resource_busy') return '先查看并结束占用此环境的原任务，等资源释放后再准备；不会强制关闭其他任务。';
+  if (category === 'integrity' || category === 'policy_or_integrity') return '文件校验或运行条件未通过。保留原日志，核对正式安装包与工具版本；不会跳过校验或自动换来源。';
+  if (category === 'probe') return '工具的实际启动或配置未通过。查看失败阶段和原日志；这不代表项目代码有错，也不要靠开放手机控制权限来修复。';
+  if (category === 'observation') return '原执行状态尚未完整取得。先刷新原记录，不要把未知结果当作失败重新派发。';
+  if (value.status === 'cancelled') return '停止不等于卸载。已有工具和项目保留，再次准备仍需你明确确认。';
+  return '';
+}
 export function runtimePhaseLabel(phase: string): string {
   if (phase.startsWith('extracting_')) return '展开已下载的工具';
   return ({ queued: '等待开始', downloading: '下载工具', verifying_download: '核对下载文件',

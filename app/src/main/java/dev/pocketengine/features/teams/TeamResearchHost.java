@@ -87,6 +87,10 @@ public final class TeamResearchHost implements TeamCoordinator.ResearchFactory {
     @Override public void checkOutputs(TeamCoordinator.ResearchSources selected)throws Exception {
         for(TaskStore.TeamResearchSourceProof proof:tasks.teamResearchOutputProofs(selected)){proof.checkCurrent();materials.checkMaterialMetadata(proof.view(),proof);proof.checkCurrent();}
     }
+    @Override public void checkMemberExit(String teamRun,String member)throws Exception {
+        if(hasActiveWork(teamRun))throw new SecurityException("原研究仍有实际执行，不能退出成员");
+        tasks.checkTeamResearchMemberExit(teamRun,member);
+    }
 
     @Override public JSONObject execute(TeamCoordinator.ResearchCall call,ModelConfig captured,
             RunControl original,Consumer<JSONObject> progress)throws Exception {

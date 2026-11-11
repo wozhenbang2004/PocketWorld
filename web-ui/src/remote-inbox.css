@@ -45,3 +45,6 @@
 @media(prefers-reduced-motion:reduce){.pw-remote-dot.is-connected{animation:none}}
 
 .pw-remote-status > .pw-remote-count{flex:0 0 auto;display:block}
+
+.pw-notification-attention{display:grid;gap:var(--pw-gap-control)}
+.pw-remote-item[data-selected="true"]{background:var(--pw-inset);outline:2px solid var(--pw-focus,var(--pw-copy));outline-offset:4px;border-radius:8px}

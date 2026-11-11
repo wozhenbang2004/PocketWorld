@@ -278,11 +278,32 @@ function RemoteWork({ profile, state, data, run, supported, back, visible }: { p
   const locked = busy || !!operation || !!baseline || !!inputRequest || !active || !visible, geminiReady = currentGeminiProbe(probe, environment, model);
   const target = () => ({ ...binding(profile), environmentId, environmentBinding: environment?.bindingHash, worker, ...(model.trim() ? { model: model.trim() } : {}), ...(configuredHarness && modeId ? { modeId } : {}), ...(worker === 'codex_app_server' && effort.trim() ? { effort: effort.trim() } : {}) });
   const formCurrent = () => nativeActive() && shownVersion === formVersion.current;
+  const durationReady = /^\d+$/.test(timeout) && Number(timeout) >= 10 && Number(timeout) <= 3600;
+  const goalReady = goal.trim().length > 0 && goal.length <= 8000;
+  const commandReady = (() => { try { const value: unknown = JSON.parse(argv); return Array.isArray(value) && value.length > 0 && value.every(item => typeof item === 'string'); } catch { return false; } })();
+  const workerReady = !!selectedWorker && selectedWorker.available !== false;
+  const capabilityReady = worker === 'command' || probe?.available === true && (!gemini || geminiReady) && (!configuredHarness || harnessReady);
+  const permissionReady = !(gemini || configuredHarness) || writeIntent && environment?.writeAllowed === true;
+  const readyForReview = !!profile.hasToken && !locked && environmentFresh && supported('remote.reviewTask') && !unresolved.length && workerReady && capabilityReady && permissionReady && durationReady && (worker === 'command' ? commandReady : goalReady);
+  // This is guidance, never permission. The original native review/admission remains authoritative.
+  const nextStep = !profile.hasToken ? { title: '先接通这台电脑', detail: '返回连接概览，在连接设置中补充原 Companion 令牌。不会安装、登录或更换电脑上的代理。', action: '' }
+    : unresolved.length ? { title: '先核对原提交', detail: '此连接有结果未明的原操作。使用上方只读查询或打开原任务，不再创建同一工作。', action: '' }
+    : !environmentFresh ? { title: '读取电脑提供的工作环境', detail: '电脑连接、工作目录、代理安装、模型登录是四件事。先取得当前环境目录，不根据已安装软件推定可启动。', action: 'environments' }
+    : !environments?.length ? { title: '电脑尚未提供工作环境', detail: '在电脑 Companion 配置允许的目录与执行器后，重新读取。不自动创建目录或安装软件。', action: 'environments' }
+    : !environment ? { title: '选择这次使用的工作目录', detail: '从下方实际环境中选择；不会自动采用上次浏览的其他目录。', action: 'environment' }
+    : !workerReady ? { title: selectedWorker ? '这个代理当前不可用' : '选择电脑上的执行器', detail: text(object(selectedWorker?.reason).message || selectedWorker?.reason) || '从此环境实际返回的选项中选择。电脑有 Codex 或 Claude 命令，不等于该环境已配置并能启动它。', action: 'worker' }
+    : !capabilityReady ? { title: probe ? '处理本次能力核对结果' : '核对代理与请求模型', detail: '核对的是这台电脑、此目录、此代理配置和当前模型选择；不会使用手机聊天模型替代。更改选项后重新核对。', action: 'probe' }
+    : !(worker === 'command' ? commandReady : goalReady) ? { title: worker === 'command' ? '填写明确命令参数' : '说明这次要完成什么', detail: worker === 'command' ? '填写非空字符串数组；执行端仍按自身 allowlist 审阅，不作为 Shell 拼接。' : '填写 1–8000 字目标。现有原任务的继续工作请回原任务，不复制成一次新任务。', action: 'goal' }
+    : !permissionReady ? { title: environment?.writeAllowed !== true ? '这个环境没有允许可写工作' : '核对这次工具权限', detail: environment?.writeAllowed !== true ? '选择支持只读分析的执行器，或在电脑端明确准备可写环境后重新读取。' : '在下方明确确认使用电脑端已配置的工具权限。目录不是系统沙箱。', action: 'worker' }
+    : !durationReady ? { title: '设置有限运行时间', detail: '填写 10–3600 秒，不因重连自动延长。', action: 'goal' }
+    : { title: '准备好审阅这次工作', detail: '下一步显示准确电脑、目录、代理、模型、目标与时限。确认后只创建一次；实际会话和推理结果在原任务核对。', action: 'review' };
+  const composer = useRef<HTMLDivElement>(null);
+  const focusStep = (name: string) => { const element = composer.current?.querySelector<HTMLElement>(`[data-remote-step="${name}"]`); element?.scrollIntoView({ block: 'start', behavior: 'auto' }); element?.querySelector<HTMLElement>('input, textarea, button, [role="combobox"]')?.focus({ preventScroll: true }); };
   const changed = (change: () => void) => { if (locked || waiting.current) return; formVersion.current++; setProbe(null); setReview(null); setWriteIntent(false); setDraftError(''); change(); };
   const edited = (change: () => void) => { if (locked || waiting.current) return; formVersion.current++; setReview(null); change(); };
   const prepare = async (mode: 'ordinary' | 'baseline' | 'inputs' = 'ordinary') => {
     if (!formCurrent() || waiting.current) return;
-    if (locked || !nativeActive() || !environmentFresh) return;
+    if (locked || !nativeActive() || !environmentFresh || !readyForReview) return;
     setDraftError('');
     const input: Data = { profileId: profile.id, bindingHash: profile.bindingHash, environmentId, environmentBinding: environment?.bindingHash, worker, timeoutSeconds: Number(timeout) };
     try {
@@ -321,20 +342,23 @@ function RemoteWork({ profile, state, data, run, supported, back, visible }: { p
   return <div className="pw-remote-work">
     <header className="pw-connection-work-title"><h3>{operation ? '这次电脑工作' : '开始新工作'}</h3><p>{operation ? '结果与后续操作都保留在同一项原任务中。' : '先选择实际环境，再说明这次要完成的事情。'}</p></header>
     {unresolved.map(item => <div className="pw-selected-object" key={item.operationId}><p>此连接有原提交待核对。</p><Button variant="secondary" disabled={busy || !active} onClick={() => { void request('remote.reconcileOperation', { profileId: profile.id, operationId: item.operationId }).then(setReceipt).catch(() => {}); }}>只读核对原提交</Button><Button variant="secondary" onClick={() => { void run('tasks.open', { id: item.operationId }).catch(() => {}); }}>打开原任务</Button></div>)}
-    <div hidden={!!operation} className="pw-remote-composer">
-    <section className="pw-connection-environment"><div className="pw-connection-section-toolbar"><h3>工作环境</h3><Button variant="ghost" disabled={locked || !profile.hasToken} onClick={readEnvironments}>读取当前工作环境</Button></div>
+    <div ref={composer} hidden={!!operation} className="pw-remote-composer">
+    <section className="pw-connection-attention" aria-label="这次电脑工作的下一步"><h3>{nextStep.title}</h3><p>{nextStep.detail}</p>
+      {nextStep.action && <Button variant={nextStep.action === 'review' ? 'primary' : 'secondary'} disabled={locked || nextStep.action === 'probe' && !supported('remote.probeWorker') || nextStep.action === 'review' && !readyForReview} onClick={() => { if (nextStep.action === 'environments') readEnvironments(); else if (nextStep.action === 'probe') probeWorker(); else if (nextStep.action === 'review') void prepare(); else focusStep(nextStep.action); }}>{({ environments: '读取当前环境', environment: '选择工作环境', worker: '核对执行器与权限', probe: '核对当前能力', goal: '填写本次目标与选项', review: '审阅这次新工作' } as Record<string,string>)[nextStep.action]}</Button>}
+    </section>
+    <section className="pw-connection-environment" data-remote-step="environment"><div className="pw-connection-section-toolbar"><h3>工作环境</h3><Button variant="ghost" disabled={locked || !profile.hasToken} onClick={readEnvironments}>读取当前工作环境</Button></div>
     {!environments && <p className="pw-field-hint">{profile.hasToken ? '读取这台电脑已提供的目录与执行器，不会自动创建或安装。' : '请返回连接概览，在连接设置中补充令牌。'}</p>}
     {!environmentFresh && (environmentId || operation) && <p className="pw-field-hint">草稿与原操作保留；开始另一项工作前，需要重新读取环境与核对执行器。</p>}
     {environments?.length === 0 && <p>未取得可用工作环境；不会自动创建电脑目录或安装执行器。</p>}
     {!!environments?.length && <SelectField label="工作环境" value={environmentId} isDisabled={locked} options={environments.map(item => ({ id: item.id, label: String(item.label || item.id) + ' · ' + String(item.kind || '') }))} onChange={value => changed(() => { setEnvironment(value); setWorker(''); setModel(''); setModeId(''); setOptionCatalog(null); })} />}
     {environment && <Facts values={[[ '实际工作区', environment.workspace ], ['允许写入', environment.writeAllowed === true ? '是' : '未启用' ]]} />}
     </section>
-    {environment && <section className="pw-connection-task-composer"><SelectField label="执行器" value={worker} isDisabled={locked} options={[{ id: '', label: '选择这台电脑已配置的执行器' }, ...workers.map(item => ({ id: item.id, label: harnessWorkerLabel(item) + (item.available === false ? ' · 当前不可用' : '') }))]} onChange={value => changed(() => { setWorker(value); setModel(''); setModeId(''); setEffort(''); setReadOnly(true); setOptionCatalog(null); })} />
+    {environment && <section className="pw-connection-task-composer" data-remote-step="worker"><SelectField label="执行器" value={worker} isDisabled={locked} options={[{ id: '', label: '选择这台电脑已配置的执行器' }, ...workers.map(item => ({ id: item.id, label: harnessWorkerLabel(item) + (item.available === false ? ' · 当前不可用' : '') }))]} onChange={value => changed(() => { setWorker(value); setModel(''); setModeId(''); setEffort(''); setReadOnly(true); setOptionCatalog(null); })} />
       {!workers.length && <p role="status">此环境没有返回执行器，请在电脑端核对配置后刷新。</p>}
       {worker && !selectedWorker && <p role="status">原执行器不在本次环境目录中；请选择当前配置的执行器。</p>}
       {selectedWorker && <p className="pw-field-hint">执行位置：{profile.name}。{harnessWorkerLabel(selectedWorker)}调用自己的模型与工具，模型选项在下方核对。</p>}
-      {worker === 'command' ? <TextAreaField label="明确参数 JSON 数组" value={argv} isDisabled={locked} onChange={value => edited(() => setArgv(value))} hint="只执行电脑 allowlist 中的参数数组，不将拼接文本当 Shell。" /> : <>
-        <TextAreaField label="这次要完成什么" value={goal} isDisabled={locked} onChange={value => edited(() => setGoal(value))} />
+      <div data-remote-step="goal">{worker === 'command' ? <TextAreaField label="明确参数 JSON 数组" value={argv} isDisabled={locked} onChange={value => edited(() => setArgv(value))} hint="只执行电脑 allowlist 中的参数数组，不将拼接文本当 Shell。" /> : <>
+        <TextAreaField label="这次要完成什么" value={goal} isDisabled={locked} onChange={value => edited(() => setGoal(value))} hint="1–8000 字。本次是新工作，继续已有会话请打开原任务。" />
         {worker === 'codex_app_server' && <CheckboxField isSelected={readOnly} isDisabled={locked} onChange={value => edited(() => setReadOnly(value))}>只读分析，不授权修改文件</CheckboxField>}
         {worker === 'pi' && <p className="pw-field-hint">仅无工具对话，不提供项目读写、命令、扩展或 MCP；执行器配置可能重试或压缩，费用与内部调用次数尚未核实。</p>}
         {worker === 'claude' && <p className="pw-field-hint">使用执行端的受限工具配置；此处不声明操作系统只读沙箱。原任务仍需实际验证账号和推理。</p>}
@@ -361,9 +385,9 @@ function RemoteWork({ profile, state, data, run, supported, back, visible }: { p
         <Button variant="secondary" disabled={locked || !selectedWorker || !environmentFresh || !supported('remote.probeWorker')} onClick={probeWorker}>核对执行器与模型能力</Button>
         {probe && (gemini ? <GeminiEvidence probe={probe} /> : configuredHarness ? <HarnessEvidence probe={probe} /> : <><p>{probe.message || (probe.available ? '执行器已返回可用声明，尚未发起模型任务。' : '尚未核实可用。')}</p>{list(probe.models).length > 0 && <details><summary>已返回的模型目录</summary>{list(probe.models).map(item => <Button key={item.id} variant="secondary" onClick={() => changed(() => { setModel(item.id); setEffort(''); })}>{item.name || item.id}</Button>)}</details>}</>)}
       </>}{worker === 'command' && <TextField label="任务时限（10–3600 秒）" value={timeout} isDisabled={locked} inputMode="numeric" onChange={value => edited(() => setTimeoutValue(value.replace(/\D/g, '').slice(0, 4)))} />}
-      <Button disabled={locked || !environmentFresh || !supported('remote.reviewTask') || unresolved.length > 0 || !workers.some(item => item.id === worker && item.available !== false) || (worker !== 'command' && (!goal.trim() || probe?.available !== true)) || gemini && (!geminiReady || !writeIntent || environment.writeAllowed !== true) || configuredHarness && (!harnessReady || !writeIntent || environment.writeAllowed !== true) || Number(timeout) < 10 || Number(timeout) > 3600} onClick={() => { void prepare(); }}>审阅这次新工作</Button>
-      {['codex_app_server', 'claude'].includes(worker) && environment.projectHistoryCapabilities?.supported === true && supported('remote.project.open') && <Button variant="secondary" disabled={locked || !environmentFresh || unresolved.length > 0 || !goal.trim() || probe?.available !== true || !workers.some(item => item.id === worker && item.available !== false) || Number(timeout) < 10 || Number(timeout) > 3600} onClick={() => void prepare('baseline')}>先保留项目基线，再创建这次工作</Button>}
-      {['codex_app_server', 'claude'].includes(worker) && environment?.privateInputCapabilities?.supported === true && supported('remote.inputs.open') && <Button variant="secondary" disabled={locked || !environmentFresh || unresolved.length > 0 || !goal.trim() || goal.length > 8000 || probe?.available !== true || !workers.some(item => item.id === worker && item.available !== false) || Number(timeout) < 10 || Number(timeout) > 3600} onClick={() => void prepare('inputs')}>选择私人原件，再审阅这次工作</Button>}
+      </div><Button disabled={!readyForReview} onClick={() => { void prepare(); }}>审阅这次新工作</Button>
+      {['codex_app_server', 'claude'].includes(worker) && environment.projectHistoryCapabilities?.supported === true && supported('remote.project.open') && <Button variant="secondary" disabled={!readyForReview} onClick={() => void prepare('baseline')}>先保留项目基线，再创建这次工作</Button>}
+      {['codex_app_server', 'claude'].includes(worker) && environment?.privateInputCapabilities?.supported === true && supported('remote.inputs.open') && <Button variant="secondary" disabled={!readyForReview} onClick={() => void prepare('inputs')}>选择私人原件，再审阅这次工作</Button>}
     </section>}
     </div>
     {(error || draftError) && <p role="alert">{error || draftError}</p>}

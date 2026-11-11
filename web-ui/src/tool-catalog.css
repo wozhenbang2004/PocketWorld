@@ -1,0 +1,18 @@
+/* Existing Affect integration/list-detail geometry; BoardUI owns all controls. */
+.pw-tool-browser { min-width: 0; display: flex; flex-direction: column; gap: 18px; outline: none; }
+.pw-tool-toolbar { display: flex; flex-direction: column; gap: 12px; }
+.pw-tool-filters { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; min-width: 0; }
+.pw-tool-filters > * { min-width: 0; }
+.pw-tool-result-count, .pw-tool-source, .pw-tool-boundary, .pw-tool-status { margin: 0; color: var(--pw-copy); font-size: 13px; line-height: 21px; overflow-wrap: anywhere; }
+.pw-tool-list { display: flex; flex-direction: column; min-width: 0; }
+.pw-tool-list .pw-data-operation-row { width: 100%; min-height: 76px; height: auto; padding: 14px 8px; margin: 0; text-align: start; border: 0; background: transparent; box-shadow: none; }
+.pw-tool-list .pw-data-operation-row > span { min-width: 0; flex: 1; white-space: normal; }
+.pw-tool-list .pw-data-operation-row > span > span { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.pw-tool-list .pw-data-operation-row > span > span > span { color: var(--pw-ink); font-size: 15px; line-height: 23px; font-weight: 600; overflow-wrap: anywhere; }
+.pw-tool-list .pw-data-operation-row small { display: block; color: var(--pw-copy); font-size: 13px; line-height: 21px; font-weight: 400; overflow-wrap: anywhere; }
+.pw-tool-detail { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.pw-tool-detail .pw-data-operation-heading { margin: 0; }
+.pw-tool-identifier { margin: 0; font-family: var(--pw-font-mono, monospace); color: var(--pw-copy); font-size: 13px; line-height: 21px; overflow-wrap: anywhere; }
+.pw-tool-description { margin: 0; color: var(--pw-ink); font-size: 15px; line-height: 25px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pw-tool-status { padding-block: 8px; }
+@media (max-width: 359px) { .pw-tool-filters { grid-template-columns: 1fr; } }

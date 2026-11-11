@@ -41,9 +41,13 @@ public final class RemoteInboxReceiveService extends Service {
                 scheduler = Executors.newSingleThreadScheduledExecutor();
                 scheduler.scheduleWithFixedDelay(() -> {
                     try {
-                        if (RemoteInboxStore.get(this).live()) RemoteInboxSync.run(this);
+                        if (RemoteInboxStore.get(this).live()) {
+                            String result = RemoteInboxSync.run(this).optString("status");
+                            if (running && !"already_running".equals(result)) showStatus("waiting_network".equals(result) ? "等待网络 · 恢复后继续检测" : "主动检测中 · 不保证即时送达");
+                        }
                     } catch (Exception failure) {
                         Log.w("PocketRemoteInbox", "Foreground receiver polling failed", failure);
+                        if (running) showStatus("最近同步失败 · 点击核对连接");
                     }
                 }, 0, 50, TimeUnit.SECONDS);
             }
@@ -55,6 +59,12 @@ public final class RemoteInboxReceiveService extends Service {
             stopSelfResult(startId);
             return START_NOT_STICKY;
         }
+    }
+    private void showStatus(String status) {
+        try {
+            NotificationManager manager = getSystemService(NotificationManager.class);
+            if (running && manager != null) manager.notify(SERVICE_ID, RemoteInboxNotifications.ongoing(this, status));
+        } catch (RuntimeException unavailable) { Log.w("PocketRemoteInbox", "Receiver status not accepted", unavailable); }
     }
     @Override public void onDestroy() {
         running = false;

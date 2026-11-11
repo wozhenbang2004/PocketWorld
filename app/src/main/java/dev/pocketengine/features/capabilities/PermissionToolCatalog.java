@@ -32,11 +32,14 @@ public final class PermissionToolCatalog {
         for(String command:new String[]{"listFiles","readFile","exec","writeFile"})catalog.descriptor(CapabilityDescriptor.ssh(command));
         catalog.descriptor(CapabilityDescriptor.createText());catalog.descriptor(CapabilityDescriptor.createDocument());catalog.descriptor(CapabilityDescriptor.document());
         catalog.descriptor(CapabilityDescriptor.transformImage());catalog.descriptor(CapabilityDescriptor.trimMedia());
-        JSONArray browser=dev.pocketengine.browser.BrowserTaskCapabilityPort.taskToolNames(true);
-        for(int i=0;i<browser.length();i++)catalog.names("browser","需要本任务原浏览器会话和对应能力。",browser.getString(i));
+        catalog.rows(dev.pocketengine.browser.BrowserTaskCapabilityPort.permissionToolCatalog());
+        // Static names only. DeviceCapabilityPort.tools() requires a live, original native route;
+        // do not construct it or inspect a peer to populate this owner-facing directory.
+        catalog.names("devices","对原任务明确选定、原生批准范围内的设备工具发起一次调用；仍须目标设备授权、准确路由、参数与剩余预算。目录和策略不会创建这些授权。","device_invoke_tool");
+        catalog.names("devices","将原任务目标交给准确已授权设备，使用原范围与分配预算；不因连接或允许规则自动开始任务。","device_delegate_goal");
+        catalog.names("devices","查询原设备操作的真实状态和回执；不重试未知动作，不将接收等同完成。","device_operation_get");
         catalog.rows(dev.pocketengine.features.local.project.ProjectCapabilityPort.permissionToolCatalog());
-        catalog.names("semantic","通过原生发现的 App 入口操作，仍须满足系统权限和原任务范围。",
-                dev.pocketengine.features.semantic.SemanticCapabilityPort.DISCOVER,dev.pocketengine.features.semantic.SemanticCapabilityPort.DISPATCH);
+        catalog.definitions(dev.pocketengine.features.semantic.SemanticCapabilityPort.catalogDefinitions(true),"semantic",true);
         catalog.names("remote","只作用于原任务明确选定的远程电脑和环境。",
                 dev.pocketengine.features.remote.RemoteTaskCapabilities.START,dev.pocketengine.features.remote.RemoteTaskCapabilities.READ);
         catalog.names("memory","按原任务或原私人对话的已授权范围读取，不恢复旧权限。","memory_raw_query","memory_raw_read",
@@ -49,7 +52,8 @@ public final class PermissionToolCatalog {
         catalog.definitions(dev.pocketengine.core.ExecutionPlan.tools(false),"run",false);
         catalog.definitions(new JSONArray().put(dev.pocketengine.core.ScopedToolCatalog.searchDefinition()),"run",false);
         catalog.notices.put("目录列出内置声明与本机已注册插件，不等于本次任务已挂载。工作配置、群组、设备及系统权限仍由原范围控制。");
-        catalog.notices.put("JS 扩展的工具名在原任务加载扩展后生成；此页不会为列目录运行扩展。可按实际调用的精确名称添加规则。");
+        catalog.notices.put("插件/MCP 仅显示本机当前注册的定义；未启用、未授权或未完成发现的工具可能尚未登记，请到对应来源核对。目录读取不会连接服务或执行工具。");
+        catalog.notices.put("JS 扩展的工具名在原任务加载扩展后生成；此页不会为列目录运行扩展。可按实际调用的精确名称添加规则。跨设备定义也不表示已有原生设备路由或授权。");
         JSONArray values=new JSONArray();for(JSONObject row:catalog.rows.values())values.put(row);
         return new JSONObject().put("tools",values).put("notices",catalog.notices).put("metadataOnly",true).put("executionAuthorized",false);
     }

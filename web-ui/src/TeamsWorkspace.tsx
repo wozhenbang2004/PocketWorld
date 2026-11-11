@@ -12,23 +12,27 @@ import { TeamHarnessFields } from './TeamHarnessFields';
 import { TeamProductionFields, TeamProductionReview } from './TeamProductionFields';
 import { TeamEvidenceWorkspace } from './TeamEvidenceWorkspace';
 import { resetTeamProductionAcknowledgments, teamDefinitionPayload, teamProductionDraft, teamProductionEditorMember } from './team-production';
+import { TeamMemberAvatar, TeamMemberIdentity } from './TeamMemberIdentity';
+import { teamAvatarShape, teamAvatarShapes, teamMemberLabel, teamMessageIdentity, teamMessageAuthor } from './team-identity';
 import { HarnessEvidence } from './HarnessEvidence';
 import { harnessWorkerLabel, isTeamHarness } from './harness-capabilities';
 import './team-continuity.css';
 import './collaboration-depth.css';
 import './team-navigation.css';
+import './team-workbench.css';
 
 type Data = Record<string, any>;
 type Run = (action: string, args?: Data) => Promise<any>;
 type PendingMessage = { id: string; memberId: string; runId: string; key: string; text: string; questionId?: string };
 type TeamTab = 'runs' | 'teams';
+type RunSection = 'progress' | 'messages' | 'materials';
 type MessageInput = { recipient: string; replyId: string; mode: string };
 const rows = (value: unknown): Data[] => Array.isArray(value) ? value : [];
 const object = (value: unknown): Data => value && typeof value === 'object' && !Array.isArray(value) ? value as Data : {};
 const label = (value: unknown): string => typeof value === 'string' ? value : '';
 const status = (value: string) => ({ queued: '等待工作', running: '工作中', completed: '本轮已有产出', partial: '部分分工未完成', paused: '已暂停',
   awaiting_review: '成果待审阅', awaiting_input: '等待回答', awaiting_user: '等待处理', waiting_dependency: '等待前置分工', blocked_dependency: '前置工作未完成',
-  blocked_unknown: '原操作结果待核对', failed: '本轮未完成', cancelled: '已停止', interrupted: '已中断', awaiting_approval: '等待授权', needs_confirmation: '成果待确认', reconciling: '核对原操作', stopping: '正在停止' } as Record<string, string>)[value] || value;
+  blocked_unknown: '原操作结果待核对', failed: '本轮未完成', exited: '已退出', cancelled: '已停止', interrupted: '已中断', awaiting_approval: '等待授权', needs_confirmation: '成果待确认', reconciling: '核对原操作', stopping: '正在停止' } as Record<string, string>)[value] || value;
 const blankMember = (id: string, index: number) => teamProductionEditorMember({ id, name: `成员 ${index + 1}`, role: '', model: '', runner: 'model' });
 const readingKey = (value: Data | null, tab: TeamTab) => value?.kind === 'run' ? `run:${value.run.id}`
   : value?.kind === 'definition' ? `definition:${value.definition.id}` : `list:${tab}`;
@@ -42,17 +46,22 @@ const memberModelLabel = (member: Data): string => {
 };
 
 /** Uses the adopted BoardUI fields/dialogs and Affect answer presentation on the original team worksite. */
-export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShownError = '' }: { state: Data; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void; alreadyShownError?: string }) {
+export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShownError = '', attentionFocus, onAttentionConsumed }: { state: Data; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void; alreadyShownError?: string; attentionFocus?: Data | null; onAttentionConsumed?: (requestId: string) => void }) {
   const [catalog, setCatalog] = useState<Data>({}), [tab, setTab] = useState<TeamTab>('teams');
+  const directoryInitialized = useRef(false);
   const [catalogReady, setCatalogReady] = useState(false), [editorExpanded, setEditorExpanded] = useState<string[]>([]);
   const [queries, setQueries] = useState<Record<TeamTab, string>>({ runs: '', teams: '' });
   const query = queries[tab], setQuery = (value: string) => setQueries(old => ({ ...old, [tab]: value }));
   const [reading, setReading] = useState<Data | null>(null), [review, setReview] = useState<Data | null>(null), [editor, setEditor] = useState<Data | null>(null);
+  const [memberDraft, setMemberDraft] = useState<Data | null>(null);
+  const pendingMemberChange = useRef<string | null>(null);
   const [phoneSelection, setPhoneSelection] = useState<Data | null>(null), [phoneChoices, setPhoneChoices] = useState<Record<string, TeamPhoneChoice>>({});
   const [externalReady, setExternalReady] = useState<Record<string, boolean>>({}), [memberProbes, setMemberProbes] = useState<Record<string, Data>>({});
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState(''), [acknowledged, setAcknowledged] = useState(false);
   const [goal, setGoal] = useState(''), [rounds, setRounds] = useState('1'), [recipient, setRecipient] = useState(''), [replyId, setReplyId] = useState(''), [mode, setMode] = useState('discussion');
   const [composeOpen, setComposeOpen] = useState(false);
+  const [runSections, setRunSections] = useState<Record<string, RunSection>>({});
+  const [memberFilters, setMemberFilters] = useState<Record<string, string>>({});
   const [drafts, setDrafts] = useState<Record<string, string>>({}), [uncertainByRun, setUncertainByRun] = useState<Record<string, PendingMessage>>({});
   const [expandedMembers, setExpandedMembers] = useState<Record<string, string[]>>({}), [expandedItems, setExpandedItems] = useState<Record<string, string[]>>({});
   const uncertain = uncertainByRun[String(reading?.run?.id || '')] || null;
@@ -63,6 +72,9 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
   const backgrounded = useRef(document.visibilityState !== 'visible'), currentReview = useRef<Data | null>(null);
   const currentPhoneSelection = useRef<Data | null>(null);
   const materialBack = useRef<(() => boolean) | null>(null);
+  const materialBeforeLeave = useRef<((leave: () => void) => void) | null>(null);
+  const [materialBusy, setMaterialBusy] = useState(false);
+  const handledAttention = useRef('');
   const workspaceActive = state.webWorkspaceSection === 'teams' && !state.webWorkspaceTaskOpen;
   const workspaceWindow = useRef({ active: false, revision: Number(state.webWorkspaceResumeRevision || 0) });
   const ownsNativeWindow = () => {
@@ -116,7 +128,12 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
   };
   const acceptReading = (next: Data) => {
     rememberView();
+    if (next.kind !== 'run' || next.run?.id !== currentReading.current?.run?.id) setMemberDraft(null);
     release(currentReading.current); setReading(next);
+    if (next.kind === 'run' && pendingMemberChange.current === next.run?.id) {
+      pendingMemberChange.current = null; setMemberDraft(null);
+      setNotice('已重新读取当前成员状态，请核对刚才的改动；没有重发旧操作。');
+    }
     if (next.kind === 'run' && next.run?.id) listSelection.current.runs = next.run.id;
     if (next.kind === 'definition' && next.definition?.id) listSelection.current.teams = next.definition.id;
     if (next.kind === 'run' && next.run?.id) setCatalog(old => ({ ...old, runs: [next.run, ...rows(old.runs).filter(value => value.id !== next.run.id)] }));
@@ -138,17 +155,51 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
     const frame = requestAnimationFrame(() => root.current?.querySelector<HTMLTextAreaElement>('.pw-team-compose textarea')?.focus());
     return () => cancelAnimationFrame(frame);
   }, [composeOpen, replyId]);
-  const acceptCatalog = (value: Data) => { setCatalog(value); setCatalogReady(true); };
+  const acceptCatalog = (value: Data) => {
+    setCatalog(value); setCatalogReady(true);
+    if (!directoryInitialized.current) { directoryInitialized.current = true; if (rows(value.runs).some(row => !['completed', 'cancelled'].includes(row.status))) setTab('runs'); }
+  };
   const load = () => { void invoke('teams.snapshot', {}, acceptCatalog); };
   const readRun = (id: string) => { void invoke('teams.readRun', { runId: id }, result => { if (result.reading?.run?.id !== id) throw new Error('原团队运行身份不匹配'); acceptReading(result.reading); }); };
   const readDefinition = (id: string) => { void invoke('teams.readDefinition', { id }, value => { if (value.definition?.id !== id) throw new Error('团队配置身份不匹配，请刷新目录'); acceptReading(value); }); };
-  const back = () => { rememberView(); release(reading); setTab(reading?.kind === 'run' ? 'runs' : 'teams'); setReading(null); setComposeOpen(false); setReplyId(''); setEditor(null); setError(''); setNotice(''); };
+  useEffect(() => {
+    const requestId = label(attentionFocus?.requestId);
+    if (!requestId || requestId === handledAttention.current || !workspaceActive || !catalogReady || busy || entered.current || backgrounded.current || !ownsNativeWindow()) return;
+    handledAttention.current = requestId;
+    const locator = Object.fromEntries(['runId', 'memberId', 'generation', 'memberGeneration', 'workItemId', 'assignmentId', 'questionId']
+      .filter(key => attentionFocus?.[key] !== undefined).map(key => [key, attentionFocus![key]]));
+    void invoke('teams.readAttention', locator, result => {
+      if (result.reading?.run?.id !== locator.runId) throw new Error('原团队待处理身份不匹配，请刷新通知。');
+      acceptReading(result.reading);
+      const focus = object(result.focus), id = result.reading.run.id;
+      setRunSections(old => ({ ...old, [id]: focus.kind === 'question' ? 'messages' : 'progress' }));
+      setMemberFilters(old => ({ ...old, [id]: '' }));
+      if (focus.kind === 'workItem') setExpandedItems(old => ({ ...old, [id]: [...new Set([...(old[id] || []), focus.workItemId])] }));
+      if (focus.kind === 'member') setExpandedMembers(old => ({ ...old, [id]: [...new Set([...(old[id] || []), focus.memberId])] }));
+      if (focus.kind === 'changed') setNotice(label(focus.message));
+      requestAnimationFrame(() => {
+        const selector = focus.kind === 'workItem' ? `[data-work-item-id="${CSS.escape(String(focus.workItemId))}"]` : focus.kind === 'question' ? `[data-message-id="${CSS.escape(String(focus.messageId))}"]`
+          : focus.kind === 'member' ? `[data-team-member-id="${CSS.escape(String(focus.memberId))}"]` : '.pw-team-run h2';
+        const target = root.current?.querySelector<HTMLElement>(selector);
+        (['member', 'workItem'].includes(focus.kind) ? target?.querySelector<HTMLElement>('button') : target)?.focus({ preventScroll: true });
+        target?.scrollIntoView({ block: 'start' });
+      });
+      onAttentionConsumed?.(requestId);
+    }, () => onAttentionConsumed?.(requestId));
+  }, [attentionFocus?.requestId, workspaceActive, catalogReady, busy]);
+  const back = () => { const leave = () => { rememberView(); release(reading); setTab(reading?.kind === 'run' ? 'runs' : 'teams'); setReading(null); setComposeOpen(false); setReplyId(''); setEditor(null); setMemberDraft(null); setError(''); setNotice(''); }; if (materialBeforeLeave.current) materialBeforeLeave.current(leave); else leave(); };
+  const openRelatedTask = (id: string) => {
+    const open = () => { void run('tasks.open', { id }).catch(failure => setError(failure instanceof Error ? failure.message : String(failure))); };
+    if (materialBeforeLeave.current) materialBeforeLeave.current(open); else open();
+  };
   const switchTab = (value: TeamTab) => { if (busy) return; rememberView(); setTab(value); setError(''); setNotice(''); };
   const closeReview = () => { const original = currentReview.current; currentReview.current = null; release(original, 'reviewHandle'); setReview(null); setAcknowledged(false); };
   const closePhoneSelection = () => { const original = currentPhoneSelection.current; currentPhoneSelection.current = null; release(original, 'phoneHandle'); setPhoneSelection(null); };
   useEffect(() => { alive.current = true; return () => { alive.current = false; requestGeneration.current++; release(currentReading.current); release(currentReview.current, 'reviewHandle'); release(currentPhoneSelection.current, 'phoneHandle'); }; }, []);
   const restoreWorkspace = () => {
     if (backgrounded.current || !ownsNativeWindow()) return;
+    // A retired read did not consume its notification; a fresh owner window may locate it again.
+    handledAttention.current = '';
     const original = currentReading.current, generation = ++requestGeneration.current;
     closeReview(); closePhoneSelection();
     entered.current = true; setBusy(true); setReview(null); setAcknowledged(false); setError('');
@@ -194,7 +245,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
     document.addEventListener('visibilitychange', visibility); window.addEventListener('pagehide', hide);
     return () => { document.removeEventListener('visibilitychange', visibility); window.removeEventListener('pagehide', hide); };
   });
-  useEffect(() => { registerTransientBack(() => { if (materialBack.current?.()) return true; if (busy) return true; if (review) { closeReview(); return true; } if (phoneSelection) { closePhoneSelection(); return true; } if (editor) { setEditor(null); return true; } if (reading) { back(); return true; } return false; }); return () => registerTransientBack(null); }, [reading, review, phoneSelection, editor, busy, registerTransientBack]);
+  useEffect(() => { registerTransientBack(() => { if (materialBack.current?.()) return true; if (busy) return true; if (review) { closeReview(); return true; } if (phoneSelection) { closePhoneSelection(); return true; } if (memberDraft) { setMemberDraft(null); return true; } if (editor) { setEditor(null); return true; } if (reading) { back(); return true; } return false; }); return () => registerTransientBack(null); }, [reading, review, phoneSelection, memberDraft, editor, busy, registerTransientBack]);
   const definition = reading?.kind === 'definition' ? object(reading.definition) : null;
   const definitionReady = workspaceActive && (!definition || !!reading?.viewHandle);
   const current = reading?.kind === 'run' ? object(reading.run) : null;
@@ -202,7 +253,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
   const changed = !!current && latest.id === current.id && (latest.generation > current.generation
     || latest.generation === current.generation && latest.revision > current.revision);
   useEffect(() => {
-    if (!changed || !workspaceActive || busy || editor || review || phoneSelection || backgrounded.current) return;
+    if (!changed || !workspaceActive || busy || materialBusy || editor || memberDraft || review || phoneSelection || backgrounded.current) return;
     const runId = current!.id, originalHandle = reading?.viewHandle, generation = requestGeneration.current;
     let retired = false;
     const stillCurrent = () => !retired && alive.current && !backgrounded.current && ownsNativeWindow()
@@ -224,13 +275,34 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
       });
     }, 250);
     return () => { retired = true; clearTimeout(timer); };
-  }, [changed, current?.id, reading?.viewHandle, workspaceActive, busy, editor, review, phoneSelection]);
+  }, [changed, current?.id, reading?.viewHandle, workspaceActive, busy, materialBusy, editor, memberDraft, review, phoneSelection]);
   const members = rows(current?.members), messages = rows(reading?.messages);
   const workItems = rows(object(current?.workPlan).items);
+  const runSection = runSections[current?.id || ''] || 'progress';
+  const memberFilter = memberFilters[current?.id || ''] || '';
+  const visibleMessages = memberFilter ? messages.filter(message => [message.memberId, message.recipientMemberId, message.targetMemberId].includes(memberFilter)) : messages;
+  const chooseMemberFilter = (id: string) => { if (current) setMemberFilters(old => ({ ...old, [current.id]: id })); };
+  const chooseRunSection = (section: RunSection, onShown?: () => void) => {
+    if (!current) return;
+    const select = () => {
+      const scroll = root.current?.closest<HTMLElement>('.pw-secondary-scroll');
+      if (scroll && section !== runSection) positions.current.set(`run:${current.id}:${runSection}`, scroll.scrollTop);
+      setRunSections(old => ({ ...old, [current.id]: section }));
+      requestAnimationFrame(() => { if (scroll && section !== runSection) scroll.scrollTop = positions.current.get(`run:${current.id}:${section}`) || 0; onShown?.(); });
+    };
+    if (runSection === 'materials' && section !== runSection && materialBeforeLeave.current) materialBeforeLeave.current(select);
+    else select();
+  };
+  const focusMessage = (id: string) => {
+    chooseRunSection('messages', () => {
+      chooseMemberFilter('');
+      requestAnimationFrame(() => { const target = root.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(id)}"]`); target?.focus({ preventScroll: true }); target?.scrollIntoView({ block: 'center' }); });
+    });
+  };
   const hasWorkPlan = !!current?.workPlan;
   const reply = messages.find(message => message.messageId === replyId);
   const draftKey = `${current?.id || ''}:${recipient}:${replyId}:${mode}`, text = drafts[draftKey] || '';
-  const canControl = workspaceActive && !!current && !!reading?.viewHandle && !busy && !changed && current.status !== 'cancelled';
+  const canControl = workspaceActive && !!current && !!reading?.viewHandle && !busy && !materialBusy && !changed && current.status !== 'cancelled';
   const canMutate = canControl && !uncertain;
   const canChangeRequirements = !hasWorkPlan && current?.mode !== 'produce' && !members.some(member => member.runner === 'phone_agent');
   const changeMessageMode = (nextMode: string) => {
@@ -239,7 +311,23 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
     setDrafts(old => old[nextKey] || !text ? old : { ...old, [nextKey]: text });
     setRecipient(nextRecipient); setMode(nextMode);
   };
-  const name = (id: string) => members.find(member => member.id === id)?.name || id;
+  const name = (id: string) => { const member = members.find(value => value.id === id); return member ? teamMemberLabel(member, members) : id; };
+  const simpleRoster = current?.mode === 'collaborate' && !hasWorkPlan && (!current.researchExecutionFormat || current.researchExecutionFormat === catalog.continuousResearchFormat) && !current.nativeWorkProfileModels
+    && members.every(member => (member.runner || 'model') === 'model' && (!member.device || member.device === 'phone'));
+  const rosterPaused = current?.status === 'paused' || current?.phase === 'awaiting_member';
+  const currentMembers = members.filter(member => !member.exited);
+  const beginMemberChange = (action: 'add' | 'rename' | 'exit', member?: Data) => {
+    if (!canMutate || !current) return;
+    setError('');
+    setMemberDraft({ action, runId: current.id, memberId: member?.id || `member-${crypto.randomUUID().slice(0, 12)}`,
+      name: member?.name || '', avatarShape: teamAvatarShape(member || { id: `new-${members.length}` }), role: '', assignment: '', model: '', newLeaderId: '' });
+  };
+  const reviewMemberChange = () => {
+    if (!memberDraft || !canMutate || memberDraft.runId !== current?.id) return;
+    const { action, memberId, name, avatarShape, role, assignment, model, newLeaderId } = memberDraft;
+    void invoke('teams.reviewMember', { viewHandle: reading!.viewHandle, action, memberId,
+      ...(action === 'exit' ? { newLeaderId } : { name, avatarShape }), ...(action === 'add' ? { role, assignment, model } : {}) }, reviewResult);
+  };
   const pendingCount = (member: Data) => Number(member.unreadOwnerMessages || 0) + Number(member.unreadPeerMessages || 0);
   const pendingMessageBusy = (member: Data) => ['running', 'awaiting_approval'].includes(member.status);
   const recipientMember = members.find(member => member.id === recipient);
@@ -342,21 +430,23 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
     { id: 'active', title: '当前工作', entries: entries.filter(row => !attentionStates.has(row.status) && !finishedStates.has(row.status)) },
     { id: 'history', title: '已结束的工作', entries: entries.filter(row => finishedStates.has(row.status)) },
   ];
-  useCollectionMotion(root, JSON.stringify([viewKey, query.trim(), state.webWorkspaceResumeRevision]), JSON.stringify([
+  useCollectionMotion(root, JSON.stringify([viewKey, runSection, memberFilter, query.trim(), state.webWorkspaceResumeRevision]), JSON.stringify([
     entries.map(row => [row.id, row.status, row.revision]),
     messages.map(message => [message.messageId, message.state, !!message.answer]),
     members.map(member => [member.id, member.status, member.exited]),
     workItems.map(item => [item.workItemId, item.status]), !!current?.summary,
     expandedMembers[String(current?.id || '')] || [], expandedItems[String(current?.id || '')] || [],
-  ]), { active: workspaceActive && catalogReady && (!reading || !!reading.viewHandle) && !editor && !review && !phoneSelection });
-  const pendingQuestions = messages.filter(message => message.kind === 'assignment_question' && message.state === 'pending');
+  ]), { active: workspaceActive && catalogReady && (!reading || !!reading.viewHandle) && !editor && !memberDraft && !review && !phoneSelection });
+  const pendingQuestions = messages.filter(message => message.kind === 'assignment_question' && message.state === 'pending' && current?.status !== 'cancelled' && members.some(member => member.id === message.memberId && !member.exited));
   const jumpToRunSection = (section: 'messages' | 'members' | 'materials' | 'compose') => {
-    if (section === 'compose') setComposeOpen(true);
-    requestAnimationFrame(() => {
-      const target = root.current?.querySelector<HTMLElement>(`[data-team-section="${section}"]`);
-      target?.scrollIntoView({ block: 'start' });
-      if (section === 'compose') target?.querySelector<HTMLTextAreaElement>('textarea')?.focus({ preventScroll: true });
-      else target?.focus({ preventScroll: true });
+    chooseRunSection(section === 'members' ? 'progress' : section === 'materials' ? 'materials' : 'messages', () => {
+      if (section === 'compose') setComposeOpen(true);
+      requestAnimationFrame(() => {
+        const target = root.current?.querySelector<HTMLElement>(`[data-team-section="${section}"]`);
+        target?.scrollIntoView({ block: 'start' });
+        if (section === 'compose') target?.querySelector<HTMLTextAreaElement>('textarea')?.focus({ preventScroll: true });
+        else target?.focus({ preventScroll: true });
+      });
     });
   };
   const editorMemberIssue = (member: Data): string => {
@@ -381,12 +471,12 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
   let editorPayload: Data | null = null, productionError = '';
   if (editor) try { editorPayload = teamDefinitionPayload(editor, catalog); }
   catch (failure) { productionError = failure instanceof Error ? failure.message : String(failure); }
-  const refreshReading = <IconButton className="pw-utility-icon" icon={IconRefresh} aria-label="刷新团队记录" title="刷新团队记录" disabled={busy} onClick={() => current ? readRun(current.id) : definition ? void invoke('teams.readDefinition', { id: definition.id }, acceptReading) : load()} />;
+  const refreshReading = <IconButton className="pw-utility-icon" icon={IconRefresh} aria-label="刷新团队记录" title="刷新团队记录" disabled={busy || materialBusy} onClick={() => current ? readRun(current.id) : definition ? void invoke('teams.readDefinition', { id: definition.id }, acceptReading) : load()} />;
   const directoryContent = <>
     {showCollectionTools && <SearchField fieldClassName="pw-collaboration-search" shape="rounded" className="pw-secondary-search" data-input-size="medium" aria-label={tab === 'runs' ? '搜索协作记录' : '搜索我的团队'} placeholder={tab === 'runs' ? '搜索目标或团队' : '搜索团队'} value={query} onChange={setQuery} />}
     {entries.length > 0 ? <div className="pw-collaboration-directory">{directoryGroups.filter(group => group.entries.length > 0).map(group => <section className="pw-collaboration-group" key={group.id} aria-label={group.title}>
       {tab === 'runs' && <header className="pw-collaboration-group-heading"><h3>{group.title}</h3><span>{group.entries.length}</span></header>}
-      <div className="pw-object-list">{group.entries.map(row => <Button key={row.id} data-team-list-id={row.id} data-motion-key={`directory:${row.id}`} variant="ghost" trailingIcon={IconChevronRight} className="pw-object-row h-auto whitespace-normal" disabled={busy} onClick={() => { listSelection.current[tab] = row.id; if (tab === 'runs') readRun(row.id); else readDefinition(row.id); }}><span className="pw-object-row-copy"><span className="pw-object-row-title">{row.goal || row.name || row.teamName || '团队工作'}</span><small>{[tab === 'runs' ? row.teamName : undefined, row.status ? status(row.status) : `${rows(row.members).length} 名成员`, tab === 'teams' ? row.mode === 'produce' ? '项目文件协作' : row.mode === 'debate' ? '取证与讨论' : '共同工作' : undefined].filter(Boolean).join(' · ')}</small>{tab === 'teams' && <small className="pw-team-roster-preview">{rows(row.members).map(member => member.name).filter(Boolean).join(' · ')}</small>}</span></Button>)}</div>
+      <div className="pw-object-list">{group.entries.map(row => <Button key={row.id} data-team-list-id={row.id} data-motion-key={`directory:${row.id}`} variant="ghost" trailingIcon={IconChevronRight} className="pw-object-row h-auto whitespace-normal" disabled={busy} onClick={() => { listSelection.current[tab] = row.id; if (tab === 'runs') readRun(row.id); else readDefinition(row.id); }}><span className="pw-object-row-copy"><span className="pw-object-row-title">{row.goal || row.name || row.teamName || '团队工作'}</span><small>{[tab === 'runs' ? row.teamName : undefined, row.status ? status(row.status) : `${rows(row.members).length} 名成员`, tab === 'teams' ? row.mode === 'produce' ? '项目文件协作' : row.mode === 'debate' ? '取证与讨论' : '共同工作' : undefined].filter(Boolean).join(' · ')}</small>{tab === 'teams' && <small className="pw-team-roster-preview">{rows(row.members).map(member => <span key={member.id}><TeamMemberAvatar member={member} size={24} />{teamMemberLabel(member, rows(row.members))}</span>)}</small>}</span></Button>)}</div>
     </section>)}</div> : <section className="pw-team-empty" aria-label="团队目录提示" role={directoryState === 'loading' ? 'status' : undefined}>
       <h2>{directoryState === 'loading' ? '正在读取团队与协作' : directoryState === 'unconfirmed' ? '团队状态需要重新核对' : directoryState === 'unread' ? '团队目录尚未读取' : directoryState === 'filtered' ? '没有匹配的记录' : tab === 'teams' ? '建立第一个团队' : '还没有协作记录'}</h2>
       <p>{directoryState === 'loading' || directoryState === 'unread' ? '读取后，会在这里显示已保存的团队和协作。' : directoryState === 'unconfirmed' ? '重新读取团队与协作记录后，再继续操作。' : directoryState === 'filtered' ? '换一个名称或清除搜索，查看当前目录。' : tab === 'teams' ? '设置成员与职责，保存后填写目标即可开始协作。' : catalogTeams.length ? '选择一个团队，填写目标后开始协作。' : '先创建团队，再让成员围绕同一个目标分工。'}</p>
@@ -397,7 +487,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
   </>;
   return <section ref={root} className="pw-team-workspace pw-depth-collaboration" data-team-layer={reading ? 'detail' : 'list'} data-team-view={viewKey} inert={!workspaceActive} aria-busy={!workspaceActive || busy}>
     <div className="pw-team-loading">{(!workspaceActive || busy) && <ProgressBar aria-label={workspaceActive ? '正在读取原团队回执' : '正在进入团队工作区'} isIndeterminate showValueLabel={false} size="sm" />}</div>
-    {error && error !== alreadyShownError && !editor && !review && !phoneSelection && <MotionFeedback identity={error} className="pw-secondary-error" role="alert">{error}</MotionFeedback>}{notice && <MotionFeedback identity={notice} className="pw-field-hint" role="status">{notice}</MotionFeedback>}
+    {error && error !== alreadyShownError && !editor && !memberDraft && !review && !phoneSelection && <MotionFeedback identity={error} className="pw-secondary-error" role="alert">{error}</MotionFeedback>}{notice && <MotionFeedback identity={notice} className="pw-field-hint" role="status">{notice}</MotionFeedback>}
     {reading && !definition && <nav className="pw-team-location" aria-label="团队内导航"><Button variant="ghost" leadingIcon={IconArrowLeft} disabled={busy} onClick={back}>{current ? '返回协作记录' : '返回我的团队'}</Button><span>{current ? current.teamName || '这次协作' : '成员与启动'}</span></nav>}
     {!reading && (showDirectoryTools ? <Tabs selectedKey={tab} onSelectionChange={value => { if (value === 'runs' || value === 'teams') switchTab(value); }} className="pw-team-tabs">
       <div className="pw-object-toolbar"><TabList aria-label="团队视图"><Tab id="teams">我的团队{catalogTeams.length > 0 ? ` · ${catalogTeams.length}` : ''}</Tab><Tab id="runs">协作记录{catalogRuns.length > 0 ? ` · ${catalogRuns.length}` : ''}</Tab></TabList>
@@ -405,7 +495,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
       </div>
       <TabPanel id={tab}>{directoryContent}</TabPanel>
     </Tabs> : directoryContent)}
-    {definition && <article className="pw-team-reading pw-team-definition"><header className="pw-object-toolbar pw-team-definition-heading"><div><h2 tabIndex={-1}>{definition.name}</h2><p>{definition.mode === 'produce' ? '原项目文件协作' : definition.mode === 'debate' ? '取证与讨论' : hasPhoneMembers ? '手机分工与共同工作' : '共同分析'} · {rows(definition.members).length} 名成员</p><p className="pw-team-roster-summary" aria-label="参与成员">{rows(definition.members).map(member => member.name).filter(Boolean).join(' · ')}</p></div>{refreshReading}</header>
+    {definition && <article className="pw-team-reading pw-team-definition"><header className="pw-object-toolbar pw-team-definition-heading"><div><h2 tabIndex={-1}>{definition.name}</h2><p>{definition.mode === 'produce' ? '原项目文件协作' : definition.mode === 'debate' ? '取证与讨论' : hasPhoneMembers ? '手机分工与共同工作' : '共同分析'} · {rows(definition.members).length} 名成员</p><div className="pw-team-roster-summary" aria-label="参与成员">{rows(definition.members).map(member => <TeamMemberIdentity key={member.id} member={member} name={teamMemberLabel(member, rows(definition.members))} size={28} />)}</div></div>{refreshReading}</header>
       <section className="pw-team-start" aria-label="开始下一次协作">{definition.mode === 'produce' ? <><h3>下一次共同工作</h3><p className="pw-muted">文件团队沿原项目任务的计划、文件范围和预算启动；这里保留其成员与既有工作记录。</p></> : <>
         <TextAreaField label="这次共同目标" value={goal} onChange={setGoal} maxLength={8000} showCount rows={3} autoResize maxRows={8} resize="none" isDisabled={busy} />
         {fixedDiscussionRounds && <p className="pw-field-hint">取证与讨论使用固定流程：独立观点、相互质疑、回应与综合结论。启动时按两轮额度核对。</p>}
@@ -415,7 +505,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
           <PressButton label={hasPhoneMembers ? '选择手机范围并开始' : '核对并开始协作'} disabled={busy || !definitionReady || !goal.trim() || goal.length > 8000 || !!state.modelSelectionBusy} onClick={() => void invoke('teams.reviewStart', { viewHandle: reading!.viewHandle, goal, rounds: hasPhoneMembers ? 1 : fixedDiscussionRounds ? 2 : Number(rounds) }, reviewResult)} />
         </div>
       </>}</section>
-      <section className="pw-team-members"><header className="pw-team-members-heading"><h3>成员与职责</h3><Button variant="ghost" leadingIcon={IconEdit} disabled={busy || !definitionReady} onClick={() => beginEditor(definition)}>编辑团队</Button></header><div className="pw-team-definition-member-list">{rows(definition.members).map(member => <div key={member.id} data-motion-key={`definition-member:${member.id}`} className="pw-source-record"><h4>{member.name}{member.id === definition.leaderId ? ' · 负责人' : ''}</h4><p>{member.role}</p>
+      <section className="pw-team-members"><header className="pw-team-members-heading"><h3>成员与职责</h3><Button variant="ghost" leadingIcon={IconEdit} disabled={busy || !definitionReady} onClick={() => beginEditor(definition)}>编辑团队</Button></header><div className="pw-team-definition-member-list">{rows(definition.members).map(member => <div key={member.id} data-motion-key={`definition-member:${member.id}`} className="pw-source-record"><h4><TeamMemberIdentity member={member} name={teamMemberLabel(member, rows(definition.members))} detail={member.id === definition.leaderId ? '负责人' : undefined} size={40} /></h4><p>{member.role}</p>
         {member.runner === 'phone_agent' ? <><small>{teamPhoneTargetLabel(member.device, phoneTargets)}</small><p>{member.assignment}</p></>
           : member.runner === 'model' || !member.runner ? <small>模型：{memberModelLabel(member) || '沿用实际启动时的主模型'} · 本机模型连接</small>
           : <><small>执行器：{harnessWorkerLabel(undefined, member.runner)} · 模型：{member.model || '执行器默认'}</small><p className="pw-field-hint">电脑：{computerLabel(member)}</p>
@@ -427,28 +517,84 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
 
     </article>}
     {current && <article className="pw-team-reading pw-team-run"><header className="pw-object-toolbar"><div><h2 tabIndex={-1}>{current.goal || current.teamName}</h2><p className="pw-detail-status">{status(current.status)}{current.phase ? ` · ${current.phase}` : ''}</p></div>{refreshReading}</header>
-      <nav className="pw-team-section-links" aria-label="这次协作的内容"><Button variant="ghost" onClick={() => jumpToRunSection('messages')}>沟通 · {messages.length}</Button><Button variant="ghost" onClick={() => jumpToRunSection('members')}>成员 · {members.length}</Button><Button variant="ghost" onClick={() => jumpToRunSection('materials')}>共享资料</Button><Button variant="secondary" disabled={!canMutate} onClick={() => jumpToRunSection('compose')}>给成员补充</Button></nav>
       {changed && <p role="status">有新的运行记录，当前阅读位置和未发送内容保留。</p>}
       {workspaceActive && !busy && !reading?.viewHandle && <p role="status">请刷新运行记录后继续操作，未发送的补充保留。</p>}
-      <div className="pw-team-run-controls">{reading?.taskId && <Button variant="secondary" trailingIcon={IconExternalLink} onClick={() => void run('tasks.open', { id: reading.taskId }).catch(() => {})}>查看原任务与审批</Button>}<div className="pw-form-actions"><IconButton className="pw-utility-icon" icon={IconPause} aria-label="暂停全队" title="暂停全队" disabled={!canControl} onClick={() => control('pause')} /><IconButton className="pw-utility-icon" icon={IconPlay} aria-label="沿原额度继续" title="沿原额度继续" disabled={!canMutate || hasWorkPlan} onClick={() => control('resume')} /><Button variant="ghost" disabled={!canControl} onClick={() => reviewResult({ operation: 'cancel', viewHandle: reading!.viewHandle, runId: current.id })}>停止这次协作</Button></div></div>
+      <div className="pw-team-run-controls">{reading?.taskId && <Button variant="secondary" trailingIcon={IconExternalLink} disabled={materialBusy} onClick={() => openRelatedTask(reading.taskId)}>查看原任务与审批</Button>}<div className="pw-form-actions"><IconButton className="pw-utility-icon" icon={IconPause} aria-label="暂停全队" title="暂停全队" disabled={!canControl} onClick={() => control('pause')} /><IconButton className="pw-utility-icon" icon={IconPlay} aria-label="沿原额度继续" title="沿原额度继续" disabled={!canMutate || hasWorkPlan} onClick={() => control('resume')} /><Button variant="ghost" disabled={!canControl} onClick={() => reviewResult({ operation: 'cancel', viewHandle: reading!.viewHandle, runId: current.id })}>停止这次协作</Button></div></div>
+      {reading?.taskLookupNotice && <p className="pw-field-hint" role="status">{reading.taskLookupNotice}</p>}
       {current.phase === 'intervention' && !hasWorkPlan && <div className="pw-collaboration-attention" role="status"><div><strong>新要求已保存，等待继续</strong><span>受影响成员已暂停；继续时使用新要求，沿用原剩余额度。</span></div><Button variant="secondary" disabled={!canMutate} onClick={() => control('resume')}>继续全队</Button></div>}
       {hasWorkPlan && <p className="pw-field-hint">继续工作或使用待处理消息时，请在原任务中核对具体工作项；不会按成员猜测要继续的分工。</p>}
-      {pendingQuestions.length > 0 && <div className="pw-collaboration-attention" role="status"><div><strong>{pendingQuestions.length} 条问题等待你的回答</strong><span>回答会留在这次原协作中</span></div><Button variant="ghost" trailingIcon={IconChevronRight} onClick={() => { const question = root.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(pendingQuestions[0].messageId)}"]`); question?.focus({ preventScroll: true }); question?.scrollIntoView({ block: 'start' }); }}>查看原问题</Button></div>}
-      <div className="pw-team-run-layout"><div className="pw-team-main">
-      {current.summary && <section className="pw-team-summary" data-motion-key="summary" aria-label="团队当前结果"><h3 className="pw-team-section-title">当前成果</h3>{current.summaryStale && <p className="pw-muted">这份总结待更新</p>}<AIAnswer text={current.summary} /></section>}
-      <section className="pw-team-messages" data-team-section="messages" tabIndex={-1} aria-label="原团队消息"><header className="pw-collaboration-group-heading"><h3>团队沟通</h3><span>{messages.length} 条消息</span></header>{messages.map(message => {
+      <Tabs selectedKey={runSection} onSelectionChange={value => { if (value === 'progress' || value === 'messages' || value === 'materials') chooseRunSection(value); }} className="pw-team-workbench">
+        <div className="pw-team-workbench-bar"><TabList aria-label="这次协作的工作区"><Tab id="progress" isDisabled={materialBusy}>进展</Tab><Tab id="messages" count={messages.length} isDisabled={materialBusy}>沟通</Tab><Tab id="materials">资料</Tab></TabList><Button variant="secondary" disabled={!canMutate || materialBusy} onClick={() => jumpToRunSection('compose')}>给成员补充</Button></div>
+        <TabPanel id="progress">
+      {pendingQuestions.length > 0 && <section className="pw-team-action-list" aria-label="等待你的回答"><header className="pw-collaboration-group-heading"><h3>需要你回答</h3><span>{pendingQuestions.length} 条</span></header>{pendingQuestions.map(question => <Button key={question.messageId} variant="ghost" className="pw-team-question-row h-auto whitespace-normal" trailingIcon={IconChevronRight} onClick={() => focusMessage(question.messageId)}><TeamMemberIdentity member={teamMessageIdentity(question, members) || { id: question.memberId, name: name(question.memberId) }} name={teamMessageAuthor(question, members)} /><span className="pw-team-question-preview">{String(question.content || '查看原问题')}</span></Button>)}</section>}
+          <div className="pw-team-progress-layout"><div className="pw-team-progress-main">
+      <section className="pw-team-overview" data-team-section="members" tabIndex={-1} aria-label="成员与当前工作">
+        <header className="pw-team-members-heading"><h3 className="pw-team-section-title">成员 <span>{currentMembers.length} 名参与{members.length > currentMembers.length ? ` · ${members.length - currentMembers.length} 名已退出` : ''}</span></h3>{simpleRoster && <Button variant="ghost" leadingIcon={IconAdd} disabled={!canMutate || !rosterPaused || currentMembers.length >= 4 || members.length >= 16} onClick={() => beginMemberChange('add')}>加入成员</Button>}</header>
+        {simpleRoster && current.researchExecutionFormat && <p className="pw-field-hint">退出只停止这名成员后续参与，不转移资料或原成果作者。已完成成果仍受原资料范围与到期限制；可在“资料”中核对并撤回。新成员需另选自己的范围，再明确继续。</p>}
+        {simpleRoster && !rosterPaused && current.status !== 'cancelled' && <p className="pw-field-hint">需要调整本次参与者时，先暂停全队；新成员加入后由你明确继续，不增加额度。</p>}
+        <Accordion key={`${current.id}:members`} variant="divided" className="pw-team-disclosures" allowsMultipleExpanded expandedKeys={new Set(expandedMembers[current.id] || [])}
+          onExpandedChange={keys => setExpandedMembers(old => ({ ...old, [current.id]: Array.from(keys, String) }))}>
+          {members.map(member => {
+            const model = memberModelLabel(member), activeItems = workItems.filter(item => item.memberId === member.id && item.status === 'running');
+            const latestRound = rows(member.roundStates).find(round => round.round === current.round) || rows(member.roundStates).at(-1), memberTaskId = member.phoneTask?.taskId || (!hasWorkPlan ? member.assignmentTask?.taskId : undefined);
+            const outputMessage = [...messages].reverse().find(message => message.memberId === member.id && ['answer', 'work_item_completed'].includes(message.kind) && message.content === member.text);
+            const outputIdentity = outputMessage ? teamMessageIdentity(outputMessage, members) : null;
+            const assignment = activeItems.length ? `正在做：${activeItems.map(item => label(item.title)).filter(Boolean).join('、')}` : label(member.assignment || member.role);
+            return <AccordionItem key={member.id} id={member.id} className="pw-team-member" data-team-member-id={member.id} data-motion-key={`member:${member.id}`}
+              title={<TeamMemberIdentity member={member} name={name(member.id)} detail={member.id === current.leaderId ? '负责人' : undefined} size={40} />}
+              description={<><span className="pw-team-member-meta" title={model || undefined}>{[model, member.exited ? '已退出' : status(member.status), !hasWorkPlan && !member.exited && pendingCount(member) > 0 ? `${pendingCount(member)} 条待处理消息` : ''].filter(Boolean).join(' · ')}</span>{assignment && <span className="pw-team-member-task">{assignment}</span>}</>}>
+              <div className="pw-team-expanded-copy">
+                <p>{member.assignment || member.role}</p><p className="pw-muted">成员标识：{member.id}</p>
+                {member.runner === 'phone_agent' && <p className="pw-muted">{teamPhoneTargetLabel(member.device, phoneTargets)}</p>}
+                {isTeamHarness(member.runner || '') && <><p className="pw-muted">执行器：{harnessWorkerLabel(undefined, member.runner)} · 电脑：{computerLabel(member)}</p>{member.externalSession?.sessionId && <p className="pw-muted">原会话：{member.externalSession.sessionId}</p>}</>}
+                {model && <p className="pw-muted">模型：{model}</p>}
+                {latestRound?.message && <p className="pw-team-member-receipt">{latestRound.message}</p>}
+                {latestRound?.nativeErrorMessage && <p className="pw-field-hint">{latestRound.nativeErrorMessage}</p>}
+                {member.text && <section className="pw-team-member-output" aria-label="已保存的成员产出"><h4>已保存的成员产出</h4>{outputIdentity && <TeamMemberIdentity member={outputIdentity} name={teamMessageAuthor(outputMessage!, members)} detail={outputIdentity.name !== member.name ? `原名称 · ${member.id}` : undefined} size={24} />}<AIAnswer text={String(member.text)} /></section>}
+                {member.acceptance && <p>验收：{member.acceptance}</p>}
+                {!!rows(member.dependsOn).length && <p>前置：{member.dependsOn.map(name).join('、')}</p>}
+                {!member.exited && <div className="pw-form-actions"><Button variant="ghost" disabled={!canMutate} onClick={() => beginMemberChange('rename', member)}>名称与头像</Button>{simpleRoster && <Button variant="ghost" disabled={!canMutate || !rosterPaused} onClick={() => beginMemberChange('exit', member)}>退出本次协作</Button>}</div>}
+                <div className="pw-form-actions"><Button variant="secondary" onClick={() => { chooseMemberFilter(member.id); jumpToRunSection('messages'); }}>查看成员沟通</Button>{!member.exited && <Button variant="ghost" disabled={!canMutate || !!uncertain} onClick={() => { setRecipient(member.id); setReplyId(''); if (mode === 'feedback') setMode('discussion'); jumpToRunSection('compose'); }}>补充分工</Button>}{memberTaskId && <Button variant="ghost" trailingIcon={IconExternalLink} onClick={() => openRelatedTask(memberTaskId)}>{member.runner === 'phone_agent' ? '查看手机任务与结果' : '查看原分工与审批'}</Button>}<Button variant="ghost" disabled={!canControl || member.exited} onClick={() => control('pause', member.id)}>暂停该成员</Button><Button variant="ghost" disabled={!canMutate || member.exited || hasWorkPlan} onClick={() => control('resume', member.id)}>继续该成员</Button>{!hasWorkPlan && !member.exited && pendingCount(member) > 0 && <Button variant="ghost" disabled={!canMutate || pendingMessageBusy(member)} onClick={() => control('continueMessages', member.id)}>使用 {pendingCount(member)} 条待处理消息继续</Button>}</div>
+              </div>
+            </AccordionItem>;
+          })}
+        </Accordion>
+      </section>
+      {!!workItems.length && <section className="pw-team-overview" aria-label="这次协作的工作项">
+        <h3 className="pw-team-section-title">工作项 <span>{workItems.length}</span></h3>
+        <Accordion key={`${current.id}:items`} variant="divided" className="pw-team-disclosures" allowsMultipleExpanded expandedKeys={new Set(expandedItems[current.id] || [])}
+          onExpandedChange={keys => setExpandedItems(old => ({ ...old, [current.id]: Array.from(keys, String) }))}>
+          {workItems.map(item => <AccordionItem key={item.workItemId} id={item.workItemId} className="pw-team-work-item" data-work-item-id={item.workItemId} data-motion-key={`work-item:${item.workItemId}`}
+            title={<span className="pw-team-item-heading"><span>{item.title}</span><small>{status(item.status)}</small></span>}
+            description={<TeamMemberIdentity member={members.find(member => member.id === item.memberId) || { id: item.memberId }} name={name(item.memberId)} size={24} />}>
+            <div className="pw-team-expanded-copy"><p>{item.instruction}</p>{item.message && <p>{item.message}</p>}{item.nativeErrorMessage && <p className="pw-field-hint">{item.nativeErrorMessage}</p>}{item.assignmentTask?.taskId && <Button variant="secondary" trailingIcon={IconExternalLink} onClick={() => openRelatedTask(item.assignmentTask.taskId)}>查看此分工与审批</Button>}{item.acceptance && <p>验收：{item.acceptance}</p>}
+              {!!rows(item.dependsOn).length && <p>前置：{item.dependsOn.map((id: string) => workItems.find(prior => prior.workItemId === id)?.title || id).join('、')}</p>}
+            </div>
+          </AccordionItem>)}
+        </Accordion>
+      </section>}
+          </div><div className="pw-team-progress-summary">
+      {current.summary && <section className="pw-team-summary" data-motion-key="summary" aria-label="本次协作小结"><h3 className="pw-team-section-title">本次小结</h3>{current.summaryStale && <p className="pw-muted">这份总结待更新</p>}<AIAnswer text={current.summary} /></section>}
+          {!current.summary && <p className="pw-team-progress-empty">{current.status === 'cancelled' ? '这次协作已停止，已有消息和资料仍可查看。' : '成员产出后会在这里汇总。先查看各自的分工与当前进展。'}</p>}
+          </div></div>
+        </TabPanel>
+        <TabPanel id="messages">
+          <div className="pw-team-member-filter" aria-label="按成员查看沟通"><Button variant="ghost" aria-pressed={!memberFilter} onClick={() => chooseMemberFilter('')}>全队</Button>{members.map(member => <Button key={member.id} variant="ghost" aria-pressed={memberFilter === member.id} onClick={() => chooseMemberFilter(member.id)}><TeamMemberIdentity member={member} name={name(member.id)} size={28} /></Button>)}</div>
+          <p className="pw-team-conversation-hint">{memberFilter ? `只看与 ${name(memberFilter)} 有关的共享记录；补充仍发送给下方明确选择的成员。` : '这次协作的共享记录。选成员可聚焦其消息，不会建立私聊或改变收件人。'}</p>
+      <section className="pw-team-messages" data-team-section="messages" tabIndex={-1} aria-label="原团队消息"><header className="pw-collaboration-group-heading"><h3>团队沟通</h3><span>{visibleMessages.length} 条消息</span></header>{visibleMessages.map(message => {
+        const identity = teamMessageIdentity(message, members), sender = teamMessageAuthor(message, members);
         const quoted = message.quoteMessageId ? object(message.quotedMessage || messages.find(row => row.messageId === message.quoteMessageId)) : null;
         const quotedText = String(quoted?.content || ''), quoteIsExcerpt = quoted?.truncated || quotedText.length > 4000;
         return <article className="pw-source-record pw-team-message" key={message.messageId} data-message-id={message.messageId} data-motion-key={`message:${message.messageId}`} data-reply-selected={replyId === message.messageId || undefined} tabIndex={-1}>
-        <header className="pw-team-message-heading"><h3>{message.role === 'user' ? '你' : message.memberSnapshot?.name || name(message.memberId || '') || '团队'}{message.recipientMemberId ? ` → ${name(message.recipientMemberId)}` : ''}</h3>{message.kind === 'assignment_question' && message.state === 'pending' && <span>等待你的回答</span>}</header>
-        {quoted && quoted.messageId && <div className="pw-team-reply-context"><header><span>{quoteIsExcerpt ? '引用节选' : '引用原消息'} · {quoted.role === 'user' ? '你' : quoted.name || quoted.memberSnapshot?.name || name(quoted.memberId || '') || '团队'}</span><Button variant="ghost" onClick={() => { const original = root.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(String(message.quoteMessageId))}"]`); original?.focus({ preventScroll: true }); original?.scrollIntoView({ block: 'center' }); }}>查看原消息</Button></header><AIAnswer text={quotedText.slice(0, 4000)} showActions={false} /></div>}
-        <AIAnswer text={String(message.content || '')} actions={(message.kind !== 'assignment_question' || message.state === 'pending') && <Button variant="ghost" disabled={!canMutate} aria-pressed={replyId === message.messageId} onClick={() => { setReplyId(message.messageId); if (mode === 'feedback') setMode('discussion'); if (members.some(member => member.id === message.memberId && !member.exited)) setRecipient(message.memberId); jumpToRunSection('compose'); }}>{message.kind === 'assignment_question' ? '回答原问题' : '引用回复'}</Button>} />
+        <header className="pw-team-message-heading"><h3>{identity ? <TeamMemberIdentity member={identity} name={sender} detail={members.some(member => member.id === identity.id && member.name !== identity.name) ? `原名称 · ${identity.id}` : members.filter(member => member.name === identity.name).length > 1 ? identity.id : undefined} /> : sender}{(message.recipientMemberId || message.targetMemberId) && <small>→ {name(message.recipientMemberId || message.targetMemberId)}</small>}</h3>{message.kind === 'assignment_question' && message.state === 'pending' ? <span>等待你的回答</span> : message.role === 'tool' ? <span>资料回执</span> : message.role === 'system' ? <span>执行记录</span> : null}</header>
+        {quoted && quoted.messageId && <div className="pw-team-reply-context"><header><span>{quoteIsExcerpt ? '引用节选' : '引用原消息'} · {teamMessageIdentity(quoted, members) ? <TeamMemberIdentity member={teamMessageIdentity(quoted, members)!} name={teamMessageAuthor(quoted, members)} size={24} /> : teamMessageAuthor(quoted, members)}</span><Button variant="ghost" onClick={() => focusMessage(String(message.quoteMessageId))}>查看原消息</Button></header><AIAnswer text={quotedText.slice(0, 4000)} showActions={false} /></div>}
+        <AIAnswer text={String(message.content || '')} actions={(message.kind !== 'assignment_question' || message.state === 'pending') && <Button variant="ghost" disabled={!canMutate || message.kind === 'assignment_question' && !members.some(member => member.id === message.memberId && !member.exited)} aria-pressed={replyId === message.messageId} onClick={() => { setReplyId(message.messageId); if (mode === 'feedback') setMode('discussion'); if (members.some(member => member.id === message.memberId && !member.exited)) setRecipient(message.memberId); jumpToRunSection('compose'); }}>{message.kind === 'assignment_question' ? '回答原问题' : '引用回复'}</Button>} />
         <MotionFeedback initial={false} identity={teamMessageDelivery(current, message)} className="pw-muted">{teamMessageDelivery(current, message)}</MotionFeedback>{message.answer && <div className="pw-team-saved-answer"><span>已保存的回答</span><p>{message.answer}</p></div>}
-      </article>; })}{!messages.length && <p className="pw-secondary-empty">这次协作还没有消息。</p>}</section>
+      </article>; })}{!visibleMessages.length && <p className="pw-secondary-empty">{memberFilter ? '这名成员还没有可显示的沟通记录。' : '这次协作还没有消息。'}</p>}</section>
       <Accordion variant="divided" className="pw-team-compose-disclosure" expandedKeys={composeOpen || !!uncertain ? ['team-compose'] : []} onExpandedChange={keys => setComposeOpen(keys.has('team-compose'))}><AccordionItem id="team-compose" title="补充给成员" description={reply ? '正在回复所选消息' : text ? '有未发送内容' : undefined}>
       <section className="pw-team-compose" data-team-section="compose" aria-label="给成员补充">
-      {reply && <div className="pw-team-reply-context"><header><span>{reply.kind === 'assignment_question' ? '回答原问题' : '引用原消息'} · {reply.memberSnapshot?.name || name(reply.memberId || '') || '团队'}</span><Button variant="ghost" disabled={busy || !!uncertain} onClick={() => setReplyId('')}>取消引用</Button></header><AIAnswer text={String(reply.content || '')} showActions={false} /></div>}
-      <SelectField label="收件成员" value={recipient} options={[...(mode === 'feedback' ? [{ id: '*', label: '全队' }] : []), ...members.filter(member => !member.exited).map(member => ({ id: member.id, label: member.name }))]} onChange={setRecipient} isDisabled={busy || !!uncertain || reply?.kind === 'assignment_question'} />
+      {reply && <div className="pw-team-reply-context"><header><span>{reply.kind === 'assignment_question' ? '回答原问题' : '引用原消息'} · {teamMessageIdentity(reply, members) ? <TeamMemberIdentity member={teamMessageIdentity(reply, members)!} name={teamMessageAuthor(reply, members)} size={24} /> : teamMessageAuthor(reply, members)}</span><Button variant="ghost" disabled={busy || !!uncertain} onClick={() => setReplyId('')}>取消引用</Button></header><AIAnswer text={String(reply.content || '')} showActions={false} /></div>}
+      <SelectField label="收件成员" value={recipient} options={[...(mode === 'feedback' ? [{ id: '*', label: '全队' }] : []), ...members.filter(member => !member.exited).map(member => ({ id: member.id, label: name(member.id) }))]} onChange={setRecipient} isDisabled={busy || !!uncertain || reply?.kind === 'assignment_question'} />
       {reply?.kind !== 'assignment_question' && <SelectField label="补充方式" value={mode} options={[{ id: 'discussion', label: '讨论补充' }, { id: 'queue', label: '排入下一安全工作点' }, ...(canChangeRequirements && !replyId ? [{ id: 'feedback', label: '修改要求并暂停' }] : [])]} onChange={changeMessageMode} isDisabled={busy || !!uncertain} />}
       <TextAreaField label={reply?.kind === 'assignment_question' ? '回答这条原问题' : '发给所选成员'} value={text} onChange={value => setDrafts(old => ({ ...old, [draftKey]: value }))} maxLength={4000} showCount isDisabled={busy || !!uncertain} hint={mode === 'feedback' ? '保存新要求并暂停受影响成员，确认后再继续。不会扩大权限或追加预算。' : '消息会排队，不打断成员。已结束的成员需在成员详情中选择“使用待处理消息”。'} />
       <PressButton label={reply?.kind === 'assignment_question' ? '保存原回答' : mode === 'feedback' ? '核对并暂停补充' : '发送补充'} disabled={!canMutate || !text.trim() || text.length > 4000 || !recipient} onClick={send} />
@@ -457,46 +603,34 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
       </section>
       </AccordionItem></Accordion>
 
-      </div><aside className="pw-team-context" aria-label="分工与资料">
-      <section className="pw-team-overview" data-team-section="members" tabIndex={-1} aria-label="成员与当前工作">
-        <h3 className="pw-team-section-title">成员 <span>{members.length}</span></h3>
-        <Accordion key={`${current.id}:members`} variant="divided" className="pw-team-disclosures" allowsMultipleExpanded expandedKeys={new Set(expandedMembers[current.id] || [])}
-          onExpandedChange={keys => setExpandedMembers(old => ({ ...old, [current.id]: Array.from(keys, String) }))}>
-          {members.map(member => {
-            const model = memberModelLabel(member), activeItems = workItems.filter(item => item.memberId === member.id && item.status === 'running');
-            const assignment = activeItems.length ? `正在做：${activeItems.map(item => label(item.title)).filter(Boolean).join('、')}` : label(member.assignment || member.role);
-            return <AccordionItem key={member.id} id={member.id} className="pw-team-member" data-team-member-id={member.id} data-motion-key={`member:${member.id}`}
-              title={<span className="pw-team-member-name">{member.name}{member.id === current.leaderId && <small>负责人</small>}</span>}
-              description={<><span className="pw-team-member-meta" title={model || undefined}>{[model, member.exited ? '已退出' : status(member.status), !hasWorkPlan && !member.exited && pendingCount(member) > 0 ? `${pendingCount(member)} 条待处理消息` : ''].filter(Boolean).join(' · ')}</span>{assignment && <span className="pw-team-member-task">{assignment}</span>}</>}>
-              <div className="pw-team-expanded-copy">
-                <p>{member.assignment || member.role}</p>
-                {member.runner === 'phone_agent' && <p className="pw-muted">{teamPhoneTargetLabel(member.device, phoneTargets)}</p>}
-                {isTeamHarness(member.runner || '') && <><p className="pw-muted">执行器：{harnessWorkerLabel(undefined, member.runner)} · 电脑：{computerLabel(member)}</p>{member.externalSession?.sessionId && <p className="pw-muted">原会话：{member.externalSession.sessionId}</p>}</>}
-                {model && <p className="pw-muted">模型：{model}</p>}
-                {member.acceptance && <p>验收：{member.acceptance}</p>}
-                {!!rows(member.dependsOn).length && <p>前置：{member.dependsOn.map(name).join('、')}</p>}
-                <div className="pw-form-actions">{member.phoneTask?.taskId && <Button variant="ghost" onClick={() => void run('tasks.open', { id: member.phoneTask.taskId }).catch(() => {})}>查看手机任务与结果</Button>}<Button variant="ghost" disabled={!canControl || member.exited} onClick={() => control('pause', member.id)}>暂停该成员</Button><Button variant="ghost" disabled={!canMutate || member.exited || hasWorkPlan} onClick={() => control('resume', member.id)}>继续该成员</Button>{!hasWorkPlan && !member.exited && pendingCount(member) > 0 && <Button variant="ghost" disabled={!canMutate || pendingMessageBusy(member)} onClick={() => control('continueMessages', member.id)}>使用 {pendingCount(member)} 条待处理消息继续</Button>}</div>
-              </div>
-            </AccordionItem>;
-          })}
-        </Accordion>
-      </section>
-      <div data-team-section="materials" tabIndex={-1}><TeamEvidenceWorkspace key={current.id} runId={current.id} members={members} run={run} disabled={!canMutate} active={workspaceActive} windowRevision={Number(state.webWorkspaceResumeRevision || 0)} onBackChange={handler => { materialBack.current = handler; }} /></div>
-      {!!workItems.length && <section className="pw-team-overview" aria-label="这次协作的工作项">
-        <h3 className="pw-team-section-title">工作项 <span>{workItems.length}</span></h3>
-        <Accordion key={`${current.id}:items`} variant="divided" className="pw-team-disclosures" allowsMultipleExpanded expandedKeys={new Set(expandedItems[current.id] || [])}
-          onExpandedChange={keys => setExpandedItems(old => ({ ...old, [current.id]: Array.from(keys, String) }))}>
-          {workItems.map(item => <AccordionItem key={item.workItemId} id={item.workItemId} className="pw-team-work-item" data-work-item-id={item.workItemId} data-motion-key={`work-item:${item.workItemId}`}
-            title={<span className="pw-team-item-heading"><span>{item.title}</span><small>{status(item.status)}</small></span>}
-            description={<span className="pw-team-member-meta">{name(item.memberId)}</span>}>
-            <div className="pw-team-expanded-copy"><p>{item.instruction}</p>{item.acceptance && <p>验收：{item.acceptance}</p>}
-              {!!rows(item.dependsOn).length && <p>前置：{item.dependsOn.map((id: string) => workItems.find(prior => prior.workItemId === id)?.title || id).join('、')}</p>}
-            </div>
-          </AccordionItem>)}
-        </Accordion>
-      </section>}
-      </aside></div>
+        </TabPanel>
+        <TabPanel id="materials" shouldForceMount data-team-materials-active={runSection === 'materials'}>
+      <div data-team-section="materials" tabIndex={-1}><TeamEvidenceWorkspace key={current.id} runId={current.id} members={members} run={run} disabled={!canMutate} active={workspaceActive && runSection === 'materials'} windowRevision={Number(state.webWorkspaceResumeRevision || 0)} onBackChange={handler => { materialBack.current = handler; }} onBeforeLeaveChange={handler => { materialBeforeLeave.current = handler; }} onBusyChange={setMaterialBusy} /></div>
+        </TabPanel>
+      </Tabs>
     </article>}
+    <SettingsDialog isOpen={!!memberDraft && !review} title={memberDraft?.action === 'add' ? '加入本次协作' : memberDraft?.action === 'exit' ? '退出本次协作' : '本次协作中的名称与头像'} onClose={() => { if (!busy) setMemberDraft(null); }}><div className="pw-collaboration-dialog" data-collaboration-kind="TeamsWorkspace">{memberDraft && <>
+      {error && <MotionFeedback identity={error} className="pw-secondary-error" role="alert">{error}</MotionFeedback>}
+      <TeamMemberIdentity member={{ ...memberDraft, id: memberDraft.memberId }} size={40} />
+      {memberDraft.action === 'exit' ? <>
+        <p>保留这名成员的历史消息和产出，不把旧消息、资料或分工转给同名新成员。退出不会撤销已经发生的效果。</p>
+        {current?.researchExecutionFormat && <p>退出研究后，已完成成果仍以原作者与原资料授权核验，范围撤回、换版或到期后不能继续用于新回答。退出成员的“资料”页只保留核对与撤回，不自动续权；未回答问题、待批或未知操作会阻止退出。</p>}
+        {current?.leaderId === memberDraft.memberId && currentMembers.length > 1 && <SelectField label="由谁接任负责人" value={memberDraft.newLeaderId} options={[{ id: '', label: '选择接任成员' }, ...currentMembers.filter(member => member.id !== memberDraft.memberId).map(member => ({ id: member.id, label: name(member.id) }))]} onChange={value => setMemberDraft({ ...memberDraft, newLeaderId: value })} isDisabled={busy} />}
+        {currentMembers.length === 1 && <p className="pw-field-hint">最后一名成员退出后，协作将等待你加入新成员，不会自行恢复。</p>}
+        {members.some(member => !member.exited && rows(member.dependsOn).includes(memberDraft.memberId)) && <p className="pw-field-hint">仍有成员依赖这份产出。核对时会阻止遗留未完成前置分工，不会静默重派。</p>}
+      </> : <>
+        <TextField label="成员名称" value={memberDraft.name} onChange={value => setMemberDraft({ ...memberDraft, name: value })} maxLength={48} isRequired isDisabled={busy} />
+        <div className="pw-team-avatar-picker" role="group" aria-label="成员头像"><span className="pw-field-hint">头像形态</span><div>{teamAvatarShapes.map((shape, index) => <Button key={shape} variant="ghost" aria-label={`选择${['柔团', '卵石', '圆方', '蛋形'][index]}头像`} aria-pressed={memberDraft.avatarShape === shape} disabled={busy} onClick={() => setMemberDraft({ ...memberDraft, avatarShape: shape })}><TeamMemberAvatar member={{ id: memberDraft.memberId, avatarShape: shape }} size={40} /><span>{['柔团', '卵石', '圆方', '蛋形'][index]}</span></Button>)}</div></div>
+        {memberDraft.action === 'add' ? <>
+          <TextAreaField label="职责" value={memberDraft.role} onChange={value => setMemberDraft({ ...memberDraft, role: value })} maxLength={1200} showCount isRequired isDisabled={busy} />
+          <TextAreaField label="这次具体分工" value={memberDraft.assignment} onChange={value => setMemberDraft({ ...memberDraft, assignment: value })} maxLength={2000} showCount isRequired isDisabled={busy} />
+          <TextField label="模型 ID，留空使用确认加入时的主模型" value={memberDraft.model} onChange={value => setMemberDraft({ ...memberDraft, model: value })} maxLength={200} isDisabled={busy} />
+          <p className="pw-field-hint">新增独立的本机分析成员，以暂停状态加入；不会继承退出成员的独立资料范围、定向消息或审批，也不增加预算。核对后从成员详情明确继续。</p>
+        </> : <p className="pw-field-hint">只改这次协作的显示身份，不改变职责、模型、权限或暂停状态；历史消息与正在执行的原轮次保留原名字和头像。下次工作的团队配置不变。</p>}
+      </>}
+      {(!reading?.viewHandle || changed) && <div className="pw-form-actions"><p className="pw-field-hint" role="status">当前记录需重新核对，编辑不会自动提交。若上次改动回执未知，会先关闭旧编辑并显示实际成员状态。</p><Button variant="secondary" disabled={busy || !current} onClick={() => { if (current) readRun(current.id); }}>重读原记录</Button></div>}
+      <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => setMemberDraft(null)}>返回</Button><Button disabled={!canMutate || memberDraft.action !== 'exit' && !label(memberDraft.name).trim() || memberDraft.action === 'add' && (!label(memberDraft.role).trim() || !label(memberDraft.assignment).trim()) || memberDraft.action === 'exit' && current?.leaderId === memberDraft.memberId && currentMembers.length > 1 && !memberDraft.newLeaderId} onClick={reviewMemberChange}>核对这次改动</Button></div>
+    </>}</div></SettingsDialog>
     <SettingsDialog isOpen={!!phoneSelection} title="这次手机分工的范围" onClose={() => { if (!busy) closePhoneSelection(); }}><div className="pw-collaboration-dialog" data-collaboration-kind="TeamsWorkspace">{phoneSelection && <>
       {error && <MotionFeedback identity={error} className="pw-secondary-error" role="alert">{error}</MotionFeedback>}
       <p>{phoneSelection.view?.goal}</p>
@@ -504,7 +638,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
       {phoneMembers.map(member => {
         const choice = phoneChoices[member.memberId] || teamPhoneChoice(), selected = rows(member.options).find(option => option.optionId === choice.optionId);
         return <section className="pw-source-record" key={member.memberId}>
-          <h3>{member.name}</h3><p className="pw-muted">{teamPhoneTargetLabel(member.device, phoneTargets)}</p>
+          <h3><TeamMemberIdentity member={rows(definition?.members).find(row => row.id === member.memberId) || { ...member, id: member.memberId }} name={teamMemberLabel({ ...member, id: member.memberId }, phoneMembers)} /></h3><p className="pw-muted">{teamPhoneTargetLabel(member.device, phoneTargets)}</p>
           <SelectField label="应用范围" value={choice.optionId} options={[{ id: '', label: '选择这名成员可使用的范围' }, ...rows(member.options).filter(option => option.available === true).map(option => ({ id: option.optionId, label: option.label }))]} onChange={id => choosePhoneScope(member, id)} isDisabled={busy} />
           {!rows(member.options).some(option => option.available === true) && <p role="status">{rows(member.options).find(option => option.reason)?.reason || '当前手机没有可用范围，请在设备页核对连接与应用权限后重新读取。'}</p>}
           {selected && <><p className="pw-field-hint">{teamPhoneScopeLabel(selected.resourceBinding)}</p>
@@ -525,8 +659,9 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
         const original = rows(definition?.members).find(row => row.id === member.id), external = !['model', 'phone_agent'].includes(member.runner || 'model');
         const targetKey = teamPhoneTargetKey(member.device), targetOptions = phoneTargets.map(target => ({ id: teamPhoneTargetKey(target), label: `${target.label}${target.available === false ? ' · 暂不可用' : ''}` }));
         if (targetKey && !targetOptions.some(target => target.id === targetKey)) targetOptions.push({ id: targetKey, label: '原手机目标 · 当前不可用' });
-        return <AccordionItem key={member.id} id={member.id} title={member.name || `成员 ${index + 1}`} description={editorMemberIssue(member) || member.role || undefined}><section id={`team-editor-member-${member.id}`} className="pw-source-record pw-team-editor-member">
+        return <AccordionItem key={member.id} id={member.id} title={<TeamMemberIdentity member={member} name={teamMemberLabel(member, rows(editor.members))} />} description={editorMemberIssue(member) || member.role || undefined}><section id={`team-editor-member-${member.id}`} className="pw-source-record pw-team-editor-member">
           <TextField label={`成员 ${index + 1} 名称`} value={member.name} onChange={value => updateMember(member.id, { name: value })} maxLength={48} isRequired isDisabled={busy} />
+          <div className="pw-team-avatar-picker" role="group" aria-label="成员头像"><span className="pw-field-hint">头像形态</span><div>{teamAvatarShapes.map((shape, shapeIndex) => <Button key={shape} variant="ghost" aria-label={`选择${['柔团', '卵石', '圆方', '蛋形'][shapeIndex]}头像`} aria-pressed={teamAvatarShape(member) === shape} disabled={busy} onClick={() => updateMember(member.id, { avatarShape: shape })}><TeamMemberAvatar member={{ ...member, avatarShape: shape }} size={40} /><span>{['柔团', '卵石', '圆方', '蛋形'][shapeIndex]}</span></Button>)}</div></div>
           <TextAreaField label="职责" value={member.role} onChange={value => updateMember(member.id, { role: value })} maxLength={1200} showCount isRequired isDisabled={busy} />
           <SelectField label="成员做什么" value={external ? 'computer' : member.runner || 'model'} options={[{ id: 'model', label: '分析与讨论' }, { id: 'computer', label: '在电脑上使用执行器工作' }, ...(editor.mode === 'collaborate' && !original?.writeFiles ? [{ id: 'phone_agent', label: '操作手机完成分工' }] : [])]}
             isDisabled={busy || !!original?.modelTarget} onChange={runner => updateMember(member.id, runner === 'phone_agent'
@@ -549,15 +684,30 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
       {productionError && <p className="pw-field-hint" role="status">{productionError}</p>}
       </div><footer className="pw-team-editor-footer">{error && <MotionFeedback identity={error} className="pw-secondary-error" role="alert">{error}</MotionFeedback>}{incompleteMembers.length > 0 && <div className="pw-team-editor-missing" role="status"><span>还有 {incompleteMembers.length} 名成员需要补充</span><Button variant="ghost" disabled={busy} onClick={() => revealMember(incompleteMembers[0].id)}>{incompleteMembers[0].name || '未命名成员'}：{editorMemberIssue(incompleteMembers[0])}</Button></div>}{!editor.name.trim() && <p className="pw-field-hint">填写团队名称后保存。</p>}{busy && <p className="pw-field-hint" role="status">正在核对这次配置，请等待回执。</p>}<div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => setEditor(null)}>取消</Button><Button disabled={busy || !definitionReady || !editorPayload || !editor.name.trim() || editor.name.length > 80 || incompleteMembers.length > 0 || !!discussionError} onClick={() => { if (editorPayload) void invoke('teams.reviewDefinition', { ...editorPayload, ...(definition ? { viewHandle: reading!.viewHandle } : {}) }, reviewResult); }}>核对并保存</Button></div></footer>
     </>}</div></SettingsDialog>
-    <SettingsDialog isOpen={!!review} title={review?.operation === 'start' ? '开始这次原团队协作' : review?.operation === 'cancel' ? '停止这次协作' : review?.operation === 'feedback' ? '修改要求并暂停' : review?.operation === 'remove' ? '移除团队配置' : '保存团队配置'} onClose={() => { if (!busy) closeReview(); }}><div className="pw-collaboration-dialog" data-collaboration-kind="TeamsWorkspace">
-      {review?.operation === 'start' ? <><p>{review.input?.goal}</p><p>{review.definition?.name} · {rows(review.definition?.members).map(member => member.name).join('、')}</p>{review.phoneScope ? <><p>手机成员将使用下列已核对的范围，模型调用会计入对应任务的额度。</p>{rows(review.phoneScope.members).map(member => <section className="pw-source-record" key={member.memberId}><h3>{member.name || rows(review.definition?.members).find(value => value.id === member.memberId)?.name}</h3><p>{teamPhoneTargetLabel(member.device, phoneTargets)}{teamPhoneScopeLabel(member.resourceBinding) ? ` · ${teamPhoneScopeLabel(member.resourceBinding)}` : ''}</p><p>最多 {member.toolBudget} 次操作 · {member.modelBudget} 次模型调用</p>{member.sourceQueryToolReserve > 0 && <p className="pw-field-hint">另预留 {member.sourceQueryToolReserve} 次目标任务状态查询。</p>}<p className="pw-muted">有效至 {new Date(member.expiresAt).toLocaleString('zh-CN')}</p></section>)}</> : <p>沿原团队与实际启动时的模型配置开始，可能消耗模型额度。文件写入与额外预算继续使用原任务的独立审批。</p>}</> : review?.operation === 'feedback' ? <><p>发给{review.recipientName}的新要求：</p><AIAnswer text={review.text} showActions={false} /><p>相关成员会暂停；已有成果保留，受影响的总结待更新。你选择继续后才会处理新要求，不自动扩大权限或预算。</p></> : review?.operation === 'cancel' ? <p>停止这个原运行后续工作，保留消息、证据和已有成果。停止请求不代表未知外部操作已完成清理。</p> : review?.operation === 'remove' ? <p>移除“{review.definition?.name}”的后续启动配置，已有运行和成果保留。</p> : <><p>{review?.input?.name}</p>{rows(review?.input?.members).map(member => <section className="pw-source-record" key={member.id}><h3>{member.name}</h3><p>{member.role}</p>{member.assignment && member.assignment !== member.role && member.runner !== 'phone_agent' && <p>具体分工：{member.assignment}</p>}{rows(member.dependsOn).length > 0 && <p>前置：{member.dependsOn.map((id: string) => rows(review?.input?.members).find(row => row.id === id)?.name || id).join('、')}</p>}{member.runner === 'phone_agent' ? <p>{teamPhoneTargetLabel(member.device, phoneTargets)} · {member.assignment}</p> : isTeamHarness(member.runner) ? <><p>执行器：{harnessWorkerLabel(undefined, member.runner)} · 电脑：{computerLabel(member)}</p><p>模型：{member.model || '执行器默认'}{member.modeId ? ` · 模式：${member.modeId}` : ''}</p></> : <p>模型：{member.model || '实际启动时的主模型'} · 本机模型连接</p>}{review?.input?.mode === 'produce' && <TeamProductionReview member={member} sources={object(catalog.productionSources)} />}</section>)}</>}
+    <SettingsDialog isOpen={!!review} title={review?.operation === 'configureMember' ? '核对本次成员改动' : review?.operation === 'start' ? '开始这次原团队协作' : review?.operation === 'cancel' ? '停止这次协作' : review?.operation === 'feedback' ? '修改要求并暂停' : review?.operation === 'remove' ? '移除团队配置' : '保存团队配置'} onClose={() => { if (!busy) closeReview(); }}><div className="pw-collaboration-dialog" data-collaboration-kind="TeamsWorkspace">
+      {review?.operation === 'configureMember' ? <>
+        <TeamMemberIdentity member={review.member || {}} name={teamMemberLabel(review.member || {}, rows(review.roster))} size={40} />
+        {review.input?.action === 'rename' ? <><p>改为：</p><TeamMemberIdentity member={{ ...review.member, name: review.input.name, avatarShape: review.input.avatarShape }} size={40} /><p>历史消息和已开始的轮次保留原身份；不改职责、权限、额度或执行状态。</p></>
+          : review.input?.action === 'add' ? <><p>职责：{review.member?.role}</p><p>具体分工：{review.member?.assignment}</p><p>本机模型：{review.member?.model || '确认加入时的主模型'}</p><p>以暂停状态加入当前运行，保留独立新身份；未开始工作、未继承旧成员的独立资料范围或定向消息、未增加额度。同队共享目标和公开协作记录仍可用于这次分工。回到进展页后明确继续。</p></>
+          : <><p>退出后保留已有产出和历史消息，未消费的补充不再唤醒这名成员；不会把任务交给其他成员。</p>{review.researchExit && <p>仅停止这名成员后续执行。旧成果按冻结作者与原资料范围核验，接任者不继承其资料读取权；到期、换版或撤回后不可继续用于新回答，可在“资料”中核对与撤回。</p>}{review.input?.newLeaderId && <p>接任负责人：{teamMemberLabel(rows(review.roster).find(member => member.id === review.input.newLeaderId) || { id: review.input.newLeaderId }, rows(review.roster))}</p>}<p>尚未完成的前置依赖会阻止退出。暂停和退出不承诺撤销已发生的效果。</p></>}
+      </> : review?.operation === 'start' ? <><p>{review.input?.goal}</p><p>{review.definition?.name}</p><div className="pw-team-roster-summary">{rows(review.definition?.members).map(member => <TeamMemberIdentity key={member.id} member={member} name={teamMemberLabel(member, rows(review.definition?.members))} size={32} />)}</div>{review.phoneScope ? <><p>手机成员将使用下列已核对的范围，模型调用会计入对应任务的额度。</p>{rows(review.phoneScope.members).map(member => <section className="pw-source-record" key={member.memberId}><h3><TeamMemberIdentity member={rows(review.definition?.members).find(value => value.id === member.memberId) || { ...member, id: member.memberId }} name={teamMemberLabel(rows(review.definition?.members).find(value => value.id === member.memberId) || { ...member, id: member.memberId }, rows(review.definition?.members))} /></h3><p>{teamPhoneTargetLabel(member.device, phoneTargets)}{teamPhoneScopeLabel(member.resourceBinding) ? ` · ${teamPhoneScopeLabel(member.resourceBinding)}` : ''}</p><p>最多 {member.toolBudget} 次操作 · {member.modelBudget} 次模型调用</p>{member.sourceQueryToolReserve > 0 && <p className="pw-field-hint">另预留 {member.sourceQueryToolReserve} 次目标任务状态查询。</p>}<p className="pw-muted">有效至 {new Date(member.expiresAt).toLocaleString('zh-CN')}</p></section>)}</> : <p>沿原团队与实际启动时的模型配置开始，可能消耗模型额度。文件写入与额外预算继续使用原任务的独立审批。</p>}</> : review?.operation === 'feedback' ? <><p>发给{review.recipientName}的新要求：</p><AIAnswer text={review.text} showActions={false} /><p>相关成员会暂停；已有成果保留，受影响的总结待更新。你选择继续后才会处理新要求，不自动扩大权限或预算。</p></> : review?.operation === 'cancel' ? <p>停止这个原运行后续工作，保留消息、证据和已有成果。停止请求不代表未知外部操作已完成清理。</p> : review?.operation === 'remove' ? <p>移除“{review.definition?.name}”的后续启动配置，已有运行和成果保留。</p> : <><p>{review?.input?.name}</p>{rows(review?.input?.members).map(member => <section className="pw-source-record" key={member.id}><h3><TeamMemberIdentity member={member} name={teamMemberLabel(member, rows(review?.input?.members))} size={40} /></h3><p>{member.role}</p>{member.assignment && member.assignment !== member.role && member.runner !== 'phone_agent' && <p>具体分工：{member.assignment}</p>}{rows(member.dependsOn).length > 0 && <p>前置：{member.dependsOn.map((id: string) => rows(review?.input?.members).find(row => row.id === id)?.name || id).join('、')}</p>}{member.runner === 'phone_agent' ? <p>{teamPhoneTargetLabel(member.device, phoneTargets)} · {member.assignment}</p> : isTeamHarness(member.runner) ? <><p>执行器：{harnessWorkerLabel(undefined, member.runner)} · 电脑：{computerLabel(member)}</p><p>模型：{member.model || '执行器默认'}{member.modeId ? ` · 模式：${member.modeId}` : ''}</p></> : <p>模型：{member.model || '实际启动时的主模型'} · 本机模型连接</p>}{review?.input?.mode === 'produce' && <TeamProductionReview member={member} sources={object(catalog.productionSources)} />}</section>)}</>}
       <CheckboxField isSelected={acknowledged} onChange={setAcknowledged} isDisabled={busy}>已核对这次操作与原目标</CheckboxField><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={closeReview}>返回</Button><Button disabled={busy || !acknowledged} onClick={() => {
         const original = review; if (!original || entered.current || backgrounded.current || !ownsNativeWindow()) return; setReview(null); setAcknowledged(false);
         const directControl = original.operation === 'cancel' || original.operation === 'feedback';
+        if (original.operation === 'configureMember') { pendingMemberChange.current = original.input.runId; setReading(value => value ? { ...value, viewHandle: '' } : null); }
         if (directControl) setReading(value => value ? { ...value, viewHandle: '' } : null);
         void invoke(directControl ? 'teams.control' : 'teams.confirm', directControl ? { command: original.operation, viewHandle: original.viewHandle,
           ...(original.operation === 'feedback' ? { memberId: original.memberId, text: original.text.trim() } : {}) } : { reviewHandle: original.reviewHandle }, result => {
-          if (result.confirmed !== true) throw new Error('原团队操作尚未确认，请刷新核对。'); setEditor(null); setNotice(result.command === 'save' ? '团队已保存。填写本次目标即可开始协作。' : '已收到原操作回执。');
+          if (result.confirmed !== true) throw new Error('原团队操作尚未确认，请刷新核对。');
+          if (original.operation === 'configureMember') {
+            if (result.command !== 'configureMember' || result.reading?.run?.id !== original.input.runId) throw new Error('成员改动回执待核对，请刷新原协作，没有自动重发。');
+            pendingMemberChange.current = null; setMemberDraft(null); acceptReading(result.reading);
+            if (original.input.action === 'add') setExpandedMembers(old => ({ ...old, [original.input.runId]: [...new Set([...(old[original.input.runId] || []), original.member.id])] }));
+            if (original.input.action === 'exit' && recipient === original.input.memberId) { setRecipient(result.reading.run.leaderId || ''); setReplyId(''); }
+            setNotice(original.input.action === 'add' ? '新成员已加入并暂停。核对分工后，明确继续该成员；没有追加额度。' : original.input.action === 'exit' ? '成员已退出本次协作，历史与成果保留，没有自动重派。' : '本次协作的名称与头像已更新，历史身份和团队配置保留。');
+            return;
+          }
+          setEditor(null); setNotice(result.command === 'save' ? '团队已保存。填写本次目标即可开始协作。' : '已收到原操作回执。');
           if (original.operation === 'feedback') {
             if (result.command !== 'feedback' || result.reading?.run?.id !== original.runId) throw new Error('补充结果待核对，请刷新原协作记录；不会自动重发。');
             setDrafts(old => old[original.draftKey] === original.text ? { ...old, [original.draftKey]: '' } : old);

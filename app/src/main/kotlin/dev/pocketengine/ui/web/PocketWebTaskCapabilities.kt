@@ -24,16 +24,21 @@ internal class PocketWebTaskCapabilities(
     private val mcpSnapshot: () -> JSONObject,
     private val mcp: (String, JSONObject, RunControl) -> JSONObject,
     private val execute: (Runnable) -> Unit,
-    private val exporter: PocketWebTaskArtifactExport? = null
+    private val exporter: PocketWebTaskArtifactExport? = null,
+    private val readPolicy: ((JSONObject) -> JSONObject)? = null,
+    private val savePolicy: ((JSONObject, Boolean, JSONObject?, Long, RunControl) -> JSONObject)? = null,
+    private val policyCatalog: (() -> JSONObject)? = null
 ) {
     constructor(controller: PocketWorldController, changed: () -> Unit = {}, originalTaskVisible: (String) -> Boolean = { true }) : this(controller::webWindowTicket, controller::webPrivateOwnerVisible,
         controller::skillExecutionHost, controller::taskCapabilitySnapshot, controller::readTaskSkillArtifact,
         { controller.nativeAccountWorkflows().mcpSnapshot() },
         { command, input, control -> controller.nativeAccountWorkflows().mcp(command, input, control) }, controller::runEcosystemControlWork,
-        PocketWebTaskArtifactExport(controller, originalTaskVisible, changed))
+        PocketWebTaskArtifactExport(controller, originalTaskVisible, changed), controller::taskPermissionPolicySnapshot, controller::saveTaskPermissionPolicy,
+        { val app = controller.nativeTokenBudgetHost(); dev.pocketengine.features.capabilities.PermissionToolCatalog.snapshot(app.features, app.tasks) })
 
     private class Page(val id: String, val task: String, val owner: Any, val native: NativeSkillExecutionHost?) {
         @Volatile var alive = true
+        @Volatile var policyInventory: String? = null
         val choices = ConcurrentHashMap<String, Pair<String, String>>()
     }
     private class Review(val id: String, val page: Page, val script: NativeSkillExecutionHost.Review?, val command: String?, val payload: String?, val shown: String) {
@@ -43,8 +48,10 @@ internal class PocketWebTaskCapabilities(
         var attempted = false
         var window: NativeSkillExecutionHost.OwnerWindow? = null
     }
+    private class Policy(val id: String, val page: Page, val target: String) { @Volatile var alive = true }
     private val pages = ConcurrentHashMap<String, Page>()
     private val reviews = ConcurrentHashMap<String, Review>()
+    private val policies = ConcurrentHashMap<String, Policy>()
     private val main = Handler(Looper.getMainLooper())
     private val busy = AtomicBoolean(false)
     private val lifetime = Any()
@@ -53,7 +60,8 @@ internal class PocketWebTaskCapabilities(
     companion object {
         val COMMANDS = setOf("taskCapabilities.open", "taskCapabilities.close", "taskCapabilities.refresh", "taskCapabilities.review",
             "taskCapabilities.script", "taskCapabilities.consent", "taskCapabilities.decide", "taskCapabilities.dismissReview",
-            "taskCapabilities.receipt", "taskCapabilities.retrieve", "taskCapabilities.artifact", "taskCapabilities.export", "taskCapabilities.mcp.review", "taskCapabilities.mcp.confirm")
+            "taskCapabilities.receipt", "taskCapabilities.retrieve", "taskCapabilities.artifact", "taskCapabilities.export", "taskCapabilities.mcp.review", "taskCapabilities.mcp.confirm",
+            "taskCapabilities.policy.open", "taskCapabilities.policy.snapshot", "taskCapabilities.policy.catalog", "taskCapabilities.policy.save", "taskCapabilities.policy.close")
         private fun fields(input: JSONObject, vararg allowed: String) { require(input.keys().asSequence().all { it in allowed }) { "本次任务能力操作包含不适用字段" } }
         private fun text(input: JSONObject, key: String): String { val raw = input.opt(key); require(raw is String && raw.isNotBlank() && raw.length <= 240 && '\u0000' !in raw); return raw }
         private fun copy(input: JSONObject) = JSONObject(input.toString())
@@ -61,7 +69,7 @@ internal class PocketWebTaskCapabilities(
     }
     private fun current(page: Page) = page.alive && page.owner == owner() && visible()
     private fun retire(review: Review) = synchronized(review) { review.alive = false; review.accepted = false; review.consent++; review.window?.close(); review.window = null }
-    private fun release(page: Page) { page.alive = false; page.choices.clear(); reviews.values.filter { it.page === page }.forEach(::retire) }
+    private fun release(page: Page) { page.alive = false; page.policyInventory = null; page.choices.clear(); reviews.values.filter { it.page === page }.forEach(::retire); policies.values.filter { it.page === page }.forEach { it.alive = false; policies.remove(it.id) } }
     private fun closePages() = synchronized(lifetime) { generation++; pages.values.forEach(::release); pages.clear(); reviews.values.forEach(::retire); reviews.clear() }
     fun clear() { closePages(); exporter?.clear() }
     fun background() { closePages(); exporter?.foreground(false) }
@@ -69,24 +77,46 @@ internal class PocketWebTaskCapabilities(
     fun exportSnapshot(): JSONObject? = exporter?.snapshot()
     private fun page(input: JSONObject): Page = (pages[text(input, "pageHandle")] ?: error("原任务能力页已关闭")).also { check(current(it)) { "原任务或前台窗口已变化" } }
     private fun review(input: JSONObject): Review = (reviews[text(input, "reviewHandle")] ?: error("原脚本审阅已关闭")).also { check(it.alive && current(it.page)) { "原审阅窗口已变化" } }
+    private fun policy(input: JSONObject): Policy = (policies[text(input, "policyHandle")] ?: error("原任务审批编辑页已关闭，请回原任务核对")).also { check(it.alive && current(it.page)) { "原任务或编辑窗口已变化，请回原任务核对" } }
+    private fun retiredPolicy(policy: Policy?): JSONObject {
+        policy?.let { it.alive = false; policies.remove(it.id) }
+        return JSONObject().put("policyRetired", true).put("saveOutcome", "unconfirmed").put("executionAuthorized", false)
+            .put("message", "原任务目标或编辑窗口已变化，这份草稿不能再提交。若刚提交过保存，结果仍需回原任务重新核对；请放弃这份草稿后重新进入。")
+    }
     private fun choice(page: Page, kind: String, value: JSONObject): String { check(page.choices.size < 1024); val id = UUID.randomUUID().toString(); page.choices[id] = kind to value.toString(); return id }
     private fun selected(page: Page, id: String, kind: String): JSONObject { val pin = page.choices[id] ?: error("原记录已变化，请重新读取"); check(pin.first == kind && current(page)); return JSONObject(pin.second) }
-    private fun work(page: Page?, done: (JSONObject?, String?) -> Unit, action: (RunControl) -> JSONObject) {
+    /** Rule keys are exact tool names, not credential field names; values remain a fixed enum. */
+    private fun policyValue(value: JSONObject): JSONObject {
+        val result = PocketWebState.publicValue(value) as JSONObject
+        for (scope in listOf("global", "conversation", "effective")) {
+            val source = value.optJSONObject(scope) ?: continue
+            val original = source.getJSONObject("tools"); val rules = JSONObject()
+            original.keys().forEach { name ->
+                val decision = original.getString(name); check(decision in setOf("allow", "ask", "deny", "review"))
+                rules.put(name, decision)
+            }
+            result.getJSONObject(scope).put("tools", rules)
+        }
+        return result
+    }
+    private fun work(page: Page?, done: (JSONObject?, String?) -> Unit, ownerPolicy: Boolean = false, action: (RunControl) -> JSONObject) {
         check(busy.compareAndSet(false, true)) { "请等待原任务能力回执" }
         val epoch = generation; val captured = owner(); val control = RunControl()
         fun accepted() = epoch == generation && captured == owner() && visible() && (page == null || current(page))
         control.setAuthorityCheck { check(accepted()) { "原任务能力窗口已变化" } }
         try { execute(Runnable {
-            val result = runCatching { control.check(); action(control).also { control.check() } }
+            val result = runCatching { control.check(); val value = action(control); control.check(); if (ownerPolicy) policyValue(value) else value }
             main.post {
                 busy.set(false)
                 if (!accepted()) done(null, "原窗口已变化；请核对原任务回执，没有自动重新提交")
-                else result.fold({ done(PocketWebState.publicValue(it) as JSONObject, null) }, { done(null, it.message ?: "原任务能力回执尚未确认") })
+                else result.fold({ done(if (ownerPolicy) it else PocketWebState.publicValue(it) as JSONObject, null) }, { done(null, it.message ?: "原任务能力回执尚未确认") })
             }
         }) } catch (failure: Exception) { busy.set(false); done(null, failure.message ?: "原控制队列不可用") }
     }
     private fun view(page: Page): JSONObject {
         val value = snapshot(page.task); check(value.getString("taskId") == page.task && current(page))
+        val inventory = value.optJSONObject("toolInventory")
+        page.policyInventory = inventory?.takeIf { it.optString("state") == "recorded" && it.optBoolean("personalPolicyApplies") }?.toString()
         page.choices.clear()
         rows(value.optJSONArray("executions")).forEach { row ->
             val operation = JSONObject().put("operationId", row.getString("operationId"))
@@ -110,8 +140,62 @@ internal class PocketWebTaskCapabilities(
     fun dispatch(action: String, input: JSONObject, done: (JSONObject?, String?) -> Unit) {
         if (action == "taskCapabilities.close") { fields(input, "pageHandle"); pages.remove(text(input, "pageHandle"))?.let(::release); done(JSONObject().put("closed", true), null); return }
         if (action == "taskCapabilities.dismissReview") { fields(input, "reviewHandle"); reviews.remove(text(input, "reviewHandle"))?.let(::retire); done(JSONObject().put("closed", true).put("taskCancelled", false), null); return }
+        if (action == "taskCapabilities.policy.close") { fields(input, "policyHandle"); policies.remove(text(input, "policyHandle"))?.alive = false; done(JSONObject().put("closed", true).put("taskCancelled", false), null); return }
+        if (action in setOf("taskCapabilities.policy.snapshot", "taskCapabilities.policy.catalog", "taskCapabilities.policy.save")) {
+            val selected = policies[text(input, "policyHandle")]
+            if (selected == null || !selected.alive || !current(selected.page)) { done(retiredPolicy(selected), null); return }
+        }
         check(visible()) { "请回到私人任务的前台页面" }
         when (action) {
+            "taskCapabilities.policy.open" -> {
+                fields(input, "pageHandle", "tool"); val page = page(input); val tool = text(input, "tool")
+                work(page, done, ownerPolicy = true) {
+                    // Pin the record shown by this page; never silently retarget a newer run on click.
+                    val inventory = JSONObject(checkNotNull(page.policyInventory) { "原任务工具记录不适用个人审批设置，请刷新原任务后核对" })
+                    check(inventory.optString("state") == "recorded" && inventory.optBoolean("personalPolicyApplies")) { "此原任务不适用个人审批设置，请使用原生专用审批" }
+                    val names = inventory.getJSONArray("names")
+                    check((0 until names.length()).any { names.getString(it) == tool }) { "原任务本轮未登记这个工具" }
+                    val target = JSONObject().put("taskId", page.task).put("runId", inventory.getString("runId")).put("epoch", inventory.getInt("epoch"))
+                        .put("conversationId", inventory.getString("policyConversationId")).put("names", JSONArray(names.toString())).put("tool", tool)
+                    val value = checkNotNull(readPolicy) { "原任务审批设置宿主不可用" }(target)
+                    synchronized(lifetime) {
+                        check(current(page)); policies.values.filter { it.page === page }.forEach { it.alive = false; policies.remove(it.id) }
+                        check(policies.size < 16); val policy = Policy(UUID.randomUUID().toString(), page, target.toString()); policies[policy.id] = policy
+                        value.put("policyHandle", policy.id)
+                    }
+                }
+            }
+            "taskCapabilities.policy.snapshot" -> {
+                fields(input, "policyHandle"); val policy = policy(input)
+                work(policy.page, done, ownerPolicy = true) {
+                    check(policy.alive)
+                    try { checkNotNull(readPolicy)(JSONObject(policy.target)).also { check(policy.alive) } }
+                    catch (failure: SecurityException) { retiredPolicy(policy) }
+                }
+            }
+            "taskCapabilities.policy.catalog" -> {
+                fields(input, "policyHandle"); val policy = policy(input)
+                work(policy.page, done) {
+                    try {
+                        check(policy.alive); checkNotNull(readPolicy)(JSONObject(policy.target))
+                        val catalog = checkNotNull(policyCatalog) { "工具目录宿主不可用" }()
+                        checkNotNull(readPolicy)(JSONObject(policy.target)); check(policy.alive); catalog
+                    } catch (failure: SecurityException) { retiredPolicy(policy) }
+                }
+            }
+            "taskCapabilities.policy.save" -> {
+                fields(input, "policyHandle", "global", "policy", "expectedRevision"); val policy = policy(input)
+                val global = input.get("global"); require(global is Boolean); require(input.has("policy"))
+                val revision = input.get("expectedRevision"); require((revision is Int || revision is Long) && (revision as Number).toLong() >= 0)
+                val value = if (input.isNull("policy")) null else copy(input.getJSONObject("policy"))
+                work(policy.page, done, ownerPolicy = true) { control ->
+                    synchronized(lifetime) {
+                        check(policy.alive && current(policy.page)); control.check()
+                        try { checkNotNull(savePolicy)(JSONObject(policy.target), global, value, (revision as Number).toLong(), control) }
+                        catch (failure: SecurityException) { retiredPolicy(policy) }
+                    }
+                }
+            }
             "taskCapabilities.open" -> {
                 fields(input, "taskId"); val task = text(input, "taskId"); val owner = owner(); val epoch = generation
                 work(null, done) {

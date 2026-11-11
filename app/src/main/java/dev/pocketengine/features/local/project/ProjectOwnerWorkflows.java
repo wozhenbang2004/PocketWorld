@@ -5,11 +5,13 @@ import dev.pocketengine.features.assistant.AssistantModule;
 import dev.pocketengine.features.local.LocalModule;
 import dev.pocketengine.store.TaskStore;
 import org.json.JSONObject;
+import org.json.JSONArray;
 
 /** Native owner selection narrows the existing assistant admission; it creates no runner or grant. */
 public final class ProjectOwnerWorkflows {
     private final LocalModule local;private final TaskStore tasks;private final AssistantModule assistant;
     private final ThreadLocal<JSONObject> selection=new ThreadLocal<>();
+    private final ThreadLocal<java.util.function.BooleanSupplier> ownerStartFence=new ThreadLocal<>();
     private final ThreadLocal<dev.pocketengine.features.teams.TeamProjectRoundHost.Admission> teamRound=new ThreadLocal<>();
     public ProjectOwnerWorkflows(LocalModule local,TaskStore tasks,AssistantModule assistant){this.local=java.util.Objects.requireNonNull(local);this.tasks=java.util.Objects.requireNonNull(tasks);this.assistant=java.util.Objects.requireNonNull(assistant);}
     @FunctionalInterface public interface RoundContinuationExecutor {JSONObject resume(dev.pocketengine.features.teams.TeamProjectRoundHost.Continuation original)throws Exception;}
@@ -18,6 +20,45 @@ public final class ProjectOwnerWorkflows {
     public JSONObject continueTeamRound(dev.pocketengine.features.teams.TeamProjectRoundHost.Continuation original)throws Exception{RoundContinuationExecutor nativeHost=roundContinuationExecutor;if(nativeHost==null)throw new IllegalStateException("原native继续入口尚未挂载；没有新建run或更换预算");return nativeHost.resume(java.util.Objects.requireNonNull(original));}
     public JSONObject createProject(JSONObject input)throws Exception{return local.createProjectForOwner(input.getString("name"),input.getString("template"));}
     public JSONObject openProject(JSONObject input)throws Exception{return local.openProjectForOwner(input.getString("projectId"));}
+    /** Read-only private choices. A team, Skill or unpublished Git copy is not
+     * silently adopted as the owner's ordinary development workspace. */
+    public JSONObject inspectForOwner(String project)throws Exception {
+        ProjectBuildPlan.identity(project);JSONArray available=new JSONArray(),rows=local.snapshot().getJSONArray("checkouts");
+        for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(!project.equals(row.optString("projectId"))||!ordinaryCheckout(row))continue;
+            available.put(new JSONObject().put("checkoutId",row.getString("id")).put("projectId",project).put("name",row.optString("name")).put("createdAt",row.optLong("createdAt")));}
+        return new JSONObject().put("projectId",project).put("checkouts",available).put("runtime",local.projectRuntimeForHost("managed_process_v1")).put("executionAuthorized",false);
+    }
+    private static boolean ordinaryCheckout(JSONObject value){return !value.has("teamProjectCopy")&&!value.has("skillExecutionCopy")&&!value.has("isolatedGit")&&!value.has("nativeGitImportPending");}
+    public JSONObject sourceForOwner(String project,String checkout)throws Exception {
+        ProjectBuildPlan.identity(project);ProjectBuildPlan.identity(checkout);JSONObject row=local.projectCheckoutForHost(checkout);
+        if(!project.equals(row.getString("projectId"))||!ordinaryCheckout(row))throw new SecurityException("请选择此项目的普通私人副本");
+        JSONObject source=ProjectSources.describe(local.handle("export",new JSONObject().put("checkoutId",checkout)));source.remove("files");return source;
+    }
+    public JSONObject prepareCheckoutForOwner(String project,String request)throws Exception{return local.prepareDevelopmentCheckoutForOwner(project,request);}
+    private void requireOrdinaryFileOwner(String project,String checkout)throws Exception {
+        ProjectBuildPlan.identity(project);ProjectBuildPlan.identity(checkout);JSONObject row=local.projectCheckoutForHost(checkout);
+        if(!project.equals(row.getString("projectId"))||!ordinaryCheckout(row))throw new SecurityException("请选择此项目的普通私人副本");
+    }
+    public JSONObject filesForOwner(String project,String checkout)throws Exception {requireOrdinaryFileOwner(project,checkout);return local.handle("changes",new JSONObject().put("checkoutId",checkout));}
+    public JSONObject fileForOwner(String project,String checkout,String path)throws Exception {requireOrdinaryFileOwner(project,checkout);return local.readDevelopmentFileForOwner(project,checkout,path);}
+    public JSONObject saveFileForOwner(ProjectFileDraft.SaveIntent intent,java.util.function.BooleanSupplier current)throws Exception {requireOrdinaryFileOwner(intent.projectId,intent.checkoutId);return local.saveDevelopmentFileForOwner(intent,current);}
+    public JSONObject reviewFileImportForOwner(String project,String checkout,String path)throws Exception {
+        requireOrdinaryFileOwner(project,checkout);JSONObject result=local.handle("reviewFile",new JSONObject().put("checkoutId",checkout).put("path",path));
+        if(!ProjectTextImport.REVIEW.equals(result.optString("format")))throw new IllegalArgumentException("这份变更包含二进制文件，请使用原固定成果包审阅，未改成文字采纳");return result;
+    }
+    public JSONObject importFileForOwner(String project,String checkout,String path,JSONObject reviewed,java.util.function.BooleanSupplier current)throws Exception {requireOrdinaryFileOwner(project,checkout);return local.importDevelopmentFileForOwner(project,checkout,path,reviewed,current);}
+    public JSONObject queryCheckoutForOwner(String project,String request)throws Exception{return local.queryDevelopmentCheckoutForOwner(project,request);}
+    public JSONObject submissionForOwner(String project,String checkout,String client)throws Exception {
+        ProjectBuildPlan.identity(project);ProjectBuildPlan.identity(checkout);ProjectBuildPlan.identity(client);
+        JSONObject original=assistant.handle("getSubmission",new JSONObject().put("clientMessageId",client));
+        if(!client.equals(original.optString("clientMessageId")))throw new SecurityException("不是原项目输入的回执");
+        if(!original.optString("taskId").isEmpty()){
+            JSONObject task=tasks.get(original.getString("taskId"),false),context=task==null?null:task.optJSONObject("developmentContext");
+            if(task==null||context==null||!"owner".equals(task.optString("actorId"))||!"private".equals(task.optString("spaceId"))||task.optJSONObject("origin")!=null
+                    ||!project.equals(context.optString("projectId"))||!checkout.equals(context.optString("checkoutId"))||!client.equals(context.optString("clientMessageId")))throw new SecurityException("原输入属于另一项目任务，不采纳这份回执");
+        }
+        return new JSONObject(original.toString());
+    }
     /** Exact native owner selection for the existing Profile admission. Reading/exporting an
      * already selected checkout creates no task, command, grant or alternate project registry. */
     public ProfileProjectSelection reviewWorkProfileProject(String projectId,String checkoutId,String runtime)throws Exception {
@@ -51,6 +92,14 @@ public final class ProjectOwnerWorkflows {
         synchronized(selected){if(selected.boundTask!=null)throw new SecurityException("原项目选择已用于一项任务，请重新核对");selected.boundTask=task.getString("id");}
         tasks.bindDevelopmentContext(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"),original,new JSONObject(selected.context));
     }
+    /** Native presentation fence is checked again after the original Assistant
+     * captures its model, before Engine binds/schedules this project's attempt. */
+    public JSONObject startReviewedForOwner(JSONObject ownerInput,java.util.function.BooleanSupplier current)throws Exception {
+        java.util.Objects.requireNonNull(current);if(ownerStartFence.get()!=null)throw new IllegalStateException("不能嵌套项目审阅");
+        if(!current.getAsBoolean())throw new SecurityException("原项目或模型审阅已变化，没有进入启动");
+        ownerStartFence.set(current);try{return start(ownerInput);}finally{ownerStartFence.remove();}
+    }
+    public void checkStartFenceForHost(){var fence=ownerStartFence.get();if(fence!=null&&!fence.getAsBoolean())throw new SecurityException("原项目窗口或模型已变化，没有分配项目执行");}
     public JSONObject start(JSONObject ownerInput)throws Exception {
         String checkout=ProjectBuildPlan.identity(ownerInput.getString("checkoutId")),project=ProjectBuildPlan.identity(ownerInput.getString("projectId"));
         String digest=ownerInput.getString("expectedSourceDigest"),client=ownerInput.getString("clientMessageId"),goal=ownerInput.getString("goal").trim();

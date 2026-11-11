@@ -35,7 +35,7 @@ public final class ProjectBuildPlan {
             }
         }else if(files.keySet().stream().anyMatch(p->p.endsWith(".js")||p.endsWith(".mjs")||p.endsWith(".cjs")))ecosystems.put(ecosystem("node",files,p->p.endsWith(".js")||p.endsWith(".mjs")||p.endsWith(".cjs")));
         boolean gradle=files.keySet().stream().anyMatch(p->p.equals("build.gradle")||p.equals("build.gradle.kts")||p.equals("settings.gradle")||p.equals("settings.gradle.kts"));
-        if(gradle){ecosystems.put(ecosystem("gradle",files,p->p.equals("build.gradle")||p.equals("build.gradle.kts")||p.equals("settings.gradle")||p.equals("settings.gradle.kts")));warnings.put("Gradle会执行项目构建逻辑并可能联网；依赖需明确执行dependencies解析；Android SDK和APK工具链未验证，不等于可在手机构建APK");}
+        if(gradle){ecosystems.put(ecosystem("gradle",files,p->p.equals("build.gradle")||p.equals("build.gradle.kts")||p.equals("settings.gradle")||p.equals("settings.gradle.kts")));warnings.put("Gradle会执行项目构建逻辑并可能联网；dependencies主要报告依赖图，不证明已缓存全部构建依赖或可离线构建。Android SDK和APK工具链未验证，不等于可在手机构建APK");}
         if(files.keySet().stream().anyMatch(p->p.endsWith(".py"))||files.containsKey("requirements.txt")||files.containsKey("pyproject.toml")){
             JSONObject python=ecosystem("python",files,p->p.endsWith(".py")||p.equals("requirements.txt")||p.equals("pyproject.toml"));
             python.put("dependencyEnvironment",runtimeId.equals("termux")?"compatibility_target_directory":"checkout_venv");
@@ -62,10 +62,13 @@ public final class ProjectBuildPlan {
         JSONObject runtime;
         if(runtimeId.equals("termux"))runtime=termux==null?new JSONObject():ProjectSources.copy(termux);
         else{runtime=local.handle("project.runtime.describe",new JSONObject().put("runtimeId",runtimeId));observed=new JSONArray();JSONArray facts=runtime.optJSONArray("tools");for(int i=0;facts!=null&&i<facts.length();i++){JSONObject fact=facts.getJSONObject(i);if(fact.optBoolean("hashVerified")||fact.optBoolean("probeVerified"))observed.put(fact.getString("name"));}probeId="";newest=-1;}
-        return new JSONObject().put("checkoutId",checkout).put("projectId",source.getString("projectId")).put("sourceDigest",source.getString("sourceDigest")).put("runtimeId",runtimeId).put("runtime",runtime)
+        JSONObject android=ProjectAndroidPreflight.inspect(files,source,observed);
+        if(android!=null)warnings.put("发现 Android 项目线索；请读取 androidBuild 的版本声明与真实缺口。基本环境就绪不等于 APK 工具链已准备，不自动安装 SDK、签名或安装 APK。");
+        JSONObject result=new JSONObject().put("checkoutId",checkout).put("projectId",source.getString("projectId")).put("sourceDigest",source.getString("sourceDigest")).put("runtimeId",runtimeId).put("runtime",runtime)
                 .put("source",source).put("ecosystems",ecosystems).put("dependencies",dependencies).put("warnings",warnings)
                 .put("termux",termux==null?new JSONObject():termux).put("observedTools",observed).put("toolProbeJobId",probeId).put("toolProbeCreatedAt",newest)
                 .put("dependencyResolutionComplete",false).put("nativeProgrammingExecution",false).put("untrustedProjectContent",true);
+        if(android!=null)result.put("androidBuild",android);return result;
     }
     private static JSONObject ecosystem(String id,Map<String,String> files,java.util.function.Predicate<String> relevant)throws Exception{JSONArray evidence=new JSONArray();for(String path:files.keySet())if(relevant.test(path))evidence.put(path);return new JSONObject().put("id",id).put("evidence",evidence);}
     /** Display declarations, not a second pip resolver or proof of installation. */
@@ -189,7 +192,8 @@ public final class ProjectBuildPlan {
                     else if(intent.equals("run")){executable="java";String target=target(files,input.optString("target",""),List.of("Main.java"),".java"),name=target.substring(target.lastIndexOf('/')+1,target.length()-5);java.util.regex.Matcher pkg=java.util.regex.Pattern.compile("(?m)^\\s*package\\s+([a-zA-Z_][\\w.]*)\\s*;").matcher(files.get(target));if(pkg.find())name=pkg.group(1)+"."+name;argv.put("-cp").put("build/classes").put(name);}else if(intent.equals("test"))throw new IllegalArgumentException("此独立Java项目尚未声明测试runner，请选择明确的Gradle测试项目");
                 }else if(ecosystem.equals("gradle")){
                     if(intent.equals("run"))throw new IllegalArgumentException("Gradle运行task需在项目内明确声明；不猜测APK安装或启动");
-                    executable="gradle";argv.put("--no-daemon").put(intent.equals("dependencies")?"dependencies":intent.equals("test")?"test":"build");network=true;
+                    executable="gradle";argv.put("--no-daemon").put(intent.equals("dependencies")?"dependencies":intent.equals("test")?"test":"assemble");network=true;
+                    if(intent.equals("build"))warnings.put("此构建明确请求 Gradle assemble，不默认连带 check/test；但项目构建脚本仍可自定义依赖任务，执行前须审阅。调用当前登记的 gradle，不擅自执行/下载项目 wrapper，也不假定与 wrapper 声明版本一致。");
                 }else throw new IllegalArgumentException("静态HTML无需编译；请使用明确的受限预览，不伪造构建成功");
                 if(!executable.isEmpty()){
                     JSONObject payload=ProjectSources.copy(base).put("executable",executable).put("argv",argv);

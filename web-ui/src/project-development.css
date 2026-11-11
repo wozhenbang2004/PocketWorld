@@ -1,0 +1,18 @@
+/* Composition of the existing BoardUI fields/dialog and local work surface.
+ * No new controls, theme or task-status presentation. */
+.pw-project-development.pw-settings-section { display: grid; gap: var(--pw-gap-content,16px); margin: 0 0 var(--pw-gap-section,28px); min-width: 0; }
+.pw-project-development .pw-local-panel-heading { margin: 0; }
+.pw-project-development .pw-form-actions { margin-top: 0; flex-wrap: wrap; }
+.pw-project-development .pw-local-inline-notice { margin: 0; }
+.pw-project-development .pw-local-inline-notice p { margin: 0 0 var(--pw-gap-related,8px); }
+.pw-project-development .pw-facts dd { overflow-wrap: anywhere; }
+.pw-checkout-files, .pw-checkout-editor { display: grid; gap: var(--pw-gap-content,16px); min-width: 0; }
+.pw-checkout-files .pw-form-actions { flex-wrap: wrap; }
+.pw-checkout-identity, .pw-checkout-editor h3 { overflow-wrap: anywhere; }
+.pw-checkout-file-list { display: grid; gap: var(--pw-gap-related,8px); max-height: 36dvh; overflow: auto; }
+.pw-checkout-file-list button { justify-content: space-between; text-align: left; min-width: 0; height: auto; white-space: normal; }
+.pw-checkout-file-list button span { overflow-wrap: anywhere; }
+.pw-checkout-file-list button small { flex: 0 0 auto; margin-left: var(--pw-gap-related,8px); }
+.pw-checkout-editor textarea { min-height: 34dvh; font-family: monospace; tab-size: 2; white-space: pre; overflow: auto; }
+.pw-checkout-adoption { display: grid; gap: var(--pw-gap-content,16px); min-width: 0; }
+.pw-checkout-review-diff { max-height: 45dvh; overflow: auto; white-space: pre; tab-size: 2; }

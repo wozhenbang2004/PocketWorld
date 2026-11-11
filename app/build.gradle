@@ -40,9 +40,11 @@ if (!updateManifestUrl.isEmpty()) {
         throw new GradleException('Private update configuration requires HTTPS without embedded credentials and a base64 RSA SPKI PUBLIC key (2048-8192 bits); values were not embedded')
     }
 }
+// Opt-in source distribution only. Does not enroll a device or include Firebase.
+def unifiedPushEnabled = providers.gradleProperty('pocketworldUnifiedPush').getOrElse('false') == 'true'
 android {
     namespace 'dev.pocketengine'
-    compileSdk 35
+    compileSdk (unifiedPushEnabled ? 36 : 35)
     buildToolsVersion '35.0.0'
     ndkVersion '28.2.13676358'
     if (providers.gradleProperty('pocketworldNdkPath').isPresent()) ndkPath providers.gradleProperty('pocketworldNdkPath').get()
@@ -56,6 +58,7 @@ android {
         versionName pocketworldVersion.versionName
         resValue 'string', 'pocketworld_update_manifest_url', updateManifestUrl
         resValue 'string', 'pocketworld_update_public_key', updatePublicKey
+        resValue 'bool', 'pocketworld_unified_push', unifiedPushEnabled.toString()
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
     }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
@@ -81,6 +84,10 @@ android {
             keepDebugSymbols += ['**/libproot.so', '**/libloader.so']
         }
     }
+}
+android.sourceSets.main.java.srcDir(unifiedPushEnabled ? 'src/unifiedPush/java' : 'src/noUnifiedPush/java')
+if (unifiedPushEnabled) {
+    dependencies { implementation 'org.unifiedpush.android:connector:3.3.5' }
 }
 dependencyLocking { lockAllConfigurations() }
 def helperTask = tasks.register('buildDisplayHelper', Exec) {

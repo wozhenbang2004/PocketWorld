@@ -217,6 +217,32 @@ public final class LocalModule implements EngineModule {
         if(entries!=null)for(File entry:entries){File metadata=new File(entry,"checkout.json");if(!metadata.isFile())continue;JSONObject value=JsonFiles.read(metadata);if(!value.has("isolatedGit")&&projectId.equals(value.optString("projectId"))&&(latest==null||value.optLong("createdAt")>latest.optLong("createdAt")))latest=value;}
         return latest==null?prepare(projectId):new JSONObject(latest.toString());
     }
+    /** Native project page: one explicit copy request, recorded in the existing
+     * checkout metadata. Unknown partial copies are queried, never overwritten. */
+    public synchronized JSONObject prepareDevelopmentCheckoutForOwner(String projectId,String requestId)throws Exception {
+        if(closed)throw new IllegalStateException("原项目宿主已关闭");
+        JSONObject prior=queryDevelopmentCheckoutForOwner(projectId,requestId);
+        if(prior.optBoolean("found"))return prior.getJSONObject("checkout");
+        if(prior.optBoolean("partial"))throw new IllegalStateException("原副本准备留下未完成文件，请保留现场核对；没有重复创建或覆盖");
+        var snapshot=packageWorkspace().projectSnapshotForHost(projectId);JSONArray entries=new JSONArray();java.util.Map<String,byte[]> files=new java.util.LinkedHashMap<>();
+        for(var file:snapshot.files()){entries.put(new JSONObject().put("path",file.path).put("sourceVersion",file.version).put("sha256",file.sha256).put("binary","binary".equals(file.kind)).put("bytes",file.sizeBytes));files.put(file.path,file.bytes());}
+        JSONObject checkout=new JSONObject().put("id",developmentCheckoutId(projectId,requestId)).put("projectId",projectId).put("name",snapshot.definition().optString("name"))
+                .put("files",entries).put("createdAt",System.currentTimeMillis()).put("ownerDevelopmentRequestId",requestId);
+        createCheckoutBytes(checkout,files);return checkout;
+    }
+    public synchronized JSONObject queryDevelopmentCheckoutForOwner(String projectId,String requestId)throws Exception {
+        if(closed)throw new IllegalStateException("原项目宿主已关闭");String id=developmentCheckoutId(projectId,requestId);
+        File directory=new File(new File(root,"checkouts"),id),record=new File(directory,"checkout.json");boolean exists=Files.exists(directory.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS);
+        if(Files.isSymbolicLink(directory.toPath())||Files.isSymbolicLink(record.toPath()))throw new SecurityException("原副本准备来源不能是符号链接");
+        JSONObject result=new JSONObject().put("requestId",requestId).put("projectId",projectId).put("checkoutId",id).put("found",false).put("partial",exists).put("replayAllowed",false);
+        if(!record.isFile())return result;
+        JSONObject original=checkout(id);if(!projectId.equals(original.optString("projectId"))||!requestId.equals(original.optString("ownerDevelopmentRequestId")))throw new SecurityException("副本登记不属于原准备请求");
+        return result.put("found",true).put("partial",false).put("checkout",new JSONObject(original.toString()));
+    }
+    private static String developmentCheckoutId(String projectId,String requestId){
+        if(projectId==null||!projectId.matches("[A-Za-z0-9_-]{1,80}")||requestId==null||!requestId.matches("[a-f0-9-]{36}"))throw new IllegalArgumentException("请核对原项目和副本准备请求");
+        return UUID.nameUUIDFromBytes(("owner-development-checkout-v1:"+projectId+":"+requestId).getBytes(StandardCharsets.UTF_8)).toString();
+    }
     public ManagedProjectRuntime managedRuntimeForOwner(){return projectRuntime instanceof ManagedProjectRuntime?(ManagedProjectRuntime)projectRuntime:null;}
     public synchronized ManagedProjectRuntime ownedServiceRuntimeForHost(String id)throws Exception {
         ProjectRuntime selected=runtime(id);if(!(selected instanceof ManagedProjectRuntime))throw new SecurityException("受控服务需要原本机managed运行时");return (ManagedProjectRuntime)selected;
@@ -982,6 +1008,38 @@ public final class LocalModule implements EngineModule {
         File target=NativeCommandExecutor.within(content(id),VersionedWorkspace.path(path));
         if(target.exists())return read(id,path).put("deleted",false);
         return new JSONObject().put("checkoutId",id).put("path",path).put("content","").put("sha256","absent").put("bytes",0).put("deleted",true);
+    }
+    /** Native owner editor reads the active private tree, not the separately
+     * versioned project. A missing source path is an explicit new-file draft. */
+    public synchronized JSONObject readDevelopmentFileForOwner(String project,String id,String path)throws Exception {
+        if(closed||!project.equals(checkout(id).getString("projectId")))throw new SecurityException("原私人副本项目已变化");
+        VersionedWorkspace.path(path);if(!ProjectSources.sourcePath(path))throw new SecurityException("请在源码文件中编辑，不改写运行缓存或Git内部文件");
+        JSONObject actual=localFile(id,path);if(actual.getLong("bytes")>262144)throw new IllegalArgumentException("这份文件超过256KiB编辑上限，原字节保留；可使用原任务有界读取或导出");
+        return actual.put("projectId",project).put("expectedHash",actual.getString("sha256"));
+    }
+    /** Reuses the original manual SHA-CAS writer, with the native page fenced
+     * again immediately before the atomic move. Never grants live-edit rights. */
+    public synchronized JSONObject saveDevelopmentFileForOwner(dev.pocketengine.features.local.project.ProjectFileDraft.SaveIntent intent,java.util.function.BooleanSupplier current)throws Exception {
+        java.util.Objects.requireNonNull(intent);java.util.Objects.requireNonNull(current);
+        dev.pocketengine.features.local.project.ProjectBinaryImport.Current live=()->{if(closed||!current.getAsBoolean()||!intent.projectId.equals(checkout(intent.checkoutId).getString("projectId")))throw new SecurityException("原文件编辑窗口已变化，未写入替代目标");};
+        live.check();if(!ProjectSources.sourcePath(VersionedWorkspace.path(intent.path)))throw new SecurityException("不能编辑运行缓存或Git内部文件");
+        java.nio.ByteBuffer encoded=StandardCharsets.UTF_8.newEncoder().encode(java.nio.CharBuffer.wrap(intent.text));byte[] bytes=new byte[encoded.remaining()];encoded.get(bytes);
+        if(bytes.length>262144)throw new IllegalArgumentException("单文件保存上限256KiB");
+        JSONObject facts=ProjectSources.describe(export(intent.checkoutId)),before=localFile(intent.checkoutId,intent.path);
+        if(facts.getLong("bytes")-before.getLong("bytes")+bytes.length>ProjectSources.MAX_TOTAL_BYTES||before.optBoolean("deleted")&&facts.getInt("fileCount")>=ProjectSources.MAX_FILES)throw new IllegalArgumentException("保存后超过项目源码2000文件/16MiB范围，原文件未改写");
+        manualWriteBytes(intent.checkoutId,intent.path,bytes,intent.expectedHash,true,live);
+        return read(intent.checkoutId,intent.path);
+    }
+    /** Owner's native one-file review is the input, never a Web-supplied diff or
+     * replacement body. This is the existing formal-version CAS and baseline
+     * reconciliation, not an atomic source/project transaction or publication. */
+    public synchronized JSONObject importDevelopmentFileForOwner(String project,String id,String path,JSONObject reviewed,java.util.function.BooleanSupplier current)throws Exception {
+        if(closed||!current.getAsBoolean()||!project.equals(checkout(id).getString("projectId")))throw new SecurityException("原采纳窗口已变化，未进入正式版本写入");
+        if(!ProjectTextImport.REVIEW.equals(reviewed.optString("format"))||!project.equals(reviewed.optString("projectId"))||!id.equals(reviewed.optString("checkoutId"))||!path.equals(reviewed.optString("path"))||!reviewed.optBoolean("importable")||reviewed.optBoolean("truncated"))throw new SecurityException("需要原生核对的完整文字差异，未导回项目");
+        JSONObject input=reviewed.optBoolean("same")?ProjectTextImport.reconciliationPayload(reviewed):new JSONObject().put("checkoutId",id).put("path",path).put("expectedHash",reviewed.getString("expectedHash")).put("expectedVersion",reviewed.getInt("expectedVersion"));
+        // Enter once. Leaving the page is not a rollback of an already confirmed
+        // version write; a missing callback is reconciled against source/history.
+        return importToProject(input);
     }
     private JSONObject write(JSONObject input)throws Exception {
         String id=JsonFiles.text(input,"checkoutId",80),path=JsonFiles.text(input,"path",240);requireIdle(id);requireCheckoutWritable(id);

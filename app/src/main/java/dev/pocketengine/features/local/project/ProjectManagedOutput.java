@@ -14,25 +14,28 @@ import org.json.*;
  * existing attachment Book remain authoritative; this class has no process, index or store. */
 public final class ProjectManagedOutput {
     public static final String FORMAT="pocketworld.managed-build-output.v1",COMMAND="collectProjectOutput",KIND="managed_output_collect",ROLE="managed_build_output";
+    // The byte[] reader is also used by Skills; its existing small budget is unchanged.
     public static final int MAX_BYTES=2*1024*1024;
+    public static final String STREAM_FORMAT="pocketworld.managed-build-output.v2";
+    public static final long MAX_STREAM_BYTES=AttachmentBook.MAX_FILE_BYTES;
     private ProjectManagedOutput(){}
-    public static boolean selection(JSONObject value){return value!=null&&FORMAT.equals(value.optString("format"));}
+    public static boolean selection(JSONObject value){return value!=null&&(FORMAT.equals(value.optString("format"))||STREAM_FORMAT.equals(value.optString("format")));}
     public static JSONObject prepare(RuntimeWorkspace root,JSONObject snapshot,JSONObject originalPlan,JSONObject originalBinding,JSONObject actualBuild,long currentOrder,String selectedPath,RunControl original)throws Exception{
         JSONObject plan=ProjectBuildPlan.verified(originalPlan),source=ProjectSources.describe(snapshot);String path=path(selectedPath);JSONObject proof=build(plan,originalBinding,actualBuild,currentOrder);
         if(!root.projectId().equals(plan.getString("projectId"))||!root.checkoutId().equals(plan.getString("checkoutId"))||!source.getString("sourceDigest").equals(plan.getString("sourceDigest")))throw new SecurityException("原成功构建与当前完整源码版本不同，未收集");
         for(int i=0;i<plan.getJSONArray("sourceManifest").length();i++)if(path.equals(plan.getJSONArray("sourceManifest").getJSONObject(i).getString("path")))throw new SecurityException("源码不是生成文件，请按原源码或固定项目包查看");
-        byte[] bytes=bytes(root,path,original);JSONObject core=new JSONObject().put("format",FORMAT).put("projectId",plan.getString("projectId")).put("checkoutId",plan.getString("checkoutId")).put("sourceDigest",plan.getString("sourceDigest"))
+        ReviewedBuildOutput.Observation observed=ReviewedBuildOutput.inspect(root,path,MAX_STREAM_BYTES,original);JSONObject core=new JSONObject().put("format",STREAM_FORMAT).put("projectId",plan.getString("projectId")).put("checkoutId",plan.getString("checkoutId")).put("sourceDigest",plan.getString("sourceDigest"))
             .put("runtimeId","managed_process_v1").put("runtimeIdentity",plan.getString("runtimeIdentity")).put("buildPlan",plan).put("buildBinding",ProjectSources.copy(originalBinding)).put("buildReceipt",proof).put("buildJobId",proof.getString("jobId")).put("buildReceiptIdentity",proof.getString("receiptIdentity")).put("buildCheckoutSequence",proof.getLong("checkoutSequence"))
-            .put("path",path).put("sha256",ProjectSources.sha256(bytes)).put("bytes",bytes.length).put("mimeType",mime(path)).put("maxBytes",MAX_BYTES).put("atomicArtifactFence",false).put("buildOutputAttribution","selected_output_observed_after_build")
-            .put("warnings",new JSONArray().put("原managed成功build、同源码SHA和原job顺序必须仍一致；仅固定这一个实际生成文件，支持二进制，最多2MiB").put("同UID不是OS沙箱；输出是构建后选定的实际字节，不据退出码推断业务正确或独占生成归属；不自动执行、分享或覆盖源码"));
-        Arrays.fill(bytes,(byte)0);String digest=ProjectSources.digest(core);return core.put("artifactPlanId",digest).put("artifactPlanDigest",digest);
+            .put("path",path).put("sha256",observed.sha256).put("bytes",observed.bytes).put("mimeType",mime(path)).put("maxBytes",MAX_STREAM_BYTES).put("atomicArtifactFence",false).put("buildOutputAttribution","selected_output_observed_after_build")
+            .put("warnings",new JSONArray().put("原managed成功build、同源码SHA和原job顺序必须仍一致；仅固定这一个实际生成文件，支持二进制，流式收集最多20MiB，仍受原附件总容量100MiB限制；APK只保存真实字节，不代表已签名、已验签或可安装").put("同UID不是OS沙箱；输出是构建后选定的实际字节，不据退出码推断业务正确或独占生成归属；不自动执行、分享或覆盖源码"));
+        String digest=ProjectSources.digest(core);return core.put("artifactPlanId",digest).put("artifactPlanDigest",digest);
     }
     public static JSONObject verified(JSONObject supplied)throws Exception{
         JSONObject core=ProjectSources.copy(supplied);core.remove("artifactPlanId");core.remove("artifactPlanDigest");String digest=supplied.getString("artifactPlanDigest");
         if(!selection(core)||!digest.matches("[a-f0-9]{64}")||!digest.equals(supplied.getString("artifactPlanId"))||!digest.equals(ProjectSources.digest(core)))throw new SecurityException("原managed生成文件选择已变化");
         var keys=new TreeSet<String>();supplied.keys().forEachRemaining(keys::add);if(!keys.equals(new TreeSet<>(Set.of("format","projectId","checkoutId","sourceDigest","runtimeId","runtimeIdentity","buildPlan","buildBinding","buildReceipt","buildJobId","buildReceiptIdentity","buildCheckoutSequence","path","sha256","bytes","mimeType","maxBytes","atomicArtifactFence","buildOutputAttribution","warnings","artifactPlanId","artifactPlanDigest"))))throw new SecurityException("生成文件选择含未审阅字段");
         JSONObject plan=ProjectBuildPlan.verified(core.getJSONObject("buildPlan")),proof=core.getJSONObject("buildReceipt");for(String field:new String[]{"projectId","checkoutId","sourceDigest","runtimeId","runtimeIdentity"})if(!plan.getString(field).equals(core.getString(field)))throw new SecurityException("生成文件选择与原构建项目/环境不同");
-        if(!"managed_process_v1".equals(core.getString("runtimeId"))||!core.getString("buildJobId").equals(proof.getString("jobId"))||!core.getString("buildReceiptIdentity").equals(proof.getString("receiptIdentity"))||positive(core.opt("buildCheckoutSequence"))!=positive(proof.opt("checkoutSequence"))||!Boolean.FALSE.equals(core.opt("atomicArtifactFence"))||!"selected_output_observed_after_build".equals(core.optString("buildOutputAttribution"))||!number(core.opt("maxBytes"),MAX_BYTES)||!core.getString("sha256").matches("[a-f0-9]{64}")||!(core.opt("bytes") instanceof Integer||core.opt("bytes") instanceof Long)||core.getLong("bytes")<0||core.getLong("bytes")>MAX_BYTES||!mime(path(core.getString("path"))).equals(core.getString("mimeType")))throw new SecurityException("生成文件原顺序、范围、摘要或容量无效");
+        if(!"managed_process_v1".equals(core.getString("runtimeId"))||!core.getString("buildJobId").equals(proof.getString("jobId"))||!core.getString("buildReceiptIdentity").equals(proof.getString("receiptIdentity"))||positive(core.opt("buildCheckoutSequence"))!=positive(proof.opt("checkoutSequence"))||!Boolean.FALSE.equals(core.opt("atomicArtifactFence"))||!"selected_output_observed_after_build".equals(core.optString("buildOutputAttribution"))||!number(core.opt("maxBytes"),limit(core))||!core.getString("sha256").matches("[a-f0-9]{64}")||!(core.opt("bytes") instanceof Integer||core.opt("bytes") instanceof Long)||core.getLong("bytes")<0||core.getLong("bytes")>limit(core)||!mime(path(core.getString("path"))).equals(core.getString("mimeType")))throw new SecurityException("生成文件原顺序、范围、摘要或容量无效");
         for(int i=0;i<plan.getJSONArray("sourceManifest").length();i++)if(core.getString("path").equals(plan.getJSONArray("sourceManifest").getJSONObject(i).getString("path")))throw new SecurityException("原源码不能改标为生成文件");
         return core.put("artifactPlanId",digest).put("artifactPlanDigest",digest);
     }
@@ -53,12 +56,19 @@ public final class ProjectManagedOutput {
     }
     public static JSONObject publish(AttachmentBook book,RuntimeWorkspace root,JSONObject selection,JSONObject link,RunControl original,Runnable beforePublication)throws Exception{
         selection=verified(selection);requireCollection(selection,link);JSONObject prior=find(book,selection,link,original);if(prior.optBoolean("found"))return receipt(selection,link,prior);
-        byte[] actual=bytes(root,selection.getString("path"),original);try{
-            if(actual.length!=selection.getLong("bytes")||!ProjectSources.sha256(actual).equals(selection.getString("sha256")))throw new SecurityException("原生成文件审阅后已变化，未发布或读取其他版本");original.check();
+        String relative=selection.getString("path");long approvedLimit=limit(selection);
+        ReviewedBuildOutput.Observation observed=ReviewedBuildOutput.inspect(root,relative,approvedLimit,original);
+        if(observed.bytes!=selection.getLong("bytes")||!observed.sha256.equals(selection.getString("sha256")))throw new SecurityException("原生成文件审阅后已变化，未发布或读取其他版本");original.check();
+        try(ReviewedBuildOutput actual=ReviewedBuildOutput.open(root,relative,approvedLimit,selection.getLong("bytes"),selection.getString("sha256"),original)){
             JSONObject source=new JSONObject().put("kind",ROLE).put("projectId",selection.getString("projectId")).put("checkoutId",selection.getString("checkoutId")).put("path",selection.getString("path")).put("sourceDigest",selection.getString("sourceDigest")).put("buildJobId",selection.getString("buildJobId")).put("buildReceiptIdentity",selection.getString("buildReceiptIdentity")).put("buildCheckoutSequence",selection.getLong("buildCheckoutSequence")).put("artifactPlanDigest",selection.getString("artifactPlanDigest")).put("taskId",link.getString("taskId")).put("runId",link.getString("runId")).put("operationId",link.getString("operationId")).put("planDigest",link.getString("planDigest")).put("buildOutputAttribution","selected_output_observed_after_build").put("businessVerified",false);
+            // Keep the original Local/TaskStore admission outside the Book monitor. The stream
+            // then refuses EOF unless the actual copied bytes match the approved identity;
+            // Book keeps its original final pause-revision commit fence and same operation ID.
             beforePublication.run();
-            JSONObject saved=book.importNativeResult(new ByteArrayInputStream(actual),selection.getString("path").substring(selection.getString("path").lastIndexOf('/')+1),selection.getString("mimeType"),source,link.getString("operationId"),ROLE,link.getString("taskId"),link.getString("runId"),selection.getString("artifactPlanDigest"),original);return receipt(selection,link,saved);
-        }finally{Arrays.fill(actual,(byte)0);}
+            JSONObject saved=book.importNativeResult(actual,relative.substring(relative.lastIndexOf('/')+1),selection.getString("mimeType"),source,link.getString("operationId"),ROLE,link.getString("taskId"),link.getString("runId"),selection.getString("artifactPlanDigest"),original);
+            if(saved.getLong("size")!=selection.getLong("bytes")||!saved.getString("sha256").equals(selection.getString("sha256")))throw new SecurityException("原Book发布回执与审阅字节不同，请核对原操作");
+            return receipt(selection,link,saved);
+        }
     }
     public static JSONObject observe(AttachmentBook book,JSONObject selection,JSONObject link,RunControl original)throws Exception{
         selection=verified(selection);requireCollection(selection,link);JSONObject prior=find(book,selection,link,original);if(!prior.optBoolean("found"))return base(selection,link).put("status","unknown").put("receiptReceived",false).put("accepted",JSONObject.NULL).put("message","原生成文件发布未完整确认，只查询同原动作，不再次保存");return receipt(selection,link,prior).put("reconciledFromOriginalCatalog",true);
@@ -84,6 +94,7 @@ public final class ProjectManagedOutput {
     private static String hashFile(Path path,RunControl control)throws Exception{var digest=java.security.MessageDigest.getInstance("SHA-256");try(InputStream input=Files.newInputStream(path,LinkOption.NOFOLLOW_LINKS)){byte[] block=new byte[16384];int count=0;for(int n;(n=input.read(block))>=0;){control.check();if(n==0)continue;if((count+=n)>MAX_BYTES)throw new IOException("生成文件复核时增长");digest.update(block,0,n);}}StringBuilder hash=new StringBuilder();for(byte b:digest.digest())hash.append(String.format(Locale.ROOT,"%02x",b&255));return hash.toString();}
     public static String path(String path){path=VersionedWorkspace.path(path);if(ProjectPackageArchive.excluded(path,false,true)!=null)throw new SecurityException("环境、依赖、凭据和私有配置不是生成成果");return path;}
     private static String mime(String path){String value=path.toLowerCase(Locale.ROOT);return value.endsWith(".html")||value.endsWith(".htm")?"text/html":value.endsWith(".css")?"text/css":value.endsWith(".js")||value.endsWith(".mjs")?"text/javascript":value.endsWith(".json")?"application/json":value.endsWith(".png")?"image/png":value.endsWith(".jpg")||value.endsWith(".jpeg")?"image/jpeg":value.endsWith(".pdf")?"application/pdf":value.endsWith(".txt")||value.endsWith(".md")||value.endsWith(".log")||value.endsWith(".csv")?"text/plain":"application/octet-stream";}
+    private static long limit(JSONObject selection){return STREAM_FORMAT.equals(selection.optString("format"))?MAX_STREAM_BYTES:MAX_BYTES;}
     private static long positive(Object value){if(!(value instanceof Integer||value instanceof Long)||((Number)value).longValue()<1)throw new SecurityException("历史build缺原生顺序，需重新明确批准构建");return ((Number)value).longValue();}
     private static boolean number(Object value,long expected){return (value instanceof Integer||value instanceof Long)&&((Number)value).longValue()==expected;}
 }

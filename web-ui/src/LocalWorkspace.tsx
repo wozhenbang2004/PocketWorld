@@ -30,7 +30,11 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
   // An existing draft includes a deliberately cleared choice. Navigation may
   // suggest a project only for a new form, never overwrite that user choice.
   const projectSelectionTouched = useRef(draft !== undefined), initialProjectApplied = useRef(false);
-  const restoredSource = useRef(draft?.projectId && draft.checkoutId ? { projectId: draft.projectId, checkoutId: draft.checkoutId } : null);
+  const sourceReadAttempt = useRef('');
+  const sourceSelection = useRef({ project, checkout }); sourceSelection.current = { project, checkout };
+  const acceptSource = (expectedProject: string, expectedCheckout: string) => (value: Data) => {
+    if (sourceSelection.current.project === expectedProject && sourceSelection.current.checkout === expectedCheckout && value.projectId === expectedProject && value.checkoutId === expectedCheckout) setSource(value);
+  };
   const readingRoot = useRef<HTMLElement>(null), readingPositions = useRef<Record<string, number>>({}), previousPresentation = useRef('setup');
   const activePanel = useRef(panel); activePanel.current = panel;
   const presentation = panel === 'setup' ? 'setup' : view ? `screen:${view.handle}` : `session:${original?.executionId || ''}`;
@@ -150,19 +154,19 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
   const canDescribeCheckout = supported('local.describeCheckout');
   const sourceWindow = ownerWindow();
   useEffect(() => {
-    const restored = restoredSource.current;
-    if (!restored) return;
-    if (project !== restored.projectId || checkout !== restored.checkoutId) { restoredSource.current = null; return; }
-    if (!visible || panel !== 'setup' || busy || entered.current || original || view || review || uncertain || unresolvedJobs.length || legacyNeedsAttention || !selected || !canDescribeCheckout) return;
-    // Secondary enters its native section asynchronously. Keep the restoration
-    // pending until this new window owns Local, then acquire its current source.
+    if (!project || !checkout) { sourceReadAttempt.current = ''; return; }
+    if (!visible || panel !== 'setup' || busy || entered.current || resultUnknown || view || review || stopReview || uncertain || unresolvedJobs.length || legacyNeedsAttention || !selected || !canDescribeCheckout) return;
+    // Choosing a real checkout is enough to read it. Creating a checkout and
+    // starting its terminal remain separate, explicitly reviewed operations.
     const nativeView = bridge.getState().view as Data;
     if (document.hidden || nativeView.section !== 'local' || nativeView.taskId) return;
-    // Restore only form values. The actual checkout version is read in this
-    // new native window; no old digest, review or terminal handle survives.
-    restoredSource.current = null;
-    void invoke('local.describeCheckout', restored, setSource).catch(() => {});
-  }, [project, checkout, visible, panel, busy, original, view, review, uncertain, unresolvedJobs.length, legacyNeedsAttention, !!selected, canDescribeCheckout, sourceWindow]);
+    const attempt = [sourceWindow, project, checkout].join('|');
+    if (sourceReadAttempt.current === attempt) return;
+    sourceReadAttempt.current = attempt; setSource(null);
+    // Only once for this choice/window. An observation failure leaves a visible
+    // manual retry, never a read loop, duplicate checkout or terminal dispatch.
+    void invoke('local.describeCheckout', { projectId: project, checkoutId: checkout }, acceptSource(project, checkout)).catch(() => {});
+  }, [project, checkout, visible, panel, busy, resultUnknown, view, review, stopReview, uncertain, unresolvedJobs.length, legacyNeedsAttention, !!selected, canDescribeCheckout, sourceWindow]);
   const preparationBlocked = busy || !!review || stopReview || resultUnknown || uncertain || unresolvedJobs.length > 0 || !!legacyNeedsAttention || prepareAttempted && !selected;
   useEffect(() => {
     // Navigation supplies a suggestion, never a checkout or execution binding.
@@ -207,9 +211,9 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
             <h3><IconFolder size={17} aria-hidden />选择工作副本</h3>
             <div className="pw-form-grid"><SelectField label="原项目" value={project} isDisabled={busy} options={[{ id: '', label: '选择已有项目' }, ...projectRows.map(row => ({ id: row.id, label: row.name })), ...(project && !projectRows.some(row => row.id === project) ? [{ id: project, label: '原项目暂未在当前清单中' }] : [])]} onChange={value => { if (!busy) { projectSelectionTouched.current = true; setProject(value); setCheckout(''); setSource(null); setPrepareAttempted(false); } }} />
               <SelectField label="私人工作副本" value={checkout} isDisabled={busy || !project} options={[{ id: '', label: '选择或准备副本' }, ...checkouts.map(row => ({ id: row.id, label: (row.name || '工作副本') + ' · ' + new Date(row.createdAt || 0).toLocaleString() })), ...(checkout && !checkouts.some(row => row.id === checkout) ? [{ id: checkout, label: '原工作副本暂未在当前清单中' }] : [])]} onChange={value => { if (!busy) { setCheckout(value); setSource(null); } }} /></div>
-            <div className="pw-form-actions"><Button variant="secondary" disabled={!selected || busy} onClick={() => { void invoke('local.describeCheckout', { projectId: project, checkoutId: checkout }, setSource).catch(() => {}); }}>{ready ? '重新核对副本版本' : '读取这个副本的实际版本'}</Button><Button variant="ghost" disabled={!project || busy || prepareAttempted} onClick={() => { if (activePanel.current !== 'setup' || entered.current || prepareAttempted) return; setPrepareAttempted(true); void invoke('local.prepareCheckout', { projectId: project }, result => { setCheckout(result.id); setSource(null); }).catch(() => {}); }}>准备新的私人副本</Button></div>
+            <div className="pw-form-actions"><Button variant="secondary" disabled={!selected || busy} onClick={() => { void invoke('local.describeCheckout', { projectId: project, checkoutId: checkout }, acceptSource(project, checkout)).catch(() => {}); }}>{ready ? '重新核对副本版本' : '读取这个副本的实际版本'}</Button><Button variant="ghost" disabled={!project || busy || prepareAttempted} onClick={() => { if (activePanel.current !== 'setup' || entered.current || prepareAttempted) return; setPrepareAttempted(true); void invoke('local.prepareCheckout', { projectId: project }, result => { setCheckout(result.id); setSource(null); }).catch(() => {}); }}>准备新的私人副本</Button></div>
             {prepareAttempted && <p className="pw-local-inline-notice" role="status">本次已请求准备副本。请核对真实副本列表；回执不明时不重复准备。</p>}
-            {ready ? <div className="pw-local-source" role="status"><span>{source.fileCount} 个源码文件 · {source.bytes} 字节</span><small>版本已读取，启动前仍会核对是否变化。</small></div> : <p className="pw-field-hint">{project ? '先读取所选副本的实际版本，才能审阅终端。' : '使用已有项目的私人副本，不直接改动原项目。'}</p>}
+            {ready ? <div className="pw-local-source" role="status"><span>{source.fileCount} 个源码文件 · {source.bytes} 字节</span><small>版本已读取，启动前仍会核对是否变化。</small></div> : <p className="pw-field-hint">{selected ? busy ? '正在读取所选副本的实际版本…' : '副本版本尚未确认，可点读取重试；没有启动终端。' : project ? '选择或准备一个私人副本后，会自动读取它的实际版本。' : '使用已有项目的私人副本，不直接改动原项目。'}</p>}
           </div>
           <div className="pw-local-setup-step" hidden={!ready}>
             <h3><IconTerminal size={17} aria-hidden />设置这次终端</h3>

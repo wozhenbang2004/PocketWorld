@@ -18,7 +18,7 @@ import org.json.JSONObject;
  * completed model request, not merely downloaded, checkpointed or described by a tool. */
 final class DeviceVisualFrames implements AutoCloseable {
     static final int MAX_SCREENSHOT_BYTES=6*1024*1024,MAX_DIMENSION=16384,MAX_PIXELS=16_000_000;
-    private final DeviceCapabilityPort.VerifiedImages images;private final RunControl original;
+    private final DeviceCapabilityPort.VerifiedImages images;private final RunControl original;private final dev.pocketengine.store.TaskStore ownerTasks;
     private final LinkedHashMap<String,Frame> frames=new LinkedHashMap<>();
     private final LinkedHashMap<String,Set<Frame>> requests=new LinkedHashMap<>();
     private Frame pending;private boolean closed;private final java.util.Map<String,Long> latestCaptured=new LinkedHashMap<>();private final Set<String> retired=new LinkedHashSet<>();
@@ -28,7 +28,8 @@ final class DeviceVisualFrames implements AutoCloseable {
         void require()throws Exception{if(closed||frames.get(route)!=this)throw new SecurityException("设备视觉帧已替换或关闭");evidence.requireCurrent();}
         void erase(){retired.add(referenceHash);if(raw!=null){Arrays.fill(raw,(byte)0);raw=null;}actualUrl=null;seen=false;}
     }
-    DeviceVisualFrames(DeviceCapabilityPort.VerifiedImages images,RunControl original){this.images=images;this.original=original;}
+    DeviceVisualFrames(DeviceCapabilityPort.VerifiedImages images,RunControl original){this(images,original,null);}
+    DeviceVisualFrames(DeviceCapabilityPort.VerifiedImages images,RunControl original,dev.pocketengine.store.TaskStore ownerTasks){this.images=images;this.original=original;this.ownerTasks=ownerTasks;}
     boolean installed(){return images!=null;}
     synchronized void invalidate(String route){Frame old=frames.remove(route);if(old!=null){if(pending==old)pending=null;old.erase();}}
     void capture(String route,String function,TaskStoreDeviceTasks.DeviceImageEvidence nativeEvidence)throws Exception{
@@ -41,7 +42,11 @@ final class DeviceVisualFrames implements AutoCloseable {
             if(bounds.outWidth!=nativeEvidence.imageWidth()||bounds.outHeight!=nativeEvidence.imageHeight()||bounds.outWidth<1||bounds.outHeight<1||bounds.outWidth>MAX_DIMENSION||bounds.outHeight>MAX_DIMENSION||(long)bounds.outWidth*bounds.outHeight>MAX_PIXELS||!nativeEvidence.mimeType().equals(bounds.outMimeType))throw new SecurityException("真实图像格式/像素尺寸与原观察不符");
             BitmapFactory.Options options=new BitmapFactory.Options();options.inScaled=false;options.inPreferredConfig=Bitmap.Config.RGB_565;
             decoded=BitmapFactory.decodeByteArray(raw,0,raw.length,options);if(decoded==null||decoded.getWidth()!=bounds.outWidth||decoded.getHeight()!=bounds.outHeight)throw new SecurityException("实际截图无法完整解码");nativeEvidence.requireCurrent();
-            synchronized(this){if(closed||retired.contains(referenceHash)||captured<=latestCaptured.getOrDefault(route,0L))throw new SecurityException("原视觉接缝/画面代次已失效");invalidate(route);latestCaptured.put(route,captured);while(frames.size()>=4)invalidate(frames.keySet().iterator().next());Frame frame=new Frame(route,function,nativeEvidence,raw);frames.put(route,frame);pending=frame;raw=null;}
+            // The owner's historical picture is not another capture, model delivery or action
+            // reference. Optional encrypted retention must not turn a real tool receipt unknown.
+            synchronized(this){if(closed||retired.contains(referenceHash)||captured<=latestCaptured.getOrDefault(route,0L))throw new SecurityException("原视觉接缝/画面代次已失效");invalidate(route);latestCaptured.put(route,captured);while(frames.size()>=4)invalidate(frames.keySet().iterator().next());Frame frame=new Frame(route,function,nativeEvidence,raw);frames.put(route,frame);pending=frame;raw=null;
+                if(ownerTasks!=null)try{ownerTasks.retainOwnerDevicePhoneSnapshot(nativeEvidence,frame.raw);}catch(Exception unavailable){/* Original image/model delivery and receipt remain unchanged. */}
+            }
         }finally{if(decoded!=null)decoded.recycle();if(raw!=null)Arrays.fill(raw,(byte)0);if(verified!=null)try{verified.discardTemporaryImage();}catch(Exception unavailableCleanup){/* Only a temporary received screenshot, never a Book/user file. Transport retries no business call. */}}
     }
     synchronized NativeToolObservation take(String tool,String consumptionOperation,RunControl actual)throws Exception{

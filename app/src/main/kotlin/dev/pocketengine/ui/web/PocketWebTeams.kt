@@ -33,9 +33,9 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
     @Volatile private var workingPhonePage: TeamPhoneHost.Page? = null
 
     companion object {
-        val COMMANDS = setOf("teams.snapshot", "teams.readRun", "teams.readDefinition", "teams.reviewDefinition",
+        val COMMANDS = setOf("teams.attention", "teams.readAttention", "teams.snapshot", "teams.readRun", "teams.readDefinition", "teams.reviewDefinition",
             "teams.reviewStart", "teams.reviewRemove", "teams.confirm", "teams.control", "teams.sendMessage",
-            "teams.answerAssignment", "teams.probeMember", "teams.closeReading", "teams.reviewPhoneStart")
+            "teams.answerAssignment", "teams.probeMember", "teams.closeReading", "teams.reviewPhoneStart", "teams.reviewMember")
     }
 
     fun clear() {
@@ -81,11 +81,29 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
         if (kind == "run") {
             result.put("messages", PocketWebState.publicValue(JSONArray(teamConversationRows(value))))
             controller.state.tasks.singleOrNull { it.raw.optString("feature") == "teams" && it.raw.optString("externalId") == value.optString("id")
-                && it.raw.optString("actorId", "owner") == "owner" && it.raw.optString("spaceId", "private") == "private" }
+                && it.raw.optString("actorId") == "owner" && it.raw.optString("spaceId") == "private" }
                 ?.let { result.put("taskId", it.id) }
         }
         return result
     }
+    private fun attentionFocus(value: JSONObject, locator: JSONObject): JSONObject {
+        val member = value.optJSONArray("members").objects().singleOrNull { it.optString("id") == locator.getString("memberId") }
+        val sameGeneration = value.optInt("generation") == locator.getInt("generation") && member?.optInt("generation") == locator.getInt("memberGeneration")
+        if (!sameGeneration) return JSONObject().put("kind", "changed").put("message", "原成员或运行已变化，已打开原协作记录；请核对当前进展。")
+        val item = if (locator.has("workItemId")) value.optJSONObject("workPlan")?.optJSONArray("items").objects().singleOrNull {
+            it.optString("workItemId") == locator.getString("workItemId") && it.optString("memberId") == locator.getString("memberId")
+                && (!locator.has("assignmentId") || it.optString("assignmentId") == locator.getString("assignmentId"))
+        } else null
+        if (locator.has("workItemId") && item == null) return JSONObject().put("kind", "changed").put("message", "原工作项已变化，已打开原协作记录；没有跳转到其他分工。")
+        if (locator.has("questionId")) {
+            val question = teamConversationRows(value).singleOrNull { it.optString("questionId") == locator.getString("questionId")
+                && it.optString("assignmentId") == locator.getString("assignmentId") && it.optString("memberId") == locator.getString("memberId") }
+            if (question == null || question.optString("state") != "pending") return JSONObject().put("kind", "changed").put("message", "这条原问题已处理或不再待回答，已打开原协作记录。")
+            return JSONObject().put("kind", "question").put("memberId", member!!.getString("id")).put("messageId", question.getString("messageId"))
+        }
+        return JSONObject().put("kind", if (item == null) "member" else "workItem").put("memberId", member!!.getString("id")).also { if (item != null) it.put("workItemId", item.getString("workItemId")) }
+    }
+
     private fun review(command: String, input: JSONObject): JSONObject {
         reviews.entries.removeAll { entry -> (entry.value.expires <= SystemClock.elapsedRealtime()).also { if (it) runCatching { entry.value.phonePage?.close() } } }
         check(reviews.size < 8) { "请先关闭已有团队操作审阅" }
@@ -127,8 +145,20 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 }
             } catch (failure: Exception) { phoneInFlight.set(false); workingPhonePage = null; runCatching { page?.close() }; throw failure }
         }
-        fun feature(command: String, input: JSONObject, messageId: String? = null) {
+        fun deliverReceipt(receipt: JSONObject) {
+            val reading = receipt.optJSONObject("reading")
+            if (reading == null || reading.optString("kind") != "run" || reading.has("taskId")) { deliver(receipt, null); return }
+            controller.readWebTeamTaskId(reading.getJSONObject("run").getString("id")) { taskId, error ->
+                if (currentWindow()) {
+                    if (taskId != null) reading.put("taskId", taskId)
+                    else reading.put("taskLookupNotice", error ?: "未找到这次协作的原任务绑定；记录仍可查看，没有猜测另一个任务。")
+                    deliver(receipt, null)
+                } else done(null, "原团队窗口已关闭；操作结果保留，请回原记录核对，没有自动重发")
+            }
+        }
+        fun feature(command: String, input: JSONObject, messageId: String? = null, attention: JSONObject? = null) {
             controller.requestFeatureReceipt("teams", command, input) { result, error ->
+                if (!currentWindow()) { done(null, "原团队窗口已关闭；请回原运行核对结果，没有自动重发"); return@requestFeatureReceipt }
                 if (error != null || result == null) deliver(null, error ?: "原团队操作没有返回回执")
                 else if (originalGeneration == generation && window == controller.webWindowTicket() && controller.webPrivateOwnerVisible()) try {
                     if (command == "sendMessage") check(result.optJSONObject("messageReceipt")?.optString("messageId") == messageId
@@ -137,9 +167,10 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                         && result.optString("questionId") == input.getString("questionId")) { "原问题回执身份不匹配" }
                     val receipt = JSONObject().put("command", command).put("confirmed", true).put("result", PocketWebState.publicValue(result))
                     messageId?.let { receipt.put("messageId", it) }
-                    if (command in setOf("get", "pause", "resume", "feedback", "continueMessages", "cancel", "sendMessage")) {
+                    if (command in setOf("get", "pause", "resume", "feedback", "continueMessages", "cancel", "sendMessage", "configureMember")) {
                         check(result.optString("id") == input.getString("runId")) { "原团队运行身份不匹配" }
                         receipt.put("reading", view("run", result))
+                        if (attention != null) receipt.put("focus", attentionFocus(result, attention))
                     }
                     if (command == "start") {
                         check(result.optString("id").isNotBlank()) { "团队启动尚未取得原运行身份" }
@@ -160,16 +191,44 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                             if (originalGeneration == generation && window == controller.webWindowTicket() && controller.webPrivateOwnerVisible()) {
                                 if (readError == null && current != null && current.optString("id") == input.getString("runId")) receipt.put("reading", view("run", current))
                                 else receipt.put("readRequired", true)
-                                deliver(receipt, null)
-                            }
+                                deliverReceipt(receipt)
+                            } else done(null, "原回答窗口已关闭；回答结果保留，请回原问题核对，没有自动重发")
                         }
                         return@requestFeatureReceipt
                     }
-                    deliver(receipt, null)
+                    deliverReceipt(receipt)
                 } catch (failure: Exception) { deliver(null, failure.message ?: "原团队回执待核对") }
             }
         }
         when (action) {
+            "teams.attention" -> {
+                fields(args, "afterRunId", "afterItemId", "limit")
+                val after = if (args.has("afterRunId")) text(args, "afterRunId", 36, empty = true) else ""
+                val afterItem = if (args.has("afterItemId")) text(args, "afterItemId", 320, empty = true) else ""
+                val limit = if (args.has("limit")) args.getInt("limit") else 8
+                require(limit in 1..8) { "团队待处理每页最多读取八次协作" }
+                controller.readWebTeamAttention(after, afterItem, limit) { value, error ->
+                    if (currentWindow()) deliver(value?.let { PocketWebState.publicValue(it) as JSONObject }, error)
+                    else done(null, "原待处理窗口已关闭，请重新读取")
+                }
+            }
+            "teams.readAttention" -> {
+                fields(args, "runId", "memberId", "generation", "memberGeneration", "workItemId", "assignmentId", "questionId")
+                val id = text(args, "runId"); text(args, "memberId")
+                require(args.opt("generation") is Int && args.opt("memberGeneration") is Int) { "原团队定位缺少运行与成员代次" }
+                if (args.has("workItemId")) text(args, "workItemId")
+                if (args.has("assignmentId")) text(args, "assignmentId")
+                if (args.has("questionId")) { text(args, "questionId"); text(args, "assignmentId") }
+                controller.readWebTeamSnapshot { value, error ->
+                    if (currentWindow()) {
+                        if (value == null || error != null) deliver(null, error ?: "原团队目录尚未读取")
+                        else try {
+                            snapshot = captureSnapshot(value); known(id, "runs")
+                            feature("get", JSONObject().put("runId", id), attention = JSONObject(args.toString()))
+                        } catch (failure: Exception) { deliver(null, failure.message ?: "原团队记录已不可用") }
+                    } else done(null, "原团队定位窗口已关闭，请重新打开原待处理记录")
+                }
+            }
             "teams.snapshot" -> {
                 fields(args)
                 controller.readWebTeamSnapshot { value, error ->
@@ -205,10 +264,11 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 require(supplied.objects().size == supplied.length()) { "成员必须是完整的原对象" }
                 val members = JSONArray(); val ids = mutableSetOf<String>()
                 supplied.objects().forEachIndexed { index, member ->
-                    fields(member, "id", "name", "role", "model", "modeId", "runner", "device", "assignment", "dependsOn", "externalExecutionRiskAcknowledged", "writeFiles", "remoteProduction")
+                    fields(member, "id", "name", "avatarShape", "role", "model", "modeId", "runner", "device", "assignment", "dependsOn", "externalExecutionRiskAcknowledged", "writeFiles", "remoteProduction")
                     val id = text(member, "id", 64); require(ids.add(id)) { "成员身份不能重复" }
                     val previous = old?.optJSONArray("members").objects().singleOrNull { it.optString("id") == id }
                     val captured = previous?.let { JSONObject(it.toString()) } ?: JSONObject().put("id", id).put("runner", "model").put("device", "phone")
+                    if (member.has("avatarShape")) captured.put("avatarShape", text(member, "avatarShape", 16))
                     captured.put("name", text(member, "name", 48).trim()).put("role", text(member, "role", 1200).trim())
                     val model = text(member, "model", 200, true).trim()
                     if (previous?.has("modelTarget") == true) require(model == previous.optString("model")) { "保留原模型目标，请在原模型设置中修改" }
@@ -331,6 +391,49 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 })
             }
             "teams.reviewRemove" -> { fields(args, "viewHandle"); val team = reading(text(args, "viewHandle"), "definition"); deliver(review("remove", JSONObject().put("id", team.getString("id")).put("expectedDefinition", team.toString())).put("definition", PocketWebState.publicValue(team)), null) }
+            "teams.reviewMember" -> {
+                fields(args, "viewHandle", "action", "memberId", "name", "avatarShape", "role", "assignment", "model", "newLeaderId")
+                val run = reading(text(args, "viewHandle"), "run")
+                check(run.optString("status") != "cancelled") { "这次协作已停止，历史成员保留" }
+                val action = text(args, "action", 16); require(action in setOf("add", "rename", "exit"))
+                val roster = run.optJSONArray("members").objects()
+                val input = JSONObject().put("runId", run.getString("id")).put("action", action)
+                    .put("expectedRevision", run.getLong("revision")).put("expectedGeneration", run.getInt("generation"))
+                if (action != "rename") {
+                    check(run.optString("mode") == "collaborate" && !run.has("workPlan") && (run.optString("researchExecutionFormat").isEmpty() || run.optString("researchExecutionFormat") == dev.pocketengine.features.teams.TeamCoordinator.RESEARCH_FORMAT)
+                        && !run.has("nativeWorkProfileModels") && roster.all { it.optString("runner", "model") == "model" && it.optString("device", "phone") == "phone" }) { "此团队的成员与原任务范围绑定，请回原任务处理" }
+                    check(run.optString("status") == "paused" || run.optString("phase") == "awaiting_member") { "请先暂停全队，再刷新并核对成员" }
+                }
+                val member = if (action == "add") {
+                    fields(args, "viewHandle", "action", "memberId", "name", "avatarShape", "role", "assignment", "model")
+                    val id = text(args, "memberId", 64)
+                    check(roster.none { it.optString("id") == id } && roster.count { !it.optBoolean("exited") } < 4 && roster.size < 16) { "当前成员已满或身份已存在；请刷新核对，不重用旧身份" }
+                    AgentSlot.normalize(JSONObject().put("id", id).put("name", text(args, "name", 48).trim())
+                        .put("avatarShape", text(args, "avatarShape", 16)).put("role", text(args, "role", 1200).trim())
+                        .put("assignment", text(args, "assignment", 2000).trim()).put("model", text(args, "model", 200, true).trim())
+                        .put("runner", "model").put("device", "phone"), roster.size).also { input.put("member", it) }
+                } else {
+                    val selected = roster.singleOrNull { it.optString("id") == text(args, "memberId", 64) && !it.optBoolean("exited") } ?: error("原成员已退出或不存在")
+                    input.put("memberId", selected.getString("id")).put("expectedConfigRevision", selected.optInt("configRevision", 1)).put("expectedMemberGeneration", selected.getInt("generation"))
+                    if (action == "rename") {
+                        fields(args, "viewHandle", "action", "memberId", "name", "avatarShape")
+                        val shape = text(args, "avatarShape", 16); require(shape in setOf("blob", "pebble", "squircle", "egg"))
+                        input.put("name", text(args, "name", 48).trim()).put("avatarShape", shape)
+                    } else {
+                        fields(args, "viewHandle", "action", "memberId", "newLeaderId")
+                        val others = roster.filter { !it.optBoolean("exited") && it.optString("id") != selected.getString("id") }
+                        val next = if (args.has("newLeaderId")) text(args, "newLeaderId", 64, true) else ""
+                        if (run.optString("leaderId") == selected.getString("id")) check(if (others.isEmpty()) next.isEmpty() else others.any { it.optString("id") == next }) { "请明确选择仍在队内的下一位负责人" }
+                        else require(next.isEmpty()) { "普通成员退出不更换负责人" }
+                        input.put("newLeaderId", next)
+                    }
+                    selected
+                }
+                val result = review("configureMember", input).put("member", PocketWebState.publicValue(member))
+                    .put("leaderId", run.optString("leaderId")).put("roster", PocketWebState.publicValue(JSONArray(roster)))
+                    .put("researchExit", action == "exit" && run.optString("researchExecutionFormat") == dev.pocketengine.features.teams.TeamCoordinator.RESEARCH_FORMAT)
+                deliver(result, null)
+            }
             "teams.confirm" -> {
                 fields(args, "reviewHandle")
                 val captured = reviews.remove(text(args, "reviewHandle")) ?: error("原操作审阅已使用或关闭，请先核对原回执")

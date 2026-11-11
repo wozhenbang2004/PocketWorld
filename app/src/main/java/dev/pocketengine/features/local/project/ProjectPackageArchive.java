@@ -29,7 +29,7 @@ public final class ProjectPackageArchive {
     public static final String FORMAT = "pocketworld.project-package.v1";
     public static final int MAX_FILES = 2000, MAX_FILE_BYTES = 2 * 1024 * 1024,
         MAX_TOTAL_BYTES = 16 * 1024 * 1024, MAX_ARCHIVE_BYTES = 20 * 1024 * 1024, MAX_MANIFEST_BYTES = 1024 * 1024;
-    private static final Set<String> PRIVATE_DIRECTORIES = Set.of(".git", "node_modules", ".venv", "venv", "__pycache__", ".gradle", ".pocketworld", ".pytest_cache", ".ssh", ".aws", ".azure", ".gnupg", ".config", ".npm", ".cache");
+    private static final Set<String> PRIVATE_DIRECTORIES = Set.of(".git", "node_modules", ".venv", "venv", "__pycache__", ".gradle", ".pocketworld", ".pytest_cache", ".ssh", ".aws", ".azure", ".gnupg", ".config", ".npm", ".cache", ".android");
     private static final Set<String> GENERATED_ROOTS = Set.of("build", "dist", "out", "target", "coverage");
     private ProjectPackageArchive() {}
 
@@ -152,8 +152,8 @@ public final class ProjectPackageArchive {
         for (String part : parts) if (PRIVATE_DIRECTORIES.contains(part)) return "dependency_environment_or_private_directory";
         if (!includeGeneratedRoots && GENERATED_ROOTS.contains(parts[0])) return "generated_root_not_selected";
         String name = parts[parts.length - 1].toLowerCase(java.util.Locale.ROOT);
-        if (!directory && (name.equals(".env") || name.startsWith(".env.") || Set.of(".npmrc", ".pypirc", ".netrc", ".git-credentials", "credentials.json", "accounts.json", "secrets.json", "token.json", "tokens.json").contains(name)
-            || name.matches("id_(rsa|dsa|ecdsa|ed25519)(\\.pub)?") || name.matches(".*\\.(pem|key|p12|pfx|jks|keystore|ppk|gpg)") || name.startsWith("service-account"))) return "credential_or_private_configuration";
+        if (!directory && (name.equals(".env") || name.startsWith(".env.") || Set.of(".npmrc", ".pypirc", ".netrc", ".git-credentials", "credentials.json", "accounts.json", "secrets.json", "token.json", "tokens.json", "local.properties", "key.properties", "keystore.properties", "signing.properties").contains(name)
+            || name.matches("id_(rsa|dsa|ecdsa|ed25519)(\\.pub)?") || name.matches(".*\\.(pem|key|p8|pk8|pkcs8|p12|pkcs12|pfx|jks|jceks|bks|keystore|ppk|gpg)(?:\\.(?:bak|backup|old))?") || name.startsWith("service-account"))) return "credential_or_private_configuration";
         return null;
     }
 
@@ -214,7 +214,10 @@ public final class ProjectPackageArchive {
 
     /** This bounded v1 never needs ZIP64/multi-disk. Validate the directory before constructing ZipFile. */
     private static void preflightDirectory(File archive)throws Exception {preflightDirectory(archive,MAX_FILES+1,MAX_TOTAL_BYTES+MAX_MANIFEST_BYTES);}
-    private static void preflightDirectory(File archive,int entryLimit,long expandedLimit)throws Exception {
+    /** Bounds APK ZIP declarations before Android parses resources. No extraction or signature claim. */
+    public static void preflightAndroidApk(File archive)throws Exception {preflightDirectory(archive,20000,256L*1024*1024,64L*1024*1024,65535);}
+    private static void preflightDirectory(File archive,int entryLimit,long expandedLimit)throws Exception {preflightDirectory(archive,entryLimit,expandedLimit,MAX_FILE_BYTES,4096);}
+    private static void preflightDirectory(File archive,int entryLimit,long expandedLimit,long entryByteLimit,int extraLimit)throws Exception {
         try(var channel=Files.newByteChannel(archive.toPath(),java.nio.file.StandardOpenOption.READ,LinkOption.NOFOLLOW_LINKS)){
             long size=channel.size();if(size<22||size>MAX_ARCHIVE_BYTES)throw new SecurityException("项目包ZIP大小无效");
             int tailSize=(int)Math.min(size,65557);java.nio.ByteBuffer tail=java.nio.ByteBuffer.allocate(tailSize).order(java.nio.ByteOrder.LITTLE_ENDIAN);channel.position(size-tailSize);readFully(channel,tail);int end=-1;
@@ -227,12 +230,12 @@ public final class ProjectPackageArchive {
             for(int i=0;i<count;i++){
                 if(at+46>central.limit()||central.getInt(at)!=0x02014b50)throw new SecurityException("项目包ZIP目录条目不完整");
                 int name=central.getShort(at+28)&65535,extra=central.getShort(at+30)&65535,comment=central.getShort(at+32)&65535,method=central.getShort(at+10)&65535;
-                if(name<1||name>1024||extra>4096||comment>4096||(central.getShort(at+34)&65535)!=0||method!=0&&method!=8)throw new SecurityException("项目包ZIP目录名/附加信息/压缩方式不支持");
+                if(name<1||name>1024||extra>extraLimit||comment>4096||(central.getShort(at+34)&65535)!=0||method!=0&&method!=8)throw new SecurityException("项目包ZIP目录名/附加信息/压缩方式不支持");
                 long localOffset=Integer.toUnsignedLong(central.getInt(at+42)),compressed=Integer.toUnsignedLong(central.getInt(at+20)),uncompressed=Integer.toUnsignedLong(central.getInt(at+24));expanded+=uncompressed;
-                if(comment!=0||!localOffsets.add(localOffset)||localOffset+30>offset||uncompressed>MAX_FILE_BYTES||expanded>expandedLimit)throw new SecurityException("项目包ZIP头重复、展开声明或注释超限");
+                if(comment!=0||!localOffsets.add(localOffset)||localOffset+30>offset||uncompressed>entryByteLimit||expanded>expandedLimit)throw new SecurityException("项目包ZIP头重复、展开声明或注释超限");
                 java.nio.ByteBuffer local=java.nio.ByteBuffer.allocate(30).order(java.nio.ByteOrder.LITTLE_ENDIAN);channel.position(localOffset);readFully(channel,local);
                 int localName=local.getShort(26)&65535,localExtra=local.getShort(28)&65535;
-                if(local.getInt(0)!=0x04034b50||(local.getShort(8)&65535)!=method||(local.getShort(6)&1)!=0||localName!=name||localExtra>4096||localOffset+30+localName+localExtra+compressed>offset)throw new SecurityException("项目包ZIP本地头/附加信息与有界目录不一致");
+                if(local.getInt(0)!=0x04034b50||(local.getShort(8)&65535)!=method||(local.getShort(6)&1)!=0||localName!=name||localExtra>extraLimit||localOffset+30+localName+localExtra+compressed>offset)throw new SecurityException("项目包ZIP本地头/附加信息与有界目录不一致");
                 if(at+46+name+extra+comment>central.limit())throw new SecurityException("项目包ZIP目录长度越界");
                 java.nio.ByteBuffer localPath=java.nio.ByteBuffer.allocate(name);readFully(channel,localPath);for(int n=0;n<name;n++)if(localPath.get(n)!=central.get(at+46+n))throw new SecurityException("项目包ZIP本地路径与目录不一致");
                 at+=46+name+extra+comment;

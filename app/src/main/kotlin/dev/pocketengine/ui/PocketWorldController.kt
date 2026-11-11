@@ -322,6 +322,12 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     internal fun nativeRuntimeSetup() = app.runtimeSetupForOwner()
     internal fun webPluginFeatureHost() = app.features
     internal fun readOriginalDeviceTask(id: String): JSONObject = app.tasks.get(id, false)
+    internal fun prepareOwnerPhoneControl(id: String, deadline: Long, tools: Int, current: () -> Boolean): JSONObject =
+        app.tasks.prepareOwnerPhoneControl(id, deadline, tools) { !closed && webPrivateOwnerVisible() && current() }
+    internal fun reviewOwnerPhoneControl(id: String, current: () -> Boolean) =
+        app.tasks.reviewOwnerPhoneControl(id) { !closed && webPrivateOwnerVisible() && current() }
+    internal fun startOwnerPhoneControl(review: dev.pocketengine.store.TaskStore.OwnerPhoneControlReview) = app.startOwnerPhoneControl(review)
+
     internal fun controlOriginalDeviceTask(id: String, run: String, epoch: Int, action: String): JSONObject =
         app.controlDeviceExecution(id, run, epoch, action)
     internal fun reviewPendingDeviceGoalCancellation(id: String) = app.reviewPendingDeviceGoalCancellation(id)
@@ -536,6 +542,39 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     internal fun localTerminalHost() = app.features
     internal fun describeLocalCheckout(checkout: String): JSONObject = dev.pocketengine.features.local.project.ProjectSources.describe(app.features.module("local").handle("export", JSONObject().put("checkoutId", checkout)))
+    internal fun projectDevelopmentForWeb() = app.projectDevelopmentForOwner()
+    internal fun projectDevelopmentPresentationForWeb() = app.getSharedPreferences("project_development_presentation", android.content.Context.MODE_PRIVATE)
+    internal fun projectDevelopmentModelForWeb(): JSONObject {
+        val model = app.captureConversationModel("", "")
+        val configured = runCatching { dev.pocketengine.store.SettingsStore.validate(model); dev.pocketengine.runtime.ModelGateway.validate(model) }.isSuccess
+        return JSONObject().put("configured", configured).put("label", model.model).put("provider", model.provider).put("route", if (model.usesAccount()) "account" else "api_key")
+    }
+    /** Same original project/Assistant admission. A closed queued window is
+     * positively not entered; failures after entry remain query-only unknown. */
+    internal fun startProjectDevelopmentForWeb(input: JSONObject, current: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
+        check(webPrivateOwnerVisible() && current()) { "原项目审阅窗口已关闭" }
+        val frozen = JSONObject(input.toString())
+        io.execute {
+            var entered = false
+            // Original Assistant slot precedes Engine's admission monitor. Do
+            // not invert that lock order by holding app around a new send.
+            val result = runCatching {
+                check(webPrivateOwnerVisible() && current()) { "原项目审阅窗口已关闭，没有开始任务" }
+                val source = app.projectDevelopmentForOwner().sourceForOwner(frozen.getString("projectId"), frozen.getString("checkoutId"))
+                check(source.getString("sourceDigest") == frozen.getString("expectedSourceDigest")) { "审阅后的源码已变化，没有开始任务，请重新核对" }
+                check(projectDevelopmentModelForWeb().optBoolean("configured")) { "默认模型配置已不可用，没有开始任务" }
+                check(current()) { "原项目审阅窗口已变化，没有开始任务" }
+                entered = true
+                app.projectDevelopmentForOwner().startReviewedForOwner(frozen, java.util.function.BooleanSupplier { current() })
+            }
+            main.post {
+                result.fold({ done(it, null) }, {
+                    val notEntered = if (!entered) JSONObject().put("clientMessageId", frozen.getString("clientMessageId")).put("status", "not_admitted").put("notAdmitted", true) else null
+                    done(notEntered, message(it))
+                })
+            }
+        }
+    }
     private var attachmentComposerKey: String? = null
     private var attachmentComposerEpoch = -1
     private data class OriginalSourceStage(val key:String,val revision:Long,val viewEpoch:Int,val conversation:String)
@@ -1173,6 +1212,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         private set
     fun skillExecutionHost(): dev.pocketengine.features.skills.NativeSkillExecutionHost = app.skillExecutionHost ?: throw IllegalStateException("技能执行宿主不可用")
     fun taskCapabilitySnapshot(taskId: String): JSONObject = app.taskCapabilitySnapshot(taskId)
+    fun taskPermissionPolicySnapshot(target: JSONObject): JSONObject = app.taskPermissionPolicySnapshot(target)
+    fun saveTaskPermissionPolicy(target: JSONObject, global: Boolean, policy: JSONObject?, revision: Long, control: dev.pocketengine.core.RunControl): JSONObject = app.saveTaskPermissionPolicy(target, global, policy, revision, control)
     fun pluginExecutionHost(): dev.pocketengine.features.NativePluginHost = app.pluginHost ?: throw IllegalStateException("JS 扩展宿主不可用")
     fun readTaskSkillArtifact(taskId: String, operationId: String, artifactId: String, sha256: String): ByteArray = app.tasks.readSkillArtifact(taskId, operationId, artifactId, sha256)
     fun runEcosystemControlWork(work: Runnable) { if (closed) throw java.util.concurrent.RejectedExecutionException(); controls.execute(work) }
@@ -1366,6 +1407,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     private fun retainedGroupReceipts(id: String, receipt: JSONObject): Map<String, JSONObject> = (state.groupOwnerReceipts + (id to receipt)).entries.toList().takeLast(64).associate { it.toPair() }
     fun nativeDeviceWorkspace(): dev.pocketengine.features.devices.NativeDeviceWorkspaceHost? = app.deviceWorkspaceHost
     fun nativeDeviceTaskScope(): dev.pocketengine.features.devices.NativeDeviceTaskScopeHost? = app.deviceTaskScopeHost
+    internal fun prepareOwnerDeviceTask(requestId: String, goal: String, deadlineAt: Long, tools: Int, models: Int, current: () -> Boolean): JSONObject =
+        app.tasks.prepareOwnerDeviceTask(requestId, goal, deadlineAt, tools, models) { !closed && webPrivateOwnerVisible() && current() }
     // Existing I/O queue for pairing/metadata waits. Urgent original stop never waits behind it.
     fun runDeviceWorkspaceWork(work: Runnable) { check(!closed); io.execute(work) }
     fun runDeviceWorkspaceControlWork(work: Runnable) { check(!closed); controls.execute(work) }
@@ -3112,6 +3155,28 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         return app.startProjectWithMemoryForOwner(input, original.consent)
     }
     fun openTeam(runId: String) { state = state.copy(teamRunId = runId,teamAssignmentFocus=null); feature("teams", "get", JSONObject().put("runId", runId)) }
+    /** Resolve an original retained team task, not the recent UI task window or its budget parent. */
+    internal fun readWebTeamTaskId(runId: String, done: (String?, String?) -> Unit) {
+        check(webPrivateOwnerVisible()) { "请在前台私人工作区读取原团队任务" }
+        require(runId.matches(Regex("[a-f0-9-]{36}"))) { "原团队身份无效" }
+        val window = webWindowTicket()
+        io.execute {
+            val result = runCatching {
+                check(webPrivateOwnerVisible() && webWindowTicket() == window) { "原工作页面已关闭" }
+                val id = app.tasks.externalTask("teams", runId) ?: app.tasks.operationTask("teams", runId)
+                id?.also {
+                    val task = app.tasks.get(it, false)
+                    check(task.optString("actorId") == "owner" && task.optString("spaceId") == "private"
+                        && task.optString("feature") == "teams" && task.optString("runId") == runId
+                        && task.optString("externalId", runId) == runId) { "原任务与团队运行身份不匹配" }
+                }
+            }
+            main.post {
+                if (!webPrivateOwnerVisible() || webWindowTicket() != window) done(null, "原工作页面已变化，请重新读取")
+                else result.fold({ done(it, null) }, { done(null, message(it)) })
+            }
+        }
+    }
     internal fun readWebTeamSnapshot(done: (JSONObject?, String?) -> Unit) {
         readWebOwnerFeatureSnapshot("teams", done)
     }
@@ -3155,6 +3220,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun resumeTask(task: UiTask, feedback: String) {
         if (isPhoneTask(task)) { controlOriginalPhone(task, "resume", feedback); return }
         val input = reviewedTaskInput(task).put("feedback", feedback).put("screenConsent", true).put("executionMode", task.executionMode)
+        if (task.raw.has("ownerDeviceWork") && task.raw.optString("runId").isEmpty() && task.raw.optInt("coordinatorEpoch") == 0)
+            input.put("deviceWorkStartFingerprint", dev.pocketengine.store.TaskStore.ownerDeviceWorkStartFingerprint(task.raw))
         if (task.raw.optJSONObject("origin")?.optString("kind") == "group") input.put("taskRevision", task.raw.getLong("groupStateRevision"))
         native("resumeTask", input)
     }
@@ -4104,7 +4171,10 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 val request = JSONObject().put("cursor", cursor).put("limit", if (taskId == null) 40 else 24)
                 val action = if (taskId == null) "listTaskHistory" else "getTaskHistoryPage"
                 if (taskId != null) request.put("taskId", taskId).put("section", section).put("maxBytes", 65536)
-                val result = app.dispatchOwnerAction(action, request)
+                val result = if (taskId == null && section in setOf("attention", "taskUpdates")) {
+                    check(privateWorkspaceView()) { "请从本机主人界面读取待处理任务" }
+                    app.tasks.taskNotificationSummaryPage(cursor, section == "taskUpdates")
+                } else app.dispatchOwnerAction(action, request)
                 main.post { if (!closed) done(result, null) }
             } catch (error: Exception) { main.post { if (!closed) done(null, message(error)) } }
         }

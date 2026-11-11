@@ -27,7 +27,7 @@ public final class RuntimeSetupState {
             long completed=Math.max(0,receipt.optLong("completedBytes",0)),total=Math.max(0,receipt.optLong("totalBytes",0));
             boolean bytes=phase.equals("downloading")||phase.startsWith("extracting_")||phase.equals("verifying_download");
             boolean items=phase.equals("probing_tools")||phase.equals("verifying_installed_tools");
-            JSONObject failure=error(receipt,preparation,observationError);
+            JSONObject failure=error(receipt,observationError);
             operation=new JSONObject().put("taskId",task.getString("id")).put("runId",task.getString("runId"))
                     .put("epoch",task.getInt("coordinatorEpoch")).put("operationId",row.getString("operationId"))
                     .put("status",status).put("phase",phase).put("completedBytes",completed).put("totalBytes",total)
@@ -39,7 +39,7 @@ public final class RuntimeSetupState {
         if(original==null&&availability.optBoolean("preparationInProgress"))status="running";
         else if(original==null&&!canPrepare&&runtime.optBoolean("preparationAvailable")&&!runtime.optBoolean("canExecute"))status="blocked";
         String message=switch(status){
-            case "ready" -> "本机工具已准备好，可以运行项目和本机技能。";
+            case "ready" -> "本机基础工具已准备好；项目依赖、运行范围与执行批准仍需单独核对。";
             case "running" -> "正在准备本机工具；可以离开此页面，返回后继续查看同一次安装。";
             case "cancel_requested" -> "已请求停止，正在等待原安装释放资源；现有项目和已完成的下载保留。";
             case "cancelled" -> "本次准备已停止；再次准备会使用已校验的下载，已有工具环境保留。";
@@ -59,13 +59,16 @@ public final class RuntimeSetupState {
                 .put("modelRequired",false).put("projectRequired",false).put("automaticReplay",false);
     }
 
-    private static JSONObject error(JSONObject receipt,JSONObject progress,String observationError)throws Exception {
+    private static JSONObject error(JSONObject receipt,String observationError)throws Exception {
         String code=receipt.optString("error",receipt.optString("code",""));
         if(code.isEmpty())code=observationError==null?"":observationError;
         if(code.isEmpty())return null;
         JSONObject details=new JSONObject();
-        for(String key:new String[]{"launchErrno","terminationSignal","exitCode","timedOut","nativeResultContract","effectStatus","cancelDelivery","observation"})if(receipt.has(key))details.put(key,receipt.get(key));
-        if(code.equals(progress.optString("error"))&&progress.optJSONObject("failure")!=null)details.put("preparationFailure",new JSONObject(progress.getJSONObject("failure").toString()));
+        for(String key:new String[]{"launchErrno","terminationSignal","exitCode","timedOut","nativeResultContract","effectStatus","cancelDelivery","observation","failedPreparationPhase"})if(receipt.has(key))details.put(key,receipt.get(key));
+        // A later preparation may have the same error code for another cause.
+        // Recovery guidance belongs to this original receipt, not the global
+        // preparation.json observation; old receipts without it stay unknown.
+        if(receipt.optJSONObject("preparationFailure")!=null)details.put("preparationFailure",new JSONObject(receipt.getJSONObject("preparationFailure").toString()));
         return new JSONObject().put("code",code).put("message",receipt.optString("message",code)).put("details",details);
     }
 }

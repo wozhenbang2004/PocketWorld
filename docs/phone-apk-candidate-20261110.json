@@ -1,0 +1,121 @@
+{
+  "schema": "pocketworld.research.android-apk-candidate.v1",
+  "researchedAt": "2026-11-10",
+  "purpose": "Research metadata only. Not an install catalog or runtime capability.",
+  "readyForInstallation": false,
+  "abi": "arm64-v8a",
+  "guest": "Ubuntu 24.04 ARM64 glibc under existing PRoot",
+  "candidate": {
+    "jdk": "Temurin 17.0.21+9",
+    "gradle": "8.9",
+    "agp": "8.7.3",
+    "compileSdk": 35,
+    "buildTools": "35.0.1",
+    "supported": false,
+    "actualPhoneBuildObserved": false
+  },
+  "artifacts": [
+    {
+      "component": "jdk",
+      "name": "OpenJDK17U-jdk_aarch64_linux_hotspot_17.0.21_9.tar.gz",
+      "url": "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.21%2B9/OpenJDK17U-jdk_aarch64_linux_hotspot_17.0.21_9.tar.gz",
+      "archiveBytes": 192336814,
+      "sha256": "3e4eca7ead088f080af1476007decf010a240a1eb4e1e78c54fa32fbcc347084",
+      "identityEvidence": "GitHub release asset digest, not locally downloaded/verified; detached signature exists but not verified",
+      "unpackedBytes": null
+    },
+    {
+      "component": "gradle",
+      "name": "gradle-8.9-bin.zip",
+      "url": "https://services.gradle.org/distributions/gradle-8.9-bin.zip",
+      "archiveBytes": 136114148,
+      "sha256": "d725d707bfabd4dfdc958c624003b3c80accc03f7037b5122c4b1d0ef15cecab",
+      "wrapperJarSha256": "498495120a03b9a6ab5d155f5de3c8f0d986a449153702fb80fc80e134484f17",
+      "identityEvidence": "https://gradle.org/release-checksums/",
+      "unpackedBytes": null
+    },
+    {
+      "component": "native-build-tool",
+      "name": "aapt2",
+      "url": "https://github.com/Commit451/android-arm-build-tools/releases/download/platform-tools-35.0.1/aapt2",
+      "archiveBytes": 5191416,
+      "sha256": "c57d02d2986d7d68147d74525ad8a5fbb105f12723b33f1ce9eab12acd238cf0",
+      "sourceCommit": "51138264630dad250b514b7796e47d700fdad38e",
+      "identityEvidence": "GitHub release asset digest only; executable not inspected or run",
+      "requiredLibc": "glibc (build container Debian 12)",
+      "localByteVerification": false
+    },
+    {
+      "component": "native-build-tool",
+      "name": "aidl",
+      "url": "https://github.com/Commit451/android-arm-build-tools/releases/download/platform-tools-35.0.1/aidl",
+      "archiveBytes": 2234728,
+      "sha256": "9ae2dfac8ff49f34d493c2fd3d96f6153563f2ec0f07d18f6f661d0e8403d6a2",
+      "sourceCommit": "51138264630dad250b514b7796e47d700fdad38e",
+      "identityEvidence": "GitHub release asset digest only; executable not inspected or run",
+      "requiredLibc": "glibc (build container Debian 12)",
+      "localByteVerification": false
+    },
+    {
+      "component": "native-build-tool",
+      "name": "split-select",
+      "url": "https://github.com/Commit451/android-arm-build-tools/releases/download/platform-tools-35.0.1/split-select",
+      "archiveBytes": 1314616,
+      "sha256": "172ecf6c4e93cc6f80a544f48b9a8fe770dd67f83b2f277504291cb4d1b82e3e",
+      "sourceCommit": "51138264630dad250b514b7796e47d700fdad38e",
+      "identityEvidence": "GitHub release asset digest only; executable not inspected or run",
+      "requiredLibc": "glibc (build container Debian 12)",
+      "localByteVerification": false
+    },
+    {
+      "component": "native-build-tool",
+      "name": "zipalign",
+      "url": "https://github.com/Commit451/android-arm-build-tools/releases/download/platform-tools-35.0.1/zipalign",
+      "archiveBytes": 199832,
+      "sha256": "d0688e26a0960b010c9702c4a4f6e53308d239a618b1dd0e5d0f4c5ad1c84fe6",
+      "sourceCommit": "51138264630dad250b514b7796e47d700fdad38e",
+      "identityEvidence": "GitHub release asset digest only; executable not inspected or run",
+      "requiredLibc": "glibc (build container Debian 12)",
+      "localByteVerification": false
+    },
+    {
+      "component": "sdk-platform",
+      "name": "platform-35_r02.zip",
+      "candidateUrl": "https://dl.google.com/android/repository/platform-35_r02.zip",
+      "archiveBytes": 64273788,
+      "sha1": "0bb560a90a7a2cbd0dd8348224d518b638fe7949",
+      "sha256": null,
+      "identityEvidence": "F-Droid SDK transparency log mirror commit dae05c5c31b45d5ef52a90af7603881d0805e238; direct Google feed unavailable in this pass",
+      "ready": false
+    },
+    {
+      "component": "sdk-build-tools",
+      "name": "build-tools_r35.0.1_linux.zip",
+      "candidateUrl": "https://dl.google.com/android/repository/build-tools_r35.0.1_linux.zip",
+      "archiveBytes": 61959297,
+      "sha1": "e009a9b188cfeb1d2b4c318ab5cb4f1ddc368861",
+      "sha256": null,
+      "identityEvidence": "Same F-Droid mirror; do not infer ARM64 host tools from host-os linux",
+      "ready": false
+    }
+  ],
+  "blockers": [
+    "SDK official artifact SHA256 and source/notice verification incomplete",
+    "Expanded and peak installation storage unknown",
+    "Full profile not integrated into original RuntimeSetupHost",
+    "No binary/PRoot/Android execution proof",
+    "No complete Maven cache or offline proof",
+    "No supported native NDK build route",
+    "Current module build outputs can enter source snapshots",
+    "Managed artifact collection is limited to 2MiB",
+    "APK verification/private signing/owner installation flow not implemented"
+  ],
+  "prohibitedAssumptions": [
+    "Asset metadata is not a local hash verification",
+    "Do not substitute a new version or mutable tag",
+    "No SDK license acceptance has occurred",
+    "No shared downloaded debug private key",
+    "No install/run/grants arise from this file"
+  ]
+}
+

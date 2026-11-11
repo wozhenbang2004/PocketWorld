@@ -59,7 +59,7 @@ public final class DeviceCapabilityPort implements CapabilityPort {
         this(tasks,coordinator,original,selectedRoutes,actualImages,null);
     }
     public DeviceCapabilityPort(TaskStore tasks,DeviceTaskCoordinator coordinator,RunControl original,Iterable<NativeRoute> selectedRoutes,VerifiedImages actualImages,ReceivedFiles receivedFiles){
-        files=receivedFiles;visual=new DeviceVisualFrames(actualImages,original);semantic=new DeviceSemanticObservations(original);this.tasks = java.util.Objects.requireNonNull(tasks); devices = tasks.deviceTasks(); this.coordinator = java.util.Objects.requireNonNull(coordinator);
+        files=receivedFiles;visual=new DeviceVisualFrames(actualImages,original,tasks);semantic=new DeviceSemanticObservations(original);this.tasks = java.util.Objects.requireNonNull(tasks); devices = tasks.deviceTasks(); this.coordinator = java.util.Objects.requireNonNull(coordinator);
         this.original = java.util.Objects.requireNonNull(original); RunControl.HostRunIdentity run = original.hostRunIdentity();
         if (run == null) throw new SecurityException("设备调用必须属于原TaskStore执行");
         taskId = run.taskId(); runId = run.runId(); epoch = run.epoch();

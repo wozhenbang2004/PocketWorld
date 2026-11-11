@@ -6,7 +6,7 @@ import { ProgressBar } from './library';
 import { backgroundConnection } from './forms-library/host-contracts';
 import { bridge, type PocketSnapshot } from './bridge';
 import { permissionLabel, readSetup, readSetupRuntime, readSetupRuntimeReview, runtimeCancelInput, runtimeLogText, runtimePreparing, runtimeProgressLabel,
-  runtimePhaseLabel, runtimeStatusLabel, setupBytes, setupCapabilities, setupDetails, setupModelLabel, setupObject, setupSaveConfirmed, setupSaveInput,
+  runtimePhaseLabel, runtimeRecoveryHint, runtimeStatusLabel, runtimeToolSummary, setupBytes, setupCapabilities, setupDetails, setupModelLabel, setupObject, setupSaveConfirmed, setupSaveInput,
   speechNetworkLabel, type SetupCapability, type SetupPermission, type SetupPreferences, type SetupRead, type SetupRuntime, type SetupRuntimeReview, type SetupStep } from './setup-contract';
 import './shell-library/affect-workflows.css';
 import './setup.css';
@@ -122,10 +122,18 @@ function RuntimePreparation({ preparation, can, blocked }: { preparation: Return
   const locked = blocked || reading || !!working, running = runtimePreparing(view), operation = view?.operation;
   const reviewDetails = review ? { effects: review.review.effects, runtime: review.review.runtimeIdentity, catalog: review.review.catalogIdentity } : null;
   const originalError = operation?.error;
+  const recoveryHint = view ? runtimeRecoveryHint(view) : '';
+  const failedPhase = setupObject(originalError?.details).failedPreparationPhase;
   return <section className="pw-setup-runtime" aria-label="开发工具准备" aria-busy={reading || !!working}>
     <div className="pw-setup-section-title"><div><h3>手机开发工具</h3><p role="status">{view ? runtimeStatusLabel(view) : reading ? '正在检查' : '尚未检查'}</p></div>
       <Button variant="ghost" leadingIcon={IconRefresh} disabled={locked || !can('setup.runtime.read')} onClick={() => void preparation.read()}>刷新</Button></div>
     {view?.message && <p className="pw-setup-copy">{view.message}</p>}
+    <p className="pw-setup-copy">用于 Web / Node.js 项目、Python 与本机命令。普通对话不需要安装，也不需要先开放手机控制权限。</p>
+    {view && <Accordion className="pw-setup-details"><AccordionItem id="setup-runtime-capabilities" title="工具与支持范围" description={view.ready ? '基础工具可用，不等于项目已配置' : '安装内容与当前实际状态'}>
+      {runtimeToolSummary(view).map(tool => <SetupRow key={tool.name} title={tool.label} status={tool.status}/>)}
+      <p className="pw-setup-copy">项目还可能需要安装依赖、配置入口，并单独批准运行。本机工具不会自动挂载到模型，也不会代替执行审批。</p>
+      <p className="pw-setup-copy">当前不包含完整的 JDK、Gradle 与 Android SDK。识别到 Android 项目，不代表已经能在手机构建 APK。</p>
+    </AccordionItem></Accordion>}
     {!can('setup.runtime.read') && <p className="pw-setup-copy">当前应用尚未接入工具准备，请更新应用后重试。</p>}
     {running && operation && <div className="pw-setup-progress">
       <ProgressBar label={runtimePhaseLabel(operation.phase)} value={operation.fraction ?? undefined} maxValue={1} isIndeterminate={operation.fraction == null} showValueLabel={operation.fraction != null} size="sm"/>
@@ -133,12 +141,14 @@ function RuntimePreparation({ preparation, can, blocked }: { preparation: Return
     </div>}
     {error && <p className="pw-setup-error" role="alert">{error}</p>}
     {originalError?.message && <p className="pw-setup-error" role="alert">{originalError.message}</p>}
+    {recoveryHint && <p className="pw-setup-copy" role="status">{recoveryHint}</p>}
     {view?.status === 'interrupted' && <p className="pw-setup-copy">上一次准备未确认完成。先刷新检查，再按当前状态继续。</p>}
     {review ? <section className="pw-setup-install-review" aria-label="确认工具准备">
       <h4>{review.review.title || '准备这些开发工具'}</h4><p>{review.review.summary}</p>
       <p className="pw-setup-download">{review.review.downloadBytes == null ? '下载大小尚未确认' : `基础下载约 ${setupBytes(review.review.downloadBytes)}`}{review.review.additionalDownloads ? '，安装过程中还会下载依赖。' : '。'}</p>
       {review.review.minimumFreeBytes != null && <p>开始前至少需要 {setupBytes(review.review.minimumFreeBytes)} 可用空间。</p>}
-      {review.review.existingGenerationRetained && view?.ready && <p>现用工具版本会保留。</p>}
+      <p>首次准备需要联网下载工具与系统依赖。网络中断后不会自动重试；返回本页可查看同一次准备和原日志。</p>
+      {review.review.existingGenerationRetained && <p>已有工具版本和项目文件保留；修复会核对当前工具，必要时准备新版本，不清空原环境。</p>}
       <Accordion><AccordionItem id="setup-install-effects" title="查看安装内容"><pre>{setupDetails(reviewDetails)}</pre></AccordionItem></Accordion>
       <div className="pw-setup-actions"><Button variant="ghost" disabled={!!working} onClick={preparation.dismissReview}>暂不安装</Button>
         <Button disabled={locked || !can('setup.runtime.start')} onClick={() => void preparation.start()}>{working === 'setup.runtime.start' ? '正在开始…' : '开始准备'}</Button></div>
@@ -151,6 +161,7 @@ function RuntimePreparation({ preparation, can, blocked }: { preparation: Return
     {(originalError || log || view && ['failed', 'blocked', 'interrupted'].includes(view.status)) && <Accordion className="pw-setup-details">
       <AccordionItem id="setup-runtime-details" title="运行详情与日志" description={originalError?.code || undefined}>
         {operation?.phase && <p>原始阶段：{operation.phase}</p>}
+        {typeof failedPhase === 'string' && failedPhase && <p>失败发生在：{runtimePhaseLabel(failedPhase)}（{failedPhase}）</p>}
         {originalError?.code && <p>错误代码：{originalError.code}</p>}{originalError?.details != null && <pre>{setupDetails(originalError.details)}</pre>}
         {log && <pre className="pw-setup-log" tabIndex={0}>{log}</pre>}
         {(logTrimmed || view?.logs?.outputTruncated) && <p>这里只保留部分日志；底层输出已截断。</p>}

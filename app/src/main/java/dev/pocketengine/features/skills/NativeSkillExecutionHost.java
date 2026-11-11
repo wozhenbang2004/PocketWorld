@@ -144,10 +144,13 @@ public final class NativeSkillExecutionHost implements AutoCloseable {
             JSONObject original=new JSONObject(row.getJSONObject("arguments").getJSONObject("nativeSkill").toString());if(row.optJSONObject("receipt")!=null)original.put("receipt",row.getJSONObject("receipt"));
             executions.put(row.put("artifactAvailability",SkillExecutionRecords.artifactAvailability(original)));
         }}
+        JSONObject toolInventory;
+        try{toolInventory=tasks.ownerToolInventory(taskId);}
+        catch(Exception unavailable){toolInventory=new JSONObject().put("state","unavailable").put("executionAuthorized",false).put("message","原任务工具记录暂不可核对；下方原脚本回执仍可查看。");}
         JSONObject configState=configuration.snapshot();
         boolean configurationApplicable=true;
         if(nativeScope!=null&&configState.optBoolean("configured"))try{requireExecutionProject(nativeScope,configuration.current());}catch(Exception different){configurationApplicable=false;}
-        return new JSONObject().put("taskId",taskId).put("goal",task.optString("goal")).put("configuration",configState).put("skills",related).put("pluginNeeds",needs)
+        return new JSONObject().put("taskId",taskId).put("goal",task.optString("goal")).put("configuration",configState).put("toolInventory",toolInventory).put("skills",related).put("pluginNeeds",needs)
                 .put("executions",executions).put("reviewPending",pendingReview(taskId)!=null).put("scriptPreparationRelevant",scriptsRelevant||pendingReview(taskId)!=null||executions.length()>0||configState.optBoolean("recoveryRequired")).put("matching","lexical-v1").put("phoneExecution",phonePreparation(nativeScope)).put("executionAuthorized",false).put("businessVerified",false)
                 .put("ownerInvocation",new JSONObject().put("available",nativeScope!=null&&configurationApplicable&&ownerTaskEligible(task)&&!tasks.hasUnresolved(taskId)).put("projectScopeAvailable",nativeScope!=null).put("projectConfigurationCompatible",configurationApplicable).put("skillScopeFingerprint",nativeScope==null?"":SkillSourcePolicy.scopeFingerprint(nativeScope)).put("projectId",nativeScope==null?"":nativeScope.optString("projectId")).put("taskPin",ownerTaskPin(task)).put("skills",ownerSkills).put("executionAuthorized",false));
     }

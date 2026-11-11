@@ -8,6 +8,14 @@ import org.json.JSONObject;
 /** Owner preferences select a reviewer, never a system permission or task grant. */
 public final class CapabilityApprovalPolicy {
     public enum Decision { NATIVE, ALLOW, ASK, DENY, REVIEW }
+    /** Same private-run eligibility for dispatch and owner presentation; no grants are created. */
+    public static boolean appliesToPrivateTask(JSONObject task) {
+        return task!=null&&task.optString("kind").matches("phone|assistant")
+                &&"owner".equals(task.optString("actorId"))&&"private".equals(task.optString("spaceId"))
+                &&task.optJSONObject("origin")==null&&!task.has("workProfileRef")&&!task.has("workProfileIntent")
+                &&!"owner_work".equals(task.optString("executionRole"));
+    }
+
     private final String mode;
     private final String instructions;
     private final Map<String,Decision> tools=new HashMap<>();

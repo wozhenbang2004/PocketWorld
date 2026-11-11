@@ -273,6 +273,8 @@ class ComposeActivity : ComponentActivity() {
     }
     override fun onResume() {
         super.onResume()
+        dev.pocketengine.features.remoteinbox.RemoteInboxNotifications.recoverCached(this)
+        dev.pocketengine.features.remoteinbox.RemoteInboxJobService.foreground(this)
         if (businessMounted && !businessCurrent()) {
             crossedBootstrap = true
             if (::webHost.isInitialized) webHost.close()
@@ -318,11 +320,20 @@ class ComposeActivity : ComponentActivity() {
     private fun deliverRemoteInbox(intent: Intent?) {
         if (intent?.action != dev.pocketengine.features.remoteinbox.RemoteInboxNotifications.OPEN) return
         intent.action = null
-        dev.pocketengine.features.remoteinbox.RemoteInboxStore.get(this).signalOpen()
+        val store = dev.pocketengine.features.remoteinbox.RemoteInboxStore.get(this)
+        val config = intent.getStringExtra(dev.pocketengine.features.remoteinbox.RemoteInboxNotifications.CONFIG_EXTRA)
+        if (config == null) store.signalOpen()
+        else store.signalOpen(config, intent.getLongExtra(dev.pocketengine.features.remoteinbox.RemoteInboxNotifications.SEQ_EXTRA, 0),
+            intent.getStringExtra(dev.pocketengine.features.remoteinbox.RemoteInboxNotifications.SOURCE_EXTRA))
+        intent.removeExtra(dev.pocketengine.features.remoteinbox.RemoteInboxNotifications.CONFIG_EXTRA)
+        intent.removeExtra(dev.pocketengine.features.remoteinbox.RemoteInboxNotifications.SEQ_EXTRA)
+        intent.removeExtra(dev.pocketengine.features.remoteinbox.RemoteInboxNotifications.SOURCE_EXTRA)
         if (::controller.isInitialized) controller.refresh()
     }
     private fun deliverRemoteAttention(intent: Intent?) {
-        dev.pocketengine.features.remote.RemoteAttentionNotifications.openRequestedTask((application as EngineApplication).tasks, intent) { controller.showRemoteAttention(it) }
+        val app = application as EngineApplication
+        dev.pocketengine.features.remote.RemoteAttentionNotifications.openRequestedTask(app.tasks, intent,
+            { controller.showRemoteAttention(it) }, { app.error(it) })
     }
     private fun deliverAccountEntry(intent: Intent?) {
         if (intent?.getBooleanExtra("openChatGptAccounts", false) != true) return
@@ -357,6 +368,10 @@ class ComposeActivity : ComponentActivity() {
     }
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (permissions.indices.any { permissions[it] == android.Manifest.permission.POST_NOTIFICATIONS &&
+                grantResults.getOrNull(it) == android.content.pm.PackageManager.PERMISSION_GRANTED }) {
+            dev.pocketengine.features.remoteinbox.RemoteInboxNotifications.recoverCached(this)
+        }
         if (!acceptBusinessResult()) return
         media.onRequestPermissionsResult(requestCode, permissions, grantResults)
         controller.realtimePermissionsChanged()

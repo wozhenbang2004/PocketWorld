@@ -53,6 +53,8 @@ public final class TeamsModule implements EngineModule {
     /** The original parent retains this native ticket, never a later lookup by operation ID. */
     public synchronized TeamCoordinator.OriginalResearchStart startOriginalResearch(JSONObject input)throws Exception{if(researchHost==null)throw new SecurityException("原持续研究宿主尚未挂载");return coordinator.startOriginalResearch(definition(input.getString("teamId")),JsonFiles.text(input,"goal",8000),input.optInt("rounds",1),context.model(),input.getString("_operationId"),evidenceFactory,externalFactory);}
     private synchronized JSONObject definition(String id)throws Exception{JSONArray all=definitions();for(int i=0;i<all.length();i++)if(id.equals(all.getJSONObject(i).getString("id")))return new JSONObject(all.getJSONObject(i).toString());throw new SecurityException("原已配置团队不存在");}
+    /** Native private-owner read only, deliberately not a model command. */
+    public JSONObject ownerAttention(String afterRunId,String afterItemId,int limit)throws Exception{return coordinator.ownerAttention(afterRunId,afterItemId,limit);}
     public boolean parentOrchestrationConfigured(){return parentHost!=null;}
     public boolean continuousResearchConfigured(){return researchHost!=null;}
     public TeamCoordinator.OriginalCancellation originalCancellation(String run)throws Exception{return coordinator.originalCancellation(run);}
@@ -120,7 +122,7 @@ public final class TeamsModule implements EngineModule {
                 TeamWorkPlan.validate(members);if(TeamEvidenceDiscussion.FORMAT.equals(current.optString("discussionFormat")))for(int m=0;m<members.length();m++)if(members.getJSONObject(m).getJSONArray("dependsOn").length()>0)throw new IllegalArgumentException("完整证据讨论首轮需独立观点，不能把另一成员预设为前置；有依赖的共同分析请用原协作模式");JSONObject updated=JsonFiles.copy(current).put("members",members);all.put(selected,updated);writeDefinitions(all);return updated;
             }
             case "start":{String id=input.getString("teamId");JSONArray all=definitions();for(int i=0;i<all.length();i++)if(id.equals(all.getJSONObject(i).getString("id")))return coordinator.start(all.getJSONObject(i),JsonFiles.text(input,"goal",8000),input.optInt("rounds",1),context.model(),input.optString("_operationId",UUID.randomUUID().toString()),evidenceFactory,externalFactory);throw new IllegalArgumentException("团队不存在");}
-            case "configureMember":return coordinator.configureMember(input,context.model());
+            case "configureMember":return input.has("expectedGeneration")?coordinator.reviewedMemberConfiguration(input,context.model()):coordinator.configureMember(input,context.model());
             case "get":return coordinator.get(input.getString("runId"));
             case "cancel":if(writeHost!=null)writeHost.cancel(input.getString("runId"));return coordinator.cancel(input.getString("runId"));
             case "pause":if(writeHost!=null&&input.optString("memberId").isEmpty())writeHost.pause(input.getString("runId"));return coordinator.pause(input.getString("runId"),input.optString("memberId"));

@@ -3,6 +3,7 @@ import { UsageWorkspace } from './UsageWorkspace';
 import { AICenter, type AIServicePreset } from './AICenter';
 import SkillsWorkspace from './SkillsWorkspace';
 import { CapabilitiesWorkspace } from './CapabilitiesWorkspace';
+import type { PermissionLeaveGuard } from './PermissionPolicySettings';
 import { BackgroundAudioSettings, BackgroundOwnerSettings, BackgroundChecks } from './BackgroundOwnerSettings';
 import ChannelsWorkspace from './ChannelsWorkspace';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
@@ -57,7 +58,7 @@ import { ACCOUNT_RECEIPT_ACTIONS, accountActionReceipt, accountLoginArguments, a
 type Data = Record<string, any>;
 type Snapshot = { state?: Data; view?: { section?: string | null; resumeRevision?: number; taskId?: string | null }; composer?: Data | null; capabilities?: { commands?: string[] } };
 type BackHandlerRegistration = (handler: (() => boolean) | null) => void;
-type Props = { route: string; onBack: () => void; snapshot: Snapshot; registerBackHandler?: BackHandlerRegistration; navigationTrigger?: ReactNode; navigationRevision?: number; onNavigationPageChange?: (page: string) => void; onOpenSetup?: (capability?: SetupCapability) => void; onReturnToSetup?: () => void; onOpenProjects?: () => void; originGoal?: string; returnLabel?: string; initialProjectId?: string; localDraft?: LocalWorkspaceDraft; onLocalDraftChange?: (draft: LocalWorkspaceDraft) => void };
+type Props = { teamAttentionFocus?: Data; onTeamAttentionConsumed?:(requestId:string)=>void; registerBeforeLeave?: (guard: PermissionLeaveGuard | null) => void; route: string; onBack: () => void; snapshot: Snapshot; registerBackHandler?: BackHandlerRegistration; navigationTrigger?: ReactNode; navigationRevision?: number; onNavigationPageChange?: (page: string) => void; onOpenSetup?: (capability?: SetupCapability) => void; onReturnToSetup?: () => void; onOpenProjects?: () => void; originGoal?: string; returnLabel?: string; initialProjectId?: string; localDraft?: LocalWorkspaceDraft; onLocalDraftChange?: (draft: LocalWorkspaceDraft) => void };
 type Run = (action: string, args?: Data) => Promise<any>;
 const object = (value: any): Data => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 const list = (value: any): Data[] => Array.isArray(value) ? value.filter(x => x && typeof x === 'object' && !Array.isArray(x)) : [];
@@ -1162,7 +1163,7 @@ function McpWorkspace({ state, data, supported, run, registerTransientBack, erro
   </>;
 }
 
-function DomainPage({ domain, state, data, supported, run, registerTransientBack, candidateTarget, onReviewCandidate, onOpenModels, onNavigate, onPrepareTools, onOpenProjects, initialProjectId, localDraft, onLocalDraftChange, alreadyShownError }: { domain: string; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: BackHandlerRegistration; candidateTarget: LearningCandidateTarget | null; onReviewCandidate: (target: LearningCandidateTarget) => void; onOpenModels: () => void; onNavigate: (domain: 'plugins' | 'pluginCatalog' | 'mcp' | 'skills') => void; onPrepareTools?: () => void; onOpenProjects?: () => void; initialProjectId?: string; localDraft?: LocalWorkspaceDraft; onLocalDraftChange?: (draft: LocalWorkspaceDraft) => void; alreadyShownError?: string }) {
+function DomainPage({ domain, state, data, supported, run, registerTransientBack, candidateTarget, onReviewCandidate, onOpenModels, onNavigate, onPrepareTools, onOpenProjects, initialProjectId, localDraft, onLocalDraftChange, alreadyShownError, teamAttentionFocus, onTeamAttentionConsumed }: { teamAttentionFocus?:Data;onTeamAttentionConsumed?:(requestId:string)=>void; domain: string; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: BackHandlerRegistration; candidateTarget: LearningCandidateTarget | null; onReviewCandidate: (target: LearningCandidateTarget) => void; onOpenModels: () => void; onNavigate: (domain: 'plugins' | 'pluginCatalog' | 'mcp' | 'skills') => void; onPrepareTools?: () => void; onOpenProjects?: () => void; initialProjectId?: string; localDraft?: LocalWorkspaceDraft; onLocalDraftChange?: (draft: LocalWorkspaceDraft) => void; alreadyShownError?: string }) {
   const title = SECONDARY_DOMAINS.find(x => x.id === domain)?.title || '连接与能力';
   if (domain === 'accounts') return <AccountsWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'devices') return <DevicesWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} openModels={onOpenModels} />;
@@ -1176,7 +1177,7 @@ function DomainPage({ domain, state, data, supported, run, registerTransientBack
   if (domain === 'mcp') return <McpWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} error={alreadyShownError} />;
   if (domain === 'skills') return <SkillsWorkspace state={state} run={run} registerTransientBack={registerTransientBack} onPrepareTools={onPrepareTools} />;
   if (domain === 'plugins' || domain === 'pluginCatalog') return <PluginsWorkspace mode={domain} state={state} supported={supported} run={run} registerTransientBack={registerTransientBack} onNavigate={onNavigate} />;
-  if (domain === 'teams') return <TeamsWorkspace state={state} run={run} registerTransientBack={registerTransientBack} alreadyShownError={alreadyShownError} />;
+  if (domain === 'teams') return <TeamsWorkspace onAttentionConsumed={onTeamAttentionConsumed} attentionFocus={teamAttentionFocus} state={state} run={run} registerTransientBack={registerTransientBack} alreadyShownError={alreadyShownError} />;
   if (domain === 'groups') return <GroupsWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'media') return <MediaWorkspace state={state} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'realtime') return <RealtimeWorkspace state={state} run={run} registerTransientBack={registerTransientBack} />;
@@ -1483,7 +1484,7 @@ function settingsEntryDetail(id: string, state: Data): string {
   return '';
 }
 
-export default function Secondary({ route, onBack, snapshot, registerBackHandler, navigationTrigger, navigationRevision, onNavigationPageChange, onOpenSetup, onReturnToSetup, onOpenProjects, originGoal, returnLabel, initialProjectId, localDraft, onLocalDraftChange }: Props) {
+export default function Secondary({ teamAttentionFocus, onTeamAttentionConsumed, registerBeforeLeave, route, onBack, snapshot, registerBackHandler, navigationTrigger, navigationRevision, onNavigationPageChange, onOpenSetup, onReturnToSetup, onOpenProjects, originGoal, returnLabel, initialProjectId, localDraft, onLocalDraftChange }: Props) {
   const phonePresentation = useRef('list');
   const state: Data = { ...object(snapshot.state), webWorkspaceResumeRevision: Number(snapshot.view?.resumeRevision || 0), webWorkspaceTaskOpen: !!snapshot.view?.taskId, webWorkspaceSection: snapshot.view?.section };
   const commands = snapshot.capabilities?.commands || [];
@@ -1649,7 +1650,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
       {notice && <p className="pw-request-notice" role="status">{notice}</p>}
       {(error || domainError) && <p className="pw-field-error" role="alert">{error || domainError}</p>}
       <div className="pw-secondary-page" data-secondary-view={viewKey}>
-        {page === 'capabilities' ? <CapabilitiesWorkspace state={state} onNavigate={navigate} onPrepare={onOpenSetup} /> : (page === 'settings' || page === 'connections') ? <div className="pw-settings-home pw-settings-preferences">
+        {page === 'capabilities' ? <CapabilitiesWorkspace state={state} onNavigate={navigate} onPrepare={onOpenSetup} run={run} supported={supported} registerBack={registerTransientBack} registerBeforeLeave={registerBeforeLeave} /> : (page === 'settings' || page === 'connections') ? <div className="pw-settings-home pw-settings-preferences">
           <SearchField className="pw-secondary-search" data-input-size="medium" aria-label="搜索设置" placeholder="搜索设置" value={query} onChange={setQuery} shape="rounded" />
           {query.trim() ? <section className="pw-settings-results" aria-label="匹配的设置">{settingRows(filtered)}{filtered.length === 0 && <Empty>没有匹配的设置。</Empty>}</section>
             : <div className="pw-settings-categories">{SETTINGS_GROUPS.map(group => <section key={group.id} className="pw-settings-category" data-settings-group={group.id} aria-label={group.title}><h2>{group.title}</h2><div className="pw-settings-category-content">{settingRows(group.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}{group.id === 'privacy' && <div className="pw-settings-execution" aria-label="执行控制"><ExecutionControls state={state} supported={supported} run={run}/></div>}</div></section>)}</div>}
@@ -1668,7 +1669,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
           : page === 'usage' ? <UsageWorkspace supported={supported} registerTransientBack={registerTransientBack} records={<HistoryPage usage supported={supported} run={run}/>} renderBudget={(onEditingChange, registerBudgetBack) => <TokenBudgetsWorkspace supported={supported} registerTransientBack={registerBudgetBack} onEditingChange={onEditingChange}/>}/>
           : page === 'history' ? <HistoryPage key={page} usage={false} supported={supported} run={run} />
           : page === 'archives' || page === 'storage' ? <DataManagement key={page} kind={page} data={object(page === 'archives' ? state.ownerArchives : state.projectStorage)} supported={supported} run={run} registerTransientBack={registerTransientBack} navigate={navigate} />
-          : domain ? <DomainPage key={page === 'local' ? page + ':' + (navigationRevision || 0) : page} domain={page} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} candidateTarget={candidateTarget} onReviewCandidate={target => navigate('memoryReview', target)} onOpenModels={() => navigate('model-settings')} onNavigate={navigate} onPrepareTools={onOpenSetup?()=>onOpenSetup('tools'):undefined} onOpenProjects={onOpenProjects} initialProjectId={initialProjectId} localDraft={localDraft} onLocalDraftChange={onLocalDraftChange} alreadyShownError={error || domainError} />
+          : domain ? <DomainPage onTeamAttentionConsumed={onTeamAttentionConsumed} teamAttentionFocus={teamAttentionFocus} key={page === 'local' ? page + ':' + (navigationRevision || 0) : page} domain={page} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} candidateTarget={candidateTarget} onReviewCandidate={target => navigate('memoryReview', target)} onOpenModels={() => navigate('model-settings')} onNavigate={navigate} onPrepareTools={onOpenSetup?()=>onOpenSetup('tools'):undefined} onOpenProjects={onOpenProjects} initialProjectId={initialProjectId} localDraft={localDraft} onLocalDraftChange={onLocalDraftChange} alreadyShownError={error || domainError} />
           : <Empty>此页面暂不可用，请从导航重新打开。</Empty>}
       </div>
     </div>;
