@@ -116,7 +116,7 @@ public final class SettingsStore {
         Object clear=change.opt("clearApiKey");
         if(clear!=null&&!(clear instanceof Boolean))throw new IllegalArgumentException("清除密钥必须为布尔值");
         String submitted=change.has("apiKey")?change.getString("apiKey").trim():null;
-        if(submitted!=null&&(submitted.length()>1024||submitted.indexOf('\\r')>=0||submitted.indexOf('\\n')>=0))
+        if(submitted!=null&&(submitted.length()>1024||submitted.indexOf('\r')>=0||submitted.indexOf('\n')>=0))
             throw new IllegalArgumentException("搜索凭据无效");
         String oldEncrypted=prefs.getString("encryptedWebSearchKey","");
         String encrypted=(switched||Boolean.TRUE.equals(clear))?"":oldEncrypted;
