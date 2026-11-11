@@ -71,10 +71,10 @@ public final class WebSourceLedger {
                 .put("untrusted",true).put("modelRelianceVerified",false);
         original.check();
         tasks.event(task,run,epoch,event);
-        WebSearchDiagnostics.observed(tool,actual,original);
         JSONObject result=new JSONObject(actual.toString()).put("sourceRefs",links)
                 .put("sourceCount",links.length()).put("sourcePersisted",true)
                 .put("citationPolicy","Cite actual URLs from sourceRefs; sourceId identifies native provenance, not independent fact verification.");
+        WebSearchDiagnostics.observed(tool,result,original);
         original.check();
         return result;
     }
