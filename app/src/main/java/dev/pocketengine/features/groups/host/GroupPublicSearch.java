@@ -15,11 +15,28 @@ public final class GroupPublicSearch {
     public interface NativeCredential {String get()throws Exception;}
     private final URI endpoint;
     private final NativeCredential credential;
+    private final dev.pocketengine.features.web.WebSearchModule unified;
+    private final java.util.function.BooleanSupplier unifiedEnabled;
+    /** Native group search uses the same provider, not another endpoint/credential registry. */
+    public GroupPublicSearch(dev.pocketengine.features.web.WebSearchModule web,
+            java.util.function.BooleanSupplier enabled){
+        endpoint=null;credential=null;unified=java.util.Objects.requireNonNull(web);
+        unifiedEnabled=java.util.Objects.requireNonNull(enabled);
+    }
+
     public GroupPublicSearch(String approvedEndpoint,NativeCredential credential)throws Exception {
         URI selected=new URI(approvedEndpoint);if(selected.getHost()==null||selected.getRawUserInfo()!=null||selected.getRawFragment()!=null||selected.getRawQuery()!=null||!(selected.getScheme().equals("https")||selected.getScheme().equals("http")&&selected.getHost().equals("127.0.0.1")))throw new SecurityException("公开检索服务必须是原生选择的HTTPS地址；仅回环可使用HTTP");
         endpoint=selected;this.credential=java.util.Objects.requireNonNull(credential);
+        unified=null;unifiedEnabled=()->false;
     }
     public JSONObject search(String query,RunControl control)throws Exception {
+        if(unified!=null){
+            control.check();
+            if(!unifiedEnabled.getAsBoolean())throw new SecurityException("原生主人未开启群组公共搜索");
+            JSONObject actual=unified.search(new JSONObject().put("query",query).put("limit",5),control);
+            control.check();if(!unifiedEnabled.getAsBoolean())throw new SecurityException("主人已撤回群组公共搜索");
+            return actual.put("groupPublicSearch",true).put("privateOwnerSourcesUsed",false);
+        }
         if(query==null||query.isBlank()||query.length()>4000)throw new IllegalArgumentException("公开检索词为空或过长");control.check();
         HttpURLConnection connection=(HttpURLConnection)endpoint.toURL().openConnection();connection.setRequestMethod("POST");connection.setInstanceFollowRedirects(false);connection.setConnectTimeout(10_000);connection.setReadTimeout(20_000);connection.setDoOutput(true);connection.setRequestProperty("Content-Type","application/json; charset=utf-8");
         String secret=credential.get();if(secret==null||secret.length()>8192||secret.indexOf('\r')>=0||secret.indexOf('\n')>=0)throw new SecurityException("原生公开检索凭据无效");if(!secret.isEmpty())connection.setRequestProperty("Authorization","Bearer "+secret);
