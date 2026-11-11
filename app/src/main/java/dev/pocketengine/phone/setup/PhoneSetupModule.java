@@ -529,22 +529,38 @@ public final class PhoneSetupModule implements EngineModule {
         if (Thread.currentThread().isInterrupted()) connection = "recovery_interrupted";
         else if (!recoveryCurrent(original)) connection = "consent_required";
         else if (!result.optBoolean("userUnlocked")) connection = "owner_unlock_required";
-        else synchronized (display) {
+        else {
             JSONObject state = display.snapshot();
-            if (state.optBoolean("taskOwned") || state.optBoolean("bootstrapBusy")) connection = "original_task_owns_connection";
-            else if (state.optBoolean("helperConnected")) connection = state.optBoolean("recoveryRequired") || state.optBoolean("releasePending")
-                    ? "original_session_requires_owner_review" : "original_helper_authenticated";
+            if (state.optBoolean("taskOwned") || state.optBoolean("bootstrapBusy"))
+                connection = "original_task_owns_connection";
+            else if (state.optBoolean("helperConnected"))
+                connection = state.optBoolean("recoveryRequired") || state.optBoolean("releasePending")
+                        ? "original_session_requires_owner_review" : "original_helper_authenticated";
             else if (!state.optBoolean("configured")) connection = "owner_setup_required";
             else if (!recoveryCurrent(original)) connection = "consent_required";
-            else try {
-                // Only the original selected backend's authenticated status. Never start/grant/switch/release here.
-                JSONObject actual = display instanceof DisplayModule nativeDisplay
-                        ? nativeDisplay.connect(original.control) : display.handle("connect", new JSONObject());
-                connection = recoveryCurrent(original) && actual.optBoolean("helperConnected")
-                        ? actual.optBoolean("recoveryRequired") || actual.optBoolean("releasePending")
-                            ? "original_session_requires_owner_review" : "original_helper_authenticated"
-                        : "connection_unconfirmed";
-            } catch (Exception unavailable) { connection = "owner_connection_check_required"; }
+            else if (state.optBoolean("recoveryRequired") || state.optBoolean("releasePending") ||
+                    state.optJSONObject("adb") != null &&
+                    state.getJSONObject("adb").optBoolean("recoveryRequired"))
+                connection = "original_session_requires_owner_review";
+            else {
+                try {
+                    JSONObject actual = display instanceof DisplayModule nativeDisplay
+                            ? nativeDisplay.connect(original.control) : display.handle("connect", new JSONObject());
+                    connection = recoveryCurrent(original) && actual.optBoolean("helperConnected")
+                            ? "original_helper_authenticated" : "connection_unconfirmed";
+                } catch (Exception disconnected) {
+                    // An already-authorized helper may have disappeared after reboot. Re-create
+                    // that helper under the owner's recovery consent, not any business task.
+                    try {
+                        if (!recoveryCurrent(original) || !(display instanceof DisplayModule nativeDisplay))
+                            throw new SecurityException("原连接恢复权限已失效");
+                        JSONObject recovered = nativeDisplay.recoverPreviouslyAuthorized(
+                                original.control, () -> recoveryCurrent(original));
+                        connection = recoveryCurrent(original) && recovered.optBoolean("helperConnected")
+                                ? "original_helper_authenticated" : "connection_unconfirmed";
+                    } catch (Exception unavailable) { connection = "owner_connection_check_required"; }
+                }
+            }
         }
         if (recoveryWork == original) lastConnectionOutcome = connection;
         return result;
