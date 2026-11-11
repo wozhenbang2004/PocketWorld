@@ -3680,7 +3680,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         native("getFeatures")
         phoneSetup("status")
         readPhonePracticeEvidence()
-        if (state.activeTaskId == null && !state.feature("display").optBoolean("taskOwned") && state.feature("display").optJSONObject("adb") != null) display("adb.status")
+        if (!state.feature("display").optBoolean("taskOwned") && (state.feature("display").has("taskOwned") || state.activeTaskId == null) && state.feature("display").optJSONObject("adb") != null) display("adb.status")
     }
     fun openWirelessSettings() {
         wirelessSettingsLaunched = true
@@ -3693,7 +3693,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun backgroundSetupResumed() {
         if (!wirelessSettingsLaunched) return
         wirelessSettingsLaunched = false
-        if (state.backgroundSetupOpen && state.activeTaskId == null && !state.feature("display").optBoolean("taskOwned") && state.feature("display").optJSONObject("adb") != null) display("adb.discover")
+        if (state.backgroundSetupOpen && !state.feature("display").optBoolean("taskOwned") && (state.feature("display").has("taskOwned") || state.activeTaskId == null) && state.feature("display").optJSONObject("adb") != null) display("adb.discover")
     }
     fun pairWireless(host: String, port: Int, code: String) {
         if (!wirelessPairCodeValid(code) || port !in 1..65535) { state = state.copy(error = "请读取系统配对窗口当前的端口和六位配对码"); return }
