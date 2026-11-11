@@ -86,13 +86,15 @@ public final class WebSourceLedger {
         try{uri=new URI(rawUrl);}catch(Exception invalid){return;}
         if(uri.getHost()==null||uri.getRawUserInfo()!=null)return;
         String url=uri.toASCIIString();
+        try{dev.pocketengine.browser.PublicHttpReader.validate(new JSONObject().put("url",url));}
+        catch(IllegalArgumentException rejected){return;}
         String unique=kind+"\n"+url;
         if(!seen.add(unique))return;
         // Source excerpts are bounded even when the original HTTP body was larger.
         String excerpt=limit(body,2000),sourceId=UUID.randomUUID().toString();
         String display=new URI(uri.getScheme(),null,uri.getHost(),uri.getPort(),uri.getPath(),null,null).toASCIIString();
         JSONObject citation=new JSONObject().put("sourceId",sourceId).put("title",limit(title,240))
-                .put("url",display).put("retrievedAt",at).put("kind",kind)
+                .put("url",url).put("displayUrl",display).put("retrievedAt",at).put("kind",kind)
                 .put("coverage",coverage).put("bodyComplete",complete).put("verified",false);
         sources.put(new JSONObject(citation.toString())
                 .put("excerpt",excerpt).put("bodySha256",hash(body==null?"":body))
