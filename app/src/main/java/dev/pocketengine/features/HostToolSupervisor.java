@@ -94,6 +94,17 @@ public final class HostToolSupervisor implements CapabilityPort {
             dev.pocketengine.features.memory.ToolOutputCapture.Factory outputCapture,dev.pocketengine.features.controlplane.WorkProfileToolSelection workProfile)throws Exception{
         this.host=java.util.Objects.requireNonNull(host);this.tasks=java.util.Objects.requireNonNull(tasks);this.taskId=catalogueOnly?null:identifier(taskId);this.runId=catalogueOnly?null:identifier(runId);this.epoch=epoch;this.allowWrites=allowWrites;
         this.outputCapture=outputCapture;this.workProfile=workProfile;if(!catalogueOnly&&workProfile==null&&tasks.get(this.taskId,false).optJSONObject("workProfileRef")!=null)throw new SecurityException("此任务已冻结工作配置，必须接入原生准确选用；没有继承全局工具");
+
+        JSONObject webTask=catalogueOnly?null:tasks.get(this.taskId,false);
+        boolean webOwner=catalogueOnly||webTask!=null
+                &&"owner".equals(webTask.optString("actorId"))
+                &&"private".equals(webTask.optString("spaceId"))
+                &&webTask.optJSONObject("origin")==null
+                &&!webTask.has("ownerDeviceWork");
+        if(webOwner)add("web","search","web_search",
+                "搜索实时公开网页。只发送本次query给主人已选的搜索服务；返回真实摘要/HTTPS链接，不读取页面正文，不表示来源事实已验证。若结果不可用须明确报告，不得假装联网成功。公开查询不得携带私人账号、附件或凭据。",
+                false,props("query",new JSONObject().put("type","string").put("minLength",1).put("maxLength",512),
+                        "limit",integer(1,8)),"query");
         add("memory","search","memory_search","检索主人私人记忆，只返回真实已保存记录。可用queries补充至多3条同义/语义短查询，constraints按时间、实体、来源缩小范围并限制0至2跳稳定身份关系。时间界限是含端点的Unix毫秒，event时间未知会排除，updated不是事发时间；entityIds仅接受已有稳定身份。原query保留，不增加模型请求或读取权限；摘要不是原件，相关不代表事实或因果。",false,props("query",text(dev.pocketengine.features.memory.MemoryQueryPlan.MAX_QUERY_CHARS),"queries",querySuggestions(),"constraints",dev.pocketengine.features.memory.MemoryRecallConstraints.schema(),"limit",integer(1,100)),"query");
         add("memory","recall","memory_recall","按当前问题召回主人私人记忆及来源。mode默认current；显式historical只读仍可访问的保留版本，标明历史/冲突/未知时序，不把历史当当前事实、原件或授权。可用queries补充至多3条同义/语义短查询，constraints按时间、实体、来源缩小范围；current可限制0至2跳稳定身份关系，historical不扩展关系。时间界限是含端点的Unix毫秒，event时间未知会排除，updated不是事发时间；entityIds仅接受已有稳定身份。原query保留，不增加模型请求或读取权限；原件仍按memory_history_search/read的原范围回读。",false,props("query",text(dev.pocketengine.features.memory.MemoryQueryPlan.MAX_QUERY_CHARS),"mode",new JSONObject().put("type","string").put("enum",new JSONArray().put("current").put("historical")),"queries",querySuggestions(),"constraints",dev.pocketengine.features.memory.MemoryRecallConstraints.schema(),"limit",integer(1,20)),"query");
         add("memory","$method_decision","memory_method_decision","记录本任务对准确经验版本的明确采用/不适用/未选决定与理由。apply须关联本task/run已经返回确定回执的1至8个stepOperationIds，可从memory_raw_query(section=operations)取得原operationId。只记录决定和原步骤关系，不证明方法语义有效或导致业务成功，不执行或重试任何步骤。",true,
@@ -550,6 +561,7 @@ public final class HostToolSupervisor implements CapabilityPort {
         if(tool==null||tool!=nativeRoutes.get(name)||tool.preset!=null)return dev.pocketengine.core.ExecutionPlanning.Access.DENY;
         boolean read=switch(tool.feature){
             case "memory"->Set.of("search","recall","$memory_draft_sources").contains(tool.command);
+            case "web"->"search".equals(tool.command);
             case "workspace"->Set.of("$projects","list","read","history","diff","listArtifacts","readArtifact","diffArtifact").contains(tool.command);
             case "remote"->Set.of("$profiles","environments","probeWorker","listJobs","getJob","readFile").contains(tool.command);
             case "skills"->Set.of("$skills_list","$skills_read","$skills_draft_sources").contains(tool.command);
@@ -705,7 +717,9 @@ public final class HostToolSupervisor implements CapabilityPort {
                 control.onCancel(cancel);
                 try{control.check();result=module instanceof PluginsModule plugins&&plugins.localMcpForHost(input)?host.invokeLocalMcpForTask(taskId,runId,epoch,name,invocationId,args,input,approvalCapability,consumedApprovalId,control,outputCapture):module instanceof PluginsModule?((PluginsModule)module).invokeForHost(input,control,outputCapture,name,tasks):module.handle(tool.command,input);}
                 finally{control.removeCancelAction(cancel);}
-            }else result=module instanceof dev.pocketengine.features.remote.RemoteModule?((dev.pocketengine.features.remote.RemoteModule)module).handleForTask(tool.command,input,control):module.handle(tool.command,input);
+            }else if(tool.feature.equals("web")&&module instanceof dev.pocketengine.features.web.WebSearchModule web)
+                result=web.search(input,control);
+            else result=module instanceof dev.pocketengine.features.remote.RemoteModule?((dev.pocketengine.features.remote.RemoteModule)module).handleForTask(tool.command,input,control):module.handle(tool.command,input);
         }
         return deliverReceipt(name,result,control);
     }

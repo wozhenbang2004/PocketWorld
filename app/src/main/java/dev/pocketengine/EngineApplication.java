@@ -846,6 +846,14 @@ public final class EngineApplication extends Application implements dev.pocketen
         queueBootstrap(bootstrap.beginInitial());
     }
     private void requireBusinessReady(){if(!businessReady())throw new SecurityException("原启动恢复或维护尚未完成，没有派发模型或工具");}
+    /** Owner app settings only. Search credentials are not exposed to model tools or public state. */
+    public JSONObject webSearchSettingsForOwner()throws Exception{
+        requireBusinessReady();return settings.webSearchSettings();
+    }
+    public JSONObject saveWebSearchSettingsForOwner(JSONObject input)throws Exception{
+        requireBusinessReady();return settings.saveWebSearchSettings(input);
+    }
+
     private void queueBootstrap(long generation){queueBootstrap(generation,null);}
     private void queueBootstrap(long generation,dev.pocketengine.store.TaskDatabaseMaintenance.OriginalReadPermit permit){
         try{bootstrapWorker.execute(()->initializeOriginalBusiness(generation,permit));}
@@ -1054,6 +1062,7 @@ public final class EngineApplication extends Application implements dev.pocketen
         if(features.module("display") instanceof dev.pocketengine.phone.display.DisplayModule phoneDisplay)
             addModule("phone_setup",()->new dev.pocketengine.phone.setup.PhoneSetupModule(context,phoneDisplay));
         addModule("notifications",()->new dev.pocketengine.features.notifications.NotificationsModule(context));
+        addModule("web",()->new dev.pocketengine.features.web.WebSearchModule(context));
         automationPlans=new dev.pocketengine.features.AutomationPlanHost(tasks,new dev.pocketengine.features.AutomationPlanHost.CurrentControl(){
             public RunControl get(String id){return retainedTaskControl(id);}
             public boolean authorizationValid(JSONObject task)throws Exception{
