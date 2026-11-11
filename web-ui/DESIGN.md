@@ -18,11 +18,17 @@
 
 当前基于 main `0377ff50dfb555ff5e444dcf7f2ad3b2cc55e63a` 实施，独立源码审阅发现的准备任务误隐藏、分页假空态和模式按钮固定宽度覆盖均已修正。主屏悬浮去重只改变控制的展示位置，不改权限、任务或执行状态；原生宿主用精确运行身份核对真实 DOM 停止按钮，2秒有效期避免 Web 无响应后丢失外部停止入口。新投影仅从原目标的 `hasUnresolved` 读取事实，不推断执行成功。
 
-实现与只读审阅已完成。代码提交为 `e11c04d41a9130fce29e866e399f7a6a3c3ab65c`，本地分支为 `work/ui-subtraction-20261111`。最终代码的 `npm run typecheck --prefix web-ui` 和 `npm run build --prefix web-ui` 均 exit 0；生产构建含 TypeScript 编译、Vite 打包及224份包内资源完整性核对，构建回执绑定上述提交。仅有既存大 chunk 与 client-only 授权文本收集提示，无新增依赖。未编写或运行任何测试，未本地构建 APK；当前环境缺少 javac、Android SDK 和 adb，原生编译、实际 Android 旅程及视觉验收尚未取得。
+实现与只读审阅已完成。本地实现检查点为 `e11c04d41a9130fce29e866e399f7a6a3c3ab65c`，原分支为 `work/ui-subtraction-20261111`。最终代码的 `npm run typecheck --prefix web-ui` 和 `npm run build --prefix web-ui` 均 exit 0；生产构建含 TypeScript 编译、Vite 打包及224份包内资源完整性核对，构建回执绑定上述提交。仅有既存大 chunk 与 client-only 授权文本收集提示，无新增依赖。未编写或运行任何测试，未本地构建 APK；本地缺少 javac、Android SDK 和 adb，Android 编译由下方正式流水线完成，实际 Android 旅程及视觉验收仍未取得。
 
 先前发布阻塞：宿主自动审批先拒绝推送 `main`，理由是当时可信用户消息没有明确授权该次默认分支发布及正式 Android 发布副作用；随后也拒绝独立工作分支上传，理由是当时消息没有明确授权向 GitHub 远端共享源码。两次拒绝均未绕过，当时未创建远端工作分支、未触发新 CI 或 Release。
 
-用户随后明确回复：“允许啊自己提不要再问我了”。来源为本轮确认消息，记录时间为北京时间 2026-11-11 12:40，精确消息 ID 不可取得。此授权覆盖将本批 UI 改动推送至 `wozhenbang2004/PocketWorld` 的 `main` 并触发正式 Android 构建发布，无需再次确认同一步骤。已重新读取远端，main 仍为 `0377ff50dfb555ff5e444dcf7f2ad3b2cc55e63a`，无需处理并行冲突；下一动作是正常快进推送并跟进关闭测试的原生产流水线。待体验重点仍为首页内容/底部输入、手机任务只保留一个主控制入口、未启动及未决工作仍可恢复；PW-S1–S5 的实际体验和用户认可保持开放。
+用户随后明确回复：“允许啊自己提不要再问我了”。来源为本轮确认消息，记录时间为北京时间 2026-11-11 12:40，精确消息 ID 不可取得。此授权覆盖将本批 UI 改动推送至 `wozhenbang2004/PocketWorld` 的 `main` 并触发正式 Android 构建发布，无需再次确认同一步骤。重新核对 main 后无并行冲突；命令行无登录凭据，改用已连接的 GitHub Git data 通道上传已审阅内容，逐文件 blob 及整棵 tree 与本地完全一致，以 expected SHA 守卫正常快进 main，未 force。
+
+本批已正式发布。发布源码为 [`a10c31217ccca0a204bc2f2c5840df8a67e8d331`](https://github.com/wozhenbang2004/PocketWorld/commit/a10c31217ccca0a204bc2f2c5840df8a67e8d331)，tree `5aae1b330270f0205acc68a4a631698dc6322fc0`，与授权后的本地 `98fee306` 完全一致。正式 [Release run 42960962217](https://github.com/wozhenbang2004/PocketWorld/actions/runs/42960962217) 的 build、prepare、publish 全部 success，无重试；云端完成224份 Web 资源核对、Android 编译、APK 组装、稳定签名、包内资源校验及远端资产核验。保留的历史测试步骤 skipped，CI 采图仍关闭。
+
+[v0.1.111](https://github.com/wozhenbang2004/PocketWorld/releases/tag/v0.1.111) 于北京时间 **2026-11-11 12:50:05** 发布，应用 **0.4.1111 / 1111**，target 为上述源码；[正式 APK](https://github.com/wozhenbang2004/PocketWorld/releases/download/v0.1.111/eecb94e04b245ee0e0980154499610978e864e083131787b3872bfb5debce813-app-1111.apk) 为149,328,565 bytes，SHA-256 `eecb94e04b245ee0e0980154499610978e864e083131787b3872bfb5debce813`。1110→1111 增量包为2,217,104 bytes，SHA-256 `4aca1d6460c8d73a8310230a298b749935ade660d8d1d1930b3967e1c709fabb`。已实际读取 CI 的稳定签名输出及构建产物元数据，签名证书继续为 `b58e014e2a2e49b2e85ebd5b47a034a28cb0d313d71f379a5208d21afe388e58`。
+
+公开 `release.json` 已实际下载并用仓内固定 RSA 公钥核验签名；1,654 bytes，SHA-256 `885edd24012093f6defafdad6ddc77cf418025a24f98a20d03e51a512567b78c`。载荷包名、版本、APK 大小/hash/URL、增量起点1110及其基线 hash 与正式资产和上一版已签名清单一致。未下载整份 APK，未声称本地安装或真机验收。**本批实现、源码审阅、构建与发布已完成；PW-S1–S5 的实际体验和用户认可保持开放**，下一体验对象是上述正式版本的首页/底部输入、应用内外停止入口切换、未准入及未决工作的原入口恢复。
 
 ## 2026-11-11 管家中枢 · 分阶段实施授权
 
