@@ -38,7 +38,7 @@ public final class WebResearchPipeline {
         for(var keys=args.keys();keys.hasNext();)if(!Set.of("queries","maxPages","maxResults").contains(keys.next()))
             throw new SecurityException("研究查询只接受查询词与有界预算");
         JSONArray queries=args.getJSONArray("queries");
-        if(queries.isEmpty()||queries.length()>MAX_QUERIES)throw new IllegalArgumentException("每次只能检索1至4条查询");
+        if(queries.length()==0||queries.length()>MAX_QUERIES)throw new IllegalArgumentException("每次只能检索1至4条查询");
         Set<String> unique=new LinkedHashSet<>();
         for(int i=0;i<queries.length();i++){
             String query=queries.getString(i);
