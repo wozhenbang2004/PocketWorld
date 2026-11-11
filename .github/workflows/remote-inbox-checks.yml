@@ -67,5 +67,6 @@ jobs:
           echo "GRADLE_USER_HOME=$RUNNER_TEMP/pocketworld-remote-inbox-gradle" >> "$GITHUB_ENV"
           ./gradlew --no-daemon --max-workers=1 --console=plain \
             -Pkotlin.compiler.execution.strategy=in-process \
+            -PpocketworldVersionCode=3 -PpocketworldVersionName=0.3.0-verify \
             -Dorg.gradle.vfs.watch=false \
             :app:compileDebugKotlin :app:compileDebugJavaWithJavac
