@@ -700,6 +700,18 @@ public final class FeatureHost implements AutoCloseable {
             boolean backendAdmission=false;
             try{if(!originalOwnerCurrent.getAsBoolean())throw new SecurityException("原审阅窗口已关闭，未执行排队操作");EngineModule module=module(feature);if(module==null)throw new IllegalArgumentException("此能力尚未接入");
                 JSONObject payload=request.optJSONObject("payload");JSONObject input=payload==null?new JSONObject():new JSONObject(payload.toString());
+                JSONObject ownerTeamDraft=null;
+                if(feature.equals("teams")&&input.has("draftDefinition")){
+                    if(!command.equals("start")||!nativeOwnerAdmission||tasks==null||!(module instanceof dev.pocketengine.features.teams.TeamsModule))
+                        throw new SecurityException("本次协作只接受私人团队页面的原启动审阅");
+                    if(input.has("expectedDefinition"))throw new SecurityException("一次协作不能同时更改原编组");
+                    ownerTeamDraft=dev.pocketengine.features.teams.TeamDraftDefinition.capture(input.getJSONObject("draftDefinition"));
+                    if(!ownerTeamDraft.getString("id").equals(input.opt("teamId")))throw new SecurityException("原协作编组身份不一致");
+                    Object rounds=input.opt("rounds");
+                    if(!(rounds instanceof Integer)||((Integer)rounds)<1||((Integer)rounds)>2
+                            ||ownerTeamDraft.optString("mode").equals("debate")&&((Integer)rounds)!=2)
+                        throw new IllegalArgumentException("请核对本次协作轮次");
+                }
                 if(feature.equals("ssh")&&command.equals("doctor"))throw new SecurityException("请使用当前本机私人环境诊断页；通用能力回执不接收诊断正文");
                 if(feature.equals("automation")&&java.util.Set.of("approvePlanExecution","startPlanExecution","setPlanPaused","cancelPlanExecution","editPlanStep","retryPlanStep","preparePlanTask","planTaskRequest","bindPlanTask","refreshPlanTasks","ownerCommand","automationPlan").contains(command))throw new SecurityException("执行计划须从本机目标审阅入口控制，工具参数不能授予执行权限");
                 if(feature.equals("remote")&&command.equals("approveJob"))throw new SecurityException("请在本机原任务页审阅并一次确认本次授权");
@@ -801,7 +813,8 @@ public final class FeatureHost implements AutoCloseable {
                         if(!originalOwnerCurrent.getAsBoolean())throw new SecurityException("原审阅窗口已关闭，未发送本次电脑任务");
                         tasks.claimRemoteBackendDispatch(taskId,runId,input);
                     });
-                }else result=tasks!=null&&feature.equals("remote")&&command.equals("cancelJob")?cancelOriginalRemoteRequest(input):module.handle(command,input);
+                }else if(ownerTeamDraft!=null)result=((dev.pocketengine.features.teams.TeamsModule)module).startOwnerDraft(input,ownerTeamDraft,originalOwnerCurrent);
+                else result=tasks!=null&&feature.equals("remote")&&command.equals("cancelJob")?cancelOriginalRemoteRequest(input):module.handle(command,input);
                 if(result==null)result=new JSONObject();
                 if(tracked!=null){JSONObject receipt=new JSONObject(result.toString());if(feature.equals("browser")){if(!trackedRun.equals(result.optString("runId"))||!tracked.equals(result.optString("taskId"))||!result.optBoolean("active")||!resources.ownsBrowser(trackedRun))throw new SecurityException("浏览器没有返回本次执行的有效租约");tasks.requireExternalRun(tracked,trackedRun,feature,false);receipt.put("status","running");}updateTask(tracked,receipt);result.put("hostTaskId",tracked);}
                 if(teamConversation!=null&&tracked!=null)result.put("conversationId",teamConversationId).put("taskId",tracked).put("conversationLinkStatus",appendTeamTaskLink(teamConversation,teamConversationId,tracked));

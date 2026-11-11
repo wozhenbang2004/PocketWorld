@@ -50,6 +50,18 @@ public final class TeamsModule implements EngineModule {
     public void setWriteHost(TaskStoreTeamWriteHost host){if(writeHost!=null)throw new IllegalStateException("原文件分工宿主已挂载");writeHost=java.util.Objects.requireNonNull(host);coordinator.setAssignmentFactory(host);coordinator.setBudgetHost(host);parentHost=host.parentHost(coordinator,context::model,this::definition,context);}
     /** Only FeatureHost supplies the captured native project scope after original task admission. */
     public synchronized JSONObject startNative(JSONObject input,TeamWriteScope scope)throws Exception {JSONArray all=definitions();for(int i=0;i<all.length();i++)if(input.getString("teamId").equals(all.getJSONObject(i).getString("id")))return coordinator.startWithScope(all.getJSONObject(i),JsonFiles.text(input,"goal",8000),input.optInt("rounds",1),context.model(),input.getString("_operationId"),evidenceFactory,externalFactory,scope);throw new IllegalArgumentException("团队不存在");}
+    /** Only the private-owner FeatureHost start path supplies this already reviewed roster. */
+    public synchronized JSONObject startOwnerDraft(JSONObject input,JSONObject draft,java.util.function.BooleanSupplier originalOwnerCurrent)throws Exception {
+        JSONObject captured=TeamDraftDefinition.capture(draft);
+        if(!captured.getString("id").equals(input.getString("teamId"))||input.optString("_taskId").isEmpty()
+                ||!input.getString("_runId").equals(input.getString("_operationId")))
+            throw new SecurityException("本次协作必须沿原任务登记开始");
+        var config=context.model();
+        synchronized(coordinator){
+            if(!originalOwnerCurrent.getAsBoolean())throw new SecurityException("原协作审阅窗口已关闭，未开始这次协作");
+            return coordinator.start(captured,JsonFiles.text(input,"goal",8000),input.getInt("rounds"),config,input.getString("_operationId"),evidenceFactory,externalFactory);
+        }
+    }
     /** The original parent retains this native ticket, never a later lookup by operation ID. */
     public synchronized TeamCoordinator.OriginalResearchStart startOriginalResearch(JSONObject input)throws Exception{if(researchHost==null)throw new SecurityException("原持续研究宿主尚未挂载");return coordinator.startOriginalResearch(definition(input.getString("teamId")),JsonFiles.text(input,"goal",8000),input.optInt("rounds",1),context.model(),input.getString("_operationId"),evidenceFactory,externalFactory);}
     private synchronized JSONObject definition(String id)throws Exception{JSONArray all=definitions();for(int i=0;i<all.length();i++)if(id.equals(all.getJSONObject(i).getString("id")))return new JSONObject(all.getJSONObject(i).toString());throw new SecurityException("原已配置团队不存在");}

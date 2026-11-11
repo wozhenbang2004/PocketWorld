@@ -6,6 +6,9 @@ import android.os.Looper
 import dev.pocketengine.features.teams.AgentSlot
 import dev.pocketengine.features.teams.TeamPhoneHost
 import dev.pocketengine.features.teams.TeamEvidenceDiscussion
+import dev.pocketengine.features.teams.TeamAttention
+import dev.pocketengine.features.teams.TeamDraftDefinition
+import dev.pocketengine.features.teams.TeamCoordinator
 import dev.pocketengine.features.teams.TeamsModule
 import dev.pocketengine.ui.PocketWorldController
 import dev.pocketengine.ui.objects
@@ -33,7 +36,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
     @Volatile private var workingPhonePage: TeamPhoneHost.Page? = null
 
     companion object {
-        val COMMANDS = setOf("teams.attention", "teams.readAttention", "teams.snapshot", "teams.readRun", "teams.readDefinition", "teams.reviewDefinition",
+        val COMMANDS = setOf("teams.attention", "teams.readAttention", "teams.snapshot", "teams.readRun", "teams.readDefinition", "teams.reviewDefinition", "teams.prepareDraftStart",
             "teams.reviewStart", "teams.reviewRemove", "teams.confirm", "teams.control", "teams.sendMessage",
             "teams.answerAssignment", "teams.probeMember", "teams.closeReading", "teams.reviewPhoneStart", "teams.reviewMember", "teams.openResearchTask")
     }
@@ -110,6 +113,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
         val result = JSONObject().put("kind", kind).put("viewHandle", handle).put(kind, PocketWebState.publicValue(value))
         if (kind == "run") {
             result.put("messages", PocketWebState.publicValue(JSONArray(teamConversationRows(value))))
+            result.put("attention", PocketWebState.publicValue(TeamAttention.forRun(value)))
             controller.state.tasks.singleOrNull { it.raw.optString("feature") == "teams" && it.raw.optString("externalId") == value.optString("id")
                 && it.raw.optString("actorId") == "owner" && it.raw.optString("spaceId") == "private" }
                 ?.let { result.put("taskId", it.id) }
@@ -120,6 +124,12 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
         val member = value.optJSONArray("members").objects().singleOrNull { it.optString("id") == locator.getString("memberId") }
         val sameGeneration = value.optInt("generation") == locator.getInt("generation") && member?.optInt("generation") == locator.getInt("memberGeneration")
         if (!sameGeneration) return JSONObject().put("kind", "changed").put("message", "原成员或运行已变化，已打开原协作记录；请核对当前进展。")
+        val identityFields = listOf("memberId", "generation", "memberGeneration", "identityRevision", "workItemId", "assignmentId", "questionId", "childKind", "round", "taskId")
+        val candidate = TeamAttention.forRun(value).objects().singleOrNull { row ->
+            row.has("questionId") == locator.has("questionId") && row.has("workItemId") == locator.has("workItemId")
+                && identityFields.all { key -> !locator.has(key) || row.has(key) && row.opt(key) == locator.opt(key) }
+        }
+        if (candidate == null) return JSONObject().put("kind", "changed").put("message", "这项原待处理已变化或已解决，已打开原协作记录；请查看当前进展。")
         val item = if (locator.has("workItemId")) value.optJSONObject("workPlan")?.optJSONArray("items").objects().singleOrNull {
             it.optString("workItemId") == locator.getString("workItemId") && it.optString("memberId") == locator.getString("memberId")
                 && (!locator.has("assignmentId") || it.optString("assignmentId") == locator.getString("assignmentId"))
@@ -131,7 +141,10 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
             if (question == null || question.optString("state") != "pending") return JSONObject().put("kind", "changed").put("message", "这条原问题已处理或不再待回答，已打开原协作记录。")
             return JSONObject().put("kind", "question").put("memberId", member!!.getString("id")).put("messageId", question.getString("messageId"))
         }
-        return JSONObject().put("kind", if (item == null) "member" else "workItem").put("memberId", member!!.getString("id")).also { if (item != null) it.put("workItemId", item.getString("workItemId")) }
+        return JSONObject().put("kind", if (item == null) "member" else "workItem").put("memberId", member!!.getString("id")).also { focus ->
+            if (item != null) focus.put("workItemId", item.getString("workItemId"))
+            listOf("childKind", "round", "taskId").forEach { key -> if (candidate.has(key)) focus.put(key, candidate.get(key)) }
+        }
     }
 
     private fun review(command: String, input: JSONObject): JSONObject {
@@ -187,8 +200,8 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
             }
         }
         fun feature(command: String, input: JSONObject, messageId: String? = null, attention: JSONObject? = null) {
-            controller.requestFeatureReceipt("teams", command, input) { result, error ->
-                if (!currentWindow()) { done(null, "原团队窗口已关闭；请回原运行核对结果，没有自动重发"); return@requestFeatureReceipt }
+            controller.requestWebFeatureReceipt("teams", command, input, ::currentWindow) { result, error ->
+                if (!currentWindow()) { done(null, "原团队窗口已关闭；请回原运行核对结果，没有自动重发"); return@requestWebFeatureReceipt }
                 if (error != null || result == null) deliver(null, error ?: "原团队操作没有返回回执")
                 else if (originalGeneration == generation && window == controller.webWindowTicket() && controller.webPrivateOwnerVisible()) try {
                     if (command == "sendMessage") check(result.optJSONObject("messageReceipt")?.optString("messageId") == messageId
@@ -224,7 +237,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                                 deliverReceipt(receipt)
                             } else done(null, "原回答窗口已关闭；回答结果保留，请回原问题核对，没有自动重发")
                         }
-                        return@requestFeatureReceipt
+                        return@requestWebFeatureReceipt
                     }
                     deliverReceipt(receipt)
                 } catch (failure: Exception) { deliver(null, failure.message ?: "原团队回执待核对") }
@@ -243,12 +256,22 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 }
             }
             "teams.readAttention" -> {
-                fields(args, "runId", "memberId", "generation", "memberGeneration", "workItemId", "assignmentId", "questionId")
+                fields(args, "runId", "memberId", "generation", "memberGeneration", "identityRevision", "workItemId", "assignmentId", "questionId", "childKind", "round", "taskId")
                 val id = text(args, "runId"); text(args, "memberId")
                 require(args.opt("generation") is Int && args.opt("memberGeneration") is Int) { "原团队定位缺少运行与成员代次" }
                 if (args.has("workItemId")) text(args, "workItemId")
                 if (args.has("assignmentId")) text(args, "assignmentId")
                 if (args.has("questionId")) { text(args, "questionId"); text(args, "assignmentId") }
+                if (args.has("identityRevision")) require(args.opt("identityRevision") is Int && args.getInt("identityRevision") > 0) { "原成员身份版本无效" }
+                if (args.has("taskId")) {
+                    val task = text(args, "taskId", 36)
+                    require(runCatching { UUID.fromString(task).toString() == task }.getOrDefault(false)) { "原子任务身份无效" }
+                }
+                if (args.has("childKind")) {
+                    require(text(args, "childKind", 16) in setOf("research", "phone")) { "原子任务类型无效" }
+                    require(args.opt("round") is Int && args.getInt("round") in 1..6) { "原子任务阶段无效" }
+                    require(args.has("taskId")) { "原子任务定位缺少身份" }
+                } else require(!args.has("round")) { "原子任务定位缺少类型" }
                 controller.readWebTeamSnapshot { value, error ->
                     if (currentWindow()) {
                         if (value == null || error != null) deliver(null, error ?: "原团队目录尚未读取")
@@ -285,8 +308,10 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 phonePages.remove(args.optString("phoneHandle"))?.original?.let { runCatching { it.close() } }
                 deliver(JSONObject().put("closed", true), null)
             }
-            "teams.reviewDefinition" -> {
-                fields(args, "viewHandle", "name", "mode", "leaderId", "members")
+            "teams.reviewDefinition", "teams.prepareDraftStart" -> {
+                val draftStart = action == "teams.prepareDraftStart"
+                if (draftStart) fields(args, "name", "mode", "leaderId", "members", "goal", "rounds")
+                else fields(args, "viewHandle", "name", "mode", "leaderId", "members")
                 val old = if (args.has("viewHandle")) reading(text(args, "viewHandle"), "definition") else null
                 val mode = text(args, "mode", 24)
                 require(mode in setOf("collaborate", "debate", "produce")) { "请选择已接入的团队协作方式" }
@@ -376,7 +401,18 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 val previousDiscussion = old?.takeIf { it.optString("mode") == "debate" }?.optString("discussionFormat")?.takeIf { it.isNotBlank() }
                 input.put("discussionFormat", if (mode == "debate") previousDiscussion ?: TeamEvidenceDiscussion.FORMAT else "classic")
                 if (input.optString("discussionFormat") == TeamEvidenceDiscussion.FORMAT) require(members.length() >= 2 && members.objects().all { it.optString("runner") == "model" && it.optJSONArray("dependsOn")?.length() == 0 }) { "证据讨论至少需要两名独立模型成员" }
-                deliver(review("save", input), null)
+                if (!draftStart) deliver(review("save", input), null)
+                else {
+                    val definition = TeamDraftDefinition.capture(JSONObject(input.toString()).also { it.remove("expectedDefinition") })
+                    check(!controller.modelSelectionPending() && !controller.state.chatSubmitting && !controller.state.phoneSubmitting
+                        && teamLaunchable(definition, controller.state)) { "请先准备本次协作所需的模型连接" }
+                    val rounds = args.opt("rounds"); require(rounds is Int && rounds in 1..2) { "请选择一至两轮协作" }
+                    val start = JSONObject().put("teamId", definition.getString("id")).put("draftDefinition", definition)
+                        .put("goal", text(args, "goal", 8000).trim()).put("rounds", if (mode == "debate") 2 else rounds)
+                    controller.state.conversationId?.let { start.put("conversationId", it) }
+                    deliver(review("start", start).put("definition", PocketWebState.publicValue(definition)).put("draft", true)
+                        .put("budget", TeamCoordinator.initialBudget(members.length(), start.getInt("rounds"))), null)
+                }
             }
             "teams.reviewStart" -> {
                 fields(args, "viewHandle", "goal", "rounds")
@@ -390,7 +426,8 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 val input = JSONObject().put("teamId", team.getString("id")).put("goal", text(args, "goal", 8000).trim())
                     .put("rounds", if (team.optString("discussionFormat") == TeamEvidenceDiscussion.FORMAT) 2 else rounds).put("expectedDefinition", team.toString())
                 controller.state.conversationId?.let { input.put("conversationId", it) }
-                if (phoneMembers.isEmpty()) deliver(review("start", input).put("definition", PocketWebState.publicValue(team)), null)
+                if (phoneMembers.isEmpty()) deliver(review("start", input).put("definition", PocketWebState.publicValue(team))
+                    .put("budget", TeamCoordinator.initialBudget(team.getJSONArray("members").length(), input.getInt("rounds"))), null)
                 else {
                     require(team.optString("mode") == "collaborate") { "手机成员请使用共同工作方式" }
                     phonePages.entries.removeAll { entry -> (entry.value.expires <= SystemClock.elapsedRealtime()).also { if (it) runCatching { entry.value.original.close() } } }

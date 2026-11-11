@@ -18,6 +18,16 @@
 
 接管时已闭合上批发布证据：`9c193fe845bc963c1389eab60b32330fb280d029` 的 [GitHub Release 运行 43037681113](https://github.com/wozhenbang2004/PocketWorld/actions/runs/43037681113) build / prepare / publish 全部成功，[v0.1.117](https://github.com/wozhenbang2004/PocketWorld/releases/tag/v0.1.117) 于北京时间 2026-11-11 22:30:08 正式发布，目标为同一 SHA，完整 APK、1116→1117 更新包及 release.json 均已上架。截图运行保持 skipped。这是上批交付结果，不代表本批代码或 Android 体验已经验证。
 
+## 2026-11-11 团队协作重构 · 围绕一次目标组织
+
+用户本轮要求“团队协作那一部分进行深度的优化”“深度的重构设计”“没有符合我们的产品语义”，并明确要求研究 AionUI 的功能、产品逻辑与 UI/UX。项目名原话、固定研究版本、需求 TC-01–TC-07、正式旅程、组件取用及 UIX-01–UIX-10 决定统一记录在 [团队协作设计](docs/team-collaboration-design-20261111.md)。起点 main 为 `9c193fe845bc963c1389eab60b32330fb280d029`；沿用直接 main 实施和发布授权，禁止写跑测试、禁止本地构建 APK。
+
+主对象是一次协作及其目标，编组是可复用配置。目录默认协作，快速开始先填写目标和模型分工，经一次原生审阅启动；一次协作不会自动保存为永久编组。运行工作区按概览、分工、沟通、资料分开：目标、待处理和现有成果优先；详细过程、编组配置和低频操作按需展开。普通成员的 `leaderId` 如实显示为负责汇总，项目整合仍由原任务的独立授权处理。
+
+所有执行继续沿原 FeatureHost、TaskStore、TeamCoordinator 和 AgentRunner。新启动保留原生窗口准入、实际预算与一次确认；未知启动在耐久草稿里保留所核对的 teamId/时间，只读原运行后显式核对，不自动重发。待处理由同一个原生 `TeamAttention` 投影提供，通知、概览和原任务导航保留准确运行、成员、阶段及子任务身份。停止后可读历史和撤回资料，撤回不会恢复执行。
+
+本轮沿仓内已经采用的 BoardUI、Fluid Tabs、Affect、Josh PressButton、成员身份与动效 tokens 组合实现；不新增组件家族。类型与生产构建、只读交叉审阅、正式 APK 发布及真机体验分别记录，实际交付证据与限制见上述设计文档；未经真机体验不标视觉验收通过。
+
 ## 2026-11-11 日常工作连续性 · 第二轮大规模升级
 
 用户本轮原话：“继续大规模升级优化。”来源为本聊天最新消息，精确消息 ID 与发送时间不可取得；北京时间 2026-11-11 固化。沿用“交给你去设计好然后彻底改好直接在 main 分支”的设计、实现及正式发布授权。基线 main 为 `b64f0d6bcb1c9ec9c3b40c86ff5c298f148f8c2d`，上批已发布 [v0.1.116 / 0.4.1116](https://github.com/wozhenbang2004/PocketWorld/releases/tag/v0.1.116)，[流水线 43009107601](https://github.com/wozhenbang2004/PocketWorld/actions/runs/43009107601) 三个作业成功，公开更新清单固定公钥验签通过。PW-C1–C7 不重复实施。

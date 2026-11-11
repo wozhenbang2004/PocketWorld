@@ -43,13 +43,20 @@ private fun teamRows(array: JSONArray?): List<JSONObject> = (0 until (array?.len
 
 internal fun teamConversationRows(run: JSONObject): List<JSONObject> {
     val rows = teamRows(run.optJSONArray("transcript")).map { JSONObject(it.toString()) }.toMutableList()
-    val assignments = if (run.optJSONObject("workPlan") != null) teamRows(run.getJSONObject("workPlan").optJSONArray("items")).mapNotNull { item -> item.optJSONObject("assignmentTask")?.let { item.optString("memberId") to it } } else teamRows(run.optJSONArray("members")).mapNotNull { member -> member.optJSONObject("assignmentTask")?.let { member.optString("id") to it } }
-    assignments.forEach { (memberId, assignment) ->
+    val assignments = if (run.optJSONObject("workPlan") != null) {
+        teamRows(run.getJSONObject("workPlan").optJSONArray("items")).mapNotNull { item ->
+            item.optJSONObject("assignmentTask")?.let { Triple(item.getString("memberId"), it, item.getString("workItemId")) }
+        }
+    } else teamRows(run.optJSONArray("members")).mapNotNull { member ->
+        member.optJSONObject("assignmentTask")?.let { Triple(member.getString("id"), it, "") }
+    }
+    assignments.forEach { (memberId, assignment, workItemId) ->
         teamRows(assignment.optJSONArray("questions")).forEach { question ->
             rows += JSONObject(question.toString()).put("messageId", "question:" + question.getString("questionId"))
                 .put("kind", "assignment_question").put("memberId", memberId)
                 .put("assignmentId", assignment.getString("assignmentId")).put("content", question.optString("question"))
                 .put("at", question.optLong("askedAt")).put("role", "assistant")
+                .also { if (workItemId.isNotEmpty()) it.put("workItemId", workItemId) }
         }
     }
     return rows.distinctBy { it.getString("messageId") }.sortedWith(compareBy<JSONObject> { it.optLong("at") }.thenBy { it.getString("messageId") })
