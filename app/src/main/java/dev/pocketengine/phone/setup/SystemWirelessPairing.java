@@ -13,6 +13,7 @@ import java.util.regex.Pattern;
 /** Bounded, explicit owner setup only. Never reads text outside a system Settings pairing dialog. */
 public final class SystemWirelessPairing {
     private static final Pattern ADDRESS = Pattern.compile("((?:[0-9]{1,3}\\.){3}[0-9]{1,3})\\s*:\\s*([0-9]{1,5})");
+    private static final Pattern IPV6 = Pattern.compile("\\[([0-9a-fA-F:%]+)\\]\\s*:\\s*([0-9]{1,5})");
     private static final Pattern CODE = Pattern.compile("(?<![0-9])([0-9]{6})(?![0-9])");
     private SystemWirelessPairing() { }
 
@@ -46,13 +47,15 @@ public final class SystemWirelessPairing {
             String item = value == null ? "" : value.trim();
             Matcher endpoint = ADDRESS.matcher(item);
             while (endpoint.find()) addresses.add(endpoint.group(1) + ":" + endpoint.group(2));
+            Matcher ipv6 = IPV6.matcher(item);
+            while (ipv6.find()) addresses.add(ipv6.group(1) + ":" + ipv6.group(2));
             if (item.matches("[0-9]{6}") || item.toLowerCase(Locale.ROOT).contains("pairing code")
                     || item.contains("配对码")) {
-                Matcher code = CODE.matcher(item);
-                while (code.find()) {
-                    // A six-digit number inside an address or a port is not a pairing code.
-                    if (!ADDRESS.matcher(item).find()) codes.add(code.group(1));
-                }
+                // Some OEMs expose the entire modal as one accessibility label.
+                // Remove addresses before looking for a six-digit pairing code.
+                String codeText=IPV6.matcher(ADDRESS.matcher(item).replaceAll(" ")).replaceAll(" ");
+                Matcher code = CODE.matcher(codeText);
+                while (code.find()) codes.add(code.group(1));
             }
         }
         if (codes.size() != 1 || addresses.size() != 1) return null;
