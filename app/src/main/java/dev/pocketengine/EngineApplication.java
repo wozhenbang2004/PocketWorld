@@ -2356,7 +2356,17 @@ public final class EngineApplication extends Application implements dev.pocketen
         dev.pocketengine.features.memory.ToolOutputCapture.Factory outputCapture=privateOutput?tasks.toolOutputFactory(id,run,epoch,original,inference::redactSensitive):null;
         var projectMemory=projectMemoryReads.get(original);JSONObject recordedMemory=task.optJSONObject("projectMemoryRead");
         if(recordedMemory!=null&&(projectMemory==null||!recordedMemory.getString("consentId").equals(projectMemory.metadata().getString("consentId"))))throw new SecurityException("本run项目记忆需要重新显选，未从metadata恢复权限或回退全局");
-        var profile=workProfileTools(task,original,selectedProfile);var nativeSupervisor=profile==null?new dev.pocketengine.features.HostToolSupervisor(features,tasks,id,run,epoch,true,outputCapture):new dev.pocketengine.features.HostToolSupervisor(features,tasks,id,run,epoch,true,outputCapture,profile);if(projectMemory!=null)nativeSupervisor.installProjectMemoryRead(projectMemory,original);if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))&&"private".equals(task.optString("spaceId")))nativeSupervisor.installNativeDeviceRoutes(()->{OriginalDeviceSourceRoutes routes=originalDeviceSourceRoutes;return routes==null?null:routes.forOriginalRun(id,original);});CapabilityPort local=nativeSupervisor;
+        var profile=workProfileTools(task,original,selectedProfile);var nativeSupervisor=profile==null?new dev.pocketengine.features.HostToolSupervisor(features,tasks,id,run,epoch,true,outputCapture):new dev.pocketengine.features.HostToolSupervisor(features,tasks,id,run,epoch,true,outputCapture,profile);if(projectMemory!=null)nativeSupervisor.installProjectMemoryRead(projectMemory,original);
+        if(settings.webSearchSettings().getBoolean("providerHostedEnabled")){
+            nativeSupervisor.installHostedSearch(inference,original,()->{
+                checkLiveExtensionControl(extensionBinding,original);
+                if(!settings.webSearchSettings().getBoolean("providerHostedEnabled"))
+                    throw new SecurityException("主人已停用厂商托管搜索");
+                dev.pocketengine.runtime.models.InferenceRouteContinuity.requireCurrent(
+                        inference,settings.currentForCaptured(inference),original);
+            });
+        }
+if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))&&"private".equals(task.optString("spaceId")))nativeSupervisor.installNativeDeviceRoutes(()->{OriginalDeviceSourceRoutes routes=originalDeviceSourceRoutes;return routes==null?null:routes.forOriginalRun(id,original);});CapabilityPort local=nativeSupervisor;
         JSONObject planRequest=automationPlanTask(task)?reviewedAutomationRequest(task):null;
         if(planRequest!=null&&planRequest.optString("executor").equals("workspace"))local=new dev.pocketengine.features.automation.PlanWorkspacePort(local,planRequest.getJSONObject("verification"),this::readAutomationArtifact,args->tasks.approveAutomationArtifactFreeze(id,run,args));
         EngineModule attached=features.module("attachments");
