@@ -21,7 +21,13 @@
 
 主输入原有“本对话的个人记忆”入口存在宿主仅允许 profile 页、与调用位置不符的断点。本批只为 `profile.conversation.read/save` 增加当前私人主表面的窄路径：无 secondary section、无任务窗口、前台私人 owner、请求 conversationId 非空且与当前会话相同；异步窗口/会话核对和原 revision/CAS 保持。其他个人资料与记忆正文命令仍要求原 profile 权限。主页来源失效工作只使用原生脱敏 goal/summary，不从 raw 事件或操作恢复正文；已完成但仍待核对的操作留在待处理组。
 
-已完成页面/会话来源及原生边界的只读交叉审阅；集成后的 `npm run typecheck --prefix web-ui` 成功。当前准备正式 main 构建与发布；不编写或运行测试，不恢复 CI 采图，不在本机构建 APK。当前 Android 真机视觉、交互与管家完整办事旅程的验收仍开放。
+已完成页面/会话来源及原生边界的只读交叉审阅；集成后的 `npm run typecheck --prefix web-ui` 成功。正式源码为 [`0de644e2`](https://github.com/wozhenbang2004/PocketWorld/commit/0de644e20b89b3c913314c98ff1329b331d8d747)，tree `08c423ccce88f634f7812a78f60a9ede9d14a333`，与本地已审阅、通过类型检查的源码树完全一致；共 9 个文件、384 行新增/60 行删除。
+
+[v0.1.99](https://github.com/wozhenbang2004/PocketWorld/releases/tag/v0.1.99) 于北京时间 **2026-11-11 08:12:20** 正式发布，应用 **0.4.1099 / 1099**；[run 42928557314](https://github.com/wozhenbang2004/PocketWorld/actions/runs/42928557314) 的 build、prepare、publish 均 success，release target commit 与上述源码一致。云端完成 Web 生产构建（2551 模块）、Android 编译、稳定项目签名、包内资源完整性、增量包准备及正式资产回读核对。项目签名证书 SHA-256 保持 `b58e014e2a2e49b2e85ebd5b47a034a28cb0d313d71f379a5208d21afe388e58`。
+
+[正式 APK](https://github.com/wozhenbang2004/PocketWorld/releases/download/v0.1.99/6c040dc928fbd7f05273e1a2605098e3b2207df09daa5a11b0ca538fd1c82bba-app-1099.apk) 为 148,546,229 bytes，SHA-256 `6c040dc928fbd7f05273e1a2605098e3b2207df09daa5a11b0ca538fd1c82bba`；1098→1099 增量包为 1,715,191 bytes。已下载公开 `release.json` 并核对其 SHA-256 `b8509df7468349585f727a26de0a94bac553008349fee3c5036813697e8f9f1b`；载荷版本、包名、APK 大小/hash/URL 及增量起点与正式资产一致。轻量构建证据 artifact `13815715843` 元数据已核对，归档 digest `c540b92649d859b6c78d5fbb6d3f054f8ef67ebbe815096693ecde2fb1fc7c1a`；本轮未下载该归档，不冒称本地验签 APK。
+
+本批完成 PW-B1–B4 的实现、只读审阅、构建与正式发布。体验路径是“打开管家 → 在明确的当前话题交代目标 → 同一对话继续沟通 → 返回管家跟进最近委派 → 打开原任务处理决定”。近期摘要来自有界原生投影，全量跨会话目录/统计未实现，不把近期记录称为所有工作。不编写或运行测试，CI 采图保持 skipped，本机未构建 APK。**当前 Android 真机视觉、手感与管家完整办事旅程尚未体验；PW-R5 及全产品重做的整体验收仍开放。**
 
 ## 2026-11-11 接续 · 项目内开始工作
 
