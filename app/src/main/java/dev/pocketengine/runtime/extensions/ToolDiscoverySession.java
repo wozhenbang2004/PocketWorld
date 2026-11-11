@@ -44,7 +44,7 @@ public final class ToolDiscoverySession implements AutoCloseable {
     }
     public synchronized JSONArray requestTools(RunControl control)throws Exception{check(control);return catalog.requestTools(published);}
     public synchronized JSONObject summary(RunControl control)throws Exception{check(control);return catalog.summary(published);}
-    public synchronized void validateSearch(JSONObject arguments,RunControl control)throws Exception{requirePublished(ScopedToolCatalog.SEARCH_TOOL,control);ScopedToolCatalog.SearchRequest.fromJson(arguments);}
+    public synchronized void validateSearch(JSONObject arguments,RunControl control)throws Exception{requirePublished(ScopedToolCatalog.SEARCH_TOOL,control);catalog.validateSearch(ScopedToolCatalog.SearchRequest.fromJson(arguments));}
     public synchronized JSONObject search(JSONObject arguments,RunControl control)throws Exception {
         requirePublished(ScopedToolCatalog.SEARCH_TOOL,control);if(pending.size()>=16)throw new IllegalStateException("tool_discovery_uncommitted_receipt_bound");
         ScopedToolCatalog.Page page=catalog.search(ScopedToolCatalog.SearchRequest.fromJson(arguments));String id=UUID.randomUUID().toString();

@@ -2738,7 +2738,7 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
             tasks.checkCapability(sourceTask,sourceRun,sourceEpoch,tool,sourceControl);return result;
         }
         if("owner_work_directory".equals(tool))return tasks.ownerWorkDirectoryForButler(sourceTask,sourceRun,sourceEpoch,sourceControl,
-                args.optString("range","all"),args.optString("filter","all"),args.optString("cursor"),args.optInt("limit",12));
+                args.optString("range","all"),args.optString("filter","all"),args.optString("query"),args.optString("cursor"),args.optInt("limit",12));
         if("owner_work_list".equals(tool)){
             JSONArray all=tasks.ownerWorks(conversation),page=new JSONArray();int offset=args.optInt("offset",0),limit=args.optInt("limit",12),end=Math.min(all.length(),offset+limit);
             for(int i=offset;i<end;i++){JSONObject work=all.getJSONObject(i),row=new JSONObject();for(String key:new String[]{"id","taskId","conversationId","runId","coordinatorEpoch","epoch","executionRole","status","controls","contextAvailable"})if(work.has(key))row.put(key,work.get(key));page.put(row);}

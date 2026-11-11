@@ -1651,12 +1651,13 @@ public final class TaskStore {
         return selected;
     }
     private JSONObject ownerWorkHandling(JSONObject task)throws Exception {
-        JSONObject meta=ownerResultMetadata(task);JSONArray deliveries=meta.optJSONArray("deliveries");
+        JSONObject meta=ownerResultMetadata(task),reserved=meta.optJSONObject("takeover");JSONArray deliveries=meta.optJSONArray("deliveries");
         if(deliveries==null)return meta.optJSONObject("handling")==null?new JSONObject().put("state","none"):new JSONObject(meta.getJSONObject("handling").toString());
         JSONObject entry=null;for(int i=deliveries.length()-1;i>=0;i--){JSONObject candidate=deliveries.getJSONObject(i);if(!ownerWorkCapacityNotice(candidate)
                 &&task.optString("runId").equals(candidate.optString("runId"))&&task.optInt("coordinatorEpoch")==candidate.optInt("epoch")){entry=candidate;break;}}
         if(entry==null){JSONObject pending=meta.optJSONObject("takeover");return pending!=null&&"unavailable".equals(pending.optString("state"))?new JSONObject().put("state","unavailable").put("reason",pending.optString("reason","原始结果已保留，自动整理暂不可用")):new JSONObject().put("state","none");}
         JSONObject value=new JSONObject().put("deliveryId",entry.getString("deliveryId"));
+        if(reserved!=null&&reserved.has("deadlineAt"))value.put("deadlineAt",reserved.get("deadlineAt"));
         JSONArray pending=meta.optJSONArray("relatedPendingChildren");if(pending!=null&&pending.length()>0)value.put("pendingChildren",new JSONArray(pending.toString())).put("pendingChildCount",pending.length());
         if(meta.optBoolean("relatedSourcesUnavailable"))return value.put("state","needs_review").put("reason",meta.optString("relatedUnavailableReason","关联任务的原结果仍待核对，未提前自动汇报"));
         if(pending!=null&&pending.length()>0&&!task.optBoolean("cancelRequested"))return value.put("state","pending").put("reason","主工作已返回，仍在等原关联任务结束或核对回执");
@@ -1669,7 +1670,6 @@ public final class TaskStore {
             if(eligibility==OwnerWorkReceiptEligibility.UNKNOWN)return value.put("state","needs_review").put("reason","管家处理回执待核对，未重复调用模型").put("receiptReconciliation",ownerWorkReceiptReview(entry));
             if(eligibility==OwnerWorkReceiptEligibility.BUSY)return value.put("state","running").put("reason","管家正在核对并整理结果");
         }
-        JSONObject reserved=meta.optJSONObject("takeover");
         if(reserved==null)return value.put("state","unavailable").put("reason","这份早期工作没有预留自动整理额度，可在原话题继续处理");
         if(task.optBoolean("cancelRequested"))return value.put("state","unavailable").put("reason","工作已停止，保留原始结果");
         long deadline=reserved.optLong("deadlineAt");if(deadline>0&&deadline<=System.currentTimeMillis())return value.put("state","unavailable").put("reason","原结果整理范围已到期，未自动续期");
@@ -2249,8 +2249,13 @@ public final class TaskStore {
      * Empty filtered pages may still have a continuation; no page claims a global total. */
     public synchronized JSONObject ownerWorkDirectoryForButler(String sourceTask,String sourceRun,int sourceEpoch,RunControl control,
                                                                String scope,String filter,String cursor,int limit)throws Exception {
+        return ownerWorkDirectoryForButler(sourceTask,sourceRun,sourceEpoch,control,scope,filter,"",cursor,limit);
+    }
+    public synchronized JSONObject ownerWorkDirectoryForButler(String sourceTask,String sourceRun,int sourceEpoch,RunControl control,
+                                                               String scope,String filter,String query,String cursor,int limit)throws Exception {
         if(!Set.of("all","conversation").contains(scope)||!Set.of("all","attention","active","open").contains(filter)
                 ||cursor==null||cursor.length()>4096||limit<1||limit>24)throw new IllegalArgumentException("私人工作目录范围无效");
+        String normalized=OwnerWorkDirectory.normalizeQuery(query),queryDigest=capabilityFingerprint(new JSONObject().put("query",normalized));
         db.beginTransaction();try{
             JSONObject source=requireOwnerButlerRead(sourceTask,sourceRun,sourceEpoch,control);
             String conversation="conversation".equals(scope)?source.getString("conversationId"):"",next="";
@@ -2258,7 +2263,9 @@ public final class TaskStore {
                 JSONObject saved;
                 try{saved=new JSONObject(new String(java.util.Base64.getUrlDecoder().decode(cursor),StandardCharsets.UTF_8));}
                 catch(Exception invalid){throw new IllegalArgumentException("私人工作目录游标不可读",invalid);}
-                if(saved.length()!=5||saved.optInt("v")!=1||!scope.equals(saved.optString("scope"))||!filter.equals(saved.optString("filter"))
+                boolean legacy=saved.optInt("v")==1&&saved.length()==5&&normalized.isEmpty();
+                boolean current=saved.optInt("v")==2&&saved.length()==6&&queryDigest.equals(saved.optString("query"));
+                if(!(legacy||current)||!scope.equals(saved.optString("scope"))||!filter.equals(saved.optString("filter"))
                         ||!conversation.equals(saved.optString("conversation"))||!(saved.opt("cursor") instanceof String))throw new SecurityException("目录游标不属于本次范围或筛选，请重新查询");
                 next=saved.getString("cursor");if(next.isEmpty())throw new IllegalArgumentException("目录继续游标为空，请重新查询");
             }
@@ -2267,30 +2274,42 @@ public final class TaskStore {
                 JSONObject page=TaskAuditStore.summaryPage(db,next,limit-works.length());JSONArray headers=page.getJSONArray("tasks");
                 pages++;scanned+=headers.length();bytes+=page.getLong("headerBytesRead");
                 for(int i=0;i<headers.length();i++){
-                    JSONObject header=headers.getJSONObject(i),checked;
+                    JSONObject header=headers.getJSONObject(i),checked,prepared=null;
                     if(OwnerWorkTask.isOwnerWork(header)){
                         OwnerWorkTask.require(header);if(!conversation.isEmpty()&&!conversation.equals(header.getString("conversationId")))continue;
-                        checked=ownerWorkForUi(header);if(checked.optBoolean("contextAvailable"))try{inheritOwnerWorkGoalSources(sourceTask,sourceRun,header);}catch(Exception unavailable){if(Thread.currentThread().isInterrupted())throw unavailable;checked.put("contextAvailable",false);}
+                        checked=ownerWorkForUi(header);
                     }else if(header.optJSONObject("ownerWorkPreparation")!=null){
-                        JSONObject actual=required(header.getString("id"));checked=preparedWorkViewForButler(sourceTask,sourceRun,actual,true);
+                        prepared=required(header.getString("id"));checked=preparedWorkViewForButler(sourceTask,sourceRun,prepared,false);
                         if(!conversation.isEmpty()&&!conversation.equals(checked.getString("conversationId"))&&!conversation.equals(checked.optString("sourceConversationId")))continue;
                     }else continue;
+                    if(!OwnerWorkDirectory.matches(checked,normalized))continue;
                     boolean sameConversation=source.getString("conversationId").equals(checked.getString("conversationId"));
                     JSONObject row=ownerWorkDirectoryRow(checked,sameConversation);
-                    if("all".equals(filter)||"attention".equals(filter)&&row.getBoolean("needsAttention")
-                            ||"active".equals(filter)&&row.getBoolean("active")||"open".equals(filter)&&(row.getBoolean("needsAttention")||row.getBoolean("active")))works.put(row);
+                    if(!OwnerWorkDirectory.matchesFilter(row,filter))continue;
+                    // Only returned text becomes a dependency of this model run. Skipped
+                    // query/filter rows never inherit unrelated conversation sources.
+                    if(checked.optBoolean("contextAvailable")){
+                        if(prepared!=null)checked=preparedWorkViewForButler(sourceTask,sourceRun,prepared,true);
+                        else try{inheritOwnerWorkGoalSources(sourceTask,sourceRun,header);}
+                        catch(Exception unavailable){if(Thread.currentThread().isInterrupted())throw unavailable;checked.put("contextAvailable",false);}
+                        if(!OwnerWorkDirectory.matches(checked,normalized))continue;
+                        row=ownerWorkDirectoryRow(checked,sameConversation);
+                    }
+                    if(!OwnerWorkDirectory.matchesFilter(row,filter))continue;
+                    works.put(row);
                 }
                 String previous=next;next=page.getString("nextCursor");more=page.getBoolean("hasMore");
                 if(more&&(next.isEmpty()||next.equals(previous)))throw new IllegalStateException("原工作目录游标未前进，未重复读取");
                 control.check();
             }while(more&&works.length()<limit&&pages<4);
-            String continuation=more?java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(new JSONObject().put("v",1)
-                    .put("scope",scope).put("filter",filter).put("conversation",conversation).put("cursor",next).toString().getBytes(StandardCharsets.UTF_8)):"";
+            String continuation=more?java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(new JSONObject().put("v",2)
+                    .put("scope",scope).put("filter",filter).put("query",queryDigest).put("conversation",conversation).put("cursor",next).toString().getBytes(StandardCharsets.UTF_8)):"";
             requireOwnerButlerRead(sourceTask,sourceRun,sourceEpoch,control);
-            JSONObject result=new JSONObject().put("works",works).put("scope",scope).put("filter",filter).put("nextCursor",continuation)
+            JSONObject result=new JSONObject().put("works",works).put("scope",scope).put("filter",filter).put("query",query).put("nextCursor",continuation)
                     .put("hasMore",more).put("scanIncomplete",more).put("headerRowsExamined",scanned).put("headerPagesRead",pages)
                     .put("headerBytesRead",bytes).put("maximumHeaderPagesPerCall",4).put("resultLimit",limit)
                     .put("coverage","current_private_owner_work_headers_keyset_window_updates_require_refresh")
+                    .put("queryCoverage","source_checked_title_and_goal_only")
                     .put("crossConversationContent","native_source_checked_goal_and_title").put("bodyScope","private_owner_native_dependencies")
                     .put("executionAuthorized",false).put("receiptConsumed",false);
             if(!conversation.isEmpty())result.put("conversationId",conversation);
@@ -2314,10 +2333,7 @@ public final class TaskStore {
             }
             row.put("contextAvailable",work.optBoolean("contextAvailable"));if(work.has("controls"))row.put("controls",work.getJSONObject("controls"));
         }else row.put("contextAvailable",false).put("reason","original_sources_unavailable");
-        boolean unresolved=hasUnresolved(id);
-        boolean attention=unresolved||status.matches("awaiting_user|waiting_user|waiting_approval|awaiting_approval|waiting_permission|needs_confirmation|reconciling|interrupted|paused|pausing|failed");
-        return row.put("needsAttention",attention).put("active",status.matches("queued|preparing|running|stopping"))
-                .put("hasUnresolvedOperations",unresolved).put("executionAuthorized",false);
+        OwnerWorkDirectory.projectState(row,work,hasUnresolved(id));return row;
     }
     private void inheritOwnerWorkGoalSources(String targetTask,String targetRun,JSONObject work)throws Exception{
         JSONObject meta=OwnerWorkTask.require(work);requireOwnerWorkSources(work);if(targetTask.equals(meta.getString("sourceTaskId"))&&targetRun.equals(meta.getString("sourceRunId")))return;
@@ -2378,6 +2394,13 @@ public final class TaskStore {
         try{requireOwnerWorkPreparationCurrent(proposal);if(inherit&&!(readerTask.equals(proposal.getString("sourceTaskId"))&&readerRun.equals(proposal.getString("sourceRunId"))))inheritOwnerWorkPreparationSources(proposal,readerTask,readerRun);
             String goal=proposal.getJSONObject("contract").getString("goal");view.put("contextAvailable",true).put("goal",goal).put("title",goal.substring(0,Math.min(goal.length(),160))).put("contract",new JSONObject(proposal.getJSONObject("contract").toString()));
         }catch(Exception unavailable){if(Thread.currentThread().isInterrupted())throw unavailable;view.put("reason","original_sources_unavailable");}
+        if(view.optBoolean("contextAvailable")&&hasOwnerResultHandling(target)){
+            try{requireOwnerResultSources(target);view.put("handling",ownerWorkHandling(target));}
+            catch(SecurityException|dev.pocketengine.features.assistant.ConversationRepository.SourceUnavailable|dev.pocketengine.features.memory.TaskStoreMemoryReader.RawMessageUnavailable unavailable){
+                if(Thread.currentThread().isInterrupted())throw unavailable;
+                view.put("handling",new JSONObject().put("state","unavailable").put("reason","原结果来源或执行代次已不可核对"));
+            }
+        }
         return view;
     }
     /** Exact already-published formal result, never a naked task summary. */

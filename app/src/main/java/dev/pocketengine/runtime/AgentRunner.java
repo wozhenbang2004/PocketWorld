@@ -1022,6 +1022,7 @@ public final class AgentRunner {
                                 :"planning_phase_unchanged".equals(code)?"原任务已经处于只读规划阶段，不需要再次申请进入。此请求没有保存或派发；请继续原范围内的资料读取，或提交完整计划。"
                                 :"planning_plan_required".equals(code)?"还没有可供审阅的完整计划，此执行阶段请求没有保存或派发。请先用 execution_plan_submit 提交完整计划，不要让主人审阅空请求。"
                                 :ExecutionPlan.supports(name)?"规划请求字段、当前阶段或完整草稿不符合原合同，尚未保存或派发。请核对当前阶段与计划结构，不要携带执行授权或额外身份字段。"
+                                :dev.pocketengine.core.ScopedToolCatalog.SEARCH_TOOL.equals(name)&&correctableArguments?"工具搜索参数或续页游标不符合当前目录，尚未派发。请核对 query、limit；旧游标、查询变化或目录更新时清空 cursor，从第一页重新搜索。"
                                 :badArguments instanceof CapabilityPort.Unavailable?"本轮工具已撤销或安装改变，旧决定尚未执行，请重新取得当前工具清单。":capabilities!=null&&capabilities.supports(name)?"此能力工具的参数不符合当前合同，尚未执行。请核对该工具的字段与范围。":"工具参数无效或页面引用已过期，请重新观察后使用当前节点与0到1000坐标。");
                         receipt.put("accepted",false).put("nativeDispatched",false);
                         repeatedTools.afterTool(name,call.getJSONObject("function").opt("arguments"),receipt,false,true);
