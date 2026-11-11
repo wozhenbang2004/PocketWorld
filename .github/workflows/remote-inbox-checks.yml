@@ -44,6 +44,8 @@ jobs:
         run: |
           npm ci --prefix web-ui
           npm run typecheck --prefix web-ui
+      - name: Verify background setup state and owner controls
+        run: node --experimental-strip-types --test web-ui/tests/background-settings.test.ts
   native-compile:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
