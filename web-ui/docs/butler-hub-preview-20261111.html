@@ -1,0 +1,465 @@
+<div id="pw-butler-proposal">
+  <style>
+    #pw-butler-proposal{--p-bg:light-dark(#f6f6f6,#111111);--p-paper:light-dark(#ffffff,#1c1c1c);--p-canvas:light-dark(#fcfcfc,#181818);--p-inset:light-dark(#f1f1f1,#242424);--p-ink:light-dark(#181818,#f6f6f6);--p-copy:light-dark(#555555,#d4d4d4);--p-muted:light-dark(#646464,#b5b5b5);--p-line:light-dark(#e6e6e6,#343434);--p-accent:light-dark(#526b8a,#a9bcd6);--p-accent-soft:light-dark(#eaf0f7,#252d3a);--p-on-accent:light-dark(#ffffff,#111821);--p-on-soft:light-dark(#405873,#b9c9df);--p-warning:light-dark(#80561f,#f0c48a);--p-warning-bg:light-dark(#faf4e9,#33291e);--p-shadow:0 1px 3px light-dark(#0000000d,#00000029),0 8px 28px -4px light-dark(#00000012,#0000003d);font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;font-size:14px;line-height:1.6;color:var(--p-ink);width:100%;min-width:0;container-type:inline-size}
+    #pw-butler-proposal *{box-sizing:border-box}
+    #pw-butler-proposal [hidden]{display:none!important}
+    #pw-butler-proposal h1,#pw-butler-proposal h2,#pw-butler-proposal h3,#pw-butler-proposal p{margin:0}
+    #pw-butler-proposal h1{font-size:27px;font-weight:550;line-height:1.4;letter-spacing:-.6px}
+    #pw-butler-proposal h2{font-size:17px;font-weight:550;line-height:1.5}
+    #pw-butler-proposal h3{font-size:14px;font-weight:500}
+    #pw-butler-proposal strong{font-weight:550}
+    #pw-butler-proposal small{font-size:12px;line-height:1.6}
+    #pw-butler-proposal button,#pw-butler-proposal input,#pw-butler-proposal textarea{font:inherit;color:inherit}
+    #pw-butler-proposal button{border:0;background:transparent}
+    #pw-butler-proposal button:disabled{opacity:.45;cursor:default}
+    #pw-butler-proposal .pw-proposal-label{font-size:12px;color:var(--p-muted);padding:4px 100px 12px 4px}
+    #pw-butler-proposal .pw-app{position:relative;display:grid;grid-template-columns:178px minmax(0,1fr);background:var(--p-bg);border-radius:18px;isolation:isolate}
+    #pw-butler-proposal .pw-nav-scrim,#pw-butler-proposal .pw-nav-close{display:none}
+    #pw-butler-proposal .pw-work-sidebar{padding:22px 12px 18px;display:flex;flex-direction:column;gap:25px;min-width:0}
+    #pw-butler-proposal .pw-brand{display:flex;align-items:center;gap:9px;padding:0 8px;font-weight:550;letter-spacing:-.3px}
+    #pw-butler-proposal .pw-brand-mark{display:grid;place-items:center;background:var(--p-ink);color:var(--p-paper);width:27px;height:27px;border-radius:9px;font-size:13px}
+    #pw-butler-proposal .pw-work-sidebar nav{display:flex;flex-direction:column;gap:5px}
+    #pw-butler-proposal .pw-nav-item{display:flex;align-items:center;gap:9px;padding:10px 12px;min-height:44px;width:100%;text-align:left;border-radius:12px;color:var(--p-copy);font-size:13px}
+    #pw-butler-proposal .pw-nav-item[aria-current="page"]{background:var(--p-paper);color:var(--p-ink);box-shadow:0 1px 3px light-dark(#00000008,#00000029)}
+    #pw-butler-proposal .pw-nav-item:hover{background:var(--p-paper)}
+    #pw-butler-proposal .pw-nav-group{margin-top:18px;padding:0 12px 4px;color:var(--p-muted);font-size:11px;letter-spacing:.06em}
+    #pw-butler-proposal .pw-nav-footer{margin-top:auto;padding-top:44px}
+    #pw-butler-proposal .pw-main{min-width:0;margin:6px 6px 6px 0;background:var(--p-canvas);border-radius:13px;min-height:720px}
+    #pw-butler-proposal .au-sc-contentbar{display:flex;align-items:center;gap:8px;min-height:62px;padding:10px 24px;color:var(--p-copy);font-size:12px}
+    #pw-butler-proposal .pw-grow{flex:1;min-width:0}
+    #pw-butler-proposal .pw-muted{color:var(--p-muted)}
+    #pw-butler-proposal .pw-copy{color:var(--p-copy)}
+    #pw-butler-proposal .pw-eyebrow{font-size:12px;color:var(--p-muted);margin-bottom:9px}
+    #pw-butler-proposal .pw-section{margin-top:30px}
+    #pw-butler-proposal .pw-section-head{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+    #pw-butler-proposal .pw-section-head h2{font-size:14px}
+    #pw-butler-proposal .pw-section-head .pw-link{margin-left:auto}
+    #pw-butler-proposal .pw-link{display:inline-flex;align-items:center;gap:5px;min-height:44px;padding:8px 2px;color:var(--p-on-soft);font-size:12px;text-align:left}
+    #pw-butler-proposal .au-sc-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:8px 13px;min-height:40px;border:1px solid var(--p-line);border-radius:11px;background:var(--p-paper);font-size:13px;line-height:1.4;box-shadow:0 1px 2px light-dark(#00000006,#00000022);transition:background .15s,transform .12s;text-align:center}
+    #pw-butler-proposal .au-sc-btn:active:not(:disabled){transform:translateY(1px)}
+    #pw-butler-proposal .au-sc-btn:hover:not(:disabled){background:var(--p-inset)}
+    #pw-butler-proposal .au-sc-primary{background:var(--p-accent);color:var(--p-on-accent);border-color:transparent;box-shadow:none}
+    #pw-butler-proposal .au-sc-primary:hover:not(:disabled){background:color-mix(in srgb,var(--p-accent) 88%,var(--p-ink))}
+    #pw-butler-proposal .au-sc-iconbtn{display:inline-flex;align-items:center;justify-content:center;width:40px;min-width:40px;height:40px;border-radius:11px;padding:8px;color:var(--p-copy)}
+    #pw-butler-proposal .au-sc-iconbtn:hover{background:var(--p-inset)}
+    #pw-butler-proposal .pw-mobile-nav{display:none}
+    #pw-butler-proposal .au-sc-home-center{width:min(672px,calc(100% - 64px));margin:22px auto 36px}
+    #pw-butler-proposal .pw-home-intro{margin-bottom:24px}
+    #pw-butler-proposal .pw-home-intro>p:last-child{margin-top:10px;color:var(--p-copy);line-height:1.75;max-width:44em}
+    #pw-butler-proposal .pw-composer-host{padding-top:13px;margin:4px 0 8px}
+    #pw-butler-proposal .pw-composer-context-rail{position:relative;width:64%;min-width:144px;max-width:320px;height:27px;margin:0 auto -12px;border-radius:24px;background:var(--p-inset)}
+    #pw-butler-proposal .au-sc-composer-inner{position:relative;background:var(--p-paper);padding:8px;border-radius:25px;box-shadow:var(--p-shadow)}
+    #pw-butler-proposal .au-sc-composer-inner textarea{display:block;box-sizing:border-box;width:100%;min-height:65px;max-width:100%;border:0;background:transparent;resize:vertical;padding:10px 12px;font-size:16px;line-height:1.6;border-radius:12px}
+    #pw-butler-proposal .au-sc-composer-inner textarea::placeholder{color:var(--p-muted)}
+    #pw-butler-proposal .au-sc-composer-tools{display:flex;align-items:center;gap:3px;padding:0 4px;min-height:44px;flex-wrap:wrap}
+    #pw-butler-proposal .pw-input-context{font-size:12px;color:var(--p-muted);padding:5px 12px 0}
+    #pw-butler-proposal .pw-context-trigger{font-size:12px;display:flex;align-items:center;gap:5px;padding:6px 8px;min-height:40px;color:var(--p-copy)}
+    #pw-butler-proposal .au-sc-send{width:38px;height:38px;background:var(--p-accent);color:var(--p-on-accent);border-radius:50%;display:grid;place-items:center}
+    #pw-butler-proposal .pw-result-highlight{margin-top:24px;padding:19px 20px;background:var(--p-accent-soft);border-radius:16px;display:flex;align-items:center;gap:14px;width:100%;text-align:left}
+    #pw-butler-proposal .pw-result-highlight strong{display:block;font-size:16px;margin:3px 0;color:var(--p-ink)}
+    #pw-butler-proposal .pw-result-highlight small{display:block;color:var(--p-on-soft)}
+    #pw-butler-proposal .pw-file-mark{display:flex;align-items:center;justify-content:center;width:38px;height:46px;border-radius:8px;background:var(--p-paper);color:var(--p-on-soft);flex-shrink:0}
+    #pw-butler-proposal .pw-object-row{display:flex;align-items:center;gap:12px;padding:15px 2px;min-height:72px;width:100%;text-align:left;border-bottom:1px solid var(--p-line)}
+    #pw-butler-proposal .pw-object-row:last-child{border-bottom:0}
+    #pw-butler-proposal .pw-object-copy{flex:1;min-width:0}
+    #pw-butler-proposal .pw-object-copy strong{display:block;font-size:14px;line-height:1.6}
+    #pw-butler-proposal .pw-object-copy small{display:block;color:var(--p-muted);margin-top:3px}
+    #pw-butler-proposal .pw-status{display:inline-flex;align-items:center;gap:5px;color:var(--p-copy);font-size:12px;white-space:nowrap}
+    #pw-butler-proposal .pw-status[data-tone="attention"]{color:var(--p-warning)}
+    #pw-butler-proposal .pw-status-dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0}
+    #pw-butler-proposal .ui-dic__compact-item{display:flex;gap:12px;align-items:center;padding:14px 0;border-bottom:1px solid var(--p-line)}
+    #pw-butler-proposal .ui-dic__compact-copy{flex:1;min-width:0}
+    #pw-butler-proposal .ui-dic__title{font-size:14px;font-weight:500;display:block}
+    #pw-butler-proposal .ui-dic__detail{display:block;color:var(--p-muted);font-size:12px;margin-top:5px}
+    #pw-butler-proposal .ui-dic__next{background:var(--p-accent-soft);color:var(--p-on-soft);border:0;min-height:44px}
+    #pw-butler-proposal .pw-page{padding:18px 32px 36px;max-width:860px;margin:0 auto}
+    #pw-butler-proposal .pw-page-lead{margin:10px 0 26px;color:var(--p-copy);line-height:1.8}
+    #pw-butler-proposal .au-sc-tabs{display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin:22px 0 20px}
+    #pw-butler-proposal .au-sc-tabs button{min-height:40px;padding:8px 15px;color:var(--p-muted);border-radius:10px;font-size:13px}
+    #pw-butler-proposal .au-sc-tabs button[aria-selected="true"]{background:var(--p-inset);color:var(--p-ink)}
+    #pw-butler-proposal .pw-rule{height:1px;background:var(--p-line);margin:23px 0}
+    #pw-butler-proposal .au-sc-chat-screen{display:grid;grid-template-columns:minmax(0,1fr);min-width:0}
+    #pw-butler-proposal .au-sc-chat-thread{display:flex;flex-direction:column;min-width:0}
+    #pw-butler-proposal .au-sc-chat-scroll{padding:18px 30px;font-size:14px;line-height:1.85;min-width:0}
+    #pw-butler-proposal .au-sc-chat-scroll>p{margin:17px 0}
+    #pw-butler-proposal .au-sc-user-message{background:var(--p-inset);padding:12px 16px;border-radius:17px;max-width:92%;margin-left:auto!important}
+    #pw-butler-proposal .au-sc-agent-name{display:flex;align-items:center;gap:8px;font-weight:550;font-size:13px;margin-top:27px}
+    #pw-butler-proposal .au-sc-worked{font-size:12px;color:var(--p-muted);margin:14px 0}
+    #pw-butler-proposal .au-sc-worked summary{padding:7px 0}
+    #pw-butler-proposal .au-sc-worked p{padding:5px 0}
+    #pw-butler-proposal .au-sc-chat-input{padding:18px 30px 30px;margin-top:auto}
+    #pw-butler-proposal .au-sc-brief{display:flex;flex-direction:column;border-left:1px solid var(--p-line);background:var(--p-paper);min-width:0}
+    #pw-butler-proposal .au-sc-brief-scroll{padding:20px}
+    #pw-butler-proposal .au-sc-brief-scroll>section{margin-top:24px}
+    #pw-butler-proposal .au-sc-brief-scroll>section>small{display:block;margin-bottom:8px;color:var(--p-muted)}
+    #pw-butler-proposal .au-sc-brief footer{padding:16px 20px;margin-top:auto;border-top:1px solid var(--p-line)}
+    #pw-butler-proposal .pw-brief-list{padding-left:18px;color:var(--p-copy);font-size:12px;line-height:1.9}
+    #pw-butler-proposal .pw-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:22px}
+    #pw-butler-proposal .pw-work-summary{background:var(--p-inset);border-radius:13px;padding:16px 18px;margin:22px 0}
+    #pw-butler-proposal .pw-work-summary p{color:var(--p-copy);font-size:13px;margin-top:5px;line-height:1.75}
+    #pw-butler-proposal .pw-target-list{padding:0;list-style:none}
+    #pw-butler-proposal .pw-target-list li{padding:11px 0;display:flex;gap:10px;align-items:baseline;border-bottom:1px solid var(--p-line)}
+    #pw-butler-proposal .pw-target-list span:first-child{color:var(--p-muted);font-size:12px;min-width:56px}
+    #pw-butler-proposal .pw-target-list span:last-child{font-size:13px}
+    #pw-butler-proposal .pw-timeline{padding-left:17px;margin:18px 0;border-left:1px solid var(--p-line)}
+    #pw-butler-proposal .pw-timeline>div{padding:0 0 20px}
+    #pw-butler-proposal .pw-timeline strong{font-size:14px;display:block}
+    #pw-butler-proposal .pw-timeline small{color:var(--p-muted)}
+    #pw-butler-proposal .pw-decision-body{max-width:580px}
+    #pw-butler-proposal .pw-decision-context{background:var(--p-warning-bg);color:var(--p-warning);padding:12px 15px;border-radius:12px;font-size:13px;margin:22px 0}
+    #pw-butler-proposal fieldset{border:0;padding:0;margin:22px 0}
+    #pw-butler-proposal legend{font-size:13px;font-weight:500;margin-bottom:10px}
+    #pw-butler-proposal .pw-radio-option{display:flex;gap:12px;padding:16px 13px;border-radius:12px;background:var(--p-paper);margin:8px 0;align-items:center}
+    #pw-butler-proposal .pw-radio-option:has(input:checked){background:var(--p-accent-soft)}
+    #pw-butler-proposal .pw-radio-option{position:relative}
+    #pw-butler-proposal .pw-radio-option input{position:absolute;opacity:0;width:1px;height:1px;margin:0}
+    #pw-butler-proposal .pw-radio-dot{position:relative;display:flex;flex-shrink:0;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%}
+    #pw-butler-proposal .pw-radio-default,#pw-butler-proposal .pw-radio-selected{position:absolute;inset:0;border-radius:50%;transition:opacity .2s}
+    #pw-butler-proposal .pw-radio-default{border:1px solid var(--p-muted);background:var(--p-paper);box-shadow:0 1px 2px light-dark(#0000000d,#00000022)}
+    #pw-butler-proposal .pw-radio-selected{opacity:0;background:linear-gradient(to bottom,var(--p-accent),color-mix(in srgb,var(--p-accent) 90%,var(--p-ink)));box-shadow:inset 0 0 0 1px var(--p-accent),inset 0 2px 0 light-dark(#ffffff40,#ffffff20)}
+    #pw-butler-proposal .pw-radio-inner{position:absolute;top:50%;left:50%;width:6px;height:6px;transform:translate(-50%,-50%);scale:0;opacity:0;border-radius:50%;background:var(--p-on-accent);transition:scale .2s,opacity .2s}
+    #pw-butler-proposal input:checked+.pw-radio-dot .pw-radio-default{opacity:0}
+    #pw-butler-proposal input:checked+.pw-radio-dot .pw-radio-selected{opacity:1}
+    #pw-butler-proposal input:checked+.pw-radio-dot .pw-radio-inner{opacity:1;scale:1}
+    #pw-butler-proposal input:focus-visible+.pw-radio-dot{outline:2px solid var(--p-accent);outline-offset:2px}
+    #pw-butler-proposal .pw-radio-option strong{display:block;font-size:14px}
+    #pw-butler-proposal .pw-radio-option small{display:block;color:var(--p-muted)}
+    #pw-butler-proposal .pw-receipt{margin-top:16px;padding:13px 15px;background:var(--p-accent-soft);border-radius:11px;color:var(--p-on-soft);font-size:13px}
+    #pw-butler-proposal .pw-article{margin-top:24px;padding:24px 26px;background:var(--p-paper);border-radius:12px}
+    #pw-butler-proposal .pw-article h2{font-size:22px;margin:10px 0 24px}
+    #pw-butler-proposal .pw-article h3{font-size:15px;margin:26px 0 10px}
+    #pw-butler-proposal .pw-article p,#pw-butler-proposal .pw-article li{font-size:14px;line-height:1.9;color:var(--p-copy)}
+    #pw-butler-proposal .pw-article ol{padding-left:22px;margin:0}
+    #pw-butler-proposal .pw-article li{padding:5px 0}
+    #pw-butler-proposal .pw-version{font-size:12px;padding:4px 8px;background:var(--p-inset);border-radius:7px;color:var(--p-copy);display:inline-block}
+    #pw-butler-proposal .pw-inline-switch{font-size:12px;min-height:40px;padding:8px 10px;border-radius:9px;color:var(--p-on-soft);background:var(--p-accent-soft)}
+    #pw-butler-proposal .pw-inline-switch[aria-pressed="false"]{background:var(--p-inset);color:var(--p-muted)}
+    #pw-butler-proposal .pw-nav-open .pw-work-sidebar{display:flex}
+    @container(min-width:950px){#pw-butler-proposal .au-sc-with-brief{grid-template-columns:minmax(0,1fr) 270px}}
+    @container(max-width:949px){#pw-butler-proposal .au-sc-brief{display:none}}
+    @container(max-width:700px){#pw-butler-proposal .pw-app{grid-template-columns:minmax(0,1fr)}#pw-butler-proposal .pw-work-sidebar{display:none;padding:16px 14px;gap:16px}#pw-butler-proposal .pw-nav-open .pw-work-sidebar{display:flex}#pw-butler-proposal .pw-nav-footer{padding-top:0;margin-top:0}#pw-butler-proposal .pw-work-sidebar nav{display:grid;grid-template-columns:1fr 1fr}#pw-butler-proposal .pw-nav-group{grid-column:1/-1;margin-top:7px}#pw-butler-proposal .pw-brand{display:none}#pw-butler-proposal .pw-main{margin:5px;min-height:690px}#pw-butler-proposal .pw-mobile-nav{display:inline-flex}#pw-butler-proposal .au-sc-contentbar{padding:10px 14px}#pw-butler-proposal .au-sc-home-center{width:calc(100% - 40px);margin-top:18px}#pw-butler-proposal .pw-page{padding:17px 20px 28px}#pw-butler-proposal h1{font-size:24px}#pw-butler-proposal .pw-result-highlight{padding:15px;gap:10px}#pw-butler-proposal .pw-status{white-space:normal;text-align:right;max-width:90px}#pw-butler-proposal .ui-dic__compact-item{flex-wrap:wrap}#pw-butler-proposal .ui-dic__compact-copy{flex-basis:calc(100% - 120px)}#pw-butler-proposal .au-sc-chat-scroll{padding:15px 20px}#pw-butler-proposal .au-sc-chat-input{padding:10px 20px 24px}#pw-butler-proposal .au-sc-brief{margin:0 20px 22px}#pw-butler-proposal .pw-article{padding:20px 17px}#pw-butler-proposal .au-sc-btn{min-height:44px}#pw-butler-proposal .au-sc-iconbtn{min-width:44px;width:44px;height:44px}#pw-butler-proposal .pw-actions{gap:8px}}
+    @container(max-width:700px){#pw-butler-proposal .pw-work-sidebar{position:absolute;z-index:40;inset:0 auto 0 0;width:min(270px,88%);background:var(--p-paper);border-radius:18px 0 0 18px;box-shadow:12px 0 40px light-dark(#0000001f,#00000066);justify-content:flex-start}#pw-butler-proposal .pw-work-sidebar nav{display:flex;flex-direction:column;gap:5px}#pw-butler-proposal .pw-nav-open .pw-nav-scrim{display:block;position:absolute;z-index:35;inset:0;background:light-dark(#00000033,#00000080);border-radius:18px;width:100%;height:100%}#pw-butler-proposal .pw-nav-close{display:inline-flex;align-self:flex-end}#pw-butler-proposal .pw-nav-footer{margin-top:auto}}
+    @media(prefers-reduced-motion:reduce){#pw-butler-proposal *{transition:none!important}}
+
+    /* Solar 2.3.5 static original paths; 480 Design CC BY 4.0, saoudi-h adapter MIT. */
+    #pw-butler-proposal .pw-solar{display:inline-flex;flex:0 0 17px;width:17px;height:17px;background:currentColor;mask:var(--p-icon) center/contain no-repeat;-webkit-mask:var(--p-icon) center/contain no-repeat;vertical-align:middle}
+    #pw-butler-proposal [data-solar="sparkles"]{--p-icon:url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIxLjUiPjxnIHN0eWxlPSJjb2xvcjp2YXIoLS1zb2xhci1zZWNvbmRhcnktY29sb3IsIGN1cnJlbnRDb2xvcik7b3BhY2l0eTp2YXIoLS1zb2xhci1zZWNvbmRhcnktb3BhY2l0eSwgMC41KSI+PHBhdGggZD0iTTQuODY2ODYgMi41MDA2NUM0Ljg5Njg1IDIuMzk0ODcgNS4wODUxOCAyLjM5NDA5IDUuMTE1ODggMi40OTk2N0M1LjI1NjEgMi45ODE3NiA1LjUxNTgzIDMuNjk0MjMgNS45MDg4NSA0LjA4NDYzQzYuMzAxOTggNC40NzUxMSA3LjAxNjYyIDQuNzI5OTIgNy40OTk2NyA0Ljg2Njg2QzcuNjA1MjkgNC44OTY5IDcuNjA1OTYgNS4wODQ5OCA3LjUwMDY1IDUuMTE1ODhDNy4wMTg1NCA1LjI1NjA5IDYuMzA1MTkgNS41MTU3MyA1LjkxNDcxIDUuOTA4ODVDNS41MjQzMiA2LjMwMjAxIDUuMjY5NDEgNy4wMTY2OCA1LjEzMjQ4IDcuNDk5NjdDNS4xMDIzNiA3LjYwNTEzIDQuOTE1NDcgNy42MDU3NyA0Ljg4NDQ0IDcuNTAwNjVDNC43NDQyMyA3LjAxODU0IDQuNDgzNjIgNi4zMDUxOSA0LjA5MDQ5IDUuOTE0NzFDMy42OTczOSA1LjUyNDUyIDIuOTgzNTUgNS4yNjk0MSAyLjUwMDY1IDUuMTMyNDhDMi4zOTQ4NyA1LjEwMjQ5IDIuMzk0MDkgNC45MTUxNCAyLjQ5OTY3IDQuODg0NDRDMi45ODE3OCA0Ljc0NDIyIDMuNjk0MTkgNC40ODM1OCA0LjA4NDYzIDQuMDkwNDlDNC40NzQ5IDMuNjk3NDYgNC43Mjk5IDIuOTgzNjMgNC44NjY4NiAyLjUwMDY1WiIgZmlsbD0iY3VycmVudENvbG9yIj48L3BhdGg+PHBhdGggZD0iTTE4Ljk5OTcgMy4yNDk2N0MxOS40MTM5IDMuMjQ5NjcgMTkuNzQ5NyAzLjU4NTQ2IDE5Ljc0OTcgMy45OTk2N1Y0LjI0OTY3SDE5Ljk5OTdDMjAuNDEzOSA0LjI0OTY3IDIwLjc0OTcgNC41ODU0NiAyMC43NDk3IDQuOTk5NjdDMjAuNzQ5NyA1LjQxMzg4IDIwLjQxMzkgNS43NDk2NyAxOS45OTk3IDUuNzQ5NjdIMTkuNzQ5N1Y1Ljk5OTY3QzE5Ljc0OTcgNi40MTM4OCAxOS40MTM5IDYuNzQ5NjcgMTguOTk5NyA2Ljc0OTY3QzE4LjU4NTUgNi43NDk2NyAxOC4yNDk3IDYuNDEzODggMTguMjQ5NyA1Ljk5OTY3VjUuNzQ5NjdIMTcuOTk5N0MxNy41ODU1IDUuNzQ5NjcgMTcuMjQ5NyA1LjQxMzg4IDE3LjI0OTcgNC45OTk2N0MxNy4yNDk3IDQuNTg1NDYgMTcuNTg1NSA0LjI0OTY3IDE3Ljk5OTcgNC4yNDk2N0gxOC4yNDk3VjMuOTk5NjdDMTguMjQ5NyAzLjU4NTQ2IDE4LjU4NTUgMy4yNDk2NyAxOC45OTk3IDMuMjQ5NjdaIiBmaWxsPSJjdXJyZW50Q29sb3IiPjwvcGF0aD48L2c+PHBhdGggZD0iTTEwLjA4MDIgNy44OTcxMkMxMS4xNTY4IDUuOTY1NzEgMTEuNjk1MiA1IDEyLjUgNUMxMy4zMDQ4IDUgMTMuODQzMiA1Ljk2NTcxIDE0LjkxOTggNy44OTcxMkwxNS4xOTg0IDguMzk2OEMxNS41MDQzIDguOTQ1NjQgMTUuNjU3MyA5LjIyMDA3IDE1Ljg5NTggOS40MDExNEMxNi4xMzQzIDkuNTgyMiAxNi40MzE0IDkuNjQ5NDIgMTcuMDI1NSA5Ljc4Mzg0TDE3LjU2NjQgOS45MDYyMkMxOS42NTcxIDEwLjM3OTMgMjAuNzAyNSAxMC42MTU4IDIwLjk1MTIgMTEuNDE1NkMyMS4xOTk5IDEyLjIxNTMgMjAuNDg3MiAxMy4wNDg3IDE5LjA2MTkgMTQuNzE1NEwxOC42OTMyIDE1LjE0NjZDMTguMjg4MSAxNS42MjAzIDE4LjA4NTYgMTUuODU3MSAxNy45OTQ1IDE2LjE1MDFDMTcuOTAzNCAxNi40NDMgMTcuOTM0IDE2Ljc1OSAxNy45OTUzIDE3LjM5MDlMMTguMDUxIDE3Ljk2NjJDMTguMjY2NSAyMC4xOSAxOC4zNzQyIDIxLjMwMTkgMTcuNzIzMSAyMS43OTYyQzE3LjA3MiAyMi4yOTA1IDE2LjA5MzIgMjEuODM5OCAxNC4xMzU3IDIwLjkzODVMMTMuNjI5MiAyMC43MDUzQzEzLjA3MyAyMC40NDkyIDEyLjc5NDggMjAuMzIxMSAxMi41IDIwLjMyMTFDMTIuMjA1MiAyMC4zMjExIDExLjkyNyAyMC40NDkyIDExLjM3MDggMjAuNzA1M0wxMC44NjQzIDIwLjkzODVDOC45MDY3NyAyMS44Mzk4IDcuOTI4IDIyLjI5MDUgNy4yNzY4OCAyMS43OTYyQzYuNjI1NzUgMjEuMzAxOSA2LjczMzUgMjAuMTkgNi45NDg5OSAxNy45NjYyTDcuMDA0NzQgMTcuMzkwOUM3LjA2NTk3IDE2Ljc1OSA3LjA5NjU5IDE2LjQ0MyA3LjAwNTQ4IDE2LjE1MDFDNi45MTQzOCAxNS44NTcxIDYuNzExODYgMTUuNjIwMyA2LjMwNjgzIDE1LjE0NjZMNS45MzgwOCAxNC43MTU0QzQuNTEyNzYgMTMuMDQ4NyAzLjgwMDEgMTIuMjE1MyA0LjA0ODgxIDExLjQxNTZDNC4yOTc1MSAxMC42MTU4IDUuMzQyODggMTAuMzc5MyA3LjQzMzYxIDkuOTA2MjJMNy45NzQ1IDkuNzgzODRDOC41Njg2MiA5LjY0OTQyIDguODY1NjggOS41ODIyIDkuMTA0MiA5LjQwMTE0QzkuMzQyNzIgOS4yMjAwNyA5LjQ5NTcgOC45NDU2NSA5LjgwMTY1IDguMzk2OEwxMC4wODAyIDcuODk3MTJaIiBmaWxsPSJjdXJyZW50Q29sb3IiPjwvcGF0aD48L3N2Zz4=")}
+    #pw-butler-proposal [data-solar="layers"]{--p-icon:url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIxLjUiPjxwYXRoIGQ9Ik0xOS4wMjE1IDEwLjMxNDVDMjEuMDA3MyAxMS4xMDg4IDIyIDExLjUwNjUgMjIgMTJDMjIgMTIuNDkzNSAyMS4wMDczIDEyLjg5MTIgMTkuMDIxNSAxMy42ODU1TDE4LjIzMzQgMTRMMTkuMDIxNSAxNC4zMTQ1QzIxLjAwNzMgMTUuMTA4OCAyMiAxNS41MDY1IDIyIDE2QzIyIDE2LjQ5MzUgMjEuMDA3MyAxNi44OTEyIDE5LjAyMTUgMTcuNjg1NUwxNi4yMTI5IDE4LjgwODZDMTQuMjI3IDE5LjYwMjkgMTMuMjMzOSAyMCAxMiAyMEMxMC43NjYxIDIwIDkuNzczIDE5LjYwMjkgNy43ODcxMSAxOC44MDg2TDQuOTc4NTIgMTcuNjg1NUMyLjk5MjcgMTYuODkxMiAyIDE2LjQ5MzUgMiAxNkMyIDE1LjUwNjUgMi45OTI3IDE1LjEwODggNC45Nzg1MiAxNC4zMTQ1TDUuNzY1NjIgMTRMNC45Nzg1MiAxMy42ODU1QzIuOTkyNyAxMi44OTEyIDIgMTIuNDkzNSAyIDEyQzIgMTEuNTA2NSAyLjk5MjcgMTEuMTA4OCA0Ljk3ODUyIDEwLjMxNDVMNS43NjY2IDEwTDcuNzg3MTEgMTAuODA4NkM5Ljc3MyAxMS42MDI5IDEwLjc2NjEgMTIgMTIgMTJDMTMuMjMzOSAxMiAxNC4yMjcgMTEuNjAyOSAxNi4yMTI5IDEwLjgwODZMMTguMjMzNCAxMEwxOS4wMjE1IDEwLjMxNDVaIiBmaWxsPSJjdXJyZW50Q29sb3IiIHN0eWxlPSJjb2xvcjp2YXIoLS1zb2xhci1zZWNvbmRhcnktY29sb3IsIGN1cnJlbnRDb2xvcik7b3BhY2l0eTp2YXIoLS1zb2xhci1zZWNvbmRhcnktb3BhY2l0eSwgMC41KSI+PC9wYXRoPjxwYXRoIGQ9Ik0xOS4wMjE1IDEwLjMxNDVDMjEuMDA3MyAxMS4xMDg4IDIyIDExLjUwNjUgMjIgMTJDMjIgMTIuNDkzNSAyMS4wMDczIDEyLjg5MTIgMTkuMDIxNSAxMy42ODU1TDE2LjIxMjkgMTQuODA4NkMxNC4yMjcgMTUuNjAyOSAxMy4yMzM5IDE2IDEyIDE2QzEwLjc2NjEgMTYgOS43NzMgMTUuNjAyOSA3Ljc4NzExIDE0LjgwODZMNC45Nzg1MiAxMy42ODU1QzIuOTkyNyAxMi44OTEyIDIgMTIuNDkzNSAyIDEyQzIgMTEuNTA2NSAyLjk5MjcgMTEuMTA4OCA0Ljk3ODUyIDEwLjMxNDVMNS43NjY2IDEwTDcuNzg3MTEgMTAuODA4NkM5Ljc3MyAxMS42MDI5IDEwLjc2NjEgMTIgMTIgMTJDMTMuMjMzOSAxMiAxNC4yMjcgMTEuNjAyOSAxNi4yMTI5IDEwLjgwODZMMTguMjMzNCAxMEwxOS4wMjE1IDEwLjMxNDVaIiBmaWxsPSJjdXJyZW50Q29sb3IiIHN0eWxlPSJjb2xvcjp2YXIoLS1zb2xhci1zZWNvbmRhcnktY29sb3IsIGN1cnJlbnRDb2xvcik7b3BhY2l0eTp2YXIoLS1zb2xhci1zZWNvbmRhcnktb3BhY2l0eSwgMC41KSI+PC9wYXRoPjxwYXRoIGQ9Ik0xMiA0QzEzLjIzMzkgNCAxNC4yMjcgNC4zOTcwNSAxNi4yMTI5IDUuMTkxNDFMMTkuMDIxNSA2LjMxNDQ1QzIxLjAwNzMgNy4xMDg3OCAyMiA3LjUwNjQ2IDIyIDhDMjIgOC40OTM1NCAyMS4wMDczIDguODkxMjIgMTkuMDIxNSA5LjY4NTU1TDE2LjIxMjkgMTAuODA4NkMxNC4yMjcgMTEuNjAyOSAxMy4yMzM5IDEyIDEyIDEyQzEwLjc2NjEgMTIgOS43NzMgMTEuNjAyOSA3Ljc4NzExIDEwLjgwODZMNC45Nzg1MiA5LjY4NTU1QzIuOTkyNyA4Ljg5MTIyIDIgOC40OTM1NCAyIDhDMiA3LjUwNjQ2IDIuOTkyNyA3LjEwODc4IDQuOTc4NTIgNi4zMTQ0NUw3Ljc4NzExIDUuMTkxNDFDOS43NzMgNC4zOTcwNSAxMC43NjYxIDQgMTIgNFoiIGZpbGw9ImN1cnJlbnRDb2xvciI+PC9wYXRoPjwvc3ZnPg==")}
+    #pw-butler-proposal [data-solar="folder"]{--p-icon:url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIxLjUiPjxwYXRoIGQ9Ik0yMiAxNFYxMS43OTc5QzIyIDkuMTY1NTQgMjIgNy44NDkzNSAyMS4yMzA1IDYuOTkzODNDMjEuMTU5OCA2LjkxNTE0IDIxLjA4NDkgNi44NDAyNCAyMS4wMDYyIDYuNzY5NDZDMjAuMTUwNiA2IDE4LjgzNDUgNiAxNi4yMDIxIDZIMTUuODI4NEMxNC42NzQ3IDYgMTQuMDk3OSA2IDEzLjU2MDQgNS44NDY3OEMxMy4yNjUxIDUuNzYyNiAxMi45ODA0IDUuNjQ0NzEgMTIuNzEyMSA1LjQ5NTQzQzEyLjIyMzcgNS4yMjM2NyAxMS44MTU4IDQuODE1NzggMTEgNEwxMC40NDk3IDMuNDQ5NzVDMTAuMTc2MyAzLjE3NjMzIDEwLjAzOTYgMy4wMzk2MSA5Ljg5NTk0IDIuOTIwNTFDOS4yNzY1MiAyLjQwNzA0IDguNTE2NjUgMi4wOTIyOSA3LjcxNTU3IDIuMDE3MzhDNy41Mjk3NiAyIDcuMzM2NDIgMiA2Ljk0OTc1IDJDNi4wNjcyMiAyIDUuNjI1OTUgMiA1LjI1ODM5IDIuMDY5MzVDMy42NDAzMSAyLjM3NDY0IDIuMzc0NjQgMy42NDAzMSAyLjA2OTM1IDUuMjU4MzlDMiA1LjYyNTk1IDIgNi4wNjcyMiAyIDYuOTQ5NzVWMTRDMiAxNy43NzEyIDIgMTkuNjU2OSAzLjE3MTU3IDIwLjgyODRDNC4zNDMxNSAyMiA2LjIyODc2IDIyIDEwIDIySDE0QzE3Ljc3MTIgMjIgMTkuNjU2OSAyMiAyMC44Mjg0IDIwLjgyODRDMjIgMTkuNjU2OSAyMiAxNy43NzEyIDIyIDE0WiIgZmlsbD0iY3VycmVudENvbG9yIiBzdHlsZT0iY29sb3I6dmFyKC0tc29sYXItc2Vjb25kYXJ5LWNvbG9yLCBjdXJyZW50Q29sb3IpO29wYWNpdHk6dmFyKC0tc29sYXItc2Vjb25kYXJ5LW9wYWNpdHksIDAuNSkiPjwvcGF0aD48cGF0aCBkPSJNMTIuMjUgMTBDMTIuMjUgOS41ODU3OSAxMi41ODU4IDkuMjUgMTMgOS4yNUgxOEMxOC40MTQyIDkuMjUgMTguNzUgOS41ODU3OSAxOC43NSAxMEMxOC43NSAxMC40MTQyIDE4LjQxNDIgMTAuNzUgMTggMTAuNzVIMTNDMTIuNTg1OCAxMC43NSAxMi4yNSAxMC40MTQyIDEyLjI1IDEwWiIgZmlsbD0iY3VycmVudENvbG9yIj48L3BhdGg+PC9zdmc+")}
+    #pw-butler-proposal [data-solar="folder-plus"]{--p-icon:url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIxLjUiPjxwYXRoIGQ9Ik0yMiAxNFYxMS43OTc5QzIyIDkuMTY1NTQgMjIgNy44NDkzNSAyMS4yMzA1IDYuOTkzODNDMjEuMTU5OCA2LjkxNTE0IDIxLjA4NDkgNi44NDAyNCAyMS4wMDYyIDYuNzY5NDZDMjAuMTUwNiA2IDE4LjgzNDUgNiAxNi4yMDIxIDZIMTUuODI4NEMxNC42NzQ3IDYgMTQuMDk3OSA2IDEzLjU2MDQgNS44NDY3OEMxMy4yNjUxIDUuNzYyNiAxMi45ODA0IDUuNjQ0NzEgMTIuNzEyMSA1LjQ5NTQzQzEyLjIyMzcgNS4yMjM2NyAxMS44MTU4IDQuODE1NzggMTEgNEwxMC40NDk3IDMuNDQ5NzVDMTAuMTc2MyAzLjE3NjMzIDEwLjAzOTYgMy4wMzk2MSA5Ljg5NTk0IDIuOTIwNTFDOS4yNzY1MiAyLjQwNzA0IDguNTE2NjUgMi4wOTIyOSA3LjcxNTU3IDIuMDE3MzhDNy41Mjk3NiAyIDcuMzM2NDIgMiA2Ljk0OTc1IDJDNi4wNjcyMiAyIDUuNjI1OTUgMiA1LjI1ODM5IDIuMDY5MzVDMy42NDAzMSAyLjM3NDY0IDIuMzc0NjQgMy42NDAzMSAyLjA2OTM1IDUuMjU4MzlDMiA1LjYyNTk1IDIgNi4wNjcyMiAyIDYuOTQ5NzVWMTRDMiAxNy43NzEyIDIgMTkuNjU2OSAzLjE3MTU3IDIwLjgyODRDNC4zNDMxNSAyMiA2LjIyODc2IDIyIDEwIDIySDE0QzE3Ljc3MTIgMjIgMTkuNjU2OSAyMiAyMC44Mjg0IDIwLjgyODRDMjIgMTkuNjU2OSAyMiAxNy43NzEyIDIyIDE0WiIgZmlsbD0iY3VycmVudENvbG9yIiBzdHlsZT0iY29sb3I6dmFyKC0tc29sYXItc2Vjb25kYXJ5LWNvbG9yLCBjdXJyZW50Q29sb3IpO29wYWNpdHk6dmFyKC0tc29sYXItc2Vjb25kYXJ5LW9wYWNpdHksIDAuNSkiPjwvcGF0aD48cGF0aCBkPSJNMTIuMjUgMTBDMTIuMjUgOS41ODU3OSAxMi41ODU4IDkuMjUgMTMgOS4yNUgxOEMxOC40MTQyIDkuMjUgMTguNzUgOS41ODU3OSAxOC43NSAxMEMxOC43NSAxMC40MTQyIDE4LjQxNDIgMTAuNzUgMTggMTAuNzVIMTNDMTIuNTg1OCAxMC43NSAxMi4yNSAxMC40MTQyIDEyLjI1IDEwWiIgZmlsbD0iY3VycmVudENvbG9yIj48L3BhdGg+PC9zdmc+")}
+    #pw-butler-proposal [data-solar="file-text"]{--p-icon:url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIxLjUiPjxwYXRoIGQ9Ik0xNCAyMkgxMEM2LjIyODc2IDIyIDQuMzQzMTUgMjIgMy4xNzE1NyAyMC44Mjg0QzIgMTkuNjU2OSAyIDE3Ljc3MTIgMiAxNFYxMEMyIDYuMjI4NzYgMiA0LjM0MzE1IDMuMTcxNTcgMy4xNzE1N0M0LjM0MzE1IDIgNi4yMzg2OSAyIDEwLjAyOTggMkMxMC42MzU4IDIgMTEuMTIxNCAyIDExLjUzIDIuMDE2NjZDMTEuNTE2NiAyLjA5NjU5IDExLjUwOTUgMi4xNzgxMyAxMS41MDkyIDIuMjYwNTdMMTEuNSA1LjA5NDk3QzExLjQ5OTkgNi4xOTIwNyAxMS40OTk4IDcuMTYxNjQgMTEuNjA0OSA3Ljk0MzE2QzExLjcxODggOC43OTAyOCAxMS45ODAzIDkuNjM3MjYgMTIuNjcxNiAxMC4zMjg1QzEzLjM2MjggMTEuMDE5OCAxNC4yMDk4IDExLjI4MTMgMTUuMDU2OSAxMS4zOTUyQzE1LjgzODUgMTEuNTAwMyAxNi44MDggMTEuNTAwMiAxNy45MDUxIDExLjUwMDFMMTggMTEuNTAwMUgyMS45NTc0QzIyIDEyLjAzNDQgMjIgMTIuNjkwMSAyMiAxMy41NjI5VjE0QzIyIDE3Ljc3MTIgMjIgMTkuNjU2OSAyMC44Mjg0IDIwLjgyODRDMTkuNjU2OSAyMiAxNy43NzEyIDIyIDE0IDIyWiIgZmlsbC1ydWxlPSJldmVub2RkIiBjbGlwLXJ1bGU9ImV2ZW5vZGQiIGZpbGw9ImN1cnJlbnRDb2xvciIgc3R5bGU9ImNvbG9yOnZhcigtLXNvbGFyLXNlY29uZGFyeS1jb2xvciwgY3VycmVudENvbG9yKTtvcGFjaXR5OnZhcigtLXNvbGFyLXNlY29uZGFyeS1vcGFjaXR5LCAwLjUpIj48L3BhdGg+PHBhdGggZD0iTTExLjUgMTcuMjVDMTEuOTE0MiAxNy4yNSAxMi4yNSAxNy41ODU4IDEyLjI1IDE4QzEyLjI1IDE4LjQxNDIgMTEuOTE0MiAxOC43NSAxMS41IDE4Ljc1SDZDNS41ODU3OSAxOC43NSA1LjI1IDE4LjQxNDIgNS4yNSAxOEM1LjI1IDE3LjU4NTggNS41ODU3OSAxNy4yNSA2IDE3LjI1SDExLjVaIiBmaWxsPSJjdXJyZW50Q29sb3IiPjwvcGF0aD48cGF0aCBkPSJNMTQgMTMuNzVDMTQuNDE0MiAxMy43NSAxNC43NSAxNC4wODU4IDE0Ljc1IDE0LjVDMTQuNzUgMTQuOTE0MiAxNC40MTQyIDE1LjI1IDE0IDE1LjI1SDZDNS41ODU3OSAxNS4yNSA1LjI1IDE0LjkxNDIgNS4yNSAxNC41QzUuMjUgMTQuMDg1OCA1LjU4NTc5IDEzLjc1IDYgMTMuNzVIMTRaIiBmaWxsPSJjdXJyZW50Q29sb3IiPjwvcGF0aD48cGF0aCBkPSJNMTEuNSAyLjAwNTg2QzEyLjAyNjYgMi4wMTcyNSAxMi40MDAzIDIuMDUwMDkgMTIuNzg0MiAyLjE0NDUzQzEyLjk0MDQgMi4xODI5OCAxMy4xNDA3IDIuMjQ0MDcgMTMuMjkyIDIuMjk4ODNDMTMuODYyMiAyLjUwNTM0IDE0LjI3ODUgMi43ODMzIDE1LjExMDQgMy4zMzg4N0MxNi4wNzg4IDMuOTg1NjkgMTcuMTg5MiA0Ljc3NyAxOCA1LjVDMTguOTExIDYuMzEyMzkgMTkuOTU0NiA3LjQ5Mzg3IDIwLjc0NzEgOC40NDIzOEMyMC44NzQ1IDguNTk0OTQgMjAuOTM4IDguNjcxNjggMjEuMDMxMiA4Ljc5ODgzQzIxLjU2MTMgOS41MjE0NCAyMS45MzM2IDEwLjU0NiAyMS45OTAyIDExLjQ0MDRDMjIuMDAwMiAxMS41OTc5IDIyIDExLjczMjUgMjIgMTJIMjEuOTg0NEMyMS45NzgxIDExLjgyMTYgMjEuOTY5NCAxMS42NTU1IDIxLjk1NyAxMS41SDE3LjkwNTNDMTYuODA4MiAxMS41MDAxIDE1LjgzODIgMTEuNDk5NiAxNS4wNTY2IDExLjM5NDVDMTQuMjA5NyAxMS4yODA2IDEzLjM2MyAxMS4wMTkyIDEyLjY3MTkgMTAuMzI4MUMxMS45ODA2IDkuNjM2ODUgMTEuNzE4NCA4Ljc4OTUgMTEuNjA0NSA3Ljk0MjM4QzExLjQ5OTUgNy4xNjA5OCAxMS40OTk5IDYuMTkxNTcgMTEuNSA1LjA5NDczTDExLjUwODggMi4yNTk3N0wxMS41IDIuMDA1ODZaIiBmaWxsPSJjdXJyZW50Q29sb3IiPjwvcGF0aD48L3N2Zz4=")}
+    #pw-butler-proposal [data-solar="message-circle"]{--p-icon:url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIxLjUiPjxwYXRoIGQ9Ik0xMiAyM0MxOC4wNzUxIDIzIDIzIDE4LjA3NTEgMjMgMTJDMjMgNS45MjQ4NyAxOC4wNzUxIDEgMTIgMUM1LjkyNDg3IDEgMSA1LjkyNDg3IDEgMTJDMSAxMy43NTk2IDEuNDEzMTggMTUuNDIyOCAyLjE0NzgxIDE2Ljg5NzdDMi4zNDMwMyAxNy4yODk3IDIuNDA4MDEgMTcuNzM3NyAyLjI5NDgzIDE4LjE2MDdMMS42Mzk2NiAyMC42MDkzQzEuMzU1MjUgMjEuNjcyMyAyLjMyNzcyIDIyLjY0NDcgMy4zOTA2OCAyMi4zNjAzTDUuODM5MzIgMjEuNzA1MkM2LjI2MjMzIDIxLjU5MiA2LjcxMDMzIDIxLjY1NyA3LjEwMjI4IDIxLjg1MjJDOC41NzcyIDIyLjU4NjggMTAuMjQwNCAyMyAxMiAyM1oiIGZpbGw9ImN1cnJlbnRDb2xvciIgc3R5bGU9ImNvbG9yOnZhcigtLXNvbGFyLXNlY29uZGFyeS1jb2xvciwgY3VycmVudENvbG9yKTtvcGFjaXR5OnZhcigtLXNvbGFyLXNlY29uZGFyeS1vcGFjaXR5LCAwLjUpIj48L3BhdGg+PHBhdGggZD0iTTEwLjkgMTIuMDAwNEMxMC45IDEyLjYwNzkgMTEuMzkyNSAxMy4xMDA0IDEyIDEzLjEwMDRDMTIuNjA3NSAxMy4xMDA0IDEzLjEgMTIuNjA3OSAxMy4xIDEyLjAwMDRDMTMuMSAxMS4zOTI5IDEyLjYwNzUgMTAuOTAwNCAxMiAxMC45MDA0QzExLjM5MjUgMTAuOTAwNCAxMC45IDExLjM5MjkgMTAuOSAxMi4wMDA0WiIgZmlsbD0iY3VycmVudENvbG9yIj48L3BhdGg+PHBhdGggZD0iTTYuNSAxMi4wMDA0QzYuNSAxMi42MDc5IDYuOTkyNDkgMTMuMTAwNCA3LjYgMTMuMTAwNEM4LjIwNzUxIDEzLjEwMDQgOC43IDEyLjYwNzkgOC43IDEyLjAwMDRDOC43IDExLjM5MjkgOC4yMDc1MSAxMC45MDA0IDcuNiAxMC45MDA0QzYuOTkyNDkgMTAuOTAwNCA2LjUgMTEuMzkyOSA2LjUgMTIuMDAwNFoiIGZpbGw9ImN1cnJlbnRDb2xvciI+PC9wYXRoPjxwYXRoIGQ9Ik0xNS4zIDEyLjAwMDRDMTUuMyAxMi42MDc5IDE1Ljc5MjUgMTMuMTAwNCAxNi40IDEzLjEwMDRDMTcuMDA3NSAxMy4xMDA0IDE3LjUgMTIuNjA3OSAxNy41IDEyLjAwMDRDMTcuNSAxMS4zOTI5IDE3LjAwNzUgMTAuOTAwNCAxNi40IDEwLjkwMDRDMTUuNzkyNSAxMC45MDA0IDE1LjMgMTEuMzkyOSAxNS4zIDEyLjAwMDRaIiBmaWxsPSJjdXJyZW50Q29sb3IiPjwvcGF0aD48L3N2Zz4=")}
+    #pw-butler-proposal [data-solar="user-round"]{--p-icon:url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIxLjUiPjxlbGxpcHNlIGN4PSIxMiIgY3k9IjE3IiByeD0iNyIgcnk9IjQiIGZpbGw9ImN1cnJlbnRDb2xvciIgc3R5bGU9ImNvbG9yOnZhcigtLXNvbGFyLXNlY29uZGFyeS1jb2xvciwgY3VycmVudENvbG9yKTtvcGFjaXR5OnZhcigtLXNvbGFyLXNlY29uZGFyeS1vcGFjaXR5LCAwLjUpIj48L2VsbGlwc2U+PGNpcmNsZSBjeD0iMTIiIGN5PSI2IiByPSI0IiBmaWxsPSJjdXJyZW50Q29sb3IiPjwvY2lyY2xlPjwvc3ZnPg==")}
+    #pw-butler-proposal [data-solar="sliders-horizontal"]{--p-icon:url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIxLjUiPjxwYXRoIGQ9Ik05LjUgMTRDMTEuMTU2OSAxNCAxMi41IDE1LjM0MzEgMTIuNSAxN0MxMi41IDE4LjY1NjggMTEuMTU2OSAyMCA5LjUgMjBDNy44NDMxNSAyMCA2LjUgMTguNjU2OCA2LjUgMTdDNi41IDE1LjM0MzEgNy44NDMxNSAxNCA5LjUgMTRaIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZT0iY3VycmVudENvbG9yIj48L3BhdGg+PHBhdGggZD0iTTE0LjUgMy45OTk5OEMxMi44NDMxIDMuOTk5OTggMTEuNSA1LjM0MzEyIDExLjUgNi45OTk5OEMxMS41IDguNjU2ODMgMTIuODQzMSA5Ljk5OTk4IDE0LjUgOS45OTk5OEMxNi4xNTY5IDkuOTk5OTggMTcuNSA4LjY1NjgzIDE3LjUgNi45OTk5OEMxNy41IDUuMzQzMTIgMTYuMTU2OSAzLjk5OTk4IDE0LjUgMy45OTk5OFoiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlPSJjdXJyZW50Q29sb3IiPjwvcGF0aD48cGF0aCBkPSJNMTUgMTYuOTU4NUwyMiAxNi45NTg1IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZT0iY3VycmVudENvbG9yIj48L3BhdGg+PHBhdGggZD0iTTkgNi45NTg1TDIgNi45NTg1IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZT0iY3VycmVudENvbG9yIj48L3BhdGg+PHBhdGggZD0iTTIgMTYuOTU4NUw0IDE2Ljk1ODUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlPSJjdXJyZW50Q29sb3IiPjwvcGF0aD48cGF0aCBkPSJNMjIgNi45NTg1TDIwIDYuOTU4NSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2U9ImN1cnJlbnRDb2xvciI+PC9wYXRoPjwvc3ZnPg==")}
+    #pw-butler-proposal [data-solar="menu"]{--p-icon:url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIxLjUiPjxwYXRoIGQ9Ik0yMCA3TDQgNyIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2U9ImN1cnJlbnRDb2xvciI+PC9wYXRoPjxwYXRoIGQ9Ik0yMCAxMkw0IDEyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZT0iY3VycmVudENvbG9yIj48L3BhdGg+PHBhdGggZD0iTTIwIDE3TDQgMTciIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlPSJjdXJyZW50Q29sb3IiPjwvcGF0aD48L3N2Zz4=")}
+    #pw-butler-proposal [data-solar="chevron-right"]{--p-icon:url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIxLjUiPjxwYXRoIGQ9Ik05IDVMMTUgMTJMOSAxOSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIiBzdHJva2U9ImN1cnJlbnRDb2xvciI+PC9wYXRoPjwvc3ZnPg==")}
+    #pw-butler-proposal [data-solar="chevron-down"]{--p-icon:url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIxLjUiPjxwYXRoIGQ9Ik0xOSA5TDEyIDE1TDUgOSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIiBzdHJva2U9ImN1cnJlbnRDb2xvciI+PC9wYXRoPjwvc3ZnPg==")}
+    #pw-butler-proposal [data-solar="arrow-left"]{--p-icon:url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIxLjUiPjxwYXRoIGQ9Ik0yMCAxMkg0TTEwIDE4TDQgMTJMMTAgNiIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIiBzdHJva2U9ImN1cnJlbnRDb2xvciI+PC9wYXRoPjwvc3ZnPg==")}
+    #pw-butler-proposal [data-solar="arrow-right"]{--p-icon:url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIxLjUiPjxwYXRoIGQ9Ik00IDEySDIwTTE0IDE4TDIwIDEyTDE0IDYiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIgc3Ryb2tlPSJjdXJyZW50Q29sb3IiPjwvcGF0aD48L3N2Zz4=")}
+    #pw-butler-proposal [data-solar="arrow-up"]{--p-icon:url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIxLjUiPjxwYXRoIGQ9Ik0xMiAyMEwxMiA0TTYgMTBMMTIgNEwxOCAxMCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIiBzdHJva2U9ImN1cnJlbnRDb2xvciI+PC9wYXRoPjwvc3ZnPg==")}
+    #pw-butler-proposal [data-solar="arrow-up-right"]{--p-icon:url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIxLjUiPjxwYXRoIGQ9Ik02IDE4TDE4IDZNMTggMTVWNkg5IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiIHN0cm9rZT0iY3VycmVudENvbG9yIj48L3BhdGg+PC9zdmc+")}
+  </style>
+  <!-- Proposal adaptation: retained Affect v3 0e69029b AssistantHome/Composer/AgentChat structure;
+       PocketWorld WorkSidebar, DecisionInbox 37b91fa MIT, composer-squircle and product tokens.
+       BoardUI RadioDot: retained md three-layer structure, adapted to static HTML selection.
+       Solar 2.3.5 geometry is copied from original module AST into theme-aware CSS image masks.
+       Solar graphics: 480 Design, CC BY 4.0; adapter: saoudi-h, MIT.
+       Narrow navigation demonstrates the existing left overlay relationship, not Vaul drag physics.
+       Local scenario data only. No real work, approval, device or model calls. -->
+  <div class="pw-proposal-label">交互方案 · 示例内容 · 页面关系与状态设计</div>
+  <div class="pw-app">
+    <button class="pw-nav-scrim cursor-interaction" data-action="nav-close" aria-label="关闭主导航"></button>
+    <aside class="pw-work-sidebar">
+      <button class="au-sc-iconbtn pw-nav-close cursor-interaction" data-action="nav-close" aria-label="关闭主导航">关闭</button>
+      <div class="pw-brand"><span class="pw-brand-mark">P</span>PocketWorld</div>
+      <nav aria-label="主导航">
+        <button class="pw-nav-item cursor-interaction" data-page="home" aria-current="page"><span class="pw-solar" data-solar="sparkles" aria-hidden="true"></span>管家</button>
+        <div class="pw-nav-group">工作与内容</div>
+        <button class="pw-nav-item cursor-interaction" data-page="works"><span class="pw-solar" data-solar="layers" aria-hidden="true"></span>我的工作</button>
+        <button class="pw-nav-item cursor-interaction" data-page="project"><span class="pw-solar" data-solar="folder" aria-hidden="true"></span>项目</button>
+        <button class="pw-nav-item cursor-interaction" data-page="artifacts"><span class="pw-solar" data-solar="file-text" aria-hidden="true"></span>成果</button>
+        <button class="pw-nav-item cursor-interaction" data-page="topic"><span class="pw-solar" data-solar="message-circle" aria-hidden="true"></span>最近话题</button>
+      </nav>
+      <div class="pw-nav-footer">
+        <button class="pw-nav-item cursor-interaction" data-page="memory"><span class="pw-solar" data-solar="user-round" aria-hidden="true"></span>我与管家</button>
+        <button class="pw-nav-item cursor-interaction" data-page="capabilities"><span class="pw-solar" data-solar="sliders-horizontal" aria-hidden="true"></span>能力与设备</button>
+      </div>
+    </aside>
+    <main class="pw-main">
+      <header class="au-sc-contentbar">
+        <button class="au-sc-iconbtn pw-mobile-nav cursor-interaction" data-action="nav" aria-label="展开主导航" aria-expanded="false"><span class="pw-solar" data-solar="menu" aria-hidden="true"></span></button>
+        <button class="au-sc-iconbtn cursor-interaction" data-action="back" aria-label="返回上一页" hidden><span class="pw-solar" data-solar="arrow-left" aria-hidden="true"></span></button>
+        <span id="pw-breadcrumb">管家</span>
+        <span class="pw-grow"></span>
+        <button class="pw-link cursor-interaction" data-page="home" id="pw-home-link" hidden>回到管家</button>
+      </header>
+      <section data-view="home" aria-label="管家首页">
+        <div class="au-sc-home-center">
+          <div class="pw-home-intro">
+            <p class="pw-eyebrow">你离开以后</p>
+            <h1>周报已整理，等你看。</h1>
+            <p id="pw-home-briefing">欢迎页工作还需要选一个副本。截图归档会在手机恢复连接后继续。</p>
+          </div>
+          <form class="pw-composer-host" id="pw-home-form">
+            <div class="pw-composer-context-rail"></div>
+            <div class="au-sc-composer-inner">
+              <div class="pw-input-context"><span id="pw-home-context">新话题</span><button type="button" class="pw-link cursor-interaction" data-action="clear-project" id="pw-project-clear" hidden>移除项目</button></div>
+              <textarea id="pw-home-input" aria-label="交代新目标" placeholder="想交给我什么事？"></textarea>
+              <div class="au-sc-composer-tools">
+                <button type="button" class="pw-context-trigger cursor-interaction" data-page="project"><span class="pw-solar" data-solar="folder-plus" aria-hidden="true"></span><span id="pw-project-context-label">关联项目</span></button>
+                <span class="pw-grow"></span>
+                <button type="button" class="pw-context-trigger cursor-interaction" data-page="capabilities">当前能力<span class="pw-solar" data-solar="chevron-down" aria-hidden="true"></span></button>
+                <button type="submit" class="au-sc-send cursor-interaction" aria-label="提交示例目标"><span class="pw-solar" data-solar="arrow-up" aria-hidden="true"></span></button>
+              </div>
+            </div>
+          </form>
+          <button class="pw-result-highlight cursor-interaction" data-page="artifact">
+            <span class="pw-file-mark"><span class="pw-solar" data-solar="file-text" aria-hidden="true"></span></span>
+            <span class="pw-object-copy"><small>新成果 · 研究资料</small><strong>AI 应用观察周报</strong><small>中文第一版已保存，附来源与待核实项。</small></span>
+            <span class="pw-solar" data-solar="arrow-up-right" aria-hidden="true"></span>
+          </button>
+          <section class="pw-section">
+            <div class="pw-section-head"><h2>待你处理</h2><span class="pw-grow"></span><small class="pw-muted">影响欢迎页工作</small></div>
+            <div class="ui-dic__compact-item">
+              <div class="ui-dic__compact-copy"><span class="ui-dic__title" id="pw-home-decision-title">选择要修改的工作副本</span><span class="ui-dic__detail" id="pw-home-decision-detail">两个副本都可用，选定后才能准备启动。</span></div>
+              <button class="au-sc-btn ui-dic__next cursor-interaction" data-page="decision">查看选择<span class="pw-solar" data-solar="chevron-right" aria-hidden="true"></span></button>
+            </div>
+          </section>
+          <section class="pw-section">
+            <div class="pw-section-head"><h2>我在跟进</h2><button class="pw-link cursor-interaction" data-page="works">查看工作<span class="pw-solar" data-solar="chevron-right" aria-hidden="true"></span></button></div>
+            <button class="pw-object-row cursor-interaction" data-work="landing"><span class="pw-object-copy"><strong>改进项目欢迎页</strong><small>目标：更适合手机阅读和操作</small></span><span class="pw-status" data-tone="attention" id="pw-home-landing-status"><span class="pw-status-dot"></span>待选副本</span></button>
+            <button class="pw-object-row cursor-interaction" data-work="screenshots"><span class="pw-object-copy"><strong>整理手机截图</strong><small>已整理的结果保留，等待设备恢复连接</small></span><span class="pw-status"><span class="pw-status-dot"></span>等待设备</span></button>
+          </section>
+        </div>
+      </section>
+      <section data-view="works" hidden aria-label="我的工作">
+        <div class="pw-page">
+          <p class="pw-eyebrow">同一份委托，持续跟进</p><h1>我的工作</h1><p class="pw-page-lead">看目标、进展和下一步。每件事都能回到原话题。</p>
+          <button class="pw-object-row cursor-interaction" data-work="report"><span class="pw-object-copy"><strong>整理 AI 应用观察周报</strong><small>研究资料 · 第一版和来源已保存</small></span><span class="pw-status">成果可查看<span class="pw-solar" data-solar="chevron-right" aria-hidden="true"></span></span></button>
+          <button class="pw-object-row cursor-interaction" data-work="landing"><span class="pw-object-copy"><strong>改进项目欢迎页</strong><small id="pw-worklist-landing-detail">需要选择真实工作副本</small></span><span class="pw-status" data-tone="attention">待你处理<span class="pw-solar" data-solar="chevron-right" aria-hidden="true"></span></span></button>
+          <button class="pw-object-row cursor-interaction" data-work="screenshots"><span class="pw-object-copy"><strong>整理手机截图</strong><small>已完成的整理保留；尚未归档的部分在等待</small></span><span class="pw-status">等待设备<span class="pw-solar" data-solar="chevron-right" aria-hidden="true"></span></span></button>
+        </div>
+      </section>
+      <section data-view="topic" hidden aria-label="话题">
+        <div class="au-sc-chat-screen au-sc-with-brief">
+          <section class="au-sc-chat-thread">
+            <div class="au-sc-chat-scroll">
+              <p class="pw-eyebrow" id="pw-topic-name">话题 · AI 应用观察</p>
+              <p class="au-sc-user-message" id="pw-topic-user">把这些 AI 应用资料整理成一份中文周报，重点写对我们有用的点，放进研究项目。</p>
+              <div class="au-sc-agent-name"><span class="pw-solar" data-solar="sparkles" aria-hidden="true"></span>管家</div>
+              <p id="pw-topic-answer">第一版已经整理好。我把资料中的产品变化、对我们有用的做法和仍需核实的部分分开了，方便你直接判断下一步。</p>
+              <details class="au-sc-worked"><summary>查看这件事的处理过程</summary><p id="pw-topic-process">整理资料 → 归纳主题 → 核对来源 → 保存第一版</p><p>过程记录附着在同一件工作上。</p></details>
+              <button class="pw-object-row cursor-interaction" data-work="report" id="pw-topic-work-row"><span class="pw-object-copy"><strong id="pw-topic-work-title">AI 应用观察周报</strong><small>工作 · 查看目标、成果与过程</small></span><span class="pw-solar" data-solar="chevron-right" aria-hidden="true"></span></button>
+              <div class="pw-receipt" id="pw-topic-receipt" role="status" hidden></div>
+            </div>
+            <form class="au-sc-chat-input" id="pw-topic-form">
+              <div class="pw-composer-host"><div class="pw-composer-context-rail"></div><div class="au-sc-composer-inner">
+                <div class="pw-input-context" id="pw-topic-target">补充给：AI 应用观察周报</div>
+                <textarea id="pw-topic-input" aria-label="补充给当前工作" placeholder="继续补充，或调整这件事…"></textarea>
+                <div class="au-sc-composer-tools"><button type="button" class="pw-context-trigger cursor-interaction" data-page="artifact" id="pw-topic-reference"><span class="pw-solar" data-solar="file-text" aria-hidden="true"></span>周报 · v1</button><span class="pw-grow"></span><button type="submit" class="au-sc-send cursor-interaction" aria-label="提交示例补充"><span class="pw-solar" data-solar="arrow-up" aria-hidden="true"></span></button></div>
+              </div></div>
+            </form>
+          </section>
+          <aside class="au-sc-brief" aria-label="当前工作">
+            <div class="au-sc-brief-scroll">
+              <small class="pw-muted">当前工作</small><h2 style="margin-top:7px" id="pw-brief-title">AI 应用观察周报</h2>
+              <section><small>目标与约束</small><ul class="pw-brief-list" id="pw-brief-goals"><li>中文可编辑周报</li><li>保留原始来源</li><li>突出对项目有用的判断</li></ul></section>
+              <section id="pw-brief-outcome"><small>成果</small><button class="pw-link cursor-interaction" data-page="artifact">打开第一版<span class="pw-solar" data-solar="arrow-up-right" aria-hidden="true"></span></button></section>
+              <section id="pw-brief-project"><small>归属</small><button class="pw-link cursor-interaction" data-page="project">研究资料项目<span class="pw-solar" data-solar="chevron-right" aria-hidden="true"></span></button></section>
+            </div>
+            <footer><button class="au-sc-btn cursor-interaction" data-work="report" id="pw-brief-fullwork">查看完整工作</button></footer>
+          </aside>
+        </div>
+      </section>
+      <section data-view="work" hidden aria-label="工作详情">
+        <div class="pw-page">
+          <p class="pw-eyebrow" id="pw-work-project">研究资料 · 来自 AI 应用观察话题</p>
+          <h1 id="pw-work-title">整理 AI 应用观察周报</h1>
+          <div class="pw-work-summary"><strong id="pw-work-state">第一版已保存，管家已整理交付说明。</strong><p id="pw-work-reason">成果附有来源。尚不能核实的部分已保留说明，可以直接查看，也可以继续修改。</p></div>
+          <div class="au-sc-tabs" role="tablist" aria-label="工作内容">
+            <button role="tab" id="pw-wtab-outcome" aria-controls="pw-wpanel-outcome" aria-selected="true" data-work-tab="outcome" class="cursor-interaction">成果</button>
+            <button role="tab" id="pw-wtab-goal" aria-controls="pw-wpanel-goal" aria-selected="false" data-work-tab="goal" class="cursor-interaction">目标</button>
+            <button role="tab" id="pw-wtab-process" aria-controls="pw-wpanel-process" aria-selected="false" data-work-tab="process" class="cursor-interaction">过程</button>
+          </div>
+          <div id="pw-wpanel-outcome" role="tabpanel" aria-labelledby="pw-wtab-outcome">
+            <button class="pw-object-row cursor-interaction" data-page="artifact" id="pw-work-artifact"><span class="pw-file-mark"><span class="pw-solar" data-solar="file-text" aria-hidden="true"></span></span><span class="pw-object-copy"><strong>AI 应用观察周报</strong><small>第一版 · 可编辑内容与来源</small></span><span class="pw-solar" data-solar="chevron-right" aria-hidden="true"></span></button>
+            <p class="pw-copy" id="pw-work-empty" hidden>当前还没有可交付的成果。</p>
+          </div>
+          <div id="pw-wpanel-goal" role="tabpanel" aria-labelledby="pw-wtab-goal" hidden>
+            <ul class="pw-target-list"><li><span>目标</span><span id="pw-goal-text">让资料变成能帮助产品判断的中文周报。</span></li><li><span>交付</span><span id="pw-delivery-text">可编辑第一版、原始来源、待核实项。</span></li><li><span>约束</span><span id="pw-constraint-text">不把未核实的产品说法写成确定事实。</span></li><li><span>归属</span><span id="pw-belongs-text">研究资料项目。</span></li></ul>
+            <button class="pw-link cursor-interaction" data-page="topic">补充或调整目标<span class="pw-solar" data-solar="arrow-right" aria-hidden="true"></span></button>
+          </div>
+          <div id="pw-wpanel-process" role="tabpanel" aria-labelledby="pw-wtab-process" hidden>
+            <div class="pw-timeline"><div><strong>接下目标</strong><small>保存原请求和交付要求</small></div><div><strong id="pw-process-middle">整理、核对与写作</strong><small id="pw-process-middle-detail">把关键变化与来源对应起来</small></div><div><strong id="pw-process-last">管家接手结果</strong><small id="pw-process-last-detail">核对目标，保存第一版，带回交付说明</small></div></div>
+            <details class="au-sc-worked"><summary>查看执行与控制的范围</summary><p>执行、成果保存、管家接手与用户决定分别记录。这里的示例状态不会调用真实执行器。</p></details>
+          </div>
+          <div class="pw-actions"><button class="au-sc-btn au-sc-primary cursor-interaction" id="pw-work-primary" data-action="work-primary">继续修改</button><button class="au-sc-btn cursor-interaction" data-page="topic">回到话题</button></div>
+        </div>
+      </section>
+      <section data-view="draft" hidden aria-label="新目标接待">
+        <div class="pw-page">
+          <p class="pw-eyebrow" id="pw-new-goal-context">新话题 · 接单状态示意</p><h1>先把这件事接清楚。</h1>
+          <p class="au-sc-user-message" style="margin-top:24px" id="pw-new-goal"></p>
+          <p class="pw-page-lead" style="margin-top:24px">正式产品会从这句话整理目标、交付物和完成条件，并检查当前需要的资料与能力。</p>
+          <div class="pw-work-summary"><strong>取得真实受理回执后，才显示“已接手”。</strong><p>这个交互方案没有连接模型或执行器，因此不会为新输入生成假的工作进度。</p></div>
+          <div class="pw-actions"><button class="au-sc-btn cursor-interaction" data-page="home">回到管家</button><button class="au-sc-btn cursor-interaction" data-work="report">查看一件完整的示例工作</button></div>
+        </div>
+      </section>
+      <section data-view="decision" hidden aria-label="选择工作副本">
+        <div class="pw-page pw-decision-body">
+          <p class="pw-eyebrow">待你处理 · 改进项目欢迎页</p><h1>在哪个副本里修改？</h1>
+          <p class="pw-page-lead">这个选择决定修改放在哪里。目标和已交代的要求会跟着这件工作保留。</p>
+          <div class="pw-decision-context">下一步：选择副本后，进入该项目的启动审阅。</div>
+          <form id="pw-decision-form">
+            <fieldset><legend>工作副本</legend>
+              <label class="pw-radio-option"><input type="radio" name="pw-copy" value="移动端改版副本" checked><span class="pw-radio-dot" aria-hidden="true"><span class="pw-radio-default"></span><span class="pw-radio-selected"></span><span class="pw-radio-inner"></span></span><span><strong>移动端改版副本</strong><small>适合本次欢迎页修改 · 保留已有改版内容</small></span></label>
+              <label class="pw-radio-option"><input type="radio" name="pw-copy" value="新建独立副本"><span class="pw-radio-dot" aria-hidden="true"><span class="pw-radio-default"></span><span class="pw-radio-selected"></span><span class="pw-radio-inner"></span></span><span><strong>新建独立副本</strong><small>从当前项目版本开始，单独保存这次改动</small></span></label>
+            </fieldset>
+            <div class="pw-actions"><button type="submit" class="au-sc-btn au-sc-primary cursor-interaction">使用这个副本</button><button type="button" class="au-sc-btn cursor-interaction" data-action="back">稍后处理</button></div>
+          </form>
+          <div class="pw-receipt" id="pw-decision-receipt" role="status" hidden></div>
+        </div>
+      </section>
+      <section data-view="artifacts" hidden aria-label="成果">
+        <div class="pw-page"><p class="pw-eyebrow">可以继续使用的内容</p><h1>成果</h1><p class="pw-page-lead">从交付物找回原工作。修改继续基于明确版本。</p><button class="pw-object-row cursor-interaction" data-page="artifact"><span class="pw-file-mark"><span class="pw-solar" data-solar="file-text" aria-hidden="true"></span></span><span class="pw-object-copy"><strong>AI 应用观察周报</strong><small>研究资料 · 第一版 · 附来源</small></span><span class="pw-solar" data-solar="chevron-right" aria-hidden="true"></span></button></div>
+      </section>
+      <section data-view="artifact" hidden aria-label="周报成果">
+        <div class="pw-page">
+          <p class="pw-eyebrow">成果 · 研究资料</p><h1>AI 应用观察周报</h1>
+          <div class="pw-actions" style="margin-top:14px"><span class="pw-version">第一版</span><span class="pw-muted" style="font-size:12px">原工作与来源可追溯</span><span class="pw-grow"></span><button class="au-sc-btn au-sc-primary cursor-interaction" data-action="revise">继续修改</button></div>
+          <article class="pw-article"><p class="pw-eyebrow">示例正文</p><h2>把产品变化，变成我们的判断。</h2><h3>本周关注</h3><p>围绕统一入口、后台工作和成果接续整理材料。每个判断保留依据，尚不确定的部分单独列出。</p><h3>对项目的建议</h3><ol><li>用户先交代目标，管家再安排适合的能力。</li><li>长工作有明确状态，回来时能接着看、接着改。</li><li>每份成果都能找到原工作与具体版本。</li></ol><h3>仍需核实</h3><p>文档里的产品承诺需要和实际可用范围分开。来源变化时，相关判断应重新核对。</p></article>
+          <div class="pw-actions"><button class="pw-link cursor-interaction" data-work="report">查看所属工作<span class="pw-solar" data-solar="chevron-right" aria-hidden="true"></span></button><span class="pw-grow"></span><button class="pw-link cursor-interaction" data-page="project">打开项目资料<span class="pw-solar" data-solar="arrow-up-right" aria-hidden="true"></span></button></div>
+        </div>
+      </section>
+      <section data-view="project" hidden aria-label="研究资料项目">
+        <div class="pw-page">
+          <p class="pw-eyebrow">项目 · 持续的工作现场</p><h1>研究资料</h1><p class="pw-page-lead">收集 AI 应用资料，沉淀对产品有用的判断。工作、成果和项目约定留在同一个地方。</p>
+          <section class="pw-section"><div class="pw-section-head"><h2>最近工作</h2></div><button class="pw-object-row cursor-interaction" data-work="report"><span class="pw-object-copy"><strong>整理 AI 应用观察周报</strong><small>第一版可查看 · 原话题仍可继续</small></span><span class="pw-solar" data-solar="chevron-right" aria-hidden="true"></span></button></section>
+          <section class="pw-section"><div class="pw-section-head"><h2>成果</h2></div><button class="pw-object-row cursor-interaction" data-page="artifact"><span class="pw-object-copy"><strong>AI 应用观察周报 · 第一版</strong><small>内容与来源一起保存</small></span><span class="pw-solar" data-solar="chevron-right" aria-hidden="true"></span></button></section>
+          <section class="pw-section"><h2>项目约定</h2><p class="pw-page-lead">用中文写作；来源要可追溯；观点与已经核实的事实分开。</p><button class="au-sc-btn cursor-interaction" data-action="project-brief">在这个项目中交代新目标</button></section>
+        </div>
+      </section>
+      <section data-view="memory" hidden aria-label="我与管家">
+        <div class="pw-page"><p class="pw-eyebrow">关于你 · 关于我们的工作方式</p><h1>我与管家</h1><p class="pw-page-lead">能看见管家记住什么，也能直接调整使用范围。</p>
+          <section class="pw-section"><h2>工作偏好</h2><div class="pw-object-row"><span class="pw-object-copy"><strong>报告先给结论，再给依据</strong><small>示例偏好 · 适用于报告写作</small></span><button class="pw-inline-switch cursor-interaction" aria-pressed="true" data-action="memory-toggle">正在使用</button></div><div class="pw-object-row"><span class="pw-object-copy"><strong>这次周报不超过两页</strong><small>当前工作约束 · 不自动变成长期偏好</small></span><button class="pw-link cursor-interaction" data-work="report">查看工作</button></div></section>
+          <section class="pw-section"><h2>长期职责</h2><p class="pw-page-lead" style="margin-bottom:0">只有明确安排并建立真实触发后，才会出现在这里。</p></section>
+          <section class="pw-section"><h2>资料的使用范围</h2><button class="pw-object-row cursor-interaction" data-page="project"><span class="pw-object-copy"><strong>研究资料项目</strong><small>用于相关工作；查看项目约定和来源</small></span><span class="pw-solar" data-solar="chevron-right" aria-hidden="true"></span></button></section>
+        </div>
+      </section>
+      <section data-view="capabilities" hidden aria-label="能力与设备">
+        <div class="pw-page"><p class="pw-eyebrow">根据当前目标准备</p><h1>能力与设备</h1><p class="pw-page-lead">支持什么、准备到哪、现在能不能用，分别说清楚。</p>
+          <div class="pw-object-row"><span class="pw-object-copy"><strong>查资料与整理文件</strong><small>示例：当前模型与资料读取已准备</small></span><span class="pw-status">可使用</span></div>
+          <button class="pw-object-row cursor-interaction" data-page="decision"><span class="pw-object-copy"><strong>修改项目</strong><small id="pw-cap-project-detail">需要选择本次修改的真实工作副本</small></span><span class="pw-status" data-tone="attention" id="pw-cap-project-status">待选择<span class="pw-solar" data-solar="chevron-right" aria-hidden="true"></span></span></button>
+          <div class="pw-object-row"><span class="pw-object-copy"><strong>操作手机</strong><small>示例：已连接过，但设备当前不在线</small></span><span class="pw-status">暂不可用</span></div>
+          <div class="pw-work-summary"><strong>回到正在处理的事</strong><p>完成准备后回原工作，保留目标、资料与草稿，并重新检查当前状态。</p><button class="pw-link cursor-interaction" data-work="screenshots">查看截图归档工作<span class="pw-solar" data-solar="chevron-right" aria-hidden="true"></span></button></div>
+        </div>
+      </section>
+      <p id="pw-preview-live" role="status" aria-live="polite" style="padding:0 24px 14px;font-size:12px;color:var(--p-muted)"></p>
+    </main>
+  </div>
+  <script>
+    (function(){
+      var root=document.getElementById('pw-butler-proposal');
+      if(!root)return;
+      var app=root.querySelector('.pw-app');
+      var view='home', history=[], work='report', topic='report', tab='outcome', chosenCopy='', homeProject='';
+      var binding='work:report', topicDrafts={}, topicReceipts={}, lastBindings={};
+      var labels={home:'管家',works:'我的工作',topic:'话题',work:'工作详情',decision:'工作 / 选择副本',artifacts:'成果',artifact:'成果 / AI 应用观察周报',project:'项目 / 研究资料',memory:'我与管家',capabilities:'能力与设备',draft:'话题 / 新交代'};
+      var works={
+        report:{title:'整理 AI 应用观察周报',project:'研究资料 · 来自 AI 应用观察话题',state:'第一版已保存，管家已整理交付说明。',reason:'成果附有来源。尚不能核实的部分已保留说明，可以直接查看，也可以继续修改。',goal:'让资料变成能帮助产品判断的中文周报。',delivery:'可编辑第一版、原始来源、待核实项。',constraint:'不把未核实的产品说法写成确定事实。',belongs:'研究资料项目。',middle:'整理、核对与写作',middleDetail:'把关键变化与来源对应起来',last:'管家接手结果',lastDetail:'核对目标，保存第一版，带回交付说明',primary:'继续修改'},
+        landing:{title:'改进项目欢迎页',project:'项目欢迎页 · 原委托保留',state:'需要先选一个真实工作副本。',reason:'两个副本都可用。选定后再准备本次启动审阅，目标和原要求继续保留。',goal:'欢迎页在手机上更易读、更容易找到下一步。',delivery:'可查看的页面改动和修改说明。',constraint:'沿原项目和现有组件完成；范围只包含欢迎页。',belongs:'项目欢迎页；工作副本待选择。',middle:'检查项目准备情况',middleDetail:'发现两个可以使用的工作副本',last:'等待你的选择',lastDetail:'选择后回到同一件事，再进入启动审阅',primary:'选择工作副本'},
+        screenshots:{title:'整理手机截图',project:'个人资料 · 来自截图整理话题',state:'正在等待手机恢复连接。',reason:'已经完成的整理保留。设备当前不在线，剩余步骤尚未继续执行。',goal:'把截图按用途整理，便于以后查找。',delivery:'归档目录与待你确认的截图清单。',constraint:'保留原图；需要删除时再作明确决定。',belongs:'个人资料；已选择的手机。',middle:'整理已取得的截图',middleDetail:'保存当前进展与已完成部分',last:'等待设备',lastDetail:'设备恢复连接后重新检查可用性',primary:'查看设备状态'}
+      };
+      function el(id){return root.querySelector('#'+id)}
+      function set(id,text){el(id).textContent=text}
+      function announce(text){set('pw-preview-live',text)}
+      function show(page,remember){
+        if(!labels[page])return;
+        if(view==='topic')topicDrafts[binding]=el('pw-topic-input').value;
+        if(remember!==false&&view!==page)history.push({view:view,work:work,topic:topic,tab:tab,binding:binding});
+        view=page;
+        root.querySelectorAll('[data-view]').forEach(function(node){node.hidden=node.dataset.view!==page});
+        root.querySelectorAll('.pw-nav-item').forEach(function(node){var active=node.dataset.page===page||(page==='work'&&node.dataset.page==='works')||(page==='artifact'&&node.dataset.page==='artifacts')||(page==='decision'&&node.dataset.page==='works');if(active)node.setAttribute('aria-current','page');else node.removeAttribute('aria-current')});
+        set('pw-breadcrumb',labels[page]);
+        root.querySelector('[data-action="back"]').hidden=page==='home';
+        el('pw-home-link').hidden=page==='home';
+        app.classList.remove('pw-nav-open');
+        root.querySelector('.pw-main').inert=false;
+        root.querySelector('[data-action="nav"]').setAttribute('aria-expanded','false');
+        announce('');
+      }
+      function workTab(name){
+        tab=name;
+        ['outcome','goal','process'].forEach(function(key){el('pw-wpanel-'+key).hidden=key!==name;el('pw-wtab-'+key).setAttribute('aria-selected',String(key===name))});
+      }
+      function openWork(id,remember){
+        if(!works[id])return;
+        show('work',remember);work=id;var d=works[id];
+        set('pw-work-title',d.title);set('pw-work-project',d.project);set('pw-work-state',d.state);set('pw-work-reason',d.reason);
+        set('pw-goal-text',d.goal);set('pw-delivery-text',d.delivery);set('pw-constraint-text',d.constraint);set('pw-belongs-text',d.belongs);
+        set('pw-process-middle',d.middle);set('pw-process-middle-detail',d.middleDetail);set('pw-process-last',d.last);set('pw-process-last-detail',d.lastDetail);
+        set('pw-work-primary',d.primary);el('pw-work-artifact').hidden=id!=='report';el('pw-work-empty').hidden=id==='report';
+        workTab(id==='report'?'outcome':'goal');
+      }
+      function openTopic(id,remember,nextBinding){
+        if(!works[id])return;
+        show('topic',remember);topic=id;binding=nextBinding||lastBindings[id]||('work:'+id);lastBindings[id]=binding;var d=works[id];
+        var requests={report:'把这些 AI 应用资料整理成一份中文周报，重点写对我们有用的点，放进研究项目。',landing:'把项目欢迎页做得更适合手机使用，保留现有组件和页面内容。',screenshots:'帮我把手机截图按用途整理，原图先保留。'};
+        var answers={report:'第一版已经整理好。我把资料中的产品变化、对我们有用的做法和仍需核实的部分分开了，方便你直接判断下一步。',landing:d.reason,screenshots:d.reason};
+        set('pw-topic-name','话题 · '+d.title);set('pw-topic-user',requests[id]);set('pw-topic-answer',answers[id]);set('pw-topic-target','补充给：'+d.title);set('pw-topic-work-title',d.title);set('pw-topic-process',d.middle+' → '+d.last);
+        if(binding==='artifact:report:v1')set('pw-topic-target','继续修改：AI 应用观察周报 · 第一版');
+        el('pw-topic-work-row').dataset.work=id;el('pw-brief-fullwork').dataset.work=id;set('pw-brief-title',d.title);
+        var list=el('pw-brief-goals');list.replaceChildren();[d.goal,d.delivery,d.constraint].forEach(function(text){var li=document.createElement('li');li.textContent=text;list.appendChild(li)});
+        el('pw-brief-outcome').hidden=id!=='report';el('pw-brief-project').hidden=id!=='report';el('pw-topic-reference').hidden=id!=='report';
+        el('pw-topic-input').value=topicDrafts[binding]||'';el('pw-topic-receipt').textContent=topicReceipts[binding]||'';el('pw-topic-receipt').hidden=!topicReceipts[binding];
+      }
+      function revise(){
+        openTopic('report',undefined,'artifact:report:v1');
+        set('pw-topic-name','话题 · AI 应用观察');
+        set('pw-topic-target','继续修改：AI 应用观察周报 · 第一版');
+        if(!el('pw-topic-input').value.trim())el('pw-topic-input').value='把建议再压缩一点，保留来源和待核实项。';
+        el('pw-topic-input').focus({preventScroll:true});
+      }
+      root.addEventListener('click',function(event){
+        var button=event.target.closest('button');if(!button||!root.contains(button))return;
+        if(button.dataset.page){if(button.dataset.page==='topic')openTopic(view==='work'?work:'report');else show(button.dataset.page);return}
+        if(button.dataset.work){openWork(button.dataset.work);return}
+        if(button.dataset.workTab){workTab(button.dataset.workTab);return}
+        var action=button.dataset.action;
+        if(action==='back'){var previous=history.pop();if(!previous){show('home',false)}else if(previous.view==='work'){openWork(previous.work,false);workTab(previous.tab)}else if(previous.view==='topic'){openTopic(previous.topic,false,previous.binding)}else show(previous.view,false)}
+        if(action==='nav'){var open=app.classList.toggle('pw-nav-open');root.querySelector('.pw-main').inert=open;button.setAttribute('aria-expanded',String(open));if(open)root.querySelector('.pw-nav-close').focus()}
+        if(action==='nav-close'){app.classList.remove('pw-nav-open');root.querySelector('.pw-main').inert=false;var navButton=root.querySelector('[data-action="nav"]');navButton.setAttribute('aria-expanded','false');navButton.focus()}
+        if(action==='revise'){revise()}
+        if(action==='work-primary'){if(work==='report')revise();else show(work==='landing'?'decision':'capabilities')}
+        if(action==='project-brief'){homeProject='研究资料';set('pw-home-context','新话题 · 研究资料项目');set('pw-project-context-label','研究资料');el('pw-project-clear').hidden=false;show('home');el('pw-home-input').focus({preventScroll:true})}
+        if(action==='clear-project'){homeProject='';set('pw-home-context','新话题');set('pw-project-context-label','关联项目');el('pw-project-clear').hidden=true}
+        if(action==='memory-toggle'){var enabled=button.getAttribute('aria-pressed')!=='true';button.setAttribute('aria-pressed',String(enabled));button.textContent=enabled?'正在使用':'已停用';announce('示例偏好已'+(enabled?'启用':'停用')+'；没有修改真实记忆。')}
+      });
+      root.addEventListener('keydown',function(event){if(event.key==='Escape'&&app.classList.contains('pw-nav-open')){event.preventDefault();root.querySelector('.pw-nav-close').click()}});
+      var resizeObserver=new ResizeObserver(function(entries){if(entries[0].contentRect.width>700&&app.classList.contains('pw-nav-open')){app.classList.remove('pw-nav-open');root.querySelector('.pw-main').inert=false;root.querySelector('[data-action="nav"]').setAttribute('aria-expanded','false')}});
+      resizeObserver.observe(root);
+      root.querySelector('[role="tablist"]').addEventListener('keydown',function(event){
+        if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
+        var items=Array.from(root.querySelectorAll('[data-work-tab]')),index=items.indexOf(event.target);if(index<0)return;
+        event.preventDefault();var next=event.key==='Home'?0:event.key==='End'?items.length-1:(index+(event.key==='ArrowRight'?1:-1)+items.length)%items.length;workTab(items[next].dataset.workTab);items[next].focus();
+      });
+      el('pw-home-form').addEventListener('submit',function(event){
+        event.preventDefault();var input=el('pw-home-input'),text=input.value.trim();if(!text){input.focus();return}
+        set('pw-new-goal',text);set('pw-new-goal-context',homeProject?'新话题 · '+homeProject+'项目 · 接单状态示意':'新话题 · 接单状态示意');show('draft');announce('设计示例：已切换到新话题，没有创建真实工作。');
+      });
+      el('pw-topic-form').addEventListener('submit',function(event){
+        event.preventDefault();var input=el('pw-topic-input'),text=input.value.trim();if(!text){input.focus();return}
+        var receipt=el('pw-topic-receipt');topicReceipts[binding]='示例补充已记录：'+text+'。正式产品会分别反馈已送达、待采用与已生效。';receipt.textContent=topicReceipts[binding];receipt.hidden=false;input.value='';topicDrafts[binding]='';announce('本次操作仅演示补充与工作之间的关系。');
+      });
+      el('pw-decision-form').addEventListener('submit',function(event){
+        event.preventDefault();var selected=root.querySelector('input[name="pw-copy"]:checked');if(!selected)return;
+        chosenCopy=selected.value;
+        works.landing.state='已选择副本，下一步是本次启动审阅。';works.landing.reason='本次选择：'+chosenCopy+'。目标保留；选择资源本身不代表执行已经启动。';works.landing.belongs='项目欢迎页 · '+chosenCopy;works.landing.last='副本已选定';works.landing.lastDetail='等待进入准确的项目启动审阅';works.landing.primary='查看本次选择';
+        set('pw-home-decision-title','副本已选定，等待启动审阅');set('pw-home-decision-detail',chosenCopy+'；尚未开始实际修改。');set('pw-home-landing-status','待启动审阅');set('pw-worklist-landing-detail',chosenCopy+' · 待启动审阅');
+        set('pw-home-briefing','欢迎页副本已选定，下一步是启动审阅。截图归档仍在等待手机恢复连接。');
+        set('pw-cap-project-detail',chosenCopy+'已选择，执行前仍需本次启动审阅');set('pw-cap-project-status','待启动审阅');
+        var receipt=el('pw-decision-receipt');receipt.textContent='示例选择已保存：'+chosenCopy+'。下一步进入原生启动审阅；本预览不会启动真实任务。';receipt.hidden=false;announce('选择、批准和开始执行是不同状态。');
+      });
+    })();
+  </script>
+</div>
