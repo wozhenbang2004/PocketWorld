@@ -77,3 +77,12 @@ jobs:
             -PpocketworldVersionCode=3 -PpocketworldVersionName=0.3.0-verify \
             -Dorg.gradle.vfs.watch=false \
             :app:compileDebugKotlin :app:compileDebugJavaWithJavac
+      - name: Verify system pairing and owner recovery guards
+        run: |
+          ./gradlew --no-daemon --max-workers=1 --console=plain \\
+            -PpocketworldVersionCode=3 -PpocketworldVersionName=0.3.0-pr-compile \\
+            -Dorg.gradle.vfs.watch=false \\
+            :app:testDebugUnitTest \\
+            --tests 'dev.pocketengine.phone.setup.SystemWirelessPairingTest' \\
+            --tests 'dev.pocketengine.phone.setup.PairingEntrySessionTest' \\
+            --tests 'dev.pocketengine.phone.setup.PhoneSetupModuleNativeTest'
