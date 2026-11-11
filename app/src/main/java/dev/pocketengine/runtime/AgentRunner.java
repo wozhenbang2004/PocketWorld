@@ -265,6 +265,9 @@ public final class AgentRunner {
             case "planning_read_only" -> "PLANNING_READ_ONLY";
             case "planning_private_text" -> "PLANNING_PRIVATE_TEXT";
             case "planning_unavailable" -> "PLANNING_UNAVAILABLE";
+            case "planning_not_active" -> "PLANNING_NOT_ACTIVE";
+            case "planning_phase_unchanged" -> "PLANNING_PHASE_UNCHANGED";
+            case "planning_plan_required" -> "PLANNING_PLAN_REQUIRED";
             case "image_input_unavailable" -> "IMAGE_INPUT_UNAVAILABLE";
             case "stale_observation" -> "STALE_OBSERVATION";
             case "approval_required","needs_user" -> "OWNER_INPUT_REQUIRED";
@@ -563,7 +566,10 @@ public final class AgentRunner {
                 String nativePlanningReference="";
                 if(turnPlanning!=null){
                     JSONObject currentPlanning=planning.reference(turnPlanning);
-                    String meaning="当前原生任务阶段与已保存的计划确认事实；具体操作仍须原工具权限和参数审批：";
+                    String meaning=turnPlanning.planning()
+                            ?"当前任务处于主人选择的只读规划阶段。可在原授权与剩余额度内使用当前只读工具收集资料，形成完整计划后提交审阅；提交计划不批准执行。"
+                            :"当前任务处于执行阶段。沿原目标使用本轮实际提供且获准的工具推进；普通检索和内部拆解步骤不需要申请规划或再次申请进入执行。历史阶段请求只是旧请求，不是当前待审计划或停等指令。";
+                    meaning+="authorizesExecution=false仅表示这条参考消息不增加权限，不表示原任务未获授权；具体工具、参数审批、主人停止或只读要求及剩余预算仍按当前原生范围核对。当前事实：";
                     if(!turnPlanning.planning()&&turnPlanning.planRevision>0&&"current_native_task_scope".equals(currentPlanning.optString("source"))
                             &&Boolean.TRUE.equals(currentPlanning.opt("planApprovalRecorded"))&&currentPlanning.optJSONObject("nativePlanApproval")!=null){
                         if(reviewedPlanConsumesOldReadHint(currentPlanning,turnPlanning,history,recallIntent))intent.consumeReviewedStageRead();
@@ -578,7 +584,7 @@ public final class AgentRunner {
                 JSONArray tools=phone==null||!control.phoneSurfaceActive()?new JSONArray():tools();
                 if(control.phoneSurfaceActive()&&DeferredPhoneSession.adaptive(phone))addTool(tools,"phone_observation_help","当前节点中找不到目标时请求新的观察；仅在本机允许且模型已配置图像输入能力时发送真实图片，不重试业务动作。",properties("observationId","string").put("reason",new JSONObject().put("type","string").put("enum",new JSONArray().put("target_missing"))),new String[]{"observationId","reason"});
                 JSONArray outcomeTools=RunOutcomeTools.tools();for(int i=0;i<outcomeTools.length();i++)tools.put(outcomeTools.getJSONObject(i));
-                if(turnPlanning!=null){JSONArray planTools=ExecutionPlan.tools(turnPlanning.planning());for(int i=0;i<planTools.length();i++)tools.put(planTools.getJSONObject(i));}
+                if(turnPlanning!=null){JSONArray planTools=ExecutionPlan.tools(turnPlanning.planning(),turnPlanning.planRevision);for(int i=0;i<planTools.length();i++)tools.put(planTools.getJSONObject(i));}
                 if(routes!=null&&control.phoneSurfaceActive()){JSONArray routeTools=routes.tools();for(int i=0;i<routeTools.length();i++)tools.put(routeTools.getJSONObject(i));}
                 if(screens!=null&&control.phoneSurfaceActive()&&config.sendScreenshots&&imageInputAvailable(config)){JSONArray oldScreens=RecentScreenHistory.tools();for(int i=0;i<oldScreens.length();i++)tools.put(oldScreens.getJSONObject(i));}
                 if(capabilities!=null){
@@ -985,7 +991,12 @@ public final class AgentRunner {
                         args = new JSONObject((String) raw);
                         if(!intent.permits(name,this::intentEffecting))throw new ToolArgumentException("owner_intent_read_only");
                         if(ExecutionPlan.supports(name)){
-                            if(planning==null||ExecutionPlanning.SUBMIT.equals(name)&&!turnPlanning.planning())throw new ToolArgumentException("planning_unavailable");
+                            if(planning==null||turnPlanning==null)throw new ToolArgumentException("planning_unavailable");
+                            if(!turnPlanning.planning())throw new ToolArgumentException("planning_not_active");
+                            if(ExecutionPlanning.REQUEST.equals(name)){
+                                if(turnPlanning.phase.equals(args.optString("phase")))throw new ToolArgumentException("planning_phase_unchanged");
+                                if(turnPlanning.planRevision<1)throw new ToolArgumentException("planning_plan_required");
+                            }
                             ExecutionPlan.validateTool(name,args);
                         }
                         else if(turnPlanning!=null&&turnPlanning.planning()&&planningAccess(name,args)!=ExecutionPlanning.Access.READ)throw new ToolArgumentException("planning_read_only");
@@ -1007,6 +1018,9 @@ public final class AgentRunner {
                         String code = badArguments instanceof CapabilityPort.Unavailable?"tool_withdrawn":badArguments instanceof ToolArgumentException ? ((ToolArgumentException) badArguments).code : "invalid_arguments";
                         receipt = failure(code, "planning_private_text".equals(code)?"规划参数含当前凭据或需要脱敏的内容，尚未保存或派发。请重新提交可公开核对的完整文本，不会替换或截断原计划。"
                                 :"planning_read_only".equals(code)?"原任务仍在只读规划阶段，此工具没有派发。请使用当前只读工具或提交完整计划供主人审阅。"
+                                :"planning_not_active".equals(code)?"原任务已经处于执行阶段，此规划请求没有保存或派发，也未创建待审计划。请使用本轮有效工具继续原目标；内部拆解步骤不需要改阶段，不要仅因这次拒绝停等主人。原工具权限、单独审批和剩余预算仍然有效。"
+                                :"planning_phase_unchanged".equals(code)?"原任务已经处于只读规划阶段，不需要再次申请进入。此请求没有保存或派发；请继续原范围内的资料读取，或提交完整计划。"
+                                :"planning_plan_required".equals(code)?"还没有可供审阅的完整计划，此执行阶段请求没有保存或派发。请先用 execution_plan_submit 提交完整计划，不要让主人审阅空请求。"
                                 :ExecutionPlan.supports(name)?"规划请求字段、当前阶段或完整草稿不符合原合同，尚未保存或派发。请核对当前阶段与计划结构，不要携带执行授权或额外身份字段。"
                                 :badArguments instanceof CapabilityPort.Unavailable?"本轮工具已撤销或安装改变，旧决定尚未执行，请重新取得当前工具清单。":capabilities!=null&&capabilities.supports(name)?"此能力工具的参数不符合当前合同，尚未执行。请核对该工具的字段与范围。":"工具参数无效或页面引用已过期，请重新观察后使用当前节点与0到1000坐标。");
                         receipt.put("accepted",false).put("nativeDispatched",false);
@@ -1018,6 +1032,11 @@ public final class AgentRunner {
                         emit(taskId, "tool", "failed", receipt.optString("message"), name, receipt, config, toolSink);
                         batchContinuation.stopSequence();
                         if(activeStep!=null||activePlan!=null||!correctableArguments||!independentRead(name))batchContinuation.stopSequenceAndObservations();
+                        if(ExecutionPlan.supports(name)){
+                            appendUnissuedReplies(history,calls,index+1,failure("planning_request_not_dispatched","规划请求未被接纳，本批余下旧决定没有派发；请依据当前阶段和有效工具重新选择下一步。").put("accepted",false).put("nativeDispatched",false),config);
+                            checkpoint(taskId,journal,history,steps,latest,config,toolSink,contextBudget,repeatedTools);
+                            break;
+                        }
                         if(activeStep!=null)break;continue;
                     }
                     boolean imageRequired=capabilities!=null&&capabilities.supports(name)&&capabilities.observationRequirement(name,args,control)==dev.pocketengine.core.NativeToolObservation.Requirement.IMAGE;
@@ -1080,12 +1099,12 @@ public final class AgentRunner {
                                 :planning.requestPhase(turnPlanning,args.getString("phase"),args.getString("reason"),call.getString("id"));
                         if(receipt==null)throw new JournalFailure();
                         repeatedTools.afterTool(name,args,receipt,false,false);history.put(toolResult(call,receipt,config,true));
-                        appendUnissuedReplies(history,calls,index+1,failure("planning_review_required","规划请求已保存，本批余下旧决定没有派发，请等待主人审阅准确版本。").put("accepted",false).put("nativeDispatched",false),config);
+                        appendUnissuedReplies(history,calls,index+1,failure("planning_review_required","完整计划已保存供主人审阅，本批余下旧决定没有派发，请等待准确版本确认。").put("accepted",false).put("nativeDispatched",false),config);
                         evidence=new JSONObject(receipt.toString()).put("executionAuthorized",false).put("automaticReplayAllowed",false);
                         checkpoint(taskId,journal,history,steps,latest,config,toolSink,contextBudget,repeatedTools);
                         toolDiagnostic.finish("awaiting_user","PLAN_REVIEW_REQUIRED");
-                        emit(taskId,"tool","awaiting_user",receipt.optString("message","规划请求已保存，等待主人审阅；尚未切换执行授权。"),name,receipt,config,toolSink);
-                        return finish(taskId,"awaiting_user",receipt.optString("message","规划请求已保存，等待主人审阅准确版本；没有追加预算或派发效果。"),evidence,steps,config,toolSink);
+                        emit(taskId,"tool","awaiting_user",receipt.optString("message","计划已保存，等待你确认后执行。"),name,receipt,config,toolSink);
+                        return finish(taskId,"awaiting_user",receipt.optString("message","计划已保存，等待你确认后执行。"),evidence,steps,config,toolSink);
                     }
                     boolean planningReadIssued=turnPlanning!=null&&turnPlanning.planning();
                     ExecutionPlanning.ReadClaim issuedRead=planningReadIssued

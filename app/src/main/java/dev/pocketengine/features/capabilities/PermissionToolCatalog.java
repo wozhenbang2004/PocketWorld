@@ -49,8 +49,7 @@ public final class PermissionToolCatalog {
         catalog.names("media","需要已配置的媒体服务与本次输入授权；目录不表示服务已就绪。","media_generate_image","media_generate_video","media_edit_image","media_synthesize_speech","media_read_original");
         catalog.names("assistant","仅主人已开启的可逆偏好；不能修改系统或工具权限。",AgentPreferencePort.LIST,AgentPreferencePort.SET);
         catalog.definitions(dev.pocketengine.runtime.policy.RunOutcomeTools.tools(),"run",true);
-        catalog.definitions(dev.pocketengine.core.ExecutionPlan.tools(true),"run",false);
-        catalog.definitions(dev.pocketengine.core.ExecutionPlan.tools(false),"run",false);
+        catalog.definitions(dev.pocketengine.core.ExecutionPlan.tools(true,1L),"run",false);
         catalog.definitions(new JSONArray().put(dev.pocketengine.core.ScopedToolCatalog.searchDefinition()),"run",false);
         catalog.notices.put("目录列出内置声明与本机已注册插件，不等于本次任务已挂载。工作配置、群组、设备及系统权限仍由原范围控制。");
         catalog.notices.put("插件/MCP 仅显示本机当前注册的定义；未启用、未授权或未完成发现的工具可能尚未登记，请到对应来源核对。目录读取不会连接服务或执行工具。");

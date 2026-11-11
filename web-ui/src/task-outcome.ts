@@ -8,6 +8,8 @@ const finite = (value: unknown): number | undefined => typeof value === 'number'
 export interface TaskOutcome {
   text: string;
   source: 'evidence' | 'result-event' | 'task-summary' | 'none';
+  /** A runner result can also end an attempt while waiting, paused or blocked. */
+  resultStatus?: string;
   image?: string;
   remotePhoneSnapshot?: { image: string; deviceId: string; screenMode: 'main_screen' | 'background'; capturedAt: number; currentRun: boolean; width: number; height: number };
   remotePhoneSnapshotStatus?: 'not_observed' | 'retention_disabled' | 'too_large' | 'save_unconfirmed' | 'saved';
@@ -86,6 +88,7 @@ export function getTaskOutcome(input: unknown, messages: unknown = [], now: numb
   } : undefined;
   const retained = !useEvidence && (evidenceText || image && !remotePhoneSnapshot) ? {text: evidenceText, ...(image && !remotePhoneSnapshot ? {image} : {})} : undefined;
   return { text: output, source: useEvidence ? 'evidence' : latest ? 'result-event' : summary ? 'task-summary' : 'none', reply, ...(screenshot ? {screenshot} : {}),
+    ...(latest ? {resultStatus: text(latest.event.status)} : {}),
     ...(useEvidence ? {evidenceRunBound: currentEvidence} : {}),
     ...(image && useEvidence && !remotePhoneSnapshot ? {image} : {}), ...(retained ? {retained} : {}), ...(remotePhoneSnapshot ? {remotePhoneSnapshot} : {}), ...(remotePhoneSnapshotStatus ? {remotePhoneSnapshotStatus} : {}),
     partial: evidence.modelSummaryTruncated === true || evidence.outputTruncated === true || evidence.diffTruncated === true ||

@@ -28,7 +28,8 @@ export function TaskOutcome({ task, messages, onCopy, onOpenAttachment }: {
   const imageLabel = screenshot?.currentRun ? '本轮结果截图' : '任务保留的较早截图';
   const work = ownerWorkPresentation(task);
   const report = work?.delivered && Array.isArray(messages) ? messages.find(message => message?.id === work.reportMessageId && message.role === 'assistant' && typeof message.content === 'string') : null;
-  const title = outcome.source === 'task-summary' ? '当前摘要' : outcome.source === 'evidence' && !outcome.evidenceRunBound ? '任务保留的结果' : work ? '执行结果' : '结果内容';
+  const progress = outcome.source === 'result-event' && outcome.resultStatus !== 'completed';
+  const title = progress ? '当前进展' : outcome.source === 'task-summary' ? '当前摘要' : outcome.source === 'evidence' && !outcome.evidenceRunBound ? '任务保留的结果' : work ? '执行结果' : '结果内容';
   const reply = outcome.reply;
   const files = reply?.attachments || [];
   const root = useRef<HTMLElement>(null);
@@ -40,7 +41,7 @@ export function TaskOutcome({ task, messages, onCopy, onOpenAttachment }: {
     {report?.content && <section className="pw-owner-work-report" aria-label="管家汇报"><header className="pw-outcome-heading"><h3>管家汇报</h3></header><AIAnswer text={report.content} onCopy={() => onCopy(report.content)} onCopyCode={onCopy}/></section>}
     <div className="pw-outcome-document">
       <header className="pw-outcome-heading"><h3>{outcome.text ? title : '暂无可读取的结果'}</h3></header>
-      {outcome.text ? <div data-motion-key="result-body"><AIAnswer text={outcome.text} onCopy={() => onCopy(outcome.text)} onCopyCode={onCopy}/></div>
+      {outcome.text ? <div data-motion-key="result-body"><AIAnswer text={outcome.text} showActions={!progress} onCopy={progress ? undefined : () => onCopy(outcome.text)} onCopyCode={onCopy}/></div>
         : <p className="pw-reading-note">{files.length ? '可先查看下方关联答复中的附件。' : '当前记录未提供可读取的结果正文。'}</p>}
       {outcome.image && <figure className="pw-outcome-image" data-motion-key={`image:${screenshot?.imageId || 'retained'}`}><img src={outcome.image} alt={imageLabel} loading="lazy" decoding="async"/><figcaption>{imageLabel}</figcaption></figure>}
       {remotePhone && <figure className="pw-outcome-image" data-motion-key={`phone:${screenshot?.imageId}`}>

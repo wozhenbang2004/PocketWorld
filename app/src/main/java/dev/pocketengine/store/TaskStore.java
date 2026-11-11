@@ -2820,16 +2820,20 @@ public final class TaskStore {
                 String operation=recordPlanningOperation(id,run,SUBMIT,arguments,"plan_receipt",new JSONObject().put("draftSaved",true).put("effectsDispatched",false));
                 task=planningTask(id);scope=task.getJSONObject("executionScope");scope.put("revision",TaskExecutionScope.nextRevision(scope.getLong("revision"))).put("planRevision",revision).put("planArtifactRef",operation).put("planHash",hash);scope.remove("planApproval");
                 invalidatePlanApprovals(task,"plan_changed");writePlanningScope(task,scope);JSONObject approval=ensureExecutionPlanApproval(task);
-                JSONObject result=executionPlanView(task).put("ok",true).put("code","execution_plan_awaiting_review").put("operationId",operation).put("approvalId",approval.getString("id")).put("executionStarted",false).put("effectsDispatched",false);
+                JSONObject result=executionPlanView(task).put("ok",true).put("code","execution_plan_awaiting_review").put("message","计划已保存，等待你确认后执行。").put("operationId",operation).put("approvalId",approval.getString("id")).put("executionStarted",false).put("effectsDispatched",false);
                 ContentValues receipt=new ContentValues();receipt.put("receipt",result.toString());db.update("operations",receipt,"task_id=? AND operation_id=?",new String[]{id,operation});db.setTransactionSuccessful();return result;
             }finally{db.endTransaction();}
         }}
         @Override public JSONObject requestPhase(Snapshot expected,String phase,String reason,String call)throws Exception{synchronized(TaskStore.this){
-            requireCurrent(expected);if(!phase.matches("planning|executing")||reason==null||reason.isBlank()||reason.length()>2000)throw new IllegalArgumentException("规划转换请求格式无效");
+            requireCurrent(expected);
+            if(!expected.planning()||!"executing".equals(phase))throw new IllegalArgumentException("只有原只读规划阶段可以请求审阅计划后执行；进入规划由主人选择");
+            if(expected.planRevision<1)throw new IllegalArgumentException("请先提交完整计划，再请求主人审阅执行");
+            if(reason==null||reason.isBlank()||reason.length()>2000)throw new IllegalArgumentException("规划转换请求格式无效");
             JSONObject args=new JSONObject().put("phase",phase).put("reason",reason);requirePlanningArguments(args,call);db.beginTransaction();try{
-                requireCurrent(expected);fence(id,run,epoch,original(),true);String operation=recordPlanningOperation(id,run,REQUEST,args,"phase_request_receipt",null);JSONObject task=planningTask(id);
-                JSONObject result=new JSONObject().put("ok",true).put("code","execution_phase_requested").put("requestedPhase",phase).put("operationId",operation).put("executionPhase",expected.phase).put("requestOnly",true).put("executionStarted",false).put("newGrant",false);
-                if(expected.planning()&&"executing".equals(phase)&&task.getJSONObject("executionScope").getLong("planRevision")>0)result.put("approvalId",ensureExecutionPlanApproval(task).getString("id"));
+                requireCurrent(expected);fence(id,run,epoch,original(),true);
+                JSONObject approval=ensureExecutionPlanApproval(planningTask(id));
+                String operation=recordPlanningOperation(id,run,REQUEST,args,"phase_request_receipt",null);
+                JSONObject result=new JSONObject().put("ok",true).put("code","execution_phase_requested").put("message","请审阅已保存的完整计划，确认后再执行。").put("requestedPhase",phase).put("operationId",operation).put("executionPhase",expected.phase).put("approvalId",approval.getString("id")).put("requestOnly",true).put("executionStarted",false).put("effectsDispatched",false).put("newGrant",false);
                 ContentValues receipt=new ContentValues();receipt.put("receipt",result.toString());db.update("operations",receipt,"task_id=? AND operation_id=?",new String[]{id,operation});db.setTransactionSuccessful();return result;
             }finally{db.endTransaction();}
         }}

@@ -68,23 +68,29 @@ public final class ExecutionPlan {
         }
         if(!ExecutionPlanning.REQUEST.equals(tool))throw new SecurityException("不是受限规划请求");
         keys(arguments,Set.of("phase","reason"),Set.of("phase","reason"));
-        String phase=text(arguments,"phase",9,true);if(!Set.of("planning","executing").contains(phase))throw new SecurityException("未知规划阶段请求");
+        String phase=text(arguments,"phase",9,true);if(!"executing".equals(phase))throw new IllegalArgumentException("只能请求审阅已提交的完整计划；进入只读规划由主人选择");
         text(arguments,"reason",2000,true);
     }
 
-    /** These two native proposals are outside the ordinary effect-tool grant and add no authority. */
+    /** Formal planning belongs to the owner's selected phase, not ordinary execution. */
     public static JSONArray tools(boolean planning)throws Exception {
+        return tools(planning,0L);
+    }
+
+    public static JSONArray tools(boolean planning,long planRevision)throws Exception {
         JSONArray tools=new JSONArray();
-        if(planning){
-            JSONObject stepProperties=new JSONObject().put("id",textSchema(1,64)).put("title",textSchema(0,200)).put("detail",textSchema(0,2000));
-            JSONObject stepSchema=objectSchema(stepProperties,"id","title","detail");
-            JSONObject properties=new JSONObject().put("format",new JSONObject().put("type","string").put("enum",new JSONArray().put(FORMAT)))
-                    .put("goal",textSchema(1,4000)).put("steps",new JSONObject().put("type","array").put("minItems",1).put("maxItems",32).put("items",stepSchema))
-                    .put("sources",new JSONObject().put("type","array").put("maxItems",8).put("items",textSchema(0,1000)));
-            tools.put(tool(ExecutionPlanning.SUBMIT,"保存完整结构化计划供主人审阅。此动作仅写原任务的计划草稿，不编辑项目文件、不批准效果、不追加预算；提交后停止等待主人确认准确版本。",objectSchema(new JSONObject().put("plan",objectSchema(properties,"format","goal","steps")),"plan")));
+        if(!planning)return tools;
+        JSONObject stepProperties=new JSONObject().put("id",textSchema(1,64)).put("title",textSchema(0,200)).put("detail",textSchema(0,2000));
+        JSONObject stepSchema=objectSchema(stepProperties,"id","title","detail");
+        JSONObject properties=new JSONObject().put("format",new JSONObject().put("type","string").put("enum",new JSONArray().put(FORMAT)))
+                .put("goal",textSchema(1,4000)).put("steps",new JSONObject().put("type","array").put("minItems",1).put("maxItems",32).put("items",stepSchema))
+                .put("sources",new JSONObject().put("type","array").put("maxItems",8).put("items",textSchema(0,1000)));
+        tools.put(tool(ExecutionPlanning.SUBMIT,"保存完整结构化计划供主人审阅。此动作仅写原任务的计划草稿，不编辑项目文件、不批准效果、不追加预算；提交后停止等待主人确认准确版本。",objectSchema(new JSONObject().put("plan",objectSchema(properties,"format","goal","steps")),"plan")));
+        if(planRevision>0){
+            JSONObject request=new JSONObject().put("phase",new JSONObject().put("type","string").put("enum",new JSONArray().put("executing"))).put("reason",textSchema(1,2000));
+            tools.put(tool(ExecutionPlanning.REQUEST,"请主人审阅当前已提交的完整计划，确认后再执行。仅适用于只读规划中已有准确计划版本的任务；请求本身不切换阶段、不批准计划、不增加工具或预算。",objectSchema(request,"phase","reason")));
         }
-        JSONObject request=new JSONObject().put("phase",new JSONObject().put("type","string").put("enum",new JSONArray().put("planning").put("executing"))).put("reason",textSchema(1,2000));
-        return tools.put(tool(ExecutionPlanning.REQUEST,"向主人提出进入规划或执行阶段的请求并等待。请求不会切换阶段、批准计划、增加工具或预算。",objectSchema(request,"phase","reason")));
+        return tools;
     }
 
     private static JSONObject textSchema(int min,int max)throws Exception{return new JSONObject().put("type","string").put("minLength",min).put("maxLength",max);}
