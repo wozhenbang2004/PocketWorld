@@ -91,6 +91,20 @@ public final class PhoneSetupModuleNativeTest {
                 .getJSONObject("pairing").getString("sessionId");
     }
 
+    @Test public void systemPairingObservationIsOwnerOnlyAndCancellationCannotPair() throws Exception {
+        assertThrows(SecurityException.class, () -> module.handle("pairing.observe", new JSONObject()));
+        assertThrows(SecurityException.class,
+                () -> module.handleForOwner("pairing.observe", new JSONObject(), () -> false));
+        JSONObject armed = module.handleForOwner("pairing.observe", new JSONObject(), () -> true);
+        assertTrue(armed.getJSONObject("pairing").getJSONObject("autoCapture").getBoolean("active"));
+        assertFalse(armed.toString().contains("pairingCode"));
+        assertEquals(0, display.pairCalls);
+        module.handle("pairing.cancel", new JSONObject());
+        assertFalse(module.snapshot().getJSONObject("pairing").getJSONObject("autoCapture").getBoolean("active"));
+        assertEquals(0, display.pairCalls);
+        assertFalse(PhoneSetupModule.systemPairingCaptureActive());
+    }
+
     @Test public void notificationReplyUsesPrivateReceiverAndOriginalPairOnceWithoutClaimingConnection() throws Exception {
         String session = begin();
         Notification notice = app.getSystemService(NotificationManager.class).getActiveNotifications()[0].getNotification();
