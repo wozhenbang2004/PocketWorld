@@ -442,7 +442,7 @@ internal class PocketWebBridge(
                     checkedPayload(args, emptySet())
                     app.webSearchSettingsForOwner()
                 } else {
-                    checkedPayload(args, setOf("provider", "baseUrl", "apiKey", "clearApiKey", "expectedRevision"))
+                    checkedPayload(args, setOf("provider", "baseUrl", "apiKey", "clearApiKey", "providerHostedEnabled", "groupSearchEnabled", "expectedRevision"))
                     app.saveWebSearchSettingsForOwner(args)
                 }
                 complete(id, result, null); publishState(); return
