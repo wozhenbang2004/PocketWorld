@@ -105,6 +105,34 @@ public final class PhoneSetupModuleNativeTest {
         assertFalse(PhoneSetupModule.systemPairingCaptureActive());
     }
 
+    private void offerSystemCode() throws Exception {
+        java.lang.reflect.Method method=PhoneSetupModule.class.getDeclaredMethod(
+                "submitObservedPairing",SystemWirelessPairing.Credential.class);
+        method.setAccessible(true);
+        method.invoke(module,new SystemWirelessPairing.Credential("127.0.0.1",43210,"482911"));
+    }
+
+    @Test public void queuedSystemPairingHonorsCancellationBeforeNativeWrite() throws Exception {
+        module.handleForOwner("pairing.observe",new JSONObject(),()->true);
+        offerSystemCode();
+        assertEquals(1,work.size());
+        module.handle("pairing.cancel",new JSONObject());
+        drain();
+        assertEquals(0,display.pairCalls);
+        assertFalse(module.snapshot().getJSONObject("pairing").getJSONObject("autoCapture").getBoolean("active"));
+    }
+
+    @Test public void visibleSystemCodeClaimsOnceAndNeverPersistsTheSecret() throws Exception {
+        module.handleForOwner("pairing.observe",new JSONObject(),()->true);
+        offerSystemCode();
+        offerSystemCode();
+        drain();
+        assertEquals(1,display.pairCalls);
+        assertFalse(display.dispatched.has("pairingCode"));
+        assertFalse(module.snapshot().toString().contains("482911"));
+        assertFalse(events.toString().contains("482911"));
+    }
+
     @Test public void notificationReplyUsesPrivateReceiverAndOriginalPairOnceWithoutClaimingConnection() throws Exception {
         String session = begin();
         Notification notice = app.getSystemService(NotificationManager.class).getActiveNotifications()[0].getNotification();
