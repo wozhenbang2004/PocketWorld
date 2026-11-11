@@ -18,6 +18,9 @@ const atEnd = (node: HTMLElement) => node.scrollHeight - node.clientHeight - nod
 const messageId = (message?: Message, index = 0) => message ? message.id || `${message.role}:${message.at}:${index}` : '';
 const rows = (node: HTMLElement) => Array.from(node.querySelectorAll<HTMLElement>('[data-message-index]'));
 const contentTop = (node: HTMLElement, row: HTMLElement) => row.getBoundingClientRect().top - node.getBoundingClientRect().top - node.clientTop + node.scrollTop;
+// The navigation can overlap the scroller. Anchors describe the readable area
+// below it, so reopening a conversation never tucks the saved line under glass.
+const readingTopInset = (node: HTMLElement) => Math.max(0, parseFloat(getComputedStyle(node).getPropertyValue('--pw-reading-top-inset')) || 0);
 // Messages are vertically ordered. Finding the first row below the viewport top
 // must not measure every preceding answer on each scroll event in a long thread.
 function readingRow(items: HTMLElement[], viewportTop: number) {
@@ -57,7 +60,7 @@ export function useConversationReading({ scroll, active, conversationId, compose
   const rememberChatPosition = useCallback(() => {
     const current = window.current, node = scroll.current;
     if (!current?.ready || !node?.isConnected || node.dataset.conversationId !== current.conversationId) return;
-    const items = currentRows(node), viewportTop = node.getBoundingClientRect().top + node.clientTop;
+    const items = currentRows(node), viewportTop = node.getBoundingClientRect().top + node.clientTop + readingTopInset(node);
     const row = readingRow(items, viewportTop);
     const index = Number(row?.dataset.messageIndex || 0);
     current.reading = { ...current.reading, top: node.scrollTop, index,
@@ -139,7 +142,7 @@ export function useConversationReading({ scroll, active, conversationId, compose
       else {
         const items = currentRows(node), anchor = items.find(row => row.dataset.messageId === reading.anchor);
         const row = anchor || items[Math.min(Math.max(0, reading.index), Math.max(0, items.length - 1))];
-        node.scrollTop = row ? contentTop(node, row) + reading.offset : reading.top;
+        node.scrollTop = row ? contentTop(node, row) + reading.offset - readingTopInset(node) : reading.top;
         reading.unread ||= !!reading.observed && reading.observed !== lastId;
         reading.following = atEnd(node) && !paused;
         if (reading.following) reading.unread = false;

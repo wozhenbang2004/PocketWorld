@@ -1,0 +1,157 @@
+/* Local material adaptation for the retained navigation controls. Filtering is
+ * bounded to each circle or shared capsule; icons and hit targets stay crisp. */
+:root {
+ --pw-navigation-glass-fill: rgb(255 255 255 / 52%);
+ --pw-navigation-glass-fill-pressed: rgb(255 255 255 / 65%);
+ --pw-navigation-glass-rim: linear-gradient(145deg, rgb(255 255 255 / 94%), rgb(255 255 255 / 20%) 38%, rgb(0 0 0 / 7%) 68%, rgb(255 255 255 / 58%));
+ --pw-navigation-glass-sheen: linear-gradient(160deg, rgb(255 255 255 / 32%), transparent 48%, rgb(255 255 255 / 10%));
+ --pw-navigation-glass-shadow: 0 2px 5px -2px rgb(0 0 0 / 10%), 0 7px 18px -7px rgb(0 0 0 / 12%), inset 0 1px 2px rgb(255 255 255 / 64%), inset 0 -1px 2px rgb(0 0 0 / 3%);
+ --pw-navigation-glass-hover: rgb(0 0 0 / 4%);
+ --pw-navigation-glass-pressed: rgb(0 0 0 / 8%);
+}
+:root.dark {
+ --pw-navigation-glass-fill: rgb(35 36 39 / 62%);
+ --pw-navigation-glass-fill-pressed: rgb(47 48 51 / 72%);
+ --pw-navigation-glass-rim: linear-gradient(145deg, rgb(255 255 255 / 33%), rgb(255 255 255 / 5%) 38%, rgb(0 0 0 / 18%) 68%, rgb(255 255 255 / 15%));
+ --pw-navigation-glass-sheen: linear-gradient(160deg, rgb(255 255 255 / 10%), transparent 48%, rgb(255 255 255 / 3%));
+ --pw-navigation-glass-shadow: 0 2px 5px -2px rgb(0 0 0 / 24%), 0 7px 18px -7px rgb(0 0 0 / 28%), inset 0 1px 2px rgb(255 255 255 / 10%), inset 0 -1px 2px rgb(0 0 0 / 16%);
+ --pw-navigation-glass-hover: rgb(255 255 255 / 7%);
+ --pw-navigation-glass-pressed: rgb(255 255 255 / 13%);
+}
+
+.pw-app .pw-navigation-glass,
+.pw-app.pw-redesign .pw-chat-navigation > .pw-chat-glass-trigger,
+.pw-app.pw-redesign .pw-app-header > [data-pw-icon-button] {
+ position: relative;
+ flex: none;
+ border: 0;
+ border-radius: 999px;
+ color: var(--pw-ink);
+ background: var(--pw-floating);
+ box-shadow: var(--pw-navigation-glass-shadow);
+}
+
+/* One optical edge belongs to the whole surface, including grouped actions. */
+.pw-app .pw-navigation-glass::before,
+.pw-app.pw-redesign .pw-chat-navigation > .pw-chat-glass-trigger::before,
+.pw-app.pw-redesign .pw-app-header > [data-pw-icon-button]::before {
+ content: '';
+ position: absolute;
+ inset: 0;
+ padding: 1px;
+ border-radius: inherit;
+ pointer-events: none;
+ background: var(--pw-navigation-glass-rim);
+ -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+ mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+ -webkit-mask-composite: xor;
+ mask-composite: exclude;
+}
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+ .pw-app .pw-navigation-glass,
+ .pw-app.pw-redesign .pw-chat-navigation > .pw-chat-glass-trigger,
+ .pw-app.pw-redesign .pw-app-header > [data-pw-icon-button] {
+  background: var(--pw-navigation-glass-sheen), var(--pw-navigation-glass-fill);
+  -webkit-backdrop-filter: blur(12px) saturate(1.35);
+  backdrop-filter: blur(12px) saturate(1.35);
+ }
+ .pw-app.pw-redesign .pw-chat-navigation > .pw-chat-glass-trigger:is(:active, [data-pressed]):not(:disabled),
+ .pw-app.pw-redesign .pw-app-header > [data-pw-icon-button]:is(:active, [data-pressed]):not(:disabled) {
+  --pw-navigation-glass-fill: var(--pw-navigation-glass-fill-pressed);
+ }
+}
+
+.pw-app :is(.pw-chat-navigation-actions, .pw-header-actions, .pw-primary-tools.pw-navigation-glass) {
+ display: inline-flex;
+ align-items: center;
+ justify-content: center;
+ gap: 0;
+ min-width: 44px;
+ min-height: 44px;
+ padding: 0;
+}
+.pw-app .pw-chat-navigation-actions { width: 88px; }
+.pw-app .pw-navigation-glass:empty { display: none; }
+.pw-app .pw-chat-navigation :is(.pw-chat-glass-trigger, .pw-chat-glass-action),
+.pw-app.pw-redesign .pw-app-header [data-pw-icon-button] {
+ width: 44px;
+ height: 44px;
+ min-width: 44px;
+ min-height: 44px;
+ padding: 11px;
+ border: 0;
+ border-radius: 999px;
+ color: var(--pw-ink);
+ transform: none;
+ transition: background-color 160ms ease, color 160ms ease;
+}
+.pw-app .pw-navigation-glass > [data-pw-icon-button] {
+ background: transparent;
+ box-shadow: none;
+ -webkit-backdrop-filter: none;
+ backdrop-filter: none;
+}
+.pw-app .pw-chat-navigation [data-pw-icon-button] > svg,
+.pw-app .pw-app-header [data-pw-icon-button] > svg {
+ width: 22px;
+ height: 22px;
+ flex: none;
+ transition: transform 260ms cubic-bezier(.2,.8,.2,1);
+}
+.pw-app :is(.pw-chat-navigation, .pw-app-header) [data-pw-icon-button]:is(:active, [data-pressed]):not(:disabled, [aria-disabled="true"]) > svg {
+ transform: scale(.9);
+ transition-duration: 100ms;
+}
+.pw-app .pw-navigation-glass > [data-pw-icon-button]:is(:active, [data-pressed], [aria-expanded="true"]):not(:disabled, [aria-disabled="true"]) {
+ background: var(--pw-navigation-glass-pressed);
+}
+.pw-app :is(.pw-chat-navigation, .pw-app-header) [data-pw-icon-button]:is(:focus-visible, [data-focus-visible]) {
+ outline: 2px solid var(--pw-focus);
+ outline-offset: -4px;
+}
+.pw-app :is(.pw-chat-navigation, .pw-app-header) [data-pw-icon-button]:is(:disabled, [aria-disabled="true"]) { opacity: .45; }
+
+@media (hover: hover) and (pointer: fine) {
+ .pw-app .pw-navigation-glass > [data-pw-icon-button]:hover:not(:disabled, [aria-disabled="true"], :active, [aria-expanded="true"]) {
+  background: var(--pw-navigation-glass-hover);
+ }
+}
+@media (prefers-reduced-motion: reduce) {
+ .pw-app :is(.pw-chat-navigation, .pw-app-header) [data-pw-icon-button],
+ .pw-app :is(.pw-chat-navigation, .pw-app-header) [data-pw-icon-button] > svg {
+  transition: none;
+ }
+ .pw-app :is(.pw-chat-navigation, .pw-app-header) [data-pw-icon-button]:is(:active, [data-pressed]) > svg { transform: none; }
+}
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+ .pw-app .pw-navigation-glass,
+ .pw-app.pw-redesign .pw-chat-navigation > .pw-chat-glass-trigger,
+ .pw-app.pw-redesign .pw-app-header > [data-pw-icon-button] {
+  background: var(--pw-floating);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+ }
+}
+@media (prefers-contrast: more) {
+ .pw-app .pw-navigation-glass,
+ .pw-app.pw-redesign .pw-chat-navigation > .pw-chat-glass-trigger,
+ .pw-app.pw-redesign .pw-app-header > [data-pw-icon-button] { box-shadow: inset 0 0 0 1px var(--pw-ink); }
+}
+@media (forced-colors: active) {
+ .pw-app .pw-navigation-glass,
+ .pw-app.pw-redesign .pw-chat-navigation > .pw-chat-glass-trigger,
+ .pw-app.pw-redesign .pw-app-header > [data-pw-icon-button] {
+  background: Canvas;
+  color: ButtonText;
+  outline: 1px solid ButtonText;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+ }
+ .pw-app .pw-navigation-glass::before,
+ .pw-app.pw-redesign .pw-chat-navigation > .pw-chat-glass-trigger::before,
+ .pw-app.pw-redesign .pw-app-header > [data-pw-icon-button]::before { display: none; }
+ .pw-app :is(.pw-chat-navigation, .pw-app-header) [data-pw-icon-button] { color: ButtonText; }
+ .pw-app :is(.pw-chat-navigation, .pw-app-header) [data-pw-icon-button]:is(:focus-visible, [data-focus-visible]) { outline-color: Highlight; }
+}

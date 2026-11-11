@@ -1,26 +1,35 @@
 /* Existing navigation and conversation actions share a compact title row.
  * Native insets stay authoritative; the conversation remains the main surface. */
 .pw-chat-navigation {
+ --pw-chat-navigation-height: 58px;
  position: relative;
  flex: none;
- min-height: 58px;
+ min-height: var(--pw-chat-navigation-height);
  padding: 7px max(14px,env(safe-area-inset-right,0px)) 7px max(14px,env(safe-area-inset-left,0px));
  z-index: 6;
  display: grid;
- grid-template-columns: 44px minmax(0,1fr) 44px;
+ grid-template-columns: 88px minmax(0,1fr) 88px;
  align-items: center;
- gap: 12px;
+ gap: 8px;
 }
-/* Adapt BoardUI ScrollFade's independent edge wash to the existing normal-flow
- * header. The short fade stays outside the scroller and never receives input. */
-.pw-chat-navigation::after {
+/* A short edge wash keeps the title readable while content passes under the
+ * controls. It has no filter and never intercepts the reading surface. */
+.pw-chat-navigation::before {
  content: '';
  position: absolute;
- inset: 100% 0 auto;
- height: 16px;
+ inset: 0 0 -16px;
+ z-index: -1;
  pointer-events: none;
- background: linear-gradient(to bottom, var(--pw-canvas-chat), transparent);
+ background: linear-gradient(to bottom, color-mix(in srgb, var(--pw-canvas-chat) 82%, transparent), color-mix(in srgb, var(--pw-canvas-chat) 32%, transparent) 70%, transparent);
 }
+/* Keep the existing scroller and its saved anchors. Only overlap the header
+ * when no activity notice sits between it and the conversation. Notices retain
+ * their reserved space; the first message always starts below the controls. */
+.pw-chat-navigation + .pw-conversation-scroll {
+ --pw-reading-top-inset: 58px;
+ margin-top: -58px;
+}
+.pw-app[data-navigation="drawer"] .pw-chat-navigation + .pw-conversation-scroll > .pw-conversation-content { padding-top: 66px; }
 .pw-chat-navigation-title {
  min-width: 0;
  margin: 0;
@@ -31,20 +40,9 @@
  font: 550 15px/24px var(--pw-font);
  text-align: center;
 }
-.pw-app .pw-chat-navigation .pw-chat-glass-trigger {
- width: 44px;
- height: 44px;
- min-width: 44px;
- min-height: 44px;
- padding: 11px;
- border: 0;
- border-radius: 50%;
- color: var(--pw-ink);
- background: var(--pw-floating);
- box-shadow: var(--pw-shadow-navigation);
- transition: background-color 150ms ease;
-}
-.pw-chat-glass-trigger[data-unread]::after {
+.pw-chat-navigation > .pw-chat-glass-trigger { justify-self: start; }
+.pw-chat-navigation-actions { justify-self: end; }
+.pw-chat-glass-action[data-unread]::after {
  content: '';
  position: absolute;
  width: 6px;
@@ -54,14 +52,6 @@
  border-radius: 50%;
  background: var(--pw-ink);
  box-shadow: 0 0 0 2px var(--pw-canvas-chat);
-}
-.pw-app .pw-chat-navigation .pw-chat-glass-trigger[aria-expanded="true"] {
- background: var(--pw-selected);
-}
-.pw-app .pw-chat-navigation .pw-chat-glass-trigger:is([data-pressed], :active):not(:disabled) { background: var(--pw-pressed); }
-.pw-app .pw-chat-navigation .pw-chat-glass-trigger:is(:focus-visible, [data-focus-visible]) {
- outline: 2px solid var(--pw-focus);
- outline-offset: -3px;
 }
 .pw-chat-glass-menu.shadow-dropdown {
  width: 248px;
@@ -98,12 +88,3 @@
 .pw-chat-menu-actions > .button-press-motion:hover:not(:disabled) { background: var(--pw-floating-hover); }
 .pw-chat-menu-actions > .button-press-motion:is(:active, [data-pressed]):not(:disabled) { background: var(--pw-floating-pressed); }
 .pw-chat-menu-unread { margin-left: auto; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--pw-copy); }
-@media (hover: hover) and (pointer: fine) {
- .pw-app .pw-chat-navigation .pw-chat-glass-trigger:hover:not(:disabled):not([aria-expanded="true"]):not(:active) { background: var(--pw-hover); }
-}
-@media (forced-colors: active) {
- .pw-app .pw-chat-navigation .pw-chat-glass-trigger:is(:focus-visible, [data-focus-visible]) { outline-color: Highlight; }
-}
-@media (prefers-reduced-motion: reduce) {
- .pw-app .pw-chat-navigation .pw-chat-glass-trigger { transition: none; }
-}
