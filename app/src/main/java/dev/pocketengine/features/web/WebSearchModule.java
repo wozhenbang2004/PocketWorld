@@ -69,7 +69,8 @@ public final class WebSearchModule implements EngineModule {
                     .header("User-Agent","Mozilla/5.0 (compatible; PocketWorldSearch/1.0)").get().build();
         }else if("searxng".equals(provider)){
             String base=config.baseUrl();
-            request=new Request.Builder().url(base+"/search?q="+encode(query)+"&format=json")
+            String path=base.endsWith("/search")?base:base+"/search";
+            request=new Request.Builder().url(path+"?q="+encode(query)+"&format=json")
                     .header("Accept","application/json").get().build();
             if(!config.apiKey().isEmpty())request=request.newBuilder().header("Authorization","Bearer "+config.apiKey()).build();
         }else if("brave".equals(provider)){
