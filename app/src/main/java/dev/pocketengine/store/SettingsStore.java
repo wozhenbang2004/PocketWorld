@@ -66,6 +66,70 @@ public final class SettingsStore {
     /** Application singleton only; current facts may change without rewriting private model settings. */
     public synchronized void installImageCapabilities(ImageCapabilitySource source) { imageCapabilities=java.util.Objects.requireNonNull(source); }
 
+
+    /** Search credentials and provider selection remain native owner settings, never model arguments. */
+    public record WebSearchConnection(String provider,String baseUrl,String apiKey,long revision) {}
+
+    public synchronized JSONObject webSearchSettings()throws Exception {
+        requireConfirmed();
+        String provider=prefs.getString("webSearchProvider","duckduckgo");
+        if(!java.util.Set.of("duckduckgo","searxng","brave").contains(provider))
+            throw new SecurityException("保存的联网搜索服务无效");
+        String baseUrl=prefs.getString("webSearchBaseUrl","");
+        boolean keySaved=!prefs.getString("encryptedWebSearchKey","").isEmpty();
+        return new JSONObject().put("provider",provider).put("baseUrl",baseUrl)
+                .put("apiKeyConfigured",keySaved).put("configured","duckduckgo".equals(provider)
+                        ||"searxng".equals(provider)&&!baseUrl.isBlank()
+                        ||"brave".equals(provider)&&keySaved)
+                .put("revision",prefs.getLong("webSearchRevision",1L)).put("networkVerified",false);
+    }
+    public synchronized WebSearchConnection webSearchConnection()throws Exception {
+        JSONObject state=webSearchSettings();
+        String encrypted=prefs.getString("encryptedWebSearchKey","");
+        String key=encrypted.isEmpty()?"":decrypt(encrypted);
+        return new WebSearchConnection(state.getString("provider"),state.getString("baseUrl"),key,state.getLong("revision"));
+    }
+    /** CAS owner configuration; raw API keys must never enter a public settings snapshot. */
+    public synchronized JSONObject saveWebSearchSettings(JSONObject change)throws Exception {
+        if(change==null)throw new IllegalArgumentException("缺少联网搜索设置");
+        java.util.Set<String> allowed=java.util.Set.of("provider","baseUrl","apiKey","clearApiKey","expectedRevision");
+        for(var names=change.keys();names.hasNext();)if(!allowed.contains(names.next()))
+            throw new SecurityException("联网搜索设置含未知字段");
+        JSONObject previous=webSearchSettings();
+        Object expected=change.opt("expectedRevision");
+        if(!(expected instanceof Integer||expected instanceof Long)
+                ||((Number)expected).longValue()!=previous.getLong("revision"))
+            throw new SecurityException("联网搜索配置已变化，请刷新后保存");
+        String provider=change.getString("provider");
+        if(!java.util.Set.of("duckduckgo","searxng","brave").contains(provider))
+            throw new IllegalArgumentException("不支持的搜索服务");
+        String endpoint=change.optString("baseUrl","").trim();
+        if("searxng".equals(provider)){
+            java.net.URI uri=new java.net.URI(endpoint);
+            if(!"https".equalsIgnoreCase(uri.getScheme())||uri.getHost()==null||uri.getHost().isBlank()
+                    ||uri.getUserInfo()!=null||uri.getRawQuery()!=null||uri.getRawFragment()!=null
+                    ||uri.toASCIIString().length()>512)
+                throw new SecurityException("SearXNG需要原生主人配置有效HTTPS实例地址");
+            endpoint=endpoint.replaceAll("/+$","");
+        }else if(!endpoint.isEmpty())throw new IllegalArgumentException("该搜索服务不接受自定义API地址");
+        boolean switched=!provider.equals(previous.getString("provider"));
+        Object clear=change.opt("clearApiKey");
+        if(clear!=null&&!(clear instanceof Boolean))throw new IllegalArgumentException("清除密钥必须为布尔值");
+        String submitted=change.has("apiKey")?change.getString("apiKey").trim():null;
+        if(submitted!=null&&(submitted.length()>1024||submitted.indexOf('\r')>=0||submitted.indexOf('\n')>=0))
+            throw new IllegalArgumentException("搜索凭据无效");
+        String oldEncrypted=prefs.getString("encryptedWebSearchKey","");
+        String encrypted=(switched||Boolean.TRUE.equals(clear))?"":oldEncrypted;
+        if(submitted!=null&&!submitted.isEmpty())encrypted=encrypt(submitted);
+        if("duckduckgo".equals(provider))encrypted="";
+        if("brave".equals(provider)&&encrypted.isEmpty())throw new IllegalArgumentException("Brave Search需要API Key");
+        long revision=Math.addExact(previous.getLong("revision"),1L);
+        commitConfirmed(prefs.edit().putString("webSearchProvider",provider)
+                .putString("webSearchBaseUrl",endpoint).putString("encryptedWebSearchKey",encrypted)
+                .putLong("webSearchRevision",revision),false);
+        return webSearchSettings();
+    }
+
     /** Owner-selected approval preferences; not a capability grant or a model-writable setting. */
     public synchronized JSONObject permissionPolicySnapshot(String conversationId) throws Exception {
         requireConfirmed();

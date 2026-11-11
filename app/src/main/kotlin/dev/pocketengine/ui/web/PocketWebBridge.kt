@@ -241,6 +241,7 @@ internal class PocketWebBridge(
             "tasks.refresh", "tasks.open", "tasks.close", "tasks.stop", "tasks.review", "tasks.confirm", "tasks.approve", "tasks.resolve", "tasks.resume", "tasks.scope", "tasks.plan.enter", "tasks.answerQuestion", "tasks.answerQuestionChoice", "tasks.deleteScreenshot", "privacy.screenshots.read", "privacy.screenshots.save",
             "projects.refresh", "projects.select", "projects.create", "projects.open", "projects.newFile", "projects.edit", "projects.save", "projects.close", "projects.history", "projects.revision", "projects.useRevision", "projects.retry",
             "settings.reviewModelTransport", "settings.saveLocalObservation", "settings.openSystem", "settings.openBrowser", "settings.openAppUpdates",
+            "webSearch.snapshot", "webSearch.save",
             "connections.enter", "connections.leave", "models.snapshot", "models.review", "models.select", "models.connection.add", "models.connection.edit", "models.connection.test", "models.connection.select", "devices.snapshot", "history.read", "usage.read", "usage.task", "usage.trends", "usage.trends.close", "usage.close", "usage.reestimate", "trace.read", "trace.detail", "trace.close",
             "phone.prepare", "phone.start", "phone.query", "phone.draft.edit", "phone.draft.fromMessage", "phone.pause", "phone.resume", "phone.stop", "phone.deadline", "background.refresh", "background.discover", "background.cancel", "background.close", "background.pair", "background.connect", "background.mainScreen", "background.selectMainScreen",
             "queued.open", "queued.refresh", "queued.close", "queued.edit", "queued.change", "queued.save", "queued.editor.close",
@@ -433,6 +434,18 @@ internal class PocketWebBridge(
             retiredWorkspaceCleanup(action, args)?.let { result ->
                 complete(id, result, null)
                 return
+            }
+            if (action == "webSearch.snapshot" || action == "webSearch.save") {
+                check(controller.webPrivateOwnerVisible()) { "仅能在本机前台私人界面管理联网搜索配置" }
+                val app = controller.webPresentationActivity().application as dev.pocketengine.EngineApplication
+                val result = if (action == "webSearch.snapshot") {
+                    checkedPayload(args, emptySet())
+                    app.webSearchSettingsForOwner()
+                } else {
+                    checkedPayload(args, setOf("provider", "baseUrl", "apiKey", "clearApiKey", "expectedRevision"))
+                    app.saveWebSearchSettingsForOwner(args)
+                }
+                complete(id, result, null); publishState(); return
             }
             if (action in PocketWebSetup.COMMANDS) {
                 setupPages.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }

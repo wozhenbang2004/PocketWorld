@@ -8,12 +8,13 @@ import type { PermissionLeaveGuard } from './PermissionPolicySettings';
 import { BackgroundAudioSettings, BackgroundOwnerSettings, BackgroundChecks } from './BackgroundOwnerSettings';
 import ChannelsWorkspace from './ChannelsWorkspace';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { IconAccount, IconAdd, IconArchive, IconArrowLeft, IconCall, IconCheck, IconChevronRight, IconDevices, IconDownload, IconFileSettings, IconFileText, IconGoal, IconKey, IconLearning, IconLink, IconMcp, IconMedia, IconMemory, IconMicrophone, IconMonitor, IconNotification, IconObserve, IconPalette, IconPhone, IconPlugin, IconPluginCatalog, IconPrivacy, IconRefresh, IconReminder, IconReview, IconServer, IconSettings, IconShieldCheck, IconSkill, IconStorage, IconTeam, IconTerminal, IconUpload } from './icons';
+import { IconAccount, IconAdd, IconArchive, IconArrowLeft, IconCall, IconCheck, IconChevronRight, IconDevices, IconDownload, IconFileSettings, IconFileText, IconGoal, IconKey, IconLearning, IconLink, IconMcp, IconMedia, IconMemory, IconMicrophone, IconMonitor, IconNotification, IconObserve, IconPalette, IconPhone, IconPlugin, IconPluginCatalog, IconPrivacy, IconRefresh, IconReminder, IconReview, IconSearch, IconServer, IconSettings, IconShieldCheck, IconSkill, IconStorage, IconTeam, IconTerminal, IconUpload } from './icons';
 import { bridge } from './bridge';
 import type {SetupCapability} from './setup-contract';
 import ReminderWorkspace from './ReminderWorkspace';
 import ConnectionWorkspace from './ConnectionWorkspace';
 import { AppearanceSettings, SystemSpeechSettings } from './PresentationSettings';
+import { WebSearchSettings } from './WebSearchSettings';
 import { TypographySettings } from './TypographySettings';
 import {LocalWorkspace,type LocalWorkspaceDraft} from './LocalWorkspace';
 import {MemoryWorkspace} from './MemoryWorkspace';
@@ -1480,7 +1481,7 @@ function DataManagement({ kind, ...props }: DataPageProps & { kind: 'archives' |
 }
 
 const SETTINGS_GROUPS = [
-  { id: 'models', title: 'AI 接入', entries: ['model-settings', 'proxy'] },
+  { id: 'models', title: 'AI 接入', entries: ['model-settings', 'web-search', 'proxy'] },
   { id: 'preferences', title: '使用偏好', entries: ['setup', 'phone:appearance', 'phone:speech'] },
   { id: 'privacy', title: '权限与运行', entries: ['phone:execution', 'phone:observation', 'background'] },
   { id: 'data', title: '数据与应用', entries: ['usage', 'storage', 'archives', 'updates'] },
@@ -1489,6 +1490,7 @@ const COMMON_SETTINGS = [
   { id: 'setup', title: '准备中心', detail: '模型、手机权限、开发工具与首次使用', icon: IconCheck },
   { id: 'model-settings', title: 'AI 接入', detail: '服务、账号、模型与调度', icon: IconKey },
   { id: 'proxy', title: '本机 API', detail: '访问地址、客户端连接与近期调用', icon: IconServer },
+  { id: 'web-search', title: '联网搜索', detail: '选择搜索服务与实时网页来源', icon: IconSearch },
   { id: 'accounts', title: 'ChatGPT 账号', detail: '登录、授权与套餐用量', icon: IconAccount },
   { id: 'phone:appearance', title: '外观与字体', detail: '主题、中文、英数与代码字体', icon: IconPalette },
   { id: 'phone:speech', title: '语音与朗读', detail: '系统听写、声音与任务播报', icon: IconMicrophone },
@@ -1664,7 +1666,7 @@ export default function Secondary({ teamAttentionFocus, onTeamAttentionConsumed,
   const modelDraftKey = modelView.kind + ':' + (modelView.kind === 'add' ? 'new' : recordId(editConnection || {}));
   const phoneTitle = ({ appearance: '外观与字体', speech: '语音与朗读', execution: '系统权限', observation: '观察与隐私', browser: '浏览器' } as Data)[phoneView];
   const pageTitle = page === 'capabilities' ? '能力与工具' : workspace?.key === 'tools' && domain ? domain.title : isAIPage ? 'AI 接入'
-    : workspace?.title || settingsGroup?.title || (page === 'settings' || page === 'connections' ? '设置' : isPhonePage ? phoneTitle || '手机能力' : page === 'background' ? '后台运行' : page === 'history' ? '任务历史' : page === 'usage' ? '用量统计' : page === 'archives' ? '备份与迁移' : page === 'storage' ? '项目存储' : domain?.title || 'PocketWorld');
+    : workspace?.title || settingsGroup?.title || (page === 'settings' || page === 'connections' ? '设置' : isPhonePage ? phoneTitle || '手机能力' : page === 'background' ? '后台运行' : page === 'history' ? '任务历史' : page === 'usage' ? '用量统计' : page === 'archives' ? '备份与迁移' : page === 'storage' ? '项目存储' : page === 'web-search' ? '联网搜索' : domain?.title || 'PocketWorld');
   const settingsEntries = COMMON_SETTINGS.filter(item => item.id !== 'setup' || !!onOpenSetup).map(item => ({ ...item, searchText: item.detail, detail: settingsEntryDetail(item.id, state) }));
   const filtered = settingsEntries.filter(item => (item.title + item.detail + item.searchText).toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const viewKey = page + (isModelPage ? ':' + modelView.kind + ':' + (modelView.id || '') : '');
@@ -1707,6 +1709,7 @@ export default function Secondary({ teamAttentionFocus, onTeamAttentionConsumed,
           {query.trim() ? <section className="pw-settings-results" aria-label="匹配的设置">{settingRows(filtered)}{filtered.length === 0 && <Empty>没有匹配的设置。</Empty>}</section>
             : <div className="pw-settings-categories">{SETTINGS_GROUPS.map(group => <section key={group.id} className="pw-settings-category" data-settings-group={group.id} aria-label={group.title}><h2>{group.title}</h2><div className="pw-settings-category-content">{settingRows(group.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}{group.id === 'privacy' && <div className="pw-settings-execution" aria-label="执行控制"><ExecutionControls state={state} supported={supported} run={run}/></div>}</div></section>)}</div>}
         </div> : settingsGroup ? <section className="pw-settings-group-page">{settingRows(settingsGroup.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}</section>
+          : page === 'web-search' ? <WebSearchSettings run={run} supported={supported} />
           : isAIPage ? <AICenter key={page + ':' + (navigationRevision || 0)} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} initialView={page === 'proxy' ? 'proxy' : 'main'} onHostSectionChange={setModelHostSection}
               renderEditor={(row, preset, close, saved, registerBack) => {
                 const draftKey = 'ai-service:' + (row?.id || preset?.name || 'new');
