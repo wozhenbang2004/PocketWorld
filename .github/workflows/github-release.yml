@@ -76,9 +76,27 @@ jobs:
               if latest.get('draft') or latest.get('prerelease'):
                   raise ValueError('Latest release has no canonical version tag')
               mode, floor = 'delta', release_version.version_code(tag)
-          code = floor + 1
-          release_version.version_tag(code)
-          if code > 2100000000: raise ValueError('Version code exhausted')
+          reservation_spec = importlib.util.spec_from_file_location("release_reservation", "tools/ci/release-tag-reservation.py")
+          reservation = importlib.util.module_from_spec(reservation_spec)
+          reservation_spec.loader.exec_module(reservation)
+          def tag_occupied(tag):
+              # A failed prior publish may have created an immutable tag without
+              # publishing a release. Never reuse that tag for different APK bytes.
+              ref_url = 'https://api.github.com/repos/wozhenbang2004/PocketWorld/git/ref/tags/' + tag
+              ref_request = urllib.request.Request(ref_url, headers={
+                  'Accept':'application/vnd.github+json',
+                  'Authorization':'Bearer '+os.environ['GITHUB_TOKEN']})
+              try:
+                  with urllib.request.urlopen(ref_request, timeout=30) as response:
+                      reference = json.load(response)
+                      if reference.get('ref') != 'refs/tags/' + tag or not isinstance(reference.get('object'), dict):
+                          raise ValueError('Malformed tag ref; stop version selection')
+                      print('Reserved release tag', tag, 'at', reference['object'].get('sha'))
+                      return True
+              except urllib.error.HTTPError as error:
+                  if error.code == 404: return False
+                  raise
+          code = reservation.select_version(floor, release_version.version_tag, tag_occupied)
           with open(os.environ['GITHUB_ENV'], 'a') as out:
               out.write('RELEASE_MODE='+mode+'\nRELEASE_VERSION_FLOOR='+str(floor)+'\nRELEASE_VERSION_CODE='+str(code)+'\n')
           print('Selected', mode, 'version', code, '; delta baseline is signature-verified during preparation')
