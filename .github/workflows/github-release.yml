@@ -52,6 +52,10 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
+      - name: Validate release tag reservation policy
+        if: github.event_name == 'push'
+        run: python3 -m unittest discover -s tools/ci -p 'test_release_tag_reservation.py'
+
       - name: Select monotonic version and first or delta mode for main push
         if: github.event_name == 'push'
         env:
