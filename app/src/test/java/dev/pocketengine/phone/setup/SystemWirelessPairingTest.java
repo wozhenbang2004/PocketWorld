@@ -20,6 +20,16 @@ public final class SystemWirelessPairingTest {
         assertNotNull(english);
         assertEquals(35145,english.port());
         assertEquals("654321",english.code());
+        var combined=SystemWirelessPairing.parseVisibleText(List.of(
+                "Pair device with pairing code", "Wi-Fi pairing code 123456 IP address & Port 10.0.0.8:35145"));
+        assertNotNull(combined);
+        assertEquals("123456",combined.code());
+        assertEquals(35145,combined.port());
+        var ipv6=SystemWirelessPairing.parseVisibleText(List.of(
+                "Pair device with pairing code", "Wi-Fi pairing code", "123456",
+                "IP address & Port", "[fe80::1%wlan0]:33777"));
+        assertNotNull(ipv6);
+        assertEquals("fe80::1%wlan0",ipv6.host());
     }
 
     @Test public void refusesMissingMarkersAmbiguousValuesAndUnrelatedDigits() {
