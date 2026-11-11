@@ -1237,7 +1237,8 @@ internal class PocketWebBridge(
             "phone.deadline" -> controller.selectNewTaskDeadline(requiredInt(args, "minutes"))
             "background.refresh" -> controller.refreshBackgroundSetup()
             "background.discover" -> {
-                require(controller.state.activeTaskId == null && !controller.state.feature("display").optBoolean("taskOwned")) { "原手机任务仍占用执行环境，未重新发现连接" }
+                val display = controller.state.feature("display")
+                require(!display.optBoolean("taskOwned") && (display.has("taskOwned") || controller.state.activeTaskId == null)) { "原手机任务仍占用执行环境，未重新发现连接" }
                 controller.display("adb.discover")
             }
             "background.cancel" -> controller.display("adb.cancel")
