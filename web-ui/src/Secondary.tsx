@@ -654,6 +654,7 @@ function BackgroundSettings({ state, supported, run, onReturn, returnLabel = '�
   const connection = backgroundConnection(display, state.activeTaskId, pending);
   const [connecting, setConnecting] = useState(() => connection.requiresConnectionCheck || connection.phase === 'paired' || connection.identityPresent);
   const [showWirelessSetup, setShowWirelessSetup] = useState(false);
+  const [openWirelessWhenArmed, setOpenWirelessWhenArmed] = useState(false);
   const automaticDiscovery = useRef(false);
   const [manual, setManual] = useState(false), [portText, setPortText] = useState(''), [selected, setSelected] = useState('');
   const [code, setCode] = useState(''), [pairPort, setPairPort] = useState<number | undefined>();
@@ -674,6 +675,12 @@ function BackgroundSettings({ state, supported, run, onReturn, returnLabel = '�
   const resultSignature = (key: string) => JSON.stringify([object(state.moduleResults)[key] ?? null, object(state.moduleErrors)[key] ?? null]);
   const closeSecrets = () => setCode('');
   const selectPanel = (value: 'setup' | 'checks') => { setCode(''); setPanel(value); };
+  useEffect(() => {
+    if (!openWirelessWhenArmed || autoCapture.active !== true ||
+        state.backgroundSetupOpen !== true || state.webWorkspaceTaskOpen === true) return;
+    setOpenWirelessWhenArmed(false);
+    void run('settings.openSystem', { section: 'wireless' }).catch(() => {});
+  }, [openWirelessWhenArmed, autoCapture.active, state.backgroundSetupOpen, state.webWorkspaceTaskOpen]);
   useEffect(() => { registerTransientBack(() => { if (Object.values(ownerBack.current).some(handler => handler?.())) return true; if (mainScreenConsent) { setMainScreenConsent(false); return true; } if (panel === 'checks') { selectPanel('setup'); return true; } if (showWirelessSetup) { setCode(''); setShowWirelessSetup(false); return true; } return false; }); return () => registerTransientBack(null); }, [panel, mainScreenConsent, showWirelessSetup, registerTransientBack]);
   useEffect(() => {
     if (state.backgroundSetupOpen === true) ownerOpened.current = true;
@@ -803,10 +810,11 @@ function BackgroundSettings({ state, supported, run, onReturn, returnLabel = '�
          <div className="pw-form-actions">
            {autoCapture.active === true
              ? <CapabilityAction action="background.pairing.cancel" supported={supported} run={run}>停止识别</CapabilityAction>
-             : <CapabilityAction action="background.pairing.observe" supported={supported} run={run} disabled={locked || !connection.canPair || state.accessibilityEnabled !== true}>开始识别配对窗口</CapabilityAction>}
+             : <Button disabled={locked || !connection.canPair || state.accessibilityEnabled !== true || !supported('background.pairing.observe')}
+                 onClick={() => { setOpenWirelessWhenArmed(true); void run('background.pairing.observe', {}).catch(() => setOpenWirelessWhenArmed(false)); }}>自动准备配对并打开设置</Button>}
            <CapabilityAction action="settings.openSystem" args={{ section: 'wireless' }} supported={supported} run={run} disabled={locked}>打开无线调试设置</CapabilityAction>
          </div>
-         {autoCapture.active === true && <p role="status" className="pw-field-hint">正在识别这次系统配对窗口。请在无线调试中打开「使用配对码配对设备」；不会保存六位码。超时后需重新开始。</p>}
+         {autoCapture.active === true && <p role="status" className="pw-field-hint">正在识别当前系统配对窗口。打开「使用配对码配对设备」后会自动读取并核对；两分钟后失效，不会保存六位码。</p>}
          {pairing.lastOutcome === 'submitted_check_original_connection' && <p role="status" className="pw-field-hint">系统配对信息已交给原生连接器，等待系统配对回执；还未确认后台助手连接。</p>}
        </section>}
        <Button variant="ghost" disabled={locked} onClick={() => { setCode(''); setShowWirelessSetup(value => !value); }}>{showWirelessSetup ? '收起连接设置' : '首次授权或手动连接'}</Button>
