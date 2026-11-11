@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import re
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -99,8 +100,15 @@ def validate_assets(assets):
   if path.stat().st_size!=item['bytes'] or hashlib.sha256(path.read_bytes()).hexdigest()!=item['sha256']:raise Stop('Local asset changed')
  if 'release.json' not in names:raise Stop('Signed manifest asset required')
 
-def check_tag(client,tag,head):
- ref=client.json('/repos/'+REPO+'/git/ref/tags/'+tag)
+def check_tag(client,tag,head,wait_for_visibility=False):
+ # A successful create can precede read visibility. Retry only this new tag's
+ # missing GET; never repeat the write or accept a different source identity.
+ ref=None
+ for delay in ((0,1,2,4,8,16) if wait_for_visibility else (0,)):
+  if delay:time.sleep(delay)
+  ref=client.json('/repos/'+REPO+'/git/ref/tags/'+tag,allow404=wait_for_visibility)
+  if ref is not None:break
+ if ref is None:raise Stop('New Git tag is not readable yet; original tag retained')
  obj=ref.get('object',{})
  # Only this publisher's lightweight immutable-version tag is accepted.
  if obj.get('type')!='commit' or obj.get('sha')!=head:raise Stop('Git tag does not point to frozen source commit')
@@ -150,7 +158,7 @@ def publish(client,tag,head,assets,verify_manifest,activate=False,resume_release
    else:raise Stop('Release history scan incomplete; cannot recover orphan')
   else:
    client.json('/repos/'+REPO+'/git/refs','POST',{'ref':'refs/tags/'+tag,'sha':head})
-  check_tag(client,tag,head)
+  check_tag(client,tag,head,wait_for_visibility=existing_ref is None)
   draft=client.json('/repos/'+REPO+'/releases','POST',{'tag_name':tag,'target_commitish':head,'name':tag,'body':'Personal development build.','draft':True,'prerelease':False})
  else:
   if type(resume_release_id) is not int or resume_release_id<=0:raise Stop('Invalid resume release ID')
