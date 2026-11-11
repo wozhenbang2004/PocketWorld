@@ -33,6 +33,7 @@ public final class PermissionToolCatalog {
         catalog.descriptor(CapabilityDescriptor.createText());catalog.descriptor(CapabilityDescriptor.createDocument());catalog.descriptor(CapabilityDescriptor.document());
         catalog.descriptor(CapabilityDescriptor.transformImage());catalog.descriptor(CapabilityDescriptor.trimMedia());
         catalog.rows(dev.pocketengine.browser.BrowserTaskCapabilityPort.permissionToolCatalog());
+        catalog.names("web","可选官方API厂商服务端搜索，必须原主人开启并对本次调用准确授权；不同厂商的用量与外部费用单独记录。",dev.pocketengine.features.web.ProviderHostedWebSearch.TOOL);
         // Static names only. DeviceCapabilityPort.tools() requires a live, original native route;
         // do not construct it or inspect a peer to populate this owner-facing directory.
         catalog.names("devices","对原任务明确选定、原生批准范围内的设备工具发起一次调用；仍须目标设备授权、准确路由、参数与剩余预算。目录和策略不会创建这些授权。","device_invoke_tool");

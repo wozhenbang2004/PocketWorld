@@ -8,6 +8,10 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
+import java.net.Proxy;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
+import java.util.List;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashSet;
@@ -17,6 +21,7 @@ import java.util.concurrent.TimeUnit;
 import okhttp3.Authenticator;
 import okhttp3.Call;
 import okhttp3.CookieJar;
+import okhttp3.Dns;
 import okhttp3.HttpUrl;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -34,7 +39,14 @@ public final class WebSearchModule implements EngineModule {
     private static final int MAX_BODY=192*1024;
     private static final OkHttpClient HTTP=new OkHttpClient.Builder()
             .cookieJar(CookieJar.NO_COOKIES).authenticator(Authenticator.NONE)
-            .proxyAuthenticator(Authenticator.NONE).followRedirects(false).followSslRedirects(false)
+            .proxyAuthenticator(Authenticator.NONE).proxy(Proxy.NO_PROXY)
+            .dns(host->{
+                List<InetAddress> actual=Dns.SYSTEM.lookup(host);
+                if(actual.isEmpty())throw new UnknownHostException("No public search address");
+                for(InetAddress address:actual)if(!dev.pocketengine.browser.PublicHttpReader.publicAddress(address))
+                    throw new UnknownHostException("Search endpoint resolves to a non-public network");
+                return actual;
+            }).followRedirects(false).followSslRedirects(false)
             .retryOnConnectionFailure(false).connectTimeout(4,TimeUnit.SECONDS)
             .readTimeout(7,TimeUnit.SECONDS).callTimeout(12,TimeUnit.SECONDS).build();
     private final FeatureContext context;
@@ -53,14 +65,22 @@ public final class WebSearchModule implements EngineModule {
     public JSONObject search(JSONObject input,RunControl original)throws Exception {
         if(input==null||!input.has("query")||!(input.opt("query") instanceof String))
             throw new IllegalArgumentException("缺少真实搜索词");
-        String query=input.getString("query").trim();
-        if(query.isEmpty()||query.length()>512||query.codePoints().anyMatch(Character::isISOControl))
-            throw new IllegalArgumentException("公开搜索词无效或超过512字符");
+        String query=WebQueryGuard.requirePublic(input.getString("query"),512);
         int limit=input.optInt("limit",5);
         if(limit<1||limit>8||input.has("limit")&&!(input.opt("limit") instanceof Integer))
             throw new IllegalArgumentException("搜索结果数量必须是1至8的整数");
         original.check();
         SettingsStore.WebSearchConnection config=context.settings.webSearchConnection();
+        return executeSearch(query,limit,config,original);
+    }
+    /** Anonymous site-scoped search for explicitly approved research child origins. */
+    public static JSONObject anonymousSearch(String query,int limit,RunControl original)throws Exception {
+        if(limit<1||limit>8)throw new IllegalArgumentException("匿名研究结果预算无效");
+        return executeSearch(WebQueryGuard.requirePublic(query,512),limit,
+                new SettingsStore.WebSearchConnection("duckduckgo","","",0),original);
+    }
+    private static JSONObject executeSearch(String query,int limit,SettingsStore.WebSearchConnection config,RunControl original)throws Exception {
+        original.check();
         String provider=config.provider();
         Request request;
         if("duckduckgo".equals(provider)){
@@ -175,6 +195,8 @@ public final class WebSearchModule implements EngineModule {
         if(!"https".equalsIgnoreCase(uri.getScheme())||uri.getHost()==null||uri.getRawUserInfo()!=null
                 ||uri.getRawFragment()!=null||uri.getHost().length()>253)return;
         String host=uri.getHost().toLowerCase(Locale.ROOT),url=uri.toASCIIString();
+        try{dev.pocketengine.browser.PublicHttpReader.validate(new JSONObject().put("url",url));}
+        catch(IllegalArgumentException rejected){return;}
         if(!seen.add(url))return;
         out.put(new JSONObject().put("title",bounded(title,240)).put("url",url)
                 .put("snippet",bounded(snippet==null?"":snippet,1400)).put("domain",host));
