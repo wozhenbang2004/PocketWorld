@@ -29,6 +29,9 @@ public final class DisplayModule implements EngineModule {
     private volatile long bootstrapEpoch;
     private volatile long verifiedAdbEpoch=-1;
     private volatile long autoPairConnectGeneration=-1;
+    private volatile long attemptedConnectEpoch=-1;
+    private volatile String attemptedConnectHost="";
+    private volatile int attemptedConnectPort=-1;
     private final java.util.concurrent.ExecutorService connectionWorker = java.util.concurrent.Executors.newSingleThreadExecutor(
             task->{Thread thread=new Thread(task,"pocket-background-connection");thread.setDaemon(true);return thread;});
     private volatile JSONObject verifiedAdbStatus;
@@ -210,9 +213,10 @@ public final class DisplayModule implements EngineModule {
                 selectWirelessBackend();adb.pair(input);return snapshot();
             }
             case "adb.connect":{
-                LocalAdbEndpoints.current().check(input.optString("host","127.0.0.1"),input.getInt("connectPort"));LocalAdbEndpoints.distinctPorts(input.optInt("pairingPort",-1),input.getInt("connectPort"));
+                String localHost=LocalAdbEndpoints.current().check(input.optString("host","127.0.0.1"),input.getInt("connectPort"));LocalAdbEndpoints.distinctPorts(input.optInt("pairingPort",-1),input.getInt("connectPort"));
                 if(!"wireless_adb".equals(backend())){requireIdleDisplay();selectWirelessBackend();}
                 long epoch=++bootstrapEpoch;verifiedAdbStatus=null;verifiedAdbEpoch=-1;connected=false;
+                attemptedConnectEpoch=epoch;attemptedConnectHost=localHost;attemptedConnectPort=input.getInt("connectPort");
                 adb.connect(input,configuration(),()->authenticateAdb(epoch));return snapshot();
             }
             case "adb.cancel":{
@@ -224,7 +228,8 @@ public final class DisplayModule implements EngineModule {
                 adb.cancel();return snapshot();
             }
             case "adb.forget":{
-                requireIdleDisplay();bootstrapEpoch++;verifiedAdbStatus=null;verifiedAdbEpoch=-1;if("wireless_adb".equals(backend()))connected=false;adb.forgetIdentity();return snapshot();
+                requireIdleDisplay();bootstrapEpoch++;verifiedAdbStatus=null;verifiedAdbEpoch=-1;if("wireless_adb".equals(backend()))connected=false;
+                prefs.edit().remove("lastAuthenticatedAdbHost").remove("lastAuthenticatedAdbPort").apply();adb.forgetIdentity();return snapshot();
             }
             case "shizuku.status":return snapshot();
             case "shizuku.permission":return shizuku.requestPermission();
@@ -559,10 +564,20 @@ public final class DisplayModule implements EngineModule {
                     throw new IllegalStateException("本机连接端口不唯一，停止自动选择");
                 unique=new JSONObject().put("host",host).put("connectPort",port);
             }
-            if(unique!=null)return unique;
+            if(unique!=null && System.currentTimeMillis()-startedAt>=750L)return unique;
             Thread.sleep(100);
         }while(System.nanoTime()<deadline);
-        throw new IllegalStateException("本机无线调试服务尚未发现，没有执行新的配对");
+        // This address was previously proven by authenticated helper status, not by
+        // local NSD advertising. It is only an ADB connection candidate, not trust.
+        String priorHost=prefs.getString("lastAuthenticatedAdbHost","");
+        int priorPort=prefs.getInt("lastAuthenticatedAdbPort",-1);
+        if(priorPort>0&&priorPort<=65535&&!priorHost.isEmpty()){
+            current.run();
+            try{return new JSONObject().put("host",LocalAdbEndpoints.current().check(priorHost,priorPort))
+                    .put("connectPort",priorPort);}
+            catch(Exception changedNetwork){/* The former host is no longer local. */}
+        }
+        throw new IllegalStateException("未找到新的本机调试服务或已验证的旧端口，没有执行新的配对");
     }
 
     /** Explicitly opted-in recovery. Only the original backend and stored authorization,
@@ -1054,7 +1069,14 @@ public final class DisplayModule implements EngineModule {
     private synchronized void adbChanged(JSONObject update){
         if("wireless_adb".equals(backend())){
             if(update.optBoolean("helperAuthenticated")&&!update.optBoolean("busy")&&verifiedAdbEpoch==bootstrapEpoch&&verifiedAdbStatus!=null){
-                try{acceptStatus(verifiedAdbStatus);message=state.optBoolean("recoveryRequired")?"已核对原后台助手；需先释放遗留会话。":"无线ADB后台助手已通过真实认证，可以建立独立显示。";}
+                try{
+                    acceptStatus(verifiedAdbStatus);
+                    if(!state.optBoolean("recoveryRequired") && attemptedConnectEpoch==bootstrapEpoch &&
+                            attemptedConnectPort>0 && !attemptedConnectHost.isEmpty())
+                        prefs.edit().putString("lastAuthenticatedAdbHost",attemptedConnectHost)
+                                .putInt("lastAuthenticatedAdbPort",attemptedConnectPort).apply();
+                    message=state.optBoolean("recoveryRequired")?"已核对原后台助手；需先释放遗留会话。":"无线ADB后台助手已通过真实认证，可以建立独立显示。";
+                }
                 catch(Exception invalid){connected=false;message="无线ADB返回的后台身份未通过核对。";}
                 finally{verifiedAdbStatus=null;verifiedAdbEpoch=-1;}
             }else if(update.optBoolean("busy")||update.optBoolean("recoveryRequired")||update.optString("phase").matches(".*unknown|.*exited|identity_forgotten|forget_failed")){
