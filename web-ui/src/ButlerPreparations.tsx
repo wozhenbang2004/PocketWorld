@@ -20,11 +20,13 @@ const targetStateLabels: Record<string, string> = { queued: '等待执行', prep
 const contractOf = (value: Data | null) => value?.contract && typeof value.contract.goal === 'string' && ['constraints', 'deliverable', 'completionCriteria'].every(key => value.contract[key] === undefined || typeof value.contract[key] === 'string') ? value.contract as { goal: string; constraints?: string; deliverable?: string; completionCriteria?: string } : undefined;
 
 /** The retained ConversationWork rows, backed by the durable proposal index. */
-export function ButlerPreparationEntries({ conversationId = '', sourceTaskId, active, refreshKey, can, run, onOpen }: Shared & {
+export function ButlerPreparationEntries({ conversationId = '', sourceTaskId, representedTaskId, active, refreshKey, can, run, onOpen, onPresenceChange }: Shared & {
   conversationId?: string; sourceTaskId?: string; active: boolean; refreshKey: string; onOpen: (target: ButlerPreparationTarget) => void;
+  representedTaskId?: string;
+  onPresenceChange?: (present: boolean) => void;
 }) {
   const [entries, setEntries] = useState<Data[]>([]), [cursor, setCursor] = useState(''), [more, setMore] = useState(false);
-  const [loaded, setLoaded] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState(''), [expanded, setExpanded] = useState(false);
+  const [busy, setBusy] = useState(false), [error, setError] = useState(''), [expanded, setExpanded] = useState(false);
   const alive = useRef(true), flight = useRef(false), sequence = useRef(0), attempted = useRef(''), latest = useRef({ active, can, run }); latest.current = { active, can, run };
   const load = async (append = false) => {
     if (!latest.current.active || flight.current || !latest.current.can('butler.preparations.list')) return;
@@ -35,7 +37,7 @@ export function ButlerPreparationEntries({ conversationId = '', sourceTaskId, ac
       if (!Array.isArray(value.entries) || !value.entries.every((row: Data) => preparation(row) && (!conversationId || row.sourceConversationId === conversationId)) || typeof value.hasMore !== 'boolean' || typeof value.nextCursor !== 'string' || value.hasMore && !value.nextCursor) throw new Error('原工作准备列表尚未完整读取。');
       const next = value.entries as Data[];
       setEntries(previous => append ? [...previous, ...next.filter(row => !previous.some(old => keyOf(old) === keyOf(row)))] : next);
-      setCursor(value.nextCursor); setMore(value.hasMore); setLoaded(true);
+      setCursor(value.nextCursor); setMore(value.hasMore);
     } catch (failure) { if (alive.current && original === sequence.current) setError(failureText(failure)); }
     finally { flight.current = false; if (alive.current && original === sequence.current) setBusy(false); }
   };
@@ -44,17 +46,28 @@ export function ButlerPreparationEntries({ conversationId = '', sourceTaskId, ac
   const readKey = JSON.stringify([conversationId, sourceTaskId, refreshKey, ownerWindow()]);
   const readable = can('butler.preparations.list');
   useEffect(() => { if (!active || !readable) { attempted.current = ''; return; } if (!busy && !flight.current && attempted.current !== readKey) { attempted.current = readKey; void loadRef.current(); } }, [active, busy, readKey, readable]);
-  const relevant = entries.filter(row => !sourceTaskId || row.sourceTaskId === sourceTaskId), visible = expanded ? relevant : relevant.slice(0, 3);
-  if (!readable || loaded && !relevant.length && !more && !error) return null;
-  return <section className="pw-butler-preparations" aria-label={sourceTaskId ? '这次回答的工作准备' : '管家的工作准备'} aria-busy={busy}>
-    <header><h2>{sourceTaskId ? '这次回答的工作准备' : '工作准备'}</h2><IconButton icon={IconRefresh} aria-label="重新读取工作准备" disabled={!active || busy} onClick={() => void load()} /></header>
+  // Remove only progress already shown by the current-task row, and settled
+  // history. An allocated task may still need admission or receipt recovery.
+  const relevant = entries.filter(row => {
+    if (sourceTaskId) return row.sourceTaskId === sourceTaskId;
+    const target = row.target;
+    if (!target?.taskId) return !['dismissed', 'unavailable'].includes(row.state);
+    if (target.taskId === representedTaskId) return false;
+    return !target.runId || target.hasUnresolvedOperations !== false || !['completed', 'cancelled', 'canceled', 'stopped'].includes(target.status);
+  });
+  const visible = expanded ? relevant : relevant.slice(0, 3);
+  const present = readable && (relevant.length > 0 || !!error || more);
+  useEffect(() => { onPresenceChange?.(present); return () => onPresenceChange?.(false); }, [present, onPresenceChange]);
+  if (!present) return null;
+  return <section className="pw-butler-preparations" aria-label={sourceTaskId ? '关联的准备记录' : '待处理与进行中的工作'} aria-busy={busy}>
+    {sourceTaskId && relevant.length > 0 && <header><h2>关联的准备</h2></header>}
     {error && <p className="pw-error" role="alert">{error}</p>}
-    {busy && !loaded && <p className="pw-muted" role="status">正在核对原提案…</p>}
+    {error && <Button variant="ghost" size="small" leadingIcon={IconRefresh} disabled={!active || busy} onClick={() => void load()}>重新读取工作记录</Button>}
     <ol>{visible.map(row => <li key={keyOf(row)}><Button variant="ghost" className="pw-preparation-row" leadingIcon={row.kind === 'phone' ? IconMonitor : IconFolder} trailingIcon={IconChevronRight} disabled={!active || busy} onClick={() => onOpen({ sourceTaskId: row.sourceTaskId, proposalId: row.proposalId, sourceConversationId: row.sourceConversationId })}>
       <span><strong dir="auto">{text(row.goal) || (row.kind === 'phone' ? '原手机工作提案' : '原项目工作提案')}</strong><small>{row.target?.taskId ? targetStateLabels[row.target.status] || '原任务状态待核对' : stateLabels[row.state] || '状态待核对'} · {row.kind === 'phone' ? '手机操作' : '项目开发'}</small></span>
     </Button></li>)}</ol>
-    {relevant.length > 3 && <Button variant="ghost" size="small" disabled={!active || busy} onClick={() => setExpanded(value => !value)}>{expanded ? '收起较早准备' : `查看已读取的另 ${relevant.length - 3} 项`}</Button>}
-    {more && <Button variant="ghost" size="small" disabled={!active || busy} onClick={() => { setExpanded(true); void load(true); }}>读取更早的准备</Button>}
+    {relevant.length > 3 && <Button variant="ghost" size="small" disabled={!active || busy} onClick={() => setExpanded(value => !value)}>{expanded ? '收起' : `查看另 ${relevant.length - 3} 项`}</Button>}
+    {more && <Button variant="ghost" size="small" disabled={!active || busy} onClick={() => { setExpanded(true); void load(true); }}>{busy ? '正在读取…' : '查看更早的工作'}</Button>}
   </section>;
 }
 

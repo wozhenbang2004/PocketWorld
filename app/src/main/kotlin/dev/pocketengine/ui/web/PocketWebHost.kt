@@ -3,6 +3,7 @@ package dev.pocketengine.ui.web
 import android.annotation.SuppressLint
 import android.graphics.Color
 import android.graphics.Insets
+import android.graphics.Rect
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
@@ -10,8 +11,10 @@ import android.net.http.SslError
 import android.os.Handler
 import android.os.Looper
 import android.os.Message
+import android.os.SystemClock
 import android.util.Log
 import android.view.View
+import android.view.ViewTreeObserver
 import android.view.WindowInsets
 import android.webkit.CookieManager
 import android.webkit.GeolocationPermissions
@@ -33,6 +36,7 @@ import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import dev.pocketengine.core.RuntimeDiagnostics
+import dev.pocketengine.phone.PhoneAccessibilityService
 import dev.pocketengine.ui.ComposeActivity
 import dev.pocketengine.ui.PocketWorldController
 import dev.pocketengine.ui.UiAppearance
@@ -81,6 +85,18 @@ internal class PocketWebHost private constructor(
     private var closed = false
     private var webDestroyed = false
     private var listenerRegistered = false
+    private var resumed = false
+    private var stopSurfaceGeneration = 0L
+    private var stopSurfacePending = false
+    private var stopSurfaceService: PhoneAccessibilityService? = null
+    private val stopSurfaceProbe = Runnable { observeOwnerStopSurface() }
+    private val stopSurfaceFocus = ViewTreeObserver.OnWindowFocusChangeListener { focused ->
+        if (focused) scheduleOwnerStopSurface(0) else revokeOwnerStopSurface()
+    }
+    private val stopSurfaceAttachment = object : View.OnAttachStateChangeListener {
+        override fun onViewAttachedToWindow(view: View) { scheduleOwnerStopSurface(0) }
+        override fun onViewDetachedFromWindow(view: View) { revokeOwnerStopSurface() }
+    }
     private val documentFence = PocketWebDocumentFence()
     private var documentToken: String? = null
     private var documentLoaded = false
@@ -101,6 +117,10 @@ internal class PocketWebHost private constructor(
 
     init {
         applyWorkspaceBackground()
+        if (bridge.surface == "business") {
+            view.addOnAttachStateChangeListener(stopSurfaceAttachment)
+            view.viewTreeObserver.addOnWindowFocusChangeListener(stopSurfaceFocus)
+        }
         view.setOnApplyWindowInsetsListener { target, insets ->
             val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
             val keyboard = insets.getInsets(WindowInsets.Type.ime())
@@ -179,6 +199,7 @@ internal class PocketWebHost private constructor(
             override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
                 if (closed || documentFence.isRejected()) return
                 if (readerFailure != null && url != ENTRY) { failReader(); return }
+                revokeOwnerStopSurface()
                 documentToken = null
                 bridge.invalidatePresentation(documentReplaced = true)
                 documentLoaded = false
@@ -193,6 +214,7 @@ internal class PocketWebHost private constructor(
                 documentLoaded = true
                 pendingState?.let { pendingState = null; send(it) }
                 sendConfiguration()
+                scheduleOwnerStopSurface(0)
             }
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
                 RuntimeDiagnostics.event("webview", "failed", "RESOURCE_LOAD_FAILED", null, null)
@@ -271,6 +293,7 @@ internal class PocketWebHost private constructor(
     private fun showReopenPrompt() {
         if (closed || reopenShown) return
         if (failReader()) return
+        revokeOwnerStopSurface()
         reopenShown = true
         documentFence.close(); documentToken = null; documentLoaded = false
         bridge.invalidatePresentation(documentReplaced = true)
@@ -380,6 +403,93 @@ internal class PocketWebHost private constructor(
         web.evaluateJavascript(bootstrap + "window.PocketWeb&&window.PocketWeb.hostConfiguration(${values})", null)
     }
 
+    private fun ownerStopWindowAvailable(): Boolean {
+        if (closed || !resumed || webDestroyed || !documentLoaded || !listenerRegistered || bridge.surface != "business"
+            || !bridge.canInteract() || !web.isAttachedToWindow || !web.isShown || !web.hasWindowFocus()
+            || activity.isFinishing || activity.isDestroyed || !trusted(Uri.parse(web.url ?: ""))) return false
+        val visible = Rect()
+        if (!web.getGlobalVisibleRect(visible) || visible.width() < web.width || visible.height() < web.height) return false
+        // Native previews are outside elementFromPoint's document. Keep the
+        // overlay whenever another native surface may cover the Web controls.
+        for (index in 0 until view.childCount) {
+            val child = view.getChildAt(index)
+            if (child !== web && child.isShown && child.width > 0 && child.height > 0) return false
+        }
+        return true
+    }
+
+    private fun scheduleOwnerStopSurface(delay: Long = 750L) {
+        main.removeCallbacks(stopSurfaceProbe)
+        if (!closed && resumed && !webDestroyed && bridge.surface == "business") main.postDelayed(stopSurfaceProbe, delay)
+    }
+
+    private fun revokeOwnerStopSurface() {
+        stopSurfaceGeneration++
+        stopSurfaceService?.clearInAppStopSurface(this)
+        stopSurfaceService = null
+        main.removeCallbacks(stopSurfaceProbe)
+    }
+
+    /** Inspect the actual bundled stop button, not a claimed route or ready bit.
+     * One in-flight read and an expiring service lease restore the overlay if
+     * the renderer hangs. No task, permission or control state is changed. */
+    private fun observeOwnerStopSurface() {
+        val service = PhoneAccessibilityService.get()
+        val identity = service?.ownerStopSurfaceIdentity()
+        if (service == null || identity == null) {
+            revokeOwnerStopSurface(); scheduleOwnerStopSurface(2_000L); return
+        }
+        if (!ownerStopWindowAvailable()) {
+            revokeOwnerStopSurface(); scheduleOwnerStopSurface(); return
+        }
+        if (stopSurfaceService !== service) {
+            revokeOwnerStopSurface()
+            stopSurfaceService = service
+        }
+        if (stopSurfacePending) { scheduleOwnerStopSurface(); return }
+        val token = documentToken
+        val window = documentFence.capture(true, "https", HOST, -1, token, bridge.canInteract())
+        if (window == null) { revokeOwnerStopSurface(); scheduleOwnerStopSurface(); return }
+        val generation = ++stopSurfaceGeneration
+        val startedAt = SystemClock.uptimeMillis()
+        val expected = JSONObject().put("taskId", identity.taskId()).put("runId", identity.runId()).put("epoch", identity.epoch())
+        val script = """
+            (()=>{
+              if(document.visibilityState!=="visible")return false;
+              const expected=$expected;
+              const buttons=document.querySelectorAll('button[data-phone-stop-task-id]');
+              for(const button of buttons){
+                if(button.dataset.phoneStopTaskId!==expected.taskId||button.dataset.phoneStopRunId!==expected.runId||Number(button.dataset.phoneStopEpoch)!==expected.epoch)continue;
+                if(button.matches(':disabled')||button.getAttribute('aria-disabled')==='true'||button.closest('[inert],[hidden],[aria-hidden="true"]'))continue;
+                let visible=true;
+                for(let node=button;node;node=node.parentElement){const style=getComputedStyle(node);if(style.display==='none'||style.visibility!=='visible'||Number(style.opacity)===0||style.pointerEvents==='none'){visible=false;break;}}
+                if(!visible)continue;
+                const rect=button.getBoundingClientRect(),x=rect.left+rect.width/2,y=rect.top+rect.height/2;
+                if(rect.width<24||rect.height<24||rect.left<0||rect.top<0||rect.right>innerWidth||rect.bottom>innerHeight)continue;
+                const top=document.elementFromPoint(x,y);
+                if(top===button||button.contains(top))return true;
+              }
+              return false;
+            })()
+        """.trimIndent()
+        stopSurfacePending = true
+        try {
+            web.evaluateJavascript(script) { result ->
+                stopSurfacePending = false
+                if (generation != stopSurfaceGeneration) return@evaluateJavascript
+                val current = PhoneAccessibilityService.get() === service && ownerStopWindowAvailable()
+                    && documentFence.accepts(window, token, bridge.canInteract())
+                    && SystemClock.uptimeMillis() - startedAt < 1_500L
+                if (current && result == "true") service.confirmInAppStopSurface(this, identity)
+                else service.clearInAppStopSurface(this)
+            }
+        } catch (_: RuntimeException) {
+            stopSurfacePending = false
+            service.clearInAppStopSurface(this)
+        }
+        scheduleOwnerStopSurface()
+    }
+
     fun handleBack(onUnhandled: () -> Unit) {
         if (closed || !documentLoaded) { onUnhandled(); return }
         if (readerFailure != null) {
@@ -404,6 +514,7 @@ internal class PocketWebHost private constructor(
     }
 
     fun resume() { if (!closed) {
+        resumed = true
         appliedBackgroundColor = null
         applyWorkspaceBackground()
         bridge.foreground(true); if (!webDestroyed) web.onResume(); view.requestApplyInsets(); main.post {
@@ -411,9 +522,12 @@ internal class PocketWebHost private constructor(
             if (documentLoaded) documentToken = documentFence.loaded()
             sendConfiguration()
             armReaderStartupTimeout()
+            scheduleOwnerStopSurface(0)
         }
     } } }
     fun pause() { if (!closed) {
+        resumed = false
+        revokeOwnerStopSurface()
         main.removeCallbacks(readerStartupTimeout)
         readerBackTimeout?.let(main::removeCallbacks); readerBackTimeout = null; readerBackPending = false
         documentFence.pause(); documentToken = null; bridge.foreground(false); bridge.invalidatePresentation(documentReplaced = false); if (!webDestroyed) web.onPause()
@@ -422,6 +536,10 @@ internal class PocketWebHost private constructor(
     fun close() {
         if (closed) return
         closed = true
+        resumed = false
+        revokeOwnerStopSurface()
+        view.removeOnAttachStateChangeListener(stopSurfaceAttachment)
+        if (view.viewTreeObserver.isAlive) view.viewTreeObserver.removeOnWindowFocusChangeListener(stopSurfaceFocus)
         main.removeCallbacks(readerStartupTimeout)
         readerBackTimeout?.let(main::removeCallbacks); readerBackTimeout = null; readerBackPending = false
         documentFence.close()
@@ -432,6 +550,7 @@ internal class PocketWebHost private constructor(
     }
     private fun destroyWeb() {
         if (webDestroyed) return
+        revokeOwnerStopSurface()
         webDestroyed = true
         if (listenerRegistered) { WebViewCompat.removeWebMessageListener(web, "PocketNative"); listenerRegistered = false }
         web.stopLoading()

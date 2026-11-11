@@ -92,6 +92,12 @@ public final class PhoneAccessibilityService extends AccessibilityService {
     private PhoneOwnerControls ownerControls;
     private QuickPanelCoordinator quickPanel;
     private volatile boolean visible;
+    private Object inAppStopOwner;
+    private volatile long inAppStopUntil;
+    private final Runnable inAppStopExpiry = () -> {
+        clearInAppStopSurface();
+        updateVisibility();
+    };
     private long nextSystemPairingRead;
 
     public static PhoneAccessibilityService get() { return instance; }
@@ -468,6 +474,39 @@ public final class PhoneAccessibilityService extends AccessibilityService {
     public void hideControls() { runOnMain(this::removeControls); }
     public void hideControls(RunControl original) { runOnMain(()->{if(original!=null&&control==original)removeControls();}); }
     public boolean hasVisibleControls() { return visible; }
+    /** The Web host may replace the overlay only after observing an actionable
+     * stop button for this exact run. This identity grants no control authority. */
+    public RunControl.HostRunIdentity ownerStopSurfaceIdentity() {
+        if (Looper.myLooper() != Looper.getMainLooper() || instance != this || controls == null
+                || control == null || control.isCancelled() || ownerApp == null) return null;
+        var identity = control.hostRunIdentity();
+        return identity != null && ownerApp.control(identity.taskId()) == control ? identity : null;
+    }
+    public void confirmInAppStopSurface(Object owner, RunControl.HostRunIdentity expected) {
+        if (Looper.myLooper() != Looper.getMainLooper()) throw new IllegalStateException("Owner stop presentation must run on main");
+        var current = ownerStopSurfaceIdentity();
+        if (owner == null || expected == null || !expected.equals(current)) { clearInAppStopSurface(owner); return; }
+        inAppStopOwner = owner;
+        inAppStopUntil = SystemClock.uptimeMillis() + 2_000L;
+        main.removeCallbacks(inAppStopExpiry);
+        main.postDelayed(inAppStopExpiry, 2_000L);
+        updateVisibility();
+    }
+    public void clearInAppStopSurface(Object owner) {
+        runOnMain(() -> {
+            if (inAppStopOwner != owner) return;
+            clearInAppStopSurface();
+            updateVisibility();
+        });
+    }
+    /** Actual visible stop control, either the overlay or the host's short-lived
+     * verified Web button. An expired/unresponsive document never counts. */
+    public boolean hasVisibleOwnerStopControl() { return visible || SystemClock.uptimeMillis() < inAppStopUntil; }
+    private void clearInAppStopSurface() {
+        inAppStopUntil = 0;
+        inAppStopOwner = null;
+        main.removeCallbacks(inAppStopExpiry);
+    }
 
     /** Only the visible owner UI opens this entry. Opening it never reads the foreground screen. */
     public boolean showQuickPanel(org.json.JSONObject expected) {
@@ -519,6 +558,7 @@ public final class PhoneAccessibilityService extends AccessibilityService {
     }
 
     private void removeControls() {
+        clearInAppStopSurface();
         if (control != null && cancellation != null) control.removeCancelAction(cancellation);
         if(ownerApp!=null&&ownerObserver!=null)ownerApp.removeObserver(ownerObserver);
         ownerApp=null;
@@ -543,7 +583,7 @@ public final class PhoneAccessibilityService extends AccessibilityService {
     void restoreAfterCapture(Object token) { captureHides.remove(token); updateVisibility(); }
 
     private void updateVisibility() {
-        visible = controls != null && captureHides.isEmpty();
+        visible = controls != null && captureHides.isEmpty() && SystemClock.uptimeMillis() >= inAppStopUntil;
         if (controls != null) controls.setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
         if (quickPanel != null) quickPanel.captureHidden(!captureHides.isEmpty());
     }

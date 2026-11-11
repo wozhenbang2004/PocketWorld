@@ -39,7 +39,7 @@ public final class AndroidPhoneReadiness {
                 : (permissions.getCapabilities() & AccessibilityServiceInfo.CAPABILITY_CAN_PERFORM_GESTURES) != 0);
         fact(facts, "screenshotCapability", () -> service == null ? false : permissions == null ? null
                 : (permissions.getCapabilities() & AccessibilityServiceInfo.CAPABILITY_CAN_TAKE_SCREENSHOT) != 0);
-        fact(facts, "ownerControlsVisible", () -> service != null && service.hasVisibleControls());
+        fact(facts, "ownerControlsVisible", () -> service != null && service.hasVisibleOwnerStopControl());
         fact(facts, "deviceUnlocked", () -> {
             KeyguardManager lock = context.getSystemService(KeyguardManager.class);
             return lock == null ? null : !lock.isDeviceLocked() && !lock.isKeyguardLocked();

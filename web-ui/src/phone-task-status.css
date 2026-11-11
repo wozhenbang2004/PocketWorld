@@ -1,0 +1,69 @@
+/* Current work stays subordinate to the conversation and input. */
+.pw-phone-activity {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 2px;
+  min-width: 0;
+  margin: 0 16px 8px;
+  padding: 2px 6px;
+  border-radius: 16px;
+  background: var(--pw-inset);
+  color: var(--pw-copy);
+}
+.pw-phone-activity .pw-phone-activity-open {
+  flex: 1;
+  min-width: 0;
+  min-height: 52px;
+  height: auto;
+  padding: 6px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  text-align: start;
+  white-space: normal;
+}
+.pw-phone-activity-open > span {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex-shrink: 1;
+  width: 100%;
+  min-width: 0;
+  gap: 8px;
+  padding: 0;
+}
+.pw-phone-activity-mark { display: grid; place-items: center; flex: none; width: 20px; }
+.pw-phone-activity-mark [role="progressbar"] { width: 16px; height: 16px; }
+.pw-phone-activity-copy { display: flex; flex-direction: column; flex: 1; min-width: 0; gap: 1px; }
+.pw-phone-activity-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--pw-ink); font: 500 13px/20px var(--pw-font); }
+.pw-phone-activity-copy > span { color: var(--pw-copy); font: 400 11px/18px var(--pw-font); }
+.pw-phone-activity > button { flex: none; min-width: 44px; min-height: 44px; background: transparent; box-shadow: none; }
+.pw-phone-activity .pw-phone-activity-stop { color: var(--pw-ink); }
+.pw-phone-activity .pw-phone-activity-stop:disabled { color: var(--pw-muted); }
+.pw-phone-activity-actions { display: grid; gap: 2px; }
+.pw-phone-activity-actions > button { justify-content: flex-start; min-height: 44px; }
+.pw-reply-activity-bar { display: flex; align-items: center; flex: none; gap: 8px; min-height: 44px; margin-inline: 20px; font-size: 12px; color: var(--pw-copy); }
+.pw-reply-activity-bar > span { flex: 1; }
+.pw-reply-activity-bar > button { flex: none; }
+.pw-composer-host.pw-squircle-composer .pw-composer-toolbar .pw-composer-intent > .pw-input-mode-trigger {
+  display: flex;
+  flex: 0 1 auto;
+  width: auto;
+  min-width: 44px;
+  max-width: 100%;
+  min-height: 44px;
+  padding: 6px;
+  border-radius: 12px;
+  gap: 4px;
+  font-size: 12px;
+  white-space: nowrap;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+.pw-composer-intent .pw-input-mode-trigger > span { gap: 4px; padding: 0; }
+.pw-composer-host.pw-squircle-composer .pw-composer-toolbar .pw-input-mode-trigger svg { width: 16px; height: 16px; }
+@media (min-width: 900px) {
+  .pw-phone-activity { width: min(calc(100% - 40px), var(--pw-conversation-width, 760px)); margin-inline: auto; }
+}

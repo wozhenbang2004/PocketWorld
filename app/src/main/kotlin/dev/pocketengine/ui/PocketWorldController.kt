@@ -3673,7 +3673,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun selectMainScreenCompatibility() {
         closeBackgroundSetup()
         state = state.copy(backgroundSetupOpen = false, requestedPhoneMode = "main_screen", requestedPhoneModeRevision = state.requestedPhoneModeRevision + 1,
-            notice = "已明确选择主屏兼容模式。请确认系统权限，再手动开始原目标；不会自动执行。")
+            notice = null)
     }
     fun refreshBackgroundSetup() {
         io.execute { app.sendState() }

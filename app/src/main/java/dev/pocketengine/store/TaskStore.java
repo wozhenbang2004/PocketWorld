@@ -1318,7 +1318,8 @@ public final class TaskStore {
         else view.put("reason","原提案来源已删除、停用或暂不可核对；仅保留原工作入口");
         JSONObject target=proposal.optJSONObject("target");if(target!=null){JSONObject actual=required(target.getString("taskId"));requirePrivateOwner(actual);requireOwnerWorkPreparationTargetIdentity(actual,proposal);
             String conversation=ownerWorkPreparationTargetConversation(actual),run=actual.optString("runId");int epoch=actual.optInt("coordinatorEpoch");
-            JSONObject linked=new JSONObject().put("taskId",actual.getString("id")).put("runId",run).put("epoch",epoch).put("status",actual.getString("status")).put("conversationId",conversation).put("boundAt",target.getLong("boundAt"));
+            JSONObject linked=new JSONObject().put("taskId",actual.getString("id")).put("runId",run).put("epoch",epoch).put("status",actual.getString("status")).put("conversationId",conversation).put("boundAt",target.getLong("boundAt"))
+                    .put("hasUnresolvedOperations",hasUnresolved(actual.getString("id")));
             view.put("target",linked).put("targetTaskId",actual.getString("id")).put("targetConversationId",conversation).put("canPrepare",false);if(current)view.put("state",run.isEmpty()?"prepared":"started");
         }return view;
     }
