@@ -31,7 +31,7 @@ public final class WebSourceLedger {
             JSONArray rows=actual.getJSONArray("results");
             for(int i=0;i<rows.length()&&sourceRows.length()<16;i++){
                 JSONObject row=rows.optJSONObject(i);if(row==null)continue;
-                add(sourceRows,links,urls,"search_snippet",row.optString("url"),
+                add(sourceRows,links,urls,ProviderHostedWebSearch.TOOL.equals(tool)?"vendor_citation":"search_snippet",row.optString("url"),
                         row.optString("title"),row.optString("snippet"),actual.optLong("retrievedAt",System.currentTimeMillis()),
                         false,"snippet_only");
             }
@@ -87,7 +87,7 @@ public final class WebSourceLedger {
         if(uri.getHost()==null||uri.getRawUserInfo()!=null)return;
         String url=uri.toASCIIString();
         try{dev.pocketengine.browser.PublicHttpReader.validate(new JSONObject().put("url",url));}
-        catch(IllegalArgumentException rejected){return;}
+        catch(IllegalArgumentException|SecurityException rejected){return;}
         String unique=kind+"\n"+url;
         if(!seen.add(unique))return;
         // Source excerpts are bounded even when the original HTTP body was larger.
