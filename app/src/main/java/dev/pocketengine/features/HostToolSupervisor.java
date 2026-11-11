@@ -48,6 +48,7 @@ public final class HostToolSupervisor implements CapabilityPort {
     private dev.pocketengine.features.memory.ProjectMemoryAccess projectMemory;
     private final Map<String,Tool> routes=new LinkedHashMap<>();
     private final Map<String,Tool> nativeRoutes=new LinkedHashMap<>();
+    private int webSearchReserved,webReadsReserved,hostedSearchReserved;
     private dev.pocketengine.core.ModelConfig hostedSearchModel;
     private dev.pocketengine.core.RunControl.AuthorityCheck hostedSearchCurrent;
     private dev.pocketengine.core.RunControl hostedSearchControl;
@@ -756,6 +757,13 @@ public final class HostToolSupervisor implements CapabilityPort {
             }else if(tool.feature.equals("web")&&module instanceof dev.pocketengine.features.web.WebSearchModule web){
                 // Never send the private _taskId/_runId envelope to an external search provider.
                 // Read tools get only model arguments; the native control remains retained here.
+                if("fetch".equals(tool.command))reserveWebBudget(0,1,0);
+                if("search".equals(tool.command))reserveWebBudget(1,0,0);
+                if("research".equals(tool.command)){
+                    dev.pocketengine.features.web.WebResearchPipeline.validate(args);
+                    reserveWebBudget(args.getJSONArray("queries").length(),args.optInt("maxPages",2),0);
+                }
+                if("providerSearch".equals(tool.command))reserveWebBudget(0,0,1);
                 result=switch(tool.command){
                     case "fetch"->web.fetch(args,control);
                     case "research"->new dev.pocketengine.features.web.WebResearchPipeline(web).research(args,control);
@@ -778,6 +786,14 @@ public final class HostToolSupervisor implements CapabilityPort {
         return deliverReceipt(name,result,control);
     }
     /** Do not lose a known native result at the post-dispatch cancellation fence. */
+    /** Conservative per-original-run HTTP budgets, charged before dispatch and never reset by retry. */
+    private synchronized void reserveWebBudget(int queries,int reads,int hosted){
+        if(queries<0||reads<0||hosted<0||webSearchReserved+queries>24
+                ||webReadsReserved+reads>16||hostedSearchReserved+hosted>2)
+            throw new SecurityException("本次联网研究预算已用尽，请开启新的明确研究任务或缩小搜索范围");
+        webSearchReserved+=queries;webReadsReserved+=reads;hostedSearchReserved+=hosted;
+    }
+
     private JSONObject deliverReceipt(String name,JSONObject result,RunControl original)throws Exception{
         if(result==null)throw new IllegalStateException("工具没有返回真实结果");
         try{original.check();tasks.checkCapability(taskId,runId,epoch,name,original);return result;}
