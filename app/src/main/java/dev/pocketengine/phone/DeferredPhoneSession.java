@@ -72,6 +72,8 @@ public final class DeferredPhoneSession implements PhonePort {
     public synchronized boolean cleanupUnconfirmed(){return preparationUncertain;}
     public synchronized JSONObject initializationEvidence()throws Exception {
         return new JSONObject().put("state",preparationUncertain?"preparation_unconfirmed":initialized()?"initialized":"not_initialized")
+                .put("taskId",task).put("runId",run).put("coordinatorEpoch",epoch)
+                .put("pauseRevision",original.pauseRevision()).put("mode",mode)
                 .put("nativeRunRetained",!closed).put("physicalDisplayHeld",preparationUncertain?JSONObject.NULL:initialized());
     }
     public PhonePort physicalPort(){Binding actual=binding;return actual==null?null:actual.physical;}

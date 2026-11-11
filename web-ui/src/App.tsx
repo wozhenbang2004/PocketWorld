@@ -120,7 +120,10 @@ const workStatusLabel=(t:Task)=>{const work=ownerWorkPresentation(t);return work
 function phoneViewerTask(task?:Task):PhoneViewerTask|null{
  const raw=task?.raw,identity=phoneRunIdentity(task);
  if(!task||!raw||!identity||raw.id!==task.id||raw.kind!=='phone'||raw.actorId!=='owner'||raw.spaceId!=='private'||task.executionMode!=='background'||raw.origin&&raw.origin.kind!=='team_phone')return null;
- return {...identity,title:task.goal,statusLabel:labelStatus(task.status),status:terminal(task)||task.status==='interrupted'?(task.status==='failed'?'error':'ended'):task.status==='stopping'?'stopping':task.status==='paused'?'paused':['queued','preparing','running','verifying'].includes(task.status)?'running':'waiting'};
+ const evidence=obj(raw.evidence),session=[obj(evidence.phoneSession),obj(evidence.phonePreparation)].find(value=>value.taskId===identity.taskId&&value.runId===identity.runId&&value.coordinatorEpoch===identity.epoch);
+ const blocked=!!session&&['awaiting_user','reconciling','failed'].includes(task.status)&&(session.state==='preparation_unconfirmed'||session.state==='not_initialized'&&evidence.code==='phone_preparation_unavailable');
+ const detail=typeof task.summary==='string'&&task.summary.trim()?task.summary:typeof raw.summary==='string'&&raw.summary.trim()?raw.summary:blocked&&typeof evidence.message==='string'?evidence.message:'';
+ return {...identity,title:task.goal,statusLabel:labelStatus(task.status),detail,preparation:blocked?'blocked':['queued','preparing'].includes(task.status)?'pending':undefined,status:terminal(task)||task.status==='interrupted'?(task.status==='failed'?'error':'ended'):task.status==='stopping'?'stopping':task.status==='paused'?'paused':['queued','preparing','running','verifying'].includes(task.status)?'running':'waiting'};
 }
 const taskBinding=(t?:Task|null)=>t?[t.id,t.updatedAt,t.raw?.runId,t.raw?.coordinatorEpoch,t.raw?.revision,t.raw?.resultReviewDigest,t.raw?.executionScope?.revision,t.raw?.executionScope?.executionPhase,t.raw?.executionScope?.planRevision,t.raw?.executionScope?.planArtifactRef,t.raw?.executionScope?.planHash].join(':'):'';
 const timeLabel=(value:any)=>typeof value==='number'&&value>0?new Date(value).toLocaleString('zh-CN',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';
@@ -855,11 +858,14 @@ export default function App(){
  const phoneViewerObscured=!!(preparationTarget||providedMemoryMessage||conversationMemoryOpen||state.conversationReader||state.queuedInputsPage||permissionOptionsOpen||organizationTarget||state.attachmentWorkspace?.open||workOpen||commandOpen||projectPickerOpen||fileDisplayOpen||newProjectOpen||newFileOpen||phoneReview||voiceReview||state.chatAttachmentPickerOpen||messageQuoteTarget||messageOriginTarget||sourceSelection||skillDraftTarget||memoryDraftTarget||routeReferenceTarget||state.quickPanelVoice||readingDocuments.length);
  const phoneViewerFor=(task:Task,conversation=false)=>{
   const target=phoneViewerTask(task);if(!target||!can('phone.viewer.open')||!can('phone.viewer.frame')||!can('phone.viewer.close'))return null;
+  const preparationSession=obj(task.raw?.evidence?.phoneSession);
+  const canCheckConnection=target.preparation==='blocked'&&preparationSession.taskId===target.taskId&&preparationSession.runId===target.runId&&preparationSession.coordinatorEpoch===target.epoch&&preparationSession.state==='not_initialized'&&preparationSession.physicalDisplayHeld===false&&task.raw?.evidence?.message===target.detail;
   return <ConversationModelPickerVisibility>{pickerVisible=><PhoneViewer key={`${task.id}:${target.runId}:${target.epoch}`} task={target} expanded={phoneViewerExpanded} onExpandedChange={setPhoneViewerExpanded} nativeVisible={!pickerVisible&&!phoneViewerObscured&&(conversation?!taskOpen:taskOpen&&taskLayer==='overview')}
    tasks={conversation?conversationViewerTasks.map(item=>phoneViewerTask(item)!):undefined} onSelectTask={conversation?(selected)=>{setPhoneViewedTaskId(selected.taskId)}:undefined}
    onPause={task.status==='running'&&can('phone.pause')?identity=>act('phone.pause',identity):undefined} onResume={task.status==='paused'&&can('phone.resume')?identity=>act('phone.resume',identity):undefined}
    onStop={!terminal(task)&&task.status!=='interrupted'&&task.status!=='stopping'&&can('phone.stop')?identity=>act('phone.stop',identity):undefined}
-   onOpenTask={can('tasks.open')?identity=>{setPhoneViewerExpanded(false);if(!conversation&&taskOpen&&openedTaskId.current===identity.taskId){showTaskLayer('overview');if(attention(task)&&can('tasks.review')&&!reviewPending)loadTaskReview(identity.taskId)}else openTask(identity.taskId,attention(task)&&can('tasks.review')?'review':'overview')}:undefined}/>}</ConversationModelPickerVisibility>;
+   onOpenSetup={canCheckConnection&&can('setup.read')?()=>{setPhoneViewerExpanded(false);void openSetup('phone')}:undefined}
+   onOpenTask={can('tasks.open')?identity=>{setPhoneViewerExpanded(false);if(!conversation&&taskOpen&&openedTaskId.current===identity.taskId){showTaskLayer(task.status==='failed'?'process':'overview');if(attention(task)&&can('tasks.review')&&!reviewPending)loadTaskReview(identity.taskId)}else openTask(identity.taskId,task.status==='failed'?'process':attention(task)&&can('tasks.review')?'review':'overview')}:undefined}/>}</ConversationModelPickerVisibility>;
  };
  const taskReviewBody=(task:Task)=>{
   const progress=getRecentTaskProgress(task);

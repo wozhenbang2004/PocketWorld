@@ -32,6 +32,7 @@ public final class DisplayModule implements EngineModule {
     private volatile long attemptedConnectEpoch=-1;
     private volatile String attemptedConnectHost="";
     private volatile int attemptedConnectPort=-1;
+    private final Object helperStartLock=new Object();
     private final java.util.concurrent.ExecutorService connectionWorker = java.util.concurrent.Executors.newSingleThreadExecutor(
             task->{Thread thread=new Thread(task,"pocket-background-connection");thread.setDaemon(true);return thread;});
     private volatile JSONObject verifiedAdbStatus;
@@ -116,7 +117,7 @@ public final class DisplayModule implements EngineModule {
             sessions.put(session);if(session.optBoolean("sessionActive"))active++;
             pending|=run.releasePending||run.creationPending;ready|=runReady(run);
         }
-        return result.put("configured",!prefs.getString("socketName","").isEmpty()).put("helperConnected",isConnected())
+        return result.put("configured",hasConfiguration()).put("helperConnected",isConnected())
                 .put("sessionActive",isConnected()&&active>0).put("releasePending",pending).put("sessions",sessions).put("activeSessionCount",active)
                 .put("setupRevision",bootstrapEpoch).put("appAccess",new dev.pocketengine.phone.access.AndroidPhoneAccessStore(context.android).snapshot()).put("clipboardPasteAllowed",dev.pocketengine.phone.setup.AndroidClipboardRecovery.allowed(context.android))
                 .put("authorizationBackend",backend()).put("requiresAdbBootstrap","adb".equals(backend())).put("shizuku",shizuku.snapshot()).put("adb",adb.snapshot())
@@ -409,6 +410,16 @@ public final class DisplayModule implements EngineModule {
     public void connectForPreparation(RunControl original,long revision,
             dev.pocketengine.phone.observation.NativePhoneEntry.Admission ownerPreparation)throws Exception {
         checkPreparation(original,revision,ownerPreparation);
+        synchronized(this){
+            if(!hasConfiguration()){
+                requireUnusedHelper(original);
+                if(bootstrapBusy())throw new IllegalStateException("后台助手正在连接，请等待当前连接完成");
+                // Internal socket credentials are prepared by the run, not by visiting Settings.
+                // configuration() preserves the selected backend and refuses retained displays.
+                configuration();
+            }
+        }
+        checkPreparation(original,revision,ownerPreparation);
         RunSession run=requireRun(original);
         try {
             synchronized(run){connectRun(run,original,revision,ownerPreparation!=null);}
@@ -447,18 +458,27 @@ public final class DisplayModule implements EngineModule {
             config=existingConfiguration();
             if(selected.equals("shizuku")&&!shizuku.authorized())throw new SecurityException("请先启动已选的Shizuku并恢复原授权；没有自动申请权限");
             if(selected.equals("wireless_adb")&&!adb.snapshot().optBoolean("identityPresent"))
-                throw new IllegalStateException("本机无线ADB尚未配对，请在手机操作设置完成首次配对");
+                throw new IllegalStateException("尚未获得本机后台操作授权，请打开手机操作设置，跟随系统引导完成首次授权");
         }
         JSONObject endpoint=selected.equals("wireless_adb")?discoverPreparationEndpoint(original,revision,ownerPreparation):null;
         final long epoch;final boolean started;
-        checkPreparation(original,revision,ownerPreparation);
-        synchronized(this){
-            requireUnusedHelper(original);
-            if(!selected.equals(backend()))throw new SecurityException("原后台授权方式已变化");
-            started=!bootstrapBusy();epoch=started?++bootstrapEpoch:bootstrapEpoch;
-            if(started){verifiedAdbStatus=null;verifiedAdbEpoch=-1;}
-        }
-        if(started){
+        // Serialize reservation and enqueue without holding the module monitor during
+        // authority callbacks. Owner admission can acquire the application monitor.
+        synchronized(helperStartLock){
+            checkPreparation(original,revision,ownerPreparation);
+            synchronized(this){
+                requireUnusedHelper(original);
+                if(!selected.equals(backend()))throw new SecurityException("原后台授权方式已变化");
+                started=!bootstrapBusy();epoch=started?++bootstrapEpoch:bootstrapEpoch;
+                if(started){
+                    verifiedAdbStatus=null;verifiedAdbEpoch=-1;
+                    if(selected.equals("wireless_adb")){
+                        attemptedConnectEpoch=epoch;attemptedConnectHost=endpoint.getString("host");
+                        attemptedConnectPort=endpoint.getInt("connectPort");
+                    }
+                }
+            }
+            if(started){
                 dev.pocketengine.core.RunControl.AuthorityCheck current=()->{
                     checkPreparation(original,revision,ownerPreparation);
                     if(epoch!=bootstrapEpoch||!selected.equals(backend()))throw new SecurityException("原后台连接请求已失效");
@@ -467,14 +487,17 @@ public final class DisplayModule implements EngineModule {
                     try{current.check();synchronized(requireRun(original)){connectRun(requireRun(original),original,revision,ownerPreparation!=null);}current.check();}
                     catch(Exception failed){throw new IllegalStateException("原Shizuku后台助手连接核验失败",failed);}
                 },current);
-                else adb.connectForPreparation(endpoint,config,()->{
-                    current.check();JSONObject answer=call("status",new JSONObject(),original,revision,ownerPreparation!=null,null);validateStatus(answer);
-                    current.check();
-                    synchronized(DisplayModule.this){
-                        if(epoch!=bootstrapEpoch||!selected.equals(backend()))throw new SecurityException("原后台连接请求已失效");
-                        verifiedAdbStatus=new JSONObject(answer.toString());verifiedAdbEpoch=epoch;
-                    }
-                },current);
+                else {
+                    adb.connectForPreparation(endpoint,config,()->{
+                        current.check();JSONObject answer=call("status",new JSONObject(),original,revision,ownerPreparation!=null,null);validateStatus(answer);
+                        current.check();
+                        synchronized(DisplayModule.this){
+                            if(epoch!=bootstrapEpoch||!selected.equals(backend()))throw new SecurityException("原后台连接请求已失效");
+                            verifiedAdbStatus=new JSONObject(answer.toString());verifiedAdbEpoch=epoch;
+                        }
+                    },current);
+                }
+            }
         }
         Runnable cancel=()->{
             if(!started||!selected.equals("wireless_adb"))return;
@@ -504,23 +527,9 @@ public final class DisplayModule implements EngineModule {
     }
     private JSONObject discoverPreparationEndpoint(RunControl original,long revision,
             dev.pocketengine.phone.observation.NativePhoneEntry.Admission ownerPreparation)throws Exception {
-        long startedAt=System.currentTimeMillis(),deadline=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(8);
-        adb.discover();
-        do{
+        return discoverUnambiguousLocalConnection(8_000L,()->{
             checkPreparation(original,revision,ownerPreparation);requireUnusedHelper(original);
-            JSONObject discovery=adb.snapshot().optJSONObject("discovery");JSONArray endpoints=discovery==null?null:discovery.optJSONArray("connect");
-            JSONObject selected=null;int port=-1;
-            if(endpoints!=null)for(int i=0;i<endpoints.length();i++){
-                JSONObject candidate=endpoints.getJSONObject(i);
-                if(candidate.optLong("resolvedAt",-1)<startedAt)continue;
-                String host=LocalAdbEndpoints.current().check(candidate.optString("host"),candidate.getInt("port"));
-                if(selected!=null&&port!=candidate.getInt("port"))throw new IllegalStateException("发现多个本机无线调试连接端口，请在连接设置明确选择；未猜测目标");
-                port=candidate.getInt("port");selected=new JSONObject().put("host",host).put("connectPort",port);
-            }
-            if(selected!=null)return selected;
-            Thread.sleep(50);
-        }while(System.nanoTime()<deadline);
-        throw new IllegalStateException("未发现当前本机无线调试连接端口，请先开启无线调试或在连接设置输入当前端口；没有重新配对或连接其他设备");
+        });
     }
     /** One bounded connect after the owner's first system PAKE succeeds; never retries an unknown write. */
     private void connectOnceAfterPair(long generation,long expectedEpoch) {
@@ -544,12 +553,12 @@ public final class DisplayModule implements EngineModule {
     }
 
     /** Only fresh, locally bound TLS service advertisements; no arbitrary LAN or port scan. */
-    private JSONObject discoverUnambiguousLocalConnection(long timeoutMillis,Runnable current)throws Exception{
+    private JSONObject discoverUnambiguousLocalConnection(long timeoutMillis,RunControl.AuthorityCheck current)throws Exception{
         long startedAt=System.currentTimeMillis();
         long deadline=System.nanoTime()+java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
         adb.discover();
         do{
-            current.run();
+            current.check();
             JSONObject discovery=adb.snapshot().optJSONObject("discovery");
             JSONArray candidates=discovery==null?null:discovery.optJSONArray("connect");
             JSONObject unique=null;
@@ -572,7 +581,7 @@ public final class DisplayModule implements EngineModule {
         String priorHost=prefs.getString("lastAuthenticatedAdbHost","");
         int priorPort=prefs.getInt("lastAuthenticatedAdbPort",-1);
         if(priorPort>0&&priorPort<=65535&&!priorHost.isEmpty()){
-            current.run();
+            current.check();
             try{return new JSONObject().put("host",LocalAdbEndpoints.current().check(priorHost,priorPort))
                     .put("connectPort",priorPort);}
             catch(Exception changedNetwork){/* The former host is no longer local. */}
@@ -612,7 +621,7 @@ public final class DisplayModule implements EngineModule {
             config=existingConfiguration();
         }
         JSONObject endpoint=selected.equals("wireless_adb")?
-                discoverUnambiguousLocalConnection(10_000L,fence):null;
+                discoverUnambiguousLocalConnection(10_000L,fence::run):null;
         fence.run();
         final long epoch;
         synchronized(this){
@@ -1099,6 +1108,9 @@ public final class DisplayModule implements EngineModule {
         context.emit("display",jsonEvent(update));
     }
     private static JSONObject jsonEvent(JSONObject update){JSONObject event=new JSONObject();try{event.put("event","adb_bootstrap_changed").put("adb",new JSONObject(update.toString()));}catch(Exception ignored){}return event;}
+    private boolean hasConfiguration(){
+        return !prefs.getString("socketName","").isEmpty()&&context.secrets.contains("display.token");
+    }
     private ShellBridgeClient client()throws Exception {
         String socket=prefs.getString("socketName","");String secret=context.secrets.get("display.token");
         if(socket.isEmpty()||secret==null||secret.isEmpty())throw new IllegalStateException("请先准备后台助手连接配置");

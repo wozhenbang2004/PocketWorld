@@ -4,6 +4,9 @@ export type PhoneViewerTask = PhoneViewerIdentity & {
   title?: string;
   status: 'running' | 'paused' | 'waiting' | 'stopping' | 'ended' | 'error';
   statusLabel?: string;
+  detail?: string;
+  /** Display-only state, bound to the original native run by the task projection. */
+  preparation?: 'pending' | 'blocked';
 };
 export type PhoneViewerSession = PhoneViewerIdentity & { viewerId: string };
 export type PhoneDisplayIdentity = { sessionId: string; displayId: number };

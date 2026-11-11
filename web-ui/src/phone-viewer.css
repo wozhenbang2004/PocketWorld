@@ -54,6 +54,7 @@
 .pw-phone-viewer-button:disabled { cursor: default; opacity: .5; }
 .pw-phone-viewer-error { flex-basis: 100%; margin: 0; padding: 10px 12px; border-radius: 12px; background: #e3e5e7; color: #454b52; font-size: 12px; line-height: 19px; overflow-wrap: anywhere; }
 .pw-phone-viewer-entry:hover, .pw-phone-viewer-button:not(:disabled):hover, .pw-phone-viewer-close:hover { background: #e3e6e8; }
+.pw-phone-viewer-entry:disabled { cursor: default; background: #f1f3f4; }
 .pw-phone-viewer-entry:focus-visible, .pw-phone-viewer-button:focus-visible, .pw-phone-viewer-close:focus-visible, .pw-phone-viewer-select select:focus-visible, .pw-phone-viewer-handle:focus-visible { outline: 2px solid #5b6570; outline-offset: 3px; }
 .pw-phone-viewer-select { display: grid; gap: 6px; min-width: 0; color: #697176; font-size: 12px; }
 .pw-phone-viewer-select-field { position: relative; display: flex; align-items: center; }
@@ -108,3 +109,9 @@
   .pw-phone-viewer-image { height: min(320px, 42vh); height: min(320px, 42dvh); }
   .pw-phone-viewer-frame-large .pw-phone-viewer-image { height: min(54vh, 600px); height: min(54dvh, 600px); }
 }
+/* A settled empty preview has no screen to reserve space for. Keep its reason
+ * and recovery actions together; active first-frame loading keeps stable geometry. */
+.pw-phone-viewer-frame[data-compact-empty] .pw-phone-viewer-image { height: auto; }
+.pw-phone-viewer-frame[data-compact-empty] .pw-phone-viewer-placeholder { min-height: 132px; padding: 20px; }
+.pw-phone-viewer-frame[data-compact-empty] figcaption[data-empty] { display: none; }
+.pw-phone-viewer-placeholder p { overflow-wrap: anywhere; }
