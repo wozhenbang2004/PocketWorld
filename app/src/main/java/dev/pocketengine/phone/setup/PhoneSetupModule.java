@@ -178,6 +178,7 @@ public final class PhoneSetupModule implements EngineModule {
                     throw new SecurityException("已存在本机无线授权身份，请直接恢复连接");
                 AutoCapture current = autoCapture;
                 if (current != null && SystemClock.elapsedRealtime() < current.expiresAt()) return snapshot();
+                pairing.cancel(); cancelNotice();
                 AutoCapture next = new AutoCapture(UUID.randomUUID().toString(),
                         sourceIdentity(state), SystemClock.elapsedRealtime() + PairingEntrySession.WINDOW_MS);
                 autoCapture = next;
@@ -260,6 +261,7 @@ public final class PhoneSetupModule implements EngineModule {
             synchronized (display) {
                 JSONObject state = display.snapshot();
                 requirePairingIdle(state);
+                autoCapture = null;
                 String host = LocalAdbEndpoints.current().check(input.optString("host", "127.0.0.1"), input.getInt("pairingPort"));
                 entry = pairing.begin(host, input.getInt("pairingPort"), sourceIdentity(state));
             }
@@ -327,8 +329,7 @@ public final class PhoneSetupModule implements EngineModule {
 
     private void cancel(String expected) {
         synchronized (pairingLock) {
-            autoCapture = null;
-            if (expected == null) { pairing.cancel(); cancelNotice(); lastPairingOutcome = "cancelled"; }
+            if (expected == null) { autoCapture = null; pairing.cancel(); cancelNotice(); lastPairingOutcome = "cancelled"; }
             else if (pairing.cancel(expected)) { cancelNotice(); lastPairingOutcome = "cancelled"; }
         }
     }
