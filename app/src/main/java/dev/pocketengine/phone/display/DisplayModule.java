@@ -28,6 +28,12 @@ public final class DisplayModule implements EngineModule {
     private final Exchange exchange;
     private volatile long bootstrapEpoch;
     private volatile long verifiedAdbEpoch=-1;
+    private volatile long autoPairConnectGeneration=-1;
+    private volatile long attemptedConnectEpoch=-1;
+    private volatile String attemptedConnectHost="";
+    private volatile int attemptedConnectPort=-1;
+    private final java.util.concurrent.ExecutorService connectionWorker = java.util.concurrent.Executors.newSingleThreadExecutor(
+            task->{Thread thread=new Thread(task,"pocket-background-connection");thread.setDaemon(true);return thread;});
     private volatile JSONObject verifiedAdbStatus;
     private volatile boolean connected;
     private volatile boolean releasePending;
@@ -207,9 +213,10 @@ public final class DisplayModule implements EngineModule {
                 selectWirelessBackend();adb.pair(input);return snapshot();
             }
             case "adb.connect":{
-                LocalAdbEndpoints.current().check(input.optString("host","127.0.0.1"),input.getInt("connectPort"));LocalAdbEndpoints.distinctPorts(input.optInt("pairingPort",-1),input.getInt("connectPort"));
+                String localHost=LocalAdbEndpoints.current().check(input.optString("host","127.0.0.1"),input.getInt("connectPort"));LocalAdbEndpoints.distinctPorts(input.optInt("pairingPort",-1),input.getInt("connectPort"));
                 if(!"wireless_adb".equals(backend())){requireIdleDisplay();selectWirelessBackend();}
                 long epoch=++bootstrapEpoch;verifiedAdbStatus=null;verifiedAdbEpoch=-1;connected=false;
+                attemptedConnectEpoch=epoch;attemptedConnectHost=localHost;attemptedConnectPort=input.getInt("connectPort");
                 adb.connect(input,configuration(),()->authenticateAdb(epoch));return snapshot();
             }
             case "adb.cancel":{
@@ -221,7 +228,8 @@ public final class DisplayModule implements EngineModule {
                 adb.cancel();return snapshot();
             }
             case "adb.forget":{
-                requireIdleDisplay();bootstrapEpoch++;verifiedAdbStatus=null;verifiedAdbEpoch=-1;if("wireless_adb".equals(backend()))connected=false;adb.forgetIdentity();return snapshot();
+                requireIdleDisplay();bootstrapEpoch++;verifiedAdbStatus=null;verifiedAdbEpoch=-1;if("wireless_adb".equals(backend()))connected=false;
+                prefs.edit().remove("lastAuthenticatedAdbHost").remove("lastAuthenticatedAdbPort").apply();adb.forgetIdentity();return snapshot();
             }
             case "shizuku.status":return snapshot();
             case "shizuku.permission":return shizuku.requestPermission();
@@ -514,6 +522,137 @@ public final class DisplayModule implements EngineModule {
         }while(System.nanoTime()<deadline);
         throw new IllegalStateException("未发现当前本机无线调试连接端口，请先开启无线调试或在连接设置输入当前端口；没有重新配对或连接其他设备");
     }
+    /** One bounded connect after the owner's first system PAKE succeeds; never retries an unknown write. */
+    private void connectOnceAfterPair(long generation,long expectedEpoch) {
+        try {
+            JSONObject endpoint=discoverUnambiguousLocalConnection(12_000L,()->{
+                if(Thread.currentThread().isInterrupted()||expectedEpoch!=bootstrapEpoch||
+                        !"wireless_adb".equals(backend())||ownersPinned()||
+                        adb.snapshot().optBoolean("recoveryRequired"))
+                    throw new SecurityException("原配对身份已变化，停止自动连接");
+            });
+            synchronized(this){
+                if(expectedEpoch!=bootstrapEpoch||ownersPinned()||bootstrapBusy()||retainedDisplays()||
+                        !"wireless_adb".equals(backend())||adb.snapshot().optBoolean("recoveryRequired")||
+                        adb.snapshot().optLong("generation",-1)!=generation)return;
+                handle("adb.connect",endpoint);
+            }
+        }catch(Exception unavailable){
+            message="无线配对已取得回执，自动连接仍待核对；可在手机设置恢复原授权连接。";
+            try{context.emit("display",snapshot());}catch(Exception ignored){}
+        }
+    }
+
+    /** Only fresh, locally bound TLS service advertisements; no arbitrary LAN or port scan. */
+    private JSONObject discoverUnambiguousLocalConnection(long timeoutMillis,Runnable current)throws Exception{
+        long startedAt=System.currentTimeMillis();
+        long deadline=System.nanoTime()+java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+        adb.discover();
+        do{
+            current.run();
+            JSONObject discovery=adb.snapshot().optJSONObject("discovery");
+            JSONArray candidates=discovery==null?null:discovery.optJSONArray("connect");
+            JSONObject unique=null;
+            if(candidates!=null)for(int i=0;i<candidates.length();i++){
+                JSONObject candidate=candidates.getJSONObject(i);
+                if(candidate.optLong("resolvedAt",-1)<startedAt-500L)continue;
+                int port=candidate.optInt("port",-1);
+                if(port<1||port>65535)continue;
+                String host=LocalAdbEndpoints.current().check(candidate.optString("host"),port);
+                if(unique!=null&&(unique.getInt("connectPort")!=port||
+                        !unique.getString("host").equals(host)))
+                    throw new IllegalStateException("本机连接端口不唯一，停止自动选择");
+                unique=new JSONObject().put("host",host).put("connectPort",port);
+            }
+            if(unique!=null && System.currentTimeMillis()-startedAt>=750L)return unique;
+            Thread.sleep(100);
+        }while(System.nanoTime()<deadline);
+        // This address was previously proven by authenticated helper status, not by
+        // local NSD advertising. It is only an ADB connection candidate, not trust.
+        String priorHost=prefs.getString("lastAuthenticatedAdbHost","");
+        int priorPort=prefs.getInt("lastAuthenticatedAdbPort",-1);
+        if(priorPort>0&&priorPort<=65535&&!priorHost.isEmpty()){
+            current.run();
+            try{return new JSONObject().put("host",LocalAdbEndpoints.current().check(priorHost,priorPort))
+                    .put("connectPort",priorPort);}
+            catch(Exception changedNetwork){/* The former host is no longer local. */}
+        }
+        throw new IllegalStateException("未找到新的本机调试服务或已验证的旧端口，没有执行新的配对");
+    }
+
+    /** Explicitly opted-in recovery. Only the original backend and stored authorization,
+     * never new pairing, a permission grant, screen creation or task resumption. */
+    public JSONObject recoverPreviouslyAuthorized(RunControl owner,
+            java.util.function.BooleanSupplier consentCurrent)throws Exception{
+        java.util.Objects.requireNonNull(owner);
+        java.util.Objects.requireNonNull(consentCurrent);
+        Runnable fence=()->{
+            try{owner.check();}
+            catch(InterruptedException stopped){
+                Thread.currentThread().interrupt();
+                throw new SecurityException("原恢复请求已取消",stopped);
+            }
+            if(!consentCurrent.getAsBoolean()||!context.executionAllowed())
+                throw new SecurityException("原主人恢复同意已失效");
+        };
+        fence.run();
+        String selected;
+        JSONObject config;
+        synchronized(this){
+            if(ownersPinned()||retainedDisplays()||bootstrapBusy()||
+                    adb.snapshot().optBoolean("recoveryRequired"))
+                throw new IllegalStateException("原任务或未知连接待核对，未重启助手");
+            selected=backend();
+            if(!selected.equals("wireless_adb")&&!selected.equals("shizuku"))
+                throw new IllegalStateException("所选电脑ADB连接需要原电脑再次核对");
+            if(selected.equals("wireless_adb")&&!adb.snapshot().optBoolean("identityPresent"))
+                throw new IllegalStateException("没有原无线ADB身份，未进行新配对");
+            if(selected.equals("shizuku")&&!shizuku.authorized())
+                throw new IllegalStateException("原Shizuku授权不可用");
+            config=existingConfiguration();
+        }
+        JSONObject endpoint=selected.equals("wireless_adb")?
+                discoverUnambiguousLocalConnection(10_000L,fence):null;
+        fence.run();
+        final long epoch;
+        synchronized(this){
+            if(ownersPinned()||retainedDisplays()||bootstrapBusy()||
+                    !selected.equals(backend())||adb.snapshot().optBoolean("recoveryRequired"))
+                throw new SecurityException("后台连接状态已变化");
+            epoch=++bootstrapEpoch;
+            verifiedAdbStatus=null;verifiedAdbEpoch=-1;
+        }
+        dev.pocketengine.core.RunControl.AuthorityCheck authority=()->{
+            fence.run();
+            if(epoch!=bootstrapEpoch||!selected.equals(backend()))
+                throw new SecurityException("原连接恢复代次已变化");
+        };
+        if(selected.equals("wireless_adb")){
+            adb.connectForPreparation(endpoint,config,()->{
+                authority.check();authenticateAdb(epoch);authority.check();
+            },authority);
+        }else{
+            shizuku.start(config,()->{
+                try{authority.check();connect(owner);authority.check();}
+                catch(Exception failure){connected=false;throw new IllegalStateException("原Shizuku连接核验失败",failure);}
+            },authority);
+        }
+        long deadline=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(
+                selected.equals("shizuku")?16:65);
+        while(bootstrapBusy()){
+            authority.check();
+            if(System.nanoTime()>=deadline)
+                throw new IllegalStateException("原后台助手恢复超时，待主人核对");
+            Thread.sleep(100);
+        }
+        authority.check();
+        JSONObject result=selected.equals("wireless_adb")?adb.snapshot():shizuku.snapshot();
+        if(selected.equals("wireless_adb")?!result.optBoolean("helperAuthenticated"):
+                !"connected".equals(result.optString("status")))
+            throw new IllegalStateException("原助手尚未通过认证，任务不会恢复");
+        return connect(owner);
+    }
+
     /** A needs-user preparation with no physical effect must not lock the owner's setup page. */
     public boolean releaseUnusedPreparation(RunControl original){
         if(original==null||original.hostRunIdentity()==null)return false;
@@ -910,7 +1049,7 @@ public final class DisplayModule implements EngineModule {
         for(RunSession run:new java.util.ArrayList<>(runSessions.values()))try{
             JSONObject original=run.state;if(original.optInt("displayId",-1)>0)releaseSession(original.getString("sessionId"),original.getInt("displayId"));
         }catch(Exception ignored){/* Retain unknown cleanup until the helper is stopped. */}
-        runSessions.clear();try{release();}catch(Exception ignored){connected=false;}adb.close();shizuku.close();connected=false;
+        runSessions.clear();connectionWorker.shutdownNow();try{release();}catch(Exception ignored){connected=false;}adb.close();shizuku.close();connected=false;
     }
     private String backend(){return prefs.getString("backend",prefs.contains("socketName")?"adb":"wireless_adb");}
     private boolean bootstrapBusy(){return adb.snapshot().optBoolean("busy")||shizuku.snapshot().optBoolean("starting");}
@@ -934,12 +1073,28 @@ public final class DisplayModule implements EngineModule {
     private synchronized void adbChanged(JSONObject update){
         if("wireless_adb".equals(backend())){
             if(update.optBoolean("helperAuthenticated")&&!update.optBoolean("busy")&&verifiedAdbEpoch==bootstrapEpoch&&verifiedAdbStatus!=null){
-                try{acceptStatus(verifiedAdbStatus);message=state.optBoolean("recoveryRequired")?"已核对原后台助手；需先释放遗留会话。":"无线ADB后台助手已通过真实认证，可以建立独立显示。";}
+                try{
+                    acceptStatus(verifiedAdbStatus);
+                    if(!state.optBoolean("recoveryRequired") && attemptedConnectEpoch==bootstrapEpoch &&
+                            attemptedConnectPort>0 && !attemptedConnectHost.isEmpty())
+                        prefs.edit().putString("lastAuthenticatedAdbHost",attemptedConnectHost)
+                                .putInt("lastAuthenticatedAdbPort",attemptedConnectPort).apply();
+                    message=state.optBoolean("recoveryRequired")?"已核对原后台助手；需先释放遗留会话。":"无线ADB后台助手已通过真实认证，可以建立独立显示。";
+                }
                 catch(Exception invalid){connected=false;message="无线ADB返回的后台身份未通过核对。";}
                 finally{verifiedAdbStatus=null;verifiedAdbEpoch=-1;}
             }else if(update.optBoolean("busy")||update.optBoolean("recoveryRequired")||update.optString("phase").matches(".*unknown|.*exited|identity_forgotten|forget_failed")){
                 connected=false;message=update.optString("message",message);
             }else if(update.optString("phase").matches("paired|needs_pairing|service_unavailable|bind_timeout|forget_blocked"))message=update.optString("message",message);
+        }
+        if("wireless_adb".equals(backend())&&"paired".equals(update.optString("phase"))&&
+                !update.optBoolean("busy")&&update.optBoolean("identityPresent")&&
+                !update.optBoolean("recoveryRequired")&&!ownersPinned()&&!retainedDisplays()&&
+                update.optLong("generation",-1)!=autoPairConnectGeneration){
+            autoPairConnectGeneration=update.optLong("generation",-1);
+            long epoch=bootstrapEpoch,generation=autoPairConnectGeneration;
+            try{connectionWorker.execute(()->connectOnceAfterPair(generation,epoch));}
+            catch(java.util.concurrent.RejectedExecutionException closing){}
         }
         context.emit("display",jsonEvent(update));
     }

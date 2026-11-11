@@ -30,7 +30,7 @@ internal class PocketWebBackground(
             "background.apps.read", "background.apps.set",
             "background.clipboard.consent", "background.clipboard.restore",
             "background.recovery.consent", "background.recovery.registration.consent", "background.recovery.restore", "background.recovery.compensate",
-            "background.pairing.begin", "background.pairing.cancel",
+            "background.pairing.begin", "background.pairing.observe", "background.pairing.cancel",
             "background.shizuku.permission", "background.shizuku.start", "background.shizuku.stop",
             "background.adb.setup", "background.adb.check", "background.adb.forget", "background.release",
             "background.diagnostics.preview", "background.diagnostics.copy", "background.diagnostics.share",
@@ -158,6 +158,11 @@ internal class PocketWebBackground(
                 require(!recovery.optBoolean("busy") && "phone_setup.$command" !in controller.state.moduleBusy
                     && recovery.optBoolean(if (command == "recovery.restore") "consent" else "compensationPending")) { "请先核对原连接恢复状态" }
                 controller.phoneSetup(command)
+            }
+            "background.pairing.observe" -> {
+                keys(); idle()
+                require(connection.canPair && controller.state.accessibilityEnabled) { "需要先授权界面读取，且后台助手没有占用连接" }
+                controller.phoneSetup("pairing.observe")
             }
             "background.pairing.begin" -> {
                 keys("host", "port"); require(connection.canPair && controller.state.notificationsEnabled) { "请先允许通知并核对本次配对状态" }

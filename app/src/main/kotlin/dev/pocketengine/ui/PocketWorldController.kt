@@ -3392,7 +3392,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         feature("display", command)
     }
     internal fun phoneSetup(command: String, input: JSONObject = JSONObject()) {
-        if (command !in setOf("status", "pairing.begin", "pairing.cancel", "recovery.consent", "recovery.registration.consent", "recovery.restore", "recovery.compensate")) return
+        if (command !in setOf("status", "pairing.begin", "pairing.observe", "pairing.cancel", "recovery.consent", "recovery.registration.consent", "recovery.restore", "recovery.compensate")) return
         if (!privateWorkspaceView() || "phone_setup.$command" in state.moduleBusy) return
         if (command != "pairing.cancel" && (!webPrivateOwnerVisible() || !state.backgroundSetupOpen)) return
         val key = "phone_setup.$command"
@@ -3438,7 +3438,9 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     internal fun cancelPairingNotification() {
         if (!privateWorkspaceView()) return
         if (state.feature("phone_setup").optJSONObject("pairing")?.optBoolean("active") != true
-            && "phone_setup.pairing.begin" !in state.moduleBusy) return
+            && state.feature("phone_setup").optJSONObject("pairing")?.optJSONObject("autoCapture")?.optBoolean("active") != true
+            && "phone_setup.pairing.begin" !in state.moduleBusy
+            && "phone_setup.pairing.observe" !in state.moduleBusy) return
         // Same native queue as begin: closing a pending view cannot leave a later begin behind its cancellation.
         phoneSetup("pairing.cancel")
     }
@@ -3678,7 +3680,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         native("getFeatures")
         phoneSetup("status")
         readPhonePracticeEvidence()
-        if (state.activeTaskId == null && !state.feature("display").optBoolean("taskOwned") && state.feature("display").optJSONObject("adb") != null) display("adb.status")
+        if (!state.feature("display").optBoolean("taskOwned") && (state.feature("display").has("taskOwned") || state.activeTaskId == null) && state.feature("display").optJSONObject("adb") != null) display("adb.status")
     }
     fun openWirelessSettings() {
         wirelessSettingsLaunched = true
@@ -3691,7 +3693,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun backgroundSetupResumed() {
         if (!wirelessSettingsLaunched) return
         wirelessSettingsLaunched = false
-        if (state.backgroundSetupOpen && state.activeTaskId == null && !state.feature("display").optBoolean("taskOwned") && state.feature("display").optJSONObject("adb") != null) display("adb.discover")
+        if (state.backgroundSetupOpen && !state.feature("display").optBoolean("taskOwned") && (state.feature("display").has("taskOwned") || state.activeTaskId == null) && state.feature("display").optJSONObject("adb") != null) display("adb.discover")
     }
     fun pairWireless(host: String, port: Int, code: String) {
         if (!wirelessPairCodeValid(code) || port !in 1..65535) { state = state.copy(error = "请读取系统配对窗口当前的端口和六位配对码"); return }

@@ -26,6 +26,8 @@ import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -90,6 +92,7 @@ public final class PhoneAccessibilityService extends AccessibilityService {
     private PhoneOwnerControls ownerControls;
     private QuickPanelCoordinator quickPanel;
     private volatile boolean visible;
+    private long nextSystemPairingRead;
 
     public static PhoneAccessibilityService get() { return instance; }
     /** A new service instance invalidates all observations from the previous connection. */
@@ -166,7 +169,61 @@ public final class PhoneAccessibilityService extends AccessibilityService {
                 for (PhoneUiSignals feed : displaySignals.values()) feed.record(-1);
             }
         }
+        inspectOwnerPairingDialog(event, displayId);
     }
+
+    /** Only an explicit two-minute owner request can read the visible system pairing dialog. */
+    private void inspectOwnerPairingDialog(AccessibilityEvent event, int displayId) {
+        if (!dev.pocketengine.phone.setup.PhoneSetupModule.systemPairingCaptureActive()) return;
+        int type = event.getEventType();
+        if (type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+                type != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED &&
+                type != AccessibilityEvent.TYPE_WINDOWS_CHANGED) return;
+        if (displayId != Display.DEFAULT_DISPLAY && displayId != Display.INVALID_DISPLAY) return;
+        CharSequence eventPackage = event.getPackageName();
+        if (eventPackage == null || !eventPackage.toString().toLowerCase(java.util.Locale.ROOT).contains("settings")) return;
+        long now = SystemClock.uptimeMillis();
+        if (now < nextSystemPairingRead) return;
+        nextSystemPairingRead = now + 300L;
+        AccessibilityNodeInfo root = null;
+        ArrayDeque<AccessibilityNodeInfo> queue = new ArrayDeque<>();
+        ArrayList<String> labels = new ArrayList<>();
+        try {
+            if (observationSafetyFailure() != null) return;
+            root = foregroundRoot();
+            if (root == null || root.getPackageName() == null ||
+                    !eventPackage.toString().contentEquals(root.getPackageName())) return;
+            queue.add(root);
+            root = null;
+            int inspected = 0;
+            while (!queue.isEmpty() && inspected++ < 96) {
+                AccessibilityNodeInfo node = queue.removeFirst();
+                try {
+                    // No editable, masked or password contents may enter the parser.
+                    if (!node.isPassword() && !node.isEditable()) {
+                        CharSequence title = node.getText(), description = node.getContentDescription();
+                        if (title != null && title.length() <= 240) labels.add(title.toString());
+                        if (description != null && description.length() <= 240 &&
+                                (title == null || !description.toString().contentEquals(title))) labels.add(description.toString());
+                    }
+                    for (int i = 0; i < node.getChildCount() && queue.size() < 95; i++) {
+                        AccessibilityNodeInfo child = node.getChild(i);
+                        if (child != null) queue.addLast(child);
+                    }
+                } finally { node.recycle(); }
+            }
+            // A partial tree or huge dialog is uncertain, never treated as a valid code.
+            if (queue.isEmpty() && labels.size() <= 96)
+                dev.pocketengine.phone.setup.PhoneSetupModule.offerVisibleSystemPairing(
+                        this, eventPackage.toString(), labels);
+        } catch (RuntimeException unavailable) {
+            // Some OEMs block Settings accessibility. Notification input remains available.
+        } finally {
+            if (root != null) root.recycle();
+            while (!queue.isEmpty()) queue.removeFirst().recycle();
+        }
+    }
+
     @Override public void onInterrupt() { }
     @Override public void onConfigurationChanged(android.content.res.Configuration configuration) {
         super.onConfigurationChanged(configuration);

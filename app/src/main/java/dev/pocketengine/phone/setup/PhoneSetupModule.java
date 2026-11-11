@@ -19,6 +19,8 @@ import dev.pocketengine.features.FeatureContext;
 import dev.pocketengine.phone.display.DisplayModule;
 import dev.pocketengine.phone.display.adb.LocalAdbEndpoints;
 import java.util.Objects;
+import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
@@ -55,6 +57,9 @@ public final class PhoneSetupModule implements EngineModule {
     private PendingIntent replyIntent, cancelIntent;
     private volatile boolean closed;
     private volatile String lastPairingOutcome = "not_requested";
+    private record AutoCapture(String id, String sourceIdentity, long expiresAt, long generation) { }
+    private volatile AutoCapture autoCapture;
+    private volatile long autoCaptureGeneration;
     private volatile String lastConnectionOutcome = "not_requested";
 
     public PhoneSetupModule(FeatureContext context, DisplayModule display) {
@@ -102,7 +107,18 @@ public final class PhoneSetupModule implements EngineModule {
                 cancelNotice();
                 lastPairingOutcome = "expired";
             }
-            return new JSONObject().put("pairing", entry.put("lastOutcome", lastPairingOutcome))
+            AutoCapture capture = autoCapture;
+            if (capture != null && SystemClock.elapsedRealtime() >= capture.expiresAt()) {
+                autoCapture = null;
+                autoCaptureGeneration++;
+                lastPairingOutcome = "auto_capture_expired";
+                capture = null;
+            }
+            JSONObject visibleCapture = new JSONObject().put("active", capture != null)
+                    .put("remainingMs", capture == null ? 0L : Math.max(0L, capture.expiresAt() - SystemClock.elapsedRealtime()))
+                    .put("storesPairingCode", false);
+            return new JSONObject().put("pairing", entry.put("lastOutcome", lastPairingOutcome)
+                    .put("autoCapture", visibleCapture))
                     .put("recovery", recovery.snapshot().put("connectionOutcome", lastConnectionOutcome)
                             .put("busy", recoveryRunning.get() || recoveryQueued.get())
                             .put("retryScheduled", activeRecovery != null && activeRecovery.scheduled)
@@ -113,7 +129,7 @@ public final class PhoneSetupModule implements EngineModule {
     }
 
     @Override public JSONObject handle(String command, JSONObject input) throws Exception {
-        if ("recovery.registration.consent".equals(command)) throw new SecurityException("owner_recovery_window_required");
+        if ("recovery.registration.consent".equals(command) || "pairing.observe".equals(command)) throw new SecurityException("owner_recovery_window_required");
         return handleOwner(command, input, () -> true);
     }
 
@@ -128,6 +144,9 @@ public final class PhoneSetupModule implements EngineModule {
         switch (command) {
             case "status": return snapshot();
             case "pairing.begin": return begin(input);
+            case "pairing.observe":
+                if (!ownerCurrent.getAsBoolean()) throw new SecurityException("owner_pairing_window_changed");
+                return beginAutoCapture();
             case "pairing.cancel": cancel(input.optString(SESSION, null)); return snapshot();
             case "recovery.consent":
                 recovery.setConsent(input.getBoolean("enabled"), input.getLong("expectedRevision"), ownerCurrent);
@@ -151,6 +170,105 @@ public final class PhoneSetupModule implements EngineModule {
         }
     }
 
+    private JSONObject beginAutoCapture() throws Exception {
+        synchronized (pairingLock) {
+            requireOpen();
+            synchronized (display) {
+                JSONObject state = display.snapshot();
+                requirePairingIdle(state);
+                if (state.optJSONObject("adb") != null && state.getJSONObject("adb").optBoolean("identityPresent"))
+                    throw new SecurityException("已存在本机无线授权身份，请直接恢复连接");
+                AutoCapture current = autoCapture;
+                if (current != null && SystemClock.elapsedRealtime() < current.expiresAt()) return snapshot();
+                pairing.cancel(); cancelNotice();
+                AutoCapture next = new AutoCapture(UUID.randomUUID().toString(),
+                        sourceIdentity(state), SystemClock.elapsedRealtime() + PairingEntrySession.WINDOW_MS,
+                        ++autoCaptureGeneration);
+                autoCapture = next;
+                lastPairingOutcome = "watching_system_pairing_window";
+                main.postAtTime(() -> expireAutoCapture(next), this,
+                        SystemClock.uptimeMillis() + PairingEntrySession.WINDOW_MS);
+            }
+            emit("system_pairing_capture_started");
+            return snapshot();
+        }
+    }
+
+    private void expireAutoCapture(AutoCapture captured) {
+        synchronized (pairingLock) {
+            if (autoCapture == captured && SystemClock.elapsedRealtime() >= captured.expiresAt()) {
+                autoCapture = null;
+                autoCaptureGeneration++;
+                lastPairingOutcome = "auto_capture_expired";
+                emit("system_pairing_capture_expired");
+            }
+        }
+    }
+
+    /** Called only by the connected accessibility service for a visible, system-owned Settings window. */
+    public static boolean systemPairingCaptureActive() {
+        PhoneSetupModule active = current();
+        AutoCapture capture = active == null ? null : active.autoCapture;
+        return capture != null && !active.closed && active.context.executionAllowed()
+                && SystemClock.elapsedRealtime() < capture.expiresAt();
+    }
+
+    public static void offerVisibleSystemPairing(Context serviceContext, String packageName, List<String> labels) {
+        PhoneSetupModule active = current();
+        if (active == null || !systemPairingCaptureActive() ||
+                !SystemWirelessPairing.trustedSettings(serviceContext, packageName)) return;
+        SystemWirelessPairing.Credential observed = SystemWirelessPairing.parseVisibleText(labels);
+        if (observed != null) active.submitObservedPairing(observed);
+    }
+
+    private void submitObservedPairing(SystemWirelessPairing.Credential observed) {
+        final AutoCapture original;
+        synchronized (pairingLock) {
+            original = autoCapture;
+            if (closed || original == null || !context.executionAllowed() ||
+                    SystemClock.elapsedRealtime() >= original.expiresAt()) return;
+            // Claim once before asynchronous dispatch. Never retry an unknown ADB effect.
+            autoCapture = null;
+            lastPairingOutcome = "system_pairing_claimed";
+        }
+        try {
+            worker.execute(() -> {
+                try {
+                    String host = LocalAdbEndpoints.current().check(observed.host(), observed.port());
+                    synchronized (pairingLock) {
+                        if (closed || original.generation() != autoCaptureGeneration ||
+                                !context.executionAllowed() ||
+                                SystemClock.elapsedRealtime() >= original.expiresAt()) return;
+                    }
+                    synchronized (display) {
+                        JSONObject state = display.snapshot();
+                        requirePairingIdle(state);
+                        if (!original.sourceIdentity().equals(sourceIdentity(state)) ||
+                                original.generation() != autoCaptureGeneration || closed ||
+                                !context.executionAllowed())
+                            throw new SecurityException("pairing_source_changed");
+                        JSONObject credentials = new JSONObject().put("host", host).put("pairingPort", observed.port())
+                                .put("pairingCode", observed.code());
+                        try { display.handle("adb.pair", credentials); }
+                        finally { credentials.remove("pairingCode"); }
+                    }
+                    if (original.generation() == autoCaptureGeneration) {
+                        lastPairingOutcome = "submitted_check_original_connection";
+                        emit("system_pairing_submitted");
+                    }
+                } catch (Exception unknown) {
+                    if (original.generation() == autoCaptureGeneration) {
+                        lastPairingOutcome = "system_pairing_not_confirmed";
+                        emit("system_pairing_unconfirmed");
+                    }
+                }
+            });
+        } catch (RuntimeException unavailable) {
+            lastPairingOutcome = "system_pairing_worker_unavailable";
+            emit("system_pairing_worker_unavailable");
+        }
+    }
+
     private JSONObject begin(JSONObject input) throws Exception {
         synchronized (pairingLock) {
             requireOpen();
@@ -158,6 +276,7 @@ public final class PhoneSetupModule implements EngineModule {
             synchronized (display) {
                 JSONObject state = display.snapshot();
                 requirePairingIdle(state);
+                autoCapture = null; autoCaptureGeneration++;
                 String host = LocalAdbEndpoints.current().check(input.optString("host", "127.0.0.1"), input.getInt("pairingPort"));
                 entry = pairing.begin(host, input.getInt("pairingPort"), sourceIdentity(state));
             }
@@ -225,7 +344,7 @@ public final class PhoneSetupModule implements EngineModule {
 
     private void cancel(String expected) {
         synchronized (pairingLock) {
-            if (expected == null) { pairing.cancel(); cancelNotice(); lastPairingOutcome = "cancelled"; }
+            if (expected == null) { autoCapture = null; autoCaptureGeneration++; pairing.cancel(); cancelNotice(); lastPairingOutcome = "cancelled"; }
             else if (pairing.cancel(expected)) { cancelNotice(); lastPairingOutcome = "cancelled"; }
         }
     }
@@ -426,22 +545,38 @@ public final class PhoneSetupModule implements EngineModule {
         if (Thread.currentThread().isInterrupted()) connection = "recovery_interrupted";
         else if (!recoveryCurrent(original)) connection = "consent_required";
         else if (!result.optBoolean("userUnlocked")) connection = "owner_unlock_required";
-        else synchronized (display) {
+        else {
             JSONObject state = display.snapshot();
-            if (state.optBoolean("taskOwned") || state.optBoolean("bootstrapBusy")) connection = "original_task_owns_connection";
-            else if (state.optBoolean("helperConnected")) connection = state.optBoolean("recoveryRequired") || state.optBoolean("releasePending")
-                    ? "original_session_requires_owner_review" : "original_helper_authenticated";
+            if (state.optBoolean("taskOwned") || state.optBoolean("bootstrapBusy"))
+                connection = "original_task_owns_connection";
+            else if (state.optBoolean("helperConnected"))
+                connection = state.optBoolean("recoveryRequired") || state.optBoolean("releasePending")
+                        ? "original_session_requires_owner_review" : "original_helper_authenticated";
             else if (!state.optBoolean("configured")) connection = "owner_setup_required";
             else if (!recoveryCurrent(original)) connection = "consent_required";
-            else try {
-                // Only the original selected backend's authenticated status. Never start/grant/switch/release here.
-                JSONObject actual = display instanceof DisplayModule nativeDisplay
-                        ? nativeDisplay.connect(original.control) : display.handle("connect", new JSONObject());
-                connection = recoveryCurrent(original) && actual.optBoolean("helperConnected")
-                        ? actual.optBoolean("recoveryRequired") || actual.optBoolean("releasePending")
-                            ? "original_session_requires_owner_review" : "original_helper_authenticated"
-                        : "connection_unconfirmed";
-            } catch (Exception unavailable) { connection = "owner_connection_check_required"; }
+            else if (state.optBoolean("recoveryRequired") || state.optBoolean("releasePending") ||
+                    state.optJSONObject("adb") != null &&
+                    state.getJSONObject("adb").optBoolean("recoveryRequired"))
+                connection = "original_session_requires_owner_review";
+            else {
+                try {
+                    JSONObject actual = display instanceof DisplayModule nativeDisplay
+                            ? nativeDisplay.connect(original.control) : display.handle("connect", new JSONObject());
+                    connection = recoveryCurrent(original) && actual.optBoolean("helperConnected")
+                            ? "original_helper_authenticated" : "connection_unconfirmed";
+                } catch (Exception disconnected) {
+                    // An already-authorized helper may have disappeared after reboot. Re-create
+                    // that helper under the owner's recovery consent, not any business task.
+                    try {
+                        if (!recoveryCurrent(original) || !(display instanceof DisplayModule nativeDisplay))
+                            throw new SecurityException("原连接恢复权限已失效");
+                        JSONObject recovered = nativeDisplay.recoverPreviouslyAuthorized(
+                                original.control, () -> recoveryCurrent(original));
+                        connection = recoveryCurrent(original) && recovered.optBoolean("helperConnected")
+                                ? "original_helper_authenticated" : "connection_unconfirmed";
+                    } catch (Exception unavailable) { connection = "owner_connection_check_required"; }
+                }
+            }
         }
         if (recoveryWork == original) lastConnectionOutcome = connection;
         return result;
@@ -469,6 +604,8 @@ public final class PhoneSetupModule implements EngineModule {
         closed = true;
         stopRecovery();
         synchronized (pairingLock) {
+            autoCapture = null;
+            autoCaptureGeneration++;
             pairing.cancel();
             cancelNotice();
             main.removeCallbacksAndMessages(this);

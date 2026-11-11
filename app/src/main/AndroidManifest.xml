@@ -22,6 +22,10 @@
     <uses-permission android:name="com.termux.permission.RUN_COMMAND" />
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
     <queries>
+        <!-- Only a visible, system-owned Settings app can supply the owner-armed pairing dialog. -->
+        <package android:name="com.android.settings"/>
+        <intent><action android:name="android.settings.SETTINGS"/></intent>
+        <intent><action android:name="android.settings.APPLICATION_DEVELOPMENT_SETTINGS"/></intent>
         <intent><action android:name="android.intent.action.INSTALL_PACKAGE"/><data android:mimeType="application/vnd.android.package-archive"/></intent>
         <intent><action android:name="android.settings.MANAGE_UNKNOWN_APP_SOURCES"/><data android:scheme="package"/></intent>
         <provider android:authorities="com.android.calendar"/>

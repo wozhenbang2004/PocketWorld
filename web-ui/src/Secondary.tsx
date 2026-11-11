@@ -647,11 +647,14 @@ function PhoneSettings({ state, supported, run, navigate, registerTransientBack,
  * display state; this page does not create a task or a second connection. */
 function BackgroundSettings({ state, supported, run, onReturn, returnLabel = '手机能力', registerTransientBack }: { state: Data; supported: (action: string) => boolean; run: Run; onReturn: () => void; returnLabel?: string; registerTransientBack: BackHandlerRegistration }) {
   const display = object(object(state.features).display), adb = object(display.adb), discovery = object(adb.discovery), shizuku = object(display.shizuku);
-  const audioRecovery = object(object(object(state.features).phone_setup).audioRecovery), audioPending = audioRecovery.pendingCount;
+  const phoneSetup = object(object(state.features).phone_setup), pairing = object(phoneSetup.pairing), autoCapture = object(pairing.autoCapture);
+  const audioRecovery = object(phoneSetup.audioRecovery), audioPending = audioRecovery.pendingCount;
+  const recovery = object(phoneSetup.recovery);
   const pending = Array.isArray(state.moduleBusy) ? state.moduleBusy.map(String) : [];
   const connection = backgroundConnection(display, state.activeTaskId, pending);
   const [connecting, setConnecting] = useState(() => connection.requiresConnectionCheck || connection.phase === 'paired' || connection.identityPresent);
   const [showWirelessSetup, setShowWirelessSetup] = useState(false);
+  const [openWirelessWhenArmed, setOpenWirelessWhenArmed] = useState(false);
   const automaticDiscovery = useRef(false);
   const [manual, setManual] = useState(false), [portText, setPortText] = useState(''), [selected, setSelected] = useState('');
   const [code, setCode] = useState(''), [pairPort, setPairPort] = useState<number | undefined>();
@@ -672,6 +675,12 @@ function BackgroundSettings({ state, supported, run, onReturn, returnLabel = '�
   const resultSignature = (key: string) => JSON.stringify([object(state.moduleResults)[key] ?? null, object(state.moduleErrors)[key] ?? null]);
   const closeSecrets = () => setCode('');
   const selectPanel = (value: 'setup' | 'checks') => { setCode(''); setPanel(value); };
+  useEffect(() => {
+    if (!openWirelessWhenArmed || autoCapture.active !== true ||
+        state.backgroundSetupOpen !== true || state.webWorkspaceTaskOpen === true) return;
+    setOpenWirelessWhenArmed(false);
+    void run('settings.openSystem', { section: 'wireless' }).catch(() => {});
+  }, [openWirelessWhenArmed, autoCapture.active, state.backgroundSetupOpen, state.webWorkspaceTaskOpen]);
   useEffect(() => { registerTransientBack(() => { if (Object.values(ownerBack.current).some(handler => handler?.())) return true; if (mainScreenConsent) { setMainScreenConsent(false); return true; } if (panel === 'checks') { selectPanel('setup'); return true; } if (showWirelessSetup) { setCode(''); setShowWirelessSetup(false); return true; } return false; }); return () => registerTransientBack(null); }, [panel, mainScreenConsent, showWirelessSetup, registerTransientBack]);
   useEffect(() => {
     if (state.backgroundSetupOpen === true) ownerOpened.current = true;
@@ -789,7 +798,25 @@ function BackgroundSettings({ state, supported, run, onReturn, returnLabel = '�
        {wirelessSaved && savedEndpoints.length > 1 && <p className="pw-field-hint">发现多个本机连接端口，无法安全地猜测。请展开下方连接设置明确选择。</p>}
        {wirelessSaved && savedEndpoints.length === 0 && !discovery.discovering && <><p className="pw-field-hint">已保存授权身份，但尚未找到本机连接服务；不需要重新输入配对码。</p>
          <CapabilityAction action="settings.openSystem" args={{ section: 'wireless' }} supported={supported} run={run}>打开无线调试设置</CapabilityAction></>}
-       {!wirelessSaved && !shizukuAuthorized && <p className="pw-field-hint">首次使用独立后台屏需要 Android 授予系统级连接能力。仅靠无障碍可以操作主屏，不能创建隔离后台屏。</p>}
+       {Number.isSafeInteger(recovery.revision) && typeof recovery.consent === 'boolean' && <StretchSwitch
+         label="开机及断连后恢复已授权助手"
+         description="默认关闭。仅重新认证和启动已授权的连接，不会开始或重放手机任务。"
+         checked={recovery.consent === true}
+         disabled={locked || recovery.busy === true || !supported('background.recovery.consent')}
+         onChange={enabled => { void run('background.recovery.consent', { enabled, expectedRevision: recovery.revision }).catch(() => {}); }}
+       />}
+       {!wirelessSaved && !shizukuAuthorized && <section className="pw-background-auto-pairing">
+         <p className="pw-field-hint">首次独立屏授权：先允许系统界面读取，再打开无线调试的「使用配对码配对设备」。可以自动识别当前窗口，不需要抄写验证码。</p>
+         <div className="pw-form-actions">
+           {autoCapture.active === true
+             ? <CapabilityAction action="background.pairing.cancel" supported={supported} run={run}>停止识别</CapabilityAction>
+             : <Button disabled={locked || !connection.canPair || state.accessibilityEnabled !== true || !supported('background.pairing.observe')}
+                 onClick={() => { setOpenWirelessWhenArmed(true); void run('background.pairing.observe', {}).catch(() => setOpenWirelessWhenArmed(false)); }}>自动准备配对并打开设置</Button>}
+           <CapabilityAction action="settings.openSystem" args={{ section: 'wireless' }} supported={supported} run={run} disabled={locked}>打开无线调试设置</CapabilityAction>
+         </div>
+         {autoCapture.active === true && <p role="status" className="pw-field-hint">正在识别当前系统配对窗口。打开「使用配对码配对设备」后会自动读取并核对；两分钟后失效，不会保存六位码。</p>}
+         {pairing.lastOutcome === 'submitted_check_original_connection' && <p role="status" className="pw-field-hint">系统配对信息已交给原生连接器，等待系统配对回执；还未确认后台助手连接。</p>}
+       </section>}
        <Button variant="ghost" disabled={locked} onClick={() => { setCode(''); setShowWirelessSetup(value => !value); }}>{showWirelessSetup ? '收起连接设置' : '首次授权或手动连接'}</Button>
      </Card>}
      {showWirelessSetup && (permissions || connecting || requiresCheck) && !connection.taskOwned && connection.loaded && connection.supported && !alternate && !connected && <Card title={connecting ? '连接后台助手' : '与这台手机配对'} description={connecting ? '回到系统无线调试主页，读取连接端口。它与配对窗口的端口不同。' : '在开发者选项开启无线调试，打开“使用配对码配对设备”，保持当前窗口可见。'}>
