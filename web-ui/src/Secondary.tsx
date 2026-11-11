@@ -649,6 +649,7 @@ function BackgroundSettings({ state, supported, run, onReturn, returnLabel = '�
   const display = object(object(state.features).display), adb = object(display.adb), discovery = object(adb.discovery), shizuku = object(display.shizuku);
   const phoneSetup = object(object(state.features).phone_setup), pairing = object(phoneSetup.pairing), autoCapture = object(pairing.autoCapture);
   const audioRecovery = object(phoneSetup.audioRecovery), audioPending = audioRecovery.pendingCount;
+  const recovery = object(phoneSetup.recovery);
   const pending = Array.isArray(state.moduleBusy) ? state.moduleBusy.map(String) : [];
   const connection = backgroundConnection(display, state.activeTaskId, pending);
   const [connecting, setConnecting] = useState(() => connection.requiresConnectionCheck || connection.phase === 'paired' || connection.identityPresent);
@@ -790,6 +791,13 @@ function BackgroundSettings({ state, supported, run, onReturn, returnLabel = '�
        {wirelessSaved && savedEndpoints.length > 1 && <p className="pw-field-hint">发现多个本机连接端口，无法安全地猜测。请展开下方连接设置明确选择。</p>}
        {wirelessSaved && savedEndpoints.length === 0 && !discovery.discovering && <><p className="pw-field-hint">已保存授权身份，但尚未找到本机连接服务；不需要重新输入配对码。</p>
          <CapabilityAction action="settings.openSystem" args={{ section: 'wireless' }} supported={supported} run={run}>打开无线调试设置</CapabilityAction></>}
+       {Number.isSafeInteger(recovery.revision) && typeof recovery.consent === 'boolean' && <StretchSwitch
+         label="开机及断连后恢复已授权助手"
+         description="默认关闭。仅重新认证和启动已授权的连接，不会开始或重放手机任务。"
+         checked={recovery.consent === true}
+         disabled={locked || recovery.busy === true || !supported('background.recovery.consent')}
+         onChange={enabled => { void run('background.recovery.consent', { enabled, expectedRevision: recovery.revision }).catch(() => {}); }}
+       />}
        {!wirelessSaved && !shizukuAuthorized && <section className="pw-background-auto-pairing">
          <p className="pw-field-hint">首次独立屏授权：先允许系统界面读取，再打开无线调试的「使用配对码配对设备」。可以自动识别当前窗口，不需要抄写验证码。</p>
          <div className="pw-form-actions">
