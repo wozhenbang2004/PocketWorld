@@ -181,6 +181,14 @@ final class TaskTokenBudgets {
         JSONObject hold=reportHold(pool,id);if(hold==null||amount<0||amount>hold.getLong("remainingTokens"))throw new ModelRequestPolicy.Rejected("owner_work_report_budget_exhausted","本次结果整理超过派单时预留的token范围；原始结果已保留，没有补满预算或重新调用。");
         hold.put("remainingTokens",hold.getLong("remainingTokens")-amount);add(pool,"heldTokens",-amount);
     }
+    /** Adjust an estimate only with genuinely free capacity in this same pool. This
+     * does not increase its limit or release an actual/unknown physical-call hold. */
+    private static void extendReportHold(JSONObject pool,String id,long additional)throws Exception {
+        if(additional<=0)return;JSONObject hold=reportHold(pool,id);if(hold==null||hold.has("releasedAt"))throw new SecurityException("原整理预留已释放，不能重新取得额度");
+        admit(pool,additional,"原结果整理实际请求");long initial=Math.addExact(hold.getLong("initialTokens"),additional);
+        if(initial>InferenceTokenReservation.MAX_TOKENS)throw new SecurityException("结果整理请求超过原预算范围");
+        hold.put("initialTokens",initial).put("remainingTokens",Math.addExact(hold.getLong("remainingTokens"),additional));add(pool,"heldTokens",additional);
+    }
     /** Caller is already in the SAME SQL transaction that writes the original started receipt. */
     static void started(SQLiteDatabase db, JSONObject owner, JSONObject receipt, InferenceTokenReservation.NativeIdentity identity) throws Exception {
         started(db,owner,receipt,identity,"");
@@ -194,6 +202,8 @@ final class TaskTokenBudgets {
         if(!reportWorkId.isEmpty()){
             JSONObject hold=task==null?null:reportHold(task,reportWorkId);
             if(hold==null||reserved==null||!key.equals(hold.optString("routeKey"))||day!=null&&!day.getString("poolId").equals(hold.optString("dailyPoolId")))throw new ModelRequestPolicy.Rejected("owner_work_report_budget_unavailable","原结果整理预留与当前模型连接或请求估计不一致，尚未发送。");
+            long additional=Math.max(0,reserved-hold.getLong("remainingTokens"));
+            if(additional>0){extendReportHold(task,reportWorkId,additional);if(day!=null)extendReportHold(day,reportWorkId,additional);}
             // Transfer into the ordinary physical-call hold in this same transaction.
             spendReportHold(task,reportWorkId,reserved);if(day!=null)spendReportHold(day,reportWorkId,reserved);
         }

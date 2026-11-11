@@ -1,7 +1,8 @@
+import { calendarTimeAt } from './calendar-time';
 type Data = Record<string, any>;
 export type ReminderIntent = 'create' | 'edit' | 'reschedule';
 export type ReminderDraft = {
-  title: string; phone: boolean; goal: string; type: string; minutes: string; time: string; zone: string;
+  title: string; phone: boolean; goal: string; type: string; minutes: string; date: string; time: string; zone: string;
   weekdays: number[]; monthDay: string; lastDay: boolean; skipGap: boolean; laterOverlap: boolean;
   cron: string; misfire: string; overlap: string; maxCatchUp: string;
 };
@@ -11,10 +12,11 @@ export const reminderDeleteWarning = '删除会移除此提醒及其全部投递
 export function reminderDraft(rule?: Data | null, intent: ReminderIntent = 'create', zone = 'UTC'): ReminderDraft {
   const schedule = intent === 'edit' ? rule?.schedule || {} : {};
   const policy = intent === 'edit' ? rule?.policy || {} : {};
+  const once = calendarTimeAt(schedule.type === 'once' && Number.isFinite(schedule.at) ? schedule.at : Date.now() + 30 * 60000, schedule.zone || zone);
   return {
     title: rule?.title || '', phone: rule?.kind === 'phone_goal', goal: rule?.goal || '',
     type: schedule.type || 'once', minutes: schedule.type === 'interval' ? String(schedule.intervalMillis / 60000) : '30',
-    time: schedule.time || '09:00', zone: schedule.zone || zone,
+    date: once.date, time: schedule.time || ((schedule.type || 'once') === 'once' ? once.time : '09:00'), zone: schedule.zone || zone,
     weekdays: Array.isArray(schedule.daysOfWeek) ? [...schedule.daysOfWeek] : [1, 2, 3, 4, 5],
     monthDay: String(schedule.dayOfMonth || 1), lastDay: schedule.shortMonthPolicy === 'last_day',
     skipGap: schedule.dstGap === 'skip', laterOverlap: schedule.dstOverlap === 'later', cron: schedule.expression || '0 9 * * 1-5',
@@ -22,7 +24,7 @@ export function reminderDraft(rule?: Data | null, intent: ReminderIntent = 'crea
   };
 }
 export function reminderTiming(draft: ReminderDraft): string {
-  return JSON.stringify([draft.type, draft.minutes, draft.time, draft.zone, [...draft.weekdays].sort((a, b) => a - b), draft.monthDay, draft.lastDay, draft.skipGap, draft.laterOverlap, draft.cron]);
+  return JSON.stringify([draft.type, draft.minutes, draft.date, draft.time, draft.zone, [...draft.weekdays].sort((a, b) => a - b), draft.monthDay, draft.lastDay, draft.skipGap, draft.laterOverlap, draft.cron]);
 }
 export function reminderReviewPayload(draft: ReminderDraft, intent: ReminderIntent, original?: Data | null, initialTiming = ''): Data {
   if (!draft.title.trim()) throw new Error('请填写提醒内容。');

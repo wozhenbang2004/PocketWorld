@@ -2,7 +2,8 @@ import { ModelDiagnosticsWorkspace } from './ModelDiagnosticsWorkspace';
 import { UsageWorkspace } from './UsageWorkspace';
 import { AICenter, type AIServicePreset } from './AICenter';
 import SkillsWorkspace from './SkillsWorkspace';
-import { CapabilitiesWorkspace } from './CapabilitiesWorkspace';
+import { CapabilitiesWorkspace, type CapabilityWorkspaceMemory } from './CapabilitiesWorkspace';
+import type { RegisterBeforeLeave as RegisterFormBeforeLeave } from './form-drafts';
 import { toolServicePresets } from './tool-service-presets';
 import type { PermissionLeaveGuard } from './PermissionPolicySettings';
 import { BackgroundAudioSettings, BackgroundOwnerSettings, BackgroundChecks } from './BackgroundOwnerSettings';
@@ -60,7 +61,7 @@ import { ACCOUNT_RECEIPT_ACTIONS, accountActionReceipt, accountLoginArguments, a
 type Data = Record<string, any>;
 type Snapshot = { state?: Data; view?: { section?: string | null; resumeRevision?: number; taskId?: string | null }; composer?: Data | null; capabilities?: { commands?: string[] } };
 type BackHandlerRegistration = (handler: (() => boolean) | null) => void;
-type Props = { teamAttentionFocus?: Data; onTeamAttentionConsumed?:(requestId:string)=>void; registerBeforeLeave?: (guard: PermissionLeaveGuard | null) => void; route: string; onBack: () => void; snapshot: Snapshot; registerBackHandler?: BackHandlerRegistration; navigationTrigger?: ReactNode; navigationRevision?: number; onNavigationPageChange?: (page: string) => void; onOpenSetup?: (capability?: SetupCapability) => void; onReturnToSetup?: () => void; onOpenProjects?: () => void; originGoal?: string; returnLabel?: string; initialProjectId?: string; localDraft?: LocalWorkspaceDraft; onLocalDraftChange?: (draft: LocalWorkspaceDraft) => void };
+type Props = { capabilityMemory?: CapabilityWorkspaceMemory; onStartCapability?: () => void; teamAttentionFocus?: Data; onTeamAttentionConsumed?:(requestId:string)=>void; registerBeforeLeave?: (guard: PermissionLeaveGuard | null) => void; route: string; onBack: () => void; snapshot: Snapshot; registerBackHandler?: BackHandlerRegistration; navigationTrigger?: ReactNode; navigationRevision?: number; onNavigationPageChange?: (page: string) => void; onOpenSetup?: (capability?: SetupCapability) => void; onReturnToSetup?: () => void; onOpenProjects?: () => void; originGoal?: string; returnLabel?: string; initialProjectId?: string; localDraft?: LocalWorkspaceDraft; onLocalDraftChange?: (draft: LocalWorkspaceDraft) => void };
 type Run = (action: string, args?: Data) => Promise<any>;
 const object = (value: any): Data => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 const list = (value: any): Data[] => Array.isArray(value) ? value.filter(x => x && typeof x === 'object' && !Array.isArray(x)) : [];
@@ -1244,22 +1245,22 @@ function McpWorkspace({ state, data, supported, run, registerTransientBack, erro
   </>;
 }
 
-function DomainPage({ domain, state, data, supported, run, registerTransientBack, candidateTarget, onReviewCandidate, onOpenModels, onNavigate, onPrepareTools, onOpenProjects, initialProjectId, localDraft, onLocalDraftChange, alreadyShownError, teamAttentionFocus, onTeamAttentionConsumed }: { teamAttentionFocus?:Data;onTeamAttentionConsumed?:(requestId:string)=>void; domain: string; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: BackHandlerRegistration; candidateTarget: LearningCandidateTarget | null; onReviewCandidate: (target: LearningCandidateTarget) => void; onOpenModels: () => void; onNavigate: (domain: 'plugins' | 'pluginCatalog' | 'mcp' | 'skills') => void; onPrepareTools?: () => void; onOpenProjects?: () => void; initialProjectId?: string; localDraft?: LocalWorkspaceDraft; onLocalDraftChange?: (draft: LocalWorkspaceDraft) => void; alreadyShownError?: string }) {
+function DomainPage({ registerFormBeforeLeave, onOpenConnections, domain, state, data, supported, run, registerTransientBack, candidateTarget, onReviewCandidate, onOpenModels, onNavigate, onPrepareTools, onOpenProjects, initialProjectId, localDraft, onLocalDraftChange, alreadyShownError, teamAttentionFocus, onTeamAttentionConsumed }: { registerFormBeforeLeave?: RegisterFormBeforeLeave; onOpenConnections?: () => void; teamAttentionFocus?:Data;onTeamAttentionConsumed?:(requestId:string)=>void; domain: string; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: BackHandlerRegistration; candidateTarget: LearningCandidateTarget | null; onReviewCandidate: (target: LearningCandidateTarget) => void; onOpenModels: () => void; onNavigate: (domain: 'plugins' | 'pluginCatalog' | 'mcp' | 'skills') => void; onPrepareTools?: () => void; onOpenProjects?: () => void; initialProjectId?: string; localDraft?: LocalWorkspaceDraft; onLocalDraftChange?: (draft: LocalWorkspaceDraft) => void; alreadyShownError?: string }) {
   const title = SECONDARY_DOMAINS.find(x => x.id === domain)?.title || '连接与能力';
   if (domain === 'accounts') return <AccountsWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'devices') return <DevicesWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} openModels={onOpenModels} />;
   if (domain === 'remote' || domain === 'ssh') return <ConnectionWorkspace domain={domain} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
-  if (domain === 'memory' || domain === 'memoryReview') return <MemoryWorkspace domain={domain} run={run} registerTransientBack={registerTransientBack} initialCandidate={candidateTarget} alreadyShownError={alreadyShownError} />;
+  if (domain === 'memory' || domain === 'memoryReview') return <MemoryWorkspace registerBeforeLeave={registerFormBeforeLeave} domain={domain} run={run} registerTransientBack={registerTransientBack} initialCandidate={candidateTarget} alreadyShownError={alreadyShownError} />;
   if (domain === 'learning') return <LearningWorkspace state={state} data={data} run={run} registerTransientBack={registerTransientBack} onReviewCandidate={onReviewCandidate} />;
-  if (domain === 'automation') return <ReminderWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
+  if (domain === 'automation') return <ReminderWorkspace registerBeforeLeave={registerFormBeforeLeave} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'workProfiles') return <WorkProfilesWorkspace state={state} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
-  if (domain === 'commitments') return <CommitmentsWorkspace state={state} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
+  if (domain === 'commitments') return <CommitmentsWorkspace registerBeforeLeave={registerFormBeforeLeave} state={state} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'channels') return <ChannelsWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'mcp') return <McpWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} error={alreadyShownError} />;
   if (domain === 'skills') return <SkillsWorkspace state={state} run={run} registerTransientBack={registerTransientBack} onPrepareTools={onPrepareTools} />;
   if (domain === 'plugins' || domain === 'pluginCatalog') return <PluginsWorkspace mode={domain} state={state} supported={supported} run={run} registerTransientBack={registerTransientBack} onNavigate={onNavigate} />;
-  if (domain === 'teams') return <TeamsWorkspace onAttentionConsumed={onTeamAttentionConsumed} attentionFocus={teamAttentionFocus} state={state} run={run} registerTransientBack={registerTransientBack} alreadyShownError={alreadyShownError} />;
-  if (domain === 'groups') return <GroupsWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
+  if (domain === 'teams') return <TeamsWorkspace registerBeforeLeave={registerFormBeforeLeave} onAttentionConsumed={onTeamAttentionConsumed} attentionFocus={teamAttentionFocus} state={state} run={run} registerTransientBack={registerTransientBack} alreadyShownError={alreadyShownError} />;
+  if (domain === 'groups') return <GroupsWorkspace registerBeforeLeave={registerFormBeforeLeave} onOpenConnections={onOpenConnections} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'media') return <MediaWorkspace state={state} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'realtime') return <RealtimeWorkspace state={state} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'proxy') return <ProxyWorkspace state={state} run={run} registerTransientBack={registerTransientBack} />;
@@ -1566,7 +1567,16 @@ function settingsEntryDetail(id: string, state: Data): string {
   return '';
 }
 
-export default function Secondary({ teamAttentionFocus, onTeamAttentionConsumed, registerBeforeLeave, route, onBack, snapshot, registerBackHandler, navigationTrigger, navigationRevision, onNavigationPageChange, onOpenSetup, onReturnToSetup, onOpenProjects, originGoal, returnLabel, initialProjectId, localDraft, onLocalDraftChange }: Props) {
+export default function Secondary({ capabilityMemory, onStartCapability, teamAttentionFocus, onTeamAttentionConsumed, registerBeforeLeave, route, onBack, snapshot, registerBackHandler, navigationTrigger, navigationRevision, onNavigationPageChange, onOpenSetup, onReturnToSetup, onOpenProjects, originGoal, returnLabel, initialProjectId, localDraft, onLocalDraftChange }: Props) {
+  const pageLeaveGuard = useRef<PermissionLeaveGuard | null>(null);
+  const registerPageLeave = useCallback((guard: PermissionLeaveGuard | null) => {
+    pageLeaveGuard.current = guard; registerBeforeLeave?.(guard);
+  }, [registerBeforeLeave]);
+  const registerFormBeforeLeave = useCallback<RegisterFormBeforeLeave>(guard => {
+    registerPageLeave(guard ? leave => { guard(leave); return true; } : null);
+  }, [registerPageLeave]);
+  const leavePage = (next: () => void) => { if (!pageLeaveGuard.current?.(next)) next(); };
+  useEffect(() => () => registerBeforeLeave?.(null), [registerBeforeLeave]);
   const phonePresentation = useRef('list');
   const state: Data = { ...object(snapshot.state), webWorkspaceResumeRevision: Number(snapshot.view?.resumeRevision || 0), webWorkspaceTaskOpen: !!snapshot.view?.taskId, webWorkspaceSection: snapshot.view?.section };
   const commands = snapshot.capabilities?.commands || [];
@@ -1622,8 +1632,8 @@ export default function Secondary({ teamAttentionFocus, onTeamAttentionConsumed,
     }
   };
   const rememberScroll = () => scrollPositions.current.set(page + ((page === 'models' || page === 'model-settings') ? ':' + modelView.kind + ':' + (modelView.id || '') : ''), scroll.current?.scrollTop || 0);
-  const navigate = (next: string, candidate: LearningCandidateTarget | null = null) => { rememberScroll(); generation.current++; trail.current.push({ page, query, modelView, modelTrail: [...modelTrail.current], candidateTarget }); modelTrail.current = []; setNotice(''); setError(''); setQuery(''); setModelView({ kind: 'list' }); setModelHostSection(next === 'proxy' ? 'proxy' : 'models'); setCandidateTarget(candidate); setPage(next); };
-  const switchWorkspacePage = (next: string) => {
+  const navigate = (next: string, candidate: LearningCandidateTarget | null = null) => leavePage(() => { rememberScroll(); generation.current++; trail.current.push({ page, query, modelView, modelTrail: [...modelTrail.current], candidateTarget }); modelTrail.current = []; setNotice(''); setError(''); setQuery(''); setModelView({ kind: 'list' }); setModelHostSection(next === 'proxy' ? 'proxy' : 'models'); setCandidateTarget(candidate); setPage(next); });
+  const switchWorkspacePage = (next: string) => leavePage(() => {
     if (next === workspacePageForRoute(page)) return;
     rememberScroll(); generation.current++;
     const family = workspaceForRoute(page)?.key;
@@ -1632,7 +1642,7 @@ export default function Secondary({ teamAttentionFocus, onTeamAttentionConsumed,
     trail.current = trail.current.filter(item => workspaceForRoute(item.page)?.key !== family);
     modelTrail.current = []; setNotice(''); setError(''); setQuery('');
     setModelView({ kind: 'list' }); setCandidateTarget(null); setPage(next);
-  };
+  });
   const returnToPhone = () => {
     rememberScroll(); generation.current++;
     // Returning from setup consumes its original phone entry, rather than
@@ -1698,6 +1708,7 @@ export default function Secondary({ teamAttentionFocus, onTeamAttentionConsumed,
   const filtered = settingsEntries.filter(item => (item.title + item.detail + item.searchText).toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const viewKey = page + (isModelPage ? ':' + modelView.kind + ':' + (modelView.id || '') : '');
   useLayoutEffect(() => {
+    if (page === 'capabilities') return; // Its list/detail journey restores its own saved position.
     const element = scroll.current;
     if (element) element.scrollTop = scrollPositions.current.get(viewKey) || 0;
   }, [viewKey]);
@@ -1705,8 +1716,7 @@ export default function Secondary({ teamAttentionFocus, onTeamAttentionConsumed,
   const modelBrowseActive = ['list', 'catalog', 'model'].includes(modelView.kind);
   const modelParent = modelTrail.current.at(-1)?.kind;
   const modelBackLabel = modelParent === 'connections' ? '返回连接管理' : modelParent === 'connection' ? '返回连接详情' : modelParent === 'catalog' ? '返回模型目录' : '返回模型与连接';
-  const consumeBack = () => {
-    if (transientBack.current?.()) return true;
+  const consumePageBack = () => {
     rememberScroll();
     if (isModelPage && modelView.kind !== 'list') { generation.current++; setNotice(''); setError(''); setModelView(modelTrail.current.pop() || { kind: 'list' }); return true; }
     const previous = trail.current.pop();
@@ -1715,6 +1725,11 @@ export default function Secondary({ teamAttentionFocus, onTeamAttentionConsumed,
     if (workspace && workspaceForRoute(normalize(route))?.key === workspace.key) return false;
     if (page === 'settings' || page === 'connections') return false;
     generation.current++; setCandidateTarget(null); setPage(page === 'background' ? 'phone' : workspace?.route || 'settings'); setModelView({ kind: 'list' }); return true;
+  };
+  const consumeBack = () => {
+    if (transientBack.current?.()) return true;
+    if (pageLeaveGuard.current?.(() => { if (!consumePageBack()) onBack(); })) return true;
+    return consumePageBack();
   };
   // Both the Android back event and the visible back button consume the same
   // current layer. Only the settings root delegates to the enclosing app.
@@ -1731,7 +1746,7 @@ export default function Secondary({ teamAttentionFocus, onTeamAttentionConsumed,
       {notice && <p className="pw-request-notice" role="status">{notice}</p>}
       {(error || domainError) && <p className="pw-field-error" role="alert">{error || domainError}</p>}
       <div className="pw-secondary-page" data-secondary-view={viewKey}>
-        {page === 'capabilities' ? <CapabilitiesWorkspace state={state} onNavigate={navigate} onPrepare={onOpenSetup} run={run} supported={supported} registerBack={registerTransientBack} registerBeforeLeave={registerBeforeLeave} /> : (page === 'settings' || page === 'connections') ? <div className="pw-settings-home pw-settings-preferences">
+        {page === 'capabilities' ? <CapabilitiesWorkspace memory={capabilityMemory} onStartWork={onStartCapability} state={state} onNavigate={navigate} onPrepare={onOpenSetup} run={run} supported={supported} registerBack={registerTransientBack} registerBeforeLeave={registerPageLeave} /> : (page === 'settings' || page === 'connections') ? <div className="pw-settings-home pw-settings-preferences">
           <SearchField className="pw-secondary-search" data-input-size="medium" aria-label="搜索设置" placeholder="搜索设置" value={query} onChange={setQuery} shape="rounded" />
           {query.trim() ? <section className="pw-settings-results" aria-label="匹配的设置">{settingRows(filtered)}{filtered.length === 0 && <Empty>没有匹配的设置。</Empty>}</section>
             : <div className="pw-settings-categories">{SETTINGS_GROUPS.map(group => <section key={group.id} className="pw-settings-category" data-settings-group={group.id} aria-label={group.title}><h2>{group.title}</h2><div className="pw-settings-category-content">{settingRows(group.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}{group.id === 'privacy' && <div className="pw-settings-execution" aria-label="执行控制"><ExecutionControls state={state} supported={supported} run={run}/></div>}</div></section>)}</div>}
@@ -1751,7 +1766,7 @@ export default function Secondary({ teamAttentionFocus, onTeamAttentionConsumed,
           : page === 'usage' ? <UsageWorkspace supported={supported} registerTransientBack={registerTransientBack} records={<HistoryPage usage supported={supported} run={run}/>} renderBudget={(onEditingChange, registerBudgetBack) => <TokenBudgetsWorkspace supported={supported} registerTransientBack={registerBudgetBack} onEditingChange={onEditingChange}/>}/>
           : page === 'history' ? <HistoryPage key={page} usage={false} supported={supported} run={run} />
           : page === 'archives' || page === 'storage' ? <DataManagement key={page} kind={page} data={object(page === 'archives' ? state.ownerArchives : state.projectStorage)} supported={supported} run={run} registerTransientBack={registerTransientBack} navigate={navigate} />
-          : domain ? <DomainPage onTeamAttentionConsumed={onTeamAttentionConsumed} teamAttentionFocus={teamAttentionFocus} key={page === 'local' ? page + ':' + (navigationRevision || 0) : page} domain={page} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} candidateTarget={candidateTarget} onReviewCandidate={target => navigate('memoryReview', target)} onOpenModels={() => navigate('model-settings')} onNavigate={navigate} onPrepareTools={onOpenSetup?()=>onOpenSetup('tools'):undefined} onOpenProjects={onOpenProjects} initialProjectId={initialProjectId} localDraft={localDraft} onLocalDraftChange={onLocalDraftChange} alreadyShownError={error || domainError} />
+          : domain ? <DomainPage registerFormBeforeLeave={registerFormBeforeLeave} onOpenConnections={() => navigate('channels')} onTeamAttentionConsumed={onTeamAttentionConsumed} teamAttentionFocus={teamAttentionFocus} key={page === 'local' ? page + ':' + (navigationRevision || 0) : page} domain={page} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} candidateTarget={candidateTarget} onReviewCandidate={target => navigate('memoryReview', target)} onOpenModels={() => navigate('model-settings')} onNavigate={navigate} onPrepareTools={onOpenSetup?()=>onOpenSetup('tools'):undefined} onOpenProjects={onOpenProjects} initialProjectId={initialProjectId} localDraft={localDraft} onLocalDraftChange={onLocalDraftChange} alreadyShownError={error || domainError} />
           : <Empty>此页面暂不可用，请从导航重新打开。</Empty>}
       </div>
     </div>;

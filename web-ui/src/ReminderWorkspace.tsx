@@ -5,6 +5,8 @@ import './reminder-workspace.css';
 import { useSurfaceEnter } from './library/surface-motion';
 import { MotionFeedback, useCollectionMotion } from './library/journey-motion';
 import { PressButton } from './library/press';
+import { CalendarDateTimeFields } from './CalendarDateTimeFields';
+import { FormDraftNotice, useFormDrafts, type RegisterBeforeLeave } from './form-drafts';
 import { WheelTimeField } from './forms-library/uiux/WheelTimeField';
 import { Accordion, AccordionItem, Button, CheckboxField, SearchField, SelectField, SettingsDialog, StretchSwitch, TextAreaField, TextField } from './forms-library';
 import { reminderDeleteWarning, reminderDraft, reminderReviewPayload, reminderRuleState, reminderSubmissionResult, reminderTiming, type ReminderDraft, type ReminderIntent, type ReminderSubmission } from './reminder-contract';
@@ -18,15 +20,17 @@ const types = [{ id: 'once', label: '一次' }, { id: 'interval', label: '固定
 const goalState = (state: string) => ({ succeeded: '已由原结果确认完成', running: '执行中', paused: '等待你核对或授权', waiting_user: '等待你核对或授权', awaiting_user: '等待你核对或授权', awaiting_authorization: '等待你核对或授权', failed: '执行失败，请查看原任务', cancelled: '已取消', stopping: '正在停止，尚未确认释放', expired: '有效时间已过', missed_window: '有效时间已过' } as Data)[state] || '仍需核对，尚无完成确认';
 
 /** Existing forms, list hierarchy and host authority. No second scheduler or local saved records. */
-export default function ReminderWorkspace({ state, data, supported, run, registerTransientBack }: {
+export default function ReminderWorkspace({ state, data, supported, run, registerTransientBack, registerBeforeLeave }: {
   state: Data; data: Data; supported: (action: string) => boolean; run: Run;
-  registerTransientBack: (handler: (() => boolean) | null) => void;
+  registerTransientBack: (handler: (() => boolean) | null) => void; registerBeforeLeave?: RegisterBeforeLeave;
 }) {
+  const formDraft = useFormDrafts(run, 'reminders', registerBeforeLeave);
   const rules = array(data.rules);
   const hasRules = Array.isArray(data.rules);
   const [editor, setEditor] = useState<Editor | null>(null), [review, setReview] = useState<Data | null>(null);
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [requesting, setRequesting] = useState(false);
   const [submission, setSubmission] = useState<ReminderSubmission | null>(null), [uncertain, setUncertain] = useState(false);
+  const [checkRequests, setCheckRequests] = useState<{ list: string; receipts: string } | null>(null);
   const [selectedId, setSelectedId] = useState('');
   const [query, setQuery] = useState(''), [filter, setFilter] = useState('all');
   const selectedRule = rules.find(rule => rule.id === selectedId) || null;
@@ -51,11 +55,11 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
       (target || root.current)?.focus({ preventScroll: true }); returnRule.current = '';
     }
   }, [selectedRule?.id, reading]);
-  const refresh = async () => { await Promise.all([run('automation.list'), run('automation.receipts')]); };
+  const refresh = async () => { const [list, receipts] = await Promise.all([run('automation.list'), run('automation.receipts')]); if (uncertain && list?.requestId && receipts?.requestId) setCheckRequests({ list: list.requestId, receipts: receipts.requestId }); };
   const close = () => { generation.current++; setEditor(null); setReview(null); setError(''); setAdvanced(false); };
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; generation.current++; }; }, []);
   useEffect(() => {
-    registerTransientBack(review ? () => { generation.current++; setReview(null); return true; } : editor ? () => { close(); return true; } : selectedRule ? () => { setSelectedId(''); return true; } : null);
+    registerTransientBack(review ? () => { generation.current++; setReview(null); return true; } : editor ? () => { formDraft.guard(close); return true; } : selectedRule ? () => { setSelectedId(''); return true; } : null);
     return () => registerTransientBack(null);
   }, [Boolean(review), Boolean(editor), selectedRule?.id, registerTransientBack]);
   useEffect(() => {
@@ -64,14 +68,16 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
     if (result.kind === 'waiting') return;
     setSubmission(null); setNotice(result.message);
     if (result.kind === 'failed') { setUncertain(true); setError(result.message); }
-    else { setUncertain(false); close(); void refresh().catch(() => {}); }
+    else { setUncertain(false); if (submission.command === 'save') formDraft.discard(close); else close(); void refresh().catch(() => {}); }
   }, [submission, state]);
   const open = (intent: ReminderIntent, original: Data | null = null) => {
-    if (pending || locked.current) return;
+    if (pending || locked.current || formDraft.loading) return;
     generation.current++; setError(''); setReview(null); setAdvanced(false);
     const draft = reminderDraft(original, intent, Intl.DateTimeFormat().resolvedOptions().timeZone);
-    setEditor({ intent, original: original ? structuredClone(original) : null, draft, initialTiming: reminderTiming(draft) });
+    void formDraft.open('owner', intent + ':' + (original?.id || 'new'), String(original?.revision || 'new'), draft).then(saved => { if (saved && mounted.current) setEditor({ intent, original: original ? structuredClone(original) : null, draft: saved, initialTiming: reminderTiming(draft) }); });
   };
+  useEffect(() => { if (editor) formDraft.update(editor.draft); }, [editor, formDraft.update]);
+  useEffect(() => { if (formDraft.requiresRecheck) setUncertain(true); }, [formDraft.requiresRecheck]);
   const change = <K extends keyof ReminderDraft>(key: K, value: ReminderDraft[K]) => {
     generation.current++; setReview(null); setError('');
     setEditor(current => current ? { ...current, draft: { ...current.draft, [key]: value } } : null);
@@ -84,7 +90,7 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
     finally { locked.current = false; if (mounted.current) setRequesting(false); }
   };
   const preview = () => {
-    if (!editor) return;
+    if (!editor || formDraft.stale || !!formDraft.conflict || formDraft.requiresRecheck) return;
     try { void prepare('automation.reviewSchedule', reminderReviewPayload(editor.draft, editor.intent, editor.original, editor.initialTiming)); }
     catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
   };
@@ -93,6 +99,8 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
     // Clear before calling the bridge. An ambiguous acknowledgement cannot replay this review.
     const handle = review.reviewHandle; setReview(null); locked.current = true; setRequesting(true); setError('');
     try {
+      if (editor) await formDraft.markSubmitted();
+      if (!mounted.current || document.visibilityState !== 'visible') return;
       const result = await run('automation.confirmReview', { reviewHandle: handle });
       if (!mounted.current) return;
       if (!result?.requestId || !['save', 'setEnabled', 'delete'].includes(result.command)) throw new Error('原操作登记结果尚未确认。');
@@ -111,6 +119,8 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
   const receiptTiming = (receipt: Data) => <dl className="pw-reminder-receipt-facts">
     {receipt.occurrenceAt > 0 && <><div><dt>计划时间</dt><dd>{date(receipt.occurrenceAt)}</dd></div><div><dt>领取延后</dt><dd>{Math.max(0, (receipt.claimedAt || receipt.occurrenceAt) - receipt.occurrenceAt) / 1000} 秒</dd></div></>}
   </dl>;
+  const unknownRead = !!checkRequests && !reading && !readingError && !receiptsBusy && !receiptsError && hasRules && receiptsReady && state.moduleResultInputs?.['automation.list']?._requestId === checkRequests.list && state.moduleResultInputs?.['automation.receipts']?._requestId === checkRequests.receipts;
+  const unknownControls = uncertain && <div className="pw-field-hint"><p>提交结果尚待核对。先读取已有提醒与投递记录；不会自动重试。</p><div className="pw-form-actions"><Button variant="secondary" disabled={reading || receiptsBusy} onClick={() => { void refresh().catch(failure => setError((failure as Error).message)); }}>读取原记录核对结果</Button><Button variant="secondary" disabled={!unknownRead} onClick={() => { formDraft.clearSubmitted(); setUncertain(false); setCheckRequests(null); setError(''); }}>已核对原记录，继续编辑</Button></div></div>;
   const receiptRow = (receipt: Data, showTiming = true) => <article key={receipt.id} className="pw-reminder-record pw-reminder-result" data-reminder-receipt-id={receipt.id} data-motion-key={`${showTiming ? 'history' : 'attention'}:${receipt.id}`}>
     <header><h3>{receipt.title || '原发生记录'}</h3><span className="pw-reminder-result-state">{receipt.status === 'delivery_unknown' ? '投递未知' : receipt.status === 'awaiting_user' ? '等待你查看' : receipt.status === 'blocked_notifications' ? '通知受阻' : receipt.status}</span></header>
     {receipt.message && <p className="pw-reminder-result-message">{receipt.message}</p>}
@@ -149,8 +159,9 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
     <section className="pw-settings-section" aria-label="提醒规则">
       {selectedRule && <Button variant="ghost" leadingIcon={IconChevronLeft} disabled={pending} onClick={() => setSelectedId('')}>返回提醒列表</Button>}
       {selectedRule ? <header className="pw-followup-heading"><div><h2 ref={heading} tabIndex={-1}>{selectedRule.title || '未命名提醒'}</h2></div>{refreshButton}</header> : !emptyDirectory && <div className="pw-reminder-directory-toolbar">{hasRules && rules.length > 0 && <p>{rules.length} 条提醒</p>}<div className="pw-reminder-directory-actions">{refreshButton}{newReminder}</div></div>}
-      {notice && <MotionFeedback identity={notice} className="pw-field-hint" role="status">{notice}</MotionFeedback>}
-      {uncertain && <p className="pw-field-hint">本页保留未确认提交，暂不开放再次写入。请核对已有提醒与原回执后重新进入页面。</p>}
+      {!editor && <FormDraftNotice draft={formDraft} />}
+    {notice && <MotionFeedback identity={notice} className="pw-field-hint" role="status">{notice}</MotionFeedback>}
+      {unknownControls}
       {error && <MotionFeedback identity={error} className="pw-field-error" role="alert">{error}</MotionFeedback>}
       {!selectedRule && receiptsReady && attentionReceipts.length > 0 && <section className="pw-reminder-attention" aria-label="需要核对的提醒结果">
         <header className="pw-reminder-attention-heading"><div><h3>需要你核对</h3><span>{attentionReceipts.length}</span></div><Button variant="ghost" disabled={receiptsBusy || !supported('automation.receipts')} onClick={() => { void run('automation.receipts').catch(failure => setError(failure instanceof Error ? failure.message : String(failure))); }}>{receiptsBusy ? '核对中…' : '核对结果'}</Button></header>
@@ -198,7 +209,7 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
       {!receiptsBusy && !receiptsError && receipts.length > receiptLimit && <Button variant="secondary" onClick={() => setReceiptLimit(value => value + 10)}>显示更早记录</Button>}
     </section>
     </AccordionItem></Accordion>}
-    <SettingsDialog isOpen={Boolean(editor || review)} title={review ? review.command === 'save' ? '核对提醒计划' : review.command === 'delete' ? '删除这个提醒？' : review.enabled ? '启用这个提醒？' : '暂停这个提醒？' : editor?.intent === 'edit' ? '编辑提醒' : editor?.intent === 'reschedule' ? '重新安排提醒' : '新建提醒'} onClose={() => { if (review) { generation.current++; setReview(null); } else close(); }}><div className={'pw-knowledge-dialog' + (review ? '' : ' pw-knowledge-edit-dialog')}>
+    <SettingsDialog isOpen={Boolean(editor || review)} title={review ? review.command === 'save' ? '核对提醒计划' : review.command === 'delete' ? '删除这个提醒？' : review.enabled ? '启用这个提醒？' : '暂停这个提醒？' : editor?.intent === 'edit' ? '编辑提醒' : editor?.intent === 'reschedule' ? '重新安排提醒' : '新建提醒'} onClose={() => { if (review) { generation.current++; setReview(null); } else formDraft.guard(close); }}><div className={'pw-knowledge-dialog' + (review ? '' : ' pw-knowledge-edit-dialog')}>
       {review ? <>
         <p>{review.rule?.title}</p><p className="pw-field-hint">{review.intent === 'reschedule' ? '来源规则版本：' + editor?.original?.revision + '，将新建独立提醒。' : review.rule?.revision ? '原规则版本：' + review.rule.revision : '将新建独立提醒。'}</p>{review.rule?.kind === 'phone_goal' && <p className="pw-receipt-copy">手机任务目标：{review.rule.goal}</p>}
         {array(review.preview?.occurrences).map((occurrence, index) => <div key={index} className="pw-selected-object"><p>预计：{String(occurrence.local || '').replace('T', ' ')} · {occurrence.zone} · {occurrence.offset}</p>{occurrence.dstResolution === 'gap_shifted_forward' && <p className="pw-field-hint">原当地时间不存在，已按策略向后移。</p>}{occurrence.dstResolution === 'overlap_earlier' && <p className="pw-field-hint">当地时间重复，使用较早一次。</p>}{occurrence.dstResolution === 'overlap_later' && <p className="pw-field-hint">当地时间重复，使用较晚一次。</p>}</div>)}
@@ -209,19 +220,20 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
         {editor!.intent === 'reschedule' && <p className="pw-field-hint">新建一个未来提醒，原发生与结果保留。请核对目标和新时间。</p>}
         {editor!.intent === 'edit' && <p className="pw-field-hint">正在编辑原规则版本 {editor!.original?.revision}。仅改内容时保留原安排与固定起点。</p>}
         {!originalCurrent && <p className="pw-field-error" role="alert">原提醒已变化或来源暂不可用，请关闭后刷新核对。</p>}
+        <FormDraftNotice draft={formDraft} />{unknownControls}
         <div className="pw-form-grid"><section className="pw-knowledge-form-section"><h3>内容与时间</h3><TextAreaField label="提醒内容" value={draft.title} onChange={value => change('title', value.slice(0, 200))} isDisabled={pending} />
           <SelectField label="时间安排" value={draft.type} options={types} onChange={value => change('type', value)} isDisabled={pending} />
-          {calendar ? <>{draft.type === 'cron' ? <TextField label="Cron：分 时 日 月 周" value={draft.cron} onChange={value => change('cron', value.slice(0, 512))} isDisabled={pending} hint="例如 0 9 * * 1-5 为工作日 09:00。支持数字、*、逗号、递增范围和步长；周日为 0。日与周至少一项不限制。" /> : <WheelTimeField label="当地时间 HH:mm" value={draft.time} onChange={value => change('time', value.slice(0, 5))} isDisabled={pending} />}<TextField label="时区" value={draft.zone} onChange={value => change('zone', value.slice(0, 80))} isDisabled={pending} hint="例如 Asia/Shanghai。预览由手机核对时区与夏令时。" /></> : <TextField label={draft.type === 'interval' ? '每隔多少分钟' : '多少分钟后'} inputMode="numeric" value={draft.minutes} onChange={value => change('minutes', value.replace(/\D/g, '').slice(0, 6))} isDisabled={pending} hint="1 至 525600 分钟。新建或修改时间后，从本次核对时计算首次时间。" />}
+          {draft.type === 'once' ? <CalendarDateTimeFields value={draft} disabled={pending} onChange={value => { generation.current++; setReview(null); setError(''); setEditor(current => current ? { ...current, draft: { ...current.draft, ...value } } : null); }} /> : calendar ? <>{draft.type === 'cron' ? <TextField label="Cron：分 时 日 月 周" value={draft.cron} onChange={value => change('cron', value.slice(0, 512))} isDisabled={pending} hint="例如 0 9 * * 1-5 为工作日 09:00。支持数字、*、逗号、递增范围和步长；周日为 0。日与周至少一项不限制。" /> : <WheelTimeField label="当地时间 HH:mm" value={draft.time} onChange={value => change('time', value.slice(0, 5))} isDisabled={pending} />}<TextField label="时区" value={draft.zone} onChange={value => change('zone', value.slice(0, 80))} isDisabled={pending} hint="例如 Asia/Shanghai。预览由手机核对时区与夏令时。" /></> : <TextField label={draft.type === 'interval' ? '每隔多少分钟' : '多少分钟后'} inputMode="numeric" value={draft.minutes} onChange={value => change('minutes', value.replace(/\D/g, '').slice(0, 6))} isDisabled={pending} hint="1 至 525600 分钟。新建或修改时间后，从本次核对时计算首次时间。" />}
           {draft.type === 'weekly' && <fieldset disabled={pending}><legend className="pw-field-label">每周日期</legend><div className="pw-form-actions">{['周一', '周二', '周三', '周四', '周五', '周六', '周日'].map((label, index) => <CheckboxField key={label} isSelected={draft.weekdays.includes(index + 1)} onChange={checked => change('weekdays', checked ? [...draft.weekdays, index + 1] : draft.weekdays.filter(value => value !== index + 1))}>{label}</CheckboxField>)}</div></fieldset>}
           {draft.type === 'monthly' && <><TextField label="每月几日（1–31）" inputMode="numeric" value={draft.monthDay} onChange={value => change('monthDay', value.replace(/\D/g, '').slice(0, 2))} isDisabled={pending} /><StretchSwitch label="短月使用最后一天" description={draft.lastDay ? '例如 31 日遇到 2 月，使用 2 月最后一天。' : '当月没有所选日期时，跳过当月。'} checked={draft.lastDay} onChange={value => change('lastDay', value)} disabled={pending} /></>}
-          </section><section className="pw-knowledge-form-section"><h3>提醒后的动作</h3><StretchSwitch label="提醒我开始手机任务" description="只提醒查看目标，不会自动操作屏幕。" checked={draft.phone} onChange={value => change('phone', value)} disabled={pending} />{draft.phone && <TextAreaField label="手机任务目标" value={draft.goal} onChange={value => change('goal', value.slice(0, 4000))} isDisabled={pending} />}
+          </section><section className="pw-knowledge-form-section"><h3>到时做什么</h3><SelectField label="职责类型" value={draft.phone ? 'phone' : 'notice'} options={[{ id: 'notice', label: '提醒我 · 发送本机通知', description: '适合记得一件事或一个时间。' }, { id: 'phone', label: '提醒我开始手机任务', description: '到时提醒查看目标，由你明确开始。' }]} onChange={value => change('phone', value === 'phone')} isDisabled={pending} /><p className="pw-field-hint">保存只安排提醒，不会自动操作手机。</p>{draft.phone && <TextAreaField label="手机任务目标" value={draft.goal} onChange={value => change('goal', value.slice(0, 4000))} isDisabled={pending} />}
           </section><Accordion variant="divided" expandedKeys={advanced ? ['advanced'] : []} onExpandedChange={keys => setAdvanced(keys.has('advanced'))}><AccordionItem id="advanced" title="高级选项" description="错过安排、任务重叠与夏令时策略">
           {advanced && <>{calendar && <><StretchSwitch label="不存在的当地时间跳过" checked={draft.skipGap} onChange={value => change('skipGap', value)} disabled={pending} /><StretchSwitch label="重复时间选择较晚一次" checked={draft.laterOverlap} onChange={value => change('laterOverlap', value)} disabled={pending} /></>}{draft.type !== 'once' && <><SelectField label="错过安排时间时" value={draft.misfire} onChange={value => change('misfire', value)} isDisabled={pending} options={[{ id: 'skip', label: '跳过旧实例，只处理最新一次' }, { id: 'coalesce', label: '合并错过的实例为一次' }, { id: 'catch_up', label: '按原安排逐次补处理' }]} />{draft.misfire === 'catch_up' && <TextField label="本轮最多补处理次数（1–20）" inputMode="numeric" value={draft.maxCatchUp} onChange={value => change('maxCatchUp', value.replace(/\D/g, '').slice(0, 2))} isDisabled={pending} />}<SelectField label="原任务仍未结束时" value={draft.overlap} onChange={value => change('overlap', value)} isDisabled={pending} options={[{ id: 'buffer_one', label: '保留一个待处理实例' }, { id: 'skip', label: '跳过新实例' }, { id: 'allow', label: '允许并行，仍各自需要原任务授权' }]} /></>}</>}
           </AccordionItem></Accordion>
         </div>
         {error && <MotionFeedback identity={error} className="pw-field-error" role="alert">{error}</MotionFeedback>}
         {(submission || requesting) && <p className="pw-field-hint" role="status">{requesting ? '正在核对或登记请求…' : '请求已登记，等待原操作回执。'}</p>}
-        <div className="pw-form-actions pw-knowledge-edit-actions"><Button variant="secondary" onClick={close}>{pending ? '关闭并核对记录' : '取消'}</Button><PressButton compact disabled={pending || reading || readingError || !originalCurrent || !supported('automation.reviewSchedule')} onClick={preview}>核对提醒计划</PressButton></div>
+        <div className="pw-form-actions pw-knowledge-edit-actions"><Button variant="secondary" onClick={() => formDraft.guard(close)}>{pending ? '返回并核对记录' : '返回并保留草稿'}</Button><Button variant="ghost" disabled={pending} onClick={() => formDraft.discard(close)}>放弃草稿</Button><PressButton compact disabled={pending || formDraft.stale || !!formDraft.conflict || formDraft.requiresRecheck || reading || readingError || !originalCurrent || !supported('automation.reviewSchedule')} onClick={preview}>核对提醒计划</PressButton></div>
       </>}
     </div></SettingsDialog>
   </div>;

@@ -154,17 +154,17 @@
   min-height: var(--pw-composer-hit);
   padding: 0;
 }
-.pw-composer-host.pw-squircle-composer .pw-composer-trailing { justify-content: flex-end; margin-inline-start: auto; }
-.pw-composer-host.pw-squircle-composer .pw-composer-controls { flex: 0 0 auto; align-self: center; min-width: 0; }
-.pw-composer-host.pw-squircle-composer .afa-toolbar { position: relative; }
+.pw-composer-host.pw-squircle-composer .pw-composer-trailing { flex: 1 1 172px; flex-wrap: nowrap; min-width: min-content; justify-content: flex-end; margin-inline-start: auto; }
+.pw-composer-host.pw-squircle-composer .pw-composer-controls { flex: 0 1 auto; align-self: center; min-width: min-content; }
+.pw-composer-host.pw-squircle-composer .afa-toolbar { position: relative; flex-wrap: nowrap; }
 .pw-composer-motion-control {
   display: grid; place-items: center; flex: 0 0 var(--pw-composer-hit);
   width: var(--pw-composer-hit); height: var(--pw-composer-hit);
 }
 .pw-composer-motion-control[inert] { pointer-events: none; }
 .pw-composer-host.pw-squircle-composer .pw-composer-intent > .pw-grow { display: none; }
-.pw-composer-host.pw-squircle-composer .pw-conversation-model-controls { display: flex; flex-wrap: nowrap; gap: 0; min-width: 0; max-width: none; }
-.pw-composer-host.pw-squircle-composer .pw-composer-toolbar :is(.pw-composer-intent > button, .afa-iconbtn, .afa-stop, .pw-conversation-model-chip, .pw-conversation-reasoning-chip),
+.pw-composer-host.pw-squircle-composer .pw-conversation-model-controls { display: flex; flex-wrap: nowrap; gap: 0; min-width: 0; max-width: 100%; }
+.pw-composer-host.pw-squircle-composer .pw-composer-toolbar :is(.pw-composer-intent > button, .afa-iconbtn, .afa-stop, .pw-conversation-reasoning-chip),
 .pw-composer-host.pw-squircle-composer .afa-recording .afa-iconbtn {
   box-sizing: border-box;
   display: grid;
@@ -197,18 +197,41 @@
   box-shadow: none;
 }
 .pw-composer-host.pw-squircle-composer .pw-composer-toolbar :is(.pw-composer-intent, .afa-toolbar) svg { width: 20px; height: 20px; }
-/* Keep BoardUI's label wrapper; only its text and secondary glyphs are hidden. */
+/* The model's current value remains readable. Only familiar reasoning glyphs
+ * use an icon-only control; its exact native value is named in the picker. */
 .pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button::before { display: none; }
 .pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button > span {
   display: flex; align-items: center; justify-content: center; gap: 0;
   flex: 0 0 auto; min-width: 0; padding: 0;
 }
-.pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button > span > :is(span, b),
-.pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button > span > svg:not(:first-child),
-.pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button > b,
-.pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button > svg:not(:first-child) { display: none; }
-.pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button > svg:first-child,
-.pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button > span > svg:first-child { display: block; flex: none; width: 20px; height: 20px; }
+.pw-composer-host.pw-squircle-composer .pw-conversation-reasoning-chip > span > :is(span, b),
+.pw-composer-host.pw-squircle-composer .pw-conversation-reasoning-chip > span > svg:not(:first-child),
+.pw-composer-host.pw-squircle-composer .pw-conversation-reasoning-chip > b,
+.pw-composer-host.pw-squircle-composer .pw-conversation-reasoning-chip > svg:not(:first-child) { display: none; }
+.pw-composer-host.pw-squircle-composer .pw-conversation-reasoning-chip > svg:first-child,
+.pw-composer-host.pw-squircle-composer .pw-conversation-reasoning-chip > span > svg:first-child { display: block; flex: none; width: 20px; height: 20px; }
+.pw-composer-host.pw-squircle-composer .pw-conversation-model-chip {
+  display: flex; flex: 0 1 auto; width: auto; min-width: 84px; max-width: 152px;
+  min-height: var(--pw-composer-hit); height: auto; padding: 8px; border: 0;
+  border-radius: 14px; background: transparent; color: var(--pw-copy); box-shadow: none;
+  font: 500 12px/20px var(--pw-font);
+}
+.pw-composer-host.pw-squircle-composer .pw-conversation-model-controls .pw-conversation-model-chip > span { flex: 1 1 auto; min-width: 0; max-width: 100%; gap: 4px; overflow: hidden; }
+.pw-composer-host.pw-squircle-composer .pw-conversation-model-chip > span > svg:first-child { display: none; }
+.pw-composer-host.pw-squircle-composer .pw-conversation-model-chip-name { display: block; min-width: 0; max-width: 16ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pw-composer-host.pw-squircle-composer .pw-conversation-model-chip > span > svg:last-child { display: block; flex: none; width: 12px; height: 12px; }
+.pw-composer-host.pw-squircle-composer .pw-composer-toolbar .pw-composer-intent > .pw-input-mode-trigger { display: flex; flex: 0 0 auto; width: auto; min-width: 44px; max-width: 104px; padding: 8px; border-radius: 14px; font: 500 12px/20px var(--pw-font); }
+.pw-composer-host.pw-squircle-composer .pw-composer-toolbar .pw-composer-intent > .pw-input-mode-trigger > span { gap: 4px; }
+.pw-composer-host.pw-squircle-composer .pw-composer-toolbar .pw-composer-intent > .pw-input-mode-trigger svg { width: 12px; height: 12px; }
+.pw-composer-work-options { max-width: min(360px, calc(100vw - 32px)); }
+.pw-composer-work-options section { display: grid; gap: 8px; padding: 8px 0; }
+.pw-composer-work-options section + section { margin-top: 8px; }
+.pw-composer-work-options section > p { margin: 0; color: var(--pw-copy); font: 400 12px/20px var(--pw-font); }
+.pw-composer-work-options .pw-composer-work-settings { gap: 2px; }
+.pw-composer-work-options .pw-composer-work-settings > button { justify-content: flex-start; min-height: 44px; white-space: normal; text-align: start; }
+@media (max-width: 359px) {
+ .pw-composer-host.pw-squircle-composer .pw-conversation-model-chip { width: 88px; min-width: 88px; max-width: 88px; padding-inline: 6px; }
+}
 .pw-composer-host.pw-squircle-composer .pw-composer-toolbar .pw-press {
   box-sizing: border-box;
   display: grid;

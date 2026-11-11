@@ -1,0 +1,28 @@
+/* The retained source/version workspace occupies a whole page. Vaul only owns
+ * focus isolation over its originating work; there is no swipe/outside dismissal. */
+.pw-file-page-underlay { position: fixed; inset: 0; z-index: 80; background: var(--pw-canvas); }
+.pw-drawer.pw-file-workspace.pw-file-page {
+  position: fixed; inset: 0; z-index: 81; width: 100%; max-width: none;
+  height: 100dvh; max-height: 100dvh; margin: 0; padding: 0;
+  border: 0; border-radius: 0; background: var(--pw-canvas); box-shadow: none;
+}
+.pw-file-page .pw-file-page-header { padding: max(12px, env(safe-area-inset-top)) max(16px, calc((100vw - 1040px) / 2)) 12px; gap: 12px; background: var(--pw-canvas); }
+.pw-file-page-header > div { display: grid; gap: 3px; min-width: 0; }
+.pw-file-page-header h2 { margin: 0; font: 550 18px/26px var(--pw-font); overflow-wrap: anywhere; }
+.pw-file-page-header p { margin: 0; color: var(--pw-copy); font: 400 12px/20px var(--pw-font); }
+.pw-drawer.pw-file-workspace.pw-file-page .pw-file-page-scroll { width: 100%; padding: 16px max(20px, calc((100vw - 960px) / 2)) max(28px, env(safe-area-inset-bottom)); overscroll-behavior: contain; scroll-padding-block: 20px; }
+.pw-file-page .pw-file-page-scroll > * { width: 100%; max-width: 960px; margin-inline: auto; }
+.pw-file-page .pw-file-page-scroll > .pw-document-editor { max-width: 960px; }
+.pw-file-page .pw-document-body textarea { min-height: min(52dvh, 680px); font-size: 16px; line-height: 1.8; }
+.pw-file-page .pw-document-footer { bottom: -1px; background: var(--pw-canvas); padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+.pw-file-page .pw-attachment-object-heading { gap: 8px; }
+.pw-search-return { padding-inline: var(--pw-conversation-gutter,20px); }
+.pw-search-return > button { min-height: 44px; color: var(--pw-copy); }
+html[data-pocket-native-insets="true"] .pw-file-page .pw-file-page-header { padding-top: 12px; }
+html[data-pocket-native-insets="true"] .pw-drawer.pw-file-workspace.pw-file-page { padding-block: 0; }
+@media (max-width: 479px) {
+ .pw-file-page .pw-file-page-header { flex-wrap: wrap; column-gap: 8px; }
+ .pw-file-page-header > div { flex-basis: calc(100% - 104px); }
+ .pw-file-page-header > button:has(svg) { flex: none; }
+ .pw-file-page .pw-document-body textarea { min-height: 42dvh; }
+}

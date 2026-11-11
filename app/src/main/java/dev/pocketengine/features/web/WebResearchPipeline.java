@@ -62,6 +62,7 @@ public final class WebResearchPipeline {
         int resultLimit=strictInteger(args,"maxResults",8,1,MAX_RESULTS);
         JSONArray queries=args.getJSONArray("queries"),searches=new JSONArray(),pages=new JSONArray();
         LinkedHashMap<String,JSONObject> selected=new LinkedHashMap<>();
+        List<JSONArray> candidates=new ArrayList<>();
         int searchCalls=0,readAttempts=0,readSuccess=0;
         for(int i=0;i<queries.length();i++){
             original.check();
@@ -75,24 +76,31 @@ public final class WebResearchPipeline {
                     .put("code",answer.optString("code")).put("resultCount",answer.optInt("resultCount"));
             searches.put(turn);
             JSONArray found=answer.optJSONArray("results");
-            if(found==null)continue;
-            for(int j=0;j<found.length()&&selected.size()<resultLimit;j++){
-                JSONObject item=found.optJSONObject(j);
+            candidates.add(found==null?new JSONArray():found);
+        }
+        // Give each question a turn before taking a second hit from any question.
+        // The existing total result/read bounds still apply after deduplication.
+        for(int rank=0;rank<8&&selected.size()<resultLimit;rank++){
+            for(int query=0;query<candidates.size()&&selected.size()<resultLimit;query++){
+                original.check();
+                JSONObject item=candidates.get(query).optJSONObject(rank);
                 if(item==null||!item.has("url"))continue;
                 String url=item.getString("url");
                 // A search hit is not yet a verified document. The read path enforces
                 // DNS/public address/redirect policy independently.
                 if(!selected.containsKey(url))selected.put(url,new JSONObject(item.toString())
-                        .put("queryIndex",i).put("rank",j+1)
+                        .put("queryIndex",query).put("rank",rank+1)
                         .put("sourceRole","search_snippet_unverified"));
             }
         }
         JSONArray results=new JSONArray();
-        for(JSONObject item:selected.values())results.put(item);
+        int[] selectedCounts=new int[queries.length()],readCounts=new int[queries.length()],readSuccessCounts=new int[queries.length()];
+        for(JSONObject item:selected.values()){results.put(item);selectedCounts[item.getInt("queryIndex")]++;}
         for(JSONObject candidate:selected.values()){
             if(readAttempts>=pageLimit)break;
             original.check();
             readAttempts++;
+            int query=candidate.getInt("queryIndex");readCounts[query]++;
             String url=candidate.getString("url");
             JSONObject page;
             try {
@@ -102,6 +110,7 @@ public final class WebResearchPipeline {
                         .put("code","public_url_rejected");
             }
             JSONObject item=new JSONObject().put("url",url).put("title",candidate.optString("title"))
+                    .put("queryIndex",query).put("rank",candidate.getInt("rank"))
                     .put("status",page.optString("status","unavailable"))
                     .put("ok",page.optBoolean("ok")).put("verified",false)
                     .put("retrievedAt",page.optJSONObject("http")==null?JSONObject.NULL:
@@ -111,7 +120,7 @@ public final class WebResearchPipeline {
                         .put("text",page.optString("text"))
                         .put("http",page.getJSONObject("http"))
                         .put("rendered",false).put("sourceRole","public_http_text");
-                readSuccess++;
+                readSuccess++;readSuccessCounts[query]++;
             }else{
                 item.put("code",page.optString("code","read_unavailable"))
                         .put("sourceRole","unreadable_search_hit")
@@ -121,6 +130,8 @@ public final class WebResearchPipeline {
             }
             pages.put(item);
         }
+        for(int i=0;i<searches.length();i++)searches.getJSONObject(i)
+                .put("selectedResultCount",selectedCounts[i]).put("readAttempts",readCounts[i]).put("pagesRead",readSuccessCounts[i]);
         original.check();
         return new JSONObject().put("ok",searches.length()>0&&results.length()>0)
                 .put("status",results.length()>0?(readSuccess>0?"partially_read":"search_results_only"):"unavailable")

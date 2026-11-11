@@ -7,8 +7,13 @@ export type ButlerHandlingState = typeof states[number] | 'unread';
 /** Presentation of native work facts. Delivery is not proof that the butler
  * consumed a result, and this projection never creates an execution authority. */
 export function ownerWorkPresentation(value: unknown) {
-  const task = object(value), raw = object(task.raw), work = object(raw.ownerWork);
-  if (!text(task.id) || raw.id !== task.id || raw.actorId !== 'owner' || raw.spaceId !== 'private' || raw.executionRole !== 'owner_work') return null;
+  const task = object(value), raw = object(task.raw), result = object(raw.resultHandling);
+  if (!text(task.id) || raw.id !== task.id || raw.actorId !== 'owner' || raw.spaceId !== 'private') return null;
+  const nativeResult = raw.nativeResultHandling === true && result.format === 'pocketworld.owner-result-handling.v1'
+    && result.taskId === task.id && !!text(result.runId) && result.runId === raw.runId
+    && Number.isSafeInteger(result.epoch) && Number(result.epoch) > 0 && result.epoch === raw.coordinatorEpoch;
+  if (raw.executionRole !== 'owner_work' && !nativeResult) return null;
+  const work = nativeResult ? result : object(raw.ownerWork);
   const available = raw.contextAvailable !== false, handling = object(work.handling), contract = object(work.contract);
   const state: ButlerHandlingState = states.includes(handling.state as typeof states[number]) ? handling.state as typeof states[number] : 'unread';
   const entries = Array.isArray(work.deliveries) ? work.deliveries.map(object) : [];
@@ -20,14 +25,15 @@ export function ownerWorkPresentation(value: unknown) {
   };
   const handlingLabel = !available ? '原工作来源不可用' : labels[state];
   const reason = !available ? '原来源已删除、停用或暂不可核对。保留工作身份与允许的控制。' : text(handling.reason);
-  const resultAvailable = available && entries.some(row => row.available === true && !row.noticeKind);
+  const resultAvailable = available && (nativeResult ? work.resultAvailable === true : entries.some(row => row.available === true && !row.noticeKind));
   return {
     state, handlingLabel, reason, reportMessageId, resultAvailable,
+    conversationId: text(work.conversationId) || text(raw.conversationId),
     waitingForButler: available && ['pending', 'running'].includes(state),
     needsAttention: available && (state === 'needs_review' || state === 'unavailable' && resultAvailable && raw.cancelRequested !== true && !['cancelled', 'canceled', 'stopped'].includes(text(task.status))),
     delivered: available && state === 'reported' && !!reportMessageId,
     deliveryId: available ? text(handling.deliveryId) : '',
-    resultState: !available ? '来源不可用' : resultAvailable ? '执行结果已保存' : delivery?.available === false ? '原结果不可用' : !Array.isArray(work.deliveries) ? '结果详情尚未读取' : '尚无可核对的成果',
+    resultState: !available ? '来源不可用' : resultAvailable ? '执行结果已保存' : delivery?.available === false ? '原结果不可用' : nativeResult && typeof work.resultAvailable === 'boolean' ? '尚无可核对的成果' : !Array.isArray(work.deliveries) ? '结果详情尚未读取' : '尚无可核对的成果',
     contract: available ? {
       goal: text(contract.goal) || text(task.goal), deliverable: text(contract.deliverable),
       completionCriteria: text(contract.completionCriteria), constraints: text(contract.constraints),

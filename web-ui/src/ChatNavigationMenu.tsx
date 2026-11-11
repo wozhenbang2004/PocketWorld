@@ -1,5 +1,5 @@
 import type {ReactNode,Ref} from 'react';
-import { IconFolder, IconGrid, IconHistory, IconMore, IconNewChat, IconNotification, IconSettings, IconSparkles } from './icons';
+import { IconFolder, IconGrid, IconMore, IconNewChat, IconNotification, IconSearch, IconSettings, IconSparkles } from './icons';
 import {Button,IconButton} from './forms-library';
 import {Popover,PopoverTrigger} from './shell-library';
 import './chat-navigation.css';
@@ -35,7 +35,7 @@ export function ChatNavigationMenu({title,navigationTrigger,isOpen,onOpenChange,
     <div className="pw-chat-menu-actions">
      <Button variant="ghost" leadingIcon={IconSparkles} onClick={()=>choose(onHome)}>回到管家</Button>
      {onNewConversation&&<Button variant="ghost" leadingIcon={IconNewChat} disabled={submitting} onClick={()=>choose(onNewConversation)}>新对话</Button>}
-     <Button variant="ghost" leadingIcon={IconHistory} onClick={()=>choose(onConversations)}>对话列表</Button>
+     <Button variant="ghost" leadingIcon={IconSearch} onClick={()=>choose(onConversations)}>搜索工作</Button>
      {onOrganize&&<Button variant="ghost" leadingIcon={IconFolder} onClick={()=>choose(onOrganize)}>整理当前对话</Button>}
      {onMemory&&<Button variant="ghost" leadingIcon={IconSettings} onClick={()=>choose(onMemory)}>本对话的个人记忆</Button>}
     </div>

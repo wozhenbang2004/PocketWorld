@@ -68,10 +68,10 @@ internal class AttachmentOutcomeCoordinator(
     fun openGroupOperation(task:UiTask,operation:String){
         val origin=task.raw.optJSONObject("origin")?:return;cancel();restoredDocumentDraft=null;state=AttachmentOutcomeState(open=true,taskId=task.id,group=GroupResultAccess.Selection(origin.getString("requestId"),task.id,origin.getString("spaceId"),"","",origin.getString("audience"),origin.getString("visibility"),operation,""));refresh()
     }
-    fun openFile(meta:JSONObject) {
-        cancel();restoredDocumentDraft=null;state=AttachmentOutcomeState(open=true,pendingDocumentTask=pendingDocumentAction,pendingProcessingTask=pendingProcessingAction);val id=meta.optString("id");val sha=meta.optString("sha256")
+    fun openFile(meta:JSONObject,fromTask:String?=null) {
+        cancel();restoredDocumentDraft=null;state=AttachmentOutcomeState(open=true,taskId=fromTask,pendingDocumentTask=pendingDocumentAction,pendingProcessingTask=pendingProcessingAction);val id=meta.optString("id");val sha=meta.optString("sha256")
         work { control,_ ->
-            val actual=app.ownerOutcomeSnapshot(null,control);val file=(actual.optJSONArray("sources").objects()+actual.optJSONArray("artifacts").objects()).firstOrNull{it.optString("id")==id&&it.optString("sha256")==sha}?:throw SecurityException("文件当前版本不可核对，请刷新附件库")
+            val actual=app.ownerOutcomeSnapshot(fromTask,control);val file=(actual.optJSONArray("sources").objects()+actual.optJSONArray("artifacts").objects()).firstOrNull{it.optString("id")==id&&it.optString("sha256")==sha&&it.optString("availability")=="available"}?:throw SecurityException("文件当前版本不可核对，请刷新附件库")
             actual to file
         }
     }

@@ -50,6 +50,8 @@ export const workIdentityKey = (value: WorkIdentity) => JSON.stringify([value.ta
 export function privateTaskConversationId(task: unknown): string | null {
   const row = object(task), raw = object(row?.raw);
   if (!row || !raw || raw.id !== row.id || raw.actorId !== 'owner' || raw.spaceId !== 'private') return null;
+  const handled = ownerWorkPresentation(task);
+  if (handled && id(handled.conversationId)) return handled.conversationId;
   const phone = phoneConversationId(row);
   if (phone) return phone;
   return id(raw.conversationId) ? raw.conversationId : null;
@@ -134,11 +136,11 @@ export function backgroundConversationWork<T extends Data>(tasks: T[], ownerWork
   for (const task of [...tasks, ...ownerWork]) {
     const raw = object(task.raw);
     if (!id(task.id) || !raw || raw.id !== task.id || raw.actorId !== 'owner' || raw.spaceId !== 'private') continue;
+    const handling = ownerWorkPresentation(task);
     const phone = phoneConversationId(task) === conversationId;
-    const associated = raw.conversationId === conversationId && (raw.executionRole === 'owner_work' || raw.feature === 'teams'
+    const associated = raw.nativeResultHandling === true && handling?.conversationId === conversationId || raw.conversationId === conversationId && (raw.executionRole === 'owner_work' || raw.feature === 'teams'
       || raw.origin?.kind === 'automation' && raw.origin?.originConversationId === conversationId);
     const resumable = raw.executionRole === 'owner_work' && raw.controls?.canContinue === true && ['failed', 'interrupted'].includes(task.status);
-    const handling = ownerWorkPresentation(task);
     if ((!phone && !associated) || ['completed', 'failed', 'cancelled', 'canceled', 'stopped', 'interrupted'].includes(task.status) && !resumable && !handling?.waitingForButler && !handling?.needsAttention) continue;
     selected.set(task.id, task);
   }

@@ -35,38 +35,65 @@ const sortedGroups = (report: UsageReport, dimension: Dimension) => [...groupRow
 const isPartialReport = (report: UsageReport) => report.queryLimited || report.conflictingCalls > 0 || report.invalidReceipts > 0 || report.invalidTimestamps > 0 || isPartialCount(report.totals.normalized.total);
 
 
-function WebUsagePanel({ supported }: { supported: (action: string) => boolean }) {
-  const [snapshot, setSnapshot] = useState<Record<string, unknown> | null>(null);
+type WebUsageTotals = { metrics: Record<string, number>; receipts: number; unavailableReceipts: number; unknownProviderUsage: number; unknownOutcomes: number; nextCursor: string };
+const webMetrics: Array<[string, string]> = [
+  ['searchRequests', '搜索请求'], ['fetchRequests', '网页读取'], ['pagesRead', '读到正文'],
+  ['sourceRefs', '保留来源'], ['hostedModelRequests', '厂商搜索调用'],
+  ['hostedInputTokens', '额外输入 Token'], ['hostedOutputTokens', '额外输出 Token'], ['failedCalls', '失败或无结果的操作'],
+];
+const emptyWebTotals = (): WebUsageTotals => ({ metrics: Object.fromEntries(webMetrics.map(([key]) => [key, 0])), receipts: 0, unavailableReceipts: 0, unknownProviderUsage: 0, unknownOutcomes: 0, nextCursor: '' });
+function WebUsagePanel({ supported, query }: { supported: (action: string) => boolean; query: UsageQuery }) {
+  const [totals, setTotals] = useState<WebUsageTotals | null>(null), current = useRef<WebUsageTotals | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
-  const generation = useRef(0);
-  const load = useCallback(() => {
-    const id = ++generation.current; setBusy(true); setError('');
-    void bridge.command('webSearch.snapshot', {}).then(data => {
-      if (id === generation.current) {
-        const raw = data as Record<string, unknown>;
-        setSnapshot(raw?.diagnostics && typeof raw.diagnostics === 'object' && !Array.isArray(raw.diagnostics)
-          ? raw.diagnostics as Record<string, unknown> : {});
+  const generation = useRef(0), available = supported('webSearch.usage');
+  const load = useCallback(async (append = false) => {
+    const ticket = ++generation.current, owner = ownerTicket();
+    let collected = append && current.current ? { ...current.current, metrics: { ...current.current.metrics } } : emptyWebTotals();
+    let cursor = append ? collected.nextCursor : '';
+    setBusy(true); setError('');
+    if (!append) { current.current = null; setTotals(null); }
+    try {
+      for (let page = 0; page < 10; page++) {
+        const result = await bridge.command('webSearch.usage', { ...query, cursor }) as Record<string, unknown>;
+        if (ticket !== generation.current || owner !== ownerTicket()) return;
+        if (!result || result.fromInclusive !== query.fromInclusive || result.toExclusive !== query.toExclusive || result.zoneId !== query.zoneId || typeof result.metrics !== 'object' || !result.metrics) throw new Error('联网用量尚未取得当前日期的有效回执。');
+        const metrics = result.metrics as Record<string, unknown>;
+        const next = { ...collected, metrics: { ...collected.metrics } };
+        for (const [key] of webMetrics) {
+          const value = metrics[key];
+          if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) throw new Error('这页联网计数无法核对，请重新读取。');
+          next.metrics[key] += value;
+        }
+        for (const key of ['receipts', 'unavailableReceipts', 'unknownProviderUsage', 'unknownOutcomes'] as const) {
+          const value = result[key];
+          if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) throw new Error('这页联网记录范围无法核对，请重新读取。');
+          next[key] += value;
+        }
+        cursor = typeof result.nextCursor === 'string' ? result.nextCursor : '';
+        collected = { ...next, nextCursor: cursor };
+        current.current = collected; setTotals(collected);
+        if (!cursor) break;
       }
-    }).catch(failure => { if (id === generation.current) setError(failure instanceof Error ? failure.message : '联网用量读取失败'); })
-      .finally(() => { if (id === generation.current) setBusy(false); });
-  }, []);
-  useEffect(() => { if (supported('webSearch.snapshot')) load(); return () => { generation.current++; }; }, [load, supported('webSearch.snapshot')]);
-  const metrics: Array<[string, string]> = [
-    ['searchRequests', '搜索请求'], ['fetchRequests', '网页读取'], ['pagesRead', '真实正文'],
-    ['sourceRefs', '保留来源'], ['hostedModelRequests', '厂商搜索调用'],
-    ['hostedInputTokens', '额外输入 Token'], ['hostedOutputTokens', '额外输出 Token'],
-    ['failedCalls', '失败或无结果'],
-  ];
+    } catch (failure) { if (ticket === generation.current) setError(failure instanceof Error ? failure.message : '联网用量读取失败'); }
+    finally { if (ticket === generation.current) setBusy(false); }
+  }, [query.fromInclusive, query.toExclusive, query.zoneId]);
+  useEffect(() => { if (available) void load(); return () => { generation.current++; }; }, [available, load]);
+  const date = (value: number) => new Intl.DateTimeFormat('zh-CN', { timeZone: query.zoneId, month: 'long', day: 'numeric' }).format(value);
   return <section className="pw-usage-primary" aria-label="联网使用情况">
-    <div className="pw-usage-section-heading"><h3>联网活动</h3><Button variant="ghost" disabled={busy || !supported('webSearch.snapshot')} onClick={load}>刷新</Button></div>
-    <p className="pw-usage-caption">仅当前应用进程累计值，不属于上方选择的日期范围。历史单任务来源记录在 TaskStore。</p>
-    {error && <p className="pw-usage-state" role="alert">{error}</p>}
-    {snapshot && <dl className="pw-facts">{metrics.map(([key, title]) => {
-      const amount = snapshot[key];
-      return <div key={key}><dt>{title}</dt><dd>{typeof amount === 'number' && Number.isFinite(amount) ? amount.toLocaleString('zh-CN') : '未知'}</dd></div>;
-    })}</dl>}
-    <p className="pw-usage-caption">搜索服务和厂商模型可能另外计费；无法确认的费用保持未知，不计入主模型 Token 总额。</p>
-    {busy && <p className="pw-usage-caption" role="status">正在读取联网计数…</p>}
+    <div className="pw-usage-section-heading"><h3>联网活动</h3><Button variant="ghost" disabled={busy || !available} onClick={() => void load()}>刷新</Button></div>
+    <p className="pw-usage-caption">{date(query.fromInclusive)} — {date(query.toExclusive - 1)} · {query.zoneId}。统计已保存的私人工作回执，应用重启后仍可查看。</p>
+    {!available && <p className="pw-usage-state">当前宿主尚未提供按日期读取的联网记录，请更新应用后查看。</p>}
+    {error && <p className="pw-usage-state" role="alert">{error} {totals ? '下方保留已读取部分。' : ''}</p>}
+    {totals && <>
+      <dl className="pw-facts">{webMetrics.map(([key, title]) => <div key={key}><dt>{title}</dt><dd>{totals.metrics[key].toLocaleString('zh-CN')}{totals.nextCursor || error ? '（已读取）' : ''}</dd></div>)}</dl>
+      <p className="pw-usage-caption">来自 {totals.receipts.toLocaleString('zh-CN')} 条已保存的联网活动回执。未保存回执的中断请求不计入。</p>
+      {totals.unknownProviderUsage > 0 && <p className="pw-usage-caption">{totals.unknownProviderUsage} 次厂商搜索没有完整 Token 回执，额外 Token 仅显示已知小计。</p>}
+      {totals.unknownOutcomes > 0 && <p className="pw-usage-caption">{totals.unknownOutcomes} 条旧记录未保存成败计数，没有将它们当作成功。</p>}
+      {totals.unavailableReceipts > 0 && <p className="pw-usage-caption">有 {totals.unavailableReceipts} 条历史回执无法完整读取，当前汇总可能不完整。</p>}
+      {totals.nextCursor && <Button variant="secondary" disabled={busy} onClick={() => void load(true)}>继续读取历史</Button>}
+    </>}
+    <p className="pw-usage-caption">搜索与阅读按请求计数；失败项按整次联网操作计数。服务费用无法从这些回执确认，额外 Token 与主模型用量分开显示。</p>
+    {busy && <p className="pw-usage-caption" role="status">正在汇总保存的联网记录…</p>}
   </section>;
 }
 
@@ -309,7 +336,7 @@ export function UsageWorkspace({ supported, records, renderBudget, diagnostics, 
         </div>
     </>}
     {view.kind === 'overview' && current && <footer className="pw-usage-footer"><Button variant="ghost" onClick={() => open({ kind: 'about' })} data-usage-focus="about">{isPartialReport(current) ? '部分数据 · 统计说明' : '本机保留记录 · 统计说明'}</Button>{current.sourceReadAt > 0 && <span>{new Date(current.sourceReadAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })} 更新</span>}</footer>}
-    {view.kind === 'web' && <WebUsagePanel supported={supported} />}
+    {view.kind === 'web' && <WebUsagePanel supported={supported} query={range.query} />}
     {view.kind === 'records' && records}
     {view.kind === 'budget' && <>{budgetEditing && <p className="pw-usage-caption" role="status">完成当前操作后即可返回；结果待确认时，请读取原设置核对。</p>}{renderBudget?.(setBudgetEditing, registerChildBack)}</>}
     {view.kind === 'diagnostics' && diagnostics}

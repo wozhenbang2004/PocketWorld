@@ -5,6 +5,7 @@ import dev.pocketengine.ui.PocketWorldController
 import dev.pocketengine.ui.objects
 import org.json.JSONObject
 import java.time.ZoneId
+import java.time.Instant
 import java.util.UUID
 
 /** Owner presentation only. The original CommitmentBook supplies revisions, evidence and receipts. */
@@ -99,8 +100,10 @@ internal class PocketWebCommitments(private val controller: PocketWorldControlle
                 deliver(JSONObject().put("closed", true), null)
             }
             "commitments.review" -> {
-                fields(args, "operation", "viewHandle", "title", "details", "taskId", "hours")
+                fields(args, "operation", "viewHandle", "title", "details", "taskId", "hours", "date", "time", "zone", "laterOverlap")
                 val operation = text(args, "operation", 24)
+                require(!args.has("date") || !args.has("hours")) { "日期时间与相对小时只能选择一种" }
+                require(args.has("date") || listOf("time", "zone", "laterOverlap").none { args.has(it) }) { "请填写完整跟进日期与时间" }
                 require(operation in setOf("create", "update", "snooze", "cancel", "complete"))
                 val original = if (operation == "create") null else read(text(args, "viewHandle"))
                 if (original != null) check(original.optString("status") !in setOf("completed", "cancelled")) { "原承诺已经结束，请刷新" }
@@ -109,13 +112,20 @@ internal class PocketWebCommitments(private val controller: PocketWorldControlle
                 if (operation in setOf("create", "update")) {
                     val body = JSONObject().put("title", text(args, "title", 200).trim()).put("details", text(args, "details", 4000, true).trim())
                         .put("taskId", text(args, "taskId", 128, true))
-                    if (operation == "create" || args.has("hours")) body.put("dueAt", Math.addExact(System.currentTimeMillis(), integer(args, "hours", 1, 8760) * 3_600_000))
+                    if (args.has("date")) body.put("dueAt", PocketWebFormTime.instant(args, System.currentTimeMillis()))
+                    else if (operation == "create" || args.has("hours")) body.put("dueAt", Math.addExact(System.currentTimeMillis(), integer(args, "hours", 1, 8760) * 3_600_000))
                     if (operation == "create") body.put("kind", "explicit_user")
                     input.put(if (operation == "create") "commitment" else "patch", body)
                 } else if (operation == "snooze") input.put("until", Math.addExact(System.currentTimeMillis(), integer(args, "hours", 1, 8760) * 3_600_000))
                 if (operation == "complete") check(snapshot.optBoolean("completionEvidenceAvailable")) { "原完成凭证宿主尚未准备" }
                 val command = mapOf("create" to "createCommitment", "update" to "updateCommitment", "snooze" to "snoozeCommitment", "cancel" to "cancelCommitment", "complete" to "completeCommitment").getValue(operation)
-                deliver(review(false, command, input, original ?: JSONObject()), null)
+                val details = JSONObject(original?.toString() ?: "{}")
+                if (args.has("date") && operation in setOf("create", "update")) {
+                    val at = input.getJSONObject(if (operation == "create") "commitment" else "patch").getLong("dueAt")
+                    val local = Instant.ofEpochMilli(at).atZone(ZoneId.of(args.getString("zone")))
+                    details.put("calendar", JSONObject().put("local", local.toLocalDateTime().toString()).put("zone", local.zone.id).put("offset", local.offset.id))
+                }
+                deliver(review(false, command, input, details), null)
             }
             "commitments.reviewPolicy" -> {
                 fields(args, "revision", "enabled", "zoneId", "quietHours", "cooldownMinutes", "pausedUntil", "maxNotificationsPerDay", "requiresNetwork", "requiresCharging", "minBatteryPercent")

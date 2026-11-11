@@ -164,7 +164,7 @@ export function ChatComposer({value,onChange,onSend,onStop,busy,submitting,disab
       {controls&&<motion.div layout={allowed?'position':false} transition={allowed?motionTransition.layout:motionTransition.instant} className="pw-composer-controls">{controls}</motion.div>}
       <div className="afa-toolbar">
        <AnimatePresence key={`controls:${composerKey}`} initial={false} mode="popLayout">
-        {onVoice&&!busy&&<ComposerControl key="voice"><ToolButton label={listening?'结束听写':'语音输入'} icon="mic" onClick={onVoice} disabled={disabled||submitting}/></ComposerControl>}
+        {onVoice&&!busy&&(!hasContent||listening)&&<ComposerControl key="voice"><ToolButton label={listening?'结束听写':'语音输入'} icon="mic" onClick={onVoice} disabled={disabled||submitting}/></ComposerControl>}
         {hasContent&&!listening&&<ComposerControl key="send"><PressButton compact aria-label={submitting?'正在登记':sendLabel||(busy?'补充给当前工作':'发送')} disabled={!canSend} onClick={onSend}><Icon name="arrow" size={18}/></PressButton></ComposerControl>}
         {busy&&onStop&&<ComposerControl key="stop"><button type="button" className="afa-stop pw-stop-motion" onClick={onStop} aria-label="停止当前回复"><span className="pw-stop-ring" aria-hidden="true"><ProgressCircle isIndeterminate size="md" aria-label="当前回复状态"/></span><span className="pw-stop-mark" aria-hidden="true"><IconStop size={12}/></span></button></ComposerControl>}
        </AnimatePresence>

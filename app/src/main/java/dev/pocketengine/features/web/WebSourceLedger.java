@@ -62,6 +62,7 @@ public final class WebSourceLedger {
                 .put("hostedModelRequests",ProviderHostedWebSearch.TOOL.equals(tool)?1:0)
                 .put("hostedInputTokens",providerUsage==null?0:Math.max(0,providerUsage.optInt("inputTokens")))
                 .put("hostedOutputTokens",providerUsage==null?0:Math.max(0,providerUsage.optInt("outputTokens")))
+                .put("failedCalls",actual.optBoolean("ok")?0:1)
                 .put("usageWasProviderReported",providerUsage!=null&&providerUsage.optBoolean("reportedByProvider"))
                 .put("searchBillingKnown",false).put("externalProviderCost",JSONObject.NULL);
         JSONObject event=new JSONObject().put("type",EVENT).put("tool",tool).put("operationId",operation)

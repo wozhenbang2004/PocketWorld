@@ -1128,7 +1128,7 @@ public final class AssistantModule implements EngineModule {
     public JSONObject takeOverOwnerWorkResult(dev.pocketengine.store.TaskStore original,dev.pocketengine.store.TaskStore.OwnerWorkDeliveryRef expected)throws Exception{
         if(original==null||original!=historyTasks||!durable()||nativeInputHost==null||executor==null)
             throw new IllegalStateException("原管家结果接手尚未就绪");
-        JSONObject work=original.get(expected.taskId(),false);String conversation=work.getString("conversationId");
+        String conversation=original.ownerWorkTakeoverConversation(expected);
         synchronized(admission){
             if(migrationInProgress||conversationLive(conversation)||liveTurns.availableCount()==0||pendingCancellations.values().stream().anyMatch(value->conversation.equals(value.conversation())))
                 return new JSONObject().put("claimed",false).put("reason","conversation_busy");
@@ -1182,7 +1182,7 @@ public final class AssistantModule implements EngineModule {
                 JSONObject current=historyTasks.get(taskId,false);
                 if(!Set.of("completed","needs_confirmation","failed","cancelled","interrupted","awaiting_user").contains(current.optString("status"))||!current.optString("runId").equals(response.optString("runId"))||current.optInt("coordinatorEpoch")!=response.optInt("epoch")||!current.optString("summary").equals(text))throw new SecurityException("只能投递原任务当前确切结果，不能换正文或轮次");
                 JSONObject publication=pinned.optJSONObject("publication");if(publication==null||!"publication_unknown".equals(publication.optString("phase"))||!response.getString("publicationClaimId").equals(publication.optString("publicationClaimId")))throw new SecurityException("原结果发布claim已改变，不能迟到重发");
-                JSONObject conversation=find(conversationId),message=newMessage(conversationId,"assistant",text,context.model()).put("taskId",taskId).put("nativeDeliveryId",deliveryId).put("nativeRunId",pinned.getString("runId")).put("nativeEpoch",pinned.getInt("epoch"));
+                JSONObject conversation=find(conversationId),message=newMessage(conversationId,"assistant",text,context.model()).put("taskId",taskId).put("nativeDeliveryId",deliveryId).put("nativeReplyId",deliveryId).put("nativeRunId",pinned.getString("runId")).put("nativeEpoch",pinned.getInt("epoch"));
                 message.put("nativeDeliveryKind","automation").put("nativeStatus",current.getString("status")).put("status",current.getString("status"))
                         .put("taskEndedAt",current.optLong("endedAt",current.optLong("updatedAt"))).put("summaryChars",text.length()).put("summaryTruncated",false)
                         .put("taskReference",new JSONObject().put("taskId",taskId).put("runId",pinned.getString("runId")).put("epoch",pinned.getInt("epoch")));

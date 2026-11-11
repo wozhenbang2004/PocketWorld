@@ -2,6 +2,8 @@ package dev.pocketengine.ui.web
 
 import dev.pocketengine.features.automation.AutomationSchedule
 import java.util.UUID
+import java.time.Instant
+import java.time.ZoneId
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -23,7 +25,7 @@ internal class PocketWebReminders(private val now: () -> Long = System::currentT
         val manualVersion = source?.opt("manualOriginVersion")
         require(intent != "reschedule" || manualVersion is Number && manualVersion.toDouble() == 1.0) { "原提醒没有可核对的手建来源，请从空白明确新建" }
         val draft = args.getJSONObject("draft")
-        only(draft, setOf("title", "phone", "goal", "type", "minutes", "time", "zone", "weekdays", "monthDay", "lastDay", "skipGap", "laterOverlap", "cron", "preserveSchedule", "misfire", "overlap", "maxCatchUp"))
+        only(draft, setOf("title", "phone", "goal", "type", "minutes", "date", "time", "zone", "weekdays", "monthDay", "lastDay", "skipGap", "laterOverlap", "cron", "preserveSchedule", "misfire", "overlap", "maxCatchUp"))
         val title = string(draft, "title", 200).trim()
         require(title.isNotEmpty()) { "请填写提醒内容" }
         val phone = boolean(draft, "phone")
@@ -34,6 +36,15 @@ internal class PocketWebReminders(private val now: () -> Long = System::currentT
         val schedule = if (preserve) AutomationSchedule.normalize(source!!.getJSONObject("schedule")) else schedule(draft)
         val preview = AutomationSchedule.preview(schedule, now(), 3)
         require(preview.getJSONArray("occurrences").length() > 0) { "当前没有下一次安排，请核对时间" }
+        if (schedule.getString("type") == "once" && draft.has("date")) {
+            val zone = ZoneId.of(string(draft, "zone", 80).trim())
+            val occurrence = preview.getJSONArray("occurrences").getJSONObject(0)
+            val local = Instant.ofEpochMilli(occurrence.getLong("at")).atZone(zone)
+            val repeated = zone.rules.getValidOffsets(local.toLocalDateTime()).size > 1
+            occurrence.put("requestedLocal", local.toLocalDateTime().toString()).put("local", local.toLocalDateTime().toString())
+                .put("zone", zone.id).put("offset", local.offset.id)
+                .put("dstResolution", if (repeated) if (local.offset == zone.rules.getValidOffsets(local.toLocalDateTime()).last()) "overlap_later" else "overlap_earlier" else "absolute")
+        }
         val repeating = schedule.getString("type") != "once"
         val misfire = string(draft, "misfire", 16)
         val overlap = string(draft, "overlap", 16)
@@ -120,6 +131,8 @@ internal class PocketWebReminders(private val now: () -> Long = System::currentT
                 .put("dstGap", if (boolean(draft, "skipGap")) "skip" else "shift_forward")
                 .put("dstOverlap", if (boolean(draft, "laterOverlap")) "later" else "earlier")
                 .put(if (type == "cron") "expression" else "time", string(draft, if (type == "cron") "cron" else "time", if (type == "cron") AutomationSchedule.MAX_CRON_LENGTH else 5))
+        } else if (type == "once" && draft.has("date")) {
+            JSONObject().put("type", "once").put("at", PocketWebFormTime.instant(draft, now()))
         } else {
             require(type == "once" || type == "interval") { "请选择支持的时间安排" }
             val minutes = string(draft, "minutes", 6).toLongOrNull() ?: 0

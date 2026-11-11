@@ -5,6 +5,7 @@ import { Accordion, AccordionItem, Button, CheckboxField, SearchField, SelectFie
 import { Tabs, TabList, Tab, TabPanel } from './shell-library';
 import { acceptGroupDelivery, acceptGroupSnapshot, acceptGroupTask, confirmedGroupResult, groupCapabilities, groupDeliveryLabel, groupPolicyDraft, groupPolicyPayload, groupPresentation, groupQuotaFields, groupRows, groupTaskLabel, sameGroupVersion, type GroupData as Data } from './groups-workspace';
 import './groups-workspace.css';
+import { FormDraftNotice, useFormDrafts, type RegisterBeforeLeave } from './form-drafts';
 import { useSurfaceEnter } from './library/surface-motion';
 import { MotionFeedback, WorkingStatus, useCollectionMotion } from './library/journey-motion';
 
@@ -16,13 +17,16 @@ const capabilityName = (value: string) => groupCapabilities.find(([id]) => id ==
 const time = (value: any) => typeof value === 'number' && value > 0 ? new Date(value).toLocaleString() : '尚未提供';
 const copy = (value: Data) => JSON.parse(JSON.stringify(value));
 const identity = (reference: Data | null) => reference ? JSON.stringify([reference.groupId, reference.spaceId, reference.requestId, reference.taskId]) : '';
+const safeGroupDraft = (draft: Data): Data => Object.fromEntries(['name', 'accountId', 'roomId', 'conversationKind', 'conversationParentId', 'senderId', 'editingSenderId', 'displayName', 'role', 'visibility', 'quota', 'hours'].filter(key => draft[key] !== undefined).map(key => [key, draft[key]]));
 const providerName = (group: Data) => group.provider === 'qq' ? group.conversationKind === 'qq_guild_channel' ? 'QQ 频道' : 'QQ 群' : '可信 Webhook 群';
 const audienceName = (audience: any) => audience === 'group' ? '原群成员' : audience === 'requester' ? '原请求发起人' : '原受众待核对';
 
 /** BoardUI controls retain their source behavior. The object-row hierarchy follows
  * OpenMuse 61796eb2 apps/mobile/src/ui.tsx LinkRow (MIT), with product-specific
  * group/request identities and reading states. Native owners remain authoritative. */
-export function GroupsWorkspace({ state, data, run, supported, registerTransientBack }: { state: Data; data: Data; run: Run; supported: (action: string) => boolean; registerTransientBack: (handler: (() => boolean) | null) => void }) {
+export function GroupsWorkspace({ state, data, run, supported, registerTransientBack, registerBeforeLeave, onOpenConnections }: { state: Data; data: Data; run: Run; supported: (action: string) => boolean; registerTransientBack: (handler: (() => boolean) | null) => void; registerBeforeLeave?: RegisterBeforeLeave; onOpenConnections?: () => void }) {
+  const formDraft = useFormDrafts(run, 'groups', registerBeforeLeave);
+  const [draftChecked, setDraftChecked] = useState(false);
   const [snapshot, setSnapshot] = useState<Data | null>(() => acceptGroupSnapshot(null, data));
   const [groupId, setGroupId] = useState(''), [tab, setTab] = useState('tasks');
   const [queries, setQueries] = useState<Record<string, string>>({});
@@ -59,7 +63,7 @@ export function GroupsWorkspace({ state, data, run, supported, registerTransient
     return () => scroll.removeEventListener('scroll', remember);
   }, [viewKey]);
   const invoke = async (action: string, args: Data = {}, accept?: (result: Data) => void | Promise<void>, failed?: () => void) => {
-    if (entered.current || backgrounded.current) return;
+    if (!alive.current || entered.current || backgrounded.current) return;
     entered.current = true; const ticket = ++generation.current; setBusy(true); setError('');
     try {
       if (!supported(action)) throw new Error('当前宿主尚未接通这项群操作。');
@@ -72,7 +76,7 @@ export function GroupsWorkspace({ state, data, run, supported, registerTransient
   };
   const refresh = () => { void invoke('groups.snapshot', {}, value => {
     const accepted = acceptGroupSnapshot(null, value); if (!accepted) throw new Error('群列表尚未取得完整回执。');
-    setSnapshot(current => acceptGroupSnapshot(current, accepted));
+    setSnapshot(current => acceptGroupSnapshot(current, accepted)); if (formDraft.requiresRecheck) setDraftChecked(true);
   }); };
   const closeReview = () => {
     const handle = reviewHandle.current; reviewHandle.current = ''; setReview(null); setAcknowledged(false);
@@ -87,7 +91,7 @@ export function GroupsWorkspace({ state, data, run, supported, registerTransient
     readings.current[key] = actual; setTaskReading(actual); setReadState(value.known === true ? 'known' : 'unknown');
   };
   const inspectTask = (reference: Data) => {
-    if (entered.current || backgrounded.current) return;
+    if (!alive.current || entered.current || backgrounded.current) return;
     rememberPosition(); closeReview(); setSelectedRequest(reference); setTaskReading(readings.current[identity(reference)] || null); setReadState('reading'); setNotice('');
     void invoke('groups.inspectTask', { requestId: reference.requestId }, value => acceptReading(reference, value), () => setReadState('error'));
   };
@@ -124,13 +128,13 @@ export function GroupsWorkspace({ state, data, run, supported, registerTransient
     document.addEventListener('visibilitychange', visibility); window.addEventListener('pagehide', hide);
     return () => { document.removeEventListener('visibilitychange', visibility); window.removeEventListener('pagehide', hide); };
   });
-  const leaveEditor = () => {
+  const leaveEditor = () => formDraft.guard(() => {
     rememberPosition(); closeReview();
     if (editor) drafts.current[draftKey.current] = { original, draft: copy(draft) };
     setEditor(null); setOriginal(null); setError('');
-  };
+  });
   const back = () => {
-    if (entered.current) return true;
+    if (entered.current || busy) return true;
     if (review) { closeReview(); return true; }
     if (editor) { leaveEditor(); return true; }
     rememberPosition(); closeReview();
@@ -155,13 +159,19 @@ export function GroupsWorkspace({ state, data, run, supported, registerTransient
   const changeTab = (key: string) => { if (entered.current || editor) return; rememberPosition(); closeReview(); setTab(key); setError(''); setNotice(''); };
   const openEditor = (kind: Editor, source: Data | null, value: Data, key: string) => {
     if (entered.current) return;
-    rememberPosition(); closeReview(); draftKey.current = key; const saved = drafts.current[key];
-    setOriginal(saved?.original || source); setDraft(saved ? copy(saved.draft) : value); setEditor(kind); setError(''); setNotice('');
+    if (formDraft.loading) return;
+    rememberPosition(); closeReview();
+    void formDraft.open(source?.spaceId || 'owner', key, source ? String(source.revision) + ':' + String(source.policyEpoch) : 'new', safeGroupDraft(value)).then(saved => {
+      if (!saved || !alive.current) return; draftKey.current = key;
+      const volatile = drafts.current[key]; const sameSource = !source && !volatile?.original || !!source && !!volatile?.original && sameGroupVersion(volatile.original, source);
+      setOriginal(source); setDraft({ ...value, ...(sameSource && volatile ? volatile.draft : {}), ...saved }); setEditor(kind); setError(''); setNotice(kind === 'policy' ? '已保留普通表单输入。能力授权与结果受众仍按当前原记录显示，请重新核对。' : '');
+    });
   };
+  useEffect(() => { if (editor) formDraft.update(safeGroupDraft(draft)); }, [editor, draft, formDraft.update]);
   const openCreate = () => openEditor('create', null, { name: '', accountId: '', roomId: '', conversationKind: 'group', conversationParentId: '' }, 'create');
   const openMember = (member?: Data) => { if (group) openEditor('member', copy(group), member ? { ...member, editingSenderId: member.senderId } : { senderId: '', displayName: '', role: 'member', enabled: true }, `${group.id}:member:${member?.senderId || 'new'}`); };
   const openPolicy = () => { if (group) openEditor('policy', copy(group), groupPolicyDraft(group), `${group.id}:policy`); };
-  const resetDraft = () => {
+  const resetDraft = () => formDraft.discard(() => {
     closeReview(); delete drafts.current[draftKey.current];
     if (editor === 'create') setDraft({ name: '', accountId: '', roomId: '', conversationKind: 'group', conversationParentId: '' });
     else if (group) {
@@ -169,28 +179,31 @@ export function GroupsWorkspace({ state, data, run, supported, registerTransient
       if (editor === 'policy') setDraft(groupPolicyDraft(group));
       else { const member = groupRows(group.members).find(row => row.senderId === draft.editingSenderId); setDraft(member ? { ...member, editingSenderId: member.senderId } : { senderId: '', displayName: '', role: 'member', enabled: true }); }
     }
-    setError(''); setNotice('已重新读取当前设置，旧草稿已清除。');
-  };
+    setEditor(null); setOriginal(null); setError(''); setNotice('未提交的草稿已清除，原群设置没有改变。');
+  });
   const openTask = () => { if (selectedRequest) { rememberPosition(); closeReview(); void invoke('groups.openTask', { requestId: selectedRequest.requestId }); } };
+  useEffect(() => { if (formDraft.requiresRecheck) setDraftChecked(false); }, [formDraft.requiresRecheck]);
   const requestReview = () => {
-    if (entered.current || review) return;
+    if (entered.current || review || formDraft.requiresRecheck) return;
     try {
+      if (formDraft.stale || formDraft.conflict) throw new Error('请先核对草稿与当前群版本。');
       if (stale) throw new Error('群设置已变化，请重新读取当前设置后编辑。');
       if (editor === 'create') void invoke('groups.reviewCreate', draft, receiveReview);
       if (editor === 'member' && original) void invoke('groups.reviewMember', { id: original.id, revision: original.revision, policyEpoch: original.policyEpoch, senderId: draft.senderId, displayName: draft.displayName, role: draft.role, enabled: draft.enabled }, receiveReview);
       if (editor === 'policy' && original) void invoke('groups.reviewPolicy', groupPolicyPayload(original, draft), receiveReview);
     } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
   };
-  const confirm = () => {
+  const confirm = async () => {
     const frozen = review; if (!frozen || !acknowledged || entered.current || backgrounded.current) return;
     if (frozen.group && !sameGroupVersion(frozen.group, groupRows(snapshot?.groups).find(row => row.id === frozen.group.id))) { closeReview(); setError('群设置或成员已变化，请重新核对后提交。'); return; }
     reviewHandle.current = ''; setReview(null); setAcknowledged(false);
     if (frozen.command === 'delivery.send') setDeliveryAttempts(old => ({ ...old, [`${identity(frozen.reference)}:${frozen.input.outputId}`]: true }));
+    if (['group.create', 'member.set', 'policy.set'].includes(frozen.command)) { setBusy(true); try { await formDraft.markSubmitted(); } catch (failure) { setBusy(false); setError((failure as Error).message); return; } }
     void invoke('groups.confirm', { reviewHandle: frozen.reviewHandle, confirmed: true }, value => {
       const result = confirmedGroupResult(value, frozen.command);
       if (['group.create', 'member.set', 'policy.set'].includes(frozen.command)) {
         if (typeof result.id !== 'string' || !Number.isSafeInteger(result.revision) || (frozen.command === 'group.create' ? result.enabled !== false : result.id !== frozen.input.id || result.revision <= frozen.input.revision)) throw new Error('群设置保存尚未取得正确版本，请刷新核对。');
-        delete drafts.current[draftKey.current]; rememberPosition(); setGroupId(result.id); setEditor(null); setOriginal(null);
+        formDraft.discard(() => { delete drafts.current[draftKey.current]; rememberPosition(); setGroupId(result.id); setEditor(null); setOriginal(null); });
         setNotice(frozen.command === 'group.create' ? '群空间已创建，当前保持关闭。请核对成员与能力后再启用。' : '原群设置已保存。旧授权的任务需按原记录重新核对。');
       } else if (frozen.command.startsWith('task.')) {
         acceptReading(frozen.reference, result); setNotice(result.known === false ? '这次原操作的状态仍待核对，请查询原任务，不要重新提交。' : '已取得原任务回执。');
@@ -234,6 +247,7 @@ export function GroupsWorkspace({ state, data, run, supported, registerTransient
     requestDeliveries.map(delivery => [delivery.deliveryId, delivery.state]), readState,
   ]), { active: !!snapshot && (!selectedRequest || readState === 'known') && !editor && !state.webWorkspaceTaskOpen });
   return <section ref={root} className="pw-group-workspace pw-depth-collaboration" tabIndex={-1} data-group-view={viewKey}>
+    <FormDraftNotice draft={formDraft} />{formDraft.requiresRecheck && <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={refresh}>重新读取原群记录</Button><Button variant="secondary" disabled={busy || !draftChecked} onClick={() => { formDraft.clearSubmitted(); setDraftChecked(false); }}>已核对原记录，继续编辑</Button></div>}
     <header className="pw-group-header" data-request-open={!!selectedRequest || undefined}>
       <div className="pw-group-heading">
         {(groupId || editor) && <Button type="button" variant="ghost" iconOnly leadingIcon={IconArrowLeft} disabled={busy} aria-label={editor ? '返回并保留草稿' : selectedRequest && tab === 'tasks' ? '返回请求列表' : '返回群列表'} onClick={back} />}
@@ -266,7 +280,8 @@ export function GroupsWorkspace({ state, data, run, supported, registerTransient
     {editor && <form className="pw-group-editor" aria-label={editorTitle} onSubmit={event => { event.preventDefault(); if (formReady) requestReview(); }}>
       <header className="pw-group-section-heading"><div><h3>{editorTitle}</h3></div></header>
       {editor === 'create' && <>
-        {connectionRequired && <div className="pw-group-create-prerequisite"><IconTeam size={24} aria-hidden /><div><h4>{connections.length ? '先启用一个机器人连接' : '先添加一个机器人连接'}</h4><p>{connections.length ? '当前机器人连接均未启用。' : '当前尚未配置 QQ 或可信 Webhook 连接。'}请在上方「消息渠道」的「连接与接收」中{connections.length ? '启用连接' : '添加连接'}，再选择要关联的群。</p></div></div>}
+        {connectionRequired && <div className="pw-group-create-prerequisite"><IconTeam size={24} aria-hidden /><div><h4>{connections.length ? '先启用一个机器人连接' : '先添加一个机器人连接'}</h4><p>{connections.length ? '当前机器人连接均未启用。' : '当前尚未配置 QQ 或可信 Webhook 连接。'}设置消息连接后，再回来选择要关联的群。</p></div></div>}
+        {connectionRequired && onOpenConnections && <Button variant="secondary" onClick={onOpenConnections}>前往设置消息连接</Button>}
         <div className="pw-group-form-grid">{field('name', '群空间名称')}
           <SelectField label="机器人连接" value={draft.accountId} onChange={value => { closeReview(); setDraft(old => ({ ...old, accountId: value, conversationKind: 'group', conversationParentId: '', roomId: '' })); }} options={connections.map(row => ({ id: row.id, label: `${row.name || row.id} · ${row.provider}`, disabled: row.enabled !== true }))} isDisabled={busy || connectionRequired} hint="使用已配置的 QQ 或可信 Webhook 连接。" />
           <SelectField label="群场景" value={draft.conversationKind} onChange={value => { closeReview(); setDraft(old => ({ ...old, conversationKind: value, conversationParentId: '', roomId: '' })); }} options={[{ id: 'group', label: '普通群' }, { id: 'qq_guild_channel', label: 'QQ 频道子频道', disabled: selectedConnection?.provider !== 'qq' || selectedConnection?.qqGuildEnabled !== true }]} isDisabled={busy || !draft.accountId} />
@@ -298,7 +313,7 @@ export function GroupsWorkspace({ state, data, run, supported, registerTransient
         <p className="pw-group-scope">模型额度是本地累计保守预留，不是服务商账单 token。媒体能力需要至少 32000 的单次与每日预留，额度不会自动提高。保存会使旧群授权失效，已完成的外部操作无法撤回。</p>
       </>}
       {stale && <p className="pw-group-warning" role="alert">群设置已变化。这份草稿仍保留，请重新读取当前设置后编辑，旧审阅不能继续使用。</p>}
-      <footer className="pw-group-editor-actions"><Button type="submit" disabled={!formReady}>{editor === 'create' ? '核对并创建' : editor === 'member' ? '核对成员变更' : '核对能力与额度'}</Button><Button type="button" variant="ghost" disabled={busy} onClick={leaveEditor}>返回并保留草稿</Button><Button type="button" variant="ghost" disabled={busy} onClick={resetDraft}>{stale ? '重新读取当前设置' : '清除这份草稿'}</Button></footer>
+      <footer className="pw-group-editor-actions"><Button type="submit" disabled={!formReady || formDraft.stale || !!formDraft.conflict || formDraft.requiresRecheck}>{editor === 'create' ? '核对并创建' : editor === 'member' ? '核对成员变更' : '核对能力与额度'}</Button><Button type="button" variant="ghost" disabled={busy} onClick={leaveEditor}>返回并保留草稿</Button><Button type="button" variant="ghost" disabled={busy || formDraft.requiresRecheck} onClick={resetDraft}>{stale ? '重新读取当前设置' : '清除这份草稿'}</Button></footer>
     </form>}
 
     {!editor && group && <Tabs className="pw-group-tabs" selectedKey={tab} onSelectionChange={key => changeTab(String(key))}>

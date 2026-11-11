@@ -68,7 +68,7 @@ export function ScopedConversationModelControls({ state, can, onOpenModel, picke
     : reasoning ? `推理强度：${reasoningLabel(reasoning)}` : target.kind === 'group' ? '推理强度：由模型组设置' : '推理强度：自动';
   return <div className="pw-conversation-model-controls" aria-label="此对话的模型与推理">
     <Button variant="ghost" className="pw-conversation-model-chip" onClick={event => onOpenModel('models', event.currentTarget)} disabled={locked} aria-label={`切换此对话模型：${modelName}`} aria-haspopup="dialog" aria-expanded={pickerSection === 'models'} title={modelName}>
-      <IconModel size={19} aria-hidden="true" /><span className="pw-conversation-model-chip-name">{modelName}</span><IconChevronDown size={14} aria-hidden="true" />
+      <IconModel size={19} aria-hidden="true" /><span className="pw-conversation-model-chip-name" dir="auto">{modelName}</span><IconChevronDown size={14} aria-hidden="true" />
     </Button>
     <Button variant="ghost" className="pw-conversation-reasoning-chip" onClick={event => { if (failed) setSummaryAttempt(attempt => attempt + 1); onOpenModel('reasoning', event.currentTarget); }} disabled={locked || !conversationModelName(state)} aria-label={strengthLabel} aria-haspopup="dialog" aria-expanded={pickerSection === 'reasoning'} aria-busy={loading || undefined} title={strengthLabel}>
       <ReasoningIndicator reasoning={reasoning} loading={loading} error={failed} /><span>推理</span>{effort && <><span aria-hidden="true">·</span><b>{effort}</b></>}

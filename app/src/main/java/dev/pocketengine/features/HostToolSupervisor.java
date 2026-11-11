@@ -438,7 +438,7 @@ public final class HostToolSupervisor implements CapabilityPort {
     @Override public JSONObject contextSnapshot(String query)throws Exception{
         JSONObject task=tasks.get(taskId,false);
         if(task==null||!runId.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch")||!"owner".equals(task.optString("actorId"))||!"private".equals(task.optString("spaceId"))||task.optBoolean("cancelRequested")||!task.optString("status").matches("preparing|running|queued"))throw new SecurityException("参考上下文的宿主任务身份已失效");
-        JSONObject personalPolicy=personalMemoryState(task);boolean personalReading=readingAllowed(personalPolicy);
+        JSONObject personalPolicy=personalMemoryState(task);boolean resultHandling=task.has("ownerWorkTakeover"),personalReading=!resultHandling&&readingAllowed(personalPolicy);
         host.synchronizeMemory(privateScope());
         EngineModule module=host.module("memory");JSONObject snapshot=new JSONObject();
         if(personalReading&&module instanceof dev.pocketengine.features.memory.MemoryModule){
@@ -454,7 +454,7 @@ public final class HostToolSupervisor implements CapabilityPort {
             JSONObject remaining=tasks.executionScopeRemaining(taskId,runId,epoch);
             if(remaining.optBoolean("scopePresent"))reference.append("\n当前原任务真实剩余额度；派后台须另保留至少1次工具及1次模型收尾，不能复制额度：\n").append(new JSONObject().put("toolsRemaining",remaining.getInt("toolsRemaining")).put("modelCallsRemaining",remaining.getInt("modelCallsRemaining")));
             // Cross-conversation reads use the explicit directory tool's grant and policy gate.
-            JSONArray works=tasks.ownerWorks(task.getString("conversationId")),included=new JSONArray();int chars=0;
+            JSONArray works=resultHandling?new JSONArray():tasks.ownerWorks(task.getString("conversationId")),included=new JSONArray();int chars=0;
             for(int i=0;i<works.length()&&included.length()<12;i++){
                 JSONObject work=works.getJSONObject(i),row=new JSONObject();
                 for(String key:new String[]{"id","runId","coordinatorEpoch","executionRole","title","status"})if(work.has(key))row.put(key,work.get(key));
@@ -466,12 +466,12 @@ public final class HostToolSupervisor implements CapabilityPort {
                 JSONArray pending=tasks.pendingOwnerWorkReceiptsForAttempt(taskId,runId,epoch,8);int resultChars=0;
                 for(int i=0;i<pending.length();i++){
                     JSONObject result=pending.getJSONObject(i);
-                    String body=result.getString("content");int end=Math.min(body.length(),1800);if(end<body.length()&&end>0&&Character.isHighSurrogate(body.charAt(end-1)))end--;
+                    String body=result.getString("content");int end=Math.min(body.length(),resultHandling?6000:1800);if(end<body.length()&&end>0&&Character.isHighSurrogate(body.charAt(end-1)))end--;
                     JSONObject view=new JSONObject().put("taskId",result.getString("taskId")).put("runId",result.getString("runId")).put("epoch",result.getInt("epoch")).put("deliveryId",result.getString("deliveryId"))
                             .put("status",result.getString("status")).put("replyToMessageIds",result.getJSONArray("replyToMessageIds")).put("content",body.substring(0,end)).put("totalChars",body.length()).put("hasMore",end<body.length());
                     String noticeKind=result.optString("noticeKind");boolean recoveryNotice=dev.pocketengine.store.OwnerWorkResultProtocol.isCapacityNoticeKind(noticeKind);
                     if(recoveryNotice)view.put("noticeKind",noticeKind);
-                    String encoded=view.toString();if(resultChars+encoded.length()>3600)break;resultChars+=encoded.length();
+                    String encoded=view.toString();if(resultChars+encoded.length()>(resultHandling?12000:3600))break;resultChars+=encoded.length();
                     reference.append(recoveryNotice?"\n原工作的容量生命周期通知，不是新的模型成果或执行授权；状态仅为通知首次生成时观察，请用owner_work_get核对当前任务，不重放动作：\n":"\n待管家结合原请求处理的真实工作结果；hasMore为true时先用owner_work_get携带同一deliveryId读取原工作，不重复执行：\n").append(encoded);
                     // Attest the exact native context prefix through this result, including the
                     // preceding references. A result copied elsewhere is not the selected frame.
@@ -480,7 +480,7 @@ public final class HostToolSupervisor implements CapabilityPort {
             }
         }
         EngineModule automation=host.module("automation");
-        if(automation instanceof dev.pocketengine.features.automation.AutomationModule){
+        if(!resultHandling&&automation instanceof dev.pocketengine.features.automation.AutomationModule){
             JSONObject due=((dev.pocketengine.features.automation.AutomationModule)automation).dueCommitments(privateScope(),10);JSONArray candidates=due.getJSONArray("commitments");
             if(candidates.length()>0){reference.append("\n已明确委托的到期跟进候选，仅为参考，不授权执行或发送：\n");int kept=0;
                 for(int i=0;i<candidates.length();i++){JSONObject candidate=candidates.getJSONObject(i);String line=new JSONObject().put("id",candidate.getString("id")).put("revision",candidate.getLong("revision")).put("title",candidate.getString("title")).put("followUpAt",candidate.getLong("followUpAt")).toString();if(reference.length()+line.length()>16000)break;reference.append(line).append('\n');kept++;}
@@ -495,7 +495,7 @@ public final class HostToolSupervisor implements CapabilityPort {
             }
         }
         EngineModule skills=host.module("skills");
-        if(skills instanceof SkillsModule){
+        if(!resultHandling&&skills instanceof SkillsModule){
             SkillsModule trusted=(SkillsModule)skills;admittedSkillScope=trusted.taskScopeForHost(task);admittedSkillAssetScope=skillAssetScope(admittedSkillScope,null);JSONObject discovery=discoverSkills(trusted,query,null,admittedSkillScope);snapshot.put("skillsDiscovery",discovery);
             if(discovery.getJSONArray("skills").length()>0){String text="\n与当前任务相关的已启用技能元数据，仅作参考；按digest读取，不执行脚本或增加授权：\n"+discovery.toString();if(reference.length()+text.length()<=MAX_HOST_REFERENCE_CHARS)reference.append(text);}
             JSONArray current=trusted.catalogueForHost(admittedSkillAssetScope).getJSONArray("skills");Set<String> skillCapabilities=skillCapabilityNames();
@@ -509,7 +509,7 @@ public final class HostToolSupervisor implements CapabilityPort {
         if(snapshot.optJSONObject("ownerContext")!=null)validation.put("ownerContextRevision",snapshot.getJSONObject("ownerContext").getString("revision"));
         JSONArray workReads=ownerWorkReadValidation();if(workReads.length()>0)validation.put("ownerWorkResults",workReads);
         if(admittedSkillAssetScope!=null)validation.put("skillScopeFingerprint",dev.pocketengine.features.skills.SkillSourcePolicy.scopeFingerprint(admittedSkillAssetScope));
-        JSONObject temporary=workingSnapshot();admittedWorkingMemory=temporary!=null;if(temporary!=null&&!temporary.optString("context").isEmpty()){reference.append("\n").append(temporary.getString("context"));snapshot.put("workingMemory",new JSONObject().put("taskId",taskId).put("runId",runId).put("epoch",epoch).put("revision",temporary.getLong("revision")).put("persisted",false));}
+        JSONObject temporary=resultHandling?null:workingSnapshot();admittedWorkingMemory=temporary!=null;if(temporary!=null&&!temporary.optString("context").isEmpty()){reference.append("\n").append(temporary.getString("context"));snapshot.put("workingMemory",new JSONObject().put("taskId",taskId).put("runId",runId).put("epoch",epoch).put("revision",temporary.getLong("revision")).put("persisted",false));}
         if(workProfile!=null&&workProfile.hasInstructions()){
             if(!(skills instanceof SkillsModule))throw new SecurityException("原任务指导来源不可读取；请回工作配置核对，没有忽略已选指导。");
             JSONObject guidance=profileInstructionContext((SkillsModule)skills,MAX_HOST_REFERENCE_CHARS-reference.length());

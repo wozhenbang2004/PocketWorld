@@ -59,7 +59,7 @@ export function AttachmentVersionContinuation({original,foregroundReady,busy,act
 }
 
 export function AttachmentDocumentEditor({original,windowId,foregroundReady,pendingTask,busy,act,beforeBack}:{original:Json;windowId:string;foregroundReady:boolean;pendingTask?:string;busy:boolean;act:AttachmentAction;beforeBack:(handler:(()=>Promise<AttachmentFrame|undefined>)|null)=>void}) {
- const [draft,setDraft]=useState<Json>(()=>structuredClone(original)),[slide,setSlide]=useState('0'),[error,setError]=useState(''),[saving,setSaving]=useState(false),[saved,setSaved]=useState(false),[review,setReview]=useState<Json|null>(null),[ack,setAck]=useState(false);
+ const [draft,setDraft]=useState<Json>(()=>structuredClone(original)),[slide,setSlide]=useState('0'),[error,setError]=useState(''),[saving,setSaving]=useState(false),[saved,setSaved]=useState(false),[review,setReview]=useState<Json|null>(null),[ack,setAck]=useState(false),[discardOpen,setDiscardOpen]=useState(false);
  const current=useRef(draft),committed=useRef(JSON.stringify(original)),savingPromise=useRef<Promise<AttachmentFrame|undefined>|null>(null),alive=useRef(true),revision=useRef(0),action=useRef(act);current.current=draft;action.current=act;
  const context=useRef({windowId,foregroundReady,generation:0});
  if(context.current.windowId!==windowId||context.current.foregroundReady!==foregroundReady)context.current={windowId,foregroundReady,generation:context.current.generation+1};
@@ -67,10 +67,15 @@ export function AttachmentDocumentEditor({original,windowId,foregroundReady,pend
  async function flush():Promise<AttachmentFrame|undefined> {
   if(savingPromise.current)return savingPromise.current;
   if(!context.current.foregroundReady)throw new Error('回到当前文件窗口后可保存保留的输入');
-  if(!validDraft(current.current)||JSON.stringify(current.current)===committed.current)return;
+  if(JSON.stringify(current.current)===committed.current)return;
+  if(!validDraft(current.current)){
+   const message='当前修改还不完整，尚未保存。请补全文件名和正文后返回；输入仍保留在这里。';
+   setError(message);throw new Error(message);
+  }
   const generation=context.current.generation;
   const operation=(async()=>{setSaving(true);let after:AttachmentFrame|undefined;try{
-   while(alive.current&&validDraft(current.current)&&JSON.stringify(current.current)!==committed.current){
+   while(alive.current&&JSON.stringify(current.current)!==committed.current){
+    if(!validDraft(current.current))throw new Error('当前修改还不完整，尚未保存。请补全文件名和正文后返回；输入仍保留在这里。');
     if(!context.current.foregroundReady||context.current.generation!==generation)throw new Error('原文件窗口已变化，当前输入保留，请重新保存');
     const next=structuredClone(current.current),encoded=JSON.stringify(next),result=await action.current('updateDocument',{draft:next},after);
     if(!alive.current||context.current.generation!==generation)throw new Error('原文件窗口已变化，当前输入保留，请重新保存');
@@ -91,12 +96,13 @@ export function AttachmentDocumentEditor({original,windowId,foregroundReady,pend
  const prepare=async()=>{const request=revision.current,generation=context.current.generation;try{const after=await flush();if(!alive.current||request!==revision.current||context.current.generation!==generation)return;const result=await act('reviewDocument',{},after);if(alive.current&&request===revision.current&&context.current.generation===generation){setReview(result);setAck(false)}}catch(cause){setError(cause instanceof Error?cause.message:'文档审阅未完成')}};
  const closeReview=()=>{setReview(null);setAck(false);void act('discardReview').catch(()=>{})};
  return <section className="pw-document-editor"><header className="pw-document-heading"><h3>{presentation?'演示文稿内容':'文档内容'}</h3><p className="pw-muted">{draft.parentArtifactId?'以选定原版本为起点，保存为新的独立文件。':'生成 Word 或 PDF，并保留可以继续修改的内容。'}</p></header>
- {error&&<p className="pw-error" role="alert">{error}</p>}{!validDraft(draft)&&supported&&<p className="pw-muted">填写完整的文件名和正文后会保存可恢复草稿。当前不完整输入仍留在编辑页。</p>}
+ {error&&<p className="pw-error" role="alert">{error}</p>}{!validDraft(draft)&&supported&&<div className="pw-document-incomplete"><p className="pw-muted">填写完整的文件名和正文后会保存可恢复草稿。当前不完整输入仍留在编辑页。</p>{JSON.stringify(draft)!==committed.current&&<Button variant="ghost" disabled={busy||saving} onClick={()=>setDiscardOpen(true)}>放弃未保存修改</Button>}</div>}
  {pendingTask&&<div className="pw-banner"><p>原保存动作待核，编辑与再次生成已暂停。</p><Button variant="secondary" disabled={busy} onClick={()=>void act('queryDocument').catch(()=>{})}>核对原文档结果</Button></div>}
  {supported?<><TextField label="文件名" value={draft.name||''} onChange={value=>text('name',value,80)} isDisabled={!editable}/>
  {presentation?<><SelectField label="幻灯片" value={slide} options={slides.map((item,i)=>({id:String(i),label:`第 ${i+1} 页 · ${item.title||'未命名'}`}))} onChange={setSlide} isDisabled={!editable}/>{selected&&<><TextField label="当前页标题" value={selected.title||''} onChange={value=>slideText('title',value)} isDisabled={!editable}/>{Array.isArray(selected.paragraphs)&&selected.paragraphs.map((value:string,i:number)=><TextAreaField key={i} label={`第 ${i+1} 段正文`} value={value} onChange={text=>slideText('paragraph',text,i)} isDisabled={!editable}/>)}<Accordion className="pw-document-secondary"><AccordionItem id="slide-notes" title="讲稿与文本对象" description={`${rows(selected.shapes).length} 个已有文本对象` }><TextAreaField label="讲稿备注" value={selected.notes||''} onChange={text=>slideText('notes',text)} isDisabled={!editable}/>{rows(selected.shapes).map((shape,i)=><TextAreaField key={shape.id||i} label={`文本对象 ${shape.id||i+1}`} value={shape.text||''} onChange={text=>slideText('shape',text,i)} isDisabled={!editable}/>)}</AccordionItem></Accordion></>}<p className="pw-muted">保留页面顺序、对象位置和大小。修改已有文字与备注后，请打开新原件核对完整排版。</p></>:<><TextField label="标题（可选）" value={draft.title||''} onChange={value=>text('title',value,200)} isDisabled={!editable}/><Accordion className="pw-document-secondary"><AccordionItem id="document-format" title="文件格式与排版" description={`${draft.format?.toUpperCase()} · ${draft.fontPoints||12} pt` }><div className="pw-file-form-grid"><SelectField label="文件格式" value={draft.format} options={[{id:'docx',label:'Word · 可编辑'},{id:'pdf',label:'PDF · 固定页面'}]} onChange={format=>edit({...draft,format})} isDisabled={!editable}/><SelectField label="字号" value={String(draft.fontPoints||12)} options={[10,11,12,14,16].map(n=>({id:String(n),label:`${n} pt`}))} onChange={font=>edit({...draft,fontPoints:Number(font)})} isDisabled={!editable}/></div></AccordionItem></Accordion><TextAreaField className="pw-document-body" label={`正文 · ${String(draft.body||'').length}/16000`} value={draft.body||''} onChange={value=>text('body',value,16000)} isDisabled={!editable}/><p className="pw-muted">用 # 标记标题、空行分段、制表符分隔简单表格。生成后可直接查看原件。</p></>}
  <footer className="pw-document-footer"><p className="pw-muted" role="status">{saving?'正在保存草稿…':saved?'可恢复草稿已保存':''}</p>{!saving&&!saved&&validDraft(draft)&&<Button variant="secondary" disabled={busy||!editable} onClick={()=>void flush().catch(()=>{})}>保存保留的修改</Button>}<Button variant="primary" disabled={busy||saving||!!pendingTask||!validDraft(draft)} onClick={()=>void prepare()}>核对并生成新文件</Button></footer></>:<p>此文件没有可在这里编辑的固定结构源，可以返回后打开或导出原件。</p>}
  <SettingsDialog isOpen={!!review} title={`生成新的 ${draft.format?.toUpperCase()} 文件`} onClose={closeReview}>{review&&<><p>将保存当前可编辑内容和一个新的独立原件。生成完成后可查看排版，再选择导出或分享。</p><p><strong>{review.draft?.name}</strong></p><CheckboxField isSelected={ack} onChange={setAck}>确认生成这个新版本</CheckboxField><div className="pw-action-row"><Button variant="secondary" onClick={closeReview}>继续编辑</Button><Button variant="primary" disabled={!ack||busy} onClick={()=>{const id=review.reviewId;setReview(null);void act('createDocument',{reviewId:id,acknowledge:true}).catch(()=>{})}}>生成新文件</Button></div></>}</SettingsDialog>
+ <SettingsDialog isOpen={discardOpen} title="放弃未保存修改" onClose={()=>setDiscardOpen(false)}><p>恢复到这份草稿最后确认保存的内容。已经生成的文件与版本保持不变。</p><div className="pw-action-row"><Button variant="secondary" onClick={()=>setDiscardOpen(false)}>继续编辑</Button><Button variant="danger" disabled={busy||saving} onClick={()=>{const retained=JSON.parse(committed.current);current.current=retained;setDraft(retained);setError('');setSaved(validDraft(retained));setDiscardOpen(false)}}>放弃未保存修改</Button></div></SettingsDialog>
  </section>;
 }
 

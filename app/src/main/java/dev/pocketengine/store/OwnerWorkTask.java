@@ -11,8 +11,16 @@ public final class OwnerWorkTask {
     public static final String ROLE = "owner_work";
     public static final String DELIVERY_FORMAT = "pocketworld.owner-work-delivery.v1";
     public static final String TAKEOVER_FORMAT = "pocketworld.owner-work-takeover.v1";
+    public static final String RESULT_HANDLING_FORMAT = "pocketworld.owner-result-handling.v1";
+    public static final String CONTRACT_FORMAT = "pocketworld.owner-work-contract.v1";
     public static final int TAKEOVER_TOOL_LIMIT = 3;
     public static final int TAKEOVER_MODEL_LIMIT = 2;
+    /** Removal-only: these capabilities may fill evidence gaps, never repeat the
+     * original phone/external action or admit another task. Native leaf gates remain. */
+    public static final Set<String> RESULT_TOOLS = Set.of("owner_work_get", "workspace_artifacts",
+            "workspace_read_artifact", "workspace_diff_artifact", "workspace_create_artifact",
+            "attachments_read_text", "attachments_create_text", "attachments_create_document",
+            "web_search", "web_fetch", "web_research", "web_sources");
     private OwnerWorkTask() { }
 
     public static boolean isOwnerWork(JSONObject task) {
@@ -79,7 +87,24 @@ public final class OwnerWorkTask {
                 || ((String) value).indexOf('\0') >= 0) throw new IllegalArgumentException("工作参数无效：" + key);
         return (String) value;
     }
-    static JSONArray messages(JSONObject task, JSONObject source, JSONArray refs) throws Exception {
+    static JSONObject contract(JSONObject arguments) throws Exception {
+        JSONObject contract = new JSONObject().put("format", CONTRACT_FORMAT).put("revision", 1)
+                .put("goal", arguments.getString("goal"));
+        for (String field : new String[]{"constraints", "deliverable", "completionCriteria"})
+            if (arguments.has(field)) contract.put(field, arguments.getString(field));
+        return contract;
+    }
+    /** Conservative planning estimate from actual text. Physical request admission
+     * still uses InferenceTokenReservation and the original cumulative budget. */
+    public static long reportTokenReserve(JSONObject contract, long sourceBytes, long resultBytes, long outputTokens) throws Exception {
+        if (sourceBytes < 0 || resultBytes < 0 || outputTokens < 1) throw new IllegalArgumentException("结果整理估计无效");
+        long text = Math.addExact(contract.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length, sourceBytes);
+        // A compact native report surface plus a bounded result excerpt; later pages
+        // are charged at their actual request size, never treated as free context.
+        long first = Math.addExact(Math.addExact(text, Math.min(resultBytes, 12L * 1024)), 1024L);
+        return Math.addExact(first, outputTokens);
+    }
+    static JSONArray messages(JSONObject task, JSONObject source, JSONArray refs, JSONObject contract) throws Exception {
         JSONArray messages = new JSONArray(), inputs = source.getJSONArray("ownerInputs");
         for (int i = 0; i < refs.length(); i++) {
             JSONObject ref = refs.getJSONObject(i), row = null;
@@ -93,8 +118,8 @@ public final class OwnerWorkTask {
             // Project element refs bind the original task. They cannot become a different task's edit capability.
             messages.put(message);
         }
-        messages.put(new JSONObject().put("role", "system").put("content", "管家已接纳的本工作目标（系统派单记录，不是新增主人原话）：\n" + task.getString("goal")
-                + "\n前面的原主人消息是本目标的来源上下文；本任务应按自己的范围完成工作并返回可核验结果。"));
+        messages.put(new JSONObject().put("role", "system").put("content", "管家已接纳的完整工作合同（系统派单记录，不是新增主人原话或权限）：\n" + contract
+                + "\n前面的原主人消息是本合同的来源上下文。执行和最终验收使用同一目标、约束、交付物与完成条件；未满足项须明确保留，不能用工具成功替代目标完成。"));
         return messages;
     }
 }

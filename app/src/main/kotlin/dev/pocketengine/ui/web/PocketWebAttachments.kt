@@ -89,12 +89,21 @@ internal class PocketWebAttachments(
             check(controller.webUiCanInteract()) { "请回到当前工作区再操作文件" }
             if (action == "attachmentWorkspace.open") {
                 check(controller.webPrivateOwnerVisible()) { "请回到私人工作区打开文件库" }
+                require(args.keys().asSequence().all { it in setOf("taskId", "fileId", "sha256") }) { "文件入口参数无效" }
                 val task = args.optString("taskId").takeIf { it.isNotBlank() }
-                if (task != null) {
-                    val actual = controller.state.tasks.firstOrNull { it.id == task } ?: error("请重新打开原任务")
-                    check(actual.raw.optString("actorId") == "owner" && actual.raw.optString("spaceId") == "private") { "请从原群任务打开其文件" }
+                require(task == null || task.length <= 240 && '\u0000' !in task) { "原工作身份无效" }
+                val file = args.optString("fileId").takeIf { it.isNotBlank() }
+                if (file != null) {
+                    val sha = args.getString("sha256")
+                    require(file.length <= 240 && '\u0000' !in file && sha.matches(Regex("[0-9a-f]{64}"))) { "原文件版本无效，请重新查找" }
+                    clear(); flow.openFile(JSONObject().put("id", file).put("sha256", sha), task)
+                } else {
+                    require(!args.has("sha256")) { "请选择对应的原文件" }
+                    // The coordinator rereads the original owner task on its IO executor.
+                    // An older task need not still be in the home page's summary cache.
+                    clear(); flow.openTask(task)
                 }
-                clear(); flow.openTask(task); done(JSONObject().put("opened", true), null); changed(); return
+                done(JSONObject().put("opened", true).put("reading", true), null); changed(); return
             }
             val current = window ?: error("文件窗口已关闭，请重新打开")
             check(args.optString("windowId") == current.id && acceptsWindow(current.ticket)) { "原文件窗口已变化，请重新核对" }

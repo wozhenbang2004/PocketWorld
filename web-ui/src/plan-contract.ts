@@ -42,4 +42,4 @@ export function planMutationReceipt(value: Data, command: string): Data {
   if (value?.confirmed !== true || value.command !== command || value.result?.command !== command || !Array.isArray(value.snapshot?.plans)) throw new Error('尚未取得这次计划操作的完整原生回执，请核对原目标。');
   return value;
 }
-export const planState = (value: string) => ({ completed: '目标已按标准完成', finished_with_failures: '本轮结束，有步骤失败', paused: '计划已暂停', cancelled: '计划已取消', review_required: '修改后待审阅', waiting_for_owner_start: '等你开始', waiting_for_original_task: '原任务正在处理或等待核对', scheduled: '等待计划时间', ready_for_host_check: '等待运行条件核对', blocked: '需要处理阻塞' } as Data)[value] || '尚未授权执行';
+export const planState = (value: string) => ({ completed: '目标已按标准完成', finished_with_failures: '本轮结束，有步骤失败', paused: '计划已暂停', cancelled: '计划已取消', review_required: '修改后待审阅', waiting_for_owner_start: '等你开始', waiting_for_original_task: '工作正在处理或等待核对', scheduled: '等待计划时间', ready_for_host_check: '等待启动条件满足', blocked: '需要处理阻塞' } as Data)[value] || '尚未授权执行';

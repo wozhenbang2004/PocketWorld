@@ -2,6 +2,9 @@ package dev.pocketengine.features.assistant;
 
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
+import android.icu.text.CaseMap;
+import android.icu.text.Edits;
+import android.icu.text.Normalizer2;
 import android.os.CancellationSignal;
 import android.os.OperationCanceledException;
 import dev.pocketengine.core.RunControl;
@@ -66,8 +69,8 @@ final class OriginalHistorySearch {
                             if(size>ConversationRepository.MAX_BYTES){gaps.put(new JSONObject().put("recordId",id).put("status","read_limited").put("reason","original_record_exceeds_inline_budget"));if(phase==0)lastNative=id;else lastImported=id;continue;}
                             if(size>ConversationRepository.MAX_BYTES-bytes){more=true;reason="source_byte_budget";exhausted=false;break;}
                             JSONObject message=phase==0?originals.historyMessage(conversation,id,signal):originals.importedMessage(conversation,id);bytes+=size;if(message==null){gaps.put(new JSONObject().put("recordId",id).put("status","unavailable"));if(phase==0)lastNative=id;else lastImported=id;continue;}
-                            String body=message.getString("content");if(phase==0&&!rows.getString(4).equals("sha256:"+ConversationRepository.shaBytes(body.getBytes(StandardCharsets.UTF_8)))){gaps.put(new JSONObject().put("recordId",id).put("status","original_integrity_unavailable"));lastNative=id;continue;}if(matches(body,query)){
-                                JSONObject locator=new JSONObject().put("kind",phase==0?"owner_native_original":"owner_imported_original").put("generation",gen).put("conversationId",conversation).put("recordId",id).put("recordVersion",rows.getLong(3)).put("fingerprint",rows.getString(4));boolean retired=phase==0&&(rows.getLong(9)>=rows.getLong(3)||rows.getInt(10)!=0);int offset=excerptOffset(body,query);JSONObject hit=page(locator,message,offset,Math.min(1000,maxChars-chars),retired);
+                            String body=message.getString("content");if(phase==0&&!rows.getString(4).equals("sha256:"+ConversationRepository.shaBytes(body.getBytes(StandardCharsets.UTF_8)))){gaps.put(new JSONObject().put("recordId",id).put("status","original_integrity_unavailable"));lastNative=id;continue;}int offset=excerptOffset(body,query,original,pause);if(offset>=0){
+                                JSONObject locator=new JSONObject().put("kind",phase==0?"owner_native_original":"owner_imported_original").put("generation",gen).put("conversationId",conversation).put("recordId",id).put("recordVersion",rows.getLong(3)).put("fingerprint",rows.getString(4));boolean retired=phase==0&&(rows.getLong(9)>=rows.getLong(3)||rows.getInt(10)!=0);JSONObject hit=page(locator,message,offset,Math.min(1000,maxChars-chars),retired);
                                 if(hit.getString("body").isEmpty()&&!body.isEmpty()){more=true;reason="character_limit";exhausted=false;break;}if(phase==0)remember(locator,body,original,pause);entries.put(hit);chars+=hit.getString("body").length();
                             }
                             if(phase==0)lastNative=id;else lastImported=id;
@@ -84,8 +87,49 @@ final class OriginalHistorySearch {
             finally{deadline.cancel(false);original.removeCancelAction(cancel);}
         }original.check();control(original,pause);return answer;
     }
-    private static boolean matches(String body,String query){String text=Normalizer.normalize(body,Normalizer.Form.NFKC).toLowerCase(Locale.ROOT);for(String term:Normalizer.normalize(query,Normalizer.Form.NFKC).toLowerCase(Locale.ROOT).trim().split("\\s+"))if(!text.contains(term))return false;return true;}
-    private static int excerptOffset(String body,String query){String term=query.trim().split("\\s+",2)[0];int match=body.indexOf(term);int offset=match<0?0:Math.max(0,match-120);if(offset>0&&offset<body.length()&&Character.isLowSurrogate(body.charAt(offset))&&Character.isHighSurrogate(body.charAt(offset-1)))offset--;return offset;}
+    private static int excerptOffset(String body,String query,RunControl original,long pause)throws Exception{
+        String normalized=Normalizer.normalize(body,Normalizer.Form.NFKC),text=normalized.toLowerCase(Locale.ROOT);
+        String[] terms=Normalizer.normalize(query,Normalizer.Form.NFKC).toLowerCase(Locale.ROOT).trim().split("\\s+");
+        for(String term:terms)if(!text.contains(term))return -1;
+        int match=text.indexOf(terms[0]);control(original,pause);
+        // Casing can expand a character. Map the matched span before mapping NFKC;
+        // offsets sent to the reader always refer to the unchanged original UTF-16.
+        Edits edits=new Edits();StringBuilder lower=new StringBuilder(text.length());
+        CaseMap.toLower().apply(Locale.ROOT,normalized,lower,edits);
+        if(!text.contentEquals(lower))throw new IllegalStateException("原文规范化位置暂不可核对");
+        Edits.Iterator mapping=edits.getFineIterator();
+        if(!mapping.findDestinationIndex(match))throw new IllegalStateException("原文命中位置暂不可核对");
+        int normalizedMatch=mapping.sourceIndex()+(mapping.hasChange()?0:match-mapping.destinationIndex());
+        int sourceMatch=body.equals(normalized)?normalizedMatch:originalOffset(body,normalizedMatch,original,pause);
+        int offset=Math.max(0,sourceMatch-120);
+        if(offset>0&&offset<body.length()&&Character.isLowSurrogate(body.charAt(offset))&&Character.isHighSurrogate(body.charAt(offset-1)))offset--;
+        return offset;
+    }
+    private static int originalOffset(String body,int match,RunControl original,long pause)throws Exception{
+        Normalizer2 nfkc=Normalizer2.getNFKCInstance();int normalizedAt=0;
+        for(int start=0;start<body.length();){
+            control(original,pause);int end=Math.min(body.length(),start+BLOCK_CHARS);
+            if(end<body.length()&&Character.isLowSurrogate(body.charAt(end))&&Character.isHighSurrogate(body.charAt(end-1)))end++;
+            // Only split at Unicode normalization boundaries, including combining
+            // sequences and Hangul. Work in blocks until the one containing the hit.
+            while(end<body.length()&&!nfkc.hasBoundaryBefore(body.codePointAt(end))){control(original,pause);end+=Character.charCount(body.codePointAt(end));}
+            String source=body.substring(start,end),normalized=Normalizer.normalize(source,Normalizer.Form.NFKC);
+            if(match<normalizedAt+normalized.length()){
+                int local=match-normalizedAt;
+                if(source.equals(normalized))return start+local;
+                for(int segment=start;segment<end;){
+                    control(original,pause);int next=segment+Character.charCount(body.codePointAt(segment));
+                    while(next<end&&!nfkc.hasBoundaryBefore(body.codePointAt(next))){control(original,pause);next+=Character.charCount(body.codePointAt(next));}
+                    int chars=Normalizer.normalize(body.substring(segment,next),Normalizer.Form.NFKC).length();
+                    if(local<chars)return segment;
+                    local-=chars;segment=next;
+                }
+                break;
+            }
+            normalizedAt+=normalized.length();start=end;
+        }
+        throw new IllegalStateException("原文规范化位置暂不可核对");
+    }
     private static JSONObject page(JSONObject locator,JSONObject message,int offset,int maxChars,boolean retired)throws Exception{
         String body=message.getString("content");if(offset<0||offset>body.length()||offset>0&&offset<body.length()&&Character.isLowSurrogate(body.charAt(offset))&&Character.isHighSurrogate(body.charAt(offset-1)))throw new IllegalArgumentException("原文UTF-16范围无效");int end=(int)Math.min((long)body.length(),(long)offset+maxChars);if(end>offset&&end<body.length()&&Character.isHighSurrogate(body.charAt(end-1))&&Character.isLowSurrogate(body.charAt(end)))end--;
         return rangePage(locator,message,body.substring(offset,end),offset,body.length(),retired);

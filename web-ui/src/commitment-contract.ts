@@ -1,17 +1,17 @@
+import { calendarTimeAt, validCalendarTime, type CalendarTime } from './calendar-time';
 type Data = Record<string, any>;
-export type CommitmentDraft = { title: string; details: string; taskId: string; hours: string };
+export type CommitmentDraft = CalendarTime & { title: string; details: string; taskId: string; hours: string; changeTiming: boolean };
 export function commitmentDraft(record?: Data): CommitmentDraft {
-  return { title: String(record?.title || ''), details: String(record?.details || ''), taskId: String(record?.taskId || ''), hours: record ? '' : '24' };
+  return { ...calendarTimeAt(record?.dueAt || Date.now() + 86400000), title: String(record?.title || ''), details: String(record?.details || ''), taskId: String(record?.taskId || ''), hours: '', changeTiming: !record };
 }
 export function commitmentReview(draft: CommitmentDraft, viewHandle?: string): Data {
   if (viewHandle !== undefined && !viewHandle.trim()) throw new Error('请重新核对原委托版本，尚未建立新的委托。');
   if (!draft.title.trim() || draft.title.length > 200 || draft.details.length > 4000) throw new Error('请填写 1–200 字目标，具体要求不超过 4000 字。');
   const input: Data = { operation: viewHandle ? 'update' : 'create', title: draft.title, details: draft.details, taskId: draft.taskId };
   if (viewHandle) input.viewHandle = viewHandle;
-  if (draft.hours !== '' || !viewHandle) {
-    const hours = Number(draft.hours);
-    if (!Number.isInteger(hours) || hours < 1 || hours > 8760) throw new Error('跟进时间应为 1–8760 小时之后。');
-    input.hours = hours;
+  if (draft.changeTiming || !viewHandle) {
+    if (!validCalendarTime(draft)) throw new Error('请填写完整日期、时间和时区。');
+    Object.assign(input, { date: draft.date, time: draft.time, zone: draft.zone, laterOverlap: draft.laterOverlap });
   }
   return input;
 }
