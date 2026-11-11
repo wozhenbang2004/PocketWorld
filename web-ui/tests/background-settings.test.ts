@@ -26,6 +26,19 @@ test('audio success requires the actual persisted value or a consistent original
   assert.throws(() => helpers.ownerActionReceipt({}));
 });
 
+test('background connection follows native display ownership, not an unrelated active task', () => {
+  const display = { supportedAndroid: true, authorizationBackend: 'wireless_adb',
+    helperConnected: false, taskOwned: false, adb: { identityPresent: true } };
+  const available = backgroundConnection(display, 'active-conversation-task');
+  assert.equal(available.taskOwned, false);
+  assert.equal(available.canConnect, true, 'a task waiting for setup does not reserve the background helper');
+  assert.equal(backgroundConnection({ ...display, taskOwned: true }, 'active-conversation-task').taskOwned, true);
+  const { taskOwned: _known, ...legacyDisplay } = display;
+  assert.equal(backgroundConnection(legacyDisplay, 'active-conversation-task').taskOwned, true,
+    'older snapshots without an explicit resource owner remain conservative');
+  assert.equal(backgroundConnection(legacyDisplay, null).taskOwned, false);
+});
+
 test('per-copy policy stays on its exact user and requires a readable revision', () => {
   const main = { selectionHandle: 'main', packageName: 'test.app', userId: 0 }, work = { selectionHandle: 'work', packageName: 'test.app', userId: 10 };
   assert.deepEqual(helpers.ownerAppCopies({ apps: [main, work, null, [], { ...work, selectionHandle: '' }, { ...work, userId: -1 }] }), [main, work]);
