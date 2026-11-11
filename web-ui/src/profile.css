@@ -211,3 +211,9 @@
 @media (prefers-reduced-motion: reduce) {
   .pw-profile-segment { transition: none; }
 }
+
+.pw-profile-scope { margin: 0 8px 18px; font-size: 13px; line-height: 21px; color: var(--pw-copy); }
+.pw-profile-duties { margin-top: 30px; }
+.pw-profile-duties > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 8px 8px; }
+.pw-profile-duties h2 { margin: 0; font-size: 15px; line-height: 24px; font-weight: 550; }
+.pw-profile-duties > .pw-profile-home-memory { width: 100%; margin-top: 8px; }

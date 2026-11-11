@@ -4,6 +4,7 @@ import { IconChevronRight, IconFile } from './icons';
 import { getTaskOutcome } from './task-outcome';
 import { useEffect, useRef, useState } from 'react';
 import { useCollectionMotion, MotionFeedback } from './library/journey-motion';
+import { ownerWorkPresentation } from './owner-work-presentation';
 import './task-reading.css';
 
 /** Composition of PW-05 Answer and PW-22 file actions around host-owned evidence. */
@@ -25,7 +26,9 @@ export function TaskOutcome({ task, messages, onCopy, onOpenAttachment }: {
     return () => window.clearTimeout(timer);
   }, [screenshot?.imageId, screenshot?.expiresAt, clock]);
   const imageLabel = screenshot?.currentRun ? '本轮结果截图' : '任务保留的较早截图';
-  const title = outcome.source === 'task-summary' ? '当前摘要' : outcome.source === 'evidence' && !outcome.evidenceRunBound ? '任务保留的结果' : '结果内容';
+  const work = ownerWorkPresentation(task);
+  const report = work?.delivered && Array.isArray(messages) ? messages.find(message => message?.id === work.reportMessageId && message.role === 'assistant' && typeof message.content === 'string') : null;
+  const title = outcome.source === 'task-summary' ? '当前摘要' : outcome.source === 'evidence' && !outcome.evidenceRunBound ? '任务保留的结果' : work ? '执行结果' : '结果内容';
   const reply = outcome.reply;
   const files = reply?.attachments || [];
   const root = useRef<HTMLElement>(null);
@@ -34,6 +37,7 @@ export function TaskOutcome({ task, messages, onCopy, onOpenAttachment }: {
   const revision = JSON.stringify([!!outcome.text, !!outcome.image, !!remotePhone, screenshot?.imageId, reply?.id, files.map(file => [file.id, file.sha256])]);
   useCollectionMotion(root, owner, revision, {layout: false});
   return <section ref={root} className="pw-task-outcome pw-task-reading" aria-label="任务结果依据" data-result-source={outcome.source}>
+    {report?.content && <section className="pw-owner-work-report" aria-label="管家汇报"><header className="pw-outcome-heading"><h3>管家汇报</h3></header><AIAnswer text={report.content} onCopy={() => onCopy(report.content)} onCopyCode={onCopy}/></section>}
     <div className="pw-outcome-document">
       <header className="pw-outcome-heading"><h3>{outcome.text ? title : '暂无可读取的结果'}</h3></header>
       {outcome.text ? <div data-motion-key="result-body"><AIAnswer text={outcome.text} onCopy={() => onCopy(outcome.text)} onCopyCode={onCopy}/></div>

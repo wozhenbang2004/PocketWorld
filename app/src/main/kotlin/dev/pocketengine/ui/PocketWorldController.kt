@@ -241,6 +241,40 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         openTeamAssignment(locator)
     }
     fun openTaskOutcomes(taskId:String) = attachmentOutcomes.openTask(taskId)
+    private val artifactContinuationDrafts by lazy { app.getSharedPreferences("owner_file_continuation_drafts",android.content.Context.MODE_PRIVATE) }
+    private val artifactContinuationSaveFailures=java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private fun artifactContinuationDraftKey(task:String,file:String,sha:String):String {
+        require(UUID.fromString(task).toString()==task&&UUID.fromString(file).toString()==file&&sha.matches(Regex("[a-f0-9]{64}"))){"原成果版本身份无效"}
+        return "$task:$file:$sha"
+    }
+    internal fun readArtifactContinuationDraft(task:String,file:String,sha:String):JSONObject {
+        val key=artifactContinuationDraftKey(task,file,sha)
+        val saved=artifactContinuationDrafts.getString(key,null)?.let{JSONObject(it)}
+        if(saved!=null){val revision=saved.opt("revision");require(saved.optString("taskId")==task&&saved.optString("fileId")==file&&saved.optString("sha256")==sha&&(revision is Int||revision is Long)&&(revision as Number).toLong()>0&&saved.opt("text") is String&&saved.getString("text").length<=2000){"原成果补充草稿不可核对，未覆盖本机内容"};return saved.put("saved",!artifactContinuationSaveFailures.contains(key))}
+        return JSONObject().put("taskId",task).put("fileId",file).put("sha256",sha).put("revision",1L).put("text","").put("saved",true)
+    }
+    internal fun saveArtifactContinuationDraft(task:String,file:String,sha:String,revision:Long,text:String,done:(JSONObject?,String?)->Unit) {
+        val key=artifactContinuationDraftKey(task,file,sha);require(revision>0&&text.length<=2000){"原成果补充草稿超出范围"}
+        io.execute{
+            val result=runCatching{synchronized(artifactContinuationDrafts){
+                val prior=readArtifactContinuationDraft(task,file,sha)
+                require(prior.getLong("revision")==revision){"原版本草稿已有更新，本页文字保留，请重新核对"}
+                if(prior.getString("text")==text&&prior.optBoolean("saved"))prior else {
+                    check(revision<Long.MAX_VALUE){"原草稿版本已达上限"}
+                    val editor=artifactContinuationDrafts.edit()
+                    if(!artifactContinuationDrafts.contains(key)&&artifactContinuationDrafts.all.size>=64){
+                        val empty=artifactContinuationDrafts.all.entries.firstOrNull{it.key!=key&&(it.value as? String)?.let{raw->runCatching{JSONObject(raw).getString("text").isEmpty()}.getOrDefault(false)}==true}?.key
+                        check(empty!=null){"已保留64份成果补充草稿，请先处理已有输入；未丢弃未发送文字"};editor.remove(empty)
+                    }
+                    val next=JSONObject(prior.toString()).put("revision",revision+1).put("text",text)
+                    next.remove("saved")
+                    if(!editor.putString(key,next.toString()).commit()){artifactContinuationSaveFailures.add(key);error("原成果草稿尚未保存，本页文字仍保留")}
+                    artifactContinuationSaveFailures.remove(key);next.put("saved",true)
+                }
+            }}
+            main.post{if(!closed)result.fold({done(it,null)},{done(null,message(it))})}
+        }
+    }
     fun openGroupArtifact(selection:dev.pocketengine.ui.groups.GroupArtifactSelection) = attachmentOutcomes.openGroup(selection)
     fun openGroupMediaOutcome(task:UiTask,operation:String) = attachmentOutcomes.openGroupOperation(task,operation)
     fun openAttachmentOutcome(meta:JSONObject) = attachmentOutcomes.openFile(meta)
@@ -543,6 +577,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     internal fun localTerminalHost() = app.features
     internal fun describeLocalCheckout(checkout: String): JSONObject = dev.pocketengine.features.local.project.ProjectSources.describe(app.features.module("local").handle("export", JSONObject().put("checkoutId", checkout)))
     internal fun projectDevelopmentForWeb() = app.projectDevelopmentForOwner()
+    internal fun nativeButlerHost(): EngineApplication = app
+    internal fun butlerPreparationPresentationForWeb() = app.getSharedPreferences("butler_preparation_presentation", android.content.Context.MODE_PRIVATE)
     internal fun projectDevelopmentPresentationForWeb() = app.getSharedPreferences("project_development_presentation", android.content.Context.MODE_PRIVATE)
     internal fun projectDevelopmentModelForWeb(): JSONObject {
         val model = app.captureConversationModel("", "")
@@ -552,6 +588,12 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     /** Same original project/Assistant admission. A closed queued window is
      * positively not entered; failures after entry remain query-only unknown. */
     internal fun startProjectDevelopmentForWeb(input: JSONObject, current: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
+        startProjectDevelopmentForWeb(input, current, done, null)
+    }
+    internal fun startPreparedProjectForWeb(preparation: dev.pocketengine.store.TaskStore.OwnerWorkPreparation, input: JSONObject, current: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
+        startProjectDevelopmentForWeb(input, current, done, preparation)
+    }
+    private fun startProjectDevelopmentForWeb(input: JSONObject, current: () -> Boolean, done: (JSONObject?, String?) -> Unit, preparation: dev.pocketengine.store.TaskStore.OwnerWorkPreparation?) {
         check(webPrivateOwnerVisible() && current()) { "原项目审阅窗口已关闭" }
         val frozen = JSONObject(input.toString())
         io.execute {
@@ -565,7 +607,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 check(projectDevelopmentModelForWeb().optBoolean("configured")) { "默认模型配置已不可用，没有开始任务" }
                 check(current()) { "原项目审阅窗口已变化，没有开始任务" }
                 entered = true
-                app.projectDevelopmentForOwner().startReviewedForOwner(frozen, java.util.function.BooleanSupplier { current() })
+                if (preparation == null) app.projectDevelopmentForOwner().startReviewedForOwner(frozen, java.util.function.BooleanSupplier { current() })
+                else app.projectDevelopmentForOwner().startReviewedForOwner(frozen, java.util.function.BooleanSupplier { current() }, preparation)
             }
             main.post {
                 result.fold({ done(it, null) }, {
@@ -975,6 +1018,12 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun returnToPendingComposer(client:String) {
         if(state.chatSubmitting)return
         val model=ownerComposer ?: return
+        val pendingWork=model.pending(client)
+        if(pendingWork!=null&&OwnerComposerState.isWorkKey(pendingWork.draftKey)){
+            try{check(webPrivateOwnerVisible()){ "请回到私人工作台" };val target=pendingWork.originalTarget();val task=target.getString("taskId");state=state.copy(requestedTaskId=task,requestedTaskRevision=state.requestedTaskRevision+1,notice="已返回原工作；请在工作补充中核对原输入回执");getTask(task)}
+            catch(error:Exception){state=state.copy(error=message(error))}
+            return
+        }
         try{voiceInputModeChanged();model.selectPending(client);chatViewEpoch++;publishComposer(true);state=state.copy(messages=emptyList(),chatActiveTurn=null,foregroundTurn=null,chatBusy=false);refreshCurrentConversationTurn();voiceInputViewChanged();persistOwnerComposer();state.conversationId?.let{feature("assistant","get",JSONObject().put("conversationId",it))}}
         catch(error:Exception){state=state.copy(error=message(error))}
     }
@@ -2671,6 +2720,103 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         persistPreparedChat(client,input,model,false)
     }
     private val ownerWorkInputCallbacks = mutableMapOf<String, (JSONObject?, String?) -> Unit>()
+    /** Work editors retain their original run and never select the conversation composer. */
+    private fun ownerWorkSupplementDraft(expected: JSONObject): OwnerComposerState.Draft {
+        check(webPrivateOwnerVisible()) { "请回到私人工作台核对原工作" }
+        val taskId=expected.getString("taskId");val runId=expected.getString("runId");val epoch=expected.getLong("epoch")
+        val conversation=expected.getString("conversationId");val key=OwnerComposerState.workKey(taskId,runId,epoch)
+        val task=state.tasks.firstOrNull{it.id==taskId}?:error("原工作尚未读取，请重新打开；已有草稿仍保留")
+        require(task.raw.optString("id")==taskId&&task.raw.optString("executionRole")=="owner_work"&&task.raw.optString("actorId")=="owner"&&task.raw.optString("spaceId")=="private"&&conversation.isNotBlank()&&task.raw.optString("conversationId")==conversation) { "工作或原话题已变化，未改写其他草稿" }
+        val model=ownerComposer?:error("工作草稿尚未读取")
+        val existing=model.draft(key)
+        if(existing!=null){require(existing.conversationId==conversation){"草稿不属于这件工作的原话题"};return existing}
+        originalOwnerWorkBinding(expected,conversation,state.tasks)
+        return model.workDraft(conversation,taskId,runId,epoch)
+    }
+    private fun ownerWorkSupplementSnapshot(expected: JSONObject): JSONObject {
+        val draft=ownerWorkSupplementDraft(expected);val model=ownerComposer?:error("工作草稿尚未读取")
+        val task=state.tasks.first{it.id==expected.getString("taskId")}
+        val current=runCatching{originalOwnerWorkBinding(expected,draft.conversationId,state.tasks)}.isSuccess
+        val accepts=current&&task.raw.optJSONObject("controls")?.optBoolean("canInput")==true
+        val pending=org.json.JSONArray().also{out->model.pending().filter{it.draftKey==draft.key}.forEach{item->
+            out.put(JSONObject().put("clientMessageId",item.clientId).put("draftRevision",item.draftRevision)
+                .put("status",state.chatReceipts[item.clientId]?.optString("status")?:"unconfirmed")
+                .put("canRetryLocallyUnsent",canRetryLocallyUnsent(item.clientId))
+                .put("receipt",state.chatReceipts[item.clientId]?.let{JSONObject(it.toString())}?:JSONObject.NULL))
+        }}
+        val otherDrafts=org.json.JSONArray().also{out->model.workDrafts(expected.getString("taskId")).filter{it.key!=draft.key&&it.conversationId==draft.conversationId}.forEach{other->
+            val parts=other.key.split(':');out.put(JSONObject().put("taskId",expected.getString("taskId")).put("runId",parts[2]).put("epoch",parts[3].toInt()).put("conversationId",other.conversationId).put("key",other.key).put("hasText",other.text.isNotBlank()))
+        }}
+        return JSONObject().put("taskId",expected.getString("taskId")).put("runId",expected.getString("runId")).put("epoch",expected.getLong("epoch"))
+            .put("conversationId",draft.conversationId).put("key",draft.key).put("revision",draft.revision).put("text",draft.text).put("mode",draft.mode)
+            .put("current",current).put("canQueue",accepts).put("canSteer",accepts).put("pending",pending).put("otherDrafts",otherDrafts)
+            .put("reason",if(!current)"这是原执行的补充草稿；工作已进入另一轮，未自动改投。" else if(!accepts)"这件工作当前不接收补充，草稿仍保留。" else "补充会保存在这件工作的原话题，并交给同一执行处理。")
+    }
+    private fun saveOwnerWorkSupplement(model:OwnerComposerState,snapshot:JSONObject,done:(JSONObject?,String?)->Unit) {
+        val version=model.revision();main.removeCallbacks(composerSave);composerSaving=true;publishComposer()
+        ownerComposerStore.save(model).whenComplete{_,error->main.post{
+            if(closed)return@post
+            if(error!=null){done(null,"补充草稿仍在本页，尚未保存："+composerFailure(error));return@post}
+            if(ownerComposer?.revision()==version)composerSaving=false
+            done(snapshot,null)
+        }}
+    }
+    internal fun readOwnerWorkSupplement(expected:JSONObject,done:(JSONObject?,String?)->Unit) {
+        val snapshot=ownerWorkSupplementSnapshot(expected)
+        saveOwnerWorkSupplement(ownerComposer?:error("工作草稿尚未读取"),snapshot,done)
+    }
+    internal fun editOwnerWorkSupplement(expected:JSONObject,key:String,revision:Long,text:String,mode:String,done:(JSONObject?,String?)->Unit) {
+        val original=ownerWorkSupplementDraft(expected)
+        require(original.key==key&&text.length<=12000&&mode in setOf("queue","steer")){"请核对原工作草稿与补充方式"}
+        val model=ownerComposer?:error("工作草稿尚未读取")
+        model.edit(key,revision,text,mode,org.json.JSONArray())
+        saveOwnerWorkSupplement(model,ownerWorkSupplementSnapshot(expected),done)
+    }
+    internal fun sendOwnerWorkSupplement(expected:JSONObject,key:String,revision:Long,client:String,done:(JSONObject?,String?)->Unit) {
+        check(!state.chatSubmitting){"请先核对上一条输入回执"}
+        require(UUID.fromString(client).toString()==client){"补充身份无效"}
+        val draft=ownerWorkSupplementDraft(expected);val model=ownerComposer?:error("工作草稿尚未读取")
+        require(draft.key==key&&draft.revision==revision&&draft.text.isNotBlank()&&draft.text.trim().length<=12000){"原补充草稿已变化，请核对保留内容"}
+        val binding=originalOwnerWorkBinding(expected,draft.conversationId,state.tasks)
+        require(state.tasks.first{it.id==binding.getString("taskId")}.raw.optJSONObject("controls")?.optBoolean("canInput")==true){"原工作已停止接收补充；草稿仍保留"}
+        val unresolved=model.pending().firstOrNull{it.draftKey==key}
+        if(unresolved!=null){
+            if(unresolved.clientId==client&&canRetryLocallyUnsent(client)){
+                ownerWorkInputCallbacks[client]={receipt,error->if(error!=null)done(null,error) else try{done(ownerWorkSupplementSnapshot(expected).put("receipt",receipt?:JSONObject.NULL),null)}catch(failure:Exception){done(null,message(failure))}}
+                retryLocallyUnsent(client)
+            } else done(ownerWorkSupplementSnapshot(expected).put("receipt",JSONObject().put("clientMessageId",unresolved.clientId).put("status","unconfirmed").put("message","请查询这条补充的原回执，没有重复提交")),null)
+            return
+        }
+        require(model.pending(client)==null&&!state.chatReceipts.containsKey(client)){"这条输入身份已使用，请核对原回执"}
+        val fingerprint=ownerWorkDraftFingerprint(ChatInputRules.fingerprint(draft.text.trim(),draft.conversationId,draft.mode,emptyList(),draft.sourceRefs(),draft.previewRefs()),binding)
+        model.prepare(client,key,revision,fingerprint,binding)
+        val input=JSONObject(binding.toString()).put("message",draft.text.trim()).put("clientMessageId",client).put("mode",draft.mode).put("attachments",org.json.JSONArray()).put("_ownerWorkTargeted",true)
+        ownerWorkInputCallbacks[client]={receipt,error->
+            if(error!=null)done(null,error)
+            else try{done(ownerWorkSupplementSnapshot(expected).put("receipt",receipt?:JSONObject.NULL),null)}catch(failure:Exception){done(null,message(failure))}
+        }
+        publishComposer();submittingChatClient=client;composerSaving=true
+        state=state.copy(chatSubmitting=true,error=null,chatReceipts=state.chatReceipts+(client to JSONObject().put("clientMessageId",client).put("status","unconfirmed")))
+        persistPreparedChat(client,input,model,false)
+    }
+    internal fun queryOwnerWorkSupplement(expected:JSONObject,key:String,client:String,done:(JSONObject?,String?)->Unit) {
+        val draft=ownerWorkSupplementDraft(expected);val original=ownerComposer?.pending(client)
+        val target=JSONObject().put("taskId",expected.getString("taskId")).put("runId",expected.getString("runId")).put("epoch",expected.getLong("epoch"))
+        val known=state.chatReceipts[client]
+        val pendingMatches=original!=null&&original.draftKey==key&&original.conversationId==draft.conversationId&&listOf("taskId","runId","epoch").all{original.originalTarget().opt(it).toString()==target.opt(it).toString()}
+        val receiptMatches=known!=null&&known.optString("clientMessageId")==client&&ChatInputRules.receiptMatchesOriginal(known,draft.conversationId,target)
+        require(draft.key==key&&(pendingMatches||receiptMatches)){"只可查询这份补充已登记的原输入"}
+        io.execute{
+            val result=runCatching{app.features.module("assistant").handle("getSubmission",JSONObject().put("clientMessageId",client))}
+            main.post{if(!closed){
+                result.fold({receipt->
+                    if(receipt.optString("clientMessageId")!=client||!ChatInputRules.receiptMatchesOriginal(receipt,draft.conversationId,target)){done(null,"原补充回执身份不一致，草稿仍保留");return@fold}
+                    receiveChatAcknowledgement(receipt,client,true)
+                    try{done(ownerWorkSupplementSnapshot(expected).put("receipt",receipt),null)}catch(failure:Exception){done(null,message(failure))}
+                },{failure->done(null,"原补充回执仍未确认；没有重发："+message(failure))})
+            }}
+        }
+    }
     /** Uses the same durable owner draft and submission receipt as ordinary conversation input. */
     internal fun sendOwnerWorkInput(expected: JSONObject, client: String, text: String, mode: String, done: (JSONObject?, String?) -> Unit) {
         check(webPrivateOwnerVisible() && !state.chatSubmitting) { "请等待原输入回执" }
@@ -2700,8 +2846,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     internal fun controlOwnerWork(expected: JSONObject, action: String, done: (JSONObject?, String?) -> Unit) {
         check(webPrivateOwnerVisible()) { "请回到原私人工作台" }
         require(action in setOf("cancel", "continue")) { "任务动作无效" }
-        val input = originalOwnerWorkBinding(expected, state.conversationId, state.tasks).put("action", action)
-        val conversation = state.conversationId ?: error("原对话未读取")
+        val conversation = state.tasks.firstOrNull { it.id == expected.optString("taskId") }?.raw?.optString("conversationId")?.takeIf(String::isNotBlank) ?: error("原工作话题未读取")
+        val input = originalOwnerWorkBinding(expected, conversation, state.tasks).put("action", action)
         io.execute {
             val result = runCatching { app.ownerWorkControl(conversation, input) }
             main.post { if (!closed) { result.fold({ done(it, null) }, { done(null, message(it)) }); getTask(input.getString("taskId")); refreshCurrentConversationTurn() } }
@@ -2726,10 +2872,11 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     fun canRetryLocallyUnsent(client:String):Boolean {
         if(closed||state.chatSubmitting)return false
-        val local=locallyUnsent[client]?:return false;val model=ownerComposer?:return false;val p=model.pending(client)?:return false;val draft=model.active()
-        if(draft.key!=local.key||draft.revision!=local.revision||p.draftKey!=local.key||p.draftRevision!=local.revision||draft.conversationId!=state.conversationId.orEmpty())return false
+        val local=locallyUnsent[client]?:return false;val model=ownerComposer?:return false;val p=model.pending(client)?:return false
+        val work=OwnerComposerState.isWorkKey(p.draftKey);val draft=if(work)model.draft(p.draftKey)?:return false else model.active()
+        if(draft.key!=local.key||draft.revision!=local.revision||p.draftKey!=local.key||p.draftRevision!=local.revision||!work&&draft.conversationId!=state.conversationId.orEmpty())return false
         val target=p.originalTarget();val actual=state.chatActiveTurn
-        if (JSONObject(local.payload).optBoolean("_ownerWorkTargeted")) return runCatching { originalOwnerWorkBinding(target, state.conversationId, state.tasks) }.isSuccess
+        if (JSONObject(local.payload).optBoolean("_ownerWorkTargeted")) return webPrivateOwnerVisible()&&runCatching { originalOwnerWorkBinding(target, if(work)draft.conversationId else state.conversationId, state.tasks) }.isSuccess
         if(target.length()==0)return !state.chatBusy
         return state.chatBusy&&actual!=null&&listOf("taskId","runId","epoch").all{target.opt(it)==actual.opt(it)}
     }

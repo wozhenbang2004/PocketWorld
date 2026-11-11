@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { IconAccount, IconAdd, IconArrowLeft, IconArrowUpRight, IconChat, IconCheck, IconChevronRight, IconControls, IconHistory, IconRefresh, IconSettings, IconShieldCheck, IconSparkles, IconTrash, IconUndo } from './icons';
+import { IconAccount, IconAdd, IconArrowLeft, IconArrowUpRight, IconCalendarCheck, IconChat, IconCheck, IconChevronRight, IconControls, IconGoal, IconHistory, IconRefresh, IconSettings, IconShieldCheck, IconSparkles, IconTrash, IconUndo } from './icons';
 import { Accordion, AccordionItem, Button, IconButton, SearchField, SelectField, SettingsDialog, StretchSwitch, TextAreaField, TextField } from './forms-library';
 import { Radio, RadioGroup } from './forms-library/boardui/components/base/radio/radio';
 import { useSurfaceEnter } from './library/surface-motion';
@@ -38,6 +38,8 @@ type Props = {
   initialTarget?: PersonalTarget;
   targetRequestKey?: string;
   onOpenAdvancedMemory?: () => void;
+  onOpenCommitments?: () => void;
+  onOpenReminders?: () => void;
 };
 type Memories = { current: Data[]; candidates: Data[]; pendingConflicts: Data[]; history: Data[]; complete: boolean };
 type MemoryPolicy = { reading: { enabled: boolean; revision: number }; learning: { revision: number; enabled: boolean; maxUserSourcesPerTask: number; candidateAcceptance: string } };
@@ -49,7 +51,7 @@ type MutationOperation = 'create' | 'correct' | MemoryReview['operation'];
 type MemoryFeedback = { value: Data; operation: MutationOperation; needsQuery: boolean; targetId?: string; submittedText?: string };
 type AvatarPicker = { id: string; editor: number };
 type AvatarPoll = { sequence: number; key: string | undefined; visibility: number; picker: AvatarPicker };
-const labels: Record<View, string> = { home: '我的', identity: '编辑资料', communication: '交流偏好', behavior: '做事偏好', memories: '个人记忆', memory: '编辑记忆', 'memory-new': '记住一件事', 'memory-settings': '记忆设置', 'memory-history': '过去的记忆' };
+const labels: Record<View, string> = { home: '我与管家', identity: '编辑资料', communication: '交流偏好', behavior: '做事偏好', memories: '个人记忆', memory: '编辑记忆', 'memory-new': '记住一件事', 'memory-settings': '记忆设置', 'memory-history': '过去的记忆' };
 const languageOptions = [{ id: 'auto', label: '跟随对话' }, { id: 'zh-CN', label: '中文' }, { id: 'en', label: 'English' }, { id: 'ja', label: '日本語' }];
 const detailOptions = [{ id: 'concise', label: '简短' }, { id: 'standard', label: '跟随问题' }, { id: 'detailed', label: '详细' }];
 const paceOptions = [{ id: 'fast', label: '高效' }, { id: 'standard', label: '均衡' }, { id: 'careful', label: '细致' }];
@@ -138,7 +140,7 @@ function Segmented({ label, value, options, disabled, onChange }: { label: strin
   return <div className="pw-profile-choice"><h2>{label}</h2><RadioGroup aria-label={label} value={value} onChange={onChange} isDisabled={disabled} className="pw-profile-segments">{options.map(item => <Radio key={item.id} value={item.id} className="pw-profile-segment"><span>{item.label}</span></Radio>)}</RadioGroup></div>;
 }
 /** Personal views share the existing host-owned profile and memory records. */
-export function ProfileWorkspace({ state, supported, run, onBack, onSettings, registerBack, registerBeforeLeave, presentationKey, initialTarget, targetRequestKey, onOpenAdvancedMemory }: Props) {
+export function ProfileWorkspace({ state, supported, run, onBack, onSettings, registerBack, registerBeforeLeave, presentationKey, initialTarget, targetRequestKey, onOpenAdvancedMemory, onOpenCommitments, onOpenReminders }: Props) {
   const [profile, setProfile] = useState<PersonalProfile | null>(null);
   const [memories, setMemories] = useState<Memories>(emptyMemories);
   const [memoryError, setMemoryError] = useState(''), [memoryAvailable, setMemoryAvailable] = useState(false);
@@ -155,6 +157,8 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   const [policy, setPolicy] = useState<MemoryPolicy | null>(null), [controlsError, setControlsError] = useState('');
   const [agentPreferences, setAgentPreferences] = useState<AgentPreferenceControl | null>(null);
   const [feedback, setFeedback] = useState<MemoryFeedback | null>(null);
+  const [duties, setDuties] = useState<Data | null>(null), [dutiesReading, setDutiesReading] = useState(false), [dutiesError, setDutiesError] = useState('');
+  const [dutiesAttempt, setDutiesAttempt] = useState(0);
   const alive = useRef(true), busy = useRef(false), runRef = useRef(run), supportedRef = useRef(supported);
   const readHandle = useRef(''), reviewHandle = useRef(''), pendingLeave = useRef<(() => void) | null>(null);
   const avatarPicker = useRef<AvatarPicker | null>(null), editorInstance = useRef(0);
@@ -278,6 +282,26 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   useEffect(() => {
     if (enteredProfile && canRead && !loaded && !busy.current) void action('正在读取资料', async () => { await readSnapshot(); });
   }, [enteredProfile, canRead, loaded]);
+  useEffect(() => {
+    if (!enteredProfile || !loaded || view !== 'home') return;
+    let active = true; const original = livePresentation.current;
+    setDutiesReading(true); setDutiesError('');
+    const commands = ['commitments.snapshot', 'automation.list', 'automation.receipts'].filter(name => supportedRef.current(name));
+    void Promise.allSettled(commands.map(name => runRef.current(name))).then(results => {
+      if (!active || !alive.current || livePresentation.current !== original) return;
+      const failures: string[] = [];
+      results.forEach((result, index) => {
+        if (result.status === 'rejected') failures.push(result.reason instanceof Error ? result.reason.message : '职责状态尚未完整读取。');
+        else if (commands[index] === 'commitments.snapshot') {
+          const value = object(result.value);
+          if (typeof value.policy?.enabled === 'boolean' && Array.isArray(value.commitments)) setDuties(value);
+          else failures.push('跟进状态尚未完整读取。');
+        }
+      });
+      setDutiesError(failures.join(' ')); setDutiesReading(false);
+    });
+    return () => { active = false; };
+  }, [enteredProfile, loaded, view, presentationKey, dutiesAttempt]);
   const hostRevision = object(state.personalProfile).revision;
   useEffect(() => {
     // Streaming snapshots deliberately carry identity metadata only. Fetch the
@@ -734,6 +758,14 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
           : view === 'home' ? <IconButton icon={IconSettings} aria-label="隐私与数据设置" title="隐私与数据" onClick={() => guarded(onSettings)} /> : <span />;
   const entry = (id: string, title: string, description: string, icon: typeof IconChat, open: () => void, badge?: ReactNode) => <Button variant="ghost" className="pw-profile-entry" leadingIcon={icon} trailingIcon={IconChevronRight} onClick={open} disabled={!loaded || locked} data-profile-entry={id}><span className="pw-profile-entry-copy"><strong>{title}</strong><small>{description}</small></span>{badge}</Button>;
   const memoryRow = (row: Data, candidate: boolean) => <Button key={(candidate ? 'candidate:' : 'memory:') + row.id} variant="ghost" className="pw-profile-memory-row" trailingIcon={IconChevronRight} data-personal-memory={string(row.id)} data-motion-key={(candidate ? 'candidate:' : 'memory:') + row.id} disabled={locked || !supported('profile.memory.get')} onClick={() => openMemory(row, candidate)}><span><strong>{string(row.text || row.title) || '未命名记忆'}</strong><small>{[memoryOrigin(row, candidate), memoryDates(row)].filter(Boolean).join(' · ')}</small></span></Button>;
+  const followUp = object(duties?.policy), quietHours = object(followUp.quietHours);
+  const followUpLabel = dutiesReading ? '正在核对跟进设置' : dutiesError ? '跟进设置待重新核对' : !duties ? '查看委托与跟进设置' : [followUp.enabled !== true ? '自动跟进已关闭' : Number(followUp.pausedUntil) > Date.now() ? '自动跟进已暂停' : '自动跟进已开启', quietHours.start && quietHours.end ? `安静时段 ${quietHours.start}–${quietHours.end}` : ''].filter(Boolean).join(' · ');
+  const reminderData = object(state.features?.automation), reminderReady = Array.isArray(reminderData.rules);
+  const reminderBusy = (state.moduleBusy || []).some((name: string) => ['automation.list', 'automation.receipts'].includes(name));
+  const reminderError = string(state.moduleErrors?.['automation.list']) || string(state.moduleErrors?.['automation.receipts']);
+  const reminderLabel = dutiesReading || reminderBusy ? '正在核对已保存提醒' : dutiesError || reminderError ? '提醒状态待重新核对' : !reminderReady ? '查看已保存的定时提醒' : rows(reminderData.rules).length ? `${rows(reminderData.rules).filter(rule => rule.enabled === true).length} 条已开启 · 查看范围与发生记录` : '还没有定时提醒';
+  const recentReceipt = !dutiesReading && !dutiesError && !reminderBusy && !reminderError ? rows(state.moduleResults?.['automation.receipts']?.receipts).slice().reverse()[0] : undefined;
+  const receiptLabel = recentReceipt ? ({ delivery_unknown: '投递待核对', awaiting_user: '等待你查看', blocked_notifications: '通知受阻', notified: '已通知', delivered: '已投递', cancelled: '已取消', failed: '未完成' }[string(recentReceipt.status)] || '查看原发生记录') : '';
 
   return <section className="pw-profile-workspace pw-route-workspace" data-profile-view={view} aria-label={headingLabel}>
     <header className="pw-profile-header"><IconButton icon={IconArrowLeft} aria-label={view === 'home' ? '返回' : '返回上一级'} onClick={requestBack} /><div className="pw-profile-header-copy"><h1 ref={heading} tabIndex={-1}>{headingLabel}</h1><WorkingStatus active={locked && loaded || avatarPicking && !locked}>{locked ? `${pending}…` : '正在等候所选头像…'}</WorkingStatus></div>{headerSave}</header>
@@ -755,12 +787,22 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
         </MotionFeedback>}
         {loaded && profile && view === 'home' && <>
           <section className="pw-profile-identity" aria-label="个人资料"><Avatar profile={profile} large /><div><h2>{profile.nickname || '我的资料'}</h2>{profile.addressAs && profile.addressAs !== profile.nickname && <p>称呼我为 {profile.addressAs}</p>}<Button variant="ghost" size="small" className="pw-profile-edit-link" onClick={() => openEditor('identity')}>编辑资料<IconChevronRight size={15} aria-hidden="true" /></Button></div></section>
+          <p className="pw-profile-scope">这里的偏好用于私人管家的交流与做事方式；每次工作的明确要求和已确认范围优先。</p>
           <div className="pw-profile-menu">
             {entry('communication', '交流偏好', [selectedLabel(languageOptions, profile.language), selectedLabel(detailOptions, profile.response_detail)].filter(Boolean).join(' · '), IconChat, () => openEditor('communication'))}
             {entry('behavior', '做事偏好', [selectedLabel(paceOptions, profile.operation_pace), selectedLabel(initiativeOptions, profile.initiative)].filter(Boolean).join(' · '), IconControls, () => openEditor('behavior'))}
             {entry('memories', '个人记忆', pendingCandidates.length ? `${pendingCandidates.length} 条待确认 · 查看和修正` : 'AI 对我的了解', IconSparkles, () => { setEditor(null); go('memories'); }, pendingCandidates.length > 0 ? <span className="pw-profile-unread" aria-label={`${pendingCandidates.length} 条待确认`} /> : undefined)}
           </div>
           {memoryAvailable && activeMemories.length > 0 && <section className="pw-profile-home-memories" aria-label="个人记忆预览">{activeMemories.slice(0, 2).map(row => <Button key={row.id} data-motion-key={`memory:${row.id}`} variant="ghost" className="pw-profile-home-memory" trailingIcon={IconChevronRight} disabled={locked || !supported('profile.memory.get')} onClick={() => openMemory(row, false)}><span><strong>{string(row.text || row.title) || '未命名记忆'}</strong><small>{memoryOrigin(row)}</small></span></Button>)}</section>}
+          {(onOpenCommitments || onOpenReminders) && <section className="pw-profile-duties" aria-label="管家的持续职责">
+            <header><h2>管家的持续职责</h2><IconButton icon={IconRefresh} aria-label="核对职责状态" disabled={locked || dutiesReading || reminderBusy} onClick={() => setDutiesAttempt(value => value + 1)} /></header>
+            <div className="pw-profile-menu">
+              {onOpenCommitments && entry('commitments', '委托与目标', followUpLabel, IconGoal, () => guarded(onOpenCommitments))}
+              {onOpenReminders && entry('reminders', '定时提醒', reminderLabel, IconCalendarCheck, () => guarded(onOpenReminders))}
+            </div>
+            {(dutiesError || reminderError) && <p className="pw-error" role="alert">{dutiesError || reminderError}</p>}
+            {recentReceipt && onOpenReminders && <Button variant="ghost" className="pw-profile-home-memory" trailingIcon={IconChevronRight} disabled={locked} onClick={() => guarded(onOpenReminders)}><span><strong>{string(recentReceipt.title) || '最近一次提醒'}</strong><small>{receiptLabel}{dateLabel(recentReceipt.occurrenceAt) ? ` · ${dateLabel(recentReceipt.occurrenceAt)}` : ''}</small></span></Button>}
+          </section>}
           <Button variant="ghost" className="pw-profile-data-entry" leadingIcon={IconShieldCheck} trailingIcon={IconChevronRight} disabled={locked} onClick={() => guarded(onSettings)}>隐私与数据</Button>
         </>}
         {editor && currentSection && <>

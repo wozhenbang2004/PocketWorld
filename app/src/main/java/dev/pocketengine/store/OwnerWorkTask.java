@@ -10,6 +10,9 @@ public final class OwnerWorkTask {
     public static final String FORMAT = "pocketworld.owner-work.v1";
     public static final String ROLE = "owner_work";
     public static final String DELIVERY_FORMAT = "pocketworld.owner-work-delivery.v1";
+    public static final String TAKEOVER_FORMAT = "pocketworld.owner-work-takeover.v1";
+    public static final int TAKEOVER_TOOL_LIMIT = 3;
+    public static final int TAKEOVER_MODEL_LIMIT = 2;
     private OwnerWorkTask() { }
 
     public static boolean isOwnerWork(JSONObject task) {
@@ -43,11 +46,27 @@ public final class OwnerWorkTask {
         return task.getJSONObject("ownerWork");
     }
     static JSONObject arguments(JSONObject supplied) throws Exception {
-        keys(supplied, Set.of("goal", "title", "toolLimit", "modelCallLimit"));
+        keys(supplied, Set.of("goal", "title", "toolLimit", "modelCallLimit", "constraints", "deliverable", "completionCriteria"));
         String goal = text(supplied, "goal", 12000), title = supplied.has("title") ? text(supplied, "title", 200) : goal.substring(0, Math.min(80, goal.length()));
         int tools = (int) TaskExecutionScope.exactLong(supplied, "toolLimit", 1, 400);
         int models = (int) TaskExecutionScope.exactLong(supplied, "modelCallLimit", 1, 512);
-        return new JSONObject().put("goal", goal).put("title", title).put("toolLimit", tools).put("modelCallLimit", models);
+        JSONObject value = new JSONObject().put("goal", goal).put("title", title).put("toolLimit", tools).put("modelCallLimit", models);
+        for (String key : new String[]{"constraints", "deliverable", "completionCriteria"})
+            if (supplied.has(key)) value.put(key, text(supplied, key, 4000));
+        return value;
+    }
+    static JSONObject preparationArguments(JSONObject supplied) throws Exception {
+        keys(supplied, Set.of("kind", "goal", "constraints", "deliverable", "completionCriteria", "projectId"));
+        String kind = text(supplied, "kind", 16);
+        if (!Set.of("phone", "project").contains(kind)) throw new IllegalArgumentException("准备提案只能选择手机或项目");
+        JSONObject value = new JSONObject().put("kind", kind).put("goal", text(supplied, "goal", kind.equals("phone") ? 4000 : 12000));
+        for (String key : new String[]{"constraints", "deliverable", "completionCriteria"})
+            if (supplied.has(key)) value.put(key, text(supplied, key, 4000));
+        if (supplied.has("projectId")) {
+            if (!kind.equals("project")) throw new IllegalArgumentException("手机提案不能附带项目选择");
+            value.put("projectId", text(supplied, "projectId", 240));
+        }
+        return value;
     }
     static void keys(JSONObject object, Set<String> allowed) {
         if (object == null) throw new IllegalArgumentException("工作参数缺失");
@@ -74,7 +93,7 @@ public final class OwnerWorkTask {
             // Project element refs bind the original task. They cannot become a different task's edit capability.
             messages.put(message);
         }
-        messages.put(new JSONObject().put("role", "user").put("content", "管家已接纳的本工作目标：\n" + task.getString("goal")
+        messages.put(new JSONObject().put("role", "system").put("content", "管家已接纳的本工作目标（系统派单记录，不是新增主人原话）：\n" + task.getString("goal")
                 + "\n前面的原主人消息是本目标的来源上下文；本任务应按自己的范围完成工作并返回可核验结果。"));
         return messages;
     }

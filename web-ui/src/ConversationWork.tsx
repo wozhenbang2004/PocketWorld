@@ -6,6 +6,7 @@ import { getRecentTaskProgress } from './task-presentation';
 import { phoneConversationId } from './phone-start';
 import { conversationWorkActionLabel, conversationWorkNeedsAttention } from './conversation-work';
 import { MotionDisclosure, MotionFeedback, useCollectionMotion } from './library/journey-motion';
+import { ownerWorkPresentation } from './owner-work-presentation';
 
 type Task = { id: string; goal: string; status: string; raw?: Record<string, any> };
 
@@ -14,8 +15,8 @@ export function ConversationWork({ tasks, labelStatus, onOpen, canOpen, identity
   const [expanded, setExpanded] = useState(false);
   const root=useRef<HTMLElement>(null),focused=useRef<{node:HTMLElement;id:string;identity:string}|null>(null);
   const listId = useId();
-  const revision=JSON.stringify([expanded,tasks.map(task=>[task.id,task.status,conversationWorkNeedsAttention(task)])]);
-  useCollectionMotion(root,identity,revision,{active:tasks.length>0});
+  const revision=JSON.stringify([expanded,tasks.map(task=>[task.id,task.status,conversationWorkNeedsAttention(task),ownerWorkPresentation(task)?.state])]);
+  useCollectionMotion(root,identity,revision,{active:tasks.length>0,layout:false});
   useLayoutEffect(()=>{
     const original=focused.current;
     if(!original)return;
@@ -30,9 +31,10 @@ export function ConversationWork({ tasks, labelStatus, onOpen, canOpen, identity
   if (!tasks.length) return null;
   const work = tasks.map(task => {
     const progress = getRecentTaskProgress(task), attention = conversationWorkNeedsAttention(task);
+    const handling = ownerWorkPresentation(task);
     const active = ['running', 'preparing', 'verifying', 'pausing', 'stopping', 'cancelling'].includes(task.status);
-    const status = progress.source === 'task' && progress.status === 'unknown' ? progress.stateLabel : attention && (active || task.status === 'queued') ? '需要处理' : labelStatus(task.status);
-    return { task, progress, attention, status, busy: active && !attention, action: conversationWorkActionLabel(task) };
+    const status = progress.source === 'task' && progress.status === 'unknown' ? progress.stateLabel : handling?.waitingForButler || handling?.needsAttention ? handling.handlingLabel : attention && (active || task.status === 'queued') ? '需要处理' : labelStatus(task.status);
+    return { task, progress, attention, status, busy: (active || handling?.state === 'running') && !attention, action: conversationWorkActionLabel(task) };
   });
   // Decisions stay visible independently of the background-work disclosure.
   // The caller continues to own admission, settled filtering and task identity.

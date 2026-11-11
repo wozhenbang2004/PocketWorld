@@ -1,0 +1,59 @@
+/* Affect AgentChat Brief / Assets / Activity composition, on the retained
+ * BoardUI Tabs and Vaul dialog implementation. The work is a full object
+ * page on phones and a reading pane beside its source on wider windows. */
+.pw-task-drawer.pw-work-object-surface {
+  inset: 0 0 0 auto;
+  width: 100%;
+  height: 100dvh;
+  max-height: 100dvh;
+  translate: none;
+  border: 0;
+  border-radius: 0;
+  background: var(--pw-surface);
+  padding-top: var(--pocket-inset-top, env(safe-area-inset-top, 0px));
+  padding-bottom: 0;
+  box-shadow: none;
+}
+.pw-work-object-surface .pw-task-header { min-height: 64px; padding: 8px 12px; background: var(--pw-surface); }
+.pw-work-object-surface .pw-task-header h2 { font: 550 18px/26px var(--pw-font); }
+.pw-work-object-surface .pw-task-body { padding: 0 var(--pw-page-gutter, 20px) 28px; background: var(--pw-surface); }
+.pw-work-object-tabs { gap: 24px; min-width: 0; }
+.pw-work-object-tabs > .relative { position: sticky; top: 0; z-index: 2; background: var(--pw-surface); }
+.pw-work-object-tabs [role="tablist"] { gap: 20px; }
+.pw-work-object-tabs [role="tab"] { min-height: 48px; padding: 12px 2px; }
+.pw-work-object-tabs > [role="tabpanel"][hidden] { display: none; }
+.pw-work-object-tabs .pw-task-overview { padding-top: 0; border-top: 0; }
+.pw-work-object-surface .pw-task-footer { background: var(--pw-surface); }
+.pw-owner-work-facts { margin: 0; padding: 0 0 20px; border-bottom: 1px solid var(--pw-edge); min-width: 0; }
+.pw-owner-work-handling { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 8px 12px; }
+.pw-owner-work-handling > [role="progressbar"] { flex: none; width: 16px; height: 16px; margin-top: 3px; }
+.pw-owner-work-handling > div { min-width: 0; flex: 1 1 180px; }
+.pw-owner-work-handling strong { font: 500 15px/23px var(--pw-font); color: var(--pw-ink); }
+.pw-owner-work-handling p { margin: 6px 0 0; font: 400 13px/21px var(--pw-font); color: var(--pw-copy); overflow-wrap: anywhere; }
+.pw-owner-work-handling > button { min-height: 44px; padding-inline: 0; font-size: 13px; }
+.pw-owner-work-result-state { margin: 8px 0 0; font: 400 12px/20px var(--pw-font); color: var(--pw-muted); }
+.pw-owner-work-report { margin-bottom: 24px; }
+.pw-work-goal-panel { display: flex; flex-direction: column; align-items: flex-start; gap: 16px; }
+.pw-work-goal { min-width: 0; width: 100%; }
+.pw-work-goal h3 { margin: 0 0 10px; font: 500 13px/21px var(--pw-font); color: var(--pw-copy); }
+.pw-work-goal-text { margin: 0; color: var(--pw-ink); font: 500 17px/28px var(--pw-font); overflow-wrap: anywhere; white-space: pre-wrap; }
+.pw-work-goal dl { margin: 28px 0 0; display: grid; gap: 24px; }
+.pw-work-goal dt { font: 500 13px/21px var(--pw-font); color: var(--pw-copy); }
+.pw-work-goal dd { margin: 8px 0 0; font: 400 15px/25px var(--pw-font); color: var(--pw-ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.pw-work-goal > .pw-muted { margin-top: 20px; font-size: 13px; line-height: 21px; }
+.pw-work-supplement { display: flex; flex-direction: column; gap: 16px; padding: 22px 0; border-block: 1px solid var(--pw-edge); }
+.pw-work-supplement-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.pw-work-supplement-heading > div { min-width: 0; }
+.pw-work-supplement-heading small { color: var(--pw-muted); font: 400 12px/20px var(--pw-font); }
+.pw-work-supplement-heading h3 { margin: 4px 0 0; font: 500 15px/24px var(--pw-font); overflow-wrap: anywhere; }
+.pw-work-supplement-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.pw-work-supplement-footer > span { color: var(--pw-muted); font: 400 12px/20px var(--pw-font); }
+.pw-work-supplement-receipt { border-top: 1px solid var(--pw-edge); padding-top: 14px; }
+.pw-work-supplement-receipt > p { margin: 0 0 10px; font: 400 13px/21px var(--pw-font); color: var(--pw-copy); }
+.pw-work-pending-links { display: flex; flex-wrap: wrap; gap: 8px; }
+@media (min-width: 950px) {
+  .pw-task-drawer.pw-work-object-surface { width: min(740px, 72vw); box-shadow: -16px 0 48px -24px rgb(0 0 0 / 18%); }
+  .pw-work-object-surface .pw-task-body { padding-inline: 32px; }
+  .pw-work-object-surface .pw-task-header { padding-inline: 22px; min-height: 76px; }
+  .pw-work-object-overlay { background: rgb(0 0 0 / 12%); }
+}

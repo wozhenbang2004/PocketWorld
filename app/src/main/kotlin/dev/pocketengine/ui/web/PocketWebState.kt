@@ -212,6 +212,7 @@ internal object PocketWebState {
             .put("pending", JSONArray().also { out -> controller.composerPending.forEach { pending ->
                 out.put(JSONObject().put("clientMessageId", pending.clientId).put("draftKey", pending.draftKey)
                     .put("draftRevision", pending.draftRevision).put("conversationId", pending.conversationId).put("mode", pending.mode)
+                    .put("originalTarget", pending.originalTarget())
                     .put("status", state.chatReceipts[pending.clientId]?.opt("status") ?: JSONObject.NULL)
                     .put("receipt", publicValue(state.chatReceipts[pending.clientId]))
                     .put("canRetryLocallyUnsent", controller.canRetryLocallyUnsent(pending.clientId)))

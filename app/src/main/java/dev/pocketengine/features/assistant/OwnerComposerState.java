@@ -30,6 +30,7 @@ public final class OwnerComposerState {
                     ||anchor.length()>300||observed.length()>300||voice.length()>4000
                     ||!voiceId.isEmpty()&&!uuid(voiceId)||voice.isEmpty()!=voiceId.isEmpty())throw new IllegalArgumentException("原私聊草稿格式无效");
             if(key.startsWith("conversation:")&&!key.equals(conversationKey(conversation)))throw new IllegalArgumentException("草稿不属于原对话");
+            if(isWorkKey(key)&&(conversation.isEmpty()||!attachments.equals("[]")||!sourceRefs.equals("[]")||!previewRefs.equals("[]")||!voice.isEmpty()))throw new IllegalArgumentException("工作补充须保留原对话与独立文字草稿");
             JSONArray selected=previewRefs();for(int i=0;i<selected.length();i++)if(!conversation.equals(selected.getJSONObject(i).getString("conversationId")))throw new SecurityException("元素引用不属于这份原对话草稿");
         }
         public JSONArray attachments()throws Exception{return new JSONArray(attachments);}
@@ -58,6 +59,7 @@ public final class OwnerComposerState {
                 if(!uuid(task)||!uuid(run))throw new IllegalArgumentException("原任务定位无效");
                 locator.put("taskId",task).put("runId",run).put("epoch",epoch);
             }originalTarget=locator.toString();
+            if(isWorkKey(key)&&(conversation.isEmpty()||locator.length()==0||!key.equals(workKey(locator.getString("taskId"),locator.getString("runId"),locator.getLong("epoch")))))throw new IllegalArgumentException("工作补充不属于原执行草稿");
         }
         /** Display/reconciliation locator only. Never pass it to a launch or resume operation. */
         public JSONObject originalTarget()throws Exception{return new JSONObject(originalTarget);}
@@ -93,6 +95,18 @@ public final class OwnerComposerState {
         String key=conversationKey(conversation);Draft existing=drafts.get(key);if(existing!=null)return existing;
         makeRoom();Draft created=blank(key,conversation);drafts.put(key,created);revision=increment(revision);return created;
     }
+    /** A work's unsent supplement is independent of the selected conversation editor. */
+    public synchronized Draft workDraft(String conversation,String task,String run,long epoch)throws Exception {
+        if(!conversationId(conversation))throw new IllegalArgumentException("工作原对话身份无效");
+        String key=workKey(task,run,epoch);Draft existing=drafts.get(key);
+        if(existing!=null){if(!existing.conversationId.equals(conversation))throw new SecurityException("工作草稿不属于原对话");return existing;}
+        makeRoom();Draft created=blank(key,conversation);drafts.put(key,created);revision=increment(revision);return created;
+    }
+    public synchronized List<Draft> workDrafts(String task){
+        if(!uuid(task))throw new IllegalArgumentException("工作身份无效");String prefix="work:"+task+":";List<Draft> result=new ArrayList<>();
+        for(Draft draft:drafts.values())if(draft.key.startsWith(prefix)&&(draft.hasInput()||hasPending(draft.key)))result.add(draft);
+        return Collections.unmodifiableList(result);
+    }
     public synchronized Draft newConversation()throws Exception {
         if(active().conversationId.isEmpty())return active();
         for(Draft draft:drafts.values())if(draft.conversationId.isEmpty()&&!hasPending(draft.key)){activeKey=draft.key;revision=increment(revision);return draft;}
@@ -101,6 +115,7 @@ public final class OwnerComposerState {
     /** Explicitly return to an original pending editor, not whichever conversation is now visible. */
     public synchronized Draft selectPending(String client)throws Exception{
         Pending p=pending.get(client);if(p==null||!drafts.containsKey(p.draftKey))throw new IllegalArgumentException("原待核对输入不存在");
+        if(isWorkKey(p.draftKey))throw new IllegalArgumentException("请回到原工作核对这份独立补充");
         if(!activeKey.equals(p.draftKey)){activeKey=p.draftKey;revision=increment(revision);}return active();
     }
     public synchronized Draft edit(String key,long expected,String text,String mode,JSONArray files)throws Exception {
@@ -166,7 +181,7 @@ public final class OwnerComposerState {
         Pending p=pending.get(client);if(p==null)return new Acknowledgement(false,false,false,activeKey,activeKey);
         if(!conversationId(conversation)||!p.conversationId.isEmpty()&&!p.conversationId.equals(conversation))throw new SecurityException("回执不属于原输入对话");
         Draft prior=drafts.get(p.draftKey);if(prior==null)throw new IllegalStateException("原草稿不可核对，未清除当前输入");
-        String target=conversationKey(conversation);boolean clear=prior.revision==p.draftRevision,migrate=!prior.key.equals(target);
+        String target=isWorkKey(prior.key)?prior.key:conversationKey(conversation);boolean clear=prior.revision==p.draftRevision,migrate=!prior.key.equals(target);
         Draft remaining=clear?new Draft(prior.key,prior.conversationId,increment(prior.revision),"",prior.mode,new JSONArray(),prior.scrollIndex,prior.scrollOffset,prior.anchorMessage,prior.observedMessage,prior.newReplies,"","",new JSONArray(),new JSONArray()):prior;
         Draft collision=drafts.get(target);
         if(migrate&&collision!=null&&collision.hasInput()&&remaining.hasInput())throw new IllegalStateException("输入已受理，但原对话另有未发送草稿；两份均保留，请回原输入核对");
@@ -189,7 +204,7 @@ public final class OwnerComposerState {
         OwnerComposerState state=new OwnerComposerState();state.revision=integer(json,"revision",1,Long.MAX_VALUE);state.activeKey=json.getString("activeKey");
         JSONArray drafts=json.getJSONArray("drafts"),pending=json.getJSONArray("pending");if(drafts.length()<1||drafts.length()>MAX_DRAFTS||pending.length()>MAX_PENDING)throw new IllegalArgumentException("草稿记录超出有界范围");
         for(int i=0;i<drafts.length();i++){JSONObject row=drafts.getJSONObject(i);Draft d=new Draft(row.getString("key"),row.getString("conversationId"),integer(row,"revision",1,Long.MAX_VALUE),row.getString("text"),row.getString("mode"),row.getJSONArray("attachments"),(int)integer(row,"scrollIndex",0,100000),(int)integer(row,"scrollOffset",0,1000000),row.getString("anchorMessage"),row.getString("observedMessage"),bool(row,"newReplies"),row.getString("voiceText"),row.getString("voiceInputId"),row.has("ownerSourceRefs")?row.getJSONArray("ownerSourceRefs"):new JSONArray(),row.has("ownerPreviewRefs")?row.getJSONArray("ownerPreviewRefs"):new JSONArray());if(state.drafts.put(d.key,d)!=null)throw new IllegalArgumentException("草稿身份重复");}
-        if(!state.drafts.containsKey(state.activeKey))throw new IllegalArgumentException("原活动草稿不存在");
+        if(!state.drafts.containsKey(state.activeKey)||isWorkKey(state.activeKey))throw new IllegalArgumentException("原活动对话草稿不存在");
         for(int i=0;i<pending.length();i++){JSONObject row=pending.getJSONObject(i);Pending p=new Pending(row.getString("clientId"),row.getString("draftKey"),integer(row,"draftRevision",1,Long.MAX_VALUE),row.getString("fingerprint"),row.getString("conversationId"),row.getString("mode"),row.getJSONObject("originalTarget"));Draft d=state.drafts.get(p.draftKey);if(d==null||!d.conversationId.equals(p.conversationId)||p.draftRevision>d.revision||state.pending.put(p.clientId,p)!=null)throw new IllegalArgumentException("待核对输入不属于原草稿版本");}
         return state;
     }
@@ -197,7 +212,16 @@ public final class OwnerComposerState {
     private boolean hasPending(String key){for(Pending p:pending.values())if(p.draftKey.equals(key))return true;return false;}
     private void makeRoom(){if(drafts.size()<MAX_DRAFTS)return;for(Draft d:new ArrayList<>(drafts.values()))if(!d.key.equals(activeKey)&&!d.hasInput()&&!hasPending(d.key)){drafts.remove(d.key);return;}throw new IllegalStateException("已保留64份原草稿，请先处理已有输入；没有丢弃未发送文字或待核对身份");}
     private static Draft blank(String key,String conversation)throws Exception{return new Draft(key,conversation,1,"","queue",new JSONArray(),0,0,"","",false,"","",new JSONArray(),new JSONArray());}
-    private static boolean validKey(String value){return value!=null&&(value.startsWith("new:")&&uuid(value.substring(4))||value.startsWith("conversation:")&&conversationId(value.substring(13)));}
+    public static boolean isWorkKey(String value){return value!=null&&value.startsWith("work:");}
+    public static String workKey(String task,String run,long epoch){
+        if(!uuid(task)||!uuid(run)||epoch<1||epoch>Integer.MAX_VALUE)throw new IllegalArgumentException("工作执行草稿身份无效");
+        return "work:"+task+":"+run+":"+epoch;
+    }
+    private static boolean validWorkKey(String value){
+        if(!isWorkKey(value))return false;String[] parts=value.split(":",-1);if(parts.length!=4)return false;
+        try{return value.equals(workKey(parts[1],parts[2],Long.parseLong(parts[3])));}catch(IllegalArgumentException invalid){return false;}
+    }
+    private static boolean validKey(String value){return value!=null&&(value.startsWith("new:")&&uuid(value.substring(4))||value.startsWith("conversation:")&&conversationId(value.substring(13))||validWorkKey(value));}
     private static String conversationKey(String value){if(!conversationId(value))throw new IllegalArgumentException("原对话身份无效");return "conversation:"+value;}
     /** Conversation IDs are the original native facade's opaque IDs, including reviewed imports. */
     private static boolean conversationId(String value){return value!=null&&!value.isEmpty()&&value.length()<=240;}

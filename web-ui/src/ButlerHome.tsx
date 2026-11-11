@@ -6,6 +6,7 @@ import { MotionFeedback, useCollectionMotion } from './library/journey-motion';
 import { DecisionInbox } from './shell-library/DecisionInbox';
 import { conversationWorkActionLabel, conversationWorkNeedsAttention } from './conversation-work';
 import { getRecentTaskProgress, taskNeedsReconciliation } from './task-presentation';
+import { ownerWorkPresentation } from './owner-work-presentation';
 import './butler-home.css';
 
 export type ButlerHomeTask = {
@@ -22,10 +23,12 @@ export type ButlerHomeProps = {
   modelReady: boolean;
   modelSetup: ReactNode;
   composer: ReactNode;
+  preparations?: ReactNode;
   tasks: ButlerHomeTask[];
   canOpen: boolean;
   onOpen: (task: ButlerHomeTask) => void;
   onAllWork: () => void;
+  onArtifacts?: (task: ButlerHomeTask) => void;
   onScrollTop?: (top: number) => void;
   initialScrollTop?: number;
 };
@@ -46,7 +49,7 @@ const updatedAt = (task: ButlerHomeTask) => typeof task.updatedAt === 'number' &
 /** Adapt the retained Affect AssistantHome / Composer composition around the
  * real shared input, MIT DecisionInbox and BoardUI task rows. This view reads
  * the native private-work projection; only the original task owns decisions. */
-export function ButlerHome({ ready, modelReady, modelSetup, composer, tasks, canOpen, onOpen, onAllWork, onScrollTop, initialScrollTop = 0 }: ButlerHomeProps) {
+export function ButlerHome({ ready, modelReady, modelSetup, composer, preparations, tasks, canOpen, onOpen, onAllWork, onArtifacts, onScrollTop, initialScrollTop = 0 }: ButlerHomeProps) {
   const scroller = useRef<HTMLDivElement>(null), workRoot = useRef<HTMLElement>(null);
   const allWorkButton = useRef<HTMLButtonElement>(null);
   const focused = useRef<{ node: HTMLElement; id: string } | null>(null);
@@ -63,19 +66,26 @@ export function ButlerHome({ ready, modelReady, modelSetup, composer, tasks, can
     .map(task => {
       const contextAvailable = task.raw?.contextAvailable !== false;
       const progress = contextAvailable ? getRecentTaskProgress(task) : null;
+      const handling = ownerWorkPresentation(task);
       const reconciliation = taskNeedsReconciliation(task);
-      const attention = conversationWorkNeedsAttention(task) || !activeStates.has(task.status) && !endedStates.has(task.status);
+      const attention = conversationWorkNeedsAttention(task) || handling?.needsAttention || !activeStates.has(task.status) && !endedStates.has(task.status);
       const unknown = progress?.source === 'task' && progress.status === 'unknown';
-      const status = reconciliation ? '结果待核对' : unknown ? progress.stateLabel : attention && activeStates.has(task.status) ? '需要你处理' : statusLabels[task.status] || '状态待核对';
-      const detail = !contextAvailable ? task.summary?.trim() || '' : unknown ? progress.detail : task.summary?.trim() || (progress && progress.source !== 'task' ? progress.detail || progress.title : '');
+      const status = reconciliation ? '结果待核对' : unknown ? progress.stateLabel : handling && endedStates.has(task.status) ? handling.handlingLabel : attention && activeStates.has(task.status) ? '需要你处理' : statusLabels[task.status] || '状态待核对';
+      const detail = !contextAvailable ? task.summary?.trim() || '' : unknown ? progress.detail : handling?.waitingForButler || handling?.needsAttention ? handling.reason : task.summary?.trim() || (progress && progress.source !== 'task' ? progress.detail || progress.title : '');
       return { task, attention, status, detail: detail === status || detail === task.goal ? '' : detail,
-        busy: !attention && activeStates.has(task.status) && task.status !== 'queued', action: conversationWorkActionLabel(task) };
+        handling, busy: !attention && (activeStates.has(task.status) && task.status !== 'queued' || handling?.state === 'running'), action: conversationWorkActionLabel(task) };
     });
-  const attention = work.filter(item => item.attention), active = work.filter(item => !item.attention && activeStates.has(item.task.status));
-  const recent = work.filter(item => !item.attention && endedStates.has(item.task.status));
-  const visible = [...attention.slice(0, 4), ...active.slice(0, 3), ...recent.slice(0, 3)];
-  const revision = JSON.stringify([ready, canOpen, visible.map(({ task, attention: needsAttention }) => [task.id, task.status, needsAttention])]);
-  useCollectionMotion(workRoot, 'butler:owner:private', revision, { active: ready });
+  const attention = work.filter(item => item.attention), active = work.filter(item => !item.attention && (activeStates.has(item.task.status) || item.handling?.waitingForButler));
+  const recent = work.filter(item => !item.attention && !item.handling?.waitingForButler && endedStates.has(item.task.status));
+  const featured = recent.find(item => item.handling?.delivered);
+  const otherRecent = recent.filter(item => item !== featured);
+  const visible = [...attention.slice(0, 4), ...active.slice(0, 3), ...(featured ? [featured] : []), ...otherRecent.slice(0, 3)];
+  const revision = JSON.stringify([ready, canOpen, visible.map(({ task, attention: needsAttention, handling }) => [task.id, task.status, needsAttention, handling?.state])]);
+  useCollectionMotion(workRoot, 'butler:owner:private', revision, { active: ready, layout: false });
+  const briefing = attention.length ? `最近的工作中，有 ${attention.length} 件需要你处理。${featured ? '也有一份已整理的结果可以查看。' : ''}`
+    : featured ? '有已整理的结果可以查看，也可以继续交代新的目标。'
+    : active.length ? '手头的工作正在跟进。你可以继续交代新的目标。'
+    : work.length ? '最近的工作都在这里，可以查看结果或继续处理。' : '说说你的目标，我来安排、跟进，把结果带回来。';
 
   useLayoutEffect(() => {
     if (!ready || restored.current || !scroller.current) return;
@@ -118,34 +128,40 @@ export function ButlerHome({ ready, modelReady, modelSetup, composer, tasks, can
   };
   const moreWork = (count: number, label: string) => count > 0 && <Button variant="ghost" className="pw-butler-more" trailingIcon={IconChevronRight} onClick={onAllWork}>另有 {count} 项{label}</Button>;
 
-  return <main className="pw-chat-workspace pw-butler-workspace" aria-label="管家">
+  return <main className="pw-chat-workspace pw-butler-workspace" aria-label="管家" data-returning={work.length > 0 || undefined}>
     <div ref={scroller} className="pw-butler-scroll" onScroll={event => { if (restored.current) reportScroll.current?.(event.currentTarget.scrollTop); }}>
       <div className="pw-butler-content">
         <header className="pw-butler-welcome">
-          <h1>有什么事交给我？</h1>
-          <p>说说你的目标，我来安排、跟进，把结果带回来。</p>
+          <h1>{work.length ? '接着把事情做好' : '有什么事交给我？'}</h1>
+          <p>{briefing}</p>
           {ready && !modelReady && <div className="pw-butler-model-setup"><p>先连接一个模型，就可以开始。</p>{modelSetup}</div>}
         </header>
         {composer}
+        {preparations}
         <section ref={workRoot} className="pw-butler-work" aria-labelledby={workHeading} aria-busy={!ready}
           onFocusCapture={event => { const node = event.target as HTMLElement, id = node.closest<HTMLElement>('[data-task-id]')?.dataset.taskId; focused.current = id ? { node, id } : null; }}
           onBlurCapture={event => { const node = event.target as HTMLElement; if (event.relatedTarget instanceof Node ? !event.currentTarget.contains(event.relatedTarget) : node.isConnected && !node.closest('[inert],[hidden]') && !node.matches(':disabled')) focused.current = null; }}>
-          <h2 id={workHeading}>最近委派</h2>
+          <h2 id={workHeading}>最近的工作</h2>
           {!ready ? <p className="pw-butler-reading" role="status"><ProgressCircle isIndeterminate size="sm" aria-label="正在恢复工作记录" /><span>正在恢复工作记录…</span></p> : <>
             {attention.length > 0 && <section className="pw-butler-work-group pw-butler-attention" aria-label="待你处理">
               <h3>待你处理</h3>
               {canOpen ? <DecisionInbox compact className="pw-butler-decisions" heading="待你处理"
-                decisions={attention.slice(0, 4).map(item => ({ id: item.task.id, title: item.task.goal || '委派工作', detail: [item.status, item.detail].filter(Boolean).join(' · '), primary: item.action, secondary: '查看任务' }))}
+                decisions={attention.slice(0, 4).map(item => ({ id: item.task.id, title: item.task.goal || '委派工作', detail: [item.status, item.detail].filter(Boolean).join(' · '), primary: item.action, secondary: '查看工作' }))}
                 onDecide={decision => { const item = attention.find(value => value.task.id === decision.id); if (canOpen && item) onOpen(item.task); }} />
                 : <ol className="pw-butler-work-list">{attention.slice(0, 4).map(renderTask)}</ol>}
               {moreWork(attention.length - 4, '待处理事项')}
             </section>}
-            {active.length > 0 && <section className="pw-butler-work-group" aria-label="进行中"><h3>进行中</h3><ol className="pw-butler-work-list">{active.slice(0, 3).map(renderTask)}</ol>{moreWork(active.length - 3, '进行中的工作')}</section>}
-            {recent.length > 0 && <section className="pw-butler-work-group pw-butler-recent" aria-label="最近结束"><h3>最近结束</h3><ol className="pw-butler-work-list">{recent.slice(0, 3).map(renderTask)}</ol>{moreWork(recent.length - 3, '近期结束的工作')}</section>}
+            {featured && <section className="pw-butler-work-group pw-butler-delivery" aria-label="已整理的结果" data-task-id={featured.task.id}>
+              <p className="pw-butler-delivery-eyebrow">管家已汇报</p><h3 dir="auto">{featured.task.goal}</h3>
+              <p>执行结果已保存，管家的汇报已回到原话题。</p>
+              <div className="pw-butler-delivery-actions"><Button variant="secondary" trailingIcon={IconChevronRight} disabled={!canOpen} onClick={() => onOpen(featured.task)}>查看这份结果</Button>{onArtifacts && <Button variant="ghost" onClick={() => onArtifacts(featured.task)}>文件与版本</Button>}</div>
+            </section>}
+            {active.length > 0 && <section className="pw-butler-work-group" aria-label="正在跟进"><h3>正在跟进</h3><ol className="pw-butler-work-list">{active.slice(0, 3).map(renderTask)}</ol>{moreWork(active.length - 3, '正在跟进的工作')}</section>}
+            {otherRecent.length > 0 && <section className="pw-butler-work-group pw-butler-recent" aria-label="最近记录"><h3>最近记录</h3><ol className="pw-butler-work-list">{otherRecent.slice(0, 3).map(renderTask)}</ol>{moreWork(otherRecent.length - 3, '近期工作')}</section>}
             {!work.length && <p className="pw-butler-work-empty">最近委派工作的进度、需要你决定的事和结果，会显示在这里。</p>}
             {!!work.length && !canOpen && <p className="pw-butler-work-note" role="status">当前暂时无法打开原任务记录。</p>}
           </>}
-          <footer className="pw-butler-work-footer"><Button ref={allWorkButton} variant="ghost" className="pw-butler-all-work" trailingIcon={IconChevronRight} disabled={!ready} onClick={onAllWork}>查看任务记录</Button></footer>
+          <footer className="pw-butler-work-footer"><Button ref={allWorkButton} variant="ghost" className="pw-butler-all-work" trailingIcon={IconChevronRight} disabled={!ready} onClick={onAllWork}>查看我的工作</Button></footer>
         </section>
       </div>
     </div>

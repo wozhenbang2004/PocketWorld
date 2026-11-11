@@ -45,7 +45,7 @@ final class TaskTokenBudgets {
     }
     static JSONObject task(SQLiteDatabase db, JSONObject owner, String ignoreCall) throws Exception {
         JSONObject place = container(owner); if (place == null) return null;
-        JSONObject stored = place.optJSONObject("tokenBudget"); if (stored != null) return checkedPool(new JSONObject(stored.toString()));
+        JSONObject stored = place.optJSONObject("tokenBudget"); if (stored != null) {JSONObject pool=checkedPool(new JSONObject(stored.toString()));expireReportHolds(pool,System.currentTimeMillis());return pool;}
         JSONObject pool = empty(System.currentTimeMillis()), frozen = owner.optJSONObject("tokenBudgetDefault");
         if (frozen != null && checkedPolicy(frozen).getBoolean("enabled"))
             pool.put("enabled", true).put("limit", frozen.getLong("limit")).put("defaultRevision", frozen.getLong("revision"));
@@ -97,7 +97,7 @@ final class TaskTokenBudgets {
         if (stored != null) {
             checkedDaily(stored, key);
             if (!stored.has("poolId")) stored.put("poolId", java.util.UUID.randomUUID().toString());
-            advance(stored, now); return stored;
+            expireReportHolds(stored,now);advance(stored, now); return stored;
         }
         ZoneId zone = ZoneId.of(initialZone); JSONObject pool = empty(now);
         pool.put("routeKey", key).put("poolId", java.util.UUID.randomUUID().toString()).put("zoneId", zone.getId()).put("nextZoneId", zone.getId())
@@ -142,13 +142,61 @@ final class TaskTokenBudgets {
         putMeta(db, DAILY + key, pool); return view(pool, true);
     }
 
+    /** Future report allowance shares the existing pool; it is not a physical call or usage receipt. */
+    static void reserveOwnerWorkReport(SQLiteDatabase db, JSONObject owner, String workId, long amount,long deadlineAt, InferenceTokenReservation.NativeIdentity identity) throws Exception {
+        if(workId==null||!workId.matches("[a-fA-F0-9-]{36}")||amount<1||amount>InferenceTokenReservation.MAX_TOKENS)throw new SecurityException("原结果整理token预留无效");
+        JSONObject task=task(db,owner,"");if(task==null)throw new SecurityException("原工作缺少累计token预算容器");
+        String key=requireIdentity(db,identity,task.getBoolean("enabled"));long now=System.currentTimeMillis();JSONObject day=key.isEmpty()?null:daily(db,key,ZoneId.systemDefault().getId(),now);
+        admit(task,amount,"原任务结果整理");if(day!=null)admit(day,amount,"原连接结果整理");
+        addReportHold(task,workId,amount,new JSONObject().put("routeKey",key).put("dailyPoolId",day==null?"":day.getString("poolId")).put("deadlineAt",deadlineAt));
+        if(day!=null){addReportHold(day,workId,amount,new JSONObject().put("deadlineAt",deadlineAt));putMeta(db,DAILY+key,day);}saveTask(owner,task);
+    }
+    /** Only the still-unspent escrow is released; actual/unknown physical-call holds remain untouched. */
+    static void releaseOwnerWorkReport(SQLiteDatabase db,JSONObject owner,String workId)throws Exception {
+        JSONObject task=task(db,owner,"");if(task==null)throw new SecurityException("原结果整理预算容器已丢失");long now=System.currentTimeMillis();expireReportHolds(task,now);JSONObject hold=reportHold(task,workId);if(hold==null)throw new SecurityException("原结果整理token预留已缺失，未退款");
+        long remaining=hold.getLong("remainingTokens");String key=hold.getString("routeKey");
+        if(!key.isEmpty()){
+            JSONObject day=meta(db,DAILY+key);if(day==null||!hold.getString("dailyPoolId").equals(checkedDaily(day,key).optString("poolId")))throw new SecurityException("原结果整理每日预留已变化，未退款");
+            expireReportHolds(day,now);JSONObject original=reportHold(day,workId);if(original==null||original.getLong("remainingTokens")!=remaining)throw new SecurityException("原结果整理每日余量不一致，未退款");
+            spendReportHold(day,workId,remaining);putMeta(db,DAILY+key,day);
+        }
+        spendReportHold(task,workId,remaining);hold.put("releasedAt",now);saveTask(owner,task);
+    }
+    static JSONArray ownerWorkReportIds(JSONObject pool)throws Exception {
+        JSONArray ids=new JSONArray();JSONObject holds=pool==null?null:pool.optJSONObject("ownerWorkReportHolds");if(holds!=null)for(var keys=holds.keys();keys.hasNext();){String id=keys.next();if(reportHold(pool,id).getLong("remainingTokens")>0)ids.put(id);}return ids;
+    }
+    private static void expireReportHolds(JSONObject pool,long now)throws Exception {
+        JSONObject holds=pool.optJSONObject("ownerWorkReportHolds");if(holds==null)return;
+        for(var keys=holds.keys();keys.hasNext();){String id=keys.next();JSONObject hold=reportHold(pool,id);long deadline=hold.optLong("deadlineAt");if(deadline>0&&deadline<=now&&hold.getLong("remainingTokens")>0){spendReportHold(pool,id,hold.getLong("remainingTokens"));hold.put("releasedAt",now);}}
+    }
+    private static void addReportHold(JSONObject pool,String id,long amount,JSONObject identity)throws Exception {
+        JSONObject rows=pool.optJSONObject("ownerWorkReportHolds");if(rows==null){rows=new JSONObject();pool.put("ownerWorkReportHolds",rows);}if(rows.has(id))throw new SecurityException("原工作结果整理已预留，未重复扣账");
+        rows.put(id,identity.put("initialTokens",amount).put("remainingTokens",amount).put("reservedAt",System.currentTimeMillis()));add(pool,"heldTokens",amount);
+    }
+    private static JSONObject reportHold(JSONObject pool,String id)throws Exception {
+        JSONObject rows=pool.optJSONObject("ownerWorkReportHolds");if(rows==null)return null;JSONObject hold=rows.optJSONObject(id);if(hold==null&&rows.has(id))throw new SecurityException("原结果整理预留损坏");
+        if(hold!=null){Long initial=nullableLong(hold,"initialTokens"),remaining=nullableLong(hold,"remainingTokens");if(initial==null||remaining==null||initial<1||initial>InferenceTokenReservation.MAX_TOKENS||remaining>initial)throw new SecurityException("原结果整理预留计数无效");}return hold;
+    }
+    private static void spendReportHold(JSONObject pool,String id,long amount)throws Exception {
+        JSONObject hold=reportHold(pool,id);if(hold==null||amount<0||amount>hold.getLong("remainingTokens"))throw new ModelRequestPolicy.Rejected("owner_work_report_budget_exhausted","本次结果整理超过派单时预留的token范围；原始结果已保留，没有补满预算或重新调用。");
+        hold.put("remainingTokens",hold.getLong("remainingTokens")-amount);add(pool,"heldTokens",-amount);
+    }
     /** Caller is already in the SAME SQL transaction that writes the original started receipt. */
     static void started(SQLiteDatabase db, JSONObject owner, JSONObject receipt, InferenceTokenReservation.NativeIdentity identity) throws Exception {
+        started(db,owner,receipt,identity,"");
+    }
+    static void started(SQLiteDatabase db, JSONObject owner, JSONObject receipt, InferenceTokenReservation.NativeIdentity identity,String reportWorkId) throws Exception {
         JSONObject task = task(db, owner, receipt.getString("callId")), route = receipt.getJSONObject("route");
         String key = requireIdentity(db, identity, task != null && task.getBoolean("enabled")); long now = receipt.getLong("startedAt");
         JSONObject day = key.isEmpty() ? null : daily(db, key, ZoneId.systemDefault().getId(), now);
         JSONObject estimate = route.optJSONObject("tokenReservation");
         Long reserved = reservation(estimate);
+        if(!reportWorkId.isEmpty()){
+            JSONObject hold=task==null?null:reportHold(task,reportWorkId);
+            if(hold==null||reserved==null||!key.equals(hold.optString("routeKey"))||day!=null&&!day.getString("poolId").equals(hold.optString("dailyPoolId")))throw new ModelRequestPolicy.Rejected("owner_work_report_budget_unavailable","原结果整理预留与当前模型连接或请求估计不一致，尚未发送。");
+            // Transfer into the ordinary physical-call hold in this same transaction.
+            spendReportHold(task,reportWorkId,reserved);if(day!=null)spendReportHold(day,reportWorkId,reserved);
+        }
         if (task != null) admit(task, reserved, "原任务");
         if (day != null) admit(day, reserved, "原连接每日");
         JSONObject annotation = new JSONObject().put("format", "pocketworld.token-budget-receipt.v1")
@@ -160,6 +208,7 @@ final class TaskTokenBudgets {
                 .put("windowStart", day == null ? JSONObject.NULL : day.getLong("windowStart"))
                 .put("reservedTokens", reserved == null ? JSONObject.NULL : reserved).put("actualTokens", JSONObject.NULL)
                 .put("state", "pending").put("providerHardCap", false);
+        if(!reportWorkId.isEmpty())annotation.put("ownerWorkReportReservation",reportWorkId);
         if (task != null) { reserve(task, reserved); saveTask(owner, task); }
         if (day != null) { reserve(day, reserved); putMeta(db, DAILY + key, day); }
         receipt.put("tokenBudget", annotation);
@@ -216,6 +265,8 @@ final class TaskTokenBudgets {
     static JSONObject view(JSONObject source, boolean daily) throws Exception {
         JSONObject pool = checkedPool(new JSONObject(source.toString()));
         long occupied = Math.addExact(pool.getLong("knownTokens"), pool.getLong("heldTokens"));
+        long reports=0;int count=0;JSONObject holds=pool.optJSONObject("ownerWorkReportHolds");if(holds!=null)for(var keys=holds.keys();keys.hasNext();){long remaining=reportHold(pool,keys.next()).getLong("remainingTokens");reports=Math.addExact(reports,remaining);if(remaining>0)count++;}
+        pool.remove("ownerWorkReportHolds");pool.put("reportReservedTokens",reports).put("reportReservationCount",count);
         return pool.put("occupiedTokens", occupied).put("remainingTokens", pool.getBoolean("enabled") ? Math.max(0, pool.getLong("limit") - occupied) : JSONObject.NULL)
                 .put("overLimit", pool.getBoolean("enabled") && occupied > pool.getLong("limit"))
                 .put("blockedByUnknown", !pool.getBoolean("coverageComplete") || pool.getLong("unboundedCalls") != 0)
@@ -290,6 +341,11 @@ final class TaskTokenBudgets {
         checkedPolicy(value);
         if (!"pocketworld.token-budget-pool.v1".equals(value.optString("format")) || !(value.opt("coverageComplete") instanceof Boolean)) throw new SecurityException("原token预算投影损坏，未重置账目");
         for (String key : new String[]{"knownTokens", "heldTokens", "unboundedCalls", "pendingCalls", "unknownCalls", "calls"}) if (nullableLong(value, key) == null) throw new SecurityException("原token预算缺少计数");
+        if(value.has("ownerWorkReportHolds")){
+            JSONObject holds=value.getJSONObject("ownerWorkReportHolds");long reserved=0;
+            for(var keys=holds.keys();keys.hasNext();){String id=keys.next();if(!id.matches("[a-fA-F0-9-]{36}"))throw new SecurityException("原结果整理预留身份无效");reserved=Math.addExact(reserved,reportHold(value,id).getLong("remainingTokens"));}
+            if(reserved>value.getLong("heldTokens"))throw new SecurityException("原结果整理预留与累计占用不一致");
+        }
         return value;
     }
     private static JSONObject checkedDaily(JSONObject value, String key) throws Exception {

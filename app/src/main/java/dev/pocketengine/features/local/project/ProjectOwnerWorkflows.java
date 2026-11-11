@@ -16,6 +16,7 @@ public final class ProjectOwnerWorkflows {
     public ProjectOwnerWorkflows(LocalModule local,TaskStore tasks,AssistantModule assistant){this.local=java.util.Objects.requireNonNull(local);this.tasks=java.util.Objects.requireNonNull(tasks);this.assistant=java.util.Objects.requireNonNull(assistant);}
     @FunctionalInterface public interface RoundContinuationExecutor {JSONObject resume(dev.pocketengine.features.teams.TeamProjectRoundHost.Continuation original)throws Exception;}
     private volatile RoundContinuationExecutor roundContinuationExecutor;
+    private final ThreadLocal<TaskStore.OwnerWorkPreparation> butlerPreparation=new ThreadLocal<>();
     public synchronized void setRoundContinuationExecutor(RoundContinuationExecutor original){if(roundContinuationExecutor!=null)throw new IllegalStateException("原round继续宿主已挂载");roundContinuationExecutor=java.util.Objects.requireNonNull(original);}
     public JSONObject continueTeamRound(dev.pocketengine.features.teams.TeamProjectRoundHost.Continuation original)throws Exception{RoundContinuationExecutor nativeHost=roundContinuationExecutor;if(nativeHost==null)throw new IllegalStateException("原native继续入口尚未挂载；没有新建run或更换预算");return nativeHost.resume(java.util.Objects.requireNonNull(original));}
     public JSONObject createProject(JSONObject input)throws Exception{return local.createProjectForOwner(input.getString("name"),input.getString("template"));}
@@ -99,6 +100,17 @@ public final class ProjectOwnerWorkflows {
         if(!current.getAsBoolean())throw new SecurityException("原项目或模型审阅已变化，没有进入启动");
         ownerStartFence.set(current);try{return start(ownerInput);}finally{ownerStartFence.remove();}
     }
+    /** The saved proposal supplies provenance only. The actual owner still selects and reviews
+     * the original checkout, source digest and runtime through the ordinary project admission. */
+    public JSONObject startReviewedForOwner(JSONObject ownerInput,java.util.function.BooleanSupplier current,TaskStore.OwnerWorkPreparation preparation)throws Exception {
+        java.util.Objects.requireNonNull(preparation).checkCurrent();JSONObject shown=preparation.view();
+        if(!"project".equals(shown.getString("kind"))||!shown.getString("clientMessageId").equals(ownerInput.getString("clientMessageId"))
+                ||!shown.getJSONObject("contract").getString("goal").equals(ownerInput.getString("goal")))throw new SecurityException("项目输入不属于这份原管家提案");
+        if(butlerPreparation.get()!=null)throw new IllegalStateException("不能嵌套管家项目交接");
+        butlerPreparation.set(preparation);
+        try{return startReviewedForOwner(ownerInput,()->{try{preparation.checkCurrent();return current.getAsBoolean();}catch(Exception changed){return false;}});}
+        finally{butlerPreparation.remove();}
+    }
     public void checkStartFenceForHost(){var fence=ownerStartFence.get();if(fence!=null&&!fence.getAsBoolean())throw new SecurityException("原项目窗口或模型已变化，没有分配项目执行");}
     public JSONObject start(JSONObject ownerInput)throws Exception {
         String checkout=ProjectBuildPlan.identity(ownerInput.getString("checkoutId")),project=ProjectBuildPlan.identity(ownerInput.getString("projectId"));
@@ -150,7 +162,10 @@ public final class ProjectOwnerWorkflows {
     public void bindNewAttempt(JSONObject task,RunControl original)throws Exception {bindNewAttempt(task,original,null);}
     public void bindNewAttempt(JSONObject task,RunControl original,dev.pocketengine.core.ModelConfig actualModel)throws Exception {
         var round=teamRound.get();if(round!=null){if(selection.get()!=null)throw new SecurityException("新一轮与其他项目选择不能混合");round.bindNewAttempt(task,original,actualModel);return;}
-        JSONObject context=selection.get();if(context!=null)tasks.bindDevelopmentContext(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"),original,new JSONObject(context.toString()));
+        JSONObject context=selection.get();if(context!=null){
+            tasks.bindDevelopmentContext(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"),original,new JSONObject(context.toString()));
+            var preparation=butlerPreparation.get();if(preparation!=null)preparation.bindPreparedTask(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"));
+        }
     }
     public JSONObject requireTask(String id)throws Exception {
         JSONObject task=tasks.get(id,false),context=task==null?null:task.optJSONObject("developmentContext");

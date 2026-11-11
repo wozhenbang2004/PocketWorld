@@ -46,6 +46,13 @@ public final class ExecutionResources {
     public synchronized boolean ownsBackgroundPhone(String token){validate(token);return backgroundPhoneTokens.contains(token);}
     public synchronized int backgroundPhoneCount(){return backgroundPhoneTokens.size();}
 
+    /** Read-only capacity observation; this neither acquires nor renews a resource. */
+    public record Availability(boolean mainScreenBusy,int backgroundUsed,int backgroundLimit,boolean browserBusy) { }
+    public synchronized Availability availability(){
+        expireBrowser(clock.getAsLong());
+        return new Availability(phoneToken!=null,backgroundPhoneTokens.size(),MAX_BACKGROUND_PHONE_RUNS,browserToken!=null);
+    }
+
     public synchronized void releasePhone(String token) {
         validate(token);
         if (token.equals(phoneToken)) phoneToken = null;

@@ -65,10 +65,14 @@ internal class PocketWebAttachments(
         val reviewedProcessing = originalReview?.let { original -> original.metadata().also { metadata ->
             if (original.command == "trimMedia") metadata.put("startAlignmentLabel", NativeMediaTrim.startAlignmentLabel(metadata))
         } }
+        val continuationDraft=if(state.group==null&&state.team==null&&state.taskId!=null&&state.file!=null)runCatching{
+            controller.readArtifactContinuationDraft(state.taskId,state.file.getString("id"),state.file.getString("sha256")).put("available",true)
+        }.getOrElse{JSONObject().put("available",false).put("error",it.message?:"原成果补充草稿尚未读取")} else null
         return JSONObject().put("open", true).put("ready", true).put("windowId", current.id).put("frameId", frameId)
             .put("taskId", state.taskId).put("group", state.group != null).put("team", state.team != null)
             .put("busy", state.busy).put("error", state.error).put("notice", state.notice)
             .put("snapshot", state.snapshot).put("file", state.file).put("document", state.document)
+            .put("continuationDraft",continuationDraft)
             .put("documentOpen", state.documentOpen).put("choosingSource", state.choosingSource)
             .put("documentDraft", state.documentDraft).put("pendingDocumentTask", state.pendingDocumentTask)
             .put("processingInfo", processingInfo).put("processingReview", reviewedProcessing).put("processingReviewId", processingReview?.id)
@@ -160,7 +164,26 @@ internal class PocketWebAttachments(
                 "export" -> flow.prepareExport()
                 "external" -> flow.openExternal()
                 "share" -> flow.shareOriginalFile()
-                "continueVersion" -> { val text = args.getString("change"); require(text.isNotBlank() && text.length <= 2000); flow.continueFromVersion(text) }
+                "readContinuationDraft", "editContinuationDraft", "continueVersion" -> {
+                    val original=flow.state;val task=original.taskId?:error("请回到原工作的固定成果")
+                    val file=original.file?:error("请先选择原成果版本")
+                    check(original.group==null&&original.team==null&&controller.webPrivateOwnerVisible()){ "请在私人原成果中编辑补充" }
+                    val saved=controller.readArtifactContinuationDraft(task,file.getString("id"),file.getString("sha256"))
+                    if(command=="readContinuationDraft")result=JSONObject().put("continuationDraft",saved.put("available",true))
+                    else {
+                        val revision=args.opt("draftRevision");require(revision is Int||revision is Long){"请重新读取原版本草稿"}
+                        val text=args.getString("change");require(text.length<=2000){"成果补充最多2000字"}
+                        require(saved.getLong("revision")== (revision as Number).toLong()){ "原版本草稿已有更新，未覆盖本页文字" }
+                        if(command=="editContinuationDraft"){
+                            controller.saveArtifactContinuationDraft(task,file.getString("id"),file.getString("sha256"),revision.toLong(),text){draft,error->
+                                if(error!=null)done(null,error)
+                                else {changed();done(JSONObject().put("continuationDraft",draft?.put("available",true)).put("workspace",snapshot()),null)}
+                            };return
+                        }
+                        require(text.isNotBlank()&&saved.getString("text")==text&&saved.optBoolean("saved")){"请先保存这份原版本补充"}
+                        flow.continueFromVersion(text)
+                    }
+                }
                 "continueTask" -> flow.continueTask()
                 "openProcessing" -> flow.openProcessing()
                 "reviewProcessing" -> { processingReview = null; flow.forgetProcessingReview(); flow.reviewProcessing(args.getJSONObject("options")) }

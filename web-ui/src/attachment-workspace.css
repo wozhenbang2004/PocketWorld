@@ -85,3 +85,6 @@
 .pw-processing-groups h4 { font-size: 12px; color: var(--pw-muted); font-weight: 400; }
 .pw-processing-groups .pw-file-form-grid { gap: 16px 20px; }
 @media(min-width:900px){.pw-document-editor { max-width: 820px; }.pw-processing-groups { grid-template-columns: repeat(2,minmax(0,1fr)); gap: var(--pw-gap-section,28px); }}
+.pw-file-version-continuation { display: flex; flex-direction: column; gap: 16px; padding-block: 22px; border-top: 1px solid var(--pw-edge); }
+.pw-file-version-continuation > h3 { margin: 0; font: 500 15px/24px var(--pw-font); color: var(--pw-ink); }
+.pw-file-version-continuation > .pw-muted { margin: 0; font-size: 13px; line-height: 21px; }

@@ -2,7 +2,12 @@
   "version": 1,
   "date": "2026-11-06",
   "scope": "Controlled desktop navigation rail and neutral product surface composition",
-  "implementation": ["WorkSidebar.tsx", "navigation-motion.css", "../uiux-surfaces.css", "../product.css"],
+  "implementation": [
+    "WorkSidebar.tsx",
+    "navigation-motion.css",
+    "../uiux-surfaces.css",
+    "../product.css"
+  ],
   "sources": [
     {
       "identity": "BoardUI DashboardSidebar",
@@ -13,8 +18,19 @@
       "sha256": "b4e7bc7740cf9fef982d11edba7af4df82fd765aee29ba2f7c7b2f476a479ee9",
       "license": "adapted/boardui/LICENSE",
       "license_sha256": "ea8a0a9ec64dcf0fdb223a4bb8a4878b6027b83f7b14a57cdd506fbeee69d6c2",
-      "retained": ["Pinned icon and Collapsible label/badge slots", "NavItem anchor structure", "Expanded/collapsed sidebar affordance and aria-expanded"],
-      "differences": ["Compact state is controlled by the existing single App shell", "Existing product actions replace sample routes/profile/team/theme controls", "248px expanded and 76px compact retain at least 44px hit areas", "Existing approved Motion shared selection surface stays beneath labels", "Compact labels retain accessible names and native hover titles", "Unavailable actions retain aria-disabled and cannot dispatch"]
+      "retained": [
+        "Pinned icon and Collapsible label/badge slots",
+        "NavItem anchor structure",
+        "Expanded/collapsed sidebar affordance and aria-expanded"
+      ],
+      "differences": [
+        "Compact state is controlled by the existing single App shell",
+        "Existing product actions replace sample routes/profile/team/theme controls",
+        "248px expanded and 76px compact retain at least 44px hit areas",
+        "Existing approved Motion shared selection surface stays beneath labels",
+        "Compact labels retain accessible names and native hover titles",
+        "Unavailable actions retain aria-disabled and cannot dispatch"
+      ]
     },
     {
       "identity": "BoardUI AppShell",
@@ -24,8 +40,17 @@
       "original": "navigation-upstream/boardui-app-shell.tsx.source",
       "sha256": "0cc0aa1398c6e815ffa677577bd74b1cdcb12609ac2fadcdceb7fca669b49398",
       "license": "adapted/boardui/LICENSE",
-      "retained": ["12px wide-screen frame", "flex sibling navigation/content", "min-width/min-height zero boundaries and independent scrolling"],
-      "differences": ["Existing Vaul drawer remains the phone authority", "Existing PocketWorld workspace remains mounted", "12px gap instead of original 16px", "No Next routing, sample notification/offer/profile or sample page column"]
+      "retained": [
+        "12px wide-screen frame",
+        "flex sibling navigation/content",
+        "min-width/min-height zero boundaries and independent scrolling"
+      ],
+      "differences": [
+        "Existing Vaul drawer remains the phone authority",
+        "Existing PocketWorld workspace remains mounted",
+        "12px gap instead of original 16px",
+        "No Next routing, sample notification/offer/profile or sample page column"
+      ]
     },
     {
       "identity": "Kevin sidebar polish",
@@ -74,5 +99,109 @@
       "Ovio keeps its original separate leading and trailing springs and velocity-preserving interruption. Motion is settled to the selected proportional pill on resize, tab-count change, reduced-motion changes and document hiding."
     ],
     "validation": "Source review only in this subtask. No tests written or run. Integrated build and current Android visual/touch feedback are recorded by the parent delivery."
+  },
+  "butler_hub_20261111": {
+    "status": "implementation-authorized; actual Android visual and journey unverified",
+    "user_authorization": "快去吧一个阶段一个阶段快速完成彻底完成",
+    "requirements": [
+      "PW-H1",
+      "PW-H2",
+      "PW-H3",
+      "PW-H4",
+      "PW-H5",
+      "UIX-01",
+      "UIX-03",
+      "UIX-06",
+      "UIX-08",
+      "UIX-10"
+    ],
+    "design": "../../docs/butler-hub-design-20261111.md",
+    "implementation": [
+      "../App.tsx",
+      "../ButlerHome.tsx",
+      "../ConversationWork.tsx",
+      "../OwnerWorkFacts.tsx",
+      "../owner-work-presentation.ts",
+      "../owner-work.css",
+      "../butler-home.css",
+      "../TaskOutcome.tsx",
+      "../OwnerWorkSupplement.tsx",
+      "../ButlerPreparations.tsx",
+      "../butler-preparations.css",
+      "../AttachmentDocumentEditor.tsx",
+      "../AttachmentWorkspace.tsx",
+      "../attachment-workspace.css",
+      "../ProfileWorkspace.tsx",
+      "../profile.css"
+    ],
+    "actual_sources_read": [
+      {
+        "source": "Affect AssistantHome v3 public reference, not Pro source",
+        "commit": "0e69029b0f617de3e4d40d3241dd9cdd1d50abc4",
+        "path": "upstream/affect/src/demos/screens/workspace.tsx",
+        "component": "AssistantHome / Composer",
+        "retained": "Goal-first column and shared composer; original demo controls are not transplanted as real actions"
+      },
+      {
+        "source": "Affect AgentChat v3 public reference, not Pro source",
+        "commit": "0e69029b0f617de3e4d40d3241dd9cdd1d50abc4",
+        "archive": "ai-dev-orchestrator references/uiux/assets/affectui-interactive-family-20261031/interactive-components-source.zip",
+        "member": "src/demos/screens/agents.tsx",
+        "component": "AgentChat",
+        "retained": "One work object with Brief / Assets / Activity views, independent reading region, retained source context",
+        "differences": "Goal / Results / Process read the original native task; no simulated timers, demo progress, automatic tab switching or sample generation"
+      },
+      {
+        "source": "BoardUI Tabs",
+        "commit": "ec5c5eb3e29c2441be63b9422cd54f411ef23466",
+        "path": "adapted/boardui/components/base/tabs/tabs.tsx",
+        "retained": "React Aria selectedKey, roving focus, panel associations and adopted local underline motion"
+      },
+      {
+        "source": "Vaul 1.1.2",
+        "commit": "3e97aac6a38e4481bade71d7233ed6002e80f9b0",
+        "path": "adapted/vaul/src/index.tsx",
+        "retained": "Existing controlled dialog lifetime, focus containment/restore and portal",
+        "differences": "Work opens from the right as a full phone object page or wide reading pane; handleOnly prevents unintentional content drag; source does not scale"
+      },
+      {
+        "source": "Existing retained Affect/BeUI PermissionReview adapter and native project preparation flow",
+        "path": "Review.tsx; ../ProjectDevelopmentWorkspace.tsx; ../ProjectWorkStart.tsx",
+        "component": "PermissionReview, project selectors and original receipt states",
+        "retained": "Single original proposal, explicit preparation then reviewed start, complete screen/model/scope disclosure, original request query instead of replay",
+        "differences": "Butler proposals use native sourceTask/proposal/sourceConversation bindings and typed phone/project preparation; they do not convert copied goal text into an execution link"
+      },
+      {
+        "source": "Retained BoardUI work input and document editor adapters",
+        "path": "../ConversationQueuedInputs.tsx; ../AttachmentDocumentEditor.tsx; ../forms-library/index.tsx",
+        "component": "TextAreaField, RadioOptions, serialized draft save and close guard",
+        "retained": "Independent text with native durable revision, explicit original-target selection, preserve input after uncertain save",
+        "differences": "Work input is scoped to exact conversation/task/run/epoch; artifact continuation to task/file/sha. Neither consumes the conversation composer draft"
+      },
+      {
+        "source": "Existing retained personal workspace and real responsibilities readers",
+        "path": "../ProfileWorkspace.tsx; ../CommitmentsWorkspace.tsx; ../ReminderWorkspace.tsx",
+        "component": "BoardUI profile entries and original automation/commitment state",
+        "retained": "Profile editing, memory provenance and navigation guards; actual policy and reminder occurrence reads",
+        "differences": "About-me is framed as me-and-butler, connects original follow-up/reminder pages and shows observed responsibility state; no new automation service or inferred task success"
+      }
+    ],
+    "behaviors": [
+      "Native handling state never inferred from completed or delivered",
+      "Unknown result routes to original reconciliation, no retry action",
+      "The work remains in topic until the pending butler takeover settles",
+      "Goal, results and process preserve separate scroll positions and mounted results",
+      "Primary navigation shows butler then work/projects/artifacts; about-me remains secondary",
+      "H-B reads the durable paginated proposal index; exactly selected native phone/project reviews own admission, original requests are only queried after unknown outcomes",
+      "H-C independent work drafts are persisted before dispatch and retain exact source conversation/task/run/epoch; old-run input remains reachable without retargeting it",
+      "H-D original artifact continuation drafts persist exact task/artifact/sha and revision; save continuation retains the original selectOutcome plus updateTask behavior and never claims a new execution",
+      "H-D profile displays read-only native follow-up settings and reminder occurrences, then opens the existing authorized editor pages"
+    ],
+    "validation": {
+      "typescript": "npm run typecheck passed after H-A/H-B/H-C/H-D implementation and source review; root integration build remains authoritative after merging remote changes",
+      "tests": "not written or executed by user requirement",
+      "android_experience": "not run; root integration build and real user experience pending",
+      "visual": "unverified: no screenshot automation or local APK executed"
+    }
   }
 }

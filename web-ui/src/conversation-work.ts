@@ -1,5 +1,6 @@
 import { phoneConversationId } from './phone-start.ts';
 import { getRecentTaskProgress, taskNeedsAttention, taskNeedsReconciliation } from './task-presentation.ts';
+import { ownerWorkPresentation } from './owner-work-presentation.ts';
 
 type Data = Record<string, any>;
 const object = (value: unknown): Data | null => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Data : null;
@@ -95,7 +96,7 @@ export function conversationTaskCompact(task: Data): boolean {
 
 /** Summary priority only; opening the original task still owns all decisions. */
 export function conversationWorkNeedsAttention(task: Data): boolean {
-  return taskNeedsAttention(task) || task.status === 'failed' && task.raw?.executionRole === 'owner_work' && task.raw?.controls?.canContinue === true;
+  return ownerWorkPresentation(task)?.needsAttention === true || taskNeedsAttention(task) || task.status === 'failed' && task.raw?.executionRole === 'owner_work' && task.raw?.controls?.canContinue === true;
 }
 
 /** Only unresolved decisions and uncertain external effects interrupt the composer.
@@ -113,6 +114,8 @@ export function conversationInlineAttention(task: Data): boolean {
 }
 
 export function conversationWorkActionLabel(task: Data): string {
+  const handling = ownerWorkPresentation(task);
+  if (handling?.needsAttention) return '核对管家汇报';
   if (taskNeedsReconciliation(task)) return '核对操作';
   if (task.status === 'needs_confirmation') return '核对结果';
   if (['waiting_approval', 'awaiting_approval', 'waiting_permission'].includes(task.status)) return '处理授权';
@@ -122,7 +125,7 @@ export function conversationWorkActionLabel(task: Data): string {
   if (taskNeedsAttention(task)) return '查看待办';
   if (task.status === 'queued') return '查看排队';
   if (['running', 'preparing', 'verifying', 'pausing', 'stopping', 'cancelling'].includes(task.status)) return '查看进展';
-  return '查看详情';
+  return handling?.resultAvailable || handling?.delivered ? '查看结果' : '查看详情';
 }
 
 export function backgroundConversationWork<T extends Data>(tasks: T[], ownerWork: T[], conversationId: unknown): T[] {
@@ -135,7 +138,8 @@ export function backgroundConversationWork<T extends Data>(tasks: T[], ownerWork
     const associated = raw.conversationId === conversationId && (raw.executionRole === 'owner_work' || raw.feature === 'teams'
       || raw.origin?.kind === 'automation' && raw.origin?.originConversationId === conversationId);
     const resumable = raw.executionRole === 'owner_work' && raw.controls?.canContinue === true && ['failed', 'interrupted'].includes(task.status);
-    if ((!phone && !associated) || ['completed', 'failed', 'cancelled', 'canceled', 'stopped', 'interrupted'].includes(task.status) && !resumable) continue;
+    const handling = ownerWorkPresentation(task);
+    if ((!phone && !associated) || ['completed', 'failed', 'cancelled', 'canceled', 'stopped', 'interrupted'].includes(task.status) && !resumable && !handling?.waitingForButler && !handling?.needsAttention) continue;
     selected.set(task.id, task);
   }
   return [...selected.values()].map(task => ({ task, attention: conversationWorkNeedsAttention(task) }))

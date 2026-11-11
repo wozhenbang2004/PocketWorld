@@ -12,6 +12,11 @@ public final class TaskNotificationState {
                 ||!"owner".equals(task.optString("actorId"))||!"private".equals(task.optString("spaceId"))||task.has("sourceLearningJob"))return null;
         JSONObject origin=task.optJSONObject("origin");if(origin!=null&&!"owner_reviewed_realtime".equals(origin.optString("kind")))return null;
         String status=task.optString("status");if(!Set.of("completed","needs_confirmation","awaiting_user","reconciling","failed","interrupted","waiting_approval","awaiting_approval").contains(status))return null;
+        JSONObject work=task.optJSONObject("ownerWork"),takeover=work==null?null:work.optJSONObject("takeover");
+        // One user-facing result notification: while the original allowance is
+        // reserved/claimed, the native report task will deliver the result notice.
+        // Decisions and unknown effects still keep their own actionable notice.
+        if(takeover!=null&&status.matches("completed|failed")&&takeover.optString("state").matches("reserved|claimed"))return null;
         String taskId=task.getString("id"),run=task.optString("runId");int epoch=task.optInt("coordinatorEpoch");if(!taskId.matches("[a-fA-F0-9-]{36}")||!run.matches("[a-fA-F0-9-]{36}")||epoch<1)return null;
         String anchor=status.equals("completed")||status.equals("needs_confirmation")?"result":status.equals("reconciling")?"reconciliation":status.matches("waiting_approval|awaiting_approval")?"approval":"decision";
         JSONObject value=new JSONObject().put("taskId",taskId).put("runId",run).put("epoch",epoch).put("status",status).put("anchor",anchor).put("conversationId",task.optString("conversationId"));

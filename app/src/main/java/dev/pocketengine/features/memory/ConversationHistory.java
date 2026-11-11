@@ -90,6 +90,8 @@ public final class ConversationHistory {
         JSONObject read(HistoryBinding binding,SourceLocator selected,int offset,int maxChars)throws Exception;
         /** Bounded native metadata/hash checks; no control.check recursion or source execution. */
         void requireCurrent(HistoryBinding binding,List<SourceLocator> provided)throws Exception;
+        /** Persist returned message dependencies before any body reaches the model. */
+        default void prepareMessageSources(HistoryBinding binding,JSONArray sourceRefs)throws Exception{if(sourceRefs.length()>0)throw new SecurityException("原历史消息来源保存门未安装，未提供正文");}
     }
     public static final class Request {
         public final String kind,query,cursor,selection,direction;public final int limit,maxChars;public final long after,before;
@@ -345,6 +347,7 @@ public final class ConversationHistory {
             boolean originalText=result.optString("body").length()>0;JSONArray exposed=result.optJSONArray("entries");
             for(int i=0;exposed!=null&&i<exposed.length();i++)if(!Set.of("task_output","assistant_conversation").contains(exposed.getJSONObject(i).optString("sourceKind")))originalText=true;
             // Output discovery is body-free. Only its actual exact-range read exposes original text.
+            if(refs.length()>0)tasks.prepareMessageSources(binding,refs);
             if(originalText)binding.caller.modelEvidencePrepared();check(original);
             result.put("messageSourceRefs",refs).put("taskSourceRefs",taskRefs);
             JSONObject reply=envelope(binding);for(Iterator<String> it=result.keys();it.hasNext();){String key=it.next();if(!Set.of("callerTaskId","callerRunId","conversationId","ownerId","spaceId").contains(key))reply.put(key,result.get(key));}
@@ -459,6 +462,7 @@ public final class ConversationHistory {
                 if(locator.kind==Kind.MESSAGE)messageRefs.put(locator.message.toJson());
                 else if(locator.kind!=Kind.CONVERSATION){taskRefs.put(locator.taskReference());if(locator.kind==Kind.OUTPUT&&row.has("body")){String key=locator.referenceKey();if(providedTasks.size()>=100&&!providedTasks.containsKey(key))throw new SecurityException("本轮保留历史来源过多");providedTasks.put(key,locator);}}
             }
+            if(messageRefs.length()>0)tasks.prepareMessageSources(binding,messageRefs);
             if(chars>0)binding.caller.modelEvidencePrepared();checkProvidedSources();checkProvidedTasks();check(original);
             if(original.pauseRevision()!=pause)throw new SecurityException("计划最终回执不属于当前暂停版本");
             if(candidates.changedCount()>0){incomplete=true;gaps.put(new JSONObject().put("reason","source_revision_changed_between_queries").put("count",candidates.changedCount()));}

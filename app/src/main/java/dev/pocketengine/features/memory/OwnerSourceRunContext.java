@@ -105,7 +105,12 @@ public final class OwnerSourceRunContext {
             .put("outputSourcesWithdrawn",prior!=null&&prior.optBoolean("outputSourcesWithdrawn"))
             .put("nativeOutputReturned",hadOutput||prior!=null&&prior.optBoolean("nativeOutputReturned"))
             .put("formalMemoryDependencies",prior==null?new JSONArray():formalDependencies(prior.optJSONArray("formalMemoryDependencies")))
-            .put("formalMemoryTrackingComplete",fresh||prior!=null&&prior.optBoolean("formalMemoryTrackingComplete"));
+            .put("formalMemoryTrackingComplete",fresh||prior!=null&&prior.optBoolean("formalMemoryTrackingComplete"))
+            .put("formalMessageTrackingComplete",fresh||prior!=null&&prior.optBoolean("formalMessageTrackingComplete",formalDependencies(prior.optJSONArray("formalMemoryDependencies")).length()==0))
+            .put("nativeAttachmentTrackingComplete",fresh||prior!=null&&prior.optBoolean("nativeAttachmentTrackingComplete"))
+            .put("replyPreviewDependenciesUntracked",prior!=null&&prior.optBoolean("replyPreviewDependenciesUntracked"))
+            .put("assistantMessageSources",prior==null?new JSONArray():assistantSources(prior.optJSONArray("assistantMessageSources")))
+            .put("relatedResultSources",prior==null?new JSONArray():relatedSources(prior.optJSONArray("relatedResultSources")));
         // These are exact final-request parts of this run. A previous summary, imported
         // checkpoint or read of a different task never backfills full user-message proof.
         fact.put("nativeUserParts",new JSONArray()).put("nativeUserTrackingComplete",fresh)
@@ -114,10 +119,11 @@ public final class OwnerSourceRunContext {
     }
     /** The original host calls after preparing current source parts, before actual model dispatch. */
     public static void prepared(SQLiteDatabase db,ConversationRepository originals,String task,String run,String conversation,JSONArray supplied)throws Exception{
-        JSONArray accepted=carriers(supplied);try(var check=originals.inspectOwnerSources()){
+        JSONArray accepted=carriers(supplied);JSONObject fact=loaded(db,task,run,null,null);try(var check=originals.inspectOwnerSources()){
             for(int i=0;i<accepted.length();i++){JSONObject row=accepted.getJSONObject(i);check.requireCarrier(row,conversation);JSONArray refs=row.getJSONArray("ownerSourceRefs");for(int j=0;j<refs.length();j++)check.requireSource(refs.getJSONObject(j));}
+            for(int i=0;i<supplied.length();i++){JSONObject row=supplied.getJSONObject(i);JSONArray refs=row.optJSONArray("ownerPreviewRefs");if(refs!=null&&refs.length()>0){check.requirePreviewCarrier(row,conversation);fact.put("replyPreviewDependenciesUntracked",true);}}
         }
-        merge(db,loaded(db,task,run,null,null),accepted);
+        merge(db,fact,accepted);
     }
     /** Same original TaskStore transaction as carrier preparation. Body-free facts are
      * captured only by the final physical MAIN admission, never by model-nominated IDs. */
@@ -130,8 +136,194 @@ public final class OwnerSourceRunContext {
                 if(previous!=null&&!TaskMemoryTrace.rawFingerprint(previous).equals(TaskMemoryTrace.rawFingerprint(part)))throw new SecurityException("同一原请求来源范围不能改写正文指纹");union.put(key,part);}
         }
         if(union.size()>MAX_CARRIERS)throw new IllegalStateException("原主人来源累计达到100条上限，未截断当作完整");JSONArray parts=new JSONArray();for(JSONObject part:union.values())parts.put(part);
-        fact.put("nativeUserParts",parts).put("nativeUserTrackingComplete",fact.optBoolean("nativeUserTrackingComplete",false))
+        JSONArray attachments=outputDependencies(fact);
+        for(int i=0;i<supplied.length();i++)attachments=union(attachments,originals.nativeMessageAttachmentSources(SourceRef.fromJson(supplied.getJSONObject(i).getJSONObject("sourceRef"))),ToolOutputStore.MAX_DEPENDENCIES,"attachment");
+        fact.put("outputAttachmentSources",attachments).put("nativeUserParts",parts).put("nativeUserTrackingComplete",fact.optBoolean("nativeUserTrackingComplete",false))
             .put("nativeUserExposureStage","final_main_request_prepared").put("nativeUserCollectionCoverage","prepared_parts_only");write(db,fact);
+    }
+    /** The original host has already checked each routed input against its native route.
+     * Foreign input becomes a dependency, never local owner-input consumption evidence. */
+    public static void routedOwnerInputsPrepared(SQLiteDatabase db,ConversationRepository originals,String task,String run,String sourceConversation,JSONArray suppliedCarriers,JSONArray suppliedParts)throws Exception{
+        if(!db.inTransaction()||originals==null||sourceConversation==null||sourceConversation.isEmpty())throw new SecurityException("跨话题来源须在原路由事务中保存");
+        if(suppliedCarriers==null||suppliedParts==null||suppliedCarriers.length()>MAX_CARRIERS||suppliedParts.length()>MAX_CARRIERS)throw new SecurityException("跨话题来源超过有界范围");
+        JSONObject fact=loaded(db,task,run,null,null);JSONArray pins=assistantSources(fact.optJSONArray("assistantMessageSources")),attachments=outputDependencies(fact);
+        LinkedHashMap<String,SourceRef> ownerMessages=new LinkedHashMap<>();boolean untrackedPreview=fact.optBoolean("replyPreviewDependenciesUntracked");
+        try(var check=originals.inspectOwnerSources()){
+            for(int i=0;i<suppliedCarriers.length();i++){
+                JSONObject row=suppliedCarriers.getJSONObject(i);if(!check.nativeOwnerInput(row,sourceConversation))throw new SecurityException("跨话题载体不是原主人消息");
+                SourceRef own=new SourceRef("message",row.getString("ownerMessageId"),integer(row,"ownerMessageRevision"),"owner","private");ownerMessages.put(own.sourceId+":"+own.revision,own);
+                JSONArray refs=OwnerSourceReferences.checked(row.optJSONArray("ownerSourceRefs")==null?new JSONArray():row.getJSONArray("ownerSourceRefs"));
+                if(refs.length()>0){check.requireCarrier(row,sourceConversation);for(int j=0;j<refs.length();j++){
+                    JSONObject selected=refs.getJSONObject(j);check.requireSource(selected);pins=mergeAssistantSources(pins,new JSONArray().put(originals.nativeMessageSource(SourceRef.fromJson(selected.getJSONObject("sourceRef")))));
+                }}
+                JSONArray previews=row.optJSONArray("ownerPreviewRefs");if(previews!=null&&previews.length()>0){check.requirePreviewCarrier(row,sourceConversation);untrackedPreview=true;}
+            }
+            for(int i=0;i<suppliedParts.length();i++){
+                JSONObject part=suppliedParts.getJSONObject(i);check.requireNativeUserPart(part,sourceConversation);SourceRef ref=SourceRef.fromJson(part.getJSONObject("sourceRef"));ownerMessages.put(ref.sourceId+":"+ref.revision,ref);
+            }
+        }
+        if(ownerMessages.size()>MAX_CARRIERS)throw new SecurityException("跨话题主人来源累计超过100条");
+        for(SourceRef ref:ownerMessages.values()){
+            pins=mergeAssistantSources(pins,new JSONArray().put(originals.nativeMessageSource(ref)));
+            attachments=union(attachments,originals.nativeMessageAttachmentSources(ref),ToolOutputStore.MAX_DEPENDENCIES,"attachment");
+            untrackedPreview|=originals.nativeMessageHasPreviewSources(ref);
+        }
+        fact.put("assistantMessageSources",pins).put("outputAttachmentSources",attachments).put("replyPreviewDependenciesUntracked",untrackedPreview);write(db,fact);
+    }
+    /** Native saved assistant history is pinned before projection. This is a source
+     * dependency, not a new user instruction or evidence of semantic consumption. */
+    public static void assistantsPrepared(SQLiteDatabase db,ConversationRepository originals,String task,String run,JSONArray supplied)throws Exception{
+        JSONArray accepted=assistantSources(supplied);JSONObject fact=loaded(db,task,run,null,null);
+        try(var check=originals.inspectOwnerSources()){for(int i=0;i<accepted.length();i++)check.requireNativeAssistantSource(accepted.getJSONObject(i));}
+        fact.put("assistantMessageSources",mergeAssistantSources(assistantSources(fact.optJSONArray("assistantMessageSources")),accepted));write(db,fact);
+    }
+    private static JSONArray assistantSources(JSONArray supplied)throws Exception{
+        if(supplied==null)return new JSONArray();if(supplied.length()>MAX_CARRIERS)throw new SecurityException("助手来源超过100条有界范围");
+        JSONArray result=new JSONArray();java.util.Set<String> seen=new java.util.HashSet<>();
+        for(int i=0;i<supplied.length();i++){
+            JSONObject row=supplied.getJSONObject(i);SourceRef ref=SourceRef.fromJson(row.getJSONObject("sourceRef"));
+            if(row.length()!=4||row.getJSONObject("sourceRef").length()!=5||!"message".equals(ref.kind)||!"owner".equals(ref.ownerId)||!"private".equals(ref.spaceId)
+                    ||row.optString("generation").isEmpty()||row.optString("generation").length()>80||!TaskStoreMemoryQuery.validTaskId(row.optString("sourceConversationId"))||!row.optString("bodyFingerprint").matches("sha256:[a-f0-9]{64}")||!seen.add(ref.sourceId+":"+ref.revision))throw new SecurityException("助手来源不是准确原生消息身份");
+            result.put(new JSONObject(row.toString()));
+        }return result;
+    }
+    private static JSONArray mergeAssistantSources(JSONArray first,JSONArray second)throws Exception{
+        LinkedHashMap<String,JSONObject> merged=new LinkedHashMap<>();for(JSONArray rows:new JSONArray[]{first,second})for(int i=0;i<rows.length();i++){
+            JSONObject row=rows.getJSONObject(i);SourceRef ref=SourceRef.fromJson(row.getJSONObject("sourceRef"));String key=ref.sourceId+":"+ref.revision;JSONObject previous=merged.get(key);
+            if(previous!=null&&!TaskMemoryTrace.rawFingerprint(previous).equals(TaskMemoryTrace.rawFingerprint(row)))throw new SecurityException("同一助手来源版本不能改写");merged.put(key,row);
+        }return assistantSources(new JSONArray(merged.values()));
+    }
+    /** Original accepted external results, not a scheduler, an imported task link or an
+     * executor-success claim. A receipt change invalidates its previous derived text. */
+    public static JSONObject nativeRelatedResultSource(SQLiteDatabase db,String childTaskId,String parentTaskId,String parentRunId)throws Exception{
+        if(!db.inTransaction())throw new SecurityException("关联结果来源必须在原回执事务中冻结");
+        return relatedSource(db,childTaskId,parentTaskId,parentRunId,relatedReadBudget(null),null,new LinkedHashMap<>());
+    }
+    /** Prepared in the same original transaction before any result body is delivered. */
+    public static void relatedResultsPrepared(SQLiteDatabase db,String targetTask,String targetRun,JSONArray supplied)throws Exception{
+        if(!db.inTransaction())throw new SecurityException("关联结果依赖必须在原执行事务中保存");
+        JSONArray accepted=relatedSources(supplied);requireRelatedResultSources(db,accepted);
+        JSONObject fact=loaded(db,targetTask,targetRun,null,null);
+        fact.put("relatedResultSources",mergeRelatedSources(relatedSources(fact.optJSONArray("relatedResultSources")),accepted));write(db,fact);
+    }
+    /** Direct original SQLite only: safe under source resolution without a TaskStore,
+     * coordinator, remote watcher or MemoryBook monitor callback. */
+    public static void requireRelatedResultSources(SQLiteDatabase db,JSONArray supplied)throws Exception{
+        requireRelatedResultSources(db,supplied,null,null);
+    }
+    /** A raw work publication has its own immutable result version. Do not attach every
+     * later child version to the producer run, or upgrade it from copied message fields. */
+    public static void requireOwnerWorkDeliverySources(SQLiteDatabase db,String task,String run,int epoch,String conversation,String generation,String messageId,String deliveryId,String resultDigest,String bodyFingerprint)throws Exception{
+        if(!TaskStoreMemoryQuery.validTaskId(run)||!TaskStoreMemoryQuery.validTaskId(messageId)||!TaskStoreMemoryQuery.validTaskId(deliveryId)||epoch<1
+                ||!resultDigest.matches("[a-f0-9]{64}")||!bodyFingerprint.matches("sha256:[a-f0-9]{64}"))throw new SecurityException("原工作发布来源身份无效");
+        ConversationHistory.SourceBytes bytes=relatedReadBudget(null);JSONObject original=relatedTask(db,task,bytes,null,new LinkedHashMap<>()),work=original.optJSONObject("ownerWork");
+        if(!dev.pocketengine.store.OwnerWorkTask.isOwnerWork(original)||!"assistant".equals(original.optString("kind"))||!"capabilities".equals(original.optString("executionMode"))
+                ||original.optJSONObject("origin")!=null||original.has("parentTaskId")||!conversation.equals(original.optString("conversationId"))||work==null
+                ||!task.equals(work.optString("workTaskId"))||!conversation.equals(work.optString("conversationId"))||!generation.equals(work.optString("generation")))throw new SecurityException("原工作发布不属于该来源");
+        JSONArray entries=work.optJSONArray("deliveries");if(entries==null||entries.length()>dev.pocketengine.store.OwnerWorkResultProtocol.ORDINARY_RESULT_LIMIT+2)throw new SecurityException("原工作发布版本不可核对");JSONObject selected=null;
+        for(int i=0;i<entries.length();i++){JSONObject entry=entries.getJSONObject(i);if(deliveryId.equals(entry.optString("deliveryId"))){if(selected!=null)throw new SecurityException("原工作发布版本不唯一");selected=entry;}}
+        if(selected==null||!dev.pocketengine.store.OwnerWorkTask.DELIVERY_FORMAT.equals(selected.optString("format"))||!task.equals(selected.optString("taskId"))||!task.equals(selected.optString("workTaskId"))
+                ||!run.equals(selected.optString("runId"))||epoch!=integer(selected,"epoch")||!conversation.equals(selected.optString("conversationId"))||!generation.equals(selected.optString("generation"))
+                ||!"delivered".equals(selected.optString("deliveryState"))||!messageId.equals(selected.optString("messageId"))||!resultDigest.equals(selected.optString("resultDigest")))throw new SecurityException("原工作发布已变化或尚未完成保存");
+        JSONObject frozen=new JSONObject(selected.toString());
+        for(String field:new String[]{"resultDigest","deliveryState","receiptState","messageId","deliveredAt","butlerClaim","consumedByMessageId","consumedAt","unavailableReason"})frozen.remove(field);
+        if(!("sha256:"+resultDigest).equals(TaskMemoryTrace.rawFingerprint(frozen)))throw new SecurityException("原工作冻结结果内容已变化");
+        byte[] digest=java.security.MessageDigest.getInstance("SHA-256").digest(selected.getString("content").getBytes(StandardCharsets.UTF_8));StringBuilder hex=new StringBuilder("sha256:");
+        for(byte value:digest){int unsigned=value&255;hex.append("0123456789abcdef".charAt(unsigned>>>4)).append("0123456789abcdef".charAt(unsigned&15));}
+        if(!bodyFingerprint.equals(hex.toString()))throw new SecurityException("原工作发布正文与冻结结果不一致");
+        requireRelatedResultSources(db,selected.optJSONArray("relatedResultSources"),bytes,null);
+    }
+    private static JSONArray relatedSources(JSONArray supplied)throws Exception{
+        JSONArray result=new JSONArray();if(supplied==null)return result;if(supplied.length()>32)throw new SecurityException("关联结果来源超过32项有界范围");
+        java.util.Set<String> seen=new java.util.HashSet<>();
+        for(int i=0;i<supplied.length();i++){
+            JSONObject pin=supplied.getJSONObject(i);Object epoch=pin.opt("childEpoch");
+            if(pin.length()!=7||!(epoch instanceof Integer||epoch instanceof Long)||((Number)epoch).longValue()<0||((Number)epoch).longValue()>Integer.MAX_VALUE
+                    ||!java.util.Set.of("remote","teams").contains(pin.optString("feature"))||!pin.optString("sourceDigest").matches("sha256:[a-f0-9]{64}"))throw new SecurityException("关联结果缺少准确原生版本");
+            for(String name:new String[]{"childTaskId","childRunId","parentTaskId","parentRunId"})if(!(pin.opt(name) instanceof String)||!TaskStoreMemoryQuery.validTaskId(pin.getString(name)))throw new SecurityException("关联结果身份无效");
+            if(!seen.add(relatedIdentity(pin)))throw new SecurityException("关联结果来源重复");result.put(new JSONObject(pin.toString()));
+        }return result;
+    }
+    private static String relatedIdentity(JSONObject pin)throws Exception{
+        return new JSONArray().put(pin.getString("childTaskId")).put(pin.getString("childRunId")).put(pin.getLong("childEpoch"))
+                .put(pin.getString("parentTaskId")).put(pin.getString("parentRunId")).put(pin.getString("feature")).toString();
+    }
+    private static JSONArray mergeRelatedSources(JSONArray first,JSONArray second)throws Exception{
+        LinkedHashMap<String,JSONObject> merged=new LinkedHashMap<>();
+        for(JSONArray rows:new JSONArray[]{first,second})for(int i=0;i<rows.length();i++){
+            JSONObject pin=rows.getJSONObject(i);String identity=relatedIdentity(pin);JSONObject old=merged.get(identity);
+            if(old!=null&&!old.getString("sourceDigest").equals(pin.getString("sourceDigest")))throw new SecurityException("原执行已依赖另一版关联结果，不能静默换版");merged.put(identity,pin);
+        }return relatedSources(new JSONArray(merged.values()));
+    }
+    private static ConversationHistory.SourceBytes relatedReadBudget(ConversationHistory.SourceBytes outer){
+        return new ConversationHistory.SourceBytes(){
+            private long remaining=4L*MAX_BYTES;private final long deadline=System.nanoTime()+500_000_000L;
+            public long remaining()throws Exception{if(System.nanoTime()>deadline)throw new TaskStoreMemoryReader.RawMessageUnavailable(UNAVAILABLE);return outer==null?remaining:Math.min(remaining,outer.remaining());}
+            public void charge(long bytes)throws Exception{if(bytes<0||bytes>remaining())throw new TaskStoreMemoryReader.RawMessageUnavailable(UNAVAILABLE);remaining-=bytes;if(outer!=null)outer.charge(bytes);}
+        };
+    }
+    private static JSONObject relatedTask(SQLiteDatabase db,String id,ConversationHistory.SourceBytes bytes,CancellationSignal signal,java.util.Map<String,JSONObject> cache)throws Exception{
+        if(!TaskStoreMemoryQuery.validTaskId(id))throw new SecurityException("关联原任务标识无效");JSONObject cached=cache.get(id);if(cached!=null)return cached;
+        long limit=Math.min(MAX_BYTES,bytes.remaining());JSONObject task;
+        try(Cursor row=db.rawQuery("SELECT document FROM tasks WHERE task_id=? AND length(CAST(document AS BLOB))<=CAST(? AS INTEGER) LIMIT 1",new String[]{id,Long.toString(limit)},signal)){
+            if(!row.moveToFirst())throw new TaskStoreMemoryReader.RawMessageUnavailable(UNAVAILABLE);String raw=row.getString(0);bytes.charge(raw.getBytes(StandardCharsets.UTF_8).length);task=new JSONObject(raw);
+        }
+        JSONObject origin=task.optJSONObject("origin");
+        if(!id.equals(task.optString("id"))||!"owner".equals(task.optString("actorId"))||!"private".equals(task.optString("spaceId"))||origin!=null&&java.util.Set.of("channel","group").contains(origin.optString("kind")))throw new SecurityException("关联来源不是原私人任务");
+        cache.put(id,task);return task;
+    }
+    private static JSONObject relatedSource(SQLiteDatabase db,String childId,String parentId,String parentRun,ConversationHistory.SourceBytes bytes,CancellationSignal signal,java.util.Map<String,JSONObject> cache)throws Exception{
+        if(!TaskStoreMemoryQuery.validTaskId(parentRun)||childId.equals(parentId))throw new SecurityException("关联原父执行无效");
+        JSONObject child=relatedTask(db,childId,bytes,signal,cache),parent=relatedTask(db,parentId,bytes,signal,cache);String feature=child.optString("feature"),run=child.optString("runId");Object epoch=child.opt("coordinatorEpoch");
+        if(!java.util.Set.of("remote","teams").contains(feature)||!feature.equals(child.optString("kind"))||!TaskStoreMemoryQuery.validTaskId(run)
+                ||!(epoch instanceof Integer||epoch instanceof Long)||((Number)epoch).longValue()<0||((Number)epoch).longValue()>Integer.MAX_VALUE
+                ||!parentId.equals(child.optString("parentTaskId"))||!parentRun.equals(child.optString("parentRunId"))||!run.equals(child.optString("operationId")))throw new SecurityException("关联结果不是原准确子执行");
+        JSONArray links=parent.optJSONArray("relatedTasks");if(links==null||links.length()>100)throw new SecurityException("原父任务关联不可核对");boolean linked=false;
+        for(int i=0;i<links.length();i++){
+            JSONObject link=links.getJSONObject(i);if(!childId.equals(link.optString("taskId")))continue;
+            if(linked||!run.equals(link.optString("runId"))||!feature.equals(link.optString("feature",link.optString("kind"))))throw new SecurityException("原父子关联不一致");linked=true;
+        }
+        if(!linked)throw new SecurityException("原父任务没有此子执行");
+        // External coordinator epoch zero is real; it is never promoted into a HostRun.
+        if(!("teams".equals(parent.optString("feature"))&&"teams".equals(parent.optString("kind"))&&parentRun.equals(parent.optString("runId"))&&parentRun.equals(parent.optString("operationId"))))
+            try(Cursor row=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND run_id=? LIMIT 1",new String[]{parentId,parentRun},signal)){if(!row.moveToFirst())throw new SecurityException("原父执行记录已不存在");}
+        JSONObject evidence=child.optJSONObject("evidence");String status=child.optString("executionStatus");
+        if(evidence==null||status.isEmpty()||!status.equals(evidence.optString("executorStatus")))throw new SecurityException("关联结果没有原执行器回执");
+        JSONObject facts=new JSONObject();for(String name:new String[]{"id","runId","coordinatorEpoch","kind","feature","actorId","spaceId","conversationId","origin","parentTaskId","parentRunId","parentOperationId","operationId","externalId","externalOperationId","externalRefs","status","executionStatus","summary","evidence","cancelRequested","memberId","generation","round","teamRunId"})if(child.has(name))facts.put(name,child.get(name));
+        if("remote".equals(feature)){
+            JSONObject receipt;String state,operationRun;long limit=Math.min(MAX_BYTES,bytes.remaining());
+            try(Cursor row=db.rawQuery("SELECT run_id,state,receipt FROM operations WHERE operation_id=? AND task_id=? AND tool='remote_job' AND receipt IS NOT NULL AND length(CAST(receipt AS BLOB))<=CAST(? AS INTEGER) LIMIT 1",new String[]{run,childId,Long.toString(limit)},signal)){
+                if(!row.moveToFirst())throw new SecurityException("原电脑回执记录已不存在");operationRun=row.getString(0);state=row.getString(1);String raw=row.getString(2);bytes.charge(raw.getBytes(StandardCharsets.UTF_8).length);receipt=new JSONObject(raw);
+            }
+            if(!run.equals(operationRun)||!run.equals(receipt.optString("operationId"))||!status.equals(receipt.optString("status"))||!state.matches("remote_job_active|remote_job_receipt|remote_job_unknown"))throw new SecurityException("电脑结果与原操作回执不同版");
+            try(Cursor row=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND run_id=? AND epoch=? LIMIT 1",new String[]{childId,run,Long.toString(((Number)epoch).longValue())},signal)){if(!row.moveToFirst())throw new SecurityException("原电脑执行代次已不存在");}
+            for(String name:new String[]{"id","operationId","profileId","serviceBase","environmentId","worker"})if(evidence.has(name)&&!evidence.get(name).equals(receipt.opt(name)))throw new SecurityException("电脑回执的准确来源已变化");
+            receipt.remove("updatedAt");receipt.remove("createdAt");facts.put("nativeReceiptState",state).put("nativeReceipt",receipt);
+        }else{
+            if(!run.equals(evidence.optString("id"))||!run.equals(child.optString("externalId"))||integer(evidence,"generation")>Integer.MAX_VALUE)throw new SecurityException("团队回执不属于原团队代次");integer(evidence,"revision");
+        }
+        bytes.remaining();return new JSONObject().put("childTaskId",childId).put("childRunId",run).put("childEpoch",((Number)epoch).longValue())
+                .put("parentTaskId",parentId).put("parentRunId",parentRun).put("feature",feature).put("sourceDigest",TaskMemoryTrace.rawFingerprint(facts));
+    }
+    private static void requireRelatedResultSources(SQLiteDatabase db,JSONArray supplied,ConversationHistory.SourceBytes outer,CancellationSignal signal)throws Exception{
+        JSONArray pins=relatedSources(supplied);ConversationHistory.SourceBytes bytes=relatedReadBudget(outer);java.util.Map<String,JSONObject> cache=new LinkedHashMap<>();
+        for(int i=0;i<pins.length();i++){
+            JSONObject pin=pins.getJSONObject(i),current=relatedSource(db,pin.getString("childTaskId"),pin.getString("parentTaskId"),pin.getString("parentRunId"),bytes,signal,cache);
+            if(!TaskMemoryTrace.rawFingerprint(pin).equals(TaskMemoryTrace.rawFingerprint(current)))throw new SecurityException("原关联结果已变化或失效");
+        }
+    }
+    /** Direct SQLite/attachment metadata only; safe under a MemoryBook source resolver.
+     * All original source versions, native run identity and output dependencies survive. */
+    public static void requireReplyDependencies(SQLiteDatabase db,ConversationRepository originals,ToolOutputStore.Sources outputs,String task,String run,int epoch,String conversation)throws Exception{
+        JSONObject fact=loaded(db,task,run,null,null);if(epoch!=fact.getInt("epoch")||!fact.optBoolean("nativeUserTrackingComplete")||!fact.optBoolean("formalMemoryTrackingComplete")
+                ||fact.optBoolean("replyPreviewDependenciesUntracked")||!fact.optBoolean("formalMessageTrackingComplete",formalDependencies(fact.optJSONArray("formalMemoryDependencies")).length()==0))throw new TaskStoreMemoryReader.RawMessageUnavailable(UNAVAILABLE);
+        require(db,originals,task,run,conversation,null,null);
+        JSONArray parts=fact.optJSONArray("nativeUserParts");if(parts==null||parts.length()>MAX_CARRIERS)throw new TaskStoreMemoryReader.RawMessageUnavailable(UNAVAILABLE);
+        try(var check=originals.inspectOwnerSources()){for(int i=0;i<parts.length();i++){
+            JSONObject part=parts.getJSONObject(i);check.requireNativeUserPart(part,part.getString("sourceConversationId"));SourceRef ref=SourceRef.fromJson(part.getJSONObject("sourceRef"));
+            if(originals.nativeMessageHasPreviewSources(ref)||!fact.optBoolean("nativeAttachmentTrackingComplete")&&originals.nativeMessageAttachmentSources(ref).length()>0)throw new TaskStoreMemoryReader.RawMessageUnavailable(UNAVAILABLE);
+        }}
+        requireOutputs(db,outputs,task,run,null,null);
     }
     private static String nativePartKey(JSONObject part)throws Exception {
         SourceRef ref=SourceRef.fromJson(part.getJSONObject("sourceRef"));return new JSONArray().put(part.getString("generation")).put(ref.sourceId).put(ref.revision).put(part.getString("coverage")).put(part.get("offset")).put(part.get("chars")).toString();
@@ -173,6 +365,8 @@ public final class OwnerSourceRunContext {
             JSONArray sources=carrier.getJSONArray("ownerSourceRefs");for(int j=0;j<sources.length();j++){SourceRef ref=SourceRef.fromJson(sources.getJSONObject(j).getJSONObject("sourceRef"));refs.put(ref.sourceId+":"+ref.revision,ref.toJson());}}
         JSONArray parts=fact.optJSONArray("nativeUserParts");
         for(int i=0;parts!=null&&i<parts.length();i++){SourceRef ref=SourceRef.fromJson(parts.getJSONObject(i).getJSONObject("sourceRef"));refs.put(ref.sourceId+":"+ref.revision,ref.toJson());}
+        JSONArray assistants=assistantSources(fact.optJSONArray("assistantMessageSources"));
+        for(int i=0;i<assistants.length();i++){SourceRef ref=SourceRef.fromJson(assistants.getJSONObject(i).getJSONObject("sourceRef"));refs.put(ref.sourceId+":"+ref.revision,ref.toJson());}
         return new JSONArray(refs.values());
     }
     /** Native history body preparation propagates the same original dependencies to its caller.
@@ -185,6 +379,29 @@ public final class OwnerSourceRunContext {
         // Even a source without an ownerSourceRefs carrier can carry native attachment/formal
         // memory dependencies. Never infer absence from its latest compacted checkpoint.
         mergeOutputs(destination,source);write(db,destination);merge(db,destination,selected);
+    }
+    /** Only a native reviewed handoff may call inside its original task/run transaction.
+     * These are conservative data dependencies, never transferred input-consumption proof,
+     * execution authority, a new owner utterance or permission to read a different topic. */
+    public static void inheritNativeRunSources(SQLiteDatabase db,ConversationRepository originals,ToolOutputStore.Sources outputs,
+            String targetTask,String targetRun,String sourceTask,String sourceRun,int sourceEpoch,String sourceConversation)throws Exception{
+        if(!db.inTransaction()||originals==null||sourceConversation==null||sourceConversation.isEmpty())throw new SecurityException("原生来源继承必须随准确任务绑定事务保存");
+        if(targetTask.equals(sourceTask)&&targetRun.equals(sourceRun))throw new SecurityException("来源继承不能指向本次执行自身");
+        requireReplyDependencies(db,originals,outputs,sourceTask,sourceRun,sourceEpoch,sourceConversation);
+        JSONObject source=loaded(db,sourceTask,sourceRun,null,null),destination=loaded(db,targetTask,targetRun,null,null);
+        JSONArray pins=assistantSources(source.optJSONArray("assistantMessageSources"));
+        for(int i=0;i<source.getJSONArray("carriers").length();i++){
+            JSONObject carrier=source.getJSONArray("carriers").getJSONObject(i);
+            pins=mergeAssistantSources(pins,new JSONArray().put(originals.nativeMessageSource(new SourceRef("message",carrier.getString("ownerMessageId"),carrier.getLong("ownerMessageRevision"),"owner","private"))));
+            JSONArray refs=carrier.getJSONArray("ownerSourceRefs");for(int j=0;j<refs.length();j++)
+                pins=mergeAssistantSources(pins,new JSONArray().put(originals.nativeMessageSource(SourceRef.fromJson(refs.getJSONObject(j).getJSONObject("sourceRef")))));
+        }
+        JSONArray users=source.getJSONArray("nativeUserParts");for(int i=0;i<users.length();i++)
+            pins=mergeAssistantSources(pins,new JSONArray().put(originals.nativeMessageSource(SourceRef.fromJson(users.getJSONObject(i).getJSONObject("sourceRef")))));
+        // Raw carriers belong to their original conversation. Exact message pins preserve
+        // that source identity without pretending they are USER input in the target topic.
+        mergeOutputs(destination,source);destination.put("assistantMessageSources",mergeAssistantSources(assistantSources(destination.optJSONArray("assistantMessageSources")),pins));
+        write(db,destination);
     }
     private static void merge(SQLiteDatabase db,JSONObject fact,JSONArray accepted)throws Exception{
         LinkedHashMap<String,JSONObject> union=new LinkedHashMap<>();
@@ -199,9 +416,11 @@ public final class OwnerSourceRunContext {
     public static void require(SQLiteDatabase db,ConversationRepository originals,String task,String run,String conversation,ConversationHistory.SourceBytes bytes,CancellationSignal signal)throws Exception{
         try{
             JSONObject fact=loaded(db,task,run,bytes,signal);if(!fact.getBoolean("trackingComplete"))throw new TaskStoreMemoryReader.RawMessageUnavailable(UNAVAILABLE);
-            JSONArray selected=fact.getJSONArray("carriers");if(selected.length()==0)return;if(originals==null||conversation==null||conversation.isEmpty())throw new TaskStoreMemoryReader.RawMessageUnavailable(UNAVAILABLE);
+            requireRelatedResultSources(db,fact.optJSONArray("relatedResultSources"),bytes,signal);
+            JSONArray selected=fact.getJSONArray("carriers"),assistants=assistantSources(fact.optJSONArray("assistantMessageSources"));if(selected.length()==0&&assistants.length()==0)return;if(originals==null||conversation==null||conversation.isEmpty())throw new TaskStoreMemoryReader.RawMessageUnavailable(UNAVAILABLE);
             try(var check=originals.inspectOwnerSources(bytes)){
                 for(int i=0;i<selected.length();i++){JSONObject row=selected.getJSONObject(i);check.requireCarrier(row,conversation);JSONArray refs=row.getJSONArray("ownerSourceRefs");for(int j=0;j<refs.length();j++)check.requireSource(refs.getJSONObject(j));}
+                for(int i=0;i<assistants.length();i++)check.requireNativeAssistantSource(assistants.getJSONObject(i));
             }
         }catch(Exception unavailable){if(unavailable instanceof TaskStoreMemoryReader.RawMessageUnavailable&&UNAVAILABLE.equals(unavailable.getMessage()))throw unavailable;var refused=new TaskStoreMemoryReader.RawMessageUnavailable(UNAVAILABLE);refused.initCause(unavailable);throw refused;}
     }
@@ -226,7 +445,12 @@ public final class OwnerSourceRunContext {
             .put("outputSourcesWithdrawn",destination.optBoolean("outputSourcesWithdrawn")||source.optBoolean("outputSourcesWithdrawn"))
             .put("nativeOutputReturned",destination.optBoolean("nativeOutputReturned")||source.optBoolean("nativeOutputReturned"))
             .put("formalMemoryDependencies",union(formalDependencies(destination.optJSONArray("formalMemoryDependencies")),formalDependencies(source.optJSONArray("formalMemoryDependencies")),64,"formal"))
-            .put("formalMemoryTrackingComplete",destination.optBoolean("formalMemoryTrackingComplete")&&source.optBoolean("formalMemoryTrackingComplete"));
+            .put("formalMemoryTrackingComplete",destination.optBoolean("formalMemoryTrackingComplete")&&source.optBoolean("formalMemoryTrackingComplete"))
+            .put("formalMessageTrackingComplete",destination.optBoolean("formalMessageTrackingComplete",formalDependencies(destination.optJSONArray("formalMemoryDependencies")).length()==0)&&source.optBoolean("formalMessageTrackingComplete",formalDependencies(source.optJSONArray("formalMemoryDependencies")).length()==0))
+            .put("nativeAttachmentTrackingComplete",destination.optBoolean("nativeAttachmentTrackingComplete")&&source.optBoolean("nativeAttachmentTrackingComplete"))
+            .put("replyPreviewDependenciesUntracked",destination.optBoolean("replyPreviewDependenciesUntracked")||source.optBoolean("replyPreviewDependenciesUntracked"))
+            .put("assistantMessageSources",mergeAssistantSources(assistantSources(destination.optJSONArray("assistantMessageSources")),assistantSources(source.optJSONArray("assistantMessageSources"))))
+            .put("relatedResultSources",mergeRelatedSources(relatedSources(destination.optJSONArray("relatedResultSources")),relatedSources(source.optJSONArray("relatedResultSources"))));
         JSONArray waiting=pending(destination),other=pending(source);java.util.Set<String> ids=new java.util.LinkedHashSet<>();for(JSONArray a:new JSONArray[]{waiting,other})for(int i=0;i<a.length();i++)ids.add(a.getString(i));if(ids.size()>64)throw new IllegalStateException("原run待核来源超过64条");JSONArray combined=new JSONArray();for(String id:ids)combined.put(id);destination.put("outputPendingSources",combined);
     }
     /** Reserve before entering this one actual native attachment read. A timeout cannot clear it. */
@@ -247,7 +471,23 @@ public final class OwnerSourceRunContext {
     /** Native PREPARE dependencies, not evidence that a model used these records. */
     public static void formalPrepared(SQLiteDatabase db,String task,String run,JSONArray selected)throws Exception{
         JSONArray exact=new JSONArray();for(int i=0;i<selected.length();i++){JSONObject row=selected.getJSONObject(i);exact.put(new JSONObject().put("id",row.getString("id")).put("revision",integer(row,"revision")));}exact=formalDependencies(exact);JSONObject fact=loaded(db,task,run,null,null);
-        fact.put("formalMemoryDependencies",union(formalDependencies(fact.optJSONArray("formalMemoryDependencies")),exact,64,"formal"));write(db,fact);
+        JSONArray previous=formalDependencies(fact.optJSONArray("formalMemoryDependencies")),messages=assistantSources(fact.optJSONArray("assistantMessageSources"));boolean complete=fact.optBoolean("formalMessageTrackingComplete",previous.length()==0);
+        for(int i=0;i<selected.length();i++){
+            JSONObject record=selected.getJSONObject(i);JSONArray refs=record.optJSONArray("sourceRefs");
+            if(refs==null){boolean known=false;for(int p=0;p<previous.length();p++)if(record.getString("id").equals(previous.getJSONObject(p).getString("id"))&&record.getLong("revision")==previous.getJSONObject(p).getLong("revision"))known=true;if(!known)complete=false;continue;}
+            if(refs.length()>100)throw new SecurityException("正式记忆原文来源超过有界范围");
+            for(int j=0;j<refs.length();j++){
+                SourceRef ref=SourceRef.fromJson(refs.getJSONObject(j));if(!"message".equals(ref.kind))continue;
+                if(!"owner".equals(ref.ownerId)||!"private".equals(ref.spaceId)){complete=false;continue;}
+                JSONObject pin;
+                try(Cursor row=db.rawQuery("SELECT s.generation,s.conversation_id,m.body_sha FROM meta a JOIN assistant_sources s ON s.generation=a.value JOIN assistant_messages m ON m.generation=s.generation AND m.source_id=s.source_id AND m.conversation_id=s.conversation_id JOIN assistant_conversations c ON c.generation=s.generation AND c.conversation_id=s.conversation_id WHERE a.key='assistant_history_generation' AND s.source_id=? AND s.revision=? AND m.revision=s.revision AND s.deleted=0 AND s.retired_through<s.revision AND s.context_retired=0 AND c.deleted=0 AND m.body IS NOT NULL LIMIT 1",new String[]{ref.sourceId,Long.toString(ref.revision)})){
+                    if(!row.moveToFirst())throw new TaskStoreMemoryReader.RawMessageUnavailable("formal_message_source_unavailable");
+                    pin=new JSONObject().put("generation",row.getString(0)).put("sourceConversationId",row.getString(1)).put("sourceRef",ref.toJson()).put("bodyFingerprint",row.getString(2));
+                }
+                messages=mergeAssistantSources(messages,new JSONArray().put(pin));
+            }
+        }
+        fact.put("formalMemoryDependencies",union(previous,exact,64,"formal")).put("formalMessageTrackingComplete",complete).put("assistantMessageSources",messages);write(db,fact);
     }
     /** One original bounded metadata read; Book implementation is a non-locking eligibility check. */
     public static void requireOutputs(SQLiteDatabase db,ToolOutputStore.Sources sources,String task,String run,ConversationHistory.SourceBytes bytes,CancellationSignal signal)throws Exception{verifiedOutputDependencies(db,sources,task,run,bytes,signal);}

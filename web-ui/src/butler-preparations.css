@@ -1,0 +1,28 @@
+/* ConversationWork's retained BoardUI rows and the work object's goal/review
+ * hierarchy share the same blue-gray tokens and page gutters. */
+.pw-butler-preparations { min-width: 0; margin-top: 28px; }
+.pw-butler-preparations > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.pw-butler-preparations h2 { margin: 0; color: var(--pw-ink); font: 500 15px/24px var(--pw-font); }
+.pw-butler-preparations ol { list-style: none; margin: 0; padding: 0; }
+.pw-butler-preparations li { min-width: 0; }
+.pw-butler-preparations .pw-preparation-row { width: 100%; min-width: 0; min-height: 66px; height: auto; justify-content: flex-start; padding: 10px 4px; gap: 12px; border: 0; border-radius: 12px; box-shadow: none; background: transparent; white-space: normal; text-align: start; }
+.pw-preparation-row > span { flex: 1; min-width: 0; flex-shrink: 1; padding: 0; justify-content: flex-start; }
+.pw-preparation-row > span > span { display: grid; min-width: 0; gap: 4px; }
+.pw-preparation-row strong { color: var(--pw-ink); font: 500 14px/22px var(--pw-font); overflow-wrap: anywhere; }
+.pw-preparation-row small { color: var(--pw-copy); font: 400 12px/20px var(--pw-font); }
+.pw-preparation-row > svg { flex: none; color: var(--pw-copy); }
+.pw-preparation-row > svg:last-child { width: 16px; height: 16px; color: var(--pw-muted); }
+.pw-task-overview > .pw-butler-preparations { margin-top: 0; }
+.pw-preparation-detail .pw-preparation-body { display: flex; flex-direction: column; gap: 28px; padding-top: 20px; padding-bottom: max(32px, env(safe-area-inset-bottom)); }
+.pw-preparation-body .pw-preparation-choices { display: flex; flex-direction: column; align-items: stretch; gap: 20px; }
+.pw-preparation-body :is(.pw-muted, .pw-error) { margin: 0; font-size: 13px; line-height: 22px; overflow-wrap: anywhere; }
+.pw-preparation-start { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.pw-preparation-start > span { font: 400 12px/20px var(--pw-font); color: var(--pw-muted); }
+.pw-preparation-receipt { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; padding-block: 18px; border-block: 1px solid var(--pw-edge); }
+.pw-preparation-receipt > p { margin: 0; font: 400 14px/23px var(--pw-font); }
+.pw-preparation-body .pw-permission { min-width: 0; }
+.pw-preparation-body .pw-scope-fields dd { overflow-wrap: anywhere; }
+.pw-preparation-body .pw-task-source-links { padding-top: 16px; border-top: 1px solid var(--pw-edge); }
+@media (hover: hover) and (pointer: fine) {
+  .pw-butler-preparations .pw-preparation-row:hover:not(:disabled) { background: var(--pw-hover); }
+}

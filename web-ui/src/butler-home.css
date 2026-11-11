@@ -85,6 +85,15 @@
 .pw-butler-work-note { margin-top: 14px; }
 .pw-butler-reading { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--pw-copy); font: 400 13px/22px var(--pw-font); }
 .pw-butler-reading > [role="progressbar"] { flex: none; width: 16px; height: 16px; }
+.pw-butler-workspace[data-returning] .pw-butler-content { padding-top: clamp(28px, 5vh, 48px); }
+.pw-butler-workspace[data-returning] .pw-butler-welcome { text-align: start; }
+.pw-butler-workspace[data-returning] .pw-butler-welcome > p { min-height: 46px; margin-inline: 0; text-wrap: pretty; }
+.pw-butler-work-group.pw-butler-delivery { padding-block: 20px; border-block: 1px solid var(--pw-edge); }
+.pw-butler-delivery-eyebrow { margin: 0 0 8px; color: var(--pw-on-accent-soft); font: 500 12px/20px var(--pw-font); }
+.pw-butler-delivery > h3 { margin: 0; color: var(--pw-ink); font: 500 18px/27px var(--pw-font); overflow-wrap: anywhere; }
+.pw-butler-delivery > p:not(.pw-butler-delivery-eyebrow) { margin: 8px 0 0; color: var(--pw-copy); font: 400 13px/22px var(--pw-font); }
+.pw-butler-delivery-actions { display: flex; flex-wrap: wrap; gap: 8px 12px; margin-top: 16px; }
+.pw-butler-delivery-actions > button { min-height: 44px; font-size: 13px; }
 @media (hover: hover) and (pointer: fine) {
   .pw-butler-work .pw-butler-work-row:hover:not(:disabled),
   .pw-butler-work :is(.pw-butler-more, .pw-butler-all-work):hover:not(:disabled),

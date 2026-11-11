@@ -6,6 +6,58 @@ import {FileDetails} from './AttachmentOriginalReader';
 const validDraft=(draft:Json)=>!!String(draft.name||'').trim()&&String(draft.name).length<=80&&new TextEncoder().encode(JSON.stringify(draft)).length<=256*1024&&
  (draft.format==='pptx'?!!draft.parentArtifactId&&Array.isArray(draft.presentation?.slides):['docx','pdf'].includes(draft.format)&&typeof draft.body==='string'&&draft.body.length>0&&draft.body.length<=16000);
 
+/** Adapted from the document editor's serialized draft/CAS interaction. Only
+ * the selected task and immutable file version receive this text. */
+export function AttachmentVersionContinuation({original,foregroundReady,busy,act,beforeBack}:{original:Json;foregroundReady:boolean;busy:boolean;act:AttachmentAction;beforeBack:(handler:(()=>Promise<AttachmentFrame|undefined>)|null)=>void}){
+ const [text,setText]=useState(String(original.text||'')),[error,setError]=useState(''),[saving,setSaving]=useState(false),[applying,setApplying]=useState(false),[saved,setSaved]=useState(original.saved===true);
+ const current=useRef(text),baseline=useRef(original),alive=useRef(true),paused=useRef(false),flight=useRef<Promise<AttachmentFrame|undefined>|null>(null),action=useRef(act),ready=useRef(foregroundReady);action.current=act;ready.current=foregroundReady;
+ const accepts=(value:Json)=>value.taskId===original.taskId&&value.fileId===original.fileId&&value.sha256===original.sha256&&Number.isSafeInteger(value.revision)&&value.revision>0&&typeof value.text==='string'&&value.text.length<=2000;
+ const dirty=()=>current.current!==baseline.current.text||baseline.current.saved!==true;
+ async function flush(explicit=false):Promise<AttachmentFrame|undefined>{
+  if(flight.current)return flight.current;
+  if(!dirty())return;
+  if(!ready.current||paused.current&&!explicit)throw new Error('原版本草稿尚未确认保存，请保留本页文字并重新核对。');
+  paused.current=false;
+  const operation=(async()=>{setSaving(true);let after:AttachmentFrame|undefined;try{
+   while(alive.current&&dirty()){
+    const next=current.current,revision=baseline.current.revision;
+    const result=await action.current('editContinuationDraft',{change:next,draftRevision:revision},after),draft=result.continuationDraft;
+    if(!draft||!accepts(draft)||draft.text!==next||draft.saved!==true)throw new Error('原成果版本的草稿保存回执不一致，请保留输入。');
+    baseline.current=draft;after=attachmentFrame(result.workspace);
+    if(!after)throw new Error('原文件窗口已变化，请重新核对这份保留草稿。');
+    if(alive.current){setSaved(!dirty());setError('')}
+   }
+   return after;
+  }catch(failure){
+   paused.current=true;if(alive.current){setSaved(false);setError(failure instanceof Error?failure.message:'原版本补充草稿尚未保存。')}
+   try{const result=await action.current('readContinuationDraft',{},after);if(result.continuationDraft&&accepts(result.continuationDraft))baseline.current=result.continuationDraft}catch{}
+   throw failure;
+  }finally{flight.current=null;if(alive.current)setSaving(false)}})();
+  flight.current=operation;return operation;
+ }
+ useEffect(()=>{alive.current=true;beforeBack(()=>flush());return()=>{alive.current=false;beforeBack(null)}},[]);
+ useEffect(()=>{
+  if(!accepts(original)||original.revision<baseline.current.revision)return;
+  const changed=current.current!==baseline.current.text;
+  baseline.current=original;if(!changed){current.current=original.text;setText(original.text)}setSaved(!dirty());
+ },[original.revision,original.text,original.saved]);
+ const edit=(next:string)=>{current.current=next;setText(next);setSaved(false);if(!paused.current)void flush().catch(()=>{})};
+ const submit=async()=>{
+  if(busy||applying||!current.current.trim())return;setApplying(true);setError('');
+  try{const after=await flush(true);await act('continueVersion',{change:current.current,draftRevision:baseline.current.revision},after)}
+  catch(failure){if(alive.current)setError(failure instanceof Error?failure.message:'原任务补充尚未确认，请回原工作核对。')}
+  finally{if(alive.current)setApplying(false)}
+ };
+ if(original.available!==true||!accepts(original))return <p className="pw-error" role="alert">{original.error||'这个原版本的补充草稿暂不可读取。'}</p>;
+ return <section className="pw-file-version-continuation" aria-label="基于这个固定版本补充工作">
+  <h3>继续这份成果</h3><p className="pw-muted">补充与当前文件版本一起保留，返回或切换版本后可以接着写。</p>
+  <TextAreaField label="给原工作的补充" value={text} onChange={edit} placeholder="基于这份成果，希望接下来调整什么？" rows={3} autoResize maxRows={7} maxLength={2000} isDisabled={!foregroundReady||applying}/>
+  {error&&<p className="pw-error" role="alert">{error}</p>}
+  <div className="pw-work-supplement-footer"><span role="status">{saving?'正在保存原版本草稿':saved?(text?'原版本草稿已保存':'这个版本还没有补充'):'本页文字尚未确认保存'}</span><div className="pw-action-row">{!saved&&<Button variant="ghost" size="small" disabled={busy||saving||applying} onClick={()=>void flush(true).catch(()=>{})}>保存本页补充</Button>}<Button variant="secondary" disabled={busy||saving||applying||!text.trim()} onClick={()=>void submit()}>把补充保存到原工作</Button></div></div>
+  <p className="pw-muted">保存补充后，可回到原工作核对并继续执行。</p>
+ </section>;
+}
+
 export function AttachmentDocumentEditor({original,windowId,foregroundReady,pendingTask,busy,act,beforeBack}:{original:Json;windowId:string;foregroundReady:boolean;pendingTask?:string;busy:boolean;act:AttachmentAction;beforeBack:(handler:(()=>Promise<AttachmentFrame|undefined>)|null)=>void}) {
  const [draft,setDraft]=useState<Json>(()=>structuredClone(original)),[slide,setSlide]=useState('0'),[error,setError]=useState(''),[saving,setSaving]=useState(false),[saved,setSaved]=useState(false),[review,setReview]=useState<Json|null>(null),[ack,setAck]=useState(false);
  const current=useRef(draft),committed=useRef(JSON.stringify(original)),savingPromise=useRef<Promise<AttachmentFrame|undefined>|null>(null),alive=useRef(true),revision=useRef(0),action=useRef(act);current.current=draft;action.current=act;

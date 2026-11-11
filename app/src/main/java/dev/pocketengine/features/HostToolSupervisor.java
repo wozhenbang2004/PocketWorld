@@ -152,12 +152,14 @@ public final class HostToolSupervisor implements CapabilityPort {
         boolean ownerWorkTools=catalogueOnly||workProfile==null&&host.hasOwnerWorkHost()&&(butler||workExecutor);
         if(ownerWorkTools){
             add("assistant","$owner_work_list","owner_work_list","读取本会话最近至多128项私人工作的兼容列表及准确执行身份，不代表全局目录。前台回复不会停止这些工作；终态结果不是新执行授权。"+(butler?"管家全局查询用owner_work_directory。":"工作执行器只读取原会话。"),false,props("offset",integer(0,128),"limit",integer(1,24)));
-            add("assistant","$owner_work_get","owner_work_get",butler?"读取一个原工作。同会话可读目标及冻结结果；跨话题只返回原生身份、枚举状态和原conversationId，不返回标题、目标、摘要或结果正文，也不接手结果回执。详情须回原会话读取。同会话用deliveryId选择确切结果，省略读最新普通结果；hasMore时用同一deliveryId及nextOffset继续。":"读取本会话一个原工作及冻结结果，不重新派发。deliveryId选择确切结果，省略读最新普通结果；hasMore时保持deliveryId并用nextOffset继续读取。",false,props("taskId",text(80),"deliveryId",text(240),"offset",integer(0,240000),"maxChars",integer(1,8000)),"taskId");
+            add("assistant","$owner_work_get","owner_work_get",butler?"读取准确私人工作及原生提案关联的手机、项目工作。跨话题正文只在原来源仍有效并完成原生来源继承后提供；available=false时不推测内容。结果使用deliveryId固定确切版本，hasMore时保持该ID并按nextOffset继续；查询不代表原话题已接手、已汇报或新授权。":"读取本会话一个原工作及冻结结果，不重新派发。deliveryId选择确切结果，省略读最新普通结果；hasMore时保持deliveryId并用nextOffset继续读取。",false,props("taskId",text(80),"deliveryId",text(240),"offset",integer(0,240000),"maxChars",integer(1,8000)),"taskId");
             if(butler){
-                add("assistant","$owner_work_directory","owner_work_directory","从真实持久任务表分页查私人工作。跨话题只给原生身份、会话位置、枚举状态、时间及布尔标记；标题、目标、摘要和结果正文须回原会话读取。同会话保留来源核验后的目标。range默认all，也可conversation；filter默认all，可attention、active或open（两者并集）。每次最多扫描4页，空结果仍可能hasMore；有nextCursor须保持range/filter继续，更新后从空cursor刷新。不是完整全局快照，不授权跨话题补充、续接、停止或消费结果回执。",false,props("range",new JSONObject().put("type","string").put("enum",new JSONArray().put("all").put("conversation")),"filter",new JSONObject().put("type","string").put("enum",new JSONArray().put("all").put("attention").put("active").put("open")),"cursor",text(4096),"limit",integer(1,24)));
-                add("assistant","$owner_work_start","owner_work_start","把当前主人明确委托的长工作交给后台私人管家，返回真实持久接收回执后可以继续回答主人。goal是工作说明，不是主人新原话。toolLimit/modelCallLimit从本任务剩余额度实际分配，不能复制或新增授权。后台可使用原团队工具，完成后回到原会话；不要为短问答派后台。",true,props("goal",text(12000),"title",text(200),"toolLimit",integer(1,400),"modelCallLimit",integer(1,512)),"goal","toolLimit","modelCallLimit");
-                add("assistant","$owner_work_input","owner_work_input","将本轮确切主人原话补充给本会话指定工作；只接受原生来源，不接受模型改写的content。queue在当前步骤后处理，steer让原任务重新考虑下一步。不会重绑本轮输入或启动第二个同目标任务。",true,props("taskId",text(80),"runId",text(80),"epoch",integer(1,Integer.MAX_VALUE),"mode",new JSONObject().put("type","string").put("enum",new JSONArray().put("queue").put("steer")),"messageIds",new JSONObject().put("type","array").put("maxItems",16).put("items",text(80))),"taskId","runId","epoch","mode");
-                add("assistant","$owner_work_control","owner_work_control","按本会话准确工作task/run/epoch请求停止后续派发，并清理其真实子任务；未启动排队工作使用原runId空串和epoch=0。不能把请求停止说成外部动作已撤销。",true,props("taskId",text(80),"runId",text(80),"epoch",integer(0,Integer.MAX_VALUE),"action",new JSONObject().put("type","string").put("enum",new JSONArray().put("cancel"))),"taskId","runId","epoch","action");
+                add("assistant","$owner_work_capabilities","owner_work_capabilities","按本次目标核对真实能力、手机资源占用和准备缺口。准备就绪不等于执行授权；手机及项目工作用owner_work_prepare形成正式交接，由原生入口核对真实设备、项目副本、模型和额度。远端与团队仍须使用已准入的原工具核对选定目标。",false,props("purpose",new JSONObject().put("type","string").put("enum",new JSONArray().put("all").put("research").put("phone").put("project").put("remote").put("team").put("schedule"))));
+                add("assistant","$owner_work_prepare","owner_work_prepare","把当前主人目标保存为手机或项目工作的正式准备提案。仅建议目标与交付合同，不启动、不授权、不选择执行副本或模型。返回准确proposalId后，引导主人从原话题的准备入口核对并开始；回执未知只查询原提案。projectId仅为现有项目建议，仍需主人在原生准备中确认。",true,props("kind",new JSONObject().put("type","string").put("enum",new JSONArray().put("phone").put("project")),"goal",text(4000),"constraints",text(4000),"deliverable",text(4000),"completionCriteria",text(4000),"projectId",text(80)),"kind","goal");
+                add("assistant","$owner_work_directory","owner_work_directory","从原持久任务表分页查私人工作及提案关联的手机、项目工作。跨话题目标须通过当前原生来源检查；不可用时只保留身份、位置和真实状态。range默认all，也可conversation；filter默认all，可attention、active或open（两者并集）。每次最多扫描4页，空页仍可能hasMore；有nextCursor须保持range/filter继续，更新后从空cursor刷新。分页不是完整全局快照，查询不授予执行或消费结果回执的权利。",false,props("range",new JSONObject().put("type","string").put("enum",new JSONArray().put("all").put("conversation")),"filter",new JSONObject().put("type","string").put("enum",new JSONArray().put("all").put("attention").put("active").put("open")),"cursor",text(4096),"limit",integer(1,24)));
+                add("assistant","$owner_work_start","owner_work_start","把当前主人明确委托的长工作交给后台执行，返回真实持久回执后可继续回答主人。goal为工作说明；constraints、deliverable、completionCriteria用于保留本次约束、交付物及完成条件，均不构成新授权。toolLimit/modelCallLimit从当前剩余额度实际分配；宿主另从同一额度预留结果核对汇报及当前回合收尾，不增额。结果回来后由原管家在原话题空闲时接手；取消、过期或来源失效时不自动处理。短问答直接回答。",true,props("goal",text(12000),"title",text(200),"constraints",text(4000),"deliverable",text(4000),"completionCriteria",text(4000),"toolLimit",integer(1,400),"modelCallLimit",integer(1,512)),"goal","toolLimit","modelCallLimit");
+                add("assistant","$owner_work_input","owner_work_input","将本轮确切主人原话补充给指定私人工作，可跨话题但保留原消息身份和来源。只接受原生来源，不接受模型改写的content。queue在当前步骤后处理，steer让原任务重新考虑下一步。不会重绑本轮输入、伪造目标话题消息或另开同目标任务。",true,props("taskId",text(80),"runId",text(80),"epoch",integer(1,Integer.MAX_VALUE),"mode",new JSONObject().put("type","string").put("enum",new JSONArray().put("queue").put("steer")),"messageIds",new JSONObject().put("type","array").put("maxItems",16).put("items",text(80))),"taskId","runId","epoch","mode");
+                add("assistant","$owner_work_control","owner_work_control","按已查询的准确私人工作task/run/epoch停止或继续原工作，可跨话题。cancel停止后续派发并清理真实子任务，不代表外部动作已撤销；未启动排队工作使用runId空串、epoch=0。continue只沿原任务剩余范围、额度、期限和原模型恢复，不能补预算、批准操作或重放未知效果。原操作有回执时只返回同一回执，不重复派发。",true,props("taskId",text(80),"runId",text(80),"epoch",integer(0,Integer.MAX_VALUE),"action",new JSONObject().put("type","string").put("enum",new JSONArray().put("cancel").put("continue"))),"taskId","runId","epoch","action");
             }
         }
         nativeRoutes.putAll(routes);refreshPluginRoutes();
@@ -278,12 +280,9 @@ public final class HostToolSupervisor implements CapabilityPort {
         return references;
     }
     private JSONArray ownerWorkReadValidation()throws Exception{
-        JSONArray result=new JSONArray();if(ownerWorkReads.isEmpty())return result;JSONObject task=tasks.get(taskId,false);
-        String conversation=task.getString("conversationId");
+        JSONArray result=new JSONArray();if(ownerWorkReads.isEmpty())return result;
         for(JSONObject selected:ownerWorkReads.values()){
-            if(!conversation.equals(selected.getString("conversationId")))throw new SecurityException("结果正文没有跨话题来源许可");
-            JSONObject current=tasks.ownerWorkResult(selected.getString("taskId"),selected.getString("conversationId"),selected.getString("deliveryId"),0,2);
-            if(!current.optBoolean("available")||!selected.getString("resultDigest").equals(current.optString("resultDigest")))throw new SecurityException("原工作结果来源已变化或撤回，请重新核对原任务；没有继续使用旧正文");
+            tasks.requireOwnerWorkReadCurrent(taskId,runId,epoch,memoryControl,selected);
             result.put(new JSONObject().put("taskId",selected.getString("taskId")).put("deliveryId",selected.getString("deliveryId")).put("resultDigest",selected.getString("resultDigest")));
         }
         return result;
@@ -556,7 +555,7 @@ public final class HostToolSupervisor implements CapabilityPort {
             case "automation"->"$schedule_list".equals(tool.command);
             case "attachments"->Set.of("list","readText").contains(tool.command);
             case "teams"->"$teams".equals(tool.command);
-            case "assistant"->Set.of("$owner_work_list","$owner_work_get","$owner_work_directory").contains(tool.command);
+            case "assistant"->Set.of("$owner_work_list","$owner_work_get","$owner_work_directory","$owner_work_capabilities").contains(tool.command);
             default->false;
         };
         if(!read)return dev.pocketengine.core.ExecutionPlanning.Access.DENY;
