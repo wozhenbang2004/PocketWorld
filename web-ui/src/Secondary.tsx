@@ -775,18 +775,19 @@ function BackgroundSettings({ state, supported, run, onReturn, returnLabel = '�
       <TabList aria-label="后台连接内容"><Tab id="setup">连接设置</Tab><Tab id="checks" count={blockedGroups || undefined}>能力检查</Tab></TabList>
       <TabPanel id="setup">
         {!permissions && <section className="pw-background-preparation"><h3>开启手机操作所需权限</h3><p>完成系统授权后返回，使用右上角刷新核对。</p><div className="pw-background-permission-status"><span>界面读取<b>{state.accessibilityEnabled === true ? '已连接' : '待开启'}</b></span><span>任务通知<b>{state.notificationsEnabled === true ? '已开启' : '待开启'}</b></span></div><div className="pw-form-actions">{state.accessibilityEnabled !== true && <CapabilityAction action="settings.openSystem" args={{ section: 'accessibility' }} supported={supported} run={run} primary>设置界面读取权限</CapabilityAction>}{state.notificationsEnabled !== true && <CapabilityAction action="settings.openSystem" args={{ section: 'notifications' }} supported={supported} run={run} primary={state.accessibilityEnabled === true}>允许任务通知</CapabilityAction>}</div></section>}
-    {!connection.taskOwned && connection.loaded && connection.supported && !connection.helperConnected && <Card title="优先使用已有授权" description="主屏操作不需要无线配对；独立屏优先复用这台手机已授权的连接。">
+    {!connection.taskOwned && connection.loaded && connection.supported && !connection.helperConnected && <Card title="手机控制" description="主屏无需配对；独立屏优先复用已有授权。">
        <div className="pw-form-actions">
          {wirelessSaved && <Button variant="primary" disabled={locked || !connection.canConnect || !supported(savedEndpoints.length === 1 ? 'background.connect' : 'background.discover') || savedEndpoints.length !== 1 && discovery.discovering === true}
            onClick={() => { if (savedEndpoints.length === 1) void reconnectSaved(); else void run('background.discover', {}).catch(() => {}); }}>
            {savedEndpoints.length === 1 ? requiresCheck ? '核对上次无线连接' : '恢复已授权后台助手' : discovery.discovering === true ? '正在发现本机连接…' : '查找已授权的连接'}
          </Button>}
          {shizukuAuthorized && <CapabilityAction action="background.shizuku.start" supported={supported} run={run} disabled={!canUseExistingShizuku} primary={!wirelessSaved}>使用已授权 Shizuku</CapabilityAction>}
-         {shizukuAvailable && !shizukuAuthorized && <CapabilityAction action="background.shizuku.permission" supported={supported} run={run} disabled={!canUseExistingShizuku}>授权已有 Shizuku</CapabilityAction>}
+         {shizukuAvailable && !shizukuAuthorized && <CapabilityAction action="background.shizuku.permission" supported={supported} run={run} disabled={!canUseExistingShizuku || shizuku.permissionRequestPending === true}>授权已有 Shizuku</CapabilityAction>}
          <Button variant={wirelessSaved || shizukuAuthorized ? 'secondary' : 'primary'} disabled={locked || !supported('background.selectMainScreen')} onClick={() => setMainScreenConsent(true)}>使用主屏模式（免配对）</Button>
        </div>
        {wirelessSaved && savedEndpoints.length > 1 && <p className="pw-field-hint">发现多个本机连接端口，无法安全地猜测。请展开下方连接设置明确选择。</p>}
-       {wirelessSaved && savedEndpoints.length === 0 && !discovery.discovering && <p className="pw-field-hint">已保存授权身份，但尚未找到无线调试服务。先确认系统无线调试已开启；不需要重新输入配对码。</p>}
+       {wirelessSaved && savedEndpoints.length === 0 && !discovery.discovering && <><p className="pw-field-hint">已保存授权身份，但尚未找到本机连接服务；不需要重新输入配对码。</p>
+         <CapabilityAction action="settings.openSystem" args={{ section: 'wireless' }} supported={supported} run={run}>打开无线调试设置</CapabilityAction></>}
        {!wirelessSaved && !shizukuAuthorized && <p className="pw-field-hint">首次使用独立后台屏需要 Android 授予系统级连接能力。仅靠无障碍可以操作主屏，不能创建隔离后台屏。</p>}
        <Button variant="ghost" disabled={locked} onClick={() => { setCode(''); setShowWirelessSetup(value => !value); }}>{showWirelessSetup ? '收起连接设置' : '首次授权或手动连接'}</Button>
      </Card>}
