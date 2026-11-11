@@ -1,5 +1,6 @@
 package dev.pocketengine.features.capabilities;
 
+import dev.pocketengine.store.OwnerWorkTask;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
@@ -10,10 +11,21 @@ public final class CapabilityApprovalPolicy {
     public enum Decision { NATIVE, ALLOW, ASK, DENY, REVIEW }
     /** Same private-run eligibility for dispatch and owner presentation; no grants are created. */
     public static boolean appliesToPrivateTask(JSONObject task) {
-        return task!=null&&task.optString("kind").matches("phone|assistant")
-                &&"owner".equals(task.optString("actorId"))&&"private".equals(task.optString("spaceId"))
-                &&task.optJSONObject("origin")==null&&!task.has("workProfileRef")&&!task.has("workProfileIntent")
-                &&!"owner_work".equals(task.optString("executionRole"));
+        if(task==null||!task.optString("kind").matches("phone|assistant")
+                ||!"owner".equals(task.optString("actorId"))||!"private".equals(task.optString("spaceId"))
+                ||task.optJSONObject("origin")!=null||task.has("workProfileRef")||task.has("workProfileIntent"))return false;
+        if(OwnerWorkTask.ROLE.equals(task.optString("executionRole"))){
+            JSONObject work=task.optJSONObject("ownerWork");
+            // Delegation retains the original conversation policy. A role label alone
+            // cannot select it, and invalid identity must not skip the policy gate.
+            if(!OwnerWorkTask.isOwnerWork(task)||!"assistant".equals(task.optString("kind"))
+                    ||!"capabilities".equals(task.optString("executionMode"))||task.has("parentTaskId")
+                    ||task.optString("id").isBlank()||task.optString("conversationId").isBlank()
+                    ||!task.optString("id").equals(work.optString("workTaskId"))
+                    ||!task.optString("conversationId").equals(work.optString("conversationId")))
+                throw new SecurityException("私人工作审批策略缺少准确原任务与会话身份");
+        }
+        return true;
     }
 
     private final String mode;

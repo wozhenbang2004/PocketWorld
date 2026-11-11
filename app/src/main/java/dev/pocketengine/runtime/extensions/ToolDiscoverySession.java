@@ -18,7 +18,9 @@ public final class ToolDiscoverySession implements AutoCloseable {
         if(realToolCount<0||capabilityNameCount<0)throw new IllegalArgumentException("negative_native_tool_count");
         return realToolCount>0&&realToolCount<=100&&capabilityNameCount>=realToolCount&&capabilityNameCount<=512;
     }
-    public static final Set<String> DEFAULT_RESIDENT=Set.of("memory_search","memory_recall","memory_raw_query","memory_raw_read","memory_history_search","memory_history_read",
+    // Only definitions already admitted to the original scope can become resident.
+    public static final Set<String> DEFAULT_RESIDENT=Set.of("owner_work_list","owner_work_directory","owner_work_get","owner_work_start","owner_work_input","owner_work_control",
+            "memory_search","memory_recall","memory_raw_query","memory_raw_read","memory_history_search","memory_history_read",
             "workspace_projects","workspace_list","workspace_read","skills_list","skills_read","skills_execute","attachments_list","attachments_read_text","project_inspect","project_read_file","project_search","browser_task_observe","browser_task_read");
     private record Pending(String digest,Set<String> identities) { }
     private final String taskId,runId;

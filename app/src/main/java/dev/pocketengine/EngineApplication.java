@@ -2678,12 +2678,18 @@ public final class EngineApplication extends Application implements dev.pocketen
         tasks.checkCapability(sourceTask,sourceRun,sourceEpoch,tool,sourceControl);JSONObject source=tasks.get(sourceTask,false);
         if(source==null||!"assistant".equals(source.optString("kind"))||!"owner".equals(source.optString("actorId"))||!"private".equals(source.optString("spaceId"))||source.optJSONObject("origin")!=null||source.has("workProfileRef")||source.has("workProfileIntent")||source.has("projectMemoryRead")||source.has("developmentContext")||source.has("teamWriteScope"))throw new SecurityException("私人工作只接受原主人管家入口");
         String conversation=source.getString("conversationId");
+        if("owner_work_directory".equals(tool))return tasks.ownerWorkDirectoryForButler(sourceTask,sourceRun,sourceEpoch,sourceControl,
+                args.optString("range","all"),args.optString("filter","all"),args.optString("cursor"),args.optInt("limit",12));
         if("owner_work_list".equals(tool)){
             JSONArray all=tasks.ownerWorks(conversation),page=new JSONArray();int offset=args.optInt("offset",0),limit=args.optInt("limit",12),end=Math.min(all.length(),offset+limit);
-            for(int i=offset;i<end;i++){JSONObject work=all.getJSONObject(i),row=new JSONObject();for(String key:new String[]{"id","taskId","runId","coordinatorEpoch","epoch","executionRole","title","status","controls","contextAvailable"})if(work.has(key))row.put(key,work.get(key));String goal=work.optString("goal");int length=Math.min(goal.length(),400);if(length<goal.length()&&length>0&&Character.isHighSurrogate(goal.charAt(length-1)))length--;row.put("goal",goal.substring(0,length));page.put(row);}
+            for(int i=offset;i<end;i++){JSONObject work=all.getJSONObject(i),row=new JSONObject();for(String key:new String[]{"id","taskId","conversationId","runId","coordinatorEpoch","epoch","executionRole","title","status","controls","contextAvailable"})if(work.has(key))row.put(key,work.get(key));String goal=work.optString("goal");int length=Math.min(goal.length(),400);if(length<goal.length()&&length>0&&Character.isHighSurrogate(goal.charAt(length-1)))length--;row.put("goal",goal.substring(0,length));page.put(row);}
             return json("works",page,"offset",offset,"nextOffset",end,"hasMore",end<all.length(),"executionAuthorized",false);
         }
-        if("owner_work_get".equals(tool))return json("work",tasks.ownerWork(args.getString("taskId"),conversation),"result",tasks.ownerWorkResult(args.getString("taskId"),conversation,args.optString("deliveryId"),args.optInt("offset",0),args.optInt("maxChars",4000)),"executionAuthorized",false);
+        if("owner_work_get".equals(tool)){
+            if(dev.pocketengine.store.OwnerWorkTask.isButlerSource(source))return tasks.ownerWorkReadForButler(sourceTask,sourceRun,sourceEpoch,sourceControl,
+                    args.getString("taskId"),args.optString("deliveryId"),args.optInt("offset",0),args.optInt("maxChars",4000));
+            return json("work",tasks.ownerWork(args.getString("taskId"),conversation),"result",tasks.ownerWorkResult(args.getString("taskId"),conversation,args.optString("deliveryId"),args.optInt("offset",0),args.optInt("maxChars",4000)),"executionAuthorized",false);
+        }
         if("owner_work_start".equals(tool)){
             ModelConfig model=capabilityInferenceModels.get(sourceControl);if(model==null)throw new SecurityException("原管家推理配置已释放");
             JSONObject admitted=tasks.admitOwnerWork(sourceTask,sourceRun,sourceEpoch,operation,args,sourceControl);
@@ -3285,7 +3291,7 @@ public final class EngineApplication extends Application implements dev.pocketen
                 }
             }:null;
 
-            var nativeProfile=attempt.has("ownerDeviceWork")||attempt.optJSONObject("origin")!=null||"owner_work".equals(attempt.optString("executionRole"))?dev.pocketengine.runtime.NativeInstructionProfile.OWNER_WORK:dev.pocketengine.runtime.NativeInstructionProfile.OWNER_BUTLER;
+            var nativeProfile=dev.pocketengine.store.OwnerWorkTask.isButlerSource(attempt)?dev.pocketengine.runtime.NativeInstructionProfile.OWNER_BUTLER:dev.pocketengine.runtime.NativeInstructionProfile.OWNER_WORK;
             var runner=new dev.pocketengine.runtime.AgentRunner(null,port,dev.pocketengine.runtime.context.ContextBudgetPolicy.currentHostSource(),projection,inputs,nativeProfile);
             if(approval!=null&&approval.attachmentCall)runner.bindApprovedCall(new dev.pocketengine.features.capabilities.ApprovedAttachmentContinuation(tasks,id,approval.runId,approval.epoch,approval.approvalId));
             RetainedDevelopmentRun development=ownerMailbox&&assistantInputs.containsKey(control)?new RetainedDevelopmentRun(attempt,config,control,runner,journal,sourceProjection):null;

@@ -17,6 +17,21 @@ public final class OwnerWorkTask {
                 && task.optJSONObject("ownerWork") != null
                 && FORMAT.equals(task.optJSONObject("ownerWork").optString("format"));
     }
+    /** The native private front door only. A damaged work marker never promotes an
+     * executor into the butler or gives it cross-conversation reading authority. */
+    public static boolean isButlerSource(JSONObject source) {
+        return source != null && "owner".equals(source.optString("actorId"))
+                && "private".equals(source.optString("spaceId"))
+                && "assistant".equals(source.optString("kind"))
+                && "capabilities".equals(source.optString("executionMode"))
+                && (!source.has("origin") || source.isNull("origin"))
+                && (!source.has("executionRole") || source.opt("executionRole") instanceof String && source.optString("executionRole").isEmpty())
+                && !source.has("ownerWork") && !source.has("parentTaskId") && !source.has("ownerDeviceWork")
+                && !source.has("teamAssignment") && !source.has("sourceLearningJob")
+                && !source.has("workProfileRef") && !source.has("workProfileIntent")
+                && !source.has("projectMemoryRead") && !source.has("developmentContext")
+                && !source.has("teamWriteScope") && !source.optString("conversationId").isBlank();
+    }
     static JSONObject require(JSONObject task) throws Exception {
         if (!isOwnerWork(task) || !"assistant".equals(task.optString("kind"))
                 || !"capabilities".equals(task.optString("executionMode"))

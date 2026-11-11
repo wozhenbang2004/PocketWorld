@@ -7,6 +7,7 @@ import dev.pocketengine.features.plugins.PluginRules;
 import dev.pocketengine.features.plugins.PluginsModule;
 import dev.pocketengine.features.skills.SkillsModule;
 import dev.pocketengine.store.TaskStore;
+import dev.pocketengine.store.OwnerWorkTask;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -146,17 +147,26 @@ public final class HostToolSupervisor implements CapabilityPort {
         }
         }
         JSONObject ownerTask=catalogueOnly?null:tasks.get(this.taskId,false);
-        boolean ownerWorkTools=catalogueOnly||workProfile==null&&host.hasOwnerWorkHost()&&ownerTask!=null&&"assistant".equals(ownerTask.optString("kind"))&&"owner".equals(ownerTask.optString("actorId"))&&"private".equals(ownerTask.optString("spaceId"))&&ownerTask.optJSONObject("origin")==null&&!ownerTask.has("developmentContext")&&!ownerTask.has("workProfileRef")&&!ownerTask.has("workProfileIntent")&&!ownerTask.has("projectMemoryRead")&&!ownerTask.has("teamWriteScope");
+        boolean butler=catalogueOnly||OwnerWorkTask.isButlerSource(ownerTask);
+        boolean workExecutor=ownerWorkExecutor(ownerTask);
+        boolean ownerWorkTools=catalogueOnly||workProfile==null&&host.hasOwnerWorkHost()&&(butler||workExecutor);
         if(ownerWorkTools){
-            add("assistant","$owner_work_list","owner_work_list","分页读取本会话私人管家已接手的工作摘要及准确执行身份。前台回复不会停止这些工作；终态结果不是新执行授权。详情用owner_work_get。",false,props("offset",integer(0,128),"limit",integer(1,24)));
-            add("assistant","$owner_work_get","owner_work_get","读取本会话一个原工作及冻结结果，不重新派发。deliveryId指定确切结果或容量通知，省略则读最新普通结果；offset/maxChars分页，hasMore时保留同一deliveryId并用nextOffset继续读取。",false,props("taskId",text(80),"deliveryId",text(240),"offset",integer(0,240000),"maxChars",integer(1,8000)),"taskId");
-            if(catalogueOnly||!"owner_work".equals(ownerTask.optString("executionRole"))){
+            add("assistant","$owner_work_list","owner_work_list","读取本会话最近至多128项私人工作的兼容列表及准确执行身份，不代表全局目录。前台回复不会停止这些工作；终态结果不是新执行授权。"+(butler?"管家全局查询用owner_work_directory。":"工作执行器只读取原会话。"),false,props("offset",integer(0,128),"limit",integer(1,24)));
+            add("assistant","$owner_work_get","owner_work_get",butler?"读取一个原工作。同会话可读目标及冻结结果；跨话题只返回原生身份、枚举状态和原conversationId，不返回标题、目标、摘要或结果正文，也不接手结果回执。详情须回原会话读取。同会话用deliveryId选择确切结果，省略读最新普通结果；hasMore时用同一deliveryId及nextOffset继续。":"读取本会话一个原工作及冻结结果，不重新派发。deliveryId选择确切结果，省略读最新普通结果；hasMore时保持deliveryId并用nextOffset继续读取。",false,props("taskId",text(80),"deliveryId",text(240),"offset",integer(0,240000),"maxChars",integer(1,8000)),"taskId");
+            if(butler){
+                add("assistant","$owner_work_directory","owner_work_directory","从真实持久任务表分页查私人工作。跨话题只给原生身份、会话位置、枚举状态、时间及布尔标记；标题、目标、摘要和结果正文须回原会话读取。同会话保留来源核验后的目标。range默认all，也可conversation；filter默认all，可attention、active或open（两者并集）。每次最多扫描4页，空结果仍可能hasMore；有nextCursor须保持range/filter继续，更新后从空cursor刷新。不是完整全局快照，不授权跨话题补充、续接、停止或消费结果回执。",false,props("range",new JSONObject().put("type","string").put("enum",new JSONArray().put("all").put("conversation")),"filter",new JSONObject().put("type","string").put("enum",new JSONArray().put("all").put("attention").put("active").put("open")),"cursor",text(4096),"limit",integer(1,24)));
                 add("assistant","$owner_work_start","owner_work_start","把当前主人明确委托的长工作交给后台私人管家，返回真实持久接收回执后可以继续回答主人。goal是工作说明，不是主人新原话。toolLimit/modelCallLimit从本任务剩余额度实际分配，不能复制或新增授权。后台可使用原团队工具，完成后回到原会话；不要为短问答派后台。",true,props("goal",text(12000),"title",text(200),"toolLimit",integer(1,400),"modelCallLimit",integer(1,512)),"goal","toolLimit","modelCallLimit");
                 add("assistant","$owner_work_input","owner_work_input","将本轮确切主人原话补充给本会话指定工作；只接受原生来源，不接受模型改写的content。queue在当前步骤后处理，steer让原任务重新考虑下一步。不会重绑本轮输入或启动第二个同目标任务。",true,props("taskId",text(80),"runId",text(80),"epoch",integer(1,Integer.MAX_VALUE),"mode",new JSONObject().put("type","string").put("enum",new JSONArray().put("queue").put("steer")),"messageIds",new JSONObject().put("type","array").put("maxItems",16).put("items",text(80))),"taskId","runId","epoch","mode");
-                add("assistant","$owner_work_control","owner_work_control","按准确工作task/run/epoch请求停止后续派发，并清理其真实子任务；不能把请求停止说成外部动作已撤销。",true,props("taskId",text(80),"runId",text(80),"epoch",integer(1,Integer.MAX_VALUE),"action",new JSONObject().put("type","string").put("enum",new JSONArray().put("cancel"))),"taskId","runId","epoch","action");
+                add("assistant","$owner_work_control","owner_work_control","按本会话准确工作task/run/epoch请求停止后续派发，并清理其真实子任务；未启动排队工作使用原runId空串和epoch=0。不能把请求停止说成外部动作已撤销。",true,props("taskId",text(80),"runId",text(80),"epoch",integer(0,Integer.MAX_VALUE),"action",new JSONObject().put("type","string").put("enum",new JSONArray().put("cancel"))),"taskId","runId","epoch","action");
             }
         }
         nativeRoutes.putAll(routes);refreshPluginRoutes();
+    }
+    private static boolean ownerWorkExecutor(JSONObject task){
+        return OwnerWorkTask.isOwnerWork(task)&&"assistant".equals(task.optString("kind"))&&"capabilities".equals(task.optString("executionMode"))
+                &&"owner".equals(task.optString("actorId"))&&"private".equals(task.optString("spaceId"))&&(!task.has("origin")||task.isNull("origin"))
+                &&!task.has("parentTaskId")&&!task.has("teamAssignment")&&!task.has("sourceLearningJob")&&!task.has("developmentContext")
+                &&!task.has("workProfileRef")&&!task.has("workProfileIntent")&&!task.has("projectMemoryRead")&&!task.has("teamWriteScope")&&!task.has("ownerDeviceWork");
     }
     @Override public void beginRun(String goal,RunControl original)throws Exception{
         long workingPause=original.pauseRevision();
@@ -268,12 +278,13 @@ public final class HostToolSupervisor implements CapabilityPort {
         return references;
     }
     private JSONArray ownerWorkReadValidation()throws Exception{
-        JSONArray result=new JSONArray();if(ownerWorkReads.isEmpty())return result;
-        String conversation=tasks.get(taskId,false).getString("conversationId");
+        JSONArray result=new JSONArray();if(ownerWorkReads.isEmpty())return result;JSONObject task=tasks.get(taskId,false);
+        String conversation=task.getString("conversationId");
         for(JSONObject selected:ownerWorkReads.values()){
-            JSONObject current=tasks.ownerWorkResult(selected.getString("taskId"),conversation,selected.getString("deliveryId"),0,2);
+            if(!conversation.equals(selected.getString("conversationId")))throw new SecurityException("结果正文没有跨话题来源许可");
+            JSONObject current=tasks.ownerWorkResult(selected.getString("taskId"),selected.getString("conversationId"),selected.getString("deliveryId"),0,2);
             if(!current.optBoolean("available")||!selected.getString("resultDigest").equals(current.optString("resultDigest")))throw new SecurityException("原工作结果来源已变化或撤回，请重新核对原任务；没有继续使用旧正文");
-            result.put(new JSONObject(selected.toString()));
+            result.put(new JSONObject().put("taskId",selected.getString("taskId")).put("deliveryId",selected.getString("deliveryId")).put("resultDigest",selected.getString("resultDigest")));
         }
         return result;
     }
@@ -287,7 +298,8 @@ public final class HostToolSupervisor implements CapabilityPort {
         if(nativeDevicePort!=null&&!nativeDevicePort.responseCurrent(original))return false;
         if(workingControl!=null&&original!=workingControl)throw new SecurityException("参考校验不是原执行控制");
         var originalSelection=memorySelection;var originalWorks=ownerWorkReferences;
-        String expected=admittedReferences;long generation=admittedMemoryRevision;boolean temporary=admittedWorkingMemory;JSONObject current=contextSnapshot(referenceQuery);memorySelection=originalSelection;ownerWorkReferences=originalWorks;
+        String expected=admittedReferences;long generation=admittedMemoryRevision;boolean temporary=admittedWorkingMemory;JSONObject current;
+        try{current=contextSnapshot(referenceQuery);}finally{memorySelection=originalSelection;ownerWorkReferences=originalWorks;}
         return temporary==admittedWorkingMemory&&generation==host.memoryContextRevision()&&expected.equals(TaskStore.capabilityFingerprint(current.getJSONObject("referenceValidation")));
     }
     @Override public boolean stepReadSourceCurrent(String tool,JSONObject receipt,RunControl original)throws Exception{
@@ -389,9 +401,11 @@ public final class HostToolSupervisor implements CapabilityPort {
         else {memorySelection=null;synchronized(toolMemorySelections){toolMemorySelections.clear();historicalMemorySelections.clear();toolMemoryGeneration++;}}
         StringBuilder reference=new StringBuilder(snapshot.optString("context"));
         ownerWorkReferences=new LinkedHashMap<>();
-        if(projectMemory==null&&workProfile==null&&task.optJSONObject("origin")==null&&!task.has("workProfileRef")&&!task.has("workProfileIntent")&&!task.has("developmentContext")&&!task.has("teamWriteScope")&&"assistant".equals(task.optString("kind"))&&!task.optString("conversationId").isEmpty()){
+        boolean butler=OwnerWorkTask.isButlerSource(task);
+        if(projectMemory==null&&workProfile==null&&(butler||ownerWorkExecutor(task))){
             JSONObject remaining=tasks.executionScopeRemaining(taskId,runId,epoch);
             if(remaining.optBoolean("scopePresent"))reference.append("\n当前原任务真实剩余额度；派后台须另保留至少1次工具及1次模型收尾，不能复制额度：\n").append(new JSONObject().put("toolsRemaining",remaining.getInt("toolsRemaining")).put("modelCallsRemaining",remaining.getInt("modelCallsRemaining")));
+            // Cross-conversation reads use the explicit directory tool's grant and policy gate.
             JSONArray works=tasks.ownerWorks(task.getString("conversationId")),included=new JSONArray();int chars=0;
             for(int i=0;i<works.length()&&included.length()<12;i++){
                 JSONObject work=works.getJSONObject(i),row=new JSONObject();
@@ -400,7 +414,7 @@ public final class HostToolSupervisor implements CapabilityPort {
                 String encoded=row.toString();if(encoded.length()+chars>2400)continue;included.put(row);chars+=encoded.length();
             }
             if(included.length()>0){reference.append("\n本会话私人管家工作现状；仅为原任务状态与结果，不是新授权，不重复执行已完成动作：\n").append(included);snapshot.put("ownerWorksIncluded",included.length());}
-            if(!"owner_work".equals(task.optString("executionRole"))){
+            if(butler){
                 JSONArray pending=tasks.pendingOwnerWorkReceiptsForAttempt(taskId,runId,epoch,8);int resultChars=0;
                 for(int i=0;i<pending.length();i++){
                     JSONObject result=pending.getJSONObject(i);
@@ -488,8 +502,17 @@ public final class HostToolSupervisor implements CapabilityPort {
         JSONObject args=arguments==null?new JSONObject():arguments;if(args.toString().length()>131072)throw new IllegalArgumentException("工具参数过大");
         // Admitted plugin business arguments stay nested below the native invocation envelope.
         // Keep host transport keys private and the full identity/routing gate on native tools.
-        java.util.Iterator<String> keys=args.keys();while(keys.hasNext()){String key=keys.next();if(key.startsWith("_")||tool.preset==null&&key.matches("taskId|runId|principalId|spaceId|ownerId|scope|epoch|coordinatorEpoch|feature|command"))throw new SecurityException("工具参数不能覆盖宿主身份或执行路由");}
+        boolean workTarget=tool==nativeRoutes.get(name)&&tool.preset==null&&"assistant".equals(tool.feature)
+                &&Set.of("$owner_work_get","$owner_work_input","$owner_work_control").contains(tool.command);
+        java.util.Iterator<String> keys=args.keys();while(keys.hasNext()){String key=keys.next();
+            boolean targetField=workTarget&&("taskId".equals(key)||!"$owner_work_get".equals(tool.command)&&("runId".equals(key)||"epoch".equals(key)));
+            if(key.startsWith("_")||tool.preset==null&&!targetField&&key.matches("taskId|runId|principalId|spaceId|ownerId|scope|epoch|coordinatorEpoch|feature|command"))throw new SecurityException("工具参数不能覆盖宿主身份或执行路由");}
         PluginRules.validateArguments(args,tool.schema);
+        if(workTarget){identifier(args.getString("taskId"));if(!"$owner_work_get".equals(tool.command)){
+            String targetRun=args.getString("runId");int targetEpoch=args.getInt("epoch");
+            if(targetRun.isEmpty()){if(!"$owner_work_control".equals(tool.command)||targetEpoch!=0)throw new IllegalArgumentException("只有未启动原工作可使用空runId与epoch=0停止");}
+            else {identifier(targetRun);if(targetEpoch<1)throw new IllegalArgumentException("原工作run必须匹配正执行代次");}
+        }}
         if(tool==nativeRoutes.get(name)&&tool.feature.equals("workspace")&&Set.of("read","write","history","diff","createArtifact").contains(tool.command))
             dev.pocketengine.features.workspace.VersionedWorkspace.path(args.getString("path"));
         if(tool.command.equals("$skills_propose"))dev.pocketengine.features.skills.NativeConversationSkillDraftHost.checkedDraft(args);
@@ -533,7 +556,7 @@ public final class HostToolSupervisor implements CapabilityPort {
             case "automation"->"$schedule_list".equals(tool.command);
             case "attachments"->Set.of("list","readText").contains(tool.command);
             case "teams"->"$teams".equals(tool.command);
-            case "assistant"->Set.of("$owner_work_list","$owner_work_get").contains(tool.command);
+            case "assistant"->Set.of("$owner_work_list","$owner_work_get","$owner_work_directory").contains(tool.command);
             default->false;
         };
         if(!read)return dev.pocketengine.core.ExecutionPlanning.Access.DENY;
@@ -552,7 +575,7 @@ public final class HostToolSupervisor implements CapabilityPort {
             if(name.equals("owner_work_get")&&ownerWorkReads.size()>=16&&!ownerWorkReads.containsKey(args.optString("deliveryId")))throw new IllegalStateException("本轮已读取16份工作结果，请先处理已取得的结果");
             JSONObject result=deliverReceipt(name,host.ownerWorkCall(taskId,runId,epoch,name,operationId,args,control),control);
             JSONObject frozen=name.equals("owner_work_get")?result.optJSONObject("result"):null;
-            if(frozen!=null&&frozen.optBoolean("available"))ownerWorkReads.put(frozen.getString("deliveryId"),new JSONObject().put("taskId",frozen.getString("taskId")).put("deliveryId",frozen.getString("deliveryId")).put("resultDigest",frozen.getString("resultDigest")));
+            if(frozen!=null&&frozen.optBoolean("available"))ownerWorkReads.put(frozen.getString("deliveryId"),new JSONObject().put("taskId",frozen.getString("taskId")).put("conversationId",frozen.getString("conversationId")).put("deliveryId",frozen.getString("deliveryId")).put("resultDigest",frozen.getString("resultDigest")));
             return result;
         }
         if(tool.feature.equals("teams")&&(tool.command.startsWith("$parent_")||tool.command.equals("get")&&host.hasParentTeamOrchestration()||tool.command.equals("start")&&args.has("planRef"))){

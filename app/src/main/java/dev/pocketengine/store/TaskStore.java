@@ -1302,14 +1302,9 @@ public final class TaskStore {
             original.check();db.setTransactionSuccessful();return result;
         }finally{db.endTransaction();}
     }
-    private static boolean ownerButlerSource(JSONObject source){
-        return "owner".equals(source.optString("actorId"))&&"private".equals(source.optString("spaceId"))
-                &&"assistant".equals(source.optString("kind"))&&"capabilities".equals(source.optString("executionMode"))&&source.optJSONObject("origin")==null
-                &&!OwnerWorkTask.isOwnerWork(source)&&!source.has("teamAssignment")&&!source.has("sourceLearningJob")&&!source.has("workProfileRef")&&!source.has("workProfileIntent")&&!source.has("projectMemoryRead")&&!source.has("developmentContext")&&!source.has("teamWriteScope")&&!source.optString("conversationId").isBlank();
-    }
     private void requireOwnerButlerSource(JSONObject source)throws Exception {
         requirePrivateOwner(source);
-        if(!ownerButlerSource(source))throw new SecurityException("只有原私人管家回合可接纳或转交主人工作");
+        if(!OwnerWorkTask.isButlerSource(source))throw new SecurityException("只有原私人管家回合可接纳或转交主人工作");
     }
     private void requireOwnerWorkPrepared(String id,String run,int epoch,String operation,String tool,JSONObject arguments,RunControl original)throws Exception {
         requireOwnerButlerSource(required(id));if(original==null||!original.matchesHostRun(id,run,epoch))throw new SecurityException("缺少原管家执行控制");
@@ -1422,6 +1417,91 @@ public final class TaskStore {
     }
     public synchronized JSONObject ownerWork(String id,String conversationId)throws Exception {
         JSONObject task=required(id);OwnerWorkTask.require(task);if(!conversationId.equals(task.getString("conversationId")))throw new SecurityException("工作不属于此私人会话");return ownerWorkView(task);
+    }
+    private JSONObject requireOwnerButlerRead(String id,String run,int epoch,RunControl control)throws Exception {
+        checkExtensionRun(id,run,epoch,control);JSONObject source=required(id);requireOwnerButlerSource(source);return source;
+    }
+    /** A bounded view of the original durable headers, never the recent-128 cache.
+     * Empty filtered pages may still have a continuation; no page claims a global total. */
+    public synchronized JSONObject ownerWorkDirectoryForButler(String sourceTask,String sourceRun,int sourceEpoch,RunControl control,
+                                                               String scope,String filter,String cursor,int limit)throws Exception {
+        if(!Set.of("all","conversation").contains(scope)||!Set.of("all","attention","active","open").contains(filter)
+                ||cursor==null||cursor.length()>4096||limit<1||limit>24)throw new IllegalArgumentException("私人工作目录范围无效");
+        db.beginTransaction();try{
+            JSONObject source=requireOwnerButlerRead(sourceTask,sourceRun,sourceEpoch,control);
+            String conversation="conversation".equals(scope)?source.getString("conversationId"):"",next="";
+            if(!cursor.isEmpty()){
+                JSONObject saved;
+                try{saved=new JSONObject(new String(java.util.Base64.getUrlDecoder().decode(cursor),StandardCharsets.UTF_8));}
+                catch(Exception invalid){throw new IllegalArgumentException("私人工作目录游标不可读",invalid);}
+                if(saved.length()!=5||saved.optInt("v")!=1||!scope.equals(saved.optString("scope"))||!filter.equals(saved.optString("filter"))
+                        ||!conversation.equals(saved.optString("conversation"))||!(saved.opt("cursor") instanceof String))throw new SecurityException("目录游标不属于本次范围或筛选，请重新查询");
+                next=saved.getString("cursor");if(next.isEmpty())throw new IllegalArgumentException("目录继续游标为空，请重新查询");
+            }
+            JSONArray works=new JSONArray();int scanned=0,pages=0;long bytes=0;boolean more;
+            do{
+                JSONObject page=TaskAuditStore.summaryPage(db,next,limit-works.length());JSONArray headers=page.getJSONArray("tasks");
+                pages++;scanned+=headers.length();bytes+=page.getLong("headerBytesRead");
+                for(int i=0;i<headers.length();i++){
+                    JSONObject header=headers.getJSONObject(i);if(!OwnerWorkTask.isOwnerWork(header))continue;
+                    OwnerWorkTask.require(header);if(!conversation.isEmpty()&&!conversation.equals(header.getString("conversationId")))continue;
+                    boolean sameConversation=source.getString("conversationId").equals(header.getString("conversationId"));
+                    JSONObject row=ownerWorkDirectoryRow(sameConversation?ownerWorkForUi(header):header,sameConversation);
+                    if("all".equals(filter)||"attention".equals(filter)&&row.getBoolean("needsAttention")
+                            ||"active".equals(filter)&&row.getBoolean("active")||"open".equals(filter)&&(row.getBoolean("needsAttention")||row.getBoolean("active")))works.put(row);
+                }
+                String previous=next;next=page.getString("nextCursor");more=page.getBoolean("hasMore");
+                if(more&&(next.isEmpty()||next.equals(previous)))throw new IllegalStateException("原工作目录游标未前进，未重复读取");
+                control.check();
+            }while(more&&works.length()<limit&&pages<4);
+            String continuation=more?java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(new JSONObject().put("v",1)
+                    .put("scope",scope).put("filter",filter).put("conversation",conversation).put("cursor",next).toString().getBytes(StandardCharsets.UTF_8)):"";
+            requireOwnerButlerRead(sourceTask,sourceRun,sourceEpoch,control);
+            JSONObject result=new JSONObject().put("works",works).put("scope",scope).put("filter",filter).put("nextCursor",continuation)
+                    .put("hasMore",more).put("scanIncomplete",more).put("headerRowsExamined",scanned).put("headerPagesRead",pages)
+                    .put("headerBytesRead",bytes).put("maximumHeaderPagesPerCall",4).put("resultLimit",limit)
+                    .put("coverage","current_private_owner_work_headers_keyset_window_updates_require_refresh")
+                    .put("crossConversationContent","identity_and_native_state_only").put("bodyScope","original_conversation")
+                    .put("executionAuthorized",false).put("receiptConsumed",false);
+            if(!conversation.isEmpty())result.put("conversationId",conversation);
+            db.setTransactionSuccessful();return result;
+        }finally{db.endTransaction();}
+    }
+    private JSONObject ownerWorkDirectoryRow(JSONObject work,boolean sameConversation)throws Exception {
+        String id=work.getString("id"),conversation=work.getString("conversationId"),run=work.optString("runId");
+        if(!id.matches("[a-fA-F0-9-]{36}")||!conversation.matches("[a-fA-F0-9-]{36}")||!run.isEmpty()&&!run.matches("[a-fA-F0-9-]{36}"))throw new SecurityException("原工作目录身份不可核对");
+        String status=work.optString("status");if(!status.matches("queued|preparing|running|pausing|paused|stopping|cancelled|completed|failed|interrupted|awaiting_user|waiting_user|waiting_approval|awaiting_approval|waiting_permission|needs_confirmation|reconciling"))status="unknown";
+        int epoch=work.optInt("coordinatorEpoch");JSONObject row=new JSONObject().put("id",id).put("taskId",id).put("conversationId",conversation).put("runId",run)
+                .put("epoch",epoch).put("coordinatorEpoch",epoch).put("executionRole",OwnerWorkTask.ROLE).put("status",status).put("cancelRequested",work.optBoolean("cancelRequested"))
+                .put("sameConversation",sameConversation).put("bodyScope","original_conversation");
+        for(String key:new String[]{"createdAt","updatedAt"})if(work.has(key))row.put(key,work.getLong(key));
+        if(sameConversation){
+            for(String key:new String[]{"title","goal"}){
+                String text=work.optString(key);int end=Math.min(text.length(),key.equals("title")?160:400);
+                if(end<text.length()&&end>0&&Character.isHighSurrogate(text.charAt(end-1)))end--;
+                if(!text.isEmpty())row.put(key,text.substring(0,end));
+            }
+            row.put("contextAvailable",work.optBoolean("contextAvailable"));if(work.has("controls"))row.put("controls",work.getJSONObject("controls"));
+        }else row.put("reason","original_conversation_required");
+        boolean unresolved=hasUnresolved(id);
+        boolean attention=unresolved||status.matches("awaiting_user|waiting_user|waiting_approval|awaiting_approval|waiting_permission|needs_confirmation|reconciling|interrupted|paused|pausing|failed");
+        return row.put("needsAttention",attention).put("active",status.matches("queued|preparing|running|stopping"))
+                .put("hasUnresolvedOperations",unresolved).put("executionAuthorized",false);
+    }
+    /** Only native identities/state span private topics. Body and result provenance
+     * keep the original conversation contract until derived-history gates are complete. */
+    public synchronized JSONObject ownerWorkReadForButler(String sourceTask,String sourceRun,int sourceEpoch,RunControl control,
+                                                          String id,String deliveryId,int offset,int maxChars)throws Exception {
+        db.beginTransaction();try{
+            JSONObject source=requireOwnerButlerRead(sourceTask,sourceRun,sourceEpoch,control),task=required(id);OwnerWorkTask.require(task);
+            String conversation=task.getString("conversationId");boolean sameConversation=conversation.equals(source.getString("conversationId"));
+            JSONObject view=sameConversation?ownerWorkView(task):ownerWorkDirectoryRow(task,false);
+            JSONObject result=sameConversation?ownerWorkResult(id,conversation,deliveryId,offset,maxChars):new JSONObject().put("taskId",id).put("conversationId",conversation)
+                    .put("available",false).put("reason","original_conversation_required").put("resultScope","original_conversation").put("executionAuthorized",false);
+            requireOwnerButlerRead(sourceTask,sourceRun,sourceEpoch,control);db.setTransactionSuccessful();
+            return new JSONObject().put("work",view).put("result",result).put("readScope","private_owner").put("resultScope","original_conversation")
+                    .put("executionAuthorized",false).put("receiptConsumed",false);
+        }finally{db.endTransaction();}
     }
     /** Bounded source-checked read of one immutable result. This never starts work,
      * consumes its butler receipt or changes an original input's submission. */
@@ -1733,7 +1813,7 @@ public final class TaskStore {
             if(!butlerTask.equals(source.getString("id"))||!butlerRun.equals(source.optString("runId"))||butlerEpoch!=source.optInt("coordinatorEpoch")||source.optBoolean("cancelRequested")||!source.optString("status").matches("preparing|running|queued"))throw new SecurityException("结果参考不是原管家回合");
             // Context enrichment is optional for non-butler native tasks. Do not turn
             // a stricter claim-domain guard into failure of their whole context read.
-            if(!ownerButlerSource(source)){db.setTransactionSuccessful();return new JSONArray();}
+            if(!OwnerWorkTask.isButlerSource(source)){db.setTransactionSuccessful();return new JSONArray();}
             String conversation=source.getString("conversationId");JSONArray result=new JSONArray();
             try(Cursor rows=TaskDocumentCursor.tasks(db,"SELECT document FROM tasks ORDER BY updated_at,task_id","SELECT task_id AS document FROM tasks ORDER BY updated_at,task_id",null,0)){
                 while(rows.moveToNext()&&result.length()<limit){
@@ -10935,7 +11015,8 @@ public final class TaskStore {
         checkExtensionRun(id,run,epoch,original);JSONObject task=required(id);
         if(!task.optString("kind").matches("phone|assistant")||task.has("origin")&&!task.isNull("origin")
                 ||task.has("workProfileRef")||task.has("workProfileIntent")||task.has("teamAssignment")
-                ||task.has("teamWriteScope")||"owner_work".equals(task.optString("executionRole")))throw new SecurityException("此执行不使用私人对话审批策略");
+                ||task.has("teamWriteScope"))throw new SecurityException("此执行不使用私人对话审批策略");
+        if("owner_work".equals(task.optString("executionRole")))return ownerWorkPermissionContext(task,run,epoch,original);
         JSONArray inputs=new JSONArray(),rows=task.optJSONArray("ownerInputs");
         for(int i=0;rows!=null&&i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(OwnerInputQueue.withdrawn(row))continue;
             if(row.opt("content") instanceof String)inputs.put(new JSONObject().put("messageId",row.optString("messageId")).put("content",row.getString("content")).put("mode",row.optString("mode")));}
@@ -10944,6 +11025,32 @@ public final class TaskStore {
         JSONObject result=new JSONObject().put("goal",task.optString("goal")).put("ownerInputs",inputs).put("boundResourceEvidence",approvalArguments(resources));
         if(result.toString().length()>64000)throw new IllegalStateException("审批所需原始用户要求超出有界窗口，需人工确认");
         return result;
+    }
+    /** Only USER messages actually included by this work run can justify an effect.
+     * The butler's generated goal is resource evidence, never an owner quotation. */
+    private JSONObject ownerWorkPermissionContext(JSONObject task,String run,int epoch,RunControl original)throws Exception {
+        db.beginTransaction();try{
+            JSONObject work=OwnerWorkTask.require(task);requireOwnerWorkSources(task);
+            String id=task.getString("id"),conversation=task.getString("conversationId");
+            JSONArray refs=scheduleProposalUserRefs(id,run,epoch,conversation);
+            requireScheduleProposalSources(id,run,epoch,conversation,refs);
+            JSONArray inputs=new JSONArray();
+            for(int i=0;i<refs.length();i++){
+                JSONObject ref=refs.getJSONObject(i),message=conversationRepository.message(conversation,ref.getString("sourceId"));
+                if(message==null||!"user".equals(message.optString("role"))||ref.getLong("revision")!=message.optLong("revision")
+                        ||!(message.opt("content") instanceof String))throw new SecurityException("原工作审批所需主人原话不可核对");
+                inputs.put(new JSONObject().put("messageId",ref.getString("sourceId")).put("revision",ref.getLong("revision"))
+                        .put("content",message.getString("content")).put("mode",message.optString("inputMode")));
+            }
+            JSONObject resources=new JSONObject().put("delegatedGoal",task.getString("goal")).put("taskId",id)
+                    .put("conversationId",conversation).put("executionMode",task.getString("executionMode"))
+                    .put("sourceTaskId",work.getString("sourceTaskId")).put("sourceRunId",work.getString("sourceRunId"))
+                    .put("sourceEpoch",work.getInt("sourceEpoch")).put("sourceMessageRefs",refs);
+            JSONObject result=new JSONObject().put("goal","").put("ownerInputs",inputs).put("boundResourceEvidence",approvalArguments(resources));
+            if(result.toString().length()>64000)throw new IllegalStateException("审批所需原始用户要求超出有界窗口，需人工确认");
+            checkExtensionRun(id,run,epoch,original);requireOwnerWorkSources(task);
+            db.setTransactionSuccessful();return result;
+        }finally{db.endTransaction();}
     }
     /** Legacy native callers decide the currently stored original, never an approval from an older run. */
     public synchronized JSONObject decideCapabilityApproval(String id,String approvalId,boolean approved)throws Exception{
