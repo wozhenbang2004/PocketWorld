@@ -93,7 +93,8 @@ export function conversationActivityLabel(state: Data): string {
 /** Only authoritative success with no unresolved work may give space back to
  * the answer. A completed label never hides a reconciliation requirement. */
 export function conversationTaskCompact(task: Data): boolean {
-  return task.status === 'completed' && !taskNeedsAttention(task);
+  const handling = ownerWorkPresentation(task);
+  return task.status === 'completed' && !taskNeedsAttention(task) && !handling?.needsAttention && !handling?.waitingForChildren;
 }
 
 /** Summary priority only; opening the original task still owns all decisions. */
@@ -117,7 +118,7 @@ export function conversationInlineAttention(task: Data): boolean {
 
 export function conversationWorkActionLabel(task: Data): string {
   const handling = ownerWorkPresentation(task);
-  if (handling?.needsAttention) return '核对管家汇报';
+  if (handling?.needsAttention || handling?.waitingForChildren) return handling.actionLabel;
   if (taskNeedsReconciliation(task)) return '核对操作';
   if (task.status === 'needs_confirmation') return '核对结果';
   if (['waiting_approval', 'awaiting_approval', 'waiting_permission'].includes(task.status)) return '处理授权';
@@ -141,7 +142,7 @@ export function backgroundConversationWork<T extends Data>(tasks: T[], ownerWork
     const associated = raw.nativeResultHandling === true && handling?.conversationId === conversationId || raw.conversationId === conversationId && (raw.executionRole === 'owner_work' || raw.feature === 'teams'
       || raw.origin?.kind === 'automation' && raw.origin?.originConversationId === conversationId);
     const resumable = raw.executionRole === 'owner_work' && raw.controls?.canContinue === true && ['failed', 'interrupted'].includes(task.status);
-    if ((!phone && !associated) || ['completed', 'failed', 'cancelled', 'canceled', 'stopped', 'interrupted'].includes(task.status) && !resumable && !handling?.waitingForButler && !handling?.needsAttention) continue;
+    if ((!phone && !associated) || ['completed', 'failed', 'cancelled', 'canceled', 'stopped', 'interrupted'].includes(task.status) && !resumable && !handling?.waitingForButler && !handling?.waitingForChildren && !handling?.needsAttention) continue;
     selected.set(task.id, task);
   }
   return [...selected.values()].map(task => ({ task, attention: conversationWorkNeedsAttention(task) }))

@@ -64,6 +64,25 @@ public final class TeamsModule implements EngineModule {
     }
     /** The original parent retains this native ticket, never a later lookup by operation ID. */
     public synchronized TeamCoordinator.OriginalResearchStart startOriginalResearch(JSONObject input)throws Exception{if(researchHost==null)throw new SecurityException("原持续研究宿主尚未挂载");return coordinator.startOriginalResearch(definition(input.getString("teamId")),JsonFiles.text(input,"goal",8000),input.optInt("rounds",1),context.model(),input.getString("_operationId"),evidenceFactory,externalFactory);}
+    /** Model-only, one-time roster from the original owner-work. It is never saved as
+     * a reusable definition or exposed through the general module command surface. */
+    public synchronized TeamCoordinator.OriginalResearchStart startOriginalResearch(JSONObject input,JSONObject draft,
+            dev.pocketengine.core.ModelConfig capturedModel,dev.pocketengine.core.RunControl.AuthorityCheck originalCurrent)throws Exception{
+        if(researchHost==null||parentHost==null)throw new SecurityException("原团队研究和父任务宿主尚未挂载");
+        JSONObject captured=TeamDraftDefinition.capture(draft);
+        if(capturedModel==null||originalCurrent==null||!captured.getString("id").equals(input.getString("teamId"))
+                ||input.optString("_operationId").isEmpty()||!input.getString("_operationId").equals(input.getString("_taskId"))
+                ||!input.getString("_operationId").equals(input.getString("_runId")))
+            throw new SecurityException("临时分工必须沿原工作登记的准确操作与捕获模型开始");
+        JSONArray members=captured.getJSONArray("members");
+        for(int index=0;index<members.length();index++)if(members.getJSONObject(index).has("model"))
+            throw new SecurityException("本次分工继承原工作模型，不能按成员换模型");
+        synchronized(coordinator){
+            originalCurrent.check();
+            return coordinator.startOriginalResearch(captured,JsonFiles.text(input,"goal",8000),input.getInt("rounds"),capturedModel,
+                    input.getString("_operationId"),evidenceFactory,externalFactory);
+        }
+    }
     private synchronized JSONObject definition(String id)throws Exception{JSONArray all=definitions();for(int i=0;i<all.length();i++)if(id.equals(all.getJSONObject(i).getString("id")))return new JSONObject(all.getJSONObject(i).toString());throw new SecurityException("原已配置团队不存在");}
     /** Native private-owner read only, deliberately not a model command. */
     public JSONObject ownerAttention(String afterRunId,String afterItemId,int limit)throws Exception{return coordinator.ownerAttention(afterRunId,afterItemId,limit);}

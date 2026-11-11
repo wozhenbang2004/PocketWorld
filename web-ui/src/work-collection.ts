@@ -53,12 +53,12 @@ export function workCollectionPresentation(task: WorkCollectionTask) {
     || pendingApproval || (!nativeGroup && taskNeedsAttention(task)) || task.status === 'awaiting_permission' || !active && !ended;
   // Re-evaluate current handling/controls even for a paged row. Only the exact
   // native operation distinction is borrowed; a stale group cannot hide a new decision.
-  const group: WorkCollectionGroup = attention ? 'attention' : active || handling?.waitingForButler ? 'running' : 'ended';
+  const group: WorkCollectionGroup = attention ? 'attention' : active || handling?.waitingForButler || handling?.waitingForChildren ? 'running' : 'ended';
   const label = reconciliation ? '结果待核对' : handling && raw.contextAvailable === false ? handling.handlingLabel
-    : handling?.needsAttention ? handling.handlingLabel : resumableFailure ? '本次未完成，可继续处理'
+    : handling?.needsAttention || handling?.waitingForChildren ? handling.handlingLabel : resumableFailure ? '本次未完成，可继续处理'
     : handling && ended && !['none', 'unread'].includes(handling.state) ? handling.handlingLabel
     : group === 'attention' && active ? '需要你处理' : labels[task.status] || '状态待核对';
-  const actionLabel = reconciliation ? '核对操作' : handling?.needsAttention ? '核对管家汇报'
+  const actionLabel = reconciliation ? '核对操作' : handling?.needsAttention || handling?.waitingForChildren ? handling.actionLabel
     : task.status === 'needs_confirmation' ? '核对结果'
     : ['waiting_approval', 'awaiting_approval', 'waiting_permission', 'awaiting_permission'].includes(task.status) ? '处理授权'
     : ['awaiting_user', 'waiting_user'].includes(task.status) ? '补充信息'
@@ -66,7 +66,8 @@ export function workCollectionPresentation(task: WorkCollectionTask) {
     : group === 'attention' ? '查看待办' : task.status === 'queued' ? '查看排队'
     : group === 'running' ? '查看进展' : handling?.resultAvailable || handling?.delivered ? '查看结果' : '查看详情';
   return { group, label, actionLabel, handling,
-    busy: group === 'running' && (active && task.status !== 'queued' || handling?.state === 'running') };
+    busy: group === 'running' && (active && task.status !== 'queued' || handling?.state === 'running'
+      || handling?.teams.some(team => ['running', 'stopping'].includes(team.status))) };
 }
 
 export function matchesWorkFilter(task: WorkCollectionTask, filter: WorkCollectionFilter): boolean {

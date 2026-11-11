@@ -117,6 +117,11 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
             controller.state.tasks.singleOrNull { it.raw.optString("feature") == "teams" && it.raw.optString("externalId") == value.optString("id")
                 && it.raw.optString("actorId") == "owner" && it.raw.optString("spaceId") == "private" }
                 ?.let { result.put("taskId", it.id) }
+            controller.nativeTokenBudgetHost().tasks.ownerWorkLinkForTeam(value.getString("id"))?.let { link ->
+                result.put("ownerWorkLink", PocketWebState.publicValue(link))
+                // The original host may have left the recent task window.
+                result.put("taskId", link.getString("teamTaskId"))
+            }
         }
         return result
     }

@@ -10,7 +10,7 @@ export const capabilityStartLabels: Record<CapabilityPurpose, string> = {
   'phone.background': '交代手机任务',
   project: '选择项目',
   remote: '选择设备',
-  team: '选择团队',
+  team: '交给管家协作',
   schedule: '安排后续工作',
 };
 

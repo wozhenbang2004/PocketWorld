@@ -2363,6 +2363,12 @@ public final class EngineApplication extends Application implements dev.pocketen
         var projectMemory=projectMemoryReads.get(original);JSONObject recordedMemory=task.optJSONObject("projectMemoryRead");
         if(recordedMemory!=null&&(projectMemory==null||!recordedMemory.getString("consentId").equals(projectMemory.metadata().getString("consentId"))))throw new SecurityException("本run项目记忆需要重新显选，未从metadata恢复权限或回退全局");
         var profile=workProfileTools(task,original,selectedProfile);var nativeSupervisor=profile==null?new dev.pocketengine.features.HostToolSupervisor(features,tasks,id,run,epoch,true,outputCapture):new dev.pocketengine.features.HostToolSupervisor(features,tasks,id,run,epoch,true,outputCapture,profile);if(projectMemory!=null)nativeSupervisor.installProjectMemoryRead(projectMemory,original);
+        if(dev.pocketengine.store.OwnerWorkTask.isOwnerWork(task)&&!task.has("ownerWorkTakeover")){
+            nativeSupervisor.installOwnerWorkTeamModel(inference,original,()->{
+                checkLiveExtensionControl(extensionBinding,original);
+                dev.pocketengine.runtime.models.InferenceRouteContinuity.requireCurrent(inference,settings.currentForCaptured(inference),original);
+            });
+        }
         if(settings.webSearchSettings().getBoolean("providerHostedEnabled")){
             nativeSupervisor.installHostedSearch(inference,original,()->{
                 checkLiveExtensionControl(extensionBinding,original);
@@ -2821,10 +2827,17 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
             rows.put(json("id","project","label","项目开发","installed",installed,"state",!installed?"unavailable":runtime.optBoolean("canExecute")?"selection_required":"preparation_required",
                     "runtime",facts,"prepareTool","owner_work_prepare","detail","选择真实项目和副本，完成原生源码与运行环境审阅后开始；项目选择不会由对话文字代替。"));
         }
-        for(String kind:new String[]{"remote","team","schedule"})if(purpose.equals("all")||purpose.equals(kind)){
-            String module=kind.equals("team")?"teams":kind.equals("schedule")?"automation":"remote";boolean installed=features.module(module)!=null;
-            rows.put(json("id",kind,"label",kind.equals("remote")?"远端执行":kind.equals("team")?"团队协作":"持续职责","installed",installed,"state",installed?"selection_required":"unavailable",
-                    "inspectTool",kind.equals("remote")?"remote_profiles":kind.equals("team")?"teams_list":"schedule_list",
+        if(purpose.equals("all")||purpose.equals("team")){
+            EngineModule module=features.module("teams");boolean installed=module!=null;
+            boolean prepared=module instanceof dev.pocketengine.features.teams.TeamsModule teams&&teams.parentOrchestrationConfigured()&&teams.continuousResearchConfigured();
+            rows.put(json("id","team","label","团队协作","installed",installed,"state",prepared?"scope_required":"unavailable",
+                    "prepareTool","owner_work_start","executionTool","teams_start","savedTeamsTool","teams_list","oneTimeModelTeamAvailable",prepared,
+                    "detail",prepared?"把当前目标交给独立工作；原工作可组织一至四名模型成员分工或讨论，沿原模型、审批和剩余额度执行，不需预先建立编组。进度和结果关联回原工作及话题。手机、电脑和文件制作仍须原生范围审阅。":"原团队研究与父任务宿主尚未接入；当前不能通过对话安排临时分工。"));
+        }
+        for(String kind:new String[]{"remote","schedule"})if(purpose.equals("all")||purpose.equals(kind)){
+            String module=kind.equals("schedule")?"automation":"remote";boolean installed=features.module(module)!=null;
+            rows.put(json("id",kind,"label",kind.equals("remote")?"远端执行":"持续职责","installed",installed,"state",installed?"selection_required":"unavailable",
+                    "inspectTool",kind.equals("remote")?"remote_profiles":"schedule_list",
                     "detail",kind.equals("schedule")?"核对原定时或条件职责及真实触发记录；新职责经原生提案审阅安装。":"用原工具核对选定目标的当前连接、授权、资源和剩余额度；配置存在不代表已经就绪。"));
         }
         return json("capabilities",rows,"observedAt",System.currentTimeMillis(),"executionAuthorized",false,"observationOnly",true);

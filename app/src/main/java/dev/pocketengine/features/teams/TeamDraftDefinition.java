@@ -1,9 +1,11 @@
 package dev.pocketengine.features.teams;
 
 import dev.pocketengine.features.workspace.JsonFiles;
+import dev.pocketengine.store.TaskStore;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
@@ -11,6 +13,28 @@ import java.util.UUID;
 /** An immutable, one-use model roster; it carries no device or file execution grant. */
 public final class TeamDraftDefinition {
     private TeamDraftDefinition() { }
+
+    /** Data capture only. The native caller must still prove the original owner-work,
+     * prepared operation, exact approval and captured model before dispatch. */
+    public static JSONObject forOwnerWork(String parentTaskId, JSONObject arguments) throws Exception {
+        if (!UUID.fromString(parentTaskId).toString().equals(parentTaskId))
+            throw new SecurityException("本次分工缺少原工作身份");
+        fields(arguments, Set.of("goal", "name", "mode", "rounds", "leaderId", "members"));
+        TeamParentTools.validate("teams_start", arguments);
+        String goal = JsonFiles.text(arguments, "goal", 8000);
+        JSONArray members = arguments.getJSONArray("members");
+        for (int index = 0; index < members.length(); index++)
+            fields(members.getJSONObject(index), Set.of("id", "name", "role", "assignment", "dependsOn"));
+        // Approval retries keep the same roster identity; an actual dispatch still uses
+        // its separate, original prepared operation ID and is never replayed by this key.
+        String id = UUID.nameUUIDFromBytes(("pocketworld.owner-work-team.v1\n" + parentTaskId
+                + "\n" + TaskStore.capabilityFingerprint(arguments)).getBytes(StandardCharsets.UTF_8)).toString();
+        return capture(new JSONObject().put("id", id)
+                .put("name", arguments.has("name") ? arguments.getString("name") : goal.substring(0, Math.min(48, goal.length())))
+                .put("mode", arguments.optString("mode", "collaborate"))
+                .put("leaderId", arguments.has("leaderId") ? arguments.getString("leaderId") : members.getJSONObject(0).getString("id"))
+                .put("members", new JSONArray(members.toString())).put("definitionKind", "one_time"));
+    }
 
     public static JSONObject capture(JSONObject supplied) throws Exception {
         fields(supplied, Set.of("id", "name", "mode", "leaderId", "members", "discussionFormat", "definitionKind"));

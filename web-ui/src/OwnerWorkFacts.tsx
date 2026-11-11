@@ -1,22 +1,25 @@
 import { Button } from './forms-library';
 import { IconChevronRight } from './icons';
 import { ProgressCircle } from './library';
-import { ownerWorkPresentation, type ReportReconciliationTarget } from './owner-work-presentation';
+import { ownerWorkPresentation, type OwnerWorkTeam, type ReportReconciliationTarget } from './owner-work-presentation';
+import { OwnerWorkTeams } from './OwnerWorkTeams';
 import './owner-work.css';
 
 /** The Brief/Assets relationship from Affect AgentChat, rendered with the
  * retained BoardUI controls and host-owned facts instead of demo data. */
-export function OwnerWorkFacts({ task, onReport, onReconcile }: { task: unknown; onReport?: () => void; onReconcile?: (target: ReportReconciliationTarget) => void }) {
+export function OwnerWorkFacts({ task, onReport, onReconcile, onTeam }: { task: unknown; onReport?: () => void; onReconcile?: (target: ReportReconciliationTarget) => void; onTeam?: (team: OwnerWorkTeam) => void }) {
   const work = ownerWorkPresentation(task);
   if (!work) return null;
   return <section className="pw-owner-work-facts" aria-label="成果与管家处理" data-handling={work.state}>
     <div className="pw-owner-work-handling">
-      {work.state === 'running' && <ProgressCircle isIndeterminate size="sm" aria-label="管家正在核对结果" />}
+      {work.waitingForButler && work.state === 'running' && <ProgressCircle isIndeterminate size="sm" aria-label="管家正在核对结果" />}
       <div><strong>{work.handlingLabel}</strong>{work.reason && <p>{work.reason}</p>}</div>
       {work.delivered && onReport && <Button variant="ghost" trailingIcon={IconChevronRight} onClick={onReport}>回到汇报话题</Button>}
       {work.receiptReconciliation && onReconcile && <Button variant="ghost" trailingIcon={IconChevronRight} onClick={() => onReconcile(work.receiptReconciliation!)}>查看整理记录</Button>}
     </div>
-    <p className="pw-owner-work-result-state">{work.resultState}</p>
+    {(work.resultAvailable || !work.teams.length) && <p className="pw-owner-work-result-state">{work.resultState}</p>}
+    <OwnerWorkTeams teams={work.teams} onOpen={onTeam} />
+    {work.teamsUnavailable && <p className="pw-owner-work-result-state" role="status">协作进展待读取，请稍后重新打开这件工作。</p>}
   </section>;
 }
 

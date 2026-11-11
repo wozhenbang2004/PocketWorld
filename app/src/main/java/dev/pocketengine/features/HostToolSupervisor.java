@@ -52,6 +52,9 @@ public final class HostToolSupervisor implements CapabilityPort {
     private dev.pocketengine.core.ModelConfig hostedSearchModel;
     private dev.pocketengine.core.RunControl.AuthorityCheck hostedSearchCurrent;
     private dev.pocketengine.core.RunControl hostedSearchControl;
+    private dev.pocketengine.core.ModelConfig ownerWorkTeamModel;
+    private RunControl ownerWorkTeamControl;
+    private RunControl.AuthorityCheck ownerWorkTeamCurrent;
     private final Map<String,Boolean> availability=new LinkedHashMap<>();
     private Map<String,JSONObject> ownerWorkReferences=new LinkedHashMap<>();
     private final Map<String,JSONObject> ownerWorkReads=new LinkedHashMap<>();
@@ -161,7 +164,7 @@ public final class HostToolSupervisor implements CapabilityPort {
         boolean parentTeamTask=catalogueOnly||tasks.teamParentEligible(this.taskId,this.runId,epoch);
         if(parentTeamTask){
         add("teams","$teams","teams_list","列出主人已配置团队的真实成员与工作模式。",false,new JSONObject());
-        addTeamParentTool("start","teams_start","在原父任务启动已有团队，或只以原planRef+planHash启动已核提案；原生主人批准准确scope/预算前不派发。",true);
+        addTeamParentTool("start","teams_start","三种互斥启动：已有teamId+goal；原planRef+planHash；或独立owner_work中的goal+members（1至4个id/name/role，可带assignment/dependsOn），临时分工可选name/leaderId/mode/rounds，不需预先保存编组。临时分工只做模型分析，继承原工作模型和剩余额度；mode默认collaborate，debate使用完整两轮且无前置依赖。前台管家须先owner_work_start。准确参数经原生审批后才派发，返回真实原工作和团队身份。",true);
         if(host.hasParentTeamOrchestration())addTeamParentTool("get","teams_get","按原父团队读取状态/事件、research_summary或member_output准确阶段的有界正文（后续页带expectedOutputHash），及制作成果；不重启，不把研究结论当文件。",false);else add("teams","get","teams_get","读取本父任务拥有的原团队，不重启。",false,props("teamRunId",text(80)),"teamRunId");
         if(host.hasParentTeamOrchestration()){
             addTeamParentTool("$parent_plan","teams_plan","为原生已选项目和已配置成员提出1至8项互斥文字文件工作及依赖/验收/可见预算；只保存提案ref/hash，不授权或启动。",true);
@@ -178,7 +181,7 @@ public final class HostToolSupervisor implements CapabilityPort {
             add("assistant","$owner_work_list","owner_work_list","读取本会话最近至多128项私人工作的兼容列表及准确执行身份，不代表全局目录。前台回复不会停止这些工作；终态结果不是新执行授权。"+(butler?"管家全局查询用owner_work_directory。":"工作执行器只读取原会话。"),false,props("offset",integer(0,128),"limit",integer(1,24)));
             add("assistant","$owner_work_get","owner_work_get",butler?"读取准确私人工作及原生提案关联的手机、项目工作。跨话题正文只在原来源仍有效并完成原生来源继承后提供；available=false时不推测内容。结果使用deliveryId固定确切版本，hasMore时保持该ID并按nextOffset继续；查询不代表原话题已接手、已汇报或新授权。":"读取本会话一个原工作及冻结结果，不重新派发。deliveryId选择确切结果，省略读最新普通结果；hasMore时保持deliveryId并用nextOffset继续读取。",false,props("taskId",text(80),"deliveryId",text(240),"offset",integer(0,240000),"maxChars",integer(1,8000)),"taskId");
             if(butler){
-                add("assistant","$owner_work_capabilities","owner_work_capabilities","按本次目标核对真实能力、手机资源占用和准备缺口。准备就绪不等于执行授权；手机及项目工作用owner_work_prepare形成正式交接，由原生入口核对真实设备、项目副本、模型和额度。远端与团队仍须使用已准入的原工具核对选定目标。",false,props("purpose",new JSONObject().put("type","string").put("enum",new JSONArray().put("all").put("research").put("phone").put("project").put("remote").put("team").put("schedule"))));
+                add("assistant","$owner_work_capabilities","owner_work_capabilities","按本次目标核对真实能力、手机资源占用和准备缺口。准备就绪不等于执行授权；手机及项目工作用owner_work_prepare形成正式交接，由原生入口核对真实设备、项目副本、模型和额度。模型团队先用owner_work_start交给独立工作，再由原工作按目标组织临时分工；远端和设备团队仍需核对原选定目标。",false,props("purpose",new JSONObject().put("type","string").put("enum",new JSONArray().put("all").put("research").put("phone").put("project").put("remote").put("team").put("schedule"))));
                 add("assistant","$owner_work_prepare","owner_work_prepare","把当前主人目标保存为手机或项目工作的正式准备提案。仅建议目标与交付合同，不启动、不授权、不选择执行副本或模型。返回准确proposalId后，引导主人从原话题的准备入口核对并开始；回执未知只查询原提案。projectId仅为现有项目建议，仍需主人在原生准备中确认。",true,props("kind",new JSONObject().put("type","string").put("enum",new JSONArray().put("phone").put("project")),"goal",text(4000),"constraints",text(4000),"deliverable",text(4000),"completionCriteria",text(4000),"projectId",text(80)),"kind","goal");
                 add("assistant","$owner_work_directory","owner_work_directory","从原持久任务表分页查私人工作及提案关联的手机、项目工作。跨话题目标须通过当前原生来源检查；不可用时只保留身份、位置和真实状态。range默认all，也可conversation；filter默认all，可attention、active或open（两者并集）。每次最多扫描4页，空页仍可能hasMore；有nextCursor须保持range/filter继续，更新后从空cursor刷新。分页不是完整全局快照，查询不授予执行或消费结果回执的权利。",false,props("range",new JSONObject().put("type","string").put("enum",new JSONArray().put("all").put("conversation")),"filter",new JSONObject().put("type","string").put("enum",new JSONArray().put("all").put("attention").put("active").put("open")),"cursor",text(4096),"limit",integer(1,24)));
                 add("assistant","$owner_work_start","owner_work_start","把当前主人明确委托的长工作交给后台执行，返回真实持久回执后可继续回答主人。goal为工作说明；constraints、deliverable、completionCriteria用于保留本次约束、交付物及完成条件，均不构成新授权。toolLimit/modelCallLimit从当前剩余额度实际分配；宿主另从同一额度预留结果核对汇报及当前回合收尾，不增额。结果回来后由原管家在原话题空闲时接手；取消、过期或来源失效时不自动处理。短问答直接回答。",true,props("goal",text(12000),"title",text(200),"constraints",text(4000),"deliverable",text(4000),"completionCriteria",text(4000),"toolLimit",integer(1,400),"modelCallLimit",integer(1,512)),"goal","toolLimit","modelCallLimit");
@@ -211,6 +214,29 @@ public final class HostToolSupervisor implements CapabilityPort {
         if(route==null)throw new SecurityException("官方厂商搜索原生模块未就绪");
         nativeRoutes.put(dev.pocketengine.features.web.ProviderHostedWebSearch.TOOL,route);
         refreshPluginRoutes();
+    }
+
+    /** Native run wiring only; tool JSON cannot select a model or turn the front desk
+     * into a background work owner. The roster itself never carries a model target. */
+    public void installOwnerWorkTeamModel(dev.pocketengine.core.ModelConfig selected,
+            RunControl original, RunControl.AuthorityCheck current) throws Exception {
+        if (ownerWorkTeamModel != null || workProfile != null || projectMemory != null
+                || !ownerWorkExecutor(tasks.get(taskId, false)) || original == null
+                || !original.matchesHostRun(taskId, runId, epoch))
+            throw new SecurityException("临时分工只能继承原独立工作的模型与执行身份");
+        original.check();java.util.Objects.requireNonNull(current).check();
+        ownerWorkTeamModel=java.util.Objects.requireNonNull(selected);
+        ownerWorkTeamControl=original;ownerWorkTeamCurrent=current;
+    }
+
+    private dev.pocketengine.core.ModelConfig requireOwnerWorkTeamModel(RunControl original) throws Exception {
+        if (ownerWorkTeamModel == null || ownerWorkTeamCurrent == null || original == null
+                || original != ownerWorkTeamControl || !original.matchesHostRun(taskId, runId, epoch)
+                || !ownerWorkExecutor(tasks.get(taskId, false))
+                || !tasks.teamParentEligible(taskId, runId, epoch))
+            throw new SecurityException("请先由管家用owner_work_start接纳独立工作，再在原工作中组织本次分工");
+        ownerWorkTeamCurrent.check();
+        return ownerWorkTeamModel;
     }
 
     private static boolean ownerWorkExecutor(JSONObject task){
@@ -293,7 +319,7 @@ public final class HostToolSupervisor implements CapabilityPort {
     private void closeWorking(){var previous=working;RunControl owner=workingControl;Runnable cancelled=workingCancellation;working=null;workingControl=null;workingFence=null;workingCancellation=null;if(owner!=null&&cancelled!=null)owner.removeCancelAction(cancelled);if(previous!=null)host.releaseWorkingMemory(previous);}
     private void endToolMemorySelections(){synchronized(toolMemorySelections){toolMemoryEnded=true;toolMemoryGeneration++;toolMemorySelections.clear();historicalMemorySelections.clear();}}
     @Override public void endRun(RunControl original){endToolMemorySelections();closeWorking();}
-    @Override public void close(){try{modelRequestAbandoned("");}catch(Exception ignored){}if(nativeDevicePort!=null)nativeDevicePort.close();nativeDevicePort=null;nativeDeviceRoutes=null;if(finalCapabilities!=null)finalCapabilities.invalidate();finalCapabilities=null;endToolMemorySelections();closeWorking();taskMemory=null;memorySelection=null;memoryTask=null;memoryControl=null;memoryFence=null;projectMemory=null;}
+    @Override public void close(){try{modelRequestAbandoned("");}catch(Exception ignored){}if(nativeDevicePort!=null)nativeDevicePort.close();nativeDevicePort=null;nativeDeviceRoutes=null;if(finalCapabilities!=null)finalCapabilities.invalidate();finalCapabilities=null;endToolMemorySelections();closeWorking();taskMemory=null;memorySelection=null;memoryTask=null;memoryControl=null;memoryFence=null;projectMemory=null;ownerWorkTeamModel=null;ownerWorkTeamControl=null;ownerWorkTeamCurrent=null;}
     private void retainToolMemorySelection(dev.pocketengine.features.memory.TaskMemoryUse.Selection selected)throws Exception{
         JSONObject metadata=selected.metadata(),identity=new JSONObject().put("contextDigest",metadata.getString("contextDigest")).put("records",metadata.getJSONArray("records"));
         for(String field:new String[]{"retrievalDependencies","memoryNamespace"})if(metadata.has(field))identity.put(field,metadata.get(field));
@@ -572,7 +598,13 @@ public final class HostToolSupervisor implements CapabilityPort {
             dev.pocketengine.features.memory.MemoryQueryPlan.agentSuggested(args.getString("query"),args.has("queries")?args.getJSONArray("queries"):new JSONArray(),args.has("constraints")?args.getJSONObject("constraints"):new JSONObject());
         if(workProfile!=null&&tool.feature.equals("skills")&&Set.of("$skills_read","$skill_reference_decision","$skill_execute").contains(tool.command)){if(profileCheck==null)workProfile.requireSkillRequest(args);else workProfile.requireSkillRequest(args,profileCheck);}
         if(tool.feature.equals("skills")&&tool.command.equals("$skills_list"))skillListMode(args);
-        if(tool.feature.equals("teams")&&name.startsWith("teams_"))dev.pocketengine.features.teams.TeamParentTools.validate(name,args);
+        if(tool.feature.equals("teams")&&name.startsWith("teams_")){
+            dev.pocketengine.features.teams.TeamParentTools.validate(name,args);
+            if(name.equals("teams_start")&&args.has("members")){
+                requireOwnerWorkTeamModel(ownerWorkTeamControl);
+                dev.pocketengine.features.teams.TeamDraftDefinition.forOwnerWork(taskId,args);
+            }
+        }
     }
     /** One pure cross-field policy for both admission and actual catalogue execution. */
     private static String skillListMode(JSONObject args){
@@ -631,7 +663,8 @@ public final class HostToolSupervisor implements CapabilityPort {
             if(tool.write&&!allowWrites)throw new SecurityException("只读成员不能取得父编排执行权");return host.teamParentCall(taskId,runId,epoch,name,operationId,args,control);
         }
         JSONObject approvalCapability=new JSONObject().put("feature",tool.feature).put("command",tool.command);
-        if(tool.feature.equals("teams")&&tool.command.equals("start"))approvalCapability.put("teamDefinition",host.teamDefinition(args.getString("teamId")));
+        if(tool.feature.equals("teams")&&tool.command.equals("start"))approvalCapability.put("teamDefinition",args.has("members")
+                ?dev.pocketengine.features.teams.TeamDraftDefinition.forOwnerWork(taskId,args):host.teamDefinition(args.getString("teamId")));
         JSONObject ownerEditPermit=null;dev.pocketengine.features.workspace.VersionedWorkspace.FileSnapshot ownerEditFile=null;
         if(name.equals("workspace_write")&&!operationId.isEmpty()&&host.module("workspace") instanceof dev.pocketengine.features.workspace.WorkspaceModule){
             var workspace=(dev.pocketengine.features.workspace.WorkspaceModule)host.module("workspace");
@@ -704,7 +737,13 @@ public final class HostToolSupervisor implements CapabilityPort {
         }
         else if(tool.command.equals("$projects"))result=new JSONObject().put("ok",true).put("projects",module.snapshot().getJSONArray("projects"));
         else if(tool.command.equals("$teams"))result=new JSONObject().put("ok",true).put("teams",module.snapshot().getJSONArray("teams"));
-        else if(tool.feature.equals("teams")&&tool.command.equals("start"))result=host.startTeamForTask(taskId,runId,operationId.isEmpty()?UUID.randomUUID().toString():operationId,args,approvalCapability.getJSONObject("teamDefinition"),control,consumedApprovalId);
+        else if(tool.feature.equals("teams")&&tool.command.equals("start")){
+            if(args.has("members")){
+                if(operationId.isEmpty())throw new SecurityException("本次分工缺少原已登记的启动操作，不另造执行身份");
+                result=host.startTeamForTask(taskId,runId,operationId,args,approvalCapability.getJSONObject("teamDefinition"),control,consumedApprovalId,
+                        requireOwnerWorkTeamModel(control),()->{requireOwnerWorkTeamModel(control);});
+            }else result=host.startTeamForTask(taskId,runId,operationId.isEmpty()?UUID.randomUUID().toString():operationId,args,approvalCapability.getJSONObject("teamDefinition"),control,consumedApprovalId);
+        }
         else if(tool.feature.equals("teams")&&tool.command.equals("get"))result=host.readTeamForTask(taskId,runId,epoch,args,control);
         else if(tool.command.equals("$profiles"))result=new JSONObject().put("ok",true).put("profiles",module.snapshot().getJSONArray("profiles"));
         else if(tool.command.equals("$skills_list")){

@@ -452,11 +452,35 @@ public final class FeatureHost implements AutoCloseable {
     }
     public JSONObject startTeamForTask(String parent,String parentRun,String operationId,JSONObject args,JSONObject expectedDefinition,dev.pocketengine.core.RunControl control)throws Exception{return startTeamForTask(parent,parentRun,operationId,args,expectedDefinition,control,"");}
     public JSONObject startTeamForTask(String parent,String parentRun,String operationId,JSONObject args,JSONObject expectedDefinition,dev.pocketengine.core.RunControl control,String consumedApprovalId)throws Exception{
+        return startTeamForTask(parent,parentRun,operationId,args,expectedDefinition,control,consumedApprovalId,null,null);
+    }
+    /** The optional model is captured by the original owner-work host, never decoded
+     * from a tool argument or selected from current global settings. */
+    public JSONObject startTeamForTask(String parent,String parentRun,String operationId,JSONObject args,JSONObject expectedDefinition,
+            dev.pocketengine.core.RunControl control,String consumedApprovalId,dev.pocketengine.core.ModelConfig capturedModel,
+            RunControl.AuthorityCheck originalModelCurrent)throws Exception{
         if(tasks==null)throw new IllegalStateException("宿主任务存储不可用");EngineModule module=module("teams");if(module==null)throw new IllegalStateException("团队模块不可用");
+        boolean temporary=args.has("members");JSONObject originalWork=null;
+        if(temporary){
+            originalWork=tasks.get(parent,false);
+            if(capturedModel==null||originalModelCurrent==null||operationId==null||operationId.isEmpty()
+                    ||!dev.pocketengine.store.OwnerWorkTask.isOwnerWork(originalWork)
+                    ||!parent.equals(originalWork.getJSONObject("ownerWork").optString("workTaskId"))
+                    ||!originalWork.optString("conversationId").equals(originalWork.getJSONObject("ownerWork").optString("conversationId"))
+                    ||!tasks.teamParentEligible(parent,parentRun,originalWork.getInt("coordinatorEpoch"))
+                    ||!(module instanceof dev.pocketengine.features.teams.TeamsModule selected)
+                    ||!selected.parentOrchestrationConfigured()||!selected.continuousResearchConfigured())
+                throw new SecurityException("本次分工需要原独立工作、捕获模型及已接入的原团队宿主");
+            originalModelCurrent.check();
+        }else if(capturedModel!=null||originalModelCurrent!=null)throw new SecurityException("已有编组仍使用其原生模型选择路径");
         control.check();JSONObject link=tasks.beginRelatedExternal(parent,parentRun,"teams","start",operationId,args);emitTask(parent);emitTask(operationId);
-        if(link.getBoolean("knownOperation"))return module.handle("get",json("runId",operationId)).put("hostTaskId",operationId).put("taskId",operationId).put("parentTaskId",parent);
+        if(link.getBoolean("knownOperation"))return linkedTeamStartResult(module.handle("get",json("runId",operationId)),operationId,parent,parentRun,originalWork);
         boolean researchStartEntered=false;
-        try{control.check();JSONObject result;synchronized(module){if(!TaskStore.capabilityFingerprint(expectedDefinition).equals(TaskStore.capabilityFingerprint(teamDefinition(args.getString("teamId")))))throw new SecurityException("团队成员或执行位置已变化，请重新确认");JSONObject nativeInput=new JSONObject(args.toString()).put("_taskId",operationId).put("_runId",operationId).put("_operationId",operationId);
+        try{control.check();JSONObject result;synchronized(module){
+            JSONObject currentDefinition=temporary?dev.pocketengine.features.teams.TeamDraftDefinition.forOwnerWork(parent,args):teamDefinition(args.getString("teamId"));
+            if(!TaskStore.capabilityFingerprint(expectedDefinition).equals(TaskStore.capabilityFingerprint(currentDefinition)))throw new SecurityException("团队成员或执行位置已变化，请重新确认");
+            JSONObject nativeInput=new JSONObject(args.toString()).put("_taskId",operationId).put("_runId",operationId).put("_operationId",operationId);
+            if(temporary)nativeInput.put("teamId",expectedDefinition.getString("id")).put("rounds",args.optInt("rounds",expectedDefinition.getString("mode").equals("debate")?2:1));
             if(expectedDefinition.optString("mode").equals("produce")){
                 EngineModule workspace=module("workspace");JSONObject original=tasks.get(parent,false);
                 if(!(module instanceof dev.pocketengine.features.teams.TeamsModule)||workspace==null||original==null||!control.matchesHostRun(parent,parentRun,original.getInt("coordinatorEpoch")))throw new SecurityException("文件协作缺少原父任务项目与执行控制");
@@ -469,12 +493,20 @@ public final class FeatureHost implements AutoCloseable {
                 }
                 researchStartEntered=researchSource!=null;
                 if(researchSource!=null){
-                    var originalStart=((dev.pocketengine.features.teams.TeamsModule)module).startOriginalResearch(nativeInput);result=originalStart.accepted();
+                    final var source=researchSource;
+                    var selected=(dev.pocketengine.features.teams.TeamsModule)module;
+                    var originalStart=temporary?selected.startOriginalResearch(nativeInput,expectedDefinition,capturedModel,()->{originalModelCurrent.check();source.checkCurrent();})
+                            :selected.startOriginalResearch(nativeInput);result=originalStart.accepted();
                     control.onCancel(()->nativeOwnerCleanup(()->{try{originalStart.requestStop();}catch(Exception unavailable){events.emit(json("type","error","message","原研究团队停止尚未确认，请核对原任务"));}}));
                     tasks.completeTeamResearchParentStart(researchSource);
-                }else result=module.handle("start",nativeInput);
-            }}updateTask(operationId,result);return result.put("hostTaskId",operationId).put("taskId",operationId).put("parentTaskId",parent);}
+                }else {if(temporary)throw new SecurityException("原团队研究宿主不可用，未改走独立执行");result=module.handle("start",nativeInput);}
+            }}updateTask(operationId,result);return linkedTeamStartResult(result,operationId,parent,parentRun,originalWork);}
         catch(Exception failure){updateTask(operationId,json("status",researchStartEntered?"unknown":failure instanceof IllegalArgumentException||failure instanceof SecurityException?"failed":"unknown","message",safe(failure)));throw failure;}
+    }
+    private JSONObject linkedTeamStartResult(JSONObject result,String operationId,String parent,String parentRun,JSONObject originalWork)throws Exception{
+        result.put("hostTaskId",operationId).put("taskId",operationId).put("teamRunId",operationId).put("parentTaskId",parent).put("parentRunId",parentRun);
+        if(originalWork!=null)result.put("ownerWorkTaskId",parent).put("ownerWorkRunId",parentRun).put("conversationId",originalWork.getString("conversationId"));
+        return result;
     }
     /** A private AgentRunner operation becomes one tracked remote child; never a second scheduler. */
     public JSONObject startRemoteForTask(String parent,String parentRun,int epoch,String operationId,JSONObject payload,JSONObject selection,dev.pocketengine.core.RunControl control)throws Exception {
@@ -972,7 +1004,14 @@ public final class FeatureHost implements AutoCloseable {
         org.json.JSONArray steps=plan==null?null:plan.optJSONArray("steps");
         for(int i=0;steps!=null&&i<steps.length();i++){String id=steps.getJSONObject(i).optString("taskId");if(!id.isEmpty())emitTask(id);}
     }
-    private void updateTask(String id,JSONObject receipt)throws Exception{tasks.updateExternal(id,receipt);emitTask(id);}
+    private void updateTask(String id,JSONObject receipt)throws Exception{
+        tasks.updateExternal(id,receipt);emitTask(id);
+        JSONObject updated=tasks.get(id,false);
+        if(updated!=null&&"teams".equals(updated.optString("feature"))){
+            JSONObject owner=tasks.ownerWorkLinkForTeam(updated.optString("externalId",updated.optString("runId")));
+            if(owner!=null)emitTask(owner.getString("taskId"));
+        }
+    }
     private void emitTask(String id)throws Exception{JSONObject task=tasks.getForUi(id,false);if(task!=null)events.emit(json("type","task","task",task));}
     public void emitApproval(JSONObject approval){JSONObject event=json("type","capability_approval");try{java.util.Iterator<String> keys=approval.keys();while(keys.hasNext()){String key=keys.next();event.put(key,approval.get(key));}events.emit(event);}catch(Exception failure){events.emit(json("type","error","message","审批提示保存失败，请在原任务中查看"));}}
     public void sendState(){try{workers.execute(()->{

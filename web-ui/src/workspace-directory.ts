@@ -20,8 +20,8 @@ export const WORKSPACE_SECTIONS: ReadonlyArray<WorkspaceSection> = [
     { route: 'automation', title: '提醒' },
     { route: 'commitments', title: '委托与目标' },
   ] },
-  { key: 'teams', title: '团队', route: 'teams', pages: [
-    { route: 'teams', title: '团队' },
+  { key: 'teams', title: '协作', route: 'teams', pages: [
+    { route: 'teams', title: '协作记录' },
     { route: 'groups', title: '群协作' },
     { route: 'channels', title: '消息渠道' },
   ] },

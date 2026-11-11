@@ -18,6 +18,7 @@ import { resetTeamProductionAcknowledgments, teamDefinitionPayload, teamProducti
 import { TeamMemberAvatar, TeamMemberIdentity } from './TeamMemberIdentity';
 import { teamAvatarShape, teamAvatarShapes, teamMemberLabel, teamMessageIdentity, teamMessageAuthor } from './team-identity';
 import { teamAttentionItems, teamCanPause, teamCanResume, teamGoalTitle, teamHasEnded, teamNeedsAttention, teamPhaseLabel, teamProgressLabel, teamRoleLabel, teamStatusLabel as status, teamTimeLabel, type TeamAttentionItem } from './team-presentation';
+import type { TeamButlerRequest, TeamOwnerWorkLink, TeamRunFocus } from './team-navigation';
 import { HarnessEvidence } from './HarnessEvidence';
 import { harnessWorkerLabel, isTeamHarness } from './harness-capabilities';
 import './team-continuity.css';
@@ -30,7 +31,7 @@ type Data = Record<string, any>;
 type Run = (action: string, args?: Data) => Promise<any>;
 type PendingMessage = { id: string; memberId: string; runId: string; key: string; text: string; questionId?: string };
 type TeamTab = 'runs' | 'teams';
-type RunSection = 'overview' | 'work' | 'messages' | 'materials';
+type RunSection = 'progress' | 'result' | 'details';
 type EditorPurpose = 'start' | 'definition';
 type MessageInput = { recipient: string; replyId: string; mode: string };
 type PendingStart = { teamId: string; since: number; goal: string };
@@ -60,7 +61,14 @@ const memberModelLabel = (member: Data): string => {
 };
 
 /** Uses the adopted BoardUI fields/dialogs and Affect answer presentation on the original team worksite. */
-export function TeamsWorkspace({ state, run, registerTransientBack, registerBeforeLeave, alreadyShownError = '', attentionFocus, onAttentionConsumed }: { state: Data; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void; registerBeforeLeave?: RegisterBeforeLeave; alreadyShownError?: string; attentionFocus?: Data | null; onAttentionConsumed?: (requestId: string) => void }) {
+export function TeamsWorkspace({ state, run, registerTransientBack, registerBeforeLeave, alreadyShownError = '', attentionFocus, onAttentionConsumed, runFocus, onRunFocusConsumed, onAskButler, onOpenWork }: {
+  state: Data; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void;
+  registerBeforeLeave?: RegisterBeforeLeave; alreadyShownError?: string; attentionFocus?: Data | null;
+  onAttentionConsumed?: (requestId: string) => void;
+  runFocus?: TeamRunFocus | null; onRunFocusConsumed?: (requestId: string) => void;
+  onAskButler?: (request: TeamButlerRequest) => void;
+  onOpenWork?: (link: TeamOwnerWorkLink, intent: 'overview' | 'supplement') => void;
+}) {
   const formDraft = useFormDrafts(run, 'teams');
   const startDraft = useFormDrafts(run, 'teams');
   const messageDraft = useFormDrafts(run, 'teams');
@@ -83,6 +91,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const [goal, setGoal] = useState(''), [rounds, setRounds] = useState('1'), [recipient, setRecipient] = useState(''), [replyId, setReplyId] = useState(''), [mode, setMode] = useState('discussion');
   const [composeOpen, setComposeOpen] = useState(false);
   const [runSections, setRunSections] = useState<Record<string, RunSection>>({});
+  const [detailSections, setDetailSections] = useState<Record<string, string[]>>({});
   const [memberFilters, setMemberFilters] = useState<Record<string, string>>({});
   const [drafts, setDrafts] = useState<Record<string, string>>({}), [uncertainByRun, setUncertainByRun] = useState<Record<string, PendingMessage>>({});
   const [expandedMembers, setExpandedMembers] = useState<Record<string, string[]>>({}), [expandedItems, setExpandedItems] = useState<Record<string, string[]>>({});
@@ -98,6 +107,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   useEffect(() => { registerBeforeLeave?.(leave => formDraft.guard(() => startDraft.guard(() => messageDraft.guard(() => memberFormDraft.guard(() => { if (materialBeforeLeave.current) materialBeforeLeave.current(leave); else leave(); }))))); return () => registerBeforeLeave?.(null); }, [registerBeforeLeave, formDraft.guard, startDraft.guard, messageDraft.guard, memberFormDraft.guard]);
   const [materialBusy, setMaterialBusy] = useState(false);
   const handledAttention = useRef('');
+  const handledRunFocus = useRef('');
   const workspaceActive = state.webWorkspaceSection === 'teams' && !state.webWorkspaceTaskOpen;
   const workspaceWindow = useRef({ active: false, revision: Number(state.webWorkspaceResumeRevision || 0) });
   const ownsNativeWindow = () => {
@@ -188,6 +198,19 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const readRun = (id: string) => { void invoke('teams.readRun', { runId: id }, result => { if (result.reading?.run?.id !== id) throw new Error('原团队运行身份不匹配'); acceptReading(result.reading); }); };
   const readDefinition = (id: string) => { void invoke('teams.readDefinition', { id }, value => { if (value.definition?.id !== id) throw new Error('团队配置身份不匹配，请刷新目录'); acceptReading(value); }); };
   useEffect(() => {
+    const requestId = runFocus?.requestId, runId = runFocus?.runId;
+    if (!requestId || !runId || requestId === handledRunFocus.current || !workspaceActive || !catalogReady || busy || entered.current || backgrounded.current || !ownsNativeWindow()) return;
+    handledRunFocus.current = requestId;
+    void invoke('teams.readRun', { runId }, result => {
+      if (result.reading?.run?.id !== runId) throw new Error('原协作记录身份不匹配，请从原工作重新打开。');
+      setEditor(null); setMemberDraft(null); closeReview(); closePhoneSelection();
+      acceptReading(result.reading);
+      setRunSections(old => ({ ...old, [runId]: 'progress' }));
+      setComposeOpen(false);
+      onRunFocusConsumed?.(requestId);
+    }, () => onRunFocusConsumed?.(requestId));
+  }, [runFocus?.requestId, workspaceActive, catalogReady, busy]);
+  useEffect(() => {
     const requestId = label(attentionFocus?.requestId);
     if (!requestId || requestId === handledAttention.current || !workspaceActive || !catalogReady || busy || entered.current || backgrounded.current || !ownsNativeWindow()) return;
     handledAttention.current = requestId;
@@ -197,7 +220,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       if (result.reading?.run?.id !== locator.runId) throw new Error('原团队待处理身份不匹配，请刷新通知。');
       acceptReading(result.reading);
       const focus = object(result.focus), id = result.reading.run.id;
-      setRunSections(old => ({ ...old, [id]: focus.kind === 'question' ? 'messages' : 'work' }));
+      setRunSections(old => ({ ...old, [id]: focus.kind === 'question' ? 'details' : 'progress' }));
+      if (focus.kind === 'question') setDetailSections(old => ({ ...old, [id]: [...new Set([...(old[id] || []), 'conversation'])] }));
       setMemberFilters(old => ({ ...old, [id]: '' }));
       if (focus.kind === 'workItem') setExpandedItems(old => ({ ...old, [id]: [...new Set([...(old[id] || []), focus.workItemId])] }));
       if (focus.kind === 'member') setExpandedMembers(old => ({ ...old, [id]: [...new Set([...(old[id] || []), focus.memberId])] }));
@@ -217,6 +241,13 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     const open = () => { void run('tasks.open', { id }).catch(failure => setError(failure instanceof Error ? failure.message : String(failure))); };
     if (materialBeforeLeave.current) materialBeforeLeave.current(open); else open();
   };
+  const leaveWithDrafts = (leave: () => void) => formDraft.guard(() => startDraft.guard(() => messageDraft.guard(() => memberFormDraft.guard(() => {
+    if (materialBeforeLeave.current) materialBeforeLeave.current(leave); else leave();
+  }))));
+  const askButler = (request: TeamButlerRequest = {}) => {
+    if (!onAskButler || busy || materialBusy) return;
+    leaveWithDrafts(() => onAskButler(request));
+  };
   const openResearchTask = (memberId: string, record: TeamResearchRecord) => {
     const original = currentReading.current;
     if (busy || materialBusy || backgrounded.current || !ownsNativeWindow() || !original?.viewHandle || original.kind !== 'run') return;
@@ -231,6 +262,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     if (backgrounded.current || !ownsNativeWindow()) return;
     // A retired read did not consume its notification; a fresh owner window may locate it again.
     handledAttention.current = '';
+    handledRunFocus.current = '';
     const original = currentReading.current, generation = ++requestGeneration.current;
     closeReview(); closePhoneSelection();
     entered.current = true; setBusy(true); setReview(null); setAcknowledged(false); setError('');
@@ -280,6 +312,12 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const definition = reading?.kind === 'definition' ? object(reading.definition) : null;
   const definitionReady = workspaceActive && (!definition || !!reading?.viewHandle);
   const current = reading?.kind === 'run' ? object(reading.run) : null;
+  // This relationship comes only from readRun's native parent-work check.
+  const ownerWorkLink = reading?.kind === 'run' && reading.ownerWorkLink ? reading.ownerWorkLink as TeamOwnerWorkLink : null;
+  const openOwnerWork = (intent: 'overview' | 'supplement') => {
+    if (!onOpenWork || !ownerWorkLink || busy || materialBusy || intent === 'supplement' && (ownerWorkLink.currentRun !== true || changed || !reading?.viewHandle)) return;
+    leaveWithDrafts(() => onOpenWork(ownerWorkLink, intent));
+  };
   const latest = current ? object(object(state.teamRuns)[current.id]) : {};
   const changed = !!current && latest.id === current.id && (latest.generation > current.generation
     || latest.generation === current.generation && latest.revision > current.revision);
@@ -311,7 +349,15 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const activeQuestionKeys = new Set(rows(reading?.attention).filter(item => item.kind === 'question').map(questionKey));
   const isCurrentQuestion = (message: Data) => message.kind === 'assignment_question' && message.state === 'pending' && activeQuestionKeys.has(questionKey(message));
   const workItems = rows(object(current?.workPlan).items);
-  const runSection = runSections[current?.id || ''] || 'overview';
+  const runSection = runSections[current?.id || ''] || 'progress';
+  const expandedDetails = detailSections[current?.id || ''] || [];
+  const materialsActive = runSection === 'details' && expandedDetails.includes('materials');
+  const revealDetail = (section: string) => { if (current) setDetailSections(old => ({ ...old, [current.id]: [...new Set([...(old[current.id] || []), section])] })); };
+  const chooseDetailSections = (sections: string[]) => {
+    if (!current) return;
+    const select = () => setDetailSections(old => ({ ...old, [current.id]: sections }));
+    if (materialsActive && !sections.includes('materials') && materialBeforeLeave.current) materialBeforeLeave.current(select); else select();
+  };
   const memberFilter = memberFilters[current?.id || ''] || '';
   const visibleMessages = memberFilter ? messages.filter(message => [message.memberId, message.recipientMemberId, message.targetMemberId].includes(memberFilter)) : messages;
   const chooseMemberFilter = (id: string) => { if (current) setMemberFilters(old => ({ ...old, [current.id]: id })); };
@@ -323,11 +369,12 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       setRunSections(old => ({ ...old, [current.id]: section }));
       requestAnimationFrame(() => { if (scroll && section !== runSection) scroll.scrollTop = positions.current.get(`run:${current.id}:${section}`) || 0; onShown?.(); });
     };
-    if (runSection === 'materials' && section !== runSection && materialBeforeLeave.current) materialBeforeLeave.current(select);
+    if (materialsActive && section !== runSection && materialBeforeLeave.current) materialBeforeLeave.current(select);
     else select();
   };
   const focusMessage = (id: string) => {
-    chooseRunSection('messages', () => {
+    chooseRunSection('details', () => {
+      revealDetail('conversation');
       chooseMemberFilter('');
       requestAnimationFrame(() => { const target = root.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(id)}"]`); target?.focus({ preventScroll: true }); target?.scrollIntoView({ block: 'center' }); });
     });
@@ -346,13 +393,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const canRead = workspaceActive && !!current && !!reading?.viewHandle && !busy && !changed;
   const canControl = canRead && !materialBusy && current?.status !== 'cancelled';
   const canMutate = canControl && !uncertain;
-  const canChangeRequirements = !hasWorkPlan && current?.mode !== 'produce' && !members.some(member => member.runner === 'phone_agent');
-  const changeMessageMode = (nextMode: string) => {
-    const nextRecipient = nextMode !== 'feedback' && recipient === '*' ? current?.leaderId || members.find(member => !member.exited)?.id || '' : recipient;
-    const nextKey = `${current?.id || ''}:${nextRecipient}:${replyId}:${nextMode}`;
-    setDrafts(old => old[nextKey] || !text ? old : { ...old, [nextKey]: text });
-    setRecipient(nextRecipient); setMode(nextMode);
-  };
+  const changeMessageMode = (nextMode: string) => messageDraft.guard(() => setMode(nextMode));
   const name = (id: string) => { const member = members.find(value => value.id === id); return member ? teamMemberLabel(member, members) : id; };
   const simpleRoster = current?.mode === 'collaborate' && !hasWorkPlan && (!current.researchExecutionFormat || current.researchExecutionFormat === catalog.continuousResearchFormat) && !current.nativeWorkProfileModels
     && members.every(member => (member.runner || 'model') === 'model' && (!member.device || member.device === 'phone'));
@@ -395,14 +436,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const send = async () => {
     // React's busy state can lag behind a second click. Reserve no message id
     // until invoke can actually admit this request in the original window.
-    if (!canMutate || !replyCanReceive || messageDraft.loading || !!messageDraft.conflict || messageDraft.requiresRecheck || entered.current || backgrounded.current || !ownsNativeWindow() || !reading || !text.trim() || text.length > 4000 || !(mode === 'feedback' && recipient === '*' || members.some(member => member.id === recipient && !member.exited))) return;
-    if (mode === 'feedback') {
-      if (!canChangeRequirements || replyId) return;
-      reviewResult({ operation: 'feedback', viewHandle: reading.viewHandle, runId: current!.id, memberId: recipient === '*' ? undefined : recipient,
-        recipientName: recipient === '*' ? '全队' : name(recipient), text, draftKey });
-      return;
-    }
-    const action = reply?.kind === 'assignment_question' ? 'teams.answerAssignment' : 'teams.sendMessage';
+    if (!canMutate || reply?.kind !== 'assignment_question' || recipient !== reply.memberId || mode !== 'discussion' || !replyCanReceive || messageDraft.loading || !!messageDraft.conflict || messageDraft.requiresRecheck || entered.current || backgrounded.current || !ownsNativeWindow() || !reading || !text.trim() || text.length > 4000 || !members.some(member => member.id === recipient && !member.exited)) return;
+    const action = 'teams.answerAssignment';
     if (!bridge.getState().capabilities.commands.includes(action)) { setError('当前团队页面尚未接通发送能力，草稿保留，请重新进入。'); return; }
     setBusy(true); try { await messageDraft.markSubmitted(); } catch (failure) { setBusy(false); setError((failure as Error).message); return; }
     if (!alive.current || !ownsNativeWindow()) return;
@@ -420,19 +455,10 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   };
   const beginEditor = (team: Data | null, purpose: EditorPurpose = team ? 'definition' : 'start', fromDraft?: Data) => {
     if (formDraft.loading) return;
-    const members = team ? rows(team.members).map(teamProductionEditorMember) : fromDraft ? rows(fromDraft.members) : starterMembers('research');
+    const members = team ? rows(team.members).map(teamProductionEditorMember) : fromDraft ? rows(fromDraft.members) : purpose === 'start' ? [] : starterMembers('research');
     setError(''); setNotice(''); setExternalReady({}); setEditorExpanded(team ? members.slice(0, 1).map(member => member.id) : []);
-    const initial = { name: team?.name || fromDraft?.name || '共同研究', nameEdited: team ? true : fromDraft?.nameEdited, mode: team?.mode || fromDraft?.mode || 'collaborate', leaderId: team?.leaderId || fromDraft?.leaderId || members[members.length - 1].id, members, goal: team ? goal : fromDraft?.goal || '', rounds: fromDraft?.rounds || '1' };
+    const initial = { name: team?.name || fromDraft?.name || (purpose === 'start' ? '' : '共同研究'), nameEdited: team ? true : fromDraft?.nameEdited, mode: team?.mode || fromDraft?.mode || 'collaborate', leaderId: team?.leaderId || fromDraft?.leaderId || members.at(-1)?.id || '', members, goal: team ? goal : fromDraft?.goal || '', rounds: fromDraft?.rounds || '1' };
     void formDraft.open('owner', team ? 'definition:' + team.id : purpose === 'start' ? 'collaboration:new' : 'definition:new', String(team?.revision || 'new'), safeTeamDraft(initial)).then(saved => { if (saved && alive.current) { setEditorPurpose(purpose); if (purpose === 'start') setQuickStartPending(pendingStart(saved)); setEditor({ ...initial, ...saved, members: rows(saved.members).map(member => ({ ...member, externalExecutionRiskAcknowledged: false, production: resetTeamProductionAcknowledgments({ ...teamProductionDraft(), ...member.production }) })) }); } });
-  };
-  const chooseSavedTeam = (id: string) => {
-    if (!id || busy || !editor) return;
-    const requestedGoal = label(editor.goal), requestedRounds = label(editor.rounds) || '1';
-    formDraft.guard(() => { void invoke('teams.readDefinition', { id }, value => {
-      if (value.definition?.id !== id) throw new Error('编组已变化，请重新选择');
-      startInputs.current.set(id, { goal: requestedGoal, rounds: requestedRounds });
-      setEditor(null); acceptReading(value);
-    }); });
   };
   const changeTeamGoal = (goal: string) => setEditor(previous => {
     if (!previous) return previous;
@@ -466,7 +492,6 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const computerLabel = (member: Data) => `${computerProfiles.find(profile => profile.id === member.device?.profileId)?.name || member.device?.profileId || '原电脑'} · ${member.device?.environmentId || '环境待选择'}`;
   const phoneMembers = rows(phoneSelection?.view?.members);
   const hasPhoneMembers = rows(definition?.members).some(member => member.runner === 'phone_agent');
-  const fixedDiscussionRounds = definition?.mode === 'debate' && !!definition.discussionFormat && definition.discussionFormat !== 'classic';
   const choosePhoneScope = (member: Data, id: string) => setPhoneChoices(value => ({ ...value, [member.memberId]: teamPhoneChoice(rows(member.options).find(option => option.optionId === id)) }));
   const changePhoneBudget = (memberId: string, field: keyof TeamPhoneChoice, value: string) => setPhoneChoices(old => ({ ...old, [memberId]: { ...old[memberId], [field]: value } }));
   const reviewPhoneStart = () => {
@@ -504,7 +529,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const attentionItems = teamAttentionItems(current, reading?.attention);
   const openAssignment = (item: TeamAttentionItem) => {
     if (item.taskId) { openRelatedTask(item.taskId); return; }
-    chooseRunSection('work', () => {
+    chooseRunSection('progress', () => {
       if (item.workItemId) setExpandedItems(old => ({ ...old, [current!.id]: [...new Set([...(old[current!.id] || []), item.workItemId!])] }));
       else setExpandedMembers(old => ({ ...old, [current!.id]: [...new Set([...(old[current!.id] || []), item.memberId])] }));
       requestAnimationFrame(() => {
@@ -515,7 +540,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     });
   };
   const jumpToRunSection = (section: 'messages' | 'members' | 'materials' | 'compose') => {
-    chooseRunSection(section === 'members' ? 'work' : section === 'materials' ? 'materials' : 'messages', () => {
+    chooseRunSection(section === 'members' ? 'progress' : 'details', () => {
+      if (section !== 'members') revealDetail(section === 'materials' ? 'materials' : 'conversation');
       if (section === 'compose') setComposeOpen(true);
       requestAnimationFrame(() => {
         const target = root.current?.querySelector<HTMLElement>(`[data-team-section="${section}"]`);
@@ -563,11 +589,11 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       </div>;
     })}
     {(formDraft.requiresRecheck && editorPurpose === 'definition' || memberFormDraft.requiresRecheck) && <Button variant="secondary" disabled={busy || !draftCatalogChecked} onClick={() => { if (editorPurpose === 'definition') formDraft.clearSubmitted(); memberFormDraft.clearSubmitted(); setDraftCatalogChecked(false); }}>已核对编组或成员改动，继续编辑</Button>}
-    {startDraft.requiresRecheck && !savedStartPending && <p className="pw-field-hint">这份旧草稿没有保存启动标识，请先查看协作记录；启动结果尚未确定。</p>}
+    {(startDraft.requiresRecheck && !savedStartPending || formDraft.requiresRecheck && editorPurpose === 'start' && !quickStartPending) && <p className="pw-field-hint">这份旧草稿没有保存启动标识，请先查看协作记录；启动结果尚未确定。</p>}
   </section>;
   const directoryContent = <>
     {showCollectionTools && <SearchField fieldClassName="pw-collaboration-search" shape="rounded" className="pw-secondary-search" data-input-size="medium" aria-label={tab === 'runs' ? '搜索协作' : '搜索编组'} placeholder={tab === 'runs' ? '查找目标或编组' : '查找编组'} value={query} onChange={setQuery} />}
-    {tab === 'teams' && entries.length > 0 && <p className="pw-team-directory-caption">保存常用成员与职责，发起协作时再确定这次目标。</p>}
+    {tab === 'teams' && entries.length > 0 && <p className="pw-team-directory-caption">保存常用成员与职责。交办工作时，管家会根据目标安排合适的分工。</p>}
     {entries.length > 0 ? <div className="pw-collaboration-directory">{directoryGroups.filter(group => group.entries.length > 0).map(group => <section className="pw-collaboration-group" key={group.id} aria-label={group.title}>
       {tab === 'runs' && <header className="pw-collaboration-group-heading"><h3>{group.title}</h3><span>{group.entries.length} 项已读取</span></header>}
       <div className="pw-object-list">{group.entries.map(row => <Button key={row.id} data-team-list-id={row.id} data-motion-key={`directory:${row.id}`} variant="ghost" trailingIcon={IconChevronRight} className="pw-object-row pw-team-directory-row h-auto whitespace-normal" disabled={busy} onClick={() => { listSelection.current[tab] = row.id; if (tab === 'runs') readRun(row.id); else readDefinition(row.id); }}>
@@ -577,8 +603,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
         </span>
       </Button>)}</div>
     </section>)}</div> : <section className="pw-team-empty" aria-label="协作目录提示" role={directoryState === 'loading' ? 'status' : undefined}>
-      <h2>{directoryState === 'loading' ? '正在读取协作' : directoryState === 'unconfirmed' ? '暂时未能读取协作' : directoryState === 'unread' ? '协作尚未读取' : directoryState === 'filtered' ? '没有匹配的记录' : tab === 'teams' ? '还没有保存编组' : '一起完成一件事'}</h2>
-      <p>{directoryState === 'loading' || directoryState === 'unread' ? '已保存的目标、分工和成果会显示在这里。' : directoryState === 'unconfirmed' ? '重新读取后继续，已有工作与草稿保留。' : directoryState === 'filtered' ? '换一个关键词，或清除搜索查看已读取的记录。' : tab === 'teams' ? '把常用成员与职责存成编组，下次可以直接选用。也可以在协作中快速开始。' : '写下想得到的结果，选择分工，再看成员进展和共同成果。'}
+      <h2>{directoryState === 'loading' ? '正在读取协作' : directoryState === 'unconfirmed' ? '暂时未能读取协作' : directoryState === 'unread' ? '协作尚未读取' : directoryState === 'filtered' ? '没有匹配的记录' : tab === 'teams' ? '还没有保存编组' : '还没有协作记录'}</h2>
+      <p>{directoryState === 'loading' || directoryState === 'unread' ? '已保存的目标、分工和成果会显示在这里。' : directoryState === 'unconfirmed' ? '重新读取后继续，已有工作与草稿保留。' : directoryState === 'filtered' ? '换一个关键词，或清除搜索查看已读取的记录。' : tab === 'teams' ? '常用分工可以保存在这里。直接把目标交给管家，也能按这次工作安排成员。' : '把想完成的事告诉管家。需要多人分工时，协作会留在那件工作里，记录也可以在这里查看。'}
       </p>
       {!showDirectoryTools && (directoryState === 'unread' || directoryState === 'unconfirmed') && <Button variant="secondary" disabled={busy} onClick={load}>重新读取</Button>}
       {directoryState === 'filtered' && <Button variant="secondary" onClick={() => setQuery('')}>清除搜索</Button>}
@@ -587,74 +613,68 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   return <section ref={root} className="pw-team-workspace pw-depth-collaboration" data-team-layer={reading ? 'detail' : 'list'} data-team-view={viewKey} inert={!workspaceActive} aria-busy={!workspaceActive || busy}>
     <div className="pw-team-loading">{(!workspaceActive || busy) && <ProgressBar aria-label={workspaceActive ? '正在读取原团队回执' : '正在进入团队工作区'} isIndeterminate showValueLabel={false} size="sm" />}</div>
     {error && error !== alreadyShownError && !editor && !memberDraft && !review && !phoneSelection && <MotionFeedback identity={error} className="pw-secondary-error" role="alert">{error}</MotionFeedback>}{notice && <MotionFeedback identity={notice} className="pw-field-hint" role="status">{notice}</MotionFeedback>}
-    {reading && <nav className="pw-team-location" aria-label="团队内导航"><Button variant="ghost" leadingIcon={IconArrowLeft} disabled={busy} onClick={back}>{current ? '全部协作' : '全部编组'}</Button><span>{current ? current.teamName || '这次协作' : '成员与启动'}</span></nav>}
+    {reading && <nav className="pw-team-location" aria-label="协作记录导航"><Button variant="ghost" leadingIcon={IconArrowLeft} disabled={busy} onClick={back}>{current ? '协作记录' : '全部编组'}</Button></nav>}
+    {!reading && <div className="pw-team-directory-intro"><p>查看工作中的分工、进展与成果。</p>{onAskButler && <Button variant="secondary" trailingIcon={IconChevronRight} disabled={busy} onClick={() => askButler()}>交给管家</Button>}</div>}
     {!reading && (showDirectoryTools ? <Tabs selectedKey={tab} onSelectionChange={value => { if (value === 'runs' || value === 'teams') switchTab(value); }} className="pw-team-tabs">
-      <div className="pw-object-toolbar"><TabList aria-label="协作与编组"><Tab id="runs">协作</Tab><Tab id="teams">编组</Tab></TabList>
-        <div className="pw-team-directory-actions">{showDirectoryActions && <Button leadingIcon={IconAdd} disabled={busy || !catalogReady} onClick={() => beginEditor(null, tab === 'runs' ? 'start' : 'definition')}>{tab === 'runs' ? '发起协作' : '新建编组'}</Button>}<IconButton className="pw-utility-icon" icon={IconRefresh} aria-label="刷新团队与协作记录" title="刷新团队与协作记录" disabled={busy} onClick={load} /></div>
+      <div className="pw-object-toolbar"><TabList aria-label="协作记录与配置"><Tab id="runs">协作记录</Tab><Tab id="teams">编组</Tab></TabList>
+        <div className="pw-team-directory-actions">{showDirectoryActions && tab === 'teams' && <IconButton className="pw-utility-icon" icon={IconAdd} aria-label="新建编组" title="新建编组" disabled={busy || !catalogReady} onClick={() => beginEditor(null, 'definition')} />}<IconButton className="pw-utility-icon" icon={IconRefresh} aria-label="刷新协作记录与编组" title="刷新协作记录与编组" disabled={busy} onClick={load} /></div>
       </div>
       <TabPanel id={tab}>{directoryContent}</TabPanel>
     </Tabs> : directoryContent)}
+    {!reading && !editor && <Accordion variant="divided" className="pw-team-recovery-access"><AccordionItem id="old-drafts" title="旧草稿与启动核对"><p className="pw-field-hint">以前未发出的目标与分工仍可查看。启动结果未确认的协作，需要先核对原记录。</p><Button variant="ghost" trailingIcon={IconChevronRight} disabled={busy || formDraft.loading} onClick={() => beginEditor(null, 'start')}>查看旧协作草稿</Button></AccordionItem></Accordion>}
     {!editor && !memberDraft && draftRecovery}
     {!editor && !definition && <FormDraftNotice draft={formDraft} />}
-    {definition && <article className="pw-team-reading pw-team-definition"><header className="pw-object-toolbar pw-team-definition-heading"><div><h2 tabIndex={-1}>{definition.name}</h2><p>{definition.mode === 'produce' ? '原项目文件协作' : definition.mode === 'debate' ? '取证与讨论' : hasPhoneMembers ? '手机分工与共同工作' : '共同分析'} · {rows(definition.members).length} 名成员</p><div className="pw-team-roster-summary" aria-label="参与成员">{rows(definition.members).map(member => <TeamMemberIdentity key={member.id} member={member} name={teamMemberLabel(member, rows(definition.members))} size={28} />)}</div></div>{refreshReading}</header>
-      <FormDraftNotice draft={startDraft} /><section className="pw-team-start" aria-label="开始下一次协作">{definition.mode === 'produce' ? <><h3>下一次共同工作</h3><p className="pw-muted">文件团队沿原项目任务的计划、文件范围和预算启动；这里保留其成员与既有工作记录。</p></> : <>
-        <TextAreaField label="这次共同目标" value={goal} onChange={setGoal} maxLength={8000} showCount rows={3} autoResize maxRows={8} resize="none" isDisabled={busy || startDraft.requiresRecheck} />
-        {fixedDiscussionRounds && <p className="pw-field-hint">取证与讨论使用固定流程：独立观点、相互质疑、回应与综合结论。启动时按两轮额度核对。</p>}
-        {hasPhoneMembers && <p className="pw-field-hint">手机成员按各自分工与前置依赖工作。本机可同时使用至多四个后台屏幕；启动前逐成员核对应用范围与预算。</p>}
-        <div className="pw-team-start-actions">
-          {!hasPhoneMembers && !fixedDiscussionRounds && <SelectField label="讨论轮数" value={rounds} options={[{ id: '1', label: '一轮' }, { id: '2', label: '两轮' }]} onChange={setRounds} isDisabled={busy || startDraft.requiresRecheck} />}
-          <PressButton label={hasPhoneMembers ? '选择手机范围并开始' : '核对并开始协作'} disabled={busy || startDraft.loading || startDraft.stale || !!startDraft.conflict || startDraft.requiresRecheck || !definitionReady || !goal.trim() || goal.length > 8000 || !!state.modelSelectionBusy} onClick={() => void invoke('teams.reviewStart', { viewHandle: reading!.viewHandle, goal, rounds: hasPhoneMembers ? 1 : fixedDiscussionRounds ? 2 : Number(rounds) }, reviewResult)} />
-        </div>
-      </>}</section>
-      <section className="pw-team-members"><header className="pw-team-members-heading"><h3>成员与职责</h3><Button variant="ghost" leadingIcon={IconEdit} disabled={busy || !definitionReady} onClick={() => beginEditor(definition)}>编辑编组</Button></header><div className="pw-team-definition-member-list">{rows(definition.members).map(member => <div key={member.id} data-motion-key={`definition-member:${member.id}`} className="pw-source-record"><h4><TeamMemberIdentity member={member} name={teamMemberLabel(member, rows(definition.members))} detail={member.id === definition.leaderId ? teamRoleLabel(definition) : undefined} size={40} /></h4><p>{member.role}</p>
+    {definition && <article className="pw-team-reading pw-team-definition"><header className="pw-object-toolbar pw-team-definition-heading"><div><h2 tabIndex={-1}>{definition.name}</h2><p>{definition.mode === 'produce' ? '原项目文件协作' : definition.mode === 'debate' ? '取证与讨论' : hasPhoneMembers ? '手机分工与共同工作' : '共同分析'} · {rows(definition.members).length} 名成员</p></div>{refreshReading}</header>
+      <section className="pw-team-handoff" aria-label="使用编组安排工作">
+        <p>这份编组保存常用成员与职责。把目标交给管家后，再按实际工作安排分工与范围。</p>
+        {onAskButler && <Button trailingIcon={IconChevronRight} disabled={busy || materialBusy || startDraft.loading || startDraft.requiresRecheck || !!startDraft.conflict || goal.length > 8000} onClick={() => askButler(goal.trim() ? { goal } : {})}>回管家安排协作</Button>}
+        {(goal.trim() || startDraft.savedAt || startDraft.loading || startDraft.error || startDraft.conflict || startDraft.requiresRecheck) && <Accordion variant="divided" className="pw-team-saved-goal"><AccordionItem id="saved-goal" title="这份编组的旧目标草稿" description={goal.trim() ? teamGoalTitle(goal) : undefined}>
+          <FormDraftNotice draft={startDraft} />
+          <TextAreaField label="保留的目标" value={goal} onChange={setGoal} maxLength={8000} rows={3} autoResize maxRows={8} resize="none" isDisabled={busy || startDraft.requiresRecheck} />
+          <p className="pw-field-hint">目标会带回管家输入区，由你继续交办；这份草稿与分工保留。</p>
+        </AccordionItem></Accordion>}
+      </section>
+      <section className="pw-team-members"><header className="pw-team-members-heading"><h3>成员与职责</h3><Button variant="ghost" leadingIcon={IconEdit} disabled={busy || !definitionReady} onClick={() => beginEditor(definition)}>编辑编组</Button></header><Accordion variant="divided" className="pw-team-definition-member-list">{rows(definition.members).map(member => <AccordionItem key={member.id} id={member.id} data-motion-key={`definition-member:${member.id}`} title={<TeamMemberIdentity member={member} name={teamMemberLabel(member, rows(definition.members))} detail={member.id === definition.leaderId ? teamRoleLabel(definition) : undefined} size={32} />} description={<span className="pw-team-definition-duty">{member.role}</span>}><div className="pw-team-detail-body"><p>{member.role}</p>
         {member.runner === 'phone_agent' ? <><small>{teamPhoneTargetLabel(member.device, phoneTargets)}</small><p>{member.assignment}</p></>
           : member.runner === 'model' || !member.runner ? <small>模型：{memberModelLabel(member) || '沿用实际启动时的主模型'} · 本机模型连接</small>
           : <><small>执行器：{harnessWorkerLabel(undefined, member.runner)} · 模型：{member.model || '执行器默认'}</small><p className="pw-field-hint">电脑：{computerLabel(member)}</p>
             <p className="pw-field-hint">开始协作前，核对这份已保存配置的实际执行器。</p><Button variant="ghost" disabled={busy || !definitionReady} onClick={() => void invoke('teams.probeMember', { viewHandle: reading!.viewHandle, memberId: member.id }, value => setMemberProbes(old => ({ ...old, [`${definition.id}:${member.id}`]: { definition: JSON.stringify(member), value: object(value.result || value) } })))}>核对原执行器</Button>
             {memberProbes[`${definition.id}:${member.id}`]?.definition === JSON.stringify(member) && <HarnessEvidence probe={memberProbes[`${definition.id}:${member.id}`].value} id={`saved-member-evidence-${member.id}`} />}
           </>}
-      </div>)}</div></section>
+      </div></AccordionItem>)}</Accordion></section>
       <div className="pw-team-definition-settings"><Accordion variant="divided"><AccordionItem id="definition-management" title="管理编组"><Button variant="ghost" disabled={busy || !definitionReady} onClick={() => void invoke('teams.reviewRemove', { viewHandle: reading!.viewHandle }, reviewResult)}>移除编组</Button></AccordionItem></Accordion></div>
 
     </article>}
     {current && <article className="pw-team-reading pw-team-run">
-      <header className="pw-object-toolbar pw-team-run-heading"><div><p className="pw-team-run-origin">{current.teamName || '共同工作'}</p><h2 tabIndex={-1}>{teamGoalTitle(current.goal, current.teamName)}</h2><div className="pw-team-run-meta"><span className="pw-team-state" data-state={current.status}>{status(current.status)}</span>{teamPhaseLabel(current.phase) && <span>{teamPhaseLabel(current.phase)}</span>}{teamProgressLabel(current) && <span>{teamProgressLabel(current)}</span>}</div></div>{refreshReading}</header>
+      <header className="pw-object-toolbar pw-team-run-heading"><div><p className="pw-team-run-origin">{ownerWorkLink ? '管家工作中的协作' : '历史协作'}{current.teamName ? ` · ${current.teamName}` : ''}</p><h2 tabIndex={-1}>{teamGoalTitle(current.goal, current.teamName)}</h2><div className="pw-team-run-meta"><span className="pw-team-state" data-state={current.status}>{status(current.status)}</span>{teamPhaseLabel(current.phase) && <span>{teamPhaseLabel(current.phase)}</span>}{teamProgressLabel(current) && <span>{teamProgressLabel(current)}</span>}</div></div>{refreshReading}</header>
       {changed && <p className="pw-team-reading-notice" role="status">正在更新进展，阅读位置与未发送内容保留。</p>}
       {workspaceActive && !busy && !reading?.viewHandle && <p className="pw-team-reading-notice" role="status">请刷新记录后继续操作，未发送内容保留。</p>}
       <div className="pw-team-run-controls">
-        {reading?.taskId && <Button variant="secondary" trailingIcon={IconExternalLink} disabled={busy || materialBusy} onClick={() => openRelatedTask(reading.taskId)}>所属任务与审批</Button>}
+        <div className="pw-team-work-actions">{ownerWorkLink && onOpenWork ? <><Button variant="ghost" trailingIcon={IconChevronRight} disabled={busy || materialBusy} onClick={() => openOwnerWork('overview')}>查看原工作</Button>{ownerWorkLink.currentRun && <Button variant="secondary" disabled={busy || materialBusy || changed || !reading?.viewHandle} onClick={() => openOwnerWork('supplement')}>补充要求</Button>}</> : <span className="pw-team-history-label">保留原目标与执行记录</span>}</div>
         <div className="pw-team-current-actions">
-          {teamCanPause(current.status) && <Button variant="ghost" leadingIcon={IconPause} disabled={!canControl} onClick={() => control('pause')}>暂停</Button>}
           {!hasWorkPlan && (teamCanResume(current.status) || current.phase === 'intervention' || current.phase === 'awaiting_member' && currentMembers.length > 0) && <Button leadingIcon={IconPlay} disabled={!canMutate} onClick={() => control('resume')}>继续协作</Button>}
-          {current.status !== 'cancelled' && <ContextMenuTrigger key={current.id}>{({ open }) => <><IconButton icon={IconMore} aria-label="更多协作操作" disabled={!canControl} onClick={event => open(event.currentTarget)} /><ContextMenu aria-label="本次协作操作" onAction={key => { if (key === 'stop' && canControl) reviewResult({ operation: 'cancel', viewHandle: reading!.viewHandle, runId: current.id }); }}><ContextMenuItem id="stop" icon={IconStop}>停止这次协作</ContextMenuItem></ContextMenu></>}</ContextMenuTrigger>}
+          {current.status !== 'cancelled' && <ContextMenuTrigger key={current.id}>{({ open }) => <><IconButton icon={IconMore} aria-label="暂停或停止协作" disabled={!canControl} onClick={event => open(event.currentTarget)} /><ContextMenu aria-label="本次协作操作" onAction={key => { if (key === 'pause' && canControl) control('pause'); if (key === 'stop' && canControl) reviewResult({ operation: 'cancel', viewHandle: reading!.viewHandle, runId: current.id }); }}>{teamCanPause(current.status) && <ContextMenuItem id="pause" icon={IconPause}>暂停协作</ContextMenuItem>}<ContextMenuItem id="stop" icon={IconStop}>停止这次协作</ContextMenuItem></ContextMenu></>}</ContextMenuTrigger>}
         </div>
       </div>
+      {ownerWorkLink && !ownerWorkLink.currentRun && <p className="pw-team-context-note">这是原工作较早一次执行的协作记录，可查看当时进展与成果。</p>}
       {reading?.taskLookupNotice && <p className="pw-field-hint" role="status">{reading.taskLookupNotice}</p>}
-      <Tabs selectedKey={runSection} onSelectionChange={value => { if (value === 'overview' || value === 'work' || value === 'messages' || value === 'materials') chooseRunSection(value); }} className="pw-team-workbench">
-        <div className="pw-team-workbench-bar"><TabList aria-label="这次协作"><Tab id="overview" isDisabled={materialBusy}>概览</Tab><Tab id="work" isDisabled={materialBusy}>分工</Tab><Tab id="messages" isDisabled={materialBusy}>沟通</Tab><Tab id="materials">资料</Tab></TabList>{current.status !== 'cancelled' && <Button variant="ghost" disabled={!canMutate || materialBusy} onClick={() => jumpToRunSection('compose')}>发消息</Button>}</div>
-        <TabPanel id="overview">
-          {label(current.goal).trim() !== teamGoalTitle(current.goal, current.teamName) && <Accordion variant="divided" className="pw-team-goal"><AccordionItem id="full-goal" title="完整目标"><p className="pw-team-goal-copy">{current.goal}</p></AccordionItem></Accordion>}
+      <Tabs selectedKey={runSection} onSelectionChange={value => { if (value === 'progress' || value === 'result' || value === 'details') chooseRunSection(value); }} className="pw-team-workbench">
+        <div className="pw-team-workbench-bar"><TabList aria-label="这次协作"><Tab id="progress" isDisabled={materialBusy}>进展</Tab><Tab id="result" isDisabled={materialBusy}>成果</Tab><Tab id="details">详情</Tab></TabList></div>
+        <TabPanel id="progress">
           {(pendingQuestions.length > 0 || attentionItems.length > 0) && <section className="pw-team-action-list" aria-label="需要你处理"><header className="pw-collaboration-group-heading"><h3>需要你处理</h3><span>{pendingQuestions.length + attentionItems.length} 项</span></header>
             {pendingQuestions.map(question => <Button key={question.messageId} variant="ghost" className="pw-team-question-row h-auto whitespace-normal" trailingIcon={IconChevronRight} disabled={materialBusy} onClick={() => focusMessage(question.messageId)}><span className="pw-team-attention-copy"><strong>{teamGoalTitle(question.content, '查看成员问题')}</strong><small>{teamMessageAuthor(question, members)} · 等待回答</small></span></Button>)}
             {attentionItems.map(item => <Button key={item.id} variant="ghost" className="pw-team-question-row h-auto whitespace-normal" trailingIcon={IconChevronRight} disabled={busy || materialBusy} onClick={() => openAssignment(item)}><span className="pw-team-attention-copy"><strong>{teamGoalTitle(item.title)}</strong><small>{item.detail}</small></span></Button>)}
           </section>}
           {current.phase === 'intervention' && !hasWorkPlan && <div className="pw-collaboration-attention" role="status"><div><strong>新要求已保存</strong><span>受影响成员已暂停。继续协作后处理，沿用剩余额度。</span></div></div>}
-          <section className="pw-team-result" aria-label="本次协作成果">
-            <header className="pw-team-result-heading"><h3>{current.summaryStale ? '上一版汇总' : current.status === 'completed' ? '本轮成果' : '当前汇总'}</h3>{current.summaryStale && <span className="pw-team-result-stale">待更新</span>}</header>
-            {current.summaryStale && <p className="pw-team-result-caption">要求、成员或资料发生了变化，以下内容保留供核对，尚未反映最新情况。</p>}
-            {current.summary ? <AIAnswer text={current.summary} /> : <div className="pw-team-result-empty"><p>{current.status === 'cancelled' ? '协作已停止，已有产出和沟通记录保留。' : '还没有共同汇总。可以先看成员分工、已保存产出与需要处理的事项。'}</p><Button variant="ghost" trailingIcon={IconChevronRight} onClick={() => jumpToRunSection('members')}>查看分工与产出</Button></div>}
-          </section>
-          <section className="pw-team-people-overview" aria-label="参与成员"><header className="pw-team-members-heading"><h3 className="pw-team-section-title">参与成员 <span>{currentMembers.length} 名</span></h3><Button variant="ghost" trailingIcon={IconChevronRight} onClick={() => jumpToRunSection('members')}>全部分工</Button></header><div className="pw-team-people-list">{currentMembers.map(member => <Button key={member.id} variant="ghost" className="pw-team-person-row h-auto whitespace-normal" trailingIcon={IconChevronRight} onClick={() => openAssignment({ id: member.id, memberId: member.id, title: member.name, detail: '', status: member.status })}><TeamMemberIdentity member={member} name={name(member.id)} detail={member.id === current.leaderId ? teamRoleLabel(current) : label(member.assignment || member.role)} size={32} /><span className="pw-team-person-state">{status(member.status)}</span></Button>)}</div></section>
-          {(typeof current.callsUsed === 'number' || typeof current.toolCallsUsed === 'number') && <Accordion variant="divided" className="pw-team-run-facts"><AccordionItem id="run-usage" title="本次额度与执行范围"><dl className="pw-team-facts">{typeof current.callsUsed === 'number' && <div><dt>模型调用</dt><dd>{current.callsUsed}{typeof current.callLimit === 'number' ? ` / ${current.callLimit}` : ''} 次</dd></div>}{typeof current.toolCallsUsed === 'number' && <div><dt>工具操作</dt><dd>{current.toolCallsUsed}{typeof current.toolCallLimit === 'number' ? ` / ${current.toolCallLimit}` : ''} 次</dd></div>}{typeof current.externalTurnsUsed === 'number' && current.externalTurnLimit > 0 && <div><dt>电脑执行</dt><dd>{current.externalTurnsUsed} / {current.externalTurnLimit} 轮</dd></div>}</dl><p className="pw-field-hint">继续沿用本次剩余额度。额外范围与预算在所属任务中处理。</p></AccordionItem></Accordion>}
-        </TabPanel>
-        <TabPanel id="work">
-          {hasWorkPlan && <p className="pw-team-panel-caption">先看具体工作项，再看参与成员。工作项的继续与审批在各自所属任务中处理。</p>}
+          {!!current.summary && <Button variant="ghost" className="pw-team-result-link" trailingIcon={IconChevronRight} onClick={() => chooseRunSection('result')}>{current.summaryStale ? '上一版成果待更新' : current.status === 'completed' ? '查看本轮成果' : '查看当前汇总'}</Button>}
+
+          {hasWorkPlan && <p className="pw-team-panel-caption">分工按计划推进，展开可查看原任务、审批与已保存产出。</p>}
       {!!workItems.length && <section className="pw-team-overview" aria-label="这次协作的工作项">
         <h3 className="pw-team-section-title">工作项 <span>{workItems.length}</span></h3>
         <Accordion key={`${current.id}:items`} variant="divided" className="pw-team-disclosures" allowsMultipleExpanded expandedKeys={new Set(expandedItems[current.id] || [])}
           onExpandedChange={keys => setExpandedItems(old => ({ ...old, [current.id]: Array.from(keys, String) }))}>
           {workItems.map(item => <AccordionItem key={item.workItemId} id={item.workItemId} className="pw-team-work-item" data-work-item-id={item.workItemId} data-motion-key={`work-item:${item.workItemId}`}
-            title={<span className="pw-team-item-heading"><span>{item.title}</span><small>{status(item.status)}</small></span>}
+            title={<span className="pw-team-item-heading"><span>{item.title}</span><small className="pw-team-state" data-state={item.status}>{status(item.status)}</small></span>}
             description={<TeamMemberIdentity member={members.find(member => member.id === item.memberId) || { id: item.memberId }} name={name(item.memberId)} size={24} />}>
             <div className="pw-team-expanded-copy"><p>{item.instruction}</p>{item.message && <p>{item.message}</p>}{item.nativeErrorMessage && <p className="pw-field-hint">{item.nativeErrorMessage}</p>}{item.assignmentTask?.taskId && <Button variant="secondary" trailingIcon={IconExternalLink} onClick={() => openRelatedTask(item.assignmentTask.taskId)}>查看此分工与审批</Button>}{item.acceptance && <p>验收：{item.acceptance}</p>}
               {!!rows(item.dependsOn).length && <p>前置：{item.dependsOn.map((id: string) => workItems.find(prior => prior.workItemId === id)?.title || id).join('、')}</p>}
@@ -663,8 +683,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
         </Accordion>
       </section>}
       <section className="pw-team-overview" data-team-section="members" tabIndex={-1} aria-label="成员与当前工作">
-        <header className="pw-team-members-heading"><h3 className="pw-team-section-title">成员 <span>{currentMembers.length} 名参与{members.length > currentMembers.length ? ` · ${members.length - currentMembers.length} 名已退出` : ''}</span></h3>{simpleRoster && <Button variant="ghost" leadingIcon={IconAdd} disabled={!canMutate || !rosterPaused || currentMembers.length >= 4 || members.length >= 16} onClick={() => beginMemberChange('add')}>加入成员</Button>}</header>
-        {simpleRoster && !rosterPaused && current.status !== 'cancelled' && <p className="pw-field-hint">暂停协作后可以调整参与成员，新成员加入后需明确继续。</p>}
+        <header className="pw-team-members-heading"><h3 className="pw-team-section-title">成员 <span>{currentMembers.length} 名参与{members.length > currentMembers.length ? ` · ${members.length - currentMembers.length} 名已退出` : ''}</span></h3></header>
         <Accordion key={`${current.id}:members`} variant="divided" className="pw-team-disclosures" allowsMultipleExpanded expandedKeys={new Set(expandedMembers[current.id] || [])}
           onExpandedChange={keys => setExpandedMembers(old => ({ ...old, [current.id]: Array.from(keys, String) }))}>
           {members.map(member => {
@@ -675,10 +694,10 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
             const researchRecords = current.researchExecutionFormat ? teamResearchRecords(current.id, member) : [];
             const assignment = activeItems.length ? `正在做：${activeItems.map(item => label(item.title)).filter(Boolean).join('、')}` : label(member.assignment || member.role);
             return <AccordionItem key={member.id} id={member.id} className="pw-team-member" data-team-member-id={member.id} data-motion-key={`member:${member.id}`}
-              title={<TeamMemberIdentity member={member} name={name(member.id)} detail={member.id === current.leaderId ? teamRoleLabel(current) : undefined} size={40} />}
-              description={<><span className="pw-team-member-meta" title={model || undefined}>{[member.exited ? '已退出' : status(member.status), !hasWorkPlan && !member.exited && pendingCount(member) > 0 ? `${pendingCount(member)} 条待处理消息` : ''].filter(Boolean).join(' · ')}</span>{assignment && <span className="pw-team-member-task">{assignment}</span>}</>}>
+              title={<span className="pw-team-progress-member-heading"><TeamMemberIdentity member={member} name={name(member.id)} size={32} /><span className="pw-team-state" data-state={member.exited ? 'exited' : member.status}>{member.exited ? '已退出' : status(member.status)}</span></span>}
+              description={<>{assignment && <span className="pw-team-member-task">{assignment}</span>}{!hasWorkPlan && !member.exited && pendingCount(member) > 0 && <span className="pw-team-member-queue">{pendingCount(member)} 条已排队消息待处理</span>}</>}>
               <div className="pw-team-expanded-copy">
-                <p>{member.assignment || member.role}</p>
+                {member.id === current.leaderId && <p className="pw-field-hint">{teamRoleLabel(current)}</p>}<p>{member.assignment || member.role}</p>
                 {!!rows(member.dependsOn).length && <p className="pw-field-hint">等待前置分工：{member.dependsOn.map(name).join('、')}</p>}
                 <Accordion variant="divided" className="pw-team-execution-details"><AccordionItem id={`execution:${member.id}`} title="模型与执行信息"><p className="pw-muted">成员标识：{member.id}</p>
                 {member.runner === 'phone_agent' && <p className="pw-muted">{teamPhoneTargetLabel(member.device, phoneTargets)}</p>}
@@ -693,38 +712,62 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
                 {member.text && <section className="pw-team-member-output" aria-label="已保存的成员产出"><h4>已保存的成员产出</h4>{outputIdentity && <TeamMemberIdentity member={outputIdentity} name={teamMessageAuthor(outputMessage!, members)} detail={outputIdentity.name !== member.name ? `原名称 · ${member.id}` : undefined} size={24} />}<AIAnswer text={String(member.text)} /></section>}
                 {member.acceptance && <p>验收：{member.acceptance}</p>}
                 {!member.exited && <div className="pw-form-actions"><Button variant="ghost" disabled={!canMutate} onClick={() => beginMemberChange('rename', member)}>名称与头像</Button>{simpleRoster && <Button variant="ghost" disabled={!canMutate || !rosterPaused} onClick={() => beginMemberChange('exit', member)}>退出本次协作</Button>}</div>}
-                <div className="pw-form-actions"><Button variant="secondary" onClick={() => { chooseMemberFilter(member.id); jumpToRunSection('messages'); }}>查看成员沟通</Button>{!member.exited && <Button variant="ghost" disabled={!canMutate || !!uncertain} onClick={() => { setRecipient(member.id); setReplyId(''); if (mode === 'feedback') setMode('discussion'); jumpToRunSection('compose'); }}>发消息</Button>}{memberTaskId && <Button variant="ghost" trailingIcon={IconExternalLink} onClick={() => openRelatedTask(memberTaskId)}>{member.runner === 'phone_agent' ? '查看手机任务与结果' : '查看原分工与审批'}</Button>}{!member.exited && teamCanPause(member.status) && <Button variant="ghost" disabled={!canControl} onClick={() => control('pause', member.id)}>暂停成员</Button>}{!member.exited && !hasWorkPlan && teamCanResume(member.status) && <Button variant="ghost" disabled={!canMutate} onClick={() => control('resume', member.id)}>继续成员</Button>}{!hasWorkPlan && !member.exited && pendingCount(member) > 0 && <Button variant="ghost" disabled={!canMutate || pendingMessageBusy(member)} onClick={() => control('continueMessages', member.id)}>使用 {pendingCount(member)} 条待处理消息继续</Button>}</div>
+                <div className="pw-form-actions"><Button variant="secondary" onClick={() => { chooseMemberFilter(member.id); jumpToRunSection('messages'); }}>查看成员沟通</Button>{memberTaskId && <Button variant="ghost" trailingIcon={IconExternalLink} onClick={() => openRelatedTask(memberTaskId)}>{member.runner === 'phone_agent' ? '查看手机任务与结果' : '查看原分工与审批'}</Button>}{!member.exited && teamCanPause(member.status) && <Button variant="ghost" disabled={!canControl} onClick={() => control('pause', member.id)}>暂停成员</Button>}{!member.exited && !hasWorkPlan && teamCanResume(member.status) && <Button variant="ghost" disabled={!canMutate} onClick={() => control('resume', member.id)}>继续成员</Button>}{!hasWorkPlan && !member.exited && pendingCount(member) > 0 && <Button variant="ghost" disabled={!canMutate || pendingMessageBusy(member)} onClick={() => control('continueMessages', member.id)}>使用 {pendingCount(member)} 条待处理消息继续</Button>}</div>
               </div>
             </AccordionItem>;
           })}
         </Accordion>
       </section>
         </TabPanel>
-        <TabPanel id="messages">
-      <Accordion variant="divided" className="pw-team-compose-disclosure" expandedKeys={composeOpen || !!uncertain ? ['team-compose'] : []} onExpandedChange={keys => setComposeOpen(keys.has('team-compose'))}><AccordionItem id="team-compose" title={mode === 'feedback' ? '调整要求并暂停' : '发消息'} description={reply ? '正在回复所选消息' : text ? '有未发送内容' : undefined}>
-      <section className="pw-team-compose" data-team-section="compose" aria-label="给成员补充">
-      {reply && <div className="pw-team-reply-context"><header><span>{reply.kind === 'assignment_question' ? '回答原问题' : '引用原消息'} · {teamMessageIdentity(reply, members) ? <TeamMemberIdentity member={teamMessageIdentity(reply, members)!} name={teamMessageAuthor(reply, members)} size={24} /> : teamMessageAuthor(reply, members)}</span><Button variant="ghost" disabled={busy || !!uncertain} onClick={() => setReplyId('')}>取消引用</Button></header><p className="pw-team-quote-excerpt">{String(reply.content || '').slice(0, 360)}{String(reply.content || '').length > 360 ? '…' : ''}</p><Button variant="ghost" onClick={() => focusMessage(reply.messageId)}>查看完整原消息</Button></div>}
-      <SelectField label="收件成员" value={recipient} options={[...(mode === 'feedback' ? [{ id: '*', label: '全队' }] : []), ...members.filter(member => !member.exited).map(member => ({ id: member.id, label: name(member.id) + (member.id === current.leaderId ? ' · ' + teamRoleLabel(current) : '') }))]} onChange={setRecipient} isDisabled={!canMutate || reply?.kind === 'assignment_question'} />
-      {mode === 'feedback' ? <div className="pw-team-feedback-mode"><strong>将暂停相关成员</strong><p>保存新要求后，由你明确继续；已有成果保留为待更新。</p><Button variant="ghost" disabled={busy || !!uncertain} onClick={() => changeMessageMode('discussion')}>返回普通消息</Button></div> : reply?.kind !== 'assignment_question' && <SelectField label="消息用途" value={mode} options={[{ id: 'discussion', label: '讨论补充' }, { id: 'queue', label: '补充下一工作点' }]} onChange={changeMessageMode} isDisabled={!canMutate} />}
-      {!replyCanReceive && <p className="pw-team-reading-notice" role="status">这条原问题已不再等待回答，已有草稿保留。可以取消引用后发送新的消息。</p>}
+        <TabPanel id="result">
+          <section className="pw-team-result" aria-label="本次协作成果">
+            <header className="pw-team-result-heading"><h3>{current.summaryStale ? '上一版汇总' : current.status === 'completed' ? '本轮成果' : '当前汇总'}</h3>{current.summaryStale && <span className="pw-team-result-stale">待更新</span>}</header>
+            {current.summaryStale && <p className="pw-team-result-caption">要求、成员或资料发生了变化，以下内容保留供核对，尚未反映最新情况。</p>}
+            {current.summary ? <AIAnswer text={current.summary} /> : <div className="pw-team-result-empty"><p>{current.status === 'cancelled' ? '协作已停止，已有产出和沟通记录保留。' : '还没有共同汇总。可以先看成员分工、已保存产出与需要处理的事项。'}</p><Button variant="ghost" trailingIcon={IconChevronRight} onClick={() => jumpToRunSection('members')}>查看分工与产出</Button></div>}
+          </section>
+        </TabPanel>
+        <TabPanel id="details" shouldForceMount data-team-details-active={runSection === 'details'}>
+          <Accordion variant="divided" className="pw-team-detail-disclosures" allowsMultipleExpanded expandedKeys={new Set(expandedDetails)} onExpandedChange={keys => chooseDetailSections(Array.from(keys, String))}>
+            <AccordionItem id="background" title="工作背景" description="完整目标与所属任务">
+              <div className="pw-team-detail-body"><p className="pw-team-goal-copy">{current.goal}</p>
+                {teamTimeLabel(current.createdAt) && <p className="pw-field-hint">开始于 {teamTimeLabel(current.createdAt)}</p>}
+                {reading?.taskId && <Button variant="ghost" trailingIcon={IconExternalLink} disabled={busy || materialBusy} onClick={() => openRelatedTask(reading.taskId)}>查看协作任务与审批</Button>}
+              </div>
+            </AccordionItem>
+            <AccordionItem id="materials" title="资料与授权" description="成员可使用的资料与范围">
+              <div data-team-section="materials" tabIndex={-1}><TeamEvidenceWorkspace key={current.id} runId={current.id} members={members} run={run} disabled={!canRead} stopped={current.status === 'cancelled'} active={workspaceActive && materialsActive} windowRevision={Number(state.webWorkspaceResumeRevision || 0)} onBackChange={handler => { materialBack.current = handler; }} onBeforeLeaveChange={handler => { materialBeforeLeave.current = handler; }} onBusyChange={setMaterialBusy} /></div>
+            </AccordionItem>
+            <AccordionItem id="conversation" title="沟通记录" description={`${messages.length} 条已读取记录`}>
+              <div className="pw-team-conversation-body">
+
+      <Accordion variant="divided" className="pw-team-compose-disclosure" expandedKeys={composeOpen || !!uncertain ? ['team-compose'] : []} onExpandedChange={keys => setComposeOpen(keys.has('team-compose'))}><AccordionItem id="team-compose" title={reply?.kind === 'assignment_question' ? '回答原问题' : '旧消息草稿'} description={reply ? '保留原问题与收件成员' : text ? '有未发送内容' : '查看以前未发出的补充'}>
+      <section className="pw-team-compose" data-team-section="compose" aria-label="原问题与消息草稿">
+      {reply && <div className="pw-team-reply-context"><header><span>{reply.kind === 'assignment_question' ? '回答原问题' : '引用原消息'} · {teamMessageIdentity(reply, members) ? <TeamMemberIdentity member={teamMessageIdentity(reply, members)!} name={teamMessageAuthor(reply, members)} size={24} /> : teamMessageAuthor(reply, members)}</span><Button variant="ghost" disabled={busy || !!uncertain} onClick={() => setReplyId('')}>查看其他草稿</Button></header><p className="pw-team-quote-excerpt">{String(reply.content || '').slice(0, 360)}{String(reply.content || '').length > 360 ? '…' : ''}</p><Button variant="ghost" onClick={() => focusMessage(reply.messageId)}>查看完整原消息</Button></div>}
+      <SelectField label="收件成员" value={recipient} options={[{ id: '*', label: '全队的旧草稿' }, ...members.map(member => ({ id: member.id, label: name(member.id) + (member.exited ? ' · 已退出' : member.id === current.leaderId ? ' · ' + teamRoleLabel(current) : '') }))]} onChange={value => messageDraft.guard(() => setRecipient(value))} isDisabled={busy || !!uncertain || reply?.kind === 'assignment_question'} />
+      {reply?.kind !== 'assignment_question' && <>
+        <SelectField label="原消息用途" value={mode} options={[{ id: 'discussion', label: '讨论补充' }, { id: 'queue', label: '补充下一工作点' }, { id: 'feedback', label: '调整要求' }]} onChange={changeMessageMode} isDisabled={busy || !!uncertain} />
+        <SelectField label="草稿引用的原消息" value={replyId} options={[{ id: '', label: '未引用消息' }, ...messages.map(message => ({ id: message.messageId, label: `${teamMessageAuthor(message, members)} · ${teamGoalTitle(message.content, '原消息')}` }))]} onChange={value => messageDraft.guard(() => { const original = messages.find(message => message.messageId === value); setReplyId(value); if (original?.kind === 'assignment_question') { setRecipient(original.memberId); setMode('discussion'); } })} isDisabled={busy || !!uncertain} />
+        <p className="pw-field-hint">旧草稿保留供核对。新的要求在原工作里交给管家，原问题仍在这里逐条回答。</p>
+        {ownerWorkLink?.currentRun && onOpenWork && <Button variant="secondary" disabled={busy || materialBusy || messageDraft.requiresRecheck || !!uncertain} onClick={() => openOwnerWork('supplement')}>回原工作补充</Button>}
+      </>}
+      {!replyCanReceive && <p className="pw-team-reading-notice" role="status">这条原问题已不再等待回答，已有草稿保留供核对。</p>}
       {current.status === 'cancelled' && <p className="pw-team-reading-notice" role="status">协作已停止，消息与未发送草稿可继续查看。</p>}
       <FormDraftNotice draft={messageDraft} />{messageDraft.requiresRecheck && <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => { void invoke('teams.readRun', { runId: current.id }, value => { if (value.reading?.run?.id !== current.id) throw new Error('原协作身份不匹配'); acceptReading(value.reading); setMessageChecked(true); }); }}>读取原消息核对结果</Button><Button variant="secondary" disabled={busy || !messageChecked || !!uncertain} onClick={() => { messageDraft.clearSubmitted(); setMessageChecked(false); }}>已核对原消息，继续编辑</Button></div>}
-      <TextAreaField label={reply?.kind === 'assignment_question' ? '回答这条原问题' : '发给所选成员'} value={text} onChange={value => setDrafts(old => ({ ...old, [draftKey]: value }))} maxLength={4000} showCount isDisabled={!canMutate || !replyCanReceive || messageDraft.loading} hint={mode === 'feedback' ? '保存新要求并暂停受影响成员，确认后再继续。不会扩大权限或追加预算。' : '讨论与工作点补充都会排队，不会打断正在推进的工作。已结束成员需明确选择使用已排队消息继续。'} />
-      <PressButton label={reply?.kind === 'assignment_question' ? '保存原回答' : mode === 'feedback' ? '核对新要求并暂停' : '发送消息'} disabled={!canMutate || !replyCanReceive || messageDraft.loading || !!messageDraft.conflict || messageDraft.requiresRecheck || !text.trim() || text.length > 4000 || !recipient} onClick={send} />
-      {mode !== 'feedback' && canChangeRequirements && !replyId && <Button className="pw-team-change-requirements" variant="ghost" disabled={!canMutate} onClick={() => changeMessageMode('feedback')}>调整要求并暂停…</Button>}
+      <TextAreaField label={reply?.kind === 'assignment_question' ? '回答这条原问题' : '以前未发送的内容'} value={text} onChange={value => setDrafts(old => ({ ...old, [draftKey]: value }))} maxLength={4000} showCount isReadOnly={reply?.kind !== 'assignment_question'} isDisabled={reply?.kind === 'assignment_question' && (!canMutate || !replyCanReceive) || messageDraft.loading} hint={reply?.kind === 'assignment_question' ? '回答只回到这条原问题，收件成员与问题身份保持不变。' : '查看草稿不会发送消息或启动工作。'} />
+      {reply?.kind === 'assignment_question' && <PressButton label="保存原回答" disabled={!canMutate || recipient !== reply.memberId || mode !== 'discussion' || !replyCanReceive || messageDraft.loading || !!messageDraft.conflict || messageDraft.requiresRecheck || !text.trim() || text.length > 4000 || !recipient} onClick={send} />}
       {mode !== 'feedback' && !replyId && recipientPending > 0 && <div className="pw-form-actions"><p className="pw-field-hint">{name(recipient)}有 {recipientPending} 条已排队消息尚未确认消费。{recipientMember && !pendingMessageBusy(recipientMember) ? '继续只使用已保存的消息，不提交当前草稿或追加额度。' : '成员正在工作或等待授权，消息保留在原队列。'}</p>{recipientMember && !pendingMessageBusy(recipientMember) && <Button variant="secondary" disabled={!canMutate} onClick={() => control('continueMessages', recipient)}>使用已排队消息继续</Button>}</div>}
       {uncertain && <p role="status">这条原消息仍待核对，草稿保留，不会重复发送。刷新原记录后仍可暂停或停止团队。</p>}
       </section>
       </AccordionItem></Accordion>
 
           <div className="pw-team-member-filter" aria-label="按成员查看沟通"><Button variant="ghost" aria-pressed={!memberFilter} onClick={() => chooseMemberFilter('')}>全队</Button>{members.map(member => <Button key={member.id} variant="ghost" aria-pressed={memberFilter === member.id} onClick={() => chooseMemberFilter(member.id)}><TeamMemberIdentity member={member} name={name(member.id)} size={28} /></Button>)}</div>
-          <p className="pw-team-conversation-hint">{memberFilter ? `只看与 ${name(memberFilter)} 有关的共享记录；消息仍发送给明确选择的收件成员。` : '按成员筛选共享记录。收件人由发消息时的选择决定。'}</p>
+          <p className="pw-team-conversation-hint">{memberFilter ? `只看与 ${name(memberFilter)} 有关的共享记录。` : '可按成员查看沟通、问题与保存回执。'}</p>
       <section className="pw-team-messages" data-team-section="messages" tabIndex={-1} aria-label="原团队消息"><header className="pw-collaboration-group-heading"><h3>团队沟通</h3><span>{visibleMessages.length} 条消息</span></header>{visibleMessages.map(message => {
         const identity = teamMessageIdentity(message, members), sender = teamMessageAuthor(message, members);
         const quoted = message.quoteMessageId ? object(message.quotedMessage || messages.find(row => row.messageId === message.quoteMessageId)) : null;
         const quotedText = String(quoted?.content || ''), quoteIsExcerpt = quoted?.truncated || quotedText.length > 360;
         const eventRecord = message.role === 'tool' || message.role === 'system';
-        const messageContent = <AIAnswer text={String(message.content || '')} actions={(message.kind !== 'assignment_question' || isCurrentQuestion(message)) && <Button variant="ghost" disabled={!canMutate || message.kind === 'assignment_question' && !members.some(member => member.id === message.memberId && !member.exited)} aria-pressed={replyId === message.messageId} onClick={() => { setReplyId(message.messageId); if (mode === 'feedback') setMode('discussion'); if (members.some(member => member.id === message.memberId && !member.exited)) setRecipient(message.memberId); jumpToRunSection('compose'); }}>{message.kind === 'assignment_question' ? '回答原问题' : '引用回复'}</Button>} />;
+        const messageContent = <AIAnswer text={String(message.content || '')} actions={isCurrentQuestion(message) && <Button variant="ghost" disabled={!canMutate || !members.some(member => member.id === message.memberId && !member.exited)} aria-pressed={replyId === message.messageId} onClick={() => { messageDraft.guard(() => { setReplyId(message.messageId); setMode('discussion'); setRecipient(message.memberId); jumpToRunSection('compose'); }); }}>回答原问题</Button>} />;
         return <article className="pw-source-record pw-team-message" data-message-kind={eventRecord ? 'event' : message.kind} key={message.messageId} data-message-id={message.messageId} data-motion-key={`message:${message.messageId}`} data-reply-selected={replyId === message.messageId || undefined} tabIndex={-1}>
         <header className="pw-team-message-heading"><h3>{identity ? <TeamMemberIdentity member={identity} name={sender} detail={members.some(member => member.id === identity.id && member.name !== identity.name) ? `原名称 · ${identity.id}` : members.filter(member => member.name === identity.name).length > 1 ? identity.id : undefined} /> : sender}{(message.recipientMemberId || message.targetMemberId) && <small>→ {name(message.recipientMemberId || message.targetMemberId)}</small>}</h3>{message.kind === 'assignment_question' ? <span>{isCurrentQuestion(message) ? '等待你的回答' : message.state === 'pending' ? '历史问题' : '问题记录'}</span> : message.role === 'tool' ? <span>资料回执</span> : message.role === 'system' ? <span>执行记录</span> : null}</header>
         {quoted && quoted.messageId && <div className="pw-team-reply-context"><header><span>{quoteIsExcerpt ? '引用节选' : '引用原消息'} · {teamMessageIdentity(quoted, members) ? <TeamMemberIdentity member={teamMessageIdentity(quoted, members)!} name={teamMessageAuthor(quoted, members)} size={24} /> : teamMessageAuthor(quoted, members)}</span><Button variant="ghost" onClick={() => focusMessage(String(message.quoteMessageId))}>查看原消息</Button></header><p className="pw-team-quote-excerpt">{quotedText.slice(0, 360)}{quoteIsExcerpt ? '…' : ''}</p></div>}
@@ -733,9 +776,13 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       </article>; })}{!visibleMessages.length && <p className="pw-secondary-empty">{memberFilter ? '这名成员还没有可显示的沟通记录。' : '这次协作还没有消息。'}</p>}</section>
 
 
-        </TabPanel>
-        <TabPanel id="materials" shouldForceMount data-team-materials-active={runSection === 'materials'}>
-          <div data-team-section="materials" tabIndex={-1}><TeamEvidenceWorkspace key={current.id} runId={current.id} members={members} run={run} disabled={!canRead} stopped={current.status === 'cancelled'} active={workspaceActive && runSection === 'materials'} windowRevision={Number(state.webWorkspaceResumeRevision || 0)} onBackChange={handler => { materialBack.current = handler; }} onBeforeLeaveChange={handler => { materialBeforeLeave.current = handler; }} onBusyChange={setMaterialBusy} /></div>
+              </div>
+            </AccordionItem>
+            {simpleRoster && <AccordionItem id="roster-management" title="调整参与成员" description={`${currentMembers.length} 名参与${members.length > currentMembers.length ? ` · ${members.length - currentMembers.length} 名已退出` : ''}`}>
+              <div className="pw-team-detail-body"><p className="pw-field-hint">暂停协作后可加入新成员。已有成员的名称、头像与退出操作在各自进展详情中。</p><Button variant="ghost" leadingIcon={IconAdd} disabled={!canMutate || !rosterPaused || currentMembers.length >= 4 || members.length >= 16} onClick={() => beginMemberChange('add')}>加入成员</Button></div>
+            </AccordionItem>}
+          </Accordion>
+          {(typeof current.callsUsed === 'number' || typeof current.toolCallsUsed === 'number') && <Accordion variant="divided" className="pw-team-run-facts"><AccordionItem id="run-usage" title="本次额度与执行范围"><dl className="pw-team-facts">{typeof current.callsUsed === 'number' && <div><dt>模型调用</dt><dd>{current.callsUsed}{typeof current.callLimit === 'number' ? ` / ${current.callLimit}` : ''} 次</dd></div>}{typeof current.toolCallsUsed === 'number' && <div><dt>工具操作</dt><dd>{current.toolCallsUsed}{typeof current.toolCallLimit === 'number' ? ` / ${current.toolCallLimit}` : ''} 次</dd></div>}{typeof current.externalTurnsUsed === 'number' && current.externalTurnLimit > 0 && <div><dt>电脑执行</dt><dd>{current.externalTurnsUsed} / {current.externalTurnLimit} 轮</dd></div>}</dl><p className="pw-field-hint">继续沿用本次剩余额度。额外范围与预算在所属任务中处理。</p></AccordionItem></Accordion>}
         </TabPanel>
       </Tabs>
     </article>}
@@ -781,9 +828,9 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       })}
       <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={closePhoneSelection}>返回</Button><Button disabled={busy || !phoneMembers.length || phoneMembers.some(member => !phoneChoices[member.memberId]?.optionId)} onClick={reviewPhoneStart}>核对本次范围</Button></div>
     </>}</div></SettingsDialog>
-    <SettingsDialog isOpen={!!editor && !review} title={editorPurpose === 'start' ? '发起协作' : definition ? '编辑编组' : '新建编组'} onClose={() => { if (!busy) formDraft.guard(() => setEditor(null)); }}><div className="pw-collaboration-dialog pw-team-editor-dialog" data-collaboration-kind="TeamsWorkspace">{editor && <><div className="pw-team-editor-scroll">
+    <SettingsDialog isOpen={!!editor && !review} title={editorPurpose === 'start' ? '旧协作草稿' : definition ? '编辑编组' : '新建编组'} onClose={() => { if (!busy) formDraft.guard(() => setEditor(null)); }}><div className="pw-collaboration-dialog pw-team-editor-dialog" data-collaboration-kind="TeamsWorkspace">{editor && <><div className="pw-team-editor-scroll">
       <FormDraftNotice draft={formDraft} />{draftRecovery}
-      {editorPurpose === 'start' ? <TeamQuickStartForm editor={editor} savedTeams={catalogTeams} disabled={busy || formDraft.loading || formDraft.requiresRecheck} onGoalChange={changeTeamGoal} onChange={changes => setEditor({ ...editor, ...changes })} onMemberChange={updateMember} onChooseSaved={chooseSavedTeam} onTemplate={template => setEditor({ ...editor, members: starterMembers(template), leaderId: 'member-1', mode: 'collaborate' })} onAddMember={addMember} onAdvanced={() => formDraft.guard(() => beginEditor(null, 'definition', editor))} /> : <>
+      {editorPurpose === 'start' ? <TeamQuickStartForm editor={editor} disabled={busy || formDraft.loading || formDraft.requiresRecheck} onGoalChange={changeTeamGoal} onAdvanced={() => formDraft.guard(() => beginEditor(null, 'definition', editor))} /> : <>
       <Accordion defaultExpandedKeys={['team-details']}><AccordionItem id="team-details" title="成员与分工" description={`${editor.name} · ${editor.members.length} 名成员`}>
       <TextField label="编组名称" value={editor.name} onChange={value => setEditor({ ...editor, name: value, nameEdited: true })} maxLength={80} isRequired isDisabled={busy} />
       <SelectField label="协作方式" value={editor.mode} options={[{ id: 'collaborate', label: '共同工作' }, ...(!rows(editor.members).some(member => member.runner === 'phone_agent') ? [{ id: 'debate', label: '取证与讨论' }, ...(catalog.writeAssignmentsConfigured === true || editor.mode === 'produce' ? [{ id: 'produce', label: '项目文件协作' }] : [])] : [])]} onChange={value => setEditor({ ...editor, mode: value })} isDisabled={busy} />
@@ -817,8 +864,16 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       <p className="pw-field-hint">保存编组供下次选用，不会启动协作或改变已有工作。</p></AccordionItem></Accordion>
       </>}
       {editorPurpose === 'start' && discussionError && <p className="pw-field-error" role="status">{discussionError}</p>}
-      {productionError && <p className="pw-field-hint" role="status">{productionError}</p>}
-      </div><footer className="pw-team-editor-footer">{error && <MotionFeedback identity={error} className="pw-secondary-error" role="alert">{error}</MotionFeedback>}{incompleteMembers.length > 0 && <div className="pw-team-editor-missing" role="status"><span>还有 {incompleteMembers.length} 名成员需要补充</span><Button variant="ghost" disabled={busy} onClick={() => revealMember(incompleteMembers[0].id)}>{incompleteMembers[0].name || '未命名成员'}：{editorMemberIssue(incompleteMembers[0])}</Button></div>}{!editor.name.trim() && <p className="pw-field-hint">填写名称后继续。</p>}{busy && <p className="pw-field-hint" role="status">正在核对这次配置，请等待回执。</p>}<div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => formDraft.guard(() => setEditor(null))}>返回并保留草稿</Button><Button variant="ghost" disabled={busy || formDraft.requiresRecheck} onClick={() => formDraft.discard(() => setEditor(null))}>放弃草稿</Button><Button disabled={busy || formDraft.stale || !!formDraft.conflict || formDraft.requiresRecheck || (editorPurpose === 'start' && (!editor.goal?.trim() || editor.goal.length > 8000 || !!state.modelSelectionBusy)) || !definitionReady || !editorPayload || !editor.name.trim() || editor.name.length > 80 || incompleteMembers.length > 0 || !!discussionError} onClick={() => { if (!editorPayload) return; if (editorPurpose === 'start') void invoke('teams.prepareDraftStart', { ...editorPayload, goal: editor.goal, rounds: editor.mode === 'debate' ? 2 : Number(editor.rounds || '1') }, reviewResult); else void invoke('teams.reviewDefinition', { ...editorPayload, ...(definition ? { viewHandle: reading!.viewHandle } : {}) }, reviewResult); }}>{editorPurpose === 'start' ? '核对并开始协作' : '核对并保存编组'}</Button></div></footer>
+      {editorPurpose === 'definition' && productionError && <p className="pw-field-hint" role="status">{productionError}</p>}
+      </div><footer className="pw-team-editor-footer">
+        {error && <MotionFeedback identity={error} className="pw-secondary-error" role="alert">{error}</MotionFeedback>}
+        {editorPurpose === 'definition' && incompleteMembers.length > 0 && <div className="pw-team-editor-missing" role="status"><span>还有 {incompleteMembers.length} 名成员需要补充</span><Button variant="ghost" disabled={busy} onClick={() => revealMember(incompleteMembers[0].id)}>{incompleteMembers[0].name || '未命名成员'}：{editorMemberIssue(incompleteMembers[0])}</Button></div>}
+        {editorPurpose === 'definition' && !editor.name.trim() && <p className="pw-field-hint">填写名称后继续。</p>}
+        {busy && <p className="pw-field-hint" role="status">正在核对这次配置，请等待回执。</p>}
+        <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => formDraft.guard(() => setEditor(null))}>返回并保留草稿</Button><Button variant="ghost" disabled={busy || formDraft.requiresRecheck} onClick={() => formDraft.discard(() => setEditor(null))}>放弃草稿</Button>
+          {editorPurpose === 'start' ? onAskButler && <Button disabled={busy || formDraft.loading || !!formDraft.conflict || formDraft.requiresRecheck || !label(editor.goal).trim() || editor.goal.length > 8000} onClick={() => askButler({ goal: editor.goal })}>带目标回管家</Button> : <Button disabled={busy || formDraft.stale || !!formDraft.conflict || formDraft.requiresRecheck || !definitionReady || !editorPayload || !editor.name.trim() || editor.name.length > 80 || incompleteMembers.length > 0 || !!discussionError} onClick={() => { if (editorPayload) void invoke('teams.reviewDefinition', { ...editorPayload, ...(definition ? { viewHandle: reading!.viewHandle } : {}) }, reviewResult); }}>核对并保存编组</Button>}
+        </div>
+      </footer>
     </>}</div></SettingsDialog>
     <SettingsDialog isOpen={!!review} title={review?.operation === 'configureMember' ? '核对本次成员改动' : review?.operation === 'start' ? '开始这次协作' : review?.operation === 'cancel' ? '停止这次协作' : review?.operation === 'feedback' ? '修改要求并暂停' : review?.operation === 'remove' ? '移除编组' : '保存编组'} onClose={() => { if (!busy) closeReview(); }}><div className="pw-collaboration-dialog" data-collaboration-kind="TeamsWorkspace">
       {review?.operation === 'configureMember' ? <>
@@ -847,7 +902,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
             setNotice(original.input.action === 'add' ? '新成员已加入并暂停。核对分工后，明确继续该成员；没有追加额度。' : original.input.action === 'exit' ? '成员已退出本次协作，历史与成果保留，没有自动重派。' : '本次协作的名称与头像已更新，历史身份和团队配置保留。');
             return;
           }
-          if (result.command === 'save') { const nextId = result.reading?.definition?.id || result.result?.id; if (nextId && editor?.goal) startInputs.current.set(nextId, { goal: editor.goal, rounds: editor.rounds || '1' }); formDraft.discard(() => setEditor(null)); } else setEditor(null); setNotice(result.command === 'save' ? '编组已保存，可以在发起协作时选用。' : '已收到操作回执。');
+          if (result.command === 'save') { const nextId = result.reading?.definition?.id || result.result?.id; if (nextId && editor?.goal) startInputs.current.set(nextId, { goal: editor.goal, rounds: editor.rounds || '1' }); formDraft.discard(() => setEditor(null)); } else setEditor(null); setNotice(result.command === 'save' ? '编组已保存，管家可按工作目标安排合适的分工。' : '已收到操作回执。');
           if (original.operation === 'feedback') {
             if (result.command !== 'feedback' || result.reading?.run?.id !== original.runId) throw new Error('补充结果待核对，请刷新原协作记录；不会自动重发。');
             setDrafts(old => old[original.draftKey] === original.text ? { ...old, [original.draftKey]: '' } : old);

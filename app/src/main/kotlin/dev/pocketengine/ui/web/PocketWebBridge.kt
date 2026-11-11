@@ -1122,7 +1122,20 @@ internal class PocketWebBridge(
                 val key = requiredString(args, "key"); val epoch = requiredInt(args, "epoch")
                 require(controller.composerDraft?.key == key && controller.composerViewEpoch == epoch) { "原输入窗口已变化，草稿仍保留，请回原输入核对" }
                 when (action) {
-                    "composer.edit" -> controller.editComposerText(key, epoch, requiredString(args, "text", true))
+                    "composer.edit" -> {
+                        val text = requiredString(args, "text", true)
+                        if (args.has("expectedRevision")) {
+                            val revision = args.opt("expectedRevision")
+                            require(revision is Number && revision.toDouble() == revision.toLong().toDouble()
+                                && controller.composerDraft?.revision == revision.toLong()) { "原输入已变化，协作目标没有覆盖当前草稿，请回原草稿核对" }
+                            require(text.length <= dev.pocketengine.features.assistant.OwnerComposerState.MAX_TEXT) { "管家原草稿与协作目标合并后过长，请先整理原输入；两份内容仍保留" }
+                        }
+                        controller.editComposerText(key, epoch, text)
+                        if (args.has("expectedRevision")) {
+                            require(controller.composerDraft?.key == key && controller.composerViewEpoch == epoch
+                                && controller.composerDraft?.text == text) { "协作目标尚未加入管家输入，请核对保留的原草稿" }
+                        }
+                    }
                     "composer.mode" -> { val mode = requiredString(args, "mode"); require(mode in setOf("queue", "steer")); controller.setChatSendMode(mode, key, epoch) }
                     else -> {
                         val text = requiredString(args, "text", true)

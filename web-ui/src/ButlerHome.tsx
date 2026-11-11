@@ -63,7 +63,7 @@ export function ButlerHome({ ready, modelReady, modelSetup, composer, preparatio
       const attention = presentation.group === 'attention';
       const unknown = progress?.source === 'task' && progress.status === 'unknown';
       const status = presentation.label;
-      const detail = !contextAvailable ? task.summary?.trim() || '' : unknown ? progress.detail : handling?.waitingForButler || handling?.needsAttention ? handling.reason : task.summary?.trim() || (progress && progress.source !== 'task' ? progress.detail || progress.title : '');
+      const detail = !contextAvailable ? task.summary?.trim() || '' : unknown ? progress.detail : handling?.waitingForButler || handling?.waitingForChildren || handling?.needsAttention ? handling.reason : task.summary?.trim() || (progress && progress.source !== 'task' ? progress.detail || progress.title : '');
       return { task, attention, status, detail: detail === status || detail === task.goal ? '' : detail,
         handling, group: presentation.group, busy: presentation.busy, action: presentation.actionLabel };
     });
@@ -74,7 +74,7 @@ export function ButlerHome({ ready, modelReady, modelSetup, composer, preparatio
   ] satisfies { id: WorkCollectionGroup; label: string; limit: number }[])
     .map(group => ({ ...group, items: work.filter(item => item.group === group.id) })).filter(group => group.items.length > 0);
   const visible = groups.flatMap(group => group.items.slice(0, group.limit));
-  const revision = JSON.stringify([ready, canOpen, Boolean(onArtifacts), visible.map(({ task, attention: needsAttention, handling }) => [task.id, task.status, needsAttention, handling?.state, handling?.resultAvailable, handling?.delivered])]);
+  const revision = JSON.stringify([ready, canOpen, Boolean(onArtifacts), visible.map(({ task, attention: needsAttention, handling }) => [task.id, task.status, needsAttention, handling?.state, handling?.handlingLabel, handling?.resultAvailable, handling?.delivered])]);
   useCollectionMotion(workRoot, 'butler:owner:private', revision, { active: ready, layout: false });
   const empty = ready && !work.length && !hasPreparations;
 
