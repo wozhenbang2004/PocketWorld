@@ -671,7 +671,7 @@ function BackgroundSettings({ state, supported, run, onReturn, returnLabel = 'æ‰
   const resultSignature = (key: string) => JSON.stringify([object(state.moduleResults)[key] ?? null, object(state.moduleErrors)[key] ?? null]);
   const closeSecrets = () => setCode('');
   const selectPanel = (value: 'setup' | 'checks') => { setCode(''); setPanel(value); };
-  useEffect(() => { registerTransientBack(() => { if (Object.values(ownerBack.current).some(handler => handler?.())) return true; if (mainScreenConsent) { setMainScreenConsent(false); return true; } if (panel === 'checks') { selectPanel('setup'); return true; } return false; }); return () => registerTransientBack(null); }, [panel, mainScreenConsent, registerTransientBack]);
+  useEffect(() => { registerTransientBack(() => { if (Object.values(ownerBack.current).some(handler => handler?.())) return true; if (mainScreenConsent) { setMainScreenConsent(false); return true; } if (panel === 'checks') { selectPanel('setup'); return true; } if (showWirelessSetup) { setCode(''); setShowWirelessSetup(false); return true; } return false; }); return () => registerTransientBack(null); }, [panel, mainScreenConsent, showWirelessSetup, registerTransientBack]);
   useEffect(() => {
     if (state.backgroundSetupOpen === true) ownerOpened.current = true;
     else if (ownerOpened.current) { setCode(''); onReturn(); }
