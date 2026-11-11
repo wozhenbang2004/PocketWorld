@@ -41,6 +41,39 @@ public final class DisplayModule implements EngineModule {
         volatile boolean pinned=true,releasePending,creationPending,created,released;
         RunSession(RunControl.HostRunIdentity owner,RunControl control){this.owner=owner;this.control=control;this.pinned=control!=null;}
     }
+    /** Native, one-use authority for this run's first screen, never a wire-supplied flag. */
+    final class OwnerCreation {
+        final RunControl original;
+        final long revision;
+        private final RunSession run;
+        private final dev.pocketengine.phone.observation.NativePhoneEntry.Admission admission;
+        private final String payload;
+        private final java.util.concurrent.atomic.AtomicBoolean consumed=new java.util.concurrent.atomic.AtomicBoolean();
+        private volatile boolean writeEntered;
+        private OwnerCreation(RunSession run,long revision,dev.pocketengine.phone.observation.NativePhoneEntry.Admission admission,JSONObject payload){
+            this.run=run;this.original=run.control;this.revision=revision;
+            this.admission=java.util.Objects.requireNonNull(admission);this.payload=payload.toString();
+        }
+        JSONObject payload()throws Exception{return new JSONObject(payload);}
+        void currentOwner()throws Exception {
+            admission.check();original.check();
+            if(requireRun(original)!=run||!original.isPaused()||original.pauseRevision()!=revision||!original.phoneSurfaceActive())
+                throw new SecurityException("原主人建屏选择或暂停代次已变化");
+        }
+        void check()throws Exception {currentOwner();unused();}
+        private void unused(){
+            if(requireRun(original)!=run||original.isCancelled()||!run.creationPending||run.created||run.released||run.releasePending
+                    ||run.state.optBoolean("sessionActive")||run.state.optBoolean("recoveryRequired")
+                    ||state.optBoolean("sessionActive")||releasePending||state.optBoolean("recoveryRequired"))
+                throw new SecurityException("原后台显示已有资源或待核对记录，未派发首次建屏");
+        }
+        /** Called inside the pause fence: no owner callbacks, locks or response wait here. */
+        void beginWrite(){
+            unused();
+            if(!consumed.compareAndSet(false,true))throw new SecurityException("原主人首次建屏准入已使用");
+            writeEntered=true;
+        }
+    }
     private final java.util.concurrent.ConcurrentHashMap<RunControl.HostRunIdentity,RunSession> runSessions=new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.LinkedHashMap<RunControl.HostRunIdentity,dev.pocketengine.phone.appcontrol.PhoneAppRunSession> appControlRuns=new java.util.LinkedHashMap<>();
     private final java.util.concurrent.ConcurrentHashMap<String,Integer> releasedSessions=new java.util.concurrent.ConcurrentHashMap<>();
@@ -623,15 +656,32 @@ public final class DisplayModule implements EngineModule {
         if(state.optBoolean("sessionActive")||releasePending)throw new IllegalStateException("请先释放原手动后台显示");
         if(helperSessionRouting<2&&runSessions.size()>1)throw new SecurityException("当前后台助手只支持单显示，请重启新版助手");
         JSONObject args=wireFor(run,input);args.remove("sessionId");args.remove("displayId");
+        OwnerCreation ownerCreation=ownerEntry?new OwnerCreation(run,revision,admission,args):null;
         run.creationPending=true;
         try{
-            JSONObject answer=call("create",args,run.control,revision,ownerEntry,admission);requireOk(answer);validateRunReply(run,answer);
+            JSONObject answer;
+            if(ownerCreation==null)answer=call("create",args,run.control,revision,false,null);
+            else if(exchange==null)answer=client().createForOwner(ownerCreation);
+            else {
+                ownerCreation.check();ownerCreation.beginWrite(); // An injected exchange has no known wire boundary.
+                answer=exchange.call("create",ownerCreation.payload(),run.control,revision,true,ownerCreation::currentOwner);
+            }
+            requireOk(answer);validateRunReply(run,answer);
             if(answer.optInt("displayId",-1)<=0||answer.optString("sessionId").isEmpty()||answer.isNull("sessionId"))throw new SecurityException("后台助手返回了无效显示");
             dev.pocketengine.displayhelper.DisplayGeometry.read(answer);
             run.state=withOwner(publicState(answer).put("sessionActive",true),run.owner);run.created=true;run.creationPending=false;
+            // Retain the validated exact identity first so a revoked window releases only this screen.
+            if(ownerCreation!=null)ownerCreation.currentOwner();
             connected=true;message="独立后台屏已创建，各任务保持自己的显示和输入会话。";
             return session(run.control);
         }catch(Exception unknown){
+            if(ownerCreation!=null&&!ownerCreation.writeEntered){
+                run.creationPending=false;
+                // Preserve cancellation/condition-wait control flow; no screen request entered the wire.
+                while(unknown instanceof dev.pocketengine.phone.observation.NativePhoneEntry.Refused&&unknown.getCause() instanceof Exception)
+                    unknown=(Exception)unknown.getCause();
+                throw unknown;
+            }
             // Retain the native run key even if the socket reply was lost. Status can later
             // find its own screen; a new run is never allowed to inherit this uncertainty.
             run.state=withOwner(new JSONObject(run.state.toString()).put("recoveryRequired",true),run.owner);

@@ -49,6 +49,17 @@ final class ShellBridgeClient {
     }
     JSONObject call(String command,JSONObject input,RunControl control,long expectedRevision,boolean ownerTakeover,
             dev.pocketengine.phone.observation.NativePhoneEntry.Admission admission)throws Exception {
+        return call(command,input,control,expectedRevision,ownerTakeover,admission,null);
+    }
+    /** Only DisplayModule can mint this first-screen permit after checking the original run. */
+    JSONObject createForOwner(DisplayModule.OwnerCreation creation)throws Exception {
+        java.util.Objects.requireNonNull(creation);
+        return call("create",creation.payload(),creation.original,creation.revision,true,creation::check,creation);
+    }
+    private JSONObject call(String command,JSONObject input,RunControl control,long expectedRevision,boolean ownerTakeover,
+            dev.pocketengine.phone.observation.NativePhoneEntry.Admission admission,DisplayModule.OwnerCreation ownerCreation)throws Exception {
+        if("create".equals(command)&&ownerTakeover&&ownerCreation==null)
+            throw new SecurityException("暂停后的首次建屏需要原主人专用准入");
         LocalSocket socket=new LocalSocket();Runnable cancel=()->{try{socket.close();}catch(Exception ignored){}};
         java.util.concurrent.atomic.AtomicBoolean writeEntered=new java.util.concurrent.atomic.AtomicBoolean();
         try{
@@ -63,8 +74,8 @@ final class ShellBridgeClient {
             if(control!=null){control.check();fresh(control,expectedRevision,ownerTakeover);}
             DataOutputStream output=new DataOutputStream(socket.getOutputStream());
             if(admission!=null){
-                if(control==null||ownerTakeover&&!java.util.Set.of("ownership","audio.get","audio.set").contains(command))throw new SecurityException("原生准入不能扩大暂停后的主人动作范围");
-                dev.pocketengine.phone.observation.NativePhoneEntry.call(control,expectedRevision,ownerTakeover,admission,()->{writeEntered.set(true);DisplayWire.write(output,request.toString(),32*1024);return null;});
+                if(control==null||ownerTakeover&&ownerCreation==null&&!java.util.Set.of("ownership","audio.get","audio.set").contains(command))throw new SecurityException("原生准入不能扩大暂停后的主人动作范围");
+                dev.pocketengine.phone.observation.NativePhoneEntry.call(control,expectedRevision,ownerTakeover,admission,()->{if(ownerCreation!=null)ownerCreation.beginWrite();writeEntered.set(true);DisplayWire.write(output,request.toString(),32*1024);return null;});
             }else if(command.startsWith("owner_handoff_")&&control!=null){
                 if(!ownerTakeover)throw new SecurityException("移屏仅供原生主人");
                 control.dispatchAtPauseState(expectedRevision,true,()->{writeEntered.set(true);DisplayWire.write(output,request.toString(),32*1024);});

@@ -4033,7 +4033,7 @@ public final class EngineApplication extends Application implements dev.pocketen
             catch(Exception unavailable){
                 String message="尚未准备好接管；"+dev.pocketengine.phone.DeferredPhoneSession.preparationMessage(unavailable,captured);
                 JSONObject receipt=json("taskId",id,"status",original.isCancelled()?"cancelled":pending.cleanupUnconfirmed()?"needs_reconciliation":"paused","manualAllowed",false,
-                        "accepted",false,"nativeDispatched",false,"effectStatus","not_dispatched","phonePreparation",pending.initializationEvidence(),"message",message);
+                        "accepted",false,"appActionDispatched",false,"phonePreparation",pending.initializationEvidence(),"message",message);
                 if(unavailable instanceof dev.pocketengine.phone.DeferredPhoneSession.PreparationFailure failure)receipt.put("displayRelease",failure.evidence());
                 synchronized(this){
                     var identity=original.hostRunIdentity();JSONObject retained=tasks.get(id,false);
