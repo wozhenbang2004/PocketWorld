@@ -81,7 +81,10 @@ public final class SettingsStore {
                 .put("apiKeyConfigured",keySaved).put("configured","duckduckgo".equals(provider)
                         ||"searxng".equals(provider)&&!baseUrl.isBlank()
                         ||"brave".equals(provider)&&keySaved)
-                .put("revision",prefs.getLong("webSearchRevision",1L)).put("networkVerified",false);
+                .put("revision",prefs.getLong("webSearchRevision",1L))
+                .put("providerHostedEnabled",prefs.getBoolean("webProviderHostedEnabled",false))
+                .put("groupSearchEnabled",prefs.getBoolean("webGroupSearchEnabled",false))
+                .put("networkVerified",false);
     }
     public synchronized WebSearchConnection webSearchConnection()throws Exception {
         JSONObject state=webSearchSettings();
@@ -92,7 +95,7 @@ public final class SettingsStore {
     /** CAS owner configuration; raw API keys must never enter a public settings snapshot. */
     public synchronized JSONObject saveWebSearchSettings(JSONObject change)throws Exception {
         if(change==null)throw new IllegalArgumentException("缺少联网搜索设置");
-        java.util.Set<String> allowed=java.util.Set.of("provider","baseUrl","apiKey","clearApiKey","expectedRevision");
+        java.util.Set<String> allowed=java.util.Set.of("provider","baseUrl","apiKey","clearApiKey","providerHostedEnabled","groupSearchEnabled","expectedRevision");
         for(var names=change.keys();names.hasNext();)if(!allowed.contains(names.next()))
             throw new SecurityException("联网搜索设置含未知字段");
         JSONObject previous=webSearchSettings();
@@ -111,6 +114,7 @@ public final class SettingsStore {
                     ||uri.toASCIIString().length()>512)
                 throw new SecurityException("SearXNG需要原生主人配置有效HTTPS实例地址");
             endpoint=endpoint.replaceAll("/+$","");
+            dev.pocketengine.browser.PublicHttpReader.validate(new JSONObject().put("url",endpoint));
         }else if(!endpoint.isEmpty())throw new IllegalArgumentException("该搜索服务不接受自定义API地址");
         boolean switched=!provider.equals(previous.getString("provider"));
         Object clear=change.opt("clearApiKey");
@@ -123,9 +127,18 @@ public final class SettingsStore {
         if(submitted!=null&&!submitted.isEmpty())encrypted=encrypt(submitted);
         if("duckduckgo".equals(provider))encrypted="";
         if("brave".equals(provider)&&encrypted.isEmpty())throw new IllegalArgumentException("Brave Search需要API Key");
+        for(String field:new String[]{"providerHostedEnabled","groupSearchEnabled"})
+            if(change.has(field)&&!(change.get(field) instanceof Boolean))
+                throw new IllegalArgumentException("联网范围开关必须是布尔值");
+        boolean providerHosted=change.has("providerHostedEnabled")
+                ?change.getBoolean("providerHostedEnabled"):previous.getBoolean("providerHostedEnabled");
+        boolean groupEnabled=change.has("groupSearchEnabled")
+                ?change.getBoolean("groupSearchEnabled"):previous.getBoolean("groupSearchEnabled");
         long revision=Math.addExact(previous.getLong("revision"),1L);
         commitConfirmed(prefs.edit().putString("webSearchProvider",provider)
                 .putString("webSearchBaseUrl",endpoint).putString("encryptedWebSearchKey",encrypted)
+                .putBoolean("webProviderHostedEnabled",providerHosted)
+                .putBoolean("webGroupSearchEnabled",groupEnabled)
                 .putLong("webSearchRevision",revision),false);
         return webSearchSettings();
     }
