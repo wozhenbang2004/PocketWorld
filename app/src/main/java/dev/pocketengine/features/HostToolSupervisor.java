@@ -48,6 +48,9 @@ public final class HostToolSupervisor implements CapabilityPort {
     private dev.pocketengine.features.memory.ProjectMemoryAccess projectMemory;
     private final Map<String,Tool> routes=new LinkedHashMap<>();
     private final Map<String,Tool> nativeRoutes=new LinkedHashMap<>();
+    private dev.pocketengine.core.ModelConfig hostedSearchModel;
+    private dev.pocketengine.core.RunControl.AuthorityCheck hostedSearchCurrent;
+    private dev.pocketengine.core.RunControl hostedSearchControl;
     private final Map<String,Boolean> availability=new LinkedHashMap<>();
     private Map<String,JSONObject> ownerWorkReferences=new LinkedHashMap<>();
     private final Map<String,JSONObject> ownerWorkReads=new LinkedHashMap<>();
@@ -184,6 +187,31 @@ public final class HostToolSupervisor implements CapabilityPort {
         }
         nativeRoutes.putAll(routes);refreshPluginRoutes();
     }
+    /**
+     * Owner opt-in + original inference route only. No setting, model output or
+     * plugin may introduce this billable official vendor search destination.
+     */
+    public void installHostedSearch(dev.pocketengine.core.ModelConfig selected,
+            dev.pocketengine.core.RunControl original,
+            dev.pocketengine.core.RunControl.AuthorityCheck current)throws Exception {
+        if(taskId==null||original==null||!original.matchesHostRun(taskId,runId,epoch)
+                ||!dev.pocketengine.features.web.ProviderHostedWebSearch.supports(selected))return;
+        JSONObject task=tasks.get(taskId,false);
+        if(task==null||!"owner".equals(task.optString("actorId"))
+                ||!"private".equals(task.optString("spaceId"))
+                ||task.optJSONObject("origin")!=null||task.has("ownerDeviceWork")
+                ||hostedSearchModel!=null)throw new SecurityException("厂商联网来源不属于唯一原私人任务");
+        original.check();current.check();
+        hostedSearchModel=selected;hostedSearchControl=original;hostedSearchCurrent=current;
+        add("web","providerSearch",dev.pocketengine.features.web.ProviderHostedWebSearch.TOOL,
+                "此工具会向原生主人明确选用的官方厂商API提交本次公开检索词，产生额外模型Token与搜索服务费用；须本次精确参数审批。仅返回真实厂商搜索回执与可引用来源，无来源时不能宣称搜索成功。",
+                true,dev.pocketengine.features.web.ProviderHostedWebSearch.schema(),"query");
+        Tool route=routes.get(dev.pocketengine.features.web.ProviderHostedWebSearch.TOOL);
+        if(route==null)throw new SecurityException("官方厂商搜索原生模块未就绪");
+        nativeRoutes.put(dev.pocketengine.features.web.ProviderHostedWebSearch.TOOL,route);
+        refreshPluginRoutes();
+    }
+
     private static boolean ownerWorkExecutor(JSONObject task){
         return OwnerWorkTask.isOwnerWork(task)&&"assistant".equals(task.optString("kind"))&&"capabilities".equals(task.optString("executionMode"))
                 &&"owner".equals(task.optString("actorId"))&&"private".equals(task.optString("spaceId"))&&(!task.has("origin")||task.isNull("origin"))
@@ -732,6 +760,13 @@ public final class HostToolSupervisor implements CapabilityPort {
                     case "fetch"->web.fetch(args,control);
                     case "research"->new dev.pocketengine.features.web.WebResearchPipeline(web).research(args,control);
                     case "sources"->dev.pocketengine.features.web.WebSourceLedger.sources(tasks,taskId,runId,epoch,args,control);
+                    case "providerSearch"->{
+                        if(hostedSearchModel==null||hostedSearchControl!=control||hostedSearchCurrent==null)
+                            throw new SecurityException("厂商联网原模型已失效");
+                        hostedSearchCurrent.check();
+                        yield new dev.pocketengine.features.web.ProviderHostedWebSearch()
+                                .search(args,hostedSearchModel,control,hostedSearchCurrent);
+                    }
                     case "search"->web.search(args,control);
                     default->throw new SecurityException("未知原生联网工具");
                 };
