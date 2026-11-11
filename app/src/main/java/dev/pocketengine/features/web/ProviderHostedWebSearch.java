@@ -152,7 +152,7 @@ public final class ProviderHostedWebSearch {
 
     static JSONObject normalize(String provider,JSONObject raw)throws Exception {
         JSONArray sources=new JSONArray();Set<String> seen=new LinkedHashSet<>();StringBuilder answer=new StringBuilder();
-        int calls=0,reportedInput=0,reportedOutput=0;JSONObject usage=new JSONObject();
+        int calls=0,reportedInput=0,reportedOutput=0;boolean billingReported=false;JSONObject usage=new JSONObject();
         if("openai_responses".equals(provider)){
             if(!"completed".equals(raw.optString("status")))return unavailable(provider,"vendor_turn_not_completed",true);
             JSONArray items=raw.optJSONArray("output");
@@ -178,7 +178,7 @@ public final class ProviderHostedWebSearch {
                 }
             }
             JSONObject bill=raw.optJSONObject("usage");
-            if(bill!=null){reportedInput=bill.optInt("input_tokens");reportedOutput=bill.optInt("output_tokens");}
+            if(bill!=null){billingReported=true;reportedInput=bill.optInt("input_tokens");reportedOutput=bill.optInt("output_tokens");}
         }else if("anthropic".equals(provider)){
             if(!"end_turn".equals(raw.optString("stop_reason")))return unavailable(provider,"vendor_turn_not_completed",true);
             JSONArray blocks=raw.optJSONArray("content");if(blocks==null)throw new IllegalArgumentException("Missing Claude content");
@@ -194,7 +194,7 @@ public final class ProviderHostedWebSearch {
                 }
             }
             JSONObject bill=raw.optJSONObject("usage");
-            if(bill!=null){reportedInput=bill.optInt("input_tokens");reportedOutput=bill.optInt("output_tokens");
+            if(bill!=null){billingReported=true;reportedInput=bill.optInt("input_tokens");reportedOutput=bill.optInt("output_tokens");
                 JSONObject server=bill.optJSONObject("server_tool_use");
                 if(server!=null)calls=server.optInt("web_search_requests",calls);}
         }else if("gemini".equals(provider)){
@@ -218,11 +218,11 @@ public final class ProviderHostedWebSearch {
                 }
             }
             JSONObject bill=raw.optJSONObject("usageMetadata");
-            if(bill!=null){reportedInput=bill.optInt("promptTokenCount");reportedOutput=bill.optInt("candidatesTokenCount");}
+            if(bill!=null){billingReported=true;reportedInput=bill.optInt("promptTokenCount");reportedOutput=bill.optInt("candidatesTokenCount");}
         }else throw new SecurityException("Unknown hosted provider");
 
         usage.put("inputTokens",Math.max(0,reportedInput)).put("outputTokens",Math.max(0,reportedOutput))
-                .put("searchRequests",Math.max(0,calls)).put("reportedByProvider",true)
+                .put("searchRequests",Math.max(0,calls)).put("reportedByProvider",billingReported)
                 .put("externalCostUsd",JSONObject.NULL).put("pricingUnknown",true);
         boolean searched=calls>0&&sources.length()>0;
         return new JSONObject().put("ok",searched).put("status",searched?"completed":"unavailable")
@@ -246,7 +246,7 @@ public final class ProviderHostedWebSearch {
         for(int i=0;i<src.length()&&out.length()<MAX_SOURCES;i++){
             JSONObject value=src.optJSONObject(i);if(value==null)continue;
             if("url_citation".equals(value.optString("type"))||"web_search_result_location".equals(value.optString("type"))
-                    ||"web_search_result".equals(value.optString("type"))||!value.has("type")){
+                    ||"web_search_result".equals(value.optString("type"))||"url".equals(value.optString("type"))||!value.has("type")){
                 addSource(out,seen,value.optString(urlKey),value.optString(titleKey),"vendor_citation");
             }
         }
