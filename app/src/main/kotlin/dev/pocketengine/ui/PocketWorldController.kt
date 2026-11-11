@@ -3392,7 +3392,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         feature("display", command)
     }
     internal fun phoneSetup(command: String, input: JSONObject = JSONObject()) {
-        if (command !in setOf("status", "pairing.begin", "pairing.cancel", "recovery.consent", "recovery.registration.consent", "recovery.restore", "recovery.compensate")) return
+        if (command !in setOf("status", "pairing.begin", "pairing.observe", "pairing.cancel", "recovery.consent", "recovery.registration.consent", "recovery.restore", "recovery.compensate")) return
         if (!privateWorkspaceView() || "phone_setup.$command" in state.moduleBusy) return
         if (command != "pairing.cancel" && (!webPrivateOwnerVisible() || !state.backgroundSetupOpen)) return
         val key = "phone_setup.$command"
@@ -3438,7 +3438,9 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     internal fun cancelPairingNotification() {
         if (!privateWorkspaceView()) return
         if (state.feature("phone_setup").optJSONObject("pairing")?.optBoolean("active") != true
-            && "phone_setup.pairing.begin" !in state.moduleBusy) return
+            && state.feature("phone_setup").optJSONObject("pairing")?.optJSONObject("autoCapture")?.optBoolean("active") != true
+            && "phone_setup.pairing.begin" !in state.moduleBusy
+            && "phone_setup.pairing.observe" !in state.moduleBusy) return
         // Same native queue as begin: closing a pending view cannot leave a later begin behind its cancellation.
         phoneSetup("pairing.cancel")
     }
