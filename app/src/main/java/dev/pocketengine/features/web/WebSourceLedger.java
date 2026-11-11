@@ -22,7 +22,7 @@ public final class WebSourceLedger {
     public static JSONObject record(TaskStore tasks,String task,String run,int epoch,
             String operation,String tool,JSONObject actual,RunControl original)throws Exception {
         if(actual==null)throw new IllegalArgumentException("missing tool result");
-        if(!Set.of("web_search","web_fetch",WebResearchPipeline.TOOL).contains(tool))
+        if(!Set.of("web_search","web_fetch",WebResearchPipeline.TOOL,ProviderHostedWebSearch.TOOL).contains(tool))
             throw new SecurityException("not a web source tool");
         original.check();
         JSONArray sourceRows=new JSONArray(),links=new JSONArray();
@@ -55,9 +55,14 @@ public final class WebSourceLedger {
                     http.optLong("retrievedAt",System.currentTimeMillis()),http!=null&&http.optBoolean("bodyComplete"),
                     http!=null&&http.optBoolean("bodyComplete")?"bounded_body":"partial_body");
         }
+        JSONObject providerUsage=actual.optJSONObject("usage");
         JSONObject counters=new JSONObject().put("searchRequests",Math.max(0,actual.optInt("searchRequests","web_search".equals(tool)?1:0)))
                 .put("readRequests",Math.max(0,actual.optInt("readRequests","web_fetch".equals(tool)?1:0)))
                 .put("pagesRead",Math.max(0,actual.optInt("pagesRead","web_fetch".equals(tool)&&actual.optBoolean("ok")?1:0)))
+                .put("hostedModelRequests",ProviderHostedWebSearch.TOOL.equals(tool)?1:0)
+                .put("hostedInputTokens",providerUsage==null?0:Math.max(0,providerUsage.optInt("inputTokens")))
+                .put("hostedOutputTokens",providerUsage==null?0:Math.max(0,providerUsage.optInt("outputTokens")))
+                .put("usageWasProviderReported",providerUsage!=null&&providerUsage.optBoolean("reportedByProvider"))
                 .put("searchBillingKnown",false).put("externalProviderCost",JSONObject.NULL);
         JSONObject event=new JSONObject().put("type",EVENT).put("tool",tool).put("operationId",operation)
                 .put("taskId",task).put("runId",run).put("epoch",epoch)
@@ -118,13 +123,13 @@ public final class WebSourceLedger {
         if(active==null||!run.equals(active.optString("runId"))||epoch!=active.optInt("coordinatorEpoch"))
             throw new SecurityException("原任务来源已换代");
         JSONArray events=active.optJSONArray("events"),out=new JSONArray();
-        int count=0,searchCalls=0,fetchCalls=0,readPages=0;
+        int count=0,searchCalls=0,fetchCalls=0,readPages=0,hostedRequests=0,hostedInput=0,hostedOutput=0;
         if(events!=null)for(int i=0;i<events.length();i++){
             JSONObject e=events.optJSONObject(i);
             if(e==null||!EVENT.equals(e.optString("type"))||!task.equals(e.optString("taskId"))
                     ||!run.equals(e.optString("runId"))||epoch!=e.optInt("epoch"))continue;
             JSONObject metric=e.optJSONObject("counters");
-            if(metric!=null){searchCalls+=metric.optInt("searchRequests");fetchCalls+=metric.optInt("readRequests");readPages+=metric.optInt("pagesRead");}
+            if(metric!=null){searchCalls+=metric.optInt("searchRequests");fetchCalls+=metric.optInt("readRequests");readPages+=metric.optInt("pagesRead");hostedRequests+=metric.optInt("hostedModelRequests");hostedInput+=metric.optInt("hostedInputTokens");hostedOutput+=metric.optInt("hostedOutputTokens");}
             JSONArray rows=e.optJSONArray("sources");if(rows==null)continue;
             for(int j=0;j<rows.length();j++){
                 JSONObject row=rows.optJSONObject(j);
@@ -137,7 +142,9 @@ public final class WebSourceLedger {
                 .put("truncated",out.length()<count)
                 .put("metrics",new JSONObject().put("searchRequests",searchCalls)
                         .put("fetchRequests",fetchCalls).put("pagesRead",readPages)
-                        .put("providerFees","unknown"))
+                        .put("hostedModelRequests",hostedRequests).put("hostedInputTokens",hostedInput)
+                        .put("hostedOutputTokens",hostedOutput)
+                        .put("providerFees","unknown").put("hostedTokensSeparateFromMain",true))
                 .put("taskId",task).put("runId",run).put("epoch",epoch)
                 .put("modelRelianceVerified",false).put("executionAuthorized",false);
     }
