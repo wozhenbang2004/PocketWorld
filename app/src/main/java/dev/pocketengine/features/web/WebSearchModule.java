@@ -65,9 +65,7 @@ public final class WebSearchModule implements EngineModule {
     public JSONObject search(JSONObject input,RunControl original)throws Exception {
         if(input==null||!input.has("query")||!(input.opt("query") instanceof String))
             throw new IllegalArgumentException("缺少真实搜索词");
-        String query=input.getString("query").trim();
-        if(query.isEmpty()||query.length()>512||query.codePoints().anyMatch(Character::isISOControl))
-            throw new IllegalArgumentException("公开搜索词无效或超过512字符");
+        String query=WebQueryGuard.requirePublic(input.getString("query"),512);
         int limit=input.optInt("limit",5);
         if(limit<1||limit>8||input.has("limit")&&!(input.opt("limit") instanceof Integer))
             throw new IllegalArgumentException("搜索结果数量必须是1至8的整数");
