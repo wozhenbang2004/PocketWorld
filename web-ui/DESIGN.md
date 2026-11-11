@@ -40,6 +40,14 @@
 
 本批源码检查覆盖声明参数到真实派发、初始及后续主人原话的物化证明、原权限策略前后核对、目录字段及分页、同会话结果来源、普通管家与执行器的原生角色。独审发现的结果参考四字段与原三字段 digest 不兼容、自动目录绕过工具策略两项均已修正；不完整来源扩展已撤下。当前尚无本批 Android 运行体验，构建/发布结果单独记录，不以静态审查关闭 PW-H1–H4。
 
+正式源码为 [`875dfee8`](https://github.com/wozhenbang2004/PocketWorld/commit/875dfee8bb7c6f4a9fbfb14518a6d69d352e7d50)，tree `db331122d91ea9ba6993db6231e3ea66e2451d15`；在 main `50ceebc` 上保留同期设备首屏准备与动效发布记录，本批共 8 个文件、242 行新增/34 行删除。独立静态审阅与 diff 空白核对完成，远端源码树与本地已审阅集成树一致。
+
+[v0.1.103](https://github.com/wozhenbang2004/PocketWorld/releases/tag/v0.1.103) 于北京时间 **2026-11-11 08:55:13** 发布，应用 **0.4.1103 / 1103**；[run 42934231031](https://github.com/wozhenbang2004/PocketWorld/actions/runs/42934231031) 的 build、prepare、publish 均 success，release target 与上述源码一致。云端完成 Web 生产构建（2570 模块）、Android 编译、项目稳定签名、包内资源完整性、增量包准备和发布。签名证书 SHA-256 保持 `b58e014e2a2e49b2e85ebd5b47a034a28cb0d313d71f379a5208d21afe388e58`。
+
+[正式 APK](https://github.com/wozhenbang2004/PocketWorld/releases/download/v0.1.103/2e997467747d3446e79c20f26246e496d7e54b6d4482ccc90bb11403340f8801-app-1103.apk) 为 148,951,733 bytes，SHA-256 `2e997467747d3446e79c20f26246e496d7e54b6d4482ccc90bb11403340f8801`；1102→1103 增量包为 971,301 bytes。已取回公开 release.json，核对 SHA-256 `1b73b95cb18e95a0fd4ef08a2a1978ec5abfcc164d6ebb91f5430e7bf78a44f6` 及载荷版本、包名、APK URL/大小/hash、增量起点与正式资产一致。轻量构建证据 artifact `13817294498` 的元数据已核对，归档 digest `e7d9cb1269d8a75a99c6acdf60a41d11b7df9f8117a6c5519d47a37a66fc1c4c`；未下载该归档或 APK，不冒称本地验签。
+
+本批仅完成上述限定修正的实现、源码审阅、构建与发布。不编写或运行测试，CI 采图保持 skipped，本机未构建 APK。**当前 Android 实际调用与完整管家办事旅程未体验；PW-H1–H4 的中枢要求及 PW-R5 的整体验收仍开放。**
+
 ## 2026-11-11 模型能力数据接线与选择详情
 
 PW-MODEL-CAP-1：本轮用户反馈截图中的 `gpt-6-luna / OpenAI API` 将图片输入、工具调用都写成“未声明”，并要求对照 Mika、DSH Go、AionUI 的真实实现。反馈由 root 转交，精确消息 ID 未提供；实际查看原截图 `1000121281.jpg`。本项不改变已批准选择器外壳，不把旧布局当作能力判断依据。基线已跟进至 main `d2a3d41f8c64a23ce2aaecd8d0dedcd3dd31a5a8`，保留同批选择器响应与退场生命周期修改。
