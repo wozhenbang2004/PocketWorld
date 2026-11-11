@@ -167,9 +167,13 @@ export function AICenter({ state, data, supported, run, registerTransientBack, i
   useEffect(() => { if (view.kind === 'connection' && connection && supported('models.catalog.snapshot')) readCatalog(false); }, [view.kind, view.id]);
   const saved = (value: Data) => {
     const row = object(value.savedConnection);
+    if (value.reconciled === true && value.savedConnection === null && text(value.savedConnectionId)) {
+      setLocalSnapshot(object(value.snapshot)); trail.current = []; setView({ kind: 'main' }); setCatalog(null);
+      setNotice('原保存已确认；当前服务列表中已没有这项连接。已收好原草稿，没有重新创建。'); return;
+    }
     if (!text(row.id) || typeof row.revision !== 'number') { setError('无法核实保存的是哪项服务，请返回读取服务列表。'); return; }
     setLocalSnapshot(old => ({ ...(old || data), connections: { ...object((old || data).connections), connections: [...aiConnections(old || data).filter(item => item.id !== row.id), row] } }));
-    trail.current = [{ kind: 'main' }]; setView({ kind: 'connection', id: row.id }); setCatalog(null); setNotice('服务已保存。可读取模型目录，再单独选择默认模型或测试推理。');
+    trail.current = [{ kind: 'main' }]; setView({ kind: 'connection', id: row.id }); setCatalog(null); setNotice(value.reconciled === true ? '已核对原保存记录，这里显示服务的当前配置。' : '服务已保存。可读取模型目录，再单独选择默认模型或测试推理。');
   };
   const filtered = connections.filter(row => `${row.name || ''} ${row.baseUrl || ''} ${aiServiceBrand(row)} ${aiSourceLabel(row)}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const filteredAccounts = accounts.filter(row => `${row.label || ''} ChatGPT OpenAI`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));

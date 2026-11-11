@@ -3978,15 +3978,19 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         io.execute { try { app.settings.saveLocalObservation(capture, ocr); app.sendState() }
             catch (error: Exception) { main.post { if (!closed) state = state.copy(error = message(error)) } } }
     }
-    internal fun saveApiConnection(adding: Boolean, id: String, revision: Long, name: String, input: JSONObject, completed: (Result<JSONObject>) -> Unit, useForNewTasks: Boolean = adding) {
+    internal fun saveApiConnection(adding: Boolean, id: String, revision: Long, name: String, input: JSONObject, completed: (Result<JSONObject>) -> Unit, useForNewTasks: Boolean = adding, recordSaveOutcome: ((Result<JSONObject>) -> Unit)? = null) {
         check(!state.modelSaving && !state.modelTesting && !state.chatSubmitting && !state.phoneSubmitting) { "请先等待原提交和模型设置回执" }
         val service = app.modelConnections ?: error("本机模型连接尚未准备")
         val captured = JSONObject(input.toString())
         state = state.copy(modelSaving = true, error = null)
         try { runModelSelectionWrite({
-            if (adding && useForNewTasks) service.addAndSelectConnection(name, captured) else if (!useForNewTasks) service.saveSource(id, revision, name, captured) else service.saveConnection(id, revision, name, captured)
+            val outcome = runCatching { if (adding && useForNewTasks) service.addAndSelectConnection(name, captured) else if (!useForNewTasks) service.saveSource(id, revision, name, captured) else service.saveConnection(id, revision, name, captured) }
+            // Preserve the original non-secret outcome before retiring this IO task.
+            // Receipt persistence failure never changes the real save result.
+            recordSaveOutcome?.let { record -> runCatching { record(outcome) } }
+            outcome.getOrThrow()
         }) { result ->
-            if (!closed) result.fold({ state = state.copy(modelSaving = false, modelSavedRevision = state.modelSavedRevision + 1, notice = if (adding && useForNewTasks) "新 API 连接已保存，后续任务将使用它" else "服务连接已保存") }, { state = state.copy(modelSaving = false, error = "保存结果待核对，请刷新原连接。" + message(it)) })
+            if (!closed) result.fold({ state = state.copy(modelSaving = false, modelSavedRevision = state.modelSavedRevision + 1, notice = if (adding && useForNewTasks) "新 API 连接已保存，后续任务将使用它" else "服务连接已保存") }, { state = state.copy(modelSaving = false, error = (if (it is dev.pocketengine.store.SettingsStore.ApiConnectionSaveNotApplied) "服务连接没有保存。" else "保存结果待核对，请刷新原连接。") + message(it)) })
             completed(result)
         } } catch (error: Exception) { state = state.copy(modelSaving = false, error = message(error)); throw error }
     }

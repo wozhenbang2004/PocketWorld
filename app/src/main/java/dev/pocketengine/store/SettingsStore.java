@@ -50,6 +50,10 @@ public final class SettingsStore {
     public static final class PersistenceUncertain extends IllegalStateException {
         PersistenceUncertain(){super("本机设置的写入结果不确定；请检查存储并重新启动应用后核对已保存内容。没有把未确认的内存值当作保存成功。");}
     }
+    /** Only the original save boundary can prove that this call reached no write. */
+    public static final class ApiConnectionSaveNotApplied extends IllegalStateException {
+        private ApiConnectionSaveNotApplied(Exception cause){super(cause.getMessage(),cause);}
+    }
     private void requireConfirmed(){synchronized(UNCERTAIN){if(UNCERTAIN.contains(prefs))throw new PersistenceUncertain();}}
     private void commitConfirmed(SharedPreferences.Editor edit){commitConfirmed(edit,true);}
     private void commitConfirmed(SharedPreferences.Editor edit,boolean selectionChanged){
@@ -667,7 +671,9 @@ public final class SettingsStore {
         return next;
     }
     private JSONObject saveApiConnectionInternal(String id,long expectedRevision,String name,JSONObject input,boolean useApi)throws Exception{
-        requireConfirmed();Profiles state=profiles();if(state==null){migrateApiConnections();state=profiles();}
+        boolean mayHaveWritten=false;
+        try{
+        requireConfirmed();Profiles state=profiles();if(state==null){mayHaveWritten=true;migrateApiConnections();state=profiles();}
         ApiConnectionProfile prior=id==null||id.isEmpty()?null:state.rows.get(id);
         if(prior==null&&id!=null&&!id.isEmpty()||prior==null&&expectedRevision!=0||prior!=null&&prior.revision!=expectedRevision)throw new IllegalStateException("API连接已变化，请重新打开原连接");
         if(prior==null&&state.rows.size()>=ApiConnectionProfile.MAX_CONNECTIONS)throw new IllegalStateException("已保存32项API连接，请先管理已有连接");
@@ -696,8 +702,10 @@ public final class SettingsStore {
         state.rows.put(saved.id(),saved);long nextRevision=Math.addExact(state.selectionRevision,1);
         if(useApi)state=new Profiles(state.rows,saved.id(),state.selectionRevision);
         profilesDocument(state,nextRevision); // Preflight before writing even the inactive credential slot.
+        mayHaveWritten=true;
         if(credential&&!slot.isEmpty())putProfileSecret(slot,next.usesBedrock()?next.awsSession.toVaultString():next.apiKey);
         commitProfiles(state,nextRevision,useApi);return saved.publicJson();
+        }catch(Exception failure){if(!mayHaveWritten)throw new ApiConnectionSaveNotApplied(failure);throw failure;}
     }
     public synchronized ModelConfig selectApiConnection(String id,long expectedRevision)throws Exception{
         requireConfirmed();Profiles state=requireProfiles();ApiConnectionProfile row=requireProfile(state,id,expectedRevision);

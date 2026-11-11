@@ -7,12 +7,20 @@
 .pw-project-overview-heading p { margin: 5px 0 0; color: var(--pw-copy); font-size: 12px; line-height: 20px; }
 .pw-project-overview-layout { display: grid; grid-template-columns: minmax(0, 1fr) 250px; gap: var(--pw-gap-section, 28px); align-items: start; }
 .pw-project-overview-work { min-width: 0; padding: 18px 16px; border-radius: 16px; background: var(--pw-surface); box-shadow: var(--pw-shadow-navigation); }
+.pw-project-work-tools { display: grid; gap: 6px; margin-bottom: 18px; min-width: 0; }
+.pw-project-work-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; }
+.pw-project-work-filters > button { min-height: 44px; padding-inline: 12px; color: var(--pw-copy); background: transparent; border: 0; box-shadow: none; }
+.pw-project-work-filters > button[aria-pressed="true"] { color: var(--pw-on-accent-soft); background: var(--pw-accent-soft); }
+.pw-project-work-filters > button > span { padding: 0; }
+.pw-project-overview-work > .pw-task-history-navigation { margin: 14px 4px 0; }
+.pw-project-overview-work > .pw-task-history-navigation p { font-size: 12px; line-height: 20px; }
 .pw-project-work-group { min-width: 0; }
 .pw-project-work-group + .pw-project-work-group { margin-top: var(--pw-gap-section, 28px); }
 .pw-project-work-group > h3, .pw-project-overview-tools h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; color: var(--pw-copy); font-size: 12px; line-height: 20px; font-weight: 500; }
 .pw-project-work-attention > h3 { color: var(--pw-on-accent-soft); }
 .pw-project-work-list { list-style: none; margin: 0; padding: 0; }
 .pw-project-work-list > li { min-width: 0; }
+.pw-project-work-list > li[data-selected] > .pw-project-work-row { background: var(--pw-inset); }
 .pw-project-overview .pw-project-work-row { display: flex; width: 100%; min-height: 76px; height: auto; justify-content: flex-start; padding: 12px 4px; border: 0; border-radius: 10px; background: transparent; box-shadow: none; text-align: start; white-space: normal; }
 .pw-project-overview .pw-project-work-row > span { display: flex; width: 100%; min-width: 0; align-items: flex-start; justify-content: flex-start; gap: 12px; padding: 0; flex-shrink: 1; }
 .pw-project-overview .pw-project-work-row:hover:not(:disabled) { background: var(--pw-inset); }

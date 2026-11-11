@@ -3,7 +3,7 @@ import { Accordion, AccordionItem, Button, TextAreaField } from './forms-library
 
 type Data = Record<string, any>;
 type Run = (action: string, args?: Data) => Promise<any>;
-export type FormDraftKind = 'memory' | 'groups' | 'teams' | 'reminders' | 'commitments' | 'plans';
+export type FormDraftKind = 'memory' | 'groups' | 'teams' | 'reminders' | 'commitments' | 'plans' | 'models';
 export type RegisterBeforeLeave = (guard: ((leave: () => void) => void) | null) => void;
 type Session = { identity: Data; revision: string; baseRevision: string; currentBase: string; value: Data; saved: string; savedBase: string; queue: Promise<void>; error: string; stale: boolean; savedAt: number; unverified: boolean; removing: boolean; conflict: Data | null };
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value));

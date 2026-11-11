@@ -246,7 +246,7 @@ public final class TaskAuditStore {
         JSONObject out=new JSONObject();for(String key:HEADER_FIELDS){Object value=task.opt(key);if(value==null)continue;
             if(value instanceof String){String text=(String)value;int max=key.equals("goal")?2000:key.equals("summary")?1000:500;out.put(key,clip(text,max));}
             else if(value instanceof Boolean||value instanceof Number||value==JSONObject.NULL)out.put(key,value);
-            else if(value instanceof JSONObject&&jsonBytes(value,8192,0)>=0)out.put(key,new JSONObject(value.toString()));
+            else if(value instanceof JSONObject){if(jsonBytes(value,8192,0)>=0)out.put(key,new JSONObject(value.toString()));else out.put("metadataLimited",true);}
         }
         JSONObject learning=task.optJSONObject("sourceLearningJob");if(learning!=null){JSONObject small=new JSONObject().put("headerOnly",true).put("inputsIncluded",false).put("executionAuthorized",false);for(String field:new String[]{"format","revision","nextIndex","reservedModelAttempts"}){Object value=learning.opt(field);if(value instanceof Number||value instanceof Boolean||value instanceof String&&((String)value).length()<=160)small.put(field,value);}out.put("sourceLearningJob",small);}
         JSONObject phoneLink=conversationPhoneLink(task);if(phoneLink!=null)out.put("conversationPhoneLink",phoneLink);

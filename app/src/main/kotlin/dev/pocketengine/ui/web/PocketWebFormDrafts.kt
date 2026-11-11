@@ -23,7 +23,8 @@ internal class PocketWebFormDrafts(context: Context) {
             "teams" to setOf("name", "nameEdited", "mode", "leaderId", "members", "goal", "rounds", "text"),
             "reminders" to setOf("title", "phone", "goal", "type", "minutes", "date", "time", "zone", "weekdays", "monthDay", "lastDay", "skipGap", "laterOverlap", "cron", "misfire", "overlap", "maxCatchUp"),
             "commitments" to setOf("title", "details", "taskId", "hours", "date", "time", "zone", "laterOverlap", "changeTiming"),
-            "plans" to setOf("goal", "delay", "steps", "timingEdited", "scheduleMode", "date", "time", "zone", "laterOverlap")
+            "plans" to setOf("goal", "delay", "steps", "timingEdited", "scheduleMode", "date", "time", "zone", "laterOverlap"),
+            "models" to setOf("name", "url", "model", "provider", "bedrockRegion", "screenshots", "supportsImageInput", "maxOutputTokens", "compatibility", "saveRequestId")
         )
         private val children = mapOf(
             "members" to setOf("id", "name", "role", "model", "runner", "modeId", "avatarShape", "assignment", "dependsOn", "device", "writeFiles", "production"),
@@ -31,7 +32,8 @@ internal class PocketWebFormDrafts(context: Context) {
             "production" to setOf("sourceMode", "sourceTaskId", "snapshotId", "packageId", "packageSha", "packageManifest", "wallSeconds", "outputBytes", "contributionBytes"),
             "quota" to setOf("dailyTasks", "memberDailyTasks", "dailyTokens", "maxTokensPerTask", "maxConcurrent", "dailyMedia", "memberDailyMedia", "maxMediaBytes"),
             "steps" to setOf("goal", "executor", "projectId", "path", "heading", "minimumBytes", "dependencies"),
-            "dependencies" to setOf("step", "outcome")
+            "dependencies" to setOf("step", "outcome"),
+            "compatibility" to setOf("enabled", "tokenField", "streamUsage", "toolWireShape", "schemaSubset", "maxTools", "maxRequestBytes", "cacheMode", "cacheSupport")
         )
     }
 
@@ -65,12 +67,58 @@ internal class PocketWebFormDrafts(context: Context) {
                 val entryLimit = if (kind == "plans") 1048576 else MAX_ENTRY
                 require(draft.toString().toByteArray(Charsets.UTF_8).size <= entryLimit) { "草稿过长，请缩短至 ${entryLimit / 1024} KiB 内再保存" }
                 validate(draft, permitted + "outcomeUnverified", 0)
+                if (kind == "models" && entry.optJSONObject("draft")?.optString("saveRequestId") != draft.optString("saveRequestId")) entry.remove("modelSaveReceipt")
                 entry.put("draft", JSONObject(draft.toString())).put("baseRevision", text(args, "baseRevision", 512, true)).put("savedAt", now)
-            } else entry.remove("draft").also { entry.put("baseRevision", "").put("savedAt", 0) }
+            } else entry.remove("draft").also { entry.remove("modelSaveReceipt"); entry.put("baseRevision", "").put("savedAt", 0) }
             entry.put("revision", UUID.randomUUID().toString()).put("expiresAt", now + TTL)
             write(state)
         }
         return JSONObject(entry.toString()).put("draft", entry.optJSONObject("draft") ?: JSONObject.NULL)
+    }
+
+    class ModelSave internal constructor(
+        internal val key: String, internal val revision: String, internal val requestId: String,
+        internal val sourceId: String, internal val sourceRevision: Long
+    )
+    class ModelSaveAlreadyAccepted : IllegalStateException("原保存已受理，请只读核对原记录")
+
+    /** Reserve this exact saved draft before the original model service is called.
+     * Only non-secret identity and completion facts are added to the existing draft.
+     * This receipt never supplies a configuration or authorizes a replay. */
+    fun beginModelSave(reference: JSONObject, sourceId: String, sourceRevision: Long): ModelSave = synchronized(storageLock) {
+        require(reference.keys().asSequence().toSet() == setOf("objectId", "revision", "requestId")) { "服务草稿身份不完整" }
+        val objectId = text(reference, "objectId", 256)
+        require(if (sourceId.isEmpty()) objectId.startsWith("new:") else objectId == "connection:$sourceId") { "服务草稿不属于这项原连接" }
+        val revision = text(reference, "revision", 64); val requestId = text(reference, "requestId", 64)
+        require(runCatching { UUID.fromString(requestId).toString() == requestId }.getOrDefault(false)) { "服务保存身份无效" }
+        val key = JSONArray().put("models").put("connections").put(objectId).toString()
+        val state = read(); val entry = state.optJSONObject("entries")?.optJSONObject(key) ?: error("服务草稿已清除，请重新读取")
+        require(entry.optLong("expiresAt") > System.currentTimeMillis() && entry.optString("revision") == revision) { "服务草稿已变化，未开始保存" }
+        require(entry.optString("baseRevision") == if (sourceId.isEmpty()) "new" else sourceRevision.toString()) { "原连接修订已变化，请先核对草稿" }
+        val draft = entry.getJSONObject("draft")
+        require(draft.optBoolean("outcomeUnverified") && draft.optString("saveRequestId") == requestId) { "原服务保存尚未登记" }
+        if (entry.optJSONObject("modelSaveReceipt") != null) throw ModelSaveAlreadyAccepted()
+        entry.put("modelSaveReceipt", JSONObject().put("requestId", requestId).put("draftRevision", revision)
+            .put("sourceId", sourceId).put("sourceRevision", sourceRevision).put("status", "pending"))
+        write(state)
+        ModelSave(key, revision, requestId, sourceId, sourceRevision)
+    }
+
+    /** A late completion is recorded only while the same user draft still exists. */
+    fun finishModelSave(ticket: ModelSave, result: JSONObject?, notSent: Boolean = false) = synchronized(storageLock) {
+        val state = read(); val entry = state.optJSONObject("entries")?.optJSONObject(ticket.key) ?: return@synchronized
+        val receipt = entry.optJSONObject("modelSaveReceipt") ?: return@synchronized
+        if (entry.optString("revision") != ticket.revision || entry.optJSONObject("draft")?.optString("saveRequestId") != ticket.requestId ||
+            receipt.optString("requestId") != ticket.requestId || receipt.optString("status") != "pending") return@synchronized
+        val saved = result?.optJSONObject("savedConnection")
+        val confirmed = result?.optString("status") == "saved" && saved != null && saved.optString("id").isNotBlank() &&
+            saved.optLong("revision") > ticket.sourceRevision && (ticket.sourceId.isEmpty() || saved.optString("id") == ticket.sourceId)
+        receipt.put("status", if (confirmed) "saved" else if (notSent) "not_sent" else "unknown")
+        if (confirmed) receipt.put("savedConnectionId", saved!!.getString("id")).put("savedRevision", saved.getLong("revision"))
+        receipt.put("completedAt", System.currentTimeMillis())
+        // User input and its revision are unchanged; readers can still remove the
+        // exact draft after observing the original native save result.
+        write(state)
     }
 
     private fun validate(value: JSONObject, allowed: Set<String>, depth: Int) {

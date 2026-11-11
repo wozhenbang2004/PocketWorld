@@ -18,7 +18,8 @@ internal object PocketWebModelConnectionCommands {
         override val expectedRevision: Long,
         val name: String,
         val input: JSONObject,
-        val useForNewTasks: Boolean = false
+        val useForNewTasks: Boolean = false,
+        val draftReference: JSONObject? = null
     ) : Command
     class Test(
         override val id: String,
@@ -33,7 +34,7 @@ internal object PocketWebModelConnectionCommands {
         val testing = action == "models.connection.test"
         val saveSourceOnly = action == "models.connections.add" || action == "models.connections.update"
         checkedPayload(args, setOf("id", "expectedRevision", "name", "url", "model", "apiKey", "bedrockRegion", "awsSession", "screenshots", "supportsImageInput", "provider", "maxOutputTokens", "cleartextConsent", "compatibility") +
-            if (testing) setOf("editorId", "draftRevision") else emptySet())
+            if (testing) setOf("editorId", "draftRevision") else if (saveSourceOnly) setOf("draftReference") else emptySet())
         val adding = action == "models.connection.add" || action == "models.connections.add" || testing && args.optString("id").isEmpty()
         val id = if (adding) "" else requiredString(args, "id")
         val expected = if (adding) 0L else requiredInt(args, "expectedRevision").also { require(it > 0) { "请重新读取原连接修订" } }.toLong()
@@ -51,7 +52,8 @@ internal object PocketWebModelConnectionCommands {
             val draftRevision = requiredInt(args, "draftRevision").also { require(it >= 0) { "草稿修订无效，请重新打开连接" } }.toLong()
             return Test(id, expected, input, editorId, draftRevision)
         }
-        return Save(adding, id, expected, args.optString("name", model.ifBlank { input.getString("provider") }), input, action == "models.connection.add")
+        val draftReference = if (args.has("draftReference")) checkedPayload(args.getJSONObject("draftReference"), setOf("objectId", "revision", "requestId")) else null
+        return Save(adding, id, expected, args.optString("name", model.ifBlank { input.getString("provider") }), input, action == "models.connection.add", draftReference)
     }
 
     private fun checkedProviderCompatibility(options: JSONObject): JSONObject {

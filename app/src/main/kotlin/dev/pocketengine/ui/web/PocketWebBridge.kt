@@ -1438,7 +1438,10 @@ internal class PocketWebBridge(
             result.fold({ snapshot ->
                 if (action.startsWith("models.connections.")) complete(requestId, PocketWebState.publicValue(snapshot) as JSONObject, null)
                 else complete(requestId, JSONObject().put("status", if (action == "models.connection.test") "tested" else "saved").put("snapshot", PocketWebState.publicValue(snapshot)), null)
-            }, { error -> complete(requestId, null, "原连接操作结果待核对：" + (error.message ?: "请刷新原连接记录"), "outcome_unknown") })
+            }, { error ->
+                val notApplied = error is dev.pocketengine.store.SettingsStore.ApiConnectionSaveNotApplied
+                complete(requestId, null, (if (notApplied) "服务连接没有保存：" else "原连接操作结果待核对：") + (error.message ?: "请刷新原连接记录"), if (notApplied) "not_sent" else "outcome_unknown")
+            })
             publishState()
         }
         when (command) {
@@ -1453,8 +1456,44 @@ internal class PocketWebBridge(
                         acceptsWindow(window) && controller.webPrivateOwnerVisible()
                 }, completed)
             }
-            is PocketWebModelConnectionCommands.Save ->
-                controller.saveApiConnection(command.adding, command.id, command.expectedRevision, command.name, command.input, completed, command.useForNewTasks)
+            is PocketWebModelConnectionCommands.Save -> {
+                val reference = command.draftReference
+                if (reference == null) {
+                    controller.saveApiConnection(command.adding, command.id, command.expectedRevision, command.name, command.input, completed, command.useForNewTasks)
+                } else {
+                    val window = captureWindow(); val document = documentId; val generation = domainGeneration
+                    controller.runPluginCatalogWork(Runnable {
+                        val reservation = runCatching { formDrafts.beginModelSave(reference, command.id, command.expectedRevision) }
+                        main.post {
+                            reservation.fold({ ticket ->
+                                val notSent: (Exception) -> Unit = { failure ->
+                                    val deliver = {
+                                        complete(requestId, null, failure.message ?: "保存没有发出", "not_sent")
+                                        publishState()
+                                    }
+                                    try {
+                                        controller.runPluginCatalogWork(Runnable {
+                                            runCatching { formDrafts.finishModelSave(ticket, null, true) }
+                                            main.post { deliver() }
+                                        })
+                                    } catch (_: java.util.concurrent.RejectedExecutionException) { deliver() }
+                                }
+                                if (closed || document != documentId || generation != domainGeneration || section != "models" ||
+                                    !acceptsWindow(window) || !controller.webPrivateOwnerVisible()) {
+                                    notSent(IllegalStateException("原服务编辑窗口已关闭，保存没有发出"))
+                                } else {
+                                    try {
+                                        requireModelSelectionIdle()
+                                        controller.saveApiConnection(command.adding, command.id, command.expectedRevision, command.name, command.input,
+                                            completed, command.useForNewTasks,
+                                            { result -> formDrafts.finishModelSave(ticket, result.getOrNull(), result.exceptionOrNull() is dev.pocketengine.store.SettingsStore.ApiConnectionSaveNotApplied) })
+                                    } catch (failure: Exception) { notSent(failure) }
+                                }
+                            }, { failure -> complete(requestId, null, failure.message ?: "服务草稿尚未核对", if (failure is PocketWebFormDrafts.ModelSaveAlreadyAccepted) "outcome_unknown" else "not_accepted") })
+                        }
+                    })
+                }
+            }
         }
     }
 

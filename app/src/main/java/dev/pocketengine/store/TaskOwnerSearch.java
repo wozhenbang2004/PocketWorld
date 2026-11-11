@@ -16,20 +16,24 @@ import org.json.JSONObject;
 final class TaskOwnerSearch {
     private TaskOwnerSearch() {}
 
-    static JSONObject search(TaskStore store, SQLiteDatabase db, String query, String cursor, int limit, String filter) throws Exception {
+    static JSONObject search(TaskStore store, SQLiteDatabase db, String query, String cursor, int limit, String filter, String projectId) throws Exception {
         if (query == null || query.length() > 500 || query.indexOf('\0') >= 0 || cursor == null ||
-                cursor.length() > 4096 || limit < 1 || limit > 40 || filter == null || !Set.of("all", "attention", "running", "ended").contains(filter))
+                cursor.length() > 4096 || limit < 1 || limit > 40 || filter == null || !Set.of("all", "attention", "running", "ended").contains(filter)
+                || projectId == null || projectId.length() > 240 || projectId.indexOf('\0') >= 0 || !projectId.equals(projectId.trim()))
             throw new IllegalArgumentException("工作查找范围无效");
         String normalized = normalize(query), signature = digest(normalized), position = "";
+        int cursorVersion = projectId.isEmpty() ? 2 : 3;
         if (!cursor.isEmpty()) {
             JSONObject saved = decode(cursor);
-            if (saved.length() != 4 || saved.optInt("v") != 2 || !signature.equals(saved.optString("query")) || !filter.equals(saved.optString("filter")))
-                throw new IllegalArgumentException("查询或筛选已变化，请重新查找工作");
+            if (saved.length() != (projectId.isEmpty() ? 4 : 5) || saved.optInt("v") != cursorVersion
+                    || !signature.equals(saved.optString("query")) || !filter.equals(saved.optString("filter"))
+                    || !projectId.equals(saved.optString("projectId")))
+                throw new IllegalArgumentException("项目、查询或筛选已变化，请重新查找工作");
             position = saved.getString("position");
             if (position.isEmpty()) throw new IllegalArgumentException("工作查找位置为空，请重新查找");
         }
         JSONArray matches = new JSONArray(), unavailableSources = new JSONArray();
-        int scanned = 0;
+        int scanned = 0, unavailableProjectAssociations = 0;
         long started = SystemClock.elapsedRealtime();
         boolean more;
         do {
@@ -45,6 +49,14 @@ final class TaskOwnerSearch {
                 // the same read retire a stale live title without returning it.
                 if ("source_unavailable".equals(task.optString("taskProjection")) || task.optBoolean("sourceCurrentReadRequired"))
                     unavailableSources.put(task.getString("id"));
+                if (!projectId.isEmpty()) {
+                    JSONObject development = task.optJSONObject("developmentContext");
+                    if (development == null || !projectId.equals(development.optString("projectId"))) {
+                        if (development == null && (task.optBoolean("metadataLimited") || task.optBoolean("sourceCurrentReadRequired")))
+                            unavailableProjectAssociations++;
+                        continue;
+                    }
+                }
                 String visibleText = task.optString("goal") + "\n" + task.optString("summary");
                 if (!normalized.isEmpty() && !normalize(visibleText).contains(normalized)) continue;
                 boolean reconciliation = reconciliationRequired(db, task);
@@ -67,10 +79,13 @@ final class TaskOwnerSearch {
             }
             if (!stoppedWithinPage) position = page.optString("nextCursor");
         } while (more && matches.length() < limit && scanned < 200 && SystemClock.elapsedRealtime() - started < 500);
+        JSONObject continuation = new JSONObject().put("v", cursorVersion).put("query", signature).put("filter", filter).put("position", position);
+        if (!projectId.isEmpty()) continuation.put("projectId", projectId);
         return new JSONObject().put("tasks", matches).put("auditBodyIncluded", false)
                 .put("sourceUnavailableTaskIds", unavailableSources)
-                .put("query", query).put("filter", filter).put("hasMore", more).put("rowsScanned", scanned)
-                .put("nextCursor", more ? encode(new JSONObject().put("v", 2).put("query", signature).put("filter", filter).put("position", position)) : "")
+                .put("query", query).put("filter", filter).put("projectId", projectId)
+                .put("unavailableProjectAssociations", unavailableProjectAssociations).put("hasMore", more).put("rowsScanned", scanned)
+                .put("nextCursor", more ? encode(continuation) : "")
                 .put("coverage", "original_private_task_titles_and_summaries")
                 .put("executionAuthorized", false);
     }

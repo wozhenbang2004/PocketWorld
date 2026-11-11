@@ -111,3 +111,4 @@
   .pw-secondary-refactor .pw-connection-policy-group { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .pw-secondary-refactor .pw-connection-policy-group > h4 { grid-column: 1 / -1; }
 }
+.pw-model-editor-fields{min-width:0;margin:0;padding:0;border:0}

@@ -46,11 +46,13 @@ internal class PocketWebWorkSearch(
                             }
                             "work.search" -> search(args, control)
                             "work.tasks.list" -> {
-                                fields(args, setOf("query", "filter", "cursor", "limit"))
+                                fields(args, setOf("query", "filter", "projectId", "cursor", "limit"))
                                 val query = args.opt("query") as? String ?: error("请输入工作查找范围")
                                 val filter = args.opt("filter") as? String ?: error("请选择工作状态")
-                                require(query.length <= 500 && '\u0000' !in query && filter in setOf("all", "attention", "running", "ended")) { "工作查找范围无效" }
-                                val page = host.tasks.ownerWorkSearchPage(query, args.optString("cursor"), integer(args, "limit", 30, 8, 40), filter)
+                                val projectId = if (args.has("projectId")) args.opt("projectId") as? String ?: error("项目查找范围无效") else ""
+                                require(query.length <= 500 && '\u0000' !in query && filter in setOf("all", "attention", "running", "ended") &&
+                                    projectId.length <= 240 && '\u0000' !in projectId && projectId == projectId.trim()) { "工作查找范围无效" }
+                                val page = host.tasks.ownerWorkSearchPage(query, args.optString("cursor"), integer(args, "limit", 30, 8, 40), filter, projectId)
                                 JSONObject(page.toString()).put("format", "pocketworld.work-directory.v1")
                                     .put("taskPage", page).put("modelCalled", false)
                             }

@@ -264,5 +264,67 @@
       "tests": "Not authored or executed. Screenshot workflow remains disabled; no local APK build.",
       "android_and_visual": "Unverified on the current Android build; compile/source results do not establish touch, keyboard, accessibility, motion or aesthetic acceptance."
     }
+  },
+  "review_continuation_20261111": {
+    "status": "implementation-authorized; current Android visual and journey unverified",
+    "requirements": [
+      "PW-N1",
+      "PW-N2",
+      "PW-N3",
+      "UIX-01",
+      "UIX-02",
+      "UIX-03",
+      "UIX-06",
+      "UIX-08",
+      "UIX-09",
+      "UIX-10"
+    ],
+    "implementation": [
+      "../App.tsx",
+      "../WorkObjectMenu.tsx",
+      "../owner-work.css",
+      "../ProjectWorkspaceOverview.tsx",
+      "../project-workspace-overview.css",
+      "../WorkDirectory.tsx",
+      "../Secondary.tsx",
+      "../AICenter.tsx"
+    ],
+    "actual_sources_read": [
+      {
+        "source": "Retained BoardUI Popover and IconButton/Button",
+        "commit": "ec5c5eb3e29c2441be63b9422cd54f411ef23466",
+        "path": "adapted/boardui/components/base/popover/popover.tsx",
+        "product_composition": "../ChatNavigationMenu.tsx",
+        "application": "WorkObjectMenu retains the actual anchored popover, dismissal, focus return, press behavior and reduced-motion handling. Only exact current-work reading/navigation actions are supplied. Stops remain a separate visible control."
+      },
+      {
+        "source": "Existing project Folder and DecisionInbox composition with retained BoardUI SearchField, Button and Accordion",
+        "path": "../ProjectWorkspaceOverview.tsx",
+        "application": "Scope the existing search and state controls to persistent project work; retain task groups and original task opening, and store query/selection/expanded state in the existing app shell."
+      },
+      {
+        "source": "Existing approved BoardUI model form and native form-draft workflow",
+        "paths": [
+          "../ModelConnectionOptions.tsx",
+          "../form-drafts.tsx",
+          "../Secondary.tsx"
+        ],
+        "application": "Preserve the original connection form, field roles and confirmation paths while retaining non-secret inputs and unresolved-save identity across navigation. No new component family."
+      },
+      {
+        "source": "Retained Linear four-layer architecture reference",
+        "library_reference": "references/uiux/assets/ia/linear-2026-header-view.png",
+        "read": "Existing reference image viewed with the related ia-depth.md case. No current live Linear app inspection claimed.",
+        "application": "Separate object identity, view control and reading content; do not copy four header rows into a phone."
+      }
+    ],
+    "design_boundary": "Existing neutral surface, blue-gray accent, compact text, at least 44px controls and adopted motion remain. Source adaptation and authorized implementation do not establish new aesthetic approval.",
+    "verification": {
+      "source": "Scoped independent review and resulting fixes recorded in DESIGN.md.",
+      "typescript": "Final integrated compiler result recorded in DESIGN.md.",
+      "release": "Original main release workflow and exact source identity.",
+      "tests": "Not authored or executed; no screenshot workflow or local APK build.",
+      "android_and_visual": "Not verified on a current Android device."
+    }
   }
 }

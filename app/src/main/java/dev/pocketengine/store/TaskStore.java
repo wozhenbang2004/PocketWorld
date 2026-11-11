@@ -10684,7 +10684,10 @@ public final class TaskStore {
         return ownerWorkSearchPage(query,cursor,limit,"all");
     }
     public synchronized JSONObject ownerWorkSearchPage(String query,String cursor,int limit,String filter)throws Exception {
-        return TaskOwnerSearch.search(this,db,query,cursor,limit,filter);
+        return ownerWorkSearchPage(query,cursor,limit,filter,"");
+    }
+    public synchronized JSONObject ownerWorkSearchPage(String query,String cursor,int limit,String filter,String projectId)throws Exception {
+        return TaskOwnerSearch.search(this,db,query,cursor,limit,filter,projectId);
     }
     public synchronized JSONObject ownerWebUsageForOwner(long from,long to,String zone,String cursor,RunControl control)throws Exception {
         return TaskWebUsage.read(db,from,to,zone,cursor,control);
