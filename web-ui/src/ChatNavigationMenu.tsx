@@ -1,5 +1,5 @@
 import type {ReactNode,Ref} from 'react';
-import { IconFolder, IconGrid, IconHistory, IconMore, IconNewChat, IconNotification, IconSettings } from './icons';
+import { IconFolder, IconGrid, IconHistory, IconMore, IconNewChat, IconNotification, IconSettings, IconSparkles } from './icons';
 import {Button,IconButton} from './forms-library';
 import {Popover,PopoverTrigger} from './shell-library';
 import './chat-navigation.css';
@@ -14,6 +14,7 @@ type ChatNavigationMenuProps={
  unread:number;
  onNewConversation?:()=>void;
  onConversations:()=>void;
+ onHome:()=>void;
  onNavigation:()=>void;
  onOrganize?:()=>void;
  onMemory?:()=>void;
@@ -23,7 +24,7 @@ type ChatNavigationMenuProps={
 
 /** The retained BoardUI/React Aria popover owns focus, placement and dismissal.
  * This only relocates navigation; actions still use the existing host paths. */
-export function ChatNavigationMenu({title,navigationTrigger,isOpen,onOpenChange,triggerRef,submitting,unread,onNewConversation,onConversations,onNavigation,onOrganize,onMemory,onNotifications,onSettings}:ChatNavigationMenuProps){
+export function ChatNavigationMenu({title,navigationTrigger,isOpen,onOpenChange,triggerRef,submitting,unread,onNewConversation,onConversations,onHome,onNavigation,onOrganize,onMemory,onNotifications,onSettings}:ChatNavigationMenuProps){
  const choose=(action:()=>void)=>{onOpenChange(false);action()};
  return <nav className="pw-chat-navigation" aria-label="对话操作">
   {navigationTrigger}
@@ -32,6 +33,7 @@ export function ChatNavigationMenu({title,navigationTrigger,isOpen,onOpenChange,
    <IconButton ref={triggerRef} icon={IconMore} className="pw-chat-glass-trigger" aria-label={unread>0?`对话菜单，${unread} 条未读通知`:'对话菜单'} title="对话菜单" data-unread={unread>0||undefined}/>
    <Popover aria-label="对话菜单" placement="bottom end" offset={8} className="pw-chat-glass-menu" dialogClassName="pw-chat-glass-dialog">
     <div className="pw-chat-menu-actions">
+     <Button variant="ghost" leadingIcon={IconSparkles} onClick={()=>choose(onHome)}>回到管家</Button>
      {onNewConversation&&<Button variant="ghost" leadingIcon={IconNewChat} disabled={submitting} onClick={()=>choose(onNewConversation)}>新对话</Button>}
      <Button variant="ghost" leadingIcon={IconHistory} onClick={()=>choose(onConversations)}>对话列表</Button>
      {onOrganize&&<Button variant="ghost" leadingIcon={IconFolder} onClick={()=>choose(onOrganize)}>整理当前对话</Button>}

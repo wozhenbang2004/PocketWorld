@@ -333,7 +333,7 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
   const headerAction = () => { if (!back.current()) close(); };
   return <section className="pw-setup-workspace" aria-label={title} data-setup-step={viewStep(view)} data-setup-view={view} data-setup-mode={mode} data-setup-focused={focused}>
     <header className="pw-setup-header">
-      <Button variant="ghost" iconOnly leadingIcon={hasParent || focused ? IconArrowLeft : IconClose} className="pw-setup-close" aria-label={hasParent ? parentLabel : onboarding ? '稍后设置，进入对话' : returning} title={hasParent ? parentLabel : onboarding ? '稍后设置' : returning} disabled={!!working || !!preparation.working || onboarding && !!data && (loading || needsRead)} onClick={headerAction}/>
+      <Button variant="ghost" iconOnly leadingIcon={hasParent || focused ? IconArrowLeft : IconClose} className="pw-setup-close" aria-label={hasParent ? parentLabel : onboarding ? '稍后设置，进入管家' : returning} title={hasParent ? parentLabel : onboarding ? '稍后设置' : returning} disabled={!!working || !!preparation.working || onboarding && !!data && (loading || needsRead)} onClick={headerAction}/>
       <h1 ref={heading} tabIndex={-1}>{title}</h1>
       {data && <Button variant="ghost" iconOnly leadingIcon={IconRefresh} className="pw-setup-refresh" aria-label="刷新准备状态" title="刷新准备状态" disabled={loading || !!working || !readable} onClick={() => void load()}/>}
     </header>
@@ -345,13 +345,13 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
             <Button variant="ghost" className="pw-setup-purpose-row" onClick={() => void openView('model')} disabled={locked || !!preparation.working}><IconModel size={24} aria-hidden="true"/><span><strong>对话与推理</strong><small>{setupModelLabel(data.model)}</small></span><IconChevronRight size={18} aria-hidden="true"/></Button>
             {setupCapabilities.map(id => { const copy = capabilityCopy[id], Icon = copy.icon; return <Button variant="ghost" key={id} className="pw-setup-purpose-row" onClick={() => void openView(id)} disabled={locked || !!preparation.working}><Icon size={24} aria-hidden="true"/><span><strong>{copy.title}</strong><small>{capabilitySummary(id)}</small></span><IconChevronRight size={18} aria-hidden="true"/></Button>; })}
           </div><p className="pw-setup-next-hint">准备只在你选择后进行。已开始的工具准备保留在原任务中，可随时查看或停止。</p></>}
-          {view === 'model' && <>{onboarding && <div className="pw-setup-intro"><h2>先连接一个模型</h2><p>登录已有账号，或添加模型服务，就能开始对话。</p></div>}{modelSection}{onboarding && <div className="pw-setup-optional"><p>手机操作、开发与语音可以在需要时准备。</p><Button variant="ghost" trailingIcon={IconChevronRight} disabled={locked || !!preparation.working} onClick={() => void openView('overview')}>查看其他能力</Button></div>}</>}
+          {view === 'model' && <>{onboarding && <div className="pw-setup-intro"><h2>先连接一个模型</h2><p>登录已有账号，或添加模型服务，就能让管家接办事情。</p></div>}{modelSection}{onboarding && <div className="pw-setup-optional"><p>手机操作、开发与语音可以在需要时准备。</p><Button variant="ghost" trailingIcon={IconChevronRight} disabled={locked || !!preparation.working} onClick={() => void openView('overview')}>查看其他能力</Button></div>}</>}
           {view !== 'overview' && view !== 'model' && <div className="pw-setup-purpose-detail"><p className="pw-setup-purpose-description">{capabilityCopy[view].description}</p>{capabilityBody(view)}</div>}
         </motion.div>
         {(error || needsRead || notice) && <div className="pw-setup-feedback">{error && <p role="alert" className="pw-setup-error">{error}</p>}{needsRead && <Button variant="secondary" disabled={loading || !!working} onClick={() => void load()}>刷新并核对</Button>}{notice && <p role="status" className="pw-setup-notice">{notice}</p>}</div>}
       </div>
       <footer className="pw-setup-footer">
-        {onboarding ? <>{canStartConversation && <Button className="pw-setup-next" disabled={locked || !!preparation.working} onClick={() => void finish(false)}>{working === 'save' ? '正在保存…' : '开始对话'}</Button>}<Button variant="ghost" className={canStartConversation ? 'pw-setup-skip' : 'pw-setup-next'} disabled={locked || !!preparation.working} onClick={() => void finish(true)}>稍后设置</Button></> : <Button className="pw-setup-next" variant="secondary" disabled={!!working || !!preparation.working} onClick={() => void finish(false)}>{returning}</Button>}
+        {onboarding ? <>{canStartConversation && <Button className="pw-setup-next" disabled={locked || !!preparation.working} onClick={() => void finish(false)}>{working === 'save' ? '正在保存…' : '进入管家'}</Button>}<Button variant="ghost" className={canStartConversation ? 'pw-setup-skip' : 'pw-setup-next'} disabled={locked || !!preparation.working} onClick={() => void finish(true)}>稍后设置</Button></> : <Button className="pw-setup-next" variant="secondary" disabled={!!working || !!preparation.working} onClick={() => void finish(false)}>{returning}</Button>}
       </footer>
     </>}
   </section>;

@@ -51,8 +51,8 @@
 .pw-chat-title-trigger > span { display: flex; align-items: center; gap: 5px; flex: 0 1 auto; min-width: 0; padding: 0; }
 .pw-chat-title-trigger .pw-chat-title-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pw-chat-title-trigger svg { flex: none; color: var(--pw-muted); }
-.pw-redesign[data-route="chat"] .pw-app-header { gap: 4px; }
-.pw-redesign[data-route="chat"] .pw-app-header > button { width: 44px; min-width: 44px; height: 44px; min-height: 44px; }
+.pw-redesign:is([data-route="chat"], [data-route="butler"]) .pw-app-header { gap: 4px; }
+.pw-redesign:is([data-route="chat"], [data-route="butler"]) .pw-app-header > button { width: 44px; min-width: 44px; height: 44px; min-height: 44px; }
 
 /* Bounded AppShell header and sheets keep reading and commit actions reachable. */
 .pw-primary-tools { display: flex; align-items: center; gap: 2px; flex: none; }
@@ -82,7 +82,7 @@
  .pw-task-status-filters { max-width: 480px; }
 }
 @media (max-width: 719px) {
- .pw-redesign[data-route="chat"] .pw-app-header { min-height: 60px; padding-block: 6px; }
+ .pw-redesign:is([data-route="chat"], [data-route="butler"]) .pw-app-header { min-height: 60px; padding-block: 6px; }
  .pw-conversation-title { font-size: 16px; line-height: 23px; }
  .pw-conversation-model { font-size: 12px; line-height: 18px; }
  .pw-model-drawer .pw-drawer-actions > button { flex: 1 1 120px; }

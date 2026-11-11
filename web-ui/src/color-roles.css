@@ -23,10 +23,10 @@
   background: var(--pw-canvas-workspace);
   color: var(--pw-ink);
 }
-.pw-redesign[data-route="chat"] {
+.pw-redesign:is([data-route="chat"], [data-route="butler"]) {
   --pw-canvas: var(--pw-canvas-chat);
 }
-.pw-redesign[data-route="chat"] .pw-main-workspace {
+.pw-redesign:is([data-route="chat"], [data-route="butler"]) .pw-main-workspace {
   background: var(--pw-canvas-chat);
 }
 .pw-redesign .pw-desktop-navigation,

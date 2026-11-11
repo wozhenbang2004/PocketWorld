@@ -695,7 +695,12 @@ internal class PocketWebBridge(
                 requireSection("learning"); experience.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }; return
             }
             if (action in PocketWebPersonal.COMMANDS) {
-                if (action != "profile.identity") requireSection("profile")
+                if ((action == "profile.conversation.read" || action == "profile.conversation.save") && section == null) {
+                    // The primary composer exposes only its current conversation's memory switch, not memory bodies.
+                    require(taskViewId == null && controller.webPrivateOwnerVisible()) { "请回到原私人对话设置记忆" }
+                    val conversation = requiredString(args, "conversationId")
+                    require(conversation == controller.state.conversationId) { "请返回原私人对话设置记忆" }
+                } else if (action != "profile.identity") requireSection("profile")
                 // Profile/memory reads do not leave source bodies in generic replay receipts.
                 personal.dispatch(action, args) { result, error -> complete(id, result, error, retainValue = action == "profile.save"); publishState() }; return
             }
