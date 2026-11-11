@@ -856,7 +856,7 @@ public final class EngineApplication extends Application implements dev.pocketen
     private void requireBusinessReady(){if(!businessReady())throw new SecurityException("原启动恢复或维护尚未完成，没有派发模型或工具");}
     /** Owner app settings only. Search credentials are not exposed to model tools or public state. */
     public JSONObject webSearchSettingsForOwner()throws Exception{
-        requireBusinessReady();return settings.webSearchSettings();
+        requireBusinessReady();return settings.webSearchSettings().put("diagnostics",dev.pocketengine.features.web.WebSearchDiagnostics.snapshot());
     }
     public JSONObject saveWebSearchSettingsForOwner(JSONObject input)throws Exception{
         requireBusinessReady();return settings.saveWebSearchSettings(input);
