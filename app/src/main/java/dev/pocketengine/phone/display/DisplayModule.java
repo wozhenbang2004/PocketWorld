@@ -587,7 +587,11 @@ public final class DisplayModule implements EngineModule {
         java.util.Objects.requireNonNull(owner);
         java.util.Objects.requireNonNull(consentCurrent);
         Runnable fence=()->{
-            owner.check();
+            try{owner.check();}
+            catch(InterruptedException stopped){
+                Thread.currentThread().interrupt();
+                throw new SecurityException("原恢复请求已取消",stopped);
+            }
             if(!consentCurrent.getAsBoolean()||!context.executionAllowed())
                 throw new SecurityException("原主人恢复同意已失效");
         };
