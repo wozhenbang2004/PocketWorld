@@ -20,13 +20,14 @@ internal class PocketWebConversationModels(
     private val reviews = LinkedHashMap<String, Review>()
     private val activeReviews = LinkedHashSet<GatewayCall>()
     private val main = Handler(Looper.getMainLooper())
+    @Volatile private var reviewWindowId: String? = null
     @Volatile private var generation = 0L
     @Volatile private var closed = false
     companion object {
         val COMMANDS = setOf("models.conversation.snapshot", "models.conversation.review", "models.conversation.reasoning",
             "models.conversation.group", "models.conversation.reset", "models.conversation.close", "models.conversation.reasoning.declare")
     }
-    fun clear() { synchronized(gate) { generation++; reviews.clear(); activeReviews.forEach { it.cancel() }; activeReviews.clear() } }
+    fun clear() { synchronized(gate) { generation++; reviewWindowId = null; reviews.clear(); activeReviews.forEach { it.cancel() }; activeReviews.clear() } }
     override fun close() { closed = true; clear() }
     private fun fields(args: JSONObject, vararg allowed: String) {
         require(args.keys().asSequence().all { it in allowed }) { "对话模型操作含不适用的字段" }
@@ -36,23 +37,39 @@ internal class PocketWebConversationModels(
         require((value is Int || value is Long) && (value as Number).toLong() >= 0) { "请重新读取原对话模型修订" }
         return (value as Number).toLong()
     }
+    private fun windowId(args: JSONObject): String {
+        val id = args.getString("windowId")
+        require(id.matches(Regex("[A-Za-z0-9_-]{16,96}"))) { "参数窗口标识无效" }
+        return id
+    }
     private fun owner() = !closed && ownerCurrent() && controller.webPrivateOwnerVisible()
     fun dispatch(action: String, args: JSONObject, done: (JSONObject?, String?, String) -> Unit) {
         require(action in COMMANDS)
         check(owner()) { "请回到原私人对话选择模型" }
-        if (action == "models.conversation.close") { fields(args); clear(); done(JSONObject().put("closed", true), null, "not_accepted"); return }
-        val scope = controller.conversationModelScope()
-        val window = controller.webWindowTicket()
-        val originalGeneration = generation
-        fun current() = owner() && generation == originalGeneration && controller.webWindowTicket() == window && controller.conversationModelScope() == scope
+        if (action == "models.conversation.close") {
+            fields(args, "windowId")
+            val id = windowId(args)
+            // A delayed cleanup belongs to its own picker, never a newly opened one.
+            synchronized(gate) { if (reviewWindowId == id) clear() }
+            done(JSONObject().put("closed", true), null, "not_accepted"); return
+        }
         if (action == "models.conversation.snapshot") {
             fields(args)
             done(controller.conversationModelPreference(), null, "not_accepted"); return
         }
         val state = controller.state
         check(!state.chatSubmitting && !state.phoneSubmitting && !state.modelSaving && !state.modelTesting && !controller.modelSelectionPending()) { "请等待原输入或模型设置回执" }
+        val scope = controller.conversationModelScope()
+        val window = controller.webWindowTicket()
         if (action == "models.conversation.review") {
-            fields(args)
+            fields(args, "windowId")
+            val id = windowId(args)
+            synchronized(gate) { clear(); reviewWindowId = id }
+        }
+        val originalGeneration = generation
+        fun current() = owner() && generation == originalGeneration && controller.webWindowTicket() == window && controller.conversationModelScope() == scope
+        if (action == "models.conversation.review") {
+            val id = windowId(args)
             val before = controller.nativeModelSelection().status()
             val call = GatewayCall(60_000)
             synchronized(gate) { check(current()); activeReviews.add(call) }
@@ -70,11 +87,11 @@ internal class PocketWebConversationModels(
                             originalGeneration, review.getJSONObject("targetForReview").toString(), review.optLong("reasoningOwnerRevision", -1))
                     }
                     review.remove("targetForReview")
-                    review.put("reviewHandle", handle).put("expiresInMs", 120_000).put("selectionRevision", before.revision())
+                    review.put("windowId", id).put("reviewHandle", handle).put("expiresInMs", 120_000).put("selectionRevision", before.revision())
                 }
                 synchronized(gate) { activeReviews.remove(call); call.close() }
                 main.post {
-                    if (!current()) done(null, "原对话参数窗口已关闭，请重新读取", "not_accepted")
+                    if (!current()) done(null, "已结束这次参数读取", "read_superseded")
                     else result.fold({ done(PocketWebState.publicValue(it) as JSONObject, null, "not_accepted") }, { done(null, it.message ?: "此对话参数暂不可读取", "not_accepted") })
                 }
             }); return

@@ -19,7 +19,10 @@ internal fun backgroundConnectionState(display: JSONObject, activeTaskId: String
     val adb = display.optJSONObject("adb")
     val helper = display.optBoolean("helperConnected")
     val screen = helper && display.optBoolean("sessionActive") && display.optBoolean("readyForTask") && display.optInt("displayId", -1) > 0 && display.optString("sessionId").isNotBlank()
-    return BackgroundConnectionState(display.has("supportedAndroid"), display.optBoolean("supportedAndroid"), adb != null, display.optString("authorizationBackend"), display.optBoolean("taskOwned") || activeTaskId != null,
+    // A task waiting for first-time setup owns no display. The native resource pin, not
+    // the mere presence of a conversation/run, decides whether setup may be changed.
+    val taskOwned = display.optBoolean("taskOwned") || !display.has("taskOwned") && activeTaskId != null
+    return BackgroundConnectionState(display.has("supportedAndroid"), display.optBoolean("supportedAndroid"), adb != null, display.optString("authorizationBackend"), taskOwned,
         display.optBoolean("bootstrapBusy") || adb?.optBoolean("busy") == true || adb?.optBoolean("processTerminationPending") == true || pending.any { it in setOf("display.adb.pair", "display.adb.connect", "display.adb.cancel", "display.adb.forget", "display.shizuku.start", "display.shizuku.stop", "display.setup", "display.release") },
         display.optBoolean("sessionActive") || display.optBoolean("releasePending") || display.optBoolean("recoveryRequired"), adb?.optBoolean("recoveryRequired") == true, adb?.optBoolean("recoveryRequired") == true || display.optBoolean("recoveryRequired") || display.optBoolean("releasePending"),
         helper, screen, adb?.optString("phase").orEmpty(), adb?.optBoolean("identityPresent") == true)

@@ -69,20 +69,36 @@ public final class AdbBootstrap implements AdbBootstrapClient {
         bind(current);return snapshot();
     }
     public JSONObject connect(JSONObject input,JSONObject bootstrap,AuthenticatedStatus authenticatedStatus)throws Exception {
+        return connect(input,bootstrap,authenticatedStatus,()->{});
+    }
+    @Override public JSONObject connectForPreparation(JSONObject input,JSONObject bootstrap,AuthenticatedStatus authenticatedStatus,
+            dev.pocketengine.core.RunControl.AuthorityCheck current)throws Exception {
+        current.check();
+        if(!identity.exists()||!prefs.getString("pendingOperation","").isEmpty())throw new IllegalStateException("原ADB身份缺失或旧启动待核对，未自动配对或重试");
+        return connect(input,bootstrap,authenticatedStatus,current);
+    }
+    private JSONObject connect(JSONObject input,JSONObject bootstrap,AuthenticatedStatus authenticatedStatus,
+            dev.pocketengine.core.RunControl.AuthorityCheck authority)throws Exception {
+        authority.check();
         String host=LocalAdbEndpoints.current().check(input.optString("host","127.0.0.1"),input.getInt("connectPort"));
         LocalAdbEndpoints.distinctPorts(input.optInt("pairingPort",-1),input.getInt("connectPort"));
         if(authenticatedStatus==null)throw new IllegalArgumentException("后台助手必须提供真实status核验");
         JSONObject config=new JSONObject(bootstrap.toString());
         if(config.optInt("ownerUid",-1)!=Process.myUid()||!config.optString("socketName").matches("pocketengine\\.display\\.[a-f0-9]{32}")||!config.optString("token").matches("[a-f0-9]{64}"))throw new SecurityException("后台助手身份配置无效");
-        Attempt current=begin("connect",new JSONObject().put("host",host).put("connectPort",input.getInt("connectPort")).put("pairingPort",input.optInt("pairingPort",-1)),config,authenticatedStatus);
+        Attempt current=begin("connect",new JSONObject().put("host",host).put("connectPort",input.getInt("connectPort")).put("pairingPort",input.optInt("pairingPort",-1)),config,authenticatedStatus,authority);
         bind(current);return snapshot();
     }
     private Attempt begin(String action,JSONObject request,JSONObject config,AuthenticatedStatus status)throws Exception {
+        return begin(action,request,config,status,()->{});
+    }
+    private Attempt begin(String action,JSONObject request,JSONObject config,AuthenticatedStatus status,
+            dev.pocketengine.core.RunControl.AuthorityCheck authority)throws Exception {
+        authority.check();
         synchronized(lock){
             requireOpen();if(Build.VERSION.SDK_INT<34)throw new IllegalStateException("后台独立显示需要Android14或以上");
             if(attempt!=null||terminating||forgetPending)throw new IllegalStateException("已有无线ADB操作或进程回收尚未结束");
             long next=Math.addExact(generation,1);if(!prefs.edit().putLong("generation",next).commit())throw new IllegalStateException("无线ADB代次保存失败");
-            generation=next;ready=false;Attempt current=new Attempt(UUID.randomUUID().toString(),next,action,request,config,status);attempt=current;
+            generation=next;ready=false;Attempt current=new Attempt(UUID.randomUUID().toString(),next,action,request,config,status,authority);attempt=current;
             phase="binding";message="正在连接本应用的独立无线ADB启动器。";return current;
         }
     }
@@ -98,9 +114,10 @@ public final class AdbBootstrap implements AdbBootstrapClient {
         main.post(()->{
             if(connection!=next)return;
             try{
+                current.authority.check();
                 next.bound=context.bindService(new Intent(context,AdbBootstrapService.class),next,Context.BIND_AUTO_CREATE);
                 if(!next.bound)bindUnavailable(next,current);
-            }catch(RuntimeException unavailable){bindUnavailable(next,current);}
+            }catch(Exception unavailable){bindUnavailable(next,current);}
         });
         main.postDelayed(()->{if(current(current)&&phase.equals("binding"))terminate("bind_timeout","独立启动器连接超时；未把配对或连接视为成功。");},10000);
         main.postDelayed(()->{if(current(current))terminate(unknownPhase(current.action),"启动回执超时，正在结束本应用独立启动进程。");},60000);
@@ -116,6 +133,7 @@ public final class AdbBootstrap implements AdbBootstrapClient {
         execute(worker,()->{
             if(!current(current)||connection!=remote||remote.binder==null)return;
             try{
+                current.authority.check();
                 phase="checking_existing";message="先核对原助手与独立启动进程，避免重放未知配对。";publish();
                 ChildState child=info(remote.binder);
                 if(current.action.equals("connect")){
@@ -128,6 +146,8 @@ public final class AdbBootstrap implements AdbBootstrapClient {
                         if(clearPendingFor(current))finish(current,"ready","原后台助手已通过认证status核验。",true);return;
                     }catch(Exception notReady){if(!current(current))return;}
                 }
+                // A revoked task is not evidence that its helper is absent.
+                current.authority.check();
                 if(!idleChild(child)){
                     terminate(unknownPhase(current.action),"旧启动进程尚未完成；先回收后再连接核对，未重复配对。");return;
                 }
@@ -135,6 +155,7 @@ public final class AdbBootstrap implements AdbBootstrapClient {
                     byte[] helper=helper();
                     try{
                         if(!current(current))return;
+                        current.authority.check();
                         JSONObject request=current.request.put("action",current.action).put("operationId",current.id).put("generation",current.generation);
                         if(current.config!=null)request.put("bootstrap",current.config);
                         // Main process is the only preferences/vault writer. A crash after
@@ -143,6 +164,8 @@ public final class AdbBootstrap implements AdbBootstrapClient {
                         Parcel data=Parcel.obtain(),reply=Parcel.obtain();
                         try{
                             data.writeInterfaceToken(AdbBootstrapWire.SERVICE);data.writeString(request.toString());data.writeByteArray(material.key);data.writeByteArray(material.certificate);data.writeByteArray(helper);data.writeStrongBinder(callback);
+                            current.authority.check();
+                            if(!current(current))throw new SecurityException("原ADB启动请求已停止");
                             if(!remote.binder.transact(AdbBootstrapWire.REQUEST,data,reply,0))throw new RemoteException("私有启动协议不支持");reply.readException();
                         }finally{data.recycle();reply.recycle();request.remove("pairingCode");request.remove("bootstrap");}
                     }finally{Arrays.fill(helper,(byte)0);}
@@ -170,7 +193,9 @@ public final class AdbBootstrap implements AdbBootstrapClient {
     private void verifyStarted(Attempt current){
         if(!current(current))return;
         try{
+            current.authority.check();
             current.status.check();if(!current(current))return;Connection remote=connection;
+            current.authority.check();
             if(remote==null||!acknowledge(remote.binder,current.id))throw new IllegalStateException("启动器未接受真实核验回执");
             if(clearPendingFor(current))finish(current,"ready","后台助手已通过既有认证status核验。",true);
         }catch(Exception unknown){if(current(current))terminate("bootstrap_outcome_unknown","助手已请求启动但认证未完成，正在回收启动进程；请核对原助手。");}
@@ -252,7 +277,8 @@ public final class AdbBootstrap implements AdbBootstrapClient {
     }
     private static final class Attempt {
         final String id,action;final long generation;final JSONObject request,config;final AuthenticatedStatus status;
-        Attempt(String id,long generation,String action,JSONObject request,JSONObject config,AuthenticatedStatus status){this.id=id;this.generation=generation;this.action=action;this.request=request;this.config=config;this.status=status;}
+        final dev.pocketengine.core.RunControl.AuthorityCheck authority;
+        Attempt(String id,long generation,String action,JSONObject request,JSONObject config,AuthenticatedStatus status,dev.pocketengine.core.RunControl.AuthorityCheck authority){this.id=id;this.generation=generation;this.action=action;this.request=request;this.config=config;this.status=status;this.authority=authority;}
         void clearTransient(){request.remove("pairingCode");if(config!=null){config.remove("token");request.remove("bootstrap");}}
     }
     private static final class ChildState {final long generation;final String phase,operation;ChildState(long generation,String phase,String operation){this.generation=generation;this.phase=phase;this.operation=operation;}}

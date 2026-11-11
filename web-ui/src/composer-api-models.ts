@@ -4,7 +4,25 @@ const object = (value: any): ApiModelRecord => value && typeof value === 'object
 const exactVersion = (value: any): boolean => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 const identity = (value: any): value is string => typeof value === 'string' && value.trim().length > 0 && !value.includes('\0');
 export const apiModelKey = (row: ApiModelRecord): string => JSON.stringify([row.connectionId, row.modelId]);
-export const apiCapability = (fact: any): string => fact?.known === true && typeof fact.value === 'boolean' ? fact.value ? '支持' : '不支持' : '未声明';
+const booleanCapability = (fact: any): boolean => fact?.known === true && typeof fact.value === 'boolean';
+export const apiCapability = (fact: any): string => {
+  if (booleanCapability(fact)) return fact.value ? '支持' : '不支持';
+  return ({ not_returned_by_catalog: '服务未提供', catalog_expired: '资料待更新', not_observed: '尚未读取', owner_marked_unknown: '待确认' } as Record<string, string>)[fact?.reason] || '暂未确认';
+};
+type ModelCapability = 'imageInput' | 'toolCalls';
+const publicCapability = (row: ApiModelRecord, key: ModelCapability): boolean => !booleanCapability(row[key]) && row[key]?.source !== 'OWNER_OVERRIDE'
+  && row.capabilityReference?.available === true && booleanCapability(row.capabilityReference[key]);
+/** Public model metadata informs the picker without changing native request admission. */
+export const apiModelCapability = (row: ApiModelRecord, key: ModelCapability): string => publicCapability(row, key)
+  ? `${row.capabilityReference[key].value ? '支持' : '不支持'}（${row.capabilityReference.stale === true ? '缓存资料' : '公开资料'}）` : apiCapability(row[key]);
+export function apiModelCapabilityNote(row: ApiModelRecord, index: ApiModelRecord = {}): string {
+  if (publicCapability(row, 'imageInput') || publicCapability(row, 'toolCalls')) return '能力信息补充自 models.dev，当前接入的实际支持可能不同。';
+  if (booleanCapability(row.imageInput) && booleanCapability(row.toolCalls)) return '';
+  if (['imageInput', 'toolCalls'].some(key => row[key]?.source === 'OWNER_OVERRIDE' && !booleanCapability(row[key]))) return '有能力被手动标记为待确认，可在模型设置中调整。';
+  if (index.refreshing === true) return '正在更新公开模型资料，稍后重新读取可查看。';
+  if (index.available === false) return '公开模型资料暂不可用，未确认不代表模型不支持。';
+  return '当前资料未提供完整能力信息，未确认不代表模型不支持。';
+}
 export function apiModelUnavailable(row: ApiModelRecord): string {
   if (row.available === true) return '';
   return ({ connection_disabled: '连接已停用', connection_unavailable: '原连接不可用', catalog_model_unavailable: '模型已不在原目录', catalog_protocol_mismatch: '此连接协议不适用于该模型', model_reference_not_supported: '此模型引用暂不支持' } as Record<string, string>)[row.unavailableReason] || '原连接或模型当前不可用';

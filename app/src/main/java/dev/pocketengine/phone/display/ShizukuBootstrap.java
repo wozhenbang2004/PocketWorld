@@ -69,7 +69,13 @@ final class ShizukuBootstrap implements AutoCloseable {
         return snapshot();
     }
 
-    synchronized JSONObject start(JSONObject configuration,Runnable authenticatedReady){
+    synchronized JSONObject start(JSONObject configuration,Runnable authenticatedReady)throws Exception {
+        return start(configuration,authenticatedReady,()->{});
+    }
+    JSONObject start(JSONObject configuration,Runnable authenticatedReady,
+            dev.pocketengine.core.RunControl.AuthorityCheck authority)throws Exception {
+        authority.check();
+        synchronized(this){
         JSONObject current=snapshot();
         if(closed){status="closed";message="后台授权组件已关闭。";return snapshot();}
         if(!supported(current))return snapshot();
@@ -78,37 +84,41 @@ final class ShizukuBootstrap implements AutoCloseable {
         final long epoch=generation.incrementAndGet();starting=true;status="starting";message="正在以已授权的Shizuku启动后台助手。";
         IBinder existing=remote;
         if(existing!=null&&existing.isBinderAlive()){
-            initializeRemote(existing,configuration,authenticatedReady,epoch);watchdog(epoch);return snapshot();
+            initializeRemote(existing,configuration,authenticatedReady,epoch,authority);watchdog(epoch);return snapshot();
         }
         ServiceConnection next=new ServiceConnection(){
             @Override public void onServiceConnected(ComponentName name,IBinder service){
                 if(closed||generation.get()!=epoch)return;
                 remote=service;
-                initializeRemote(service,configuration,authenticatedReady,epoch);
+                initializeRemote(service,configuration,authenticatedReady,epoch,authority);
             }
             @Override public void onServiceDisconnected(ComponentName name){
                 if(generation.get()!=epoch)return;remote=null;starting=false;status="service_disconnected";message="后台UserService已断开，未回落到主屏。";publish();
             }
         };
         connection=next;
-        main.post(()->{try{if(!closed&&generation.get()==epoch)Shizuku.bindUserService(args,next);}
-            catch(RuntimeException failed){if(generation.get()==epoch){starting=false;status="bind_failed";message="Shizuku无法绑定后台UserService。";publish();}}});
+        main.post(()->{try{authority.check();if(!closed&&generation.get()==epoch)Shizuku.bindUserService(args,next);}
+            catch(Exception failed){if(generation.get()==epoch){starting=false;status="bind_failed";message="Shizuku无法绑定后台UserService，或原连接请求已失效。";publish();}}});
         watchdog(epoch);return snapshot();
+        }
     }
     private void watchdog(long epoch){
         main.postDelayed(()->{if(generation.get()==epoch&&starting){generation.incrementAndGet();starting=false;status="bind_timeout";message="后台UserService启动或握手超时，请检查Shizuku后重试。";publish();}},15_000);
     }
-    private void initializeRemote(IBinder service,JSONObject configuration,Runnable authenticatedReady,long epoch){
+    private void initializeRemote(IBinder service,JSONObject configuration,Runnable authenticatedReady,long epoch,
+            dev.pocketengine.core.RunControl.AuthorityCheck current){
         if(closed)return;
         try{bootstrap.execute(()->{
             Parcel input=Parcel.obtain(),output=Parcel.obtain();
             try{
                 if(closed||generation.get()!=epoch||!authorized())return;
+                current.check();
                 input.writeInterfaceToken(ShizukuDisplayService.DESCRIPTOR);input.writeString(configuration.toString());
                 if(!service.transact(ShizukuDisplayService.START,input,output,0))throw new IllegalStateException();
                 output.readException();JSONObject result=new JSONObject(output.readString());
                 if(!result.optBoolean("ok"))throw new IllegalStateException();
                 if(closed||generation.get()!=epoch||!authorized())return;
+                current.check();
                 authenticatedReady.run();
                 if(generation.get()==epoch){status="connected";message="Shizuku后台助手已通过真实连接核验。";}
             }catch(Exception unavailable){if(generation.get()==epoch){status="start_failed";message="后台助手启动或握手失败，请检查Shizuku和系统支持。";}}

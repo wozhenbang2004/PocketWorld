@@ -1,5 +1,21 @@
 # PocketWorld UI/UX · 2026-11-10
 
+## 2026-11-11 模型能力数据接线与选择详情
+
+PW-MODEL-CAP-1：本轮用户反馈截图中的 `gpt-6-luna / OpenAI API` 将图片输入、工具调用都写成“未声明”，并要求对照 Mika、DSH Go、AionUI 的真实实现。反馈由 root 转交，精确消息 ID 未提供；实际查看原截图 `1000121281.jpg`。本项不改变已批准选择器外壳，不把旧布局当作能力判断依据。基线已跟进至 main `d2a3d41f8c64a23ce2aaecd8d0dedcd3dd31a5a8`，保留同批选择器响应与退场生命周期修改。
+
+根因不是模型已确认不支持：标准 OpenAI 模型列表仅提供身份，`CatalogParser.OPENAI` 不产生图片/工具事实；现有 `ModelKnowledgeRegistry` 已下载 models.dev 并保存原始 gzip 缓存，但其 Entry/enrich 只读取推理能力，图片和工具字段未投影到选择器。旧 `ModelMetadataSuggestions` 虽解析这些字段，却是另一条手动参考路径。本轮复用既有注册表与缓存，不新增第二模型库或自动探针。
+
+具体采用：注册表读取 v1 `tool_call` 与 `modalities.input`，原模型 ID 精确匹配；缺失、畸形字段保留未知。通过 `ModelCatalog` 与 `modelPickerSnapshot` 增加独立 `capabilityReference`，包含 provider/model 身份、来源、读取时间与缓存过期状态。显示优先级为明确的接口/手动事实，再用公开参考；手动标记未知也保留，不被参考覆盖。公开参考显示“支持（公开资料）”或“不支持（公开资料）”，过期资料明确标缓存，不能伪装当前服务已确认；仍无资料时解释未读取/服务未提供/待更新，不再统一写“未声明”。详情保留管理入口，资料更新期间可重新读取。图片支持与任务权限文案分开。未改 `ModelRequestPolicy`、工具授权、连接选择、模型历史或已进行中的请求，公共资料不会放宽执行准入。
+
+同维度对照与取舍：
+- [Mika 固定源码](https://github.com/wangzan101/Mika/blob/1473f143285950f1266378f4c1ad613efb182ee9/core/src/main/kotlin/com/wangzan101/mika/core/model/ModelCatalog.kt)：nullable 能力、逐字段合并及 known 标记，UI 区分用户设定、服务列表、未确认。取用来源与未知分离，不移植其探针执行或将默认 provider caps 当作已确认。
+- [DSH Go 模型配置](https://github.com/ccch1mneyyy/dsh-Go/blob/8f31b2ed8c3fe0b49451379af7af4ddd00f29eef/packages/dsh_client/lib/src/providers_api.dart)：已安装目录、接口 discover、用户 ModelOverride 分开；缺省输入沿 routeDefault，不是接口证明。[设置页](https://github.com/ccch1mneyyy/dsh-Go/blob/8f31b2ed8c3fe0b49451379af7af4ddd00f29eef/app/lib/ui/providers/provider_model_page.dart)保留未编辑字段、按支持显示推理选项。取用现有数据链与覆盖语义，不照抄 text-only 默认成“不支持”。
+- [AionUI 固定源码](https://github.com/iOfficeAI/AionUi/blob/e108b6b56b1a6eb99a00904878d0582f657b2908/packages/desktop/src/common/utils/modelCapabilities.ts)：API 选择链路存在名称正则推断；显式 image_input 覆盖与 ACP 运行时配置是不同机制。取用低噪声披露和明确覆盖，不采用名称推断作为执行能力或放行依据。
+- [models.dev v1 转换源码](https://github.com/anomalyco/models.dev/blob/ef81bdff8d747eb4a0f75964b782247365f3b285/packages/core/src/translate.ts)与固定 schema 已读取，确认工具布尔值、输入 modalities 来自实际字段。公开全量接口因阅读工具大小限制未完整下载，不冒称本机已读当前完整数据。[GPT-6 Luna 官方说明](https://developers.openai.com/api/docs/models/gpt-6-luna)明确图片输入与函数调用，同时 Chat Completions 的函数调用受 reasoning_effort=none 约束；这也是模型资料不能等同任意网关实际兼容性的具体例子。
+
+审美沿现有 BoardUI Button、选择器事实列表与既有低权重说明，不新造控件/卡片/颜色体系。相关检查为 UIX-03/06/09：资料跟随原模型、来源不混同权限、无空泛状态。已做源码链路检查、TS/TSX 语法编译、能力展示 helper 的独立 TypeScript 类型检查及 diff 空白检查；未写或运行测试、未运行应用/真机。完整应用构建、公开资料在用户缓存中的实际命中及当前视觉/交互仍待集成和用户体验，不宣称已通过。
+
 ## 2026-11-11 管家主入口 · 产品层级纠正
 
 本轮用户原话：“我们产品不是要有什么管家主入口吗？”本聊天，记录于北京时间 07:58；精确消息 ID 与发送时间不可取得。个人上下文找回的 11-04 原话为“一个唯一的入口给用户”“相当于一个私人管家”，由它安排任务给不同子 Agent，记忆主要服务私人管家；这些是检索返回的原话片段，不冒充已读取完整原对话。当前源码 `NativeInstructionProfile.OWNER_BUTLER` 与普通私人会话宿主印证统一接待、独立工作和结果回原请求的关系。

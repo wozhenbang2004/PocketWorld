@@ -3,7 +3,7 @@ import { IconAdd, IconArrowLeft, IconCheck, IconChevronRight, IconInfo, IconMode
 import { Accordion, AccordionItem, Button, IconButton, SearchField, SelectField, TextField } from './forms-library';
 import { Tabs, Tab, TabList, TabPanel } from './shell-library';
 import { ShimmerText } from './library';
-import { apiCapability, apiModelFavorite, apiModelKey, apiModelProjectionCurrent, apiModelReviewCurrent, apiModelReviewRequest, apiModelRows, apiModelSelection, apiModelUnavailable, type ApiModelFilter } from './composer-api-models';
+import { apiCapability, apiModelCapability, apiModelCapabilityNote, apiModelFavorite, apiModelKey, apiModelProjectionCurrent, apiModelReviewCurrent, apiModelReviewRequest, apiModelRows, apiModelSelection, apiModelUnavailable, type ApiModelFilter } from './composer-api-models';
 import { accountModelAccountRows, accountModelCatalog, accountModelProjectionCurrent, accountModelReadRequest, accountModelReasoningLevels, accountModelReviewCurrent, accountModelReviewRequest, accountModelSelection, type AccountModelOptions } from './composer-account-models';
 import { conversationModelName, conversationModelStamp, conversationSelectionReceipt, modelPickerSelected, modelPickerSourceChanged, type PickerModelIdentity } from './conversation-model-selection';
 import './ai-center.css';
@@ -280,7 +280,8 @@ export function AIModelPicker({ state, can, act, scope = 'conversation', active 
     accountRows.some(row => isSelected({ kind: 'account', nativeRef: row.nativeRef }, !defaultGroup?.groupId && shown.modelRoute === 'account' && selectedAccount?.accountId === catalog!.accountId && selectedAccount?.accountVersion === catalog!.accountVersion && selectedAccount?.modelId === row.id))
   );
   const model = review?.value.model || {}, facts = review?.value.catalogFacts?.facts || {};
-  const levels = accountModelReasoningLevels(review?.value), known = (key: string) => facts[key]?.known === true ? facts[key].value : undefined;
+  const levels = accountModelReasoningLevels(review?.value);
+  const capabilityNote = review?.kind === 'api' ? apiModelCapabilityNote(model, api?.publicModelIndex) : '';
   let selectable = false, favoritable = false;
   try { if (!review) throw new Error(); selection(review, options); selectable = true; } catch {}
   try { if (review?.kind !== 'api') throw new Error(); selection(review, options, true); favoritable = true; } catch {}
@@ -328,7 +329,9 @@ export function AIModelPicker({ state, can, act, scope = 'conversation', active 
     {groupReview ? <div className="pw-ai-model-review"><Button variant="ghost" leadingIcon={IconArrowLeft} disabled={locked} onClick={() => setGroupReview(null)}>返回模型</Button><header><h3>{groupReview.name}</h3><p>模型组 · {Array.isArray(groupReview.candidates) ? groupReview.candidates.length : 0} 个候选</p></header><div className="pw-ai-model-rows">{(Array.isArray(groupReview.candidates) ? groupReview.candidates : []).map((candidate: Data, index: number) => <div className="pw-ai-group-candidate-preview" key={candidate.candidateId}><span>{index + 1}</span><span className="pw-ai-row-copy"><strong>{candidate.target?.modelId || '原候选'}</strong><small>{candidate.target?.connectionId}{candidate.enabled === false ? ' · 已停用' : ''}</small></span></div>)}</div><p className="pw-ai-muted">{groupReview.attemptPolicy?.maxRouteSwitches === 1 ? '失败时可切换至下一候选。' : '失败切换未开启。'}</p><div className="pw-ai-picker-actions"><Button disabled={locked || scope === 'conversation' && !onSelectTarget} onClick={() => void selectGroup(groupReview)}>{scope === 'conversation' ? '用于本对话' : '设为默认模型组'}</Button></div></div> : review ? <div className="pw-ai-model-review">
       <Button variant="ghost" leadingIcon={IconArrowLeft} disabled={locked} onClick={() => setReview(null)}>返回模型</Button>
       <header><h3>{review.kind === 'api' ? model.modelId : review.value.displayName || review.value.modelId}</h3><p>{review.kind === 'api' ? model.connectionName || model.connectionId : `ChatGPT · ${review.value.accountLabel || review.value.accountId}`}</p></header>
-      <dl className="pw-ai-model-facts"><div><dt>图片输入</dt><dd>{review.kind === 'api' ? apiCapability(model.imageInput) : known('IMAGE_INPUT') === undefined ? '未声明' : known('IMAGE_INPUT') ? '支持，仍需任务授权' : '不支持'}</dd></div>{review.kind === 'api' && <div><dt>工具调用</dt><dd>{apiCapability(model.toolCalls)}</dd></div>}</dl>
+      <dl className="pw-ai-model-facts"><div><dt>图片输入</dt><dd>{review.kind === 'api' ? apiModelCapability(model, 'imageInput') : apiCapability(facts.IMAGE_INPUT)}</dd></div>{review.kind === 'api' && <div><dt>工具调用</dt><dd>{apiModelCapability(model, 'toolCalls')}</dd></div>}</dl>
+      {capabilityNote && <p className="pw-ai-muted">{capabilityNote}</p>}
+      {review.kind === 'api' && capabilityNote && <div className="pw-ai-picker-actions">{api?.publicModelIndex?.refreshing === true && <Button variant="ghost" leadingIcon={IconRefresh} disabled={locked} onClick={() => void refresh()}>重新读取</Button>}{onManage && <Button variant="ghost" trailingIcon={IconChevronRight} disabled={locked} onClick={onManage}>管理模型</Button>}</div>}
       {review.kind === 'api' && !model.available && <p role="alert">{apiModelUnavailable(model)}</p>}
       {review.kind === 'account' && <>
         {scope === 'default' && levels.length > 0 && <SelectField label="推理设置" value={options.reasoningEffort || 'service-default'} options={[{ id: 'service-default', label: '服务默认' }, ...levels.map(level => ({ id: level, label: level }))]} onChange={value => setOptions(old => ({ ...old, reasoningEffort: value === 'service-default' ? '' : value }))} isDisabled={locked} />}

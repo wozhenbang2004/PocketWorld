@@ -364,6 +364,139 @@ public final class DisplayModule implements EngineModule {
         state=publicState(answer).put("sessionActive",true);connected=true;message="独立后台屏已创建；主屏不会作为备用执行位置。";
         return snapshot();
     }
+    /** Demand-connect the selected helper before readiness; an existing display is never replaced. */
+    public void connectForPreparation(RunControl original,long revision,
+            dev.pocketengine.phone.observation.NativePhoneEntry.Admission ownerPreparation)throws Exception {
+        checkPreparation(original,revision,ownerPreparation);
+        RunSession run=requireRun(original);
+        try {
+            synchronized(run){connectRun(run,original,revision,ownerPreparation!=null);}
+        } catch(java.io.IOException unavailable) {
+            checkPreparation(original,revision,ownerPreparation);
+            try{connectSelectedHelper(original,revision,ownerPreparation);}
+            catch(Exception failed){failed.addSuppressed(unavailable);throw failed;}
+            synchronized(run){connectRun(run,original,revision,ownerPreparation!=null);}
+        }
+        checkPreparation(original,revision,ownerPreparation);
+    }
+    private void checkPreparation(RunControl original,long revision,
+            dev.pocketengine.phone.observation.NativePhoneEntry.Admission ownerPreparation)throws Exception {
+        context.requireExecutionEnabled();original.check();
+        if(ownerPreparation!=null)ownerPreparation.check();
+        if(original.isPaused()!=(ownerPreparation!=null)||original.pauseRevision()!=revision||!original.phoneSurfaceActive())
+            throw new SecurityException("原手机准备暂停代次或操作范围已变化");
+        requireRun(original);
+    }
+    private void requireUnusedHelper(RunControl original)throws Exception {
+        RunSession run=requireRun(original);
+        if(run.created||run.released||run.creationPending||run.state.optBoolean("recoveryRequired"))
+            throw new IllegalStateException("原运行已持有过后台显示或结果待核对，不能重启助手替换原会话");
+        if(retainedDisplays())throw new IllegalStateException("原后台显示或创建结果仍待核对，不能重启助手替换原会话");
+        if(adb.snapshot().optBoolean("recoveryRequired"))throw new IllegalStateException("上次无线ADB启动结果未确认，请先在连接设置核对原助手");
+    }
+    /** One bounded attempt per preparation, using the selected backend's existing identity/authorization. */
+    private void connectSelectedHelper(RunControl original,long revision,
+            dev.pocketengine.phone.observation.NativePhoneEntry.Admission ownerPreparation)throws Exception {
+        String selected;JSONObject config;
+        checkPreparation(original,revision,ownerPreparation);
+        synchronized(this){
+            requireUnusedHelper(original);selected=backend();
+            if(!selected.equals("shizuku")&&!selected.equals("wireless_adb"))
+                throw new IllegalStateException("电脑启动的后台助手已不可达，请重新执行原启动命令后连接；没有切换授权方式");
+            config=existingConfiguration();
+            if(selected.equals("shizuku")&&!shizuku.authorized())throw new SecurityException("请先启动已选的Shizuku并恢复原授权；没有自动申请权限");
+            if(selected.equals("wireless_adb")&&!adb.snapshot().optBoolean("identityPresent"))
+                throw new IllegalStateException("本机无线ADB尚未配对，请在手机操作设置完成首次配对");
+        }
+        JSONObject endpoint=selected.equals("wireless_adb")?discoverPreparationEndpoint(original,revision,ownerPreparation):null;
+        final long epoch;final boolean started;
+        checkPreparation(original,revision,ownerPreparation);
+        synchronized(this){
+            requireUnusedHelper(original);
+            if(!selected.equals(backend()))throw new SecurityException("原后台授权方式已变化");
+            started=!bootstrapBusy();epoch=started?++bootstrapEpoch:bootstrapEpoch;
+            if(started){verifiedAdbStatus=null;verifiedAdbEpoch=-1;}
+        }
+        if(started){
+                dev.pocketengine.core.RunControl.AuthorityCheck current=()->{
+                    checkPreparation(original,revision,ownerPreparation);
+                    if(epoch!=bootstrapEpoch||!selected.equals(backend()))throw new SecurityException("原后台连接请求已失效");
+                };
+                if(selected.equals("shizuku"))shizuku.start(config,()->{
+                    try{current.check();synchronized(requireRun(original)){connectRun(requireRun(original),original,revision,ownerPreparation!=null);}current.check();}
+                    catch(Exception failed){throw new IllegalStateException("原Shizuku后台助手连接核验失败",failed);}
+                },current);
+                else adb.connectForPreparation(endpoint,config,()->{
+                    current.check();JSONObject answer=call("status",new JSONObject(),original,revision,ownerPreparation!=null,null);validateStatus(answer);
+                    current.check();
+                    synchronized(DisplayModule.this){
+                        if(epoch!=bootstrapEpoch||!selected.equals(backend()))throw new SecurityException("原后台连接请求已失效");
+                        verifiedAdbStatus=new JSONObject(answer.toString());verifiedAdbEpoch=epoch;
+                    }
+                },current);
+        }
+        Runnable cancel=()->{
+            if(!started||!selected.equals("wireless_adb"))return;
+            synchronized(DisplayModule.this){if(epoch==bootstrapEpoch&&bootstrapBusy())adb.cancel();}
+        };
+        original.onCancel(cancel);
+        try{
+            long deadline=System.nanoTime()+java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(selected.equals("shizuku")?16_000L:65_000L);
+            while(bootstrapBusy()){
+                checkPreparation(original,revision,ownerPreparation);
+                if(epoch!=bootstrapEpoch)throw new SecurityException("原后台连接请求已被替代");
+                if(System.nanoTime()>=deadline)throw new IllegalStateException("原后台助手连接超时，请到连接设置核对；未重复启动或切换主屏");
+                Thread.sleep(50);
+            }
+            checkPreparation(original,revision,ownerPreparation);
+            if(epoch!=bootstrapEpoch)throw new SecurityException("原后台连接请求已被替代");
+            JSONObject result=selected.equals("shizuku")?shizuku.snapshot():adb.snapshot();
+            if(selected.equals("shizuku")?!"connected".equals(result.optString("status")):!result.optBoolean("helperAuthenticated"))
+                throw new IllegalStateException(result.optString("message","后台助手连接未确认，请核对原连接"));
+        }catch(Exception failure){cancel.run();throw failure;}
+        finally{original.removeCancelAction(cancel);}
+    }
+    private JSONObject existingConfiguration()throws Exception {
+        String socket=prefs.getString("socketName",""),token=context.secrets.get("display.token");
+        if(socket.isEmpty()||token==null||token.isEmpty())throw new IllegalStateException("请先完成独立后台助手设置，当前没有可恢复的原连接身份");
+        return new JSONObject().put("socketName",socket).put("token",token).put("ownerUid",android.os.Process.myUid());
+    }
+    private JSONObject discoverPreparationEndpoint(RunControl original,long revision,
+            dev.pocketengine.phone.observation.NativePhoneEntry.Admission ownerPreparation)throws Exception {
+        long startedAt=System.currentTimeMillis(),deadline=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(8);
+        adb.discover();
+        do{
+            checkPreparation(original,revision,ownerPreparation);requireUnusedHelper(original);
+            JSONObject discovery=adb.snapshot().optJSONObject("discovery");JSONArray endpoints=discovery==null?null:discovery.optJSONArray("connect");
+            JSONObject selected=null;int port=-1;
+            if(endpoints!=null)for(int i=0;i<endpoints.length();i++){
+                JSONObject candidate=endpoints.getJSONObject(i);
+                if(candidate.optLong("resolvedAt",-1)<startedAt)continue;
+                String host=LocalAdbEndpoints.current().check(candidate.optString("host"),candidate.getInt("port"));
+                if(selected!=null&&port!=candidate.getInt("port"))throw new IllegalStateException("发现多个本机无线调试连接端口，请在连接设置明确选择；未猜测目标");
+                port=candidate.getInt("port");selected=new JSONObject().put("host",host).put("connectPort",port);
+            }
+            if(selected!=null)return selected;
+            Thread.sleep(50);
+        }while(System.nanoTime()<deadline);
+        throw new IllegalStateException("未发现当前本机无线调试连接端口，请先开启无线调试或在连接设置输入当前端口；没有重新配对或连接其他设备");
+    }
+    /** A needs-user preparation with no physical effect must not lock the owner's setup page. */
+    public boolean releaseUnusedPreparation(RunControl original){
+        if(original==null||original.hostRunIdentity()==null)return false;
+        RunSession run=runSessions.get(original.hostRunIdentity());
+        if(run==null||run.control!=original)return false;
+        boolean removed;
+        synchronized(run){
+            if(runSessions.get(run.owner)!=run||run.created||run.released||run.creationPending||run.releasePending
+                    ||run.state.optBoolean("sessionActive")||run.state.optBoolean("recoveryRequired")
+                    ||bootstrapBusy()||adb.snapshot().optBoolean("recoveryRequired"))return false;
+            run.pinned=false;removed=runSessions.remove(run.owner,run);
+        }
+        if(removed&&!context.executionAllowed()&&!ownersPinned())try{stopForOwnerDisable();}
+        catch(Exception unknown){message="原后台资源释放尚未确认，请核对原连接";}
+        return removed;
+    }
     public JSONObject prepare(RunControl control)throws Exception {
         if(control!=null&&control.hasHostRun()){
             pinOwner(control);RunSession run=requireRun(control);

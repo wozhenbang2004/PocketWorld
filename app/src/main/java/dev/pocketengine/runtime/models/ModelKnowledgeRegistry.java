@@ -46,7 +46,7 @@ final class ModelKnowledgeRegistry {
     private static final Set<String> ALLOWED_EFFORT = Set.of("none", "minimal", "low", "medium", "high", "xhigh", "max");
 
     private record Entry(String modelId, boolean reasoning, List<String> effort, boolean toggle, boolean budget,
-                         String canonicalId, String name) { }
+                         String canonicalId, String name, Boolean imageInput, Boolean toolCalls) { }
     private record Provider(String id, String apiHost, Map<String, Entry> models) { }
     private record Index(long updatedAt, Map<String, Provider> providers, int modelCount) {
         static Index empty() { return new Index(0, Map.of(), 0); }
@@ -134,9 +134,31 @@ final class ModelKnowledgeRegistry {
         return inferred.isEmpty() ? facts : facts.withOverrides(inferred);
     }
 
+    /** Model reference data for display, never a grant or proof of gateway support. */
+    JSONObject capabilityReference(ModelBinding binding, String modelId) throws org.json.JSONException {
+        Index data = index;
+        ProviderMatch match = resolve(data, binding, modelId);
+        JSONObject out = new JSONObject().put("available", match != null).put("source", "models.dev");
+        if (match == null) return out;
+        Entry entry = match.entry;
+        String reference = "public-model-index:" + match.provider.id + "/" + entry.modelId;
+        long age = clock.millis() - data.updatedAt;
+        return out.put("providerId", match.provider.id).put("modelId", entry.modelId)
+                .put("observedAtMillis", data.updatedAt).put("stale", age < 0 || age > REFRESH_INTERVAL_MS)
+                .put("imageInput", referenceFact(entry.imageInput, reference + "/modalities/input", data.updatedAt).toJson())
+                .put("toolCalls", referenceFact(entry.toolCalls, reference + "/tool_call", data.updatedAt).toJson());
+    }
+
+    private static Fact<Boolean> referenceFact(Boolean value, String reference, long at) {
+        return value == null ? Fact.unknown(Source.PUBLIC_REGISTRY, reference, at, "not_returned_by_registry")
+                : Fact.known(value, Source.PUBLIC_REGISTRY, reference, at);
+    }
+
     private record ProviderMatch(Provider provider, Entry entry) { }
     private ProviderMatch resolve(ModelBinding binding, String requestedId) {
-        Index data = index;
+        return resolve(index, binding, requestedId);
+    }
+    private ProviderMatch resolve(Index data, ModelBinding binding, String requestedId) {
         if (data.providers.isEmpty()) return null;
         String bare = requestedId;
         String explicitProvider = "";
@@ -237,7 +259,8 @@ final class ModelKnowledgeRegistry {
                 String modelId = modelKeys.next();
                 if (modelId.isEmpty() || modelId.length() > 300) continue;
                 JSONObject row = models.optJSONObject(modelId);
-                if (row == null || !row.has("reasoning") || !(row.opt("reasoning") instanceof Boolean)) continue;
+                if (row == null || row.has("id") && !modelId.equals(row.opt("id"))
+                        || !row.has("reasoning") || !(row.opt("reasoning") instanceof Boolean)) continue;
                 boolean reasoning = row.optBoolean("reasoning", false);
                 List<String> efforts = new ArrayList<>();
                 boolean toggle = false, budget = false;
@@ -260,13 +283,27 @@ final class ModelKnowledgeRegistry {
                     }
                 }
                 entries.put(modelId, new Entry(modelId, reasoning, List.copyOf(efforts), toggle, budget,
-                        row.optString("canonical_model_id", ""), row.optString("name", "")));
+                        row.optString("canonical_model_id", ""), row.optString("name", ""), imageInput(row),
+                        row.opt("tool_call") instanceof Boolean value ? value : null));
                 count++;
             }
             if (!entries.isEmpty()) providers.put(providerId, new Provider(providerId, apiHost, Map.copyOf(entries)));
         }
         if (count == 0) throw new IllegalArgumentException("model_index_empty");
         return new Index(refreshedAt, Collections.unmodifiableMap(providers), count);
+    }
+
+    private static Boolean imageInput(JSONObject row) {
+        JSONObject modalities = row.optJSONObject("modalities");
+        JSONArray inputs = modalities == null ? null : modalities.optJSONArray("input");
+        if (inputs == null || inputs.length() == 0 || inputs.length() > 32) return null;
+        boolean image = false;
+        for (int n = 0; n < inputs.length(); n++) {
+            Object raw = inputs.opt(n);
+            if (!(raw instanceof String type) || !type.matches("[a-z][a-z0-9_+./-]{0,63}")) return null;
+            image |= type.equals("image") || type.startsWith("image/");
+        }
+        return image;
     }
 
     private static byte[] download() throws Exception {

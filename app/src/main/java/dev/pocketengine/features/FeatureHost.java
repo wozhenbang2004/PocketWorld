@@ -745,7 +745,10 @@ public final class FeatureHost implements AutoCloseable {
                     }
                     if(result!=null){String id=result.optString("hostTaskId",result.optString("taskId"));if(!id.isEmpty())emitTask(id);reply(feature,command,requestId,true,result,null);sendState();return;}
                 }
-                if(feature.equals("display")&&phoneBusy.getAsBoolean())throw new IllegalStateException("手机任务持有后台屏资源，请先停止执行再检查、更改或释放后台助手");
+                // Native display admission uses actual run pins and recovery barriers. A
+                // logical task waiting for first-time setup must not lock out that setup.
+                if(feature.equals("display")&&!(module instanceof dev.pocketengine.phone.display.DisplayModule)&&phoneBusy.getAsBoolean())
+                    throw new IllegalStateException("手机任务持有后台屏资源，请先停止执行再检查、更改或释放后台助手");
                 if(tasks!=null&&tracked(feature,command)){
                     if(feature.equals("ssh")){input.put("_resourceId",sshResource(module,input));requireSshCapturedBinding(module,input);}
                     String id=UUID.randomUUID().toString();

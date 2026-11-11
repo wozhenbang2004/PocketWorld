@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ModelPicker, ShimmerText } from './library';
 import { Button, RadioOptions } from './forms-library';
 import { PermissionReview } from './shell-library';
-import { apiCapability, apiModelFavorite, apiModelKey, apiModelProjectionCurrent, apiModelReviewCurrent, apiModelReviewRequest, apiModelRows, apiModelSelection, apiModelUnavailable, type ApiModelFilter, type ApiModelRecord } from './composer-api-models';
+import { apiModelCapability, apiModelCapabilityNote, apiModelFavorite, apiModelKey, apiModelProjectionCurrent, apiModelReviewCurrent, apiModelReviewRequest, apiModelRows, apiModelSelection, apiModelUnavailable, type ApiModelFilter, type ApiModelRecord } from './composer-api-models';
 import './composer-models.css';
 import './model-picker-depth.css';
 
@@ -89,11 +89,12 @@ export function ComposerApiModels({ state, can, act, onSelected, onSelectionPend
     {loading ? <div className="pw-loading-models" aria-busy="true"><ShimmerText>正在读取连接与模型</ShimmerText></div> : review && row ? <PermissionReview
       title={String(row.modelId)} context={`API 连接：${row.connectionName || row.connectionId}`}
       reason={row.available ? '此选择用于之后开始的任务，已有任务保留原模型。模型能力与工具授权分别核对。' : apiModelUnavailable(row)}
-      fields={[{ label: '图片输入', value: apiCapability(row.imageInput) }, { label: '工具调用', value: apiCapability(row.toolCalls) },
+      fields={[{ label: '图片输入', value: apiModelCapability(row, 'imageInput') }, { label: '工具调用', value: apiModelCapability(row, 'toolCalls') },
         { label: '目录状态', value: row.catalogFresh === true ? '已读取' : '尚未获取或已过期，保留原能力记录' }, { label: '最近成功使用', value: recent(row) || '尚无成功使用记录' }]}
       pending={writing || !!state.modelSelectionBusy} onApprove={!locked && selection && !needsRead ? () => void write('select') : undefined}
       onReject={() => { if (!writing) setReview(null); }} approveLabel="确认切换主模型" rejectLabel="返回模型目录">
       {!apiModelReviewCurrent(review, projection, state.modelSelectionRevision) && <p className="pw-error" role="alert">原模型记录已变化，请重新读取。</p>}
+      {apiModelCapabilityNote(row, projection?.publicModelIndex) && <p className="pw-field-hint">{apiModelCapabilityNote(row, projection?.publicModelIndex)}</p>}
       <div className="pw-action-row"><Button variant="secondary" disabled={locked || !favorite || needsRead} onClick={() => void write('favorite')}>{row.favorite ? '取消收藏' : '收藏此模型'}</Button></div>
     </PermissionReview> : current && !needsRead ? <>
 

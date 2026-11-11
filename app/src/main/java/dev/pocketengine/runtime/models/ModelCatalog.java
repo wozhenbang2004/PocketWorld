@@ -72,6 +72,10 @@ public final class ModelCatalog {
     Path selectionMetadataPath() { return file.resolveSibling(file.getFileName().toString() + ".model-preferences"); }
     public void refreshPublicIndexAsync() { publicIndex.refreshIfDueAsync(); }
     public JSONObject publicIndexStatus() throws org.json.JSONException { return publicIndex.status(); }
+    public synchronized JSONObject publicCapabilityReference(ModelKey key) throws org.json.JSONException {
+        requireActive(key.binding());
+        return publicIndex.capabilityReference(key.binding(), key.modelId());
+    }
 
     Path thirdPartyMetadataPath() { return file.resolveSibling(file.getFileName().toString() + ".metadata-suggestions"); }
 

@@ -575,6 +575,7 @@ public final class ModelConnectionService {
                             .put("binding",binding.toJson()).put("modelId",model).put("provider",profile.getString("provider")).put("available",reason.isEmpty()).put("unavailableReason",reason)
                             .put("favorite",pref.favorite()).put("lastUsedAt",pref.lastUsedAt()).put("selected",binding.connectionId().equals(selectedConnection)&&model.equals(selectedModel))
                             .put("catalogFresh",view.catalogFresh()).put("facts",view.facts().toJson()).put("toolCalls",view.facts().toolCalls().toJson()).put("imageInput",view.facts().imageInput().toJson())
+                            .put("capabilityReference",catalog.publicCapabilityReference(view.key()))
                             .put("endpointSupport",view.endpointSupport()==null?JSONObject.NULL:view.endpointSupport().toJson());
                     rows.put(key,row);
                 }
@@ -584,6 +585,7 @@ public final class ModelConnectionService {
                         .put("available",false).put("unavailableReason","connection_unavailable").put("favorite",pref.favorite()).put("lastUsedAt",pref.lastUsedAt()));
             JSONArray ordered=new JSONArray();for(ModelSelectionPreferences.Key key:modelPreferences.sort(new java.util.ArrayList<>(rows.keySet())))ordered.put(rows.get(key));
             return new JSONObject().put("format","pocketworld.model-picker.v1").put("models",ordered).put("selectedConnectionId",selectedConnection).put("selectedModel",selectedModel)
+                    .put("publicModelIndex",catalog.publicIndexStatus())
                     .put("preferencesAvailable",modelPreferences.readable()).put("recentUseSaveFailed",recentUseSaveFailed).put("recentMeaning","successful_persisted_inference_only")
                     .put("selectionScope","future_tasks_only").put("networkRequest",false);
         }

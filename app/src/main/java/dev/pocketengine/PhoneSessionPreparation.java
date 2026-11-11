@@ -35,13 +35,18 @@ final class PhoneSessionPreparation {
                     PhonePort physical=null;DisplayModule preparing=null;
                     try {
                         current(app,id,run,epoch,mode,control,revision,owner,ownerPreparation);
+                        if("background".equals(mode)) {
+                            if(!(app.features.module("display") instanceof DisplayModule module))throw new IllegalStateException("后台助手不可用");
+                            module.pinOwner(control);preparing=module;
+                            module.connectForPreparation(control,revision,ownerPreparation);
+                            current(app,id,run,epoch,mode,control,revision,owner,ownerPreparation);
+                        }
                         PhoneReadiness.awaitStart(app::phoneReadiness,mode,()->current(app,id,run,epoch,mode,control,revision,owner,ownerPreparation));
                         if(!app.phoneReadiness().getJSONObject("taskNotifications").optBoolean("ready"))
                             throw new SecurityException("手机操作需要可见任务通知和停止入口");
                         String session;int display;
                         if("background".equals(mode)) {
-                            if(!(app.features.module("display") instanceof DisplayModule module))throw new IllegalStateException("后台助手不可用");
-                            preparing=module;
+                            DisplayModule module=preparing;
                             if(ownerPreparation==null)module.prepare(control);else module.prepareForOwner(control,revision,ownerPreparation);
                             BackgroundPhonePort background=new BackgroundPhonePort(module,control);physical=background;
                             background.bindLifecycle(service,id,run,epoch,control);backgroundOwner.accept(background);
@@ -80,6 +85,8 @@ final class PhoneSessionPreparation {
                             try{disposition=abortUnbound(app,preparing,id,run,epoch,control);}
                             catch(Exception cleanup){failure.addSuppressed(cleanup);disposition=new JSONObject().put("releaseConfirmed",false).put("error","preparation_cleanup_receipt_unconfirmed");}
                             if(failure instanceof InterruptedException||failure instanceof RunControl.ConditionWaitException){failure.addSuppressed(new DeferredPhoneSession.PreparationFailure(new IllegalStateException("原准备清理状态"),disposition));throw failure;}
+                            if(disposition.optBoolean("setupCorrectionRequiresStop"))
+                                failure=new IllegalStateException("请先停止本次任务，再到连接设置核对原后台助手。"+failure.getMessage(),failure);
                             throw new DeferredPhoneSession.PreparationFailure(failure,disposition);
                         }
                         throw failure;
@@ -121,6 +128,10 @@ final class PhoneSessionPreparation {
             else release=new JSONObject().put("releaseConfirmed",!state.optBoolean("recoveryRequired"))
                     .put("noDisplayIdentityReturned",true).put("automaticRecreationAllowed",false);
         } catch(Exception unknown) {release=new JSONObject().put("releaseConfirmed",false).put("error","preparation_cleanup_unknown").put("automaticRecreationAllowed",false);}
+        if(release.optBoolean("releaseConfirmed")&&release.optBoolean("noDisplayIdentityReturned")){
+            boolean unpinned=module.releaseUnusedPreparation(original);
+            release.put("unusedPreparationPinReleased",unpinned).put("setupCorrectionRequiresStop",!unpinned);
+        }
         JSONObject resources=dev.pocketengine.phone.PhoneResourceDisposition.release(id,run,epoch,release);
         app.tasks.event(id,new JSONObject().put("type","phone_resource_release").put("runId",run).put("coordinatorEpoch",epoch)
                 .put("preparationAborted",true).put("displayRelease",release).put("phoneResources",resources));
