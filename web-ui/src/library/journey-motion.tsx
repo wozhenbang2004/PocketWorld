@@ -203,3 +203,8 @@ export function MotionFeedback({identity,children,className='',initial=true,as:T
  useEffect(()=>()=>playing.current?.cancel(),[]);
  return <Tag {...props} className={className} ref={node=>{root.current=node}}>{children}</Tag>;
 }
+
+/** Keep routine work in one reading line without moving the content below it. */
+export function WorkingStatus({active,children,className=''}:{active:boolean;children:string;className?:string}){
+ return <MotionFeedback identity={active?children:''} initial={false} className={`pw-working-status ${className}`} role="status" aria-live="polite" aria-atomic="true" title={active?children:undefined}>{active?children:''}</MotionFeedback>;
+}

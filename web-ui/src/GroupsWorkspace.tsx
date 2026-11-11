@@ -6,7 +6,7 @@ import { Tabs, TabList, Tab, TabPanel } from './shell-library';
 import { acceptGroupDelivery, acceptGroupSnapshot, acceptGroupTask, confirmedGroupResult, groupCapabilities, groupDeliveryLabel, groupPolicyDraft, groupPolicyPayload, groupPresentation, groupQuotaFields, groupRows, groupTaskLabel, sameGroupVersion, type GroupData as Data } from './groups-workspace';
 import './groups-workspace.css';
 import { useSurfaceEnter } from './library/surface-motion';
-import { MotionFeedback, useCollectionMotion } from './library/journey-motion';
+import { MotionFeedback, WorkingStatus, useCollectionMotion } from './library/journey-motion';
 
 type Run = (action: string, args?: Data) => Promise<any>;
 type Editor = 'create' | 'member' | 'policy';
@@ -237,7 +237,7 @@ export function GroupsWorkspace({ state, data, run, supported, registerTransient
     <header className="pw-group-header" data-request-open={!!selectedRequest || undefined}>
       <div className="pw-group-heading">
         {(groupId || editor) && <Button type="button" variant="ghost" iconOnly leadingIcon={IconArrowLeft} disabled={busy} aria-label={editor ? '返回并保留草稿' : selectedRequest && tab === 'tasks' ? '返回请求列表' : '返回群列表'} onClick={back} />}
-        <div>{group ? <><p className="pw-group-eyebrow">{providerName(group)}</p><h2>{group.name}</h2></> : <h2>群空间</h2>}</div>
+        <div>{group ? <><p className="pw-group-eyebrow">{providerName(group)}</p><h2>{group.name}</h2></> : <h2>群空间</h2>}<WorkingStatus active={busy}>正在读取原操作回执…</WorkingStatus></div>
         {group && <span className="pw-group-state" data-enabled={group.enabled === true}>{group.enabled ? '服务已启用' : '服务已关闭'}</span>}
       </div>
       <div className="pw-group-tools">
@@ -246,9 +246,8 @@ export function GroupsWorkspace({ state, data, run, supported, registerTransient
       </div>
     </header>
     {group && <p className="pw-group-context">{groupRows(group.members).filter(member => member.enabled).length} 位已启用成员 · {requests.length} 项请求 · {group.visibility === 'members' ? '进度可按任务开放给群成员' : '任务进度仅发起人可见'}</p>}
-    <MotionFeedback identity={`${busy}:${error}:${notice}`} initial={false} className="pw-group-feedback" aria-live="polite">
+    <MotionFeedback identity={`${error}:${notice}`} initial={false} className="pw-group-feedback" aria-live="polite">
       {error && <p className="pw-group-warning" role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
-      {busy && <p className="pw-muted" role="status">正在读取原操作回执…</p>}
     </MotionFeedback>
     {!snapshot && !busy && <div className="pw-group-empty"><IconTeam aria-hidden /><h3>群记录尚未读取</h3><p>刷新群记录后继续。</p></div>}
     {!editor && !groupId && <div className="pw-collaboration-directory" aria-label="群空间列表">

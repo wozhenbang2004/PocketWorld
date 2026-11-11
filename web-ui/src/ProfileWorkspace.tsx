@@ -3,7 +3,7 @@ import { IconAccount, IconAdd, IconArrowLeft, IconArrowUpRight, IconChat, IconCh
 import { Accordion, AccordionItem, Button, IconButton, SearchField, SelectField, SettingsDialog, StretchSwitch, TextAreaField, TextField } from './forms-library';
 import { Radio, RadioGroup } from './forms-library/boardui/components/base/radio/radio';
 import { useSurfaceEnter } from './library/surface-motion';
-import { MotionFeedback, useCollectionMotion } from './library/journey-motion';
+import { MotionFeedback, WorkingStatus, useCollectionMotion } from './library/journey-motion';
 import './profile.css';
 
 type Data = Record<string, any>;
@@ -736,7 +736,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   const memoryRow = (row: Data, candidate: boolean) => <Button key={(candidate ? 'candidate:' : 'memory:') + row.id} variant="ghost" className="pw-profile-memory-row" trailingIcon={IconChevronRight} data-personal-memory={string(row.id)} data-motion-key={(candidate ? 'candidate:' : 'memory:') + row.id} disabled={locked || !supported('profile.memory.get')} onClick={() => openMemory(row, candidate)}><span><strong>{string(row.text || row.title) || '未命名记忆'}</strong><small>{[memoryOrigin(row, candidate), memoryDates(row)].filter(Boolean).join(' · ')}</small></span></Button>;
 
   return <section className="pw-profile-workspace pw-route-workspace" data-profile-view={view} aria-label={headingLabel}>
-    <header className="pw-profile-header"><IconButton icon={IconArrowLeft} aria-label={view === 'home' ? '返回' : '返回上一级'} onClick={requestBack} /><h1 ref={heading} tabIndex={-1}>{headingLabel}</h1>{headerSave}</header>
+    <header className="pw-profile-header"><IconButton icon={IconArrowLeft} aria-label={view === 'home' ? '返回' : '返回上一级'} onClick={requestBack} /><div className="pw-profile-header-copy"><h1 ref={heading} tabIndex={-1}>{headingLabel}</h1><WorkingStatus active={locked && loaded || avatarPicking && !locked}>{locked ? `${pending}…` : '正在等候所选头像…'}</WorkingStatus></div>{headerSave}</header>
     <div className="pw-profile-scroll" ref={scroller}>
       <div className="pw-profile-content">
         {!canEnter && <div className="pw-profile-empty"><IconAccount aria-hidden="true" /><h2>个人资料暂不可用</h2><p>请更新应用后重新打开。</p></div>}
@@ -753,8 +753,6 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
             {(feedback.needsQuery || ['unknown', 'conflict'].includes(feedback.value.status)) && <Button variant="secondary" size="small" leadingIcon={IconRefresh} disabled={locked || !supported('profile.memory.query')} onClick={() => readReceipt()}>查询这次修改</Button>}
           </div>
         </MotionFeedback>}
-        {locked && loaded && <MotionFeedback identity={pending} className="pw-profile-working" role="status">{pending}…</MotionFeedback>}
-        {avatarPicking && !locked && <p className="pw-profile-working" role="status">正在等候所选头像…</p>}
         {loaded && profile && view === 'home' && <>
           <section className="pw-profile-identity" aria-label="个人资料"><Avatar profile={profile} large /><div><h2>{profile.nickname || '我的资料'}</h2>{profile.addressAs && profile.addressAs !== profile.nickname && <p>称呼我为 {profile.addressAs}</p>}<Button variant="ghost" size="small" className="pw-profile-edit-link" onClick={() => openEditor('identity')}>编辑资料<IconChevronRight size={15} aria-hidden="true" /></Button></div></section>
           <div className="pw-profile-menu">

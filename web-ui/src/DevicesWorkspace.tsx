@@ -8,7 +8,7 @@ import { DeviceTaskPreparation } from './DeviceTaskPreparation';
 import { PhoneControlPreparation } from './PhoneControlPreparation';
 import { desktopScopes } from './desktop-viewer';
 import { useSurfaceEnter } from './library/surface-motion';
-import { MotionFeedback, useCollectionMotion } from './library/journey-motion';
+import { MotionFeedback, WorkingStatus, useCollectionMotion } from './library/journey-motion';
 import './devices-reading.css';
 
 type Run = (action: string, args?: Data) => Promise<any>;
@@ -193,7 +193,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
       {!desktopOpen && <>
         {error && <MotionFeedback identity={error} className="pw-device-feedback" role="alert">{error}</MotionFeedback>}
         {notice && <MotionFeedback identity={notice} className="pw-device-feedback" role="status">{notice}</MotionFeedback>}
-        {busy && <MotionFeedback identity="reading" role="status" className="pw-device-loading">正在读取原设备回执…</MotionFeedback>}
+        <WorkingStatus active={busy && !form}>正在读取原设备回执…</WorkingStatus>
         {!snapshot && !busy && <div className="pw-device-empty"><h3>尚未读取设备状态</h3><p>读取后查看已配对设备与连接状态。</p><Button variant="secondary" onClick={refresh}>读取设备状态</Button></div>}
         {snapshot && !peerId && <>
           {supported('deviceTaskScope.prepare') && <section className="pw-device-section" aria-label="新建设备工作"><header className="pw-device-section-heading"><div><h3>让设备完成一件事</h3><p>写目标，选择准确设备范围，再开始。也可以进入电脑详情直接查看桌面。</p></div></header><div className="pw-form-actions"><Button disabled={busy} onClick={() => setForm('work')}>交给助手完成目标</Button>{supported('phoneControl.prepare') && <Button variant="secondary" disabled={busy} onClick={() => setForm('manual')}>手动控制手机</Button>}</div></section>}
@@ -333,10 +333,10 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     </section>
     <PhoneControlPreparation onPendingChange={setPreparingDeviceWork} open={form === 'manual'} run={run} onClose={() => setForm('')} />
     <DeviceTaskPreparation onPendingChange={setPreparingDeviceWork} open={form === 'work'} run={run} onClose={() => setForm('')} />
-    <SettingsDialog isOpen={!!form && form !== 'work'} onClose={() => { clearSensitive(true); refresh(); }} title={form === 'relay' ? '临时中继租约' : form === 'connection' ? '更新原设备连接地址' : form.startsWith('recovery') ? '核对原配对结果' : '配对你的另一台设备'}><div className="pw-collaboration-dialog" data-collaboration-kind="DevicesWorkspace">
+    <SettingsDialog isOpen={!!form && form !== 'work' && form !== 'manual'} onClose={() => { clearSensitive(true); refresh(); }} title={form === 'relay' ? '临时中继租约' : form === 'connection' ? '更新原设备连接地址' : form.startsWith('recovery') ? '核对原配对结果' : '配对你的另一台设备'}><div className="pw-collaboration-dialog" data-collaboration-kind="DevicesWorkspace">
       <div className="pw-device-form">
         {error && <p className="pw-device-feedback" role="alert">{error}</p>}
-        {busy && <p className="pw-device-loading" role="status">正在读取原设备回执…</p>}
+        <WorkingStatus active={busy}>正在读取原设备回执…</WorkingStatus>
         {form === 'add' && <><p className="pw-device-form-intro">在要连接的手机或电脑打开 PocketWorld 接收端，启用接收并复制短期邀请。下面先读取邀请，再核对双端完整指纹和各自的权限。</p><p>手机端需先准备主屏访问或独立屏；电脑手控需提供屏幕范围。安装电脑代理不是配对或手控的前提。</p></>}
         {['add', 'connection', 'relay'].includes(form) && <section className="pw-device-form-step">
           {form === 'add' && <h3>使用另一台设备的邀请</h3>}

@@ -222,7 +222,6 @@ export interface TabPanelProps extends AriaTabPanelProps {
 }
 
 export function TabPanel({ className, ref, ...props }: TabPanelProps) {
-  const allowed = useMotionAllowed();
   return (
     <AriaTabPanel
       ref={ref}
@@ -230,11 +229,6 @@ export function TabPanel({ className, ref, ...props }: TabPanelProps) {
       className={(state) =>
         cx(
           "outline-none focus-visible:rounded-sm focus-visible:ring-2 focus-visible:ring-border-focus-ring",
-          // React Aria owns the selected panel. Only the new surface enters;
-          // an outgoing panel never keeps a second business view alive.
-          allowed && !state.isExiting && !state.isInert
-            ? "transition-[opacity,translate] duration-(--pw-motion-enter) ease-(--pw-ease-settle) data-[entering]:opacity-0 data-[entering]:translate-y-1.5"
-            : "transition-none",
           typeof className === "function" ? className(state) : className,
         )
       }

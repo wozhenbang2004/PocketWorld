@@ -9,6 +9,8 @@ const arrivalTiming:KeyframeAnimationOptions={
  easing:cssEase(motionEase.enter),
 };
 const arrivalFrames:Keyframe[]=[{opacity:0,transform:'translateY(10px)'},{opacity:1,transform:'translateY(0)'}];
+type SurfaceMotionOwner={animation:Animation;cancel:()=>void};
+const surfaceOwners=new Map<HTMLElement,SurfaceMotionOwner>();
 
 /** Suspend decorative CSS loops while the host document is in the background. */
 export function useMotionLifecycle(){
@@ -35,33 +37,43 @@ export function useMotionLifecycle(){
 
 export function useSurfaceEnter(root:RefObject<HTMLElement|null>,identity:string,{selector=':scope > .pw-route-workspace, :scope > .pw-secondary',depth=0,active=true}:{selector?:string;depth?:number;active?:boolean}={}){
  const allowed=useMotionAllowed();
- const previous=useRef({identity,depth});const playing=useRef<Animation|null>(null);
+ const previous=useRef<{identity:string;depth:number;enabled:boolean}|null>(null);
+ const playing=useRef<{surface:HTMLElement;owner:SurfaceMotionOwner}|null>(null);
  const cancel=()=>{
-  const animation=playing.current;if(!animation)return;
-  const target=animation.effect instanceof KeyframeEffect?animation.effect.target:null;
-  if(target instanceof HTMLElement)target.removeAttribute('data-pw-surface-enter');
-  animation.cancel();playing.current=null;
+  const current=playing.current;if(!current)return;
+  playing.current=null;
+  // A retiring callback must not release a newer owner's marker on this node.
+  if(surfaceOwners.get(current.surface)===current.owner){
+   surfaceOwners.delete(current.surface);current.surface.removeAttribute('data-pw-surface-enter');
+  }
+  current.owner.animation.cancel();
  };
  useLayoutEffect(()=>{
-  const before=previous.current;previous.current={identity,depth};
-  if(!allowed||!active){cancel();return}
-  if(before.identity===identity)return;
+  const enabled=active&&allowed,before=previous.current;
+  previous.current={identity,depth,enabled};
+  // Mounting, restoring a surface and changing peer/data identities keep their
+  // settled geometry. Only an actual hierarchy change has a travel direction.
+  if(!enabled||!before?.enabled||before.identity===identity||before.depth===depth){cancel();return}
   const surface=selector?root.current?.querySelector<HTMLElement>(selector):root.current;
   if(!surface){cancel();return}
-  // A rapid second navigation starts at the visible frame of this surface.
-  // Keep one live workspace: no outgoing editor, media or host subscription.
-  const interrupted=playing.current?.playState==='running'&&playing.current.effect instanceof KeyframeEffect&&playing.current.effect.target===surface;
-  const current=interrupted?getComputedStyle(surface):null;
-  const start:Keyframe=current?{opacity:current.opacity,transform:current.transform}:{opacity:.65,transform:depth===before.depth?'translateY(6px)':`translateX(${depth<before.depth?-12:12}px)`};
+  const interrupted=surfaceOwners.get(surface)?.animation.playState==='running';
+  const transform=interrupted?getComputedStyle(surface).transform:`translateX(${depth<before.depth?-12:12}px)`;
   cancel();
-  // This current surface owns its entrance. Child collections/messages can
-  // present immediately instead of adding a second translation to the same fact.
+  for(const [node,owner] of surfaceOwners){
+   if(!node.isConnected||owner.animation.playState==='finished'||owner.animation.playState==='idle')owner.cancel();
+  }
+  // Layout effects run child first. A parent cancels a child's earlier entrance;
+  // an existing parent also prevents a child from adding another displacement.
+  for(const node of surfaceOwners.keys())if(node!==surface&&node.contains(surface))return;
+  for(const [node,owner] of surfaceOwners)if(surface.contains(node))owner.cancel();
   surface.setAttribute('data-pw-surface-enter','');
-  const animation=surface.animate([start,{opacity:1,transform:'translate(0,0)'}],arrivalTiming);
-  animation.id='pw-surface-enter';playing.current=animation;
-  animation.onfinish=()=>{if(playing.current===animation)cancel()};
+  // Keep text fully visible; a rapid reverse continues this same node's frame.
+  const animation=surface.animate([{transform},{transform:'translateX(0)'}],arrivalTiming);
+  const owner:SurfaceMotionOwner={animation,cancel:()=>{if(playing.current?.owner===owner)cancel()}};
+  animation.id='pw-surface-enter';playing.current={surface,owner};surfaceOwners.set(surface,owner);
+  animation.onfinish=owner.cancel;animation.oncancel=owner.cancel;
  },[root,identity,selector,depth,active,allowed]);
- useEffect(()=>cancel,[]);
+ useLayoutEffect(()=>cancel,[]);
 }
 
 /** New tail IDs enter once; streaming updates, restored history and returning to

@@ -5,7 +5,7 @@
 .pw-usage-workspace h3{font-size:14px;font-weight:600;line-height:1.5;letter-spacing:-.01em}
 .pw-usage-workspace button:focus-visible{outline:2px solid var(--pw-focus);outline-offset:2px}
 .pw-usage-toolbar{display:flex;align-items:center;gap:10px;min-height:48px;margin:0 0 14px}
-.pw-usage-toolbar>span{flex:1;min-width:0;font-size:12px;text-align:end;color:var(--pw-muted);white-space:nowrap}
+.pw-usage-toolbar-copy{flex:1;min-width:0;font-size:12px;text-align:end;color:var(--pw-muted);white-space:nowrap}
 .pw-secondary.pw-secondary-refactor .pw-usage-workspace .pw-usage-select-trigger{min-height:44px;min-width:0;gap:7px;padding:8px 12px;background:var(--pw-surface);box-shadow:none;border:0;border-radius:12px;color:var(--pw-ink);font-size:13px;font-weight:500}
 .pw-usage-select{min-width:0;max-width:100%;flex-shrink:0}
 .pw-usage-select-trigger>span{min-width:0}

@@ -43,8 +43,7 @@ export default function ProjectApkWorkspace({ snapshot }: { snapshot: PocketSnap
   }, [epoch]);
   useEffect(() => { document.documentElement.dataset.pocketUi = connected ? 'ready' : 'loading';return () => { delete document.documentElement.dataset.pocketUi; }; }, [connected]);
   useEffect(() => {
-    bridge.setBackHandler(() => { if (!confirmation) return false;if (!pending) setConfirmation(null);return true; });
-    return () => bridge.setBackHandler(null);
+    return bridge.setBackHandler(() => { if (!confirmation) return false;if (!pending) setConfirmation(null);return true; });
   }, [confirmation, pending]);
   const run = async (action: Action, values: Record<string, unknown> = {}) => {
     const original = live.current;

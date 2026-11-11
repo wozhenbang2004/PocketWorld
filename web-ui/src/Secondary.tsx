@@ -1513,7 +1513,7 @@ export default function Secondary({ teamAttentionFocus, onTeamAttentionConsumed,
   const [query, setQuery] = useState(''), [notice, setNotice] = useState(''), [error, setError] = useState('');
   const trail = useRef<Array<{ page: string; query: string; modelView: ModelView; modelTrail: ModelView[]; candidateTarget: LearningCandidateTarget | null }>>([]), scroll = useRef<HTMLDivElement>(null), scrollPositions = useRef(new Map<string, number>());
   const mounted = useRef(true), generation = useRef(0);
-  useEffect(() => { generation.current++; trail.current = []; modelTrail.current = []; setEntry({ route, revision: navigationRevision }); setPage(normalize(route)); setCandidateTarget(null); setModelView({ kind: 'list' }); setModelHostSection(normalize(route) === 'proxy' ? 'proxy' : 'models'); setNotice(''); setError(''); }, [route, navigationRevision]);
+  useLayoutEffect(() => { generation.current++; trail.current = []; modelTrail.current = []; setEntry({ route, revision: navigationRevision }); setPage(normalize(route)); setCandidateTarget(null); setModelView({ kind: 'list' }); setModelHostSection(normalize(route) === 'proxy' ? 'proxy' : 'models'); setNotice(''); setError(''); }, [route, navigationRevision]);
   useEffect(() => { onNavigationPageChange?.(page); }, [page, onNavigationPageChange]);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; generation.current++; }; }, []);
   const run: Run = async (action, args = {}) => {
@@ -1615,15 +1615,14 @@ export default function Secondary({ teamAttentionFocus, onTeamAttentionConsumed,
   const settingsEntries = COMMON_SETTINGS.filter(item => item.id !== 'setup' || !!onOpenSetup).map(item => ({ ...item, searchText: item.detail, detail: settingsEntryDetail(item.id, state) }));
   const filtered = settingsEntries.filter(item => (item.title + item.detail + item.searchText).toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const viewKey = page + (isModelPage ? ':' + modelView.kind + ':' + (modelView.id || '') : '');
+  useLayoutEffect(() => {
+    const element = scroll.current;
+    if (element) element.scrollTop = scrollPositions.current.get(viewKey) || 0;
+  }, [viewKey]);
   useSurfaceEnter(scroll, viewKey, {selector: ':scope > .pw-secondary-page', depth: trail.current.length + modelTrail.current.length, active: page !== 'devices'});
   const modelBrowseActive = ['list', 'catalog', 'model'].includes(modelView.kind);
   const modelParent = modelTrail.current.at(-1)?.kind;
   const modelBackLabel = modelParent === 'connections' ? '返回连接管理' : modelParent === 'connection' ? '返回连接详情' : modelParent === 'catalog' ? '返回模型目录' : '返回模型与连接';
-  useEffect(() => {
-    const element = scroll.current;
-    if (!element) return;
-    element.scrollTop = scrollPositions.current.get(viewKey) || 0;
-  }, [viewKey]);
   const consumeBack = () => {
     if (transientBack.current?.()) return true;
     rememberScroll();

@@ -15,6 +15,17 @@
  --pw-ease-move:cubic-bezier(.42,0,.58,1);
 }
 .pw-thinking-loader.ui-tlc {font-family:var(--font-ui);}
+/* The same compact line is present before, during and after a routine read.
+ * Error and decision content keeps its own space and is never clipped here. */
+.pw-working-status {
+ display:block;flex:none;min-width:0;block-size:20px;min-block-size:20px;
+ margin:0;padding:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;
+ color:var(--pw-muted);font:400 12px/20px var(--pw-font);
+}
+.pw-learning-tabs > .pw-working-status {order:1;}
+.pw-profile-header-copy {min-width:0;}
+.pw-devices-reading[data-device-view="detail"] > .pw-working-status {grid-column:1 / -1;}
+.pw-memory-scope-copy,.pw-memory-detail-copy {min-width:0;flex:1;}
 .pw-task-filters-reveal {
  display:grid;grid-template-rows:0fr;opacity:0;visibility:hidden;
  transition:grid-template-rows var(--pw-motion-layout) var(--pw-ease-move),opacity var(--pw-motion-exit) var(--pw-ease-exit),visibility 0s var(--pw-motion-layout);

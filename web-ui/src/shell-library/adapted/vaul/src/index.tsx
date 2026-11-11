@@ -529,6 +529,11 @@ export function Root({
     function onVisualViewportChange() {
       if (!drawerRef.current || !repositionInputs) return;
 
+      // The bundled Android host already sizes the WebView inside the IME and
+      // system insets. Its dvh-based drawers must keep that single geometry owner.
+      // Read the live host marker: configuration can arrive after this listener.
+      if (document.documentElement.dataset.pocketNativeInsets === 'true') return;
+
       const focusedElement = document.activeElement as HTMLElement;
       if (isInput(focusedElement) || keyboardIsOpen.current) {
         const visualViewportHeight = window.visualViewport?.height || 0;
@@ -583,7 +588,7 @@ export function Root({
 
     window.visualViewport?.addEventListener('resize', onVisualViewportChange);
     return () => window.visualViewport?.removeEventListener('resize', onVisualViewportChange);
-  }, [activeSnapPointIndex, snapPoints, snapPointsOffset]);
+  }, [activeSnapPointIndex, snapPoints, snapPointsOffset, repositionInputs, fixed]);
 
   function closeDrawer(fromWithin?: boolean) {
     navigationSwipe.cancelGesture();

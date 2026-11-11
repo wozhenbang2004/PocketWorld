@@ -6,6 +6,7 @@ import { Tabs, TabList, Tab, TabPanel } from './shell-library';
 import { Accordion, AccordionItem, Button, CheckboxField, IconButton, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { MemoryAssertionFields } from './MemoryAssertionFields';
 import { MemoryHistoryWorkspace } from './MemoryHistoryWorkspace';
+import { WorkingStatus } from './library/journey-motion';
 import type { LearningCandidateTarget } from './LearningWorkspace';
 
 type Data = Record<string, any>;
@@ -19,6 +20,7 @@ const eligible = (row: Data) => row.active === true && row.consolidationBlocked 
 /** Existing BoardUI reading rows, native namespace selection, and exact record review. */
 export function MemoryWorkspace({ domain, run, registerTransientBack, initialCandidate = null, alreadyShownError = '' }: { domain: string; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void; initialCandidate?: LearningCandidateTarget | null; alreadyShownError?: string }) {
   const [snapshot, setSnapshot] = useState<Data | null>(null), [selection, setSelection] = useState<Data | null>(null), [review, setReview] = useState<Data | null>(null), [source, setSource] = useState<Data | null>(null);
+  const [snapshotCurrent, setSnapshotCurrent] = useState(false), currentList = useRef(false);
   const [assertionOpen, setAssertionOpen] = useState(false), [selectingConsolidation, setSelectingConsolidation] = useState(false);
   const [tab, setTab] = useState(domain === 'memoryReview' ? 'candidates' : 'records'), [query, setQuery] = useState(''), [draft, setDraft] = useState(''), [reason, setReason] = useState('');
   const [filter, setFilter] = useState('all');
@@ -44,8 +46,10 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, initialCan
   const clearConsolidation = () => { selectedHandles.current.forEach(closeHandle); selectedHandles.current = []; setConsolidation([]); };
   const load = (candidate: LearningCandidateTarget | null = null) => {
     if (entered.current || !alive.current) return;
-    closeRecord(); clearConsolidation(); setSnapshot(null); setHistory(null); setCapacity(null);
-    void invoke('knowledge.snapshot', {}, value => { setSnapshot(value); setScopeName(value.scopeName || ''); setNotice(''); }).then(value => {
+    closeRecord(); clearConsolidation(); setHistory(null); setCapacity(null);
+    // A same-scope refresh may keep its last reading on screen, never its admission.
+    currentList.current = false; setSnapshotCurrent(false);
+    void invoke('knowledge.snapshot', {}, value => { setSnapshot(value); currentList.current = true; setSnapshotCurrent(true); setScopeName(value.scopeName || ''); setNotice(''); }).then(value => {
       if (value && alive.current && candidate) { setTab('candidates'); choose({ id: candidate.id }, true, candidate); }
     });
   };
@@ -54,7 +58,7 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, initialCan
     closeRecord(); clearConsolidation(); setHistory(null); setCapacity(null); setSelectingConsolidation(false);
     // Native selection retires the old scope and every choice handle, even if
     // the new scope fails. Do not present the old rows as a valid fallback.
-    setSnapshot(null); setScopeName(''); setNamespace(''); setNamespaces([]); setNotice('');
+    currentList.current = false; setSnapshotCurrent(false); setSnapshot(null); setScopeName(''); setNamespace(''); setNamespaces([]); setNotice('');
     const result = await invoke('knowledge.namespace', { choiceHandle: value === 'private' ? '' : value }, selected => {
       setNamespace(value); setScopeName(selected.scopeName || '');
     });
@@ -76,7 +80,7 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, initialCan
     return () => { active = false; clearInterval(timer); };
   }, [operation?.operationHandle, operation?.settled, run]);
   const openReview = (value: Data) => { setReview(value); reviewHandle.current = value.reviewHandle; setAcknowledged(false); };
-  const choose = (row: Data, candidate: boolean, origin: LearningCandidateTarget | null = null) => { openedRecord.current = row.id; listScrollPosition.current = collectionPanel.current?.closest('.pw-secondary-scroll')?.scrollTop || 0; closeRecord(); void invoke('knowledge.get', { id: row.id, candidate }, value => {
+  const choose = (row: Data, candidate: boolean, origin: LearningCandidateTarget | null = null) => { if (!currentList.current || entered.current) return; openedRecord.current = row.id; listScrollPosition.current = collectionPanel.current?.closest('.pw-secondary-scroll')?.scrollTop || 0; closeRecord(); void invoke('knowledge.get', { id: row.id, candidate }, value => {
     if (origin && value.candidate?.id !== origin.id) { closeHandle(value.readHandle); throw new Error('原批次候选身份不符，请返回学习任务重新读取。'); }
     setSelection(value); readHandle.current = value.readHandle; const record = value.candidate || value.record;
     setDraft(record?.text || ''); setDraftMeta({ layer: record?.layer || 'fact', reason: record?.reason || '', applicability: record?.applicability || '', confidence: String(record?.confidence ?? 0.5) }); setReason(''); setAttempted(false); setNotice(origin ? `已定位“${origin.sourceTitle}”的原候选。批次登记修订 ${origin.revision}，当前修订 ${record?.revision ?? '未知'}；请按当前内容核对。` : '');
@@ -85,7 +89,7 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, initialCan
     // Re-read storage after a write rather than keep an unusable, stale revision.
     // This also serves uncertain outcomes without repeating the mutation.
     void invoke('knowledge.snapshot', {}, value => {
-      setSnapshot(value); setScopeName(value.scopeName || ''); setHistory(null); setCapacity(null);
+      setSnapshot(value); currentList.current = true; setSnapshotCurrent(true); setScopeName(value.scopeName || ''); setHistory(null); setCapacity(null);
       clearConsolidation();
     }).then(value => {
       if (!value || !alive.current) return;
@@ -96,6 +100,7 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, initialCan
   };
   const prepare = (operation: string, extra: Data = {}) => { void invoke('knowledge.review', { readHandle: readHandle.current, operation, ...extra }, openReview); };
   const toggleConsolidation = (row: Data, checked: boolean) => {
+    if (!currentList.current || entered.current) return;
     if (!checked) { const old = consolidation.find(item => item.record.id === row.id); if (old) { closeHandle(old.readHandle); selectedHandles.current = selectedHandles.current.filter(id => id !== old.readHandle); } setConsolidation(old => old.filter(item => item.record.id !== row.id)); return; }
     if (consolidation.length >= 20) { setError('一次最多归纳 20 条原记忆。'); return; }
     void invoke('knowledge.get', { id: row.id, candidate: false }, value => { selectedHandles.current.push(value.readHandle); setConsolidation(old => [...old, value]); });
@@ -136,13 +141,14 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, initialCan
   const running = !!operation && !operation.settled;
   const candidateHasEdits = candidate && record && (draft !== record.text || draftMeta.layer !== (record.layer || 'fact') || draftMeta.reason !== (record.reason || '') || draftMeta.applicability !== (record.applicability || '') || draftMeta.confidence !== String(record.confidence ?? 0.5));
   return <div className="pw-memory-workspace pw-knowledge-workspace">
-    {error && error !== alreadyShownError && <p className="pw-secondary-error" role="alert">{error}</p>}{notice && <p className="pw-field-hint" role="status">{notice}</p>}{busy && <p className="pw-muted">正在核对原回执…</p>}
+    {error && error !== alreadyShownError && <p className="pw-secondary-error" role="alert">{error}</p>}{notice && <p className="pw-field-hint" role="status">{notice}</p>}
+    {snapshot && !snapshotCurrent && !busy && <p className="pw-field-hint" role="status">当前保留上次读取的内容，尚未核对最新状态。请重新读取后再操作。</p>}
     <section ref={collectionPanel} className="pw-memory-collection" aria-label="记忆管理" hidden={!!selection}>
       <Tabs selectedKey={tab} onSelectionChange={value => { setTab(String(value)); setFilter('all'); closeRecord(); }} className="pw-team-tabs pw-memory-tabs">
-        <TabList aria-label="记忆视图"><Tab id="records" isDisabled={busy}>已保存</Tab><Tab id="candidates" isDisabled={busy}>待审阅</Tab><Tab id="history" isDisabled={busy}>旧事与来源</Tab></TabList>
+        <TabList aria-label="记忆视图"><Tab id="records" isDisabled={busy || !snapshotCurrent}>已保存</Tab><Tab id="candidates" isDisabled={busy || !snapshotCurrent}>待审阅</Tab><Tab id="history" isDisabled={busy || !snapshotCurrent}>旧事与来源</Tab></TabList>
         <TabPanel id={tab}>
-      <header className="pw-memory-scope-heading"><p className="pw-detail-location">{scopeName || (busy ? '正在核对记忆范围' : '记忆范围尚未确认')}</p><IconButton className="pw-utility-icon" icon={IconRefresh} aria-label="重新读取记忆" title="重新读取记忆" disabled={busy} onClick={() => load()} /></header>
-      {tab === 'history' ? <MemoryHistoryWorkspace key={namespace + ':' + String(!!snapshot)} scopeKey={namespace + ':' + String(snapshot?.cognitionRevision || '')} run={run} registerTransientBack={registerHistoryBack} /> : <>
+      <header className="pw-memory-scope-heading"><div className="pw-memory-scope-copy"><p className="pw-detail-location">{scopeName || (busy ? '正在核对记忆范围' : '记忆范围尚未确认')}</p><WorkingStatus active={busy}>正在核对原回执…</WorkingStatus></div><IconButton className="pw-utility-icon" icon={IconRefresh} aria-label="重新读取记忆" title="重新读取记忆" disabled={busy} onClick={() => load()} /></header>
+      {tab === 'history' ? <MemoryHistoryWorkspace key={namespace + ':' + String(!!snapshot)} scopeKey={namespace + ':' + String(snapshot?.cognitionRevision || '')} readOnly={busy || !snapshotCurrent} run={run} registerTransientBack={registerHistoryBack} /> : <>
       {snapshot && (collection.length > 0 || hasFilters) && <div className="pw-memory-tools">
         <SearchField className="pw-secondary-search" data-input-size="medium" aria-label="筛选当前读取的记忆" placeholder={tab === 'candidates' ? '查找候选' : '查找记忆'} clearLabel="清除搜索" value={query} onChange={setQuery} />
         <SelectField className="pw-memory-filter" label="记忆状态筛选" value={filter} options={filters} onChange={setFilter} />
@@ -154,13 +160,13 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, initialCan
         {hasFilters ? <Button variant="secondary" onClick={() => { setQuery(''); setFilter('all'); }}>清除筛选</Button> : tab === 'records' && pendingCandidates > 0 ? <Button disabled={busy} onClick={() => { setTab('candidates'); setQuery(''); setFilter('pending'); }}>查看待审候选</Button> : null}
       </section>}
       {!snapshot && !busy && <p className="pw-memory-unread">{namespace ? '尚未读取记忆，请重新读取。' : '尚未读取记忆，请先重新选择范围。'}</p>}
-      {(list.length > 0 || selectingConsolidation) && <div className="pw-memory-list-heading"><p>{snapshot ? `已读取 ${list.length} 条` : '正在读取记忆…'}</p>{tab === 'records' && (canConsolidate || selectingConsolidation) && <Button variant="ghost" disabled={busy || running} onClick={() => { if (selectingConsolidation) clearConsolidation(); setSelectingConsolidation(value => !value); }}>{selectingConsolidation ? '退出多选' : '归纳记忆'}</Button>}</div>}
-      {selectingConsolidation && tab === 'records' && <div className="pw-form-actions pw-memory-selection-actions" role="region" aria-label="本次记忆归纳选择"><span>已选 {consolidation.length} 条</span><Button variant="secondary" disabled={busy || running || consolidation.length < 2} onClick={() => { void invoke('knowledge.consolidation.review', { readHandles: consolidation.map(item => item.readHandle) }, openReview); }}>核对所选记忆与模型调用</Button><Button variant="ghost" disabled={busy || running || !consolidation.length} onClick={clearConsolidation}>清空本次选择</Button></div>}
+      {(list.length > 0 || selectingConsolidation) && <div className="pw-memory-list-heading"><p>{snapshot ? `已读取 ${list.length} 条` : '正在读取记忆…'}</p>{tab === 'records' && (canConsolidate || selectingConsolidation) && <Button variant="ghost" disabled={busy || running || !snapshotCurrent} onClick={() => { if (selectingConsolidation) clearConsolidation(); setSelectingConsolidation(value => !value); }}>{selectingConsolidation ? '退出多选' : '归纳记忆'}</Button>}</div>}
+      {selectingConsolidation && tab === 'records' && <div className="pw-form-actions pw-memory-selection-actions" role="region" aria-label="本次记忆归纳选择"><span>已选 {consolidation.length} 条</span><Button variant="secondary" disabled={busy || running || !snapshotCurrent || consolidation.length < 2} onClick={() => { void invoke('knowledge.consolidation.review', { readHandles: consolidation.map(item => item.readHandle) }, openReview); }}>核对所选记忆与模型调用</Button><Button variant="ghost" disabled={busy || running || !consolidation.length} onClick={clearConsolidation}>清空本次选择</Button></div>}
       {groups.map(group => <section className="pw-knowledge-directory-group" key={group.key} aria-label={group.label}><header className="pw-knowledge-group-heading"><h3>{group.label}</h3><span>{group.records.length}</span></header><div className="pw-memory-list">{group.records.map(row => <article className="pw-memory-list-item" key={row.id}>
-        <Button variant="ghost" className="pw-memory-row" data-memory-id={row.id} trailingIcon={IconChevronRight} disabled={busy} onClick={() => choose(row, tab === 'candidates')} aria-label={`读取原版本与来源：${(row.text || row.title || '未命名内容').split('\n')[0].slice(0, 100)}`} aria-description={[layer(row.layer), row.core ? '核心记忆' : '', recordStatus(row.status) || '', row.active === false ? '已停用' : ''].filter(Boolean).join('；')}>
+        <Button variant="ghost" className="pw-memory-row" data-memory-id={row.id} trailingIcon={IconChevronRight} disabled={busy || !snapshotCurrent} onClick={() => choose(row, tab === 'candidates')} aria-label={`读取原版本与来源：${(row.text || row.title || '未命名内容').split('\n')[0].slice(0, 100)}`} aria-description={[layer(row.layer), row.core ? '核心记忆' : '', recordStatus(row.status) || '', row.active === false ? '已停用' : ''].filter(Boolean).join('；')}>
           <span className="pw-memory-row-copy"><strong>{(row.text || row.title || '未命名内容').split('\n')[0]}</strong>{String(row.text || '').includes('\n') && <span className="pw-knowledge-row-preview">{row.text.slice(row.text.indexOf('\n') + 1)}</span>}<small>{[layer(row.layer), recordStatus(row.status) || '', row.active === false ? '已停用' : '', row.revision != null ? `修订 ${row.revision}` : ''].filter(Boolean).join(' · ')}</small></span>
         </Button>
-        {selectingConsolidation && tab === 'records' && eligible(row) && <CheckboxField className="pw-memory-select" isSelected={consolidation.some(item => item.record.id === row.id)} isDisabled={busy || running} onChange={checked => toggleConsolidation(row, checked)}>加入本次归纳选择</CheckboxField>}
+        {selectingConsolidation && tab === 'records' && eligible(row) && <CheckboxField className="pw-memory-select" isSelected={consolidation.some(item => item.record.id === row.id)} isDisabled={busy || running || !snapshotCurrent} onChange={checked => toggleConsolidation(row, checked)}>加入本次归纳选择</CheckboxField>}
       </article>)}</div></section>)}
       {operation && <section className="pw-source-record"><h3>这次原归纳</h3><p>{running ? '正在处理所选原版本，尚未确认形成候选。' : operation.error || (operation.result?.outcome === 'existing_candidate_barrier' ? '相同来源已有原候选处理记录，没有再次生成。请刷新候选核对。' : '原候选回执已取得。请刷新候选，阅读后再决定是否采用。')}</p><div className="pw-form-actions"><Button variant="ghost" disabled={busy} onClick={() => { const handle = operation.operationHandle; void invoke('knowledge.consolidation.query', { operationHandle: handle }, value => setOperation({ ...value, operationHandle: handle })); }}>核对原结果</Button>{running && <Button variant="secondary" disabled={stopping} onClick={() => { setStopping(true); void run('knowledge.consolidation.stop', { operationHandle: operation.operationHandle }).then(() => setNotice('已收到原停止请求回执，请核对原结果。')).catch(failure => setError(failure.message)).finally(() => setStopping(false)); }}>停止这次原归纳</Button>}</div></section>}
       </>}
@@ -173,7 +179,7 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, initialCan
         </TabPanel>
       </Tabs>
     </section>
-    {selection && <section ref={selectionPanel} tabIndex={-1} className="pw-source-record pw-memory-reading"><header className="pw-memory-detail-header"><Button variant="ghost" leadingIcon={IconChevronLeft} disabled={busy} onClick={closeRecord}>返回列表</Button><h2>{candidate ? '候选审阅' : '这条记忆'}</h2></header>
+    {selection && <section ref={selectionPanel} tabIndex={-1} className="pw-source-record pw-memory-reading"><header className="pw-memory-detail-header"><Button variant="ghost" leadingIcon={IconChevronLeft} disabled={busy} onClick={closeRecord}>返回列表</Button><div className="pw-memory-detail-copy"><h2>{candidate ? '候选审阅' : '这条记忆'}</h2><WorkingStatus active={busy}>正在核对原回执…</WorkingStatus></div></header>
       <div className="pw-memory-document"><p className="pw-reading-copy">{record?.text}</p>{record?.applicability && <p className="pw-memory-context">适用条件：{record.applicability}</p>}{record?.reason && <p className="pw-memory-context">依据：{record.reason}</p>}</div><p className="pw-muted pw-knowledge-status">{layer(record?.layer)}{record?.core ? ' · 核心记忆' : ''} · 原修订 {record?.revision} · {recordStatus(record?.status) || (record?.active ? '当前可用' : '已停用')}</p>
       {record?.assertion && <p>主体：{record.assertion.subjectLabel || '未知'} · 陈述类型：{record.assertion.kind} · 关系：{record.assertion.predicate} · {record.assertion.object}。保存不证明陈述为真。</p>}
       {!attempted && candidate && record?.status === 'pending' && <>{candidateHasEdits && <p className="pw-memory-context pw-knowledge-notice" role="status">未保存的编辑不会随采用提交。请先核对内容修改。</p>}<div className="pw-form-actions pw-memory-decisions"><Button disabled={busy} onClick={() => prepare('accept')}>核对并采用候选</Button></div></>}

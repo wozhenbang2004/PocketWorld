@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { motion, useReducedMotion } from 'motion/react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useSurfaceEnter } from './library/surface-motion';
 import { IconArrowLeft, IconChevronRight, IconClose, IconMicrophone, IconModel, IconMonitor, IconMoon, IconPhone, IconRefresh } from './icons';
 import { Accordion, AccordionItem, Button } from './forms-library';
 import { ProgressBar } from './library';
@@ -196,8 +196,8 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
     queue.current = request.then(() => undefined, () => undefined);
     return request;
   };
-  const heading = useRef<HTMLHeadingElement>(null), stepBody = useRef<HTMLDivElement>(null), back = useRef<() => boolean>(() => false);
-  const reducedMotion = useReducedMotion(), can = (action: string) => snapshot.capabilities.commands.includes(action);
+  const heading = useRef<HTMLHeadingElement>(null), stepBody = useRef<HTMLDivElement>(null), stage = useRef<HTMLDivElement>(null), back = useRef<() => boolean>(() => false);
+  const can = (action: string) => snapshot.capabilities.commands.includes(action);
   const locked = !entered || loading || !!working || needsRead;
   const focused = !!initialCapability, onboarding = mode === 'onboarding';
   const resumeRevision = setupObject(snapshot.view).resumeRevision;
@@ -233,7 +233,8 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
   }, []);
   const readable = can('setup.read');
   useEffect(() => { if (entered && readable) { returnRead.current = true; void loadRef.current(); } }, [entered, readable, resumeRevision, snapshot.state.modelSelectionRevision]);
-  useEffect(() => { stepBody.current?.scrollTo({ top: 0 }); heading.current?.focus({ preventScroll: true }); }, [view]);
+  useLayoutEffect(() => { if (stepBody.current) stepBody.current.scrollTop = 0; heading.current?.focus({ preventScroll: true }); }, [view]);
+  useSurfaceEnter(stage, view, { selector: '', active: !!data, depth: focused ? 0 : onboarding ? view === 'model' ? 0 : view === 'overview' ? 1 : 2 : view === 'overview' ? 0 : 1 });
   useEffect(() => { onViewChange?.(view); }, [view, onViewChange]);
   useEffect(() => { registerBackHandler?.(() => back.current()); return () => registerBackHandler?.(null); }, [registerBackHandler]);
 
@@ -351,14 +352,14 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
     {!data ? <div className="pw-setup-loading"><h2>{!readable ? '准备入口暂不可用' : error ? '暂时无法读取准备状态' : '正在读取当前状态'}</h2><p>{focused ? '只检查这次需要的能力。' : '准备进度与权限以这台手机的实际状态为准。'}</p>{error && <p role="alert" className="pw-setup-error">{error}</p>}<Button variant="secondary" disabled={loading || !readable} onClick={() => void load()}>重新读取</Button></div> : <>
       <div className="pw-setup-body" ref={stepBody}>
         {originGoal?.trim() && <div className="pw-setup-origin"><span>当前要做的事</span><p>{originGoal}</p></div>}
-        <motion.div className="pw-setup-stage" key={view} initial={reducedMotion ? false : { opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reducedMotion ? 0 : .22, ease: [.22, 1, .36, 1] }}>
+        <div className="pw-setup-stage" ref={stage}>
           {view === 'overview' && <><div className="pw-setup-intro"><h2>准备想用的能力</h2><p>选择要做的事，查看对应状态和下一步。</p></div><div className="pw-setup-purpose-list">
             <Button variant="ghost" className="pw-setup-purpose-row" onClick={() => void openView('model')} disabled={locked || !!preparation.working}><IconModel size={24} aria-hidden="true"/><span><strong>对话与推理</strong><small>{setupModelLabel(data.model)}</small></span><IconChevronRight size={18} aria-hidden="true"/></Button>
             {setupCapabilities.map(id => { const copy = capabilityCopy[id], Icon = copy.icon; return <Button variant="ghost" key={id} className="pw-setup-purpose-row" onClick={() => void openView(id)} disabled={locked || !!preparation.working}><Icon size={24} aria-hidden="true"/><span><strong>{copy.title}</strong><small>{capabilitySummary(id)}</small></span><IconChevronRight size={18} aria-hidden="true"/></Button>; })}
           </div><p className="pw-setup-next-hint">准备只在你选择后进行。已开始的工具准备保留在原任务中，可随时查看或停止。</p></>}
           {view === 'model' && <>{onboarding && <div className="pw-setup-intro"><h2>先连接一个模型</h2><p>登录已有账号，或添加模型服务，就能让管家接办事情。</p></div>}{modelSection}{onboarding && <div className="pw-setup-optional"><p>手机操作、开发与语音可以在需要时准备。</p><Button variant="ghost" trailingIcon={IconChevronRight} disabled={locked || !!preparation.working} onClick={() => void openView('overview')}>查看其他能力</Button></div>}</>}
           {view !== 'overview' && view !== 'model' && <div className="pw-setup-purpose-detail"><p className="pw-setup-purpose-description">{capabilityCopy[view].description}</p>{capabilityBody(view)}</div>}
-        </motion.div>
+        </div>
         {(error || needsRead || notice) && <div className="pw-setup-feedback">{error && <p role="alert" className="pw-setup-error">{error}</p>}{needsRead && <Button variant="secondary" disabled={loading || !!working} onClick={() => void load()}>刷新并核对</Button>}{notice && <p role="status" className="pw-setup-notice">{notice}</p>}</div>}
       </div>
       <footer className="pw-setup-footer">

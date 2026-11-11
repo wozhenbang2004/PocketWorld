@@ -20,7 +20,8 @@ export function PhoneControlWorkspace({ taskId, hasScope, started, visible, run,
     if (value?.taskId && value.taskId !== taskId) throw new Error('回执不属于原手控任务。');
     if (value.pageHandle) page.current = value.pageHandle;
     setView(previous => {
-      const frame = value.frame && value.active && previous?.frame?.frameHandle === value.frame.frameHandle && !value.frame.dataUrl ? { ...value.frame, dataUrl: previous.frame.dataUrl } : value.frame;
+      const previousFrame = previous?.frame;
+      const frame = value.frame && value.active && previousFrame && previousFrame.frameHandle === value.frame.frameHandle && !value.frame.dataUrl ? { ...value.frame, dataUrl: previousFrame.dataUrl } : value.frame;
       return { ...value, frame: value.active ? frame : undefined };
     });
     setUncertain(false);

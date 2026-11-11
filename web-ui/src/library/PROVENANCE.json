@@ -333,5 +333,17 @@
     "changes": "Local provider owns transient picker state with unchanged children; scoped consumers preserve trigger semantics and native preview visibility. Existing source Popover gains a quick scale/opacity transition for model/reasoning controls (150ms enter, 100ms exit) without surface blur. Aria retains the full exiting body, while active/window generations retire interactions and requests immediately.",
     "data": "Independent catalog reads dispatch together into the existing native IO queue; one validated API projection plus linear account duplicate counting. Pure local presentation responses do not request another complete app projection; warm model preference presentation reads the last atomically saved immutable snapshot.",
     "evidence": "../../docs/motion-research-20261110.md; exact source review and build/release status recorded there. No tests or synthetic host, no claim of current Android handfeel or user aesthetic acceptance."
+  },
+  "pageStability20261111": {
+    "scope": "PW-M29–PW-M32: cross-page switching stability after user reports widespread vertical jumps and flashes. Same retained component families; no new dependency or Android runtime claim.",
+    "sources": {
+      "tabs": "BoardUI official registry capture 2026-11-01; retained upstream tabs.tsx SHA-256 343761c69bd612a8a9c5f8aa1ef8aabdc32deda23e7870b5722c40623e325f0b",
+      "drawer": "Vaul 1.1.2 retained source 3e97aac6a38e4481bade71d7233ed6002e80f9b0",
+      "principles": "Aesthetics motion/transition system: continuity, interruption, hierarchy and selection recipe. React useLayoutEffect/useEffect and web.dev layout-shift guidance read for geometry ownership."
+    },
+    "surface": "Remove App-wide identity-triggered entrance and unconditional TabPanel opacity/Y entrance. Preserve TabList indicator. Existing surface adapter now changes X only for a real depth change, with one current ancestor/descendant owner and lifecycle cancellation; first mount, peer/data changes and reactivation settle immediately.",
+    "geometry": "Move required page scroll/focus restoration before paint. Setup uses the same explicit content owner. Native-host IME marker disables only the duplicate Vaul visualViewport height/bottom compensation; native project-preview paths avoid ancestor scaling/translation.",
+    "loading": "WorkingStatus is composition over the existing MotionFeedback, with a stable compact status line. Real errors/unknown receipts retain independent readable content. Unread account state is distinct from a confirmed empty list; retained memory refresh content does not retain command authority.",
+    "evidence": "../../docs/motion-research-20261110.md records implementation, source review, build/release identity and unverified Android interaction. No tests, mock host or new user aesthetic approval."
   }
 }
