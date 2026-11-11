@@ -13,6 +13,9 @@
   background: transparent;
   box-shadow: none;
 }
+.pw-task-reading .pw-owner-work-report { min-width: 0; }
+.pw-task-reading .pw-owner-work-report > .pw-reading-note { margin-bottom: var(--pw-gap-content); }
+.pw-task-reading .pw-owner-report-controls { margin-top: var(--pw-gap-control); }
 .pw-task-reading .pw-outcome-heading {
   align-items: center;
   margin: 0 0 var(--pw-gap-content);

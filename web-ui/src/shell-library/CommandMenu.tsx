@@ -13,9 +13,11 @@ export function CommandMenu({commands,onClose,conversationOnly=false,footer,quer
  const input=useRef<HTMLInputElement>(null),restoredSelection=useRef<string|undefined>(undefined);
  const list=remote?commands:commands.filter(x=>[x.group,x.title,x.description||''].join(' ').toLocaleLowerCase().includes(query.toLocaleLowerCase()));
  const activeIndex=Math.min(active,Math.max(0,list.length-1));
+ const activeId=list[activeIndex]?.id;
  const choose=(item:WorkCommand)=>{if(loading)return;onSelectedId?.(item.id);item.onSelect();if(closeOnSelect)onClose?.()};
  useEffect(()=>{if(!selectedId){restoredSelection.current=undefined;return}if(restoredSelection.current===selectedId)return;const next=list.findIndex(item=>item.id===selectedId);if(next>=0){restoredSelection.current=selectedId;setActive(next)}},[selectedId,commands]);
- useEffect(()=>{document.getElementById(`${commandId}-${activeIndex}`)?.scrollIntoView({block:'nearest'});},[activeIndex,query,commandId,list.length]);
+ // Appending a page must not move a manually scrolled list back to its active row.
+ useEffect(()=>{document.getElementById(`${commandId}-${activeIndex}`)?.scrollIntoView({block:'nearest'});},[activeIndex,activeId,query,commandId]);
  return <LayoutGroup id={commandId}><motion.section className="afa-command afa-card pw-command pw-morph-search" layout={!reduce}
  initial={reduce?false:{clipPath:'inset(0 0 calc(100% - 64px) 0 round 20px)',opacity:0}}
  animate={{clipPath:'inset(0 0 0 0 round 20px)',opacity:1}} transition={reduce?{duration:0}:{layout:{type:'spring',duration:.58,bounce:.22},clipPath:{duration:.32,ease:EASE_OUT},opacity:{duration:.16}}}

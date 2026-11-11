@@ -1665,7 +1665,7 @@ public final class TaskStore {
         JSONObject claim=entry.optJSONObject("butlerClaim");
         if(claim!=null){
             OwnerWorkReceiptEligibility eligibility=ownerWorkReceiptEligibility(entry,"","",0);
-            if(eligibility==OwnerWorkReceiptEligibility.UNKNOWN)return value.put("state","needs_review").put("reason","管家处理回执待核对，未重复调用模型");
+            if(eligibility==OwnerWorkReceiptEligibility.UNKNOWN)return value.put("state","needs_review").put("reason","管家处理回执待核对，未重复调用模型").put("receiptReconciliation",ownerWorkReceiptReview(entry));
             if(eligibility==OwnerWorkReceiptEligibility.BUSY)return value.put("state","running").put("reason","管家正在核对并整理结果");
         }
         JSONObject reserved=meta.optJSONObject("takeover");
@@ -2225,6 +2225,70 @@ public final class TaskStore {
             JSONObject review=ownerWorkReceiptReview(entry);if(review!=null)result.put("receiptReconciliation",review);
             db.setTransactionSuccessful();return result;
         }finally{db.endTransaction();}
+    }
+    /** Read the exact saved report selected by the original work receipt. This is an
+     * owner page read, never a result claim, replay, model input or new execution. */
+    public synchronized JSONObject ownerWorkReportForOwner(JSONObject args,RunControl control)throws Exception {
+        OwnerWorkTask.keys(args,Set.of("taskId","runId","epoch","reportMessageId","offset","maxChars","expectedReportRevision","expectedReportFingerprint"));
+        String id=OwnerWorkTask.text(args,"taskId",80),run=OwnerWorkTask.text(args,"runId",80),message=OwnerWorkTask.text(args,"reportMessageId",512);
+        int epoch=TaskExecutionScope.exactInt(args,"epoch",1,Integer.MAX_VALUE),offset=TaskExecutionScope.exactInt(args,"offset",0,Integer.MAX_VALUE),maxChars=TaskExecutionScope.exactInt(args,"maxChars",64,16000);
+        boolean pinned=args.has("expectedReportRevision");
+        if(pinned!=args.has("expectedReportFingerprint")||offset>0&&!pinned)throw new SecurityException("继续读取汇报需要同一原文版本与指纹，请从开头重新打开");
+        long revision=pinned?TaskExecutionScope.exactLong(args,"expectedReportRevision",1,Long.MAX_VALUE):0;
+        String fingerprint=pinned?OwnerWorkTask.text(args,"expectedReportFingerprint",80):"";
+        if(pinned&&!fingerprint.matches("sha256:[a-f0-9]{64}"))throw new SecurityException("原汇报指纹无效");
+        if(control==null||control.hasHostRun())throw new SecurityException("汇报原文只供当前主人页面读取");
+        long pause=control.pauseRevision(),started=System.nanoTime();checkOwnerWorkReportRead(control,pause,started);
+        JSONObject result;db.beginTransactionNonExclusive();try{
+            JSONObject selected=ownerWorkReportSelection(id,run,epoch,message),source=selected.getJSONObject("source"),ref=source.getJSONObject("sourceRef");
+            long actualRevision=ref.getLong("revision");String actualFingerprint=source.getString("bodyFingerprint");
+            if(pinned&&(revision!=actualRevision||!fingerprint.equals(actualFingerprint)))throw new SecurityException("原汇报版本已变化，未混入其他正文；请从开头重新打开");
+            checkOwnerWorkReportRead(control,pause,started);
+            JSONObject locator=new JSONObject().put("kind","owner_native_original").put("generation",source.getString("generation"))
+                    .put("conversationId",source.getString("sourceConversationId")).put("recordId",message).put("recordVersion",actualRevision).put("fingerprint",actualFingerprint);
+            JSONObject page=conversationRepository.readOwnerSearchHit(new JSONObject().put("ownerLocator",locator).put("offset",offset).put("maxChars",maxChars),control);
+            checkOwnerWorkReportRead(control,pause,started);
+            if(!capabilityFingerprint(selected).equals(capabilityFingerprint(ownerWorkReportSelection(id,run,epoch,message))))throw new SecurityException("原工作与汇报的关系已变化，未返回旧正文");
+            result=new JSONObject().put("taskId",id).put("runId",run).put("epoch",epoch).put("reportMessageId",message)
+                    .put("conversationId",selected.getString("conversationId")).put("reportRevision",actualRevision).put("bodyFingerprint",actualFingerprint)
+                    .put("readOnly",true).put("ownerOnly",true).put("executionAuthorized",false).put("modelCalled",false).put("modelReferenceRegistered",false).put("formalMemorySaved",false)
+                    .put("status",page.getString("status"));
+            if("current".equals(page.getString("status"))){
+                if(!message.equals(page.optString("recordId"))||!selected.getString("conversationId").equals(page.optString("conversationId"))||actualRevision!=page.getLong("recordVersion")
+                        ||!"assistant".equals(page.optString("role"))||!actualFingerprint.equals(page.getJSONObject("ownerLocator").optString("fingerprint")))throw new SecurityException("原文读取没有返回这份准确汇报");
+                result.put("body",page.getString("body")).put("readRange",new JSONObject(page.getJSONObject("readRange").toString())).put("nextOffset",page.getInt("nextOffset"));
+            }else result.put("reason",page.optString("reason","原汇报正文暂不可读取"));
+            checkOwnerWorkReportRead(control,pause,started);db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
+        checkOwnerWorkReportRead(control,pause,started);return result;
+    }
+    private static void checkOwnerWorkReportRead(RunControl control,long pause,long started)throws Exception {
+        control.check();if(control.isPaused()||control.pauseRevision()!=pause)throw new InterruptedException("汇报读取已暂停，未返回迟到正文");
+        if(System.nanoTime()-started>500_000_000L)throw new IllegalStateException("汇报原文核对超过本页读取范围，请重新打开");
+    }
+    /** Only an exact current receipt can select a report. The report producer may be
+     * an older butler run; reading it never requires or reopens that run's grant. */
+    private JSONObject ownerWorkReportSelection(String id,String run,int epoch,String message)throws Exception {
+        JSONObject work;
+        try(Cursor row=db.rawQuery("SELECT CASE WHEN length(CAST(document AS BLOB))<=1048576 THEN document END FROM tasks WHERE task_id=?",new String[]{id})){
+            if(!row.moveToFirst())throw new IllegalArgumentException("原工作不存在");
+            if(row.isNull(0))throw new IllegalStateException("原工作超过本次汇报读取范围，请查看原工作记录");work=new JSONObject(row.getString(0));
+        }
+        requirePrivateOwner(work);
+        if(!id.equals(work.optString("id"))||!run.equals(work.optString("runId"))||epoch!=work.optInt("coordinatorEpoch"))throw new SecurityException("原工作执行代次已变化，请重新打开当前工作");
+        ownerResultMetadata(work);requireOwnerResultSources(work);JSONObject handling=ownerWorkHandling(work);
+        if(!"reported".equals(handling.optString("state"))||!message.equals(handling.optString("reportMessageId")))throw new SecurityException("这份汇报不属于原工作当前已保存的处理结果");
+        JSONObject entry=ownerWorkDeliveryById(work,handling.getString("deliveryId")),claim=entry.optJSONObject("butlerClaim");
+        if(claim==null||!run.equals(entry.optString("runId"))||epoch!=entry.optInt("epoch")||!"consumed".equals(entry.optString("receiptState"))
+                ||!message.equals(entry.optString("consumedByMessageId"))||!ownerWorkResultAvailable(work,entry))throw new SecurityException("原结果的汇报回执或来源已不可核对");
+        String conversation=ownerResultConversation(work);JSONObject source=conversationRepository.nativeAssistantSource(message),saved=conversationRepository.source(message);
+        JSONObject producer=saved==null?null:saved.optJSONObject("nativeContext");
+        if(producer==null||!conversation.equals(source.optString("sourceConversationId"))||!claim.getString("taskId").equals(producer.optString("taskId"))
+                ||!claim.getString("runId").equals(producer.optString("runId"))||claim.getInt("epoch")!=producer.optInt("epoch")
+                ||saved.optString("nativeReplyId").isEmpty())throw new SecurityException("正式汇报没有同一管家处理回合的原生保存证明");
+        return new JSONObject().put("deliveryId",entry.getString("deliveryId")).put("resultDigest",entry.getString("resultDigest")).put("conversationId",conversation)
+                .put("producerTaskId",claim.getString("taskId")).put("producerRunId",claim.getString("runId")).put("producerEpoch",claim.getInt("epoch"))
+                .put("requestId",claim.getString("requestId")).put("source",source);
     }
     /** Durable never-started admission only. Interrupted work requires explicit continuation. */
     public synchronized JSONArray pendingOwnerWorkDispatches(int limit)throws Exception {

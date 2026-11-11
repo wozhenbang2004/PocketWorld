@@ -14,14 +14,14 @@ import java.text.Normalizer
 import java.util.Base64
 import java.util.Locale
 
-/** Read-only navigation over the existing stores; search never creates a grant or a model task. */
+/** Owner read paths over existing stores; navigation and report reads grant no execution. */
 internal class PocketWebWorkSearch(
     private val controller: PocketWorldController,
     private val captureWindow: () -> PocketWebWindowTicket,
     private val acceptsWindow: (PocketWebWindowTicket) -> Boolean,
     private val rememberTasks: (JSONObject) -> Unit
 ) {
-    companion object { val COMMANDS = setOf("work.search", "work.search.read", "work.capabilities", "webSearch.usage") }
+    companion object { val COMMANDS = setOf("work.search", "work.search.read", "work.capabilities", "webSearch.usage", "ownerWork.report.read") }
     private val main = Handler(Looper.getMainLooper())
     private val host get() = controller.nativeButlerHost()
     private val pending = mutableSetOf<RunControl>()
@@ -40,18 +40,28 @@ internal class PocketWebWorkSearch(
                         control.check()
                         check(acceptsWindow(window) && controller.webPrivateOwnerVisible()) { "原查找窗口已关闭" }
                         when (action) {
+                            "ownerWork.report.read" -> {
+                                fields(args, setOf("taskId", "runId", "epoch", "reportMessageId", "offset", "maxChars", "expectedReportRevision", "expectedReportFingerprint"))
+                                host.tasks.ownerWorkReportForOwner(args, control)
+                            }
                             "work.search" -> search(args, control)
                             // Internal tasks.open preflight: reread the selected original instead
                             // of treating the bounded navigation-ID cache as lasting authority.
                             "work.search.task" -> {
-                                fields(args, setOf("taskId", "query"))
+                                fields(args, setOf("taskId", "query", "expectedRunId", "expectedEpoch"))
                                 val id = args.opt("taskId") as? String ?: error("原工作身份缺失")
                                 val query = args.opt("query") as? String ?: error("原查找文字缺失")
                                 require(id.isNotBlank() && id.length <= 240 && query.length <= 500 && '\u0000' !in query) { "原工作查找范围无效" }
-                                val task = host.tasks.getForUi(id, false) ?: error("原工作已不存在，请重新搜索")
+                                val task = host.tasks.getForUi(id, false) ?: error("原工作已不存在，请返回核对")
                                 require(task.optString("id") == id && task.optString("actorId") == "owner" &&
-                                    task.optString("spaceId") == "private" && task.optString("kind") != "inference") { "原工作不属于当前私人搜索" }
-                                check(task.optString("taskProjection") != "source_unavailable" && !task.optBoolean("sourceCurrentReadRequired")) { "原工作来源暂不可核对，请重新搜索" }
+                                    task.optString("spaceId") == "private" && task.optString("kind") != "inference") { "原工作不属于当前私人工作区" }
+                                check(task.optString("taskProjection") != "source_unavailable" && !task.optBoolean("sourceCurrentReadRequired")) { "原工作来源暂不可核对，请返回重新打开" }
+                                require(args.has("expectedRunId") == args.has("expectedEpoch")) { "原整理记录身份不完整" }
+                                if (args.has("expectedRunId")) {
+                                    val run = args.opt("expectedRunId") as? String ?: error("原整理记录身份缺失")
+                                    require(run.isNotBlank() && run.length <= 80 && task.optString("runId") == run &&
+                                        task.optInt("coordinatorEpoch") == integer(args, "expectedEpoch", 0, 1, Int.MAX_VALUE)) { "原整理回合已变化，请在原工作中重新核对" }
+                                }
                                 val normalized = normalize(query)
                                 check(normalized.isEmpty() || normalize(task.optString("goal") + "\n" + task.optString("summary")).contains(normalized)) { "原工作已变化，请重新搜索" }
                                 JSONObject().put("taskId", id).put("readOnly", true).put("executionAuthorized", false)

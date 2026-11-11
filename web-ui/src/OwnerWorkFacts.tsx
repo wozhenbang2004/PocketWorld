@@ -1,12 +1,12 @@
 import { Button } from './forms-library';
 import { IconChevronRight } from './icons';
 import { ProgressCircle } from './library';
-import { ownerWorkPresentation } from './owner-work-presentation';
+import { ownerWorkPresentation, type ReportReconciliationTarget } from './owner-work-presentation';
 import './owner-work.css';
 
 /** The Brief/Assets relationship from Affect AgentChat, rendered with the
  * retained BoardUI controls and host-owned facts instead of demo data. */
-export function OwnerWorkFacts({ task, onReport }: { task: unknown; onReport?: () => void }) {
+export function OwnerWorkFacts({ task, onReport, onReconcile }: { task: unknown; onReport?: () => void; onReconcile?: (target: ReportReconciliationTarget) => void }) {
   const work = ownerWorkPresentation(task);
   if (!work) return null;
   return <section className="pw-owner-work-facts" aria-label="成果与管家处理" data-handling={work.state}>
@@ -14,6 +14,7 @@ export function OwnerWorkFacts({ task, onReport }: { task: unknown; onReport?: (
       {work.state === 'running' && <ProgressCircle isIndeterminate size="sm" aria-label="管家正在核对结果" />}
       <div><strong>{work.handlingLabel}</strong>{work.reason && <p>{work.reason}</p>}</div>
       {work.delivered && onReport && <Button variant="ghost" trailingIcon={IconChevronRight} onClick={onReport}>回到汇报话题</Button>}
+      {work.receiptReconciliation && onReconcile && <Button variant="ghost" trailingIcon={IconChevronRight} onClick={() => onReconcile(work.receiptReconciliation!)}>查看整理记录</Button>}
     </div>
     <p className="pw-owner-work-result-state">{work.resultState}</p>
   </section>;

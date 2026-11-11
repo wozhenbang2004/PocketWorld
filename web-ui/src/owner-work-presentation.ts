@@ -3,6 +3,7 @@ const object = (value: unknown): Data => value !== null && typeof value === 'obj
 const text = (value: unknown) => typeof value === 'string' ? value.trim() : '';
 const states = ['none', 'pending', 'running', 'reported', 'needs_review', 'unavailable'] as const;
 export type ButlerHandlingState = typeof states[number] | 'unread';
+export type ReportReconciliationTarget = { taskId: string; runId: string; epoch: number };
 
 /** Presentation of native work facts. Delivery is not proof that the butler
  * consumed a result, and this projection never creates an execution authority. */
@@ -26,8 +27,13 @@ export function ownerWorkPresentation(value: unknown) {
   const handlingLabel = !available ? '原工作来源不可用' : labels[state];
   const reason = !available ? '原来源已删除、停用或暂不可核对。保留工作身份与允许的控制。' : text(handling.reason);
   const resultAvailable = available && (nativeResult ? work.resultAvailable === true : entries.some(row => row.available === true && !row.noticeKind));
+  const reconciliation = object(handling.receiptReconciliation);
+  const receiptReconciliation: ReportReconciliationTarget | null = available && state === 'needs_review'
+    && reconciliation.state === 'unknown' && reconciliation.automaticReplayAllowed === false
+    && !!text(reconciliation.taskId) && !!text(reconciliation.runId) && Number.isSafeInteger(reconciliation.epoch) && Number(reconciliation.epoch) > 0
+    ? { taskId: text(reconciliation.taskId), runId: text(reconciliation.runId), epoch: Number(reconciliation.epoch) } : null;
   return {
-    state, handlingLabel, reason, reportMessageId, resultAvailable,
+    state, handlingLabel, reason, reportMessageId, resultAvailable, receiptReconciliation,
     conversationId: text(work.conversationId) || text(raw.conversationId),
     waitingForButler: available && ['pending', 'running'].includes(state),
     needsAttention: available && (state === 'needs_review' || state === 'unavailable' && resultAvailable && raw.cancelRequested !== true && !['cancelled', 'canceled', 'stopped'].includes(text(task.status))),

@@ -438,6 +438,7 @@ internal class PocketWebBridge(
                 return
             }
             if (action in PocketWebWorkSearch.COMMANDS) {
+                if (action == "ownerWork.report.read") require(section == null && taskViewId == requiredString(args, "taskId") && controller.webPrivateOwnerVisible()) { "请在原工作详情中读取这份汇报" }
                 workSearch.dispatch(action, args) { result, error -> complete(id, result, error) }
                 return
             }
@@ -598,17 +599,22 @@ internal class PocketWebBridge(
                 return
             }
             if (action == "tasks.open") {
-                checkedPayload(args, setOf("id", "requestNavigation", "readerWindow", "readerConversationId", "readerMessageId", "searchQuery"))
+                checkedPayload(args, setOf("id", "requestNavigation", "readerWindow", "readerConversationId", "readerMessageId", "searchQuery", "expectedRunId", "expectedEpoch"))
                 val taskId = requiredString(args, "id")
                 val fromReader = args.has("readerWindow") || args.has("readerConversationId") || args.has("readerMessageId")
-                if (args.has("searchQuery")) {
-                    require(!fromReader && controller.webPrivateOwnerVisible()) { "请从私人搜索重新打开原工作" }
+                require(args.has("expectedRunId") == args.has("expectedEpoch")) { "原整理记录身份不完整" }
+                val expectedRunId = if (args.has("expectedRunId")) requiredString(args, "expectedRunId") else null
+                val expectedEpoch = if (expectedRunId != null) requiredInt(args, "expectedEpoch").also { require(it > 0) { "原整理回合无效" } } else null
+                if (args.has("searchQuery") || expectedRunId != null) {
+                    require(!fromReader && controller.webPrivateOwnerVisible()) { "请回到私人工作区打开原工作" }
                     val requestNavigation = if (args.has("requestNavigation")) requiredBoolean(args, "requestNavigation") else true
-                    workSearch.dispatch("work.search.task", JSONObject().put("taskId", taskId).put("query", requiredString(args, "searchQuery", true))) { result, error ->
+                    val lookup = JSONObject().put("taskId", taskId).put("query", if (args.has("searchQuery")) requiredString(args, "searchQuery", true) else "")
+                    if (expectedRunId != null) lookup.put("expectedRunId", expectedRunId).put("expectedEpoch", expectedEpoch)
+                    workSearch.dispatch("work.search.task", lookup) { result, error ->
                         if (error != null || result == null) complete(id, null, error ?: "原工作暂不可核对")
                         else try {
                             require(taskHistory.contains(taskId) && result.optString("taskId") == taskId) { "原工作读取身份已变化" }
-                            openOriginalTask(id, taskId, requestNavigation)
+                            openOriginalTask(id, taskId, requestNavigation, keepConversationReader = expectedRunId != null && !requestNavigation, expectedRunId = expectedRunId, expectedEpoch = expectedEpoch)
                         } catch (failure: Exception) { complete(id, null, failure.message ?: "原工作暂不可打开") }
                     }
                     return
@@ -1540,7 +1546,7 @@ internal class PocketWebBridge(
         }
     }
 
-    private fun openOriginalTask(requestId: String, taskId: String, requestNavigation: Boolean, returnSection: String? = section ?: taskReturnSection, keepConversationReader: Boolean = false) {
+    private fun openOriginalTask(requestId: String, taskId: String, requestNavigation: Boolean, returnSection: String? = section ?: taskReturnSection, keepConversationReader: Boolean = false, expectedRunId: String? = null, expectedEpoch: Int? = null) {
         require(returnSection == null || returnSection in connectionSections) { "原工作页面已变化" }
         leaveTask(); leaveConnection(); reviews.clear()
         taskReturnSection = returnSection
@@ -1555,6 +1561,7 @@ internal class PocketWebBridge(
                 complete(requestId, null, error ?: "原任务暂不可读取")
                 publishState()
             } else try {
+                if (expectedRunId != null) require(task.raw.optString("runId") == expectedRunId && task.raw.optInt("coordinatorEpoch") == expectedEpoch) { "原整理回合已变化，未打开其他执行记录" }
                 if (isGroup(task)) taskPage = controller.enterGroupTask(task.id)
                 controller.completeWebTaskOpen(task.id, requestNavigation, keepConversationReader)
                 complete(requestId, JSONObject().put("taskId", task.id).put("readOnly", true).put("executionAuthorized", false), null)

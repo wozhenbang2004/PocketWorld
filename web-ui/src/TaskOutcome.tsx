@@ -5,12 +5,16 @@ import { getTaskOutcome } from './task-outcome';
 import { useEffect, useRef, useState } from 'react';
 import { useCollectionMotion, MotionFeedback } from './library/journey-motion';
 import { ownerWorkPresentation } from './owner-work-presentation';
+import { OwnerWorkReport } from './OwnerWorkReport';
 import './task-reading.css';
 
 /** Composition of PW-05 Answer and PW-22 file actions around host-owned evidence. */
-export function TaskOutcome({ task, messages, onCopy, onOpenAttachment }: {
+export function TaskOutcome({ task, messages, active, canReadReport, readIdentity, onCopy, onOpenAttachment }: {
   task: unknown;
   messages: unknown;
+  active: boolean;
+  canReadReport: boolean;
+  readIdentity: string;
   onCopy: (text: string) => Promise<unknown>;
   onOpenAttachment?: (messageId: string, id: string, sha256: string) => void;
 }) {
@@ -27,19 +31,18 @@ export function TaskOutcome({ task, messages, onCopy, onOpenAttachment }: {
   }, [screenshot?.imageId, screenshot?.expiresAt, clock]);
   const imageLabel = screenshot?.currentRun ? '本轮结果截图' : '任务保留的较早截图';
   const work = ownerWorkPresentation(task);
-  const report = work?.delivered && Array.isArray(messages) ? messages.find(message => message?.id === work.reportMessageId && message.role === 'assistant' && typeof message.content === 'string') : null;
   const progress = outcome.source === 'result-event' && outcome.resultStatus !== 'completed';
   const title = progress ? '当前进展' : outcome.source === 'task-summary' ? '当前摘要' : outcome.source === 'evidence' && !outcome.evidenceRunBound ? '任务保留的结果' : work ? '执行结果' : '结果内容';
   const reply = outcome.reply;
   const files = reply?.attachments || [];
   const root = useRef<HTMLElement>(null);
   const record = task && typeof task === 'object' ? task as Record<string, any> : {};
+  const report = work?.delivered && typeof record.raw?.runId === 'string' && Number.isSafeInteger(record.raw?.coordinatorEpoch) && record.raw.coordinatorEpoch > 0
+    ? { taskId: String(record.id), runId: record.raw.runId as string, epoch: record.raw.coordinatorEpoch as number, reportMessageId: work.reportMessageId, conversationId: work.conversationId } : null;
   const owner = JSON.stringify([record.id, record.raw?.runId, record.raw?.coordinatorEpoch]);
   const revision = JSON.stringify([!!outcome.text, !!outcome.image, !!remotePhone, screenshot?.imageId, reply?.id, files.map(file => [file.id, file.sha256])]);
   useCollectionMotion(root, owner, revision, {layout: false});
-  return <section ref={root} className="pw-task-outcome pw-task-reading" aria-label="任务结果依据" data-result-source={outcome.source}>
-    {report?.content && <section className="pw-owner-work-report" aria-label="管家汇报"><header className="pw-outcome-heading"><h3>管家汇报</h3></header><AIAnswer text={report.content} onCopy={() => onCopy(report.content)} onCopyCode={onCopy}/></section>}
-    <div className="pw-outcome-document">
+  const executionResult = <div className="pw-outcome-document">
       <header className="pw-outcome-heading"><h3>{outcome.text ? title : '暂无可读取的结果'}</h3></header>
       {outcome.text ? <div data-motion-key="result-body"><AIAnswer text={outcome.text} showActions={!progress} onCopy={progress ? undefined : () => onCopy(outcome.text)} onCopyCode={onCopy}/></div>
         : <p className="pw-reading-note">{files.length ? '可先查看下方关联答复中的附件。' : '当前记录未提供可读取的结果正文。'}</p>}
@@ -57,7 +60,10 @@ export function TaskOutcome({ task, messages, onCopy, onOpenAttachment }: {
         '本轮还没有可保存的手机观察画面。需要原任务执行带图观察、目标允许全屏捕获，并开启本机截图留存；不会为打开此页面额外抓图。'
       }</p>}
       {outcome.partial && <MotionFeedback identity={`${owner}:partial`} className="pw-outcome-limit" role="status">部分结果记录尚未载入。</MotionFeedback>}
-    </div>
+    </div>;
+  return <section ref={root} className="pw-task-outcome pw-task-reading" aria-label="任务结果依据" data-result-source={outcome.source}>
+    {report && <OwnerWorkReport key={JSON.stringify(report)} target={report} active={active} supported={canReadReport} identity={readIdentity} onCopy={onCopy} />}
+    {report ? <Accordion variant="divided" className="pw-reading-disclosures" aria-label="执行原始结果"><AccordionItem id="execution-result" title="查看执行原始结果" description="保留执行时的正文和画面">{executionResult}</AccordionItem></Accordion> : executionResult}
 
     {/* These files belong to the linked message, not necessarily to the current run. */}
     {files.length > 0 && <section className="pw-outcome-deliverables" aria-label="关联答复中的附件">
