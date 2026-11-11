@@ -75,9 +75,9 @@ public final class WebSearchModule implements EngineModule {
     }
     /** Anonymous site-scoped search for explicitly approved research child origins. */
     public static JSONObject anonymousSearch(String query,int limit,RunControl original)throws Exception {
-        if(query==null||query.isBlank()||query.length()>512||query.codePoints().anyMatch(Character::isISOControl)
-                ||limit<1||limit>8)throw new IllegalArgumentException("匿名研究查询无效");
-        return executeSearch(query.trim(),limit,new SettingsStore.WebSearchConnection("duckduckgo","","",0),original);
+        if(limit<1||limit>8)throw new IllegalArgumentException("匿名研究结果预算无效");
+        return executeSearch(WebQueryGuard.requirePublic(query,512),limit,
+                new SettingsStore.WebSearchConnection("duckduckgo","","",0),original);
     }
     private static JSONObject executeSearch(String query,int limit,SettingsStore.WebSearchConnection config,RunControl original)throws Exception {
         original.check();
