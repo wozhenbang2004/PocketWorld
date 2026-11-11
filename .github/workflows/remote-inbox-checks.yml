@@ -44,6 +44,8 @@ jobs:
         run: |
           npm ci --prefix web-ui
           npm run typecheck --prefix web-ui
+      - name: Verify background setup state and owner controls
+        run: node --experimental-strip-types --test web-ui/tests/background-settings.test.ts
   native-compile:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
@@ -65,7 +67,10 @@ jobs:
       - name: Compile Android Kotlin and Java without producing an unverified APK
         run: |
           echo "GRADLE_USER_HOME=$RUNNER_TEMP/pocketworld-remote-inbox-gradle" >> "$GITHUB_ENV"
+          # Compile-only workflow: fixed local development identity. No APK is produced
+          # or distributed here; signed release versions remain owned by build-apk.yml.
           ./gradlew --no-daemon --max-workers=1 --console=plain \
+            -PpocketworldVersionCode=3 -PpocketworldVersionName=0.3.0-pr-compile \
             -Pkotlin.compiler.execution.strategy=in-process \
             -Dorg.gradle.vfs.watch=false \
             :app:compileDebugKotlin :app:compileDebugJavaWithJavac

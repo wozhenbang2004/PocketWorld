@@ -9,7 +9,9 @@ export function backgroundConnection(display: HostObject, activeTaskId: unknown,
     'display.adb.pair', 'display.adb.connect', 'display.adb.cancel', 'display.adb.forget',
     'display.shizuku.start', 'display.shizuku.stop', 'display.setup', 'display.release',
   ].includes(key)));
-  const taskOwned = Boolean(display.taskOwned || activeTaskId != null);
+  // Follow the native display resource authority. A conversation or task awaiting
+  // initial setup does not own a background display when the host explicitly says false.
+  const taskOwned = display.taskOwned === true || !Object.hasOwn(display, 'taskOwned') && activeTaskId != null;
   const barrier = Boolean(display.sessionActive || display.releasePending || display.recoveryRequired);
   const recovery = Boolean(adb.recoveryRequired);
   const supported = display.supportedAndroid === true;

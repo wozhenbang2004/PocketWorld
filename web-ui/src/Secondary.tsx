@@ -645,11 +645,13 @@ function PhoneSettings({ state, supported, run, navigate, registerTransientBack,
  * fields, radio options, accordion and SettingsModal. It reads the existing
  * display state; this page does not create a task or a second connection. */
 function BackgroundSettings({ state, supported, run, onReturn, returnLabel = '手机能力', registerTransientBack }: { state: Data; supported: (action: string) => boolean; run: Run; onReturn: () => void; returnLabel?: string; registerTransientBack: BackHandlerRegistration }) {
-  const display = object(object(state.features).display), adb = object(display.adb), discovery = object(adb.discovery);
+  const display = object(object(state.features).display), adb = object(display.adb), discovery = object(adb.discovery), shizuku = object(display.shizuku);
   const audioRecovery = object(object(object(state.features).phone_setup).audioRecovery), audioPending = audioRecovery.pendingCount;
   const pending = Array.isArray(state.moduleBusy) ? state.moduleBusy.map(String) : [];
   const connection = backgroundConnection(display, state.activeTaskId, pending);
   const [connecting, setConnecting] = useState(() => connection.requiresConnectionCheck || connection.phase === 'paired' || connection.identityPresent);
+  const [showWirelessSetup, setShowWirelessSetup] = useState(false);
+  const automaticDiscovery = useRef(false);
   const [manual, setManual] = useState(false), [portText, setPortText] = useState(''), [selected, setSelected] = useState('');
   const [code, setCode] = useState(''), [pairPort, setPairPort] = useState<number | undefined>();
   const [panel, setPanel] = useState<'setup' | 'checks'>('setup');
@@ -669,7 +671,7 @@ function BackgroundSettings({ state, supported, run, onReturn, returnLabel = '�
   const resultSignature = (key: string) => JSON.stringify([object(state.moduleResults)[key] ?? null, object(state.moduleErrors)[key] ?? null]);
   const closeSecrets = () => setCode('');
   const selectPanel = (value: 'setup' | 'checks') => { setCode(''); setPanel(value); };
-  useEffect(() => { registerTransientBack(() => { if (Object.values(ownerBack.current).some(handler => handler?.())) return true; if (mainScreenConsent) { setMainScreenConsent(false); return true; } if (panel === 'checks') { selectPanel('setup'); return true; } return false; }); return () => registerTransientBack(null); }, [panel, mainScreenConsent, registerTransientBack]);
+  useEffect(() => { registerTransientBack(() => { if (Object.values(ownerBack.current).some(handler => handler?.())) return true; if (mainScreenConsent) { setMainScreenConsent(false); return true; } if (panel === 'checks') { selectPanel('setup'); return true; } if (showWirelessSetup) { setCode(''); setShowWirelessSetup(false); return true; } return false; }); return () => registerTransientBack(null); }, [panel, mainScreenConsent, showWirelessSetup, registerTransientBack]);
   useEffect(() => {
     if (state.backgroundSetupOpen === true) ownerOpened.current = true;
     else if (ownerOpened.current) { setCode(''); onReturn(); }
@@ -688,6 +690,17 @@ function BackgroundSettings({ state, supported, run, onReturn, returnLabel = '�
   useEffect(() => {
     if (!endpoints.some(item => item.id === selected)) setSelected(endpoints.length === 1 ? endpoints[0].id : '');
   }, [endpointKeys, selected]);
+  // Discover existing local TLS services once per visit. Discovery is read-only and
+  // never pairs a new device or retries a connection with unknown effects.
+  useEffect(() => {
+    if (automaticDiscovery.current || !connection.loaded || !connection.supported ||
+        !connection.identityPresent || connection.backend !== 'wireless_adb' ||
+        connection.helperConnected || connection.taskOwned || connection.busy ||
+        !supported('background.discover')) return;
+    automaticDiscovery.current = true;
+    void run('background.discover', {}).catch(() => {});
+  }, [connection.loaded, connection.supported, connection.identityPresent, connection.backend,
+      connection.helperConnected, connection.taskOwned, connection.busy, supported('background.discover')]);
   useEffect(() => {
     const hide = () => { if (document.visibilityState !== 'visible') closeSecrets(); };
     document.addEventListener('visibilitychange', hide);
@@ -716,8 +729,12 @@ function BackgroundSettings({ state, supported, run, onReturn, returnLabel = '�
     catch { setUnknownResult(true); setConnecting(true); setAwaiting(null); pairGuard.current = false; }
     finally { setRequesting(false); }
   };
+  const wirelessSaved = connection.backend === 'wireless_adb' && connection.identityPresent;
+  const savedEndpoints = wirelessEndpoints(discovery, 'connect');
+  const shizukuAvailable = shizuku.binderAvailable === true && Number(shizuku.serverVersion) >= 13;
+  const shizukuAuthorized = shizukuAvailable && shizuku.permissionGranted === true;
   const errors = Object.entries(object(state.moduleErrors)).filter(([key]) => key.startsWith('display.') || key.startsWith('phone_setup.')).map(([, value]) => text(value)).filter(Boolean);
-  const headline = connection.busy || requesting || awaiting ? '正在核对本次连接' : requiresCheck ? '上次连接结果待核对' : connection.screenEstablished ? '独立屏幕已建立' : connection.helperConnected ? '后台助手已连接' : !connection.loaded ? '正在读取后台连接' : !connection.supported ? '后台独立屏需要 Android 14 或以上' : connection.phase === 'paired' ? '配对已确认，还需要连接助手' : '连接手机后台助手';
+  const headline = connection.busy || requesting || awaiting ? '正在核对本次连接' : requiresCheck ? '上次连接结果待核对' : connection.screenEstablished ? '独立屏幕已建立' : connection.helperConnected ? '后台助手已连接' : !connection.loaded ? '正在读取后台连接' : !connection.supported ? '后台独立屏需要 Android 14 或以上' : connection.phase === 'paired' ? '配对已确认，还需要连接助手' : '选择手机操作方式';
   const alternate = connection.backend === 'shizuku' || connection.backend === 'adb';
   const permissions = state.accessibilityEnabled === true && state.notificationsEnabled === true;
   const steps = [
@@ -727,6 +744,17 @@ function BackgroundSettings({ state, supported, run, onReturn, returnLabel = '�
     { title: '返回原目标', done: false, detail: connection.taskOwned ? '原任务持有执行资源，回到原任务查看' : '完成设置后返回，由你确认是否开始原目标' },
   ];
   const locked = connection.taskOwned || connection.busy || requesting || awaiting !== null;
+  const canUseExistingShizuku = !locked && !connection.displayBarrier && !connection.recoveryRequired && !requiresCheck;
+  const reconnectSaved = async () => {
+    if (locked || pairGuard.current || !wirelessSaved || !connection.canConnect || savedEndpoints.length !== 1 ||
+        !supported('background.connect')) return;
+    const endpoint = savedEndpoints[0], key = 'display.adb.connect';
+    pairGuard.current = true; setConnecting(true); setRequesting(true); setCode('');
+    setAwaiting({ key, before: resultSignature(key), busySeen: false });
+    try { await run('background.connect', { host: endpoint.host, port: endpoint.port }); }
+    catch { setUnknownResult(true); setAwaiting(null); pairGuard.current = false; }
+    finally { setRequesting(false); }
+  };
   const connected = connection.helperConnected && connection.backend === 'wireless_adb' && !display.releasePending && !display.recoveryRequired;
   const activeStep = connection.taskOwned || connection.helperConnected && !requiresCheck ? 3 : !connection.loaded || !connection.supported || !permissions ? 0 : connecting || requiresCheck ? 2 : 1;
   const blockedGroups = list(object(state.phoneReadiness).groups).filter(group => group.state === 'blocked').length;
@@ -735,7 +763,7 @@ function BackgroundSettings({ state, supported, run, onReturn, returnLabel = '�
     <header className="pw-background-heading"><h2>{headline}</h2>
       <p className="pw-background-backend">{({ wireless_adb: '手机内无线连接', shizuku: 'Shizuku 兼容连接', adb: '受信任电脑 ADB' } as Data)[connection.backend] || '连接方式尚未读取'}{connection.taskOwned ? ' · 原手机任务持有执行资源' : ''}</p>
     </header>
-    <ol className="pw-background-progress" aria-label="连接准备进度">{steps.map((step, index) => <li key={step.title} data-complete={step.done || undefined} aria-current={activeStep === index ? 'step' : undefined} title={step.title}><span aria-hidden="true">{step.done ? <IconCheck size={13}/> : index + 1}</span><span aria-hidden="true">{['系统准备', alternate ? '连接授权' : '本机配对', '连接核对', '返回目标'][index]}</span><span className="pw-sr-only">{step.title}，{step.done ? '已完成' : activeStep === index ? '当前步骤' : '待核对'}。{step.detail}</span></li>)}</ol>
+    {showWirelessSetup && <ol className="pw-background-progress" aria-label="连接准备进度">{steps.map((step, index) => <li key={step.title} data-complete={step.done || undefined} aria-current={activeStep === index ? 'step' : undefined} title={step.title}><span aria-hidden="true">{step.done ? <IconCheck size={13}/> : index + 1}</span><span aria-hidden="true">{['系统准备', alternate ? '连接授权' : '本机配对', '连接核对', '返回目标'][index]}</span><span className="pw-sr-only">{step.title}，{step.done ? '已完成' : activeStep === index ? '当前步骤' : '待核对'}。{step.detail}</span></li>)}</ol>}
     {connection.taskOwned && state.activeTaskId && <div className="pw-background-status-actions"><CapabilityAction action="tasks.open" args={{ id: state.activeTaskId }} supported={supported} run={run} primary>回到原任务</CapabilityAction></div>}
     {(connection.busy || requesting || awaiting || requiresCheck) && text(adb.message) && <p className="pw-background-native-message" role="status">{text(adb.message)}</p>}
     {requiresCheck && <p className="pw-background-attention" role="status">上次连接结果尚未确认。核对原助手，不要重复提交配对码。</p>}
@@ -747,7 +775,23 @@ function BackgroundSettings({ state, supported, run, onReturn, returnLabel = '�
       <TabList aria-label="后台连接内容"><Tab id="setup">连接设置</Tab><Tab id="checks" count={blockedGroups || undefined}>能力检查</Tab></TabList>
       <TabPanel id="setup">
         {!permissions && <section className="pw-background-preparation"><h3>开启手机操作所需权限</h3><p>完成系统授权后返回，使用右上角刷新核对。</p><div className="pw-background-permission-status"><span>界面读取<b>{state.accessibilityEnabled === true ? '已连接' : '待开启'}</b></span><span>任务通知<b>{state.notificationsEnabled === true ? '已开启' : '待开启'}</b></span></div><div className="pw-form-actions">{state.accessibilityEnabled !== true && <CapabilityAction action="settings.openSystem" args={{ section: 'accessibility' }} supported={supported} run={run} primary>设置界面读取权限</CapabilityAction>}{state.notificationsEnabled !== true && <CapabilityAction action="settings.openSystem" args={{ section: 'notifications' }} supported={supported} run={run} primary={state.accessibilityEnabled === true}>允许任务通知</CapabilityAction>}</div></section>}
-    {(permissions || connecting || requiresCheck) && !connection.taskOwned && connection.loaded && connection.supported && !alternate && !connected && <Card title={connecting ? '连接后台助手' : '与这台手机配对'} description={connecting ? '回到系统无线调试主页，读取连接端口。它与配对窗口的端口不同。' : '在开发者选项开启无线调试，打开“使用配对码配对设备”，保持当前窗口可见。'}>
+    {!connection.taskOwned && connection.loaded && connection.supported && !connection.helperConnected && <Card title="手机控制" description="主屏无需配对；独立屏优先复用已有授权。">
+       <div className="pw-form-actions">
+         {wirelessSaved && <Button variant="primary" disabled={locked || !connection.canConnect || !supported(savedEndpoints.length === 1 ? 'background.connect' : 'background.discover') || savedEndpoints.length !== 1 && discovery.discovering === true}
+           onClick={() => { if (savedEndpoints.length === 1) void reconnectSaved(); else void run('background.discover', {}).catch(() => {}); }}>
+           {savedEndpoints.length === 1 ? requiresCheck ? '核对上次无线连接' : '恢复已授权后台助手' : discovery.discovering === true ? '正在发现本机连接…' : '查找已授权的连接'}
+         </Button>}
+         {shizukuAuthorized && <CapabilityAction action="background.shizuku.start" supported={supported} run={run} disabled={!canUseExistingShizuku} primary={!wirelessSaved}>使用已授权 Shizuku</CapabilityAction>}
+         {shizukuAvailable && !shizukuAuthorized && <CapabilityAction action="background.shizuku.permission" supported={supported} run={run} disabled={!canUseExistingShizuku || shizuku.permissionRequestPending === true}>授权已有 Shizuku</CapabilityAction>}
+         <Button variant={wirelessSaved || shizukuAuthorized ? 'secondary' : 'primary'} disabled={locked || !supported('background.selectMainScreen')} onClick={() => setMainScreenConsent(true)}>使用主屏模式（免配对）</Button>
+       </div>
+       {wirelessSaved && savedEndpoints.length > 1 && <p className="pw-field-hint">发现多个本机连接端口，无法安全地猜测。请展开下方连接设置明确选择。</p>}
+       {wirelessSaved && savedEndpoints.length === 0 && !discovery.discovering && <><p className="pw-field-hint">已保存授权身份，但尚未找到本机连接服务；不需要重新输入配对码。</p>
+         <CapabilityAction action="settings.openSystem" args={{ section: 'wireless' }} supported={supported} run={run}>打开无线调试设置</CapabilityAction></>}
+       {!wirelessSaved && !shizukuAuthorized && <p className="pw-field-hint">首次使用独立后台屏需要 Android 授予系统级连接能力。仅靠无障碍可以操作主屏，不能创建隔离后台屏。</p>}
+       <Button variant="ghost" disabled={locked} onClick={() => { setCode(''); setShowWirelessSetup(value => !value); }}>{showWirelessSetup ? '收起连接设置' : '首次授权或手动连接'}</Button>
+     </Card>}
+     {showWirelessSetup && (permissions || connecting || requiresCheck) && !connection.taskOwned && connection.loaded && connection.supported && !alternate && !connected && <Card title={connecting ? '连接后台助手' : '与这台手机配对'} description={connecting ? '回到系统无线调试主页，读取连接端口。它与配对窗口的端口不同。' : '在开发者选项开启无线调试，打开“使用配对码配对设备”，保持当前窗口可见。'}>
       {!connection.wirelessAvailable ? <Empty>此安装包尚未提供手机内无线配对能力。</Empty> : <>
         <div className="pw-form-actions"><Button variant="secondary" disabled={locked || !supported('settings.openSystem')} onClick={() => { setCode(''); void run('settings.openSystem', { section: 'wireless' }).catch(() => {}); }}>前往无线调试设置</Button><CapabilityAction action="background.discover" supported={supported} run={run} disabled={connection.taskOwned || pending.includes('display.adb.discover')}>查找本机服务</CapabilityAction></div>
         <div className="pw-background-endpoints">
