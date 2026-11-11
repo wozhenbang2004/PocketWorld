@@ -13,7 +13,7 @@ import java.util.regex.Pattern;
 /** Bounded, explicit owner setup only. Never reads text outside a system Settings pairing dialog. */
 public final class SystemWirelessPairing {
     private static final Pattern ADDRESS = Pattern.compile("((?:[0-9]{1,3}\\.){3}[0-9]{1,3})\\s*:\\s*([0-9]{1,5})");
-    private static final Pattern IPV6 = Pattern.compile("\\[([0-9a-fA-F:%]+)\\]\\s*:\\s*([0-9]{1,5})");
+    private static final Pattern IPV6 = Pattern.compile("\\[([0-9a-fA-F:.]+(?:%[A-Za-z0-9_.-]{1,64})?)\\]\\s*:\\s*([0-9]{1,5})");
     private static final Pattern CODE = Pattern.compile("(?<![0-9])([0-9]{6})(?![0-9])");
     private SystemWirelessPairing() { }
 
