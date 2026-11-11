@@ -35,7 +35,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
     companion object {
         val COMMANDS = setOf("teams.attention", "teams.readAttention", "teams.snapshot", "teams.readRun", "teams.readDefinition", "teams.reviewDefinition",
             "teams.reviewStart", "teams.reviewRemove", "teams.confirm", "teams.control", "teams.sendMessage",
-            "teams.answerAssignment", "teams.probeMember", "teams.closeReading", "teams.reviewPhoneStart", "teams.reviewMember")
+            "teams.answerAssignment", "teams.probeMember", "teams.closeReading", "teams.reviewPhoneStart", "teams.reviewMember", "teams.openResearchTask")
     }
 
     fun clear() {
@@ -69,6 +69,36 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
         val original = if (consume) readings.remove(handle) else readings[handle]
         check(original != null && original.kind == kind) { "原团队读取已关闭，请重新读取" }
         return JSONObject(original.original)
+    }
+    /** Exact original record navigation, including children outside the recent task list.
+     * This is not a continuation, member read grant or authorization to reuse old output. */
+    fun taskForResearchNavigation(args: JSONObject): String {
+        check(controller.webPrivateOwnerVisible()) { "请回到前台私人团队页面" }
+        fields(args, "viewHandle", "memberId", "round", "taskId")
+        val original = reading(text(args, "viewHandle"), "run")
+        check(original.optString("researchExecutionFormat").isNotBlank()) { "这份记录不是原研究协作" }
+        val memberId = text(args, "memberId")
+        val member = original.optJSONArray("members").objects().singleOrNull { it.optString("id") == memberId }
+            ?: error("原研究成员不在这份读取窗口")
+        val round = args.opt("round")
+        require(round is Number && round.toDouble() == round.toInt().toDouble() && round.toInt() in 1..6) { "请核对原研究阶段" }
+        val phase = member.optJSONArray("roundStates").objects().singleOrNull { it.optInt("round") == round.toInt() }
+            ?: error("原研究阶段不在这份读取窗口")
+        val id = text(args, "taskId", 36)
+        require(runCatching { UUID.fromString(id).toString() == id }.getOrDefault(false)) { "原研究任务身份无效" }
+        val result = if (phase.optString("researchTaskId") == id) phase.optJSONObject("researchTask") else {
+            val prior = phase.optJSONArray("researchHistory").objects().singleOrNull { it.optString("taskId") == id }
+                ?: error("这份原研究任务不属于所选成员与阶段，请重新读取")
+            prior.optJSONObject("result")
+        }
+        if (result != null) {
+            check((!result.has("taskId") || result.optString("taskId") == id)
+                && (!result.has("teamRunId") || result.optString("teamRunId") == original.getString("id"))
+                && (!result.has("memberId") || result.optString("memberId") == memberId)) { "原研究回执身份不一致，请重新读取" }
+        }
+        // Absence of a progress receipt does not invent a task or a terminal state.
+        // The original owner getTask path must still find and authorize the record.
+        return id
     }
     private fun view(kind: String, value: JSONObject): JSONObject {
         while (readings.size >= 24) readings.remove(readings.keys.first())

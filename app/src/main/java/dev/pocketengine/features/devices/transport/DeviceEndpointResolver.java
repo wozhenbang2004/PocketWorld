@@ -57,6 +57,16 @@ public final class DeviceEndpointResolver {
             || !("https".equals(uri.getScheme()) || "wss".equals(uri.getScheme())) || uri.getHost() == null || uri.getUserInfo() != null || uri.getQuery() != null || uri.getFragment() != null) throw new SecurityException("Relay hint is not this native configured trusted service");
         return new Resolved(null, 0, 0, 0, 0, serviceBase);
     }
+    /** Owner-selected DNS-SD address for an EXISTING paired identity; no pairing ports or token. */
+    public static Resolved resolvePairedLan(JSONObject address) throws Exception {
+        if (address.length() != 3 || !address.has("host") || !address.has("controlPort") || !address.has("bulkPort"))
+            throw new SecurityException("Invalid paired LAN address");
+        int control = address.getInt("controlPort"), bulk = address.getInt("bulkPort");
+        if (control < 1 || control > 65535 || bulk < 1 || bulk > 65535 || control == bulk) throw new SecurityException("Invalid paired LAN ports");
+        InetAddress host = literal(address.getString("host"));
+        if (host.isLoopbackAddress()) throw new SecurityException("Loopback is not a nearby device");
+        return new Resolved(host, 0, 0, control, bulk, null);
+    }
     public static final class Resolved {
         public final String kind, host, serviceBase;
         public final int candidatePort, completionPort, controlPort, bulkPort;

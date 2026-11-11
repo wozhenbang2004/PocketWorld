@@ -1,10 +1,10 @@
 # 手机本机 APK 开发：可行路线与未交付边界
 
-研究时间：2026-11-10 UTC。承接“手机本机开发真正可用”的要求；本切片不推 main、不安装依赖、不写或运行测试、不真机。它不替代此前私人项目编辑、原 Agent 任务、原回执与正式版本采纳链。
+研究时间：2026-11-10 UTC；源码状态对齐于 2026-11-11，基线 `50ceebc077517e937de5007c4302d9172bf132be`。承接“手机本机开发真正可用”的要求；原 Stage 5 研究未安装依赖、未写或运行测试、未真机；Stage 5–7 源码现已存在于上述 main 基线，不再是未合入候选。它不替代此前私人项目编辑、原 Agent 任务、原回执与正式版本采纳链。
 
 ## 结论
 
-**不依赖 Termux 固定路径的 ARM64 Android 构建路线真实存在，但 PocketWorld 目前没有完成 APK 工具链或安装闭环。** 推荐继续复用原 Ubuntu 24 ARM64/glibc/PRoot 环境，增加可选、独立计费空间的工具链 generation，而不是降低 targetSdk、修改系统安全配置、把 Termux 私有路径硬写进项目，或悄悄切到远端。
+**不依赖 Termux 固定路径的 ARM64 Android 构建路线真实存在，但 PocketWorld 目前没有完成 APK 工具链或实际安装闭环。** 单 APK 主人审阅和系统安装交接源码已实现，见 `phone-apk-owner-handoff-20261110.md`；这不是已经构建、签名或真机安装成功。推荐继续复用原 Ubuntu 24 ARM64/glibc/PRoot 环境，增加可选、独立计费空间的工具链 generation，而不是降低 targetSdk、修改系统安全配置、把 Termux 私有路径硬写进项目，或悄悄切到远端。
 
 当前可交付的是源码级前置条件、构建意图和私钥排除修正。以下组合是**待验证候选**，不是已支持或已在手机跑通的组合：Temurin JDK 17.0.21+9 Linux aarch64、Gradle 8.9、AGP 8.7.3、API 35、显式 Build Tools 35.0.1，以及 ARM64/glibc 的 AAPT2/AIDL/zipalign/split-select。AGP 8.7 官方矩阵是 JDK 17、Gradle 8.9、最高 API 35，默认/最低 Build Tools 34.0.0，不能把这里选择 35.0.1 写成官方认证。旧 AGP/Gradle 候选在正式供货前还要重查安全公告，不自动降级用户已有项目。
 
@@ -28,7 +28,7 @@
 候选具体元数据见同目录 `phone-apk-candidate-20261110.json`，它是研究材料，不在 APK assets/runtime catalog 中，不可用来授予安装/执行能力。
 
 - Temurin aarch64 JDK 17.0.21+9：192,336,814 B；Gradle 8.9 binary ZIP：136,114,148 B；四个离散 ARM64 工具合计 8,940,592 B。JDK/Gradle 采用发布者固定版本及校验来源；JDK 签名资产存在但本轮未验证签名。
-- SDK feed 的 F-Droid 透明日志镜像显示 Linux Build Tools 35.0.1 为 61,959,297 B，Platform 35 r02 为 64,273,788 B。镜像给的是 SHA-1，且本轮没能读取 Google 原 feed，所以两项仍为**未完成固定 SHA256/官方内容核验**，不能进安装 catalog。不要从搜索摘要猜 URL，镜像里的 Linux 文件名是 `build-tools_r35.0.1_linux.zip`。
+- SDK feed 的 F-Droid 透明日志镜像显示 Linux Build Tools 35.0.1 为 61,959,297 B，Platform 35 r02 为 64,273,788 B。镜像给的是 SHA-1，且本轮没能读取 Google 原 feed，当时缺 SHA256。Stage 7 从固定 Google Perfetto 源码取得两项 SHA256，本次已再次读取该原文并同步候选 JSON；**仍未下载核验 ZIP 字节、内容和 notices**，不能进安装 catalog。不要从搜索摘要猜 URL，镜像里的 Linux 文件名是 `build-tools_r35.0.1_linux.zip`。
 - 上述原始下载合计约 **442.1 MiB**，还不含现有基本环境约 58.1 MiB、AGP/Kotlin/Maven 项目依赖、签名工具附加项或安装临时文件。展开量、同时保存旧 generation 的峰值、项目缓存和产物都未测量，不能拿基本环境约 797 MiB 最低空间当 APK 总预算。产品应由真实 archive/expanded 清单加缓存/旧版保留预算计算，不先写死“1GB 足够”。
 - [Google SDK 条款](https://developer.android.com/studio/terms) 2 节要求接受后使用；3.4 对修改/再分发有限制，3.5 将开源组件交给各自开源许可。不能因为构建胶水是 MIT 就把 Google SDK、AOSP、JDK 和第三方库统一当 MIT。保留组件 notices；优先由手机直接从供应商下载经明确审阅的 SDK，不把未知权利的合并 SDK 放进仓库/APK。
 - 本次没有接受 SDK 条款、运行 `yes | sdkmanager --licenses`、上传源码、保存凭据或同意任何权限。可选工具链的原生审阅应同时展示来源、总下载/空间、各许可和联网范围，不暗中接受协议。
@@ -49,14 +49,14 @@
 - Gradle `build` 意图改为 `--no-daemon assemble`，不再默认触发 Gradle 生命周期 `build -> check/test`。显式原 `test` 意图保持不变，本轮没有写/运行测试。未增加 runner、wrapper 自动下载、权限或任务状态。
 - `ProjectPackageArchive.excluded` 原单一进出包/成果策略新增 `.android`、PK8/PKCS8/JCEKS/BKS 等私钥/密钥库、签名 properties 和常见备份后缀。不会删除文件；明确选中被排除文件时仍由原入口拒绝。既有含这些文件的包现在不能导入是有意的安全收紧。它是已知文件名规则，**不声称能发现任意改名或硬编码在源码中的秘密，也不保护用户自行运行的 git add/push**。
 
-不改 frozen stage1–4、统一候选、App.tsx/Bridge/UI。仅源码读写和研究，没有编译、测试、设备、签名、APK 构建或安装结果。
+原 Stage 5 未改 stage1–4、App.tsx/Bridge/UI。当前状态对齐仍只有源码读写和来源研究，没有增加编译、测试、设备、签名、APK 构建或安装成功证据。
 
 ## 未交付项与继续实施条件
 
 1. 完整 SDK/JDK/Gradle profile 的官方字节身份、许可、展开量、原生可执行加载/版本验证、原 setup 生命周期集成。只有“有安装按钮”不满足此项。
 2. **Android 模块输出与源隔离**：`ProjectSources.sourcePath` 目前仅排根 build/dist，模块 `app/build` 仍可能进入源码清单；直接全局排所有名为 build 的目录又会误删合法源码范围。应在原完整树/源码策略统一支持明确生成根，连同 baseline、编辑、导回、包和 Agent 查询一致，而非只在 UI 隐藏。
-3. **大 APK 成果**：`ProjectManagedOutput.MAX_BYTES` 为 2MiB，且目前持 byte[]；需要原附件 catalog 的有界流式保存/身份核验方案，不能简单把内存限制调到几百 MiB。
-4. APK 解析、签名、密钥持久/迁移、PackageInstaller owner handoff 与回执恢复。未签/未验签输出不得标为安装成功。
+3. **大 APK 成果**：Stage 6 已实现原附件 catalog 的有界流式发布，每文件 20 MiB、原附件总存储 100 MiB；旧选择仍守 2 MiB。Stage 7 后的流式读取增量见交接文档。超过 20 MiB 的 APK 仍未支持，不能只调高常量而保留 byte[]、缓存峰值和 Provider 读取瓶颈。
+4. Stage 7 已实现包身份解析、固定系统安装 Intent、主人交接及未知回执恢复，但解析不是密码学验签，系统回执不是逐字节安装归因。签名、密钥持久/迁移、分包和实际安装验证仍未交付；未签/未验签输出不得标为安装成功。
 5. 真实组装与手机运行证据。当前明确禁止测试/安装依赖/真机，源码补丁不可能替代这些证据；这些是交付边界，不是“研究认为可行所以已完成”。
 
 ## 可回读来源

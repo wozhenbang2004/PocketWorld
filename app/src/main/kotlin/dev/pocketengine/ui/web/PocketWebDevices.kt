@@ -34,7 +34,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
     private val desktopGeneration = AtomicLong(0)
     private val desktopInFlight = AtomicReference<String?>(null)
     companion object {
-        val COMMANDS = setOf("devices.snapshot", "devices.createInvitation", "devices.inspectInvitation", "devices.reviewPairing", "devices.advancePairing", "devices.reviewPeerGrant",
+        val COMMANDS = setOf("devices.discovery.start", "devices.discovery.stop", "devices.discovery.reviewConnection", "devices.snapshot", "devices.createInvitation", "devices.inspectInvitation", "devices.reviewPairing", "devices.advancePairing", "devices.reviewPeerGrant",
             "devices.reviewGrant", "devices.reviewConnection", "devices.reviewRelay", "devices.reviewAction", "devices.reviewGoal", "devices.reviewResult", "devices.reviewApproval",
             "devices.confirm", "devices.reject", "devices.discard", "devices.recoveryAddresses", "devices.openRecovery", "devices.recoverPairing", "devices.reviewAbandonment", "devices.openTask", "devices.readTask", "devices.reviewResumeRequest",
             "devices.openHistory", "devices.queryHistory", "devices.stopHistory",
@@ -56,6 +56,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         generation.incrementAndGet(); review = null; latest = JSONObject()
         desktopGeneration.incrementAndGet(); desktop?.close(); desktop = null
         desktopInFlight.set(null); runCatching { window()?.closeDesktop() }
+        runCatching { window()?.stopLanDiscovery() }
         runCatching { window()?.discardReview() }
     }
     @Synchronized private fun discard(original: Host.Window, handle: String = ""): Boolean {
@@ -203,9 +204,14 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         val original = window() ?: error("原设备窗口已关闭，请重新进入")
         current(original, generation.get())
         if (action.startsWith("devices.desktop.")) { dispatchDesktop(action, args, original, done); return }
+        if (action == "devices.discovery.stop") {
+            fields(args); discard(original); original.stopLanDiscovery()
+            done(JSONObject().put("value", JSONObject().put("candidatesDisabled", true).put("stopRequested", true)).put("snapshot", captureSnapshot(original, taskIds())), null); return
+        }
         if (action == "devices.discard") {
             fields(args, "viewHandle")
             val handle = if (args.has("viewHandle")) text(args, "viewHandle") else ""
+            if (handle.isBlank()) original.stopLanDiscovery()
             val closed = discard(original, handle)
             done(JSONObject().put("closed", closed), null); return
         }
@@ -226,6 +232,15 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                 current(original, epoch)
                 val before by lazy { captureSnapshot(original, ids) }
                 value = when (action) {
+                    "devices.discovery.start" -> {
+                        fields(args, "advertise", "acknowledged"); require(bool(args, "acknowledged")) { "请先确认本次局域网查找及广播范围" }
+                        original.startLanDiscovery(bool(args, "advertise")); JSONObject().put("startRequested", true)
+                    }
+                    "devices.discovery.reviewConnection" -> {
+                        fields(args, "deviceId", "candidateId"); val id = text(args, "deviceId"); peer(before, id)
+                        val native = original.reviewDiscoveredConnection(id, text(args, "candidateId"))
+                        store("connection", native, native.view(), original, epoch)
+                    }
                     "devices.snapshot" -> { fields(args, "deviceId"); if (args.has("deviceId")) { val id = text(args, "deviceId"); peer(before, id); original.refreshPeerFacts(id) }; JSONObject().put("readOnly", true) }
                     "devices.createInvitation" -> {
                         fields(args, "address"); val address = text(args, "address", 512)
@@ -391,7 +406,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                     else -> error("设备操作尚未接通")
                 }
                 current(original, epoch)
-            } catch (failure: Exception) { error = if (failure is org.json.JSONException) "原设备信息不完整，请刷新核对。" else failure.message?.take(400) ?: "设备操作结果待核对" }
+            } catch (failure: Exception) { if (action == "devices.discovery.start" && runCatching { current(original, epoch) }.isFailure) original.stopLanDiscovery(); error = if (failure is org.json.JSONException) "原设备信息不完整，请刷新核对。" else failure.message?.take(400) ?: "设备操作结果待核对" }
             try { current(original, epoch); snapshot = captureSnapshot(original, ids) } catch (_: Exception) { }
             val result = JSONObject().put("value", value ?: JSONObject.NULL).put("snapshot", snapshot ?: JSONObject.NULL)
             main.post {

@@ -26,6 +26,11 @@ final class HttpFailureEvidence {
                 ?InferenceFailure.bedrockHttp(status,withoutCapturedSecret(retryAfter,captured),withoutCapturedSecret(date,captured),withoutCapturedSecret(errorTypes,captured),System.currentTimeMillis(),bounded)
                 :InferenceFailure.classifiedHttp(status,withoutCapturedSecret(retryAfter,captured),withoutCapturedSecret(date,captured),System.currentTimeMillis(),bounded);
         String explanation=dev.pocketengine.runtime.models.ModelConnectionFailure.message(reason);
+        if(status==404 && (captured.provider.equals("openai_chat") || captured.provider.equals("openai_responses"))) {
+            // Fixed protocol labels only: never expose the configured URL, model, key or provider body.
+            String route=captured.provider.equals("openai_responses")?"Responses（/responses）":"Chat Completions（/chat/completions）";
+            explanation += " 本次失败来自"+route+"对话推理接口，不是媒体生图接口（/images/generations）。";
+        }
         if(captured.usesBedrock()){
             if(status==401||status==403||java.util.Set.of("BEDROCK_SIGNATURE_INVALID","BEDROCK_NOT_AUTHORIZED","BEDROCK_INVALID_IDENTITY").contains(observation.nativeCode))explanation="Bedrock 拒绝了原临时身份或签名，请核对该连接的完整会话、到期时间、区域和权限；没有换连接。";
             if("BEDROCK_REQUEST_EXPIRED".equals(observation.nativeCode))explanation="Bedrock 报告请求时间戳已失效，请核对设备时钟和原会话；没有重发请求。";

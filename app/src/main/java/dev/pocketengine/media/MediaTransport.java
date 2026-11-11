@@ -84,7 +84,7 @@ public final class MediaTransport {
                 || !result.normalize().getPath().equals(path))) {
             throw new IllegalArgumentException("媒体服务需有效的http/https API基础地址");
         }
-        if (path != null && path.matches(".*/(?:chat/completions|images/generations|audio/speech)/?")) {
+        if (path != null && path.matches(".*/(?:chat/completions|responses|messages|images/generations|images/edits|audio/speech)/?")) {
             throw new IllegalArgumentException("请填写API基础地址，而不是单个接口地址");
         }
         return result;

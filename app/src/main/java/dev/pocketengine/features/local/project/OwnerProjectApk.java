@@ -42,7 +42,7 @@ final class OwnerProjectApk {
     }
 
     static synchronized JSONObject inspect(Context context,OwnerFilePreviewSource source,RunControl control) throws Exception {
-        requireSource(source);byte[] bytes=source.bytes(control);File temp=null;
+        requireSource(source);source.requireCurrent(control);File temp=null;
         try {
             File root=new File(context.getCacheDir().getCanonicalFile(),"project-apk-inspection");
             if(Files.isSymbolicLink(root.toPath())||!root.getAbsoluteFile().equals(root.getCanonicalFile())||!root.isDirectory()&&!root.mkdirs())throw new SecurityException("APK 私有审阅目录不可用");
@@ -54,10 +54,10 @@ final class OwnerProjectApk {
                 if(System.currentTimeMillis()-child.lastModified()>10*60_000L){Files.deleteIfExists(child.toPath());continue;}
                 total+=child.length();count++;
             }
-            if(count>=4||total+bytes.length>40L*1024*1024)throw new IllegalStateException("APK 审阅临时空间正在占用，请稍后再读；没有丢弃其他正在审阅的文件");
+            if(count>=4||total+source.sizeBytes>40L*1024*1024)throw new IllegalStateException("APK 审阅临时空间正在占用，请稍后再读；没有丢弃其他正在审阅的文件");
             temp=new File(root,UUID.randomUUID()+".apk");
             try(var out=Files.newOutputStream(temp.toPath(),StandardOpenOption.CREATE_NEW,StandardOpenOption.WRITE,LinkOption.NOFOLLOW_LINKS)){
-                for(int at=0;at<bytes.length;){control.check();int n=Math.min(32768,bytes.length-at);out.write(bytes,at,n);at+=n;}
+                source.copyTo(out,control);
             }
             var before=Files.readAttributes(temp.toPath(),java.nio.file.attribute.BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);
             try{ProjectPackageArchive.preflightAndroidApk(temp);}catch(Exception unsupported){throw new IllegalArgumentException("APK ZIP 格式或展开声明超出有界审阅范围，未请求安装",unsupported);}
@@ -79,7 +79,7 @@ final class OwnerProjectApk {
                 if(info.getLongVersionCode()<installed.getLong("versionCode"))throw new SecurityException("此版本低于当前安装版本，未请求降级");
             }
             return result;
-        } finally { Arrays.fill(bytes,(byte)0);if(temp!=null)Files.deleteIfExists(temp.toPath()); }
+        } finally { if(temp!=null)Files.deleteIfExists(temp.toPath()); }
     }
 
     private static void verifyInspection(File file,OwnerFilePreviewSource source,RunControl control,java.nio.file.attribute.BasicFileAttributes before)throws Exception {
@@ -100,12 +100,11 @@ final class OwnerProjectApk {
         if(reviewed.getLong("bytes")!=actual.getLong("bytes")||reviewed.getLong("versionCode")!=actual.getLong("versionCode")||
                 !reviewed.getJSONArray("signerSha256").toString().equals(actual.getJSONArray("signerSha256").toString())||
                 !ProjectSources.canonical(reviewed.getJSONObject("beforeInstalled")).equals(ProjectSources.canonical(actual.getJSONObject("beforeInstalled"))))throw new SecurityException("APK 或当前安装身份已变化，请重新审阅，不沿旧决定继续");
-        byte[] bytes=source.bytes(control);AttachmentViewSnapshots views=new AttachmentViewSnapshots(context);Intent view=null;
+        AttachmentViewSnapshots views=new AttachmentViewSnapshots(context);Intent view=null;
         try {
-            view=views.prepare(source.name,"application/vnd.android.package-archive",source.sha256,bytes,control);
+            view=views.prepare(source,"application/vnd.android.package-archive",control);
             source.requireCurrent(control);return systemIntent(context,view.setAction(Intent.ACTION_INSTALL_PACKAGE).putExtra(Intent.EXTRA_RETURN_RESULT,true));
         } catch(Exception failure){if(view!=null)try{views.discardUnissuedView(view);}catch(Exception cleanup){failure.addSuppressed(cleanup);}throw failure;}
-        finally {Arrays.fill(bytes,(byte)0);}
     }
 
     static Intent systemIntent(Context context,Intent intent) {

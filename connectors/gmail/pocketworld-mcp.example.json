@@ -1,0 +1,17 @@
+{
+  "id": "gmail-owner",
+  "name": "Gmail · owner-selected account",
+  "checkoutId": "REPLACE_WITH_CURRENT_NATIVE_CHECKOUT_ID",
+  "expectedSourceDigest": "REPLACE_WITH_CURRENT_NATIVE_SOURCE_SHA256",
+  "executable": "python3",
+  "argv": [
+    "connectors/gmail/server.py",
+    "serve",
+    "--account",
+    "owner@example.com",
+    "--state-dir",
+    "/OWNER_PRIVATE_STABLE_DIRECTORY/gmail"
+  ],
+  "workingDirectory": ".",
+  "protocolVersion": "2025-11-25"
+}

@@ -119,10 +119,13 @@ public final class PluginRules {
     }
     private static void validateSchema(JSONObject schema,int depth,int[] nodes,boolean mcp)throws Exception {
         if(depth>6||++nodes[0]>1024)throw new IllegalArgumentException("参数定义结构过深或过大");
-        Set<String> allowed=new HashSet<>(java.util.Arrays.asList("type","properties","required","additionalProperties","items","maxItems","maxLength","enum","minimum","maximum"));
+        Set<String> allowed=new HashSet<>(java.util.Arrays.asList("type","properties","required","additionalProperties","items","maxItems","minLength","maxLength","enum","minimum","maximum"));
         if(mcp)allowed.addAll(java.util.Arrays.asList("$schema","title","description","$comment","default","examples","deprecated","readOnly","writeOnly","x-mcp-header"));
         java.util.Iterator<String> keys=schema.keys();while(keys.hasNext()){String key=keys.next();if(!allowed.contains(key))throw new IllegalArgumentException("当前参数定义包含不支持的关键字："+key);}
-        if(schema.has("$schema")&&!"https://json-schema.org/draft/2020-12/schema".equals(schema.optString("$schema")))throw new IllegalArgumentException("当前仅支持JSON Schema 2020-12的有限子集");
+        // The supported keywords have the same meaning in draft-07 and 2020-12.
+        // Exa's official MCP SDK emits draft-07. Keep the original dialect and
+        // descriptor identity; this does not enable references or other keywords.
+        if(schema.has("$schema")&&!Set.of("https://json-schema.org/draft/2020-12/schema","http://json-schema.org/draft-07/schema#","https://json-schema.org/draft-07/schema#").contains(schema.optString("$schema")))throw new IllegalArgumentException("当前仅支持JSON Schema draft-07与2020-12的有限子集");
         for(String annotation:new String[]{"title","description","$comment"})if(schema.has(annotation)&&!(schema.get(annotation) instanceof String))throw new IllegalArgumentException(annotation+"需为文字");
         for(String annotation:new String[]{"deprecated","readOnly","writeOnly"})if(schema.has(annotation)&&!(schema.get(annotation) instanceof Boolean))throw new IllegalArgumentException(annotation+"需为布尔值");
         if(schema.has("examples")&&!(schema.get("examples") instanceof JSONArray))throw new IllegalArgumentException("examples需为列表");
@@ -140,12 +143,14 @@ public final class PluginRules {
                 }
             }else throw new IllegalArgumentException("参数定义类型需为类型名称或不重复的类型列表");
         }
-        for(String key:new String[]{"maxLength","maxItems"})if(schema.has(key)){
+        for(String key:new String[]{"minLength","maxLength","maxItems"})if(schema.has(key)){
             BigDecimal value=decimal(schema.get(key));
             if(value==null||value.signum()<0||value.compareTo(BigDecimal.valueOf(Integer.MAX_VALUE))>0||!integer(value))
                 throw new IllegalArgumentException(key+"需为0至2147483647之间的整数；执行时仍受平台上限约束");
             schemaSize(nodes,schema.get(key).toString().length());
         }
+        if(schema.has("minLength")&&schema.has("maxLength")&&decimal(schema.get("minLength")).compareTo(decimal(schema.get("maxLength")))>0)
+            throw new IllegalArgumentException("minLength不可大于maxLength");
         for(String key:new String[]{"minimum","maximum"})if(schema.has(key)){if(decimal(schema.get(key))==null)throw new IllegalArgumentException(key+"需为有限数字");schemaSize(nodes,schema.get(key).toString().length());}
         if(schema.has("minimum")&&schema.has("maximum")&&decimal(schema.get("minimum")).compareTo(decimal(schema.get("maximum")))>0)
             throw new IllegalArgumentException("minimum不可大于maximum");

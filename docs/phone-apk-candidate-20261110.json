@@ -84,9 +84,11 @@
       "candidateUrl": "https://dl.google.com/android/repository/platform-35_r02.zip",
       "archiveBytes": 64273788,
       "sha1": "0bb560a90a7a2cbd0dd8348224d518b638fe7949",
-      "sha256": null,
-      "identityEvidence": "F-Droid SDK transparency log mirror commit dae05c5c31b45d5ef52a90af7603881d0805e238; direct Google feed unavailable in this pass",
-      "ready": false
+      "sha256": "0988cacad01b38a18a47bac14a0695f246bc76c1b06c0eeb8eb0dc825ab0c8e0",
+      "identityEvidence": "google/perfetto@938634fb440df0ea42e8af2891e98a5df1305101 tools/install-build-deps, lines 385-396; SHA256 values re-read 2026-11-11; see phone-sdk-sha256-addendum-20261110.json",
+      "ready": false,
+      "localByteVerification": false,
+      "unpackedBytes": null
     },
     {
       "component": "sdk-build-tools",
@@ -94,21 +96,25 @@
       "candidateUrl": "https://dl.google.com/android/repository/build-tools_r35.0.1_linux.zip",
       "archiveBytes": 61959297,
       "sha1": "e009a9b188cfeb1d2b4c318ab5cb4f1ddc368861",
-      "sha256": null,
-      "identityEvidence": "Same F-Droid mirror; do not infer ARM64 host tools from host-os linux",
-      "ready": false
+      "sha256": "5993499f3229a021b89f87088c57242aeefaa62316bf3d69da7de40bfd5350f1",
+      "identityEvidence": "google/perfetto@938634fb440df0ea42e8af2891e98a5df1305101 tools/install-build-deps, lines 385-396; SHA256 values re-read 2026-11-11; see phone-sdk-sha256-addendum-20261110.json",
+      "ready": false,
+      "localByteVerification": false,
+      "unpackedBytes": null,
+      "hostArchitectureVerified": false
     }
   ],
   "blockers": [
-    "SDK official artifact SHA256 and source/notice verification incomplete",
+    "SDK archive bytes, contents and component notices not locally verified; published SHA256 source evidence now exists",
     "Expanded and peak installation storage unknown",
     "Full profile not integrated into original RuntimeSetupHost",
     "No binary/PRoot/Android execution proof",
     "No complete Maven cache or offline proof",
     "No supported native NDK build route",
     "Current module build outputs can enter source snapshots",
-    "Managed artifact collection is limited to 2MiB",
-    "APK verification/private signing/owner installation flow not implemented"
+    "Managed artifact publication and APK handoff remain capped at 20MiB; larger APKs need end-to-end storage/reader budgets",
+    "Private signing ownership, backup and recovery not implemented",
+    "Single-APK system handoff source exists, but signature/installation outcome and app launch are not device-verified"
   ],
   "prohibitedAssumptions": [
     "Asset metadata is not a local hash verification",
@@ -116,6 +122,28 @@
     "No SDK license acceptance has occurred",
     "No shared downloaded debug private key",
     "No install/run/grants arise from this file"
-  ]
+  ],
+  "reconciledAt": "2026-11-11",
+  "sourceBaseline": "50ceebc077517e937de5007c4302d9172bf132be",
+  "sourceImplemented": {
+    "managedBuildOutput": {
+      "maxFileBytes": 20971520,
+      "attachmentTotalBytes": 104857600,
+      "boundedStreamingPublication": true,
+      "legacySelectionMaxBytes": 2097152
+    },
+    "ownerInstallHandoff": {
+      "implemented": true,
+      "scope": "original private managed-build single APK only; explicit owner review then fixed system installer",
+      "cryptographicVerificationPerformedByPocketWorld": false,
+      "automaticSigning": false,
+      "deviceVerified": false
+    },
+    "sdkProfile": {
+      "installCatalogEnabled": false,
+      "ownerLicenseAcceptanceRecorded": false,
+      "toolchainCompatibilityVerified": false
+    },
+    "evidence": "Source at sourceBaseline only; not compile, phone execution, installer success or release-readiness evidence."
+  }
 }
-

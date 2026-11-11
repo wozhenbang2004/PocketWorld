@@ -59,8 +59,9 @@ final class PluginArguments {
         JSONArray choices=schema.optJSONArray("enum");
         if(choices!=null){boolean found=false;for(int i=0;i<choices.length();i++)if(equal(value,choices.get(i)))found=true;if(!found)error(path,"enum","请选择此字段允许的值");}
         if(value instanceof String){
-            String text=(String)value;int limit=Math.min(16000,schema.optInt("maxLength",16000));
-            if(text.codePointCount(0,text.length())>limit)error(path,"max_length","文字最多"+limit+"个字符，请缩短内容");
+            String text=(String)value;int length=text.codePointCount(0,text.length()),minimum=schema.optInt("minLength",0),limit=Math.min(16000,schema.optInt("maxLength",16000));
+            if(length<minimum)error(path,"min_length","文字至少"+minimum+"个字符，请补充内容");
+            if(length>limit)error(path,"max_length","文字最多"+limit+"个字符，请缩短内容");
         }
         if(value instanceof JSONObject){
             JSONObject object=(JSONObject)value,properties=schema.optJSONObject("properties");JSONArray required=schema.optJSONArray("required");

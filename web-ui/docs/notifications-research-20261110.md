@@ -92,3 +92,15 @@ NCP-08：将原发布逻辑集中为不访问网络的 `RemoteInboxNotifications
 
 
 NCP-09：另确认“条数有界但字节无界”的真实补收阻塞。单是 300 条各 600 个常用汉字的合法正文就约 540,000 UTF-8 字节，超过原 journal 的 512 KiB 硬限，尚未计标题、来源、链接与 JSON；原 count-only 截断会使 ingest 反复失败、cursor 不前进。现按原序列保留最新记录，同时满足最多 300 条与 448 KiB 内容窗口，为后续状态写留 64 KiB。原 512 KiB 文件配额不提高，cursor 仍只随同一 atomic journal 成功提交，已读/归档和去重继续使用这一个保留窗。该结论来自字段上限与真实序列化路径的源码检查，未构造/执行合成测试。
+
+### 2026-11-11 · 可选链故障隔离与登记恢复
+
+本轮继续委派要求为“补齐通知中心可靠送达”，保持不安装依赖、不写/跑测试、不做真机、不注册/部署/订阅/传递用户数据的边界；未取得直接用户消息 ID。读取 GitHub `main` 固定基线 `50ceebc077517e937de5007c4302d9172bf132be` 后定位以下真实源码断点，不以旧本地候选代替主干：
+
+- **NCP-10，推送不可拖垮事件来源。** 原 `worker-push.scheduled` 先 await `flushPush`，可选表缺失或 D1 推送查询异常会在 GitHub 扫描之前抛出。现将发送放入独立 `waitUntil` 并隔离运行时错误；扫描前可恢复旧积压，扫描后可发送新事件。日志仅保留固定错误提示，不输出 endpoint、secret、payload 或异常对象。读取 [Cloudflare Context/waitUntil](https://developers.cloudflare.com/workers/runtime-apis/context/) 的生命周期约定；未运行 Worker。模块导入/打包失败仍需操作者处理，这不是所有启动故障的 fallback。
+- **NCP-11，凭据修复要求不能被传输状态抹掉。** 原客户端用同一个 `status` 表示登记 Token 失效和唤醒/补收；收到旧有效登记的 hint 或成功回执可能覆盖 `credentials_required`。现用本机加密状态中的独立标记保留该要求，并兼容已有失效状态；继续展示原 UI 的凭据修复文案。device secret 与登记 Token 权限独立，旧登记仍有效时允许补收回执，不假装已修好登记 Token；登记缺失且凭据失效时不持续紧密重试。
+- **NCP-12，旧登记证明不沿用。** `/ack` 返回 401/410 时退休旧 challenge，并记录需恢复登记；维护时向同一已选 distributor 重新请求端点，后续仍需真实加密 challenge。不会选择新接收器、改变服务地址或自动创建账号。这个实现不能证明 distributor 会立即更换失效端点，真实返回仍待环境确认。
+
+核对 [Android JobInfo.Builder#setExpedited](https://developer.android.com/reference/android/app/job/JobInfo.Builder#setExpedited(boolean))：官方允许 network、storage-not-low、persistence 约束，因此没有误删现有 persisted + expedited 组合。系统配额、Doze、force-stop 与厂商限制仍适用。
+
+本增量只做代码阅读、`node --check` 静态语法和 diff 空白核对，未导入/执行发送模块、安装依赖、解析新锁、编译 APK、构建 Worker、运行测试、配置第三方或操作设备。默认入口和默认 APK 没有启用推送。NCP-10 至 NCP-12 是候选源码补齐，不是已部署/已验证送达；NCP-01 的工具链、操作者服务及分发器配置和真实用户到达体验仍开放。

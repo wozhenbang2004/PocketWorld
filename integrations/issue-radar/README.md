@@ -10,7 +10,7 @@ No inbound event may automatically create comments, claim Issues, start an Agent
 3. PocketWorld reads the authenticated HTTPS API, durably records events on-device and shows native Android notifications and a unified inbox in its existing React UI.
 4. An optional explicit foreground receiver checks roughly every 50 seconds while displaying an ongoing Android notification. Android JobScheduler independently requests periodic offline catch-up at the minimum supported interval (not exact scheduling).
 
-This is polling, not FCM. It cannot guarantee second-level notifications when the system force-stops or kills the application. It does not rely on a phone public IP. Future system push should deliver only a hint to sync the same persistent inbox rather than bypassing validation.
+The standard build is polling, not FCM. It cannot guarantee second-level notifications when the system force-stops or kills the application. It does not rely on a phone public IP. The optional UnifiedPush source path below only hints that the same persistent inbox should be synchronized; it does not bypass validation or provide a hard delivery guarantee.
 
 ## Deploy
 
@@ -67,11 +67,13 @@ A stable key prevents duplicate events on retries. GET /v1/events?after=0 uses I
 - Stored Worker events currently have no TTL. Implement retention before high-volume production use and avoid storing sensitive information.
 - Deployment, working secrets and a signed tested APK are separate requirements. This code has not deployed an external Worker or created Firebase credentials.
 
-## Checks
+## Source checks (no tests)
 
-    npm test
+    node --check src/worker.mjs
+    node --check src/push.mjs
+    node --check src/worker-push.mjs
 
-The private PocketWorld main build workflow handles the bundled React frontend and Android APK. A successful source edit alone does not prove a working signed APK or real remote delivery.
+These commands parse source without importing dependencies or contacting services. Do not run the retained historical test script or add tests. The private PocketWorld main build workflow handles the bundled React frontend and Android APK. A successful source edit alone does not prove a working signed APK or real remote delivery.
 
 ## 可选 UnifiedPush 唤醒（源码候选，默认关闭）
 
@@ -93,6 +95,8 @@ The private PocketWorld main build workflow handles the bundled React frontend a
 - `GET /v1/push/config`、`POST /v1/push/register` 使用专用登记 Token。登记包含 `{deviceId,secret,subscription:{endpoint,keys:{p256dh,auth}}}`；最多 16 台，30 天租约，活跃客户端每天维护。返回登记结果但不返回 challenge。
 - `POST /v1/push/ack`、`DELETE /v1/push/device` 使用该设备 secret，body 包含 deviceId；ack 可带从推送收到的 challenge 和实际持久化 cursor。不会把 HTTP 2xx 当用户送达回执。
 - cron 延续已有一分钟触发，扫描待确认/落后 cursor 的设备；每批最多 8 台、4 并发，指数退避至 1 小时，TTL 1 小时、normal urgency。new event POST 也请求一次有界发送。端点 404/410 后移除；缺失登记由客户端重新登记。单个提供者接受不代表收到，只有设备成功补收回执才停止对应积压唤醒。
+- 推送发送通过独立 `waitUntil` 生命周期处理；推送表尚未应用、可选存储或发送器失败不会阻断原 Issue 扫描，也不会把已持久化事件的 HTTP 接收改判失败。这里只隔离运行时故障；发送库缺失或模块无法加载仍会阻止可选 Worker 启动，部署前必须完成真实打包。关闭可选入口、保留原 `worker.mjs` 可回到不依赖推送模块的拉取路径。
+- 登记 Token 失效会保留独立的待修复状态，不能被后续唤醒或成功补收覆盖。若旧设备登记仍有效，独立 device secret 仍可回执；若登记也失效则停止无效凭据的紧密重试，等待用户停用后用新凭据启用。服务端返回登记缺失/过期时清掉旧 challenge，并重新询问用户原先选定的接收器，不自动切换提供者。
 - Android 31+ 收到合格 hint 后申请 expedited Job；无配额则保留普通持久 network Job。旧 Android、Doze、限制后台、force-stop 或接收器网络故障仍可能延迟，没有硬实时 SLA。普通 foreground 检测和周期 Job 没有被包装成系统推送。
 - 停用先删除本机有效身份和 SDK 订阅，再尽力删除服务端登记；断网时远端删除未确认，运营者可删除该设备记录，或等待租约到期。更换连接会先退订旧身份，不会把新服务凭据用于旧地址。
 - 推送数据永远只有 kind/随机 instance/一次性 challenge，没有任务正文、标题、URL 或工具命令。系统通知的点击、归档、已读和原任务审批继续走原中心路径。

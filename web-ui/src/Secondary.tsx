@@ -3,6 +3,7 @@ import { UsageWorkspace } from './UsageWorkspace';
 import { AICenter, type AIServicePreset } from './AICenter';
 import SkillsWorkspace from './SkillsWorkspace';
 import { CapabilitiesWorkspace } from './CapabilitiesWorkspace';
+import { toolServicePresets } from './tool-service-presets';
 import type { PermissionLeaveGuard } from './PermissionPolicySettings';
 import { BackgroundAudioSettings, BackgroundOwnerSettings, BackgroundChecks } from './BackgroundOwnerSettings';
 import ChannelsWorkspace from './ChannelsWorkspace';
@@ -1072,7 +1073,8 @@ function McpWorkspace({ state, data, supported, run, registerTransientBack, erro
   const [review, setReview] = useState<Data | null>(null), [selected, setSelected] = useState<string[]>([]);
   const [detail, setDetail] = useState<Data | null>(null), [busy, setBusy] = useState(false);
   const [adding, setAdding] = useState(false);
-  const [entryMode, setEntryMode] = useState('address');
+  const [entryMode, setEntryMode] = useState('guided');
+  const [servicePreset, setServicePreset] = useState('exa');
   const [direct, setDirect] = useState({ name: '', endpoint: '', protocolVersion: '2026-07-28' });
   const alive = useRef(true), view = useRef(0);
   const closeReview = () => { view.current++; setReview(null); };
@@ -1084,7 +1086,8 @@ function McpWorkspace({ state, data, supported, run, registerTransientBack, erro
   const preparing = pending.includes('mcp.discoverMcp');
   const choosing = pending.includes('mcp.pickConfig');
   const activeConfig = object(progress.configuration), inputConfig: Data = entryMode === 'address' ? direct : config;
-  const previewMatchesInput = ['name', 'endpoint', 'protocolVersion'].every(key => text(activeConfig[key]) === text(inputConfig[key], key === 'protocolVersion' ? '2026-07-28' : '').trim()) &&
+  const preset = toolServicePresets.find(item => item.id === servicePreset) || toolServicePresets[0];
+  const previewMatchesInput = entryMode !== 'guided' && ['name', 'endpoint', 'protocolVersion'].every(key => text(activeConfig[key]) === text(inputConfig[key], key === 'protocolVersion' ? '2026-07-28' : '').trim()) &&
     (entryMode === 'address' || activeConfig.id === config.id);
   const discoverDirect = async () => {
     if (writing || preparing || choosing || phase === 'unknown') return;
@@ -1126,8 +1129,14 @@ function McpWorkspace({ state, data, supported, run, registerTransientBack, erro
     </Card>
     <SettingsDialog isOpen={adding && !review} title="添加 MCP 服务" closeLabel="返回服务列表" onClose={() => { if (!writing) setAdding(false); }}>
       <div className="pw-mcp-editor">
-      <RadioOptions className="pw-mcp-entry-mode" label="添加方式" value={entryMode} onChange={value => { closeReview(); setEntryMode(value); }} isDisabled={writing || preparing || choosing} options={[{ id: 'address', label: '填写地址' }, { id: 'file', label: '导入配置' }]} />
-      {entryMode === 'address' ? <>
+      <RadioOptions className="pw-mcp-entry-mode" label="添加方式" value={entryMode} onChange={value => { closeReview(); setEntryMode(value); }} isDisabled={writing || preparing || choosing} options={[{ id: 'guided', label: '搜索与邮件' }, { id: 'address', label: '填写地址' }, { id: 'file', label: '导入配置' }]} />
+      {entryMode === 'guided' ? <>
+        <SelectField label="想接入的能力" value={servicePreset} onChange={setServicePreset} isDisabled={writing || preparing || choosing} options={toolServicePresets.map(item => ({ id: item.id, label: item.name }))} />
+        <div className="pw-selected-object"><h3>{preset.purpose}</h3><p>{preset.status}</p><p className="pw-field-hint">{preset.preparation}</p><p className="pw-field-hint">{preset.destination}</p>
+          <p><a href={preset.source} target="_blank" rel="noopener noreferrer">{preset.sourceLabel}</a></p>
+          {preset.endpoint ? <Button variant="secondary" disabled={writing || preparing || choosing} onClick={() => { closeReview(); setDirect({ name: preset.name, endpoint: preset.endpoint, protocolVersion: preset.protocolVersion }); setEntryMode('address'); }}>填入此服务，继续核对</Button> : <p className="pw-field-hint">准备完成后，从原项目的本机 MCP 入口发现这份准确源码；本页不会把未准备的邮箱显示为已连接。</p>}
+        </div>
+      </> : entryMode === 'address' ? <>
         <div className="pw-form-grid">
           <TextField label="服务名称" placeholder="给这个服务起个名字" value={direct.name} onChange={name => setDirect(value => ({ ...value, name }))} maxLength={80} isDisabled={writing || preparing || choosing} />
           <TextField label="HTTPS 服务地址" placeholder="https://example.com/mcp" value={direct.endpoint} onChange={endpoint => setDirect(value => ({ ...value, endpoint }))} maxLength={2000} autoComplete="off" isDisabled={writing || preparing || choosing} hint="填写服务提供的 MCP 端点，不要把令牌或密码放进地址。" />
@@ -1157,7 +1166,7 @@ function McpWorkspace({ state, data, supported, run, registerTransientBack, erro
     </>}</SettingsDialog>
     <SettingsDialog isOpen={review !== null} title={review?.kind === 'install' ? '核对这次发现并安装' : review?.kind === 'grant' ? review.granted ? '允许这个工具？' : '撤销工具权限？' : review?.enabled ? '启用这项安装？' : '停用这项安装？'} onClose={() => { if (!busy) closeReview(); }}>{review && <>
       <Facts items={[[ '服务', review.name || object(review.manifest).name || review.id ], ['工具', object(review.selectedTool).name ], ['地址', review.endpoint || object(review.selectedTool).endpoint ], ['协议', review.protocolVersion ], ['预览到期', timeText(review.expiresAt) ]]} />
-      {review.kind === 'install' ? <><p>选择要安装的工具（{selected.length}/12）。服务说明和参数仅供核对。</p>{list(review.tools).map(tool => <div key={text(tool.name)}><CheckboxField isSelected={selected.includes(tool.name)} isDisabled={busy || !tool.supported || selected.length >= 12 && !selected.includes(tool.name)} onChange={value => setSelected(current => value ? [...current, tool.name] : current.filter(name => name !== tool.name))}>{text(tool.name)}</CheckboxField><p className="pw-field-hint">{text(tool.description || object(tool.declaration).description)}{!tool.supported ? ' · 当前不支持' : ''}</p></div>)}{review.mcpSource && <p>包含资源或提示来源；不选工具可只安装参考来源。</p>}{review.expectedInstallationId && <p>将替换同标识的旧安装、清空旧工具授权；已发生的远端效果不会撤回。</p>}<p>保存后保持停用且不授予工具权限。</p></> : review.kind === 'grant' ? <><p>{text(object(review.selectedTool).description)}</p><Accordion variant="divided"><AccordionItem id="mcp-tool-schema" title="工具参数结构"><pre className="pw-source-code">{JSON.stringify(object(object(review.selectedTool).schema), null, 2)}</pre></AccordionItem></Accordion><p>仅改变这项安装的一个工具权限。原任务仍需按实际参数批准敏感动作。</p></> : <p>{review.enabled ? '仅启用这项安装。工具仍需逐项授权。' : '停止继续使用这项安装；已发生的远端效果不会撤回。'}</p>}
+      {review.kind === 'install' ? <><p>选择要安装的工具（{selected.length}/12）。服务说明和参数仅供核对。</p>{list(review.tools).map(tool => <div key={text(tool.name)}><CheckboxField isSelected={selected.includes(tool.name)} isDisabled={busy || !tool.supported || selected.length >= 12 && !selected.includes(tool.name)} onChange={value => setSelected(current => value ? [...current, tool.name] : current.filter(name => name !== tool.name))}>{text(tool.name)}</CheckboxField><p className="pw-field-hint">{text(tool.description || object(tool.declaration).description)}{!tool.supported ? ` · 当前不支持：${text(tool.unsupportedReason) || '参数或协议超出当前支持范围'}` : ''}</p></div>)}{review.mcpSource && <p>包含资源或提示来源；不选工具可只安装参考来源。</p>}{review.expectedInstallationId && <p>将替换同标识的旧安装、清空旧工具授权；已发生的远端效果不会撤回。</p>}<p>保存后保持停用且不授予工具权限。</p></> : review.kind === 'grant' ? <><p>{text(object(review.selectedTool).description)}</p><Accordion variant="divided"><AccordionItem id="mcp-tool-schema" title="工具参数结构"><pre className="pw-source-code">{JSON.stringify(object(object(review.selectedTool).schema), null, 2)}</pre></AccordionItem></Accordion><p>仅改变这项安装的一个工具权限。原任务仍需按实际参数批准敏感动作。</p></> : <p>{review.enabled ? '仅启用这项安装。工具仍需逐项授权。' : '停止继续使用这项安装；已发生的远端效果不会撤回。'}</p>}
       <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={closeReview}>取消</Button><PressButton compact disabled={busy || review.kind === 'install' && selected.length === 0 && !review.mcpSource} onClick={confirm}>{busy ? '等待受理…' : review.kind === 'install' ? '确认安装' : '确认更改'}</PressButton></div>
     </>}</SettingsDialog>
   </>;

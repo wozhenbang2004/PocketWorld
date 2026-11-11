@@ -124,7 +124,7 @@ public final class AttachmentOutcomeHost {
     /** Actual original-format viewer; task/audience and canonical byte checks remain this host's. */
     public OwnerFilePreviewSource originalFile(String taskId,String artifactId,String expectedSha256,RunControl control)throws Exception {
         requireReference(taskId,artifactId,expectedSha256);JSONObject metadata=privateMetadata(artifactId,expectedSha256);repository.book.requireUnchanged(artifactId,expectedSha256,control);
-        return new OwnerFilePreviewSource("attachments",metadata,c->repository.book.verifiedBytes(artifactId,expectedSha256,c),c->{requireReference(taskId,artifactId,expectedSha256);repository.book.requireUnchanged(artifactId,expectedSha256,c);});
+        return new OwnerFilePreviewSource("attachments",metadata,c->repository.book.verifiedBytes(artifactId,expectedSha256,c),c->{requireReference(taskId,artifactId,expectedSha256);repository.book.requireUnchanged(artifactId,expectedSha256,c);},(destination,c)->repository.book.exportOwnerArchiveBytes(artifactId,expectedSha256,destination,c));
     }
     /** Explicit system chooser with a pinned original copy; a requested share is not delivery. */
     public Intent share(String taskId,String artifactId,String expectedSha256,RunControl control)throws Exception {

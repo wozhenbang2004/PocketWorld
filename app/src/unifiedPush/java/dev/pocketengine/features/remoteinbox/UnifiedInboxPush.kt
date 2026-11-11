@@ -18,8 +18,11 @@ class UnifiedInboxPush : RemoteInboxPush.Backend {
         private val cleanup = Executors.newSingleThreadExecutor()
         private val transportProblems = setOf("distributor_unavailable", "registration_failed", "unregistered", "temporarily_unavailable", "temporary_receiver", "endpoint_rejected", "encryption_unavailable")
         private fun store(context: Context) = RemoteInboxStore.get(context)
+        private fun credentialsRequired(state: JSONObject) = state.optBoolean("credentialsRequired") || state.optString("status") == "credentials_required"
         private fun active(context: Context): JSONObject = synchronized(store(context)) {
             val saved = store(context).pushConfiguration()
+            // Preserve an older saved credential failure before a transport callback changes status.
+            if (credentialsRequired(saved)) saved.put("credentialsRequired", true)
             if (saved.optString("configId") == store(context).configId() && saved.optBoolean("enabled")) saved else JSONObject()
         }
         private fun change(context: Context, instance: String, update: (JSONObject) -> Unit): Boolean = synchronized(store(context)) {
@@ -97,6 +100,7 @@ class UnifiedInboxPush : RemoteInboxPush.Backend {
         fun failed(context: Context, instance: String, status: String) {
             try { change(context, instance) {
                 it.put("status", status)
+                if (status == "credentials_required") it.put("credentialsRequired", true)
                 if (status in transportProblems) it.put("transportProblem", status)
             } } catch (_: Exception) { }
         }
@@ -111,7 +115,7 @@ class UnifiedInboxPush : RemoteInboxPush.Backend {
         }
         return JSONObject().put("supported", true).put("enabled", state.optBoolean("enabled"))
             .put("distributors", distributors).put("distributor", state.optString("distributor"))
-            .put("status", state.optString("transportProblem").ifEmpty { state.optString("status", "disabled") })
+            .put("status", if (credentialsRequired(state)) "credentials_required" else state.optString("transportProblem").ifEmpty { state.optString("status", "disabled") })
             .put("registeredAt", state.optLong("registeredAt")).put("verifiedAt", state.optLong("verifiedAt"))
             .put("lastWakeAt", state.optLong("lastWakeAt")).put("lastCatchUpAt", state.optLong("lastCatchUpAt"))
     }
@@ -169,18 +173,18 @@ class UnifiedInboxPush : RemoteInboxPush.Backend {
     }
     override fun needsMaintenance(context: Context): Boolean {
         val state = active(context)
-        return state.length() > 0 && state.optString("status") != "credentials_required" &&
+        return state.length() > 0 && !credentialsRequired(state) &&
             (state.has("challenge") || state.has("subscription") && state.optLong("registeredAt") == 0L)
     }
     override fun maintain(context: Context) {
         val state = active(context)
         if (state.length() == 0) return
         val subscription = state.optJSONObject("subscription")
-        if ((subscription == null || state.optString("transportProblem") in setOf("registration_failed", "unregistered", "distributor_unavailable")) &&
+        if ((subscription == null || state.optBoolean("registrationMissing") || state.optString("transportProblem") in setOf("registration_failed", "unregistered", "distributor_unavailable")) &&
             System.currentTimeMillis() - state.optLong("lastRegisterRequestAt") >= 60_000) reconcile(context)
         if (subscription == null) return
         val instance = state.getString("instance")
-        if (state.optString("status") == "credentials_required") return
+        if (credentialsRequired(state)) return
         if (System.currentTimeMillis() - state.optLong("registeredAt") >= 24 * 60 * 60 * 1000L) {
             val result = try {
                 request(state.getString("root"), "/v1/push/register", state.getString("registrationToken"), body = JSONObject()
@@ -195,6 +199,7 @@ class UnifiedInboxPush : RemoteInboxPush.Backend {
                 if (it.optJSONObject("subscription")?.toString() == subscription.toString() &&
                     it.optString("endpointGeneration") == state.optString("endpointGeneration")) {
                     it.put("registeredAt", System.currentTimeMillis())
+                    it.remove("registrationMissing")
                     if (!result.optBoolean("verified")) {
                         it.put("verifiedAt", 0)
                         if (!it.has("challenge")) it.put("status", "awaiting_challenge")
@@ -209,7 +214,9 @@ class UnifiedInboxPush : RemoteInboxPush.Backend {
     }
     override fun acknowledge(context: Context) {
         val state = active(context)
-        if (state.length() == 0 || !state.has("subscription") || state.optString("status") == "credentials_required") return
+        if (state.length() == 0 || !state.has("subscription") || credentialsRequired(state) && state.optLong("registeredAt") == 0L) return
+        // A failed renewal token does not revoke the separate device secret for a live registration.
+        // Continue acknowledging durable catch-up, but never hide the credential repair requirement.
         val instance = state.getString("instance")
         val cursor = synchronized(store(context)) {
             if (active(context).optString("instance") != instance) return
@@ -222,7 +229,8 @@ class UnifiedInboxPush : RemoteInboxPush.Backend {
             if (error is RequestFailure && (error.code == 401 || error.code == 410)) change(context, instance) {
                 if (it.optString("endpointGeneration") != state.optString("endpointGeneration") ||
                     it.optJSONObject("subscription")?.toString() != state.optJSONObject("subscription")?.toString()) return@change
-                it.put("registeredAt", 0).put("verifiedAt", 0).put("status", "registration_missing")
+                it.put("registeredAt", 0).put("verifiedAt", 0).put("status", "registration_missing").put("registrationMissing", true)
+                it.remove("challenge") // Proof for an expired/removed registration cannot verify its replacement.
             }
             throw error
         }

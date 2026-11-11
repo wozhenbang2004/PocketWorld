@@ -56,7 +56,7 @@ export function CapabilitiesWorkspace({ state, onNavigate, onPrepare, run, suppo
       </div></section>
       <section className="pw-capabilities-group" aria-label="扩展与服务"><header><h2>扩展与服务</h2></header><div className="pw-capabilities-list">
         <DataOperationRow id="plugins" title="插件" detail="查找、安装、查看定义与逐项工具授权" icon={IconPlugin} onOpen={onNavigate} />
-        <DataOperationRow id="mcp" title="工具服务 · MCP" detail="管理连接、认证和发现的工具，状态以原服务核对为准" icon={IconMcp} onOpen={onNavigate} />
+        <DataOperationRow id="mcp" title="工具服务 · MCP" detail="接入全网搜索与邮件等服务；准备、安装和授权分别核对" icon={IconMcp} onOpen={onNavigate} />
       </div></section>
       <section className="pw-capabilities-group" aria-label="执行位置"><header><h2>执行位置</h2></header><div className="pw-capabilities-list">
         <DataOperationRow id="local" title="这台手机的开发环境" detail="准备运行环境、项目与依赖，构建仍需原范围" icon={IconTerminal} onOpen={onNavigate} />

@@ -7,6 +7,7 @@ import { AIAnswer, PressButton, ProgressBar } from './library';
 import { useSurfaceEnter } from './library/surface-motion';
 import { MotionFeedback, useCollectionMotion } from './library/journey-motion';
 import { teamMessageConfirmed, teamMessageDelivery, teamMessageRecorded } from './team-message';
+import { teamResearchRecords, type TeamResearchRecord } from './team-research';
 import { teamPhoneChoice, teamPhoneDevice, teamPhoneScopeLabel, teamPhoneSelections, teamPhoneTargetKey, teamPhoneTargetLabel, type TeamPhoneChoice } from './team-phone';
 import { TeamHarnessFields } from './TeamHarnessFields';
 import { TeamProductionFields, TeamProductionReview } from './TeamProductionFields';
@@ -190,6 +191,12 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
   const back = () => { const leave = () => { rememberView(); release(reading); setTab(reading?.kind === 'run' ? 'runs' : 'teams'); setReading(null); setComposeOpen(false); setReplyId(''); setEditor(null); setMemberDraft(null); setError(''); setNotice(''); }; if (materialBeforeLeave.current) materialBeforeLeave.current(leave); else leave(); };
   const openRelatedTask = (id: string) => {
     const open = () => { void run('tasks.open', { id }).catch(failure => setError(failure instanceof Error ? failure.message : String(failure))); };
+    if (materialBeforeLeave.current) materialBeforeLeave.current(open); else open();
+  };
+  const openResearchTask = (memberId: string, record: TeamResearchRecord) => {
+    const original = currentReading.current;
+    if (busy || materialBusy || backgrounded.current || !ownsNativeWindow() || !original?.viewHandle || original.kind !== 'run') return;
+    const open = () => { void invoke('teams.openResearchTask', { viewHandle: original.viewHandle, memberId, round: record.round, taskId: record.taskId }); };
     if (materialBeforeLeave.current) materialBeforeLeave.current(open); else open();
   };
   const switchTab = (value: TeamTab) => { if (busy) return; rememberView(); setTab(value); setError(''); setNotice(''); };
@@ -539,6 +546,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
             const latestRound = rows(member.roundStates).find(round => round.round === current.round) || rows(member.roundStates).at(-1), memberTaskId = member.phoneTask?.taskId || (!hasWorkPlan ? member.assignmentTask?.taskId : undefined);
             const outputMessage = [...messages].reverse().find(message => message.memberId === member.id && ['answer', 'work_item_completed'].includes(message.kind) && message.content === member.text);
             const outputIdentity = outputMessage ? teamMessageIdentity(outputMessage, members) : null;
+            const researchRecords = current.researchExecutionFormat ? teamResearchRecords(current.id, member) : [];
             const assignment = activeItems.length ? `正在做：${activeItems.map(item => label(item.title)).filter(Boolean).join('、')}` : label(member.assignment || member.role);
             return <AccordionItem key={member.id} id={member.id} className="pw-team-member" data-team-member-id={member.id} data-motion-key={`member:${member.id}`}
               title={<TeamMemberIdentity member={member} name={name(member.id)} detail={member.id === current.leaderId ? '负责人' : undefined} size={40} />}
@@ -550,6 +558,10 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
                 {model && <p className="pw-muted">模型：{model}</p>}
                 {latestRound?.message && <p className="pw-team-member-receipt">{latestRound.message}</p>}
                 {latestRound?.nativeErrorMessage && <p className="pw-field-hint">{latestRound.nativeErrorMessage}</p>}
+                {researchRecords.length > 0 && <section aria-label="原研究记录"><h4>原研究记录</h4><p className="pw-field-hint">查看完整产出、待处理事项和执行过程；打开不会继续工作，最新状态以原任务为准。</p>
+                  <div className="pw-form-actions">{researchRecords.filter(record => !record.historical).map(record => <Button key={`${record.round}:${record.taskId}`} variant="ghost" trailingIcon={IconExternalLink} disabled={!workspaceActive || !reading?.viewHandle || busy || materialBusy || changed} onClick={() => openResearchTask(member.id, record)}>第 {record.round} 阶段记录{record.recordedStatus ? ` · 记录时${status(record.recordedStatus)}` : ''}</Button>)}</div>
+                  {researchRecords.some(record => record.historical) && <Accordion variant="divided"><AccordionItem id="research-history" title="历史研究版本"><p className="pw-field-hint">这些版本已被后续输入替代，不代表当前成果，也不会转移给新成员。</p><div className="pw-form-actions">{researchRecords.filter(record => record.historical).map(record => <Button key={`${record.round}:${record.taskId}:${record.version}`} variant="ghost" trailingIcon={IconExternalLink} disabled={!workspaceActive || !reading?.viewHandle || busy || materialBusy || changed} onClick={() => openResearchTask(member.id, record)}>第 {record.round} 阶段 · 旧版本 {record.version}{record.recordedStatus ? ` · 记录时${status(record.recordedStatus)}` : ''}</Button>)}</div></AccordionItem></Accordion>}
+                </section>}
                 {member.text && <section className="pw-team-member-output" aria-label="已保存的成员产出"><h4>已保存的成员产出</h4>{outputIdentity && <TeamMemberIdentity member={outputIdentity} name={teamMessageAuthor(outputMessage!, members)} detail={outputIdentity.name !== member.name ? `原名称 · ${member.id}` : undefined} size={24} />}<AIAnswer text={String(member.text)} /></section>}
                 {member.acceptance && <p>验收：{member.acceptance}</p>}
                 {!!rows(member.dependsOn).length && <p>前置：{member.dependsOn.map(name).join('、')}</p>}

@@ -37,6 +37,7 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         default RelayLeaseAction reviewRelayLease(String raw) throws Exception { throw new SecurityException("本机中继配置尚未接线"); }
         default void removeRelayLease(String serviceBase, String inviterDeviceId) throws Exception { throw new SecurityException("本机中继配置尚未接线"); }
         default ConnectionReviewAction reviewRelayConnection(String peerId, String serviceBase) throws Exception { throw new SecurityException("本机中继连接尚未接线"); }
+        default LanDiscovery openLanDiscovery(boolean advertise) throws Exception { throw new SecurityException("本机尚未接通局域网发现"); }
         Availability inviteAvailability();
         /** Explicit click only. Return the one-use short-lived invitation for display, not logs. */
         java.util.List<String> localAddresses() throws Exception;
@@ -134,6 +135,11 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         void confirmBothFingerprints() throws Exception;
         void reject() throws Exception;
     }
+    public interface LanDiscovery extends AutoCloseable {
+        JSONObject view() throws Exception;
+        ConnectionReviewAction reviewConnection(String peerId, String candidateId) throws Exception;
+        void close();
+    }
     public interface ConnectionReviewAction {
         /** Safe original paired identity and address summary only; no invitation token or grant. */
         JSONObject view() throws Exception;
@@ -229,6 +235,7 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         private volatile DesktopWindow desktop;
         private final java.util.concurrent.atomic.AtomicLong desktopGeneration = new java.util.concurrent.atomic.AtomicLong();
         private volatile RecoveryEndpoint recoveryEndpoint;
+        private volatile LanDiscovery lanDiscovery;
         private volatile RelayLeaseReview relayReview;
         private final java.util.concurrent.atomic.AtomicLong reviewGeneration = new java.util.concurrent.atomic.AtomicLong();
         private Window() {}
@@ -264,7 +271,19 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
             }
             value = copy(value).put("actions", actions).put("taskActions", taskActions)
                     .put("taskActionCount", taskActions.length()).put("hasMoreTaskActions", originalTaskIds != null && originalTaskIds.length > 40);
+            LanDiscovery discovery = lanDiscovery;
+            if (discovery != null) value.put("lanDiscovery", discovery.view());
             return value;
+        }
+        public synchronized void startLanDiscovery(boolean advertise) throws Exception {
+            current(); stopLanDiscovery();
+            LanDiscovery opened = pairing.openLanDiscovery(advertise);
+            try { current(); lanDiscovery = opened; } catch (Exception closed) { opened.close(); throw closed; }
+        }
+        public synchronized void stopLanDiscovery() { LanDiscovery old = lanDiscovery; if (old != null) old.close(); }
+        public ConnectionReview reviewDiscoveredConnection(String peerId, String candidateId) throws Exception {
+            current(); LanDiscovery original = lanDiscovery; if (original == null) throw new SecurityException("请先开启本次局域网发现");
+            return connectionReview(peerId, original.reviewConnection(peerId, candidateId));
         }
         public Availability receiverAvailability(boolean enabled) { current(); return enabled ? receiver.enableAvailability() : receiver.disableAvailability(); }
         public void setReceiverEnabled(boolean enabled) throws Exception { current(); receiverAvailability(enabled).require(); receiver.setEnabled(enabled); }
@@ -451,7 +470,7 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         public Availability stopAvailability(String id) throws Exception { current(); return control.stopAvailability(id); }
         public void requestStop(String id) throws Exception { current(); stopAvailability(id).require(); control.requestStop(id); }
         public void discardReview() { if (!closed) nextReview(); }
-        @Override public void close() { closed = true; windows.remove(this); closeDesktop(); nextReview(); }
+        @Override public void close() { closed = true; windows.remove(this); stopLanDiscovery(); closeDesktop(); nextReview(); }
     }
     public static final class DesktopWindow implements AutoCloseable {
         private final Window window; private final long generation; private final DesktopAction source;

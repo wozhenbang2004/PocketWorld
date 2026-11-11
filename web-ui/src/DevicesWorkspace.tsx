@@ -60,6 +60,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const [workBusy, setWorkBusy] = useState(false), [controlBusy, setControlBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const [taskDetails, setTaskDetails] = useState<Record<string, Data>>({}), [historyReceipt, setHistoryReceipt] = useState<Data | null>(null), [historyStopSubmitted, setHistoryStopSubmitted] = useState(false);
   const [preparingDeviceWork, setPreparingDeviceWork] = useState(false);
+  const [discoveryAck, setDiscoveryAck] = useState(false), [advertise, setAdvertise] = useState(false), [discoveryPeer, setDiscoveryPeer] = useState('');
   const [desktopOpen, setDesktopOpen] = useState(false), [query, setQuery] = useState('');
   const readingRoot = useRef<HTMLElement>(null), readingPositions = useRef({ list: 0, detail: 0 }), previousReadingView = useRef('list');
   const rememberReadingPosition = (view: 'list' | 'detail') => { readingPositions.current[view] = readingRoot.current?.closest<HTMLElement>('.pw-secondary-scroll')?.scrollTop || 0; };
@@ -95,7 +96,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   };
   const acceptReview = (value: Data) => { const actual = deviceReview(value); handle.current = actual.viewHandle; setReview(actual); setAck(false); setFuture(false); setHistoryReceipt(null); setHistoryStopSubmitted(false); setRaw(''); setForm(''); setInvitation(''); };
   const clearSensitive = (enabled = false) => {
-    setDesktopOpen(false);
+    setDesktopOpen(false); setDiscoveryAck(false); setAdvertise(false); setDiscoveryPeer('');
     scope.current.invalidate(enabled); handle.current = ''; setReview(null); setAck(false); setFuture(false); setRaw(''); setInvitation('');
     setForm(''); setAddress(''); setHost(''); setPort(''); setRecoveryAddresses([]); setHistoryReceipt(null); setHistoryStopSubmitted(false); setTaskDetails({}); setSnapshot(null); setError(''); setNotice(''); setWorkBusy(false); setControlBusy(false);
     void run('devices.discard', {}).catch(() => {});
@@ -125,6 +126,14 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     if (peerId) { setPeerId(''); return true; }
     return false;
   }); return () => registerTransientBack(null); }, [review, invitation, form, desktopOpen, peerId, preparingDeviceWork, registerTransientBack]);
+  useEffect(() => {
+    if (!snapshot?.lanDiscovery?.active && !snapshot?.lanDiscovery?.stopPending) return;
+    const timer = window.setInterval(() => {
+      if (Date.now() > Number(snapshot?.lanDiscovery?.expiresAt || 0) + 10_000) { window.clearInterval(timer); return; }
+      if (!scope.current.hasPending('work') && document.visibilityState === 'visible') void invoke('devices.snapshot');
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [snapshot?.lanDiscovery?.active, snapshot?.lanDiscovery?.stopPending]);
   // Keep list/detail reading position without changing native request or Back ownership.
   useLayoutEffect(() => {
     const view = desktopOpen ? 'desktop' : peerId ? 'detail' : 'list';
@@ -222,13 +231,31 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
             </div></section>)}{query && !visiblePeers.length && <div className="pw-device-empty"><h3>没有匹配的设备</h3><p>换个名称搜索，或查看全部已配对设备。</p><Button variant="secondary" onClick={() => setQuery('')}>清除搜索</Button></div>}</div> : <div className="pw-device-empty">
               <span className="pw-device-empty-icon" aria-hidden="true"><IconMonitor size={24} /><IconPhone size={19} /></span>
               <h3>连接另一台设备</h3>
-              <p>同一局域网先交换短期邀请，核对两端身份与范围。这里不会扫描附近设备，也不会仅凭同一 Wi-Fi 自动信任。</p>
+              <p>同一局域网先交换短期邀请，核对两端身份与范围。需要时可在下方临时查找地址；同一 Wi-Fi 或服务广播不代表可信。</p>
               <Button variant={pairings.length ? 'secondary' : 'primary'} disabled={busy} onClick={() => { setForm('add'); setRaw(''); setAddress(''); }}>{pairings.length ? '配对其他设备' : '配对设备'}</Button>
             </div>}
           </section>
           <section className="pw-device-section" aria-label="本机接收">
             <header className="pw-device-section-heading"><h3>本机接收</h3></header>
             <Accordion className="pw-device-disclosures pw-device-local-settings">
+              {supported('devices.discovery.start') && <AccordionItem id="lan-discovery" title="临时查找局域网地址" description="60 秒 · 不自动配对或信任">
+                <p>在另一台 Android 手机的同一入口启用临时广播，然后查找。广播只公开随机服务名和连接端口，不含设备身份、证书、邀请或权限；同一网络的其他设备也可能看到。电脑端尚未接入这项广播，仍用短期邀请。</p>
+                {!snapshot?.lanDiscovery?.active && <>
+                  <CheckboxField isSelected={advertise} isDisabled={busy || !snapshot?.local?.listenerReady} onChange={value => { setAdvertise(value); setDiscoveryAck(false); }}>同时临时广播本机接收地址（需先开启设备接收）</CheckboxField>
+                  <CheckboxField isSelected={discoveryAck} isDisabled={busy} onChange={setDiscoveryAck}>我同意在本页查找 60 秒{advertise ? '，并向同一局域网临时公开本机服务地址' : '，不广播本机接收服务'}</CheckboxField>
+                  <Button disabled={busy || !discoveryAck || snapshot?.lanDiscovery?.stopPending} onClick={() => void invoke('devices.discovery.start', { advertise, acknowledged: true })}>开始本次查找</Button>
+                </>}
+                {snapshot?.lanDiscovery && <p role="status">{snapshot.lanDiscovery.notice}{snapshot.lanDiscovery.active ? ` 截至 ${time(snapshot.lanDiscovery.expiresAt)}。` : ''}{snapshot.lanDiscovery.advertising ? ' 系统仍报告本机服务广播已登记。' : ''}{snapshot.lanDiscovery.stopPending ? ' 已禁用本页候选，系统停止回执仍待确认。' : ''}</p>}
+                {snapshot?.lanDiscovery?.active && <>
+                  <p>下列是未认证的地址候选，不是在线设备。先选它应当对应的原配对身份，再核对地址；实际连接仍须通过原证书双向 TLS。未配对设备仍需交换短期邀请。</p>
+                  <SelectField label="应当连接的原配对设备" value={discoveryPeer} onChange={setDiscoveryPeer} isDisabled={busy} options={[{ id: '', label: '明确选择一台已配对设备' }, ...peers.filter(row => !row.revoked).map(row => ({ id: row.deviceId, label: `${name(row)} · ${String(row.deviceId).slice(-8)}` }))]} />
+                  {rows(snapshot.lanDiscovery.candidates).map(candidate => <div className="pw-source-record" key={candidate.candidateId}><p>{candidate.host} · 控制 {candidate.controlPort} · 成果 {candidate.bulkPort} · 未认证</p><Button variant="secondary" disabled={busy || !discoveryPeer} onClick={() => void invoke('devices.discovery.reviewConnection', { deviceId: discoveryPeer, candidateId: candidate.candidateId }, acceptReview)}>核对这个地址与原身份</Button></div>)}
+                  {!rows(snapshot.lanDiscovery.candidates).length && <p>暂未发现可用地址。确认另一台手机已开启本页广播；访客 Wi-Fi、客户端隔离、VPN 或系统限制可能阻止发现。空列表不代表设备不存在。</p>}
+                  {snapshot.lanDiscovery.skipped > 0 && <p>部分服务未能解析或不符合有限发现范围，未纳入候选。</p>}
+                  <Button variant="ghost" disabled={busy} onClick={() => void invoke('devices.discovery.stop')}>停止查找与本机广播</Button>
+                </>}
+                <p>离开本页、进入后台或到期即禁用候选并请求系统撤回发现与广播；IPv6 链路本地地址暂不接入，仍可使用原邀请中的可路由地址。查找和广播不启用接收、不改变权限，也不启动任务。</p>
+              </AccordionItem>}
               <AccordionItem id="phone-preparation" title="让另一台设备使用这台手机" description="主屏与独立屏分别准备">
                 <p>只配置这台手机，不会启动远程任务。配对时还需明确选应用、节点或整屏输入范围。</p>
                 <dl className="pw-facts"><div><dt>主屏读取</dt><dd>{phoneStatus('mainObservation')}</dd></div><div><dt>主屏输入</dt><dd>{phoneStatus('mainExecution')}</dd></div><div><dt>独立屏准备</dt><dd>{phoneStatus('backgroundPreparation')}</dd></div><div><dt>独立屏执行</dt><dd>{phoneStatus('backgroundExecution')}</dd></div></dl>
@@ -369,7 +396,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
           {exactGrant && <><GrantScope scope={exactGrant} />{review.kind === 'pair' ? <><p className="pw-source-copy">发出邀请的设备：{originalView.inviterDeviceId}<br />完整指纹：{fingerprint(originalView.inviterFingerprint)}</p><p className="pw-source-copy">加入设备：{originalView.joinerDeviceId}<br />完整指纹：{fingerprint(originalView.joinerFingerprint)}</p><p>原邀请至 {time(originalView.expiresAt)}。两台设备均核对一致后才能完成配对。</p></> : <p className="pw-source-copy">已配对设备完整指纹：{fingerprint(originalView.certificateFingerprint)}</p>}</>}
           {review.kind === 'goal' && <><h3>{originalView.goal}</h3><p>本机模型 {originalView.model} · {originalView.provider} · {originalView.source === 'local_api' ? '本机 API 连接' : originalView.source === 'local_account' ? '本机账号' : originalView.source}</p><ResourceScope resource={originalView.resourceBinding || {}} /><p>本次上限：工具 {originalView.toolBudget} 次 · 模型 {originalView.modelBudget} 次 · 至 {time(originalView.deadline)}</p>{originalView.origin && <p>原发起设备 {originalView.origin.originDeviceId} · 请求设备 {originalView.origin.callerDeviceId}</p>}{originalView.contextSummary && <p>{originalView.contextSummary}</p>}{originalView.contextArtifactCount > 0 && <p>附带 {originalView.contextArtifactCount} 个原文件引用，仅本任务使用。</p>}{openModels && <Button variant="secondary" disabled={busy} onClick={() => { closeReview(); openModels(); }}>更换本机模型</Button>}{originalView.source === 'local_account' && <p role="alert">这个账号当前不支持跨设备目标，请先在模型设置选择已授权 API 模型。</p>}<CheckboxField isSelected={future} onChange={setFuture} isDisabled={busy}>以后同一配对授权、模型与范围内的目标自动处理</CheckboxField>{future && <p>未来策略：工具 {originalView.policyToolBudget} 次 · 模型 {originalView.policyModelBudget} 次 · 至 {time(originalView.policyExpiresAt)}。模型、配对代次或范围改变后重新审阅。</p>}</>}
           {review.kind === 'action' && <><h3>{deviceOperationLabels[originalView.operation]}</h3>{originalView.peer && <><p>{name(originalView.peer)} · {originalView.peer.deviceId}</p><p className="pw-source-copy">{fingerprint(originalView.peer.certificateFingerprint)}</p></>}{originalView.taskId && <><p>{originalView.goal || originalView.pendingGoal?.goal}</p><p>原任务 {originalView.taskId}{originalView.runId ? ` · 执行 ${originalView.runId} · 代次 ${originalView.executorEpoch}` : ' · 从未启动的原目标'}</p>{originalView.origin && <p>原发起设备 {originalView.origin.originDeviceId} · 请求设备 {originalView.origin.callerDeviceId}</p>}{originalView.resourceBinding && <ResourceScope resource={originalView.resourceBinding} />}</>}{originalView.lease && <p>{originalView.lease.serviceBase} · {originalView.lease.inviterDeviceId}</p>}<p>{originalView.operation === 'peer.revoke' ? '本机撤销会使旧授权失效，对端是否收到撤销另看真实回执。已经发生的动作无法撤回。' : originalView.operation.startsWith('task.') ? '只控制这项原任务，不重新提交目标。暂停、继续与停止仍以执行端回执为准。' : '变更本机接收或连接不会把正在执行的任务标记为停止。'}</p></>}
-          {review.kind === 'connection' && <><p>更新原设备 {originalView.deviceId} 的连接地址。</p><p className="pw-source-copy">已配对证书完整指纹：{fingerprint(originalView.certificateFingerprint)}</p><ResourceScope resource={Object.fromEntries(Object.entries(originalView).filter(([key]) => ['host', 'port', 'controlPort', 'bulkPort', 'serviceBase', 'path', 'connectionKind', 'kind', 'expiresAt'].includes(key)))} /></>}
+          {review.kind === 'connection' && <>{originalView.discoveredAddress && <p role="alert">此地址来自未认证的局域网广播。确认只更新本机连接地址并尝试原证书双向 TLS；不重新配对、不扩大权限，不代表地址已验证或设备在线。选错地址会连接失败，可用原设备邀请恢复。</p>}<p>更新原设备 {originalView.deviceId} 的连接地址。</p><p className="pw-source-copy">已配对证书完整指纹：{fingerprint(originalView.certificateFingerprint)}</p><ResourceScope resource={Object.fromEntries(Object.entries(originalView).filter(([key]) => ['host', 'port', 'controlPort', 'bulkPort', 'serviceBase', 'path', 'connectionKind', 'kind', 'expiresAt'].includes(key)))} /></>}
           {review.kind === 'relay' && <><p>{originalView.serviceBase} · 至 {time(originalView.expiresAt)}</p><p>只在内存中使用这份临时租约；不产生设备权限，双端身份仍要核对。</p><p>原邀请设备 {originalView.inviterDeviceId}</p></>}
           {review.kind === 'abandon' && <><p>只放弃本机这次待配对记录，对端可能已经保存配对。这里不会代替对端撤销。</p><p className="pw-source-copy">原设备指纹：{fingerprint(originalView.inviterFingerprint)}</p></>}
           {review.kind === 'recovery' && <><p>{originalView.kind === 'relay' ? originalView.serviceBase : `${originalView.host} · ${originalView.port}`}</p><p>只读入口截至 {time(originalView.expiresAt)}，关闭此窗口将关闭入口，不延长旧授权。</p><p className="pw-source-copy">本机指纹 {fingerprint(originalView.localFingerprint)}<br />原设备指纹 {fingerprint(originalView.peerFingerprint)}</p></>}

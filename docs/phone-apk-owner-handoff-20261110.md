@@ -1,6 +1,6 @@
 # 私人构建 APK 的主人安装交接（Stage 7，源码候选）
 
-状态：独立增量，接在 Stage 5/6 之后。主人的 PocketWebHost + React 审阅接线已补齐，保存在 `apk-stage7`，未覆盖统一候选 `integration-sparse`。未编译、未安装依赖、未写或运行测试、未真机、未推送 main。不是“手机 APK 开发环境已配好”。
+状态：Stage 7 源码已存在于 main `50ceebc077517e937de5007c4302d9172bf132be`（2026-11-11 对齐）。主人的 PocketWebHost + React 审阅接线已补齐。原交付没有编译、依赖安装、测试或真机证据；本次流式增量同样未构建/运行，不是“手机 APK 开发环境已配好”。
 
 ## 用户旅程与复用
 
@@ -44,7 +44,24 @@
 - 64 位版本代码只在给 React 的展示投影中变成十进制文本，避免 JavaScript 数值舍入；原生比较、哈希和持久引用仍使用原精确 long。SettingsDialog 保持挂载并通过 `isOpen` 退出，沿用原控件的关闭动效。
 - 源码交叉审查覆盖原源身份、持久未知回执、窗口生命周期和系统组件限制；当前没有运行或视觉验收。现存 `node_modules` 的来源/完整性不能确认，且本轮已知有依赖安装被审核拒绝，未借用这些依赖执行类型检查或构建。
 
-独立补丁及逐文件 before/after 身份清单由本目录与 `apk-stage7-base` 生成，供唯一集成者按原文件核对后并入。后续应先完成允许的不带测试构建，再按另行授权做真实设备体验；本报告不把源码审查称为构建、签名、安装或体验成功。
+历史 Stage 7 补丁已并入上述 main 基线，不能重复应用。后续应先完成允许的不带测试构建，再按另行授权做真实设备体验；本报告不把源码审查称为构建、签名、安装或体验成功。
+
+## 2026-11-11：原 APK 审阅与系统读取改为有界流式
+
+本次只补原旅程中的内存路径，不扩大文件、权限或安装范围：
+
+- `AttachmentOutcomeHost.originalFile` 为同一私人附件签发原流式读能力，复用 `AttachmentBook.exportOwnerArchiveBytes` 的私人来源与前后 SHA 校验。`OwnerFilePreviewSource.copyTo` 再绑定原长度/hash、控制器与前后 current，失败的部分写入只能由调用方丢弃，不能外发。未具流接口的既有来源保留受限 byte[] 兼容，不宣称其他来源都已流式化。
+- `OwnerProjectApk.inspect` 直接流入未发布的 app cache 审阅副本，不再先持整份 APK；解析后的文件属性/hash 核对照旧。交接准备从同一原源流入原 `AttachmentViewSnapshots`，完整检查并写完元数据才返回 URI。
+- 快照锁内只预留完整原长度预算、创建副本和发布元数据；读取原源/current/Book、控制器回调和流写均在锁外。进程内活跃写入保留完整预算且不被 TTL 清理，失败清理未发布副本，避免原文件会话撤销回调形成 Book 与快照锁反向等待。
+- 系统安装器实际消费的 `AttachmentViewSnapshots.openReadOnly` 也不再创建整份 byte[]：用 32 KiB 缓冲复制并核 SHA 到私有 reader，unlink 后再核对真正只读 FD 的长度/hash，rewind 后才返回。不是只把生产端改流式、读取端仍全量持有。此共用 reader 改动也用于原临时查看 URI，但不改变其来源权限或可读内容。
+- 原每文件 20 MiB、源附件总存储 100 MiB、各临时目录 40 MiB/4 份、10 分钟 TTL、固定系统组件和单 URI READ grant 均未提高。没有增加下载、安装工具、签名、URI 根、后台会话、自动重投或首启。
+- 校验仍需要多次读盘，未测得速度/内存/电量改善数值；同 UID 不是恶意代码隔离。完整 SDK profile、超过 20 MiB 的 APK、模块输出与源码范围隔离、签名保管/恢复仍是开放项。
+
+本次再次读取 Android 官方 SDK 条款第 2/3 节、AGP 8.7 compatibility 表和 PackageInstaller.Session.commit：SDK 使用仍需接受条款，开源组件各自许可；AGP 8.7 的 Gradle/JDK/API 为 8.9/17/35、默认 Build Tools 34.0.0；targetSdk 35+ 的 Session commit 不能使用 immutable PendingIntent。没有接受任何条款或创建 Session。固定 Perfetto SDK 摘要原文已回读，候选 JSON 反映来源证据而非本机字节验证。
+
+独立源码复查已核对原源前后身份、实际 FD 消费、活跃写入预算和撤销回调锁序；最初发现的反向锁路径已按上述结构修正，复查未见新增阻断。这不等于运行或并发行为验证。
+
+验证边界：仅源码及文档差异审查；本环境未发现 javac、Android SDK 或可用 Gradle 构建环境，未安装补齐。未写/运行测试，未进行编译、设备运行、UI 体验、签名或真实安装。下一步是允许的不带测试构建与另行授权的真实体验，不是重新应用 Stage 5–7。
 
 ## 为什么暂不引入 PackageInstaller Session
 

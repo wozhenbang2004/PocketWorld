@@ -215,6 +215,7 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
         public void setEnabled(boolean enabled) throws Exception { if (enabled) network.enable(); else network.disable(); changed(); }
     }
     private final class Pairing implements NativeDeviceWorkspaceHost.PairingOwner {
+        public NativeDeviceWorkspaceHost.LanDiscovery openLanDiscovery(boolean advertise) throws Exception { return network.openLanDiscovery(advertise); }
         public JSONArray relayLeases() throws Exception { return network.relayLeases(); }
         public NativeDeviceWorkspaceHost.RelayLeaseAction reviewRelayLease(String raw) throws Exception { return network.reviewRelayLease(raw); }
         public void removeRelayLease(String service, String inviter) throws Exception { network.removeRelayLease(service, inviter); }

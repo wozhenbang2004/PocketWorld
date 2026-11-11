@@ -754,6 +754,11 @@ internal class PocketWebBridge(
                 openOriginalTask(id, groupPages.taskForNavigation(args), true, "groups")
                 return
             }
+            if (action == "teams.openResearchTask") {
+                requireSection("teams")
+                openOriginalTask(id, teamPages.taskForResearchNavigation(args), true, "teams")
+                return
+            }
             if (action == "devices.openTask") {
                 requireSection("devices")
                 openOriginalTask(id, devicePages.taskForNavigation(args), true, "devices")
