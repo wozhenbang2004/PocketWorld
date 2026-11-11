@@ -78,9 +78,7 @@ public final class ProviderHostedWebSearch {
             throw new IllegalArgumentException("缺少厂商检索词");
         for(var keys=args.keys();keys.hasNext();)if(!Set.of("query","maxUses").contains(keys.next()))
             throw new SecurityException("厂商搜索不接受请求身份、端点、凭据或费用参数");
-        String query=args.getString("query").trim();
-        if(query.isBlank()||query.length()>500||query.codePoints().anyMatch(Character::isISOControl))
-            throw new IllegalArgumentException("厂商检索词无效");
+        String query=WebQueryGuard.requirePublic(args.getString("query"),500);
         int maxUses=2;
         if(args.has("maxUses")){
             Object raw=args.get("maxUses");
