@@ -78,6 +78,8 @@ PW-MODEL-CAP-1：本轮用户反馈截图中的 `gpt-6-luna / OpenAI API` 将图
 
 保留已采用的选中指示、按压、对象增删/让位、披露与浮层动效，以及管家/项目/用量/模型的同期产品结构。native宿主已管理IME时，Web浮层不再重复补偿高度；原生预览几何与权威请求/回执不得被动画接管。代码/构建/发布与Android实际体验分别记录，不以源码修正自动关闭用户的流畅度反馈。
 
+本批已于北京时间2026-11-11 **08:27:16**随[v0.1.100](https://github.com/wozhenbang2004/PocketWorld/releases/tag/v0.1.100)发布，应用`0.4.1100 / 1100`；源码[`8eb4633`](https://github.com/wozhenbang2004/PocketWorld/commit/8eb463379fd0e90b88c168c473d62814bbdccc45)，tree `c3e825d22b669042441c5160118d0660d2a3d47c`。独立源码复核、类型/生产构建及[CI build/prepare/publish](https://github.com/wozhenbang2004/PocketWorld/actions/runs/42930404123)均完成，发布APK身份与取回的构建证据一致，具体签名/hash见上述研究记录。整合保留设备/项目/团队同期功能，并修正手控与配对同时打开两个Dialog的问题。没有编写或运行测试；Android真机上下跳动、闪烁及流畅度仍待当前产物体验，未宣称visual PASS或用户已认可。
+
 ## 2026-11-11 模型与推理入口响应
 
 当前反馈与实施合同见 [动效研究第四次深化](docs/motion-research-20261110.md#第四次深化--模型与推理入口响应--2026-11-11)，PW-M25–PW-M28。保留独立锚定选择、既有表面与状态语义；重点修正局部开关牵动聊天树、读取/全量快照开销和退场正文提前卸载。此项是实现与性能修正，不能将源码依据或构建通过写成用户已认可流畅度。

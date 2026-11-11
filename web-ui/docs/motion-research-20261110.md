@@ -19,6 +19,28 @@
 
 发布前主线新增`411c22e26d64d5c169469d906cfb47f372080ef8`的设备、项目、团队、工具与收件箱功能，已无损整合并复核交叉文件：保留设备任务的返回处理、新能力入口、团队定位及离页守卫。设备手控准备已有独立对话框，因此配对对话框补排除`manual`状态，避免同一点击同时打开两个模态层。合并后的生产构建发现该主线另有两处TypeScript阻断，已限定修正：手机画面续用先确认上一帧存在，项目APK页直接返回bridge提供的所属返回处理清理函数。没有通过放宽类型检查或删除功能绕过构建。
 
+### 本批实现与构建检查点
+
+PW-M29–PW-M32已落实。共享进场只对真实深度变化做单层横向衔接，首次显示、同级切换及恢复可见不重播；准备中心保留同一外壳供快速返回接续。资料返回侧栏通过实际节点挂载回调恢复原滚动，项目/二级页/准备中心在布局阶段恢复位置。记忆同scope刷新保留只读展示，当前读取成功才恢复操作，namespace变化仍清空；AI账号目录区分尚未读取、失败和已确认空结果。独立只读审查核对了这些状态及Vaul原生IME标记，对合并后的App/Devices和Secondary/Setup另行复核，无待处理阻断；父子记忆重复busy提示已修正。
+
+正式源码为[`8eb463379fd0e90b88c168c473d62814bbdccc45`](https://github.com/wozhenbang2004/PocketWorld/commit/8eb463379fd0e90b88c168c473d62814bbdccc45)，tree `c3e825d22b669042441c5160118d0660d2a3d47c`，与本地整合后构建的源码树逐字节一致。`npm run typecheck --prefix web-ui`及最终`npm run build --prefix web-ui`成功；最终生产构建含2570个模块和224项随包资源完整性核对。既存许可正文缺项与大chunk提示仍存在，本轮未更换依赖。源码与工作区已回读核对；Android构建与发布身份另列，不把Web构建当成设备体验。
+
+### 本批正式交付 · v0.1.100
+
+北京时间2026-11-11 **08:27:16**，[v0.1.100](https://github.com/wozhenbang2004/PocketWorld/releases/tag/v0.1.100)正式发布，应用版本`0.4.1100 / 1100`。release target为上述`8eb463379fd0e90b88c168c473d62814bbdccc45`，与本次APK回执中的commit/tree一致；不把随后文档提交或主线新增工作冒充本APK的源码身份。
+
+| 交付项 | 实际证据 |
+| --- | --- |
+| CI | [run 42930404123](https://github.com/wozhenbang2004/PocketWorld/actions/runs/42930404123)，build、prepare、publish均success；Web生产构建与Android assembleDebug完成。 |
+| 安装包 | `dev.pocketengine`，versionName `0.4.1100`、versionCode `1100`，arm64-v8a，最低Android API 30；148,923,061 bytes。 |
+| APK SHA-256 | `a04cca3e1df76c28b22c3e4db60341095ec95bc972678e05710633a9be76fd1f`；发布资产digest与大小已和同次`apk-identity.json`、`SHA256SUMS`核对。 |
+| 签名 | 同次CI的apksigner回执为Verifies，v3为true；证书SHA-256 `b58e014e2a2e49b2e85ebd5b47a034a28cb0d313d71f379a5208d21afe388e58`，沿用项目签名。此处为已取回的CI验签证据，不称本机重新验签了完整APK。 |
+| 打包完整性 | CI完成ZIP对齐/CRC、准确Web清单与哈希、native ABI/catalog及display helper DEX核对；不代表设备运行。 |
+| 独立取回 | 已下载并读取`pocketworld-debug-arm64-238-1`，artifact `13816167601`，176,633 bytes；ZIP SHA-256 `f48fba85046473af1fb41bf97ab92e70206b0fdf467f460997752985ac303308`与服务端digest一致。 |
+| 增量发布 | 1099→1100增量包4,240,901 bytes，已随同完整APK及release.json发布；发布资产元数据已回读。 |
+
+[直接下载本轮APK](https://github.com/wozhenbang2004/PocketWorld/releases/download/v0.1.100/a04cca3e1df76c28b22c3e4db60341095ec95bc972678e05710633a9be76fd1f-app-1100.apk)。PW-M29–PW-M32的实现、独立源码复核、构建及发布身份已有证据；**当前Android实际视觉、触屏/键盘与切换流畅度仍待真实体验，用户反馈未被标为已完全解决**。未编写或运行测试，CI截图流程保持skipped，构建回执的`device_install_or_runtime_test`为`not performed`。体验关注“管家→准备中心/AI接入/个人资料/项目→返回”，以及同页刷新、连续进入详情再返回、带键盘关闭浮层；不以源码推导冒充观察结果。
+
 ## 第四次深化 · 模型与推理入口响应 · 2026-11-11
 
 用户原话：“How do you发张卡顿啊，点模型的时候点那个推理长度的时候非常卡顿。我希望你都再进行一轮的优化和深入，好不好？”来源为本聊天当前消息，精确消息ID与发送时刻不可取得；本批记录于北京时间2026-11-11 07:20。开头保留语音转写歧义；当前源码将“推理长度”对应到已有“推理强度”入口，不据此另造输出长度设置。用户没有说明安装版本、设备或录屏，不把反馈擅自归给v0.1.95。
