@@ -14,7 +14,7 @@ type Props = {
   renderBudget?: (onEditingChange: (value: boolean) => void, registerBack: Back) => ReactNode;
 };
 type Dimension = 'model' | 'purpose' | 'conversation';
-type View = { kind: 'overview' | 'trends' | 'analysis' | 'group' | 'metrics' | 'records' | 'budget' | 'diagnostics' | 'about'; day?: string; groupKey?: string; dimension?: Dimension };
+type View = { kind: 'overview' | 'trends' | 'analysis' | 'group' | 'metrics' | 'records' | 'budget' | 'diagnostics' | 'web' | 'about'; day?: string; groupKey?: string; dimension?: Dimension };
 type OwnedReport = { owner: string; value: UsageReport };
 type TrailEntry = { view: View; scroll: number; focus: string | null };
 const periods = [7, 30, 90];
@@ -33,6 +33,42 @@ const groupSubtitle = (row: UsageSummary, dimension: Dimension) => dimension ===
 const groupRows = (report: UsageReport, dimension: Dimension) => dimension === 'model' ? report.byModel : dimension === 'purpose' ? report.byPurpose : report.byConversation;
 const sortedGroups = (report: UsageReport, dimension: Dimension) => [...groupRows(report, dimension)].sort((a, b) => (b.normalized.total.knownSubtotal ?? -1) - (a.normalized.total.knownSubtotal ?? -1));
 const isPartialReport = (report: UsageReport) => report.queryLimited || report.conflictingCalls > 0 || report.invalidReceipts > 0 || report.invalidTimestamps > 0 || isPartialCount(report.totals.normalized.total);
+
+
+function WebUsagePanel({ supported }: { supported: (action: string) => boolean }) {
+  const [snapshot, setSnapshot] = useState<Record<string, unknown> | null>(null);
+  const [busy, setBusy] = useState(false), [error, setError] = useState('');
+  const generation = useRef(0);
+  const load = useCallback(() => {
+    const id = ++generation.current; setBusy(true); setError('');
+    void bridge.command('webSearch.snapshot', {}).then(data => {
+      if (id === generation.current) {
+        const raw = data as Record<string, unknown>;
+        setSnapshot(raw?.diagnostics && typeof raw.diagnostics === 'object' && !Array.isArray(raw.diagnostics)
+          ? raw.diagnostics as Record<string, unknown> : {});
+      }
+    }).catch(failure => { if (id === generation.current) setError(failure instanceof Error ? failure.message : '联网用量读取失败'); })
+      .finally(() => { if (id === generation.current) setBusy(false); });
+  }, []);
+  useEffect(() => { if (supported('webSearch.snapshot')) load(); return () => { generation.current++; }; }, [load, supported('webSearch.snapshot')]);
+  const metrics: Array<[string, string]> = [
+    ['searchRequests', '搜索请求'], ['fetchRequests', '网页读取'], ['pagesRead', '真实正文'],
+    ['sourceRefs', '保留来源'], ['hostedModelRequests', '厂商搜索调用'],
+    ['hostedInputTokens', '额外输入 Token'], ['hostedOutputTokens', '额外输出 Token'],
+    ['failedCalls', '失败或无结果'],
+  ];
+  return <section className="pw-usage-primary" aria-label="联网使用情况">
+    <div className="pw-usage-section-heading"><h3>联网活动</h3><Button variant="ghost" disabled={busy || !supported('webSearch.snapshot')} onClick={load}>刷新</Button></div>
+    <p className="pw-usage-caption">仅当前应用进程累计值，不属于上方选择的日期范围。历史单任务来源记录在 TaskStore。</p>
+    {error && <p className="pw-usage-state" role="alert">{error}</p>}
+    {snapshot && <dl className="pw-facts">{metrics.map(([key, title]) => {
+      const amount = snapshot[key];
+      return <div key={key}><dt>{title}</dt><dd>{typeof amount === 'number' && Number.isFinite(amount) ? amount.toLocaleString('zh-CN') : '未知'}</dd></div>;
+    })}</dl>}
+    <p className="pw-usage-caption">搜索服务和厂商模型可能另外计费；无法确认的费用保持未知，不计入主模型 Token 总额。</p>
+    {busy && <p className="pw-usage-caption" role="status">正在读取联网计数…</p>}
+  </section>;
+}
 
 function Count({ value, compact = false }: { value: UsageCount; compact?: boolean }) {
   return <span title={countCoverage(value)}>{tokenNumber(value.knownSubtotal, compact)}{value.knownSubtotal !== null && isPartialCount(value) && <small className="pw-usage-known">已知</small>}</span>;
@@ -230,7 +266,7 @@ export function UsageWorkspace({ supported, records, renderBudget, diagnostics, 
   const showGroup = (row: UsageSummary, selectedDimension = dimension) => open({ kind: 'group', day, dimension: selectedDimension, groupKey: groupKey(row, selectedDimension) });
   const selectedGroup = current && view.kind === 'group' ? groupRows(current, view.dimension || 'model').find(row => groupKey(row, view.dimension || 'model') === view.groupKey) : null;
   const entries = current ? sortedGroups(current, dimension).filter(row => `${groupTitle(row, dimension)} ${groupSubtitle(row, dimension)}`.toLocaleLowerCase().includes(filter.trim().toLocaleLowerCase())) : [];
-  const viewTitle = view.kind === 'trends' ? '每日趋势' : view.kind === 'analysis' ? day ? `${fullDate(day)}用量` : '用量分布' : view.kind === 'group' ? selectedGroup ? groupTitle(selectedGroup, view.dimension || 'model') : '来源明细' : view.kind === 'metrics' ? 'Token 与费用' : view.kind === 'records' ? '调用记录' : view.kind === 'budget' ? '预算与限制' : view.kind === 'diagnostics' ? '模型诊断' : '统计说明';
+  const viewTitle = view.kind === 'trends' ? '每日趋势' : view.kind === 'analysis' ? day ? `${fullDate(day)}用量` : '用量分布' : view.kind === 'group' ? selectedGroup ? groupTitle(selectedGroup, view.dimension || 'model') : '来源明细' : view.kind === 'metrics' ? 'Token 与费用' : view.kind === 'records' ? '调用记录' : view.kind === 'budget' ? '预算与限制' : view.kind === 'diagnostics' ? '模型诊断' : view.kind === 'web' ? '联网活动' : '统计说明';
   return <section ref={root} className="pw-usage-workspace" aria-label="用量统计">
     {view.kind === 'overview' ? <header className="pw-usage-toolbar"><CompactSelect label="统计时间范围" value={String(period)} options={periods.map(value => ({ id: String(value), label: `近 ${value} 天` }))} onChange={value => { const days = Number(value); setPeriod(days); setRange(usageRange(days)); setPeriodReport(null); setDayReport(null); setSelectedDay(''); }}/>
       <div className="pw-usage-toolbar-copy"><span>{scopeDates}</span><WorkingStatus active={busy}>{current ? '正在更新…' : '正在读取用量…'}</WorkingStatus></div><IconButton icon={IconRefresh} aria-label="刷新用量统计" title="刷新用量统计" disabled={busy || !available} onClick={() => { setRange(usageRange(period)); setRefresh(value => value + 1); }}/></header>
@@ -268,10 +304,12 @@ export function UsageWorkspace({ supported, records, renderBudget, diagnostics, 
     {view.kind === 'overview' && <>
         <div className="pw-usage-utility-list">{current && <Button variant="ghost" trailingIcon={IconChevronRight} className="pw-usage-utility" onClick={showMetrics} data-usage-focus="metrics"><span>Token 与费用<small>输入、输出、缓存与估算</small></span></Button>}
           {records && <Button variant="ghost" trailingIcon={IconChevronRight} className="pw-usage-utility" onClick={() => open({ kind: 'records' })} data-usage-focus="records"><span>调用记录<small>逐次查看原始用量</small></span></Button>}
+          {supported('webSearch.snapshot') && <Button variant="ghost" trailingIcon={IconChevronRight} className="pw-usage-utility" onClick={() => open({ kind: 'web' })} data-usage-focus="web"><span>联网活动<small>搜索、网页读取与额外厂商用量</small></span></Button>}
           {renderBudget && <Button variant="ghost" trailingIcon={IconChevronRight} className="pw-usage-utility" onClick={() => open({ kind: 'budget' })} data-usage-focus="budget"><span>预算与限制<small>管理调用上限</small></span></Button>}
         </div>
     </>}
     {view.kind === 'overview' && current && <footer className="pw-usage-footer"><Button variant="ghost" onClick={() => open({ kind: 'about' })} data-usage-focus="about">{isPartialReport(current) ? '部分数据 · 统计说明' : '本机保留记录 · 统计说明'}</Button>{current.sourceReadAt > 0 && <span>{new Date(current.sourceReadAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })} 更新</span>}</footer>}
+    {view.kind === 'web' && <WebUsagePanel supported={supported} />}
     {view.kind === 'records' && records}
     {view.kind === 'budget' && <>{budgetEditing && <p className="pw-usage-caption" role="status">完成当前操作后即可返回；结果待确认时，请读取原设置核对。</p>}{renderBudget?.(setBudgetEditing, registerChildBack)}</>}
     {view.kind === 'diagnostics' && diagnostics}
