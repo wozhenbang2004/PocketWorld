@@ -422,3 +422,13 @@ SOFTWARE.
 - Embla Carousel runtime packages are exactly 8.6.0; exact upstream license and version evidence are retained in licenses/embla-carousel-0fe6583 and incorporated by the dependency collector.
 - Reaction action capsules adapt the approved library-maintained independent study v1, retained as src/library/reaction-study-v1.html.source. This is not a released Malay source-code claim. No original screenshots, avatars, reaction counts or participants ship with the application.
 - Kevin, Neverland, FlexLayout, Material Carousel and Fennel inform layout/interaction selection. Their marketing screenshots/videos are not shipped as product artwork. Paper Widgets uses the separately identified library study; no paid template source claim is made.
+
+## Glasswork navigation material
+
+Top navigation uses the original `lens.js` and a scoped adaptation of `glass.css`
+from [Glasswork](https://github.com/kubai087/glasswork) at commit
+`4f0b6744b898b3a9b98fbd913ab24fdb83c53162`, MIT, Copyright (c) 2026 Kubai087.
+Original files and exact provenance are retained in
+`src/shell-library/upstream/glasswork/`. The complete MIT license and upstream
+NOTICE are bundled in `source-notices/src/shell-library/upstream/glasswork/`.
+No Apple wallpapers or Playground media are included.

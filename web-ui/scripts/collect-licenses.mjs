@@ -142,6 +142,8 @@ const selectedSourceFiles = [];
 for (const filename of [
   'THIRD-PARTY-NOTICES.md',
   'src/shell-library/upstream/beui-a866cb2/LICENSE',
+  'src/shell-library/upstream/glasswork/LICENSE',
+  'src/shell-library/upstream/glasswork/NOTICE',
   'src/forms-library/upstream/uiux/ncdai-wheel-fbe21d7/LICENSE',
   'src/forms-library/upstream/uiux/RAMOTION-LICENSE',
   'src/workspace-library/upstream/ovio/LICENSE',

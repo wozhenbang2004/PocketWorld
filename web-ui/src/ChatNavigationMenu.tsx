@@ -2,6 +2,7 @@ import type {ReactNode,Ref} from 'react';
 import { IconFolder, IconGrid, IconMore, IconNewChat, IconNotification, IconSearch, IconSettings, IconSparkles } from './icons';
 import {Button,IconButton} from './forms-library';
 import {Popover,PopoverTrigger} from './shell-library';
+import {useNavigationGlass} from './useNavigationGlass';
 import './chat-navigation.css';
 
 type ChatNavigationMenuProps={
@@ -25,11 +26,12 @@ type ChatNavigationMenuProps={
 /** The retained BoardUI/React Aria popover owns focus, placement and dismissal.
  * This only relocates navigation; actions still use the existing host paths. */
 export function ChatNavigationMenu({title,navigationTrigger,isOpen,onOpenChange,triggerRef,submitting,unread,onNewConversation,onConversations,onHome,onNavigation,onOrganize,onMemory,onNotifications,onSettings}:ChatNavigationMenuProps){
+ const actionsGlass=useNavigationGlass<HTMLDivElement>();
  const choose=(action:()=>void)=>{onOpenChange(false);action()};
  return <nav className="pw-chat-navigation" aria-label="对话操作">
   {navigationTrigger}
-  <h1 className="pw-chat-navigation-title" title={title}>{title}</h1>
-  <div className="pw-chat-navigation-actions pw-navigation-glass" role="group" aria-label="查找与对话菜单">
+  <h1 className="pw-chat-navigation-title" title={title}><span>{title}</span></h1>
+  <div ref={actionsGlass} className="pw-chat-navigation-actions pw-navigation-glass" role="group" aria-label="查找与对话菜单">
    <IconButton icon={IconSearch} className="pw-chat-glass-action" aria-label="搜索工作" onClick={event=>{const trigger=event.currentTarget;choose(()=>onConversations(trigger))}}/>
    <PopoverTrigger isOpen={isOpen} onOpenChange={onOpenChange}>
    <IconButton ref={triggerRef} icon={IconMore} className="pw-chat-glass-action" aria-label={unread>0?`对话菜单，${unread} 条未读通知`:'对话菜单'} title="对话菜单" data-unread={unread>0||undefined}/>

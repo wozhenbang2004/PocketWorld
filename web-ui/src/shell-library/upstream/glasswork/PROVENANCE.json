@@ -1,0 +1,19 @@
+{
+  "project": "Glasswork",
+  "repository": "https://github.com/kubai087/glasswork",
+  "commit": "4f0b6744b898b3a9b98fbd913ab24fdb83c53162",
+  "license": "MIT",
+  "copyright": "Copyright (c) 2026 Kubai087",
+  "files": {
+    "lens.js": "7dc1c4b5c37fc3aec7ee4903f643f1be774d680dcae79a95e38461cb00bb9c31",
+    "glass.css": "d13548bf70660fbb25c5361d7dc60c1fc47fc0803e4b4937d062753b664d2290",
+    "LICENSE": "b38c1defe9e46be8baa663da135c74b3edb0d2ae8c930e9b41d9405f6013e512",
+    "NOTICE": "824058026d7338161460df1fda278d593e7a1682d9601c3780167c7fd6144a29"
+  },
+  "usage": {
+    "lens.js": "Original runtime module. Mounted only on top navigation circles and shared action capsules; default rim/edge/power, dispersion set to 0 for one neutral pass.",
+    "glass.css": "Original reference preserved; its light/dark four-declaration material is scoped in src/navigation-glass.css. Fixed density 0.35; no media sampling or playground.",
+    "adapter": "src/useNavigationGlass.ts owns mount, media preference updates, and teardown."
+  },
+  "exclusions": "No Apple wallpapers, media, adapt.js, refract.js, or playground dependencies are included."
+}

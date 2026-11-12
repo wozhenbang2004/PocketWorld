@@ -12,12 +12,12 @@
  align-items: center;
  gap: 8px;
 }
-/* A short edge wash keeps the title readable while content passes under the
- * controls. It has no filter and never intercepts the reading surface. */
-.pw-chat-navigation::before {
+/* Only the title needs a wash. Keep both control backdrops open to the content
+ * underneath instead of putting an opaque veil in front of their lenses. */
+.pw-chat-navigation-title::before {
  content: '';
  position: absolute;
- inset: 0 0 -16px;
+ inset: -17px 0 -33px;
  z-index: -1;
  pointer-events: none;
  background: linear-gradient(to bottom, color-mix(in srgb, var(--pw-canvas-chat) 82%, transparent), color-mix(in srgb, var(--pw-canvas-chat) 32%, transparent) 70%, transparent);
@@ -31,14 +31,19 @@
 }
 .pw-app[data-navigation="drawer"] .pw-chat-navigation + .pw-conversation-scroll > .pw-conversation-content { padding-top: 66px; }
 .pw-chat-navigation-title {
+ position: relative;
+ isolation: isolate;
  min-width: 0;
  margin: 0;
- overflow: hidden;
- text-overflow: ellipsis;
- white-space: nowrap;
  color: var(--pw-ink);
  font: 550 15px/24px var(--pw-font);
  text-align: center;
+}
+.pw-chat-navigation-title > span {
+ display: block;
+ overflow: hidden;
+ text-overflow: ellipsis;
+ white-space: nowrap;
 }
 .pw-chat-navigation > .pw-chat-glass-trigger { justify-self: start; }
 .pw-chat-navigation-actions { justify-self: end; }
