@@ -12,7 +12,7 @@
   },
   "usage": {
     "lens.js": "Original runtime module. Mounted only on top navigation circles and shared action capsules; default rim/edge/power, dispersion set to 0 for one neutral pass.",
-    "glass.css": "Original reference preserved; its light/dark four-declaration material is scoped in src/navigation-glass.css. Fixed density 0.35; no media sampling or playground.",
+    "glass.css": "Original reference preserved; its light/dark four-declaration material is scoped in src/navigation-glass.css. Density 0.35, tint strength 0 in light and 0.35 in dark; shadow alpha scaled by 0.45 with a compact 2px/6px contact shadow. No media sampling or playground.",
     "adapter": "src/useNavigationGlass.ts owns mount, media preference updates, and teardown."
   },
   "exclusions": "No Apple wallpapers, media, adapt.js, refract.js, or playground dependencies are included."

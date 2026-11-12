@@ -1,40 +1,38 @@
 /* Glasswork 4f0b6744, MIT (Kubai087): scoped adaptation of glass.css.
  * Original material and lens are retained in shell-library/upstream/glasswork.
- * Density is the upstream default .35, with one CSS pixel per material unit.
+ * Clear light material: upstream tint strength 0 removes its white veil,
+ * brightness lift and bevel. Dark strength .35 keeps a thin smoky contrast.
+ * Rim light stays directional; compact contact shadows replace the large halo.
  * Each circle or shared capsule owns one backdrop; icons remain unfiltered. */
 :root {
- --pw-navigation-glass-fill: rgb(255 255 255 / 11.6%);
- --pw-navigation-glass-fill-pressed: rgb(255 255 255 / 22%);
+ --pw-navigation-glass-fill: transparent;
+ --pw-navigation-glass-fill-pressed: rgb(255 255 255 / 8%);
  --pw-navigation-glass-solid: #f7f7f8;
- --pw-navigation-glass-filter: blur(2px) saturate(1.8) contrast(1) brightness(1.06);
+ --pw-navigation-glass-filter: blur(2px) saturate(1.8) contrast(1) brightness(1);
  --pw-navigation-glass-shadow:
   inset 1.5px 1.5px 1px -1px rgb(255 255 255),
   inset -1.5px -1.5px 1px -1px rgb(255 255 255 / 60%),
   inset 0 0 0 .5px rgb(255 255 255 / 30%),
-  0 0 0 .5px rgb(0 0 0 / 12%),
-  0 4px 16px rgb(0 0 0 / 10%),
-  inset 0 6px 8px -6px rgb(255 255 255 / 50%),
-  inset 4px 0 8px -6px rgb(255 255 255 / 22%),
-  inset -4px 0 8px -6px rgb(255 255 255 / 12%),
-  inset 0 -6px 8px -6px rgb(0 0 0 / 6%);
+  0 0 0 .5px rgb(0 0 0 / 5.4%),
+  0 2px 6px rgb(0 0 0 / 4.5%);
  --pw-navigation-glass-hover: rgb(0 0 0 / 4%);
  --pw-navigation-glass-pressed: rgb(0 0 0 / 8%);
 }
 :root.dark {
- --pw-navigation-glass-fill: rgb(30 30 34 / 23.7%);
- --pw-navigation-glass-fill-pressed: rgb(30 30 34 / 38%);
+ --pw-navigation-glass-fill: rgb(30 30 34 / 8.3%);
+ --pw-navigation-glass-fill-pressed: rgb(30 30 34 / 18%);
  --pw-navigation-glass-solid: #242427;
- --pw-navigation-glass-filter: blur(2px) saturate(1.6) contrast(1) brightness(.8);
+ --pw-navigation-glass-filter: blur(2px) saturate(1.6) contrast(1) brightness(.93);
  --pw-navigation-glass-shadow:
   inset 1px 1px .5px -.5px rgb(255 255 255 / 46%),
   inset -1px -1px .5px -.5px rgb(255 255 255 / 18%),
   inset 0 0 0 .5px rgb(255 255 255 / 6%),
-  0 0 0 .5px rgb(0 0 0 / 28%),
-  0 4px 14px rgb(0 0 0 / 22%),
-  inset 0 6px 8px -6px rgb(255 255 255 / 18%),
-  inset 4px 0 8px -6px rgb(255 255 255 / 7%),
-  inset -4px 0 8px -6px rgb(255 255 255 / 4%),
-  inset 0 -6px 8px -6px rgb(0 0 0 / 8%);
+  0 0 0 .5px rgb(0 0 0 / 12.6%),
+  0 2px 6px rgb(0 0 0 / 9.9%),
+  inset 0 6px 8px -6px rgb(255 255 255 / 6.3%),
+  inset 4px 0 8px -6px rgb(255 255 255 / 2.45%),
+  inset -4px 0 8px -6px rgb(255 255 255 / 1.4%),
+  inset 0 -6px 8px -6px rgb(0 0 0 / 2.8%);
  --pw-navigation-glass-hover: rgb(255 255 255 / 7%);
  --pw-navigation-glass-pressed: rgb(255 255 255 / 13%);
 }
