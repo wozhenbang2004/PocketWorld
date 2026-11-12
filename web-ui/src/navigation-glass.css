@@ -1,22 +1,53 @@
 /* Local material adaptation for the retained navigation controls. Filtering is
  * bounded to each circle or shared capsule; icons and hit targets stay crisp. */
 :root {
- --pw-navigation-glass-fill: rgb(255 255 255 / 52%);
- --pw-navigation-glass-fill-pressed: rgb(255 255 255 / 65%);
- --pw-navigation-glass-rim: linear-gradient(145deg, rgb(255 255 255 / 94%), rgb(255 255 255 / 20%) 38%, rgb(0 0 0 / 7%) 68%, rgb(255 255 255 / 58%));
- --pw-navigation-glass-sheen: linear-gradient(160deg, rgb(255 255 255 / 32%), transparent 48%, rgb(255 255 255 / 10%));
- --pw-navigation-glass-shadow: 0 2px 5px -2px rgb(0 0 0 / 10%), 0 7px 18px -7px rgb(0 0 0 / 12%), inset 0 1px 2px rgb(255 255 255 / 64%), inset 0 -1px 2px rgb(0 0 0 / 3%);
+ --pw-navigation-glass-fill: rgb(80 80 84 / 13%);
+ --pw-navigation-glass-fill-pressed: rgb(72 72 76 / 20%);
+ --pw-navigation-glass-solid: #e7e7e9;
+ --pw-navigation-glass-rim: linear-gradient(135deg, rgb(255 255 255 / 95%), rgb(255 255 255 / 28%) 32%, rgb(0 0 0 / 18%) 60%, rgb(255 255 255 / 72%) 85%, rgb(0 0 0 / 6%));
+ --pw-navigation-glass-sheen: linear-gradient(135deg, rgb(255 255 255 / 18%), transparent 44%, rgb(0 0 0 / 2.5%));
+ --pw-navigation-glass-shadow: 0 0 0 .5px rgb(0 0 0 / 9%), 0 2px 6px -3px rgb(0 0 0 / 12%), inset 0 1px 1px rgb(255 255 255 / 80%), inset 1px 0 1px rgb(255 255 255 / 30%), inset 0 -1px 1px rgb(0 0 0 / 10%);
  --pw-navigation-glass-hover: rgb(0 0 0 / 4%);
  --pw-navigation-glass-pressed: rgb(0 0 0 / 8%);
 }
 :root.dark {
- --pw-navigation-glass-fill: rgb(35 36 39 / 62%);
- --pw-navigation-glass-fill-pressed: rgb(47 48 51 / 72%);
+ --pw-navigation-glass-fill: rgb(86 86 94 / 26%);
+ --pw-navigation-glass-fill-pressed: rgb(112 112 120 / 32%);
+ --pw-navigation-glass-solid: #303034;
  --pw-navigation-glass-rim: linear-gradient(145deg, rgb(255 255 255 / 33%), rgb(255 255 255 / 5%) 38%, rgb(0 0 0 / 18%) 68%, rgb(255 255 255 / 15%));
  --pw-navigation-glass-sheen: linear-gradient(160deg, rgb(255 255 255 / 10%), transparent 48%, rgb(255 255 255 / 3%));
- --pw-navigation-glass-shadow: 0 2px 5px -2px rgb(0 0 0 / 24%), 0 7px 18px -7px rgb(0 0 0 / 28%), inset 0 1px 2px rgb(255 255 255 / 10%), inset 0 -1px 2px rgb(0 0 0 / 16%);
+ --pw-navigation-glass-shadow: 0 0 0 .5px rgb(255 255 255 / 13%), 0 2px 6px -3px rgb(0 0 0 / 28%), inset 0 1px 1px rgb(255 255 255 / 22%), inset 1px 0 1px rgb(255 255 255 / 8%), inset 0 -1px 1px rgb(0 0 0 / 24%);
  --pw-navigation-glass-hover: rgb(255 255 255 / 7%);
  --pw-navigation-glass-pressed: rgb(255 255 255 / 13%);
+}
+
+/* Butler's controls sit above its real work scroller. The old opaque header
+ * prevented backdrop sampling even when the controls themselves were glass.
+ * Activity/error notices still reserve their own space: overlap only when the
+ * header is immediately followed by the route workspace. */
+.pw-app.pw-redesign[data-route="butler"] .pw-app-header {
+ position: relative;
+ z-index: 6;
+ min-height: 60px;
+ height: 60px;
+ padding-block: 8px;
+ background: transparent;
+}
+.pw-app.pw-redesign[data-route="butler"] .pw-app-header > .pw-current-work {
+ position: relative;
+ isolation: isolate;
+}
+.pw-app.pw-redesign[data-route="butler"] .pw-app-header > .pw-current-work::before {
+ content: '';
+ position: absolute;
+ inset: -16px 0 -28px;
+ z-index: -1;
+ pointer-events: none;
+ background: linear-gradient(to bottom, color-mix(in srgb, var(--pw-canvas-chat) 92%, transparent), color-mix(in srgb, var(--pw-canvas-chat) 75%, transparent) 65%, transparent);
+}
+.pw-app.pw-redesign[data-route="butler"] .pw-app-header + .pw-route-workspace {
+ --pw-butler-header-overlap: 60px;
+ margin-top: calc(-1 * var(--pw-butler-header-overlap));
 }
 
 .pw-app .pw-navigation-glass,
@@ -27,7 +58,7 @@
  border: 0;
  border-radius: 999px;
  color: var(--pw-ink);
- background: var(--pw-floating);
+ background: var(--pw-navigation-glass-sheen), var(--pw-navigation-glass-solid);
  box-shadow: var(--pw-navigation-glass-shadow);
 }
 
@@ -53,8 +84,8 @@
  .pw-app.pw-redesign .pw-chat-navigation > .pw-chat-glass-trigger,
  .pw-app.pw-redesign .pw-app-header > [data-pw-icon-button] {
   background: var(--pw-navigation-glass-sheen), var(--pw-navigation-glass-fill);
-  -webkit-backdrop-filter: blur(12px) saturate(1.35);
-  backdrop-filter: blur(12px) saturate(1.35);
+  -webkit-backdrop-filter: blur(8px) saturate(1.35);
+  backdrop-filter: blur(8px) saturate(1.35);
  }
  .pw-app.pw-redesign .pw-chat-navigation > .pw-chat-glass-trigger:is(:active, [data-pressed]):not(:disabled),
  .pw-app.pw-redesign .pw-app-header > [data-pw-icon-button]:is(:active, [data-pressed]):not(:disabled) {
@@ -128,7 +159,7 @@
  .pw-app .pw-navigation-glass,
  .pw-app.pw-redesign .pw-chat-navigation > .pw-chat-glass-trigger,
  .pw-app.pw-redesign .pw-app-header > [data-pw-icon-button] {
-  background: var(--pw-floating);
+  background: var(--pw-navigation-glass-solid);
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
  }
