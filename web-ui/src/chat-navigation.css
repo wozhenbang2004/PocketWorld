@@ -22,14 +22,6 @@
  pointer-events: none;
  background: linear-gradient(to bottom, color-mix(in srgb, var(--pw-canvas-chat) 82%, transparent), color-mix(in srgb, var(--pw-canvas-chat) 32%, transparent) 70%, transparent);
 }
-/* Keep the existing scroller and its saved anchors. Only overlap the header
- * when no activity notice sits between it and the conversation. Notices retain
- * their reserved space; the first message always starts below the controls. */
-.pw-chat-navigation + .pw-conversation-scroll {
- --pw-reading-top-inset: 58px;
- margin-top: -58px;
-}
-.pw-app[data-navigation="drawer"] .pw-chat-navigation + .pw-conversation-scroll > .pw-conversation-content { padding-top: 66px; }
 .pw-chat-navigation-title {
  position: relative;
  isolation: isolate;
