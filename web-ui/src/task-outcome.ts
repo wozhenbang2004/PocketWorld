@@ -1,4 +1,5 @@
 /** Read-only task evidence. Nothing here is a capability, an approval, or proof of success. */
+import { projectPackageOutcome, type ProjectPackageOutcome } from './project-preview';
 type Row = Record<string, unknown>;
 const row = (value: unknown): Row => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Row : {};
 const text = (value: unknown): string => typeof value === 'string' ? value : '';
@@ -18,10 +19,12 @@ export interface TaskOutcome {
   screenshot?: { imageId: string; state: string; currentRun: boolean; encrypted: boolean; legacyRetained: boolean; createdAt?: number; expiresAt?: number; readState: string; deletionPending: boolean };
   /** A linked reply has task identity, but the message protocol has no run identity. */
   reply?: { id: string; text: string; at?: number; attachments: Row[] };
+  projectPackages: ProjectPackageOutcome[];
+  projectPackagesPartial: boolean;
   partial: boolean;
 }
 
-export function getTaskOutcome(input: unknown, messages: unknown = [], now: number = Date.now()): TaskOutcome {
+export function getTaskOutcome(input: unknown, messages: unknown = [], now: number = Date.now(), packageRead?: unknown): TaskOutcome {
   const task = row(input), raw = row(task.raw), id = text(task.id), runId = text(raw.runId);
   const page = row(raw.historyEventPage);
   const validPage = !!id && (!text(page.taskId) || page.taskId === id) && (!text(page.section) || page.section === 'events');
@@ -87,7 +90,19 @@ export function getTaskOutcome(input: unknown, messages: unknown = [], now: numb
     id: text(linked.id), text: replyText, at: finite(linked.at), attachments,
   } : undefined;
   const retained = !useEvidence && (evidenceText || image && !remotePhoneSnapshot) ? {text: evidenceText, ...(image && !remotePhoneSnapshot ? {image} : {})} : undefined;
+  const packagePage = row(packageRead ?? raw.projectPackageOutcomes), hasPackagePage = Object.keys(packagePage).length > 0;
+  const validPackagePage = packagePage.taskId === id && Array.isArray(packagePage.items);
+  const packageCandidates = validPackagePage ? rows(packagePage.items) : [];
+  const seenPackages = new Set<string>();
+  let projectPackagesPartial = hasPackagePage && (!validPackagePage || packagePage.hasMore === true || packagePage.readLimited === true || rows(packagePage.unavailable).length > 0);
+  const projectPackages: ProjectPackageOutcome[] = [];
+  for (const candidate of packageCandidates) {
+    const original = projectPackageOutcome(task, candidate);
+    if (!original) { projectPackagesPartial = true; continue; }
+    if (!seenPackages.has(original.operationId)) { seenPackages.add(original.operationId); projectPackages.push(original); }
+  }
   return { text: output, source: useEvidence ? 'evidence' : latest ? 'result-event' : summary ? 'task-summary' : 'none', reply, ...(screenshot ? {screenshot} : {}),
+    projectPackages, projectPackagesPartial,
     ...(latest ? {resultStatus: text(latest.event.status)} : {}),
     ...(useEvidence ? {evidenceRunBound: currentEvidence} : {}),
     ...(image && useEvidence && !remotePhoneSnapshot ? {image} : {}), ...(retained ? {retained} : {}), ...(remotePhoneSnapshot ? {remotePhoneSnapshot} : {}), ...(remotePhoneSnapshotStatus ? {remotePhoneSnapshotStatus} : {}),

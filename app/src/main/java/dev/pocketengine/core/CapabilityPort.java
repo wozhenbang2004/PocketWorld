@@ -47,6 +47,11 @@ public interface CapabilityPort extends AutoCloseable {
     final class Unavailable extends SecurityException {
         public Unavailable(){super("本轮工具已撤销或安装身份改变，请重新取得当前工具清单");}
     }
+    /** The native catalogue still admits this tool, but its schema was not in
+     * this model request. Recover only before dispatch; never treat it as a grant. */
+    final class SchemaNotPublished extends SecurityException {
+        public SchemaNotPublished(){super("工具参数定义尚未在本次模型请求发布");}
+    }
     /** A real result already exists, but the same native host rejected continued
      * execution. Runner may settle this original receipt, never expose its body to
      * a new model request or use it to restore authority after withdrawal. */

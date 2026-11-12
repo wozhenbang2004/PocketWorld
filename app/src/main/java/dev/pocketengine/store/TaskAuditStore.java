@@ -244,15 +244,30 @@ public final class TaskAuditStore {
     }
     public static JSONObject header(JSONObject task)throws Exception{
         JSONObject out=new JSONObject();for(String key:HEADER_FIELDS){Object value=task.opt(key);if(value==null)continue;
-            if(value instanceof String){String text=(String)value;int max=key.equals("goal")?2000:key.equals("summary")?1000:500;out.put(key,clip(text,max));}
+            if(key.equals("developmentContext")&&value instanceof JSONObject)out.put(key,developmentHeader((JSONObject)value));
+            else if(value instanceof String){String text=(String)value;int max=key.equals("goal")?2000:key.equals("summary")?1000:500;out.put(key,clip(text,max));}
             else if(value instanceof Boolean||value instanceof Number||value==JSONObject.NULL)out.put(key,value);
             else if(value instanceof JSONObject){if(jsonBytes(value,8192,0)>=0)out.put(key,new JSONObject(value.toString()));else out.put("metadataLimited",true);}
         }
         JSONObject learning=task.optJSONObject("sourceLearningJob");if(learning!=null){JSONObject small=new JSONObject().put("headerOnly",true).put("inputsIncluded",false).put("executionAuthorized",false);for(String field:new String[]{"format","revision","nextIndex","reservedModelAttempts"}){Object value=learning.opt(field);if(value instanceof Number||value instanceof Boolean||value instanceof String&&((String)value).length()<=160)small.put(field,value);}out.put("sourceLearningJob",small);}
         JSONObject phoneLink=conversationPhoneLink(task);if(phoneLink!=null)out.put("conversationPhoneLink",phoneLink);
         out.put("taskProjection","summary").put("auditBodyIncluded",false).put("events",new JSONArray());
-        if(utf8(out.toString())>MAX_HEADER_BYTES-2048){for(String key:new String[]{"origin","developmentContext","sshSelection","teamAssignment"})out.remove(key);out.put("metadataLimited",true);}
+        if(utf8(out.toString())>MAX_HEADER_BYTES-2048){for(String key:new String[]{"origin","sshSelection","teamAssignment"})out.remove(key);JSONObject project=out.optJSONObject("developmentContext");if(project!=null&&project.has("deliveryContract")){project.remove("deliveryContract");project.put("deliveryContractReadState","not_loaded");}out.put("metadataLimited",true);}
         return out;
+    }
+    /** A long owner contract must not evict the project's navigation identity on a progress push. */
+    private static JSONObject developmentHeader(JSONObject original)throws Exception {
+        JSONObject view=new JSONObject();
+        for(String key:new String[]{"format","projectId","checkoutId","runtime","initialSourceDigest","clientMessageId","filesAreUntrusted","authorityAdded"}){
+            Object value=original.opt(key);if(value instanceof String&&((String)value).length()<=500||value instanceof Boolean)view.put(key,value);
+        }
+        JSONObject contract=original.optJSONObject("deliveryContract");
+        if(contract!=null){
+            view.put("deliveryContractDigest",TaskStore.capabilityFingerprint(contract));
+            if(jsonBytes(contract,6144,0)>=0)view.put("deliveryContract",new JSONObject(contract.toString())).put("deliveryContractReadState","loaded");
+            else view.put("deliveryContractReadState","not_loaded");
+        }
+        return view;
     }
     /** Navigation only: retain the verified identity without copying the review/goal or granting a run.
      * An unavailable association omits this optional view; it never hides or rewrites the original task. */

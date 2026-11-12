@@ -28,6 +28,7 @@ export type ProjectWorkspaceOverviewProps = {
   onOpenPreview: () => void;
   onOpenTerminal: () => void;
   canPreview: boolean;
+  onAskButler?: () => void;
   startContent?: ReactNode;
 };
 
@@ -44,7 +45,7 @@ const updatedDate = (task: ProjectWorkspaceTask) => {
  * MIT DecisionInbox. The approved Agent Run image informs work/decision/result
  * hierarchy; it is not a claim to Affect Pro source. All task records and routes
  * come from the host. This view neither starts work nor settles a decision. */
-export function ProjectWorkspaceOverview({ project, directory, directoryAvailable, view, onViewChange, canOpenTask, onOpenTask, onOpenFiles, onOpenPreview, onOpenTerminal, canPreview, startContent }: ProjectWorkspaceOverviewProps) {
+export function ProjectWorkspaceOverview({ project, directory, directoryAvailable, view, onViewChange, canOpenTask, onOpenTask, onOpenFiles, onOpenPreview, onOpenTerminal, canPreview, onAskButler, startContent }: ProjectWorkspaceOverviewProps) {
   const root = useRef<HTMLElement>(null);
   const hasFilters = Boolean(view.query.trim()) || view.filter !== 'all';
   const openTask = (id: string) => { onViewChange({ selected: id }); onOpenTask(id); };
@@ -88,6 +89,7 @@ export function ProjectWorkspaceOverview({ project, directory, directoryAvailabl
   return <section ref={root} className="pw-project-overview" aria-label={`${project.name}的项目工作`}>
     <header className="pw-project-overview-heading">
       <h2>项目工作</h2>
+      {onAskButler && <Button variant="ghost" size="small" onClick={onAskButler}>问管家</Button>}
     </header>
     <div className="pw-project-overview-layout">
       <div className="pw-project-overview-work">

@@ -4,12 +4,22 @@ import { Accordion, AccordionItem, Button, CheckboxField, SettingsDialog } from 
 import { PermissionPolicySettings, PermissionTargetRetired, type PermissionLeaveGuard } from './PermissionPolicySettings';
 import { TaskToolInventory } from './TaskToolInventory';
 import { TaskCapabilityConsent, taskCapabilityArtifactStatus, taskCapabilityDecision } from './task-capabilities';
+import { profileDependencyLabel } from './profile-contract';
 
 type Data = Record<string, any>;
 type Run = (action: string, args?: Data) => Promise<any>;
 const rows = (value: any): Data[] => Array.isArray(value) ? value : [];
 const receiptStatus = (value: string) => ({unknown:'结果待核对',pending:'等待原回执',running:'执行中',failed:'执行失败',rejected:'本次已拒绝',completed:'执行回执已返回'} as Record<string,string>)[value] || value;
 const names = (value: any) => Array.isArray(value) ? value.join('、') || '无' : '尚未取得';
+const capabilityState = (state?: string): string => ({
+  available: '配置已就绪，执行时仍核对本次授权', missing_installation: '尚未登记这个插件', source_unavailable: '当前来源暂不可核对',
+  disabled: '这个插件已停用', missing_tool: '当前来源没有这项工具', grant_required: '这项工具尚未获准',
+  needs_authorization: '需要在原连接完成授权', needs_discovery: '需要在原连接重新发现工具', not_available: '来源已准备，当前宿主仍未提供这项能力',
+  not_selected: '原工作配置没有选入这项工具', selection_changed: '原工作配置固定的来源版本已变化', host_capability_missing: '当前宿主尚未提供这项能力',
+  source_shadowed: profileDependencyLabel('source_shadowed'),
+  unsupported_reference: '能力标识暂不受支持', revision_changed: '原技能版本或启用状态已变化', skill_not_active: '原技能未启用、已到期或待重新审阅', source_missing: '此范围没有原技能', scope_unavailable: '原任务的资料范围暂不可核对',
+} as Record<string, string>)[state || ''] || '当前状态暂不可核对';
+const requiredBy = (need: Data) => rows(need.requiredBy).map(skill => `${skill.name || skill.id} · 修订 ${skill.revision}`).join('；');
 const toolMaintenanceRoute = (need: Data): 'plugins' | 'mcp' | null => {
   const installation = need.installation, definitions = installation?.manifest?.tools;
   if (!installation) return null;
@@ -57,7 +67,7 @@ export function TaskCapabilityWorkspace({ taskId, run, exportState, onBackChange
     if (!review || review !== shown.current || !consent.current.confirm(confirmTicket, approved) || working.current) return;
     void invoke(review.kind === 'script' ? 'taskCapabilities.decide' : 'taskCapabilities.mcp.confirm', review.kind === 'script' ? { reviewHandle: review.reviewHandle, approved } : { reviewHandle: review.reviewHandle }, value => {
       if (!consent.current.current(confirmTicket)) return;
-      setNotice(review.kind === 'script' ? taskCapabilityDecision(value) : value.saved === true ? '这项原安装的设置已保存，没有调用工具。' : '原安装设置尚未确认。');
+      setNotice(review.kind === 'script' ? taskCapabilityDecision(value) : value.saved === true ? '这项原安装的设置已保存。请回原任务重新核对可用工具与原选择，再继续工作。' : '原安装设置尚未确认。');
       if (value.view) acceptView(value.view); closeReview();
     });
   };
@@ -118,16 +128,24 @@ export function TaskCapabilityWorkspace({ taskId, run, exportState, onBackChange
       <TaskToolInventory key={`${taskId}:${view?.toolInventory?.runId || ''}`} inventory={view?.toolInventory} registerBack={registerInventoryBack} onEditPolicy={openPolicy} onOpenCatalog={onOpenTools ? () => onOpenTools() : undefined} onOpenProfiles={onOpenTools ? () => onOpenTools('workProfiles') : undefined} />
       <div className="pw-eco-capability-layout"><section className="pw-eco-executions"><div className="pw-eco-section-heading"><h4>执行与成果</h4><p>原回执和文件分开核对，取回不会重跑脚本。</p></div>{rows(view?.executions).map(operation => <section className="pw-eco-operation" key={operation.operationId}><h4>原任务脚本回执</h4><p>{receiptStatus(operation.receipt?.status || operation.state || '等待原回执')} · {taskCapabilityArtifactStatus(operation)}</p><p className="pw-field-hint">原操作 {operation.operationId}</p><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => original('taskCapabilities.receipt', operation)}>核对原回执</Button>{operation.artifactAvailability?.canRecheck === true && <Button variant="secondary" disabled={busy} onClick={() => original('taskCapabilities.retrieve', operation)}>取回原文件成果</Button>}</div>{operation.receipt?.output && <Accordion variant="divided"><AccordionItem title="读取原始输出"><pre className="pw-source-code">{String(operation.receipt.output)}</pre></AccordionItem></Accordion>}{rows(operation.receipt?.artifacts).map(artifact => <div className="pw-eco-artifact" key={artifact.artifactId}><p>{artifact.path} · {artifact.bytes} 字节</p><Button variant="ghost" disabled={busy} onClick={() => void invoke('taskCapabilities.artifact', { pageHandle: page.current, artifactHandle: artifact.artifactHandle }, value => setFile(value))}>读取原成果</Button><Button variant="secondary" disabled={busy || !!exported && ['waiting', 'selected', 'writing'].includes(exported.phase)} onClick={() => void invoke('taskCapabilities.export', { pageHandle: page.current, artifactHandle: artifact.artifactHandle }, () => setNotice('系统保存请求已发出，请完成或取消原文件选择。'))}>导出原成果</Button></div>)}</section>)}
       {!!file && <section><h4>{file.path}</h4><p className="pw-field-hint" style={{ overflowWrap: 'anywhere' }}>SHA-256：{file.sha256}</p><p>{file.bytes} 字节。文件内容来自原脚本，尚未导入项目或执行。</p></section>}
-      </section><aside className="pw-eco-tool-needs"><div className="pw-eco-section-heading"><h4>相关技能的工具</h4><p>根据任务描述匹配的技能引用，是否使用仍以本次执行为准。</p></div>{rows(view?.pluginNeeds).map(need => {
-        const maintenanceRoute = toolMaintenanceRoute(need);
-        return <section className="pw-eco-tool" key={need.needHandle}><h4>{need.pluginId} · {need.tool}</h4>{need.installation ? <>
-          <p>复用已安装的服务 · {need.available ? '当前配置已满足此技能引用，不代表本任务已接入' : '此技能引用的配置尚未满足'}</p>
-          <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => void invoke('taskCapabilities.mcp.review', { pageHandle: page.current, needHandle: need.needHandle, change: 'grant', value: !(need.installation.grants || []).includes(`tool:${need.tool}`) }, showReview)}>{(need.installation.grants || []).includes(`tool:${need.tool}`) ? '审阅并撤销这个工具' : '审阅并允许这个工具'}</Button><Button variant="ghost" disabled={busy} onClick={() => void invoke('taskCapabilities.mcp.review', { pageHandle: page.current, needHandle: need.needHandle, change: 'enabled', value: need.installation.enabled !== true }, showReview)}>{need.installation.enabled ? '审阅并停用这个安装' : '审阅并启用这个安装'}</Button>
+      </section><aside className="pw-eco-tool-needs"><div className="pw-eco-section-heading"><h4>{view?.skillPreparation?.selectionSource === 'original_work_profile' ? '所选技能的能力准备' : '相关技能的能力准备'}</h4><p>{view?.skillPreparation?.selectionSource === 'original_work_profile' ? `按原工作配置${view.skillPreparation.profileRevision ? `修订 ${view.skillPreparation.profileRevision}` : ''}固定的技能版本核对。准备后仍需回原任务检查原选择。` : '按任务描述提示相关技能，列出它们需要的连接、工具与宿主能力。是否使用以本次执行为准。'}</p></div>
+      {view?.skillPreparation && view.skillPreparation.state !== 'ready' && <p role="status">{view.skillPreparation.state === 'profile_unavailable' ? '原工作配置暂不可核对，请回原任务重新读取。' : view.skillPreparation.state === 'selection_changed' ? '读取期间原任务选择已变化，请刷新后核对。' : view.skillPreparation.state === 'skills_unavailable' ? '技能来源暂未读到，请刷新后核对；原脚本回执仍可查看。' : '原任务的资料范围暂不可核对，请先检查原项目。'}</p>}
+      {rows(view?.skillPreparation?.unresolvedSkills).map(skill => <p className="pw-field-hint" key={skill.id}>原技能 {skill.id} · 修订 {skill.revision}：{capabilityState(skill.status)}</p>)}
+      {rows(view?.pluginNeeds).map(need => {
+        const installation = need.installation, maintenanceRoute = toolMaintenanceRoute(need);
+        const knownTool = rows(installation?.manifest?.tools).some(tool => tool.name === need.tool), knownGrants = Array.isArray(installation?.grants);
+        const granted = knownGrants && installation.grants.includes(`tool:${need.tool}`), canReviewGrant = knownTool && knownGrants && !['source_unavailable', 'needs_authorization', 'needs_discovery'].includes(need.status);
+        return <section className="pw-eco-tool" key={need.needHandle || need.capability}><h4>{installation?.manifest?.name || need.pluginId} · {need.tool}</h4><p>{capabilityState(need.status)}</p>{requiredBy(need) && <p className="pw-field-hint">所需技能：{requiredBy(need)}</p>}
+          <div className="pw-form-actions">{installation && <>
+            {canReviewGrant && <Button variant="secondary" disabled={busy} onClick={() => void invoke('taskCapabilities.mcp.review', { pageHandle: page.current, needHandle: need.needHandle, change: 'grant', value: !granted }, showReview)}>{granted ? '审阅并撤销这个工具' : '审阅并允许这个工具'}</Button>}
+            {typeof installation.enabled === 'boolean' && need.status !== 'source_unavailable' && <Button variant="ghost" disabled={busy} onClick={() => void invoke('taskCapabilities.mcp.review', { pageHandle: page.current, needHandle: need.needHandle, change: 'enabled', value: !installation.enabled }, showReview)}>{installation.enabled ? '审阅并停用这个安装' : '审阅并启用这个安装'}</Button>}
             {maintenanceRoute && onOpenTools && <Button variant="ghost" disabled={busy} onClick={() => onOpenTools(maintenanceRoute)}>管理这项工具的来源</Button>}
-          </div>
-        </> : <><p>相关技能引用了尚未安装的工具，可按需要添加。</p>{onOpenTools && <Button variant="secondary" disabled={busy} onClick={() => onOpenTools()}>查找相关工具</Button>}</>}</section>;
+          </>}{!installation && need.status === 'missing_installation' && onOpenTools && <Button variant="secondary" disabled={busy} onClick={() => onOpenTools('plugins')}>查看插件与连接</Button>}
+          {['not_selected', 'selection_changed'].includes(need.status) && onOpenTools && <Button variant="ghost" disabled={busy} onClick={() => onOpenTools('workProfiles')}>查看工作配置</Button>}</div>
+        </section>;
       })}
-      </aside></div>{view && !view.reviewPending && !rows(view.executions).length && !rows(view.pluginNeeds).length && <p className="pw-muted">当前没有待审阅脚本、原执行记录或匹配到的工具引用。</p>}
+      {rows(view?.capabilityNeeds).map(need => <section className="pw-eco-tool" key={need.capability}><h4>{need.capability}</h4><p>{capabilityState(need.status)}</p><p className="pw-field-hint">所需技能：{requiredBy(need)}</p></section>)}
+      </aside></div>{view && !view.reviewPending && !rows(view.executions).length && !rows(view.pluginNeeds).length && !rows(view.capabilityNeeds).length && !rows(view.skillPreparation?.unresolvedSkills).length && (!view.skillPreparation || view.skillPreparation.state === 'ready') && <p className="pw-muted">当前没有待审阅脚本、原执行记录或需要准备的技能能力。</p>}
       </div>
     </>}{error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}{exported && <p role="status">{exported.error || (exported.phase === "exported" && exported.receipt?.status === "exported" ? `已按原 SHA-256 导出 ${exported.receipt.bytes} 字节，请在文件应用中查看。` : exported.phase === "cancelled" ? "原保存选择已取消，没有写入其他位置。" : exported.phase === "writing" ? "正在写入所选的原文件位置…" : "等待原系统保存选择；尚未确认文件已导出。")}</p>}
     <SettingsDialog isOpen={!!review} onClose={closeReview} title={review?.kind === 'script' ? '审阅本次脚本执行' : '审阅工具设置'}>{review && <div className="pw-ecosystem-depth pw-eco-review-body">

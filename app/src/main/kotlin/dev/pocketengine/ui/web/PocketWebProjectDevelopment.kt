@@ -3,6 +3,7 @@ package dev.pocketengine.ui.web
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import dev.pocketengine.features.local.project.ProjectOwnerWorkflows
 import dev.pocketengine.ui.PocketWorldController
 import org.json.JSONArray
 import org.json.JSONObject
@@ -37,6 +38,7 @@ internal class PocketWebProjectDevelopment(
         // Multiple Activities must not overwrite each other's pending original
         // input references with an older presentation snapshot.
         private val ownerDrafts = linkedMapOf<String, JSONObject>()
+        private val deliveryFields = arrayOf("constraints", "deliverable", "completionCriteria")
         val COMMANDS = setOf("projects.development.read", "projects.development.draft", "projects.development.inspect",
             "projects.development.prepare", "projects.development.queryCopy", "projects.development.review",
             "projects.development.start", "projects.development.query", "projects.development.dismiss", "projects.development.close") + PocketWebCheckoutFiles.COMMANDS
@@ -49,6 +51,13 @@ internal class PocketWebProjectDevelopment(
         require(found is String && found.length <= maximum && '\u0000' !in found && (blank || found.isNotBlank())) { "请核对$key" }
         return found
     }
+    private fun copyDeliveryFields(from: JSONObject, into: JSONObject): JSONObject {
+        deliveryFields.forEach { key -> into.put(key, if (from.has(key)) text(from, key, 4000, true) else "") }
+        return into
+    }
+    private fun sameDraft(left: JSONObject, right: JSONObject): Boolean =
+        left.optString("goal") == right.optString("goal") && left.optString("checkoutId") == right.optString("checkoutId") &&
+            deliveryFields.all { left.optString(it) == right.optString(it) }
     private fun current(original: Page): Boolean = page === original && generation == original.generation &&
         ownerCurrent() && controller.webPrivateOwnerVisible() && acceptsWindow(original.window) &&
         controller.state.projectId == original.project && controller.state.projects.any { it.id == original.project }
@@ -59,14 +68,14 @@ internal class PocketWebProjectDevelopment(
     }
     private fun draft(project: String): JSONObject = synchronized(drafts) {
         copy(drafts[project] ?: run {
-            JSONObject().put("projectId", project).put("goal", "").put("checkoutId", "")
+            copyDeliveryFields(JSONObject(), JSONObject().put("projectId", project).put("goal", "").put("checkoutId", ""))
         })
     }
     private fun updateDraft(project: String, durable: Boolean = false, change: (JSONObject) -> Unit) = synchronized(drafts) {
         check(restoreFailure == null) { restoreFailure ?: "本机项目输入引用不可用" }
         if (!drafts.containsKey(project) && drafts.size >= 40) {
             val disposable = drafts.entries.firstOrNull { (_, value) ->
-                value.optString("goal").isBlank() && value.optJSONObject("submission")?.optString("status") !in setOf("pending", "unknown", "unconfirmed") &&
+                value.optString("goal").isBlank() && deliveryFields.all { value.optString(it).isBlank() } && value.optJSONObject("submission")?.optString("status") !in setOf("pending", "unknown", "unconfirmed") &&
                     (!value.has("copyRequestId") || value.optString("copyStatus") == "ready")
             }?.key
             check(disposable != null) { "有 40 个项目保留输入或未决准备，请先核对已有请求；没有丢弃草稿或未决记录" }
@@ -115,7 +124,9 @@ internal class PocketWebProjectDevelopment(
         updateDraft(original.getString("projectId")) { retained ->
             if (retained.optJSONObject("submission")?.optString("clientMessageId") == original.getString("clientMessageId")) {
                 retained.put("submission", observed)
-                if (accepted && retained.optString("goal") == original.optString("goal")) retained.put("goal", "")
+                if (accepted && sameDraft(retained, original)) {
+                    retained.put("goal", ""); deliveryFields.forEach { retained.put(it, "") }
+                }
             }
         }
         return observed
@@ -148,10 +159,11 @@ internal class PocketWebProjectDevelopment(
                 done(JSONObject().put("dismissed", true).put("taskStopped", false), null)
             }
             "projects.development.draft" -> {
-                fields(args, "viewHandle", "goal", "checkoutId")
+                fields(args, "viewHandle", "goal", "checkoutId", *deliveryFields)
                 val goal = text(args, "goal", 12000, true); val checkout = text(args, "checkoutId", 80, true)
+                val retainedFields = copyDeliveryFields(args, JSONObject())
                 check(!busy && !pending(original.project)) { "原项目输入仍待核对，草稿没有替换" }
-                updateDraft(original.project) { it.put("goal", goal).put("checkoutId", checkout) }; review = null
+                updateDraft(original.project) { copyDeliveryFields(retainedFields, it.put("goal", goal).put("checkoutId", checkout)) }; review = null
                 done(JSONObject().put("saved", true).put("projectId", original.project), null)
             }
             "projects.development.inspect" -> {
@@ -174,21 +186,24 @@ internal class PocketWebProjectDevelopment(
                 }
             }
             "projects.development.review" -> {
-                fields(args, "viewHandle", "checkoutId", "goal")
+                fields(args, "viewHandle", "checkoutId", "goal", *deliveryFields)
                 check(!pending(original.project)) { "请先查询原项目输入，不要重新开始" }
-                val checkout = text(args, "checkoutId"); val goal = text(args, "goal", 12000).trim()
-                updateDraft(original.project) { it.put("goal", goal).put("checkoutId", checkout) }; review = null
+                val checkout = text(args, "checkoutId")
+                val contract = ProjectOwnerWorkflows.deliveryContractForOwner(args)
+                val goal = contract.getString("goal")
+                updateDraft(original.project) { copyDeliveryFields(contract, it.put("goal", goal).put("checkoutId", checkout)) }; review = null
                 working(original, done) {
                     val actual = source(original, checkout); val selectedModel = model()
                     check(selectedModel.value().optBoolean("configured")) { "默认模型尚未就绪，请先连接模型；项目与草稿保留" }
                     val input = JSONObject().put("projectId", original.project).put("checkoutId", checkout)
                         .put("expectedSourceDigest", actual.getString("sourceDigest")).put("runtime", "managed_process_v1")
                         .put("clientMessageId", UUID.randomUUID().toString()).put("goal", goal)
+                    copyDeliveryFields(contract, input)
                     val selected = Review(UUID.randomUUID().toString(), original, input.toString(), selectedModel.revision(), SystemClock.elapsedRealtime() + 120_000)
                     check(current(original)) { "原项目窗口已变化，没有准备启动" }
                     review = selected
                     JSONObject().put("reviewHandle", selected.handle).put("requestId", input.getString("clientMessageId")).put("projectId", original.project)
-                        .put("checkoutId", checkout).put("goal", goal).put("source", actual).put("model", selectedModel.value())
+                        .put("checkoutId", checkout).put("goal", goal).put("deliveryContract", contract).put("source", actual).put("model", selectedModel.value())
                         .put("runtime", "这台手机").put("expiresAt", System.currentTimeMillis() + 120_000)
                         .put("commandsAuthorized", false).put("projectMemoryAuthorized", false)
                 }
@@ -202,12 +217,13 @@ internal class PocketWebProjectDevelopment(
                 fun startCurrent(): Boolean {
                     val status = controller.nativeModelSelection().status()
                     return current(original) && SystemClock.elapsedRealtime() < selected.expires && !status.pending() && status.revision() == selected.modelRevision &&
-                        draft(original.project).optString("goal") == input.getString("goal") && draft(original.project).optString("checkoutId") == input.getString("checkoutId")
+                        sameDraft(draft(original.project), input)
                 }
                 check(startCurrent()) { "项目、默认模型或审阅期限已变化，请重新核对" }
                 review = null; busy = true
                 val marker = JSONObject().put("projectId", original.project).put("checkoutId", input.getString("checkoutId"))
                     .put("clientMessageId", input.getString("clientMessageId")).put("goal", input.getString("goal")).put("status", "pending")
+                copyDeliveryFields(input, marker)
                 try {
                     // Persist the original query identity before any action can
                     // reach Assistant; a killed Activity cannot turn unknown
@@ -242,14 +258,15 @@ internal class PocketWebProjectDevelopment(
         for (i in 0 until minOf(40, saved.length())) {
             val value = saved.optJSONObject(i) ?: continue
             val project = value.optString("projectId")
-            if (!project.matches(Regex("[A-Za-z0-9_-]{1,80}")) || value.optString("goal").length > 12000) continue
+            if (!project.matches(Regex("[A-Za-z0-9_-]{1,80}"))) continue
             // Durable presentation wins over an older Activity Bundle. Neither
             // source can restore an opaque review or execution authority.
             if (drafts.containsKey(project)) continue
-            val retained = JSONObject().put("projectId", project).put("goal", value.optString("goal")).put("checkoutId", value.optString("checkoutId"))
+            val retained = copyDeliveryFields(value, JSONObject().put("projectId", project)
+                .put("goal", if (value.has("goal")) text(value, "goal", 12000, true) else "").put("checkoutId", value.optString("checkoutId")))
             value.optString("copyRequestId").takeIf { it.matches(Regex("[a-f0-9-]{36}")) }?.let { retained.put("copyRequestId", it).put("copyStatus", if (value.optString("copyStatus") == "ready") "ready" else "unknown") }
             value.optJSONObject("submission")?.takeIf { it.optString("projectId") == project && it.optString("clientMessageId").matches(Regex("[a-f0-9-]{36}")) }?.let {
-                val marker = copy(it); if (marker.optString("status") == "pending") marker.put("status", "unknown")
+                val marker = copyDeliveryFields(it, copy(it)); if (marker.optString("status") == "pending") marker.put("status", "unknown")
                 retained.put("submission", marker)
             }
             drafts[project] = retained

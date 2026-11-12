@@ -51,7 +51,7 @@ export function planMutationReceipt(value: Data, command: string): Data {
   if (value?.confirmed !== true || value.command !== command || value.result?.command !== command || !Array.isArray(value.snapshot?.plans)) throw new Error('尚未取得这次计划操作的完整原生回执，请核对原目标。');
   return value;
 }
-export const planState = (value: string) => ({ completed: '目标已按标准完成', finished_with_failures: '本轮结束，有步骤失败', paused: '计划已暂停', cancelled: '计划已取消', review_required: '修改后待审阅', waiting_for_owner_start: '等你开始', waiting_for_original_task: '工作正在处理或等待核对', scheduled: '等待计划时间', ready_for_host_check: '等待启动条件满足', blocked: '需要处理阻塞' } as Data)[value] || '尚未授权执行';
+export const planState = (value: string) => ({ completed: '目标已按标准完成', finished_with_failures: '本轮结束，有步骤失败', paused: '计划已暂停', cancelled: '计划已取消', evidence_unavailable: '原工作状态暂不可核对', reconciliation_required: '原结果变化，需要重新核对', review_required: '修改后待审阅', waiting_for_owner_start: '等你开始', waiting_for_original_task: '工作正在处理或等待核对', scheduled: '等待计划时间', ready_for_host_check: '等待启动条件满足', blocked: '需要处理阻塞' } as Data)[value] || '尚未授权执行';
 
 const waitingReasons = new Set(['not_due', 'quiet_or_not_due', 'conditions_blocked', 'remote_wait_pending', 'business_wait_pending']);
 const runningReasons = new Set(['bound_task', 'ready']);
@@ -86,6 +86,8 @@ function planOriginalTask(plan: Data): { attention: boolean; message: string } |
   return { attention: !advancingTaskStates.has(status), message: originalTaskLabels[status] || '原工作状态仍需核对，请查看当前步骤' };
 }
 export function planGroup(plan: Data): 'attention' | 'running' | 'scheduled' | 'ended' {
+  const observed = planProgressView(plan);
+  if (observed && (observed.readState === 'partial' || observed.state === 'reconciliation_required' || observed.notificationKind === 'attention')) return 'attention';
   if (plan.originalTasksUnsettled && plan.state !== 'waiting_for_original_task') return 'attention';
   if (['completed', 'cancelled'].includes(plan.state)) return 'ended';
   if (['finished_with_failures', 'paused', 'review_required', 'waiting_for_owner_start', 'blocked'].includes(plan.state)
@@ -121,4 +123,20 @@ export function planWaitingReason(plan: Data): string {
     bound_task: '已关联原工作，查看该步骤的进展', existing_task_requires_owner_continue: '需要在原工作中明确继续', ready: '条件已具备，等待原调度处理',
     completed: '这一步已完成', failed: '这一步未完成', cancelled: '这一步已取消', skipped: '这一步未采用',
   } as Record<string, string>)[reason] || '当前条件仍需核对，请查看目标与步骤';
+}
+
+/** Native snapshot of original occurrences. It does not infer a result from a planned step. */
+export function planProgressView(plan: Data): Data | null {
+  const value = plan.progress;
+  return value?.format === 'pocketworld.plan-progress.v1' && value.planId === plan.id && value.taskStateAuthority === 'TaskStore'
+    && Number.isSafeInteger(value.observedAt) && value.observedAt > 0 && ['current', 'partial'].includes(value.readState) ? value : null;
+}
+export function planProgressReason(plan: Data): string {
+  const progress = planProgressView(plan), reason = String(progress?.stopReason || '');
+  if (!reason) return '';
+  return ({ task_state_unavailable: '部分原工作暂不可读取，保留已有记录', original_tasks_stopping: '已停止后续启动，原工作仍在结束或核对',
+    awaiting_user: '需要你回答原工作中的问题', waiting_user: '原工作正在等你处理', needs_confirmation: '已有结果，等你核对', unverified_result: '结果尚未取得本轮完成依据',
+    reconciling: '有原操作的效果待核对', interrupted: '原工作已中断，需要处理', waiting_approval: '有原操作等待你授权', awaiting_approval: '有原操作等待你授权',
+    result_changed: '原工作结果已变化，需要重新核对计划中的记录', finished_with_failures: '目标已结束，仍有未完成的步骤', completed: '原目标的步骤已有完成依据', cancelled: '原目标已取消，已有结果仍保留',
+  } as Record<string, string>)[reason] || planWaitingReason({ state: 'progress', runtimeDecision: { reason } });
 }

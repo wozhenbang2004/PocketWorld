@@ -140,6 +140,29 @@ public final class ConversationHistory {
             JSONArray originals=nativeReceipt.getJSONArray("entries"),clean=result.getJSONArray("entries");if(originals.length()>20||clean.length()!=originals.length())throw new SecurityException("历史行结构在清理后已变化");
             for(int i=0;i<originals.length();i++)restoreReferenceRow(nativeReceipt,originals.getJSONObject(i),clean.getJSONObject(i));
         }else if(nativeReceipt.has("sourceKind"))restoreReferenceRow(nativeReceipt,nativeReceipt,result);
+        if(nativeReceipt.has("continuations")){
+            JSONArray originals=nativeReceipt.getJSONArray("continuations"),clean=result.getJSONArray("continuations");
+            if(originals.length()>32||clean.length()!=originals.length())throw new SecurityException("历史续读位置在清理后已变化");
+            for(int i=0;i<originals.length();i++){
+                JSONObject original=originals.getJSONObject(i),safe=clean.getJSONObject(i),args=original.getJSONObject("arguments"),safeArgs=safe.getJSONObject("arguments");String nextTool=original.getString("tool");
+                if(SEARCH.equals(nextTool)){
+                    Request checked=new Request(args);
+                    if(!checked.selection.isEmpty()&&!nativeOpaque(checked.selection)||!checked.cursor.isEmpty()&&!nativeOpaque(checked.cursor))throw new SecurityException("历史续读不是本轮原生位置");
+                }else if(READ.equals(nextTool)){
+                    if(args.length()!=3||!args.has("offset")||!args.has("maxChars")||!nativeOpaque(args.getString("selectionId")))throw new SecurityException("原文续读缺准确选择");Request.integer(args,"offset",-1,0,Integer.MAX_VALUE);Request.integer(args,"maxChars",-1,64,16000);
+                }else if("owner_work_get".equals(nextTool)){
+                    if(args.length()!=3||!args.has("maxChars")||!TaskStoreMemoryQuery.validTaskId(args.getString("taskId"))||Request.integer(args,"offset",-1,0,0)!=0)throw new SecurityException("原工作续查缺准确任务");Request.integer(args,"maxChars",-1,1,8000);
+                }else if("owner_work_directory".equals(nextTool)){
+                    if(args.length()!=5||!args.has("query")||!args.has("limit")||!Set.of("conversation","all").contains(args.getString("range"))||!"all".equals(args.getString("filter"))||!args.getString("cursor").isEmpty())throw new SecurityException("原工作目录续查范围无效");Request.text(args,"query","",500);Request.integer(args,"limit",-1,1,24);
+                }else throw new SecurityException("历史回执不能新增执行工具");
+                // Search text still passes captured-key cleaning. A changed query
+                // cannot reuse a cursor sealed for the original text.
+                if(args.has("query")&&!args.getString("query").equals(safeArgs.optString("query"))){
+                    safe.remove("arguments");safe.put("available",false).put("reason","query_changed_during_safe_projection");
+                }else safe.put("arguments",new JSONObject(args.toString())).put("available",true);
+                safe.put("tool",nextTool).put("readOnly",true).put("executionAuthorized",false).put("requiresOriginalRunnerCall",true);
+            }
+        }
         return result;
     }
     private static boolean nativeOpaque(String value){try{return value!=null&&UUID.fromString(value).toString().equals(value);}catch(IllegalArgumentException invalid){return false;}}
@@ -158,7 +181,9 @@ public final class ConversationHistory {
             if(ref==null)throw new SecurityException("历史读取缺少原任务精确引用");
         }else ref=SourceLocator.from(original);
         if(ref.kind==Kind.CONVERSATION){clean.put("sourceKind","assistant_conversation").put("sourceConversationId",ref.conversationId).put("metadataOnly",true).put("originalBodyIncluded",false);}
-        else if(ref.kind==Kind.MESSAGE){clean.put("sourceKind","assistant_message").put("sourceRef",ref.message.toJson()).put("bodyFingerprint",ref.messageFingerprint);if(!ref.conversationId.isEmpty())clean.put("sourceConversationId",ref.conversationId);}
+        else if(ref.kind==Kind.MESSAGE){clean.put("sourceKind","assistant_message").put("sourceRef",ref.message.toJson()).put("bodyFingerprint",ref.messageFingerprint);if(!ref.conversationId.isEmpty())clean.put("sourceConversationId",ref.conversationId);
+            if(Set.of("user","assistant").contains(original.optString("role")))clean.put("role",original.getString("role"));
+            if(original.has("contextAnchorSourceRef")){SourceRef anchor=SourceRef.fromJson(original.getJSONObject("contextAnchorSourceRef"));if(!"message".equals(anchor.kind)||!"owner".equals(anchor.ownerId)||!"private".equals(anchor.spaceId)||!Set.of("before","after").contains(original.optString("contextDirection")))throw new SecurityException("历史上下文关系缺原消息位置");clean.put("contextAnchorSourceRef",anchor.toJson()).put("contextDirection",original.getString("contextDirection"));}}
         else{
             if(!ref.membership.matches("sha256:[0-9a-f]{64}"))throw new SecurityException("历史原定位缺归属指纹");
             JSONObject metadata=ref.taskReference();for(Iterator<String> keys=metadata.keys();keys.hasNext();){String key=keys.next();clean.put(key,metadata.get(key));}
@@ -239,7 +264,7 @@ public final class ConversationHistory {
     public interface ProjectionBatches {ProjectionBatch open(long sourceBytesRemaining)throws Exception;}
     public interface MessageProjection {
         JSONArray project(JSONArray messages,Set<String> delegatedMessageIds)throws Exception;
-        default JSONArray project(JSONArray messages,Set<String> delegatedMessageIds,SourceBytes bytes)throws Exception{for(int i=0;i<messages.length();i++)for(String field:new String[]{"ownerSourceRefs","ownerPreviewRefs"}){JSONArray refs=messages.getJSONObject(i).optJSONArray(field);if(refs!=null&&refs.length()>0)throw new TaskStoreMemoryReader.RawMessageUnavailable("owner_source_projection_budget_unavailable");}return project(messages,delegatedMessageIds);}
+        default JSONArray project(JSONArray messages,Set<String> delegatedMessageIds,SourceBytes bytes)throws Exception{for(int i=0;i<messages.length();i++)for(String field:new String[]{"ownerSourceRefs","ownerPreviewRefs","ownerObjectRefs"}){JSONArray refs=messages.getJSONObject(i).optJSONArray(field);if(refs!=null&&refs.length()>0)throw new TaskStoreMemoryReader.RawMessageUnavailable("owner_source_projection_budget_unavailable");}return project(messages,delegatedMessageIds);}
     }
     /** Native composition shared by the real App mount and focused original-store fixtures. */
     public static TaskStoreMemoryReader.RawMessageCurrentness currentness(HistoryBinding binding,ProjectionBatches batches,MessageProjection assistant){
@@ -307,7 +332,8 @@ public final class ConversationHistory {
         private String unseal(Request request)throws Exception{
             if(request.cursor.isEmpty())return "";JSONObject value=cursors.get(request.cursor);if(value==null)throw new SecurityException("历史游标不是本轮native签发或已失效");if(!request.kind.equals(value.optString("kind"))||!request.selection.equals(value.optString("selection"))||!request.query.equals(value.optString("query"))||request.after!=value.getLong("after")||request.before!=value.getLong("before"))throw new SecurityException("历史游标不能更换查询范围");return value.getString("cursor");
         }
-        private String register(JSONObject row)throws Exception{SourceLocator locator=SourceLocator.from(row);String token=UUID.randomUUID().toString();selections.put(token,locator);while(selections.size()>100)selections.remove(selections.keySet().iterator().next());if(locator.message!=null){if(providedMessages.size()>=100&&!providedMessages.containsKey(locator.message.sourceId))throw new SecurityException("本轮保留历史来源过多");providedMessages.put(locator.message.sourceId,locator.message);providedMessageConversations.put(locator.message.sourceId,locator.conversationId.isEmpty()?binding.conversationId:locator.conversationId);}
+        private String selectionFor(SourceLocator locator){String token=UUID.randomUUID().toString();selections.put(token,locator);while(selections.size()>100)selections.remove(selections.keySet().iterator().next());return token;}
+        private String register(JSONObject row)throws Exception{SourceLocator locator=SourceLocator.from(row);String token=selectionFor(locator);if(locator.message!=null){if(providedMessages.size()>=100&&!providedMessages.containsKey(locator.message.sourceId))throw new SecurityException("本轮保留历史来源过多");providedMessages.put(locator.message.sourceId,locator.message);providedMessageConversations.put(locator.message.sourceId,locator.conversationId.isEmpty()?binding.conversationId:locator.conversationId);}
             if(locator.kind!=Kind.CONVERSATION&&locator.kind!=Kind.MESSAGE&&locator.kind!=Kind.OUTPUT){String key=locator.referenceKey();if(providedTasks.size()>=100&&!providedTasks.containsKey(key))throw new SecurityException("本轮保留历史来源过多");providedTasks.put(key,locator);}
             return token;}
         @Override public JSONObject execute(String name,JSONObject args,RunControl original)throws Exception{
@@ -362,6 +388,53 @@ public final class ConversationHistory {
         private void enqueueEvidenceQueries(Deque<EvidenceStep> queue,Set<String> queued,MemoryEvidencePlan plan,String kind,SourceLocator locator){
             for(int i=0;i<plan.queries.size();i++)enqueueEvidence(queue,queued,new EvidenceStep(kind,locator,plan.queries.get(i),i,true));
         }
+        private JSONObject evidenceQueryArguments(EvidenceStep step,MemoryEvidencePlan plan,String nativeCursor)throws Exception{
+            JSONObject args=new JSONObject().put("kind",step.kind).put("query",step.query).put("limit",plan.request.limit).put("maxChars",plan.request.maxChars);
+            if(step.locator!=null)args.put("selectionId",selectionFor(step.locator));
+            if(step.leaf&&plan.after>=0)args.put("createdAfter",plan.after);
+            if(step.leaf&&plan.before>=0)args.put("createdBefore",plan.before);
+            if(!nativeCursor.isEmpty())args.put("cursor",cursor(new Request(args),nativeCursor));
+            return args;
+        }
+        private static void continuation(JSONArray into,String tool,JSONObject args,String reason)throws Exception{
+            if(into.length()>=32)return;
+            String key=TaskMemoryTrace.rawFingerprint(new JSONObject().put("tool",tool).put("arguments",args));
+            for(int i=0;i<into.length();i++){JSONObject old=into.getJSONObject(i);if(key.equals(TaskMemoryTrace.rawFingerprint(new JSONObject().put("tool",old.getString("tool")).put("arguments",old.getJSONObject("arguments")))))return;}
+            into.put(new JSONObject().put("tool",tool).put("arguments",args).put("reason",reason).put("readOnly",true).put("executionAuthorized",false).put("requiresOriginalRunnerCall",true));
+        }
+        private void unreadSource(JSONArray into,SourceLocator locator,int maxChars,String reason)throws Exception{
+            if(into.length()>=32||!Set.of(Kind.MESSAGE,Kind.OPERATION,Kind.OUTPUT).contains(locator.kind))return;
+            continuation(into,READ,new JSONObject().put("selectionId",selectionFor(locator)).put("offset",0).put("maxChars",Math.min(4000,maxChars)),reason);
+        }
+        private static boolean originalBodyComplete(JSONObject row)throws Exception{
+            if(!(row.opt("body") instanceof String))return false;JSONObject range=row.optJSONObject("readRange");
+            if(range==null)return false;
+            long offset=SourceRef.integer(range,"offset",0),chars=SourceRef.integer(range,"chars",0),total=SourceRef.integer(range,"totalChars",0);
+            if(!"UTF-16".equals(range.optString("unit"))||total>Integer.MAX_VALUE||offset>total||chars>total-offset||chars!=row.getString("body").length())throw new SecurityException("历史原文范围与实际正文不符");
+            int next=offset+chars<total?(int)(offset+chars):-1;
+            if(row.has("nextOffset")&&SourceRef.integer(row,"nextOffset",-1)!=next)throw new SecurityException("历史续读位置与原文范围不一致");
+            // Operation search rows have an exact readRange without nextOffset.
+            // Derive that one boundary, keeping the original source/version pin.
+            row.put("nextOffset",next);
+            return offset==0&&chars==total;
+        }
+        private static boolean evidencePageIncomplete(JSONObject page){
+            return !"current".equals(page.optString("status"))||page.optBoolean("hasMore")||!page.optString("nextCursor").isEmpty()
+                    ||page.optJSONArray("gaps")!=null&&page.optJSONArray("gaps").length()>0;
+        }
+        private static void pageGap(JSONArray gaps,String kind,JSONObject page)throws Exception{
+            if(gaps.length()>=64)return;
+            JSONArray missing=page.optJSONArray("gaps");JSONObject reasons=new JSONObject();
+            for(int i=0;missing!=null&&i<missing.length();i++){
+                JSONObject source=missing.optJSONObject(i);String reason=source==null?"unknown":source.optString("reason",source.optString("status","unknown"));
+                if(reason.isEmpty())reason="unknown";if(reason.length()>160||!reasons.has(reason)&&reasons.length()>=16)reason="other_source_gaps";
+                reasons.put(reason,reasons.optInt(reason)+1);
+            }
+            String reason=page.optString("reason");if(reason.isEmpty())reason=missing!=null&&missing.length()>0?"original_source_gaps":"source_page_not_fully_read";
+            gaps.put(new JSONObject().put("kind",kind).put("status",page.optString("status","unavailable"))
+                    .put("reason",reason).put("hasMore",page.optBoolean("hasMore"))
+                    .put("unavailableSourceCount",missing==null?0:missing.length()).put("unavailableReasons",reasons).put("completeOriginalHistory",false));
+        }
         private JSONObject queryEvidence(EvidenceStep step,JSONObject options,RunControl original)throws Exception{
             HistoryBinding target=step.locator==null?binding:binding.forSource(step.locator.conversationId.isEmpty()?binding.conversationId:step.locator.conversationId);
             JSONObject result;
@@ -390,12 +463,12 @@ public final class ConversationHistory {
             SourceLocator start=plan.request.selection.isEmpty()?null:selected(plan.request.selection);
             MemoryEvidencePlan.Budget budget=new MemoryEvidencePlan.Budget(plan.maxCalls);
             MemoryEvidencePlan.Candidates candidates=new MemoryEvidencePlan.Candidates();
-            Deque<EvidenceStep> queue=new ArrayDeque<>();Set<String> queued=new HashSet<>();JSONArray gaps=new JSONArray();
+            Deque<EvidenceStep> queue=new ArrayDeque<>();Set<String> queued=new HashSet<>();JSONArray gaps=new JSONArray(),continuations=new JSONArray(),contextCoverage=new JSONArray();
             if(plan.follow.equals("none"))enqueueEvidenceQueries(queue,queued,plan,plan.request.kind,start);
             else if(start!=null&&start.kind==Kind.RUN)enqueueEvidenceQueries(queue,queued,plan,plan.follow,start);
             else enqueueEvidence(queue,queued,new EvidenceStep(plan.request.kind,start,"",0,false));
             boolean incomplete=false;String stop="complete_bounded_plan";int traversedBranches=0;
-            while(!queue.isEmpty()&&budget.available()&&budget.calls<plan.maxCalls-plan.readTop){
+            while(!queue.isEmpty()&&budget.available()&&(candidates.size()==0||budget.calls<plan.maxCalls-plan.readTop-2*plan.contextTop)){
                 if(MemoryEvidencePlan.MAX_CANDIDATE_CHARS-budget.candidateChars<64){stop="candidate_character_budget";break;}
                 check(original);if(original.pauseRevision()!=pause)throw new SecurityException("计划读取的暂停代次已变化");
                 EvidenceStep step=queue.removeFirst();JSONObject options=plan.options(step.query,step.leaf,MemoryEvidencePlan.MAX_CANDIDATE_CHARS-budget.candidateChars);
@@ -404,11 +477,18 @@ public final class ConversationHistory {
                 catch(java.io.IOException unavailable){check(original);page=new JSONObject().put("status","unavailable").put("reason","original_source_io_unavailable").put("entries",new JSONArray());}
                 check(original);if(original.pauseRevision()!=pause)throw new SecurityException("暂停前补查迟回已丢弃");budget.record(step.kind,page);
                 if(!Set.of("current","partial").contains(page.optString("status"))){incomplete=true;gaps.put(new JSONObject().put("kind",step.kind).put("reason",page.optString("reason","source_unavailable")));continue;}
-                if(page.optBoolean("hasMore")||!page.optString("nextCursor").isEmpty()||page.optString("status").equals("partial")||page.optJSONArray("gaps")!=null&&page.getJSONArray("gaps").length()>0)incomplete=true;
+                if(evidencePageIncomplete(page)){incomplete=true;pageGap(gaps,step.kind,page);}
+                if(continuations.length()<32&&!page.optString("nextCursor").isEmpty())continuation(continuations,SEARCH,evidenceQueryArguments(step,plan,page.getString("nextCursor")),"source_page_not_fully_read");
                 JSONArray rows=page.getJSONArray("entries");
                 if(step.leaf){for(int i=0;i<rows.length();i++)candidates.add(rows.getJSONObject(i),step.queryIndex,i);}
                 else{
-                    int branches=Math.min(MemoryEvidencePlan.MAX_BRANCHES,rows.length());if(branches<rows.length())incomplete=true;
+                    int branches=Math.min(MemoryEvidencePlan.MAX_BRANCHES,rows.length());if(branches<rows.length()){
+                        incomplete=true;gaps.put(new JSONObject().put("kind",step.kind).put("reason","branch_limit").put("unreadBranches",rows.length()-branches));
+                        for(int i=branches;i<rows.length()&&continuations.length()<32;i++){
+                            SourceLocator ref=SourceLocator.from(rows.getJSONObject(i));String kind=ref.kind==Kind.CONVERSATION?"messages":ref.kind==Kind.TASK?"runs":plan.follow;
+                            continuation(continuations,SEARCH,evidenceQueryArguments(new EvidenceStep(kind,ref,ref.kind==Kind.TASK?"":plan.queries.get(0),0,ref.kind!=Kind.TASK),plan,""),"planned_branch_not_read");
+                        }
+                    }
                     for(int i=0;i<branches;i++){
                         SourceLocator ref=SourceLocator.from(rows.getJSONObject(i));traversedBranches++;
                         if(ref.kind==Kind.CONVERSATION&&plan.follow.equals("messages"))enqueueEvidenceQueries(queue,queued,plan,"messages",ref);
@@ -418,15 +498,20 @@ public final class ConversationHistory {
                     }
                 }
             }
-            if(!queue.isEmpty()){incomplete=true;if(stop.equals("complete_bounded_plan"))stop="producer_call_or_time_budget";}
-            JSONArray entries=new JSONArray();int chars=0,readAttempts=0;List<SourceLocator> finalRefs=new ArrayList<>();
+            if(!queue.isEmpty()){
+                incomplete=true;if(stop.equals("complete_bounded_plan"))stop="producer_call_or_time_budget";
+                for(EvidenceStep remaining:queue){if(continuations.length()>=32)break;continuation(continuations,SEARCH,evidenceQueryArguments(remaining,plan,""),"planned_step_not_read");}
+            }
+            JSONArray entries=new JSONArray();int chars=0,readAttempts=0,contextAnchorsRead=0,contextReadAttempts=0,laterUserMessagesRead=0;List<SourceLocator> finalRefs=new ArrayList<>();Set<String> emitted=new HashSet<>();
             List<JSONObject> ranked=candidates.ordered();
             for(JSONObject candidate:ranked){
-                if(entries.length()>=plan.request.limit){incomplete=true;stop="result_limit";break;}
-                SourceLocator locator=SourceLocator.from(candidate);JSONObject row=new JSONObject(candidate.toString());
+                SourceLocator locator=SourceLocator.from(candidate);if(emitted.contains(locator.referenceKey()))continue;
+                if(entries.length()>=plan.request.limit){incomplete=true;stop="result_limit";unreadSource(continuations,locator,plan.request.maxChars,"ranked_source_not_read");break;}
+                JSONObject row=new JSONObject(candidate.toString());
                 if(readAttempts<plan.readTop&&(locator.kind==Kind.MESSAGE||locator.kind==Kind.OPERATION||locator.kind==Kind.OUTPUT)){
                     int available=Math.min(4000,Math.min(plan.request.maxChars-chars,MemoryEvidencePlan.MAX_CANDIDATE_CHARS-budget.candidateChars));
-                    if(available<64||!budget.available()){incomplete=true;stop=available<64?"character_budget":"producer_call_or_time_budget";break;}
+                    if(plan.contextTop>0&&available>=64)available=Math.min(available,Math.max(64,(plan.request.maxChars-chars)/Math.max(1,plan.readTop-readAttempts+2*(plan.contextTop-contextAnchorsRead))));
+                    if(available<64||!budget.available()){incomplete=true;stop=available<64?"character_budget":"producer_call_or_time_budget";unreadSource(continuations,locator,plan.request.maxChars,"exact_source_not_read");break;}
                     check(original);budget.take();readAttempts++;HistoryBinding target=binding.forSource(locator.conversationId.isEmpty()?binding.conversationId:locator.conversationId);JSONObject exact;
                     try{exact=locator.kind==Kind.MESSAGE?target.source.read(target.messageGate(locator.message),locator.message,0,available,original):tasks.read(target,locator,0,available);}
                     catch(java.io.IOException unavailable){check(original);exact=new JSONObject().put("status","unavailable").put("reason","original_source_io_unavailable");}
@@ -440,8 +525,50 @@ public final class ConversationHistory {
                     for(String key:List.of("body","readRange","sourceJump","nextOffset","bodyFingerprint","timeStatus","at"))if(exact.has(key))row.put(key,exact.get(key));
                     row.put("exactSourceRead",true).put("metadataOnly",false).put("originalBodyIncluded",true);
                 }
-                String body=row.optString("body");if(body.length()>plan.request.maxChars-chars){incomplete=true;stop="character_budget";continue;}
-                chars+=body.length();row.put("historicalEvidence",true).put("currentFactVerified",false);entries.put(row);finalRefs.add(locator);
+                String body=row.optString("body");if(body.length()>plan.request.maxChars-chars){incomplete=true;stop="character_budget";unreadSource(continuations,locator,plan.request.maxChars,"ranked_source_not_read");continue;}
+                if(row.has("body")){boolean complete=originalBodyComplete(row);row.put("originalBodyComplete",complete);if(!complete)incomplete=true;}
+                chars+=body.length();row.put("historicalEvidence",true).put("currentFactVerified",false).put("evidenceRole","matched_source");entries.put(row);finalRefs.add(locator);emitted.add(locator.referenceKey());
+                if(locator.kind!=Kind.MESSAGE||!row.optBoolean("exactSourceRead")||contextAnchorsRead>=plan.contextTop)continue;
+                contextAnchorsRead++;
+                // Later owner text is read first so a small budget does not spend
+                // every remaining byte on the old conclusion's preceding context.
+                for(String direction:List.of("after","before")){
+                    int remaining=plan.request.maxChars-chars,slots=plan.request.limit-entries.length();
+                    int available=Math.min(4000,Math.min(remaining,MemoryEvidencePlan.MAX_CANDIDATE_CHARS-budget.candidateChars));
+                    if(available>=64)available=Math.min(available,Math.max(64,remaining/Math.max(1,plan.readTop-readAttempts+2*(plan.contextTop-contextAnchorsRead)+(direction.equals("after")?2:1))));
+                    JSONObject next=new JSONObject().put("kind","neighbors").put("selectionId",selectionFor(locator)).put("direction",direction).put("limit",Math.min(3,plan.request.limit)).put("maxChars",plan.request.maxChars);
+                    if(slots==0||available<64||!budget.available()){
+                        incomplete=true;gaps.put(new JSONObject().put("kind","neighbors").put("direction",direction).put("anchorSourceRef",locator.message.toJson()).put("reason","context_read_budget_exhausted"));
+                        continuation(continuations,SEARCH,next,"context_not_read");continue;
+                    }
+                    check(original);budget.take();contextReadAttempts++;HistoryBinding target=binding.forSource(locator.conversationId.isEmpty()?binding.conversationId:locator.conversationId);
+                    JSONObject options=new JSONObject().put("query","").put("cursor","").put("limit",Math.min(3,slots)).put("maxChars",available).put("createdAfter",-1).put("createdBefore",-1),page;
+                    try{page=target.source.neighbors(target.messageGate(locator.message),locator.message,locator.messageFingerprint,direction,options,original);}
+                    catch(java.io.IOException unavailable){check(original);page=new JSONObject().put("status","unavailable").put("reason","original_source_io_unavailable").put("entries",new JSONArray());}
+                    check(original);if(original.pauseRevision()!=pause)throw new SecurityException("前后文回读迟回已丢弃");budget.record("neighbors_"+direction,page);
+                    JSONObject coverage=new JSONObject().put("anchorSourceRef",locator.message.toJson()).put("direction",direction).put("status",page.optString("status","unavailable")).put("hasMore",page.optBoolean("hasMore")).put("providedRows",0)
+                            .put("adjacentSourceScanExhausted",page.optJSONObject("pageCoverage")!=null&&page.getJSONObject("pageCoverage").optBoolean("adjacentSourceScanExhausted")).put("allReturnedBodiesComplete",true).put("userCorrectionSemanticallyVerified",false);
+                    contextCoverage.put(coverage);
+                    if(evidencePageIncomplete(page)){incomplete=true;pageGap(gaps,"neighbors_"+direction,page);}
+                    if(!Set.of("current","partial").contains(page.optString("status")))continue;
+                    JSONArray neighbors=page.getJSONArray("entries");if(neighbors.length()>options.getInt("limit"))throw new SecurityException("原消息邻域超过本次条数预算");int pageChars=0,provided=0;SourceLocator boundary=null;
+                    for(int i=0;i<neighbors.length();i++){
+                        JSONObject adjacent=new JSONObject(neighbors.getJSONObject(i).toString());if(!adjacent.has("sourceConversationId"))adjacent.put("sourceConversationId",target.sourceConversationId);
+                        SourceLocator ref=SourceLocator.from(adjacent);if(ref.kind!=Kind.MESSAGE||!target.sourceConversationId.equals(ref.conversationId))throw new SecurityException("原消息前后文跨越所选会话");
+                        pageChars=Math.addExact(pageChars,adjacent.getString("body").length());if(pageChars>available)throw new SecurityException("原消息邻域超过本次正文预算");boundary=ref;
+                        boolean complete=originalBodyComplete(adjacent);if(!complete){incomplete=true;coverage.put("allReturnedBodiesComplete",false);}
+                        if(!emitted.add(ref.referenceKey()))continue;
+                        adjacent.put("exactSourceRead",true).put("originalBodyComplete",complete).put("historicalEvidence",true).put("currentFactVerified",false).put("evidenceRole",direction.equals("after")?"later_context":"preceding_context")
+                                .put("contextAnchorSourceRef",locator.message.toJson()).put("contextDirection",direction);
+                        entries.put(adjacent);finalRefs.add(ref);chars+=adjacent.getString("body").length();provided++;
+                        if(direction.equals("after")&&"user".equals(adjacent.optString("role"))&&!adjacent.getString("body").isEmpty())laterUserMessagesRead++;
+                    }
+                    coverage.put("providedRows",provided);
+                    if(page.optBoolean("hasMore")){
+                        if(boundary!=null)next.put("selectionId",selectionFor(boundary));
+                        continuation(continuations,SEARCH,next,"neighbor_sequence_not_fully_read");
+                    }
+                }
             }
             // No body is registered or returned until all selected originals pass another
             // native revision/hash/scope check. A changed source aborts this response entirely.
@@ -461,32 +588,52 @@ public final class ConversationHistory {
                 JSONObject row=entries.getJSONObject(i);SourceLocator locator=finalRefs.get(i);row.put("selectionId",register(row));
                 if(locator.kind==Kind.MESSAGE)messageRefs.put(locator.message.toJson());
                 else if(locator.kind!=Kind.CONVERSATION){taskRefs.put(locator.taskReference());if(locator.kind==Kind.OUTPUT&&row.has("body")){String key=locator.referenceKey();if(providedTasks.size()>=100&&!providedTasks.containsKey(key))throw new SecurityException("本轮保留历史来源过多");providedTasks.put(key,locator);}}
+                if(row.has("body")&&!row.optBoolean("originalBodyComplete")){
+                    if(gaps.length()<64)gaps.put(new JSONObject().put("kind",row.getString("sourceKind")).put("selectionId",row.getString("selectionId")).put("reason","original_body_not_fully_read"));
+                    if(row.optInt("nextOffset",-1)>=0)continuation(continuations,READ,new JSONObject().put("selectionId",row.getString("selectionId")).put("offset",row.getInt("nextOffset")).put("maxChars",Math.min(4000,plan.request.maxChars)),"original_body_not_fully_read");
+                }
             }
             if(messageRefs.length()>0)tasks.prepareMessageSources(binding,messageRefs);
             if(chars>0)binding.caller.modelEvidencePrepared();checkProvidedSources();checkProvidedTasks();check(original);
             if(original.pauseRevision()!=pause)throw new SecurityException("计划最终回执不属于当前暂停版本");
             if(candidates.changedCount()>0){incomplete=true;gaps.put(new JSONObject().put("reason","source_revision_changed_between_queries").put("count",candidates.changedCount()));}
             if(candidates.omittedCount()>0){incomplete=true;stop="candidate_limit";}
+            if(plan.contextTop>contextAnchorsRead&&entries.length()>0){incomplete=true;gaps.put(new JSONObject().put("kind","neighbors").put("reason","requested_context_anchors_not_all_read").put("requested",plan.contextTop).put("read",contextAnchorsRead));}
+            // Work results remain a separate normal Runner tool call. A message
+            // sequence alone cannot invent the task that produced a conclusion.
+            boolean workReadAvailable=existing.supports("owner_work_get"),directoryAvailable=existing.supports("owner_work_directory");Set<String> workCandidates=new LinkedHashSet<>();
+            if(workReadAvailable)for(SourceLocator locator:finalRefs)if(locator.kind!=Kind.MESSAGE&&locator.kind!=Kind.CONVERSATION&&workCandidates.add(locator.taskId))
+                continuation(continuations,"owner_work_get",new JSONObject().put("taskId",locator.taskId).put("offset",0).put("maxChars",Math.min(4000,plan.request.maxChars)),"historical_task_candidate_result_not_read");
+            if(workCandidates.isEmpty()&&directoryAvailable&&entries.length()>0)continuation(continuations,"owner_work_directory",new JSONObject()
+                    .put("range",binding.readScope!=null&&binding.readScope.mode()==ScopeMode.OWNER_PRIVATE?"all":"conversation").put("filter","all")
+                    .put("query",plan.queries.get(0)).put("cursor","").put("limit",Math.min(12,plan.request.limit)),"message_to_work_relation_not_established");
+            if(entries.length()>0)gaps.put(new JSONObject().put("kind","original_work_result").put("reason","original_work_result_not_read").put("workRelationVerified",false)
+                    .put("existingResultReaderAvailable",workReadAvailable).put("existingDirectoryAvailable",directoryAvailable));
+            if(continuations.length()>=32){incomplete=true;gaps.put(new JSONObject().put("reason","continuation_suggestion_limit").put("limit",32));}
             if(incomplete&&stop.equals("complete_bounded_plan"))stop="source_coverage_gaps";
             JSONObject planMeta=budget.metadata().put("strategy","bounded_native_history_rrf_v1").put("queryCount",plan.queries.size())
                     .put("querySuggestionSource",plan.queries.size()>1?"existing_metered_MAIN":"original_query").put("querySuggestionsAreEvidence",false)
                     .put("follow",plan.follow).put("maxBranchesPerLayer",MemoryEvidencePlan.MAX_BRANCHES).put("traversedBranches",traversedBranches)
                     .put("candidateCount",candidates.size()).put("maxCandidates",MemoryEvidencePlan.MAX_CANDIDATES).put("omittedCandidates",candidates.omittedCount())
-                    .put("exactReadAttempts",readAttempts).put("stopReason",stop).put("scopeExpanded",false)
-                    .put("summaryUsedAsOriginal",false).put("historicalEvidence",true).put("currentFactVerified",false);
+                    .put("exactReadAttempts",readAttempts).put("contextTop",plan.contextTop).put("contextAnchorsRead",contextAnchorsRead).put("contextReadAttempts",contextReadAttempts)
+                    .put("continuationLimit",32).put("continuationsMayBeLimited",continuations.length()>=32).put("stopReason",stop).put("scopeExpanded",false)
+                    .put("bodyCompletenessScope","exact_retained_source_range_not_original_full_trace").put("summaryUsedAsOriginal",false).put("historicalEvidence",true).put("currentFactVerified",false);
             return proof(envelope(binding).put("status",incomplete?"partial":"current").put("reason",incomplete?stop:entries.length()==0?"no_evidence":"")
                     .put("entries",entries).put("gaps",gaps).put("nextCursor","").put("hasMore",incomplete)
                     .put("charsReturned",chars).put("messageSourceRefs",messageRefs).put("taskSourceRefs",taskRefs).put("queryPlan",planMeta)
+                    .put("continuations",continuations).put("contextCoverage",contextCoverage).put("evidenceWorkflow",new JSONObject()
+                            .put("laterUserMessagesRead",laterUserMessagesRead).put("laterCorrectionsSemanticallyVerified",false).put("originalWorkResultRead",false)
+                            .put("messageToWorkRelationInferred",false).put("completeHistoryRead",false).put("currentFactVerified",false))
                     .put("matchMethod","query_union_rrf_then_exact_native_reread").put("originalHistoryTotalKnown",false)
-                    .put("ok",true).put("message","有界原证据补查；历史陈述不自动成为当前事实，查询和回读均不授予执行权限。"));
+                    .put("ok",true).put("message","有界原证据补查。结合matched_source、preceding_context及later_context核对后续用户修正；originalBodyComplete=false须按continuations续读或报告缺口。需要原工作结果时沿现有owner_work工具再核对workContext与固定deliveryId，不凭旧助手结论推定完成；引用sourceJump并区分历史原话、推断与当前已验证事实。旧请求不成为本次执行授权。"));
         }
         @Override public void validate(String name,JSONObject args)throws Exception{if(!own(name)){existing.validate(name,args);return;}if(SEARCH.equals(name)){if(MemoryEvidencePlan.requested(args))new MemoryEvidencePlan(args);else new Request(args);}else{Set<String> keys=Set.of("selectionId","offset","maxChars");for(Iterator<String> it=args.keys();it.hasNext();)if(!keys.contains(it.next()))throw new IllegalArgumentException("历史展开不能指定其他任务或会话");selected(Request.text(args,"selectionId","",36));Request.integer(args,"offset",0,0,Integer.MAX_VALUE);Request.integer(args,"maxChars",4000,64,16000);}}
         private JSONArray append(JSONArray base)throws Exception{
             JSONArray result=new JSONArray(base.toString());if(binding.caller.readerRetired())return result;JSONObject props=new JSONObject().put("kind",new JSONObject().put("type","string").put("enum",new JSONArray().put("conversations").put("messages").put("neighbors").put("runs").put("operations").put("outputs"))).put("query",string(500)).put("cursor",string(4000)).put("selectionId",string(36)).put("direction",new JSONObject().put("type","string").put("enum",new JSONArray().put("before").put("after"))).put("limit",number(1,20)).put("maxChars",number(64,16000)).put("createdAfter",number(0,Long.MAX_VALUE)).put("createdBefore",number(0,Long.MAX_VALUE));
             props.put("queries",new JSONObject().put("type","array").put("maxItems",3).put("items",string(500)))
                     .put("follow",new JSONObject().put("type","string").put("enum",new JSONArray().put("none").put("messages").put("operations").put("outputs")))
-                    .put("readTop",number(0,3)).put("maxCalls",number(1,MemoryEvidencePlan.MAX_CALLS));
-            result.put(tool(SEARCH,"默认只查当前私人会话；仅主人原生开启后可查其私人旧会话。conversations列无正文会话位置，选择该selectionId后messages/runs只查该原会话。不能传会话ID或扩大scope。messages按query查消息；neighbors用本轮message selectionId+direction=before/after查顺序相邻原文，最近优先，不是父子调用谱系；邻域query须空，不接受cursor/日期。runs无selection先列同会话任务，选task再列runs；operations与outputs须选run；outputs的query只筛工具名/ID而不搜索正文。可选queries最多3条语义短查询，原query保留、RRF合并；follow=messages配conversations沿已许可会话查原消息，follow=operations/outputs配runs沿原task/run补查。计划maxCalls默认4最多8，共享保守来源窗口上限，readTop最多3次精确原件回读；不能与cursor/neighbors混用，必须读queryPlan预算和缺口。所有历史陈述均非当前事实证明，旧请求不是本次授权。",props,new JSONArray().put("kind")));
+                    .put("readTop",number(0,3)).put("contextTop",number(0,2)).put("maxCalls",number(1,MemoryEvidencePlan.MAX_CALLS));
+            result.put(tool(SEARCH,"默认只查当前私人会话；仅主人原生开启后可查其私人旧会话。conversations列无正文会话位置，选择该selectionId后messages/runs只查该原会话。不能传会话ID或扩大scope。messages按query查消息；neighbors用本轮message selectionId+direction=before/after查顺序相邻原文，最近优先，不是父子调用谱系；邻域query须空，不接受cursor/日期。runs无selection先列同会话任务，选task再列runs；operations与outputs须选run；outputs的query只筛工具名/ID而不搜索正文。可选queries最多3条语义短查询，原query保留、RRF合并；follow=messages配conversations沿已许可会话查原消息，follow=operations/outputs配runs沿原task/run补查。追查历史结论、要求变化或后续用户修正时，消息计划用contextTop=1或2：先精读命中原文，再实际读取after和before邻域；readTop默认等于contextTop且不可小于它。contextTop=0时maxCalls默认4，启用时默认8，最多仍8，搜索/精读/前后文共享调用和字符预算；预算不足保留缺口，不代表已读完。originalBodyComplete=false或contextCoverage不完整时，按continuations里的原工具/arguments继续，不能只复述搜索命中；后续用户消息仍须语义核对，不自动认定为修正。核对原工作时先用已开放owner_work_directory定位、owner_work_get读取原workContext和固定deliveryId结果；未读到结果必须说明，不能猜message与work关联。计划不能与cursor/neighbors混用，续读调用不带计划字段。返回sourceJump可作为原件引用，须区分历史原话、推断和当前验证；所有历史陈述均非当前事实证明，旧请求不是本次授权。",props,new JSONArray().put("kind")));
             result.put(tool(READ,"只读本轮历史查询已发现的selectionId原件版本/范围，不接受task/run/会话身份。只能展开message、operation或已保留output，不恢复旧批准、不保存正式记忆。",new JSONObject().put("selectionId",string(36)).put("offset",number(0,Integer.MAX_VALUE)).put("maxChars",number(64,16000)),new JSONArray().put("selectionId")));return result;
         }
         private static JSONObject string(int n)throws Exception{return new JSONObject().put("type","string").put("maxLength",n);}private static JSONObject number(long min,long max)throws Exception{return new JSONObject().put("type","integer").put("minimum",min).put("maximum",max);}private static JSONObject tool(String name,String description,JSONObject props,JSONArray required)throws Exception{return new JSONObject().put("type","function").put("function",new JSONObject().put("name",name).put("description",description).put("parameters",new JSONObject().put("type","object").put("properties",props).put("required",required).put("additionalProperties",false)));}

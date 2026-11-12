@@ -6,7 +6,9 @@ import dev.pocketengine.features.EngineModule;
 import dev.pocketengine.store.TaskStore;
 import java.io.File;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -123,23 +125,57 @@ public final class NativeSkillExecutionHost implements AutoCloseable {
     private static boolean ownerTaskEligible(JSONObject task){return "owner".equals(task.optString("actorId"))&&"private".equals(task.optString("spaceId"))&&"assistant".equals(task.optString("kind"))&&!task.has("origin")&&!task.has("workProfileRef")&&!task.has("workProfileIntent")&&!task.has("sourceLearningJob")&&!task.optBoolean("cancelRequested")&&task.optString("status").matches("queued|interrupted|needs_confirmation|awaiting_user|failed");}
     private static String ownerTaskPin(JSONObject task)throws Exception {return TaskStore.capabilityFingerprint(new JSONObject().put("id",task.getString("id")).put("runId",task.optString("runId")).put("epoch",task.optInt("coordinatorEpoch")).put("status",task.optString("status")).put("updatedAt",task.optLong("updatedAt")).put("goal",task.optString("goal")).put("feedback",task.optString("feedback")).put("developmentContext",task.optJSONObject("developmentContext")==null?JSONObject.NULL:task.getJSONObject("developmentContext")).put("executionScope",task.optJSONObject("executionScope")==null?JSONObject.NULL:task.getJSONObject("executionScope")));}
     public JSONObject configuration()throws Exception {open();return configuration.snapshot();}
-    /** Same-task native preparation, lexical candidates only; configuration is not execution authority. */
+    /** Same-task preparation uses the original profile when one exists; lexical discovery
+     * remains a suggestion for ordinary tasks. Neither path creates execution authority. */
     public JSONObject taskSnapshot(String taskId,Set<String> configuredCapabilities,JSONObject pluginSnapshot)throws Exception {
         open();JSONObject task=tasks.get(taskId,false);if(task==null||!"owner".equals(task.optString("actorId"))||!"private".equals(task.optString("spaceId")))throw new SecurityException("只能准备本机主人私人任务的能力");
         String query=(task.optString("goal")+"\n"+task.optString("feedback")).replaceAll("[\\p{Cntrl}&&[^\\n\\r\\t]]","");int end=Math.min(512,query.length());if(end>0&&end<query.length()&&Character.isHighSurrogate(query.charAt(end-1)))end--;
         JSONObject nativeScope=null;
         try{nativeScope=skills.taskScopeForHost(task);}catch(Exception unavailable){/* Original receipts stay readable; no fallback catalogue is exposed. */}
-        JSONObject diagnosed=nativeScope==null?new JSONObject().put("skills",new JSONArray()):skills.diagnoseDiscovery(nativeScope,query.substring(0,end),configuredCapabilities);
-        JSONArray related=new JSONArray(),needs=new JSONArray(),plugins=pluginSnapshot.optJSONArray("plugins"),executions=new JSONArray(),ownerSkills=new JSONArray();Set<String> seen=new java.util.HashSet<>();boolean scriptsRelevant=false;
+        boolean profileTask=task.has("workProfileRef")||task.has("workProfileIntent");JSONObject frozen=null,assetScope=nativeScope;
+        JSONObject preparation=new JSONObject().put("selectionSource",profileTask?"original_work_profile":"related_skills").put("state",nativeScope==null?"scope_unavailable":"ready");
+        Map<String,JSONObject> selectedSkills=new LinkedHashMap<>(),selectedPlugins=new LinkedHashMap<>();JSONArray unresolved=new JSONArray();
+        if(profileTask&&nativeScope!=null)try{
+            frozen=task.has("workProfileRef")?tasks.workProfileRunSnapshot(taskId,task.getString("runId"),task.getInt("coordinatorEpoch")):tasks.pendingWorkProfileTaskSnapshot(taskId);
+            if(frozen.has("skillScope")){
+                if(!SkillSourcePolicy.scopeFingerprint(nativeScope).equals(frozen.getString("skillScopeFingerprint")))throw new SecurityException("原工作配置的技能范围已变化");
+                assetScope=frozen.getJSONObject("skillScope");
+            }else assetScope=new JSONObject().put("ownerId","owner").put("spaceId","private");
+            preparation.put("profileId",frozen.getString("profileId")).put("profileRevision",frozen.getLong("profileRevision")).put("resolutionDigest",frozen.getString("resolutionDigest"));
+            JSONArray items=frozen.getJSONArray("items");for(int i=0;i<items.length();i++){
+                JSONObject item=items.getJSONObject(i);if(!item.getBoolean("included"))continue;String kind=item.getString("kind");JSONObject binding=item.getJSONObject("binding");
+                if(kind.equals("skill")||kind.equals("instruction"))selectedSkills.put(binding.getString("id"),binding);
+                else if(kind.equals("plugin"))selectedPlugins.put(binding.getString("id"),binding);
+            }
+        }catch(Exception unavailable){frozen=null;assetScope=null;selectedSkills.clear();selectedPlugins.clear();preparation.put("state","profile_unavailable");}
+        JSONObject diagnosed=new JSONObject().put("skills",new JSONArray());boolean skillSourcesAvailable=false;
+        if(assetScope!=null)try{diagnosed=skills.diagnoseDiscovery(assetScope,query.substring(0,end),configuredCapabilities);skillSourcesAvailable=true;}
+        catch(Exception unavailable){preparation.put("state","skills_unavailable");}
+        JSONArray related=new JSONArray(),needs=new JSONArray(),capabilityNeeds=new JSONArray(),plugins=pluginSnapshot.optJSONArray("plugins"),executions=new JSONArray(),ownerSkills=new JSONArray();boolean scriptsRelevant=false;
         JSONArray all=diagnosed.getJSONArray("skills");for(int i=0;i<all.length();i++){JSONObject skill=all.getJSONObject(i);if(!skill.optBoolean("applicableToScope")||!skill.optBoolean("active")||!SkillSourcePolicy.ownerInvocable(skill))continue;JSONArray scripts=new JSONArray(),resources=skill.optJSONArray("resources");for(int j=0;resources!=null&&j<resources.length();j++)if(resources.getString(j).startsWith("scripts/"))scripts.put(resources.getString(j));if(scripts.length()>0)ownerSkills.put(new JSONObject().put("id",skill.getString("id")).put("name",skill.getString("name")).put("revision",skill.getInt("revision")).put("digest",skill.getString("digest")).put("executionGeneration",skill.optLong("executionGeneration",0)).put("sourceVersion",skill.getString("sourceVersion")).put("sourcePolicy",skill.getJSONObject("sourcePolicy")).put("skillScopeFingerprint",skill.getString("skillScopeFingerprint")).put("scripts",scripts));}
         scriptsRelevant=ownerSkills.length()>0;
-        JSONArray rows=diagnosed.getJSONArray("skills");for(int i=0;i<rows.length()&&related.length()<8;i++){JSONObject skill=rows.getJSONObject(i);if(!skill.optBoolean("applicableToScope")||skill.optInt("score")<=0)continue;related.put(skill);
-            JSONArray resources=skill.optJSONArray("resources");for(int j=0;resources!=null&&j<resources.length();j++)if(resources.optString(j).startsWith("scripts/"))scriptsRelevant=true;
-            JSONArray required=skill.optJSONArray("requiredCapabilities");for(int j=0;required!=null&&j<required.length();j++){String capability=required.getString(j);if(!capability.startsWith("plugin:")||!seen.add(capability))continue;
-                String[] parts=capability.split(":",3);if(parts.length!=3)continue;JSONObject need=new JSONObject().put("capability",capability).put("pluginId",parts[1]).put("tool",parts[2]).put("available",configuredCapabilities.contains(capability));
-                for(int k=0;plugins!=null&&k<plugins.length();k++){JSONObject plugin=plugins.getJSONObject(k);if(parts[1].equals(plugin.optString("id")))need.put("installation",plugin);}needs.put(need);
+        if(profileTask){
+            for(JSONObject ref:selectedSkills.values()){
+                JSONObject exact=null;for(int i=0;i<all.length();i++)if(ref.getString("id").equals(all.getJSONObject(i).optString("id"))){exact=all.getJSONObject(i);break;}
+                String issue=!skillSourcesAvailable?"source_unavailable":exact==null?"source_missing":!sameSkill(ref,exact)?"revision_changed":!exact.optBoolean("applicableToScope")?"scope_unavailable":!exact.optBoolean("contentVerified")?"source_unavailable":!exact.optBoolean("active")?"skill_not_active":exact.optBoolean("shadowed")?"source_shadowed":null;
+                if(issue!=null){JSONObject missing=new JSONObject(ref.toString()).put("status",issue);if(exact!=null&&exact.optBoolean("shadowed"))missing.put("shadowed",true).put("shadowedBy",exact.get("shadowedBy"));unresolved.put(missing);continue;}
+                related.put(new JSONObject(exact.toString()).put("selectionSource","original_work_profile"));
+            }
+        }else{
+            List<JSONObject> matches=new ArrayList<>();for(int i=0;i<all.length();i++){JSONObject skill=all.getJSONObject(i);if(skill.optBoolean("applicableToScope")&&skill.optBoolean("contentVerified")&&skill.optBoolean("active")&&!skill.optBoolean("shadowed")&&skill.optInt("score")>0)matches.add(skill);}
+            matches.sort(java.util.Comparator.comparingInt((JSONObject skill)->skill.optInt("score")).reversed().thenComparing(skill->skill.optString("id")));
+            for(JSONObject skill:matches){if(related.length()==8)break;related.put(new JSONObject(skill.toString()).put("selectionSource","related_skills"));}
+        }
+        Map<String,JSONObject> grouped=new LinkedHashMap<>();
+        for(int i=0;i<related.length();i++){
+            JSONObject skill=related.getJSONObject(i);JSONArray resources=skill.optJSONArray("resources");for(int j=0;resources!=null&&j<resources.length();j++)if(resources.optString(j).startsWith("scripts/"))scriptsRelevant=true;
+            JSONArray required=skill.optJSONArray("requiredCapabilities");for(int j=0;required!=null&&j<required.length();j++){
+                String capability=required.getString(j);JSONObject need=grouped.get(capability);
+                if(need==null){need=capabilityNeed(capability,configuredCapabilities,plugins,profileTask,selectedPlugins);need.put("requiredBy",new JSONArray());grouped.put(capability,need);}
+                need.getJSONArray("requiredBy").put(new JSONObject().put("id",skill.getString("id")).put("name",skill.getString("name")).put("revision",skill.getInt("revision")).put("digest",skill.getString("digest")).put("selectionSource",skill.getString("selectionSource")));
             }
         }
+        for(JSONObject need:grouped.values())(need.has("pluginId")?needs:capabilityNeeds).put(need);
         JSONArray operations=task.getJSONArray("operations");for(int i=0;i<operations.length();i++){JSONObject row=operations.getJSONObject(i);if("skills_execute".equals(row.optString("tool"))&&row.getJSONObject("arguments").has("nativeSkill")){
             JSONObject original=new JSONObject(row.getJSONObject("arguments").getJSONObject("nativeSkill").toString());if(row.optJSONObject("receipt")!=null)original.put("receipt",row.getJSONObject("receipt"));
             executions.put(row.put("artifactAvailability",SkillExecutionRecords.artifactAvailability(original)));
@@ -150,9 +186,48 @@ public final class NativeSkillExecutionHost implements AutoCloseable {
         JSONObject configState=configuration.snapshot();
         boolean configurationApplicable=true;
         if(nativeScope!=null&&configState.optBoolean("configured"))try{requireExecutionProject(nativeScope,configuration.current());}catch(Exception different){configurationApplicable=false;}
-        return new JSONObject().put("taskId",taskId).put("goal",task.optString("goal")).put("configuration",configState).put("toolInventory",toolInventory).put("skills",related).put("pluginNeeds",needs)
-                .put("executions",executions).put("reviewPending",pendingReview(taskId)!=null).put("scriptPreparationRelevant",scriptsRelevant||pendingReview(taskId)!=null||executions.length()>0||configState.optBoolean("recoveryRequired")).put("matching","lexical-v1").put("phoneExecution",phonePreparation(nativeScope)).put("executionAuthorized",false).put("businessVerified",false)
+        try{
+            if(nativeScope!=null)skills.requireTaskScopeForHost(tasks.get(taskId,false),nativeScope);
+            if(frozen!=null){JSONObject current=task.has("workProfileRef")?tasks.workProfileRunSnapshot(taskId,task.getString("runId"),task.getInt("coordinatorEpoch")):tasks.pendingWorkProfileTaskSnapshot(taskId);if(!frozen.getString("resolutionDigest").equals(current.getString("resolutionDigest")))throw new SecurityException("原工作配置已变化");}
+        }catch(Exception changedScope){nativeScope=null;related=new JSONArray();needs=new JSONArray();capabilityNeeds=new JSONArray();ownerSkills=new JSONArray();preparation.put("state","selection_changed");configurationApplicable=false;}
+        preparation.put("unresolvedSkills",unresolved).put("selectedSkillCount",related.length()).put("configurationOnly",true).put("executionAuthorized",false);
+        return new JSONObject().put("taskId",taskId).put("goal",task.optString("goal")).put("configuration",configState).put("toolInventory",toolInventory).put("skills",related).put("pluginNeeds",needs).put("capabilityNeeds",capabilityNeeds).put("skillPreparation",preparation)
+                .put("executions",executions).put("reviewPending",pendingReview(taskId)!=null).put("scriptPreparationRelevant",scriptsRelevant||pendingReview(taskId)!=null||executions.length()>0||configState.optBoolean("recoveryRequired")).put("matching",profileTask?"exact_work_profile":"lexical-v1").put("phoneExecution",phonePreparation(nativeScope)).put("executionAuthorized",false).put("businessVerified",false)
                 .put("ownerInvocation",new JSONObject().put("available",nativeScope!=null&&configurationApplicable&&ownerTaskEligible(task)&&!tasks.hasUnresolved(taskId)).put("projectScopeAvailable",nativeScope!=null).put("projectConfigurationCompatible",configurationApplicable).put("skillScopeFingerprint",nativeScope==null?"":SkillSourcePolicy.scopeFingerprint(nativeScope)).put("projectId",nativeScope==null?"":nativeScope.optString("projectId")).put("taskPin",ownerTaskPin(task)).put("skills",ownerSkills).put("executionAuthorized",false));
+    }
+    private static boolean sameSkill(JSONObject ref,JSONObject actual)throws Exception {
+        return ref.getInt("revision")==actual.optInt("revision",-1)&&ref.getString("digest").equals(actual.optString("digest"))
+                &&(!ref.has("executionGeneration")||ref.getLong("executionGeneration")==actual.optLong("executionGeneration",-1))
+                &&(!ref.has("skillScopeFingerprint")||ref.getString("skillScopeFingerprint").equals(actual.optString("skillScopeFingerprint")));
+    }
+    private static JSONObject capabilityNeed(String capability,Set<String> configured,JSONArray plugins,boolean profileTask,Map<String,JSONObject> selected)throws Exception {
+        boolean available=configured.contains(capability);JSONObject need=new JSONObject().put("capability",capability).put("available",available).put("executionAuthorized",false);
+        if(SkillManifest.isPluginFunctionAlias(capability))return need.put("status","unsupported_reference").put("reasonCode","plugin_function_alias_requires_stable_identity").put("available",false);
+        if(!capability.startsWith("plugin:"))return need.put("status",available?"available":"host_capability_missing");
+        String[] parts=capability.split(":",3);if(parts.length!=3)return need.put("status","unsupported_reference");
+        need.put("pluginId",parts[1]).put("tool",parts[2]);JSONObject installation=null;
+        for(int i=0;plugins!=null&&i<plugins.length();i++){JSONObject row=plugins.getJSONObject(i);if(parts[1].equals(row.optString("id"))){installation=row;break;}}
+        if(installation==null)return need.put("status",plugins==null?"source_unavailable":"missing_installation").put("available",false);
+        need.put("installation",installation);JSONObject manifest=installation.optJSONObject("manifest");JSONArray tools=manifest==null?null:manifest.optJSONArray("tools");
+        String mcpState=installation.optString("mcpStatus");
+        if(installation.optBoolean("credentialNeedsReentry")||mcpState.equals("needs_authorization"))return need.put("status","needs_authorization").put("available",false);
+        if(mcpState.equals("needs_discovery"))return need.put("status","needs_discovery").put("available",false);
+        if(!(installation.opt("enabled") instanceof Boolean)||tools==null)return need.put("status","source_unavailable").put("available",false);
+        if(!installation.getBoolean("enabled"))return need.put("status","disabled").put("available",false);
+        boolean found=false;for(int i=0;i<tools.length();i++)if(parts[2].equals(tools.getJSONObject(i).optString("name")))found=true;
+        if(!found)return need.put("status","missing_tool").put("available",false);
+        JSONArray grants=installation.optJSONArray("grants");if(grants==null)return need.put("status","source_unavailable").put("available",false);
+        boolean granted=false;for(int i=0;i<grants.length();i++)if(("tool:"+parts[2]).equals(grants.optString(i)))granted=true;
+        if(!granted)return need.put("status","grant_required").put("available",false);
+        if(!available)return need.put("status","not_available");
+        if(profileTask){
+            JSONObject ref=selected.get(parts[1]);boolean included=false;
+            if(ref!=null){JSONArray names=ref.getJSONArray("tools");for(int i=0;i<names.length();i++)if(parts[2].equals(names.getString(i)))included=true;}
+            if(!included)return need.put("status","not_selected");
+            if(!ref.getString("installationId").equals(installation.optString("installationId"))||ref.getLong("stateRevision")!=installation.optLong("stateRevision",-1)
+                    ||!ref.getString("grantsDigest").equals(installation.optString("grantsDigest"))||!ref.getString("manifestDigest").equals(dev.pocketengine.features.controlplane.WorkProfile.fingerprint(manifest)))return need.put("status","selection_changed");
+        }
+        return need.put("status","available");
     }
     private JSONObject phonePreparation(JSONObject nativeScope)throws Exception {
         if(local==null)return new JSONObject().put("available",false).put("message","原手机托管环境未接入");

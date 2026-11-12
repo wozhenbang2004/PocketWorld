@@ -94,6 +94,7 @@ public final class AutomationPlanHost implements AutomationBook.GoalTaskResolver
         JSONArray plans=handle(module,"listPlans",new JSONObject()).getJSONArray("plans");
         for(int i=0;i<plans.length();i++){JSONObject plan=executionView(module,plans.getJSONObject(i));plans.put(i,plan);plan.put("requirements",controls==null?new JSONObject().put("allowed",false).put("reason","native_host_unavailable"):controls.requirementsForPlan(plan));
             JSONObject next=plan.optJSONObject("nextStep");if(plan.optJSONObject("execution")!=null&&next!=null)plan.put("runtimeDecision",module.inspectPlanTask(scope(),plan.getString("id"),next.getString("id")));
+            if(plan.optJSONObject("execution")!=null)plan.put("progress",module.planProgress(scope(),plan.getString("id")));
         }
         return new JSONObject().put("plans",plans).put("scheduleProposals",proposalSnapshot(module)).put("remoteWaitCandidates",tasks.automationRemoteWaitCandidates(20)).put("businessWaitCandidates",businessWaitCandidates()).put("businessWaitSourceAvailable",businessEvents!=null).put("conditions",module.conditionsSnapshot()).put("taskAuthority","TaskStore").put("workerState","not_inferred_from_plan_state").put("snapshotProcess",snapshotProcess).put("snapshotSequence",snapshotSequence.incrementAndGet());
     }
@@ -283,13 +284,32 @@ public final class AutomationPlanHost implements AutomationBook.GoalTaskResolver
             if(checked){JSONObject confirmation=latestConfirmation(task);result.put("verificationSource",tasks.automationArtifactVerified(task.getString("id"))?"native_workspace_artifact_standard":"owner_confirmation");
                 if(confirmation!=null)result.put("evidenceRef",new JSONObject().put("kind","owner_confirmation").put("id",task.getString("id")+":"+confirmation.getLong("seq")));
             }
-            return result;
+            return progressFacts(task,result);
         }
     }
     private JSONObject taskState(JSONObject task)throws Exception{
-        return new JSONObject().put("taskId",task.getString("id")).put("actorId","owner").put("spaceId","private").put("status",task.getString("status"))
+        return progressFacts(task,new JSONObject().put("taskId",task.getString("id")).put("actorId","owner").put("spaceId","private").put("status",task.getString("status"))
                 .put("runId",task.optString("runId")).put("coordinatorEpoch",task.optInt("coordinatorEpoch"))
-                .put("resultVerified",verified(task)).put("terminalVerified",task.optString("status").matches("failed|cancelled")&&settled(task,new java.util.HashSet<>()));
+                .put("resultVerified",verified(task)).put("terminalVerified",task.optString("status").matches("failed|cancelled")&&settled(task,new java.util.HashSet<>())));
+    }
+    /** Read-side result/attention facts. These never make a plan step complete or grant a new action. */
+    private JSONObject progressFacts(JSONObject task,JSONObject result)throws Exception {
+        String id=task.getString("id"),run=task.optString("runId"),status=task.optString("status");int epoch=task.optInt("coordinatorEpoch");
+        boolean closed=settled(task,new java.util.HashSet<>()),machine=tasks.automationArtifactVerified(id);JSONObject confirmation=latestConfirmation(task),review=task.optJSONObject("resultConfirmation");
+        boolean owner=confirmation!=null&&confirmation.optBoolean("completed")&&run.equals(confirmation.optString("runId"))&&epoch>0&&epoch==confirmation.optInt("coordinatorEpoch")&&confirmation.optLong("seq")>0
+                &&review!=null&&review.optBoolean("completed")&&task.optLong("resultRevision",-1)==review.optLong("confirmedResultRevision",-2)
+                &&!review.optString("resultReviewDigest").isEmpty()&&review.optString("resultReviewDigest").equals(confirmation.optString("resultReviewDigest"));
+        boolean complete="completed".equals(status)&&closed&&(machine||owner);JSONArray approvals=new JSONArray(),all=task.optJSONArray("approvals");
+        for(int i=0;all!=null&&i<all.length();i++){JSONObject approval=all.getJSONObject(i);if("pending".equals(approval.optString("state"))&&approval.optLong("expiresAt")>System.currentTimeMillis())approvals.put(new JSONObject().put("id",approval.optString("id")).put("digest",approval.optString("digest")));}
+        String observed=tasks.hasUnresolved(id)?"reconciling":approvals.length()>0?"awaiting_approval":"completed".equals(status)&&!complete?"unverified_result":status;
+        JSONObject basis=new JSONObject().put("kind",complete?(machine?"native_workspace_artifact_standard":"owner_confirmation"):"none");
+        if(complete&&owner)basis.put("confirmationSeq",confirmation.getLong("seq")).put("resultReviewDigest",review.getString("resultReviewDigest"));
+        String original=task.optString("summary"),summary=original;int limit=Math.min(1600,summary.length());if(limit<summary.length()&&limit>0&&Character.isHighSurrogate(summary.charAt(limit-1)))limit--;summary=summary.substring(0,limit);
+        JSONObject change=new JSONObject().put("status",observed).put("basis",basis).put("approvals",approvals);
+        JSONObject question=dev.pocketengine.features.assistant.notifications.OwnerQuestionReply.identity(task);if(question!=null)change.put("question",question);
+        if(status.matches("needs_confirmation|completed"))change.put("resultRevision",task.optLong("resultRevision")).put("resultFingerprint",TaskStore.capabilityFingerprint(new JSONObject().put("summary",original).put("evidence",task.optJSONObject("evidence"))));
+        return result.put("progressStatus",observed).put("progressResultVerified",complete).put("progressTerminalVerified",closed&&status.matches("completed|failed|cancelled"))
+                .put("resultBasis",basis).put("summary",summary).put("summaryTruncated",summary.length()<original.length()).put("changeFingerprint",TaskStore.capabilityFingerprint(change));
     }
     private boolean settled(JSONObject task,java.util.Set<String> seen)throws Exception{
         String id=task.getString("id");if(seen.size()>=100||!seen.add(id)||tasks.hasUnresolved(id))return false;

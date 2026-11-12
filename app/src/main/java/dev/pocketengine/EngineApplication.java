@@ -837,6 +837,10 @@ public final class EngineApplication extends Application implements dev.pocketen
     private dev.pocketengine.features.ssh.SshPreviewWorkflows sshPreviewWorkflows;
     @Override public dev.pocketengine.features.automation.AutomationModule originalReminderModule(){EngineModule selected=features==null?null:features.module("automation");return selected instanceof dev.pocketengine.features.automation.AutomationModule schedules?schedules:null;}
     @Override public dev.pocketengine.features.automation.AutomationModule.AlarmHost automationAlarmHost(){return automationHost;}
+    public JSONObject openExecutionPlanNotification(String planId,String claimId)throws Exception {
+        if(automationHost==null)throw new IllegalStateException("执行计划正在准备，请稍后重新打开原提醒");
+        return automationHost.openPlanNotification(planId,claimId);
+    }
     public dev.pocketengine.features.teams.TeamResearchHost.Page openTeamResearchBudgetPage(String run)throws Exception{if(!(features.module("teams") instanceof dev.pocketengine.features.teams.TeamsModule))throw new SecurityException("原团队模块不可用");return ((dev.pocketengine.features.teams.TeamsModule)features.module("teams")).newResearchBudgetPage(run);}
     public dev.pocketengine.features.teams.TeamMemberEvidenceHost.Page openTeamMemberMaterialsPage(String run,String member)throws Exception{if(teamMemberEvidence==null||!(features.module("teams") instanceof dev.pocketengine.features.teams.TeamsModule))throw new IllegalStateException("原团队资料宿主未准备好");return ((dev.pocketengine.features.teams.TeamsModule)features.module("teams")).newMemberEvidencePage(teamMemberEvidence,run,member);}
     @Override public void onCreate(){
@@ -1125,6 +1129,7 @@ public final class EngineApplication extends Application implements dev.pocketen
             assistantAttachments=new dev.pocketengine.features.assistant.AttachmentRequestProjection(dev.pocketengine.features.attachments.AttachmentRepository.get(this).book,(dev.pocketengine.features.attachments.AttachmentsModule)attachments,this::requireDocumentReferenceRoute);
             var module=(dev.pocketengine.features.assistant.AssistantModule)assistant;module.setAttachmentProjection(assistantAttachments);
             module.setNativeInputHost(assistantInputHost());
+            module.setOwnerObjectResolver(this::selectOwnerObjectReference);
             features.setOwnerWorkHost(this::ownerWorkTool);
         }
         addModule("media",()->new dev.pocketengine.media.MediaModule(context));
@@ -2542,6 +2547,32 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
     public JSONObject ownerOutcomeSnapshot(String taskId,RunControl control)throws Exception {
         if(attachmentOutcomes==null)throw new IllegalStateException("附件成果宿主尚未就绪");return attachmentOutcomes.snapshot(taskId,control);
     }
+    /** Resolve a private owner's selected object without starting, resuming or granting a task. */
+    public JSONObject selectOwnerObjectReference(JSONObject supplied,RunControl control)throws Exception {
+        control.check();JSONObject ref=dev.pocketengine.features.assistant.OwnerObjectReferences.locator(supplied);
+        String kind=ref.getString("kind"),id=ref.getString("id"),label="";JSONObject selected=null;
+        if("work".equals(kind)){
+            selected=tasks.getForUi(id,false);
+            if(selected==null||!"owner".equals(selected.optString("actorId"))||!"private".equals(selected.optString("spaceId"))||"inference".equals(selected.optString("kind"))
+                    ||"source_unavailable".equals(selected.optString("taskProjection"))||!selected.optBoolean("contextAvailable",true))throw new SecurityException("原工作已不可读取，请重新选择");
+            if(!ref.getString("runId").equals(selected.optString("runId"))||ref.getLong("epoch")!=selected.optLong("coordinatorEpoch"))throw new IllegalStateException("这件工作已进入另一轮，请重新关联当前工作");
+            JSONObject original=tasks.get(id,false);
+            if(original==null||!dev.pocketengine.store.OwnerWorkTask.isOwnerWork(original)&&original.optJSONObject("ownerResultHandling")==null&&original.optJSONObject("ownerWorkPreparation")==null)
+                throw new IllegalArgumentException("这条前台回复请沿原对话引用；工作关联用于已派发的正式工作");
+            if(!ref.getString("runId").equals(original.optString("runId"))||ref.getLong("epoch")!=original.optLong("coordinatorEpoch"))throw new IllegalStateException("原工作已变化，请重新关联");
+            label=selected.optString("goal");
+        }else if("artifact".equals(kind)){
+            JSONObject snapshot=ownerOutcomeSnapshot(null,control);
+            for(String field:java.util.List.of("artifacts","sources")){JSONArray rows=snapshot.optJSONArray(field);for(int i=0;rows!=null&&i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(id.equals(row.optString("id"))&&ref.getString("sha256").equals(row.optString("sha256"))){selected=row;label=row.optString("name");break;}}if(selected!=null)break;}
+        }else{
+            EngineModule module=features.module("project".equals(kind)?"workspace":"teams");
+            if(module==null)throw new IllegalStateException("原对象目录尚未就绪");
+            JSONArray rows=module.snapshot().optJSONArray("project".equals(kind)?"projects":"teams");
+            for(int i=0;rows!=null&&i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(id.equals(row.optString("id"))&&!row.optBoolean("archived")){selected=row;label=row.optString("name",row.optString("title"));break;}}
+        }
+        control.check();if(selected==null)throw new IllegalStateException("原对象或成果版本已不可读取，请重新选择；没有替换为同名对象");
+        return dev.pocketengine.features.assistant.OwnerObjectReferences.selected(ref,label);
+    }
     public JSONObject ownerOutcomeDocument(String taskId,String id,String sha,dev.pocketengine.features.attachments.documents.DocumentContent.Request range,RunControl control)throws Exception {
         if(attachmentOutcomes==null)throw new IllegalStateException("附件文档宿主尚未就绪");return attachmentOutcomes.readOwnerDocument(taskId,id,sha,range,control);
     }
@@ -2746,7 +2777,7 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
         }
         if("owner_work_get".equals(tool)){
             return tasks.ownerWorkReadForButler(sourceTask,sourceRun,sourceEpoch,sourceControl,
-                    args.getString("taskId"),args.optString("deliveryId"),args.optInt("offset",0),args.optInt("maxChars",4000));
+                    args.getString("taskId"),args.optString("deliveryId"),args.optInt("offset",0),args.optInt("maxChars",4000),args.optString("contextCursor"));
         }
         if("owner_work_prepare".equals(tool)){
             JSONObject proposed=tasks.proposeOwnerWorkPreparation(sourceTask,sourceRun,sourceEpoch,operation,args,sourceControl);

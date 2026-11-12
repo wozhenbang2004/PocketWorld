@@ -18,6 +18,12 @@ export type ProjectPreviewState = {
 export type PreviewWindow = { projectId: string; documentEpoch: number; resumeRevision: number };
 export type PreviewRect = { x: number; y: number; width: number; height: number };
 export type PackagePreviewTarget = { taskId: string; operationId: string };
+export type ProjectPackageOutcome = PackagePreviewTarget & {
+  runId: string; epoch: number; projectId: string; checkoutId: string; sourceDigest: string;
+  artifactId: string; archiveSha256: string; archiveBytes: number; manifestIdentity: string;
+  name: string; mode: 'web_output' | 'source_project'; entryPath: string;
+  currentRun: boolean; fileCount?: number; omittedCount?: number; createdAt?: number;
+};
 export type PackagePreviewChoices = PackagePreviewTarget & {
   kind: 'package_preview_choices'; conversationId: string; projectId: string; checkoutId: string; sourceDigest: string;
   artifactId: string; artifactSha256: string; mode: 'web_output' | 'source_project';
@@ -52,6 +58,36 @@ const uuid = (value: unknown): value is string => typeof value === 'string' && /
 const entry = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 240 &&
   value === value.trim() && !value.startsWith('/') && !value.includes('\\') && !/[\u0000-\u001f\u007f]/.test(value) &&
   value.split('/').every(part => part !== '' && part !== '.' && part !== '..');
+
+export function projectPackageTaskIdentity(taskValue: unknown): { taskId: string; projectId: string; checkoutId: string } | null {
+  const task = record(taskValue), raw = record(task.raw), development = record(raw.developmentContext);
+  return identifier(task.id) && raw.kind === 'assistant' && raw.actorId === 'owner' && raw.spaceId === 'private' && raw.origin == null &&
+    identifier(development.projectId) && identifier(development.checkoutId)
+    ? { taskId: task.id, projectId: development.projectId, checkoutId: development.checkoutId } : null;
+}
+
+/** Metadata from a native original-operation read. Opening still verifies the
+ * original SQL, artifact catalog and bytes; this projection grants no access. */
+export function projectPackageOutcome(taskValue: unknown, value: unknown): ProjectPackageOutcome | null {
+  const target = projectPackageTaskIdentity(taskValue), raw = record(record(taskValue).raw), source = record(value), artifact = record(source.packageArtifact);
+  if (!target || source.format !== 'pocketworld.project-package-evidence.v1' || source.taskId !== target.taskId ||
+      source.projectId !== target.projectId || source.checkoutId !== target.checkoutId || source.authorityAdded !== false ||
+      !identifier(source.operationId) || !identifier(source.runId) || !Number.isSafeInteger(source.coordinatorEpoch) || Number(source.coordinatorEpoch) < 1 ||
+      !sha256(source.planDigest) || !sha256(source.sourceDigest) || !sha256(source.manifestIdentity) || !sha256(source.archiveSha256) ||
+      !Number.isSafeInteger(source.archiveBytes) || Number(source.archiveBytes) <= 0 ||
+      artifact.kind !== 'project_bundle' || artifact.persisted !== true || !uuid(artifact.id) || artifact.versionId !== artifact.id || !uuid(artifact.ownerActionId) ||
+      !Number.isSafeInteger(artifact.versionSequence) || Number(artifact.versionSequence) < 1 ||
+      artifact.projectId !== target.projectId || artifact.checkoutId !== target.checkoutId || artifact.sourceDigest !== source.sourceDigest ||
+      artifact.manifestIdentity !== source.manifestIdentity || artifact.sha256 !== source.archiveSha256 || artifact.sizeBytes !== source.archiveBytes ||
+      (artifact.mode !== 'web_output' && artifact.mode !== 'source_project') || typeof artifact.entryPath !== 'string' ||
+      (artifact.mode === 'web_output' ? !entry(artifact.entryPath) : artifact.entryPath !== '' && !entry(artifact.entryPath))) return null;
+  const count = (value: unknown): number | undefined => Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : undefined;
+  return { ...target, operationId: source.operationId, runId: source.runId, epoch: Number(source.coordinatorEpoch),
+    sourceDigest: source.sourceDigest, artifactId: artifact.id, archiveSha256: source.archiveSha256, archiveBytes: Number(source.archiveBytes),
+    manifestIdentity: source.manifestIdentity, name: typeof artifact.name === 'string' && artifact.name ? artifact.name : '项目固定包',
+    mode: artifact.mode, entryPath: artifact.entryPath, currentRun: source.runId === raw.runId && source.coordinatorEpoch === raw.coordinatorEpoch,
+    fileCount: count(artifact.fileCount), omittedCount: count(artifact.omittedCount), createdAt: count(artifact.createdAt) };
+}
 
 /** A display candidate from the original bounded operation, never artifact authority. */
 export function packageOperationTarget(taskValue: unknown, operationValue: unknown): PackagePreviewTarget | null {

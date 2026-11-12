@@ -866,6 +866,13 @@ public final class LocalModule implements EngineModule {
         if(closed||original==null)throw new SecurityException("缺少原项目只读控制");String id=JsonFiles.text(input,"checkoutId",80);dev.pocketengine.features.local.project.ProjectFileQueries.Current current=()->{original.check();if(original.isPaused())throw new SecurityException("原项目读取已暂停");};
         return search?dev.pocketengine.features.local.project.ProjectFileQueries.search(content(id),id,input,current):dev.pocketengine.features.local.project.ProjectFileQueries.read(content(id),id,input,current);
     }
+    /** Original checkout conventions only; this host read is not a model-selectable root. */
+    public dev.pocketengine.features.local.project.ProjectGuidance.Snapshot projectGuidanceForHost(String checkoutId,java.util.Collection<String> directories,RunControl original)throws Exception {
+        if(original==null)throw new SecurityException("缺少原项目规则读取控制");final File selected;
+        synchronized(this){if(closed)throw new SecurityException("原Local已关闭");selected=content(dev.pocketengine.features.local.project.ProjectBuildPlan.identity(checkoutId));}
+        dev.pocketengine.features.local.project.ProjectFileQueries.Current current=()->{original.check();if(closed||original.isPaused()||Thread.currentThread().isInterrupted())throw new java.io.InterruptedIOException("原项目规则读取已暂停、取消或关闭");};
+        return dev.pocketengine.features.local.project.ProjectGuidance.read(selected,checkoutId,directories,current);
+    }
     private static JSONObject packageReceipt(JSONObject exact,JSONObject link)throws Exception {
         return new JSONObject().put("id",link.getString("operationId")).put("operationId",link.getString("operationId")).put("checkoutId",exact.getString("checkoutId")).put("projectExecution",new JSONObject(link.toString())).put("kind","project_package_freeze").put("provider","app_private_checkout").put("nativeFileOperation",true).put("processExitCode",JSONObject.NULL).put("sourceDigest",exact.getString("sourceDigest")).put("businessVerified",false).put("automaticallyExported",false).put("replayAllowed",false).put("cancelRequested",link.optBoolean("cancelRequested"));
     }

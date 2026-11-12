@@ -5,8 +5,8 @@ import './composer-context.css';
 
 type Data = Record<string, any>;
 
-/** Both reference collections use the same native draft CAS, without replaying a removal. */
-export function useComposerReferenceRemoval(composer: Data, disabled: boolean, kind: 'source' | 'preview') {
+/** Reference collections use the same native draft CAS, without replaying a removal. */
+export function useComposerReferenceRemoval(composer: Data, disabled: boolean, kind: 'source' | 'preview' | 'object') {
   const identity = JSON.stringify([composer.key, composer.epoch, composer.revision]);
   const renderedEpoch = bridge.getDocumentEpoch();
   const currentDisabled = useRef(disabled);
@@ -52,6 +52,27 @@ export function useComposerReferenceRemoval(composer: Data, disabled: boolean, k
     });
   };
   return { remove, error, unknown, busy: phase !== 'idle', phase };
+}
+
+/** Reuse the existing draft disclosure for explicitly selected work objects. */
+export function ComposerObjectReferences({ composer, disabled }: { composer: Data; disabled: boolean }) {
+  const refs: Data[] = Array.isArray(composer.objectRefs) ? composer.objectRefs : [];
+  const removal = useComposerReferenceRemoval(composer, disabled, 'object');
+  if (!refs.length && !removal.error) return null;
+  const kinds: Record<string, string> = { work: '工作', project: '项目', artifact: '文件', team: '团队' };
+  return <section className="pw-composer-context" aria-label="这条消息关联的对象">
+    {refs.length > 0 && <Accordion className="pw-composer-context-disclosure"><AccordionItem id="object-references" title={`关于 · ${refs.map(ref => ref.label).join('、')}`} description="发送后，管家会根据你的问题读取这些对象。">
+      <div className="pw-composer-context-scroll" role="region" aria-label="关联对象清单" tabIndex={0}>
+        {refs.map((ref, index) => <div className="pw-composer-context-row" key={`${ref.kind}:${ref.id}`}>
+          <div className="pw-composer-context-object"><strong>{String(ref.label)}</strong><p className="pw-composer-context-hint">{kinds[ref.kind] || '对象'}{ref.kind === 'artifact' ? ' · 当前固定版本' : ref.kind === 'work' ? ' · 当前执行回合' : ''}</p></div>
+          <Button variant="ghost" size="small" className="pw-composer-context-remove" disabled={disabled || removal.busy || removal.unknown} onClick={() => removal.remove(index)} aria-label={`移除关联：${ref.label}`}>移除</Button>
+        </div>)}
+        <p className="pw-composer-context-hint">关联对象保留在这份草稿中，发送前可以移除。</p>
+      </div>
+    </AccordionItem></Accordion>}
+    {removal.busy && <p className="pw-composer-context-feedback" role="status">{removal.phase === 'refreshing' ? '正在核对草稿…' : '正在移除关联…'}</p>}
+    {removal.error && <p className="pw-composer-context-feedback pw-error" role="alert">{removal.error}</p>}
+  </section>;
 }
 
 /** BoardUI disclosure with OpenMuse LinkRow's compact title/detail hierarchy.

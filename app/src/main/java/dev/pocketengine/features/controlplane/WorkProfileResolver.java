@@ -131,7 +131,7 @@ public final class WorkProfileResolver {
         JSONObject definition = profile.toJson(), capturedModels = new JSONObject(),skillScope=sources.skillScope(observation); JSONArray rows = new JSONArray();
         Set<String> availableCapabilities=sources.hostCapabilities();
         Set<String> selectedPluginCapabilities = new java.util.HashSet<>();JSONArray pluginRefs=definition.getJSONArray("pluginRefs");for(int i=0;i<pluginRefs.length();i++){JSONObject plugin=pluginRefs.getJSONObject(i);JSONArray tools=plugin.getJSONArray("tools");for(int n=0;n<tools.length();n++)selectedPluginCapabilities.add("plugin:"+plugin.getString("id")+":"+tools.getString(n));}
-        Map<String, ModelConfig> models = new LinkedHashMap<>();
+        Map<String, ModelConfig> models = new LinkedHashMap<>(); Map<String,JSONArray> dependencyDetails=new LinkedHashMap<>();
         JSONObject policies = definition.getJSONObject("modelPolicies");
         for (String purpose : WorkProfile.keys(policies)) {
             JSONObject requested = policies.getJSONObject(purpose); observation.check();
@@ -159,13 +159,20 @@ public final class WorkProfileResolver {
         for (String section : new String[]{"instructionRefs", "skillRefs"}) {
             JSONArray selected = definition.getJSONArray(section);
             for (int i = 0; i < selected.length(); i++) {
-                JSONObject ref = selected.getJSONObject(i); String id = ref.getString("id");
-                rows.put(inspect(section.equals("instructionRefs") ? "instruction" : "skill", id, ref, observation,
+                JSONObject ref = selected.getJSONObject(i); String id = ref.getString("id"), kind=section.equals("instructionRefs")?"instruction":"skill";
+                rows.put(inspect(kind, id, ref, observation,
                         () -> sources.skill(id, observation), actual -> {
                             exact(actual, ref, "id", "revision", "digest");
                             if (!actual.optBoolean("contentVerified") || !actual.optBoolean("active") || !"active".equals(actual.optString("status"))) throw new Missing("skill_not_active");
-                            JSONArray required = actual.getJSONArray("requiredCapabilities");
-                            for (int n = 0; n < required.length(); n++){String capability=required.getString(n);if(!availableCapabilities.contains(capability))throw new Missing("host_capability_missing");if(capability.startsWith("plugin:")&&!selectedPluginCapabilities.contains(capability))throw new Missing("required_plugin_not_selected");}
+                            JSONArray required = actual.getJSONArray("requiredCapabilities"), details=new JSONArray();String missing=null;
+                            for(int n=0;n<required.length();n++){
+                                String capability=required.getString(n);boolean available=availableCapabilities.contains(capability),selectedTool=!capability.startsWith("plugin:")||selectedPluginCapabilities.contains(capability);
+                                details.put(dependency(capability,available,selectedTool,sources,observation));
+                                if(missing==null&&dev.pocketengine.features.skills.SkillManifest.isPluginFunctionAlias(capability))missing="unsupported_reference";
+                                else if(missing==null&&!available)missing="host_capability_missing";else if(missing==null&&!selectedTool)missing="required_plugin_not_selected";
+                            }
+                            if(details.length()>0)dependencyDetails.put(kind+":"+id,details);
+                            if(missing!=null)throw new Missing(missing);
                             return pick(actual, "id", "revision", "digest", "executionGeneration", "expiresAt", "skillScopeFingerprint");
                         }));
             }
@@ -176,8 +183,10 @@ public final class WorkProfileResolver {
             rows.put(inspect("plugin", id, ref, observation, () -> sources.plugin(id, observation), actual -> {
                 exact(actual, ref, "id", "installationId", "stateRevision");
                 if (!WorkProfile.fingerprint(actual.getJSONObject("manifest")).equals(ref.getString("manifestDigest"))) throw new Missing("revision_changed");
-                if (!actual.optBoolean("enabled")) throw new Missing("plugin_disabled");
+                if (!(actual.opt("enabled") instanceof Boolean)) throw new Missing("source_unavailable");
+                if (!actual.getBoolean("enabled")) throw new Missing("plugin_disabled");
                 JSONArray requested = ref.getJSONArray("tools"), granted = actual.optJSONArray("grants"), tools = actual.getJSONObject("manifest").getJSONArray("tools");
+                if(granted==null)throw new Missing("source_unavailable");
                 for (int n = 0; n < requested.length(); n++) {
                     String name = requested.getString(n); JSONObject found = null;
                     for (int t = 0; t < tools.length(); t++) if (name.equals(tools.getJSONObject(t).getString("name"))) found = tools.getJSONObject(t);
@@ -220,8 +229,19 @@ public final class WorkProfileResolver {
             if (actual != null && actual.optJSONObject("sourceEvidence") != null) item.put("sourceEvidence", targetEvidence(actual.getJSONObject("sourceEvidence")));
             rows.put(item);
         }
+        Set<String> includedPluginCapabilities=new java.util.HashSet<>();
+        for(int i=0;i<rows.length();i++){JSONObject item=rows.getJSONObject(i);if(!"plugin".equals(item.getString("kind"))||!item.getBoolean("included"))continue;JSONArray tools=item.getJSONObject("binding").getJSONArray("tools");for(int n=0;n<tools.length();n++)includedPluginCapabilities.add("plugin:"+item.getString("id")+":"+tools.getString(n));}
+        for(int i=0;i<rows.length();i++){
+            JSONObject item=rows.getJSONObject(i);JSONArray details=dependencyDetails.get(item.getString("kind")+":"+item.getString("id"));if(details==null||!item.getBoolean("included"))continue;
+            for(int n=0;n<details.length();n++){JSONObject need=details.getJSONObject(n);String capability=need.getString("capability");if(capability.startsWith("plugin:")&&!includedPluginCapabilities.contains(capability)){
+                need.put("status","required_plugin_unavailable");item.put("status","required_plugin_unavailable").put("included",false).put("binding",JSONObject.NULL);
+            }}
+        }
         boolean ready = true; int omitted = 0;
         for (int i = 0; i < rows.length(); i++) { JSONObject row = rows.getJSONObject(i); if (!"ready".equals(row.getString("status"))) { if (row.getBoolean("optional")) omitted++; else ready = false; } }
+        // Diagnostics are not run authority. Keep ready snapshots byte-compatible with
+        // existing frozen selections, including their optional omissions.
+        if(!ready)for(int i=0;i<rows.length();i++){JSONObject item=rows.getJSONObject(i);JSONArray details=dependencyDetails.get(item.getString("kind")+":"+item.getString("id"));if(details!=null)item.put("dependencies",details);}
         observation.check();
         JSONObject result = new JSONObject().put("format", "pocketworld.resolved-work-profile.v1").put("profileId", profile.id).put("profileRevision", profile.revision)
                 .put("profileDigest", profile.digest()).put("items", rows).put("modelPolicies", capturedModels).put("resourcePreferences", definition.getJSONObject("resourcePreferences"))
@@ -229,6 +249,28 @@ public final class WorkProfileResolver {
         if(skillScope!=null)result.put("skillScope",new JSONObject(skillScope.toString())).put("skillScopeFingerprint",dev.pocketengine.features.skills.SkillSourcePolicy.scopeFingerprint(skillScope));
         requireStoredSkillScope(result,sources,observation);
         return new Resolution(profile, sources, result, models);
+    }
+    private static JSONObject dependency(String capability,boolean available,boolean selected,Sources sources,RunControl observation)throws Exception {
+        JSONObject result=new JSONObject().put("capability",capability).put("available",available).put("selected",selected);
+        if(dev.pocketengine.features.skills.SkillManifest.isPluginFunctionAlias(capability))return result.put("status","unsupported_reference").put("reasonCode","plugin_function_alias_requires_stable_identity").put("available",false).put("selected",false);
+        if(!capability.startsWith("plugin:"))return result.put("status",available?"ready":"host_capability_missing");
+        String[] parts=capability.split(":",3);if(parts.length!=3||parts[1].isEmpty()||parts[2].isEmpty())return result.put("status","unsupported_reference");
+        result.put("pluginId",parts[1]).put("tool",parts[2]);
+        if(available)return result.put("status",selected?"ready":"required_plugin_not_selected");
+        try{
+            observation.check();JSONObject plugin=sources.plugin(parts[1],observation);observation.check();
+            if(plugin==null)return result.put("status","missing_installation");
+            String state=plugin.optString("mcpStatus");
+            if(plugin.optBoolean("credentialNeedsReentry")||state.equals("needs_authorization"))return result.put("status","needs_authorization");
+            if(state.equals("needs_discovery"))return result.put("status","needs_discovery");
+            JSONObject manifest=plugin.optJSONObject("manifest");JSONArray tools=manifest==null?null:manifest.optJSONArray("tools"),grants=plugin.optJSONArray("grants");
+            if(!(plugin.opt("enabled") instanceof Boolean)||tools==null||grants==null)return result.put("status","source_unavailable");
+            if(!plugin.getBoolean("enabled"))return result.put("status","plugin_disabled");
+            boolean found=false;for(int i=0;i<tools.length();i++)if(parts[2].equals(tools.getJSONObject(i).optString("name")))found=true;
+            if(!found)return result.put("status","tool_missing");
+            if(!contains(grants,"tool:"+parts[2]))return result.put("status","tool_grant_required");
+            return result.put("status","host_capability_missing");
+        }catch(Exception unavailable){observation.check();return result.put("status","source_unavailable");}
     }
     private static JSONObject inspect(String kind, String id, JSONObject ref, RunControl observation, Read read, Check check) throws Exception {
         observation.check(); boolean optional = ref.getBoolean("optional");

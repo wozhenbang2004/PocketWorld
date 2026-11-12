@@ -10,6 +10,72 @@ export function profileReferenceKey(value?: ProfileData | null): string {
   if (value.kind === 'group') return JSON.stringify(['group', value.groupId, value.groupRevision]);
   return JSON.stringify(Object.keys(value).filter(key => key !== 'optional').sort().map(key => [key, value[key]]));
 }
+const pluginBinding = (value: ProfileData) => profileReferenceKey(Object.fromEntries(['id', 'installationId', 'stateRevision', 'manifestDigest'].map(key => [key, value[key]])));
+export const profileDependencyLabel = (status: string): string => ({
+  ready: '已满足', selected: '已加入这份配置', ready_to_add: '当前已就绪，尚未加入配置', native_preflight: '使用前由原生预检核对',
+  source_unavailable: '来源暂不可核对，请重新读取', missing_installation: '尚未登记这个插件', plugin_disabled: '插件已停用',
+  tool_missing: '当前来源没有这项工具', tool_grant_required: '这项工具尚未获准', needs_authorization: '需要在原连接完成授权', needs_discovery: '需要在原连接重新发现工具',
+  required_plugin_not_selected: '尚未选入这项工具', required_plugin_unavailable: '所选插件工具在本次预检中不可用', host_capability_missing: '当前宿主尚未提供这项能力',
+  revision_changed: '原来源版本已变化，请重新选择', source_missing: '原来源已不存在',
+  selection_changed: '已选插件的准确版本已变化，请重新选择', skill_source_missing: '此范围没有原技能，请核对已选引用',
+  skill_revision_changed: '原技能修订已变化，请重新选择', skill_not_active: '原技能未启用或未完成内容审阅', source_shadowed: '原技能已被更高优先级的同名来源遮蔽，请核对原选择',
+  unsupported_reference: '能力标识暂不受支持；插件依赖请使用 plugin:插件标识:工具名',
+} as Record<string, string>)[status] || status;
+/** Read-only preparation from the selected exact skill revisions and the current native
+ * choice window. A package requirement never installs or grants a plugin. */
+export function profileSkillDependencies(draft: ProfileData, sections: ProfileData): ProfileData[] {
+  const grouped = new Map<string, ProfileData>();
+  for (const field of ['instructionRefs', 'skillRefs']) for (const ref of profileRows(draft[field])) {
+    const skill = profileRows(sections.skills?.items).find(row => row.id === ref.id);
+    const status = sections.skills?.available !== true || !Array.isArray(sections.skills?.items) ? 'source_unavailable'
+      : !skill ? 'skill_source_missing' : skill.revision !== ref.revision || skill.digest !== ref.digest ? 'skill_revision_changed'
+      : skill.active !== true || skill.contentVerified !== true ? 'skill_not_active' : skill.shadowed === true ? 'source_shadowed' : !Array.isArray(skill.requiredCapabilities) ? 'source_unavailable' : '';
+    const source = { id: ref.id, revision: ref.revision, digest: ref.digest, name: skill?.name || ref.id, optional: ref.optional === true };
+    const capabilities: string[] = status ? [''] : skill!.requiredCapabilities;
+    for (const capability of capabilities) {
+      const key = capability || `skill:${ref.id}:${ref.revision}:${ref.digest}`;
+      let need = grouped.get(key);
+      if (!need) { need = { capability, status, requiredBy: [] }; grouped.set(key, need); }
+      const prior = need.requiredBy.find((row: ProfileData) => row.id === ref.id && row.revision === ref.revision && row.digest === ref.digest);
+      if (prior) prior.optional = prior.optional && source.optional; else need.requiredBy.push(source);
+    }
+  }
+  for (const need of grouped.values()) {
+    if (need.status) continue;
+    if (typeof need.capability !== 'string') { need.status = 'unsupported_reference'; continue; }
+    if (/^plugin_[a-f0-9]{24}$/.test(need.capability)) { need.status = 'unsupported_reference'; need.reasonCode = 'plugin_function_alias_requires_stable_identity'; continue; }
+    if (!need.capability.startsWith('plugin:')) { need.status = 'native_preflight'; continue; }
+    const match = /^plugin:([^:]+):([^:]+)$/.exec(need.capability);
+    if (!match) { need.status = 'unsupported_reference'; continue; }
+    need.pluginId = match[1]; need.tool = match[2];
+    if (sections.plugins?.available !== true || !Array.isArray(sections.plugins?.items)) { need.status = 'source_unavailable'; continue; }
+    const plugin = profileRows(sections.plugins.items).find(row => row.id === need.pluginId);
+    if (!plugin) { need.status = 'missing_installation'; continue; }
+    need.plugin = plugin;
+    if (['needs_authorization', 'needs_discovery'].includes(plugin.mcpStatus)) { need.status = plugin.mcpStatus; continue; }
+    if (typeof plugin.enabled !== 'boolean' || !Array.isArray(plugin.tools) || typeof plugin.installationId !== 'string' || !plugin.installationId || !Number.isSafeInteger(plugin.stateRevision) || typeof plugin.manifestDigest !== 'string') { need.status = 'source_unavailable'; continue; }
+    if (!plugin.enabled) { need.status = 'plugin_disabled'; continue; }
+    const tool = profileRows(plugin.tools).find(row => row.name === need.tool);
+    if (!tool) { need.status = 'tool_missing'; continue; }
+    if (typeof tool.granted !== 'boolean') { need.status = 'source_unavailable'; continue; }
+    if (!tool.granted) { need.status = 'tool_grant_required'; continue; }
+    const selected = profileRows(draft.pluginRefs).find(row => row.id === plugin.id);
+    need.status = selected && pluginBinding(selected) !== pluginBinding(plugin) ? 'selection_changed'
+      : selected?.tools?.includes(need.tool) ? 'selected' : 'ready_to_add';
+  }
+  return [...grouped.values()];
+}
+/** Explicit draft action only. Re-evaluate native choices and never replace a stale
+ * installation binding or relax an existing optional/required selection. */
+export function profileAddRequiredTools(draft: ProfileData, sections: ProfileData): ProfileData {
+  let next = copy(draft);
+  for (const need of profileSkillDependencies(draft, sections)) if (need.status === 'ready_to_add') {
+    const original = profileRows(draft.pluginRefs).find(row => row.id === need.pluginId), prior = profileRows(next.pluginRefs).find(row => row.id === need.pluginId);
+    next = profilePluginTool(next, need.plugin, need.tool, true);
+    if (!original) next.pluginRefs.find((row: ProfileData) => row.id === need.pluginId).optional = (!prior || prior.optional === true) && need.requiredBy.every((row: ProfileData) => row.optional === true);
+  }
+  return next;
+}
 export function profileModel(draft: ProfileData, purpose: string, reference: ProfileData | null): ProfileData {
   if (!/^(MAIN|SUMMARY|RELAY|MEMBER(?:\.[A-Za-z0-9_-]{1,60})?)$/.test(purpose)) throw new Error('请选择原主任务、摘要、网关或实际成员用途。');
   if (purpose === 'RELAY' && reference?.kind === 'exact' && String(reference.connectionId).startsWith('account:')) throw new Error('ChatGPT 账号模型仅供本应用使用，不能作为外部网关模型。');
@@ -29,9 +95,8 @@ export function profileAsset(draft: ProfileData, field: string, source: ProfileD
 }
 export function profilePluginTool(draft: ProfileData, plugin: ProfileData, tool: string, selected: boolean): ProfileData {
   const next = copy(draft), old = profileRows(next.pluginRefs).find(row => row.id === plugin.id);
-  const binding = (value: ProfileData) => profileReferenceKey(Object.fromEntries(['id', 'installationId', 'stateRevision', 'manifestDigest'].map(key => [key, value[key]])));
   if (selected && (plugin.enabled !== true || !profileRows(plugin.tools).some(row => row.name === tool && row.granted === true))) throw new Error('请先在原插件页审阅这项工具的权限。');
-  let tools: string[] = old && binding(old) === binding(plugin) ? [...old.tools] : [];
+  let tools: string[] = old && pluginBinding(old) === pluginBinding(plugin) ? [...old.tools] : [];
   tools = tools.filter(name => name !== tool); if (selected) tools.push(tool);
   next.pluginRefs = profileRows(next.pluginRefs).filter(row => row.id !== plugin.id);
   if (tools.length) next.pluginRefs.push({ id: plugin.id, installationId: plugin.installationId, stateRevision: plugin.stateRevision, manifestDigest: plugin.manifestDigest, tools, optional: old?.optional === true });

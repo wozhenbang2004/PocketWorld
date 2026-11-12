@@ -246,7 +246,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   }))));
   const askButler = (request: TeamButlerRequest = {}) => {
     if (!onAskButler || busy || materialBusy) return;
-    leaveWithDrafts(() => onAskButler(request));
+    const teamId = reading?.kind === 'definition' ? label(reading.definition?.id) : reading?.kind === 'run' ? label(reading.run?.teamId) : '';
+    leaveWithDrafts(() => onAskButler({ ...request, ...(teamId ? { teamId } : {}) }));
   };
   const openResearchTask = (memberId: string, record: TeamResearchRecord) => {
     const original = currentReading.current;

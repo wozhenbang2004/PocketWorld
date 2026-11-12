@@ -9,8 +9,9 @@ import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Comparator;
+import java.util.Collection;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -23,7 +24,27 @@ import org.json.JSONTokener;
 /** Read-only definitions inside one original native capability scope. It owns no grants or executor. */
 public final class ScopedToolCatalog {
     public static final String SEARCH_TOOL="tools_search";
-    public static final int MAX_TOOLS=100,MAX_PAGE_TOOLS=12,MAX_PAGE_BYTES=48*1024,MAX_CATALOG_BYTES=24*1024*1024;
+    public static final int MAX_TOOLS=512,MAX_PAGE_TOOLS=12,MAX_PAGE_BYTES=48*1024,MAX_CATALOG_BYTES=24*1024*1024;
+    public static final int MAX_REQUEST_TOOLS=64,MAX_REQUEST_BYTES=192*1024,MAX_MODEL_TOOLS=96,MAX_MODEL_BYTES=256*1024;
+    /** No partial schemas or full-catalog fallback when mandatory definitions cannot fit. */
+    public static final class RequestBudgetExceeded extends IllegalStateException {
+        public final int toolCount,definitionBytes,maximumTools,maximumBytes;
+        private RequestBudgetExceeded(int count,int bytes,int maximumTools,int maximumBytes){
+            super("本次完整工具定义需要 "+count+" 个 / "+bytes+" 字节，超过单轮 "+maximumTools+" 个 / "+maximumBytes+" 字节的范围。请缩小本次工具选择；未截断参数定义或改用全量工具请求。");
+            this.toolCount=count;this.definitionBytes=bytes;this.maximumTools=maximumTools;this.maximumBytes=maximumBytes;
+        }
+    }
+    private record RequestSize(int count,int bytes) {
+        boolean fits(){return count<=MAX_REQUEST_TOOLS&&bytes<=MAX_REQUEST_BYTES;}
+        void requireFits(){if(!fits())throw new RequestBudgetExceeded(count,bytes,MAX_REQUEST_TOOLS,MAX_REQUEST_BYTES);}
+    }
+    public static boolean withinRequestBudget(JSONArray definitions){return definitions.length()<=MAX_REQUEST_TOOLS&&utf8(definitions.toString()).length<=MAX_REQUEST_BYTES;}
+    public static void requireRequestBudget(JSONArray definitions){new RequestSize(definitions.length(),utf8(definitions.toString()).length).requireFits();}
+    /** Called after the original Runner has merged and filtered its own resident control tools. */
+    public static void requireModelRequestBudget(JSONArray definitions){
+        int bytes=utf8(definitions.toString()).length;
+        if(definitions.length()>MAX_MODEL_TOOLS||bytes>MAX_MODEL_BYTES)throw new RequestBudgetExceeded(definitions.length(),bytes,MAX_MODEL_TOOLS,MAX_MODEL_BYTES);
+    }
     public enum SourceKind { NATIVE, PLUGIN, EXTENSION, UNKNOWN }
     /** Supplied by the original native route/installation owner; never decoded from model arguments. */
     public record SourcePin(SourceKind kind,String installationId,String version,String identityDigest) {
@@ -53,20 +74,25 @@ public final class ScopedToolCatalog {
     public static final class Page {
         private final String value;
         private final Set<String> identities;
-        private Page(JSONObject value,Set<String> identities){this.value=value.toString();this.identities=Set.copyOf(identities);}
+        private Page(JSONObject value,Set<String> identities){this.value=value.toString();this.identities=java.util.Collections.unmodifiableSet(new LinkedHashSet<>(identities));}
         public JSONObject view()throws Exception{return new JSONObject(value);}
         public Set<String> identities(){return identities;}
     }
-    private record Entry(String name,String description,String definition,String metadata,String identity,boolean resident) { }
+    private record Entry(String name,String description,String definition,String metadata,String identity,boolean resident,int bytes) { }
     private record SearchMatch(Entry entry,int score) { }
     private final CapabilitySnapshot scope;
     private final String taskId,runId,revision;
     private final int epoch;
     private final RunControl original;
     private final Map<String,Entry> entries;
+    private final Map<String,Entry> identities;
+    private final int searchBytes;
     private volatile boolean retired;
 
-    private ScopedToolCatalog(CapabilitySnapshot scope,String taskId,String runId,int epoch,RunControl original,Map<String,Entry> entries,String revision){this.scope=scope;this.taskId=taskId;this.runId=runId;this.epoch=epoch;this.original=original;this.entries=Map.copyOf(entries);this.revision=revision;}
+    private ScopedToolCatalog(CapabilitySnapshot scope,String taskId,String runId,int epoch,RunControl original,Map<String,Entry> entries,String revision)throws Exception{
+        this.scope=scope;this.taskId=taskId;this.runId=runId;this.epoch=epoch;this.original=original;this.entries=Map.copyOf(entries);this.revision=revision;
+        Map<String,Entry> byIdentity=new TreeMap<>();for(Entry row:entries.values())byIdentity.put(row.identity,row);identities=Map.copyOf(byIdentity);searchBytes=utf8(searchDefinition().toString()).length;
+    }
 
     public static ScopedToolCatalog capture(CapabilitySnapshot scope,String taskId,String runId,int epoch,RunControl original,
                                             JSONArray definitions,Map<String,SourcePin> sources,Set<String> residentNames)throws Exception {
@@ -85,7 +111,7 @@ public final class ScopedToolCatalog {
             String identity=fingerprint(metadata);metadata.put("identity",identity).put("description",excerpt(description,160));
             String value=definition.toString();boolean resident=pin.kind()==SourceKind.UNKNOWN||residentNames.contains(name)||utf8(value).length>MAX_PAGE_BYTES-8192||requiresOriginalTransport(definition);
             metadata.put("resident",resident);
-            entries.put(name,new Entry(name,description,value,metadata.toString(),identity,resident));
+            entries.put(name,new Entry(name,description,value,metadata.toString(),identity,resident,utf8(value).length));
         }
         if(!entries.keySet().equals(sources.keySet()))throw new SecurityException("tool_source_map_not_exact");
         if(!sources.equals(scope.sourcePinsFor(taskId,runId,epoch,original,entries.keySet())))throw new SecurityException("tool_sources_not_original_snapshot_pins");
@@ -98,15 +124,43 @@ public final class ScopedToolCatalog {
         try{scope.catalogTools(taskId,runId,epoch,original);}catch(Exception stale){retired=true;throw stale;}
     }
     public String revision(){return revision;}
-    public boolean containsIdentity(String identity){return entries.values().stream().anyMatch(row->row.identity.equals(identity));}
+    /** Apply only when discovery is selected; a complete small surface may be cheaper than search. */
+    public void requireDiscoveryBudget()throws Exception {
+        check();requestSize(Set.of()).requireFits();
+        // Every discoverable complete schema must fit with the required resident surface.
+        // Otherwise paging could strand a real tool behind a cursor that can never advance.
+        for(Entry row:entries.values())if(!row.resident)requestSize(Set.of(row.identity)).requireFits();
+        check();
+    }
+    public boolean containsIdentity(String identity){return identities.containsKey(identity);}
+    /** Metadata lookup only; original admission is still required before publication or execution. */
+    public String deferredIdentity(String name){Entry row=entries.get(name);return row==null||row.resident?null:row.identity;}
+    /** All current-batch disclosures are compulsory next turn; older activations use the remaining budget. */
+    public Set<String> selectPublished(Set<String> requiredNext,Collection<String> oldestToNewest)throws Exception {
+        check();Set<String> selected=new LinkedHashSet<>(requiredNext);requireIdentities(selected);requestSize(selected).requireFits();
+        List<String> recent=new ArrayList<>(oldestToNewest);
+        for(int i=recent.size()-1;i>=0;i--){String identity=recent.get(i);Entry row=identities.get(identity);if(row==null||row.resident||selected.contains(identity))continue;
+            selected.add(identity);if(!requestSize(selected).fits())selected.remove(identity);
+        }
+        check();return java.util.Collections.unmodifiableSet(new LinkedHashSet<>(selected));
+    }
+    private void requireIdentities(Set<String> selected){for(String identity:selected){Entry row=identities.get(identity);if(row==null||row.resident)throw new SecurityException("tool_publication_identity_not_deferred_in_original_catalog");}}
+    private RequestSize requestSize(Set<String> selected){
+        int count=0,bytes=2;boolean hidden=false;
+        for(Entry row:entries.values())if(row.resident||selected.contains(row.identity)){if(count++>0)bytes++;bytes+=row.bytes;}else hidden=true;
+        if(hidden){if(count++>0)bytes++;bytes+=searchBytes;}
+        return new RequestSize(count,bytes);
+    }
     public boolean exposes(String name,Set<String> activated)throws Exception{check();if(SEARCH_TOOL.equals(name))return hasHidden(activated);Entry row=entries.get(name);return row!=null&&(row.resident||activated.contains(row.identity));}
     public JSONArray requestTools(Set<String> activated)throws Exception {
-        check();JSONArray tools=new JSONArray();for(Entry row:ordered())if(row.resident||activated.contains(row.identity))tools.put(new JSONObject(row.definition));if(hasHidden(activated))tools.put(searchDefinition());check();return tools;
+        check();requireIdentities(activated);requestSize(activated).requireFits();JSONArray tools=new JSONArray();for(Entry row:ordered())if(row.resident||activated.contains(row.identity))tools.put(new JSONObject(row.definition));if(hasHidden(activated))tools.put(searchDefinition());requireRequestBudget(tools);check();return tools;
     }
     private boolean hasHidden(Set<String> activated){for(Entry row:entries.values())if(!row.resident&&!activated.contains(row.identity))return true;return false;}
     public JSONObject summary(Set<String> activated)throws Exception {
         check();JSONArray rows=new JSONArray();int hidden=0;for(Entry row:ordered())if(!row.resident&&!activated.contains(row.identity)){hidden++;if(rows.length()<12)rows.put(new JSONObject(row.metadata));}
-        JSONObject out=new JSONObject().put("format","pocketworld.tool-catalog-summary.v1").put("catalogRevision",revision).put("tools",rows).put("hiddenCount",hidden).put("listedCount",rows.length()).put("truncated",hidden>rows.length()).put("executionAuthorized",false);check();return out;
+        RequestSize size=requestSize(activated);
+        JSONObject out=new JSONObject().put("format","pocketworld.tool-catalog-summary.v1").put("catalogRevision",revision).put("tools",rows).put("hiddenCount",hidden).put("listedCount",rows.length()).put("truncated",hidden>rows.length()).put("executionAuthorized",false)
+                .put("publishedDefinitionCount",size.count).put("publishedDefinitionBytes",size.bytes).put("requestToolLimit",MAX_REQUEST_TOOLS).put("requestByteLimit",MAX_REQUEST_BYTES).put("olderSchemasMayNeedRediscovery",true);check();return out;
     }
     /** Reject obsolete paging arguments before the native read claim is created. */
     public void validateSearch(SearchRequest request)throws Exception {
@@ -118,8 +172,10 @@ public final class ScopedToolCatalog {
         }
         check();
     }
-    public Page search(SearchRequest request)throws Exception {
-        check();String query=normalizeSearch(request.query);String[] terms=query.split(" ");List<SearchMatch> ranked=new ArrayList<>();
+    public Page search(SearchRequest request)throws Exception {return search(request,Set.of());}
+    /** Reservations include only original issued pages, never model-supplied activation claims. */
+    public Page search(SearchRequest request,Set<String> requiredNext)throws Exception {
+        check();requireIdentities(requiredNext);requestSize(requiredNext).requireFits();String query=normalizeSearch(request.query);String[] terms=query.split(" ");List<SearchMatch> ranked=new ArrayList<>();
         for(Entry row:ordered()){
             int score=searchScore(row,query,terms);if(score>0)ranked.add(new SearchMatch(row,score));
         }
@@ -130,13 +186,20 @@ public final class ScopedToolCatalog {
             if(row.resident){publishedCount++;if(publishedMatches.length()<MAX_PAGE_TOOLS)publishedMatches.put(row.name);}
             else matches.add(row);
         }
-        int offset=cursorOffset(request,matches.size());JSONArray rows=new JSONArray();Set<String> found=new HashSet<>();int next=offset;
+        int offset=cursorOffset(request,matches.size());JSONArray rows=new JSONArray();Set<String> found=new LinkedHashSet<>(),reserved=new LinkedHashSet<>(requiredNext);int next=offset;boolean nextRequestRequired=false;
         while(next<matches.size()&&rows.length()<request.limit){Entry row=matches.get(next);JSONObject result=new JSONObject(row.metadata).put("definition",new JSONObject(row.definition));
-            JSONArray candidate=new JSONArray(rows.toString()).put(result);if(utf8(pageValue(request,candidate,matches.size(),next+1,publishedMatches,publishedCount).toString()).length>MAX_PAGE_BYTES)break;
-            rows.put(result);found.add(row.identity);next++;
+            Set<String> candidateIdentities=new LinkedHashSet<>(reserved);candidateIdentities.add(row.identity);
+            if(!requestSize(candidateIdentities).fits()){nextRequestRequired=true;break;}
+            JSONArray candidate=new JSONArray(rows.toString()).put(result);
+            // Leave room for the original session's task/run/discovery receipt envelope.
+            if(Math.max(utf8(pageValue(request,candidate,matches.size(),next+1,publishedMatches,publishedCount,false).toString()).length,
+                    utf8(pageValue(request,candidate,matches.size(),next+1,publishedMatches,publishedCount,true).toString()).length)>MAX_PAGE_BYTES-1024)break;
+            rows.put(result);found.add(row.identity);reserved.add(row.identity);next++;
         }
-        if(next==offset&&next<matches.size())throw new IllegalStateException("tool_schema_exceeds_discovery_transport");
-        JSONObject value=pageValue(request,rows,matches.size(),next,publishedMatches,publishedCount);check();return new Page(value,found);
+        if(next==offset&&next<matches.size()&&!nextRequestRequired)throw new IllegalStateException("tool_schema_exceeds_discovery_transport");
+        JSONObject value=pageValue(request,rows,matches.size(),next,publishedMatches,publishedCount,nextRequestRequired);
+        if(nextRequestRequired&&next==offset&&!request.cursor.isEmpty())value.put("nextCursor",request.cursor);
+        check();return new Page(value,found);
     }
     /** Match every keyword across the existing name/description, then prefer exact names
      * and phrases. This is bounded lexical discovery, not inferred capability or authority. */
@@ -155,11 +218,13 @@ public final class ScopedToolCatalog {
     private static String normalizeSearch(String value){
         return Normalizer.normalize(value,Normalizer.Form.NFKC).toLowerCase(Locale.ROOT).replaceAll("[\\p{javaWhitespace}\\p{Z}]+"," ").trim();
     }
-    private JSONObject pageValue(SearchRequest request,JSONArray rows,int total,int next,JSONArray publishedMatches,int publishedCount)throws Exception {
-        boolean more=next<total;String status=total==0?(publishedCount>0?"already_available":"no_match"):rows.length()==0?"end_of_results":"matched";
+    private JSONObject pageValue(SearchRequest request,JSONArray rows,int total,int next,JSONArray publishedMatches,int publishedCount,boolean nextRequestRequired)throws Exception {
+        boolean more=next<total;String status=nextRequestRequired&&rows.length()==0?"next_request_required":total==0?(publishedCount>0?"already_available":"no_match"):rows.length()==0?"end_of_results":"matched";
         return new JSONObject().put("format","pocketworld.tool-discovery.v1").put("catalogRevision",revision).put("query",request.query).put("matching","all_keywords_name_description_v2").put("status",status).put("tools",rows)
                 .put("alreadyPublishedToolNames",publishedMatches).put("alreadyPublishedCount",publishedCount).put("alreadyPublishedTruncated",publishedCount>publishedMatches.length())
-                .put("matchedCount",total).put("returnedCount",rows.length()).put("truncated",more).put("nextCursor",more?cursor(request,next):JSONObject.NULL).put("executionAuthorized",false).put("scopeExpanded",false);
+                .put("matchedCount",total).put("returnedCount",rows.length()).put("truncated",more).put("nextCursor",more?cursor(request,next):JSONObject.NULL).put("executionAuthorized",false).put("scopeExpanded",false)
+                .put("nextRequestRequired",nextRequestRequired).put("requestToolLimit",MAX_REQUEST_TOOLS).put("requestByteLimit",MAX_REQUEST_BYTES)
+                .put("continuation",nextRequestRequired?"Use the checkpointed schemas on the next model request before continuing this unchanged cursor; no unread tool was skipped.":"New schemas become usable only on the next model request after the original receipt checkpoint.");
     }
     private String cursor(SearchRequest request,int offset)throws Exception {
         JSONObject value=new JSONObject().put("v",2).put("catalog",revision).put("query",digest(normalizeSearch(request.query))).put("offset",offset).put("limit",request.limit);
@@ -180,7 +245,7 @@ public final class ScopedToolCatalog {
     public static JSONObject searchDefinition()throws Exception {
         JSONObject properties=new JSONObject().put("query",new JSONObject().put("type","string").put("minLength",1).put("maxLength",500))
                 .put("limit",new JSONObject().put("type","integer").put("minimum",1).put("maximum",MAX_PAGE_TOOLS)).put("cursor",new JSONObject().put("type","string").put("maxLength",1600));
-        return new JSONObject().put("type","function").put("function",new JSONObject().put("name",SEARCH_TOOL).put("description","Search the current native scope using a tool name or a few name/description keywords separated by spaces. Every keyword must match; exact names and phrases rank first. Matching ignores case, surrounding/repeated spaces and full-width variants; it is lexical, not semantic. tools returns exact deferred schemas; alreadyPublishedToolNames identifies matching resident tools with schemas already in this request. already_available does not mean missing. Discovery is metadata, never permission. Keep the same query and limit with a continuation cursor; restart with an empty cursor after changing them or the catalog. New schemas are available on the next model request after the original receipt checkpoint.")
+        return new JSONObject().put("type","function").put("function",new JSONObject().put("name",SEARCH_TOOL).put("description","Search the current native scope using a tool name or a few name/description keywords separated by spaces. Every keyword must match; exact names and phrases rank first. Matching ignores case, surrounding/repeated spaces and full-width variants; it is lexical, not semantic. tools returns exact deferred schemas; alreadyPublishedToolNames identifies matching resident tools with schemas already in this request. already_available does not mean missing. Discovery is metadata, never permission. Keep the same query and limit with a continuation cursor; restart with an empty cursor after changing them or the catalog. New schemas are available only on the next model request after the original receipt checkpoint. Definitions have count and byte budgets: nextRequestRequired or next_request_required means stop searching in this batch, use the newly published tools next turn, then continue the unchanged cursor. Older schemas may leave a later request and can be rediscovered by exact name; never call a tool absent from this request's definitions.")
                 .put("parameters",new JSONObject().put("type","object").put("properties",properties).put("required",new JSONArray().put("query")).put("additionalProperties",false)));
     }
     private static boolean requiresOriginalTransport(Object value)throws Exception {

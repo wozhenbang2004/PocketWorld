@@ -154,9 +154,9 @@ internal class PocketWebPlans(private val controller: PocketWorldController) {
             "plans.reviewApproval" -> {
                 fields(args, "viewHandle", "settings")
                 val plan = read(text(args, "viewHandle")); val input = args.getJSONObject("settings")
-                fields(input, "mode", "maxTaskAdmissions", "phoneMode", "modelObservationConsent", "allowPrivateArtifactFreeze", "businessEventConsent", "hours", "zoneId", "quietHours", "requiresNetwork", "requiresCharging", "minBatteryPercent")
+                fields(input, "mode", "maxTaskAdmissions", "phoneMode", "modelObservationConsent", "allowPrivateArtifactFreeze", "businessEventConsent", "notifyChanges", "hours", "zoneId", "quietHours", "requiresNetwork", "requiresCharging", "minBatteryPercent")
                 require(text(input, "mode", 16) in setOf("manual", "automatic")); require(text(input, "phoneMode", 16) in setOf("background", "main_screen"))
-                for (key in listOf("modelObservationConsent", "allowPrivateArtifactFreeze", "businessEventConsent", "requiresNetwork", "requiresCharging")) require(input.opt(key) is Boolean)
+                for (key in listOf("modelObservationConsent", "allowPrivateArtifactFreeze", "businessEventConsent", "notifyChanges", "requiresNetwork", "requiresCharging")) require(input.opt(key) is Boolean)
                 require(input.getBoolean("modelObservationConsent")) { "请明确核对需要发送给模型的观察范围" }
                 if (plan.getJSONArray("steps").objects().any { it.optJSONObject("businessWait") != null }) require(input.getBoolean("businessEventConsent")) { "请明确核对认证来源触发范围" }
                 integer(input, "maxTaskAdmissions", 1, 1000); integer(input, "minBatteryPercent", 0, 100); ZoneId.of(text(input, "zoneId", 128))

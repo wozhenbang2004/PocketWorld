@@ -115,11 +115,13 @@ final class OwnerInputQueue {
         if (end > 0 && end < content.length() && Character.isHighSurrogate(content.charAt(end - 1)) && Character.isLowSurrogate(content.charAt(end))) end--;
         result.put("content", content.substring(0, end)).put("contentChars", content.length()).put("contentTruncated", end < content.length()).put("attachmentCount", row.optJSONArray("attachments") == null ? 0 : row.getJSONArray("attachments").length())
                 .put("sourceReferenceCount", row.optJSONArray("ownerSourceRefs") == null ? 0 : row.getJSONArray("ownerSourceRefs").length())
-                .put("previewReferenceCount", row.optJSONArray("ownerPreviewRefs") == null ? 0 : row.getJSONArray("ownerPreviewRefs").length());
+                .put("previewReferenceCount", row.optJSONArray("ownerPreviewRefs") == null ? 0 : row.getJSONArray("ownerPreviewRefs").length())
+                .put("objectReferenceCount", row.optJSONArray("ownerObjectRefs") == null ? 0 : row.getJSONArray("ownerObjectRefs").length());
         if (detail) {
             result.put("attachments", row.optJSONArray("attachments") == null ? new JSONArray() : new JSONArray(row.getJSONArray("attachments").toString()));
             if (row.has("ownerSourceRefs")) result.put("ownerSourceRefs", new JSONArray(row.getJSONArray("ownerSourceRefs").toString()));
             if (row.has("ownerPreviewRefs")) result.put("ownerPreviewRefs", new JSONArray(row.getJSONArray("ownerPreviewRefs").toString()));
+            if (row.has("ownerObjectRefs")) result.put("ownerObjectRefs", new JSONArray(row.getJSONArray("ownerObjectRefs").toString()));
         }
         return result;
     }

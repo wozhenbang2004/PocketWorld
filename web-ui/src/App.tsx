@@ -65,7 +65,7 @@ import {MessageQuote,type MessageQuoteTarget} from './MessageQuote';
 import {MessageOriginReader,type MessageOriginTarget} from './MessageOriginReader';
 import {ReadingView} from './ReadingView';
 import {ReadingContext,type ReadingDocument,type ReadingSnapshot} from './reading-context';
-import {ComposerSourceReferences} from './ComposerSourceReferences';
+import {ComposerSourceReferences,ComposerObjectReferences} from './ComposerSourceReferences';
 import {ComposerPreviewReferences} from './ComposerPreviewReferences';
 import {ProjectPreviewPane,useProjectPreview} from './ProjectPreviewPane';
 import {ProjectFileEditor} from './ProjectFileEditor';
@@ -559,7 +559,7 @@ export default function App(){
  },[invalidateContinuation]);
  const backFromTask=useCallback(()=>{if(taskMenuOpen){setTaskMenuOpen(false);return}if(deviceScopeBack.current?.()||capabilityBack.current?.()||livePreviewBack.current?.()||taskTransientBack.current?.())return;if(taskLayer==='scope'){showTaskLayer('goal');return}const origin=taskReconciliationOrigin.current;if(origin?.openedId===taskId){openTask(origin.taskId,origin.layer,false,origin.history);return}void closeTask().then(closed=>{if(closed&&searchReturn)showWorkSearch()})},[taskMenuOpen,taskId,taskLayer,showTaskLayer,openTask,closeTask,searchReturn,showWorkSearch]);
  const selectConversation=useCallback((id:string)=>{void navigate('chat',()=>{if(can('conversation.select'))run('conversation.select',{id})});},[can,run,navigate]);
- const returnToTaskConversation=async(task:Task)=>{
+ const returnToTaskConversation=async(task:Task,associate=false)=>{
   const conversationId=privateTaskConversationId(task);
   if(!conversationId||returningConversation||bridge.getState().state.chatSubmitting||!can('conversation.select'))return;
   const request=++conversationReturnRequest.current,documentEpoch=bridge.getDocumentEpoch(),navigation=navigationWindow.current;
@@ -597,7 +597,8 @@ export default function App(){
    // instead. Confirm both the identity and its editable conversation surface.
    if(!await waitForSnapshot(()=>bridge.getState().state.conversationId===conversationId&&!bridge.getState().state.conversationReader,'尚未确认已回到所属对话，请从对话列表重新打开。'))return;
    if(current()&&navigationWindow.current===destination&&bridge.getState().state.conversationId===conversationId){
-    if(intent!=='chat')changeIntent('chat');
+    if(!await changeIntent('chat')||!atDestination())return;
+    if(associate&&!await stageButlerObject({kind:'work',id:task.id,runId:task.raw?.runId,epoch:task.raw?.coordinatorEpoch},atDestination))return;
     requestAnimationFrame(()=>{if(current()&&navigationWindow.current===destination&&bridge.getState().state.conversationId===conversationId&&!bridge.getState().state.conversationReader)workspace.current?.querySelector<HTMLTextAreaElement>('.pw-composer-row textarea')?.focus({preventScroll:true})});
    }
   }catch(error){if(current()&&navigationWindow.current===navigation+1)setLocalError(error instanceof Error?error.message:String(error))}
@@ -610,7 +611,7 @@ export default function App(){
   if(await openRelatedWorkspace('projects')&&navigationWindow.current===navigation+1)run('projects.select',{id:projectId});
  };
  const previewBlocked=!!(searchOriginal||projectWorkReviewOpen||providedMemoryMessage||conversationMemoryOpen||permissionOptionsOpen||organizationTarget||state.attachmentWorkspace?.open||phoneViewerExpanded||workOpen||commandOpen||taskOpen||projectPickerOpen||fileDisplayOpen||newProjectOpen||newFileOpen||phoneReview||voiceReview||state.chatAttachmentPickerOpen||messageQuoteTarget||messageOriginTarget||sourceSelection||skillDraftTarget||memoryDraftTarget||routeReferenceTarget||state.quickPanelVoice);
- const projectPreview=useProjectPreview({value:state.projectPreview,projectId:String(state.projectId||''),resumeRevision:Number(obj(snapshot?.view).resumeRevision||0),active:route==='projects'&&!state.filePath,blocked:previewBlocked,can,onReturned:()=>navigate('chat'),onPackageTask:(id,entry='process')=>openTask(id,entry)});
+ const projectPreview=useProjectPreview({value:state.projectPreview,exportValue:state.projectPackageExport,projectId:String(state.projectId||''),resumeRevision:Number(obj(snapshot?.view).resumeRevision||0),active:route==='projects'&&!state.filePath,blocked:previewBlocked,can,onReturned:()=>navigate('chat'),onPackageTask:(id,entry='process')=>openTask(id,entry)});
  const packageSequence=useRef(0),packageNavigation=useRef<PackageNavigation|null>(null);
  const [packageRequest,setPackageRequest]=useState(0),[packageOpening,setPackageOpening]=useState(false),[packageReady,setPackageReady]=useState<{request:PackageNavigation;choices:PackagePreviewChoices}|null>(null);
  const packageLocation=useRef({route,navigationRevision,projectId:String(state.projectId||''),resumeRevision:Number(obj(snapshot?.view).resumeRevision||0),blocked:previewBlocked});
@@ -726,6 +727,37 @@ export default function App(){
      return false;
    });
  };
+ const stageButlerObject=async(reference:Json,current:()=>boolean)=>{
+   if(!current())return false;
+   const draft=obj(bridge.getState().composer);
+   if(draft.ready!==true||!draft.key||!Number.isSafeInteger(draft.epoch)||!Number.isSafeInteger(draft.revision)||!can('composer.object.add'))throw new Error('管家输入尚未就绪，请稍后关联当前对象。');
+   const receipt=await act('composer.object.add',{key:draft.key,epoch:draft.epoch,revision:draft.revision,reference});
+   if(!current())return false;
+   if(receipt?.added!==true)throw new Error('对象关联结果尚待核对，请查看原草稿。');
+   return new Promise<boolean>((resolve,reject)=>{
+     let unsubscribe=()=>{};
+     const timer=window.setTimeout(()=>{unsubscribe();if(current())reject(new Error('尚未确认关联后的草稿，请查看管家输入。'));else resolve(false)},5000);
+     const check=()=>{
+       if(!current()){clearTimeout(timer);unsubscribe();resolve(false);return}
+       const next=obj(bridge.getState().composer);
+       if(next.key!==draft.key||next.epoch!==draft.epoch){clearTimeout(timer);unsubscribe();resolve(false);return}
+       if(next.revision>=draft.revision&&(Array.isArray(next.objectRefs)?next.objectRefs:[]).some((ref:Json)=>Object.entries(reference).every(([key,value])=>ref[key]===value))){clearTimeout(timer);unsubscribe();resolve(true)}
+     };
+     unsubscribe=bridge.subscribe(check);check();
+   });
+ };
+ const askButlerAbout=(reference:Json)=>{
+   if(state.chatSubmitting||state.phoneSubmitting||phoneAction.current||phoneReviewPending){setLocalError('请先等待当前输入处理完成。');return;}
+   void navigate('butler',()=>{
+     const navigation=navigationWindow.current,documentEpoch=bridge.getDocumentEpoch();
+     const current=()=>navigationWindow.current===navigation&&bridge.getDocumentEpoch()===documentEpoch&&!document.hidden;
+     void changeIntent('chat').then(async changed=>{
+       if(!changed||!current()||!await stageButlerObject(reference,current))return;
+       setLocalStatus('已关联到管家输入，可以继续提问。');
+       requestAnimationFrame(()=>{if(current())workspace.current?.querySelector<HTMLTextAreaElement>('.pw-composer-row textarea:not(:disabled)')?.focus({preventScroll:true})});
+     }).catch(error=>{if(current())setLocalError(error instanceof Error?error.message:'对象尚未关联，请核对原草稿。')});
+   });
+ };
  const askButlerForTeam=(request:TeamButlerRequest={})=>{
    if(state.chatSubmitting||state.phoneSubmitting||phoneAction.current||phoneReviewPending){setLocalError('请先等待当前输入处理完成，协作草稿仍保留。');return;}
    void navigate('butler',()=>{
@@ -733,6 +765,7 @@ export default function App(){
      const current=()=>navigationWindow.current===navigation&&bridge.getDocumentEpoch()===documentEpoch&&!document.hidden;
      void changeIntent('chat').then(async changed=>{
        if(!changed||!current())return;
+       if(request.teamId&&!await stageButlerObject({kind:'team',id:request.teamId},current))return;
        const goal=typeof request.goal==='string'?request.goal.trim():'';
        if(goal){
          const draft=obj(bridge.getState().composer);
@@ -746,7 +779,7 @@ export default function App(){
          }catch(error){if(current())setLocalError(error instanceof Error?error.message:'原输入已变化，协作目标没有覆盖当前草稿。');return;}
        }
        requestAnimationFrame(()=>{if(current())workspace.current?.querySelector<HTMLTextAreaElement>('.pw-composer-row textarea:not(:disabled)')?.focus({preventScroll:true})});
-     });
+     }).catch(error=>{if(current())setLocalError(error instanceof Error?error.message:'团队尚未关联，请核对原草稿。')});
    });
  };
  const openWorkTeam=(team:OwnerWorkTeam)=>{
@@ -1029,7 +1062,7 @@ export default function App(){
   const ordinaryResume=!project&&!review?.ownerQuestion&&!approved.length&&!unresolved.length&&actionNames.includes('tasks.resume')&&actionNames.every(action=>['tasks.resume','tasks.scope','tasks.plan.enter','tasks.deleteScreenshot'].includes(action));
   const resumeFeedback=<Accordion variant="divided" className="pw-compact-disclosures" expandedKeys={reviewFeedbackOpen?['resume-feedback']:[]} onExpandedChange={keys=>setReviewFeedbackOpen(keys.has('resume-feedback'))}><AccordionItem id="resume-feedback" title="补充说明（可选）" description={reviewNote?'已填写':undefined}><TextAreaField label="本次补充" value={reviewNote} onChange={setReviewNote} placeholder="需要调整的内容" isDisabled={protectedDisabled}/></AccordionItem></Accordion>;
   const decisionFirst=(!!review?.ownerQuestion||actionNames.includes('tasks.approve')&&approved.length>0)&&!actionNames.includes('tasks.confirm')&&!actionNames.includes('tasks.resolve');
-  const evidence=<div key="task-evidence" className="pw-task-evidence">{decisionFirst&&<Button variant="ghost" className="pw-task-context-toggle" aria-expanded={taskContextExpanded} aria-controls={`pw-task-context-${task.id}`} onClick={()=>setTaskContextExpanded(value=>!value)}>查看任务上下文<IconChevronDown size={16}/></Button>}<div id={`pw-task-context-${task.id}`} hidden={decisionFirst&&!taskContextExpanded}><TaskOutcome task={review&&!reviewStale?review.task:task} messages={messages} active={taskOpen&&!taskOpening&&openedTaskId.current===task.id&&taskLayer==='overview'&&(!decisionFirst||taskContextExpanded)} canReadReport={can('ownerWork.report.read')} readIdentity={`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}:${navigationRevision}`} onCopy={copyWithLocalFeedback} onOpenAttachment={can('attachments.open')?(messageId,id,sha256)=>run('attachments.open',{messageId,id,sha256}):undefined}/></div></div>;
+  const evidence=<div key="task-evidence" className="pw-task-evidence">{decisionFirst&&<Button variant="ghost" className="pw-task-context-toggle" aria-expanded={taskContextExpanded} aria-controls={`pw-task-context-${task.id}`} onClick={()=>setTaskContextExpanded(value=>!value)}>查看任务上下文<IconChevronDown size={16}/></Button>}<div id={`pw-task-context-${task.id}`} hidden={decisionFirst&&!taskContextExpanded}><TaskOutcome task={review&&!reviewStale?review.task:task} messages={messages} active={taskOpen&&!taskOpening&&openedTaskId.current===task.id&&taskLayer==='overview'&&(!decisionFirst||taskContextExpanded)} canReadReport={can('ownerWork.report.read')} readIdentity={`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}:${navigationRevision}`} onCopy={copyWithLocalFeedback} onOpenProjectPackage={!packageOpening&&!taskOpening&&can('projects.package.preview.inspect')&&can('projects.package.preview.open')&&can('tasks.close')?openTaskPackage:undefined} onOpenAttachment={can('attachments.open')?(messageId,id,sha256)=>run('attachments.open',{messageId,id,sha256}):undefined}/></div></div>;
   const refreshControl=can('tasks.review')&&<IconButton icon={IconRefresh} aria-label={review?'重新核对':'读取可用操作'} title={review?'重新核对':'读取可用操作'} disabled={readingReview||questionPending} onClick={showTaskReview}/>;
   const reviewStatus=<>{readingReview&&<ThinkingLoader phase="正在读取当前任务"/>}{reviewStale&&<p className="pw-error">任务已有新进展，请重新核对后再操作。</p>}{continuation&&<section aria-label="原项目续接回执"><p className="pw-muted" role="status">{continuation.message}</p>{!project&&projectNote&&<Accordion variant="divided"><AccordionItem id="continuation-feedback" title="本次反馈"><p className="pw-approval-copy">{projectNote}</p></AccordionItem></Accordion>}{continuation.status==='unknown'&&can('tasks.review')&&<Button variant="secondary" disabled={readingReview} onClick={showTaskReview}>核对原任务状态</Button>}{['continued','unknown'].includes(continuation.status)&&can('conversation.select')&&<Button variant="ghost" disabled={!!state.chatSubmitting} onClick={()=>selectConversation(continuation.original.conversationId)}>返回原对话，草稿保留</Button>}</section>}{!continuation&&(reviewSubmitted||reviewReceipt)&&!review?.ownerQuestion&&(reviewReceipt?<p className="pw-muted" role="status">{reviewReceipt}</p>:state.taskActionErrors?.[task.id]?<p className="pw-error" role="alert">本次提交未确认。请先重新核对原任务，再决定是否操作。</p>:<p className="pw-muted" role="status">已提交这次决定，等待任务回执。</p>)}</>;
   const decision=(review||reviewPending||continuation||(canReadProject||attention(task))&&can('tasks.review'))&&<div key="task-decision" className="pw-task-decision">
@@ -1088,6 +1121,7 @@ export default function App(){
    <TabPanel id="goal" shouldForceMount hidden={taskLayer!=='goal'&&taskLayer!=='scope'}>
     <div hidden={taskLayer==='scope'} className="pw-work-goal-panel"><WorkGoal task={task}/>
      {privateTaskConversationId(task)&&can('conversation.select')&&<Button variant="ghost" leadingIcon={IconChat} disabled={!!state.chatSubmitting||!!returningConversation} onClick={()=>void returnToTaskConversation(task)}>查看原请求与补充</Button>}
+     {privateTaskConversationId(task)&&(task.raw?.executionRole==='owner_work'||task.raw?.nativeResultHandling===true||task.raw?.ownerWorkPreparation)&&task.raw?.runId&&Number.isSafeInteger(task.raw?.coordinatorEpoch)&&task.raw.coordinatorEpoch>0&&can('conversation.select')&&can('composer.object.add')&&<Button variant="ghost" disabled={!!state.chatSubmitting||!!returningConversation} onClick={()=>void returnToTaskConversation(task,true)}>问管家这件事</Button>}
      {can('tasks.review')&&<Button variant="secondary" leadingIcon={IconShieldCheck} disabled={readingReview||questionPending} onClick={()=>{showTaskLayer('scope');if(!review||reviewStale)refreshReview()}}>查看执行范围与预算</Button>}
     </div>
     {taskLayer==='scope'&&<section className="pw-task-review" aria-label="本次任务范围">
@@ -1198,6 +1232,7 @@ export default function App(){
    {route==='chat'&&hasNewReplies&&<Button variant="secondary" className="pw-new-replies" onClick={goToLatest}>有新回复 · 回到最新</Button>}
    {route==='chat'&&conversationAttention&&conversationAttention.id!==representedPhoneTaskId&&<Button variant="ghost" className="pw-chat-attention" data-task-id={conversationAttention.id} trailingIcon={IconChevronRight} aria-label={`${can('tasks.review')?taskActionLabel(conversationAttention):'查看任务'}：${conversationAttention.goal}`} disabled={taskOpening} onClick={()=>openTask(conversationAttention.id,can('tasks.review')?'review':'overview')}><span className="pw-chat-attention-copy"><small>{can('tasks.review')?taskActionLabel(conversationAttention):'查看任务'}</small><b>{conversationAttention.goal}</b></span></Button>}
    {intent==='chat'&&<ComposerSourceReferences key={`${draftKey}:${draftEpoch}`} composer={composer} disabled={!!state.chatSubmitting||!can('composer.source.remove')}/>}
+   {intent==='chat'&&<ComposerObjectReferences key={`objects:${draftKey}:${draftEpoch}`} composer={composer} disabled={!!state.chatSubmitting||!can('composer.object.remove')}/>}
    {intent==='chat'&&<ComposerPreviewReferences key={`preview:${draftKey}:${draftEpoch}`} composer={composer} disabled={!!state.chatSubmitting||!can('composer.preview.remove')}/>}
    <ChatComposer contextStatus={<>{conversationMemoryMode&&conversationMemoryMode.conversationId===state.conversationId&&!conversationMemoryMode.enabled&&<Button variant="ghost" size="small" onClick={()=>setConversationMemoryOpen(true)}>个人记忆已暂停</Button>}<IconChat size={15} aria-label="当前对话"/></>} controls={<ConversationModelPickerControls/>} status={inputLimitMessage||undefined} sendDisabled={!!inputLimitMessage||!composerModelName||intent==='chat'&&previewRefsUnavailable} sendLabel={inputLimitMessage||(!composerModelName?'请先连接模型':intent==='chat'&&previewRefsUnavailable?'请重新选择预览元素':undefined)} toolbar={<div className="pw-composer-intent">
     <PopoverTrigger isOpen={voiceOptionsOpen} onOpenChange={setVoiceOptionsOpen}><IconButton icon={IconAdd} size="medium" aria-label="添加内容"/><Popover aria-label="添加内容"><PopoverHeader title="添加内容"/>{intent==='chat'&&can('attachments.openPicker')&&<Button variant="ghost" leadingIcon={IconFile} disabled={!!state.chatSubmitting} onClick={()=>{setVoiceOptionsOpen(false);run('attachments.openPicker')}}>添加附件</Button>}{can('voice.start')&&<Button variant="ghost" disabled={!!state.chatSubmitting||!!state.phoneSubmitting} onClick={()=>{setVoiceOptionsOpen(false);run(isListening?'voice.stop':'voice.start',{phone:intent!=='chat'})}}>{isListening?'结束听写':'语音输入'}</Button>}</Popover></PopoverTrigger>
@@ -1307,7 +1342,7 @@ export default function App(){
     <Tabs selectedKey={projectPreview.expanded?'preview':projectSection} onSelectionChange={key=>{if(key==='preview')projectPreview.open();else showProjectSection(key==='files'?'files':'work')}} className="pw-project-tabs">
       <TabList aria-label="项目工作方式"><Tab id="work" icon={IconLayers}>工作</Tab><Tab id="files" icon={IconFolder}>文件</Tab><Tab id="preview" icon={IconPlay} isDisabled={!can('projects.preview')&&!projectPreview.expanded}>预览</Tab></TabList>
       <TabPanel id="work" shouldForceMount hidden={projectSection!=='work'||projectPreview.expanded}>
-       <ProjectWorkspaceOverview project={currentProject} directory={projectDirectory} view={projectWorkView} onViewChange={updateProjectWorkView} directoryAvailable={can('work.tasks.list')} canOpenTask={can('tasks.open')} onOpenTask={id=>{projectTaskReturn.current={projectId:currentProject.id,taskId:id};openTask(id)}} onOpenFiles={()=>showProjectSection('files')} onOpenPreview={projectPreview.open} onOpenTerminal={()=>void openRelatedWorkspace('local')} canPreview={can('projects.preview')}
+       <ProjectWorkspaceOverview project={currentProject} directory={projectDirectory} view={projectWorkView} onViewChange={updateProjectWorkView} directoryAvailable={can('work.tasks.list')} canOpenTask={can('tasks.open')} onOpenTask={id=>{projectTaskReturn.current={projectId:currentProject.id,taskId:id};openTask(id)}} onOpenFiles={()=>showProjectSection('files')} onOpenPreview={projectPreview.open} onOpenTerminal={()=>void openRelatedWorkspace('local')} canPreview={can('projects.preview')} onAskButler={can('composer.object.add')?()=>askButlerAbout({kind:'project',id:currentProject.id}):undefined}
         startContent={can('projects.development.read')||can('projectWork.open')&&can('projectWork.confirm')?<ProjectWorkLauncher key={currentProject.id}
           active={route==='projects'&&!taskOpen&&!state.filePath&&projectSection==='work'&&!projectPreview.expanded&&!projectPickerOpen&&!newProjectOpen&&!newFileOpen&&!workOpen&&!commandOpen}
           resumeProfile={!!projectWorkDrafts[currentProject.id]?.operation}
@@ -1357,7 +1392,7 @@ export default function App(){
   <ConversationHistoryWindow page={route==='chat'&&!taskOpen?state.conversationReader||null:null} submitting={!!state.chatSubmitting} can={can} act={act} registerBack={registerHistoryWindowBack} onCopy={copyWithLocalFeedback} onOpenTask={(id,entry,origin)=>openTask(id,entry,false,origin)}/>
   <ConversationQueuedInputs page={state.queuedInputsPage||null} can={can} act={act} registerBack={registerQueuedInputsBack}/>
   {searchOriginal&&<WorkSearchOriginalReader target={searchOriginal} identity={`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}`} onClose={closeSearchOriginal} onConversation={()=>{const target=searchOriginal;void openSearchResult({...target,ownerLocator:undefined}).catch(error=>setLocalError(error instanceof Error?error.message:String(error)))}} onCopy={copyWithLocalFeedback}/>}
-  <AttachmentWorkspace state={state} registerBack={registerAttachmentBack} onReturnToSearch={searchReturn?showWorkSearch:undefined}/>
+  <AttachmentWorkspace state={state} registerBack={registerAttachmentBack} onReturnToSearch={searchReturn?showWorkSearch:undefined} onAskButler={can('composer.object.add')?askButlerAbout:undefined}/>
   {organizationTarget&&<ConversationOrganization key={organizationTarget} conversationId={organizationTarget} onClose={()=>setOrganizationTarget(null)}/>}
   <Drawer.Root open={taskOpen} onOpenChange={open=>{if(!open){if(taskMenuOpen){setTaskMenuOpen(false);return}if(!deviceScopeBack.current?.()&&!capabilityBack.current?.()&&!livePreviewBack.current?.()&&!taskTransientBack.current?.())closeTask()}else setTaskOpen(true)}} direction="right" handleOnly shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay pw-work-object-overlay"/><Drawer.Content className="pw-drawer pw-task-drawer pw-work-object-surface" data-task-layer={taskLayer} aria-describedby="pw-task-description" onCloseAutoFocus={event=>{
    const origin=projectTaskReturn.current;projectTaskReturn.current=null;

@@ -82,6 +82,10 @@ final class DurableHistoryCodec {
             if(!"user".equals(message.optString("role")))throw new SecurityException("元素引用只能保留在原主人消息中");
             message.put("ownerPreviewRefs",dev.pocketengine.features.local.preview.PreviewElementRef.checked(original.getJSONArray("ownerPreviewRefs")));
         }
+        if(original.has("ownerObjectRefs")){
+            if(!"user".equals(role))throw new JournalFailure();
+            message.put("ownerObjectRefs",dev.pocketengine.features.assistant.OwnerObjectReferences.checked(original.getJSONArray("ownerObjectRefs")));
+        }
         if(original.has("ownerInputMode")){
             String mode=original.getString("ownerInputMode");if(!"user".equals(role)||!java.util.Set.of("queue","steer").contains(mode))throw new JournalFailure();message.put("ownerInputMode",mode);
         }
@@ -203,7 +207,7 @@ final class DurableHistoryCodec {
      */
     static void markObservationWithoutImage(JSONObject message) throws Exception {
         if (!"user".equals(message.optString("role")) || message.has("ownerMessageId")
-                || message.has("ownerInputMode") || message.has("ownerAttachmentRefs") || message.has("ownerSourceRefs") || message.has("ownerPreviewRefs") || message.has("ownerRecallFeedback")) return;
+                || message.has("ownerInputMode") || message.has("ownerAttachmentRefs") || message.has("ownerSourceRefs") || message.has("ownerPreviewRefs") || message.has("ownerObjectRefs") || message.has("ownerRecallFeedback")) return;
         JSONArray parts = message.optJSONArray("content");
         JSONObject first = parts == null ? null : parts.optJSONObject(0);
         if (first == null || first.length() != 2 || !"text".equals(first.optString("type"))
@@ -235,6 +239,11 @@ final class DurableHistoryCodec {
      * arbitrary exception string, body or model JSON cannot escape redaction through this path. */
     static JSONObject safeToolReceipt(String name,JSONObject original,ModelConfig config)throws Exception{
         JSONObject clean=safeReceipt(original,config);
+        if("owner_work_get".equals(name)){
+            JSONObject context=original.optJSONObject("workContext");
+            if(context!=null&&context.opt("available")==Boolean.TRUE)
+                clean.put("workContext",dev.pocketengine.store.OwnerWorkTask.restoreSafeContextReference(context,clean.optJSONObject("workContext")));
+        }
         if(("memory_history_search".equals(name)||"memory_history_read".equals(name))&&(original.has("callerTaskId")||original.has("callerRunId")||original.has("messageSourceRefs")||original.has("taskSourceRefs")))
             return dev.pocketengine.features.memory.ConversationHistory.restoreSafeReferenceMetadata(name,original,clean);
         return clean;

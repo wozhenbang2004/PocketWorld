@@ -164,6 +164,9 @@ internal object PocketWebState {
             .put("requestedCommitmentId", state.requestedCommitmentId ?: JSONObject.NULL)
             .put("requestedCommitmentRevision", state.requestedCommitmentRevision)
             .put("requestedFollowUpClaimId", state.requestedFollowUpClaimId ?: JSONObject.NULL)
+            .put("requestedExecutionPlanId", state.requestedExecutionPlanId ?: JSONObject.NULL)
+            .put("requestedExecutionPlanRevision", state.requestedExecutionPlanRevision)
+            .put("projectPackageExport", publicValue(controller.projectPackages.exportSnapshot()))
             .put("teamRunId", state.teamRunId ?: JSONObject.NULL)
             .put("teamRuns", JSONObject().also { out -> state.teamRuns.forEach { (key, value) -> out.put(key, publicValue(value)) } })
             .put("modelTest", state.modelTest ?: JSONObject.NULL).put("modelTestTaskId", state.modelTestTaskId ?: JSONObject.NULL)
@@ -222,6 +225,7 @@ internal object PocketWebState {
             .put("anchorMessage", draft?.anchorMessage ?: "").put("observedMessage", draft?.observedMessage ?: "")
             .put("newReplies", draft?.newReplies ?: false).put("sourceRefs", publicValue(draft?.sourceRefs()))
             .put("previewRefs", publicValue(draft?.previewRefs() ?: JSONArray())).put("previewRefsAvailable", controller.composerPreviewRefsAvailable())
+            .put("objectRefs", publicValue(draft?.objectRefs() ?: JSONArray()))
             .put("voiceText", draft?.voiceText ?: "").put("voiceInputId", draft?.voiceInputId ?: "")
             .put("pending", JSONArray().also { out -> controller.composerPending.forEach { pending ->
                 out.put(JSONObject().put("clientMessageId", pending.clientId).put("draftKey", pending.draftKey)

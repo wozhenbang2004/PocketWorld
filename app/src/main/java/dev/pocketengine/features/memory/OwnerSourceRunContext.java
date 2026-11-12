@@ -177,6 +177,21 @@ public final class OwnerSourceRunContext {
         try(var check=originals.inspectOwnerSources()){for(int i=0;i<accepted.length();i++)check.requireNativeAssistantSource(accepted.getJSONObject(i));}
         fact.put("assistantMessageSources",mergeAssistantSources(assistantSources(fact.optJSONArray("assistantMessageSources")),accepted));write(db,fact);
     }
+    /** Read-only admission preview in the caller's original transaction. Candidates include
+     * this page's pending pins, not just its next row. This does not reserve capacity, validate
+     * source currentness or replace assistantsPrepared before delivering any body. */
+    public static JSONObject assistantSourceCapacity(SQLiteDatabase db,String task,String run,JSONArray candidates)throws Exception{
+        if(!db.inTransaction())throw new SecurityException("原来源容量必须在读取任务的事务内核对");
+        JSONObject fact=loaded(db,task,run,null,null);JSONArray retained=assistantSources(fact.optJSONArray("assistantMessageSources")),accepted=assistantSources(candidates);
+        LinkedHashMap<String,JSONObject> combined=assistantSourceUnion(retained,accepted);
+        JSONObject proposed=new JSONObject(fact.toString()).put("assistantMessageSources",new JSONArray(combined.values()));
+        boolean countAvailable=combined.size()<=MAX_CARRIERS,bytesAvailable=proposed.toString().getBytes(StandardCharsets.UTF_8).length<=MAX_BYTES;
+        boolean available=countAvailable&&bytesAvailable;
+        return new JSONObject().put("available",available).put("retainedSources",retained.length()).put("candidateSources",accepted.length())
+                .put("additionalSources",combined.size()-retained.length()).put("remainingSources",Math.max(0,MAX_CARRIERS-combined.size())).put("maximumSources",MAX_CARRIERS)
+                .put("sourceBudgetExhausted",!available).put("continuationRequiresNewReaderTask",!available)
+                .put("reason",!countAvailable?"native_message_source_limit":!bytesAvailable?"native_source_metadata_limit":"within_native_source_limits");
+    }
     private static JSONArray assistantSources(JSONArray supplied)throws Exception{
         if(supplied==null)return new JSONArray();if(supplied.length()>MAX_CARRIERS)throw new SecurityException("助手来源超过100条有界范围");
         JSONArray result=new JSONArray();java.util.Set<String> seen=new java.util.HashSet<>();
@@ -188,10 +203,13 @@ public final class OwnerSourceRunContext {
         }return result;
     }
     private static JSONArray mergeAssistantSources(JSONArray first,JSONArray second)throws Exception{
+        return assistantSources(new JSONArray(assistantSourceUnion(first,second).values()));
+    }
+    private static LinkedHashMap<String,JSONObject> assistantSourceUnion(JSONArray first,JSONArray second)throws Exception{
         LinkedHashMap<String,JSONObject> merged=new LinkedHashMap<>();for(JSONArray rows:new JSONArray[]{first,second})for(int i=0;i<rows.length();i++){
             JSONObject row=rows.getJSONObject(i);SourceRef ref=SourceRef.fromJson(row.getJSONObject("sourceRef"));String key=ref.sourceId+":"+ref.revision;JSONObject previous=merged.get(key);
             if(previous!=null&&!TaskMemoryTrace.rawFingerprint(previous).equals(TaskMemoryTrace.rawFingerprint(row)))throw new SecurityException("同一助手来源版本不能改写");merged.put(key,row);
-        }return assistantSources(new JSONArray(merged.values()));
+        }return merged;
     }
     /** Original accepted external results, not a scheduler, an imported task link or an
      * executor-success claim. A receipt change invalidates its previous derived text. */

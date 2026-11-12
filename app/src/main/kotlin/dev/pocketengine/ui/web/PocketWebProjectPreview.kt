@@ -20,7 +20,7 @@ internal class PocketWebProjectPreview(
     companion object {
         val COMMANDS = setOf("projects.preview", "projects.preview.mode", "projects.preview.viewport",
             "projects.preview.reload", "projects.preview.close", "projects.preview.return", "composer.preview.remove",
-            "projects.package.preview.inspect", "projects.package.preview.open")
+            "projects.package.preview.inspect", "projects.package.preview.open", "projects.package.export")
         private fun fields(args: JSONObject, names: Set<String>) {
             require(args.keys().asSequence().toSet() == names) { "预览操作参数不完整或包含未接入字段" }
         }
@@ -70,6 +70,7 @@ internal class PocketWebProjectPreview(
         check(!closed && foreground && controller.webPrivateOwnerVisible()) { "原私人预览窗口已关闭" }
         if (action == "projects.package.preview.inspect") {
             fields(args, setOf("taskId", "operationId")); val task = text(args, "taskId"); val operation = text(args, "operationId")
+            controller.projectPackages.invalidateTaskExportSelection()
             val window = captureWindow(); val request = ++opening
             controller.inspectProjectPackagePreview(task, operation, { !closed && foreground && opening == request && acceptsWindow(window) }) { choices, error ->
                 if (closed || opening != request || !acceptsWindow(window) || !controller.webPrivateOwnerVisible()) done(null, "原项目包窗口已变化，未接收迟到的入口清单")
@@ -82,6 +83,7 @@ internal class PocketWebProjectPreview(
             fields(args, setOf("taskId", "operationId", "entryPath")); val task = text(args, "taskId"); val operation = text(args, "operationId")
             val entry = args.opt("entryPath") as? String ?: error("原项目包入口必须为路径文字")
             dev.pocketengine.features.workspace.VersionedWorkspace.path(entry)
+            controller.projectPackages.invalidateTaskExportSelection()
             val window = captureWindow(); val request = ++opening
             controller.openRegisteredProjectPackagePreview(task, operation, entry, { !closed && foreground && opening == request && acceptsWindow(window) }) { selected, error ->
                 if (selected == null || error != null) { done(null, error ?: "原固定包预览未读取"); return@openRegisteredProjectPackagePreview }
@@ -91,8 +93,23 @@ internal class PocketWebProjectPreview(
             }
             return
         }
+        if (action == "projects.package.export") {
+            fields(args, setOf("taskId", "operationId", "artifactId", "artifactSha256"))
+            val task = text(args, "taskId"); val operation = text(args, "operationId")
+            val artifact = text(args, "artifactId"); val sha = text(args, "artifactSha256")
+            require(sha.matches(Regex("[a-f0-9]{64}"))) { "固定包摘要无效" }
+            val window = captureWindow(); val request = ++opening
+            controller.offerProjectPackageExport(task, operation, artifact, sha,
+                { !closed && foreground && opening == request && acceptsWindow(window) }) { result, error ->
+                if (closed || opening != request || !acceptsWindow(window) || !controller.webPrivateOwnerVisible()) done(null, "原导出窗口已变化，请核对原固定包的导出状态；没有重新请求")
+                else done(result, error)
+                changed()
+            }
+            return
+        }
         if (action == "projects.preview") {
             fields(args, setOf("projectId")); val project = text(args, "projectId")
+            controller.projectPackages.invalidateTaskExportSelection()
             val window = captureWindow(); val request = ++opening
             controller.openRegisteredProjectPreview(project, { !closed && foreground && opening == request && acceptsWindow(window) }) { selected, error ->
                 if (selected == null || error != null) { done(null, error ?: "原项目预览未读取"); return@openRegisteredProjectPreview }
@@ -151,12 +168,14 @@ internal class PocketWebProjectPreview(
             }
             "projects.preview.return" -> {
                 fields(args, setOf("sessionId")); hide(selected)
+                controller.projectPackages.invalidateTaskExportSelection()
                 controller.returnToProjectPreviewConversation(selected.original.conversationId)
                 changed()
                 done(JSONObject().put("sessionId", selected.id).put("conversationId", selected.original.conversationId).put("returned", true), null)
             }
             "projects.preview.close" -> {
                 fields(args, setOf("sessionId")); release(); controller.closeProjectPreview()
+                controller.projectPackages.invalidateTaskExportSelection()
                 done(JSONObject().put("sessionId", selected.id).put("closed", true), null)
             }
             else -> error("未接入的原预览操作")
@@ -237,7 +256,7 @@ internal class PocketWebProjectPreview(
     }
     fun invalidatePresentation(documentReplaced: Boolean) {
         opening++
-        if (documentReplaced) { release(); controller.closeProjectPreview() } else session?.let(::hide)
+        if (documentReplaced) { controller.projectPackages.invalidateTaskExportSelection(); release(); controller.closeProjectPreview() } else session?.let(::hide)
         changed()
     }
     private fun release() {
@@ -246,6 +265,6 @@ internal class PocketWebProjectPreview(
     }
     fun close() {
         if (closed) return
-        closed = true; opening++; release(); container.removeOnLayoutChangeListener(layoutChanged); controller.closeProjectPreview()
+        closed = true; opening++; controller.projectPackages.invalidateTaskExportSelection(); release(); container.removeOnLayoutChangeListener(layoutChanged); controller.closeProjectPreview()
     }
 }

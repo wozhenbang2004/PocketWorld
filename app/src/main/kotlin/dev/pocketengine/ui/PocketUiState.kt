@@ -128,6 +128,8 @@ internal data class PocketUiState(
     val requestedCommitmentId: String? = null,
     val requestedFollowUpClaimId: String? = null,
     val requestedCommitmentRevision: Int = 0,
+    val requestedExecutionPlanId: String? = null,
+    val requestedExecutionPlanRevision: Int = 0,
     val teamRunId: String? = null,
     val teamAssignmentFocus: JSONObject? = null,
     val teamRuns: Map<String, JSONObject> = emptyMap(),
@@ -194,6 +196,15 @@ internal fun mergeTaskSummary(incoming: UiTask, previous: UiTask?): UiTask {
     if (!newerRemoteEpoch && incoming.updatedAt < previous.updatedAt) return previous
     val sameRun = incoming.raw.optString("runId") == previous.raw.optString("runId") && incoming.raw.optInt("coordinatorEpoch") == previous.raw.optInt("coordinatorEpoch")
     val merged = JSONObject(incoming.raw.toString())
+    val project = merged.optJSONObject("developmentContext")
+    val previousProject = previous.raw.optJSONObject("developmentContext")
+    val previousContract = previousProject?.optJSONObject("deliveryContract")
+    if (sameRun && incoming.id == previous.id && merged.optString("taskProjection") == "summary" && project != null && previousProject != null && previousContract != null &&
+        project.optString("deliveryContractReadState") == "not_loaded" && project.optString("projectId") == previousProject.optString("projectId") &&
+        project.optString("checkoutId") == previousProject.optString("checkoutId") && project.optString("clientMessageId") == previousProject.optString("clientMessageId") &&
+        project.optString("deliveryContractDigest") == dev.pocketengine.store.TaskStore.capabilityFingerprint(previousContract)) {
+        project.put("deliveryContract", JSONObject(previousContract.toString())).put("deliveryContractReadState", "loaded")
+    }
     val evidence = merged.optJSONObject("evidence")
     val oldEvidence = previous.raw.optJSONObject("evidence")
     val resultDigest = merged.optString("resultImageDigest")

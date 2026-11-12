@@ -261,6 +261,7 @@ public final class AgentRunner {
             case "project_read_page_too_small" -> "PROJECT_READ_PAGE_TOO_SMALL";
             case "invalid_arguments" -> "INVALID_ARGUMENTS";
             case "tool_withdrawn" -> "TOOL_WITHDRAWN";
+            case "tool_schema_not_published" -> "TOOL_SCHEMA_NOT_PUBLISHED";
             case "owner_intent_read_only" -> "OWNER_INTENT_READ_ONLY";
             case "planning_read_only" -> "PLANNING_READ_ONLY";
             case "planning_private_text" -> "PLANNING_PRIVATE_TEXT";
@@ -581,6 +582,7 @@ public final class AgentRunner {
                     }
                     nativePlanningReference=clean(meaning+currentPlanning,config);
                 }
+                boolean boundedToolCatalog=false;
                 JSONArray tools=phone==null||!control.phoneSurfaceActive()?new JSONArray():tools();
                 if(control.phoneSurfaceActive()&&DeferredPhoneSession.adaptive(phone))addTool(tools,"phone_observation_help","当前节点中找不到目标时请求新的观察；仅在本机允许且模型已配置图像输入能力时发送真实图片，不重试业务动作。",properties("observationId","string").put("reason",new JSONObject().put("type","string").put("enum",new JSONArray().put("target_missing"))),new String[]{"observationId","reason"});
                 JSONArray outcomeTools=RunOutcomeTools.tools();for(int i=0;i<outcomeTools.length();i++)tools.put(outcomeTools.getJSONObject(i));
@@ -589,6 +591,7 @@ public final class AgentRunner {
                 if(screens!=null&&control.phoneSurfaceActive()&&config.sendScreenshots&&imageInputAvailable(config)){JSONArray oldScreens=RecentScreenHistory.tools();for(int i=0;i<oldScreens.length();i++)tools.put(oldScreens.getJSONObject(i));}
                 if(capabilities!=null){
                     JSONObject prepared=capabilities.prepareTurn(clean(recallIntent,config),round,steps,control);
+                    boundedToolCatalog=prepared.optBoolean("boundedToolCatalog");
                     JSONArray extra=prepared.getJSONArray("tools");java.util.Set<String> names=new java.util.HashSet<>();for(int i=0;i<tools.length();i++)names.add(tools.getJSONObject(i).getJSONObject("function").getString("name"));
                     for(int i=0;i<extra.length();i++){JSONObject tool=extra.getJSONObject(i);if(PhoneRouteSession.supports(tool.getJSONObject("function").getString("name"))||!names.add(tool.getJSONObject("function").getString("name")))throw new SecurityException("能力工具与原生手机工具名称冲突");tools.put(tool);}
                     JSONObject reference=prepared.optJSONObject("reference");if(reference==null)reference=new JSONObject();
@@ -600,6 +603,7 @@ public final class AgentRunner {
                 historyTurnPrepared.set(true);
                 tools=intent.filter(tools,this::intentEffecting);
                 tools=planningTools(tools,planning,turnPlanning);
+                if(boundedToolCatalog)dev.pocketengine.core.ScopedToolCatalog.requireModelRequestBudget(tools);
                 withdrawHistoricalImages(screens,history,control);
                 // Keep current native control facts separate from untrusted memory/extension/recovery data.
                 // Both are request-only projections; neither is a new owner message or an execution grant.
@@ -1011,7 +1015,19 @@ public final class AgentRunner {
                         // or leak a known current credential into the original read ledger.
                         if((ExecutionPlan.supports(name)||turnPlanning!=null&&turnPlanning.planning())
                                 &&!CompactionPlan.fingerprint(args).equals(CompactionPlan.fingerprint(safeJson(args,config,false))))throw new ToolArgumentException("planning_private_text");
-                    } catch(PhoneRouteSession.SourceUnavailable unavailable){throw unavailable;} catch (Exception badArguments) {
+                    } catch(PhoneRouteSession.SourceUnavailable unavailable){throw unavailable;} catch(CapabilityPort.SchemaNotPublished unpublished) {
+                        control.check();stepRouting.reset("tool_schema_not_published");
+                        receipt=failure("tool_schema_not_published","此工具属于当前范围，但参数定义尚未在本次请求发布，调用没有执行。请先用 tools_search 找到工具，再在下一次模型请求中按实际发布的完整参数重新选择调用；若本批搜索已经成功，直接依据下一轮定义继续，不重复搜索或重放本批调用。")
+                                .put("accepted",false).put("nativeDispatched",false).put("effectStatus","not_dispatched");
+                        repeatedTools.afterTool(name,call.getJSONObject("function").opt("arguments"),receipt,false,true);
+                        history.put(toolResult(call,receipt,config));
+                        appendUnissuedReplies(history,calls,index+1,failure("tool_schema_batch_not_dispatched","工具定义尚未在原请求发布，本批剩余调用没有派发；请依据下一轮实际工具定义重新选择后续操作。")
+                                .put("accepted",false).put("nativeDispatched",false).put("effectStatus","not_dispatched"),config);
+                        checkpoint(taskId,journal,history,steps,latest,config,toolSink,contextBudget,repeatedTools);
+                        diagnosticToolReceipt(toolDiagnostic,receipt);
+                        emit(taskId,"tool","failed",receipt.getString("message"),name,receipt,config,toolSink);
+                        batchContinuation.stopSequenceAndObservations();break;
+                    } catch (Exception badArguments) {
                         if(!(badArguments instanceof IllegalArgumentException||badArguments instanceof org.json.JSONException||badArguments instanceof ToolArgumentException||badArguments instanceof CapabilityPort.Unavailable))throw badArguments;
                         stepRouting.reset("tool_arguments_or_authority_rejected");
                         boolean correctableArguments=badArguments instanceof IllegalArgumentException||badArguments instanceof org.json.JSONException;
@@ -1283,6 +1299,15 @@ public final class AgentRunner {
                     }
                     stepRouting.completedRead(name,receipt,latest,StepModelRouting.knownRead(name,capabilities));
                     try{contextBudget.completedRead(call,committedToolMessage);}catch(Exception unavailable){/* Optional request projection never replaces a committed receipt. */}
+                    if(boundedToolCatalog&&dev.pocketengine.core.ScopedToolCatalog.SEARCH_TOOL.equals(name)
+                            &&"pocketworld.tool-discovery.v1".equals(receipt.optString("format"))&&receipt.optBoolean("nextRequestRequired")){
+                        // The native discovery receipt and checkpoint are committed. Publish
+                        // those exact schemas on the next ordinary turn before reading more.
+                        batchContinuation.stopSequence();
+                        appendUnissuedReplies(history,calls,index+1,failure("tool_discovery_next_request","本批已发现的工具将在下一次模型请求中发布，余下调用尚未派发。请先使用下一轮的实际定义，再沿原游标继续查找。")
+                                .put("accepted",false).put("nativeDispatched",false).put("effectStatus","not_dispatched"),config);
+                        break;
+                    }
                     // A successful read can still time out with an unmet predicate. Only this
                     // native plan step uses matched as a prerequisite; standalone WAIT is unchanged.
                     String conditionKey=activeStep!=null&&activeStep.tool==dev.pocketengine.core.NativeToolPlan.Tool.BROWSER_WAIT?"conditionMet":"matched";
@@ -1452,6 +1477,12 @@ public final class AgentRunner {
             return finishQuietly(taskId,"awaiting_user",openOperation==null
                     ?"本次调用次数已到上限，已完成内容保留。已在新请求发出前暂停；请在原任务入口核对已用次数和上限，明确追加后再继续。不会自动追加或重做已完成的操作。"
                     :"原执行预算不足，已有登记操作仍须核对。没有清除未决效果、追加额度或自动重放。",evidence,steps,initialConfig,sink);
+        } catch (dev.pocketengine.core.ScopedToolCatalog.RequestBudgetExceeded blocked) {
+            RuntimeDiagnostics.event("run_settlement",control!=null&&(control.isCancelled()||Thread.currentThread().isInterrupted())?"cancelled":"awaiting_user","TOOL_DEFINITION_BUDGET_BLOCKED",control,blocked);
+            unresolved(evidence,openOperation);
+            try{evidence.put("toolDefinitionBudget",new JSONObject().put("toolCount",blocked.toolCount).put("definitionBytes",blocked.definitionBytes)
+                    .put("maximumTools",blocked.maximumTools).put("maximumBytes",blocked.maximumBytes).put("scopeExpanded",false).put("automaticReplay",false));}catch(Exception ignored){}
+            return finishQuietly(taskId,control!=null&&(control.isCancelled()||Thread.currentThread().isInterrupted())?"cancelled":"awaiting_user",blocked.getMessage(),evidence,steps,initialConfig,sink);
         } catch (RunContextBudget.Blocked blocked) {
             RuntimeDiagnostics.event("run_settlement",control!=null&&(control.isCancelled()||Thread.currentThread().isInterrupted())?"cancelled":"awaiting_user","CONTEXT_BUDGET_BLOCKED",control,blocked);
             unresolved(evidence, openOperation);
@@ -1566,6 +1597,7 @@ public final class AgentRunner {
             }
             if(row.has("ownerSourceRefs"))message.put("ownerSourceRefs",dev.pocketengine.features.assistant.OwnerSourceReferences.checked(row.getJSONArray("ownerSourceRefs")));
             if(row.has("ownerPreviewRefs"))message.put("ownerPreviewRefs",dev.pocketengine.features.local.preview.PreviewElementRef.checked(row.getJSONArray("ownerPreviewRefs")));
+            if(row.has("ownerObjectRefs"))message.put("ownerObjectRefs",dev.pocketengine.features.assistant.OwnerObjectReferences.checked(row.getJSONArray("ownerObjectRefs")));
             JSONArray refs=row.optJSONArray("attachments");if(refs!=null&&refs.length()>0)message.put("ownerAttachmentRefs",new JSONArray(refs.toString()));
             history.put(message);
         }
@@ -1691,8 +1723,16 @@ public final class AgentRunner {
         try{
             if(validation==null)return false;JSONObject result=new JSONObject(body);result.remove(ToolOutcome.KEY);
             if(name.equals("owner_work_get")){
+                JSONObject context=result.optJSONObject("workContext");boolean contextCurrent=false;
+                if(context!=null){
+                    JSONObject selectedContext=dev.pocketengine.store.OwnerWorkTask.contextReadReference(context);
+                    JSONArray contexts=validation.optJSONArray("ownerWorkContexts");
+                    if(contexts!=null)for(int i=0;i<contexts.length();i++)if(dev.pocketengine.store.TaskStore.capabilityFingerprint(selectedContext).equals(dev.pocketengine.store.TaskStore.capabilityFingerprint(contexts.getJSONObject(i)))){contextCurrent=true;break;}
+                    if(!contextCurrent)return false;
+                }
                 JSONObject selected=result.optJSONObject("result");JSONArray live=validation.optJSONArray("ownerWorkResults");
-                if(selected==null||!Boolean.TRUE.equals(selected.opt("available"))||live==null||selected.optString("taskId").isEmpty()||selected.optString("deliveryId").isEmpty()||!selected.optString("resultDigest").matches("[a-f0-9]{64}"))return false;
+                if(selected==null||!Boolean.TRUE.equals(selected.opt("available")))return contextCurrent;
+                if(live==null||selected.optString("taskId").isEmpty()||selected.optString("deliveryId").isEmpty()||!selected.optString("resultDigest").matches("[a-f0-9]{64}"))return false;
                 for(int i=0;i<live.length();i++){JSONObject current=live.getJSONObject(i);if(selected.getString("taskId").equals(current.optString("taskId"))&&selected.getString("deliveryId").equals(current.optString("deliveryId"))&&selected.getString("resultDigest").equals(current.optString("resultDigest")))return true;}return false;
             }
             if(name.startsWith("skills_")&&validation.has("skillScopeFingerprint")){

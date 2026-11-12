@@ -21,7 +21,7 @@ internal class PocketWebWorkSearch(
     private val acceptsWindow: (PocketWebWindowTicket) -> Boolean,
     private val rememberTasks: (JSONObject) -> Unit
 ) {
-    companion object { val COMMANDS = setOf("work.search", "work.search.read", "work.tasks.list", "work.capabilities", "webSearch.usage", "ownerWork.report.read") }
+    companion object { val COMMANDS = setOf("work.search", "work.search.read", "work.tasks.list", "work.capabilities", "webSearch.usage", "ownerWork.report.read", "tasks.projectPackages", "composer.object.add", "composer.object.remove") }
     private val main = Handler(Looper.getMainLooper())
     private val host get() = controller.nativeButlerHost()
     private val pending = mutableSetOf<RunControl>()
@@ -40,9 +40,23 @@ internal class PocketWebWorkSearch(
                         control.check()
                         check(acceptsWindow(window) && controller.webPrivateOwnerVisible()) { "原查找窗口已关闭" }
                         when (action) {
+                            "composer.object.add" -> {
+                                fields(args,setOf("key","epoch","revision","reference"))
+                                JSONObject().put("reference",host.selectOwnerObjectReference(args.getJSONObject("reference"),control))
+                            }
+                            "composer.object.remove" -> {
+                                fields(args,setOf("key","epoch","revision","index"))
+                                JSONObject()
+                            }
                             "ownerWork.report.read" -> {
                                 fields(args, setOf("taskId", "runId", "epoch", "reportMessageId", "offset", "maxChars", "expectedReportRevision", "expectedReportFingerprint"))
                                 host.tasks.ownerWorkReportForOwner(args, control)
+                            }
+                            "tasks.projectPackages" -> {
+                                fields(args, setOf("taskId", "cursor"))
+                                val task = args.opt("taskId") as? String ?: error("原项目任务身份缺失")
+                                val cursor = args.opt("cursor") as? String ?: error("原成果读取位置缺失")
+                                host.tasks.projectPackagesForOwner(task, cursor, control)
                             }
                             "work.search" -> search(args, control)
                             "work.tasks.list" -> {
@@ -108,6 +122,14 @@ internal class PocketWebWorkSearch(
                             done(null, "原查找窗口已变化，请重新读取")
                         else result.fold({ value ->
                             try {
+                                if(action=="composer.object.add"||action=="composer.object.remove") {
+                                    val revision=args.opt("revision")
+                                    require((revision is Int||revision is Long)&&(revision as Number).toLong()>0) { "原草稿版本无效" }
+                                    val key=args.getString("key");val epoch=integer(args,"epoch",0,0,Int.MAX_VALUE)
+                                    if(action=="composer.object.add")controller.addComposerObject(key,epoch,(revision as Number).toLong(),value.getJSONObject("reference"))
+                                    else controller.removeComposerObject(key,epoch,(revision as Number).toLong(),integer(args,"index",-1,0,3))
+                                    value.remove("reference");value.put(if(action=="composer.object.add")"added" else "removed",true)
+                                }
                                 value.optJSONObject("taskPage")?.let(rememberTasks)
                                 value.remove("taskPage")
                                 done(PocketWebState.publicValue(value) as JSONObject, null)

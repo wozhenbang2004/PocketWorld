@@ -10,6 +10,7 @@ export type TeamOwnerWorkLink = {
 };
 
 export type TeamButlerRequest = {
+  teamId?: string;
   goal?: string;
 };
 

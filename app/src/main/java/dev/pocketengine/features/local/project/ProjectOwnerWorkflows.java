@@ -4,6 +4,7 @@ import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.assistant.AssistantModule;
 import dev.pocketengine.features.local.LocalModule;
 import dev.pocketengine.store.TaskStore;
+import dev.pocketengine.store.OwnerWorkTask;
 import org.json.JSONObject;
 import org.json.JSONArray;
 
@@ -112,13 +113,37 @@ public final class ProjectOwnerWorkflows {
         finally{butlerPreparation.remove();}
     }
     public void checkStartFenceForHost(){var fence=ownerStartFence.get();if(fence!=null&&!fence.getAsBoolean())throw new SecurityException("原项目窗口或模型已变化，没有分配项目执行");}
+    /** Native owner text only. These requirements describe the requested result, not grants. */
+    public static JSONObject deliveryContractForOwner(JSONObject input)throws Exception {
+        Object value=input.opt("goal");
+        if(!(value instanceof String)||((String)value).length()>12000||((String)value).indexOf('\u0000')>=0||((String)value).codePoints().allMatch(Character::isWhitespace))throw new IllegalArgumentException("请填写1至12000字的项目目标");
+        JSONObject contract=new JSONObject().put("format",OwnerWorkTask.CONTRACT_FORMAT).put("revision",1).put("goal",((String)value).trim());
+        for(String key:new String[]{"constraints","deliverable","completionCriteria"}){
+            if(!input.has(key))continue;Object field=input.get(key);
+            if(!(field instanceof String)||((String)field).length()>4000||((String)field).indexOf('\u0000')>=0)throw new IllegalArgumentException("项目交付要求每项最多4000字，且必须为文字");
+            if(!((String)field).codePoints().allMatch(Character::isWhitespace))contract.put(key,field);
+        }
+        return contract;
+    }
+    private JSONObject selectedDeliveryContract(JSONObject input)throws Exception {
+        var preparation=butlerPreparation.get();
+        if(preparation==null)return deliveryContractForOwner(input);
+        JSONObject original=preparation.view().getJSONObject("contract");
+        for(String key:new String[]{"goal","constraints","deliverable","completionCriteria"})
+            if(input.has(key)&&!ProjectSources.canonical(input.get(key)).equals(ProjectSources.canonical(original.opt(key))))throw new SecurityException("项目交付要求与原管家提案不同，请回到原提案修改");
+        // A proposal keeps its own revision and full contract. It is not replaced
+        // by the ordinary page's revision-one requirements.
+        return new JSONObject(original.toString());
+    }
     public JSONObject start(JSONObject ownerInput)throws Exception {
         String checkout=ProjectBuildPlan.identity(ownerInput.getString("checkoutId")),project=ProjectBuildPlan.identity(ownerInput.getString("projectId"));
-        String digest=ownerInput.getString("expectedSourceDigest"),client=ownerInput.getString("clientMessageId"),goal=ownerInput.getString("goal").trim();
+        JSONObject contract=selectedDeliveryContract(ownerInput);
+        String digest=ownerInput.getString("expectedSourceDigest"),client=ownerInput.getString("clientMessageId"),goal=contract.getString("goal");
         String runtime=ownerInput.getString("runtime");local.projectRuntimeForHost(runtime);
         if(!digest.matches("[a-f0-9]{64}")||!client.matches("[a-fA-F0-9-]{36}")||goal.codePoints().allMatch(Character::isWhitespace)||goal.length()>12000)throw new IllegalArgumentException("请选择真实项目、运行位置和1至12000字目标");
         JSONObject context=new JSONObject().put("format","pocketworld.development-context.v1").put("projectId",project).put("checkoutId",checkout).put("runtime",runtime)
                 .put("initialSourceDigest",digest).put("clientMessageId",client).put("filesAreUntrusted",true).put("authorityAdded",false);
+        if(butlerPreparation.get()==null)context.put("deliveryContract",contract);
         JSONObject prior=null;try{prior=assistant.handle("getSubmission",new JSONObject().put("clientMessageId",client));}catch(IllegalArgumentException absent){}
         if(prior!=null){verifyAcknowledgement(prior,context);return prior;}
         JSONObject actual=ProjectSources.describe(local.handle("export",new JSONObject().put("checkoutId",checkout)));
@@ -139,10 +164,12 @@ public final class ProjectOwnerWorkflows {
     }
     public JSONObject start(JSONObject ownerInput,dev.pocketengine.features.memory.ProjectMemoryAccess.Consent memory)throws Exception{
         java.util.Objects.requireNonNull(memory);String checkout=ProjectBuildPlan.identity(ownerInput.getString("checkoutId")),project=ProjectBuildPlan.identity(ownerInput.getString("projectId"));
-        String digest=ownerInput.getString("expectedSourceDigest"),client=ownerInput.getString("clientMessageId"),goal=ownerInput.getString("goal").trim(),runtime=ownerInput.getString("runtime");local.projectRuntimeForHost(runtime);
+        JSONObject contract=selectedDeliveryContract(ownerInput);
+        String digest=ownerInput.getString("expectedSourceDigest"),client=ownerInput.getString("clientMessageId"),goal=contract.getString("goal"),runtime=ownerInput.getString("runtime");local.projectRuntimeForHost(runtime);
         if(!digest.matches("[a-f0-9]{64}")||!client.matches("[a-fA-F0-9-]{36}")||goal.isEmpty()||goal.length()>12000)throw new IllegalArgumentException("请选择真实项目及有界目标");
         JSONObject consent=memory.metadata();if(!project.equals(consent.getString("projectId"))||!checkout.equals(consent.getString("checkoutId")))throw new SecurityException("原生记忆同意不属于此实际项目副本");
         JSONObject context=new JSONObject().put("format","pocketworld.development-context.v1").put("projectId",project).put("checkoutId",checkout).put("runtime",runtime).put("initialSourceDigest",digest).put("clientMessageId",client).put("filesAreUntrusted",true).put("authorityAdded",false);
+        if(butlerPreparation.get()==null)context.put("deliveryContract",contract);
         JSONObject prior=null;try{prior=assistant.handle("getSubmission",new JSONObject().put("clientMessageId",client));}catch(IllegalArgumentException absent){}
         if(prior!=null){verifyAcknowledgement(prior,context);JSONObject task=requireTask(prior.getString("taskId")),original=task.optJSONObject("projectMemoryRead");if(original==null||!consent.getString("consentId").equals(original.optString("consentId")))throw new SecurityException("原提交的记忆选择不同；只核对原任务，未恢复或替换旧权限");return prior;}
         JSONObject actual=ProjectSources.describe(local.handle("export",new JSONObject().put("checkoutId",checkout)));if(!project.equals(actual.getString("projectId"))||!digest.equals(actual.getString("sourceDigest")))throw new SecurityException("项目源码已变化，请重新核对开始");
@@ -174,6 +201,15 @@ public final class ProjectOwnerWorkflows {
     }
     private void verifyAcknowledgement(JSONObject ack,JSONObject expected)throws Exception {
         if(!ack.has("taskId"))return;JSONObject task=requireTask(ack.getString("taskId"));
-        if(!ProjectSources.canonical(expected).equals(ProjectSources.canonical(task.getJSONObject("developmentContext"))))throw new SecurityException("这条输入回执属于另一个已选项目，请核对原任务");
+        JSONObject actual=task.getJSONObject("developmentContext");
+        if(ProjectSources.canonical(expected).equals(ProjectSources.canonical(actual)))return;
+        // Old saved starts had only a goal. They can be queried, but cannot
+        // acquire additional requirements under the same client identity.
+        JSONObject contract=expected.optJSONObject("deliveryContract");
+        if(!actual.has("deliveryContract")&&contract!=null&&contract.length()==3&&contract.optInt("revision")==1&&contract.getString("goal").equals(task.optString("goal"))){
+            JSONObject legacy=new JSONObject(expected.toString());legacy.remove("deliveryContract");
+            if(ProjectSources.canonical(legacy).equals(ProjectSources.canonical(actual)))return;
+        }
+        throw new SecurityException("这条输入回执的项目或交付要求不同，请核对原任务；没有替换原要求");
     }
 }

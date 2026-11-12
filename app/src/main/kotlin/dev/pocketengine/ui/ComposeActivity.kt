@@ -378,6 +378,13 @@ class ComposeActivity : ComponentActivity() {
         controller.refresh()
     }
     private fun deliverGoal(intent: Intent?) {
+        if (intent?.action == "dev.pocketengine.OPEN_EXECUTION_PLAN") {
+            val plan = intent.getStringExtra("automationPlanId")
+            val claim = intent.getStringExtra("planChangeClaimId")
+            intent.action = null; intent.removeExtra("automationPlanId"); intent.removeExtra("planChangeClaimId")
+            if (!plan.isNullOrBlank() && !claim.isNullOrBlank()) controller.openExecutionPlanNotification(plan, claim)
+            return
+        }
         if (intent?.hasExtra("channelEventId") == true || intent?.data?.host == "owner-request") {
             val eventId = intent?.getStringExtra("channelEventId")
             intent?.removeExtra("channelEventId"); intent?.removeExtra("automationGoal")

@@ -78,7 +78,7 @@ final class ExtensionCapabilityPort implements CapabilityPort {
         if(!baseFingerprint.equals(toolFingerprint(base))||!fingerprint.equals(sync(false)))throw new SecurityException("参考组装期间能力已变化，请重新取得现场");
         capabilitySnapshot.check();
         for(int i=0;i<extensionTools.length();i++){JSONObject function=extensionTools.getJSONObject(i).getJSONObject("function");next.put(function.getString("name"),new JSONObject(function.getJSONObject("parameters").toString()));}
-        // Authorize the complete real surface first. Native metadata never consumes a 101st grant.
+        // Authorize the complete real surface first. Native discovery never consumes a business grant.
         synchronized(tasks){check(control);tasks.authorizeTools(binding.taskId,binding.runId,names(all));}
         admitted.clear();admitted.putAll(next);admittedBaseNames=names(base);admittedFingerprint=fingerprint;admittedBaseFingerprint=toolFingerprint(base);stale=false;
         JSONArray published=all;
@@ -92,11 +92,17 @@ final class ExtensionCapabilityPort implements CapabilityPort {
             catalogNames=nameSet(filtered);
             Map<String,ScopedToolCatalog.SourcePin> sources=capabilitySnapshot.sourcePinsFor(binding.taskId,binding.runId,binding.epoch,original,catalogNames);
             ScopedToolCatalog candidate=ScopedToolCatalog.capture(capabilitySnapshot,binding.taskId,binding.runId,binding.epoch,original,filtered,sources,ToolDiscoverySession.DEFAULT_RESIDENT);
-            // Decide once per exact source/scope revision. Later activation must not hide an
-            // already published tool again merely because the last search is no longer useful.
+            // Choose the discovery route once per exact source/scope revision. Individual
+            // requests retain required residents and a bounded window of disclosed schemas.
             if(!candidate.revision().equals(catalogDecisionRevision)){
-                JSONObject summary=candidate.summary(Set.of());JSONArray initial=candidate.requestTools(Set.of());
-                deferCatalog=summary.getInt("hiddenCount")>0&&utf8Bytes(initial)+utf8Bytes(discoveryReference(summary))<utf8Bytes(filtered);
+                JSONObject summary=candidate.summary(Set.of());boolean fullFits=ScopedToolCatalog.withinRequestBudget(filtered);
+                deferCatalog=ToolDiscoverySession.shouldDefer(filtered.length(),capabilities.size())&&summary.getInt("hiddenCount")>0&&
+                        (!fullFits||summary.getInt("publishedDefinitionBytes")+utf8Bytes(discoveryReference(summary))<utf8Bytes(filtered));
+                if(deferCatalog)try{candidate.requireDiscoveryBudget();}catch(ScopedToolCatalog.RequestBudgetExceeded tooLarge){
+                    if(!fullFits)throw tooLarge;
+                    // The complete exact surface is already bounded and needs no search slot.
+                    deferCatalog=false;
+                }
                 catalogDecisionRevision=candidate.revision();
             }
             published=filtered;
@@ -107,14 +113,14 @@ final class ExtensionCapabilityPort implements CapabilityPort {
                 published=requestSession.requestTools(original);JSONObject summary=requestSession.summary(original);
                 catalogAccess.bindRequest(()->requestSession.requirePublished(ScopedToolCatalog.SEARCH_TOOL,original));
                 if(summary.getInt("hiddenCount")>0)reference.put("context",reference.optString("context")+discoveryReference(summary));
-            }else closeDiscovery();
+            }else{ScopedToolCatalog.requireRequestBudget(published);closeDiscovery();}
             catalogAccess.check(original);
         }else{
             // Dedicated native scopes retain their complete original schemas and budget path.
             closeDiscovery();catalogDecisionRevision="";deferCatalog=false;
         }
         publishedNames=nameSet(published);capabilitySnapshot.check();
-        return new JSONObject().put("tools",published).put("reference",reference).put("extensionSnapshot",fingerprint);
+        return new JSONObject().put("tools",published).put("reference",reference).put("extensionSnapshot",fingerprint).put("boundedToolCatalog",catalogAccess!=null);
         }catch(Exception failure){capabilitySnapshot.invalidate();stale=true;closeCatalogAccess();throw failure;}
     }
     @Override public void prepareTurnSurface(RunControl control)throws Exception {check(control);existing.prepareTurnSurface(control);check(control);}
@@ -223,7 +229,13 @@ final class ExtensionCapabilityPort implements CapabilityPort {
             if(requestSession==null||!publishedNames.contains(name))throw new SecurityException("工具搜索没有在本请求发布");
             requestSession.requirePublished(name,control);
         }else if(admitted.containsKey(name)||existing.supports(name)){
-            if(!catalogNames.contains(name)||!publishedNames.contains(name))throw new SecurityException("工具不在本请求已准入且发布的定义中");
+            if(!catalogNames.contains(name))throw new SecurityException("工具不在本请求已准入的定义中");
+            if(!publishedNames.contains(name)){
+                ToolDiscoverySession requestSession=discovery;
+                if(requestSession==null||!publishedNames.contains(ScopedToolCatalog.SEARCH_TOOL))throw new SecurityException("本请求没有可用的工具发现入口");
+                requestSession.requirePublished(ScopedToolCatalog.SEARCH_TOOL,control);
+                throw new CapabilityPort.SchemaNotPublished();
+            }
             if(discovery!=null)discovery.requirePublished(name,control);
         }
     }

@@ -21,6 +21,12 @@ const operation = (value: string) => ({ createCommitment: '保存新委托', upd
 export function CommitmentsWorkspace(props: Props) {
   const [tab, setTab] = useState('commitments');
   const [childBusy, setChildBusy] = useState(false);
+  const openedPlanRequest = useRef(0);
+  useEffect(() => {
+    const revision = Number(props.state.requestedExecutionPlanRevision || 0);
+    if (childBusy || revision <= openedPlanRequest.current || !props.state.requestedExecutionPlanId) return;
+    openedPlanRequest.current = revision; setTab('plans');
+  }, [props.state.requestedExecutionPlanId, props.state.requestedExecutionPlanRevision, childBusy]);
   return <Tabs className="pw-followup-tabs" selectedKey={tab} onSelectionChange={key => { if (!childBusy) setTab(String(key)); }}>
     <TabList aria-label="委托类型"><Tab id="commitments" isDisabled={childBusy && tab !== 'commitments'}>单项委托</Tab><Tab id="plans" isDisabled={childBusy && tab !== 'plans'}>持续目标</Tab></TabList>
     {/* Inactive workspaces must unmount: each owns requests and one back handler. */}

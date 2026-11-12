@@ -14,20 +14,22 @@ import org.json.JSONObject;
  * the plan neither owns evidence nor grants a conversation, task or model permission. */
 final class MemoryEvidencePlan {
     static final int MAX_CALLS=8,MAX_BRANCHES=3,MAX_CANDIDATES=80,MAX_CANDIDATE_CHARS=32000;
-    static final Set<String> FIELDS=Set.of("queries","follow","readTop","maxCalls");
+    static final Set<String> FIELDS=Set.of("queries","follow","readTop","contextTop","maxCalls");
     final ConversationHistory.Request request;
     final List<String> queries;
     final String follow;
-    final int readTop,maxCalls;
+    final int readTop,contextTop,maxCalls;
 
     static boolean requested(JSONObject input){for(String field:FIELDS)if(input.has(field))return true;return false;}
     MemoryEvidencePlan(JSONObject supplied)throws Exception{
         JSONObject input=new JSONObject(supplied.toString());
         follow=ConversationHistory.Request.text(input,"follow","none",20);
         if(!Set.of("none","messages","operations","outputs").contains(follow))throw new IllegalArgumentException("未知历史补查层次");
-        readTop=ConversationHistory.Request.integer(input,"readTop",0,0,3);
-        maxCalls=ConversationHistory.Request.integer(input,"maxCalls",4,1,MAX_CALLS);
+        contextTop=ConversationHistory.Request.integer(input,"contextTop",0,0,2);
+        readTop=ConversationHistory.Request.integer(input,"readTop",contextTop,0,3);
+        maxCalls=ConversationHistory.Request.integer(input,"maxCalls",contextTop>0?MAX_CALLS:4,1,MAX_CALLS);
         if(readTop>=maxCalls)throw new IllegalArgumentException("原件回读须为查询保留调用预算");
+        if(contextTop>readTop)throw new IllegalArgumentException("上下文补查须先精读对应原消息，contextTop不能超过readTop");
         String original=ConversationHistory.Request.text(input,"query","",500);
         JSONArray suggested=input.optJSONArray("queries");
         if(input.has("queries")&&suggested==null)throw new IllegalArgumentException("历史短查询建议必须是数组");
@@ -45,6 +47,8 @@ final class MemoryEvidencePlan {
             throw new IllegalArgumentException("历史补查只能沿已发现会话到消息，或原任务到轮次和操作/输出");
         if(request.kind.equals("conversations")&&follow.equals("none")&&suggested!=null&&suggested.length()>0)
             throw new IllegalArgumentException("会话目录没有可改写的正文查询");
+        if(contextTop>0&&!(request.kind.equals("messages")&&follow.equals("none")||request.kind.equals("conversations")&&follow.equals("messages")))
+            throw new IllegalArgumentException("contextTop仅用于消息检索或已许可会话到消息的补查，不给任务/操作猜造前后文");
         after=supplied.has("createdAfter")?SourceRef.integer(supplied,"createdAfter",0):-1;
         before=supplied.has("createdBefore")?SourceRef.integer(supplied,"createdBefore",0):-1;
         if(after>=0&&before>=0&&after>before)throw new IllegalArgumentException("历史日期范围颠倒");

@@ -23,7 +23,7 @@ public final class CapabilitySnapshot {
     public CapabilitySnapshot(String taskId,String runId,int epoch,RunControl original,Set<String> capabilities,CurrentCheck current){
         this.taskId=java.util.Objects.requireNonNull(taskId);this.runId=java.util.Objects.requireNonNull(runId);this.epoch=epoch;
         this.original=java.util.Objects.requireNonNull(original);this.current=java.util.Objects.requireNonNull(current);this.capabilities=Set.copyOf(capabilities);pauseRevision=original.pauseRevision();
-        if(!original.hasHostRun()||!original.matchesHostRun(taskId,runId,epoch)||capabilities.size()>512)throw new SecurityException("能力快照缺少原任务身份或超过范围");
+        if(!original.hasHostRun()||!original.matchesHostRun(taskId,runId,epoch)||capabilities.size()>ScopedToolCatalog.MAX_TOOLS)throw new SecurityException("能力快照缺少原任务身份或超过范围");
         for(String name:capabilities)if(!name.matches("[A-Za-z][A-Za-z0-9_.:-]{0,79}"))throw new IllegalArgumentException("能力快照名称无效");
     }
     public Set<String> current(String task,String run,int generation,RunControl control)throws Exception {
@@ -60,7 +60,7 @@ public final class CapabilitySnapshot {
     /** One native SQL admission, never an extra grant. Registration calls no external checks. */
     public void admitToolCatalog(Set<String> names,String nativeScopeDigest,CurrentCheck scopeCheck){
         Set<String> admitted=Set.copyOf(names);java.util.Objects.requireNonNull(scopeCheck);
-        if(admitted.size()>100||!capabilities.containsAll(admitted)||admitted.contains(ScopedToolCatalog.SEARCH_TOOL)
+        if(admitted.size()>ScopedToolCatalog.MAX_TOOLS||!capabilities.containsAll(admitted)||admitted.contains(ScopedToolCatalog.SEARCH_TOOL)
                 ||nativeScopeDigest==null||!nativeScopeDigest.matches("[a-f0-9]{64}"))throw new SecurityException("tool_catalog_native_admission_invalid");
         for(String name:admitted)if(!name.matches("[A-Za-z][A-Za-z0-9_]{0,63}"))throw new SecurityException("tool_catalog_native_name_invalid");
         synchronized(this){

@@ -438,7 +438,7 @@ internal class PocketWebBridge(
                 return
             }
             if (action in PocketWebWorkSearch.COMMANDS) {
-                if (action == "ownerWork.report.read") require(section == null && taskViewId == requiredString(args, "taskId") && controller.webPrivateOwnerVisible()) { "请在原工作详情中读取这份汇报" }
+                if (action in setOf("ownerWork.report.read", "tasks.projectPackages")) require(section == null && taskViewId == requiredString(args, "taskId") && controller.webPrivateOwnerVisible()) { "请在原工作详情中读取这份成果" }
                 workSearch.dispatch(action, args) { result, error -> complete(id, result, error) }
                 return
             }

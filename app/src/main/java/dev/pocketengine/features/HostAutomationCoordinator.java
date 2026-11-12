@@ -88,20 +88,22 @@ public class HostAutomationCoordinator implements AutomationModule.AlarmHost {
                 if(decision.optBoolean("eligible")){
                     admitted++;
                     if(Thread.currentThread().isInterrupted()||!notificationsAllowed())return;
-                    JSONObject claim=automation.claimFollowUp(scope,record.getString("id"),record.getLong("revision"),record.getString("candidateKey"),CLAIM_LEASE);
+                    boolean plan="plan_change".equals(record.optString("kind"));
+                    JSONObject claim=plan?automation.claimPlanChange(scope,record.getString("planId"),decision.getString("candidateKey"),CLAIM_LEASE)
+                            :automation.claimFollowUp(scope,record.getString("id"),record.getLong("revision"),record.getString("candidateKey"),CLAIM_LEASE);
                     if(!claim.optBoolean("claimed"))continue;
                     JSONObject receipt=claim.getJSONObject("receipt");String claimId=receipt.getString("claimId");
                     String tag=notificationTag(claimId);int id=notificationId(claimId);
                     // Persist the exact platform identity before entering the one-shot
                     // transition. A post that succeeds and then throws stays reconcilable.
-                    tasks.recordFollowUpNotificationLink(claimId,record.getString("id"),record.getLong("revision"),tag,id);
+                    tasks.recordFollowUpNotificationLink(claimId,receipt.getString("commitmentId"),receipt.getLong("commitmentRevision"),tag,id);
                     if(Thread.currentThread().isInterrupted()||!notificationsAllowed())return;
                     JSONObject begin=automation.beginFollowUpDelivery(scope,claimId);
                     if(!begin.optBoolean("dispatchGranted"))continue;
                     // begin persisted delivery_unknown. Every exception, interruption or
                     // timeout from this point leaves that barrier; never infer not_sent.
                     if(Thread.currentThread().isInterrupted()||!notificationsAllowed())return;
-                    post(tag,id,notification(record,claimId,id));
+                    post(tag,id,notification(plan?claim.getJSONObject("candidate"):record,claimId,id));
                     automation.recordFollowUpDelivery(scope,claimId,"notified");
                 }
                 if(System.nanoTime()>=budget){scanned++;break;}
@@ -129,6 +131,16 @@ public class HostAutomationCoordinator implements AutomationModule.AlarmHost {
         return reconciliation(receipt,false,"active_notification_not_found");
     }
 
+    /** A system tap is navigation to a retained original plan, never resume, retry or another notification. */
+    public JSONObject openPlanNotification(String planId,String claimId)throws Exception {
+        AutomationModule automation=module();if(automation==null)throw new IllegalStateException("原目标模块正在准备");
+        JSONObject receipt=automation.getFollowUpReceipt(scope(),claimId);
+        if(!"plan_change".equals(receipt.optString("kind"))||!planId.equals(receipt.optString("planId"))||!receipt.optString("status").matches("notified|delivery_unknown"))throw new SecurityException("原计划变化通知不存在或尚未投递");
+        JSONObject progress=automation.planProgress(scope(),planId);
+        return new JSONObject().put("planId",planId).put("claimId",claimId).put("expired",!receipt.getString("candidateKey").equals(progress.optString("changeKey")))
+                .put("executionAuthorized",false);
+    }
+
     protected void post(String tag,int id,Notification notification)throws Exception {
         tasks.requireExecutionEnabled();
         NotificationManager manager=context.getSystemService(NotificationManager.class);if(manager==null)throw new IllegalStateException("通知服务不可用");manager.notify(tag,id,notification);
@@ -141,14 +153,19 @@ public class HostAutomationCoordinator implements AutomationModule.AlarmHost {
         String group=channel.getGroup();if(group!=null){NotificationChannelGroup parent=manager.getNotificationChannelGroup(group);if(parent!=null&&parent.isBlocked())return false;}return true;
     }
     private Notification notification(JSONObject record,String claimId,int id)throws Exception {
-        String commitment=record.getString("id");Intent open=new Intent().setClassName(context.getPackageName(),"dev.pocketengine.ui.ComposeActivity")
+        boolean plan="plan_change".equals(record.optString("kind"));String commitment=record.getString("id");Intent open=new Intent().setClassName(context.getPackageName(),"dev.pocketengine.ui.ComposeActivity")
                 .setAction("dev.pocketengine.OPEN_COMMITMENT").setData(Uri.parse("pocketworld://commitment/"+Uri.encode(commitment)+"?claim="+Uri.encode(claimId)))
                 .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP|Intent.FLAG_ACTIVITY_SINGLE_TOP).putExtra("commitmentId",commitment).putExtra("followUpClaimId",claimId);
+        if(plan){String target=record.getString("planId");open.setAction("dev.pocketengine.OPEN_EXECUTION_PLAN").setData(Uri.parse("pocketworld://execution-plan/"+Uri.encode(target)+"?claim="+Uri.encode(claimId)))
+                .putExtra("automationPlanId",target).putExtra("planChangeClaimId",claimId);open.removeExtra("commitmentId");open.removeExtra("followUpClaimId");}
         PendingIntent tap=PendingIntent.getActivity(context,id,open,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
         Bundle evidence=new Bundle();evidence.putString("commitmentId",commitment);evidence.putString("followUpClaimId",claimId);evidence.putLong("commitmentRevision",record.getLong("revision"));
         int icon=context.getApplicationInfo().icon;if(icon==0)icon=android.R.drawable.ic_dialog_info;
+        String body=plan?("attention".equals(record.optString("notificationKind"))?"原目标需要你处理。点击查看原因与原任务。"
+                :"completed".equals(record.optString("stopReason"))?"原目标已有核验结果。点击查看成果与完成范围。":"原目标已结束。点击核对结果与未完成的步骤。")
+                :"这项承诺已到跟进时间。点击查看详情，由你决定下一步。";
         return new Notification.Builder(context,CHANNEL).setSmallIcon(icon).setContentTitle(record.optString("title","承诺待跟进"))
-                .setContentText("这项承诺已到跟进时间。点击查看详情，由你决定下一步。")
+                .setContentText(body).setOnlyAlertOnce(true)
                 .setContentIntent(tap).setExtras(evidence).setAutoCancel(true).setCategory(Notification.CATEGORY_REMINDER).setVisibility(Notification.VISIBILITY_PRIVATE).build();
     }
     private static List<JSONObject> records(AutomationModule module,JSONObject scope)throws Exception {
@@ -158,9 +175,12 @@ public class HostAutomationCoordinator implements AutomationModule.AlarmHost {
             if(!"owner".equals(record.optString("ownerId"))||!"private".equals(record.optString("spaceId"))||record.isNull("followUpAt")||record.isNull("candidateKey"))continue;
             if(record.optString("status").matches("completed|cancelled"))continue;result.add(record);
         }
+        JSONArray plans=module.handle("listPlans",new JSONObject().put("scope",scope)).getJSONArray("plans");
+        for(int i=0;i<plans.length();i++){JSONObject plan=plans.getJSONObject(i),execution=plan.optJSONObject("execution");if(execution==null||!execution.optBoolean("notifyChanges"))continue;
+            result.add(new JSONObject().put("kind","plan_change").put("planId",plan.getString("id")).put("id",plan.getString("id")).put("followUpAt",0L));}
         result.sort(Comparator.comparingLong((JSONObject record)->record.optLong("followUpAt")).thenComparing(record->record.optString("id")));return result;
     }
-    private static JSONObject evaluate(AutomationModule module,JSONObject scope,JSONObject record)throws Exception {return module.evaluateFollowUp(scope,record.getString("id"),record.getLong("revision"),record.getString("candidateKey"));}
+    private static JSONObject evaluate(AutomationModule module,JSONObject scope,JSONObject record)throws Exception {return "plan_change".equals(record.optString("kind"))?module.evaluatePlanChange(scope,record.getString("planId")):module.evaluateFollowUp(scope,record.getString("id"),record.getLong("revision"),record.getString("candidateKey"));}
     private static JSONObject reconciliation(JSONObject receipt,boolean applied,String source)throws Exception{return new JSONObject().put("receipt",receipt).put("reconciled",applied).put("source",source);}
     private static String notificationTag(String claimId){return "pocketworld.followup."+claimId;}
     private static int notificationId(String claimId){return 0x10000000|(claimId.hashCode()&0x0fffffff);}

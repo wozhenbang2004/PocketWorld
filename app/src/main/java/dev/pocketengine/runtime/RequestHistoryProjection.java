@@ -44,7 +44,7 @@ final class RequestHistoryProjection {
 
     private static boolean hasContentReferences(JSONArray history) throws Exception {
         for (int i = 0; i < history.length(); i++)
-            for (String key : new String[]{"ownerAttachmentRefs", "ownerSourceRefs", "ownerPreviewRefs"}) {
+            for (String key : new String[]{"ownerAttachmentRefs", "ownerSourceRefs", "ownerPreviewRefs", "ownerObjectRefs"}) {
                 JSONArray refs = history.getJSONObject(i).optJSONArray(key);
                 if (refs != null && refs.length() > 0) return true;
             }

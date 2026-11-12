@@ -23,6 +23,9 @@ public final class TaskMemoryHistory {
         if(validation.has("ownerWorkResults")){
             JSONArray results=validation.optJSONArray("ownerWorkResults");String digest=ownerWorkResultsDigest(results);if(digest!=null)identity.put("ownerWorkResultsDigest",digest);
         }
+        if(validation.has("ownerWorkContexts")){
+            String digest=ownerWorkContextsDigest(validation.getJSONArray("ownerWorkContexts"));if(digest!=null)identity.put("ownerWorkContextsDigest",digest);
+        }
         JSONArray historical=validation.optJSONArray("historicalMemory");if(historical!=null&&historical.length()>0)identity.put("historicalMemory",historical);
         return new JSONObject().put("format",1).put("memoryDigest",TaskStore.capabilityFingerprint(identity));
     }
@@ -34,6 +37,20 @@ public final class TaskMemoryHistory {
         for(int i=0;i<results.length();i++){JSONObject row=results.getJSONObject(i);Object task=row.opt("taskId"),delivery=row.opt("deliveryId"),digest=row.opt("resultDigest");
             if(row.length()!=3||!(task instanceof String)||!TaskStoreMemoryQuery.validTaskId((String)task)||!(delivery instanceof String)||!((String)delivery).matches("[a-f0-9-]{36}")||!(digest instanceof String)||!((String)digest).matches("[a-f0-9]{64}"))throw new SecurityException("原工作结果依赖只接受准确任务、投递身份与内容指纹");
             String key=task+":"+delivery;if(ordered.put(key,new JSONObject(row.toString()))!=null)throw new SecurityException("原工作结果依赖不能重复");
+        }
+        return ordered.isEmpty()?null:TaskMemoryUse.digest(MemoryArchive.canonical(new JSONArray(ordered.values())));
+    }
+    /** A changed/withdrawn work input retires answers derived from that read too. */
+    private static String ownerWorkContextsDigest(JSONArray contexts)throws Exception {
+        if(contexts.length()>128)throw new SecurityException("原工作上下文选择超过128页");
+        java.util.Map<String,JSONObject> ordered=new java.util.TreeMap<>();
+        for(int i=0;i<contexts.length();i++){
+            JSONObject row=contexts.getJSONObject(i);Object epoch=row.opt("epoch");
+            if(row.length()!=6||!TaskStoreMemoryQuery.validTaskId(row.optString("taskId"))||!TaskStoreMemoryQuery.validTaskId(row.optString("conversationId"))
+                    ||!row.optString("runId").isEmpty()&&!TaskStoreMemoryQuery.validTaskId(row.optString("runId"))
+                    ||!(epoch instanceof Integer||epoch instanceof Long)||((Number)epoch).longValue()<0||((Number)epoch).longValue()>Integer.MAX_VALUE
+                    ||!row.optString("contextRevision").matches("[a-f0-9]{64}")||!row.optString("contextDigest").matches("[a-f0-9]{64}"))throw new SecurityException("原工作上下文依赖不是准确原生读取身份");
+            ordered.put(row.getString("taskId")+":"+row.getString("contextDigest"),new JSONObject(row.toString()));
         }
         return ordered.isEmpty()?null:TaskMemoryUse.digest(MemoryArchive.canonical(new JSONArray(ordered.values())));
     }
@@ -90,7 +107,7 @@ public final class TaskMemoryHistory {
                 }retired.put("tool_calls",identities);}
                 copy.put(i,retired);row=retired;
             }
-            row.remove("nativeTraceCallId");row.remove("nativeAssistantSource");row.remove("memoryContext");row.remove("memoryReference");row.remove("memoryContextRetired");row.remove("ownerMessageRevision");row.remove("ownerSourceRefs");row.remove("ownerSourceRefsUnavailable");row.remove("ownerPreviewRefs");row.remove("ownerPreviewRefsUnavailable");row.remove("ownerRecallFeedback");row.remove("hostObservation");row.remove("toolOutputCapture");
+            row.remove("nativeTraceCallId");row.remove("nativeAssistantSource");row.remove("memoryContext");row.remove("memoryReference");row.remove("memoryContextRetired");row.remove("ownerMessageRevision");row.remove("ownerSourceRefs");row.remove("ownerSourceRefsUnavailable");row.remove("ownerPreviewRefs");row.remove("ownerPreviewRefsUnavailable");row.remove("ownerObjectRefs");row.remove("ownerObjectRefsUnavailable");row.remove("ownerRecallFeedback");row.remove("hostObservation");row.remove("toolOutputCapture");
         }return copy;
     }
     /** F012: only a validated private carrier exactly matching its public tool receipt is
@@ -102,7 +119,7 @@ public final class TaskMemoryHistory {
         if(!TaskMemoryTrace.rawFingerprint(saved).equals(TaskMemoryTrace.rawFingerprint(exposed)))throw new SecurityException("原输出private/public定位不一致");copy.remove("toolOutputCapture");return copy;
     }
     private static boolean retireObservationProjection(JSONObject row)throws Exception{
-        if(!"user".equals(row.optString("role"))||row.has("ownerMessageId")||row.has("ownerInputMode")||row.has("ownerAttachmentRefs")||row.has("ownerSourceRefs")||row.has("ownerPreviewRefs")||row.has("ownerRecallFeedback"))return false;
+        if(!"user".equals(row.optString("role"))||row.has("ownerMessageId")||row.has("ownerInputMode")||row.has("ownerAttachmentRefs")||row.has("ownerSourceRefs")||row.has("ownerPreviewRefs")||row.has("ownerObjectRefs")||row.has("ownerRecallFeedback"))return false;
         JSONArray parts=row.optJSONArray("content");if(parts==null)return false;boolean changed=false;
         for(int i=0;i<parts.length();i++){
             JSONObject part=parts.optJSONObject(i);if(part==null||!"text".equals(part.optString("type")))continue;

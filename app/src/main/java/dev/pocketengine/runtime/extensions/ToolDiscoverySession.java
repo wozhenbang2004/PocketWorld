@@ -3,7 +3,7 @@ package dev.pocketengine.runtime.extensions;
 import dev.pocketengine.core.CapabilitySnapshot;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.core.ScopedToolCatalog;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
@@ -13,10 +13,10 @@ import org.json.JSONObject;
 
 /** Metadata state inside the existing original run; no execution, task store or JSON restore API. */
 public final class ToolDiscoverySession implements AutoCloseable {
-    /** Metadata occupies a schema slot only while at least one real definition is hidden. */
+    /** Eligible real catalogue size; per-request publication has a separate, smaller budget. */
     public static boolean shouldDefer(int realToolCount,int capabilityNameCount){
         if(realToolCount<0||capabilityNameCount<0)throw new IllegalArgumentException("negative_native_tool_count");
-        return realToolCount>0&&realToolCount<=100&&capabilityNameCount>=realToolCount&&capabilityNameCount<=512;
+        return realToolCount>0&&realToolCount<=ScopedToolCatalog.MAX_TOOLS&&capabilityNameCount>=realToolCount&&capabilityNameCount<=ScopedToolCatalog.MAX_TOOLS;
     }
     // Only definitions already admitted to the original scope can become resident.
     public static final Set<String> DEFAULT_RESIDENT=Set.of("owner_work_list","owner_work_directory","owner_work_get","owner_work_start","owner_work_input","owner_work_control","owner_work_capabilities","owner_work_prepare",
@@ -26,7 +26,10 @@ public final class ToolDiscoverySession implements AutoCloseable {
     private final String taskId,runId;
     private final int epoch;
     private final RunControl original;
-    private final Set<String> activated=new HashSet<>();
+    /** Least recent first. Eviction removes only publication, never an original scope entry. */
+    private final Set<String> activated=new LinkedHashSet<>();
+    /** Every checkpointed page in this model batch must be published together next turn. */
+    private final Set<String> requiredNext=new LinkedHashSet<>();
     private final Map<String,Pending> pending=new LinkedHashMap<>();
     private ScopedToolCatalog catalog;
     private Set<String> published=Set.of();
@@ -38,26 +41,38 @@ public final class ToolDiscoverySession implements AutoCloseable {
     }
     /** The original host calls this after its full-scope authorization; hiding definitions does not change that set. */
     public synchronized void beginRequest(CapabilitySnapshot scope,JSONArray definitions,Map<String,ScopedToolCatalog.SourcePin> sources,Set<String> resident,RunControl control)throws Exception {
-        original(control);ScopedToolCatalog next=ScopedToolCatalog.capture(scope,taskId,runId,epoch,original,definitions,sources,resident);
-        if(catalog==null||!catalog.revision().equals(next.revision()))activated.clear();
-        activated.removeIf(identity->!next.containsIdentity(identity));pending.clear();published=Set.copyOf(activated);catalog=next;stale=false;
+        original(control);ScopedToolCatalog next=ScopedToolCatalog.capture(scope,taskId,runId,epoch,original,definitions,sources,resident);next.requireDiscoveryBudget();
+        if(catalog==null||!catalog.revision().equals(next.revision())){activated.clear();requiredNext.clear();}
+        activated.removeIf(identity->!next.containsIdentity(identity));requiredNext.removeIf(identity->!next.containsIdentity(identity));
+        Set<String> selected=next.selectPublished(requiredNext,activated);
+        activated.retainAll(selected);pending.clear();published=selected;requiredNext.clear();catalog=next;stale=false;
     }
     public synchronized JSONArray requestTools(RunControl control)throws Exception{check(control);return catalog.requestTools(published);}
     public synchronized JSONObject summary(RunControl control)throws Exception{check(control);return catalog.summary(published);}
     public synchronized void validateSearch(JSONObject arguments,RunControl control)throws Exception{requirePublished(ScopedToolCatalog.SEARCH_TOOL,control);catalog.validateSearch(ScopedToolCatalog.SearchRequest.fromJson(arguments));}
     public synchronized JSONObject search(JSONObject arguments,RunControl control)throws Exception {
         requirePublished(ScopedToolCatalog.SEARCH_TOOL,control);if(pending.size()>=16)throw new IllegalStateException("tool_discovery_uncommitted_receipt_bound");
-        ScopedToolCatalog.Page page=catalog.search(ScopedToolCatalog.SearchRequest.fromJson(arguments));String id=UUID.randomUUID().toString();
+        Set<String> reserved=new LinkedHashSet<>(requiredNext);for(Pending issued:pending.values())reserved.addAll(issued.identities);
+        ScopedToolCatalog.Page page=catalog.search(ScopedToolCatalog.SearchRequest.fromJson(arguments),reserved);String id=UUID.randomUUID().toString();
         JSONObject receipt=page.view().put("discoveryId",id).put("taskId",taskId).put("runId",runId).put("epoch",epoch).put("activation","after_original_checkpoint").put("ok",true);
         check(control);pending.put(id,new Pending(ScopedToolCatalog.fingerprint(receipt),page.identities()));return receipt;
     }
     /** Native afterTool callback only, after the existing Runner's real receipt/history checkpoint succeeds.
      * JSON cannot recreate this session's one-use pending object, original control or scope. */
     public synchronized void afterTool(String tool,JSONObject originalReceipt,RunControl control)throws Exception {
-        if(!ScopedToolCatalog.SEARCH_TOOL.equals(tool))return;check(control);
+        if(!ScopedToolCatalog.SEARCH_TOOL.equals(tool)){
+            // Optional recency bookkeeping must not replace the outer port's original
+            // responseCurrent retirement path after a committed scope-changing effect.
+            if(closed||control!=original||catalog==null)return;
+            String identity=catalog.deferredIdentity(tool);
+            if(identity!=null&&published.contains(identity)){activated.remove(identity);activated.add(identity);}
+            return;
+        }
+        check(control);
         Object raw=originalReceipt.opt("discoveryId");Pending issued=raw instanceof String?pending.remove((String)raw):null;
         if(issued==null||!issued.digest.equals(ScopedToolCatalog.fingerprint(originalReceipt)))throw new SecurityException("tool_discovery_receipt_not_original_or_changed");
-        check(control);activated.addAll(issued.identities);
+        check(control);requiredNext.addAll(issued.identities);
+        for(String identity:issued.identities){activated.remove(identity);activated.add(identity);}
         // Keep this request's published definitions unchanged. Only the next original beginRequest exposes them.
     }
     public synchronized void requirePublished(String name,RunControl control)throws Exception {
@@ -67,7 +82,7 @@ public final class ToolDiscoverySession implements AutoCloseable {
     private void original(RunControl control)throws InterruptedException{if(closed||control!=original||!original.matchesHostRun(taskId,runId,epoch))throw new SecurityException("tool_discovery_foreign_or_closed_run");original.check();}
     private void check(RunControl control)throws Exception {
         original(control);if(stale||catalog==null)throw new SecurityException("tool_discovery_request_not_current");
-        try{catalog.check();}catch(Exception revoked){stale=true;activated.clear();pending.clear();published=Set.of();throw revoked;}
+        try{catalog.check();}catch(Exception revoked){stale=true;activated.clear();requiredNext.clear();pending.clear();published=Set.of();throw revoked;}
     }
-    @Override public synchronized void close(){closed=true;activated.clear();pending.clear();published=Set.of();catalog=null;}
+    @Override public synchronized void close(){closed=true;activated.clear();requiredNext.clear();pending.clear();published=Set.of();catalog=null;}
 }

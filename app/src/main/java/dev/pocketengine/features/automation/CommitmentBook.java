@@ -460,6 +460,18 @@ public final class CommitmentBook {
                     .put("createdAt",now).put("admissionNumber",Math.addExact(execution.getLong("admissions"),1)).put("state","task_creation_unknown");step.put("taskAdmission",intent);
             if(decision.optJSONObject("remoteWaitStatus")!=null)intent.put("remoteWaitEvidence",copy(decision.getJSONObject("remoteWaitStatus").getJSONObject("evidence")));
             if(decision.optJSONObject("businessWaitStatus")!=null){JSONObject observed=decision.getJSONObject("businessWaitStatus"),proof=observed.getJSONObject("evidence");intent.put("businessWaitEvidence",copy(proof));step.put("businessWaitConsumedEventId",proof.getString("eventId"));}
+            JSONArray dependencies=new JSONArray(),refs=step.getJSONArray("dependencies");
+            for(int i=0;i<refs.length();i++){JSONObject ref=refs.getJSONObject(i),parent=find(state,identity,ref.getString("stepId")),actual=resolvePlanTask(identity,parent);
+                JSONObject evidence=new JSONObject().put("stepId",parent.getString("id")).put("requiredOutcome",ref.getString("outcome")).put("observedOutcome",parent.getString("status"));
+                if(actual!=null&&planTaskMatches(identity,parent,parent.optJSONObject("taskAdmission"),actual))evidence.put("taskId",actual.getString("taskId")).put("runId",actual.optString("runId")).put("epoch",actual.optLong("coordinatorEpoch")).put("resultVerified",actual.optBoolean("resultVerified"));
+                dependencies.put(evidence);
+            }
+            JSONObject basis=new JSONObject().put("format","pocketworld.plan-admission-basis.v1").put("checkedAt",now).put("mode",execution.getString("mode"))
+                    .put("approvalSequence",execution.getLong("approvalSequence")).put("scheduledAt",step.getLong("dueAt")).put("dependencies",dependencies)
+                    .put("runPolicy",copy(execution.getJSONObject("policy"))).put("taskStarted",false);
+            if(decision.optJSONObject("conditionStatus")!=null)basis.put("conditions",copy(decision.getJSONObject("conditionStatus")));
+            for(String key:new String[]{"remoteWaitEvidence","businessWaitEvidence"})if(intent.optJSONObject(key)!=null)basis.put(key,copy(intent.getJSONObject(key)));
+            intent.put("admissionBasis",basis);
             execution.put("admissions",Math.addExact(execution.getLong("admissions"),1));touchPlan(plan,now);write(state);
             return taskRequestView(plan,step).put("lookupOnly",false).put("eligible",true);
         }
@@ -532,6 +544,71 @@ public final class CommitmentBook {
             if(planInFlight(state,identity,plan)){long poll=AutomationConditions.later(now);next=next<0?poll:Math.min(next,poll);continue;}
             JSONArray ids=plan.getJSONArray("stepIds");for(int j=0;j<ids.length();j++){JSONObject decision=planTaskDecision(state,identity,plan,find(state,identity,ids.getString(j)),now);if(!decision.isNull("nextAt")){long at=decision.getLong("nextAt");next=next<0?at:Math.min(next,at);}}
         }return next;}
+    }
+    /** Current native observations over the original occurrences; no cache, task or result is created. */
+    public JSONObject planProgress(JSONObject scope,String planId,long now)throws Exception {
+        JSONObject identity=scope(scope);privatePlanScope(identity);validNow(now);
+        synchronized(lock){JSONObject state=read();return planProgress(state,identity,findPlan(state,identity,planId),now);}
+    }
+    private JSONObject planProgress(JSONObject state,JSONObject identity,JSONObject plan,long now)throws Exception {
+        JSONObject view=planView(state,identity,plan,now),execution=plan.optJSONObject("execution");JSONArray steps=planSteps(state,identity,plan),facts=new JSONArray();
+        JSONObject current=null,last=null,attention=null,lastStep=null;boolean available=true,allClosed=true;int verified=0;long lastAt=-1;
+        for(int i=0;i<steps.length();i++){
+            if(Thread.currentThread().isInterrupted())throw new InterruptedException("原计划进展读取已停止");
+            JSONObject step=steps.getJSONObject(i),intent=step.optJSONObject("taskAdmission");boolean bound=intent!=null||!step.optString("taskId").isEmpty();
+            JSONObject actual=bound?resolvePlanTask(identity,step):null;boolean matched=actual!=null&&planTaskMatches(identity,step,intent,actual)
+                    &&(step.optString("taskId").isEmpty()||step.getString("taskId").equals(actual.optString("taskId")));
+            String status=matched?actual.optString("progressStatus",actual.optString("status")):bound?"unavailable":step.getString("status");
+            boolean completed=matched&&actual.optBoolean("progressResultVerified"),closed=matched&&actual.optBoolean("progressTerminalVerified")&&(!"completed".equals(actual.optString("status"))||completed);
+            JSONObject entry=new JSONObject().put("stepId",step.getString("id")).put("index",i).put("title",step.getString("title")).put("status",status).put("taskId",matched?actual.getString("taskId"):step.optString("taskId"))
+                    .put("readState",bound?(matched?"current":"unavailable"):"not_started").put("resultVerified",completed).put("terminalVerified",closed);
+            lastStep=entry;
+            if(intent!=null){entry.put("occurrenceId",intent.getString("occurrenceId"));if(intent.optJSONObject("admissionBasis")!=null)entry.put("admissionBasis",copy(intent.getJSONObject("admissionBasis")));}
+            if(matched){entry.put("runId",actual.optString("runId")).put("epoch",actual.optLong("coordinatorEpoch")).put("summary",actual.optString("summary"))
+                    .put("summaryTruncated",actual.optBoolean("summaryTruncated")).put("resultBasis",actual.optJSONObject("resultBasis"));}
+            boolean settled=bound?closed&&step.getString("status").equals(actual.optString("status")):step.optString("status").matches("skipped|cancelled");allClosed&=settled;if(bound&&!matched)available=false;
+            if(completed)verified++;
+            if(closed&&step.optLong("updatedAt")>=lastAt){last=entry;lastAt=step.optLong("updatedAt");}
+            if(!settled&&current==null)current=entry;
+            if(matched&&status.matches("awaiting_user|waiting_user|needs_confirmation|unverified_result|reconciling|interrupted|waiting_approval|awaiting_approval")&&attention==null)attention=entry;
+            if(matched&&terminal(step)&&!settled&&closed&&attention==null){entry.put("status","result_changed");attention=entry;}
+            // Only identity, original outcome proof and semantic state enter deduplication.
+            facts.put(new JSONObject().put("stepId",step.getString("id")).put("occurrenceId",intent==null?"":intent.getString("occurrenceId"))
+                    .put("taskId",entry.getString("taskId")).put("runId",matched?actual.optString("runId"):"").put("epoch",matched?actual.optLong("coordinatorEpoch"):0)
+                    .put("status",status).put("resultVerified",completed).put("terminalVerified",closed).put("changeFingerprint",matched?actual.optString("changeFingerprint"):""));
+        }
+        JSONObject decision=null;if(execution!=null&&current!=null)decision=planTaskDecision(state,identity,plan,planStep(state,identity,plan,current.getString("stepId")),now);
+        String reason=decision==null?"":decision.optString("reason"),control=execution==null?"":execution.optString("state");
+        if(!available)reason="task_state_unavailable";
+        else if(control.equals("paused"))reason="plan_paused";else if(control.equals("cancelled")&&!allClosed)reason="original_tasks_stopping";
+        else if(attention!=null)reason=attention.getString("status");else if(reason.matches("bound_task|ready"))reason="";
+        boolean ended=available&&allClosed&&view.optString("state").matches("completed|cancelled|finished_with_failures");
+        if(ended)reason=view.getString("state");
+        boolean blocked=execution!=null&&execution.optBoolean("started")&&reason.matches("expired|approval_expired|expires_before_eligible|task_admission_budget_exhausted");
+        String notice=ended?"ended":available&&(attention!=null||blocked)?"attention":"";
+        JSONObject anchor=attention!=null?attention:current!=null?current:last!=null?last:lastStep;
+        String observedState=!available?"evidence_unavailable":!ended&&view.optString("state").matches("completed|cancelled|finished_with_failures")?"reconciliation_required":view.getString("state");
+        JSONObject result=new JSONObject().put("format","pocketworld.plan-progress.v1").put("planId",plan.getString("id")).put("observedAt",now)
+                .put("goal",plan.optString("goal")).put("state",observedState)
+                .put("readState",available?"current":"partial").put("currentStep",current==null?JSONObject.NULL:current).put("lastResult",last==null?JSONObject.NULL:last)
+                .put("verifiedResults",verified).put("stopReason",reason).put("nextCheckAt",decision==null||decision.isNull("nextAt")?JSONObject.NULL:decision.get("nextAt"))
+                .put("notificationKind",notice).put("executionAuthorized",false).put("taskStateAuthority","TaskStore");
+        if(execution!=null&&anchor!=null&&!notice.isEmpty()){
+            JSONObject change=new JSONObject().put("planId",plan.getString("id")).put("kind",notice).put("reason",reason);
+            // Another step advancing must not re-notify the same question or approval.
+            if(attention!=null&&!ended)change.put("attention",facts.getJSONObject(attention.getInt("index")));
+            else if(ended)change.put("approvalSequence",execution.getLong("approvalSequence")).put("facts",facts);
+            else change.put("approvalSequence",execution.getLong("approvalSequence")).put("blockedStepId",anchor.getString("stepId"));
+            result.put("changeKey",PlanExecutionPolicy.changeKey(change)).put("anchorStepId",anchor.getString("stepId"));
+        }
+        JSONObject notification=new JSONObject().put("requested",execution!=null&&execution.optBoolean("notifyChanges")).put("followUpEnabled",policy(state,identity).getBoolean("enabled")).put("state",result.has("changeKey")?"pending":"no_change");
+        JSONArray receipts=array(state,"followUpReceipts");for(int i=receipts.length()-1;i>=0;i--){JSONObject receipt=receipts.getJSONObject(i);
+            if(!matches(identity,receipt)||!"plan_change".equals(receipt.optString("kind"))||!plan.getString("id").equals(receipt.optString("planId")))continue;
+            if(!notification.has("lastStatus"))notification.put("lastStatus",receipt.getString("status")).put("lastClaimId",receipt.getString("claimId"));
+            if(result.optString("changeKey").equals(receipt.optString("candidateKey"))){notification.put("state",receipt.getString("status"));break;}
+        }
+        if(!notification.getBoolean("requested"))notification.put("state","plan_disabled");else if(!notification.getBoolean("followUpEnabled"))notification.put("state","follow_up_disabled");
+        return result.put("notification",notification);
     }
     private JSONObject planTaskDecision(JSONObject state,JSONObject identity,JSONObject plan,JSONObject step,long now)throws Exception {
         JSONObject result=copy(identity).put("planId",plan.getString("id")).put("planRevision",aggregatePlanRevision(state,identity,plan)).put("stepId",step.getString("id"))
@@ -709,6 +786,56 @@ public final class CommitmentBook {
         synchronized(lock){return evaluate(read(),identity,id,revision,candidateKey,now,null);}
     }
 
+    /** Same Book and delivery receipts as ordinary follow-ups. No notification effect or task admission. */
+    public JSONObject evaluatePlanChange(JSONObject scope,String planId,long now)throws Exception {
+        JSONObject identity=scope(scope);privatePlanScope(identity);validNow(now);
+        synchronized(lock){return evaluatePlanChange(read(),identity,planId,"",now,null);}
+    }
+    private JSONObject evaluatePlanChange(JSONObject state,JSONObject identity,String planId,String expectedKey,long now,String ownClaim)throws Exception {
+        JSONObject plan=findPlan(state,identity,planId),progress=planProgress(state,identity,plan,now),execution=plan.optJSONObject("execution"),policy=policy(state,identity);
+        JSONObject result=copy(identity).put("planId",planId).put("progress",progress).put("evaluatedAt",now).put("policyRevision",policy.getLong("revision"))
+                .put("dispatchGranted",false).put("referenceOnly",true).put("requiresHostAdmission",true).put("executionAuthorized",false);
+        String key=progress.optString("changeKey");
+        if(execution==null||!execution.optBoolean("notifyChanges"))return decision(result,false,"plan_notifications_disabled",-1);
+        if(key.isEmpty()||!progress.optString("readState").equals("current")||"paused".equals(execution.optString("state"))&&"attention".equals(progress.optString("notificationKind")))return decision(result,false,"no_important_change",-1);
+        if(!expectedKey.isEmpty()&&!expectedKey.equals(key))return decision(result,false,"stale_candidate",-1);
+        JSONObject step=planStep(state,identity,plan,progress.getString("anchorStepId"));
+        JSONObject candidate=new JSONObject().put("kind","plan_change").put("planId",planId).put("id",step.getString("id")).put("revision",step.getLong("revision"))
+                .put("candidateKey",key).put("title",plan.getString("title")).put("notificationKind",progress.getString("notificationKind")).put("stopReason",progress.getString("stopReason"));
+        result.put("candidate",candidate).put("candidateKey",key);
+        if(!policy.getBoolean("enabled"))return decision(result,false,"disabled",-1);
+        long next=now,cooldown=policy.getLong("cooldownMillis");String reason="eligible";JSONArray receipts=array(state,"followUpReceipts");
+        for(int i=0;i<receipts.length();i++){JSONObject receipt=receipts.getJSONObject(i);if(!matches(identity,receipt))continue;String status=receipt.getString("status");
+            boolean same="plan_change".equals(receipt.optString("kind"))&&planId.equals(receipt.optString("planId"))&&key.equals(receipt.getString("candidateKey"));
+            if(same&&status.matches("notified|not_sent|delivery_unknown"))return decision(result,false,status.equals("notified")?"already_notified":status,-1);
+            if(status.equals("reserved")&&!receipt.getString("claimId").equals(ownClaim)&&reservationActive(state,identity,receipt,policy,now)){
+                if(same)return decision(result,false,"claimed",receipt.getLong("leaseUntil"));
+                if(cooldown>0&&receipt.getLong("leaseUntil")>next){next=receipt.getLong("leaseUntil");reason="scope_reserved";}
+            }
+            if(!receipt.isNull("dispatchStartedAt")&&cooldown>0){long until=Math.min(MAX_TIME,receipt.getLong("dispatchStartedAt")+cooldown);if(until>next){next=until;reason="cooldown";}}
+        }
+        if(!policy.isNull("pausedUntil")&&policy.getLong("pausedUntil")>next){next=policy.getLong("pausedUntil");reason="paused";}
+        long quiet=Math.max(quietEnd(policy,next),AutomationPolicy.quietEnd(execution.getJSONObject("policy"),next));if(quiet>next){next=quiet;reason="quiet_hours";}
+        long budget=budgetNext(state,identity,policy,next,ownClaim);if(budget<0)return decision(result,false,"daily_budget_exhausted",-1);
+        if(budget>next){next=Math.max(quietEnd(policy,budget),AutomationPolicy.quietEnd(execution.getJSONObject("policy"),budget));reason="daily_budget_exhausted";}
+        if(next<=now){JSONObject condition=AutomationConditions.evaluate(policy,conditions,now);result.put("conditionStatus",condition);if(!condition.getBoolean("allowed"))return decision(result,false,"conditions_blocked",condition.getLong("nextCheckAt"));}
+        return decision(result,next<=now,reason,next);
+    }
+    public JSONObject claimPlanChange(JSONObject scope,String planId,String candidateKey,long leaseMillis,long now)throws Exception {
+        JSONObject identity=scope(scope);privatePlanScope(identity);validNow(now);identifier(candidateKey,"计划变化");
+        if(leaseMillis<1000||leaseMillis>300000||now>MAX_TIME-leaseMillis)throw new IllegalArgumentException("领取租约应为1秒至5分钟");
+        synchronized(lock){JSONObject state=read(),decision=evaluatePlanChange(state,identity,planId,candidateKey,now,null);if(!decision.getBoolean("eligible"))return decision.put("claimed",false);
+            JSONArray receipts=array(state,"followUpReceipts");for(int i=receipts.length()-1;i>=0;i--){JSONObject prior=receipts.getJSONObject(i);if(matches(identity,prior)&&"plan_change".equals(prior.optString("kind"))&&candidateKey.equals(prior.optString("candidateKey"))&&"reserved".equals(prior.optString("status")))receipts.remove(i);}
+            if(receipts.length()>=10000)throw new IllegalStateException("跟进收据已达到容量上限，未领取");JSONObject candidate=decision.getJSONObject("candidate");
+            JSONObject receipt=copy(identity).put("claimId",UUID.randomUUID().toString()).put("kind","plan_change").put("planId",planId)
+                    .put("commitmentId",candidate.getString("id")).put("commitmentRevision",candidate.getLong("revision")).put("candidateKey",candidateKey)
+                    .put("notificationKind",candidate.getString("notificationKind")).put("stopReason",candidate.getString("stopReason"))
+                    .put("policyRevision",policy(state,identity).getLong("revision")).put("status","reserved").put("claimedAt",now).put("leaseUntil",now+leaseMillis)
+                    .put("dispatchStartedAt",JSONObject.NULL).put("recordedAt",JSONObject.NULL);
+            receipts.put(receipt);write(state);return decision.put("claimed",true).put("receipt",copy(receipt)).put("dispatchGranted",false);
+        }
+    }
+
     /**
      * Native host reservation only. An unexpired token must pass beginFollowUpDelivery before
      * any effect. Expired reservations are safe to replace because they never granted dispatch.
@@ -746,8 +873,8 @@ public final class CommitmentBook {
                 return deliveryResult(receipt,false,"already_started");
             if(receipt.getLong("leaseUntil")<=now)return deliveryResult(receipt,false,"lease_expired");
             if(receipt.getLong("policyRevision")!=policy(state,identity).getLong("revision"))return deliveryResult(receipt,false,"policy_changed");
-            JSONObject decision=evaluate(state,identity,receipt.getString("commitmentId"),receipt.getLong("commitmentRevision"),
-                    receipt.getString("candidateKey"),now,claimId);
+            JSONObject decision="plan_change".equals(receipt.optString("kind"))?evaluatePlanChange(state,identity,receipt.getString("planId"),receipt.getString("candidateKey"),now,claimId)
+                    :evaluate(state,identity,receipt.getString("commitmentId"),receipt.getLong("commitmentRevision"),receipt.getString("candidateKey"),now,claimId);
             if(!decision.getBoolean("eligible"))return decision.put("dispatchGranted",false).put("receipt",copy(receipt));
             receipt.put("status","delivery_unknown").put("dispatchStartedAt",now);write(state);
             return deliveryResult(receipt,true,"host_dispatch_admitted");
@@ -830,8 +957,9 @@ public final class CommitmentBook {
         }
         return decision(result,next<=now,reason,next);
     }
-    private static boolean reservationActive(JSONObject state,JSONObject identity,JSONObject receipt,JSONObject policy,long now)throws Exception {
+    private boolean reservationActive(JSONObject state,JSONObject identity,JSONObject receipt,JSONObject policy,long now)throws Exception {
         if(receipt.getLong("leaseUntil")<=now||receipt.getLong("policyRevision")!=policy.getLong("revision"))return false;
+        if("plan_change".equals(receipt.optString("kind"))){JSONObject plan=findPlan(state,identity,receipt.getString("planId")),execution=plan.optJSONObject("execution");return execution!=null&&execution.optBoolean("notifyChanges")&&receipt.getString("candidateKey").equals(planProgress(state,identity,plan,now).optString("changeKey"));}
         JSONObject record=find(state,identity,receipt.getString("commitmentId"));
         return !terminal(record)&&!expired(record,now)&&dependency(state,identity,record,now)==null&&receipt.getLong("commitmentRevision")==record.getLong("revision")&&receipt.getString("candidateKey").equals(candidateKey(record));
     }
@@ -849,7 +977,7 @@ public final class CommitmentBook {
         return copy(identity).put("revision",0L).put("enabled",false).put("zoneId","UTC").put("quietHours",JSONObject.NULL)
                 .put("pausedUntil",JSONObject.NULL).put("cooldownMillis",0L).put("maxNotificationsPerDay",JSONObject.NULL).put("updatedAt",JSONObject.NULL);
     }
-    private static long budgetNext(JSONObject state,JSONObject identity,JSONObject policy,long at,String ownClaim)throws Exception {
+    private long budgetNext(JSONObject state,JSONObject identity,JSONObject policy,long at,String ownClaim)throws Exception {
         if(policy.isNull("maxNotificationsPerDay"))return at;
         long maximum=policy.getLong("maxNotificationsPerDay");if(maximum==0)return -1;
         long start=AutomationPolicy.dayStart(policy,at),end=AutomationPolicy.nextDay(policy,at),used=0,reserved=0,lease=end;

@@ -13,6 +13,9 @@ public final class OwnerWorkTask {
     public static final String TAKEOVER_FORMAT = "pocketworld.owner-work-takeover.v1";
     public static final String RESULT_HANDLING_FORMAT = "pocketworld.owner-result-handling.v1";
     public static final String CONTRACT_FORMAT = "pocketworld.owner-work-contract.v1";
+    public static final String CONTEXT_FORMAT = "pocketworld.owner-work-context.v1";
+    static final int CONTEXT_INPUT_LIMIT = 128;
+    static final int CONTEXT_PAGE_INPUT_LIMIT = 8;
     public static final int TAKEOVER_TOOL_LIMIT = 3;
     public static final int TAKEOVER_MODEL_LIMIT = 2;
     /** Removal-only: these capabilities may fill evidence gaps, never repeat the
@@ -22,6 +25,79 @@ public final class OwnerWorkTask {
             "attachments_read_text", "attachments_create_text", "attachments_create_document",
             "web_search", "web_fetch", "web_research", "web_sources");
     private OwnerWorkTask() { }
+
+    /** A receipt identity is useful only when matched against the host's native
+     * read selection. The digest also binds the exact observed progress and page. */
+    public static JSONObject contextReadReference(JSONObject context) throws Exception {
+        if (context == null || !CONTEXT_FORMAT.equals(context.optString("format"))
+                || context.opt("available") != Boolean.TRUE
+                || !context.optString("contextRevision").matches("[a-f0-9]{64}")
+                || !context.optString("contextDigest").matches("[a-f0-9]{64}")
+                || !context.optString("taskId").matches("[a-fA-F0-9-]{36}")
+                || !context.optString("conversationId").matches("[a-fA-F0-9-]{36}")
+                || !context.optString("runId").isEmpty()&&!context.optString("runId").matches("[a-fA-F0-9-]{36}")
+                || context.has("sourceContextDigest")&&!context.optString("sourceContextDigest").matches("[a-f0-9]{64}"))
+            throw new SecurityException("原工作上下文回执身份不完整");
+        TaskExecutionScope.exactLong(context,"epoch",0,Integer.MAX_VALUE);
+        JSONObject body = new JSONObject(context.toString());
+        body.remove("contextDigest");
+        if (!TaskStore.capabilityFingerprint(body).equals(context.getString("contextDigest")))
+            throw new SecurityException("原工作上下文正文或观察快照已变化");
+        JSONObject reference = new JSONObject();
+        for (String key : new String[]{"taskId", "conversationId", "runId", "epoch", "contextRevision", "contextDigest"})
+            reference.put(key, context.get(key));
+        return reference;
+    }
+
+    /** Preserve only verified native locator fields across text cleaning. The visible body
+     * receives its own digest and keeps the original digest as a link; neither is authority
+     * until the host matches it to the read it actually performed in this run. */
+    public static JSONObject restoreSafeContextReference(JSONObject original,JSONObject cleaned)throws Exception {
+        JSONObject reference=contextReadReference(original);
+        if(original.has("sourceContextDigest")||cleaned==null)throw new SecurityException("需要本次原生工作上下文，不能再次认证派生回执");
+        JSONObject visible=new JSONObject(cleaned.toString());
+        for(String field:new String[]{"taskId","conversationId","runId","epoch","contextRevision"})visible.put(field,reference.get(field));
+        visible.put("format",CONTEXT_FORMAT).put("available",true).remove("contextDigest");visible.remove("sourceContextDigest");
+        // A cursor is a bounded locator, not source prose. Preserve it only after checking
+        // that it names this exact native source revision and an actual input position.
+        String cursor=original.getString("nextCursor");
+        int count=(int)TaskExecutionScope.exactLong(original,"inputCount",0,CONTEXT_INPUT_LIMIT);
+        if(!cursor.isEmpty()){if(count==0)throw new SecurityException("空工作输入不能携带续读游标");contextPosition(cursor,reference,count);}
+        visible.put("nextCursor",cursor);
+        String sourceDigest=reference.getString("contextDigest");
+        if(!sourceDigest.equals(TaskStore.capabilityFingerprint(visible)))visible.put("sourceContextDigest",sourceDigest);
+        visible.put("contextDigest",TaskStore.capabilityFingerprint(visible));contextReadReference(visible);return visible;
+    }
+
+    /** Stateless source-version cursor. It carries a locator, never a grant. */
+    static JSONObject contextPosition(String cursor, JSONObject identity, int count) throws Exception {
+        if (cursor == null || cursor.length() > 2048) throw new IllegalArgumentException("工作上下文游标无效");
+        if (cursor.isEmpty()) return new JSONObject().put("inputIndex", 0).put("charOffset", 0);
+        JSONObject value;
+        try {
+            value = new JSONObject(new String(android.util.Base64.decode(cursor,
+                    android.util.Base64.URL_SAFE | android.util.Base64.NO_WRAP), java.nio.charset.StandardCharsets.UTF_8));
+        } catch (Exception invalid) { throw new IllegalArgumentException("工作上下文游标不可读取"); }
+        keys(value, Set.of("format", "taskId", "conversationId", "runId", "epoch", "contextRevision", "inputIndex", "charOffset"));
+        if (!CONTEXT_FORMAT.equals(value.optString("format"))) throw new IllegalArgumentException("工作上下文游标版本无效");
+        for (String key : new String[]{"taskId", "conversationId", "runId", "contextRevision"})
+            if (!identity.getString(key).equals(value.optString(key)))
+                throw new IllegalStateException("原工作或主人输入已变化，请去掉contextCursor重新读取");
+        if (TaskExecutionScope.exactLong(value, "epoch", 0, Integer.MAX_VALUE) != identity.getInt("epoch"))
+            throw new IllegalStateException("原工作执行代次已变化，请去掉contextCursor重新读取");
+        TaskExecutionScope.exactLong(value, "inputIndex", 0, Math.max(0, count - 1));
+        TaskExecutionScope.exactLong(value, "charOffset", 0, Integer.MAX_VALUE);
+        return value;
+    }
+
+    static String contextCursor(JSONObject identity, int index, int offset) throws Exception {
+        JSONObject value = new JSONObject().put("format", CONTEXT_FORMAT);
+        for (String key : new String[]{"taskId", "conversationId", "runId", "epoch", "contextRevision"})
+            value.put(key, identity.get(key));
+        value.put("inputIndex", index).put("charOffset", offset);
+        return android.util.Base64.encodeToString(value.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                android.util.Base64.URL_SAFE | android.util.Base64.NO_WRAP | android.util.Base64.NO_PADDING);
+    }
 
     public static boolean isOwnerWork(JSONObject task) {
         return task != null && ROLE.equals(task.optString("executionRole"))
@@ -115,6 +191,7 @@ public final class OwnerWorkTask {
             if (row.optJSONArray("attachments") != null && row.getJSONArray("attachments").length() > 0)
                 message.put("ownerAttachmentRefs", new JSONArray(row.getJSONArray("attachments").toString()));
             if (row.optJSONArray("ownerSourceRefs") != null) message.put("ownerSourceRefs", new JSONArray(row.getJSONArray("ownerSourceRefs").toString()));
+            if (row.optJSONArray("ownerObjectRefs") != null) message.put("ownerObjectRefs", dev.pocketengine.features.assistant.OwnerObjectReferences.checked(row.getJSONArray("ownerObjectRefs")));
             // Project element refs bind the original task. They cannot become a different task's edit capability.
             messages.put(message);
         }

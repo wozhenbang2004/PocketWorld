@@ -24,8 +24,15 @@ export function OwnerWorkFacts({ task, onReport, onReconcile, onTeam }: { task: 
 }
 
 export function WorkGoal({ task }: { task: { goal: string; raw?: Record<string, any> } }) {
-  const work = ownerWorkPresentation(task), contract = work?.contract;
-  return <WorkContract goal={task.goal} contract={contract} />;
+  const work = ownerWorkPresentation(task), raw = task.raw, selected = raw?.developmentContext?.deliveryContract;
+  const ordinary = raw?.kind === 'assistant' && raw.actorId === 'owner' && raw.spaceId === 'private' && raw.origin == null && raw.contextAvailable !== false &&
+    selected?.format === 'pocketworld.owner-work-contract.v1' && Number.isSafeInteger(selected.revision) && selected.revision > 0 &&
+    typeof selected.goal === 'string' && ['constraints', 'deliverable', 'completionCriteria'].every(key => selected[key] === undefined || typeof selected[key] === 'string')
+    ? selected : undefined;
+  const contract = work?.contract || ordinary;
+  return <><WorkContract goal={task.goal} contract={contract} />
+    {!contract && raw?.developmentContext?.deliveryContractReadState === 'not_loaded' && <p className="pw-muted" role="status">交付要求尚未完整载入，请重新打开原任务查看。</p>}
+  </>;
 }
 
 export function WorkContract({ goal, contract }: { goal: string; contract?: { goal: string; deliverable?: string; completionCriteria?: string; constraints?: string } }) {

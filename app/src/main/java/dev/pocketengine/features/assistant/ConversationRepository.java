@@ -297,6 +297,7 @@ public final class ConversationRepository {
                     if(actualInteger(message.opt("at"))&&message.getLong("at")>=0)messages.getJSONObject(messages.length()-1).put("at",message.getLong("at"));
                     if(message.optJSONArray("attachments")!=null&&message.getJSONArray("attachments").length()>0){omitted.put(new JSONObject().put("sourceRecordId",id).put("reason","attachment_bytes_and_grants_not_exported"));JSONArray refs=message.getJSONArray("attachments");for(int i=0;i<refs.length();i++){JSONObject ref=refs.getJSONObject(i);if(ref.optString("id").isEmpty()||!ref.optString("sha256").matches("[a-f0-9]{64}"))continue;attachments.put(new JSONObject().put("messageId",id).put("attachmentId",ref.getString("id")).put("sha256",ref.getString("sha256")).put("availability","reference_only_unverified_not_restored"));}}
                     if(message.optJSONArray("ownerSourceRefs")!=null&&message.getJSONArray("ownerSourceRefs").length()>0)omitted.put(new JSONObject().put("sourceRecordId",id).put("reason","external_source_grants_not_exported"));
+                    if(message.optJSONArray("ownerObjectRefs")!=null&&message.getJSONArray("ownerObjectRefs").length()>0)omitted.put(new JSONObject().put("sourceRecordId",id).put("reason","native_object_selections_not_exported"));
                     if(message.optJSONArray("ownerPreviewRefs")!=null&&message.getJSONArray("ownerPreviewRefs").length()>0)omitted.put(new JSONObject().put("sourceRecordId",id).put("reason","native_preview_selections_not_exported"));
                 }
             }
@@ -799,7 +800,7 @@ public final class ConversationRepository {
         if(!pendingAck&&(!row.getString("acceptedRunId").equals(ack.optString("runId"))||integer(row,"acceptedEpoch",1)!=integer(ack,"epoch",1)
                 ||row.has("acceptedTaskId")&&!row.getString("acceptedTaskId").equals(ack.optString("taskId"))))
             throw new SecurityException("原接收代次与消息回执不一致，未接手副本");
-        for(String key:List.of("attachments","ownerSourceRefs","ownerPreviewRefs")){
+        for(String key:List.of("attachments","ownerSourceRefs","ownerPreviewRefs","ownerObjectRefs")){
             JSONArray expected=row.optJSONArray(key),actual=message.optJSONArray(key);
             if(row.has(key)&&expected==null||message.has(key)&&actual==null
                     ||!TaskMemoryTrace.rawFingerprint(new JSONObject().put("refs",expected==null?new JSONArray():expected))
@@ -815,7 +816,7 @@ public final class ConversationRepository {
                 .put("ownerMessageRevision",selected.currentMessageRevision).put("acceptedRunId",selected.acceptedRunId).put("acceptedEpoch",selected.acceptedEpoch)
                 .put("ownerRequestFingerprint",selected.requestFingerprint).put("acceptedTaskId",selected.taskId)
                 .put("content",selected.content)
-                .put("mode",selected.mode).put("attachments",selected.attachments()).put("ownerSourceRefs",selected.sourceRefs()).put("ownerPreviewRefs",selected.previewRefs());
+                .put("mode",selected.mode).put("attachments",selected.attachments()).put("ownerSourceRefs",selected.sourceRefs()).put("ownerPreviewRefs",selected.previewRefs()).put("ownerObjectRefs",selected.objectRefs());
         requireQueuedOwnerMessageCurrent(selected.conversationId,expected);
         JSONObject state=source(selected.messageId),message=message(selected.conversationId,selected.messageId),ack=new JSONObject(state.getJSONObject("submission").toString());
         boolean missingAck="unconfirmed".equals(ack.optString("status"))&&!ack.has("taskId")&&!ack.has("runId")&&!ack.has("epoch");
@@ -1067,8 +1068,9 @@ public final class ConversationRepository {
         public void requireCarrier(JSONObject row,String conversation)throws Exception {requireReferenceCarrier(row,conversation,"ownerSourceRefs");}
         /** The DOM observation must be the exact selection saved on this native message, not checkpoint JSON. */
         public void requirePreviewCarrier(JSONObject row,String conversation)throws Exception {requireReferenceCarrier(row,conversation,"ownerPreviewRefs");}
+        public void requireObjectCarrier(JSONObject row,String conversation)throws Exception {requireReferenceCarrier(row,conversation,"ownerObjectRefs");}
         private static JSONArray selectedReferences(JSONObject row,String field)throws Exception {
-            return "ownerPreviewRefs".equals(field)?dev.pocketengine.features.local.preview.PreviewElementRef.checked(row.getJSONArray(field)):OwnerSourceReferences.checked(row.getJSONArray(field));
+            return "ownerObjectRefs".equals(field)?OwnerObjectReferences.checked(row.getJSONArray(field)):"ownerPreviewRefs".equals(field)?dev.pocketengine.features.local.preview.PreviewElementRef.checked(row.getJSONArray(field)):OwnerSourceReferences.checked(row.getJSONArray(field));
         }
         private void requireReferenceCarrier(JSONObject row,String conversation,String field)throws Exception {
             current();if(!nativeOwnerInput(row,conversation))throw new SecurityException("原文引用缺少属于当前原会话的原生主人消息");
@@ -1091,7 +1093,7 @@ public final class ConversationRepository {
             if(closed)return;
             try{
                 current();for(JSONObject ref:new ArrayList<>(checkedSources.values()))requireSource(ref);
-                for(JSONObject row:new ArrayList<>(checkedCarriers.values()))requireReferenceCarrier(row,row.getString("_nativeConversationId"),row.has("ownerPreviewRefs")?"ownerPreviewRefs":"ownerSourceRefs");
+                for(JSONObject row:new ArrayList<>(checkedCarriers.values()))requireReferenceCarrier(row,row.getString("_nativeConversationId"),row.has("ownerObjectRefs")?"ownerObjectRefs":row.has("ownerPreviewRefs")?"ownerPreviewRefs":"ownerSourceRefs");
                 for(JSONObject row:new ArrayList<>(checkedNativeUsers.values()))requireNativeUserPart(row,row.getString("sourceConversationId"));
                 for(JSONObject row:new ArrayList<>(checkedAssistants.values()))requireNativeAssistantSource(row);
             }finally{closed=true;deadline.cancel(false);}

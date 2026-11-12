@@ -6,6 +6,16 @@ import './local-workspace.css';
 import './project-development.css';
 
 type Data = Record<string, any>;
+type DeliveryRequirements = { constraints: string; deliverable: string; completionCriteria: string };
+type DevelopmentDraft = DeliveryRequirements & { goal: string; checkoutId: string };
+const deliveryFields = ['constraints', 'deliverable', 'completionCriteria'] as const;
+const deliveryRequirements = (value: Data = {}): DeliveryRequirements => ({
+  constraints: typeof value.constraints === 'string' ? value.constraints : '',
+  deliverable: typeof value.deliverable === 'string' ? value.deliverable : '',
+  completionCriteria: typeof value.completionCriteria === 'string' ? value.completionCriteria : '',
+});
+const sameDraft = (draft: DevelopmentDraft, original: Data) => draft.goal === original.goal && draft.checkoutId === original.checkoutId &&
+  deliveryFields.every(key => draft[key] === (original[key] || ''));
 type Props = { projectId: string; name: string; active: boolean; run: (action: string, args?: Data) => Promise<any>; can: (action: string) => boolean;
   onOpenTask: (id: string) => void; onPrepareTools: () => void; onConnectModel: () => void; onOpenTerminal: () => void;
   registerBack: (handler: (() => boolean) | null) => void; onInteractionBusyChange?: (busy: boolean) => void };
@@ -18,14 +28,19 @@ const failureText = (failure: unknown) => failure instanceof Error ? failure.mes
  * approved here, and reopening never repeats a submission or copy creation. */
 export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can, onOpenTask, onPrepareTools, onConnectModel, onOpenTerminal, registerBack, onInteractionBusyChange }: Props) {
   const [view, setView] = useState<Data | null>(null), [goal, setGoal] = useState(''), [checkout, setCheckout] = useState('');
+  const [requirements, setRequirements] = useState<DeliveryRequirements>(() => deliveryRequirements());
   const [source, setSource] = useState<Data | null>(null), [review, setReview] = useState<Data | null>(null), [submission, setSubmission] = useState<Data | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [expired, setExpired] = useState(false), [copyResult, setCopyResult] = useState<Data | null>(null);
   const [filesOpen, setFilesOpen] = useState(false), filesBack = useRef<(() => boolean) | null>(null);
   const registerFilesBack = useCallback((handler: (() => boolean) | null) => { filesBack.current = handler; }, []);
   const alive = useRef(false), generation = useRef(0), entered = useRef<object | null>(null), handle = useRef(''), activeReview = useRef<Data | null>(null);
-  const sourceAttempt = useRef(''), readAttempt = useRef(''), touched = useRef(false), draft = useRef({ goal: '', checkoutId: '' });
+  const sourceAttempt = useRef(''), readAttempt = useRef(''), touched = useRef(false), draft = useRef<DevelopmentDraft>({ goal: '', checkoutId: '', ...deliveryRequirements() });
   const latest = useRef({ run, can, active }); latest.current = { run, can, active }; activeReview.current = review;
-  const applySubmission = (receipt: Data) => { setSubmission(receipt); if (receipt.status === 'accepted') { setGoal(''); draft.current.goal = ''; } };
+  const clearSubmittedDraft = (receipt: Data) => {
+    if (receipt.status !== 'accepted' || !sameDraft(draft.current, receipt)) return;
+    draft.current = { ...draft.current, goal: '', ...deliveryRequirements() }; setGoal(''); setRequirements(deliveryRequirements());
+  };
+  const applySubmission = (receipt: Data) => { setSubmission(receipt); clearSubmittedDraft(receipt); };
   const invoke = async (action: string, args: Data = {}, accept?: (value: Data) => void) => {
     if (!latest.current.active || entered.current || document.hidden || !latest.current.can(action)) return;
     const token = {}, window = ownerWindow(), sequence = generation.current;
@@ -47,19 +62,26 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
     if (!touched.current) {
       const retained = value.draft || {}, available = rows(value.checkouts);
       const selected = retained.checkoutId || (available.length === 1 ? available[0].checkoutId : '');
-      draft.current = { goal: retained.goal || '', checkoutId: selected }; setGoal(draft.current.goal); setCheckout(selected);
+      draft.current = { goal: retained.goal || '', checkoutId: selected, ...deliveryRequirements(retained) };
+      setGoal(draft.current.goal); setCheckout(selected); setRequirements(deliveryRequirements(retained));
     }
     setSubmission(value.draft?.submission || null);
-    if (value.draft?.submission?.status === 'accepted' && draft.current.goal === value.draft.submission.goal) { draft.current.goal = ''; setGoal(''); }
+    if (value.draft?.submission) clearSubmittedDraft(value.draft.submission);
     });
   };
   const readRef = useRef(read); readRef.current = read;
-  const retain = (next: { goal: string; checkoutId: string }) => {
+  const retain = (next: DevelopmentDraft) => {
     touched.current = true; draft.current = next;
     const original = handle.current, sequence = generation.current;
     if (original) void latest.current.run('projects.development.draft', { viewHandle: original, ...next }).catch(failure => {
       if (alive.current && sequence === generation.current && handle.current === original) setError(`草稿未保存：${failureText(failure)}`);
     });
+  };
+  const acceptReview = (value: Data) => {
+    if (value.deliveryContract?.format !== 'pocketworld.owner-work-contract.v1' || value.deliveryContract.revision !== 1 || value.deliveryContract.goal !== value.goal)
+      throw new Error('项目交付约定没有完整载入，请重新核对。');
+    draft.current = { goal: value.goal, checkoutId: value.checkoutId, ...deliveryRequirements(value.deliveryContract) };
+    setGoal(draft.current.goal); setRequirements(deliveryRequirements(value.deliveryContract)); setReview(value);
   };
   const dismiss = () => {
     if (entered.current) return;
@@ -129,7 +151,8 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
   const start = () => {
     const selected = activeReview.current;
     if (!active || !selected || busy || expired || Number(selected.expiresAt) <= Date.now()) return;
-    const marker = { projectId, checkoutId: selected.checkoutId, clientMessageId: selected.requestId, goal: selected.goal, status: 'unknown', message: '正在核对原输入回执。请勿重复开始。' };
+    const marker = { projectId, checkoutId: selected.checkoutId, clientMessageId: selected.requestId, goal: selected.goal,
+      ...deliveryRequirements(selected.deliveryContract), status: 'unknown', message: '正在核对原输入回执。请勿重复开始。' };
     setSubmission(marker); setReview(null); activeReview.current = null;
     void invoke('projects.development.start', { viewHandle: handle.current, reviewHandle: selected.reviewHandle }, applySubmission);
   };
@@ -145,6 +168,14 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
           {pending && <Button variant="secondary" disabled={busy || filesOpen} onClick={() => void invoke('projects.development.query', { viewHandle: handle.current }, applySubmission)}>查询原输入</Button>}
         </div></div>}
       <TextAreaField label="这次的目标" value={goal} isDisabled={disabled} onChange={value => { if (value.length <= 12000) { setGoal(value); retain({ ...draft.current, goal: value }); } }} hint="例如：做一个能在手机预览的番茄钟，先用本地数据。不要填写密码或令牌。" />
+      <Accordion><AccordionItem id="development-delivery" title="交付要求" description={deliveryFields.some(key => requirements[key].trim()) ? '已补充约束、交付物或完成标准' : '选填：约束、交付物与完成标准'}>
+        <TextAreaField label="限制与约束" value={requirements.constraints} isDisabled={disabled} hint="例如：保留已有数据，沿用当前组件，每项最多 4000 字。"
+          onChange={value => { if (value.length <= 4000) { setRequirements(previous => ({ ...previous, constraints: value })); retain({ ...draft.current, constraints: value }); } }} />
+        <TextAreaField label="要交付什么" value={requirements.deliverable} isDisabled={disabled} hint="例如：可预览的页面和对应项目固定包。"
+          onChange={value => { if (value.length <= 4000) { setRequirements(previous => ({ ...previous, deliverable: value })); retain({ ...draft.current, deliverable: value }); } }} />
+        <TextAreaField label="怎样算完成" value={requirements.completionCriteria} isDisabled={disabled} hint="写清你要看到的实际结果；发送或发布仍需原来的确认。"
+          onChange={value => { if (value.length <= 4000) { setRequirements(previous => ({ ...previous, completionCriteria: value })); retain({ ...draft.current, completionCriteria: value }); } }} />
+      </AccordionItem></Accordion>
       <SelectField label="要工作的私人副本" value={checkout} isDisabled={disabled} options={[{ id: '', label: available.length ? '选择已有私人副本' : '尚未准备私人副本' },
         ...available.map(row => ({ id: row.checkoutId, label: `${row.name || name} · ${new Date(row.createdAt || 0).toLocaleString()}` })),
         ...(checkout && !available.some(row => row.checkoutId === checkout) ? [{ id: checkout, label: '原副本暂不可用，请核对' }] : [])]}
@@ -153,7 +184,7 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
       {(view.draft?.copyRequestId || copyResult) && <div><Button variant="ghost" disabled={busy || !!review || filesOpen} onClick={() => void copy(true)}>查询原副本准备</Button>
         {copyResult?.partial && <div role="status"><p>原副本准备中断，部分文件已保留，不会覆盖。可在手动终端显式准备另一份完整副本，再返回选择；已有部分不会自动删除。</p><Button variant="secondary" disabled={busy || filesOpen} onClick={onOpenTerminal}>打开副本准备入口</Button></div>}
         {copyResult && !copyResult.found && !copyResult.partial && <p role="status">未发现这次准备的副本；显式准备仍使用同一请求，不会换一个身份重建。</p>}</div>}
-      <div className="pw-form-actions"><Button disabled={disabled || !goal.trim() || !checkout || !source || view.model?.configured !== true} onClick={() => void invoke('projects.development.review', { viewHandle: handle.current, checkoutId: checkout, goal }, setReview)}>核对并开始</Button>
+      <div className="pw-form-actions"><Button disabled={disabled || !goal.trim() || !checkout || !source || view.model?.configured !== true} onClick={() => void invoke('projects.development.review', { viewHandle: handle.current, checkoutId: checkout, goal, ...requirements }, acceptReview)}>核对并开始</Button>
         <Button variant="ghost" disabled={busy || pending || !!review || filesOpen} onClick={() => void read()}>重新读取项目条件</Button>
         {checkout && !source && <Button variant="ghost" disabled={disabled} onClick={() => { sourceAttempt.current = ''; setView(previous => previous ? { ...previous } : previous); }}>重新读取副本版本</Button>}
       </div>
@@ -169,7 +200,13 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
     </>}
     {view && filesOpen && checkout && <ProjectCheckoutFiles key={`${view.viewHandle}|${checkout}`} projectId={projectId} checkoutId={checkout} viewHandle={view.viewHandle} run={run} onClose={closeFiles} registerBack={registerFilesBack} />}
     <SettingsDialog isOpen={!!review} title="开始这个项目任务？" onClose={dismiss} closeLabel="返回修改目标">{review && <div className="pw-local-review">
-      <p>{review.goal}</p><dl className="pw-facts"><div><dt>项目</dt><dd>{name}</dd></div><div><dt>私人副本</dt><dd>{review.checkoutId}</dd></div><div><dt>默认模型</dt><dd>{review.model?.label} · {review.model?.provider}</dd></div><div><dt>运行位置</dt><dd>{review.runtime}</dd></div><div><dt>源码版本</dt><dd>{review.source?.sourceDigest}</dd></div></dl>
+      <p>{review.goal}</p>
+      {deliveryFields.some(key => review.deliveryContract?.[key]) && <dl className="pw-facts">
+        {review.deliveryContract.constraints && <div><dt>限制与约束</dt><dd>{review.deliveryContract.constraints}</dd></div>}
+        {review.deliveryContract.deliverable && <div><dt>要交付什么</dt><dd>{review.deliveryContract.deliverable}</dd></div>}
+        {review.deliveryContract.completionCriteria && <div><dt>怎样算完成</dt><dd>{review.deliveryContract.completionCriteria}</dd></div>}
+      </dl>}
+      <dl className="pw-facts"><div><dt>项目</dt><dd>{name}</dd></div><div><dt>私人副本</dt><dd>{review.checkoutId}</dd></div><div><dt>默认模型</dt><dd>{review.model?.label} · {review.model?.provider}</dd></div><div><dt>运行位置</dt><dd>{review.runtime}</dd></div><div><dt>源码版本</dt><dd>{review.source?.sourceDigest}</dd></div></dl>
       <p>将目标交给默认模型，在新的项目任务中处理。不会批准任意命令、安装依赖、读取项目记忆或自动发布。具体文件修改、命令与成果采纳仍按原任务范围审阅。</p>
       {expired && <p role="status">本次审阅已过期，还未启动。请返回重新核对。</p>}
       <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={dismiss}>返回修改</Button><Button disabled={busy || expired} onClick={start}>开始这个项目任务</Button></div>

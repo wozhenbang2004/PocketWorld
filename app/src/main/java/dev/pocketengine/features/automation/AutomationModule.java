@@ -79,6 +79,7 @@ public final class AutomationModule implements EngineModule {
                 .put("rulePolicySupported",true).put("ruleBudgetUnit","claimed_notification_occurrences").put("commitmentPlansSupported",true)
                 .put("goalResultAuthority","TaskStore").put("followUpBudgetUnit","notification_admissions_per_local_day")
                 .put("executionPlansSupported",true).put("executionPlanControl","native_owner_review_only").put("executionPlanTaskAuthority","existing_TaskStore")
+                .put("planChangeNotificationsSupported",true).put("planChangeNotificationsDefault","explicit_owner_choice")
                 .put("existingRemoteCommandWaitSupported",true).put("remoteWaitResultScope","exact_original_command_exit_zero_only")
                 .put("runConditionsSupported",true).put("conditionSnapshot","native_read_only").put("conditionRecheckMillis",AutomationConditions.RECHECK_MILLIS)
                 .put("scheduleTypes",new JSONArray(new String[]{"once","interval","daily","weekly","monthly","cron"})).put("schedulePreview","native_read_only")
@@ -269,6 +270,11 @@ public final class AutomationModule implements EngineModule {
     public JSONObject readyPlanTasks(JSONObject scope,int limit)throws Exception {return commitments.readyPlanTasks(scope,System.currentTimeMillis(),limit);}
     public JSONObject readyPlanTasks(JSONObject scope,String planId,int limit)throws Exception {return commitments.readyPlanTasks(scope,planId,System.currentTimeMillis(),limit);}
     public JSONObject inspectPlanTask(JSONObject scope,String planId,String stepId)throws Exception{return commitments.inspectPlanTask(scope,planId,stepId,System.currentTimeMillis());}
+    public JSONObject planProgress(JSONObject scope,String planId)throws Exception{return commitments.planProgress(scope,planId,System.currentTimeMillis());}
+    public JSONObject evaluatePlanChange(JSONObject scope,String planId)throws Exception{return commitments.evaluatePlanChange(scope,planId,System.currentTimeMillis());}
+    public JSONObject claimPlanChange(JSONObject scope,String planId,String candidateKey,long leaseMillis)throws Exception {
+        JSONObject result=commitments.claimPlanChange(scope,planId,candidateKey,leaseMillis,System.currentTimeMillis());if(result.optBoolean("claimed"))reschedule(context.android);return result;
+    }
     public void remoteTaskChanged(JSONObject scope,String taskId)throws Exception {if(commitments.waitsForRemoteTask(scope,taskId))commitmentsChanged();}
     public void authenticatedBusinessEventChanged(JSONObject scope)throws Exception{if(commitments.waitsForBusinessEvents(scope))commitmentsChanged();}
     public long nextPlanTaskAt(JSONObject scope,long now)throws Exception {return commitments.nextPlanTaskAt(scope,now);}

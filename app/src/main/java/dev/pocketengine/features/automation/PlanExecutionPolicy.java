@@ -22,7 +22,7 @@ public final class PlanExecutionPolicy {
     }
     static JSONObject settings(JSONObject input)throws Exception {
         for(Iterator<String> keys=input.keys();keys.hasNext();){String key=keys.next();
-            if(!key.matches("mode|maxTaskAdmissions|phoneMode|modelObservationConsent|allowPrivateArtifactFreeze|businessEventConsent|zoneId|quietHours|expiresAt|requiresNetwork|requiresCharging|minBatteryPercent"))throw new IllegalArgumentException("不支持的计划执行设置："+key);
+            if(!key.matches("mode|maxTaskAdmissions|phoneMode|modelObservationConsent|allowPrivateArtifactFreeze|businessEventConsent|notifyChanges|zoneId|quietHours|expiresAt|requiresNetwork|requiresCharging|minBatteryPercent"))throw new IllegalArgumentException("不支持的计划执行设置："+key);
         }
         String mode=text(input,"mode",20);if(!mode.matches("manual|automatic"))throw new IllegalArgumentException("计划触发应为manual或automatic");
         long maximum=AutomationPolicy.integer(input,"maxTaskAdmissions",1,1000);
@@ -30,9 +30,11 @@ public final class PlanExecutionPolicy {
         if(input.has("modelObservationConsent")&&!(input.opt("modelObservationConsent") instanceof Boolean))throw new IllegalArgumentException("模型观察同意必须为明确布尔值");
         if(input.has("allowPrivateArtifactFreeze")&&!(input.opt("allowPrivateArtifactFreeze") instanceof Boolean))throw new IllegalArgumentException("私人文件成果范围必须为明确布尔值");
         if(input.has("businessEventConsent")&&!(input.opt("businessEventConsent") instanceof Boolean))throw new IllegalArgumentException("认证来源触发须由主人明确确认");
+        if(input.has("notifyChanges")&&!(input.opt("notifyChanges") instanceof Boolean))throw new IllegalArgumentException("计划变化提醒须为明确选择");
         JSONObject policy=new JSONObject(input.toString());policy.remove("mode");policy.remove("maxTaskAdmissions");
         policy.remove("phoneMode");policy.remove("modelObservationConsent");policy.remove("allowPrivateArtifactFreeze");policy.remove("businessEventConsent");
-        return new JSONObject().put("mode",mode).put("maxTaskAdmissions",maximum).put("phoneMode",phoneMode).put("modelObservationConsent",Boolean.TRUE.equals(input.opt("modelObservationConsent"))).put("allowPrivateArtifactFreeze",Boolean.TRUE.equals(input.opt("allowPrivateArtifactFreeze"))).put("businessEventConsent",Boolean.TRUE.equals(input.opt("businessEventConsent"))).put("policy",AutomationPolicy.rule(policy,"UTC"));
+        policy.remove("notifyChanges");
+        return new JSONObject().put("mode",mode).put("maxTaskAdmissions",maximum).put("phoneMode",phoneMode).put("modelObservationConsent",Boolean.TRUE.equals(input.opt("modelObservationConsent"))).put("allowPrivateArtifactFreeze",Boolean.TRUE.equals(input.opt("allowPrivateArtifactFreeze"))).put("businessEventConsent",Boolean.TRUE.equals(input.opt("businessEventConsent"))).put("notifyChanges",Boolean.TRUE.equals(input.opt("notifyChanges"))).put("policy",AutomationPolicy.rule(policy,"UTC"));
     }
     static JSONArray dependencies(JSONObject step,JSONArray previousIds)throws Exception {
         JSONArray input=step.optJSONArray("dependsOn");
@@ -70,6 +72,10 @@ public final class PlanExecutionPolicy {
         byte[] digest=MessageDigest.getInstance("SHA-256").digest(definition.toString().getBytes(StandardCharsets.UTF_8));StringBuilder result=new StringBuilder();for(byte b:digest)result.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return result.toString();
     }
     static boolean terminal(JSONObject step){return step.optString("status").matches("completed|failed|cancelled|skipped");}
+    /** Fixed-order native facts only. Observation/updated timestamps must not enter a notice identity. */
+    static String changeKey(JSONObject facts)throws Exception {
+        byte[] digest=MessageDigest.getInstance("SHA-256").digest(facts.toString().getBytes(StandardCharsets.UTF_8));StringBuilder result=new StringBuilder();for(byte b:digest)result.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return result.toString();
+    }
     static boolean matchesOutcome(String status,String wanted){return wanted.equals("settled")?status.matches("completed|failed|cancelled|skipped"):status.equals(wanted);}
     static String text(JSONObject input,String key,int max){Object raw=input.opt(key);if(!(raw instanceof String)||((String)raw).trim().isEmpty()||((String)raw).length()>max)throw new IllegalArgumentException(key+"必须为1至"+max+"字的文字");return ((String)raw).trim();}
 }
