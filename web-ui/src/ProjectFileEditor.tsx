@@ -7,6 +7,7 @@ import type { FileLayer } from './project-file';
 import { useSurfaceEnter } from './library/surface-motion';
 import { MotionDisclosure, MotionFeedback, useCollectionMotion } from './library/journey-motion';
 import './project-workspace.css';
+import './project-workspace-manga.css';
 type Data = Record<string, any>;
 type Props = { path: string; version: number; draft?: { text: string; baseline: string; version: number; dirty: boolean }; state: Data; conflict: boolean; mode: FileLayer; setMode: (value: FileLayer) => void; can: (action: string) => boolean; edit: (value: string) => void; save: () => void; readHistory: () => void; readRevision: (revision: number) => void; retry: () => void; copy: () => void; adoption: { pending: boolean; unknown: boolean; message: string; adopt: () => void }; registerBack: (handler: (() => boolean) | null) => void };
 export function ProjectFileEditor({ path, version, draft, state, conflict, mode, setMode, can, edit, save, readHistory, readRevision, retry, copy, adoption, registerBack }: Props) {

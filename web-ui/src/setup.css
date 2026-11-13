@@ -1,4 +1,6 @@
-/* BoardUI purpose rows and Affect task-body/review/footer composition.
+/* MangaFlow 246a8ae SettingsSection / SettingsLinkRow adaptation: grouped
+ * state-bearing rows, quiet icons, readable next action; retained BoardUI input.
+ * BoardUI purpose rows and Affect task-body/review/footer composition.
  * Preparation follows the requested job; guide completion is never readiness. */
 .pw-setup-workspace { display:flex; flex-direction:column; min-height:0; height:100%; max-height:100%; color:var(--pw-ink); background:var(--pw-canvas); overflow:hidden; font-family:var(--pw-font); }
 .pw-setup-header { display:flex; flex:none; align-items:center; gap:12px; width:min(100%,712px); min-height:64px; margin-inline:auto; padding:8px 16px; }
@@ -9,7 +11,7 @@
 .pw-setup-workspace button:focus-visible, .pw-setup-workspace .button-press-motion:focus-visible { box-shadow:0 0 0 2px var(--pw-canvas),0 0 0 4px var(--pw-accent); outline:none; }
 .pw-setup-workspace button > span { min-width:0; flex-shrink:1; white-space:normal; overflow-wrap:anywhere; }
 .pw-setup-workspace button.pw-setup-close, .pw-setup-workspace button.pw-setup-refresh { flex:none; width:44px; padding:12px; border-radius:50%; color:var(--pw-copy); }
-.pw-setup-body { flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding:16px 16px 8px; scroll-padding-block:16px 24px; }
+.pw-setup-body { flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding:24px 20px 16px; scroll-padding-block:16px 24px; }
 .pw-setup-stage, .pw-setup-feedback, .pw-setup-origin { width:min(100%,680px); margin-inline:auto; }
 .pw-setup-stage { min-width:0; }
 .pw-setup-origin { margin-bottom:20px; padding:0 4px; }
@@ -20,12 +22,12 @@
 .pw-setup-intro p, .pw-setup-copy, .pw-setup-next-hint { font-size:13px; line-height:21px; color:var(--pw-copy); margin:8px 0; overflow-wrap:anywhere; }
 .pw-setup-intro p { margin:8px 0 0; }
 .pw-setup-next-hint { margin:16px 4px 0; }
-.pw-setup-purpose-list { display:flex; flex-direction:column; gap:4px; padding:8px; border-radius:20px; background:var(--pw-surface); box-shadow:var(--pw-shadow-surface); }
-.pw-setup-workspace button.pw-setup-purpose-row { width:100%; min-width:0; min-height:76px; padding:12px 8px; border:0; box-shadow:none; border-radius:14px; text-align:left; color:var(--pw-ink); }
+.pw-setup-purpose-list { display:flex; flex-direction:column; gap:4px; padding:8px 16px; border-radius:20px; background:color-mix(in srgb,var(--pw-surface) 85%,var(--pw-canvas)); box-shadow:var(--pw-shadow-surface); }
+.pw-setup-workspace button.pw-setup-purpose-row { width:100%; min-width:0; min-height:72px; padding:12px 0; border:0; box-shadow:none; border-radius:14px; text-align:left; color:var(--pw-ink); }
 .pw-setup-purpose-row > span { display:grid; grid-template-columns:24px minmax(0,1fr) 18px; gap:12px; align-items:center; width:100%; padding:0 4px; }
-.pw-setup-purpose-row > span > svg:first-child { color:var(--pw-accent); }
+.pw-setup-purpose-row > span > svg:first-child { color:var(--pw-copy); width:20px; height:20px; }
 .pw-setup-purpose-row > span > svg:last-child { color:var(--pw-muted); }
-.pw-setup-purpose-row > span > span { display:flex; min-width:0; flex-direction:column; align-items:flex-start; gap:4px; }
+.pw-setup-purpose-row > span > span { display:flex; min-width:0; flex-direction:column; align-items:flex-start; gap:3px; }
 .pw-setup-purpose-row strong { font-size:15px; line-height:24px; font-weight:600; }
 .pw-setup-purpose-row small { font-size:13px; line-height:20px; font-weight:400; color:var(--pw-copy); overflow-wrap:anywhere; }
 .pw-setup-purpose-row:hover:not(:disabled) { background:var(--pw-inset); }
@@ -82,3 +84,14 @@
 @media (max-width:359px) { .pw-setup-header { gap:8px; } .pw-setup-status-row { gap:12px; } .pw-setup-purpose-row > span { gap:10px; } .pw-setup-model { padding:16px; } }
 @media (max-height:500px) { .pw-setup-header { min-height:52px; padding-block:4px; } .pw-setup-footer { padding-block:8px; } }
 @media (prefers-reduced-motion:reduce) { .pw-setup-workspace *, .pw-setup-workspace *::before, .pw-setup-workspace *::after { transition:none !important; animation:none !important; } }
+
+/* Keep capability status attached to its action rather than placing a badge
+ * elsewhere on the screen. Narrow layouts stack without clipping long errors. */
+.pw-setup-workspace .pw-setup-intro { max-width:48ch; margin-bottom:24px; }
+.pw-setup-workspace .pw-setup-origin { padding:16px; border-radius:16px; background:var(--pw-inset); }
+.pw-setup-workspace .pw-setup-purpose-list > .pw-setup-purpose-row + .pw-setup-purpose-row { border-top:1px solid var(--pw-edge); border-top-left-radius:0; border-top-right-radius:0; }
+@media(max-width:380px) {
+ .pw-setup-workspace .pw-setup-status-row { flex-wrap:wrap; gap:12px; }
+ .pw-setup-workspace .pw-setup-status-row > div { flex-basis:100%; }
+ .pw-setup-workspace .pw-setup-status-row > button { max-width:100%; }
+}

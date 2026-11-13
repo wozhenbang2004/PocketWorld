@@ -60,7 +60,7 @@ export function ButlerPreparationEntries({ conversationId = '', sourceTaskId, re
   useEffect(() => { onPresenceChange?.(present); return () => onPresenceChange?.(false); }, [present, onPresenceChange]);
   if (!present) return null;
   return <section className="pw-butler-preparations" aria-label={sourceTaskId ? '关联的准备记录' : '待处理与进行中的工作'} aria-busy={busy}>
-    {sourceTaskId && relevant.length > 0 && <header><h2>关联的准备</h2></header>}
+    {relevant.length > 0 && <header><h2>{sourceTaskId ? '关联的准备' : '工作与准备'}</h2></header>}
     {error && <p className="pw-error" role="alert">{error}</p>}
     {error && <Button variant="ghost" size="small" leadingIcon={IconRefresh} disabled={!active || busy} onClick={() => void load()}>重新读取工作记录</Button>}
     <ol>{visible.map(row => <li key={keyOf(row)}><Button variant="ghost" className="pw-preparation-row" leadingIcon={row.kind === 'phone' ? IconMonitor : IconFolder} trailingIcon={IconChevronRight} disabled={!active || busy} onClick={() => onOpen({ sourceTaskId: row.sourceTaskId, proposalId: row.proposalId, sourceConversationId: row.sourceConversationId })}>

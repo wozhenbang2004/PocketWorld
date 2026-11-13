@@ -117,7 +117,7 @@ export function RealtimeWorkspace({ state, run, registerTransientBack }: { state
       {active && <>
         <div className="pw-realtime-live-heading"><IconCall size={18} aria-hidden /><h3>{natural ? '当前自然语音' : '当前房间通话'}</h3><span>{realtimeStage(session.state)}</span></div>
         <div className="pw-realtime-capture" aria-live="polite"><span><IconMicrophone size={15} aria-hidden />麦克风：{captureLabel(session.microphoneEnabled)}</span>{!natural && <span><IconVideo size={15} aria-hidden />摄像头：{captureLabel(session.cameraEnabled)}</span>}</div>
-        <div className="pw-realtime-controls">
+        <div className="pw-realtime-controls pw-material-navigation">
           {session.state === 'connected' && <>
             {session.microphoneEnabled ? <Button variant="secondary" disabled={controlPending('mute')} onClick={() => control('mute', { sessionId: snapshot.sessionId })}>关闭麦克风发送</Button> : <Button variant="secondary" disabled={locked || controlPending('mute') || !snapshot.microphonePermission} onClick={() => reviewAction('enableMicrophone', { sessionId: snapshot.sessionId })}>核对开启麦克风</Button>}
             {!natural && (session.cameraEnabled ? <Button variant="secondary" disabled={controlPending('setCamera')} onClick={() => control('setCamera', { sessionId: snapshot.sessionId })}>关闭摄像头</Button> : <Button variant="secondary" disabled={locked || controlPending('setCamera') || !snapshot.cameraPermission} onClick={() => reviewAction('enableCamera', { sessionId: snapshot.sessionId })}>核对开启摄像头</Button>)}

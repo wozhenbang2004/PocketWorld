@@ -88,3 +88,29 @@
 .pw-file-version-continuation { display: flex; flex-direction: column; gap: 16px; padding-block: 22px; border-top: 1px solid var(--pw-edge); }
 .pw-file-version-continuation > h3 { margin: 0; font: 500 15px/24px var(--pw-font); color: var(--pw-ink); }
 .pw-file-version-continuation > .pw-muted { margin: 0; font-size: 13px; line-height: 21px; }
+
+/* LibraryScreen's stable collection/detail hierarchy, adapted to documents:
+ * keep filenames and real metadata rather than inventing cover thumbnails. */
+.pw-file-library-header { align-items: flex-start; gap: 12px; }
+.pw-file-collection-list { border-radius: 24px; }
+.pw-original-file { width: 100%; max-width: 760px; margin-inline: auto; }
+.pw-original-file > header { padding-block: 4px 12px; }
+.pw-original-raster { background: var(--pw-inset); padding: 8px; border-radius: 22px; }
+.pw-document-editor .pw-document-body { padding: 12px; border-radius: 20px; background: var(--pw-surface); }
+.pw-document-footer { gap: 8px; padding: 10px 12px; border-radius: 20px; box-shadow: var(--pw-shadow-surface); }
+
+/* Reader controls are grouped apart from pixels; original image transforms
+ * remain the existing reader's responsibility. No animation on image content. */
+.pw-original-file .pw-original-pagination,
+.pw-original-file .pw-original-zoom { padding: 6px; border-radius: 22px; gap: 4px; }
+.pw-original-pagination > span { min-width: 72px; text-align: center; font-variant-numeric: tabular-nums; }
+.pw-original-pagination > div:has(input) { flex: 1 1 100px; }
+.pw-original-zoom button { flex: 1 1 auto; }
+.pw-file-projection { max-width: 720px; margin-inline: auto; line-height: 1.8; }
+.pw-file-projection .pw-file-text { font-size: 16px; line-height: 1.8; }
+.pw-document-save-state { margin-inline-end: auto; color: var(--pw-muted); font-size: 12px; }
+.pw-document-save-state[data-saved="false"] { color: var(--pw-copy); }
+.pw-file-processing-review { display: grid; gap: 14px; padding: 20px; border-radius: 22px; background: var(--pw-surface); }
+.pw-file-processing-review > :is(h4,p) { margin: 0; }
+
+.pw-original-file :is(.pw-original-pagination,.pw-original-zoom)[hidden] { display: none; }

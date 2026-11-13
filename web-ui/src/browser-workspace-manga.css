@@ -1,0 +1,42 @@
+/* MangaFlow's content/navigation separation. The native toolbar height remains
+ * exactly the host's budget; glass cannot sample the separate native webpage. */
+.browser-chrome { background: var(--pw-canvas); }
+.browser-chrome .browser-chrome-address-shell { border-radius: 22px; background: var(--pw-surface); box-shadow: var(--pw-shadow-surface); padding-inline: 14px; }
+.browser-chrome .browser-chrome-control { border-radius: 50%; transition-duration: var(--pw-motion-quick, 120ms); }
+.browser-chrome .browser-chrome-control:active:not(:disabled) { transform: scale(.98); }
+.browser-chrome .browser-chrome-return { color: var(--pw-on-accent-soft); background: var(--pw-accent-soft); }
+.browser-chrome .browser-chrome-open { border-radius: 18px; color: var(--pw-on-accent-soft); }
+.browser-chrome-progress > span { background: var(--pw-accent); opacity: .8; }
+.pw-browser-workspace { background: var(--pw-canvas); }
+.pw-browser-workspace .pw-browser-workspace-header { border: 0; gap: 12px; background: var(--pw-canvas); }
+.pw-browser-workspace .pw-browser-workspace-header h1 { font-size: 20px; line-height: 28px; letter-spacing: -.02em; }
+.pw-browser-workspace .pw-browser-workspace-body { gap: 16px; padding: 0 16px 16px; }
+.pw-browser-workspace .pw-browser-workspace-nav { align-self: flex-start; margin-top: 16px; padding: 6px; border: 0; border-radius: 18px; background: var(--pw-surface); box-shadow: var(--pw-shadow-surface); }
+.pw-browser-workspace .pw-browser-workspace-nav button { border-radius: 16px; }
+.pw-browser-workspace .pw-browser-workspace-nav button[aria-current] { color: var(--pw-on-accent-soft); background: var(--pw-accent-soft); box-shadow: none; }
+.pw-browser-workspace .pw-browser-workspace-scroll { padding: 16px 16px max(24px, env(safe-area-inset-bottom)); }
+.pw-browser-workspace .pw-browser-page-record,
+.pw-browser-workspace .pw-browser-source-record,
+.pw-browser-workspace .pw-browser-conclusion { padding: 20px; margin-block: 12px; border: 0; border-radius: 20px; background: var(--pw-surface); box-shadow: var(--pw-shadow-surface); }
+.pw-browser-workspace .pw-browser-attention { padding: 18px; border-radius: 20px; background: var(--pw-surface); }
+.pw-browser-workspace .pw-browser-group-label { color: var(--pw-muted); font-weight: 500; }
+.pw-browser-workspace .pw-browser-record .pw-form-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+.pw-browser-workspace .pw-browser-record .pw-form-actions > button { min-height: 44px; }
+@media (max-width: 680px) {
+  .pw-browser-workspace .pw-browser-workspace-header { padding: 10px 12px; gap: 6px; }
+  .pw-browser-workspace .pw-browser-workspace-header h1 { font-size: 18px; }
+  .pw-browser-workspace .pw-browser-workspace-body { flex-direction: column; gap: 0; padding: 0 12px max(10px, env(safe-area-inset-bottom)); }
+  .pw-browser-workspace .pw-browser-workspace-nav { order: 0; align-self: stretch; width: auto; flex: 0 0 auto; flex-direction: row; justify-content: space-between; margin: 0 0 8px; padding: 4px; }
+  /* Top segmented navigation stays before content in visual and DOM order. */
+  .pw-browser-workspace .pw-browser-workspace-nav button { flex: 1 1 0; flex-direction: row; justify-content: center; gap: 8px; padding: 10px 6px; min-height: 44px; font-size: 13px; }
+  .pw-browser-workspace .pw-browser-workspace-scroll { padding: 12px 4px 16px; }
+  .pw-browser-workspace .pw-browser-page-record,
+  .pw-browser-workspace .pw-browser-source-record,
+  .pw-browser-workspace .pw-browser-conclusion { padding: 16px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .browser-chrome .browser-chrome-control:active:not(:disabled) { transform: none; }
+}
+/* The keyboard uses the native compact height. Do not let navigation's
+ * display:flex override the existing hidden attribute in that layout. */
+.browser-chrome .browser-chrome-actions[hidden] { display: none; }

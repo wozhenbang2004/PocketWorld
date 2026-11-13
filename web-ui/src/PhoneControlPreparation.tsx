@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { Button, SelectField, SettingsDialog } from './forms-library';
+import { Accordion, AccordionItem, Button, SelectField, SettingsDialog } from './forms-library';
+
+import './device-control-reading.css';
 
 type Data = Record<string, any>;
 /** Same preparation/recovery interaction as DeviceTaskPreparation, without a model goal. */
@@ -21,11 +23,12 @@ export function PhoneControlPreparation({ open, run, onClose, onPendingChange }:
     } catch (failure) { if (mounted.current) { setUnknown(true); setError(failure instanceof Error ? failure.message : String(failure)); } }
     finally { working.current = false; if (mounted.current) { setBusy(false); onPendingChange(false); } }
   };
-  return <SettingsDialog isOpen={open} onClose={() => { if (!busy) onClose(); }} title="直接手动控制手机"><div className="pw-collaboration-dialog">
+  return <SettingsDialog isOpen={open} onClose={() => { if (!busy) onClose(); }} title="手动控制手机"><div className="pw-collaboration-dialog pw-phone-preparation">
     <p>选择一台已获授权的手机与一个屏幕，核对后由你刷新画面、点击、滑动或输入。无需模型或电脑代理，不会让助手自行操作。</p>
-    <SelectField label="从本次准备起截止" value={minutes} onChange={setMinutes} isDisabled={busy || unknown} options={[{ id: '1', label: '1 分钟' }, { id: '5', label: '5 分钟' }, { id: '10', label: '10 分钟' }]} />
-    <SelectField label="本次总调用额度" value={tools} onChange={setTools} isDisabled={busy || unknown} options={[{ id: '20', label: '20 次' }, { id: '80', label: '80 次' }, { id: '200', label: '200 次' }]} />
-    <p>总额度同时包含本机发起与分给对端的调用；每次刷新和输入都计入，不自动补满。下一页再选择对端份额。离页、切后台、停止或到期会阻止后续输入，但不能撤回已发送的动作。</p>
+    <div className="pw-phone-preparation-options"><SelectField label="有效时长（首次准备起）" value={minutes} onChange={setMinutes} isDisabled={busy || unknown} options={[{ id: '1', label: '1 分钟' }, { id: '5', label: '5 分钟' }, { id: '10', label: '10 分钟' }]} />
+    <SelectField label="总调用额度" value={tools} onChange={setTools} isDisabled={busy || unknown} options={[{ id: '20', label: '20 次' }, { id: '80', label: '80 次' }, { id: '200', label: '200 次' }]} /></div>
+    <p className="pw-field-hint">刷新和输入均计入总额度，包含本机与对端调用。</p>
+    <Accordion><AccordionItem id="phone-preparation-limits" title="额度与离开页面后的行为"><p>总额度同时包含本机发起与分给对端的调用；每次刷新和输入都计入，不自动补满。下一页再选择对端份额。离页、切后台、停止或到期会阻止后续输入，但不能撤回已发送的动作。</p></AccordionItem></Accordion>
     {error && <p role="alert">{error}</p>}{unknown && <p role="status">原任务可能已保存。只核对同一个编号与原期限，不再创建：{original.current?.requestId}</p>}
     <div className="pw-form-actions"><Button variant="ghost" disabled={busy} onClick={onClose}>返回设备</Button><Button disabled={busy} onClick={() => void prepare()}>{busy ? '正在准备…' : unknown ? '核对原准备并打开' : '选择手机与范围'}</Button></div>
   </div></SettingsDialog>;

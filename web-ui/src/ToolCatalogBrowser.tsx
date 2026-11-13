@@ -2,7 +2,10 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 import { Button, SearchField, SelectField, Accordion, AccordionItem } from './forms-library';
 import { DataOperationHeading, DataOperationRow, useDataSettingsJourney } from './DataSettingsJourney';
 import { categoryLabels, toolSource, toolTitle, type CatalogTool } from './tool-catalog';
+import { IconPhone, IconSearch, IconTerminal, IconFolder, IconDevices, IconTeam, IconClock, IconPlugin, IconSkill, IconFileSettings, IconImage } from './icons';
 import './tool-catalog.css';
+
+const categoryIcons: Record<string, typeof IconPhone> = { phone: IconPhone, semantic: IconPhone, browser: IconSearch, memory: IconSearch, project: IconTerminal, ssh: IconTerminal, attachments: IconFolder, workspace: IconFolder, remote: IconDevices, devices: IconDevices, teams: IconTeam, automation: IconClock, plugins: IconPlugin, skills: IconSkill, media: IconImage };
 
 type Props = {
   tools: CatalogTool[]; error?: string; loading?: boolean; initialTool?: string;
@@ -35,14 +38,12 @@ export function ToolCatalogBrowser({ tools, error, loading, initialTool, onReloa
   return <div className="pw-tool-browser" ref={journey.root} tabIndex={-1}>
     {selected ? <section className="pw-tool-detail" aria-label="工具详情">
       <DataOperationHeading title={toolTitle(selected)} parent="工具列表" description={categoryLabels[selected.category] || selected.category} onBack={() => journey.open('list')} />
-      <p className="pw-tool-identifier">{selected.name}</p>
-      <p className="pw-tool-source">{toolSource(selected)} · {selected.configurable ? '可设置审批规则' : '原生流程控制'}</p>
-      <p className="pw-tool-description">{summary || '此定义暂未提供用途说明。'}</p>
-      <p className="pw-tool-boundary">目录未核对本次任务是否接入此工具。保存规则不会连接服务、添加任务能力或代替原生确认。</p>
+      <div className="pw-tool-overview pw-material-content"><p className="pw-tool-description">{summary || '此定义暂未提供用途说明。'}</p><dl className="pw-tool-metadata"><div><dt>来源</dt><dd>{toolSource(selected)}</dd></div><div><dt>审批</dt><dd>{selected.configurable ? '可单独设置规则' : '由原生流程控制'}</dd></div><div><dt>工具名</dt><dd className="pw-tool-identifier">{selected.name}</dd></div></dl></div>
+      <p className="pw-tool-boundary">实际调用取决于任务接入和授权。审批规则不会自动连接服务或扩大权限。</p>
       {detail?.(selected)}
       {description && description !== summary && <Accordion variant="divided" defaultExpandedKeys={[]}><AccordionItem id="tool-definition" title="完整工具说明与限制"><p className="pw-tool-description">{description}</p></AccordionItem></Accordion>}
     </section> : <>
-      {tools.length > 0 && <div className="pw-tool-toolbar">
+      {tools.length > 0 && <div className="pw-tool-toolbar pw-material-content">
         <SearchField aria-label="按用途或名称搜索工具" placeholder="搜索用途、工具名…" value={query} onChange={setQuery} />
         <div className="pw-tool-filters">
           <SelectField label="用途" compactValue value={category} onChange={setCategory} options={[{ id: 'all', label: '全部用途' }, ...categories.map(id => ({ id, label: categoryLabels[id] || id }))]} />
@@ -51,9 +52,9 @@ export function ToolCatalogBrowser({ tools, error, loading, initialTool, onReloa
       </div>}
       {loading && <p className="pw-tool-status" role="status">正在读取工具定义…</p>}
       {error && <div className="pw-tool-status" role="alert"><p>{error}</p>{onReload && <Button variant="secondary" onClick={onReload}>重新读取目录</Button>}</div>}
-      {!loading && <p className="pw-tool-result-count">{listed.length} 项定义{search || category !== 'all' || source !== 'all' ? '符合筛选' : ''}，不代表当前可执行</p>}
+      {!loading && <p className="pw-tool-result-count"><span>{listed.length} 个工具{search || category !== 'all' || source !== 'all' ? '符合筛选' : ''}</span><span>可用性由具体任务核对</span></p>}
       {!loading && listed.length === 0 && <div className="pw-tool-status"><p>{tools.length ? '没有匹配的工具，试试另一种用途或清除筛选。' : '尚未读到工具定义。可以先管理来源，或按实际工具名设置规则。'}</p>{tools.length > 0 && <Button variant="ghost" onClick={() => { setQuery(''); setCategory('all'); setSource('all'); }}>清除筛选</Button>}</div>}
-      <div className="pw-tool-list">{listed.slice(0, limit).map(tool => <DataOperationRow key={tool.name} id={tool.name} title={toolTitle(tool)} detail={`${tool.name} · ${status ? status(tool) : `${categoryLabels[tool.category] || tool.category} · ${toolSource(tool)}`}`} onOpen={open} />)}</div>
+      <div className="pw-tool-list pw-material-content">{listed.slice(0, limit).map(tool => <DataOperationRow key={tool.name} id={tool.name} title={toolTitle(tool)} icon={categoryIcons[tool.category] || IconFileSettings} detail={status ? status(tool) : `${categoryLabels[tool.category] || tool.category} · ${toolSource(tool)}`} onOpen={open} />)}</div>
       {listed.length > limit && <Button variant="secondary" onClick={() => setLimit(value => value + 24)}>再显示 {Math.min(24, listed.length - limit)} 项</Button>}
       <Accordion variant="divided" defaultExpandedKeys={[]}><AccordionItem id="tool-boundaries" title="为什么有工具却不一定能用？"><p className="pw-tool-boundary">这里仅列定义。来源安装与连接、工作配置选择、原任务范围、设备权限和这次动作的审批需要分别满足。实际结果以原任务回执为准。</p></AccordionItem></Accordion>
     </>}

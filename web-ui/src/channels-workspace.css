@@ -3,7 +3,7 @@
 .pw-channels-workspace.pw-settings-section { max-width: 860px; min-width: 0; }
 .pw-channels-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin: 4px 0 20px; }
 .pw-channels-heading > div { min-width: 0; }
-.pw-channels-heading h2 { margin: 0; font-size: 24px; line-height: 32px; font-weight: 500; letter-spacing: -.035em; }
+.pw-channels-heading h2 { margin: 0; font-size: 24px; line-height: 32px; font-weight: 650; letter-spacing: -.035em; }
 .pw-channels-heading p { margin: 5px 0 0; color: var(--pw-copy,#626262); font-size: 13px; line-height: 21px; }
 .pw-channels-heading .pw-form-actions { flex: none; margin: 0; gap: 4px; }
 .pw-channels-heading .pw-form-actions button { min-height: 44px; }
@@ -20,7 +20,7 @@
 .pw-channels-tabs [role="tablist"] { border-color: var(--pw-hairline,#e9e9e9); }
 .pw-channels-tabs [role="tab"] { min-height: 44px; padding-inline: 14px; }
 .pw-channels-tabs [role="tabpanel"][hidden] { display: none; }
-.pw-channels-records { overflow: hidden; border: 0; border-radius: 15px; padding: 2px 18px; background: var(--pw-surface,#fff); box-shadow: 0 2px 6px -2px #00000005, 0 14px 26px -13px #00000010; }
+.pw-channels-records { overflow: hidden; border: 0; border-radius: 18px; padding: 2px 18px; background: var(--pw-surface,#fff); box-shadow: 0 2px 6px -2px #00000005, 0 14px 26px -13px #00000010; }
 .pw-channels-records:empty { display: none; }
 .pw-channels-records > * { border: 0; border-radius: 0; box-shadow: none; background: transparent; }
 .pw-channels-records > * + * { border-top: 1px solid var(--pw-hairline,#eeeeef); }
@@ -69,3 +69,8 @@
   .pw-channels-records { padding-inline: 14px; }
   .pw-channels-records button[slot="trigger"] { gap: 10px; }
 }
+
+.pw-channels-workspace .pw-collection-navigation { padding: 6px; border-radius: 24px; overflow-x: auto; }
+.pw-channels-workspace.pw-depth-collaboration .pw-channels-tabs .pw-channels-records { padding: 4px 16px; border-radius: 18px; background: var(--pw-surface); box-shadow: none; border: 1px solid var(--pw-divider); }
+.pw-channels-workspace .pw-channels-receiving { align-items: flex-start; flex-wrap: wrap; }
+.pw-channels-workspace .pw-channels-heading { flex-wrap: wrap; }

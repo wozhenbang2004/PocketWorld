@@ -57,7 +57,10 @@ export function useSurfaceEnter(root:RefObject<HTMLElement|null>,identity:string
   const surface=selector?root.current?.querySelector<HTMLElement>(selector):root.current;
   if(!surface){cancel();return}
   const interrupted=surfaceOwners.get(surface)?.animation.playState==='running';
-  const transform=interrupted?getComputedStyle(surface).transform:`translateX(${depth<before.depth?-12:12}px)`;
+  // MangaFlow MotionTabContent mirrors hierarchy travel for RTL. Retain
+  // only the current page: no outgoing clone can expose stale actions.
+  const direction=(depth<before.depth?-1:1)*(getComputedStyle(surface).direction==='rtl'?-1:1);
+  const transform=interrupted?getComputedStyle(surface).transform:`translateX(${direction*10}px)`;
   cancel();
   for(const [node,owner] of surfaceOwners){
    if(!node.isConnected||owner.animation.playState==='finished'||owner.animation.playState==='idle')owner.cancel();

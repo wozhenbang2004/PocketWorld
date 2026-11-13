@@ -84,7 +84,7 @@ export default function ChannelsWorkspace({ state, data, supported, run, registe
     setModal({ kind: 'owner', operation, original: clone({ ...profile, ownerIdentity: channelOwnerIdentity(profile, bound), ownerBinding: bound, requestedEnabled: enabled }) });
   };
   return <section ref={root} className="pw-channels-workspace pw-depth-collaboration pw-settings-section">
-    <header className="pw-channels-heading"><div><p className="pw-collaboration-eyebrow">接收状态 · {profiles.length} 个连接</p><strong className="pw-channels-status">{channelReceivingStatus(background)}</strong></div><div className="pw-form-actions">
+    <header className="pw-channels-heading"><div><h2>消息渠道</h2><p className="pw-collaboration-eyebrow">{profiles.length} 个连接</p><strong className="pw-channels-status">{channelReceivingStatus(background)}</strong></div><div className="pw-form-actions">
       <Button variant="ghost" leadingIcon={IconSettings} onClick={openConnections}>连接与接收</Button>
       <Button variant="ghost" iconOnly leadingIcon={IconRefresh} aria-label="刷新真实状态" disabled={busy || !supported('channels.inspect')} onClick={() => act('channels.inspect')} />
     </div></header>
@@ -106,7 +106,7 @@ export default function ChannelsWorkspace({ state, data, supported, run, registe
     {receipt && <div className="pw-channels-feedback" role="status"><p>这次实际回执</p><Facts values={[[ '状态', receipt.status ], ['已认证', receipt.authenticated === true ? '是' : undefined ], ['实际接收条数', receipt.received ], ['尚未识别的项目', receipt.skippedUnsupported ], ['服务停止信号', receipt.serviceStopSignalAccepted === true ? '已交给系统' : receipt.serviceStopSignalAccepted === false ? '系统未确认' : undefined ]]} />{receipt.message && <p>{receipt.message}</p>}{receipt.connected === false && <p>配置存在，尚未确认平台联通。</p>}{receipt.foregroundEstablished === false && <p>已提交原服务请求；等待上方真实服务和账号状态。</p>}{receipt.removed === true && <p>原连接已移除。</p>}</div>}
 
     <Tabs selectedKey={panel} onSelectionChange={key => selectPanel(String(key))} className="pw-channels-tabs">
-      <TabList aria-label="渠道记录"><Tab id="inbox">最近消息</Tab><Tab id="tasks">原任务</Tab><Tab id="outbox">回复投递</Tab></TabList>
+      <TabList className="pw-material-navigation pw-collection-navigation" aria-label="渠道记录"><Tab id="inbox">最近消息</Tab><Tab id="tasks">任务</Tab><Tab id="outbox">回复投递</Tab></TabList>
       <TabPanel id="inbox" shouldForceMount hidden={panel !== 'inbox'}>
         <ChannelInbox data={data} supported={supported} run={run} connect={openConnections} account={id => { rememberOrigin(); openAccount(id); }} media={(event, index) => { rememberOrigin(); setModal({ kind: 'media', event: clone(event), index }); }} />
       </TabPanel>

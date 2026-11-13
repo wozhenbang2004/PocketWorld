@@ -244,7 +244,7 @@ function TraceDetails({ selection, page, complete, close, active }: { selection:
     <Drawer.Portal><Drawer.Overlay className="pw-overlay pw-trace-overlay"/>
       <Drawer.Content className="pw-drawer pw-trace-detail" aria-describedby={descriptionId}>
         <Drawer.Handle aria-label="拖动调整详情高度"/>
-        <header className="pw-drawer-header"><div><Drawer.Title>{node?.kind === 'model' ? 'Request' : node ? traceRoleLabel(node) : '记录详情'}{node?.sequence != null && <small>#{node.sequence}</small>}</Drawer.Title>
+        <header className="pw-drawer-header"><div><Drawer.Title>{node?.kind === 'model' ? '模型请求' : node ? traceRoleLabel(node) : '记录详情'}{node?.sequence != null && <small>#{node.sequence}</small>}</Drawer.Title>
           <Drawer.Description id={descriptionId}>{node ? `${node.name} · ${traceStatus(node.status)}` : '原任务的一次调用'}</Drawer.Description></div><IconButton icon={IconClose} aria-label="关闭调用详情" onClick={close}/></header>
         {node && selection && <Tabs selectedKey={tab} onSelectionChange={value => { setTab(String(value)); setSnap(.94); }} className="pw-trace-detail-tabs">
           <TabList aria-label="记录详情页签">{tabs.map(([id, label]) => <Tab id={id} key={id}>{label}</Tab>)}</TabList>

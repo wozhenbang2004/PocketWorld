@@ -77,7 +77,7 @@ export function TypographySettings({ state, supported, run }: Props) {
   };
 
   return <section className="pw-typography-settings" aria-label="字体设置">
-    <div className="pw-typography-heading"><h3>字体</h3></div>
+    <div className="pw-typography-heading"><h3>字体</h3><span className="pw-typography-draft-state">{locked ? '正在保存字体…' : visibleError ? '保存待确认' : dirty ? '尚未保存的选择' : '当前字体组合'}</span></div>
     <div className="pw-typography-workbench">
       <div className="pw-typography-preview" aria-label="所选字体预览" aria-busy={preview === 'loading'}>
         {preview === 'loading' && <p className="pw-field-hint" role="status">正在准备所选字体…</p>}
@@ -94,8 +94,10 @@ export function TypographySettings({ state, supported, run }: Props) {
         <SelectField compactValue label="代码与终端" options={options(CODE_FONTS)} value={draft.code} onChange={value => change('code', value)} isDisabled={locked || !canSave} />
       </div>
     </div>
+    <p className="pw-field-hint">选择后先预览，保存才会应用到整个界面。</p>
     <div className="pw-form-actions pw-typography-actions">
       <Button disabled={locked || !canSave || !needsSave || preview !== 'ready'} onClick={() => { void save(); }}>{pending ? '正在保存…' : visibleError ? '重试保存' : '保存字体'}</Button>
+      {dirty && <Button variant="ghost" disabled={locked} onClick={() => { setDraft({ ...persisted }); setSaved(null); setError(''); }}>撤销本次选择</Button>}
       <Button variant="ghost" disabled={locked || !canSave || draftKey === typographyKey(DEFAULT_TYPOGRAPHY)} onClick={() => { setDraft({ ...DEFAULT_TYPOGRAPHY }); setSaved(null); setError(''); }}>恢复默认组合</Button>
     </div>
     {!canSave && <p className="pw-field-hint">当前窗口暂不支持保存字体。</p>}

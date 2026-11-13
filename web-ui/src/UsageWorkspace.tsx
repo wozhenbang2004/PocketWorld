@@ -294,15 +294,25 @@ export function UsageWorkspace({ supported, records, renderBudget, diagnostics, 
   const selectedGroup = current && view.kind === 'group' ? groupRows(current, view.dimension || 'model').find(row => groupKey(row, view.dimension || 'model') === view.groupKey) : null;
   const entries = current ? sortedGroups(current, dimension).filter(row => `${groupTitle(row, dimension)} ${groupSubtitle(row, dimension)}`.toLocaleLowerCase().includes(filter.trim().toLocaleLowerCase())) : [];
   const viewTitle = view.kind === 'trends' ? '每日趋势' : view.kind === 'analysis' ? day ? `${fullDate(day)}用量` : '用量分布' : view.kind === 'group' ? selectedGroup ? groupTitle(selectedGroup, view.dimension || 'model') : '来源明细' : view.kind === 'metrics' ? 'Token 与费用' : view.kind === 'records' ? '调用记录' : view.kind === 'budget' ? '预算与限制' : view.kind === 'diagnostics' ? '模型诊断' : view.kind === 'web' ? '联网活动' : '统计说明';
+  const changePeriod = (days: number) => {
+    if (days === period) return;
+    setPeriod(days); setRange(usageRange(days)); setPeriodReport(null); setDayReport(null); setSelectedDay('');
+    setFilter(''); setLimit(10);
+  };
+  const periodControl = <div className="pw-usage-periods" role="group" aria-label="统计时间范围">{periods.map(days =>
+    <Button key={days} variant="ghost" aria-pressed={period === days} onClick={() => changePeriod(days)}>近 {days} 天</Button>
+  )}</div>;
   return <section ref={root} className="pw-usage-workspace" aria-label="用量统计">
-    {view.kind === 'overview' ? <header className="pw-usage-toolbar"><CompactSelect label="统计时间范围" value={String(period)} options={periods.map(value => ({ id: String(value), label: `近 ${value} 天` }))} onChange={value => { const days = Number(value); setPeriod(days); setRange(usageRange(days)); setPeriodReport(null); setDayReport(null); setSelectedDay(''); }}/>
+    {view.kind === 'overview' ? <header className="pw-usage-toolbar">{periodControl}
       <div className="pw-usage-toolbar-copy"><span>{scopeDates}</span><WorkingStatus active={busy}>{current ? '正在更新…' : '正在读取用量…'}</WorkingStatus></div><IconButton icon={IconRefresh} aria-label="刷新用量统计" title="刷新用量统计" disabled={busy || !available} onClick={() => { setRange(usageRange(period)); setRefresh(value => value + 1); }}/></header>
       : <header className="pw-usage-detail-heading"><Button variant="ghost" leadingIcon={IconChevronLeft} onClick={back}>返回{trail.current.at(-1)?.view.kind === 'analysis' ? '分布' : trail.current.at(-1)?.view.kind === 'trends' ? '趋势' : '概览'}</Button><h2 tabIndex={-1} data-usage-heading>{viewTitle}</h2>{needsReport && <p>{scopeDates} · {day ? '当天' : `近 ${period} 天`}</p>}</header>}
+    {!day && ['trends', 'analysis'].includes(view.kind) && periodControl}
     {needsReport && <>
       {!available && <p className="pw-usage-state">当前版本暂未提供趋势统计，可查看调用记录。</p>}
       {error && <div className="pw-usage-error" role="alert"><p>{error}</p>{current && <small>当前保留上次成功读取的统计。</small>}<Button variant="ghost" disabled={busy} onClick={() => setRefresh(value => value + 1)}>重新读取</Button></div>}
       {view.kind !== 'overview' && <WorkingStatus active={busy}>{current ? '正在更新…' : '正在读取用量…'}</WorkingStatus>}
       {current && view.kind === 'overview' && <>
+        <p className="pw-usage-scope-note">本机保留的调用记录 · {current.query.zoneId}{isPartialReport(current) ? ' · 当前为部分数据' : ''}</p>
         {current.totals.attempts > 0 ? <section className="pw-usage-primary" aria-label="当前时段用量"><Total report={current} title="累计用量" onCache={showMetrics}/>
           <div className="pw-usage-trend-heading"><h3>每日消耗</h3><Button variant="ghost" trailingIcon={IconChevronRight} data-usage-focus="trends" onClick={() => open({ kind: 'trends' })}>分析趋势</Button></div>
           <DailyChart report={current} days={range.days} metric="total" selected={selectedDay} onSelect={setSelectedDay} onOpenDay={showDay}/>

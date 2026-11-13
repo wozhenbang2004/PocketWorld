@@ -3,11 +3,13 @@
 import {useEffect,useLayoutEffect,useRef} from 'react';
 import {animate,useMotionValue} from 'motion/react';
 import type {PressButtonProps} from './types';
+import {motionTransition} from './motion-tokens';
 
-// Keep the approved quick contact / slower release and separate material strain.
+// MangaFlow motionPress attack / release response on the retained drawing layers.
+// The stable button hit region and original pointer/keyboard ownership stay intact.
 // Physical springs retain current velocity when a press interrupts a release.
-const contact = {type:'spring',stiffness:1800,damping:58,mass:.7,restDelta:.001,restSpeed:.01} as const;
-const recovery = {type:'spring',stiffness:520,damping:30,mass:.8,restDelta:.001,restSpeed:.01} as const;
+const contact = {...motionTransition.pressAttack,restDelta:.001,restSpeed:.01} as const;
+const recovery = {...motionTransition.press,restDelta:.001,restSpeed:.01} as const;
 
 export function PressButton({label,icon,compact=false,children,className='',disabled,...props}:PressButtonProps){
  const ref=useRef<HTMLButtonElement>(null);

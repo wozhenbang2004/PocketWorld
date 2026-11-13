@@ -1,17 +1,17 @@
 /* Role timings shared by the existing source adaptations. Keep these values in
  * step with library/motion-tokens.ts; animations never supply business progress. */
 :root {
- --pw-motion-press:80ms;
+ --pw-motion-press:120ms;
  --pw-motion-release:220ms;
- --pw-motion-feedback:140ms;
- --pw-motion-enter:220ms;
- --pw-motion-exit:160ms;
+ --pw-motion-feedback:180ms;
+ --pw-motion-enter:260ms;
+ --pw-motion-exit:180ms;
  --pw-motion-layout:280ms;
  --pw-motion-drawer:320ms;
  --pw-motion-drawer-exit:240ms;
- --pw-ease-enter:cubic-bezier(0,0,.58,1);
+ --pw-ease-enter:cubic-bezier(.22,1,.36,1);
  --pw-ease-settle:cubic-bezier(.22,1,.36,1);
- --pw-ease-exit:cubic-bezier(.42,0,1,1);
+ --pw-ease-exit:cubic-bezier(.4,0,1,1);
  --pw-ease-move:cubic-bezier(.42,0,.58,1);
 }
 .pw-thinking-loader.ui-tlc {font-family:var(--font-ui);}

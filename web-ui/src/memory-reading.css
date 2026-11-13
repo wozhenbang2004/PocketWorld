@@ -23,11 +23,11 @@
 .pw-memory-workspace .pw-memory-list-heading p { margin: 0; color: var(--pw-copy); font-size: 13px; line-height: 22px; }
 .pw-memory-workspace .pw-memory-list-heading > button { font-size: 13px; padding-inline: var(--pw-gap-related); }
 .pw-memory-workspace .pw-knowledge-directory-group { margin: 24px 0; }
-.pw-memory-workspace .pw-memory-list { display: flex; flex-direction: column; padding: 4px 0; border-radius: 20px; background: var(--pw-surface); box-shadow: none; }
+.pw-memory-workspace .pw-memory-list { display: flex; flex-direction: column; gap: 10px; padding: 0; border-radius: 0; background: transparent; box-shadow: none; }
 .pw-memory-workspace .pw-memory-list:empty { display: none; }
-.pw-memory-workspace .pw-memory-list-item { min-width: 0; }
+.pw-memory-workspace .pw-memory-list-item { min-width: 0; border: 1px solid var(--pw-divider); border-radius: 18px; background: var(--pw-surface); overflow: hidden; }
 .pw-memory-workspace .pw-memory-row.button-press-motion {
-  width: 100%; min-width: 0; min-height: 72px; height: auto; padding: 12px 16px; gap: var(--pw-gap-control);
+  width: 100%; min-width: 0; min-height: 88px; height: auto; padding: 18px 16px; gap: var(--pw-gap-control);
   border: 0; border-radius: 16px; background: transparent; box-shadow: none;
   color: var(--pw-ink); white-space: normal; text-align: start; justify-content: flex-start;
 }
@@ -57,4 +57,28 @@
 .pw-memory-workspace .pw-memory-row:active { background: var(--pw-selected); }
 @media (hover: hover) and (pointer: fine) {
   .pw-memory-workspace .pw-memory-row:hover:not(:active) { background: var(--pw-inset); }
+}
+
+.pw-memory-workspace .pw-collection-navigation { padding: 6px; border-radius: 24px; }
+.pw-memory-workspace .pw-memory-row-copy small { font-size: 12px; }
+@media (min-width: 800px) {
+  .pw-memory-workspace .pw-memory-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+}
+
+/* Memory review stays a child layer: original text, proposed text, then one
+ * decision edge. SettingsDialog retains the exiting body and owns focus/exit. */
+.pw-memory-modal.pw-settings-dialog { width: min(640px, calc(100vw - 24px)); border-radius: 24px; }
+.pw-memory-modal .pw-knowledge-review { display: grid; gap: 16px; min-width: 0; }
+.pw-memory-modal .pw-memory-review-version { padding: 16px; border: 1px solid var(--pw-divider); border-radius: 16px; background: var(--pw-inset); min-width: 0; }
+.pw-memory-modal .pw-memory-review-version h3 { margin: 0 0 8px; color: var(--pw-copy); font-size: 12px; font-weight: 600; }
+.pw-memory-modal .pw-memory-review-version p { margin: 0; font-size: 15px; line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pw-memory-modal .pw-knowledge-review > .pw-form-actions { position: sticky; bottom: 0; margin: 0; padding: 12px 0; border-top: 1px solid var(--pw-divider); background: var(--pw-surface); display: flex; flex-wrap: wrap; gap: 8px; }
+.pw-memory-modal .pw-form-actions button { min-height: 44px; }
+.pw-memory-history .pw-knowledge-search-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
+.pw-memory-history .pw-knowledge-search-actions > :first-child { flex: 1 1 200px; min-width: 0; }
+.pw-memory-history .pw-knowledge-conflict { padding: 16px; border-radius: 18px; background: var(--pw-surface); display: grid; gap: 12px; }
+.pw-memory-history .pw-memory-reading > .pw-source-record { padding: 16px; background: var(--pw-inset); border-radius: 16px; }
+.pw-memory-history .pw-memory-reading { min-width: 0; scroll-margin-top: 16px; }
+@media (max-width: 400px) {
+  .pw-memory-modal .pw-knowledge-review > .pw-form-actions > button { flex: 1 1 auto; }
 }

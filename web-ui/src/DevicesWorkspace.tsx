@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import './collaboration-depth.css';
+import './device-control-reading.css';
 import { Accordion, AccordionItem, Button, CheckboxField, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { DeviceRequestScope, deviceConnectionLabel, deviceGrantInput, deviceHistoryLabel, deviceHistoryReceipt, deviceTaskDetails, deviceMethodLabels, deviceOperationLabels, deviceReceipt, deviceReview, deviceRows as rows, deviceSnapshot, deviceStrings as strings, deviceTaskRows, deviceWorkspaceTaskMode, type DeviceData as Data } from './devices-workspace';
 import { IconAdd, IconArrowLeft, IconChevronRight, IconMonitor, IconPhone, IconRefresh, IconShieldCheck } from './icons';
@@ -205,7 +206,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
         <WorkingStatus active={busy && !form}>正在读取原设备回执…</WorkingStatus>
         {!snapshot && !busy && <div className="pw-device-empty"><h3>尚未读取设备状态</h3><p>读取后查看已配对设备与连接状态。</p><Button variant="secondary" onClick={refresh}>读取设备状态</Button></div>}
         {snapshot && !peerId && <>
-          {supported('deviceTaskScope.prepare') && <section className="pw-device-section" aria-label="新建设备工作"><header className="pw-device-section-heading"><div><h3>让设备完成一件事</h3><p>写目标，选择准确设备范围，再开始。也可以进入电脑详情直接查看桌面。</p></div></header><div className="pw-form-actions"><Button disabled={busy} onClick={() => setForm('work')}>交给助手完成目标</Button>{supported('phoneControl.prepare') && <Button variant="secondary" disabled={busy} onClick={() => setForm('manual')}>手动控制手机</Button>}</div></section>}
+          {supported('deviceTaskScope.prepare') && <section className="pw-device-section pw-device-launcher" aria-label="新建设备工作"><header className="pw-device-section-heading"><div><h3>选择操作方式</h3><p>让助手执行目标，或由你直接操作。电脑桌面可从下方设备打开。</p></div></header><div className="pw-form-actions"><Button disabled={busy} onClick={() => setForm('work')}>交给助手</Button>{supported('phoneControl.prepare') && <Button variant="secondary" disabled={busy} onClick={() => setForm('manual')}>自己控制手机</Button>}</div></section>}
           {pairings.length > 0 && <section className="pw-device-section" aria-label="等待核对的原配对">
             <header className="pw-device-section-heading"><h3>配对待确认</h3><span>{pairings.length} 项</span></header>
             <div className="pw-device-attention">

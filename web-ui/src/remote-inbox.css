@@ -48,3 +48,11 @@
 
 .pw-notification-attention{display:grid;gap:var(--pw-gap-control)}
 .pw-remote-item[data-selected="true"]{background:var(--pw-inset);outline:2px solid var(--pw-focus,var(--pw-copy));outline-offset:4px;border-radius:8px}
+/* Three independent sources, not one mixed completion queue. Filters and
+ * bounded pages stay with their original backend and never imply bulk work. */
+.pw-remote-inbox > .pw-remote-message-group { display: grid; gap: 20px; min-width: 0; padding-top: 24px; border-top: 1px solid var(--pw-edge); }
+.pw-remote-inbox > .pw-notification-attention + .pw-notification-attention { padding-top: 24px; border-top: 1px solid var(--pw-edge); }
+.pw-remote-message-group > .pw-remote-section-title h2 { font-size: 22px; line-height: 1.35; letter-spacing: -.025em; }
+.pw-remote-message-group .pw-remote-list-toolbar { min-width: 0; flex-wrap: wrap; gap: 12px; }
+.pw-remote-message-group .pw-remote-filters { flex-wrap: wrap; }
+.pw-remote-message-group .pw-remote-list-toolbar > button { white-space: normal; min-height: 44px; text-align: start; }

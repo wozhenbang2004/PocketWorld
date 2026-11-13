@@ -30,6 +30,7 @@ import './setup.css';
 import './borderless-surfaces.css';
 import './composer-squircle.css';
 import './navigation-glass.css';
+import './manga-foundation.css';
 
 const element = document.getElementById('app');
 if (!element) throw new Error('PocketWorld application mount is missing');

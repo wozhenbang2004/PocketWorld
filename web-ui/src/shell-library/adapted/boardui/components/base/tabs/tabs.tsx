@@ -3,7 +3,7 @@
 import { useDirection } from "../../foundations/direction/direction";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ComponentType, ReactNode, Ref } from "react";
-import { animate, motion, useMotionValue } from "motion/react";
+import { animate, motion, useMotionValue, useTransform } from "motion/react";
 import {
   Tab as AriaTab,
   TabList as AriaTabList,
@@ -76,20 +76,24 @@ export function TabList<T extends object>({ className, ref, ...props }: TabListP
   const wrapperRef = useRef<HTMLDivElement>(null);
   const [underline, setUnderline] = useState<Underline | null>(null);
   const indicatorX = useMotionValue(0);
-  const indicatorWidth = useMotionValue(0);
+  const indicatorRight = useMotionValue(0);
+  const indicatorWidth = useTransform(() => Math.max(0, indicatorRight.get() - indicatorX.get()));
 
   useIsomorphicLayoutEffect(() => {
     if (!underline) return;
     if (!allowed || !underline.animate) {
-      indicatorX.jump(underline.left); indicatorWidth.jump(underline.width);
+      indicatorX.jump(underline.left); indicatorRight.jump(underline.left + underline.width);
       return;
     }
+    // Only the decorative edges travel. Tabs retain stable hit targets and focus.
+    // Physical coordinates already include RTL; reverse taps preserve velocity.
+    const rightward = underline.left > indicatorX.get();
     const animations = [
-      animate(indicatorX, underline.left, motionTransition.selection),
-      animate(indicatorWidth, underline.width, motionTransition.selection),
+      animate(indicatorX, underline.left, rightward ? motionTransition.tabTrailing : motionTransition.tabLeading),
+      animate(indicatorRight, underline.left + underline.width, rightward ? motionTransition.tabLeading : motionTransition.tabTrailing),
     ];
     return () => animations.forEach(animation => animation.stop());
-  }, [underline, allowed, indicatorX, indicatorWidth]);
+  }, [underline, allowed, indicatorX, indicatorRight]);
 
   useIsomorphicLayoutEffect(() => {
     const el = wrapperRef.current;

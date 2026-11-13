@@ -5,6 +5,7 @@ import { PressButton } from './library';
 import { Tabs, TabList, Tab, TabPanel } from './shell-library';
 import { IconAdd, IconArrowLeft, IconChevronRight, IconFileSettings, IconRefresh } from './icons';
 import './work-profiles-workspace.css';
+import './capability-management-manga.css';
 import { newProfile, profileAddRequiredTools, profileAsset, profileDependencyLabel, profileModel, profileMutationReceipt, profilePluginTool, profileReferenceKey, profileRows, profileSaveInput, profileSkillDependencies, profileStartInput, profileStartReceipt, ProfileRequestGate, type ProfileData as Data } from './profile-contract';
 
 type Props = { state: Data; supported: (action: string) => boolean; run: (action: string, args?: Data) => Promise<any>; registerTransientBack: (handler: (() => boolean) | null) => void };

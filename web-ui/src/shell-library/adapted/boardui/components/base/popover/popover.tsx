@@ -99,7 +99,8 @@ export interface PopoverProps
   className?: string;
   /** Classes on the inner dialog; `p-0` suits menu-like rows that pad themselves. */
   dialogClassName?: string;
-  /** Frequent text selectors keep the source scale/opacity motion without blur. */
+  /** CompactGlassPopover correspondence: 180/120ms opacity/scale, no blur.
+   * CSS retargets the same anchored surface; no duplicate live content or Haze claim. */
   motionProfile?: "default" | "quick";
   children: ReactNode | ((renderProps: DialogRenderProps) => ReactNode);
 }
@@ -134,10 +135,10 @@ export function Popover({
         "rounded-[20px] border border-border-button-default bg-background-primary-default p-1.5 shadow-dropdown",
         "origin-(--trigger-anchor-point)",
         allowed ? motionProfile === "quick" ? [
-          "transition-[opacity,scale] duration-150 ease-(--pw-ease-enter)",
-          "data-[exiting]:duration-100 data-[exiting]:ease-(--pw-ease-exit)",
+          "transition-[opacity,scale] duration-(--pw-motion-feedback) ease-(--pw-ease-enter)",
+          "data-[exiting]:duration-(--pw-motion-press) data-[exiting]:ease-(--pw-ease-exit)",
           "data-[entering]:opacity-0 data-[exiting]:opacity-0",
-          "data-[entering]:scale-95 data-[exiting]:scale-95",
+          "data-[entering]:scale-94 data-[exiting]:scale-94",
         ].join(" ") : [
           "transition-[opacity,scale,filter] duration-(--pw-motion-enter) ease-(--pw-ease-enter)",
           "data-[exiting]:duration-(--pw-motion-exit) data-[exiting]:ease-(--pw-ease-exit)",
@@ -148,6 +149,7 @@ export function Popover({
         className,
       )}
     >
+      {({ isExiting }) => <>
       {showArrow ? (
         <AriaOverlayArrow>
           {({ placement: side }) => {
@@ -166,9 +168,10 @@ export function Popover({
           }}
         </AriaOverlayArrow>
       ) : null}
-      <AriaDialog aria-label={ariaLabel} className={cx("flex flex-col gap-3 p-2.5 outline-none", dialogClassName)}>
+      <AriaDialog inert={isExiting} aria-label={ariaLabel} className={cx("flex flex-col gap-3 p-2.5 outline-none", dialogClassName)}>
         {children}
       </AriaDialog>
+      </>}
     </AriaPopover>
   );
 }

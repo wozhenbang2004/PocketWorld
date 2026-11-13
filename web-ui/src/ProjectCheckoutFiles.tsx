@@ -3,6 +3,7 @@ import { Accordion, AccordionItem, Button, SettingsDialog, TextAreaField, TextFi
 import { InlineDiff } from './shell-library';
 import { bridge } from './bridge';
 import './project-development.css';
+import './project-workspace-manga.css';
 
 type Data = Record<string, any>;
 type Props = { projectId: string; checkoutId: string; viewHandle: string; run: (action: string, args?: Data) => Promise<any>;
@@ -18,6 +19,8 @@ const failureText = (error: unknown) => error instanceof Error ? error.message :
 export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, onClose, registerBack }: Props) {
   const [listing, setListing] = useState<Data | null>(null), [file, setFile] = useState<Data | null>(null), [text, setText] = useState('');
   const [newPath, setNewPath] = useState(''), [busy, setBusy] = useState(false), [editing, setEditing] = useState(false), [error, setError] = useState('');
+  const [treeOpen, setTreeOpen] = useState(true);
+  const editorHeading = useRef<HTMLHeadingElement>(null);
   const [orphan, setOrphan] = useState<string | null>(null), [choice, setChoice] = useState<'keep_mine' | 'use_latest' | null>(null);
   const [adoption, setAdoption] = useState<Data | null>(null), [adoptionExpired, setAdoptionExpired] = useState(false);
   const activeAdoption = useRef<Data | null>(null), adoptionHeading = useRef<HTMLHeadingElement>(null); activeAdoption.current = adoption;
@@ -57,7 +60,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     if (value.projectId !== projectId || value.checkoutId !== checkoutId || value.filesHandle !== handle.current) throw new Error('文件列表不属于原副本。');
     setListing(previous => ({ ...value, files: more ? [...rows(previous?.files), ...rows(value.files)] : rows(value.files) }));
   });
-  const readFile = (path: string) => invoke('read', { path }, value => { setChoice(null); setAdoption(null); apply(value); });
+  const readFile = (path: string) => invoke('read', { path }, value => { setChoice(null); setAdoption(null); apply(value); setTreeOpen(false); requestAnimationFrame(() => { editorHeading.current?.scrollIntoView({ block: 'nearest' }); editorHeading.current?.focus({ preventScroll: true }); }); });
   const edit = (value: string) => {
     const original = currentFile.current;
     if (!original || entered.current || orphan !== null || activeAdoption.current || document.hidden) return;
@@ -75,7 +78,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
       .finally(() => { edits.current--; if (alive.current) setEditing(edits.current > 0); });
   };
   const dismissAdoption = () => { if (entered.current || edits.current) return; const selected = activeAdoption.current; activeAdoption.current = null; setAdoption(null); if (selected) void latest.current.run(command + 'dismissImport', { viewHandle, filesHandle: handle.current, importHandle: selected.importHandle }).catch(() => {}); };
-  const close = () => { if (entered.current || edits.current) return; if (activeAdoption.current) { dismissAdoption(); return; } latest.current.onClose(); };
+  const close = () => { if (entered.current || edits.current) return; if (activeAdoption.current) { dismissAdoption(); return; } if (choice) { setChoice(null); return; } latest.current.onClose(); };
   useEffect(() => {
     alive.current = true; originalWindow.current = windowKey();
     const retire = () => {
@@ -111,16 +114,16 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     <small className="pw-checkout-identity">{projectId} / {checkoutId}</small>
     {error && <p role="alert">{error}</p>}
     {!listing ? <Button variant="secondary" disabled={busy} onClick={() => void invoke('open', {}, value => { if (value.projectId !== projectId || value.checkoutId !== checkoutId || !value.filesHandle) throw new Error('没有取得原私人副本文件窗口。'); handle.current = value.filesHandle; setListing(value); })}>重新读取副本文件</Button> : <>
-      <Accordion><AccordionItem id="checkout-tree" title={file ? '切换文件或新建' : '选择要编辑的文件'} description={`${listing.fileCount} 个实际源码文件；另列保留草稿`}>
+      <Accordion expandedKeys={new Set(treeOpen ? ['checkout-tree'] : [])} onExpandedChange={keys => setTreeOpen(Array.from(keys).includes('checkout-tree'))}><AccordionItem id="checkout-tree" title={file ? '切换文件或新建' : '选择要编辑的文件'} description={`${listing.fileCount} 个实际源码文件；另列保留草稿`}>
         {listing.draftError && <p role="alert">{listing.draftError}</p>}
         <div className="pw-form-actions"><Button variant="ghost" disabled={locked} onClick={() => void readList()}>重新读取文件列表</Button></div>
-        <div className="pw-checkout-file-list">{rows(listing.files).map(row => <Button key={row.path} variant="ghost" disabled={locked || row.binary === true} onClick={() => void readFile(row.path)}><span>{row.path}</span><small>{row.binary ? '二进制' : row.hasDraft ? '有保留草稿' : row.change === 'deleted' ? '副本已删除' : row.change === 'added' ? '副本新增' : row.change === 'modified' ? '副本已修改' : '与原基线一致'}</small></Button>)}</div>
+        <div className="pw-checkout-file-list">{rows(listing.files).map(row => <Button key={row.path} aria-current={file?.path === row.path ? 'true' : undefined} variant="ghost" disabled={locked || row.binary === true} onClick={() => void readFile(row.path)}><span>{row.path}</span><small>{row.binary ? '二进制' : row.hasDraft ? '有保留草稿' : row.change === 'deleted' ? '副本已删除' : row.change === 'added' ? '副本新增' : row.change === 'modified' ? '副本已修改' : '与原基线一致'}</small></Button>)}</div>
         {!rows(listing.files).length && <p>副本中还没有文件。可以在下方填写相对路径创建，或返回目标让 AI 开始。</p>}
         {listing.nextPath && <Button variant="secondary" disabled={locked} onClick={() => void readList(true)}>读取下一页文件</Button>}
         <TextField label="相对文件路径" value={newPath} onChange={setNewPath} isDisabled={locked} hint="例如 index.html 或 src/main.ts；不操作运行缓存和 Git 内部目录。" />
         <Button variant="secondary" disabled={locked || !newPath.trim()} onClick={() => void readFile(newPath.trim())}>打开或准备新文件草稿</Button>
       </AccordionItem></Accordion>
-      {file && <section className="pw-checkout-editor"><header><h3>{file.path}</h3><small>{file.baseHash === 'absent' ? '文件尚未存在' : '来自此副本的实际文件'} · {file.dirty ? '有未保存修改' : '没有未保存修改'}</small></header>
+      {file && <section className="pw-checkout-editor"><header><h3 ref={editorHeading} tabIndex={-1}>{file.path}</h3><small>{file.baseHash === 'absent' ? '文件尚未存在' : '来自此副本的实际文件'} · {file.dirty ? '有未保存修改' : '没有未保存修改'}</small></header>
         {orphan !== null && <div role="alert"><p>上次界面文字尚未确认缓存，与手机恢复的草稿不同。下面保留的是界面文字，选择前不会替换任一份。</p><InlineDiff before={nativeText} after={orphan} versionLabel="手机恢复的草稿" /><div className="pw-form-actions"><Button variant="secondary" disabled={locked} onClick={() => { const retained = orphan; blockedEdit.current = true; setOrphan(null); currentText.current = retained; setText(retained); /* explicit cache edit, never a source write */ const sequence = ++editSequence.current; void invoke('edit', { fileHandle: file.fileHandle, editSequence: sequence, text: retained }, value => { blockedEdit.current = false; apply({ ...value, text: retained }, false); }); }}>保留界面文字为草稿</Button><Button variant="secondary" disabled={locked} onClick={() => { interfaceDrafts.delete(keyFor(file.path)); setOrphan(null); currentText.current = nativeText; setText(nativeText); }}>采用已恢复的手机草稿</Button></div></div>}
         <TextAreaField label="副本文件内容" value={text} onChange={edit} isReadOnly={busy || !!adoption || orphan !== null} className="pw-code-editor" />
         {(file.conflict || file.saveUnknown) && <p role="status">{file.saveUnknown ? '保存结果待核对，请读取同一文件。' : '副本文件与保留草稿的基线不同。请比较后决定，未自动覆盖。'}</p>}
@@ -145,10 +148,10 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
         </section>}
         {file.importStatus && <p role="status">{file.importReceipt?.message || file.importMessage} {file.importError || ''} {file.projectListRefreshMessage || ''}</p>}
         {file.message && <p role="status">{file.message} {file.saveError || ''}</p>}
-        <p role="status">{editing ? '正在保留这次文字…' : file.draftError || (file.draftDurable ? '草稿缓存已核对' : '文字仍在当前会话，正在保存到手机缓存。')}</p>
+        {file.draftError && <p role="alert">{file.draftError}</p>}
         {(file.draftError || blockedEdit.current) && <div className="pw-form-actions"><Button variant="secondary" disabled={locked || orphan !== null} onClick={() => { if (blockedEdit.current) edit(currentText.current); else void invoke('cache', { fileHandle: file.fileHandle, retry: true }, value => apply(value, false)); }}>重试保留草稿</Button></div>}
       </section>}
     </>}
-    <Button variant="secondary" disabled={busy || editing} onClick={close}>{adoption ? '返回文件' : '返回项目目标'}</Button>
+    <Button variant="secondary" disabled={busy || editing} onClick={close}>{adoption || choice ? '返回文件' : '返回项目目标'}</Button>
   </div></SettingsDialog>;
 }

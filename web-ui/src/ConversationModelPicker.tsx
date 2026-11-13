@@ -24,7 +24,10 @@ const ControlsContext = createContext<PickerContext | null>(null);
 const VisibilityContext = createContext(false);
 const busy = (state: Row) => !!(state.chatSubmitting || state.phoneSubmitting || state.modelSaving || state.modelTesting || state.modelSelectionBusy);
 
-/** The existing BoardUI picker owns its transient state; App's children stay intact. */
+/** MangaFlow CompactGlassPopover correspondence: a real trigger anchor, bounded
+ * scrolling foreground, retained exit content and input gating. React Aria owns
+ * placement/focus; this is deliberately not a second replica of the trigger or
+ * a claimed Haze surface morph. App's children stay intact. */
 export function ConversationModelPickerProvider({ ref, state, can, act, disabled, active, channelPhoneModel, onChannelModel, onManage, onOpenMedia, children }: {
   ref: Ref<ConversationModelPickerHandle>;
   state: Row; can: (action: string) => boolean; act: Run;
@@ -116,7 +119,7 @@ export function ConversationModelPickerProvider({ ref, state, can, act, disabled
       placement="top start" offset={8} shouldFlip containerPadding={16} maxHeight={view.section === 'models' ? 560 : 480}
       scrollRef={body} isKeyboardDismissDisabled={pending || !!state.modelSelectionBusy} motionProfile="quick"
       aria-label={view.section === 'models' ? '选择此对话的模型' : '选择此对话的推理强度'}
-      className={`pw-conversation-picker-popover ${view.section === 'models' ? 'pw-conversation-model-popover' : 'pw-conversation-reasoning-popover'}`}
+      className={`pw-conversation-picker-popover pw-material-panel ${view.section === 'models' ? 'pw-conversation-model-popover' : 'pw-conversation-reasoning-popover'}`}
       dialogClassName="pw-conversation-picker-dialog">
       <PickerPresence onChange={setPresent}>
         <header className="pw-conversation-picker-header" inert={!view.open}>

@@ -1,14 +1,14 @@
-/* ConversationWork's retained BoardUI rows and the work object's goal/review
- * hierarchy share the same blue-gray tokens and page gutters. */
+/* MangaFlow SettingsLinkRow: title, current state and destination stay together.
+ * Existing BoardUI and Vaul retain press/focus, request identity and review. */
 .pw-butler-preparations { min-width: 0; margin-top: 28px; }
 .pw-butler-preparations > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .pw-butler-preparations h2 { margin: 0; color: var(--pw-ink); font: 500 15px/24px var(--pw-font); }
 .pw-butler-preparations ol { list-style: none; margin: 0; padding: 0; }
 .pw-butler-preparations li { min-width: 0; }
-.pw-butler-preparations .pw-preparation-row { width: 100%; min-width: 0; min-height: 66px; height: auto; justify-content: flex-start; padding: 10px 4px; gap: 12px; border: 0; border-radius: 12px; box-shadow: none; background: transparent; white-space: normal; text-align: start; }
+.pw-butler-preparations .pw-preparation-row { width: 100%; min-width: 0; min-height: 76px; height: auto; justify-content: flex-start; padding: 14px 16px; gap: 12px; border: 0; border-radius: 12px; box-shadow: none; background: transparent; white-space: normal; text-align: start; }
 .pw-preparation-row > span { flex: 1; min-width: 0; flex-shrink: 1; padding: 0; justify-content: flex-start; }
 .pw-preparation-row > span > span { display: grid; min-width: 0; gap: 4px; }
-.pw-preparation-row strong { color: var(--pw-ink); font: 500 14px/22px var(--pw-font); overflow-wrap: anywhere; }
+.pw-preparation-row strong { color: var(--pw-ink); font: 500 15px/24px var(--pw-font); overflow-wrap: anywhere; }
 .pw-preparation-row small { color: var(--pw-copy); font: 400 12px/20px var(--pw-font); }
 .pw-preparation-row > svg { flex: none; color: var(--pw-copy); }
 .pw-preparation-row > svg:last-child { width: 16px; height: 16px; color: var(--pw-muted); }
@@ -25,4 +25,17 @@
 .pw-preparation-body .pw-task-source-links { padding-top: 16px; border-top: 1px solid var(--pw-edge); }
 @media (hover: hover) and (pointer: fine) {
   .pw-butler-preparations .pw-preparation-row:hover:not(:disabled) { background: var(--pw-hover); }
+}
+
+.pw-butler-preparations > header { margin-bottom:12px; }
+.pw-butler-preparations ol:not(:empty) { padding:4px; border-radius:20px; background:var(--pw-surface); }
+.pw-butler-preparations li + li { border-top:1px solid var(--pw-edge); }
+.pw-preparation-detail .pw-preparation-body { gap:24px; }
+.pw-preparation-body .pw-preparation-choices { padding:20px; border-radius:20px; background:var(--pw-surface); }
+.pw-preparation-start { padding-top:4px; }
+.pw-preparation-receipt { border:0; padding:16px; border-radius:16px; background:var(--pw-inset); }
+@media(max-width:380px) {
+ .pw-preparation-body .pw-preparation-choices { padding:16px; }
+ .pw-preparation-start { align-items:stretch; flex-direction:column; }
+ .pw-preparation-start > button { width:100%; }
 }

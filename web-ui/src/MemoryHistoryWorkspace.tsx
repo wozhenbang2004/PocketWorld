@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { IconChevronLeft, IconChevronRight } from './icons';
 import { Accordion, AccordionItem, Button, CheckboxField, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import './knowledge-depth.css';
+import './memory-reading.css';
+import { useSurfaceEnter } from './library/surface-motion';
 import { MemoryAssertionFields } from './MemoryAssertionFields';
 import { WorkingStatus } from './library/journey-motion';
 import { MemoryReadingWindow, memoryHistoryStatus, taskMemorySelectionDetails, taskMemorySummary, taskMemoryVisibleRecords } from './memory-history';
@@ -28,6 +30,7 @@ export function MemoryHistoryWorkspace({ run, scopeKey, registerTransientBack, i
   const [version, setVersion] = useState(() => window.current.capture());
   const selectedRef = useRef<Data | null>(null), focus = useRef<HTMLElement | null>(null), reading = useRef<HTMLElement | null>(null);
   const collection = useRef<HTMLElement | null>(null), listPosition = useRef(0), returnFocus = useRef('');
+  useSurfaceEnter(collection, selected ? `history:${selected.id}` : `history-list:${view}`, { selector: selected ? ':scope > .pw-memory-reading' : '', depth: selected ? 1 : 0, active: !readOnly });
   selectedRef.current = selected;
   const closeHandle = (handle: string) => { if (handle) void run('memoryHistory.close', { handle }).catch(() => {}); };
   const closeReview = () => { closeHandle(reviewHandle.current); reviewHandle.current = ''; setReview(null); setAcknowledged(false); };
@@ -177,8 +180,8 @@ export function MemoryHistoryWorkspace({ run, scopeKey, registerTransientBack, i
         {view === 'tasks' && <><Button variant="ghost" disabled={locked} onClick={() => { void invoke('taskMemory.replacements', { readHandle: selected.readHandle }, value => { setReplacements(rows(value.records)); setReplacement(''); }); }}>选择另一条正式记忆替代</Button>{replacements.length > 0 && <><SelectField label="保留的正式记忆" value={replacement} options={replacements.map(row => ({ id: row.replacementHandle, label: row.text }))} onChange={setReplacement} isDisabled={locked} /><Button variant="secondary" disabled={locked || !replacement} onClick={() => prepare('replace')}>核对替代与旧版本停用</Button></>}<Button variant="ghost" disabled={locked} onClick={() => prepare('forget')}>核对遗忘</Button></>}
       </AccordionItem></Accordion>
     </section>}
-    <SettingsDialog isOpen={!!review} onClose={() => { if (!busy) closeReview(); }} title={review?.operation === 'conflict' ? '核对这组原冲突版本' : review?.operation === 'forget' ? '遗忘这条原记忆' : '核对本次修改'}><div className="pw-knowledge-review">
-      <p className="pw-reading-copy">{review?.before?.text}</p>{rows(review?.beforeRecords).map(row => <p key={row.id}>{row.text} · 修订 {row.revision}</p>)}{review?.afterText && <p className="pw-reading-copy">修改后：{review.afterText}</p>}{review?.reason && <p>理由：{review.reason}</p>}
+    <SettingsDialog className="pw-memory-modal" isOpen={!!review} onClose={() => { if (!busy) closeReview(); }} title={review?.operation === 'conflict' ? '核对这组原冲突版本' : review?.operation === 'forget' ? '遗忘这条原记忆' : '核对本次修改'}><div className="pw-knowledge-review">
+      <section className="pw-memory-review-version"><h3>当前内容</h3><p className="pw-reading-copy">{review?.before?.text}</p>{rows(review?.beforeRecords).map(row => <p key={row.id}>{row.text} · 修订 {row.revision}</p>)}</section>{review?.afterText && <section className="pw-memory-review-version"><h3>修改后</h3><p className="pw-reading-copy">{review.afterText}</p></section>}{review?.reason && <p>理由：{review.reason}</p>}
       <p>只处理所示的精确版本。原会话与任务证据保留；保存不证明内容为真。旧上下文是否清理，以原宿主回执为准。</p>
       <CheckboxField isSelected={acknowledged} onChange={setAcknowledged} isDisabled={locked}>我已核对这次内容与影响</CheckboxField><div className="pw-form-actions"><Button variant="secondary" disabled={locked} onClick={closeReview}>返回核对</Button><Button disabled={locked || !acknowledged} onClick={confirm}>确认这一次修改</Button></div>
     </div></SettingsDialog>

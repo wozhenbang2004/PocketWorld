@@ -467,13 +467,12 @@ function ModelSettings({ state, connection, supported, run, adding = false, pres
       <div className="pw-field-hint pw-model-draft-status" aria-live="polite">
         {restoringDraft ? <p>正在读取服务草稿…</p> : formDraft.error ? <><p role="alert">{formDraft.error}</p><Button variant="secondary" disabled={requesting || discarding} onClick={() => { if (savedResult) finishSaved(savedResult); else if (draftReady) formDraft.retry(); else void loadDraft(); }}>{savedResult ? '完成并返回' : draftReady ? '重试保存草稿' : '重新读取草稿'}</Button></>
           : formDraft.conflict ? <><p role="alert">本机已有另一份更新的草稿。这次未保存输入仍保留，可对照后放弃这次输入，重新打开本机草稿。</p><Accordion><AccordionItem id="model-draft-conflict" title="对照本机已保存的草稿"><Facts items={[['服务名称', text(formDraft.conflict.name) || '未填写'], ['接口地址', text(formDraft.conflict.url) || '未填写'], ['模型', text(formDraft.conflict.model) || '未填写'], ['保存结果', formDraft.conflict.outcomeUnverified ? '原保存结果仍待核对' : '尚未提交']]} /></AccordionItem></Accordion></>
-          : formDraft.saving && !savedResult ? <p>正在保存草稿…</p>
-          : formDraft.savedAt && !saveUnresolved && !savedResult ? <p>{formDraft.restored ? '已恢复服务草稿。' : ''}普通输入已保存在此设备，返回后可继续。</p> : null}
+          : formDraft.restored && !saveUnresolved && !savedResult ? <p>已恢复服务草稿。</p> : null}
         {draftReady && !savedResult && <p>密钥与短期凭据仅留在当前编辑页，离开后需重新填写。</p>}
         {draftReady && (formDraft.savedAt > 0 || formDraft.conflict) && (!saveUnresolved || formDraft.conflict) && !savedResult && <Button variant="ghost" disabled={requesting || discarding} onClick={() => setDiscardOpen(true)}>{formDraft.conflict ? '放弃这次未保存输入' : '放弃草稿'}</Button>}
       </div>
       <fieldset className="pw-model-editor-fields" disabled={fieldsLocked}>
-      <section className="pw-model-form-section" aria-label="服务身份"><div className="pw-form-grid">
+      <section className="pw-model-form-section" aria-label="服务身份"><h3>连接地址</h3><div className="pw-form-grid">
         <TextField label="服务名称" value={form.name} onChange={value => change('name', value)} maxLength={80} autoComplete="off" placeholder="便于辨认的名称" />
         {bedrock && <TextField label="AWS 区域" value={form.bedrockRegion} onChange={value => change('bedrockRegion', value)} placeholder="例如 us-east-1" autoComplete="off" />}
         <TextField label={bedrock ? '区域端点（自动生成）' : '接口地址'} type="url" value={bedrock ? bedrockUrl : form.url} onChange={value => { if (!bedrock) change('url', value); }} isReadOnly={bedrock} placeholder={bedrock ? '填写区域后显示' : 'https://…'} autoComplete="off" />
@@ -487,15 +486,15 @@ function ModelSettings({ state, connection, supported, run, adding = false, pres
         </> : awsFields}
       </> : canRetainApiKey ? <><p className="pw-credential-summary"><IconShieldCheck size={16} aria-hidden="true" />密钥已保存，留空保留原密钥。</p><Accordion variant="divided"><AccordionItem id="api-credential" title="替换 API 密钥" description="仅在明确保存后更换">{apiKeyField}</AccordionItem></Accordion></> : <div className="pw-form-grid">{apiKeyField}</div>}</section>
       {!bedrock && <section className="pw-model-form-section pw-ai-draft-catalog" aria-label="草稿模型目录"><div className="pw-ai-section-heading"><h3>模型</h3><Button variant="secondary" disabled={requesting || stale || unknownSave || !form.url.trim() || !supported('models.catalog.preview')} onClick={() => request('models.catalog.preview')}>{requesting && requestedAction === 'models.catalog.preview' ? '读取中…' : '读取模型'}</Button></div>
-        {draftModels && (draftModels.length ? <SelectField label="选择模型" options={draftModels.map(row => ({ id: row.modelId, label: row.modelId, ...(row.protocolCompatibility === 'declared_incompatible' ? { disabled: true, description: '目录已声明使用其他协议' } : {}) }))} value={form.model} onChange={value => { if (draftModels.some(row => row.modelId === value && row.protocolCompatibility !== 'declared_incompatible')) change('model', value); }} isDisabled={requesting} placeholder="从这次目录中选择" /> : <p className="pw-field-hint">服务没有返回模型，可在高级设置中手动填写模型 ID。</p>)}
-        {!draftModels && <p className="pw-field-hint">可先读取目录，也可以直接保存服务。{form.model ? `当前模型：${form.model}` : ''}</p>}
+        {draftModels && (draftModels.length ? <SelectField label="选择模型" options={draftModels.map(row => ({ id: row.modelId, label: row.modelId, ...(row.protocolCompatibility === 'declared_incompatible' ? { disabled: true, description: '目录已声明使用其他协议' } : {}) }))} value={form.model} onChange={value => { if (draftModels.some(row => row.modelId === value && row.protocolCompatibility !== 'declared_incompatible')) change('model', value); }} isDisabled={requesting} placeholder="从这次目录中选择" /> : <p className="pw-field-hint">服务没有返回模型，可在下方填写模型 ID。</p>)}
+        {!draftModels && <p className="pw-field-hint">读取目录后选择，或直接填写模型 ID。也可以先保存连接，稍后选择。</p>}
+        <TextField label="模型 ID（可选）" value={form.model} onChange={value => change('model', value)} autoComplete="off" placeholder="填写服务商提供的精确模型 ID" />
         {draftModels && <p className="pw-field-hint">目录已读取，服务草稿尚未保存；读取目录不代表推理测试通过。</p>}
       </section>}
       <Accordion className="pw-model-advanced" variant="divided">
-        <AccordionItem id="advanced" title="高级设置" description="协议、手动模型与请求选项">
+        <AccordionItem id="advanced" title="高级设置" description="协议、输出上限与请求选项">
           <div className="pw-form-grid">
             <SelectField label="接口协议" options={providers} value={form.provider} onChange={value => change('provider', value)} />
-            {!bedrock && <TextField label="手动模型 ID（可选）" value={form.model} onChange={value => change('model', value)} autoComplete="off" hint="可以先保存并读取模型目录；推理测试需要明确的模型 ID。" />}
             <TextField label="每次回复的输出上限" value={form.maxOutputTokens} onChange={value => change('maxOutputTokens', value.replace(/\D/g, '').slice(0, 5))} inputMode="numeric"
               isDisabled={!adding && Boolean(original.current?.catalogEnabled)} hint={!adding && original.current?.catalogEnabled ? '在原连接的模型目录中核对精确参数和容量。' : '128–32768 tokens'} />
             <CheckboxField isSelected={form.supportsImageInput} onChange={value => change('supportsImageInput', value)} isDisabled={!adding && Boolean(original.current?.catalogEnabled)}>此模型支持图像输入</CheckboxField>
@@ -1111,10 +1110,23 @@ function AccountsWorkspace({ state, data, supported, run, registerTransientBack,
   const [options, setOptions] = useState({ reasoningEffort: '', outputReserve: '4096', imageTokenReserve: '0' });
   const [adding, setAdding] = useState(startAdding), [accountLabel, setAccountLabel] = useState(''), [needsAccountRead, setNeedsAccountRead] = useState(false);
   const [accountFeedback, setAccountFeedback] = useState<{ message: string; error: boolean } | null>(null);
-  const alive = useRef(true), generation = useRef(0), operationPending = useRef(false);
-  const closeReview = () => { generation.current++; setReview(null); };
+  const alive = useRef(true), generation = useRef(0), operationPending = useRef(false), operationOwner = useRef<number | null>(null);
+  const finishOperation = (owner: number) => {
+    if (operationOwner.current !== owner) return;
+    operationOwner.current = null; operationPending.current = false;
+    if (alive.current) setBusy(false);
+  };
+  const closeReview = () => { if (operationPending.current) return; generation.current++; setReview(null); };
+  const closeCatalog = () => { if (operationPending.current) return; generation.current++; setCatalog(null); };
   useEffect(() => { alive.current = true; return () => { alive.current = false; generation.current++; }; }, []);
-  useEffect(() => { registerTransientBack(adding ? () => { if (!busy) setAdding(false); return true; } : review ? () => { if (!busy) closeReview(); return true; } : catalog ? () => { if (!busy) { generation.current++; setCatalog(null); } return true; } : null); return () => registerTransientBack(null); }, [adding, review, catalog, busy, registerTransientBack]);
+  useEffect(() => { registerTransientBack(() => {
+    // Synchronous guard also covers the interval before busy renders.
+    if (operationPending.current) return true;
+    if (adding) { setAdding(false); return true; }
+    if (review) { closeReview(); return true; }
+    if (catalog) { closeCatalog(); return true; }
+    return false;
+  }); return () => registerTransientBack(null); }, [adding, review, catalog, registerTransientBack]);
   const pending = Array.isArray(state.ownerPending) ? state.ownerPending : [];
   const locked = busy || Boolean(state.modelSelectionBusy) || pending.some((key: string) => key.startsWith('accounts.'));
   const accounts = list(data.accounts), login = object(data.login), selected = object(data.selectedModelRef);
@@ -1128,7 +1140,7 @@ function AccountsWorkspace({ state, data, supported, run, registerTransientBack,
     if (!ACCOUNT_RECEIPT_ACTIONS.has(action)) return run(action, args);
     if (operationPending.current) throw new Error('请先等待本次账号操作的回执。');
     if (needsAccountRead && ['accounts.beginLogin', 'accounts.reauthorize'].includes(action)) throw new Error('请先刷新账号状态，核对原授权后再继续。');
-    const original = ++generation.current; operationPending.current = true; setBusy(true); setAccountFeedback(null); setCatalog(null); setReview(null);
+    const original = ++generation.current; operationPending.current = true; operationOwner.current = original; setBusy(true); setAccountFeedback(null); setCatalog(null); setReview(null);
     try {
       const value = await run(action, args), message = accountActionReceipt(action, args, value);
       if (alive.current && original === generation.current) {
@@ -1144,19 +1156,19 @@ function AccountsWorkspace({ state, data, supported, run, registerTransientBack,
         if (feedback.needsAccountRead && action !== 'accounts.refresh') setNeedsAccountRead(true);
       }
       throw failure;
-    } finally { if (alive.current && original === generation.current) { operationPending.current = false; setBusy(false); } }
+    } finally { finishOperation(original); }
   };
   const act = (action: string, args: Data, label: string, primary = false) => <CapabilityAction action={action} args={args} supported={supported} run={runAccount} disabled={locked || needsAccountRead && action === 'accounts.reauthorize'} primary={primary}>{label}</CapabilityAction>;
   const readModels = async (row: Data) => {
     if (operationPending.current || locked) return;
-    const original = ++generation.current; operationPending.current = true; setBusy(true); setCatalog(null); setReview(null); setReceipt(null); setQuery('');
+    const original = ++generation.current; operationPending.current = true; operationOwner.current = original; setBusy(true); setAccountFeedback(null); setCatalog(null); setReview(null); setReceipt(null); setQuery('');
     try { const result = object(await run('accounts.models', { accountId: row.id, expectedVersion: row.version })); if (alive.current && original === generation.current) setCatalog(result); }
-    catch { /* The shared page displays the actual native failure. */ }
-    finally { if (alive.current && original === generation.current) { operationPending.current = false; setBusy(false); } }
+    catch (failure) { if (alive.current && original === generation.current) setAccountFeedback({ message: failure instanceof Error ? failure.message : String(failure), error: true }); }
+    finally { finishOperation(original); }
   };
   const prepare = async (kind: 'model' | 'logout', args: Data) => {
     if (operationPending.current || locked) return;
-    const original = ++generation.current; operationPending.current = true; setBusy(true); setReceipt(null);
+    const original = ++generation.current; operationPending.current = true; operationOwner.current = original; setBusy(true); setAccountFeedback(null); setReceipt(null);
     try {
       const result = object(await run(kind === 'model' ? 'accounts.model.review' : 'accounts.logout.review', args));
       if (alive.current && original === generation.current) {
@@ -1164,8 +1176,8 @@ function AccountsWorkspace({ state, data, supported, run, registerTransientBack,
         setOptions({ reasoningEffort: text(defaults.reasoningEffort), outputReserve: text(defaults.outputReserve, '4096'), imageTokenReserve: text(defaults.imageTokenReserve, '0') });
         setReview({ ...result, kind });
       }
-    } catch { /* Preserve the current account; failed review is not a selection. */ }
-    finally { if (alive.current && original === generation.current) { operationPending.current = false; setBusy(false); } }
+    } catch (failure) { if (alive.current && original === generation.current) setAccountFeedback({ message: failure instanceof Error ? failure.message : String(failure), error: true }); }
+    finally { finishOperation(original); }
   };
   const facts = object(object(review?.catalogFacts).facts), levelsFact = object(facts.REASONING_LEVELS);
   const levels = levelsFact.known === true && Array.isArray(levelsFact.value) ? levelsFact.value.filter((value: any) => typeof value === 'string') as string[] : [];
@@ -1173,12 +1185,12 @@ function AccountsWorkspace({ state, data, supported, run, registerTransientBack,
   const valid = /^\d+$/.test(options.outputReserve) && Number.isSafeInteger(output) && output >= 128 && output <= 32768 && /^\d+$/.test(options.imageTokenReserve) && Number.isSafeInteger(imageReserve) && imageReserve >= 0 && imageReserve <= 2_000_000 && (!options.reasoningEffort || levels.includes(options.reasoningEffort));
   const confirm = async () => {
     if (!review || locked || operationPending.current || !reviewCurrent || review.kind === 'model' && !valid) return;
-    const original = review, attempt = ++generation.current; operationPending.current = true; setBusy(true);
+    const original = review, attempt = ++generation.current; operationPending.current = true; operationOwner.current = attempt; setBusy(true);
     try {
       const result = object(await run(original.kind === 'model' ? 'accounts.model.select' : 'accounts.logout.confirm', { reviewHandle: original.reviewHandle, ...(original.kind === 'model' ? { options: { reasoningEffort: options.reasoningEffort, outputReserve: output, imageTokenReserve: imageReserve } } : {}) }));
       if (alive.current && attempt === generation.current) setReceipt({ kind: original.kind, ...result });
     } catch { if (alive.current && attempt === generation.current) setReceipt({ kind: original.kind, status: 'unknown' }); }
-    finally { if (alive.current && attempt === generation.current) { operationPending.current = false; setBusy(false); closeReview(); setCatalog(null); } }
+    finally { finishOperation(attempt); if (alive.current && attempt === generation.current) { closeReview(); setCatalog(null); } }
   };
   const known = (key: string) => object(facts[key]).known === true ? object(facts[key]).value : undefined;
   const actualReceipt = object(receipt?.receipt);
@@ -1191,13 +1203,26 @@ function AccountsWorkspace({ state, data, supported, run, registerTransientBack,
       {accountFeedback && !adding && <p className={accountFeedback.error ? 'pw-field-error' : 'pw-receipt-copy'} role={accountFeedback.error ? 'alert' : 'status'}>{accountFeedback.message}</p>}
       {state.modelRoute === 'account' && data.selectedModelRef && <div className="pw-selected-object"><h3>当前账号模型</h3><Facts items={[[ '模型', selected.modelId ], ['账号', accounts.find(row => row.id === selected.accountId)?.label ], ['可用状态', data.selectedModelUsable ? '当前引用可用' : '需要重新读取目录并选择' ]]} /></div>}
       {data.planWelcomeRequired === true && welcomeAccount && <div className="pw-receipt-copy"><h3>已通过 ChatGPT 登录</h3><p>在本应用选择账号模型后，推理使用你的 ChatGPT 套餐，并受套餐和此应用的使用限制。登录不授予手机操作权限；图片仍需任务授权和目录支持。</p><div className="pw-form-actions">{act('accounts.acknowledgePlanWelcome', {accountId: welcomeAccount.id, expectedVersion: welcomeAccount.version}, '知道了')}{act('accounts.manageUsage', {}, '管理用量')}</div></div>}
+      {login.sessionId && <section className="pw-selected-object" aria-label="本次授权"><h3>{loginActive ? '继续完成登录' : '本次授权'}</h3>{login.status === 'pending' && <p>在浏览器完成授权后回到这里；若页面已关闭，可以重新打开原授权页面。</p>}{login.status === 'exchanging' && <p role="status">正在接收授权结果，请勿重复发起登录。</p>}<Facts items={[[ '账号', loginAccount?.label ], [ '状态', accountStatusText(login.status) ], ['到期时间', timeText(login.expiresAt) ]]} />
+        {typeof login.error === 'string' && login.error.length > 0 && <p className="pw-field-error" role="alert">本次授权错误码：{text(login.error)}</p>}
+        {login.status === 'pending' && <div className="pw-form-actions">{act('accounts.openAuthorization', { sessionId: login.sessionId }, '打开原授权页面')}{act('accounts.cancelLogin', { sessionId: login.sessionId }, '取消本次授权')}</div>}
+        {loginRecovery.kind !== 'none' && <>
+          <p className="pw-field-hint" role="status">这次登录授权已过期，原授权页面不能继续使用。{loginRecovery.kind === 'existing' ? '重新登录会为此账号准备新的授权。' : loginRecovery.kind === 'new' ? '重新开始登录，完成后再选择账号模型。' : loginRecovery.kind === 'disabled' ? '此账号已停用，请先在上方启用，再重新登录。' : '请刷新账号状态，核对原账号后再继续。'}</p>
+          {needsAccountRead && <p className="pw-field-hint">上次操作结果尚未确认，请先刷新账号状态。</p>}
+          <div className="pw-form-actions">
+            {loginRecovery.kind === 'existing' && act('accounts.reauthorize', { accountId: loginRecovery.accountId, expectedVersion: loginRecovery.expectedVersion }, '重新登录此账号', true)}
+            {loginRecovery.kind === 'new' && <PressButton compact disabled={locked || needsAccountRead || !supported('accounts.beginLogin')} onClick={() => { setAccountFeedback(null); setAdding(true); }}>重新开始登录</PressButton>}
+            {(needsAccountRead || loginRecovery.kind === 'unavailable') && act('accounts.refresh', {}, '核对原授权状态')}
+          </div>
+        </>}
+      </section>}
       <Collection data={onlyAccountId ? { ...data, accounts: accounts.filter(row => row.id === onlyAccountId) } : data} keys={['accounts']} label="账号" formatStatus={accountStatusText}>{row => <>
         <Facts items={[[ '套餐', row.plan || row.planName ], ['套餐使用权限', row.planUsageEnabled ? '已授予' : '尚未授予'], ['状态', accountStatusText(row.status)], ['冷却至', timeText(row.cooldownUntil)], ['本机选择', data.selectedAccountId === row.id ? '当前账号' : undefined]]} />
         {row.usageLimited && <p className="pw-field-hint">套餐请求已暂停。明确允许再试后，仍需回到原任务继续；不会自动发送请求。</p>}
         {row.error && <p className="pw-field-error" role="alert">{row.error === 'LOGIN_EXPIRED' ? '上次登录授权已过期，请重新登录。' : text(row.error)}</p>}
-        <div className="pw-form-actions">
+        <div className="pw-form-actions pw-account-next-actions">
           {act('accounts.select', { accountId: row.id, expectedVersion: row.version }, '选择此账号')}
-          <Button variant="secondary" disabled={locked || !supported('accounts.models') || !row.enabled || !row.planUsageEnabled || row.usageLimited} onClick={() => readModels(row)}>读取模型目录</Button>
+          <Button variant="secondary" disabled={locked || !supported('accounts.models') || !row.enabled || !row.planUsageEnabled || row.usageLimited} onClick={() => readModels(row)}>选择账号模型</Button>
           {row.usageLimited && act('accounts.retryPlanUsage', { accountId: row.id, expectedVersion: row.version }, '允许手动再试')}
           {row.enabled && !loginActive && !(login.status === 'expired' && login.accountId === row.id) && (['signed_out', 'reauthorization_required'].includes(text(row.status)) || !row.planUsageEnabled) && act('accounts.reauthorize', {accountId: row.id, expectedVersion: row.version}, '重新登录此账号')}
         </div>
@@ -1211,32 +1236,22 @@ function AccountsWorkspace({ state, data, supported, run, registerTransientBack,
           </div>
         </AccordionItem></Accordion>
       </>}</Collection>
-      {login.sessionId && <section className="pw-selected-object" aria-label="本次授权"><h3>本次授权</h3><Facts items={[[ '账号', loginAccount?.label ], [ '状态', accountStatusText(login.status) ], ['到期时间', timeText(login.expiresAt) ]]} />
-        {typeof login.error === 'string' && login.error.length > 0 && <p className="pw-field-error" role="alert">本次授权错误码：{text(login.error)}</p>}
-        {login.status === 'pending' && <div className="pw-form-actions">{act('accounts.openAuthorization', { sessionId: login.sessionId }, '打开原授权页面')}{act('accounts.cancelLogin', { sessionId: login.sessionId }, '取消本次授权')}</div>}
-        {loginRecovery.kind !== 'none' && <>
-          <p className="pw-field-hint" role="status">这次登录授权已过期，原授权页面不能继续使用。{loginRecovery.kind === 'existing' ? '重新登录会为此账号准备新的授权。' : loginRecovery.kind === 'new' ? '重新开始登录，完成后再选择账号模型。' : loginRecovery.kind === 'disabled' ? '此账号已停用，请先在上方启用，再重新登录。' : '请刷新账号状态，核对原账号后再继续。'}</p>
-          {needsAccountRead && <p className="pw-field-hint">上次操作结果尚未确认，请先刷新账号状态。</p>}
-          <div className="pw-form-actions">
-            {loginRecovery.kind === 'existing' && act('accounts.reauthorize', { accountId: loginRecovery.accountId, expectedVersion: loginRecovery.expectedVersion }, '重新登录此账号', true)}
-            {loginRecovery.kind === 'new' && <PressButton compact disabled={locked || needsAccountRead || !supported('accounts.beginLogin')} onClick={() => { setAccountFeedback(null); setAdding(true); }}>重新开始登录</PressButton>}
-            {(needsAccountRead || loginRecovery.kind === 'unavailable') && act('accounts.refresh', {}, '核对原授权状态')}
-          </div>
-        </>}
-      </section>}
+
       {receipt && <div className="pw-receipt-copy" role="status">{receipt.status !== 'saved' ? '原操作结果待核对。请刷新账号状态；不会自动重试。' : receipt.kind === 'model' ? '模型选择已保存。当前使用状态以上方统一模型状态为准；已有任务保留原模型。' : actualReceipt.signedOutLocally ? '已在本机退出，账号记录保留。' + (actualReceipt.credentialCleanupRequired ? ' 本机凭据仍需清理。' : '') + (actualReceipt.remoteRevocationConfirmed ? ' 服务商确认撤销授权。' : ' 远端撤销尚未确认。') : '收到原退出回执，请刷新并核对本机状态。'}</div>}
     </div></Card>
-    <SettingsDialog isOpen={adding} title="添加 ChatGPT 账号" onClose={() => { if (!busy) setAdding(false); }}>
+    <SettingsDialog isOpen={adding} title="添加 ChatGPT 账号" onClose={() => { if (!operationPending.current) setAdding(false); }}>
+      <p className="pw-account-login-intro">使用浏览器授权，不在这里填写密码。完成登录后，再选择此账号可用的模型。</p>
       <TextField label="账号名称（可选）" placeholder="我的 ChatGPT 账号" value={accountLabel} maxLength={80} isDisabled={busy} onChange={setAccountLabel} hint="名称只用于本机辨认。登录会打开系统浏览器。" />
       {accountFeedback && <p className={accountFeedback.error ? 'pw-field-error' : 'pw-receipt-copy'} role={accountFeedback.error ? 'alert' : 'status'}>{accountFeedback.message}</p>}
       {needsAccountRead && <p className="pw-field-hint">请先返回并刷新账号状态，核对原授权后再继续。</p>}
-      <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => setAdding(false)}>返回</Button><PressButton compact disabled={locked || needsAccountRead || loginActive} onClick={() => {
+      <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => { if (!operationPending.current) setAdding(false); }}>返回</Button><PressButton compact disabled={locked || needsAccountRead || loginActive || !supported('accounts.beginLogin')} onClick={() => {
         try { void runAccount('accounts.beginLogin', accountLoginArguments(accountLabel)).catch(() => {}); }
         catch (failure) { setAccountFeedback({ message: (failure as Error).message, error: true }); }
       }}>{busy ? '正在准备授权…' : '用 ChatGPT 登录'}</PressButton></div>
     </SettingsDialog>
     {catalog && <Card className="pw-account-catalog" title="此账号的模型目录" description="能力以这次实际目录为准；选择不会自动授权手机操作。">
-      <Button variant="ghost" leadingIcon={IconArrowLeft} onClick={() => { generation.current++; setCatalog(null); }}>返回账号</Button>
+      {accountFeedback?.error && <p className="pw-field-error" role="alert">{accountFeedback.message}</p>}
+      <Button variant="ghost" leadingIcon={IconArrowLeft} disabled={locked} onClick={closeCatalog}>返回账号</Button>
       {!catalogCurrent && <p role="alert" className="pw-field-error">账号或模型设置已变化，请重新读取目录。</p>}
       {models.length > 8 && <SearchField label="筛选账号模型" value={query} onChange={setQuery} placeholder="模型名称" />}
       {visibleModels.length === 0 ? <Empty>{models.length ? '没有匹配的模型。' : '服务商没有返回可用模型。'}</Empty> : visibleModels.map(row => <SourceRecord key={text(row.id)} item={row} titleKeys={['displayName', 'id']}><Button variant="secondary" disabled={locked || !catalogCurrent || !supported('accounts.model.review')} onClick={() => prepare('model', { accountId: catalogBody.accountId, modelId: row.id })}>核对能力与选项</Button></SourceRecord>)}
@@ -1859,10 +1874,10 @@ export default function Secondary({ teamRunFocus, onTeamRunFocusConsumed, onAskB
       {notice && <p className="pw-request-notice" role="status">{notice}</p>}
       {(error || domainError) && <p className="pw-field-error" role="alert">{error || domainError}</p>}
       <div className="pw-secondary-page" data-secondary-view={viewKey}>
-        {page === 'capabilities' ? <CapabilitiesWorkspace memory={capabilityMemory} onStartWork={onStartCapability} state={state} onNavigate={navigate} onPrepare={onOpenSetup} run={run} supported={supported} registerBack={registerTransientBack} registerBeforeLeave={registerPageLeave} /> : (page === 'settings' || page === 'connections') ? <div className="pw-settings-home pw-settings-preferences">
+        {page === 'capabilities' ? <CapabilitiesWorkspace memory={capabilityMemory} onStartWork={onStartCapability} state={state} onNavigate={navigate} onPrepare={onOpenSetup} run={run} supported={supported} registerBack={registerTransientBack} registerBeforeLeave={registerPageLeave} /> : (page === 'settings' || page === 'connections') ? <div className="pw-settings-home pw-settings-preferences pw-settings-manga">
           <SearchField className="pw-secondary-search" data-input-size="medium" aria-label="搜索设置" placeholder="搜索设置" value={query} onChange={setQuery} shape="rounded" />
           {query.trim() ? <section className="pw-settings-results" aria-label="匹配的设置">{settingRows(filtered)}{filtered.length === 0 && <Empty>没有匹配的设置。</Empty>}</section>
-            : <div className="pw-settings-categories">{SETTINGS_GROUPS.map(group => <section key={group.id} className="pw-settings-category" data-settings-group={group.id} aria-label={group.title}><h2>{group.title}</h2><div className="pw-settings-category-content">{settingRows(group.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}{group.id === 'privacy' && <div className="pw-settings-execution" aria-label="执行控制"><ExecutionControls state={state} supported={supported} run={run}/></div>}</div></section>)}</div>}
+            : <div className="pw-settings-categories">{SETTINGS_GROUPS.map(group => <section key={group.id} className="pw-settings-category" data-settings-group={group.id} aria-label={group.title}><h2>{group.title}</h2><div className="pw-settings-category-content pw-material-panel">{settingRows(group.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}{group.id === 'privacy' && <div className="pw-settings-execution" aria-label="执行控制"><ExecutionControls state={state} supported={supported} run={run}/></div>}</div></section>)}</div>}
         </div> : settingsGroup ? <section className="pw-settings-group-page">{settingRows(settingsGroup.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}</section>
           : page === 'web-search' ? <WebSearchSettings run={run} supported={supported} />
           : isAIPage ? <AICenter key={page + ':' + (navigationRevision || 0)} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} initialView={page === 'proxy' ? 'proxy' : 'main'} onHostSectionChange={setModelHostSection}

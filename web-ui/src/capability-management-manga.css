@@ -1,0 +1,67 @@
+/* MangaFlow SettingsSection / SettingsDisclosure: quiet grouped content,
+ * stable trigger geometry and local expansion, not a moving page shell.
+ * The existing React Aria Accordion owns height, focus and reduced motion. */
+:is(.pw-skill-workspace, .pw-plugins-workspace, .pw-profiles-workspace) { min-width: 0; }
+:is(.pw-skill-workspace, .pw-plugins-workspace, .pw-profile-editor, .pw-skill-import-workspace, .pw-plugin-dialog-body, .pw-mcp-editor) [slot="trigger"] {
+  min-height: 52px; gap: 12px; text-align: start;
+}
+:is(.pw-skill-workspace, .pw-plugins-workspace, .pw-profile-editor, .pw-skill-import-workspace, .pw-plugin-dialog-body, .pw-mcp-editor) [slot="trigger"] > svg {
+  flex: none; width: 22px; height: 22px;
+}
+.pw-skill-workspace.pw-ecosystem-depth .pw-skill-directory-controls,
+.pw-plugins-workspace.pw-ecosystem-depth .pw-plugin-collection-tools {
+  padding: 12px 16px; border-radius: 20px; background: var(--pw-surface);
+  margin-bottom: 16px; box-shadow: var(--pw-shadow-content);
+}
+.pw-skill-workspace.pw-ecosystem-depth .pw-skill-detail,
+.pw-plugins-workspace.pw-ecosystem-depth .pw-eco-directory-group,
+.pw-profiles-workspace .pw-object-table {
+  border-radius: 20px; background: var(--pw-surface); box-shadow: var(--pw-shadow-content);
+  padding: 16px; min-width: 0;
+}
+.pw-plugins-workspace.pw-ecosystem-depth .pw-eco-directory-group + .pw-eco-directory-group { margin-top: 20px; }
+.pw-plugins-workspace.pw-ecosystem-depth .pw-eco-directory-group > .pw-eco-record {
+  border-radius: 0; padding: 16px 0; margin: 0; background: transparent; box-shadow: none;
+}
+.pw-plugins-workspace.pw-ecosystem-depth .pw-eco-directory-group > .pw-eco-record + .pw-eco-record { border-top: 1px solid var(--pw-edge); }
+.pw-plugins-workspace.pw-ecosystem-depth .pw-eco-plugin-detail {
+  margin-top: 16px; padding: 16px; border: 0; border-radius: 16px; background: var(--pw-inset); min-width: 0;
+}
+.pw-plugins-workspace.pw-ecosystem-depth .pw-eco-plugin-detail .pw-eco-tool {
+  background: var(--pw-surface); padding: 16px; border-radius: 14px; margin-top: 12px;
+}
+.pw-skill-workspace.pw-ecosystem-depth .pw-skill-document {
+  padding: 20px; border-radius: 16px; background: var(--pw-surface); line-height: 1.75;
+}
+.pw-skill-workspace .pw-skill-collection[hidden] { display: none; }
+.pw-profile-editor .pw-profile-source-bar { background: var(--pw-inset); gap: 12px; }
+.pw-profile-editor .pw-profile-editor-scroll { scroll-padding-block: 16px; }
+.pw-profile-editor .pw-profile-reference {
+  padding: 16px; border-radius: 16px; background: var(--pw-surface); margin-block: 12px;
+}
+.pw-profile-editor .pw-profile-editor-footer {
+  padding-bottom: max(16px, env(safe-area-inset-bottom));
+  background: var(--pw-surface); border-top: 1px solid var(--pw-edge);
+}
+.pw-profile-editor .pw-profile-disclosures { background: var(--pw-surface); border-radius: 20px; padding-inline: 16px; margin-block: 16px; }
+/* Keep the selected control and every label in place; only its material changes. */
+:is(.pw-skill-workspace, .pw-plugins-workspace) .pw-eco-filters button {
+  min-height: 44px; border-radius: 14px;
+  transition: background-color var(--pw-motion-quick, 120ms), color var(--pw-motion-quick, 120ms);
+}
+:is(.pw-skill-workspace, .pw-plugins-workspace) .pw-eco-filters button[aria-pressed="true"] { background: var(--pw-accent-soft); color: var(--pw-on-accent-soft); }
+.pw-secondary-refactor .pw-mcp-workspace .pw-source-record {
+  padding: 16px; margin-block: 12px; border-radius: 20px;
+  background: var(--pw-surface); box-shadow: var(--pw-shadow-content);
+}
+.pw-mcp-editor > .pw-selected-object { padding: 16px; border-radius: 20px; background: var(--pw-surface); min-width: 0; }
+.pw-mcp-editor .pw-mcp-entry-mode { min-width: 0; }
+:is(.pw-mcp-editor, .pw-plugin-review-copy) :is(pre, dd, h3, h4) { overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  .pw-profile-editor .pw-profile-source-bar { flex-wrap: wrap; }
+  .pw-skill-workspace.pw-ecosystem-depth .pw-skill-document { padding: 16px; }
+  .pw-plugins-workspace.pw-ecosystem-depth .pw-eco-plugin-detail { padding: 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  :is(.pw-skill-workspace, .pw-plugins-workspace) .pw-eco-filters button { transition: none; }
+}

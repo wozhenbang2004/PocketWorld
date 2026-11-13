@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, type PointerEvent } from 'react';
 import { Accordion, AccordionItem, Button, CheckboxField, SelectField, TextAreaField } from './forms-library';
 import { IconRefresh, IconStop } from './icons';
 import './phone-viewer.css';
+import './device-control-reading.css';
 
 type Data = Record<string, any>;
 type Run = (action: string, args?: Data) => Promise<any>;
@@ -12,9 +13,10 @@ const time = (value: number) => new Date(value).toLocaleTimeString();
 
 export function PhoneControlWorkspace({ taskId, hasScope, started, visible, run, onChanged }: { taskId: string; hasScope: boolean; started: boolean; visible: boolean; run: Run; onChanged: () => void }) {
   const [view, setView] = useState<Data | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState(''), [ack, setAck] = useState(false), [uncertain, setUncertain] = useState(false);
+  const [controlsVisible, setControlsVisible] = useState(true);
   const [decoded, setDecoded] = useState(''), [node, setNode] = useState(''), [text, setText] = useState(''), [app, setApp] = useState('');
   const page = useRef(''), epoch = useRef(0), working = useRef(false), mounted = useRef(true), current = useRef<Data | null>(null);
-  const gesture = useRef<{ pointer: number; x: number; y: number; at: number; frame: string; serial: number } | null>(null);
+  const gesture = useRef<{ pointer: number; x: number; y: number; at: number; frame: string; serial: number; rect: { left: number; top: number; width: number; height: number } } | null>(null);
   current.current = view;
   const merge = (value: Data) => {
     if (value?.taskId && value.taskId !== taskId) throw new Error('回执不属于原手控任务。');
@@ -35,7 +37,7 @@ export function PhoneControlWorkspace({ taskId, hasScope, started, visible, run,
   };
   const close = () => {
     const handle = page.current; page.current = ''; epoch.current++; working.current = false; gesture.current = null; current.current = null;
-    if (mounted.current) { setView(null); setBusy(false); setDecoded(''); setAck(false); setText(''); }
+    if (mounted.current) { setView(null); setBusy(false); setDecoded(''); setAck(false); setText(''); setControlsVisible(true); }
     if (handle) void run('phoneControl.close', { pageHandle: handle }).catch(() => {});
   };
   const closeCurrent = useRef(close); closeCurrent.current = close;
@@ -64,10 +66,17 @@ export function PhoneControlWorkspace({ taskId, hasScope, started, visible, run,
   };
   const down = (event: PointerEvent<HTMLImageElement>) => {
     if (!ready || (!supports('phone_tap') && !supports('phone_swipe')) || event.button !== 0 || !event.isPrimary) return; const at = point(event); if (!at) return;
-    event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); gesture.current = { ...at, pointer: event.pointerId, at: performance.now(), frame: frame.frameHandle, serial: view!.serial };
+    event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); const box = event.currentTarget.getBoundingClientRect();
+    gesture.current = { ...at, pointer: event.pointerId, at: performance.now(), frame: frame.frameHandle, serial: view!.serial, rect: { left: box.left, top: box.top, width: box.width, height: box.height } };
   };
   const up = (event: PointerEvent<HTMLImageElement>) => {
-    const first = gesture.current; gesture.current = null; const end = point(event);
+    const first = gesture.current; gesture.current = null;
+    if (!first) return;
+    const box = event.currentTarget.getBoundingClientRect();
+    // A resize, scroll or chrome transition must not reinterpret a held touch
+    // against a different image box. The owner can start a fresh gesture.
+    if (box.left !== first.rect.left || box.top !== first.rect.top || box.width !== first.rect.width || box.height !== first.rect.height) return;
+    const end = point(event);
     if (!ready || !first || first.pointer !== event.pointerId || first.frame !== frame.frameHandle || first.serial !== view!.serial || !end) return;
     event.preventDefault(); const distance = Math.hypot(end.x - first.x, end.y - first.y);
     if (distance < 12 && supports('phone_tap')) input('phone_tap', { x: end.x, y: end.y });
@@ -79,8 +88,8 @@ export function PhoneControlWorkspace({ taskId, hasScope, started, visible, run,
     try { const result = await run('phoneControl.stop', { pageHandle: handle }); if (mounted.current && generation === epoch.current) { merge(result); onChanged(); } }
     catch (failure) { if (mounted.current && generation === epoch.current) setError('停止回执尚未确认，已禁用本页新输入。请核对原任务。' + (failure instanceof Error ? failure.message : '')); }
   };
-  return <section className="pw-phone-viewer-card" aria-label="主人手动控制手机">
-    <header className="pw-phone-viewer-card-header"><div className="pw-phone-viewer-card-title"><strong>手动控制手机</strong><span>你逐次操作 · 不调用模型 · 非实时视频</span></div>{view?.active && <Button variant="secondary" leadingIcon={IconStop} onClick={() => void stop()}>停止</Button>}</header>
+  return <section className="pw-phone-viewer-card pw-phone-control-reading" aria-label="主人手动控制手机">
+    <header className="pw-phone-viewer-card-header"><div className="pw-phone-viewer-card-title"><strong>手动控制手机</strong><span>手动操作 · 按需刷新画面</span></div>{view?.active && <Button variant="ghost" aria-expanded={controlsVisible} onClick={()=>{gesture.current=null;setControlsVisible(value=>!value)}}>{controlsVisible?'收起控件':'显示控件'}</Button>}{view?.active && <Button variant="secondary" leadingIcon={IconStop} onClick={() => void stop()}>停止</Button>}</header>
     {!view && <><p>{hasScope ? started ? '这份手控已有原执行。离页后不会恢复旧输入权限；请在原任务轨迹核对已有操作，需要再次控制请重新准备并审阅。' : '设备范围已保存。开始前再核对屏幕、全屏捕获与输入、期限和额度。' : '先在上方选择一个手机屏幕和准确应用范围。'}</p>{hasScope && !started && <Button disabled={busy} onClick={() => void command('phoneControl.open', { taskId })}>核对并开始手动控制</Button>}</>}
     {view?.reviewReady && <>
       <dl className="pw-facts"><div><dt>接收设备</dt><dd>{view.range.targetDeviceId}</dd></div><div><dt>屏幕</dt><dd>{view.range.resourceBinding.screenMode === 'background' ? '独立后台屏' : '手机主屏'}</dd></div><div><dt>应用名单</dt><dd>{view.range.resourceBinding.packageNames.join('、')}</dd></div><div><dt>截止</dt><dd>{time(Math.min(view.deadlineAt, view.range.deadline))}</dd></div><div><dt>有限调用</dt><dd>原任务合计 {view.toolLimit} 次，其中对端 {view.range.toolBudget} 次；模型 0 次</dd></div></dl>
@@ -90,9 +99,9 @@ export function PhoneControlWorkspace({ taskId, hasScope, started, visible, run,
     </>}
     {view && !view.reviewReady && <>
       <p role="status">{view.notice}</p><p className="pw-field-hint">设备 {String(view.targetDeviceId || '').slice(-8)} · {view.resourceBinding?.screenMode === 'background' ? '独立后台屏' : '主屏'} · 截止 {time(view.deadlineAt)} · 本机已用 {view.toolsUsed}/{view.toolLimit} 次（另含对端预留）</p>
-      {view.active && <div className="pw-phone-viewer-controls"><Button leadingIcon={IconRefresh} disabled={busy || uncertain || view.unresolved || view.sourceCallsRemaining < 1 || !supports('phone_observe')} onClick={() => input('phone_observe')}>刷新画面</Button><Button variant="secondary" disabled={!ready || !supports('phone_back')} onClick={() => input('phone_back')}>返回</Button><Button variant="secondary" disabled={!ready || !supports('phone_home')} onClick={() => input('phone_home')}>主屏幕</Button></div>}
-      {frame?.dataUrl && <figure className="pw-phone-viewer-frame"><div className="pw-phone-viewer-image"><img src={frame.dataUrl} width={frame.width} height={frame.height} alt="原手机本次观察画面；可点击或拖动操作一次" draggable={false} style={{ touchAction: ready ? 'none' : 'auto', cursor: ready ? 'crosshair' : 'default' }} onLoad={event => { const image = event.currentTarget; if (image.naturalWidth === frame.width && image.naturalHeight === frame.height) setDecoded(frame.frameHandle); else { setDecoded(''); setError('画面实际尺寸不匹配，已禁用输入。'); } }} onError={() => { setDecoded(''); setError('画面无法解码，已禁用输入。'); }} onPointerDown={down} onPointerUp={up} onPointerCancel={() => { gesture.current = null; }} /></div><figcaption><span>{ready ? supports('phone_tap') || supports('phone_swipe') ? `${supports('phone_tap') ? '可点击一次' : ''}${supports('phone_tap') && supports('phone_swipe') ? '或' : ''}${supports('phone_swipe') ? '拖动一次' : ''}；操作后刷新` : '当前范围未授权点图或滑动，可使用下方已授权控件操作' : '画面尚不可操作'}</span><time>{time(frame.capturedAt)}</time></figcaption></figure>}
-      {view.active && <Accordion>
+      {view.active && controlsVisible && <div className="pw-phone-viewer-controls pw-material-navigation"><Button leadingIcon={IconRefresh} disabled={busy || uncertain || view.unresolved || view.sourceCallsRemaining < 1 || !supports('phone_observe')} onClick={() => input('phone_observe')}>刷新画面</Button><Button variant="secondary" disabled={!ready || !supports('phone_back')} onClick={() => input('phone_back')}>返回</Button><Button variant="secondary" disabled={!ready || !supports('phone_home')} onClick={() => input('phone_home')}>主屏幕</Button></div>}
+      {frame?.dataUrl && <figure className="pw-phone-viewer-frame"><div className="pw-phone-viewer-image"><img src={frame.dataUrl} width={frame.width} height={frame.height} alt="原手机本次观察画面；可点击或拖动操作一次" draggable={false} style={{ touchAction: ready ? 'none' : 'auto', cursor: ready ? 'crosshair' : 'default' }} onLoad={event => { const image = event.currentTarget; if (image.naturalWidth === frame.width && image.naturalHeight === frame.height) setDecoded(frame.frameHandle); else { setDecoded(''); setError('画面实际尺寸不匹配，已禁用输入。'); } }} onError={() => { setDecoded(''); setError('画面无法解码，已禁用输入。'); }} onPointerDown={down} onPointerUp={up} onPointerCancel={() => { gesture.current = null; }} /></div><figcaption><span>{ready ? supports('phone_tap') || supports('phone_swipe') ? `${supports('phone_tap') ? '可点击一次' : ''}${supports('phone_tap') && supports('phone_swipe') ? '或' : ''}${supports('phone_swipe') ? '拖动一次' : ''}；操作后刷新` : controlsVisible ? '当前范围未授权点图或滑动，可使用已授权控件操作' : '当前范围未授权点图或滑动，请先点“显示控件”使用已授权控件' : '画面尚不可操作'}</span><time>{time(frame.capturedAt)}</time></figcaption></figure>}
+      {view.active && controlsVisible && <Accordion>
         {supports('phone_launch_app') && <AccordionItem id="open-app" title="打开授权应用"><SelectField label="本次范围内的应用" value={app} onChange={setApp} options={[{ id: '', label: '选择应用' }, ...(view.resourceBinding?.packageNames || []).map((name: string) => ({ id: name, label: name }))]} isDisabled={busy || uncertain || view.unresolved} /><Button disabled={busy || uncertain || view.unresolved || view.sourceCallsRemaining < 1 || !app} onClick={() => input('phone_launch_app', { packageName: app })}>打开所选应用</Button><p>打开后再刷新画面，不会继续自动点击。</p></AccordionItem>}
         {!!frame?.nodes?.length && <AccordionItem id="node-input" title="按当前控件点击或输入"><SelectField label="本次画面中的控件" value={node} onChange={setNode} isDisabled={!ready} options={[{ id: '', label: '选择控件' }, ...frame.nodes.map((item: Data, index: number) => ({ id: item.choiceId, label: `${index + 1}. ${item.label || '未命名控件'}${item.editable ? ' · 输入框' : ''}` }))]} /><TextAreaField label="输入文字" value={text} onChange={setText} isDisabled={!ready} /><div className="pw-form-actions"><Button variant="secondary" disabled={!ready || !node || !supports('phone_click_node')} onClick={() => input('phone_click_node', { nodeChoice: node })}>点击所选控件</Button><Button disabled={!ready || !node || !frame.nodes.find((item: Data) => item.choiceId === node)?.editable || text.length > 12000 || !supports('phone_type')} onClick={() => input('phone_type', { nodeChoice: node, text })}>输入到所选控件</Button></div></AccordionItem>}
       </Accordion>}

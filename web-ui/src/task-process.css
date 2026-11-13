@@ -11,9 +11,11 @@
 .pw-task-history-tabs [role="tab"]:focus-visible { outline: 2px solid var(--pw-focus); outline-offset: -3px; border-radius: 9px; }
 .pw-task-process .pw-audit-caption { margin: var(--pw-gap-control) 0 var(--pw-gap-section); font-size: 12px; line-height: 20px; color: var(--pw-copy); }
 .pw-task-process .pw-task-history-limit { margin: 0 0 var(--pw-gap-related); font-size: 12px; line-height: 20px; color: var(--pw-copy); }
-.pw-task-process .pw-task-event-list { gap: 0; }
-.pw-task-process .pw-task-event { border: 0; border-radius: 0; }
-.pw-task-event [slot="trigger"] { min-height: 72px; padding: var(--pw-gap-content) 0; gap: var(--pw-gap-control); }
+.pw-task-process .pw-task-event-list { gap: 0; padding-inline-start: 18px; }
+.pw-task-process .pw-task-event { position: relative; border: 0; border-radius: 0; padding-inline-start: 16px; }
+.pw-task-process .pw-task-event::before { content: ""; position: absolute; inset-inline-start: -10px; inset-block: 0; width: 1px; background: var(--pw-edge); pointer-events: none; }
+.pw-task-process .pw-task-event::after { content: ""; position: absolute; inset-inline-start: -13px; top: 26px; width: 7px; height: 7px; border-radius: 50%; background: var(--pw-copy); box-shadow: 0 0 0 4px var(--pw-surface); pointer-events: none; }
+.pw-task-event [slot="trigger"] { min-height: 64px; padding: 14px 0; gap: var(--pw-gap-control); }
 .pw-task-event [slot="trigger"] .text-headline-medium { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 14px; line-height: 22px; font-weight: 500; color: var(--pw-ink); }
 .pw-task-event [slot="trigger"] .text-body-regular { font-size: 12px; line-height: 18px; color: var(--pw-copy); }
 .pw-task-event [role="region"] > div { padding: 0 0 var(--pw-gap-content); border-radius: 0; background: transparent; }

@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { motion, useIsPresent, useReducedMotion } from 'motion/react';
+import { motionTransition } from './library/motion-tokens';
 import { bridge } from './bridge';
 import { Button } from './forms-library';
 import { CommandMenu, type WorkCommand } from './shell-library/CommandMenu';
@@ -31,6 +33,7 @@ export function WorkSearch({ supported, identity, memory, onOpen, onClose, label
   supported: boolean; identity: string; memory: WorkSearchMemory; onOpen: (item: WorkSearchItem, stillCurrent: () => boolean) => void | Promise<void>;
   onClose: () => void; labelStatus: (status: string) => string;
 }) {
+  const present = useIsPresent(), reduce = useReducedMotion();
   const [query, setQuery] = useState(memory.query || ''), [kind, setKind] = useState<WorkSearchKind>(memory.kind || 'all');
   const [reply, setReply] = useState<SearchReply | null>(null), [replyScope, setReplyScope] = useState('');
   const [loading, setLoading] = useState(false), [opening, setOpening] = useState(false), [error, setError] = useState(''), [attempt, setAttempt] = useState(0);
@@ -39,12 +42,13 @@ export function WorkSearch({ supported, identity, memory, onOpen, onClose, label
   const current = useRef({ query, kind, identity }); current.current = { query, kind, identity };
   const scope = JSON.stringify([query, kind, identity]);
   const openingRef = useRef(false), openingRequest = useRef(0);
+  const active = useRef(present); active.current = present;
   const read = useCallback(async (cursor = '') => {
-    if (!supported || pending.current) return;
+    if (!active.current || !supported || pending.current) return;
     const owner = ++request.current, expected = { ...current.current }, epoch = bridge.getDocumentEpoch();
     const expectedScope = JSON.stringify([expected.query, expected.kind, expected.identity]);
     pending.current = true; setLoading(true); setError('');
-    const accepts = () => alive.current && owner === request.current && expected.query === current.current.query &&
+    const accepts = () => active.current && alive.current && owner === request.current && expected.query === current.current.query &&
       expected.kind === current.current.kind && expected.identity === current.current.identity && epoch === bridge.getDocumentEpoch() && !document.hidden;
     try {
       const count = cursor ? 1 : Math.max(1, memory.pages || 1);
@@ -81,6 +85,22 @@ export function WorkSearch({ supported, identity, memory, onOpen, onClose, label
     document.addEventListener('visibilitychange', visibility);
     return () => document.removeEventListener('visibilitychange', visibility);
   }, []);
+  const wasExiting = useRef(false);
+  useEffect(() => {
+    if (present) {
+      if (wasExiting.current) { wasExiting.current = false; setAttempt(value => value + 1); }
+      return;
+    }
+    wasExiting.current = true;
+    request.current++; openingRequest.current++; pending.current = false; openingRef.current = false;
+    const focused = document.activeElement;
+    if (focused instanceof HTMLElement && root.current?.contains(focused)) focused.blur();
+  }, [present]);
+  const focusSearch = () => {
+    if (!active.current || document.hidden) return;
+    // The panel has reached its readable width before the IME takes space.
+    root.current?.querySelector<HTMLInputElement>('input[role="combobox"]')?.focus({ preventScroll: true });
+  };
   const visibleReply = replyScope === scope ? reply : null;
   useEffect(() => {
     if (!visibleReply || loading || restored.current) return;
@@ -103,7 +123,7 @@ export function WorkSearch({ supported, identity, memory, onOpen, onClose, label
     onSelect: () => {
       if (openingRef.current) return;
       const owner = ++openingRequest.current, expected = { ...current.current }, epoch = bridge.getDocumentEpoch();
-      const stillCurrent = () => alive.current && owner === openingRequest.current && openingRef.current
+      const stillCurrent = () => active.current && alive.current && owner === openingRequest.current && openingRef.current
         && expected.query === current.current.query && expected.kind === current.current.kind && expected.identity === current.current.identity
         && epoch === bridge.getDocumentEpoch() && !document.hidden;
       openingRef.current = true; setOpening(true); memory.selectedId = itemKey(item);
@@ -111,8 +131,14 @@ export function WorkSearch({ supported, identity, memory, onOpen, onClose, label
         .finally(() => { if (owner === openingRequest.current) { openingRef.current = false; if (alive.current) setOpening(false); } });
     },
   })), [visibleReply, onOpen, labelStatus, memory]);
-  return <div className="pw-work-search" ref={root}>
-    <CommandMenu commands={commands} query={query} queryReadOnly={opening} onQueryChange={changeQuery} scopeKey={kind} remote loading={loading || opening}
+  return <motion.div className="pw-work-search" ref={root} inert={!present} aria-hidden={!present || undefined}
+    initial={reduce ? false : { opacity: 0, clipPath: 'inset(0 0 calc(100% - 48px) 0 round 20px)' }}
+    animate={{ opacity: 1, clipPath: 'inset(0 0 0 0 round 20px)' }}
+    exit={{ opacity: 0, clipPath: 'inset(0 0 calc(100% - 48px) 0 round 20px)' }}
+    transition={reduce ? motionTransition.instant : present ? motionTransition.enter : motionTransition.exit}
+    onAnimationComplete={() => { if (present) focusSearch(); }}>
+
+    <CommandMenu autoFocusInput={!!reduce} animateReveal={false} commands={commands} query={query} queryReadOnly={opening} onQueryChange={changeQuery} scopeKey={kind} remote loading={loading || opening}
       closeOnSelect={false} onClose={() => { openingRequest.current++; openingRef.current = false; onClose(); }} selectedId={memory.selectedId}
       controls={<div className="pw-search-kind-filters" role="group" aria-label="查找对象">{filters.map(option => <Button key={option.id} variant="ghost" aria-pressed={kind === option.id} disabled={opening} onClick={() => changeKind(option.id)}>{option.label}</Button>)}</div>}
       emptyMessage={visibleReply?.nextCursor ? '当前已读取范围内没有命中，可以继续查找更早的记录。' : visibleReply?.notices.length ? '已读取范围内没有命中；还有部分记录尚未读全，请查看下方说明。' : query.trim() ? `没有找到匹配的${scopeLabel(kind)}。试试目标中的关键词或文件名。` : `还没有可显示的${scopeLabel(kind)}记录。`}
@@ -120,5 +146,5 @@ export function WorkSearch({ supported, identity, memory, onOpen, onClose, label
       footer={<><p>{kind === 'artifact' ? '查找文件名与文件信息' : kind === 'conversation' ? '查找对话标题与保存的原文' : kind === 'work' ? '查找工作目标与摘要' : kind === 'project' ? '查找已保存的项目名称' : '查找保存的工作、对话内容、成果和项目'}</p>
         {visibleReply?.nextCursor && <Button variant="ghost" disabled={loading || opening} onClick={() => void read(visibleReply.nextCursor)}>{visibleReply.items.length ? '查看更多结果' : '继续查找'}</Button>}
         {visibleReply?.notices.map((notice, index) => <p className="pw-search-notice" key={index}>{notice}</p>)}</>} />
-  </div>;
+  </motion.div>;
 }

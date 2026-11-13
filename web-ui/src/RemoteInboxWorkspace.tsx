@@ -6,7 +6,7 @@ import {bridge} from './bridge';
 import './remote-inbox.css';
 import {NotificationTaskAttention} from './NotificationTaskAttention';
 import {NotificationTeamAttention,type TeamAttentionLocator} from './NotificationTeamAttention';
-export type NotificationViewMemory={remoteFilter?:'all'|'unread'|'issues'|'archived';teamCursor?:string;teamItemCursor?:string;teamPrior?:{run:string;item:string}[];teamFocus?:string;taskMode?:'attention'|'taskUpdates';taskCursor?:string;taskPrior?:string[]};
+export type NotificationViewMemory={remoteFilter?:'all'|'unread'|'issues'|'archived';teamCursor?:string;teamItemCursor?:string;teamPrior?:{run:string;item:string}[];teamFocus?:string;taskMode?:'attention'|'taskUpdates';taskCursor?:string;taskPrior?:string[];taskFocus?:string};
 
 type Event = {
   seq:number; source_key:string; kind:string; title:string; body:string;
@@ -52,7 +52,7 @@ export default function RemoteInboxWorkspace({state,navigationTrigger,onBack,reg
   const list=useRef<HTMLElement>(null),configId=useId();
   const readFocus=useRef<{seq:number;index:number;origin:HTMLElement;identity:string}|null>(null);
   useEffect(()=>{if(state?.endpoint)setEndpoint(previous=>previous||state.endpoint||'')},[state?.endpoint]);
-  useEffect(()=>{registerBack?.(configOpen?()=>{if(!working)setConfigOpen(false);return true}:null);return()=>registerBack?.(null)},[configOpen,working,registerBack]);
+  useEffect(()=>{registerBack?.(configOpen?()=>{if(!working){if(disconnectConfirm)setDisconnectConfirm(false);else setConfigOpen(false)}return true}:null);return()=>registerBack?.(null)},[configOpen,disconnectConfirm,working,registerBack]);
   const hasSnapshot=typeof state?.configured==='boolean'&&Array.isArray(state.events);
   const hasEvents=Array.isArray(state?.events)&&state.events.some(item=>item&&Number.isSafeInteger(item.seq));
   const entries=useMemo(()=>{
@@ -115,7 +115,7 @@ export default function RemoteInboxWorkspace({state,navigationTrigger,onBack,reg
     {message&&<MotionFeedback identity={message} role="status" className="pw-remote-note">{message}</MotionFeedback>}
     <NotificationTaskAttention enabled={state?.available===true} onOpenTask={onOpenTask} memory={memory}/>
     <NotificationTeamAttention enabled={state?.available===true&&bridge.getState().capabilities.commands.includes('teams.attention')} onOpen={onOpenTeamAttention} memory={memory}/>
-    <header className="pw-remote-section-title"><h2>远程消息</h2><span>最近消息 · 最多 300 条，长消息会更少</span></header>
+    <section className="pw-remote-message-group" aria-label="远程消息"><header className="pw-remote-section-title"><h2>远程消息</h2><span>最近消息 · 最多 300 条，长消息会更少</span></header>
     {state?.selectionError&&<MotionFeedback identity={state.selectionError+String(state.openRevision)} role="alert" className="pw-remote-note is-error">{state.selectionError}</MotionFeedback>}
     {state?.notificationPermission&&(!state.notificationPermission.appEnabled||!state.notificationPermission.normalEnabled||!state.notificationPermission.attentionEnabled)&&<div className="pw-remote-note">{!state.notificationPermission.appEnabled?'系统通知已关闭；应用内消息仍保留。':'部分远程消息渠道已关闭；对应消息可能不会显示系统提醒。'}<Button variant="ghost" onClick={()=>void act('remoteInbox.notificationSettings')}>系统通知设置</Button></div>}
     {state?.configured&&<section className="pw-remote-status" aria-label="接收状态">
@@ -124,7 +124,7 @@ export default function RemoteInboxWorkspace({state,navigationTrigger,onBack,reg
         <small>{state?.lastSync?.status==='waiting_network'?'等待网络，尚未尝试本次同步':state?.lastSync?.status==='credentials_required'?'凭据已失效，请重新配置':state?.lastSync?.status==='connection_failed'?'最近一次同步失败，请检查网络后重试':state?.lastSync?.status==='more_pending'?'仍有历史消息待补收':state?.lastSync?.lastSuccessAt?'最近成功同步 '+when(new Date(state.lastSync.lastSuccessAt).toISOString()):'尚无成功同步记录'}。系统限制、离线或进程停止均可能延迟消息。</small></MotionFeedback>
       <MotionFeedback initial={false} identity={Number(state?.unread||0)} className="pw-remote-count">{Number(state?.unread||0)} <small>未读</small></MotionFeedback>
     </section>}
-    <SettingsDialog isOpen={configOpen} title="连接与接收设置" closeLabel="返回通知" onClose={()=>{if(!working)setConfigOpen(false)}}>
+    <SettingsDialog isOpen={configOpen} title="连接与接收设置" closeLabel="返回通知" onClose={()=>{if(!working){if(disconnectConfirm)setDisconnectConfirm(false);else setConfigOpen(false)}}}>
     <section id={configId} className="pw-remote-config" aria-label="通知服务配置">
       <p className="pw-remote-config-intro">连接自己的 HTTPS 事件服务，接收 Issue、PR 回复及服务消息。</p>
       <div className="pw-remote-fields">
@@ -171,7 +171,7 @@ export default function RemoteInboxWorkspace({state,navigationTrigger,onBack,reg
       <div role="group" aria-label="筛选通知" className="pw-remote-filters">
         {([{key:'all',label:'全部'},{key:'unread',label:'未读'},{key:'issues',label:'开源 Issue'},{key:'archived',label:'已归档'}] as const).map(option=><Button key={option.key} variant="ghost" aria-pressed={filter===option.key} onClick={()=>setFilter(option.key)}>{option.label}</Button>)}
       </div>
-      <Button variant="ghost" disabled={working||!entries.some(item=>!item.read)} onClick={()=>update(entries.filter(item=>!item.read),'read',true)}>本筛选全部已读</Button>
+      <Button variant="ghost" disabled={working||!entries.some(item=>!item.read)} onClick={()=>update(entries.filter(item=>!item.read),'read',true)}>当前已载入消息全部已读</Button>
     </div>}
     <section ref={list} className="pw-remote-list" aria-label="通知列表" tabIndex={-1}>
       {entries.length===0?<div className="pw-remote-empty"><IconNotification size={30} aria-hidden/><h2>{!hasSnapshot?'尚未取得通知状态':filter==='unread'?'没有未读通知':filter==='archived'?'没有已归档通知':filter==='issues'?'没有开源 Issue 通知':state?.configured?'还没有收到通知':'把新的消息收在这里'}</h2>
@@ -197,5 +197,6 @@ export default function RemoteInboxWorkspace({state,navigationTrigger,onBack,reg
       </article>)}
     </section>
     {entries.some(item=>item.kind==='github_issue')&&<p className="pw-remote-footnote">Issue 未分配不等于可直接认领；贡献前请先核对仓库规则、评论和关联 PR。</p>}
+    </section>
   </main>;
 }

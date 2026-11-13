@@ -5,6 +5,7 @@ import { Popover, PopoverTrigger } from './shell-library';
 import { MarkdownBody } from './library/MarkdownBody';
 import './skills-reading.css';
 import './ecosystem-depth.css';
+import './capability-management-manga.css';
 import { Accordion, AccordionItem, Button, CheckboxField, HostFileUpload, IconButton, SelectField, SettingsDialog, TextField } from './forms-library';
 
 type Data = Record<string, any>;

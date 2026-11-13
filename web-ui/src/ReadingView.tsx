@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useId, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { IconArrowLeft, IconCopy } from './icons';
 import { MarkdownBody } from './library/MarkdownBody';
@@ -9,6 +9,9 @@ const ReadingPage = memo(function ReadingPage({ document: snapshot, active }: {
   document: ReadingDocument; active: boolean;
 }) {
   const [mode, setMode] = useState<'read' | 'select'>('read');
+  const [toolsVisible, setToolsVisible] = useState(true);
+  const toolsId = useId();
+  const [textSize, setTextSize] = useState<'normal' | 'large' | 'larger'>('normal');
   const [selected, setSelected] = useState('');
   const [feedback, setFeedback] = useState('');
   const [copying, setCopying] = useState(false);
@@ -47,13 +50,15 @@ const ReadingPage = memo(function ReadingPage({ document: snapshot, active }: {
     if (next === 'select') requestAnimationFrame(() => { original.current?.focus({ preventScroll: true }); selectText(); });
   };
   const content = <MarkdownBody text={snapshot.tableDocument?.markdown ?? snapshot.text} onlyTableAt={snapshot.tableDocument?.offset} onCopyCode={copy} />;
-  return <section className="pw-reading-page" data-kind={snapshot.kind} hidden={!active}>
-    <div className="pw-reading-tools">
+  return <section className="pw-reading-page" data-kind={snapshot.kind} data-text-size={textSize} hidden={!active}>
+    <div className="pw-reading-tools-visibility"><button type="button" aria-expanded={toolsVisible} aria-controls={toolsId} onPointerDown={event=>event.preventDefault()} onClick={()=>setToolsVisible(value=>!value)}>{toolsVisible?'收起阅读工具':'显示阅读工具'}</button></div>
+    <div id={toolsId} hidden={!toolsVisible} className="pw-reading-tools pw-material-navigation">
       <div className="pw-reading-modes" role="group" aria-label="阅读方式">
         <button type="button" aria-pressed={mode === 'read'} onClick={() => changeMode('read')}>阅读</button>
         <button type="button" aria-pressed={mode === 'select'} onClick={() => changeMode('select')}>选字</button>
       </div>
       <span className="pw-reading-tool-space" />
+      <button type="button" aria-label={`文字大小：${textSize === 'normal' ? '标准' : textSize === 'large' ? '大' : '更大'}，点击切换`} title="切换文字大小" onClick={() => setTextSize(size => size === 'normal' ? 'large' : size === 'large' ? 'larger' : 'normal')}>Aa</button>
       {mode === 'select' && <button type="button" onClick={() => { original.current?.focus({ preventScroll: true }); original.current?.select(); selectText(); }}>全选</button>}
       <button type="button" disabled={copying} aria-label={selected ? '复制选中文字' : snapshot.kind === 'table' ? '复制表格' : '复制全文'}
         onPointerDown={event => event.preventDefault()}

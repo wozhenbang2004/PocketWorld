@@ -4,6 +4,7 @@ import { bridge } from './bridge';
 import { ProjectCheckoutFiles } from './ProjectCheckoutFiles';
 import './local-workspace.css';
 import './project-development.css';
+import './project-workspace-manga.css';
 
 type Data = Record<string, any>;
 type DeliveryRequirements = { constraints: string; deliverable: string; completionCriteria: string };
@@ -157,7 +158,7 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
     void invoke('projects.development.start', { viewHandle: handle.current, reviewHandle: selected.reviewHandle }, applySubmission);
   };
   return <section hidden={!active} className="pw-project-development pw-local-workspace pw-settings-section" aria-label="使用默认模型开发项目">
-    <p className="pw-field-hint">使用默认模型，在私人副本中开发。结果由你审阅后再导回项目。</p>
+    <header className="pw-development-intro"><h3>让模型接手开发</h3><p>在私人副本中工作，结果由你审阅后导回项目。</p></header>
     {error && <p className="pw-local-inline-notice" role="alert">{error}</p>}
     {!view ? <Button variant="secondary" disabled={busy || !readable} onClick={() => void read()}> {busy ? '正在读取原项目…' : '读取项目开发条件'} </Button> : <>
       {view.draftRecoveryRequired && <p className="pw-local-inline-notice" role="alert">{view.draftRecoveryMessage} 仍可查看下方原任务、文件和工具状态。请保留应用数据，从诊断记录定位草稿存储问题后恢复，不要清空数据或重复提交目标。</p>}

@@ -1,7 +1,7 @@
 /* Composition of the retained BoardUI controls. OpenMuse LinkRow's compact
  * title/detail/chevron grouping is adapted to the existing Web controls;
  * original media receipts and attachment opens remain host-owned. */
-.pw-media-workspace.pw-settings-section { max-width: 1020px; min-width: 0; color: var(--pw-ink, #202020); }
+.pw-media-workspace.pw-settings-section { max-width: 860px; min-width: 0; color: var(--pw-ink, #202020); }
 .pw-media-workspace [hidden] { display: none !important; }
 .pw-media-heading { display: flex; justify-content: flex-end; align-items: center; gap: var(--pw-gap-content,16px); margin: 0 0 var(--pw-gap-content,16px); }
 .pw-media-heading h2 { margin: 0; font-size: 22px; line-height: 32px; letter-spacing: -.035em; font-weight: 500; }
@@ -12,19 +12,20 @@
 .pw-media-service small { font-size: 12px; line-height: 18px; color: var(--pw-copy, #626262); overflow-wrap: anywhere; }
 .pw-media-service > button { flex-shrink: 0; }
 /* Filters operate on retained task rows; they never initiate generation. */
-.pw-media-filters { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:2px;padding:3px;margin-bottom:var(--pw-gap-section,28px);border-radius:13px;background:var(--pw-inset); }
-.pw-media-filters > button { min-height:48px;min-width:0;padding:8px 4px;font-size:13px;line-height:20px;border-radius:10px;color:var(--pw-copy); }
+.pw-media-filters { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:2px;padding:4px;margin-bottom:20px;border-radius:22px;background:var(--pw-inset); }
+.pw-media-filters > button { min-height:48px;min-width:0;padding:8px 4px;font-size:13px;line-height:20px;border-radius:18px;color:var(--pw-copy); }
 .pw-media-filters > button[aria-pressed="true"] { color:var(--pw-ink);background:var(--pw-surface);box-shadow:var(--pw-shadow-surface); }
 .pw-media-filters > button > span { padding:0; }
 .pw-media-task-group + .pw-media-task-group { margin-top:var(--pw-gap-section,28px); }
 .pw-media-task-group > h4 { display:flex;align-items:baseline;gap:8px;margin:0 0 var(--pw-gap-related,8px);font-size:13px;line-height:20px;font-weight:600;color:var(--pw-copy); }
 .pw-media-task-group > h4 > span { font-size:12px;font-weight:400;color:var(--pw-muted); }
 .pw-media-task-group > button + button { border-top:1px solid var(--pw-edge); }
+.pw-media-task-group { padding: 16px; border-radius: 22px; background: var(--pw-surface); }
 .pw-media-section-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin: 0 0 16px; }
 .pw-media-section-heading h3, .pw-media-section-heading h4 { margin: 0; font-size: 20px; font-weight: 600; line-height: 28px; }
 .pw-media-section-heading small { font-size: 12px; color: var(--pw-copy, #626262); }
 .pw-media-workspace [data-media-heading]:focus { outline: none; }
-.pw-media-task-list { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.pw-media-task-list { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
 .pw-media-workspace .pw-media-task-row, .pw-media-workspace .pw-media-file-row { display: flex; width: 100%; height: auto; min-height: 64px; justify-content: flex-start; gap: var(--pw-gap-control,12px); padding: var(--pw-gap-content,16px) 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; text-align: start; white-space: normal; }
 .pw-media-workspace .pw-media-task-row:hover, .pw-media-workspace .pw-media-file-row:hover { background: var(--pw-surface, #fff); }
 .pw-media-workspace .pw-media-task-row > svg, .pw-media-workspace .pw-media-file-row > svg { flex: none; width: 18px; height: 18px; color: var(--pw-copy, #626262); }
@@ -129,3 +130,12 @@
 .pw-media-settings .pw-media-settings-group { gap: var(--pw-gap-content,16px); margin-top: var(--pw-gap-control,12px); }
 .pw-media-settings .pw-media-settings-group > h3 { margin-bottom: 0; font-size: 12px; color: var(--pw-muted); }
 @media(max-width:640px){.pw-media-workspace .pw-media-work-surface { padding: var(--pw-gap-content,16px); }.pw-media-workspace .pw-media-heading h2 { font-size: 20px; }.pw-media-workspace[data-media-view="task"] .pw-media-heading p { display: none; }.pw-media-workspace .pw-media-task-actions { gap: var(--pw-gap-control,12px); }.pw-media-compose-footer { align-items: stretch; }.pw-media-compose-footer > button { align-self: stretch; }}
+/* Detail states share the collection's content-first hierarchy. Actual task
+ * progress and original receipts remain visible, not replaced by decoration. */
+.pw-media-review .pw-media-review-identity { padding: 18px; border-radius: 20px; }
+.pw-media-review .pw-media-review-identity strong { font-size: 15px; line-height: 24px; }
+.pw-media-workspace .pw-media-submission { flex-wrap: wrap; border-radius: 20px; }
+.pw-media-submission > div { flex: 1 1 200px; }
+.pw-media-compose-footer { flex-wrap: wrap; padding-top: 16px; border-top: 1px solid var(--pw-edge); }
+.pw-media-workspace .pw-media-receipt { padding: 16px 0; }
+.pw-media-workspace .pw-media-feedback[role="alert"] { border-inline-start: 3px solid var(--pw-danger); }

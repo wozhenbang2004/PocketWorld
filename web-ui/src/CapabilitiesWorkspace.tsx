@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { DataOperationHeading, DataOperationRow, useDataSettingsJourney } from './DataSettingsJourney';
 import { Accordion, AccordionItem, Button, IconButton } from './forms-library';
-import { IconClock, IconDevices, IconFileSettings, IconFolder, IconMcp, IconPhone, IconPlugin, IconRefresh, IconSearch, IconSkill, IconTeam, IconTerminal } from './icons';
+import { IconClock, IconDevices, IconFileSettings, IconFolder, IconMcp, IconPhone, IconPlugin, IconRefresh, IconSearch, IconSkill, IconTeam, IconTerminal, IconShieldCheck } from './icons';
 import { PermissionPolicySettings, type PermissionLeaveGuard } from './PermissionPolicySettings';
 import { ToolCatalogBrowser } from './ToolCatalogBrowser';
 import { type CatalogTool, type ToolCatalog } from './tool-catalog';
@@ -10,7 +10,7 @@ import { capabilityCheckAction, capabilityCheckDescription, capabilityCheckReady
 import './capabilities-workspace.css';
 import './capability-purpose.css';
 
-export type CapabilityWorkspaceMemory = { view?: string; scrollTop?: number; focusId?: string; selectedTool?: string };
+export type CapabilityWorkspaceMemory = { view?: string; scrollTop?: number; focusId?: string; selectedTool?: string; policyOrigin?: 'list' | 'catalog' };
 type Capability = { id: string; label: string; state: string; installed: boolean; detail?: string; checks?: Record<string, any>[]; notifications?: { checks?: Record<string, any>[] }; runtime?: Record<string, any> };
 type CapabilityObservation = { capabilities: Capability[]; observedAt: number; executionAuthorized: false };
 const purposes: Record<CapabilityPurpose, { title: string; description: string; icon: typeof IconSearch; route?: string; prepare?: SetupCapability; preparationLabel?: string }> = {
@@ -22,6 +22,12 @@ const purposes: Record<CapabilityPurpose, { title: string; description: string; 
   team: { title: '让团队协作', description: '围绕同一个目标分工并汇总结果', icon: IconTeam },
   schedule: { title: '安排后续工作', description: '查看定时工作、条件职责与触发记录', icon: IconClock },
 };
+// MangaFlow settings groups: quiet section labels around related destinations.
+const purposeSections = [
+  { title: '资料与创作', ids: ['research', 'project'] },
+  { title: '手机与设备', ids: ['phone.background', 'phone.main_screen', 'remote'] },
+  { title: '协作与安排', ids: ['team', 'schedule'] },
+];
 const readinessLabel = (state: string) => ({ scope_required: '按目标核对范围', review_required: '可进入任务核对', selection_required: '需要选择目标', preparation_required: '需要准备', busy: '执行资源使用中', unavailable: '当前不可用' } as Record<string, string>)[state] || '状态待核对';
 const checkNames: Record<string, string> = { serviceConnected: '手机操作服务', windowContent: '界面内容读取', interactiveWindows: '窗口读取', deviceUnlocked: '手机解锁', screenInteractive: '屏幕状态', mainDisplayPresent: '手机主屏', gestureCapability: '手机操作权限', screenshotCapability: '截图权限', backgroundSupported: '后台屏支持', backgroundConnected: '后台助手连接', backgroundClean: '原后台会话释放', notificationsAllowed: '任务通知', notificationPermission: '系统通知权限', notificationsNotPaused: '通知显示', taskChannel: '任务通知类别' };
 const checkGroupNames: Record<string, string> = { accessibility: '手机权限', notifications: '任务通知', background_setup: '后台连接' };
@@ -40,6 +46,7 @@ export function CapabilitiesWorkspace({ state, onNavigate, onPrepare, run, suppo
   const [catalog, setCatalog] = useState<ToolCatalog | null>(null), [loading, setLoading] = useState(false), [error, setError] = useState(''), [selectedTool, setSelectedTool] = useState(memory?.selectedTool || '');
   const [observation, setObservation] = useState<CapabilityObservation | null>(null), [observing, setObserving] = useState(false), [observationError, setObservationError] = useState('');
   const observationGeneration = useRef(0), observationAlive = useRef(false);
+  const policyOrigin = useRef<'list' | 'catalog'>(memory?.policyOrigin || 'catalog');
   const beforeLeave = useRef<PermissionLeaveGuard | null>(null), catalogBack = useRef<(() => boolean) | null>(null), generation = useRef(0);
   const runRef = useRef(run); runRef.current = run;
   const canRead = !!run && supported?.('permissions.catalog') === true;
@@ -89,13 +96,13 @@ export function CapabilitiesWorkspace({ state, onNavigate, onPrepare, run, suppo
   };
   useEffect(() => { if (journey.view === 'catalog' || journey.view === 'policy') void reload(); return () => { ++generation.current; }; }, [canRead, state.conversationId, journey.view === 'catalog' || journey.view === 'policy']);
   const back = () => {
-    if (journey.view === 'policy') { leave(() => journey.open('catalog')); return true; }
+    if (journey.view === 'policy') { leave(() => journey.open(policyOrigin.current)); return true; }
     if (journey.view === 'catalog' && catalogBack.current?.()) return true;
     return journey.back();
   };
   useEffect(() => { registerBack?.(back); return () => registerBack?.(null); }, [registerBack, journey.view]);
   useEffect(() => { registerBeforeLeave?.(next => beforeLeave.current?.(next) || false); return () => registerBeforeLeave?.(null); }, [registerBeforeLeave]);
-  const openPolicy = (tool = '') => { setSelectedTool(tool); journey.open('policy'); };
+  const openPolicy = (tool = '') => { policyOrigin.current = journey.view === 'list' ? 'list' : 'catalog'; if (memory) memory.policyOrigin = policyOrigin.current; setSelectedTool(tool); journey.open('policy'); };
   const sourceRoute = (tool: CatalogTool) => tool.source === 'installed_plugin' ? 'plugins' : ({ skills: 'skills', project: 'local', remote: 'devices', devices: 'devices', teams: 'teams', ssh: 'ssh', media: 'media', automation: 'automation' } as Record<string, string>)[tool.category];
   const selectedCapability = observation?.capabilities.find(item => journey.view === `purpose:${item.id}`);
   const selectedChecks = capabilityChecks(selectedCapability?.checks, selectedCapability?.notifications?.checks);
@@ -123,20 +130,23 @@ export function CapabilitiesWorkspace({ state, onNavigate, onPrepare, run, suppo
   };
   return <div className="pw-capabilities-workspace" ref={journey.root} tabIndex={-1}>
     {journey.view === 'list' ? <>
-      <div className="pw-capabilities-introduction"><p className="pw-capabilities-intro">想让管家帮你做什么？</p><p>先看当前准备情况，再交代这次的目标。</p></div>
+      <div className="pw-capabilities-introduction"><h2 className="pw-capabilities-intro">让想法开始行动</h2><p>选择一项工作，查看准备情况。</p></div>
       {readyStatus}
       {!canObserve && <p className="pw-capability-read-error" role="status">当前版本尚不能读取能力准备情况，仍可管理工具来源。</p>}
       {observationError && <p className="pw-capability-read-error" role="alert">{observationError}</p>}
-      {observation && <div className="pw-capability-purpose-list" aria-busy={observing || undefined}>{observation.capabilities.map(item => {
-        const purpose = isCapabilityPurpose(item.id) ? purposes[item.id] : undefined;
-        return <DataOperationRow key={item.id} id={`purpose:${item.id}`} title={purpose?.title || item.label} detail={`${readinessLabel(item.state)} · ${purpose?.description || item.detail || ''}`} icon={purpose?.icon} onOpen={id => { if (memory) memory.focusId = id; journey.open(id); }} />;
+      {observation && <div className="pw-capability-purpose-groups" aria-busy={observing || undefined}>{[...purposeSections, { title: '其他能力', ids: observation.capabilities.filter(item => !purposeSections.some(section => section.ids.includes(item.id))).map(item => item.id) }].map(section => {
+        const items = observation.capabilities.filter(item => section.ids.includes(item.id));
+        return items.length > 0 && <section className="pw-capabilities-group" aria-label={section.title} key={section.title}><header><h2>{section.title}</h2></header><div className="pw-capability-purpose-list pw-material-content">{items.map(item => {
+          const purpose = isCapabilityPurpose(item.id) ? purposes[item.id] : undefined;
+          return <div className="pw-capability-entry" key={item.id} data-readiness={item.state}><DataOperationRow id={`purpose:${item.id}`} title={purpose?.title || item.label} detail={`${readinessLabel(item.state)} · ${purpose?.description || item.detail || ''}`} icon={purpose?.icon} onOpen={id => { if (memory) memory.focusId = id; journey.open(id); }} /></div>;
+        })}</div></section>;
       })}</div>}
-      <div className="pw-capabilities-management" aria-label="能力管理"><Button variant="ghost" data-capability-focus="sources" onClick={() => journey.open('sources')}>连接与管理</Button><Button variant="ghost" data-capability-focus="catalog" onClick={() => journey.open('catalog')}>工具目录</Button></div>
+      <div className="pw-capabilities-management pw-material-navigation" aria-label="能力管理"><Button variant="ghost" leadingIcon={IconPlugin} data-capability-focus="sources" onClick={() => journey.open('sources')}>连接与管理</Button><Button variant="ghost" leadingIcon={IconFileSettings} data-capability-focus="catalog" onClick={() => journey.open('catalog')}>工具目录</Button>{canEdit && <Button variant="ghost" leadingIcon={IconShieldCheck} data-capability-focus="policy" onClick={() => openPolicy()}>审批规则</Button>}</div>
     </> : journey.view.startsWith('purpose:') ? <>
       <DataOperationHeading title={selectedPurpose?.title || selectedCapability?.label || '能力准备'} parent="能力" description={selectedPurpose?.description || ''} onBack={() => journey.open('list')} />
       {readyStatus}
       {observationError && <p className="pw-capability-read-error" role="alert">{observationError}</p>}
-      {selectedCapability ? <section className="pw-capability-purpose-detail">
+      {selectedCapability ? <section className="pw-capability-purpose-detail pw-material-content">
         <h3>{readinessLabel(selectedCapability.state)}</h3><p>{selectedCapability.detail}</p>
         {!!pendingGroups.length && <section className="pw-capability-next-steps" aria-label="还需准备的事项"><h4>还需完成</h4><ul className="pw-capability-checks pw-capability-pending-checks">{pendingGroups.map(({ key, checks, action }) => {
           const first = checks[0], focusId = `check:${key}`;
@@ -148,20 +158,20 @@ export function CapabilitiesWorkspace({ state, onNavigate, onPrepare, run, suppo
         {!!preparedChecks.length && <Accordion variant="divided" defaultExpandedKeys={[]}><AccordionItem id="purpose-checks" title={`已准备的事项（${preparedChecks.length}）`}><ul className="pw-capability-checks">{preparedChecks.map((check, index) => <li key={check.id || index}><strong>{check.label || check.title || checkNames[check.id || ''] || '准备项'}</strong><span>{capabilityCheckDescription(check)}</span></li>)}</ul></AccordionItem></Accordion>}
       </section> : !observing && !observationError ? <p className="pw-capability-read-error">这项能力的状态暂不可读取，请重新核对或返回能力列表。</p> : null}
     </> : journey.view === 'policy' && run ? <>
-      <DataOperationHeading title="审批规则" parent="工具目录" description="先选择范围，修改草稿，再明确保存。" onBack={() => leave(() => journey.open('catalog'))} />
+      <DataOperationHeading title="审批规则" parent={policyOrigin.current === 'list' ? '能力' : '工具目录'} description="选择作用范围，再设置工具的审批方式。" onBack={() => leave(() => journey.open(policyOrigin.current))} />
       <PermissionPolicySettings key={`${String(state.conversationId || '')}:${selectedTool}`} conversationId={String(state.conversationId || '')} act={run} initialScope={state.conversationId ? 'conversation' : 'global'} initialTool={selectedTool} registerBeforeLeave={registerPolicyLeave} />
     </> : journey.view === 'sources' ? <>
       <DataOperationHeading title="连接与管理" parent="能力" description="准备做事需要的方法、服务和执行位置。" onBack={() => journey.open('list')} />
-      {onPrepare && <section className="pw-capabilities-preparation" aria-label="手机能力准备"><DataOperationRow id="setup" title="准备这台手机" detail="按需准备手机操作、开发、语音与后台运行" icon={IconPhone} onOpen={() => onPrepare()} /></section>}
-      <section className="pw-capabilities-group" aria-label="方法与任务选择"><header><h2>方法与任务选择</h2></header><div className="pw-capabilities-list">
+      {onPrepare && <section className="pw-capabilities-preparation pw-material-content" aria-label="手机能力准备"><DataOperationRow id="setup" title="准备这台手机" detail="按需准备手机操作、开发、语音与后台运行" icon={IconPhone} onOpen={() => onPrepare()} /></section>}
+      <section className="pw-capabilities-group" aria-label="方法与任务选择"><header><h2>方法与任务选择</h2></header><div className="pw-capabilities-list pw-material-content">
         <DataOperationRow id="skills" title="技能与方法" detail="安装和阅读做事步骤，脚本执行单独审批" icon={IconSkill} onOpen={onNavigate} />
         <DataOperationRow id="workProfiles" title="工作配置" detail="选择模型、技能与工具，不授予执行权限" icon={IconFileSettings} onOpen={onNavigate} />
       </div></section>
-      <section className="pw-capabilities-group" aria-label="扩展与服务"><header><h2>扩展与服务</h2></header><div className="pw-capabilities-list">
+      <section className="pw-capabilities-group" aria-label="扩展与服务"><header><h2>扩展与服务</h2></header><div className="pw-capabilities-list pw-material-content">
         <DataOperationRow id="plugins" title="插件" detail="查找、安装、查看定义与逐项工具授权" icon={IconPlugin} onOpen={onNavigate} />
         <DataOperationRow id="mcp" title="工具服务 · MCP" detail="接入全网搜索与邮件等服务；准备、安装和授权分别核对" icon={IconMcp} onOpen={onNavigate} />
       </div></section>
-      <section className="pw-capabilities-group" aria-label="执行位置"><header><h2>执行位置</h2></header><div className="pw-capabilities-list">
+      <section className="pw-capabilities-group" aria-label="执行位置"><header><h2>执行位置</h2></header><div className="pw-capabilities-list pw-material-content">
         <DataOperationRow id="local" title="这台手机的开发环境" detail="准备运行环境、项目与依赖，构建仍需原范围" icon={IconTerminal} onOpen={onNavigate} />
         <DataOperationRow id="devices" title="其他设备" detail="核对连接与设备能力，每次使用原授权范围" icon={IconDevices} onOpen={onNavigate} />
       </div></section>

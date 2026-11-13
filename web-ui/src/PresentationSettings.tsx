@@ -24,6 +24,7 @@ export function AppearanceSettings({ state, supported, run }: Props) {
           .catch(failure => setError(failure instanceof Error ? failure.message : '外观保存未确认，请重试'))
           .finally(() => setPending(false));
       }} />
+    <p className="pw-field-hint">{pending || appearance.saving === true ? '正在保存外观…' : mode === 'system' ? '随手机的浅色或深色模式切换。' : mode ? '所选主题直接应用，字体可在下方单独预览。' : '正在读取当前外观。'}</p>
     {(error || typeof appearance.error === 'string') && <p className="pw-error" role="alert">{error || String(appearance.error)}</p>}
   </section>;
 }

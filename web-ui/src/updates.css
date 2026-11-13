@@ -20,16 +20,16 @@
 }
 .pw-updates .pw-updates-header button { width: 44px; min-width: 44px; height: 44px; }
 .pw-updates-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
-.pw-updates-content { display: grid; gap: 16px; max-width: 720px; margin-inline: auto; padding: 8px 16px 32px; }
-.pw-updates-group { min-width: 0; padding: 20px; border-radius: 20px; background: var(--pw-surface); }
+.pw-updates-content { display: grid; gap: 24px; max-width: 720px; margin-inline: auto; padding: 8px 16px 32px; }
+.pw-updates-group { min-width: 0; padding: 20px; border-radius: 20px; background: var(--pw-surface); box-shadow: 0 2px 5px rgb(0 0 0 / .025), 0 9px 24px rgb(0 0 0 / .025); }
 .pw-updates p { margin: 0; overflow-wrap: anywhere; }
 .pw-updates-version { display: grid; gap: 12px; }
 .pw-updates .pw-updates-caption { font-size: 13px; line-height: 20px; color: var(--pw-muted); }
-.pw-updates .pw-updates-installed { margin-top: -8px; font-size: 16px; font-weight: 500; }
-.pw-updates-release { display: grid; gap: 4px; padding-top: 8px; }
+.pw-updates .pw-updates-installed { margin-top: -4px; font-size: 28px; line-height: 36px; letter-spacing: -.035em; font-weight: 600; font-variant-numeric: tabular-nums; }
+.pw-updates-release { display: grid; gap: 8px; padding-top: 16px; border-top: 1px solid var(--pw-edge); }
 .pw-updates-release h2 { margin: 0; font-size: 16px; line-height: 24px; font-weight: 600; }
-.pw-updates .pw-updates-message { font-size: 16px; line-height: 25px; }
-.pw-updates .pw-updates-error { font-size: 16px; line-height: 25px; }
+.pw-updates .pw-updates-message { font-size: 14px; line-height: 23px; }
+.pw-updates .pw-updates-error { font-size: 14px; line-height: 23px; }
 .pw-updates-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 4px; }
 .pw-updates .pw-updates-actions button,
 .pw-updates .pw-updates-notification button { min-height: 44px; height: auto; padding: 10px 16px; white-space: normal; font-size: 16px; line-height: 24px; }
@@ -51,3 +51,5 @@
   .pw-updates-content { padding-inline: 12px; }
   .pw-updates-group { padding-inline: 16px; }
 }
+.pw-updates-release .pw-updates-notes { margin: 0; color: var(--pw-copy); font-size: 14px; line-height: 23px; }
+.pw-updates-release [slot="trigger"] { min-height: 48px; }

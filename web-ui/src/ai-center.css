@@ -32,6 +32,11 @@
 .pw-ai-center button:is(:focus-visible,[data-focus-visible]),.pw-ai-picker button:is(:focus-visible,[data-focus-visible]){outline:2px solid var(--pw-focus);outline-offset:-3px;}
 .pw-ai-center button:disabled,.pw-ai-picker button:disabled{opacity:.5;}
 .pw-ai-service-list{display:flex;flex-direction:column;gap:24px;}
+.pw-ai-service-group>h3{display:flex;align-items:center;gap:8px;}
+.pw-ai-group-count{font-size:12px;font-variant-numeric:tabular-nums;color:var(--pw-muted);font-weight:400;}
+.pw-ai-picker .pw-ai-catalog-heading{padding:16px 12px 6px;margin:0;font:500 12px/18px var(--pw-font);color:var(--pw-muted);}
+.pw-ai-picker .pw-ai-catalog-heading:first-child{padding-top:8px;}
+.pw-ai-service-row .pw-ai-service-model{font-family:var(--pw-font-code,ui-monospace,monospace);font-size:11px;line-height:17px;overflow-wrap:anywhere;}
 .pw-ai-service-group>h3,.pw-ai-default-group>h3,.pw-ai-utilities>h3{margin:0 0 8px;padding-inline:4px;font-size:13px;font-weight:500;color:var(--pw-copy);}
 .pw-ai-center .pw-ai-service-row,.pw-ai-picker .pw-ai-model-row,.pw-ai-center .pw-ai-model-row{display:flex;width:100%;height:auto;min-height:72px;padding:var(--pw-gap-control) 0;justify-content:flex-start;white-space:normal;text-align:left;gap:var(--pw-gap-control);border-radius:12px;background:transparent;box-shadow:none;}
 .pw-ai-center .pw-ai-service-row:hover,.pw-ai-picker .pw-ai-model-row:hover,.pw-ai-center .pw-ai-model-row:hover{background:var(--pw-hover);}
@@ -40,8 +45,10 @@
 .pw-ai-center .pw-ai-row-copy,.pw-ai-picker .pw-ai-row-copy{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:4px;flex:1;min-width:0;white-space:normal;}
 .pw-ai-row-copy strong{font-size:15px;font-weight:550;line-height:1.6;overflow-wrap:anywhere;text-align:left;}
 .pw-ai-row-copy small{font-size:13px;font-weight:400;line-height:1.55;color:var(--pw-muted);overflow-wrap:anywhere;text-align:left;}
-.pw-ai-service-group-body{padding:4px 16px;background:var(--pw-surface);border-radius:20px;min-width:0;}
-.pw-ai-center .pw-ai-default-group>.pw-ai-service-row{padding:16px;border-radius:20px;background:var(--pw-surface);}
+.pw-ai-service-group-body{padding:4px 14px;background:var(--pw-surface);border-radius:22px;min-width:0;}
+.pw-ai-service-group-body>.pw-ai-service-row+.pw-ai-service-row{border-top:1px solid var(--pw-edge);border-top-left-radius:0;border-top-right-radius:0;}
+.pw-ai-center .pw-ai-default-group>.pw-ai-service-row{padding:16px;border-radius:22px;background:var(--pw-surface);box-shadow:var(--pw-shadow-surface);}
+.pw-ai-default-group .pw-ai-row-copy strong{font-size:18px;line-height:25px;}
 .pw-ai-default-group{margin-bottom:8px;}
 .pw-ai-services-heading{min-height:48px;}
 .pw-ai-services-title{min-width:0;flex:1 1 120px;padding-inline:4px;}
@@ -87,7 +94,7 @@
 .pw-ai-model-review>header>h3{font-size:20px;overflow-wrap:anywhere;}
 .pw-ai-model-review>header>p{font-size:13px;color:var(--pw-muted);overflow-wrap:anywhere;}
 .pw-ai-picker .pw-ai-scope{font-size:13px;color:var(--pw-muted);}
-.pw-ai-model-facts{display:flex;flex-direction:column;gap:var(--pw-gap-control);margin:0;}
+.pw-ai-model-facts{display:flex;flex-direction:column;gap:var(--pw-gap-control);margin:0;padding:14px 16px;background:var(--pw-inset);border-radius:18px;}
 .pw-ai-model-facts>div{display:grid;grid-template-columns:minmax(70px,.7fr) minmax(0,1.3fr);gap:var(--pw-gap-content);align-items:start;font-size:13px;line-height:1.6;}
 .pw-ai-model-facts dt{color:var(--pw-muted);}.pw-ai-model-facts dd{margin:0;overflow-wrap:anywhere;}
 .pw-ai-picker-actions{display:flex;align-items:center;justify-content:flex-end;gap:var(--pw-gap-control);padding-top:var(--pw-gap-control);flex-wrap:wrap;}
@@ -130,3 +137,8 @@
 .pw-ai-center .pw-accounts-workspace,.pw-ai-center .pw-source-record,.pw-ai-center .pw-selected-object{border:0!important;box-shadow:none;background:transparent;padding-inline:0;}
 @media(max-width:359px){.pw-ai-tabs [role=tab]{padding-inline:var(--pw-gap-related);}}
 @media(prefers-reduced-motion:reduce){.pw-ai-tabs [role=tablist]+span,.pw-ai-filter [role=tablist]+span{transition:none!important;}}
+/* A connection is a short journey, not an undifferentiated settings form. */
+.pw-ai-next-step{padding:16px 0 4px;display:flex;flex-direction:column;gap:6px;}
+.pw-ai-next-step h3{margin:0;font-size:17px;line-height:1.4;color:var(--pw-ink);}
+.pw-ai-next-step p{margin:0;color:var(--pw-muted);font-size:13px;line-height:1.6;max-width:56ch;}
+.pw-ai-detail-heading [data-ai-detail-heading]:focus{outline:none;}

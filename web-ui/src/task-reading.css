@@ -32,8 +32,8 @@
   padding: 0;
 }
 .pw-task-outcome.pw-task-reading .afa-answerbody :is(p, li) {
-  font-size: 16px;
-  line-height: 1.75;
+  font-size: 15px;
+  line-height: 1.8;
   color: var(--pw-ink);
 }
 .pw-task-outcome.pw-task-reading .afa-answer > footer {
@@ -155,10 +155,11 @@
 .pw-task-inference.pw-task-reading {
   min-width: 0;
   margin-top: var(--pw-gap-section);
-  padding: var(--pw-gap-content);
+  padding: 20px;
   border: 0;
   border-radius: 20px;
-  background: var(--pw-inset);
+  background: var(--pw-surface);
+  box-shadow: 0 2px 5px rgb(0 0 0 / .025), 0 9px 24px rgb(0 0 0 / .025);
   color: var(--pw-ink);
 }
 .pw-task-reading .pw-usage-heading {

@@ -3,18 +3,36 @@
 .pw-navigation-search > .pw-work-search .pw-command { width: 100%; min-height: 0; max-height: 100%; }
 .pw-navigation-search > .pw-work-search .afa-commandlist { max-height: none; overflow-y: auto; }
 .pw-work-search .pw-command-copy { min-width: 0; gap: 4px; }
-.pw-work-search .pw-command-title { white-space: normal; overflow-wrap: anywhere; font-size: 15px; line-height: 23px; }
-.pw-work-search .pw-command-meta { color: var(--pw-muted); font: 400 12px/20px var(--pw-font); }
-.pw-work-search .pw-command-description { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; white-space: normal; overflow-wrap: anywhere; font: 400 13px/21px var(--pw-font); color: var(--pw-copy); }
-.pw-work-search .afa-commandlist > div > button { align-items: flex-start; min-height: 64px; padding-block: 12px; }
+.pw-work-search .pw-command .pw-command-title { white-space: normal; overflow-wrap: anywhere; font-size: 15px; line-height: 23px; }
+.pw-work-search .pw-command .pw-command-meta { color: var(--pw-muted); font: 400 12px/20px var(--pw-font); }
+.pw-work-search .pw-command .pw-command-description { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; white-space: normal; overflow-wrap: anywhere; font: 400 13px/21px var(--pw-font); color: var(--pw-copy); }
+.pw-work-search .afa-commandlist > div > button { align-items: flex-start; min-height: 72px; padding: 14px 12px; border-radius: 14px; }
 .pw-work-search .pw-command-icon { margin-top: 2px; flex: none; }
 .pw-work-search .pw-search-status { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 12px; margin: 0; color: var(--pw-copy); font: 400 13px/21px var(--pw-font); }
 .pw-work-search .pw-search-status p, .pw-work-search footer p { margin: 0; }
 .pw-work-search .pw-command footer { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; white-space: normal; }
 .pw-work-search .pw-search-notice { color: var(--pw-copy); font-size: 12px; line-height: 20px; }
-.pw-search-kind-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 4px 8px 8px; border-bottom: 1px solid var(--pw-selected); }
+.pw-search-kind-filters { display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; padding: 4px 8px 12px; overflow-x: auto; overscroll-behavior-inline: contain; scrollbar-width: none; border-bottom: 0; }
 .pw-search-kind-filters button { flex: 1 0 auto; min-height: 44px; padding-inline: 10px; font: 400 13px/20px var(--pw-font); color: var(--pw-copy); }
-.pw-search-kind-filters button[aria-pressed="true"] { color: var(--pw-accent); background: var(--pw-selection-surface); font-weight: 600; }
+.pw-search-kind-filters button[aria-pressed="true"] { color: var(--pw-ink); background: var(--pw-selected); font-weight: 600; }
 .pw-search-original-body { display: flex; flex-direction: column; gap: 20px; overflow-anchor: none; }
 .pw-search-original-meta { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; color: var(--pw-copy); font: 400 12px/20px var(--pw-font); }
 .pw-search-original-body .pw-reading-copy { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 400 16px/1.8 var(--pw-font); }
+
+.pw-search-kind-filters::-webkit-scrollbar { display: none; }
+.pw-work-search .pw-search-kind-filters button { border-radius: 12px; }
+.pw-work-search .pw-command footer { padding: 12px; border-top: 1px solid var(--pw-edge); }
+.pw-work-search .pw-command footer > p:first-child { font-size: 12px; line-height: 20px; color: var(--pw-muted); }
+
+/* Stable drawer-local anchor: results leave in place rather than collapsing the
+   navigation layout. Exit retains the query and scroll owner, but owns no input. */
+.pw-navigation-drawer .pw-navigation-search-host { position: relative; }
+.pw-navigation-search-host > .pw-work-search { position: absolute; inset: 0; display: flex; min-height: 0; padding: 0; z-index: 1; transform-origin: top left; background: var(--pw-surface); }
+.pw-navigation-search-host > .pw-work-search .pw-command { width: 100%; min-height: 0; max-height: 100%; }
+.pw-navigation-search-host > .pw-work-search .afa-commandlist { max-height: none; overflow-y: auto; overscroll-behavior: contain; }
+.pw-navigation-search-host > .pw-work-search[inert] { pointer-events: none; }
+.pw-navigation-browse { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.pw-navigation-browse[hidden] { display: none; }
+.pw-navigation-drawer .pw-drawer-body.pw-navigation-search-host { overflow: hidden; }
+.pw-navigation-search-host > .pw-navigation-actions { flex: none; }
+.pw-navigation-search-host > .pw-navigation-browse { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }

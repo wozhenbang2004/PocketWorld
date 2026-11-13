@@ -14,6 +14,7 @@ import {
 } from './browser-chrome-contract';
 import './browser-chrome.css';
 import './browser-depth.css';
+import './browser-workspace-manga.css';
 
 /** Fixed native toolbar surface. The real webpage remains in its separate native WebView. */
 export default function BrowserChrome({ snapshot }: { snapshot: PocketSnapshot }) {

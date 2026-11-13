@@ -132,9 +132,12 @@
 .pw-reminder-workspace .pw-reminder-plan-group {
   margin: var(--pw-gap-section) 0;
 }
-.pw-reminder-workspace .pw-reminder-rule-row {
-  padding: var(--pw-gap-content) 0;
-  min-height: 82px;
+.pw-reminder-workspace .pw-reminder-rules .pw-reminder-rule-row {
+  padding: 16px;
+  min-height: 88px;
+  border: 1px solid var(--pw-divider);
+  border-radius: 18px;
+  background: var(--pw-surface);
 }
 .pw-reminder-workspace .pw-reminder-rule-row .pw-reminder-rule-layout {
   display: flex;
@@ -150,7 +153,10 @@
   align-items: flex-start;
   gap: var(--pw-gap-related);
   padding-right: var(--pw-gap-control);
-  border-right: 1px solid var(--pw-hairline);
+  border-right: 0;
+  border-radius: 12px;
+  background: var(--pw-inset);
+  padding: 8px;
   font-variant-numeric: tabular-nums;
 }
 .pw-reminder-workspace .pw-reminder-rule-time strong {
@@ -178,3 +184,7 @@
   .pw-reminder-workspace .pw-reminder-rule-row .pw-reminder-rule-layout { gap: var(--pw-gap-control); }
   .pw-reminder-workspace .pw-reminder-rule-time { flex-basis: 60px; padding-right: var(--pw-gap-related); }
 }
+
+.pw-reminder-workspace .pw-reminder-rules { display: grid; gap: 10px; background: transparent; padding: 0; }
+.pw-reminder-workspace .pw-reminder-plan-tools .pw-knowledge-filters { padding: 6px; border-radius: 24px; width: fit-content; max-width: 100%; overflow-x: auto; flex-wrap: nowrap; }
+.pw-reminder-workspace .pw-reminder-plan-tools .pw-knowledge-filters > button { flex-shrink: 0; min-height: 44px; }

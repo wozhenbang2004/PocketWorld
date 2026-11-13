@@ -9,7 +9,7 @@
 .pw-desktop-viewer button, .pw-desktop-viewer select, .pw-desktop-viewer textarea {
   font: inherit; color: inherit; border: 0; outline: none;
 }
-.pw-desktop-viewer button { display: inline-flex; justify-content: center; align-items: center; gap: var(--pw-gap-related,8px); min-width: var(--pw-control-target,44px); min-height: var(--pw-control-target,44px); padding: var(--pw-gap-related,8px) var(--pw-gap-control,12px); border-radius: 11px; background: transparent; cursor: pointer; font-size: 13px; font-weight: 500; white-space: nowrap; }
+.pw-desktop-viewer button { display: inline-flex; justify-content: center; align-items: center; gap: var(--pw-gap-related,8px); min-width: var(--pw-control-target,44px); min-height: var(--pw-control-target,44px); padding: var(--pw-gap-related,8px) var(--pw-gap-control,12px); border-radius: 18px; background: transparent; cursor: pointer; font-size: 13px; font-weight: 500; white-space: nowrap; }
 .pw-desktop-viewer button:hover:not(:disabled) { background: var(--pw-inset,#e9eaed); }
 .pw-desktop-viewer button:active:not(:disabled) { transform: translateY(1px); }
 .pw-desktop-viewer button:disabled { opacity: .4; cursor: default; }
@@ -25,14 +25,14 @@
 .pw-desktop-scope select { appearance: none; background: var(--desktop-surface); border-radius: 8px; min-height: var(--pw-control-target,44px); padding: var(--pw-gap-related,8px) var(--pw-gap-control,12px); font-size: 12px; max-width: 132px; }
 .pw-desktop-icons { flex-shrink: 0; gap: 4px; }
 .pw-desktop-icons button, .pw-desktop-viewer .pw-desktop-icon { width: var(--pw-control-target,44px); height: var(--pw-control-target,44px); padding: var(--pw-gap-control,12px); }
-.pw-desktop-screen { position: relative; width: 100%; max-height: 64dvh; min-height: 150px; border-radius: 15px; background: var(--desktop-surface); overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; touch-action: none; }
+.pw-desktop-screen { position: relative; width: 100%; max-height: 64dvh; min-height: 150px; border-radius: 22px; background: var(--desktop-surface); overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; touch-action: none; }
 .pw-desktop-video-size { min-width: 100%; min-height: 100%; }
 .pw-desktop-screen video { display: block; width: 100%; height: 100%; object-fit: contain; user-select: none; -webkit-user-select: none; }
 .pw-desktop-screen.has-control { cursor: crosshair; }
 .pw-desktop-screen.is-zoomed { cursor: grab; }
 .pw-desktop-screen.is-zoomed:active { cursor: grabbing; }
 .pw-desktop-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 11px; padding: 18px; background: var(--desktop-surface); color: var(--desktop-muted); text-align: center; font-size: 13px; }
-.pw-desktop-toolbar { justify-content: space-between; gap: var(--pw-gap-control,12px); padding: var(--pw-gap-control,12px) 0 0; flex-wrap: wrap; }
+.pw-desktop-toolbar { justify-content: space-between; gap: var(--pw-gap-control,12px); margin-top: 12px; padding: 6px 10px; border-radius: 22px; flex-wrap: wrap; }
 .pw-desktop-status { gap: 6px; min-height: 32px; color: var(--desktop-muted); font-size: 12px; flex-shrink: 0; }
 .pw-desktop-status-dot { width: 6px; height: 6px; background: #b9bcc3; border-radius: 50%; }
 .pw-desktop-status-dot.is-live { background: #51545b; }
@@ -63,3 +63,12 @@
 @media (max-width: 380px) { .pw-desktop-source > span:first-of-type { max-width: 112px; } .pw-desktop-toolbar { gap: var(--pw-gap-related,8px); } .pw-desktop-control-actions { gap: 4px; } .pw-desktop-scope-label { display: none; } }
 @media (orientation: landscape) and (max-height: 500px) { .pw-desktop-viewer.is-expanded .pw-desktop-heading { padding-bottom: 3px; } .pw-desktop-viewer.is-expanded .pw-desktop-toolbar { padding-top: 4px; } .pw-desktop-viewer.is-expanded .pw-desktop-hint { display: none; } }
 @media (prefers-reduced-motion: reduce) { .pw-desktop-viewer button:active:not(:disabled) { transform: none; } .pw-desktop-spin { animation: none; } }
+/* Visibility is explicit and outside the input viewport: tapping the screen
+ * never ambiguously toggles chrome and dispatches a remote click. */
+.pw-desktop-icons .pw-desktop-controls-toggle { width: auto; padding: 8px 10px; flex: none; }
+.pw-desktop-toolbar[data-controls-visible="false"] { padding-block: 2px; background: transparent; box-shadow: none; backdrop-filter: none; }
+@media (max-width: 420px) {
+  .pw-desktop-heading { flex-wrap: wrap; }
+  .pw-desktop-source { flex-basis: 100%; }
+  .pw-desktop-icons { margin-inline-start: auto; }
+}

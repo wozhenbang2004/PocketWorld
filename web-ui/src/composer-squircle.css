@@ -1,9 +1,8 @@
-/* The retained Affect composer owns its surface, editor and action geometry.
- * SmoothComposerSurface supplies the same continuous corners in WebViews.
- * Keep the context rail quiet; its real hit area sits above the editing surface. */
+/* MangaFlow GlassControlGroup composition: one quiet editing surface, compact
+ * independent controls. Retains Affect input, measured editor and real actions;
+ * no decorative second context slab above the conversation. */
 .pw-composer-host.pw-squircle-composer {
   --pw-composer-hit: 44px;
-  --pw-composer-rail: var(--pw-inset);
   --pw-composer-shadow: var(--pw-shadow-composer);
   min-width: 0;
   width: 100%;
@@ -11,63 +10,33 @@
 .pw-composer-host.pw-squircle-composer .afa-composer {
   position: relative;
   width: 100%;
-  padding-top: 22px;
+  padding-top: 0;
   isolation: isolate;
 }
-.pw-composer-host.pw-squircle-composer .pw-composer-context-rail {
+.pw-composer-host.pw-squircle-composer .pw-composer-context-slot {
+  display: grid;
+  place-items: center;
+  flex: 0 0 var(--pw-composer-hit);
+  width: var(--pw-composer-hit);
+  height: var(--pw-composer-hit);
+  color: var(--pw-copy);
+}
+.pw-composer-host.pw-squircle-composer .pw-composer-context-slot > .pw-context-meter-button {
   position: relative;
-  z-index: 0;
-  width: 64%;
-  min-width: 144px;
-  max-width: 320px;
-  height: 38px;
-  margin: 0 auto -16px;
+  display: grid;
+  place-items: center;
+  width: var(--pw-composer-hit);
+  height: var(--pw-composer-hit);
   padding: 0;
   border: 0;
-  border-radius: 24px;
-  background: var(--pw-composer-rail);
-  color: var(--pw-copy);
-  box-shadow: none;
-}
-.pw-composer-host.pw-squircle-composer .pw-composer-context-rail > .pw-context-meter-button {
-  position: absolute;
-  top: -22px;
-  left: 0;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  min-width: var(--pw-composer-hit);
-  height: var(--pw-composer-hit);
-  min-height: var(--pw-composer-hit);
-  margin: 0;
-  padding: 22px 0 6px;
-  border: 0;
-  border-radius: 16px;
+  border-radius: 50%;
   background: transparent;
   color: inherit;
-  box-shadow: none;
   cursor: pointer;
-  isolation: isolate;
 }
 .pw-composer-host.pw-squircle-composer .pw-context-meter-button:focus-visible {
-  outline: none;
-  box-shadow: none;
-}
-.pw-composer-host.pw-squircle-composer .pw-context-meter-button:focus-visible::before {
-  content: '';
-  position: absolute;
-  bottom: 0;
-  left: 50%;
-  z-index: -1;
-  width: 30px;
-  height: 22px;
-  border-radius: 11px;
-  background: var(--pw-selected);
   outline: 2px solid var(--pw-focus);
-  outline-offset: 2px;
-  transform: translateX(-50%);
+  outline-offset: -3px;
 }
 .pw-composer-host.pw-squircle-composer .pw-context-meter-button[data-attention] { color: var(--pw-warning); }
 .pw-composer-host.pw-squircle-composer .pw-composer-context-usage {
@@ -86,11 +55,11 @@
   z-index: 1;
   padding: 8px;
   border: 0;
-  border-radius: 30px;
+  border-radius: 24px;
   background: var(--pw-surface);
   box-shadow: var(--pw-composer-shadow);
 }
-.pw-composer-host.pw-squircle-composer .afa-composer > :is(.pw-composer-card, .pw-composer-context-rail)[data-continuous-shape="true"] {
+.pw-composer-host.pw-squircle-composer .afa-composer > :is(.pw-composer-card)[data-continuous-shape="true"] {
   background: transparent;
   box-shadow: none;
   isolation: isolate;
@@ -105,8 +74,6 @@
   filter: var(--pw-shadow-composer-shape);
 }
 .pw-composer-host.pw-squircle-composer .pw-continuous-surface path { fill: var(--pw-surface); }
-.pw-composer-host.pw-squircle-composer .pw-continuous-surface[data-tone="context"] { filter: none; }
-.pw-composer-host.pw-squircle-composer .pw-continuous-surface[data-tone="context"] path { fill: var(--pw-composer-rail); }
 .pw-composer-host.pw-squircle-composer .pw-composer-row { min-width: 0; width: 100%; margin-bottom: 2px; }
 .pw-composer-host.pw-squircle-composer .pw-composer-row > textarea {
   box-sizing: border-box;
@@ -163,8 +130,8 @@
 }
 .pw-composer-motion-control[inert] { pointer-events: none; }
 .pw-composer-host.pw-squircle-composer .pw-composer-intent > .pw-grow { display: none; }
-.pw-composer-host.pw-squircle-composer .pw-conversation-model-controls { display: flex; flex-wrap: nowrap; gap: 0; min-width: 0; max-width: 100%; }
-.pw-composer-host.pw-squircle-composer .pw-composer-toolbar :is(.pw-composer-intent > button, .afa-iconbtn, .afa-stop, .pw-conversation-reasoning-chip),
+.pw-composer-host.pw-squircle-composer .pw-conversation-model-controls { display: flex; flex-wrap: nowrap; gap: var(--pw-navigation-gap,6px); min-width: 0; max-width: 100%; }
+.pw-composer-host.pw-squircle-composer .pw-composer-toolbar :is(.pw-composer-intent > button, .afa-iconbtn, .afa-stop),
 .pw-composer-host.pw-squircle-composer .afa-recording .afa-iconbtn {
   box-sizing: border-box;
   display: grid;
@@ -197,29 +164,7 @@
   box-shadow: none;
 }
 .pw-composer-host.pw-squircle-composer .pw-composer-toolbar :is(.pw-composer-intent, .afa-toolbar) svg { width: 20px; height: 20px; }
-/* The model's current value remains readable. Only familiar reasoning glyphs
- * use an icon-only control; its exact native value is named in the picker. */
-.pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button::before { display: none; }
-.pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button > span {
-  display: flex; align-items: center; justify-content: center; gap: 0;
-  flex: 0 0 auto; min-width: 0; padding: 0;
-}
-.pw-composer-host.pw-squircle-composer .pw-conversation-reasoning-chip > span > :is(span, b),
-.pw-composer-host.pw-squircle-composer .pw-conversation-reasoning-chip > span > svg:not(:first-child),
-.pw-composer-host.pw-squircle-composer .pw-conversation-reasoning-chip > b,
-.pw-composer-host.pw-squircle-composer .pw-conversation-reasoning-chip > svg:not(:first-child) { display: none; }
-.pw-composer-host.pw-squircle-composer .pw-conversation-reasoning-chip > svg:first-child,
-.pw-composer-host.pw-squircle-composer .pw-conversation-reasoning-chip > span > svg:first-child { display: block; flex: none; width: 20px; height: 20px; }
-.pw-composer-host.pw-squircle-composer .pw-conversation-model-chip {
-  display: flex; flex: 0 1 auto; width: auto; min-width: 84px; max-width: 152px;
-  min-height: var(--pw-composer-hit); height: auto; padding: 8px; border: 0;
-  border-radius: 14px; background: transparent; color: var(--pw-copy); box-shadow: none;
-  font: 500 12px/20px var(--pw-font);
-}
-.pw-composer-host.pw-squircle-composer .pw-conversation-model-controls .pw-conversation-model-chip > span { flex: 1 1 auto; min-width: 0; max-width: 100%; gap: 4px; overflow: hidden; }
-.pw-composer-host.pw-squircle-composer .pw-conversation-model-chip > span > svg:first-child { display: none; }
-.pw-composer-host.pw-squircle-composer .pw-conversation-model-chip-name { display: block; min-width: 0; max-width: 16ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pw-composer-host.pw-squircle-composer .pw-conversation-model-chip > span > svg:last-child { display: block; flex: none; width: 12px; height: 12px; }
+/* Model/reasoning internals belong to conversation-model-controls.css. */
 .pw-composer-host.pw-squircle-composer .pw-composer-toolbar .pw-composer-intent > .pw-input-mode-trigger { display: flex; flex: 0 0 auto; width: auto; min-width: 44px; max-width: 104px; padding: 8px; border-radius: 14px; font: 500 12px/20px var(--pw-font); }
 .pw-composer-host.pw-squircle-composer .pw-composer-toolbar .pw-composer-intent > .pw-input-mode-trigger > span { gap: 4px; }
 .pw-composer-host.pw-squircle-composer .pw-composer-toolbar .pw-composer-intent > .pw-input-mode-trigger svg { width: 12px; height: 12px; }
@@ -317,7 +262,7 @@
   .pw-composer-host.pw-squircle-composer .pw-context-meter-button:hover .pw-context-meter-track { opacity: .6; }
 }
 @supports (corner-shape: superellipse(2)) {
-  .pw-composer-host.pw-squircle-composer :is(.pw-composer-context-rail, .pw-composer-card, .pw-composer-attachment, .pw-composer-file-preview) { corner-shape: superellipse(2); }
+  .pw-composer-host.pw-squircle-composer :is(.pw-composer-card, .pw-composer-attachment, .pw-composer-file-preview) { corner-shape: superellipse(2); }
 }
 @media (forced-colors: active) {
   .pw-composer-host.pw-squircle-composer .pw-continuous-surface path { fill: Canvas; stroke: CanvasText; stroke-width: 1; }

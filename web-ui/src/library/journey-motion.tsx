@@ -125,7 +125,7 @@ export function useCollectionMotion(root:RefObject<HTMLElement|null>,identity:st
    const top=last.top+bounds.top-scrollTop;
    if(top+last.height<viewportTop||top>viewportBottom)return;
    const first=before.items.get(id);
-   let frames:Keyframe[]|null=null,duration:number=motionDuration.enter;
+   let frames:Keyframe[]|null=null,duration:number=motionDuration.listEnter;
    let generators:Pick<CollectionRun,'x'|'y'>={},physical=false;
    if(first&&layout){
     const offset=offsets.get(first.node);
@@ -140,7 +140,7 @@ export function useCollectionMotion(root:RefObject<HTMLElement|null>,identity:st
    }
    const opacity=first?offsets.get(first.node)?.opacity:undefined;
    if(opacity!==undefined&&Number(opacity)<1){
-    if(!frames){frames=[{},{}];duration=motionDuration.enter}
+    if(!frames){frames=[{},{}];duration=motionDuration.listEnter}
     frames.forEach((frame,index)=>{const progress=Math.min(1,duration*index/(frames!.length-1)/motionDuration.feedback);frame.opacity=Number(opacity)+(1-Number(opacity))*progress});
    }
    if(!frames)return;
@@ -148,7 +148,7 @@ export function useCollectionMotion(root:RefObject<HTMLElement|null>,identity:st
   });
   // All geometry and interrupted values are read before starting new effects.
   plans.forEach(({node,frames,duration,physical,...generators})=>{
-   const animation=node.animate(frames,{duration,easing:physical?'linear':cssEase(motionEase.settle)});
+   const animation=node.animate(frames,{duration,easing:physical?'linear':cssEase(motionEase.listFade)});
    const run:CollectionRun={animation,frames,...generators};
    animation.id='pw-collection-change';playing.current.set(node,run);
    animation.onfinish=()=>finish(node,run);

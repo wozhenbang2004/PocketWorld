@@ -1,13 +1,13 @@
 /* PW-P4: existing BoardUI controls share two flat settings groups. */
 .pw-phone-workspace[data-phone-view="appearance"] > .pw-phone-detail { gap: 24px; }
 .pw-appearance-preference,
-.pw-typography-settings { display: grid; gap: 16px; min-width: 0; margin: 0; padding: 16px; border-radius: 20px; background: var(--pw-surface); }
+.pw-typography-settings { display: grid; gap: 16px; min-width: 0; margin: 0; padding: 16px; border-radius: 20px; background: var(--pw-surface); box-shadow: 0 2px 5px rgb(0 0 0 / .025), 0 9px 24px rgb(0 0 0 / .025); }
 .pw-appearance-theme > .pw-field-label,
-.pw-typography-heading h3 { margin: 0; color: var(--pw-ink); font-size: 20px; line-height: 28px; font-weight: 600; }
+.pw-typography-heading h3 { margin: 0; color: var(--pw-ink); font-size: 16px; line-height: 24px; font-weight: 600; }
 .pw-appearance-theme > .pw-field-label { margin-bottom: 16px; }
 .pw-appearance-theme [role="radiogroup"] { display: flex; flex-direction: row; flex-wrap: wrap; gap: 8px; }
 .pw-appearance-theme .pw-radio-option { flex: 1 1 auto; justify-content: center; min-height: 48px; padding: 8px 10px; border-radius: var(--pw-radius-control); }
-.pw-appearance-theme .pw-option-copy { color: var(--pw-ink); font-size: 16px; line-height: 24px; white-space: nowrap; }
+.pw-appearance-theme .pw-option-copy { color: var(--pw-ink); font-size: 14px; line-height: 22px; white-space: nowrap; }
 .pw-appearance-theme .pw-radio-option[data-hovered]:not([data-disabled]) { background: var(--pw-hover); }
 .pw-appearance-theme .pw-radio-option[data-selected] { background: var(--pw-selected); }
 .pw-typography-workbench { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; min-width: 0; }
@@ -17,7 +17,7 @@
 .pw-typography-fields .pw-selection-field > div { min-width: 0; }
 .pw-typography-fields .pw-select-trigger { min-height: 48px; max-width: 100%; padding: 10px 12px; font-size: 16px; line-height: 24px; }
 .pw-typography-fields .pw-select-trigger > span { white-space: normal; text-align: start; overflow-wrap: anywhere; }
-.pw-typography-preview { min-width: 0; min-height: 112px; padding: 16px; border-radius: 12px; background: var(--pw-canvas); color: var(--pw-ink); }
+.pw-typography-preview { min-width: 0; min-height: 144px; padding: 24px 20px; border-radius: 16px; background: var(--pw-canvas); color: var(--pw-ink); }
 .pw-typography-preview > p { margin: 0; }
 .pw-typography-specimens { display: grid; gap: 8px; font-synthesis: none; }
 .pw-typography-specimens[hidden] { display: none; }
@@ -31,3 +31,10 @@
 .pw-typography-settings .pw-field-hint,
 .pw-typography-settings > .pw-error,
 .pw-appearance-preference > .pw-error { margin: 0; font-size: 13px; line-height: 21px; }
+
+@media (min-width: 760px) {
+  .pw-typography-workbench { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; gap: 24px; }
+}
+.pw-typography-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; }
+.pw-typography-draft-state { color: var(--pw-muted); font-size: 12px; line-height: 20px; }
+.pw-appearance-preference > .pw-field-hint { margin: 12px 0 0; color: var(--pw-muted); font-size: 13px; line-height: 21px; }

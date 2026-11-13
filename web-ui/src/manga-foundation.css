@@ -1,0 +1,47 @@
+/* MangaFlow 246a8ae: GlassControlGroup's 22dp navigation corners,
+ * adapted to CSS px. Motion roles live in motion.css / motion-tokens.ts.
+ * Web backdrop blur is not Haze's optical refraction or shared glass renderer.
+ * These opt-in roles preserve each page's layout and semantic controls. */
+:root {
+  --pw-navigation-radius: 22px;
+  --pw-navigation-gap: 6px;
+  --pw-material-tint: color-mix(in srgb, var(--pw-surface) 88%, transparent);
+}
+.pw-material-navigation {
+  background: var(--pw-material-tint);
+  border: 0;
+  border-radius: var(--pw-navigation-radius);
+  box-shadow: var(--pw-shadow-navigation);
+}
+@supports (backdrop-filter: blur(12px)) {
+  .pw-material-navigation { backdrop-filter: blur(12px); }
+}
+/* Long scrolling navigation owns a solid surface in nav-settings-manga.css.
+ * Do not pay for a backdrop hidden behind that opaque surface. */
+.pw-navigation-drawer.pw-material-navigation {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+.pw-material-panel {
+  background: var(--pw-floating);
+  color: var(--pw-ink);
+  border: 0;
+  box-shadow: var(--pw-shadow-floating);
+}
+.pw-material-content {
+  background: var(--pw-canvas);
+  color: var(--pw-ink);
+  box-shadow: none;
+}
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .pw-material-navigation { background: var(--pw-surface); backdrop-filter: none; }
+}
+@media (forced-colors: active) {
+  .pw-material-navigation, .pw-material-panel {
+    background: Canvas;
+    color: CanvasText;
+    box-shadow: none;
+    backdrop-filter: none;
+    outline: 1px solid CanvasText;
+  }
+}

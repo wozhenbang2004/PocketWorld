@@ -20,8 +20,8 @@ const signature = (policy: ToolPolicy | null) => policy ? JSON.stringify([policy
 const differs = (left: ToolPolicy | null, right: ToolPolicy | null) => signature(left) !== signature(right);
 const instructionLimit = 8000;
 const modes = [
-  { id: 'custom', label: '按规则处理', description: '工具规则优先，其余沿用原生要求' },
-  { id: 'auto_review', label: '交给 AI 审批', description: '需要审批或产生更改的动作，由 AI 判断' },
+  { id: 'custom', label: '自定义', description: '工具规则优先，其余沿用原生要求' },
+  { id: 'auto_review', label: 'AI 自动审批', description: '需要审批或产生更改的动作，由 AI 判断' },
   { id: 'full_access', label: '默认直接允许', description: '直接允许可配置审批，单独工具规则仍优先' },
 ];
 export function PermissionPolicySettings({ conversationId, act, onPendingChange, registerBeforeLeave, initialScope, initialTool, children, conversationLabel = '此对话', initialToolFromTask = false, unavailableReason }: Props) {
@@ -132,23 +132,23 @@ export function PermissionPolicySettings({ conversationId, act, onPendingChange,
   </div>;
   return <section className="pw-permission-policy pw-policy-workbench" aria-label="审批策略" aria-busy={busy}>
     {unavailableReason && <p className="pw-permission-error" role="alert">{unavailableReason} 草稿仍在此处，不会自动换目标或再次提交；可核对后放弃更改返回原任务。</p>}
-    <div className="pw-permission-scope">
-      <RadioOptions label="修改哪个范围" value={scope} isDisabled={busy} options={[{ id: 'conversation', label: conversationLabel, disabled: !snapshot.conversationId }, { id: 'global', label: '全局默认' }]} onChange={value => { setScope(value as Scope); setError(''); setNotice(''); }} />
+    <div className="pw-permission-scope pw-material-content">
+      <RadioOptions label="作用范围" value={scope} isDisabled={busy} options={[{ id: 'conversation', label: conversationLabel, disabled: !snapshot.conversationId }, { id: 'global', label: '全局默认' }]} onChange={value => { setScope(value as Scope); setError(''); setNotice(''); }} />
       <p className="pw-policy-origin">{scope === 'global' ? '全局默认用于未单独设置的对话。' : saved ? `当前：${conversationLabel}有独立模式与 AI 指令；未覆盖的工具规则继承全局。` : `当前：${conversationLabel}跟随全局默认。`}{scope === 'conversation' && own === null && currentDirty ? ' 待保存：恢复跟随全局，当前设置尚未改变。' : ''}</p>
       {dirtyScopes.some(key => key !== scope) && <p className="pw-permission-hint" role="status">{scope === 'global' ? conversationLabel : '全局默认'}还有未保存的草稿，切换范围不会丢失。</p>}
     </div>
-    <div className="pw-permission-modes">
-      <RadioOptions label="没有单独工具规则时" value={draft.mode} options={modes} isDisabled={editingDisabled} onChange={mode => edit({ ...draft, mode: mode as ToolPolicy['mode'] })} />
+    <div className="pw-permission-modes pw-material-content">
+      <RadioOptions label="默认审批方式" value={draft.mode} options={modes} isDisabled={editingDisabled} onChange={mode => edit({ ...draft, mode: mode as ToolPolicy['mode'] })} />
       {draft.mode === 'full_access' && <p className="pw-policy-caution" role="note">保存后，可配置动作将默认不再询问，可能修改、删除数据或访问外部服务。已有禁止规则仍有效。</p>}
       {(draft.mode === 'auto_review' || Object.values(effectiveTools).includes('review')) && <p className="pw-permission-hint">AI 可能误判，并会产生额外模型调用。</p>}
       <p className="pw-permission-hint">这些设置用于普通私人任务，不覆盖团队、工作配置等专用范围。所有模式都不扩大系统权限、服务授权或任务范围，原生高风险确认仍有效。</p>
     </div>
     <section className="pw-policy-tools" aria-label="单独工具规则">
-      <h3>单独工具规则</h3>
+      <header className="pw-policy-section-heading"><h3>工具规则</h3><p>对个别工具另作安排，优先于默认方式。</p></header>
       <SelectField label="查看工具" compactValue value={ruleFilter} onChange={setRuleFilter} options={[{ id: 'rules', label: `已设置规则 · ${Object.keys(effectiveTools).length}` }, { id: 'all', label: '浏览全部工具定义' }]} />
       {ruleFilter === 'rules' && catalogTools.length === 0 ? <div className="pw-tool-status"><p>还没有单独工具规则，工具按当前默认模式或原生要求处理。</p><Button variant="secondary" onClick={() => setRuleFilter('all')}>查找工具并设置规则</Button></div> : <ToolCatalogBrowser key={ruleFilter} tools={catalogTools} loading={catalogLoading} error={catalogError} onReload={() => void readCatalog()} initialTool={initialTool} status={tool => ruleSummary(draft, snapshot.global, scope, tool.name).replaceAll('此对话', conversationLabel)} detail={ruleDetail} />}
     </section>
-    <Accordion variant="divided" defaultExpandedKeys={[]} className="pw-permission-rules">
+    <Accordion variant="divided" defaultExpandedKeys={[]} className="pw-permission-rules pw-material-content">
       <AccordionItem id="permission-manual" title="按精确工具名设置" description="用于目录尚未登记的动态工具，不支持通配符">
         <TextField label="精确工具名" value={toolName} isDisabled={editingDisabled} onChange={setToolName} placeholder="例如 attachments_create_document" />
         <Button variant="secondary" disabled={editingDisabled || !toolName.trim()} onClick={addExactRule}>暂存为“询问我”</Button>

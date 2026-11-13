@@ -16,3 +16,39 @@
 .pw-task-policy-editor { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .pw-task-policy-editor > h4 { margin: 0; color: var(--pw-ink); font-size: 15px; line-height: 24px; font-weight: 600; }
 .pw-task-policy-editor > p { margin: 0; color: var(--pw-copy); font-size: 13px; line-height: 21px; overflow-wrap: anywhere; }
+
+/* Same quiet grouped surface as MangaFlow settings; the save action and
+ * scope-specific drafts remain explicit rather than becoming auto-save. */
+.pw-policy-workbench { display: flex; flex-direction: column; gap: 24px; }
+.pw-policy-workbench > .pw-permission-scope,
+.pw-policy-workbench > .pw-permission-modes { display: grid; gap: 14px; padding: 18px; border-radius: 20px; }
+.pw-policy-workbench .pw-policy-section-heading { display: grid; gap: 4px; padding-inline: 4px; }
+.pw-policy-section-heading h3 { margin: 0; color: var(--pw-ink); font: 600 15px/24px var(--pw-font); }
+.pw-policy-section-heading p { margin: 0; color: var(--pw-copy); font: 400 13px/21px var(--pw-font); }
+.pw-policy-workbench .pw-permission-scope [role="radiogroup"] { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px; background: var(--pw-inset); border-radius: 16px; }
+.pw-policy-workbench .pw-permission-scope .pw-radio-option { flex: 1 1 120px; min-height: 44px; border-radius: 12px; }
+.pw-policy-workbench .pw-permission-modes [role="radiogroup"] { display: grid; gap: 8px; }
+.pw-policy-workbench .pw-permission-modes .pw-radio-option { min-height: 68px; padding: 12px; border-radius: 14px; background: var(--pw-inset); }
+.pw-policy-workbench .pw-radio-option[data-selected] { background: var(--pw-accent-soft); color: var(--pw-on-accent-soft); }
+.pw-policy-workbench .pw-permission-rules { padding: 4px 16px; border-radius: 20px; }
+.pw-policy-workbench > .pw-permission-actions { gap: 14px; padding: 18px 0 4px; }
+.pw-policy-workbench .pw-permission-action-row { display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; }
+.pw-policy-tool-editor { padding: 16px; border-radius: 16px; background: var(--pw-inset); }
+.pw-policy-change-summary { padding: 14px 16px; background: var(--pw-accent-soft); border-radius: 16px; }
+@media (max-width: 359px) {
+  .pw-policy-workbench > .pw-permission-scope,
+  .pw-policy-workbench > .pw-permission-modes { padding: 14px; }
+  .pw-policy-workbench .pw-permission-action-row > button { flex: 1 1 100%; }
+}
+.pw-policy-workbench > :is(.pw-permission-scope, .pw-permission-modes, .pw-permission-rules) {
+  background: var(--pw-surface);
+  box-shadow: var(--pw-shadow-surface);
+}
+/* Match MangaFlow's stationary labels and hit regions: only local state
+ * material changes, never a scale/slide of the whole permission form. */
+.pw-policy-workbench .pw-radio-option {
+  transition: background-color var(--pw-motion-quick, 120ms) ease, color var(--pw-motion-quick, 120ms) ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pw-policy-workbench .pw-radio-option { transition: none; }
+}

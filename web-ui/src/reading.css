@@ -12,7 +12,7 @@
 .pw-reading-description { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .pw-reading-page { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; }
 .pw-reading-page[hidden],.pw-reading-scroll[hidden],.pw-reading-original[hidden] { display: none; }
-.pw-reading-tools { display: flex; align-items: center; gap: 2px; flex: none; padding: 0 12px 2px; user-select: none; }
+.pw-reading-tools { display: flex; align-items: center; gap: 2px; flex: none; margin: 4px 16px 8px; padding: 4px; border-radius: 22px; flex-wrap: wrap; user-select: none; }
 .pw-reading-modes { display: flex; gap: 2px; }
 .pw-reading-modes button { min-width: 56px; }
 .pw-reading-modes button[aria-pressed=true] { color: var(--pw-ink); background: var(--pw-inset); font-weight: 600; }
@@ -20,7 +20,7 @@
 .pw-reading-feedback { flex: none; min-height: 0; margin: 0; padding: 0 20px; font-size: 12px; color: var(--pw-copy); }
 .pw-reading-feedback:not(:empty) { padding-block: 4px; }
 .pw-reading-scroll { flex: 1; min-height: 0; min-width: 0; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; padding: 12px 20px max(28px,env(safe-area-inset-bottom)); user-select: text; -webkit-user-select: text; }
-.pw-reading-scroll > .pw-markdown { max-width: 820px; margin-inline: auto; color: var(--pw-ink); }
+.pw-reading-scroll > .pw-markdown { max-width: 720px; margin-inline: auto; color: var(--pw-ink); }
 .pw-reading-original { display: block; flex: 1; min-height: 0; min-width: 0; width: 100%; padding: 16px 20px max(28px,env(safe-area-inset-bottom)); margin: 0; resize: none; border: 0; border-radius: 0; background: var(--pw-canvas-chat); color: var(--pw-ink); font: 15px/1.75 var(--pw-font); overscroll-behavior: contain; }
 .pw-reading-page[data-kind=table] .pw-markdown { width: max-content; min-width: 100%; max-width: none; }
 .pw-reading-page[data-kind=table] .pw-markdown-table { overflow: visible; width: max-content; min-width: 100%; margin: 0; }
@@ -40,3 +40,20 @@
   .pw-reading-header { padding-inline: 12px 20px; }
   .pw-reading-scroll,.pw-reading-original { padding-inline: 28px; }
 }
+
+/* ReaderControls / ReaderSettingsPanel: presentation preferences stay separate
+ * from source data. No auto-hide timer while selecting or using assistive input. */
+.pw-reading-page { --pw-reading-size: 16px; }
+.pw-reading-page[data-text-size="large"] { --pw-reading-size: 18px; }
+.pw-reading-page[data-text-size="larger"] { --pw-reading-size: 20px; }
+.pw-reading-page .pw-reading-scroll > .pw-markdown,
+.pw-reading-page .pw-reading-scroll .pw-markdown :is(p,li,td,th),
+.pw-reading-page .pw-reading-original { font-size: var(--pw-reading-size); line-height: 1.8; }
+.pw-reading-page .pw-reading-scroll .pw-markdown :is(pre,code) { font-size: .88em; }
+.pw-reading-tools .pw-reading-modes { padding: 2px; border-radius: 18px; background: var(--pw-inset); }
+.pw-reading-tools .pw-reading-modes button[aria-pressed=true] { border-radius: 16px; background: var(--pw-surface); box-shadow: var(--pw-shadow-surface); }
+
+/* Explicit reader chrome toggle: no timers, scroll triggers or content taps. */
+.pw-reading-tools-visibility { display: flex; justify-content: flex-end; flex: none; padding-inline: 16px; }
+.pw-reading-tools-visibility > button { min-height: 44px; padding: 6px 12px; border: 0; border-radius: 18px; background: transparent; color: var(--pw-copy); font: inherit; font-size: 12px; cursor: pointer; }
+.pw-reading-tools[hidden] { display: none; }

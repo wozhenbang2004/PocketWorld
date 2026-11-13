@@ -6,6 +6,7 @@ import { getRecentTaskProgress } from './task-presentation';
 import { workCollectionPresentation, type WorkCollectionFilter } from './work-collection';
 import { WorkDirectoryControls, type useWorkDirectory } from './WorkDirectory';
 import './project-workspace-overview.css';
+import './project-workspace-manga.css';
 
 export type ProjectWorkspaceTask = {
   id: string;
@@ -88,9 +89,14 @@ export function ProjectWorkspaceOverview({ project, directory, directoryAvailabl
 
   return <section ref={root} className="pw-project-overview" aria-label={`${project.name}的项目工作`}>
     <header className="pw-project-overview-heading">
-      <h2>项目工作</h2>
+      <div><p className="pw-project-overview-eyebrow">项目工作台</p><h2>{project.name}</h2></div>
       {onAskButler && <Button variant="ghost" size="small" onClick={onAskButler}>问管家</Button>}
     </header>
+    <nav className="pw-project-shortcuts" aria-label="项目内容与操作">
+      <Button variant="ghost" leadingIcon={IconFolder} onClick={onOpenFiles}>文件</Button>
+      <Button variant="ghost" leadingIcon={IconEye} disabled={!canPreview} title={canPreview ? '选择入口，查看页面效果' : '当前宿主尚未提供预览入口'} onClick={onOpenPreview}>预览</Button>
+      <Button variant="ghost" leadingIcon={IconTerminal} data-workspace-entry="project-terminal" onClick={onOpenTerminal}>终端</Button>
+    </nav>
     <div className="pw-project-overview-layout">
       <div className="pw-project-overview-work">
         <section className="pw-project-work-tools" aria-label="查找这个项目的工作">
@@ -122,14 +128,7 @@ export function ProjectWorkspaceOverview({ project, directory, directoryAvailabl
         {work.length > 0 && !canOpenTask && <p className="pw-project-work-unavailable" role="status">当前宿主暂不支持打开任务记录。</p>}
         {startContent && <div className="pw-project-new-work">{startContent}</div>}
       </div>
-      <aside className="pw-project-overview-tools" aria-label="项目内容与操作">
-        <h3>项目内容</h3>
-        <nav aria-label="查看项目内容">
-          <Button variant="ghost" className="pw-project-tool-row" data-primary={directory.loaded && !hasFilters && !work.length && !directory.hasMore || undefined} leadingIcon={IconFolder} trailingIcon={IconChevronRight} onClick={onOpenFiles}><span><strong>项目文件</strong><small>查看已保存的项目内容</small></span></Button>
-          <Button variant="ghost" className="pw-project-tool-row" leadingIcon={IconEye} trailingIcon={IconChevronRight} disabled={!canPreview} onClick={onOpenPreview}><span><strong>项目预览</strong><small>{canPreview ? '选择入口，查看页面效果' : '当前宿主尚未提供预览入口'}</small></span></Button>
-        </nav>
-        <div className="pw-project-overview-manual"><h3>需要手动操作时</h3><Button variant="ghost" className="pw-project-tool-row" data-workspace-entry="project-terminal" leadingIcon={IconTerminal} trailingIcon={IconChevronRight} onClick={onOpenTerminal}><span><strong>手动终端</strong><small>在私人工作副本中操作</small></span></Button></div>
-      </aside>
+
     </div>
   </section>;
 }

@@ -6,6 +6,7 @@ import { FunctionalPacksWorkspace } from './FunctionalPacksWorkspace';
 import { acceptPluginReview, acceptPluginView, catalogReceiptResult, catalogReview, catalogUnknown, confirmedPluginResult, confirmedSourceConfiguration, jsPluginIdentity, pluginIdentity, pluginRows, samePluginIdentity, sourceConfiguration, sourceDraft, type PluginData as Data } from './plugins-workspace';
 import './plugins-workspace.css';
 import './ecosystem-depth.css';
+import './capability-management-manga.css';
 
 type Run = (action: string, args?: Data) => Promise<any>;
 type Props = { mode: 'plugins' | 'pluginCatalog'; state: Data; run: Run; supported: (action: string) => boolean; registerTransientBack: (handler: (() => boolean) | null) => void; onNavigate?: (domain: 'plugins' | 'pluginCatalog' | 'mcp' | 'skills') => void };
@@ -51,6 +52,8 @@ function SourceReview({ data }: { data: Data }) {
 /** UI handles remain presentation-only; native module and Page session own every write. */
 export function PluginsWorkspace({ mode, state, run, supported, registerTransientBack, onNavigate }: Props) {
   const [snapshot, setSnapshot] = useState<Data | null>(null), [tab, setTab] = useState(mode === 'plugins' ? 'declaration' : 'catalog');
+  const toolTrigger = useRef<HTMLButtonElement | null>(null);
+  const closeToolDetails = () => { setSelectedId(''); requestAnimationFrame(() => toolTrigger.current?.focus({ preventScroll: true })); };
   const [selectedId, setSelectedId] = useState(''), [history, setHistory] = useState<Data | null>(null), [jsHistory, setJsHistory] = useState<Data | null>(null);
   const [sourceId, setSourceId] = useState(''), [catalogKind, setCatalogKind] = useState('declaration');
   const [installedQuery, setInstalledQuery] = useState(''), [jsQuery, setJsQuery] = useState(''), [catalogQuery, setCatalogQuery] = useState(''), [installedFilter, setInstalledFilter] = useState('all');
@@ -153,7 +156,7 @@ export function PluginsWorkspace({ mode, state, run, supported, registerTransien
       if (review) { discardReview(); return true; }
       if (editor) { setEditor(null); setToken(''); return true; }
       if (history || jsHistory) { setHistory(null); setJsHistory(null); return true; }
-      if (selectedId) { setSelectedId(''); return true; }
+      if (selectedId) { closeToolDetails(); return true; }
       return false;
     });
     return () => registerTransientBack(null);
@@ -232,8 +235,8 @@ export function PluginsWorkspace({ mode, state, run, supported, registerTransien
     {installedGroups.map(group => <section key={group.id} className="pw-eco-directory-group" aria-label={group.label}><header className="pw-eco-group-heading"><h3>{group.label}</h3><span>{group.records.length}</span></header>{group.records.map(row => <article className="pw-source-record pw-eco-record" key={row.installationId}>
       <header><h3>{row.manifest?.name || row.id}</h3><span>{row.enabled ? '已启用' : '已停用'} · {row.manifest?.version}</span></header>
       <p className="pw-eco-record-meta">{pluginRows(row.manifest?.tools).length} 个工具 · {strings(row.grants).length} 项授权</p>
-      <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => { setSelectedId(selectedId === row.id ? '' : row.id); setHistory(null); }}>{selectedId === row.id ? '收起工具' : '管理工具'}</Button><Button variant="ghost" disabled={locked} onClick={() => changePlugin(row, 'enabled', { enabled: !row.enabled })}>{row.enabled ? '停用' : '启用'}</Button><IconButton icon={IconHistory} aria-label="版本历史" title="版本历史" disabled={busy} onClick={() => readHistory(row)}/></div>
-      {selectedId === row.id && <div className="pw-selected-object pw-eco-plugin-detail"><div className="pw-eco-install-identity"><h4>当前安装</h4><Facts rows={[["安装身份", row.installationId], ["状态版本", row.stateRevision], ["工具凭据", row.hasToken ? '已配置' : '未配置'], ["MCP 状态", row.mcpStatus]]} />
+      <div className="pw-form-actions"><Button variant="secondary" aria-expanded={selectedId === row.id} aria-controls={`plugin-tools-${row.installationId}`} disabled={busy} onClick={event => { toolTrigger.current = event.currentTarget; if (selectedId === row.id) closeToolDetails(); else setSelectedId(row.id); setHistory(null); }}>{selectedId === row.id ? '收起工具' : '管理工具'}</Button><Button variant="ghost" disabled={locked} onClick={() => changePlugin(row, 'enabled', { enabled: !row.enabled })}>{row.enabled ? '停用' : '启用'}</Button><IconButton icon={IconHistory} aria-label="版本历史" title="版本历史" disabled={busy} onClick={() => readHistory(row)}/></div>
+      {selectedId === row.id && <div id={`plugin-tools-${row.installationId}`} className="pw-selected-object pw-eco-plugin-detail" role="region" aria-label={`${row.manifest?.name || row.id} 的工具权限`}><div className="pw-eco-install-identity"><h4>当前安装</h4><Facts rows={[["安装身份", row.installationId], ["状态版本", row.stateRevision], ["工具凭据", row.hasToken ? '已配置' : '未配置'], ["MCP 状态", row.mcpStatus]]} />
         <Definition title="安装声明与原始定义" value={row.manifestText || row.manifest} /></div><div className="pw-eco-tools"><div className="pw-eco-section-heading"><h4>工具权限</h4></div>{pluginRows(row.manifest?.tools).map(tool => <div className="pw-source-record pw-eco-tool" key={tool.name}>
           <header><h3>{tool.name}</h3><span>{tool.effect === 'read' ? '读取' : '可能修改'}</span></header><p>{tool.description}</p>
           <Definition title="工具类型与服务地址" value={{kind:tool.kind,endpoint:tool.endpoint}} />

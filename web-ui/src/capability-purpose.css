@@ -27,3 +27,15 @@
   .pw-capability-pending-checks > li { grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .pw-capability-pending-checks > li > button { justify-self: start; }
 }
+
+.pw-capability-purpose-list { padding: 6px 12px; border-radius: 20px; gap: 0; }
+.pw-capability-entry { min-width: 0; }
+.pw-capability-entry[data-readiness="unavailable"] .pw-data-operation-row > svg:first-child { color: var(--pw-muted); }
+.pw-capability-purpose-detail { padding: 20px; border-radius: 20px; }
+.pw-capability-next-steps { padding: 16px; border-radius: 16px; background: var(--pw-inset); }
+.pw-capability-observation { margin-block: -8px; padding-inline: 4px; }
+.pw-capability-purpose-detail > .pw-action-row { display: flex; flex-wrap: wrap; gap: 10px; }
+@media (max-width: 359px) {
+  .pw-capability-purpose-list { padding-inline: 8px; }
+  .pw-capability-purpose-detail { padding: 16px; }
+}

@@ -49,12 +49,12 @@ type ReplyPhase={label:string;state:ReplyActivityState};
  * task success. Failed attempts may arrive before the first text delta. */
 export function replyActivityPhase(draft:ConversationStream|null,resourceState:string|undefined,activity:string):ReplyPhase{
  const hasText=!!draft?.text.trim();
- if(draft?.failed)return {state:'error',label:hasText?'生成中断 · 草稿已保留':'生成中断 · 尚未生成回复'};
- if(resourceState==='queued')return {state:'waiting',label:'等待执行'};
- if(resourceState==='retained')return {state:'waiting',label:'等待补充'};
+ if(draft?.failed)return {state:'error',label:hasText?'回复中断，已保留内容':'回复中断'};
+ if(resourceState==='queued')return {state:'waiting',label:'排队中'};
+ if(resourceState==='retained')return {state:'waiting',label:'开发会话已保留'};
  if(resourceState==='stopping')return {state:'stopping',label:'正在停止'};
- if(draft?.turnEnded)return {state:'settling',label:hasText?`回复草稿 · ${activity||'正在整理结果'}`:`本轮生成已结束 · ${activity||'等待后续处理'}`};
- return hasText?{state:'replying',label:'正在回复'}:{state:'thinking',label:activity||'正在处理这次回复'};
+ if(draft?.turnEnded)return {state:'settling',label:activity||'正在整理结果'};
+ return hasText?{state:'replying',label:'正在回复'}:{state:'thinking',label:activity||'正在思考'};
 }
 /** Only the closing label is retained; actions and activity stop immediately. */
 export function ReplyActivity({phase,onProcess}:{phase:ReplyPhase|null;onProcess?:()=>void}){
@@ -62,11 +62,11 @@ export function ReplyActivity({phase,onProcess}:{phase:ReplyPhase|null;onProcess
  const shown=phase||previous.current;
  if(!shown)return null;
  return <MotionDisclosure open={!!phase} className="pw-reply-phase">
-  <header className="pw-stream-status">
-   <span className="pw-stream-activity">
+  <header className="pw-stream-status" data-reply-state={shown.state}>
+   <span className="pw-stream-activity" role="status" aria-live="polite" aria-atomic="true">
     <ReplyPhaseStatus label={shown.label} state={shown.state} active={!!phase}/>
    </span>
-   <Button variant="ghost" size="small" aria-label="查看当前回复的执行过程" disabled={!phase||!onProcess} onClick={phase?onProcess:undefined} hidden={!onProcess&&!!phase}>查看过程<IconChevronRight size={15} aria-hidden="true"/></Button>
+   {onProcess&&<Button variant="ghost" size="small" aria-label="查看当前回复的执行过程" disabled={!phase} onClick={phase?onProcess:undefined}>执行过程<IconChevronRight size={15} aria-hidden="true"/></Button>}
   </header>
  </MotionDisclosure>;
 }

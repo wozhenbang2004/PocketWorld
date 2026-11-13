@@ -112,14 +112,14 @@ export default function UpdatesWorkspace({ snapshot }: { snapshot: PocketSnapsho
         <section ref={version} className="pw-updates-group pw-updates-version" aria-label="版本与更新状态">
           <p className="pw-updates-caption">当前版本</p>
           <p className="pw-updates-installed">{data?.installedVersion || '正在读取当前版本…'}</p>
-          {data?.release && <div className="pw-updates-release" data-motion-key="release"><h2>新版本 {data.release.versionName}</h2><p className="pw-updates-caption">完整安装包 {megabytes(data.release.bytes)}</p></div>}
+          {data?.release && <div className="pw-updates-release" data-motion-key="release"><h2>新版本 {data.release.versionName}</h2><p className="pw-updates-caption">完整安装包 {megabytes(data.release.bytes)}</p>{data.release.notes && <Accordion variant="divided"><AccordionItem id="update-release-notes" title="本次更新内容"><p className="pw-updates-notes">{data.release.notes}</p></AccordionItem></Accordion>}</div>}
           <MotionFeedback identity={data?.phase || 'reading'} initial={false} data-motion-key="message" className={`pw-updates-message${data?.phase === 'failed' ? ' pw-field-error' : ''}`} role={data?.phase === 'failed' ? 'alert' : 'status'}>{data?.message || '正在读取更新状态…'}</MotionFeedback>
           {error && <MotionFeedback identity={error} className="pw-field-error pw-updates-error" role="alert" data-motion-key="error">{error}</MotionFeedback>}
           {data?.awaitingSystem && <MotionFeedback identity="system-handoff" className="pw-updates-caption" role="status" data-motion-key="system-handoff">请完成或取消原系统窗口，返回后再核对当前状态。</MotionFeedback>}
           {(working || !data) && <div data-motion-key="progress"><ProgressBar aria-label={data?.message || '读取更新状态'} value={progress} isIndeterminate={!measured} showValueLabel={measured} className="pw-updates-progress" /></div>}
           {transfer && <p className="pw-updates-caption pw-updates-transfer" data-motion-key="transfer">{transfer}</p>}
           {primary && <MotionFeedback identity={`${primary.action}:${pending === primary.action}`} initial={false} className="pw-updates-actions" data-motion-key="actions" aria-busy={pending !== null}>
-            <Button disabled={locked} variant={cancellable && !needsRead ? 'secondary' : 'primary'} leadingIcon={primary.action === 'updates.download' ? IconDownload : primary.action === 'updates.check' || primary.action === 'updates.read' ? IconRefresh : undefined} onClick={() => void run(primary.action)}>{pending === primary.action ? '请稍候…' : primary.label}</Button>
+            <Button disabled={locked} variant={cancellable && !needsRead ? 'secondary' : 'primary'} leadingIcon={primary.action === 'updates.download' ? IconDownload : primary.action === 'updates.check' || primary.action === 'updates.read' ? IconRefresh : undefined} onClick={() => void run(primary.action)}>{pending === primary.action ? primary.action === 'updates.check' ? '正在检查…' : primary.action === 'updates.read' ? '正在读取…' : primary.action === 'updates.install' ? '正在打开安装确认…' : primary.action === 'updates.cancel' ? '正在暂停…' : '正在开始下载…' : primary.label}</Button>
             {data?.release && !working && !needsRead && <Button variant="ghost" disabled={locked} onClick={() => void run('updates.check')}>检查新版本</Button>}
           </MotionFeedback>}
           {data?.packageReady && <p className="pw-updates-caption">安装仍需你在 Android 系统窗口确认；返回本页不会自动安装。</p>}
@@ -132,7 +132,6 @@ export default function UpdatesWorkspace({ snapshot }: { snapshot: PocketSnapsho
 
         <section className="pw-updates-group pw-updates-details" aria-label="更新说明">
           <Accordion variant="divided">
-            {data?.release?.notes && <AccordionItem id="update-release-notes" title="版本说明"><p className="pw-updates-notes">{data.release.notes}</p></AccordionItem>}
             <AccordionItem id="update-check-schedule" title="自动检查如何运行"><p>应用启动时及 Android 允许的约 6 小时间隔检查。这是定期检查，不是实时服务端推送。</p></AccordionItem>
             <AccordionItem id="update-verification" title="下载与安装安全"><p>更新包先验证发布清单签名、文件完整性、应用包名、版本和当前安装签名。增量不可用时改用完整包。</p><p>最终安装由 Android 提示确认，不会为绕过签名而卸载应用。此页面和系统安装确认由你亲手操作；手机任务会在敏感步骤交还控制。</p></AccordionItem>
           </Accordion>

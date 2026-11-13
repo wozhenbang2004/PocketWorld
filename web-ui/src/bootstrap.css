@@ -1,5 +1,6 @@
-/* Existing BoardUI surfaces, typography and controls; startup adds no native widgets. */
-.pw-bootstrap{box-sizing:border-box;width:100%;max-width:760px;margin:0 auto;padding:var(--pw-gap-section) var(--pw-page-gutter) 48px;display:flex;flex-direction:column;gap:var(--pw-gap-section);min-height:100dvh;color:var(--pw-ink,#242424);overflow-wrap:anywhere}
+/* MangaFlow SettingsSection hierarchy: quiet section labels, one light surface
+ * per decision, diagnostic content retained. BoardUI owns input and focus. */
+.pw-bootstrap{box-sizing:border-box;width:100%;max-width:680px;margin:0 auto;padding:max(24px,env(safe-area-inset-top)) 24px max(32px,env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:var(--pw-gap-section);min-height:100dvh;color:var(--pw-ink,#242424);overflow-wrap:anywhere}
 .pw-bootstrap-header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding-bottom:8px}
 .pw-bootstrap-brand{font-size:16px;font-weight:500;letter-spacing:-.2px}
 .pw-bootstrap-context{font-size:12px;color:var(--pw-muted,#737373)}
@@ -22,3 +23,19 @@
 .pw-bootstrap .pw-object-table{margin-top:16px;max-width:100%;overflow:auto}.pw-bootstrap-review{display:flex;flex-direction:column;gap:var(--pw-gap-content);min-width:0}
 .pw-bootstrap-review .pw-form-actions{display:flex;flex-wrap:wrap;gap:var(--pw-gap-control)}.pw-bootstrap-review button{white-space:normal;height:auto;min-height:var(--pw-control-target)}
 @media(max-width:480px){.pw-bootstrap-facts>div{grid-template-columns:88px minmax(0,1fr);gap:12px}}
+
+.pw-bootstrap .pw-bootstrap-header { min-height:48px; padding-bottom:16px; }
+.pw-bootstrap .pw-bootstrap-brand { font-weight:600; letter-spacing:-.025em; }
+.pw-bootstrap .pw-bootstrap-context { text-align:end; }
+.pw-bootstrap .pw-bootstrap-summary { gap:16px; }
+.pw-bootstrap .pw-bootstrap-eyebrow { color:var(--pw-muted); font-size:12px; line-height:20px; }
+.pw-bootstrap .pw-bootstrap-heading { gap:12px; align-items:center; }
+.pw-bootstrap .pw-bootstrap-heading > :first-child:not(h1) { flex:none; }
+.pw-bootstrap .pw-bootstrap-summary > .pw-bootstrap-facts { padding:16px; border-radius:20px; background:color-mix(in srgb,var(--pw-surface) 85%,var(--pw-canvas)); }
+.pw-bootstrap .pw-bootstrap-maintenance { padding-top:24px; border-top:1px solid var(--pw-edge); }
+.pw-bootstrap .pw-form-actions:empty { display:none; }
+@media(max-width:380px) {
+ .pw-bootstrap { padding-inline:16px; }
+ .pw-bootstrap .pw-form-actions { align-items:stretch; flex-direction:column; }
+ .pw-bootstrap .pw-form-actions > button { width:100%; }
+}

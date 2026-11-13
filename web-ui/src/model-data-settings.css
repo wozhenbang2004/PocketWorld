@@ -43,8 +43,8 @@
 .pw-secondary-refactor .pw-data-workspace { min-width: 0; outline-offset: 4px; }
 .pw-data-collection { display: flex; flex-direction: column; gap: 24px; }
 .pw-secondary-refactor .pw-data-operation-group > h2 { margin: 0 0 8px; padding-inline: 4px; color: var(--pw-copy); font-size: 13px; line-height: 22px; font-weight: 500; }
-.pw-secondary-refactor .pw-data-purpose-list { margin: 0; padding: 4px 16px; background: var(--pw-surface); border-radius: 20px; }
-.pw-secondary-refactor .pw-data-purpose-list .pw-domain-link { min-height: 76px; padding: 12px 0; gap: 12px; }
+.pw-secondary-refactor .pw-data-purpose-list { margin: 0; padding: 8px 16px; background: var(--pw-surface); border-radius: 20px; box-shadow: 0 2px 5px rgb(0 0 0 / .025), 0 9px 24px rgb(0 0 0 / .025); }
+.pw-secondary-refactor .pw-data-purpose-list .pw-domain-link { min-height: 64px; padding: 12px 0; gap: 12px; }
 .pw-secondary-refactor .pw-data-operation-row { width: 100%; text-align: start; }
 .pw-data-operation-row > svg:first-child:not(:last-child) { color: var(--pw-copy); width: 20px; height: 20px; flex: none; }
 .pw-data-operation-row > svg:last-child { width: 18px; height: 18px; color: var(--pw-muted); }

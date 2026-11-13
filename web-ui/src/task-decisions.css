@@ -4,13 +4,14 @@
 .pw-approval-item.pw-task-decision {
   display: flex;
   flex-direction: column;
-  gap: var(--pw-gap-content);
+  gap: 20px;
   min-width: 0;
   margin-block: 0 var(--pw-gap-content);
-  padding: var(--pw-gap-content);
+  padding: 20px;
   border: 0;
   border-radius: 20px;
-  background: var(--pw-inset, #f6f6f6);
+  background: var(--pw-surface, #fafafa);
+  box-shadow: 0 2px 5px rgb(0 0 0 / .025), 0 9px 24px rgb(0 0 0 / .025);
   color: var(--pw-ink, #242424);
 }
 .pw-task-decision.pw-approval-item .pw-decision-heading { display: flex; flex-direction: column; gap: var(--pw-gap-related); }
@@ -18,9 +19,9 @@
 .pw-task-decision.pw-approval-item .pw-decision-heading h4 {
   margin: 0;
   color: var(--pw-ink);
-  font-size: 16px;
+  font-size: 18px;
   font-weight: 600;
-  line-height: 25px;
+  line-height: 28px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -85,11 +86,11 @@
   user-select: text;
 }
 .pw-task-decision.pw-approval-item .pw-approval-json:focus-visible { outline: 2px solid var(--pw-focus); outline-offset: 3px; }
-.pw-task-decision.pw-approval-item .pw-decision-footer { display: flex; flex-direction: column; gap: var(--pw-gap-content); }
+.pw-task-decision.pw-approval-item .pw-decision-footer { display: flex; flex-direction: column; gap: 12px; padding-top: 16px; border-top: 1px solid var(--pw-edge); }
 .pw-task-decision.pw-approval-item .pw-decision-reviewed { min-height: 44px; align-items: flex-start; padding-block: 7px; }
 .pw-task-decision.pw-approval-item .pw-decision-reviewed > span:last-child { font-size: 13px; line-height: 21px; }
-.pw-task-decision.pw-approval-item .pw-decision-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--pw-gap-control); }
-.pw-task-decision.pw-approval-item .pw-decision-actions > button { max-width: 100%; min-height: 44px; height: auto; white-space: normal; }
+.pw-task-decision.pw-approval-item .pw-decision-actions { display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px; }
+.pw-task-decision.pw-approval-item .pw-decision-actions > button { flex: 1 1 120px; max-width: 100%; min-height: 48px; height: auto; white-space: normal; }
 .pw-task-decision.pw-approval-item .pw-decision-actions .pw-press { min-width: 0; }
 .pw-task-decision.pw-approval-item .pw-decision-actions .pw-press-label { white-space: normal; overflow-wrap: anywhere; }
 .pw-task-decision.pw-approval-item .pw-decision-caveat { margin-top: 0; color: var(--pw-copy); font-size: 12px; line-height: 20px; }

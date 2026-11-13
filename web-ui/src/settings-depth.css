@@ -143,10 +143,10 @@
 .pw-budget-heading h3{font-size:14px;line-height:23px;font-weight:600}
 .pw-budget-heading p{font-size:12px;line-height:21px;margin:4px 0 0;color:var(--pw-copy)}
 .pw-budget-title{display:flex;align-items:flex-start;gap:12px}
-.pw-budget-title>svg{flex:none;padding:9px;box-sizing:content-box;border-radius:12px;background:var(--pw-accent-soft);color:var(--pw-on-accent-soft)}
+.pw-budget-title>svg{flex:none;width:22px;height:22px;margin-top:2px;color:var(--pw-copy)}
 .pw-budget-title>div{min-width:0}
 .pw-budget-title h3{margin:0;font-size:16px;line-height:24px}
-.pw-budget-default{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;margin:16px 0;padding-block:4px}
+.pw-budget-default{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:16px;margin:20px 0;padding:16px;border-radius:16px;background:var(--pw-surface)}
 .pw-budget-default>div{flex:1 1 220px}
 .pw-budget-default h4{font-size:14px;line-height:23px;font-weight:600;margin:0 0 5px}
 .pw-budget-default p{margin:4px 0;font-size:13px;line-height:22px}

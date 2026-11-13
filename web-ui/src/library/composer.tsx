@@ -145,21 +145,21 @@ export function ChatComposer({value,onChange,onSend,onStop,busy,submitting,disab
  const measuredContext=typeof contextPercent==='number'&&Number.isFinite(contextPercent)&&contextPercent>=0&&contextPercent<=100?Math.round(contextPercent):null;
  return <FrameA className={`pw-composer-host pw-squircle-composer ${className}`}>
   <section className="afa-composer" aria-label={label} data-composer-key={composerKey}>
-   <div className="pw-composer-context-rail" aria-label="当前对话上下文">
-    <SmoothComposerSurface radius={24} tone="context"/>
-    {contextStatus!==undefined&&contextPercent===undefined?<ComposerContextMeter composerKey={composerKey} draftText={value} attachmentCount={attachments.length} contextStatus={contextStatus}/>:<span className="pw-composer-context-usage" data-available={measuredContext!==null} role="status" aria-label={measuredContext===null?'上下文占用暂无可核对数据':'上下文已使用 '+measuredContext+'%'} title={measuredContext===null?'上下文占用暂无可核对数据':'上下文占用 '+measuredContext+'%'}>
-     <svg className="pw-context-meter-ring" width="16" height="16" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.5" className="pw-context-meter-track"/>{measuredContext!==null&&measuredContext>0&&<circle cx="10" cy="10" r="7.5" className="pw-context-meter-value" pathLength="100" strokeDasharray={`${measuredContext} 100`} transform="rotate(-90 10 10)"/>}</svg>
-    </span>}
-   </div>
    <div className="afa-card pw-composer-card" data-has-text={hasText} data-has-attachments={attachments.length>0}>
-    <SmoothComposerSurface/>
+    <SmoothComposerSurface radius={24}/>
     <AnimatePresence key={`attachments:${composerKey}`} initial={false}>{attachments.length>0&&<ComposerAttachments key="attachments" files={attachments} onRemove={onRemoveAttachment}/>}</AnimatePresence>
     {onSelectModel&&<div className="pw-composer-model"><button type="button" className="afa-btn pw-model-trigger" onClick={onSelectModel}><Icon name="spark"/><span>{modelName||'选择模型'}</span><Icon name="chevron" size={12}/></button></div>}
     <div className="pw-composer-row">
      {listening?<div className="afa-recording" role="status"><i aria-hidden="true"/><span>{voiceStatus||'正在听写…'}</span>{onDiscardVoice&&<ToolButton label="取消本次听写" icon="close" onClick={onDiscardVoice}/>}</div>:<textarea ref={editor} rows={1} aria-label={label} enterKeyHint="enter" placeholder={placeholder} value={value} disabled={disabled} onChange={e=>onChange(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing&&e.nativeEvent.keyCode!==229&&(!matchMedia('(pointer: coarse)').matches||e.ctrlKey||e.metaKey)){e.preventDefault();if(canSend)onSend()}}}/>}
     </div>
     <div className="pw-composer-toolbar">
-     {(toolbar||onAttach)&&<div className="pw-composer-leading">{toolbar}{onAttach&&<ToolButton label="添加附件" icon="plus" onClick={onAttach} disabled={submitting}/>}</div>}
+     <div className="pw-composer-leading">{toolbar}{onAttach&&<ToolButton label="添加附件" icon="plus" onClick={onAttach} disabled={submitting}/>}
+      <div className="pw-composer-context-slot" aria-label="当前对话上下文">
+       {contextStatus!==undefined&&contextPercent===undefined?<ComposerContextMeter composerKey={composerKey} draftText={value} attachmentCount={attachments.length} contextStatus={contextStatus}/>:<span className="pw-composer-context-usage" data-available={measuredContext!==null} role="status" aria-label={measuredContext===null?'上下文占用暂无可核对数据':'上下文已使用 '+measuredContext+'%'} title={measuredContext===null?'上下文占用暂无可核对数据':'上下文占用 '+measuredContext+'%'}>
+        <svg className="pw-context-meter-ring" width="16" height="16" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.5" className="pw-context-meter-track"/>{measuredContext!==null&&measuredContext>0&&<circle cx="10" cy="10" r="7.5" className="pw-context-meter-value" pathLength="100" strokeDasharray={`${measuredContext} 100`} transform="rotate(-90 10 10)"/>}</svg>
+       </span>}
+      </div>
+     </div>
      <div className="pw-composer-trailing">
       {controls&&<motion.div layout={allowed?'position':false} transition={allowed?motionTransition.layout:motionTransition.instant} className="pw-composer-controls">{controls}</motion.div>}
       <div className="afa-toolbar">

@@ -14,6 +14,7 @@ type Run = (action: string, args?: Data) => Promise<any>;
 type Back = (handler: (() => boolean) | null) => void;
 export type AIServicePreset = { name: string; provider: string; url: string };
 type View = { kind: 'main' | 'add' | 'openai' | 'connection' | 'edit' | 'account' | 'tools' | 'proxy'; id?: string; preset?: AIServicePreset; adding?: boolean };
+type ViewPosition = { scroll: number; focusKey?: string };
 type Props = {
   state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: Back;
   initialView?: 'main' | 'proxy'; onHostSectionChange: (section: 'models' | 'accounts' | 'proxy') => void;
@@ -43,7 +44,7 @@ export function AICenter({ state, data, supported, run, registerTransientBack, i
   const [serviceChange, setServiceChange] = useState<Data | null>(null), [serviceUnknown, setServiceUnknown] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const childBack = useRef<(() => boolean) | null>(null), trail = useRef<View[]>([]), alive = useRef(true), generation = useRef(0), pending = useRef(false), pickerPending = useRef(false);
-  const root = useRef<HTMLElement>(null), proxyReturnScroll = useRef<number | null>(null), accountRead = useRef(0);
+  const root = useRef<HTMLElement>(null), positions = useRef<ViewPosition[]>([]), restorePosition = useRef<ViewPosition | null>(null), accountRead = useRef(0);
   const registerChildBack = useCallback<Back>(handler => { childBack.current = handler; }, []);
   const modelSelectionPending = useCallback((value: boolean) => { pickerPending.current = value; setBusy(value); }, []);
   const latest = useRef({ run, supported }); latest.current = { run, supported };
@@ -76,7 +77,8 @@ export function AICenter({ state, data, supported, run, registerTransientBack, i
   };
   const open = (next: View) => {
     if (pending.current || pickerPending.current || busy) return;
-    if (next.kind === 'proxy') proxyReturnScroll.current = root.current?.closest('.pw-secondary-scroll')?.scrollTop || 0;
+    const active = document.activeElement instanceof HTMLElement ? document.activeElement.closest<HTMLElement>('[data-ai-return-key]') : null;
+    positions.current.push({ scroll: root.current?.closest('.pw-secondary-scroll')?.scrollTop || 0, focusKey: active?.dataset.aiReturnKey });
     generation.current++; trail.current.push(view); setError(''); setNotice(''); setCatalog(null); setModelReview(null);
     // Change the native section in the same update as the view. Secondary's
     // layout effect must enter it before a newly mounted child reads its owner.
@@ -90,21 +92,21 @@ export function AICenter({ state, data, supported, run, registerTransientBack, i
     if (modelReview) { setModelReview(null); return true; }
     if (view.kind === 'main' || view.kind === 'proxy' && trail.current.length === 0) return false;
     const previous: View = trail.current.pop() || { kind: 'main' };
+    restorePosition.current = positions.current.pop() || { scroll: 0 };
     generation.current++; setCatalog(null); setError(''); onHostSectionChange(hostSection(previous)); setView(previous); return true;
   };
   const latestBack = useRef(back); latestBack.current = back;
   useEffect(() => { registerTransientBack(() => latestBack.current()); return () => registerTransientBack(null); }, [registerTransientBack]);
   useLayoutEffect(() => {
     const scroller = root.current?.closest('.pw-secondary-scroll');
-    if (view.kind === 'proxy') {
-      if (scroller) scroller.scrollTop = 0;
-      root.current?.querySelector<HTMLElement>('[data-ai-proxy-heading]')?.focus({ preventScroll: true });
-    } else if (view.kind === 'main' && proxyReturnScroll.current !== null) {
-      if (scroller) scroller.scrollTop = proxyReturnScroll.current;
-      root.current?.querySelector<HTMLButtonElement>('.pw-ai-proxy-link')?.focus({ preventScroll: true });
-      proxyReturnScroll.current = null;
-    }
-  }, [view.kind]);
+    const restored = restorePosition.current;
+    restorePosition.current = null;
+    if (scroller) scroller.scrollTop = restored?.scroll || 0;
+    const target = restored?.focusKey
+      ? Array.from(root.current?.querySelectorAll<HTMLElement>('[data-ai-return-key]') || []).find(node => node.dataset.aiReturnKey === restored.focusKey)
+      : null;
+    (target || root.current?.querySelector<HTMLElement>('[data-ai-detail-heading]'))?.focus({ preventScroll: true });
+  }, [view]);
   const request = async (action: string, args: Data = {}, accept?: (value: Data) => void) => {
     if (pending.current || !supported(action)) return;
     const current = ++generation.current; pending.current = true; setBusy(true); setError('');
@@ -168,12 +170,12 @@ export function AICenter({ state, data, supported, run, registerTransientBack, i
   const saved = (value: Data) => {
     const row = object(value.savedConnection);
     if (value.reconciled === true && value.savedConnection === null && text(value.savedConnectionId)) {
-      setLocalSnapshot(object(value.snapshot)); trail.current = []; setView({ kind: 'main' }); setCatalog(null);
+      setLocalSnapshot(object(value.snapshot)); trail.current = []; positions.current = []; setView({ kind: 'main' }); setCatalog(null);
       setNotice('原保存已确认；当前服务列表中已没有这项连接。已收好原草稿，没有重新创建。'); return;
     }
     if (!text(row.id) || typeof row.revision !== 'number') { setError('无法核实保存的是哪项服务，请返回读取服务列表。'); return; }
     setLocalSnapshot(old => ({ ...(old || data), connections: { ...object((old || data).connections), connections: [...aiConnections(old || data).filter(item => item.id !== row.id), row] } }));
-    trail.current = [{ kind: 'main' }]; setView({ kind: 'connection', id: row.id }); setCatalog(null); setNotice(value.reconciled === true ? '已核对原保存记录，这里显示服务的当前配置。' : '服务已保存。可读取模型目录，再单独选择默认模型或测试推理。');
+    trail.current = [{ kind: 'main' }]; positions.current = [{ scroll: 0, focusKey: `connection:${row.id}` }]; setView({ kind: 'connection', id: row.id }); setCatalog(null); setNotice(value.reconciled === true ? '已核对原保存记录，这里显示服务的当前配置。' : '服务已保存。可读取模型目录，再单独选择默认模型或测试推理。');
   };
   const filtered = connections.filter(row => `${row.name || ''} ${row.baseUrl || ''} ${aiServiceBrand(row)} ${aiSourceLabel(row)}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const filteredAccounts = accounts.filter(row => `${row.label || ''} ChatGPT OpenAI`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
@@ -188,24 +190,24 @@ export function AICenter({ state, data, supported, run, registerTransientBack, i
   ]), { active: !state.webWorkspaceTaskOpen && (topLevel ? !accountsLoading && !!live.connections : !!catalog) });
   return <section className="pw-ai-center" data-ai-view={view.kind} ref={root}>
     {topLevel ? <Tabs selectedKey={tab} isDisabled={busy} onSelectionChange={key => changeTab(String(key))} className="pw-ai-main-tabs">
-      <div className="pw-ai-toolbar"><div className="pw-ai-tabs"><TabList aria-label="AI 接入管理"><Tab id="services">服务</Tab><Tab id="models">模型</Tab><Tab id="routing">调度</Tab></TabList></div></div>
+      <div className="pw-ai-toolbar"><div className="pw-ai-tabs"><TabList aria-label="AI 接入管理"><Tab id="services">服务</Tab><Tab id="models">模型</Tab><Tab id="routing">模型组</Tab></TabList></div></div>
       <TabPanel id={tab} className="pw-ai-tab-panel">
       {tab === 'services' && <>
-        <section className="pw-ai-default-group" aria-label="默认模型"><h3>默认模型</h3><Button variant="ghost" className="pw-ai-service-row" onClick={() => changeTab('models')}><IconControls size={19} aria-hidden /><span className="pw-ai-row-copy"><strong>{text(state.modelName) || '选择默认模型'}</strong><small>用于新对话</small></span><IconChevronRight size={17} aria-hidden /></Button></section>
-        <header className="pw-ai-section-heading pw-ai-services-heading"><div className="pw-ai-services-title"><h2>服务与账号</h2><WorkingStatus active={accountsLoading || !accountsReady && !accountsError && (canReadAccounts || accountsEntryPending)}>{canReadAccounts ? '正在读取账号…' : '账号目录尚未就绪'}</WorkingStatus></div>{connections.length + accounts.length > 0 && <Button variant="ghost" leadingIcon={IconAdd} disabled={!supported('models.connections.add') && !supported('accounts.beginLogin')} onClick={() => open({ kind: 'add' })}>添加</Button>}</header>
+        <section className="pw-ai-default-group" aria-label="默认模型"><h3>默认模型</h3><Button variant="ghost" className="pw-ai-service-row" onClick={() => changeTab('models')}><IconControls size={19} aria-hidden /><span className="pw-ai-row-copy"><strong>{text(state.modelName) || '选择默认模型'}</strong><small>新对话默认使用 · 点此更换</small></span><IconChevronRight size={17} aria-hidden /></Button></section>
+        <header className="pw-ai-section-heading pw-ai-services-heading"><div className="pw-ai-services-title"><h2>服务与账号</h2><WorkingStatus active={accountsLoading || !accountsReady && !accountsError && (canReadAccounts || accountsEntryPending)}>{canReadAccounts ? '正在读取账号…' : '账号目录尚未就绪'}</WorkingStatus></div>{connections.length + accounts.length > 0 && <Button variant="ghost" leadingIcon={IconAdd} data-ai-return-key="add" disabled={!supported('models.connections.add') && !supported('accounts.beginLogin')} onClick={() => open({ kind: 'add' })}>添加</Button>}</header>
         {(connections.length + accounts.length > 5 || query.length > 0) && <SearchField data-input-size="medium" aria-label="搜索服务或账号" placeholder="搜索服务或账号" value={query} onChange={setQuery} className="pw-ai-search" />}
-        {serviceGroups.length ? <div className="pw-ai-service-list">{serviceGroups.map(group => <section className="pw-ai-service-group" key={group.kind} aria-label={group.label}><h3>{group.label}</h3><div className="pw-ai-service-group-body">{group.accounts.map(row => <Button key={`account:${row.id}`} data-motion-key={`account:${row.id}`} variant="ghost" className="pw-ai-service-row" onClick={() => open({ kind: 'account', id: row.id })}><IconAccount size={19} aria-hidden /><span className="pw-ai-row-copy"><strong>{row.label || 'ChatGPT 账号'}</strong><small>ChatGPT · {aiAccountStatus(row)}</small></span><IconChevronRight size={17} aria-hidden /></Button>)}{group.connections.map(row => <Button key={row.id} data-motion-key={`connection:${row.id}`} variant="ghost" className="pw-ai-service-row" onClick={() => open({ kind: 'connection', id: row.id })}><IconKey size={19} aria-hidden /><span className="pw-ai-row-copy"><strong>{row.name || 'API 服务'}</strong><small>{aiServiceBrand(row)} · {aiCredentialStatus(row)}{row.model ? ` · ${row.model}` : ' · 待读取模型'}</small></span><IconChevronRight size={17} aria-hidden /></Button>)}</div></section>)}</div>
+        {serviceGroups.length ? <div className="pw-ai-service-list">{serviceGroups.map(group => <section className="pw-ai-service-group" key={group.kind} aria-label={group.label}><h3>{group.label}<span className="pw-ai-group-count">{group.accounts.length + group.connections.length}</span></h3><div className="pw-ai-service-group-body">{group.accounts.map(row => <Button key={`account:${row.id}`} data-ai-return-key={`account:${row.id}`} data-motion-key={`account:${row.id}`} variant="ghost" className="pw-ai-service-row" onClick={() => open({ kind: 'account', id: row.id })}><IconAccount size={19} aria-hidden /><span className="pw-ai-row-copy"><strong>{row.label || 'ChatGPT 账号'}</strong><small>ChatGPT · {aiAccountStatus(row)}</small></span><IconChevronRight size={17} aria-hidden /></Button>)}{group.connections.map(row => <Button key={row.id} data-ai-return-key={`connection:${row.id}`} data-motion-key={`connection:${row.id}`} variant="ghost" className="pw-ai-service-row" onClick={() => open({ kind: 'connection', id: row.id })}><IconKey size={19} aria-hidden /><span className="pw-ai-row-copy"><strong>{row.name || 'API 服务'}</strong><small>{aiServiceBrand(row)} · {aiCredentialStatus(row)}</small>{row.model && <small className="pw-ai-service-model">{row.model}</small>}</span><IconChevronRight size={17} aria-hidden /></Button>)}</div></section>)}</div>
           : accountsLoading || !accountsReady && (canReadAccounts || accountsEntryPending) ? null
           : !accountsReady && !accountsError ? <p className="pw-ai-loading" role="status">当前版本暂未开放账号读取。</p>
-          : accountsError ? null : <div className="pw-ai-empty"><IconKey size={26} aria-hidden /><h3>{query ? '没有匹配的服务' : '连接你的第一个 AI 服务'}</h3><p>{query ? '试试服务或账号名称。' : '添加 API 密钥，或登录你的 ChatGPT 账号。'}</p>{!query && <Button disabled={!supported('models.connections.add') && !supported('accounts.beginLogin')} onClick={() => open({ kind: 'add' })}>添加服务</Button>}{query && <Button variant="ghost" onClick={() => setQuery('')}>清除搜索</Button>}</div>}
-        {accountsError && <div className="pw-ai-feedback" role="status"><p>账号状态暂未更新。{accounts.length ? '保留上次读取的账号。' : '当前还不能确认已保存的账号。'}</p><Button variant="ghost" disabled={accountsLoading || busy} onClick={() => void loadAccounts()}>重新读取账号</Button></div>}
-        <section className="pw-ai-utilities" aria-label="更多设置"><h3>更多设置</h3><div className="pw-ai-service-group-body"><Button variant="ghost" leadingIcon={IconServer} trailingIcon={IconChevronRight} className="pw-ai-utility-row pw-ai-proxy-link" disabled={busy} onClick={() => open({ kind: 'proxy' })}>本机 API</Button><Button variant="ghost" leadingIcon={IconControls} trailingIcon={IconChevronRight} className="pw-ai-utility-row" onClick={() => open({ kind: 'tools' })}>用量统计</Button></div></section>
+          : accountsError ? null : <div className="pw-ai-empty"><IconKey size={26} aria-hidden /><h3>{query ? '没有匹配的服务' : '连接你的第一个 AI 服务'}</h3><p>{query ? '试试服务或账号名称。' : '添加 API 密钥，或登录你的 ChatGPT 账号。'}</p>{!query && <Button data-ai-return-key="add" disabled={!supported('models.connections.add') && !supported('accounts.beginLogin')} onClick={() => open({ kind: 'add' })}>添加服务</Button>}{query && <Button variant="ghost" onClick={() => setQuery('')}>清除搜索</Button>}</div>}
+        {accountsError && <div className="pw-ai-feedback" role="status"><p>账号状态暂未更新。{accounts.length ? '保留上次读取的账号。' : '当前还不能确认已保存的账号。'}</p><p className="pw-field-error">{accountsError}</p><Button variant="ghost" disabled={accountsLoading || busy} onClick={() => void loadAccounts()}>重新读取账号</Button></div>}
+        <section className="pw-ai-utilities" aria-label="更多设置"><h3>更多设置</h3><div className="pw-ai-service-group-body"><Button variant="ghost" leadingIcon={IconServer} trailingIcon={IconChevronRight} className="pw-ai-utility-row pw-ai-proxy-link" data-ai-return-key="proxy" disabled={busy} onClick={() => open({ kind: 'proxy' })}>本机 API</Button><Button variant="ghost" leadingIcon={IconControls} trailingIcon={IconChevronRight} className="pw-ai-utility-row" data-ai-return-key="usage" onClick={() => open({ kind: 'tools' })}>用量统计</Button></div></section>
       </>}
       {tab === 'models' && <AIModelPicker state={state} can={supported} act={run} scope="default" presentationState={modelPresentation} onPresentationChange={setModelPresentation} onManage={() => changeTab('services')} onAddService={() => open({ kind: 'add' })} onSelected={() => { setNotice('默认模型已保存，新对话将使用这项选择。'); setTab('services'); }} onSelectionPending={modelSelectionPending} />}
       {tab === 'routing' && <AIModelGroups state={state} data={live} supported={supported} run={run} registerTransientBack={registerChildBack} />}
       </TabPanel>
     </Tabs> : <>
-      <header className="pw-ai-detail-heading"><h2 tabIndex={view.kind === 'proxy' ? -1 : undefined} data-ai-proxy-heading={view.kind === 'proxy' ? '' : undefined}>{view.kind === 'proxy' ? '本机 API' : view.kind === 'add' ? '添加服务' : view.kind === 'openai' ? '连接 OpenAI' : view.kind === 'account' ? accountName || 'ChatGPT 账号' : view.kind === 'tools' ? '用量统计' : view.kind === 'edit' ? connection?.name || view.preset?.name || '服务配置' : connection?.name || '服务详情'}</h2></header>
+      <header className="pw-ai-detail-heading"><h2 tabIndex={-1} data-ai-detail-heading>{view.kind === 'proxy' ? '本机 API' : view.kind === 'add' ? '添加服务' : view.kind === 'openai' ? '连接 OpenAI' : view.kind === 'account' ? accountName || 'ChatGPT 账号' : view.kind === 'tools' ? '用量统计' : view.kind === 'edit' ? connection?.name || view.preset?.name || '服务配置' : connection?.name || '服务详情'}</h2></header>
       {view.kind === 'add' && <div className="pw-ai-brand-directory">
         <section className="pw-ai-service-group" aria-label="账号与官方 API"><h3>账号与官方 API</h3><div className="pw-ai-service-group-body">
           <ServiceOption title="OpenAI" detail="ChatGPT 账号或 API 密钥" icon={IconModel} onClick={() => open({ kind: 'openai' })} />
@@ -223,7 +225,8 @@ export function AICenter({ state, data, supported, run, registerTransientBack, i
       {view.kind === 'proxy' && renderProxy(registerChildBack)}
       {view.kind === 'connection' && (connection ? <>
         <div className="pw-ai-service-summary"><p>{aiSourceLabel(connection)} · {aiServiceBrand(connection)} · {aiCredentialStatus(connection)}</p><small>{connection.baseUrl}</small><small>{aiConnectionSource(connection).externalRelayEligible ? '用于应用内推理，也可单独配置本机 API。' : '用于应用内推理。此来源暂不支持本机 API。'}</small></div>
-        <div className="pw-ai-detail-actions"><Button leadingIcon={IconRefresh} disabled={busy || !supported('models.catalog.refresh')} onClick={() => readCatalog(true)}>{busy ? '读取中…' : '读取模型'}</Button><Button variant="ghost" leadingIcon={IconControls} disabled={busy} onClick={() => open({ kind: 'edit', id: connection.id })}>配置与测试</Button></div>
+        <section className="pw-ai-next-step" aria-label="接下来"><h3>{connection.enabled === false ? '服务已停用' : ((!connection.hasApiKey && !connection.hasAwsSession) || ['expired', 'not_configured'].includes(connection.credentialStatus)) ? '先完善连接凭据' : '选择要使用的模型'}</h3><p>{connection.enabled === false ? '可在下方服务管理中启用；已有任务不会更换服务。' : ((!connection.hasApiKey && !connection.hasAwsSession) || ['expired', 'not_configured'].includes(connection.credentialStatus)) ? '打开编辑连接，填写或更新凭据后保存。' : '读取此服务的模型目录，再选择默认模型。保存连接不代表模型调用已经成功。'}</p></section>
+        <div className="pw-ai-detail-actions"><Button leadingIcon={IconRefresh} disabled={busy || !supported('models.catalog.refresh')} onClick={() => readCatalog(true)}>{busy ? '读取中…' : '读取模型'}</Button><Button variant="ghost" leadingIcon={IconControls} data-ai-return-key="edit-connection" disabled={busy} onClick={() => open({ kind: 'edit', id: connection.id })}>编辑连接</Button></div>
         {catalog && aiCatalogCurrent(catalog, connection) && <section className="pw-ai-source-catalog"><header className="pw-ai-section-heading"><h3>模型目录</h3>{catalog.catalogFetchedAtMillis > 0 && <span>{new Date(catalog.catalogFetchedAtMillis).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>}</header>
           {catalog.refreshAttempt?.status === 'failed' && <MotionFeedback identity={String(catalog.refreshAttempt.message || 'failed')} className="pw-ai-feedback" role="status">{catalog.refreshAttempt.message || '这次目录读取失败。你仍可查看上次成功读取的记录，或重新读取。'}</MotionFeedback>}
           {catalog.catalogAvailable === false && <p className="pw-ai-feedback">{catalog.catalogUnavailableReason || '此服务没有可读取的模型目录，请在配置中填写模型 ID。'}</p>}
@@ -253,5 +256,5 @@ export function AICenter({ state, data, supported, run, registerTransientBack, i
   </section>;
 }
 function ServiceOption({ title, detail, icon: Icon = IconKey, onClick }: { title: string; detail: string; icon?: typeof IconKey; onClick: () => void }) {
-  return <Button variant="ghost" className="pw-ai-service-row" onClick={onClick}><Icon size={20} aria-hidden /><span className="pw-ai-row-copy"><strong>{title}</strong><small>{detail}</small></span><IconChevronRight size={18} aria-hidden /></Button>;
+  return <Button variant="ghost" className="pw-ai-service-row" data-ai-return-key={title} onClick={onClick}><Icon size={20} aria-hidden /><span className="pw-ai-row-copy"><strong>{title}</strong><small>{detail}</small></span><IconChevronRight size={18} aria-hidden /></Button>;
 }

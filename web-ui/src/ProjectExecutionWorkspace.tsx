@@ -5,6 +5,7 @@ import { bridge } from './bridge';
 import { registerOverlayBack } from './overlay-back';
 import { projectExecutionActivity, projectExecutionCanInput, projectExecutionRows, projectExecutionShouldRead, type ProjectExecutionData as Data } from './project-execution';
 import './local-workspace.css';
+import './project-workspace-manga.css';
 
 type Run = (action: string, args?: Data) => Promise<any>;
 const ownerWindow = () => { const view = bridge.getState().view as Data; return [bridge.getDocumentEpoch(), view.taskId, view.section, view.resumeRevision].join('|'); };

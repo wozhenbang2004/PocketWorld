@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import './project-workspace-manga.css';
 
 type Frame = { revision: number; generation: number; cols: number; rows: number; packets: string[]; gap?: boolean };
 const loaded = new Map<string, Promise<void>>();
@@ -48,6 +49,6 @@ export default function TerminalSurface({ frame, dimensionMode = 'ssh', onFrameA
     return () => { alive.current = false; pending.current = null; terminal.current?.dispose(); terminal.current = null; };
   }, []);
   useEffect(() => { pending.current = frame; void drain(); }, [frame]);
-  return <><div ref={element} role="region" aria-label="原任务终端输出" style={{ overflow: 'auto', minHeight: 260, maxHeight: '60vh' }} />
+  return <><div ref={element} role="region" aria-label="原任务终端输出" className="pw-terminal-surface" />
     {frame?.gap && <p className="pw-field-hint">较早输出已被覆盖，当前屏幕由保留的实际字节重建。</p>}{error && <p role="alert" className="pw-secondary-error">{error}</p>}</>;
 }

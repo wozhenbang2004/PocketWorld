@@ -108,3 +108,24 @@
 
 .pw-capabilities-catalog-view { display: flex; flex-direction: column; gap: 24px; min-width: 0; }
 .pw-capabilities-catalog-view[hidden] { display: none; }
+
+/* MangaFlow's softly elevated settings groups, with one stable icon/text axis. */
+.pw-capabilities-workspace { gap: 24px; }
+.pw-capabilities-introduction { gap: 6px; padding-inline: 4px; }
+.pw-capabilities-introduction > .pw-capabilities-intro { color: var(--pw-ink); font: 600 24px/32px var(--pw-font); letter-spacing: -.025em; }
+.pw-capability-purpose-groups { display: grid; gap: 24px; min-width: 0; }
+.pw-capabilities-group > header { margin-bottom: 8px; }
+.pw-capabilities-group > header > h2 { font-weight: 500; color: var(--pw-muted); }
+.pw-capabilities-workspace .pw-data-operation-row.pw-domain-link { min-height: 72px; padding: 12px 8px; border-radius: 14px; gap: 12px; }
+.pw-capabilities-workspace .pw-data-operation-row.pw-domain-link > svg:first-child { width: 22px; height: 22px; color: var(--pw-copy); }
+.pw-capabilities-workspace .pw-data-operation-row.pw-domain-link > span > span > span { font-size: 15px; line-height: 23px; font-weight: 500; }
+.pw-capabilities-workspace .pw-data-operation-row.pw-domain-link:focus-visible { outline: 2px solid var(--pw-accent); outline-offset: 2px; }
+.pw-capabilities-workspace .pw-capabilities-list,
+.pw-capabilities-workspace .pw-capabilities-preparation { padding: 6px 12px; }
+.pw-capabilities-workspace .pw-capabilities-management { padding: 6px; border-radius: 20px; display: flex; flex-wrap: wrap; gap: 4px; }
+.pw-capabilities-management > button { flex: 1 1 auto; min-height: 44px; border-radius: 14px; }
+.pw-capabilities-workspace .pw-capabilities-preparation .pw-data-operation-row > svg:first-child { width: 38px; height: 38px; padding: 8px; color: var(--pw-on-accent-soft); }
+.pw-capabilities-workspace :is(.pw-capabilities-list, .pw-capabilities-preparation, .pw-capability-purpose-list) {
+  background: var(--pw-surface);
+  box-shadow: var(--pw-shadow-surface);
+}

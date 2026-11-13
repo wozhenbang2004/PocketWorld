@@ -45,7 +45,7 @@ export function GroupsWorkspace({ state, data, run, supported, registerTransient
   const resources = snapshot?.nativeResources || {}, connections = groupRows(snapshot?.nativeConnections);
   const stale = !!original && !sameGroupVersion(original, groupRows(snapshot?.groups).find(row => row.id === original.id));
   const viewKey = editor ? `edit:${draftKey.current}` : !groupId ? 'groups' : `${groupId}:${tab}:${tab === 'tasks' ? identity(selectedRequest) || 'list' : ''}`;
-  useSurfaceEnter(root, viewKey, { selector: '', depth: !groupId ? editor ? 1 : 0 : editor || selectedRequest && tab === 'tasks' ? 2 : 1, active: !state.webWorkspaceTaskOpen });
+  useSurfaceEnter(root, viewKey, { selector: ':scope > .pw-group-editor, :scope > .pw-group-tabs > [role=tabpanel]:not([hidden]), :scope > .pw-collaboration-directory', depth: !groupId ? editor ? 1 : 0 : editor || selectedRequest && tab === 'tasks' ? 2 : 1, active: !state.webWorkspaceTaskOpen });
   const rememberPosition = () => { positions.current[viewKey] = root.current?.closest<HTMLElement>('.pw-secondary-scroll')?.scrollTop || 0; };
   useLayoutEffect(() => {
     const scroll = root.current?.closest<HTMLElement>('.pw-secondary-scroll');
@@ -317,7 +317,7 @@ export function GroupsWorkspace({ state, data, run, supported, registerTransient
     </form>}
 
     {!editor && group && <Tabs className="pw-group-tabs" selectedKey={tab} onSelectionChange={key => changeTab(String(key))}>
-      <TabList aria-label="群工作区"><Tab id="tasks" isDisabled={busy}>群请求</Tab><Tab id="members" isDisabled={busy}>成员</Tab><Tab id="policy" isDisabled={busy}>能力与额度</Tab></TabList>
+      <TabList className="pw-material-navigation pw-collection-navigation" aria-label="群工作区"><Tab id="tasks" isDisabled={busy}>群请求</Tab><Tab id="members" isDisabled={busy}>成员</Tab><Tab id="policy" isDisabled={busy}>能力与额度</Tab></TabList>
       <TabPanel id="tasks">
         {!selectedRequest && <div className="pw-group-request-directory" aria-label="群请求列表">
           {requests.length > 0 && <><SearchField fieldClassName="pw-collaboration-search" shape="rounded" aria-label="搜索群请求" placeholder="搜索目标或发起人" value={query} onChange={setQuery} /><header className="pw-collaboration-group-heading"><h3>这个群的请求</h3><span>{visibleRequests.length} 项</span></header></>}
@@ -372,7 +372,7 @@ export function GroupsWorkspace({ state, data, run, supported, registerTransient
         <Accordion><AccordionItem id="saved-quota" title="任务与媒体额度" description={`全群每日 ${group.quota?.dailyTasks ?? '未设置'} 项任务 · 同时运行 ${group.quota?.maxConcurrent ?? '未设置'} 项`}><dl className="pw-facts">{groupQuotaFields.map(([key, label]) => <div key={key}><dt>{label}</dt><dd>{group.quota?.[key] ?? '尚未提供'}</dd></div>)}</dl><p className="pw-muted">模型额度是本地累计保守预留，不是服务商账单 token。</p></AccordionItem></Accordion>
       </section></TabPanel>
     </Tabs>}
-    <SettingsDialog isOpen={!!review} onClose={() => { if (!busy) closeReview(); }} title={review?.command === 'group.create' ? '创建这个群空间' : review?.command === 'delivery.send' ? '发回这份原产物' : review?.command?.startsWith('task.') ? '核对原任务操作' : '保存这份群设置'}><div className="pw-collaboration-dialog" data-collaboration-kind="GroupsWorkspace">
+    <SettingsDialog className="pw-group-modal" isOpen={!!review} onClose={() => { if (!busy) closeReview(); }} title={review?.command === 'group.create' ? '创建这个群空间' : review?.command === 'delivery.send' ? '发回这份原产物' : review?.command?.startsWith('task.') ? '核对原任务操作' : '保存这份群设置'}><div className="pw-collaboration-dialog" data-collaboration-kind="GroupsWorkspace">
       {review && <div className="pw-group-review">
         <p className="pw-group-review-context">{review.group?.name || review.input.name}</p>
         {review.command === 'group.create' && <><p>连接 {review.connection?.name || review.input.accountId} · {review.input.conversationKind === 'qq_guild_channel' ? `频道 ${review.input.conversationParentId} / ` : ''}{review.input.roomId}</p><p className="pw-group-scope">空间创建后保持关闭，继续添加成员与授权。</p></>}

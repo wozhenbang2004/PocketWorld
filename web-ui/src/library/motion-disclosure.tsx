@@ -59,7 +59,7 @@ export function MotionDisclosure({open,children,resize=true,className='',style,i
   setMoving(true);
   // animate(MotionValue) replaces its prior animation while retaining velocity.
   // Do not jump/set a new origin or inject velocity:0 on a normal retarget.
-  const size=animate(height,target,motionTransition.layout);
+  const size=animate(height,target,motionTransition.panel);
   animate(opacity,state.open?1:0,state.open?motionTransition.enter:motionTransition.exit);
   void size.then(()=>{
    if(generation.current!==token)return;

@@ -1,0 +1,59 @@
+/* MangaFlow SettingsSection and stable reading surfaces adapted to the
+ * existing project workbench. No terminal/session/approval behavior changes. */
+.pw-project-overview { margin-inline: auto; width: 100%; }
+.pw-project-overview > .pw-project-overview-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
+.pw-project-overview-heading > div { min-width: 0; }
+.pw-project-overview-heading .pw-project-overview-eyebrow { margin: 0 0 4px; font: 500 12px/20px var(--pw-font); color: var(--pw-muted); }
+.pw-project-overview .pw-project-overview-heading h2 { font: 600 24px/32px var(--pw-font); overflow-wrap: anywhere; }
+.pw-project-overview .pw-project-overview-work { padding: 20px; border-radius: 22px; box-shadow: var(--pw-shadow-surface); }
+.pw-project-overview .pw-project-work-tools { gap: 12px; margin-bottom: 24px; }
+.pw-project-overview .pw-project-work-filters { padding: 4px; gap: 4px; border-radius: 16px; background: var(--pw-inset); }
+.pw-project-overview .pw-project-work-filters > button { flex: 1 1 auto; border-radius: 12px; }
+.pw-project-overview .pw-project-work-filters > button[aria-pressed="true"] { background: var(--pw-surface); box-shadow: var(--pw-shadow-surface); color: var(--pw-ink); }
+.pw-project-overview .pw-project-work-row { padding: 12px 8px; border-radius: 14px; }
+.pw-project-overview .pw-project-work-mark { background: transparent; width: 24px; height: 28px; border-radius: 9px; }
+.pw-project-overview .pw-project-work-empty { padding: 24px 4px; }
+.pw-project-development.pw-settings-section { padding: 20px; border-radius: 22px; background: var(--pw-surface); box-shadow: var(--pw-shadow-surface); gap: 20px; }
+.pw-development-intro { display: grid; gap: 4px; }
+.pw-development-intro h3 { margin: 0; font: 600 18px/26px var(--pw-font); color: var(--pw-ink); }
+.pw-development-intro p { margin: 0; font: 400 13px/21px var(--pw-font); color: var(--pw-copy); }
+.pw-project-file-editor.pw-file-workspace > header.pw-file-heading { padding: 18px 20px; border-radius: 20px; background: var(--pw-surface); box-shadow: var(--pw-shadow-surface); }
+.pw-project-file-editor .pw-file-tabs [role="tablist"] { padding: 4px; gap: 4px; border-radius: 16px; background: var(--pw-inset); }
+.pw-project-file-editor .pw-file-tabs [role="tab"] { min-height: 44px; border-radius: 12px; }
+.pw-project-file-editor .pw-file-tabs [role="tab"][aria-selected="true"] { background: var(--pw-surface); color: var(--pw-ink); box-shadow: var(--pw-shadow-surface); }
+.pw-project-file-editor .pw-file-save-bar { padding: 14px 16px max(14px, env(safe-area-inset-bottom)); border-radius: 18px; gap: 12px; background: var(--pw-surface); box-shadow: var(--pw-shadow-surface); }
+.pw-project-file-editor .pw-file-version-row { min-height: 60px; border-radius: 14px; padding: 12px; }
+.pw-project-execution .pw-local-screen-toolbar { gap: 12px; padding: 12px 16px; border-radius: 18px 18px 0 0; background: var(--pw-inset); }
+.pw-project-execution .pw-local-screen-toolbar span { min-width: 0; overflow-wrap: anywhere; }
+.pw-terminal-surface { overflow: auto; min-height: 260px; max-height: 60vh; border-radius: 16px; padding: 12px; background: #101418; color: #e4e8ed; overscroll-behavior: contain; }
+.pw-terminal-surface .xterm { padding: 0; }
+@media (max-width: 680px) {
+  .pw-project-overview > .pw-project-overview-layout { display: flex; flex-direction: column; gap: 20px; }
+  .pw-project-overview .pw-project-overview-work { padding: 16px; }
+  .pw-project-development.pw-settings-section { padding: 16px; }
+  .pw-project-file-editor.pw-file-workspace > header.pw-file-heading { padding: 16px; }
+  .pw-terminal-surface { padding: 8px; }
+}
+/* Like MangaFlow's reading controls, frequent project destinations remain a
+ * compact reachable rail, rather than following an arbitrarily long task list. */
+.pw-project-overview > .pw-project-overview-layout { display: block; }
+.pw-project-shortcuts { display: flex; gap: 6px; padding: 6px; margin-bottom: 20px; border-radius: 22px; background: var(--pw-surface); box-shadow: var(--pw-shadow-navigation); }
+.pw-project-shortcuts > button { flex: 1 1 0; min-width: 0; min-height: 44px; gap: 8px; border-radius: 16px; }
+.pw-project-shortcuts > button > svg { width: 20px; height: 20px; }
+/* Start-method switching keeps drafts mounted but must not expose the
+ * inactive method after this file's grid presentation rule is applied. */
+.pw-project-development.pw-settings-section[hidden] { display: none; }
+/* Nested checkout preserves the original editor, diff and save contract.
+ * Files are open on entry; selecting one doesn't rebuild the dialog. */
+.pw-checkout-files > .pw-checkout-identity { padding: 10px 12px; border-radius: 12px; background: var(--pw-inset); font: 12px/1.6 ui-monospace, monospace; }
+.pw-checkout-files .pw-checkout-file-list { gap: 2px; padding: 6px; border-radius: 16px; background: var(--pw-inset); overscroll-behavior: contain; }
+.pw-checkout-files .pw-checkout-file-list > button { min-height: 48px; padding: 12px; border-radius: 12px; }
+.pw-checkout-files .pw-checkout-file-list > button[aria-current="true"] { background: var(--pw-accent-soft); color: var(--pw-on-accent-soft); }
+.pw-checkout-files .pw-checkout-editor > header { padding: 16px; border-radius: 16px; background: var(--pw-surface); }
+.pw-checkout-files .pw-checkout-editor > header h3 { margin: 0 0 6px; }
+.pw-checkout-files .pw-checkout-editor > header small { color: var(--pw-copy); }
+.pw-checkout-files .pw-checkout-adoption { padding: 16px; border-radius: 20px; background: var(--pw-surface); box-shadow: var(--pw-shadow-content); }
+@media (max-width: 480px) {
+  .pw-checkout-files .pw-checkout-file-list > button { flex-direction: column; align-items: flex-start; gap: 4px; }
+  .pw-checkout-files .pw-checkout-file-list > button small { margin: 0; }
+}

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { IconChevronLeft, IconChevronRight, IconMemory, IconRefresh, IconSearch } from './icons';
 import './knowledge-depth.css';
 import './memory-reading.css';
+import { useSurfaceEnter } from './library/surface-motion';
 import { Tabs, TabList, Tab, TabPanel } from './shell-library';
 import { Accordion, AccordionItem, Button, CheckboxField, IconButton, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { MemoryAssertionFields } from './MemoryAssertionFields';
@@ -31,6 +32,8 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, registerBe
   const [scopeName, setScopeName] = useState('');
   const [consolidation, setConsolidation] = useState<Data[]>([]), [operation, setOperation] = useState<Data | null>(null), [stopping, setStopping] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState(''), [acknowledged, setAcknowledged] = useState(false), [attempted, setAttempted] = useState(false);
+  const workspaceRoot = useRef<HTMLDivElement | null>(null);
+  useSurfaceEnter(workspaceRoot, selection ? `memory:${(selection.candidate || selection.record)?.id || selection.readHandle}` : `collection:${tab}`, { selector: selection ? ":scope > .pw-memory-reading" : ":scope > .pw-memory-collection", depth: selection ? 1 : 0 });
   const selectionPanel = useRef<HTMLElement | null>(null), collectionPanel = useRef<HTMLElement | null>(null);
   const listScrollPosition = useRef(0), openedRecord = useRef('');
   const alive = useRef(true), entered = useRef(false), readHandle = useRef(''), reviewHandle = useRef(''), selectedHandles = useRef<string[]>([]);
@@ -145,13 +148,13 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, registerBe
   const operationLabel: Record<string, string> = { correct: '保存纠正', forget: '遗忘这条记忆', core: review?.core ? '加入核心记忆' : '移出核心记忆', accept: '采用这条候选', reject: '拒绝这条候选', edit: '保存候选修改', archive: '清理终态候选正文', reconsider: '重新考虑被拒绝候选', assertion: '核对主体与关系', consolidation: '从所选记忆归纳候选' };
   const running = !!operation && !operation.settled;
   const candidateHasEdits = candidate && record && (draft !== record.text || draftMeta.layer !== (record.layer || 'fact') || draftMeta.reason !== (record.reason || '') || draftMeta.applicability !== (record.applicability || '') || draftMeta.confidence !== String(record.confidence ?? 0.5));
-  return <div className="pw-memory-workspace pw-knowledge-workspace">
+  return <div ref={workspaceRoot} className="pw-memory-workspace pw-knowledge-workspace">
     <FormDraftNotice draft={formDraft} />
     {error && error !== alreadyShownError && <p className="pw-secondary-error" role="alert">{error}</p>}{notice && <p className="pw-field-hint" role="status">{notice}</p>}
     {snapshot && !snapshotCurrent && !busy && <p className="pw-field-hint" role="status">当前保留上次读取的内容，尚未核对最新状态。请重新读取后再操作。</p>}
     <section ref={collectionPanel} className="pw-memory-collection" aria-label="记忆管理" hidden={!!selection}>
       <Tabs selectedKey={tab} onSelectionChange={value => { setTab(String(value)); setFilter('all'); closeRecord(); }} className="pw-team-tabs pw-memory-tabs">
-        <TabList aria-label="记忆视图"><Tab id="records" isDisabled={busy || !snapshotCurrent}>已保存</Tab><Tab id="candidates" isDisabled={busy || !snapshotCurrent}>待审阅</Tab><Tab id="history" isDisabled={busy || !snapshotCurrent}>旧事与来源</Tab></TabList>
+        <TabList className="pw-material-navigation pw-collection-navigation" aria-label="记忆视图"><Tab id="records" isDisabled={busy || !snapshotCurrent}>已保存</Tab><Tab id="candidates" isDisabled={busy || !snapshotCurrent}>待审阅</Tab><Tab id="history" isDisabled={busy || !snapshotCurrent}>旧事与来源</Tab></TabList>
         <TabPanel id={tab}>
       <header className="pw-memory-scope-heading"><div className="pw-memory-scope-copy"><p className="pw-detail-location">{scopeName || (busy ? '正在核对记忆范围' : '记忆范围尚未确认')}</p><WorkingStatus active={busy}>正在核对原回执…</WorkingStatus></div><IconButton className="pw-utility-icon" icon={IconRefresh} aria-label="重新读取记忆" title="重新读取记忆" disabled={busy} onClick={() => load()} /></header>
       {tab === 'history' ? <MemoryHistoryWorkspace key={namespace + ':' + String(!!snapshot)} scopeKey={namespace + ':' + String(snapshot?.cognitionRevision || '')} readOnly={busy || !snapshotCurrent} run={run} registerTransientBack={registerHistoryBack} /> : <>
@@ -205,8 +208,8 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, registerBe
       {!attempted && <Button variant="ghost" disabled={busy} onClick={() => formDraft.discard(() => { setDraft(record?.text || ''); setDraftMeta({ layer: record?.layer || 'fact', reason: record?.reason || '', applicability: record?.applicability || '', confidence: String(record?.confidence ?? 0.5) }); closeRecord(); })}>放弃未提交的修改</Button>}
       {(attempted || formDraft.requiresRecheck) && <div className="pw-form-actions"><p className="pw-muted">本次提交已结束或结果待核对。重新读取只查询当前状态，不会重复提交。</p><Button variant="secondary" disabled={busy} onClick={() => { formDraft.clearSubmitted(); refreshSelection(record.id, candidate); }}>重新读取当前状态</Button></div>}
     </section>}
-    <SettingsDialog isOpen={!!review} onClose={() => { if (!busy) closeReview(); }} title={operationLabel[review?.operation] || '核对记忆修改'}><div className="pw-knowledge-review">
-      {review?.operation === 'consolidation' ? <><p>向开始时的当前模型发送以下原记忆，归纳为待审候选。原记忆保留；不会自动采用新候选。</p>{rows(review.records).map(row => <p key={row.id} className="pw-reading-copy">{row.text}</p>)}</> : <><p className="pw-muted">确认只应用到刚才读取的原版本。</p><h3>原内容</h3><p className="pw-reading-copy">{review?.before?.text}</p>{review?.afterText && <><h3>修改后</h3><p className="pw-reading-copy">{review.afterText}</p></>}{review?.reason && <p>理由：{review.reason}</p>}{review?.assertion && <p>主体：{review.assertion.subject?.label || '主人'} · {review.assertion.kind} · {review.assertion.predicate} · {review.assertion.object}。此修改继续留在待审候选。</p>}</>}
+    <SettingsDialog className="pw-memory-modal" isOpen={!!review} onClose={() => { if (!busy) closeReview(); }} title={operationLabel[review?.operation] || '核对记忆修改'}><div className="pw-knowledge-review">
+      {review?.operation === 'consolidation' ? <><p>向开始时的当前模型发送以下原记忆，归纳为待审候选。原记忆保留；不会自动采用新候选。</p>{rows(review.records).map(row => <p key={row.id} className="pw-reading-copy">{row.text}</p>)}</> : <><p className="pw-muted">确认只应用到刚才读取的原版本。</p><section className="pw-memory-review-version"><h3>当前内容</h3><p className="pw-reading-copy">{review?.before?.text}</p></section>{review?.afterText && <section className="pw-memory-review-version"><h3>修改后</h3><p className="pw-reading-copy">{review.afterText}</p></section>}{review?.reason && <p>理由：{review.reason}</p>}{review?.assertion && <p>主体：{review.assertion.subject?.label || '主人'} · {review.assertion.kind} · {review.assertion.predicate} · {review.assertion.object}。此修改继续留在待审候选。</p>}</>}
       {review?.operation === 'forget' && <p>将遗忘原记忆，退休相关派生上下文，并阻止相同旧来源自动重新导入；原消息保留。</p>}{review?.operation === 'accept' && <p>采用候选不会证明内容已独立核实，也不会自动启用技能或取得执行权限。</p>}{review?.operation === 'archive' && <p>将移除这条终态候选的正文与拒绝理由；已接受的正式记忆和必要去重标记保留。这项清理不能恢复正文。</p>}{review?.operation === 'reconsider' && <p>只将这一条完整拒绝项重新放回待审；不会自动采用，也不会解除其他拒绝项或来源遗忘屏障。</p>}
       <CheckboxField isSelected={acknowledged} onChange={setAcknowledged}>我已阅读内容和影响，确认这一次操作</CheckboxField><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={closeReview}>返回</Button><Button disabled={busy || !acknowledged} onClick={confirm}>{review?.operation === 'consolidation' ? '开始这次归纳' : '确认这次修改'}</Button></div>
     </div></SettingsDialog>
