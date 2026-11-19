@@ -10,7 +10,7 @@ import {NotificationTeamAttention,type TeamAttentionLocator} from './Notificatio
 export type InboxLane='attention'|'updates';
 export type UpdateSource='results'|'external';
 export type TaskInboxPage={cursor?:string;prior?:string[];focus?:string};
-export type NotificationViewMemory={lane?:InboxLane;updateSource?:UpdateSource;externalOpen?:string;externalUnreadRequest?:number;externalUnreadConsumed?:number;taskPages?:Partial<Record<'attention'|'taskUpdates',TaskInboxPage>>;remoteFilter?:'all'|'unread'|'issues'|'archived';teamCursor?:string;teamItemCursor?:string;teamPrior?:{run:string;item:string}[];teamFocus?:string};
+export type NotificationViewMemory={lane?:InboxLane;updateSource?:UpdateSource;externalOpen?:string;externalUnreadRequest?:number;externalUnreadConsumed?:number;attentionRequest?:number;attentionConsumed?:number;taskPages?:Partial<Record<'attention'|'taskUpdates',TaskInboxPage>>;remoteFilter?:'all'|'unread'|'issues'|'archived';teamCursor?:string;teamItemCursor?:string;teamPrior?:{run:string;item:string}[];teamFocus?:string};
 
 type Event = {
   seq:number; source_key:string; kind:string; title:string; body:string;
@@ -40,7 +40,8 @@ export default function RemoteInboxWorkspace({state,navigationTrigger,onBack,reg
   const nativeEntry=state?.openRevision&&(state.selectedSeq||state.selectionError)?JSON.stringify([state.configId,state.openRevision,state.selectedSeq,state.selectionError]):'';
   const openingExternal=!!nativeEntry&&nativeEntry!==memory.externalOpen,unreadRequest=memory.externalUnreadRequest||0;
   const openingUnread=unreadRequest>0&&unreadRequest!==(memory.externalUnreadConsumed||0);
-  const [lane,setLane]=useState<InboxLane>(openingExternal||openingUnread?'updates':memory.lane||'attention'),[source,setSource]=useState<UpdateSource>(openingExternal||openingUnread?'external':memory.updateSource||'results');
+  const attentionRequest=memory.attentionRequest||0,openingAttention=attentionRequest>0&&attentionRequest!==memory.attentionConsumed;
+  const [lane,setLane]=useState<InboxLane>(openingExternal||openingUnread?'updates':openingAttention?'attention':memory.lane||'attention'),[source,setSource]=useState<UpdateSource>(openingExternal||openingUnread?'external':memory.updateSource||'results');
   const showLane=(next:InboxLane)=>{memory.lane=next;setLane(next)};
   const showSource=(next:UpdateSource)=>{memory.updateSource=next;setSource(next)};
   const external=lane==='updates'&&source==='external';
@@ -64,7 +65,13 @@ export default function RemoteInboxWorkspace({state,navigationTrigger,onBack,reg
   // A real Android notification names an external item, not a pending approval.
   // Consume the visibility intent once, never the message's read/archive state.
   useLayoutEffect(()=>{
-    if(!openingExternal&&!openingUnread)return;
+    // An explicit directory entry starts at decisions, but a native item
+    // addressed to this inbox takes priority over that default.
+    if(openingAttention)memory.attentionConsumed=attentionRequest;
+    if(!openingExternal&&!openingUnread){
+      if(openingAttention){wantedEvent.current=null;showLane('attention');}
+      return;
+    }
     memory.externalUnreadConsumed=unreadRequest;wantedEvent.current=null;
     showLane('updates');showSource('external');
     if(!openingExternal){setFilter('unread');return;}
@@ -74,7 +81,7 @@ export default function RemoteInboxWorkspace({state,navigationTrigger,onBack,reg
       wantedEvent.current={seq:state.selectedSeq,key:item?.source_key,config:state.configId||'',revision:state.openRevision};
       setFilter(item?.archived?'archived':'all');
     }
-  },[nativeEntry,unreadRequest,memory]);
+  },[nativeEntry,unreadRequest,attentionRequest,memory]);
   const list=useRef<HTMLElement>(null),configId=useId();
   const readFocus=useRef<{seq:number;index:number;origin:HTMLElement;identity:string}|null>(null);
   useEffect(()=>{if(state?.endpoint)setEndpoint(previous=>previous||state.endpoint||'')},[state?.endpoint]);

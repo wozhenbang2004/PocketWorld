@@ -20,13 +20,14 @@ public final class NativeOriginalFileSession implements AutoCloseable {
     public static final int MAX_RASTER_PIXELS=4*1024*1024;
     private final Context context;private final AttachmentViewSnapshots views;private final String token;
     private final OwnerFilePreviewSource original;private final RunControl lifetime;private final Runnable cancel=this::close;
+    public final boolean hasRecognizedBinaryHeader;
     private boolean closed;private PdfRenderer pdf;private final List<ParcelFileDescriptor> descriptors=new ArrayList<>();
-    private NativeOriginalFileSession(Context context,AttachmentViewSnapshots views,String token,OwnerFilePreviewSource original,RunControl lifetime){this.context=context.getApplicationContext();this.views=views;this.token=token;this.original=original;this.lifetime=lifetime;}
+    private NativeOriginalFileSession(Context context,AttachmentViewSnapshots views,String token,OwnerFilePreviewSource original,RunControl lifetime,boolean hasRecognizedBinaryHeader){this.hasRecognizedBinaryHeader=hasRecognizedBinaryHeader;this.context=context.getApplicationContext();this.views=views;this.token=token;this.original=original;this.lifetime=lifetime;}
     public static NativeOriginalFileSession open(Context context,OwnerFilePreviewSource original,RunControl lifetime)throws Exception {
         worker();original.requireCurrent(lifetime);if(original.tombstone)throw new IllegalStateException("原删除修订没有文件正文，不打开空文件");byte[] bytes=original.bytes(lifetime);AttachmentViewSnapshots views=new AttachmentViewSnapshots(context);Intent prepared=null;
         try{
             prepared=views.prepare(original.name,original.mimeType,original.sha256,bytes,lifetime);original.requireCurrent(lifetime);
-            NativeOriginalFileSession session=new NativeOriginalFileSession(context,views,prepared.getData().getLastPathSegment(),original,lifetime);lifetime.onCancel(session.cancel);session.current();return session;
+            NativeOriginalFileSession session=new NativeOriginalFileSession(context,views,prepared.getData().getLastPathSegment(),original,lifetime,DocumentReader.hasRecognizedBinaryHeader(bytes));lifetime.onCancel(session.cancel);session.current();return session;
         }catch(Exception failure){if(prepared!=null)try{views.discard(prepared.getData().getLastPathSegment());}catch(Exception cleanup){failure.addSuppressed(cleanup);}throw failure;}finally{Arrays.fill(bytes,(byte)0);}
     }
     private static void worker(){if(Looper.myLooper()==Looper.getMainLooper())throw new IllegalStateException("原文件解码必须在工作线程执行");}

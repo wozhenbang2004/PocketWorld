@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { bridge } from './bridge';
 import { Accordion, AccordionItem, Button, CheckboxField, SelectField, SettingsDialog, TextAreaField } from './forms-library';
-import { IconAdd, IconArrowLeft, IconCheckCircle, IconChevronRight, IconFileSettings, IconFolder, IconPlay, IconRefresh } from './icons';
+import { IconAdd, IconArrowLeft, IconCheckCircle, IconChevronRight, IconClock, IconFileSettings, IconFolder, IconPlay, IconRefresh } from './icons';
 import { profileRows, profileStartReceipt, type ProfileData as Data } from './profile-contract';
 import './project-work-start.css';
 
@@ -12,7 +12,9 @@ type Operation = {
   goal?: string;
   original?: Data;
   taskId?: string;
+  checkoutId?: string; // Optional for a receipt retained by an older client.
   admitted?: boolean;
+  final?: boolean;
   error?: string;
 };
 
@@ -36,7 +38,8 @@ type Props = {
   ownerRevision: string;
   supported: (action: string) => boolean;
   run: (action: string, args?: Data) => Promise<any>;
-  onOpenTask: (id: string) => void;
+  onOpenTask: (id: string, checkoutId?: string) => void;
+  onTaskRegistered: () => void;
   onConfigure: () => void;
   onPrepareModel?: () => void;
   onPrepareTools?: () => void;
@@ -53,7 +56,7 @@ const kindLabel = (kind: string, id: string) => kind === 'model' ? ({ MAIN: '主
   : ({ skill: '技能', instruction: '指令资料', plugin: '插件', extension: '扩展', team: '团队模板', target: '执行位置' }[kind] || '工作来源');
 
 /** Project form state belongs to App; this component owns only the current native window. */
-export function ProjectWorkStart({ project, draft, onChange, initiallyOpen, active, ownerRevision, supported, run, onOpenTask, onConfigure, onPrepareModel, onPrepareTools, registerBack, onReviewChange, embedded = false, onInteractionBusyChange }: Props) {
+export function ProjectWorkStart({ project, draft, onChange, initiallyOpen, active, ownerRevision, supported, run, onOpenTask, onTaskRegistered, onConfigure, onPrepareModel, onPrepareTools, registerBack, onReviewChange, embedded = false, onInteractionBusyChange }: Props) {
   const [snapshot, setSnapshot] = useState<Data | null>(null), [inspection, setInspection] = useState<Data | null>(null), [review, setReview] = useState<Data | null>(null);
   const [loading, setLoading] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState(''), [acknowledged, setAcknowledged] = useState(false), [reload, setReload] = useState(0);
   const [visible, setVisible] = useState(() => !document.hidden);
@@ -65,7 +68,8 @@ export function ProjectWorkStart({ project, draft, onChange, initiallyOpen, acti
   const patch = (next: Partial<ProjectWorkDraft>) => {
     const value = { ...draftRef.current, ...next }; draftRef.current = value; changeRef.current(value);
   };
-  const current = (ticket: number, id: string) => activeRef.current && generation.current === ticket && windowId.current === id && !document.hidden;
+  const current = (ticket: number, id: string) => activeRef.current && generation.current === ticket && windowId.current === id && !document.hidden &&
+    bridge.getState().state.projectId === project.id && !bridge.getState().state.filePath;
   const closeNative = (id: string) => { if (id) void bridge.command('projectWork.close', { windowId: id }).catch(() => {}); };
   const clearReview = () => { reviewRef.current = null; setReview(null); setAcknowledged(false); };
   const restartWindow = () => { clearReview(); setInspection(null); setReload(value => value + 1); };
@@ -107,7 +111,7 @@ export function ProjectWorkStart({ project, draft, onChange, initiallyOpen, acti
 
   const request = async (action: string, input: Data, accept: (value: Data) => void | Promise<void>, operation?: Operation) => {
     const id = windowId.current, ticket = generation.current;
-    if (!id || pending.current || !mounted) return;
+    if (!id || pending.current || !mounted || !current(ticket, id)) return;
     pending.current = true; setBusy(true); setError('');
     try {
       const value = await run(action, { windowId: id, ...input });
@@ -136,14 +140,20 @@ export function ProjectWorkStart({ project, draft, onChange, initiallyOpen, acti
       patch({ checkoutId: checkout.id, operation: null }); setReload(version => version + 1); return;
     }
     if (value.taskId != null && !taskIdentity(value.taskId)) throw new Error('任务身份尚未完整返回，请核对原操作。');
+    if (expected.taskId && value.taskId && expected.taskId !== value.taskId) throw new Error('原启动返回了不同工作，未替换已登记记录。');
     let taskId = taskIdentity(value.taskId) ? value.taskId : expected.taskId;
     if (expected.command === 'start' && value.status === 'completed') {
       const actual = profileStartReceipt(value.receipt, expected);
       if (taskId && taskId !== actual.taskId) throw new Error('任务回执身份不一致，请保留当前记录并核对。');
       taskId = actual.taskId;
     }
-    const operation = { ...expected, status: value.status, taskId, admitted: value.admitted === true || expected.admitted === true, error: typeof value.error === 'string' ? value.error : undefined };
+    const previous = draftRef.current.operation;
+    const admitted = value.admitted === true || expected.admitted === true;
+    const final = value.final === true || expected.final === true || ['completed', 'not_entered'].includes(value.status);
+    const registrationChanged = !!taskId && (previous?.taskId !== taskId || admitted && !previous.admitted || final && !previous.final);
+    const operation = { ...expected, status: value.status, taskId, admitted, final, error: typeof value.error === 'string' ? value.error : undefined };
     patch({ operation, ...(taskId && draftRef.current.goal.trim() === expected.goal ? { goal: '' } : {}) });
+    if (registrationChanged) onTaskRegistered();
   };
   const queryResult = () => {
     const original = draftRef.current.operation; if (!original) return;
@@ -152,14 +162,14 @@ export function ProjectWorkStart({ project, draft, onChange, initiallyOpen, acti
   const queryRef = useRef(queryResult); queryRef.current = queryResult;
   useEffect(() => {
     const original = draft.operation;
-    if (!mounted || !snapshot || !original || original.taskId || !['queued', 'entered'].includes(original.status)) return;
+    if (!mounted || !snapshot || !original || original.admitted || original.final || !['queued', 'entered'].includes(original.status)) return;
     let count = 0;
     const timer = window.setInterval(() => {
       if (++count > 12) { window.clearInterval(timer); return; }
       if (!pending.current) queryRef.current();
     }, 1500);
     return () => window.clearInterval(timer);
-  }, [mounted, snapshot?.windowId, draft.operation?.operationId, draft.operation?.status, draft.operation?.taskId]);
+  }, [mounted, snapshot?.windowId, draft.operation?.operationId, draft.operation?.status, draft.operation?.admitted, draft.operation?.final]);
 
   const prepareCheckout = () => {
     if (draftRef.current.operation || !windowId.current || pending.current) return;
@@ -186,7 +196,10 @@ export function ProjectWorkStart({ project, draft, onChange, initiallyOpen, acti
   const confirm = () => {
     const original = reviewRef.current;
     if (!original || !acknowledged || pending.current || draftRef.current.operation) return;
-    const operation: Operation = { operationId: original.operationId, command: 'start', status: 'queued', goal: original.goal, original: original.original };
+    if (!current(generation.current, windowId.current) || original.projectId !== project.id) {
+      clearReview(); setError('项目页面已切换，没有开始工作。'); return;
+    }
+    const operation: Operation = { operationId: original.operationId, command: 'start', status: 'queued', goal: original.goal, checkoutId: original.project.checkoutId, original: original.original };
     patch({ operation }); clearReview();
     void request('projectWork.confirm', { reviewHandle: original.reviewHandle, consent: true }, value => acceptResult(value, operation, false), operation);
   };
@@ -197,7 +210,10 @@ export function ProjectWorkStart({ project, draft, onChange, initiallyOpen, acti
   const needsLocalTools = runtime?.runtimeId === 'managed_process_v1' && runtime.canExecute === false;
   const unavailableSelection = (value: string, found: Data | undefined) => value && !found ? [{ id: value, label: '原选择已不可用，请重新选择', disabled: true }] : [];
   const operation = draft.operation;
-  const interactionBusy = active && (busy || loading || !!review || !!operation && ['queued', 'entered', 'unknown'].includes(operation.status));
+  // SQL may already contain the task before its authorized run owns the project.
+  // Leaving the original form during that interval can invalidate admission.
+  const admissionPending = !!operation?.taskId && !operation.admitted && !operation.final && !['completed', 'not_entered'].includes(operation.status);
+  const interactionBusy = active && (busy || loading || !!review || !!operation && ['queued', 'entered', 'unknown'].includes(operation.status) && (!operation.taskId || admissionPending));
   useEffect(() => { onInteractionBusyChange?.(interactionBusy); return () => onInteractionBusyChange?.(false); }, [interactionBusy, onInteractionBusyChange]);
   const locked = busy || loading || !snapshot || !!operation;
   const ready = !locked && !!profile && profile.restoredPendingReview !== true && !!checkout && !!runtime && !!draft.goal.trim() && draft.goal.trim().length <= 4000 && !draft.goal.includes('\u0000');
@@ -233,7 +249,16 @@ export function ProjectWorkStart({ project, draft, onChange, initiallyOpen, acti
       </div>
     </div>}
     {operation && <div className="pw-project-start-receipt" role="status" aria-live="polite">
-      {operation.taskId ? <><IconCheckCircle size={22} aria-hidden/><div><strong>{operation.admitted ? '任务已开始' : '任务已建立'}</strong><p dir="auto">{operation.goal}</p>{operation.error && <p>{operation.error}</p>}</div><div className="pw-project-start-actions"><Button variant="primary" trailingIcon={IconChevronRight} disabled={!supported('tasks.open')} onClick={() => onOpenTask(operation.taskId!)}>查看任务</Button><Button variant="ghost" disabled={busy} onClick={() => { patch({ operation: null, expanded: true }); restartWindow(); }}>新工作</Button></div></>
+      {operation.taskId ? <>{operation.admitted ? <IconCheckCircle size={22} aria-hidden/> : <IconClock size={22} aria-hidden/>}
+        <div><strong>{operation.admitted ? '任务已开始' : '工作已登记，启动未确认'}</strong><p dir="auto">{operation.goal}</p>
+          {admissionPending && <p>先核对这次交办，不会重新提交目标。</p>}{operation.error && <p>{operation.error}</p>}</div>
+        <div className="pw-project-start-actions">
+          {!operation.admitted && <Button variant={admissionPending ? 'primary' : 'ghost'} leadingIcon={IconRefresh} disabled={busy || loading}
+            onClick={snapshot ? queryResult : restartWindow}>{busy ? '正在查询…' : '核对启动回执'}</Button>}
+          {!admissionPending && <Button variant="primary" trailingIcon={IconChevronRight} disabled={!supported('tasks.open')} data-project-receipt-task={operation.taskId}
+            onClick={() => onOpenTask(operation.taskId!, operation.checkoutId)}>查看原工作</Button>}
+          <Button variant="ghost" disabled={busy || admissionPending} onClick={() => { patch({ operation: null, expanded: true }); restartWindow(); }}>新工作</Button>
+        </div></>
         : <><div><strong>{operation.command === 'prepareCheckout' ? '正在确认工作副本' : '正在确认这次启动'}</strong><p>{operation.status === 'not_entered' ? '原请求尚未进入。输入已保留，可以重新准备。' : operation.status === 'unknown' ? '结果还没有确认。先查询这次操作，避免重复创建。' : '请求已送出，正在等本次操作的真实回执。'}</p>{operation.goal && <p dir="auto">{operation.goal}</p>}{operation.error && <p>{operation.error}</p>}</div><div className="pw-project-start-actions"><Button variant="secondary" leadingIcon={IconRefresh} disabled={busy || loading} onClick={snapshot ? queryResult : restartWindow}>{busy ? '正在查询…' : loading ? '正在读取…' : snapshot ? '核对结果' : '重新读取项目'}</Button>{operation.status === 'not_entered' && <Button variant="ghost" disabled={busy} onClick={() => { patch({ operation: null, expanded: true }); restartWindow(); }}>返回准备</Button>}</div></>}
     </div>}
     {error && !review && <p className="pw-project-start-error" role="alert">{error}</p>}

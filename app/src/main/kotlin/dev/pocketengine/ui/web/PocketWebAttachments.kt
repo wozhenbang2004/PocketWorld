@@ -70,7 +70,10 @@ internal class PocketWebAttachments(
         val continuationDraft=if(state.group==null&&state.team==null&&state.taskId!=null&&state.file!=null)runCatching{
             controller.readArtifactContinuationDraft(state.taskId,state.file.getString("id"),state.file.getString("sha256")).put("available",true)
         }.getOrElse{JSONObject().put("available",false).put("error",it.message?:"原成果补充草稿尚未读取")} else null
+        val privateOriginal = state.group == null && state.team == null && viewer.matchesOriginal(state.file)
         return JSONObject().put("open", true).put("ready", true).put("windowId", current.id).put("frameId", frameId)
+            .put("canSaveOriginal", privateOriginal).put("canOpenInReader", privateOriginal && viewer.canOpenInReader(state.file))
+            .put("externalViewerResult", state.externalViewerResult)
             .put("taskId", state.taskId).put("group", state.group != null).put("team", state.team != null)
             .put("fromWorkResult", state.fromWorkResult).put("resultFilesOnly", state.resultRun?.taskId?.let { it == state.taskId } == true)
             .put("busy", state.busy).put("error", state.error).put("notice", state.notice)
@@ -181,6 +184,12 @@ internal class PocketWebAttachments(
                 "saveRead" -> flow.saveReadAsFile()
                 "openOriginal" -> flow.openOriginalFile()
                 "export" -> flow.prepareExport()
+                "openInReader" -> {
+                    check(flow.state.group == null && flow.state.team == null && viewer.canOpenInReader(flow.state.file)) {
+                        "请重新打开这份可读取的私人原件"
+                    }
+                    flow.openExternal()
+                }
                 "external" -> flow.openExternal()
                 "share" -> flow.shareOriginalFile()
                 "readContinuationDraft", "editContinuationDraft", "continueVersion" -> {

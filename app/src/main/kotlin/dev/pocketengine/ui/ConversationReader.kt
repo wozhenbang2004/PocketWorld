@@ -2,6 +2,33 @@ package dev.pocketengine.ui
 
 import org.json.JSONObject
 
+/** Read-only link from the persisted owner input and its matching native ACK.
+ * An attempted send, imported text or the task's title is not a binding. */
+internal data class ReaderInputWork(val taskId: String, val runId: String, val epoch: Int) {
+    companion object {
+        fun fromMessage(row: JSONObject, conversation: String): ReaderInputWork? {
+            fun id(value: Any?) = (value as? String)?.takeIf { it.isNotBlank() && it.length <= 240 }
+            if (row.opt("role") != "user" || row.optBoolean("importAssignedIdentity") || row.optLong("revision") < 1) return null
+            val message = id(row.opt("id")) ?: return null
+            val client = id(row.opt("clientMessageId")) ?: return null
+            val receipt = row.optJSONObject("submission") ?: return null
+            if (receipt.optString("status") !in setOf("accepted", "queued", "consumed") || receipt.optBoolean("notAdmitted") ||
+                receipt.optBoolean("reconciliationRequired") || receipt.opt("messageId") != message ||
+                receipt.opt("clientMessageId") != client || receipt.opt("conversationId") != conversation) return null
+            val task = id(receipt.opt("taskId")) ?: return null
+            val run = id(receipt.opt("runId")) ?: return null
+            val epoch = when (val value = receipt.opt("epoch")) {
+                is Int -> value.takeIf { it > 0 }
+                is Long -> value.takeIf { it in 1L..Int.MAX_VALUE.toLong() }?.toInt()
+                else -> null
+            } ?: return null
+            if ((!row.isNull("taskId") && row.opt("taskId") != task) ||
+                (!row.isNull("conversationId") && row.opt("conversationId") != conversation)) return null
+            return ReaderInputWork(task, run, epoch)
+        }
+    }
+}
+
 internal data class ConversationReadPage(
     val window: Long, val conversation: String, val title: String, val readingKey: String?,
     val messages: List<UiMessage> = emptyList(), val cursor: String = "", val hasMore: Boolean = false,
@@ -15,7 +42,8 @@ internal data class ConversationReadPage(
         val loaded = nativeRows.map { row ->
             UiMessage(row.getString("role"), row.getString("content"), row.optLong("at"), row.optString("taskId").takeIf(String::isNotBlank), row.getString("id"),
                 row.optJSONObject("submission"), row.optJSONArray("attachments")?.length() ?: 0, row.optJSONArray("attachments").objects().mapNotNull(ChatInputRules::attachment),
-                if (row.optBoolean("importAssignedIdentity")) 0L else row.optLong("revision", 0), memoryReference = row.optJSONObject("memoryReference"), phoneResult = UiPhoneResult.fromNativeMessage(row), replyContext = UiReplyContext.fromNativeMessage(row), taskResult = UiTaskResult.fromNativeMessage(row))
+                if (row.optBoolean("importAssignedIdentity")) 0L else row.optLong("revision", 0), memoryReference = row.optJSONObject("memoryReference"), phoneResult = UiPhoneResult.fromNativeMessage(row), replyContext = UiReplyContext.fromNativeMessage(row), taskResult = UiTaskResult.fromNativeMessage(row),
+                readerInputWork = ReaderInputWork.fromMessage(row, conversation))
         }
         require(loaded.none { it.id.isNullOrBlank() }) { "原历史消息缺少稳定身份" }
         require(loaded.map { it.id }.distinct().size == loaded.size) { "原历史窗口重复消息身份，未混合显示" }

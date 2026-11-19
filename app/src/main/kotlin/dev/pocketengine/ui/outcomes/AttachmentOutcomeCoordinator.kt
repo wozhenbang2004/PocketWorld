@@ -45,7 +45,7 @@ internal data class AttachmentOutcomeState(
     val processingSource:dev.pocketengine.features.attachments.OwnerFilePreviewSource?=null,val processingInfo:JSONObject?=null,
     val processingReview:dev.pocketengine.features.attachments.processing.NativeFileProcess.Review?=null,val pendingProcessingTask:String?=null,
     val comparison:Pair<dev.pocketengine.features.attachments.OwnerFilePreviewSource,dev.pocketengine.features.attachments.OwnerFilePreviewSource>?=null,
-    val fromWorkResult:Boolean=false,val resultRun:AttachmentResultRun?=null
+    val fromWorkResult:Boolean=false,val resultRun:AttachmentResultRun?=null,val externalViewerResult:String?=null
 )
 
 /** Navigation and revocable waits only. TaskStore, canonical artifact stores and native owner gate retain truth. */
@@ -140,7 +140,7 @@ internal class AttachmentOutcomeCoordinator(
             "原任务状态已变化，请打开当前工作核对成果"
         }
     }
-    fun selectFile(file:JSONObject){cancel();restoreFile=null;val group=state.group;val selected=if(group==null)null else GroupResultAccess.Selection(group.requestId,group.taskId,group.spaceId,file.getString("id"),file.getString("id"),group.audience,group.visibility,file.optString("sourceOperationId",group.sourceOperationHint),file.optString("sourceTaskRunId",group.sourceRunHint));state=state.copy(group=selected?:group,file=JSONObject(file.toString()),document=null,documentOpen=false,error=null,notice=null,thumbnail=null,originalFile=null);if(file.optString("mimeType").startsWith("image/"))loadThumbnail()}
+    fun selectFile(file:JSONObject){cancel();restoreFile=null;val group=state.group;val selected=if(group==null)null else GroupResultAccess.Selection(group.requestId,group.taskId,group.spaceId,file.getString("id"),file.getString("id"),group.audience,group.visibility,file.optString("sourceOperationId",group.sourceOperationHint),file.optString("sourceTaskRunId",group.sourceRunHint));state=state.copy(group=selected?:group,file=JSONObject(file.toString()),document=null,documentOpen=false,error=null,notice=null,thumbnail=null,originalFile=null,externalViewerResult=null);if(file.optString("mimeType").startsWith("image/"))loadThumbnail()}
     fun backFromFile(){cancel();restoreFile=null;state=state.copy(group=state.group?.withoutArtifact(),file=null,document=null,documentOpen=false,thumbnail=null,originalFile=null);refresh()}
     fun chooseSource(){if(state.team!=null||state.group!=null||state.taskId.isNullOrBlank())return;restoreFile=null;state=state.copy(choosingSource=true,file=null,originalFile=null);work{c,_->app.ownerOutcomeSnapshot(null,c) to null}}
     fun attach(file:JSONObject){val task=state.taskId?:return;if(state.group!=null)return
@@ -288,10 +288,12 @@ internal class AttachmentOutcomeCoordinator(
                             // This Android result explicitly means there was no reader, even if cancel ran during entry.
                             intent.removeExtra(dev.pocketengine.features.attachments.AttachmentOutcomeHost.NATIVE_VIEW_ISSUED)
                             if(disposition.compareAndSet(1,2))discard(intent)
-                            state=state.copy(error="当前没有可打开此类型的应用；可以导出文件后查看")
+                            if(state.open && state.file === file && state.taskId == task && state.group == group)
+                                state=state.copy(externalViewerResult="no_reader",error="系统没有找到能打开这份文件的应用。可以另存原件，自己选择保存位置。")
                         }catch(_:Exception){
                             // Android may already have handed off the URI. Keep the reader copy until its normal TTL.
-                            state=state.copy(error="外部查看是否启动尚未确认；原文件保留，可以导出后查看")
+                            if(state.open && state.file === file && state.taskId == task && state.group == group)
+                                state=state.copy(externalViewerResult="launch_unknown",error="无法确认其他应用是否已经启动。请先查看最近使用的应用；这里的原件未改动。")
                         }
                     }else c.cancel()
                 })c.cancel()
@@ -372,7 +374,7 @@ internal class AttachmentOutcomeCoordinator(
     private fun work(document:Boolean=false,replaceDocumentWithFile:Boolean=false,teamDifference:Boolean=false,groupAuthority:Boolean?=null,onFinished:(()->Unit)?=null,onSuccess:((JSONObject)->Unit)?=null,call:(RunControl,String?)->Pair<JSONObject,JSONObject?>){
         wait?.cancel();observation?.cancel();observation=null;val token=++generation;val c=RunControl();wait=c
         val group=state.group;val window=if(groupAuthority?:(group!=null||export?.optJSONObject("group")!=null))try{ownerWindow()}catch(e:Exception){state=state.copy(error=listOfNotNull(restoredExportNotice,safe(e)).joinToString(" "),busy=false);restoredExportNotice=null;if(onFinished!=null){if(wait===c)wait=null;c.cancel();onFinished()};return}else null
-        state=state.copy(busy=true,error=null,observing=false,documentOpen=document||state.documentOpen)
+        state=state.copy(busy=true,error=null,externalViewerResult=null,observing=false,documentOpen=document||state.documentOpen)
         try{io.execute{try{val(result,file)=call(c,window);c.check();main.post{if(!closed&&state.open&&generation==token&&wait===c&&!c.isCancelled){
             val actualFile=if(group!=null&&result.optJSONObject("artifact")!=null)result.getJSONObject("artifact").let{JSONObject(it.toString()).put("id",it.getString("artifactId")).put("size",it.getLong("bytes")).put("name","群任务成果")}else file
             state=if(teamDifference)state.copy(busy=false,teamDifference=result)else if(document)state.copy(busy=false,document=result)else state.copy(busy=false,snapshot=if(result.has("sources")||result.has("kind")||result.optString("provider")=="teams"&&result.has("artifact"))result else state.snapshot,file=actualFile?:state.file,notice=result.optString("outcomeNotice").takeIf{it.isNotBlank()},documentOpen=if(replaceDocumentWithFile)false else state.documentOpen,document=if(replaceDocumentWithFile)null else state.document,thumbnail=if(replaceDocumentWithFile)null else state.thumbnail)

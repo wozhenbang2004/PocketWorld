@@ -18,7 +18,7 @@ const deliveryRequirements = (value: Data = {}): DeliveryRequirements => ({
 const sameDraft = (draft: DevelopmentDraft, original: Data) => draft.goal === original.goal && draft.checkoutId === original.checkoutId &&
   deliveryFields.every(key => draft[key] === (original[key] || ''));
 type Props = { projectId: string; name: string; active: boolean; run: (action: string, args?: Data) => Promise<any>; can: (action: string) => boolean;
-  onOpenTask: (id: string) => void; onPrepareTools: () => void; onConnectModel: () => void; onOpenTerminal: () => void;
+  onOpenTask: (id: string, checkoutId?: string) => void; onTaskRegistered: () => void; onPrepareTools: () => void; onConnectModel: () => void; onOpenTerminal: () => void;
   registerBack: (handler: (() => boolean) | null) => void; onInteractionBusyChange?: (busy: boolean) => void };
 const rows = (value: unknown): Data[] => Array.isArray(value) ? value : [];
 const ownerWindow = () => { const view = bridge.getState().view as Data; return [bridge.getDocumentEpoch(), view.section, view.taskId, view.resumeRevision].join('|'); };
@@ -27,7 +27,7 @@ const failureText = (failure: unknown) => failure instanceof Error ? failure.mes
 
 /** Existing project checkout + original Assistant admission. No command is
  * approved here, and reopening never repeats a submission or copy creation. */
-export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can, onOpenTask, onPrepareTools, onConnectModel, onOpenTerminal, registerBack, onInteractionBusyChange }: Props) {
+export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can, onOpenTask, onTaskRegistered, onPrepareTools, onConnectModel, onOpenTerminal, registerBack, onInteractionBusyChange }: Props) {
   const [view, setView] = useState<Data | null>(null), [goal, setGoal] = useState(''), [checkout, setCheckout] = useState('');
   const [requirements, setRequirements] = useState<DeliveryRequirements>(() => deliveryRequirements());
   const [source, setSource] = useState<Data | null>(null), [review, setReview] = useState<Data | null>(null), [submission, setSubmission] = useState<Data | null>(null);
@@ -41,12 +41,21 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
     if (receipt.status !== 'accepted' || !sameDraft(draft.current, receipt)) return;
     draft.current = { ...draft.current, goal: '', ...deliveryRequirements() }; setGoal(''); setRequirements(deliveryRequirements());
   };
-  const applySubmission = (receipt: Data) => { setSubmission(receipt); clearSubmittedDraft(receipt); };
+  const applySubmission = (receipt: Data, expected: Data) => {
+    if (receipt.projectId !== projectId || receipt.clientMessageId !== expected.clientMessageId ||
+        receipt.checkoutId !== expected.checkoutId || !['accepted', 'rejected', 'unknown'].includes(receipt.status))
+      throw new Error('启动回执和原交办不一致，输入已保留；请查询原输入。');
+    if (receipt.status === 'accepted' && (typeof receipt.taskId !== 'string' || !receipt.taskId))
+      throw new Error('原工作身份尚未返回，请查询原输入。');
+    setSubmission(receipt); clearSubmittedDraft(receipt);
+    if (receipt.status === 'accepted' && (submission?.status !== 'accepted' || submission.taskId !== receipt.taskId)) onTaskRegistered();
+  };
   const invoke = async (action: string, args: Data = {}, accept?: (value: Data) => void) => {
-    if (!latest.current.active || entered.current || document.hidden || !latest.current.can(action)) return;
+    const ownsProject = () => bridge.getState().state.projectId === projectId && !bridge.getState().state.filePath;
+    if (!latest.current.active || entered.current || document.hidden || !ownsProject() || !latest.current.can(action)) return;
     const token = {}, window = ownerWindow(), sequence = generation.current;
     entered.current = token; setBusy(true); setError('');
-    const current = () => alive.current && latest.current.active && entered.current === token && generation.current === sequence && ownerWindow() === window && !document.hidden;
+    const current = () => alive.current && latest.current.active && entered.current === token && generation.current === sequence && ownerWindow() === window && ownsProject() && !document.hidden;
     try {
       const value = await latest.current.run(action, args);
       if (current()) { accept?.(value); return value as Data; }
@@ -79,6 +88,15 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
     });
   };
   const acceptReview = (value: Data) => {
+    if (value.projectId !== projectId || value.checkoutId !== draft.current.checkoutId ||
+        value.source?.projectId !== projectId || value.source?.checkoutId !== value.checkoutId ||
+        typeof value.goal !== 'string' || value.goal.trim() !== draft.current.goal.trim() ||
+        !value.requestId || !value.reviewHandle || value.commandsAuthorized !== false || value.projectMemoryAuthorized !== false)
+      throw new Error('审阅不属于这个项目或所选副本，没有开始工作。请重新读取项目条件。');
+    if (!source?.sourceDigest || value.source.sourceDigest !== source.sourceDigest) {
+      sourceAttempt.current = ''; setSource(null);
+      throw new Error('副本内容已变化，还没有开始工作。请核对更新后的版本。');
+    }
     if (value.deliveryContract?.format !== 'pocketworld.owner-work-contract.v1' || value.deliveryContract.revision !== 1 || value.deliveryContract.goal !== value.goal)
       throw new Error('项目交付约定没有完整载入，请重新核对。');
     draft.current = { goal: value.goal, checkoutId: value.checkoutId, ...deliveryRequirements(value.deliveryContract) };
@@ -152,10 +170,13 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
   const start = () => {
     const selected = activeReview.current;
     if (!active || !selected || busy || expired || Number(selected.expiresAt) <= Date.now()) return;
+    if (document.hidden || selected.projectId !== bridge.getState().state.projectId || bridge.getState().state.filePath) {
+      dismiss(); setError('项目页面已切换，没有开始工作。'); return;
+    }
     const marker = { projectId, checkoutId: selected.checkoutId, clientMessageId: selected.requestId, goal: selected.goal,
       ...deliveryRequirements(selected.deliveryContract), status: 'unknown', message: '正在核对原输入回执。请勿重复开始。' };
     setSubmission(marker); setReview(null); activeReview.current = null;
-    void invoke('projects.development.start', { viewHandle: handle.current, reviewHandle: selected.reviewHandle }, applySubmission);
+    void invoke('projects.development.start', { viewHandle: handle.current, reviewHandle: selected.reviewHandle }, receipt => applySubmission(receipt, marker));
   };
   return <section hidden={!active} className="pw-project-development pw-local-workspace pw-settings-section" aria-label="使用默认模型开发项目">
     <header className="pw-development-intro"><h3>让模型接手开发</h3><p>在私人副本中工作，结果由你审阅后导回项目。</p></header>
@@ -165,8 +186,8 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
       {submission && <div className="pw-local-inline-notice" role="status"><p>{submission.message || (pending ? '原项目输入仍待核对。' : submission.status === 'accepted' ? '项目任务已保存。' : '上次输入没有启动。')}</p>
         {submission.status === 'accepted' && <p>继续同一件事时，请打开原任务补充，不必重新开始。</p>}
         {submission.error && <p>{submission.error}</p>}<div className="pw-form-actions">
-          {submission.taskId && <Button variant="secondary" disabled={busy || filesOpen || !can('tasks.open')} onClick={() => onOpenTask(submission.taskId)}>查看原任务与结果</Button>}
-          {pending && <Button variant="secondary" disabled={busy || filesOpen} onClick={() => void invoke('projects.development.query', { viewHandle: handle.current }, applySubmission)}>查询原输入</Button>}
+          {submission.taskId && <Button variant="secondary" disabled={busy || filesOpen || !can('tasks.open')} data-project-receipt-task={submission.taskId} onClick={() => onOpenTask(submission.taskId, submission.checkoutId)}>查看原任务与结果</Button>}
+          {pending && <Button variant="secondary" disabled={busy || filesOpen} onClick={() => void invoke('projects.development.query', { viewHandle: handle.current }, receipt => applySubmission(receipt, submission))}>查询原输入</Button>}
         </div></div>}
       <TextAreaField label="这次的目标" value={goal} isDisabled={disabled} onChange={value => { if (value.length <= 12000) { setGoal(value); retain({ ...draft.current, goal: value }); } }} hint="例如：做一个能在手机预览的番茄钟，先用本地数据。不要填写密码或令牌。" />
       <Accordion><AccordionItem id="development-delivery" title="交付要求" description={deliveryFields.some(key => requirements[key].trim()) ? '已补充约束、交付物或完成标准' : '选填：约束、交付物与完成标准'}>

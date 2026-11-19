@@ -18,6 +18,19 @@ final class TaskRunDocumentReader {
         return read(db,"SELECT run_id FROM runs WHERE task_id=? ORDER BY epoch DESC LIMIT 1",taskId,TaskStoreTextReader.Column.RUN_CHECKPOINT,true);
     }
 
+    /** Same latest-epoch selection as startAttempt. Inspect one bounded original only for
+     * a readable, stopped private work detail. No message text or grant leaves this read. */
+    static String resumeHistoryForUi(SQLiteDatabase db,String task,String run,int epoch) {
+        if(Thread.currentThread().isInterrupted())return "unverified";
+        try(Cursor row=db.rawQuery("SELECT run_id,epoch,CASE WHEN length(CAST(checkpoint AS BLOB))<=65536 THEN checkpoint END FROM runs WHERE task_id=? ORDER BY epoch DESC LIMIT 1",new String[]{task})){
+            if(!row.moveToFirst()||!run.equals(row.getString(0))||epoch!=row.getInt(1)||row.isNull(2))return "unverified";
+            JSONObject saved=new JSONObject(row.getString(2));
+            if(!saved.has("messages"))return "goal_only";
+            org.json.JSONArray messages=saved.optJSONArray("messages");
+            return messages==null?"unverified":messages.length()==0?"goal_only":"saved_history";
+        }catch(android.database.sqlite.SQLiteException|org.json.JSONException unavailable){return "unverified";}
+    }
+
     /** Read a saved grant, never renew or authorize it. All original expiry,
      * principal, scope, epoch and remaining-budget checks stay with the caller. */
     static JSONObject grantForRun(SQLiteDatabase db,String runId)throws Exception {

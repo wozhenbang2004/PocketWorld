@@ -53,6 +53,7 @@ internal object PocketWebState {
         .also { value ->
             row.phoneResult?.let { value.put("phoneResult", it.toJson()) }
             row.replyContext?.let { value.put("replyContext", it.toJson()) }
+            row.readerInputWork?.let { value.put("readerInputTaskId", it.taskId) }
             row.taskResult?.let { value.put("taskResult", it.toJson()) }
         }
 

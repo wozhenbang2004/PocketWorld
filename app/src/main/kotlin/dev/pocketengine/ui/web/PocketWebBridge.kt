@@ -613,22 +613,25 @@ internal class PocketWebBridge(
                 return
             }
             if (action == "tasks.open") {
-                checkedPayload(args, setOf("id", "requestNavigation", "readerWindow", "readerConversationId", "readerMessageId", "searchQuery", "expectedRunId", "expectedEpoch"))
+                checkedPayload(args, setOf("id", "requestNavigation", "readerWindow", "readerConversationId", "readerMessageId", "searchQuery", "expectedRunId", "expectedEpoch", "expectedProjectId", "expectedCheckoutId"))
                 val taskId = requiredString(args, "id")
                 val fromReader = args.has("readerWindow") || args.has("readerConversationId") || args.has("readerMessageId")
                 require(args.has("expectedRunId") == args.has("expectedEpoch")) { "原整理记录身份不完整" }
                 val expectedRunId = if (args.has("expectedRunId")) requiredString(args, "expectedRunId") else null
                 val expectedEpoch = if (expectedRunId != null) requiredInt(args, "expectedEpoch").also { require(it > 0) { "原整理回合无效" } } else null
-                if (args.has("searchQuery") || expectedRunId != null) {
+                val projectScope = ProjectTaskReadScope.read(args)
+                if (args.has("searchQuery") || expectedRunId != null || projectScope != null) {
+                    if (projectScope != null) require(projectReadCurrent(projectScope)) { "请返回原项目工作页后再打开" }
                     require(!fromReader && controller.webPrivateOwnerVisible()) { "请回到私人工作区打开原工作" }
                     val requestNavigation = if (args.has("requestNavigation")) requiredBoolean(args, "requestNavigation") else true
                     val lookup = JSONObject().put("taskId", taskId).put("query", if (args.has("searchQuery")) requiredString(args, "searchQuery", true) else "")
+                    projectScope?.addTo(lookup)
                     if (expectedRunId != null) lookup.put("expectedRunId", expectedRunId).put("expectedEpoch", expectedEpoch)
                     workSearch.dispatch("work.search.task", lookup) { result, error ->
                         if (error != null || result == null) complete(id, null, error ?: "原工作暂不可核对")
                         else try {
                             require(taskHistory.contains(taskId) && result.optString("taskId") == taskId) { "原工作读取身份已变化" }
-                            openOriginalTask(id, taskId, requestNavigation, keepConversationReader = expectedRunId != null && !requestNavigation, expectedRunId = expectedRunId, expectedEpoch = expectedEpoch)
+                            openOriginalTask(id, taskId, requestNavigation, keepConversationReader = expectedRunId != null && !requestNavigation, expectedRunId = expectedRunId, expectedEpoch = expectedEpoch, projectScope = projectScope)
                         } catch (failure: Exception) { complete(id, null, failure.message ?: "原工作暂不可打开") }
                     }
                     return
@@ -639,6 +642,23 @@ internal class PocketWebBridge(
                         reader.window == requiredLong(args, "readerWindow") && reader.conversation == requiredString(args, "readerConversationId")) { "原历史阅读窗口已变化，请重新打开" }
                     val row = reader.messages.firstOrNull { it.id == requiredString(args, "readerMessageId") }
                         ?: error("原消息已不在这份阅读窗口")
+                    if (row.role == "user") {
+                        val input = row.readerInputWork ?: error("这条原输入没有可核对的工作回执")
+                        require(taskId == input.taskId && args.opt("requestNavigation") == false) { "工作不属于这条原输入" }
+                        openOriginalTask(id, taskId, false, keepConversationReader = true, checkReaderInput = { task ->
+                            val current = controller.conversationReader
+                            require(controller.canReadConversationWindow(reader) && current?.messages?.any {
+                                it.id == row.id && it.sourceRevision == row.sourceRevision && it.readerInputWork == input
+                            } == true) { "原消息已变化，请返回历史重新查看" }
+                            require(!isGroup(task) && task.id == input.taskId && task.raw.opt("id") == input.taskId &&
+                                task.raw.opt("conversationId") == reader.conversation &&
+                                task.raw.opt("actorId") == "owner" && task.raw.opt("spaceId") == "private") { "未找到属于这条输入的私人工作" }
+                            require(task.raw.opt("runId") == input.runId && task.raw.optInt("coordinatorEpoch") == input.epoch) {
+                                "这项工作已换到另一轮，未打开其他执行记录"
+                            }
+                        })
+                        return
+                    }
                     require(row.role == "assistant" && (row.sourceRevision > 0 || row.phoneResult != null || row.taskResult != null) &&
                         (row.taskId == taskId || row.phoneResult?.taskId == taskId || row.taskResult?.taskId == taskId)) { "任务不属于这条原回复" }
                 }
@@ -1629,28 +1649,43 @@ internal class PocketWebBridge(
         }
     }
 
-    private fun openOriginalTask(requestId: String, taskId: String, requestNavigation: Boolean, returnSection: String? = section ?: taskReturnSection, keepConversationReader: Boolean = false, expectedRunId: String? = null, expectedEpoch: Int? = null) {
+    private fun projectReadCurrent(scope: ProjectTaskReadScope) = controller.webPrivateOwnerVisible() && section == null &&
+        controller.state.projectId == scope.projectId && controller.state.filePath == null
+
+    private fun openOriginalTask(requestId: String, taskId: String, requestNavigation: Boolean, returnSection: String? = section ?: taskReturnSection, keepConversationReader: Boolean = false, expectedRunId: String? = null, expectedEpoch: Int? = null, projectScope: ProjectTaskReadScope? = null, checkReaderInput: ((UiTask) -> Unit)? = null) {
+        if (projectScope != null) require(projectReadCurrent(projectScope)) { "原项目页面已切换，未打开其他工作" }
         require(returnSection == null || returnSection in connectionSections) { "原工作页面已变化" }
-        leaveTask(); leaveConnection(); reviews.clear()
-        taskReturnSection = returnSection
-        taskViewId = taskId
-        publishState()
+        var entered = false
+        fun enterWindow() {
+            leaveTask(); leaveConnection(); reviews.clear()
+            taskReturnSection = returnSection
+            taskViewId = taskId
+            entered = true
+        }
+        // A recorded input ACK does not prove its task is still on the same run.
+        // Keep the reader and draft unchanged until the original is checked.
+        if (checkReaderInput == null) { enterWindow(); publishState() }
         val window = captureWindow()
-        controller.readTaskForOpen(taskId, { !closed && acceptsWindow(window) }) { task, error ->
+        controller.readTaskForOpen(taskId, { !closed && acceptsWindow(window) && (projectScope == null || projectReadCurrent(projectScope)) }) { task, error ->
             if (closed) return@readTaskForOpen
             if (!acceptsWindow(window)) complete(requestId, null, "原任务窗口已关闭，请重新打开")
             else if (error != null || task == null) {
-                if (requestNavigation) runCatching { restoreTaskWorkspace() }
+                if (requestNavigation || projectScope != null) runCatching { restoreTaskWorkspace() }
                 complete(requestId, null, error ?: "原任务暂不可读取")
                 publishState()
             } else try {
+                if (projectScope != null) {
+                    require(projectReadCurrent(projectScope)) { "原项目页面已切换，未打开其他工作" }
+                    projectScope.requireOriginal(taskId, task.raw)
+                }
                 if (expectedRunId != null) require(task.raw.optString("runId") == expectedRunId && task.raw.optInt("coordinatorEpoch") == expectedEpoch) { "原整理回合已变化，未打开其他执行记录" }
+                checkReaderInput?.let { check -> check(task); enterWindow() }
                 if (isGroup(task)) taskPage = controller.enterGroupTask(task.id)
                 controller.completeWebTaskOpen(task.id, requestNavigation, keepConversationReader)
                 complete(requestId, JSONObject().put("taskId", task.id).put("readOnly", true).put("executionAuthorized", false), null)
                 publishState()
             } catch (failure: Exception) {
-                if (requestNavigation) runCatching { restoreTaskWorkspace() }
+                if (requestNavigation || projectScope != null || checkReaderInput != null && entered) runCatching { restoreTaskWorkspace() }
                 complete(requestId, null, failure.message ?: "原任务窗口不可用")
                 publishState()
             }

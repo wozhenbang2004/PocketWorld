@@ -126,6 +126,8 @@ public final class DocumentReader {
     static DocumentContent.Result unavailable(String format,String status,String reason) {
         return new DocumentContent.Result(format,status,"none",Collections.emptyList(),Collections.singletonList(reason),0,0,0);
     }
+    /** A recognized binary signature vetoes text decoding; an unknown header does not establish a text format. */
+    public static boolean hasRecognizedBinaryHeader(byte[] bytes) { return !"text".equals(identify(bytes)); }
     static String identify(byte[] b) {
         if(starts(b,new int[]{0x25,0x50,0x44,0x46,0x2d}))return "pdf";
         if(starts(b,new int[]{0x50,0x4b,3,4})||starts(b,new int[]{0x50,0x4b,5,6}))return "zip";

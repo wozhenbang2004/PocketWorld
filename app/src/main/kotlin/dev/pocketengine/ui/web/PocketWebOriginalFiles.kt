@@ -19,9 +19,41 @@ import java.util.concurrent.Executors
 
 /** Original native decoders supply bounded content to the same React document. No file URI or network route is exposed. */
 internal class PocketWebOriginalFiles(private val context: Context, private val visible: () -> Boolean, private val changed: () -> Unit) {
+    private companion object {
+        val office = setOf("docx", "xlsx", "pptx")
+        val officeMime = setOf("application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation")
+        val textMime = setOf("application/json", "application/xml", "application/javascript", "application/yaml", "application/x-yaml")
+        val textNames = setOf("txt", "md", "csv", "tsv", "log", "json", "jsonl", "xml", "yaml", "yml", "srt",
+            "html", "htm", "css", "js", "ts", "tsx", "jsx", "py", "java", "kt", "sql", "ini", "toml", "properties")
+        val binaryNames = setOf("zip", "7z", "rar", "gz", "tar", "bin", "doc", "xls", "ppt")
+        val packageNames = setOf("apk", "apks", "apkm", "xapk", "aab")
+        fun packageFile(source: OwnerFilePreviewSource) = source.mimeType == "application/vnd.android.package-archive" ||
+            source.name.substringAfterLast('.', "").lowercase() in packageNames
+
+        fun declaredKind(source: OwnerFilePreviewSource): String {
+            val mime = source.mimeType; val extension = source.name.substringAfterLast('.', "").lowercase()
+            return when {
+                source.tombstone || packageFile(source) -> "unsupported"
+                mime == "application/pdf" -> "pdf"
+                mime.startsWith("image/") -> "image"
+                mime.startsWith("audio/") -> "audio"
+                mime.startsWith("video/") -> "video"
+                mime in officeMime || extension in office -> "office"
+                extension in binaryNames -> "unsupported"
+                mime.startsWith("text/") || mime in textMime || mime.endsWith("+json") || mime.endsWith("+xml") ||
+                    mime == "application/octet-stream" && extension in textNames -> "text"
+                else -> "unsupported"
+            }
+        }
+    }
     private class Pin(val source: OwnerFilePreviewSource, val ticket: PocketWebWindowTicket,
         val accepts: (PocketWebWindowTicket) -> Boolean) {
         val id = UUID.randomUUID().toString()
+        val kind = declaredKind(source)
+        val fileId = source.metadata().optString("id")
+        var sourceUnavailable = false
         val lifetime = RunControl()
         @Volatile var session: NativeOriginalFileSession? = null
         @Volatile var error: String? = null
@@ -41,7 +73,7 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
             val current = pins.values.toList()
             runCatching { worker.execute {
                 current.filter { it.error == null }.forEach { pin -> try { requireCurrent(pin); pin.session?.current() }
-                    catch (_: Exception) { main.post { if (pins[pin.id] === pin) { retire(pin); pin.error = "原来源、受众或版本已失效，请返回后重新打开"; changed() } } } }
+                    catch (_: Exception) { main.post { if (pins[pin.id] === pin) { retire(pin); pin.sourceUnavailable = true; pin.error = "原来源、受众或版本已失效，请返回后重新打开"; changed() } } } }
             } }
             main.postDelayed(this, 1500)
         }
@@ -55,19 +87,18 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
         if (compared != null) comparison = Pair(Pin(compared.first, ticket, accepts), Pin(compared.second, ticket, accepts)).also { pins[it.first.id] = it.first; pins[it.second.id] = it.second }
         if (pins.isNotEmpty()) main.postDelayed(watchdog, 1500)
     }
-    private fun kind(source: OwnerFilePreviewSource): String = when {
-        source.mimeType == "application/pdf" -> "pdf"
-        source.mimeType.startsWith("image/") -> "image"
-        source.mimeType.startsWith("audio/") -> "audio"
-        source.mimeType.startsWith("video/") -> "video"
-        source.mimeType.contains("officedocument") || source.name.substringAfterLast('.', "").lowercase() in setOf("docx", "xlsx", "pptx") -> "office"
-        else -> "text"
-    }
     private fun view(pin: Pin): JSONObject = JSONObject().put("id", pin.id).put("identity", pin.source.identity)
         .put("name", pin.source.name).put("mimeType", pin.source.mimeType).put("sha256", pin.source.sha256)
-        .put("kind", kind(pin.source)).put("size", pin.source.sizeBytes).put("busy", pin.busy).put("error", pin.error)
+        .put("kind", pin.kind).put("sourceUnavailable", pin.sourceUnavailable).put("size", pin.source.sizeBytes).put("busy", pin.busy).put("error", pin.error)
         .put("url", "https://pocketengine.local/pocket-files/${pin.id}/content").put("information", pin.information)
     fun snapshot(): JSONObject? = primary?.let(::view)
+    /** Preview recovery is narrower than the file-detail external action, which also handles managed APKs. */
+    fun matchesOriginal(file: JSONObject?): Boolean {
+        val pin = primary ?: return false
+        return file != null && !pin.sourceUnavailable && !pin.lifetime.isCancelled && !pin.source.tombstone &&
+            pin.fileId.isNotBlank() && pin.fileId == file.optString("id") && pin.source.sha256 == file.optString("sha256")
+    }
+    fun canOpenInReader(file: JSONObject?) = matchesOriginal(file) && primary?.source?.let { !packageFile(it) } == true
     fun comparisonSnapshot(): JSONArray? = comparison?.let { JSONArray().put(view(it.first)).put(view(it.second)) }
     private fun requireCurrent(pin: Pin) {
         check(!closed && pins[pin.id] === pin && visible() && pin.accepts(pin.ticket)) { "原文件查看已关闭" }
@@ -88,12 +119,20 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
         val request = JSONObject(args.toString())
         pin.busy = true; pin.error = null; changed()
         try { worker.execute {
-            var value: JSONObject? = null; var error: String? = null
+            var value: JSONObject? = null; var error: String? = null; var sourceUnavailable = false
             try {
-                requireCurrent(pin); val original = session(pin); val identity = pin.source.identity; val type = kind(pin.source)
-                value = when (command) {
-                    "check" -> { original.current(); JSONObject().put("current", true) }
-                    "find" -> {
+                requireCurrent(pin); val type = pin.kind; val identity = pin.source.identity
+                // No temp copy or decoder for a format with no reader. A known binary header in a file named .txt also vetoes text decoding.
+                val original = if (type == "unsupported") null else session(pin)
+                value = when {
+                    original == null || type == "text" && original.hasRecognizedBinaryHeader -> {
+                        check(!pin.source.tombstone) { "此修订没有原文件正文" }
+                        check(command == "load" || command == "check") { "此原件没有可用的内置预览" }
+                        pin.source.requireCurrent(pin.lifetime)
+                        JSONObject().put("current", true).put("previewAvailable", false)
+                    }
+                    command == "check" -> JSONObject().put("current", true)
+                    command == "find" -> {
                         val query = request.getString("query"); require(query.isNotEmpty() && query.length <= 256)
                         if (type == "pdf") original.pdfSearch(query, request.optInt("cursor", 1), pin.lifetime)
                         else { check(type == "text"); original.searchText(request.optString("encoding", "UTF-8"), query, request.optInt("cursor", 0), pin.lifetime) }
@@ -113,20 +152,25 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
                             val result = document(original.document(unit, chunk, pin.lifetime))
                             preferences.edit().putInt("$identity.unit", unit).apply(); result.put("unit", unit).put("chunk", chunk)
                         }
-                        else -> {
+                        "text" -> {
                             val encoding = request.optString("encoding", preferences.getString("$identity.encoding", "UTF-8") ?: "UTF-8")
                             val offset = request.optInt("offset", preferences.getInt("$identity.offset", 0)).coerceAtLeast(0)
                             val result = original.text(encoding, offset, 12000, pin.lifetime)
                             preferences.edit().putInt("$identity.offset", offset).putString("$identity.encoding", encoding).apply()
                             result.put("encoding", encoding).put("offset", offset)
                         }
+                        else -> throw IllegalStateException("此原件没有可用的内置预览")
                     }
                 }
-                requireCurrent(pin); original.current()
-            } catch (failure: Exception) { error = failure.message?.take(260) ?: "原件读取未完成" }
+                requireCurrent(pin); original?.current()
+            } catch (failure: Exception) {
+                error = failure.message?.take(260) ?: "原件读取未完成"
+                // A decoder failure need not revoke a still-valid file; loss of the scoped source must.
+                sourceUnavailable = pin.source.tombstone || runCatching { requireCurrent(pin); pin.source.requireCurrent(pin.lifetime) }.isFailure
+            }
             main.post {
                 if (pins[pin.id] !== pin || pin.lifetime.isCancelled || !visible() || !pin.accepts(pin.ticket)) { done(null, "原文件窗口已变化，没有换用其他文件"); return@post }
-                pin.busy = false; pin.error = error
+                pin.busy = false; pin.error = error; pin.sourceUnavailable = sourceUnavailable
                 if (error == null && command != "find" && command != "check") pin.information = value
                 done(value, error); changed()
             }
@@ -145,7 +189,9 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
         if (method != "GET" || uri.port != -1 || uri.userInfo != null || uri.pathSegments.size != 3 || uri.pathSegments[2] != "content") return blocked()
         val pin = pins[uri.pathSegments[1]] ?: return blocked()
         return try {
-            requireCurrent(pin); val original = session(pin); val type = kind(pin.source)
+            requireCurrent(pin); val type = pin.kind
+            if (type !in setOf("image", "pdf", "audio", "video")) return blocked()
+            val original = session(pin)
             val bytes: ByteArray; val mime: String; var rangeStart = 0L; var rangeEnd = -1L; var partial = false
             if (type == "image" || type == "pdf") {
                 val image = if (type == "image") original.image().bitmap else original.pdfPage(uri.getQueryParameter("page")?.toIntOrNull() ?: 1, 1536)

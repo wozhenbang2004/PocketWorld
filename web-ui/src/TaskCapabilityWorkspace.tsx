@@ -3,6 +3,7 @@ import './ecosystem-depth.css';
 import { Accordion, AccordionItem, Button, CheckboxField, SettingsDialog } from './forms-library';
 import { PermissionPolicySettings, PermissionTargetRetired, type PermissionLeaveGuard } from './PermissionPolicySettings';
 import { TaskToolInventory } from './TaskToolInventory';
+import type { TaskCatalogReading } from './TaskToolComparison';
 import { TaskCapabilityConsent, taskCapabilityArtifactStatus, taskCapabilityDecision } from './task-capabilities';
 import { profileDependencyLabel } from './profile-contract';
 
@@ -19,6 +20,9 @@ const capabilityState = (state?: string): string => ({
   source_shadowed: profileDependencyLabel('source_shadowed'),
   unsupported_reference: '能力标识暂不受支持', revision_changed: '原技能版本或启用状态已变化', skill_not_active: '原技能未启用、已到期或待重新审阅', source_missing: '此范围没有原技能', scope_unavailable: '原任务的资料范围暂不可核对',
 } as Record<string, string>)[state || ''] || '当前状态暂不可核对';
+const knownPreparationGaps = new Set(['missing_installation', 'disabled', 'missing_tool', 'grant_required', 'needs_authorization', 'needs_discovery',
+  'not_available', 'not_selected', 'host_capability_missing', 'skill_not_active', 'source_missing', 'source_shadowed']);
+const preparationState = (state: string): 'ready' | 'gap' | 'unknown' => state === 'available' ? 'ready' : knownPreparationGaps.has(state) ? 'gap' : 'unknown';
 const requiredBy = (need: Data) => rows(need.requiredBy).map(skill => `${skill.name || skill.id} · 修订 ${skill.revision}`).join('；');
 const toolMaintenanceRoute = (need: Data): 'plugins' | 'mcp' | null => {
   const installation = need.installation, definitions = installation?.manifest?.tools;
@@ -57,6 +61,42 @@ export function TaskCapabilityWorkspace({ taskId, run, exportState, onBackChange
   };
   const acceptView = (value: Data) => { page.current = value.pageHandle; setView(value); setFile(null); };
   const load = () => { if (version !== generation.current) return; void invoke(page.current ? 'taskCapabilities.refresh' : 'taskCapabilities.open', page.current ? { pageHandle: page.current } : { taskId }, acceptView); };
+  const readComparison = async (current: () => boolean): Promise<TaskCatalogReading> => {
+    const handle = page.current, before = view?.toolInventory;
+    const live = () => current() && alive.current && !document.hidden && generation.current === version && !!handle && page.current === handle;
+    if (!live() || before?.taskId !== taskId || !['recorded', 'not_recorded'].includes(before.state)) throw new Error('请先在原任务重新读取这轮工具。');
+    const value = await invoke('taskCapabilities.refresh', { pageHandle: handle }, fresh => {
+      if (!live() || fresh.taskId !== taskId || fresh.pageHandle !== handle || fresh.executionAuthorized !== false) return;
+      acceptView(fresh);
+      if (fresh.toolInventory?.taskId !== taskId || fresh.toolInventory?.runId !== before.runId || fresh.toolInventory?.epoch !== before.epoch)
+        setNotice('原任务的工具记录或执行代次已变化，请从原任务重新核对。');
+    });
+    const record = value?.toolInventory;
+    if (!live() || value?.taskId !== taskId || value?.pageHandle !== handle || value.executionAuthorized !== false
+      || record?.taskId !== taskId || record.runId !== before.runId || record.epoch !== before.epoch
+      || record.format !== 'pocketworld.owner-tool-inventory.v1' || record.source !== 'original_run_record' || record.liveAvailabilityChecked !== false
+      || record.executionAuthorized !== false || !['recorded', 'not_recorded'].includes(record.state)) throw new Error('没有核对到同一轮执行记录。请返回原任务刷新；没有替换成其他执行或对话。');
+    const prep = value.skillPreparation, items: TaskCatalogReading['preparation']['items'] = [];
+    const exact = prep?.selectionSource === 'original_work_profile';
+    const checked = exact && prep.state === 'ready' && prep.configurationOnly === true && prep.executionAuthorized === false && !value.capabilityPreparationMessage
+      && Array.isArray(prep.unresolvedSkills) && Array.isArray(value.pluginNeeds) && Array.isArray(value.capabilityNeeds);
+    if (checked) {
+      for (const skill of rows(prep.unresolvedSkills)) items.push({ key: 'skill:' + skill.id, title: `技能 ${skill.id} · 修订 ${skill.revision}`, detail: capabilityState(skill.status), requiredBy: '', state: preparationState(skill.status) });
+      for (const need of [...rows(value.pluginNeeds), ...rows(value.capabilityNeeds)]) {
+        // A suggested skill, a same-name global definition and an unrelated installation are not evidence about this work.
+        if (need.executionAuthorized !== false || !rows(need.requiredBy).length || !rows(need.requiredBy).every(skill => skill.selectionSource === 'original_work_profile')) continue;
+        const ready = need.status === 'available';
+        const detail = need.pluginId && ready ? '读取时，原工作配置已选入，原安装已允许这个工具' : need.status === 'grant_required' ? '读取时，该插件安装尚未允许这个工具' : capabilityState(need.status);
+        items.push({ key: 'need:' + need.capability, title: need.pluginId ? `${need.pluginId} · ${need.tool}` : String(need.capability), detail, requiredBy: requiredBy(need), state: preparationState(need.status) });
+      }
+      const order = { gap: 0, unknown: 1, ready: 2 };
+      items.sort((left, right) => order[left.state] - order[right.state]);
+    }
+    const gaps = items.filter(item => item.state === 'gap').length, unknown = items.filter(item => item.state === 'unknown').length;
+    const summary = checked ? (gaps || unknown ? [gaps && `${gaps} 项已知缺项`, unknown && `${unknown} 项待核对`].filter(Boolean).join('，') : '所选技能未报告待准备项') : exact ? '所选技能的准备情况未知' : '没有已核对的技能选择';
+    const description = checked ? '只列原工作配置选定的技能及其要求。安装已允许，不等于本轮动作已批准。' : exact ? '暂时读不到原工作配置或其来源，不能把未知当作已准备。' : '按任务描述推荐的技能并非本次选用，不计作本轮缺项。';
+    return { record, preparation: { summary, description, items } };
+  };
   const showReview = (value: Data) => { reviewId.current = value.reviewHandle; consent.current.show(value.reviewHandle); setReview(value); setScript(null); setAcknowledged(false); };
   const acknowledge = (accepted: boolean) => {
     if (!review || review !== shown.current || working.current) return;
@@ -125,7 +165,7 @@ export function TaskCapabilityWorkspace({ taskId, run, exportState, onBackChange
       </section>}
       <div hidden={!!policy} style={policy ? { display: 'none' } : undefined}><div className="pw-form-actions"><Button variant="ghost" disabled={busy} onClick={load}>刷新原任务能力</Button></div>
       {view?.reviewPending && <section className="pw-eco-pending-review"><div><h4>待你核对本次脚本</h4><p>当前任务正在等你审阅脚本。打开此页不会批准执行。</p></div><Button disabled={busy} onClick={() => void invoke('taskCapabilities.review', { pageHandle: page.current }, showReview)}>审阅本次执行</Button></section>}{view?.capabilityPreparationMessage && <p>{view.capabilityPreparationMessage}</p>}
-      <TaskToolInventory key={`${taskId}:${view?.toolInventory?.runId || ''}`} inventory={view?.toolInventory} registerBack={registerInventoryBack} onEditPolicy={openPolicy} onOpenCatalog={onOpenTools ? () => onOpenTools() : undefined} onOpenProfiles={onOpenTools ? () => onOpenTools('workProfiles') : undefined} />
+      <TaskToolInventory key={`${taskId}:${view?.toolInventory?.runId || ''}:${view?.toolInventory?.epoch ?? ''}`} inventory={view?.toolInventory} registerBack={registerInventoryBack} onEditPolicy={openPolicy} readComparison={view?.toolInventory?.taskId === taskId && ['recorded', 'not_recorded'].includes(view.toolInventory.state) ? readComparison : undefined} onOpenProfiles={onOpenTools ? () => onOpenTools('workProfiles') : undefined} />
       <div className="pw-eco-capability-layout"><section className="pw-eco-executions"><div className="pw-eco-section-heading"><h4>执行与成果</h4><p>原回执和文件分开核对，取回不会重跑脚本。</p></div>{rows(view?.executions).map(operation => <section className="pw-eco-operation" key={operation.operationId}><h4>原任务脚本回执</h4><p>{receiptStatus(operation.receipt?.status || operation.state || '等待原回执')} · {taskCapabilityArtifactStatus(operation)}</p><p className="pw-field-hint">原操作 {operation.operationId}</p><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => original('taskCapabilities.receipt', operation)}>核对原回执</Button>{operation.artifactAvailability?.canRecheck === true && <Button variant="secondary" disabled={busy} onClick={() => original('taskCapabilities.retrieve', operation)}>取回原文件成果</Button>}</div>{operation.receipt?.output && <Accordion variant="divided"><AccordionItem title="读取原始输出"><pre className="pw-source-code">{String(operation.receipt.output)}</pre></AccordionItem></Accordion>}{rows(operation.receipt?.artifacts).map(artifact => <div className="pw-eco-artifact" key={artifact.artifactId}><p>{artifact.path} · {artifact.bytes} 字节</p><Button variant="ghost" disabled={busy} onClick={() => void invoke('taskCapabilities.artifact', { pageHandle: page.current, artifactHandle: artifact.artifactHandle }, value => setFile(value))}>读取原成果</Button><Button variant="secondary" disabled={busy || !!exported && ['waiting', 'selected', 'writing'].includes(exported.phase)} onClick={() => void invoke('taskCapabilities.export', { pageHandle: page.current, artifactHandle: artifact.artifactHandle }, () => setNotice('系统保存请求已发出，请完成或取消原文件选择。'))}>导出原成果</Button></div>)}</section>)}
       {!!file && <section><h4>{file.path}</h4><p className="pw-field-hint" style={{ overflowWrap: 'anywhere' }}>SHA-256：{file.sha256}</p><p>{file.bytes} 字节。文件内容来自原脚本，尚未导入项目或执行。</p></section>}
       </section><aside className="pw-eco-tool-needs"><div className="pw-eco-section-heading"><h4>{view?.skillPreparation?.selectionSource === 'original_work_profile' ? '所选技能的能力准备' : '相关技能的能力准备'}</h4><p>{view?.skillPreparation?.selectionSource === 'original_work_profile' ? `按原工作配置${view.skillPreparation.profileRevision ? `修订 ${view.skillPreparation.profileRevision}` : ''}固定的技能版本核对。准备后仍需回原任务检查原选择。` : '按任务描述提示相关技能，列出它们需要的连接、工具与宿主能力。是否使用以本次执行为准。'}</p></div>

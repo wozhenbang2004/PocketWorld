@@ -76,7 +76,7 @@ internal class PocketWebWorkSearch(
                             // Internal tasks.open preflight: reread the selected original instead
                             // of treating the bounded navigation-ID cache as lasting authority.
                             "work.search.task" -> {
-                                fields(args, setOf("taskId", "query", "expectedRunId", "expectedEpoch"))
+                                fields(args, setOf("taskId", "query", "expectedRunId", "expectedEpoch", "expectedProjectId", "expectedCheckoutId"))
                                 val id = args.opt("taskId") as? String ?: error("原工作身份缺失")
                                 val query = args.opt("query") as? String ?: error("原查找文字缺失")
                                 require(id.isNotBlank() && id.length <= 240 && query.length <= 500 && '\u0000' !in query) { "原工作查找范围无效" }
@@ -93,6 +93,7 @@ internal class PocketWebWorkSearch(
                                     require(run.isNotBlank() && run.length <= 80 && task.optString("runId") == run &&
                                         task.optInt("coordinatorEpoch") == integer(args, "expectedEpoch", 0, 1, Int.MAX_VALUE)) { "原整理回合已变化，请在原工作中重新核对" }
                                 }
+                                ProjectTaskReadScope.read(args)?.requireOriginal(id, task)
                                 val normalized = normalize(query)
                                 check(normalized.isEmpty() || normalize(task.optString("goal") + "\n" + task.optString("summary")).contains(normalized)) { "原工作已变化，请重新搜索" }
                                 JSONObject().put("taskId", id).put("readOnly", true).put("executionAuthorized", false)

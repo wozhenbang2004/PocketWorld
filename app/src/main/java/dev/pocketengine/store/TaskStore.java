@@ -2013,13 +2013,34 @@ public final class TaskStore {
                 .put("ownerWork",ownerWorkMetadataView(task)).put("executionScope",new JSONObject(task.getJSONObject("executionScope").toString()));
     }
     private JSONObject ownerWorkControls(JSONObject task)throws Exception {
-        String status=task.optString("status"),run=task.optString("runId");boolean unresolved=hasUnresolved(task.getString("id"));JSONObject state=ownerWorkControlState(task);
-        boolean remaining=state.optBoolean("budgetRemaining")&&state.optLong("effectiveDeadline")>System.currentTimeMillis();
+        return ownerWorkControls(task,ownerWorkControlState(task));
+    }
+    private JSONObject ownerWorkControls(JSONObject task,JSONObject state)throws Exception {
+        String status=task.optString("status"),run=task.optString("runId");boolean unresolved=hasUnresolved(task.getString("id"));
+        long now=System.currentTimeMillis(),deadline=state.optLong("effectiveDeadline");
+        boolean remaining=state.optBoolean("budgetRemaining")&&deadline>now;
         int results=state.optInt("resultDeliveryCount",-1);boolean capacityKnown=results>=0,capacityAvailable=capacityKnown&&results<OWNER_WORK_RESULT_LIMIT;
         boolean relatedPending=state.optInt("pendingChildCount")>0||state.optBoolean("relatedStateUnavailable"),canStop=(!status.matches("completed|failed|cancelled")||relatedPending||state.optBoolean("resultHandlingActive"))&&!task.optBoolean("cancelRequested");
-        return new JSONObject().put("resultCapacityAvailable",capacityAvailable).put("resultCapacityState",!capacityKnown?"requires_original_read":capacityAvailable?"available":"full").put("canStop",canStop).put("canCancel",canStop)
+        boolean stopped=status.matches("interrupted|paused|awaiting_user|needs_confirmation|failed");
+        boolean canContinue=!run.isEmpty()&&stopped&&!task.optBoolean("cancelRequested")&&!unresolved&&!relatedPending&&remaining&&capacityAvailable;
+        JSONObject controls=new JSONObject().put("resultCapacityAvailable",capacityAvailable).put("resultCapacityState",!capacityKnown?"requires_original_read":capacityAvailable?"available":"full").put("canStop",canStop).put("canCancel",canStop)
                 .put("canInput",!run.isEmpty()&&status.matches("preparing|running|paused|pausing")&&!task.optBoolean("cancelRequested")&&state.optBoolean("mailboxOpen"))
-                .put("canContinue",!run.isEmpty()&&status.matches("interrupted|paused|awaiting_user|needs_confirmation|failed")&&!task.optBoolean("cancelRequested")&&!unresolved&&!relatedPending&&remaining&&capacityAvailable);
+                .put("canContinue",canContinue);
+        // A display explanation for this read, never an alternate admission predicate.
+        if(stopped){
+            String reason;
+            if(canContinue)reason="next_attempt";
+            else if(task.optBoolean("cancelRequested"))reason="stop_requested";
+            else if(unresolved)reason="unresolved_effect";
+            else if(state.optBoolean("relatedStateUnavailable"))reason="related_unavailable";
+            else if(relatedPending)reason="waiting_children";
+            else if(capacityKnown&&!capacityAvailable)reason="result_limit";
+            else if(deadline>0&&deadline<=now)reason="deadline_reached";
+            else if(Boolean.FALSE.equals(state.opt("budgetRemaining")))reason="budget_spent";
+            else reason="original_read_required";
+            controls.put("continuationState",reason);
+        }
+        return controls;
     }
     /** Small native facts saved atomically with the original task header. UI reads
      * recheck time and unresolved SQL operations without loading an oversized core. */
@@ -2125,7 +2146,7 @@ public final class TaskStore {
         }
     }
     private void projectOwnerWorkHeader(JSONObject task,JSONObject header)throws Exception {
-        if(!OwnerWorkTask.isOwnerWork(task))return;JSONObject meta=OwnerWorkTask.require(task),reference=new JSONObject(),state=ownerWorkControlState(task),controls=ownerWorkControls(task);
+        if(!OwnerWorkTask.isOwnerWork(task))return;JSONObject meta=OwnerWorkTask.require(task),reference=new JSONObject(),state=ownerWorkControlState(task),controls=ownerWorkControls(task,state);
         for(String key:new String[]{"format","workTaskId","conversationId","generation","sourceTaskId","sourceRunId","sourceEpoch","sourceOperationId","sourceMessageRefs","phase","admittedAt","replyToMessageIds","contract","relatedRunId","relatedTaskCount","relatedPendingChildren","relatedSourcesUnavailable","relatedUnavailableReason"})if(meta.has(key))reference.put(key,meta.get(key));
         reference.put("handling",ownerWorkHandling(task));
         header.put("executionRole",OwnerWorkTask.ROLE).put("taskId",task.getString("id")).put("conversationId",task.getString("conversationId")).put("runId",task.optString("runId")).put("epoch",task.optInt("coordinatorEpoch")).put("coordinatorEpoch",task.optInt("coordinatorEpoch"))
@@ -2207,7 +2228,8 @@ public final class TaskStore {
         if(!OwnerWorkTask.isOwnerWork(view))return ownerResultHandlingForUi(view);
         boolean current;try{requireOwnerWorkSources(view);current=true;}catch(Exception unavailable){current=false;}
         if(view.optJSONObject("executionScope")!=null)projectOwnerWorkHeader(view,view);
-        view.put("taskId",view.getString("id")).put("runId",view.optString("runId")).put("epoch",view.optInt("coordinatorEpoch")).put("controls",ownerWorkControls(view)).put("contextAvailable",current);
+        else view.put("controls",ownerWorkControls(view));
+        view.put("taskId",view.getString("id")).put("runId",view.optString("runId")).put("epoch",view.optInt("coordinatorEpoch")).put("contextAvailable",current);
         view.remove("ownerWorkControlState");
         if(current){
             // An older bounded header may predate this projection. Do not load
@@ -2216,7 +2238,7 @@ public final class TaskStore {
             return view;
         }
         view.getJSONObject("ownerWork").remove("contract");view.getJSONObject("ownerWork").put("handling",new JSONObject().put("state","unavailable").put("reason","原工作来源已不可用"));
-        view.getJSONObject("controls").put("canInput",false).put("canContinue",false);
+        view.getJSONObject("controls").put("canInput",false).put("canContinue",false).put("continuationState","source_unavailable");
         JSONObject hidden=new JSONObject();for(String key:new String[]{"id","kind","executionMode","executionRole","actorId","spaceId","taskId","conversationId","runId","epoch","coordinatorEpoch","status","createdAt","updatedAt","cancelRequested","ownerWork","controls","taskCoreBytes","taskCoreReadLimited"})if(view.has(key))hidden.put(key,view.get(key));
         return hidden.put("title","原工作").put("goal","原工作来源已不可用于上下文").put("summary","原工作来源已删除、停用或暂不可核对；任务身份与停止入口保留")
                 .put("contextAvailable",false).put("taskProjection","source_unavailable").put("sourceCurrentReadRequired",true).put("auditBodyIncluded",false).put("executionAuthorized",false)
@@ -2230,7 +2252,7 @@ public final class TaskStore {
     private JSONObject ownerWorkView(JSONObject task)throws Exception {
         OwnerWorkTask.require(task);JSONObject view=new JSONObject();for(String key:new String[]{"id","kind","executionMode","executionRole","actorId","spaceId","conversationId","title","goal","status","summary","createdAt","updatedAt","coordinatorEpoch","cancelRequested","stepCeiling","executionScope","resultRevision"})if(task.has(key))view.put(key,task.get(key));
         boolean current;try{requireOwnerWorkSources(task);current=true;}catch(Exception unavailable){current=false;}if(!current)view.put("title","原工作").put("goal","原工作来源已不可用于上下文").put("summary","原工作来源已删除、停用或暂不可核对；任务身份与停止入口保留");
-        JSONObject controls=ownerWorkControls(task);if(!current)controls.put("canInput",false).put("canContinue",false);
+        JSONObject controls=ownerWorkControls(task);if(!current)controls.put("canInput",false).put("canContinue",false).put("continuationState","source_unavailable");
         JSONObject metadata=ownerWorkMetadataView(task);if(!current){metadata.remove("contract");metadata.put("handling",new JSONObject().put("state","unavailable").put("reason","原工作来源已不可用"));}
         if(current)projectOwnerWorkTeams(task,view);
         return view.put("taskId",task.getString("id")).put("runId",task.optString("runId")).put("epoch",task.optInt("coordinatorEpoch")).put("controls",controls).put("contextAvailable",current).put("ownerWork",metadata);
@@ -15232,6 +15254,9 @@ public final class TaskStore {
         // hides their body. Limited cores already carry the native header's verified projection.
         if(!limited){result.remove("conversationPhoneLink");JSONObject link=TaskAuditStore.conversationPhoneLink(result);if(link!=null)result.put("conversationPhoneLink",link);}
         JSONObject sourceView=phoneOwnerQuestionForUi(result);if(sourceView!=result)return sourceView;
+        if(OwnerWorkTask.isOwnerWork(result)&&result.optBoolean("contextAvailable")&&result.getJSONObject("controls").optBoolean("canContinue")){
+            result.getJSONObject("controls").put("continuationHistory",TaskRunDocumentReader.resumeHistoryForUi(db,id,result.getString("runId"),result.getInt("coordinatorEpoch")));
+        }
         JSONObject contextCheck=TaskAuditStore.contextBudgetCheck(db,result);result.put("contextBudgetCheck",contextCheck==null?JSONObject.NULL:contextCheck);
         JSONObject events=TaskAuditStore.eventPage(db,id,"",32,65536),operations=TaskAuditStore.operationPage(db,id,"",24,65536);
         JSONArray eventBodies=new JSONArray(),operationBodies=new JSONArray(),eventRows=events.getJSONArray("entries"),operationRows=operations.getJSONArray("entries");
@@ -15243,7 +15268,10 @@ public final class TaskStore {
         result.put("logicalRequests",InferenceRequestStore.list(db,id)).put("logicalRequestWindowLimit",16);
         JSONObject flags=new JSONObject();for(String type:new String[]{"memory_owner_consolidation","media_owner_prepared","browser_research_requested"})try(Cursor row=db.rawQuery("SELECT 1 FROM task_events WHERE task_id=? AND event_type=? LIMIT 1",new String[]{id,type})){flags.put(type,row.moveToFirst());}result.put("nativeEventTypeFlags",flags).put("nativeTaskKind",result.optJSONObject("sourceLearningJob")!=null?"source_learning":flags.optBoolean("memory_owner_consolidation")?"memory_consolidation":flags.optBoolean("media_owner_prepared")?"media":result.optString("kind"));
         if("GATEWAY_ONLY".equals(result.optString("nativeExecutionMode")))result.put("gatewaySession",gatewayParentSessionForUi(id));
-        return image&&!limited?copy(result,true):result;
+        // ownerWorkForUi already verified controls against the source before dropping its
+        // private deliveries/control header. Recomputing from this display copy invents an
+        // unknown result count and hides a valid Continue when the detail includes images.
+        return image&&!limited?copy(result,true,OwnerWorkTask.isOwnerWork(result)?result.getJSONObject("controls"):null):result;
     }
     private boolean hasUnconfirmedForUi(String id){
         // Presentation only: owned-running/stopping are real nonterminal facts, not unknown effects.
@@ -15658,10 +15686,11 @@ public final class TaskStore {
         }
         projection.put("resultImageDigest",resultReviewDigest(task));JSONObject evidence=projection.optJSONObject("evidence");if(evidence==null){evidence=new JSONObject();projection.put("evidence",evidence);}evidence.put("imageFile",image.getString("imageFile")).put("imageSha256",image.getString("imageSha256"));
     }
-    private JSONObject copy(JSONObject t,boolean image)throws Exception {
+    private JSONObject copy(JSONObject t,boolean image)throws Exception {return copy(t,image,null);}
+    private JSONObject copy(JSONObject t,boolean image,JSONObject checkedOwnerControls)throws Exception {
         // Never delete an old file while a caller can still roll its replacement pointer back.
         String issue="";if(!db.inTransaction())try{maintainScreenshot(t,System.currentTimeMillis(),image);}catch(Exception unavailable){issue="unreadable";}
-        JSONObject result=new JSONObject(t.toString());if(OwnerWorkTask.isOwnerWork(t))result.put("taskId",t.getString("id")).put("runId",t.optString("runId")).put("epoch",t.optInt("coordinatorEpoch")).put("controls",ownerWorkControls(t));if("needs_confirmation".equals(t.optString("status")))result.put("resultReviewDigest",resultReviewDigest(t));
+        JSONObject result=new JSONObject(t.toString());if(OwnerWorkTask.isOwnerWork(t))result.put("taskId",t.getString("id")).put("runId",t.optString("runId")).put("epoch",t.optInt("coordinatorEpoch")).put("controls",checkedOwnerControls==null?ownerWorkControls(t):new JSONObject(checkedOwnerControls.toString()));if("needs_confirmation".equals(t.optString("status")))result.put("resultReviewDigest",resultReviewDigest(t));
         projectOwnerWorkPreparationHeader(t,result);result.remove("ownerWorkPreparations");
         projectResultImageIdentity(t,result);JSONObject evidence=result.optJSONObject("evidence");if(evidence==null)return result;
         evidence.remove("imageDataUrl");JSONObject record=evidence.optJSONObject("screenshot");

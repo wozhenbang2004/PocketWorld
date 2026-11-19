@@ -7,3 +7,5 @@
 .pw-history-window-message .afa-answer { border: 0; box-shadow: none; background: transparent; padding: 0; }
 .pw-history-window-message .afa-answerbody { padding: 0; }
 .pw-history-window-messages > button { align-self: center; flex: none; min-height: 44px; }
+.pw-history-window-message .pw-input-work { min-height: 44px; }
+.pw-history-window-message .pw-input-work-error { margin: 2px 0 0; font-size: .875rem; }

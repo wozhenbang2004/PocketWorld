@@ -2756,7 +2756,7 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
 
     public JSONObject ownerWorkControl(String conversation,JSONObject input)throws Exception{
         String id=input.getString("taskId"),run=input.getString("runId"),action=input.getString("action");int epoch=input.getInt("epoch");
-        final JSONObject task;
+        final JSONObject task;JSONObject continuation=null;
         try{task=tasks.ownerWork(id,conversation);}
         catch(Exception unavailable){throw new OwnerWorkControlRejected("暂时无法读取这件工作，请重新打开任务后再试。",unavailable);}
         if(task==null||!run.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch"))throw new OwnerWorkControlRejected("这件工作的执行状态已变化，请重新打开任务。",null);
@@ -2766,8 +2766,12 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
             else{var related=run.isEmpty()?null:captureOriginalRelatedStops(id,run,epoch);tasks.requestOwnerWorkCancel(id,run,epoch);if(related!=null)features.cancelRelatedTasks(related);}
         }else if("continue".equals(action)){
             if(!task.getJSONObject("controls").optBoolean("canContinue"))throw new OwnerWorkControlRejected("这件工作当前无法继续，请查看任务状态。",null);
+            final JSONObject target;
+            try{target=tasks.ownerWorkExecutionModel(id,run,epoch);}
+            catch(InterruptedException interrupted){throw interrupted;}
+            catch(Exception changed){throw new OwnerWorkControlRejected("无法核实原工作绑定的来源和模型，未开启新一轮。请核对原工作；不会改用默认模型。",changed);}
             final ModelConfig selected;
-            try{selected=captureOwnerWorkModel(tasks.ownerWorkExecutionModel(id,run,epoch));}
+            try{selected=captureOwnerWorkModel(target);}
             catch(InterruptedException interrupted){throw interrupted;}
             catch(Exception unavailable){throw new OwnerWorkControlRejected("暂时无法使用这件工作原来的模型，请检查模型连接后重试。",unavailable);}
             synchronized(assistantAdmissions){
@@ -2778,9 +2782,14 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
                 requireOwnerWorkAttachmentRoute(task,selected);
                 // From admission onward, errors must not claim that no write occurred.
                 JSONObject admitted=tasks.continueOwnerWork(id,run,epoch,original);executeAdmittedOwnerWork(admitted,selected,original,null);
+                // Bind acceptance to the tuple actually admitted by this call, not whichever
+                // attempt is current by the time the following UI snapshot is read.
+                continuation=json("taskId",id,"fromRunId",run,"fromEpoch",epoch,"runId",admitted.getString("runId"),"epoch",admitted.getInt("coordinatorEpoch"));
             }
         }else throw new OwnerWorkControlRejected("不支持的私人工作操作。",null);
-        pushTask(id);return tasks.ownerWork(id,conversation).put("controlRequested",action).put("newGrant",false);
+        pushTask(id);JSONObject result=tasks.ownerWork(id,conversation).put("controlRequested",action).put("newGrant",false);
+        if(continuation!=null)result.put("continuationReceipt",continuation);
+        return result;
     }
     private JSONObject ownerWorkTool(String sourceTask,String sourceRun,int sourceEpoch,String tool,String operation,JSONObject args,RunControl sourceControl)throws Exception{
         tasks.checkCapability(sourceTask,sourceRun,sourceEpoch,tool,sourceControl);JSONObject source=tasks.get(sourceTask,false);

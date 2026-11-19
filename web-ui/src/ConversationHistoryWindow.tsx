@@ -9,7 +9,7 @@ import './conversation-history-window.css';
 type Json=Record<string,any>;
 type Position={index:number;offset:number;anchor:string};
 export type ConversationHistoryTaskOrigin={readerWindow:number;readerConversationId:string;readerMessageId:string};
-type Props={page:Json|null;submitting:boolean;can:(action:string)=>boolean;act:(action:string,args?:Json)=>Promise<any>;registerBack:(handler:(()=>boolean)|null)=>void;onCopy:(text:string)=>Promise<unknown>;onOpenTask:(taskId:string,entry:'overview'|'process',origin:ConversationHistoryTaskOrigin)=>void};
+type Props={page:Json|null;submitting:boolean;can:(action:string)=>boolean;act:(action:string,args?:Json)=>Promise<any>;registerBack:(handler:(()=>boolean)|null)=>void;onCopy:(text:string)=>Promise<unknown>;onOpenTask:(taskId:string,entry:'overview'|'process',origin:ConversationHistoryTaskOrigin,nativeAlreadyOpen?:boolean)=>void};
 /** A second, read-only history window. The active composer stays with its original
  * submission until the owner explicitly switches after its receipt has settled. */
 export function ConversationHistoryWindow({page,submitting,can,act,registerBack,onCopy,onOpenTask}:Props){
@@ -18,8 +18,11 @@ export function ConversationHistoryWindow({page,submitting,can,act,registerBack,
  const restored=useRef<number|null>(null),position=useRef<Position>({index:0,offset:0,anchor:''});
  const timer=useRef<ReturnType<typeof setTimeout>|null>(null),sending=useRef(false);
  const [pending,setPending]=useState(false),[error,setError]=useState('');
+ const [inputNotice,setInputNotice]=useState<{window:number;messageId:string;error?:string}|null>(null);
+ const returnToInput=useRef<(ConversationHistoryTaskOrigin&{taskId:string;revision:number})|null>(null);
  const rows:Json[]=Array.isArray(shown.messages)?shown.messages:[];
  const marker=rows.map(row=>`${row.id}:${row.sourceRevision||0}`).join('|');
+ const loadingInput=(id:string)=>pending&&inputNotice?.window===shown.window&&inputNotice?.messageId===id&&!inputNotice?.error;
  const args=()=>({window:live.current?.window,conversationId:live.current?.conversation});
  const remember=()=>{
   const node=scroll.current;if(!node||!live.current||restored.current!==live.current.window)return;
@@ -45,16 +48,45 @@ export function ConversationHistoryWindow({page,submitting,can,act,registerBack,
   try{await onCopy(text)}catch(failure){if(live.current?.window===original.window)setError(failure instanceof Error?failure.message:'复制未完成，请选择文字后复制。');throw failure}
  };
  const openLinkedTask=async(message:Json,entry:'overview'|'process')=>{
-  const original=live.current,taskId=message.phoneResult?.taskId||message.taskResult?.taskId||message.taskId;
+  const original=live.current,input=message.role==='user';
+  const taskId=input?message.readerInputTaskId:message.phoneResult?.taskId||message.taskResult?.taskId||message.taskId;
   if(!original||sending.current||!taskId||!can('tasks.open'))return;
-  sending.current=true;setPending(true);setError('');remember();
+  const origin={readerWindow:original.window,readerConversationId:original.conversation,readerMessageId:message.id};
+  const sameWindow=()=>live.current?.window===origin.readerWindow&&live.current?.conversation===origin.readerConversationId;
+  const checkInput=()=>{
+   if(document.hidden||!sameWindow())return false;
+   if(!live.current?.messages?.some((row:Json)=>row.id===message.id&&row.role==='user'&&row.sourceRevision===message.sourceRevision&&row.readerInputTaskId===taskId))throw new Error('原消息已变化，请刷新这份历史后再查看。');
+   return true;
+  };
+  sending.current=true;setPending(true);setError('');setInputNotice(input?{window:origin.readerWindow,messageId:message.id}:null);remember();
   if(timer.current){clearTimeout(timer.current);timer.current=null}
   try{
-   // Keep the native reading window in place while its task sheet is shown.
+   // Preserve the reader and its underlying draft. Never select the conversation.
    if(can('conversation.reader.position'))await act('conversation.reader.position',{window:original.window,conversationId:original.conversation,index:position.current.index,offset:position.current.offset});
-   if(live.current?.window===original.window)onOpenTask(String(taskId),entry,{readerWindow:original.window,readerConversationId:original.conversation,readerMessageId:message.id});
-  }catch(failure){if(live.current?.window===original.window)setError(failure instanceof Error?failure.message:'原任务暂不可读取。')}
-  finally{sending.current=false;setPending(false)}
+   if(!sameWindow())return;
+   if(!input){onOpenTask(String(taskId),entry,origin);return}
+   if(!checkInput())return;
+   // Only promote the sheet after native binds this exact persisted input to its
+   // private task and still-current run. A failed read never opens a substitute.
+   const ack=await act('tasks.open',{id:taskId,requestNavigation:false,...origin});
+   if(!checkInput())return;
+   if(ack?.taskId!==taskId||ack.readOnly!==true||ack.executionAuthorized!==false)throw new Error('未能核对这条输入的原工作。');
+   returnToInput.current={...origin,taskId,revision:message.sourceRevision};
+   onOpenTask(taskId,'overview',origin,true);
+  }catch(failure){
+   if(sameWindow()){
+    const text=failure instanceof Error?failure.message:'原工作暂不可读取，请重试。';
+    if(input)setInputNotice({window:origin.readerWindow,messageId:message.id,error:text});else setError(text)
+   }
+  }finally{sending.current=false;setPending(false);setInputNotice(notice=>notice?.error?notice:null)}
+ };
+ const focusOriginalInput=()=>{
+  const target=returnToInput.current;if(!target||!scroll.current)return false;
+  returnToInput.current=null;
+  if(live.current?.window!==target.readerWindow||live.current?.conversation!==target.readerConversationId)return false;
+  const button=Array.from(scroll.current?.querySelectorAll<HTMLButtonElement>('[data-input-work]')||[]).find(item=>item.closest<HTMLElement>('[data-reader-id]')?.dataset.readerId===target.readerMessageId&&item.dataset.inputWork===target.taskId&&Number(item.dataset.inputRevision)===target.revision);
+  if(!button||button.disabled)return false;
+  button.focus({preventScroll:true});return true;
  };
  const back=()=>{if(!live.current)return false;if(!sending.current)void invoke('conversation.reader.close');return true};
  useEffect(()=>{registerBack(back);return()=>registerBack(null)});
@@ -67,10 +99,10 @@ export function ConversationHistoryWindow({page,submitting,can,act,registerBack,
   const items=Array.from(node.querySelectorAll<HTMLElement>('[data-reader-index]'));
   const row=items.find(item=>item.dataset.readerId===saved.anchor)||items[Math.min(Math.max(0,saved.index),items.length-1)];
   if(row)node.scrollTop+=row.getBoundingClientRect().top-node.getBoundingClientRect().top+saved.offset;
-  restored.current=page.window;remember();
+  restored.current=page.window;remember();if(first)focusOriginalInput();
  },[page?.window,marker]);
  useEffect(()=>{setError('')},[page?.window]);
- return <Drawer.Root open={!!page} onOpenChange={open=>{if(!open)back()}} dismissible={!pending} shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay"/><Drawer.Content className="pw-drawer pw-conversation-history-window" aria-describedby="pw-history-window-description" inert={!page} onCloseAutoFocus={exit.onCloseAutoFocus}>
+ return <Drawer.Root open={!!page} onOpenChange={open=>{if(!open)back()}} dismissible={!pending} shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay"/><Drawer.Content className="pw-drawer pw-conversation-history-window" aria-describedby="pw-history-window-description" inert={!page} onOpenAutoFocus={event=>{if(focusOriginalInput())event.preventDefault()}} onCloseAutoFocus={exit.onCloseAutoFocus}>
   <header className="pw-drawer-header"><div><Drawer.Title>{shown.title||'阅读对话'}</Drawer.Title><Drawer.Description id="pw-history-window-description">只读查看，原输入和发送回执仍留在原对话。</Drawer.Description></div><IconButton icon={IconRefresh} aria-label="刷新这份对话历史" disabled={!page||pending||!!shown.loading||!can('conversation.reader.refresh')} onClick={()=>void invoke('conversation.reader.refresh')}/><IconButton icon={IconClose} aria-label="返回原输入" disabled={!page||pending} onClick={back}/></header>
   <div className="pw-drawer-body pw-history-window-messages" ref={scroll} onScroll={saveReading}>
    {(error||shown.error)&&<p className="pw-error" role="alert">{error||shown.error}</p>}
@@ -82,11 +114,13 @@ export function ConversationHistoryWindow({page,submitting,can,act,registerBack,
     {Array.isArray(message.attachments)&&message.attachments.length>0&&<div className="pw-message-files">{message.attachments.map((file:Json)=><Button key={`${file.id}:${file.sha256}`} variant="ghost" leadingIcon={IconFile} disabled={!page||pending||!can('conversation.reader.attachment')} onClick={()=>void invoke('conversation.reader.attachment',{messageId:message.id,id:file.id,sha256:file.sha256})}>{file.name||'原附件'}</Button>)}</div>}
     <div className="pw-action-row">
      {!!message.content&&<MessageActions onCopy={()=>copy(message.content)}/>}
+     {message.role==='user'&&typeof message.readerInputTaskId==='string'&&message.readerInputTaskId&&can('tasks.open')&&<Button variant="ghost" size="small" className="pw-input-work" leadingIcon={IconTool} data-input-work={message.readerInputTaskId} data-input-revision={message.sourceRevision} aria-busy={loadingInput(message.id)} disabled={!page||pending} onClick={()=>void openLinkedTask(message,'overview')}>{loadingInput(message.id)?'正在读取…':'查看原工作'}</Button>}
      {message.role==='assistant'&&(Number(message.sourceRevision)>0||message.phoneResult||message.taskResult)&&(message.phoneResult?.taskId||message.taskResult?.taskId||message.taskId)&&can('tasks.open')&&<>
       <Button variant="ghost" size="small" disabled={!page||pending} onClick={()=>void openLinkedTask(message,'overview')}>任务详情</Button>
       <Button variant="ghost" size="small" leadingIcon={IconTool} disabled={!page||pending} onClick={()=>void openLinkedTask(message,'process')}>执行轨迹</Button>
      </>}
     </div>
+    {inputNotice?.error&&inputNotice.window===shown.window&&inputNotice.messageId===message.id&&<p className="pw-input-work-error" role="status">{inputNotice.error}</p>}
    </article>)}
    {!shown.loading&&!shown.error&&!rows.length&&<p className="pw-muted">这份对话没有可读取的消息。</p>}
   </div>

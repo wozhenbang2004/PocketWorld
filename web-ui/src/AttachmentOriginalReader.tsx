@@ -21,13 +21,17 @@ export function DocumentProjection({value}:{value:Json}) {
 }
 
 const textEncodings=['UTF-8','UTF-16LE','UTF-16BE','GB18030','ISO-8859-1'].map(id=>({id,label:id}));
-type OriginalReaderProps={source:Json;windowId:string;showTitle?:boolean};
+type OriginalReaderProps={source:Json;windowId:string;showTitle?:boolean;recovery?:{canSave:boolean;busy:boolean;onOpenInReader?:()=>void}};
+const officePreviewIssue:Record<string,string>={
+ unsupported:'这个文档格式没有内置预览。', encrypted:'这份文档受加密保护，无法在这里预览。',
+ invalid:'未能读出这份文档的结构。', limit_exceeded:'这份文档超出了内置预览的读取范围。', unavailable:'这份文档暂时不能在这里预览。',
+};
 
 export function AttachmentOriginalReader(props:OriginalReaderProps) {
  return <OriginalReader key={JSON.stringify([props.windowId,props.source.id])} {...props}/>;
 }
 
-function OriginalReader({source,windowId,showTitle=true}:OriginalReaderProps) {
+function OriginalReader({source,windowId,showTitle=true,recovery}:OriginalReaderProps) {
  const [toolsVisible,setToolsVisible]=useState(false);
  const [value,setValue]=useState<Json>(obj(source.information)),[error,setError]=useState(''),[busy,setBusy]=useState(false),[query,setQuery]=useState(''),[found,setFound]=useState<Json|null>(null),[zoom,setZoom]=useState(1),[turn,setTurn]=useState(0),[position,setPosition]=useState('1'),[markdown,setMarkdown]=useState(String(source.name||'').toLowerCase().endsWith('.md'));
  const [recoveryEncoding,setRecoveryEncoding]=useState('');
@@ -43,7 +47,10 @@ function OriginalReader({source,windowId,showTitle=true}:OriginalReaderProps) {
  useEffect(()=>{setValue(obj(source.information));setError('');setFound(null);setZoom(1);setTurn(0);pending.current=false;void invoke('load');return()=>{sequence.current++;pending.current=false}},[source.id,windowId]);
  useEffect(()=>{const hide=()=>{if(document.visibilityState==='hidden'){sequence.current++;pending.current=false;setBusy(false);setFound(null)}};document.addEventListener('visibilitychange',hide);return()=>document.removeEventListener('visibilitychange',hide)},[]);
  useEffect(()=>{if(Object.keys(details).length)setValue(details)},[source.information]);
- const actual=value,failed=String(source.error||error||''),ready=!failed&&Object.keys(actual).length>0,page=Number(actual.page||1),pages=Number(actual.pages||0);
+ const actual=value,failed=String(source.error||error||'');
+ const officeIssue=type==='office'&&actual.status?(Object.hasOwn(officePreviewIssue,String(actual.status))?officePreviewIssue[String(actual.status)]:!['docx','xlsx','pptx'].includes(actual.format)?'未读到支持的 Office 文档结构。':''):'';
+ const unavailable=actual.previewAvailable===false?'这个格式没有内置预览。':officeIssue;
+ const ready=!failed&&!unavailable&&type!=='unsupported'&&Object.keys(actual).length>0,page=Number(actual.page||1),pages=Number(actual.pages||0);
  const imageTools=(type==='pdf'||type==='image')&&ready;
  const isMarkdown=String(source.name||'').toLowerCase().endsWith('.md');
  const read=(args:Json)=>void invoke('read',args);
@@ -52,14 +59,17 @@ function OriginalReader({source,windowId,showTitle=true}:OriginalReaderProps) {
  return <section className="pw-original-file" aria-label={`原件：${source.name}`}>
  {showTitle&&<header><h3>{source.name}</h3><p className="pw-muted">{source.mimeType}</p></header>}
  {(busy||source.busy)&&<p role="status">正在读取原件…</p>}
+ {!failed&&unavailable&&<p role="status">{unavailable}{recovery?.canSave&&' 可以另存这份原件，文件内容不变。'}</p>}
  {failed&&<section aria-label="原件读取失败">
   <p className="pw-error" role="alert">{failed}</p>
-  <Button variant="secondary" disabled={busy||source.busy} onClick={retry}>{failedRead?.command==='find'?'重试本次查找':'重试本次读取'}</Button>
-  {type==='text'&&<div className="pw-action-row">
+  {!source.sourceUnavailable&&<Button variant="secondary" disabled={busy||source.busy} onClick={retry}>{failedRead?.command==='find'?'重试本次查找':type==='unsupported'?'重新核对文件':'重试本次读取'}</Button>}
+  {type==='text'&&!source.sourceUnavailable&&actual.previewAvailable!==false&&<div className="pw-action-row">
    <RadioOptions label="重新读取时使用的文本编码" value={encodingChoice} options={textEncodings} isDisabled={busy||source.busy} onChange={setRecoveryEncoding}/>
    <Button variant="secondary" disabled={busy||source.busy} onClick={()=>{setFound(null);read({encoding:encodingChoice,offset:0})}}>用此编码从头读取</Button>
   </div>}
  </section>}
+ {(unavailable||failed&&failedRead?.command!=='find')&&!source.sourceUnavailable&&recovery?.onOpenInReader&&
+  <div className="pw-action-row"><Button variant="secondary" disabled={recovery.busy||busy||source.busy} onClick={recovery.onOpenInReader}>用其他应用打开</Button></div>}
  {imageTools&&<div className="pw-action-row">
   {type==='pdf'&&<><Button variant="ghost" disabled={busy||page<=1} onClick={()=>read({page:page-1})}>上一页</Button><span>{page} / {pages} 页</span><Button variant="ghost" disabled={busy||page>=pages} onClick={()=>read({page:page+1})}>下一页</Button></>}
   <Button variant="ghost" aria-expanded={toolsVisible} onClick={()=>setToolsVisible(value=>!value)}>{toolsVisible?'收起阅读工具':'阅读工具'}</Button>
@@ -74,7 +84,7 @@ function OriginalReader({source,windowId,showTitle=true}:OriginalReaderProps) {
  {type==='pdf'&&ready&&!actual.searchAvailable&&<p className="pw-muted">此设备不支持 PDF 原文搜索；可返回文件来源，选择本机文字识别。</p>}
  {found&&<div className="pw-action-row">{rows(found.matches).map((hit,i)=><Button key={i} variant="ghost" disabled={busy} onClick={()=>read(type==='pdf'?{page:hit.page}:{offset:hit.offset,encoding:actual.encoding})}>{type==='pdf'?`第 ${hit.page} 页`:`位置 ${Number(hit.offset)+1}`}</Button>)}{found[type==='pdf'?'nextPage':'nextOffset']!=null&&<Button variant="secondary" disabled={busy} onClick={()=>void invoke('find',{query,encoding:actual.encoding,cursor:found[type==='pdf'?'nextPage':'nextOffset']})}>继续后续范围</Button>}{!rows(found.matches).length&&<p>当前查找范围内没有匹配文字。</p>}{found.pageMatchesOmitted&&<p>部分命中未显示，请缩小查找范围。</p>}</div>}</AccordionItem></Accordion>}
  {ready&&(type==='image'||type==='pdf')&&<><div hidden={!toolsVisible} className="pw-action-row pw-original-zoom pw-material-navigation" role="group" aria-label="原件显示比例"><Button variant="ghost" disabled={zoom<=1} onClick={()=>setZoom(x=>Math.max(1,x/1.5))}>缩小</Button><Button variant="ghost" onClick={()=>{setZoom(1);setTurn(0)}}>适合页面 · {Math.round(zoom*100)}%</Button><Button variant="ghost" disabled={zoom>=8} onClick={()=>setZoom(x=>Math.min(8,x*1.5))}>放大</Button>{type==='image'&&<Button variant="ghost" onClick={()=>setTurn(x=>(x+90)%360)}>旋转查看</Button>}</div>{type==='image'&&<p className="pw-muted">原尺寸 {actual.width} × {actual.height}{actual.sampled?' · 显示时已采样，导出保留完整原图':''}</p>}<div className="pw-original-raster"><img key={`${source.id}:${page}`} src={`${source.url}${type==='pdf'?`?page=${page}`:''}`} style={{width:`${zoom*100}%`,transform:`rotate(${turn}deg)`}} alt={type==='pdf'?`原 PDF 第 ${page} 页`:'选定的固定原图'} onError={()=>setError('原件显示已关闭或未完成，请返回后重新打开')}/></div></>}
- {ready&&(type==='video'||type==='audio')&&<OriginalMediaPlayer key={`${windowId}:${source.id}`} url={source.url} kind={type} name={String(source.name||'媒体原件')} onError={()=>setError('原媒体无法播放，请返回后用其他阅读器打开')} />}
+ {ready&&(type==='video'||type==='audio')&&<OriginalMediaPlayer key={`${windowId}:${source.id}`} url={source.url} kind={type} name={String(source.name||'媒体原件')} onError={()=>setError('此设备未能播放这份原媒体。')} />}
  {ready&&type==='office'&&<><div className="pw-action-row"><TextField label={actual.format==='pptx'?'幻灯片编号':actual.format==='xlsx'?'工作表编号':'段落起点'} value={position} onChange={setPosition}/><Button variant="secondary" disabled={busy||!/^\d+$/.test(position)||Number(position)<1} onClick={()=>read({unit:Number(position),chunk:0})}>定位</Button></div><p className="pw-muted">当前显示文字与表格结构，字体、分页和图表应在原件中核对。</p><DocumentProjection value={actual}/>{Number(actual.nextUnit)>0&&<Button variant="secondary" disabled={busy} onClick={()=>read({unit:actual.nextUnit,chunk:actual.nextChunk})}>读取后续内容</Button>}</>}
  {ready&&type==='text'&&<Accordion className="pw-original-find"><AccordionItem id="text-options" title="文本显示选项">
   <RadioOptions label="文本编码" value={actual.encoding||'UTF-8'} options={textEncodings} isDisabled={busy} onChange={encoding=>{setRecoveryEncoding(encoding);setFound(null);read({encoding,offset:0})}}/>
