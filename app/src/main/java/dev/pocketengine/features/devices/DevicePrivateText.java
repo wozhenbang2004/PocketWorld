@@ -1,6 +1,5 @@
 package dev.pocketengine.features.devices;
 
-import org.json.JSONArray;
 import org.json.JSONObject;
 
 /** Outgoing projections on B. Only the existing owner-reviewed, digest-bound
@@ -8,36 +7,25 @@ import org.json.JSONObject;
 public final class DevicePrivateText {
     private DevicePrivateText() {}
 
-    private static boolean directApp(JSONObject binding) {
-        if (binding == null || !("main_screen".equals(binding.opt("screenMode")) || "background".equals(binding.opt("screenMode")))) return false;
-        JSONArray packages = binding.optJSONArray("packageNames");
-        return binding.opt("androidUserId") instanceof Number && packages != null && packages.length() == 1
-                && !binding.optBoolean("allowWholeDisplayInput") && !binding.optBoolean("allowWholeDisplayCapture");
-    }
-
+    /** The receiver's actual no-screen runner, not the source platform's choice of operation IDs,
+     * determines which results must stay private until owner review. This is a deny-only classifier. */
     public static boolean requested(DeviceTaskEnvelope request) {
-        JSONObject wire = request.json(); String operation = request.operationId();
-        if(DeviceProtocol.ownerTextRequest(wire))return true;
-        return "task.submitGoal".equals(request.method()) && request.originDeviceId().equals(request.callerDeviceId())
-                && !request.callerDeviceId().equals(request.targetDeviceId()) && operation != null && !operation.isEmpty()
-                && operation.equals(wire.opt("rootTaskId")) && operation.equals(wire.opt("parentTaskId")) && operation.equals(wire.opt("localTaskId"))
-                && request.budget().optLong("toolCalls", -1) == 0 && directApp(request.resourceBinding());
+        return DeviceExecutionAdmission.zeroToolPhoneGoal(request);
     }
 
     public static boolean applies(JSONObject task) {
-        JSONObject scope = task.optJSONObject("deviceExecutionScope"), origin = task.optJSONObject("origin");
-        if (origin!=null && DeviceProtocol.textMarker(origin.opt("textReturnContract")))return true;
-        if (scope == null) return false;
-        // Fixed at the original native admission. Incomplete later metadata may
-        // never switch this task back to the unrestricted snapshot serializer.
-        if (Boolean.TRUE.equals(scope.opt("reviewedTextOnly"))) return true;
-        if (origin == null || !"GOAL".equals(task.opt("deviceExecutionKind")) || !"paired_device".equals(origin.opt("kind"))) return false;
-        String operation = origin.optString("remoteOperationId"), caller = origin.optString("callerDeviceId");
-        // Also protect existing Windows-shaped tasks accepted before this marker.
-        return !operation.isEmpty() && !caller.isEmpty() && caller.equals(origin.opt("originDeviceId"))
-                && !caller.equals(origin.opt("targetDeviceId")) && operation.equals(origin.opt("rootTaskId"))
-                && operation.equals(origin.opt("parentTaskId")) && operation.equals(origin.opt("remoteLocalTaskId"))
-                && scope.optLong("toolLimit", -1) == 0 && directApp(scope.optJSONObject("resourceBinding"));
+        JSONObject scope=task.optJSONObject("deviceExecutionScope"), origin=task.optJSONObject("origin");
+        if(origin!=null&&DeviceProtocol.textMarker(origin.opt("textReturnContract")))return true;
+        if(scope==null)return false;
+        if(Boolean.TRUE.equals(scope.opt("reviewedTextOnly")))return true;
+        // Older accepted Android allocations have distinct parent/operation/allocation IDs, unlike
+        // the legacy Windows source. The persisted receiving budget and signed resource also survive death.
+        if(origin==null||!"GOAL".equals(task.opt("deviceExecutionKind"))||!"paired_device".equals(origin.opt("kind"))
+                ||scope.optLong("toolLimit",-1)!=0)return false;
+        JSONObject resource=scope.optJSONObject("resourceBinding");
+        String signed=resource==null?"":resource.optString("screenMode");
+        return "main_screen".equals(signed)||"background".equals(signed)
+                ||"main_screen".equals(scope.opt("mode"))||"background".equals(scope.opt("mode"));
     }
 
     static JSONObject identity(JSONObject task) throws Exception {
