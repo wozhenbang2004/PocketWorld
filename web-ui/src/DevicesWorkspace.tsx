@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import './collaboration-depth.css';
 import './device-control-reading.css';
 import { Accordion, AccordionItem, Button, CheckboxField, RadioOptions, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
-import { DeviceRequestScope, archivedPhoneAcceptanceLine, archivedPhoneStopAttemptLine, archivedPhoneStopLine, deviceChannelWasConnected, deviceConnectionLabel, deviceGrantInput, deviceHistoryLabel, deviceHistoryReceipt, deviceOriginalTaskActions, isReceivedPhoneTask, receivedPhoneGoalReturn, matchesReceivedPhoneGoal, type ReceivedPhoneGoalReturn, type SentPhoneGoalFocus, PHONE_ACTION_WINDOW_MS, deviceRecordedScopes, devicePhoneGoalArchive, localReceivedPhonePage, localReviewedInbox, samePhoneGoalArchive, receivedPhoneArchiveReturn, waitingPhoneGoalPage, type PhoneArchiveSide, deviceTaskHistoryPage, deviceTaskHistoryLinks, deviceTaskDetails, deviceMethodLabels, deviceOperationLabels, devicePhoneGoalResult, deviceReceipt, deviceReview, deviceRows as rows, deviceSnapshot, deviceStrings as strings, deviceTaskRows, deviceWorkspaceTaskMode, type DeviceData as Data } from './devices-workspace';
+import { DeviceRequestScope, pickupUnavailable, archivedPhoneAcceptanceLine, archivedPhoneStopAttemptLine, archivedPhoneStopLine, deviceChannelWasConnected, deviceConnectionLabel, deviceGrantInput, deviceHistoryLabel, deviceHistoryReceipt, deviceOriginalTaskActions, isReceivedPhoneTask, receivedPhoneGoalReturn, matchesReceivedPhoneGoal, type ReceivedPhoneGoalReturn, type SentPhoneGoalFocus, PHONE_ACTION_WINDOW_MS, deviceRecordedScopes, devicePhoneGoalArchive, localReceivedPhonePage, localReviewedInbox, samePhoneGoalArchive, receivedPhoneArchiveReturn, waitingPhoneGoalPage, type PhoneArchiveSide, deviceTaskHistoryPage, deviceTaskHistoryLinks, deviceTaskDetails, deviceMethodLabels, deviceOperationLabels, devicePhoneGoalResult, deviceReceipt, deviceReview, deviceRows as rows, deviceSnapshot, deviceStrings as strings, deviceTaskRows, deviceWorkspaceTaskMode, type DeviceData as Data } from './devices-workspace';
 import { IconAdd, IconArrowLeft, IconChevronRight, IconClock, IconDevices, IconLayers, IconMonitor, IconPhone, IconRefresh, IconShieldCheck } from './icons';
 import { DesktopViewer } from './DesktopViewer';
 import { ReceivedGoalInputReview, originalDeviceInputReady } from './ReceivedGoalInputReview';
@@ -385,7 +385,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     const captured = item?.phoneActionScope ? item.actions.capturedAt : snapshot?.taskActions?.[task.id]?.capturedAt;
     return [captured + PHONE_ACTION_WINDOW_MS, item?.phoneActionScope?.executionDeadline ?? task.raw.deviceExecutionScope?.deadline, grant?.expiresAt];
   });
-  const nextExpiry = Math.min(...[validUntil, ...actionExpiries, ...rows(waitingPhones?.rows).map(row=>row.sourceIdentity?.expiresAt), ...rows(snapshot?.pendingPairings).filter(row => row.localOwnerWindow).map(row => row.expiresAt), ...rows(peer?.receivedGrantScopes).map(row => row.expiresAt), ...rows(peer?.grantScopes).map(row => row.expiresAt)]
+  const nextExpiry = Math.min(...[validUntil, ...actionExpiries, ...rows(waitingPhones?.rows).flatMap(row=>[row.sourceIdentity?.expiresAt,row.pickupBy]), ...rows(snapshot?.pendingPairings).filter(row => row.localOwnerWindow).map(row => row.expiresAt), ...rows(peer?.receivedGrantScopes).map(row => row.expiresAt), ...rows(peer?.grantScopes).map(row => row.expiresAt)]
     .filter(t => Number.isSafeInteger(t) && t > now));
   const [clockRevision, tickClock] = useState(0);
   useEffect(() => {
@@ -533,6 +533,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   };
   const reviewWaiting = (row:Data) => {
     if(busy||selectedPeer.current||!waitingPage||waitingPage.resultOnly||waitingPage.startedOnly||waitingPage.declinedOnly||waitingPage.withdrawnOnly||waitingPage.failedOnly)return;
+    const blockedNow=pickupUnavailable(row,Date.now());if(blockedNow){setError(blockedNow);return;}
     const args={waitingHandle:waitingPage.waitingHandle,taskId:row.taskId,operationId:row.operationId};
     setWaitingBlock(null);
     void invoke('devices.reviewGoal',args,value=>{
@@ -695,6 +696,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   };
   const chooseModelForReceived=(args:Data,row:Data,sourceId:string,expected?:Data)=>{
     if(!openModels||busy||sourceFocus||!supported('devices.prepareReceivedModelReturn'))return;
+    if(args.waitingHandle){const block=pickupUnavailable(row,Date.now());if(block){setError(block);return;}}
     const selected=selectedPeer.current;if(selected&&selected!==sourceId)return;
     void invoke('devices.prepareReceivedModelReturn',args,value=>{
       if(selectedPeer.current!==selected)return;
@@ -990,22 +992,25 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               {!waitingPage.rows.length && waitingPage.searchText && <p>这段待接手记录没有可核对的匹配。{waitingPage.hasMore?'还有较早的记录可继续查。':'已读到这批原记录末尾。'}</p>}
               {!waitingPage.rows.length && !waitingPage.searchText && <p>这一批没有可核对的{waitingPage.withdrawnOnly?'启动前撤回记录':waitingPage.failedOnly?'本机失败原执行':waitingPage.declinedOnly?'本机不接手记录':waitingPage.startedOnly?'正在处理、暂停或中断的原执行':waitingPage.resultOnly ? '待核对或只可在本机查看的候选成果' : '待接手目标'}。{waitingPage.hasMore && '可以再查较早记录。'}</p>}
               {rows(waitingPage.rows).map(row => {const blocked=waitingBlock?.waitingHandle===waitingPage.waitingHandle&&waitingBlock?.taskId===row.taskId&&waitingBlock?.operationId===row.operationId?waitingBlock:null;
+                const cannotPickUp=pickupUnavailable(row,now);
                 return <div className="pw-device-history-entry" key={JSON.stringify([row.taskId,row.operationId])}>
                 <h4 dir="auto">{row.goal}</h4><p>来自 {sourceLabel(row.sourceDeviceId,row.sourceIdentity)} · {waitingPage.failedOnly?'最后登记失败 '+time(row.stateRecordedAt):waitingPage.declinedOnly||waitingPage.withdrawnOnly?'本机接纳 '+time(row.createdAt):waitingPage.startedOnly?'本机登记执行 '+time(row.registeredAt):waitingPage.resultOnly ? (row.candidateState?'原工作'+taskLabels[row.candidateState]+' · 本机候选 ':'产生结果 ') + time(row.reviewRecordedAt) : time(row.createdAt)}{row.waitingState === 'interrupted_before_start' && ' · 本机已中断，未启动'}</p>
                 {waitingPage.searchText&&row.matchedLater===true&&<p>匹配在上方预览之后的原目标文字里。</p>}
                 {waitingPage.failedOnly&&<p>本机登记执行 {time(row.registeredAt)} · 第 {row.epoch} 轮；不代表成果已交回。</p>}
                 {waitingPage.withdrawnOnly&&<p>{time(row.withdrawnAt)} 原发起设备已撤回 · 本机未启动</p>}
+                {(row.waitingState==='not_started'||row.waitingState==='interrupted_before_start') && (cannotPickUp
+                  ? <p>{cannotPickUp}</p> : row.pickupBy && <p>按原记录最迟可于 {time(row.pickupBy)} 接手；开始前仍需核对授权。</p>)}
                 {waitingPage.declinedOnly&&<p>{time(row.declinedAt)} 本机决定不接手 · 从未启动</p>}
                 {waitingPage.startedOnly&&<p>任务记录：{taskLabels[row.taskState]}{row.taskState!==row.runState&&' · 执行记录：'+taskLabels[row.runState]}{row.stopRequested&&' · 已请求停止，非停止回执'}</p>}
                 {!review && !form && !waitingPage.resultOnly && !waitingPage.startedOnly && !waitingPage.failedOnly && !waitingPage.withdrawnOnly && !waitingPage.declinedOnly &&
-                  row.waitingState!=='interrupted_before_start' && (!blocked||blocked.state==='local_review_unavailable') && supported('devices.readPendingGoalInput') &&
+                  !cannotPickUp && row.waitingState!=='interrupted_before_start' && (!blocked||blocked.state==='local_review_unavailable') && supported('devices.readPendingGoalInput') &&
                   <PendingReceivedGoalInput key={JSON.stringify([waitingPage.waitingHandle,snapshot?.capturedAt,row.waitingState])} handle={waitingPage.waitingHandle} here={waitingPage.localDeviceId} instance={waitingPage.localInstanceId} row={row} busy={busy}
                     active={inputPick===JSON.stringify([waitingPage.waitingHandle,row.taskId,row.operationId])} select={()=>setInputPick(JSON.stringify([waitingPage.waitingHandle,row.taskId,row.operationId]))}
                     read={done=>{void invoke('devices.readPendingGoalInput',{waitingHandle:waitingPage.waitingHandle,taskId:row.taskId,operationId:row.operationId},done);}}/>}
                 {blocked && <p role="status">{({original_not_retained:'本机保存了原派单，但已没有当时的接手授权；不会从记录中重建执行。',
                   expired:'原派单已到期，不能再启动。',interrupted_before_start:'上次接手在开始前中断，没有原执行可恢复。',original_conditions_unavailable:'无法再次核对原授权和本机条件；本次没有启动。'} as Record<string,string>)[blocked.state] || blocked.reason || '本机未建立模型审阅。请查看原工作与本机模型，尚未开始执行。'}</p>}
-                {!waitingPage.declinedOnly&&!waitingPage.withdrawnOnly&&<div className="pw-form-actions">{!waitingPage.resultOnly && !waitingPage.startedOnly && !waitingPage.failedOnly && <Button disabled={busy||!supported('devices.reviewGoal')} onClick={()=>reviewWaiting(row)}>{blocked?'重新核对接手条件':'核对本机接手'}</Button>}
-                  {blocked?.canCheckLocalModel===true && openModels && supported('devices.prepareReceivedModelReturn')&&<Button variant="secondary" disabled={busy}
+                {!waitingPage.declinedOnly&&!waitingPage.withdrawnOnly&&<div className="pw-form-actions">{!waitingPage.resultOnly && !waitingPage.startedOnly && !waitingPage.failedOnly && <Button disabled={busy||!!cannotPickUp||!supported('devices.reviewGoal')} onClick={()=>reviewWaiting(row)}>{blocked?'重新核对接手条件':'核对本机接手'}</Button>}
+                  {!cannotPickUp && blocked?.canCheckLocalModel===true && openModels && supported('devices.prepareReceivedModelReturn')&&<Button variant="secondary" disabled={busy}
                     onClick={()=>chooseModelForReceived({waitingHandle:waitingPage.waitingHandle,taskId:row.taskId,operationId:row.operationId},row,row.sourceDeviceId)}>先检查本机模型</Button>}
                   {!waitingPage.resultOnly&&!waitingPage.startedOnly&&!waitingPage.failedOnly&&(!blocked||blocked.canRetire===true)&&<Button variant="ghost" disabled={busy||!supported('devices.reviewAction')}
                     onClick={()=>actionReview('task.cancelPending',{waitingHandle:waitingPage.waitingHandle,taskId:row.taskId,operationId:row.operationId})}>不接手</Button>}

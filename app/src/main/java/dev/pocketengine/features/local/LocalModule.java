@@ -507,11 +507,47 @@ public final class LocalModule implements EngineModule {
     }
     /** Native UI only. No URI, byte input, model tool, or fallback to an identically named file. */
     private JSONObject privateTaskPackage(String task,String operation)throws Exception {
+        JSONObject source=privateTaskPackageLedger(task,operation);requirePackagePreviewOwner(source);return source;
+    }
+    private JSONObject privateTaskPackageLedger(String task,String operation)throws Exception {
         if(closed||!(context.android instanceof dev.pocketengine.EngineApplication app)||app.tasks==null)throw new SecurityException("原私人任务不可读取");
         JSONObject visible=app.tasks.getForUi(task,false);
         if(visible==null||!task.equals(visible.opt("id"))||!visible.optBoolean("contextAvailable",true)||visible.optBoolean("sourceCurrentReadRequired")||
                 "source_unavailable".equals(visible.opt("taskProjection")))throw new SecurityException("原任务的当前来源不可读取");
-        JSONObject source=app.tasks.ownerPackagePreviewSource(task,operation);requirePackagePreviewOwner(source);return source;
+        return app.tasks.ownerPackagePreviewSource(task,operation);
+    }
+    /** An original-task link needs the private ledger, not a still-running process or a surviving mutable checkout. */
+    public JSONObject privateTaskSourceOriginForOwner(String project,String id,String expected)throws Exception {
+        packageIdentity(project);packageIdentity(id);JSONObject row=projectCheckoutForHost(id),imported=row.optJSONObject("sourceImport");
+        if(!project.equals(row.opt("projectId"))||!id.equals(row.opt("id"))||imported==null||!dev.pocketengine.features.local.project.ProjectTaskSourceOrigin.KIND.equals(imported.opt("sourceKind")))
+            throw new SecurityException("这不是当前私人项目的原任务源码副本");
+        File directory=new File(new File(root,"checkouts"),id);
+        JSONObject evidence=dev.pocketengine.features.local.project.ProjectTaskSourceRecord.read(directory,row);
+        // A previous version may have kept only the staging receipt. Never search tasks by filename or project name.
+        if(evidence==null)synchronized(projectPackageStaging){
+            File cache=new File(context.android.getCacheDir(),"project-package-imports-v1");
+            if(Files.exists(cache.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS)){
+                if(!cache.getAbsoluteFile().equals(cache.getCanonicalFile())||!Files.isDirectory(cache.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS))throw new SecurityException("原暂存目录不可核对");
+                File[] headers=cache.listFiles(f->f.getName().matches("[a-f0-9-]{36}\\.source\\.json"));if(headers==null||headers.length>4)throw new SecurityException("原暂存来源超出核对范围");
+                File match=null;for(File header:headers){if(!dev.pocketengine.features.local.project.ProjectTaskSourceRecord.matchingHeader(header,imported))continue;
+                    if(match!=null)throw new SecurityException("旧副本有多份相同来源登记，未选择其他工作");match=header;}
+                if(match!=null)try{
+                    JSONObject staged=stagedProjectPackage(match.getName().substring(0,36),imported.getString("packageSha256"));
+                    evidence=dev.pocketengine.features.local.project.ProjectTaskSourceRecord.verified(row,staged.getJSONObject("sourceEvidence"));
+                }catch(Exception unavailable){if(expected!=null)throw new SecurityException("此前读取的旧来源已不可核对",unavailable);}
+            }
+        }
+        JSONObject result=new JSONObject().put("projectId",project).put("checkoutId",id).put("sourceRecorded",evidence!=null).put("taskVerified",false);
+        if(evidence==null){if(expected!=null)throw new SecurityException("未找到原私人来源");return result;}
+        String digest=ProjectSources.digest(evidence);if(expected!=null&&!expected.equals(digest))throw new SecurityException("原工作来源已变化");
+        JSONObject pin=evidence.getJSONObject("original");result.put("sourceName",evidence.getString("sourceLabel")).put("files",evidence.getInt("files"))
+            .put("archiveSha256",pin.getString("archiveSha256")).put("archiveBytes",pin.getLong("archiveBytes")).put("evidenceDigest",digest);
+        boolean verified=false;try{JSONObject current=privateTaskPackageLedger(pin.getString("taskId"),pin.getString("operationId"));
+            verified=ProjectSources.canonical(pin).equals(ProjectSources.canonical(dev.pocketengine.features.local.project.ProjectTaskSourceOrigin.pin(current)));
+        }catch(Exception unavailable){/* A historical receipt does not authorize a link to a now unavailable task. */}
+        if(verified)result.put("taskVerified",true).put("taskId",pin.getString("taskId")).put("operationId",pin.getString("operationId"));
+        else if(expected!=null)throw new SecurityException("原私人工作与保存操作当前不能核对，没有打开其他工作");
+        return result;
     }
     public JSONObject preparePrivateTaskSource(String task,String operation,String artifact,String sha,String project,String checkout,String run,int epoch,RunControl control)throws Exception {
         var owner=sourceCurrent(control);owner.check();JSONObject source=privateTaskPackage(task,operation);
@@ -690,6 +726,8 @@ public final class LocalModule implements EngineModule {
             if(sourceEvidence!=null)checkout.getJSONObject("sourceImport").put("sourceKind",sourceEvidence.getString("sourceKind")).put("sourceEvidenceSha256",plan.getString("sourceEvidenceSha256"));
             if(nativeGit!=null){JSONObject pins=nativeGit.metadata();pins.remove("files");checkout.getJSONObject("sourceImport").put("gitOriginal",pins).put("gitHistoryCopied",true).put("credentialsRestored",false);}
 
+            if(dev.pocketengine.features.local.project.ProjectTaskSourceOrigin.is(sourceEvidence))
+                dev.pocketengine.features.local.project.ProjectTaskSourceRecord.write(prepared,checkout,sourceEvidence);
             if(sourceEvidence!=null&&"host_saved_snapshot".equals(sourceEvidence.opt("sourceKind")))
                 dev.pocketengine.features.local.project.ProjectHostOrigin.write(prepared,checkout,sourceEvidence);
             JsonFiles.write(new File(prepared,"checkout.json"),checkout);

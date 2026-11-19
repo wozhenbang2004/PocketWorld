@@ -3,7 +3,7 @@ import {bridge} from './bridge';
 import {Button} from './forms-library';
 import {isPrivateLocalPhone} from './PhonePauseInstruction';
 import {phoneReportInSource,phoneReportTarget,type PhoneReportTarget} from './PhoneReturnedReport';
-import {phoneRunIdentity,type PhoneResult} from './phone-start';
+import {cancelledPhoneSummaryNote,phoneRunIdentity,type PhoneResult} from './phone-start';
 import './phone-message-return.css';
 
 type Entry='overview'|'process';
@@ -31,10 +31,12 @@ export function PhoneMessageReturn({result:r,conversation,messageId,revision,rea
   const outcome=outcomes[r.status],step=onRun&&onOriginal&&matchingStep(r);
   const [changed,setChanged]=useState('');
   // On zero native characters, this one exact fallback belongs to the delivery formatter, not the original summary.
+  const cancellationNote=cancelledPhoneSummaryNote(r,body);
   const placeholder=r.summaryChars===0&&body==='本轮执行已结束，未提供文字总结；请查看原手机任务。';
   const target=(from:HTMLElement)=>phoneReportTarget(conversation,messageId,revision,r,from,reader);
   return <section className="pw-phone-message-return" aria-label={`手机任务第 ${r.epoch} 轮的原回执`}>
     <header><small>手机任务 · 第 {r.epoch} 轮回执</small><strong>{outcome?.title||'已有轮次记录'}</strong></header>
+    {cancellationNote&&<p className="pw-field-hint">{cancellationNote}</p>}
     {placeholder?<p className="pw-phone-return-empty">{r.status==='failed'||r.status==='interrupted'?'这轮没有留下说明原因的文字。':
       '这轮没有留下文字总结。'}</p>:children}
     {(onOriginal||step)&&<div className="pw-phone-return-actions">

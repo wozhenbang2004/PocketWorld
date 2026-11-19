@@ -332,7 +332,9 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
         public NativeDeviceWorkspaceHost.Availability reviewAvailability(String id) throws Exception {
             JSONObject task = tasks.get(id, false);
             if (!TaskStoreDeviceTasks.deviceTask(task) || !"GOAL".equals(task.optString("deviceExecutionKind")) || !app.hasPendingDeviceGoal(id)) return NativeDeviceWorkspaceHost.Availability.blocked("当前没有待确认的设备目标");
-            if (!task.optString("runId").isEmpty() || task.optBoolean("cancelRequested")) return NativeDeviceWorkspaceHost.Availability.blocked("任务状态已变化，请查看执行结果");
+            if (!task.optString("runId").isEmpty() || task.optBoolean("cancelRequested") || !task.optString("status").matches("queued|awaiting_user")) return NativeDeviceWorkspaceHost.Availability.blocked("原工作不在可接手状态，请查看原记录");
+            JSONObject scope=task.optJSONObject("deviceExecutionScope");
+            if(scope==null||scope.optLong("deadline")<=System.currentTimeMillis())return NativeDeviceWorkspaceHost.Availability.blocked("原接手时限已过或无法核对，不能靠重新选择模型开始");
             boolean textOnly=app.pendingDeviceGoalUsesNoScreen(id);
             if(textOnly&&app.activePhoneRunCount()>0)return NativeDeviceWorkspaceHost.Availability.blocked("本机执行器正忙。文字任务不占屏幕，须等原执行释放后再接手。");
             if (!textOnly&&("background".equals(task.optString("executionMode")) ? !backgroundGoalCapacity() : app.activePhoneRunCount()>0)) return NativeDeviceWorkspaceHost.Availability.blocked("所选屏幕暂无可用运行位置，请先处理占用它的原任务");
@@ -412,11 +414,24 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
         }
         public JSONObject findWaitingPhoneGoals(String caller,String op,String query)throws Exception{
             DeviceIdentity.LocalIdentity local=existingIdentity();if(local==null)throw new SecurityException("没有这部收件手机原来的身份");
-            return tasks.deviceTasks().findWaitingPhoneGoals(local.deviceId(),local.instanceId(),caller,op,query);
+            return addOriginalPickupWindows(tasks.deviceTasks().findWaitingPhoneGoals(local.deviceId(),local.instanceId(),caller,op,query));
         }
         public JSONObject waitingPhoneGoals(String afterCaller,String afterOp,boolean results)throws Exception {
             DeviceIdentity.LocalIdentity local=existingIdentity();if(local==null)throw new SecurityException("本机原设备身份不可读取");
-            return tasks.deviceTasks().waitingPhoneGoals(local.deviceId(),local.instanceId(),afterCaller,afterOp,results);
+            JSONObject page=tasks.deviceTasks().waitingPhoneGoals(local.deviceId(),local.instanceId(),afterCaller,afterOp,results);
+            return results?page:addOriginalPickupWindows(page);
+        }
+        private JSONObject addOriginalPickupWindows(JSONObject page)throws Exception{
+            JSONArray rows=page.getJSONArray("rows");
+            for(int i=0;i<rows.length();i++){
+                JSONObject row=rows.getJSONObject(i);
+                long signed=row.optLong("pickupRequestEndsAt"),held=app.matchingPendingDeviceGoalDeadline(row.getString("taskId"),
+                        row.getString("sourceDeviceId"),row.getString("operationId"),row.getString("argumentsDigest"));
+                // The held deadline also includes the receiving device's original grant limit.
+                row.put("pickupRetained",held>0);
+                if(signed>0)row.put("pickupBy",held>0?Math.min(held,signed):signed);
+            }
+            return page;
         }
         public JSONObject phoneGoalIndex(String target,String parentAfter,String after,boolean received) throws Exception {return phoneGoalIndex(target,parentAfter,after,received,"");}
         public JSONObject phoneGoalIndex(String target,String parentAfter,String after,boolean received,String searchText) throws Exception {

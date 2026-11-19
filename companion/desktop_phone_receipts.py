@@ -211,10 +211,14 @@ class ResultView:
             try:
                 if WindowsDesktopHealth().probe(session_only=True).get("available") is not True: return
                 while self.active():
-                    direction = self._dialog("要看哪一端执行的工作？", "工作和结果都保留在原执行设备；这里不能启动或接管任务。",
+                    direction = self._dialog("这台电脑与已配对设备", "工作和结果保留在原执行设备。也可核对本次伴侣的桌面连接；这里不能启动或接管任务。",
                                              [("incoming", "其他设备交给这台电脑的工作\n查看本机工作、收文件和项目副本。收到项目包不代表已经确认导入。"),
-                                              ("outgoing", "这台电脑交给手机的工作\n选择原派单后，只向那部手机查询。")])
+                                              ("outgoing", "这台电脑交给手机的工作\n选择原派单后，只向那部手机查询。"),
+                                              ("viewing", "这台 Windows 的桌面连接\n只查本机原观看会话、媒体及人工输入权；不联系手机。")])
                     if direction is None: return
+                    if direction == "viewing":
+                        from windows_owner_viewing import show as show_viewing
+                        show_viewing(self); continue
                     incoming = direction == "incoming"
                     peer_page = 0
                     while self.active():

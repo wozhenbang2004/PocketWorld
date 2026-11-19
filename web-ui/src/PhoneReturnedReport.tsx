@@ -5,7 +5,7 @@ import {registerOverlayBack} from './overlay-back';
 import {Button,IconButton} from './forms-library';
 import {IconClose} from './icons';
 import {ShimmerText} from './library';
-import {messagePhoneResult,type PhoneResult} from './phone-start';
+import {cancelledPhoneSummaryNote,messagePhoneResult,type PhoneResult} from './phone-start';
 import {finalScreenLine} from './PhoneFinalScreenReceipt';
 import {usePhoneOriginalReadingPlace} from './phone-original-reading-place';
 import './phone-returned-report.css';
@@ -64,6 +64,7 @@ export function PhoneReturnedReport({target:t,onClose}:{target:PhoneReportTarget
   const [expired,setExpired]=useState(false),[page,setPage]=useState<Page|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(true);
   const attempts=useRef(0),inFlight=useRef(false),digest=useRef(''),previous=useRef<number[]>([]),request=useRef(0);
   const original=t.phoneResult,valid=current(t),available=!expired&&valid;
+  const cancellationNote=page?.offset===0&&!page.more?cancelledPhoneSummaryNote(original,page.text):undefined;
   const reading=usePhoneOriginalReadingPlace(t,available,page?.offset,()=>current(t));
   const Sheet=t.readerWindow>0||t.noticeOrigin?Drawer.NestedRoot:Drawer.Root;
   const close=useRef(onClose);close.current=onClose;
@@ -107,6 +108,7 @@ export function PhoneReturnedReport({target:t,onClose}:{target:PhoneReportTarget
         {busy&&<ShimmerText>正在核对这轮原文…</ShimmerText>}{error&&<p role="alert">{error}</p>}
         {page&&<>{page.finalScreen?<p className="pw-field-hint"><strong>收尾时的屏幕：</strong>{page.finalScreen}</p>:
           original.status==='needs_confirmation'||original.status==='completed'?<p className="pw-muted">这份原报告没有独立的终屏回执，不能据此确认当时的页面。</p>:null}
+          {cancellationNote&&<p className="pw-field-hint">{cancellationNote}</p>}
           {original.summaryChars===0?<p>这轮没有留下文字总结。</p>:<p ref={reading.body} tabIndex={-1} className="pw-phone-report-text" dir="auto">{page.text}</p>}
           {original.summaryChars>page.text.length&&<p className="pw-muted" role="status">原文位置 {page.offset+1}–{page.next} / {original.summaryChars}</p>}
           <div className="pw-action-row">

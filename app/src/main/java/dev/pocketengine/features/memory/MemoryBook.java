@@ -1376,7 +1376,8 @@ public final class MemoryBook {
      * Unknown legacy subjects remain unknown, rather than being attributed to the owner. */
     public synchronized JSONObject cognitionProjection(JSONObject scope,String subjectId,long now)throws Exception {
         Scope identity=Scope.from(scope);if(subjectId==null||!subjectId.matches("[\\p{L}\\p{N}_.:/@-]{1,160}"))throw new IllegalArgumentException("请选择确切的稳定主体身份");
-        Set<String> eligible=sourceEligibleIds(now),active=activeIds(now);Map<String,String> statuses=MemoryAssertion.statuses(records.values(),eligible,now,assertionFences);
+        // These sections belong to one owner read. Do not render stale historical/conflict bodies from an earlier source check.
+        ActiveInspection inspection=activeInspection(now);Set<String> active=inspection.active;Map<String,String> statuses=inspection.assertions;
         Set<String> pendingKeys=new HashSet<>();for(JSONObject row:records.values())if("pending_conflict".equals(statuses.get(row.optString("id"))))pendingKeys.add(MemoryAssertion.key(row));
         JSONArray current=new JSONArray(),history=new JSONArray(),conflicts=new JSONArray(),versions=new JSONArray();Set<String> evidence=new HashSet<>();
         for(JSONObject row:records.values())if(identity.matches(row)&&row.has("assertion")&&subjectId.equals(row.getJSONObject("assertion").getString("subjectId"))){

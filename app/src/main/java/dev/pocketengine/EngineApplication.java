@@ -557,6 +557,14 @@ public final class EngineApplication extends Application implements dev.pocketen
     }
     /** Called by B's native owner model/permission page, never by a device or model JSON command. */
     public boolean hasPendingDeviceGoal(String id){return pendingDeviceGoals.containsKey(id);}
+    /** Metadata only. No new admission, device probe, model read or synthetic grant. */
+    public long matchingPendingDeviceGoalDeadline(String id,String caller,String operation,String digest){
+        var held=pendingDeviceGoals.get(id);if(held==null)return 0;
+        JSONObject wire=held.request().json();
+        return held.kind()==dev.pocketengine.features.devices.DeviceExecutionAdmission.Kind.GOAL
+                && caller.equals(wire.opt("callerDeviceId"))&&caller.equals(wire.opt("originDeviceId"))&&operation.equals(wire.opt("operationId"))
+                && digest.equals(wire.opt("argumentsDigest"))?held.deadline():0;
+    }
     /** One explicit local inbox review. Never reacquire an Admission from the durable envelope. */
     public synchronized String retainedDeviceGoalCondition(String id){
         var pending=pendingDeviceGoals.get(id);if(pending==null)return "original_not_retained";
@@ -586,6 +594,7 @@ public final class EngineApplication extends Application implements dev.pocketen
     }
     public synchronized dev.pocketengine.store.TaskStoreDeviceTasks.GoalModelReview reviewDeviceGoalModel(String id)throws Exception{
         var admission=pendingDeviceGoals.get(id);if(admission==null)throw new SecurityException("没有该原目标的当前认证准入；不能由持久JSON造peer");
+        if(admission.deadline()<=System.currentTimeMillis())throw new SecurityException("原接手时限已过，不读取本机模型或恢复准入");
         settings.apiConnections();ModelConfig selected=settings.get();SettingsStore.validate(selected);dev.pocketengine.runtime.ModelGateway.validate(selected);
         return tasks.deviceTasks().reviewGoalModel(id,tasks.get(id,false).getLong("deviceStateRevision"),admission,selected);
     }

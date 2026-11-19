@@ -16550,7 +16550,7 @@ public final class TaskStore {
     public synchronized JSONObject getForUi(String id,boolean image)throws Exception{
         JSONObject result;boolean limited;
         try(Cursor row=db.rawQuery("SELECT CASE WHEN length(CAST(document AS BLOB))<=262144 THEN document END,ui_header,length(CAST(document AS BLOB)) FROM tasks WHERE task_id=?",new String[]{id})){
-            if(!row.moveToFirst())return null;limited=row.isNull(0);result=new JSONObject(row.getString(limited?1:0));result.remove("_localPhonePauseInput");
+            if(!row.moveToFirst())return null;limited=row.isNull(0);result=new JSONObject(row.getString(limited?1:0));result.remove("_localPhonePauseInput");result.remove(PhoneActionRecovery.INTERRUPTED);
             if(!limited&&"needs_confirmation".equals(result.optString("status")))result.put("resultReviewDigest",resultReviewDigest(result));
             result.put("taskCoreBytes",row.getLong(2)).put("taskCoreReadLimited",limited);
         }
@@ -16588,7 +16588,9 @@ public final class TaskStore {
         // ownerWorkForUi already verified controls against the source before dropping its
         // private deliveries/control header. Recomputing from this display copy invents an
         // unknown result count and hides a valid Continue when the detail includes images.
-        return image&&!limited?copy(result,true,OwnerWorkTask.isOwnerWork(result)?result.getJSONObject("controls"):null):result;
+        JSONObject view=image&&!limited?copy(result,true,OwnerWorkTask.isOwnerWork(result)?result.getJSONObject("controls"):null):result;
+        if(!limited)view.put(PhoneActionRecovery.INTERRUPTED,PhoneActionRecovery.interruptedAttempt(db,id,result));
+        return view;
     }
     private boolean hasUnconfirmedForUi(String id){
         // Presentation only: owned-running/stopping are real nonterminal facts, not unknown effects.
@@ -17120,7 +17122,12 @@ public final class TaskStore {
                     else if(feature.equals("browser"))t.put("status","awaiting_user").put("summary","浏览器执行租约已失效，目标和已有结果保留；请重新打开浏览器并接管");
                     else if(feature.equals("teams"))t.put("status","interrupted").put("summary","手机已重启，团队分析已中断；已有成员结果保留，未自动重放");
                     else if(feature.equals("plugins"))t.put("status","reconciling").put("summary","工具请求可能已经被处理；请核对服务端结果，未重复提交");
-                    else if(t.optString("kind").equals("phone")&&!t.optString("runId").isEmpty())t.put("status",t.optBoolean("cancelRequested")?"cancelled":"paused").put("summary","执行已中断，目标和上下文已保留，可继续原任务");
+                    else if(t.optString("kind").equals("phone")&&!t.optString("runId").isEmpty()){
+                        boolean stop=t.optBoolean("cancelRequested");
+                        // The conversation freezes this summary. A recorded stop is not a resume invitation or proof of rollback.
+                        t.put("status",stop?"cancelled":"paused").put("summary",stop&&PhoneActionRecovery.local(t)
+                                ?"停止请求已保留，重新打开时没有重启本轮。之前的操作是否生效，请核对记录。":"执行已中断，目标和上下文已保留，可继续原任务");
+                    }
                     else t.put("status","interrupted").put("summary","上次执行已中断，请检查已有结果");
                     if(!retainSaturatedOwnerWorkRecovery(t,previousSummary,hadSummary,true))write(t);
                     if(t.optJSONObject("conversationPhoneHandoff")!=null&&!t.optString("runId").isEmpty())conversationPhoneRecovery.put(t);

@@ -98,6 +98,13 @@ export function messagePhoneResult(message: unknown): PhoneResult | null {
     status: result.status, endedAt: result.endedAt, summaryTruncated: result.summaryTruncated, summaryChars: result.summaryChars };
 }
 
+/** A cancelled receipt wins over the one contradictory summary formerly emitted by recovery.
+ * Keep the frozen prose as written; this interpretation is not a new historical event. */
+export function cancelledPhoneSummaryNote(r:PhoneResult,original:string):string|undefined {
+  if(r.status==='cancelled'&&!r.summaryTruncated&&r.summaryChars===original.length&&
+     original==='执行已中断，目标和上下文已保留，可继续原任务')
+    return '本轮已登记为取消。原文里的“可继续”不是当前可用操作，也不表示此前动作已撤回。';
+}
 /** Display association only. Opening and reviewing still use the original native task. */
 export function phoneConversationId(task: unknown): string | null {
   if (!task || typeof task !== 'object') return null;

@@ -106,6 +106,12 @@ export function samePhoneGoalArchive(value: DeviceData | null, peer: DeviceData 
     && value.localDeviceId === local.deviceId && value.localInstanceId === local.instanceId;
 }
 const startedPhases=new Set(['preparing','running','pausing','paused','stopping','verifying','awaiting_user','waiting_user','awaiting_approval','waiting_approval','waiting_permission','interrupted','reconciling','reconciliation_required','blocked_unknown']);
+export function pickupUnavailable(row:DeviceData,now:number){
+  if(row.waitingState==='interrupted_before_start')return '原工作在执行前中断，不能从这里重新开始。';
+  if(positiveInteger(row.pickupBy)&&row.pickupBy<=now)return '这份原派单已到接手时限，不能再启动。';
+  if(row.pickupRetained===false)return '本机只留有原派单，没有当时的接手授权，不会重建。';
+  return '';
+}
 export function waitingPhoneGoalPage(value: unknown, local: DeviceData, search='') {
   if (!object(value) || value.kind !== 'waitingPhoneGoals' || value.readOnly !== true
     || (value.searchText ?? '')!==search || search!==''&&(Array.from(search).length>64||value.withdrawnOnly!==false||value.failedOnly!==false||value.declinedOnly!==false||value.startedOnly!==false||value.resultOnly!==false)
@@ -127,7 +133,7 @@ export function waitingPhoneGoalPage(value: unknown, local: DeviceData, search='
         ? r.waitingState==='original_run' && identity(r.runId) && positiveInteger(r.epoch) && startedPhases.has(r.taskState)
           &&(startedPhases.has(r.runState)||r.runState==='needs_confirmation')&&positiveInteger(r.registeredAt)&&typeof r.stopRequested==='boolean'
         : value.resultOnly === true
-        ? r.waitingState === 'result_review' && positiveInteger(r.reviewRecordedAt) && (r.candidateState===undefined || ['interrupted','failed','cancelled'].includes(r.candidateState)) : ['not_started','interrupted_before_start'].includes(r.waitingState)) && identity(r.goal) && positiveInteger(r.createdAt) && (['main_screen','background'].includes(r.screenMode) || r.textOnly === true && r.screenMode === 'capabilities'))
+        ? r.waitingState === 'result_review' && positiveInteger(r.reviewRecordedAt) && (r.candidateState===undefined || ['interrupted','failed','cancelled'].includes(r.candidateState)) : ['not_started','interrupted_before_start'].includes(r.waitingState) && (r.pickupRetained===undefined||typeof r.pickupRetained==='boolean') && (r.pickupBy===undefined||positiveInteger(r.pickupBy))) && identity(r.goal) && positiveInteger(r.createdAt) && (['main_screen','background'].includes(r.screenMode) || r.textOnly === true && r.screenMode === 'capabilities'))
     || new Set(value.rows.map((row: DeviceData) => JSON.stringify([row.taskId,row.operationId]))).size !== value.rows.length) throw new Error('这批待接手记录无法与本机原身份核对。');
   return value;
 }

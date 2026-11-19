@@ -2,6 +2,7 @@ import type {ProjectDraftReturn} from './ProjectConventionDraftAction';
 import { checkedHostFiles, checkedHostText, ProjectHostComparedFiles, ProjectHostDiff, type HostComparedFile, type HostComparison, type HostDiff, type HostEditorFile } from './ProjectHostFileComparison';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Accordion, AccordionItem, Button, SelectField, SettingsDialog, TextAreaField } from './forms-library';
+import {ProjectTaskPackageOrigin} from './ProjectTaskPackageOrigin';
 import { bridge } from './bridge';
 import { ProjectCheckoutFiles } from './ProjectCheckoutFiles';
 import { CheckoutGuide, checkoutKindSummary } from './ProjectWorkBinding';
@@ -337,6 +338,9 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, pro
             {origin.taskVerified && onOpenHostOriginal && can('projects.development.resolveHostSource') && can('tasks.open') ?
               <Button variant="secondary" disabled={busy || !!review || filesOpen} onClick={() => readOrigin(true)}>打开原主机委托</Button> :
               origin.localSourceRecorded && !origin.taskVerified ? <p>原私人任务或冻结文件回执目前不能核对。</p> : null}</div>}</div>}
+      {view?.viewHandle && available.some(row=>row.checkoutId===checkout && row.taskPackageSource===true) &&
+        <ProjectTaskPackageOrigin key={view.viewHandle+':'+checkout} project={projectId} checkout={checkout} view={view.viewHandle}
+          disabled={busy||!!review||filesOpen} invoke={invoke} can={can} open={onOpenHostOriginal}/>}
       {available.length === 0 && <div className="pw-form-actions"><Button variant="secondary" disabled={disabled || copyResult?.partial === true} onClick={() => void copy(false)}>准备这个项目的私人副本</Button></div>}
       {(view.draft?.copyRequestId || copyResult) && <div><Button variant="ghost" disabled={busy || !!review || filesOpen} onClick={() => void copy(true)}>查询原副本准备</Button>
         {copyResult?.partial && <div role="status"><p>原副本准备中断，部分文件已保留，不会覆盖。可在手动终端显式准备另一份完整副本，再返回选择；已有部分不会自动删除。</p><Button variant="secondary" disabled={busy || filesOpen} onClick={onOpenTerminal}>打开副本准备入口</Button></div>}

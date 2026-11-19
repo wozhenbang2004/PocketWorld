@@ -595,6 +595,9 @@ internal class PocketWebBridge(
                 requireFile(args)
                 controller.formalFileExports.dispatch(action,args){result,error->complete(id,result,error,retainValue=false);publishState()};return
             }
+            if(action=="projects.development.taskPackageSource" || action=="projects.development.resolveTaskPackageSource"){
+                projectDevelopment.dispatch(action,args){r,e->complete(id,r,e,retainValue=false)};return
+            }
             if (action in PocketWebProjectDevelopment.COMMANDS) {
                 projectDevelopment.dispatch(action, args) { result, error -> complete(id, result, error, retainValue = action !in PocketWebCheckoutFiles.COMMANDS && action !in setOf("projects.development.readHostDiff", "projects.development.read", "projects.development.review", "projects.development.start", "projects.development.query")); publishState() }; return
             }

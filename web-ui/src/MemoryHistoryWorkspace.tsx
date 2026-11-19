@@ -27,7 +27,8 @@ export function MemoryHistoryWorkspace({ run, scopeKey, registerTransientBack, i
   const [replacements, setReplacements] = useState<Data[]>([]), [replacement, setReplacement] = useState('');
   const [draft, setDraft] = useState(''), [review, setReview] = useState<Data | null>(null), [acknowledged, setAcknowledged] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
-  const cognitionAt = useRef('');
+  const cognitionAt = useRef(''), localChoices = useRef(new Set<string>()), turnFocus = useRef(false), pageHeading = useRef<HTMLParagraphElement | null>(null);
+  const [deferredPage, setDeferredPage] = useState('');
   const blocked = useRef(readOnly); blocked.current = readOnly;
   const locked = busy || readOnly;
   const window = useRef(new MemoryReadingWindow()), session = useRef(''), reviewHandle = useRef('');
@@ -41,6 +42,7 @@ export function MemoryHistoryWorkspace({ run, scopeKey, registerTransientBack, i
   const closeReview = () => { closeHandle(reviewHandle.current); reviewHandle.current = ''; setReview(null); setAcknowledged(false); };
   const clearReading = () => { setSelected(null); selectedRef.current = null; setSource(null); setReplacements([]); setReplacement(''); setDraft(''); closeReview(); };
   const reset = () => {
+    localChoices.current.clear(); turnFocus.current = false; setDeferredPage('');
     globalThis.clearTimeout(lease.current.timer); lease.current = { expires: 0, timer: 0, confirming: false };
     window.current.invalidate(); closeHandle(session.current); session.current = '';
     // Even an already-empty view needs fresh handlers for this reading window.
@@ -99,6 +101,20 @@ export function MemoryHistoryWorkspace({ run, scopeKey, registerTransientBack, i
     clearReading(); setCognition(null); setTask(null); setReceipt(null); setPage(null);
     void invoke(view === 'history' ? 'memoryHistory.search' : 'taskMemory.search', { query, cursor }, setPage);
   };
+  const readCognition = (cursorHandle?: string) => {
+    if (locked || !subject.trim() || (cursorHandle && (!cognition || ![cognition.directoryPage?.previous, cognition.directoryPage?.next].includes(cursorHandle)))) return;
+    localChoices.current.clear(); setDeferredPage(''); turnFocus.current = !!cursorHandle;
+    clearReading(); setPage(null); setCognition(null); const origin = cognitionWindow();
+    void invoke('memoryHistory.cognition', { subjectId: subject.trim(), ...(cursorHandle ? { cursorHandle } : {}) }, value => {
+      const d = value.directoryPage;
+      if (origin !== cognitionWindow() || value.subjectId !== subject.trim() || !d || !Number.isSafeInteger(d.number) || !Number.isSafeInteger(d.pages) ||
+          d.number < 1 || d.number > d.pages || !Number.isSafeInteger(d.visible) || d.visible < 0 || d.visible > 24 || !Number.isSafeInteger(d.total) || d.total < d.visible ||
+          (d.number > 1) !== (typeof d.previous === 'string' && !!d.previous) || (d.number < d.pages) !== (typeof d.next === 'string' && !!d.next)) throw new Error('原主体目录页未能核对，请从第一页重新读取。');
+      cognitionAt.current = origin; setCognition(value);
+    });
+  };
+  const stepCognitionPage = (handle: string) => { if (localChoices.current.size) setDeferredPage(handle); else readCognition(handle); };
+  useEffect(() => { if (cognition && turnFocus.current) { turnFocus.current = false; pageHeading.current?.focus(); } }, [cognition]);
   const openTask = (taskId: string) => { clearReading(); setReceipt(null); setTask(null); void invoke('taskMemory.task', { taskId }, setTask); };
   const acceptReceipt = (value: Data) => {
     setReceipt(value); const previous = selectedRef.current;
@@ -146,9 +162,9 @@ export function MemoryHistoryWorkspace({ run, scopeKey, registerTransientBack, i
     }
   }, [selected, busy]);
   useEffect(() => {
-    registerTransientBack(review || selected ? () => { if (!busy) { if (review) closeReview(); else clearReading(); } return true; } : null);
+    registerTransientBack(review || selected || deferredPage ? () => { if (!busy) { if (review) closeReview(); else if (selected) clearReading(); else setDeferredPage(''); } return true; } : null);
     return () => registerTransientBack(null);
-  }, [review, selected, busy, registerTransientBack]);
+  }, [review, selected, deferredPage, busy, registerTransientBack]);
   useEffect(() => {
     const hidden = () => { if (document.visibilityState !== 'visible') reset(); else live(); };
     const leave = () => reset(), resumed = () => { live(); };
@@ -179,13 +195,19 @@ export function MemoryHistoryWorkspace({ run, scopeKey, registerTransientBack, i
       {view === 'history' && <Accordion variant="divided" className="pw-compact-disclosures"><AccordionItem id="cognition" title="主体当前认知与冲突">
         <p className="pw-muted">未知主体不会归入主人；计划与想象不参与当前现实事实。</p>
         <TextField label="稳定主体身份" value={subject} onChange={value => { reset(); setSubject(value); }} maxLength={200} isDisabled={locked} />
-        <Button variant="ghost" disabled={locked || !subject.trim()} onClick={() => { clearReading(); setPage(null); setCognition(null); const origin = cognitionWindow();
-          void invoke('memoryHistory.cognition', { subjectId: subject.trim() }, value => { cognitionAt.current = origin; setCognition(value); }); }}>读取当前认知</Button>
+        <Button variant="ghost" disabled={locked || !subject.trim()} onClick={() => readCognition()}>读取当前认知</Button>
       </AccordionItem></Accordion>}
       {!page && !cognition && !task && !busy && <p className="pw-knowledge-empty-copy">{view === 'history' ? '输入关键词或记载日期，查找保存过的原文。也可以按主体核对当前认知与未决冲突。' : '搜索原任务，再查看当时提供给模型的记忆凭据。'}</p>}
-      {cognition && <section aria-label="已读取的主体认知"><p className="pw-knowledge-caption">当前 {rows(cognition.current).length} · 历史 {rows(cognition.history).length} · 待审冲突 {rows(cognition.pendingConflicts).length}</p>
-        {rows(cognition.conflictGroups).map(group => <ConflictReview key={group.conflictHandle} group={group} pending={rows(cognition.pendingConflicts)} deadline={cognition.conflictReadExpiresAt} invoke={invoke} busy={locked} onReview={args => { void invoke('memoryHistory.conflict.review', args, openReview); }} />)}
+      {cognition && <section aria-label="已读取的主体认知">{cognition.directoryPage.pages > 1 && <p ref={pageHeading} tabIndex={-1} className="pw-muted" role="status">第 {cognition.directoryPage.number} / {cognition.directoryPage.pages} 页 · 本页 {cognition.directoryPage.visible} 条，共 {cognition.directoryPage.total} 条。未列在本页不等于没有保存。</p>}<p className="pw-knowledge-caption">{cognition.directoryPage.pages > 1 ? '本页：' : ''}当前 {rows(cognition.current).length} · 历史 {rows(cognition.history).length} · 待审冲突 {rows(cognition.pendingConflicts).length}</p>
+        {rows(cognition.conflictGroups).map(group => <ConflictReview key={group.conflictHandle} group={group} onDraft={dirty => { if (dirty) localChoices.current.add(group.conflictHandle); else localChoices.current.delete(group.conflictHandle); }} pending={rows(cognition.pendingConflicts)} deadline={cognition.conflictReadExpiresAt} invoke={invoke} busy={locked} onReview={args => { void invoke('memoryHistory.conflict.review', args, openReview); }} />)}
         {(['current', 'history'] as const).map(key => rows(cognition[key]).length > 0 && <section className="pw-knowledge-directory-group" key={key}><header className="pw-knowledge-group-heading"><h3>{key === 'current' ? '当前认知' : '历史、计划或尚未生效'}</h3><span>{rows(cognition[key]).length}</span></header><div className="pw-memory-list">{rows(cognition[key]).map(row => <article key={row.id} className="pw-memory-list-item"><Button variant="ghost" className="pw-memory-row" data-history-id={`${key}:${row.id}`} trailingIcon={IconChevronRight} disabled={locked} onClick={() => choose(row, `${key}:${row.id}`)}><span className="pw-memory-row-copy"><strong>{row.text}</strong><small>{row.assertion?.kind} · {row.assertionStatus}</small></span></Button></article>)}</div></section>)}
+        {cognition.directoryPage.pages > 1 && <nav aria-label="同一主体目录分页">{deferredPage ? <><p className="pw-muted">这一页有尚未提交的选择或理由。翻页不会保存。</p><div className="pw-form-actions">
+          <Button variant="secondary" disabled={locked} onClick={() => setDeferredPage('')}>留在本页</Button>
+          <Button variant="ghost" disabled={locked} onClick={() => readCognition(deferredPage)}>放弃未提交内容并翻页</Button>
+        </div></> : <div className="pw-form-actions">
+          {cognition.directoryPage.previous && <Button variant="ghost" disabled={locked} onClick={() => stepCognitionPage(cognition.directoryPage.previous)}>上一页</Button>}
+          {cognition.directoryPage.next && <Button variant="ghost" disabled={locked} onClick={() => stepCognitionPage(cognition.directoryPage.next)}>下一页</Button>}
+        </div>}</nav>}
       </section>}
       {page && <section className="pw-knowledge-section"><h3 className="pw-knowledge-section-heading">{view === 'history' ? '匹配的旧事' : '原任务记录'}</h3>
         <p className="pw-muted">{view === 'history' ? `本页 ${rows(page.matches).length} / 匹配 ${page.totalMatches ?? '未知'}。未列出不代表从未保存。` : `本页 ${rows(page.tasks).length} 条原任务 · ${page.coverage === 'full_task_store' ? '完整任务记录检索' : '以原宿主声明范围为准'}`}</p>
@@ -222,16 +244,20 @@ export function MemoryHistoryWorkspace({ run, scopeKey, registerTransientBack, i
   </section>;
 }
 
-function ConflictReview({ group, pending, deadline, busy, invoke, onReview }: { group: Data; pending: Data[]; deadline: number; busy: boolean; invoke: (action: string, args: Data, receive: (value: Data) => void) => Promise<unknown>; onReview: (args: Data) => void }) {
+function ConflictReview({ group, pending, deadline, busy, invoke, onDraft, onReview }: { group: Data; onDraft: (dirty: boolean) => void; pending: Data[]; deadline: number; busy: boolean; invoke: (action: string, args: Data, receive: (value: Data) => void) => Promise<unknown>; onReview: (args: Data) => void }) {
   const [choice, setChoice] = useState(''), [reason, setReason] = useState('');
+  useEffect(() => () => onDraft(false), [group.conflictHandle]);
   const originals = rows(group.records), coexist = choice === ':coexist', chosen = originals.find(row => `keep:${row.id}` === choice);
+  if (group.reviewable === false) return <section className="pw-source-record pw-knowledge-conflict"><h3>这组冲突暂时只能逐条核对</h3>
+    <p className="pw-muted">同组共 {group.totalRecords} 条，超过一次原生审阅可处理的 20 条。本页只显示其中 {originals.length} 条；不会让部分版本代替整组确认。</p>
+    <MemoryConflictEvidence group={group} pending={pending} deadline={deadline} busy={busy} invoke={invoke} /></section>;
   const options = originals.map(row => ({ id: `keep:${row.id}`, label: row.text, description: `${row.reviewRole === 'protected_current' ? '此前受保护的当前版本' : '待核对'} · 修订 ${row.revision}` }));
   if (originals.length >= 2) options.push({ id: ':coexist', label: '这些内容并存', description: '不指定唯一版本，需要说明保留理由。' });
   return <section className="pw-source-record pw-knowledge-conflict"><h3>核对这组冲突</h3>
     <p className="pw-muted">新的推断不会自动替换主人纠正过的内容。先逐条对照，再决定以后如何参考。</p>
     <MemoryConflictEvidence group={group} pending={pending} deadline={deadline} busy={busy} invoke={invoke} />
-    <RadioOptions label={originals.length >= 2 ? '保留哪一条，或允许并存' : '核对要保留的版本'} value={choice} options={options} onChange={setChoice} isDisabled={busy} />
-    <TextAreaField label="这样处理的理由" value={reason} onChange={setReason} maxLength={1000} isDisabled={busy} />
+    <RadioOptions label={originals.length >= 2 ? '保留哪一条，或允许并存' : '核对要保留的版本'} value={choice} options={options} onChange={v => { setChoice(v); onDraft(!!v || !!reason.trim()); }} isDisabled={busy} />
+    <TextAreaField label="这样处理的理由" value={reason} onChange={v => { setReason(v); onDraft(!!choice || !!v.trim()); }} maxLength={1000} isDisabled={busy} />
     <Button variant="secondary" disabled={busy || !(coexist ? originals.length >= 2 : chosen) || !reason.trim()} onClick={() => onReview({
       conflictHandle: group.conflictHandle, decision: coexist ? 'coexist' : 'replace', selectedId: coexist ? '' : chosen?.id, reason,
     })}>核对这次选择</Button></section>;

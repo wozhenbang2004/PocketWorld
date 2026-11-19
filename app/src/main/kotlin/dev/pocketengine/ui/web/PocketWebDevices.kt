@@ -336,6 +336,10 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         val display=JSONArray();for(row in rows)display.put(JSONObject().also { item ->
             for(key in listOf("taskId","operationId","sourceDeviceId","goal","screenMode","createdAt","waitingState"))item.put(key,row.get(key))
             row.optJSONObject("sourceIdentity")?.let{item.put("sourceIdentity",it)}
+            if(!results&&!started&&!declined&&!withdrawn&&!failed){
+                item.put("pickupRetained",row.getBoolean("pickupRetained"))
+                if(row.has("pickupBy"))item.put("pickupBy",row.getLong("pickupBy"))
+            }
             if(searching && row.optBoolean("matchedLater"))item.put("matchedLater",true)
             if(row.optBoolean("textOnly"))item.put("textOnly",true)
             if(withdrawn)item.put("withdrawnAt",row.getLong("withdrawnAt")).put("notDispatched",true)

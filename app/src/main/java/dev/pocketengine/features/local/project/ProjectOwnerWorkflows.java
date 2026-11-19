@@ -29,6 +29,7 @@ public final class ProjectOwnerWorkflows {
         ProjectBuildPlan.identity(project);JSONArray available=new JSONArray(),rows=local.snapshot().getJSONArray("checkouts");
         for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(!project.equals(row.optString("projectId"))||!ordinaryCheckout(row))continue;
             available.put(new JSONObject().put("checkoutId",row.getString("id")).put("projectId",project).put("name",row.optString("name")).put("createdAt",row.optLong("createdAt"))
+                .put("taskPackageSource",row.optJSONObject("sourceImport")!=null&&ProjectTaskSourceOrigin.KIND.equals(row.getJSONObject("sourceImport").opt("sourceKind")))
                 .put("hostSource",row.optJSONObject("sourceImport")!=null&&"host_saved_snapshot".equals(row.getJSONObject("sourceImport").opt("sourceKind"))));}
         return new JSONObject().put("projectId",project).put("checkouts",available).put("runtime",local.projectRuntimeForHost("managed_process_v1")).put("executionAuthorized",false);
     }
@@ -53,6 +54,9 @@ public final class ProjectOwnerWorkflows {
         if(!project.equals(row.getString("projectId"))||!ordinaryCheckout(row))throw new SecurityException("请选择此项目的普通私人副本");
     }
     /** Project -> historical original receipt. Does not restore a grant, connect, or prepare a new task. */
+    public JSONObject taskSourceOriginForOwner(String project,String checkout,String expected)throws Exception {
+        requireOrdinaryFileOwner(project,checkout);return local.privateTaskSourceOriginForOwner(project,checkout,expected);
+    }
     public JSONObject hostSourceOriginForOwner(String project,String checkout,String expected)throws Exception {
         requireOrdinaryFileOwner(project,checkout);
         var origin=local.phoneHostOriginForOwner(project,checkout);

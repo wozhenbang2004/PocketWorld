@@ -183,19 +183,36 @@ internal class PocketWebMemoryHistory(private val controller: PocketWorldControl
                 }
             }
             "memoryHistory.cognition" -> {
-                fields(args, "sessionHandle", "subjectId"); val session = session(args, "memoryReview"); val subject = text(args, "subjectId")
-                check(session.displayedScope.optString("spaceId") == "private") { "主体认知只在原私人记忆范围读取" }; retire(session)
+                fields(args, "sessionHandle", "subjectId", "cursorHandle"); val session = session(args, "memoryReview"); val subject = text(args, "subjectId")
+                check(session.displayedScope.optString("spaceId") == "private") { "主体认知只在原私人记忆范围读取" }
+                val cursor = if (args.has("cursorHandle")) selected(args, "cursorHandle", "cognition-page").let { (same, pinned) ->
+                    check(same === session && pinned.getString("subjectId") == subject) { "原目录页不属于这一主体或窗口" }; pinned
+                } else null
+                val memoryRevision = controller.state.memoryRefreshRevision; val sourceRevision = controller.conversationSourceRevision
+                fun sameEpoch() = memoryRevision == controller.state.memoryRefreshRevision && sourceRevision == controller.conversationSourceRevision
+                if (cursor != null) check(cursor.getLong("memoryRevision") == memoryRevision && cursor.getLong("sourceRevision") == sourceRevision) { "原目录或来源已变化，请从第一页重新读取" }
+                retire(session)
                 call(session, "cognitionProjection", JSONObject().put("subjectId", subject), done) { value ->
-                    check(value.optString("subjectId") == subject)
-                    for (key in listOf("current", "history", "pendingConflicts")) rows(value.optJSONArray(key)).forEach {
-                        it.put("readHandle", pin(session, "memory-record", JSONObject().put("record", it).put("subjectId", subject)))
-                    }
+                    check(value.getString("subjectId") == subject && sameEpoch()) { "原主体或来源已变化，请重新读取" }
+                    val page = MemoryCognitionDirectory.page(value, cursor?.getInt("number") ?: 0)
+                    if (cursor != null) check(cursor.getString("version") == page.version) { "原目录版本或页内成员已变化，请重新读取" }
+                    fun record(row: JSONObject) = copy(row).put("readHandle", pin(session, "memory-record", JSONObject().put("record", row).put("subjectId", subject)))
+                    fun cursorAt(n: Int) = pin(session, "cognition-page", JSONObject().put("subjectId", subject).put("number", n).put("version", page.version)
+                        .put("memoryRevision", memoryRevision).put("sourceRevision", sourceRevision))
                     val groups = JSONArray()
-                    rows(value.optJSONArray("pendingConflicts")).groupBy(::conflictGroup).values.forEach { group ->
-                        val original = JSONObject().put("subjectId", subject).put("records", JSONArray(group.map { copy(it).apply { remove("readHandle") } }))
-                        groups.put(JSONObject().put("records", original.getJSONArray("records")).put("conflictHandle", pin(session, "conflict", original)))
+                    for (clash in page.conflicts) {
+                        val canReview = clash.all.size <= MemoryCognitionDirectory.MAX_REVIEW
+                        val original = JSONObject().put("subjectId", subject).put("records", JSONArray(clash.visible))
+                        if (!canReview) original.put("wholeCount", clash.all.size).put("wholeFingerprint", MemoryCognitionDirectory.groupVersion(clash.all))
+                        groups.put(JSONObject().put("records", JSONArray(clash.visible)).put("reviewable", canReview).put("totalRecords", clash.all.size)
+                            .put("conflictHandle", pin(session, if (canReview) "conflict" else "conflict-read", original)))
                     }
-                    value.put("conflictGroups", groups).put("conflictReadExpiresAt", session.expires)
+                    val where = JSONObject().put("number", page.number + 1).put("pages", page.pages).put("visible", page.visible.size).put("total", page.count)
+                    if (page.number > 0) where.put("previous", cursorAt(page.number - 1))
+                    if (page.number + 1 < page.pages) where.put("next", cursorAt(page.number + 1))
+                    value.put("current", JSONArray(page.current.map(::record))).put("history", JSONArray(page.history.map(::record))).put("pendingConflicts", JSONArray(page.pending.map(::record)))
+                        .put("sourceVersions", JSONArray(rows(value.getJSONArray("sourceVersions")).filter { it.getString("id") in page.visible }))
+                        .put("conflictGroups", groups).put("conflictReadExpiresAt", session.expires).put("directoryPage", where)
                 }
             }
             "memoryHistory.source" -> {
@@ -204,7 +221,7 @@ internal class PocketWebMemoryHistory(private val controller: PocketWorldControl
                 val refs = (if (span) row.optJSONObject("assertion")?.optJSONArray("evidenceSpans") else row.optJSONArray("sourceRefs")) ?: JSONArray()
                 val ix = index(args, "index", refs.length()); val reference = copy(refs.getJSONObject(ix)); val offset = offset(args)
                 if (args.has("conflictHandle")) {
-                    val (same, group) = selected(args, "conflictHandle", "conflict")
+                    val (same, group) = selected(args, "conflictHandle", "conflict", "conflict-read")
                     check(span && same === session && original.getString("subjectId") == group.getString("subjectId")) { "原冲突与这一版不属同一阅读窗口" }
                     conflictSpan(session, group, row, ix, reference, offset, done)
                 } else memoryCurrent(session, original, done) { call(session, if (span) "readAssertionEvidence" else "openSource", reference, done) { sourcePage(it, offset) } }
@@ -360,18 +377,18 @@ internal class PocketWebMemoryHistory(private val controller: PocketWorldControl
         }
     }
     // Match the Book's owner / space / subject / predicate / condition tuple, not labels or iteration order.
-    private fun conflictGroup(row: JSONObject): List<String> = row.getJSONObject("assertion").let { a ->
-        listOf(row.getString("ownerId"), row.getString("spaceId"), a.getString("subjectId"), a.getString("predicate"), a.getString("condition"))
-    }
+    private fun conflictGroup(row: JSONObject) = MemoryCognitionDirectory.group(row)
     private fun conflictCurrent(session: Session, original: JSONObject, done: (JSONObject?, String?) -> Unit, next: () -> Unit) {
         call(session, "cognitionProjection", JSONObject().put("subjectId", original.getString("subjectId")), { value, error ->
             if (value == null) done(null, error) else try {
                 val frozen = rows(original.getJSONArray("records")); check(frozen.isNotEmpty())
-                val key = conflictGroup(frozen.first()); val live = rows(value.getJSONArray("pendingConflicts")).filter { conflictGroup(it) == key }
-                check(value.getString("subjectId") == original.getString("subjectId") && key[2] == original.getString("subjectId") &&
+                val key = conflictGroup(frozen.first()); val live = rows(value.getJSONArray("pendingConflicts")).filter { conflictGroup(it) == key }; val byId = live.associateBy { it.getString("id") }
+                val whole = if (original.has("wholeFingerprint")) original.getInt("wholeCount") == live.size && live.size > MemoryCognitionDirectory.MAX_REVIEW &&
+                    MemoryCognitionDirectory.groupVersion(live) == original.getString("wholeFingerprint") else live.size == frozen.size
+                check(value.getString("subjectId") == original.getString("subjectId") && key[2] == original.getString("subjectId") && whole &&
                     frozen.all { conflictGroup(it) == key } && frozen.map { it.getString("id") }.toSet().size == frozen.size &&
-                    live.size == frozen.size && frozen.all { before -> live.count { now -> MemoryLearningReviewGuard.sameReview(before, now) &&
-                        before.optString("reviewRole") == now.optString("reviewRole") && before.getString("assertionStatus") == now.getString("assertionStatus") } == 1 }) {
+                    byId.size == live.size && frozen.all { before -> byId[before.getString("id")]?.let { now -> MemoryLearningReviewGuard.sameReview(before, now) &&
+                        before.optString("reviewRole") == now.optString("reviewRole") && before.getString("assertionStatus") == now.getString("assertionStatus") } == true }) {
                     "这一组的成员、版本或当前状态已变化，请重新读取整组"
                 }
                 next()

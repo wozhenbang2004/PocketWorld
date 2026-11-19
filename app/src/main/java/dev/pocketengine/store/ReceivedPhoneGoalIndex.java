@@ -206,6 +206,7 @@ final class ReceivedPhoneGoalIndex {
                     if (goal.codePointCount(0,goal.length())>160) goal=goal.substring(0,goal.offsetByCodePoints(0,160))+"…";
                     items.put(new JSONObject().put("taskId",task).put("operationId",op).put("argumentsDigest",digest)
                             .put("sourceIdentity",shelf==Shelf.PENDING||started||declined||withdrawn||results||failed?sourceIdentity(db,here,source,c.getString(4),c.getLong(5),System.currentTimeMillis()):null)
+                            .put("pickupRequestEndsAt",shelf==Shelf.PENDING&&wire.optLong("deadline")>0&&wire.optLong("deadline")<=DeviceProtocol.MAX_SAFE_INTEGER?Long.valueOf(wire.getLong("deadline")):null)
                             .put("sourceDeviceId",source).put("withdrawnAt",withdrawn?Long.valueOf(withdrawnAt):null).put("declinedAt",declined?Long.valueOf(declinedAt):null).put("failedRun",failedRun).put("startedRun",startedRun).put("closedReview",closedReview).put("mayCheckLocalText",!waiting&&zero&&"completed".equals(header.opt("status"))&&!header.optString("runId").isEmpty()&&header.optInt("coordinatorEpoch")>0?true:null)
                             .put("textOnly",textOnly||zero&&"assistant".equals(header.opt("kind"))?true:null).put("reviewRun",review==null?null:review.getString("runId"))
                             .put("candidateState",candidateState.isEmpty()?null:candidateState).put("reviewEpoch",review==null?null:review.getInt("epoch")).put("reviewRecordedAt",review==null?null:review.getLong("recordedAt"))

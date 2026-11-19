@@ -23,6 +23,21 @@ public final class PhoneActionRecovery {
                 &&task.isNull("origin")&&task.isNull("parentTaskId")&&task.isNull("ownerPhoneControl")&&task.isNull("ownerDeviceWork")
                 &&Set.of("main_screen","background").contains(task.optString("executionMode"))&&!task.optString("runId").isEmpty()&&task.optInt("coordinatorEpoch")>0;
     }
+    static final String INTERRUPTED="originalInterruptedPhoneAttempt";
+    /** Detail-only, from the same run journal recovery settles. Paused task status alone
+     * proves neither a surviving controller nor an interrupted run. Never read a checkpoint. */
+    static JSONObject interruptedAttempt(SQLiteDatabase db,String id,JSONObject task)throws Exception{
+        if(!"paused".equals(task.optString("status"))||!local(task)||!id.equals(task.optString("id"))||task.optBoolean("cancelRequested")
+                ||task.has(dev.pocketengine.phone.MainPhoneOwnerStep.KEY)||dev.pocketengine.phone.MainPhoneOwnerStep.needsOwner(task)
+                ||!task.isNull("ownerPhoneQuestionHold"))return null;
+        String run=task.getString("runId");int epoch=task.getInt("coordinatorEpoch");
+        try(Cursor original=db.rawQuery("SELECT status FROM runs WHERE task_id=? AND run_id=? AND epoch=?",
+                new String[]{id,run,Integer.toString(epoch)})){
+            if(!original.moveToFirst()||!"interrupted".equals(original.getString(0)))return null;
+            return new JSONObject().put("format","pocketworld.private-phone-interrupted.v1").put("taskId",id)
+                    .put("runId",run).put("epoch",epoch).put("mode",task.getString("executionMode")).put("runStatus","interrupted");
+        }catch(android.database.sqlite.SQLiteException unavailable){return null;}
+    }
     private static String safeStatus(String value){return value!=null&&value.matches("running|preparing|paused|completed|cancelled|stopped|failed|awaiting_user|needs_confirmation|interrupted|reconciling")?value:"recorded";}
     private static String safeOperationState(String value){return value!=null&&value.matches("prepared|unknown|receipt|resolved|failed")?value:"recorded";}
     /** Status of the exact retained run for an explicit notification open. No goals, observation data, arguments or receipt bodies. */

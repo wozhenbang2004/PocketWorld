@@ -132,7 +132,7 @@ import {EarlierDraftPhoneStarts,BlankPhoneReceiptActions,type BlankFirstRun} fro
 import {PhoneNotificationReturn,originalPhoneNotice,type PhoneNotice} from './PhoneNotificationReturn';
 import {PhoneScopeReview,type PhoneReviewDisplay} from './PhoneScopeReview';
 import {currentPhonePlaceInput,phonePlaceReturn,samePhonePlaceDraft,type ReviewedPlace,type PhonePlaceReturn} from './phone-review-place';
-import {PhonePauseInstruction,isPrivateLocalPhone} from './PhonePauseInstruction';
+import {PhonePauseInstruction,isPrivateLocalPhone,interruptedPrivatePhone,InterruptedPhoneRecord} from './PhonePauseInstruction';
 import {PhoneMainOwnerStep,mainPhoneStep} from './PhoneMainOwnerStep';
 import {PhoneServiceRecovery} from './PhoneServiceRecovery';
 import {privatePhoneSurface,phoneSurfaceLabel,sameDisplayedPause,type DisplayedPhonePause} from './private-phone-surface';
@@ -1573,8 +1573,10 @@ export default function App(){
   const phoneUnknown=unresolved.filter(op=>op.format===PHONE_RECORD),ordinaryUnknown=unresolved.filter(op=>op.format!==PHONE_RECORD&&op.tool!=='team_integrate_file');
   const originalIntegrator=task.raw?.origin?.kind==='team_integration'&&!!task.raw?.runId&&Number.isSafeInteger(task.raw?.coordinatorEpoch)&&can('tasks.recoverTeamFile');
   const hasDecision=!!review?.ownerQuestion||!!project||actionNames.some(action=>action!=='tasks.scope'&&action!=='tasks.plan.enter'&&(action!=='tasks.resolve'||ordinaryUnknown.some(op=>!!op.operationId)));
+  const phoneInterrupted=interruptedPrivatePhone(task,state.livePrivatePhones);
+  const pausedSurface=task.status==='paused'?privatePhoneSurface(task,state.livePrivatePhones):null;
   const ordinaryResume=!project&&!review?.ownerQuestion&&!approved.length&&!unresolved.length&&actionNames.includes('tasks.resume')&&actionNames.every(action=>['tasks.resume','tasks.scope','tasks.plan.enter','tasks.deleteScreenshot'].includes(action));
-  const resumeFeedback=<Accordion variant="divided" className="pw-compact-disclosures" expandedKeys={reviewFeedbackOpen?['resume-feedback']:[]} onExpandedChange={keys=>setReviewFeedbackOpen(keys.has('resume-feedback'))}><AccordionItem id="resume-feedback" title="补充说明（可选）" description={reviewNote?'已填写':undefined}><TextAreaField label="本次补充" value={reviewNote} onChange={setReviewNote} placeholder="需要调整的内容" isDisabled={protectedDisabled}/></AccordionItem></Accordion>;
+  const resumeFeedback=<Accordion variant="divided" className="pw-compact-disclosures" expandedKeys={reviewFeedbackOpen?['resume-feedback']:[]} onExpandedChange={keys=>setReviewFeedbackOpen(keys.has('resume-feedback'))}><AccordionItem id="resume-feedback" title={phoneInterrupted?'给新一轮的补充（可选）':'补充说明（可选）'} description={reviewNote?'已填写':undefined}><TextAreaField label="本次补充" value={reviewNote} onChange={setReviewNote} placeholder="需要调整的内容" isDisabled={protectedDisabled}/></AccordionItem></Accordion>;
   const inspectResult=stage==='ended'||actionNames.includes('tasks.confirm');
   const decisionFirst=stage==='attention'&&!inspectResult;
   const overviewActive=taskOpen&&!taskOpening&&openedTaskId.current===task.id&&taskLayer==='overview';
@@ -1621,6 +1623,9 @@ export default function App(){
      {overviewActive&&<WorkExecutionPlace task={task} projects={projects} canReadPhoneResources={!phoneViewerObscured&&!phoneViewerExpanded&&!obj(snapshot?.view).section&&obj(snapshot?.view).taskId===task.id&&can('history.read')}/>}
      {overviewActive&&!phoneViewerObscured&&!phoneViewerExpanded&&!obj(snapshot?.view).section&&obj(snapshot?.view).taskId===task.id&&can('history.read')&&<PhoneServiceRecovery key={JSON.stringify([task.id,task.raw?.runId,task.raw?.coordinatorEpoch])} task={task} readiness={state.phoneReadiness} openSettings={can('settings.openSystem')?()=>act('settings.openSystem',{section:'accessibility'},task.id):undefined} review={can('tasks.review')&&!readingReview&&!questionPending?showTaskReview:undefined}/>}
      {taskOpen&&!taskOpening&&openedTaskId.current===task.id&&<PhoneMainOwnerStep key={'main-owner-step:'+task.id} task={task} visible={overviewActive&&!phoneViewerObscured&&!phoneViewerExpanded&&obj(snapshot?.view).taskId===task.id} run={act} can={can} onProcess={()=>showTaskLayer('process')}/>}
+     {phoneInterrupted&&overviewActive&&!phoneViewerObscured&&!phoneViewerExpanded&&!obj(snapshot?.view).section&&obj(snapshot?.view).taskId===task.id&&<InterruptedPhoneRecord
+       reviewed={!!review&&!reviewStale&&!readingReview} canStart={actionNames.includes('tasks.resume')} onHistory={can('history.read')?()=>showTaskLayer('process'):undefined}
+       onReview={can('tasks.review')&&!readingReview&&!questionPending?showTaskReview:undefined}/>}
      {inspectResult?[evidence,decision,workFacts]:decisionFirst?[mainPhoneStep(task)&&!approved.length&&!unresolved.length&&!review?.ownerQuestion?null:decision,workFacts,evidence]:[latestProgress,workFacts,evidence,decision]}
      {taskLayer==='overview'&&ownerWorkActions(task)}
      {taskOpen&&openedTaskId.current===task.id&&!taskOpening&&task.raw?.hasOwnerWorkPreparations&&<ButlerPreparationEntries key={'preparations-task:'+task.id} sourceTaskId={task.id} conversationId={privateTaskConversationId(task)||''} active={taskLayer==='overview'&&!preparationTarget} refreshKey={String(task.raw?.ownerWorkPreparationCount||0)+':'+preparationRevision} can={can} run={bridge.command} onOpen={setPreparationTarget}/>}
@@ -1651,7 +1656,7 @@ export default function App(){
       {can('phoneControl.open')&&<ConversationModelPickerVisibility key={'manual:'+task.id}>{pickerVisible=><PhoneControlWorkspace taskId={task.id} hasScope={asArray(task.raw?.deviceSourceScope?.routes).length===1} started={!!task.raw?.runId} visible={taskLayer==='overview'&&!pickerVisible&&!phoneViewerObscured} run={act} onChanged={()=>loadTaskReview(task.id)}/>}</ConversationModelPickerVisibility>}
      </>}
      {taskOpen && openedTaskId.current===task.id && !taskOpening && isPrivateLocalPhone(task) && can('phone.pauseNote.read') && can('phone.pauseNote.continue') &&
-       <PhonePauseInstruction key={'phone-pause-note:'+task.id} task={task} visible={taskLayer==='overview' && !phoneViewerObscured && !phoneViewerExpanded && obj(snapshot?.view).taskId===task.id} run={act}/>}
+       <PhonePauseInstruction key={'phone-pause-note:'+task.id} task={task} livePause={!!pausedSurface?.paused&&!pausedSurface.stopRequested&&pausedSurface.surfaceState!=='other_surface'&&pausedSurface.surfaceState!=='handoff_unconfirmed'} interrupted={phoneInterrupted} visible={taskLayer==='overview' && !phoneViewerObscured && !phoneViewerExpanded && obj(snapshot?.view).taskId===task.id} run={act}/>}
      {taskOpen&&phoneViewerFor(task)}
      {taskOpen&&task.raw?.feature==='remote'&&can('remoteTask.open')&&<RemoteTaskWorkspace key={task.id} taskId={task.id} raw={obj(task.raw)} receipt={task.hostReceipt} savedFiles={asArray<Json>(task.raw?.remoteSnapshotAttachments)} openProject={can('remoteTask.stageSavedSources')&&can('projects.localSource.openPrepared')?pin=>{void navigate('projects',()=>run('projects.localSource.openPrepared',pin));}:undefined}/>}
      {overviewActive&&task.raw?.mayReadProjectTeamFirstReviews===true&&can('tasks.projectTeamReviews')&&can('tasks.projectTeamReview.original')&&can('teams.readFrozenOutputs')&&can('teams.readRun')&&
@@ -1718,7 +1723,7 @@ export default function App(){
   const actions=asArray<{action:string}>(review.actions).map(x=>x.action),disabled=taskOpening||reviewSubmitted||reviewPending;
   if(taskLayer==='scope'&&actions.includes('tasks.scope'))return <footer className="pw-task-footer"><PressButton label="确认本次范围修订" disabled={disabled||!/^\d+$/.test(scopeTools)||!/^\d+$/.test(scopeModels)||Number(scopeTools)<1||Number(scopeTools)>400||Number(scopeModels)<1||Number(scopeModels)>512} onClick={()=>reviewedAction('tasks.scope',{minutes:Number(scopeMinutes),tools:Number(scopeTools),models:Number(scopeModels)})}/></footer>;
   if(taskLayer==='overview'&&actions.includes('tasks.confirm'))return <footer className="pw-task-footer"><Button variant="secondary" disabled={disabled} onClick={()=>reviewedAction('tasks.confirm',{completed:false,feedback:reviewNote})}>目标尚未达到</Button><PressButton label="确认达到目标" disabled={disabled} onClick={()=>reviewedAction('tasks.confirm',{completed:true,feedback:reviewNote})}/></footer>;
-   if(taskLayer==='overview'&&actions.includes('tasks.resume')){const project=projectContinuation(review),note=projectFeedback[projectFeedbackKey(task)]||'';return <footer className="pw-task-footer"><PressButton label={project?'在原范围内继续项目任务':task.raw?.ownerDeviceWork&&!task.raw?.runId?'开始这项设备工作':'继续原任务'} disabled={disabled||!!project&&(continuationBlocks(continuations[task.id])||!note.trim()||note.trim().length>8000)} onClick={()=>reviewedAction('tasks.resume',{confirmed:true,feedback:reviewNote})}/></footer>;}
+   if(taskLayer==='overview'&&actions.includes('tasks.resume')){const project=projectContinuation(review),note=projectFeedback[projectFeedbackKey(task)]||'';return <footer className="pw-task-footer"><PressButton label={project?'在原范围内继续项目任务':task.raw?.ownerDeviceWork&&!task.raw?.runId?'开始这项设备工作':interruptedPrivatePhone(task,state.livePrivatePhones)?'在原任务另开一轮':'继续原任务'} disabled={disabled||!!project&&(continuationBlocks(continuations[task.id])||!note.trim()||note.trim().length>8000)} onClick={()=>reviewedAction('tasks.resume',{confirmed:true,feedback:reviewNote})}/></footer>;}
   return null;
  };
  const selectedWorkIdentity=ownerWorkIdentity(selectedTask);

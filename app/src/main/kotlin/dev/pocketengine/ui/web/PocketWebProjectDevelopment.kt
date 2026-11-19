@@ -44,6 +44,7 @@ internal class PocketWebProjectDevelopment(
         private val ownerDrafts = linkedMapOf<String, JSONObject>()
         private val deliveryFields = arrayOf("constraints", "deliverable", "completionCriteria")
         val COMMANDS = setOf("projects.development.read", "projects.development.draft", "projects.development.inspect",
+            "projects.development.taskPackageSource", "projects.development.resolveTaskPackageSource",
             "projects.development.hostSource", "projects.development.resolveHostSource", "projects.development.compareHostSource", "projects.development.readHostDiff",
             "projects.development.prepare", "projects.development.queryCopy", "projects.development.review",
             "projects.development.start", "projects.development.query", "projects.development.dismiss", "projects.development.close") + PocketWebCheckoutFiles.COMMANDS
@@ -260,6 +261,14 @@ internal class PocketWebProjectDevelopment(
                 val checkout = text(args, "checkoutId"); val evidence = text(args, "evidenceDigest", 64)
                 require(evidence.matches(Regex("[a-f0-9]{64}")))
                 working(original, done) { controller.projectDevelopmentForWeb().compareHostSourceForOwner(original.project, checkout, evidence) { current(original) } }
+            }
+            "projects.development.taskPackageSource","projects.development.resolveTaskPackageSource" -> {
+                val opening=action=="projects.development.resolveTaskPackageSource"
+                if(opening)fields(args,"viewHandle","checkoutId","evidenceDigest") else fields(args,"viewHandle","checkoutId")
+                check(review==null){ "请先关闭当前项目审阅" }
+                val checkout=text(args,"checkoutId")
+                val expected=if(opening)text(args,"evidenceDigest",64).also{require(it.matches(Regex("[a-f0-9]{64}")))} else null
+                working(original,done){controller.projectDevelopmentForWeb().taskSourceOriginForOwner(original.project,checkout,expected)}
             }
             "projects.development.hostSource", "projects.development.resolveHostSource" -> {
                 val opening = action == "projects.development.resolveHostSource"

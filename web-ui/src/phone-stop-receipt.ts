@@ -48,6 +48,19 @@ function actionResult(entry: Row): string {
   return '请求已接纳，未核实应用内效果';
 }
 
+/** Reuse the same native action vocabulary in the original result and stop checkpoint.
+ * The SQL run join and any receipt binding must agree. Never display arguments or the target chosen in a plan. */
+export function originalPhoneActionFact(entry:Row,owner:{taskId:string;runId:string;epoch:number}){
+  const name=actions.get(entry.tool);
+  if(!name||!id(entry.operationId)||entry.runId!==owner.runId||entry.runEpoch!==owner.epoch)return;
+  const r=entry.status==='available'?object(entry.receipt):undefined;
+  const bound=!r||['observationScope','observationBinding'].every(key=>{
+    if(r[key]===undefined)return true;const b=object(r[key]);
+    return b?.taskId===owner.taskId&&b?.runId===owner.runId&&b?.epoch===owner.epoch;
+  });
+  return {id:entry.operationId as string,name,result:bound?actionResult(entry):'回执归属无法核对',bound};
+}
+
 /** Only accepted, already-open audit windows. No bridge, persistence, image decoding, model or device call. */
 export function phoneStopReceipt(task:TaskHeader, eventPage?:AuditPage, operationPage?:AuditPage):PhoneStopReceipt | undefined {
   if (!['cancelled','canceled','stopped'].includes(task.status) || task.raw?.status !== task.status || !isPrivateLocalPhone(task) ||
@@ -63,16 +76,14 @@ export function phoneStopReceipt(task:TaskHeader, eventPage?:AuditPage, operatio
       e.coordinatorEpoch === epoch && (e.epoch === undefined || e.epoch === epoch) && e.type === entry.type;
   });
   const ops = operationPage?.section === 'operations' && operationPage.taskId === taskId ? operationPage.entries : [];
-  const latest = ops.filter(op => id(op.operationId) && actions.has(op.tool) && op.runId === runId && op.runEpoch === epoch).slice(0,3);
+  const latest=[];
+  for(const entry of ops){const fact=originalPhoneActionFact(entry,owner);if(fact&&latest.push(fact)===3)break;}
   const lines: string[] = [];
   let record:ProcessRecord | undefined;
   let screenRead = false, suffixRead = false;
   for (const op of latest) {
-    const r = op.status === 'available' ? object(op.receipt) : undefined;
-    const wrongScope = r && ['observationScope','observationBinding'].some(key => r[key] !== undefined && !match(object(r[key])));
-    const result = wrongScope ? '回执归属无法核对' : actionResult(op);
-    const body = actions.get(op.tool) + '：' + result;
-    if (!record) record = {section:'operations', id:op.operationId, runId, locatable:!wrongScope, label:'最近读到的手机操作', body};
+    const body=op.name+'：'+op.result;
+    if (!record) record = {section:'operations', id:op.id, runId, locatable:op.bound, label:'最近读到的手机操作', body};
     else lines.push('此前记录 · '+body);
   }
 
