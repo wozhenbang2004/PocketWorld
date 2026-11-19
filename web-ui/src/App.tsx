@@ -273,7 +273,7 @@ export default function App(){
  const fileQuery=projectView.query,fileView=projectView.view;const setFileQuery=(query:string)=>updateProjectView({query}),setFileView=(view:'files'|'tree'|'grid')=>updateProjectView({view});
  const taskScroll=useRef<HTMLDivElement>(null),taskReading=useRef(new Map<string,number>());
  const reviewRequest=useRef(0),openedTaskId=useRef<string|null>(null),secondaryBack=useRef<(()=>boolean)|null>(null);
- const openedTaskWindow=useRef<{documentEpoch:number;resumeRevision:number}|null>(null);
+ const openedTaskResumeRevision=useRef(0);
  const taskHistoryOrigin=useRef<{taskId:string;origin:ConversationHistoryTaskOrigin}|null>(null);
  const taskReconciliationOrigin=useRef<{taskId:string;layer:TaskLayer;openedId:string;expected:{runId:string;epoch:number};history?:ConversationHistoryTaskOrigin}|null>(null);
  const [taskOpening,setTaskOpening]=useState(false);
@@ -551,16 +551,18 @@ export default function App(){
    if(stillCurrent&&!stillCurrent()||reviewRequest.current!==request||bridge.getDocumentEpoch()!==window.documentEpoch||Number(obj(bridge.getState().view).resumeRevision||0)!==window.resumeRevision||document.hidden)return false;
    await act('tasks.open',{id,requestNavigation:false,...origin,...(searchQuery===undefined?{}:{searchQuery}),...(expected?{expectedRunId:expected.runId,expectedEpoch:expected.epoch}:{})},id);return true;
   };
-  void openOriginal().then(opened=>{if(reviewRequest.current!==request)return;if(!opened||stillCurrent&&!stillCurrent()){setTaskOpening(false);return}openedTaskId.current=id;openedTaskWindow.current=window;setTaskOpening(false);if(readReview)loadTaskReview(id)}).catch(()=>{if(reviewRequest.current===request)setTaskOpening(false)});
+  void openOriginal().then(opened=>{if(reviewRequest.current!==request)return;if(!opened||stillCurrent&&!stillCurrent()){setTaskOpening(false);return}openedTaskId.current=id;openedTaskResumeRevision.current=window.resumeRevision;setTaskOpening(false);if(readReview)loadTaskReview(id)}).catch(()=>{if(reviewRequest.current===request)setTaskOpening(false)});
   };
   if(workSupplementBeforeLeave.current)void workSupplementBeforeLeave.current().then(saved=>{if(saved)commit()});else commit();
  },[act,loadTaskReview,tasks,taskId,taskLayer,rememberTaskPosition,invalidateContinuation]);
  useEffect(()=>{
   const invalidate=()=>{
-   const original=reviewWindow.current,opened=openedTaskWindow.current,view=obj(bridge.getState().view);
+   const original=reviewWindow.current,view=obj(bridge.getState().view);
    const documentEpoch=bridge.getDocumentEpoch(),resumeRevision=Number(view.resumeRevision||0);
-   if(openedTaskId.current&&opened&&(documentEpoch!==opened.documentEpoch||resumeRevision!==opened.resumeRevision||document.hidden&&view.taskId!==openedTaskId.current)){
-    openedTaskId.current=null;openedTaskWindow.current=null;
+   // Foregrounding rotates the command token in this same WebView. Only a
+   // different native view retires the read-only acknowledgement.
+   if(openedTaskId.current&&(resumeRevision!==openedTaskResumeRevision.current||document.hidden&&view.taskId!==openedTaskId.current)){
+    openedTaskId.current=null;
    }
    if(!original||!document.hidden&&documentEpoch===original.documentEpoch&&resumeRevision===original.resumeRevision)return;
    // Retain the acknowledged read-only work window when Android backgrounds it.
