@@ -337,7 +337,11 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
             resultReviewAvailability(id).require(); JSONObject task = tasks.get(id, false);
             TaskStoreDeviceTasks.GoalResultReview nativeReview = app.reviewDeviceGoalResult(id, task.getString("runId"), task.getInt("coordinatorEpoch"));
             return new NativeDeviceWorkspaceHost.ResultAction() {
-                public JSONObject view() throws Exception { return nativeReview.view(); }
+                public JSONObject view() throws Exception {
+                    JSONObject value=nativeReview.view();
+                    if(DevicePrivateText.applies(task))value.put("textResultReader",task.getJSONObject("origin").getString("callerDeviceId"));
+                    return value;
+                }
                 public void confirm(boolean completed) throws Exception { app.confirmDeviceGoalResult(nativeReview, completed); changed(); }
             };
         }
@@ -569,6 +573,9 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
         } else {
             if (!"capabilities".equals(mode)) {
                 if (!mode.matches("main_screen|background") || resource.optInt("androidUserId",-1)!=0) throw new SecurityException("手机目标需要主人选择的准确显示和 Android 用户范围");
+                // Permission, exact app binding, local model policy and notification
+                // still apply. A zero-tool goal never needs a display helper.
+                if(DeviceExecutionAdmission.zeroToolPhoneGoal(request))return;
                 JSONObject readiness=app.phoneReadiness(),helper=app.features.module("display") instanceof dev.pocketengine.phone.display.DisplayModule display?display.snapshot():null;
                 if("background".equals(mode)){
                     boolean alreadyAdmitted=false;try{JSONObject original=tasks.get(DeviceProtocol.receiverTaskId(request),false);alreadyAdmitted=!original.optString("runId").isEmpty()&&"background".equals(original.optString("executionMode"));}catch(Exception absent){/* First admission has no run or display yet. */}

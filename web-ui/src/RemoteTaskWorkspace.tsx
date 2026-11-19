@@ -4,6 +4,7 @@ import { bridge } from './bridge';
 import { appendRemoteClipboard, managedRemoteRows, remoteApprovalClaim, remoteDraftState, remoteEditor, remoteObject as object, remoteProgress, remoteReadsPaused, remoteRows as rows, sameRemoteEditor, savedRemoteEditor, type RemoteData as Data, type RemoteEditor } from './remote-task-workspace';
 import './remote-task-workspace.css';
 import './collaboration-depth.css';
+import { RemoteSavedResults } from './RemoteSavedResults';
 import { RemoteTaskArtifacts } from './RemoteTaskArtifacts';
 import { RemoteTaskPreview } from './RemoteTaskPreview';
 import { RemoteTaskHarness } from './RemoteTaskHarness';
@@ -168,7 +169,25 @@ function RemoteQuestion({ request, snapshot, busy, run }: { request: Data; snaps
   </section>;
 }
 
-export function RemoteTaskWorkspace({ taskId }: { taskId: string }) {
+export function RemoteTaskWorkspace({ taskId, raw, receipt, savedFiles }: { taskId: string; raw: Data; receipt?:Data; savedFiles: Data[] }) {
+  const [observing,setObserving]=useState('');
+  const personal=raw.id===taskId&&raw.actorId==='owner'&&raw.spaceId==='private'&&raw.feature==='remote'&&raw.command==='submitJob'&&
+    (!raw.origin||object(raw.origin).kind==='native_remote_private_inputs')&&!raw.teamRunId&&!raw.parentTaskId&&!raw.memberId;
+  const foreground=taskVisible(taskId),onlineView=!personal||foreground&&!!observing&&observing===windowIdentity();
+  useEffect(()=>{const hidden=()=>{if(document.hidden)setObserving('')};document.addEventListener('visibilitychange',hidden);return()=>document.removeEventListener('visibilitychange',hidden)},[]);
+  const proof=receipt?.taskId===taskId&&receipt.runId===raw.runId?receipt:undefined;
+  const accepted=proof?.stage==='host_acknowledged'&&typeof proof.jobId==='string'&&proof.jobId.length>0;
+  return <>{personal&&<section className="pw-remote-workspace" aria-label="原主机任务的本机回执">
+    <div className="pw-section-heading"><h3>本机回执</h3><Button variant="secondary" disabled={!foreground||!supported('remoteTask.open')} onClick={()=>{if(taskVisible(taskId))setObserving(onlineView?'':windowIdentity())}}>{onlineView?'只看本机记录':'查询原主机'}</Button></div>
+    <p className="pw-field-hint">{accepted?(proof!.detailRetired===true?'原主机曾接单，详细记录已归档。':'原主机曾接单。'):'这条本机记录只确认手机已登记。'}{!onlineView&&'当前只读手机记录。'}</p>
+    {accepted&&<p className="pw-field-hint">原主机作业：<code>{proof!.jobId}</code>{proof!.detailRetired!==true&&proof!.executorStatus&&proof!.executorStatus!=='unknown'&&' · 上次回执：'+executionLabel(proof!.executorStatus)}</p>}
+  </section>}
+    <RemoteSavedResults taskId={taskId} rows={savedFiles}/>
+    {onlineView&&<LiveRemoteTask key={taskId} taskId={taskId}/>}</>;
+}
+
+/** Only an explicitly opened private host observation mounts the network-backed poller. */
+function LiveRemoteTask({taskId}:{taskId:string}) {
   const { snapshot, pending, error, stale, act, current } = useRemoteTask(taskId);
   const enabled = !!snapshot && !stale && taskVisible(taskId), source = object(snapshot?.source);
   if (!supported('remoteTask.open')) return null;

@@ -26,7 +26,7 @@ public final class DeviceGoalPhonePort implements PhonePort {
     }
     public DeviceGoalPhonePort(PhonePort physical, DeviceExecutionAdmission admission, RunControl original,dev.pocketengine.phone.access.PhoneOwnerPackages.Probe nativeUsers) throws Exception {
         this(physical, admission.request().resourceBinding(), admission.toolNames(), original, admission::checkCurrent,nativeUsers);
-        if (admission.kind() != DeviceExecutionAdmission.Kind.GOAL) throw new SecurityException("需要原设备目标准入");
+        if (admission.kind() != DeviceExecutionAdmission.Kind.GOAL || admission.noPhoneSurface()) throw new SecurityException("原设备目标未获手机操作预算，不能建立物理口");
     }
     /** Called only by native owners retaining their opaque admission; serialized scope is not authority. */
     public DeviceGoalPhonePort(PhonePort physical, JSONObject nativeBinding, JSONArray nativeTools,

@@ -128,6 +128,10 @@ public final class NativeOwnerWorkflows {
         host.synchronizeMemory(ownerScope());
         return memory().snapshot().put("nativeCapabilities",new JSONObject().put("acceptCandidate",true).put("candidateCapacity",true).put("listCandidateHistory",true).put("archiveCandidates",true).put("reconsiderRejected",true).put("forgetReviewed",true).put("openSource",true).put("prepareAssertionReview",true).put("reviewCandidateAssertion",true));
     }
+    /** Separate from raw memory dispatch: the owner page has already pinned the existing duplicate and requested date. */
+    public JSONObject shortenPersonalNoteForOwner(String id,long revision,long until)throws Exception {
+        JSONObject scope=ownerScope();host.synchronizeMemory(scope);return sources.shortenManualNoteReviewed(scope,id,revision,until);
+    }
     public JSONObject memory(String command,JSONObject payload)throws Exception{
         dev.pocketengine.features.memory.ProjectMemoryNamespaces.rejectNamespaceArguments(payload);
         MemoryModule module=memory();JSONObject scope=ownerScope();host.synchronizeMemory(scope);

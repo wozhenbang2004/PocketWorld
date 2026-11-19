@@ -163,7 +163,10 @@ public final class AttachmentOutcomeHost {
     }
     public void requireReference(String taskId,String artifactId,String expectedSha256)throws Exception {
         JSONObject meta=privateMetadata(artifactId,expectedSha256);if(taskId==null||taskId.isEmpty())return;
-        ownerTaskRequired(taskId);JSONArray selected=tasks.ownerAttachmentReferences(taskId);
+        JSONObject original=ownerTaskRequired(taskId), provenance=meta.optJSONObject("source");
+        if(provenance!=null&&"remote_result_snapshot".equals(provenance.opt("kind"))&&taskId.equals(provenance.opt("taskId")))
+            dev.pocketengine.features.remote.RemoteSavedOriginal.requireLive(original,meta);
+        JSONArray selected=tasks.ownerAttachmentReferences(taskId);
         for(int i=0;i<selected.length();i++)if(artifactId.equals(selected.getJSONObject(i).getString("id"))&&sameReference(selected.getJSONObject(i),meta))return;
         JSONObject source=meta.optJSONObject("source");if(source!=null&&taskId.equals(source.optString("taskId"))){
             if(source.optString("kind").equals("generated_media")){JSONObject op=tasks.ownerMediaOperationSource(taskId,source.getString("operationId"));if(!op.getString("runId").equals(source.optString("runId")))throw new SecurityException("文件不属于原媒体执行");}

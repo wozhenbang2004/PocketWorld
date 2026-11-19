@@ -61,6 +61,8 @@ internal class PocketWebPersonal(private val controller: PocketWorldController) 
     }
     private fun receiptView(handle: String, receipt: JSONObject): JSONObject {
         val result = receipt.optJSONObject("result")?.let { JSONObject(it.toString()) } ?: JSONObject().put("undoAvailable", false)
+        val next = result.optString("shortenReviewHandle")
+        if (next.isNotEmpty() && (reviews[next]?.expires ?: 0L) <= System.currentTimeMillis()) result.remove("shortenReviewHandle")
         return result.put("status", receipt.getString("status")).put("receiptHandle", handle)
     }
     private fun callProfile(command: String, args: JSONObject, done: (JSONObject?, String?) -> Unit, project: (JSONObject) -> JSONObject = { it }) {
@@ -204,6 +206,10 @@ internal class PocketWebPersonal(private val controller: PocketWorldController) 
                 val payload = review.getJSONObject("payload")
                 recordReceipt(handle, "unknown", JSONObject().put("undoAvailable", false).put("message", "原操作已提交，等待真实回执；未自动重发"))
                 callMemory(command, payload, original, done) { result ->
+                    if (command == "shortenManualNote" && result.optString("status") == "unchanged" && result.opt("saved") == false) {
+                        recordReceipt(handle, "unchanged", result.put("undoAvailable", false))
+                        return@callMemory receiptView(handle, selected(receipts, handle))
+                    }
                     if (result.optString("status") == "settings_required" && result.opt("saved") == false) {
                         result.put("undoAvailable", false)
                         recordReceipt(handle, "settings_required", result)
@@ -211,18 +217,31 @@ internal class PocketWebPersonal(private val controller: PocketWorldController) 
                     }
                     if (result.optBoolean("duplicate")) {
                         result.put("undoAvailable", false)
+                        // A semantic match is not a change of retention. Keep the original owner's request in this receipt.
+                        if (command == "createPersonalNote") {
+                            val requested = payload.get("expiresAt")
+                            result.put("requestedExpiresAt", requested)
+                            val record = result.optJSONObject("record")
+                            if (record != null && requested is Number && dev.pocketengine.features.memory.PersonalMemorySemantics.canShortenManualNote(record, requested.toLong(), System.currentTimeMillis())) {
+                                val change = JSONObject().put("id", record.getString("id")).put("expectedRevision", record.getLong("revision")).put("expiresAt", requested)
+                                val pinned = JSONObject().put("candidate", false).put("record", record)
+                                val next = prepare(JSONObject().put("command", "shortenManualNote").put("original", pinned).put("payload", change))
+                                result.put("shortenReviewHandle", next).put("shortenReviewExpiresAt", reviews.getValue(next).expires)
+                            }
+                        }
                         recordReceipt(handle, "already_saved", result)
                         return@callMemory receiptView(handle, selected(receipts, handle))
                     }
                     if (command == "createPersonalNote") {
                         val record = result.getJSONObject("record")
-                        check(record.getLong("revision") == 1L && record.getString("text") == payload.getString("text")) { "新增记忆的原回执不完整，请查询；没有重发" }
+                        check(record.getLong("revision") == 1L && record.getString("text") == payload.getString("text") && record.get("expiresAt") == payload.get("expiresAt")) { "新增记忆的原回执不完整，请查询；没有重发" }
                     } else if (original!!.getBoolean("candidate") || command == "forgetReviewed") {
                         check(MemoryLearningReviewGuard.validMutationResult(command, payload, result)) { "原操作效果未完整核对，请刷新；没有自动重发" }
                     } else {
                         val updated = result.getJSONObject("record")
                         check(updated.getString("id") == before!!.getString("id") && MemoryLearningReviewGuard.revision(updated) == Math.addExact(MemoryLearningReviewGuard.revision(before), 1)) { "原个人记忆保存回执未完整核对，请重新读取" }
                         if (command == "correctReviewed") check(updated.getString("text") == payload.getString("text")) { "原个人记忆正文与保存回执不一致" }
+                        if (command == "shortenManualNote") check(result.opt("saved") == true && updated.getLong("expiresAt") == payload.getLong("expiresAt") && updated.getString("text") == before!!.getString("text")) { "有效期回执尚未确认" }
                         if (command == "setCore") check(updated.getBoolean("core") == payload.getBoolean("core")) { "原个人记忆重要标记未确认" }
                     }
                     result.put("undoAvailable", command in setOf("createPersonalNote", "acceptCandidate") && result.optJSONObject("record")?.optLong("revision") == 1L)

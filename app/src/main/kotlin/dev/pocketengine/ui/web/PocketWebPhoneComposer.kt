@@ -331,7 +331,8 @@ internal class PocketWebPhoneComposer(
             rejected -> (error?:"这次启动未被接纳")+"。尚未创建手机任务，草稿仍保留；请明确重新审阅。"
             accepted && blank -> when(result?.optString("admissionState")){
                 "admitted" -> "找到了本次手机任务及原首次准入回执，不代表已完成。"
-                "no_run" -> "本次手机任务已保存，尚无执行轮次。"
+                "run_recorded" -> "已保存原首次执行轮次，尚未确认 Android 已接收启动请求；不代表已经读屏或操作。"
+                "no_run" -> "这项旧手机目标已保存，但没有执行轮次或可继续的原授权。"
                 else -> "本次手机任务已保存，未能确认原首次准入。"
             }
             accepted && linked -> if(result?.optBoolean("admitted")==true)"手机任务已获准执行，结果会回到原对话。" else "手机任务已保存到原对话；尚未确认获准执行，请查看原任务。"

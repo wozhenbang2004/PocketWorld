@@ -242,6 +242,10 @@ public final class MemorySourceBridge {
         });}
         return result.put("contextRetirement",retired[0]==null?new JSONObject():retired[0]).put("executionAuthorized",false);
     }
+    public synchronized JSONObject shortenManualNoteReviewed(JSONObject scope,String id,long revision,long until)throws Exception {
+        EngineModule original=host.module("memory");if(!(original instanceof MemoryModule memory))throw new IllegalStateException("记忆模块暂不可用");
+        reconcilePending(scope,memory);return mutate(scope,memory,false,"owner_correction",null,false,receipt->memory.shortenManualNoteReviewed(scope,id,revision,until,receipt));
+    }
     public synchronized JSONObject correctReviewed(JSONObject scope,String id,long revision,String text)throws Exception{
         EngineModule module=host.module("memory");if(!(module instanceof MemoryModule))throw new IllegalStateException("记忆模块暂不可用");MemoryModule memory=(MemoryModule)module;
         reconcilePending(scope,memory);return mutate(scope,memory,false,"owner_correction",receipt->memory.correctReviewed(scope,id,revision,text,receipt));
@@ -313,6 +317,7 @@ public final class MemorySourceBridge {
                             .put("scope",new JSONObject(scope.toString())).put("removedRefs",batch).put("cause",cause));
                 }
             });}
+            if("unchanged".equals(result.optString("status"))&&Boolean.FALSE.equals(result.opt("saved"))&&cleanups.isEmpty()&&contextRetirement[0]==null)return result;
             for(String id:cleanups)reconcileOne(scope,memory,tasks.get(id,false));
             if(contextRetirement[0]!=null){
                 boolean blocked=retiredVersionsAbsent(scope,memory,result.getJSONArray("removedRefs"));

@@ -64,6 +64,9 @@ final class BackgroundPhoneRun {
         JSONObject task=app.tasks.foregroundNotificationContextSnapshot(taskId);if(!original.matchesHostRun(taskId,task.optString("runId"),task.optInt("coordinatorEpoch")))throw new SecurityException("原后台任务已变化");
         runningGoal=task.getString("goal");runningConfig=app.config(taskId);if(runningConfig==null)throw new SecurityException("原后台模型未冻结");
         deviceGoal=app.originalDeviceGoalSession(taskId);teamAdmission=app.originalTeamPhoneAdmission(taskId);
+        // Defense in depth: fail before a worker, display.prepare(), helper or
+        // physical port can exist, even if a future service route is miswired.
+        if(deviceGoal!=null&&deviceGoal.admission().noPhoneSurface())throw new SecurityException("零工具原目标不得创建独立后台屏宿主");
         leaseSupervisor=leases;this.cleanup=cleanup;
         worker=Executors.newSingleThreadExecutor(r->{Thread thread=new Thread(r,"pocket-phone-"+runningRunId.substring(0,Math.min(8,runningRunId.length())));thread.setDaemon(true);return thread;});
     }

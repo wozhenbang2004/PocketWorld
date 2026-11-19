@@ -188,7 +188,7 @@ public final class PhoneRunService extends Service {
             var session=deviceGoal;if(session!=null&&id!=null&&id.equals(runningId)&&runningRunId.equals(intent.getStringExtra("deviceRunId"))&&runningEpoch==intent.getIntExtra("deviceEpoch",-1)&&session.originalControl()==ownerControl&&!ownerControl.isCancelled()){
                 String approval=intent.getStringExtra("deviceApprovalId");if(approval!=null&&!approval.isEmpty())pendingDeviceApproval=approval;
                 if(waitingForUser&&!ownerControl.isPaused()){
-                    if("main_screen".equals(session.admission().executionMode())&&heldPort==null){ownerControl.pause();app.setStatus(id,"awaiting_user","原设备主屏物理口已释放；请核对原任务，未创建替代执行",ownerControl);return START_NOT_STICKY;}
+                    if("main_screen".equals(session.admission().hostMode())&&heldPort==null){ownerControl.pause();app.setStatus(id,"awaiting_user","原设备主屏物理口已释放；请核对原任务，未创建替代执行",ownerControl);return START_NOT_STICKY;}
                     pendingDeviceApproval=null;waitingForUser=false;ownerWaitGeneration++;lastStartId=startId;worker.execute(()->runDeviceGoal(session,startId));
                 }
             }return START_NOT_STICKY;
@@ -372,7 +372,7 @@ public final class PhoneRunService extends Service {
             runningId=id;runningRunId=task.getString("runId");runningEpoch=task.getInt("coordinatorEpoch");ownerControl=original;runningGoal=task.getString("goal");runningConfig=session.capturedModel();lastStartId=startId;deviceGoal=session;deviceGoalPhysicalCreated=false;deviceGoalPhysicalSessionId=null;
             startTaskForeground(task);
             if(!AndroidPhoneReadiness.snapshot(this,null).getJSONObject("taskNotifications").optBoolean("ready"))throw new SecurityException("设备目标需要本机可见任务通知和停止入口");
-            if("main_screen".equals(session.admission().executionMode())){PhoneAccessibilityService phone=PhoneAccessibilityService.get();if(phone==null)throw new SecurityException("原主屏无障碍未连接");phone.showControls(id,runningGoal,original);}
+            if("main_screen".equals(session.admission().hostMode())){PhoneAccessibilityService phone=PhoneAccessibilityService.get();if(phone==null)throw new SecurityException("原主屏无障碍未连接");phone.showControls(id,runningGoal,original);}
             startLeaseWatch(id,runningRunId,runningEpoch,original);worker.execute(()->runDeviceGoal(session,startId));
         }catch(Exception unavailable){finishAttempt(id,admittedRun,original,new RunOutcome("awaiting_user","原设备目标本机模型或可见停止条件不可用，未借主屏START",new JSONObject()),startId);}
     }
@@ -382,7 +382,8 @@ public final class PhoneRunService extends Service {
         try{
             session.checkCurrent();if(destroyed||session!=deviceGoal||original!=ownerControl||original!=app.control(id))throw new SecurityException("原设备目标宿主已变化");
             if(!AndroidPhoneReadiness.snapshot(this,null).getJSONObject("taskNotifications").optBoolean("ready"))throw new SecurityException("本机可见停止入口不可用");
-            PhonePort scopedPhone=null;String mode=session.admission().executionMode();
+            PhonePort scopedPhone=null;String mode=session.admission().hostMode();
+            if(session.admission().noPhoneSurface() && physical!=null)throw new SecurityException("零工具原目标不能接管已保留的物理手机口");
             if("main_screen".equals(mode)){
                 if(!(app.features.module("display") instanceof DisplayModule display)||!display.isConnected())throw new SecurityException("主屏应用用户身份核验不可用，未借其他显示");
                 PhoneAccessibilityService connected=PhoneAccessibilityService.get();if(connected==null)throw new SecurityException("原主屏读取服务已断开");

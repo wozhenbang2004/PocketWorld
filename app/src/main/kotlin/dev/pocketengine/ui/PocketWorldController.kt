@@ -457,8 +457,19 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     internal fun requestPersonalMemory(command: String, payload: JSONObject, original: JSONObject?, current: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
         val input = JSONObject(payload.toString())
         val frozen = original?.let { JSONObject(it.toString()) }
-        require(command in setOf("get", "getCandidate", "openSource", "correctReviewed", "forgetReviewed", "setCore", "acceptCandidate", "rejectCandidate", "createPersonalNote", "retractCreatedReviewed")) { "请在原记忆工作区完成此审核操作" }
+        require(command in setOf("get", "getCandidate", "openSource", "correctReviewed", "forgetReviewed", "setCore", "acceptCandidate", "rejectCandidate", "createPersonalNote", "retractCreatedReviewed", "shortenManualNote")) { "请在原记忆工作区完成此审核操作" }
         requestPersonalOwner(current, done, memoryChanged = command !in setOf("get", "getCandidate", "openSource")) {
+            if (command == "shortenManualNote") {
+                check(frozen != null && !frozen.getBoolean("candidate") && input.length() == 3)
+                val before = frozen.getJSONObject("record"); requirePersonalMemory(before)
+                val revision = before.getLong("revision"); val until = input.getLong("expiresAt")
+                check(input.getString("id") == before.getString("id") && input.getLong("expectedRevision") == revision)
+                val result = app.nativeOwnerWorkflows.shortenPersonalNoteForOwner(before.getString("id"), revision, until)
+                // Return only the reviewed note. The source retirement journal and its task IDs stay native.
+                if (!result.optBoolean("saved")) return@requestPersonalOwner JSONObject().put("saved", false).put("status", result.getString("status")).put("message", result.getString("message"))
+                val record = result.getJSONObject("record"); requirePersonalMemory(record)
+                return@requestPersonalOwner JSONObject().put("record", record).put("saved", true)
+            }
             var reviewed: JSONObject? = null
             if (frozen != null) {
                 val candidate = frozen.getBoolean("candidate")

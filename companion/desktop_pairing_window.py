@@ -216,11 +216,16 @@ def show_pairing_window(controller, host, *, offer_local_receipts=False):
                     for control in [controls["budget"], controls["minutes"], controls["history"]]:
                         user.EnableWindow(control, False)
                     notice("本机已确认准确授权，正在等待手机通过保留端口完成双向TLS；此时仍没有业务通道。")
+                elif action in (301, 302) and offer_local_receipts:
+                    key, other = ("phone_work", "phone_receipts") if action == 302 else ("phone_receipts", "phone_work")
+                    if user.SendMessageW(controls[key], 0xf0, 0, 0) == 1: user.SendMessageW(controls[other], 0xf1, 0, 0)
                 elif action == 104:
                     controller.config_store.current()
                     host.business_reservations()  # actual held sockets, not guessed port numbers
                     with_receipts = offer_local_receipts and user.SendMessageW(controls["phone_receipts"], 0xF0, 0, 0) == 1
-                    start_bridge = "with_local_receipts" if with_receipts else True
+                    with_work = offer_local_receipts and user.SendMessageW(controls["phone_work"], 0xf0, 0, 0) == 1
+                    if with_work and with_receipts: raise PlatformError("请选择一个本机入口；没有启动")
+                    start_bridge = "with_phone_work" if with_work else "with_local_receipts" if with_receipts else True
                     user.DestroyWindow(hwnd)
                 elif action == 105:
                     user.DestroyWindow(hwnd)
@@ -299,7 +304,9 @@ def show_pairing_window(controller, host, *, offer_local_receipts=False):
         user.EnableWindow(review_button, False); user.EnableWindow(start_button, False)
         status = control("STATIC", "选择手机也能访问的本机地址，或手动填写，再创建一次性邀请。选地址不会监听；关闭窗口不会撤销已确认的配对。", 16, bottom + 28, width - 50, 44 if offer_local_receipts else 52)
         if offer_local_receipts:
-            controls["phone_receipts"] = control("BUTTON", "启动桥接时，在本机通知区域保留「设备工作回执」入口", 16, bottom + 72, width - 50, 23, 301, 0x3 | 0x10000)
+            half = (width - 50) // 2
+            controls["phone_receipts"] = control("BUTTON", "保留设备工作回执（只读）", 16, bottom + 72, half, 23, 301, 0x3 | 0x10000)
+            controls["phone_work"] = control("BUTTON", "保留「交给手机」入口（仅文字）", 16 + half, bottom + 72, half, 23, 302, 0x3 | 0x10000)
         user.SetTimer(window, 1, 500, None)
         user.ShowWindow(window, 5); user.SetForegroundWindow(window)
         message = w.MSG()

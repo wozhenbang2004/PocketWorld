@@ -24,15 +24,22 @@ def _bound():
 
 
 class Budget:
-    def __init__(self):
-        self.bytes_left, self.work_left = 12*1024*1024, 16*1024*1024
-        self.reads_left, self.ops_left = 8192, 100000
+    def __init__(self, tree_walk, content, checkpoint):
+        self.checkpoint = checkpoint
+        self.bytes_left = (256 if content else 32 if tree_walk else 12)*1024*1024
+        self.work_left = (384 if content else 32 if tree_walk else 16)*1024*1024
+        self.reads_left, self.ops_left = (240000,2000000) if content else (32768,200000) if tree_walk else (8192,100000)
+
+    def charge(self, size):
+        self.checkpoint()
+        self.bytes_left -= size
+        if self.bytes_left < 0: _bound()
 
     def at(self, reader, position, size):
         if position < 0 or size < 0 or position+size > reader.size: _bad()
-        self.bytes_left -= size
+        self.charge(size)
         self.reads_left -= 1
-        if self.bytes_left < 0 or self.reads_left < 0: _bound()
+        if self.reads_left < 0: _bound()
         reader.seek(position)
         return reader.read(size)
 
@@ -74,6 +81,7 @@ def _delta(base, instructions, limit, budget):
     while wire.pos < len(instructions):
         budget.ops_left -= 1
         if budget.ops_left < 0: _bound()
+        if not budget.ops_left%256: budget.checkpoint()
         mask = wire.byte()
         if mask & 128:
             offset = sum(wire.byte() << (8*i) for i in range(4) if mask & (1 << i))
@@ -160,7 +168,7 @@ class Index:
         if (marker!=b"PACK" or ver not in (2,3) or num!=self.count
                 or self.source.budget.at(self.file,self.end,self.width)!=self.trailer): _bad()
 
-    def body(self, off, checksum, kind, limit, ancestors):
+    def body(self, off, checksum, kind, limit, ancestors, retained=0):
         if len(ancestors)>12: _bound()
         if off in ancestors or not 12<=off<self.end: _bad()
         budget = self.source.budget
@@ -170,9 +178,10 @@ class Index:
         while part & 128:
             if shift>32: _bound()
             part = header.byte(); size |= (part&127) << shift; shift += 7
-        expected = {b"commit":1,b"tree":2}.get(kind)
+        expected = {b"commit":1,b"tree":2,b"blob":3}.get(kind)
         if objtype not in (expected,6,7) or expected is None: _bad()
         if size > (limit if objtype==expected else limit+65536): _bound()
+        if retained+size > max(4*1024*1024,2*limit+2*1024*1024): _bound()
         ref = base_off = base_crc = None
         if objtype==6:
             part = header.byte()
@@ -190,16 +199,16 @@ class Index:
         raw, actual_crc = _inflate(self.file,off+header.pos,self.end,size,header.data[:header.pos],budget)
         if checksum is not None and checksum!=actual_crc: _bad()
         if base_off is None: return raw
-        base = self.body(base_off,base_crc,kind,limit,ancestors | {off})
+        base = self.body(base_off,base_crc,kind,limit,ancestors | {off},retained+size)
         if ref is not None: self.source.verify(ref,kind,base)
         return _delta(base,raw,limit,budget)
 
 
 class PinnedPacks:
-    def __init__(self, pins, algo):
+    def __init__(self, pins, algo, *, tree_walk=False, content=False, checkpoint=lambda: None):
         self.pins, self.algo = pins, algo
         self.width = hashlib.new(algo).digest_size
-        self.names, self.indexes, self.budget = None, {}, Budget()
+        self.names, self.indexes, self.budget = None, {}, Budget(tree_walk,content,checkpoint)
 
     def _names(self):
         directory = self.pins.node(".git/objects/pack")

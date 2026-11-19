@@ -18,7 +18,7 @@ from platform_windows import local_root
 from windows_installation import WindowsInstalledContext, _object, same_path
 
 
-def _dialog(heading, body, choices, *, retire=None):
+def _dialog(heading, body, choices, *, retire=None, progress=None):
     # Windows common-controls v6 command links. This is navigation, never a
     # PairGrant, physical confirmation proof or alternative approval dialog.
     class Button(ctypes.Structure):
@@ -41,16 +41,28 @@ def _dialog(heading, body, choices, *, retire=None):
     config.size, config.flags, config.common = ctypes.sizeof(config), 0x10 | 0x08, 0x20  # command links, cancel, Close
     config.title, config.heading, config.body = "PocketWorld · 电脑伴侣", heading, body
     config.count, config.buttons, config.default = len(choices), table if choices else None, 8  # IDCLOSE, Enter never starts a service.
-    if retire is not None:
+    if retire is not None or progress is not None:
         # Local result views close on loss of their original manager/owner scope;
         # never refresh a peer or dispatch a command from a timer callback.
         post = ctypes.WinDLL("user32").PostMessageW
         post.argtypes, post.restype = [w.HWND, w.UINT, w.WPARAM, w.LPARAM], w.BOOL
+        send_text = None
+        if progress is not None:
+            send_text = ctypes.WinDLL("user32").SendMessageW
+            send_text.argtypes, send_text.restype = [w.HWND,w.UINT,w.WPARAM,w.LPCWSTR],ctypes.c_ssize_t
+        last_text = body
         callback_type = ctypes.WINFUNCTYPE(ctypes.c_long, w.HWND, w.UINT, w.WPARAM, w.LPARAM, ctypes.c_ssize_t)
         @callback_type
         def on_notice(hwnd, message, _wparam, _lparam, _context):
+            nonlocal last_text
             if message == 4:  # TDN_TIMER
-                try: ending = retire()
+                try:
+                    ending = retire is not None and retire()
+                    if not ending and send_text is not None:
+                        text = progress()
+                        if isinstance(text,str) and text!=last_text:
+                            last_text = text
+                            send_text(hwnd,0x400+108,0,text)  # TDM_SET_ELEMENT_TEXT / TDE_CONTENT; synchronous.
                 except Exception: ending = True
                 if ending: post(hwnd, 0x400 + 102, 8, 0)  # TDM_CLICK_BUTTON / IDCLOSE
             return 0
@@ -179,6 +191,7 @@ def _page(context, facts, notice):
     elif facts["busy"]:
         heading = "原伴侣正在使用本机工作区"
         body += "\n可能正在配对或运行服务，不能据此确认手机已经连接。请回到原配对窗口，或在手机「我的设备」查看这台电脑。不会另起一个。"
+        body += "\n若选择了「交给手机」，从本机通知区域准备文字工作；不会自动联系设备。"
         body += "\n如果启动时保留了「设备工作回执」，可在 Windows 时钟旁的通知区域（包括折叠图标）中打开，区分本机接单与交给手机的工作。"
     else:
         heading = "已有连接设置" if facts["devices"] else "可以与手机配对"
@@ -211,9 +224,9 @@ def _page(context, facts, notice):
     return _dialog(heading, body, [*actions, ("Refresh", "重新读取本机状态")])
 
 
-def _run_original(context, action, workspace=None, reviewed_config=None, *, phone_receipts=False):
+def _run_original(context, action, workspace=None, reviewed_config=None, *, phone_receipts=False, phone_work=False):
     if (action not in {"Initialize", "PairDevices", "Serve", "StopDesktop"} or (action == "Initialize") != bool(workspace)
-            or (action == "Serve") != bool(reviewed_config) or phone_receipts and action != "Serve"):
+            or (action == "Serve") != bool(reviewed_config) or (phone_receipts or phone_work) and action != "Serve" or phone_receipts and phone_work):
         raise PlatformError("未选择受支持的本机原动作")
     # Hold exact manifest-pinned script bytes, with write/delete sharing denied,
     # while the fixed launcher itself checks the full release, signer and config.
@@ -235,6 +248,7 @@ def _run_original(context, action, workspace=None, reviewed_config=None, *, phon
         if workspace: command += ["-Workspace", workspace]
         if reviewed_config: command += ["-ReviewedConfigSha256", reviewed_config]
         if phone_receipts: command += ["-PhoneReceipts"]
+        if phone_work: command += ["-PhoneWork"]
         return subprocess.run(command, cwd=context.home, shell=False, check=False).returncode
 
 
@@ -251,7 +265,7 @@ def open_installed_desk():
                 from windows_git_source_entry import open_source
                 open_source(context, facts["settings"])
                 notice = ""; continue
-            workspace, phone_receipts = None, False
+            workspace, phone_receipts, phone_work = None, False, False
             if action == "Initialize":
                 workspace = _folder()
                 if workspace is None: continue
@@ -264,8 +278,9 @@ def open_installed_desk():
                 control, bulk, local = facts["listeners"]
                 selected = _dialog("按这些已保存的地址启动？", f"已配对设备的控制：{control}\n已配对设备的文件：{bulk}\n仅本机的旧版服务：{local}"
                                    "\n\n手机还须连接；观看和输入均沿用原授权。",
-                                   [("yes", "只启动原服务"), ("receipts", "启动并保留「设备工作回执」入口\n在本次 Windows 通知区域随时打开；本机接单在本机读，派给手机的工作才向手机查询。")])
-                if selected not in {"yes", "receipts"}: continue
+                                   [("yes", "只启动原服务"), ("work", "启动并保留「交给手机」入口\n准备仅文字的工作；每次另行选择手机并在本机确认，不读屏或操作应用。"), ("receipts", "启动并保留「设备工作回执」入口\n在本次 Windows 通知区域随时打开；本机接单在本机读，派给手机的工作才向手机查询。")])
+                if selected not in {"yes", "receipts", "work"}: continue
+                phone_work = selected == "work"
                 phone_receipts = selected == "receipts"
             if action == "StopDesktop":
                 if _dialog("暂停这台电脑的远程桌面？",
@@ -274,7 +289,7 @@ def open_installed_desk():
                            [("yes", "确认暂停本机远程桌面")]) != "yes": continue
             if _read(context) != facts:
                 notice = "刚才的本机状态已经改变，未执行。请重新核对。"; continue
-            code = _run_original(context, action, workspace, facts["settings"] if action == "Serve" else None, phone_receipts=phone_receipts)
+            code = _run_original(context, action, workspace, facts["settings"] if action == "Serve" else None, phone_receipts=phone_receipts, phone_work=phone_work)
             if action == "StopDesktop":
                 notice = ("只读取本机状态即可查看回执；没有恢复或重放任何操作。" if code == 0
                           else "原管理入口未确认请求完成。请核对本机记录；没有自动重试。")

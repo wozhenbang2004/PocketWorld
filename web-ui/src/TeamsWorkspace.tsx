@@ -14,6 +14,7 @@ import { TeamProductionFields, TeamProductionReview } from './TeamProductionFiel
 import { TeamEvidenceWorkspace } from './TeamEvidenceWorkspace';
 import { TeamQuickStartForm } from './TeamQuickStartForm';
 import { TeamStartReview } from './TeamStartReview';
+import { canInspectFileContinuation, TeamFileContinuationReview } from './TeamFileContinuation';
 import { resetTeamProductionAcknowledgments, teamDefinitionPayload, teamProductionDraft, teamProductionEditorMember } from './team-production';
 import { TeamMemberAvatar, TeamMemberIdentity } from './TeamMemberIdentity';
 import { teamAvatarShape, teamAvatarShapes, teamMemberLabel, teamMessageIdentity, teamMessageAuthor } from './team-identity';
@@ -868,7 +869,18 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
           {workItems.map(item => <AccordionItem key={item.workItemId} id={item.workItemId} className="pw-team-work-item" data-work-item-id={item.workItemId} data-motion-key={`work-item:${item.workItemId}`}
             title={<span className="pw-team-item-heading"><span>{item.title}</span><small className="pw-team-state" data-state={item.status}>{status(item.status)}</small></span>}
             description={<TeamMemberIdentity member={members.find(member => member.id === item.memberId) || { id: item.memberId }} name={name(item.memberId)} size={24} />}>
-            <div className="pw-team-expanded-copy"><p>{item.instruction}</p>{item.message && <p>{item.message}</p>}{item.nativeErrorMessage && <p className="pw-field-hint">{item.nativeErrorMessage}</p>}{item.assignmentTask?.taskId && <Button variant="secondary" trailingIcon={IconExternalLink} data-team-source-task={item.assignmentTask.taskId} onClick={() => openRelatedTask(item.assignmentTask.taskId)}>查看此分工与审批</Button>}{item.acceptance && <p>验收：{item.acceptance}</p>}
+            <div className="pw-team-expanded-copy"><p>{item.instruction}</p>{item.message && <p>{item.message}</p>}{item.nativeErrorMessage && <p className="pw-field-hint">{item.nativeErrorMessage}</p>}{item.assignmentTask?.taskId && <Button variant="secondary" trailingIcon={IconExternalLink} data-team-source-task={item.assignmentTask.taskId} onClick={() => openRelatedTask(item.assignmentTask.taskId)}>查看此分工与审批</Button>}
+              {canInspectFileContinuation(current, item, members.find(member => member.id === item.memberId)) && <Button variant="ghost" disabled={!canMutate} onClick={() => {
+                const original = reading?.viewHandle;
+                if (!original) return;
+                void invoke('teams.reviewWorkItemContinuation', { viewHandle: original, workItemId: item.workItemId }, value => {
+                  if (currentReading.current?.viewHandle !== original || value.operation !== 'continueWorkItem' || value.input?.runId !== current.id
+                      || value.input?.workItemId !== item.workItemId || value.input?.assignmentId !== item.assignmentId) {
+                    release(value, 'reviewHandle'); throw new Error('原分工已变化，未开始工作。');
+                  }
+                  reviewResult(value);
+                });
+              }}>核对能否继续此分工</Button>}{item.acceptance && <p>验收：{item.acceptance}</p>}
               {!!rows(item.dependsOn).length && <p>前置：{item.dependsOn.map((id: string) => workItems.find(prior => prior.workItemId === id)?.title || id).join('、')}</p>}
             </div>
           </AccordionItem>)}
@@ -1022,8 +1034,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
         </div>
       </footer>
     </>}</div></SettingsDialog>
-    <SettingsDialog className="pw-team-modal" isOpen={!!review} title={review?.operation === 'configureMember' ? '核对本次成员改动' : review?.operation === 'start' ? '开始这次协作' : review?.operation === 'cancel' ? '停止这次协作' : review?.operation === 'feedback' ? '修改要求并暂停' : review?.operation === 'remove' ? '移除编组' : '保存编组'} onClose={() => { if (!busy) closeReview(); }}><div className="pw-collaboration-dialog" data-collaboration-kind="TeamsWorkspace">
-      {review?.operation === 'configureMember' ? <>
+    <SettingsDialog className="pw-team-modal" isOpen={!!review} title={review?.operation === 'continueWorkItem' ? '核对原文件分工' : review?.operation === 'configureMember' ? '核对本次成员改动' : review?.operation === 'start' ? '开始这次协作' : review?.operation === 'cancel' ? '停止这次协作' : review?.operation === 'feedback' ? '修改要求并暂停' : review?.operation === 'remove' ? '移除编组' : '保存编组'} onClose={() => { if (!busy) closeReview(); }}><div className="pw-collaboration-dialog" data-collaboration-kind="TeamsWorkspace">
+      {review?.operation === 'continueWorkItem' ? <TeamFileContinuationReview facts={review.input} /> : review?.operation === 'configureMember' ? <>
         <TeamMemberIdentity member={review.member || {}} name={teamMemberLabel(review.member || {}, rows(review.roster))} size={40} />
         {review.input?.action === 'rename' ? <><p>改为：</p><TeamMemberIdentity member={{ ...review.member, name: review.input.name, avatarShape: review.input.avatarShape }} size={40} /><p>历史消息和已开始的轮次保留原身份；不改职责、权限、额度或执行状态。</p></>
           : review.input?.action === 'add' ? <><p>职责：{review.member?.role}</p><p>具体分工：{review.member?.assignment}</p><p>本机模型：{review.member?.model || '确认加入时的主模型'}</p><p>以暂停状态加入当前运行，保留独立新身份；未开始工作、未继承旧成员的独立资料范围或定向消息、未增加额度。同队共享目标和公开协作记录仍可用于这次分工。回到分工页后明确继续。</p></>
@@ -1041,6 +1053,12 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
           ...(original.operation === 'feedback' ? { memberId: original.memberId, text: original.text.trim() } : {}) } : { reviewHandle: original.reviewHandle }, result => {
           if (result.confirmed !== true) throw new Error('原团队操作尚未确认，请刷新核对。');
           if (original.operation === 'start' && (result.command !== 'start' || !result.reading?.run?.id || result.reading.run.teamId !== original.input.teamId)) throw new Error('启动回执身份待核对，请读取协作记录；不会再次启动。');
+          if (original.operation === 'continueWorkItem') {
+            if (result.command !== 'continueWorkItem' || result.reading?.run?.id !== original.input.runId
+                || result.assignmentId !== original.input.assignmentId || result.workItemId !== original.input.workItemId)
+              throw new Error('原分工是否已继续待核对，请只刷新原件，不重复提交。');
+            acceptReading(result.reading); setNotice('原文件分工已排队继续，尚无新的完成回执。'); return;
+          }
           if (original.operation === 'configureMember') {
             if (result.command !== 'configureMember' || result.reading?.run?.id !== original.input.runId) throw new Error('成员改动回执待核对，请刷新原协作，没有自动重发。');
             pendingMemberChange.current = null; if (original.input.action !== 'exit') memberFormDraft.discard(() => setMemberDraft(null)); else setMemberDraft(null); acceptReading(result.reading);
@@ -1070,7 +1088,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
           }
           setNotice('这次启动未被受理，目标与分工已保留。请重新核对后再确认开始。');
         });
-      }}>{review?.operation === 'start' ? '开始协作' : review?.operation === 'save' ? '保存编组' : '确认这一次操作'}</Button></div>
+      }}>{review?.operation === 'continueWorkItem' ? '继续这个原分工' : review?.operation === 'start' ? '开始协作' : review?.operation === 'save' ? '保存编组' : '确认这一次操作'}</Button></div>
     </div></SettingsDialog>
   </section>;
 }

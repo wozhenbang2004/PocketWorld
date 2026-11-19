@@ -156,6 +156,7 @@ public final class RemoteOwnerWorkflows {
         java.util.Set<String> allowed=new java.util.HashSet<>(java.util.Set.of("windowId","taskId","reviewId"));
         if(command.equals("continue")){allowed.add("modelSelection");allowed.add("prompt");allowed.add("snapshotId");allowed.add("snapshotVersion");allowed.add("timeoutSeconds");allowed.add("recoveryOwnerAcknowledged");}if(command.equals("captureSnapshot"))allowed.add("paths");if(command.equals("readSnapshot")){allowed.add("snapshotId");allowed.add("path");}if(command.equals("readArtifact"))allowed.add("path");if(command.equals("approve")){allowed.add("requestId");allowed.add("decision");}if(command.equals("answerQuestion")){allowed.add("requestId");allowed.add("requestHash");allowed.add("answers");}
         if(command.equals("listResultFiles")){allowed.add("path");allowed.add("offset");}if(command.equals("selectResultFile"))allowed.add("path");if(command.equals("saveSnapshot")){allowed.add("snapshotId");allowed.add("path");}
+        if(command.equals("pickupSnapshotFiles")){allowed.add("snapshotId");allowed.add("snapshotVersion");allowed.add("files");}
         if(command.equals("setAttention"))allowed.add("enabled");
         if(command.equals("saveDraft")){allowed.add("draftId");allowed.add("draftRevision");allowed.add("mode");allowed.add("text");allowed.add("queued");}if(command.equals("withdrawDraft")||command.equals("sendDraft")){allowed.add("draftId");allowed.add("draftRevision");}
         if(command.equals("reviewConversationResult")||command.equals("reviewConversationAttachment")){allowed.add("snapshotId");allowed.add("path");allowed.add("inputAttachmentId");}if(command.equals("confirmConversationResult"))allowed.add("digest");
@@ -181,6 +182,7 @@ public final class RemoteOwnerWorkflows {
         if(command.equals("selectResultFile"))return selectResultFile(window,input);
         if(command.equals("captureSelectedSnapshot"))return captureSelectedSnapshot(window,input);
         if(command.equals("saveSnapshot"))return saveSnapshot(window,input);
+        if(command.equals("pickupSnapshotFiles"))return pickupSnapshotFiles(window,input);
         if(command.equals("reviewConversationResult")||command.equals("reviewConversationAttachment"))return reviewConversationResult(window,input,command.equals("reviewConversationAttachment"));
         if(command.equals("confirmConversationResult"))return confirmConversationResult(window,input);
         throw new IllegalArgumentException("未知原生电脑任务操作");
@@ -462,10 +464,50 @@ public final class RemoteOwnerWorkflows {
         String binding,profile;long revision;String snapshot=input.getString("snapshotId"),path=input.getString("path");
         synchronized(this){checkResultRead(window,input.getString("reviewId"));if(window.savingResult)throw new IllegalStateException("正在保存本次原件，请等待或离开页面停止");window.savingResult=true;binding=window.profileBinding;profile=window.source.getString("profileId");revision=window.lifecycleRevision;}
         try{dev.pocketengine.core.RunControl current=resultReadControl(window,profile,binding,revision);
-        dev.pocketengine.features.remote.RemoteResultFiles.Saved saved=dev.pocketengine.features.remote.RemoteResultFiles.save(tasks,module().resultAttachmentBook(),window.task,snapshot,path,
-            (original,selected)->{JSONObject source=original.getJSONObject("source");return module().readResultSnapshot(new JSONObject(source.toString()).put("snapshotId",original.getString("snapshotId")).put("snapshotVersion",original.getString("snapshotVersion")).put("path",selected).put("_profileBinding",binding));},current);
+        dev.pocketengine.features.remote.RemoteResultFiles.Saved saved=readOriginalSnapshotFile(window,binding,snapshot,path,current,null);
         current.check();tasks.recordRemoteSnapshotAttachment(window.task,saved);emitTask(window.task);return response(window,true,null);
         }finally{synchronized(this){window.savingResult=false;}}
+    }
+    private dev.pocketengine.features.remote.RemoteResultFiles.Saved readOriginalSnapshotFile(Window w,String binding,String snapshot,String path,dev.pocketengine.core.RunControl current,boolean[] fetched)throws Exception {
+        return dev.pocketengine.features.remote.RemoteResultFiles.save(tasks,module().resultAttachmentBook(),w.task,snapshot,path,(original,selected)->{
+            if(fetched!=null)fetched[0]=true;
+            return module().readResultSnapshot(new JSONObject(original.getJSONObject("source").toString()).put("snapshotId",original.getString("snapshotId"))
+                    .put("snapshotVersion",original.getString("snapshotVersion")).put("path",selected).put("_profileBinding",binding));
+        },current);
+    }
+    private JSONObject pickupSnapshotFiles(Window w,JSONObject input)throws Exception {
+        String binding,profile,base,snapshot=input.getString("snapshotId"),version=input.getString("snapshotVersion");long revision;
+        synchronized(this){
+            checkResultRead(w,input.getString("reviewId"));if(w.savingResult)throw new IllegalStateException("已有原件正在保存，未另开领取");
+            binding=w.profileBinding;profile=w.source.getString("profileId");base=w.source.getString("serviceBase");revision=w.lifecycleRevision;w.savingResult=true;
+        }
+        try{
+            dev.pocketengine.core.RunControl current=resultReadControl(w,profile,binding,revision);current.check();
+            JSONObject original=tasks.remoteResultSnapshot(w.task,snapshot);
+            JSONObject target=original.getJSONObject("source");
+            if(!profile.equals(target.opt("profileId"))||!base.equals(target.opt("serviceBase"))||target.has("profileBinding")&&!binding.equals(target.opt("profileBinding")))
+                throw new SecurityException("原冻结版本不属于这台主机及原连接，未领取");
+            JSONArray chosen=dev.pocketengine.features.remote.RemoteResultPickup.validate(original,input),saved=new JSONArray();
+            JSONObject receipt=new JSONObject().put("kind","frozen_file_pickup").put("taskId",w.task).put("snapshotId",snapshot)
+                    .put("snapshotVersion",version).put("requested",chosen.length()).put("saved",saved).put("executionAuthorized",false);
+            for(int i=0;i<chosen.length();i++){
+                JSONObject file=chosen.getJSONObject(i);boolean[] fetched={false};
+                try{
+                    synchronized(this){checkResultRead(w,input.getString("reviewId"));}
+                    current.check();
+                    var verified=readOriginalSnapshotFile(w,binding,snapshot,file.getString("path"),current,fetched);
+                    current.check();JSONObject linked=tasks.recordRemoteSnapshotAttachment(w.task,verified);
+                    saved.put(new JSONObject().put("path",file.getString("path")).put("sha256",file.get("sha256")).put("bytes",file.get("bytes"))
+                            .put("attachmentId",linked.getJSONObject("attachment").get("id")).put("from",fetched[0]?"host":"verified_phone_copy"));
+                }catch(Exception stopped){
+                    // Prior files are committed individually; the interrupted item is never claimed, skipped or retried.
+                    receipt.put("status",saved.length()>0?"partial":"stopped").put("stoppedPath",file.get("path")).put("notAttempted",chosen.length()-i-1);break;
+                }
+            }
+            if(!receipt.has("status"))receipt.put("status","complete").put("notAttempted",0);
+            if(saved.length()>0)emitTask(w.task);
+            return responseIfOpen(w,receipt);
+        }finally{synchronized(this){w.savingResult=false;}}
     }
     private JSONObject reviewConversationResult(Window window,JSONObject input,boolean attachment)throws Exception {
         String binding;long lifecycle;JSONObject target;

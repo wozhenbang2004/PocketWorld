@@ -145,6 +145,11 @@ public final class MemoryModule implements EngineModule {
         JSONObject result=book.forgetReviewed(authenticatedScope,id,expectedRevision,receipt);
         context.emit(id(),new JSONObject().put("event","memory_changed").put("snapshot",snapshot()));return result;
     }
+    /** Called only by the private owner's prepared retention review; not a module/tool command. */
+    public JSONObject shortenManualNoteReviewed(JSONObject scope,String id,long revision,long until,MemoryBook.BeforeForget receipt)throws Exception {
+        JSONObject result=book.shortenManualNoteReviewed(scope,id,revision,until,receipt,System.currentTimeMillis());
+        if(result.optBoolean("saved"))context.emit(id(),new JSONObject().put("event","memory_changed"));return result;
+    }
     public JSONObject correctReviewed(JSONObject authenticatedScope,String id,long expectedRevision,String text,MemoryBook.BeforeForget receipt)throws Exception {
         JSONObject result=book.correctReviewed(authenticatedScope,id,expectedRevision,text,receipt,System.currentTimeMillis());
         context.emit(id(),new JSONObject().put("event","memory_changed").put("snapshot",snapshot()));return result;

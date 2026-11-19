@@ -45,6 +45,7 @@ internal class PocketWebRemoteTasks(
             "readArtifact" to setOf("path"), "listResultFiles" to setOf("path", "offset"),
             "selectResultFile" to setOf("path"), "captureSelectedSnapshot" to emptySet(),
             "captureSnapshot" to setOf("paths"), "readSnapshot" to setOf("snapshotId", "path"),
+            "pickupSnapshotFiles" to setOf("snapshotId", "snapshotVersion", "files"),
             "saveSnapshot" to setOf("snapshotId", "path"), "openSavedSnapshot" to setOf("attachmentId"),
             "reviewConversationResult" to setOf("snapshotId", "path", "inputAttachmentId"),
             "reviewConversationAttachment" to setOf("snapshotId", "path", "inputAttachmentId"),
@@ -71,7 +72,7 @@ internal class PocketWebRemoteTasks(
             "gateway.prepareContinuation" to setOf("snapshotId", "snapshotVersion"), "openHarnessConfig" to setOf("operationId", "restoreOperationId", "selectionFromTask"))
         private fun independentReview(command: String) = command.startsWith("gateway.") && command != "gateway.prepareContinuation" || command.endsWith("HarnessConfig") || command == "cancelHarnessConfigPreview"
         val COMMANDS = fields.keys.map { "remoteTask.$it" }.toSet() +
-            setOf("remoteTask.open", "remoteTask.close", "remoteSessions.read", "remoteSessions.open") + PocketWebRemotePreview.COMMANDS + PocketWebRemoteInputs.COMMANDS
+            setOf("remoteTask.open", "remoteTask.close", "remoteTask.openLocalSnapshot", "remoteSessions.read", "remoteSessions.open") + PocketWebRemotePreview.COMMANDS + PocketWebRemoteInputs.COMMANDS
 
         /** All lineage and delivery decisions use the same native rules as execution. */
         internal fun presentSnapshot(original: JSONObject): JSONObject {
@@ -151,7 +152,25 @@ internal class PocketWebRemoteTasks(
         }
     }
 
+    /** A saved phone file opens from its task even when the configured host is gone. Never contacts it. */
+    private fun openLocalSnapshot(claim: JSONObject, done: (JSONObject?,String?)->Unit) {
+        fields(claim,setOf("taskId","snapshotId","snapshotVersion","path","fileVersion","sha256","attachmentId"))
+        val task=string(claim,"taskId"); val window=captureWindow()
+        val current={acceptsWindow(window) && taskCurrent(task)}
+        check(current()) { "请回到保存这份原件的私人主机任务" }
+        controller.readTaskForOpen(task,current) { row,error ->
+            if(error!=null||row==null||!current())done(null,error?:"原任务窗口已变化")
+            else try {
+                val meta=dev.pocketengine.features.remote.RemoteSavedOriginal.resolve(row.raw,claim)
+                controller.attachmentOutcomes.openFile(meta,fromTask=task,showOriginal=true,fromWorkResult=true)
+                done(JSONObject().put("taskId",task).put("attachmentId",meta.getString("id")).put("viewerRequested",true)
+                    .put("networkUsed",false).put("executionAuthorized",false),null);changed()
+            }catch(failure:Exception){done(null,failure.message?:"原任务中的手机原件尚不可核对")}
+        }
+    }
+
     fun dispatch(action: String, args: JSONObject, done: (JSONObject?, String?) -> Unit) {
+        if(action=="remoteTask.openLocalSnapshot"){openLocalSnapshot(args,done);return}
         if (action in PocketWebRemoteInputs.COMMANDS) { inputPages.dispatch(action, args, done); return }
         if (action in PocketWebRemotePreview.COMMANDS) {
             (preview ?: error("原隔离预览宿主尚未接入")).dispatch(action, args, done); return
@@ -241,10 +260,11 @@ internal class PocketWebRemoteTasks(
             }
         }
         if (command == "openSavedSnapshot") {
-            val file = current.optJSONArray("snapshotAttachments").objects().singleOrNull { it.optJSONObject("attachment")?.optString("id") == string(args, "attachmentId") }
-                ?.optJSONObject("attachment") ?: error("请重新读取这个原快照附件")
-            controller.openAttachmentOutcome(file)
-            done(JSONObject().put("snapshot", presentSnapshot(current).put("windowHandle", id)).put("viewerRequested", true), null); return
+            val saved = current.optJSONArray("snapshotAttachments").objects().singleOrNull { it.optJSONObject("attachment")?.optString("id") == string(args, "attachmentId") }
+                ?: error("请重新读取这一个原快照附件")
+            openLocalSnapshot(dev.pocketengine.features.remote.RemoteSavedOriginal.claim(saved)){receipt,error ->
+                if(receipt!=null && error==null)done(receipt.put("snapshot",presentation(current,id)),null) else done(null,error)
+            };return
         }
         if (command == "project.openTask") {
             val operation = current.optJSONObject("projectHistoryOperation") ?: error("尚无原分支任务回执")

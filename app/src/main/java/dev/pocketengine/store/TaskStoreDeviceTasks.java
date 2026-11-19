@@ -2,6 +2,7 @@ package dev.pocketengine.store;
 
 import dev.pocketengine.features.devices.DeviceProtocol;
 import dev.pocketengine.features.devices.DirectedPhoneTarget;
+import dev.pocketengine.features.devices.DevicePrivateText;
 
 import android.content.ContentValues;
 import android.database.Cursor;
@@ -1219,7 +1220,7 @@ public final class TaskStoreDeviceTasks {
     /** Called only after a native catalog lookup. The artifact id MUST also be present in this exact
      * original operation's real immutable descriptor, so a catalog string never grants private access. */
     public JSONObject historyAudienceForArtifact(DeviceTaskEnvelope query,String id,String run,String localOperation)throws Exception{
-        synchronized(owner){String artifact=query.arguments().getString("artifactId");
+        synchronized(owner){if(DevicePrivateText.applies(task(id)))throw new SecurityException("这次原文字工作不对外提供附件或屏幕");String artifact=query.arguments().getString("artifactId");
             try(Cursor actual=db.rawQuery("SELECT receipt FROM operations WHERE task_id=? AND run_id=? AND operation_id=?",new String[]{id,run,localOperation})){if(!actual.moveToFirst()||actual.isNull(0))throw new SecurityException("成果没有原操作真实收据");JSONObject descriptor=new JSONObject(actual.getString(0)).optJSONObject("imageArtifact");if(descriptor==null||!artifact.equals(descriptor.optString("artifactId"))||!id.equals(descriptor.optString("taskId"))||!run.equals(descriptor.optString("runId"))||!localOperation.equals(descriptor.optString("operationId")))throw new SecurityException("成果不属于该原task/run/operation真实固定描述");}
             try(Cursor row=db.rawQuery("SELECT envelope_json,accepted_at FROM device_inbound WHERE caller_device_id=? AND local_task_id=? AND local_operation_id=?",new String[]{query.callerDeviceId(),id,localOperation})){if(!row.moveToFirst())throw new SecurityException("该成果没有此设备原生接受映射");return historyAudience(query,"artifact",artifact,id,new JSONObject(row.getString(0)),row.getLong(1));}
         }
@@ -1246,9 +1247,10 @@ public final class TaskStoreDeviceTasks {
                     facts.put("cancellation",new JSONObject().put("targetOperationId",actual.getString("targetOperationId")).put("targetArgumentsDigest",actual.getString("targetArgumentsDigest")).put("requested",actual.getBoolean("requested")).put("stopped",actual.getBoolean("stopped")));
                     return dev.pocketengine.features.devices.DeviceProtocol.operationReceipt(executorDeviceId,instanceId,remote,row.getString(1),actual.getBoolean("stopped")?"succeeded":"cancel_requested",true,"reported",new JSONObject().put("managementOnly",true),facts);
                 }
-                String status=payload.optString("status",wireState(task(id)));if(request.method().equals("task.acquireControl"))status="succeeded";if(!dev.pocketengine.features.devices.DeviceProtocol.TASK_STATES.contains(status)&&!status.matches("prepared|unknown"))status=wireState(task(id));String effect="GoalSubmission".equals(original.optString("messageType"))?"reported":"not_dispatched";
+                JSONObject localTask=task(id);String status=payload.optString("status",wireState(localTask));if(request.method().equals("task.acquireControl"))status="succeeded";if(!dev.pocketengine.features.devices.DeviceProtocol.TASK_STATES.contains(status)&&!status.matches("prepared|unknown"))status=wireState(localTask);String effect="GoalSubmission".equals(original.optString("messageType"))?"reported":"not_dispatched";
                 if(!row.isNull(4))try(Cursor operation=db.rawQuery("SELECT state,receipt FROM operations WHERE task_id=? AND operation_id=?",new String[]{id,row.getString(4)})){if(operation.moveToFirst()){String state=operation.getString(0);effect=state.equals("receipt")?"reported":state.equals("prepared")?"not_dispatched":"unknown";if(state.contains("unknown")){effect="unknown";status="unknown";}}}
-                return dev.pocketengine.features.devices.DeviceProtocol.operationReceipt(executorDeviceId,instanceId,remote,row.getString(1),status,true,effect,duplicate(payload),facts);
+                return dev.pocketengine.features.devices.DeviceProtocol.operationReceipt(executorDeviceId,instanceId,remote,row.getString(1),status,true,effect,
+                        DevicePrivateText.applies(localTask)?DevicePrivateText.operation(request.method(),payload):duplicate(payload),facts);
             }
         }
     }

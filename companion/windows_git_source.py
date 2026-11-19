@@ -14,6 +14,8 @@ import zlib
 from platform_backend import PlatformError
 from platform_windows import WindowsHandleReader, local_root, relative_parts
 from windows_git_pack import PackUnavailable, PinnedPacks
+from windows_git_contents import ContentProblem, measure
+from windows_git_tree import TreeIssue, entries, review
 from windows_installation import _object, same_path
 
 PROFILE = "pocketworld.windows-registered-git-source.v1"
@@ -62,29 +64,36 @@ class Pins:
         path, handle, identity = stack.enter_context(backend.directory(root))
         self.nodes, self.missing = {(): (path, handle, True, identity)}, set()
 
+    def _child(self, parent_entry, name, stack):
+        parent, _, directory, _ = parent_entry
+        if not directory: _fail("unsafe_layout")
+        target = ntpath.join(parent, name)
+        try: handle = self.api.open(target, directory=True)  # open reparse point itself, share READ only
+        except OSError as error:
+            if getattr(error, "winerror", None) != 2: raise
+            return None
+        stack.callback(self.api.k.CloseHandle, handle)
+        info, actual = self.api.info(handle), self.api.final(handle)
+        if (actual.casefold() != ("\\\\?\\"+target).casefold() or ntpath.basename(actual) != name
+                or info.attributes & 0x400 or not info.attributes & 0x10 and info.links != 1):
+            _fail("unsafe_layout")  # No junction, symlink, hardlink, 8.3 alias or case-changed Git ref.
+        return target, handle, bool(info.attributes & 0x10), self.api.identity(info)
+
     def node(self, path):
         parts = tuple(relative_parts(path))
-        for n in range(1, len(parts)+1):
+        for n in range(1,len(parts)+1):
             prefix = parts[:n]
             if prefix in self.nodes: continue
             if prefix in self.missing: return None
-            parent, _, directory, _ = self.nodes[prefix[:-1]]
-            if not directory: _fail("unsafe_layout")
-            target = ntpath.join(parent, prefix[-1])
-            try: handle = self.api.open(target, directory=True)  # open reparse point itself, share READ only
-            except OSError as error:
-                if getattr(error, "winerror", None) != 2: raise
-                self.missing.add(prefix); return None
-            self.stack.callback(self.api.k.CloseHandle, handle)
-            info, actual = self.api.info(handle), self.api.final(handle)
-            if (actual.casefold() != ("\\\\?\\"+target).casefold() or ntpath.basename(actual) != prefix[-1]
-                    or info.attributes & 0x400 or not info.attributes & 0x10 and info.links != 1):
-                _fail("unsafe_layout")  # No junction, symlink, hardlink, 8.3 alias or case-changed Git ref.
-            self.nodes[prefix] = (target, handle, bool(info.attributes & 0x10), self.api.identity(info))
+            item = self._child(self.nodes[prefix[:-1]],prefix[-1],self.stack)
+            if item is None: self.missing.add(prefix); return None
+            self.nodes[prefix] = item
         return self.nodes[parts]
 
     def reader(self, path, limit):
-        entry = self.node(path)
+        return self._reader(self.node(path),limit)
+
+    def _reader(self, entry, limit):
         if entry is None: return None
         if entry[2]: _fail("unsafe_layout")
         info = self.api.info(entry[1])
@@ -93,9 +102,10 @@ class Pins:
         if reader.identity != entry[3]: _fail("changed")
         return reader
 
-    def file(self, path, limit):
-        reader = self.reader(path,limit)
+    @staticmethod
+    def read_all(reader, charge):
         if reader is None: return None
+        if charge is not None: charge(reader.size)
         # A cached handle may have been used before. Read its original version
         # from the beginning, not the previous reader's shared file cursor.
         reader.seek(0)
@@ -105,10 +115,24 @@ class Pins:
         reader.verify_unchanged()
         return b"".join(chunks)
 
-    def recheck_absence(self):
+    def file(self, path, limit, charge=None):
+        return self.read_all(self.reader(path,limit),charge)
+
+    def blob_file(self, path, limit, charge):
+        # The source/ref and object directories stay pinned. Release each loose
+        # blob after reading its exact original; retain only a digest, not
+        # thousands of deny-write handles. A later copy must reopen and verify.
+        parent,_,name = path.rpartition("/")
+        directory = self.node(parent)
+        if directory is None: return None
+        with ExitStack() as leaf:
+            return self.read_all(self._reader(self._child(directory,name,leaf),limit),charge)
+
+    def recheck_absence(self, checkpoint):
         # In particular: a new loose ref shadows packed-refs. Validate absent
         # paths again, while their original parents and selected objects are still pinned.
-        for components in self.missing:
+        for i,components in enumerate(self.missing):
+            if not i%16: checkpoint()
             target = ntpath.join(self.nodes[components[:-1]][0], components[-1])
             try: handle = self.api.open(target, directory=True)
             except OSError as error:
@@ -195,7 +219,8 @@ def _head(pins, algo):
 
 
 def _object_body(pins, packs, oid, kind, limit):
-    raw = pins.file(".git/objects/"+oid[:2]+"/"+oid[2:], limit+65536)
+    read = pins.blob_file if kind==b"blob" else pins.file
+    raw = read(".git/objects/"+oid[:2]+"/"+oid[2:],limit+65536,packs.budget.charge)
     if raw is None: return packs.get(oid,kind,limit), "pack"
     try:
         decoder = zlib.decompressobj(); decoded = decoder.decompress(raw,limit+64)
@@ -204,6 +229,7 @@ def _object_body(pins, packs, oid, kind, limit):
     header, nul, body = decoded.partition(b"\0")
     if (not nul or len(body)>limit or header != kind+b" "+str(len(body)).encode()
             or hashlib.new(packs.algo,decoded).hexdigest()!=oid): _fail("invalid_object")
+    packs.budget.work(len(body))
     return body, "loose"
 
 
@@ -219,49 +245,77 @@ def _tree_id(body, algo):
     return oid.decode("ascii")
 
 
-def _tree_count(body, width):
-    pos, count, previous, names = 0, 0, b"", set()
-    while pos < len(body):
-        space, nul = body.find(b" ",pos,pos+8), body.find(b"\0",pos,pos+4096)
-        if space < pos or nul < space or nul+1+width > len(body) or count >= 8192: _fail("invalid_object")
-        mode,name = body[pos:space],body[space+1:nul]
-        if mode not in {b"40000",b"100644",b"100755",b"120000",b"160000"} or name in {b"",b".",b".."} or b"/" in name: _fail("invalid_object")
-        ordered = name+(b"/" if mode==b"40000" else b"\0")
-        if ordered<=previous or name in names or not any(body[nul+1:nul+1+width]): _fail("invalid_object")
-        names.add(name)
-        previous,pos,count = ordered,nul+1+width,count+1
-    return count
-
-
-def capture(context, settings_digest, environment_id):
+def capture(context, settings_digest, environment_id, *, layout_for=None, content=False, checkpoint=lambda: None, on_count=lambda *_: None):
     facts = {"format": PROFILE, "environmentId": environment_id, "sourceVerified": False, "projectProduction": False,
              "scope": "committed_head_and_root_tree_only", "treeRecursivelyVerified": False,
              "workingTreeChecked": False, "projectCopied": False, "capturedAt": int(time.time()*1000)}
     try:
+        checkpoint()
+        if content and (not isinstance(layout_for,dict) or layout_for.get("committedNameReview",{}).get("complete") is not True):
+            _fail("original_mapping_changed")
         root = dict(registered(context, settings_digest)).get(environment_id)
         if not root: _fail("configuration_changed")
         with ExitStack() as stack:
             pins = Pins(context.backend,root,stack)
             dot = pins.node(".git")
             if dot is None: _fail("not_repository")
-            if not dot[2] or pins.node(".git/commondir") is not None: _fail("external_layout")
-            if pins.node(".git/objects/info/alternates") is not None: _fail("external_layout")
-            algo = _format(pins.file(".git/config", 128*1024))
-            head, branch = _head(pins, algo)
-            packs = PinnedPacks(pins,algo)
-            commit_body, commit_storage = _object_body(pins,packs,head,b"commit",256*1024)
-            tree = _tree_id(commit_body,algo)
-            tree_body, tree_storage = _object_body(pins,packs,tree,b"tree",1024*1024)
-            count = _tree_count(tree_body,packs.width)
-            # Anchor to BOTH actual physical directory handles, not repo name,
-            # remembered path, remote URL, commit alone or active checkout label.
+            if not dot[2]: _fail("external_layout")
+            # Recheck this installed workspace AND its .git before opening a
+            # replacement's refs. Pin the original head/branch before expanding
+            # data; a new tip isn't consent to review that other version.
             identity = [PROFILE,context.install_state["installId"],environment_id,pins.nodes[()][3],dot[3]]
             anchor = hashlib.sha256(json.dumps(identity,separators=(",",":")).encode()).hexdigest()
+            if layout_for is not None:
+                expected = {"format":PROFILE,"sourceVerified":True,"environmentId":environment_id,"repositoryAnchor":anchor}
+                if any(layout_for.get(k)!=v for k,v in expected.items()): _fail("original_source_changed")
+            if pins.node(".git/commondir") is not None or pins.node(".git/objects/info/alternates") is not None: _fail("external_layout")
+            algo = _format(pins.file(".git/config",128*1024))
+            if layout_for is not None and layout_for.get("objectFormat")!=algo: _fail("original_source_changed")
+            head, branch = _head(pins,algo)
+            if layout_for is not None and (layout_for.get("commit"),layout_for.get("branch"))!=(head,branch):
+                _fail("original_source_changed")
+            packs = PinnedPacks(pins,algo,tree_walk=layout_for is not None,content=content,checkpoint=checkpoint)
+            commit_body, commit_storage = _object_body(pins,packs,head,b"commit",256*1024)
+            tree = _tree_id(commit_body,algo)
+            if layout_for is not None and layout_for.get("tree")!=tree: _fail("original_source_changed")
+            tree_body, tree_storage = _object_body(pins,packs,tree,b"tree",1024*1024)
+            count = sum(1 for _ in entries(tree_body,packs.width))
+            path_review, content_review = None, None
+            selected = [] if content else None
+            if layout_for is not None:
+                try:
+                    path_review = review(tree,tree_body,packs.width,
+                        lambda oid: _object_body(pins,packs,oid,b"tree",1024*1024)[0],pins.api,checkpoint,collect=selected)
+                except (Incomplete,TreeIssue,PackUnavailable) as error:
+                    path_review = {"complete":False,"reason":error.reason,"example":getattr(error,"example",None)}
+                except (PlatformError,OSError,ValueError,TypeError):
+                    path_review = {"complete":False,"reason":"native_read_unavailable"}
+            if content and path_review["complete"]:
+                original = layout_for["committedNameReview"]
+                if any(original.get(k)!=path_review[k] for k in ("profile","mappingDigest","files","directories")):
+                    _fail("original_mapping_changed")
+                # Only now are regular blobs in the exact reviewed tree read.
+                try:
+                    content_review = measure(selected,path_review["mappingDigest"],packs.width,
+                        lambda oid,limit: _object_body(pins,packs,oid,b"blob",limit)[0],checkpoint,on_count)
+                except (ContentProblem,Incomplete,PackUnavailable) as error:
+                    content_review = {"complete":False,"reason":error.reason}
+                except (PlatformError,OSError,ValueError,TypeError):
+                    content_review = {"complete":False,"reason":"native_read_unavailable"}
+            checkpoint()
             if dict(registered(context,settings_digest)).get(environment_id)!=root: _fail("configuration_changed")
-            pins.recheck_absence()
+            pins.recheck_absence(checkpoint)
+            if path_review is not None:
+                facts["committedNameReview"] = path_review
+                if path_review["complete"]: facts["scope"] = "committed_directory_name_records"
+            if content_review is not None:
+                facts["committedContentReview"] = content_review
+                if content_review["complete"]:
+                    facts.update(scope="raw_committed_tree_and_blob_content",treeRecursivelyVerified=True,
+                                 workingTreeChecked=False,atomicWorkingTreeSnapshot=False)
             facts.update(sourceVerified=True, repositoryAnchor=anchor, objectFormat=algo, commit=head, tree=tree,
                          branch=branch, rootEntries=count, objectStorage={"commit":commit_storage,"rootTree":tree_storage},
                          capturedAt=int(time.time()*1000))
-    except (Incomplete,PackUnavailable) as error: facts["reason"] = error.reason
+    except (Incomplete,TreeIssue,PackUnavailable) as error: facts["reason"] = error.reason
     except (PlatformError,OSError,ValueError,TypeError): facts["reason"] = "native_read_unavailable"
     return facts

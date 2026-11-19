@@ -7,8 +7,8 @@ import uuid
 
 
 class LocalReceiptIcon:
-    def __init__(self, view):
-        self.view = view
+    def __init__(self, view, *, phone_work=False):
+        self.view, self.phone_work = view, phone_work
         self.ready, self.installed, self.hwnd, self.post = threading.Event(), False, None, None
 
     def start(self):
@@ -86,6 +86,7 @@ class LocalReceiptIcon:
                 extract(sys.executable, 0, None, c.byref(native_icon), 1)
                 note.size, note.hwnd, note.id, note.flags, note.message = c.sizeof(note), hwnd, 1, 0x01 | 0x02 | 0x04 | 0x80, 0x8001
                 note.icon, note.tip, note.version = native_icon.value or load_icon(None, c.c_void_p(32512)), "PocketWorld · 设备工作回执（只读）", 4
+                if self.phone_work: note.tip = "PocketWorld · 交给手机（本机确认）"
                 if not note.icon or not self.view.active() or not add(): return
                 self.installed = True; self.ready.set()
                 message = w.MSG()

@@ -61,6 +61,14 @@ public final class CloudWorkspaceJobs {
         return value!=null&&"companion_cloud_admission_archive_v1".equals(value.opt("cloudArchive"))
             && Boolean.TRUE.equals(value.opt("archived"))&&"unknown".equals(value.opt("status"));
     }
+    /** A scoped last observation for this original task, not current connectivity or a session lease. */
+    public static JSONObject receiptForTask(JSONObject t)throws Exception {
+        JSONObject refs=t==null?null:t.optJSONObject("externalRefs"),s=refs==null?null:refs.optJSONObject("hostWorkspace");
+        if(s==null||!matches(t,s))return null;
+        JSONObject row=project(t),out=new JSONObject();
+        for(String k:new String[]{"taskId","runId","stage","jobId","detailRetired","executorStatus"})if(row.has(k))out.put(k,row.get(k));
+        return out;
+    }
     private static JSONObject project(JSONObject t)throws Exception {
         JSONObject s=t.getJSONObject("externalRefs").getJSONObject("hostWorkspace"),e=t.optJSONObject("evidence");
         String goal=t.optString("goal");int end=goal.length()>200&&Character.isHighSurrogate(goal.charAt(199))?199:200;

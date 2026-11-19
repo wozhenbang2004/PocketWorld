@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import './collaboration-depth.css';
 import { Accordion, AccordionItem, Button, CheckboxField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
+import { RemoteSnapshotPickup } from './RemoteSnapshotPickup';
+import { OpenRemoteSavedFile } from './RemoteSavedResults';
 import { registerOverlayBack } from './overlay-back';
 import { holdRemoteReads, remoteObject as object, remoteRows as rows, type RemoteData as Data } from './remote-task-workspace';
 
@@ -99,15 +101,14 @@ export function RemoteTaskArtifacts({ snapshot, busy, active, run }: Props) {
       {rows(task.operations).filter(row => row.tool === 'remote_snapshot').slice(-4).map(row => <p key={row.operationId} className="pw-field-hint">快照操作 {row.operationId} · {row.state === 'unknown' ? '回执待核对，只查询原编号，不重新采集' : row.receipt?.message || row.state}</p>)}
       {saved.map(version => <section className="pw-remote-frozen" key={version.snapshotId}><h4>冻结版本 · {String(version.snapshotVersion).slice(0, 16)}</h4><p>{version.bytes} 字节 · 原 job {version.jobId}</p>
         <p className="pw-field-hint">{pickupWindow(version)}</p>
+        <RemoteSnapshotPickup snapshot={snapshot} version={version} enabled={enabled} run={safeRun}/>
         {rows(version.files).map(file => {
           const local = rows(snapshot.snapshotAttachments).find(row => row.snapshotId === version.snapshotId && row.path === file.path);
           const attachmentId = local?.attachment?.id;
           const canOpenLocal = windowReady && typeof attachmentId === 'string' && attachmentId.length > 0;
           return <div key={file.path} className="pw-remote-file"><span>{file.path}</span><div className="pw-form-actions">
             <Button variant="ghost" disabled={!enabled} onClick={() => void safeRun('remoteTask.readSnapshot', { snapshotId: version.snapshotId, path: file.path })}>查看冻结文件</Button>
-            {local ? <Button variant="ghost" disabled={!canOpenLocal} onClick={() => {
-              if (canOpenLocal) void safeRun('remoteTask.openSavedSnapshot', { attachmentId });
-            }}>打开手机原件</Button> : <Button variant="ghost" disabled={!enabled} onClick={() => void safeRun('remoteTask.saveSnapshot', { snapshotId: version.snapshotId, path: file.path })}>存入手机原件</Button>}
+            {local ? <OpenRemoteSavedFile taskId={String(snapshot.taskId||task.id||'')} row={local} disabled={!canOpenLocal}/> : <Button variant="ghost" disabled={!enabled} onClick={() => void safeRun('remoteTask.saveSnapshot', { snapshotId: version.snapshotId, path: file.path })}>存入手机原件</Button>}
           </div></div>;
         })}
         {version.jobId === source.jobId && <Button variant="secondary" disabled={!enabled} onClick={() => setSelectedSnapshot(selectedSnapshot?.snapshotId === version.snapshotId ? null : version)}>{selectedSnapshot?.snapshotId === version.snapshotId ? '已选此版本继续（点击取消）' : '以此版本明确继续'}</Button>}

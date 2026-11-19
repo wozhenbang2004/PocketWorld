@@ -116,6 +116,21 @@ class PhoneTaskRouter:
     def invoke(self, action, params):
         return self._invoke(action, params)
 
+    def discover_for_owner_text(self, peer_id):
+        # Capture the actual connection which reported this feature. Do not
+        # serialize it or equate a later connection from the same device with it.
+        held = {}
+        value = self._invoke("doctor", {"peerDeviceId": peer_id}, owner_text_channel=held)
+        if "channel" not in held: raise PhoneTaskError("No current original phone channel", 403)
+        return value, held["channel"]
+
+    def submit_owner_goal(self, params, fence):
+        # In-process native owner UI only; no public method, token, alternate
+        # executor or grant. The ordinary run still checks its exact PairGrant.
+        if not callable(fence) or params.get("toolCalls") != 0:
+            raise PhoneTaskError("Local text-only scope is required", 403)
+        return self._invoke("run", params, owner_goal_fence=fence)
+
     def read_for_local_receipt(self, peer_id, operation_id):
         """In-process Windows owner UI only. The local scope fence is not serializable,
         not an RPC field, not a lease and never returned to phone/Web/MCP clients."""
@@ -129,12 +144,16 @@ class PhoneTaskRouter:
         # pending questions, screenshots, evidence or model/phone credentials.
         return safe, retained.get("current")
 
-    def _invoke(self, action, params, retained=None):
+    def _invoke(self, action, params, retained=None, *, owner_goal_fence=None, owner_text_channel=None):
         if not isinstance(params, dict):
             raise PhoneTaskError("Parameters must be an object")
         if self.closed or self.service.loop is None or self.service.closed:
             raise PhoneTaskError("Enable the existing paired device service first", 503)
-        work = self.execute(action, copy.deepcopy(params)) if retained is None else self.execute(action, copy.deepcopy(params), local_task_read=retained)
+        kwargs = {}
+        if retained is not None: kwargs["local_task_read"] = retained
+        if owner_goal_fence is not None: kwargs["owner_goal_fence"] = owner_goal_fence
+        if owner_text_channel is not None: kwargs["owner_text_channel"] = owner_text_channel
+        work = self.execute(action, copy.deepcopy(params), **kwargs)
         future = asyncio.run_coroutine_threadsafe(work, self.service.loop)
         try:
             return future.result(timeout=58)
@@ -385,7 +404,7 @@ class PhoneTaskRouter:
         # memory or SQL. All immutable scope and native semantics passed first.
         value.update(updates)
 
-    async def execute(self, action, params, *, local_task_read=None):
+    async def execute(self, action, params, *, local_task_read=None, owner_goal_fence=None, owner_text_channel=None):
         if self.closed:
             raise PhoneTaskError("Phone task surface is closed; accepted phone work remains on the phone", 503)
         if action in {"acquire_control", "answer", "steer", "resume"}:
@@ -421,6 +440,7 @@ class PhoneTaskRouter:
                 raise PhoneTaskError("Receiving-owner signed grant receipt could not be verified", 403)
             capabilities = {capability for receipt in description["grantReceipts"] for capability in receipt["body"]["grant"]["capabilities"]
                             if self.manager.now() < receipt["body"]["grant"]["expiresAt"]}
+            if owner_text_channel is not None: owner_text_channel["channel"] = (connection, peer, description["validUntil"])
             return {"description": response["result"], "modelInferenceVerified": False, "phoneConfirmationLocalOnly": True,
                     "ordinaryAnswerAvailable": "task.answerQuestion" in capabilities, "steerAvailable": "task.steer" in capabilities,
                     "resumeReviewAvailable": "task.requestResume" in capabilities,
@@ -458,6 +478,7 @@ class PhoneTaskRouter:
                          arguments={"goal": params["goal"], "executionMode": "agent", "modelSource": {"kind": "local"}})
             value["argumentsDigest"] = wire.arguments_digest(value)
             envelope = wire.parse_request(wire.canonical_bytes(value))
+            if owner_goal_fence is not None: owner_goal_fence(connection, peer, ticket)
             return await self._mutation(operation_id, params, connection, peer, ticket, envelope)
         if action in {"status", "wait", "events", "cancel"}:
             optional = {"timeoutMs"} if action == "wait" else {"cursor", "limit"} if action == "events" else {"cancelOperationId"} if action == "cancel" else set()

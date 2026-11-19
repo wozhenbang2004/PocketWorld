@@ -56,6 +56,18 @@ public final class DeviceExecutionAdmission {
     public DeviceTaskEnvelope request() { return request; }
     public Kind kind() { return kind; }
     public String executionMode() { return mode; }
+    /** Signed resource stays on the original task. Zero allotted tools means NO
+     * display host, phone port, observations or input, not even at startup. */
+    public static final String ZERO_TOOL_PHONE_CONTRACT="pocketworld.zero-tool-phone.no-screen-reviewed.v2";
+    public static boolean zeroToolPhoneGoal(DeviceTaskEnvelope original) {
+        if(!"task.submitGoal".equals(original.method()))return false;
+        String location=original.resourceBinding().optString("screenMode");
+        return ("main_screen".equals(location)||"background".equals(location)) && original.budget().optLong("toolCalls",-1)==0;
+    }
+    public boolean noPhoneSurface(){return kind==Kind.GOAL && zeroToolPhoneGoal(request);}
+    /** Local host selection, never used as a replacement for the signed resource. */
+    public String hostMode(){return noPhoneSurface()?"capabilities":mode;}
+
     public long deadline() { return Math.min(request.deadline(), permission.deadline()); }
     public int toolBudget() { return Math.toIntExact(Math.min(400, Math.min(permission.toolBudget(), permission.budget().optLong("toolCalls")))); }
     public int modelBudget() { return kind == Kind.DEVICE_TOOLS ? 0 : Math.toIntExact(Math.min(1000, Math.min(permission.modelBudget(), permission.budget().optLong("modelCalls")))); }
@@ -98,6 +110,7 @@ public final class DeviceExecutionAdmission {
                 .put("delegationChain", envelope.optJSONArray("delegationChain") == null ? new JSONArray() : envelope.getJSONArray("delegationChain"))
                 .put("maxDelegationDepth", envelope.optInt("maxDelegationDepth", 2))
                 .put("resourceBinding", envelope.optJSONObject("resourceBinding") == null ? new JSONObject() : envelope.getJSONObject("resourceBinding"));
+        if(DevicePrivateText.requested(request))scope.put("reviewedTextOnly",true);
         JSONObject forwarding = request.arguments().optJSONObject("delegationAuthorization");
         if (forwarding != null) scope.put("forwardingProof", new JSONObject(forwarding.toString()));
         PairingCoordinator.SourceShare source=sourceShare();if(source!=null)scope.put("sourceShare",source.record()).put("localToolsUsed",0).put("localModelCallsUsed",0);

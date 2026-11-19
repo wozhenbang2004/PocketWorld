@@ -29,7 +29,7 @@ public final class DeviceGoalCapabilityPort implements CapabilityPort {
         if (admission.kind() != DeviceExecutionAdmission.Kind.GOAL || original.hostRunIdentity() == null) throw new SecurityException("需要原设备目标执行");
         this.nativeScoped = java.util.Objects.requireNonNull(selectedNativeProjectAndDevices); this.admission = admission; this.original = original;
         this.currentModel=java.util.Objects.requireNonNull(currentModel);
-        allowed = new HashSet<>(); JSONArray names = admission.toolNames();
+        allowed = new HashSet<>(); JSONArray names = admission.noPhoneSurface()?new JSONArray():admission.toolNames();
         for (int i = 0; i < names.length(); i++) {
             String name = names.getString(i);
             if (name.startsWith("memory_") || name.startsWith("skills_") || name.startsWith("attachments_") || name.startsWith("workspace_")
@@ -44,7 +44,7 @@ public final class DeviceGoalCapabilityPort implements CapabilityPort {
         if (closed || control != original || original.isCancelled() || original.isPaused()) throw new SecurityException("原设备目标控制已停止或变化");
         admission.checkCurrent(); original.check(); currentModel.check();
     }
-    private boolean phoneMode(){return !"capabilities".equals(admission.executionMode());}
+    private boolean phoneMode(){return !admission.noPhoneSurface()&&!"capabilities".equals(admission.executionMode());}
     private boolean phoneTool(String name){return phoneMode()&&(name.equals("phone_wait")||allowed.contains(name)&&DeviceToolsRuntime.supports(name));}
     private void tool(String name, RunControl control) throws Exception { check(control); if (!allowed.contains(name) || !nativeScoped.supports(name)) throw new SecurityException("工具不在设备目标闭集范围"); }
     @Override public JSONArray tools() throws Exception {
@@ -58,6 +58,7 @@ public final class DeviceGoalCapabilityPort implements CapabilityPort {
     @Override public void validate(String name, JSONObject args) throws Exception { tool(name, original); nativeScoped.validate(name, args); }
     @Override public JSONObject contextSnapshot(String query) throws Exception {
         check(original);
+        if(admission.noPhoneSurface())return new JSONObject().put("textOnly",true).put("ambientMemoryProvided",false).put("authorizationTransferred",false);
         JSONObject result=new JSONObject().put("deviceContext", DeviceContextSnapshot.validate(admission.request().arguments().optJSONObject("contextSnapshot"), admission.request().originDeviceId()))
                 .put("ambientMemoryProvided", false).put("authorizationTransferred", false);
         JSONObject local=nativeScoped.contextSnapshot(query);if(local.optJSONObject("developmentProject")!=null)result.put("developmentProject",new JSONObject(local.getJSONObject("developmentProject").toString()));

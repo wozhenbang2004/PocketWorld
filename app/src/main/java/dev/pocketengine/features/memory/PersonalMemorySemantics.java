@@ -96,6 +96,17 @@ public final class PersonalMemorySemantics {
                 ||normalizedText(a.optString("predicate")).equals(normalizedText(b.optString("predicate")))
                 &&normalizedText(a.optString("object")).equals(normalizedText(b.optString("object")));
     }
+    /** Review-only eligibility for an earlier, finite deadline; never establishes that a fresh version is still active. */
+    public static boolean canShortenManualNote(JSONObject row,long until,long now)throws Exception {
+        if(row==null||until<=now||until>8_640_000_000_000_000L||!"owner".equals(row.optString("ownerId"))||!"private".equals(row.optString("spaceId"))
+                ||!ownerAssertion(row.optJSONObject("assertion"))||!nativeManualNote(row)||row.optBoolean("archiveOnly")
+                ||row.has("learningCandidateId")||row.has("appKnowledge")||row.has("parentRevisions")||row.has("assertionResolution")||row.has("supersedes")||!row.has("expiresAt"))return false;
+        JSONObject review=row.getJSONObject("assertionReview"),assertion=row.getJSONObject("assertion");String text=row.getString("text");
+        if(review.optLong("revision")!=1||review.optLong("at",-1)!=row.optLong("createdAt",-2)||!text.equals(assertion.optString("object"))
+                ||!("personal_note:"+TaskMemoryUse.digest(normalizedText(text))).equals(assertion.optString("predicate")))return false;
+        for(String field:java.util.List.of("sourceIds","sourceRefs")){JSONArray refs=row.optJSONArray(field);if(refs==null||refs.length()!=0)return false;}
+        Object prior=row.opt("expiresAt");return prior==JSONObject.NULL||prior instanceof Long&&until<(Long)prior||prior instanceof Integer&&until<(Integer)prior;
+    }
     private static boolean manualNoteContent(JSONObject row){JSONObject assertion=row.optJSONObject("assertion");return MANUAL_SOURCE.equals(row.optString("source"))&&assertion!=null&&"inferred".equals(assertion.optString("kind"));}
     private static boolean nativeManualNote(JSONObject row){return manualNoteContent(row)&&"explicit_save".equals(row.optString("formation"))&&row.optJSONObject("assertionReview")!=null;}
 }

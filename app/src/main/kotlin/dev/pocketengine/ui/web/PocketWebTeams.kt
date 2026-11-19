@@ -23,8 +23,19 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /** Owner presentation for the original TeamsModule. No worker, grant or execution state lives here. */
 internal class PocketWebTeams(private val controller: PocketWorldController) {
-    private data class Reading(val kind: String, val original: String)
-    private data class Review(val command: String, val input: String, val expires: Long, val phonePage: TeamPhoneHost.Page? = null, val phoneReview: TeamPhoneHost.Review? = null, val productionSources: String? = null)
+    private class Reading(val kind: String, val original: String) {
+        @Volatile var live = true
+            private set
+        private var itemPage: AutoCloseable? = null
+        @Synchronized fun hold(page: AutoCloseable) {
+            check(live) { "原分工窗口已关闭" }; itemPage?.close(); itemPage = page
+        }
+        @Synchronized fun retire() { live = false; itemPage?.close(); itemPage = null }
+    }
+    private data class Review(val command: String, val input: String, val expires: Long, val phonePage: TeamPhoneHost.Page? = null, val phoneReview: TeamPhoneHost.Review? = null, val productionSources: String? = null,
+        val workItem: PocketWebTeamWorkReturn? = null, val ownerReading: Reading? = null) {
+        fun close() { runCatching { phonePage?.close() }; runCatching { workItem?.close() } }
+    }
     private data class PhonePage(val original: TeamPhoneHost.Page, val definition: String, val input: String, val expires: Long)
     @Volatile private var generation = 0L
     private var snapshot = JSONObject()
@@ -33,19 +44,19 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
     private val phonePages = linkedMapOf<String, PhonePage>()
     private val main = Handler(Looper.getMainLooper())
     private val phoneInFlight = AtomicBoolean(false)
-    @Volatile private var workingPhonePage: TeamPhoneHost.Page? = null
+    @Volatile private var workingTeamPage: AutoCloseable? = null
 
     companion object {
         val COMMANDS = setOf("teams.attention", "teams.readAttention", "teams.snapshot", "teams.readRun", "teams.readDefinition", "teams.reviewDefinition", "teams.prepareDraftStart",
             "teams.reviewStart", "teams.reviewRemove", "teams.confirm", "teams.control", "teams.sendMessage",
-            "teams.answerAssignment", "teams.probeMember", "teams.closeReading", "teams.reviewPhoneStart", "teams.reviewMember", "teams.openResearchTask")
+            "teams.reviewWorkItemContinuation", "teams.answerAssignment", "teams.probeMember", "teams.closeReading", "teams.reviewPhoneStart", "teams.reviewMember", "teams.openResearchTask")
     }
 
     fun clear() {
-        generation++; snapshot = JSONObject(); readings.clear()
+        generation++; snapshot = JSONObject(); readings.values.forEach { it.retire() }; readings.clear()
         phonePages.values.forEach { runCatching { it.original.close() } }; phonePages.clear()
-        reviews.values.forEach { runCatching { it.phonePage?.close() } }; reviews.clear()
-        runCatching { workingPhonePage?.close() }
+        reviews.values.forEach { it.close() }; reviews.clear()
+        runCatching { workingTeamPage?.close() }
     }
     private fun fields(value: JSONObject, vararg allowed: String) {
         require(value.keys().asSequence().all { it in allowed }) { "团队操作包含不适用的字段" }
@@ -69,7 +80,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
         return JSONObject(value.toString()).put("runs", JSONArray(retained)).put("productionSources", productionSources())
     }
     private fun reading(handle: String, kind: String, consume: Boolean = false): JSONObject {
-        val original = if (consume) readings.remove(handle) else readings[handle]
+        val original = if (consume) readings.remove(handle)?.also { it.retire() } else readings[handle]
         check(original != null && original.kind == kind) { "原团队读取已关闭，请重新读取" }
         return JSONObject(original.original)
     }
@@ -140,7 +151,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
             assignment.optJSONArray("questions").objects().none { it.optString("state") == "pending" }
     }
     private fun view(kind: String, value: JSONObject): JSONObject {
-        while (readings.size >= 24) readings.remove(readings.keys.first())
+        while (readings.size >= 24) readings.remove(readings.keys.first())?.retire()
         val handle = UUID.randomUUID().toString()
         // Reading/editing is bound to the visible native window, not a timer.
         // clear()/closeReading retire it; mutations still compare the original
@@ -192,7 +203,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
     }
 
     private fun review(command: String, input: JSONObject): JSONObject {
-        reviews.entries.removeAll { entry -> (entry.value.expires <= SystemClock.elapsedRealtime()).also { if (it) runCatching { entry.value.phonePage?.close() } } }
+        reviews.entries.removeAll { entry -> (entry.value.expires <= SystemClock.elapsedRealtime()).also { if (it) entry.value.close() } }
         check(reviews.size < 8) { "请先关闭已有团队操作审阅" }
         val handle = UUID.randomUUID().toString()
         reviews[handle] = Review(command, input.toString(), SystemClock.elapsedRealtime() + 120_000,
@@ -208,29 +219,29 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
             if (originalGeneration == generation && window == controller.webWindowTicket() && controller.webPrivateOwnerVisible()) done(value, error)
         }
         fun currentWindow() = originalGeneration == generation && window == controller.webWindowTicket() && controller.webPrivateOwnerVisible()
-        fun phoneWork(page: TeamPhoneHost.Page? = null, work: () -> JSONObject, accept: (JSONObject) -> Unit) {
-            if (!phoneInFlight.compareAndSet(false, true)) { runCatching { page?.close() }; error("正在核对这次手机协作，请等待原回执") }
-            workingPhonePage = page
+        fun hostWork(page: AutoCloseable? = null, work: () -> JSONObject, accept: (JSONObject) -> Unit) {
+            if (!phoneInFlight.compareAndSet(false, true)) { runCatching { page?.close() }; error("正在核对这次团队操作，请等待原回执") }
+            workingTeamPage = page
             try {
                 controller.runTeamPhoneWork {
                     val result = runCatching { check(currentWindow()) { "原团队页面已关闭" }; work() }
                     main.post {
                         phoneInFlight.set(false)
                         if (!currentWindow()) {
-                            runCatching { workingPhonePage?.close() }; workingPhonePage = null
+                            runCatching { workingTeamPage?.close() }; workingTeamPage = null
                             // Complete the original bridge command even when its presentation was retired.
                             // The bridge owns outcome-unknown delivery; never populate the next page's handles.
-                            done(null, "原手机协作窗口已关闭；请查询原团队结果，没有自动重放")
+                            done(null, "原团队窗口已关闭；请查询原团队结果，没有自动重放")
                         }
                         else {
-                            val completedPage = workingPhonePage ?: page
-                            workingPhonePage = null
-                            result.fold({ value -> try { accept(value) } catch (failure: Exception) { runCatching { completedPage?.close() }; deliver(null, failure.message ?: "原手机协作回执待核对") } },
-                                { failure -> runCatching { completedPage?.close() }; deliver(null, failure.message ?: "原手机协作暂不可用") })
+                            val completedPage = workingTeamPage ?: page
+                            workingTeamPage = null
+                            result.fold({ value -> try { accept(value) } catch (failure: Exception) { runCatching { completedPage?.close() }; deliver(null, failure.message ?: "原团队操作回执待核对") } },
+                                { failure -> runCatching { completedPage?.close() }; deliver(null, failure.message ?: "原团队操作暂不可用") })
                         }
                     }
                 }
-            } catch (failure: Exception) { phoneInFlight.set(false); workingPhonePage = null; runCatching { page?.close() }; throw failure }
+            } catch (failure: Exception) { phoneInFlight.set(false); workingTeamPage = null; runCatching { page?.close() }; throw failure }
         }
         fun deliverReceipt(receipt: JSONObject) {
             val reading = receipt.optJSONObject("reading")
@@ -375,8 +386,8 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 }
             }
             "teams.closeReading" -> {
-                fields(args, "viewHandle", "reviewHandle", "phoneHandle"); readings.remove(args.optString("viewHandle"))
-                reviews.remove(args.optString("reviewHandle"))?.phonePage?.let { runCatching { it.close() } }
+                fields(args, "viewHandle", "reviewHandle", "phoneHandle"); readings.remove(args.optString("viewHandle"))?.retire()
+                reviews.remove(args.optString("reviewHandle"))?.close()
                 phonePages.remove(args.optString("phoneHandle"))?.original?.let { runCatching { it.close() } }
                 deliver(JSONObject().put("closed", true), null)
             }
@@ -505,10 +516,10 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                     phonePages.entries.removeAll { entry -> (entry.value.expires <= SystemClock.elapsedRealtime()).also { if (it) runCatching { entry.value.original.close() } } }
                     check(phonePages.size < 4) { "请先关闭已有手机范围选择" }
                     var created: TeamPhoneHost.Page? = null
-                    phoneWork(work = {
+                    hostWork(work = {
                         val module = controller.webPluginFeatureHost().module("teams") as? TeamsModule ?: error("原团队模块不可用")
                         val page = module.newPhonePage(team.getString("id"), input.getString("goal"), input.getInt("rounds"), input.optString("conversationId"))
-                        created = page; workingPhonePage = page
+                        created = page; workingTeamPage = page
                         page.view().also { check(it.getJSONObject("definition").toString() == team.toString()) { "原团队配置已变化，请重新读取后开始" } }
                     }, accept = { value ->
                         val handle = UUID.randomUUID().toString()
@@ -523,7 +534,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 if (page.expires <= SystemClock.elapsedRealtime()) { page.original.close(); error("原手机范围选择已过期") }
                 val choices = JSONObject().put("members", args.getJSONArray("members"))
                 var captured: TeamPhoneHost.Review? = null
-                phoneWork(page.original, work = { page.original.review(choices).also { captured = it }.view() }, accept = { value ->
+                hostWork(page.original, work = { page.original.review(choices).also { captured = it }.view() }, accept = { value ->
                     val result = review("start", JSONObject(page.input)); val handle = result.getString("reviewHandle")
                     reviews[handle] = reviews.getValue(handle).copy(phonePage = page.original, phoneReview = captured ?: error("原手机范围尚未审阅"))
                     deliver(result.put("definition", PocketWebState.publicValue(JSONObject(page.definition))).put("phoneScope", PocketWebState.publicValue(value)), null)
@@ -573,17 +584,45 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                     .put("researchExit", action == "exit" && run.optString("researchExecutionFormat") == dev.pocketengine.features.teams.TeamCoordinator.RESEARCH_FORMAT)
                 deliver(result, null)
             }
+            "teams.reviewWorkItemContinuation" -> {
+                fields(args, "viewHandle", "workItemId")
+                val handle = text(args, "viewHandle")
+                val owner = readings[handle]?.takeIf { it.kind == "run" && it.live } ?: error("请重新打开原团队")
+                val source = PocketWebTeamWorkReturn.source(JSONObject(owner.original), text(args, "workItemId"))
+                reviews.entries.removeAll { (_, old) -> (old.expires <= SystemClock.elapsedRealtime()).also { if (it) old.close() } }
+                check(reviews.size < 8) { "请先关闭已有团队操作审阅" }
+                var prepared: PocketWebTeamWorkReturn? = null
+                hostWork(work = {
+                    val page = controller.openTeamWorkPlanPage(source.team); workingTeamPage = page
+                    owner.hold(page); check(currentWindow() && owner.live) { "原分工窗口已关闭" }; page.setForeground(true)
+                    PocketWebTeamWorkReturn.prepare(source, page).also { prepared = it }.preview
+                }, accept = { shown ->
+                    check(readings[handle] === owner && owner.live) { "原团队记录已更换，没有开始工作" }
+                    val token = UUID.randomUUID().toString()
+                    reviews[token] = Review("continueWorkItem", "", SystemClock.elapsedRealtime() + 120_000,
+                        workItem = requireNotNull(prepared), ownerReading = owner)
+                    deliver(JSONObject().put("operation", "continueWorkItem").put("reviewHandle", token).put("input", PocketWebState.publicValue(shown)), null)
+                })
+            }
             "teams.confirm" -> {
                 fields(args, "reviewHandle")
                 val captured = reviews.remove(text(args, "reviewHandle")) ?: error("原操作审阅已使用或关闭，请先核对原回执")
-                if (captured.expires <= SystemClock.elapsedRealtime()) { captured.phonePage?.close(); error("原操作审阅已过期") }
-                if (captured.phonePage == null) {
+                if (captured.expires <= SystemClock.elapsedRealtime()) { captured.close(); error("原操作审阅已过期") }
+                if (captured.workItem != null) {
+                    val work = captured.workItem
+                    if (captured.ownerReading?.live != true) { captured.close(); error("原分工审阅已关闭，没有开始工作") }
+                    hostWork(work, work = {
+                        try { check(captured.ownerReading?.live == true && currentWindow()) { "原分工审阅已关闭" }; work.approve() } finally { work.close() }
+                    }, accept = { result -> deliverReceipt(JSONObject().put("confirmed", true).put("command", "continueWorkItem")
+                        .put("workItemId", work.source.work.getString("workItemId")).put("assignmentId",work.source.work.getString("assignmentId")).put("reading", view("run", result))) })
+                }
+                else if (captured.phonePage == null) {
                     val input = JSONObject(captured.input)
                     if (captured.command == "save" && input.optString("mode") == "produce") PocketWebTeamProduction.validateDefinition(input.getJSONArray("members"), snapshot,
                         JSONObject(captured.productionSources ?: error("原文件来源审阅缺失")), productionSources())
                     feature(captured.command, input)
                 }
-                else phoneWork(captured.phonePage, work = { captured.phonePage.confirm(captured.phoneReview ?: error("原手机范围审阅缺失")) }, accept = { result ->
+                else hostWork(captured.phonePage, work = { captured.phonePage.confirm(captured.phoneReview ?: error("原手机范围审阅缺失")) }, accept = { result ->
                     captured.phonePage.close(); check(result.optString("id").isNotBlank()) { "团队启动尚未取得原运行身份" }
                     snapshot.put("runs", (snapshot.optJSONArray("runs") ?: JSONArray()).put(JSONObject(result.toString())))
                     deliver(JSONObject().put("command", "start").put("confirmed", true).put("result", PocketWebState.publicValue(result)).put("reading", view("run", result)), null)

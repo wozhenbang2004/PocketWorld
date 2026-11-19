@@ -4,14 +4,14 @@ import {bridge} from './bridge';
 import {Button} from './forms-library';
 import type {PhoneStartReceipt} from './phone-start';
 
-type Original={id:string;goal:string;at:number;admission:'admitted'|'no_run'|'unconfirmed'};
+type Original={id:string;goal:string;at:number;admission:'admitted'|'run_recorded'|'no_run'|'unconfirmed'};
 type Rows={owner:string;document:number;rows:Original[]};
 function originals(value:unknown):Original[]{
   if(!Array.isArray(value))return [];
   return value.slice(0,5).flatMap(row=>{
     if(!row||row.accepted!==true||typeof row.draftRequestId!=='string'||row.taskId!==row.draftRequestId||
       typeof row.goal!=='string'||!Number.isSafeInteger(row.createdAt)||row.createdAt<1)return [];
-    return [{id:row.taskId,goal:row.goal,at:row.createdAt,admission:row.admissionState==='admitted'?'admitted':row.admissionState==='no_run'?'no_run':'unconfirmed'}];
+    return [{id:row.taskId,goal:row.goal,at:row.createdAt,admission:row.admissionState==='admitted'?'admitted':row.admissionState==='run_recorded'?'run_recorded':row.admissionState==='no_run'?'no_run':'unconfirmed'}];
   });
 }
 
@@ -47,7 +47,7 @@ export function EarlierDraftPhoneStarts({composer,except,onTask}:{composer:strin
     <Button size="small" variant="ghost" aria-expanded={open} onClick={()=>{if(!here())return;if(open){++serial.current;setBusy(false);setOpen(false);setSaved(null);setNote('')}else load()}}>本草稿最近的手机任务 · {ids.length}</Button>
     {open&&<>{busy&&<small role="status">正在核对原记录…</small>}{note&&<p role="status">{note} <Button size="small" variant="ghost" disabled={busy} onClick={()=>load()}>再查一次</Button></p>}
       {!!rows.length&&<ul className="pw-draft-start-list">{rows.map(row=><li key={row.id}><div><strong>{row.goal}</strong>
-      <small>{new Date(row.at).toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})} · {row.admission==='admitted'?'有首次准入回执':row.admission==='no_run'?'尚无执行轮次':'首次准入待核对'}</small></div>
+      <small>{new Date(row.at).toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})} · {row.admission==='admitted'?'有首次准入回执':row.admission==='run_recorded'?'有首次轮次，服务接收待核对':row.admission==='no_run'?'尚无执行轮次':'首次准入待核对'}</small></div>
       <Button size="small" variant="secondary" disabled={busy} onClick={()=>load(row.id)}>打开任务</Button></li>)}</ul>}</>}
   </section>;
 }

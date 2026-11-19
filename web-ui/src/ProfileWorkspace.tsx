@@ -48,8 +48,8 @@ type AgentPreferenceControl = { enabled: boolean; revision: number };
 type Editor = { section: Section; original: PersonalProfile; draft: PersonalProfile };
 type MemorySelection = { id: string; candidate: boolean; value: Data; record: Data; originalText: string; draft: string; historical?: boolean };
 type MemoryReview = { value: Data; operation: 'forget' | 'accept' | 'reject'; id: string; candidate: boolean };
-type MutationOperation = 'create' | 'correct' | MemoryReview['operation'];
-type MemoryFeedback = { value: Data; operation: MutationOperation; needsQuery: boolean; targetId?: string; submittedText?: string };
+type MutationOperation = 'create' | 'correct' | 'shorten' | MemoryReview['operation'];
+type MemoryFeedback = { value: Data; operation: MutationOperation; needsQuery: boolean; targetId?: string; submittedText?: string; term?: { id: string; revision: number; until: number } };
 type AvatarPicker = { id: string; editor: number };
 type AvatarPoll = { sequence: number; key: string | undefined; visibility: number; picker: AvatarPicker };
 const labels: Record<View, string> = { home: '我与管家', identity: '编辑资料', communication: '交流偏好', behavior: '做事偏好', memories: '个人记忆', memory: '编辑记忆', 'memory-new': '记住一件事', 'memory-settings': '记忆设置', 'memory-history': '过去的记忆' };
@@ -86,8 +86,25 @@ function memoryDates(row: Data): string {
   const expiry = dateLabel(row.expiresAt), updated = dateLabel(row.updatedAt || row.createdAt);
   return [updated ? `${updated} 更新` : '', expiry ? `${expiredMemory(row) ? '已到期' : '有效至'} ${expiry}` : ''].filter(Boolean).join(' · ');
 }
+const retentionLabel = (value: unknown): string => value === null ? '不设到期时间' : typeof value === 'number' && Number.isSafeInteger(value) && value > 0 && Number.isFinite(new Date(value).getTime()) ? new Date(value).toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '期限未核对';
+function duplicateRetention(feedback: MemoryFeedback): string {
+  const receipt = feedback.value;
+  if (feedback.needsQuery || feedback.operation !== 'create' || receipt.status !== 'already_saved' || receipt.duplicate !== true || receipt.saved !== false) return '';
+  const original = receipt.record || receipt.candidate;
+  if (!string(original?.id)) return '';
+  return `没有新建或更改期限。提交时${receipt.record ? '原记忆' : '待确认内容'}：${retentionLabel(original.expiresAt)}；本次选择：${retentionLabel(receipt.requestedExpiresAt)}。`;
+}
+function validShortenReceipt(receipt: Data, original: MemoryFeedback): boolean {
+  const term = original.term;
+  if (!term || receipt.receiptHandle !== original.value.receiptHandle || receipt.undoAvailable !== false) return false;
+  if (receipt.status === 'unchanged') return receipt.saved === false && !!string(receipt.message);
+  return receipt.status === 'saved' && receipt.saved === true && receipt.record?.id === term.id && receipt.record.revision === term.revision + 1 && receipt.record.expiresAt === term.until;
+}
 function feedbackLabel(feedback: MemoryFeedback): string {
   if (feedback.needsQuery || feedback.value.status === 'unknown') return '这次修改的结果待核对';
+  if (feedback.operation === 'shorten' && feedback.value.status === 'not_submitted') return '这次缩短期限尚未提交，原期限未改';
+  if (feedback.operation === 'shorten' && feedback.value.status === 'unchanged') return string(feedback.value.message) || '原期限未改';
+  if (feedback.operation === 'shorten' && feedback.value.status === 'saved') return `原记忆的有效期已缩短至 ${retentionLabel(feedback.value.record?.expiresAt)}`;
   if (feedback.value.status === 'settings_required') return string(feedback.value.message) || '这项默认偏好请在偏好设置中修改，本次没有写入记忆。';
   if (feedback.value.status === 'not_submitted') return '这次修改尚未提交，输入已保留，可以重新保存';
   if (feedback.value.duplicate === true || feedback.value.status === 'already_saved') return string(feedback.value.message) || (feedback.value.candidate ? '已有相同待确认内容' : '已经记住这条内容');
@@ -602,21 +619,21 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
       try {
         const expiresAt = expiry === 'none' ? null : Date.now() + Number(expiry) * 86_400_000;
         const prepared = object(await call('profile.memory.createReview', { text, expiresAt }));
-        if (!string(prepared.reviewHandle) || !string(prepared.receiptHandle) || prepared.operation !== 'create' || prepared.afterText !== text) { closeHandle(string(prepared.reviewHandle)); throw new Error('待保存内容尚未完整核对，输入已保留。'); }
+        if (!string(prepared.reviewHandle) || !string(prepared.receiptHandle) || prepared.operation !== 'create' || prepared.afterText !== text || prepared.expiresAt !== expiresAt) { closeHandle(string(prepared.reviewHandle)); throw new Error('待保存内容尚未完整核对，输入已保留。'); }
         if (!alive.current) { closeHandle(prepared.reviewHandle); return; }
         rememberReceipt({ receiptHandle: prepared.receiptHandle, undoAvailable: false }, 'create', true, undefined, text);
         sent = true;
         const result = object(await call('profile.memory.confirm', { reviewHandle: prepared.reviewHandle }));
         if (settlePreferenceReceipt(result, prepared.receiptHandle, 'create', undefined, text)) return;
         if (result.duplicate === true && result.status === 'already_saved') {
-          if (result.receiptHandle !== prepared.receiptHandle || !string((result.record || result.candidate)?.id)) throw new Error('相同内容的原回执尚未完整核对。');
+          if (result.receiptHandle !== prepared.receiptHandle || result.saved !== false || result.requestedExpiresAt !== expiresAt || !string((result.record || result.candidate)?.id)) throw new Error('相同内容的原回执尚未完整核对。');
           saved = true; duplicate = true;
           if (!alive.current) return;
           rememberReceipt({ ...result, receiptHandle: result.receiptHandle || prepared.receiptHandle, undoAvailable: false }, 'create');
           setNewMemoryText(''); setNewMemoryExpiry('none'); setCreateUnknown(false); go('memories');
           await readSnapshot(); return;
         }
-        if (result.status !== 'saved' || result.receiptHandle !== prepared.receiptHandle || !string(result.record?.id) || result.record?.text !== text || !Number.isSafeInteger(result.record?.revision) || result.record.revision < 1) throw new Error('记忆保存结果尚未确认。');
+        if (result.status !== 'saved' || result.receiptHandle !== prepared.receiptHandle || !string(result.record?.id) || result.record?.text !== text || result.record?.expiresAt !== expiresAt || !Number.isSafeInteger(result.record?.revision) || result.record.revision < 1) throw new Error('记忆保存结果尚未确认。');
         saved = true;
         if (!alive.current) return;
         rememberReceipt(result, 'create');
@@ -721,6 +738,24 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
     setSelection({ ...selection, value: object(latestMemory.value), record, originalText: string(record.text), draft: keepDraft ? selection.draft : string(record.text), historical: historicalMemory(record) });
     setLatestMemory(null); setMemoryConflict(false); setMemoryUnknown(false); setError(''); setNotice(keepDraft ? '输入已保留，请核对后保存' : '已使用最新内容');
   };
+  const shortenDuplicate = () => {
+    const frozen = current.current.feedback;
+    if (!frozen || current.current.view !== 'memories' || !duplicateRetention(frozen) || busy.current) return;
+    const receipt = frozen.value, handle = string(receipt.shortenReviewHandle), record = receipt.record, until = receipt.requestedExpiresAt;
+    if (!handle || !record || !string(record.id) || !Number.isSafeInteger(record.revision) || record.revision < 1 || !Number.isSafeInteger(until)) return;
+    if (!(receipt.shortenReviewExpiresAt > Date.now()) || until <= Date.now()) {
+      setFeedback({ ...frozen, value: { ...receipt, shortenReviewHandle: '' } }); setNotice('原期限未改。核对窗口已过期，请重新选择期限。'); return;
+    }
+    void action('正在缩短原记忆有效期', async () => {
+      const pending: MemoryFeedback = { value: { receiptHandle: handle, undoAvailable: false }, operation: 'shorten', needsQuery: true, targetId: record.id, term: { id: record.id, revision: record.revision, until } };
+      setFeedback(pending);
+      const result = object(await call('profile.memory.confirm', { reviewHandle: handle }));
+      if (!validShortenReceipt(result, pending)) throw new Error('有效期结果尚未核对，请查询这次修改，不要重复提交。');
+      if (!alive.current) return;
+      setFeedback({ ...pending, value: result, needsQuery: false });
+      if (result.status === 'saved') try { await readSnapshot(); } catch { throw new Error('原记忆的有效期已缩短；列表暂未刷新。'); }
+    });
+  };
   const readReceipt = (undo = false) => {
     const frozen = current.current.feedback;
     if (!frozen || !string(frozen.value.receiptHandle) || (undo && (frozen.needsQuery || frozen.value.status !== 'saved' || frozen.value.undoAvailable !== true || !['create', 'accept'].includes(frozen.operation)))) return;
@@ -736,7 +771,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
           // arrive after the editor has been unlocked for a new explicit save.
           result = object(await call('profile.memory.query', { receiptHandle: frozen.value.receiptHandle }));
         }
-        if (result.receiptHandle !== frozen.value.receiptHandle || !['not_submitted', 'settings_required', 'saved', 'already_saved', 'reverted', 'unknown', 'conflict'].includes(result.status) || result.status === 'settings_required' && !preferenceSectionOf(result)) throw new Error('这次修改的回执尚未完整读取。');
+        if (result.receiptHandle !== frozen.value.receiptHandle || !['not_submitted', 'settings_required', 'saved', 'already_saved', 'reverted', 'unknown', 'conflict', 'unchanged'].includes(result.status) || (result.status === 'unchanged' || frozen.operation === 'shorten' && result.status === 'saved') && !validShortenReceipt(result, frozen) || result.status === 'settings_required' && !preferenceSectionOf(result)) throw new Error('这次修改的回执尚未完整读取。');
         if (!alive.current) return;
         settled = true;
         setFeedback({ ...frozen, value: result, needsQuery: false });
@@ -792,6 +827,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   const candidateResultUnclear = !!selection?.candidate && feedback?.targetId === selection.id
     && (feedback.needsQuery || feedback.value.status === 'unknown');
   const relatedRecords = rows(selection?.value.relatedRecords);
+  const retention = feedback ? duplicateRetention(feedback) : '';
   const feedbackVisible = !!feedback && (['memories', 'memory', 'memory-history'].includes(view) || view === 'memory-new' && (createUnknown || feedback.value.status === 'settings_required'));
   const preferenceSection = feedback && !feedback.needsQuery ? preferenceSectionOf(feedback.value) : null;
   const headingLabel = view === 'memory' && selection?.candidate ? '记忆建议' : view === 'memory' && selection?.historical ? '记忆详情' : labels[view];
@@ -821,8 +857,10 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
         {notice && <MotionFeedback identity={notice} className="pw-profile-feedback" role="status">{['已保存', '记忆已删除', '已记住', '已忽略', '当前内容已核对'].includes(notice) && <IconCheck size={15} aria-hidden="true" />}{notice}</MotionFeedback>}
         {feedbackVisible && feedback && <MotionFeedback identity={JSON.stringify([feedback.operation, feedback.targetId, feedback.value.status, feedback.needsQuery, feedback.value.undoAvailable])} className="pw-profile-feedback pw-profile-memory-feedback" role="status">
           <div className="pw-profile-receipt-heading">{!feedback.needsQuery && ['saved', 'reverted'].includes(feedback.value.status) && <IconCheck size={16} aria-hidden="true" />}<span>{feedbackLabel(feedback)}</span></div>
+          {retention && <p>{retention}</p>}
           {feedback.value.undoUnavailableReason && <p>{string(feedback.value.undoUnavailableReason)}</p>}
           <div className="pw-profile-actions">
+            {view === 'memories' && retention && string(feedback.value.shortenReviewHandle) && <Button variant="secondary" size="small" disabled={locked || !supported('profile.memory.confirm')} onClick={shortenDuplicate}>仅缩短这条原记忆</Button>}
             {preferenceSection && <Button variant="secondary" size="small" trailingIcon={IconChevronRight} disabled={locked} onClick={() => openEditor(preferenceSection)}>去{preferenceSection === 'communication' ? '交流偏好' : '做事偏好'}</Button>}
             {!feedback.needsQuery && ['saved', 'already_saved', 'conflict'].includes(feedback.value.status) && string((feedback.value.record || feedback.value.candidate)?.id) && feedback.operation !== 'forget' && <Button variant="ghost" size="small" disabled={locked} onClick={() => guarded(() => openMemory(feedback.value.record || feedback.value.candidate, !feedback.value.record))}>查看{feedback.value.status === 'conflict' ? '最新记忆' : feedback.value.candidate && !feedback.value.record ? '待确认内容' : ''}</Button>}
             {!feedback.needsQuery && feedback.value.status === 'saved' && feedback.value.undoAvailable === true && ['create', 'accept'].includes(feedback.operation) && supported('profile.memory.undo') && <Button variant="ghost" size="small" leadingIcon={IconUndo} disabled={locked} onClick={() => guarded(() => readReceipt(true))}>撤销这次保存</Button>}

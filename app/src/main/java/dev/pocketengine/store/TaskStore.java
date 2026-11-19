@@ -953,14 +953,25 @@ public final class TaskStore {
         if(allocated!=null)allocated.accept(t.getString("id"));
         write(t);return copy(t,false);
     }
-    /** Only the native, explicitly submitted blank-draft review can create a task with its reserved request ID. */
-    public synchronized JSONObject createReviewedDraftPhone(String request,String scopeKey,String goal,String mode,java.util.function.Consumer<String> allocated)throws Exception {
+    /** No previously saved record is ever admitted here. Task, reviewed scope and first attempt commit together;
+     * service dispatch, external source reads and live controller registration are deliberately not in this transaction. */
+    public synchronized JSONObject beginReviewedDraftPhone(String request,String scopeKey,String goal,String mode,long deadline,int tools,int models,
+            int allocation,java.util.function.Consumer<String> allocated,java.util.concurrent.Callable<Boolean> ownerCurrent)throws Exception {
         requireExecutionEnabled();
         if(!"main_screen".equals(mode)&&!"background".equals(mode)||goal==null||goal.isBlank()||goal.length()>4000)throw new IllegalArgumentException("原手机草稿目标或执行模式无效");
         db.beginTransaction();try{
-            if(read(request)!=null)throw new SecurityException("原手机请求已经登记，不再创建第二项工作");
+            if(read(request)!=null||!Boolean.TRUE.equals(ownerCurrent.call()))throw new SecurityException("原手机请求或当前审阅已变化，未创建其他任务");
+            try(Cursor previous=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? LIMIT 1",new String[]{request})){
+                if(previous.moveToFirst())throw new SecurityException("已有执行记录，不能当作新草稿首次提交");
+            }
             JSONObject t=base(request,goal,"phone",mode).put("displayId","background".equals(mode)?-1:0);t.put("goalOriginClock",OwnerInputClock.capture(t.getLong("createdAt")));
-            DraftPhoneReceipts.created(db,request,scopeKey,t);allocated.accept(request);write(t);db.setTransactionSuccessful();return copy(t,false);
+            DraftPhoneReceipts.created(db,request,scopeKey,t);allocated.accept(request);write(t);
+            // Unchanged native CAS/budget/tool rules: later recovery cannot auto-configure a missing scope.
+            configureExecutionScope(request,0,deadline,tools,models);
+            JSONObject first=startAttempt(request,mode,allocation);
+            DraftPhoneReceipts.paired(db,scopeKey,first);requireExecutionEnabled();
+            if(!Boolean.TRUE.equals(ownerCurrent.call()))throw new SecurityException("原草稿窗口已变化，首次执行登记没有提交");
+            db.setTransactionSuccessful();return first;
         }finally{db.endTransaction();}
     }
     public synchronized void rememberInitialDraftPhoneAdmission(String scopeKey,JSONObject admission)throws Exception {DraftPhoneReceipts.admitted(db,scopeKey,admission);}
@@ -9375,14 +9386,48 @@ public final class TaskStore {
             item.getJSONArray("assignmentHistory").put(new JSONObject(dev.pocketengine.features.teams.TeamWorkItems.exactIdentity(item).toString()).put("status",item.optString("status")).put("endedAt",System.currentTimeMillis()).put("reason","native_owner_unstarted_handoff"));item.put("memberId",shown.getString("newMemberId")).put("assignmentId",UUID.randomUUID().toString()).put("ownerGeneration",item.getInt("ownerGeneration")+1).put("itemRevision",item.getInt("itemRevision")+1).put("status","queued").put("artifacts",new JSONArray());item.getJSONObject("draftScope").put("grantId",UUID.randomUUID().toString());plan.put("revision",plan.getInt("revision")+1);team.put("teamWorkPlan",plan);if(team.optString("status").matches("awaiting_user|paused"))team.put("status","queued");review.window.require();write(team);db.setTransactionSuccessful();review.consumed=true;return teamWorkPlanSnapshot(review.window.teamRun);
         }finally{db.endTransaction();}
     }
+    // A known stop is not permission to run past an approval, unknown effect,
+    // revoked draft scope, or an original child which has not released its Runner.
+    private void requireOwnerWorkContinuationSafe(String run,JSONObject child,JSONObject item)throws Exception{
+        requirePrivateOwner(child);
+        JSONObject identity=child.getJSONObject("teamAssignment"),origin=child.getJSONObject("origin");
+        if(!"team_assignment".equals(origin.optString("kind"))||!run.equals(origin.optString("teamRunId"))||!run.equals(identity.optString("teamRunId"))
+                ||!child.getString("id").equals(identity.getString("assignmentId"))||!dev.pocketengine.features.teams.TeamWorkItems.sameIdentity(identity,item))
+            throw new SecurityException("原文件分工的任务身份已变，请回原件核对");
+        JSONObject evidence=child.optJSONObject("evidence");if(evidence!=null&&evidence.optJSONObject("ownerQuestion")!=null)throw new SecurityException("原任务仍等你的答复，请先打开原问题");
+        JSONArray approvals=child.optJSONArray("approvals");for(int i=0;approvals!=null&&i<approvals.length();i++)if("pending".equals(approvals.getJSONObject(i).optString("state")))throw new SecurityException("原任务还有待处理审批，请打开原审批；继续不会代批");
+        try(Cursor active=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND status='running' LIMIT 1",new String[]{child.getString("id")})){if(active.moveToFirst())throw new SecurityException("原分工执行尚未退出，不能重复继续");}
+        JSONObject draft=item.getJSONObject("draftScope");
+        if(!"active".equals(draft.optString("state"))||draft.getLong("expiresAt")<=System.currentTimeMillis()||draft.getInt("remainingOperations")<1)throw new SecurityException("原分工的文件范围已撤销、到期或用尽，本次不补权限");
+    }
+    private static void requireLocalStoppedTeamDraft(JSONObject team,JSONObject item,JSONObject child)throws Exception {
+        JSONObject identity=child.getJSONObject("teamAssignment"),scope=team.getJSONObject("teamWriteScope");
+        if(!child.optString("status").matches("paused|failed|interrupted")||child.optString("runId").isEmpty()||scope.has("projectSelection")||item.has("remoteSelection")
+                ||item.has("projectSelection")||identity.has("remoteSelection")||identity.has("projectSelection")||child.has("teamProject"))
+            throw new SecurityException("仅可从这里继续已明确停下的本机选定文件分工；请回原任务核对实际范围");
+    }
     public synchronized TeamWorkReview prepareTeamWorkContinuation(TeamWorkWindow window,String itemId,int itemRevision,int ownerGeneration)throws Exception {
+        return prepareTeamWorkContinuation(window,itemId,itemRevision,ownerGeneration,false);
+    }
+    public synchronized TeamWorkReview prepareLocalTeamWorkContinuation(TeamWorkWindow window,String itemId,int itemRevision,int ownerGeneration)throws Exception{
+        return prepareTeamWorkContinuation(window,itemId,itemRevision,ownerGeneration,true);
+    }
+    private TeamWorkReview prepareTeamWorkContinuation(TeamWorkWindow window,String itemId,int itemRevision,int ownerGeneration,boolean localOnly)throws Exception{
         if(window==null||window.issuer!=this)throw new SecurityException("不是原主人工作项窗口");window.require();JSONObject team=teamWriteTask(window.teamRun),plan=team.getJSONObject("teamWorkPlan"),item=dev.pocketengine.features.teams.TeamWorkItems.find(plan.getJSONArray("items"),itemId),child=required(item.getString("assignmentId"));currentTeamWorkItem(team,new JSONObject(item.toString()).put("assignmentId",child.getString("id")));teamWorkPlanParent(window.teamRun);
         if(item.getInt("itemRevision")!=itemRevision||item.getInt("ownerGeneration")!=ownerGeneration||hasUnresolved(child.getString("id"))||teamHasPendingQuestion(child)||!child.optString("status").matches("paused|awaiting_user|needs_confirmation|interrupted|failed|cancelled"))throw new SecurityException("原工作项未处于确定安全等待点；未知操作或未回答问题不能重放");
-        JSONObject queued=child.optJSONObject("teamDraftContinuation");if(queued!=null&&!queued.has("runId"))throw new SecurityException("原继续已登记但尚未实际启动；请刷新核对原队列，不重复预留或替换继续身份");JSONObject budget=teamBudgetSnapshot(window.teamRun);if(budget.getInt("remainingModelRequests")<1||budget.getInt("remainingToolOperations")<1)throw new SecurityException("原父预算已用尽，此继续不追加额度");return new TeamWorkReview(this,window,null,new JSONObject().put("kind","continue").put("planId",plan.getString("planId")).put("workItem",dev.pocketengine.features.teams.TeamWorkItems.exactIdentity(item)).put("runId",child.getString("runId")).put("epoch",child.getInt("coordinatorEpoch")).put("parentBudget",budget).put("budgetChanged",false).put("expiresAt",Math.min(plan.getLong("expiresAt"),System.currentTimeMillis()+120_000)));
+        requireOwnerWorkContinuationSafe(window.teamRun,child,item);if(localOnly)requireLocalStoppedTeamDraft(team,item,child);
+        JSONObject queued=child.optJSONObject("teamDraftContinuation");if(queued!=null&&!queued.has("runId"))throw new SecurityException("原继续已登记但尚未实际启动；请刷新核对原队列，不重复预留或替换继续身份");JSONObject budget=teamBudgetSnapshot(window.teamRun);if(budget.getInt("remainingModelRequests")<1||budget.getInt("remainingToolOperations")<1)throw new SecurityException("原父预算已用尽，此继续不追加额度");return new TeamWorkReview(this,window,null,new JSONObject().put("kind","continue").put("planId",plan.getString("planId")).put("workItem",dev.pocketengine.features.teams.TeamWorkItems.exactIdentity(item)).put("runId",child.getString("runId")).put("epoch",child.getInt("coordinatorEpoch")).put("parentBudget",budget).put("budgetChanged",false).put("localDraftOnly",localOnly).put("stoppedStatus",child.getString("status")).put("title",item.getString("title")).put("files",new JSONArray(item.getJSONArray("files").toString())).put("draftOperationsRemaining",item.getJSONObject("draftScope").getInt("remainingOperations")).put("expiresAt",Math.min(Math.min(plan.getLong("expiresAt"),item.getJSONObject("draftScope").getLong("expiresAt")),System.currentTimeMillis()+120_000)));
     }
     public synchronized JSONObject approveTeamWorkContinuation(TeamWorkReview review,String digest,int runGeneration,int memberGeneration)throws Exception {
         if(review==null||review.issuer!=this||review.consumed||review.plan!=null||!review.digest.equals(digest))throw new SecurityException("不是本次精确原工作项继续审阅");review.window.require();if(review.pageGeneration!=review.window.pageGeneration)throw new SecurityException("原前台审阅已离开，请重新核对");JSONObject shown=new JSONObject(review.data);if(!shown.optString("kind").equals("continue"))throw new SecurityException("不是原工作项继续");db.beginTransaction();try{JSONObject team=teamWriteTask(review.window.teamRun),item=currentTeamWorkItem(team,shown.getJSONObject("workItem")),child=required(item.getString("assignmentId")),owner=teamBudgetOwner(team),pool=teamBudget(owner);teamWorkPlanParent(review.window.teamRun);
             if(!shown.getString("runId").equals(child.getString("runId"))||shown.getInt("epoch")!=child.getInt("coordinatorEpoch")||shown.getLong("expiresAt")<=System.currentTimeMillis()||hasUnresolved(child.getString("id"))||teamHasPendingQuestion(child)||!child.optString("status").matches("paused|awaiting_user|needs_confirmation|interrupted|failed|cancelled"))throw new SecurityException("原child/epoch等待点已变化或效果未知");
+            requireOwnerWorkContinuationSafe(review.window.teamRun,child,item);
+            if(shown.optBoolean("localDraftOnly")){
+                requireLocalStoppedTeamDraft(team,item,child);
+                if(!shown.getString("stoppedStatus").equals(child.optString("status")))throw new SecurityException("原停点已变化，请重新审阅");
+            }
+            JSONObject currentBudget=teamBudgetSnapshot(review.window.teamRun);if(currentBudget.getInt("remainingModelRequests")<1||currentBudget.getInt("remainingToolOperations")<1)throw new SecurityException("原父预算已用尽，本次不补额度");
+            if(!canonical(shown.getJSONArray("files")).equals(canonical(item.getJSONArray("files"))))throw new SecurityException("原分工文件范围已改变，请重新核对");
             JSONObject previousContinuation=child.optJSONObject("teamDraftContinuation");if(previousContinuation!=null&&!previousContinuation.has("runId"))throw new SecurityException("原工作项已有未消费继续claim，不覆盖或重复预留");JSONObject binding=new JSONObject().put("teamRunId",review.window.teamRun).put("runGeneration",runGeneration).put("memberGeneration",memberGeneration).put("childTaskId",child.getString("id")).put("childRunId",child.getString("runId")).put("childEpoch",child.getInt("coordinatorEpoch")).put("memberId",item.getString("memberId")).put("assignmentId",child.getString("id"));JSONObject reservation=dev.pocketengine.features.teams.TeamParentBudget.reserve(pool,binding,"member","work_continue:"+digest,1,0);child.put("teamDraftContinuation",new JSONObject().put("reservationId",reservation.getString("reservationId")).put("workItemId",item.getString("workItemId")).put("runGeneration",runGeneration).put("memberGeneration",memberGeneration));item.put("status","queued");team.put("status","queued");owner.put("teamReservationPool",pool);review.window.require();write(owner);write(child);write(team);db.setTransactionSuccessful();review.consumed=true;return teamWorkPlanSnapshot(review.window.teamRun);
         }finally{db.endTransaction();}
     }
@@ -10676,7 +10721,8 @@ public final class TaskStore {
                     else approval.put("state","invalidated").put("reason","original_edit_run_ended");
                 }
                 if(approval.optString("state").equals("approved")&&approval.optLong("expiresAt")>now){if("project_execute".equals(approval.optString("tool"))&&approval.optJSONObject("arguments")!=null&&approval.getJSONObject("arguments").has("planRef"))continueProjectPlanApproval(t,approval,runId,epoch,now);else approval.put("runId",runId);}}
-            t.remove("automationConditionWaitId");t.remove("nativeExecutionMode");t.put("runId",runId).put("coordinatorEpoch",epoch).put("executionMode",mode).put("status","preparing").put("cancelRequested",false).put("stepCeiling",ceiling).put("approvalState","granted").put("summary","正在恢复任务并重新观察当前现场");write(t);db.setTransactionSuccessful();return copy(t,false);
+            boolean firstPhone=phoneMode&&"phone".equals(t.optString("kind"))&&epoch==1&&t.optString("runId").isEmpty();
+            t.remove("automationConditionWaitId");t.remove("nativeExecutionMode");t.put("runId",runId).put("coordinatorEpoch",epoch).put("executionMode",mode).put("status","preparing").put("cancelRequested",false).put("stepCeiling",ceiling).put("approvalState","granted").put("summary",firstPhone?"首次手机执行已登记，尚无本轮屏幕回执":"正在恢复任务并重新观察当前现场");write(t);db.setTransactionSuccessful();return copy(t,false);
         }finally{db.endTransaction();}
     }
     /** Native owner viewer only. Read canonical task/run/lease facts without audit history,

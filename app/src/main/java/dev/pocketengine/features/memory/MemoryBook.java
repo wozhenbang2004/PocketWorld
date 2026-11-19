@@ -1176,6 +1176,25 @@ public final class MemoryBook {
     }
     /** Pre-mutation receipt belongs to the existing host journal, never another memory transaction store. */
     public interface BeforeForget {void record(JSONArray removedRefs)throws Exception;}
+    /** Only an active, unshared handwritten leaf can be shortened here; never change another saved note or candidate. */
+    public synchronized JSONObject shortenManualNoteReviewed(JSONObject authenticatedScope,String id,long revision,long until,BeforeForget receipt,long now)throws Exception {
+        Scope scope=MemoryArchive.ownerScope(authenticatedScope);JSONObject row=records.get(id);
+        if(row==null||!scope.matches(row)||row.getLong("revision")!=revision||!PersonalMemorySemantics.canShortenManualNote(row,until,now)
+                ||!retrievalActiveIds(scope,now).contains(id))return retentionUnchanged("原条目已变化、已到期或不再是当前手写记忆。");
+        if(retractTargets(scope,id).size()!=1)return retentionUnchanged("这条记忆已有派生条目，未单独更改期限。");
+        for(JSONObject candidate:learningCandidates.values())if(scope.matches(candidate)&&"pending".equals(candidate.optString("status"))){
+            JSONArray refs=candidate.optJSONArray("recordRefs");
+            for(int i=0;refs!=null&&i<refs.length();i++)if(id.equals(refs.getJSONObject(i).getString("id")))return retentionUnchanged("有待确认的内容引用这条记忆，未单独更改期限。");
+        }
+        JSONArray refs=removalRefs(scope,Set.of(id));java.util.Objects.requireNonNull(receipt).record(new JSONArray(refs.toString()));
+        reviewedRecord(scope,id,revision);
+        if(until<=System.currentTimeMillis())throw new IllegalStateException("所选期限已经过去；请核对原操作。");
+        JSONObject updated=save(authenticatedScope,new JSONObject().put("id",id).put("revision",revision).put("text",row.getString("text")).put("expiresAt",until),now,false,false);
+        return new JSONObject().put("record",viewRecord(updated)).put("saved",true).put("removedRefs",refs).put("executionAuthorized",false);
+    }
+    private static JSONObject retentionUnchanged(String reason)throws Exception {
+        return new JSONObject().put("saved",false).put("status","unchanged").put("message",reason).put("undoAvailable",false).put("executionAuthorized",false);
+    }
     /** Exact native correction, including a durable retirement receipt for the old revision/derivations. */
     public synchronized JSONObject correctReviewed(JSONObject scope,String id,long expectedRevision,String text,BeforeForget receipt,long now)throws Exception {
         Scope identity=learningScope(scope);JSONObject old=reviewedRecord(identity,id,expectedRevision);

@@ -94,6 +94,25 @@ public final class TaskStoreTeamWriteHost implements TeamCoordinator.BudgetHost,
         }
         public synchronized JSONObject approveTransfer(TaskStore.TeamWorkReview review,String digest)throws Exception{require();if(review==null||pending!=review||source!=null)throw new SecurityException("请先审阅此窗口的原工作项交接");JSONObject continued;if(handoffPlan!=null){TeamWorkHandoff.checkDraft(workspace,handoffPlan);if(handoffPlan.projectSelection()!=null)projects.checkSelectionCurrent(handoffPlan.projectSelection());continued=coordinator.approveWorkHandoff(mutation,()->{require();TeamWorkHandoff.checkDraft(workspace,handoffPlan);if(handoffPlan.projectSelection()!=null)projects.checkSelectionCurrent(handoffPlan.projectSelection());return tasks.approveTeamWorkHandoff(review,digest);},models.get());handoffPlan=null;mutation=null;}else{JSONObject committed=tasks.approveTeamWorkTransfer(review,digest);continued=coordinator.refreshWorkItems(run,committed);}pending=null;tasks.updateExternal(run,continued);changed.accept(run);return continued;}
         public synchronized TaskStore.TeamWorkReview reviewContinuation(String item,int itemRevision,int ownerGeneration)throws Exception{require();pendingRevision=null;mutation=null;source=null;pending=tasks.prepareTeamWorkContinuation(window,item,itemRevision,ownerGeneration);return pending;}
+        public synchronized TaskStore.TeamWorkReview reviewLocalContinuation(String item,int itemRevision,int ownerGeneration)throws Exception {
+            require();pendingRevision=null;mutation=null;source=null;pending=tasks.prepareLocalTeamWorkContinuation(window,item,itemRevision,ownerGeneration);return pending;
+        }
+        /** A web owner review may only continue the original, stopped local draft.
+         * Recheck the shown member and run under the same lock as native admission. */
+        public synchronized JSONObject approveShownLocalContinuation(TaskStore.TeamWorkReview review,String digest,int teamGeneration,int memberGeneration,int identityRevision)throws Exception {
+            require();if(review==null||pending!=review||source!=null)throw new SecurityException("请重新审阅原分工");
+            synchronized(coordinator){
+                JSONObject original=coordinator.get(run),shown=review.view(),work=shown.getJSONObject("workItem"),plan=original.getJSONObject("workPlan");
+                JSONObject item=TeamWorkItems.find(plan.getJSONArray("items"),work.getString("workItemId")),member=TeamWorkPlan.find(original.getJSONArray("members"),work.getString("memberId")),child=item.optJSONObject("assignmentTask");
+                if(!shown.optBoolean("localDraftOnly")||original.optInt("generation",-1)!=teamGeneration||member.optInt("generation",-1)!=memberGeneration||member.optInt("identityRevision",1)!=identityRevision
+                        ||member.optBoolean("exited")||!member.optString("runner","model").equals("model")||!"phone".equals(member.opt("device"))
+                        ||original.getJSONObject("productionScope").has("projectSelection")||member.has("remoteProduction")||item.has("projectSelection")||item.has("remoteSelection")
+                        ||!plan.getString("planId").equals(shown.getString("planId"))||!TeamWorkItems.sameIdentity(item,work)||child==null
+                        ||!shown.getString("runId").equals(child.optString("runId"))||!child.optString("status").matches("paused|interrupted|failed"))
+                    throw new SecurityException("原成员、分工或停点已改变，未按旧审阅继续");
+                return approveContinuation(review,digest);
+            }
+        }
         public synchronized JSONObject approveContinuation(TaskStore.TeamWorkReview review,String digest)throws Exception{require();if(review==null||pending!=review||source!=null)throw new SecurityException("请先审阅本窗口原工作项继续");JSONObject shown=review.view();JSONObject continued=coordinator.continueWorkItem(run,shown.getJSONObject("workItem").getString("workItemId"),(runGeneration,memberGeneration)->tasks.approveTeamWorkContinuation(review,digest,runGeneration,memberGeneration),models.get());pending=null;tasks.updateExternal(run,continued);changed.accept(run);return continued;}
         private void requireRevisionBase(TaskStore.TeamWorkRevisionSource source)throws Exception {
             source.checkCurrent();JSONObject original=source.view().getJSONObject("integration");if(integrations.containsKey(run)||reviews.containsKey(run)||!TeamIntegrationFiles.progress(workspace,original.getJSONObject("binding"),original.getJSONArray("receipts")).getBoolean("complete"))throw new SecurityException("原成果当前文件已变化，或原独审/整合仍在执行；请重新核对真实差异");source.checkCurrent();

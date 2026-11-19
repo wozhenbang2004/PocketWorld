@@ -108,6 +108,15 @@ public final class DeviceTaskCoordinator {
     private JSONObject taskSnapshot(JSONObject task,String caller,long authorizationEpoch)throws Exception{
         JSONArray events = task.optJSONArray("events"); long cursor = 0;
         for (int i = 0; events != null && i < events.length(); i++) cursor = Math.max(cursor, events.getJSONObject(i).optLong("seq", i + 1L));
+        JSONObject detail = DevicePrivateText.applies(task) ? DevicePrivateText.identity(task) : ordinaryDetails(task,caller,authorizationEpoch);
+        JSONObject snapshot = new JSONObject().put("protocolVersion", DeviceProtocol.VERSION).put("protocolProfile",DeviceProtocol.PROFILE).put("messageType", "TaskSnapshot")
+                .put("taskId", task.getString("id")).put("executorDeviceId", localDeviceId).put("instanceId", localInstanceId)
+                .put("state", TaskStoreDeviceTasks.wireState(task)).put("revision", Math.max(1, task.optLong("deviceStateRevision", task.optLong("updatedAt", 1))))
+                .put("eventCursor", Long.toString(cursor)).put("updatedAt", task.optLong("updatedAt", 1)).put("result", detail);
+        if (!task.optString("runId").isEmpty()) snapshot.put("runId", task.getString("runId")).put("executorEpoch", task.getInt("coordinatorEpoch"));
+        return DeviceProtocol.validateMessage(snapshot);
+    }
+    private JSONObject ordinaryDetails(JSONObject task,String caller,long authorizationEpoch)throws Exception{
         JSONObject detail = new JSONObject().put("summary", task.optString("summary")).put("origin", task.getJSONObject("origin"))
                 .put("rootTaskId", task.getString("rootTaskId")).put("remoteParentTaskId", task.optString("remoteParentTaskId"))
                 .put("executionKind", task.getString("deviceExecutionKind")).put("transportStateIsNotExecutionState", true);
@@ -127,12 +136,7 @@ public final class DeviceTaskCoordinator {
         JSONObject evidence = task.optJSONObject("evidence");
         if (evidence != null && evidence.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= 16_000) detail.put("evidence", evidence);
         else if (evidence != null) detail.put("evidenceTruncated", true).put("nextAction", "read_original_operation_receipts");
-        JSONObject snapshot = new JSONObject().put("protocolVersion", DeviceProtocol.VERSION).put("protocolProfile",DeviceProtocol.PROFILE).put("messageType", "TaskSnapshot")
-                .put("taskId", task.getString("id")).put("executorDeviceId", localDeviceId).put("instanceId", localInstanceId)
-                .put("state", TaskStoreDeviceTasks.wireState(task)).put("revision", Math.max(1, task.optLong("deviceStateRevision", task.optLong("updatedAt", 1))))
-                .put("eventCursor", Long.toString(cursor)).put("updatedAt", task.optLong("updatedAt", 1)).put("result", detail);
-        if (!task.optString("runId").isEmpty()) snapshot.put("runId", task.getString("runId")).put("executorEpoch", task.getInt("coordinatorEpoch"));
-        return DeviceProtocol.validateMessage(snapshot);
+        return detail;
     }
     public JSONObject events(PairingCoordinator.Permission permission) throws Exception {
         JSONObject args=permission.envelope().arguments();return eventPage(requireTask(permission,args.getString("taskId")),args);
@@ -142,15 +146,17 @@ public final class DeviceTaskCoordinator {
         String rawCursor = args.optString("cursor", "0");
         if (!rawCursor.matches("[0-9]{1,16}")) throw new SecurityException("无效原任务事件游标");
         long cursor = Long.parseLong(rawCursor); int limit = Math.min(32, args.optInt("limit", 20));
+        boolean privateText=DevicePrivateText.applies(task);
         JSONArray source = task.optJSONArray("events"), page = new JSONArray(); long next = cursor; boolean more = false,snapshotRequired=false;
         for (int i = 0; source != null && i < source.length(); i++) {
             JSONObject event = source.getJSONObject(i); long sequence = event.optLong("seq", i + 1L);
             if (sequence <= cursor) continue;
-            if (page.length() >= limit || page.toString().length() + event.toString().length() > 24_000) { more = true;snapshotRequired=page.length()==0; break; }
+            JSONObject visible=privateText?new JSONObject():event;
+            if (page.length() >= limit || page.toString().length() + visible.toString().length() > 24_000) { more = true;snapshotRequired=page.length()==0; break; }
             JSONObject wire = new JSONObject().put("protocolVersion", DeviceProtocol.VERSION).put("protocolProfile",DeviceProtocol.PROFILE).put("messageType", "TaskEvent")
                     .put("taskId", task.getString("id")).put("executorDeviceId", localDeviceId).put("instanceId", localInstanceId)
-                    .put("sequence", sequence).put("cursor", Long.toString(sequence)).put("kind", event.optString("type", "task_event"))
-                    .put("createdAt", Math.max(1, event.optLong("at", task.optLong("updatedAt", 1)))).put("data", event);
+                    .put("sequence", sequence).put("cursor", Long.toString(sequence)).put("kind", privateText?"private_lifecycle":event.optString("type", "task_event"))
+                    .put("createdAt", Math.max(1, event.optLong("at", task.optLong("updatedAt", 1)))).put("data", visible);
             page.put(DeviceProtocol.validateMessage(wire)); next = sequence;
         }
         return new JSONObject().put("events", page).put("nextCursor", Long.toString(next))

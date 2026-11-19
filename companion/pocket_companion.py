@@ -2912,7 +2912,7 @@ def initialize(path: Path, workspace: str):
     print("Created configuration and private token file. Enter the token on your phone; it is not printed here.")
 
 
-def main(*, config_override=None, owner_phone_receipts=False):
+def main(*, config_override=None, owner_phone_receipts=False, owner_phone_work=False):
     parser = argparse.ArgumentParser(description="PocketEngine owner Companion")
     parser.add_argument("--config", type=Path)
     parser.add_argument("--init", action="store_true")
@@ -2975,10 +2975,10 @@ def main(*, config_override=None, owner_phone_receipts=False):
         except BaseException:
             manager.close()
             raise
-    serve_original_manager(manager, owner_phone_receipts=owner_phone_receipts)
+    serve_original_manager(manager, owner_phone_receipts=owner_phone_receipts, owner_phone_work=owner_phone_work)
 
 
-def serve_original_manager(manager, *, owner_phone_receipts=False):
+def serve_original_manager(manager, *, owner_phone_receipts=False, owner_phone_work=False):
     """Continue the SAME original manager after an explicit native owner action.
 
     Pairing has no new Agent, HTTP-token permission conversion or parallel DB.
@@ -3004,6 +3004,13 @@ def serve_original_manager(manager, *, owner_phone_receipts=False):
             context.load_cert_chain(config["tlsCert"], config["tlsKey"])
             server.socket = context.wrap_socket(server.socket, server_side=True, do_handshake_on_connect=False)
         print("Pocket World Companion listening; authentication required; press Ctrl+C to stop.")
+        if owner_phone_work and owner_phone_receipts: raise ValueError("Select one native owner entry")
+        if owner_phone_work and os.name == "nt" and getattr(sys, "frozen", False) and manager.device_companion is not None:
+            try:
+                from desktop_phone_goal import open_owner_work
+                receipt_entry = open_owner_work(manager)
+            except Exception:
+                print("Local text handoff unavailable; the original Companion is still serving.", file=sys.stderr)
         if owner_phone_receipts and os.name == "nt" and getattr(sys, "frozen", False) and manager.device_companion is not None:
             try:
                 from desktop_phone_receipts import open_local_entry

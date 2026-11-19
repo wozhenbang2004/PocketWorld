@@ -39,15 +39,25 @@ final class DraftPhoneReceipts {
         ContentValues record=new ContentValues();record.put("request_id",id(request));record.put("scope_sha",scope);record.put("goal_sha",hash(task.getString("goal")));record.put("mode",task.getString("executionMode"));record.put("created_ms",task.getLong("createdAt"));record.put("state","created");
         db.insertOrThrow(TABLE,null,record);
     }
-    // Only after the first, explicitly reviewed start obtained its own host receipt. A later "continue" is never substituted.
+    /** Distinguish a committed original SQL run from a receipt for requesting Android's service. */
+    static void paired(SQLiteDatabase db,String scopeKey,JSONObject first)throws Exception{
+        if(!db.inTransaction()||first.getInt("coordinatorEpoch")!=1)throw new SecurityException("不能把后继轮次登记成草稿的首次执行");
+        String task=id(first.getString("id")),run=id(first.getString("runId"));
+        requireFirst(db,task,run);ContentValues v=new ContentValues();v.put("first_run",run);v.put("state","paired");
+        if(db.update(TABLE,v,"request_id=? AND scope_sha=? AND state='created' AND first_run IS NULL",new String[]{task,scope(scopeKey)})!=1)
+            throw new SecurityException("原草稿的首次执行记录已变化");
+    }
+    private static void requireFirst(SQLiteDatabase db,String task,String run){
+        try(Cursor c=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND run_id=? AND epoch=1",new String[]{task,run})){
+            if(!c.moveToFirst())throw new SecurityException("原首次执行身份尚不可核对");
+        }
+    }
+    // Only after the explicit start obtained its own original host receipt. Do not take a later "continue".
     static void admitted(SQLiteDatabase db,String scopeKey,JSONObject ack)throws Exception{
         String task=id(ack.getString("taskId")),run=id(ack.getString("runId"));
         if(ack.getInt("epoch")!=1)throw new SecurityException("这不是新草稿的原首次准入");
-        try(Cursor c=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND run_id=? AND epoch=1",new String[]{task,run})){
-            if(!c.moveToFirst())throw new SecurityException("原首次准入尚不可核对");
-        }
-        ContentValues receipt=new ContentValues();receipt.put("first_run",run);
-        if(db.update(TABLE,receipt,"request_id=? AND scope_sha=? AND state='created' AND (first_run IS NULL OR first_run=?)",new String[]{task,scope(scopeKey),run})!=1)
+        requireFirst(db,task,run);ContentValues receipt=new ContentValues();receipt.put("first_run",run);receipt.put("state","created");
+        if(db.update(TABLE,receipt,"request_id=? AND scope_sha=? AND ((state='paired' AND first_run=?) OR (state='created' AND (first_run IS NULL OR first_run=?)))",new String[]{task,scope(scopeKey),run,run})!=1)
             throw new SecurityException("原草稿的首次启动记录已变化");
     }
     private static boolean direct(JSONObject t,String request){
@@ -62,12 +72,16 @@ final class DraftPhoneReceipts {
             if(!scope.equals(c.getString(0)))throw new SecurityException("原手机请求不属于当前新对话草稿");
             if("retired".equals(c.getString(4)))return out.put("status","retired");
             JSONObject t=lookup.read(request);
-            if(!"created".equals(c.getString(4))||!direct(t,request)||t.optLong("createdAt")!=c.getLong(3)||!hash(t.optString("goal")).equals(c.getString(1)))
+            boolean paired="paired".equals(c.getString(4));
+            if((!paired&&!"created".equals(c.getString(4)))||!direct(t,request)||t.optLong("createdAt")!=c.getLong(3)||!hash(t.optString("goal")).equals(c.getString(1)))
                 return out.put("status","unavailable");
             out.put("accepted",true).put("taskId",request).put("status","saved").put("createdAt",c.getLong(3)).put("mode",c.getString(2));
             if(brief){String g=t.getString("goal");out.put("goal",g.substring(0,g.offsetByCodePoints(0,Math.min(120,g.codePointCount(0,g.length())))));}
             if(!c.isNull(5))try(Cursor run=db.rawQuery("SELECT status FROM runs WHERE task_id=? AND run_id=? AND epoch=1",new String[]{request,c.getString(5)})){
-                if(run.moveToFirst())return out.put("admitted",true).put("admissionState","admitted").put("runId",c.getString(5)).put("epoch",1).put("status",run.getString(0));
+                if(run.moveToFirst()){
+                    out.put("runId",c.getString(5)).put("epoch",1).put("status",run.getString(0));
+                    return paired?out.put("admissionState","run_recorded"):out.put("admitted",true).put("admissionState","admitted");
+                }
             }
             try(Cursor any=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? LIMIT 1",new String[]{request})){
                 if(c.isNull(5)&&!any.moveToFirst()&&t.optString("runId").isEmpty()&&t.optInt("coordinatorEpoch")==0)
@@ -86,7 +100,7 @@ final class DraftPhoneReceipts {
     }
     static JSONArray recent(SQLiteDatabase db,Lookup lookup,String scopeKey,boolean details)throws Exception{
         String scope=scope(scopeKey);JSONArray rows=new JSONArray();if(!exists(db))return rows;
-        try(Cursor c=db.rawQuery("SELECT s.request_id FROM "+TABLE+" s JOIN tasks t ON t.task_id=s.request_id WHERE s.scope_sha=? AND s.state='created' ORDER BY s.created_ms DESC,s.request_id LIMIT 5",new String[]{scope})){
+        try(Cursor c=db.rawQuery("SELECT s.request_id FROM "+TABLE+" s JOIN tasks t ON t.task_id=s.request_id WHERE s.scope_sha=? AND s.state IN ('created','paired') ORDER BY s.created_ms DESC,s.request_id LIMIT 5",new String[]{scope})){
             while(c.moveToNext()){String request=c.getString(0);if(!details){rows.put(request);continue;}JSONObject row=query(db,lookup,scopeKey,request,true);if(row.optBoolean("accepted"))rows.put(row);}
         }return rows;
     }

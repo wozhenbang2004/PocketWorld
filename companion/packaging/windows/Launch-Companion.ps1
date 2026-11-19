@@ -2,10 +2,11 @@
 [CmdletBinding()]
 param([ValidateSet('Serve','OpenDesk','Initialize','StopDesktop','RecoverDesktop','PairDevices','Health','ListHarnesses','EnableHarness')][string]$Action='Serve',
       [string]$Workspace, [string]$Environment, [string]$Harness, [string]$HarnessDefinition, [switch]$AllowHarnessWrite,
-      [ValidatePattern('^[0-9a-f]{64}$')][string]$ReviewedConfigSha256, [switch]$PhoneReceipts)
+      [ValidatePattern('^[0-9a-f]{64}$')][string]$ReviewedConfigSha256, [switch]$PhoneReceipts, [switch]$PhoneWork)
 $ErrorActionPreference='Stop'
 if ($ReviewedConfigSha256 -and $Action -ne 'Serve') { throw 'Reviewed settings only narrow the installed Serve action.' }
-if ($PhoneReceipts -and ($Action -ne 'Serve' -or -not $ReviewedConfigSha256)) { throw 'The local receipt entry needs an explicitly reviewed installed service start.' }
+if ($PhoneReceipts -and $PhoneWork) { throw 'Choose one explicit local owner entry.' }
+if (($PhoneReceipts -or $PhoneWork) -and ($Action -ne 'Serve' -or -not $ReviewedConfigSha256)) { throw 'The chosen local entry needs an explicitly reviewed installed service start.' }
 if ($Action -notin @('ListHarnesses','EnableHarness') -and ($Environment -or $Harness -or $HarnessDefinition -or $AllowHarnessWrite)) {
     throw 'Harness arguments require the explicit ListHarnesses or EnableHarness owner action.'
 }
@@ -33,7 +34,8 @@ if ($Action -eq 'OpenDesk') {
 else {
     Assert-PWFixedConfig $paths $paths.Config -Required
     if ($Action -eq 'Serve') {
-        if ($PhoneReceipts) { & $exe --serve --config $paths.Config --reviewed-config-sha256 $ReviewedConfigSha256 --owner-phone-receipts }
+        if ($PhoneWork) { & $exe --serve --config $paths.Config --reviewed-config-sha256 $ReviewedConfigSha256 --owner-phone-work }
+        elseif ($PhoneReceipts) { & $exe --serve --config $paths.Config --reviewed-config-sha256 $ReviewedConfigSha256 --owner-phone-receipts }
         elseif ($ReviewedConfigSha256) { & $exe --serve --config $paths.Config --reviewed-config-sha256 $ReviewedConfigSha256 }
         else { & $exe --serve --config $paths.Config }
     }

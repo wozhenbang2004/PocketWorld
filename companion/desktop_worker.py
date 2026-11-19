@@ -64,6 +64,7 @@ def main():
     parser = argparse.ArgumentParser(description="PocketWorld lightweight Windows Companion (user-session only)")
     parser.add_argument("--config", type=Path)
     parser.add_argument("--reviewed-config-sha256", help="Reject startup unless these exact reviewed installed settings are still current")
+    parser.add_argument("--owner-phone-work", action="store_true", help="Keep a separate human-confirmed text handoff entry for this installed service")
     parser.add_argument("--owner-phone-receipts", action="store_true", help="Keep a read-only local phone work receipt icon for this explicitly started installed service")
     actions = parser.add_mutually_exclusive_group(required=True)
     actions.add_argument("--serve", action="store_true")
@@ -86,8 +87,9 @@ def main():
     args = parser.parse_args()
     if args.reviewed_config_sha256 is not None and (not args.serve or args.development_state):
         parser.error("A reviewed-config digest only narrows a fixed installed --serve action")
-    if args.owner_phone_receipts and (not args.serve or not args.reviewed_config_sha256 or not getattr(sys, "frozen", False) or os.name != "nt"):
-        parser.error("The receipt entry only belongs to this explicitly started installed Windows service")
+    if args.owner_phone_receipts and args.owner_phone_work: parser.error("Choose one explicit owner entry")
+    if (args.owner_phone_receipts or args.owner_phone_work) and (not args.serve or not args.reviewed_config_sha256 or not getattr(sys, "frozen", False) or os.name != "nt"):
+        parser.error("The selected owner entry only belongs to this explicitly started installed Windows service")
     if (args.environment or args.harness_definition or args.allow_harness_write) and not (args.list_harnesses or args.enable_harness):
         parser.error("Harness configuration arguments require --list-harnesses or --enable-harness")
     if args.list_harnesses and (args.harness_definition or args.allow_harness_write):
@@ -236,7 +238,7 @@ def main():
     try:
         from pocket_companion import main as original_main
         sys.argv = [sys.argv[0], "--config", str(config)]
-        original_main(config_override=launch, owner_phone_receipts=args.owner_phone_receipts)
+        original_main(config_override=launch, owner_phone_receipts=args.owner_phone_receipts, owner_phone_work=args.owner_phone_work)
     finally:
         if handle is not None:
             from ctypes import wintypes as w

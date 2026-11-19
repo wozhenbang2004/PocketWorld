@@ -1,4 +1,5 @@
 """Local-only project source review; no replica, service, install or authorization."""
+import threading
 import time
 import unicodedata
 
@@ -22,12 +23,86 @@ REASONS = {
     "configuration_changed": "已登记的工作区或安装配置已改变，请回到准备页重新选择。",
     "changed": "读取期间原 Git 引用或布局已改变，请在你需要时重新核对。",
     "limit": "原 Git 元数据超过本机预检范围，不能据此确认项目版本。",
+    "original_source_changed": "刚才所选仓库、分支或提交已改变。没有改查新版本，请回准备页重新选择。",
+    "unmapped_name": "有目录条目无法按本机 Windows 文件名规则原样表示。不会重命名、替换字符或跳过。",
+    "protected_or_unselected": "提交内有本机项目策略排除的私有路径或未选择的生成目录。没有展开它，也不显示私有名称。",
+    "name_collision": "同一目录中的不同名字会在 Windows 大小写比较或保守的 Unicode 别名检查中冲突。不会覆盖或合并。",
+    "symbolic_entry": "原树中有符号链接，不是普通文件；未跟随，也未把它当成文件。",
+    "submodule_entry": "原树中有独立子模块的提交引用，不是当前仓库的普通目录；未展开或拉取。",
+    "name_comparison_unavailable": "未取得本机原生的文件名比较结果，不据此宣称路径可以落盘。",
+    "tree_limit": "目录数量、深度、元数据或读取时间超过本次限定，没有将截断的清单当成完整结果。",
+    "original_mapping_changed": "原仓库、原提交和刚才的完整目录映射未能再次对上。没有读取另一个文件集。",
+    "content_limit": "已提交文件数、单个文件、总量或本机核对时间超过这次的界限，没有把部分文件当作完整源码。",
+    "review_cancelled": "已结束此次本地核对。",
     "native_read_unavailable": "当前无法拿到准确的原生只读句柄，可能文件正被修改或不可读。没有改变仓库。",
 }
 
 
 def _display(value):
     return "".join(ch if not unicodedata.category(ch).startswith("C") else "�" for ch in value)
+
+
+def _review_source(context,settings,source,locked,*,content=False):
+    stopped, done = threading.Event(), threading.Event()
+    result, auto_finish = {}, False
+    expires = time.monotonic()+(120 if content else 30)
+    heading = "核对已提交的文件正文" if content else "核对这次提交的目录和文件名"
+    status = f"{source['commit'][:12]} · 正在核对原仓库和已提交目录。关闭即可停止，不会在后台重试。"
+    def count(n,total,size):
+        nonlocal status
+        status = f"{source['commit'][:12]} · 已核对 {n}/{total} 个文件（{size/1048576:.1f} MiB）。关闭即可停止。"
+    def checkpoint():
+        if stopped.is_set(): raise Incomplete("review_cancelled")
+        if time.monotonic()>expires: raise Incomplete("content_limit" if content else "tree_limit")
+    def worker():
+        try: result.update(capture(context,settings,source["environmentId"],layout_for=source,content=content,checkpoint=checkpoint,on_count=count))
+        except Exception: result.update(sourceVerified=False,reason="native_read_unavailable")
+        finally: done.set()
+    def close_progress():
+        nonlocal auto_finish
+        if locked(): stopped.set(); return True
+        if done.is_set(): auto_finish = True; return True
+        return False
+    task = threading.Thread(target=worker,name="owner-selected-git-name-review")
+    task.start()
+    try:
+        _dialog(heading,status,[],retire=close_progress,progress=(lambda: status) if content else None)
+    finally:
+        stopped.set()
+        task.join()
+    if not auto_finish or locked(): return
+    check = result.get("committedNameReview") if result.get("sourceVerified") else None
+    if not check or not check["complete"]:
+        code = check["reason"] if check else result.get("reason")
+        why = REASONS.get(code,REASONS["native_read_unavailable"])
+        if check and check.get("example"):
+            # Private/unprintable names have no example; do not log any path.
+            sample = _display(check["example"])
+            why += "\n原提交中的条目：" + (sample if len(sample)<=176 else "…"+sample[-175:])
+        _dialog("没有确认完整的目录映射",why+"\n没有创建文件、目录或副本。",[],retire=locked)
+        return
+    if content:
+        actual = result.get("committedContentReview",{})
+        if not actual.get("complete"):
+            why = REASONS.get(actual.get("reason"),REASONS["native_read_unavailable"])
+            _dialog("没有确认全部已提交文件的正文",why+"\n没有保存部分文件清单、写入或启动工作。",[],retire=locked)
+            return
+        text = f"{source['commit'][:12]} · {actual['files']} 个文件，{actual['logicalBytes']/1048576:.1f} MiB。"
+        text += "\n已逐一核实 Git 保存的原始字节；没有读取未提交改动、应用过滤器、复制文件或启动执行器。"
+        if actual["lfsHeaderFiles"]: text += f"\n{actual['lfsHeaderFiles']} 个文件含 LFS 指针版本头；已核实的是指针，不是外部大文件。"
+        if _dialog("原提交的文件正文已核对",text,[("digest","查看完整内容清单编号")],retire=locked)=="digest" and not locked():
+            _dialog("已提交文件内容编号",actual["contentManifestDigest"]+"\n按原路径、模式、Git 对象号、长度和 SHA-256 绑定。只是本次本机核对，不是副本、权限或交付回执。",[],retire=locked)
+        return
+    text = f"{source['commit'][:12]} · {check['directories']} 个子目录，{check['files']} 个普通文件。"
+    text += "\n已核对各层 Git 目录对象、原文件名与本机命名规则；未打开文件正文，未验证目标卷，未创建副本。"
+    action = _dialog("原提交的目录映射已核对",text,
+        [("content","核对这些文件的已提交正文\n仅本机读取原 Git 对象并计算摘要，不显示文件内容或创建副本。"),
+         ("digest","查看这次目录映射的完整编号")],retire=locked)
+    if locked(): return
+    if action=="content":
+        _review_source(context,settings,result,locked,content=True)
+    elif action=="digest":
+        _dialog("目录记录编号",check["mappingDigest"]+"\n绑定该根树的原路径、模式和对象编号，不是文件正文或交付回执。",[],retire=locked)
 
 
 def open_source(context, settings):
@@ -60,7 +135,13 @@ def open_source(context, settings):
         where = "分离 HEAD" if branch is None else "分支 "+_display(branch.removeprefix("refs/heads/"))
         summary = f"{key} · {where}\n{when} 核实提交 {result['commit'][:12]} 与其根树。"
         summary += "\n这是已提交的版本；未检查未提交改动、子目录或所有对象，未创建副本，也未开放项目生产。"
-        if _dialog("已核对这台 Windows 上的 Git 来源",summary,[("identity","查看完整仓库与源版本编号")],retire=locked)=="identity" and not locked():
+        action = _dialog("已核对这台 Windows 上的 Git 来源",summary,
+             [("names","检查这次提交的目录映射\n逐层核对文件名和目录；不读取文件正文或创建副本。"),
+              ("identity","查看完整仓库与源版本编号")],retire=locked)
+        if locked(): return
+        if action=="names":
+            _review_source(context,settings,result,locked)
+        elif action=="identity":
             details = f"本机仓库标识：{result['repositoryAnchor']}\n提交 ({result['objectFormat']})：{result['commit']}\n根树：{result['tree']}"
             stores = result["objectStorage"]
             label = {"loose":"散对象","pack":"本地对象包"}

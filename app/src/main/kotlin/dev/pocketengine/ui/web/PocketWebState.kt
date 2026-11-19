@@ -63,7 +63,9 @@ internal object PocketWebState {
     fun task(row: UiTask, images: Boolean = false): JSONObject = JSONObject()
         .put("id", row.id).put("goal", row.goal).put("status", row.status)
         .put("summary", row.summary).put("executionMode", row.executionMode).put("updatedAt", row.updatedAt)
-        .put("raw", publicValue(row.raw, images))
+        .put("raw", publicValue(row.raw, images)).also { value ->
+            runCatching { dev.pocketengine.store.CloudWorkspaceJobs.receiptForTask(row.raw) }.getOrNull()?.let { value.put("hostReceipt",it) }
+        }
 
     /** Same private work relation as ownerWorkPresentation in the web view.
      * A foreground assistant reply cannot join the home merely by completing. */
