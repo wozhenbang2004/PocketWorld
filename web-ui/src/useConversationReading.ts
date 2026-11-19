@@ -16,21 +16,32 @@ type Options = {
 };
 const atEnd = (node: HTMLElement) => node.scrollHeight - node.clientHeight - node.scrollTop <= 4;
 const messageId = (message?: Message, index = 0) => message ? message.id || `${message.role}:${message.at}:${index}` : '';
-const rows = (node: HTMLElement) => Array.from(node.querySelectorAll<HTMLElement>('[data-message-index]'));
 const contentTop = (node: HTMLElement, row: HTMLElement) => row.getBoundingClientRect().top - node.getBoundingClientRect().top - node.clientTop + node.scrollTop;
 // The navigation can overlap the scroller. Anchors describe the readable area
 // below it, so reopening a conversation never tucks the saved line under glass.
 const readingTopInset = (node: HTMLElement) => Math.max(0, parseFloat(getComputedStyle(node).getPropertyValue('--pw-reading-top-inset')) || 0);
+// A live reply may be the final direct child, but it is not a saved reading
+// anchor. Use the committed DOM so a draft becoming a saved row needs no reset.
+function savedRowCount(list: HTMLElement) {
+  const tail = list.lastElementChild;
+  return list.childElementCount - (tail && !tail.hasAttribute('data-message-index') ? 1 : 0);
+}
 // Messages are vertically ordered. Finding the first row below the viewport top
 // must not measure every preceding answer on each scroll event in a long thread.
-function readingRow(items: HTMLElement[], viewportTop: number) {
-  let start = 0, end = items.length;
+function readingRow(list: HTMLElement | null, viewportTop: number) {
+  if (!list) return;
+  // Saved articles are direct children, followed by at most one transient reply.
+  // Inspect their positions without collecting descendants of every Markdown body.
+  const items = list.children as HTMLCollectionOf<HTMLElement>;
+  const count = savedRowCount(list);
+  if (!count) return;
+  let start = 0, end = count;
   while (start < end) {
     const middle = start + Math.floor((end - start) / 2);
     if (items[middle].getBoundingClientRect().bottom > viewportTop) end = middle;
     else start = middle + 1;
   }
-  return items[Math.min(start, items.length - 1)];
+  return items[Math.min(start, count - 1)];
 }
 
 /** Preserve user intent before content grows. Measuring the new bottom gap after
@@ -40,16 +51,7 @@ export function useConversationReading({ scroll, active, conversationId, compose
   const content = useRef<HTMLDivElement>(null), positions = useRef(new Map<string, Reading>());
   const window = useRef<{ key: string; draftKey: string; conversationId: string; ready: boolean; reading: Reading; marker: ContentMarker | null } | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const messageRows = useRef<{ node: HTMLElement; items: HTMLElement[] } | null>(null);
-  // Article identity can change on a React commit, but scrolling and resizing do
-  // not replace those nodes. Share one collection until the next committed layout.
-  useLayoutEffect(() => { messageRows.current = null; });
-  const currentRows = useCallback((node: HTMLElement) => {
-    if (messageRows.current?.node === node) return messageRows.current.items;
-    const items = rows(node);
-    messageRows.current = { node, items };
-    return items;
-  }, []);
+  const messageList = useRef<HTMLDivElement>(null);
   const [hasNewReplies, setHasNewReplies] = useState(false);
   const key = conversationId || composer.key || '';
   const last = messages.at(-1), lastId = messageId(last, messages.length - 1);
@@ -60,14 +62,14 @@ export function useConversationReading({ scroll, active, conversationId, compose
   const rememberChatPosition = useCallback(() => {
     const current = window.current, node = scroll.current;
     if (!current?.ready || !node?.isConnected || node.dataset.conversationId !== current.conversationId) return;
-    const items = currentRows(node), viewportTop = node.getBoundingClientRect().top + node.clientTop + readingTopInset(node);
-    const row = readingRow(items, viewportTop);
+    const viewportTop = node.getBoundingClientRect().top + node.clientTop + readingTopInset(node);
+    const row = readingRow(messageList.current, viewportTop);
     const index = Number(row?.dataset.messageIndex || 0);
     current.reading = { ...current.reading, top: node.scrollTop, index,
       offset: row ? Math.max(0, Math.round(viewportTop - row.getBoundingClientRect().top)) : 0,
       anchor: row?.dataset.messageId || '', observed: latest.current.lastId };
     positions.current.set(current.key, { ...current.reading });
-  }, [scroll, currentRows]);
+  }, [scroll]);
 
   const persistReading = useCallback(() => {
     const current = window.current;
@@ -140,8 +142,14 @@ export function useConversationReading({ scroll, active, conversationId, compose
       const reading = current.reading;
       if (reading.following) node.scrollTop = node.scrollHeight;
       else {
-        const items = currentRows(node), anchor = items.find(row => row.dataset.messageId === reading.anchor);
-        const row = anchor || items[Math.min(Math.max(0, reading.index), Math.max(0, items.length - 1))];
+        const list = messageList.current, items = list?.children as HTMLCollectionOf<HTMLElement> | undefined;
+        const count = list ? savedRowCount(list) : 0;
+        let row = items && count ? items[Math.min(Math.max(0, reading.index), count - 1)] : undefined;
+        if (reading.anchor && items) {
+          for (let i = 0; i < count; i++) {
+            if (items[i].dataset.messageId === reading.anchor) { row = items[i]; break; }
+          }
+        }
         node.scrollTop = row ? contentTop(node, row) + reading.offset - readingTopInset(node) : reading.top;
         reading.unread ||= !!reading.observed && reading.observed !== lastId;
         reading.following = atEnd(node) && !paused;
@@ -167,7 +175,7 @@ export function useConversationReading({ scroll, active, conversationId, compose
       setHasNewReplies(true);
     }
     rememberChatPosition();
-  }, [active, key, composer.key, composer.epoch, conversationId, lastContent, paused, messages.length, lastId, streamMarker, scroll, currentRows, rememberChatPosition]);
+  }, [active, key, composer.key, composer.epoch, conversationId, lastContent, paused, messages.length, lastId, streamMarker, scroll, rememberChatPosition]);
 
   useEffect(() => {
     const node = scroll.current, body = content.current;
@@ -187,5 +195,5 @@ export function useConversationReading({ scroll, active, conversationId, compose
   }, [active, key, scroll, rememberChatPosition]);
 
   useEffect(() => () => { if (saveTimer.current) clearTimeout(saveTimer.current); }, []);
-  return { content, hasNewReplies, saveReading, rememberChatPosition, goToLatest, stopFollowing };
+  return { content, messageList, hasNewReplies, saveReading, rememberChatPosition, goToLatest, stopFollowing };
 }

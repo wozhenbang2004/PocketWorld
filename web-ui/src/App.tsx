@@ -376,7 +376,7 @@ export default function App(){
  const conversationStream=conversationDraft?.text.trim()?conversationDraft:null;
  const {rows:replyRows,continued:wasReplyVisible}=useReplyRows(String(state.conversationId||''),messages,conversationDraft,foregroundTurn as WorkIdentity|null,route==='chat'&&commands.length>0);
  const streamMarker=conversationStream?`${conversationStream.requestId}:${conversationStream.generation}:${conversationStream.sequence}`:'';
- const {content:chatContent,hasNewReplies,saveReading,rememberChatPosition,goToLatest,stopFollowing}=useConversationReading({scroll,active:route==='chat',conversationId:String(state.conversationId||''),composer,messages,streamMarker,paused:readingDocuments.length>0||!!messageOriginTarget||!!state.conversationReader||!!state.queuedInputsPage});
+ const {content:chatContent,messageList:chatMessageList,hasNewReplies,saveReading,rememberChatPosition,goToLatest,stopFollowing}=useConversationReading({scroll,active:route==='chat',conversationId:String(state.conversationId||''),composer,messages,streamMarker,paused:readingDocuments.length>0||!!messageOriginTarget||!!state.conversationReader||!!state.queuedInputsPage});
  const openReading=useCallback((document:ReadingSnapshot)=>{rememberChatPosition();const entry={...document,key:++readingSerial.current};setReadingDocuments(previous=>[...previous,entry])},[rememberChatPosition]);
  const activeTask=tasks.find(x=>x.id===state.activeTaskId);const selectedTask=tasks.find(x=>x.id===taskId);const currentProject=projects.find(x=>x.id===state.projectId);const currentConversation=conversations.find(x=>x.id===state.conversationId);
  useEffect(()=>setTaskMenuOpen(false),[taskId,taskOpen,taskLayer,selectedTask?.status,selectedTask?.raw?.runId,selectedTask?.raw?.coordinatorEpoch,personalDocumentEpoch,snapshot?.view?.resumeRevision]);
@@ -1427,7 +1427,7 @@ export default function App(){
     <div className="pw-start-heading"><h2>想聊些什么？</h2>{!composerModelName&&<p>连接模型后，就可以开始。</p>}</div>
     {!composerModelName&&modelSetupAction}
    </div>:null}
-   {ready&&replyRows.length>0&&<div className="pw-message-stream">{replyRows.map(row=>{
+   {ready&&replyRows.length>0&&<div ref={chatMessageList} className="pw-message-stream">{replyRows.map(row=>{
     if(row.kind==='live'){
      const draft=row.draft,hasText=!!draft?.text.trim(),phase=replyActivityPhase(draft,foregroundTurn?.resourceState,conversationActivity);
      return <article key={row.key} className="pw-message pw-message-assistant" aria-label={hasText?'当前回复草稿':'当前回复状态'} aria-busy={['thinking','replying','stopping'].includes(phase.state)}>
