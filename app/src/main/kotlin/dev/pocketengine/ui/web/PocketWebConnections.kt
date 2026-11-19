@@ -20,6 +20,7 @@ internal class PocketWebConnections(private val controller: PocketWorldControlle
     private val environments = mutableMapOf<String, JSONObject>()
     private val probes = mutableMapOf<String, Pair<String, JSONObject>>()
     val workHistory = PocketWebSshHistory(controller)
+    val cloudJobs = PocketWebCloudJobs(controller)
     private val downloads = PocketWebSshDownloads()
     private val screens = mutableMapOf<String, SshTerminalScreen>()
     private var doctor: SshOwnerWorkflows.DoctorPage? = null
@@ -30,14 +31,14 @@ internal class PocketWebConnections(private val controller: PocketWorldControlle
 
     companion object {
         val COMMANDS = setOf(
-            "remote.rememberWorkspace", "remote.forgetWorkspace", "remote.saveProfile", "remote.removeProfile", "remote.probe", "remote.environments", "remote.probeWorker",
+            "remote.workspaceJobs", "remote.openWorkspaceJob", "remote.rememberWorkspace", "remote.forgetWorkspace", "remote.saveProfile", "remote.removeProfile", "remote.probe", "remote.environments", "remote.probeWorker",
             "remote.reconnect", "remote.reconcileOperation", "remote.getJob", "remote.readSessionRecovery", "remote.cancelJob",
             "remote.reviewTask", "remote.confirmTask", "remote.project.open", "remote.project.review", "remote.project.confirm", "remote.project.close", "remote.inputs.open", "ssh.saveProfile", "ssh.removeProfile", "ssh.probeHostKey", "ssh.approveHostKey",
             "ssh.forgetHostKey", "ssh.listFiles", "ssh.readFile", "ssh.inspectFile", "ssh.getOperation", "ssh.reviewOperation", "ssh.confirmOperation",
             "ssh.workHistory", "ssh.openOriginalWork", "ssh.inspectDownload", "ssh.confirmDownload", "ssh.dismissDownload", "ssh.readPty", "ssh.writePty", "ssh.resizePty", "ssh.closePty", "ssh.startTask", "ssh.doctor", "ssh.closeDoctor"
         )
     }
-    fun clear() { generation++; workHistory.clear(); downloads.clear(); reviews.clear(); environments.clear(); probes.clear(); screens.clear(); doctor?.close(); doctor = null; closeBaseline() }
+    fun clear() { generation++; cloudJobs.clear(); workHistory.clear(); downloads.clear(); reviews.clear(); environments.clear(); probes.clear(); screens.clear(); doctor?.close(); doctor = null; closeBaseline() }
     private fun closeBaseline() { val original = baseline; baseline = null; original?.let { controller.leaveRemoteTask(it.window) } }
     private fun fields(args: JSONObject, vararg allowed: String) { require(args.keys().asSequence().all { it in allowed }) { "原连接操作包含不适用的字段" } }
     private fun string(args: JSONObject, key: String, max: Int = 128, empty: Boolean = false): String {

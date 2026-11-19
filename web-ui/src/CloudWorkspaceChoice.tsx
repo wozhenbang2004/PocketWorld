@@ -2,10 +2,10 @@ import { Button } from './forms-library';
 import { harnessWorkerLabel } from './harness-capabilities';
 
 type Data = Record<string, any>;
-type Saved = { profileId: string; profileBinding: string; environmentId: string; worker: string; workspaceAnchor: string };
+export type SavedCloudWorkspace = { profileId: string; profileBinding: string; environmentId: string; worker: string; workspaceAnchor: string };
 const digest = (v: unknown): v is string => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v);
 const id = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(v);
-export function cloudChoice(value: Data | undefined): { revision: number; target?: Saved } | null {
+export function cloudChoice(value: Data | undefined): { revision: number; target?: SavedCloudWorkspace } | null {
   if (value?.selectionOnly !== true || value.liveState !== 'not_checked' || !Number.isSafeInteger(value.revision) || value.revision < 0) return null;
   const t = value.target;
   if (t == null) return { revision: value.revision };
@@ -18,7 +18,7 @@ export function hostWorkspaceAnchor(environment?: Data): string | null {
     value.jobRegistry === 'persistent_operations' && value.runningAfterSupervisorRestart === 'not_guaranteed' && value.processSandbox === false
     ? value.anchor : null;
 }
-export function originalCloudEnvironment(catalog: Data[], t: Saved): Data | undefined {
+export function originalCloudEnvironment(catalog: Data[], t: SavedCloudWorkspace): Data | undefined {
   const rows = catalog.filter(e => e.id === t.environmentId);
   if (rows.length !== 1 || hostWorkspaceAnchor(rows[0]) !== t.workspaceAnchor || !digest(rows[0].bindingHash)) return;
   const workers = Array.isArray(rows[0].workers) ? rows[0].workers.filter((w: Data) => w?.id === t.worker) : [];

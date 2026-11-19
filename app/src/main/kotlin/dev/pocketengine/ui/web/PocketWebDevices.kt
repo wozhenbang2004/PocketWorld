@@ -33,18 +33,21 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         val previous: List<String>, val next: String?, val operations: Map<String, String>)
     private data class PhoneArchive(val handle: String, val window: Host.Window, val epoch: Long, val target: String,
         val targetInstance: String, val fingerprint: String, val localId: String, val localInstance: String,
-        val after: Pair<String,String>, val previous: List<Pair<String,String>>, val next: Pair<String,String>?, val digests: Map<Pair<String,String>,String>)
+        val after: Pair<String,String>, val previous: List<Pair<String,String>>, val next: Pair<String,String>?, val digests: Map<Pair<String,String>,String>,
+        val received: Boolean, val inbox: Map<Pair<String,String>, Pair<String,String>>)
     @Volatile private var phoneArchive: PhoneArchive? = null
     private val historyPages = LinkedHashMap<String, LocalHistoryPage>()
     @Volatile private var latest = JSONObject()
     @Volatile private var desktop: Host.DesktopWindow? = null
     private val desktopGeneration = AtomicLong(0)
     private val desktopInFlight = AtomicReference<String?>(null)
+    private val pairingImage = PocketWebPairingImage()
     companion object {
         val COMMANDS = setOf("devices.discovery.start", "devices.discovery.stop", "devices.discovery.reviewConnection", "devices.snapshot", "devices.createInvitation", "devices.inspectInvitation", "devices.reviewPairing", "devices.advancePairing", "devices.reviewPeerGrant",
             "devices.reviewGrant", "devices.reviewConnection", "devices.reviewRelay", "devices.reviewAction", "devices.reviewGoal", "devices.reviewResult", "devices.reviewApproval",
             "devices.confirm", "devices.reject", "devices.discard", "devices.recoveryAddresses", "devices.openRecovery", "devices.recoverPairing", "devices.reviewAbandonment", "devices.openTask", "devices.readTask", "devices.reviewResumeRequest",
-            "devices.readPhoneGoalArchive", "devices.openHistory", "devices.queryHistory", "devices.queryPhoneGoalResult", "devices.stopHistory",
+            "devices.readPhoneGoalArchive", "devices.readReceivedPhoneGoals", "devices.returnToReceivedPhoneGoal", "devices.openHistory", "devices.queryHistory", "devices.queryPhoneGoalResult", "devices.stopHistory",
+            "devices.pairImage.pick", "devices.pairImage.review", "devices.pairImage.close",
             "devices.desktop.open", "devices.desktop.negotiate", "devices.desktop.status",
             "devices.desktop.control", "devices.desktop.input", "devices.desktop.close")
         private fun fields(value: JSONObject, vararg allowed: String) = PocketWebGroupReviews.fields(value, *allowed)
@@ -57,7 +60,8 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         private fun peer(snapshot: JSONObject, id: String): JSONObject = snapshot.optJSONArray("peers").objects().singleOrNull { it.opt("deviceId") == id } ?: error("这台设备不在原读取窗口，请刷新")
         private fun samePeer(a: JSONObject, b: JSONObject): Boolean = listOf("deviceId", "certificateFingerprint", "instanceId", "authorizationEpoch", "revoked").all { a.opt(it) == b.opt(it) }
     }
-    @Synchronized fun clear() {
+    @Synchronized fun clear(preserveImageChoice: Boolean = false) {
+        if (!preserveImageChoice) pairingImage.clear()
         // Keep running-lane gates until their own callbacks settle; an invalidated read cannot
         // race a new review on this same native Window and close its resources.
         generation.incrementAndGet(); review = null; historyPages.clear(); phoneArchive = null; latest = JSONObject()
@@ -81,6 +85,17 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         }
         return value.put("taskActions", actions)
     }
+    /** Match the original private peer view; this only limits a new LOCAL draft. No route lookup. */
+    fun originalPhoneForPreparation(hint: JSONObject): JSONObject {
+        fields(hint,"deviceId","instanceId","certificateFingerprint")
+        val native = requireNotNull(window()); current(native,generation.get())
+        val target = peer(latest,text(hint,"deviceId"))
+        val platform = target.optString("platform"); val profiles = target.optJSONObject("capabilitySnapshot")?.optJSONArray("capabilities").objects()
+        require((platform.contains("android",true) || platform.contains("phone",true) || profiles.any { it.optString("id") in setOf("phone.tools.main","phone.tools.background") })
+            && target.opt("revoked") != true && target.optJSONObject("connection")?.optString("state") != "REVOKED"
+            && target.opt("instanceId") == hint.opt("instanceId") && target.opt("certificateFingerprint") == hint.opt("certificateFingerprint")) { "所选原手机身份或配对已变化，不会换用其他设备" }
+        return dev.pocketengine.features.devices.DirectedPhoneTarget.read(hint).view()
+    }
     /** Identity of an already accepted Android goal on THIS receiving phone. Navigation facts only. */
     private fun receivedPhoneActionScope(id: String): JSONObject? {
         val task = controller.readOriginalDeviceTask(id)
@@ -103,11 +118,29 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         if (args.has("archiveHandle")) {
             fields(args, "taskId", "operationId", "archiveHandle"); val id = text(args, "taskId")
             val index = archiveFor(text(args, "archiveHandle"), requireNotNull(window()), generation.get())
-            require(index.digests.containsKey(id to text(args, "operationId"))) { "不在这部手机已读取的原派工内" }
+            require(!index.received && index.digests.containsKey(id to text(args, "operationId"))) { "不在这部手机已读取的原派工内" }
             return id // Read-only navigation only; do not put archive parents in taskIds() / controls.
         }
         fields(args, "taskId")
         return text(args, "taskId").also { require(it in taskIds()) { "请从原设备任务记录打开" } }
+    }
+    private fun receivedEntry(args: JSONObject): Pair<PhoneArchive, Pair<String,String>> {
+        fields(args,"taskId","operationId","archiveHandle"); val key = text(args,"taskId") to text(args,"operationId")
+        val original = archiveFor(text(args,"archiveHandle"), requireNotNull(window()), generation.get())
+        require(original.received && key in original.inbox) { "请从本机接纳的这项目标返回，不能改换工作" }
+        return original to key
+    }
+    fun receivedTaskForReturn(args: JSONObject): String = receivedEntry(args).second.first
+    fun checkReceivedTaskForReturn(args: JSONObject, raw: JSONObject): JSONObject {
+        val (original,key) = receivedEntry(args); val (digest,mode) = original.inbox.getValue(key)
+        val origin = raw.optJSONObject("origin") ?: error("原接纳来源未能核对")
+        require(raw.opt("id") == key.first && raw.opt("deviceExecutionKind") == "GOAL" && raw.opt("kind") == "phone"
+            && raw.opt("actorId") == "paired_device:${original.target}" && raw.opt("spaceId") == "device:${original.target}"
+            && raw.opt("deviceNativeInstanceId") == original.localInstance && raw.opt("executionMode") == mode
+            && DeviceProtocol.sha256(DeviceProtocol.canonicalBytes(origin)) == digest) { "本机原接纳任务身份已变化，未打开或恢复执行" }
+        return JSONObject().put("kind","receivedGoalReturn").put("readOnly",true).put("taskId",key.first).put("operationId",key.second)
+            .put("instanceId",original.localInstance).put("sourceId",original.target).put("targetId",original.localId)
+            .put("parentTaskId",origin.getString("parentTaskId")).put("grantId",origin.getString("grantId")).put("epoch",origin.getLong("authorizationEpoch"))
     }
     @Synchronized private fun archiveFor(handle: String, original: Host.Window, epoch: Long): PhoneArchive {
         current(original, epoch)
@@ -117,11 +150,11 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
             here.opt("deviceId") == index.localId && here.opt("instanceId") == index.localInstance) { "原本机或手机身份已变化" }
         return index
     }
-    private fun phoneArchivePage(args: JSONObject, original: Host.Window, epoch: Long): JSONObject {
+    private fun phoneArchivePage(args: JSONObject, original: Host.Window, epoch: Long, received: Boolean): JSONObject {
         val old: PhoneArchive?; val targetId: String; val after: Pair<String,String>; val previous: List<Pair<String,String>>
         if (args.has("archiveHandle")) {
             fields(args, "archiveHandle", "direction")
-            old = archiveFor(text(args, "archiveHandle"), original, epoch); targetId = old.target
+            old = archiveFor(text(args, "archiveHandle"), original, epoch); targetId = old.target; require(old.received == received) { "发出与接纳目录不能混用" }
             when (text(args, "direction")) {
                 "older" -> { after = requireNotNull(old.next) { "没有更早的本机记录" }; previous = (old.previous + listOf(old.after)).takeLast(32) }
                 "newer" -> { require(old.previous.isNotEmpty()); after = old.previous.last(); previous = old.previous.dropLast(1) }
@@ -131,19 +164,21 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
             fields(args, "targetDeviceId"); old = null; targetId = text(args, "targetDeviceId"); after = "" to ""; previous = emptyList()
         }
         val target = peer(latest, targetId); val here = latest.getJSONObject("local")
-        val page = original.phoneGoalIndex(targetId, after.first, after.second)
-        require(page.opt("readOnly") == true && page.opt("targetDeviceId") == targetId && page.opt("instanceId") == target.opt("instanceId") &&
+        val side = if (received) "received" else "sent"
+        val page = original.phoneGoalIndex(targetId, after.first, after.second, received)
+        require(page.opt("side") == side && page.opt("readOnly") == true && page.opt("targetDeviceId") == targetId && page.opt("instanceId") == target.opt("instanceId") &&
             page.opt("localDeviceId") == here.opt("deviceId") && page.opt("localInstanceId") == here.opt("instanceId")) { "本机索引不属于原手机" }
         val rows = page.getJSONArray("rows").objects(); require(rows.size <= 24)
         val digests = rows.associate { (it.getString("taskId") to it.getString("operationId")) to it.getString("argumentsDigest") }
         require(digests.size == rows.size)
+        val inbox = if (received) rows.associate { (it.getString("taskId") to it.getString("operationId")) to (it.getString("originDigest") to it.getString("screenMode")) } else emptyMap()
         val next = if (page.getBoolean("hasMore")) page.getString("lastParent") to page.getString("lastOperation") else null
         val index = PhoneArchive(UUID.randomUUID().toString(), original, epoch, targetId, target.getString("instanceId"), target.getString("certificateFingerprint"),
-            here.getString("deviceId"), here.getString("instanceId"), after, previous, next, digests)
+            here.getString("deviceId"), here.getString("instanceId"), after, previous, next, digests, received, inbox)
         synchronized(this) { current(original, epoch); if (old != null) require(phoneArchive === old); phoneArchive = index }
         val display = JSONArray()
         for (row in rows) display.put(JSONObject().also { safe -> for (key in listOf("taskId", "operationId", "goal", "screenMode", "createdAt")) safe.put(key, row.get(key)) })
-        return JSONObject().put("kind", "phoneGoalArchive").put("archiveHandle", index.handle).put("targetDeviceId", targetId).put("readOnly", true)
+        return JSONObject().put("kind", "phoneGoalArchive").put("side", side).put("archiveHandle", index.handle).put("targetDeviceId", targetId).put("readOnly", true)
             .put("instanceId", index.targetInstance).put("targetFingerprint", index.fingerprint).put("localDeviceId", index.localId).put("localInstanceId", index.localInstance)
             .put("rows", display).put("hasMore", next != null).put("canReadNewer", previous.isNotEmpty())
     }
@@ -301,15 +336,28 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
     fun dispatch(action: String, args: JSONObject, done: (JSONObject?, String?) -> Unit) {
         val original = window() ?: error("原设备窗口已关闭，请重新进入")
         current(original, generation.get())
+        if (action == "devices.pairImage.pick" || action == "devices.pairImage.close") {
+            fields(args, "pickerId"); val id = text(args, "pickerId", 36)
+            if (action.endsWith(".pick")) {
+                val available = original.joinAvailability(); check(available.available) { available.reason }
+                pairingImage.pick(controller.webPresentationActivity(), id, original)
+            } else pairingImage.clear(id)
+            done(JSONObject().put("value", JSONObject().put("pickerId", id).put("opened", action.endsWith(".pick"))), null); return
+        }
         if (action.startsWith("devices.desktop.")) { dispatchDesktop(action, args, original, done); return }
         if (action == "devices.discovery.stop") {
             fields(args); discard(original); original.stopLanDiscovery()
             done(JSONObject().put("value", JSONObject().put("candidatesDisabled", true).put("stopRequested", true)).put("snapshot", captureSnapshot(original, taskIds())), null); return
         }
         if (action == "devices.discard") {
+            if (args.has("archiveHandle")) {
+                fields(args, "archiveHandle"); val expected = text(args,"archiveHandle")
+                val closed = synchronized(this) { if (phoneArchive?.handle == expected) { phoneArchive = null; true } else false }
+                done(JSONObject().put("closed",closed),null); return // Release one local reader only, never stop discovery.
+            }
             fields(args, "viewHandle")
             val handle = if (args.has("viewHandle")) text(args, "viewHandle") else ""
-            if (handle.isBlank()) original.stopLanDiscovery()
+            if (handle.isBlank()) { synchronized(this) { phoneArchive = null }; original.stopLanDiscovery() }
             val closed = discard(original, handle)
             done(JSONObject().put("closed", closed), null); return
         }
@@ -346,6 +394,17 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                         JSONObject().put("kind", "invitation").put("invitation", original.createInvitation(address)).put("displayOnce", true)
                     }
                     "devices.inspectInvitation" -> { fields(args, "raw"); val native = original.inspectInvitation(text(args, "raw", 16384)); store("pair", native, native.view(), original, epoch) }
+                    "devices.pairImage.review" -> {
+                        fields(args, "pickerId"); val id = text(args, "pickerId", 36)
+                        val raw = pairingImage.read(id, original, controller.webPresentationActivity().contentResolver) { current(original, epoch) }
+                        if (raw == null) JSONObject().put("pickerId", id).put("cancelled", true)
+                        else {
+                            current(original, epoch); check(pairingImage.current(id, original)) { "原图片选择已关闭，未核对配对。" }
+                            val native = original.inspectInvitation(raw) // Same local preview as paste; no candidate send or grant.
+                            if (!pairingImage.current(id, original)) { original.discardReview(); error("原图片选择已关闭，未交付配对审阅。") }
+                            store("pair", native, native.view(), original, epoch)
+                        }
+                    }
                     "devices.reviewPairing", "devices.advancePairing" -> {
                         fields(args, "candidateId"); val id = text(args, "candidateId")
                         require(before.optJSONArray("pendingPairings").objects().any { it.optString("candidateId", it.optString("inviteId")) == id }) { "原配对候选已变化" }
@@ -409,7 +468,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                         val view = JSONObject(request.toString()).put("canApprove", request.opt("stale") == false && actions.getJSONObject("resume").opt("available") == true)
                         original.discardReview(); store("resume", view, view, original, epoch)
                     }
-                    "devices.readPhoneGoalArchive" -> phoneArchivePage(args, original, epoch)
+                    "devices.readPhoneGoalArchive", "devices.readReceivedPhoneGoals" -> phoneArchivePage(args, original, epoch, action == "devices.readReceivedPhoneGoals")
                     "devices.openHistory" -> {
                         fields(args, "taskId", "operationId", "historyPageHandle", "archiveHandle")
                         require(!args.has("archiveHandle") || !args.has("historyPageHandle"))
@@ -417,6 +476,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                         val id = if (archive == null) taskId() else text(args, "taskId"); val operation = text(args, "operationId")
                         val selectedPage = if (args.has("historyPageHandle")) localHistoryPage(id, text(args, "historyPageHandle"), original, epoch)
                             else synchronized(this) { historyPages[id]?.takeIf { it.window === original && it.epoch == epoch } }
+                        require(archive?.received != true) { "收方目录不能打开对外派发或查询其他设备" }
                         val archivedDigest = archive?.digests?.get(id to operation)
                         val target = if (archive != null) archive.target.takeIf { archivedDigest != null } else if (selectedPage != null) selectedPage.operations[operation]
                             else original.historyLinks(id).getJSONArray("links").objects().singleOrNull { it.opt("parentTaskId") == id && it.opt("operationId") == operation }?.getString("targetDeviceId")
@@ -552,7 +612,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                 }
                 current(original, epoch)
             } catch (failure: Exception) { if (action == "devices.discovery.start" && runCatching { current(original, epoch) }.isFailure) original.stopLanDiscovery(); error = if (failure is org.json.JSONException) "原设备信息不完整，请刷新核对。" else failure.message?.take(400) ?: "设备操作结果待核对" }
-            if (action != "devices.readPhoneGoalArchive" && (action != "devices.readTask" || !args.has("historyPageHandle"))) {
+            if (action != "devices.readPhoneGoalArchive" && action != "devices.readReceivedPhoneGoals" && (action != "devices.readTask" || !args.has("historyPageHandle"))) {
                 try { current(original, epoch); snapshot = captureSnapshot(original, ids) } catch (_: Exception) { }
             }
             val result = JSONObject().put("value", value ?: JSONObject.NULL).put("snapshot", snapshot ?: JSONObject.NULL)

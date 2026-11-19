@@ -130,6 +130,13 @@ public final class PublicHttpReader {
                 .put("privateNetworkAllowed",false).put("rendered",false);
     }
     public Result read(JSONObject args,Budget budget,BrowserTaskSpace.Gate gate,RunControl control)throws Exception {
+        return read(args,budget,gate,control,false);
+    }
+    /** Look at links in the one response already requested. No requests or redirect grants for link targets. */
+    public Result readWithPageLinks(JSONObject args,Budget budget,BrowserTaskSpace.Gate gate,RunControl control)throws Exception {
+        return read(args,budget,gate,control,true);
+    }
+    private Result read(JSONObject args,Budget budget,BrowserTaskSpace.Gate gate,RunControl control,boolean pageLinks)throws Exception {
         if(budget==null||!budget.boundTo(control))throw new SecurityException("公共读取必须使用同一个原控制与native预算");
         validate(args);HttpUrl initial=url(args.getString("url")),current=initial;Set<String> approved=new LinkedHashSet<>();approved.add(origin(initial));
         JSONArray allowed=args.optJSONArray("allowedRedirectOrigins");if(allowed!=null)for(int i=0;i<allowed.length();i++)approved.add(allowed.getString(i));
@@ -177,7 +184,7 @@ public final class PublicHttpReader {
                             return failed("redirect_approval_required","redirect_origin_not_approved",true,budget,facts.put("proposedOrigin",origin(next)));
                         redirects.put(new JSONObject().put("fromOrigin",origin(target)).put("toOrigin",origin(next)).put("statusCode",status));current=next;continue;
                     }
-                    return consume(received,args,facts,budget,gate);
+                    return consume(received,args,facts,budget,gate,pageLinks);
                 }
             }catch(InterruptedException stopped){throw stopped;}
             catch(Exception failure){
@@ -196,6 +203,9 @@ public final class PublicHttpReader {
     }
     /** Called only after the native public-address connection admission. Package scope supports bounded body/parser fixtures, not another transport. */
     static Result consume(Response received,JSONObject args,JSONObject facts,Budget budget,BrowserTaskSpace.Gate gate)throws Exception {
+        return consume(received,args,facts,budget,gate,false);
+    }
+    private static Result consume(Response received,JSONObject args,JSONObject facts,Budget budget,BrowserTaskSpace.Gate gate,boolean pageLinks)throws Exception {
         budget.admit(gate);int status=received.code(),limit=args.optInt("maxBytes",DEFAULT_BYTES),chars=args.optInt("maxChars",MAX_CHARS);
         if(!headersWithinBudget(received,budget))return failed("unavailable","response_headers_budget",true,budget,facts);
         if(status==401||status==403)return failed("needs_webview","login_or_access_required",true,budget,facts);
@@ -221,14 +231,16 @@ public final class PublicHttpReader {
                 .put("bodyTruncated",!complete).put("byteCounting","uncompressed_identity_response_body");
         String decoded;
         try{decoded=decode(data,charset,!complete);}catch(java.nio.charset.CharacterCodingException malformed){return failed("needs_webview","text_decode_incomplete",true,budget,facts);}
-        Projection projection=project(decoded,mime,received.request().url().toString(),budget);budget.admit(gate);
+        Projection projection=project(decoded,mime,received.request().url().toString(),budget,pageLinks);budget.admit(gate);
         if(projection.reason!=null)return failed("needs_webview",projection.reason,true,budget,facts);
         String text=projection.text;boolean clipped=text.length()>chars;text=clip(text,chars);
         facts.put("projection",htmlMime(mime)?"server_dom_text_not_rendered":"unrendered_text_body").put("projectionTruncated",clipped).put("projectedChars",text.length());
-        return new Result(new JSONObject().put("ok",true).put("accepted",true).put("status","read").put("observationId",UUID.randomUUID().toString())
+        JSONObject observation=new JSONObject().put("ok",true).put("accepted",true).put("status","read").put("observationId",UUID.randomUUID().toString())
                 .put("title",clip(projection.title,240)).put("text",text).put("http",facts).put("verified",false).put("verifiedBusinessSuccess",false)
                 .put("responseBodyComplete",complete).put("projectionTruncated",clipped).put("rendered",false)
-                .put("automaticReplayAllowed",false).put("untrustedPageContent",true),budget);
+                .put("automaticReplayAllowed",false).put("untrustedPageContent",true);
+        if(projection.links!=null)observation.put("navigation",new JSONObject().put("source","anchors_on_this_page").put("linkedPagesRead",false).put("links",projection.links));
+        return new Result(observation,budget);
     }
 
     static Response await(CompletableFuture<Response> future,Budget budget)throws Exception {
@@ -243,8 +255,15 @@ public final class PublicHttpReader {
         else out.put("message",status.equals("unknown")?"公共读取未取得确定回执；未声称读完，也未自动重试或切换浏览后端。":"公共读取受到网络、来源或预算边界限制；没有把失败页面当成完整来源，也不会借WebView回落绕过受限地址。");
         return new Result(out,budget);
     }
-    static final class Projection {final String title,text,reason;Projection(String title,String text,String reason){this.title=title;this.text=text;this.reason=reason;}}
+    static final class Projection {
+        final String title,text,reason;final JSONArray links;
+        Projection(String title,String text,String reason){this(title,text,reason,null);}
+        Projection(String title,String text,String reason,JSONArray links){this.title=title;this.text=text;this.reason=reason;this.links=links;}
+    }
     static Projection project(String source,String mime,String url,Budget budget)throws Exception {
+        return project(source,mime,url,budget,false);
+    }
+    private static Projection project(String source,String mime,String url,Budget budget,boolean pageLinks)throws Exception {
         budget.check();if(!htmlMime(mime))return new Projection("",source,source.trim().isEmpty()?"empty_body":null);
         Parser parser=Parser.htmlParser();parser.setMaxDepth(128);
         Reader checked=new FilterReader(new StringReader(source)){@Override public int read(char[] b,int off,int len)throws IOException{try{budget.check();}catch(Exception stopped){throw new IOException("Public parsing admission ended",stopped);}return super.read(b,off,Math.min(len,4096));}};
@@ -256,7 +275,30 @@ public final class PublicHttpReader {
         boolean scripts=!document.select("script").isEmpty();document.select("script,style,noscript,template").remove();
         Element main=document.selectFirst("main,article,[role=main]");if(main==null||main.text().trim().isEmpty())main=document.body();
         String text=main==null?"":main.text();budget.check();
-        return new Projection(document.title(),text,text.trim().isEmpty()?"empty_server_dom":scripts&&text.length()<80?"low_server_text_requires_rendering":null);
+        String reason=text.trim().isEmpty()?"empty_server_dom":scripts&&text.length()<80?"low_server_text_requires_rendering":null;
+        JSONArray links=null;
+        if(pageLinks&&reason==null){
+            links=new JSONArray();Set<String> seen=new LinkedHashSet<>();seen.add(url);
+            collectPageLinks(main.select("a[href]"),url,seen,links,budget);
+            if(links.length()<8)collectPageLinks(document.select("nav a[href]"),url,seen,links,budget);
+        }
+        return new Projection(document.title(),text,reason,links);
+    }
+    /** Hints are not citations to the linked pages. Only literal, same-origin HTTPS paths,
+     * never query strings, contacts, downloads, cookies or off-origin navigation. */
+    private static void collectPageLinks(Iterable<Element> anchors,String page,Set<String> seen,JSONArray links,Budget budget)throws Exception {
+        String base=origin(url(page));int scanned=0;
+        for(Element anchor:anchors){
+            if(scanned++>=96||links.length()>=8)break;
+            if((scanned&15)==1)budget.check();
+            String label=anchor.text().trim(),absolute=anchor.absUrl("href");
+            if(label.isEmpty()||anchor.hasAttr("download")||absolute.isEmpty()||absolute.length()>640)continue;
+            // Exclude the entire candidate, rather than stripping a query and inventing another target.
+            if(absolute.indexOf('?')>=0||absolute.indexOf('#')>=0)continue;
+            HttpUrl target;try{target=url(absolute);}catch(IllegalArgumentException unavailable){continue;}
+            if(!target.isHttps()||!base.equals(origin(target)))continue;
+            String next=target.toString();if(seen.add(next))links.put(new JSONObject().put("label",clip(label,80)).put("url",next));
+        }
     }
     static HttpUrl url(String raw){
         if(raw==null||raw.length()>2048||raw.codePoints().anyMatch(Character::isISOControl))throw new IllegalArgumentException("公共URL无效");

@@ -196,6 +196,11 @@ class PhoneTaskRouter:
         connection, peer, route = self._route(value["peerDeviceId"], value["grantId"], True)
         ticket = route.history_query(self.service.identity, method, object_id, value["resourceBinding"], self.manager.now(), options=options)
         response = await self._exchange(connection, peer, ticket, ticket.envelope)
+        # Returning a read to the owner is a separate boundary from sending it:
+        # revocation, expiry or replacement during a reply must not reveal it.
+        if self.closed or self.service.closed or self.connections.get(connection) is not peer:
+            raise PhoneTaskError("Original authenticated phone read window changed", 503)
+        ticket.require_target_peer(peer, self.manager.now())
         if response["messageType"] == "DeviceError":
             raise PhoneTaskError("Phone denied the current original-result read", 403)
         return response["result"]
@@ -432,7 +437,7 @@ class PhoneTaskRouter:
         if action in {"status", "wait", "events", "cancel"}:
             optional = {"timeoutMs"} if action == "wait" else {"cursor", "limit"} if action == "events" else {"cancelOperationId"} if action == "cancel" else set()
             wire._keys(params, {"operationId", "peerDeviceId"}, optional)
-            _, value = self._row(params["operationId"])
+            original_fingerprint, value = self._row(params["operationId"])
             if value["peerDeviceId"] != params["peerDeviceId"]:
                 raise PhoneTaskError("Original operation belongs to a different fixed phone", 403)
             if action == "cancel":
@@ -462,7 +467,24 @@ class PhoneTaskRouter:
                     self._save(value["operationId"], value)
                 snapshot = self._public(value)
                 if value.get("taskId"):
-                    snapshot["task"] = await self._read(value, "task.get", value["taskId"])
+                    task = await self._read(value, "task.get", value["taskId"])
+                    from phone_task_outcome import is_phone_action_goal, original_phone_goal
+                    if is_phone_action_goal(value):
+                        fingerprint, current_row = self._row(value["operationId"])
+                        try:
+                            if fingerprint != original_fingerprint:
+                                raise PermissionError("Original dispatch row was replaced before presentation")
+                            outcome = original_phone_goal(current_row, task, self.service.identity.device_id)
+                        except (wire.ProtocolError, PermissionError):
+                            # The operation was read from the phone, but this task/run
+                            # cannot be matched. Never substitute cached or other-run text.
+                            return dict(snapshot, currentOperationRead="confirmed", currentRead="unavailable", phoneStateUnconfirmed=True)
+                        snapshot["phoneGoalOutcome"] = outcome
+                        if "phoneGoalOutcome" in task["result"]:
+                            # Do not forward extra/unverified text from an unconfirmed
+                            # outcome. Keep the existing task snapshot for ordinary controls.
+                            task["result"]["phoneGoalOutcome"] = {key: outcome[key] for key in ("review", "summary", "truncated")}
+                    snapshot["task"] = task
                 return snapshot
             while True:
                 try:

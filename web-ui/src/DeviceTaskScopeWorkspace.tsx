@@ -56,7 +56,7 @@ function RouteMaterials({ kind, option, view, draft, disabled, update }: { kind:
   </AccordionItem>;
 }
 
-export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange, onSaved, onOpenDevices, autoOpen = false }: { autoOpen?: boolean; taskId: string; peers?: Data[]; run: Run; onBackChange?: (handler: (() => boolean) | null) => void; onSaved?: () => void; onOpenDevices?: () => void }) {
+export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange, onSaved, onOpenDevices, autoOpen = false, directed }: { directed?: { deviceId: string; instanceId: string; certificateFingerprint: string }; autoOpen?: boolean; taskId: string; peers?: Data[]; run: Run; onBackChange?: (handler: (() => boolean) | null) => void; onSaved?: () => void; onOpenDevices?: () => void }) {
   const [open, setOpen] = useState(false), [view, setView] = useState<Data | null>(null), [drafts, setDrafts] = useState<Record<string, RouteDraft>>({});
   const [review, setReview] = useState<Data | null>(null), [ack, setAck] = useState(false), [removeUnavailable, setRemoveUnavailable] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
@@ -104,11 +104,17 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
     finally { if (ticket === generation.current && mounted.current) { working.current = false; setBusy(false); } }
   };
   const read = () => { if (view && dirty) { setDiscard('reload'); return; } doRead(); };
+  const directedId = directed?.deviceId;
   const doRead = () => {
     if (working.current) return;
     dismissReview(); setOpen(true);
     void invoke('deviceTaskScope.open', { taskId }, value => {
       if (!value || value.taskId !== taskId || typeof value.pageHandle !== 'string' || !Array.isArray(value.options)) throw new Error('没有收到本任务的设备范围。');
+      if (directed && (!['deviceId','instanceId','certificateFingerprint'].every(key => value.directPhone?.[key] === directed[key as keyof typeof directed])
+        || !value.options.every((option: Data) => option && option.targetDeviceId === directed.deviceId && option.targetInstanceId === directed.instanceId && !rows(option.downstreamOptions).length))) {
+        page.current = ''; setView(null); void run('deviceTaskScope.close', { pageHandle: value.pageHandle }).catch(() => {});
+        throw new Error('读取的范围不属于准备时选定的原手机，没有改用其他设备。');
+      }
       page.current = value.pageHandle; const next = Object.fromEntries(rows(value.options).map(option => [option.optionId, routeDraft(option, value)])); initialDraft.current = JSON.stringify(next); setView(value); setDrafts(next); setRemoveUnavailable(false);
     });
   };
@@ -135,9 +141,10 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
   };
   const peerIds = [...new Set(rows(view?.options).map(option => option.targetDeviceId))];
   return <section className="pw-task-capabilities" aria-label="本任务的远端设备范围">
-    <Button variant="secondary" onClick={read} disabled={busy}>选择本任务的远端设备</Button>
+    <Button variant="secondary" onClick={read} disabled={busy}>{directedId ? '读取所选手机的可用范围' : '选择本任务的远端设备'}</Button>
+    {directedId && !open && <p>这份工作只给{deviceName(directedId, peers)}。点读取才核对它已授权的范围，不会发送目标或启动执行。</p>}
     {notice && <p role="status">{notice}</p>}
-    <SettingsDialog isOpen={open} onClose={() => requestExit('close')} title={review ? review.kind === 'import' ? '核对原项目包导入' : '核对本任务设备范围' : view?.humanInputOnly ? '选择一个手控手机屏幕' : '选择远端手机或电脑'}>
+    <SettingsDialog isOpen={open} onClose={() => requestExit('close')} title={review ? review.kind === 'import' ? '核对原项目包导入' : '核对本任务设备范围' : directedId ? '核对所选手机的范围' : view?.humanInputOnly ? '选择一个手控手机屏幕' : '选择远端手机或电脑'}>
       <div className="pw-collaboration-dialog">
         {busy && <p role="status">正在读取原设备范围回执…</p>}
         {error && <p role="alert">{error}</p>}
@@ -181,7 +188,7 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
             })}
           </Accordion></section>)}
           {rows(view.unavailableOptions).length > 0 && <Accordion><AccordionItem id="unavailable" title={`有 ${rows(view.unavailableOptions).length} 项范围暂不可用`}><p>这些范围没有替换成其他设备，也不阻止你选择已核对的设备。</p>{rows(view.unavailableOptions).map((item,index) => <p key={index}>{deviceName(item.targetDeviceId, peers)}：{item.reason === 'grant_unavailable' ? '原授权到期、撤销或无法核对' : item.reason === 'capability_read_unavailable' ? '连接或能力读取未完成，请核对对端接收服务与当前网络' : '设备身份或能力时效不匹配，需要重新读取'}</p>)}</AccordionItem></Accordion>}
-          {!peerIds.length && <p>{view.humanInputOnly ? '没有可手控的手机范围。请先连接对端，并由对端主人授权主屏或独立屏、准确应用、全屏捕获与输入，再重新读取。不会改用电脑或模型代理。' : '未读取到可选择的设备范围。请在设备页连接对端，并由对端明确授权工具或目标范围，再回来重新读取。'}</p>}
+          {!peerIds.length && <p>{view.directPhone ? '未读取到这部原手机可用的直接范围。请检查对端连接及已有授权；不会改投其他设备或继续转派。' : view.humanInputOnly ? '没有可手控的手机范围。请先连接对端，并由对端主人授权主屏或独立屏、准确应用、全屏捕获与输入，再重新读取。不会改用电脑或模型代理。' : '未读取到可选择的设备范围。请在设备页连接对端，并由对端明确授权工具或目标范围，再回来重新读取。'}</p>}
           {view.hasMoreOptions && <p>还有未读取的授权记录。未显示的设备不会自动加入本任务。</p>}
           <div className="pw-form-actions"><Button disabled={busy || unavailable.length > 0 && !removeUnavailable} onClick={prepare}>核对这次范围修改</Button><Button variant="ghost" disabled={busy} onClick={read}>重新读取</Button>{onOpenDevices && <Button variant="ghost" disabled={busy} onClick={() => requestExit('devices')}>管理设备与连接</Button>}</div>
           {rows(view.pendingProjectImports).map(item => <div key={item.operationId || item.receiveOperationId}><p>原项目包等待独立导入确认</p><Button variant="secondary" disabled={busy} onClick={() => { void invoke('deviceTaskScope.reviewImport', { pageHandle: page.current, operationId: item.receiveOperationId || item.operationId }, acceptReview); }}>核对这份原项目包</Button></div>)}

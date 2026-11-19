@@ -74,11 +74,19 @@ function recordControlRead(operation, result) {
 }
 function acceptSnapshot(result, operation, revision) {
   if (!isCurrent(operation, revision)) return false;
-  if (unknown(result)) {
+  const task = result.task, outcome = result.phoneGoalOutcome;
+  const bound = !!task && !!outcome && result.operationId === operation && outcome.operationId === operation &&
+    result.peerDeviceId === peer && outcome.peerDeviceId === peer && task.executorDeviceId === peer &&
+    outcome.instanceId === task.instanceId && outcome.taskId === task.taskId && outcome.runId === task.runId &&
+    Number.isSafeInteger(task.executorEpoch) && outcome.executorEpoch === task.executorEpoch;
+  if ((unknown(result) && !bound) || (!!outcome && !bound)) {
+    byId("task-state").textContent = result.currentOperationRead === "confirmed" ? "Dispatch read; task not confirmed" : "Phone result not confirmed";
+    byId("current-title").textContent = "Original phone task";
+    byId("result-summary").textContent = "No current matching result. Read this original operation again; no input was resent.";
+    byId("approval-hint").hidden = true;
     currentTask = null; markConnection(false); refreshInputs();
     return false;
   }
-  const task = result.task;
   if (!task || typeof task !== "object") return false;
   if (task.executorDeviceId !== peer || !task.taskId || !task.instanceId || !Number.isSafeInteger(task.revision)) {
     currentTask = null; refreshInputs(); throw new Error("The task snapshot does not belong to the selected phone.");
@@ -95,7 +103,16 @@ function acceptSnapshot(result, operation, revision) {
   byId("task-state").textContent = task.state.replaceAll("_", " ");
   byId("current-title").textContent = task.result?.title || "Phone task";
   const summary = task.result?.summary ?? task.result?.text ?? task.result?.answer;
-  byId("result-summary").textContent = typeof summary === "string" && summary ? summary : task.state === "waiting_approval" ? "Your phone is waiting for your review." : "The original task is " + task.state.replaceAll("_", " ") + ".";
+  if (bound) {
+    const labels = {pending:"The receiving phone must still review this result.", none:"The phone has no reviewed result for this run.",
+      not_confirmed:"The result was not confirmed on the receiving phone.", unverified:"The phone could not verify the original result.",
+      unavailable:"The receiving phone did not return a verifiable goal result."};
+    byId("result-summary").textContent = outcome.review === "confirmed" && task.state === "succeeded" && typeof outcome.summary === "string"
+      ? (outcome.summary || "The phone confirmed completion without a text summary.") + (outcome.truncated === true ? " (Partial summary from the phone.)" : "")
+      : (labels[outcome.review] || "No verified goal result was returned.");
+  } else {
+    byId("result-summary").textContent = typeof summary === "string" && summary ? "Task status: " + summary : task.state === "waiting_approval" ? "Your phone is waiting for your review." : "The original task is " + task.state.replaceAll("_", " ") + ".";
+  }
   byId("approval-hint").hidden = task.state !== "waiting_approval";
   refreshInputs(); return true;
 }

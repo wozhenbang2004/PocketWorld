@@ -93,8 +93,16 @@ export function samePhoneGoalArchive(value: DeviceData | null, peer: DeviceData 
     && value.targetDeviceId === peer.deviceId && value.instanceId === peer.instanceId && value.targetFingerprint === peer.certificateFingerprint
     && value.localDeviceId === local.deviceId && value.localInstanceId === local.instanceId;
 }
-export function devicePhoneGoalArchive(value: unknown, peer: DeviceData, local: DeviceData) {
-  if (!object(value) || value.kind !== 'phoneGoalArchive' || !samePhoneGoalArchive(value, peer, local) || value.readOnly !== true || !identity(value.archiveHandle)
+export type PhoneArchiveSide = 'sent' | 'received';
+export function receivedPhoneArchiveReturn(value: unknown, row: DeviceData, peer: DeviceData, local: DeviceData): ReceivedPhoneGoalReturn {
+  if (!object(value) || value.kind !== 'receivedGoalReturn' || value.readOnly !== true || value.taskId !== row.taskId || value.operationId !== row.operationId
+    || value.targetId !== local.deviceId || value.instanceId !== local.instanceId || value.sourceId !== peer.deviceId
+    || !identity(value.parentTaskId) || !identity(value.grantId) || !positiveInteger(value.epoch)) throw new Error('未能核对本机接纳的这次原任务。');
+  return { taskId: value.taskId, operationId: value.operationId, targetId: value.targetId, instanceId: value.instanceId, sourceId: value.sourceId,
+    parentTaskId: value.parentTaskId, grantId: value.grantId, epoch: value.epoch, peerDetail: true, leftAt: Date.now() };
+}
+export function devicePhoneGoalArchive(value: unknown, peer: DeviceData, local: DeviceData, side: PhoneArchiveSide) {
+  if (!object(value) || value.kind !== 'phoneGoalArchive' || (value.side ?? 'sent') !== side || !samePhoneGoalArchive(value, peer, local) || value.readOnly !== true || !identity(value.archiveHandle)
     || !Array.isArray(value.rows) || value.rows.length > 24 || typeof value.hasMore !== 'boolean' || typeof value.canReadNewer !== 'boolean'
     || !value.rows.every((row: unknown) => object(row) && identity(row.taskId) && identity(row.operationId) && typeof row.goal === 'string' && !!row.goal
       && ['main_screen', 'background'].includes(row.screenMode) && positiveInteger(row.createdAt))
@@ -173,7 +181,7 @@ export function deviceTaskRows(tasks: unknown, snapshot: DeviceData | null, peer
     const prepared = deviceWorkspaceTaskMode(raw) !== '';
     const selected = deviceRows(raw.deviceSourceScope?.routes);
     const targets = deviceStrings(raw.deviceWorkspaceNavigation?.targetDeviceIds);
-    return peerId ? prepared && (selected.some(route => route.targetDeviceId === peerId) || targets.includes(peerId)) || links.some(link => link.targetDeviceId === peerId && link.parentTaskId === task.id) || origin.kind === 'paired_device' && ['originDeviceId', 'callerDeviceId', 'targetDeviceId'].some(key => origin[key] === peerId) || operations.some(operation => typeof operation.tool === 'string' && operation.tool.startsWith('device_') && operation.arguments?.targetDeviceId === peerId)
+    return peerId ? prepared && (selected.some(route => route.targetDeviceId === peerId) || targets.includes(peerId) || raw.ownerDeviceWork?.directPhone?.deviceId === peerId) || links.some(link => link.targetDeviceId === peerId && link.parentTaskId === task.id) || origin.kind === 'paired_device' && ['originDeviceId', 'callerDeviceId', 'targetDeviceId'].some(key => origin[key] === peerId) || operations.some(operation => typeof operation.tool === 'string' && operation.tool.startsWith('device_') && operation.arguments?.targetDeviceId === peerId)
       : prepared || origin.kind === 'paired_device' || operations.some(operation => typeof operation.tool === 'string' && operation.tool.startsWith('device_')) || links.some(link => link.parentTaskId === task.id);
   });
   for (const link of links) if (identity(link.parentTaskId) && (!peerId || link.targetDeviceId === peerId) && !result.some(task => task.id === link.parentTaskId)) result.push({ id: link.parentTaskId, goal: '原设备关联任务', raw: {}, summaryOnly: true });

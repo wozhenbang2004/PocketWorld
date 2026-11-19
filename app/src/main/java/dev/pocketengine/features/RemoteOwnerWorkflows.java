@@ -194,6 +194,7 @@ public final class RemoteOwnerWorkflows {
     }
     private static boolean sameReadTarget(JSONObject before,JSONObject after,boolean acceptedJob)throws Exception {
         for(String key:new String[]{"taskId","runId","coordinatorEpoch","profileId","serviceBase","jobOperationId"})if(!before.get(key).equals(after.opt(key)))return false;
+        if((before.has("hostWorkspace")||after.has("hostWorkspace"))&&!dev.pocketengine.store.CloudWorkspaceJobs.same(before.optJSONObject("hostWorkspace"),after.optJSONObject("hostWorkspace")))return false;
         if(before.has("backendSelection")||after.has("backendSelection")){
             HarnessCapabilityObservation.requireSameBackendSelection(before.optJSONObject("backendSelection"),after.optJSONObject("backendSelection"));
             for(String key:new String[]{"profileBinding","environmentId","environmentBinding","worker"})if(!before.get(key).equals(after.opt(key)))return false;
@@ -206,8 +207,9 @@ public final class RemoteOwnerWorkflows {
 
         long lifecycle,generation;synchronized(this){lifecycle=window.lifecycleRevision;generation=++window.readGeneration;checkReadCurrent(window,lifecycle,generation);window.fresh=false;window.review=null;window.queryStatus="querying";window.lastReadAttemptAt=System.currentTimeMillis();}
         JSONObject target=tasks.remoteOwnerTarget(window.task),payload=new JSONObject().put("profileId",target.getString("profileId")).put("serviceBase",target.getString("serviceBase"));String job=target.optString("jobId");
+        if(target.has("hostWorkspace"))payload.put("_expectedHostWorkspace",new JSONObject(target.getJSONObject("hostWorkspace").toString()));
         String capturedBinding;JSONObject result;try{
-            capturedBinding=target.has("backendSelection")?target.getString("profileBinding"):module().profileBindingHash(target.getString("profileId"));
+            capturedBinding=target.has("profileBinding")?target.getString("profileBinding"):module().profileBindingHash(target.getString("profileId"));
             if(!capturedBinding.equals(module().profileBindingHash(target.getString("profileId"))))throw new SecurityException("原后端连接代次已变化，不能改用新配置查询旧任务");payload.put("_profileBinding",capturedBinding);if(target.has("backendSelection"))payload.put("backendSelection",new JSONObject(target.getJSONObject("backendSelection").toString()));
             checkReadCurrent(window,lifecycle,generation);
             if(!sameReadTarget(target,tasks.remoteOwnerTarget(window.task),false))throw new SecurityException("读取前原task/run/job已变化");
@@ -672,7 +674,7 @@ public final class RemoteOwnerWorkflows {
     }
     private JSONObject projectRead(Window window,JSONObject query)throws Exception {
         JSONObject source=tasks.remoteOwnerTarget(window.task);long lifecycle,generation;synchronized(this){projectForeground(window);if(window.projectFirst!=null)throw new SecurityException("尚未创建此原任务");lifecycle=window.lifecycleRevision;generation=++window.readGeneration;}
-        String historical=window.projectReadOperation;JSONObject selected=historical==null?source:tasks.originalRemoteProjectHistorySource(window.task,historical);String binding=module().profileBindingHash(selected.getString("profileId"));JSONObject actual=module().readProjectHistory(selected,binding,query,()->{synchronized(RemoteOwnerWorkflows.this){checkReadCurrent(window,lifecycle,generation);}JSONObject current=tasks.remoteOwnerTarget(window.task);if(!sameReadTarget(source,current,false))throw new SecurityException("读取期间原task/run/job改变");if(historical!=null&&!TaskStore.capabilityFingerprint(selected).equals(TaskStore.capabilityFingerprint(tasks.originalRemoteProjectHistorySource(window.task,historical))))throw new SecurityException("历史项目原SQL来源发生变化，迟读未接入");});
+        String historical=window.projectReadOperation;JSONObject selected=historical==null?source:tasks.originalRemoteProjectHistorySource(window.task,historical);String binding=selected.has("profileBinding")?selected.getString("profileBinding"):module().profileBindingHash(selected.getString("profileId"));module().requireProfileBinding(selected.getString("profileId"),binding);JSONObject actual=module().readProjectHistory(selected,binding,query,()->{synchronized(RemoteOwnerWorkflows.this){checkReadCurrent(window,lifecycle,generation);}JSONObject current=tasks.remoteOwnerTarget(window.task);if(!sameReadTarget(source,current,false))throw new SecurityException("读取期间原task/run/job改变");if(historical!=null&&!TaskStore.capabilityFingerprint(selected).equals(TaskStore.capabilityFingerprint(tasks.originalRemoteProjectHistorySource(window.task,historical))))throw new SecurityException("历史项目原SQL来源发生变化，迟读未接入");});
         synchronized(this){checkReadCurrent(window,lifecycle,generation);window.source=source;window.projectReadSource=selected;window.profileBinding=binding;}return actual;
     }
     private JSONObject projectRestoreReview(Window window,JSONObject input)throws Exception {

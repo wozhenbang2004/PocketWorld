@@ -2,10 +2,10 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import './collaboration-depth.css';
 import './device-control-reading.css';
 import { Accordion, AccordionItem, Button, CheckboxField, RadioOptions, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
-import { DeviceRequestScope, deviceChannelWasConnected, deviceConnectionLabel, deviceGrantInput, deviceHistoryLabel, deviceHistoryReceipt, deviceOriginalTaskActions, isReceivedPhoneTask, receivedPhoneGoalReturn, matchesReceivedPhoneGoal, type ReceivedPhoneGoalReturn, PHONE_ACTION_WINDOW_MS, deviceRecordedScopes, devicePhoneGoalArchive, samePhoneGoalArchive, deviceTaskHistoryPage, deviceTaskHistoryLinks, deviceTaskDetails, deviceMethodLabels, deviceOperationLabels, devicePhoneGoalResult, deviceReceipt, deviceReview, deviceRows as rows, deviceSnapshot, deviceStrings as strings, deviceTaskRows, deviceWorkspaceTaskMode, type DeviceData as Data } from './devices-workspace';
+import { DeviceRequestScope, deviceChannelWasConnected, deviceConnectionLabel, deviceGrantInput, deviceHistoryLabel, deviceHistoryReceipt, deviceOriginalTaskActions, isReceivedPhoneTask, receivedPhoneGoalReturn, matchesReceivedPhoneGoal, type ReceivedPhoneGoalReturn, PHONE_ACTION_WINDOW_MS, deviceRecordedScopes, devicePhoneGoalArchive, samePhoneGoalArchive, receivedPhoneArchiveReturn, type PhoneArchiveSide, deviceTaskHistoryPage, deviceTaskHistoryLinks, deviceTaskDetails, deviceMethodLabels, deviceOperationLabels, devicePhoneGoalResult, deviceReceipt, deviceReview, deviceRows as rows, deviceSnapshot, deviceStrings as strings, deviceTaskRows, deviceWorkspaceTaskMode, type DeviceData as Data } from './devices-workspace';
 import { IconAdd, IconArrowLeft, IconChevronRight, IconClock, IconDevices, IconLayers, IconMonitor, IconPhone, IconRefresh, IconShieldCheck } from './icons';
 import { DesktopViewer } from './DesktopViewer';
-import { DeviceTaskPreparation } from './DeviceTaskPreparation';
+import { DeviceTaskPreparation, type PreparedPhone } from './DeviceTaskPreparation';
 import { PhoneControlPreparation } from './PhoneControlPreparation';
 import { WorkspaceSectionHeading } from './WorkspaceSectionHeading';
 import { desktopScopes } from './desktop-viewer';
@@ -76,6 +76,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const [phoneArchive, setPhoneArchive] = useState<Data | null>(null);
   const [phoneGoalResult, setPhoneGoalResult] = useState<Data | null>(null);
   const [preparingDeviceWork, setPreparingDeviceWork] = useState(false);
+  const [workPhone, setWorkPhone] = useState<PreparedPhone>();
   const [discoveryAck, setDiscoveryAck] = useState(false), [advertise, setAdvertise] = useState(false), [discoveryPeer, setDiscoveryPeer] = useState('');
   const [desktopOpen, setDesktopOpen] = useState(false), [query, setQuery] = useState('');
   const restoredModelReturn = useRef<ReceivedPhoneGoalReturn | undefined>(undefined);
@@ -117,6 +118,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   };
   const selectPeer = (next: string) => {
     if (selectedPeer.current === next) return;
+    if (phoneArchive?.archiveHandle) void run('devices.discard', { archiveHandle: phoneArchive.archiveHandle }).catch(() => {});
     setModelReturnFocus(undefined); setPhoneArchive(null);
     closeReview(); // Retire pending review handles before changing the list/detail scope.
     setNotice(''); setError(''); setTaskDetails({});
@@ -183,6 +185,23 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const peer = peerId ? peers.find(row => row.deviceId === peerId) : undefined, local = snapshot?.local || {}, actions = snapshot?.actions || {};
   const PeerIcon = peer ? platformIcon(peer) : IconDevices;
   const pairingEntry = form === 'add' || form === 'invite';
+  // Only this short-lived choice ID crosses the system picker. The URI, photo
+  // and decoded invite stay native; the owner separately asks to inspect it.
+  const [imageId, setImageId] = useState(''), activeImage = useRef(''), imageRun = useRef(run);
+  imageRun.current = run;
+  const releaseImage = () => {
+    const old = activeImage.current; activeImage.current = '';
+    if (old) void imageRun.current('devices.pairImage.close', { pickerId: old }).catch(() => {});
+  };
+  const closeImage = () => { releaseImage(); setImageId(''); };
+  useEffect(() => { if (form !== 'add' && activeImage.current) closeImage(); }, [form]);
+  useEffect(() => () => releaseImage(), []);
+  const chooseImage = () => {
+    releaseImage(); const id = crypto.randomUUID(); activeImage.current = id; setImageId(id);
+    void invoke('devices.pairImage.pick', { pickerId: id }, value => {
+      if (value.pickerId !== id || value.opened !== true) throw new Error('没有收到这次系统选图的回执，请重新选择。');
+    });
+  };
   const inviteAddresses = strings(actions.localAddresses);
   const inviteAddress = address ? inviteAddresses.includes(address) ? address : '' : inviteAddresses.length === 1 ? inviteAddresses[0] : '';
   const openPairEntry = (side: 'add' | 'invite') => { setRaw(''); setAddress(''); setError(''); setNotice(''); setForm(side); };
@@ -241,6 +260,16 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const phoneAccess = peer && phonePeer && !retired(peer) ? phoneSurfaceStatus(peer, now) : null;
   const desktopPeer = !!peer && (!!peer.windowsDesktop || /windows/i.test(peer.platform || '') || desktopScopes(peer, now, local.deviceId).length > 0
     || rows(peer.capabilitySnapshot?.capabilities).some(item => item.id === 'desktop' || String(item.id).startsWith('desktop.')));
+  const prepareDeviceGoal = () => {
+    if (!peer || selectedPeer.current !== peer.deviceId || retired(peer)) return;
+    if (phonePeer && !desktopPeer) {
+      if (!/^pw1_[a-f0-9]{64}$/.test(peer.deviceId) || typeof peer.instanceId !== 'string' || !peer.instanceId || !/^[a-f0-9]{64}$/.test(peer.certificateFingerprint || '')) {
+        setError('这部手机的原配对身份尚未核对，未改成任意设备。'); return;
+      }
+      setWorkPhone({ deviceId: peer.deviceId, instanceId: peer.instanceId, certificateFingerprint: peer.certificateFingerprint, label: name(peer) });
+    } else setWorkPhone(undefined);
+    setForm('work');
+  };
   const openDesktopPreparation = () => { rememberReadingPosition('detail'); setError(''); setNotice(''); setDesktopOpen(true); };
   const localPhone = rows(state.phoneReadiness?.groups);
   const phoneStatus = (id: string) => { const value = localPhone.find(row => row.id === id); return ({ ready: '本机检查可用', blocked: '需要准备', unsupported: '本机不支持', unknown: '尚未核实' } as Record<string,string>)[value?.state] || '尚未核实'; };
@@ -275,16 +304,25 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     });
   };
   const activeArchive = samePhoneGoalArchive(phoneArchive, peer, local) ? phoneArchive : null;
-  const readPhoneArchive = (direction?: 'older' | 'newer') => {
-    if (busy || !peer || selectedPeer.current !== peer.deviceId || direction && !activeArchive) return;
+  const archiveSide: PhoneArchiveSide = activeArchive?.side === 'received' ? 'received' : 'sent';
+  const readPhoneArchive = (side: PhoneArchiveSide, direction?: 'older' | 'newer') => {
+    if (busy || !peer || selectedPeer.current !== peer.deviceId || direction && (!activeArchive || archiveSide !== side)) return;
     const target = peer.deviceId;
-    void invoke('devices.readPhoneGoalArchive', direction ? { archiveHandle: activeArchive!.archiveHandle, direction } : { targetDeviceId: target }, value => {
-      const actual = devicePhoneGoalArchive(value, peer, local); if (selectedPeer.current === target) setPhoneArchive(actual);
+    void invoke(side === 'received' ? 'devices.readReceivedPhoneGoals' : 'devices.readPhoneGoalArchive', direction ? { archiveHandle: activeArchive!.archiveHandle, direction } : { targetDeviceId: target }, value => {
+      const actual = devicePhoneGoalArchive(value, peer, local, side); if (selectedPeer.current === target) setPhoneArchive(actual);
     });
   };
   const openArchivedGoal = (row: Data, sourceWork: boolean) => {
-    if (busy || !activeArchive || activeArchive.targetDeviceId !== selectedPeer.current || !rows(activeArchive.rows).some(entry => entry.taskId === row.taskId && entry.operationId === row.operationId)) return;
+    if (busy || !peer || !activeArchive || activeArchive.targetDeviceId !== selectedPeer.current || !rows(activeArchive.rows).some(entry => entry.taskId === row.taskId && entry.operationId === row.operationId)) return;
     const args = { taskId: row.taskId, operationId: row.operationId, archiveHandle: activeArchive.archiveHandle };
+    if (archiveSide === 'received') {
+      void invoke('devices.returnToReceivedPhoneGoal', args, value => {
+        if (selectedPeer.current !== peer.deviceId) return;
+        setModelReturnFocus(receivedPhoneArchiveReturn(value, row, peer, local));
+        setNotice('已找回本机接纳的原工作。没有重新开始；可用操作请从该工作单独读取。');
+      });
+      return;
+    }
     if (sourceWork) { void invoke('devices.openTask', args); return; }
     void invoke('devices.openHistory', args, value => {
       if (value.kind !== 'history' || value.view?.archiveReadOnly !== true || value.view.phoneGoalResult !== true || value.view.taskId !== row.taskId
@@ -554,7 +592,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
           {originalWork}
           {(trusted.length > 0 || snapshot.hasMorePeers) && supported('deviceTaskScope.prepare') && <section className="pw-device-section" aria-label="准备新的设备工作">
             <WorkspaceSectionHeading title="准备新工作" actions={<>
-              <Button variant="secondary" disabled={busy} onClick={() => setForm('work')}>准备交给助手</Button>
+              <Button variant="secondary" disabled={busy} onClick={() => { setWorkPhone(undefined); setForm('work'); }}>准备交给助手</Button>
               {supported('phoneControl.prepare') && <Button variant="ghost" disabled={busy} onClick={() => setForm('manual')}>自己控制手机</Button>}
             </>} />
           </section>}
@@ -592,22 +630,27 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               {!deviceChannelWasConnected(peer) && available(peer.actions?.connect) ? <Button variant="secondary" disabled={busy} onClick={() => actionReview('peer.connect', { deviceId: peer.deviceId })}>核对并连接这台设备</Button>
                 : desktopPeer ? <Button variant="secondary" disabled={busy} onClick={openDesktopPreparation}>核对桌面观看范围</Button>
                 : !phoneAccess && !received?.count && deviceChannelWasConnected(peer) && supported('devices.snapshot') ? <Button variant="secondary" disabled={busy} onClick={readPeerCapabilities}>向对方读取能力与授权</Button>
-                : received?.workRecorded && supported('deviceTaskScope.prepare') ? <Button variant="secondary" disabled={busy} onClick={() => setForm('work')}>写目标，再选择设备范围</Button> : null}
+                : received?.workRecorded && supported('deviceTaskScope.prepare') ? <Button variant="secondary" disabled={busy} onClick={prepareDeviceGoal}>{phonePeer && !desktopPeer ? '为这部手机写目标' : '写目标，再选择设备范围'}</Button> : null}
             </div>}
           </section>}
           <Accordion className="pw-device-disclosures">
-            {(!desktopPeer || phonePeer) && supported('devices.readPhoneGoalArchive') && <AccordionItem id="phone-goal-archive" title="找回这部手机的原目标" description="从本机记录查找，无需对方在线" icon={IconClock}>
-              <Button variant="secondary" disabled={busy} onClick={() => readPhoneArchive()}>{activeArchive ? '从最近的记录重新读取' : '读取这部手机的原派工'}</Button>
+            {(!desktopPeer || phonePeer) && supported('devices.readPhoneGoalArchive') && <AccordionItem id="phone-goal-archive" title="找回往来目标" description="查本机留下的记录，无需对方在线" icon={IconClock}>
+              <div className="pw-form-actions" role="group" aria-label="读取方向">
+                <Button variant={activeArchive && archiveSide === 'sent' ? 'secondary' : 'ghost'} aria-pressed={!!activeArchive && archiveSide === 'sent'} disabled={busy} onClick={() => readPhoneArchive('sent')}>我交给它的</Button>
+                {supported('devices.readReceivedPhoneGoals') && <Button variant={activeArchive && archiveSide === 'received' ? 'secondary' : 'ghost'} aria-pressed={!!activeArchive && archiveSide === 'received'} disabled={busy} onClick={() => readPhoneArchive('received')}>它交给我的</Button>}
+              </div>
               {activeArchive && <>
-                <p>这里只列本机为这部手机保留的目标，不代表已经送达或完成。打开原派发后，由你决定是否向手机读取回执或成果。</p>
+                <p role="status">{archiveSide === 'received' ? '这是本机已收到并保存的直接目标，不代表你已同意开始。找回原工作不会重启任务。' : '这里只列本机为这部手机保留的目标，不代表已经送达或完成。打开原派发后，由你决定是否读取回执或成果。'}</p>
                 {!activeArchive.rows.length && <p>这一批本机记录里没有能核对的直接手机目标。</p>}
                 {rows(activeArchive.rows).map(row => <div className="pw-device-history-entry" key={JSON.stringify([row.taskId, row.operationId])}>
                   <h4 dir="auto">{row.goal}</h4><p>{time(row.createdAt)} · {row.screenMode === 'background' ? '独立后台屏' : '主屏'}</p>
-                  <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => openArchivedGoal(row, false)}>核对这次原派发</Button>
-                    <Button variant="ghost" disabled={busy || !supported('devices.openTask')} onClick={() => openArchivedGoal(row, true)}>打开本机原工作</Button></div>
+                  <div className="pw-form-actions">{archiveSide === 'received'
+                    ? <Button variant="secondary" disabled={busy || !supported('devices.returnToReceivedPhoneGoal')} onClick={() => openArchivedGoal(row, false)}>找回本机接纳的原工作</Button>
+                    : <><Button variant="secondary" disabled={busy} onClick={() => openArchivedGoal(row, false)}>核对这次原派发</Button>
+                      <Button variant="ghost" disabled={busy || !supported('devices.openTask')} onClick={() => openArchivedGoal(row, true)}>打开本机原工作</Button></>}</div>
                 </div>)}
-                <div className="pw-form-actions">{activeArchive.canReadNewer && <Button variant="ghost" disabled={busy} onClick={() => readPhoneArchive('newer')}>较新记录</Button>}
-                  {activeArchive.hasMore && <Button variant="secondary" disabled={busy} onClick={() => readPhoneArchive('older')}>更早记录</Button>}</div>
+                <div className="pw-form-actions">{activeArchive.canReadNewer && <Button variant="ghost" disabled={busy} onClick={() => readPhoneArchive(archiveSide, 'newer')}>较新记录</Button>}
+                  {activeArchive.hasMore && <Button variant="secondary" disabled={busy} onClick={() => readPhoneArchive(archiveSide, 'older')}>更早记录</Button>}</div>
               </>}
             </AccordionItem>}
             {!retired(peer) && (desktopPeer || phonePeer || supported('deviceTaskScope.prepare')) && <AccordionItem id="peer-work-options" title="新工作与手动查看" description="新目标要重新选择设备和范围，不沿用原工作的权限" icon={IconLayers}>
@@ -615,7 +658,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               <div className="pw-form-actions">
               {desktopPeer && <Button disabled={busy} leadingIcon={IconMonitor} onClick={openDesktopPreparation}>核对并选择桌面范围</Button>}
               {phonePeer && !retired(peer) && supported('phoneControl.prepare') && <Button disabled={busy} onClick={() => setForm('manual')}>选择手机与屏幕</Button>}
-              {!retired(peer) && supported('deviceTaskScope.prepare') && <Button variant={desktopPeer ? 'secondary' : 'primary'} disabled={busy} onClick={() => setForm('work')}>选择设备并准备目标</Button>}
+              {!retired(peer) && supported('deviceTaskScope.prepare') && <Button variant={desktopPeer ? 'secondary' : 'primary'} disabled={busy} onClick={prepareDeviceGoal}>{phonePeer && !desktopPeer ? '为这部手机准备工作' : '选择设备并准备目标'}</Button>}
               </div>
               {desktopPeer && <p className="pw-field-hint">准备页只核对电脑与观看范围，不打开画面，不申请控制。</p>}
               {phonePeer && <div><p>写目标后，选择主屏或独立后台屏及准确应用范围，再审阅开始。“完成目标”由模型操作；“手动控制”由你刷新静态画面后逐次点击、滑动或输入，不是实时视频镜像。</p>
@@ -663,7 +706,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
       </>}
     </section>
     <PhoneControlPreparation onPendingChange={setPreparingDeviceWork} open={form === 'manual'} run={run} onClose={() => setForm('')} />
-    <DeviceTaskPreparation onPendingChange={setPreparingDeviceWork} open={form === 'work'} run={run} onClose={() => setForm('')} />
+    <DeviceTaskPreparation phone={workPhone} onPendingChange={setPreparingDeviceWork} open={form === 'work'} run={run} onClose={() => setForm('')} />
     <SettingsDialog isOpen={!!form && !review && form !== 'work' && form !== 'manual' && (!pairingEntry || !!snapshot)} onClose={() => { clearSensitive(true); refresh(); }} title={form === 'relay' ? '临时中继租约' : form === 'connection' ? '更新原设备连接地址' : form.startsWith('recovery') ? '核对原配对结果' : '配对另一台设备'}><div className="pw-collaboration-dialog" data-collaboration-kind="DevicesWorkspace">
       <div className="pw-device-form">
         {error && <p className="pw-device-feedback" role="alert">{error}</p>}
@@ -671,7 +714,21 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
         {pairingEntry && <RadioOptions className="pw-device-pair-roles" label="从哪台设备发出邀请？" value={form} onChange={side => { if (side === 'add' || side === 'invite') openPairEntry(side); }} isDisabled={busy}
           options={[{id: 'add', label: '对方已发邀请'}, {id: 'invite', label: '从这台手机发出'}]} />}
         {['add', 'connection', 'relay'].includes(form) && <section className="pw-device-form-step">
-          {form === 'add' && <p>粘贴对方的短时邀请。加入不要求这台手机开启接收、主屏读取或独立屏。之后双方各自选择范围并核对完整指纹。</p>}
+          {form === 'add' && <p>加入对方的短时邀请，无需开启这台手机的接收或屏幕读取。两端仍需分别核对指纹和权限。</p>}
+          {form === 'add' && supported('devices.pairImage.pick') && supported('devices.pairImage.review') && <>
+            <div className="pw-form-actions">
+              <Button variant="secondary" disabled={busy || !available(actions.join)} onClick={chooseImage}>{imageId ? '重新选择图片' : '选择邀请二维码图片'}</Button>
+              {imageId && <Button disabled={busy || !available(actions.join)} onClick={() => {
+                void invoke('devices.pairImage.review', { pickerId: imageId }, value => {
+                  if (activeImage.current !== imageId) throw new Error('原选图窗口已变化，请重新选择。');
+                  closeImage();
+                  if (value.cancelled === true && value.pickerId === imageId) { setError('没有选择图片。请重新选图，或粘贴原邀请。'); return; }
+                  acceptReview(value);
+                });
+              }}>核对所选图片</Button>}
+            </div>
+            <p>可选电脑上这次邀请的截图或照片，保留四周白边。只在本机识别，不上传，也不自动加入。也可以粘贴邀请：</p>
+          </>}
           <TextAreaField label={form === 'relay' ? '已有临时租约' : form === 'add' ? '对方的短时邀请' : '原设备短时邀请'} value={raw} onChange={setRaw} isDisabled={busy} hint="仅在当前窗口核对，离开或进入后台后清除。" />
           <Button disabled={busy || !raw.trim() || form === 'add' && !available(actions.join)} onClick={() => { void invoke(form === 'relay' ? 'devices.reviewRelay' : form === 'connection' ? 'devices.reviewConnection' : 'devices.inspectInvitation', { raw, ...(form === 'connection' ? { deviceId: peerId } : {}) }, acceptReview); }}>{form === 'add' ? '核对邀请与权限' : '读取原生审阅'}</Button>
           {form === 'add' && !available(actions.join) && actions.join?.reason && <p>{actions.join.reason}</p>}

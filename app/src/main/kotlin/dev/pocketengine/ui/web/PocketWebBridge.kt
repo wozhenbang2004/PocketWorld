@@ -247,6 +247,7 @@ internal class PocketWebBridge(
             "chat.cancel", "ownerWork.input", "ownerWork.control", "message.origin", "conversation.new", "conversation.select", "conversation.directory", "conversation.reader.open", "conversation.reader.close", "conversation.reader.earlier", "conversation.reader.refresh", "conversation.reader.position", "conversation.reader.select", "conversation.reader.attachment",
             "ownerWork.supplement.read", "ownerWork.supplement.edit", "ownerWork.supplement.send", "ownerWork.supplement.query",
             "attachments.pick", "attachments.openPicker", "attachments.closePicker", "attachments.toggle", "attachments.remove", "attachments.open", "sources.open", "sources.read", "sources.close",
+            "phone.result.original",
             "quickVoice.start", "quickVoice.save", "quickVoice.close", "quickVoice.return",
             "skillDraft.open", "skillDraft.read", "skillDraft.source", "skillDraft.confirm", "skillDraft.cancel", "skillDraft.query", "skillDraft.close", "voice.start", "voice.stop", "voice.review", "voice.accept", "voice.discard", "speech.speak", "speech.stop", "speech.taskAnnouncements", "speech.stopTaskAnnouncement",
             "tasks.refresh", "tasks.open", "tasks.close", "tasks.stop", "tasks.review", "tasks.confirm", "tasks.approve", "tasks.resolve", "tasks.resume", "tasks.scope", "tasks.plan.enter", "tasks.answerQuestion", "tasks.answerQuestionChoice", "tasks.deleteScreenshot", "privacy.screenshots.read", "privacy.screenshots.save",
@@ -260,7 +261,7 @@ internal class PocketWebBridge(
             "memory.list", "memory.search", "memoryReview.list", "memoryReview.getCandidate", "memoryReview.capacity", "memoryReview.history", "memoryReview.openSource",
             "memoryReview.candidates", "mcp.snapshot", "mcp.pickConfig", "mcp.cancel", "mcp.discoverImport", "mcp.discoverDirect", "mcp.reviewImport", "mcp.installImport", "mcp.reviewEnabled", "mcp.confirmEnabled", "mcp.read", "mcp.reviewGrant", "mcp.confirmGrant", "learning.snapshot", "groups.snapshot",
             "remote.probe", "remote.environments", "local.termuxProbe", "local.inspectRuntime", "local.readReceipts", "local.prepareCheckout", "local.describeCheckout", "local.terminal.review", "local.terminal.confirm", "local.terminal.query", "local.terminal.stop", "local.terminal.open", "local.terminal.read", "local.terminal.input", "local.terminal.inputReceipt", "local.terminal.close", "automation.receipts", "automation.list", "automation.reviewSchedule", "automation.reviewRule", "automation.confirmReview", "automation.prepareOccurrence", "channels.inspect", "skills.read", "plugins.history", "proxy.status", "proxy.stop"
-        ) + PocketWebSetup.COMMANDS + PocketWebModelConnectionCommands.COMMANDS + PocketWebAiSources.COMMANDS + PocketWebAiGroups.COMMANDS + PocketWebConversationModels.COMMANDS + PocketWebPermissionPolicy.COMMANDS + PocketWebData.COMMANDS + PocketWebConnections.COMMANDS + PocketWebMemoryDrafts.COMMANDS + setOf("conversation.drafts") + PocketWebKnowledge.COMMANDS + PocketWebPersonal.COMMANDS + PocketWebMessageQuotes.COMMANDS + PocketWebChannels.COMMANDS + PocketWebExperience.COMMANDS + PocketWebRouteReferences.COMMANDS + PocketWebSkills.COMMANDS + PocketWebPresentation.COMMANDS + PocketWebTeams.COMMANDS + PocketWebGroups.COMMANDS + PocketWebMedia.COMMANDS + PocketWebComposerModels.COMMANDS + PocketWebDevices.COMMANDS + PocketWebPlugins.COMMANDS + PocketWebRealtime.COMMANDS + PocketWebProxy.COMMANDS + PocketWebPlans.COMMANDS + PocketWebCommitments.COMMANDS + PocketWebTokenBudgets.COMMANDS + PocketWebProfiles.COMMANDS + PocketWebProjectWork.COMMANDS + PocketWebProjectPreview.COMMANDS + PocketWebPhoneViewer.COMMANDS + PocketWebBackground.COMMANDS + PocketWebMemoryHistory.COMMANDS + PocketWebModelDiagnostics.COMMANDS + PocketWebDeveloperLogs.COMMANDS + PocketWebAttachments.COMMANDS + PocketWebRemoteTasks.COMMANDS + PocketWebTeamEvidence.COMMANDS + PocketWebConversationOrganization.COMMANDS + PocketWebTaskCapabilities.COMMANDS + PocketWebPhoneControl.COMMANDS + PocketWebDeviceTaskScope.COMMANDS + PocketWebProjectRuntime.COMMANDS + PocketWebProjectLivePreview.COMMANDS + PocketWebRemoteInbox.COMMANDS + PocketWebProjectDevelopment.COMMANDS + PocketWebProjectGitImport.COMMANDS + PocketWebButlerPreparations.COMMANDS + PocketWebWorkSearch.COMMANDS + PocketWebFormDrafts.COMMANDS
+        ) + PocketWebSetup.COMMANDS + PocketWebModelConnectionCommands.COMMANDS + PocketWebAiSources.COMMANDS + PocketWebAiGroups.COMMANDS + PocketWebConversationModels.COMMANDS + PocketWebPermissionPolicy.COMMANDS + PocketWebData.COMMANDS + PocketWebConnections.COMMANDS + PocketWebMemoryDrafts.COMMANDS + setOf("conversation.drafts", "composer.firstMemory.save") + PocketWebKnowledge.COMMANDS + PocketWebPersonal.COMMANDS + PocketWebMessageQuotes.COMMANDS + PocketWebChannels.COMMANDS + PocketWebExperience.COMMANDS + PocketWebRouteReferences.COMMANDS + PocketWebSkills.COMMANDS + PocketWebPresentation.COMMANDS + PocketWebTeams.COMMANDS + PocketWebGroups.COMMANDS + PocketWebMedia.COMMANDS + PocketWebComposerModels.COMMANDS + PocketWebDevices.COMMANDS + PocketWebPlugins.COMMANDS + PocketWebRealtime.COMMANDS + PocketWebProxy.COMMANDS + PocketWebPlans.COMMANDS + PocketWebCommitments.COMMANDS + PocketWebTokenBudgets.COMMANDS + PocketWebProfiles.COMMANDS + PocketWebProjectWork.COMMANDS + PocketWebProjectPreview.COMMANDS + PocketWebPhoneViewer.COMMANDS + PocketWebBackground.COMMANDS + PocketWebMemoryHistory.COMMANDS + PocketWebModelDiagnostics.COMMANDS + PocketWebDeveloperLogs.COMMANDS + PocketWebAttachments.COMMANDS + PocketWebRemoteTasks.COMMANDS + PocketWebTeamEvidence.COMMANDS + PocketWebConversationOrganization.COMMANDS + PocketWebTaskCapabilities.COMMANDS + PocketWebPhoneControl.COMMANDS + PocketWebDeviceTaskScope.COMMANDS + PocketWebProjectRuntime.COMMANDS + PocketWebProjectLivePreview.COMMANDS + PocketWebRemoteInbox.COMMANDS + PocketWebProjectDevelopment.COMMANDS + PocketWebProjectGitImport.COMMANDS + PocketWebButlerPreparations.COMMANDS + PocketWebWorkSearch.COMMANDS + PocketWebFormDrafts.COMMANDS
     }
 
     /** Equivalent to the former Activity saveable presentation state, never an execution grant. */
@@ -344,7 +345,7 @@ internal class PocketWebBridge(
         taskReviewGeneration++
         domainGeneration++
         taskHistory.clear(); workSearch.clear()
-        reviews.clear(); phoneComposer.clearReviews(); voiceInput.clear(); modelReviews.clear(); automation.clear(); mcpImports.clear(); executionReviews.clear(); sourceReader.clear(); messageQuotes.clear(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); memoryHistory.clear(); conversationOrganization.clear(); if (documentReplaced) taskCapabilities.clear() else taskCapabilities.background(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); connectionPages.clear(); teamPages.clear(); groupPages.clear(); mediaPages.clear(); realtimePages.clear(); proxyPages.clear(); planPages.clear(); commitmentPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); devicePages.clear(); pluginPages.clear(); localPages.clear(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); accountWorkspace.invalidate(); composerModels.clear(); aiSources.clear(); conversationModels.clear()
+        reviews.clear(); phoneComposer.clearReviews(); voiceInput.clear(); modelReviews.clear(); automation.clear(); mcpImports.clear(); executionReviews.clear(); sourceReader.clear(); messageQuotes.clear(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); memoryHistory.clear(); conversationOrganization.clear(); if (documentReplaced) taskCapabilities.clear() else taskCapabilities.background(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); connectionPages.clear(); teamPages.clear(); groupPages.clear(); mediaPages.clear(); realtimePages.clear(); proxyPages.clear(); planPages.clear(); commitmentPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); devicePages.clear(preserveImageChoice = !documentReplaced); pluginPages.clear(); localPages.clear(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); accountWorkspace.invalidate(); composerModels.clear(); aiSources.clear(); conversationModels.clear()
         if (documentReplaced) personal.clear() else personal.background()
         developerLogs.clear()
         if (documentReplaced) routeReferences.clear() else routeReferences.background()
@@ -548,7 +549,9 @@ internal class PocketWebBridge(
                     val selected = requireTask(requiredString(args, "taskId"))
                     require(selected.id == taskViewId && selected.raw.optString("actorId") == "owner" && selected.raw.optString("spaceId") == "private") { "请先打开这份原私人任务" }
                 }
-                deviceTaskScope.dispatch(action, args) { result, error ->
+                val input = if (action == "deviceTaskScope.prepare" && args.has("directPhone"))
+                    JSONObject(args.toString()).put("directPhone",devicePages.originalPhoneForPreparation(args.getJSONObject("directPhone"))) else args
+                deviceTaskScope.dispatch(action, input) { result, error ->
                     if (action == "deviceTaskScope.prepare" && error == null && result?.optBoolean("prepared") == true)
                         openOriginalTask(id, result.getString("taskId"), true, "devices")
                     else { complete(id, result, error); publishState() }
@@ -835,6 +838,17 @@ internal class PocketWebBridge(
                 }
                 return
             }
+            if (action == "phone.result.original") {
+                checkedPayload(args, setOf("conversationId", "messageId", "sourceRevision", "taskId", "runId", "epoch", "deliveryId", "offset", "expectedDigest", "readerWindow"))
+                val ticket = captureWindow()
+                val document = documentId
+                val current = { !closed && document != null && document == documentId && acceptsWindow(ticket) && section == null && taskViewId == null }
+                require(current() && controller.webPrivateOwnerVisible()) { "请回到这条手机回执的原私人对话" }
+                controller.readPhoneOriginal(requiredString(args, "conversationId"), requiredString(args, "messageId"), requiredLong(args, "sourceRevision"),
+                    requiredString(args, "taskId"), requiredString(args, "runId"), requiredInt(args, "epoch"), requiredString(args, "deliveryId"),
+                    requiredInt(args, "offset"), requiredString(args, "expectedDigest", true), requiredLong(args, "readerWindow"), current) { result, error -> complete(id, result, error, retainValue = false) }
+                return
+            }
             if (action == "message.origin") {
                 checkedPayload(args, setOf("messageId", "sourceMessageId", "offset"))
                 require(section == null && taskViewId == null && controller.webPrivateOwnerVisible()) { "请回到原答复读取原请求" }
@@ -891,6 +905,14 @@ internal class PocketWebBridge(
             if (action in PocketWebExperience.COMMANDS) {
                 requireSection("learning"); experience.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }; return
             }
+            if (action == "composer.firstMemory.save") {
+                require(section == null && taskViewId == null && controller.webPrivateOwnerVisible()) { "请回到新的私人对话" }
+                checkedPayload(args, setOf("key", "epoch", "revision", "paused"))
+                val epoch = args.opt("epoch"); val revision = args.opt("revision"); val paused = args.opt("paused")
+                require(epoch is Int && epoch >= 0 && (revision is Int || revision is Long) && (revision as Number).toLong() > 0 && paused is Boolean)
+                controller.setFirstMessageMemory(requiredString(args, "key"), epoch, (revision as Number).toLong(), paused) { value, error -> complete(id, value, error); publishState() }
+                return
+            }
             if (action in PocketWebPersonal.COMMANDS) {
                 if ((action == "profile.conversation.read" || action == "profile.conversation.save") && section == null) {
                     // The primary composer exposes only its current conversation's memory switch, not memory bodies.
@@ -933,6 +955,20 @@ internal class PocketWebBridge(
                                 task.raw.optString("spaceId") == "private" && task.raw.opt("contextAvailable") != false &&
                                 output.matches(task.raw.optJSONObject("teamResearchOutputReference"))) { "当前原任务无法核对这份产出，没有打开其他执行" }
                         })
+                }
+                return
+            }
+            if (action == "devices.returnToReceivedPhoneGoal") {
+                requireSection("devices")
+                val originalId = devicePages.receivedTaskForReturn(args)
+                val current = { section == "devices" && runCatching { devicePages.receivedTaskForReturn(args) == originalId }.getOrDefault(false) }
+                controller.readReceivedPhoneTaskForReturn(originalId, current, { raw -> devicePages.checkReceivedTaskForReturn(args, raw); Unit }) { task, failure ->
+                    if (failure != null || task == null) complete(id, null, failure ?: "原接纳工作不可读取")
+                    else try {
+                        val receipt = devicePages.checkReceivedTaskForReturn(args, task.raw)
+                        complete(id, JSONObject().put("value",receipt).put("snapshot",JSONObject.NULL), null)
+                    } catch (changed: Exception) { complete(id, null, changed.message ?: "原接纳身份已变化") }
+                    publishState()
                 }
                 return
             }
@@ -1038,6 +1074,12 @@ internal class PocketWebBridge(
             }
             if (action in PocketWebConnections.COMMANDS) {
                 requireSection(action.substringBefore('.'))
+                if (action == "remote.workspaceJobs") { connectionPages.cloudJobs.read(args) { row, error -> complete(id, row, error, retainValue = false) }; return }
+                if (action == "remote.openWorkspaceJob") {
+                    val origin = connectionPages.cloudJobs.opener(args)
+                    openOriginalTask(id, args.getString("taskId"), true, sourceWindowCurrent = { section == "remote" && origin.current() }, checkReaderInput = { original -> origin.verify(original.raw) })
+                    return
+                }
                 if (action == "ssh.workHistory") { connectionPages.workHistory.read(args) { row, error -> complete(id, row, error) }; return }
                 if (action == "ssh.openOriginalWork") {
                     val origin = connectionPages.workHistory.opener(args)

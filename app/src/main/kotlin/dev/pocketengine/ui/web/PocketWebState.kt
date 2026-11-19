@@ -54,6 +54,7 @@ internal object PocketWebState {
             row.phoneResult?.let { value.put("phoneResult", it.toJson()) }
             row.replyContext?.let { value.put("replyContext", it.toJson()) }
             row.readerInputWork?.let { value.put("readerInputTaskId", it.taskId) }
+            if (row.learningExcluded && row.role == "user") value.put("automaticLearningExcluded", true)
             row.taskResult?.let { value.put("taskResult", it.toJson()) }
         }
 
@@ -224,6 +225,7 @@ internal object PocketWebState {
             .put("epoch", controller.composerViewEpoch).put("revision", draft?.revision ?: 0L)
             .put("text", draft?.text ?: "").put("mode", draft?.mode ?: state.chatSendMode)
             .put("conversationId", draft?.conversationId ?: "").put("saving", controller.composerSaving)
+            .put("firstMessageMemory", draft?.let { controller.firstMessageMemoryState(it.key) } ?: JSONObject.NULL)
             .put("scrollIndex", draft?.scrollIndex ?: 0).put("scrollOffset", draft?.scrollOffset ?: 0)
             .put("anchorMessage", draft?.anchorMessage ?: "").put("observedMessage", draft?.observedMessage ?: "")
             .put("newReplies", draft?.newReplies ?: false).put("sourceRefs", publicValue(draft?.sourceRefs()))

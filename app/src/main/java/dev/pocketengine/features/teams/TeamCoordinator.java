@@ -769,14 +769,21 @@ if(runs.size()+archived.size()>=RETAINED_RUN_LIMIT)throw new IllegalStateExcepti
             // A future stage is a valid mailbox destination, not a reason to create its child.
             letter.put("researchRound",requestedRound);
             String child=progress(member(run,target),requestedRound).optString("researchTaskId");
-            if(!child.isEmpty()){nativeMessages.queue(new JSONObject(deliveryInput.toString()).put("recipientMemberId",target).put("assignmentId",child));letter.put("nativeResearchInput",true).put("researchTaskId",child);}
+            if(!child.isEmpty()){
+                JSONObject saved=nativeMessages.queue(new JSONObject(deliveryInput.toString()).put("recipientMemberId",target).put("assignmentId",child));
+                if(!id.equals(saved.optString("messageId"))||!child.equals(saved.optString("assignmentId"))||!target.equals(saved.optString("recipientMemberId"))||requestedRound!=saved.optInt("researchRound"))
+                    throw new SecurityException("原研究消息的持久回执不对应此成员阶段");
+                letter.put("nativeResearchInput",true).put("researchTaskId",child);
+                if("historical".equals(saved.optString("state")))letter.put("status","historical");
+            }
         }
         if(!parentActor.isEmpty())letter.put("senderParentTaskId",parentActor);inbox.put(letter);
         message(run,target,run.json.optInt("round"),parentActor.isEmpty()?"user":"parent_model","conversation",redact(text,run.config),null);JSONObject shown=run.json.getJSONArray("transcript").getJSONObject(run.json.getJSONArray("transcript").length()-1);
         if(requestedRound>0)shown.put("researchRound",requestedRound);
         if(selectedItem!=null)shown.put("workItemId",selectedItem.getString("workItemId")).put("assignmentId",selectedItem.getString("assignmentId"));shown.put("messageId",id).put("senderId",parentActor.isEmpty()?"owner":"@parent").put("senderParentTaskId",parentActor).put("recipientMemberId",target).put("quoteMessageId",quote).put("mode",mode).put("deliveryId",id);TeamMessageQuote.copyTo(letter,shown);
-        activity(run,"conversation_queued",parentActor.isEmpty()?"主人消息已定向排队；未暂停其他成员，未冒称已消费":"父代理低信任消息已定向排队；不是主人批准，也未冒称已消费",target);save(run);
-        return JsonFiles.copy(run.json).put("messageReceipt",messageReceipt(letter,"queued"));
+        boolean historical="historical".equals(letter.optString("status"));
+        activity(run,historical?"conversation_saved":"conversation_queued",historical?"原研究阶段已结束；消息仅作原记录保留，未派发":parentActor.isEmpty()?"主人消息已定向排队；未暂停其他成员，未冒称已消费":"父代理低信任消息已定向排队；不是主人批准，也未冒称已消费",target);save(run);
+        return JsonFiles.copy(run.json).put("messageReceipt",messageReceipt(letter,historical?"historical":"queued"));
     }
     private static JSONObject messageReceipt(JSONObject letter,String status)throws Exception {
         JSONObject receipt=new JSONObject().put("messageId",letter.getString("id")).put("recipientMemberId",letter.getString("targetMemberId")).put("status",status).put("executionAuthorized",false);
@@ -879,13 +886,30 @@ if(runs.size()+archived.size()>=RETAINED_RUN_LIMIT)throw new IllegalStateExcepti
             admission.prepareTransition();JSONObject result=resumeSelected(run.json.getString("id"),slot.getString("id"),model,run.evidenceFactory,run.externalFactory,admission);return result.put("parentContinuation",true).put("wakeQueuedNotCompleted",true).put("budgetIncreased",false);
         }
     }
-    public JSONObject continueResearchForParent(dev.pocketengine.store.TaskStore.TeamParentOrigin original,JSONObject input,WorkPlanStarter nativeAdmission,ModelConfig model,boolean messageContinuation)throws Exception {
-        original.checkCurrent();synchronized(this){Run run=required(input.getString("runId"));if(!researchEnabled(run)||run.json.optString("mode").equals("produce")||run.json.optJSONObject("workPlan")!=null)throw new SecurityException("制作任务仍必须走原workItem继续");reviewedSnapshot(run,input);
-            JSONObject slot=member(run,input.getString("memberId")),pause=slot.optJSONObject("parentPause");String parent=original.view().getString("parentTaskId");int round=input.getInt("researchRound"),next=unfinishedRound(run,slot);if(next<1)for(int r=1;r<=plannedRounds(run);r++)if(!"completed".equals(progress(slot,r).optString("status"))){next=r;break;}
-            if(next!=round||run.children.containsKey(slot.getString("id"))||researchFactory.hasActiveWork(run.json.getString("id"))||slot.optBoolean("exited"))throw new SecurityException("原研究阶段已完成/变化或仍有执行，不按最新阶段猜测重做");
-            if(slot.optBoolean("paused")){if(pause==null||!parent.equals(pause.optString("parentTaskId"))||pause.optBoolean("permanent")||pause.optInt("memberGeneration")!=slot.getInt("generation"))throw new SecurityException("主人/其他代次暂停只能由原前台继续，父代理不能代批");}
-            else if(!messageContinuation||!slot.optString("status").matches("awaiting_user|interrupted"))throw new SecurityException("只继续父代理暂停或已有确定安全等待的原研究child");
-            nativeAdmission.approve();JSONObject result=resume(run.json.getString("id"),slot.getString("id"),model,run.evidenceFactory,run.externalFactory);slot.remove("parentPause");save(run);return JsonFiles.copy(run.json).put("parentContinuation",true).put("budgetIncreased",false);
+    private static JSONObject heldResearchMessage(String reason)throws Exception {
+        return new JSONObject().put("parentContinuation",false).put("continuationState","not_dispatched")
+                .put("continuationReason",reason).put("budgetIncreased",false);
+    }
+    public JSONObject continueResearchForParent(dev.pocketengine.store.TaskStore.TeamParentOrigin original,JSONObject input,WorkPlanStarter nativeAdmission,ModelConfig model,JSONObject savedMessage)throws Exception {
+        original.checkCurrent();synchronized(this){Run run=required(input.getString("runId"));if(!researchEnabled(run)||run.json.optString("mode").equals("produce")||run.json.optJSONObject("workPlan")!=null)throw new SecurityException("制作任务仍必须走原workItem继续");
+            JSONObject slot=member(run,input.getString("memberId")),pause=slot.optJSONObject("parentPause");String parent=original.view().getString("parentTaskId");int round=input.getInt("researchRound");
+            if(savedMessage!=null){
+                if(!savedMessage.getString("messageId").equals(input.getString("messageId"))||!slot.getString("id").equals(savedMessage.getString("recipientMemberId"))||savedMessage.getInt("researchRound")!=round)throw new SecurityException("不是本次已保存的原成员消息");
+                if(savedMessage.optString("status").matches("historical|consumed"))return heldResearchMessage("原消息已有归档或消费记录，不以该消息重新派发");
+                if(run.generation!=input.getInt("expectedGeneration")||slot.getInt("generation")!=input.getInt("expectedMemberGeneration")||run.json.getLong("revision")!=input.getLong("expectedRevision"))
+                    return heldResearchMessage("消息已保存，原协作快照已变化；未改投或另起执行");
+                String originalChild=savedMessage.optString("researchTaskId");
+                if(originalChild.isEmpty())return heldResearchMessage("消息已留在指定阶段，该阶段尚无原子任务可续");
+                if(!originalChild.equals(progress(slot,round).optString("researchTaskId")))return heldResearchMessage("原消息绑定的子任务与当前阶段不同，未转交新任务");
+            }
+            reviewedSnapshot(run,input);int next=unfinishedRound(run,slot);if(next<1)for(int r=1;r<=plannedRounds(run);r++)if(!"completed".equals(progress(slot,r).optString("status"))){next=r;break;}
+            if(next!=round||slot.optBoolean("exited")){if(savedMessage!=null)return heldResearchMessage("指定阶段已结束或更换，未跨轮重新执行");throw new SecurityException("原研究阶段已完成/变化，不按最新阶段猜测重做");}
+            if(run.children.containsKey(slot.getString("id"))||researchFactory.hasActiveWork(run.json.getString("id"))){if(savedMessage!=null)return heldResearchMessage("原团队仍有分工在途；本次没有另起执行，消息是否已消费以原回执为准");throw new SecurityException("原研究仍有执行，不重复派发");}
+            if(slot.optBoolean("paused")){if(pause==null||!parent.equals(pause.optString("parentTaskId"))||pause.optBoolean("permanent")||pause.optInt("memberGeneration")!=slot.getInt("generation")){if(savedMessage!=null)return heldResearchMessage("消息已保存，原暂停只能由主人或原控制者解除");throw new SecurityException("主人/其他代次暂停只能由原前台继续，父代理不能代批");}}
+            else if(savedMessage==null||!slot.optString("status").matches("awaiting_user|interrupted")){if(savedMessage!=null)return heldResearchMessage("原成员未到可继续的等待点；消息保留，未另起执行");throw new SecurityException("只继续父代理暂停或已有确定安全等待的原研究child");}
+            // Everything above is before admission. After this line an error remains uncertain;
+            // never turn a possibly queued worker into an asserted "not dispatched" result.
+            nativeAdmission.approve();resume(run.json.getString("id"),slot.getString("id"),model,run.evidenceFactory,run.externalFactory);slot.remove("parentPause");save(run);return JsonFiles.copy(run.json).put("parentContinuation",true).put("continuationState","queued").put("budgetIncreased",false);
         }
     }
     public synchronized JSONObject parentExecutorState(String id)throws Exception{Run run=required(id);boolean active=run.executing||!run.children.isEmpty()||!run.researchTurns.isEmpty()||assignmentFactory!=null&&assignmentFactory.hasActiveWork(id)||researchFactory!=null&&researchFactory.hasActiveWork(id);return new JSONObject().put("activeNativeExecutors",active).put("resourcesReleased",!active).put("requestedStopNotTerminal",active&&run.json.optString("status").matches("paused|cancelled"));}

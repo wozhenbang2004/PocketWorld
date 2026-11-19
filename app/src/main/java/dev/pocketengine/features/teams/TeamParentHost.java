@@ -101,14 +101,19 @@ public final class TeamParentHost {
         boolean researchWake=args.optString("delivery","queue").equals("queue")&&args.has("researchRound")&&!args.has("workItemId")&&tasks.teamWakePolicyConfigured(source,id);
         nativeInput.put("mode","queue");JSONObject sent=coordinator.sendParentMessage(source,nativeInput,input->tasks.queueTeamParentInput(source,input,wakePolicy?coordinator.wakeSource(id,args.getString("memberId"),args.getString("workItemId")):researchWake?coordinator.researchQueueWakeSource(id,args.getString("memberId"),args.getInt("researchRound"),input.getString("assignmentId")):null));
         if(args.optString("delivery","queue").equals("continue")){
-            if(!args.has("workItemId")&&!args.has("researchRound"))throw new IllegalArgumentException("显式continue需原workItem或准确研究阶段，普通queue不唤醒");JSONObject now=coordinator.get(id);nativeInput.put("expectedRevision",now.getLong("revision")).put("expectedGeneration",now.getInt("generation"));JSONObject slot=TeamWorkPlan.find(now.getJSONArray("members"),args.getString("memberId"));nativeInput.put("expectedMemberGeneration",slot.getInt("generation"));
-            // A native continuation may already have queued its original worker before a later
-            // persistence failure. Never turn an arbitrary exception into "waiting / not started".
-            // The saved message stays in its original inbox; the original prepared operation and
-            // parent reservation remain unresolved for reconciliation instead of being replayed.
-            if(args.has("researchRound"))coordinator.continueResearchForParent(source,nativeInput,()->{tasks.admitTeamResearchParentContinuation(source,id,args.getString("memberId"),args.getInt("researchRound"));return new JSONObject();},models.get(),true);
-            else coordinator.continueForParent(source,nativeInput,(nextRun,nextMember)->tasks.continueTeamParentItem(source,id,args.getString("workItemId"),args.getInt("itemRevision"),args.getInt("ownerGeneration"),nextRun,nextMember),models.get(),true);
-            sent.getJSONObject("messageReceipt").put("continuationState","queued").put("budgetIncreased",false);
+            if(!args.has("workItemId")&&!args.has("researchRound"))throw new IllegalArgumentException("显式continue需原workItem或准确研究阶段，普通queue不唤醒");
+            JSONObject receipt=sent.getJSONObject("messageReceipt");
+            if(args.has("researchRound")){
+                // Bind continuation to the snapshot returned by that save, not whatever member or stage is latest now.
+                nativeInput.put("expectedRevision",sent.getLong("revision"));
+                JSONObject outcome=coordinator.continueResearchForParent(source,nativeInput,()->{tasks.admitTeamResearchParentContinuation(source,id,args.getString("memberId"),args.getInt("researchRound"));return new JSONObject();},models.get(),receipt);
+                receipt.put("continuationState",outcome.getString("continuationState")).put("budgetIncreased",false);
+                if(outcome.has("continuationReason"))receipt.put("continuationReason",outcome.getString("continuationReason"));
+            }else{
+                JSONObject now=coordinator.get(id);nativeInput.put("expectedRevision",now.getLong("revision")).put("expectedGeneration",now.getInt("generation"));JSONObject slot=TeamWorkPlan.find(now.getJSONArray("members"),args.getString("memberId"));nativeInput.put("expectedMemberGeneration",slot.getInt("generation"));
+                coordinator.continueForParent(source,nativeInput,(nextRun,nextMember)->tasks.continueTeamParentItem(source,id,args.getString("workItemId"),args.getInt("itemRevision"),args.getInt("ownerGeneration"),nextRun,nextMember),models.get(),true);
+                receipt.put("continuationState","queued").put("budgetIncreased",false);
+            }
         }
         if(wakePolicy)sent.getJSONObject("messageReceipt").put("automaticWake",false);
         if(wakePolicy&&!sent.getJSONObject("messageReceipt").optBoolean("duplicate")){
@@ -118,7 +123,7 @@ public final class TeamParentHost {
                 coordinator.continueForWake(admission,nativeInput,models.get());sent.getJSONObject("messageReceipt").put("automaticWake",true).put("continuationState","queued").put("budgetIncreased",false);
             }}
         }
-        if(researchWake){JSONObject receipt=sent.getJSONObject("messageReceipt").put("automaticWake",false);if(receipt.has("researchTaskId")&&!receipt.optBoolean("duplicate")){
+        if(researchWake){JSONObject receipt=sent.getJSONObject("messageReceipt").put("automaticWake",false);if(receipt.has("researchTaskId")&&!receipt.optString("status").equals("historical")&&!receipt.optBoolean("duplicate")){
             var nativeWake=coordinator.researchQueueWakeSource(id,args.getString("memberId"),args.getInt("researchRound"),receipt.getString("researchTaskId"));
             var admission=nativeWake==null?null:tasks.prepareTeamParentResearchWake(source,nativeWake);
             if(admission!=null){sent.getJSONObject("messageReceipt").put("wake",admission.view());if(admission.hasCandidate()){
@@ -148,7 +153,7 @@ public final class TeamParentHost {
         switch(action){
             case "pause":case "cancel":tasks.claimTeamParentAction(source,id);JSONObject stopped=coordinator.pauseForParent(source,input,action.equals("cancel"));if(input.optString("memberId").isEmpty()){if(action.equals("cancel")){writes.cancel(id);tasks.requestCancel(id,id);}else writes.pause(id);}tasks.updateExternal(id,stopped);changed.accept(id);JSONObject stoppedState=status(source,id);return stoppedState.put("stopRequested",true).put("stopState",stoppedState.getBoolean("resourcesReleased")?"drained":"stopping");
             case "resume":if(args.has("researchRound")){
-                JSONObject continued=coordinator.continueResearchForParent(source,input,()->{tasks.admitTeamResearchParentContinuation(source,id,args.getString("memberId"),args.getInt("researchRound"));return new JSONObject();},models.get(),false);tasks.updateExternal(id,continued);changed.accept(id);return status(source,id).put("budgetIncreased",false);
+                JSONObject continued=coordinator.continueResearchForParent(source,input,()->{tasks.admitTeamResearchParentContinuation(source,id,args.getString("memberId"),args.getInt("researchRound"));return new JSONObject();},models.get(),null);tasks.updateExternal(id,continued);changed.accept(id);return status(source,id).put("budgetIncreased",false);
             }if(!args.has("workItemId"))throw new IllegalArgumentException("按原workItem逐项继续，不恢复整队cancelled或猜最新成员任务");JSONObject continued=coordinator.continueForParent(source,input,(nextRun,nextMember)->tasks.continueTeamParentItem(source,id,args.getString("workItemId"),args.getInt("itemRevision"),args.getInt("ownerGeneration"),nextRun,nextMember),models.get(),false);tasks.updateExternal(id,continued);changed.accept(id);return status(source,id).put("budgetIncreased",false);
             case "reassign":JSONObject transferred=tasks.transferTeamParentItem(source,id,args.getString("workItemId"),args.getString("newMemberId"),args.getInt("itemRevision"),args.getInt("ownerGeneration"));JSONObject refreshed=coordinator.refreshWorkItems(id,transferred);tasks.updateExternal(id,refreshed);changed.accept(id);return status(source,id).put("budgetIncreased",false);
             case "request_review":{

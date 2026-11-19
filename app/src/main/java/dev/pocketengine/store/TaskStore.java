@@ -15,6 +15,7 @@ import dev.pocketengine.core.RunJournal;
 import dev.pocketengine.core.ExecutionPlan;
 import dev.pocketengine.core.ExecutionPlanning;
 import dev.pocketengine.core.CapabilitySnapshot;
+import dev.pocketengine.features.devices.DirectedPhoneTarget;
 import dev.pocketengine.core.ScopedToolCatalog;
 import dev.pocketengine.features.teams.TeamWakeQueue;
 import dev.pocketengine.runtime.usage.InferenceCapture;
@@ -1072,6 +1073,32 @@ public final class TaskStore {
                     ||!snapshot.getString("content").equals(message.optString("content"))||!snapshot.getString("resultDigest").equals(message.optString("resultDigest")))throw new SecurityException("原手机结果消息未完整保存");
         }
     }
+    /** Owner reading only: the selected private publication, not the latest run of its task.
+     * A result may be visible to its owner without being eligible as new model context. */
+    public synchronized JSONObject conversationPhoneOriginalPage(String conversation,String message,long revision,String task,String run,int epoch,String delivery,int offset,String expectedDigest)throws Exception {
+        ConversationPhoneHandoff.nativeId(conversation);ConversationPhoneHandoff.nativeId(message);
+        String key=ConversationPhoneHandoff.resultKey(task,run,epoch);
+        // Native phone result publication inserts exactly revision 1. Edits or restored text do not reissue it.
+        if(revision!=1L||offset<0||!ConversationPhoneHandoff.deliveryId(task,run,epoch).equals(delivery))throw new SecurityException("请选择这条原手机回执");
+        db.beginTransactionNonExclusive();try{
+            if(!conversationRepository.active()||!conversationRepository.exists(conversation))throw new SecurityException("原私人对话已关闭或不可用");
+            JSONObject published=conversationRepository.sourceByReply(delivery);
+            if(published==null||!message.equals(published.optString("sourceId"))||revision!=published.optLong("revision")||!conversation.equals(published.optString("conversationId"))
+                    ||published.optBoolean("deleted")||published.optBoolean("memoryContextRetired")||published.optLong("memorySourceRetiredThrough")>=revision)
+                throw new SecurityException("原回执已撤回、换版或不可用，没有打开其他结果");
+            JSONObject link=ConversationPhoneHandoff.association(required(task));
+            if(!conversation.equals(link.getString("conversationId")))throw new SecurityException("原手机工作不属于这段私人对话");
+            JSONObject record=new JSONObject(TaskStoreTextReader.read(db,TaskStoreTextReader.Column.PHONE_RETURN_RECORD,key,8*1024*1024));
+            if(!"delivered".equals(record.optString("phase"))||!message.equals(record.optString("messageId")))throw new SecurityException("没有这条回执的正式原文");
+            JSONObject snapshot=record.getJSONObject("snapshot");ConversationPhoneHandoff.requireResult(snapshot,task,run,epoch);
+            if(!conversation.equals(snapshot.getString("conversationId"))||!snapshot.getString("generation").equals(link.getJSONObject("source").getString("generation"))||
+                    !snapshot.getString("generation").equals(conversationRepository.authority().optString("generation")))throw new SecurityException("原结果的对话或来源代次已变化");
+            if(!snapshot.getString("status").equals(published.optString("nativeStatus")))throw new SecurityException("原回执终态无法核对");
+            requireConversationPhoneEndedRun(task,run,epoch);requireConversationPhonePublication(snapshot,published);
+            JSONObject page=ConversationPhoneHandoff.summaryPage(snapshot,record.getString("originalSummary"),offset,expectedDigest).put("messageId",message).put("sourceRevision",revision);
+            db.setTransactionSuccessful();return page;
+        }finally{db.endTransaction();}
+    }
     private static JSONObject conversationPhoneDeliveryAck(JSONObject snapshot)throws Exception {
         JSONObject ack=new JSONObject().put("executionAuthorized",false).put("resultVerified",false);
         for(String field:new String[]{"requestId","taskId","runId","epoch","conversationId","deliveryId","status"})ack.put(field,snapshot.get(field));return ack;
@@ -1203,21 +1230,26 @@ public final class TaskStore {
     /** Native private preparation only. This creates no run, model call, remote operation or grant.
      * The caller retains the same UUID and complete arguments when a save receipt is unknown. */
     public synchronized JSONObject prepareOwnerDeviceTask(String requestId,String goal,long deadlineAt,int tools,int models,java.util.function.BooleanSupplier ownerWindow)throws Exception{
+        return prepareOwnerDeviceTask(requestId,goal,deadlineAt,tools,models,null,ownerWindow);
+    }
+    public synchronized JSONObject prepareOwnerDeviceTask(String requestId,String goal,long deadlineAt,int tools,int models,DirectedPhoneTarget directPhone,java.util.function.BooleanSupplier ownerWindow)throws Exception{
         if(requestId==null||!requestId.matches("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}")||goal==null||goal.isBlank()||goal.length()>8000
                 ||tools<1||tools>TaskExecutionScope.MAX_TOOLS||models<1||models>TaskExecutionScope.MAX_MODEL_CALLS)throw new IllegalArgumentException("请填写目标、有限额度和准确准备编号");
-        String wanted=goal.trim();String digest=capabilityFingerprint(new JSONObject().put("goal",wanted).put("deadlineAt",deadlineAt).put("toolLimit",tools).put("modelCallLimit",models));
+        String wanted=goal.trim();JSONObject body=new JSONObject().put("goal",wanted).put("deadlineAt",deadlineAt).put("toolLimit",tools).put("modelCallLimit",models);
+        if(directPhone!=null)body.put("directPhone",directPhone.view());String digest=capabilityFingerprint(body);
         db.beginTransaction();try{
             if(ownerWindow==null||!ownerWindow.getAsBoolean())throw new SecurityException("原私人设备工作窗口已关闭");
             JSONObject prior=read(requestId);
             if(prior!=null){
                 requirePrivateOwner(prior);JSONObject prepared=prior.optJSONObject(OWNER_DEVICE_WORK);
-                if(prepared==null||!OWNER_DEVICE_WORK_FORMAT.equals(prepared.optString("format"))||!requestId.equals(prepared.optString("requestId"))||!digest.equals(prepared.optString("requestDigest")))throw new SecurityException("相同准备编号不能替换目标、额度或期限");
+                if(prepared==null||!OWNER_DEVICE_WORK_FORMAT.equals(prepared.optString("format"))||!requestId.equals(prepared.optString("requestId"))||!digest.equals(prepared.optString("requestDigest")))throw new SecurityException("相同准备编号不能替换目标、接收设备、额度或期限");
                 db.setTransactionSuccessful();return copy(prior,false);
             }
             long now=System.currentTimeMillis();if(deadlineAt<=now||deadlineAt>now+7_200_000L)throw new IllegalArgumentException("首次设备工作需设置未来两小时以内的有限期限");
             JSONObject task=base(requestId,wanted,"assistant","capabilities").put("conversationId","").put("runId","").put("status","paused")
                     .put("summary","目标已准备；请选择设备范围并确认，再开始。尚未调用模型或设备。")
                     .put(OWNER_DEVICE_WORK,new JSONObject().put("format",OWNER_DEVICE_WORK_FORMAT).put("requestId",requestId).put("requestDigest",digest));
+            if(directPhone!=null)task.getJSONObject(OWNER_DEVICE_WORK).put("directPhone",directPhone.view());
             task.put("executionScope",TaskExecutionScope.create(requestId,"capabilities",1L,deadlineAt,tools,models,0,0,
                     new JSONArray(new String[]{"device_invoke_tool","device_delegate_goal","device_operation_get"}),true));
             if(!ownerWindow.getAsBoolean())throw new SecurityException("原私人设备工作窗口已关闭");
@@ -1235,7 +1267,8 @@ public final class TaskStore {
         java.util.Set<String> allowed=new java.util.HashSet<>();for(int i=0;i<names.length();i++)allowed.add(names.getString(i));if(!allowed.equals(OWNER_DEVICE_TOOLS))throw new SecurityException("设备工作不能扩为本机通用工具");
         if(selected==null||!"pocketworld.native-device-source-scope.v1".equals(selected.optString("format"))||!task.getString("id").equals(selected.optString("taskId"))||!task.getString("goal").equals(selected.optString("goal"))
                 ||selected.optLong("parentScopeRevision")!=scope.getLong("revision")||!"goal_only".equals(selected.optString("contextMode"))||selected.getJSONArray("routes").length()==0)throw new SecurityException("请先在这份原任务选择并确认设备范围，再开始；未调用模型或设备");
-        JSONArray routes=selected.getJSONArray("routes");long now=System.currentTimeMillis();for(int i=0;i<routes.length();i++)if(routes.getJSONObject(i).getLong("deadline")<=now)throw new SecurityException("所选设备范围已到期，请重新读取并确认");
+        JSONArray routes=selected.getJSONArray("routes");DirectedPhoneTarget direct=DirectedPhoneTarget.fromTask(task);if(direct!=null)direct.requireRoutes(routes);
+        long now=System.currentTimeMillis();for(int i=0;i<routes.length();i++)if(routes.getJSONObject(i).getLong("deadline")<=now)throw new SecurityException("所选设备范围已到期，请重新读取并确认");
     }
     /** Identity projection only, never an authorization parsed from JSON. */
     public static String ownerDeviceWorkStartFingerprint(JSONObject task)throws Exception{
@@ -2232,7 +2265,9 @@ public final class TaskStore {
                     ||!"capabilities".equals(task.optString("executionMode"))||!task.optString("conversationId").isEmpty())return;
             mode="agent_device";
         }
-        JSONArray targets=new JSONArray();java.util.Set<String> seen=new java.util.HashSet<>();JSONObject scope=task.optJSONObject("deviceSourceScope");
+        JSONArray targets=new JSONArray();java.util.Set<String> seen=new java.util.HashSet<>();
+        DirectedPhoneTarget direct=DirectedPhoneTarget.fromTask(task);if(direct!=null){seen.add(direct.deviceId());targets.put(direct.deviceId());}
+        JSONObject scope=task.optJSONObject("deviceSourceScope");
         if(scope!=null&&"pocketworld.native-device-source-scope.v1".equals(scope.optString("format"))&&task.optString("id").equals(scope.optString("taskId"))){
             JSONArray routes=scope.optJSONArray("routes");
             for(int i=0;routes!=null&&i<Math.min(16,routes.length());i++){
@@ -5936,6 +5971,9 @@ public final class TaskStore {
     }
     /** Conversation identity is supplied by the validated host, never copied from tool arguments. */
     public synchronized JSONObject beginExternal(String feature,String command,String operationId,JSONObject input,String conversationId)throws Exception{
+        return beginExternal(feature,command,operationId,input,conversationId,null);
+    }
+    public synchronized JSONObject beginExternal(String feature,String command,String operationId,JSONObject input,String conversationId,JSONObject observedWorkspace)throws Exception{
         requireExecutionEnabled();
         if(feature.equals("ssh")){
             String resource=input.optString("_resourceId");if(resource.isEmpty())throw new SecurityException("SSH缺少宿主连接身份");
@@ -5947,6 +5985,10 @@ public final class TaskStore {
                 .put("feature",feature).put("command",command).put("operationId",operationId).put("status","queued");
         if(conversationId!=null&&!conversationId.isEmpty())t.put("conversationId",conversationId);
         JSONObject refs=new JSONObject();for(String key:new String[]{"profileId","environmentId","teamId","id","tool","worker","model","modeId","readOnly","harnessSelection","externalExecutionRiskAcknowledged"})if(input.has(key))refs.put(key,input.get(key));
+        if(observedWorkspace!=null&&"remote".equals(feature)&&"submitJob".equals(command)&&CloudWorkspaceJobs.valid(observedWorkspace)){
+            if(!observedWorkspace.get("profileId").equals(refs.opt("profileId"))||!observedWorkspace.get("environmentId").equals(refs.opt("environmentId"))||!observedWorkspace.get("worker").equals(refs.opt("worker"))||!observedWorkspace.get("profileBinding").equals(input.opt("_profileBinding")))throw new SecurityException("工作位置与原主机委托不符");
+            refs.put("hostWorkspace",new JSONObject(observedWorkspace.toString()));t.put("cloudWorkspaceRun",operationId);
+        }
         if(feature.equals("remote")&&command.equals("submitJob")&&"gemini_acp".equals(input.optString("worker"))){
             JSONObject captured=remoteBackendFirstRequest(operationId,input),target=captured.getJSONObject("target"),selection=captured.getJSONObject("request").getJSONObject("backendSelection");
             for(String key:new String[]{"profileBinding","serviceBase","environmentBinding"})refs.put(key,target.get(key));
@@ -6161,11 +6203,21 @@ public final class TaskStore {
     public synchronized JSONObject remoteOwnerTarget(String id)throws Exception{
         JSONObject task=required(id);requireRemoteOwner(task);rejectChannelParent(task);
         JSONObject evidence=task.optJSONObject("evidence"),refs=task.optJSONObject("externalRefs");
-        if(evidence==null||refs==null)throw new SecurityException("原电脑任务尚无可核对的执行证据");
+        JSONObject host=refs==null?null:refs.optJSONObject("hostWorkspace");
+        if(refs==null||evidence==null&&host==null)throw new SecurityException("原电脑任务尚无可核对的来源");
+        if(host!=null&&!CloudWorkspaceJobs.matches(task,host))host=null; // Older or differently scoped runs remain readable through their own original path, never this cloud projection.
+        if(evidence==null)evidence=new JSONObject(); // Phone registration can precede a transport receipt; only its original operation can be queried.
         String operation=messageText(task,"operationId",80),profile=messageText(refs,"profileId",80);
         if(!operation.equals(task.optString("runId"))||!profile.equals(evidence.optString("profileId",profile))||!operation.equals(evidence.optString("operationId",operation)))throw new SecurityException("原电脑执行身份不匹配");
-        String service=messageText(evidence,"serviceBase",2048);dev.pocketengine.features.remote.RemoteTransport.validateBase(service);
+        String service=host==null?messageText(evidence,"serviceBase",2048):messageText(host,"serviceBase",2048);dev.pocketengine.features.remote.RemoteTransport.validateBase(service);
         JSONObject source=new JSONObject().put("taskId",id).put("runId",task.getString("runId")).put("coordinatorEpoch",task.getInt("coordinatorEpoch")).put("profileId",profile).put("serviceBase",service).put("jobOperationId",operation).put("jobId",task.optString("externalId")).put("cancelRequested",task.optBoolean("cancelRequested"));
+        if(host!=null){
+            if(!service.equals(evidence.optString("serviceBase",service)))throw new SecurityException("原云作业回执地址不符");
+            source.put("profileBinding",host.getString("profileBinding")).put("hostWorkspace",new JSONObject(host.toString()))
+                .put("environmentId",host.getString("environmentId")).put("worker",host.getString("worker"));
+            if(!task.optString("externalId").isEmpty()&&!CloudWorkspaceJobs.accepted(task,evidence,host)&&!CloudWorkspaceJobs.accepted(task,task.optJSONObject("cloudHostAdmission"),host))
+                throw new SecurityException("不能核对原工作目录的接单身份；未改查另一项作业");
+        }
         if("gemini_acp".equals(refs.optString("worker"))){
             JSONObject args=remoteOperation(id,operation,"remote_job").getJSONObject("arguments"),target=args.getJSONObject("target");requireRemoteBackendReceipt(args,evidence);
             for(String key:new String[]{"profileId","profileBinding","serviceBase","environmentId","environmentBinding","worker"})if(!target.get(key).equals(refs.opt(key)))throw new SecurityException("原后端任务来源不一致");
@@ -6411,6 +6463,7 @@ public final class TaskStore {
             else if(nativeColdBudget!=null)throw new SecurityException("普通已结算续接不接受冷恢复授权移植");
             if(snapshot!=null){JSONObject known=remoteResultSnapshot(id,snapshot.getString("snapshotId"));if(!known.getString("snapshotVersion").equals(snapshot.getString("snapshotVersion"))||!source.getString("jobId").equals(known.getString("jobId"))||!source.getString("jobOperationId").equals(known.getString("jobOperationId")))throw new SecurityException("所选成果版本不是原任务当前job的快照");args.put("resultSnapshotId",known.getString("snapshotId")).put("resultSnapshotVersion",known.getString("snapshotVersion"));}
             insertRemoteOperation(operation,id,operation,"remote_job",args,"remote_job_prepared");
+            CloudWorkspaceJobs.advance(task,source,operation);
             task.put("runId",operation).put("operationId",operation).put("coordinatorEpoch",epoch).put("cancelRequested",false).put("status","queued").put("executionStatus","submitting").put("evidence",new JSONObject().put("executorStatus","submitting").put("operationId",operation).put("profileId",source.getString("profileId")).put("serviceBase",source.getString("serviceBase")).put("automaticallyVerified",false));task.remove("externalId");task.remove("externalUpdatedAt");
             if(preparation!=null){JSONObject evidence=task.getJSONObject("evidence");for(String key:new String[]{"environmentId","worker","model","readOnly"})if(source.has(key))evidence.put(key,source.get(key));evidence.put("executorStatus","native_gateway_prepared").put("nativePreparedContinuation",true).put("processStarted",false);task.put("status","awaiting_user").put("executionStatus","prepared");write(task);}
             saveRemoteRun(task,preparation==null?"running":"prepared",new JSONObject().put("source",source).put("ownerPrompt",prompt.trim()).put("gatewayPrepared",preparation!=null));
@@ -6811,6 +6864,7 @@ public final class TaskStore {
                 if(dev.pocketengine.features.remote.RemoteColdRecovery.source(source))dev.pocketengine.features.remote.RemoteColdRecovery.ownerBudget(source,request);
                 if(task.has("remoteInputScope")){JSONArray history=task.optJSONArray("remoteInputHistory");if(history==null)history=new JSONArray();if(history.length()>=8)throw new SecurityException("此任务已有8次历史输入范围，不覆盖旧记录");history.put(new JSONObject().put("scope",task.getJSONObject("remoteInputScope")).put("scopeHash",task.getString("remoteInputScopeHash")).put("state",task.optJSONObject("remoteInputState")).put("jobId",task.optString("remoteInputJobId")));task.put("remoteInputHistory",history);}
                 saveRemoteRun(task,task.optString("executionStatus"),new JSONObject().put("receipt",task.getJSONObject("evidence")));
+                CloudWorkspaceJobs.advance(task,source,operation);
                 task.put("runId",operation).put("operationId",operation).put("coordinatorEpoch",scope.getInt("coordinatorEpoch")).put("cancelRequested",false).put("status","queued").put("executionStatus","submitting").put("evidence",new JSONObject().put("executorStatus","submitting").put("operationId",operation).put("profileId",scope.getString("profileId")).put("serviceBase",scope.getString("serviceBase")).put("automaticallyVerified",false));
                 for(String key:new String[]{"externalId","externalUpdatedAt","externalOperationId","remoteInputJobId","remoteInputState","remoteInputStateAt"})task.remove(key);
                 appendEvent(task,new JSONObject().put("type","remote_owner_input_continuation").put("previousRunId",source.getString("runId")).put("runId",operation).put("coordinatorEpoch",scope.getInt("coordinatorEpoch")).put("source",source));
@@ -14808,11 +14862,18 @@ public final class TaskStore {
     public synchronized void updateExternal(String id,JSONObject receipt)throws Exception{db.beginTransaction();try{updateExternal(id,receipt,false);db.setTransactionSuccessful();}finally{db.endTransaction();}}
     private void updateExternal(String id,JSONObject receipt,boolean reviewedAdmission)throws Exception{
         JSONObject t=required(id);String raw=receipt.optString("status",receipt.optBoolean("ok",true)?"response_received":"failed");
+        JSONObject registered=t.optJSONObject("externalRefs"),location=registered==null?null:registered.optJSONObject("hostWorkspace");
+        JSONObject host=CloudWorkspaceJobs.matches(t,location)?location:null;
         if(t.optString("feature").equals("remote")){
             String operation=receipt.optString("operationId"),current=t.optString("operationId");
             if(operation.isEmpty()){
                 receipt=bindRemoteNotice(id,receipt);if(receipt==null)return;
                 operation=receipt.getString("operationId");
+            }
+            if(host!=null&&operation.equals(current)&&!receipt.optString("id").isEmpty()){
+                boolean knownId=t.optString("externalId").equals(receipt.opt("id"));
+                boolean uncertain=knownId&&raw.matches("unknown|not_found")&&!receipt.has("hostWorkspaceAnchor");
+                if(!t.optString("externalId").isEmpty()&&!knownId||!uncertain&&!CloudWorkspaceJobs.receipt(t,receipt,host))return;
             }
             JSONObject originalHarness=t.optJSONObject("externalRefs");
             if(originalHarness!=null&&"pi".equals(originalHarness.optString("worker"))&&receipt.opt("teamToolsOnly")==Boolean.TRUE){
@@ -14852,6 +14913,7 @@ public final class TaskStore {
         if(t.optString("feature").equals("remote"))settleRemoteDelegationAcceptance(t,receipt);
         if(!receipt.optString("id").isEmpty())t.put("externalId",receipt.getString("id"));
         if(receipt.has("operationId"))t.put("externalOperationId",receipt.getString("operationId"));
+        if(host!=null)CloudWorkspaceJobs.noteAdmission(t,receipt,host);
         String status;
         switch(raw){
             case "completed":case "partial":case "response_received":case "release":status="needs_confirmation";break;
@@ -14869,6 +14931,8 @@ public final class TaskStore {
         if(!status.matches("queued|running|paused|stopping|cancelled|failed|interrupted|awaiting_user|needs_confirmation|reconciling"))status="needs_confirmation";
         if(hasUnresolved(id)&&!("running".equals(raw)&&onlyLiveCoordinatorReads(t)))status="reconciling";
         JSONObject evidence=new JSONObject().put("executorStatus",raw).put("automaticallyVerified",false);for(String key:new String[]{"harnessSelection","harness","resumeSupported","promptTerminalConfirmed","teamContext","pendingTeamTools","teamToolReceipts","configurationRevision","capabilityRevision","executionPolicy","modeId","id","profileId","environmentId","operationId","expiresAt","exitCode","summary","message","pendingApprovals","pendingQuestions","questionReceipts","progress","promptResultIdentity","diffTruncated","threadId","turnId","protocol","outputTruncated","phase","round","generation","revision","mode","leaderId","controls","inputSteeringVerified","steeringUnknown","serviceBase","worker","model","capabilities","readOnly","readOnlyConfirmed","externalToolsDisabled","teamReadOnlyTools","protocolVerified","controlProtocolVerified","sessionIdentityConfirmed","sessionId","promptRequestId","reportedModel","interruptAcknowledged","turnStartAcknowledged","resumeJobId","sourceServiceBase","approvalReceipts","remoteEffectsVerified","eventCount","resultSubtype","permissionDenialCount","resultSnapshotId","resultSnapshotVersion","snapshotPrelaunchVerified","snapshotBaseVerifiedAt","workspaceIdentity","assignmentWorkspace","externalJobLimits","inferenceUsage","modelCallHardCapSupported","tokenHardCapSupported","costHardCapSupported","wallTimeHardCapSupported","wallTimeEnforcement","detachedDescendantIsolationVerified","assignmentWriteSandboxVerified","assignmentWorkspaceConfirmed","osReadIsolationVerified","modelOptions","modelRuntime","effort","noTools","teamTools","teamToolsOnly","codingToolsSupported","nativeSettled","nativeQueueEmptyConfirmed","resourcesHeld","commandAllowlistEnforced","processStarted","dispatchFenceFinal","notStartedConfirmed","processCleanupProof","outputLimitExceeded","inputState","recoveryProof","coldRecovery","projectHistory","sessionBranchSource","sessionBranch","nativeLocalDispatchProof","backendSelection","environmentBinding","inferenceAudience","groupInputSource","externalGroupApiMode","externalGroupApiRead","originalCancellation","cancellationDispatched","queryOnly","effectsReversed"})if(receipt.has(key))evidence.put(key,receipt.get(key));
+        if("remote".equals(t.opt("feature"))&&receipt.optString("hostWorkspaceAnchor").matches("[a-f0-9]{64}")&&receipt.optString("profileBinding").matches("[a-f0-9]{64}"))
+            evidence.put("hostWorkspaceAnchor",receipt.getString("hostWorkspaceAnchor")).put("profileBinding",receipt.getString("profileBinding"));
         if(t.has("remoteInputScope")&&t.has("remoteInputState")&&evidence.has("inputState"))evidence.put("inputState",new JSONObject(t.getJSONObject("remoteInputState").toString()));
         if("ssh".equals(t.optString("feature"))&&t.optString("command").matches("inspectFile|downloadFile|uploadFile"))for(String key:new String[]{"path","exists","bytes","version","expectedVersion","currentVersion","expectedRemoteVersion","maxTransferBytes","modifiedAtSeconds","streamedHash","atomicRemoteSnapshot","artifactSaved","attachment","sourceAttachment","sourceSha256","bytesReadFromLocal","expectedBytes","verifiedBytes","verifiedBusinessSuccess","targetReplacementSent","stagingPath","lockPath","stagingCleanupConfirmed","lockCleanupConfirmed","lockOwnershipConfirmed","cleanupReviewRequired","partialRemoteFilePossible","sourceChanged","cooperativeConditionalWrite","externalWriterRacePossible","workspaceIsSandbox","transferExpiresAt","localTransferDeadline","automaticRetry","code"})if(receipt.has(key))evidence.put(key,receipt.get(key));
         if(t.optString("feature").equals("teams")&&receipt.optJSONArray("members")!=null){
@@ -15264,21 +15328,29 @@ public final class TaskStore {
     public synchronized JSONObject taskSummaryPage(String cursor,int limit)throws Exception{
         JSONObject page=TaskAuditStore.summaryPage(db,cursor,limit);JSONArray rows=page.getJSONArray("tasks"),visible=new JSONArray();for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if("inference".equals(row.optString("kind")))continue;row=ownerWorkForUi(row);conversationPhoneLinkForUi(row);row=phoneOwnerQuestionForUi(row);row.put("hasUnresolvedOperations",hasUnresolved(row.getString("id"))).put("historyHasUnconfirmedOperations",hasUnconfirmedForUi(row.getString("id")));visible.put(row);}return page.put("tasks",visible).put("accountingRecordsExcluded",rows.length()-visible.length());
     }
-    /** Attention is a bounded read of original headers, not a second task ledger. A sparse
-     * window retains its cursor, so old unanswered work remains reachable beyond the home page. */
-    /** Source-gated SQLite projection only. No network, credential lookup or grant. */
+    /** Only locally held original first jobs, scoped to the selected logical Companion store + directory. */
+    public synchronized JSONObject originalCloudWorkspacePage(JSONObject target,String cursor,SshWorkHistory.Check check)throws Exception {
+        return CloudWorkspaceJobs.page(target,cursor,(position,limit)->TaskAuditStore.summaryPage(db,position,limit),id->{
+            JSONObject task=boundedHostWorkCore(id);if(!CloudWorkspaceJobs.matches(task,target))return null;
+            return phoneOwnerQuestionForUi(ownerWorkForUi(task));
+        },check);
+    }
+    private JSONObject boundedHostWorkCore(String id)throws Exception {
+        try(Cursor row=db.rawQuery("SELECT CASE WHEN length(CAST(document AS BLOB))<="+TaskAuditStore.MAX_CORE_BYTES+" THEN document END, CASE WHEN length(CAST(ui_header AS BLOB))<=32768 THEN ui_header END FROM tasks WHERE task_id=?",new String[]{id})){
+            if(!row.moveToFirst()||row.isNull(0)&&row.isNull(1))return null;
+            return new JSONObject(row.getString(row.isNull(0)?1:0));
+        }
+    }
     public synchronized JSONObject originalSshWorkPage(String profile,String binding,String cursor,SshWorkHistory.Check check)throws Exception {
         return SshWorkHistory.page(profile,binding,cursor,(position,limit)->TaskAuditStore.summaryPage(db,position,limit),id->{
             // Same bounded original core and source gates as getForUi, without fetching unneeded event/operation bodies.
-            JSONObject task;
-            try(Cursor row=db.rawQuery("SELECT CASE WHEN length(CAST(document AS BLOB))<="+TaskAuditStore.MAX_CORE_BYTES+" THEN document END, CASE WHEN length(CAST(ui_header AS BLOB))<=32768 THEN ui_header END FROM tasks WHERE task_id=?",new String[]{id})){
-                if(!row.moveToFirst()||row.isNull(0)&&row.isNull(1))return null;
-                task=new JSONObject(row.getString(row.isNull(0)?1:0));
-            }
+            JSONObject task=boundedHostWorkCore(id);
             if(!SshWorkHistory.matches(task,profile,binding))return null;
             return phoneOwnerQuestionForUi(ownerWorkForUi(task));
         },check);
     }
+    /** Attention is a bounded read of original headers, not a second task ledger. A sparse
+     * window retains its cursor, so old unanswered work remains reachable beyond the home page. */
     public synchronized JSONObject taskAttentionSummaryPage(String cursor)throws Exception{return taskNotificationSummaryPage(cursor,false);}
     public synchronized JSONObject taskNotificationSummaryPage(String cursor,boolean results)throws Exception{
         String next=cursor;int windows=0,examined=0;JSONObject page;JSONArray selected;

@@ -1,0 +1,8 @@
+.pw-phone-report-text {
+  margin: 0 0 1em;
+  font-size: 1rem;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}

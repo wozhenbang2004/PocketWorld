@@ -109,6 +109,21 @@ final class ConversationPhoneHandoff {
         if(summary==null||!summaryDigest(summary).equals(result.getString("summaryDigest"))||summary.length()!=result.getInt("summaryChars")
                 ||(summary.length()>MAX_CONTENT_CHARS)!=result.getBoolean("summaryTruncated")||!summaryContent(summary).equals(result.getString("content")))throw new SecurityException("原手机结果正文与冻结指纹不一致");
     }
+    /** Read one span of an already-authorized immutable receipt. Offsets count UTF-16 units, never half a pair. */
+    static JSONObject summaryPage(JSONObject snapshot,String summary,int offset,String expectedDigest)throws Exception {
+        requireOriginalSummary(snapshot,summary);
+        String digest=snapshot.getString("resultDigest");
+        if(expectedDigest==null||(!expectedDigest.isEmpty()&&!expectedDigest.equals(digest))||(offset>0&&expectedDigest.isEmpty()))
+            throw new SecurityException("原结果版本已变化，未拼接不同轮次");
+        if(offset<0||offset>summary.length()||offset>0&&offset<summary.length()&&Character.isLowSurrogate(summary.charAt(offset))&&Character.isHighSurrogate(summary.charAt(offset-1)))
+            throw new IllegalArgumentException("原文段落位置无效");
+        int end=offset+Math.min(8000,summary.length()-offset);
+        if(end<summary.length()&&end>offset&&Character.isHighSurrogate(summary.charAt(end-1))&&Character.isLowSurrogate(summary.charAt(end)))end--;
+        JSONObject out=new JSONObject();
+        for(String field:new String[]{"taskId","runId","epoch","conversationId","deliveryId","status","endedAt","summaryChars","summaryTruncated","resultDigest","summaryDigest"})out.put(field,snapshot.get(field));
+        return out.put("offset",offset).put("nextOffset",end).put("hasMore",end<summary.length()).put("text",summary.substring(offset,end))
+                .put("executionAuthorized",false).put("resultVerified",false);
+    }
     private static String summaryContent(String summary){
         if(summary.isBlank())return "本轮执行已结束，未提供文字总结；请查看原手机任务。";
         if(summary.length()<=MAX_CONTENT_CHARS)return summary;

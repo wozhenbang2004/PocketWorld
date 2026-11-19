@@ -806,7 +806,10 @@ public final class FeatureHost implements AutoCloseable {
                     JSONObject admitted;
                     if(feature.equals("browser")&&!input.optString("taskId").isEmpty()){
                         id=input.getString("taskId");admitted=tasks.resumeExternalAttempt(id,feature);
-                    }else admitted=tasks.beginExternal(feature,command,id,input,teamConversationId);
+                    }else {
+                        JSONObject location=nativeOwnerAdmission&&"remote".equals(feature)&&"submitJob".equals(command)&&module instanceof dev.pocketengine.features.remote.RemoteModule cloud ? cloud.observedWorkspaceForOwner(input):null;
+                        admitted=tasks.beginExternal(feature,command,id,input,teamConversationId,location);
+                    }
                     tracked=id;trackedRun=admitted.getString("runId");emitTask(id);
                     input.put("_operationId",trackedRun);
                     if(feature.equals("remote")||feature.equals("local")||feature.equals("ssh"))input.put("operationId",trackedRun);

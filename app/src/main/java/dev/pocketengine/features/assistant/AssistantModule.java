@@ -320,6 +320,7 @@ public final class AssistantModule implements EngineModule {
         catch(Exception notDelivered){pendingCancellations.put(control,new Cancellation(control,conversation));throw notDelivered;}
     }
     private JSONObject send(JSONObject input)throws Exception{
+        if(input.has("firstMessageWithoutPersonalMemory"))throw new IllegalStateException("未安装原生首条输入准入，未按默认个人记忆发送");
         if(input.has("ownerSourceRefs")&&(input.optJSONArray("ownerSourceRefs")==null||input.getJSONArray("ownerSourceRefs").length()>0))throw new IllegalStateException("原文引用的真实原生任务投影未安装，未降级为普通文本发送");
         if(input.has("ownerPreviewRefs")&&(input.optJSONArray("ownerPreviewRefs")==null||input.getJSONArray("ownerPreviewRefs").length()>0))throw new IllegalStateException("元素引用的原生项目投影未安装，草稿未降级发送");
         if(input.has("ownerObjectRefs")&&(input.optJSONArray("ownerObjectRefs")==null||input.getJSONArray("ownerObjectRefs").length()>0))throw new IllegalStateException("对象引用的原生任务投影未安装，草稿未降级发送");
@@ -471,7 +472,10 @@ public final class AssistantModule implements EngineModule {
         if(input.has("ownerObjectRefs")&&input.optJSONArray("ownerObjectRefs")==null)throw new IllegalArgumentException("对象引用必须为固定数组");
         final JSONArray selectedObjects=OwnerObjectReferences.checked(input.optJSONArray("ownerObjectRefs")==null?new JSONArray():input.getJSONArray("ownerObjectRefs"));
         if(selectedObjects.length()>0&&executor==null)throw new IllegalStateException("原对象投影未安装，草稿仍保留");
-        String fingerprint=fingerprint(text,mode,selections,selectedSources,selectedPreviews,selectedObjects);
+        boolean firstPaused=input.has("firstMessageWithoutPersonalMemory");
+        if(firstPaused&&(!Boolean.TRUE.equals(input.opt("firstMessageWithoutPersonalMemory"))||!requested.isEmpty()||projectStart!=null||!durable()))throw new SecurityException("首条个人记忆设置只适用于新私人对话的原生持久准入，未按默认发送");
+        String contentFingerprint=fingerprint(text,mode,selections,selectedSources,selectedPreviews,selectedObjects);
+        String fingerprint=firstPaused?dev.pocketengine.store.TaskStore.capabilityFingerprint(new JSONObject().put("input",contentFingerprint).put("firstMessageWithoutPersonalMemory",true)):contentFingerprint;
         synchronized(admission){
             if(migrationInProgress)throw new IllegalStateException("原迁移正在对账，未接收新消息");
             JSONObject prior=findSubmission(client);
@@ -521,6 +525,8 @@ public final class AssistantModule implements EngineModule {
                     JSONObject conversation;
                     if(requested.isEmpty()){
                         conversation=new JSONObject().put("conversationId",cid).put("title",unicodePrefix(safe,40)).put("createdAt",System.currentTimeMillis()).put("messages",new JSONArray());
+                        // Same original transaction writes this header before the owner message and before startScoped.
+                        if(firstPaused)conversation.put("personalMemoryEnabled",false).put("personalMemoryRevision",1L);
                         JSONArray next=new JSONArray().put(conversation);for(int i=0;i<conversations.length();i++)next.put(conversations.getJSONObject(i));conversations=next;trimConversations();
                     }else conversation=find(requested);
                     JSONObject message=newMessage(cid,"user",safe,config).put("clientMessageId",client).put("requestFingerprint",fingerprint).put("inputMode",mode).put("attachments",immutableRefs);

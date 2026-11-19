@@ -1062,10 +1062,16 @@ class JobManager:
                 job["externalExecutionRiskAcknowledged"] = True
             job["workspaceIdentity"] = self.workspace_identity(env)
             # Bind the observed root again at reservation. Existing process-start checks still fence a later swap.
-            if assignment_record is None and request.get("environmentBinding") and job["workspaceIdentity"] and env["root"] == self._environment(eid)["root"]:
+            bound_prior = self.jobs.get(request["resumeJobId"]) if request.get("resumeJobId") else None
+            continued_anchor = bound_prior.get("hostWorkspaceAnchor") if bound_prior is not None else None
+            if assignment_record is None and (request.get("environmentBinding") or continued_anchor) and job["workspaceIdentity"] and env["root"] == self._environment(eid)["root"]:
                 location = self.host_workspace(env, job["workspaceIdentity"])
-                if request["environmentBinding"] != self.environment_binding(eid, location=location):
+                if request.get("environmentBinding") and request["environmentBinding"] != self.environment_binding(eid, location=location):
                     raise RequestError("Original workspace changed before acceptance; no replacement job was created", 409)
+                if continued_anchor and (not location or location["anchor"] != continued_anchor):
+                    raise RequestError("Original cloud job workspace changed; continuation was not accepted", 409)
+                if location:
+                    job["hostWorkspaceAnchor"] = location["anchor"]  # Actual accepted location, never copied from a prompt.
             if job["worker"] == "command":
                 job["outputEncoding"] = env.get("commandOutputEncoding", "utf-8")
             if native_device_admission is not None:

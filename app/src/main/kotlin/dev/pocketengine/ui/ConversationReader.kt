@@ -2,6 +2,21 @@ package dev.pocketengine.ui
 
 import org.json.JSONObject
 
+/** An affirmative row-level restriction, not an inference from today's conversation switch.
+ * Keep missing legacy/imported/foreign receipts unknown. No new source read or catalogue lookup. */
+internal fun originalLearningExcluded(row: JSONObject, conversation: String): Boolean {
+    if (row.opt("personalMemoryExcluded") != true || row.opt("role") != "user" ||
+        row.optBoolean("importAssignedIdentity") || conversation.isBlank()) return false
+    val original = row.optJSONObject("ownerOriginalLocator") ?: return false
+    val id = row.opt("id") as? String ?: return false
+    fun version(value: Any?): Long? = when (value) { is Int -> value.toLong(); is Long -> value; else -> null }
+    val revision = version(row.opt("revision")) ?: return false
+    return id.isNotBlank() && (row.opt("clientMessageId") as? String)?.isNotBlank() == true &&
+        revision > 0 && revision == version(original.opt("recordVersion")) &&
+        original.opt("kind") == "owner_native_original" && original.opt("recordId") == id &&
+        original.opt("conversationId") == conversation && (original.opt("generation") as? String)?.isNotBlank() == true
+}
+
 /** Read-only link from the persisted owner input and its matching native ACK.
  * An attempted send, imported text or the task's title is not a binding. */
 internal data class ReaderInputWork(val taskId: String, val runId: String, val epoch: Int) {
@@ -43,7 +58,7 @@ internal data class ConversationReadPage(
             UiMessage(row.getString("role"), row.getString("content"), row.optLong("at"), row.optString("taskId").takeIf(String::isNotBlank), row.getString("id"),
                 row.optJSONObject("submission"), row.optJSONArray("attachments")?.length() ?: 0, row.optJSONArray("attachments").objects().mapNotNull(ChatInputRules::attachment),
                 if (row.optBoolean("importAssignedIdentity")) 0L else row.optLong("revision", 0), memoryReference = row.optJSONObject("memoryReference"), phoneResult = UiPhoneResult.fromNativeMessage(row), replyContext = UiReplyContext.fromNativeMessage(row), taskResult = UiTaskResult.fromNativeMessage(row),
-                readerInputWork = ReaderInputWork.fromMessage(row, conversation))
+                readerInputWork = ReaderInputWork.fromMessage(row, conversation), learningExcluded = originalLearningExcluded(row, conversation))
         }
         require(loaded.none { it.id.isNullOrBlank() }) { "原历史消息缺少稳定身份" }
         require(loaded.map { it.id }.distinct().size == loaded.size) { "原历史窗口重复消息身份，未混合显示" }

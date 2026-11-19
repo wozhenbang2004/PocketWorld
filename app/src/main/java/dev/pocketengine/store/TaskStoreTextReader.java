@@ -12,6 +12,7 @@ import java.nio.charset.CodingErrorAction;
 final class TaskStoreTextReader {
     private static final int CHUNK_BYTES=65536;
     enum Column {
+        PHONE_RETURN_RECORD("meta","key","value",false),
         TASK_DOCUMENT("tasks","task_id","document",false),
         RUN_CHECKPOINT("runs","run_id","checkpoint",false),
         RUN_GRANT("runs","run_id","grant_json",false),
@@ -24,6 +25,10 @@ final class TaskStoreTextReader {
     private TaskStoreTextReader() {}
 
     static String read(SQLiteDatabase db,Column column,String identity) {
+        return read(db,column,identity,Integer.MAX_VALUE);
+    }
+
+    static String read(SQLiteDatabase db,Column column,String identity,int maxBytes) {
         if(!db.inTransaction())throw new IllegalStateException("原文分块读取需要同一活动事务");
         String table=column.table,key=column.key,field=column.field;
         // Reassemble bytes before decoding: a chunk boundary can split a UTF-8
@@ -39,6 +44,7 @@ final class TaskStoreTextReader {
             size=row.getLong(0);
         }
         if(size<0||size>Integer.MAX_VALUE)throw new IllegalStateException("原文超过当前字符串可表示范围，未截断");
+        if(size>maxBytes)throw new IllegalStateException("这份原结果超过本机单次核对范围，没有改读其他轮次");
         // The transaction fixes the byte length. Allocate one exact buffer instead
         // of geometric growth plus toByteArray(), which held duplicate full bodies
         // during decode. This still materializes one whole document; it is not a

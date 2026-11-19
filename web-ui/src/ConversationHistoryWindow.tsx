@@ -1,9 +1,11 @@
 import {useEffect,useLayoutEffect,useRef,useState} from 'react';
 import { IconClose, IconFile, IconRefresh, IconTool } from './icons';
-import {Button,IconButton} from './forms-library';
+import {Accordion,AccordionItem,Button,IconButton} from './forms-library';
 import {Drawer} from './shell-library';
 import {AIAnswer,MessageActions} from './library';
 import {useClosingSnapshot} from './library/surface-motion';
+import {PhoneReturnedReport,phoneReportTarget,type PhoneReportTarget} from './PhoneReturnedReport';
+import {messagePhoneResult} from './phone-start';
 import './conversation-history-window.css';
 
 type Json=Record<string,any>;
@@ -18,6 +20,7 @@ export function ConversationHistoryWindow({page,submitting,can,act,registerBack,
  const restored=useRef<number|null>(null),position=useRef<Position>({index:0,offset:0,anchor:''});
  const timer=useRef<ReturnType<typeof setTimeout>|null>(null),sending=useRef(false);
  const [pending,setPending]=useState(false),[error,setError]=useState('');
+ const [phoneOriginal,setPhoneOriginal]=useState<PhoneReportTarget|null>(null);
  const [inputNotice,setInputNotice]=useState<{window:number;messageId:string;error?:string}|null>(null);
  const returnToInput=useRef<(ConversationHistoryTaskOrigin&{taskId:string;revision:number})|null>(null);
  const rows:Json[]=Array.isArray(shown.messages)?shown.messages:[];
@@ -88,7 +91,7 @@ export function ConversationHistoryWindow({page,submitting,can,act,registerBack,
   if(!button||button.disabled)return false;
   button.focus({preventScroll:true});return true;
  };
- const back=()=>{if(!live.current)return false;if(!sending.current)void invoke('conversation.reader.close');return true};
+ const back=()=>{if(phoneOriginal){setPhoneOriginal(null);return true}if(!live.current)return false;if(!sending.current)void invoke('conversation.reader.close');return true};
  useEffect(()=>{registerBack(back);return()=>registerBack(null)});
  useEffect(()=>()=>{if(timer.current)clearTimeout(timer.current)},[]);
  useLayoutEffect(()=>{
@@ -101,7 +104,7 @@ export function ConversationHistoryWindow({page,submitting,can,act,registerBack,
   if(row)node.scrollTop+=row.getBoundingClientRect().top-node.getBoundingClientRect().top+saved.offset;
   restored.current=page.window;remember();if(first)focusOriginalInput();
  },[page?.window,marker]);
- useEffect(()=>{setError('')},[page?.window]);
+ useEffect(()=>{setError('');setPhoneOriginal(null)},[page?.window]);
  return <Drawer.Root open={!!page} onOpenChange={open=>{if(!open)back()}} dismissible={!pending} shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay"/><Drawer.Content className="pw-drawer pw-conversation-history-window" aria-describedby="pw-history-window-description" inert={!page} onOpenAutoFocus={event=>{if(focusOriginalInput())event.preventDefault()}} onCloseAutoFocus={exit.onCloseAutoFocus}>
   <header className="pw-drawer-header"><div><Drawer.Title>{shown.title||'阅读对话'}</Drawer.Title><Drawer.Description id="pw-history-window-description">只读查看，原输入和发送回执仍留在原对话。</Drawer.Description></div><IconButton icon={IconRefresh} aria-label="刷新这份对话历史" disabled={!page||pending||!!shown.loading||!can('conversation.reader.refresh')} onClick={()=>void invoke('conversation.reader.refresh')}/><IconButton icon={IconClose} aria-label="返回原输入" disabled={!page||pending} onClick={back}/></header>
   <div className="pw-drawer-body pw-history-window-messages" ref={scroll} onScroll={saveReading}>
@@ -112,12 +115,17 @@ export function ConversationHistoryWindow({page,submitting,can,act,registerBack,
    {rows.map((message,index)=><article key={message.id} className={`pw-history-window-message pw-message-${message.role}`} data-reader-index={index} data-reader-id={message.id} aria-label={message.role==='assistant'?'助手回复':'你的消息'}>
     {message.role==='assistant'?<AIAnswer text={message.content} onCopyCode={copy} showActions={false}/>:<p className="pw-user-text">{message.content}</p>}
     {Array.isArray(message.attachments)&&message.attachments.length>0&&<div className="pw-message-files">{message.attachments.map((file:Json)=><Button key={`${file.id}:${file.sha256}`} variant="ghost" leadingIcon={IconFile} disabled={!page||pending||!can('conversation.reader.attachment')} onClick={()=>void invoke('conversation.reader.attachment',{messageId:message.id,id:file.id,sha256:file.sha256})}>{file.name||'原附件'}</Button>)}</div>}
+    {page?.window===shown.window&&message.role==='user'&&message.automaticLearningExcluded===true&&<Accordion className="pw-compact-disclosures"><AccordionItem id={'memory-'+message.id} title="这条原话已排除自动记忆整理"><p className="pw-muted">后来开启也不会补提炼。它仍是对话原文；这不代表类似内容从未另行保存。</p></AccordionItem></Accordion>}
     <div className="pw-action-row">
      {!!message.content&&<MessageActions onCopy={()=>copy(message.content)}/>}
      {message.role==='user'&&typeof message.readerInputTaskId==='string'&&message.readerInputTaskId&&can('tasks.open')&&<Button variant="ghost" size="small" className="pw-input-work" leadingIcon={IconTool} data-input-work={message.readerInputTaskId} data-input-revision={message.sourceRevision} aria-busy={loadingInput(message.id)} disabled={!page||pending} onClick={()=>void openLinkedTask(message,'overview')}>{loadingInput(message.id)?'正在读取…':'查看原工作'}</Button>}
+     {messagePhoneResult(message)&&message.sourceRevision===1&&can('phone.result.original')&&<Button variant="secondary" size="small" disabled={!page||page.loading||!!page.error||pending} onClick={event=>{
+       const r=messagePhoneResult(message),h=live.current;if(!r||!h||h.window!==shown.window||h.conversation!==shown.conversation)return;
+       remember();setPhoneOriginal(phoneReportTarget(h.conversation,message.id,message.sourceRevision,r,event.currentTarget,h.window));
+     }}>查看这轮原文</Button>}
      {message.role==='assistant'&&(Number(message.sourceRevision)>0||message.phoneResult||message.taskResult)&&(message.phoneResult?.taskId||message.taskResult?.taskId||message.taskId)&&can('tasks.open')&&<>
-      <Button variant="ghost" size="small" disabled={!page||pending} onClick={()=>void openLinkedTask(message,'overview')}>任务详情</Button>
-      <Button variant="ghost" size="small" leadingIcon={IconTool} disabled={!page||pending} onClick={()=>void openLinkedTask(message,'process')}>执行轨迹</Button>
+      <Button variant="ghost" size="small" disabled={!page||pending} onClick={()=>void openLinkedTask(message,'overview')}>{message.phoneResult?'所属工作':'任务详情'}</Button>
+      <Button variant="ghost" size="small" leadingIcon={IconTool} disabled={!page||pending} onClick={()=>void openLinkedTask(message,'process')}>{message.phoneResult?'当前进展':'执行轨迹'}</Button>
      </>}
     </div>
     {inputNotice?.error&&inputNotice.window===shown.window&&inputNotice.messageId===message.id&&<p className="pw-input-work-error" role="status">{inputNotice.error}</p>}
@@ -125,5 +133,6 @@ export function ConversationHistoryWindow({page,submitting,can,act,registerBack,
    {!shown.loading&&!shown.error&&!rows.length&&<p className="pw-muted">这份对话没有可读取的消息。</p>}
   </div>
   <footer className="pw-drawer-actions"><Button variant="ghost" disabled={pending} onClick={back}>返回原输入</Button><Button variant="secondary" disabled={!page||submitting||pending||!can('conversation.reader.select')} onClick={()=>void invoke('conversation.reader.select')}>{submitting?'原输入正在登记':'在此对话继续'}</Button></footer>
+  {phoneOriginal&&page?.window===phoneOriginal.readerWindow&&<PhoneReturnedReport target={phoneOriginal} onClose={()=>setPhoneOriginal(null)}/>}
  </Drawer.Content></Drawer.Portal></Drawer.Root>;
 }
