@@ -20,15 +20,24 @@ export function DocumentProjection({value}:{value:Json}) {
  </section>;
 }
 
-export function AttachmentOriginalReader({source,windowId,showTitle=true}:{source:Json;windowId:string;showTitle?:boolean}) {
+const textEncodings=['UTF-8','UTF-16LE','UTF-16BE','GB18030','ISO-8859-1'].map(id=>({id,label:id}));
+type OriginalReaderProps={source:Json;windowId:string;showTitle?:boolean};
+
+export function AttachmentOriginalReader(props:OriginalReaderProps) {
+ return <OriginalReader key={JSON.stringify([props.windowId,props.source.id])} {...props}/>;
+}
+
+function OriginalReader({source,windowId,showTitle=true}:OriginalReaderProps) {
  const [toolsVisible,setToolsVisible]=useState(false);
  const [value,setValue]=useState<Json>(obj(source.information)),[error,setError]=useState(''),[busy,setBusy]=useState(false),[query,setQuery]=useState(''),[found,setFound]=useState<Json|null>(null),[zoom,setZoom]=useState(1),[turn,setTurn]=useState(0),[position,setPosition]=useState('1'),[markdown,setMarkdown]=useState(String(source.name||'').toLowerCase().endsWith('.md'));
+ const [recoveryEncoding,setRecoveryEncoding]=useState('');
+ const [failedRead,setFailedRead]=useState<{command:string;args:Json}|null>(null);
  const live=useRef({id:source.id,windowId}),sequence=useRef(0),pending=useRef(false);live.current={id:source.id,windowId};
  const type=String(source.kind),details=obj(source.information);
  const invoke=async(command:string,args:Json={})=>{
-  if(pending.current)return null;const owner={...live.current},request=++sequence.current;pending.current=true;setBusy(true);setError('');
+  if(pending.current)return null;const owner={...live.current},request=++sequence.current;pending.current=true;setBusy(true);setFailedRead(null);setError('');
   try{const result=await bridge.command<Json>('attachmentWorkspace.viewer',{windowId:owner.windowId,viewerId:owner.id,command,...args});if(request!==sequence.current||live.current.id!==owner.id||live.current.windowId!==owner.windowId||document.visibilityState==='hidden')return null;if(command==='find')setFound(result);else setValue(result);return result}
-  catch(cause){if(request===sequence.current)setError(cause instanceof Error?cause.message:'原件读取未完成');return null}
+  catch(cause){if(request===sequence.current){setFailedRead({command,args});setError(cause instanceof Error?cause.message:'原件读取未完成')}return null}
   finally{if(request===sequence.current){pending.current=false;setBusy(false)}}
  };
  useEffect(()=>{setValue(obj(source.information));setError('');setFound(null);setZoom(1);setTurn(0);pending.current=false;void invoke('load');return()=>{sequence.current++;pending.current=false}},[source.id,windowId]);
@@ -38,10 +47,19 @@ export function AttachmentOriginalReader({source,windowId,showTitle=true}:{sourc
  const imageTools=(type==='pdf'||type==='image')&&ready;
  const isMarkdown=String(source.name||'').toLowerCase().endsWith('.md');
  const read=(args:Json)=>void invoke('read',args);
+ const retry=()=>void invoke(failedRead?.command||'load',failedRead?.args);
+ const encodingChoice=recoveryEncoding||String(actual.encoding||'UTF-8');
  return <section className="pw-original-file" aria-label={`原件：${source.name}`}>
  {showTitle&&<header><h3>{source.name}</h3><p className="pw-muted">{source.mimeType}</p></header>}
  {(busy||source.busy)&&<p role="status">正在读取原件…</p>}
- {failed&&<div className="pw-action-row"><p className="pw-error" role="alert">{failed}</p><Button variant="secondary" disabled={busy||source.busy} onClick={()=>void invoke('load')}>重新读取原件</Button></div>}
+ {failed&&<section aria-label="原件读取失败">
+  <p className="pw-error" role="alert">{failed}</p>
+  <Button variant="secondary" disabled={busy||source.busy} onClick={retry}>{failedRead?.command==='find'?'重试本次查找':'重试本次读取'}</Button>
+  {type==='text'&&<div className="pw-action-row">
+   <SelectField label="重新读取时使用的文本编码" value={encodingChoice} options={textEncodings} isDisabled={busy||source.busy} onChange={setRecoveryEncoding}/>
+   <Button variant="secondary" disabled={busy||source.busy} onClick={()=>{setFound(null);read({encoding:encodingChoice,offset:0})}}>用此编码从头读取</Button>
+  </div>}
+ </section>}
  {imageTools&&<div className="pw-action-row">
   {type==='pdf'&&<><Button variant="ghost" disabled={busy||page<=1} onClick={()=>read({page:page-1})}>上一页</Button><span>{page} / {pages} 页</span><Button variant="ghost" disabled={busy||page>=pages} onClick={()=>read({page:page+1})}>下一页</Button></>}
   <Button variant="ghost" aria-expanded={toolsVisible} onClick={()=>setToolsVisible(value=>!value)}>{toolsVisible?'收起阅读工具':'阅读工具'}</Button>
@@ -59,7 +77,7 @@ export function AttachmentOriginalReader({source,windowId,showTitle=true}:{sourc
  {ready&&(type==='video'||type==='audio')&&<OriginalMediaPlayer key={`${windowId}:${source.id}`} url={source.url} kind={type} name={String(source.name||'媒体原件')} onError={()=>setError('原媒体无法播放，请返回后用其他阅读器打开')} />}
  {ready&&type==='office'&&<><div className="pw-action-row"><TextField label={actual.format==='pptx'?'幻灯片编号':actual.format==='xlsx'?'工作表编号':'段落起点'} value={position} onChange={setPosition}/><Button variant="secondary" disabled={busy||!/^\d+$/.test(position)||Number(position)<1} onClick={()=>read({unit:Number(position),chunk:0})}>定位</Button></div><p className="pw-muted">当前显示文字与表格结构，字体、分页和图表应在原件中核对。</p><DocumentProjection value={actual}/>{Number(actual.nextUnit)>0&&<Button variant="secondary" disabled={busy} onClick={()=>read({unit:actual.nextUnit,chunk:actual.nextChunk})}>读取后续内容</Button>}</>}
  {ready&&type==='text'&&<Accordion className="pw-original-find"><AccordionItem id="text-options" title="文本显示选项">
-  <SelectField label="文本编码" value={actual.encoding||'UTF-8'} options={['UTF-8','UTF-16LE','UTF-16BE','GB18030','ISO-8859-1'].map(id=>({id,label:id}))} isDisabled={busy} onChange={encoding=>{setFound(null);read({encoding,offset:0})}}/>
+  <SelectField label="文本编码" value={actual.encoding||'UTF-8'} options={textEncodings} isDisabled={busy} onChange={encoding=>{setRecoveryEncoding(encoding);setFound(null);read({encoding,offset:0})}}/>
   {isMarkdown&&<Button variant="ghost" onClick={()=>setMarkdown(value=>!value)}>{markdown?'显示原文':'显示 Markdown'}</Button>}
  </AccordionItem></Accordion>}
  </section>;
