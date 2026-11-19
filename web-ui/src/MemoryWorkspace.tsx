@@ -5,6 +5,7 @@ import './memory-reading.css';
 import { useSurfaceEnter } from './library/surface-motion';
 import { Tabs, TabList, Tab, TabPanel } from './shell-library';
 import { Accordion, AccordionItem, Button, CheckboxField, IconButton, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
+import { CandidateIdentityDecision, reviewedCandidateIdentity } from './CandidateIdentityDecision';
 import { MemoryAssertionFields } from './MemoryAssertionFields';
 import { ProjectMemoryQuote } from './ProjectMemoryQuote';
 import {ProjectConventionDraftAction,manualConvention,type OpenProjectDraft} from './ProjectConventionDraftAction';
@@ -120,8 +121,10 @@ export function MemoryWorkspace({ onOpenProjectDraft, domain, run, registerTrans
     if (consolidation.length >= 20) { setError('一次最多归纳 20 条原记忆。'); return; }
     void invoke('knowledge.get', { id: row.id, candidate: false }, value => { selectedHandles.current.push(value.readHandle); setConsolidation(old => [...old, value]); });
   };
+  const identityDecision = reviewedCandidateIdentity(review);
+  const invalidIdentity = review?.operation === 'assertion' && !identityDecision;
   const confirm = async () => {
-    const frozen = review; if (!frozen) return; const handle = reviewHandle.current; reviewHandle.current = ''; setReview(null); setAcknowledged(false);
+    const frozen = review; if (!frozen || (frozen.operation === 'assertion' && (!identityDecision || !acknowledged || busy || reviewHandle.current !== frozen.reviewHandle))) return; const handle = reviewHandle.current; reviewHandle.current = ''; setReview(null); setAcknowledged(false);
     if (frozen.operation === 'consolidation') { void invoke('knowledge.consolidation.start', { reviewHandle: handle }, setOperation); return; }
     const id = frozen.before?.id, isCandidate = selection?.candidateSelected === true;
     setAttempted(true); if (['edit', 'correct', 'accept'].includes(frozen.operation)) { try { await formDraft.markSubmitted(); } catch (failure) { setError((failure as Error).message); return; } } void invoke('knowledge.confirm', { reviewHandle: handle }, () => setNotice('操作已完成，正在读取当前状态。')).then(value => {
@@ -229,9 +232,9 @@ export function MemoryWorkspace({ onOpenProjectDraft, domain, run, registerTrans
       if (id) refreshSelection(id, true); else load();
     }} />}
     <SettingsDialog className="pw-memory-modal" isOpen={!!review} onClose={() => { if (!busy) closeReview(); }} title={operationLabel[review?.operation] || '核对记忆修改'}><div className="pw-knowledge-review">
-      {review?.operation === 'consolidation' ? <><p>向开始时的当前模型发送以下原记忆，归纳为待审候选。原记忆保留；不会自动采用新候选。</p>{rows(review.records).map(row => <p key={row.id} className="pw-reading-copy">{row.text}</p>)}</> : <><p className="pw-muted">确认只应用到刚才读取的原版本。</p><section className="pw-memory-review-version"><h3>当前内容</h3><p className="pw-reading-copy">{review?.before?.text}</p></section>{review?.afterText && <section className="pw-memory-review-version"><h3>修改后</h3><p className="pw-reading-copy">{review.afterText}</p></section>}{review?.reason && <p>理由：{review.reason}</p>}{review?.assertion && <p>主体：{review.assertion.subject?.label || '主人'} · {review.assertion.kind} · {review.assertion.predicate} · {review.assertion.object}。此修改继续留在待审候选。</p>}</>}
+      {review?.operation === 'consolidation' ? <><p>向开始时的当前模型发送以下原记忆，归纳为待审候选。原记忆保留；不会自动采用新候选。</p>{rows(review.records).map(row => <p key={row.id} className="pw-reading-copy">{row.text}</p>)}</> : <><p className="pw-muted">确认只应用到刚才读取的原版本。</p><section className="pw-memory-review-version"><h3>当前内容</h3><p className="pw-reading-copy">{review?.before?.text}</p></section>{review?.afterText && <section className="pw-memory-review-version"><h3>修改后</h3><p className="pw-reading-copy">{review.afterText}</p></section>}{review?.reason && <p>理由：{review.reason}</p>}{review?.operation === 'assertion' && <CandidateIdentityDecision decision={identityDecision} />}</>}
       {review?.operation === 'forget' && <p>将遗忘原记忆，退休相关派生上下文，并阻止相同旧来源自动重新导入；原消息保留。</p>}{review?.operation === 'accept' && <p>采用候选不会证明内容已独立核实，也不会自动启用技能或取得执行权限。</p>}{review?.operation === 'archive' && <p>将移除这条终态候选的正文与拒绝理由；已接受的正式记忆和必要去重标记保留。这项清理不能恢复正文。</p>}{review?.operation === 'reconsider' && <p>只将这一条完整拒绝项重新放回待审；不会自动采用，也不会解除其他拒绝项或来源遗忘屏障。</p>}
-      <CheckboxField isSelected={acknowledged} onChange={setAcknowledged}>我已阅读内容和影响，确认这一次操作</CheckboxField><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={closeReview}>返回</Button><Button disabled={busy || !acknowledged} onClick={confirm}>{review?.operation === 'consolidation' ? '开始这次归纳' : '确认这次修改'}</Button></div>
+      <CheckboxField isSelected={acknowledged} onChange={setAcknowledged} isDisabled={invalidIdentity}>我已阅读内容和影响，确认这一次操作</CheckboxField><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={closeReview}>返回</Button><Button disabled={busy || !acknowledged || invalidIdentity} onClick={confirm}>{review?.operation === 'consolidation' ? '开始这次归纳' : '确认这次修改'}</Button></div>
     </div></SettingsDialog>
   </div>;
 }

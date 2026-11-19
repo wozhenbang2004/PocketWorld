@@ -3,6 +3,7 @@
 Local pause/health work without a phone or public network. This is not a
 Session-0 service, a second task host, or another Agent/model loop.
 """
+from contextlib import contextmanager, nullcontext
 import argparse
 import ctypes
 import hashlib
@@ -48,6 +49,19 @@ def _mutex(state, *, probe=False):
     return handle
 
 
+@contextmanager
+def original_state_idle(state):
+    # The same process/thread-owned lock as --serve, --pairing and harness setup.
+    handle = _mutex(state)
+    try:
+        yield
+    finally:
+        from ctypes import wintypes as w
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.ReleaseMutex.argtypes, kernel.CloseHandle.argtypes = [w.HANDLE], [w.HANDLE]
+        kernel.ReleaseMutex(handle); kernel.CloseHandle(handle)
+
+
 def main():
     if not sys.argv[1:] and getattr(sys, "frozen", False) and os.name == "nt":
         # Opening the installed app from Explorer must not start a listener.
@@ -72,6 +86,7 @@ def main():
     actions.add_argument("--clear-local-stop", action="store_true")
     actions.add_argument("--health", action="store_true")
     actions.add_argument("--init", action="store_true")
+    actions.add_argument("--init-devices-only", action="store_true", help="Explicit installed setup with no work folders")
     actions.add_argument("--recover-desktop", action="store_true")
     actions.add_argument("--pairing", action="store_true")
     actions.add_argument("--list-harnesses", action="store_true", help="List installed/configured external harnesses without starting them")
@@ -79,12 +94,15 @@ def main():
     actions.add_argument("--stream-self-test", action="store_true", help="Encode one synthetic VP8 frame; no desktop, network, config or identity access")
     parser.add_argument("--identity-dir", type=Path)
     parser.add_argument("--manual-takeover-after-os-restart", action="store_true")
-    parser.add_argument("--workspace", default=".")
+    parser.add_argument("--workspace")
     parser.add_argument("--environment", help="Existing owner environment ID for harness discovery/enablement")
     parser.add_argument("--harness-definition", type=Path, help="Owner-local JSON command definition; never a package installer")
     parser.add_argument("--allow-harness-write", action="store_true", help="Explicitly enable owner-managed external tools in the selected environment")
     parser.add_argument("--development-state", action="store_true", help="Source-tree development only; never allowed by a frozen installed executable")
     args = parser.parse_args()
+    if args.init_devices_only and (not getattr(sys, "frozen", False) or os.name != "nt" or args.development_state
+            or args.config is None or args.workspace is not None or args.identity_dir is not None or args.manual_takeover_after_os_restart):
+        parser.error("Device-only setup requires the fixed installed Windows entry and no workspace or recovery arguments")
     if args.reviewed_config_sha256 is not None and (not args.serve or args.development_state):
         parser.error("A reviewed-config digest only narrows a fixed installed --serve action")
     if args.owner_phone_receipts and args.owner_phone_work: parser.error("Choose one explicit owner entry")
@@ -123,14 +141,21 @@ def main():
         from windows_installation import WindowsInstalledContext
         installed = WindowsInstalledContext(args.config, current_executable=sys.executable if getattr(sys, "frozen", False) else None)
         config = Path(installed.config)
+    if args.init_devices_only:
+        from windows_first_workspace import require_owner
+        with original_state_idle(installed.jobs):
+            require_owner(installed)
+            print(json.dumps(installed.initialize(None, devices_only=True), ensure_ascii=False))
+        return
     if args.init and installed is not None:
-        print(json.dumps(installed.initialize(args.workspace), ensure_ascii=False))
+        with original_state_idle(installed.jobs):
+            print(json.dumps(installed.initialize(args.workspace if args.workspace is not None else "."), ensure_ascii=False))
         return
     if args.init:
         # Explicit operator initialization only; builds/installers never mint
         # real user credentials in CI or embed a shared token in an artifact.
         from pocket_companion import initialize
-        initialize(config, args.workspace)
+        initialize(config, args.workspace if args.workspace is not None else ".")
         return
     if installed is not None:
         launch = installed.launch_config(reviewed_sha256=args.reviewed_config_sha256)
@@ -183,7 +208,8 @@ def main():
         handle = _mutex(state)  # Never open a second manager beside the original --serve.
         try:
             from desktop_pairing import run_native_pairing
-            run_native_pairing(config, installed=installed, launch_config=launch, identity_dir=args.identity_dir)
+            with (launch.holding_registered_inputs() if launch is not None else nullcontext(None)) as pinned:
+                run_native_pairing(config, installed=installed, launch_config=pinned, identity_dir=args.identity_dir)
         finally:
             if handle is not None:
                 from ctypes import wintypes as w
@@ -238,7 +264,8 @@ def main():
     try:
         from pocket_companion import main as original_main
         sys.argv = [sys.argv[0], "--config", str(config)]
-        original_main(config_override=launch, owner_phone_receipts=args.owner_phone_receipts, owner_phone_work=args.owner_phone_work)
+        with (launch.holding_registered_inputs() if launch is not None else nullcontext(None)) as pinned:
+            original_main(config_override=pinned, owner_phone_receipts=args.owner_phone_receipts, owner_phone_work=args.owner_phone_work)
     finally:
         if handle is not None:
             from ctypes import wintypes as w

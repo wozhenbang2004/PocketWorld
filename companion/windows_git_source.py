@@ -49,6 +49,11 @@ def registered(context, settings_digest):
         if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", key) or key in seen: _fail("configuration_changed")
         seen.add(key)
         if item.get("kind", "local") != "local": continue
+        from windows_first_workspace import PIN, verified_root
+        if PIN in item:
+            try:
+                with verified_root(context, item): pass
+            except (OSError, KeyError, TypeError, ValueError, PlatformError): continue
         try: root = local_root(item.get("root"))
         except (TypeError, PlatformError): continue
         try: overlap = ntpath.commonpath([root.casefold(), context.home.casefold()])

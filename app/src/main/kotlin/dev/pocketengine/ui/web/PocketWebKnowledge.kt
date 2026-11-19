@@ -227,7 +227,8 @@ internal class PocketWebKnowledge(private val controller: PocketWorldController,
                     // A new search replaces its old choices, not the two selected endpoints.
                     // Retained pins keep their original scope, candidate revision and expiry.
                     identities.clear(); identities.putAll(retained)
-                    for (i in 0 until values.length()) { val identity = values.getJSONObject(i); identity.put("choiceHandle", pin(identities, JSONObject().put("original", original).put("selection", identity.getJSONObject("selection")), MemoryAssertionReview.MAX_IDENTITIES + retained.size)) }
+                    for (i in 0 until values.length()) { val identity = values.getJSONObject(i); identity.put("choiceHandle", pin(identities, JSONObject().put("original", original).put("selection", identity.getJSONObject("selection"))
+                            .put("identityId", identity.getString("id")).put("identityType", identity.getString("type")).put("originalLabel", identity.getString("label")), MemoryAssertionReview.MAX_IDENTITIES + retained.size)) }
                     result
                 } }
             }
@@ -235,13 +236,16 @@ internal class PocketWebKnowledge(private val controller: PocketWorldController,
                 fields(args, "readHandle", "subject", "relationTarget", "kind", "predicate", "object", "condition", "eventTime", "validFrom", "validTo", "reviewAfter")
                 val original = readSelection(text(args, "readHandle")); check(original.getBoolean("candidate") && row(original).optString("status") == "pending")
                 val kind = text(args, "kind"); require(kind in setOf("inferred", "told", "imagined"))
+                val subject = JSONObject(); val relation = if (args.isNull("relationTarget")) null else JSONObject()
                 val payload = target(original).put("revision", row(original).getLong("revision"))
-                    .put("subject", identityChoice(original, args.getJSONObject("subject"), "subject"))
-                    .put("relationTarget", if (args.isNull("relationTarget")) JSONObject.NULL else identityChoice(original, args.getJSONObject("relationTarget"), "object"))
-                    .put("kind", kind).put("predicate", text(args, "predicate", 160)).put("object", text(args, "object", 4000))
-                val condition = args.opt("condition"); require(condition is String && condition.length <= 1000); payload.put("condition", condition)
+                    .put("subject", identityChoice(original, args.getJSONObject("subject"), "subject", subject))
+                    .put("relationTarget", if (relation == null) JSONObject.NULL else identityChoice(original, args.getJSONObject("relationTarget"), "object", relation))
+                    .put("kind", kind).put("predicate", identityText(args, "predicate", 160)).put("object", identityText(args, "object", 4000))
+                val condition = args.opt("condition"); require(condition is String && condition.length <= 1000); payload.put("condition", condition.trim { it <= ' ' })
                 for (key in listOf("eventTime", "validFrom", "validTo", "reviewAfter")) { val value = args.opt(key); require(value is String && value.length <= 64); payload.put(key, assertionReviewDate(value)) }
-                current(original, done) { done(JSONObject().put("reviewHandle", pin(reviews, JSONObject().put("original", original).put("command", "reviewCandidateAssertion").put("payload", payload))).put("operation", "assertion").put("before", row(original)).put("assertion", payload).put("executionAuthorized", false), null) }
+                val endpoints = JSONObject().put("subject", subject).put("relationTarget", relation ?: JSONObject.NULL)
+                current(original, done) { done(JSONObject().put("reviewHandle", pin(reviews, JSONObject().put("original", original).put("command", "reviewCandidateAssertion").put("payload", payload).put("endpoints", endpoints)))
+                    .put("operation", "assertion").put("before", row(original)).put("assertion", payload).put("endpoints", endpoints).put("executionAuthorized", false), null) }
             }
             "knowledge.consolidation.review" -> {
                 fields(args, "readHandles"); val handles = args.getJSONArray("readHandles"); require(handles.length() in 2..20); val frozen = JSONArray()
@@ -302,7 +306,7 @@ internal class PocketWebKnowledge(private val controller: PocketWorldController,
                 current(original, done) { call("memoryReview", review.getString("command"), review.getJSONObject("payload"), done) { result ->
                     if (review.getString("command") == "reviewCandidateAssertion") {
                         val candidate = result.getJSONObject("candidate")
-                        check(result.opt("formalMemorySaved") == false && result.opt("sourceProofIssued") == false && result.opt("executionAuthorized") == false && candidate.getString("id") == row(original).getString("id") && candidate.optString("status") == "pending" && MemoryLearningReviewGuard.revision(candidate) == MemoryLearningReviewGuard.revision(row(original)) + 1 && assertionReviewKeepsSources(row(original), candidate)) { "身份核对结果待确认，请重新读取原候选" }
+                        check(result.opt("formalMemorySaved") == false && result.opt("sourceProofIssued") == false && result.opt("executionAuthorized") == false && candidate.getString("id") == row(original).getString("id") && candidate.optString("status") == "pending" && MemoryLearningReviewGuard.revision(candidate) == MemoryLearningReviewGuard.revision(row(original)) + 1 && assertionReviewKeepsSources(row(original), candidate) && sameIdentityResult(review, candidate)) { "身份核对结果待确认，请重新读取原候选" }
                     } else if (original.getBoolean("candidate") || review.getString("command") == "forgetReviewed") check(MemoryLearningReviewGuard.validMutationResult(review.getString("command"), review.getJSONObject("payload"), result)) { "原处理效果未完整核对，请读取原记录；没有重复提交" }
                     result
                 } }
@@ -365,13 +369,38 @@ internal class PocketWebKnowledge(private val controller: PocketWorldController,
         val saved = selected(reads, id)
         return if (saved.getBoolean("candidate")) JSONObject().put("candidate", true).put("candidateRecord", saved.getJSONObject("candidateRecord")) else saved
     }
-    private fun identityChoice(original: JSONObject, input: JSONObject, role: String): JSONObject {
+    // Match the original Java writer's text normalization before sealing and showing either endpoint.
+    private fun identityText(value: JSONObject, key: String, max: Int) = text(value, key, max).trim { it <= ' ' }
+    private fun sameIdentityResult(review: JSONObject, candidate: JSONObject): Boolean = runCatching {
+        val a = candidate.getJSONObject("assertion"); val p = review.getJSONObject("payload"); val ends = review.getJSONObject("endpoints")
+        fun matches(role: String, choice: JSONObject, proof: JSONObject): Boolean {
+            val subject = role == "subject"; val id = a.getString(if (subject) "subjectId" else "objectId")
+            val type = a.getString(if (subject) "subjectType" else "objectType"); val label = a.getString(if (subject) "subjectLabel" else "object")
+            if (choice.getString("mode") != proof.getString("mode") || type != proof.getString("type")) return false
+            if (proof.getString("mode") == "new") return type in setOf("person", "entity") && id.startsWith("$type:") &&
+                UUID.fromString(id.removePrefix("$type:")).toString() == id.removePrefix("$type:") && label == choice.getString("label")
+            return id == proof.getString("id") && label == (if (proof.getString("mode") == "owner") "主人" else choice.getString("label"))
+        }
+        listOf("kind", "predicate", "object", "condition").all { p.getString(it) == a.getString(it) } &&
+            listOf("eventTime", "validFrom", "validTo", "reviewAfter").all { if (p.isNull(it)) a.isNull(it) else !a.isNull(it) && p.getLong(it) == a.getLong(it) } &&
+            a.isNull("assertedAt") && a.getJSONArray("evidenceSpans").length() == 0 && matches("subject", p.getJSONObject("subject"), ends.getJSONObject("subject")) &&
+            (if (p.isNull("relationTarget")) ends.isNull("relationTarget") && a.isNull("objectId") && a.isNull("objectType")
+            else matches("object", p.getJSONObject("relationTarget"), ends.getJSONObject("relationTarget")))
+    }.getOrDefault(false)
+    private fun identityChoice(original: JSONObject, input: JSONObject, role: String, shown: JSONObject): JSONObject {
         fields(input, "mode", "type", "label", "choiceHandle")
-        return when (text(input, "mode")) {
-            "owner" -> JSONObject().put("mode", "owner")
-            "new" -> { val type = text(input, "type"); require(type in setOf("person", "entity")); JSONObject().put("mode", "new").put("type", type).put("label", text(input, "label", 160)) }
-            "candidate" -> { val key = if (role == "subject") "subjectId" else "objectId"; check(!row(original).optJSONObject("assertion")?.optString(key).isNullOrBlank()); JSONObject().put("mode", "candidate").put("role", role).put("label", text(input, "label", 160)) }
-            "existing" -> { val identity = selected(identities, text(input, "choiceHandle")); check(MemoryLearningReviewGuard.sameReview(row(original), row(identity.getJSONObject("original")))); JSONObject(identity.getJSONObject("selection").toString()).put("label", text(input, "label", 160)) }
+        val mode = text(input, "mode"); shown.put("mode", mode)
+        return when (mode) {
+            "owner" -> { shown.put("id", "owner").put("type", "owner").put("originalLabel", "主人"); JSONObject().put("mode", "owner") }
+            "new" -> { val type = text(input, "type"); require(type in setOf("person", "entity")); shown.put("type", type)
+                JSONObject().put("mode", "new").put("type", type).put("label", identityText(input, "label", 160)) }
+            "candidate" -> { val a = row(original).getJSONObject("assertion"); val subject = role == "subject"
+                val id = a.getString(if (subject) "subjectId" else "objectId"); check(id.isNotBlank())
+                shown.put("id", id).put("type", a.getString(if (subject) "subjectType" else "objectType")).put("originalLabel", a.getString(if (subject) "subjectLabel" else "object"))
+                JSONObject().put("mode", "candidate").put("role", role).put("label", identityText(input, "label", 160)) }
+            "existing" -> { val identity = selected(identities, text(input, "choiceHandle")); check(MemoryLearningReviewGuard.sameReview(row(original), row(identity.getJSONObject("original"))))
+                shown.put("id", identity.getString("identityId")).put("type", identity.getString("identityType")).put("originalLabel", identity.getString("originalLabel"))
+                JSONObject(identity.getJSONObject("selection").toString()).put("label", identityText(input, "label", 160)) }
             else -> error("请明确选择原主体或独立新身份")
         }
     }

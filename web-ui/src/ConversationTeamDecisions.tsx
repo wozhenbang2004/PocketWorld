@@ -1,3 +1,5 @@
+import {ConversationFileDecision} from './ConversationFileDecision';
+import type {TeamFileDecisionMark} from './team-file-decision-mark';
 import {useEffect,useId,useRef,useState} from 'react';
 import {bridge} from './bridge';
 import {ConversationParentRevisions} from './ConversationParentRevisions';
@@ -11,7 +13,7 @@ import {sameTeamFiles,teamDecisionEntryKey,teamFileEntryKey,type TeamDecisionOri
 
 type Item={locator:TeamAttentionLocator;name:string;title:string;detail:string};
 type Page={items:Item[];total:number};
-export type TeamWorkTarget = TeamAttentionLocator | {runId:string;fileReview:TeamFileReviewMark} | {runId:string;proposal:TeamProposalMark};
+export type TeamWorkTarget = TeamAttentionLocator | {runId:string;openedFileDecision:TeamFileDecisionMark} | {runId:string;fileReview:TeamFileReviewMark} | {runId:string;proposal:TeamProposalMark};
 export type OpenTeamDecision=(locator:TeamWorkTarget,source:TeamDecisionOrigin)=>void;
 
 function WorkFileLink({source,label,onOpen}:{source:WorkFileSource;label:string;onOpen:OpenTeamDecision}){
@@ -69,8 +71,10 @@ export function ConversationTeamDecisions({team,distinguish,onOpen}:{team:OwnerW
     catch(error){if(current())setReading({stamp,error:error instanceof Error?error.message:'未能读取这组原待办。'})}
   };
   const count=team.pendingDecisionCount??team.pendingQuestionCount??0;
-  if(!team.needsAttention||team.cancelRequested||count<1&&!team.fileReview&&!(team.pendingParentRevisionCount??0))return null;
+  if(!team.needsAttention||team.cancelRequested||count<1&&!team.fileReview&&!team.pendingFileOperation&&!(team.pendingParentRevisionCount??0))return null;
   return <div className="pw-conversation-team-decisions">
+    {team.pendingFileOperation&&<ConversationFileDecision key={team.pendingFileOperation.approvalId} mark={team.pendingFileOperation} source={source}
+      onOpened={()=>{if(team.pendingFileOperation)onOpen({runId:team.teamRunId,openedFileDecision:team.pendingFileOperation},source)}}/>}
     {team.fileReview&&<WorkFileLink key={teamFileEntryKey({...source,fileReview:team.fileReview})}
       source={{...source,fileReview:team.fileReview}} label={distinguish&&team.goal?team.goal+' · ':''} onOpen={onOpen}/>}
     {!!team.pendingParentRevisionCount&&<ConversationParentRevisions key={entry} source={source} count={team.pendingParentRevisionCount} stamp={stamp}

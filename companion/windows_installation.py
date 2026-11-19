@@ -4,6 +4,7 @@ The installer owns the fixed user layout and current pointer. This adapter
 verifies original handles/DACLs and passes local settings to the ORIGINAL main;
 it is neither another server nor a credential provisioning-on-startup fallback.
 """
+from contextlib import ExitStack, contextmanager
 import copy
 import hashlib
 import json
@@ -55,6 +56,27 @@ class NativeInstalledConfig:
         self.context.check_current_pointer()
         if self.context._raw(self.context.state, "companion.json", 262144) != self._raw:
             raise PlatformError("Owner configuration changed before original supervisor startup", 409)
+
+    @contextmanager
+    def holding_registered_inputs(self):
+        # Only folders registered by the new deferred setup carry a physical seal.
+        # Keep that exact directory generation locked while pairing/serving. A
+        # removed/replaced folder is omitted; the independent device still works.
+        from windows_first_workspace import PIN, verified_root
+        config = self.json()
+        entries = config.get("environments")
+        with ExitStack() as held:
+            if isinstance(entries, list) and any(isinstance(e, dict) and PIN in e for e in entries):
+                active = []
+                for env in entries:
+                    if isinstance(env, dict) and PIN in env:
+                        try: held.enter_context(verified_root(self.context, env))
+                        except (OSError, KeyError, TypeError, ValueError, PlatformError): continue
+                    active.append(env)
+                config["environments"] = active
+                yield NativeInstalledConfig(_CONFIG, self.context, config, self._raw)
+            else:
+                yield self
 
 
 class WindowsInstalledContext:
@@ -174,13 +196,25 @@ class WindowsInstalledContext:
                              "streaming": copy.deepcopy(desktop.get("streaming", {}))}
         return NativeInstalledConfig(_CONFIG, self, config, raw)
 
-    def initialize(self, workspace):
+    def initialize(self, workspace, *, devices_only=False):
         """Only called after the local owner's explicit --init/Manage Initialize."""
         if self.backend.read_bytes(self.state, "companion.json") is not None or self.backend.read_bytes(self.state, "companion-token.txt") is not None:
             raise PlatformError("Existing or partially initialized private state requires local inspection; no overwrite/new identity", 409)
         from device_identity import _private_dir, load_existing_identity, provision_identity
-        root = local_root(os.fspath(Path(workspace).expanduser().absolute()))
-        with self.backend.directory(root), self.backend.directory(self.state):
+        if type(devices_only) is not bool or devices_only != (workspace is None):
+            raise PlatformError("Choose either a real workspace or explicit device-only setup; no default folder")
+        with ExitStack() as held:
+            root = None
+            if not devices_only:
+                root = local_root(os.fspath(Path(workspace).expanduser().absolute()))
+                held.enter_context(self.backend.directory(root))
+            held.enter_context(self.backend.directory(self.state))
+            if devices_only:
+                # A genuinely unused installed state contains no owner objects.
+                # Look only for the first direct entry; never adopt/scan prior keys, jobs or settings.
+                with os.scandir(self.state) as entries:
+                    if next(entries, None) is not None:
+                        raise PlatformError("Existing local state requires inspection; device-only setup cannot adopt it")
             for directory in (self.jobs, self.logs):
                 _private_dir(directory)
             identity_path = Path(self.identity_dir)
@@ -192,7 +226,11 @@ class WindowsInstalledContext:
             self.backend.create_private_snapshot(self.state, "companion-token.txt", token)
             config = {"listen": "127.0.0.1", "port": 8766, "tokenFile": ntpath.join(self.state, "companion-token.txt"), "stateDir": self.jobs,
                       "devices": {"enabled": False, "identityDir": self.identity_dir, "routes": []}, "desktop": {"enabled": False},
-                      "environments": [{"id": "computer", "label": "我的电脑", "kind": "local", "root": root, "workers": ["command"], "commands": {}, "writeAllowed": False}]}
+                      "environments": [] if devices_only else [{"id": "computer", "label": "我的电脑", "kind": "local", "root": root, "workers": ["command"], "commands": {}, "writeAllowed": False}]}
+            if devices_only:
+                from windows_first_workspace import MARKER, SETUP, _encoded, new_marker
+                config[MARKER] = new_marker(self, local_identity)
+                self.backend.create_private_snapshot(self.state, SETUP, _encoded(config[MARKER]), maximum=2048)
             self.backend.create_private_snapshot(self.state, "companion.json", (json.dumps(config, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
         return {"initialized": True, "deviceId": local_identity.device_id, "instanceId": local_identity.instance_id,
                 "devicesEnabled": False, "desktopEnabled": False, "credentialsPrinted": False}

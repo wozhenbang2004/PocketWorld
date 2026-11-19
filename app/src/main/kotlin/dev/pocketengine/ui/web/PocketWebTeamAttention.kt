@@ -90,3 +90,25 @@ internal fun PocketWorldController.readWebWorkDecisions(parent: String, run: Str
         }
     }
 }
+
+/** The original conversation may open an existing approval, not decide it or resume the integrator. */
+internal fun PocketWorldController.readWebOriginalFileDecision(source: JSONObject, done: (JSONObject?, String?) -> Unit) {
+    val team=source.getString("teamRunId"); val conversation=source.getString("conversationId")
+    val shown=JSONObject(source.getJSONObject("pendingFileOperation").toString())
+    val window=webWindowTicket()
+    fun current()=webPrivateOwnerVisible() && webWindowTicket()==window && state.conversationId==conversation
+    check(current()) { "请从发起这件工作的原对话查看" }
+    val main=Handler(Looper.getMainLooper())
+    runTeamPhoneWork {
+        val result=runCatching {
+            check(current()) { "原对话已经切换" }
+            val actual=requireWorkOrigin(source,team).optJSONObject("pendingFileOperation") ?: error("这笔写回不再等待决定，留在原对话")
+            check(shown.keys().asSequence().toSet()==actual.keys().asSequence().toSet() && actual.keys().asSequence().filterNot { it=="sourceUpdatedAt" }.all { actual.opt(it)==shown.opt(it) }) { "原文件、请求或执行轮次已变，没有打开另一笔" }
+            JSONObject(actual.toString())
+        }
+        main.post {
+            if(!current())done(null,"原工作页面已变化")
+            else result.fold({done(it,null)},{done(null,it.message?:"原文件请求暂不可核对")})
+        }
+    }
+}

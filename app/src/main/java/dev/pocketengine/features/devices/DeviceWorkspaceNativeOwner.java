@@ -463,6 +463,7 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
             for(int i=0;i<records.length();i++){
                 JSONObject row=records.getJSONObject(i);if(!source.equals(row.opt("taskId")))throw new SecurityException("原私人任务发生变化");
                 JSONObject safe=new JSONObject().put("goal",row.getString("goal")).put("createdAt",row.getLong("createdAt"));
+                if(!row.has("targetAcceptedAt")&&row.has("sourceSendPhase"))safe.put("sourceSendPhase",row.getString("sourceSendPhase"));
                 if(row.has("targetAcceptedAt")){
                     safe.put("targetAcceptedAt",row.getLong("targetAcceptedAt"));
                     if(row.optBoolean("targetRunRecorded"))safe.put("targetRunRecorded",true);

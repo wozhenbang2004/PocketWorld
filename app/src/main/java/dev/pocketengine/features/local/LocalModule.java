@@ -487,8 +487,34 @@ public final class LocalModule implements EngineModule {
             try{var selected=dev.pocketengine.features.local.project.ProjectSourceImport.tree(source,copied,selection,label,generated,skip,current);return publishSourceSelection(selected,selection,current);}finally{deleteOwnPackageStaging(copied);}}
     }
     public JSONObject stageSourceZipForOwner(java.io.InputStream stream,String label,String selection,boolean stripRoot,boolean generated,RunControl original)throws Exception {
-        packageIdentity(selection);if(stream==null)throw new IllegalArgumentException("没有主人所选ZIP字节");var current=sourceCurrent(original);current.check();synchronized(projectPackageStaging){File directory=packageImportRoot(),target=new File(directory,selection+".zip");if(target.exists()){JSONObject saved=stagedProjectPackage(selection,null);JSONObject evidence=saved.optJSONObject("sourceEvidence");if(evidence==null||!"external_zip".equals(evidence.optString("sourceKind"))||generated!=evidence.optBoolean("includeGeneratedRoots"))throw new SecurityException("已有来源选择与本次类型或范围不同，未替换原选择");return saved;}sourceStageCapacity(directory);File copied=Files.createTempDirectory(directory.toPath(),"source-read-").toFile(),archive=new File(directory,"source-archive-"+UUID.randomUUID()+".pending");
-            try{dev.pocketengine.features.local.project.ProjectSourceImport.copyArchive(stream,archive,current);var selected=dev.pocketengine.features.local.project.ProjectSourceImport.zip(archive,copied,selection,label,stripRoot,generated,current);return publishSourceSelection(selected,selection,current);}finally{deleteOwnPackageStaging(copied);Files.deleteIfExists(archive.toPath());}}
+        packageIdentity(selection);if(stream==null)throw new IllegalArgumentException("没有主人本次所选的 ZIP");var current=sourceCurrent(original);current.check();
+        synchronized(projectPackageStaging){
+            File directory=packageImportRoot(),target=new File(directory,selection+".zip");
+            File copied=Files.createTempDirectory(directory.toPath(),"source-read-").toFile(),archive=new File(directory,"source-archive-"+UUID.randomUUID()+".pending");
+            try{
+                dev.pocketengine.features.local.project.ProjectSourceImport.copyArchive(stream,archive,current);
+                var fresh=dev.pocketengine.features.local.project.ProjectSourceImport.zip(archive,copied,selection,label,stripRoot,generated,current);
+                JSONObject wanted=fresh.evidence();String layout=dev.pocketengine.features.local.project.ProjectZipSelection.selectedLayout(fresh);
+                boolean originalId=Files.exists(target.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS);
+                File[] candidates=originalId?new File[]{target}:directory.listFiles(f->f.getName().matches("[a-f0-9-]{36}\\.zip"));
+                if(candidates==null||candidates.length>4)throw new SecurityException("临时源码目录超出核对范围");
+                JSONObject match=null;
+                for(File candidate:candidates){
+                    current.check();String id=candidate.getName().substring(0,36);JSONObject verified=null;
+                    try{
+                        String sha=dev.pocketengine.features.local.project.ProjectZipSelection.candidate(new File(directory,id+".source.json"),id,wanted);
+                        if(sha!=null){JSONObject staged=stagedProjectPackage(id,sha);
+                            if(dev.pocketengine.features.local.project.ProjectZipSelection.same(staged,wanted,layout))verified=staged;}
+                    }catch(Exception unavailable){if(originalId)throw new SecurityException("旧选择的整包不能重新核对，未替换",unavailable);}
+                    current.check();if(verified==null)continue;
+                    if(match!=null)throw new IllegalStateException("已有多份字节与录入路径都相同的暂存。请从已固定源码中明确选一份，未另占位置");
+                    match=verified;
+                }
+                if(match!=null)return match.put("reusedSelectedZipBytes",true);
+                if(originalId)throw new SecurityException("这次 ZIP 字节、名称或导入范围与旧选择不同，未沿用或覆盖");
+                sourceStageCapacity(directory);current.check();return publishSourceSelection(fresh,selection,current);
+            }finally{deleteOwnPackageStaging(copied);Files.deleteIfExists(archive.toPath());}
+        }
     }
     /** No network, SSH or remote capability is accepted here. The input type can only be created from an original private Task and Book. */
     public JSONObject stageSavedHostSourceForOwner(dev.pocketengine.features.local.project.ProjectHostSource capture,RunControl original)throws Exception {

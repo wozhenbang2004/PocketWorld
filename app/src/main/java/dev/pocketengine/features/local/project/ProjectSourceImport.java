@@ -152,7 +152,7 @@ public final class ProjectSourceImport {
         if(!archiveSha.equals(fileSha(archive,current)))throw new SecurityException("原ZIP暂存字节在读取时变化");
         if(scan.files.isEmpty())throw new IllegalArgumentException("普通ZIP没有纳入的源码文件，请核对原归档和排除范围");
         JSONObject original=(fixed==null?new JSONObject():fixed).put("originalArchiveSha256",archiveSha).put("originalArchiveBytes",archiveBytes)
-            .put("singleRootStripped",stripped).put("executableBitsAvailable",fixed==null).put("zipLinksRestored",false);
+            .put("singleRootStripped",stripped).put("stripSingleRootRequested",stripSingleRoot).put("executableBitsAvailable",fixed==null).put("zipLinksRestored",false);
         return finish(emptyDestination,selectionId,label,"external_zip",generated,scan.omissions(),original,current);
     }
     /** The sealed decoder verifies the whole envelope before we write a single payload. No old project ID,

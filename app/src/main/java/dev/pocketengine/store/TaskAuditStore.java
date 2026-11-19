@@ -254,6 +254,7 @@ public final class TaskAuditStore {
             String signed=dev.pocketengine.features.devices.DeviceProtocol.receivedPhoneScopeMode(task);
             if("main_screen".equals(signed)||"background".equals(signed))out.put("receivedZeroToolAppScope",signed);
         }
+        TeamOriginalFileDecision.projectChildHeader(task,out);
         JSONObject pendingPhoneResult=ReceivedPhoneGoalIndex.pendingSlot(task);
         if(pendingPhoneResult!=null)out.put("receivedPhoneResultSlot",pendingPhoneResult);
         JSONObject phoneLink=conversationPhoneLink(task);if(phoneLink!=null)out.put("conversationPhoneLink",phoneLink);

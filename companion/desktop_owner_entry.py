@@ -162,7 +162,7 @@ def _read(context):
         raise PlatformError("安装事务尚未完成，请用原安装包修复；不会自行改动安装")
     health = WindowsDesktopHealth().probe(session_only=True)
     session = health.get("sessionId") if health.get("available") is True else None
-    facts = {"interactive": session, "configured": False, "partial": False, "devices": False, "desktop": False,
+    facts = {"firstFolder": None, "interactive": session, "configured": False, "partial": False, "devices": False, "desktop": False,
              "busy": False, "stop": ("none",), "settings": None, "listeners": None}
     config_present = _present(context, context.state, "companion.json")
     token_present = _present(context, context.state, "companion-token.txt")  # Metadata only; no token bytes read.
@@ -177,6 +177,8 @@ def _read(context):
                 or not same_path(config.get("stateDir"), context.jobs)
                 or not same_path(config.get("tokenFile"), ntpath.join(context.state, "companion-token.txt"))):
             raise PlatformError("已保存的配置不再属于这个安装，未启用配对或启动")
+        from windows_first_workspace import summary as first_folder_summary
+        facts["firstFolder"] = first_folder_summary(context, config)
         facts.update(configured=True, devices=devices.get("enabled") is True, desktop=desktop.get("enabled") is True,
                      settings=hashlib.sha256(raw).hexdigest(), listeners=_local_listeners(config, devices), busy=_original_in_use(context),
                      stop=owner_status(context))
@@ -194,9 +196,15 @@ def _page(context, facts, notice):
         heading = "已有部分初始化记录"
         body += "\n请核对本机原配置；这里不会覆盖原身份或重新生成凭据。"
     elif not facts["configured"]:
-        heading = "先选一个本机工作文件夹"
-        body += "\n只建立本机私有配置，创建或沿用原安装身份；不会开放网络、启动服务或授予手机权限。"
-        actions.append(("Initialize", "选择工作文件夹\n选好后再确认初始化。"))
+        from windows_first_workspace import signed
+        if signed(context):
+            heading = "在这台电脑上准备什么？"
+            actions.append(("InitializeDevicesOnly", "只准备设备连接\n不选择或登记文件夹；配对与桌面另行确认。"))
+            actions.append(("Initialize", "同时准备工作文件夹\n选定一个本机目录，再确认初始化。"))
+        else:
+            heading = "先选一个本机工作文件夹"
+            actions.append(("Initialize", "选择工作文件夹\n选好后再确认初始化。"))
+        body += "\n只建立本机私有配置；不会开放网络、启动服务或授予手机权限。"
     elif facts["busy"]:
         heading = "原伴侣正在使用本机工作区"
         from windows_pairing_return import supported
@@ -230,7 +238,17 @@ def _page(context, facts, notice):
             actions.insert(0, ("StopDesktop", "暂停这台电脑的远程桌面\n只请求停止本机桌面输入与观看；不取消手机或电脑上的其他工作。"))
         if status[0] in {"acknowledged", "requested", "unidentified"}:
             body += " 配对或重启不会自行恢复桌面。"
-    if facts["configured"] and facts["interactive"]:
+    if facts["firstFolder"] == "unverified":
+        body += "\n配置中已有目录，但无可核实的原登记回执；配对与服务不会使用该目录。请核对原本机记录，不会重试。"
+    if facts["firstFolder"] in {"empty", "inspect"}:
+        body += "\n本机未登记工作文件夹。"
+        if facts["firstFolder"] == "inspect":
+            body += "原准备或登记记录还需要核对；这里不会替换配置。"
+        elif facts["busy"]:
+            body += "如需登记，请先在原窗口正常结束配对或服务。"
+        elif facts["interactive"]:
+            actions.append(("FirstFolder", "登记第一个工作文件夹\n可选。只登记你随后确认的目录，不新增手机权限。"))
+    if facts["configured"] and facts["interactive"] and facts["firstFolder"] is None:
         actions.append(("LocalProjectWork", "继续本机项目工作\n按原登记找底稿、草稿或多文件补丁，不需要先选择仓库或启动服务。"))
         actions.append(("CommandSetup", "核对本机可接的命令\n看一个工作区已登记的命令名；可单独核对一项，不运行或授权。"))
         actions.append(("ProjectSource", "核对一个本机 Git 项目的来源\n只从本机已登记工作区读取提交，不启动服务或项目工作。"))
@@ -241,7 +259,7 @@ def _page(context, facts, notice):
 
 
 def _run_original(context, action, workspace=None, reviewed_config=None, *, phone_receipts=False, phone_work=False):
-    if (action not in {"Initialize", "PairDevices", "Serve", "StopDesktop"} or (action == "Initialize") != bool(workspace)
+    if (action not in {"Initialize", "InitializeDevicesOnly", "PairDevices", "Serve", "StopDesktop"} or (action == "Initialize") != bool(workspace)
             or (action == "Serve") != bool(reviewed_config) or (phone_receipts or phone_work) and action != "Serve" or phone_receipts and phone_work):
         raise PlatformError("未选择受支持的本机原动作")
     # Hold exact manifest-pinned script bytes, with write/delete sharing denied,
@@ -281,6 +299,9 @@ def open_installed_desk():
                 from windows_pairing_return import offer
                 if offer(context): return  # do not pop a new owner desk over the original pairing window
                 notice = ""; continue
+            if action == "FirstFolder":
+                from windows_first_workspace import offer
+                notice = offer(context, facts["settings"]); continue
             if action == "OwnerStartMenu":
                 from windows_owner_start_menu import offer
                 offer(context)
@@ -298,6 +319,10 @@ def open_installed_desk():
                 open_source(context, facts["settings"])
                 notice = ""; continue
             workspace, phone_receipts, phone_work = None, False, False
+            if action == "InitializeDevicesOnly":
+                if _dialog("只准备这台电脑的设备身份？", "建立此安装的私有身份和本机凭据；不登记任何工作文件夹。"
+                           "\n本次不联网、不配对、不开桌面。以后可在原服务停止时另选文件夹。",
+                           [("yes", "确认只准备设备")]) != "yes": continue
             if action == "Initialize":
                 workspace = _folder()
                 if workspace is None: continue
@@ -322,6 +347,11 @@ def open_installed_desk():
             if _read(context) != facts:
                 notice = "刚才的本机状态已经改变，未执行。请重新核对。"; continue
             code = _run_original(context, action, workspace, facts["settings"] if action == "Serve" else None, phone_receipts=phone_receipts, phone_work=phone_work)
+            if action == "InitializeDevicesOnly" and code == 0:
+                after = _read(context)
+                notice = ("已准备设备身份，没有登记工作文件夹。要连接手机，请单独打开本机配对与范围核对。"
+                          if after["configured"] and after["firstFolder"] == "empty" else "原入口已返回，但未核对到无文件夹配置。")
+                continue
             if action == "StopDesktop":
                 notice = ("只读取本机状态即可查看回执；没有恢复或重放任何操作。" if code == 0
                           else "原管理入口未确认请求完成。请核对本机记录；没有自动重试。")

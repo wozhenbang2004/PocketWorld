@@ -2274,6 +2274,14 @@ public final class TaskStore {
             throw unavailable;
         }
     }
+    /** Read the exact unanswered claim; this projection carries no file path or body. */
+    private JSONObject ownerWorkOriginalFileDecision(JSONObject work,JSONObject team)throws Exception {
+        try{long now=System.currentTimeMillis();if(!TeamOriginalFileDecision.waitingCandidate(work,team,now))return null;
+            JSONObject child=read(dev.pocketengine.features.teams.TeamDeliveryWorkers.taskId(team.getString("runId"),"integrator",""));
+            if(child==null||!"awaiting_user".equals(child.opt("status"))||hasUnresolved(child.getString("id")))return null;
+            return TeamOriginalFileDecision.mark(db,work,team,child,now);
+        }catch(SecurityException|org.json.JSONException|IllegalArgumentException unavailable){return null;} // No unique original receipt: leave other team decisions available.
+    }
     /** Navigation only: a completed independent reading, not an owner's permission.
      * Do not read workspace bytes or put findings / file paths in conversation lists. */
     private static JSONObject ownerWorkFileReviewMark(JSONObject work,JSONObject team)throws Exception{
@@ -2331,7 +2339,7 @@ public final class TaskStore {
                 .put("conversationId",work.getString("conversationId")).put("currentRun",current).put("readOnly",true)
                 .put("teamTaskId",team.getString("id")).put("teamRunId",teamRunId)
                 .put("stopping",work.optBoolean("cancelRequested")||team.optBoolean("cancelRequested")||work.optString("status").matches("cancelled|canceled|stopped")||team.optString("executionStatus").matches("cancelled|cancel|taken_over|takeover|stopping"));
-        if(current){link.put("goal",work.optString("goal"));if(!link.getBoolean("stopping")){JSONObject marker=ownerWorkFileReviewMark(work,team);if(marker!=null)link.put("fileReview",marker);JSONObject pack=ownerWorkTeamPackageMark(team);if(pack!=null)link.put("deliveredPackage",pack);}}
+        if(current){link.put("goal",work.optString("goal"));if(!link.getBoolean("stopping")){JSONObject marker=ownerWorkFileReviewMark(work,team);if(marker!=null)link.put("fileReview",marker);JSONObject file=ownerWorkOriginalFileDecision(work,team);if(file!=null)link.put("pendingFileOperation",file);JSONObject pack=ownerWorkTeamPackageMark(team);if(pack!=null)link.put("deliveredPackage",pack);}}
         return link;
     }
     /** The current work's own teams, read from TaskStore receipts. Historical
@@ -2371,9 +2379,10 @@ public final class TaskStore {
                 if(!stopped&&!unresolved){int proposals=progress==null?0:progress.optInt("pendingParentRevisionCount",0);
                     if(proposals>0&&proposals<=16&&!work.optString("status").matches("completed|stopping|cancelled|paused|pausing|interrupted")&&team.optJSONObject("teamWorkPlan")!=null&&team.getJSONObject("teamWorkPlan").optLong("expiresAt")>System.currentTimeMillis())row.put("pendingParentRevisionCount",proposals).put("needsAttention",true);
                     JSONObject marker=ownerWorkFileReviewMark(work,team);if(marker!=null)row.put("fileReview",marker).put("needsAttention",true);
+                    JSONObject file=ownerWorkOriginalFileDecision(work,team);if(file!=null){if(!row.optBoolean("needsAttention"))row.put("attentionFromFileOnly",true);row.put("pendingFileOperation",file).put("needsAttention",true);}
                     JSONObject pack=ownerWorkTeamPackageMark(team);
                     if(pack!=null){row.put("deliveredPackage",pack);
-                        if(marker==null&&dev.pocketengine.features.teams.TeamWorkPackageReturn.solelyAuthorReview(team,progress))row.put("needsAttention",false);}}
+                        if(marker==null&&file==null&&dev.pocketengine.features.teams.TeamWorkPackageReturn.solelyAuthorReview(team,progress))row.put("needsAttention",false);}}
                 teams.put(row);
             }
         }catch(SecurityException|dev.pocketengine.features.memory.TaskStoreMemoryReader.RawMessageUnavailable unavailable){
@@ -2467,7 +2476,7 @@ public final class TaskStore {
         if(!OwnerWorkTask.isOwnerWork(view))return ownerResultHandlingForUi(view);
         boolean current;try{requireOwnerWorkSources(view);current=true;}catch(Exception unavailable){current=false;}
         if(view.optJSONObject("executionScope")!=null)projectOwnerWorkHeader(view,view);
-        else view.put("controls",ownerWorkControls(view));
+        else{view.put("controls",ownerWorkControls(view));if(current)TeamOriginalFileDecision.retireCached(db,view,System.currentTimeMillis());}
         view.put("taskId",view.getString("id")).put("runId",view.optString("runId")).put("epoch",view.optInt("coordinatorEpoch")).put("contextAvailable",current);
         view.remove("ownerWorkControlState");
         if(current){

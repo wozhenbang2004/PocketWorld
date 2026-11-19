@@ -69,11 +69,16 @@ final class OwnerPhoneGoalIndex {
             JSONObject item=new JSONObject().put("taskId",parent).put("operationId",op).put("argumentsDigest",row.getString(3))
                     .put("goal",preview).put("matchedLater",search.beyondPreview(preview)?true:null)
                     .put("screenMode",wire.getJSONObject("resourceBinding").getString("screenMode")).put("textOnly",DeviceProtocol.isAndroidTextReturn(wire)?true:null).put("createdAt",row.getLong(2));
+            // Deadline belongs to the original digest-bound request, not a receipt or a remote runtime status.
+            Object deadline=wire.opt("deadline");
+            if(selected!=null && (deadline instanceof Long || deadline instanceof Integer) && ((Number)deadline).longValue()>0
+                    && ((Number)deadline).longValue()<=DeviceProtocol.MAX_SAFE_INTEGER)item.put("requestDeadline",deadline);
             if(originalPhone!=null){
                 JSONObject stop=SentPhoneStopReceipt.localFact(db,originalPhone,parent,op,wire);
                 if(stop!=null)item.put(stop.has("localPhase")?"stopAttempt":"stopReceipt",stop);
             }
             acceptedFact(db,item,wire,parent,op);
+            if(!item.has("targetAcceptedAt"))item.put("sourceSendPhase",SentPhoneDispatchPhase.read(db,wire,parent,op));
             items.put(item);
         }}
         if(selected!=null&&!selected.equals(LocalPhoneDispatchPin.current(db,target)))throw new SecurityException("本机配对记录已更新，请重读原设备");

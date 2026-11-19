@@ -1,6 +1,6 @@
 # Stable per-user entry. Login tasks never target a version directory directly.
 [CmdletBinding()]
-param([ValidateSet('Serve','OpenDesk','Initialize','StopDesktop','RecoverDesktop','PairDevices','Health','ListHarnesses','EnableHarness')][string]$Action='Serve',
+param([ValidateSet('Serve','OpenDesk','Initialize','InitializeDevicesOnly','StopDesktop','RecoverDesktop','PairDevices','Health','ListHarnesses','EnableHarness')][string]$Action='Serve',
       [string]$Workspace, [string]$Environment, [string]$Harness, [string]$HarnessDefinition, [switch]$AllowHarnessWrite,
       [ValidatePattern('^[0-9a-f]{64}$')][string]$ReviewedConfigSha256, [switch]$PhoneReceipts, [switch]$PhoneWork,
       [ValidatePattern('^[a-f0-9]{32}$')][string]$OwnerDeskInstallId, [ValidatePattern('^[a-fA-F0-9]{40}$')][string]$OwnerDeskSigner)
@@ -8,6 +8,7 @@ $ErrorActionPreference='Stop'
 if (($OwnerDeskInstallId -or $OwnerDeskSigner) -and ($Action -ne 'OpenDesk' -or -not $OwnerDeskInstallId -or -not $OwnerDeskSigner -or $Workspace)) {
     throw 'An owner Start-menu link can only open its original signed desk.'
 }
+if ($Action -eq 'InitializeDevicesOnly' -and $PSBoundParameters.ContainsKey('Workspace')) { throw 'Device-only setup never accepts a work folder.' }
 if ($ReviewedConfigSha256 -and $Action -ne 'Serve') { throw 'Reviewed settings only narrow the installed Serve action.' }
 if ($PhoneReceipts -and $PhoneWork) { throw 'Choose one explicit local owner entry.' }
 if (($PhoneReceipts -or $PhoneWork) -and ($Action -ne 'Serve' -or -not $ReviewedConfigSha256)) { throw 'The chosen local entry needs an explicitly reviewed installed service start.' }
@@ -38,6 +39,10 @@ if ($Action -eq 'OpenDesk') {
     if (-not $Workspace) { throw 'Choose a workspace explicitly for first initialization.' }
     if (Test-Path -LiteralPath $paths.Config) { throw 'Configuration already exists; it was not reset.' }
     & $exe --init --config $paths.Config --workspace $Workspace
+} elseif ($Action -eq 'InitializeDevicesOnly') {
+    if ($pointer.allowUnsignedDevelopment -ne $false) { throw 'Use the original signed installed desk for device-only setup.' }
+    if (Test-Path -LiteralPath $paths.Config) { throw 'Configuration already exists; it was not reset.' }
+    & $exe --init-devices-only --config $paths.Config
 } elseif ($Action -eq 'Health') { & $exe --health }
 else {
     Assert-PWFixedConfig $paths $paths.Config -Required

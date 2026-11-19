@@ -1,3 +1,4 @@
+import {teamFileDecisionMark,type TeamFileDecisionMark} from './team-file-decision-mark';
 import {teamPackageMark,type TeamPackageMark} from './team-delivered-package';
 import {teamFileMark,type TeamFileReviewMark} from './team-navigation';
 type Data = Record<string, unknown>;
@@ -12,7 +13,7 @@ export type OwnerWorkTeam = {
   goal: string; status: string; taskStatus: string; phase: string; updatedAt: number;
   needsAttention: boolean; active: boolean; cancelRequested: boolean; readOnly: true;
   memberCount?: number; completedMemberCount?: number; pendingMemberCount?: number;
-  pendingQuestionCount?: number; pendingDecisionCount?: number; pendingParentRevisionCount?: number; attentionCount?: number; fileReview?:TeamFileReviewMark; deliveredPackage?:TeamPackageMark;
+  pendingQuestionCount?: number; pendingDecisionCount?: number; pendingParentRevisionCount?: number; attentionCount?: number; fileReview?:TeamFileReviewMark; pendingFileOperation?:TeamFileDecisionMark; deliveredPackage?:TeamPackageMark;
 };
 const count = (value: unknown): number | undefined => Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : undefined;
 
@@ -32,7 +33,7 @@ function workTeams(raw: Data, available: boolean): OwnerWorkTeam[] {
       goal: text(row.goal), status: text(row.status), taskStatus: text(row.taskStatus), phase: text(row.phase), updatedAt: Number(row.updatedAt),
       needsAttention: row.needsAttention, active: row.active, cancelRequested: row.cancelRequested === true, readOnly: true,
       memberCount: count(row.memberCount), completedMemberCount: count(row.completedMemberCount), pendingMemberCount: count(row.pendingMemberCount),
-      pendingParentRevisionCount: count(row.pendingParentRevisionCount), pendingQuestionCount: count(row.pendingQuestionCount), pendingDecisionCount: count(row.pendingDecisionCount), attentionCount: count(row.attentionCount), fileReview:teamFileMark(row.fileReview)??undefined, deliveredPackage:teamPackageMark(row.deliveredPackage)??undefined });
+      pendingParentRevisionCount: count(row.pendingParentRevisionCount), pendingQuestionCount: count(row.pendingQuestionCount), pendingDecisionCount: count(row.pendingDecisionCount), attentionCount: count(row.attentionCount), fileReview:teamFileMark(row.fileReview)??undefined, pendingFileOperation:teamFileDecisionMark(row.pendingFileOperation)??undefined, deliveredPackage:teamPackageMark(row.deliveredPackage)??undefined });
   }
   return teams;
 }
@@ -78,6 +79,7 @@ export function ownerWorkPresentation(value: unknown) {
   const teamsUnavailable = available && raw.ownerWorkTeamsUnavailable === true;
   const teamLabel = teams.some(team => (team.pendingQuestionCount || 0) > 0) ? '团队有问题等你回答'
     : teams.some(team => (team.pendingParentRevisionCount||0)>0) ? '管家有修订提案等你核对'
+    : teams.some(team => team.pendingFileOperation && team.pendingFileOperation.expiresAt>Date.now()) ? '有一笔团队文件写回等你核对'
     : teams.some(team => team.status === 'awaiting_approval') ? '团队等待授权'
     : teams.some(team => team.status === 'awaiting_review') ? '团队成果等你核对' : '团队需要你处理';
   const childLabel = stopped ? '关联任务的停止状态待核对' : childNeedsAttention ? '关联任务需要处理' : '等待关联任务完成';

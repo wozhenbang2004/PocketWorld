@@ -554,13 +554,14 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const archiveSide: PhoneArchiveSide = activeArchive?.side === 'received' ? 'received' : 'sent';
   const findKey=JSON.stringify([local?.deviceId,local?.instanceId,peer?.deviceId,peer?.instanceId,peer?.certificateFingerprint,archiveSide]);
   const archiveDraft=archiveFind.key===findKey?archiveFind.text:String(activeArchive?.searchText||'');
-  const readPhoneArchive = (side: PhoneArchiveSide, direction?: 'older' | 'newer', searchText='') => {
+  const readPhoneArchive = (side: PhoneArchiveSide, direction?: 'older' | 'newer', searchText='', filterMissing?:boolean) => {
     if (busy || !peer || selectedPeer.current !== peer.deviceId || direction && (!activeArchive || archiveSide !== side)) return;
     if(sourceFocus && (!focusedPeer || focusedPeer!==peer || side!=='sent' || searchText))return;
     closeOwnText();const sourceId=sourceFocus?.taskId||'';
     const target = peer.deviceId, keyword=direction?String(activeArchive?.searchText||''):searchText.trim();
-    void invoke(side === 'received' ? 'devices.readReceivedPhoneGoals' : 'devices.readPhoneGoalArchive', direction ? { archiveHandle: activeArchive!.archiveHandle, direction } : { targetDeviceId: target, ...(sourceId?{sourceTaskId:sourceId}:{}), ...(keyword?{searchText:keyword}:{}) }, value => {
-      const actual = devicePhoneGoalArchive(value, peer, local, side,sourceId); if(String(actual.searchText||'')!==keyword)throw new Error('这次本机查找已变化，请再查一次。');
+    const needsProof=side==='sent' && !sourceId && (filterMissing ?? (activeArchive?.side==='sent' && activeArchive.needsAcceptanceProof===true));
+    void invoke(side === 'received' ? 'devices.readReceivedPhoneGoals' : 'devices.readPhoneGoalArchive', direction ? { archiveHandle: activeArchive!.archiveHandle, direction } : { targetDeviceId: target, ...(sourceId?{sourceTaskId:sourceId}:{}), ...(keyword?{searchText:keyword}:{}), ...(needsProof?{needsAcceptanceProof:true}:{}) }, value => {
+      const actual = devicePhoneGoalArchive(value, peer, local, side,sourceId); if(String(actual.searchText||'')!==keyword || (actual.needsAcceptanceProof===true)!==needsProof)throw new Error('这次本机查找已变化，请再查一次。');
       if (selectedPeer.current === target) {setPhoneArchive(actual); setArchiveFind({key:JSON.stringify([local?.deviceId,local?.instanceId,peer.deviceId,peer.instanceId,peer.certificateFingerprint,side]),text:keyword});}
     });
   };
@@ -859,7 +860,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               {rows(activeArchive.rows).map(row=><article className="pw-device-history-entry" key={row.operationId}>
                 <h4 dir="auto">{row.goal}</h4><p>{time(row.createdAt)} · {archivedPhoneAcceptanceLine(row,time)}</p>
                 {row.stopReceipt?<p>{archivedPhoneStopLine(row.stopReceipt,time)}</p>:row.stopAttempt&&<p>{archivedPhoneStopAttemptLine(row.stopAttempt,time)}</p>}
-                <Button variant="secondary" disabled={busy||!supported('devices.openHistory')} onClick={()=>openArchivedGoal(row,false)}>核对原回执与成果</Button>
+                <Button variant="secondary" disabled={busy||!supported('devices.openHistory')} onClick={()=>openArchivedGoal(row,false)}>{row.sourceSendPhase==='abandoned_before_write'?'查看这次本机派发详情':'核对原回执与成果'}</Button>
               </article>)}
               <p className="pw-device-footnote">接单不代表机主已读或工作已完成。本机回复不是对方成果；读取对方已核对的结果需另行点击。</p>
               <div className="pw-form-actions">{activeArchive.canReadNewer && <Button variant="ghost" disabled={busy} onClick={()=>readPhoneArchive('sent','newer')}>较新派单</Button>}
@@ -1078,17 +1079,23 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
                   <SearchField aria-label="查找已保存的原目标" placeholder="输入原目标里的词" value={archiveDraft} isDisabled={busy}
                     onChange={value=>setArchiveFind({key:findKey,text:Array.from(value).slice(0,64).join('')})} />
                   <Button type="submit" variant="secondary" disabled={busy||!archiveDraft.trim()}>查找</Button>
-                  {activeArchive.searchText && <Button type="button" variant="ghost" disabled={busy} onClick={()=>readPhoneArchive(archiveSide)}>显示全部</Button>}
+                  {activeArchive.searchText && <Button type="button" variant="ghost" disabled={busy} onClick={()=>readPhoneArchive(archiveSide)}>清除关键词</Button>}
+                  {archiveSide==='sent' && <Button type="button" variant={activeArchive.needsAcceptanceProof?'secondary':'ghost'} aria-pressed={activeArchive.needsAcceptanceProof===true}
+                    disabled={busy} onClick={()=>readPhoneArchive('sent',undefined,archiveDraft,!activeArchive.needsAcceptanceProof)}>只看缺接单回执</Button>}
                 </form>
                 {archiveSide==='sent' && activeArchive.oldTargetIdentityChanged===true && <p>这台设备曾更换配对身份。不能核对目标的旧派单不归入这里，仍可从当时的本机原任务查找。</p>}
                 {activeArchive.searchText && <p role="status">只在这部设备的{archiveSide==='received'?'本机已接收':'本机已发出'}原目标中查找「{activeArchive.searchText}」，不会查询对端或成果。</p>}
-                {!activeArchive.rows.length && <p>{activeArchive.searchText ? activeArchive.hasMore ? '这段记录没有命中，可以继续查更早的记录。' : '这段可核对的记录没有命中。' : '这一批本机记录里没有能核对的直接手机目标。'}</p>}
+                {activeArchive.needsAcceptanceProof && <p role="status">只列本机尚无可核对接单回执的派单。缺回执或过了原请求期限，都不代表对方没有收到或已经停下。</p>}
+                {!activeArchive.rows.length && <p>{activeArchive.needsAcceptanceProof ? activeArchive.hasMore?'这段没有符合筛选的派单，可以继续查更早的记录。':'这段没有符合筛选的派单。' : activeArchive.searchText ? activeArchive.hasMore ? '这段记录没有命中，可以继续查更早的记录。' : '这段可核对的记录没有命中。' : '这一批本机记录里没有能核对的直接手机目标。'}</p>}
                 {rows(activeArchive.rows).map(row => <div className="pw-device-history-entry" key={JSON.stringify([row.taskId, row.operationId])}>
                   <h4 dir="auto">{row.goal}</h4>{row.matchedLater===true && <p>关键词出现在原目标的后文。</p>}<p>{time(row.createdAt)} · {row.textOnly === true ? '仅文字，不使用屏幕' : row.screenMode === 'background' ? '独立后台屏' : '主屏'}</p>
-                  {archiveSide === 'sent' && <p>{archivedPhoneAcceptanceLine(row,time)}</p>}
+                  {archiveSide==='sent' && (!activeArchive.needsAcceptanceProof || row.sourceSendPhase) && <p>{archivedPhoneAcceptanceLine(row,time)}</p>}
+                  {activeArchive.needsAcceptanceProof && row.requestDeadline>0 && row.requestDeadline<=8640000000000000 && <p>原请求期限：{time(row.requestDeadline)}</p>}
                   <div className="pw-form-actions">{archiveSide === 'received'
                     ? <><Button variant="secondary" disabled={busy || !supported('devices.returnToReceivedPhoneGoal')} onClick={() => openArchivedGoal(row, false)}>找回本机接纳的原工作</Button>
                       {row.mayCheckLocalText===true&&supported('devices.readLocalReviewedPhoneGoal')&&<Button variant="ghost" disabled={busy} onClick={()=>readOwnText(row)}>重看本机已核对原文</Button>}</>
+                    : row.sourceSendPhase==='abandoned_before_write' ? <><Button variant="secondary" disabled={busy || !supported('devices.openTask')} onClick={()=>openArchivedGoal(row,true)}>回到本机原工作</Button>
+                      <Button variant="ghost" disabled={busy} onClick={()=>openArchivedGoal(row,false)}>查看这次本机派发详情</Button></>
                     : <><Button variant="secondary" disabled={busy} onClick={() => openArchivedGoal(row, false)}>核对这次原派发</Button>
                       <Button variant="ghost" disabled={busy || !supported('devices.openTask')} onClick={() => openArchivedGoal(row, true)}>打开本机原工作</Button></>}</div>
                 </div>)}

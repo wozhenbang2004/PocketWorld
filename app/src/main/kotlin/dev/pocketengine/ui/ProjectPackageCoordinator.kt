@@ -670,7 +670,11 @@ internal class ProjectPackageCoordinator(
                 if (pin.optString("sourceKind") == "external_zip") local().stageSourceZipForOwner(checked, sourceLabel, pin.getString("selectionId"), pin.getBoolean("stripSingleRoot"), pin.getBoolean("includeGeneratedRoots"), c)
                 else local().stageProjectPackageForOwner(checked, pin.getString("selectionId"))
             } } finally { c.removeCancelAction(cancel) }
-            return@work { state = state.copy(staged = actual, stagedPackages = withStage(actual), imported = null, importPlan = null, notice = if (actual.has("sourceEvidence")) "已核对所选 ZIP。请查看实际录入的路径，再决定是否创建项目；未执行代码。" else "项目包已读取，请核对后明确导入；尚未运行。") }
+            return@work { state = state.copy(staged = actual, stagedPackages = withStage(actual), imported = null, importPlan = null, notice = when {
+                actual.optBoolean("reusedSelectedZipBytes") -> "本次选的 ZIP 字节、名称和录入路径与已有暂存相同，已复用原包，没多占位置。未复用文件权限，也未创建项目。"
+                actual.has("sourceEvidence") -> "已核对所选 ZIP。请查看实际录入的路径，再决定是否创建项目；未执行代码。"
+                else -> "项目包已读取，请核对后明确导入；尚未运行。"
+            }) }
         }
     }
     private fun withStage(actual: JSONObject) = listOf(JSONObject(actual, arrayOf("selectionId", "sha256", "manifestIdentity", "sourceEvidence", "manifest", "complete", "sizeBytes", "deviceSource")).put("available", true)) +

@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { Button } from './forms-library';
-import { archivedPhoneAcceptanceLine, archivedPhoneStopAttemptLine, archivedPhoneStopLine, isArchivedPhoneStopAttempt, isArchivedPhoneStop, type ArchivedPhoneStopAttempt, type ArchivedPhoneStop, type DeviceData, type SentPhoneGoalFocus } from './devices-workspace';
+import { archivedPhoneAcceptanceLine, isSourcePhoneSendPhase, type SourcePhoneSendPhase, archivedPhoneStopAttemptLine, archivedPhoneStopLine, isArchivedPhoneStopAttempt, isArchivedPhoneStop, type ArchivedPhoneStopAttempt, type ArchivedPhoneStop, type DeviceData, type SentPhoneGoalFocus } from './devices-workspace';
 
-type Row = {goal:string; createdAt:number; targetAcceptedAt?:number; targetRunRecorded?:true; stopReceipt?:ArchivedPhoneStop; stopAttempt?:ArchivedPhoneStopAttempt};
+type Row = {goal:string; createdAt:number; targetAcceptedAt?:number; targetRunRecorded?:true; sourceSendPhase?:SourcePhoneSendPhase; stopReceipt?:ArchivedPhoneStop; stopAttempt?:ArchivedPhoneStopAttempt};
 type Page = {rows:Row[]; after:string; next:string; previous:string[]};
 const positiveTime=(n:unknown):n is number=>typeof n==='number' && Number.isSafeInteger(n) && n>0;
 const time=(n:number)=>new Date(n).toLocaleString();
@@ -21,10 +21,11 @@ export function SavedPhoneDispatches({source,local,busy,read}:Props){
         ||value.target.instanceId!==target.instanceId||value.target.certificateFingerprint!==target.certificateFingerprint
         ||typeof value.nextAfter!=='string'||value.nextAfter!==''&&(!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value.nextAfter)||value.nextAfter===after)
         ||!Array.isArray(value.rows)||value.rows.length>24||!value.rows.every((r:Row)=>r&&typeof r.goal==='string'&&r.goal.trim()
-          &&Array.from(r.goal).length<=161&&positiveTime(r.createdAt)&&(r.targetAcceptedAt===undefined||positiveTime(r.targetAcceptedAt))&&(r.targetRunRecorded===undefined||r.targetRunRecorded===true&&positiveTime(r.targetAcceptedAt))&&(r.stopReceipt===undefined||isArchivedPhoneStop(r.stopReceipt))
+          &&Array.from(r.goal).length<=161&&positiveTime(r.createdAt)&&(r.targetAcceptedAt===undefined||positiveTime(r.targetAcceptedAt))&&(r.targetRunRecorded===undefined||r.targetRunRecorded===true&&positiveTime(r.targetAcceptedAt))&&(r.sourceSendPhase===undefined||r.targetAcceptedAt===undefined&&isSourcePhoneSendPhase(r.sourceSendPhase))
+          &&(r.stopReceipt===undefined||isArchivedPhoneStop(r.stopReceipt))
           &&(r.stopAttempt===undefined||r.stopReceipt===undefined&&isArchivedPhoneStopAttempt(r.stopAttempt))))
         throw new Error('留档与这份工作当时选定的手机不符，未显示其他派单。');
-      setPage({rows:value.rows.map(({goal,createdAt,targetAcceptedAt,targetRunRecorded,stopReceipt,stopAttempt}:Row)=>({goal,createdAt,targetAcceptedAt,targetRunRecorded,stopReceipt,stopAttempt})),after,next:value.nextAfter,previous});
+      setPage({rows:value.rows.map(({goal,createdAt,targetAcceptedAt,targetRunRecorded,sourceSendPhase,stopReceipt,stopAttempt}:Row)=>({goal,createdAt,targetAcceptedAt,targetRunRecorded,sourceSendPhase,stopReceipt,stopAttempt})),after,next:value.nextAfter,previous});
     });
   };
   return <div>

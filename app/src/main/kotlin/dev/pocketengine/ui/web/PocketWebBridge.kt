@@ -1179,6 +1179,21 @@ internal class PocketWebBridge(
                     }
                 };return
             }
+            if(action=="teams.openWorkFileDecision"){
+                checkedPayload(args,setOf("parentTaskId","parentRunId","parentEpoch","teamRunId","conversationId","pendingFileOperation"))
+                val conversation=requiredString(args,"conversationId");val window=captureWindow()
+                fun current()= !closed && acceptsWindow(window) && section==null && taskViewId==null &&
+                    controller.webPrivateOwnerVisible() && controller.state.conversationId==conversation
+                require(current()) { "请回到发起原工作的私人对话" }
+                controller.readWebOriginalFileDecision(JSONObject(args.toString())) { mark,error ->
+                    if(!current()||error!=null||mark==null)complete(id,null,error?:"原对话或文件待办已变化")
+                    else openOriginalTask(id,mark.getString("taskId"),false,returnSection=null,expectedRunId=mark.getString("runId"),expectedEpoch=mark.getInt("epoch"),originalFileApproval=mark.getString("approvalId"),
+                        sourceWindowCurrent=::current,checkReaderInput={ task ->
+                            require(dev.pocketengine.store.TeamOriginalFileDecision.stillPending(task.raw,mark,System.currentTimeMillis())) { "这笔文件决定已处理、过期或暂不可完整读取，没有打开别的请求" }
+                        })
+                }
+                return
+            }
             if (action == "teams.openDeliveryWorker") {
                 requireSection("teams")
                 val handle=requiredString(args,"viewHandle");val file=args.optString("fileHandle"); val source=teamPages.taskForDeliveryNavigation(args)
@@ -2178,7 +2193,7 @@ internal class PocketWebBridge(
     private fun projectReadCurrent(scope: ProjectTaskReadScope) = controller.webPrivateOwnerVisible() && section == null &&
         controller.state.projectId == scope.projectId && controller.state.filePath == null
 
-    private fun openOriginalTask(requestId: String, taskId: String, requestNavigation: Boolean, returnSection: String? = section ?: taskReturnSection, keepConversationReader: Boolean = false, expectedRunId: String? = null, expectedEpoch: Int? = null, projectScope: ProjectTaskReadScope? = null, sourceWindowCurrent: (() -> Boolean)? = null, checkedDeviceFile: dev.pocketengine.ui.ReceivedFileSelection? = null, checkReaderInput: ((UiTask) -> Unit)? = null) {
+    private fun openOriginalTask(requestId: String, taskId: String, requestNavigation: Boolean, returnSection: String? = section ?: taskReturnSection, keepConversationReader: Boolean = false, expectedRunId: String? = null, expectedEpoch: Int? = null, projectScope: ProjectTaskReadScope? = null, sourceWindowCurrent: (() -> Boolean)? = null, checkedDeviceFile: dev.pocketengine.ui.ReceivedFileSelection? = null, originalFileApproval: String? = null, checkReaderInput: ((UiTask) -> Unit)? = null) {
         if (projectScope != null) require(projectReadCurrent(projectScope)) { "原项目页面已切换，未打开其他工作" }
         require(returnSection == null || returnSection in connectionSections) { "原工作页面已变化" }
         var entered = false
@@ -2193,8 +2208,13 @@ internal class PocketWebBridge(
         if (checkReaderInput == null) { enterWindow(); publishState() }
         val window = captureWindow()
         val bindImage = controller.bindPhoneImageAfterOpen()
-        controller.readTaskForOpen(taskId, { !closed && acceptsWindow(window) && (projectScope == null || projectReadCurrent(projectScope)) && (sourceWindowCurrent?.invoke() != false) }) { task, error ->
-            if (closed) return@readTaskForOpen
+        fun currentSource()= !closed && acceptsWindow(window) && (projectScope == null || projectReadCurrent(projectScope)) && (sourceWindowCurrent?.invoke() != false)
+        fun readOriginal(done: (UiTask?,String?) -> Unit) {
+            if(originalFileApproval==null)controller.readTaskForOpen(taskId,::currentSource,done)
+            else controller.readTaskForActionReview(taskId,originalFileApproval,::currentSource,done)
+        }
+        readOriginal { task, error ->
+            if (closed) return@readOriginal
             if (!acceptsWindow(window)) complete(requestId, null, "原任务窗口已关闭，请重新打开")
             else if (error != null || task == null) {
                 if ((requestNavigation || projectScope != null) && (sourceWindowCurrent == null || entered)) runCatching { restoreTaskWorkspace() }
