@@ -94,9 +94,12 @@ public final class HostToolSupervisor implements CapabilityPort {
     public static JSONArray permissionToolCatalog(FeatureHost host,TaskStore tasks)throws Exception {
         HostToolSupervisor catalog=new HostToolSupervisor(host,tasks,null,null,0,true,true,null,null);
         JSONArray rows=new JSONArray();for(var entry:catalog.routes.entrySet()){
-            Tool tool=entry.getValue();rows.put(new JSONObject().put("name",entry.getKey()).put("category",tool.feature)
+            Tool tool=entry.getValue();JSONObject row=new JSONObject().put("name",entry.getKey()).put("category",tool.feature)
                     .put("description",tool.definition.getJSONObject("function").optString("description"))
-                    .put("source",tool.preset==null?"native_registry":"installed_plugin").put("configurable",true));
+                    .put("source",tool.preset==null?"native_registry":"installed_plugin").put("configurable",true);
+            // Only present names from this registered route, never its full execution preset.
+            if(tool.preset!=null)row.put("plugin",new JSONObject().put("id",tool.preset.getString("id")).put("tool",tool.preset.getString("tool")));
+            rows.put(row);
         }return rows;
     }
     private HostToolSupervisor(FeatureHost host,TaskStore tasks,String taskId,String runId,int epoch,boolean allowWrites,boolean catalogueOnly,

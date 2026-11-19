@@ -2,7 +2,7 @@
 export type ToolDecision = 'allow' | 'ask' | 'deny' | 'review';
 export type ToolPolicy = { version: 2; mode: 'custom' | 'auto_review' | 'full_access'; tools: Record<string, ToolDecision>; instructions: string };
 export type PolicySnapshot = { revision: number; conversationId: string; global: ToolPolicy; conversation: ToolPolicy | null; effective: ToolPolicy };
-export type CatalogTool = { name: string; category: string; description: string; source: string; configurable: boolean };
+export type CatalogTool = { name: string; category: string; description: string; source: string; configurable: boolean; plugin?: { id: string; tool: string } };
 export type ToolCatalog = { tools: CatalogTool[]; notices: string[]; metadataOnly?: boolean; executionAuthorized?: boolean };
 export const categoryLabels: Record<string, string> = {
   phone: '操作手机', browser: '浏览网页', ssh: '连接服务器', attachments: '处理文件与文档',

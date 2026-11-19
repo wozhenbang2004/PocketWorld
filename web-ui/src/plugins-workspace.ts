@@ -126,3 +126,27 @@ export function confirmedSourceConfiguration(input: PluginData, view: PluginData
     && view.operationReceipt?.command === 'configure' && view.operationReceipt?.requestId === view.requestId && view.operationReceipt?.recorded === true
     && JSON.stringify(rows(input.sources)) === JSON.stringify(rows(view.config.sources));
 }
+
+/** Display only: a granted declaration is not a live connection or permission for a task. */
+export const pluginAccessSections = [
+  { id: 'configured', title: '已有工具授权' }, { id: 'permission', title: '需要核对授权' },
+  { id: 'setup', title: '需要准备' }, { id: 'unknown', title: '需要重新核对' },
+] as const;
+type PluginAccessSection = typeof pluginAccessSections[number]['id'];
+type PluginNext = 'tools' | 'enable' | 'mcp' | 'refresh';
+export function pluginAccess(row: PluginData) {
+  const tools = pluginRows(row.manifest?.tools), grants = row.grants;
+  const grantKnown = Array.isArray(grants) && grants.every(grant => typeof grant === 'string');
+  const toolsKnown = Array.isArray(row.manifest?.tools) && tools.length === row.manifest.tools.length && tools.every(tool => text(tool.name));
+  const allowed = new Set(tools.filter(tool => grantKnown && grants.includes(`tool:${tool.name}`)).map(tool => tool.name as string));
+  const access = (group: PluginAccessSection, note: string, next: PluginNext, label: string) => ({ group, note, next, label, allowed, grantKnown, toolsKnown, tools });
+  if (!toolsKnown || !grantKnown || typeof row.enabled !== 'boolean') return access('unknown', '安装或工具授权记录不完整。', 'refresh', '重新读取安装');
+  if (row.mcpAuthorizationState === 'reauthorization_required' || row.mcpStatus === 'needs_authorization') return access('permission', '服务账号要求重新授权。这里不能代办登录；可查看服务记录或收回已有工具权限。', 'mcp', '查看服务状态');
+  if (row.mcpStatus === 'needs_discovery' || row.mcpCatalogueInvalidated === true) return access('setup', '服务的工具清单需要重新发现。', 'mcp', '前往工具服务');
+  if (!tools.length) return access('setup', row.sourceOnly === true ? '只登记了服务来源，没有安装可调用的工具。' : '这份安装没有声明可调用工具。', row.sourceOnly === true ? 'mcp' : 'tools', row.sourceOnly === true ? '查看工具服务' : '查看安装详情');
+  if (!row.enabled) return access('setup', '当前安装未启用。启用不会授予任何工具权限。', 'enable', '核对启用');
+  if (!allowed.size) return access('permission', '已启用，但尚未允许任何工具。请按实际用途逐项核对。', 'tools', '选择要授权的工具');
+  if (row.credentialNeedsReentry === true) return access('setup', '旧凭据不会沿用。如果服务需要新凭据，须重新核对安装，原工具授权会被清空。', 'tools', '查看原安装');
+  const later = row.mcpStatus === 'will_revalidate' ? '使用时重新核对服务连接。' : row.mcpStatus === 'original_task_revalidation_required' ? '由原任务重新核对本机服务。' : '使用时仍核对任务范围。';
+  return access('configured', `已授权 ${allowed.size}/${tools.length} 个工具。 ${later}`, 'tools', '查看工具权限');
+}

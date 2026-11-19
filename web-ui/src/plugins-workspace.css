@@ -75,3 +75,15 @@
   .pw-plugins-workspace.pw-ecosystem-depth .pw-eco-catalog-source, .pw-functional-packs.pw-ecosystem-depth .pw-pack-current { padding: 16px; }
   .pw-functional-packs .pw-pack-management { grid-template-columns: minmax(0, 1fr); gap: 4px; }
 }
+
+/* One installation, then a list of individual effects, not another grid of technical cards. */
+.pw-plugins-workspace.pw-ecosystem-depth .pw-plugin-access-detail {
+  display: flex; flex-direction: column; gap: 16px; min-width: 0;
+}
+.pw-plugins-workspace.pw-ecosystem-depth .pw-plugin-access-detail > .pw-eco-tools { order: 0; }
+.pw-plugin-access-detail .pw-eco-tool > header { flex-wrap: wrap; align-items: baseline; }
+.pw-plugin-access-detail .pw-eco-tool :is(h3, p), .pw-plugins-workspace [data-installed-source] > .pw-field-hint { overflow-wrap: anywhere; }
+.pw-plugins-workspace.pw-ecosystem-depth .pw-eco-tool .pw-eco-tool-destination { margin: 4px 0 12px; color: var(--pw-copy); font: 400 13px/21px var(--pw-font); }
+.pw-plugins-workspace [data-installed-source] .pw-form-actions button { min-height: 44px; max-width: 100%; white-space: normal; }
+.pw-plugins-workspace .pw-plugin-collection-tools .pw-eco-filters { flex-wrap: wrap; overflow: visible; }
+.pw-plugins-workspace .pw-plugin-collection-tools .pw-eco-filters > button { min-height: 44px; }
