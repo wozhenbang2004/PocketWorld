@@ -112,15 +112,15 @@ export function ButlerHome({ ready, modelReady, modelSetup, composer, preparatio
       </Button>
     </li>;
   };
-  const modelConnection = ready && !modelReady && <div className="pw-butler-model-setup"><p>连接模型后即可开始。</p>{modelSetup}</div>;
+  const modelConnection = ready && !modelReady && <div className="pw-butler-model-setup"><p>草稿可以先写。连接模型后发送。</p>{modelSetup}</div>;
 
   return <main className="pw-chat-workspace pw-butler-workspace" aria-label="管家" data-empty={empty || undefined}>
     <div ref={scroller} className="pw-butler-scroll" onScroll={event => { if (restored.current) reportScroll.current?.(event.currentTarget.scrollTop); }}>
       <div className="pw-butler-content">
         <section className="pw-butler-intake" aria-label="交办">
           <header className="pw-butler-welcome"><h2>想交给我什么事？</h2></header>
-          {modelConnection}
           {composer}
+          {modelConnection}
         </section>
         {(!ready || work.length > 0 || phoneActivity || hasPreparations) && <section ref={workRoot} className="pw-butler-work" aria-labelledby={workHeading} aria-busy={!ready}
           onFocusCapture={event => { const node = event.target as HTMLElement, id = node.closest<HTMLElement>('[data-task-id]')?.dataset.taskId; focused.current = id ? { node, id } : null; }}
