@@ -605,7 +605,7 @@ internal class PocketWebBridge(
                 projectDevelopment.dispatch(action, args) { result, error -> complete(id, result, error, retainValue = action !in PocketWebCheckoutFiles.COMMANDS && action !in setOf("projects.development.readHostDiff", "projects.development.read", "projects.development.review", "projects.development.start", "projects.development.query")); publishState() }; return
             }
             if (action in PocketWebButlerPreparations.COMMANDS) {
-                butlerPreparations.dispatch(action, args, section == null && taskViewId == null) { result, error -> complete(id, result, error, "outcome_unknown"); publishState() }; return
+                butlerPreparations.dispatch(action, args, section == null && taskViewId == null) { result, error -> complete(id, result, error, "outcome_unknown", retainValue=action!="butler.preparation.project.savedRevisions" && !(action=="butler.preparation.project.review" && args.has("ownerRevision"))); publishState() }; return
             }
             if (action in PocketWebProjectLivePreview.COMMANDS) {
                 if (action == "projectLive.open") require(requiredString(args, "taskId") == taskViewId) { "请先打开这份原项目任务" }

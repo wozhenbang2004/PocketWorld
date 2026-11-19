@@ -58,8 +58,8 @@ public final class ProjectCapabilityPort implements CapabilityPort {
         this.outputCapture=outputCapture;this.projectMemory=projectMemory;
         if(projectMemory!=null){projectMemory.requireOriginal(original,binding.taskId,binding.runId,binding.epoch);JSONObject selected=projectMemory.metadata();if(!binding.projectId.equals(selected.getString("projectId"))||!nativeCheckoutId.equals(selected.getString("checkoutId")))throw new SecurityException("项目工具/记忆选择不是同一原生项目副本");}
         this.binding=java.util.Objects.requireNonNull(binding);this.authority=java.util.Objects.requireNonNull(authority);this.original=java.util.Objects.requireNonNull(original);this.existing=existing;this.local=java.util.Objects.requireNonNull(local);this.tasks=java.util.Objects.requireNonNull(tasks);checkout=ProjectBuildPlan.identity(nativeCheckoutId);runtimeId=java.util.Objects.requireNonNull(nativeRuntimeId);JSONObject runtimeFacts=draftScope==null?local.projectRuntimeForHost(runtimeId):new JSONObject();
-        if(binding.projectId.isEmpty()||!original.hasHostRun()||!original.matchesHostRun(binding.taskId,binding.runId,binding.epoch))throw new SecurityException("项目工具需要已选项目和原宿主控制");checkoutIdentity=checkoutIdentity(local.projectCheckoutForHost(checkout));checkCheckout();
-        frozenDraftFiles=draftScope==null?null:new FixedProjectDraftSource(local.handle("export",new JSONObject().put("checkoutId",checkout)),draftScope);
+        if(binding.projectId.isEmpty()||!original.hasHostRun()||!original.matchesHostRun(binding.taskId,binding.runId,binding.epoch))throw new SecurityException("项目工具需要已选项目和原宿主控制");checkoutIdentity=usesOwnerRevision()?null:checkoutIdentity(local.projectCheckoutForHost(checkout));checkCheckout();
+        frozenDraftFiles=draftScope==null?null:new FixedProjectDraftSource(draftSnapshot(),draftScope);
         schemas=new SchemaDefinitions(runtimeId,runtimeFacts,binding.allowWrites).schemas;
         if(draftScope!=null){
             schemas.keySet().retainAll(ProjectEditDraft.TOOLS);
@@ -201,7 +201,9 @@ public final class ProjectCapabilityPort implements CapabilityPort {
         return args;
     }
     private static String checkoutIdentity(JSONObject row)throws Exception {JSONObject identity=new JSONObject();for(String key:new String[]{"id","projectId","createdAt","isolatedGit"})if(row.has(key))identity.put(key,row.get(key));return ProjectSources.digest(identity);}
-    private void checkCheckout()throws Exception {JSONObject row=local.projectCheckoutForHost(checkout);if(!checkout.equals(row.optString("id"))||!binding.projectId.equals(row.optString("projectId"))||!checkoutIdentity.equals(checkoutIdentity(row)))throw new SecurityException("原生选定项目副本已不存在或已被替换");}
+    private boolean usesOwnerRevision(){return draftScope!=null&&draftScope.has(OwnerRevisionSource.FIELD);}
+    private JSONObject draftSnapshot()throws Exception{return usesOwnerRevision()?tasks.originalOwnerRevisionSnapshot(binding.taskId,binding.runId,binding.epoch,original):local.handle("export",new JSONObject().put("checkoutId",checkout));}
+    private void checkCheckout()throws Exception {if(usesOwnerRevision()){tasks.requireOwnerProjectRevisionRun(binding.taskId,binding.runId,binding.epoch,original);return;}JSONObject row=local.projectCheckoutForHost(checkout);if(!checkout.equals(row.optString("id"))||!binding.projectId.equals(row.optString("projectId"))||!checkoutIdentity.equals(checkoutIdentity(row)))throw new SecurityException("原生选定项目副本已不存在或已被替换");}
     private void check(String name,RunControl control)throws Exception {if(closed||control!=original||!original.matchesHostRun(binding.taskId,binding.runId,binding.epoch))throw new SecurityException("项目工具不能替换原执行控制");original.check();if(original.isPaused())throw new SecurityException("项目原任务已暂停");authority.check(name,original);checkCheckout();}
     private JSONObject nativeBinding(String operation)throws Exception {return new JSONObject().put("taskId",binding.taskId).put("runId",binding.runId).put("coordinatorEpoch",binding.epoch).put("operationId",ProjectBuildPlan.identity(operation));}
     @Override public JSONObject execute(String name,JSONObject input,RunControl control)throws Exception {
@@ -259,9 +261,9 @@ public final class ProjectCapabilityPort implements CapabilityPort {
                     try {if(draftScope!=null){
                         if(!"draft_edit".equals(args.opt("intent")))throw new SecurityException("独立改稿不能转换为可执行计划");
                         frozenDraftFiles.requireRead(args.getString("path"),args.getString("expectedHash"));
-                        JSONObject view=local.handle("export",new JSONObject().put("checkoutId",checkout));
+                        JSONObject view=draftSnapshot();
                         JSONObject draft=ProjectEditDraft.freeze(view,draftScope,binding.taskId,binding.runId,binding.epoch,args);
-                        check(name,control);if(!draft.getString("sourceDigest").equals(ProjectSources.describe(local.handle("export",new JSONObject().put("checkoutId",checkout))).opt("sourceDigest")))throw new SecurityException("原项目在准备期间变化，没有交付陈旧差异");
+                        check(name,control);if(!usesOwnerRevision()&&!draft.getString("sourceDigest").equals(ProjectSources.describe(draftSnapshot()).opt("sourceDigest")))throw new SecurityException("原项目在准备期间变化，没有交付陈旧差异");
                         result=tasks.savePrivateProjectEditDraft(binding.taskId,binding.runId,binding.epoch,original,draft);nativeSuccessCode="project_edit_draft_saved";break;
                     }JSONObject plan;
                     if(args.getString("intent").equals("revert_operation")){JSONObject evidence=tasks.projectRevertEvidence(binding.taskId,binding.runId,binding.epoch,original,ProjectBuildPlan.identity(args.getString("revertOperationId")));plan=ProjectBuildPlan.revert(local,nativeInput,evidence.getJSONObject("plan"),evidence.getJSONObject("receipt"),evidence.getString("operationId"));}

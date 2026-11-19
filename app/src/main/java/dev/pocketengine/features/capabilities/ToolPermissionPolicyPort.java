@@ -44,13 +44,18 @@ public final class ToolPermissionPolicyPort implements CapabilityPort {
     private final String policyHash;
     private final ModelConfig reviewer;
     private final EventSink events;
-    private final boolean phone;
+    private final boolean phone,mainModelOnly;
     private final AutoCloseable policyFence;
     private volatile boolean closed;
     private JSONArray evidence=new JSONArray();
 
     public ToolPermissionPolicyPort(CapabilityPort existing,TaskStore tasks,ModelCapabilityAdapters.Binding binding,
             TaskStoreCapabilityAuthority.PolicySource source,java.util.function.LongSupplier revisionSource,ModelConfig model,EventSink events,boolean phone)throws Exception {
+        this(existing,tasks,binding,source,revisionSource,model,events,phone,false);
+    }
+    public ToolPermissionPolicyPort(CapabilityPort existing,TaskStore tasks,ModelCapabilityAdapters.Binding binding,
+            TaskStoreCapabilityAuthority.PolicySource source,java.util.function.LongSupplier revisionSource,ModelConfig model,EventSink events,boolean phone,boolean mainModelOnly)throws Exception {
+        this.mainModelOnly=mainModelOnly;
         this.existing=java.util.Objects.requireNonNull(existing);this.tasks=tasks;this.binding=binding;this.revisionSource=revisionSource;this.events=events;this.phone=phone;
         policyRevision=revisionSource.getAsLong();JSONObject snapshot=CapabilityApprovalPolicy.normalize(source.current());
         if(policyRevision!=revisionSource.getAsLong())throw new SecurityException("审批策略在准备期间改变，请重新开始原任务");
@@ -94,6 +99,9 @@ public final class ToolPermissionPolicyPort implements CapabilityPort {
         String schemaHash=TaskStore.capabilityFingerprint(schema);JSONObject arguments=ToolApprovalPermit.exact(supplied);
         JSONObject result=new JSONObject().put("decision","allow").put("risk","not_assessed").put("authorization","owner_rule");
         String approver=policy.mode().equals("full_access")?"full_access":"tool_rule";
+        if(mainModelOnly&&choice==CapabilityApprovalPolicy.Decision.REVIEW){
+            choice=CapabilityApprovalPolicy.Decision.ASK;result.put("decision","ask").put("reason","你只同意把这份已存稿交给本轮主模型。此项另设复核，请亲自确认准确调用；没有发送给审核模型。");
+        }
         if(choice==CapabilityApprovalPolicy.Decision.REVIEW){
             approver="ai_review";
             JSONObject owner;
@@ -125,6 +133,10 @@ public final class ToolPermissionPolicyPort implements CapabilityPort {
             if(!"allow".equals(result.optString("decision")))choice=CapabilityApprovalPolicy.Decision.ASK;
         }
         if(choice==CapabilityApprovalPolicy.Decision.ASK){
+            // A generic prompt stores exact arguments; never copy manuscript text into its persisted
+            // payload. The owner's stronger rule remains effective, not silently treated as approval.
+            if(mainModelOnly&&arguments.length()>0)
+                return refusal("approval_required",dev.pocketengine.features.local.project.OwnerRevisionRunPrivacy.MANUAL_SCOPE_BLOCK);
             JSONObject capability=new JSONObject().put("kind","tool_permission_policy").put("tool",name).put("definitionHash",schemaHash).put("policyHash",policyHash);
             JSONObject approval=tasks.requireCapabilityApproval(binding.taskId,binding.runId,name,arguments,capability);
             if(!approval.optBoolean("approved")){
@@ -173,7 +185,7 @@ public final class ToolPermissionPolicyPort implements CapabilityPort {
     @Override public void validate(String name,JSONObject args)throws Exception{existing.validate(name,args);}
     @Override public JSONObject execute(String name,JSONObject args,RunControl control)throws Exception{current(control);return existing.execute(name,args,control);}
     @Override public void afterTool(String name,JSONObject args,JSONObject receipt,RunControl control)throws Exception{
-        ToolApprovalPermit.clear(this);existing.afterTool(name,args,receipt,control);
+        ToolApprovalPermit.clear(this);existing.afterTool(name,args,receipt,control);if(mainModelOnly)return;
         String text=reviewer.redactSensitive(receipt.toString());if(text.length()>3000)text=text.substring(0,3000)+"[证据已截断]";
         evidence.put(new JSONObject().put("role","tool").put("tool",name).put("content",text));if(evidence.length()>20)evidence.remove(0);
     }
@@ -184,7 +196,7 @@ public final class ToolPermissionPolicyPort implements CapabilityPort {
     @Override public JSONObject prepareTurn(String query,int round,int steps,RunControl control)throws Exception{current(control);return existing.prepareTurn(query,round,steps,control);}
     @Override public boolean responseCurrent(RunControl control)throws Exception{current(control);return existing.responseCurrent(control);}
     @Override public boolean stepReadSourceCurrent(String tool,JSONObject receipt,RunControl control)throws Exception{current(control);return existing.stepReadSourceCurrent(tool,receipt,control);}
-    @Override public void beforeModelRequest(String id,JSONArray messages,RunControl control)throws Exception{current(control);existing.beforeModelRequest(id,messages,control);evidence=evidence(messages);}
+    @Override public void beforeModelRequest(String id,JSONArray messages,RunControl control)throws Exception{current(control);existing.beforeModelRequest(id,messages,control);if(!mainModelOnly)evidence=evidence(messages);}
     @Override public JSONObject afterModelResponse(String id,String answer,RunControl control)throws Exception{return existing.afterModelResponse(id,answer,control);}
     @Override public void modelRequestAbandoned(String id)throws Exception{existing.modelRequestAbandoned(id);}
     @Override public NativeToolObservation.Requirement observationRequirement(String name,JSONObject args,RunControl control)throws Exception{return existing.observationRequirement(name,args,control);}

@@ -157,7 +157,10 @@ public final class ProjectOwnerWorkflows {
         try{return startReviewedForOwner(ownerInput,()->{try{preparation.checkCurrent();return current.getAsBoolean();}catch(Exception changed){return false;}});}
         finally{butlerPreparation.remove();}
     }
-    public void checkStartFenceForHost(){var fence=ownerStartFence.get();if(fence!=null&&!fence.getAsBoolean())throw new SecurityException("原项目窗口或模型已变化，没有分配项目执行");}
+    public void checkStartFenceForHost(dev.pocketengine.core.ModelConfig actual)throws Exception{
+        var fence=ownerStartFence.get();if(fence!=null&&!fence.getAsBoolean())throw new SecurityException("原项目窗口或模型已变化，没有分配项目执行");
+        JSONObject chosen=selection.get();if(chosen!=null&&chosen.has(OwnerRevisionSource.FIELD)&&!OwnerRevisionRecipient.pin(actual).equals(chosen.opt("revisionRecipient")))throw new SecurityException("实际模型不是主人刚审阅的选稿目的地，没有启动");
+    }
     /** Native owner text only. These requirements describe the requested result, not grants. */
     public static JSONObject deliveryContractForOwner(JSONObject input)throws Exception {
         Object value=input.opt("goal");
@@ -193,15 +196,24 @@ public final class ProjectOwnerWorkflows {
                 !"managed_process_v1".equals(runtime))throw new SecurityException("独立改稿只接受机主刚确认的原管家项目审阅");
             context.put("draftOnly",true);
         }
+        if(ownerInput.has(OwnerRevisionSource.FIELD)){
+            if(!ProjectEditDraft.selected(context)||butlerPreparation.get()==null||ownerStartFence.get()==null)throw new SecurityException("已存稿不能独立于新原提案的主人审阅启动");
+            JSONObject ref=OwnerRevisionSource.pin(ownerInput.getJSONObject(OwnerRevisionSource.FIELD)),v=tasks.reviewOwnerProjectRevision(butlerPreparation.get(),ref);
+            if(!project.equals(v.opt("projectId"))||!checkout.equals(v.opt("checkoutId"))||!digest.equals(v.opt("sourceDigest")))throw new SecurityException("原提案的起始稿不能更换");
+            String recipient=ownerInput.getString("revisionRecipient");if(!recipient.matches("[a-f0-9]{64}"))throw new SecurityException("请重新核对这份稿的实际接收模型");
+            context.put(OwnerRevisionSource.FIELD,ref).put("revisionRecipient",recipient);
+        }
         if(butlerPreparation.get()==null)context.put("deliveryContract",contract);
         JSONObject prior=null;try{prior=assistant.handle("getSubmission",new JSONObject().put("clientMessageId",client));}catch(IllegalArgumentException absent){}
         if(prior!=null){verifyAcknowledgement(prior,context);return prior;}
-        JSONObject actual=ProjectSources.describe(local.handle("export",new JSONObject().put("checkoutId",checkout)));
-        if(!project.equals(actual.getString("projectId"))||!digest.equals(actual.getString("sourceDigest")))throw new SecurityException("选择后的项目源码已变化，请重新核对再开始");
+        if(!context.has(OwnerRevisionSource.FIELD)){JSONObject actual=ProjectSources.describe(local.handle("export",new JSONObject().put("checkoutId",checkout)));
+        if(!project.equals(actual.getString("projectId"))||!digest.equals(actual.getString("sourceDigest")))throw new SecurityException("选择后的项目源码已变化，请重新核对再开始");}
         if(selection.get()!=null)throw new IllegalStateException("不能嵌套启动项目任务");selection.set(context);
         try{
             // sendNative synchronously calls the existing NativeInputHost before scheduling its sole runner.
-            JSONObject ack=assistant.handle("send",new JSONObject().put("clientMessageId",client).put("message",goal).put("mode","queue"));
+            JSONObject message=new JSONObject().put("clientMessageId",client).put("message",goal).put("mode","queue");
+            if(context.has(OwnerRevisionSource.FIELD))message.put("firstMessageWithoutPersonalMemory",true).put("excludeThisInputFromLearning",true).put("firstTaskWithoutDefaultWrites",true);
+            JSONObject ack=assistant.handle("send",message);
             if(ack.optString("status").matches("accepted|queued"))verifyAcknowledgement(ack,context);
             return ack;
         }finally{selection.remove();}
@@ -213,7 +225,7 @@ public final class ProjectOwnerWorkflows {
         private NativeStart(ProjectOwnerWorkflows issuer,JSONObject context,dev.pocketengine.features.memory.ProjectMemoryAccess.Consent memory){this.issuer=issuer;this.context=context.toString();this.memory=memory;}
     }
     public JSONObject start(JSONObject ownerInput,dev.pocketengine.features.memory.ProjectMemoryAccess.Consent memory)throws Exception{
-        if(ownerInput.has("draftOnly"))throw new SecurityException("独立改稿只走已确认的原生私人管家交办，不合并记忆授权");
+        if(ownerInput.has("draftOnly")||ownerInput.has(OwnerRevisionSource.FIELD))throw new SecurityException("独立改稿只走已确认的原生私人管家交办，不合并记忆授权");
         java.util.Objects.requireNonNull(memory);String checkout=ProjectBuildPlan.identity(ownerInput.getString("checkoutId")),project=ProjectBuildPlan.identity(ownerInput.getString("projectId"));
         JSONObject contract=selectedDeliveryContract(ownerInput);
         String digest=ownerInput.getString("expectedSourceDigest"),client=ownerInput.getString("clientMessageId"),goal=contract.getString("goal"),runtime=ownerInput.getString("runtime");local.projectRuntimeForHost(runtime);
@@ -252,7 +264,10 @@ public final class ProjectOwnerWorkflows {
         JSONObject checkout=local.projectCheckoutForHost(context.getString("checkoutId"));if(!context.getString("projectId").equals(checkout.getString("projectId")))throw new SecurityException("原项目副本已不可用");return task;
     }
     private void verifyAcknowledgement(JSONObject ack,JSONObject expected)throws Exception {
-        if(!ack.has("taskId"))return;JSONObject task=requireTask(ack.getString("taskId"));
+        if(!ack.has("taskId"))return;JSONObject task;
+        if(expected.has(OwnerRevisionSource.FIELD)){task=tasks.get(ack.getString("taskId"),false);
+            if(task==null||!"owner".equals(task.opt("actorId"))||!"private".equals(task.opt("spaceId"))||!task.isNull("origin")||task.optJSONObject("ownerWorkPreparation")==null)throw new SecurityException("不是所选稿的新正式工作");
+        }else task=requireTask(ack.getString("taskId"));
         JSONObject actual=task.getJSONObject("developmentContext");
         if(ProjectSources.canonical(expected).equals(ProjectSources.canonical(actual)))return;
         // Old saved starts had only a goal. They can be queried, but cannot

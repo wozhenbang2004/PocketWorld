@@ -245,7 +245,7 @@ function TraceDetails({ selection, page, complete, close, active }: { selection:
     : node?.kind === 'tool' ? [['summary', '摘要'], ['input', '参数'], ['output', '结果'], ...(role === 'subtool' ? [] : [['schema', 'Schema']]), ['timing', '耗时']]
       : [['summary', '摘要'], ['preview', '预览'], ['raw', '原始']];
   const sourceUnavailable = read.detail && read.detail.sourceState !== 'current';
-  const missing = read.busy ? '正在读取原记录正文…' : sourceUnavailable ? read.detail!.sourceReason || '原记录正文已不可用，调用元数据仍保留。' : '原记录未保留这项内容。';
+  const missing = read.busy ? '正在读取原记录正文…' : read.detail?.sourceReason === 'private_revision_result_only' ? '续稿过程只保留步骤和耗时。原稿与新稿请回这次交办查看差异。' : sourceUnavailable ? read.detail!.sourceReason || '原记录正文已不可用，调用元数据仍保留。' : '原记录未保留这项内容。';
   return <Drawer.NestedRoot open={active && !!selection} onOpenChange={open => { if (!open) close(); }} shouldScaleBackground={false}
     snapPoints={[.64, .94]} activeSnapPoint={snap} setActiveSnapPoint={setSnap} fadeFromIndex={0}>
     <Drawer.Portal><Drawer.Overlay className="pw-overlay pw-trace-overlay"/>

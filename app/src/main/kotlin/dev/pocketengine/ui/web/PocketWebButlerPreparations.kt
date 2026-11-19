@@ -37,7 +37,7 @@ internal class PocketWebButlerPreparations(
         private val unsavedDrafts = mutableSetOf<String>()
         val COMMANDS = setOf("butler.capabilities", "butler.preparations.list", "butler.preparation.read",
             "butler.preparation.phone.review", "butler.preparation.phone.settings", "butler.preparation.phone.start", "butler.preparation.project.choices",
-            "butler.preparation.project.prepare", "butler.preparation.project.queryCopy", "butler.preparation.project.review",
+            "butler.preparation.project.prepare", "butler.preparation.project.queryCopy", "butler.preparation.project.review", "butler.preparation.project.savedRevisions",
             "butler.preparation.project.start", "butler.preparation.draft", "butler.preparation.query", "butler.preparation.dismiss", "butler.preparation.close")
     }
     fun clear() { generation++; workSequence++; page = null; phone = null; project = null; busy = false }
@@ -267,22 +267,35 @@ internal class PocketWebButlerPreparations(
                     native.queryCheckoutForOwner(projectId, request).put("registered", synchronized(persistence) { presentation.contains(key) })
                 }
             }
+            "butler.preparation.project.savedRevisions" -> {
+                fields(args,"viewHandle","cursor"); project=null
+                val cursor=if(args.has("cursor"))text(args,"cursor",4096,true) else ""
+                work(original,done){host.tasks.priorOwnerProjectRevisions(typed(original),cursor)}
+            }
             "butler.preparation.project.review" -> {
-                fields(args, "viewHandle", "projectId", "checkoutId", "draftOnly")
-                val projectId = text(args, "projectId"); val checkout = text(args, "checkoutId")
+                project=null
+                fields(args, "viewHandle", "projectId", "checkoutId", "draftOnly", "sourceKind", "ownerRevision")
+                if(args.has("ownerRevision") || args.has("sourceKind")) require(args.opt("sourceKind")=="owner_saved_revision" && args.optJSONObject("ownerRevision")!=null) { "请明确选中一个原保存版本；不会退回工程副本" }
+                val pinned = if(args.has("ownerRevision")) dev.pocketengine.features.local.project.OwnerRevisionSource.pin(args.getJSONObject("ownerRevision")) else null
                 val draftOnly = args.opt("draftOnly") as? Boolean ?: error("请明确选择本次项目交付方式")
-                remember(original, "projectId" to projectId, "checkoutId" to checkout)
+                if(pinned!=null)require(draftOnly && !args.has("projectId") && !args.has("checkoutId")) { "只能选择一份已存稿，不能同时读取工程" }
+                else remember(original, "projectId" to text(args,"projectId"), "checkoutId" to text(args,"checkoutId"))
                 work(original, done) {
                     val preparation = typed(original); val proposed = preparation.view(); check(proposed.getString("kind") == "project")
-                    val source = controller.projectDevelopmentForWeb().sourceForOwner(projectId, checkout)
-                    val model = controller.nativeModelSelection().readStable { controller.projectDevelopmentModelForWeb() }
+                    val source = if(pinned!=null)host.tasks.reviewOwnerProjectRevision(preparation,pinned)
+                        else controller.projectDevelopmentForWeb().sourceForOwner(text(args,"projectId"),text(args,"checkoutId"))
+                    val projectId=source.getString("projectId");val checkout=source.getString("checkoutId")
+                    val model = controller.nativeModelSelection().readStable { controller.projectDevelopmentModelForWeb(pinned!=null) }
                     check(model.value().optBoolean("configured")) { "模型尚未就绪，提案和项目选择仍可保留" }
                     val input = JSONObject().put("projectId", projectId).put("checkoutId", checkout).put("expectedSourceDigest", source.getString("sourceDigest"))
                         .put("runtime", "managed_process_v1").put("clientMessageId", proposed.getString("clientMessageId")).put("goal", proposed.getJSONObject("contract").getString("goal"))
                     if (draftOnly) input.put("draftOnly", true)
+                    val display=JSONObject(model.value().toString())
+                    if(pinned!=null){input.put("ownerRevision",pinned).put("revisionRecipient",display.getString("reviewPin"));display.remove("reviewPin")}
                     check(current(original)); val retained = ProjectReview(UUID.randomUUID().toString(), original, preparation, input.toString(), model.revision(), SystemClock.elapsedRealtime() + 120_000)
                     project = retained; phone = null
-                    JSONObject().put("reviewHandle", retained.handle).put("projectId", projectId).put("checkoutId", checkout).put("source", source).put("model", model.value())
+                    JSONObject().put("reviewHandle", retained.handle).put("projectId", projectId).put("checkoutId", checkout).put("source", source).put("model", display)
+                        .put("sourceTaskId",original.source).put("proposalId",original.proposal).put("sourceConversationId",proposed.getString("sourceConversationId"))
                         .put("contract", proposed.getJSONObject("contract")).put("goal", input.getString("goal")).put("runtime", "这台手机").put("draftOnly", draftOnly).put("commandsAuthorized", false).put("projectMemoryAuthorized", false)
                 }
             }
@@ -291,7 +304,7 @@ internal class PocketWebButlerPreparations(
                 val reviewed = project; check(reviewed != null && reviewed.page === original && reviewed.handle == text(args, "reviewHandle")) { "这份项目审阅已关闭或使用" }
                 fun startCurrent(): Boolean { val state = controller.nativeModelSelection().status(); return current(original) && SystemClock.elapsedRealtime() < reviewed.expires && !state.pending() && state.revision() == reviewed.modelRevision }
                 check(startCurrent()) { "原项目或模型审阅已变化" }; val input = JSONObject(reviewed.input)
-                val marker = JSONObject(input.toString()).put("kind", "project").put("status", "pending"); saveMarker(original, marker); project = null
+                val marker = JSONObject(input.toString()).put("kind", "project").put("status", "pending"); marker.remove("revisionRecipient"); saveMarker(original, marker); project = null
                 controller.startPreparedProjectForWeb(reviewed.native, input, ::startCurrent) { result, error -> completeStart(original, marker, result, error, done) }
             }
             "butler.preparation.query" -> {
@@ -302,6 +315,8 @@ internal class PocketWebButlerPreparations(
                     else {
                         val result = if (originalStart.getString("kind") == "phone") host.queryConversationPhoneStart(originalStart.getString("requestId"), originalStart.getString("conversationId"))
                             else controller.projectDevelopmentForWeb().submissionForOwner(originalStart.getString("projectId"), originalStart.getString("checkoutId"), originalStart.getString("clientMessageId"))
+                        if(originalStart.has("ownerRevision") && result.optString("taskId").isNotBlank())
+                            host.tasks.requireOwnerRevisionSubmission(result.getString("taskId"),original.source,original.proposal,originalStart.getString("clientMessageId"),originalStart.getString("expectedSourceDigest"),originalStart.getJSONObject("ownerRevision"))
                         record(original, originalStart, result, null)
                     }
                 }

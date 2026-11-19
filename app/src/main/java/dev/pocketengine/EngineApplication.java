@@ -2718,7 +2718,7 @@ public final class EngineApplication extends Application implements dev.pocketen
             CapabilityPort drafts=new dev.pocketengine.features.local.project.ProjectCapabilityPort(binding,originalAuthority,original,null,host,tasks,development.getString("checkoutId"),development.getString("runtime"),null,null,development);
             try{
                 tasks.authorizeTools(id,run,toolNames(drafts.tools()));
-                return withExecutionPlanning(id,original,new dev.pocketengine.features.capabilities.ToolPermissionPolicyPort(drafts,tasks,binding,()->settings.getEffectivePermissionPolicy(task.optString("conversationId")),settings::permissionPolicyRevision,inference,features::emitApproval,false));
+                return withExecutionPlanning(id,original,new dev.pocketengine.features.capabilities.ToolPermissionPolicyPort(drafts,tasks,binding,()->settings.getEffectivePermissionPolicy(task.optString("conversationId")),settings::permissionPolicyRevision,inference,features::emitApproval,false,development.has(dev.pocketengine.features.local.project.OwnerRevisionSource.FIELD)));
             }catch(Exception stopped){drafts.close();throw stopped;}
         }
         if(task.has("ownerDeviceWork")){
@@ -3410,7 +3410,7 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
             control.check();if(control.hasHostRun())throw new SecurityException("不能用旧控制器新建聊天任务");SettingsStore.validate(config);dev.pocketengine.runtime.ModelGateway.validate(config);
             for(var entry:capabilityControls.entrySet()){JSONObject current=tasks.get(entry.getKey(),false);if(current!=null&&!"owner_work".equals(current.optString("executionRole"))&&conversation.equals(current.optString("conversationId")))throw new IllegalStateException("原对话仍由原任务执行；请在原任务核对输入，不能启动第二执行器");}
             if(tasks.ownerConversationUnresolved(conversation)!=null)throw new IllegalStateException("原对话有动作结果待核对，请先处理原任务；没有重发旧目标");
-            if(projectOwnerWorkflows!=null)projectOwnerWorkflows.checkStartFenceForHost();
+            if(projectOwnerWorkflows!=null)projectOwnerWorkflows.checkStartFenceForHost(config);
             if(blockDefaults&&(projectStart!=null||!Boolean.TRUE.equals(message.opt("personalMemoryExcluded"))||!"user".equals(message.opt("role"))||message.optString("id").isEmpty()||message.optString("clientMessageId").isEmpty()))throw new SecurityException("不能将默认偏好限制转给其他来源或任务");
             JSONObject task=tasks.createCapabilityTask(goal,conversation,blockDefaults);initializeOwnerExecutionScope(task.getString("id"),config,ownerScope);task=tasks.startAttempt(task.getString("id"),"capabilities",config.maxSteps);
             if(blockDefaults&&!Boolean.TRUE.equals(task.opt("ownerDefaultsWriteBlocked")))throw new SecurityException("原任务未保留偏好写入限制，未接手执行");
@@ -3923,13 +3923,21 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
                 }
             }:null;
 
-            var nativeProfile=attempt.optJSONObject("ownerWorkTakeover")!=null?dev.pocketengine.runtime.NativeInstructionProfile.OWNER_WORK_REPORT:dev.pocketengine.store.OwnerWorkTask.isButlerSource(attempt)?dev.pocketengine.runtime.NativeInstructionProfile.OWNER_BUTLER:dev.pocketengine.runtime.NativeInstructionProfile.OWNER_WORK;
+            boolean selectedRevision=dev.pocketengine.features.local.project.OwnerRevisionRunPrivacy.active(attempt);
+            var nativeProfile=selectedRevision?dev.pocketengine.runtime.NativeInstructionProfile.SELECTED_PROJECT_REVISION:attempt.optJSONObject("ownerWorkTakeover")!=null?dev.pocketengine.runtime.NativeInstructionProfile.OWNER_WORK_REPORT:dev.pocketengine.store.OwnerWorkTask.isButlerSource(attempt)?dev.pocketengine.runtime.NativeInstructionProfile.OWNER_BUTLER:dev.pocketengine.runtime.NativeInstructionProfile.OWNER_WORK;
             var runner=new dev.pocketengine.runtime.AgentRunner(null,port,dev.pocketengine.runtime.context.ContextBudgetPolicy.currentHostSource(),projection,inputs,nativeProfile);
             if(approval!=null&&approval.attachmentCall)runner.bindApprovedCall(new dev.pocketengine.features.capabilities.ApprovedAttachmentContinuation(tasks,id,approval.runId,approval.epoch,approval.approvalId));
-            RetainedDevelopmentRun development=ownerMailbox&&assistantInputs.containsKey(control)?new RetainedDevelopmentRun(attempt,config,control,runner,journal,sourceProjection):null;
+            RetainedDevelopmentRun development=ownerMailbox&&!selectedRevision&&assistantInputs.containsKey(control)?new RetainedDevelopmentRun(attempt,config,control,runner,journal,sourceProjection):null;
             if(development!=null)runner.bindDevelopmentContinuation(development::retainCurrent);
-            RunOutcome result=ownerSkill==null?runner.run(id,attempt.optString("goal"),config.withStepCeiling(attempt.getInt("stepCeiling")),control,event->recordCapabilityProgress(id,admittedRun,admittedEpoch,control,event),journal)
-                    :runner.runOwnerSkill(id,attempt.optString("goal"),config.withStepCeiling(attempt.getInt("stepCeiling")),control,event->recordCapabilityProgress(id,admittedRun,admittedEpoch,control,event),journal,ownerSkill);
+            dev.pocketengine.core.EventSink visibleProgress=event->{
+                if(!selectedRevision){recordCapabilityProgress(id,admittedRun,admittedEpoch,control,event);return;}
+                // Do not echo partial model text to the shared progress stream, persistent trace or logs.
+                if("model_stream".equals(event.optString("type")))return;
+                try{recordCapabilityProgress(id,admittedRun,admittedEpoch,control,dev.pocketengine.features.local.project.OwnerRevisionRunPrivacy.event(event));}
+                catch(Exception unavailable){RuntimeDiagnostics.event("run_settlement","unconfirmed","DRAFT_DIAGNOSTIC_METADATA_UNAVAILABLE",control,unavailable);}
+            };
+            RunOutcome result=ownerSkill==null?runner.run(id,attempt.optString("goal"),config.withStepCeiling(attempt.getInt("stepCeiling")),control,visibleProgress,journal)
+                    :runner.runOwnerSkill(id,attempt.optString("goal"),config.withStepCeiling(attempt.getInt("stepCeiling")),control,visibleProgress,journal,ownerSkill);
             if(runner.developmentYielded())try{return development.held(result);}catch(Exception failed){runner.closeDevelopment(id,control,journal);throw failed;}
             if(dev.pocketengine.features.local.project.ProjectEditDraft.selected(attempt.optJSONObject("developmentContext")))
                 result=tasks.boundDraftOutcome(id,admittedRun,admittedEpoch,control,result);
@@ -4000,6 +4008,16 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
         if(task==null||!"owner".equals(task.optString("actorId"))||!"private".equals(task.optString("spaceId"))||source!=null&&source.optString("kind").matches("channel|group"))return journal;
         if(task.has("ownerWorkPreparation")||task.has("conversationPhoneHandoff")||source!=null&&"automation".equals(source.optString("kind"))&&source.has("nativeOrigin"))
             tasks.registerOwnerResultHandling(id,run,epoch,original,ownerWorkTakeoverModelTarget(capturedInference,json("goal",task.getString("goal")),0,0));
+        // A manually selected local revision is for this one reviewed inference destination only.
+        if(task.optJSONObject("developmentContext")!=null&&task.getJSONObject("developmentContext").has(dev.pocketengine.features.local.project.OwnerRevisionSource.FIELD)){
+            if(!dev.pocketengine.features.local.project.OwnerRevisionRecipient.pin(capturedInference).equals(task.getJSONObject("developmentContext").opt("revisionRecipient")))throw new SecurityException("所选稿的原模型不可核对，未转交其他模型");
+            tasks.requireOwnerProjectRevisionRun(id,run,epoch,original);
+            return journal.withCandidateAdmission(candidate->{
+                tasks.requireOwnerProjectRevisionRun(id,run,epoch,original);
+                dev.pocketengine.runtime.models.InferenceRouteContinuity.requireCurrent(capturedInference,settings.currentForCaptured(capturedInference),original);
+                dev.pocketengine.runtime.models.InferenceRouteContinuity.requireCurrent(capturedInference,candidate,original);
+            }); // no raw memory mirror or secondary summarization of this file
+        }
         // Attachment consent pins an exact destination, not every model in a fallback plan.
         // Check the live task at each candidate/dispatch boundary so later owner attachments
         // are covered too. This read-only check never creates or replaces the original pin.

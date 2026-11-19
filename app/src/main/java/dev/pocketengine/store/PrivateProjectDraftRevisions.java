@@ -7,6 +7,8 @@ import dev.pocketengine.features.local.project.ProjectSources;
 import java.nio.CharBuffer;
 import java.nio.charset.StandardCharsets;
 import org.json.JSONObject;
+import org.json.JSONArray;
+import dev.pocketengine.features.local.project.OwnerRevisionSource;
 
 /** Owner follow-on texts. Neither the immutable model result nor a checkout file is an update target. */
 final class PrivateProjectDraftRevisions {
@@ -36,17 +38,25 @@ final class PrivateProjectDraftRevisions {
         db.execSQL("CREATE TRIGGER IF NOT EXISTS retire_private_project_owner_draft_revisions AFTER DELETE ON tasks BEGIN DELETE FROM private_project_owner_draft_revisions WHERE task_id=OLD.task_id; END");
     }
     static JSONObject head(SQLiteDatabase db,JSONObject root)throws Exception{
+        return read(db,root,null,null);
+    }
+    static JSONArray choices(SQLiteDatabase db,JSONObject root)throws Exception{JSONArray out=new JSONArray();read(db,root,null,out);return out;}
+    static JSONObject exact(SQLiteDatabase db,JSONObject root,JSONObject requested)throws Exception{return read(db,root,OwnerRevisionSource.pin(requested),null);}
+    private static JSONObject read(SQLiteDatabase db,JSONObject root,JSONObject requested,JSONArray choices)throws Exception{
         JSONObject prior=base(root);String task=root.getString("taskId");
-        try(Cursor present=db.rawQuery("SELECT 1 FROM sqlite_master WHERE type='table' AND name='private_project_owner_draft_revisions'",null)){if(!present.moveToFirst())return prior;}
+        if(requested!=null&&(!task.equals(requested.getString("taskId"))||!root.getString("draftId").equals(requested.getString("draftId"))))throw changed();
+        try(Cursor present=db.rawQuery("SELECT 1 FROM sqlite_master WHERE type='table' AND name='private_project_owner_draft_revisions'",null)){if(!present.moveToFirst()){if(requested!=null)throw changed();return prior;}}
         try(Cursor rows=db.rawQuery("SELECT ordinal,revision_id,parent_id,CASE WHEN length(CAST(body AS BLOB))<=160000 THEN body END FROM private_project_owner_draft_revisions WHERE task_id=? ORDER BY ordinal ASC LIMIT 9",new String[]{task})){
             while(rows.moveToNext()){
                 if(rows.isNull(3)||!prior.getString("revisionId").equals(rows.getString(2))||rows.getInt(0)!=prior.getInt("ordinal")+1||rows.getInt(0)>LIMIT)throw changed();
                 JSONObject stored=new JSONObject(rows.getString(3)),actual=next(prior,stored.getString("text"));
                 if(!actual.getString("revisionId").equals(rows.getString(1))||!ProjectSources.canonical(actual).equals(ProjectSources.canonical(stored)))throw changed();
                 prior=actual;
+                if(choices!=null)choices.put(OwnerRevisionSource.metadata(actual));
+                if(requested!=null&&requested.getString("revisionId").equals(rows.getString(1))){if(!requested.getString("sha256").equals(actual.getString("sha256")))throw changed();return actual;}
             }
         }
-        return prior;
+        if(requested!=null)throw changed();return prior;
     }
     static JSONObject keep(SQLiteDatabase db,JSONObject root,String parent,String text)throws Exception{
         if(!db.inTransaction())throw new IllegalStateException("独立稿本需在同一原生事务中留存");

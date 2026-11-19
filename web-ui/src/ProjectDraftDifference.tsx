@@ -7,7 +7,7 @@ import {ProjectDraftOwnerRevision} from './ProjectDraftOwnerRevision';
 import type {OriginalProjectDraft} from './ButlerPreparations';
 
 type Diff={taskId:string;available:boolean;draftId:string;projectId:string;checkoutId:string;path:string;runId:string;epoch:number;code:string;sourceChanged:boolean;executionAuthorized:boolean;
- before:string;after:string;beforeSha256:string;afterSha256:string;beforeBytes:number;afterBytes:number};
+ ownerRevision?:{taskId:string;draftId:string;revisionId:string;sha256:string};before:string;after:string;beforeSha256:string;afterSha256:string;beforeBytes:number;afterBytes:number};
 const action='projectDraft.readDifference',sha=/^[a-f0-9]{64}$/;
 const visible=()=>bridge.getState().view as {resumeRevision?:number;section?:string;taskId?:string}|undefined;
 const ticket=()=>{const v=visible();return JSON.stringify([bridge.getDocumentEpoch(),v?.resumeRevision,v?.section,v?.taskId])};
@@ -44,7 +44,7 @@ export function ProjectDraftDifference({id,active,project,checkout,pin,requested
       if(r.available===false){tell('还没有实际生成并保存的改稿。模型的文字答复不算差异。');return;}
       if(r.available!==true||r.code!=='project_edit_draft_saved'||r.projectId!==project||r.checkoutId!==checkout||!sha.test(r.draftId)||
         (pin&&pin!==r.draftId)||(exact&&(exact.runId!==r.runId||exact.epoch!==r.epoch))||r.sourceChanged!==false||r.executionAuthorized!==false||typeof r.path!=='string'||
-        typeof r.before!=='string'||typeof r.after!=='string'||r.before===r.after||!sha.test(r.beforeSha256)||!sha.test(r.afterSha256))throw Error('原工程、文件或两版文字不能同时核对。');
+        (r.ownerRevision&&(!sha.test(r.ownerRevision.draftId)||!sha.test(r.ownerRevision.revisionId)||r.ownerRevision.sha256!==r.beforeSha256||typeof r.ownerRevision.taskId!=="string"||!r.ownerRevision.taskId||r.ownerRevision.taskId===id))||typeof r.before!=='string'||typeof r.after!=='string'||r.before===r.after||!sha.test(r.beforeSha256)||!sha.test(r.afterSha256))throw Error('原工程、文件或两版文字不能同时核对。');
       show(r);
     }catch(e){if(valid())tell(e instanceof Error?e.message:'这份真实草稿暂不可读。');}finally{if(turn.current===n){flight.current=false;spin(false)}}
   }
@@ -68,8 +68,8 @@ export function ProjectDraftDifference({id,active,project,checkout,pin,requested
       <div className="pw-form-actions"><Button onClick={()=>warn(false)}>回到当前稿</Button></div>
     </SettingsDialog>}
     {note&&<p className="pw-field-hint" role="status">{note}</p>}
-    {data&&held.current===ticket()&&current()&&<><strong className="pw-project-draft-path">{data.path}</strong><p className="pw-field-hint">原工程未写回，没有构建或执行。这里比较的是本次固定的两版文件。</p>
-      <ProjectDraftChanges key={data.draftId} before={data.before} after={data.after} version={data.afterSha256.slice(0,8)}/>
+    {data&&held.current===ticket()&&current()&&<><strong className="pw-project-draft-path">{data.path}</strong><p className="pw-field-hint">原工程未写回，没有构建或执行。{data.ownerRevision?'以你点选的已存稿为起点，不是工程原件或最新稿。':'这里比较的是本次固定的两版文件。'}</p>
+      <ProjectDraftChanges key={data.draftId} before={data.before} after={data.after} version={data.afterSha256.slice(0,8)} beforeLabel={data.ownerRevision?'选中的已存稿':undefined}/>
       <ProjectDraftOwnerRevision key={data.draftId} task={id} root={data.draftId} path={data.path} originalHash={data.afterSha256} protect={protect}/>
       <details className="pw-field-hint"><summary>文件与版本</summary>工程 {data.projectId} · 副本 {data.checkoutId}<br/>原文 {data.beforeBytes} 字节 · {data.beforeSha256}<br/>改稿 {data.afterBytes} 字节 · {data.afterSha256}</details></>}
   </section>;

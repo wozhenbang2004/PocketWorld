@@ -626,6 +626,7 @@ public final class AgentRunner {
                 // The peer text contract authorizes a model answer, not even a global outcome/phase tool.
                 // Seal the complete catalog AFTER every contribution and before budgeting, routing or any provider adapter.
                 if(instructionProfile==NativeInstructionProfile.PAIRED_DEVICE_TEXT)tools=new JSONArray();
+                if(instructionProfile==NativeInstructionProfile.SELECTED_PROJECT_REVISION)tools=dev.pocketengine.features.local.project.OwnerRevisionRunPrivacy.catalog(tools);
                 if(boundedToolCatalog)dev.pocketengine.core.ScopedToolCatalog.requireModelRequestBudget(tools);
                 withdrawHistoricalImages(screens,history,control);
                 // Keep current native control facts separate from untrusted memory/extension/recovery data.
@@ -892,6 +893,10 @@ public final class AgentRunner {
                     // A mixed text + unsolicited call is not a text result. Never checkpoint it as an answer or dispatch it.
                     if(capabilities!=null)capabilities.modelRequestAbandoned(nativeRequest[0]);
                     return finish(taskId,"failed","模型返回了原文字任务未授权的工具调用；未执行，也没有可交回的文字结果。",new JSONObject().put("unsolicitedToolRejected",true),steps,config,sink);
+                }
+                if(instructionProfile==NativeInstructionProfile.SELECTED_PROJECT_REVISION&&!dev.pocketengine.features.local.project.OwnerRevisionRunPrivacy.offered(response,tools)){
+                    if(capabilities!=null)capabilities.modelRequestAbandoned(nativeRequest[0]);
+                    return finish(taskId,"failed","模型要求了本次选稿范围以外的动作，未执行；请在原交办核对实际成品。",new JSONObject().put("unsolicitedToolRejected",true),steps,config,sink);
                 }
                 if(!nativeApprovedResponse&&!stepRouting.acceptLightResponse(response,capabilities)){
                     if(capabilities!=null)capabilities.modelRequestAbandoned(nativeRequest[0]);

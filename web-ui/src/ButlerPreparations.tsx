@@ -7,6 +7,7 @@ import { WorkContract } from './OwnerWorkFacts';
 import {PhoneScopeReview} from './PhoneScopeReview';
 import {ButlerPhoneReceipt, reviewedPhone, type ProposalPhoneRun} from './ButlerPhoneJourney';
 import {phoneReportInSource, type PhoneReportTarget} from './PhoneReturnedReport';
+import {pinKey,revisionChoice,type RevisionChoice} from './OwnerRevisionChoice';
 import './butler-preparations.css';
 
 type Data = Record<string, any>;
@@ -137,6 +138,8 @@ export function ButlerPreparationDetail({ target, projects, can, run, onClose, o
   // Proposed mode is the non-mutating route. The native confirmation is still
   // required; reopening a proposal never restores permission for the wider route.
   const [draftOnly, setDraftOnly] = useState(true);
+  const [usingRevision,useRevision]=useState(false),[versions,setVersions]=useState<RevisionChoice[]>([]),[picked,pick]=useState<RevisionChoice|null>(null);
+  const [versionsCursor,pageVersions]=useState(''),[versionsRead,didReadVersions]=useState(false);
   const [view, setView] = useState<Data | null>(null), [review, setReview] = useState<Data | null>(null), [capabilities, setCapabilities] = useState<Data[]>([]);
   const [choices, setChoices] = useState<Choices>(() => choicesOf({})), [inspection, setInspection] = useState<Data | null>(null), [copy, setCopy] = useState<Data | null>(null), [receipt, setReceipt] = useState<Data | null>(null);
   const [busy, setBusy] = useState(false), [saving, setSaving] = useState(false), [error, setError] = useState(''), [draftError, setDraftError] = useState(''), [stale, setStale] = useState(false), [saved, setSaved] = useState(true);
@@ -159,6 +162,7 @@ export function ButlerPreparationDetail({ target, projects, can, run, onClose, o
   };
   const read = () => invoke('butler.preparation.read', { sourceTaskId: target.sourceTaskId, proposalId: target.proposalId }, value => {
     if (!preparation(value, target) || !text(value.viewHandle)) throw new Error('没有取得这份原提案的页面，请重新读取。');
+    setVersions([]);pick(null);pageVersions('');didReadVersions(false);
     handle.current = value.viewHandle; setView(value); setStale(false); setReview(null); setInspection(null); setCapabilities([]);
     const nativeChoices = choicesOf(value.preparationDraft || {});
     baseline.current = encodeChoices(nativeChoices, value.kind);
@@ -173,7 +177,7 @@ export function ButlerPreparationDetail({ target, projects, can, run, onClose, o
   const closeNative = (original: string) => { if (original) void latest.current.run('butler.preparation.close', { viewHandle: original }).catch(() => {}); };
   useEffect(() => {
     alive.current = true; let window = ownerWindow();
-    const retire = () => { generation.current++; const original = handle.current; handle.current = ''; closeNative(original); if (alive.current) { setStale(true); setReview(null); setInspection(null); setCapabilities([]); } };
+    const retire = () => { generation.current++; const original = handle.current; handle.current = ''; closeNative(original); if (alive.current) { setStale(true); setReview(null); setInspection(null); setCapabilities([]); setVersions([]);pick(null);pageVersions('');didReadVersions(false); } };
     const inspect = () => { const next = ownerWindow(); if (next !== window || document.hidden) { window = next; retire(); } };
     const unsubscribe = bridge.subscribe(inspect); document.addEventListener('visibilitychange', inspect);
     void readRef.current();
@@ -246,15 +250,28 @@ export function ButlerPreparationDetail({ target, projects, can, run, onClose, o
       setCopy(value); if (value.found === true) setInspection(null);
     });
   });
-  const prepareReview = () => void afterSave(() => invoke(view?.kind === 'phone' ? 'butler.preparation.phone.review' : 'butler.preparation.project.review', view?.kind === 'phone' ? { mode: choicesRef.current.mode } : { projectId: choicesRef.current.projectId, checkoutId: choicesRef.current.checkoutId, draftOnly }, value => {
+  const listVersions=(more=false)=>void afterSave(()=>invoke('butler.preparation.project.savedRevisions',more?{cursor:versionsCursor}:{},v=>{
+    if(v.sourceTaskId!==target.sourceTaskId||v.proposalId!==target.proposalId||v.sourceConversationId!==target.sourceConversationId||typeof v.nextCursor!=='string'||!Array.isArray(v.entries)||!v.entries.every(revisionChoice))throw new Error('原对话与这批已存稿不能核对。');
+    setVersions(prior=>{const unique=new Map<string,RevisionChoice>();for(const row of [...(more?prior:[]),...v.entries])unique.set(pinKey(row.ownerRevision),row);return [...unique.values()]});pageVersions(v.nextCursor);didReadVersions(true);
+  }));
+  const switchProjectSource=(value:string)=>{
+    if(entered.current||reviewRef.current)return;setReview(null);setError('');setDraftOnly(value!=='project');useRevision(value==='saved');pick(null);setVersions([]);pageVersions('');didReadVersions(false);
+    if(value==='saved')listVersions();
+  };
+  const prepareReview = () => void afterSave(() => invoke(view?.kind === 'phone' ? 'butler.preparation.phone.review' : 'butler.preparation.project.review', view?.kind === 'phone' ? { mode: choicesRef.current.mode } : usingRevision ? {draftOnly:true,sourceKind:'owner_saved_revision',ownerRevision:picked?.ownerRevision} : { projectId: choicesRef.current.projectId, checkoutId: choicesRef.current.checkoutId, draftOnly }, value => {
     if (!text(value.reviewHandle) || value.goal !== contractOf(viewRef.current)?.goal || !contractOf(value)) throw new Error('审阅没有完整对应原提案目标，请重新核对。');
     if (viewRef.current?.kind === 'phone' && !reviewedPhone(value,viewRef.current,target,choicesRef.current.mode)) throw new Error('原目标、手机条件和执行范围没有一起核实。没有提交，请重新核对。');
-    if (viewRef.current?.kind === 'project' && (value.projectId !== choicesRef.current.projectId || value.checkoutId !== choicesRef.current.checkoutId || value.draftOnly !== draftOnly || !text(value.source?.sourceDigest) || !text(value.model?.label))) throw new Error('项目副本、源码与模型审阅尚未完整返回。');
+    if(viewRef.current?.kind==='project'){
+      if(value.projectId!==(usingRevision?picked?.projectId:choicesRef.current.projectId)||value.checkoutId!==(usingRevision?picked?.checkoutId:choicesRef.current.checkoutId)||value.draftOnly!==draftOnly||!text(value.source?.sourceDigest)||!text(value.model?.label))throw new Error('项目来源与模型审阅尚未完整返回。');
+      if(usingRevision&&(!picked||!text(value.model?.destination)||value.sourceTaskId!==target.sourceTaskId||value.proposalId!==target.proposalId||value.sourceConversationId!==target.sourceConversationId||!revisionChoice(value.source)||pinKey(value.source.ownerRevision)!==pinKey(picked.ownerRevision)||value.source.ordinal!==picked.ordinal||value.source.path!==picked.path||value.source.bytes!==picked.bytes||typeof value.source.selectedText!=='string'||new TextEncoder().encode(value.source.selectedText).length!==picked.bytes))throw new Error('新目标与选定的同一份已存稿不能核对，没有启动。');
+      if(!usingRevision&&value.source?.ownerRevision)throw new Error('收到与本次选择不同的起始件。');
+    }
     setReview(viewRef.current?.kind==='phone'?{...value,documentEpoch:bridge.getDocumentEpoch(),deadline:performance.now()+value.expiresInMs}:value);
   }));
   const acceptReceipt = (value: Data, original?: Data | null) => {
     if (preparation(value, target)) { setView(previous => ({ ...previous, ...value })); setReceipt(null); return; }
     const expected = original || receiptRef.current;
+    if(expected?.ownerRevision && pinKey(value.ownerRevision)!==pinKey(expected.ownerRevision))throw new Error('原请求回执不属于刚确认的那份已存稿，请查询原请求。');
     if (!['accepted', 'rejected', 'unknown'].includes(value.status) || expected?.kind === 'phone' && (value.kind !== 'phone' || value.requestId !== expected.requestId || value.requestId !== viewRef.current?.targetRequestId || value.conversationId !== target.sourceConversationId || value.status === 'accepted' && value.taskId !== value.requestId) || expected?.kind === 'project' && value.clientMessageId !== expected.clientMessageId || value.status === 'accepted' && !text(value.taskId)) throw new Error('原启动回执身份尚未完整核对，请查询原请求。');
     setReceipt(value); setReview(null);
   };
@@ -265,7 +282,7 @@ export function ButlerPreparationDetail({ target, projects, can, run, onClose, o
       if(!shown||document.hidden||original.documentEpoch!==bridge.getDocumentEpoch()||performance.now()>=original.deadline||
         shown.conditions?.notification.state!=='ready'||shown.conditions.capacity?.state!=='ready'){setError('这次手机条件需要重新核对，没有提交。');return}
     }
-    const retained = { ...original, kind: currentView.kind, clientMessageId: currentView.clientMessageId, status: 'unknown', message: '原启动请求待核对，请查询原请求。' };
+    const retained = { ...original, source:undefined, ownerRevision:original.source?.ownerRevision, kind: currentView.kind, clientMessageId: currentView.clientMessageId, status: 'unknown', message: '原启动请求待核对，请查询原请求。' };
     setReceipt(retained); setReview(null);
     void invoke(currentView.kind === 'phone' ? 'butler.preparation.phone.start' : 'butler.preparation.project.start', { reviewHandle: original.reviewHandle }, value => acceptReceipt(value, retained));
   };
@@ -308,19 +325,22 @@ export function ButlerPreparationDetail({ target, projects, can, run, onClose, o
                 <Button variant="ghost" disabled={busy || saving} onClick={() => void read()}>核对原执行</Button></section>)}
           {view.canPrepare === true && !unresolved && !review && <section className="pw-preparation-choices" aria-label="本次执行准备">
             {view.kind === 'phone' ? <RadioOptions label="在哪个屏幕执行" value={choices.mode} options={[{ id: 'background', label: '后台独立屏' }, { id: 'main_screen', label: '手机主屏' }]} onChange={mode => edit({ ...choicesRef.current, mode })} isDisabled={!canPrepare} /> : <>
-              <RadioOptions label="本次交给你的结果" value={draftOnly ? 'draft' : 'project'} isDisabled={!canPrepare}
-                options={[{id:'draft',label:'只出改稿和差异',description:'不写回原件，不运行命令。'},{id:'project',label:'按现有项目流程工作'}]}
-                onChange={value=>setDraftOnly(value==='draft')} />
+              <RadioOptions label="本次怎么做" value={usingRevision?'saved':draftOnly ? 'draft' : 'project'} isDisabled={!canPrepare}
+                options={[{id:'draft',label:'只出改稿和差异',description:'不写回原件，不运行命令。'},...(can('butler.preparation.project.savedRevisions')?[{id:'saved',label:'接着改我另存的一稿',description:'只把你选的版本交给模型，不读工程或其他稿。'}]:[]),{id:'project',label:'按现有项目流程工作'}]}
+                onChange={switchProjectSource} />
+              {usingRevision?<><SelectField label="用我保留的哪一稿" value={picked?pinKey(picked.ownerRevision):''} options={[{id:'',label:'请选择一份，不默认使用最新稿'},...versions.map(v=>({id:pinKey(v.ownerRevision),label:v.path+' · 我的第 '+v.ordinal+' 稿 · '+(v.goal||v.ownerRevision.taskId)+' · '+v.ownerRevision.sha256.slice(0,8)}))]} isDisabled={!canPrepare||!versions.length} onChange={id=>pick(versions.find(v=>pinKey(v.ownerRevision)===id)||null)}/>
+                {versionsRead&&!versions.length&&<p className="pw-muted">{versionsCursor?'这一批工作没有主人另存的稿。':'在这段对话可核对的先前项目工作中，还没有你另存的稿。'}</p>}
+                {(!versionsRead||versionsCursor)&&<Button variant="ghost" disabled={!canPrepare} onClick={()=>listVersions(!!versionsCursor)}>{versionsCursor?'查看更早的工作':'读取本对话的已存稿'}</Button>}</>:<>
               <SelectField label="选择真实项目" value={choices.projectId} options={[{ id: '', label: '选择要工作的项目' }, ...projects.map(project => ({ id: project.id, label: project.name })), ...(choices.projectId && !projects.some(project => project.id === choices.projectId) ? [{ id: choices.projectId, label: '原项目暂不可用，请重新核对' }] : [])]} isDisabled={!canPrepare} onChange={chooseProject} />
               {suggestedProject && !choices.projectId && <Button variant="secondary" disabled={!canPrepare} onClick={() => chooseProject(suggestedProject.id)}>用提案中的项目：{suggestedProject.name}</Button>}
               {choices.projectId && (!inspection || inspection.projectId !== choices.projectId) && <Button variant="ghost" disabled={!canPrepare} onClick={inspectProject}>重新读取私人副本</Button>}
               {inspection && inspection.projectId === choices.projectId && <><SelectField label="本次工作的私人副本" value={choices.checkoutId} options={[{ id: '', label: checkouts.length ? '选择已有私人副本' : '尚未准备私人副本' }, ...checkouts.map(row => ({ id: row.checkoutId, label: text(row.name) || projectName })), ...(choices.checkoutId && !checkouts.some(row => row.checkoutId === choices.checkoutId) ? [{ id: choices.checkoutId, label: '原副本暂不可用，请核对' }] : [])]} isDisabled={!canPrepare} onChange={checkoutId => edit({ ...choicesRef.current, checkoutId })} /><p className="pw-muted">{draftOnly ? '仅使用所选副本的源码，不需要运行环境。' : '仍需核对这次使用的源码、模型与权限。'}</p></>}
               {choices.projectId && (!copy || copy.registered === false) && inspection && !checkouts.length && <Button variant="secondary" disabled={!canPrepare} onClick={() => copyProject(false)}>准备原项目的私人副本</Button>}
               {choices.projectId && <Button variant="ghost" disabled={!canPrepare} onClick={() => copyProject(true)}>查询原副本准备</Button>}
-              {copy?.projectId === choices.projectId && <p className="pw-muted" role="status">{copy.found === true ? '原私人副本已准备，请重新读取副本列表后选择。' : copy.partial === true ? '原副本准备中断，已有文件保留。请在原项目入口核对。' : copy.queryRequired ? '原副本准备已有记录，请先查询原请求。' : '这次查询没有读到完整副本，未重复创建。'}</p>}
+              {copy?.projectId === choices.projectId && <p className="pw-muted" role="status">{copy.found === true ? '原私人副本已准备，请重新读取副本列表后选择。' : copy.partial === true ? '原副本准备中断，已有文件保留。请在原项目入口核对。' : copy.queryRequired ? '原副本准备已有记录，请先查询原请求。' : '这次查询没有读到完整副本，未重复创建。'}</p>}</>}
             </>}
             {!saved && <Button variant="secondary" disabled={blocked} onClick={() => void flush(true).catch(() => {})}>保存保留的选择</Button>}
-            <div className="pw-preparation-start"><Button variant="primary" disabled={!canPrepare || view.kind === 'project' && (!choices.projectId || !choices.checkoutId)} onClick={prepareReview}>核对{view.kind === 'phone' ? '手机范围' : '源码与模型'}</Button><span role="status">{saving ? '正在保存选择…' : saved ? '准备选择已保留' : '本页选择尚未确认保存'}</span></div>
+            <div className="pw-preparation-start"><Button variant="primary" disabled={!canPrepare || view.kind === 'project' && (usingRevision?!picked:!choices.projectId || !choices.checkoutId)} onClick={prepareReview}>核对{view.kind === 'phone' ? '手机范围' : '源码与模型'}</Button><span role="status">{usingRevision?'本次选稿不会自动发给模型':saving ? '正在保存选择…' : saved ? '准备选择已保留' : '本页选择尚未确认保存'}</span></div>
             <Accordion variant="divided"><AccordionItem id="capabilities" title="核对所需能力" description="设备与运行环境的当前情况">
               <Button variant="ghost" leadingIcon={IconRefresh} disabled={blocked} onClick={() => void invoke('butler.capabilities', { purpose: view.kind }, value => { if (value.observationOnly !== true || !Array.isArray(value.capabilities)) throw new Error('能力状态尚未完整读取。'); setCapabilities(value.capabilities); }, true)}>读取当前能力状态</Button>
               {capabilities.map(row => <section key={row.id}><h3>{text(row.label)}</h3><p>{text(row.detail)}</p>{row.state && <p className="pw-muted">{({ busy: '当前资源占用中', preparation_required: '需要完成准备', review_required: '可以进入本次审阅', selection_required: '需要选择真实执行对象', unavailable: '当前不可用' } as Record<string, string>)[row.state] || '请按实际范围核对'}</p>}</section>)}
@@ -332,7 +352,7 @@ export function ButlerPreparationDetail({ target, projects, can, run, onClose, o
             onCheck={can('butler.preparation.phone.review')?h=>{if(reviewRef.current?.reviewHandle===h)prepareReview()}:undefined}
             onSettings={can('butler.preparation.phone.settings')?(h,place)=>{if(reviewRef.current?.reviewHandle===h)void invoke('butler.preparation.phone.settings',{reviewHandle:h,target:place},v=>{if(v.status!=='settings_opened')throw new Error('系统设置页是否已打开尚未核对。');setReview(null)})}:undefined}
             onPlace={phoneShown.conditions?.screen.settings!=='background_setup'||onSetup?(h,place)=>{if(reviewRef.current?.reviewHandle!==h||entered.current)return;if(place==='main_screen_choice')setReview(null);else if(onSetup)void close(()=>onSetup('phone'))}:undefined}/>}
-          {review&&view.kind==='project'&&<PermissionReview title={text(review.goal)} context={`${projectName} · 原私人副本`} reason={review.draftOnly === true ? '只准备独立改稿和差异。模型可按需读这份固定副本；如果选择的是在线模型，被读取的源码会交给该模型。不写回原件或副本，不运行命令。' : '按已选择的源码与模型建立原项目任务，命令执行与项目导回继续使用各自的原审阅入口。'} fields={[{ label: '本次模型', value: text(review.model?.label) }, { label: '运行位置', value: text(review.runtime) }, { label: '固定副本', value: choices.checkoutId }, { label: '源码版本', value: text(review.source?.sourceDigest) }]} pending={busy} onReject={() => setReview(null)} onApprove={!blocked ? start : undefined} approveLabel={review.draftOnly === true ? '确认，只准备改稿' : '确认并开始这次工作'}><WorkContract goal={text(review.goal)} contract={contractOf(review)} /></PermissionReview>}
+          {review&&view.kind==='project'&&<PermissionReview title={text(review.goal)} context={review.source?.ownerRevision?'这次新目标 · 我已另存的一稿':`${projectName} · 原私人副本`} reason={review.source?.ownerRevision?'确认后，新目标和所选稿全文可发给下面这个模型；在线模型会收到这些内容。不会附带其他版本或工程文件，不写回、不运行命令。':review.draftOnly === true ? '只准备独立改稿和差异。模型可按需读这份固定副本；如果选择的是在线模型，被读取的源码会交给该模型。不写回原件或副本，不运行命令。' : '按已选择的源码与模型建立原项目任务，命令执行与项目导回继续使用各自的原审阅入口。'} fields={[{ label: '本次模型', value: text(review.model?.label) }, { label: '运行位置', value: text(review.runtime) }, ...(review.source?.ownerRevision?[{label:'接收方',value:text(review.model.destination)},{label:'所选文件',value:text(review.source.path)},{label:'你的保存版本',value:'第 '+review.source.ordinal+' 稿 · '+review.source.bytes+' 字节'},{label:'此稿 SHA-256',value:text(review.source.ownerRevision.sha256)}]:[{ label: '固定副本', value: choices.checkoutId }, { label: '源码版本', value: text(review.source?.sourceDigest) }])]} pending={busy} onReject={() => setReview(null)} onApprove={!blocked ? start : undefined} approveLabel={review.source?.ownerRevision?'确认，把这一稿交给管家':review.draftOnly === true ? '确认，只准备改稿' : '确认并开始这次工作'}><WorkContract goal={text(review.goal)} contract={contractOf(review)} />{review.source?.ownerRevision&&<details><summary>核对会发给模型的完整稿</summary><pre className="pw-code-editor">{review.source.selectedText||'（这份已存稿是空文件）'}</pre></details>}</PermissionReview>}
           <nav className="pw-task-source-links" aria-label="原委托与准备"><Button variant="ghost" disabled={busy || saving || !can('tasks.open')} onClick={() => void close(() => onOpenTask(target.sourceTaskId))}>查看原委托记录</Button>{!inline && onConversation && <Button variant="ghost" leadingIcon={IconChat} disabled={busy || saving} onClick={() => void close(() => onConversation(target.sourceConversationId))}>回到原委托话题</Button>}{view.canPrepare === true && !unresolved && !review && <Button variant="ghost" disabled={blocked} onClick={() => void afterSave(() => invoke('butler.preparation.dismiss', {}, value => { if (!preparation(value, target)) throw new Error('原提案取消回执尚未核对。'); setView(value); }))}>取消这份提案</Button>}</nav>
         </>}
       </div>;

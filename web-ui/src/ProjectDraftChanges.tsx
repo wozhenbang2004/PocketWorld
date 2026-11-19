@@ -30,7 +30,7 @@ function focusedChanges(before:string,after:string){
 }
 
 /** Lead with the changes on a phone. The same complete, byte-verified texts stay available below. */
-export function ProjectDraftChanges({before,after,version}:{before:string;after:string;version:string}){
+export function ProjectDraftChanges({before,after,version,beforeLabel='交办时的原文件'}:{before:string;after:string;version:string;beforeLabel?:string}){
   const summary=useMemo(()=>focusedChanges(before,after),[before,after]);
   const [limit,setLimit]=useState(80),[full,setFull]=useState(false);
   return <div className="pw-draft-changes">
@@ -47,7 +47,7 @@ export function ProjectDraftChanges({before,after,version}:{before:string;after:
     </>:<p className="pw-field-hint">改动较多，下面仍可对照两份完整文件。</p>}
     <details className="pw-draft-full" onToggle={e=>setFull(e.currentTarget.open)}>
       <summary>对照两份完整文件</summary>
-      {full&&<InlineDiff before={before} after={after} beforeLabel="交办时的原文件" afterLabel="独立改稿" versionLabel={version} readOnly/>}
+      {full&&<InlineDiff before={before} after={after} beforeLabel={beforeLabel} afterLabel="独立改稿" versionLabel={version} readOnly/>}
     </details>
   </div>;
 }

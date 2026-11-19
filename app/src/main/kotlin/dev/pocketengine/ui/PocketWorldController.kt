@@ -779,10 +779,12 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     internal fun refreshCloudWorkspaceForWeb() { native("getFeatures") }
     internal fun butlerPreparationPresentationForWeb() = app.getSharedPreferences("butler_preparation_presentation", android.content.Context.MODE_PRIVATE)
     internal fun projectDevelopmentPresentationForWeb() = app.getSharedPreferences("project_development_presentation", android.content.Context.MODE_PRIVATE)
-    internal fun projectDevelopmentModelForWeb(): JSONObject {
+    internal fun projectDevelopmentModelForWeb(forSavedRevision:Boolean=false): JSONObject {
         val model = app.captureConversationModel("", "")
         val configured = runCatching { dev.pocketengine.store.SettingsStore.validate(model); dev.pocketengine.runtime.ModelGateway.validate(model) }.isSuccess
-        return JSONObject().put("configured", configured).put("label", model.model).put("provider", model.provider).put("route", if (model.usesAccount()) "account" else "api_key")
+        return JSONObject().put("configured", configured).put("label", model.model).put("provider", model.provider).put("route", if (model.usesAccount()) "account" else "api_key").also {
+            if(forSavedRevision && configured)it.put("reviewPin",dev.pocketengine.features.local.project.OwnerRevisionRecipient.pin(model)).put("destination",dev.pocketengine.features.local.project.OwnerRevisionRecipient.destination(model))
+        }
     }
     /** Same original project/Assistant admission. A closed queued window is
      * positively not entered; failures after entry remain query-only unknown. */
@@ -806,7 +808,10 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             // not invert that lock order by holding app around a new send.
             val result = runCatching {
                 check(webPrivateOwnerVisible() && current()) { "原项目审阅窗口已关闭，没有开始任务" }
-                val source = app.projectDevelopmentForOwner().sourceForOwner(frozen.getString("projectId"), frozen.getString("checkoutId"))
+                val source = if (frozen.has("ownerRevision")) {
+                    check(preparation!=null && picked==null && frozen.opt("draftOnly")==true) { "所选旧稿只能进入原生的新拟稿交办" }
+                    app.tasks.reviewOwnerProjectRevision(preparation,frozen.getJSONObject("ownerRevision"))
+                } else app.projectDevelopmentForOwner().sourceForOwner(frozen.getString("projectId"), frozen.getString("checkoutId"))
                 check(source.getString("sourceDigest") == frozen.getString("expectedSourceDigest")) { "审阅后的源码已变化，没有开始任务，请重新核对" }
                 check(projectDevelopmentModelForWeb().optBoolean("configured")) { "默认模型配置已不可用，没有开始任务" }
                 check(current()) { "原项目审阅窗口已变化，没有开始任务" }
