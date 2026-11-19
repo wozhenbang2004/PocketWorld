@@ -6,6 +6,18 @@
   gap: var(--pw-gap-section);
   min-width: 0;
 }
+.pw-task-reading .pw-outcome-settlement h3 {
+  margin: 0;
+  color: var(--pw-ink);
+  font: 600 16px/1.5 var(--pw-font);
+}
+.pw-task-reading .pw-outcome-settlement p {
+  margin: 4px 0 0;
+  color: var(--pw-copy);
+  font: 400 14px/1.65 var(--pw-font);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .pw-task-reading .pw-outcome-document {
   padding: 0;
   border: 0;

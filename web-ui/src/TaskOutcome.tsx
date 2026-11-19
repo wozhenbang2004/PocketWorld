@@ -2,6 +2,7 @@ import { AIAnswer } from './library';
 import { Button, Accordion, AccordionItem } from './forms-library';
 import { IconChevronRight, IconFile } from './icons';
 import { getTaskOutcome } from './task-outcome';
+import { taskNeedsReconciliation } from './task-presentation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useCollectionMotion, MotionFeedback } from './library/journey-motion';
 import { ownerWorkPresentation } from './owner-work-presentation';
@@ -10,6 +11,15 @@ import { bridge } from './bridge';
 import { projectPackageTaskIdentity, type PackagePreviewTarget } from './project-preview';
 import { TaskResultFiles, type TaskResultFile } from './TaskResultFiles';
 import './task-reading.css';
+
+const stoppedAttemptTitles: Record<string, string> = {
+  paused: '这次执行已暂停',
+  interrupted: '这次执行已中断',
+  failed: '这次执行未完成',
+  cancelled: '这次执行已停止',
+  canceled: '这次执行已停止',
+  stopped: '这次执行已停止',
+};
 
 type PackageRead = { identity: string; taskId: string; items: unknown[]; hasMore: boolean; readLimited: boolean; nextCursor: string; unavailable: unknown[] };
 const packageReadSupported = () => bridge.getState().capabilities.commands.includes('tasks.projectPackages');
@@ -106,21 +116,36 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   }, [screenshot?.imageId, screenshot?.expiresAt, clock]);
   const imageLabel = screenshot?.currentRun ? '本轮结果截图' : '任务保留的较早截图';
   const work = ownerWorkPresentation(task);
-  const progress = outcome.source === 'result-event' && outcome.resultStatus !== 'completed';
-  const title = progress ? '当前进展' : outcome.source === 'task-summary' ? '当前摘要' : outcome.source === 'evidence' && !outcome.evidenceRunBound ? '任务保留的结果' : work ? '执行结果' : '结果内容';
+  const record = task && typeof task === 'object' ? task as Record<string, any> : {};
+  const status = typeof record.status === 'string' && record.status ? record.status : record.raw?.status;
+  const reconciliation = taskNeedsReconciliation(task);
+  // The store can reconcile an attempted stop after the runner emits its result.
+  // Keep the authoritative state separate from the output and saved files.
+  const settlementTitle = reconciliation ? '有操作结果待核对'
+    : typeof status === 'string' && Object.hasOwn(stoppedAttemptTitles, status) ? stoppedAttemptTitles[status] : '';
+  const currentSummary = typeof record.summary === 'string' && record.summary.trim() ? record.summary
+    : typeof record.raw?.summary === 'string' ? record.raw.summary : '';
+  const settlementDetail = reconciliation ? '操作可能已经发生，请在这件工作里核对原操作。'
+    : currentSummary.trim() || (outcome.source === 'result-event' && outcome.resultStatus === status ? outcome.text.trim() : '');
+  const resultText = settlementTitle && (outcome.text.trim() === settlementDetail || outcome.text.trim() === settlementTitle)
+    ? '' : outcome.text;
+  const readyForConfirmation = status === 'needs_confirmation' && outcome.resultStatus === 'needs_confirmation';
+  const progress = !settlementTitle && outcome.source === 'result-event' && outcome.resultStatus !== 'completed' && !readyForConfirmation;
+  const title = outcome.source === 'evidence' && !outcome.evidenceRunBound ? '任务保留的结果'
+    : settlementTitle ? '原执行记录' : progress ? '当前进展' : outcome.source === 'task-summary' ? '当前摘要' : work ? '执行结果' : '结果内容';
   const reply = outcome.reply;
   const files = reply?.attachments || [];
   const root = useRef<HTMLElement>(null);
-  const record = task && typeof task === 'object' ? task as Record<string, any> : {};
   const report = work?.delivered && typeof record.raw?.runId === 'string' && Number.isSafeInteger(record.raw?.coordinatorEpoch) && record.raw.coordinatorEpoch > 0
     ? { taskId: String(record.id), runId: record.raw.runId as string, epoch: record.raw.coordinatorEpoch as number, reportMessageId: work.reportMessageId, conversationId: work.conversationId } : null;
   const owner = JSON.stringify([record.id, record.raw?.runId, record.raw?.coordinatorEpoch]);
-  const revision = JSON.stringify([!!outcome.text, !!outcome.image, !!remotePhone, screenshot?.imageId, reply?.id, files.map(file => [file.id, file.sha256]), outcome.projectPackages.map(item => [item.operationId, item.archiveSha256])]);
+  const revision = JSON.stringify([settlementTitle, !!resultText, !!outcome.image, !!remotePhone, screenshot?.imageId, reply?.id, files.map(file => [file.id, file.sha256]), outcome.projectPackages.map(item => [item.operationId, item.archiveSha256])]);
   useCollectionMotion(root, owner, revision, {layout: false});
-  const executionResult = <div className="pw-outcome-document">
-      <header className="pw-outcome-heading"><h3>{outcome.text ? title : outcome.projectPackages.length ? '结果正文' : '暂无可读取的结果正文'}</h3></header>
-      {outcome.text ? <div data-motion-key="result-body"><AIAnswer text={outcome.text} showActions={!progress} onCopy={progress ? undefined : () => onCopy(outcome.text)} onCopyCode={onCopy}/></div>
-        : <p className="pw-reading-note">{files.length ? '可先查看下方关联答复中的附件。' : '当前记录未提供可读取的结果正文。'}</p>}
+  const hasExecutionRecord = !!(resultText || outcome.image || remotePhone || phoneStatus || outcome.partial);
+  const executionResult = (hasExecutionRecord || !settlementTitle) && <div className="pw-outcome-document">
+      <header className="pw-outcome-heading"><h3>{hasExecutionRecord ? title : outcome.projectPackages.length ? '结果正文' : '暂无可读取的结果正文'}</h3></header>
+      {resultText ? <div data-motion-key="result-body"><AIAnswer text={resultText} showActions={!progress} onCopy={progress ? undefined : () => onCopy(resultText)} onCopyCode={onCopy}/></div>
+        : !settlementTitle && <p className="pw-reading-note">{files.length ? '可先查看下方关联答复中的附件。' : '当前记录未提供可读取的结果正文。'}</p>}
       {outcome.image && <figure className="pw-outcome-image" data-motion-key={`image:${screenshot?.imageId || 'retained'}`}><img src={outcome.image} alt={imageLabel} loading="lazy" decoding="async"/><figcaption>{imageLabel}</figcaption></figure>}
       {remotePhone && <figure className="pw-outcome-image" data-motion-key={`phone:${screenshot?.imageId}`}>
         <img src={remotePhone.image} alt={`设备 ${remotePhone.deviceId.slice(-4)} 的${remotePhone.screenMode === 'background' ? '独立屏' : '主屏'}观察快照`} loading="lazy" decoding="async"/>
@@ -137,7 +162,11 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
       {outcome.partial && <MotionFeedback identity={`${owner}:partial`} className="pw-outcome-limit" role="status">部分结果记录尚未载入。</MotionFeedback>}
     </div>;
   return <section ref={root} className="pw-task-outcome pw-task-reading" aria-label="任务结果依据" data-result-source={outcome.source}>
-    {resultFiles && active && <TaskResultFiles {...resultFiles} active={active} readIdentity={`${readIdentity}:${owner}:${record.status || ''}`}/>}
+    {settlementTitle && <div className="pw-outcome-settlement" role="status">
+      <h3>{settlementTitle}</h3>
+      {settlementDetail && settlementDetail !== settlementTitle && <p>{settlementDetail}</p>}
+    </div>}
+    {resultFiles && active && <TaskResultFiles {...resultFiles} active={active} readIdentity={`${readIdentity}:${owner}:${status || ''}`}/>}
     {packageRead.eligible && <section className="pw-outcome-deliverables" aria-label="项目固定成果" aria-busy={packageRead.busy || undefined}>
       <div className="pw-reading-section-heading"><h4>项目固定成果</h4>{outcome.projectPackages.length > 0 && <span>{outcome.projectPackages.length} 个已读取版本</span>}</div>
       {outcome.projectPackages.length > 0 && <>
@@ -163,7 +192,7 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
       </div>}
     </section>}
     {report && <OwnerWorkReport key={JSON.stringify(report)} target={report} active={active} supported={canReadReport} identity={readIdentity} onCopy={onCopy} />}
-    {report ? <Accordion variant="divided" className="pw-reading-disclosures" aria-label="执行原始结果"><AccordionItem id="execution-result" title="查看执行原始结果" description="保留执行时的正文和画面">{executionResult}</AccordionItem></Accordion> : executionResult}
+    {executionResult && (report ? <Accordion variant="divided" className="pw-reading-disclosures" aria-label="执行原始结果"><AccordionItem id="execution-result" title="查看执行原始结果" description="保留执行时的正文和画面">{executionResult}</AccordionItem></Accordion> : executionResult)}
 
     {/* These files belong to the linked message, not necessarily to the current run. */}
     {files.length > 0 && <section className="pw-outcome-deliverables" aria-label="关联答复中的附件">
