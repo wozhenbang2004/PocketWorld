@@ -169,12 +169,15 @@ export function useConversationReading({ scroll, active, conversationId, compose
       node.scrollTop = node.scrollHeight;
       current.reading.unread = false;
       setHasNewReplies(false);
+      rememberChatPosition();
     } else if (changed) {
+      // During a reply update the navigation can still be moving. Keep the
+      // user's reading anchor until the scroller reports a new position.
       current.reading.following = false;
       current.reading.unread = true;
+      positions.current.set(current.key, { ...current.reading });
       setHasNewReplies(true);
     }
-    rememberChatPosition();
   }, [active, key, composer.key, composer.epoch, conversationId, lastContent, paused, messages.length, lastId, streamMarker, scroll, rememberChatPosition]);
 
   useEffect(() => {
