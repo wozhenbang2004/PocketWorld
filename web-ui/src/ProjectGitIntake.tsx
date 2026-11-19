@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import { bridge } from './bridge';
 import { Button, SettingsDialog, TextField } from './forms-library';
 import './project-git-intake.css';
@@ -10,8 +10,14 @@ type IntakeState = {
   reviewUrl?: string; draftBranch?: string; projectName?: string; branch?: string; commit?: string; sourceBytes?: number;
 };
 
-export function ProjectGitIntake({ state }: { state?: IntakeState }) {
-  const [url, setUrl] = useState(''), [branch, setBranch] = useState(''), [name, setName] = useState('');
+export type PublicGitDraft = { url: string; branch: string; name: string };
+export function ProjectGitIntake({ state, toolReturn, onPrepareTools }: {
+  state?: IntakeState; toolReturn: RefObject<PublicGitDraft | null>; onPrepareTools?: () => void;
+}) {
+  const [url, setUrl] = useState(toolReturn.current?.url || '');
+  const [branch, setBranch] = useState(toolReturn.current?.branch || '');
+  const [name, setName] = useState(toolReturn.current?.name || '');
+  useEffect(() => { toolReturn.current = null; }, [toolReturn]);
   const [pending, setPending] = useState(false), [error, setError] = useState('');
   const pendingRef = useRef(false), wasOpen = useRef(false);
   wasOpen.current = !!state?.open;
@@ -21,10 +27,10 @@ export function ProjectGitIntake({ state }: { state?: IntakeState }) {
   useEffect(() => { if (!state?.open) setError(''); }, [state?.open]);
   const busy = pending || !!state?.busy;
   const doAction = async (action: string, args: Record<string, string> = {}) => {
-    if (pendingRef.current) return;
+    if (pendingRef.current) return false;
     pendingRef.current = true; setPending(true); setError('');
-    try { await bridge.command('projects.gitImport.' + action, args); }
-    catch (failure) { setError(failure instanceof Error ? failure.message : '原导入操作尚未确认'); }
+    try { await bridge.command('projects.gitImport.' + action, args); return true; }
+    catch (failure) { setError(failure instanceof Error ? failure.message : '原导入操作尚未确认'); return false; }
     finally { pendingRef.current = false; setPending(false); }
   };
   const review = state?.reviewId && state?.reviewKind;
@@ -73,7 +79,14 @@ export function ProjectGitIntake({ state }: { state?: IntakeState }) {
         <TextField label="公开 HTTPS 仓库地址" value={url} onChange={setUrl} maxLength={2048} isDisabled={busy} placeholder="https://github.com/owner/project.git"/>
         <TextField label="要读取的分支" value={branch} onChange={setBranch} maxLength={120} isDisabled={busy} placeholder="例如 main"/>
         <TextField label="本机项目名称" value={name} onChange={setName} maxLength={100} isDisabled={busy}/>
-        <Button variant="primary" disabled={!canReview} onClick={() => void doAction('review', { url, branch, name })}>核对来源与分支</Button>
+        <div className="pw-action-row">
+          <Button variant="primary" disabled={!canReview} onClick={() => void doAction('review', { url, branch, name })}>核对来源与分支</Button>
+          {onPrepareTools && <Button variant="ghost" disabled={busy} onClick={() => { void doAction('close').then(closed => {
+            if (!closed) return;
+            toolReturn.current = { url, branch, name };
+            onPrepareTools();
+          }); }}>准备本机开发工具</Button>}
+        </div>
       </>}
     </div>
   </SettingsDialog>;

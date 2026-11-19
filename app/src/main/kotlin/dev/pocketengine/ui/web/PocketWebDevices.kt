@@ -74,6 +74,22 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         }
         return value.put("taskActions", actions)
     }
+    /** Identity of an already accepted Android goal on THIS receiving phone. Navigation facts only. */
+    private fun receivedPhoneActionScope(id: String): JSONObject? {
+        val task = controller.readOriginalDeviceTask(id)
+        val origin = task.optJSONObject("origin") ?: return null
+        val scope = task.optJSONObject("deviceExecutionScope") ?: return null
+        val resource = scope.optJSONObject("resourceBinding") ?: return null
+        if (task.opt("id") != id || task.opt("deviceExecutionKind") != "GOAL" || origin.opt("kind") != "paired_device" ||
+            origin.opt("originDeviceId") != origin.opt("callerDeviceId") || origin.opt("rootTaskId") != origin.opt("parentTaskId") ||
+            resource.optString("screenMode") !in setOf("main_screen", "background") || resource.opt("androidUserId") !is Number ||
+            (resource.optJSONArray("packageNames")?.length() ?: 0) == 0) return null
+        return JSONObject().put("taskId", id).put("status", task.getString("status")).put("updatedAt", task.getLong("updatedAt"))
+            .put("runId", task.optString("runId")).put("epoch", task.optInt("coordinatorEpoch")).put("instanceId", task.getString("deviceNativeInstanceId"))
+            .put("sourceDeviceId", origin.getString("callerDeviceId")).put("targetDeviceId", origin.getString("targetDeviceId"))
+            .put("operationId", origin.getString("remoteOperationId")).put("grantId", origin.getString("grantId"))
+            .put("authorizationEpoch", origin.getLong("authorizationEpoch")).put("executionDeadline", scope.getLong("deadline"))
+    }
     private fun taskIds(): Array<String> = (controller.state.tasks.filter(::isDeviceWorkspaceTask).map { it.id } + workspaceTaskLinks(latest).map { it.optString("parentTaskId") }).filter { it.isNotBlank() }.distinct().toTypedArray()
     fun taskForNavigation(args: JSONObject): String {
         fields(args, "taskId"); check(visible() && controller.webPrivateOwnerVisible())
@@ -281,7 +297,17 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                     "devices.reviewApproval" -> { fields(args, "taskId", "approvalId"); val native = original.reviewApproval(taskId(), text(args, "approvalId")); store("approval", native, native.view(), original, epoch) }
                     "devices.readTask" -> {
                         fields(args, "taskId"); val id = taskId()
-                        JSONObject().put("kind", "taskDetails").put("taskId", id).put("actions", original.taskActions(id)).put("history", original.historyLinks(id))
+                        val header = controller.state.tasks.firstOrNull { it.id == id }?.raw
+                        val before = if (header != null && header.optJSONObject("origin")?.optString("kind") == "paired_device" &&
+                            header.optString("executionMode") in setOf("main_screen", "background")) receivedPhoneActionScope(id) else null
+                        val actions = original.taskActions(id)
+                        val response = JSONObject().put("kind", "taskDetails").put("taskId", id).put("actions", actions).put("history", original.historyLinks(id))
+                        if (before != null) {
+                            val after = receivedPhoneActionScope(id)
+                            if (after != null && DeviceProtocol.canonical(before) == DeviceProtocol.canonical(after)) response.put("phoneActionScope", before)
+                            else response.put("phoneActionScopeChanged", true)
+                        }
+                        response
                     }
                     "devices.reviewResumeRequest" -> {
                         fields(args, "taskId", "resumeRequestId", "reviewRevision"); val id = taskId(); val actions = original.taskActions(id)

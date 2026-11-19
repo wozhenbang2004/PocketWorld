@@ -32,6 +32,47 @@ export function deviceTaskDetails(value: unknown, taskId: string): DeviceData {
   if (!object(value) || value.kind !== 'taskDetails' || value.taskId !== taskId || !object(value.actions) || !positiveInteger(value.actions.capturedAt) || !object(value.history) || !Array.isArray(value.history.links) || !value.history.links.every((link: unknown) => object(link) && link.parentTaskId === taskId && identity(link.operationId) && identity(link.targetDeviceId))) throw new Error('原设备任务关联回执不完整或任务已变化。');
   return value;
 }
+export const PHONE_ACTION_WINDOW_MS = 30_000;
+export function isReceivedPhoneTask(task: DeviceData, snapshot: DeviceData | null): boolean {
+  const origin = task.raw?.origin;
+  return object(origin) && origin.kind === 'paired_device' && identity(origin.callerDeviceId) && origin.callerDeviceId === origin.originDeviceId
+    && identity(origin.targetDeviceId) && origin.targetDeviceId === snapshot?.local?.deviceId && identity(origin.remoteOperationId) && identity(origin.grantId)
+    && ['main_screen','background'].includes(task.raw.executionMode);
+}
+/** Only a deliberate per-task read can extend the native 40-row window. Facts cannot authorize
+ * a click: expired or changed execution facts disappear; local reduction still uses native review. */
+export function deviceOriginalTaskActions(task: DeviceData, details: DeviceData | undefined, snapshot: DeviceData | null, peerId: string, now: number): DeviceData {
+  const aggregate = snapshot?.taskActions?.[task.id] || {}, bound = details?.phoneActionScope;
+  const unavailable = (reason: string): DeviceData => ({ unavailable: true, phoneActionReason: reason });
+  if (details?.phoneActionScopeChanged === true) return unavailable('读取时原执行已变化，请重新读取这项原工作。');
+  const receiverPhone = isReceivedPhoneTask(task, snapshot);
+  const knownGoal = bound || task.raw?.deviceExecutionKind === 'GOAL' || ['goalReview','pendingCancel','resultReview'].some(key => aggregate[key]?.available === true);
+  if (!bound && (!receiverPhone || !knownGoal)) return aggregate;
+  if (!bound && !positiveInteger(aggregate.capturedAt)) return {};
+  const origin = task.raw?.origin, captured = bound ? details?.actions?.capturedAt : aggregate.capturedAt;
+  if (!receiverPhone || (peerId && peerId !== origin.callerDeviceId)
+      || (bound && (details?.taskId !== task.id || bound.taskId !== task.id || bound.instanceId !== snapshot?.local?.instanceId ||
+        bound.sourceDeviceId !== origin.callerDeviceId || origin.targetDeviceId !== bound.targetDeviceId || origin.remoteOperationId !== bound.operationId ||
+        origin.grantId !== bound.grantId || origin.authorizationEpoch !== bound.authorizationEpoch || bound.runId !== (task.raw.runId || '') ||
+        bound.epoch !== (task.raw.coordinatorEpoch ?? 0) || bound.status !== task.status || bound.updatedAt !== task.raw.updatedAt)))
+    return unavailable('原手机、派发或执行记录已变化，请重新读取这项原工作。');
+  if (!positiveInteger(captured) || captured > now || now - captured >= PHONE_ACTION_WINDOW_MS || task.raw.updatedAt > captured)
+    return unavailable('这次操作状态已过期或变化，请重新读取；不会自动联系对方。');
+  let facts = !bound || positiveInteger(aggregate.capturedAt) && aggregate.capturedAt >= captured ? aggregate : details!.actions;
+  if (facts.unavailable) return unavailable('当前原任务操作状态不可读，请重新读取。');
+  const request = facts.resumeRequest;
+  if (request && (request.taskId !== task.id || request.callerDeviceId !== origin.callerDeviceId ||
+      request.runId !== (task.raw.runId || '') || request.executorEpoch !== (task.raw.coordinatorEpoch ?? 0)))
+    facts = { ...facts, resumeRequest: undefined, resume: { available: false, reason: '恢复请求不属于当前原执行。' } };
+  const peer = deviceRows(snapshot?.peers).find(row => row.deviceId === origin.callerDeviceId);
+  const grant = deviceRows(peer?.grantScopes).find(row => row.grantId === origin.grantId && row.authorizationEpoch === origin.authorizationEpoch);
+  const deadline = bound?.executionDeadline ?? task.raw.deviceExecutionScope?.deadline;
+  if (positiveInteger(deadline) && deadline > now && peer?.revoked === false &&
+      peer.authorizationEpoch === origin.authorizationEpoch && grant?.state === 'active' && positiveInteger(grant.expiresAt) && grant.expiresAt > now) return facts;
+  const reason = !bound && deadline === undefined ? '这台手机已接收。请读取本机接手状态，核对这次目标的期限和可用操作。' : '原执行期限已到或当前授权范围无法核对，不能从这里开始或恢复。';
+  return { stop: facts.stop, pendingCancel: facts.pendingCancel, resultReview: facts.resultReview,
+    goalReview: { available: false, reason }, resume: { available: false, reason }, phoneActionReason: reason };
+}
 export function deviceTaskHistoryLinks(details: DeviceData | undefined, taskId: string, peerId: string): DeviceData[] {
   if (!details || details.taskId !== taskId) return [];
   return deviceRows(details.history?.links).filter(link => link.parentTaskId === taskId && (!peerId || link.targetDeviceId === peerId));
@@ -53,9 +94,27 @@ export function devicePhoneGoalResult(value: unknown, review: DeviceData): Devic
     || typeof result.truncated !== 'boolean' || (result.review !== 'confirmed' && (result.summary || result.truncated))) throw new Error('缺少原任务、原执行或准确结果回执。');
   return result;
 }
-export function deviceHistoryLabel(value: DeviceData | null): string {
-  if (!value) return '读取这次操作的最新回执。';
+export function deviceHistoryLabel(value: DeviceData | null, view?: DeviceData): string {
+  if (!value) return view?.phoneGoalResult === true ? '本机保留了这次派发。尚未读取对端接收状态，不能推断机主已读。' : '读取这次操作的最新回执。';
   if (value.managementOnly === true) return value.stopped === true ? '执行端报告已停止，请继续查询原操作结果。' : value.requested === true ? '执行端已接受停止请求，仍待核对停止结果。' : '停止结果待核对，请查询原操作回执。';
+  if (view?.phoneGoalResult === true) {
+    const r = value.operationReceipt;
+    if (!object(r) || r.messageType !== 'OperationReceipt' || r.operationId !== view.operationId ||
+        r.executorDeviceId !== view.targetDeviceId || r.instanceId !== view.instanceId ||
+        (r.accepted === true && r.argumentsDigest !== view.argumentsDigest)) return '未取得这次手机派发可核对的接收记录。';
+    if (r.accepted !== true) return r.status === 'rejected' ? '原手机拒绝了本次请求；这不是机主已读回执。'
+      : '对端本次没有确认接收。不能据此推断未送达，或机主已经看过。';
+    if (r.effectState === 'unknown') return '原手机已登记这次派发，操作效果仍未知。';
+    const run = identity(r.runId) && positiveInteger(r.executorEpoch);
+    if (r.status === 'cancel_requested') return '原手机已收到取消请求，不能当作已经停止。';
+    if (r.status === 'cancelled') return run ? '原手机报告这次执行已取消，不代表之前的操作已撤销。' : '原手机报告目标已取消，未返回已开始的执行编号。';
+    if (r.status === 'waiting_approval') return run ? '原手机上的这次执行正在等人处理。' : '原手机已接收，尚未报告开始执行。请在原手机查看待处理事项。';
+    if (r.status === 'waiting_resource' || r.status === 'waiting_dependency') return '原手机已接收，正在等待执行条件。';
+    if (run && r.status === 'running') return '原手机已开始执行这份目标；这不是成果回执。';
+    if (run && (r.status === 'paused' || r.status === 'pause_requested')) return r.status === 'paused' ? '原手机报告这次执行已暂停。能否继续，以原手机当前许可为准。' : '原手机正在暂停这次执行，尚未确认停下。';
+    if (run && (r.status === 'succeeded' || r.status === 'failed')) return '原手机报告这次执行已结束。这里是派发记录，不是机主核对过的成果。';
+    return run ? '原手机已接收并返回了原执行编号，当前进展仍待核对。' : '原手机已接收，尚未返回已开始的执行编号。不代表机主已经看过。';
+  }
   return value.unknown === true ? '执行效果仍未确认，保留原占用次数。' : '执行端已返回原操作回执，业务成果仍需核对。';
 }
 /** Navigation only. Opening a row obtains the complete original native task/review. */

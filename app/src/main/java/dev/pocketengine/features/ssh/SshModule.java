@@ -58,6 +58,10 @@ public final class SshModule implements EngineModule {
                 .put("ptyImplemented",true).put("deviceVerified",false).put("remotePersistentJobs",false).put("posixShellOnly",true)
                 .put("strongAtomicCas",false).put("binaryFileTransfers",fileArtifacts!=null).put("maxBinaryTransferBytes",DirectSshClient.MAX_TRANSFER).put("binaryBodiesInJson",false).put("automaticTransferResume",false).put("ownerOnly",true).put("library","com.github.mwiede:jsch:2.28.8");
     }
+    /** Compare only the saved configuration revision. No credential read, SSH probe or grant. */
+    public synchronized boolean isOriginalOwnerBinding(String id,String binding) {
+        SshProfile p=profiles.get(id);return !closed && p!=null && p.bindingHash().equals(binding);
+    }
     /** Private native WorkProfile source only: reads no credential bytes and makes no SSH connection. */
     public synchronized JSONObject workProfileTargetFacts(JSONObject reference,RunControl observation)throws Exception {
         java.util.Objects.requireNonNull(observation).check();if(closed)throw new SecurityException("原SSH模块已关闭");

@@ -448,7 +448,10 @@ public final class TaskAuditStore {
         if(cursor.isEmpty()){try(Cursor row=db.rawQuery("SELECT COALESCE(MAX("+position+"),0) FROM "+table+" WHERE task_id=?"+filter,new String[]{task})){row.moveToFirst();upper=row.getLong(0);if(nativeUpper>=0)upper=Math.min(upper,nativeUpper);}last=upper;}
         else{JSONObject c=decode(cursor);if(c.length()!=5||c.optInt("v")!=1||!task.equals(c.optString("taskId"))||!section.equals(c.optString("section"))||!(c.opt("upper") instanceof Number)||!(c.opt("last") instanceof Number))throw new IllegalArgumentException("原历史游标不匹配");upper=c.getLong("upper");last=c.getLong("last");if(upper<0||last<1||last>upper||nativeUpper>=0&&upper>nativeUpper)throw new IllegalArgumentException("原历史游标边界无效");}
         JSONArray entries=new JSONArray();long used=0,scanned=0;boolean more=false,limited=false;long next=last;
-        String select=events?"event_order,event_type,body_bytes,row_revision,native_seq":"rowid,operation_id,tool,state,run_id,created_at,length(CAST(arguments AS BLOB)),COALESCE(length(CAST(receipt AS BLOB)),0)";
+        // A stopped phone receipt belongs to a durable attempt, not to the epoch of the
+        // task currently on screen. Missing legacy attempts stay unbound. runs.run_id is the PK.
+        String select=events?"event_order,event_type,body_bytes,row_revision,native_seq":"rowid,operation_id,tool,state,run_id,created_at,length(CAST(arguments AS BLOB)),COALESCE(length(CAST(receipt AS BLOB)),0),"+
+                "CASE WHEN substr(tool,1,6)='phone_' THEN (SELECT r.epoch FROM runs r WHERE r.run_id=operations.run_id AND r.task_id=operations.task_id) END";
         String boundary=cursor.isEmpty()?"":" AND "+position+"<?";
         String[] args=cursor.isEmpty()?new String[]{task,Long.toString(upper),Integer.toString(limit+1)}:new String[]{task,Long.toString(upper),Long.toString(last),Integer.toString(limit+1)};
         try(Cursor rows=db.rawQuery("SELECT "+select+" FROM "+table+" WHERE task_id=?"+filter+" AND "+position+"<=?"+boundary+" ORDER BY "+position+" DESC LIMIT ?",args)){
@@ -457,6 +460,7 @@ public final class TaskAuditStore {
                 long bytes=events?rows.getLong(2):rows.getLong(6)+rows.getLong(7);
                 if(events)item.put("eventKey","task:"+task+":event-order:"+at).put("type",rows.getString(1)).put("rowRevision",rows.getLong(3));
                 else item.put("operationId",rows.getString(1)).put("tool",rows.getString(2)).put("state",rows.getString(3)).put("runId",rows.getString(4)).put("createdAt",rows.getLong(5));
+                if(!events&&!rows.isNull(8)&&rows.getInt(8)>0)item.put("runEpoch",rows.getInt(8));
                 item.put("bodyBytes",bytes);
                 if(bytes<0||bytes>maxBytes-used){item.put("status","read_limited").put("reason","original_body_exceeds_remaining_page_bytes");limited=true;}
                 else if(events){item.put("status","available").put("event",nativeEvent(db,task,at,bytes));used+=bytes;}

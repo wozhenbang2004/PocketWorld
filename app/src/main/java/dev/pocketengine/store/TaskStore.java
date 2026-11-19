@@ -15200,6 +15200,19 @@ public final class TaskStore {
     }
     /** Attention is a bounded read of original headers, not a second task ledger. A sparse
      * window retains its cursor, so old unanswered work remains reachable beyond the home page. */
+    /** Source-gated SQLite projection only. No network, credential lookup or grant. */
+    public synchronized JSONObject originalSshWorkPage(String profile,String binding,String cursor,SshWorkHistory.Check check)throws Exception {
+        return SshWorkHistory.page(profile,binding,cursor,(position,limit)->TaskAuditStore.summaryPage(db,position,limit),id->{
+            // Same bounded original core and source gates as getForUi, without fetching unneeded event/operation bodies.
+            JSONObject task;
+            try(Cursor row=db.rawQuery("SELECT CASE WHEN length(CAST(document AS BLOB))<="+TaskAuditStore.MAX_CORE_BYTES+" THEN document END, CASE WHEN length(CAST(ui_header AS BLOB))<=32768 THEN ui_header END FROM tasks WHERE task_id=?",new String[]{id})){
+                if(!row.moveToFirst()||row.isNull(0)&&row.isNull(1))return null;
+                task=new JSONObject(row.getString(row.isNull(0)?1:0));
+            }
+            if(!SshWorkHistory.matches(task,profile,binding))return null;
+            return phoneOwnerQuestionForUi(ownerWorkForUi(task));
+        },check);
+    }
     public synchronized JSONObject taskAttentionSummaryPage(String cursor)throws Exception{return taskNotificationSummaryPage(cursor,false);}
     public synchronized JSONObject taskNotificationSummaryPage(String cursor,boolean results)throws Exception{
         String next=cursor;int windows=0,examined=0;JSONObject page;JSONArray selected;

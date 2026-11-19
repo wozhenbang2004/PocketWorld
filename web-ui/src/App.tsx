@@ -72,7 +72,7 @@ import {ReadingView} from './ReadingView';
 import {ReadingContext,type ReadingDocument,type ReadingSnapshot} from './reading-context';
 import {ComposerSourceReferences,ComposerObjectReferences} from './ComposerSourceReferences';
 import {ComposerPreviewReferences} from './ComposerPreviewReferences';
-import {ProjectGitIntake} from './ProjectGitIntake';
+import {ProjectGitIntake,type PublicGitDraft} from './ProjectGitIntake';
 import {ProjectPreviewPane,useProjectPreview} from './ProjectPreviewPane';
 import {ProjectFileEditor} from './ProjectFileEditor';
 import {ProjectWorkspaceOverview,type ProjectWorkCollectionView,type ProjectWorkEntry} from './ProjectWorkspaceOverview';
@@ -285,6 +285,7 @@ export default function App(){
  useEffect(()=>{setPhoneViewerExpanded(false)},[state.conversationId,route,taskId,taskOpen]);
  const projectScroll=useRef<HTMLElement>(null),projectListTop=useRef(new Map<string,number>());
  const projectTaskReturn=useRef<ProjectTaskReturn|null>(null);
+ const projectGitToolReturn=useRef<PublicGitDraft|null>(null);
  const homeReport=useRef<VerifiedHomeReport|null>(null);
  const taskList=useRef<HTMLElement>(null),workListReturn=useRef<(()=>boolean)|null>(null),workDrillFocus=useRef<'origin'|'ended'|null>(null);
  const registerWorkReturn=useCallback((handler:(()=>boolean)|null)=>{workListReturn.current=handler},[]);
@@ -1665,7 +1666,7 @@ export default function App(){
     </Tabs>
 
   </section>:projects.length>0?<section className="pw-project-library" aria-label="项目目录"><header><h2>你的项目</h2><div className="pw-project-library-actions">{can('projects.gitImport.open')&&<Button variant="ghost" onClick={()=>run('projects.gitImport.open')}>从 Git 导入</Button>}{can('projects.create')&&<Button variant="secondary" leadingIcon={IconAdd} onClick={()=>openCreate('project')}>新项目</Button>}</div></header><div>{projects.map(project=><Button key={project.id} variant="ghost" className="pw-project-library-row" data-motion-key={project.id} leadingIcon={IconFolder} trailingIcon={IconChevronRight} disabled={!can('projects.select')} onClick={()=>run('projects.select',{id:project.id})}>{project.name}</Button>)}</div></section>:!ready?<p className="pw-muted" role="status">正在读取项目…</p>:<div className="pw-empty pw-project-empty"><IconFolder size={26} aria-hidden="true"/><h3>从一个项目开始</h3><p>把相关任务、文件和成果放在一起，随时接着做。</p><div className="pw-project-library-actions">{can('projects.create')&&<Button variant="primary" leadingIcon={IconAdd} onClick={()=>openCreate('project')}>新建项目</Button>}{can('projects.gitImport.open')&&<Button variant="ghost" onClick={()=>run('projects.gitImport.open')}>从 Git 导入</Button>}</div></div>}
-  <ProjectGitIntake state={state.projectGitImport}/>
+  <ProjectGitIntake state={state.projectGitImport} toolReturn={projectGitToolReturn} onPrepareTools={can('setup.runtime.read')?()=>{void openSetup('tools')}:undefined}/>
  </motion.main>;
  const workspaceNotices=<>{route!=='chat'&&replyActivity}{currentCancelFeedback&&<div className={currentCancelFeedback.error?'pw-banner pw-banner-error':'pw-banner'} role={currentCancelFeedback.error?'alert':'status'}><p>{currentCancelFeedback.message}</p></div>}{(localError||state.error)&&<div className="pw-banner pw-banner-error" role="alert"><IconInfo size={17}/><p>{localError||state.error}</p>{localError&&<IconButton icon={IconClose} aria-label="关闭这条操作提示" onClick={()=>setLocalError('')}/>}</div>}{Object.entries(obj(state.attachmentOpens)).filter(([,value])=>value.error).map(([key,value])=><div className="pw-banner pw-banner-error" role="alert" key={key}><p>{value.error}</p></div>)}{(localStatus||state.notice)&&<div className="pw-banner" role="status"><p>{localStatus||state.notice}</p>{(localStatus||can('notice.dismiss'))&&<IconButton icon={IconClose} aria-label="关闭这条提示" onClick={()=>{setLocalStatus('');if(state.notice&&can('notice.dismiss'))run('notice.dismiss')}}/>}</div>}
   {searchReturn&&!state.attachmentWorkspace?.open&&<div className="pw-search-return"><Button variant="ghost" size="small" leadingIcon={IconArrowLeft} onClick={showWorkSearch}>返回搜索结果</Button></div>}</>;

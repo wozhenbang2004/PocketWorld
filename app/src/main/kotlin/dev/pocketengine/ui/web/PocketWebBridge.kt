@@ -995,6 +995,12 @@ internal class PocketWebBridge(
             }
             if (action in PocketWebConnections.COMMANDS) {
                 requireSection(action.substringBefore('.'))
+                if (action == "ssh.workHistory") { connectionPages.workHistory.read(args) { row, error -> complete(id, row, error) }; return }
+                if (action == "ssh.openOriginalWork") {
+                    val origin = connectionPages.workHistory.opener(args)
+                    openOriginalTask(id, args.getString("taskId"), true, sourceWindowCurrent = { section == "ssh" && origin.current() }, checkReaderInput = { original -> origin.verify(original.raw) })
+                    return
+                }
                 connectionPages.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }; return
             }
             if (action in PocketWebData.COMMANDS) {
@@ -1695,7 +1701,7 @@ internal class PocketWebBridge(
     private fun projectReadCurrent(scope: ProjectTaskReadScope) = controller.webPrivateOwnerVisible() && section == null &&
         controller.state.projectId == scope.projectId && controller.state.filePath == null
 
-    private fun openOriginalTask(requestId: String, taskId: String, requestNavigation: Boolean, returnSection: String? = section ?: taskReturnSection, keepConversationReader: Boolean = false, expectedRunId: String? = null, expectedEpoch: Int? = null, projectScope: ProjectTaskReadScope? = null, checkReaderInput: ((UiTask) -> Unit)? = null) {
+    private fun openOriginalTask(requestId: String, taskId: String, requestNavigation: Boolean, returnSection: String? = section ?: taskReturnSection, keepConversationReader: Boolean = false, expectedRunId: String? = null, expectedEpoch: Int? = null, projectScope: ProjectTaskReadScope? = null, sourceWindowCurrent: (() -> Boolean)? = null, checkReaderInput: ((UiTask) -> Unit)? = null) {
         if (projectScope != null) require(projectReadCurrent(projectScope)) { "原项目页面已切换，未打开其他工作" }
         require(returnSection == null || returnSection in connectionSections) { "原工作页面已变化" }
         var entered = false
@@ -1709,11 +1715,11 @@ internal class PocketWebBridge(
         // Keep the reader and draft unchanged until the original is checked.
         if (checkReaderInput == null) { enterWindow(); publishState() }
         val window = captureWindow()
-        controller.readTaskForOpen(taskId, { !closed && acceptsWindow(window) && (projectScope == null || projectReadCurrent(projectScope)) }) { task, error ->
+        controller.readTaskForOpen(taskId, { !closed && acceptsWindow(window) && (projectScope == null || projectReadCurrent(projectScope)) && (sourceWindowCurrent?.invoke() != false) }) { task, error ->
             if (closed) return@readTaskForOpen
             if (!acceptsWindow(window)) complete(requestId, null, "原任务窗口已关闭，请重新打开")
             else if (error != null || task == null) {
-                if (requestNavigation || projectScope != null) runCatching { restoreTaskWorkspace() }
+                if ((requestNavigation || projectScope != null) && (sourceWindowCurrent == null || entered)) runCatching { restoreTaskWorkspace() }
                 complete(requestId, null, error ?: "原任务暂不可读取")
                 publishState()
             } else try {
@@ -1728,7 +1734,7 @@ internal class PocketWebBridge(
                 complete(requestId, JSONObject().put("taskId", task.id).put("readOnly", true).put("executionAuthorized", false), null)
                 publishState()
             } catch (failure: Exception) {
-                if (requestNavigation || projectScope != null || checkReaderInput != null && entered) runCatching { restoreTaskWorkspace() }
+                if ((requestNavigation || projectScope != null || checkReaderInput != null && entered) && (sourceWindowCurrent == null || entered)) runCatching { restoreTaskWorkspace() }
                 complete(requestId, null, failure.message ?: "原任务窗口不可用")
                 publishState()
             }

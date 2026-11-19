@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import './collaboration-depth.css';
 import './device-control-reading.css';
 import { Accordion, AccordionItem, Button, CheckboxField, RadioOptions, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
-import { DeviceRequestScope, deviceChannelWasConnected, deviceConnectionLabel, deviceGrantInput, deviceHistoryLabel, deviceHistoryReceipt, deviceRecordedScopes, deviceTaskHistoryLinks, deviceTaskDetails, deviceMethodLabels, deviceOperationLabels, devicePhoneGoalResult, deviceReceipt, deviceReview, deviceRows as rows, deviceSnapshot, deviceStrings as strings, deviceTaskRows, deviceWorkspaceTaskMode, type DeviceData as Data } from './devices-workspace';
+import { DeviceRequestScope, deviceChannelWasConnected, deviceConnectionLabel, deviceGrantInput, deviceHistoryLabel, deviceHistoryReceipt, deviceOriginalTaskActions, isReceivedPhoneTask, PHONE_ACTION_WINDOW_MS, deviceRecordedScopes, deviceTaskHistoryLinks, deviceTaskDetails, deviceMethodLabels, deviceOperationLabels, devicePhoneGoalResult, deviceReceipt, deviceReview, deviceRows as rows, deviceSnapshot, deviceStrings as strings, deviceTaskRows, deviceWorkspaceTaskMode, type DeviceData as Data } from './devices-workspace';
 import { IconAdd, IconArrowLeft, IconChevronRight, IconClock, IconDevices, IconLayers, IconMonitor, IconPhone, IconRefresh, IconShieldCheck } from './icons';
 import { DesktopViewer } from './DesktopViewer';
 import { DeviceTaskPreparation } from './DeviceTaskPreparation';
@@ -201,7 +201,13 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const now = Date.now(), validUntil = peer?.capabilitySnapshot?.validUntil;
   const received = peer && deviceRecordedScopes(peer, true, now), given = peer && deviceRecordedScopes(peer, false, now);
   // Repaint a recorded expiry while the page is open; never poll or contact the partner here.
-  const nextExpiry = Math.min(...[validUntil, ...rows(peer?.receivedGrantScopes).map(row => row.expiresAt), ...rows(peer?.grantScopes).map(row => row.expiresAt)]
+  const actionExpiries = rows(state.tasks).filter(task => isReceivedPhoneTask(task, snapshot)).flatMap(task => {
+    const item = taskDetails[task.id], origin = task.raw.origin, source = rows(snapshot?.peers).find(row => row.deviceId === origin.callerDeviceId);
+    const grant = rows(source?.grantScopes).find(row => row.grantId === origin.grantId && row.authorizationEpoch === origin.authorizationEpoch);
+    const captured = item?.phoneActionScope ? item.actions.capturedAt : snapshot?.taskActions?.[task.id]?.capturedAt;
+    return [captured + PHONE_ACTION_WINDOW_MS, item?.phoneActionScope?.executionDeadline ?? task.raw.deviceExecutionScope?.deadline, grant?.expiresAt];
+  });
+  const nextExpiry = Math.min(...[validUntil, ...actionExpiries, ...rows(peer?.receivedGrantScopes).map(row => row.expiresAt), ...rows(peer?.grantScopes).map(row => row.expiresAt)]
     .filter(t => Number.isSafeInteger(t) && t > now));
   const [clockRevision, tickClock] = useState(0);
   useEffect(() => {
@@ -269,18 +275,24 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const taskLabels: Record<string, string> = { queued: '等待执行', preparing: '准备中', running: '执行中', pausing: '正在暂停', paused: '已暂停', stopping: '正在停止', verifying: '正在核对', needs_confirmation: '成果待确认', awaiting_user: '待你处理', waiting_user: '待你处理', waiting_approval: '等待授权', awaiting_approval: '等待授权', waiting_permission: '等待授权', interrupted: '已中断', completed: '已完成', failed: '未完成', cancelled: '已停止', canceled: '已停止', stopped: '已停止', reconciling: '结果待核对', reconciliation_required: '结果待核对', unknown: '结果待核对' };
 
   const workKey = peerId ? 'peer:' + peerId : 'directory', extraWork = moreWork.key === workKey ? moreWork.count : 0;
+  const actionsFor = (task: Data, at = now) => deviceOriginalTaskActions(task, taskDetails[task.id], snapshot, peerId, at);
+  const actIfCurrent = (task: Data, key: string, next: () => void) => {
+    const fresh = actionsFor(task, Date.now());
+    if (unreadSource(task) || !available(fresh[key])) { setError(fresh.phoneActionReason || fresh[key]?.reason || '原操作状态已变化，请重新读取。'); return; }
+    next();
+  };
   const resumeRequest = (task: Data) => {
-    const request = snapshot?.taskActions?.[task.id]?.resumeRequest;
+    const request = actionsFor(task).resumeRequest;
     return !unreadSource(task) && request?.taskId === task.id && (!peerId || request.callerDeviceId === peerId) ? request : undefined;
   };
   const needsOwner = (task: Data) => {
     if (unreadSource(task)) return false;
-    const facts = snapshot?.taskActions?.[task.id];
+    const facts = actionsFor(task);
     return available(facts?.goalReview) || available(facts?.resultReview) || resumeRequest(task)?.ownerActionRequired === true
       || rows(task.raw?.approvals).some(item => item.state === 'pending');
   };
   const waiting: Data[] = [], interruptible: Data[] = [], remaining: Data[] = [];
-  const canStop = (task: Data) => available(snapshot?.taskActions?.[task.id]?.stop) || available(snapshot?.taskActions?.[task.id]?.pendingCancel);
+  const canStop = (task: Data) => { const facts = actionsFor(task); return available(facts.stop) || available(facts.pendingCancel); };
   // The native 40-action window bounds controls, not the number of saved originals one may open.
   for (const task of tasks) (needsOwner(task) ? waiting : canStop(task) ? interruptible : remaining).push(task);
   const initialCount = Math.max(0, 2 - waiting.length - interruptible.length);
@@ -294,33 +306,43 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
           <header className="pw-device-section-heading"><div><h3>{peer ? '这台设备的原工作' : '设备相关工作'}</h3><p>{peer ? '打开本机保留的原任务，不会重连或恢复执行。' : '本机保存的任务与结果，打开不会重新执行。'}</p></div><span>已读到 {tasks.length} 项</span></header>
           <div className="pw-device-task-list">
             {shownTasks.map(task => {
-              const controls = snapshot?.taskActions?.[task.id] || {}, request = resumeRequest(task);
+              const controls = actionsFor(task), request = resumeRequest(task);
               const readable = !unreadSource(task), details = readable ? taskDetails[task.id] : undefined, links = deviceTaskHistoryLinks(details, task.id, peerId);
+              const receivedPhone = readable && isReceivedPhoneTask(task, snapshot), showLocalRead = receivedPhone && (!controls.capturedAt || controls.phoneActionReason);
+              const readLocalTask = () => { void invoke('devices.readTask', { taskId: task.id }, value => { const actual = deviceTaskDetails(value, task.id); setTaskDetails(old => ({ ...old, [task.id]: actual })); }); };
               return <article className="pw-device-task" key={task.id} data-motion-key={`task:${task.id}`}>
                 <header><h4 dir="auto">{readable ? task.goal || '原设备任务' : '原工作来源待核对'}</h4><span>{readable ? taskLabels[task.status] || '状态待读取' : '本机仅留关联'}</span></header>
                 {readable && task.summary && <p className="pw-device-task-summary" dir="auto">{task.summary}</p>}
                 {readable && deviceWorkspaceTaskMode(task.raw) === 'manual_phone' && <p>{task.raw?.runId ? '原手控操作与回执保留；离页后不恢复旧输入权限。' : '手控尚未开始。打开后选择一个手机屏幕，明确审阅，再逐次操作。'}</p>}
                 {readable && deviceWorkspaceTaskMode(task.raw) === 'agent_device' && !task.raw?.runId && <p>原目标尚未启动。打开后选择设备范围并审阅开始；取消不会影响其他任务。</p>}
+                {readable && controls.phoneActionReason && <p role="status">{controls.phoneActionReason}</p>}
+                {receivedPhone && !controls.phoneActionReason && !task.raw?.runId
+                  && (available(controls.goalReview) || available(controls.pendingCancel)) && <p>{available(controls.goalReview) ? '这台手机已接收，尚未启动。你可以核对本机模型与范围，再决定是否开始。' : `这台手机已接收，尚未启动。${controls.goalReview?.reason || '目前不能开始。'}`}</p>}
                 <div className="pw-form-actions">
-                  {readable && available(controls.goalReview) && <Button disabled={busy} onClick={() => { void invoke('devices.reviewGoal', { taskId: task.id }, acceptReview); }}>审阅本机模型与原目标</Button>}
-                  {readable && available(controls.resultReview) && <Button disabled={busy} onClick={() => { void invoke('devices.reviewResult', { taskId: task.id }, acceptReview); }}>核对成果并结束</Button>}
+                  {showLocalRead && <Button variant="secondary" disabled={busy || !supported('devices.readTask')} onClick={readLocalTask}>读取本机接手状态</Button>}
+                  {readable && available(controls.goalReview) && <Button disabled={busy} onClick={() => actIfCurrent(task, 'goalReview', () => { void invoke('devices.reviewGoal', { taskId: task.id }, acceptReview); })}>审阅本机模型与原目标</Button>}
+                  {readable && available(controls.resultReview) && <Button disabled={busy} onClick={() => actIfCurrent(task, 'resultReview', () => { void invoke('devices.reviewResult', { taskId: task.id }, acceptReview); })}>核对成果并结束</Button>}
                   <Button variant="secondary" disabled={busy || !supported('devices.openTask')} onClick={() => {
                     if (selectedPeer.current !== peerId || !deviceTaskRows(state.tasks, snapshot, peerId).some(row => row.id === task.id)) return;
                     void invoke('devices.openTask', { taskId: task.id });
                   }}>打开原工作</Button>
                   {(['stop', 'pendingCancel'] as const).filter(key => !(key === 'stop' && available(controls.pendingCancel))).map(key => {
                     const operation = key === 'pendingCancel' ? 'task.cancelPending' : 'task.stop';
-                    return available(controls[key]) && <Button key={key} variant="ghost" disabled={controlBusy} onClick={() => actionReview(operation, { taskId: task.id })}>{deviceOperationLabels[operation]}</Button>;
+                    return available(controls[key]) && <Button key={key} variant="ghost" disabled={controlBusy} onClick={() => actIfCurrent(task, key, () => actionReview(operation, { taskId: task.id }))}>{deviceOperationLabels[operation]}</Button>;
                   })}
                 </div>
-                {readable && request?.ownerActionRequired === true && <div className="pw-device-task-request"><h4>对方请求继续原执行</h4><p>请求设备 {request.callerDeviceId}</p>{request.stale === true && <p>任务版本已经变化；需要对方重新读取后发起恢复请求。仍可拒绝这次旧请求。</p>}<Button variant="secondary" disabled={busy} onClick={() => { void invoke('devices.reviewResumeRequest', { taskId: task.id, resumeRequestId: request.resumeRequestId, reviewRevision: request.reviewRevision }, acceptReview, 'control'); }}>核对这次恢复请求</Button></div>}
+                {readable && request?.ownerActionRequired === true && <div className="pw-device-task-request"><h4>对方请求继续原执行</h4><p>请求设备 {request.callerDeviceId}</p>{request.stale === true && <p>任务版本已经变化；需要对方重新读取后发起恢复请求。仍可拒绝这次旧请求。</p>}<Button variant="secondary" disabled={busy} onClick={() => {
+                    const fresh = actionsFor(task, Date.now()).resumeRequest;
+                    if (!fresh?.ownerActionRequired || fresh.resumeRequestId !== request.resumeRequestId || fresh.reviewRevision !== request.reviewRevision) { setError('原恢复请求已变化，请重新读取。'); return; }
+                    void invoke('devices.reviewResumeRequest', { taskId: task.id, resumeRequestId: request.resumeRequestId, reviewRevision: request.reviewRevision }, acceptReview, 'control');
+                  }}>核对这次恢复请求</Button></div>}
                 {readable && rows(task.raw?.approvals).filter(row => row.state === 'pending').slice(0, 16).map(approval => <div className="pw-device-task-request" key={approval.id || approval.approvalId}><p>{approval.message || approval.tool}</p><Button variant="secondary" disabled={busy || typeof (approval.id || approval.approvalId) !== 'string' || !Number.isSafeInteger(approval.expiresAt) || approval.expiresAt <= Date.now()} onClick={() => { void invoke('devices.reviewApproval', { taskId: task.id, approvalId: approval.id || approval.approvalId }, acceptReview); }}>核对这次原操作</Button></div>)}
                 {readable && <Accordion className="pw-device-task-history"><AccordionItem id={`history-${task.id}`} headingLevel={5} title="操作记录与管理" description={details ? `已读取 ${links.length} 项原操作` : undefined}>
                   <div className="pw-form-actions">
                   {(['pause', 'resume'] as const).filter(key => !(key === 'resume' && controls.resumeRequest?.ownerActionRequired === true)).map(key =>
-                    available(controls[key]) && <Button key={key} variant="ghost" disabled={busy} onClick={() => actionReview(`task.${key}`, { taskId: task.id })}>{deviceOperationLabels[`task.${key}`]}</Button>)}
+                    available(controls[key]) && <Button key={key} variant="ghost" disabled={busy} onClick={() => actIfCurrent(task, key, () => actionReview(`task.${key}`, { taskId: task.id }))}>{deviceOperationLabels[`task.${key}`]}</Button>)}
                   </div>
-                  <Button variant="ghost" disabled={busy} onClick={() => { void invoke('devices.readTask', { taskId: task.id }, value => { const actual = deviceTaskDetails(value, task.id); setTaskDetails(old => ({ ...old, [task.id]: actual })); }); }}>{details ? '刷新原设备操作记录' : '读取原设备操作记录'}</Button>
+                  {!showLocalRead && <Button variant="ghost" disabled={busy} onClick={readLocalTask}>{details ? '刷新原设备操作记录' : '读取原设备操作记录'}</Button>}
                   {details && <>
                     {!links.length && <p>{peerId ? '本次读取中没有这台设备的关联操作。' : '本次读取中没有关联的设备操作。'}</p>}
                     {links.map(link => <div className="pw-device-history-entry" key={link.operationId}><p>设备 {link.targetDeviceId} · 原操作 {link.operationId}</p><p>{link.terminalReceipt?.terminal === true && link.terminalReceipt?.stopped === true && link.terminalReceipt?.hasUnresolved === false ? '执行端已有结束回执，业务成果仍待核对。' : String(link.holdState || '').includes('unknown') ? '执行效果仍未确认，原占用次数保留。' : link.childBinding ? '执行端已接受，尚未核对最终结果。' : '已保留这次原操作的关联记录。'}</p><Button variant="secondary" disabled={busy} onClick={() => openHistory(task.id, link)}>查看原派发记录</Button></div>)}
@@ -609,7 +631,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
                 : <p>{phoneGoalResult.review === 'pending' ? '结果在原手机等机主核对，暂不显示内容。' : phoneGoalResult.review === 'not_confirmed' ? '原手机没有确认这份成果。' : phoneGoalResult.review === 'none' ? '原手机还没有这次执行已核对的成果记录。' : '原手机只返回了执行进展，没有可核对的原结果摘要。'}</p>}
             </div>}
           </section>}
-          {review.kind === 'history' && <>{originalView.phoneGoalResult === true && <h3>原派发回执</h3>}<p>执行设备 {originalView.targetDeviceId}</p><p>原操作 {originalView.operationId}</p><ResourceScope resource={originalView.resourceBinding} /><p role="status">{deviceHistoryLabel(historyReceipt)}</p><p>查询只读取原操作；未知效果保留原占用次数。请求停止后仍需核对回执。</p>{historyReceipt && <Accordion><AccordionItem id="original-receipt" title="原操作回执详情"><pre className="pw-source-copy">{JSON.stringify(historyReceipt, null, 2)}</pre></AccordionItem></Accordion>}<Button disabled={busy} onClick={() => queryHistory()}>查询原操作回执</Button>{!historyStopSubmitted ? <><CheckboxField isSelected={ack} onChange={setAck} isDisabled={busy}>我已核对上方原设备、原操作与范围，要求停止这次操作</CheckboxField><Button variant="secondary" disabled={busy || !ack} onClick={() => queryHistory(true)}>请求停止这次原操作</Button></> : <p>本窗口已提交过停止请求。继续查询原回执核对结果。</p>}</>}
+          {review.kind === 'history' && <>{originalView.phoneGoalResult === true && <h3>原派发回执</h3>}<p>执行设备 {originalView.targetDeviceId}</p><p>原操作 {originalView.operationId}</p><ResourceScope resource={originalView.resourceBinding} /><p role="status">{deviceHistoryLabel(historyReceipt, originalView)}</p><p>查询只读取原操作；未知效果保留原占用次数。请求停止后仍需核对回执。</p>{historyReceipt && <Accordion><AccordionItem id="original-receipt" title="原操作回执详情"><pre className="pw-source-copy">{JSON.stringify(historyReceipt, null, 2)}</pre></AccordionItem></Accordion>}<Button disabled={busy} onClick={() => queryHistory()}>查询原操作回执</Button>{!historyStopSubmitted ? <><CheckboxField isSelected={ack} onChange={setAck} isDisabled={busy}>我已核对上方原设备、原操作与范围，要求停止这次操作</CheckboxField><Button variant="secondary" disabled={busy || !ack} onClick={() => queryHistory(true)}>请求停止这次原操作</Button></> : <p>本窗口已提交过停止请求。继续查询原回执核对结果。</p>}</>}
           {!['recovery', 'history'].includes(review.kind) && <CheckboxField isSelected={ack} onChange={setAck} isDisabled={busy}>{review.kind === 'pair' ? '我同意准确权限，并已比较两台设备显示的两个完整指纹，均一致' : '我已核对原对象、范围与影响，确认这一次操作'}</CheckboxField>}
           <div className="pw-form-actions"><Button variant="secondary" onClick={closeReview}>{review.kind === 'recovery' ? '关闭只读入口' : '返回核对'}</Button>{!['recovery', 'history'].includes(review.kind) && <Button disabled={busy || !ack || review.kind === 'resume' && originalView.canApprove !== true || review.kind === 'goal' && (originalView.source === 'local_account' || !originalView.model)} onClick={() => confirmReview(review.kind === 'result' ? { completed: true } : ['approval', 'resume'].includes(review.kind) ? { approved: true } : {})}>{review.kind === 'result' ? '确认成果并结束' : review.kind === 'approval' ? '允许这次原操作' : review.kind === 'resume' ? '同意继续原执行' : review.kind === 'pair' ? '同意权限并确认双端指纹' : '确认本次操作'}</Button>}{review.kind === 'result' && <Button variant="secondary" disabled={busy || !ack} onClick={() => confirmReview({ completed: false })}>结束但不确认完成</Button>}{['approval', 'resume'].includes(review.kind) && <Button variant="secondary" disabled={busy || !ack} onClick={() => confirmReview({ approved: false })}>{review.kind === 'resume' ? '拒绝这次恢复请求' : '拒绝这次操作'}</Button>}</div>
         </>}

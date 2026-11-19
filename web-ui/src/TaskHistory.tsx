@@ -7,6 +7,7 @@ import { TaskTrajectory } from './TaskTrajectory';
 import { Accordion, AccordionItem, Button, IconButton } from './forms-library';
 import { IconArrowLeft, IconArrowRight, IconChevronRight, IconRefresh } from './icons';
 import { processCheckpoint, type ProcessRecord } from './task-process-checkpoint';
+import { phoneStopReceipt } from './phone-stop-receipt';
 import { getTaskEventHistory, getTaskOperations } from './task-presentation';
 import { taskAuditPage, taskHistoryIdentity, type AuditPage, type AuditSection, type TaskHeader } from './task-history';
 
@@ -73,6 +74,10 @@ export function TaskHistory({ task, canRead, canReadTrace = false, active = true
 }) {
   const [selectedTab, setSelectedTab] = useState('trace');
   const documentEpoch = useSyncExternalStore(bridge.subscribe, bridge.getDocumentEpoch, bridge.getDocumentEpoch);
+  const inOriginalTask = useSyncExternalStore(bridge.subscribe, () => {
+    const view=bridge.getState().view as {section?:string; taskId?:string} | undefined;
+    return !view?.section && view?.taskId === task.id;
+  });
   const revision = useSyncExternalStore(bridge.subscribe, sourceRevision, sourceRevision);
   const unavailable = task.raw?.contextAvailable === false || task.raw?.sourceCurrentReadRequired === true ||
     task.raw?.taskProjection === 'source_unavailable' || !!task.raw?.id && task.raw.id !== task.id;
@@ -122,7 +127,8 @@ export function TaskHistory({ task, canRead, canReadTrace = false, active = true
   const visibleTask = projected(events.page, operations.page), latestTask = projected(events.latest, operations.latest);
   const history = getTaskEventHistory(visibleTask), tools = getTaskOperations(visibleTask);
   const checkpoint = active && selectedTab === 'trace' ? processCheckpoint(latestTask, events.page === events.latest ? history.entries : getTaskEventHistory(latestTask).entries,
-    operations.page === operations.latest ? tools : getTaskOperations(latestTask)) : null;
+    operations.page === operations.latest ? tools : getTaskOperations(latestTask),
+    inOriginalTask && canRead ? phoneStopReceipt(latestTask, events.latest, operations.latest) : undefined) : null;
   const locate = (record: ProcessRecord) => {
     if (!active || record.runId !== task.raw?.runId) return;
     if (record.section === 'events') {
@@ -138,6 +144,7 @@ export function TaskHistory({ task, canRead, canReadTrace = false, active = true
       <small>{checkpoint.record.label}</small><p dir="auto">{checkpoint.record.body}</p>
       {checkpoint.record.locatable && <Button variant="ghost" trailingIcon={IconChevronRight} onClick={() => locate(checkpoint.record!)}>定位原记录</Button>}
     </div>}
+    {checkpoint.lines?.map((line,index) => <p key={index} dir="auto">{line}</p>)}
   </section>;
   const navigation = (window: ReturnType<typeof useAuditWindow>, label: string) => <>
     {window.error && <p className="pw-error" role="alert">{window.error}</p>}

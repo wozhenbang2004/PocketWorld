@@ -1,10 +1,11 @@
 // A reading aid for the original process window, never a plan, retry or decision.
 import type { TaskHeader } from './task-history';
+import type { PhoneStopReceipt } from './phone-stop-receipt';
 import { presentOperation, type TaskEventRecord, type TaskOperation } from './task-presentation';
 import { workCollectionPresentation } from './work-collection';
 
 export type ProcessRecord = { section: 'events' | 'operations'; id: string; runId: string; locatable: boolean; label: string; body: string };
-type Checkpoint = { state: string; note: string; record?: ProcessRecord };
+type Checkpoint = { state: string; note: string; record?: ProcessRecord; lines?: string[] };
 const copy = (value: unknown) => typeof value === 'string' ? value.trim() : '';
 // Positions are ordered within one native journal, not across events and operations.
 function newest<T>(rows: T[], position: (row: T) => number | undefined, at: (row: T) => number | undefined) {
@@ -16,7 +17,7 @@ function newest<T>(rows: T[], position: (row: T) => number | undefined, at: (row
   }, undefined);
 }
 
-export function processCheckpoint(task: TaskHeader, events: TaskEventRecord[], operations: TaskOperation[]): Checkpoint {
+export function processCheckpoint(task: TaskHeader, events: TaskEventRecord[], operations: TaskOperation[], phoneStop?: PhoneStopReceipt): Checkpoint {
   const run = copy(task.raw?.runId);
   const currentEvents = events.filter(event => event.isCurrentRun && event.bodyAvailable);
   const currentOps = operations.filter(op => !!run && op.runId === run);
@@ -39,8 +40,16 @@ export function processCheckpoint(task: TaskHeader, events: TaskEventRecord[], o
   if (view.reconciliation) {
     const record = opRecord(currentOps.filter(op => presentOperation(op).status === 'unknown' &&
       (op.bodyAvailable || op.requiresReconciliation || op.state.includes('unknown'))), '本轮待核对的操作');
+    if (phoneStop) {
+      const phone = phoneStop.record, same = phone && record?.section === phone.section && record.id === phone.id;
+      return { state:'手机执行已停止，有操作待核对', note:'请先核对原操作，不要重做。停止不会撤销已发生的动作。',
+        record:same ? phone : record ?? phone,
+        lines:phone && record && !same ? [phone.label+'：'+phone.body, ...phoneStop.lines] : phoneStop.lines };
+    }
     return { state: '操作结果待核对', note: '有操作可能已经发生。请在概览核对，不要重复执行。', record };
   }
+  if (phoneStop) return {state:'这次手机执行已停止', note:'停止不会撤销已发生的动作。系统接纳请求、屏幕有变化，都不等于目标办成。',
+    record:phoneStop.record, lines:phoneStop.lines};
   const matchingEvent = (...states: string[]) => currentEvents.filter(event => states.includes(event.status));
   if (view.pendingApproval || ['waiting_approval','awaiting_approval','waiting_permission','awaiting_permission'].includes(status)) {
     const record = opRecord(currentOps.filter(op => presentOperation(op).status === 'needs_approval'), '本轮授权请求');
