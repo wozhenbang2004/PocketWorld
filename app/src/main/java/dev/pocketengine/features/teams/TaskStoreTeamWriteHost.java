@@ -88,11 +88,25 @@ public final class TaskStoreTeamWriteHost implements TeamCoordinator.BudgetHost,
         public synchronized TaskStore.TeamWorkReview approveParentBudget(TaskStore.TeamWorkReview exact,String digest)throws Exception {
             require();if(exact==null||pending!=exact)throw new SecurityException("不是本窗口完整项目的预算审阅");if(handoffPlan!=null){TeamWorkHandoff.checkDraft(workspace,handoffPlan);if(handoffPlan.projectSelection()!=null)projects.checkSelectionCurrent(handoffPlan.projectSelection());JSONObject shown=handoffPlan.view(),item=shown.getJSONObject("workItem");tasks.approveTeamWorkHandoffParentBudget(exact,digest);return reviewTransfer(item.getString("workItemId"),shown.getString("newMemberId"),item.getInt("itemRevision"),item.getInt("ownerGeneration"));}if(projectPlan==null)throw new SecurityException("没有原完整项目范围");projects.checkSelectionCurrent(projectPlan.projectSelection());pending=tasks.approveTeamProjectParentBudget(exact,digest);return pending;
         }
+        /** Existing TeamWorkHandoff seals the actual old draft. This narrower UI path cannot buy a new budget or route. */
+        public synchronized TaskStore.TeamWorkReview reviewSoleLocalHandoff(String item,String member,int itemRevision,int ownerGeneration)throws Exception{
+            require();pendingRevision=null;source=null;handoffPlan=null;pending=null;mutation=coordinator.workMutationSource(run);
+            coordinator.requireSoleLocalHandoff(mutation,item,member);
+            TaskStore.TeamWorkHandoffSource bound=tasks.localRemainderHandoffSource(window,mutation,item,member,itemRevision,ownerGeneration);
+            handoffPlan=TeamWorkHandoff.capture(workspace,bound);pending=tasks.prepareTeamWorkHandoff(handoffPlan);return pending;
+        }
+        public synchronized JSONObject approveSoleLocalHandoff(TaskStore.TeamWorkReview exact)throws Exception{
+            require();if(exact==null||pending!=exact||handoffPlan==null||handoffPlan.projectSelection()!=null)throw new SecurityException("不是原主人的剩余分工交接审阅");
+            JSONObject shown=exact.view();if(!shown.getBoolean("carryLocalRemainder")||shown.getBoolean("budgetChanged")||shown.getBoolean("parentBudgetIncreaseRequired"))throw new SecurityException("不能借交接补额度");
+            String item=shown.getJSONObject("workItem").getString("workItemId"),next=shown.getString("newMemberId");
+            JSONObject updated=coordinator.approveSoleLocalHandoff(mutation,item,next,()->{require();TeamWorkHandoff.checkDraft(workspace,handoffPlan);return tasks.approveTeamWorkHandoff(exact,shown.getString("digest"));});
+            pending=null;mutation=null;handoffPlan=null;tasks.updateExternal(run,updated);changed.accept(run);return updated;
+        }
         public synchronized TaskStore.TeamWorkReview reviewTransfer(String item,String member,int itemRevision,int ownerGeneration)throws Exception{
             require();pendingRevision=null;source=null;handoffPlan=null;JSONObject current=TeamWorkItems.find(tasks.teamWorkPlanSnapshot(run).getJSONObject("workPlan").getJSONArray("items"),item),task=current.optJSONObject("assignmentTask");
             mutation=coordinator.workMutationSource(run);TaskStore.TeamWorkHandoffSource nativeSource=tasks.teamWorkHandoffSource(window,mutation,item,member,itemRevision,ownerGeneration);handoffPlan=TeamWorkHandoff.capture(workspace,nativeSource);if(nativeSource.view().has("projectContext")){if(projects==null)throw new SecurityException("原完整副本宿主未挂载，不能冒文字接手");handoffPlan=TeamWorkHandoff.withProject(handoffPlan,projects.captureHandoff(handoffPlan));}pending=tasks.prepareTeamWorkHandoff(handoffPlan);return pending;
         }
-        public synchronized JSONObject approveTransfer(TaskStore.TeamWorkReview review,String digest)throws Exception{require();if(review==null||pending!=review||source!=null)throw new SecurityException("请先审阅此窗口的原工作项交接");JSONObject continued;if(handoffPlan!=null){TeamWorkHandoff.checkDraft(workspace,handoffPlan);if(handoffPlan.projectSelection()!=null)projects.checkSelectionCurrent(handoffPlan.projectSelection());continued=coordinator.approveWorkHandoff(mutation,()->{require();TeamWorkHandoff.checkDraft(workspace,handoffPlan);if(handoffPlan.projectSelection()!=null)projects.checkSelectionCurrent(handoffPlan.projectSelection());return tasks.approveTeamWorkHandoff(review,digest);},models.get());handoffPlan=null;mutation=null;}else{JSONObject committed=tasks.approveTeamWorkTransfer(review,digest);continued=coordinator.refreshWorkItems(run,committed);}pending=null;tasks.updateExternal(run,continued);changed.accept(run);return continued;}
+        public synchronized JSONObject approveTransfer(TaskStore.TeamWorkReview review,String digest)throws Exception{require();if(review==null||pending!=review||source!=null||review.view().optBoolean("carryLocalRemainder"))throw new SecurityException("请使用这次原工作项的准确交接审阅");JSONObject continued;if(handoffPlan!=null){TeamWorkHandoff.checkDraft(workspace,handoffPlan);if(handoffPlan.projectSelection()!=null)projects.checkSelectionCurrent(handoffPlan.projectSelection());continued=coordinator.approveWorkHandoff(mutation,()->{require();TeamWorkHandoff.checkDraft(workspace,handoffPlan);if(handoffPlan.projectSelection()!=null)projects.checkSelectionCurrent(handoffPlan.projectSelection());return tasks.approveTeamWorkHandoff(review,digest);},models.get());handoffPlan=null;mutation=null;}else{JSONObject committed=tasks.approveTeamWorkTransfer(review,digest);continued=coordinator.refreshWorkItems(run,committed);}pending=null;tasks.updateExternal(run,continued);changed.accept(run);return continued;}
         public synchronized TaskStore.TeamWorkReview reviewContinuation(String item,int itemRevision,int ownerGeneration)throws Exception{require();pendingRevision=null;mutation=null;source=null;pending=tasks.prepareTeamWorkContinuation(window,item,itemRevision,ownerGeneration);return pending;}
         public synchronized TaskStore.TeamWorkReview reviewLocalContinuation(String item,int itemRevision,int ownerGeneration)throws Exception {
             require();pendingRevision=null;mutation=null;source=null;pending=tasks.prepareLocalTeamWorkContinuation(window,item,itemRevision,ownerGeneration);return pending;
@@ -496,6 +510,11 @@ public final class TaskStoreTeamWriteHost implements TeamCoordinator.BudgetHost,
         JSONObject run=coordinator.retainedOwnerReading(team);if(!TeamIntegrationDeliveryNote.readableRecovery(run))return null;
         JSONObject actual=knownState==null?integrationState(team):knownState;
         return TeamIntegrationDeliveryNote.recovered(run,actual,pointer);
+    }
+    TeamParentDeliveryWait parentDeliveryWait(JSONObject checkedPage)throws Exception {
+        String team=checkedPage.getString("teamRunId");
+        return TeamParentDeliveryWait.capture(checkedPage,finalWorkers(team),integrationTasks::get,
+                role->"reviewer".equals(role)?reviews.get(team):"integrator".equals(role)?integrations.get(team):null);
     }
     JSONObject finalWorkers(String team)throws Exception {
         RunControl review=reviews.get(team),integration=integrations.get(team);JSONObject sql;

@@ -151,7 +151,7 @@ def resume(ctx,settings,op,row,locked):
         edit(ctx,settings,op,base,retired,_observe,previous=display,prior_artifact=still_saved)
 
 
-def detail(ctx,op,row,locked,*,settings=None):
+def detail(ctx,op,row,locked,*,settings=None,read_patch=None):
     try: state=model.check(ctx,op,row,locked)
     except Exception: state="unavailable"
     if locked(): return
@@ -164,8 +164,10 @@ def detail(ctx,op,row,locked,*,settings=None):
     actions=[("show","在文件资源管理器中定位原补丁\n不打开文件、不调用关联程序。"),("ids","查看原文、草稿和补丁编号")]
     if settings: actions[:0]=[("resume","从已保存的这份草稿继续编辑\n只从本机原件还原完整草稿，不回写项目或手机。"),
                               ("text","另存或查看完整草稿文本\n单独保留一份可阅读的 draft.txt，原补丁不变。")]
+    if state=="saved" and read_patch is not None: actions.insert(0,("read-patch","在伴侣中阅读完整原补丁"))
     picked=_dialog("机主草稿补丁已核实",text+f"\n{f['bytes']:,} 字节 · "+path,actions,retire=locked)
     if locked(): return
+    if picked=="read-patch" and read_patch is not None: read_patch(); return
     if picked=="resume" and settings: resume(ctx,settings,op,row,locked)
     elif picked=="text" and settings:
         from windows_owner_draft_text_entry import open_text

@@ -14,6 +14,7 @@ import org.json.JSONObject;
 public final class OwnerComposerState {
     public static final String FORMAT="pocketworld.owner-composer.v1";
     private static final String RESTRICTED_FORMAT="pocketworld.owner-composer.v1.first-message-paused";
+    private static final String TASK_ONLY_FORMAT="pocketworld.owner-composer.v1.first-task-defaults-locked";
     private static final String ONE_MESSAGE_FORMAT="pocketworld.owner-composer.v1.one-message-learning-exclusion";
     public static final int MAX_DRAFTS=64,MAX_PENDING=64,MAX_TEXT=48_000,MAX_STATE_BYTES=1_048_576;
     public static final class Draft {
@@ -78,6 +79,7 @@ public final class OwnerComposerState {
     private final LinkedHashMap<String,Pending> pending=new LinkedHashMap<>();
     // Optional restriction of an original unbound draft, never a grant or a global default.
     private final java.util.LinkedHashSet<String> firstMessagePaused=new java.util.LinkedHashSet<>();
+    private final java.util.LinkedHashSet<String> firstTaskDefaultsLocked=new java.util.LinkedHashSet<>();
     private final java.util.LinkedHashSet<String> oneMessageExcluded=new java.util.LinkedHashSet<>();
     private String activeKey;
     private long revision;
@@ -184,19 +186,29 @@ public final class OwnerComposerState {
     }
     public synchronized boolean oneMessageEligible(String key){return activeKey.equals(key)&&oneMessageTarget(drafts.get(key));}
     public synchronized boolean oneMessageExcluded(String key){return oneMessageExcluded.contains(key);}
+    public synchronized boolean firstTaskDefaultsLocked(String key){return firstTaskDefaultsLocked.contains(key);}
     public synchronized Draft setOneMessageExcluded(String key,long expected,boolean excluded)throws Exception {
+        return setOneMessageChoice(key,expected,excluded,excluded&&firstTaskDefaultsLocked.contains(key));
+    }
+    public synchronized Draft setOneMessageChoice(String key,long expected,boolean excluded,boolean lockDefaults)throws Exception {
         Draft prior=require(key,expected);
+        if(lockDefaults&&(!excluded||!prior.conversationId.isEmpty()||!key.startsWith("new:")))throw new IllegalArgumentException("只可在未发送的新私聊首条限制这项委托的默认偏好写入");
         if(!oneMessageEligible(key)||hasPending(key))
             throw new IllegalStateException("请先核对这段私人对话的上一条输入回执");
-        if(excluded==oneMessageExcluded.contains(key))return prior;
+        if(excluded==oneMessageExcluded.contains(key)&&lockDefaults==firstTaskDefaultsLocked.contains(key))return prior;
         Draft next=prior.content(prior.text,prior.mode,prior.attachments(),prior.voiceText,prior.voiceInputId);long nextRevision=increment(revision);
         if(excluded)oneMessageExcluded.add(key);else oneMessageExcluded.remove(key);
+        if(lockDefaults)firstTaskDefaultsLocked.add(key);else firstTaskDefaultsLocked.remove(key);
         drafts.put(key,next);revision=nextRevision;return next;
     }
     public synchronized Pending prepare(String client,String key,long expected,String fingerprint,JSONObject target)throws Exception {
         return prepare(client,key,expected,fingerprint,target,false);
     }
     public synchronized Pending prepare(String client,String key,long expected,String fingerprint,JSONObject target,boolean excluded)throws Exception {
+        return prepare(client,key,expected,fingerprint,target,excluded,false);
+    }
+    public synchronized Pending prepare(String client,String key,long expected,String fingerprint,JSONObject target,boolean excluded,boolean lockDefaults)throws Exception {
+        if(lockDefaults!=firstTaskDefaultsLocked.contains(key)||lockDefaults&&(!excluded||target!=null))throw new IllegalStateException("此草稿须按原新委托范围发送，未交给另一项工作");
         if(excluded!=oneMessageExcluded.contains(key))throw new IllegalStateException("原草稿的单条记忆限制不适用于另一提交入口，没有发送");
         Draft draft=require(key,expected);if((blank(draft.text)&&draft.attachments().length()==0)||draft.text.trim().length()>12000)throw new IllegalArgumentException("请保留草稿并将本条输入缩至12000字内；纯附件消息必须已有真实附件选择");
         Pending duplicate=matchingPending(key,fingerprint);if(duplicate!=null)return duplicate;
@@ -236,21 +248,22 @@ public final class OwnerComposerState {
         boolean keepOriginal=migrate&&pending.values().stream().anyMatch(other->!other.clientId.equals(client)&&other.draftKey.equals(prior.key));
         if(keepOriginal&&collision==null)makeRoom();
         if(keepOriginal)drafts.put(prior.key,remaining);else {drafts.remove(prior.key);firstMessagePaused.remove(prior.key);}
-        drafts.put(target,next);pending.remove(client);if(releaseOne)oneMessageExcluded.remove(prior.key);
+        drafts.put(target,next);pending.remove(client);if(releaseOne){oneMessageExcluded.remove(prior.key);firstTaskDefaultsLocked.remove(prior.key);}
         if(activeKey.equals(prior.key))activeKey=target;
         revision=increment(revision);return new Acknowledgement(true,clear,migrate,prior.key,target);
     }
     public synchronized JSONObject toJson()throws Exception{
         JSONArray d=new JSONArray(),p=new JSONArray();for(Draft draft:drafts.values())d.put(draft.json());for(Pending item:pending.values())p.put(item.json());
-        JSONObject result=new JSONObject().put("format",!oneMessageExcluded.isEmpty()?ONE_MESSAGE_FORMAT:firstMessagePaused.isEmpty()?FORMAT:RESTRICTED_FORMAT).put("revision",revision).put("activeKey",activeKey).put("drafts",d).put("pending",p);
+        JSONObject result=new JSONObject().put("format",!firstTaskDefaultsLocked.isEmpty()?TASK_ONLY_FORMAT:!oneMessageExcluded.isEmpty()?ONE_MESSAGE_FORMAT:firstMessagePaused.isEmpty()?FORMAT:RESTRICTED_FORMAT).put("revision",revision).put("activeKey",activeKey).put("drafts",d).put("pending",p);
         if(!oneMessageExcluded.isEmpty())result.put("oneMessageExcluded",new JSONArray(oneMessageExcluded));
+        if(!firstTaskDefaultsLocked.isEmpty())result.put("firstTaskDefaultsLocked",new JSONArray(firstTaskDefaultsLocked));
         if(!firstMessagePaused.isEmpty())result.put("firstMessagePaused",new JSONArray(firstMessagePaused));
         return result;
     }
     public static OwnerComposerState fromJson(JSONObject json)throws Exception {
         String format=json.getString("format");boolean restricted=RESTRICTED_FORMAT.equals(format);
-        boolean one=ONE_MESSAGE_FORMAT.equals(format);
-        if(!FORMAT.equals(format)&&!restricted&&!one||one!=json.has("oneMessageExcluded")||!one&&restricted!=json.has("firstMessagePaused"))throw new IllegalArgumentException("草稿版本或首条记忆范围不受支持，请保留原文件");
+        boolean taskOnly=TASK_ONLY_FORMAT.equals(format),one=ONE_MESSAGE_FORMAT.equals(format)||taskOnly;
+        if(taskOnly!=json.has("firstTaskDefaultsLocked")||!FORMAT.equals(format)&&!restricted&&!one||one!=json.has("oneMessageExcluded")||!one&&restricted!=json.has("firstMessagePaused"))throw new IllegalArgumentException("草稿版本或首条记忆范围不受支持，请保留原文件");
         OwnerComposerState state=new OwnerComposerState();state.revision=integer(json,"revision",1,Long.MAX_VALUE);state.activeKey=json.getString("activeKey");
         JSONArray drafts=json.getJSONArray("drafts"),pending=json.getJSONArray("pending");if(drafts.length()<1||drafts.length()>MAX_DRAFTS||pending.length()>MAX_PENDING)throw new IllegalArgumentException("草稿记录超出有界范围");
         for(int i=0;i<drafts.length();i++){JSONObject row=drafts.getJSONObject(i);Draft d=new Draft(row.getString("key"),row.getString("conversationId"),integer(row,"revision",1,Long.MAX_VALUE),row.getString("text"),row.getString("mode"),row.getJSONArray("attachments"),(int)integer(row,"scrollIndex",0,100000),(int)integer(row,"scrollOffset",0,1000000),row.getString("anchorMessage"),row.getString("observedMessage"),bool(row,"newReplies"),row.getString("voiceText"),row.getString("voiceInputId"),row.has("ownerSourceRefs")?row.getJSONArray("ownerSourceRefs"):new JSONArray(),row.has("ownerPreviewRefs")?row.getJSONArray("ownerPreviewRefs"):new JSONArray(),row.has("ownerObjectRefs")?row.getJSONArray("ownerObjectRefs"):new JSONArray());if(state.drafts.put(d.key,d)!=null)throw new IllegalArgumentException("草稿身份重复");}
@@ -263,6 +276,12 @@ public final class OwnerComposerState {
             if(restrictions.length()<1||restrictions.length()>drafts.length())throw new IllegalArgumentException("单条记忆限制无法核对");
             for(int i=0;i<restrictions.length();i++){Object raw=restrictions.get(i);Draft d=raw instanceof String?state.drafts.get(raw):null;
                 if(!oneMessageTarget(d)||!state.oneMessageExcluded.add(d.key))throw new IllegalArgumentException("单条记忆限制不属于原私人对话");}
+        }
+        if(taskOnly){
+            JSONArray restrictions=json.getJSONArray("firstTaskDefaultsLocked");
+            if(restrictions.length()<1||restrictions.length()>state.oneMessageExcluded.size())throw new IllegalArgumentException("首项委托的偏好范围无法核对");
+            for(int i=0;i<restrictions.length();i++){Object raw=restrictions.get(i);
+                if(!(raw instanceof String key)||!state.oneMessageExcluded.contains(key)||!key.startsWith("new:")||!state.drafts.get(key).conversationId.isEmpty()||!state.firstTaskDefaultsLocked.add(key))throw new IllegalArgumentException("默认偏好限制不属于原新草稿");}
         }
         if(!state.drafts.containsKey(state.activeKey)||isWorkKey(state.activeKey))throw new IllegalArgumentException("原活动对话草稿不存在");
         for(int i=0;i<pending.length();i++){JSONObject row=pending.getJSONObject(i);Pending p=new Pending(row.getString("clientId"),row.getString("draftKey"),integer(row,"draftRevision",1,Long.MAX_VALUE),row.getString("fingerprint"),row.getString("conversationId"),row.getString("mode"),row.getJSONObject("originalTarget"));Draft d=state.drafts.get(p.draftKey);if(d==null||!d.conversationId.equals(p.conversationId)||p.draftRevision>d.revision||state.pending.put(p.clientId,p)!=null)throw new IllegalArgumentException("待核对输入不属于原草稿版本");}

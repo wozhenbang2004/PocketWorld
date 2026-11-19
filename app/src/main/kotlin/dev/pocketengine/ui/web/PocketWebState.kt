@@ -63,7 +63,10 @@ internal object PocketWebState {
             row.replyContext?.let { value.put("replyContext", it.toJson()) }
             row.hostGoalTaskId?.let { value.put("hostGoalTaskId",it) }
             row.readerInputWork?.let { value.put("readerInputTaskId", it.taskId) }
-            if (row.learningExcluded && row.role == "user") value.put("automaticLearningExcluded", true)
+            if (row.learningExcluded && row.role == "user") {
+                value.put("automaticLearningExcluded", true)
+                if (row.defaultWritesBlocked) value.put("originalDefaultWritesBlocked", true)
+            }
             row.taskResult?.let { value.put("taskResult", it.toJson()) }
         }
 

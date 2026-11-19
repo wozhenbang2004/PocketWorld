@@ -21,7 +21,7 @@ internal class PocketWebLocal(private val controller: PocketWorldController, pri
     private var busy = false
     companion object {
         // Publish only viewing. Interactive input/stop remain outside this surface.
-        val PROJECT_OBSERVATION_COMMANDS = setOf("local.execution.observe","local.execution.readLogs","local.execution.close")
+        val PROJECT_OBSERVATION_COMMANDS = setOf("local.execution.observe","local.execution.readLogs","local.execution.close","local.execution.savedTermux")
         val COMMANDS = PROJECT_OBSERVATION_COMMANDS + setOf("local.prepareCheckout", "local.describeCheckout", "local.terminal.review", "local.terminal.confirm", "local.terminal.query", "local.terminal.stop", "local.terminal.open", "local.terminal.read", "local.terminal.input", "local.terminal.inputReceipt", "local.terminal.close", "local.execution.open", "local.execution.readLogs", "local.execution.input", "local.execution.inputReceipt", "local.execution.stop", "local.execution.close") }
 
     fun clear() {
@@ -46,6 +46,20 @@ internal class PocketWebLocal(private val controller: PocketWorldController, pri
         check(controller.webPrivateOwnerVisible()) { "请在私人前台打开原本机工作区" }
         check(!busy) { "请等待本次原操作回执" }
         val owner = controller.webWindowTicket(); val request = generation
+        if(action=="local.execution.savedTermux"){
+            fields(args,"taskId","executionId","source","channel","expectedRecord")
+            val t=executionId(args,"taskId");val op=executionId(args,"executionId");require(taskView()==t){"请先打开原私人项目任务"}
+            val source=args.opt("source");val channel=args.opt("channel");val expected=args.opt("expectedRecord")
+            require(source is String&&source in setOf("journal","callback")&&channel is String&&channel in setOf("summary","stdout","stderr")&&
+                expected is String&&(channel=="summary"&&expected.isEmpty()||channel!="summary"&&expected.matches(Regex("[a-f0-9]{64}"))))
+            busy=true
+            try{controller.runPluginCatalogWork(Runnable{
+                val result=runCatching{check(current(owner,request,t)){"原任务窗口已关闭"};controller.localTerminalHost().readStoredTermuxCommandForOwner(t,op,source,channel,expected)}
+                main.post{if(generation==request)busy=false
+                    if(!current(owner,request,t))done(null,"原任务窗口已变化，未带出旧回执")
+                    else result.fold({done(PocketWebState.publicValue(it) as JSONObject,null)},{done(null,it.message?:"这份 Termux 原回执尚不能核对")})}
+            })}catch(f:Exception){busy=false;throw f};return
+        }
         if (action == "local.prepareCheckout") {
             fields(args, "projectId"); val project = id(args, "projectId")
             check(controller.state.projects.any { it.id == project }) { "原项目不在当前读取范围" }; busy = true

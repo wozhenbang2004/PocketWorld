@@ -87,9 +87,21 @@ public final class TeamParentHost {
         return out.put("teamRunId",id).put("fileReceipts",shown).put("fileReceiptCount",shown.length()).put("receiptBodiesIncluded",false).put("businessVerified",false);
     }
     private JSONObject read(TaskStore.TeamParentOrigin source,JSONObject args,RunControl original,boolean waiting)throws Exception {
-        String id=args.getString("teamRunId");tasks.teamParentAccess(source,id,false);JSONObject reservation=tasks.beginTeamParentRead(source,id,args),receipt=new JSONObject().put("status","read_failed");
-        try{JSONObject out;if(waiting)out=coordinator.waitParentEvents(id,args.optLong("afterEvent",0),args.optInt("maxWait",5000),original,()->{source.checkCurrent();return tasks.teamParentHasSteering(source);});
-            else switch(args.optString("view","status")){
+        String id=args.getString("teamRunId");JSONObject access=tasks.teamParentAccess(source,id,false);JSONObject reservation=tasks.beginTeamParentRead(source,id,args),receipt=new JSONObject().put("status","read_failed");
+        try{JSONObject out;if(waiting){
+                long started=System.nanoTime(),cursor=args.optLong("afterEvent",0);int max=args.optInt("maxWait",5000);
+                if(max<0||max>20000)throw new IllegalArgumentException("一次最多等待20秒，超时不是成员失败");
+                TeamParentDeliveryWait originalDelivery=null;
+                if(access.optJSONObject("teamWriteScope")!=null){
+                    JSONObject page=coordinator.parentEvents(id,cursor,16);
+                    if(TeamParentDeliveryWait.candidate(page))originalDelivery=writes.parentDeliveryWait(page);
+                }
+                int remaining=max-(int)Math.min(max,java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-started));
+                out=coordinator.waitParentEvents(id,cursor,remaining,original,()->{source.checkCurrent();return tasks.teamParentHasSteering(source);},originalDelivery);
+                if(originalDelivery!=null&&!out.optBoolean("interruptedForOwnerInput")){
+                    original.check();tasks.teamParentAccess(source,id,false);originalDelivery.report(out,writes.finalWorkers(id));
+                }
+            }else switch(args.optString("view","status")){
                 case "status":case "members":out=status(source,id);break;
                 case "events":out=coordinator.parentEvents(id,args.optLong("afterEvent",0),args.optInt("limit",16));break;
                 case "message_receipt":{

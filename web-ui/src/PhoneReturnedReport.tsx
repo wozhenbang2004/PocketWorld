@@ -7,6 +7,7 @@ import {IconClose} from './icons';
 import {ShimmerText} from './library';
 import {messagePhoneResult,type PhoneResult} from './phone-start';
 import {finalScreenLine} from './PhoneFinalScreenReceipt';
+import {usePhoneOriginalReadingPlace} from './phone-original-reading-place';
 import './phone-returned-report.css';
 
 type WindowView={resumeRevision?:number;section?:string|null;taskId?:string|null};
@@ -62,12 +63,14 @@ export function PhoneReturnedReport({target:t,onClose}:{target:PhoneReportTarget
   const [expired,setExpired]=useState(false),[page,setPage]=useState<Page|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(true);
   const attempts=useRef(0),inFlight=useRef(false),digest=useRef(''),previous=useRef<number[]>([]),request=useRef(0);
   const original=t.phoneResult,valid=current(t),available=!expired&&valid;
+  const reading=usePhoneOriginalReadingPlace(t,available,page?.offset,()=>current(t));
   const Sheet=t.readerWindow>0||t.noticeOrigin?Drawer.NestedRoot:Drawer.Root;
   const close=useRef(onClose);close.current=onClose;
   useEffect(()=>registerOverlayBack(()=>close.current()),[]);
   useEffect(()=>{if(!valid){++attempts.current;inFlight.current=false;setPage(null);setExpired(true);}},[valid]);
-  async function read(offset:number){
+  async function read(offset:number,manual=true){
     if(inFlight.current||!current(t))return;
+    if(manual)reading.leaving(offset);
     const attempt=++attempts.current;inFlight.current=true;request.current=offset;setBusy(true);setPage(null);setError('');
     try{
       const p=await bridge.command('phone.result.original',{conversationId:t.conversationId,messageId:t.messageId,sourceRevision:t.sourceRevision,
@@ -90,7 +93,7 @@ export function PhoneReturnedReport({target:t,onClose}:{target:PhoneReportTarget
   }
   useEffect(()=>{
     const obscure=()=>{if(document.hidden){++attempts.current;setExpired(true);setPage(null);}};
-    document.addEventListener('visibilitychange',obscure);void read(0);
+    document.addEventListener('visibilitychange',obscure);void read(0,false);
     return()=>{document.removeEventListener('visibilitychange',obscure);++attempts.current;inFlight.current=false;};
   },[t]);
   return <Sheet open onOpenChange={open=>{if(!open)onClose();}}><Drawer.Portal><Drawer.Overlay className="pw-overlay"/>
@@ -103,13 +106,14 @@ export function PhoneReturnedReport({target:t,onClose}:{target:PhoneReportTarget
         {busy&&<ShimmerText>正在核对这轮原文…</ShimmerText>}{error&&<p role="alert">{error}</p>}
         {page&&<>{page.finalScreen?<p className="pw-field-hint"><strong>收尾时的屏幕：</strong>{page.finalScreen}</p>:
           original.status==='needs_confirmation'||original.status==='completed'?<p className="pw-muted">这份原报告没有独立的终屏回执，不能据此确认当时的页面。</p>:null}
-          {original.summaryChars===0?<p>这轮没有留下文字总结。</p>:<p className="pw-phone-report-text" dir="auto">{page.text}</p>}
+          {original.summaryChars===0?<p>这轮没有留下文字总结。</p>:<p ref={reading.body} tabIndex={-1} className="pw-phone-report-text" dir="auto">{page.text}</p>}
           {original.summaryChars>page.text.length&&<p className="pw-muted" role="status">原文位置 {page.offset+1}–{page.next} / {original.summaryChars}</p>}
           <div className="pw-action-row">
             {previous.current.length>1&&<Button variant="ghost" onClick={()=>void read(previous.current[previous.current.length-2])}>上一段</Button>}
             {page.more&&<Button variant="secondary" onClick={()=>void read(page.next)}>下一段原文</Button>}
           </div></>}
-        {error&&<Button variant="secondary" onClick={()=>void read(request.current)}>重读这一段</Button>}
+        {error&&<div className="pw-action-row"><Button variant="secondary" onClick={()=>void read(request.current)}>重读这一段</Button>
+          {reading.prior!==undefined&&reading.prior!==request.current&&<Button variant="ghost" onClick={()=>void read(reading.prior!)}>回到刚才读到的那段</Button>}</div>}
       </>}</div>
     </Drawer.Content></Drawer.Portal></Sheet>;
 }

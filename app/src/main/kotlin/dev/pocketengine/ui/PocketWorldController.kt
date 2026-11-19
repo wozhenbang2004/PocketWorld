@@ -1266,14 +1266,19 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val same = if (draft.conversationId.isEmpty()) state.conversationId.isNullOrBlank() && key.startsWith("new:") && !state.chatBusy
             else draft.conversationId == state.conversationId
         if (!model.oneMessageEligible(key) || !same) return null
-        return JSONObject().put("excluded", model.oneMessageExcluded(key)).put("pending", model.pending().any { it.draftKey == key })
+        return JSONObject().put("excluded", model.oneMessageExcluded(key)).also { if (draft.conversationId.isEmpty()) it.put("protectDefaults", model.firstTaskDefaultsLocked(key)) }.put("pending", model.pending().any { it.draftKey == key })
             .put("saving", writingDraftMemory == key).put("confirmed", key !in unconfirmedDraftMemory)
     }
-    internal fun setOneMessageLearning(key: String, epoch: Int, revision: Long, excluded: Boolean, done: (JSONObject?, String?) -> Unit) {
+    internal fun setOneMessageLearning(key: String, epoch: Int, revision: Long, excluded: Boolean, protectDefaults: Boolean? = null, done: (JSONObject?, String?) -> Unit) {
         check(webPrivateOwnerVisible() && !state.chatSubmitting && epoch == chatViewEpoch && writingDraftMemory == null && oneMessageLearningState(key) != null) { "请回到没有待提交操作的原私聊草稿" }
         val model = ownerComposer ?: error("原草稿尚未读取")
-        val updated = model.setOneMessageExcluded(key, revision, excluded)
-        persistDraftMemoryChoice(model, key, epoch, updated.revision, "excluded", excluded, done)
+        if (protectDefaults != null) check(state.conversationId.isNullOrBlank() && !state.chatBusy && key.startsWith("new:") && model.active().conversationId.isEmpty()) { "只有这份新私聊首条草稿可以选择本次默认偏好范围" }
+        val protect = protectDefaults ?: (excluded && model.firstTaskDefaultsLocked(key))
+        val updated = model.setOneMessageChoice(key, revision, excluded, protect)
+        persistDraftMemoryChoice(model, key, epoch, updated.revision, "excluded", excluded) { result, error ->
+            if (result?.opt("persisted") == true && model.active().conversationId.isEmpty()) result.put("protectDefaults", protect)
+            done(result, error)
+        }
     }
     internal fun setFirstMessageMemory(key: String, epoch: Int, revision: Long, paused: Boolean, done: (JSONObject?, String?) -> Unit) {
         check(webPrivateOwnerVisible() && !state.chatSubmitting && state.conversationId.isNullOrBlank() && epoch == chatViewEpoch && writingDraftMemory == null) { "请回到还未发送的原新对话" }
@@ -3117,22 +3122,25 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         if(draft.key in unconfirmedDraftMemory || writingDraftMemory==draft.key){state=state.copy(error="这份草稿的记忆选择尚未确认保存。请先核对，不会按默认规则发送");return}
         val firstPaused=model.firstMessagePaused(draft.key)
         val excluded=model.oneMessageExcluded(draft.key)
+        val lockDefaults=model.firstTaskDefaultsLocked(draft.key)
+        if(lockDefaults&&(!excluded||draft.conversationId.isNotEmpty()||!state.conversationId.isNullOrBlank()||state.chatBusy)){state=state.copy(error="这项偏好限制只属于原新私聊首条，没有发送");return}
         if(excluded && oneMessageLearningState(draft.key)==null){state=state.copy(error="原草稿的单条自动整理限制无法核对，没有发送");return}
         if(firstPaused&&(!draft.key.startsWith("new:")||draft.conversationId.isNotEmpty()||!state.conversationId.isNullOrBlank()||state.chatBusy)){state=state.copy(error="原新草稿范围已变化，没有发送");return}
         val selected=state.selectedChatAttachments.toList();val selectedSources=draft.sourceRefs();val selectedPreviews=draft.previewRefs();val selectedObjects=draft.objectRefs()
         if(selectedPreviews.length()>0&&!composerPreviewRefsAvailable()){state=state.copy(error="原元素引用已不可用，草稿仍保留；请移除或回原预览重新选择");return}
-        val fingerprint=ChatInputRules.fingerprint(text.trim(),state.conversationId,state.chatSendMode,selected,selectedSources,selectedPreviews,selectedObjects,firstPaused,excluded)
+        val fingerprint=ChatInputRules.fingerprint(text.trim(),state.conversationId,state.chatSendMode,selected,selectedSources,selectedPreviews,selectedObjects,firstPaused,excluded,lockDefaults)
         val unresolved=model.matchingPending(draft.key,fingerprint) ?: matchingOriginalOwnerWorkInput(model,draft.key,fingerprint)
         if(unresolved!=null){if(canRetryLocallyUnsent(unresolved.clientId))state=state.copy(notice="本进程确认这条原输入尚未派发；修复保存问题后，请明确点击原输入下的重新保存并发送")else{queryChatSubmission(unresolved.clientId);state=state.copy(notice="正在查询同一输入的原回执，没有用新消息身份重发")};return}
         val client=try{voiceInput.claimMessageId(voiceTarget(false),voiceOwnerAuthority())?:UUID.randomUUID().toString()}catch(error:Exception){state=state.copy(error=message(error));return}
         val input=JSONObject().put("message",ChatInputRules.submittedText(text,selected)).put("clientMessageId",client).put("mode",draft.mode).put("attachments",org.json.JSONArray().also{a->selected.forEach{a.put(it.selection())}});if(selectedSources.length()>0)input.put("ownerSourceRefs",selectedSources);if(selectedPreviews.length()>0)input.put("ownerPreviewRefs",selectedPreviews)
         if(firstPaused)input.put("firstMessageWithoutPersonalMemory",true)
         if(excluded)input.put("excludeThisInputFromLearning",true)
+        if(lockDefaults)input.put("firstTaskWithoutDefaultWrites",true)
         if(!state.chatBusy)input.put("executionScope",newTaskExecutionScope())
         if(selectedObjects.length()>0)input.put("ownerObjectRefs",selectedObjects)
         state.conversationId?.let{input.put("conversationId",it)}
         if(state.chatBusy)for(key in listOf("taskId","runId","epoch"))input.put(key,binding!!.get(key))
-        try{model.prepare(client,draft.key,draft.revision,fingerprint,if(state.chatBusy)binding else null,excluded);publishComposer()}
+        try{model.prepare(client,draft.key,draft.revision,fingerprint,if(state.chatBusy)binding else null,excluded,lockDefaults);publishComposer()}
         catch(error:Exception){state=state.copy(error=message(error));return}
         submittingChatClient=client;composerSaving=true;state=state.copy(chatSubmitting=true,error=null,chatReceipts=state.chatReceipts+(client to JSONObject().put("clientMessageId",client).put("status","unconfirmed")))
         persistPreparedChat(client,input,model,false)
@@ -5367,7 +5375,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                         state = state.copy(conversations = parseConversations(state.feature("assistant").optJSONArray("conversations")))
                     }
                     // Only absent or valid empty reference arrays permit text-only staging; malformed or unknown payloads fail closed.
-                    if (id.isNotBlank() && state.conversationId == id) state = state.copy(conversationId = id, messages = result.optJSONArray("messages").objects().map { UiMessage(it.optString("role"), it.optString("content"), it.optLong("at"), it.optString("taskId").takeIf(String::isNotBlank), it.optString("id").takeIf(String::isNotBlank),it.optJSONObject("submission"),it.optJSONArray("attachments")?.length()?:0,it.optJSONArray("attachments").objects().mapNotNull(ChatInputRules::attachment), sourceRevision = if (it.optBoolean("importAssignedIdentity")) 0L else it.optLong("revision", 0), projectConventionRecorded = it.opt("projectConventionRecorded") == true, memoryReference = it.optJSONObject("memoryReference"), ownerOriginalLocator = if (it.optBoolean("importAssignedIdentity")) null else it.optJSONObject("ownerOriginalLocator"), hostGoalTaskId = PrivateHostReceipt.fromMessage(it,id), learningExcluded = originalLearningExcluded(it, id), phoneResult = UiPhoneResult.fromNativeMessage(it), replyContext = UiReplyContext.fromNativeMessage(it), taskResult = UiTaskResult.fromNativeMessage(it), textOnlyHandoffEligible = listOf("attachments", "ownerSourceRefs", "ownerPreviewRefs", "ownerObjectRefs").all { key -> !it.has(key) || it.optJSONArray(key)?.length() == 0 }) });resolveOriginalMessageAttachments(id)
+                    if (id.isNotBlank() && state.conversationId == id) state = state.copy(conversationId = id, messages = result.optJSONArray("messages").objects().map { UiMessage(it.optString("role"), it.optString("content"), it.optLong("at"), it.optString("taskId").takeIf(String::isNotBlank), it.optString("id").takeIf(String::isNotBlank),it.optJSONObject("submission"),it.optJSONArray("attachments")?.length()?:0,it.optJSONArray("attachments").objects().mapNotNull(ChatInputRules::attachment), sourceRevision = if (it.optBoolean("importAssignedIdentity")) 0L else it.optLong("revision", 0), projectConventionRecorded = it.opt("projectConventionRecorded") == true, memoryReference = it.optJSONObject("memoryReference"), ownerOriginalLocator = if (it.optBoolean("importAssignedIdentity")) null else it.optJSONObject("ownerOriginalLocator"), hostGoalTaskId = PrivateHostReceipt.fromMessage(it,id), learningExcluded = originalLearningExcluded(it, id), defaultWritesBlocked = originalDefaultWritesBlocked(it, id), phoneResult = UiPhoneResult.fromNativeMessage(it), replyContext = UiReplyContext.fromNativeMessage(it), taskResult = UiTaskResult.fromNativeMessage(it), textOnlyHandoffEligible = listOf("attachments", "ownerSourceRefs", "ownerPreviewRefs", "ownerObjectRefs").all { key -> !it.has(key) || it.optJSONArray(key)?.length() == 0 }) });resolveOriginalMessageAttachments(id)
                 }
                 "send" -> { receiveChatAcknowledgement(result,meta.second.optString("clientMessageId"));native("getFeatures") }
                 "getSubmission" -> { receiveChatAcknowledgement(result,meta.second.optString("clientMessageId"),true);native("getFeatures") }

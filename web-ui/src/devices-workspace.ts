@@ -102,6 +102,7 @@ export function samePhoneGoalArchive(value: DeviceData | null, peer: DeviceData 
   return !!value && !!peer && identity(local.deviceId) && identity(local.instanceId) && identity(peer.instanceId) && /^[a-f0-9]{64}$/.test(peer.certificateFingerprint || '')
     && value.targetDeviceId === peer.deviceId && value.instanceId === peer.instanceId && value.targetFingerprint === peer.certificateFingerprint
     && (value.side!=='received' || positiveInteger(value.receivedPeerEpoch) && value.receivedPeerEpoch===peer.authorizationEpoch)
+    && ((value.side??'sent')!=='sent' || !!value.sourceTaskId || positiveInteger(value.sentPeerEpoch) && value.sentPeerEpoch===peer.authorizationEpoch)
     && value.localDeviceId === local.deviceId && value.localInstanceId === local.instanceId;
 }
 const startedPhases=new Set(['preparing','running','pausing','paused','stopping','verifying','awaiting_user','waiting_user','awaiting_approval','waiting_approval','waiting_permission','interrupted','reconciling','reconciliation_required','blocked_unknown']);
@@ -139,6 +140,7 @@ export function receivedPhoneArchiveReturn(value: unknown, row: DeviceData, peer
 export function devicePhoneGoalArchive(value: unknown, peer: DeviceData, local: DeviceData, side: PhoneArchiveSide, sourceTaskId = '') {
   if (!object(value) || value.kind !== 'phoneGoalArchive' || (value.sourceTaskId ?? '') !== sourceTaskId
     || !!sourceTaskId && (side !== 'sent' || value.searchText) || value.searchText !== undefined && (typeof value.searchText !== 'string' || Array.from(value.searchText).length > 64) || (value.side ?? 'sent') !== side || !samePhoneGoalArchive(value, peer, local) || value.readOnly !== true || !identity(value.archiveHandle)
+    || value.oldTargetIdentityChanged!==undefined && (value.oldTargetIdentityChanged!==true || side!=='sent' || !!sourceTaskId)
     || !Array.isArray(value.rows) || value.rows.length > 24 || typeof value.hasMore !== 'boolean' || typeof value.canReadNewer !== 'boolean'
     || !value.rows.every((row: unknown) => object(row) && identity(row.taskId) && (!sourceTaskId || row.taskId === sourceTaskId) && identity(row.operationId) && typeof row.goal === 'string' && !!row.goal
       && (row.targetAcceptedAt === undefined || !!sourceTaskId && positiveInteger(row.targetAcceptedAt))

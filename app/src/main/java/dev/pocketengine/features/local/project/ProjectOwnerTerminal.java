@@ -14,6 +14,9 @@ public final class ProjectOwnerTerminal {
     public ProjectOwnerTerminal(TaskStore tasks,LocalModule local,TaskStoreProjectHost.CurrentControl controls){this.tasks=tasks;this.local=local;this.controls=controls;}
     public Session open(String task,String execution,RunControl observation)throws Exception{return new Session(tasks.ownerProjectTerminalForOwner(task,execution),observation);}
     public Session openObservation(String task,String execution,RunControl observation)throws Exception{return new Session(tasks.ownerProjectExecutionForOwner(task,execution),observation);}
+    public JSONObject readStoredTermuxCommand(String task,String execution,String source,String channel,String expected)throws Exception{
+        return tasks.ownerTermuxCommandRecord(task,execution).read(source,channel,expected,(exact,binding)->local.projectReceiptForHost(exact,binding,false));
+    }
     public final class Session implements AutoCloseable {
         private final TaskStore.ProjectTerminalTarget target;private final RunControl observation;private final AtomicBoolean closed=new AtomicBoolean();private boolean inputUncertain;private JSONObject lastInput;private ProjectTerminalScreen screen;
         private Session(TaskStore.ProjectTerminalTarget target,RunControl observation)throws Exception{this.target=target;this.observation=java.util.Objects.requireNonNull(observation);JSONObject meta=check().metadata();inputUncertain=meta.optInt("pendingInputCount")>0;if(meta.has("pendingInputOperationId"))lastInput=new JSONObject().put("taskId",target.taskId).put("runId",target.runId).put("coordinatorEpoch",target.epoch).put("operationId",meta.getString("pendingInputOperationId"));}

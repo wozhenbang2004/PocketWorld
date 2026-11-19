@@ -22,7 +22,7 @@ def _choose(heading,body,items,label,locked):
         else: return None
 
 
-def detail(ctx,op,row,locked):
+def detail(ctx,op,row,locked,*,read_patch=None):
     if locked(): return
     f=row["fields"]
     def evidence(show=False):
@@ -39,8 +39,10 @@ def detail(ctx,op,row,locked):
         actions.insert(0,("show","在资源管理器定位 change.patch\n仅选中原本机产物，不打开、执行或应用。"))
     elif state=="pending": text+="\n只有保存意图，可能已留下材料，未补写或认领同名文件。"
     else: text+="\n无法核实原补丁；没有从现在的代码重新生成。"
+    if state=="saved" and read_patch is not None: actions.insert(0,("read-patch","在伴侣中阅读完整原补丁"))
     pick=_dialog("新增文件的本机补丁",text,actions,retire=locked)
     if locked(): return
+    if pick=="read-patch" and read_patch is not None: read_patch(); return
     if pick=="show":
         try: evidence(True)
         except Exception:

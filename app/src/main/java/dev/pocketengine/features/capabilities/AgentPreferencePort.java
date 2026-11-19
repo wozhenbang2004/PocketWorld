@@ -14,12 +14,13 @@ public final class AgentPreferencePort implements CapabilityPort {
     @FunctionalInterface public interface PersonalContext { boolean enabled()throws Exception; }
     private final PersonalContext personalContext;
     private final PersonalContext memoryReading;
-    private final boolean projectMemoryReading;
+    private final boolean projectMemoryReading,defaultWritesBlocked;
     private long admittedProfileRevision=-1;
     private final ModelCapabilityAdapters.Binding binding;private final ModelCapabilityAdapters.Authority authority;
     public AgentPreferencePort(SettingsStore settings,CapabilityPort existing,ModelCapabilityAdapters.Binding binding,ModelCapabilityAdapters.Authority authority,RunControl original){this(settings,existing,binding,authority,original,()->true,()->true);}
     public AgentPreferencePort(SettingsStore settings,CapabilityPort existing,ModelCapabilityAdapters.Binding binding,ModelCapabilityAdapters.Authority authority,RunControl original,PersonalContext personalContext,PersonalContext memoryReading){this(settings,existing,binding,authority,original,personalContext,memoryReading,false);}
-    public AgentPreferencePort(SettingsStore settings,CapabilityPort existing,ModelCapabilityAdapters.Binding binding,ModelCapabilityAdapters.Authority authority,RunControl original,PersonalContext personalContext,PersonalContext memoryReading,boolean projectMemoryReading){this.settings=java.util.Objects.requireNonNull(settings);this.existing=java.util.Objects.requireNonNull(existing);this.binding=java.util.Objects.requireNonNull(binding);this.authority=java.util.Objects.requireNonNull(authority);this.original=java.util.Objects.requireNonNull(original);this.personalContext=java.util.Objects.requireNonNull(personalContext);this.memoryReading=java.util.Objects.requireNonNull(memoryReading);this.projectMemoryReading=projectMemoryReading;enabledAtAdmission=ownerEnabled();}
+    public AgentPreferencePort(SettingsStore settings,CapabilityPort existing,ModelCapabilityAdapters.Binding binding,ModelCapabilityAdapters.Authority authority,RunControl original,PersonalContext personalContext,PersonalContext memoryReading,boolean projectMemoryReading){this(settings,existing,binding,authority,original,personalContext,memoryReading,projectMemoryReading,false);}
+    public AgentPreferencePort(SettingsStore settings,CapabilityPort existing,ModelCapabilityAdapters.Binding binding,ModelCapabilityAdapters.Authority authority,RunControl original,PersonalContext personalContext,PersonalContext memoryReading,boolean projectMemoryReading,boolean defaultWritesBlocked){this.defaultWritesBlocked=defaultWritesBlocked;this.settings=java.util.Objects.requireNonNull(settings);this.existing=java.util.Objects.requireNonNull(existing);this.binding=java.util.Objects.requireNonNull(binding);this.authority=java.util.Objects.requireNonNull(authority);this.original=java.util.Objects.requireNonNull(original);this.personalContext=java.util.Objects.requireNonNull(personalContext);this.memoryReading=java.util.Objects.requireNonNull(memoryReading);this.projectMemoryReading=projectMemoryReading;enabledAtAdmission=ownerEnabled();}
     private boolean ownerEnabled(){try{return settings.agentPreferences().getBoolean("enabled");}catch(Exception unavailable){return false;}}
     private boolean enabled(){try{return enabledAtAdmission&&ownerEnabled()&&personalContext.enabled();}catch(Exception unavailable){return false;}}
     private boolean memoryAllowed(String name)throws Exception{
@@ -29,10 +30,19 @@ public final class AgentPreferencePort implements CapabilityPort {
         return name.equals("memory_propose")||name.equals("memory_draft_sources")?personalContext.enabled():memoryReading.enabled();
     }
     private void requireMemoryAllowed(String name)throws Exception{if(!memoryAllowed(name))throw new SecurityException("已关闭个人记忆；原文回读和隐藏调用也不能继续读取");}
-    private void check(String name,RunControl live)throws Exception {if(live!=original||!enabled())throw new SecurityException("原偏好工具未启用或已撤回");binding.check(live);authority.check(name,live);}
+    private void check(String name,RunControl live)throws Exception {if(defaultWritesBlocked&&SET.equals(name))throw new SecurityException("主人已禁止这项委托更改默认偏好");if(live!=original||!enabled())throw new SecurityException("原偏好工具未启用或已撤回");binding.check(live);authority.check(name,live);}
     public JSONArray tools()throws Exception {return appendTools(existing.tools());}
-    private JSONArray appendTools(JSONArray offered)throws Exception {JSONArray out=new JSONArray();for(int i=0;i<offered.length();i++){JSONObject definition=offered.getJSONObject(i);if(memoryAllowed(definition.getJSONObject("function").getString("name")))out.put(new JSONObject(definition.toString()));}if(!enabled())return out;out.put(tool(LIST,"查看主人允许对话修改的六项表达和协作偏好及当前revision；与个人中心共用设置。",new JSONObject()));out.put(tool(SET,"仅在主人明确要求长期改变默认偏好时使用当前revision保存；本轮临时要求不写默认。支持语言、详略、先结论、举例、节奏、主动建议；明确偏好不同时写成推断记忆。布尔字段用真正Boolean，其他用choices中对应值。不能修改身份、自由说明、模型、权限或授权新动作。",new JSONObject().put("key",choice("language","response_detail","conclusionFirst","includeExamples","operation_pace","initiative")).put("value",new JSONObject().put("anyOf",new JSONArray().put(new JSONObject().put("type","string")).put(new JSONObject().put("type","boolean")))).put("expectedRevision",new JSONObject().put("type","integer").put("minimum",1)),"key","value","expectedRevision"));return out;}
-    public boolean supports(String name){try{return memoryAllowed(name)&&((LIST.equals(name)||SET.equals(name))?enabled():existing.supports(name));}catch(Exception unavailable){return false;}}
+    private JSONArray appendTools(JSONArray offered)throws Exception {
+        JSONArray out=new JSONArray();
+        for(int i=0;i<offered.length();i++){
+            JSONObject definition=offered.getJSONObject(i);String name=definition.getJSONObject("function").getString("name");
+            if(!(defaultWritesBlocked&&SET.equals(name))&&memoryAllowed(name))out.put(new JSONObject(definition.toString()));
+        }
+        if(!enabled())return out;
+        out.put(tool(LIST,"查看主人允许对话修改的六项表达和协作偏好及当前revision；与个人中心共用设置。",new JSONObject()));
+        if(defaultWritesBlocked)return out;
+        out.put(tool(SET,"仅在主人明确要求长期改变默认偏好时使用当前revision保存；本轮临时要求不写默认。支持语言、详略、先结论、举例、节奏、主动建议；明确偏好不同时写成推断记忆。布尔字段用真正Boolean，其他用choices中对应值。不能修改身份、自由说明、模型、权限或授权新动作。",new JSONObject().put("key",choice("language","response_detail","conclusionFirst","includeExamples","operation_pace","initiative")).put("value",new JSONObject().put("anyOf",new JSONArray().put(new JSONObject().put("type","string")).put(new JSONObject().put("type","boolean")))).put("expectedRevision",new JSONObject().put("type","integer").put("minimum",1)),"key","value","expectedRevision"));return out;}
+    public boolean supports(String name){try{return !(defaultWritesBlocked&&SET.equals(name))&&memoryAllowed(name)&&((LIST.equals(name)||SET.equals(name))?enabled():existing.supports(name));}catch(Exception unavailable){return false;}}
     public boolean sideEffecting(String name){return SET.equals(name)||!LIST.equals(name)&&existing.sideEffecting(name);}
     @Override public dev.pocketengine.core.ExecutionPlanning.Access planningAccess(String name,JSONObject arguments)throws Exception {
         if(!memoryAllowed(name))return dev.pocketengine.core.ExecutionPlanning.Access.DENY;

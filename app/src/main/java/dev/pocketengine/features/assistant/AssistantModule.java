@@ -31,6 +31,8 @@ public final class AssistantModule implements EngineModule {
         JSONObject start(String conversationId,String goal,JSONObject message,ModelConfig config,RunControl control)throws Exception;
         /** Native owner settings, never copied into provider messages or stored owner prose. */
         default JSONObject startScoped(String conversationId,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope)throws Exception{if(ownerScope!=null)throw new SecurityException("原宿主尚未支持明确任务范围，未丢弃主人选择或新建执行");return start(conversationId,goal,message,config,control);}
+        /** Narrower first-task admission. A legacy host cannot drop this reviewed restriction. */
+        default JSONObject startWithoutDefaultWrites(String conversationId,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope)throws Exception{throw new SecurityException("原宿主不能保护这项委托的默认偏好，未按普通任务发送");}
         default JSONObject startProject(String conversationId,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.NativeStart selected)throws Exception{throw new SecurityException("原宿主未接显式项目记忆同意，未回退全局任务");}
         default JSONObject continueProject(JSONObject reviewedTask,String feedback,ModelConfig config,RunControl control,java.util.function.BooleanSupplier currentOwnerWindow)throws Exception{throw new SecurityException("原宿主尚未支持原项目续接，请保留草稿并核对原任务");}
         JSONObject append(String conversationId,JSONObject message,String mode,JSONObject expected,RunControl control)throws Exception;
@@ -377,7 +379,7 @@ public final class AssistantModule implements EngineModule {
         catch(Exception notDelivered){pendingCancellations.put(control,new Cancellation(control,conversation));throw notDelivered;}
     }
     private JSONObject send(JSONObject input)throws Exception{
-        if(input.has("firstMessageWithoutPersonalMemory")||input.has("excludeThisInputFromLearning"))throw new IllegalStateException("未安装原生记忆限制准入，没有按默认规则发送");
+        if(input.has("firstMessageWithoutPersonalMemory")||input.has("excludeThisInputFromLearning")||input.has("firstTaskWithoutDefaultWrites"))throw new IllegalStateException("未安装原生记忆限制准入，没有按默认规则发送");
         if(input.has("ownerSourceRefs")&&(input.optJSONArray("ownerSourceRefs")==null||input.getJSONArray("ownerSourceRefs").length()>0))throw new IllegalStateException("原文引用的真实原生任务投影未安装，未降级为普通文本发送");
         if(input.has("ownerPreviewRefs")&&(input.optJSONArray("ownerPreviewRefs")==null||input.getJSONArray("ownerPreviewRefs").length()>0))throw new IllegalStateException("元素引用的原生项目投影未安装，草稿未降级发送");
         if(input.has("ownerObjectRefs")&&(input.optJSONArray("ownerObjectRefs")==null||input.getJSONArray("ownerObjectRefs").length()>0))throw new IllegalStateException("对象引用的原生任务投影未安装，草稿未降级发送");
@@ -462,7 +464,7 @@ public final class AssistantModule implements EngineModule {
     private static void requireContinuationWindow(java.util.function.BooleanSupplier current){if(current==null||!current.getAsBoolean())throw new SecurityException("原项目审阅窗口已关闭，请重新核对；对话草稿未发送");}
     /** Direct owner UI ingress to an exact durable work. Does not reserve the foreground chat. */
     public JSONObject sendOwnerWorkInput(String conversation,JSONObject input)throws Exception{
-        if(input.has("excludeThisInputFromLearning"))throw new SecurityException("单条自动整理限制只用于原私聊输入，未转交其他工作");
+        if(input.has("excludeThisInputFromLearning")||input.has("firstTaskWithoutDefaultWrites"))throw new SecurityException("原私聊的记忆限制不能转交其他工作");
         if(historyTasks==null||!durable()||nativeInputHost==null)throw new IllegalStateException("原私人会话存储尚未就绪");
         String text=input.optString("message").trim(),client=input.getString("clientMessageId"),mode=input.optString("mode","queue");
         if(text.isEmpty()||text.length()>12000||!client.matches("[a-fA-F0-9-]{36}")||!Set.of("queue","steer").contains(mode))throw new IllegalArgumentException("补充内容、消息身份或方式无效");
@@ -535,12 +537,15 @@ public final class AssistantModule implements EngineModule {
         String contentFingerprint=fingerprint(text,mode,selections,selectedSources,selectedPreviews,selectedObjects);
         boolean excludeThis=input.has("excludeThisInputFromLearning");
         if(excludeThis&&(!Boolean.TRUE.equals(input.opt("excludeThisInputFromLearning"))||projectStart!=null||!durable()))throw new SecurityException("单条限制只用于普通私人输入的原生持久登记，未按默认规则发送");
+        boolean blockDefaults=input.has("firstTaskWithoutDefaultWrites");
+        if(blockDefaults&&(!Boolean.TRUE.equals(input.opt("firstTaskWithoutDefaultWrites"))||!excludeThis||!requested.isEmpty()||projectStart!=null||!durable()))throw new SecurityException("只有首次新建的私人委托可按这份草稿禁止更改默认偏好");
         // Single-flag identities stay byte-compatible. Both independent restrictions must be bound if both were reviewed.
         String fingerprint;
         if(firstPaused||excludeThis){
             JSONObject restricted=new JSONObject().put("input",contentFingerprint);
             if(firstPaused)restricted.put("firstMessageWithoutPersonalMemory",true);
             if(excludeThis)restricted.put("excludeThisInputFromLearning",true);
+            if(blockDefaults)restricted.put("firstTaskWithoutDefaultWrites",true);
             fingerprint=dev.pocketengine.store.TaskStore.capabilityFingerprint(restricted);
         }else fingerprint=contentFingerprint;
         synchronized(admission){
@@ -555,6 +560,7 @@ public final class AssistantModule implements EngineModule {
             var existing=liveTurns.get(requested);
             DevelopmentTurn retained=existing==null?developmentTurns.get(requested):null;
             boolean resuming=retained!=null,starting=existing==null&&!resuming;
+            if(blockDefaults&&!starting)throw new SecurityException("默认偏好限制未转交给正在执行的任务");
             if(starting&&selectedPreviews.length()>0)throw new IllegalStateException("原项目执行已结束，请回到原项目任务核对后继续；元素引用草稿仍保留，不会新建普通任务");
             if(projectStart!=null&&!starting)throw new SecurityException("项目记忆新任务同意不能追加或挪给旧执行");
             if((starting||resuming)&&pendingCancellations.values().stream().anyMatch(value->requested.equals(value.conversation())))
@@ -612,9 +618,12 @@ public final class AssistantModule implements EngineModule {
             }catch(Exception failure){if(starting||resuming)releaseLive(lease);throw failure;}
             JSONObject message=saved.getJSONObject("message"),binding;
             try{
-                binding=starting?(projectStart==null?nativeInputHost.startScoped(cid,safe,copy(message),config,live,nativeExecutionScope(input)):nativeInputHost.startProject(cid,safe,copy(message),config,live,nativeExecutionScope(input),projectStart))
-                        :nativeInputHost.append(cid,copy(message),mode,expected,live);
+                if(!starting)binding=nativeInputHost.append(cid,copy(message),mode,expected,live);
+                else if(blockDefaults)binding=nativeInputHost.startWithoutDefaultWrites(cid,safe,copy(message),config,live,nativeExecutionScope(input));
+                else if(projectStart!=null)binding=nativeInputHost.startProject(cid,safe,copy(message),config,live,nativeExecutionScope(input),projectStart);
+                else binding=nativeInputHost.startScoped(cid,safe,copy(message),config,live,nativeExecutionScope(input));
                 if(!live.matchesHostRun(binding.getString("taskId"),binding.getString("runId"),binding.getInt("epoch")))throw new SecurityException("宿主未返回原任务控制绑定");
+                if(blockDefaults&&!Boolean.TRUE.equals(binding.opt("defaultWritesBlocked")))throw new SecurityException("原宿主未证实这项委托的默认偏好限制");
             }catch(Exception failure){
                 if(starting||resuming){stopUnstarted(lease);}
                 // Only the native mailbox can prove this input was never admitted. Unknown

@@ -41,7 +41,7 @@ def inspect_members(members,locked):
         else: return
 
 
-def detail(ctx,op,row,locked):
+def detail(ctx,op,row,locked,*,read_patch=None):
     if locked(): return
     f=row["fields"]
     def check(show=False):
@@ -57,8 +57,10 @@ def detail(ctx,op,row,locked):
         actions.insert(0,("locate","在资源管理器选中 changes.patch\n不打开、应用或发送；系统文件夹由你关闭。"))
     elif state=="pending": text+="\n只有保存意图，不能确认完整文件已写出，也不会自动重做。"
     else: text+="\n现在无法核实原组合产物；不改用同名文件或重组一份。"
+    if state=="saved" and read_patch is not None: actions.insert(0,("read-patch","读组合原件中一份文件的完整差异"))
     pick=_dialog("本机多文件补丁",text,actions,retire=locked)
     if locked(): return
+    if pick=="read-patch" and read_patch is not None: read_patch(); return
     if pick=="members": inspect_members(f["members"],locked)
     if pick=="hash": _dialog("组合补丁的固定编号",f"原提交：{f['commit']}\n原提交根树：{f['tree']}\n本机组合记录：{row['id']}\n完整补丁 SHA-256：{f['patchSha']}",[],retire=locked)
     if pick=="locate":

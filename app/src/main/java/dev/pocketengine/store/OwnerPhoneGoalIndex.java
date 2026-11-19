@@ -18,6 +18,10 @@ final class OwnerPhoneGoalIndex {
     }
     static JSONObject read(SQLiteDatabase db,String here,String target,String instance,String parentAfter,String operationAfter,String searchText,String source) throws Exception {
         DeviceProtocol.deviceId(here,"ownerDeviceId");DeviceProtocol.deviceId(target,"targetDeviceId");DeviceProtocol.identifier(instance,"targetInstanceId");
+        // A specific private original task has already verified its durable directed target; it must
+        // remain readable even when the peer record no longer exists. Only the partner folder uses current pairing.
+        LocalPhoneDispatchPin.Identity selected=source.isEmpty()?LocalPhoneDispatchPin.current(db,target):null;
+        if(source.isEmpty()&&(selected==null||!instance.equals(selected.instance())))throw new SecurityException("原目标身份不可核对，没有合并其他设备的派单");
         LocalPhoneGoalSearch search=new LocalPhoneGoalSearch(searchText);
         String where=" WHERE b.target_device_id=?";ArrayList<String> args=new ArrayList<>();args.add(target);
         if(!source.isEmpty()){
@@ -38,7 +42,8 @@ final class OwnerPhoneGoalIndex {
         String query="SELECT b.parent_task_id,b.parent_operation_id,b.created_at,l.wire_digest,"
                 +"CASE WHEN length(CAST(l.wire_json AS BLOB))<="+DeviceProtocol.MAX_CONTROL_BYTES+" THEN l.wire_json END,"
                 +"CASE WHEN length(CAST(t.ui_header AS BLOB))<=32768 THEN t.ui_header END,"
-                +(source.isEmpty()?"NULL,NULL ":"CASE WHEN length(CAST(b.child_binding AS BLOB))<=32768 THEN b.child_binding END,b.arguments_digest ")
+                +(selected==null?"CASE WHEN length(CAST(b.child_binding AS BLOB))<=32768 THEN b.child_binding END,b.arguments_digest,NULL "
+                        :selected.generation()==1?"NULL,NULL,NULL ":"NULL,NULL,CASE WHEN length(CAST(b.receipt_json AS BLOB))<=67584 THEN b.receipt_json END ")
                 +"FROM device_child_budget b LEFT JOIN device_child_links l ON l.parent_task_id=b.parent_task_id AND l.parent_operation_id=b.parent_operation_id AND l.allocation_id=b.allocation_id "
                 +"LEFT JOIN tasks t ON t.task_id=b.parent_task_id"+where+" ORDER BY b.created_at DESC,b.parent_task_id,b.parent_operation_id LIMIT 25";
         JSONArray items=new JSONArray();String parent="",op="";int scanned=0;boolean more=false;
@@ -51,6 +56,7 @@ final class OwnerPhoneGoalIndex {
             if(!parent.equals(header.opt("id"))||!"owner".equals(header.opt("actorId"))||!"private".equals(header.opt("spaceId"))||header.has("origin")
                     ||!target.equals(wire.opt("targetDeviceId"))||!instance.equals(wire.opt("instanceId"))||!row.getString(3).equals(wire.opt("argumentsDigest"))
                     ||!DeviceProtocol.isDirectPhoneGoal(wire,here,parent,op)||!row.getString(3).equals(DeviceProtocol.argumentsDigest(wire)))continue;
+            if(selected!=null&&!selected.owns(row.isNull(8)?null:row.getString(8),parent,op,row.getString(3)))continue;
             JSONObject input=wire.optJSONObject("arguments");String goal=input==null?"":input.optString("goal");
             if(goal.trim().isEmpty()||!search.matches(goal))continue;
             int length=goal.codePointCount(0,goal.length());String preview=length>160?goal.substring(0,goal.offsetByCodePoints(0,160))+"…":goal;
@@ -60,7 +66,9 @@ final class OwnerPhoneGoalIndex {
             if(!row.isNull(6)&&!row.isNull(7))acceptedFact(item,row.getString(6),row.getString(7),wire,parent,op);
             items.put(item);
         }}
-        return new JSONObject().put("rows",items).put("hasMore",more).put("lastParent",parent).put("lastOperation",op)
+        if(selected!=null&&!selected.equals(LocalPhoneDispatchPin.current(db,target)))throw new SecurityException("本机配对记录已更新，请重读原设备");
+        return new JSONObject().put("targetFingerprint",selected==null?null:selected.fingerprint()).put("sentPeerEpoch",selected==null?null:selected.localEpoch())
+                .put("oldTargetIdentityChanged",selected!=null&&selected.generation()>1?true:null).put("rows",items).put("hasMore",more).put("lastParent",parent).put("lastOperation",op)
                 .put("sourceTaskId",source.isEmpty()?null:source).put("targetDeviceId",target).put("instanceId",instance).put("localDeviceId",here).put("readOnly",true);
     }
     /** Project only two facts from the native authenticated acceptance; never expose a stored receipt or peer output. */

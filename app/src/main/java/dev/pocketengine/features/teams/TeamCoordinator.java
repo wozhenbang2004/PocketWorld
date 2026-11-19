@@ -1313,6 +1313,25 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
         nativeBudget(run,approved);for(int i=0;i<roster(run).length();i++){JSONObject member=roster(run).getJSONObject(i);if(!member.optBoolean("exited"))member.put("status","queued").put("paused",false);}
         activity(run,"work_plan_approved","主人已批准当前讨论来源、工作项依赖、隔离文件范围与明确父预算；原项目仍待独审和唯一整合",null);save(run);schedule(run);return JsonFiles.copy(run.json);
     }
+    /** No old control is revived and no different default model is selected for this owner action. */
+    synchronized void requireSoleLocalHandoff(WorkMutationSource source,String workItem,String next)throws Exception {
+        source.checkCurrent();Run run=source.run;
+        if(closed||source.readOnlyRound||run.config==null||run.control==null||run.paused||run.control.isCancelled()||run.control.isPaused()||
+                !run.children.isEmpty()||assignmentFactory==null||assignmentFactory.hasActiveWork(run.json.getString("id"))||
+                !"awaiting_user".equals(run.json.opt("status"))||!"waiting_work_item".equals(run.json.opt("phase")))
+            throw new SecurityException("原队伍或模型控制未停在可交接的等待点；不恢复整个团队");
+        JSONArray items=run.json.getJSONObject("workPlan").getJSONArray("items");JSONObject original=TeamWorkItems.find(items,workItem),recipient=member(run,next);
+        if(!"failed".equals(original.opt("status"))||next.equals(original.opt("memberId"))||recipient.optBoolean("exited")||recipient.optBoolean("paused")||
+                !"model".equals(recipient.optString("runner","model"))||!"phone".equals(recipient.opt("device"))||recipient.has("remoteProduction"))
+            throw new SecurityException("交接只限原团队中另一位已选本机模型成员");
+        for(int i=0;i<items.length();i++)if(!workItem.equals(items.getJSONObject(i).opt("workItemId"))&&!TeamWorkItemAddress.hasFrozenReceipts(items.getJSONObject(i)))
+            throw new SecurityException("还有其他未冻结分工；不打断、代启或重跑队友");
+        if(TeamWorkItems.blockers(items,original).length()!=0)throw new SecurityException("原前置成果未冻结，不带起其他分工");
+    }
+    synchronized JSONObject approveSoleLocalHandoff(WorkMutationSource source,String item,String next,WorkPlanStarter nativeOwner)throws Exception {
+        requireSoleLocalHandoff(source,item,next);
+        return approveWorkHandoff(source,nativeOwner,source.run.config);
+    }
     public synchronized JSONObject approveWorkHandoff(WorkMutationSource source,WorkPlanStarter owner,ModelConfig model)throws Exception {
         source.checkCurrent();Run run=source.run;if(closed||source.readOnlyRound||run.json.optString("status").equals("cancelled")||!run.children.isEmpty()||assignmentFactory!=null&&assignmentFactory.hasActiveWork(run.json.getString("id")))throw new SecurityException("原团队仍有实际执行或已停止");JSONObject committed=owner.approve(),plan=committed.getJSONObject("workPlan");
         if(run.control==null||run.control.isCancelled()){run.control=new RunControl();run.generation++;run.json.put("generation",run.generation);}run.paused=false;run.config=model;
@@ -1998,12 +2017,29 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
     public interface ParentWaitCheck {boolean newOwnerSteering()throws Exception;}
     /** Native event subscription on this original coordinator, no polling Agent or extra model turn. */
     public JSONObject waitParentEvents(String id,long after,int maxWait,RunControl original,ParentWaitCheck current)throws Exception {
+        return waitParentEvents(id,after,maxWait,original,current,null);
+    }
+    JSONObject waitParentEvents(String id,long after,int maxWait,RunControl original,ParentWaitCheck current,TeamParentDeliveryWait delivery)throws Exception {
         if(maxWait<0||maxWait>20000)throw new IllegalArgumentException("一次最多等待20秒，超时不是成员失败");long end=System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(maxWait);
         // Cancellation may be requested while TaskStore holds its monitor. Never acquire this
         // coordinator monitor from a RunControl cancellation callback (the worker also enters SQL).
         // Event publication notifies immediately; cancellation/owner steer are checked outside it
         // after at most 250 ms, without consuming the original Runner mailbox.
-        while(true){original.check();if(current.newOwnerSteering())return parentEvents(id,after,16).put("state","interrupted_for_owner_input").put("interruptedForOwnerInput",true).put("timedOut",false);synchronized(this){JSONObject result=parentEvents(id,after,16);if(result.getJSONArray("events").length()>0||result.getBoolean("gap")||result.optString("status").matches("cancelled|completed|failed|partial|awaiting_input|awaiting_user|awaiting_review|paused|interrupted"))return result.put("state","observed").put("timedOut",false);long remaining=end-System.nanoTime();if(remaining<=0)return result.put("state","timeout").put("timedOut",true).put("pending",true);TimeUnit.NANOSECONDS.timedWait(this,Math.min(remaining,TimeUnit.MILLISECONDS.toNanos(250)));}}
+        while(true){
+            original.check();
+            if(current.newOwnerSteering())return parentEvents(id,after,16).put("state","interrupted_for_owner_input").put("interruptedForOwnerInput",true).put("timedOut",false);
+            boolean changed=delivery!=null&&delivery.changed();
+            synchronized(this){
+                JSONObject result=parentEvents(id,after,16);
+                if(result.getJSONArray("events").length()>0||result.getBoolean("gap"))return result.put("state","observed").put("timedOut",false);
+                boolean sameDelivery=delivery!=null&&delivery.covers(result);
+                if(sameDelivery&&changed)return result.put("state","delivery_activity_changed").put("timedOut",false);
+                if(!sameDelivery&&result.optString("status").matches("cancelled|completed|failed|partial|awaiting_input|awaiting_user|awaiting_review|paused|interrupted"))
+                    return result.put("state","observed").put("timedOut",false);
+                long remaining=end-System.nanoTime();if(remaining<=0)return result.put("state","timeout").put("timedOut",true).put("pending",true);
+                TimeUnit.NANOSECONDS.timedWait(this,Math.min(remaining,TimeUnit.MILLISECONDS.toNanos(250)));
+            }
+        }
     }
     private void publish(Run run)throws Exception{try{events.accept(new JSONObject().put("run",JsonFiles.copy(run.json)));}catch(RuntimeException ignored){}}
     private void persist()throws Exception{JsonFiles.write(file,new JSONObject().put("runs",list()).put("archived",history()));}

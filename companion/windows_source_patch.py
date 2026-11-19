@@ -143,7 +143,8 @@ def records(ctx,op):
     return rows
 
 
-def _read_file(ctx,tree,stack,expected,f,*,bundle=False,content=False):
+def _read_file(ctx,tree,stack,expected,f,*,bundle=False,content=False,member_index=None):
+    if member_index is not None and (not bundle or content or type(member_index) is not int or not 0<=member_index<len(f["members"])): _bad()
     filename,limit=(SET_FILE,SET_LIMIT) if bundle else (FILENAME,LIMIT)
     h,origin=tree.open_file(filename); stack.callback(tree.api.k.CloseHandle,h)
     if expected is not None and origin!=expected: _bad()
@@ -155,12 +156,16 @@ def _read_file(ctx,tree,stack,expected,f,*,bundle=False,content=False):
         if blocks is not None: blocks.append(block)
     if not reader.verify_unchanged() or sha.hexdigest()!=f["patchSha"]: _bad()
     if bundle:
-        joined=b"".join(blocks); start=0
-        for member in f["members"]:
+        joined=b"".join(blocks); start=0; selected=None
+        for index,member in enumerate(f["members"]):
             end=start+member["bytes"]
             if end>len(joined) or hashlib.sha256(joined[start:end]).hexdigest()!=member["sha256"]: _bad()
+            if index==member_index: selected=joined[start:end]
             start=end
         if start!=len(joined): _bad()
+        if member_index is not None:
+            if selected is None: _bad()
+            return origin,selected  # no bytes returned until the whole original and EVERY member match
     return (origin,b"".join(blocks)) if content else origin
 
 
@@ -188,14 +193,15 @@ def output_names(ctx,op,rid,slot,*,added,bundle=False,removed=False,draft=False)
     return PROFILE,_slot(op,slot),_receipt(rid),_target(ctx,rid)
 
 
-def checked_output(ctx,op,row,locked,*,show,added,bundle=False,content=False,removed=False,draft=False,hold=None):
+def checked_output(ctx,op,row,locked,*,show,added,bundle=False,content=False,removed=False,draft=False,hold=None,member_index=None):
     # The caller has checked its own immutable slot/schema. Single-file variants use
     # the same exact-file check and fixed safe filename but separate banks.
     rid,f=row["id"],row["fields"]
     profile,_,receipt,base=output_names(ctx,op,rid,0,added=added,bundle=bundle,removed=removed,draft=draft)
     filename=SET_FILE if bundle else FILENAME
     if (row.get("format")!=profile or locked() or content and (show or bundle)
-            or hold is not None and (not isinstance(hold,ExitStack) or not draft or not content)): _bad()
+            or hold is not None and (not isinstance(hold,ExitStack) or not draft or not content)
+            or member_index is not None and (not bundle or content or show or hold is not None or type(member_index) is not int)): _bad()
     end=_read(ctx,receipt,4096)
     if end is None: return "pending"
     if (end.get("format")!=profile or end.get("id")!=rid or end.get("copy")!=op or end.get("patchSha")!=f["patchSha"]
@@ -203,11 +209,11 @@ def checked_output(ctx,op,row,locked,*,show,added,bundle=False,content=False,rem
     with ExitStack() as stack:
         _,state,_=stack.enter_context(ctx.backend.directory(ctx.state)); ctx.backend.api.private_access(state,ctx.sid,require_protected=True)
         tree=DirectoryTree(ctx,base,stack,end["folder"])
-        fixed=_read_file(ctx,tree,stack,end["file"],f,bundle=bundle,content=content)
-        if content:
+        fixed=_read_file(ctx,tree,stack,end["file"],f,bundle=bundle,content=content,member_index=member_index)
+        if content or member_index is not None:
             if locked(): _bad()
             if hold is not None: hold.enter_context(stack.pop_all())  # same original read-only handles, never reopen by name
-            return fixed[1]  # original single patch from the SAME physically checked read
+            return fixed[1]  # single patch or explicitly selected bundle member from the SAME physically checked read
         if show:
             # Don't open a private state parent, an unknown sibling or an association.
             # Check the exact single entry without scanning unbounded foreign names.

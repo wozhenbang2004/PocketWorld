@@ -2,6 +2,8 @@ package dev.pocketengine.ui
 
 import org.json.JSONObject
 
+private fun originalRecordVersion(value: Any?): Long? = when (value) { is Int -> value.toLong(); is Long -> value; else -> null }
+
 /** An affirmative row-level restriction, not an inference from today's conversation switch.
  * Keep missing legacy/imported/foreign receipts unknown. No new source read or catalogue lookup. */
 internal fun originalLearningExcluded(row: JSONObject, conversation: String): Boolean {
@@ -9,10 +11,9 @@ internal fun originalLearningExcluded(row: JSONObject, conversation: String): Bo
         row.optBoolean("importAssignedIdentity") || conversation.isBlank()) return false
     val original = row.optJSONObject("ownerOriginalLocator") ?: return false
     val id = row.opt("id") as? String ?: return false
-    fun version(value: Any?): Long? = when (value) { is Int -> value.toLong(); is Long -> value; else -> null }
-    val revision = version(row.opt("revision")) ?: return false
+    val revision = originalRecordVersion(row.opt("revision")) ?: return false
     return id.isNotBlank() && (row.opt("clientMessageId") as? String)?.isNotBlank() == true &&
-        revision > 0 && revision == version(original.opt("recordVersion")) &&
+        revision > 0 && revision == originalRecordVersion(original.opt("recordVersion")) &&
         original.opt("kind") == "owner_native_original" && original.opt("recordId") == id &&
         original.opt("conversationId") == conversation && (original.opt("generation") as? String)?.isNotBlank() == true
 }
@@ -44,6 +45,15 @@ internal data class ReaderInputWork(val taskId: String, val runId: String, val e
     }
 }
 
+/** An affirmative restriction only for the registered first goal of this exact original task. */
+internal fun originalDefaultWritesBlocked(row: JSONObject, conversation: String): Boolean {
+    val receipt = row.optJSONObject("submission") ?: return false
+    val version = originalRecordVersion(receipt.opt("ownerMessageRevision")) ?: return false
+    return receipt.opt("defaultWritesBlocked") == true && receipt.opt("queueRole") == "task_goal" &&
+        version > 0 && version == originalRecordVersion(row.opt("revision")) &&
+        originalLearningExcluded(row, conversation) && ReaderInputWork.fromMessage(row, conversation) != null
+}
+
 internal data class ConversationReadPage(
     val window: Long, val conversation: String, val title: String, val readingKey: String?,
     val messages: List<UiMessage> = emptyList(), val cursor: String = "", val hasMore: Boolean = false,
@@ -59,7 +69,7 @@ internal data class ConversationReadPage(
             UiMessage(row.getString("role"), row.getString("content"), row.optLong("at"), row.optString("taskId").takeIf(String::isNotBlank), row.getString("id"),
                 row.optJSONObject("submission"), row.optJSONArray("attachments")?.length() ?: 0, row.optJSONArray("attachments").objects().mapNotNull(ChatInputRules::attachment),
                 if (row.optBoolean("importAssignedIdentity")) 0L else row.optLong("revision", 0), projectConventionRecorded = row.opt("projectConventionRecorded")==true, memoryReference = row.optJSONObject("memoryReference"), phoneResult = UiPhoneResult.fromNativeMessage(row), replyContext = UiReplyContext.fromNativeMessage(row), taskResult = UiTaskResult.fromNativeMessage(row),
-                hostGoalTaskId = PrivateHostReceipt.fromMessage(row,conversation), readerInputWork = ReaderInputWork.fromMessage(row, conversation), learningExcluded = originalLearningExcluded(row, conversation))
+                hostGoalTaskId = PrivateHostReceipt.fromMessage(row,conversation), readerInputWork = ReaderInputWork.fromMessage(row, conversation), learningExcluded = originalLearningExcluded(row, conversation), defaultWritesBlocked = originalDefaultWritesBlocked(row, conversation))
         }
         require(loaded.none { it.id.isNullOrBlank() }) { "原历史消息缺少稳定身份" }
         require(loaded.map { it.id }.distinct().size == loaded.size) { "原历史窗口重复消息身份，未混合显示" }

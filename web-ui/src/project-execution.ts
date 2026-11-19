@@ -1,5 +1,5 @@
 export type ProjectExecutionData = Record<string, any>;
-export type ProjectExecutionRow = ProjectExecutionData & { operationId: string; interactive: boolean };
+export type ProjectExecutionRow = ProjectExecutionData & { operationId: string; interactive: boolean; routeKind: 'managed'|'termux' };
 const object = (value: any): ProjectExecutionData => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 
 /** A locator for the original native journal. This projection grants no input or stop authority. */
@@ -7,8 +7,16 @@ export function projectExecutionRows(task: ProjectExecutionData, operation?: Pro
   const raw = object(task.raw);
   if (raw.actorId !== 'owner' || raw.spaceId !== 'private' || raw.origin || !raw.developmentContext && !raw.ownerLocalTerminal) return [];
   const source: ProjectExecutionData[] = operation ? [operation] : Array.isArray(raw.operations) ? raw.operations : [];
-  return source.filter(row => row.tool === 'project_execute' && typeof row.operationId === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(row.operationId))
-    .map(row => ({ ...row, operationId: row.operationId, interactive: row.runId === raw.runId && object(object(row.receipt).executionReceipt).terminalMode === 'pty' }));
+  return source.flatMap(row=>{
+    if(row.tool!=='project_execute'||typeof row.operationId!=='string'||!/^[A-Za-z0-9_-]{1,80}$/.test(row.operationId))return [];
+    const receipt=object(row.receipt),route=object(receipt.projectExecution),context=object(raw.developmentContext);
+    const command=route.authority==='native_host_operation'&&route.taskId===task.id&&route.runId===row.runId&&route.operationId===row.operationId?route.command:undefined;
+    // A fixed package, probe or edit is still in process history, but is not a terminal command.
+    if(typeof command==='string'&&!['project.runtime.run','termux.run'].includes(command))return [];
+    const termux=context.runtime==='termux'||command==='termux.run';
+    return [{...row,operationId:row.operationId,routeKind:termux?'termux' as const:'managed' as const,
+      interactive:!termux&&row.runId===raw.runId&&object(receipt.executionReceipt).terminalMode==='pty'}];
+  });
 }
 
 export function projectExecutionCanInput(metadata: ProjectExecutionData, output: ProjectExecutionData, accepted: boolean, uncertain: boolean, stopping: boolean) {

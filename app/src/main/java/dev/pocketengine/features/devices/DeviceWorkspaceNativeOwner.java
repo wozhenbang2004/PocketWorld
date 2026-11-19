@@ -410,7 +410,10 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
                     throw new SecurityException("本机接纳记录不是刚选择的原设备身份");
                 return page.put("side","received");
             }
-            return tasks.deviceTasks().ownerPhoneGoalIndex(local.deviceId(),target,peer.getString("instanceId"),parentAfter,after,searchText).put("localInstanceId",local.instanceId()).put("side","sent");
+            JSONObject page=tasks.deviceTasks().ownerPhoneGoalIndex(local.deviceId(),target,peer.getString("instanceId"),parentAfter,after,searchText);
+            if(peer.getLong("authorizationEpoch")!=page.optLong("sentPeerEpoch")||!peer.getString("fingerprint").equals(page.opt("targetFingerprint")))
+                throw new SecurityException("本机派单不属于刚选择的原目标身份");
+            return page.put("localInstanceId",local.instanceId()).put("side","sent");
         }
         public JSONObject directedPhoneDispatches(String target,String source,String parentAfter,String after)throws Exception {
             DeviceIdentity.LocalIdentity local=existingIdentity();JSONObject peer=trust.peer(target);

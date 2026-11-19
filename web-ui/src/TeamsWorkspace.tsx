@@ -15,6 +15,7 @@ import { TeamEvidenceWorkspace } from './TeamEvidenceWorkspace';
 import { TeamQuickStartForm } from './TeamQuickStartForm';
 import { TeamStartReview } from './TeamStartReview';
 import { canInspectFileContinuation, TeamFileContinuationReview } from './TeamFileContinuation';
+import { TeamFailedWorkHandoff, FailedHandoffReview } from './TeamFailedWorkHandoff';
 import { TeamParentRevisions,TeamParentRevisionReview } from './TeamParentRevisions';
 import { TeamFrozenFiles } from './TeamFrozenFiles';
 import { resetTeamProductionAcknowledgments, teamDefinitionPayload, teamProductionDraft, teamProductionEditorMember } from './team-production';
@@ -922,7 +923,17 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
                   }
                   reviewResult(value);
                 });
-              }}>核对能否继续此分工</Button>}{item.acceptance && <p>验收：{item.acceptance}</p>}
+              }}>核对能否继续此分工</Button>}
+              {bridge.getState().capabilities.commands.includes('teams.reviewSoleFailedHandoff') && <TeamFailedWorkHandoff team={current} item={item} members={members} disabled={!canMutate} review={next=>{
+                const origin=reading?.viewHandle;if(!origin)return;
+                void invoke('teams.reviewSoleFailedHandoff',{viewHandle:origin,workItemId:item.workItemId,nextMemberId:next},value=>{
+                  if(currentReading.current?.viewHandle!==origin||value.operation!=='handoffFailedItem'||value.input?.runId!==current.id||
+                    value.input?.workItemId!==item.workItemId||value.input?.assignmentId!==item.assignmentId||value.input?.nextMemberId!==next){
+                    release(value,'reviewHandle');throw new Error('不是此次选定的失败分工和接手成员，没有排队。');
+                  }reviewResult(value);
+                });
+              }}/>}
+              {item.acceptance && <p>验收：{item.acceptance}</p>}
               {!!rows(item.dependsOn).length && <p>前置：{item.dependsOn.map((id: string) => workItems.find(prior => prior.workItemId === id)?.title || id).join('、')}</p>}
             </div>
           </AccordionItem>)}
@@ -1076,8 +1087,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
         </div>
       </footer>
     </>}</div></SettingsDialog>
-    <SettingsDialog className="pw-team-modal" isOpen={!!review} title={review?.operation === 'reviseFromParent' ? '核对原团队修订' : review?.operation === 'continueWorkItem' ? '核对原文件分工' : review?.operation === 'configureMember' ? '核对本次成员改动' : review?.operation === 'start' ? '开始这次协作' : review?.operation === 'cancel' ? '停止这次协作' : review?.operation === 'feedback' ? '修改要求并暂停' : review?.operation === 'remove' ? '移除编组' : '保存编组'} onClose={() => { if (!busy) closeReview(); }}><div className="pw-collaboration-dialog" data-collaboration-kind="TeamsWorkspace">
-      {review?.operation === 'reviseFromParent' ? <TeamParentRevisionReview facts={review.input}/> : review?.operation === 'continueWorkItem' ? <TeamFileContinuationReview facts={review.input} /> : review?.operation === 'configureMember' ? <>
+    <SettingsDialog className="pw-team-modal" isOpen={!!review} title={review?.operation === 'handoffFailedItem' ? '核对这一次分工交接' : review?.operation === 'reviseFromParent' ? '核对原团队修订' : review?.operation === 'continueWorkItem' ? '核对原文件分工' : review?.operation === 'configureMember' ? '核对本次成员改动' : review?.operation === 'start' ? '开始这次协作' : review?.operation === 'cancel' ? '停止这次协作' : review?.operation === 'feedback' ? '修改要求并暂停' : review?.operation === 'remove' ? '移除编组' : '保存编组'} onClose={() => { if (!busy) closeReview(); }}><div className="pw-collaboration-dialog" data-collaboration-kind="TeamsWorkspace">
+      {review?.operation === 'handoffFailedItem' ? <FailedHandoffReview facts={review.input}/> : review?.operation === 'reviseFromParent' ? <TeamParentRevisionReview facts={review.input}/> : review?.operation === 'continueWorkItem' ? <TeamFileContinuationReview facts={review.input} /> : review?.operation === 'configureMember' ? <>
         <TeamMemberIdentity member={review.member || {}} name={teamMemberLabel(review.member || {}, rows(review.roster))} size={40} />
         {review.input?.action === 'rename' ? <><p>改为：</p><TeamMemberIdentity member={{ ...review.member, name: review.input.name, avatarShape: review.input.avatarShape }} size={40} /><p>历史消息和已开始的轮次保留原身份；不改职责、权限、额度或执行状态。</p></>
           : review.input?.action === 'add' ? <><p>职责：{review.member?.role}</p><p>具体分工：{review.member?.assignment}</p><p>本机模型：{review.member?.model || '确认加入时的主模型'}</p><p>以暂停状态加入当前运行，保留独立新身份；未开始工作、未继承旧成员的独立资料范围或定向消息、未增加额度。同队共享目标和公开协作记录仍可用于这次分工。回到分工页后明确继续。</p></>
@@ -1099,6 +1110,13 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
             if(result.command!=='reviseFromParent'||result.reading?.run?.id!==original.input.runId||result.operationId!==original.input.operationId||result.workItemId!==original.input.workItemId||result.assignmentId!==original.input.assignmentId)
               throw new Error('原修订是否已排队待核对，请刷新原协作，不要重发。');
             acceptReading(result.reading);setNotice('已提交给这次列明的原分工。新成果尚未交回，不会自动写回项目。');return;
+          }
+          if (original.operation === 'handoffFailedItem') {
+            const row=rows(result.reading?.run?.workPlan?.items).find(i=>i.workItemId===original.input.workItemId);
+            if(result.command!=='handoffFailedItem'||result.reading?.run?.id!==original.input.runId||result.oldAssignmentId!==original.input.assignmentId||
+              result.nextMemberId!==original.input.nextMemberId||row?.assignmentId!==result.newAssignmentId||row?.memberId!==original.input.nextMemberId||
+              !result.newAssignmentId||result.newAssignmentId===original.input.assignmentId)throw new Error('原交接是否已排队待核对，请刷新这个协作，不要重发。');
+            acceptReading(result.reading);setNotice('接手已登记。只有这项分工已排队，还没有新的完成回执。');return;
           }
           if (original.operation === 'continueWorkItem') {
             if (result.command !== 'continueWorkItem' || result.reading?.run?.id !== original.input.runId
@@ -1135,7 +1153,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
           }
           setNotice('这次启动未被受理，目标与分工已保留。请重新核对后再确认开始。');
         });
-      }}>{review?.operation === 'reviseFromParent' ? '按此范围开始修订' : review?.operation === 'continueWorkItem' ? '继续这个原分工' : review?.operation === 'start' ? '开始协作' : review?.operation === 'save' ? '保存编组' : '确认这一次操作'}</Button></div>
+      }}>{review?.operation === 'handoffFailedItem' ? '确认只交接这项分工' : review?.operation === 'reviseFromParent' ? '按此范围开始修订' : review?.operation === 'continueWorkItem' ? '继续这个原分工' : review?.operation === 'start' ? '开始协作' : review?.operation === 'save' ? '保存编组' : '确认这一次操作'}</Button></div>
     </div></SettingsDialog>
   </section>;
 }

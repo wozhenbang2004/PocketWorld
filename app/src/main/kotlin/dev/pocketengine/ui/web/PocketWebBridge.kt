@@ -1025,10 +1025,11 @@ internal class PocketWebBridge(
             }
             if (action == "composer.oneLearning.save") {
                 require(section == null && taskViewId == null && controller.webPrivateOwnerVisible()) { "请回到原私人对话" }
-                checkedPayload(args, setOf("key", "epoch", "revision", "excluded"))
+                checkedPayload(args, setOf("key", "epoch", "revision", "excluded", "protectDefaults"))
+                val protect = if (args.has("protectDefaults")) requiredBoolean(args, "protectDefaults") else null
                 val epoch = args.opt("epoch"); val revision = args.opt("revision"); val excluded = args.opt("excluded")
                 require(epoch is Int && epoch >= 0 && (revision is Int || revision is Long) && (revision as Number).toLong() > 0 && excluded is Boolean)
-                controller.setOneMessageLearning(requiredString(args, "key"), epoch, (revision as Number).toLong(), excluded) { value, error -> complete(id, value, error); publishState() }
+                controller.setOneMessageLearning(requiredString(args, "key"), epoch, (revision as Number).toLong(), excluded, protect) { value, error -> complete(id, value, error); publishState() }
                 return
             }
             if (action == "composer.firstMemory.save") {

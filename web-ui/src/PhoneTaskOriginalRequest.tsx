@@ -4,6 +4,7 @@ import {Button} from './forms-library';
 import {IconChat} from './icons';
 import {registerOverlayBack} from './overlay-back';
 import {phoneConversationId} from './phone-start';
+import {usePhoneOriginalReadingPlace} from './phone-original-reading-place';
 import './phone-request-original.css';
 
 type Task={id:string;raw?:Record<string,any>};
@@ -26,8 +27,11 @@ export function PhoneTaskOriginalRequest({task,active}:{task:Task;active:boolean
     ++serial.current;hold.current=null;history.current=[];pending.current=false;setOpen(false);setPage(null);setError('');setBusy(false);
     if(focus)requestAnimationFrame(()=>{if(activity.current.active&&activity.current.identity===identity&&trigger.current?.isConnected)trigger.current.focus({preventScroll:true});});
   }
-  async function read(t:Ticket,offset:number){
+  const valid=current(hold.current);
+  const reading=usePhoneOriginalReadingPlace(hold.current,open&&valid,page?.offset,()=>current(hold.current));
+  async function read(t:Ticket,offset:number,manual=true){
     if(pending.current||!current(t))return;
+    if(manual)reading.leaving(offset);
     const attempt=++serial.current;pending.current=true;wanted.current=offset;setBusy(true);setPage(null);setError('');
     try{
       const p=await bridge.command('phone.request.original',{taskId:task.id,runId:run,epoch,offset,reviewDigest:t.review});
@@ -47,9 +51,8 @@ export function PhoneTaskOriginalRequest({task,active}:{task:Task;active:boolean
   function enter(){
     const s=bridge.getState();if(!active||!conversation||typeof run!=='string'||!Number.isSafeInteger(epoch)||epoch<0||(!run)!==(epoch===0))return;
     const t={doc:bridge.getDocumentEpoch(),resume:Number((s.view as {resumeRevision:number})?.resumeRevision),changes:Number(s.state.traceSourceRevision),identity,review:'',message:'',revision:0};
-    hold.current=t;if(!current(t)){hold.current=null;return;}history.current=[];setOpen(true);void read(t,0);
+    hold.current=t;if(!current(t)){hold.current=null;return;}history.current=[];setOpen(true);void read(t,0,false);
   }
-  const valid=current(hold.current);
   useEffect(()=>{if(open&&!valid)close();},[open,valid]);
   useEffect(()=>{if(!open)return;const hidden=()=>{if(document.hidden)close();};document.addEventListener('visibilitychange',hidden);
     const remove=registerOverlayBack(()=>close(true));return()=>{document.removeEventListener('visibilitychange',hidden);remove();};},[open,identity]);
@@ -58,10 +61,11 @@ export function PhoneTaskOriginalRequest({task,active}:{task:Task;active:boolean
     {open&&valid?'收起原交代':'查看当时关联的原话'}</Button>
     {open&&valid&&<section aria-label="手机工作的原交代">{busy&&<p role="status">正在核对原消息…</p>}{error&&<p role="alert">{error}</p>}
       {page&&<><p className="pw-muted">{page.picked?'你在准备这个手机目标时选定了这条消息。':'这是创建手机任务时关联的对话消息。'}上面是当时确认的任务目标。</p>
-        {page.total===0?<p>原消息没有文字。</p>:<p className="pw-phone-request-original" dir="auto">{page.text}</p>}
+        {page.total===0?<p>原消息没有文字。</p>:<p ref={reading.body} tabIndex={-1} className="pw-phone-request-original" dir="auto">{page.text}</p>}
         {page.total>page.text.length&&<p className="pw-muted">原文位置 {page.offset+1}–{page.offset+page.text.length} / {page.total}</p>}
         <div className="pw-action-row">{history.current.length>1&&<Button variant="ghost" onClick={()=>hold.current&&void read(hold.current,history.current[history.current.length-2])}>上一段</Button>}
           {page.next>=0&&<Button variant="secondary" onClick={()=>hold.current&&void read(hold.current,page.next)}>下一段原话</Button>}</div></>}
-      {error&&<Button variant="secondary" onClick={()=>hold.current&&void read(hold.current,wanted.current)}>重读原消息</Button>}
+      {error&&<div className="pw-action-row"><Button variant="secondary" onClick={()=>hold.current&&void read(hold.current,wanted.current)}>重读原消息</Button>
+        {reading.prior!==undefined&&reading.prior!==wanted.current&&<Button variant="ghost" onClick={()=>hold.current&&void read(hold.current,reading.prior!)}>回到刚才读到的那段</Button>}</div>}
     </section>}</div>;
 }

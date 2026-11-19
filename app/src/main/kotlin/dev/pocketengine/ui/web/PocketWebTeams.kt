@@ -9,6 +9,7 @@ import dev.pocketengine.features.teams.TeamParentRevisionOffer
 import dev.pocketengine.features.teams.TeamOwnerFileReading
 import dev.pocketengine.features.teams.AgentSlot
 import dev.pocketengine.features.teams.TeamPhoneHost
+import dev.pocketengine.features.teams.TeamWorkItems
 import dev.pocketengine.features.teams.TeamEvidenceDiscussion
 import dev.pocketengine.features.teams.TeamAttention
 import dev.pocketengine.features.teams.TeamDraftDefinition
@@ -60,8 +61,8 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
         @Synchronized fun retire() { live = false; packageRead.cancel(); finalPackage=null; finalPackageKey=null; itemPage?.close(); itemPage = null }
     }
     private data class Review(val command: String, val input: String, val expires: Long, val phonePage: TeamPhoneHost.Page? = null, val phoneReview: TeamPhoneHost.Review? = null, val productionSources: String? = null,
-        val workItem: PocketWebTeamWorkReturn? = null, val ownerReading: Reading? = null, val proposal: TaskStoreTeamWriteHost.WorkPlanPage.ParentProposalReview? = null) {
-        fun close() { runCatching { phonePage?.close() }; runCatching { workItem?.close() }; runCatching { proposal?.close() } }
+        val workItem: PocketWebTeamWorkReturn? = null, val failedHandoff:PocketWebTeamFailedHandoff?=null, val ownerReading: Reading? = null, val proposal: TaskStoreTeamWriteHost.WorkPlanPage.ParentProposalReview? = null) {
+        fun close() { runCatching { phonePage?.close() }; runCatching { workItem?.close() }; runCatching { failedHandoff?.close() }; runCatching { proposal?.close() } }
     }
     private data class PhonePage(val original: TeamPhoneHost.Page, val definition: String, val input: String, val expires: Long)
     @Volatile private var generation = 0L
@@ -76,7 +77,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
     companion object {
         val COMMANDS = setOf("teams.attention", "teams.readAttention", "teams.snapshot", "teams.readRun", "teams.readDefinition", "teams.reviewDefinition", "teams.prepareDraftStart",
             "teams.reviewStart", "teams.reviewRemove", "teams.confirm", "teams.control", "teams.sendMessage",
-            "teams.readFrozenOutputs", "teams.readFrozenDiff", "teams.reviewFrozenTextApproval", "teams.approveFrozenText", "teams.reviewParentRevision", "teams.reviewWorkItemContinuation", "teams.answerAssignment", "teams.probeMember", "teams.closeReading", "teams.reviewPhoneStart", "teams.reviewMember", "teams.openResearchTask", "teams.openDeliveryWorker", "teams.readFinalPackageFiles", "teams.chooseFinalPackageTarget", "teams.saveFinalPackageTarget", "teams.discardFinalPackageTarget")
+            "teams.readFrozenOutputs", "teams.readFrozenDiff", "teams.reviewFrozenTextApproval", "teams.approveFrozenText", "teams.reviewParentRevision", "teams.reviewWorkItemContinuation", "teams.reviewSoleFailedHandoff", "teams.answerAssignment", "teams.probeMember", "teams.closeReading", "teams.reviewPhoneStart", "teams.reviewMember", "teams.openResearchTask", "teams.openDeliveryWorker", "teams.readFinalPackageFiles", "teams.chooseFinalPackageTarget", "teams.saveFinalPackageTarget", "teams.discardFinalPackageTarget")
     }
 
     fun clear() {
@@ -782,6 +783,25 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                     deliver(JSONObject().put("operation","reviseFromParent").put("reviewHandle",token).put("input",PocketWebState.publicValue(shown)),null)
                 })
             }
+            "teams.reviewSoleFailedHandoff" -> {
+                fields(args,"viewHandle","workItemId","nextMemberId")
+                val handle=text(args,"viewHandle");val item=text(args,"workItemId");val next=text(args,"nextMemberId")
+                val owner=readings[handle]?.takeIf{it.kind=="run"&&it.live} ?: error("原团队窗口已经关闭")
+                val run=JSONObject(owner.original)
+                reviews.entries.removeAll { (_,old)->(old.expires<=SystemClock.elapsedRealtime()).also{if(it)old.close()} }
+                check(reviews.size<8){"请先关闭其他团队审阅"}
+                var prepared:PocketWebTeamFailedHandoff?=null
+                hostWork(work={
+                    val page=controller.openTeamWorkPlanPage(run.getString("id"));workingTeamPage=page
+                    owner.hold(page);check(currentWindow()&&owner.live);page.setForeground(true)
+                    PocketWebTeamFailedHandoff.prepare(run,item,next,page).also{prepared=it}.preview
+                },accept={shown->
+                    check(owner.live&&readings[handle]===owner){"原团队已离开，没有交接"}
+                    val token=UUID.randomUUID().toString()
+                    reviews[token]=Review("handoffFailedItem","",SystemClock.elapsedRealtime()+120000,failedHandoff=requireNotNull(prepared),ownerReading=owner)
+                    deliver(JSONObject().put("operation","handoffFailedItem").put("reviewHandle",token).put("input",shown),null)
+                })
+            }
             "teams.reviewWorkItemContinuation" -> {
                 fields(args, "viewHandle", "workItemId")
                 val handle = text(args, "viewHandle")
@@ -806,6 +826,15 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 fields(args, "reviewHandle")
                 val captured = reviews.remove(text(args, "reviewHandle")) ?: error("原操作审阅已使用或关闭，请先核对原回执")
                 if (captured.expires <= SystemClock.elapsedRealtime()) { captured.close(); error("原操作审阅已过期") }
+                if(captured.failedHandoff!=null){
+                    val original=captured.failedHandoff; val owner=captured.ownerReading;val shown=original.preview
+                    if(owner?.live!=true){captured.close();error("已离开原交接窗口")}
+                    hostWork(original,work={try{check(currentWindow()&&owner.live);original.confirm()}finally{original.close()}},accept={result->
+                        val item=TeamWorkItems.find(result.getJSONObject("workPlan").getJSONArray("items"),shown.getString("workItemId"))
+                        deliverReceipt(JSONObject().put("confirmed",true).put("command","handoffFailedItem").put("workItemId",shown.getString("workItemId"))
+                            .put("oldAssignmentId",shown.getString("assignmentId")).put("newAssignmentId",item.getString("assignmentId")).put("nextMemberId",item.getString("memberId")).put("reading",view("run",result)))
+                    });return
+                }
                 if(captured.proposal!=null){
                     val proposal=captured.proposal;val shown=proposal.preview();val owner=captured.ownerReading
                     if(owner?.live!=true){captured.close();error("原修订窗口已关闭，未开始")}

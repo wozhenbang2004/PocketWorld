@@ -1038,6 +1038,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
                   <Button type="submit" variant="secondary" disabled={busy||!archiveDraft.trim()}>查找</Button>
                   {activeArchive.searchText && <Button type="button" variant="ghost" disabled={busy} onClick={()=>readPhoneArchive(archiveSide)}>显示全部</Button>}
                 </form>
+                {archiveSide==='sent' && activeArchive.oldTargetIdentityChanged===true && <p>这台设备曾更换配对身份。不能核对目标的旧派单不归入这里，仍可从当时的本机原任务查找。</p>}
                 {activeArchive.searchText && <p role="status">只在这部设备的{archiveSide==='received'?'本机已接收':'本机已发出'}原目标中查找「{activeArchive.searchText}」，不会查询对端或成果。</p>}
                 {!activeArchive.rows.length && <p>{activeArchive.searchText ? activeArchive.hasMore ? '这段记录没有命中，可以继续查更早的记录。' : '这段可核对的记录没有命中。' : '这一批本机记录里没有能核对的直接手机目标。'}</p>}
                 {rows(activeArchive.rows).map(row => <div className="pw-device-history-entry" key={JSON.stringify([row.taskId, row.operationId])}>

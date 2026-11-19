@@ -1588,7 +1588,12 @@ public final class TaskStoreDeviceTasks {
             if(allocation.has("boundWire"))throw new SecurityException("原wire已经绑定，不重新签名或签发新票；先查原ID");
             ContentValues link=new ContentValues();link.put("wire_digest",finalWire.argumentsDigest());link.put("wire_json",encoded);
             if(db.update("device_child_links",link,"parent_task_id=? AND parent_operation_id=? AND wire_json IS NULL",new String[]{reservation.id,reservation.operation})!=1)throw new SecurityException("原wire已经固定");
-            if(reservation.operation.equals(allocation.getString("anchorOperationId"))){ContentValues anchor=new ContentValues();anchor.put("arguments_digest",finalWire.argumentsDigest());db.update("device_child_budget",anchor,"parent_task_id=? AND parent_operation_id=?",new String[]{reservation.id,reservation.operation});}
+            if(reservation.operation.equals(allocation.getString("anchorOperationId"))){
+                ContentValues anchor=new ContentValues();anchor.put("arguments_digest",finalWire.argumentsDigest());
+                if(reservation.sourceApproval!=null&&!reservation.sourceApproval.forwarded())LocalPhoneDispatchPin.attach(db,anchor,reservation.id,reservation.operation,
+                        finalWire.json(),receivingGrant,reservation.sourceApproval.sourceKey(),reservation.sourceApproval.policyDigest);
+                db.update("device_child_budget",anchor,"parent_task_id=? AND parent_operation_id=?",new String[]{reservation.id,reservation.operation});
+            }
             JSONObject marker=new JSONObject().put("format","pocketworld.native-device-send.v1").put("state","not_claimed").put("wireSha256",dev.pocketengine.features.devices.DeviceProtocol.sha256(bytes)).put("allocationId",reservation.allocation).put("intentDigest",reservation.intent);
             ContentValues row=new ContentValues();row.put("receipt",new JSONObject().put("nativeDeviceSend",marker).toString());
             if(db.update("operations",row,"task_id=? AND run_id=? AND operation_id=? AND state='prepared'",new String[]{reservation.id,reservation.run,reservation.operation})!=1)throw new SecurityException("原操作已不再prepared");

@@ -7,7 +7,7 @@ from windows_added_source_entry import _choose,_short
 from windows_source_patch import FILENAME,checked_output,output_names
 
 
-def detail(ctx,op,row,locked):
+def detail(ctx,op,row,locked,*,read_patch=None):
     if locked(): return
     f=row["fields"]
     def evidence(show=False):
@@ -24,8 +24,10 @@ def detail(ctx,op,row,locked):
         actions.insert(0,("show","在资源管理器选中 change.patch\n不打开或应用；系统文件夹由你关闭。"))
     elif state=="pending": body+="\n只有保存意图，没有完整回执；不会自动重写。"
     else: body+="\n不能再核实原补丁，不查找替代文件，也不重新生成。"
+    if state=="saved" and read_patch is not None: actions.insert(0,("read-patch","在伴侣中阅读完整原补丁"))
     click=_dialog("本机原路径移除补丁",body,actions,retire=locked)
     if locked(): return
+    if click=="read-patch" and read_patch is not None: read_patch(); return
     if click=="id":
         _dialog("这项补丁的固定编号",f"原提交：{f['commit']}\n原 Git blob：{f['originalOid']}\n原始 SHA-256：{f['originalSha']}"
                 f"\n原文件模式：{f['mode']}\n完整补丁 SHA-256：{f['patchSha']}",[],retire=locked)

@@ -7,7 +7,7 @@ from windows_source_diff import selected
 from windows_source_patch import BANK,FILENAME,_key,_target,check,intent,records,save
 
 
-def detail(ctx,op,row,locked):
+def detail(ctx,op,row,locked,*,read_patch=None):
     if locked(): return
     f=row["fields"]
     try: state=check(ctx,op,row,locked)
@@ -21,8 +21,10 @@ def detail(ctx,op,row,locked):
         actions.insert(0,("locate","在资源管理器定位 change.patch\n只选中这个本机产物；不会打开文件、应用补丁或发送。"))
     elif state=="pending": text+="\n只确认原保存意图，没有完整的落盘回执。可能已留有文件；不会按名称认领或自动再写。"
     else: text+="\n这次不能核实原补丁的最终记录、原文件身份和字节。不改从同名文件取回，也不重做。"
+    if state=="saved" and read_patch is not None: actions.insert(0,("read-patch","在伴侣中阅读完整原补丁"))
     pick=_dialog("单文件变更的本机成果",text,actions,retire=locked)
     if locked(): return
+    if pick=="read-patch" and read_patch is not None: read_patch(); return
     if pick=="locate":
         try: check(ctx,op,row,locked,show=True)
         except Exception:
