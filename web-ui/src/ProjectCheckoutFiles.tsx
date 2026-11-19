@@ -36,6 +36,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     if (value.projectId !== projectId || value.checkoutId !== checkoutId || value.filesHandle !== handle.current) throw new Error('回执不属于这个原私人副本。');
     const next = { ...(currentFile.current?.fileHandle === value.fileHandle ? currentFile.current : {}), ...value };
     if (body) for (const key of ['saveStatus', 'message', 'saveError', 'importStatus', 'importReceipt', 'importMessage', 'importError', 'projectListRefreshMessage']) if (!(key in value)) delete next[key];
+    if (!('formalFile' in value)) delete next.formalFile;
     currentFile.current = next; setFile(next);
     if (body && typeof value.text === 'string') {
       const retained = interfaceDrafts.get(keyFor(value.path));
@@ -132,6 +133,15 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   }, [adoption]);
   const locked = busy || editing || !!adoption, nativeText = file?.text || '';
   const backLabel = sourceMember ? '返回原工作' : hostFile ? '返回本机项目' : '返回项目目标';
+  const formalLink = (pin: Data | undefined, evidence: 'import_receipt' | 'equal_content') => {
+    if (!file || !pin || pin.evidence !== evidence || pin.projectId !== projectId || pin.checkoutId !== checkoutId || pin.path !== file.path ||
+        typeof pin.handle !== 'string' || !pin.handle || !Number.isInteger(pin.version) || pin.version < 1 || !/^[a-f0-9-]{36}$/.test(pin.revisionId) ||
+        !/^[a-f0-9]{64}$/.test(pin.sha256) || !Number.isInteger(pin.bytes) || pin.bytes < 0 || pin.bytes > 262144) return null;
+    return <div className="pw-form-actions"><Button variant="secondary" disabled={busy || editing || orphan !== null || blockedEdit.current || !!file.dirty || !!file.saveUnknown}
+      onClick={() => { if (evidence === 'equal_content') { activeAdoption.current = null; setAdoption(null); } void invoke('openFormal', { fileHandle: file.fileHandle, formalHandle: pin.handle }); }}>
+      {evidence === 'equal_content' ? '查看内容相同的正式版本' : '打开已核对的正式文件'} v{pin.version}
+    </Button></div>;
+  };
   return <SettingsDialog isOpen title={sourceMember ? '原工作副本' : hostFile ? '已核对的本机文件' : '这份私人副本的文件'} onClose={close} closeLabel={backLabel}><div className="pw-checkout-files">
     <p className="pw-muted">{sourceMember ? '保存只改这个副本。原任务的固定包不会改变，也不会重新运行。' : hostFile ? '这是刚核对的手机副本。已有草稿会单独提示；保存只修改手机文件，采纳到本机正式项目仍须另行审阅，不会连回或改写主机。' : '这里是 AI 实际工作的副本，不是“项目文件”中的正式版本。保存只改副本；另行比较并采纳才会导回正式项目，不会运行代码或放开热修改；已有进程和未知回执仍会阻止不安全的保存。'}</p>
     <small className="pw-checkout-identity">{projectId} / {checkoutId}</small>
@@ -172,12 +182,14 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
           <p>正式项目 v{adoption.expectedVersion} → 这份已保存的私人副本。{adoption.deleted ? '这会在正式项目中登记此文件删除，可从原版本历史核对。' : '不会采纳其他文件或尚未保存的草稿。'}</p>
           <p>{adoption.message}</p>{adoption.diff ? <pre className="pw-checkout-review-diff" aria-label="正式版本与副本差异">{adoption.diff}</pre> : <p>{adoption.same ? '正式内容与副本已经相同。' : '文字相同，但文件存在或删除状态不同，请核对上方说明。'}</p>}
           {adoption.truncated && <p role="alert">差异超出完整展示范围，不能采纳。请缩小改动后重新比较。</p>}
+          {adoption.same && formalLink(adoption.formalFile, 'equal_content')}
           {adoption.same && adoption.baselineNeedsRefresh && <p>本次只登记已一致的副本基线，不创建新的正式版本。</p>}
           <p className="pw-muted">确认前仍核对副本 SHA 和正式版本。不是跨两处存储的原子事务；确认后离开页面不等于撤销已写入的版本。回执不明时重新比较，不会自动重试。</p>
           {adoptionExpired && <p role="status">这次审阅已过期，尚未采纳。返回后重新比较。</p>}
           <div className="pw-form-actions"><Button variant="secondary" disabled={busy || editing} onClick={dismissAdoption}>返回文件</Button><Button disabled={busy || editing || adoptionExpired || !adoption.importable || adoption.truncated} onClick={() => { const selected = activeAdoption.current; if (!selected || Number(selected.expiresAt) <= Date.now()) return; activeAdoption.current = null; setAdoption(null); void invoke('import', { importHandle: selected.importHandle }, value => apply(value)); }}>{adoption.same ? '只登记已一致的基线' : adoption.deleted ? '采纳此文件删除' : '采纳这个文件'}</Button></div>
         </section>}
         {file.importStatus && <p role="status">{file.importReceipt?.message || file.importMessage} {file.importError || ''} {file.projectListRefreshMessage || ''}</p>}
+        {!adoption && file.importStatus === 'observed' && formalLink(file.formalFile, 'import_receipt')}
         {file.message && <p role="status">{file.message} {file.saveError || ''}</p>}
         {file.draftError && <p role="alert">{file.draftError}</p>}
         {(file.draftError || blockedEdit.current) && <div className="pw-form-actions"><Button variant="secondary" disabled={locked || orphan !== null} onClick={() => { if (blockedEdit.current) edit(currentText.current); else void invoke('cache', { fileHandle: file.fileHandle, retry: true }, value => apply(value, false)); }}>重试保留草稿</Button></div>}

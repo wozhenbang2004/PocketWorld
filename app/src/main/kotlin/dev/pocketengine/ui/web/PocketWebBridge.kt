@@ -215,6 +215,8 @@ internal class PocketWebBridge(
     private val pendingCommands = mutableMapOf<String, String>()
     @Volatile private var documentId: String? = null
     private val phoneComposer = PocketWebPhoneComposer(controller, { closed }, ::captureWindow, ::acceptsWindow,
+        { PocketWebWindowTicket(commandFence.ticket(), controller.webPhoneViewerWindowTicket()) },
+        { ticket -> ticket.accepts(commandFence.ticket(), controller.webPhoneViewerWindowTicket()) },
         { id, value, error -> complete(id, value, error) }, { publishState() })
     private val voiceInput = PocketWebVoiceInput(controller, phoneComposer)
     private var deviceWindow: NativeDeviceWorkspaceHost.Window? = null
@@ -256,7 +258,7 @@ internal class PocketWebBridge(
             "phone.result.original", "phone.resultNotice.read", "phone.resultNotice.set", "phone.activity.original", "phone.draft.original",
             "quickVoice.start", "quickVoice.save", "quickVoice.close", "quickVoice.return",
             "skillDraft.open", "skillDraft.read", "skillDraft.source", "skillDraft.confirm", "skillDraft.cancel", "skillDraft.query", "skillDraft.close", "voice.start", "voice.stop", "voice.review", "voice.accept", "voice.discard", "speech.speak", "speech.stop", "speech.taskAnnouncements", "speech.stopTaskAnnouncement",
-            "tasks.refresh", "tasks.open", "tasks.close", "tasks.stop", "tasks.review", "tasks.confirm", "tasks.approve", "tasks.resolve", "tasks.resume", "tasks.scope", "tasks.plan.enter", "tasks.answerQuestion", "tasks.answerQuestionChoice", "tasks.deleteScreenshot", "privacy.screenshots.read", "privacy.screenshots.save",
+            "tasks.refresh", "tasks.open", "tasks.close", "tasks.recoverTeamFile", "tasks.stop", "tasks.review", "tasks.confirm", "tasks.approve", "tasks.resolve", "tasks.resume", "tasks.scope", "tasks.plan.enter", "tasks.answerQuestion", "tasks.answerQuestionChoice", "tasks.deleteScreenshot", "privacy.screenshots.read", "privacy.screenshots.save",
             "projects.refresh", "projects.select", "projects.create", "projects.open", "projects.newFile", "projects.edit", "projects.save", "projects.close", "projects.history", "projects.revision", "projects.useRevision", "projects.retry",
             "settings.reviewModelTransport", "settings.saveLocalObservation", "settings.openSystem", "settings.openBrowser", "settings.openAppUpdates",
             "webSearch.snapshot", "webSearch.save",
@@ -1012,6 +1014,24 @@ internal class PocketWebBridge(
                 openOriginalTask(id, groupPages.taskForNavigation(args), true, "groups")
                 return
             }
+            if (action == "tasks.recoverTeamFile") {
+                checkedPayload(args,setOf("taskId","runId","epoch","operationId"))
+                val task=requiredString(args,"taskId");val run=requiredString(args,"runId");val epoch=requiredInt(args,"epoch");val operation=requiredString(args,"operationId")
+                val ticket=captureWindow();val document=documentId
+                val current={ !closed && document!=null && document==documentId && acceptsWindow(ticket) && section==null && taskViewId==task && controller.webPrivateOwnerVisible() }
+                require(current()) { "请回到原私人整合任务核对文件" }
+                controller.runTeamPhoneWork {
+                    val result=runCatching {
+                        check(current()) { "原任务窗口已关闭" }
+                        val teams=controller.webPluginFeatureHost().module("teams") as? dev.pocketengine.features.teams.TeamsModule ?: error("原文件团队宿主不可用")
+                        teams.recoverOwnerOriginalFile(task,run,epoch,operation) { current() }
+                    }
+                    main.post {
+                        if(!current())complete(id,null,"原窗口已关闭，请回原任务核对；不会重新写入文件",retainValue=false)
+                        else result.fold({ complete(id,it,null,retainValue=false);publishState() },{ complete(id,null,it.message?:"原文件回执未能核实",retainValue=false) })
+                    }
+                };return
+            }
             if (action == "teams.openDeliveryWorker") {
                 requireSection("teams")
                 val handle=requiredString(args,"viewHandle"); val source=teamPages.taskForDeliveryNavigation(args)
@@ -1051,6 +1071,24 @@ internal class PocketWebBridge(
                 }
                 return
             }
+            if (action == "devices.openCheckedLocalFile") {
+                requireSection("devices")
+                devicePages.dispatch(action,args) { result,error ->
+                    if(error!=null){complete(id,null,error,retainValue=false);return@dispatch}
+                    try{
+                        val handle=args.getString("viewHandle")
+                        val value=requireNotNull(result).getJSONObject("value")
+                        require(value.getString("kind")=="internalFileHandoff")
+                        val handoff=devicePages.checkedFileForNavigation(handle,value.getString("handoff"))
+                        val file=handoff.selected
+                        val sourceCurrent={runCatching { devicePages.checkedFileForNavigation(handle,handoff.key)===handoff }.getOrDefault(false)}
+                        openOriginalTask(id,file.task,true,"devices",sourceWindowCurrent=sourceCurrent,checkedDeviceFile=file,checkReaderInput={ task ->
+                            require(sourceCurrent() && task.id==file.task && task.raw.opt("actorId")=="owner" && task.raw.opt("spaceId")=="private" && !task.raw.has("origin"))
+                                { "原设备窗口或私人工作已变化，未打开文件" }
+                        })
+                    }catch(failure:Exception){complete(id,null,failure.message?:"原文件窗口已变化",retainValue=false)}
+                };return
+            }
             if (action == "devices.openTask") {
                 requireSection("devices")
                 val taskId = devicePages.taskForNavigation(args)
@@ -1069,7 +1107,8 @@ internal class PocketWebBridge(
                         result?.optJSONObject("snapshot")?.let { domainSnapshots["devices"] = JSONObject(it.toString()) }
                         if (error == null) domainErrors.remove("devices") else domainErrors["devices"] = error
                     }
-                    complete(id, result, error, "outcome_unknown")
+                    // A local file version is a time-of-check observation, not a replayable Web result.
+                    complete(id, result, error, "outcome_unknown", retainValue = action != "devices.checkLocalExportedFile")
                     if (!action.startsWith("devices.desktop.")) publishState()
                 }
                 return
@@ -1952,7 +1991,7 @@ internal class PocketWebBridge(
     private fun projectReadCurrent(scope: ProjectTaskReadScope) = controller.webPrivateOwnerVisible() && section == null &&
         controller.state.projectId == scope.projectId && controller.state.filePath == null
 
-    private fun openOriginalTask(requestId: String, taskId: String, requestNavigation: Boolean, returnSection: String? = section ?: taskReturnSection, keepConversationReader: Boolean = false, expectedRunId: String? = null, expectedEpoch: Int? = null, projectScope: ProjectTaskReadScope? = null, sourceWindowCurrent: (() -> Boolean)? = null, checkReaderInput: ((UiTask) -> Unit)? = null) {
+    private fun openOriginalTask(requestId: String, taskId: String, requestNavigation: Boolean, returnSection: String? = section ?: taskReturnSection, keepConversationReader: Boolean = false, expectedRunId: String? = null, expectedEpoch: Int? = null, projectScope: ProjectTaskReadScope? = null, sourceWindowCurrent: (() -> Boolean)? = null, checkedDeviceFile: dev.pocketengine.ui.ReceivedFileSelection? = null, checkReaderInput: ((UiTask) -> Unit)? = null) {
         if (projectScope != null) require(projectReadCurrent(projectScope)) { "原项目页面已切换，未打开其他工作" }
         require(returnSection == null || returnSection in connectionSections) { "原工作页面已变化" }
         var entered = false
@@ -1982,7 +2021,12 @@ internal class PocketWebBridge(
                 checkReaderInput?.let { check -> check(task); enterWindow() }
                 if (isGroup(task)) taskPage = controller.enterGroupTask(task.id)
                 controller.completeWebTaskOpen(task.id, requestNavigation, keepConversationReader)
-                complete(requestId, JSONObject().put("taskId", task.id).put("readOnly", true).put("executionAuthorized", false), null)
+                checkedDeviceFile?.let { file ->
+                    require(entered && task.id==file.task && taskViewId==file.task && section==null)
+                    val taskWindow=captureWindow()
+                    attachmentPages.openOriginalFromDevice(file) { !closed && acceptsWindow(taskWindow) && section==null && taskViewId==file.task && controller.webPrivateOwnerVisible() }
+                }
+                complete(requestId, JSONObject().put("taskId", task.id).put("readOnly", true).put("executionAuthorized", false), null, retainValue = checkedDeviceFile==null)
                 publishState()
             } catch (failure: Exception) {
                 if ((requestNavigation || projectScope != null || checkReaderInput != null && entered) && (sourceWindowCurrent == null || entered)) runCatching { restoreTaskWorkspace() }

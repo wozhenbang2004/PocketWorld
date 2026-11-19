@@ -16,5 +16,19 @@ final class LocalPhoneGoalSearch {
     }
     private static String fold(String value){return Normalizer.normalize(value,Normalizer.Form.NFKC).toLowerCase(Locale.ROOT);}
     boolean matches(String goal){return term.isEmpty()||fold(goal).contains(term);}
+    boolean active(){return !term.isEmpty();}
+    /** Full normalization decides membership; page windows only locate the first nearby passage.
+     * A keyword spanning a page boundary opens at the earlier section, never a guessed text snippet. */
+    int firstMatchingPage(String source,int size){
+        if(!active()||!matches(source))return -1;
+        int left=source.codePointCount(0,source.length()),start=0,previous=0,page=0;
+        while(left>0){
+            int n=Math.min(size,left),end=source.offsetByCodePoints(start,n);
+            if(matches(source.substring(start,end)))return page;
+            if(page>0&&matches(source.substring(previous,end)))return page-1;
+            previous=start;start=end;left-=n;page++;
+        }
+        return -1; // No demonstrable local passage; do not pretend page zero matched.
+    }
     boolean beyondPreview(String preview){return !term.isEmpty()&&!matches(preview);}
 }

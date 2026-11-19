@@ -12,6 +12,7 @@ public final class TeamWorkspaceAccess implements TeamWorkFiles.Workspace {
     @Override public JSONObject call(String command,JSONObject input)throws Exception{return original.handle(command,input);}
     @Override public boolean byteFilesSupported(){return true;}
     @Override public VersionedWorkspace.FileSnapshot nativeFile(String project,String path,int version)throws Exception{return original.fileSnapshotForHost(project,path,version);}
+    @Override public VersionedWorkspace.FileSnapshot commitTeamFile(VersionedWorkspace.FileSnapshot expected,byte[] bytes,java.util.UUID revision)throws Exception{return original.commitTeamFileForHost(expected,bytes,revision);}
     @Override public VersionedWorkspace.FileSnapshot writeBytes(VersionedWorkspace.FileSnapshot expected,byte[] bytes)throws Exception{return original.writeBytesForHost(expected,bytes);}
     @Override public VersionedWorkspace.FileSnapshot delete(VersionedWorkspace.FileSnapshot expected)throws Exception{return original.deleteForHost(expected);}
     @Override public WorkspaceArtifacts.ArtifactRef freeze(VersionedWorkspace.FileSnapshot selected,String operation,String task,String run)throws Exception{return original.freezeFileForHost(selected,operation,task,run);}

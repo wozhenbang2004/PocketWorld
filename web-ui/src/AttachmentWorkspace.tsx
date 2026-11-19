@@ -21,7 +21,7 @@ type Props={
 type DraftHandoff={scope:string;target:FileDraftTarget;phase:'adding'|'added'|'opening'|'failed';error?:string};
 const fileOrigins:Record<string,string>={
  created_text:'生成的文本',created_document:'生成的文档',document_extract:'文档摘录',generated_media:'生成的媒体',
- derived_media:'原件加工成果',managed_build_output:'构建产物',remote_result_snapshot:'已保存的远端成果',
+ device_received_file:'来自这次原设备工作',derived_media:'原件加工成果',managed_build_output:'构建产物',remote_result_snapshot:'已保存的远端成果',
 };
 /** One file surface for conversation attachments, task outcomes and the private library. */
 export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onReturnFocus,openTaskId,draftTarget,onStageFile,onOpenDraft}:Props) {
@@ -83,7 +83,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const registerBeforeBack=useCallback((handler:(()=>Promise<AttachmentFrame|undefined>)|null)=>{beforeBack.current=handler},[]);
  useEffect(()=>{alive.current=true;registerBack(goBack);return()=>{alive.current=false;registerBack(null)}},[registerBack,goBack]);
  useEffect(()=>{setError('');setPage('1')},[view.windowId,file.id,file.sha256]);
- const busy=pending>0||!!view.busy||!view.ready,privateFiles=!view.group&&!view.team,hasFile=typeof file.id==='string';
+ const busy=pending>0||!!view.busy||!view.ready,privateFiles=!view.group&&!view.team&&!view.deviceOriginalOnly,hasFile=typeof file.id==='string';
  const canStage=privateFiles&&hasFile&&typeof file.sha256==='string'&&!!draftTarget&&!!onStageFile&&!!onOpenDraft;
  const title=hasOriginal?'查看原件':view.comparison?'原图对照':view.documentDraft?'编辑文档':view.processingOpen?'处理原件':view.documentOpen?'按来源读取':hasFile?'文件来源':view.team?'成员文件成果':view.taskId?'原任务的文件与成果':'文件与成果';
  const close=()=>{
@@ -166,7 +166,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   </ContextMenu>
  </>}</ContextMenuTrigger>;
  const resultFilesOnly=view.resultFilesOnly===true;
- const backLabel=mode==='list'?'返回原工作区':mode==='detail'?'返回文件列表':'返回文件详情';
+ const backLabel=view.deviceOriginalOnly?'返回原工作':mode==='list'?'返回原工作区':mode==='detail'?'返回文件列表':'返回文件详情';
  const fileList=(label:string,files:Json[])=><AttachmentFileCollection label={label} files={files} busy={busy} choosing={!!view.choosingSource} onSelect={target=>run(view.choosingSource?'attach':'selectFile',target)}/>;
  // A source picker reads the private library, not the task it will return to.
  // Do not show retained rows from the preceding location while the new read settles.

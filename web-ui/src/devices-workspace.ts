@@ -49,7 +49,7 @@ export function isReceivedPhoneTask(task: DeviceData, snapshot: DeviceData | nul
 }
 /** A local return bookmark, never a review, model selection, or execution authority. */
 export type SentPhoneGoalFocus = { taskId: string; deviceId: string; instanceId: string; certificateFingerprint: string };
-export type ReceivedPhoneGoalReturn = { taskId: string; instanceId: string; sourceId: string; targetId: string; parentTaskId: string; operationId: string; grantId: string; epoch: number; peerDetail: boolean; leftAt: number };
+export type ReceivedPhoneGoalReturn = { taskId: string; instanceId: string; sourceId: string; targetId: string; parentTaskId: string; operationId: string; grantId: string; epoch: number; runId?:string; executorEpoch?:number; peerDetail: boolean; leftAt: number };
 export function receivedPhoneGoalReturn(task: DeviceData, snapshot: DeviceData | null, peerDetail = false): ReceivedPhoneGoalReturn | undefined {
   if (!isReceivedPhoneTask(task, snapshot) || !identity(task.id) || !identity(snapshot?.local?.instanceId)) return;
   const raw = task.raw, origin = raw.origin;
@@ -61,7 +61,8 @@ export function receivedPhoneGoalReturn(task: DeviceData, snapshot: DeviceData |
 export function matchesReceivedPhoneGoal(task: DeviceData, snapshot: DeviceData | null, expected: ReceivedPhoneGoalReturn) {
   const value = receivedPhoneGoalReturn(task, snapshot);
   return !!value && value.taskId === expected.taskId && value.instanceId === expected.instanceId && value.sourceId === expected.sourceId
-    && value.targetId === expected.targetId && value.parentTaskId === expected.parentTaskId && value.operationId === expected.operationId && value.grantId === expected.grantId && value.epoch === expected.epoch;
+    && value.targetId === expected.targetId && value.parentTaskId === expected.parentTaskId && value.operationId === expected.operationId && value.grantId === expected.grantId && value.epoch === expected.epoch
+    &&(!expected.runId || task.raw.runId===expected.runId && task.raw.coordinatorEpoch===expected.executorEpoch);
 }
 /** Only a deliberate per-task read can extend the native 40-row window. Facts cannot authorize
  * a click: expired or changed execution facts disappear; local reduction still uses native review. */
@@ -102,13 +103,18 @@ export function samePhoneGoalArchive(value: DeviceData | null, peer: DeviceData 
     && value.targetDeviceId === peer.deviceId && value.instanceId === peer.instanceId && value.targetFingerprint === peer.certificateFingerprint
     && value.localDeviceId === local.deviceId && value.localInstanceId === local.instanceId;
 }
+const startedPhases=new Set(['preparing','running','pausing','paused','stopping','verifying','awaiting_user','waiting_user','awaiting_approval','waiting_approval','waiting_permission','interrupted','reconciling','reconciliation_required','blocked_unknown']);
 export function waitingPhoneGoalPage(value: unknown, local: DeviceData) {
   if (!object(value) || value.kind !== 'waitingPhoneGoals' || value.readOnly !== true
-    || value.resultOnly === true && (!Number.isSafeInteger(value.limitedCandidates) || value.limitedCandidates < 0 || value.limitedCandidates > 24) || !identity(local.deviceId) || !identity(local.instanceId)
+    || value.startedOnly!==undefined && typeof value.startedOnly!=='boolean' || value.startedOnly===true && value.resultOnly!==false
+    || (value.resultOnly === true || value.startedOnly===true) && (!Number.isSafeInteger(value.limitedCandidates) || value.limitedCandidates < 0 || value.limitedCandidates > 24) || !identity(local.deviceId) || !identity(local.instanceId)
     || value.localDeviceId !== local.deviceId || value.localInstanceId !== local.instanceId || !identity(value.waitingHandle) || !positiveInteger(value.capturedAt)
     || typeof value.hasMore !== 'boolean' || typeof value.canReadNewer !== 'boolean' || !Array.isArray(value.rows) || value.rows.length > 24
     || !value.rows.every((r: unknown) => object(r) && identity(r.taskId) && identity(r.operationId) && typeof r.sourceDeviceId === 'string'
-      && /^pw1_[a-f0-9]{64}$/.test(r.sourceDeviceId) && (value.resultOnly === true
+      && /^pw1_[a-f0-9]{64}$/.test(r.sourceDeviceId) && (value.startedOnly===true
+        ? r.waitingState==='original_run' && identity(r.runId) && positiveInteger(r.epoch) && startedPhases.has(r.taskState)
+          &&(startedPhases.has(r.runState)||r.runState==='needs_confirmation')&&positiveInteger(r.registeredAt)&&typeof r.stopRequested==='boolean'
+        : value.resultOnly === true
         ? r.waitingState === 'result_review' && positiveInteger(r.reviewRecordedAt) : ['not_started','interrupted_before_start'].includes(r.waitingState)) && identity(r.goal) && positiveInteger(r.createdAt) && (['main_screen','background'].includes(r.screenMode) || r.textOnly === true && r.screenMode === 'capabilities'))
     || new Set(value.rows.map((row: DeviceData) => JSON.stringify([row.taskId,row.operationId]))).size !== value.rows.length) throw new Error('这批待接手记录无法与本机原身份核对。');
   return value;
@@ -117,9 +123,10 @@ export type PhoneArchiveSide = 'sent' | 'received';
 export function receivedPhoneArchiveReturn(value: unknown, row: DeviceData, peer: DeviceData, local: DeviceData): ReceivedPhoneGoalReturn {
   if (!object(value) || value.kind !== 'receivedGoalReturn' || value.readOnly !== true || value.taskId !== row.taskId || value.operationId !== row.operationId
     || value.targetId !== local.deviceId || value.instanceId !== local.instanceId || value.sourceId !== peer.deviceId
+    || (row.waitingState==='original_run' ? value.runId!==row.runId || value.executorEpoch!==row.epoch : value.runId!==undefined || value.executorEpoch!==undefined)
     || !identity(value.parentTaskId) || !identity(value.grantId) || !positiveInteger(value.epoch)) throw new Error('未能核对本机接纳的这次原任务。');
   return { taskId: value.taskId, operationId: value.operationId, targetId: value.targetId, instanceId: value.instanceId, sourceId: value.sourceId,
-    parentTaskId: value.parentTaskId, grantId: value.grantId, epoch: value.epoch, peerDetail: true, leftAt: Date.now() };
+    parentTaskId: value.parentTaskId, grantId: value.grantId, epoch: value.epoch, ...(row.waitingState==='original_run'?{runId:value.runId,executorEpoch:value.executorEpoch}:{}), peerDetail: true, leftAt: Date.now() };
 }
 export function devicePhoneGoalArchive(value: unknown, peer: DeviceData, local: DeviceData, side: PhoneArchiveSide, sourceTaskId = '') {
   if (!object(value) || value.kind !== 'phoneGoalArchive' || (value.sourceTaskId ?? '') !== sourceTaskId
@@ -133,10 +140,12 @@ export function devicePhoneGoalArchive(value: unknown, peer: DeviceData, local: 
     || new Set(value.rows.map((row: DeviceData) => JSON.stringify([row.taskId, row.operationId]))).size !== value.rows.length) throw new Error('原手机、本机派发或目录已变化，请重新读取。');
   return value;
 }
-export function localReviewedInbox(value:unknown,local:DeviceData){
-  if(!object(value)||value.kind!=='reviewedPhoneInbox'||value.readOnly!==true||value.localDeviceId!==local.deviceId||value.localInstanceId!==local.instanceId||!identity(value.closedHandle)
+export function localReviewedInbox(value:unknown,local:DeviceData,search=''){
+  if(!object(value)||value.kind!=='reviewedPhoneInbox'||(value.searchText??'')!==search||Array.from(search).length>64||value.readOnly!==true||value.localDeviceId!==local.deviceId||value.localInstanceId!==local.instanceId||!identity(value.closedHandle)
     ||!Array.isArray(value.rows)||value.rows.length>6||typeof value.hasMore!=='boolean'||typeof value.canReadNewer!=='boolean'||!Number.isSafeInteger(value.limitedCandidates)||value.limitedCandidates<0
-    ||!value.rows.every((r:unknown)=>object(r)&&identity(r.taskId)&&identity(r.operationId)&&identity(r.sourceDeviceId)&&typeof r.goal==='string'&&positiveInteger(r.reviewedAt)&&typeof r.keptOnPhone==='boolean'&&typeof r.hasText==='boolean')
+    ||!value.rows.every((r:unknown)=>object(r)&&identity(r.taskId)&&identity(r.operationId)&&identity(r.sourceDeviceId)&&typeof r.goal==='string'&&positiveInteger(r.reviewedAt)&&typeof r.keptOnPhone==='boolean'&&typeof r.hasText==='boolean'
+      &&(search ? (r.matchPart==='goal'||r.matchPart==='result'&&r.hasText===true)&&Number.isSafeInteger(r.matchPage)&&r.matchPage>=0&&r.matchPage<188&&typeof r.bothParts==='boolean'
+        : r.matchPart===undefined&&r.matchPage===undefined&&r.bothParts===undefined))
     ||new Set(value.rows.map((r:DeviceData)=>JSON.stringify([r.taskId,r.operationId]))).size!==value.rows.length)throw new Error('本机已核对目录身份已变化，请重新读取。');
   return value;
 }

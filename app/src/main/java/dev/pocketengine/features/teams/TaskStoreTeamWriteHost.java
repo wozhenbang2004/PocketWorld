@@ -391,6 +391,15 @@ public final class TaskStoreTeamWriteHost implements TeamCoordinator.BudgetHost,
         }catch(Exception failure){if(!settled&&binding!=null&&!binding.optBoolean("inspectOnly"))try{tasks.endAttempt(binding.getString("taskId"),binding.getString("runId"),control.isCancelled()?"cancelled":"interrupted","原唯一整合者未取得确定终态，实际逐文件回执保留；未知效果只核对、不重放",new JSONObject());changed.accept(binding.getString("taskId"));}catch(Exception persistence){failure.addSuppressed(persistence);}throw failure;}
         finally{closeFence(liveFence);integrations.remove(run,control);if(binding!=null&&!binding.optString("taskId").isEmpty())integrationTasks.remove(binding.optString("taskId"),control);}
     }
+    JSONObject recoverOriginalFile(String id,String run,int epoch,String operation,java.util.function.BooleanSupplier ownerWindow)throws Exception{
+        JSONObject selection=tasks.pendingTeamFileEffect(id,run,epoch,operation);String team=selection.getJSONObject("binding").getString("teamRunId");
+        java.util.function.BooleanSupplier stopped=()->ownerWindow.getAsBoolean()&&!integrations.containsKey(team)&&!integrationTasks.containsKey(id);
+        if(!stopped.getAsBoolean())throw new SecurityException("原整合尚未退出或私人窗口已关闭");
+        TeamIntegrationFileRecovery.Observed proof=TeamIntegrationFiles.recoverOriginal(workspace,selection);
+        JSONObject receipt=tasks.recoverTeamFileReceipt(proof,stopped);
+        try{changed.accept(id);}catch(RuntimeException stalePresentation){receipt.put("refreshRequired",true);}
+        return receipt; // A notification failure cannot undo the already committed original receipt.
+    }
     JSONObject finalWorkers(String team)throws Exception {
         RunControl review=reviews.get(team),integration=integrations.get(team);JSONObject sql;
         try{sql=tasks.teamFinalWorkerTasks(team);}catch(Exception incomplete){sql=TeamDeliveryWorkers.unavailable(team);}

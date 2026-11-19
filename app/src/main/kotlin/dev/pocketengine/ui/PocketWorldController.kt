@@ -3367,7 +3367,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         return app.prepareDraftPhoneStart(scope, goal, mode, JSONObject()
             .put("scopeMinutes", newTaskScopeMinutes).put("toolLimit", newTaskToolBudget).put("modelCallLimit", newTaskModelBudget))
     }
-    internal fun startDraftPhone(review: EngineApplication.DraftPhoneStartReview, ownerCurrent: () -> Boolean, completed: (JSONObject?, String?) -> Unit): Boolean {
+    internal fun startDraftPhone(review: EngineApplication.DraftPhoneStartReview, ownerCurrent: () -> Boolean, capacity: JSONObject? = null, completed: (JSONObject?, String?) -> Unit): Boolean {
         val shown = review.view()
         if (!webPrivateOwnerVisible() || !ownerCurrent() || hasChannelPhoneOrigin || review.modelScope() != conversationModelScope()) {
             state = state.copy(error = "原私人手机任务草稿已变化，请重新核对"); return false
@@ -3377,9 +3377,9 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         return try {
             io.execute {
                 var allocated: String? = null
-                val result = runCatching { app.startDraftPhone(review, true,
+                val result = runCatching { withReviewedPhoneCapacity(shown.getString("mode"), capacity, ownerCurrent) { app.startDraftPhone(review, true,
                     java.util.function.BooleanSupplier { webPrivateOwnerVisible() && !hasChannelPhoneOrigin && ownerCurrent() },
-                    java.util.function.Consumer { allocated = it }) }
+                    java.util.function.Consumer { allocated = it }) } }
                 main.post {
                     if (!closed) {
                         state = state.copy(phoneSubmitting = false)
@@ -3388,14 +3388,15 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                     }
                     completed(result.getOrNull() ?: JSONObject().put("draftRequestId",shown.getString("draftRequestId")).also { receipt ->
                         allocated?.let { receipt.put("taskId", it) }
-                        if (allocated == null && result.exceptionOrNull() is EngineApplication.DraftPhoneStartRejected) receipt.put("status", "rejected")
+                        if (allocated == null && result.exceptionOrNull() is PrivatePhoneCapacityChanged) receipt.put("status", "rejected").put("capacityChanged", true)
+                        else if (allocated == null && result.exceptionOrNull() is EngineApplication.DraftPhoneStartRejected) receipt.put("status", "rejected")
                     }, result.exceptionOrNull()?.let(::message))
                 }
             }
             true
         } catch (error: Exception) { state = state.copy(phoneSubmitting = false, error = message(error)); false }
     }
-    internal fun startConversationPhone(review: EngineApplication.ConversationPhoneStartReview, ownerCurrent: () -> Boolean, completed: (JSONObject?, String?) -> Unit): Boolean {
+    internal fun startConversationPhone(review: EngineApplication.ConversationPhoneStartReview, ownerCurrent: () -> Boolean, capacity: JSONObject? = null, completed: (JSONObject?, String?) -> Unit): Boolean {
         val shown = review.view()
         if (!webPrivateOwnerVisible() || !ownerCurrent() || hasChannelPhoneOrigin) { state = state.copy(error = "原私人手机任务审阅已变化，请重新核对"); return false }
         if (!preparePhoneSubmission(shown.getString("goal"), shown.getString("mode"))) return false
@@ -3403,9 +3404,9 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         return try {
             io.execute {
                 var allocated: String? = null
-                val result = runCatching { app.startConversationPhone(review, true,
+                val result = runCatching { withReviewedPhoneCapacity(shown.getString("mode"), capacity, ownerCurrent) { app.startConversationPhone(review, true,
                     java.util.function.BooleanSupplier { webPrivateOwnerVisible() && ownerCurrent() },
-                    java.util.function.Consumer { allocated = it }) }
+                    java.util.function.Consumer { allocated = it }) } }
                 main.post {
                     if (!closed) {
                         state = state.copy(phoneSubmitting = false)
@@ -3421,7 +3422,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                     completed(result.getOrNull() ?: JSONObject().put("requestId", shown.getString("requestId"))
                         .put("conversationId", shown.getString("conversationId")).also { value ->
                             allocated?.let { value.put("taskId", it) }
-                            if (allocated == null && result.exceptionOrNull() is EngineApplication.ConversationPhoneStartRejected) value.put("status", "rejected")
+                            if (allocated == null && result.exceptionOrNull() is PrivatePhoneCapacityChanged) value.put("status", "rejected").put("capacityChanged", true)
+                            else if (allocated == null && result.exceptionOrNull() is EngineApplication.ConversationPhoneStartRejected) value.put("status", "rejected")
                         },
                         result.exceptionOrNull()?.let(::message))
                 }
@@ -3456,6 +3458,23 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     /** Local configuration snapshot only; no screen content or new display connection. */
     internal fun reviewedPhoneConditions(): JSONObject = app.phoneReadiness()
+    internal fun reviewedPhoneCapacity(mode: String): JSONObject = app.privatePhoneStartCapacity(mode)
+
+    private class PrivatePhoneCapacityChanged(message: String) : IllegalStateException(message)
+    /** On the original submission worker, before its first write and under the native admission lock. */
+    private fun <T> withReviewedPhoneCapacity(mode: String, shown: JSONObject?, original: () -> Boolean, submit: () -> T): T {
+        if (shown == null) return submit() // Legacy callers keep their existing native admission checks.
+        return synchronized(app) {
+            if (!webPrivateOwnerVisible() || hasChannelPhoneOrigin || !original())
+                throw PrivatePhoneCapacityChanged("原草稿或审阅窗口已变化，这次没有提交。")
+            val now = runCatching { app.privatePhoneStartCapacity(mode) }.getOrNull()
+            if (!dev.pocketengine.phone.PrivatePhoneStartCapacity.unchangedReady(mode, shown, now)) {
+                val reason = now?.takeUnless { it.optString("state") == "ready" }?.optString("message")?.takeIf { it.isNotBlank() }
+                throw PrivatePhoneCapacityChanged((reason ?: "核对后的执行位置有变化。") + " 原目标还在，请重新核对；没有提交。")
+            }
+            submit()
+        }
+    }
 
     private fun preparePhoneSubmission(goal: String, mode: String): Boolean {
         if (modelSelectionPending()) { state = state.copy(error = "模型设置正在保存，请等待回执后再开始手机任务"); return false }
@@ -4334,6 +4353,16 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         // Creation continues independently. Only the latest creation intent may
         // open its result, and only while its original owner window is still current.
         projectCreationNavigation = ProjectCreationNavigation(requestId, window)
+    }
+    /** From the original private checkout only. No path-based latest read, external open or save. */
+    internal fun showAdoptedFormalFile(loaded: ProjectAdoptedFormalFile.Loaded) {
+        val pin = loaded.pin
+        check(!closed && webPrivateOwnerVisible() && state.projectId == pin.project && state.filePath == null &&
+            !state.fileSaving && loaded.stillCurrent()) { "原正式版本或项目窗口已变化，未切换文件或覆盖现有编辑" }
+        invalidateFileRequests()
+        state = state.copy(filePath = pin.path, fileContent = loaded.content, fileBaseline = loaded.content, fileVersion = pin.version,
+            fileLoading = false, fileSaving = false, fileReady = true, fileError = null, fileHistory = emptyList(), revisionContent = null,
+            revisionNumber = null, revisionLoading = false, lastSavedVersion = null, workspaceArtifactEditorOrigin = null)
     }
     fun openFile(path: String) {
         val project = state.projectId ?: return

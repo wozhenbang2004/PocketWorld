@@ -5,6 +5,8 @@ import android.os.Looper
 import android.os.SystemClock
 import dev.pocketengine.core.RunControl
 import dev.pocketengine.features.local.project.ProjectFileDraft
+import dev.pocketengine.ui.ProjectAdoptedFormalFile
+import dev.pocketengine.features.workspace.WorkspaceModule
 import dev.pocketengine.ui.PocketWorldController
 import org.json.JSONArray
 import org.json.JSONObject
@@ -22,6 +24,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
     private class Opened(val handle: String, var draft: ProjectFileDraft) {
         var sequence = 0L
         var saveUnknown = false
+        @Volatile var formal: ProjectAdoptedFormalFile? = null
     }
     private val main = Handler(Looper.getMainLooper())
     private val store = controller.projectWorkbench.fileDrafts
@@ -31,7 +34,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
         val COMMANDS = setOf("projects.development.files.open", "projects.development.files.openSource", "projects.development.files.openHostChange", "projects.development.files.list", "projects.development.files.read",
             "projects.development.files.edit", "projects.development.files.save", "projects.development.files.resolve",
             "projects.development.files.cache", "projects.development.files.close", "projects.development.files.reviewImport",
-            "projects.development.files.import", "projects.development.files.dismissImport")
+            "projects.development.files.import", "projects.development.files.dismissImport", "projects.development.files.openFormal")
     }
     fun clear() { val old = page; page = null; busy = false; old?.opened?.let { store.release(it.draft) } }
     private fun current(original: Page) = page === original && original.parentCurrent() && controller.webPrivateOwnerVisible() && controller.state.projectId == original.project
@@ -59,17 +62,21 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
             .put("dirty", value.dirty()).put("conflict", value.conflict()).put("baseHash", value.baseHash).put("saveUnknown", file.saveUnknown)
             .put("draftDurable", store.durable(value)).put("draftError", store.persistenceError(value) ?: "")
             .put("projectVersionWritten", false).put("executionAuthorized", false)
+        file.formal?.let { result.put("formalFile", it.position()) }
         if (body) result.put("text", value.text).put("baseContent", value.baseContent).put("latest", value.latestReview() ?: JSONObject.NULL)
         return result
     }
-    private fun work(original: Page, done: (JSONObject?, String?) -> Unit, block: () -> JSONObject) {
+    private fun workspace() = controller.nativeButlerHost().features.module("workspace") as WorkspaceModule
+    private fun work(original: Page, done: (JSONObject?, String?) -> Unit, block: () -> JSONObject) =
+        observe(original, done, { it }, block)
+    private fun <T> observe(original: Page, done: (JSONObject?, String?) -> Unit, present: (T) -> JSONObject, block: () -> T) {
         check(!busy) { "请等待原文件操作回执" }; busy = true
         try { controller.runPluginCatalogWork(Runnable {
             val result = runCatching { check(current(original)) { "原副本窗口已关闭，未开始排队操作" }; block() }
             main.post {
                 if (page === original) busy = false
                 if (!current(original)) done(null, "原副本窗口已变化；已有草稿保留，保存结果请重新读取原文件核对")
-                else result.fold({ value ->
+                else result.mapCatching(present).fold({ value ->
                     if (value.has("importStatus")) runCatching { controller.requestFeature("workspace", "list", JSONObject().put("projectId", original.project)) }
                         .onFailure { value.put("projectListRefreshMessage", "正式文件列表尚未刷新；请重新选择原项目读取，不重复采纳。") }
                     done(PocketWebState.publicValue(value) as JSONObject, null)
@@ -139,7 +146,23 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
         val original = selected(args)
         if (action in setOf("projects.development.files.list", "projects.development.files.read", "projects.development.files.edit",
                 "projects.development.files.resolve", "projects.development.files.save")) original.adoption = null
+        if (action in setOf("projects.development.files.reviewImport", "projects.development.files.import",
+                "projects.development.files.edit", "projects.development.files.save", "projects.development.files.resolve")) original.opened?.formal = null
         when (action) {
+            "projects.development.files.openFormal" -> {
+                fields(args, "viewHandle", "filesHandle", "fileHandle", "formalHandle")
+                val file = opened(original, args); val pin = file.formal
+                check(pin != null && pin.handle == text(args, "formalHandle") && pin.project == original.project &&
+                    pin.checkout == original.checkout && pin.path == file.draft.path) { "原正式修订定位已结束，请在同一文件重新比较" }
+                fun sameWindow() = current(original) && original.opened === file && file.formal === pin && controller.state.filePath == null &&
+                    !file.saveUnknown && synchronized(store) { requireDraft(file); !file.draft.dirty() }
+                check(sameWindow()) { "原副本仍有草稿或已切换，没有代开正式文件" }
+                original.adoption = null // Opening the original version never applies a pending import.
+                observe(original, done, { loaded ->
+                    check(sameWindow()) { "原副本窗口已变化，没有覆盖其他编辑" }; controller.showAdoptedFormalFile(loaded)
+                    pin.position().put("opened", true).put("projectVersionWritten", false).put("executionAuthorized", false)
+                }) { pin.read(workspace()) }; return
+            }
             "projects.development.files.dismissImport" -> {
                 fields(args, "viewHandle", "filesHandle", "importHandle")
                 if (original.adoption?.handle == text(args, "importHandle")) original.adoption = null
@@ -157,7 +180,11 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                     check(current(original) && original.opened === file) { "原文件采纳窗口已变化，没有准备替代文件审阅" }
                     val entry = Adoption(UUID.randomUUID().toString(), file, revision, JSONObject(reviewed.toString()), SystemClock.elapsedRealtime() + 120_000)
                     original.adoption = entry
-                    JSONObject(reviewed.toString()).put("filesHandle", original.handle).put("fileHandle", file.handle).put("importHandle", entry.handle)
+                    val shown = JSONObject(reviewed.toString())
+                    if (reviewed.opt("same") == true) runCatching {
+                        ProjectAdoptedFormalFile.matching(reviewed, original.project, original.checkout, file.draft.path, workspace())
+                    }.onSuccess { pin -> file.formal = pin; pin?.let { shown.put("formalFile", it.position()) } }
+                    shown.put("filesHandle", original.handle).put("fileHandle", file.handle).put("importHandle", entry.handle)
                         .put("expiresAt", System.currentTimeMillis() + 120_000).put("projectVersionWritten", false).put("executionAuthorized", false)
                 }
             }
@@ -172,6 +199,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                         val result = controller.projectDevelopmentForWeb().importFileForOwner(original.project, original.checkout, entry.file.draft.path, entry.review) {
                             current(original) && original.opened === entry.file && entry.expires > SystemClock.elapsedRealtime() && synchronized(store) { requireDraft(entry.file); entry.file.draft.revision == entry.revision && !entry.file.draft.dirty() }
                         }
+                        entry.file.formal = ProjectAdoptedFormalFile.receipt(result, original.project, original.checkout, entry.file.draft.path)
                         info(original, entry.file, true).also { reply ->
                             reply.remove("projectVersionWritten")
                             if (result.opt("projectVersionCommitted") is Boolean) reply.put("projectVersionWritten", result.getBoolean("projectVersionCommitted"))

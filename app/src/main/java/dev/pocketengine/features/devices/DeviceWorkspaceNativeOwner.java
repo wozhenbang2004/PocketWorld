@@ -351,9 +351,14 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
         }
         public JSONObject historyLinks(String id) throws Exception { tasks.get(id, false); return tasks.deviceTasks().childOverview(id, 24); }
         public JSONObject historyPage(String id,String target,String after) throws Exception { return tasks.deviceTasks().childHistoryPage(id,target,after,24); }
-        public JSONObject closedReceivedPhoneGoals(String caller,String operation)throws Exception{
+        public JSONObject closedReceivedPhoneGoals(String caller,String operation)throws Exception{return closedReceivedPhoneGoals(caller,operation,"");}
+        public JSONObject closedReceivedPhoneGoals(String caller,String operation,String query)throws Exception{
             DeviceIdentity.LocalIdentity local=existingIdentity();if(local==null)throw new SecurityException("本机身份不可核对");
-            return tasks.deviceTasks().closedReceivedPhoneGoals(local.deviceId(),local.instanceId(),caller,operation);
+            return tasks.deviceTasks().closedReceivedPhoneGoals(local.deviceId(),local.instanceId(),caller,operation,query);
+        }
+        public JSONObject startedReceivedPhoneGoals(String caller,String operation)throws Exception{
+            DeviceIdentity.LocalIdentity local=existingIdentity();if(local==null)throw new SecurityException("无法核对这部接收手机的原身份");
+            return tasks.deviceTasks().startedReceivedPhoneGoals(local.deviceId(),local.instanceId(),caller,operation);
         }
         public JSONObject waitingPhoneGoals(String afterCaller,String afterOp,boolean results)throws Exception {
             DeviceIdentity.LocalIdentity local=existingIdentity();if(local==null)throw new SecurityException("本机原设备身份不可读取");

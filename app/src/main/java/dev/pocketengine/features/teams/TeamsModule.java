@@ -117,6 +117,10 @@ public final class TeamsModule implements EngineModule {
     @Override public String id(){return "teams";}
     /** Private foreground reading; not a feature command, task update or execution admission. */
     public JSONObject retainedOwnerReading(String runId)throws Exception{return coordinator.retainedOwnerReading(runId);}
+    /** Foreground owner receipt recovery only; not exposed by handle() or any model tool. */
+    public JSONObject recoverOwnerOriginalFile(String id,String run,int epoch,String operation,java.util.function.BooleanSupplier ownerWindow)throws Exception{
+        if(writeHost==null)throw new IllegalStateException("原团队文件宿主不可用");return writeHost.recoverOriginalFile(id,run,epoch,operation,ownerWindow);
+    }
     public JSONObject ownerFinalWorkers(String runId)throws Exception{return writeHost==null?TeamDeliveryWorkers.unavailable(runId):writeHost.finalWorkers(runId);}
     private JSONArray definitions()throws Exception {JSONArray a=JsonFiles.read(file).optJSONArray("teams");return a==null?new JSONArray():a;}
     private void writeDefinitions(JSONArray teams)throws Exception {JSONObject document=JsonFiles.read(file);document.put("teams",teams);JsonFiles.write(file,document);}

@@ -20,6 +20,7 @@ public final class TeamWorkFiles implements CapabilityPort {
         JSONObject call(String command,JSONObject input)throws Exception;
         default boolean byteFilesSupported(){return false;}
         default VersionedWorkspace.FileSnapshot nativeFile(String project,String path,int version)throws Exception{throw new SecurityException("原工作区尚未提供字节版本引用");}
+        default VersionedWorkspace.FileSnapshot commitTeamFile(VersionedWorkspace.FileSnapshot expected,byte[] bytes,java.util.UUID revision)throws Exception{throw new SecurityException("原工作区尚未接入带原操作身份的文件写回");}
         default VersionedWorkspace.FileSnapshot writeBytes(VersionedWorkspace.FileSnapshot expected,byte[] bytes)throws Exception{throw new SecurityException("原工作区尚未提供字节CAS");}
         default VersionedWorkspace.FileSnapshot delete(VersionedWorkspace.FileSnapshot expected)throws Exception{throw new SecurityException("原工作区尚未提供删除CAS");}
         default WorkspaceArtifacts.ArtifactRef freeze(VersionedWorkspace.FileSnapshot selected,String operation,String task,String run)throws Exception{throw new SecurityException("原工作区尚未提供原件冻结");}

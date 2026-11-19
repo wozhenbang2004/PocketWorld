@@ -90,24 +90,33 @@ public final class VersionedWorkspace {
         List<FileSnapshot> result=new ArrayList<>();JSONArray heads=list(projectId);for(int i=0;i<heads.length();i++){JSONObject row=heads.getJSONObject(i);result.add(snapshot(projectId,row.getString("path"),row.getInt("version")));}
         return new ProjectSnapshot(definition,result);
     }
-    public synchronized FileSnapshot writeBytes(String projectId,String path,byte[] bytes,int expectedVersion,String expectedSha256)throws Exception {return writeBytes(projectId,path,bytes,expectedVersion,expectedSha256,null);}
+    public synchronized FileSnapshot writeBytes(String projectId,String path,byte[] bytes,int expectedVersion,String expectedSha256)throws Exception {return writeBytes(projectId,path,bytes,expectedVersion,expectedSha256,null,null);}
     synchronized FileSnapshot writeFromArtifact(FileSnapshot expected,byte[] bytes,WorkspaceArtifacts.ArtifactRef selected)throws Exception{
         requireIssued(expected);if(selected==null||!expected.projectId.equals(selected.projectId)||!expected.path.equals(selected.path)||selected.tombstone)throw new SecurityException("续改目标或原成果来源无效");
         JSONObject lineage=new JSONObject().put("artifactId",selected.artifactId).put("sha256",selected.sha256).put("sourceVersion",selected.version).put("sourceRevisionId",selected.revisionId).put("sizeBytes",selected.sizeBytes).put("kind",selected.kind);
-        return writeBytes(expected.projectId,expected.path,bytes,expected.version,expected.sha256,lineage);
+        return writeBytes(expected.projectId,expected.path,bytes,expected.version,expected.sha256,lineage,null);
     }
-    private FileSnapshot writeBytes(String projectId,String path,byte[] bytes,int expectedVersion,String expectedSha256,JSONObject lineage)throws Exception {
+    private FileSnapshot writeBytes(String projectId,String path,byte[] bytes,int expectedVersion,String expectedSha256,JSONObject lineage,UUID revision)throws Exception {
         if(bytes==null||bytes.length>MAX_FILE_BYTES)throw new IllegalArgumentException("单个版本文件最多2MiB；没有保存部分内容");
         path=path(path);FileSnapshot current=snapshot(projectId,path,0);requireExpected(current,expectedVersion,expectedSha256);
         byte[] retained=bytes.clone();String text=null;try{text=StandardCharsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT).onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(retained)).toString();if(text.indexOf('\0')>=0)text=null;}catch(java.nio.charset.CharacterCodingException binary){/* Preserve the original bytes, not replacement text. */}
         JSONObject entry=new JSONObject().put("encoding","base64").put("contentBase64",Base64.getEncoder().encodeToString(retained)).put("kind",text==null?"binary":"text").put("sizeBytes",retained.length).put("sha256",sha256(retained));
         if(lineage!=null)entry.put("continuedFromArtifact",JsonFiles.copy(lineage));
-        commitEntry(projectId,path,entry,expectedVersion,false);return snapshot(projectId,path,0);
+        commitEntry(projectId,path,entry,expectedVersion,false,revision);return snapshot(projectId,path,0);
     }
     public synchronized FileSnapshot writeBytes(FileSnapshot expected,byte[] bytes)throws Exception{requireIssued(expected);return writeBytes(expected.projectId,expected.path,bytes,expected.version,expected.sha256);}
+    /** Native admitted team write only. The command surface cannot supply a revision ID. */
+    public synchronized FileSnapshot commitTeamFile(FileSnapshot expected,byte[] bytes,UUID revision)throws Exception{
+        requireIssued(expected);if(revision==null||revision.version()!=8)throw new SecurityException("原写回没有绑定已登记的操作");
+        return bytes==null?delete(expected.projectId,expected.path,expected.version,expected.sha256,revision)
+                :writeBytes(expected.projectId,expected.path,bytes,expected.version,expected.sha256,null,revision);
+    }
     public synchronized FileSnapshot delete(String projectId,String path,int expectedVersion,String expectedSha256)throws Exception {
+        return delete(projectId,path,expectedVersion,expectedSha256,null);
+    }
+    private FileSnapshot delete(String projectId,String path,int expectedVersion,String expectedSha256,UUID revision)throws Exception {
         path=path(path);FileSnapshot current=snapshot(projectId,path,0);requireExpected(current,expectedVersion,expectedSha256);if(current.tombstone)throw new IllegalArgumentException("文件不存在或已经删除");
-        commitEntry(projectId,path,new JSONObject().put("kind","tombstone").put("sha256","absent").put("sizeBytes",0).put("content",""),expectedVersion,true);return snapshot(projectId,path,0);
+        commitEntry(projectId,path,new JSONObject().put("kind","tombstone").put("sha256","absent").put("sizeBytes",0).put("content",""),expectedVersion,true,revision);return snapshot(projectId,path,0);
     }
     public synchronized FileSnapshot delete(FileSnapshot expected)throws Exception{requireIssued(expected);return delete(expected.projectId,expected.path,expected.version,expected.sha256);}
     public void requireIssued(FileSnapshot value){if(value==null||value.issuer!=this)throw new SecurityException("文件快照不是这个原工作区读取的对象");}
@@ -161,11 +170,12 @@ public final class VersionedWorkspace {
         commitEntry(projectId,path,new JSONObject().put("content",content).put("kind","text").put("sha256",sha256(bytes)).put("sizeBytes",bytes.length),expectedVersion,false);
         return metadata(head(projectId,path)).put("content",content);
     }
-    private void commitEntry(String projectId,String path,JSONObject value,int expectedVersion,boolean deleted)throws Exception {
+    private void commitEntry(String projectId,String path,JSONObject value,int expectedVersion,boolean deleted)throws Exception {commitEntry(projectId,path,value,expectedVersion,deleted,null);}
+    private void commitEntry(String projectId,String path,JSONObject value,int expectedVersion,boolean deleted,UUID revision)throws Exception {
         File folder=project(projectId);JSONObject head=head(projectId,path);int current=head.optInt("version");
         if(current!=expectedVersion)throw new IllegalStateException("版本冲突，请重新读取原文件");
         if(!deleted&&(current==0||head.optBoolean("deleted"))&&list(projectId).length()>=100)throw new IllegalStateException("项目最多100个文件");
-        JSONObject entry=JsonFiles.copy(value).put("revisionId",UUID.randomUUID().toString()).put("version",current+1).put("deleted",deleted).put("at",System.currentTimeMillis());
+        JSONObject entry=JsonFiles.copy(value).put("revisionId",(revision==null?UUID.randomUUID():revision).toString()).put("version",current+1).put("deleted",deleted).put("at",System.currentTimeMillis());
         JSONArray history=head.optJSONArray("history"),kept=new JSONArray();if(history!=null)for(int i=Math.max(0,history.length()-7);i<history.length();i++)kept.put(history.get(i));kept.put(entry);
         JSONObject next=new JSONObject().put("path",path).put("revisionId",entry.getString("revisionId")).put("version",current+1).put("deleted",deleted).put("history",kept).put("updatedAt",entry.getLong("at"));
         long total=next.toString().getBytes(StandardCharsets.UTF_8).length;File target=new File(folder,key(path)+".json");File[] records=committedRecords(folder);if(records!=null)for(File record:records)if(!record.equals(target))total+=record.length();

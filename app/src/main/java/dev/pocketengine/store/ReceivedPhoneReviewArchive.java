@@ -12,10 +12,10 @@ final class ReceivedPhoneReviewArchive {
     private static final int PAGE=1400;
     private ReceivedPhoneReviewArchive(){}
     static JSONObject read(SQLiteDatabase db,JSONObject selection,int page,String stamp)throws Exception{
-        return read(db,selection,page,stamp,false);
+        return read(db,selection,page,stamp,false,null);
     }
-    static JSONObject checkedMetadata(SQLiteDatabase db,JSONObject selection)throws Exception{return read(db,selection,0,"",true);}
-    private static JSONObject read(SQLiteDatabase db,JSONObject selection,int page,String stamp,boolean metadataOnly)throws Exception{
+    static JSONObject checkedMetadata(SQLiteDatabase db,JSONObject selection,LocalPhoneGoalSearch search)throws Exception{return read(db,selection,0,"",true,search);}
+    private static JSONObject read(SQLiteDatabase db,JSONObject selection,int page,String stamp,boolean metadataOnly,LocalPhoneGoalSearch search)throws Exception{
         String id=selection.getString("taskId"),op=selection.getString("operationId"),caller=selection.getString("sourceId"),
                 here=selection.getString("localId"),instance=selection.getString("localInstance");
         if(page<0||page>TaskAuditStore.MAX_CORE_BYTES/PAGE+1||page>0&&stamp.isEmpty())throw new SecurityException("请从本次原结果的页码读取");
@@ -66,7 +66,15 @@ final class ReceivedPhoneReviewArchive {
         String reference=TaskStore.capabilityFingerprint(new JSONObject().put("task",id).put("operation",op).put("wire",selection.getString("wireDigest"))
                 .put("run",run).put("epoch",epoch).put("review",digest).put("at",saved.getLong("reviewedAt")).put("kept",kept));
         if(!stamp.isEmpty()&&!stamp.equals(reference))throw new SecurityException("本机原结果已变化，不可接读另一份文字");
-        if(metadataOnly)return new JSONObject().put("hasText",!saved.getString("summary").isEmpty()).put("runId",run).put("epoch",epoch).put("reviewedAt",saved.getLong("reviewedAt")).put("keptOnPhone",kept).put("stamp",reference);
+        if(metadataOnly){
+            JSONObject meta=new JSONObject().put("hasText",!saved.getString("summary").isEmpty()).put("runId",run).put("epoch",epoch).put("reviewedAt",saved.getLong("reviewedAt")).put("keptOnPhone",kept).put("stamp",reference);
+            if(search!=null&&search.active()){
+                int goal=search.firstMatchingPage(receivedGoal,PAGE),answer=search.firstMatchingPage(saved.getString("summary"),PAGE);
+                if(goal<0&&answer<0)return null;
+                meta.put("matchPart",answer>=0?"result":"goal").put("matchPage",answer>=0?answer:goal).put("bothParts",goal>=0&&answer>=0);
+            }
+            return meta;
+        }
         String text="goal".equals(part)?receivedGoal:saved.getString("summary");int count=text.codePointCount(0,text.length()),pages=Math.max(1,(count+PAGE-1)/PAGE);
         if(page>=pages)throw new IllegalArgumentException("不在这份原文字的分页范围");
         int start=text.offsetByCodePoints(0,page*PAGE),end=text.offsetByCodePoints(start,Math.min(PAGE,count-page*PAGE));

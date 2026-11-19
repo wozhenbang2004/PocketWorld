@@ -431,6 +431,16 @@ public final class EngineApplication extends Application implements dev.pocketen
         if(run!=null)return run.control==original?run.questions:null;
         return original!=null&&id!=null&&id.equals(activeTaskId)&&original==activeControl?ownerPhoneQuestions:null;
     }
+    /** Review only. Both registries must agree; final admission still acquires the original exclusive lease. */
+    public synchronized JSONObject privatePhoneStartCapacity(String mode) throws org.json.JSONException {
+        var leases = businessReady() ? resources.availability() : null;
+        JSONObject view = dev.pocketengine.phone.PrivatePhoneStartCapacity.read(mode, activeTaskId != null, backgroundRuns.size(), leases);
+        if ("ready".equals(view.optString("state"))) {
+            try { requirePhoneSlotAvailable(mode); }
+            catch (IllegalStateException changed) { return dev.pocketengine.phone.PrivatePhoneStartCapacity.read(mode, false, 0, null); }
+        }
+        return view;
+    }
     private synchronized void requirePhoneSlotAvailable(String mode){
         if(activeTaskId!=null)throw new IllegalStateException("本机主执行仍占用，不能抢占原任务");
         if("background".equals(mode)){

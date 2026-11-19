@@ -174,6 +174,10 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
             throw new IllegalStateException("此本机宿主未提供原派发分页");
         }
         default JSONObject closedReceivedPhoneGoals(String afterCaller,String afterOp)throws Exception {throw new IllegalStateException("本机未提供已核对的文字收件目录");}
+        default JSONObject closedReceivedPhoneGoals(String caller,String operation,String query)throws Exception{
+            if(!query.isEmpty())throw new IllegalStateException("原宿主未提供本机文字查找");return closedReceivedPhoneGoals(caller,operation);
+        }
+        default JSONObject startedReceivedPhoneGoals(String caller,String operation)throws Exception{throw new IllegalStateException("此本机宿主没有已接手目录");}
         default JSONObject waitingPhoneGoals(String afterCaller,String afterOp,boolean results)throws Exception {throw new IllegalStateException("本机未提供待接手工作索引");}
         default JSONObject phoneGoalIndex(String target,String parentAfter,String operationAfter,boolean received) throws Exception { throw new IllegalStateException("本机未提供手机目标记录"); }
         default JSONObject phoneGoalIndex(String target,String parentAfter,String operationAfter,boolean received,String searchText)throws Exception {
@@ -491,8 +495,12 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         }
         public JSONObject historyLinks(String id) throws Exception { current(); return copy(control.historyLinks(id)); }
         public JSONObject historyPage(String id,String target,String after) throws Exception { current(); return copy(control.historyPage(id,target,after)); }
-        public JSONObject closedReceivedPhoneGoals(String caller,String operation)throws Exception {
-            current();JSONObject page=copy(control.closedReceivedPhoneGoals(caller,operation));current();return page;
+        public JSONObject closedReceivedPhoneGoals(String caller,String operation)throws Exception{return closedReceivedPhoneGoals(caller,operation,"");}
+        public JSONObject closedReceivedPhoneGoals(String caller,String operation,String query)throws Exception {
+            current();JSONObject page=copy(control.closedReceivedPhoneGoals(caller,operation,query));current();return page;
+        }
+        public JSONObject startedReceivedPhoneGoals(String caller,String operation)throws Exception{
+            current();JSONObject page=copy(control.startedReceivedPhoneGoals(caller,operation));current();return page;
         }
         public JSONObject waitingPhoneGoals(String afterCaller,String afterOp,boolean results)throws Exception {current();return copy(control.waitingPhoneGoals(afterCaller,afterOp,results));}
         public JSONObject directedPhoneDispatches(String target,String source,String parentAfter,String after)throws Exception {

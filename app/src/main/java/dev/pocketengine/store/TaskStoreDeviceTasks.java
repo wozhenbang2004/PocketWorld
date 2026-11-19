@@ -945,6 +945,9 @@ public final class TaskStoreDeviceTasks {
      * This is not a peer endpoint; it never returns wire_json, contexts, paths or credentials. */
     public JSONObject workspaceTaskLinks(int offset,int limit)throws Exception{return workspaceTaskLinks(null,offset,limit,"","");}
     public JSONObject childOverview(String parentTaskId,int limit)throws Exception{return childHistoryPage(parentTaskId,"","",limit);}
+    public JSONObject startedReceivedPhoneGoals(String here,String instance,String afterCaller,String afterOp)throws Exception{
+        synchronized(owner){return ReceivedPhoneGoalIndex.started(db,here,instance,afterCaller,afterOp);}
+    }
     public JSONObject waitingPhoneGoals(String here,String instance,String afterCaller,String afterOp,boolean results)throws Exception{
         synchronized(owner){return ReceivedPhoneGoalIndex.waiting(db,here,instance,afterCaller,afterOp,results);}
     }
@@ -954,8 +957,9 @@ public final class TaskStoreDeviceTasks {
     public JSONObject receivedPhoneGoalIndex(String here,String instance,String caller,String afterTask,String afterOperation,String searchText)throws Exception{
         synchronized(owner){return ReceivedPhoneGoalIndex.read(db,here,instance,caller,afterTask,afterOperation,searchText);}
     }
-    public JSONObject closedReceivedPhoneGoals(String here,String instance,String afterCaller,String afterOp)throws Exception{
-        synchronized(owner){return ReceivedPhoneGoalIndex.closed(db,here,instance,afterCaller,afterOp);}
+    public JSONObject closedReceivedPhoneGoals(String here,String instance,String afterCaller,String afterOp)throws Exception{return closedReceivedPhoneGoals(here,instance,afterCaller,afterOp,"");}
+    public JSONObject closedReceivedPhoneGoals(String here,String instance,String afterCaller,String afterOp,String query)throws Exception{
+        synchronized(owner){return ReceivedPhoneGoalIndex.closed(db,here,instance,afterCaller,afterOp,query);}
     }
     public JSONObject readLocallyReviewedPhoneGoal(JSONObject selected,int page,String stamp)throws Exception{
         synchronized(owner){return ReceivedPhoneReviewArchive.read(db,selected,page,stamp);}

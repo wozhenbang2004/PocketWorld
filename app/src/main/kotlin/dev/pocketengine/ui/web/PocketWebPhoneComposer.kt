@@ -19,13 +19,15 @@ internal class PocketWebPhoneComposer(
     private val isClosed: () -> Boolean,
     private val captureWindow: () -> PocketWebWindowTicket,
     private val acceptsWindow: (PocketWebWindowTicket) -> Boolean,
+    private val captureOwnerWindow: () -> PocketWebWindowTicket,
+    private val acceptsOwnerWindow: (PocketWebWindowTicket) -> Boolean,
     private val complete: (String, JSONObject?, String?) -> Unit,
     private val publishState: () -> Unit
 ) {
     private data class PhoneReview(val goal: String, val mode: String, val tools: Int, val models: Int, val minutes: Int,
         val viewEpoch: Int, val expires: Long, val window: PocketWebWindowTicket, val composerKey: String,
         val conversation: String, val draftEpoch: Int, val draftRevision: Long, val reviewGeneration: Long, val originRevision: Long,
-        val modelRevision: Long, val linked: EngineApplication.ConversationPhoneStartReview? = null,
+        val modelRevision: Long, val privateOwner: Boolean, val linked: EngineApplication.ConversationPhoneStartReview? = null,
         val draft: EngineApplication.DraftPhoneStartReview? = null, val conditions: JSONObject? = null)
     private val main = Handler(Looper.getMainLooper())
     private val phoneReviews = mutableMapOf<String, PhoneReview>()
@@ -116,7 +118,7 @@ internal class PocketWebPhoneComposer(
         check(requiredInt(args, "epoch") == presentationEpoch && requiredLong(args, "revision") == phoneDraftRevision) { "手机草稿已变化，原文字仍保留" }
         val conversation = requiredString(args, "conversationId")
         check(conversation == controller.state.conversationId && controller.composerDraft?.conversationId == conversation) { "原对话已切换，没有复制其他对话的消息" }
-        check(!controller.state.chatSubmitting && !controller.state.chatBusy && !controller.state.phoneSubmitting && controller.state.activeTaskId == null) { "请先等原回复结束或处理当前任务，没有开始第二次执行" }
+        check(!controller.state.chatSubmitting && !controller.state.chatBusy && !controller.state.phoneSubmitting) { "请先等原输入或回复结束；没有替换这次输入" }
         check(phoneStartReceipt?.optString("status") !in setOf("pending", "unknown")) { "原手机启动结果待核对，请先查询原请求" }
         val id = requiredString(args, "messageId")
         val message = controller.state.messages.firstOrNull { it.id == id } ?: error("原消息已不在当前对话，请重新打开")
@@ -154,7 +156,8 @@ internal class PocketWebPhoneComposer(
                 && requiredInt(expected, "ownerEpoch") == controller.composerViewEpoch && requiredLong(expected, "revision") == phoneDraftRevision
                 && requiredLong(expected, "origin") == controller.phoneOriginRevision) { "原手机草稿已变化，请返回核对原目标；没有准备其他任务" }
         }
-        require(!controller.state.phoneSubmitting && controller.state.activeTaskId == null) { "请先处理当前工作；没有创建第二个手机任务" }
+        val channel = controller.hasChannelPhoneOrigin
+        require(!controller.state.phoneSubmitting && (!channel || controller.state.activeTaskId == null)) { "原输入仍在提交或渠道工作正占用，未创建手机任务" }
         check(!textElsewhere()) { "请回到保存手机目标的原草稿；没有替换原请求" }
         val prior=phoneStartReceipt
         if(prior!=null && receiptHere(prior)){
@@ -165,7 +168,6 @@ internal class PocketWebPhoneComposer(
         clearReviews()
         val handle = UUID.randomUUID().toString()
         val conversation = controller.state.conversationId.orEmpty()
-        val channel = controller.hasChannelPhoneOrigin
         val pin=picked
         check(!pinLost && (pin == null || !channel && pin.conversation == conversation && pickedCurrent(pin))) { "所选的原请求已换版、移出窗口或不再是最新交代。原草稿保留，没有关联其他消息" }
         val modelScope = if (channel) null else controller.conversationModelScope()
@@ -173,8 +175,8 @@ internal class PocketWebPhoneComposer(
         check(!modelStatus.pending()) { "请等待原模型设置回执" }
         val original = PhoneReview(goal, mode, controller.newTaskToolBudget,
             controller.newTaskModelBudget, controller.newTaskScopeMinutes,
-            controller.composerViewEpoch, SystemClock.elapsedRealtime() + 120_000L, captureWindow(),
-            controller.composerDraft?.key.orEmpty(), conversation, presentationEpoch, phoneDraftRevision, reviewGeneration, controller.phoneOriginRevision, modelStatus.revision())
+            controller.composerViewEpoch, SystemClock.elapsedRealtime() + 120_000L, if (channel) captureWindow() else captureOwnerWindow(),
+            controller.composerDraft?.key.orEmpty(), conversation, presentationEpoch, phoneDraftRevision, reviewGeneration, controller.phoneOriginRevision, modelStatus.revision(), !channel)
         // Account refresh/model resolution may use the network. Keep it off the WebView's main thread.
         controller.runModelConnectionWork(Runnable {
             val prepared = runCatching {
@@ -212,6 +214,11 @@ internal class PocketWebPhoneComposer(
         val screen = source?.optJSONObject(if (mode == "main_screen") "mainPreparation" else "backgroundPreparation")
         return JSONObject().put("notification", condition(notification, "notifications"))
             .put("screen", condition(screen, "accessibility", notificationIds))
+            .put("capacity", readCapacity(mode))
+    }
+
+    private fun readCapacity(mode: String): JSONObject = runCatching { controller.reviewedPhoneCapacity(mode) }.getOrElse {
+        JSONObject().put("state", "unknown").put("mode", mode).put("message", "本机执行位置暂时无法核实，请重新核对。")
     }
 
     private fun checks(group: JSONObject?): List<JSONObject> {
@@ -303,7 +310,8 @@ internal class PocketWebPhoneComposer(
     private fun phoneReviewCurrent(review: PhoneReview): Boolean = phoneIntent && phoneExecutionMode == review.mode && review.reviewGeneration == reviewGeneration &&
         review.originRevision == controller.phoneOriginRevision && !pinLost && picked.let { it == null || pickedCurrent(it) } &&
         !isClosed() && controller.webPrivateOwnerVisible() &&
-        SystemClock.elapsedRealtime() < review.expires && acceptsWindow(review.window) &&
+        review.privateOwner == !controller.hasChannelPhoneOrigin && SystemClock.elapsedRealtime() < review.expires &&
+        (if (review.privateOwner) acceptsOwnerWindow(review.window) else acceptsWindow(review.window)) &&
         review.viewEpoch == controller.composerViewEpoch && review.composerKey == controller.composerDraft?.key.orEmpty() &&
         review.conversation == controller.state.conversationId.orEmpty() && review.draftEpoch == presentationEpoch && review.draftRevision == phoneDraftRevision &&
         !controller.nativeModelSelection().status().pending() && review.modelRevision == controller.nativeModelSelection().status().revision() &&
@@ -352,8 +360,11 @@ internal class PocketWebPhoneComposer(
             if(result.has("status"))receipt.put("taskStatus",result.get("status"))
         }
         if(absent)receipt.put("canRetire",true)
+        if(rejected && !retired && result?.optBoolean("capacityChanged") == true)
+            receipt.put("recheckReview", original.getString("reviewHandle"))
         receipt.put("status",if(rejected)"rejected" else if(accepted)"accepted" else "unknown").put("message",when{
             retired -> "已关闭这次未建成的请求。旧编号不会再创建任务；目标文字仍保留。"
+            rejected && receipt.has("recheckReview") -> error ?: "原执行位置已变化，请重新核对。"
             rejected -> (error?:"这次启动未被接纳")+"。尚未创建手机任务，草稿仍保留；请明确重新审阅。"
             accepted && blank -> when(result?.optString("admissionState")){
                 "admitted" -> "找到了本次手机任务及原首次准入回执，不代表已完成。"
@@ -419,8 +430,8 @@ internal class PocketWebPhoneComposer(
         val details=if(args.has("details"))requiredBoolean(args,"details") else false
         require(request==null||!details){"请核对一个原请求"}
         check(phoneIntent && controller.composerDraft?.key==composer){"请回到原手机草稿"}
-        val window=captureWindow();val epoch=presentationEpoch
-        controller.lookupDraftPhone(request,composer,false,details,{phoneIntent && epoch==presentationEpoch && acceptsWindow(window)}) { result,error ->
+        val window=captureOwnerWindow();val epoch=presentationEpoch
+        controller.lookupDraftPhone(request,composer,false,details,{phoneIntent && epoch==presentationEpoch && acceptsOwnerWindow(window)}) { result,error ->
             if(error==null && result!=null){
                 val scope=Triple(composer,epoch,controller.displayedPhoneWindowVersion())
                 if(request==null){
@@ -435,8 +446,10 @@ internal class PocketWebPhoneComposer(
     }
     fun query(id: String, args: JSONObject, retire: Boolean = false) {
         val original=phoneStartReceipt?.let {JSONObject(it.toString())} ?: error("没有可查询的原手机请求")
-        val window=captureWindow();val epoch=presentationEpoch
-        fun current() = !isClosed() && epoch==presentationEpoch && acceptsWindow(window) && controller.webPrivateOwnerVisible() &&
+        val privateRead = !retire && !controller.hasChannelPhoneOrigin && (original.has("draftRequestId") || original.has("requestId"))
+        val window=if(privateRead)captureOwnerWindow() else captureWindow();val epoch=presentationEpoch
+        fun current() = !isClosed() && epoch==presentationEpoch && controller.webPrivateOwnerVisible() &&
+            (if(privateRead) !controller.hasChannelPhoneOrigin && acceptsOwnerWindow(window) else acceptsWindow(window)) &&
             phoneStartReceipt?.optString("reviewHandle")==original.optString("reviewHandle")
         if(original.has("draftRequestId")){
             checkedPayload(args,if(retire)setOf("draftRequestId","confirmed") else setOf("draftRequestId"))
@@ -473,8 +486,17 @@ internal class PocketWebPhoneComposer(
         val handle = requiredString(args, "reviewHandle")
         val review = phoneReviews[handle] ?: error("原手机目标审阅已关闭或已使用")
         require(phoneReviewCurrent(review)) { "原对话、目标窗口或执行范围已变化，请重新核对" }
-        require(!controller.state.phoneSubmitting && controller.state.activeTaskId == null) { "已有原工作正在处理，未重复开始" }
+        val privateRequest = review.privateOwner && (review.linked != null || review.draft != null)
+        require(!controller.state.phoneSubmitting && (privateRequest || controller.state.activeTaskId == null)) { "原输入仍在提交或渠道工作正占用，未重复开始" }
         val original = phoneReceiptIdentity(handle, review)
+        val capacity = review.conditions?.optJSONObject("capacity")
+        if (privateRequest && capacity?.optString("state") != "ready") {
+            phoneReviews.remove(handle)
+            complete(id, JSONObject().put("status", "rejected").put("draftRequestId", original.opt("draftRequestId"))
+                .put("recheckReview", handle).put("message", "原执行位置尚未核实可用。目标还在，没有提交。"), null)
+            publishState()
+            return
+        }
         if(review.linked!=null&&phoneDraft.isNotBlank())heldLinkedGoal=linkedOwner(original)
         val completed: (JSONObject?, String?) -> Unit = { result, error ->
             val retained=phoneStartReceipt
@@ -490,8 +512,8 @@ internal class PocketWebPhoneComposer(
                 publishState()
             } else complete(id,null,"原启动窗口已变化，未覆盖已核对的回执")
         }
-        val admitted = review.linked?.let { controller.startConversationPhone(it, { phoneReviewCurrent(review) }, completed) }
-            ?: review.draft?.let { controller.startDraftPhone(it, { phoneReviewCurrent(review) }, completed) }
+        val admitted = review.linked?.let { controller.startConversationPhone(it, { phoneReviewCurrent(review) }, capacity, completed) }
+            ?: review.draft?.let { controller.startDraftPhone(it, { phoneReviewCurrent(review) }, capacity, completed) }
             ?: controller.startReviewedPhone(review.goal, review.mode, { phoneReviewCurrent(review) }, completed)
         if (admitted) {
             phoneReviews.remove(handle)

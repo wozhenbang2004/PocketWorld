@@ -72,6 +72,7 @@ internal class PocketWebTaskActions(
                         val operation = requiredString(args, "operationId"); val outcome = requiredString(args, "outcome")
                         require(outcome in setOf("occurred", "not_occurred"))
                         val op=unresolvedForReview(task).singleOrNull { it.optString("operationId",it.optString("id"))==operation } ?: error("这项原操作不在审阅中")
+                        require(op.optString("tool")!="team_integrate_file") { "请查回原文件写回回执，不能人工判定" }
                         val pin=if(op.optString("format")==PhoneActionRecovery.FORMAT){
                             require(taskViewId==task.id && controller.webPrivateOwnerVisible() && op.optBoolean("canRecord") && requiredBoolean(args,"checkedOriginal") &&
                                 op.getString("runId")==requiredString(args,"operationRun") && op.getInt("epoch")==requiredInt(args,"operationEpoch") &&
@@ -173,7 +174,7 @@ internal class PocketWebTaskActions(
                 PocketWebOwnerQuestions.actions(question).forEach { allowed[it] = if (it == PocketWebOwnerQuestions.CHOOSE) "选择原问题答案" else "回答原问题" }
                 if (task.status == "needs_confirmation" && task.id != activeTaskId) allowed["tasks.confirm"] = "核对结果"
                 if (approvals.isNotEmpty()) allowed["tasks.approve"] = "审阅操作授权"
-                if (unknown.any { it.optString("operationId", it.optString("id")).isNotBlank() && (it.optString("format")!=PhoneActionRecovery.FORMAT || it.optBoolean("canRecord")) }) allowed["tasks.resolve"] = "核对原操作"
+                if (unknown.any { it.optString("tool") != "team_integrate_file" && it.optString("operationId", it.optString("id")).isNotBlank() && (it.optString("format")!=PhoneActionRecovery.FORMAT || it.optBoolean("canRecord")) }) allowed["tasks.resolve"] = "核对原操作"
                 if (projectContinuation != null) {
                     if (!projectContinuation.has("reason")) allowed["tasks.resume"] = "在原范围内继续项目任务"
                 } else if (task.raw.optString("executionRole") != "owner_work" && !PocketWebOwnerQuestions.blocksGenericResume(task.raw) && !dev.pocketengine.phone.MainPhoneOwnerStep.needsOwner(task.raw) && task.raw.optJSONObject(dev.pocketengine.phone.MainPhoneOwnerStep.KEY) == null && (task.raw.optString("kind") == "assistant" || isPhoneTask(task) && task.raw.optString("runId").isNotBlank() && task.raw.optInt("coordinatorEpoch")>0) && task.id != activeTaskId && task.status in setOf("paused", "awaiting_user", "needs_confirmation", "interrupted") && !task.raw.optBoolean("cancelRequested") && unknown.isEmpty() && approvals.isEmpty()) allowed["tasks.resume"] = "确认继续原任务"

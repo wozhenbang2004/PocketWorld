@@ -4,6 +4,7 @@ import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import dev.pocketengine.features.devices.DeviceProtocol;
 import java.util.ArrayList;
+import java.util.Set;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -11,27 +12,32 @@ import org.json.JSONObject;
 /** B's own accepted requests, not the sender's outbox and not authority to execute one. */
 final class ReceivedPhoneGoalIndex {
     private ReceivedPhoneGoalIndex() {}
+    private enum Shelf{PEER,PENDING,RESULT,CLOSED,STARTED}
+    private static final Set<String> OPEN_PHASES=Set.of("preparing","running","pausing","paused","stopping","verifying","awaiting_user","waiting_user",
+            "awaiting_approval","waiting_approval","waiting_permission","interrupted","reconciling","reconciliation_required","blocked_unknown");
 
     static JSONObject read(SQLiteDatabase db,String here,String localInstance,String source,String afterTask,String afterOp)throws Exception {
         return read(db,here,localInstance,source,afterTask,afterOp,"");
     }
     static JSONObject read(SQLiteDatabase db, String here, String localInstance, String source, String afterTask, String afterOp,String searchText) throws Exception {
-        return scan(db,here,localInstance,DeviceProtocol.deviceId(source,"callerDeviceId"),afterTask,afterOp,false,new LocalPhoneGoalSearch(searchText));
+        return scan(db,here,localInstance,DeviceProtocol.deviceId(source,"callerDeviceId"),afterTask,afterOp,Shelf.PEER,new LocalPhoneGoalSearch(searchText));
     }
     static JSONObject waiting(SQLiteDatabase db,String here,String localInstance,String afterCaller,String afterOp,boolean results)throws Exception{
-        return scan(db,here,localInstance,null,afterCaller,afterOp,results,new LocalPhoneGoalSearch(""));
+        return scan(db,here,localInstance,null,afterCaller,afterOp,results?Shelf.RESULT:Shelf.PENDING,new LocalPhoneGoalSearch(""));
     }
-    private static JSONObject scan(SQLiteDatabase db,String here,String localInstance,String issuer,String anchorId,String afterOp,boolean results,LocalPhoneGoalSearch search)throws Exception{
-        return scan(db,here,localInstance,issuer,anchorId,afterOp,results,search,false);
+    static JSONObject started(SQLiteDatabase db,String here,String instance,String afterCaller,String afterOp)throws Exception{
+        return scan(db,here,instance,null,afterCaller,afterOp,Shelf.STARTED,new LocalPhoneGoalSearch(""));
     }
-    static JSONObject closed(SQLiteDatabase db,String here,String instance,String afterCaller,String afterOp)throws Exception{
-        return scan(db,here,instance,null,afterCaller,afterOp,false,new LocalPhoneGoalSearch(""),true);
+    static JSONObject closed(SQLiteDatabase db,String here,String instance,String afterCaller,String afterOp,String query)throws Exception{
+        return scan(db,here,instance,null,afterCaller,afterOp,Shelf.CLOSED,new LocalPhoneGoalSearch(query));
     }
-    private static JSONObject scan(SQLiteDatabase db,String here,String localInstance,String issuer,String anchorId,String afterOp,boolean results,LocalPhoneGoalSearch search,boolean closed)throws Exception{
+    private static JSONObject scan(SQLiteDatabase db,String here,String localInstance,String issuer,String anchorId,String afterOp,Shelf shelf,LocalPhoneGoalSearch search)throws Exception{
+        boolean results=shelf==Shelf.RESULT,closed=shelf==Shelf.CLOSED,started=shelf==Shelf.STARTED;
         DeviceProtocol.deviceId(here,"targetDeviceId"); DeviceProtocol.identifier(localInstance,"instanceId");
         boolean waiting=issuer==null; String where=" WHERE i.method='task.submitGoal'";
         ArrayList<String> args=new ArrayList<>();
         if(closed)where+=" AND EXISTS(SELECT 1 FROM runs r WHERE r.task_id=i.local_task_id AND r.status='completed')";
+        else if(started)where+=" AND EXISTS(SELECT 1 FROM runs r WHERE r.task_id=i.local_task_id AND r.status NOT IN ('completed','failed','cancelled','canceled','stopped'))";
         else if(waiting) where+=" AND "+(results?"":"NOT ")+"EXISTS(SELECT 1 FROM runs r WHERE r.task_id=i.local_task_id)"; // runs has UNIQUE(task_id,epoch).
         else {where+=" AND i.caller_device_id=?";args.add(issuer);}
         if(!anchorId.isEmpty()||!afterOp.isEmpty()){
@@ -53,10 +59,11 @@ final class ReceivedPhoneGoalIndex {
             while (c.moveToNext()) {
                 if (scanned++ == (closed?6:24)) { more=true; break; }
                 task=c.getString(0); op=c.getString(1); source=c.getString(8);
-                if (here.equals(source) || c.isNull(6) || c.isNull(7) || c.getLong(2)<=0 || c.getLong(5)<=0) continue;
+                if (here.equals(source) || c.getLong(2)<=0 || c.getLong(5)<=0) continue;
+                if(c.isNull(6)||c.isNull(7)){if(started)limited++;continue;}
                 try {
                     JSONObject wire=new JSONObject(c.getString(6)), header=new JSONObject(c.getString(7)); boolean textOnly=DeviceProtocol.ownerTextRequest(wire);
-                    if(waiting && !results && !closed && (!header.optString("runId").isEmpty() || header.optInt("coordinatorEpoch",-1)!=0 || !Boolean.FALSE.equals(header.opt("cancelRequested"))
+                    if(shelf==Shelf.PENDING && (!header.optString("runId").isEmpty() || header.optInt("coordinatorEpoch",-1)!=0 || !Boolean.FALSE.equals(header.opt("cancelRequested"))
                             || !("queued".equals(header.opt("status"))||"awaiting_user".equals(header.opt("status"))||"interrupted".equals(header.opt("status")))))continue;
                     JSONObject origin=header.getJSONObject("origin"); String parent=wire.getString("parentTaskId"), digest=c.getString(3);
                     if (!here.equals(wire.opt("targetDeviceId")) || !localInstance.equals(wire.opt("instanceId"))
@@ -73,12 +80,26 @@ final class ReceivedPhoneGoalIndex {
                             || !here.equals(origin.opt("targetDeviceId")) || !op.equals(origin.opt("remoteOperationId")) || !parent.equals(origin.opt("rootTaskId"))
                             || !parent.equals(origin.opt("parentTaskId")) || !wire.getString("localTaskId").equals(origin.opt("remoteLocalTaskId"))
                             || !c.getString(4).equals(origin.opt("grantId")) || c.getLong(5)!=origin.getLong("authorizationEpoch")) continue;
+                    JSONObject startedRun=null;
+                    if(started){
+                        String phase=header.optString("status"),run=header.optString("runId");int epoch=header.optInt("coordinatorEpoch",-1);
+                        if(!OPEN_PHASES.contains(phase)
+                                ||run.isEmpty()||epoch<=0||!(header.opt("cancelRequested") instanceof Boolean))continue;
+                        try(Cursor original=db.rawQuery("SELECT status,created_at FROM runs WHERE task_id=? AND run_id=? AND epoch=?",new String[]{task,run,Integer.toString(epoch)})){
+                            if(!original.moveToFirst()||original.getLong(1)<=0){limited++;continue;}
+                            String recorded=original.getString(0);
+                            if(!OPEN_PHASES.contains(recorded)&&!"needs_confirmation".equals(recorded)){limited++;continue;}
+                            // Thread liveness and restartability are NOT implied by either persisted phase.
+                            startedRun=new JSONObject().put("runId",run).put("epoch",epoch).put("taskState",phase).put("runState",recorded)
+                                    .put("registeredAt",original.getLong(1)).put("stopRequested",header.getBoolean("cancelRequested"));
+                        }
+                    }
                     JSONObject closedReview=null;
                     if(closed){
                         if(!zero||!"completed".equals(header.opt("status"))||header.optString("runId").isEmpty()||header.optInt("coordinatorEpoch")<=0)continue;
                         JSONObject selected=new JSONObject().put("taskId",task).put("operationId",op).put("localId",here).put("localInstance",localInstance)
                                 .put("sourceId",source).put("screenMode",mode).put("wireDigest",digest).put("originDigest",DeviceProtocol.sha256(DeviceProtocol.canonicalBytes(origin)));
-                        try{closedReview=ReceivedPhoneReviewArchive.checkedMetadata(db,selected);}
+                        try{closedReview=ReceivedPhoneReviewArchive.checkedMetadata(db,selected,search);if(closedReview==null)continue;}
                         catch(IllegalStateException|SecurityException|JSONException unavailable){limited++;continue;}
                     }
                     JSONObject review=null;
@@ -92,19 +113,19 @@ final class ReceivedPhoneGoalIndex {
                         try(Cursor r=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND epoch=? AND run_id=?",
                                 new String[]{task, Integer.toString(review.getInt("epoch")),review.getString("runId")})){if(!r.moveToFirst())continue;}
                     }
-                    String goal=wire.getJSONObject("arguments").getString("goal"); if (goal.trim().isEmpty()||!search.matches(goal)) continue;
+                    String goal=wire.getJSONObject("arguments").getString("goal"); if (goal.trim().isEmpty()||!closed&&!search.matches(goal)) continue;
                     if (goal.codePointCount(0,goal.length())>160) goal=goal.substring(0,goal.offsetByCodePoints(0,160))+"…";
                     items.put(new JSONObject().put("taskId",task).put("operationId",op).put("argumentsDigest",digest)
-                            .put("sourceDeviceId",source).put("closedReview",closedReview).put("mayCheckLocalText",!waiting&&zero&&"completed".equals(header.opt("status"))&&!header.optString("runId").isEmpty()&&header.optInt("coordinatorEpoch")>0?true:null)
+                            .put("sourceDeviceId",source).put("startedRun",startedRun).put("closedReview",closedReview).put("mayCheckLocalText",!waiting&&zero&&"completed".equals(header.opt("status"))&&!header.optString("runId").isEmpty()&&header.optInt("coordinatorEpoch")>0?true:null)
                             .put("textOnly",textOnly||zero&&"assistant".equals(header.opt("kind"))?true:null).put("reviewRun",review==null?null:review.getString("runId"))
                             .put("reviewEpoch",review==null?null:review.getInt("epoch")).put("reviewRecordedAt",review==null?null:review.getLong("recordedAt"))
-                            .put("waitingState",results?"result_review":waiting&&!closed?("interrupted".equals(header.opt("status"))?"interrupted_before_start":"not_started"):null).put("originDigest",DeviceProtocol.sha256(DeviceProtocol.canonicalBytes(origin))).put("screenMode",mode)
-                            .put("goal",goal).put("matchedLater",search.beyondPreview(goal)?true:null).put("createdAt",c.getLong(2)));
+                            .put("waitingState",started?"original_run":results?"result_review":waiting&&!closed?("interrupted".equals(header.opt("status"))?"interrupted_before_start":"not_started"):null).put("originDigest",DeviceProtocol.sha256(DeviceProtocol.canonicalBytes(origin))).put("screenMode",mode)
+                            .put("goal",goal).put("matchedLater",!closed&&search.beyondPreview(goal)?true:null).put("createdAt",c.getLong(2)));
                 } catch (JSONException | DeviceProtocol.ProtocolException invalid) { /* Never replace missing provenance with a nearby task. */ }
             }
         }
         return new JSONObject().put("rows",items).put("hasMore",more).put("lastParent",waiting?source:task).put("lastOperation",op)
-                .put("localDeviceId",here).put("localInstanceId",localInstance).put("targetDeviceId",issuer).put("waitingOnly",waiting&&!closed).put("closedOnly",closed?Boolean.TRUE:null).put("resultOnly",results).put("limitedCandidates",limited).put("readOnly",true);
+                .put("localDeviceId",here).put("localInstanceId",localInstance).put("targetDeviceId",issuer).put("waitingOnly",waiting&&!closed&&!started).put("startedOnly",started?Boolean.TRUE:null).put("closedOnly",closed?Boolean.TRUE:null).put("resultOnly",results).put("limitedCandidates",limited).put("readOnly",true);
     }
 
     /** Non-content marker from the same native task write. No summary/evidence is put in the queue. */

@@ -57,6 +57,7 @@ public final class WorkspaceModule implements EngineModule {
     /** Strict no-lock/no-IO native source currentness projection; not a model command/grant. */
     public VersionedWorkspace.HeadObservation currentFileHeadForHost(String project,String path){return workspace.currentFileHeadForHost(project,path);}
     @Override public void close(){nativeClosed=true;workspace.closeNativeHeadsForHost();}
+    public VersionedWorkspace.FileSnapshot commitTeamFileForHost(VersionedWorkspace.FileSnapshot original,byte[] bytes,java.util.UUID revision)throws Exception{return workspace.commitTeamFile(original,bytes,revision);}
     public VersionedWorkspace.FileSnapshot writeBytesForHost(VersionedWorkspace.FileSnapshot expected,byte[] actualBytes)throws Exception{return workspace.writeBytes(expected,actualBytes);}
     public VersionedWorkspace.FileSnapshot deleteForHost(VersionedWorkspace.FileSnapshot expected)throws Exception{return workspace.delete(expected);}
     public WorkspaceArtifacts.ArtifactRef freezeFileForHost(VersionedWorkspace.FileSnapshot original,String nativeOperationId,String taskId,String runId)throws Exception{return artifacts.freezeFile(original,nativeOperationId,taskId,runId);}
