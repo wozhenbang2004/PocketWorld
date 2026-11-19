@@ -54,10 +54,11 @@ export function RemoteTaskArtifacts({ snapshot, busy, active, run }: Props) {
   const [notice, setNotice] = useState('');
   const live = useRef({ snapshot, active, busy, prompt, selectedSnapshot, model, effort, changeModel, timeout, recoveryAck, manual, inputSource }), mounted = useRef(true); live.current = { snapshot, active, busy, prompt, selectedSnapshot, model, effort, changeModel, timeout, recoveryAck, manual, inputSource };
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  const enabled = active && !busy && snapshot.fresh === true, browse = enabled && snapshot.canCaptureSnapshot === true;
+  const windowReady = active && !busy && !!snapshot.windowHandle && !!snapshot.reviewId;
+  const enabled = windowReady && snapshot.fresh === true, browse = enabled && snapshot.canCaptureSnapshot === true;
   const selectedBytes = selected.reduce((sum, file) => sum + Number(file.bytes || 0), 0);
   const safeRun: Run = (action, args = {}) => {
-    if (!mounted.current || !live.current.active || live.current.busy || live.current.snapshot.reviewId !== snapshot.reviewId || live.current.snapshot.windowHandle !== snapshot.windowHandle) return Promise.resolve();
+    if (!mounted.current || !windowReady || !live.current.active || live.current.busy || live.current.snapshot.reviewId !== snapshot.reviewId || live.current.snapshot.windowHandle !== snapshot.windowHandle) return Promise.resolve();
     return run(action, args);
   };
   useEffect(() => { setFreeze(null); setContinuing(null); if (!active) { setProjectReviewClosed(snapshot.projectHistoryReview?.digest || ''); setReturnClosed(snapshot.conversationResultReview?.digest || ''); } }, [snapshot.reviewId, active]);
@@ -90,7 +91,17 @@ export function RemoteTaskArtifacts({ snapshot, busy, active, run }: Props) {
       <Accordion><AccordionItem title="按明确路径采集（高级）"><TextAreaField label="明确文件路径，每行一个（1–8 个）" value={manual} onChange={value => { live.current.manual = value; setManual(value); }} isDisabled={busy} /><Button variant="secondary" disabled={!browse || !manual.trim() || manual.split('\n').filter(line => line.trim()).length > 8} onClick={() => { const paths = manual.split('\n').map(line => line.trim()).filter(Boolean); setFreeze({ reviewId: snapshot.reviewId, manual, command: 'captureSnapshot', args: { paths }, files: paths.map(path => ({ path })) }); }}>核对并保存指定文件快照</Button></AccordionItem></Accordion>
       {rows(task.operations).filter(row => row.tool === 'remote_snapshot').slice(-4).map(row => <p key={row.operationId} className="pw-field-hint">快照操作 {row.operationId} · {row.state === 'unknown' ? '回执待核对，只查询原编号，不重新采集' : row.receipt?.message || row.state}</p>)}
       {saved.map(version => <section className="pw-remote-frozen" key={version.snapshotId}><h4>冻结版本 · {String(version.snapshotVersion).slice(0, 16)}</h4><p>{version.bytes} 字节 · 原 job {version.jobId}</p>
-        {rows(version.files).map(file => { const local = rows(snapshot.snapshotAttachments).find(row => row.snapshotId === version.snapshotId && row.path === file.path); return <div key={file.path} className="pw-remote-file"><span>{file.path}</span><div className="pw-form-actions"><Button variant="ghost" disabled={!enabled} onClick={() => void safeRun('remoteTask.readSnapshot', { snapshotId: version.snapshotId, path: file.path })}>查看冻结文件</Button><Button variant="ghost" disabled={!enabled} onClick={() => void safeRun(local ? 'remoteTask.openSavedSnapshot' : 'remoteTask.saveSnapshot', local ? { attachmentId: local.attachment.id } : { snapshotId: version.snapshotId, path: file.path })}>{local ? '打开手机原件' : '存入手机原件'}</Button></div></div>; })}
+        {rows(version.files).map(file => {
+          const local = rows(snapshot.snapshotAttachments).find(row => row.snapshotId === version.snapshotId && row.path === file.path);
+          const attachmentId = local?.attachment?.id;
+          const canOpenLocal = windowReady && typeof attachmentId === 'string' && attachmentId.length > 0;
+          return <div key={file.path} className="pw-remote-file"><span>{file.path}</span><div className="pw-form-actions">
+            <Button variant="ghost" disabled={!enabled} onClick={() => void safeRun('remoteTask.readSnapshot', { snapshotId: version.snapshotId, path: file.path })}>查看冻结文件</Button>
+            {local ? <Button variant="ghost" disabled={!canOpenLocal} onClick={() => {
+              if (canOpenLocal) void safeRun('remoteTask.openSavedSnapshot', { attachmentId });
+            }}>打开手机原件</Button> : <Button variant="ghost" disabled={!enabled} onClick={() => void safeRun('remoteTask.saveSnapshot', { snapshotId: version.snapshotId, path: file.path })}>存入手机原件</Button>}
+          </div></div>;
+        })}
         {version.jobId === source.jobId && <Button variant="secondary" disabled={!enabled} onClick={() => setSelectedSnapshot(selectedSnapshot?.snapshotId === version.snapshotId ? null : version)}>{selectedSnapshot?.snapshotId === version.snapshotId ? '已选此版本继续（点击取消）' : '以此版本明确继续'}</Button>}
       </section>)}
       {frozen.path && <div><h4>冻结原件：{frozen.path}</h4><p>{frozen.bytes} 字节 · SHA-256 {frozen.sha256}</p>{frozen.preview === 'utf8_text' ? <pre>{frozen.text}</pre> : <p>二进制原件已核对完整字节与 SHA。</p>}{frozen.viewTruncated && <p>预览已截断；SHA 对应完整冻结原件。</p>}</div>}
