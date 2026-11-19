@@ -1,5 +1,5 @@
 import {useEffect,useRef,useState} from 'react';
-import {Accordion,AccordionItem,Button,SelectField,TextField} from './forms-library';
+import {Accordion,AccordionItem,Button,RadioOptions,TextField} from './forms-library';
 import {MarkdownBody} from './library';
 import {bridge} from './bridge';
 import {documentTable,fileObject as obj,fileRows as rows,type FileJson as Json} from './attachment-workspace';
@@ -56,7 +56,7 @@ function OriginalReader({source,windowId,showTitle=true}:OriginalReaderProps) {
   <p className="pw-error" role="alert">{failed}</p>
   <Button variant="secondary" disabled={busy||source.busy} onClick={retry}>{failedRead?.command==='find'?'重试本次查找':'重试本次读取'}</Button>
   {type==='text'&&<div className="pw-action-row">
-   <SelectField label="重新读取时使用的文本编码" value={encodingChoice} options={textEncodings} isDisabled={busy||source.busy} onChange={setRecoveryEncoding}/>
+   <RadioOptions label="重新读取时使用的文本编码" value={encodingChoice} options={textEncodings} isDisabled={busy||source.busy} onChange={setRecoveryEncoding}/>
    <Button variant="secondary" disabled={busy||source.busy} onClick={()=>{setFound(null);read({encoding:encodingChoice,offset:0})}}>用此编码从头读取</Button>
   </div>}
  </section>}
@@ -77,7 +77,7 @@ function OriginalReader({source,windowId,showTitle=true}:OriginalReaderProps) {
  {ready&&(type==='video'||type==='audio')&&<OriginalMediaPlayer key={`${windowId}:${source.id}`} url={source.url} kind={type} name={String(source.name||'媒体原件')} onError={()=>setError('原媒体无法播放，请返回后用其他阅读器打开')} />}
  {ready&&type==='office'&&<><div className="pw-action-row"><TextField label={actual.format==='pptx'?'幻灯片编号':actual.format==='xlsx'?'工作表编号':'段落起点'} value={position} onChange={setPosition}/><Button variant="secondary" disabled={busy||!/^\d+$/.test(position)||Number(position)<1} onClick={()=>read({unit:Number(position),chunk:0})}>定位</Button></div><p className="pw-muted">当前显示文字与表格结构，字体、分页和图表应在原件中核对。</p><DocumentProjection value={actual}/>{Number(actual.nextUnit)>0&&<Button variant="secondary" disabled={busy} onClick={()=>read({unit:actual.nextUnit,chunk:actual.nextChunk})}>读取后续内容</Button>}</>}
  {ready&&type==='text'&&<Accordion className="pw-original-find"><AccordionItem id="text-options" title="文本显示选项">
-  <SelectField label="文本编码" value={actual.encoding||'UTF-8'} options={textEncodings} isDisabled={busy} onChange={encoding=>{setRecoveryEncoding(encoding);setFound(null);read({encoding,offset:0})}}/>
+  <RadioOptions label="文本编码" value={actual.encoding||'UTF-8'} options={textEncodings} isDisabled={busy} onChange={encoding=>{setRecoveryEncoding(encoding);setFound(null);read({encoding,offset:0})}}/>
   {isMarkdown&&<Button variant="ghost" onClick={()=>setMarkdown(value=>!value)}>{markdown?'显示原文':'显示 Markdown'}</Button>}
  </AccordionItem></Accordion>}
  </section>;
