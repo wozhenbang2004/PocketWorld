@@ -10,7 +10,7 @@ import {NotificationTeamAttention,type TeamAttentionLocator} from './Notificatio
 export type InboxLane='attention'|'updates';
 export type UpdateSource='results'|'external';
 export type TaskInboxPage={cursor?:string;prior?:string[];focus?:string};
-export type NotificationViewMemory={lane?:InboxLane;updateSource?:UpdateSource;externalOpen?:string;externalUnreadRequest?:number;externalUnreadConsumed?:number;taskPages?:Partial<Record<'attention'|'taskUpdates',TaskInboxPage>>;remoteFilter?:'all'|'unread'|'issues'|'archived';teamCursor?:string;teamItemCursor?:string;teamPrior?:{run:string;item:string}[];teamFocus?:string;taskMode?:'attention'|'taskUpdates';taskCursor?:string;taskPrior?:string[];taskFocus?:string};
+export type NotificationViewMemory={lane?:InboxLane;updateSource?:UpdateSource;externalOpen?:string;externalUnreadRequest?:number;externalUnreadConsumed?:number;taskPages?:Partial<Record<'attention'|'taskUpdates',TaskInboxPage>>;remoteFilter?:'all'|'unread'|'issues'|'archived';teamCursor?:string;teamItemCursor?:string;teamPrior?:{run:string;item:string}[];teamFocus?:string};
 
 type Event = {
   seq:number; source_key:string; kind:string; title:string; body:string;

@@ -510,6 +510,12 @@ export default function App(){
   focusKey:document.activeElement instanceof HTMLElement?document.activeElement.closest<HTMLElement>('[data-workspace-entry]')?.dataset.workspaceEntry:undefined,
   parent:relatedOrigin.current,
  });
+ const captureNavigationOrigin=():WorkspaceOrigin=>{
+  const origin=captureWorkspaceOrigin();
+  if(route!=='chat'||desktopNavigation)return origin;
+  const live=bridge.getState();
+  return {...origin,focus:null,focusKey:undefined,drawerChat:{id:String(live.state.conversationId||''),draftKey:String(live.composer?.key||''),documentEpoch:bridge.getDocumentEpoch()}};
+ };
  const openRelatedWorkspace=async(destination:string,origin=captureWorkspaceOrigin(),afterNavigate?:()=>void):Promise<boolean|undefined>=>{
   if(taskPolicyBeforeLeave.current?.(()=>{void openRelatedWorkspace(destination,origin,afterNavigate)}))return;
   const navigation=navigationWindow.current,closingTask=taskOpen;
@@ -519,6 +525,9 @@ export default function App(){
   relatedOrigin.current=origin;
   return navigate(destination,afterNavigate,{keepOrigin:true,taskClosed:closingTask});
  };
+ const openNotifications=(afterNavigate?:()=>void)=>route==='remoteInbox'
+  ?navigate('remoteInbox',afterNavigate,{keepOrigin:true})
+  :openRelatedWorkspace('remoteInbox',captureNavigationOrigin(),afterNavigate);
  const restoreWorkspace=async(origin:WorkspaceOrigin,keepOrigin=false)=>{
   const navigation=navigationWindow.current,documentEpoch=bridge.getDocumentEpoch();
   const source=origin.drawerChat;
@@ -577,7 +586,7 @@ export default function App(){
  };
  const remoteInboxOpenRevision=Number(state.remoteInbox?.openRevision||0);
  const lastRemoteInboxOpen=useRef(0);
- useEffect(()=>{if(remoteInboxOpenRevision>0&&remoteInboxOpenRevision!==lastRemoteInboxOpen.current){lastRemoteInboxOpen.current=remoteInboxOpenRevision;navigate('remoteInbox');}},[remoteInboxOpenRevision,navigate]);
+ useEffect(()=>{if(remoteInboxOpenRevision>0&&remoteInboxOpenRevision!==lastRemoteInboxOpen.current){lastRemoteInboxOpen.current=remoteInboxOpenRevision;if(route!=='remoteInbox')void openNotifications();}},[remoteInboxOpenRevision,route,openNotifications]);
  const loadTaskReview=useCallback((id:string,approvalId?:string)=>{
   if(!can('tasks.review')||openedTaskId.current!==id)return;invalidateContinuation();const request=++reviewRequest.current;setReviewPending(true);setReviewSubmitted(false);setReviewReceipt('');setQuestionPending(false);
   const window={taskId:id,request,documentEpoch:bridge.getDocumentEpoch(),resumeRevision:Number(obj(bridge.getState().view).resumeRevision||0)};reviewWindow.current=window;
@@ -1064,10 +1073,12 @@ export default function App(){
    setWorkOpen(false);setCommandOpen(false);
    if(can('attachmentWorkspace.open'))run('attachmentWorkspace.open');
   }else if(key==='tasks'&&route==='chat'&&!desktopNavigation){
-   const live=bridge.getState();void openRelatedWorkspace('tasks',{...captureWorkspaceOrigin(),focus:null,focusKey:undefined,drawerChat:{id:String(live.state.conversationId||''),draftKey:String(live.composer?.key||''),documentEpoch:bridge.getDocumentEpoch()}});
+   void openRelatedWorkspace('tasks',captureNavigationOrigin());
+  }else if(key==='remoteInbox'){
+   void openNotifications();
   }else if(key==='setup')openSetup();
   else navigate(key);
- },[can,run,route,desktopNavigation,openRelatedWorkspace,openSetup,navigate]);
+ },[can,run,route,desktopNavigation,captureNavigationOrigin,openRelatedWorkspace,openNotifications,openSetup,navigate]);
  const workNav:WorkNavItem[]=useMemo(()=>[
   {key:'butler',label:'管家',icon:IconSparkles,group:'主入口'},
   {key:'tasks',label:'我的工作',icon:IconCalendar,group:'工作',status:attentionTasks.length?'有工作需要处理':undefined},
@@ -1392,7 +1403,7 @@ export default function App(){
  // Only surface a decision that belongs to a task anchored in this conversation.
  const conversationAttention=intent==='chat'?tasks.reduce<Task|undefined>((latest,task)=>{const anchor=messageTaskAnchors.get(task.id);if(!conversationInlineAttention(task)||anchor===undefined)return latest;return !latest||anchor>messageTaskAnchors.get(latest.id)!?task:latest;},undefined):undefined;
  const navigationTrigger=desktopNavigation?<span className="pw-header-spacer" aria-hidden="true"/>:<Drawer.Trigger asChild><IconButton ref={isPrimaryRoute?navigationMenuGlass:undefined} icon={IconMenu} className={isChatSurface?'pw-chat-glass-trigger':undefined} aria-label="打开导航" data-testid="all_work" onClick={event=>{navigationReturnFocus.current=event.currentTarget}}/></Drawer.Trigger>;
- const openUnreadMessages=()=>{void navigate('remoteInbox',()=>{notificationMemory.current.externalUnreadRequest=(notificationMemory.current.externalUnreadRequest||0)+1})};
+ const openUnreadMessages=()=>{void openNotifications(()=>{notificationMemory.current.externalUnreadRequest=(notificationMemory.current.externalUnreadRequest||0)+1})};
  const navigationContent=<WorkspaceNavigator items={workNav} selected={navigationSelection} recent={recentWork}
   selectedConversation={route==='chat'?String(state.conversationId||''):undefined}
   desktop={desktopNavigation} compact={effectiveCompact} onToggleCompact={()=>setNavigationCompact(value=>!value)}
@@ -1495,7 +1506,7 @@ export default function App(){
   inline={preparationInline} registerBack={registerPreparationBack} registerBeforeLeave={registerPreparationBeforeLeave}
   onOpenTask={id=>openTask(id)} onConversation={!preparationInline&&can('conversation.select')&&!state.chatSubmitting?selectConversation:undefined}
   onSetup={can('setup.read')?kind=>{void openSetup(kind==='phone'?'phone':'tools')}:undefined}/>;
- const chatNavigation=!desktopNavigation&&<ChatNavigationMenu title={messages.length?currentTitle:'与管家对话'} navigationTrigger={<IconButton ref={chatBackGlass} icon={IconArrowLeft} className="pw-chat-glass-trigger" aria-label="返回管家" onClick={()=>navigate('butler')}/>} onHome={()=>navigate('butler')} isOpen={chatMenuOpen} onOpenChange={setChatMenuOpen} triggerRef={chatMenuTrigger} submitting={!!state.chatSubmitting} unread={can('remoteInbox.state')?Number(state.remoteInbox?.unread||0):0} onNewConversation={can('conversation.new')?()=>{void navigate('butler',()=>run('conversation.new'))}:undefined} onConversations={trigger=>{navigationReturnFocus.current=trigger;showWorkSearch()}} onNavigation={()=>{navigationReturnFocus.current=chatMenuTrigger.current;setCommandOpen(false);setWorkOpen(true)}} onOrganize={currentConversation&&can('conversation.organization.read')?()=>setOrganizationTarget(currentConversation.id):undefined} onMemory={state.conversationId&&can('profile.conversation.read')?()=>setConversationMemoryOpen(true):undefined} onNotifications={can('remoteInbox.state')?()=>navigate('remoteInbox'):undefined} onSettings={()=>navigate('settings')}/>;
+ const chatNavigation=!desktopNavigation&&<ChatNavigationMenu title={messages.length?currentTitle:'与管家对话'} navigationTrigger={<IconButton ref={chatBackGlass} icon={IconArrowLeft} className="pw-chat-glass-trigger" aria-label="返回管家" onClick={()=>navigate('butler')}/>} onHome={()=>navigate('butler')} isOpen={chatMenuOpen} onOpenChange={setChatMenuOpen} triggerRef={chatMenuTrigger} submitting={!!state.chatSubmitting} unread={can('remoteInbox.state')?Number(state.remoteInbox?.unread||0):0} onNewConversation={can('conversation.new')?()=>{void navigate('butler',()=>run('conversation.new'))}:undefined} onConversations={trigger=>{navigationReturnFocus.current=trigger;showWorkSearch()}} onNavigation={()=>{navigationReturnFocus.current=chatMenuTrigger.current;setCommandOpen(false);setWorkOpen(true)}} onOrganize={currentConversation&&can('conversation.organization.read')?()=>setOrganizationTarget(currentConversation.id):undefined} onMemory={state.conversationId&&can('profile.conversation.read')?()=>setConversationMemoryOpen(true):undefined} onNotifications={can('remoteInbox.state')?()=>{void openNotifications()}:undefined} onSettings={()=>navigate('settings')}/>;
  const chatPage=<main className={`pw-chat-workspace${ready&&!messages.length&&!foregroundTurn?' pw-chat-empty':''}`}>
   <div ref={scroll} className="pw-conversation-scroll" data-conversation-id={String(state.conversationId||'')} onScroll={saveReading} aria-label="当前对话消息"><div ref={chatContent} className="pw-conversation-content">
    {ready&&messages.length>0&&state.conversationId&&can('conversation.reader.open')&&<Button variant="ghost" size="small" leadingIcon={IconHistory} onClick={()=>run('conversation.reader.open',{conversationId:state.conversationId})}>浏览对话记录</Button>}

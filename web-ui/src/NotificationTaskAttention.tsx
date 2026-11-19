@@ -12,7 +12,7 @@ const labels:Record<string,string>={needs_confirmation:'结果等待你确认',a
 /** Paged original task headers. Reading this queue never answers, approves or resumes work. */
 export function NotificationTaskAttention({enabled,onOpenTask,memory,mode}:{enabled:boolean;mode:'attention'|'taskUpdates';onOpenTask:(id:string,review?:boolean)=>void;memory:NotificationViewMemory}) {
   const pages=memory.taskPages??(memory.taskPages={});
-  const stored=pages[mode]??(pages[mode]=memory.taskMode===mode?{cursor:memory.taskCursor,prior:memory.taskPrior,focus:memory.taskFocus}:{});
+  const stored=pages[mode]??(pages[mode]={});
   const [page,setPage]=useState<Page|null>(null),[cursor,setCursor]=useState(stored.cursor||''),[prior,setPrior]=useState<string[]>(stored.prior||[]);
   const [busy,setBusy]=useState(false),[error,setError]=useState(''),[returnRevision,reloadReturn]=useState(0),[returnNote,setReturnNote]=useState('');
   const request=useRef(0),entering=useRef(false),alive=useRef(true),section=useRef<HTMLElement>(null);
@@ -50,6 +50,7 @@ export function NotificationTaskAttention({enabled,onOpenTask,memory,mode}:{enab
   useEffect(()=>{request.current++;entering.current=false;setPage(null);setBusy(false);setError('');if(enabled)void read(cursor,prior);},[enabled,mode,returnRevision]);
   const resultLabel=(status:string)=>status==='completed'?'任务已结束':status==='failed'?'这次执行未完成':status==='cancelled'?'任务已停止':labels[status]||status||'状态未提供';
   const category=(task:Task)=>task.historyHasUnconfirmedOperations?'操作待核对':['waiting_approval','awaiting_approval','waiting_permission','awaiting_permission','needs_confirmation'].includes(task.status||'')?'确认与授权':['awaiting_user','waiting_user'].includes(task.status||'')?'需要补充':['failed','interrupted','reconciling','reconciliation_required','unknown'].includes(task.status||'')?'执行异常':task.status==='paused'?'已暂停':'其他待处理';
+  const canReview=mode==='attention'&&bridge.getState().capabilities.commands.includes('tasks.review');
   const groups=mode==='attention'
     ? ['操作待核对','确认与授权','需要补充','执行异常','已暂停','其他待处理'].map(title=>({title,tasks:(page?.tasks||[]).filter(task=>category(task)===title)}))
     : [{title:'已完成',tasks:(page?.tasks||[]).filter(task=>task.status==='completed')},{title:'未完成与其他结果',tasks:(page?.tasks||[]).filter(task=>task.status!=='completed')}];
@@ -59,14 +60,13 @@ export function NotificationTaskAttention({enabled,onOpenTask,memory,mode}:{enab
     {groups.filter(group=>group.tasks.length).map(group=><section className="pw-notification-group" key={group.title} aria-label={group.title}>
       <header className="pw-notification-group-heading"><h3>{group.title}</h3><span aria-label={`本页 ${group.tasks.length} 项`}>{group.tasks.length}</span></header>
       <div className="pw-task-list">{group.tasks.map(task=>{
-        const state=task.status||'',canReview=mode==='attention'&&bridge.getState().capabilities.commands.includes('tasks.review');
+        const state=task.status||'';
         const direct=canReview&&(task.historyHasUnconfirmedOperations===true||['needs_confirmation','waiting_approval','awaiting_approval','waiting_permission','awaiting_permission','awaiting_user','waiting_user'].includes(state));
         const next=mode==='attention'?(task.historyHasUnconfirmedOperations?'核对操作结果':labels[state]||state||'查看原工作'):resultLabel(state);
-        return <div className="pw-inbox-original-line" key={task.id}><Button variant="ghost" className="pw-task-row" data-task-id={task.id} data-task-status={state} onClick={()=>openTask(task.id,direct)}>
+        return <Button variant="ghost" className="pw-task-row" key={task.id} data-task-id={task.id} data-task-status={state} onClick={()=>openTask(task.id,direct)}>
           <span className="pw-task-row-status">{state==='completed'?<IconCheckCircle size={20} aria-hidden/>:state==='failed'?<IconError size={20} aria-hidden/>:<IconClock size={20} aria-hidden/>}</span>
-          <span className="pw-task-row-copy"><b>{task.goal||'原工作'}</b><span className="pw-task-row-meta">{next}{!!task.updatedAt&&<time>{new Date(task.updatedAt).toLocaleString('zh-CN')}</time>}</span>{task.summary&&<span className="pw-task-row-summary">{task.summary}</span>}</span><IconChevronRight size={18} aria-hidden/></Button>
-          {canReview&&<Button variant="ghost" size="small" className="pw-inbox-row-alt" aria-label={(direct?'查看工作概览：':'查看这件工作的处理页：')+(task.goal||'原工作')} onClick={()=>openTask(task.id,!direct)}>{direct?'概览':'处理页'}</Button>}
-        </div>;
+          <span className="pw-task-row-copy"><b>{task.goal||'原工作'}</b><span className="pw-task-row-meta">{next}{!!task.updatedAt&&<time>{new Date(task.updatedAt).toLocaleString('zh-CN')}</time>}</span>{task.summary&&<span className="pw-task-row-summary">{task.summary}</span>}</span><IconChevronRight size={18} aria-hidden/>
+        </Button>;
       })}</div></section>)}
     {error&&<p className="pw-error" role="alert">{error}</p>}
     {busy&&<p className="pw-muted" role="status">正在查找原任务记录…</p>}

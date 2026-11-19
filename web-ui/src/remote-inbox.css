@@ -76,8 +76,6 @@
 .pw-inbox-panel .pw-task-row-copy{min-width:0;overflow-wrap:anywhere}
 .pw-inbox-panel .pw-task-row-status{flex:none}
 .pw-inbox-panel .pw-task-row-summary{font-size:.8125rem}
-.pw-inbox-original-line{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px;align-items:center;min-width:0;border-bottom:1px solid var(--pw-divider)}
-.pw-inbox-panel .pw-inbox-row-alt{min-width:44px;min-height:44px;padding:3px 6px;color:var(--pw-copy)}
 .pw-inbox-panel .pw-task-list>.pw-task-row+.pw-task-row{border-top:1px solid var(--pw-divider);border-radius:0}
 .pw-inbox-source{display:flex;align-items:center;flex-wrap:wrap;gap:4px}
 .pw-inbox-source>button{min-height:44px;color:var(--pw-copy)}
