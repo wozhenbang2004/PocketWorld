@@ -276,15 +276,13 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
     if (onboarding && !await save({ ...data.preferences, step: viewStep(view), status: 'in_progress' })) return;
     preparation.dismissReview(); onNavigate(target);
   };
-  const finish = async (skip: boolean) => {
+  const canRecordProgress = !!data && entered && readable && can('setup.save') && !loading && !needsRead;
+  const close = async () => {
     if (pending.current || preparation.working) return;
     if (!onboarding) { preparation.dismissReview(); onClose(); return; }
-    if (!data || locked || (!skip && !textVerified)) return;
-    if (await save({ ...data.preferences, step: skip ? viewStep(view) : 'finish', status: skip ? 'skipped' : 'completed' })) onClose();
-  };
-  const close = () => {
-    if (pending.current || preparation.working) return;
-    if (onboarding && data) void finish(!textVerified); else onClose();
+    // A pending read or unconfirmed receipt must not trap the original draft or replay a write.
+    if (!data || !canRecordProgress || reading.current) { onClose(); return; }
+    if (await save({ ...data.preferences, step: textVerified ? 'finish' : viewStep(view), status: textVerified ? 'completed' : 'skipped' })) onClose();
   };
   const command = async (action: string, args: Record<string, unknown> = {}) => {
     if (!data || pending.current || reading.current || needsRead || !can(action) || document.hidden) return;
@@ -310,11 +308,11 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
     if (pending.current || preparation.working) return true;
     if (preparation.review) { preparation.dismissReview(); return true; }
     if (hasParent) {
-      if (onboarding) void openView(parentView);
+      if (onboarding && canRecordProgress && !reading.current) void openView(parentView);
       else { preparation.dismissReview(); setNotice(''); setView(parentView); }
       return true;
     }
-    if (onboarding && data) { void finish(!textVerified); return true; }
+    if (onboarding && data) { void close(); return true; }
     return false;
   };
   const capabilitySummary = (id: SetupCapability) => {
@@ -381,12 +379,12 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
   const title = view === 'overview' ? '能力准备' : view === 'model' ? onboarding ? '开始使用' : '模型连接' : capabilityCopy[view].title;
   const returning = returnLabel || (onboarding ? '进入管家' : '返回原页面');
   const skipLabel = `${modelSelected ? '暂不验证' : '稍后设置'}，${returning}`;
-  const leaveLabel = onboarding && !textVerified ? skipLabel : returning;
+  const leaveLabel = onboarding && canRecordProgress && !textVerified ? skipLabel : returning;
   const parentLabel = parentView === 'model' ? '返回模型连接' : '返回能力准备';
-  const headerAction = () => { if (!back.current()) close(); };
+  const headerAction = () => { if (!back.current()) void close(); };
   return <section className="pw-setup-workspace" aria-label={title} data-setup-step={viewStep(view)} data-setup-view={view} data-setup-mode={mode} data-setup-focused={focused}>
     <header className="pw-setup-header">
-      <Button variant="ghost" iconOnly leadingIcon={hasParent || focused ? IconArrowLeft : IconClose} className="pw-setup-close" aria-label={hasParent ? parentLabel : leaveLabel} title={hasParent ? parentLabel : leaveLabel} disabled={!!working || !!preparation.working || onboarding && !!data && (loading || needsRead)} onClick={headerAction}/>
+      <Button variant="ghost" iconOnly leadingIcon={hasParent || focused ? IconArrowLeft : IconClose} className="pw-setup-close" aria-label={hasParent ? parentLabel : leaveLabel} title={hasParent ? parentLabel : leaveLabel} disabled={!!working || !!preparation.working} onClick={headerAction}/>
       <h1 ref={heading} tabIndex={-1}>{title}</h1>
       {data && <Button variant="ghost" iconOnly leadingIcon={IconRefresh} className="pw-setup-refresh" aria-label="刷新准备状态" title="刷新准备状态" disabled={loading || !!working || !readable} onClick={() => void load()}/>}
     </header>
@@ -401,13 +399,11 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
           {view === 'model' && <>{modelSection}{onboarding && <div className="pw-setup-optional"><Button variant="ghost" trailingIcon={IconChevronRight} disabled={locked || !!preparation.working} onClick={() => void openView('overview')}>查看手机、开发与语音能力</Button></div>}</>}
           {view !== 'overview' && view !== 'model' && <div className="pw-setup-purpose-detail"><p className="pw-setup-purpose-description">{capabilityCopy[view].description}</p>{capabilityBody(view)}</div>}
         </div>
-        {(error || needsRead || notice) && <div className="pw-setup-feedback">{error && <p role="alert" className="pw-setup-error">{error}</p>}{needsRead && <Button variant="secondary" disabled={loading || !!working} onClick={() => void load()}>刷新并核对</Button>}{notice && <p role="status" className="pw-setup-notice">{notice}</p>}</div>}
+        {(error || needsRead || notice) && <div className="pw-setup-feedback">{error && <p role="alert" className="pw-setup-error">{error}</p>}{needsRead && readable && <Button variant="secondary" disabled={loading || !!working} onClick={() => void load()}>刷新并核对</Button>}{notice && <p role="status" className="pw-setup-notice">{notice}</p>}</div>}
       </div>
       <footer className="pw-setup-footer">
-        {onboarding ? <Button className="pw-setup-next" variant={textVerified ? 'primary' : 'ghost'}
-          disabled={locked || !!preparation.working || !can('setup.save')} onClick={() => void finish(!textVerified)}>
-          {working === 'save' ? '正在保存…' : textVerified ? returning : skipLabel}
-        </Button> : <Button className="pw-setup-next" variant="secondary" disabled={!!working || !!preparation.working} onClick={() => void finish(false)}>{returning}</Button>}
+        <Button className="pw-setup-next" variant={!onboarding ? 'secondary' : canRecordProgress && textVerified ? 'primary' : 'ghost'}
+          disabled={!!working || !!preparation.working} onClick={() => void close()}>{working === 'save' ? '正在保存…' : leaveLabel}</Button>
       </footer>
     </>}
   </section>;
