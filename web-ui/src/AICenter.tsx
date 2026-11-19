@@ -181,6 +181,44 @@ export function AICenter({ state, data, supported, run, registerTransientBack, i
   const filtered = connections.filter(row => `${row.name || ''} ${row.baseUrl || ''} ${aiServiceBrand(row)} ${aiSourceLabel(row)}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const filteredAccounts = accounts.filter(row => `${row.label || ''} ChatGPT OpenAI`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const serviceGroups = aiSourceGroups.map(group => ({ ...group, accounts: group.kind === 'subscription_account' ? filteredAccounts : [], connections: filtered.filter(row => aiConnectionSource(row).kind === group.kind) })).filter(group => group.accounts.length || group.connections.length);
+  const detailCatalog = connection && catalog && aiCatalogCurrent(catalog, connection) ? catalog : null;
+  const detailProfile: Data = { ...connection, ...object(detailCatalog?.connection) };
+  if (detailProfile.provider === 'bedrock_anthropic' && Date.parse(text(detailProfile.credentialExpiresAt)) <= Date.now()) detailProfile.credentialStatus = 'expired';
+  const modelReviewBlocked = busy || selectionUnknown || serviceUnknown || detailProfile.enabled === false ||
+    detailProfile.credentialStatus === 'expired' || !supported('models.catalog.review');
+  const connectionNextStep = (row: Data) => {
+    const manualModel = row.provider === 'bedrock_anthropic' || detailCatalog?.catalogAvailable === false;
+    const canRefresh = !manualModel && row.enabled !== false && detailCatalog?.canRefresh !== false && supported('models.catalog.refresh');
+    const canEdit = supported('models.connections.update');
+    const edit = (label = '编辑连接', primary = false) => <Button variant={primary ? 'primary' : 'ghost'} leadingIcon={IconControls} data-ai-return-key="edit-connection"
+      disabled={busy} onClick={() => open({ kind: 'edit', id: row.id })}>{canEdit ? label : '查看连接配置'}</Button>;
+    const read = (primary = true) => <Button variant={primary ? 'primary' : 'ghost'} leadingIcon={IconRefresh} disabled={busy || !canRefresh} onClick={() => readCatalog(true)}>读取模型</Button>;
+    const step = (title: string, hint: string, action: ReactNode, other?: ReactNode) => <>
+      <section className="pw-ai-next-step" aria-label="接下来"><h3>{title}</h3><p>{hint}</p></section>
+      <div className="pw-ai-detail-actions">{action}{other}</div>
+    </>;
+    if (serviceUnknown) return supported('models.snapshot')
+      ? step('先核对服务状态', '上一次启停还没有确认。这里只读取已保存的状态，不会再次提交。', <Button leadingIcon={IconRefresh} disabled={busy} onClick={recoverService}>读取服务状态</Button>)
+      : step('启停结果待核对', '当前不能读取上一次启停的结果，不会重复提交。', <Button disabled={busy} onClick={back}>返回服务</Button>);
+    if (row.enabled === false) return supported('models.connections.setEnabled')
+      ? step('服务已停用', '启用后允许新的请求使用这项服务，不会更改默认模型。',
+        <Button disabled={busy} onClick={() => setServiceChange({ id: row.id, revision: row.revision, name: row.name, enabled: true })}>审阅启用服务</Button>, edit())
+      : step('服务已停用', '当前不能更改启停状态，仍可查看已保存的配置。', edit('查看连接配置', true));
+    if (row.credentialStatus === 'expired') return step('凭据已过期', canEdit ? '在原连接中替换凭据并保存，再使用这项服务。' : '当前不能保存凭据更改，可查看原连接配置。', edit('更新凭据', true));
+    if (row.credentialStatus === 'not_configured' || !row.hasApiKey && !row.hasAwsSession) {
+      const source = aiConnectionSource(row).kind;
+      const keyMayBeOptional = canRefresh && (source === 'local_gateway' || source === 'third_party_gateway');
+      return step('尚未保存凭据', !canEdit ? '当前不能保存凭据更改，可查看原连接配置。' : keyMayBeOptional ? '需要密钥时在原连接中添加。免密网关也可以直接读取模型。' : '在原连接中填写凭据并明确保存。',
+        edit('配置凭据', true), keyMayBeOptional ? read(false) : undefined);
+    }
+    if (manualModel || !canRefresh) {
+      const model = text(row.model).trim();
+      if (model && supported('models.catalog.review')) return step('使用已配置的模型', `模型 ID：${model}。核对后再决定是否设为默认，不会发起推理。`,
+        <Button disabled={busy || selectionUnknown} onClick={() => reviewModel(model)}>核对模型</Button>, edit());
+      return step('手动指定模型', !canEdit ? '当前不能刷新模型目录或保存模型 ID，可查看原连接配置。' : manualModel ? '此服务不提供模型目录，可在原连接中填写或更改模型 ID。' : '当前不能刷新模型目录，可在原连接中查看或填写模型 ID。', edit('编辑模型 ID', true));
+    }
+    return step('选择要使用的模型', '读取此服务的模型目录，再选择默认模型。读取目录不代表推理调用成功。', read(), edit());
+  };
   const hasServices = connections.length + accounts.length > 0;
   const defaultModelName = text(state.modelName).trim();
   const canAddService = supported('models.connections.add') || supported('accounts.beginLogin');
@@ -231,13 +269,12 @@ export function AICenter({ state, data, supported, run, registerTransientBack, i
       {view.kind === 'tools' && renderTools(registerChildBack)}
       {view.kind === 'proxy' && renderProxy(registerChildBack)}
       {view.kind === 'connection' && (connection ? <>
-        <div className="pw-ai-service-summary"><p>{aiSourceLabel(connection)} · {aiServiceBrand(connection)} · {aiCredentialStatus(connection)}</p><small>{connection.baseUrl}</small><small>{aiConnectionSource(connection).externalRelayEligible ? '用于应用内推理，也可单独配置本机 API。' : '用于应用内推理。此来源暂不支持本机 API。'}</small></div>
-        <section className="pw-ai-next-step" aria-label="接下来"><h3>{connection.enabled === false ? '服务已停用' : ((!connection.hasApiKey && !connection.hasAwsSession) || ['expired', 'not_configured'].includes(connection.credentialStatus)) ? '先完善连接凭据' : '选择要使用的模型'}</h3><p>{connection.enabled === false ? '可在下方服务管理中启用；已有任务不会更换服务。' : ((!connection.hasApiKey && !connection.hasAwsSession) || ['expired', 'not_configured'].includes(connection.credentialStatus)) ? '打开编辑连接，填写或更新凭据后保存。' : '读取此服务的模型目录，再选择默认模型。保存连接不代表模型调用已经成功。'}</p></section>
-        <div className="pw-ai-detail-actions"><Button leadingIcon={IconRefresh} disabled={busy || !supported('models.catalog.refresh')} onClick={() => readCatalog(true)}>{busy ? '读取中…' : '读取模型'}</Button><Button variant="ghost" leadingIcon={IconControls} data-ai-return-key="edit-connection" disabled={busy} onClick={() => open({ kind: 'edit', id: connection.id })}>编辑连接</Button></div>
+        <div className="pw-ai-service-summary"><p>{aiSourceLabel(connection)} · {aiServiceBrand(connection)} · {aiCredentialStatus(detailProfile)}</p><small>{connection.baseUrl}</small><small>{aiConnectionSource(connection).externalRelayEligible ? '用于应用内推理，也可单独配置本机 API。' : '用于应用内推理。此来源暂不支持本机 API。'}</small></div>
+        {connectionNextStep(detailProfile)}
         {catalog && aiCatalogCurrent(catalog, connection) && <section className="pw-ai-source-catalog"><header className="pw-ai-section-heading"><h3>模型目录</h3>{catalog.catalogFetchedAtMillis > 0 && <span>{new Date(catalog.catalogFetchedAtMillis).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>}</header>
           {catalog.refreshAttempt?.status === 'failed' && <MotionFeedback identity={String(catalog.refreshAttempt.message || 'failed')} className="pw-ai-feedback" role="status">{catalog.refreshAttempt.message || '这次目录读取失败。你仍可查看上次成功读取的记录，或重新读取。'}</MotionFeedback>}
           {catalog.catalogAvailable === false && <p className="pw-ai-feedback">{catalog.catalogUnavailableReason || '此服务没有可读取的模型目录，请在配置中填写模型 ID。'}</p>}
-          {rows(catalog.models).length ? <div className="pw-ai-model-rows">{rows(catalog.models).map(row => <Button key={row.modelId} data-motion-key={`model:${row.modelId}`} variant="ghost" className="pw-ai-model-row" disabled={busy || selectionUnknown || !supported('models.catalog.review')} onClick={() => reviewModel(row.modelId)}><span className="pw-ai-row-copy"><strong>{row.modelId}</strong><small>{row.catalogFresh === true ? '目录已读取' : '保留的模型记录'}</small></span><IconChevronRight size={17} aria-hidden /></Button>)}</div> : <p className="pw-ai-muted">尚未读到模型。可重新读取，或在配置中填写模型 ID。</p>}
+          {rows(catalog.models).length ? <div className="pw-ai-model-rows">{rows(catalog.models).map(row => <Button key={row.modelId} data-motion-key={`model:${row.modelId}`} variant="ghost" className="pw-ai-model-row" disabled={modelReviewBlocked} onClick={() => reviewModel(row.modelId)}><span className="pw-ai-row-copy"><strong>{row.modelId}</strong><small>{row.catalogFresh === true ? '目录已读取' : '保留的模型记录'}</small></span><IconChevronRight size={17} aria-hidden /></Button>)}</div> : <p className="pw-ai-muted">尚未读到模型。可重新读取，或在配置中填写模型 ID。</p>}
         </section>}
         <Accordion><AccordionItem id="service-details" title="服务信息与管理"><dl className="pw-ai-model-facts"><div><dt>连接 ID</dt><dd>{connection.id}</dd></div><div><dt>配置版本</dt><dd>{connection.revision}</dd></div><div><dt>接口协议</dt><dd>{connection.provider}</dd></div></dl><StretchSwitch label="启用这项服务" checked={connection.enabled === true} disabled={busy || serviceUnknown || !supported('models.connections.setEnabled')} onChange={enabled => setServiceChange({ id: connection.id, revision: connection.revision, name: connection.name, enabled })} /></AccordionItem></Accordion>
       </> : <div className="pw-ai-empty"><h3>这项服务已变化</h3><p>返回服务列表重新核对。</p><Button onClick={back}>返回服务</Button></div>)}
@@ -245,7 +282,7 @@ export function AICenter({ state, data, supported, run, registerTransientBack, i
     {notice && <MotionFeedback identity={notice} className="pw-ai-feedback" role="status">{notice}</MotionFeedback>}{error && <MotionFeedback identity={error} className="pw-field-error" role="alert">{error}</MotionFeedback>}
     {view.kind === 'proxy' && (selectionUnknown || serviceUnknown) && <p className="pw-ai-feedback" role="status">AI 接入的上次更改尚未确认，返回后读取状态核对。</p>}
     {view.kind !== 'proxy' && selectionUnknown && <Button variant="secondary" disabled={busy} onClick={recoverSelection}>读取当前状态，核对原选择</Button>}
-    {view.kind !== 'proxy' && serviceUnknown && <p className="pw-ai-feedback" role="status">服务启停结果待核对，没有自动重试。<Button variant="ghost" disabled={busy} onClick={recoverService}>读取服务状态</Button></p>}
+    {view.kind !== 'proxy' && !(view.kind === 'connection' && connection) && serviceUnknown && <p className="pw-ai-feedback" role="status">服务启停结果待核对，没有自动重试。<Button variant="ghost" disabled={busy} onClick={recoverService}>读取服务状态</Button></p>}
     <SettingsDialog isOpen={!!serviceChange} title={serviceChange?.enabled ? '启用这项服务？' : '停用这项服务？'} onClose={() => { if (!busy) setServiceChange(null); }}>{serviceChange && <><p>{serviceChange.name}</p><p>{serviceChange.enabled ? '允许后续模型请求使用这项服务；不会更改默认模型。' : '停止此来源的新模型请求。默认模型仍保留原选择，正在执行的任务不会自动改用其他服务。'}</p><div className="pw-ai-picker-actions"><Button variant="secondary" disabled={busy} onClick={() => setServiceChange(null)}>取消</Button><Button disabled={busy || serviceUnknown} onClick={changeServiceEnabled}>{serviceChange.enabled ? '启用服务' : '停用服务'}</Button></div></>}</SettingsDialog>
     <SettingsDialog isOpen={!!modelReview} title="选择默认模型" onClose={() => { if (!busy) setModelReview(null); }}>{modelReview && <div className="pw-ai-model-review">
       <header><h3>{modelReview.requestedModelId}</h3><p>{connection?.name}</p></header>
