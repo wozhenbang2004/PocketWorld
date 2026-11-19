@@ -1,0 +1,43 @@
+/* One BoardUI/Vaul navigation surface, whether temporary on phones or pinned on desktop. */
+.pw-owner-nav-header{flex:none;min-width:0}
+.pw-owner-nav-header h2{min-width:0;flex:1;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pw-navigation-drawer .pw-drawer-body.pw-owner-nav-body:not([data-nav-face="records"]),
+.pw-desktop-navigation .pw-drawer-body.pw-owner-nav-body:not([data-nav-face="records"]){display:flex;flex:1 1 auto;flex-direction:column;min-width:0;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:auto;padding:4px 12px 12px}
+.pw-owner-quick{display:flex;align-items:center;gap:6px;min-width:0;margin:2px 0 10px}
+.pw-owner-quick .pw-owner-search{display:flex;flex:1;min-width:0;justify-content:flex-start;gap:12px;min-height:44px;padding:8px 12px;background:var(--pw-inset);color:var(--pw-copy);border-radius:13px}
+.pw-owner-quick>[data-pw-icon-button]{flex:none;min-width:44px;min-height:44px;background:transparent;color:var(--pw-ink)}
+.pw-owner-nav-body .pw-nav-item>a{height:auto;min-width:0;min-height:46px}
+.pw-owner-nav-body .pw-nav-content{min-width:0}
+.pw-owner-nav-body .pw-nav-label>span{overflow:hidden;text-overflow:ellipsis}
+.pw-owner-nav-body .pw-work-sidebar nav section{margin:0;padding:0}
+.pw-owner-nav-body[data-nav-face="home"] .pw-work-sidebar nav{gap:0}
+.pw-owner-nav-body .pw-owner-all{display:flex;align-items:center;justify-content:flex-start;min-width:0;min-height:46px;height:auto;width:100%;gap:12px;margin:2px 0 0;padding:8px 12px;box-shadow:none;border:0;border-radius:12px;background:transparent;color:var(--pw-copy);text-align:start}
+.pw-owner-all>span{display:flex;flex:1;min-width:0;justify-content:flex-start;padding:0;gap:6px;white-space:normal}
+.pw-owner-all>span small{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pw-owner-nav-body .pw-owner-all>svg:last-child{margin-inline-start:auto;width:16px}
+.pw-owner-nav-body .pw-owner-recent{margin-top:18px}
+.pw-owner-recent h3,.pw-owner-nav-body[data-nav-face="directory"] .pw-work-sidebar nav h3{margin:0;padding:4px 12px;color:var(--pw-copy);font:500 .8125rem/1.5 var(--pw-font)}
+.pw-owner-recent-heading{display:flex;align-items:center;justify-content:space-between;min-width:0}
+.pw-owner-recent-heading>button{min-height:44px}
+.pw-owner-recent .pw-conversation-row>button{min-height:44px}
+.pw-owner-nav-find{position:sticky;top:-4px;z-index:1;padding:4px 0 8px;background:var(--pw-surface)}
+.pw-owner-nav-find [role="search"]{min-width:0}
+.pw-owner-nav-find input{min-height:42px;min-width:0}
+.pw-owner-nav-body[data-nav-face="directory"] .pw-work-sidebar nav section+section{margin-top:12px}
+.pw-owner-nav-body[data-nav-face="directory"] .pw-nav-label>span{line-height:1.5;white-space:normal;overflow-wrap:anywhere}
+.pw-owner-nav-empty{padding:18px 12px;color:var(--pw-copy);overflow-wrap:anywhere}
+.pw-owner-nav-empty>button{min-height:44px}
+.pw-owner-nav-footer{flex:none}
+.pw-owner-nav-footer .pw-navigation-profile-copy{min-width:0}
+.pw-owner-nav-footer .pw-navigation-profile-copy strong{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.pw-owner-nav-body[data-mini] .pw-owner-quick{flex-direction:column}
+.pw-owner-nav-body[data-mini] .pw-owner-quick>button,.pw-owner-nav-body[data-mini] .pw-owner-all{width:44px;min-width:44px;min-height:44px;padding:10px;justify-content:center;border:0}
+.pw-owner-nav-body[data-mini] .pw-owner-search>span,.pw-owner-nav-body[data-mini] .pw-owner-all>span,.pw-owner-nav-body[data-mini] .pw-owner-all>svg:last-child{display:none}
+@media(max-height:520px){.pw-navigation-drawer.pw-material-navigation .pw-owner-nav-header{min-height:48px;padding-block:2px}.pw-navigation-drawer.pw-material-navigation .pw-owner-nav-footer{padding-block:2px}.pw-owner-nav-body .pw-owner-recent{margin-top:8px}}
+@media(forced-colors:active){.pw-owner-nav-body a[aria-current="page"]{outline:1px solid Highlight;outline-offset:-2px}}
+.pw-navigation-drawer .pw-owner-nav-body[data-nav-face="directory"] .pw-work-sidebar nav section:first-child>h3:not(.pw-sr-only){display:block}
+.pw-owner-nav-body .pw-work-attention-label{color:var(--pw-copy);font:500 12px/18px var(--pw-font);white-space:nowrap}
+.pw-owner-nav-footer .pw-navigation-account>[data-owner-unread]{position:relative}
+.pw-owner-nav-footer [data-owner-unread]::after{content:"";position:absolute;inset:9px 9px auto auto;width:5px;height:5px;border-radius:50%;background:currentColor}
+.pw-owner-nav-body.pw-navigation-search-host{position:relative}
+.pw-owner-nav-body .pw-work-search[inert]{pointer-events:none}

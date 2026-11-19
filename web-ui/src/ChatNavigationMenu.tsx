@@ -1,5 +1,5 @@
 import type {ReactNode,Ref} from 'react';
-import { IconFolder, IconGrid, IconMore, IconNewChat, IconNotification, IconSearch, IconSettings, IconSparkles } from './icons';
+import { IconChevronDown, IconFolder, IconMemory, IconMenu, IconSearch } from './icons';
 import {Button,IconButton} from './forms-library';
 import {Popover,PopoverTrigger} from './shell-library';
 import {useNavigationGlass} from './useNavigationGlass';
@@ -23,32 +23,28 @@ type ChatNavigationMenuProps={
  onSettings:()=>void;
 };
 
-/** The retained BoardUI/React Aria popover owns focus, placement and dismissal.
- * This only relocates navigation; actions still use the existing host paths. */
-export function ChatNavigationMenu({title,navigationTrigger,isOpen,onOpenChange,triggerRef,submitting,unread,onNewConversation,onConversations,onHome,onNavigation,onOrganize,onMemory,onNotifications,onSettings}:ChatNavigationMenuProps){
+/** Back and global navigation are different visible targets. The title menu
+ * belongs to the current conversation; account settings, notifications and
+ * starting another chat belong to the single workspace navigator. */
+export function ChatNavigationMenu({title,navigationTrigger,isOpen,onOpenChange,triggerRef,unread,onConversations,onNavigation,onOrganize,onMemory}:ChatNavigationMenuProps){
  const actionsGlass=useNavigationGlass<HTMLDivElement>();
  const choose=(action:()=>void)=>{onOpenChange(false);action()};
- return <nav className="pw-chat-navigation" aria-label="对话操作">
+ const local=!!onOrganize||!!onMemory;
+ return <nav className="pw-chat-navigation" aria-label="对话导航">
   {navigationTrigger}
-  <h1 className="pw-chat-navigation-title" title={title}><span>{title}</span></h1>
-  <div ref={actionsGlass} className="pw-chat-navigation-actions pw-navigation-glass" role="group" aria-label="查找与对话菜单">
-   <IconButton icon={IconSearch} className="pw-chat-glass-action" aria-label="搜索工作" onClick={event=>{const trigger=event.currentTarget;choose(()=>onConversations(trigger))}}/>
+  <h1 className="pw-chat-navigation-title" title={title}>{local?
    <PopoverTrigger isOpen={isOpen} onOpenChange={onOpenChange}>
-   <IconButton ref={triggerRef} icon={IconMore} className="pw-chat-glass-action" aria-label={unread>0?`对话菜单，${unread} 条未读通知`:'对话菜单'} title="对话菜单" data-unread={unread>0||undefined}/>
-   <Popover aria-label="对话菜单" placement="bottom end" offset={8} className="pw-chat-glass-menu" dialogClassName="pw-chat-glass-dialog">
-    <div className="pw-chat-menu-actions">
-     <Button variant="ghost" leadingIcon={IconSparkles} onClick={()=>choose(onHome)}>回到管家</Button>
-     {onNewConversation&&<Button variant="ghost" leadingIcon={IconNewChat} disabled={submitting} onClick={()=>choose(onNewConversation)}>新对话</Button>}
-     {onOrganize&&<Button variant="ghost" leadingIcon={IconFolder} onClick={()=>choose(onOrganize)}>整理当前对话</Button>}
-     {onMemory&&<Button variant="ghost" leadingIcon={IconSettings} onClick={()=>choose(onMemory)}>本对话的个人记忆</Button>}
-    </div>
-    <div className="pw-chat-menu-actions">
-     <Button variant="ghost" leadingIcon={IconGrid} onClick={()=>choose(onNavigation)}>工作区与导航</Button>
-     {onNotifications&&<Button variant="ghost" leadingIcon={IconNotification} onClick={()=>choose(onNotifications)}><span>通知</span>{unread>0&&<small className="pw-chat-menu-unread">{unread>99?'99+':unread}</small>}</Button>}
-     <Button variant="ghost" leadingIcon={IconSettings} onClick={()=>choose(onSettings)}>设置</Button>
-    </div>
-   </Popover>
-   </PopoverTrigger>
+    <Button variant="ghost" className="pw-chat-object-menu" trailingIcon={IconChevronDown} aria-label={title+'，当前对话操作'}><span dir="auto">{title}</span></Button>
+    <Popover aria-label="当前对话操作" placement="bottom" offset={8} className="pw-chat-glass-menu" dialogClassName="pw-chat-glass-dialog">
+     <div className="pw-chat-menu-actions">
+      {onOrganize&&<Button variant="ghost" leadingIcon={IconFolder} onClick={()=>choose(onOrganize)}>整理当前对话</Button>}
+      {onMemory&&<Button variant="ghost" leadingIcon={IconMemory} onClick={()=>choose(onMemory)}>本对话的个人记忆</Button>}
+     </div>
+    </Popover>
+   </PopoverTrigger>:<span dir="auto">{title}</span>}</h1>
+  <div ref={actionsGlass} className="pw-chat-navigation-actions pw-navigation-glass" role="group" aria-label="查找与导航">
+   <IconButton icon={IconSearch} className="pw-chat-glass-action" aria-label="搜索工作" onClick={event=>{const trigger=event.currentTarget;choose(()=>onConversations(trigger))}}/>
+   <IconButton ref={triggerRef} icon={IconMenu} className="pw-chat-glass-action" aria-label={unread>0?`打开全局导航，${unread} 条未读通知`:'打开全局导航'} title="打开全局导航" aria-haspopup="dialog" data-unread={unread>0||undefined} onClick={()=>choose(onNavigation)}/>
   </div>
  </nav>;
 }

@@ -125,8 +125,8 @@ export function WorkSidebar({items,selected,onNavigate,header,footer,label='工�
     <nav aria-label={label}>
      {groups.map(group=><section key={group}>
       <h3 className={hideGroupLabels?'pw-sr-only':undefined}>{group}</h3>
-      {items.filter(x=>(x.group||'工作')===group).map(item=><div className="pw-nav-item" key={item.key}>
-       <NavItem icon={item.icon} label={item.label} status={item.status} collapsed={compact} disabled={item.disabled} isSelected={selected===item.key} reduceMotion={reduceMotion} badge={item.status?<span className="pw-nav-status" aria-hidden="true"/>:item.count!=null?<span className="pw-nav-count">{item.count}</span>:undefined} onClick={()=>onNavigate(item.key)}/>
+      {items.filter(x=>(x.group||'工作')===group).map(item=><div className="pw-nav-item" data-destination={item.key} key={item.key}>
+       <NavItem icon={item.icon} label={item.label} status={item.status||(item.key==='remoteInbox'&&Number(item.count)>0?`${item.count} 条未读通知`:undefined)} collapsed={compact} disabled={item.disabled} isSelected={selected===item.key} reduceMotion={reduceMotion} badge={item.status&&item.key==='tasks'?<span className="pw-work-attention-label" aria-hidden="true">待处理</span>:item.status?<span className="pw-nav-status" aria-hidden="true"/>:item.count!=null?<span className="pw-nav-count">{item.count}</span>:undefined} onClick={()=>onNavigate(item.key)}/>
        {item.description&&selected===item.key&&!compact&&<small>{item.description}</small>}
       </div>)}
      </section>)}
