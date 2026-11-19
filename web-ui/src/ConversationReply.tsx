@@ -57,7 +57,7 @@ export function useReplyRows<M extends SavedReply>(conversation:string,messages:
  return {rows,continued:(row:SavedRow<M>)=>!!row.request&&!!seen?.has(row.request)};
 }
 
-type ReplyPhase={label:string;state:ReplyActivityState};
+export type ReplyPhase={label:string;state:ReplyActivityState};
 
 /** Stream completion is a provisional model result, never a saved answer or a
  * task success. Failed attempts may arrive before the first text delta. */
@@ -77,7 +77,7 @@ export function ReplyActivity({phase,onProcess}:{phase:ReplyPhase|null;onProcess
  if(!shown)return null;
  return <MotionDisclosure open={!!phase} className="pw-reply-phase">
   <header className="pw-stream-status" data-reply-state={shown.state}>
-   <span className="pw-stream-activity" role="status" aria-live="polite" aria-atomic="true">
+   <span className="pw-stream-activity">
     <ReplyPhaseStatus label={shown.label} state={shown.state} active={!!phase}/>
    </span>
    {onProcess&&<Button variant="ghost" size="small" aria-label="查看当前回复的执行过程" disabled={!phase} onClick={phase?onProcess:undefined}>执行过程<IconChevronRight size={15} aria-hidden="true"/></Button>}
