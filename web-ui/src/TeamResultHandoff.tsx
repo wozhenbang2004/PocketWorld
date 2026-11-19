@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { Button } from './forms-library';
 import { IconChevronRight } from './icons';
 import { AIAnswer } from './library';
@@ -17,8 +18,8 @@ export function TeamFollowUps({ items, disabled, read, expanded = true, toggle }
   </section>;
 }
 
-export function TeamResultHandoff({ result, actions, stopped, openMembers, openMessage, openOriginalReview }: {
-  result: ReturnType<typeof teamResultReading>; actions: Actions; stopped: boolean;
+export function TeamResultHandoff({ result, actions, sources, stopped, openMembers, openMessage, openOriginalReview }: {
+  result: ReturnType<typeof teamResultReading>; actions: Actions; sources?:ReactNode; stopped: boolean;
   openMembers: () => void; openMessage: (id: string) => void; openOriginalReview?: () => void;
 }) {
   return <section className="pw-team-result" aria-label="本次协作成果">
@@ -27,12 +28,13 @@ export function TeamResultHandoff({ result, actions, stopped, openMembers, openM
     <TeamFollowUps {...actions}/>
     {openOriginalReview && <Button variant="secondary" size="small" disabled={actions.disabled} trailingIcon={IconChevronRight}
       onClick={openOriginalReview}>查看待审阅的原协作任务</Button>}
+    {sources}
     {result.statusNote && <div className="pw-team-result-caption"><strong>原协作记录</strong><p dir="auto" style={{ whiteSpace: 'pre-wrap' }}>{result.statusNote}</p></div>}
     {result.previous && <p className="pw-team-result-caption">这是当时保存的汇总，不代表当前进展或授权。</p>}
     {result.body ? <><AIAnswer text={result.body}/>
       {result.excerpt && <p className="pw-field-hint">这里只保留了原汇总的节选。</p>}
       {result.messageId && <Button variant="ghost" size="small" data-team-follow-up="summary-original" disabled={actions.disabled} onClick={() => openMessage(result.messageId)}>查看汇总原消息</Button>}</>
       : <div className="pw-team-result-empty"><p>{stopped ? '协作已停止，成员已有的产出和记录仍可查看。' : '还没有能核对来源的共同汇总。各成员已保存的产出可以单独查看。'}</p>
-        <Button variant="ghost" trailingIcon={IconChevronRight} data-team-follow-up="members" onClick={openMembers}>查看分工与产出</Button></div>}
+        {!sources && <Button variant="ghost" trailingIcon={IconChevronRight} data-team-follow-up="members" onClick={openMembers}>查看分工与产出</Button>}</div>}
   </section>;
 }

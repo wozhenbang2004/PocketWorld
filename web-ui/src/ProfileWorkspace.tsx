@@ -783,6 +783,8 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   const memorySources: unknown[] | null = Array.isArray(selection?.record.sourceRefs) ? selection.record.sourceRefs : null;
   const sourceHandle = readHandle.current;
   const retiredSuggestion = !!selection?.candidate && !['pending', 'accepted', 'rejected'].includes(selection.record.status);
+  const candidateResultUnclear = !!selection?.candidate && feedback?.targetId === selection.id
+    && (feedback.needsQuery || feedback.value.status === 'unknown');
   const relatedRecords = rows(selection?.value.relatedRecords);
   const feedbackVisible = !!feedback && (['memories', 'memory', 'memory-history'].includes(view) || view === 'memory-new' && (createUnknown || feedback.value.status === 'settings_required'));
   const preferenceSection = feedback && !feedback.needsQuery ? preferenceSectionOf(feedback.value) : null;
@@ -878,7 +880,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
             {!showCandidates && topics.length > 1 && <SelectField className="pw-profile-topic-select" label="主题" value={topic} options={[{ id: 'all', label: '所有主题' }, ...topics]} onChange={setTopic} isDisabled={locked} />}
             {!memories.complete && <p className="pw-profile-list-hint">当前搜索范围为已读取的个人记忆。</p>}
           </div>}
-          {showCandidates ? <section className="pw-profile-memory-group"><h2>待你确认<span>{pendingCandidates.length}</span></h2><p className="pw-profile-list-hint">这些是待选建议，还不是已保存的个人记忆。你可以看原文，再决定记住或忽略。</p><div className="pw-profile-memory-list">{visibleCandidates.map(row => memoryRow(row, true))}</div>{!visibleCandidates.length && <p className="pw-profile-list-hint">{query ? '没有匹配的候选。' : '目前没有待确认的内容。'}</p>}</section>
+          {showCandidates ? <section className="pw-profile-memory-group"><h2>待你确认<span>{pendingCandidates.length}</span></h2><p className="pw-profile-list-hint">这些建议还不是已保存的个人记忆。有原文时可先核对，不必现在决定。</p><div className="pw-profile-memory-list">{visibleCandidates.map(row => memoryRow(row, true))}</div>{!visibleCandidates.length && <p className="pw-profile-list-hint">{query ? '没有匹配的候选。' : '目前没有待确认的内容。'}</p>}</section>
             : topics.filter(item => visibleMemories.some(row => topicOf(row).id === item.id)).map(item => <section className="pw-profile-memory-group" key={item.id}><h2>{item.label}</h2><div className="pw-profile-memory-list">{visibleMemories.filter(row => topicOf(row).id === item.id).map(row => memoryRow(row, false))}</div></section>)}
           {memoryAvailable && !showCandidates && !visibleMemories.length && (query || topic !== 'all') && <div className="pw-profile-empty"><h2>没有找到匹配的记忆</h2><p>试试其他关键词，或查看所有主题。</p><Button variant="ghost" disabled={locked} onClick={() => { setQuery(''); setTopic('all'); }}>清除搜索与筛选</Button></div>}
           {memoryAvailable && !activeMemories.length && !pendingCandidates.length && !query && topic === 'all' && <div className="pw-profile-empty"><IconSparkles aria-hidden="true" /><h2>还没有个人记忆</h2><p>告诉我一件你希望下次不用再解释的事。</p><Button leadingIcon={IconAdd} disabled={locked || !supported('profile.memory.createReview')} onClick={openNewMemory}>记住一件事</Button><p>也可以在对话中直接说“记住这件事”。</p></div>}
@@ -886,7 +888,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
           <div className="pw-profile-collection-footer"><Button variant="ghost" leadingIcon={IconHistory} trailingIcon={IconChevronRight} disabled={locked} onClick={() => go('memory-history')}>过去的记忆</Button>{onOpenAdvancedMemory && <Button variant="ghost" leadingIcon={IconArrowUpRight} disabled={locked} onClick={() => guarded(onOpenAdvancedMemory)}>项目记忆与更多管理</Button>}<Button variant="ghost" className="pw-profile-refresh" leadingIcon={IconRefresh} disabled={locked} onClick={refresh}>刷新记忆</Button></div>
         </>}
         {loaded && view === 'memory-new' && <div className="pw-profile-form">
-          <p className="pw-profile-intro">写下一条关于你的背景、兴趣或近况。保存后可以查看、纠正或撤销这次记录。</p>
+          <p className="pw-profile-intro">手动保存的背景、兴趣或偏好可供以后参考。只对这次任务有效的要求，留在原对话即可。</p>
           <TextAreaField className="pw-profile-field" fieldClassName="pw-profile-input pw-profile-memory-input" label="希望记住什么" placeholder="一件你希望下次不用再解释的事" value={newMemoryText} onChange={setNewMemoryText} rows={5} maxLength={4000} resize="none" isDisabled={locked || createUnknown} />
           <SelectField className="pw-profile-language" label="有效期" value={newMemoryExpiry} options={expiryOptions} onChange={setNewMemoryExpiry} isDisabled={locked || createUnknown} />
           <p className="pw-profile-preference-priority">到期后会移入过去的记忆，不再作为当前背景。回答风格与做事方式可以在明确偏好中设置。</p>
@@ -926,7 +928,14 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
             disabled={!memoryAvailable || memoryConflict || memoryUnknown || !sourceHandle || !supported('profile.memory.source') || locked && pending !== '正在读取来源'}
             start={work => { void action('正在读取来源', work); }}
             read={(index, offset) => call('profile.memory.source', { readHandle: sourceHandle, index, offset })} />}
-          {selection.candidate ? selection.record.status === 'pending' && <div className="pw-profile-actions pw-profile-candidate-actions"><Button disabled={locked || memoryConflict || memoryUnknown || settingsRequiredFor(feedback, 'accept', selection.id) || !supported('profile.memory.confirm')} onClick={() => prepareReview('accept')}>记住</Button><Button variant="ghost" disabled={locked || memoryConflict || memoryUnknown || !supported('profile.memory.confirm')} onClick={() => prepareReview('reject')}>忽略</Button></div> : <Button variant="ghost" className="pw-profile-delete" leadingIcon={IconTrash} disabled={locked || memoryConflict || memoryUnknown || !supported('profile.memory.confirm')} onClick={() => prepareReview('forget')}>忘记这条记忆</Button>}
+          {selection.candidate ? selection.record.status === 'pending' && <>
+            <p className="pw-profile-list-hint" id="personal-candidate-choice">暂不保存只返回，不改变建议状态。忽略建议会将这条移出待确认。</p>
+            <div className="pw-profile-actions pw-profile-candidate-actions" role="group" aria-label="处理这条建议" aria-describedby="personal-candidate-choice">
+              <Button disabled={locked || memoryConflict || memoryUnknown || candidateResultUnclear || settingsRequiredFor(feedback, 'accept', selection.id) || !supported('profile.memory.confirm')} onClick={() => prepareReview('accept')}>记住</Button>
+              <Button variant="secondary" disabled={locked || memoryUnknown || candidateResultUnclear} onClick={back}>暂不保存</Button>
+              <Button variant="ghost" disabled={locked || memoryConflict || memoryUnknown || candidateResultUnclear || !supported('profile.memory.confirm')} onClick={() => prepareReview('reject')}>忽略建议</Button>
+            </div>
+          </> : <Button variant="ghost" className="pw-profile-delete" leadingIcon={IconTrash} disabled={locked || memoryConflict || memoryUnknown || !supported('profile.memory.confirm')} onClick={() => prepareReview('forget')}>忘记这条记忆</Button>}
         </div>}
       </div>
     </div>

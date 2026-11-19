@@ -103,7 +103,7 @@ internal class PocketWebProjectDevelopment(
             })
         } catch (failure: Exception) { busy = false; throw failure }
     }
-    private fun source(original: Page, checkout: String) = controller.projectDevelopmentForWeb().sourceForOwner(original.project, checkout)
+    private fun source(original: Page, checkout: String) = controller.projectDevelopmentForWeb().sourceForOwner(original.project, checkout, true)
     private fun model() = controller.nativeModelSelection().readStable { controller.projectDevelopmentModelForWeb() }
     private fun metadata(original: Page): JSONObject {
         val actual = controller.projectDevelopmentForWeb().inspectForOwner(original.project)
@@ -204,7 +204,7 @@ internal class PocketWebProjectDevelopment(
                     review = selected
                     JSONObject().put("reviewHandle", selected.handle).put("requestId", input.getString("clientMessageId")).put("projectId", original.project)
                         .put("checkoutId", checkout).put("goal", goal).put("deliveryContract", contract).put("source", actual).put("model", selectedModel.value())
-                        .put("runtime", "这台手机").put("expiresAt", System.currentTimeMillis() + 120_000)
+                        .put("runtime", "这台手机").put("runtimeId", input.getString("runtime")).put("expiresAt", System.currentTimeMillis() + 120_000)
                         .put("commandsAuthorized", false).put("projectMemoryAuthorized", false)
                 }
             }

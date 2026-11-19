@@ -54,8 +54,10 @@ public final class DeviceCapabilityRegistry {
         JSONArray granted=nativeState==null?null:nativeState.optJSONArray("toolNames");JSONObject binding=nativeState==null?null:nativeState.optJSONObject("resourceBinding");
         JSONArray available=granted==null||binding==null?new JSONArray():DeviceToolsRuntime.toolDeclarations(granted,binding);
         JSONArray requires=new JSONArray().put("native_device_scope").put("visible_stop_control").put("accessibility").put("unlocked_interactive_session");if(background)requires.put("android_14_or_newer").put("local_authorized_adb_or_shizuku_helper").put("background_display_session");
-        return new JSONObject().put("id",id).put("version","1.0").put("implemented",true).put("installed",nativeState!=null&&nativeState.optBoolean("installed")).put("authorized",authorized).put("ready",ready).put("busy",health.optBoolean("busy")).put("blocked",!ready)
+        JSONObject profile = new JSONObject().put("id",id).put("version","1.0").put("implemented",true).put("installed",nativeState!=null&&nativeState.optBoolean("installed")).put("authorized",authorized).put("ready",ready).put("busy",health.optBoolean("busy")).put("blocked",!ready)
                 .put("reason",nativeState==null?"native_health_unavailable":nativeState.optString("reason",ready?"":"permission_or_resource_unavailable")).put("requires",requires).put("modelRequired",false).put("screenMode",mode).put("toolDeclarations",available).put("supportedToolDeclarations",DeviceToolsRuntime.toolDeclarations())
                 .put("wholeDisplayInputRequiresExplicitGrant",true).put("wholeDisplayCaptureRequiresSeparateExplicitGrant",true).put("fallbackToMainScreen",false);
+        if (authorized && nativeState.optJSONObject("phoneScopeFact") != null) profile.put("phoneScopeFact", nativeState.getJSONObject("phoneScopeFact"));
+        return profile;
     }
 }

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Accordion, AccordionItem, Button, SelectField, SettingsDialog, TextAreaField } from './forms-library';
 import { bridge } from './bridge';
 import { ProjectCheckoutFiles } from './ProjectCheckoutFiles';
+import { CheckoutGuide, checkoutKindSummary } from './ProjectWorkBinding';
 import './local-workspace.css';
 import './project-development.css';
 import './project-workspace-manga.css';
@@ -108,7 +109,7 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
   };
   const acceptReview = (value: Data) => {
     if (value.projectId !== projectId || value.checkoutId !== draft.current.checkoutId ||
-        value.source?.projectId !== projectId || value.source?.checkoutId !== value.checkoutId ||
+        value.source?.projectId !== projectId || value.source?.checkoutId !== value.checkoutId || value.runtimeId != null && value.runtimeId !== 'managed_process_v1' ||
         typeof value.goal !== 'string' || value.goal.trim() !== draft.current.goal.trim() ||
         !value.requestId || !value.reviewHandle || value.commandsAuthorized !== false || value.projectMemoryAuthorized !== false)
       throw new Error('审阅不属于这个项目或所选副本，没有开始工作。请重新读取项目条件。');
@@ -232,12 +233,12 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
       </div>
       <div className="pw-form-actions"><Button variant="secondary" disabled={busy || !!review || filesOpen || !checkout || !can('projects.development.files.open')} onClick={() => setFilesOpen(true)}>编辑这份私人副本的文件</Button></div>
       {view.model?.configured !== true && <p className="pw-local-inline-notice">需要先连接默认模型。项目与已保存草稿保留。<Button variant="secondary" disabled={busy || pending || !!review || filesOpen} onClick={onConnectModel}>连接模型</Button></p>}
-      <Accordion><AccordionItem id="development-conditions" title="运行位置与开发条件" description={androidWrapper ? '检测到 Android 配置；本机 APK 构建条件未核验' : view.runtime?.canExecute === true ? '这台手机的基础运行条件已具备' : '可以先讨论或编辑，运行命令前需准备工具'}>
+      <Accordion><AccordionItem id="development-conditions" title="运行位置与开发条件" description={androidWrapper ? '检测到 Android 配置；本机 APK 构建条件未核验' : checkoutKindSummary(source, projectId, checkout) || '可先编辑文件；运行命令前核对工具'}>
         <p>本次只绑定这台手机与所选副本，不会自动切换到远程设备。Linux 工具不是聊天引擎，不需要为本机开发开启手机操控权限。</p>
-        {androidWrapper ? <AndroidBuildConditions wrapper={androidWrapper} runtime={view.runtime} /> : <p>Web / Node.js / Python 的安装、构建与启动仍需核对具体命令。基础工具不包含 Android SDK、JDK 或 Gradle，不代表所有项目都能运行。</p>}
+        {androidWrapper ? <AndroidBuildConditions wrapper={androidWrapper} runtime={view.runtime} /> : <p>安装依赖、构建或启动仍须核对具体方案；不会因为发现项目类型就运行脚本。</p>}
         <p>模型调用需要相应网络；已有文件和副本不会因离线而删除。退出页面不等于停止任务，重开请查看原任务。</p>
         <Button variant="secondary" disabled={busy || pending || !!review || filesOpen} onClick={onPrepareTools}>{androidWrapper ? '查看手机基础工具（不安装 SDK）' : '查看工具准备'}</Button>
-        {source && <dl className="pw-facts"><div><dt>原项目</dt><dd>{projectId}</dd></div><div><dt>私人副本</dt><dd>{checkout}</dd></div><div><dt>已读取版本</dt><dd>{source.sourceDigest}</dd></div></dl>}
+        {source && <dl className="pw-facts"><div><dt>原项目</dt><dd>{projectId}</dd></div><div><dt>私人副本</dt><dd>{checkout}</dd></div><div><dt>已读取版本</dt><dd>{source.sourceDigest}</dd></div><CheckoutGuide source={source} projectId={projectId} checkoutId={checkout}/></dl>}
       </AccordionItem></Accordion>
     </>}
     {view && filesOpen && checkout && <ProjectCheckoutFiles key={`${view.viewHandle}|${checkout}`} projectId={projectId} checkoutId={checkout} viewHandle={view.viewHandle} run={run} onClose={closeFiles} registerBack={registerFilesBack} />}
@@ -248,7 +249,7 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
         {review.deliveryContract.deliverable && <div><dt>要交付什么</dt><dd>{review.deliveryContract.deliverable}</dd></div>}
         {review.deliveryContract.completionCriteria && <div><dt>怎样算完成</dt><dd>{review.deliveryContract.completionCriteria}</dd></div>}
       </dl>}
-      <dl className="pw-facts"><div><dt>项目</dt><dd>{name}</dd></div><div><dt>私人副本</dt><dd>{review.checkoutId}</dd></div><div><dt>默认模型</dt><dd>{review.model?.label} · {review.model?.provider}</dd></div><div><dt>运行位置</dt><dd>{review.runtime}</dd></div><div><dt>源码版本</dt><dd>{review.source?.sourceDigest}</dd></div></dl>
+      <dl className="pw-facts"><div><dt>项目</dt><dd>{name}</dd></div><div><dt>私人副本</dt><dd>{review.checkoutId}</dd></div><div><dt>默认模型</dt><dd>{review.model?.label} · {review.model?.provider}</dd></div><div><dt>运行位置</dt><dd>{review.runtimeId === 'managed_process_v1' ? '这台手机 · 本机托管环境' : review.runtime}</dd></div><div><dt>源码版本</dt><dd>{review.source?.sourceDigest}</dd></div><CheckoutGuide source={review.source} projectId={projectId} checkoutId={review.checkoutId}/></dl>
       <p>将目标交给默认模型，在新的项目任务中处理。不会批准任意命令、安装依赖、读取项目记忆或自动发布。具体文件修改、命令与成果采纳仍按原任务范围审阅。</p>
       {expired && <p role="status">本次审阅已过期，还未启动。请返回重新核对。</p>}
       <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={dismiss}>返回修改</Button><Button disabled={busy || expired} onClick={start}>开始这个项目任务</Button></div>

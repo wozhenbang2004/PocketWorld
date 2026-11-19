@@ -558,7 +558,25 @@ public final class TaskStore {
     public synchronized JSONObject listConversationDraftsForOwner(String id)throws Exception {
         if(!skillProposalsEligible(id))throw new SecurityException("原任务不是主人私人会话");long total;try(Cursor count=db.rawQuery("SELECT COUNT(*) FROM operations WHERE task_id=? AND state='receipt' AND tool IN ('skills_propose','memory_propose')",new String[]{id})){count.moveToFirst();total=count.getLong(0);}
         JSONArray drafts=new JSONArray();int inspected=0,unavailable=0;try(Cursor rows=db.rawQuery("SELECT o.operation_id,o.run_id,o.tool,r.epoch FROM operations o JOIN runs r ON r.task_id=o.task_id AND r.run_id=o.run_id WHERE o.task_id=? AND o.state='receipt' AND o.tool IN ('skills_propose','memory_propose') ORDER BY o.created_at DESC,o.operation_id DESC LIMIT 100",new String[]{id})){
-            while(rows.moveToNext()&&drafts.length()<20){inspected++;ConversationDraftKind kind="skills_propose".equals(rows.getString(2))?ConversationDraftKind.SKILL:ConversationDraftKind.MEMORY;try{JSONObject original=conversationProposalForOwner(kind,id,rows.getString(1),rows.getInt(3),rows.getString(0)),proposal=original.getJSONObject("proposal");String action=proposal.getString("action"),title=kind==ConversationDraftKind.SKILL?proposal.getString("name"):action.equals("create")?"新增记忆":action.equals("update")?"纠正记忆":"遗忘记忆";if(title.length()>200)throw new SecurityException("原提案标题超过投影范围");drafts.put(new JSONObject().put("kind",kind==ConversationDraftKind.SKILL?"skill":"memory").put("taskId",id).put("runId",rows.getString(1)).put("epoch",rows.getInt(3)).put("operationId",rows.getString(0)).put("proposalDigest",proposal.getString("proposalDigest")).put("action",action).put("title",title).put("apply",new JSONObject().put("status",original.getJSONObject("apply").getString("status"))));}catch(Exception invalid){unavailable++;}}
+            while(rows.moveToNext()&&drafts.length()<20){
+                inspected++;ConversationDraftKind kind="skills_propose".equals(rows.getString(2))?ConversationDraftKind.SKILL:ConversationDraftKind.MEMORY;
+                try{
+                    JSONObject original=conversationProposalForOwner(kind,id,rows.getString(1),rows.getInt(3),rows.getString(0));
+                    JSONObject proposal=original.getJSONObject("proposal"),applied=original.getJSONObject("apply");String action=proposal.getString("action"),applyStatus=applied.getString("status");
+                    String title=kind==ConversationDraftKind.SKILL?proposal.getString("name"):action.equals("create")?"新增记忆":action.equals("update")?"纠正记忆":"遗忘记忆";
+                    if(title.length()>200)throw new SecurityException("原提案标题超过投影范围");
+                    JSONObject link=new JSONObject().put("kind",kind==ConversationDraftKind.SKILL?"skill":"memory").put("taskId",id).put("runId",rows.getString(1))
+                            .put("epoch",rows.getInt(3)).put("operationId",rows.getString(0)).put("proposalDigest",proposal.getString("proposalDigest"))
+                            .put("action",action).put("title",title).put("apply",new JSONObject().put("status",applyStatus));
+                    if(kind==ConversationDraftKind.MEMORY){
+                        // An undo has its own exact-operation receipt. Never infer it from the
+                        // original save or the current presence/absence of a memory record.
+                        link.put("undoStatus",original.getJSONObject("undo").getString("status"));
+                        if("rejected".equals(applyStatus)&&"existing_personal_memory".equals(applied.optString("outcome")))link.put("duplicate",true);
+                    }
+                    drafts.put(link);
+                }catch(Exception invalid){unavailable++;}
+            }
         }return new JSONObject().put("taskId",id).put("drafts",drafts).put("partial",total>inspected).put("totalCandidates",total).put("unavailableCandidates",unavailable).put("bodyIncluded",false);
     }
     /** Native, body-free original USER identities. Missing legacy materialization is not proof. */

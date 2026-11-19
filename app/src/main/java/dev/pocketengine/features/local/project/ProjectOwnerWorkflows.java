@@ -31,11 +31,16 @@ public final class ProjectOwnerWorkflows {
         return new JSONObject().put("projectId",project).put("checkouts",available).put("runtime",local.projectRuntimeForHost("managed_process_v1")).put("executionAuthorized",false);
     }
     private static boolean ordinaryCheckout(JSONObject value){return !value.has("teamProjectCopy")&&!value.has("skillExecutionCopy")&&!value.has("isolatedGit")&&!value.has("nativeGitImportPending");}
-    public JSONObject sourceForOwner(String project,String checkout)throws Exception {
+    public JSONObject sourceForOwner(String project,String checkout)throws Exception {return sourceForOwner(project,checkout,false);}
+    public JSONObject sourceForOwner(String project,String checkout,boolean observeTooling)throws Exception {
         ProjectBuildPlan.identity(project);ProjectBuildPlan.identity(checkout);JSONObject row=local.projectCheckoutForHost(checkout);
         if(!project.equals(row.getString("projectId"))||!ordinaryCheckout(row))throw new SecurityException("请选择此项目的普通私人副本");
         JSONObject snapshot=local.handle("export",new JSONObject().put("checkoutId",checkout)),source=ProjectSources.describe(snapshot);
-        JSONObject wrapper=ProjectAndroidPreflight.ownerWrapper(snapshot,source);source.remove("files");
+        JSONObject wrapper=ProjectAndroidPreflight.ownerWrapper(snapshot,source);
+        if(!project.equals(source.getString("projectId"))||!checkout.equals(source.getString("checkoutId")))throw new SecurityException("原项目副本已变化");
+        if(observeTooling)try{source.put("checkoutTooling",ProjectCheckoutTooling.describe(snapshot,source,local.projectRuntimeForHost("managed_process_v1")).put("androidClues",wrapper!=null));}
+        catch(Exception unavailable){/* Optional observation must not block reading/editing a verified checkout. */}
+        source.remove("files");
         if(wrapper!=null)source.put("androidGradleWrapper",wrapper);
         return source;
     }

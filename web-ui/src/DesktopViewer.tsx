@@ -1,18 +1,21 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { IconAdd, IconArrowDown, IconArrowLeft, IconArrowRight, IconArrowUp, IconCheck, IconChevronDown, IconClose, IconCollapse, IconCursor, IconCursorClick, IconExpand, IconKeyboard, IconLoading, IconMinus, IconMonitor, IconMore, IconRefresh, IconReturn, IconSend, IconTakeControl } from './icons';
+import { IconAdd, IconArrowDown, IconArrowLeft, IconArrowRight, IconArrowUp, IconCheck, IconClose, IconCollapse, IconCursor, IconCursorClick, IconExpand, IconKeyboard, IconLoading, IconMinus, IconMonitor, IconMore, IconRefresh, IconReturn, IconSend, IconTakeControl } from './icons';
 import { DesktopViewerConnection, desktopScopes, desktopText, type DesktopInput, type DesktopRecord, type DesktopRun, type DesktopViewerState } from './desktop-viewer';
 import { MotionFeedback } from './library/journey-motion';
+import { Button, RadioOptions } from './forms-library';
 import './desktop-viewer.css';
 
-const idle: DesktopViewerState = { phase: 'idle', session: null, frameReady: false, frameIssue: null, controlPending: false, inputPending: false, inputUncertain: false, controlExpired: false, error: '' };
+const idle: DesktopViewerState = { phase: 'idle', session: null, playbackReady: false, frameReady: false, frameIssue: null, controlPending: false, inputPending: false, inputUncertain: false, controlExpired: false, error: '' };
 const clampZoom = (n: number) => Math.round(Math.max(1, Math.min(3, n)) * 10) / 10;
 type Touch = { x: number; y: number; initialX: number; initialY: number; started: number; button: number; moved: boolean; sessionId?: string; revision?: number; inputAllowed: boolean; inside: boolean };
 
 /** Embedded owner view. The AI's observations and this video have separate lifecycles. */
-export function DesktopViewer({ peer, supported, run, onClose }: { peer: DesktopRecord; supported: (action: string) => boolean; run: DesktopRun; onClose: () => void }) {
-  const scopes = useMemo(() => desktopScopes(peer), [peer]);
-  const first = scopes.find(scope => scope.available && scope.resourceBinding.windowId) || scopes.find(scope => scope.available) || scopes[0];
-  const [scopeKey, setScopeKey] = useState(first?.key || ''), [state, setState] = useState<DesktopViewerState>(idle);
+export function DesktopViewer({ peer, ownerDeviceId, now, partialGrants, supported, run, onRefresh, refreshing, refreshError, onClose }: {
+  peer: DesktopRecord; ownerDeviceId: string; now: number; partialGrants: boolean; supported: (action: string) => boolean; run: DesktopRun;
+  onRefresh: () => void; refreshing: boolean; refreshError: string; onClose: () => void;
+}) {
+  const scopes = useMemo(() => desktopScopes(peer, now, ownerDeviceId), [peer, now, ownerDeviceId]);
+  const [scopeKey, setScopeKey] = useState(''), [state, setState] = useState<DesktopViewerState>(idle);
   const [zoom, setZoom] = useState(1), [expanded, setExpanded] = useState(false), [keyboard, setKeyboard] = useState(false), [more, setMore] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
   const [draft, setDraft] = useState(''), [textError, setTextError] = useState(''), [videoError, setVideoError] = useState(''), [clickMode, setClickMode] = useState<'left' | 'double' | 'right'>('left');
@@ -20,11 +23,17 @@ export function DesktopViewer({ peer, supported, run, onClose }: { peer: Desktop
   const video = useRef<HTMLVideoElement>(null), viewport = useRef<HTMLDivElement>(null), textarea = useRef<HTMLTextAreaElement>(null);
   const connection = useRef<DesktopViewerConnection | null>(null), runRef = useRef(run), mounted = useRef(false), composing = useRef(false), zoomRef = useRef(zoom);
   const pointers = useRef(new Map<number, Touch>()), pinch = useRef<{ distance: number; zoom: number } | null>(null), pinched = useRef(false);
-  const scope = scopes.find(option => option.key === scopeKey) || first;
+  const scope = scopeKey ? scopes.find(option => option.key === scopeKey) : scopes.length === 1 ? scopes[0] : undefined;
+  const activeScope = useRef('');
   const busy = state.phase === 'opening' || state.phase === 'connecting';
+  const preparing = state.phase === 'idle' || state.phase === 'failed';
   const connected = state.phase === 'live', human = state.session?.control.owner === 'human', otherHuman = state.session?.control.owner === 'other_human';
   const canInput = connection.current?.canInput() === true;
   const hostReady = ['open', 'negotiate', 'status', 'control', 'input', 'close'].every(action => supported(`devices.desktop.${action}`));
+  const online = peer.revoked !== true && ['ONLINE', 'DEGRADED'].includes(peer.connection?.state);
+  const check = peer.windowsDesktop, fresh = check?.currentChannel === true && check.capturedAt <= now && check.validUntil > now;
+  const wrongSession = (sessionId: number) => fresh && Number.isSafeInteger(check.sessionId) && check.sessionId !== sessionId;
+  const allowed = !!scope?.available && !wrongSession(scope.resourceBinding.sessionId) && online && hostReady && (!fresh || check.mediaCandidate === true);
   runRef.current = run; zoomRef.current = zoom;
 
   useEffect(() => {
@@ -76,16 +85,16 @@ export function DesktopViewer({ peer, supported, run, onClose }: { peer: Desktop
     const hide = () => { if (document.visibilityState !== 'visible') { owner.close(); onClose(); } };
     const leave = () => { owner.close(); };
     document.addEventListener('visibilitychange', hide); window.addEventListener('pagehide', leave);
-    if (hostReady && first?.available && document.visibilityState === 'visible') void owner.open(peer.deviceId, first);
     return () => { mounted.current = false; document.removeEventListener('visibilitychange', hide); window.removeEventListener('pagehide', leave); owner.dispose(); stopDecoding(); connection.current = null; };
   }, [peer.deviceId, hostReady]);
 
   useEffect(() => {
-    if (!scopes.some(option => option.key === scopeKey) && first) setScopeKey(first.key);
-  }, [scopes, scopeKey, first?.key]);
-  useEffect(() => {
-    if (peer.revoked === true || state.session && !scopes.some(option => option.key === scopeKey && option.available)) connection.current?.close();
-  }, [peer.revoked, scopes, scopeKey, state.session?.sessionId]);
+    // Revocation or replacement while opening also fences a delayed native reply.
+    if (activeScope.current && (!online || !scopes.some(option => option.key === activeScope.current && option.available))) {
+      activeScope.current = ''; connection.current?.close(); setDraft(''); setKeyboard(false);
+      setTextError('原连接或观看授权已变化。未改用其他范围，请重新核对。');
+    }
+  }, [online, scopes]);
   useEffect(() => {
     if (!expanded) return;
     const previous = document.body.style.overflow; document.body.style.overflow = 'hidden';
@@ -114,7 +123,17 @@ export function DesktopViewer({ peer, supported, run, onClose }: { peer: Desktop
   }, [expanded, keyboard, more, state.session?.streamId]);
   useEffect(() => () => { cancelAnimationFrame(zoomFrame.current); pointers.current.clear(); }, []);
 
-  const reconnect = () => { if (scope && hostReady) { setClickMode('left'); setTextError(''); void connection.current?.open(peer.deviceId, scope); } };
+  const reconnect = () => {
+    const owner = connection.current;
+    if (!owner || !scope || !allowed || refreshing || scope.expiresAt <= Date.now() || document.visibilityState !== 'visible'
+      || ['opening', 'connecting'].includes(owner.state.phase) || owner.state.controlPending || owner.state.inputPending) return;
+    activeScope.current = scope.key; setScopeKey(scope.key); setClickMode('left'); setTextError('');
+    void owner.open(peer.deviceId, scope);
+  };
+  const choose = (key: string) => {
+    activeScope.current = ''; connection.current?.close(); setScopeKey(key); setDraft(''); setKeyboard(false); setMore(false); setExpanded(false); setViewZoom(1);
+    setTextError(state.inputUncertain ? '上一次输入结果仍待核对，不会在新连接重放。' : '');
+  };
   const send = (input: DesktopInput) => { setTextError(''); void connection.current?.input(input); };
   const point = (x: number, y: number) => { const element = video.current; return element && connection.current?.point(x, y, element.getBoundingClientRect(), element.videoWidth, element.videoHeight); };
   const setViewZoom = (next: number) => {
@@ -169,46 +188,70 @@ export function DesktopViewer({ peer, supported, run, onClose }: { peer: Desktop
     setTextError(''); const sessionId = state.session?.sessionId;
     if (await connection.current.input({ kind: 'insert_text', text }) && mounted.current && connection.current?.state.session?.sessionId === sessionId) setDraft(current => current === text ? '' : current);
   };
-  const status = state.controlPending ? '正在切换控制' : state.inputPending ? '正在输入' : state.inputUncertain ? '请核对操作结果' : state.phase === 'opening' ? '正在连接电脑' : state.phase === 'connecting' ? '正在连接画面' : state.phase === 'disconnected' ? '连接中断' : state.controlExpired ? '本次操作时间已到' : connected && otherHuman ? '另一窗口正在控制' : connected && state.frameIssue ? '仅可观看' : connected && !state.frameReady ? '等待新画面' : human ? '你正在操作' : connected ? state.session?.control.owner === 'agent' ? 'AI 正在操作' : '正在观看' : '未连接';
+  const status = state.controlPending ? '正在切换控制' : state.inputPending ? '正在输入' : state.inputUncertain ? '请核对操作结果' : state.phase === 'opening' ? '正在连接电脑' : state.phase === 'connecting' ? '正在连接画面' : state.phase === 'disconnected' ? '连接中断' : state.controlExpired ? '本次操作时间已到' : connected && !state.playbackReady ? '通道已连接 · 等待画面播放' : connected && otherHuman ? '另一窗口正在控制' : connected && state.frameIssue ? '仅可观看' : connected && !state.frameReady ? '等待新画面' : human ? '你正在操作' : connected ? state.session?.control.owner === 'agent' ? 'AI 正在操作' : '正在观看' : '未连接';
   const label = peer.label || peer.name || '电脑';
 
   return <section className={`pw-desktop-viewer${expanded ? ' is-expanded' : ''}`} aria-label="电脑实时桌面" data-phase={state.phase}>
     <header className="pw-desktop-heading">
       <div className="pw-desktop-source"><IconMonitor size={17} aria-hidden="true" /><span>{label}</span>
-        {scopes.length > 1 ? <label className="pw-desktop-scope"><span className="pw-desktop-sr">观看范围</span><select value={scope?.key || ''} aria-label="观看范围" onChange={event => { const selected = scopes.find(option => option.key === event.target.value); connection.current?.close(); setScopeKey(event.target.value); setDraft(''); setTextError(''); setKeyboard(false); setViewZoom(1); if (selected?.available && hostReady) void connection.current?.open(peer.deviceId, selected); }}>{scopes.map((option, index) => <option key={option.key} value={option.key}>{option.label}{scopes.length > 1 ? ` ${index + 1}` : ''}{option.available ? '' : ' · 待授权'}</option>)}</select><IconChevronDown size={12} aria-hidden="true" /></label> : <span className="pw-desktop-scope-label">{scope?.label || '桌面'}</span>}
+        {!preparing && scope && <span className="pw-desktop-current-scope">{scope.label} · 会话 {scope.resourceBinding.sessionId}</span>}
       </div>
-      <div className="pw-desktop-icons"><button type="button" className="pw-desktop-controls-toggle" aria-expanded={controlsVisible} onClick={()=>{pointers.current.clear();pinch.current=null;setKeyboard(false);setMore(false);setControlsVisible(value=>!value)}}>{controlsVisible?'收起控件':'显示控件'}</button><button type="button" onClick={() => setExpanded(value => !value)} aria-label={expanded ? '退出全屏桌面' : '全屏查看桌面'} title={expanded ? '退出全屏' : '全屏查看'}>{expanded ? <IconCollapse size={18} /> : <IconExpand size={18} />}</button><button type="button" onClick={() => { connection.current?.close(); onClose(); }} aria-label="关闭桌面观看" title="关闭桌面"><IconClose size={19} /></button></div>
+      <div className="pw-desktop-icons">{!preparing && <>
+        {scopes.length > 1 && <button type="button" className="pw-desktop-controls-toggle" disabled={state.inputPending || state.controlPending} onClick={() => choose('')}>更换范围</button>}
+        <button type="button" className="pw-desktop-controls-toggle" aria-expanded={controlsVisible} onClick={()=>{pointers.current.clear();pinch.current=null;setKeyboard(false);setMore(false);setControlsVisible(value=>!value)}}>{controlsVisible?'收起控件':'显示控件'}</button><button type="button" onClick={() => setExpanded(value => !value)} aria-label={expanded ? '退出全屏桌面' : '全屏查看桌面'} title={expanded ? '退出全屏' : '全屏查看'}>{expanded ? <IconCollapse size={18} /> : <IconExpand size={18} />}</button></>}<button type="button" onClick={() => { connection.current?.close(); onClose(); }} aria-label="返回原设备" title="返回原设备"><IconClose size={19} /></button></div>
     </header>
+    {preparing && <section className="pw-desktop-prepare" aria-label="连接桌面前的核对">
+      <h3>桌面观看准备</h3>
+      <p>{!hostReady ? '当前手机宿主没有桌面观看入口。' : !online ? '这台设备的加密通道未接通，请返回原设备核对连接。SSH 连接不能代替它。'
+        : check ? (fresh ? '这次检查：' : '上次记录，待重新核对：') + check.detail : '尚未收到这台电脑的桌面准备记录。配对不是画面，SSH 也不提供这里的桌面。'}</p>
+      {scopes.length > 0 ? <>
+        {scopes.length === 1 && scope ? <p><strong>{scope.label}</strong> · Windows 会话 {scope.resourceBinding.sessionId}</p>
+          : <RadioOptions label="观看哪个范围" value={scopeKey} onChange={choose} options={scopes.map(option => ({
+            id: option.key, label: option.label, description: `会话 ${option.resourceBinding.sessionId} · 授权 ${option.grantId.slice(-8)} · ${new Date(option.expiresAt).toLocaleString()} 到期`,
+            disabled: !option.available || wrongSession(option.resourceBinding.sessionId),
+          }))} />}
+        {scope && !scope.available && <p>{scope.reason}。请在电脑的本机配对窗口核对桌面范围。</p>}
+        {scope && wrongSession(scope.resourceBinding.sessionId) && <p>原授权属于另一 Windows 会话。请回到原会话，或在电脑上重新授权准确范围。</p>}
+        {!scope && scopes.every(option => !option.available || wrongSession(option.resourceBinding.sessionId)) && <p>当前列出的范围均不能用于这次观看。请在电脑上核对会话和对这台手机的观看授权。</p>}
+      </> : <p>{partialGrants ? '本次只读到部分授权；未列出可观看范围不等于电脑未授权。' : '本页没有可观看的范围。可先重新读取；若仍缺少，请在已安装伴侣的电脑上打开本机配对窗口，明确授予桌面观看。'}</p>}
+      <div className="pw-form-actions">
+        {scope && allowed && <Button className="pw-desktop-primary" disabled={refreshing} onClick={reconnect}>{state.phase === 'failed' ? '重新连接并仅观看' : '连接并仅观看'}</Button>}
+        {online && supported('devices.snapshot') && <Button variant="secondary" disabled={refreshing} onClick={onRefresh}>{refreshing ? '正在读取…' : '重新读取准备状态'}</Button>}
+        {!online && <Button variant="secondary" onClick={onClose}>返回原设备连接</Button>}
+      </div>
+      {refreshError && <p role="alert">{refreshError}</p>}
+      <p className="pw-field-hint">选择范围或读取状态都不会打开画面。开始观看后，“我来操作”才会单独申请控制。</p>
+    </section>}
 
-    <div ref={viewport} className={`pw-desktop-screen${canInput ? ' has-control' : ''}${zoom > 1 ? ' is-zoomed' : ''}`} style={{ aspectRatio: `${state.session?.width || 16} / ${state.session?.height || 10}` }}
+    <div ref={viewport} hidden={preparing} className={`pw-desktop-screen${canInput ? ' has-control' : ''}${zoom > 1 ? ' is-zoomed' : ''}`} style={{ aspectRatio: `${state.session?.width || 16} / ${state.session?.height || 10}` }}
       onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={event => pointers.current.delete(event.pointerId)} onLostPointerCapture={event => pointers.current.delete(event.pointerId)} onContextMenu={event => event.preventDefault()}>
       <div className="pw-desktop-video-size" style={{ width: `${zoom * 100}%`, height: `${zoom * 100}%` }}><video ref={video} autoPlay playsInline muted aria-label="远程电脑实时画面" /></div>
-      {state.phase !== 'live' && <MotionFeedback identity={state.phase} initial={false} className="pw-desktop-overlay" aria-live="polite">
-        {busy ? <><IconLoading className="pw-desktop-spin" size={24} /><span>{status}</span></> : <><IconMonitor size={28} strokeWidth={1.4} /><span>{!hostReady ? '请更新手机端以开启桌面观看' : !scope?.available ? scope?.reason || '请在电脑上授权桌面观看' : state.phase === 'disconnected' ? '正在恢复画面' : '电脑桌面'}</span>{hostReady && scope?.available && state.phase !== 'disconnected' && <button type="button" className="pw-desktop-primary" onClick={reconnect}><IconRefresh size={15} />{state.phase === 'failed' ? '重新连接' : '连接桌面'}</button>}</>}
+      {!preparing && (state.phase !== 'live' || !state.playbackReady) && <MotionFeedback identity={state.phase} initial={false} className="pw-desktop-overlay" aria-live="polite">
+        <IconLoading className="pw-desktop-spin" size={24} /><span>{state.phase === 'disconnected' ? '等待原画面恢复' : status}</span>
       </MotionFeedback>}
     </div>
 
-    <div className="pw-desktop-toolbar pw-material-navigation" data-controls-visible={controlsVisible}>
+    {!preparing && <div className="pw-desktop-toolbar pw-material-navigation" data-controls-visible={controlsVisible}>
       <MotionFeedback identity={status} initial={false} className="pw-desktop-status" role="status">{busy || state.controlPending || state.inputPending ? <IconLoading size={14} className="pw-desktop-spin" aria-hidden="true" /> : <span className={`pw-desktop-status-dot${connected && state.frameReady ? ' is-live' : ''}`} />}<span>{status}</span></MotionFeedback>
       {controlsVisible&&<MotionFeedback identity={human ? 'human' : 'watching'} initial={false} className="pw-desktop-control-actions">
         {human ? <button type="button" className="pw-desktop-primary" disabled={state.controlPending || state.inputPending} onClick={() => { setClickMode('left'); void connection.current?.control('release'); }}><IconCheck size={16} />交还控制</button> : <button type="button" className="pw-desktop-primary" disabled={!connected || otherHuman || !state.frameReady || state.controlPending || state.inputPending || state.inputUncertain} title={otherHuman ? '另一窗口交还控制后可申请' : undefined} onClick={() => void connection.current?.control('take')}><IconTakeControl size={16} />我来操作</button>}
         <button type="button" className="pw-desktop-icon" aria-label="打开远程键盘" aria-pressed={keyboard} title="远程键盘" disabled={!human} onClick={() => setKeyboard(value => !value)}><IconKeyboard size={19} /></button>
         <button type="button" className="pw-desktop-icon" aria-label="更多桌面操作" aria-expanded={more} title="更多操作" onClick={() => setMore(value => !value)}><IconMore size={19} /></button>
       </MotionFeedback>}
-    </div>
+    </div>}
     {(state.error || textError || videoError) && <MotionFeedback identity={textError || state.error || videoError} className="pw-desktop-error" role="alert"><span>{textError || state.error || videoError}</span>{state.inputUncertain && <button type="button" onClick={reconnect} disabled={state.controlPending || state.inputPending}>重新连接核对</button>}</MotionFeedback>}
-    {connected && state.frameIssue && !state.inputUncertain && <p className="pw-desktop-hint">{state.frameIssue === 'unavailable' ? '当前连接无法核对画面，只能观看。请更新手机端和电脑端后重新连接。' : '暂时无法核对画面，已停用电脑操作。可以继续观看，或重新连接后再试。'}</p>}
+    {connected && state.playbackReady && state.frameIssue && !state.inputUncertain && <p className="pw-desktop-hint">{state.frameIssue === 'unavailable' ? '当前连接无法核对画面，只能观看。请更新手机端和电脑端后重新连接。' : '暂时无法核对画面，已停用电脑操作。可以继续观看，或重新连接后再试。'}</p>}
     {human && connected && !state.inputUncertain && !state.frameIssue && <p className="pw-desktop-hint">{state.controlExpired ? '请先交还控制，再重新接管。' : clickMode === 'double' ? '轻点画面执行一次双击' : clickMode === 'right' ? '轻点画面执行右键' : zoom > 1 ? '拖动画面查看 · 轻点操作' : '轻点点击 · 长按右键 · 滑动滚动'}</p>}
 
-    {controlsVisible && more && <MotionFeedback identity="tools" className="pw-desktop-more" aria-label="桌面工具">
+    {!preparing && controlsVisible && more && <MotionFeedback identity="tools" className="pw-desktop-more" aria-label="桌面工具">
       <div className="pw-desktop-zoom"><button type="button" onClick={() => setViewZoom(zoom - .5)} aria-label="缩小桌面" disabled={zoom <= 1}><IconMinus size={17} /></button><button type="button" onClick={() => setViewZoom(1)} aria-label="还原桌面大小">{Math.round(zoom * 100)}%</button><button type="button" onClick={() => setViewZoom(zoom + .5)} aria-label="放大桌面" disabled={zoom >= 3}><IconAdd size={17} /></button></div>
       <button type="button" disabled={!canInput} aria-pressed={clickMode === 'double'} onClick={() => setClickMode(mode => mode === 'double' ? 'left' : 'double')}><IconCursorClick size={16} />双击</button>
       <button type="button" disabled={!canInput} aria-pressed={clickMode === 'right'} onClick={() => setClickMode(mode => mode === 'right' ? 'left' : 'right')}><IconCursor size={16} />右键</button>
       <div className="pw-desktop-scroll"><button type="button" disabled={!canInput} onClick={() => send({ kind: 'scroll', direction: 'up', amount: 3, by: 'line' })} aria-label="向上滚动电脑"><IconArrowUp size={16} /></button><button type="button" disabled={!canInput} onClick={() => send({ kind: 'scroll', direction: 'down', amount: 3, by: 'line' })} aria-label="向下滚动电脑"><IconArrowDown size={16} /></button><button type="button" disabled={!canInput} onClick={() => send({ kind: 'scroll', direction: 'left', amount: 3, by: 'line' })} aria-label="向左滚动电脑"><IconArrowLeft size={16} /></button><button type="button" disabled={!canInput} onClick={() => send({ kind: 'scroll', direction: 'right', amount: 3, by: 'line' })} aria-label="向右滚动电脑"><IconArrowRight size={16} /></button></div>
-      <button type="button" onClick={reconnect} disabled={!hostReady || !scope?.available || busy}><IconRefresh size={15} />重连</button>
+      <button type="button" onClick={reconnect} disabled={!allowed || busy || state.controlPending || state.inputPending}><IconRefresh size={15} />重连</button>
     </MotionFeedback>}
 
-    {controlsVisible && keyboard && <MotionFeedback identity="keyboard" className="pw-desktop-keyboard">
+    {!preparing && controlsVisible && keyboard && <MotionFeedback identity="keyboard" className="pw-desktop-keyboard">
       <div className="pw-desktop-shortcuts" aria-label="电脑快捷键"><button type="button" disabled={!canInput} onClick={() => send({ kind: 'press_key', key: 'escape' })}>Esc</button><button type="button" disabled={!canInput} onClick={() => send({ kind: 'press_key', key: 'tab' })}>Tab</button><button type="button" disabled={!canInput} onClick={() => send({ kind: 'press_key', key: 'enter' })}><IconReturn size={14} style={{transform: 'rotate(90deg)'}} />Enter</button>{['A', 'C', 'V', 'Z'].map(key => <button key={key} type="button" disabled={!canInput} onClick={() => send({ kind: 'hotkey', keys: ['CTRL', key] })}>Ctrl+{key}</button>)}</div>
       <form className="pw-desktop-text" onSubmit={event => { event.preventDefault(); void submitText(); }}>
         <label className="pw-desktop-sr" htmlFor="desktop-text-input">发送到电脑的文字</label><textarea id="desktop-text-input" ref={textarea} value={draft} rows={2} disabled={!human || state.inputUncertain} placeholder="在手机输入，发送到电脑…" onChange={event => { setDraft(event.target.value); setTextError(''); }} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing && !composing.current) { event.preventDefault(); void submitText(); } }} />

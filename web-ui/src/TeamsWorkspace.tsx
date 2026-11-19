@@ -17,6 +17,7 @@ import { TeamStartReview } from './TeamStartReview';
 import { resetTeamProductionAcknowledgments, teamDefinitionPayload, teamProductionDraft, teamProductionEditorMember } from './team-production';
 import { TeamMemberAvatar, TeamMemberIdentity } from './TeamMemberIdentity';
 import { teamAvatarShape, teamAvatarShapes, teamMemberLabel, teamMessageIdentity, teamMessageAuthor } from './team-identity';
+import { teamResearchDeliveries, TeamResearchDeliveries, type TeamResearchDelivery } from './TeamResearchDeliveries';
 import { TeamFollowUps, TeamResultHandoff } from './TeamResultHandoff';
 import { teamFollowUpFocus, teamFollowUps, teamResultReading, type TeamFollowUp } from './team-result-reading';
 import { teamCanPause, teamCanResume, teamGoalTitle, teamHasEnded, teamNeedsAttention, teamPhaseLabel, teamProgressLabel, teamRoleLabel, teamStatusLabel as status, teamTimeLabel } from './team-presentation';
@@ -109,6 +110,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   useEffect(() => { registerBeforeLeave?.(leave => formDraft.guard(() => startDraft.guard(() => messageDraft.guard(() => memberFormDraft.guard(() => { if (materialBeforeLeave.current) materialBeforeLeave.current(leave); else leave(); }))))); return () => registerBeforeLeave?.(null); }, [registerBeforeLeave, formDraft.guard, startDraft.guard, messageDraft.guard, memberFormDraft.guard]);
   const [materialBusy, setMaterialBusy] = useState(false);
   const [resultSource, setResultSource] = useState<{ runId: string; key: string; scroll: number } | null>(null);
+  const [shownMemberSources,setShownMemberSources]=useState<Record<string,boolean>>({});
+  const deliveryReturn=useRef<{team:string;key:string;taskId:string;scroll:number;entered:boolean}|null>(null);
   const [allResultActions, setAllResultActions] = useState<Record<string, boolean>>({});
   const resultBack = useRef<() => boolean>(() => false);
   const handledAttention = useRef('');
@@ -580,6 +583,41 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       });
     });
   };
+  const deliveries=runSection==='result'?teamResearchDeliveries(current,messages):[];
+  const openMemberDelivery=(item:TeamResearchDelivery)=>{
+    const original=currentReading.current;
+    if(deliveryReturn.current||!canRead||materialBusy||!ownsNativeWindow()||original?.run?.id!==item.team)return;
+    leaveWithDrafts(()=>{
+      if(!ownsNativeWindow()||currentReading.current?.viewHandle!==original.viewHandle)return;
+      void invoke('teams.readRun',{runId:item.team},reply=>{
+        const next=reply.reading;
+        if(!ownsNativeWindow()||currentReading.current?.viewHandle!==original.viewHandle){release(next);return}
+        if(next?.kind!=='run'||!next.viewHandle||next.run?.id!==item.team){release(next);throw new Error('未读取到原协作，没有打开其他分工。')}
+        const same=teamResearchDeliveries(next.run,next.messages).find(s=>s.key===item.key);
+        acceptReading(next);
+        if(!same){setNotice('这份成员原件已变化，请重新核对。没有打开另一阶段。');return}
+        const origin={team:item.team,key:item.key,taskId:item.taskId,scroll:root.current?.closest<HTMLElement>('.pw-secondary-scroll')?.scrollTop||0,entered:false};
+        deliveryReturn.current=origin;
+        void run('teams.openResearchTask',{viewHandle:next.viewHandle,memberId:same.memberId,round:same.round,taskId:same.taskId,outputFingerprint:same.hash}).catch(failure=>{
+          if(deliveryReturn.current===origin)deliveryReturn.current=null;
+          if(alive.current&&!backgrounded.current&&ownsNativeWindow()&&currentReading.current?.run?.id===item.team)
+            setError(failure instanceof Error?failure.message:'原研究任务暂不可读取。');
+        });
+      });
+    });
+  };
+  useLayoutEffect(()=>{
+    const origin=deliveryReturn.current;if(!origin)return;
+    const view=object(bridge.getState().view);
+    if(view.taskId===origin.taskId){origin.entered=true;return}
+    if(!origin.entered||!workspaceActive||!ownsNativeWindow()||busy||!reading?.viewHandle)return;
+    deliveryReturn.current=null;
+    if(current?.id!==origin.team||runSection!=='result')return;
+    const area=root.current?.querySelector<HTMLElement>('.pw-team-result');
+    const target=Array.from(area?.querySelectorAll<HTMLButtonElement>('[data-team-delivery]')||[]).find(row=>row.dataset.teamDelivery===origin.key);
+    const scroll=root.current?.closest<HTMLElement>('.pw-secondary-scroll');if(scroll)scroll.scrollTop=origin.scroll;
+    (target||area?.querySelector<HTMLElement>('[data-team-result-heading]'))?.focus({preventScroll:true});
+  },[workspaceActive,busy,reading?.viewHandle,current?.id,runSection,state.webWorkspaceResumeRevision]);
   const openAwaitingReview = () => {
     const original = currentReading.current, owner = original?.taskId, id = current?.id;
     if (!canRead || materialBusy || !id || !owner || original?.run?.id !== id || current.status !== 'awaiting_review') return;
@@ -772,7 +810,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       </section>
         </TabPanel>
         <TabPanel id="result">
-          <TeamResultHandoff result={teamResult} stopped={current.status === 'cancelled'}
+          <TeamResultHandoff result={teamResult} sources={deliveries.length>0 ? <TeamResearchDeliveries records={deliveries} disabled={!canRead||materialBusy||!bridge.getState().capabilities.commands.includes('teams.openResearchTask')} open={openMemberDelivery}
+            expanded={!!shownMemberSources[current.id]} onExpanded={value=>setShownMemberSources(old=>({...old,[current.id]:value}))}/> : undefined} stopped={current.status === 'cancelled'}
             actions={{ items: followUps, read: openFollowUp, disabled: !canRead || materialBusy, expanded: !!allResultActions[current.id],
               toggle: () => setAllResultActions(old => ({ ...old, [current.id]: !old[current.id] })) }}
             openOriginalReview={current.status === 'awaiting_review' && reading?.taskId ? openAwaitingReview : undefined}

@@ -170,18 +170,19 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
             try {
                 desktopCurrent(original, epoch)
                 if (action == "devices.desktop.open") {
-                    fields(args, "deviceId", "grantId", "resourceBinding")
+                    fields(args, "deviceId", "instanceId", "grantId", "authorizationEpoch", "resourceBinding")
                     val deviceId = text(args, "deviceId"); val grantId = text(args, "grantId")
+                    val instanceId = text(args, "instanceId"); val grantEpoch = integer(args, "authorizationEpoch", 1, DeviceProtocol.MAX_SAFE_INTEGER)
                     val binding = args.getJSONObject("resourceBinding")
                     DeviceProtocol.validateResourceBinding("desktop-v2", binding)
                     val selected = peer(original.snapshot(), deviceId)
-                    require(!selected.optBoolean("revoked")) { "此设备已撤销配对" }
+                    require(!selected.optBoolean("revoked") && selected.opt("instanceId") == instanceId) { "设备信任或电脑实例已变化，请返回核对原设备" }
                     require(selected.optJSONArray("receivedGrantScopes").objects().any { grant ->
-                        grant.optString("grantId") == grantId && grant.optLong("expiresAt") > System.currentTimeMillis() &&
+                        grant.optString("grantId") == grantId && grant.optLong("authorizationEpoch") == grantEpoch && grant.optLong("expiresAt") > System.currentTimeMillis() &&
                             strings(grant.optJSONArray("capabilities")).contains("desktop.viewer") &&
                             grant.optJSONArray("resources").objects().any { DeviceProtocol.resourceEquals(it, binding) }
                     }) { "请从电脑当前已授予的桌面范围打开" }
-                    val source = original.openDesktop(deviceId, grantId, binding, Host.DesktopCurrent { desktopCurrent(original, epoch) }); opened = source
+                    val source = original.openDesktop(deviceId, instanceId, grantId, grantEpoch, binding, Host.DesktopCurrent { desktopCurrent(original, epoch) }); opened = source
                     value = source.view()
                     synchronized(this) { desktopCurrent(original, epoch); desktop = source }
                 } else {

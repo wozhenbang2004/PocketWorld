@@ -254,7 +254,7 @@ internal class PocketWebBridge(
             "settings.reviewModelTransport", "settings.saveLocalObservation", "settings.openSystem", "settings.openBrowser", "settings.openAppUpdates",
             "webSearch.snapshot", "webSearch.save",
             "connections.enter", "connections.leave", "models.snapshot", "models.review", "models.select", "models.connection.add", "models.connection.edit", "models.connection.test", "models.connection.select", "devices.snapshot", "history.read", "usage.read", "usage.task", "usage.trends", "usage.trends.close", "usage.close", "usage.reestimate", "trace.read", "trace.detail", "trace.close",
-            "phone.prepare", "phone.start", "phone.query", "phone.draft.edit", "phone.draft.fromMessage", "phone.pauseNote.read", "phone.pauseNote.continue", "phone.pause", "phone.resume", "phone.stop", "phone.deadline", "background.refresh", "background.discover", "background.cancel", "background.close", "background.pair", "background.connect", "background.mainScreen", "background.selectMainScreen",
+            "phone.prepare", "phone.review.settings", "phone.start", "phone.query", "phone.draft.edit", "phone.draft.fromMessage", "phone.pauseNote.read", "phone.pauseNote.continue", "phone.pause", "phone.resume", "phone.stop", "phone.deadline", "background.refresh", "background.discover", "background.cancel", "background.close", "background.pair", "background.connect", "background.mainScreen", "background.selectMainScreen",
             "queued.open", "queued.refresh", "queued.close", "queued.edit", "queued.change", "queued.save", "queued.editor.close",
             "accounts.beginLogin", "accounts.cancelLogin", "accounts.openAuthorization", "accounts.select", "accounts.refresh", "accounts.models", "accounts.retryPlanUsage", "accounts.model.review", "accounts.model.select", "accounts.logout.review", "accounts.logout.confirm", "accounts.setEnabled", "accounts.refreshAuthorization", "accounts.reauthorize", "accounts.acknowledgePlanWelcome", "accounts.manageUsage",
             "memory.list", "memory.search", "memoryReview.list", "memoryReview.getCandidate", "memoryReview.capacity", "memoryReview.history", "memoryReview.openSource",
@@ -896,7 +896,19 @@ internal class PocketWebBridge(
             }
             if (action == "teams.openResearchTask") {
                 requireSection("teams")
-                openOriginalTask(id, teamPages.taskForResearchNavigation(args), true, "teams")
+                val destination = teamPages.taskForResearchNavigation(args)
+                val output = destination.output
+                if (output == null) openOriginalTask(id, destination.id, true, "teams")
+                else {
+                    val handle = requiredString(args, "viewHandle")
+                    openOriginalTask(id, destination.id, true, "teams", expectedRunId = output.childRun, expectedEpoch = output.epoch,
+                        sourceWindowCurrent = { section == "teams" && taskViewId == null && controller.webPrivateOwnerVisible() },
+                        checkReaderInput = { task ->
+                            require(teamPages.retainsRunReading(handle) && task.id == output.taskId && task.status == "completed" && task.raw.optString("actorId") == "owner" &&
+                                task.raw.optString("spaceId") == "private" && task.raw.opt("contextAvailable") != false &&
+                                output.matches(task.raw.optJSONObject("teamResearchOutputReference"))) { "当前原任务无法核对这份产出，没有打开其他执行" }
+                        })
+                }
                 return
             }
             if (action == "devices.openTask") {
@@ -1078,6 +1090,7 @@ internal class PocketWebBridge(
                 complete(id, result, null); publishState(); return
             }
             if (action == "phone.prepare") { phoneComposer.prepare(id, args); return }
+            if (action == "phone.review.settings") { complete(id, phoneComposer.openReviewedSettings(args), null); return }
             if (action == "phone.start") { phoneComposer.start(id, args); return }
             if (action == "phone.query") { phoneComposer.query(id, args); return }
             if (action == "phone.pauseNote.read" || action == "phone.pauseNote.continue") {

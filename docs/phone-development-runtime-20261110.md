@@ -95,3 +95,10 @@
 独立新文件和原生 owner helpers 可单独保留；`App.tsx`、`PocketWebBridge.kt`、`PocketWorldController.kt` 与其他对话可能并行变化，应先对照最终 main 的同位置小 hunk，再统一整合。本轮不得提前提交 main。UI 保留既有 BoardUI fields、Accordion、SettingsDialog 和本机工作样式；没有替换原正式文件编辑器、终端或预览器。私人副本编辑和逐文件采纳是独立新增组件。
 
 交付顺序：先 stage1 基础体验修正，再 stage2 项目目标 core/integration，再 stage3 私人副本文件增量，再 stage4 逐文件采纳与本说明增量；各包带独立基线/摘要，不重复应用最终内容。冻结候选不会自动成为 main 或已发布功能。
+
+## 11 月 19 日：原工程的工具与交付位置
+
+- [DSH-Go 的 workspaceRootProvider](https://github.com/ccch1mneyyy/dsh-Go/blob/9ad11167c53a5da12ff8791c21f4327f5d8a9a25/app/lib/state/workspace_state.dart#L65-L83) 只从同一会话取 cwd，未知就不猜；[会话产物](https://github.com/ccch1mneyyy/dsh-Go/blob/9ad11167c53a5da12ff8791c21f4327f5d8a9a25/app/lib/ui/session/session_artifacts.dart#L27-L45) 也按 sessionId 读取。[AndCode](https://github.com/yuga-hashimoto/and-code/blob/244a7e098951e75110fbd9f132b19db3646dbaa0/app/src/main/java/com/yugahashimoto/andcode/runtime/local/GitCloneRepository.kt#L26-L68) 先取已安装 runtime，再把克隆目标限定于工作区。PocketWorld 以唯一原任务绑定的 projectId、checkoutId、运行位置为准，不将当前选中的目录或模型推断当作绑定。
+- 原缺口：开工审阅只有「这台手机」，原工作续接主要列预算。现从同一普通私人副本已读取的源码，按原规划规则辨认 Node、Python、Gradle、Java 或静态入口。多种类型并列。包管理器是规划器候选，不是已安装或执行；仅按选中运行时的原生 probe/hash 记录列出观测到的工具。项目类型、环境可用、具体命令和真正交付分别核对。
+- 开工核对显示副本、源码版本、工具和落点。续接从原任务只读展示相同归属；如需知道是否变化，明确点「核对当前副本与工具」再读取该副本，与首次开工摘要区别展示。Termux、缺字段、专用副本及不可读的旧记录不冒充本机托管范围，也不以其他项目代替。读取不执行、续接、安装或生成产物。改动先在私人副本，固定包或附件保存后在原任务概览核对。
+- 限制：自动识别仍是原规划器的项目类型，不解释任意工具配置、monorepo 子目录或项目脚本；大于 65,536 个 UTF-16 单元或无法严格解析的 package.json 不给包管理器结论。基础环境不能证明 Android SDK/ARM64 APK 构建已就绪。只读说明不改变原审批、权限、结果目录或导出流程。

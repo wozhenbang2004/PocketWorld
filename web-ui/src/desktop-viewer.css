@@ -20,9 +20,10 @@
 .pw-desktop-source { gap: var(--pw-gap-related,8px); min-width: 0; flex: 1; flex-wrap: wrap; font-size: 13px; font-weight: 550; }
 .pw-desktop-source > span:first-of-type { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px; }
 .pw-desktop-source > svg { flex-shrink: 0; color: var(--desktop-muted); }
-.pw-desktop-scope-label { color: var(--desktop-muted); font-size: 12px; font-weight: 400; }
-.pw-desktop-scope { display: flex; align-items: center; gap: 1px; min-width: 0; }
-.pw-desktop-scope select { appearance: none; background: var(--desktop-surface); border-radius: 8px; min-height: var(--pw-control-target,44px); padding: var(--pw-gap-related,8px) var(--pw-gap-control,12px); font-size: 12px; max-width: 132px; }
+.pw-desktop-current-scope { color: var(--desktop-muted); font-size: 12px; font-weight: 400; overflow-wrap: anywhere; }
+.pw-desktop-prepare { display: grid; gap: var(--pw-gap-control,12px); padding: var(--pw-gap-content,16px) 0; max-width: 58ch; }
+.pw-desktop-prepare h3, .pw-desktop-prepare p { margin: 0; overflow-wrap: anywhere; }
+.pw-desktop-prepare .pw-form-actions { flex-wrap: wrap; }
 .pw-desktop-icons { flex-shrink: 0; gap: 4px; }
 .pw-desktop-icons button, .pw-desktop-viewer .pw-desktop-icon { width: var(--pw-control-target,44px); height: var(--pw-control-target,44px); padding: var(--pw-gap-control,12px); }
 .pw-desktop-screen { position: relative; width: 100%; max-height: 64dvh; min-height: 150px; border-radius: 22px; background: var(--desktop-surface); overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; touch-action: none; }

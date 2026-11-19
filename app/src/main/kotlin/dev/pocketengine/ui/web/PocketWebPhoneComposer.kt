@@ -1,5 +1,7 @@
 package dev.pocketengine.ui.web
 
+import android.content.Intent
+import android.provider.Settings
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -24,7 +26,7 @@ internal class PocketWebPhoneComposer(
         val viewEpoch: Int, val expires: Long, val window: PocketWebWindowTicket, val composerKey: String,
         val conversation: String, val draftEpoch: Int, val draftRevision: Long, val reviewGeneration: Long, val originRevision: Long,
         val modelRevision: Long, val linked: EngineApplication.ConversationPhoneStartReview? = null,
-        val draft: EngineApplication.DraftPhoneStartReview? = null)
+        val draft: EngineApplication.DraftPhoneStartReview? = null, val conditions: JSONObject? = null)
     private val main = Handler(Looper.getMainLooper())
     private val phoneReviews = mutableMapOf<String, PhoneReview>()
     // Main-thread invalidation also revokes a review already captured by a queued worker.
@@ -91,11 +93,18 @@ internal class PocketWebPhoneComposer(
     }
 
     fun prepare(id: String, args: JSONObject) {
-        checkedPayload(args, setOf("goal", "mode", "epoch"))
+        checkedPayload(args, setOf("goal", "mode", "epoch", "originalDraft"))
         require(controller.webPrivateOwnerVisible() && requiredInt(args, "epoch") == presentationEpoch) { "原手机输入窗口已变化，请重新核对保留草稿" }
         val goal = requiredString(args, "goal"); val mode = requiredString(args, "mode")
         require(goal.trim().isNotEmpty() && goal.trim().length <= 4000 && mode in setOf("background", "main_screen")) { "请填写 1–4000 字的手机任务目标，并选择执行位置" }
         require(phoneDraft.trim() == goal.trim() && phoneIntent && phoneExecutionMode == mode) { "原手机草稿或执行位置已变化，请重新核对" }
+        if (args.has("originalDraft")) {
+            val expected = args.getJSONObject("originalDraft")
+            check(!controller.hasChannelPhoneOrigin && requiredString(expected, "composer", true) == controller.composerDraft?.key.orEmpty()
+                && requiredString(expected, "conversation", true) == controller.state.conversationId.orEmpty()
+                && requiredInt(expected, "ownerEpoch") == controller.composerViewEpoch && requiredLong(expected, "revision") == phoneDraftRevision
+                && requiredLong(expected, "origin") == controller.phoneOriginRevision) { "原手机草稿已变化，请返回核对原目标；没有准备其他任务" }
+        }
         require(!controller.state.phoneSubmitting && controller.state.activeTaskId == null) { "请先处理当前工作；没有创建第二个手机任务" }
         require(phoneStartReceipt?.optString("status") !in setOf("pending", "unknown") || phoneStartReceipt?.has("requestId") != true && phoneStartReceipt?.optString("goal")?.trim() != goal.trim()) { "原手机请求的启动结果待核对，请先查询原请求。草稿仍保留。" }
         clearReviews()
@@ -117,6 +126,8 @@ internal class PocketWebPhoneComposer(
                     channel -> original
                     conversation.isNotBlank() -> original.copy(linked = controller.prepareConversationPhoneStart(conversation, goal, mode))
                     else -> original.copy(draft = controller.prepareDraftPhoneStart(modelScope!!, goal, mode))
+                }.let { review ->
+                    if (channel) review else review.copy(conditions = readConditions(mode))
                 }.also { review ->
                     val native = review.linked?.view() ?: review.draft?.view()
                     check(native == null || native.getInt("toolLimit") == original.tools &&
@@ -136,12 +147,71 @@ internal class PocketWebPhoneComposer(
         })
     }
 
+    // A preflight is not an observation. Publish no session ids, screen data or operation grant.
+    private fun readConditions(mode: String): JSONObject {
+        val source = runCatching { controller.reviewedPhoneConditions() }.getOrNull()
+        val notification = source?.optJSONObject("taskNotificationsForStart")
+        val notificationIds = checks(notification).map { it.optString("id") }.toSet()
+        val screen = source?.optJSONObject(if (mode == "main_screen") "mainPreparation" else "backgroundPreparation")
+        return JSONObject().put("notification", condition(notification, "notifications"))
+            .put("screen", condition(screen, "accessibility", notificationIds))
+    }
+
+    private fun checks(group: JSONObject?): List<JSONObject> {
+        val items = group?.optJSONArray("checks") ?: return emptyList()
+        return (0 until items.length()).mapNotNull(items::optJSONObject)
+    }
+
+    private fun condition(group: JSONObject?, settings: String, excludedIds: Set<String> = emptySet()): JSONObject {
+        fun unknown() = JSONObject().put("state", "unknown")
+        // backgroundPreparation also contains the notification gate. Report each prerequisite once.
+        val rows = checks(group).filterNot { it.optString("id") in excludedIds }
+        if (rows.isEmpty()) return unknown()
+        val issue = (if (settings == "notifications") rows.firstOrNull { it.optString("state") == "blocked" } else null)
+            ?: rows.firstOrNull { it.optString("state") != "ready" }
+        if (issue == null) return if (excludedIds.isNotEmpty() || group?.optBoolean("ready") == true && group.optString("state") == "ready")
+            JSONObject().put("state", "ready") else unknown()
+        val state = if (issue.optString("state") == "blocked") "blocked" else "unknown"
+        return JSONObject().put("state", state).put("message", issue.optString("message")).also { view ->
+            val action = issue.optString("action")
+            if (state == "blocked" && action == settings) view.put("settings", action)
+        }
+    }
+
+    /** Only an explicit click on the specific remedy may leave the original private review. */
+    fun openReviewedSettings(args: JSONObject): JSONObject {
+        checkedPayload(args, setOf("reviewHandle", "target"))
+        val review = phoneReviews[requiredString(args, "reviewHandle")]
+        check(review != null && !controller.hasChannelPhoneOrigin && phoneReviewCurrent(review)) { "原手机任务核对已失效，请重新核对；草稿仍保留" }
+        val conditions = checkNotNull(review.conditions)
+        val notification = conditions.getJSONObject("notification")
+        val issue = if (notification.optString("state") != "ready") notification else conditions.getJSONObject("screen")
+        val target = requiredString(args, "target")
+        check(issue.optString("settings") == target && issue.optString("state") == "blocked") { "请从原任务当前缺少的条件打开设置" }
+        val activity = controller.webPresentationActivity()
+        when (target) {
+            "notifications" -> activity.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                .putExtra(Settings.EXTRA_APP_PACKAGE, activity.packageName))
+            "accessibility" -> controller.openAccessibility()
+            else -> error("本次核对不支持这个设置入口")
+        }
+        clearReviews()
+        return JSONObject().put("status", "settings_opened")
+    }
+
     private fun reviewView(handle: String, review: PhoneReview): JSONObject {
         val shown = review.linked?.view() ?: review.draft?.view()
         return (shown ?: JSONObject()).put("reviewHandle", handle).put("goal", review.goal).put("mode", review.mode)
             .put("toolLimit", review.tools).put("modelCallLimit", review.models).put("scopeMinutes", review.minutes)
-            .put("expiresInMs", 120000).put("screenDisclosure", shown?.optString("screenDisclosure") ?: "执行时，屏幕与可见文字会发送到本次配置的模型。")
-            .put("message", if (review.mode == "background") "在后台独立屏处理这个目标；连接不可用时等待，不切换到手机主屏。" else "在手机主屏处理这个目标，会使用当前屏幕。")
+            .put("originalDraft", review.conditions?.let { JSONObject().put("composer", review.composerKey).put("conversation", review.conversation)
+                .put("ownerEpoch", review.viewEpoch).put("revision", review.draftRevision).put("origin", review.originRevision) })
+            .put("conditions", review.conditions).put("expiresInMs", (review.expires - SystemClock.elapsedRealtime()).coerceAtLeast(0L))
+            .put("screenDisclosure", shown?.optString("screenDisclosure") ?: "执行时，屏幕与可见文字会发送到本次配置的模型。")
+            .put("message", when {
+                review.conditions != null -> if (review.mode == "background") "任务需要用屏时，只使用后台独立屏，不切换到手机主屏。" else "任务需要用屏时，才会使用手机主屏。"
+                review.mode == "background" -> "在后台独立屏处理这个目标；连接不可用时等待，不切换到手机主屏。"
+                else -> "在手机主屏处理这个目标，会使用当前屏幕。"
+            })
     }
 
     /** Equivalent to the former Activity saveable presentation state, never an execution grant. */
@@ -239,7 +309,10 @@ internal class PocketWebPhoneComposer(
             phoneReviews.remove(handle)
             phoneStartReceipt = original.put("status", "pending").put("message", "正在等待原手机任务的启动回执。")
         } else {
-            complete(id, JSONObject().put("status", "rejected").put("message", controller.state.error ?: controller.state.notice ?: "这次任务尚未接纳，草稿仍保留。"), null)
+            // The controller declined before dispatching its private start worker. No task was submitted.
+            if (review.conditions != null) phoneReviews.remove(handle)
+            complete(id, JSONObject().put("status", "rejected").put("recheckReview", handle.takeIf { review.conditions != null })
+                .put("message", controller.state.error ?: controller.state.notice ?: "这次任务尚未接纳，草稿仍保留。"), null)
         }
         publishState()
     }

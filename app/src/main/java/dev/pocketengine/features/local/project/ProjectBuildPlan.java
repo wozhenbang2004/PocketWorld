@@ -33,11 +33,11 @@ public final class ProjectBuildPlan {
                         dependencies.put(new JSONObject().put("ecosystem","node").put("name",name).put("spec",String.valueOf(values.get(name))).put("kind",kind).put("sourcePath","package.json"));
                 }
             }
-        }else if(files.keySet().stream().anyMatch(p->p.endsWith(".js")||p.endsWith(".mjs")||p.endsWith(".cjs")))ecosystems.put(ecosystem("node",files,p->p.endsWith(".js")||p.endsWith(".mjs")||p.endsWith(".cjs")));
-        boolean gradle=files.keySet().stream().anyMatch(p->p.equals("build.gradle")||p.equals("build.gradle.kts")||p.equals("settings.gradle")||p.equals("settings.gradle.kts"));
-        if(gradle){ecosystems.put(ecosystem("gradle",files,p->p.equals("build.gradle")||p.equals("build.gradle.kts")||p.equals("settings.gradle")||p.equals("settings.gradle.kts")));warnings.put("Gradle会执行项目构建逻辑并可能联网；dependencies主要报告依赖图，不证明已缓存全部构建依赖或可离线构建。Android SDK和APK工具链未验证，不等于可在手机构建APK");}
-        if(files.keySet().stream().anyMatch(p->p.endsWith(".py"))||files.containsKey("requirements.txt")||files.containsKey("pyproject.toml")){
-            JSONObject python=ecosystem("python",files,p->p.endsWith(".py")||p.equals("requirements.txt")||p.equals("pyproject.toml"));
+        }else if(files.keySet().stream().anyMatch(ProjectCheckoutTooling::js))ecosystems.put(ecosystem("node",files,ProjectCheckoutTooling::js));
+        boolean gradle=files.keySet().stream().anyMatch(ProjectCheckoutTooling::gradle);
+        if(gradle){ecosystems.put(ecosystem("gradle",files,ProjectCheckoutTooling::gradle));warnings.put("Gradle会执行项目构建逻辑并可能联网；dependencies主要报告依赖图，不证明已缓存全部构建依赖或可离线构建。Android SDK和APK工具链未验证，不等于可在手机构建APK");}
+        if(files.keySet().stream().anyMatch(ProjectCheckoutTooling::python)){
+            JSONObject python=ecosystem("python",files,ProjectCheckoutTooling::python);
             python.put("dependencyEnvironment",runtimeId.equals("termux")?"compatibility_target_directory":"checkout_venv");
             if(files.containsKey("requirements.txt"))python.put("hashCheckingDeclared",pythonRequirements(files.get("requirements.txt"),dependencies,warnings));
             ecosystems.put(python);
@@ -91,10 +91,9 @@ public final class ProjectBuildPlan {
         return hashes;
     }
     private static String manager(Map<String,String> files,JSONObject pkg,JSONArray warnings){
-        String declared=pkg.optString("packageManager","").split("@",2)[0];
-        boolean npm=files.containsKey("package-lock.json")||files.containsKey("npm-shrinkwrap.json"),pnpm=files.containsKey("pnpm-lock.yaml");
-        if(npm&&pnpm||!declared.isEmpty()&&!Set.of("npm","pnpm").contains(declared)||declared.equals("npm")&&pnpm||declared.equals("pnpm")&&npm){warnings.put("包管理器声明/锁文件冲突或暂不支持，请先明确修正");return "unsupported_or_conflicting";}
-        return !declared.isEmpty()?declared:pnpm?"pnpm":"npm";
+        String selected=ProjectCheckoutTooling.manager(files.keySet(),pkg.optString("packageManager",""));
+        if("unsupported_or_conflicting".equals(selected))warnings.put("包管理器声明/锁文件冲突或暂不支持，请先明确修正");
+        return selected;
     }
     public static JSONObject create(EngineModule local,JSONObject input)throws Exception {return create(local,input,16000);}
     /** Native private editor only: same reviewed dev-watch contract and immutable plan store,

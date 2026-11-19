@@ -75,9 +75,16 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
     }
     /** Exact original record navigation, including children outside the recent task list.
      * This is not a continuation, member read grant or authorization to reuse old output. */
-    fun taskForResearchNavigation(args: JSONObject): String {
+    data class ResearchNavigation(val id: String, val output: ResearchOutput? = null)
+    data class ResearchOutput(val taskId: String, val childRun: String, val epoch: Int, val index: Int, val chars: Int, val fingerprint: String) {
+        fun matches(ref: JSONObject?): Boolean = ref != null && ref.optString("format") == "pocketworld.team-research-original.v1" &&
+            ref.opt("taskId") == taskId && ref.opt("runId") == childRun && ref.optInt("coordinatorEpoch", -1) == epoch &&
+            ref.optInt("messageIndex", -1) == index && ref.optInt("chars", -1) == chars && ref.opt("sha256") == fingerprint
+    }
+    fun retainsRunReading(handle: String): Boolean = readings[handle]?.kind == "run"
+    fun taskForResearchNavigation(args: JSONObject): ResearchNavigation {
         check(controller.webPrivateOwnerVisible()) { "请回到前台私人团队页面" }
-        fields(args, "viewHandle", "memberId", "round", "taskId")
+        fields(args, "viewHandle", "memberId", "round", "taskId", "outputFingerprint")
         val original = reading(text(args, "viewHandle"), "run")
         check(original.optString("researchExecutionFormat").isNotBlank()) { "这份记录不是原研究协作" }
         val memberId = text(args, "memberId")
@@ -101,7 +108,17 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
         }
         // Absence of a progress receipt does not invent a task or a terminal state.
         // The original owner getTask path must still find and authorize the record.
-        return id
+        if (!args.has("outputFingerprint")) return ResearchNavigation(id)
+        val hash = text(args, "outputFingerprint", 64)
+        val saved = requireNotNull(result) { "这份原阶段没有已保存的研究产出" }
+        require(phase.optString("status") == "completed" && phase.optString("researchTaskId") == id &&
+            saved.optString("status") == "completed" && saved.opt("executionAuthorized") == false &&
+            saved.opt("teamRunId") == original.getString("id") && saved.opt("memberId") == memberId && saved.opt("taskId") == id &&
+            (!saved.has("round") || saved.optInt("round", -1) == round.toInt()) && hash.matches(Regex("[0-9a-f]{64}"))) { "原研究成员或阶段已变化" }
+        val ref = saved.getJSONObject("outputReference")
+        val output = ResearchOutput(id, saved.getString("runId"), saved.getInt("coordinatorEpoch"), ref.getInt("messageIndex"), ref.getInt("chars"), hash)
+        require(output.childRun.isNotBlank() && output.epoch > 0 && output.index >= 0 && output.chars > 0 && output.matches(ref)) { "这份原产出已变化" }
+        return ResearchNavigation(id, output)
     }
     private fun view(kind: String, value: JSONObject): JSONObject {
         while (readings.size >= 24) readings.remove(readings.keys.first())

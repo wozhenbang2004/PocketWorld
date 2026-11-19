@@ -198,6 +198,10 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
     @FunctionalInterface public interface DesktopOwner {
         DesktopAction open(String deviceId, String grantId, JSONObject resourceBinding,
                 DesktopCurrent current) throws Exception;
+        default DesktopAction openReviewed(String deviceId, String instanceId, String grantId, long grantEpoch,
+                JSONObject binding, DesktopCurrent current) throws Exception {
+            throw new SecurityException("当前宿主不能核对已选择的电脑实例与授权版本");
+        }
     }
     public interface DesktopAction extends AutoCloseable {
         String id();
@@ -422,6 +426,9 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
             return openDesktop(deviceId, grantId, binding, () -> {});
         }
         public DesktopWindow openDesktop(String deviceId, String grantId, JSONObject binding, DesktopCurrent callerCurrent) throws Exception {
+            return openDesktop(deviceId, null, grantId, 0, binding, callerCurrent);
+        }
+        public DesktopWindow openDesktop(String deviceId, String instanceId, String grantId, long grantEpoch, JSONObject binding, DesktopCurrent callerCurrent) throws Exception {
             Objects.requireNonNull(callerCurrent);
             current(); callerCurrent.require(); DeviceProtocol.deviceId(deviceId, "deviceId"); DeviceProtocol.identifier(grantId, "grantId");
             DeviceProtocol.validateResourceBinding("desktop-v2", binding);
@@ -431,7 +438,8 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
             DesktopCurrent guard = () -> {
                 current(); callerCurrent.require(); if (desktopGeneration.get() != generation) throw new SecurityException("原桌面窗口已被替换");
             };
-            DesktopAction source = desktopOwner.open(deviceId, grantId, copy(binding), guard);
+            DesktopAction source = instanceId == null ? desktopOwner.open(deviceId, grantId, copy(binding), guard)
+                    : desktopOwner.openReviewed(deviceId, instanceId, grantId, grantEpoch, copy(binding), guard);
             try {
                 JSONObject view = source.view(); guard.require();
                 if (!source.id().equals(view.optString("sessionId")) || !deviceId.equals(view.optString("deviceId"))

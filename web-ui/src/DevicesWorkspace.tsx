@@ -10,6 +10,7 @@ import { PhoneControlPreparation } from './PhoneControlPreparation';
 import { WorkspaceSectionHeading } from './WorkspaceSectionHeading';
 import { desktopScopes } from './desktop-viewer';
 import { windowsObservationCompatibility } from './windows-observation-compatibility';
+import { phoneSurfaceStatus } from './phone-surface-status';
 import { useSurfaceEnter } from './library/surface-motion';
 import { MotionFeedback, WorkingStatus, useCollectionMotion } from './library/journey-motion';
 import './devices-reading.css';
@@ -21,7 +22,8 @@ const time = (value: any) => typeof value === 'number' && value > 0 ? new Date(v
 const available = (value: any) => value?.available === true;
 const unreadSource = (task: Data) => task.summaryOnly === true || task.raw?.contextAvailable === false || task.raw?.sourceCurrentReadRequired === true || task.raw?.taskProjection === 'source_unavailable';
 const retired = (peer: Data) => peer.revoked === true || peer.connection?.state === 'REVOKED';
-const platformIcon = (peer: Data) => /android|ios|phone/i.test(peer.platform || '') ? IconPhone : /windows|macos|linux|desktop/i.test(peer.platform || '') ? IconMonitor : IconDevices;
+const peerPlatform = (peer: Data) => peer.windowsDesktop ? 'Windows' : peer.platform || '';
+const platformIcon = (peer: Data) => /android|ios|phone/i.test(peerPlatform(peer)) ? IconPhone : /windows|macos|linux|desktop/i.test(peerPlatform(peer)) ? IconMonitor : IconDevices;
 const fingerprint = (value: any) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value) ? value.match(/.{1,8}/g)?.join(' ') : '未取得完整指纹';
 const grantDraft = () => ({ optionId: '', toolBudget: '', modelBudget: '', durationMinutes: '15', historyDays: '7', historyReadMethods: [] as string[], additionalOriginOptionIds: [] as string[], forwardingOptionIds: [] as string[], forwardingToolBudget: '', forwardingModelBudget: '', wholeDisplayCapture: false });
 
@@ -218,9 +220,17 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const windowsObservation = windowsObservationCompatibility(peer, now);
   const capabilityCaveat = !Number.isSafeInteger(validUntil) || validUntil <= 0 ? '尚未核实有效期限' : validUntil <= now ? '上次读取已过期' : '';
   const phonePeer = /android|phone/i.test(peer?.platform || '') || phoneCapabilities.some(item => String(item.id).startsWith('phone.'));
-  const desktopPeer = desktopScopes(peer || {}).length > 0 || /windows/i.test(peer?.platform || '') || rows(peer?.capabilitySnapshot?.capabilities).some(item => String(item.id).startsWith('desktop.'));
+  const phoneAccess = peer && phonePeer && !retired(peer) ? phoneSurfaceStatus(peer, now) : null;
+  const desktopPeer = !!peer && (!!peer.windowsDesktop || /windows/i.test(peer.platform || '') || desktopScopes(peer, now, local.deviceId).length > 0
+    || rows(peer.capabilitySnapshot?.capabilities).some(item => item.id === 'desktop' || String(item.id).startsWith('desktop.')));
+  const openDesktopPreparation = () => { rememberReadingPosition('detail'); setError(''); setNotice(''); setDesktopOpen(true); };
   const localPhone = rows(state.phoneReadiness?.groups);
   const phoneStatus = (id: string) => { const value = localPhone.find(row => row.id === id); return ({ ready: '本机检查可用', blocked: '需要准备', unsupported: '本机不支持', unknown: '尚未核实' } as Record<string,string>)[value?.state] || '尚未核实'; };
+  const localScreenDetail = (id: string) => {
+    const group = localPhone.find(value => value.id === id), checks = rows(group?.checks);
+    const reason = checks.find(check => check.state === group?.state && check.state !== 'ready' && check.message) || checks.find(check => check.state !== 'ready' && check.message);
+    return reason ? phoneStatus(id) + ' · ' + reason.message : phoneStatus(id);
+  };
   const openPhoneSetup = (section: 'accessibility' | 'background' | 'notifications') => { if (busy) return; clearSensitive(true, form === 'invite'); void run('settings.openSystem', { section }).catch(async failure => { await invoke('devices.snapshot'); if (alive.current && document.visibilityState === 'visible') setError(failure instanceof Error ? failure.message : String(failure)); }); };
   const actionReview = (operation: string, extra: Data = {}) => { void invoke('devices.reviewAction', { operation, ...extra }, acceptReview, operation.startsWith('task.') ? 'control' : 'work'); };
   const confirmReview = (extra: Data = {}) => {
@@ -261,7 +271,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const originalView = review?.view || {}, exactGrant = originalView.grantReview;
   const pairings = rows(snapshot?.pendingPairings);
   const trusted = peers.filter(row => !retired(row));
-  const visiblePeers = peers.filter(peer => [name(peer), peer.deviceId, peer.platform].filter(Boolean).join(' ').toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  const visiblePeers = peers.filter(peer => [name(peer), peer.deviceId, peerPlatform(peer)].filter(Boolean).join(' ').toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const peerSections = [
     { id: 'online', title: '上次检查已接通', peers: visiblePeers.filter(row => !retired(row) && row.connection?.state === 'ONLINE') },
     { id: 'degraded', title: '上次连接不稳定', peers: visiblePeers.filter(row => !retired(row) && row.connection?.state === 'DEGRADED') },
@@ -367,13 +377,15 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
         <div className="pw-device-heading-copy">
           {peerId && !desktopOpen && <Button variant="ghost" className="pw-device-back" leadingIcon={IconArrowLeft} disabled={busy} onClick={() => { selectPeer(''); setForm(''); setRaw(''); }}>所有设备</Button>}
           <h2 tabIndex={-1}>{desktopOpen ? '电脑桌面' : peer ? name(peer) : '设备详情'}</h2>
-          {!desktopOpen && peer && <p>{peer.platform || (retired(peer) ? '原设备记录' : '已配对设备')}</p>}
+          {!desktopOpen && peer && <p>{peerPlatform(peer) || (retired(peer) ? '原设备记录' : '已配对设备')}</p>}
         </div>
         {!desktopOpen && <div className="pw-device-heading-actions">
           <Button variant="ghost" iconOnly leadingIcon={IconRefresh} aria-label="重读这台设备的连接记录" title="重读这台设备的连接记录" disabled={busy} onClick={refresh} />
         </div>}
       </header>}
-      {desktopOpen && peer && <DesktopViewer key={peer.deviceId} peer={peer} supported={supported} run={run} onClose={() => setDesktopOpen(false)} />}
+      {desktopOpen && peer && <DesktopViewer key={peer.deviceId + ':' + peer.instanceId} peer={peer} ownerDeviceId={local.deviceId || ''} now={now}
+        partialGrants={peer.hasMoreReceivedGrantScopes === true || snapshot?.hasMoreOutgoingGrants === true || peer.capabilitySnapshot?.metadata?.grantReceiptsTruncated === true}
+        supported={supported} run={run} onRefresh={readPeerCapabilities} refreshing={busy} refreshError={error} onClose={() => setDesktopOpen(false)} />}
       {desktopOpen && !peer && <p role="alert">设备状态已变化。<Button variant="secondary" onClick={() => setDesktopOpen(false)}>返回设备</Button></p>}
       {!desktopOpen && <>
         {error && <MotionFeedback identity={error} className="pw-device-feedback" role="alert">{error}</MotionFeedback>}
@@ -397,7 +409,9 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
             <Accordion className="pw-device-disclosures pw-device-local-settings">
               <AccordionItem id="phone-preparation" title="主屏与独立屏准备" description="主屏与独立屏分别准备">
                 <p>只配置这台手机，不会启动远程任务。配对时还需明确选应用、节点或整屏输入范围。</p>
-                <dl className="pw-facts"><div><dt>主屏读取</dt><dd>{phoneStatus('mainObservation')}</dd></div><div><dt>主屏输入</dt><dd>{phoneStatus('mainExecution')}</dd></div><div><dt>独立屏准备</dt><dd>{phoneStatus('backgroundPreparation')}</dd></div><div><dt>独立屏执行</dt><dd>{phoneStatus('backgroundExecution')}</dd></div></dl>
+                <dl className="pw-facts">{[['mainObservation', '主屏读屏'], ['mainExecution', '主屏操作'], ['mainScreenshot', '主屏截图'],
+                  ['backgroundPreparation', '独立屏准备'], ['backgroundExecution', '独立屏执行'], ['backgroundInput', '独立屏输入'], ['backgroundCapture', '独立屏截图']].map(([id, title]) =>
+                  <div key={id}><dt>{title}</dt><dd>{localScreenDetail(id)}</dd></div>)}</dl>
                 <div className="pw-form-actions"><Button variant="secondary" disabled={busy || !supported('settings.openSystem')} onClick={() => openPhoneSetup('accessibility')}>准备主屏访问</Button><Button variant="secondary" disabled={busy || !supported('settings.openSystem')} onClick={() => openPhoneSetup('background')}>准备独立屏连接</Button></div>
                 <p>独立屏连接成功不等于已建立显示、输入与截图能力。主屏会影响你正在用的界面；整屏截图与整屏输入分别授权。</p>
               </AccordionItem>
@@ -463,7 +477,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
             {(peers.length > 5 || query) && <SearchField className="pw-device-search" fieldClassName="pw-collaboration-search" shape="rounded" aria-label="搜索已配对设备" placeholder="搜索名称或设备" value={query} onChange={setQuery} />}
             {peers.length ? <div className="pw-device-directory">{peerSections.filter(section => section.peers.length > 0).map(section => <section className="pw-collaboration-group" key={section.id} aria-label={section.title}><header className="pw-collaboration-group-heading"><h3>{section.title}</h3><span>{section.peers.length} 台</span></header><div className="pw-device-list">
               {section.peers.map(row => <Button key={row.deviceId} data-peer-entry={row.deviceId} data-motion-key={`peer:${row.deviceId}`} variant="ghost" className="pw-device-row" leadingIcon={platformIcon(row)} trailingIcon={IconChevronRight} disabled={busy} onClick={() => { rememberReadingPosition('list'); selectPeer(row.deviceId); }}>
-                <span className="pw-device-row-copy"><span className="pw-device-row-name" dir="auto">{name(row)}</span><span className="pw-device-row-status">{deviceConnectionLabel(row)}</span><small>{row.platform || (retired(row) ? '原设备' : '配对设备')} · {row.connection?.observedAt > 0 ? time(row.connection.observedAt) : '尚无检查时间'}</small></span>
+                <span className="pw-device-row-copy"><span className="pw-device-row-name" dir="auto">{name(row)}</span><span className="pw-device-row-status">{deviceConnectionLabel(row)}</span><small>{peerPlatform(row) || (retired(row) ? '原设备' : '配对设备')} · {row.connection?.observedAt > 0 ? time(row.connection.observedAt) : '尚无检查时间'}</small></span>
               </Button>)}
             </div></section>)}{query && !visiblePeers.length && <div className="pw-device-empty"><h3>没有匹配的设备</h3><p>换个名称搜索，或查看全部已配对设备。</p><Button variant="secondary" onClick={() => setQuery('')}>清除搜索</Button></div>}</div> : null}
           </section>
@@ -493,12 +507,21 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               <div><dt>对方给本机</dt><dd>{received?.text}</dd></div>
               <div><dt>本机给对方</dt><dd>{given?.text}</dd></div>
             </dl><p>这是已读授权，不是执行回执。准确应用、工具和额度见「能力与两端权限」。</p></>}
+            {phoneAccess && <div><h4>本机可用的手机工具</h4>
+              {phoneAccess.note && <p>{phoneAccess.note}</p>}
+              {phoneAccess.entries.map(entry => <div key={entry.key}><h4>{entry.title}{entry.packages && ' · ' + entry.packages}</h4>
+                <dl className="pw-facts"><div><dt>读屏节点</dt><dd>{entry.read}</dd></div>
+                  <div><dt>操作</dt><dd>{entry.control}</dd></div><div><dt>整屏截图</dt><dd>{entry.capture}</dd></div></dl>
+                {entry.next && <p>{entry.next}</p>}</div>)}
+              {phoneAccess.entries.length > 0 && <p>这是上次核对的条件，不是已经看见或操作了画面。工作开始前仍会核对当前范围。</p>}
+              {deviceChannelWasConnected(peer) && <Button variant="secondary" disabled={busy || !supported('devices.snapshot')} onClick={readPeerCapabilities}>核对这台手机的能力记录</Button>}
+            </div>}
           </section>
           {originalWork || <section className="pw-device-no-work"><h3>这台设备的工作</h3><p>本机暂未读到关联的原工作。</p>
             {!retired(peer) && <div className="pw-form-actions">
               {!deviceChannelWasConnected(peer) && available(peer.actions?.connect) ? <Button variant="secondary" disabled={busy} onClick={() => actionReview('peer.connect', { deviceId: peer.deviceId })}>核对并连接这台设备</Button>
-                : !received?.count && deviceChannelWasConnected(peer) && supported('devices.snapshot') ? <Button variant="secondary" disabled={busy} onClick={readPeerCapabilities}>向对方读取能力与授权</Button>
-                : desktopScopes(peer).some(scope => scope.available) ? <Button variant="secondary" disabled={busy} onClick={() => { rememberReadingPosition('detail'); setDesktopOpen(true); }}>选择已授权桌面或窗口</Button>
+                : desktopPeer ? <Button variant="secondary" disabled={busy} onClick={openDesktopPreparation}>核对桌面观看范围</Button>
+                : !phoneAccess && !received?.count && deviceChannelWasConnected(peer) && supported('devices.snapshot') ? <Button variant="secondary" disabled={busy} onClick={readPeerCapabilities}>向对方读取能力与授权</Button>
                 : received?.workRecorded && supported('deviceTaskScope.prepare') ? <Button variant="secondary" disabled={busy} onClick={() => setForm('work')}>写目标，再选择设备范围</Button> : null}
             </div>}
           </section>}
@@ -506,14 +529,13 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
             {!retired(peer) && (desktopPeer || phonePeer || supported('deviceTaskScope.prepare')) && <AccordionItem id="peer-work-options" title="新工作与手动查看" description="新目标要重新选择设备和范围，不沿用原工作的权限" icon={IconLayers}>
               {!deviceChannelWasConnected(peer) && <p>准备目标不代表对端已接收。实际执行仍需核对原设备连接和本次授权。</p>}
               <div className="pw-form-actions">
-              {desktopPeer && <Button disabled={busy || retired(peer) || !desktopScopes(peer).length} leadingIcon={IconMonitor} onClick={() => { rememberReadingPosition('detail'); setDesktopOpen(true); }}>查看这台电脑的桌面</Button>}
+              {desktopPeer && <Button disabled={busy} leadingIcon={IconMonitor} onClick={openDesktopPreparation}>核对并选择桌面范围</Button>}
               {phonePeer && !retired(peer) && supported('phoneControl.prepare') && <Button disabled={busy} onClick={() => setForm('manual')}>选择手机与屏幕</Button>}
               {!retired(peer) && supported('deviceTaskScope.prepare') && <Button variant={desktopPeer ? 'secondary' : 'primary'} disabled={busy} onClick={() => setForm('work')}>选择设备并准备目标</Button>}
               </div>
-              {desktopPeer && <p className="pw-field-hint">查看桌面不会授予输入权限。要操作时再单独申请，不能与助手同时输入。{!desktopScopes(peer).length && '尚未读到可查看的屏幕范围。'}</p>}
+              {desktopPeer && <p className="pw-field-hint">准备页只核对电脑与观看范围，不打开画面，不申请控制。</p>}
               {phonePeer && <div><p>写目标后，选择主屏或独立后台屏及准确应用范围，再审阅开始。“完成目标”由模型操作；“手动控制”由你刷新静态画面后逐次点击、滑动或输入，不是实时视频镜像。</p>
-            {phoneCapabilities.map(cap => <p key={cap.id}>{cap.id === 'phone.tools.main' ? '手机主屏工具' : cap.id === 'phone.tools.background' ? '独立后台屏工具' : '交给对端模型处理目标'}：{capabilityCaveat || (cap.ready === true ? '上次报告就绪，仍需本次范围授权' : cap.canSubmitForLocalReview === true ? '上次报告可交给对方审阅，尚未开始' : cap.reason || '上次未报告就绪')}</p>)}
-            {!phoneCapabilities.length && <p>尚未读到手机工具能力。确认对端已准备后，可在「能力与两端权限」更新。</p>}</div>}
+            {phoneCapabilities.filter(cap => cap.id === 'agent.goal').map(cap => <p key={cap.id}>交给对端模型处理目标：{capabilityCaveat || (cap.ready === true ? '上次报告可接受目标，具体范围另审' : cap.canSubmitForLocalReview === true ? '可交给对方审阅，尚未开始' : '对端未报告可接受目标')}</p>)}</div>}
             </AccordionItem>}
             <AccordionItem id="network-help" title="换了网络或连接不上" description="先核对控制通道，再核对画面">
               <dl className="pw-facts">
@@ -531,9 +553,9 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               {!retired(peer) && <Button variant="secondary" disabled={busy} onClick={() => { setForm('connection'); setRaw(''); setAddress(''); }}>核对原身份并更新连接方式</Button>}
             </AccordionItem>
             <AccordionItem id="capabilities" title="能力与两端权限" description="查看范围，调整本机授予的权限" icon={IconShieldCheck}>
-              {!retired(peer) && <><Button variant="secondary" disabled={busy || !supported('devices.snapshot')} onClick={readPeerCapabilities}>向这台设备更新能力记录</Button>{!deviceChannelWasConnected(peer) && <p>上次检查未接通。更新时会核对实际通道，不会自动重连。</p>}</>}
+              {!retired(peer) && <>{!phoneAccess && <Button variant="secondary" disabled={busy || !supported('devices.snapshot')} onClick={readPeerCapabilities}>向这台设备更新能力记录</Button>}{!deviceChannelWasConnected(peer) && <p>上次检查未接通。更新时会核对实际通道，不会自动重连。</p>}</>}
               <p>上次能力记录：{time(peer.capabilitySnapshot?.capturedAt)}</p>
-              {rows(peer.capabilitySnapshot?.capabilities).map(cap => <p key={cap.id}>{cap.id} · {capabilityCaveat || (cap.ready === true && cap.authorized === true ? '上次核对时可用' : cap.reason || '上次未报告就绪')}</p>)}
+              {rows(peer.capabilitySnapshot?.capabilities).filter(cap => !phoneAccess || !['phone.tools.main', 'phone.tools.background'].includes(cap.id)).map(cap => <p key={cap.id}>{cap.id} · {capabilityCaveat || (cap.ready === true && cap.authorized === true ? '上次核对时可用' : cap.reason || '上次未报告就绪')}</p>)}
               <h4>允许这台设备在本机使用</h4>{rows(peer.grantScopes).map((scope, index) => <GrantScope key={index} scope={scope} />)}
               <h4>本机可在对端使用</h4>{rows(peer.receivedGrantScopes).map((scope, index) => <GrantScope key={index} scope={scope} />)}
               {peer.hasMoreGrantScopes || peer.hasMoreReceivedGrantScopes || snapshot?.hasMoreOutgoingGrants ? <p>本次授权记录有读取上限，未列出不代表没有。</p> : null}

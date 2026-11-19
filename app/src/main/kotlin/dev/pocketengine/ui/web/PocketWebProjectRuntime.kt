@@ -16,7 +16,8 @@ internal class PocketWebProjectRuntime(private val controller: PocketWorldContro
     fun clear() { generation++ }
     fun dispatch(action: String, input: JSONObject, done: (JSONObject?, String?) -> Unit) {
         check(action == "projectRuntime.read" && controller.webPrivateOwnerVisible() && !busy)
-        require(input.keys().asSequence().toSet() == setOf("taskId"))
+        val checkoutGuide = input.opt("checkoutGuide") == true
+        require(input.keys().asSequence().toSet() == if (checkoutGuide) setOf("taskId", "checkoutGuide") else setOf("taskId"))
         val id = input.get("taskId"); require(id is String && id.isNotBlank() && id.length <= 200)
         val owner = controller.webWindowTicket(); val epoch = generation
         fun current() = epoch == generation && owner == controller.webWindowTicket() && controller.webPrivateOwnerVisible()
@@ -31,6 +32,15 @@ internal class PocketWebProjectRuntime(private val controller: PocketWorldContro
                 controller.runEcosystemControlWork(Runnable {
                     val result = runCatching {
                         check(current())
+                        if (checkoutGuide) {
+                            check(runtime == "managed_process_v1" && task.raw.optString("kind") == "assistant" &&
+                                task.raw.optBoolean("contextAvailable", true) && !task.raw.optBoolean("sourceCurrentReadRequired") &&
+                                task.raw.optString("taskProjection") != "source_unavailable") { "这不是可核对的原本机托管任务" }
+                            val source = controller.projectDevelopmentForWeb().sourceForOwner(context.getString("projectId"), checkout, true)
+                            val tooling = source.optJSONObject("checkoutTooling") ?: error("未取得原副本的本机工具观察；没有运行命令")
+                            return@runCatching JSONObject().put("readOnly", true).put("taskId", id).put("runId", task.raw.getString("runId"))
+                                .put("epoch", task.raw.getInt("coordinatorEpoch")).put("checkoutTooling", tooling)
+                        }
                         val local = controller.localTerminalHost().module("local") as? LocalModule ?: error("原手机项目环境不可用")
                         val actual = local.projectCheckoutForHost(checkout)
                         check(actual.getString("projectId") == context.getString("projectId")) { "原工作副本已变化" }

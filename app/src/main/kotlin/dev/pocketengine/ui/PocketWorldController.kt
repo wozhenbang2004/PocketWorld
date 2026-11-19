@@ -3135,6 +3135,9 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             main.post { completed(result.getOrNull(), result.exceptionOrNull()?.let(::message)) }
         }
     }
+    /** Local configuration snapshot only; no screen content or new display connection. */
+    internal fun reviewedPhoneConditions(): JSONObject = app.phoneReadiness()
+
     private fun preparePhoneSubmission(goal: String, mode: String): Boolean {
         if (modelSelectionPending()) { state = state.copy(error = "模型设置正在保存，请等待回执后再开始手机任务"); return false }
         if (state.phoneSubmitting) { state = state.copy(error = "请先核对上一次手机任务的启动回执"); return false }

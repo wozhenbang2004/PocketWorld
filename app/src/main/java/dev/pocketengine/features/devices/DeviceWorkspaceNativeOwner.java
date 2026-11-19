@@ -157,12 +157,20 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
             peer.put("connection", new JSONObject().put("state", connection.state().name()).put("path", connection.path().name())
                     .put("localListenerReady", connection.localListenerReady()).put("reconnectClientRunning", connection.reconnectClientRunning())
                     .put("unconfirmedTransportWrite", connection.unconfirmedTransportWrite()).put("observedAt", connection.observedAt()));
-            JSONObject capability = network.capabilities(id); if (capability != null) peer.put("capabilitySnapshot", capability);
+            JSONObject fresh = network.authenticatedCapabilities(id); // Cache only, on the current mTLS channel.
+            JSONObject capability = fresh != null ? fresh : network.capabilities(id);
+            if (capability != null) {
+                peer.put("capabilitySnapshot", capability);
+                JSONObject desktop = WindowsDesktopPreparation.from(id, peer.optString("instanceId"), capability, fresh != null);
+                if (desktop != null) peer.put("windowsDesktop", desktop);
+            }
             JSONArray received = new JSONArray(); boolean moreReceived = false;
             for (PairingCoordinator.OutgoingGrant nativeGrant : receivedGrants) if (id.equals(nativeGrant.targetDeviceId())) {
                 if (received.length() >= 32) { moreReceived = true; continue; }
                 JSONObject scope = nativeGrant.grant(), safe = new JSONObject();
                 for (String field : new String[]{"grantId", "authorizationEpoch", "issuedAt", "expiresAt", "capabilities", "toolNames", "resources", "allowedOrigins", "allowDelegation", "maxDelegationDepth", "toolBudget", "modelBudget", "forwardingScope", "historyRead"}) if (scope.has(field)) safe.put(field, scope.get(field));
+                JSONArray surface = DevicePhoneSurfaceStatus.forWorkspace(fresh, nativeGrant, local == null ? null : local.deviceId(), now);
+                if (surface.length() > 0) safe.put("phoneSurfaceStatus", surface);
                 received.put(safe.put("receivedScope", true));
             }
             peer.put("receivedGrantScopes", received).put("hasMoreReceivedGrantScopes", moreReceived);
@@ -590,7 +598,11 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
             if (exactCurrentGrant != null) { JSONArray resources = exactCurrentGrant.getJSONArray("resources"); for (int i = 0; i < resources.length(); i++) if (mode.equals(resources.getJSONObject(i).optString("screenMode"))) exactResource = resources.getJSONObject(i); }
             JSONObject nativeState = new JSONObject().put("installed", state != null).put("authorized", exactResource != null)
                     .put("ready", state != null && state.optBoolean("ready")).put("reason", state != null && state.optBoolean("ready") ? "" : "permission_or_resource_unavailable");
-            if (exactResource != null) nativeState.put("resourceBinding", exactResource).put("toolNames", exactCurrentGrant.getJSONArray("toolNames"));
+            if (exactResource != null) {
+                nativeState.put("resourceBinding", exactResource).put("toolNames", exactCurrentGrant.getJSONArray("toolNames"));
+                JSONObject fact = DevicePhoneSurfaceStatus.forCaller(permission, exactCurrentGrant, exactResource, readiness, System.currentTimeMillis());
+                if (fact != null) nativeState.put("phoneScopeFact", fact);
+            }
             result.put(mode, nativeState);
         }
         if (permission != null) {

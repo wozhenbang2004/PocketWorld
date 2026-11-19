@@ -2,7 +2,7 @@
 export type DesktopRecord = Record<string, any>;
 export type DesktopRun = (action: string, args?: DesktopRecord) => Promise<unknown>;
 export type DesktopResource = { kind: 'desktop'; sessionId: number; displayId: string; windowId?: number };
-export type DesktopScope = { key: string; grantId: string; resourceBinding: DesktopResource; label: string; available: boolean; reason: string; expiresAt: number };
+export type DesktopScope = { key: string; instanceId: string; grantId: string; grantEpoch: number; resourceBinding: DesktopResource; label: string; available: boolean; reason: string; expiresAt: number };
 export type DesktopControl = { owner: 'none' | 'human' | 'other_human' | 'agent'; revision: number; lease?: DesktopRecord; needsReconcile?: boolean };
 export type DesktopSession = {
   kind: 'desktopSession'; deviceId: string; sessionId: string; resourceBinding: DesktopResource; expiresAt: number;
@@ -17,7 +17,7 @@ export type DesktopInput =
   | { kind: 'press_key'; key: 'enter' | 'escape' | 'tab' };
 export type DesktopViewerState = {
   phase: 'idle' | 'opening' | 'connecting' | 'live' | 'disconnected' | 'failed';
-  session: DesktopSession | null; frameReady: boolean; frameIssue: 'unavailable' | 'unmatched' | null; controlPending: boolean; inputPending: boolean;
+  session: DesktopSession | null; playbackReady: boolean; frameReady: boolean; frameIssue: 'unavailable' | 'unmatched' | null; controlPending: boolean; inputPending: boolean;
   inputUncertain: boolean; controlExpired: boolean; error: string;
 };
 
@@ -39,20 +39,23 @@ function sameResource(a: DesktopResource, b: DesktopResource): boolean {
 }
 
 /** Old grants stay visible with a renewal explanation; no client-side widening of a grant. */
-export function desktopScopes(peer: DesktopRecord, now = Date.now()): DesktopScope[] {
+export function desktopScopes(peer: DesktopRecord, now = Date.now(), ownerDeviceId = ''): DesktopScope[] {
   const result: DesktopScope[] = [];
   const grants = Array.isArray(peer.receivedGrantScopes) ? peer.receivedGrantScopes : [];
   for (const grant of grants) {
-    if (!record(grant) || !id(grant.grantId) || !Array.isArray(grant.resources)) continue;
+    if (!record(grant) || grant.receivedScope !== true || !id(grant.grantId) || !id(peer.instanceId)
+      || !integer(grant.authorizationEpoch) || !Array.isArray(grant.resources)) continue;
     for (const binding of grant.resources) {
-      if (!resource(binding)) continue;
+      if (!resource(binding) || binding.displayId !== 'primary') continue;
       const authorized = Array.isArray(grant.capabilities) && grant.capabilities.includes('desktop.viewer');
+      const direct = id(ownerDeviceId) && Array.isArray(grant.allowedOrigins) && grant.allowedOrigins.includes(ownerDeviceId);
       const current = integer(grant.expiresAt) && grant.expiresAt > now;
-      const trusted = peer.revoked !== true;
-      const label = binding.windowId ? '已授权窗口' : '已授权桌面';
-      result.push({ key: `${grant.grantId}:${binding.sessionId}:${binding.displayId}:${binding.windowId || ''}`, grantId: grant.grantId,
-        resourceBinding: copy(binding), label, available: authorized && current && trusted,
-        reason: !trusted ? '设备信任已撤销，请重新配对后授权' : !authorized ? '请在电脑上更新桌面观看授权' : !current ? '桌面授权已到期，请在电脑上重新授权' : '',
+      const trusted = peer.revoked !== true && peer.connection?.state !== 'REVOKED';
+      const label = binding.windowId ? `窗口 0x${binding.windowId.toString(16).toUpperCase()}` : '整个主屏（所有可见窗口）';
+      result.push({ key: JSON.stringify([peer.instanceId, grant.grantId, grant.authorizationEpoch, binding.sessionId, binding.displayId, binding.windowId ?? null]),
+        instanceId: peer.instanceId, grantId: grant.grantId, grantEpoch: grant.authorizationEpoch,
+        resourceBinding: copy(binding), label, available: authorized && current && trusted && direct,
+        reason: !trusted ? '这台设备的信任已撤销' : !authorized ? '电脑未在此范围授予桌面观看' : !direct ? '此授权不允许这台手机直接观看' : !current ? '桌面授权已到期' : '',
         expiresAt: integer(grant.expiresAt) ? grant.expiresAt : 0 });
     }
   }
@@ -133,7 +136,7 @@ export function waitForDesktopIce(peer: RTCPeerConnection, signal: AbortSignal, 
   });
 }
 
-const initialState = (): DesktopViewerState => ({ phase: 'idle', session: null, frameReady: false, frameIssue: null, controlPending: false, inputPending: false, inputUncertain: false, controlExpired: false, error: '' });
+const initialState = (): DesktopViewerState => ({ phase: 'idle', session: null, playbackReady: false, frameReady: false, frameIssue: null, controlPending: false, inputPending: false, inputUncertain: false, controlExpired: false, error: '' });
 
 /** One viewer owns one native handle. Late replies only close their own handle. */
 export class DesktopViewerConnection {
@@ -243,7 +246,8 @@ export class DesktopViewerConnection {
       // native owner's single ordinary request lane to finish its old callback.
       if (previousRequest) { try { await previousRequest; } catch { /* The retired request owns its error. */ } }
       if (!this.current(generation)) return;
-      const value = desktopValue(await this.request('devices.desktop.open', { deviceId, grantId: scope.grantId, resourceBinding: binding }));
+      const value = desktopValue(await this.request('devices.desktop.open', { deviceId, instanceId: scope.instanceId,
+        grantId: scope.grantId, authorizationEpoch: scope.grantEpoch, resourceBinding: binding }));
       if (!this.current(generation)) { if (value.deviceId === deviceId && id(value.sessionId)) this.closeRemote(value.sessionId); return; }
       let session: DesktopSession;
       try { session = desktopSession(value, { deviceId, resourceBinding: binding }, this.clock()); }
@@ -364,7 +368,9 @@ export class DesktopViewerConnection {
       if (this.identityConflict || this.metadataIdentity === false || this.videoIdentity === false) issue = 'unavailable';
       else if (now - this.unmatchedSince >= FRAME_MATCH_TIMEOUT_MS) issue = 'unmatched';
     }
-    if (ready !== this.state.frameReady || issue !== this.state.frameIssue) this.publish({ frameReady: ready, frameIssue: issue });
+    const playing = this.mediaFresh();
+    if (playing !== this.state.playbackReady || ready !== this.state.frameReady || issue !== this.state.frameIssue)
+      this.publish({ playbackReady: playing, frameReady: ready, frameIssue: issue });
   }
   private mediaFresh(): boolean {
     if (this.state.phase !== 'live' || !this.state.session || this.playbackAt === null || this.videoTrack?.muted || this.videoTrack?.readyState === 'ended'

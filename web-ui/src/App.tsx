@@ -77,6 +77,7 @@ import {ProjectPreviewPane,useProjectPreview} from './ProjectPreviewPane';
 import {ProjectFileEditor} from './ProjectFileEditor';
 import {ProjectWorkspaceOverview,type ProjectWorkCollectionView,type ProjectWorkEntry} from './ProjectWorkspaceOverview';
 import {ProjectDevelopmentWorkspace} from './ProjectDevelopmentWorkspace';
+import {ContinuedProjectBinding} from './ProjectWorkBinding';
 import {ProjectWorkStart,emptyProjectWorkDraft,type ProjectWorkDraft} from './ProjectWorkStart';
 import {ProjectWorkLauncher,type ProjectWorkPresentation} from './ProjectWorkLauncher';
 import type {LocalWorkspaceDraft} from './LocalWorkspace';
@@ -103,6 +104,7 @@ import {ButlerHome} from './ButlerHome';
 import {ButlerReturnedReport,currentHomeReport,type VerifiedHomeReport} from './ButlerReturnedReport';
 import type {TaskResultFile} from './TaskResultFiles';
 import {PhoneTaskStatus} from './PhoneTaskStatus';
+import {PhoneScopeReview,type PhoneReviewDisplay} from './PhoneScopeReview';
 import {PhonePauseInstruction,isPrivateLocalPhone} from './PhonePauseInstruction';
 import {privatePhoneSurface,phoneSurfaceLabel} from './private-phone-surface';
 import {ButlerPreparationEntries,ButlerPreparationDetail,type ButlerPreparationTarget} from './ButlerPreparations';
@@ -127,7 +129,7 @@ type Message={id?:string;role:string;content:string;at?:number;taskId?:string;su
 type Project={id:string;name:string};
 type Review={reviewHandle:string;task?:Task;ownerQuestion?:Json|null;actions?:{action:string;label:string}[];approvals?:Json[];unresolvedOperations?:Json[];projectContinuation?:Json|null;capabilityApprovalRead?:Json;approvalExecutionScope?:Json};
 type TaskReviewWindow={taskId:string;request:number;documentEpoch:number;resumeRevision:number};
-type PhoneReview={reviewHandle:string;goal:string;mode:string;toolLimit:number;modelCallLimit:number;scopeMinutes:number;message?:string;requestId?:string;conversationId?:string;conversationTitle?:string;modelName?:string;provider?:string;screenDisclosure?:string};
+type PhoneReview=PhoneReviewDisplay&{reviewHandle:string;expiresInMs?:number;documentEpoch?:number;originalDraft?:{composer:string;conversation:string;ownerEpoch:number;revision:number;origin:number};requestId?:string;provider?:string};
 type TaskLayer='overview'|'goal'|'process'|'scope'|'homeReport';
 type WorkspaceOrigin={route:string;label:string;drawerChat?:{id:string;draftKey:string;documentEpoch:number};settingsDirectory?:SettingsDirectoryOrigin;goal?:string;projectId?:string;contextProjectId?:string;task?:{id:string;layer:TaskLayer};focus?:HTMLElement|null;focusKey?:string;modelPicker?:boolean;parent?:WorkspaceOrigin|null};
 type FileDraft={text:string;baseline:string;version:number;dirty:boolean;submitted?:string};
@@ -372,9 +374,10 @@ export default function App(){
  const [questionAnswer,setQuestionAnswer]=useOwnerQuestionDraft(review?.ownerQuestion?.questionKey);
  const [questionPending,setQuestionPending]=useState(false);
  const [intent,setIntent]=useState<'chat'|'background'|'main_screen'>('chat'),[phoneReview,setPhoneReview]=useState<PhoneReview|null>(null),[phoneReviewPending,setPhoneReviewPending]=useState(false);
+ const [phoneReviewError,setPhoneReviewError]=useState<{handle:string;message:string}|null>(null);
  const [phoneStart,setPhoneStart]=useState<PhoneStartReceipt|null>(null);
  const phoneAction=useRef(false),phoneWindow=useRef(0),phoneReviewLive=useRef(phoneReview);phoneReviewLive.current=phoneReview;
- const phonePresentation=useMemo(()=>phoneReview?{goal:phoneReview.goal,mode:phoneReview.mode,message:phoneReview.message,screenDisclosure:phoneReview.screenDisclosure,conversationId:phoneReview.conversationId,conversationTitle:phoneReview.conversationTitle,modelName:phoneReview.modelName,toolLimit:phoneReview.toolLimit,modelCallLimit:phoneReview.modelCallLimit,scopeMinutes:phoneReview.scopeMinutes}:null,[phoneReview]);
+ const phonePresentation=useMemo(()=>phoneReview?{goal:phoneReview.goal,mode:phoneReview.mode,message:phoneReview.message,screenDisclosure:phoneReview.screenDisclosure,conversationId:phoneReview.conversationId,conversationTitle:phoneReview.conversationTitle,modelName:phoneReview.modelName,toolLimit:phoneReview.toolLimit,modelCallLimit:phoneReview.modelCallLimit,scopeMinutes:phoneReview.scopeMinutes,conditions:phoneReview.conditions}:null,[phoneReview]);
  const phoneExit=useClosingSnapshot(phonePresentation),phoneDisplay=phoneExit.display;
  const [scopeMinutes,setScopeMinutes]=useState('-1');const [newProjectOpen,setNewProjectOpen]=useState(false),[projectName,setProjectName]=useState(''),[newFileOpen,setNewFileOpen]=useState(false),[newPath,setNewPath]=useState(''),[fileModes,setFileModes]=useState<Record<string,FileLayer>>({}),[fileDrafts,setFileDrafts]=useState<Record<string,FileDraft>>({});
  const channelPhoneModel=intent!=='chat'&&phoneDraft.channelOrigin===true;
@@ -778,8 +781,47 @@ export default function App(){
   const original=phoneStart;phoneAction.current=true;setPhoneReviewPending(true);
   void act('phone.query',{requestId:original.requestId,conversationId:original.conversationId}).then(value=>{const receipt=phoneStartReceipt(value,original);setPhoneStart(receipt);setLocalStatus(receipt.message);if(receipt.status==='accepted')setPhoneReview(null)}).catch(error=>{const receipt={...original,...phoneStartFailure(error,original)};setPhoneStart(receipt);setLocalStatus(receipt.message)}).finally(()=>{phoneAction.current=false;setPhoneReviewPending(false)});
  };
- const preparePhone=()=>{if(phoneAction.current||!phoneText.value.trim()||!can('phone.prepare'))return;if(phoneStart?.status==='unknown'){setLocalStatus('请先查询原手机请求，草稿仍保留。');return}phoneExit.captureReturnFocus(workspace.current?.querySelector<HTMLElement>('textarea[aria-label="工作输入"]')||null);const window=phoneWindow.current;phoneAction.current=true;setPhoneReviewPending(true);void act('phone.prepare',{goal:phoneText.value,mode:intent,epoch:phoneDraft.epoch}).then(value=>{if(phoneWindow.current!==window)return;if(value?.reviewHandle){setPhoneStart(null);setPhoneReview(value)}else setLocalError('未取得这次目标的范围审阅，请重新核对。')}).catch(error=>{if(phoneWindow.current===window)setLocalError(error instanceof Error?error.message:String(error))}).finally(()=>{phoneAction.current=false;setPhoneReviewPending(false)});};
- const startReviewedPhone=()=>{const reviewed=phoneReviewLive.current;if(phoneAction.current||!reviewed||phoneReviewPending||phoneStart?.status==='unknown')return;phoneAction.current=true;phoneText.markSent();setPhoneReviewPending(true);void act('phone.start',{reviewHandle:reviewed.reviewHandle}).then(value=>{const receipt=phoneStartReceipt(value,reviewed);setPhoneStart(receipt);if(receipt.status!=='unknown')setPhoneReview(null);setLocalStatus(receipt.message)}).catch(error=>{const receipt=phoneStartFailure(error,reviewed);setPhoneStart(receipt);setLocalStatus(receipt.message)}).finally(()=>{phoneAction.current=false;setPhoneReviewPending(false)});};
+ const preparePhone=(original?:string)=>{
+  if(document.hidden||phoneAction.current||!phoneText.value.trim()||!can('phone.prepare'))return;
+  const previous=original?phoneReviewLive.current:null;
+  if(original&&(!previous?.originalDraft||previous.reviewHandle!==original))return;
+  if(previous&&(previous.mode!==intent||previous.goal.trim()!==phoneText.value.trim())){
+    setPhoneReviewError({handle:previous.reviewHandle,message:'原目标或执行位置已变化。请返回核对，未准备其他任务。'});return;
+  }
+  if(phoneStart?.status==='unknown'){setLocalStatus('请先查询原手机请求，草稿仍保留。');return}
+  if(!original)phoneExit.captureReturnFocus(workspace.current?.querySelector<HTMLElement>('textarea[aria-label="工作输入"]')||null);
+  const window=phoneWindow.current,documentEpoch=bridge.getDocumentEpoch();
+  const current=()=>phoneWindow.current===window&&bridge.getDocumentEpoch()===documentEpoch&&!document.hidden&&(!original||phoneReviewLive.current?.reviewHandle===original);
+  phoneAction.current=true;setPhoneReviewPending(true);setPhoneReviewError(null);
+  void act('phone.prepare',{goal:phoneText.value,mode:intent,epoch:phoneDraft.epoch,...(previous?{originalDraft:previous.originalDraft}:{})}).then(value=>{
+    if(!current())return;
+    if(!value?.reviewHandle)throw Error('未取得这次目标的范围审阅，请重新核对。');
+    setPhoneStart(null);setPhoneReview({...value,documentEpoch});
+  }).catch(error=>{
+    if(!current())return;const message=error instanceof Error?error.message:String(error);
+    if(original)setPhoneReviewError({handle:original,message});else setLocalError(message);
+  }).finally(()=>{phoneAction.current=false;setPhoneReviewPending(false)});
+ };
+ const openPhoneReviewSettings=(handle:string,target:'notifications'|'accessibility')=>{
+  if(document.hidden||phoneAction.current||phoneReviewLive.current?.reviewHandle!==handle||phoneStart?.status==='unknown')return;
+  phoneAction.current=true;setPhoneReviewPending(true);setPhoneReviewError(null);
+  void act('phone.review.settings',{reviewHandle:handle,target}).catch(()=>{
+    if(phoneReviewLive.current?.reviewHandle===handle)setPhoneReviewError({handle,message:'未能确认设置页已打开。可在系统设置中查看后返回重新核对；没有提交任务。'});
+  }).finally(()=>{phoneAction.current=false;setPhoneReviewPending(false)});
+ };
+ const startReviewedPhone=()=>{
+  const reviewed=phoneReviewLive.current;
+  if(document.hidden||phoneAction.current||!reviewed||phoneReviewPending||phoneStart?.status==='unknown')return;
+  phoneAction.current=true;phoneText.markSent();setPhoneReviewPending(true);
+  void act('phone.start',{reviewHandle:reviewed.reviewHandle}).then(value=>{
+    const receipt=phoneStartReceipt(value,reviewed);setPhoneStart(receipt);
+    if(reviewed.conditions&&receipt.status==='rejected'&&value?.recheckReview===reviewed.reviewHandle){
+      setPhoneReview(current=>current?.reviewHandle===reviewed.reviewHandle?{...current,documentEpoch:undefined}:current);
+    }else if(receipt.status!=='unknown')setPhoneReview(current=>current?.reviewHandle===reviewed.reviewHandle?null:current);
+    setLocalStatus(receipt.message);
+  }).catch(error=>{const receipt=phoneStartFailure(error,reviewed);setPhoneStart(receipt);setLocalStatus(receipt.message)})
+    .finally(()=>{phoneAction.current=false;setPhoneReviewPending(false)});
+ };
  useEffect(()=>{const receipt=phoneDraft.startReceipt;if(receipt&&['accepted','rejected','unknown'].includes(receipt.status)){const original=phoneStartReceipt(receipt);setPhoneStart(original);if(original.status!=='unknown'&&phoneReview&&phoneReview.reviewHandle===receipt.reviewHandle)setPhoneReview(null)}},[phoneDraft.startReceipt?.status,phoneDraft.startReceipt?.reviewHandle,phoneDraft.startReceipt?.requestId,phoneDraft.startReceipt?.taskId]);
  const send=()=>{if(inputLimitMessage){setLocalError(inputLimitMessage);return}if(!composerModelName){if(can('setup.read'))void openModelSetup();else void navigate('models');return}if(intent!=='chat'){preparePhone();return}if(!composerHasPayload(text,asArray<Json>(state.selectedChatAttachments).length)||!draftKey||previewRefsUnavailable)return;
   if(!can('composer.send')||state.chatSubmitting||pendingOriginal)return;
@@ -1257,6 +1299,7 @@ export default function App(){
   const projectBlocked=protectedDisabled||continuationBlocks(continuation);
   const projectNote=projectFeedback[task.id]||'';
   const projectControls=project&&<section aria-label="原项目续接范围">
+   {review?.task&&!reviewStale&&<ContinuedProjectBinding key={review.reviewHandle} task={review.task} projects={projects} read={can('projectRuntime.read')?args=>bridge.command('projectRuntime.read',args):undefined}/>}
    <p>继续同一项目任务会立即开始原任务工作，不会自动发送对话草稿。</p>
    <p className="pw-muted">工具调用已用 {String(scope.toolsUsed??'未读取')} / 总上限 {String(scope.toolLimit??'未读取')}；模型调用已用 {String(scope.modelCallsUsed??'未读取')} / 总上限 {String(scope.modelCallLimit??'未读取')}。本次不增加额度，不延长截止时间。</p>
    <p className="pw-muted">{scope.deadlineAt===0?'沿用原任务未设置截止时间的范围，仍受剩余预算约束。':typeof scope.deadlineAt==='number'?`原截止时间：${new Date(scope.deadlineAt).toLocaleString('zh-CN')}。`:'原任务期限尚未读取。'}{scope.executionPhase==='planning'?' 原任务仍处于只读规划，继续不会批准具体执行。':''}</p>
@@ -1330,7 +1373,7 @@ export default function App(){
      {taskOpen&&taskLayer==='overview'&&task.raw?.developmentContext&&can('projectLive.open')&&<ConversationModelPickerVisibility key={'live:'+task.id}>{pickerVisible=><ProjectLivePreview taskId={task.id} run={act} nativeVisible={!pickerVisible&&!phoneViewerObscured} onBackChange={registerLivePreviewBack}/>}</ConversationModelPickerVisibility>}
      {currentScope.executionPhase==='planning'&&<p className="pw-muted" role="status">原任务处于只读规划。{Number(currentScope.planRevision)>0?`当前计划版本 ${String(currentScope.planRevision)}，确认准确计划后才能在原范围内继续。`:'尚未提交计划正文，重新打开页面不会启动执行。'}</p>}
 
-     {openedTaskId.current===task.id&&!taskOpening&&task.raw?.kind==='assistant'&&can('conversation.drafts')&&<ConversationDrafts key={'drafts:'+task.id} taskId={task.id} refreshRevision={Number(state.memoryRefreshRevision||0)} open={openConversationDraft}/>}
+     {openedTaskId.current===task.id&&!taskOpening&&task.raw?.kind==='assistant'&&can('conversation.drafts')&&<ConversationDrafts key={'drafts:'+task.id} taskId={task.id} reviewingMemory={memoryDraftTarget?.taskId===task.id} refreshRevision={Number(state.memoryRefreshRevision||0)} open={openConversationDraft}/>}
 
      <Accordion variant="divided" className="pw-task-disclosures" aria-label="更多任务资料">
       <AccordionItem id={`${task.id}:details`} title="过程与范围">
@@ -1606,7 +1649,7 @@ export default function App(){
         {m.retainedSources&&can('sources.open')&&<Button variant="ghost" leadingIcon={IconLink} onClick={()=>{setMessageMenu(null);openSource(m)}}>回答来源</Button>}
         {m.memoryReference&&m.id&&can('taskMemory.answer')&&<Button variant="ghost" onClick={()=>{setMessageMenu(null);setProvidedMemoryMessage(m.id!)}}>本次提供的记忆</Button>}
         {m.memoryReference&&<Button variant="ghost" onClick={()=>{setMessageMenu(null);openPersonalMemory({view:'memories'})}}>管理个人记忆</Button>}
-        {m.role==='assistant'&&!phoneResult&&!taskResult&&m.taskId&&can('conversation.drafts')&&messageTaskAnchors.get(m.taskId)===index&&<ConversationDrafts key={m.taskId} taskId={m.taskId} refreshRevision={Number(state.memoryRefreshRevision||0)} open={draft=>{setMessageMenu(null);openConversationDraft(draft)}}/>}
+        {m.role==='assistant'&&!phoneResult&&!taskResult&&m.taskId&&can('conversation.drafts')&&messageTaskAnchors.get(m.taskId)===index&&<ConversationDrafts key={m.taskId} taskId={m.taskId} reviewingMemory={memoryDraftTarget?.taskId===m.taskId} refreshRevision={Number(state.memoryRefreshRevision||0)} open={draft=>{setMessageMenu(null);openConversationDraft(draft)}}/>}
        </div></Popover>
       </PopoverTrigger>
      </div>}
@@ -1732,7 +1775,7 @@ export default function App(){
      onScope={can('tasks.review')?()=>{showTaskLayer('scope');if(!review||reviewStale)refreshReview()}:undefined}/>}
    </div>}
   </header>{selectedTask&&taskLayer!=='homeReport'&&selectedWorkControl?.message&&<div className="pw-task-control-feedback" role="status"><p>{selectedWorkControl.message}</p>{selectedWorkControl.unknown&&can('tasks.open')&&<Button variant="ghost" size="small" onClick={()=>openTask(selectedTask.id,taskLayer)}>核对原任务状态</Button>}</div>}{taskLayer!=='homeReport'&&selectedTask&&<>{taskErrors[selectedTask.id]&&<div className="pw-banner pw-banner-error pw-task-local-error" data-task-id={selectedTask.id} role="alert"><IconInfo size={17}/><p>{taskErrors[selectedTask.id]}</p></div>}{state.taskActionErrors?.[selectedTask.id]&&state.taskActionErrors[selectedTask.id]!==taskErrors[selectedTask.id]&&<div className="pw-banner pw-banner-error pw-task-local-error" data-task-id={selectedTask.id} role="alert"><IconInfo size={17}/><p>{state.taskActionErrors[selectedTask.id]}</p></div>}</>}<div ref={taskScroll} className="pw-drawer-body pw-task-body" onScroll={rememberTaskPosition}>{taskLayer!=='homeReport'&&selectedTask&&state.originalTaskNotice?.taskId===selectedTask.id&&<section className="pw-selected-object" aria-label="原任务通知"><h3>{state.originalTaskNotice.content?.title||"原任务提醒"}</h3><p style={{whiteSpace:"pre-wrap"}}>{state.originalTaskNotice.content?.body||"通知正文请在原任务执行过程的 post_notice 记录中核对。"}</p><p className="pw-muted">{state.originalTaskNotice.expired?"这条提醒属于先前的执行状态。":""}{state.originalTaskNotice.content?.message||"通知接口回执不代表已经显示或阅读。"}</p><Button variant="ghost" size="small" onClick={()=>run("notice.task.close")}>收起提醒</Button></section>}{selectedTask?<>{taskReviewBody(selectedTask)}</>:taskOpening?<ThinkingLoader phase="正在读取原任务"/>:<section className="pw-empty-small"><p className="pw-error" role="alert">{taskLayer==='homeReport'?'原工作或汇报已变化，请返回管家首页核对。':taskId&&taskErrors[taskId]||'原任务暂不可读取，请重新读取原历史窗口。'}</p>{taskLayer!=='homeReport'&&taskId&&can('tasks.open')&&<Button variant="secondary" onClick={()=>openTask(taskId,taskLayer)}>重新读取原任务</Button>}</section>}</div>{selectedTask&&taskFooter(selectedTask)}</Drawer.Content></Drawer.Portal></Drawer.Root>
-  <Drawer.Root open={!!phoneReview} onOpenChange={open=>{if(!open&&!phoneReviewPending)setPhoneReview(null)}} dismissible={!phoneReviewPending} shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay"/><Drawer.Content className="pw-drawer pw-scope-drawer" aria-describedby="pw-phone-description" inert={!phoneReview} onCloseAutoFocus={phoneExit.onCloseAutoFocus}><div className="pw-drawer-handle"/><header className="pw-drawer-header"><div><Drawer.Title>核对这次手机任务</Drawer.Title><Drawer.Description id="pw-phone-description">目标、执行位置与本次范围</Drawer.Description></div><IconButton icon={IconClose} aria-label="关闭手机任务核对" disabled={phoneReviewPending} onClick={()=>setPhoneReview(null)}/></header><div className="pw-drawer-body">{phoneDisplay&&<PermissionReview key={phoneExit.generation} title={phoneDisplay.goal} context={phoneDisplay.mode==='background'?'在后台独立屏执行':'在手机主屏执行'} reason={[phoneDisplay.message,phoneDisplay.screenDisclosure].filter(Boolean).join(' ')} fields={[...(phoneDisplay.conversationId?[{label:'结果返回',value:phoneDisplay.conversationTitle||'原私人对话'}]:[]),...(phoneDisplay.modelName?[{label:'本次模型',value:phoneDisplay.modelName}]:[]),{label:'工具调用上限',value:phoneDisplay.toolLimit},{label:'模型调用上限',value:phoneDisplay.modelCallLimit},{label:'本次期限',value:phoneDisplay.scopeMinutes<0?'使用原授权期限':phoneDisplay.scopeMinutes===0?'不设截止时间':`${phoneDisplay.scopeMinutes} 分钟`}]} onReject={phoneReviewPending?undefined:()=>{if(phoneReviewLive.current)setPhoneReview(null)}} onApprove={can('phone.start')&&phoneStart?.status!=='unknown'?startReviewedPhone:undefined} pending={phoneReviewPending} approveLabel="开始这次任务"/>}{phoneStart&&phoneStart.status!=='accepted'&&<><Receipt receipt={phoneStart}/>{phoneStart.status==='unknown'&&(phoneStart.requestId&&phoneStart.conversationId&&can('phone.query')?<Button variant="secondary" disabled={phoneReviewPending} onClick={()=>{if(phoneReviewLive.current)queryOriginalPhone()}}>查询原手机请求</Button>:<Button variant="secondary" onClick={()=>{if(!phoneReviewLive.current)return;setPhoneReview(null);if(phoneStart.taskId)openTask(phoneStart.taskId);else navigate('tasks')}}>核对原任务记录</Button>)}</>}</div></Drawer.Content></Drawer.Portal></Drawer.Root>
+  <Drawer.Root open={!!phoneReview} onOpenChange={open=>{if(!open&&!phoneReviewPending)setPhoneReview(null)}} dismissible={!phoneReviewPending} shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay"/><Drawer.Content className="pw-drawer pw-scope-drawer" aria-describedby="pw-phone-description" inert={!phoneReview} onCloseAutoFocus={phoneExit.onCloseAutoFocus}><div className="pw-drawer-handle"/><header className="pw-drawer-header"><div><Drawer.Title>核对这次手机任务</Drawer.Title><Drawer.Description id="pw-phone-description">目标、执行位置与本次范围</Drawer.Description></div><IconButton icon={IconClose} aria-label="关闭手机任务核对" disabled={phoneReviewPending} onClick={()=>setPhoneReview(null)}/></header><div className="pw-drawer-body">{phoneDisplay&&<PhoneScopeReview key={phoneExit.generation} shown={phoneDisplay} live={phoneReview} pending={phoneReviewPending} unknown={phoneStart?.status==='unknown'} onClose={()=>{if(phoneReviewLive.current)setPhoneReview(null)}} onStart={can('phone.start')?startReviewedPhone:undefined} onCheck={can('phone.prepare')?preparePhone:undefined} onSettings={can('phone.review.settings')?openPhoneReviewSettings:undefined} error={phoneReviewError?.handle===phoneReview?.reviewHandle?phoneReviewError?.message:undefined}/>}{phoneStart&&phoneStart.status!=='accepted'&&<><Receipt receipt={phoneStart}/>{phoneStart.status==='unknown'&&(phoneStart.requestId&&phoneStart.conversationId&&can('phone.query')?<Button variant="secondary" disabled={phoneReviewPending} onClick={()=>{if(phoneReviewLive.current)queryOriginalPhone()}}>查询原手机请求</Button>:<Button variant="secondary" onClick={()=>{if(!phoneReviewLive.current)return;setPhoneReview(null);if(phoneStart.taskId)openTask(phoneStart.taskId);else navigate('tasks')}}>核对原任务记录</Button>)}</>}</div></Drawer.Content></Drawer.Portal></Drawer.Root>
   <SettingsDialog isOpen={newProjectOpen||newFileOpen} title={createKind==='project'?'新项目':'新文件'} onClose={closeCreate} closeLabel="关闭创建" className="pw-create-dialog">
    <form className="pw-create-form" onSubmit={event=>{event.preventDefault();if(!createBusy&&(createKind==='project'?projectName:newPath).trim())createObject()}}>
     <TextField label={createKind==='project'?'项目名称':'文件路径'} isDisabled={createBusy} value={createKind==='project'?projectName:newPath} onChange={createKind==='project'?setProjectName:setNewPath} placeholder={createKind==='project'?'输入项目名称':'例如 index.html'}/>
