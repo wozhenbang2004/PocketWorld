@@ -600,7 +600,7 @@ public final class AgentRunner {
                     }
                     nativePlanningReference=clean(meaning+currentPlanning,config);
                 }
-                boolean boundedToolCatalog=false, privatePreferencesProvided=false;
+                boolean boundedToolCatalog=false;long admittedPreferenceRevision=0L;
                 JSONArray tools=phone==null||!control.phoneSurfaceActive()?new JSONArray():tools();
                 if(control.phoneSurfaceActive()&&DeferredPhoneSession.adaptive(phone))addTool(tools,"phone_observation_help","当前节点中找不到目标时请求新的观察；仅在本机允许且模型已配置图像输入能力时发送真实图片，不重试业务动作。",properties("observationId","string").put("reason",new JSONObject().put("type","string").put("enum",new JSONArray().put("target_missing"))),new String[]{"observationId","reason"});
                 JSONArray outcomeTools=RunOutcomeTools.tools();for(int i=0;i<outcomeTools.length();i++)tools.put(outcomeTools.getJSONObject(i));
@@ -614,7 +614,7 @@ public final class AgentRunner {
                     for(int i=0;i<extra.length();i++){JSONObject tool=extra.getJSONObject(i);if(PhoneRouteSession.supports(tool.getJSONObject("function").getString("name"))||!names.add(tool.getJSONObject("function").getString("name")))throw new SecurityException("能力工具与原生手机工具名称冲突");tools.put(tool);}
                     JSONObject reference=prepared.optJSONObject("reference");if(reference==null)reference=new JSONObject();
                     JSONObject validation=reference.optJSONObject("referenceValidation");
-                    privatePreferencesProvided=dev.pocketengine.features.memory.TaskMemoryHistory.privatePreferencesProvided(validation);
+                    admittedPreferenceRevision=dev.pocketengine.features.memory.TaskMemoryHistory.admittedPreferenceRevision(validation);
                     memoryDependency=dev.pocketengine.features.memory.TaskMemoryHistory.dependency(validation);
                     refreshReferenceHistory(history,validation);
                     String context=clean(reference.optString("context"),config);
@@ -657,7 +657,7 @@ public final class AgentRunner {
                 if(nativeApprovedResponse&&instructionProfile==NativeInstructionProfile.PAIRED_DEVICE_TEXT)throw new SecurityException("零工具原任务不能续接工具调用");
                 if(nativeApprovedResponse){response=approvedCall.take(history,control);approvedCall=null;}
                 else {
-                final RequestHistoryProjection materializedHistory=RequestHistoryProjection.prepare(requestProjection,nativeProvenance,config,control,privatePreferencesProvided);
+                final RequestHistoryProjection materializedHistory=RequestHistoryProjection.prepare(requestProjection,nativeProvenance,config,control,admittedPreferenceRevision);
                 requestHistory=materializedHistory.messages();
                 contextBudget.projected(nativeProvenance,requestHistory);
                 RunContextBudget.Projection projection;

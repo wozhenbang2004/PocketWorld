@@ -430,7 +430,19 @@ public final class PhoneAccessibilityService extends AccessibilityService {
             // refreshOwnerControls installs a distinct Android View for each displayed intention.
             ownerActionSlot=new android.widget.FrameLayout(this);
             Button stop = button("停止");
-            stop.setOnClickListener(v -> bound.stop());
+            stop.setOnClickListener(v -> {
+                if(ownerControls!=bound||control!=runControl||!visible||instance!=this||!stop.isEnabled())return;
+                stop.setEnabled(false);stop.setText("请求中");
+                try{bound.stop().whenComplete((receipt,failed)->main.post(()->{
+                    if(instance!=this||ownerControls!=bound||control!=runControl)return;
+                    if(failed==null&&bound.stopAccepted(receipt)){stop.setText("已请求停止");return;}
+                    stop.setText("再请求停止");stop.setEnabled(bound.retained());
+                    stop.setContentDescription("停手回执未确认，再次请求停止这一原执行");
+                }));}catch(RuntimeException rejected){
+                    stop.setText("再请求停止");stop.setEnabled(bound.retained());
+                    stop.setContentDescription("本次未提交，重新请求停止这一原执行");
+                }
+            });
             Button back = button("暂停并返回原任务");
             back.setOnClickListener(v -> {if(ownerControls==bound&&visible&&bound.holdForReturn()){
                 refreshOwnerControls(bound,goal);openOriginalOwnerReview(bound,app);

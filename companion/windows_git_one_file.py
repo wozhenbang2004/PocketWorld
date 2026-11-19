@@ -10,6 +10,7 @@ from platform_windows import relative_parts
 from windows_git_source import _object_body
 from windows_git_tree import DIR, FILE, EXEC, TreeIssue, _component, _native_compare, entries
 from windows_source_diff import _lines, original_commit
+from windows_source_publisher import _origin
 
 MAX_TEXT=64*1024
 MAX_DEPTH=32
@@ -43,6 +44,7 @@ def child(pins,packs,oid,name,check):
 
 @contextmanager
 def node(ctx,settings,src,path,check):
+    if "selectedFile" in src and path!=src["selectedFile"]["path"]: reject()
     parts=pieces(path,root=True)
     with original_commit(ctx,settings,src,check) as (pins,packs,oid):
         mode=DIR
@@ -84,9 +86,12 @@ class TextFile:
     size: int
     sha: str
     text: str
+    mode: str
+    repository: tuple | None
+    git: tuple | None
 
 
-def read(ctx,settings,src,path,expected,check):
+def read(ctx,settings,src,path,expected,check,*,with_bytes=False):
     if not path: reject()
     with node(ctx,settings,src,path,check) as (pins,packs,mode,oid):
         if mode not in (FILE,EXEC) or (expected is not None and expected!=oid): reject()
@@ -98,4 +103,10 @@ def read(ctx,settings,src,path,expected,check):
         # CR, LF and BOM are presentation only; the size, Git OID and SHA are for unmodified original bytes.
         shown=text.replace("\r\n","\n").replace("\r","\n").replace("\n","\r\n")
         check()
-        return TextFile(path,oid,len(raw),hashlib.sha256(raw).hexdigest(),shown)
+        origin=lambda h: tuple(_origin(pins.api,pins.api.info(h)))
+        try: root_id,git_id=origin(pins.nodes[()][1]),origin(pins.nodes[(".git",)][1])
+        except (OSError,PlatformError):
+            if with_bytes: reject()
+            root_id=git_id=None  # Optional save evidence must not break the original text reader.
+        result=TextFile(path,oid,len(raw),hashlib.sha256(raw).hexdigest(),shown,mode.decode("ascii"),root_id,git_id)
+        return (result,raw) if with_bytes else result

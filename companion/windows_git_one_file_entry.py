@@ -74,9 +74,16 @@ def show(ctx,settings,src,locked):
     if file is None:
         _dialog("没有打开这个原文件","原提交或确切路径可能已不可核对；二进制、LFS 指针、文本或对象超限、链接及同名映射冲突也不会打开。没有从工作树补读。",[],retire=closed); return
     while current():
+        actions=[("show","查看完整原文本"),("ids","查看原提交、Git 对象和字节摘要")]
+        if file.repository and file.git:
+            actions.insert(1,("save","只保存这一份文件的独立副本\n先核对原选择和新位置，不复制整个项目。"))
         selected=_dialog("已核实一份已提交原文件",f"{file.path}\n{file.size:,} 字节 · 原提交 {src['commit'][:12]}\n"
-                         "这不是当前磁盘文件，也不是整仓核验或副本。",[("show","查看完整原文本"),("ids","查看原提交、Git 对象和字节摘要")],retire=closed)
+                         "这不是当前磁盘文件，也不是整仓核验或副本。",actions,retire=closed)
         if selected is None or not current(): return
+        if selected=="save":
+            from windows_git_copy_entry import confirm_copy
+            from windows_git_one_copy import descriptor
+            confirm_copy(ctx,settings,{**src,"selectedFile":descriptor(file)},closed); return
         if selected=="ids":
             _dialog("这一份原文件的编号",f"原提交：{src['commit']}\nGit blob：{file.oid}\n原始字节 SHA-256：{file.sha}",[],retire=closed)
         else:

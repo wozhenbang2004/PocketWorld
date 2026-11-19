@@ -143,3 +143,5 @@
 正式文字编辑器另有「在这部手机保留草稿」。只保留明确点选、可核对原项目版本的当前文字（或确证尚未建立的原路径）；不会把普通工作副本冒充正式项目。每份限 65536 字符/256 KiB，每项目至多 16 份/2 MiB，不挤掉旧稿，不写正式版本。Android noBackup 私有目录只在保留时登记；项目「文件 → 本机保留的文件草稿」只列元数据，选择原稿后才打开其实读文字。重开同一路径并核对原基线后方可明确放入编辑区；仍须另行保存。原版本变化或不可读时只展示所保留的文字，不向二进制或其他版本自动写入。只有单独确认才移除这一份保留稿；没有云同步、任务附加、注册文档或隐式备份。[Android 备份排除目录](https://developer.android.com/identity/data/autobackup#Files)；与 [VS Code Hot Exit](https://code.visualstudio.com/docs/editing/codebasics#_hot-exit) 同样区分正式保存和本机恢复，但本功能只保留主动点选的快照，不宣称自动保留之后的击键。
 
 保留的文字草稿落后于正式文件时，可在原项目、同一路径核对旧版本、当前正式版本和所选稿。从可定位的未冲突分段中明确选择后，只放入干净的当前编辑草稿；已有冲突、重复定位、历史断层、删除重建与非文字都不自动采用。最终仍需独立保存正式版本，不通过云或另一部设备传输。
+
+在普通私人开发副本中，输入部分文件名/路径即可在该次完整文件清单中查找并按页看结果，也可仅看实际新增/修改；不把正文交给模型。命中文件打开时守住相同副本、路径和字节 SHA，已移除不会变成新文件草稿。单个原任务或主机文件入口不放大范围。参考 [DSH-Go 固定工作区查找](https://github.com/ccch1mneyyy/dsh-Go/blob/9ad11167c53a5da12ff8791c21f4327f5d8a9a25/app/lib/ui/files/workspace_browser.dart) 与 [Operit 按原环境读取目录](https://github.com/AAswordman/Operit/blob/7a39941bad80209973c535046a18195c5da9e647/app/src/main/java/com/ai/assistance/operit/ui/features/chat/webview/workspace/FileManager.kt#L187-L203)；保留 PocketWorld 原草稿及审阅保存边界。

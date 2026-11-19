@@ -18,9 +18,11 @@ from windows_git_subproject import valid as valid_selected_project
 from windows_installation import _object
 from windows_source_publisher import disk, publish
 import windows_source_inventory as inventory
+import windows_git_one_copy as one_copy
 
 PROFILE = "pocketworld.windows-local-source-file-copy.v1"
 BANK = 8
+FILE_BANK = 8
 SOURCE_KEYS = ("environmentId","repositoryAnchor","objectFormat","commit","tree","branch")
 
 
@@ -48,7 +50,11 @@ def _key(install,source):
 def _target(op): return "source-"+op
 
 
-def _slot(n): return "source-copy-v1-slot-"+str(n)+".json"
+def _slot(n):
+    return ("source-one-file-v1-slot-"+str(n-BANK) if n>=BANK else "source-copy-v1-slot-"+str(n))+".json"
+
+
+def bank(one): return range(BANK,BANK+FILE_BANK) if one else range(BANK)
 
 
 def _phase(op,phase): return "source-copy-v1-"+op+"-"+phase+".json"
@@ -79,6 +85,10 @@ class Material:
 
 
 def source_facts(source):
+    if "selectedFile" in source:
+        if source.get("sourceVerified") is not True: raise PlatformError("Original committed file is required")
+        selected={"selectedProject":source["selectedProject"]} if "selectedProject" in source else {}
+        return {**{key:source[key] for key in SOURCE_KEYS},**selected,**one_copy.facts(source)}
     review,contents = source.get("committedNameReview",{}),source.get("committedContentReview",{})
     if not (source.get("sourceVerified") is True and review.get("complete") is True and contents.get("complete") is True):
         raise PlatformError("Original complete local source evidence is required")
@@ -94,17 +104,18 @@ def plan(ctx,source):
     return op,ntpath.join(ctx.state,_target(op))
 
 
-def slots(ctx):
+def slots(ctx,*,one=None):
     ctx.check_current_pointer()
     ctx.backend.assert_private_directory(ctx.state,ctx.sid)
     entries = []
-    for n in range(BANK):
+    for n in (range(BANK+FILE_BANK) if one is None else bank(one)):
         row = _read(ctx,_slot(n),16384)
         if row is not None:
             facts = row.get("source")
             if (row.get("format")!=PROFILE or row.get("install")!=ctx.install_state["installId"]
                     or not isinstance(facts,dict) or not isinstance(facts.get("environmentId"),str)
                     or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}",facts["environmentId"])
+                    or ("selectedFile" in facts)!=(n>=BANK) or (n>=BANK and not one_copy.matches(facts))
                     or "selectedProject" in facts and not valid_selected_project(facts["selectedProject"],row["install"],facts["environmentId"])
                     or not isinstance(facts.get("commit"),str) or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}",facts["commit"])
                     or facts.get("objectFormat") not in ("sha1","sha256")
@@ -130,7 +141,7 @@ def _directory_id(ctx,name):
 
 
 def inspect(ctx,row):
-    if not any(current==row for _,current in slots(ctx)): raise PlatformError("Original reservation no longer matches")
+    if not any(current==row for _,current in slots(ctx,one="selectedFile" in row["source"])): raise PlatformError("Original reservation no longer matches")
     op, target = row["operation"],_target(row["operation"])
     opened = _read(ctx,_phase(op,"opened"),4096)
     sealed, final = _read(ctx,_phase(op,"stage"),4096),_read(ctx,_phase(op,"result"),4096)
@@ -160,25 +171,28 @@ def inspect(ctx,row):
 
 
 def save(ctx,settings,source,checkpoint,progress,phase,locked):
-    records = slots(ctx)
+    one="selectedFile" in source; records=slots(ctx,one=one)
     original,install = source_facts(source),ctx.install_state["installId"]
     op = _key(install,original)
     previous = next((r for n,r in records if r["operation"]==op),None)
     if previous is not None: return inspect(ctx,previous)
-    if len(records)>=BANK: raise CopyBlocked("bank_full")
-    if storage_limit(source["committedContentReview"]): raise CopyBlocked("outside_limit")
+    if len(records)>=len(bank(one)): raise CopyBlocked("bank_full")
+    if not one and storage_limit(source["committedContentReview"]): raise CopyBlocked("outside_limit")
     material = Material()
     phase("正在重新核对同一提交的源文件")
-    checked = capture(ctx,settings,source["environmentId"],layout_for=source,content=True,
-                      checkpoint=checkpoint,on_count=progress,material=material)
-    if not checked.get("committedContentReview",{}).get("complete") or source_facts(checked)!=original:
-        raise CopyBlocked("source_changed")
+    def rebuild(sink,check,notice):
+        if one: return one_copy.materialize(ctx,settings,source,sink,check,notice)
+        checked=capture(ctx,settings,source["environmentId"],layout_for=source,content=True,
+                        checkpoint=check,on_count=notice,material=sink)
+        if not checked.get("committedContentReview",{}).get("complete") or source_facts(checked)!=original:
+            raise CopyBlocked("source_changed")
+    rebuild(material,checkpoint,progress)
     manifest = {"format":PROFILE,"source":original,"directories":material.directories,"files":material.rows}
     digest = manifest_identity(manifest)
     # Bound saved IDs plus their 64-bit creation timestamps before reserving any slot.
     if len(_json(manifest))+64*(len(material.directories)+len(material.rows))+1024>inventory.LIMIT:
         raise CopyBlocked("inventory_limit")
-    n = next(n for n in range(BANK) if all(used!=n for used,_ in records))
+    n = next(n for n in bank(one) if all(used!=n for used,_ in records))
     target = _target(op)
     last_check = 0.
     def current(force=False):
@@ -209,6 +223,7 @@ def save(ctx,settings,source,checkpoint,progress,phase,locked):
             # No rebinding in the gap between the two source passes or at final publication.
             source_pins(ctx,root,env,original["selectedProject"],hold)
             work_origin=original["selectedProject"]["parent"]
+        if one: one_copy.hold_original(ctx,settings,source,hold,checkpoint)
         current(True)
         if not disk(ctx,original)["enough"]: raise CopyBlocked("disk_space")
         for leaf in (target,".pocketworld-project-"+op):
@@ -243,11 +258,7 @@ def save(ctx,settings,source,checkpoint,progress,phase,locked):
                 def __init__(self): self.directories=[]
                 def keep(self,path,mode,oid,raw,sha): append(path,mode,oid,raw,sha)
             current(True)
-            again = capture(ctx,settings,source["environmentId"],layout_for=source,content=True,
-                checkpoint=current, material=Sink(),
-                on_count=lambda n,t,size:phase(f"已按原内容编号写入独立暂存：{n}/{t} 个文件，{size/1048576:.1f} MiB"))
-            if not again.get("committedContentReview",{}).get("complete") or source_facts(again)!=original:
-                raise PlatformError("Exact original contents no longer available")
+            rebuild(Sink(),current,lambda n,t,size:phase(f"已按原内容编号写入独立暂存：{n}/{t} 个文件，{size/1048576:.1f} MiB"))
         outcome = publish(ctx,op,digest,manifest,feed,current,record,phase)
         complete = (outcome.get("status")=="completed" and outcome.get("verified") is True and outcome.get("delivered") is True
                     and outcome.get("path")==target and outcome.get("manifestDigest")==digest and _native_id(outcome.get("directoryIdentity")))

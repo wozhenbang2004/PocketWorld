@@ -1266,16 +1266,25 @@ public final class TaskStore {
 
     /** Local preparation only; no model, remote operation or execution lease is created. */
     public synchronized JSONObject prepareOwnerPhoneControl(String requestId,long deadlineAt,int tools,java.util.function.BooleanSupplier window)throws Exception {
+        return prepareOwnerPhoneControl(requestId,deadlineAt,tools,null,window);
+    }
+    public synchronized JSONObject prepareOwnerPhoneControl(String requestId,long deadlineAt,int tools,DirectedPhoneTarget target,java.util.function.BooleanSupplier window)throws Exception {
         if(requestId==null||!requestId.matches("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}")||tools<4||tools>200)throw new SecurityException("手机手控准备编号或额度无效");
-        String digest=capabilityFingerprint(new JSONObject().put("requestId",requestId).put("deadlineAt",deadlineAt).put("toolLimit",tools));
+        String digest=OwnerPhoneControlScope.preparationDigest(requestId,deadlineAt,tools,target);
         db.beginTransaction();try{
             if(window==null||!window.getAsBoolean())throw new SecurityException("原私人手控窗口已关闭");JSONObject existing=read(requestId);
-            if(existing!=null){OwnerPhoneControlScope.require(existing);if(!digest.equals(existing.getJSONObject(OwnerPhoneControlScope.KEY).getString("requestDigest")))throw new SecurityException("相同手控编号不能补额度或延长期限");db.setTransactionSuccessful();return copy(existing,false);}
+            if(existing!=null){OwnerPhoneControlScope.require(existing);if(!digest.equals(existing.getJSONObject(OwnerPhoneControlScope.KEY).getString("requestDigest")))throw new SecurityException("相同手控编号不能替换手机、补额度或延长期限");db.setTransactionSuccessful();return copy(existing,false);}
             long now=System.currentTimeMillis();if(deadlineAt<=now||deadlineAt>now+600_000L)throw new SecurityException("请设置从准备起十分钟以内的有限期限");
+            if(target!=null)try(Cursor row=db.rawQuery("SELECT 1 FROM device_peers WHERE device_id=? AND instance_id=? AND fingerprint=? AND revoked=0",
+                    new String[]{target.deviceId(),target.instanceId(),target.certificateFingerprint()})){
+                if(!row.moveToFirst())throw new SecurityException("未找到这部手机的原配对身份，没有建立手控任务");
+            }
             JSONObject task=base(requestId,"主人手动控制远程手机","tool","capabilities").put("feature","devices").put("command","owner.phone.control").put("nativeExecutionMode","OWNER_PHONE_CONTROL")
                     .put("conversationId","").put("runId","").put("status","paused").put("summary","请选择一个手机屏幕并核对范围；尚未调用模型或设备。")
                     .put(OwnerPhoneControlScope.KEY,new JSONObject().put("format",OwnerPhoneControlScope.FORMAT).put("requestId",requestId).put("requestDigest",digest).put("deadlineAt",deadlineAt).put("toolLimit",tools).put("modelDispatchAllowed",false))
-                    .put("executionScope",OwnerPhoneControlScope.create(requestId,deadlineAt,tools));OwnerPhoneControlScope.require(task);
+                    .put("executionScope",OwnerPhoneControlScope.create(requestId,deadlineAt,tools));
+            if(target!=null)task.getJSONObject(OwnerPhoneControlScope.KEY).put(OwnerPhoneControlScope.TARGET,target.view());
+            OwnerPhoneControlScope.require(task);
             if(!window.getAsBoolean())throw new SecurityException("原私人手控窗口已关闭");write(task);db.setTransactionSuccessful();return copy(task,false);
         }finally{db.endTransaction();}
     }
@@ -1284,6 +1293,7 @@ public final class TaskStore {
         long end=OwnerPhoneControlScope.require(task);JSONObject selected=task.getJSONObject("deviceSourceScope"),scope=task.getJSONObject("executionScope");
         if(end<=System.currentTimeMillis()||!"pocketworld.native-device-source-scope.v1".equals(selected.optString("format"))||!task.getString("id").equals(selected.optString("taskId"))
                 ||!task.getString("goal").equals(selected.optString("goal"))||!"goal_only".equals(selected.optString("contextMode"))||selected.getLong("parentScopeRevision")!=scope.getLong("revision")||selected.getJSONArray("routes").length()!=1)throw new SecurityException("请先确认一个手机的原范围；不自动选择或扩权");
+        OwnerPhoneControlScope.requireSingleTarget(OwnerPhoneControlScope.target(task),selected.getJSONArray("routes"));
         JSONObject route=selected.getJSONArray("routes").getJSONObject(0);OwnerPhoneControlScope.requireRoute(route);
         if(route.getLong("deadline")<=System.currentTimeMillis()||route.getLong("deadline")>end||!route.getJSONObject("toolDeclarations").has("phone_observe"))throw new SecurityException("原手机观察范围已失效");return route;
     }
@@ -16116,6 +16126,12 @@ public final class TaskStore {
             if(!waiting&&(revision instanceof Integer||revision instanceof Long)&&((Number)revision).longValue()>0)out.put("scopeRevision",revision);
         }
         return out;
+    }
+    /** Original service notification STOP needs only the canonical lifecycle status, never the goal, screen or audit. */
+    public synchronized String originalPhoneNoticeStopState(String id,String run,int epoch)throws Exception{
+        JSONObject task=read(id);
+        if(task==null||!id.equals(task.opt("id"))||!"phone".equals(task.opt("kind"))||!run.equals(task.opt("runId"))||epoch<1||epoch!=task.optInt("coordinatorEpoch",-1))return null;
+        return task.opt("status") instanceof String status&&!status.isBlank()?status:null;
     }
     public synchronized JSONObject foregroundNotificationContextSnapshot(String id)throws Exception{
         JSONObject task=read(id);if(task==null)return null;

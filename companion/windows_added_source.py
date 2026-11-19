@@ -39,7 +39,7 @@ def _source_name(parent,name):
 
 def _owner(ctx,op):
     if not isinstance(op,str) or not re.fullmatch("[a-f0-9]{32}",op): _bad()
-    for _,row in slots(ctx):
+    for _,row in slots(ctx,one=False):  # Whole-copy additions/sets only; a selected file grants no siblings.
         if row["operation"]==op: return row
     _bad()
 

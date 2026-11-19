@@ -18,7 +18,7 @@ public final class OwnerPhoneStopInputs {
     public static final class NotDispatched extends RejectedExecutionException {
         private NotDispatched(String message){super(message);}
     }
-    private record Key(long generation, String task, String run, int epoch) {}
+    private record Key(long generation, String task, String run, int epoch, dev.pocketengine.core.RunControl source, boolean overlay) {}
     private static final class Input {
         final CompletableFuture<String> result=new CompletableFuture<>();
         int listeners;
@@ -29,10 +29,10 @@ public final class OwnerPhoneStopInputs {
                 Thread thread=new Thread(work,"owner-phone-stop");thread.setDaemon(true);return thread;
             });
 
-    public synchronized CompletionStage<String> submit(long generation,String id,String run,int epoch,Callable<String> stop) {
-        if(id==null||id.isBlank()||run==null||run.isBlank()||epoch<1||stop==null)
+    public synchronized CompletionStage<String> submit(long generation,String id,String run,int epoch,dev.pocketengine.core.RunControl source,boolean overlay,Callable<String> stop) {
+        if(id==null||id.isBlank()||run==null||run.isBlank()||epoch<1||source==null||!source.matchesHostRun(id,run,epoch)||stop==null)
             throw new IllegalArgumentException("没有原手机执行身份，这次没有提交停手。");
-        Key key=new Key(generation,id,run,epoch);Input previous=active.get(key);
+        Key key=new Key(generation,id,run,epoch,source,overlay);Input previous=active.get(key);
         if(previous!=null){
             if(previous.listeners>=8)throw new NotDispatched("这轮已有停手在处理，本次没有另发。");
             previous.listeners++;return previous.result.thenApply(value->value);

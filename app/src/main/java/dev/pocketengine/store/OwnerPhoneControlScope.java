@@ -1,12 +1,30 @@
 package dev.pocketengine.store;
 
 import java.util.Set;
+import dev.pocketengine.features.devices.DirectedPhoneTarget;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
 /** Separate zero-model owner input scope. Never accepted as an ordinary agent scope. */
 public final class OwnerPhoneControlScope {
     public static final String KEY="ownerPhoneControl", FORMAT="pocketworld.owner-phone-control.v1";
+    public static final String TARGET="manualPhoneTarget";
+    public static DirectedPhoneTarget target(JSONObject task)throws Exception{
+        JSONObject marker=task.optJSONObject(KEY);
+        return marker!=null&&marker.has(TARGET)?DirectedPhoneTarget.read(marker.getJSONObject(TARGET)):null;
+    }
+    static String preparationDigest(String id,long end,int tools,DirectedPhoneTarget target)throws Exception{
+        JSONObject request=new JSONObject().put("requestId",id).put("deadlineAt",end).put("toolLimit",tools);
+        if(target!=null)request.put(TARGET,target.view()); // No label; old generic request bytes are unchanged.
+        return TaskStore.capabilityFingerprint(request);
+    }
+    public static void requireSingleTarget(DirectedPhoneTarget target,JSONArray routes)throws Exception{
+        if(target==null)return;
+        if(routes.length()!=1)throw new SecurityException("只可使用准备时选定的一部手机");
+        JSONObject route=routes.getJSONObject(0);requireRoute(route);
+        if(!target.deviceId().equals(route.opt("targetDeviceId"))||!target.instanceId().equals(route.opt("instanceId")))
+            throw new SecurityException("手控范围不是原设备或实例，没有改用其他手机");
+    }
     private static final String SCOPE="pocketworld.owner-phone-control-scope.v1";
     private static final Set<String> TOOLS=Set.of("device_invoke_tool","device_operation_get");
     private OwnerPhoneControlScope() { }
@@ -33,6 +51,7 @@ public final class OwnerPhoneControlScope {
         long end=TaskExecutionScope.exactLong(scope,"deadlineAt",1,Long.MAX_VALUE);
         if(end!=TaskExecutionScope.exactLong(marker,"deadlineAt",1,Long.MAX_VALUE))throw new SecurityException("手控不能延长期限");
         int tools=TaskExecutionScope.exactInt(scope,"toolLimit",4,200);TaskExecutionScope.exactInt(scope,"toolsUsed",0,tools);
+        if(!preparationDigest(id,end,tools,target(task)).equals(marker.getString("requestDigest")))throw new SecurityException("原手控准备的对象、期限或额度已变化");
         if(tools!=TaskExecutionScope.exactInt(marker,"toolLimit",4,200))throw new SecurityException("手控不能补满额度");
         TaskExecutionScope.exactInt(scope,"modelCallLimit",0,0);TaskExecutionScope.exactInt(scope,"modelCallsUsed",0,0);TaskExecutionScope.exactLong(scope,"revision",1,Long.MAX_VALUE);
         JSONArray names=scope.getJSONArray("tools");Set<String> actual=new java.util.HashSet<>();for(int i=0;i<names.length();i++)actual.add(names.getString(i));

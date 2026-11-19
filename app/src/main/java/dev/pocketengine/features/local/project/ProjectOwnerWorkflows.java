@@ -47,7 +47,8 @@ public final class ProjectOwnerWorkflows {
         return source;
     }
     public JSONObject prepareCheckoutForOwner(String project,String request)throws Exception{return local.prepareDevelopmentCheckoutForOwner(project,request);}
-    private void requireOrdinaryFileOwner(String project,String checkout)throws Exception {
+    /** Native owner-read fence for the existing checkout, including an already captured path listing. */
+    public void requireOrdinaryFileOwner(String project,String checkout)throws Exception {
         ProjectBuildPlan.identity(project);ProjectBuildPlan.identity(checkout);JSONObject row=local.projectCheckoutForHost(checkout);
         if(!project.equals(row.getString("projectId"))||!ordinaryCheckout(row))throw new SecurityException("请选择此项目的普通私人副本");
     }

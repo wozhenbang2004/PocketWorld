@@ -376,6 +376,8 @@ public final class EngineApplication extends Application implements dev.pocketen
     // Weak keys and exact release confine it to this native controller's lifetime.
     private final java.util.Map<RunControl,TaskStore> privatePhoneStopOrigins=new java.util.WeakHashMap<>();
     private final dev.pocketengine.phone.OwnerPhoneStopInputs privatePhoneStopInputs=new dev.pocketengine.phone.OwnerPhoneStopInputs();
+    // The system notice remains independently usable if all in-app stop slots are occupied; no queued or automatic work.
+    private final dev.pocketengine.phone.OwnerPhoneStopInputs systemNoticeStopInputs=new dev.pocketengine.phone.OwnerPhoneStopInputs();
     private RunControl currentPhoneControl(String id){BackgroundRun run=id==null?null:backgroundRuns.get(id);return run!=null?run.control:id!=null&&id.equals(activeTaskId)?activeControl:null;}
     /** Snapshot for an already visible private task. Retained registry and local policy only: no TaskStore, service, PackageManager, helper, or physical phone call. */
     public JSONObject retainedPhoneSurface(String id,String run,int epoch,String requested,long displayedScopeRevision)throws Exception {
@@ -1910,28 +1912,89 @@ public final class EngineApplication extends Application implements dev.pocketen
         return stopOriginalPhoneRun(id,run,epoch,true);
     }
     public java.util.concurrent.CompletionStage<String> submitPrivatePhoneStop(String id,String run,int epoch) {
+        return submitShownPhoneStop(id,run,epoch,currentPhoneControl(id),false);
+    }
+    /** Only the already mounted Android main-screen overlay possesses its original control object. Not a Web or model command. */
+    public java.util.concurrent.CompletionStage<String> submitMainOverlayStop(String id,String run,int epoch,RunControl shown) {
+        return submitShownPhoneStop(id,run,epoch,shown,true);
+    }
+    private java.util.concurrent.CompletionStage<String> submitShownPhoneStop(String id,String run,int epoch,RunControl shown,boolean overlay) {
         long generation=bootstrap.generation();TaskStore originalStore=tasks;
-        return privatePhoneStopInputs.submit(generation,id,run,epoch,()->{
-            if(bootstrap.generation()!=generation||originalStore==null||tasks!=originalStore)
+        if(shown==null||shown!=currentPhoneControl(id)||!shown.matchesHostRun(id,run,epoch))
+            throw new IllegalStateException("眼前的原执行已变化，没有提交停手。");
+        return privatePhoneStopInputs.submit(generation,id,run,epoch,shown,overlay,()->{
+            if(bootstrap.generation()!=generation||originalStore==null||tasks!=originalStore||currentPhoneControl(id)!=shown)
                 throw new IllegalStateException("原执行宿主已变化，没有向后继工作发送停手。");
-            return stopPrivatePhoneFromOwner(id,run,epoch).toString();
+            try{return stopOriginalPhoneRun(id,run,epoch,true,shown,originalStore,generation).toString();}
+            catch(Exception unavailable){
+                // Preserve the overlay's pre-existing emergency stop for its exact in-memory controller only.
+                // A failed or stale queued submission is not grounds to stop a successor or infer journal/child cleanup.
+                if(!overlay||unavailable instanceof SecurityException||unavailable instanceof InterruptedException)throw unavailable;
+                synchronized(this){if(bootstrap.generation()!=generation||tasks!=originalStore||features==null||!features.ownsTaskStore(originalStore)||
+                        currentPhoneControl(id)!=shown||shown.recoveryOnly()||!shown.matchesHostRun(id,run,epoch))throw unavailable;}
+                shown.cancel();
+                return json("taskId",id,"runId",run,"epoch",epoch,"controlRequested",true,"originalControlCancelled",shown.isCancelled(),
+                        "stopJournal","unconfirmed","cleanupComplete",false,"budgetIncreased",false,
+                        "message","原控制器已收到停手，任务记录、在途操作和清理尚未核实。").toString();
+            }
+        });
+    }
+    /** Called only after the original service checked its immutable STOP action. This is never a Web, model or generic stop. */
+    public java.util.concurrent.CompletionStage<String> submitSystemNoticeStop(String id,String run,int epoch,RunControl source,
+                                                                              java.util.function.BooleanSupplier sameService) {
+        TaskStore store=tasks;long generation=bootstrap.generation();
+        if(store==null||!sameService.getAsBoolean()||source==null||source.recoveryOnly()||currentPhoneControl(id)!=source||!source.matchesHostRun(id,run,epoch))
+            throw new SecurityException("这条通知已经不属于原执行，未提交停手");
+        return systemNoticeStopInputs.submit(generation,id,run,epoch,source,false,()->{
+            java.util.function.BooleanSupplier live=()->sameService.getAsBoolean()&&tasks==store&&currentPhoneControl(id)==source&&source.matchesHostRun(id,run,epoch);
+            if(bootstrap.generation()!=generation||!live.getAsBoolean())throw new SecurityException("原通知已失效");
+            try{
+                String status=store.originalPhoneNoticeStopState(id,run,epoch);
+                if(status==null||bootstrap.generation()!=generation||!live.getAsBoolean())throw new SecurityException("原通知状态尚未核实");
+                if(status.matches("preparing|running|pausing|paused|awaiting_user|reconciling"))
+                    return stopOriginalPhoneRun(id,run,epoch,true,source,store,generation,sameService).toString();
+                // Never convert an unrecognized lifecycle into a finished task or a fallback.
+                if(!status.matches("completed|failed|cancelled|interrupted|needs_confirmation"))
+                    throw new SecurityException("原通知的执行状态尚未核实");
+                // An ended original row can still have a retained controller. Its cancel is not proof about the business result.
+            }catch(SecurityException|InterruptedException rejected){throw rejected;}
+            catch(Exception unavailable){
+                if(bootstrap.generation()!=generation||!live.getAsBoolean())throw unavailable;
+                // The original STOP's existing in-memory fallback cannot infer a journal write or touch any child.
+            }
+            if(!live.getAsBoolean())throw new SecurityException("原通知服务已退场");
+            source.cancel();
+            return json("taskId",id,"runId",run,"epoch",epoch,"originalControlCancelled",source.isCancelled(),
+                    "controlRequested",true,"stopJournal","unconfirmed","cleanupComplete",false,"budgetIncreased",false).toString();
         });
     }
     private JSONObject stopOriginalPhoneRun(String id,String run,int epoch,boolean ownerUi)throws Exception {
+        return stopOriginalPhoneRun(id,run,epoch,ownerUi,null,null,-1L);
+    }
+    private JSONObject stopOriginalPhoneRun(String id,String run,int epoch,boolean ownerUi,RunControl expected,TaskStore expectedStore,long expectedGeneration)throws Exception {
+        return stopOriginalPhoneRun(id,run,epoch,ownerUi,expected,expectedStore,expectedGeneration,null);
+    }
+    private JSONObject stopOriginalPhoneRun(String id,String run,int epoch,boolean ownerUi,RunControl expected,TaskStore expectedStore,long expectedGeneration,
+                                           java.util.function.BooleanSupplier sameService)throws Exception {
+        if(sameService!=null&&!sameService.getAsBoolean())throw new SecurityException("原通知服务已退场");
         if(tasks!=null&&Thread.holdsLock(tasks))throw new IllegalStateException("related_task_capture_requires_unlocked_tasks");
         RunControl original=originalPhoneControl(id,run,epoch,true);TaskStore store=tasks;FeatureHost host=features;
+        if(expected!=null&&(expected!=original||store!=expectedStore||bootstrap.generation()!=expectedGeneration))
+            throw new SecurityException("原停手控制或任务库已替换，未作用于后继执行");
         // Native lifecycle flags only; full audit is unrelated to stopping this retained run.
         Runnable teamStops=null;
         TaskStore.PhoneStopBatch batch;
         try{
             if(!original.isCancelled()&&!store.cancellationContextSnapshot(id).optBoolean("cancelRequested"))try{teamStops=host.prepareOriginalPhoneTeamStops(id,run,epoch);}catch(Exception unavailable){/* Original child scope remains unknown below. */}
             synchronized(store){
+                if(expected!=null&&(tasks!=store||features!=host||currentPhoneControl(id)!=expected||sameService!=null&&!sameService.getAsBoolean()))
+                    throw new SecurityException("原停手来源已经改变，没有登记到后继工作");
                 if(original.isCancelled()||store.cancellationContextSnapshot(id).optBoolean("cancelRequested"))teamStops=null;
                 batch=store.recordOriginalPhoneStopBatch(id,run,epoch,original);
             }
         }catch(android.database.sqlite.SQLiteException unavailable){
             synchronized(this){
-                if(!ownerUi||store!=tasks||host!=features||!host.ownsTaskStore(store)||privatePhoneStopOrigins.get(original)!=store||
+                if(!ownerUi||sameService!=null&&!sameService.getAsBoolean()||store!=tasks||host!=features||!host.ownsTaskStore(store)||privatePhoneStopOrigins.get(original)!=store||
                         control(id)!=original||original.recoveryOnly()||!original.matchesHostRun(id,run,epoch))throw unavailable;
             }
             // A replacement cannot inherit this object. Do not infer a durable stop or guess the scope of descendants.

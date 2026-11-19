@@ -2,6 +2,7 @@ package dev.pocketengine.features.memory;
 
 import dev.pocketengine.core.ToolOutcome;
 import dev.pocketengine.features.capabilities.AgentPreferencePort;
+import dev.pocketengine.store.SettingsStore;
 import dev.pocketengine.store.TaskStore;
 import java.util.HashMap;
 import java.util.Map;
@@ -113,31 +114,33 @@ public final class TaskMemoryHistory {
             row.remove("nativeTraceCallId");row.remove("nativeAssistantSource");row.remove("memoryContext");row.remove("memoryReference");row.remove("memoryContextRetired");row.remove("ownerMessageRevision");row.remove("ownerSourceRefs");row.remove("ownerSourceRefsUnavailable");row.remove("ownerPreviewRefs");row.remove("ownerPreviewRefsUnavailable");row.remove("ownerObjectRefs");row.remove("ownerObjectRefsUnavailable");row.remove("ownerRecallFeedback");row.remove("hostObservation");row.remove("toolOutputCapture");
         }return copy;
     }
-    /** Only this turn's native personal-profile admission can retain an old preference value.
+    /** Only the actual revision admitted into this turn can prove a prior settings read is still current.
      * The separate MemoryBook reading switch is not the explicit-defaults control. */
-    public static boolean privatePreferencesProvided(JSONObject validation){
+    public static long admittedPreferenceRevision(JSONObject validation){
         JSONObject memory=validation==null?null:validation.optJSONObject("personalMemory");
         Object revision=validation==null?null:validation.opt("personalProfileRevision");
         return memory!=null&&Boolean.TRUE.equals(memory.opt("conversationEnabled"))
-                &&(revision instanceof Integer||revision instanceof Long)&&((Number)revision).longValue()>0;
+                &&(revision instanceof Integer||revision instanceof Long)&&((Number)revision).longValue()>0?((Number)revision).longValue():0L;
     }
 
     public static boolean isPrivatePreferenceTool(String name){
         return AgentPreferencePort.LIST.equals(name)||AgentPreferencePort.SET.equals(name);
     }
     /** Model-request copy only. Keep the original local action, receipt and owner messages. */
-    public static JSONArray wireMessages(JSONArray history,boolean privatePreferencesProvided)throws Exception{
+    public static JSONArray wireMessages(JSONArray history,long admittedRevision)throws Exception{
         JSONArray wire=wireMessages(history);
-        if(privatePreferencesProvided)return wire;
-        Map<String,String> privateCalls=new HashMap<>();
+        Map<String,String> privateCalls=new HashMap<>();java.util.Set<String> consumed=new java.util.HashSet<>();
         for(int i=0;i<wire.length();i++){
             JSONObject row=wire.getJSONObject(i);String role=row.optString("role");
             if("assistant".equals(role)){
-                privateCalls.clear();
+                privateCalls.clear();consumed.clear();java.util.Set<String> seen=new java.util.HashSet<>();
                 JSONArray calls=row.optJSONArray("tool_calls");if(calls==null)continue;
                 for(int j=0;j<calls.length();j++){
-                    JSONObject call=calls.getJSONObject(j),fn=call.getJSONObject("function");
-                    String id=call.getString("id"),name=fn.getString("name");
+                    JSONObject call=calls.optJSONObject(j);if(call==null)continue;
+                    JSONObject fn=call.optJSONObject("function");String name=fn==null?null:fn.optString("name");
+                    String id=call.opt("id") instanceof String?(String)call.opt("id"):"";
+                    if(!id.isEmpty()&&!seen.add(id)&&(privateCalls.containsKey(id)||isPrivatePreferenceTool(name)))
+                        throw new SecurityException("历史偏好调用身份重复，未向模型提供该历史");
                     if(!isPrivatePreferenceTool(name))continue;
                     // The native history validator accepts a legacy function with no type.
                     // Do not let omission bypass withdrawal or invent a type for that record.
@@ -153,14 +156,17 @@ public final class TaskMemoryHistory {
                 // Other calls in a mixed batch keep their native identities and visible arguments.
                 if(!privateCalls.isEmpty())wire.put(i,new JSONObject().put("role","assistant").put("content",PREFERENCES_WITHHELD).put("tool_calls",calls));
             }else if("tool".equals(role)){
-                String id=row.optString("tool_call_id");String name=privateCalls.remove(id);
-                if(name!=null)wire.put(i,new JSONObject().put("role","tool").put("tool_call_id",id)
-                        .put("content",withheldPreferenceReceipt(row,name).toString()));
-            }
+                String id=row.optString("tool_call_id");String name=privateCalls.get(id);
+                if(name!=null){
+                    if(!consumed.add(id))throw new SecurityException("历史偏好回执身份重复，未向模型提供该历史");
+                    wire.put(i,new JSONObject().put("role","tool").put("tool_call_id",id)
+                            .put("content",preferenceWireReceipt(row,name,admittedRevision).toString()));
+                }
+            }else privateCalls.clear();
         }
         return wire;
     }
-    private static JSONObject withheldPreferenceReceipt(JSONObject row,String name)throws Exception{
+    private static JSONObject preferenceWireReceipt(JSONObject row,String name,long admittedRevision)throws Exception{
         JSONObject receipt;
         try{receipt=new JSONObject(row.getString("content"));}catch(org.json.JSONException unreadable){receipt=new JSONObject();}
         // ToolResultDelivery attaches the host's original outcome *after* sanitizing the body.
@@ -178,7 +184,26 @@ public final class TaskMemoryHistory {
         if(AgentPreferencePort.SET.equals(name)&&ToolOutcome.Kind.SUCCESS.value.equals(outcome.opt("kind"))
                 &&Boolean.TRUE.equals(receipt.opt("ok"))&&Boolean.TRUE.equals(receipt.opt("accepted"))
                 &&"agent_preference_saved".equals(receipt.opt("code")))safe.put("code","agent_preference_saved");
-        return safe;
+        // SET carries complete previous/current tables. Even a successful current SET is an
+        // effect receipt, not authority to re-provide the replaced defaults. The freshly
+        // admitted profile already supplies current defaults. LIST can expose only a real
+        // successful snapshot at this exact revision; never use a stale or legacy receipt.
+        Object rev=receipt.opt("revision");
+        if(!nativeOutcome||!AgentPreferencePort.LIST.equals(name)||admittedRevision<=0||!(rev instanceof Long||rev instanceof Integer)
+                ||((Number)rev).longValue()!=admittedRevision||!Boolean.TRUE.equals(receipt.opt("ok"))||!Boolean.TRUE.equals(receipt.opt("enabled"))
+                ||!ToolOutcome.Kind.SUCCESS.value.equals(outcome.opt("kind")))return safe;
+        JSONObject choices=SettingsStore.agentPreferenceChoices(),values=new JSONObject();
+        JSONObject actual=receipt.optJSONObject("choices");
+        if(actual==null||actual.length()!=choices.length())return safe;
+        for(var keys=choices.keys();keys.hasNext();){
+            String key=keys.next();JSONArray offered=actual.optJSONArray(key),expected=choices.getJSONArray(key);Object value=receipt.opt(key);boolean allowed=false;
+            if(offered==null||offered.length()!=expected.length())return safe;
+            for(int n=0;n<expected.length();n++){Object option=expected.get(n);if(!option.equals(offered.opt(n)))return safe;if(option.equals(value))allowed=true;}
+            if(!allowed)return safe;
+            values.put(key,value);
+        }
+        values.put("enabled",true).put("revision",admittedRevision).put("choices",choices).put("ok",true).put(ToolOutcome.KEY,outcome);
+        return values;
     }
     /** F012: only a validated private carrier exactly matching its public tool receipt is
      * ignored for wire comparison. Every real body/public-locator/retirement change remains pinned. */

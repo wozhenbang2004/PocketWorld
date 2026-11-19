@@ -135,6 +135,9 @@ class DirectoryTree:
 def _plan(manifest):
     source = manifest["source"]
     declared,files = manifest["directories"],manifest["files"]
+    if "selectedFile" in source:
+        from windows_git_one_copy import validate_manifest
+        validate_manifest(source,declared,files)
     if (not isinstance(declared,list) or not isinstance(files,list) or len(declared)>=MAX_DIRS
             or len(declared)!=source["directories"] or not 1<=len(files)<=MAX_FILES or len(files)!=source["files"]): _bad()
     dirs,rows,children,total = set(),{},{"":set()},0

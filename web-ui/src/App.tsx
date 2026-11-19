@@ -1533,7 +1533,12 @@ export default function App(){
          void openRelatedWorkspace('devices',undefined,()=>setSentPhoneFocus({...original,purpose:'partner_connection',navigation:navigationWindow.current}));
        }}/>}
      {taskOpen&&openedTaskId.current===task.id&&!taskOpening&&task.raw?.ownerPhoneControl?.format==='pocketworld.owner-phone-control.v1'&&task.raw?.actorId==='owner'&&task.raw?.spaceId==='private'&&<>
-      {!task.raw?.runId&&can('deviceTaskScope.open')&&<DeviceTaskScopeWorkspace key={'manual-scope:'+task.id} taskId={task.id} run={act} autoOpen={!asArray(task.raw?.deviceSourceScope?.routes).length} onBackChange={registerDeviceScopeBack} onSaved={()=>loadTaskReview(task.id)} onOpenDevices={()=>void openRelatedWorkspace('devices')}/>}
+      {!task.raw?.runId&&can('deviceTaskScope.open')&&<DeviceTaskScopeWorkspace key={'manual-scope:'+task.id} taskId={task.id} run={act} directedManual={task.raw.ownerPhoneControl.manualPhoneTarget}
+         autoOpen={!task.raw.ownerPhoneControl.manualPhoneTarget&&!asArray(task.raw?.deviceSourceScope?.routes).length} onBackChange={registerDeviceScopeBack} onSaved={()=>loadTaskReview(task.id)}
+         onOpenDevices={()=>{const p=task.raw!.ownerPhoneControl.manualPhoneTarget;if(!p){void openRelatedWorkspace('devices');return;}
+           if(typeof p.deviceId!=='string'||typeof p.instanceId!=='string'||typeof p.certificateFingerprint!=='string'||!/^pw1_[a-f0-9]{64}$/.test(p.deviceId)||!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(p.instanceId)||!/^[a-f0-9]{64}$/.test(p.certificateFingerprint)){setLocalError('原手控设备身份无法核对，未打开其他伙伴。');return;}
+           void openRelatedWorkspace('devices',undefined,()=>setSentPhoneFocus({taskId:task.id,deviceId:p.deviceId,instanceId:p.instanceId,certificateFingerprint:p.certificateFingerprint,purpose:'partner_connection',navigation:navigationWindow.current}));
+         }}/>}
       {can('phoneControl.open')&&<ConversationModelPickerVisibility key={'manual:'+task.id}>{pickerVisible=><PhoneControlWorkspace taskId={task.id} hasScope={asArray(task.raw?.deviceSourceScope?.routes).length===1} started={!!task.raw?.runId} visible={taskLayer==='overview'&&!pickerVisible&&!phoneViewerObscured} run={act} onChanged={()=>loadTaskReview(task.id)}/>}</ConversationModelPickerVisibility>}
      </>}
      {taskOpen && openedTaskId.current===task.id && !taskOpening && isPrivateLocalPhone(task) && can('phone.pauseNote.read') && can('phone.pauseNote.continue') &&

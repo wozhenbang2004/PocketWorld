@@ -315,6 +315,8 @@ public final class PairingCoordinator {
         private final PairingCoordinator owner;private final JSONObject record;
         private Candidate(PairingCoordinator owner,JSONObject record){DeviceProtocol.requireProfile(record.optJSONObject("transcript"));this.owner=owner;this.record=copy(record);}
         public String inviteId(){return record.optString("inviteId");}public String candidateDigest(){return record.optString("candidateDigest");}public String deviceId(){return record.optString("peerDeviceId");}public String certificateFingerprint(){return record.optString("peerFingerprint");}public long expiresAt(){return record.optLong("expiresAt");}
+        // SQL candidate snapshot only. A signed original need not still have a live completion window.
+        boolean ownerConfirmationSaved(){return "confirmed".equals(record.optString("state"));}
         public JSONObject display()throws Exception{JSONObject transcript=record.getJSONObject("transcript");return new JSONObject().put("inviteId",inviteId()).put("inviterDeviceId",transcript.getString("inviterDeviceId")).put("inviterFingerprint",transcript.getString("inviterFingerprint")).put("joinerDeviceId",deviceId()).put("joinerFingerprint",certificateFingerprint()).put("expiresAt",expiresAt());}
     }
     /** Native two-fingerprint confirmation pins the next mTLS lane; it grants no business permission. */

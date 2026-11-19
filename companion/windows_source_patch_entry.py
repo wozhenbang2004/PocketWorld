@@ -33,7 +33,7 @@ def detail(ctx,op,row,locked):
                 f"\n原文件 SHA-256：{f['baseSha']}\n选定 SHA-256：{f['currentSha']}\n完整补丁 SHA-256：{f['patchSha']}",[],retire=locked)
 
 
-def browse(ctx,op,locked,observe=None):
+def browse(ctx,op,locked,observe=None,*,draft_only=False,draft_settings=None):
     from windows_added_source import records as additions
     from windows_added_source_entry import detail as added_detail
     from windows_removed_source import records as removals
@@ -41,14 +41,14 @@ def browse(ctx,op,locked,observe=None):
     from windows_owner_draft import records as drafts
     from windows_owner_draft_entry import detail as draft_detail
     rows=[]; unavailable=False
-    for reader,kind in ((records,"tracked"),(additions,"added"),(removals,"removed"),(drafts,"draft")):
+    for reader,kind in (((drafts,"draft"),) if draft_only else ((records,"tracked"),(additions,"added"),(removals,"removed"),(drafts,"draft"))):
         try: rows.extend((kind,r) for r in reader(ctx,op).values())
         except Exception: unavailable=True  # A damaged/newer bank never hides valid results in the other one.
     rows.sort(key=lambda pair:pair[1]["at"],reverse=True)
     if not rows:
         if not locked():
             chosen=_dialog("没有可核实的单文件补丁","有一组原记录不可读取；不会在其他目录中寻找替代品。" if unavailable else
-                           "尚无可用单项；已经另存的多文件原件可单独查看。",
+                           "还没有这份单文件副本的可核实草稿补丁。" if draft_only else "尚无可用单项；已经另存的多文件原件可单独查看。",
                            [("sets","查看这个副本的多文件补丁")] if observe else [],retire=locked)
             if chosen=="sets" and not locked():
                 from windows_patch_set_entry import menu
@@ -74,7 +74,8 @@ def browse(ctx,op,locked,observe=None):
             menu(ctx,op,locked,observe); return
         if pick is not None and not locked():
             kind,r=rows[pick[1]]
-            {"tracked":detail,"added":added_detail,"removed":removed_detail,"draft":draft_detail}[kind](ctx,op,r,locked)
+            if kind=="draft": draft_detail(ctx,op,r,locked,settings=draft_settings)
+            else: {"tracked":detail,"added":added_detail,"removed":removed_detail}[kind](ctx,op,r,locked)
         return
 
 

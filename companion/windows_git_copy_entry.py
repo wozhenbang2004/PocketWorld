@@ -1,10 +1,11 @@
 """Machine-owner local artifact UI. No remote endpoints or project worker."""
 import threading
+import ntpath
 import time
 
 from desktop_owner_entry import _dialog
 from platform_backend import PlatformError
-from windows_git_copy import BANK, CopyBlocked, inspect, plan, save, slots, source_facts
+from windows_git_copy import BANK, FILE_BANK, CopyBlocked, inspect, plan, save, slots, source_facts
 from windows_source_publisher import disk
 from windows_source_inventory import compare, reveal
 from windows_source_diff import selected as compare_selected
@@ -14,11 +15,13 @@ import windows_source_patch_entry as patches
 def show_receipt(ctx,evidence,locked,settings=None):
     if locked(): return
     facts, state = evidence["source"],evidence["status"]
-    title = "原副本制作回执"
+    leaf=facts.get("selectedFile"); title="单个文件的独立副本回执" if leaf else "原副本制作回执"
     source_label=facts["environmentId"]+(" / "+facts["selectedProject"]["path"] if "selectedProject" in facts else "")
     message = f"{source_label} · 提交 {facts['commit'][:12]} · {facts['files']} 个文件"
+    if leaf: message+="\n准确选材："+leaf["path"]+"。只有这一件和必要的上级文件夹，不是整仓。"
     if state=="saved":
-        message += "\n原发布回执已核实全部文件与目录，当前路径仍是原目录身份。若你后来编辑过，不能据此断言内容未变。"
+        message += ("\n原保存回执已核实这份文件；只有再次核对原文件身份和字节通过才会显示正文。" if leaf else
+                    "\n原发布回执已核实全部文件与目录，当前路径仍是原目录身份。若你后来编辑过，不能据此断言内容未变。")
     elif state=="saved_original_unavailable":
         message += "\n原发布时核实成功；现在未能重新绑定那个原目录。不会把同名目录当成果。"
     elif state=="published_unconfirmed":
@@ -32,7 +35,11 @@ def show_receipt(ctx,evidence,locked,settings=None):
     if evidence.get("path"): message += "\n本机位置："+evidence["path"]
     actions = [("identity","查看原操作和内容编号")]
     if state=="saved":
-        if evidence.get("itemsRecorded"):
+        if evidence.get("itemsRecorded") and leaf:
+            actions.insert(0,("one-text","查看已保存的这份原文\n核对这一个本机文件，不依赖原仓库在线。"))
+            if settings and leaf["mode"]=="100644" and leaf["bytes"]<=32768:
+                actions.insert(1,("draft","从这份准确原文件起草补丁\n只编辑临时草稿，再决定是否另存。"))
+        elif evidence.get("itemsRecorded"):
             if settings:
                 actions.insert(0,("draft","从原文件起草补丁\n只编辑一份临时文本；原仓库与副本保持不变。"))
             actions[:0] = [("open","在文件资源管理器中打开原副本\n定位原文件夹中的一个原条目，不打开文件或运行项目。"),
@@ -41,14 +48,28 @@ def show_receipt(ctx,evidence,locked,settings=None):
     actions.append(("patches","已另存的单文件变更\n只查这次副本的本机补丁原件，不需要当前源仓库。"))
     chosen = _dialog(title,message,actions,retire=locked)
     if locked(): return
-    if chosen=="open":
+    if chosen=="one-text":
+        from desktop_phone_goal_text import source_text
+        from windows_git_one_copy import saved
+        def original_view():
+            try:
+                if locked(): return False
+                ctx.check_current_pointer()
+                return ctx._read(ctx.home,"install-state.json",32768)==ctx.install_state
+            except Exception: return False
+        try: text=saved(ctx,evidence["operation"],lambda:not original_view())
+        except Exception:
+            if original_view(): _dialog("未核实所保存的原文","原文件身份或字节不符；不会打开同名替代物、上级目录或仓库现版。",[],retire=locked)
+            return
+        source_text(original_view,"已保存的单文件原文","本机只读 · "+leaf["path"],text,review=True)
+    elif chosen=="open":
         try: reveal(ctx,evidence["operation"],locked)
         except (AttributeError,OSError,ValueError,TypeError,PlatformError):
             _dialog("未打开原副本","没有同时核实原目录、用于定位的原成员和本机系统文件夹入口。不会改开上级目录、同名替代物或执行文件。",[],retire=locked)
     elif chosen=="draft":
         from windows_owner_draft_entry import start
-        start(ctx,settings,evidence["operation"],locked,_observe)
-    elif chosen=="patches": patches.browse(ctx,evidence["operation"],locked,_observe)
+        start(ctx,settings,evidence["operation"],locked,_observe,only=leaf["path"] if leaf else None)
+    elif chosen=="patches": patches.browse(ctx,evidence["operation"],locked,None if leaf else _observe,draft_only=leaf is not None,draft_settings=settings)
     elif chosen=="compare": _compare(ctx,evidence["operation"],locked,settings)
     elif chosen=="identity":
         _dialog("原副本编号",f"操作：{evidence['operation']}\n原提交：{facts['commit']}\n原始内容清单：{facts['content']}\n不含执行权、手机授权或 Git 历史。",[],retire=locked)
@@ -181,7 +202,9 @@ def browse(ctx,locked,settings=None):
         for n,r in rows[page*4:page*4+4]:
             source = r["source"]
             stamp = time.strftime("%m-%d %H:%M",time.localtime(r["at"]/1000))
-            name=(source["environmentId"]+(" / "+source["selectedProject"]["path"] if "selectedProject" in source else "")).replace("&","&&")
+            label=source["environmentId"]+(" / "+source["selectedProject"]["path"] if "selectedProject" in source else "")
+            if "selectedFile" in source: label+=" · 单文件 "+source["selectedFile"]["path"]
+            name=label.replace("&","&&")
             choices.append((("item",n),f"{name} · {source['commit'][:12]}\n{stamp} · 查看这次原制作回执"))
         if page: choices.append(("previous","上一页"))
         if (page+1)*4<len(rows): choices.append(("next","下一页"))
@@ -196,8 +219,8 @@ def browse(ctx,locked,settings=None):
 
 
 def confirm_copy(ctx,settings,source,locked):
-    op,path = plan(ctx,source)
-    try: rows = slots(ctx)
+    op,path = plan(ctx,source); leaf=source.get("selectedFile")
+    try: rows=slots(ctx,one=leaf is not None)
     except (OSError,ValueError,TypeError,PlatformError):
         _dialog("本机回执暂不可用","没有制作副本。",[],retire=locked); return
     for _,row in rows:
@@ -206,9 +229,9 @@ def confirm_copy(ctx,settings,source,locked):
             except (OSError,ValueError,TypeError,PlatformError):
                 _dialog("原回执不能核对","不会再制作一份或改用别的目录。",[],retire=locked); return
             show_receipt(ctx,result,locked,settings); return
-    if len(rows)>=BANK:
-        _dialog("本机已保留八次原制作记录","没有覆盖已有副本、清除收据或开始新制作。",[],retire=locked); return
-    contents = source["committedContentReview"]
+    if len(rows)>=(FILE_BANK if leaf else BANK):
+        _dialog("这一类副本已保留八次原制作记录","没有挤占另一类副本的名额、覆盖旧物或开始新制作。",[],retire=locked); return
+    contents={"files":1,"logicalBytes":leaf["bytes"]} if leaf else source["committedContentReview"]
     try: space = disk(ctx,source_facts(source))
     except (OSError,ValueError,TypeError,PlatformError):
         _dialog("无法核对目标磁盘的可用空间","仅检查这台电脑固定的私有成果位置；没有开始制作。",[],retire=locked); return
@@ -218,7 +241,11 @@ def confirm_copy(ctx,settings,source,locked):
     text = (f"{name} · {source['commit'][:12]}\n{contents['files']} 个文件，{contents['logicalBytes']} 字节。"
             f"\n新建本机位置：{path}\n当前可用 {space['available']/1073741824:.1f} GiB，预计需约 {space['estimate']/1048576:.1f} MiB（含余量，不预留）。\n只保存原提交中的源码文件，以及供本机核对的路径、文件身份和摘要清单。没有 .git 历史、未提交改动、运行环境或手机权限。"
             "不会改源仓库、覆盖已有目录、执行代码或发送文件。")
-    if _dialog("要保存这份独立源码副本吗？",text,[("save","确认新建这个本机副本")],retire=locked)!="save" or locked(): return
+    if leaf:
+        exact_path=ntpath.join(path,*leaf["path"].split("/"))
+        text=(f"仅 {leaf['path']} · {leaf['bytes']:,} 字节\n原提交：{source['commit']}\n原 Git 文件对象：{leaf['object']}"
+              f"\n新私有文件：{exact_path}\n只新建这一份文件和必要的上级目录，不含其他仓库文件，不覆盖、执行或向手机发送。")
+    if _dialog("只新建这份文件的本机副本？" if leaf else "要保存这份独立源码副本吗？",text,[("save","确认新建这个本机副本")],retire=locked)!="save" or locked(): return
     stopped,done = threading.Event(),threading.Event()
     result,auto_finish = {},False
     expires = time.monotonic()+300

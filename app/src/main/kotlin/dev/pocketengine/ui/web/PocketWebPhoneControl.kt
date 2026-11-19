@@ -60,16 +60,17 @@ internal class PocketWebPhoneControl(
             done(JSONObject().put("closed", true).put("stopRequested", true).put("remoteStopVerified", false), null); return
         }
         if (action == "phoneControl.prepare") {
-            fields(input, "requestId", "deadlineAt", "toolLimit")
+            fields(input, "requestId", "deadlineAt", "toolLimit", "manualPhoneTarget")
+            val target = if(input.has("manualPhoneTarget")) dev.pocketengine.features.devices.DirectedPhoneTarget.read(input.getJSONObject("manualPhoneTarget")) else null
             val id = text(input, "requestId", 36); val deadline = integer(input, "deadlineAt", 1, 9_007_199_254_740_991L); val tools = integer(input, "toolLimit", 4, 200).toInt()
             val epoch = generation; val owner = controller.webWindowTicket()
             fun current() = epoch == generation && owner == controller.webWindowTicket() && controller.webPrivateOwnerVisible() && preparationVisible()
             check(current()) { "请在设备页准备手控" }; check(busy.compareAndSet(false, true)) { "请等待原准备回执" }
             try { controller.runDeviceWorkspaceWork(Runnable {
-                val result = runCatching { controller.prepareOwnerPhoneControl(id, deadline, tools, ::current) }
+                val result = runCatching { controller.prepareOwnerPhoneControl(id, deadline, tools, target, ::current) }
                 main.post { busy.set(false)
                     if (!current()) done(null, "准备结果请在原编号核对；没有自动再次创建或启动。")
-                    else result.fold({ done(JSONObject().put("taskId", it.getString("id")).put("prepared", true).put("taskStarted", false), null) }, { done(null, it.message ?: "准备回执尚未确认") })
+                    else result.fold({ done(JSONObject().put("taskId", it.getString("id")).put("manualPhoneTarget", it.getJSONObject("ownerPhoneControl").optJSONObject("manualPhoneTarget")).put("prepared", true).put("taskStarted", false), null) }, { done(null, it.message ?: "准备回执尚未确认") })
                 }
             }) } catch (failure: Exception) { busy.set(false); done(null, failure.message ?: "准备队列不可用") }; return
         }

@@ -108,7 +108,7 @@ public final class PhoneRunService extends Service {
         finally{queuedOwnerStep.compareAndSet(h,null);}
     }
     private static final ExecutorService CLEANUP=Executors.newSingleThreadExecutor(r->{Thread thread=new Thread(r,"pocket-display-cleanup");thread.setDaemon(true);return thread;});
-    private RunControl ownerControl;
+    private volatile RunControl ownerControl;
     private RunControl cancellationOwner;
     private Runnable cancellationAction;
     private int runningEpoch,lastStartId;
@@ -164,7 +164,8 @@ public final class PhoneRunService extends Service {
         String id=intent.getStringExtra("taskId");
         BackgroundPhoneRun backgroundRun=id==null?null:backgroundRuns.get(id);
         if(backgroundRun!=null){
-            if(PhoneNotificationControls.handles(intent.getAction())){PhoneNotificationControls.dispatch(app,intent,backgroundRun.runningId,backgroundRun.runningRunId,backgroundRun.runningEpoch,backgroundRun.ownerControl);return START_NOT_STICKY;}
+            if(PhoneNotificationControls.handles(intent.getAction())){PhoneNotificationControls.dispatch(app,intent,backgroundRun.runningId,backgroundRun.runningRunId,backgroundRun.runningEpoch,backgroundRun.ownerControl,
+                    ()->!destroyed&&backgroundRuns.get(id)==backgroundRun);return START_NOT_STICKY;}
             if(dev.pocketengine.features.devices.DeviceNotificationControls.handles(intent.getAction())){dev.pocketengine.features.devices.DeviceNotificationControls.dispatch(app,intent,backgroundRun.runningId,backgroundRun.runningRunId,backgroundRun.runningEpoch,backgroundRun.ownerControl);return START_NOT_STICKY;}
             if(CONTINUE.equals(intent.getAction())||DEVICE_GOAL_CONTINUE.equals(intent.getAction())){backgroundRun.continueOriginal(intent,startId);return START_NOT_STICKY;}
             if(DEVICE_GOAL_CLOSE_RESULT.equals(intent.getAction())){backgroundRun.closeReviewedDeviceResult(intent,startId);return START_NOT_STICKY;}
@@ -177,7 +178,9 @@ public final class PhoneRunService extends Service {
         if(dev.pocketengine.features.devices.DeviceNotificationControls.handles(intent.getAction())){dev.pocketengine.features.devices.DeviceNotificationControls.dispatch(app,intent,runningId,runningRunId,runningEpoch,ownerControl);if(runningId==null)settleForegroundOwnership(startId);return START_NOT_STICKY;}
         if(PhoneNotificationControls.handles(intent.getAction())){
             if(gatewayParent!=null||gatewayOnly!=null)return START_NOT_STICKY;
-            PhoneNotificationControls.dispatch(app,intent,runningId,runningRunId,runningEpoch,ownerControl);
+            RunControl shown=ownerControl;String task=runningId;
+            PhoneNotificationControls.dispatch(app,intent,task,runningRunId,runningEpoch,shown,
+                    ()->!destroyed&&shown!=null&&shown==ownerControl&&task!=null&&task.equals(runningId));
             if(runningId==null)settleForegroundOwnership(startId);return START_NOT_STICKY;
         }
         if(START_GATEWAY.equals(intent.getAction())){startGatewayOnly(intent,startId);return START_NOT_STICKY;}

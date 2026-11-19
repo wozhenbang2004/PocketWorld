@@ -49,8 +49,14 @@ const pairConclusion = (state: unknown): string => {
     default: return '';
   }
 };
-const originalPairProgress = (candidate: Data): string => {
+const ownerWindowEnded = (candidate: Data, now: number) => !!candidate.localOwnerWindow &&
+  (candidate.localOwnerWindow === 'review_closed' || candidate.localOwnerWindow === 'completion_closed' || candidate.expiresAt <= now);
+const originalPairProgress = (candidate: Data, now = Date.now()): string => {
   const terminal = pairConclusion(candidate.state); if (terminal) return terminal;
+  if (ownerWindowEnded(candidate, now)) {
+    const recorded = (candidate.localOwnerWindow === 'completion_closed' || candidate.localOwnerWindow === 'completion_open') ? '本机已保存原身份与范围确认' : '本机已收到这份申请，尚未确认';
+    return recorded + (candidate.expiresAt <= now ? '；原邀请已到期。' : '；原邀请窗口已关闭。') + '原申请不能在这里继续，不代表对方拒绝。';
+  }
   if (candidate.joiningOriginal === true) {
     switch (candidate.state) {
       case 'waiting_remote_confirmation': return '上次回执显示邀请方收到了这份申请，当时还没有机主确认。对方确认后可在这里继续原配对。';
@@ -372,7 +378,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     const captured = item?.phoneActionScope ? item.actions.capturedAt : snapshot?.taskActions?.[task.id]?.capturedAt;
     return [captured + PHONE_ACTION_WINDOW_MS, item?.phoneActionScope?.executionDeadline ?? task.raw.deviceExecutionScope?.deadline, grant?.expiresAt];
   });
-  const nextExpiry = Math.min(...[validUntil, ...actionExpiries, ...rows(waitingPhones?.rows).map(row=>row.sourceIdentity?.expiresAt), ...rows(peer?.receivedGrantScopes).map(row => row.expiresAt), ...rows(peer?.grantScopes).map(row => row.expiresAt)]
+  const nextExpiry = Math.min(...[validUntil, ...actionExpiries, ...rows(waitingPhones?.rows).map(row=>row.sourceIdentity?.expiresAt), ...rows(snapshot?.pendingPairings).filter(row => row.localOwnerWindow).map(row => row.expiresAt), ...rows(peer?.receivedGrantScopes).map(row => row.expiresAt), ...rows(peer?.grantScopes).map(row => row.expiresAt)]
     .filter(t => Number.isSafeInteger(t) && t > now));
   const [clockRevision, tickClock] = useState(0);
   useEffect(() => {
@@ -394,15 +400,16 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   // must not be hidden behind an older identity-only description.
   const identityOnlyHere = lastIdentityOnly && !rows(peer?.receivedGrantScopes).some(row => row.receivedScope === true &&
     Number.isSafeInteger(row.expiresAt) && row.expiresAt > now && strings(row.capabilities).some(method => method === 'task.submitGoal' || method === 'tool.invoke'));
-  const prepareDeviceGoal = () => {
+  const openDirectedPhone = (destination:'work'|'manual') => {
     if (!peer || selectedPeer.current !== peer.deviceId || retired(peer)) return;
     if (!phonePeer || desktopPeer || identityOnlyHere || !/^pw1_[a-f0-9]{64}$/.test(peer.deviceId) ||
       typeof peer.instanceId !== 'string' || !peer.instanceId || !/^[a-f0-9]{64}$/.test(peer.certificateFingerprint || '')) {
       setError('没有能锁定到这部手机的工作范围。没有创建任务，也没有换成其他设备。'); return;
     }
     setWorkPhone({ deviceId: peer.deviceId, instanceId: peer.instanceId, certificateFingerprint: peer.certificateFingerprint, label: name(peer) });
-    setForm('work');
+    setForm(destination);
   };
+  const prepareDeviceGoal = () => openDirectedPhone('work');
   const prepareWindowsWorkspace = () => {
     if (!peer || !desktopPeer || identityOnlyHere || selectedPeer.current !== peer.deviceId || retired(peer)) return;
     if (!/^pw1_[a-f0-9]{64}$/.test(peer.deviceId) || typeof peer.instanceId !== 'string' || !peer.instanceId || !/^[a-f0-9]{64}$/.test(peer.certificateFingerprint || '')) {
@@ -634,7 +641,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const originalView = review?.view || {}, exactGrant = originalView.grantReview;
   const declining=review?.kind==='action'&&originalView.pendingGoal?.runStarted===false&&originalView.pendingGoal?.localOnly===true;
   const pairings = rows(snapshot?.pendingPairings);
-  const pendingPairs = pairings.filter(row => !pairConclusion(row.state));
+  const pendingPairs = pairings.filter(row => !pairConclusion(row.state) && !ownerWindowEnded(row, now));
   const trusted = peers.filter(row => !retired(row));
   const visiblePeers = peers.filter(peer => [name(peer), peer.deviceId, peerPlatform(peer)].filter(Boolean).join(' ').toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const peerSections = [
@@ -899,14 +906,15 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
             <div className="pw-device-attention">
               {pairings.map(candidate => {
                 const id = candidate.candidateId || candidate.inviteId, advance = candidate.advanceAvailable === true;
+                const ended = ownerWindowEnded(candidate, now), known = peers.some(row => row.deviceId === candidate.joinerDeviceId);
                 const other = local.deviceId && (local.deviceId === candidate.inviterDeviceId ? candidate.joinerDeviceId : local.deviceId === candidate.joinerDeviceId ? candidate.inviterDeviceId : '');
                 return <article className="pw-device-pairing" key={id} data-motion-key={`pairing:${id}`}>
                   <div><h4>{candidate.label || (typeof other === 'string' && other ? `设备 ${other.slice(-4)}` : '原设备配对')}</h4>
-                    <p>{originalPairProgress(candidate)}</p></div>
+                    <p>{originalPairProgress(candidate, now)}</p></div>
                   {advance ? <Button variant="secondary" disabled={busy || !id || !supported('devices.advancePairing')} onClick={() => { void invoke('devices.advancePairing', { candidateId: id }, (value, actual) => {
                     if (value.queriedOriginalPairing !== true) throw new Error('尚未收到这次原配对的回执，请重读本机记录。');
                     reportPair(candidate, actual);
-                  }); }}>继续原配对</Button> : candidate.reviewAvailable === true ? <Button variant="secondary" disabled={busy || !id || !supported('devices.reviewPairing')} onClick={() => { void invoke('devices.reviewPairing', { candidateId: id }, acceptReview); }}>核对权限与身份</Button> : null}
+                  }); }}>继续原配对</Button> : ended ? (!known && <Button variant="secondary" disabled={busy || !supported('devices.createInvitation')} onClick={() => openPairEntry('invite')}>准备新邀请</Button>) : candidate.reviewAvailable === true ? <Button variant="secondary" disabled={busy || !id || !supported('devices.reviewPairing')} onClick={() => { void invoke('devices.reviewPairing', { candidateId: id }, acceptReview); }}>核对权限与身份</Button> : null}
                 </article>;
               })}
             </div>
@@ -980,7 +988,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
           {(trusted.length > 0 || snapshot.hasMorePeers) && supported('deviceTaskScope.prepare') && <section className="pw-device-section" aria-label="准备新的设备工作">
             <WorkspaceSectionHeading title="准备新工作" actions={<>
               <Button variant="secondary" disabled={busy} onClick={() => { setWorkPhone(undefined); setForm('work'); }}>准备交给助手</Button>
-              {supported('phoneControl.prepare') && <Button variant="ghost" disabled={busy} onClick={() => setForm('manual')}>自己控制手机</Button>}
+              {supported('phoneControl.prepare') && <Button variant="ghost" disabled={busy} onClick={() => { setWorkPhone(undefined); setForm('manual'); }}>自己控制手机</Button>}
             </>} />
           </section>}
         </>}
@@ -1045,7 +1053,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               {!deviceChannelWasConnected(peer) && <p>准备目标不代表对端已接收。实际执行仍需核对原设备连接和本次授权。</p>}
               <div className="pw-form-actions">
               {desktopPeer && !identityOnlyHere && peerEntry?.kind !== 'desktop' && <Button disabled={busy} leadingIcon={IconMonitor} onClick={openDesktopPreparation}>核对并选择桌面范围</Button>}
-              {phonePeer && !retired(peer) && supported('phoneControl.prepare') && <Button disabled={busy} onClick={() => setForm('manual')}>选择手机与屏幕</Button>}
+              {phonePeer && !desktopPeer && !identityOnlyHere && !retired(peer) && supported('phoneControl.prepare') && <Button disabled={busy} onClick={() => openDirectedPhone('manual')}>手动查看这部手机的屏幕范围</Button>}
               {!retired(peer) && !identityOnlyHere && (desktopPeer || phonePeer) && supported('deviceTaskScope.prepare') && peerEntry?.kind !== 'goal' &&
                 <Button variant="secondary" disabled={busy} onClick={desktopPeer ? prepareWindowsWorkspace : prepareDeviceGoal}>{desktopPeer ? '准备读取这台电脑的工作区' : '为这部手机准备工作'}</Button>}
               {!retired(peer) && (identityOnlyHere || !desktopPeer && !phonePeer) && <p>{identityOnlyHere
@@ -1130,7 +1138,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
         <p className="pw-device-footnote">仅查看本机保存的原件，没有联系发起设备或重新派工。</p>
         <Button variant="ghost" onClick={closeOwnText}>回到接纳记录</Button></div>}
     </SettingsDialog>
-    <PhoneControlPreparation onPendingChange={setPreparingDeviceWork} open={form === 'manual'} run={run} onClose={() => setForm('')} />
+    <PhoneControlPreparation phone={workPhone} onPendingChange={setPreparingDeviceWork} open={form === 'manual'} run={run} onClose={() => setForm('')} />
     <DeviceTaskPreparation phone={workPhone} onPendingChange={setPreparingDeviceWork} open={form === 'work'} run={run} onClose={() => setForm('')} />
     <SettingsDialog isOpen={!!form && !review && form !== 'work' && form !== 'manual' && (!pairingEntry || !!snapshot)} onClose={() => { clearSensitive(true); refresh(); }} title={form === 'relay' ? '临时中继租约' : form === 'connection' ? '更新原设备连接地址' : form.startsWith('recovery') ? '核对原配对结果' : '配对另一台设备'}><div className="pw-collaboration-dialog" data-collaboration-kind="DevicesWorkspace">
       <div className="pw-device-form">

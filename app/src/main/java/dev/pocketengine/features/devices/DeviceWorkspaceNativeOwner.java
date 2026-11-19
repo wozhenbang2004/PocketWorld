@@ -199,8 +199,14 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
         JSONArray pending = new JSONArray();
         if (local != null) for (PairingCoordinator.Candidate candidate : pairing().pendingCandidates(now)) {
             JSONObject safe = candidate.display(), receipt = pairing().candidateReceipt(candidate, now);
-            safe.put("candidateId", candidate.inviteId()).put("state", receipt.getString("state"))
-                    .put("reviewAvailable", "pending_owner_confirmation".equals(receipt.getString("state")));
+            String state = receipt.getString("state");
+            safe.put("candidateId", candidate.inviteId()).put("state", state).put("reviewAvailable", false);
+            if ("pending_owner_confirmation".equals(state) || "confirmed_for_mtls".equals(state)) {
+                boolean signed = candidate.ownerConfirmationSaved() || "confirmed_for_mtls".equals(state);
+                boolean open = (!signed || "confirmed_for_mtls".equals(state)) && network.originalOwnerLaneOpen(candidate.inviteId(), signed);
+                safe.put("localOwnerWindow", signed ? (open ? "completion_open" : "completion_closed") : (open ? "review_open" : "review_closed"))
+                        .put("reviewAvailable", !signed && open);
+            }
             pending.put(safe);
         }
         int hiddenPending = network.appendOutgoingPairings(pending);
@@ -291,8 +297,8 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
     }
     NativeDeviceWorkspaceHost.PairingReviewAction candidateReview(PairingCoordinator.Candidate candidate, DeviceWorkspaceGrantOwner.Review reviewed) {
         return new NativeDeviceWorkspaceHost.PairingReviewAction() {
-            public JSONObject view() throws Exception { JSONObject value = candidate.display(); if (reviewed == null) decorateGrantInputs(value, candidate.deviceId()); else value.put("grantReview", grants.view(reviewed)); return value; }
-            public NativeDeviceWorkspaceHost.PairingReviewAction reviewGrant(NativeDeviceWorkspaceHost.GrantChoice selection) throws Exception { return candidateReview(candidate, reviewGrantFor(candidate.deviceId(), selection)); }
+            public JSONObject view() throws Exception { network.requireOriginalCandidateReview(candidate); JSONObject value = candidate.display(); if (reviewed == null) decorateGrantInputs(value, candidate.deviceId()); else value.put("grantReview", grants.view(reviewed)); return value; }
+            public NativeDeviceWorkspaceHost.PairingReviewAction reviewGrant(NativeDeviceWorkspaceHost.GrantChoice selection) throws Exception { network.requireOriginalCandidateReview(candidate); return candidateReview(candidate, reviewGrantFor(candidate.deviceId(), selection)); }
             public void confirmBothFingerprints() throws Exception { if (reviewed == null) throw new SecurityException("请先选择权限范围"); reviewed.requireCurrent(); network.confirmCandidate(candidate, reviewed.grant()); changed(); }
             public void reject() throws Exception { pairing().rejectCandidateLocally(candidate, System.currentTimeMillis()); changed(); }
         };

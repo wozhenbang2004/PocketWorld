@@ -36,6 +36,9 @@ def original_commit(ctx,settings,source,checkpoint):
         pins=source_pins(ctx,root,source["environmentId"],source.get("selectedProject"),stack)
         dot = pins.node(".git")
         if not dot or not dot[2] or repository_anchor(ctx,source["environmentId"],pins,dot)!=source["repositoryAnchor"]: _bad()
+        if "selectedFile" in source:
+            from windows_git_one_copy import verify_source
+            verify_source(pins,source)
         if pins.node(".git/commondir") is not None or pins.node(".git/objects/info/alternates") is not None: _bad()
         algo = _format(pins.file(".git/config",128*1024))
         if algo!=source["objectFormat"]: _bad()
@@ -50,6 +53,10 @@ def original_commit(ctx,settings,source,checkpoint):
 
 @contextmanager
 def bound_blob(ctx,settings,source,path,row,checkpoint):
+    if "selectedFile" in source:
+        from windows_git_one_copy import selection
+        _,_,fixed=selection(source)
+        if path!=fixed["path"] or row!=fixed: _bad()
     with original_commit(ctx,settings,source,checkpoint) as (pins,packs,oid):
         pieces = relative_parts(path)
         # Verify each path component inside the immutable commit, not a file

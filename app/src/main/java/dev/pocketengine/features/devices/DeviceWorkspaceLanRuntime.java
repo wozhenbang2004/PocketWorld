@@ -408,9 +408,22 @@ public final class DeviceWorkspaceLanRuntime implements AutoCloseable, DeviceTra
             invitations.put(id, reservation); owner.changed(); return DeviceProtocol.canonical(invitation);
         } catch (Exception unavailable) { reservation.close(); throw unavailable; }
     }
+    // Observe this process's already-open original lane. No lookup, socket open, recovery or remote probe.
+    boolean originalOwnerLaneOpen(String id, boolean completion) {
+        DevicePairingEndpoint endpoint = invitations.get(id);
+        return ownerEnabled() && endpoint != null && (completion ? endpoint.isCompletionListening() : endpoint.isCandidateListening());
+    }
+    void requireOriginalCandidateReview(PairingCoordinator.Candidate candidate) throws Exception {
+        long now = System.currentTimeMillis();
+        if (candidate.expiresAt() <= now || !originalOwnerLaneOpen(candidate.inviteId(), false))
+            throw new SecurityException("本机原邀请窗口已关闭。请重读配对进展；如仍需配对，另行准备新邀请。");
+        if (candidate.ownerConfirmationSaved() || !"pending_owner_confirmation".equals(owner.pairing().candidateReceipt(candidate, now).opt("state")))
+            throw new SecurityException("本机原确认已变化，请重读这次配对进展。");
+    }
     synchronized void confirmCandidate(PairingCoordinator.Candidate candidate, JSONObject exactGrant) throws Exception {
+        requireOriginalCandidateReview(candidate);
         DevicePairingEndpoint reservation = invitations.get(candidate.inviteId());
-        if (reservation == null || !reservation.isCandidateListening()) throw new SecurityException("原邀请通道已关闭，请重新创建邀请");
+        if (reservation == null) throw new SecurityException("本机原邀请窗口已关闭");
         DeviceIdentity.LocalIdentity local = owner.existingIdentity();
         final JSONObject confirmedHint = reservation.connectionHint();
         final String receiverToken = networkOwnerToken;

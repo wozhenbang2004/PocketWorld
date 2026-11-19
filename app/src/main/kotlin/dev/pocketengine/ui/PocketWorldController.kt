@@ -455,8 +455,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     internal fun readOriginalDeviceTask(id: String): JSONObject = app.tasks.get(id, false)
     internal fun readLocallyReviewedPhoneGoal(selected: JSONObject,page: Int,stamp: String): JSONObject =
         app.tasks.deviceTasks().readLocallyReviewedPhoneGoal(selected,page,stamp)
-    internal fun prepareOwnerPhoneControl(id: String, deadline: Long, tools: Int, current: () -> Boolean): JSONObject =
-        app.tasks.prepareOwnerPhoneControl(id, deadline, tools) { !closed && webPrivateOwnerVisible() && current() }
+    internal fun prepareOwnerPhoneControl(id: String, deadline: Long, tools: Int, target:dev.pocketengine.features.devices.DirectedPhoneTarget?, current: () -> Boolean): JSONObject =
+        app.tasks.prepareOwnerPhoneControl(id, deadline, tools, target) { !closed && webPrivateOwnerVisible() && current() }
     internal fun reviewOwnerPhoneControl(id: String, current: () -> Boolean) =
         app.tasks.reviewOwnerPhoneControl(id) { !closed && webPrivateOwnerVisible() && current() }
     internal fun startOwnerPhoneControl(review: dev.pocketengine.store.TaskStore.OwnerPhoneControlReview) = app.startOwnerPhoneControl(review)

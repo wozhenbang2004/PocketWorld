@@ -49,10 +49,13 @@ final class PhoneOwnerControls {
         else if(shown.action()==Action.RESUME_SOURCE)app.resumeSourceOverlayPhoneRun(taskId,born.runId(),born.epoch(),original,shown.pause(),visible);
         else throw new SecurityException("这不是已显示的继续动作");
     }
-    void stop() {
-        if(!ownsControl())return;
-        try {app.stopOriginalPhoneRun(taskId,born.runId(),born.epoch());}
-        catch(Exception unavailable){if(ownsControl()){original.cancel();app.error("已停止原执行控制，请返回应用核对任务记录");}}
+    java.util.concurrent.CompletionStage<String> stop() {
+        if(!retained())throw new IllegalStateException("眼前的原控制已变化，未提交停止");
+        return app.submitMainOverlayStop(taskId,born.runId(),born.epoch(),original);
+    }
+    boolean stopAccepted(String value){
+        try{JSONObject r=new JSONObject(value);return born!=null&&taskId.equals(r.opt("taskId"))&&born.runId().equals(r.opt("runId"))&&
+                born.epoch()==r.optInt("epoch",-1)&&Boolean.TRUE.equals(r.opt("controlRequested"));}catch(Exception unknown){return false;}
     }
     ViewState view(String goal) {
         try {

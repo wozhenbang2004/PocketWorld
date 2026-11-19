@@ -81,7 +81,13 @@ def load(ctx,op,*,work_root=False):
     return (*result,tuple(proof))
 
 
+def full_scope(ctx,op):
+    from windows_git_copy import slots
+    if not any(row["operation"]==op for _,row in slots(ctx,one=False)): _bad()
+
+
 def compare(ctx,op,checkpoint,progress):
+    full_scope(ctx,op)  # Whole-copy scans must never enumerate siblings for a single-file source.
     root,dirs,rows,children,dir_ids,file_ids = load(ctx,op)
     report = dict(matched=0,different=0,replaced=0,missing=0,unreadable=0,unvisited=0,
                   unboundDirectories=0,newEntries=0,directoryChanged=False)
@@ -170,6 +176,7 @@ def compare(ctx,op,checkpoint,progress):
 
 
 def reveal(ctx,op,locked):
+    full_scope(ctx,op)
     """Open the original copy folder and SELECT one bound child; never run the child.
 
     cidl=0 would open the parent (protected application STATE), so deliberately

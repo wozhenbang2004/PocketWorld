@@ -24,6 +24,7 @@ def project_path(row,read):
     if ((selected and tuple(selected["parent"])!=read.origin) or not read.path.startswith(prefix)
             or len(read.path)==len(prefix)): return None
     path=read.path[len(prefix):]
+    if "selectedFile" in src and src["selectedFile"]["path"]!=path: return None
     return path if "/".join(relative_parts(path))==path else None
 
 
@@ -47,6 +48,7 @@ def choose(view,rows,current):
         actions=[]
         for i,row in enumerate(rows[4*page:4*page+4],4*page):
             src=row["source"]; label=src.get("selectedProject",{}).get("path","登记根项目").replace("&","&&")
+            if "selectedFile" in src: label+=" · 单文件 "+src["selectedFile"]["path"].replace("&","&&")
             when=time.strftime("%m-%d %H:%M",time.localtime(row["at"]/1000))
             actions.append((("item",i),f"{label} · {src['commit'][:12]}\n本机制作记录 {when}"))
         if page: actions.append(("prev","上一页"))

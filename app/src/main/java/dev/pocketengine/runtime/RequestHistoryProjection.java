@@ -17,23 +17,23 @@ final class RequestHistoryProjection {
     private final JSONArray messages;
     // Rematerialize the same view for equality; the native capability port still
     // rechecks live admission before each physical MAIN request, including retries.
-    private final boolean privatePreferencesProvided;
+    private final long admittedPreferenceRevision;
 
     private RequestHistoryProjection(AgentRunner.RequestProjection source, JSONArray provenance,
-                                     JSONArray messages, boolean privatePreferencesProvided) {
+                                     JSONArray messages, long admittedPreferenceRevision) {
         this.source = source;
         this.provenance = provenance;
         this.messages = messages;
-        this.privatePreferencesProvided = privatePreferencesProvided;
+        this.admittedPreferenceRevision = admittedPreferenceRevision;
     }
 
     static RequestHistoryProjection prepare(AgentRunner.RequestProjection source, JSONArray history,
-                                            ModelConfig config, RunControl control, boolean privatePreferencesProvided) throws Exception {
+                                            ModelConfig config, RunControl control, long admittedPreferenceRevision) throws Exception {
         JSONArray materialized = history;
         if (source != null) materialized = source.project(history, config, control);
         else if (hasContentReferences(history))
             throw new IllegalStateException("附件或原文请求投影未安装，不能把引用冒充真实内容");
-        return new RequestHistoryProjection(source, history, TaskMemoryHistory.wireMessages(materialized, privatePreferencesProvided), privatePreferencesProvided);
+        return new RequestHistoryProjection(source, history, TaskMemoryHistory.wireMessages(materialized, admittedPreferenceRevision), admittedPreferenceRevision);
     }
 
     JSONArray provenance() { return provenance; }
@@ -42,7 +42,7 @@ final class RequestHistoryProjection {
     /** Re-materialize, never reuse an earlier authorization or a cached comparison result. */
     boolean current(ModelConfig config, RunControl control) throws Exception {
         if (source == null) return true;
-        JSONArray current = TaskMemoryHistory.wireMessages(source.project(provenance, config, control), privatePreferencesProvided);
+        JSONArray current = TaskMemoryHistory.wireMessages(source.project(provenance, config, control), admittedPreferenceRevision);
         return CompactionPlan.fingerprint(messages).equals(CompactionPlan.fingerprint(current));
     }
 

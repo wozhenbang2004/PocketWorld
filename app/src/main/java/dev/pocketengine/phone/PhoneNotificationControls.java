@@ -79,7 +79,22 @@ public final class PhoneNotificationControls {
         return intent.setData(new Uri.Builder().scheme("pocketengine-phone").authority("owner").appendPath(action).appendPath(id).appendPath(run).appendPath(String.valueOf(epoch)).build())
                 .putExtra("taskId",id).putExtra(RUN,run).putExtra(EPOCH,epoch);
     }
-    public static boolean dispatch(EngineApplication app,Intent intent,String serviceTask,String serviceRun,int serviceEpoch,RunControl original) {
+    public static boolean dispatch(EngineApplication app,Intent intent,String serviceTask,String serviceRun,int serviceEpoch,RunControl original,
+                                   java.util.function.BooleanSupplier sameService) {
+        // STOP is explicit: this branch only acknowledges submission, never a completed halt. Keep the OS fallback independent of the Web stop slots.
+        if(PhoneRunService.STOP.equals(intent.getAction())){
+            try{
+                String id=intent.getStringExtra("taskId"),run=intent.getStringExtra(RUN);int epoch=intent.getIntExtra(EPOCH,-1);
+                if(id==null||id.length()>100||run==null||run.length()>100||!id.equals(serviceTask)||!run.equals(serviceRun)||epoch<1||epoch!=serviceEpoch||
+                        original==null||!original.matchesHostRun(id,run,epoch)||!sameService.getAsBoolean())return false;
+                Uri identity=new Uri.Builder().scheme("pocketengine-phone").authority("owner").appendPath(PhoneRunService.STOP).appendPath(id).appendPath(run).appendPath(String.valueOf(epoch)).build();
+                if(!identity.equals(intent.getData())||!new android.content.ComponentName(app,PhoneRunService.class).equals(intent.getComponent()))return false;
+                app.submitSystemNoticeStop(id,run,epoch,original,sameService).whenComplete((ignored,failed)->{
+                    if(failed!=null&&sameService.getAsBoolean()&&app.retainsShownPhoneControl(id,original))app.error("通知停手未取得原回执，请打开原任务核对；不会自动重发");
+                });
+                return true;
+            }catch(RuntimeException notSubmitted){if(sameService.getAsBoolean())app.error("通知停手这次未提交，请打开原任务核对");return false;}
+        }
         boolean nativeOwner=false;
         try {
             String id=intent.getStringExtra("taskId"),run=intent.getStringExtra(RUN);int epoch=intent.getIntExtra(EPOCH,-1);
@@ -92,7 +107,6 @@ public final class PhoneNotificationControls {
             JSONObject task=app.tasks.foregroundNotificationContextSnapshot(id);
             if(task==null||!"phone".equals(task.optString("kind"))||!run.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch"))return false;
             boolean active=task.optString("status").matches("preparing|running|pausing|paused|awaiting_user|reconciling");
-            if(PhoneRunService.STOP.equals(intent.getAction())){if(active)app.stopOriginalPhoneRun(id,run,epoch);else original.cancel();return true;}
             if(!active||original.isCancelled())return false;
             if(PAUSE.equals(intent.getAction())){if(!original.isPaused())app.pauseOriginalPhoneRun(id,run,epoch);}
             else{
@@ -108,8 +122,7 @@ public final class PhoneNotificationControls {
             }
             return true;
         } catch(Exception unavailable) {
-            if(nativeOwner&&PhoneRunService.STOP.equals(intent.getAction()))original.cancel();
-            else if(nativeOwner&&PAUSE.equals(intent.getAction()))original.pause();
+            if(nativeOwner&&PAUSE.equals(intent.getAction()))original.pause();
             app.error("手机通知所属执行暂不可核对，已阻止继续；请打开原任务核对记录");return false;
         }
     }

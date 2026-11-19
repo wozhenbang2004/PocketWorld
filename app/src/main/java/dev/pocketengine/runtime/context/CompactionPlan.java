@@ -258,7 +258,7 @@ public final class CompactionPlan {
         String ordinary=fingerprint(TaskMemoryHistory.wireMessages(original).getJSONObject(0));
         if(retired&&ordinary.equals(expected))return true;
         if(!comparingWire)return false;
-        String withheld=fingerprint(TaskMemoryHistory.wireMessages(original,false).getJSONObject(0));
+        String withheld=fingerprint(TaskMemoryHistory.wireMessages(original,0L).getJSONObject(0));
         return !ordinary.equals(withheld)&&withheld.equals(expected);
     }
     private static boolean sameWireContent(JSONObject stored,JSONObject visible)throws Exception{
