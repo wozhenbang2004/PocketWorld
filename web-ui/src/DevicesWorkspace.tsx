@@ -286,6 +286,14 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     } else setWorkPhone(undefined);
     setForm('work');
   };
+  const prepareWindowsWorkspace = () => {
+    if (!peer || !desktopPeer || selectedPeer.current !== peer.deviceId || retired(peer)) return;
+    if (!/^pw1_[a-f0-9]{64}$/.test(peer.deviceId) || typeof peer.instanceId !== 'string' || !peer.instanceId || !/^[a-f0-9]{64}$/.test(peer.certificateFingerprint || '')) {
+      setError('原 Windows 配对身份尚未核对，没有替换其他设备。'); return;
+    }
+    setWorkPhone({ deviceId: peer.deviceId, instanceId: peer.instanceId, certificateFingerprint: peer.certificateFingerprint, label: name(peer), kind: 'windows-workspace' });
+    setForm('work');
+  };
   const openDesktopPreparation = () => { rememberReadingPosition('detail'); setError(''); setNotice(''); setDesktopOpen(true); };
   // See the next available step without making old work a prerequisite for new work.
   const peerEntry = !peer || retired(peer) ? null
@@ -861,7 +869,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               <div className="pw-form-actions">
               {desktopPeer && peerEntry?.kind !== 'desktop' && <Button disabled={busy} leadingIcon={IconMonitor} onClick={openDesktopPreparation}>核对并选择桌面范围</Button>}
               {phonePeer && !retired(peer) && supported('phoneControl.prepare') && <Button disabled={busy} onClick={() => setForm('manual')}>选择手机与屏幕</Button>}
-              {!retired(peer) && supported('deviceTaskScope.prepare') && peerEntry?.kind !== 'goal' && <Button variant="secondary" disabled={busy} onClick={prepareDeviceGoal}>{phonePeer && !desktopPeer ? '为这部手机准备工作' : '准备目标，再选执行设备'}</Button>}
+              {!retired(peer) && supported('deviceTaskScope.prepare') && peerEntry?.kind !== 'goal' && <Button variant="secondary" disabled={busy} onClick={desktopPeer ? prepareWindowsWorkspace : prepareDeviceGoal}>{desktopPeer ? '准备读取这台电脑的工作区' : phonePeer ? '为这部手机准备工作' : '准备目标，再选执行设备'}</Button>}
               </div>
               {desktopPeer && <p className="pw-field-hint">准备页只核对电脑与观看范围，不打开画面，不申请控制。</p>}
               {phonePeer && <div><p>写目标后，选择主屏或独立后台屏及准确应用范围，再审阅开始。“完成目标”由模型操作；“手动控制”由你刷新静态画面后逐次点击、滑动或输入，不是实时视频镜像。</p>

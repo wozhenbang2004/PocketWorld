@@ -84,17 +84,21 @@ class ResultView:
         current = self.receiver.trust.peer(peer[0])
         return current and not current["revoked"] and (current["fingerprint"], current["instanceId"], current["authorizationEpoch"]) == peer[1:4]
 
-    def _page(self, peer, before=None, *, incoming=False):
+    def _page(self, peer, before=None, *, incoming=False, read_work=None):
         # Index seek, bounded projection, release the business manager lock
         # between batches. Empty matched pages still expose the older cursor.
         selected, cursor = [], before if before is not None else 9223372036854775807
         for _ in range(4):
             with self.manager.lock:
-                batch = (self.manager.ledger.execute(received.BATCH, (peer[0], cursor)) if incoming else
-                         self.manager.ledger.execute(_BATCH, (PROTOCOL, peer[0], peer[2], TEXT_RETURN, cursor))).fetchall()
+                if read_work is not None:
+                    if not incoming: return [], None
+                    query, values = received.read_work.BATCH, (peer[0], read_work.task, read_work.run, read_work.binding, cursor)
+                elif incoming: query, values = received.BATCH, (peer[0], cursor)
+                else: query, values = _BATCH, (PROTOCOL, peer[0], peer[2], TEXT_RETURN, cursor)
+                batch = self.manager.ledger.execute(query, values).fetchall()
             for index, row in enumerate(batch):
                 cursor = row[0]
-                if isinstance(row[4], str) and (not incoming or received.local_record(self, peer, row)):
+                if isinstance(row[4], str) and (not incoming or received.local_record(self, peer, row, required_work=read_work)):
                     selected.append(row)
                     if len(selected) == 6:
                         return selected, cursor if index + 1 < len(batch) or len(batch) == 64 and cursor > 1 else None
@@ -229,7 +233,12 @@ class ResultView:
                         pages = [None]
                         while self._peer_current(peer):
                             rows, older = self._page(peer, pages[-1], incoming=incoming)
-                            choices = [(row, (received.TOOLS[row[4]] if incoming else _STATE.get(row[4], "原派单")) + " · " + _stamp(row[3]) + "\n操作 …" + row[1][-16:]) for row in rows]
+                            choices = []
+                            for row in rows:
+                                label = (received.TOOLS[row[4]] if incoming else _STATE.get(row[4], "原派单")) + " · " + _stamp(row[3])
+                                # List only native receipt identities here; don't expose paths or inspect file content on the peer list.
+                                work = received.local_record(self, peer, row, work_key=True) if incoming and row[4] in received.read_work.READS else None
+                                choices.append((row, label + (f"\n工作区 {work.environment} · 手机任务 …{work.task[-10:]}" if work else "\n操作 …" + row[1][-16:])))
                             if len(pages) > 1: choices.append(("newer", "较新派单"))
                             if older is not None: choices.append(("older", "查看较早的原记录"))
                             choices.append(("back", "返回设备"))

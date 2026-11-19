@@ -7,6 +7,7 @@ import { Tabs, TabList, Tab, TabPanel } from './shell-library';
 import { Accordion, AccordionItem, Button, CheckboxField, IconButton, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { MemoryAssertionFields } from './MemoryAssertionFields';
 import { ProjectMemoryQuote } from './ProjectMemoryQuote';
+import {ProjectConventionDraftAction,manualConvention} from './ProjectConventionDraftAction';
 import { ProjectMemoryNote } from './ProjectMemoryNote';
 import { ScopedMemoryEvidence } from './ScopedMemoryEvidence';
 import { MemoryHistoryWorkspace } from './MemoryHistoryWorkspace';
@@ -43,6 +44,7 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, registerBe
   const selectionPanel = useRef<HTMLElement | null>(null), collectionPanel = useRef<HTMLElement | null>(null);
   const listScrollPosition = useRef(0), openedRecord = useRef('');
   const alive = useRef(true), entered = useRef(false), readHandle = useRef(''), reviewHandle = useRef(''), selectedHandles = useRef<string[]>([]);
+  const conventionDraftBack = useRef<(()=>boolean)|null>(null);
   const historyBack = useRef<(() => boolean) | null>(null);
   const registerHistoryBack = useCallback((handler: (() => boolean) | null) => { historyBack.current = handler; }, []);
   const invoke = async (action: string, args: Data = {}, accept?: (value: Data) => void | Promise<void>) => {
@@ -80,7 +82,7 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, registerBe
     else setNotice('范围切换未完成，请重新选择范围。');
   };
   useEffect(() => { alive.current = true; load(initialCandidate); return () => { alive.current = false; closeHandle(readHandle.current); closeHandle(reviewHandle.current); selectedHandles.current.forEach(closeHandle); }; }, []);
-  useEffect(() => { registerTransientBack(projectEntry || review || selection || tab === 'history' ? () => { if (projectEntry) { quoteBack.current?.(); return true; } if (historyBack.current?.()) return true; if (!review && !selection) return false; if (!busy) { if (review) closeReview(); else formDraft.guard(closeRecord); } return true; } : null); return () => registerTransientBack(null); }, [projectEntry, review, selection, busy, tab, registerTransientBack]);
+  useEffect(() => { registerTransientBack(projectEntry || review || selection || tab === 'history' ? () => { if (projectEntry) { quoteBack.current?.(); return true; } if (conventionDraftBack.current?.() || historyBack.current?.()) return true; if (!review && !selection) return false; if (!busy) { if (review) closeReview(); else formDraft.guard(closeRecord); } return true; } : null); return () => registerTransientBack(null); }, [projectEntry, review, selection, busy, tab, registerTransientBack]);
   useEffect(() => {
     if (!operation?.operationHandle || operation.settled) return;
     const handle = operation.operationHandle; let active = true, reading = false;
@@ -197,6 +199,9 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, registerBe
     </section>
     {selection && <section ref={selectionPanel} tabIndex={-1} className="pw-source-record pw-memory-reading"><header className="pw-memory-detail-header"><Button variant="ghost" leadingIcon={IconChevronLeft} disabled={busy} onClick={() => formDraft.guard(closeRecord)}>返回列表</Button><div className="pw-memory-detail-copy">{snapshot?.namespaceStatus === 'project' && <p className="pw-detail-location">仅此项目 · {projectLabel}</p>}<h2>{candidate ? '候选审阅' : '这条记忆'}</h2><WorkingStatus active={busy}>正在核对原回执…</WorkingStatus></div></header>
       <div className="pw-memory-document"><p className="pw-reading-copy">{record?.text}</p>{record?.applicability && <p className="pw-memory-context">适用条件：{record.applicability}</p>}{record?.reason && <p className="pw-memory-context">依据：{record.reason}</p>}</div><p className="pw-muted pw-knowledge-status">{layer(record?.layer)}{record?.core ? ' · 核心记忆' : ''} · 原修订 {record?.revision} · {recordStatus(record?.status) || (record?.active ? '当前可用' : '已停用')}</p>
+      {!candidate && !attempted && snapshotCurrent && projectScope && manualConvention(record,projectScope) &&
+        <ProjectConventionDraftAction key={selection.readHandle} row={record} readHandle={selection.readHandle} expires={selection.readExpiresAt} project={projectScope.slice(8)}
+          disabled={busy || !!review || draft!==record.text || formDraft.stale || !!formDraft.conflict || formDraft.requiresRecheck} run={run} back={conventionDraftBack}/>}
       {record?.assertion && <p>主体：{record.assertion.subjectLabel || '未知'} · 陈述类型：{record.assertion.kind} · 关系：{record.assertion.predicate} · {record.assertion.object}。保存不证明陈述为真。</p>}
       {!attempted && candidate && record?.status === 'pending' && <>{candidateHasEdits && <p className="pw-memory-context pw-knowledge-notice" role="status">先保存刚才的修改，再采用更新后的候选。</p>}<div className="pw-form-actions pw-memory-decisions"><Button disabled={busy || formDraft.stale || !!formDraft.conflict || formDraft.requiresRecheck} onClick={() => candidateHasEdits ? prepare('edit', { draft: { text: draft, ...draftMeta, confidence: Number(draftMeta.confidence) } }) : prepare('accept')}>{candidateHasEdits ? '先保存修改' : '核对并采用候选'}</Button></div></>}
 <section className="pw-knowledge-evidence"><h3>来源与关联</h3>

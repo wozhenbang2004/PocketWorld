@@ -35,6 +35,7 @@ export function WorkGoal({ task }: { task: { goal: string; raw?: Record<string, 
     ? selected : undefined;
   const contract = work?.contract || ordinary;
   return <><WorkContract goal={task.goal} contract={contract} />
+    {ordinary?.constraints && <p className="pw-muted">这是你在原项目提交的本次限制，不证明某次回答已收到或采用。</p>}
     {!contract && raw?.developmentContext?.deliveryContractReadState === 'not_loaded' && <p className="pw-muted" role="status">交付要求尚未完整载入，请重新打开原任务查看。</p>}
   </>;
 }

@@ -113,6 +113,7 @@ import type {CloudGoal} from './cloud-goal';
 import {ButlerReturnedReport,currentHomeReport,type VerifiedHomeReport} from './ButlerReturnedReport';
 import type {TaskResultFile} from './TaskResultFiles';
 import {PhoneTaskStatus} from './PhoneTaskStatus';
+import {PhoneInlineStopReceipt,useInlinePhoneStops,type ShownPhoneRun} from './PhoneInlineStopReceipts';
 import {PhoneTaskOriginalRequest} from './PhoneTaskOriginalRequest';
 import {PHONE_RECORD,PhoneOriginalActionReview} from './PhoneOriginalActionReview';
 import {EarlierDraftPhoneStarts,BlankPhoneReceiptActions,type BlankFirstRun} from './BlankPhoneStarts';
@@ -1507,9 +1508,9 @@ export default function App(){
      {task.raw?.ownerWorkPreparation?.sourceTaskId&&task.raw?.ownerWorkPreparation?.proposalId&&task.raw?.ownerWorkPreparation?.sourceConversationId&&<Button variant="ghost" leadingIcon={IconChat} onClick={()=>setPreparationTarget({sourceTaskId:task.raw!.ownerWorkPreparation.sourceTaskId,proposalId:task.raw!.ownerWorkPreparation.proposalId,sourceConversationId:task.raw!.ownerWorkPreparation.sourceConversationId})}>查看管家的原工作准备</Button>}
      {taskOpen&&openedTaskId.current===task.id&&!taskOpening&&workSupplementTarget?.taskId===task.id&&can('ownerWork.supplement.read')&&<OwnerWorkSupplement key={workIdentityKey(workSupplementTarget)} target={workSupplementTarget} task={task} can={can} registerBeforeLeave={registerWorkSupplementBeforeLeave} onClose={()=>setWorkSupplementTarget(null)} onSelectOriginal={identity=>void targetWork(task,identity)}/>}
      {workSupplementTarget?.taskId!==task.id&&pendingInputs.some(item=>String(item.draftKey).startsWith('work:')&&item.originalTarget?.taskId===task.id)&&<div className="pw-work-pending-links" aria-label="原工作补充">{pendingInputs.filter(item=>String(item.draftKey).startsWith('work:')&&item.originalTarget?.taskId===task.id).map(item=><Button key={item.clientMessageId} variant="secondary" size="small" onClick={()=>returnToWorkInput(item)}>核对原工作中的补充</Button>)}</div>}
-     {taskOpen&&openedTaskId.current===task.id&&!taskOpening&&task.raw?.ownerDeviceWork&&can('deviceTaskScope.open')&&<DeviceTaskScopeWorkspace key={'device:'+task.id} taskId={task.id} run={act} directed={task.raw.ownerDeviceWork.directPhone}
+     {taskOpen&&openedTaskId.current===task.id&&!taskOpening&&task.raw?.ownerDeviceWork&&can('deviceTaskScope.open')&&<DeviceTaskScopeWorkspace key={'device:'+task.id} taskId={task.id} run={act} directed={task.raw.ownerDeviceWork.directPhone} directedWorkspace={task.raw.ownerDeviceWork.directWorkspace}
        onOpenOriginal={task.raw.ownerDeviceWork.directPhone&&can('devices.readPhoneGoalArchive')?()=>{const p=task.raw!.ownerDeviceWork.directPhone;
-         void openRelatedWorkspace('devices',undefined,()=>setSentPhoneFocus({taskId:task.id,deviceId:p.deviceId,instanceId:p.instanceId,certificateFingerprint:p.certificateFingerprint,navigation:navigationWindow.current}));}:undefined} autoOpen={!task.raw.ownerDeviceWork.directPhone&&!task.raw?.runId&&!asArray(task.raw?.deviceSourceScope?.routes).length} onBackChange={registerDeviceScopeBack} onSaved={()=>loadTaskReview(task.id)} onOpenDevices={()=>void openRelatedWorkspace('devices')}/>}
+         void openRelatedWorkspace('devices',undefined,()=>setSentPhoneFocus({taskId:task.id,deviceId:p.deviceId,instanceId:p.instanceId,certificateFingerprint:p.certificateFingerprint,navigation:navigationWindow.current}));}:undefined} autoOpen={!task.raw.ownerDeviceWork.directPhone&&!task.raw.ownerDeviceWork.directWorkspace&&!task.raw?.runId&&!asArray(task.raw?.deviceSourceScope?.routes).length} onBackChange={registerDeviceScopeBack} onSaved={()=>loadTaskReview(task.id)} onOpenDevices={()=>void openRelatedWorkspace('devices')}/>}
      {taskOpen&&openedTaskId.current===task.id&&!taskOpening&&task.raw?.ownerPhoneControl?.format==='pocketworld.owner-phone-control.v1'&&task.raw?.actorId==='owner'&&task.raw?.spaceId==='private'&&<>
       {!task.raw?.runId&&can('deviceTaskScope.open')&&<DeviceTaskScopeWorkspace key={'manual-scope:'+task.id} taskId={task.id} run={act} autoOpen={!asArray(task.raw?.deviceSourceScope?.routes).length} onBackChange={registerDeviceScopeBack} onSaved={()=>loadTaskReview(task.id)} onOpenDevices={()=>void openRelatedWorkspace('devices')}/>}
       {can('phoneControl.open')&&<ConversationModelPickerVisibility key={'manual:'+task.id}>{pickerVisible=><PhoneControlWorkspace taskId={task.id} hasScope={asArray(task.raw?.deviceSourceScope?.routes).length===1} started={!!task.raw?.runId} visible={taskLayer==='overview'&&!pickerVisible&&!phoneViewerObscured} run={act} onChanged={()=>loadTaskReview(task.id)}/>}</ConversationModelPickerVisibility>}
@@ -1648,14 +1649,40 @@ export default function App(){
  const phoneRows=tasks.filter(task=>!terminal(task)&&(route==='butler'||route==='chat'&&!!state.conversationId&&phoneConversationId(task)===state.conversationId))
    .map(task=>({task,surface:privatePhoneSurface(task,state.livePrivatePhones)}))
    .filter(row=>row.surface!==null||!isPrivateLocalPhone(row.task)&&row.task.id===activeTask?.id);
- const phoneActivity=phoneRows.length?<>{phoneRows.map(({task,surface})=><PhoneTaskStatus key={JSON.stringify([task.id,task.raw?.runId,task.raw?.coordinatorEpoch])} task={task} surface={surface||undefined} can={can}
-    onOpen={()=>{const entry=attention(task)&&can('tasks.review')?'review':'overview';
-     if(!isPrivateLocalPhone(task)){openTask(task.id,entry);return}
-     if(document.hidden||!surface?.activityHandle||!can('phone.activity.original'))return;
-     const {taskId,runId,epoch,activityHandle}=surface;
-     phoneActivityPick.current={kind:'activity',handle:activityHandle,navigation:navigationWindow.current,document:bridge.getDocumentEpoch(),resume:Number(obj(bridge.getState().view).resumeRevision||0),entry};
-     run('phone.activity.original',{taskId,runId,epoch,activityHandle})}}
-    onControl={(action,identity,shownPause)=>triggerPhoneControl(action,identity,isPrivateLocalPhone(task),shownPause)}/>)}</>:null;
+ const stopWindow=!taskOpen&&!workOpen&&(route==='butler'||route==='chat'&&!!state.conversationId)
+   ?JSON.stringify([route,navigationWindow.current,bridge.getDocumentEpoch(),obj(snapshot?.view).resumeRevision??0,chatOwner,state.conversationId||'']):null;
+ const stoppedSource=(shown:ShownPhoneRun,rows:Task[])=>rows.find(task=>{const id=phoneRunIdentity(task),r=task.raw;
+   return task.id===shown.taskId&&id?.runId===shown.runId&&id.epoch===shown.epoch&&isPrivateLocalPhone(task)&&r&&r.status===task.status&&
+     r.contextAvailable!==false&&r.taskCoreReadLimited!==true&&r.sourceCurrentReadRequired!==true&&r.taskProjection!=='source_unavailable'&&
+     (route==='butler'||route==='chat'&&!!state.conversationId&&phoneConversationId(task)===state.conversationId)});
+ const sameStopWindow=()=>{const n=bridge.getState(),owner=obj(n.composer);
+   return !!stopWindow&&stopWindow===JSON.stringify([route,navigationWindow.current,bridge.getDocumentEpoch(),obj(n.view).resumeRevision??0,`${owner.key||''}:${owner.epoch??''}`,n.state.conversationId||''])&&
+     !document.hidden};
+ const sameStopSource=(shown:ShownPhoneRun)=>sameStopWindow()&&!!stoppedSource(shown,asArray<Task>(bridge.getState().state.tasks));
+ const stopReceipts=useInlinePhoneStops(stopWindow,sameStopSource);
+ const openOriginalActivity=(shown:ShownPhoneRun,entry:'overview'|'review')=>{
+   if(document.hidden||!shown.activityHandle||!can('phone.activity.original'))return;
+   const {taskId,runId,epoch,activityHandle}=shown;
+   phoneActivityPick.current={kind:'activity',handle:activityHandle,navigation:navigationWindow.current,document:bridge.getDocumentEpoch(),resume:Number(obj(bridge.getState().view).resumeRevision||0),entry};
+   run('phone.activity.original',{taskId,runId,epoch,activityHandle});
+ };
+ const phoneActivity=phoneRows.length||stopReceipts.rows.length?<>{phoneRows.map(({task,surface})=>{
+   const held=stopReceipts.rows.find(x=>surface?.activityHandle===x.activityHandle);
+   if(held?.phase==='requested'&&surface?.stopRequested)return null;
+   return <PhoneTaskStatus key={JSON.stringify([task.id,task.raw?.runId,task.raw?.coordinatorEpoch])} task={task} surface={surface||undefined} can={can}
+     onOpen={()=>{const entry=attention(task)&&can('tasks.review')?'review':'overview';
+       if(!isPrivateLocalPhone(task)){openTask(task.id,entry);return}
+       if(surface?.activityHandle)openOriginalActivity({...surface,activityHandle:surface.activityHandle},entry)}}
+     onControl={(action,identity,shownPause)=>{
+       if(action==='phone.stop'&&surface?.activityHandle&&isPrivateLocalPhone(task)){
+         if(!sameStopWindow()){setLocalError('原手机任务页面已变化，这次没有发送停止。');return}
+         if(stopReceipts.request({...identity,activityHandle:surface.activityHandle},()=>exactPhoneControl(action,identity,true)))return}
+       triggerPhoneControl(action,identity,isPrivateLocalPhone(task),shownPause)}}/>
+ })}{stopReceipts.rows.map(item=>{const row=stoppedSource(item,tasks);if(!row)return null;
+   return <PhoneInlineStopReceipt key={item.ticket} item={item} goal={row.goal} recordedStatus={row.status}
+     onDismiss={()=>stopReceipts.dismiss(item.ticket)} onOpen={can('phone.activity.original')?()=>{
+       if(sameStopSource(item))openOriginalActivity(item,'overview')}:undefined}/>
+ })}</>:null;
  const representedPhoneTaskIds=new Set(phoneRows.map(row=>row.task.id));
  const chatAttention=conversationAttention&&!representedPhoneTaskIds.has(conversationAttention.id)?conversationAttention:undefined;
  const conversationWorkRows=conversationWork.filter(task=>!representedPhoneTaskIds.has(task.id)&&task.id!==chatAttention?.id);

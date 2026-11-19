@@ -107,8 +107,10 @@ internal class PocketWebDeviceTaskScope(
         }
         when (action) {
             "deviceTaskScope.prepare" -> {
-                fields(input, "requestId", "goal", "deadlineAt", "toolLimit", "modelCallLimit", "directPhone")
+                fields(input, "requestId", "goal", "deadlineAt", "toolLimit", "modelCallLimit", "directPhone", "directWorkspace")
                 val direct = if (input.has("directPhone")) dev.pocketengine.features.devices.DirectedPhoneTarget.read(input.getJSONObject("directPhone")) else null
+                val workspace = if (input.has("directWorkspace")) dev.pocketengine.features.devices.DirectedWorkspaceTarget.read(input.getJSONObject("directWorkspace")) else null
+                require(direct == null || workspace == null)
                 val request = text(input, "requestId", 36); val goal = text(input, "goal", 8000)
                 val deadline = integer(input, "deadlineAt", 1, 9_007_199_254_740_991L)
                 val tools = integer(input, "toolLimit", 1, 400).toInt(); val models = integer(input, "modelCallLimit", 1, 512).toInt()
@@ -118,7 +120,7 @@ internal class PocketWebDeviceTaskScope(
                 check(busy.compareAndSet(false, true)) { "请等待原准备请求回执" }
                 try {
                     controller.runDeviceWorkspaceWork(Runnable {
-                        val result = runCatching { controller.prepareOwnerDeviceTask(request, goal, deadline, tools, models, direct, ::current) }
+                        val result = runCatching { controller.prepareOwnerDeviceTask(request, goal, deadline, tools, models, direct, workspace, ::current) }
                         main.post {
                             busy.set(false)
                             if (!current()) done(null, "原准备窗口已关闭；请在任务记录核对原编号，没有自动重新创建")

@@ -16,25 +16,27 @@ internal object PocketWebState {
         // The project run selection holds private file paths, range fingerprints and record revisions. It is native audit, not Web state.
         "projectmemoryread"
     )
+    private val contractFields = setOf("deliverycontract","deliverycontractdigest")
     private val imageFields = setOf("imagedataurl", "screenshotdataurl", "screenshotbase64")
     private val unscopedMemoryReads = setOf("memory.list", "memory.search")
     private val scopedMemoryMirrors = setOf("memoryReview", "taskMemory")
 
     /** Preserve public object structure, but never return credential values or hidden host objects. */
-    fun publicValue(value: Any?, images: Boolean = false, depth: Int = 0): Any {
+    fun publicValue(value: Any?, images: Boolean = false, depth: Int = 0, omitProjectContract: Boolean = false): Any {
         if (value == null || value === JSONObject.NULL) return JSONObject.NULL
         if (depth > 32) return JSONObject().put("unavailable", "nested_data_requires_original_source")
         return when (value) {
             is JSONObject -> JSONObject().also { out ->
                 value.keys().forEach { key ->
                     val normalized = key.lowercase().filter(Char::isLetterOrDigit)
-                    if (normalized !in hidden && (images || normalized !in imageFields)) {
-                        out.put(key, publicValue(value.opt(key), images, depth + 1))
+                    if (normalized !in hidden && (images || normalized !in imageFields) &&
+                        (!omitProjectContract || normalized !in contractFields)) {
+                        out.put(key, publicValue(value.opt(key), images, depth + 1, omitProjectContract))
                     }
                 }
             }
             is JSONArray -> JSONArray().also { out ->
-                for (index in 0 until value.length()) out.put(publicValue(value.opt(index), images, depth + 1))
+                for (index in 0 until value.length()) out.put(publicValue(value.opt(index), images, depth + 1, omitProjectContract))
             }
             is String, is Number, is Boolean -> value
             else -> JSONObject.NULL
@@ -63,10 +65,12 @@ internal object PocketWebState {
             row.taskResult?.let { value.put("taskResult", it.toJson()) }
         }
 
-    fun task(row: UiTask, images: Boolean = false): JSONObject = JSONObject()
+    fun task(row: UiTask, images: Boolean = false, originalProjectContract: Boolean = false): JSONObject = JSONObject()
         .put("id", row.id).put("goal", row.goal).put("status", row.status)
         .put("summary", row.summary).put("executionMode", row.executionMode).put("updatedAt", row.updatedAt)
-        .put("raw", publicValue(row.raw, images)).also { value ->
+        .put("raw", publicValue(row.raw, images, omitProjectContract = !originalProjectContract)).also { value ->
+            if (!originalProjectContract && row.raw.optJSONObject("developmentContext")?.has("deliveryContract") == true)
+                value.getJSONObject("raw").getJSONObject("developmentContext").put("deliveryContractReadState","not_loaded")
             runCatching { dev.pocketengine.store.CloudWorkspaceJobs.receiptForTask(row.raw) }.getOrNull()?.let { value.put("hostReceipt",it) }
         }
 
@@ -85,7 +89,7 @@ internal object PocketWebState {
             raw.optLong("coordinatorEpoch") > 0 && result.optLong("epoch") == raw.optLong("coordinatorEpoch")
     }
 
-    fun snapshot(controller: PocketWorldController): JSONObject {
+    fun snapshot(controller: PocketWorldController, contractVisible: (UiTask) -> Boolean = { false }): JSONObject {
         val raw = controller.state
         // An old unscoped local feature receipt is not part of the selected memory workspace.
         // Strip it before serializing, not from the owner's original native state.
@@ -99,11 +103,12 @@ internal object PocketWebState {
         val ownerWork = JSONArray()
         val livePrivatePhones = JSONArray()
         state.tasks.forEach { row ->
-            val projected = task(row)
+            val chosen = contractVisible(row)
+            val projected = task(row, originalProjectContract = chosen)
             tasks.put(projected)
             controller.retainedPrivatePhoneSurface(row)?.let { livePrivatePhones.put(it) }
             if (homeWork(row)) {
-                ownerWork.put(projected)
+                ownerWork.put(if (chosen) task(row) else projected)
             }
         }
         val data = JSONObject()
@@ -143,7 +148,7 @@ internal object PocketWebState {
             .put("foregroundTurn", publicValue(state.foregroundTurn))
             .put("originalTaskNotice", publicValue(controller.originalTaskNotice))
             .put("originalPhoneNotification",publicValue(controller.originalPhoneNotification.takeIf {controller.webPrivateOwnerVisible()}))
-            .put("chatReceipts", JSONObject().also { out -> state.chatReceipts.forEach { (key, value) -> out.put(key, publicValue(value)) } })
+            .put("chatReceipts", JSONObject().also { out -> state.chatReceipts.forEach { (key, value) -> out.put(key, publicValue(value, omitProjectContract = true)) } })
             .put("selectedChatAttachments", JSONArray().also { out -> state.selectedChatAttachments.forEach { out.put(attachment(it)) } })
             .put("chatAttachmentPickerOpen", state.chatAttachmentPickerOpen)
             .put("chatAttachmentModel", publicValue(state.chatAttachmentModel))
@@ -157,6 +162,11 @@ internal object PocketWebState {
             .put("projectId", state.projectId ?: JSONObject.NULL)
             .put("files", JSONArray().also { out -> state.files.forEach { out.put(JSONObject().put("path", it.path).put("version", it.version)) } })
             .put("filePath", state.filePath ?: JSONObject.NULL).put("fileContent", state.fileContent)
+            .put("fileObservation", state.fileObservation?.takeIf { it.matches(state.projectId, state.filePath) && controller.webPrivateOwnerVisible() }?.json() ?: JSONObject.NULL)
+            .put("revisionObservation", state.revisionObservation?.takeIf { it.matches(state.projectId, state.filePath) && it.version == state.revisionNumber && controller.webPrivateOwnerVisible() }?.json() ?: JSONObject.NULL)
+            .put("heldFormalDraft", state.heldFormalDraft?.takeIf { it.project == state.projectId && it.path == state.filePath && controller.webPrivateOwnerVisible() }?.let {
+                JSONObject().put("projectId", it.project).put("path", it.path).put("version", it.version).put("text", it.text)
+            } ?: JSONObject.NULL)
             .put("fileBaseline", state.fileBaseline).put("fileVersion", state.fileVersion)
             .put("fileLoading", state.fileLoading).put("fileSaving", state.fileSaving).put("fileReady", state.fileReady)
             .put("fileError", state.fileError ?: JSONObject.NULL).put("lastSavedVersion", state.lastSavedVersion ?: JSONObject.NULL)
@@ -168,14 +178,14 @@ internal object PocketWebState {
             .put("features", publicValue(state.features))
             // Only the current checked memory window gets its result. Native audit mirrors may include
             // full source bodies, even when the answer/history reader returned only one bounded page.
-            .put("ownerSnapshots", JSONObject().also { out -> state.ownerSnapshots.forEach { (key, value) -> if (key !in scopedMemoryMirrors) out.put(key, publicValue(value)) } })
+            .put("ownerSnapshots", JSONObject().also { out -> state.ownerSnapshots.forEach { (key, value) -> if (key !in scopedMemoryMirrors) out.put(key, publicValue(value, omitProjectContract = true)) } })
             .put("ownerResponses", JSONObject().also { out -> state.ownerResponses.forEach { (domain, responses) ->
-                if (domain !in scopedMemoryMirrors) out.put(domain, JSONObject().also { result -> responses.forEach { (key, value) -> result.put(key, publicValue(value)) } })
+                if (domain !in scopedMemoryMirrors) out.put(domain, JSONObject().also { result -> responses.forEach { (key, value) -> result.put(key, publicValue(value, omitProjectContract = true)) } })
             } })
             .put("ownerPending", JSONArray(state.ownerPending.toList())).put("ownerErrors", JSONObject(state.ownerErrors))
             .put("ownerSource", JSONObject.NULL)
-            .put("moduleResults", JSONObject().also { out -> state.moduleResults.forEach { (key, value) -> out.put(key, publicValue(value)) } })
-            .put("moduleResultInputs", JSONObject().also { out -> state.moduleResultInputs.forEach { (key, value) -> out.put(key, publicValue(value)) } })
+            .put("moduleResults", JSONObject().also { out -> state.moduleResults.forEach { (key, value) -> out.put(key, publicValue(value, omitProjectContract = true)) } })
+            .put("moduleResultInputs", JSONObject().also { out -> state.moduleResultInputs.forEach { (key, value) -> out.put(key, publicValue(value, omitProjectContract = true)) } })
             .put("moduleBusy", JSONArray(state.moduleBusy.toList())).put("moduleErrors", JSONObject(state.moduleErrors))
             .put("taskActionErrors", JSONObject(state.taskActionErrors)).put("backgroundSetupOpen", state.backgroundSetupOpen)
             .put("requestedTaskId", state.requestedTaskId ?: JSONObject.NULL).put("requestedTaskRevision", state.requestedTaskRevision)

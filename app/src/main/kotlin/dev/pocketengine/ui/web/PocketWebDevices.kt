@@ -109,6 +109,18 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
             && target.opt("instanceId") == hint.opt("instanceId") && target.opt("certificateFingerprint") == hint.opt("certificateFingerprint")) { "所选原手机身份或配对已变化，不会换用其他设备" }
         return dev.pocketengine.features.devices.DirectedPhoneTarget.read(hint).view()
     }
+    /** The current original Windows peer is only a local draft audience; live grants are checked later. */
+    fun originalWorkspaceForPreparation(hint: JSONObject): JSONObject {
+        fields(hint, "deviceId", "instanceId", "certificateFingerprint")
+        val native = requireNotNull(window()); current(native, generation.get())
+        val target = peer(latest, text(hint, "deviceId"))
+        require((target.optJSONObject("windowsDesktop") != null || target.optString("platform").contains("windows", true))
+            && target.opt("revoked") != true && target.optJSONObject("connection")?.optString("state") != "REVOKED"
+            && target.opt("instanceId") == hint.opt("instanceId") && target.opt("certificateFingerprint") == hint.opt("certificateFingerprint")) {
+            "原 Windows 配对或安装已变化，没有改用其他设备"
+        }
+        return dev.pocketengine.features.devices.DirectedWorkspaceTarget.read(hint).view()
+    }
     /** Identity of an already accepted Android goal on THIS receiving phone. Navigation facts only. */
     private fun receivedPhoneActionScope(id: String): JSONObject? {
         val task = controller.readOriginalDeviceTask(id)

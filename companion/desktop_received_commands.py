@@ -8,6 +8,7 @@ from windows_received_job import COMMAND, EXPORT, FILE, admission
 from windows_workspace_export import PROFILE as EXPORT_PROFILE, project as workspace_export, show as show_export
 from windows_received_file import PROFILE as FILE_PROFILE, project as workspace_file
 from windows_workspace_read import PROFILE as READ_PROFILE, project as workspace_read
+import windows_read_work as read_work
 
 BATCH = """SELECT rid,operation_id,fingerprint,updated_at,CASE WHEN
     ((json_extract(doc,'$.protocol')='native-device-command-v1' AND json_extract(doc,'$.audience.toolName')='command.run')
@@ -25,7 +26,7 @@ LABEL = {"queued": "已在这台电脑排队", "running": "这台电脑已启动
          "accepted_only": "已接单，原执行文件未能核对"}
 
 
-def local_record(view, peer, item, *, read=False, revision=None, archive=False, locate=False, ticket=None, held=None, export_guard=None):
+def local_record(view, peer, item, *, read=False, revision=None, archive=False, locate=False, ticket=None, held=None, export_guard=None, work_key=False, required_work=None):
     # This is the unlocked receiver owner's local view, never a synthetic MTLS
     # history permission. Admit only the direct source and its still-current original read scope.
     if not view._peer_current(peer): return None
@@ -37,6 +38,8 @@ def local_record(view, peer, item, *, read=False, revision=None, archive=False, 
         original = admission(manager, operation, row, owner_export=True)
         if not original: return None
         source, accepted = original
+        work = read_work.from_original(original) if work_key or required_work is not None else None
+        if (work_key and work is None) or (required_work is not None and work != required_work): return None
         now = manager.now()
         if (accepted["callerDeviceId"] != peer[0] or accepted["authorizationEpoch"] != peer[3]
                 or not accepted["acceptedAt"] <= now < accepted["retainedUntil"] or not receiver.history.source_visible(accepted, now)):
@@ -52,6 +55,7 @@ def local_record(view, peer, item, *, read=False, revision=None, archive=False, 
             return None
         if revision is not None and manager.jobs.get(row[1], {}).get("nativeDeviceRevision") != revision:
             return None
+        if work_key: return work
         if export_guard is not None or read and source["toolName"]==EXPORT:
             if source["toolName"]!=EXPORT or locate or archive: return None
             summary=workspace_export(receiver,manager,operation,row,original,grant,now)
@@ -66,13 +70,14 @@ def local_record(view, peer, item, *, read=False, revision=None, archive=False, 
         return (command_receipt if source["toolName"] == COMMAND else workspace_file if source["toolName"] == FILE else workspace_read)(manager, operation, row, original)
 
 
-def show(view, peer, item):
+def show(view, peer, item, *, required_work=None, owning_current=lambda: True):
     from desktop_phone_receipts import _parts, _stamp
-    receipt = local_record(view, peer, item, read=True)
+    if not owning_current(): return
+    receipt = local_record(view, peer, item, read=True, required_work=required_work)
     if not receipt: return
     phase = receipt["phase"]
     until = time.monotonic() + 60
-    def current(): return time.monotonic() < until and bool(local_record(view, peer, item, revision=receipt.get("revision")))
+    def current(): return time.monotonic() < until and owning_current() and bool(local_record(view, peer, item, revision=receipt.get("revision"), required_work=required_work))
     if receipt["profile"] == EXPORT_PROFILE:
         def export_current():
             return time.monotonic()<until and bool(local_record(view,peer,item,revision=receipt.get("revision"),export_guard=receipt.get("_guard")))
@@ -97,7 +102,7 @@ def show(view, peer, item):
         else: view._dialog(titles[phase],text,[],current)
         return
     if receipt["profile"] == READ_PROFILE:
-        _show_read(view, peer, item, receipt, current)
+        _show_read(view, peer, item, receipt, current, offer_work=required_work is None)
         return
     body = f"配对设备 …{peer[0][-12:]} → 这台 Windows\n当时的本机工作区：{receipt['environmentId']} · {_stamp(receipt['updatedAt'])}"
     if "exitCode" in receipt: body += f"\n进程退出码：{receipt['exitCode']}"
@@ -121,7 +126,7 @@ def show(view, peer, item):
         else: return
 
 
-def _show_read(view, peer, item, receipt, current):
+def _show_read(view, peer, item, receipt, current, *, offer_work):
     from desktop_phone_receipts import _parts, _stamp
     kind = receipt["phase"]
     title = {"text_snapshot": "上次从这台 Windows 读到的文本", "directory_snapshot": "上次从这台 Windows 读到的目录"}.get(kind, "只核对到原读取回执")
@@ -138,7 +143,12 @@ def _show_read(view, peer, item, receipt, current):
         body += "\n这是当时的读取，不是当前目录或文件；没有重新扫描，也没有导入或修改项目。"
     while current():
         choices = ([] if kind == "receipt_only" else [("content", "查看原文本片段" if kind == "text_snapshot" else "查看原目录项")])
+        if offer_work: choices.append(("work", "查看这次手机任务在此工作区的读取"))
         choice = view._dialog(title, body, choices + [("ids","核对原操作和 Windows 工作编号")], current)
+        if choice == "work":
+            group = local_record(view, peer, item, work_key=True)
+            if group and current(): read_work.show(view, peer, item, group, current)
+            continue
         if choice == "ids":
             view._dialog("这一次读取的原编号", f"原操作：{item[1]}\nWindows 工作：{receipt['jobId']}\n请求摘要：{item[2]}", [], current)
         elif choice == "content":

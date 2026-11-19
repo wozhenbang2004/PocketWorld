@@ -157,18 +157,27 @@ public final class VersionedWorkspace {
         FileSnapshot actual=snapshot(projectId,path,revision);if(actual.tombstone)throw new FileUnavailable(actual.version!=0);
         JSONObject out=actual.json().put("deleted",false);
         if(!"text".equals(actual.kind))return out.put("contentAvailable",false).put("requiresNativeByteRead",true).put("message","这是原二进制版本；未解码成文字或改用其他文件");
-        String content=StandardCharsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(actual.bytes())).toString();
-        if(content.length()>65536)return out.put("contentAvailable",false).put("requiresNativeByteRead",true).put("message","原UTF-8版本超过文字接口65536字符上限；完整字节仍在原版本中");
+        String content=completeEditorText(actual);
+        if(content==null)return out.put("contentAvailable",false).put("requiresNativeByteRead",true).put("message","原UTF-8版本超过文字接口65536字符上限；完整字节仍在原版本中");
         return out.put("content",content).put("contentAvailable",true);
+    }
+    /** The ordinary text endpoint cannot replace a binary or a text body this editor could not read.
+     * Exact byte import/create/delete keep their original, separately reviewed native contracts. */
+    private static String completeEditorText(FileSnapshot value)throws Exception {
+        if(value.tombstone||!"text".equals(value.kind)||value.sizeBytes>4L*65536)return null;
+        String text=StandardCharsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+            .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(value.original)).toString();
+        return text.length()<=65536?text:null;
     }
     public synchronized JSONObject write(String projectId,String path,String content,int expectedVersion,boolean deleted)throws Exception {
         path=path(path);if(content==null||content.length()>65536)throw new IllegalArgumentException("单文件最多65536字符");
         FileSnapshot current=snapshot(projectId,path,0);if(current.version!=expectedVersion)throw new IllegalStateException("版本冲突，请重新读取文件后保存（当前版本"+current.version+"）");
         if(deleted){delete(projectId,path,expectedVersion,current.sha256);return metadata(head(projectId,path)).put("content","");}
+        if(!current.tombstone&&completeEditorText(current)==null)throw new IllegalStateException("这个原正式版本没有可完整编辑的文字；文字保存不能替换原字节或较长正文");
         // A valid source file is strict UTF-8; incomplete IME code units belong in the private draft, not a saved source.
         java.nio.ByteBuffer encoded=StandardCharsets.UTF_8.newEncoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT).onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT).encode(java.nio.CharBuffer.wrap(content));byte[] bytes=new byte[encoded.remaining()];encoded.get(bytes);
         commitEntry(projectId,path,new JSONObject().put("content",content).put("kind","text").put("sha256",sha256(bytes)).put("sizeBytes",bytes.length),expectedVersion,false);
-        return metadata(head(projectId,path)).put("content",content);
+        return metadata(head(projectId,path)).put("projectId",projectId).put("content",content).put("contentAvailable",true);
     }
     private void commitEntry(String projectId,String path,JSONObject value,int expectedVersion,boolean deleted)throws Exception {commitEntry(projectId,path,value,expectedVersion,deleted,null);}
     private void commitEntry(String projectId,String path,JSONObject value,int expectedVersion,boolean deleted,UUID revision)throws Exception {

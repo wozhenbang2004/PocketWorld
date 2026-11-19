@@ -95,8 +95,11 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
     return invoke('projects.development.read', { projectId }, value => {
     if (value.projectId !== projectId || typeof value.viewHandle !== 'string') throw new Error('没有取得这个原项目的页面，请重新读取。');
     handle.current = value.viewHandle; setView(value); sourceAttempt.current = ''; setSource(null);
-    if (!touched.current) {
-      const retained = value.draft || {}, available = rows(value.checkouts);
+    const incoming = value.draft || {}, here = draft.current;
+    const selectedCopy = incoming.ownerPickedConvention && !here.constraints && (!here.checkoutId || here.checkoutId===incoming.checkoutId) &&
+      here.goal === (incoming.goal||'') && here.deliverable === (incoming.deliverable||'') && here.completionCriteria === (incoming.completionCriteria||'');
+    if (!touched.current || selectedCopy) {
+      const retained = incoming, available = rows(value.checkouts);
       const selected = retained.checkoutId || (available.length === 1 ? available[0].checkoutId : '');
       draft.current = { goal: retained.goal || '', checkoutId: selected, ...deliveryRequirements(retained) };
       setGoal(draft.current.goal); setCheckout(selected); setRequirements(deliveryRequirements(retained));
@@ -157,6 +160,11 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
     void readRef.current();
     return () => { alive.current = false; retire(); unsubscribe(); document.removeEventListener('visibilitychange', inspect); window.removeEventListener('pagehide', retire); };
   }, [projectId, active]);
+  const picked = view?.draft?.ownerPickedConvention;
+  const currentPicked = picked && Number.isSafeInteger(picked.revision) && picked.revision>0 && picked.checkoutId===checkout &&
+    requirements.constraints && view?.draft?.constraints===requirements.constraints ? picked : null;
+  const removePicked = () => { setRequirements(value=>({...value,constraints:''})); retain({...draft.current,constraints:''});
+    setView(value=>value ? {...value,draft:{...value.draft,ownerPickedConvention:null}} : value); };
   const readable = can('projects.development.read');
   useEffect(() => { if (active && readable && !handle.current) void readRef.current(); }, [active, readable]);
   useEffect(() => {
@@ -256,9 +264,13 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
           {pending && <Button variant="secondary" disabled={busy || filesOpen} onClick={() => void invoke('projects.development.query', { viewHandle: handle.current }, receipt => applySubmission(receipt, submission))}>查询原输入</Button>}
         </div></div>}
       <TextAreaField label="这次的目标" value={goal} isDisabled={disabled} onChange={value => { if (value.length <= 12000) { setGoal(value); retain({ ...draft.current, goal: value }); } }} hint="例如：做一个能在手机预览的番茄钟，先用本地数据。不要填写密码或令牌。" />
+      {currentPicked && <div className="pw-local-inline-notice"><p>已从本项目手写约定修订 {currentPicked.revision} 放入本次草稿，尚不是模型采用的证据。</p>
+        <Button variant="ghost" size="small" disabled={disabled} onClick={removePicked}>移除本次约定</Button></div>}
       <Accordion><AccordionItem id="development-delivery" title="交付要求" description={deliveryFields.some(key => requirements[key].trim()) ? '已补充约束、交付物或完成标准' : '选填：约束、交付物与完成标准'}>
         <TextAreaField label="限制与约束" value={requirements.constraints} isDisabled={disabled} hint="例如：保留已有数据，沿用当前组件，每项最多 4000 字。"
-          onChange={value => { if (value.length <= 4000) { setRequirements(previous => ({ ...previous, constraints: value })); retain({ ...draft.current, constraints: value }); } }} />
+          onChange={value => { if (value.length <= 4000) {
+            if(currentPicked && value!==requirements.constraints)setView(previous=>previous?{...previous,draft:{...previous.draft,ownerPickedConvention:null}}:previous);
+            setRequirements(previous => ({ ...previous, constraints: value })); retain({ ...draft.current, constraints: value }); } }} />
         <TextAreaField label="要交付什么" value={requirements.deliverable} isDisabled={disabled} hint="例如：可预览的页面和对应项目固定包。"
           onChange={value => { if (value.length <= 4000) { setRequirements(previous => ({ ...previous, deliverable: value })); retain({ ...draft.current, deliverable: value }); } }} />
         <TextAreaField label="怎样算完成" value={requirements.completionCriteria} isDisabled={disabled} hint="写清你要看到的实际结果；发送或发布仍需原来的确认。"
@@ -267,7 +279,8 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
       <SelectField label="要工作的私人副本" value={checkout} isDisabled={disabled} options={[{ id: '', label: available.length ? '选择已有私人副本' : '尚未准备私人副本' },
         ...available.map(row => ({ id: row.checkoutId, label: `${row.name || name} · ${new Date(row.createdAt || 0).toLocaleString()}` })),
         ...(checkout && !available.some(row => row.checkoutId === checkout) ? [{ id: checkout, label: '原副本暂不可用，请核对' }] : [])]}
-        onChange={value => { setCheckout(value); setSource(null); setHostOrigin(null); setHostFiles(null); sourceAttempt.current = ''; retain({ ...draft.current, checkoutId: value }); }} />
+        onChange={value => { const clear = !!currentPicked && checkout!==value; if(clear){setRequirements(last=>({...last,constraints:''}));setView(last=>last?{...last,draft:{...last.draft,ownerPickedConvention:null}}:last);}
+          setCheckout(value); setSource(null); setHostOrigin(null); setHostFiles(null); sourceAttempt.current = ''; retain({ ...draft.current, checkoutId: value, ...(clear?{constraints:''}:{}) }); }} />
       {available.some(row => row.checkoutId === checkout && row.hostSource === true) && can('projects.development.hostSource') &&
         <div className="pw-form-actions"><Button variant="ghost" disabled={busy || !!review || filesOpen} onClick={() => readOrigin(false)}>核对导入来源</Button>
           {origin && <div role="status">{origin.localSourceRecorded ? <p>来自主机冻结版本 {origin.snapshotVersion} · {origin.files} 份文件 · {origin.bytes} 字节。这里只记录导入时的版本，不代表本机文件未改或主机现在在线。</p> :

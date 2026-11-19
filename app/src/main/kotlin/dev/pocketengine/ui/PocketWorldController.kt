@@ -489,6 +489,15 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val meta = scope.selected.metadata(); check(meta.opt("selectionCurrent") == true) { "项目选择已失效，请重新核对" }
         return meta.getString("spaceId")
     }
+    /** Only an already selected, live local-owner project. No input can select a destination here. */
+    internal fun webProjectConventionDraftOrigin(): JSONObject {
+        val space = webProjectConventionDestination()
+        val scope = memoryReviewScope as? MemoryReviewScope.Project ?: error("请重新选择原项目")
+        val meta = scope.selected.metadata()
+        check(meta.opt("selectionCurrent") == true && meta.getString("spaceId") == space)
+        return JSONObject().put("projectId", meta.getString("projectId")).put("checkoutId", meta.getString("checkoutId"))
+            .put("scopeRevision", meta.getString("revision")).put("name", scope.label)
+    }
     /** Personal identity is intentionally independent of the memory workspace's namespace picker. */
     internal fun webPersonalProfileSummary(): JSONObject? =
         if (closed) null else runCatching { app.settings.personalProfileSummary() }.getOrNull()
@@ -1727,8 +1736,9 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     private fun retainedGroupReceipts(id: String, receipt: JSONObject): Map<String, JSONObject> = (state.groupOwnerReceipts + (id to receipt)).entries.toList().takeLast(64).associate { it.toPair() }
     fun nativeDeviceWorkspace(): dev.pocketengine.features.devices.NativeDeviceWorkspaceHost? = app.deviceWorkspaceHost
     fun nativeDeviceTaskScope(): dev.pocketengine.features.devices.NativeDeviceTaskScopeHost? = app.deviceTaskScopeHost
-    internal fun prepareOwnerDeviceTask(requestId: String, goal: String, deadlineAt: Long, tools: Int, models: Int, direct: dev.pocketengine.features.devices.DirectedPhoneTarget?, current: () -> Boolean): JSONObject =
-        app.tasks.prepareOwnerDeviceTask(requestId, goal, deadlineAt, tools, models, direct) { !closed && webPrivateOwnerVisible() && current() }
+    internal fun prepareOwnerDeviceTask(requestId: String, goal: String, deadlineAt: Long, tools: Int, models: Int,
+        direct: dev.pocketengine.features.devices.DirectedPhoneTarget?, workspace: dev.pocketengine.features.devices.DirectedWorkspaceTarget?, current: () -> Boolean): JSONObject =
+        app.tasks.prepareOwnerDeviceTask(requestId, goal, deadlineAt, tools, models, direct, workspace) { !closed && webPrivateOwnerVisible() && current() }
     // Existing I/O queue for pairing/metadata waits. Urgent original stop never waits behind it.
     fun runDeviceWorkspaceWork(work: Runnable) { check(!closed); io.execute(work) }
     fun runDeviceWorkspaceControlWork(work: Runnable) { check(!closed); controls.execute(work) }
@@ -2746,7 +2756,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                         } else {
                             closeWorkspaceArtifact(); selectProject(view.source.projectId); invalidateFileRequests()
                             exactArtifactContinuation = selected
-                            state = state.copy(filePath = view.source.path, fileContent = historical, fileBaseline = current, fileVersion = selected.expected.version,
+                            state = state.copy(fileObservation = null, revisionObservation = null, heldFormalDraft = null, filePath = view.source.path, fileContent = historical, fileBaseline = current, fileVersion = selected.expected.version,
                                 fileLoading = false, fileSaving = false, fileReady = true, fileError = null, fileHistory = emptyList(), revisionContent = null, revisionNumber = null,
                                 revisionLoading = false, lastSavedVersion = null, workspaceArtifactEditorOrigin = UiArtifactEditorOrigin(view.source, view.fromTaskId),
                                 notice = "已把所选历史成果的原字节放入编辑区。当前文件仅用作保存冲突基线；明确保存才创建新版本，原成果保留。")
@@ -4344,7 +4354,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         projectGit.deactivate()
         projectPackages.cancel()
         invalidateFileRequests()
-        state = state.copy(projectId = id, files = emptyList(), filePath = null, lastSavedVersion = null, fileReady = false, workspaceArtifactEditorOrigin = null, projectTaskReturn = state.projectTaskReturn?.takeIf { it.projectId == id })
+        state = state.copy(projectId = id, files = emptyList(), fileObservation = null, revisionObservation = null, heldFormalDraft = null, filePath = null, lastSavedVersion = null, fileReady = false, workspaceArtifactEditorOrigin = null, projectTaskReturn = state.projectTaskReturn?.takeIf { it.projectId == id })
         feature("workspace", "list", JSONObject().put("projectId", id))
     }
     fun createProject(name: String) {
@@ -4360,14 +4370,18 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         check(!closed && webPrivateOwnerVisible() && state.projectId == pin.project && state.filePath == null &&
             !state.fileSaving && loaded.stillCurrent()) { "原正式版本或项目窗口已变化，未切换文件或覆盖现有编辑" }
         invalidateFileRequests()
-        state = state.copy(filePath = pin.path, fileContent = loaded.content, fileBaseline = loaded.content, fileVersion = pin.version,
+        state = state.copy(fileObservation = null, revisionObservation = null, heldFormalDraft = null, filePath = pin.path, fileContent = loaded.content, fileBaseline = loaded.content, fileVersion = pin.version,
             fileLoading = false, fileSaving = false, fileReady = true, fileError = null, fileHistory = emptyList(), revisionContent = null,
             revisionNumber = null, revisionLoading = false, lastSavedVersion = null, workspaceArtifactEditorOrigin = null)
     }
     fun openFile(path: String) {
         val project = state.projectId ?: return
         invalidateFileRequests()
-        state = state.copy(filePath = path, fileContent = "", fileBaseline = "", fileVersion = 0, fileLoading = true, fileReady = false, fileError = null, fileHistory = emptyList(), revisionContent = null, revisionNumber = null, revisionLoading = false, lastSavedVersion = null)
+        val sameFile = state.filePath == path
+        val held = if (sameFile && state.fileReady && state.fileContent != state.fileBaseline)
+            HeldFormalDraft(project, path, state.fileVersion, state.fileContent) else state.heldFormalDraft?.takeIf { sameFile && it.project == project && it.path == path }
+        state = state.copy(fileObservation = state.fileObservation?.takeIf { sameFile && it.matches(project, path) }, revisionObservation = null, heldFormalDraft = held,
+            filePath = path, fileContent = "", fileBaseline = "", fileVersion = if (sameFile) state.fileVersion else 0, fileLoading = true, fileReady = false, fileError = null, fileHistory = emptyList(), revisionContent = null, revisionNumber = null, revisionLoading = false, lastSavedVersion = null)
         fileRequestId = feature("workspace", "read", JSONObject().put("projectId", project).put("path", path))
     }
     fun newFile(path: String) {
@@ -4375,13 +4389,19 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val target = path.trim()
         if (state.files.any { it.path == target }) { openFile(target); return }
         invalidateFileRequests()
-        state = state.copy(filePath = target, fileContent = "", fileBaseline = "", fileVersion = 0, fileLoading = false, fileReady = true, fileError = null, fileHistory = emptyList(), revisionContent = null, revisionNumber = null, revisionLoading = false, lastSavedVersion = null)
+        state = state.copy(fileObservation = null, revisionObservation = null, heldFormalDraft = null, filePath = target, fileContent = "", fileBaseline = "", fileVersion = 0, fileLoading = false, fileReady = true, fileError = null, fileHistory = emptyList(), revisionContent = null, revisionNumber = null, revisionLoading = false, lastSavedVersion = null)
     }
-    fun editFile(content: String) { state = state.copy(fileContent = content, lastSavedVersion = null) }
+    internal fun requireFormalTextEditor() {
+        check(state.filePath != null && state.fileReady && !state.fileLoading && !state.fileSaving &&
+            state.fileObservation?.takeIf { it.matches(state.projectId, state.filePath) }?.let { it.representation == "text" } != false) {
+            "没有取得这份正式版本的完整文字；未编辑或保存，原件和已保留草稿不变"
+        }
+    }
+    fun editFile(content: String) { requireFormalTextEditor(); state = state.copy(fileContent = content, lastSavedVersion = null) }
     fun closeFile() {
         if (state.fileSaving) return
         val origin = state.workspaceArtifactEditorOrigin
-        invalidateFileRequests(); state = state.copy(filePath = null, fileReady = false, fileLoading = false, workspaceArtifactEditorOrigin = null)
+        invalidateFileRequests(); state = state.copy(fileObservation = null, revisionObservation = null, heldFormalDraft = null, filePath = null, fileReady = false, fileLoading = false, workspaceArtifactEditorOrigin = null)
         if (origin != null && currentWorkspaceArtifact(origin.source, origin.fromTaskId)) openWorkspaceArtifact(origin.source, origin.fromTaskId)
     }
     fun retryFile() { state.filePath?.let(::openFile) }
@@ -4393,18 +4413,24 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun previewRevision(version: Int) {
         val project = state.projectId ?: return
         val path = state.filePath ?: return
-        state = state.copy(revisionNumber = version, revisionContent = null, revisionLoading = true)
+        state = state.copy(revisionNumber = version, revisionContent = null, revisionLoading = true,
+            revisionObservation = state.revisionObservation?.takeIf { it.matches(project, path) && it.version == version }, fileError = null)
         revisionRequestId = feature("workspace", "read", JSONObject().put("projectId", project).put("path", path).put("version", version))
     }
     fun useRevision() {
-        val content = state.revisionContent ?: return
+        requireFormalTextEditor()
+        val version = state.revisionNumber
+        val proof = state.revisionObservation
+        check(!state.revisionLoading && proof != null && proof.matches(state.projectId, state.filePath) &&
+            proof.version == version && proof.representation == "text") { "这个历史版本没有可采用的完整文字，当前草稿未替换" }
+        val content = state.revisionContent ?: error("没有读到原历史文字，当前草稿未替换")
         state = state.copy(fileContent = content, lastSavedVersion = null, notice = "历史内容已放入编辑区，保存后才会创建新版本")
     }
     private fun invalidateFileRequests() { fileRequestId = null; historyRequestId = null; revisionRequestId = null; exactArtifactContinuation = null; artifactContinuationGeneration++ }
     fun saveFile() {
         val project = state.projectId ?: return
         val path = state.filePath ?: return
-        if (state.fileSaving || state.fileLoading || !state.fileReady) return
+        requireFormalTextEditor()
         val historical = exactArtifactContinuation
         if (historical != null) {
             val origin = state.workspaceArtifactEditorOrigin ?: return
@@ -5144,7 +5170,13 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             }
             state = state.copy(error = if (feature == "workspace" && command in setOf("read", "write")) state.error else message, chatBusy = if (feature == "assistant" && command == "send" && state.chatActiveTurn==null) false else state.chatBusy)
             if (feature == "workspace") state = when (requestId) {
-                fileRequestId -> state.copy(fileError = message, fileLoading = false, fileSaving = false)
+                fileRequestId -> {
+                    val project = state.projectId; val path = state.filePath
+                    val held = if (project != null && path != null && state.fileReady && state.fileContent != state.fileBaseline)
+                        HeldFormalDraft(project, path, state.fileVersion, state.fileContent) else state.heldFormalDraft
+                    state.copy(fileError = message, fileReady = false, fileLoading = false, fileSaving = false, heldFormalDraft = held,
+                        fileContent = "", fileBaseline = "", lastSavedVersion = null)
+                }
                 revisionRequestId -> state.copy(fileError = message, revisionLoading = false)
                 historyRequestId -> state.copy(fileError = message)
                 // Project creation/list/export failures retain their module/global error.
@@ -5258,9 +5290,31 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 "list" -> if (meta.second.optString("projectId") == state.projectId) state = state.copy(files = result.optJSONArray("files").objects().map { UiFile(it.optString("path"), it.optInt("version")) })
                 "history" -> if (requestId == historyRequestId) state = state.copy(fileHistory = result.optJSONArray("history").objects().map { UiFileRevision(it.optInt("version"), it.optLong("at"), it.optInt("characters"), it.optBoolean("deleted")) }.sortedByDescending { it.version })
                 "read", "write" -> if (meta.second.optString("projectId") == state.projectId && meta.second.optString("path") == state.filePath) {
-                    if (requestId == revisionRequestId) { state = state.copy(revisionContent = result.optString("content"), revisionLoading = false); return }
-                    if (requestId != fileRequestId) return
-                    state = state.copy(filePath = result.optString("path", state.filePath ?: ""), fileContent = result.optString("content"), fileBaseline = result.optString("content"), fileVersion = result.optInt("version"), fileLoading = false, fileSaving = false, fileReady = true, fileError = null, lastSavedVersion = if (command == "write") result.optInt("version") else null)
+                    val historyRead = requestId == revisionRequestId
+                    if (!historyRead && requestId != fileRequestId) return
+                    val project = meta.second.getString("projectId"); val path = meta.second.getString("path")
+                    val expected = if (historyRead) meta.second.getInt("version") else if (command == "write") meta.second.getInt("expectedVersion") + 1 else null
+                    val seen = FormalFileObservation.read(result, project, path, expected)
+                    if (historyRead) {
+                        state = state.copy(revisionContent = seen?.second, revisionLoading = false,
+                            revisionObservation = seen?.first ?: state.revisionObservation?.takeIf { it.matches(project, path) && it.version == expected },
+                            fileError = if (seen == null) "未获原历史版本的完整身份；没有使用空白正文替换草稿" else null)
+                        return
+                    }
+                    val text = seen?.second
+                    if (seen == null || text == null) {
+                        val hold = if (state.fileReady && state.fileContent != state.fileBaseline) HeldFormalDraft(project, path, state.fileVersion, state.fileContent) else state.heldFormalDraft
+                        state = state.copy(fileObservation = seen?.first ?: state.fileObservation, heldFormalDraft = hold,
+                            fileContent = "", fileBaseline = "", fileVersion = seen?.first?.version ?: state.fileVersion,
+                            fileLoading = false, fileSaving = false, fileReady = false, lastSavedVersion = null,
+                            fileError = if (seen == null || seen.first.representation == "unverified")
+                                "未取得可核对的完整正文。原稿保留，请重读原文件，不重复保存。" else null)
+                        return
+                    }
+                    state = state.copy(filePath = path, fileContent = text, fileBaseline = text, fileObservation = seen.first,
+                        heldFormalDraft = state.heldFormalDraft?.takeIf { it.matchesDifferentText(project, path, text) },
+                        fileVersion = seen.first.version, fileLoading = false, fileSaving = false, fileReady = true, fileError = null,
+                        lastSavedVersion = if (command == "write") seen.first.version else null)
                     if (command == "write") state.projectId?.let { feature("workspace", "list", JSONObject().put("projectId", it)) }
                     if (command == "write" && state.fileHistory.isNotEmpty()) fileHistory()
                 }

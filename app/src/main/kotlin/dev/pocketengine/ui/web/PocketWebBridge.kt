@@ -140,6 +140,17 @@ internal class PocketWebBridge(
     }
     private var section: String? = null
     private var taskPage: String? = null
+    // A task-list stub or proposed ID is not permission to expose that owner's detailed project requirements.
+    private data class GoalWindow(val task:String,val run:String,val epoch:Int,val project:String,val checkout:String,val ticket:PocketWebWindowTicket)
+    private var projectGoal:GoalWindow?=null
+    private fun canReadProjectGoal(row:UiTask):Boolean {
+        val pin=projectGoal ?: return false
+        if (row.id!=pin.task || taskViewId!=pin.task || section!=null || !controller.webPrivateOwnerVisible() || !acceptsWindow(pin.ticket)) return false
+        val raw=row.raw; val d=raw.optJSONObject("developmentContext") ?: return false
+        return raw.optString("kind")=="assistant" && raw.optString("actorId")=="owner" && raw.optString("spaceId")=="private" &&
+            !raw.has("origin") && raw.optString("runId")==pin.run && raw.optInt("coordinatorEpoch")==pin.epoch &&
+            d.optString("projectId")==pin.project && d.optString("checkoutId")==pin.checkout
+    }
     @Volatile private var taskViewId: String? = null
     private data class PauseNoteReview(val handle: String, val task: String, val run: String, val epoch: Int, val pause: Long, val scope: Long,
                                        val window: PocketWebWindowTicket, val expires: Long)
@@ -162,7 +173,6 @@ internal class PocketWebBridge(
     private val trajectory = PocketWebTrace(controller)
     private val skillDrafts = PocketWebSkillDrafts(controller)
     private val memoryDrafts = PocketWebMemoryDrafts(controller)
-    private val knowledge = PocketWebKnowledge(controller)
     private val personal = PocketWebPersonal(controller)
     private val memoryHistory = PocketWebMemoryHistory(controller)
     private val conversationOrganization = PocketWebConversationOrganization(controller)
@@ -202,6 +212,7 @@ internal class PocketWebBridge(
         !closed && documentId != null && section == null && taskViewId == null && controller.webPrivateOwnerVisible() && controller.state.filePath == null
     }
     private val projectDevelopment = PocketWebProjectDevelopment(controller, { !closed && documentId != null && section == null && taskViewId == null && controller.webPrivateOwnerVisible() }, ::captureWindow, ::acceptsWindow)
+    private val knowledge = PocketWebKnowledge(controller, projectDevelopment::conventionDraft)
     private val butlerPreparations = PocketWebButlerPreparations(controller, { !closed && documentId != null && controller.webPrivateOwnerVisible() }, ::captureWindow, ::acceptsWindow)
     private val localPages = PocketWebLocal(controller) { taskViewId }
     private val setupPages = PocketWebSetup(controller) { !closed && documentId != null && section == "setup" && taskViewId == null }
@@ -296,7 +307,7 @@ internal class PocketWebBridge(
         projectLivePreview = PocketWebProjectLivePreview(controller, container, ::captureWindow, ::acceptsWindow) { publishState() }
         remoteTasks.attachPreview(container)
     }
-    fun foreground(value: Boolean) { if (!value) projectWorkPages.clear(); projectPreview?.foreground(value); projectLivePreview?.foreground(value); phoneViewer.foreground(value); attachmentPages.foreground(value); remoteTasks.foreground(value); taskCapabilities.foreground(value); deviceTaskScope.foreground(value); phoneControl.foreground(value) }
+    fun foreground(value: Boolean) { if (!value) { projectGoal=null; projectWorkPages.clear() }; projectPreview?.foreground(value); projectLivePreview?.foreground(value); phoneViewer.foreground(value); attachmentPages.foreground(value); remoteTasks.foreground(value); taskCapabilities.foreground(value); deviceTaskScope.foreground(value); phoneControl.foreground(value) }
     fun resource(uri: android.net.Uri, method: String, headers: Map<String, String>): android.webkit.WebResourceResponse? = attachmentPages.response(uri, method, headers)
 
     fun close() {
@@ -346,7 +357,7 @@ internal class PocketWebBridge(
     fun invalidatePresentation(documentReplaced: Boolean) {
         check(Looper.myLooper() == Looper.getMainLooper())
         cancelStatePublication()
-        commandFence.invalidate()
+        projectGoal=null; commandFence.invalidate()
         if (documentReplaced) controller.forgetShownPhoneActivity()
         if (documentReplaced) localSourceIntake.close() else localSourceIntake.pause()
         projectGitImport.close()
@@ -392,7 +403,7 @@ internal class PocketWebBridge(
         var projection: JSONObject? = null
         snapshotObserver.observeReads {
             controller.modelSelectionRevision
-            projection = PocketWebState.snapshot(controller)
+            projection = PocketWebState.snapshot(controller, ::canReadProjectGoal)
             projection?.getJSONObject("state")?.put("projectPreview", projectPreview?.snapshot() ?: JSONObject.NULL)
             projection?.getJSONObject("state")?.put("localSourceIntake", localSourceIntake.snapshot() ?: JSONObject.NULL)
             projection?.getJSONObject("state")?.put("projectGitImport", projectGitImport.snapshot() ?: JSONObject.NULL)
@@ -422,7 +433,7 @@ internal class PocketWebBridge(
             if (needsRead) main.post { if (!closed && !controller.modelSelectionPending()) readModelSnapshot() }
         }
         domainSnapshots.forEach { (domain, value) ->
-            val public = PocketWebState.publicValue(value)
+            val public = PocketWebState.publicValue(value, omitProjectContract = true)
             projectedState.getJSONObject("ownerSnapshots").put(domain, public)
             projectedState.getJSONObject("features").put(domain, public)
             if (domain == "models") projectedState.put("modelConnections", public)
@@ -532,7 +543,7 @@ internal class PocketWebBridge(
                 controller.formalFileExports.dispatch(action,args){result,error->complete(id,result,error,retainValue=false);publishState()};return
             }
             if (action in PocketWebProjectDevelopment.COMMANDS) {
-                projectDevelopment.dispatch(action, args) { result, error -> complete(id, result, error, retainValue = action !in PocketWebCheckoutFiles.COMMANDS && action != "projects.development.readHostDiff"); publishState() }; return
+                projectDevelopment.dispatch(action, args) { result, error -> complete(id, result, error, retainValue = action !in PocketWebCheckoutFiles.COMMANDS && action !in setOf("projects.development.readHostDiff", "projects.development.read", "projects.development.review", "projects.development.start", "projects.development.query")); publishState() }; return
             }
             if (action in PocketWebButlerPreparations.COMMANDS) {
                 butlerPreparations.dispatch(action, args) { result, error -> complete(id, result, error, "outcome_unknown"); publishState() }; return
@@ -574,8 +585,13 @@ internal class PocketWebBridge(
                     val selected = requireTask(requiredString(args, "taskId"))
                     require(selected.id == taskViewId && selected.raw.optString("actorId") == "owner" && selected.raw.optString("spaceId") == "private") { "请先打开这份原私人任务" }
                 }
-                val input = if (action == "deviceTaskScope.prepare" && args.has("directPhone"))
-                    JSONObject(args.toString()).put("directPhone",devicePages.originalPhoneForPreparation(args.getJSONObject("directPhone"))) else args
+                val input = when {
+                    action != "deviceTaskScope.prepare" -> args
+                    args.has("directPhone") && args.has("directWorkspace") -> error("不能为同一目标同时指定两类设备")
+                    args.has("directPhone") -> JSONObject(args.toString()).put("directPhone", devicePages.originalPhoneForPreparation(args.getJSONObject("directPhone")))
+                    args.has("directWorkspace") -> JSONObject(args.toString()).put("directWorkspace", devicePages.originalWorkspaceForPreparation(args.getJSONObject("directWorkspace")))
+                    else -> args
+                }
                 deviceTaskScope.dispatch(action, input) { result, error ->
                     if (action == "deviceTaskScope.prepare" && error == null && result?.optBoolean("prepared") == true)
                         openOriginalTask(id, result.getString("taskId"), true, "devices")
@@ -1107,8 +1123,20 @@ internal class PocketWebBridge(
                         result?.optJSONObject("snapshot")?.let { domainSnapshots["devices"] = JSONObject(it.toString()) }
                         if (error == null) domainErrors.remove("devices") else domainErrors["devices"] = error
                     }
-                    // A local file version is a time-of-check observation, not a replayable Web result.
-                    complete(id, result, error, "outcome_unknown", retainValue = action != "devices.checkLocalExportedFile")
+                    // Only the first delivery belongs to the owner's original text/read window.
+                    // The cache still keeps the exact command fingerprint and a non-replay receipt.
+                    val value=result?.optJSONObject("value")
+                    val privateText=when(action){
+                        "devices.queryPhoneGoalResult" -> !value?.optJSONObject("result")?.optString("summary").isNullOrEmpty()
+                        "devices.readLocalReviewedPhoneGoal" -> value?.has("text")==true
+                        "devices.reviewResult" -> value?.optJSONObject("view")?.let { it.has("summary") || it.has("evidence") }==true
+                        "devices.reviewGoal" -> value?.optJSONObject("view")?.has("goal")==true
+                        "devices.readReviewedPhoneInbox","devices.readReceivedPhoneGoals","devices.readPhoneGoalArchive","devices.readWaitingPhoneGoals" ->
+                            (value?.optJSONArray("rows")?.length()?:0)>0 || !value?.optString("searchText").isNullOrEmpty()
+                        else -> false
+                    }
+                    complete(id,result,error,"outcome_unknown",retainValue=!privateText && action!="devices.checkLocalExportedFile",
+                        replayHint=if(privateText)"原文字读取或审阅已结束，请回到原工作重新核对；没有重放正文或执行操作。" else null)
                     if (!action.startsWith("devices.desktop.")) publishState()
                 }
                 return
@@ -1411,7 +1439,7 @@ internal class PocketWebBridge(
             "memoryDraft.close", "memoryHistory.close", "knowledge.close" -> null // No record, source, selector or authority in a close ACK.
             "memoryDraft.confirm", "memoryDraft.cancel", "memoryDraft.undo" -> "此请求不会重复执行，请在原提案查询实际结果。"
             "knowledge.namespace" -> "原范围不会自动重新打开。请明确选择当前要查看的记忆范围。"
-            "knowledge.confirm", "knowledge.project.propose", "knowledge.project.note.confirm", "knowledge.consolidation.start", "knowledge.consolidation.stop",
+            "knowledge.confirm", "knowledge.project.propose", "knowledge.project.note.confirm", "knowledge.project.draft.confirm", "knowledge.consolidation.start", "knowledge.consolidation.stop",
             "memoryHistory.confirm", "taskMemory.confirm" -> "此请求不会重复执行，请在原记忆或任务核对实际结果。"
             else -> "原读取或审阅结果不能重放，请在原范围重新核对。"
         }
@@ -2026,6 +2054,12 @@ internal class PocketWebBridge(
                     val taskWindow=captureWindow()
                     attachmentPages.openOriginalFromDevice(file) { !closed && acceptsWindow(taskWindow) && section==null && taskViewId==file.task && controller.webPrivateOwnerVisible() }
                 }
+                val raw=task.raw; val dev=raw.optJSONObject("developmentContext")
+                projectGoal=if (checkedDeviceFile==null && dev!=null && raw.optString("kind")=="assistant" && raw.optString("actorId")=="owner" &&
+                    raw.optString("spaceId")=="private" && !raw.has("origin") && controller.webPrivateOwnerVisible() &&
+                    raw.optString("runId").isNotBlank() && raw.optInt("coordinatorEpoch")>0 && dev.optString("projectId").isNotBlank() &&
+                    dev.optString("checkoutId").isNotBlank()) GoalWindow(task.id,raw.getString("runId"),raw.getInt("coordinatorEpoch"),
+                    dev.getString("projectId"),dev.getString("checkoutId"),captureWindow()) else null
                 complete(requestId, JSONObject().put("taskId", task.id).put("readOnly", true).put("executionAuthorized", false), null, retainValue = checkedDeviceFile==null)
                 publishState()
             } catch (failure: Exception) {
@@ -2075,7 +2109,7 @@ internal class PocketWebBridge(
         return result
     }
     private fun requireTask(id: String): UiTask = controller.state.tasks.firstOrNull { it.id == id } ?: error("原任务不在当前读取窗口，请刷新后重新打开")
-    private fun leaveTask() { phoneViewer.clear(); localPages.clear(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); composerModels.clear(); taskViewId = null; controller.closeWebTaskView(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.clear(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); commandFence.invalidate(); taskReviewGeneration++; taskPage?.let(controller::leaveGroupTask); taskPage = null }
+    private fun leaveTask() { projectGoal=null; phoneViewer.clear(); localPages.clear(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); composerModels.clear(); taskViewId = null; controller.closeWebTaskView(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.clear(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); commandFence.invalidate(); taskReviewGeneration++; taskPage?.let(controller::leaveGroupTask); taskPage = null }
     private fun leaveConnection() { localSourceIntake.close(); projectGitImport.close(); phoneViewer.clear(); controller.webChannels.clear(); controller.webSkills.clear(); commandFence.invalidate(); ++domainGeneration; modelReviews.clear(); automation.clear(); mcpImports.clear(); executionReviews.clear(); sourceReader.clear(); messageQuotes.clear(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.clear(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); connectionPages.clear(); teamPages.clear(); groupPages.clear(); mediaPages.clear(); realtimePages.clear(); proxyPages.clear(); planPages.clear(); commitmentPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); devicePages.clear(); pluginPages.clear(); localPages.clear(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); accountWorkspace.invalidate(); composerModels.clear(); aiSources.clear(); conversationModels.clear(); deviceWindow?.close(); deviceWindow = null; section?.let { if (it == "memory") controller.leaveOwnerDomain("memoryReview") else if (it in ownerDomains) controller.leaveOwnerDomain(it) }; section?.takeIf { it == "archives" || it == "storage" }?.let(dataPages::close); section = null }
     /**
      * Navigation already disposes these workspace handles in leaveConnection().

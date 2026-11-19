@@ -23,6 +23,7 @@ import dev.pocketengine.phone.display.BackgroundPhonePort;
 import dev.pocketengine.phone.display.DisplayModule;
 import dev.pocketengine.phone.PhoneAccessibilityService;
 import dev.pocketengine.phone.PhoneNotificationControls;
+import dev.pocketengine.phone.OriginalPhoneNotice;
 import dev.pocketengine.phone.observation.AdaptivePhonePort;
 import dev.pocketengine.runtime.AgentRunner;
 import java.util.concurrent.ExecutorService;
@@ -117,6 +118,8 @@ public final class PhoneRunService extends Service {
     private String deviceGoalPhysicalSessionId;
     private PowerManager.WakeLock wakeLock;
     private final java.util.concurrent.ConcurrentHashMap<String,BackgroundPhoneRun> backgroundRuns=new java.util.concurrent.ConcurrentHashMap<>();
+    // Main-thread presentation only. A metadata update must not move a sibling into the original foreground row.
+    private BackgroundPhoneRun primaryBackgroundNotice;
     private final java.util.concurrent.atomic.AtomicInteger backgroundNotificationIds=new java.util.concurrent.atomic.AtomicInteger(1000);
     private final EngineApplication.Observer observer=event->{
         if(destroyed)return;
@@ -241,7 +244,7 @@ public final class PhoneRunService extends Service {
             if(!refreshBackgroundNotifications(session))throw new IllegalStateException("原后台任务通知未发布，未启动执行");
             session.start(intent.getBooleanExtra("manualOnly",false));
         }catch(Exception unavailable){
-            if(session!=null){backgroundRuns.remove(id,session);session.destroy();}
+            if(session!=null){backgroundRuns.remove(id,session);if(primaryBackgroundNotice==session)primaryBackgroundNotice=null;session.destroy();}
             else{original.cancel();try{app.tasks.endAttempt(id,run,"awaiting_user",safeMessage(unavailable),new JSONObject());}catch(Exception ignored){app.error("原后台启动结果保存尚未确认");}app.released(id,original);}
             app.pushTask(id);settleForegroundOwnership(startId);
         }
@@ -249,6 +252,7 @@ public final class PhoneRunService extends Service {
     /** Exact owner callback; no completion may remove another run of the same task. */
     void backgroundFinished(BackgroundPhoneRun session,int startId){
         if(!backgroundRuns.remove(session.runningId,session))return;
+        if(primaryBackgroundNotice==session)primaryBackgroundNotice=null;
         getSystemService(NotificationManager.class).cancel(session.notificationId);
         if(!destroyed)settleForegroundOwnership(startId);
     }
@@ -260,13 +264,21 @@ public final class PhoneRunService extends Service {
         if(destroyed||backgroundRuns.isEmpty())return false;
         boolean published=required==null;
         NotificationManager notifications=getSystemService(NotificationManager.class);boolean primary=runningId==null;
-        for(BackgroundPhoneRun session:backgroundRuns.values())try{
+        var anchored=primaryBackgroundNotice;
+        if(anchored!=null&&backgroundRuns.get(anchored.runningId)!=anchored)primaryBackgroundNotice=anchored=null;
+        var sessions=new java.util.ArrayList<>(backgroundRuns.values());
+        sessions.sort(java.util.Comparator.comparingInt(session->session.notificationId));
+        if(anchored!=null){sessions.remove(anchored);sessions.add(0,anchored);}
+        for(BackgroundPhoneRun session:sessions)try{
             // Retained-run routing and question controls use native core fields;
             // unrelated audit history is not required to keep the stop notice visible.
             JSONObject task=app.tasks.foregroundNotificationContextSnapshot(session.runningId);
             if(task==null||!session.matches(task.optString("id"),task.optString("runId"),task.optInt("coordinatorEpoch"),app.control(session.runningId)))continue;
             Notification note=notification(task,session.ownerControl,false);
-            if(primary){startForeground(NOTIFICATION,note);notifications.cancel(session.notificationId);primary=false;}
+            if(primary&&(anchored==null||anchored==session)){
+                startForeground(NOTIFICATION,note);primaryBackgroundNotice=session;primary=false;
+                notifications.cancel(session.notificationId);
+            }
             else notifications.notify(session.notificationId,note);
             if(session==required)published=true;
         }catch(Exception unavailable){app.error("原后台任务通知暂不可用，请在任务页核对原执行");}
@@ -783,9 +795,13 @@ public final class PhoneRunService extends Service {
         dev.pocketengine.features.proxy.NativeHarnessGatewayBridge gatewayOnly=gatewayAware?this.gatewayOnly:null;
         RunControl ownerControl=noticeControl;
         String id=t==null?"":t.optString("id");
+        boolean originalWaitUnconfirmed=false;
         if(t!=null&&"phone".equals(t.optString("kind"))&&"awaiting_user".equals(t.optString("status"))){
-            JSONObject fallback=EngineApplication.json("id",id,"kind","phone","executionMode",t.optString("executionMode"),"status",t.optString("status"),"runId",t.optString("runId"),"coordinatorEpoch",t.optInt("coordinatorEpoch"),"goal","原手机任务","summary","原问题暂不可核对，请打开原任务；你仍可停止原任务。");
-            try{JSONObject current=app.tasks.getForUi(id,false);t=current==null?fallback:current;}catch(Exception unavailable){t=fallback;}
+            JSONObject refreshed=null;
+            try{refreshed=app.tasks.getForUi(id,false);}catch(Exception unavailable){/* Fall back to this original identity only. */}
+            boolean held=noticeControl!=null&&noticeControl==app.control(id)&&noticeControl.matchesHostRun(id,t.optString("runId"),t.optInt("coordinatorEpoch"));
+            if(held&&OriginalPhoneNotice.sameAwaiting(t,refreshed))t=refreshed;
+            else{t=OriginalPhoneNotice.readingOnly(t);originalWaitUnconfirmed=true;}
         }
         Intent openIntent=new Intent(this,dev.pocketengine.ui.ComposeActivity.class).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP|Intent.FLAG_ACTIVITY_SINGLE_TOP);
         boolean identified=t!=null&&!id.isEmpty()&&!t.optString("runId").isEmpty()&&t.optInt("coordinatorEpoch")>0;
@@ -798,14 +814,18 @@ public final class PhoneRunService extends Service {
             var bridge=gatewayOnly;Intent stopIntent=new Intent(this,PhoneRunService.class).setAction(STOP_GATEWAY).setData(android.net.Uri.parse("pocketengine-gateway://stop/"+bridge.leaseId())).putExtra("gatewayLeaseId",bridge.leaseId());
             PendingIntent stop=PendingIntent.getService(this,0,stopIntent,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);builder.addAction(new Notification.Action.Builder(null,"停止模型网关",stop).build());return builder.build();
         }
+        // While the original question is unavailable, the only control retained is a stop for the exact live owner.
+        boolean liveOriginal=identified&&ownerControl!=null&&ownerControl==app.control(id)&&ownerControl.matchesHostRun(id,t.optString("runId"),t.optInt("coordinatorEpoch"));
+        if(originalWaitUnconfirmed&&!liveOriginal)return builder.build();
         if(identified&&dev.pocketengine.store.TaskStoreDeviceTasks.deviceTask(t))try{
             PendingIntent stop=PendingIntent.getService(this,0,dev.pocketengine.features.devices.DeviceNotificationControls.command(this,dev.pocketengine.features.devices.DeviceNotificationControls.STOP,t),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);builder.addAction(new Notification.Action.Builder(null,"停止设备执行",stop).build());
-            RunControl owner=ownerControl;if(owner!=null&&owner==app.control(id)&&!owner.isCancelled()&&owner.matchesHostRun(id,t.getString("runId"),t.getInt("coordinatorEpoch"))){String action=owner.isPaused()?dev.pocketengine.features.devices.DeviceNotificationControls.RESUME:dev.pocketengine.features.devices.DeviceNotificationControls.PAUSE;PendingIntent control=PendingIntent.getService(this,0,dev.pocketengine.features.devices.DeviceNotificationControls.command(this,action,t),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);builder.addAction(new Notification.Action.Builder(null,owner.isPaused()?"继续原设备任务":"暂停",control).build());}
+            RunControl owner=ownerControl;if(!originalWaitUnconfirmed&&owner!=null&&owner==app.control(id)&&!owner.isCancelled()&&owner.matchesHostRun(id,t.getString("runId"),t.getInt("coordinatorEpoch"))){String action=owner.isPaused()?dev.pocketengine.features.devices.DeviceNotificationControls.RESUME:dev.pocketengine.features.devices.DeviceNotificationControls.PAUSE;PendingIntent control=PendingIntent.getService(this,0,dev.pocketengine.features.devices.DeviceNotificationControls.command(this,action,t),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);builder.addAction(new Notification.Action.Builder(null,owner.isPaused()?"继续原设备任务":"暂停",control).build());}
             return builder.build();
         }catch(Exception unavailable){app.error("原设备通知控制暂不可用，请打开原任务核对");}
         if(identified)try{
             PendingIntent stop=PendingIntent.getService(this,0,PhoneNotificationControls.command(this,STOP,t),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
             builder.addAction(new Notification.Action.Builder(null,"停止",stop).build());
+            if(originalWaitUnconfirmed)return builder.build();
             RunControl owner=ownerControl;
             if(owner!=null&&owner==app.control(id)&&!owner.isCancelled()&&owner.matchesHostRun(id,t.getString("runId"),t.getInt("coordinatorEpoch"))
                     &&t.optString("status").matches("preparing|running|pausing|paused|awaiting_user|reconciling")){
@@ -830,7 +850,7 @@ public final class PhoneRunService extends Service {
                 }
             }
         }catch(Exception invalid){app.error("原任务通知控制暂不可用，请打开应用核对");}
-        try{dev.pocketengine.features.assistant.notifications.OwnerPhoneQuestionNotification.add(builder,this,t);}catch(Exception unavailable){/* Original open/stop/pause routes remain usable. */}
+        try{if(!originalWaitUnconfirmed)dev.pocketengine.features.assistant.notifications.OwnerPhoneQuestionNotification.add(builder,this,t);}catch(Exception unavailable){/* Original open/stop/pause routes remain usable. */}
         return builder.build();
     }
     private static String safeMessage(Exception e){String m=e.getMessage();return m==null?"任务执行异常，请查看步骤后重试":m.length()>250?m.substring(0,250):m;}

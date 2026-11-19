@@ -16,6 +16,7 @@ import dev.pocketengine.core.ExecutionPlan;
 import dev.pocketengine.core.ExecutionPlanning;
 import dev.pocketengine.core.CapabilitySnapshot;
 import dev.pocketengine.features.devices.DirectedPhoneTarget;
+import dev.pocketengine.features.devices.DirectedWorkspaceTarget;
 import dev.pocketengine.core.ScopedToolCatalog;
 import dev.pocketengine.features.teams.TeamWakeQueue;
 import dev.pocketengine.runtime.usage.InferenceCapture;
@@ -1322,10 +1323,14 @@ public final class TaskStore {
         return prepareOwnerDeviceTask(requestId,goal,deadlineAt,tools,models,null,ownerWindow);
     }
     public synchronized JSONObject prepareOwnerDeviceTask(String requestId,String goal,long deadlineAt,int tools,int models,DirectedPhoneTarget directPhone,java.util.function.BooleanSupplier ownerWindow)throws Exception{
+        return prepareOwnerDeviceTask(requestId,goal,deadlineAt,tools,models,directPhone,null,ownerWindow);
+    }
+    public synchronized JSONObject prepareOwnerDeviceTask(String requestId,String goal,long deadlineAt,int tools,int models,DirectedPhoneTarget directPhone,DirectedWorkspaceTarget workspace,java.util.function.BooleanSupplier ownerWindow)throws Exception{
+        if(directPhone!=null&&workspace!=null)throw new SecurityException("同一份目标不得同时指定两类原设备");
         if(requestId==null||!requestId.matches("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}")||goal==null||goal.isBlank()||goal.length()>8000
                 ||tools<1||tools>TaskExecutionScope.MAX_TOOLS||models<1||models>TaskExecutionScope.MAX_MODEL_CALLS)throw new IllegalArgumentException("请填写目标、有限额度和准确准备编号");
         String wanted=goal.trim();JSONObject body=new JSONObject().put("goal",wanted).put("deadlineAt",deadlineAt).put("toolLimit",tools).put("modelCallLimit",models);
-        if(directPhone!=null)body.put("directPhone",directPhone.view());String digest=capabilityFingerprint(body);
+        if(directPhone!=null)body.put("directPhone",directPhone.view());if(workspace!=null)body.put(DirectedWorkspaceTarget.FIELD,workspace.view());String digest=capabilityFingerprint(body);
         db.beginTransaction();try{
             if(ownerWindow==null||!ownerWindow.getAsBoolean())throw new SecurityException("原私人设备工作窗口已关闭");
             JSONObject prior=read(requestId);
@@ -1339,6 +1344,7 @@ public final class TaskStore {
                     .put("summary","目标已准备；请选择设备范围并确认，再开始。尚未调用模型或设备。")
                     .put(OWNER_DEVICE_WORK,new JSONObject().put("format",OWNER_DEVICE_WORK_FORMAT).put("requestId",requestId).put("requestDigest",digest));
             if(directPhone!=null)task.getJSONObject(OWNER_DEVICE_WORK).put("directPhone",directPhone.view());
+            if(workspace!=null)task.getJSONObject(OWNER_DEVICE_WORK).put(DirectedWorkspaceTarget.FIELD,workspace.view());
             task.put("executionScope",TaskExecutionScope.create(requestId,"capabilities",1L,deadlineAt,tools,models,0,0,
                     new JSONArray(new String[]{"device_invoke_tool","device_delegate_goal","device_operation_get"}),true));
             if(!ownerWindow.getAsBoolean())throw new SecurityException("原私人设备工作窗口已关闭");
@@ -1357,6 +1363,7 @@ public final class TaskStore {
         if(selected==null||!"pocketworld.native-device-source-scope.v1".equals(selected.optString("format"))||!task.getString("id").equals(selected.optString("taskId"))||!task.getString("goal").equals(selected.optString("goal"))
                 ||selected.optLong("parentScopeRevision")!=scope.getLong("revision")||!"goal_only".equals(selected.optString("contextMode"))||selected.getJSONArray("routes").length()==0)throw new SecurityException("请先在这份原任务选择并确认设备范围，再开始；未调用模型或设备");
         JSONArray routes=selected.getJSONArray("routes");DirectedPhoneTarget direct=DirectedPhoneTarget.fromTask(task);if(direct!=null)direct.requireRoutes(routes);
+        DirectedWorkspaceTarget workspace=DirectedWorkspaceTarget.fromTask(task);if(workspace!=null)workspace.requireRoutes(routes);
         long now=System.currentTimeMillis();for(int i=0;i<routes.length();i++)if(routes.getJSONObject(i).getLong("deadline")<=now)throw new SecurityException("所选设备范围已到期，请重新读取并确认");
     }
     /** Identity projection only, never an authorization parsed from JSON. */
@@ -2388,6 +2395,7 @@ public final class TaskStore {
         }
         JSONArray targets=new JSONArray();java.util.Set<String> seen=new java.util.HashSet<>();
         DirectedPhoneTarget direct=DirectedPhoneTarget.fromTask(task);if(direct!=null){seen.add(direct.deviceId());targets.put(direct.deviceId());}
+        DirectedWorkspaceTarget workspace=DirectedWorkspaceTarget.fromTask(task);if(workspace!=null){seen.add(workspace.deviceId());targets.put(workspace.deviceId());}
         JSONObject scope=task.optJSONObject("deviceSourceScope");
         if(scope!=null&&"pocketworld.native-device-source-scope.v1".equals(scope.optString("format"))&&task.optString("id").equals(scope.optString("taskId"))){
             JSONArray routes=scope.optJSONArray("routes");
