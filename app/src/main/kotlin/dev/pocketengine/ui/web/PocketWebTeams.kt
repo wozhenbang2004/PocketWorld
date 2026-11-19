@@ -267,6 +267,17 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
         }
         when (action) {
             "teams.attention" -> {
+                if (args.has("parentTaskId")) {
+                    fields(args, "parentTaskId", "parentRunId", "parentEpoch", "conversationId", "teamRunId")
+                    val parent = text(args, "parentTaskId"); val parentRun = text(args, "parentRunId"); val conversation = text(args, "conversationId")
+                    val teamRun = text(args, "teamRunId"); val epoch = args.opt("parentEpoch")
+                    require(epoch is Int && epoch > 0) { "原工作代次无效" }
+                    controller.readWebWorkDecisions(parent, parentRun, epoch, conversation, teamRun) { value, error ->
+                        if (currentWindow()) deliver(value?.let { PocketWebState.publicValue(it) as JSONObject }, error)
+                        else done(null, "原对话已变化，请重新打开这件工作")
+                    }
+                    return
+                }
                 fields(args, "afterRunId", "afterItemId", "limit")
                 val after = if (args.has("afterRunId")) text(args, "afterRunId", 36, empty = true) else ""
                 val afterItem = if (args.has("afterItemId")) text(args, "afterItemId", 320, empty = true) else ""

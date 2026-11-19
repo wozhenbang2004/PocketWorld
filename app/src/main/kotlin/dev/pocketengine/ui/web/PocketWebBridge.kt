@@ -247,6 +247,7 @@ internal class PocketWebBridge(
             "chat.cancel", "ownerWork.input", "ownerWork.control", "message.origin", "conversation.new", "conversation.select", "conversation.directory", "conversation.reader.open", "conversation.reader.close", "conversation.reader.earlier", "conversation.reader.refresh", "conversation.reader.position", "conversation.reader.select", "conversation.reader.attachment",
             "ownerWork.supplement.read", "ownerWork.supplement.edit", "ownerWork.supplement.send", "ownerWork.supplement.query",
             "attachments.pick", "attachments.openPicker", "attachments.closePicker", "attachments.toggle", "attachments.remove", "attachments.open", "sources.open", "sources.read", "sources.close",
+            "phone.request.original",
             "phone.result.original",
             "quickVoice.start", "quickVoice.save", "quickVoice.close", "quickVoice.return",
             "skillDraft.open", "skillDraft.read", "skillDraft.source", "skillDraft.confirm", "skillDraft.cancel", "skillDraft.query", "skillDraft.close", "voice.start", "voice.stop", "voice.review", "voice.accept", "voice.discard", "speech.speak", "speech.stop", "speech.taskAnnouncements", "speech.stopTaskAnnouncement",
@@ -838,6 +839,15 @@ internal class PocketWebBridge(
                 }
                 return
             }
+            if (action == "phone.request.original") {
+                checkedPayload(args, setOf("taskId","runId","epoch","offset","reviewDigest"))
+                val task=requiredString(args,"taskId");val window=captureWindow();val document=documentId
+                val current={ !closed && section==null && taskViewId==task && document!=null && document==documentId && acceptsWindow(window) }
+                require(current() && controller.webPrivateOwnerVisible()) { "请在原手机工作中核对原交代" }
+                controller.readPhoneTaskRequest(task,requiredString(args,"runId",true),requiredInt(args,"epoch"),requiredInt(args,"offset"),requiredString(args,"reviewDigest",true),current) {
+                    value,error -> complete(id,value,error,retainValue=false)
+                };return
+            }
             if (action == "phone.result.original") {
                 checkedPayload(args, setOf("conversationId", "messageId", "sourceRevision", "taskId", "runId", "epoch", "deliveryId", "offset", "expectedDigest", "readerWindow"))
                 val ticket = captureWindow()
@@ -975,7 +985,7 @@ internal class PocketWebBridge(
             if (action == "devices.openTask") {
                 requireSection("devices")
                 val taskId = devicePages.taskForNavigation(args)
-                if (args.has("archiveHandle")) {
+                if (args.has("archiveHandle") || args.has("sourceViewHandle")) {
                     val sourceCurrent = { runCatching { devicePages.taskForNavigation(args) == taskId }.getOrDefault(false) }
                     openOriginalTask(id, taskId, true, "devices", sourceWindowCurrent = sourceCurrent, checkReaderInput = { source ->
                         require(sourceCurrent() && source.id == taskId && source.raw.optString("actorId") == "owner" && source.raw.optString("spaceId") == "private" && !source.raw.has("origin")) { "原工作来源已变化，没有打开其他任务" }
@@ -1063,7 +1073,7 @@ internal class PocketWebBridge(
                 check(controller.webPrivateOwnerVisible()) { "请从本机主人界面读取团队待处理" }
                 val window = captureWindow()
                 teamPages.dispatch(action, args) { result, error ->
-                    if (!closed && acceptsWindow(window)) complete(id, result, error)
+                    if (!closed && acceptsWindow(window)) complete(id, result, error, retainValue = !args.has("parentTaskId"))
                     else complete(id, null, "原通知窗口已变化，请重新读取团队待处理")
                     publishState()
                 }
@@ -1103,7 +1113,9 @@ internal class PocketWebBridge(
             }
             if (action in setOf("accounts.models", "accounts.model.review", "accounts.logout.review", "accounts.model.select", "accounts.logout.confirm")) { accountCommand(id, action, args); return }
             if (action in PocketWebMessageQuotes.COMMANDS) {
-                messageQuotes.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }; return
+                if (action == "messageQuote.open" || action == "messageQuote.stage")
+                    require(section == null && taskViewId == null && controller.webPrivateOwnerVisible()) { "请回到原私人对话选择引用" }
+                messageQuotes.dispatch(action, args) { result, error -> complete(id, result, error, retainValue = action != "messageQuote.open"); publishState() }; return
             }
             if (action == "sources.open") {
                 checkedPayload(args, setOf("messageId", "taskId"))

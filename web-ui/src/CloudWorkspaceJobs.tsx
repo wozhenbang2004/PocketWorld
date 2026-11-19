@@ -5,7 +5,7 @@ import { IconChevronRight, IconHistory } from './icons';
 import type { SavedCloudWorkspace } from './CloudWorkspaceChoice';
 
 type Data = Record<string, any>;
-type Row = { taskId: string; runId: string; epoch: number; goal: string; stage: 'phone_registered' | 'host_acknowledged'; executorStatus?: string };
+type Row = { taskId: string; runId: string; epoch: number; goal: string; stage: 'phone_registered' | 'host_acknowledged'; executorStatus?: string; detailRetired?: boolean };
 type Page = { items: Row[]; next: string };
 const keys: (keyof SavedCloudWorkspace)[] = ['profileId','profileBinding','environmentId','worker','workspaceAnchor'];
 const same = (a: Data | undefined, b: SavedCloudWorkspace) => !!a && keys.every(k => a[k] === b[k]);
@@ -44,12 +44,12 @@ export function CloudWorkspaceJobs({ scope, run }: { scope: SavedCloudWorkspace;
     } catch (e) { if (visible()) setError(e instanceof Error ? e.message : '这一页没有读完整，请重新读取原记录。'); }
     finally { if (n === serial.current) { waiting.current = false; if (mounted.current) setPending(false); } }
   };
-  return <section className="pw-connection-subsection" aria-label="原云工作">
-    <div className="pw-connection-section-toolbar"><h4>这个云环境的原工作</h4><Button size="small" variant="secondary" disabled={pending} onClick={() => void act()}><IconHistory size={16}/>{pending ? '正在读取' : page ? '重新读取' : '查看本机记录'}</Button></div>
+  return <section className="pw-connection-subsection" aria-label="原主机工作">
+    <div className="pw-connection-section-toolbar"><h4>这个工作区的原工作</h4><Button size="small" variant="secondary" disabled={pending} onClick={() => void act()}><IconHistory size={16}/>{pending ? '正在读取' : page ? '重新读取' : '查看本机记录'}</Button></div>
     {(page || error) && <p className="pw-field-hint">只看手机保存的原委托。主机最后一次回执不代表现在在线；核对进度、处理确认或查看成果，请打开原任务。</p>}
     {page && !page.items.length && <p role="status">{page.next ? '这页没有能核对归属的任务，可继续查看更早记录。' : '这里没有能核对归属的原任务。旧委托仍可从工作记录打开。'}</p>}
-    {page?.items.map(row => <article key={row.taskId} className="pw-connection-job"><header><h3>{row.goal || '原云端委托'}</h3></header>
-      <p>{row.stage === 'host_acknowledged' ? '主机已接单 · 最后回执：'+(states[row.executorStatus ?? ''] || '状态未核实') : '手机已登记 · 此回执不能确认主机已接单'}</p>
+    {page?.items.map(row => <article key={row.taskId} className="pw-connection-job"><header><h3>{row.goal || '原主机委托'}</h3></header>
+      <p>{row.detailRetired ? '主机曾接单 · 详细记录已归档' : row.stage === 'host_acknowledged' ? '主机已接单 · 最后回执：'+(states[row.executorStatus ?? ''] || '状态未核实') : '手机已登记 · 此回执不能确认主机已接单'}</p>
       <Button size="small" variant="ghost" disabled={pending} onClick={() => void act(row)}>打开原任务与成果<IconChevronRight size={16}/></Button></article>)}
     {page?.next && <Button size="small" variant="secondary" disabled={pending} onClick={() => void act(undefined,page.next)}>查看更早记录</Button>}
     {error && <p role="alert">{error}</p>}

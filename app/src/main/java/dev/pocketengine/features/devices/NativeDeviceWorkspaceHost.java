@@ -173,6 +173,7 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
             if (target.isEmpty() && after.isEmpty()) return historyLinks(originalTaskId);
             throw new IllegalStateException("此本机宿主未提供原派发分页");
         }
+        default JSONObject waitingPhoneGoals(String afterCaller,String afterOp)throws Exception {throw new IllegalStateException("本机未提供待接手工作索引");}
         default JSONObject phoneGoalIndex(String target,String parentAfter,String operationAfter,boolean received) throws Exception { throw new IllegalStateException("本机未提供手机目标记录"); }
         HistoryAction openHistory(String originalTaskId, String originalOperationId) throws Exception;
         void pause(String originalTaskId) throws Exception;
@@ -476,6 +477,7 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         }
         public JSONObject historyLinks(String id) throws Exception { current(); return copy(control.historyLinks(id)); }
         public JSONObject historyPage(String id,String target,String after) throws Exception { current(); return copy(control.historyPage(id,target,after)); }
+        public JSONObject waitingPhoneGoals(String afterCaller,String afterOp)throws Exception {current();return copy(control.waitingPhoneGoals(afterCaller,afterOp));}
         public JSONObject phoneGoalIndex(String target,String parentAfter,String after,boolean received) throws Exception { current(); return copy(control.phoneGoalIndex(target,parentAfter,after,received)); }
         public HistoryWindow openHistory(String id, String operationId) throws Exception {
             current(); HistoryAction source = Objects.requireNonNull(control.openHistory(id, operationId)); JSONObject safe;

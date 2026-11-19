@@ -113,3 +113,10 @@
 .pw-linked-task-complete .pw-linked-task-summary{font-size:13px;font-weight:500;color:var(--pw-copy)}
 .pw-linked-task-complete .pw-linked-task-action{font-size:12px;color:var(--pw-muted)}
 @media(prefers-reduced-motion:reduce){.pw-conversation-work *{scroll-behavior:auto}}
+
+.pw-conversation-team-decisions { margin-inline-start: 24px; min-width: 0; }
+.pw-conversation-team-decisions button { min-height: 44px; height: auto; max-width: 100%; white-space: normal; text-align: start; overflow-wrap: anywhere; }
+.pw-team-decision-entries { display: grid; justify-items: start; gap: 2px; padding-inline-start: 8px; border-inline-start: 1px solid var(--pw-border); }
+.pw-team-decision-entries small,.pw-team-decision-entries strong { display: block; }
+.pw-team-decision-entries p,.pw-team-decision-entries small { margin: 0; color: var(--pw-muted); font-size: 12px; }
+.pw-team-decision-entries strong { font-size: 13px; font-weight: 500; }

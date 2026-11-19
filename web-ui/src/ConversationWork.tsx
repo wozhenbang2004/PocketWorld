@@ -5,12 +5,14 @@ import { ProgressCircle } from './library';
 import { getRecentTaskProgress } from './task-presentation';
 import { phoneConversationId } from './phone-start';
 import { MotionDisclosure, MotionFeedback, useCollectionMotion } from './library/journey-motion';
+import { ownerWorkPresentation } from './owner-work-presentation';
+import { ConversationTeamDecisions, type OpenTeamDecision } from './ConversationTeamDecisions';
 import { workCollectionPresentation } from './work-collection';
 
 type Task = { id: string; goal: string; status: string; raw?: Record<string, any> };
 
 /** A compact continuation of the conversation; the existing task drawer owns its details. */
-export function ConversationWork({ tasks, onOpen, canOpen, identity='', onEmptyFocus }: { tasks: Task[]; onOpen: (task: Task) => void; canOpen: boolean; identity?:string; onEmptyFocus?:()=>void }) {
+export function ConversationWork({ tasks, onOpen, canOpen, identity='', onEmptyFocus, onTeamDecision, pinnedTask }: { tasks: Task[]; onOpen: (task: Task) => void; canOpen: boolean; identity?:string; onEmptyFocus?:()=>void; onTeamDecision?:OpenTeamDecision; pinnedTask?:Task }) {
   const [expanded, setExpanded] = useState(false);
   const root=useRef<HTMLElement>(null),focused=useRef<{node:HTMLElement;id:string;identity:string}|null>(null);
   const listId = useId();
@@ -27,10 +29,14 @@ export function ConversationWork({ tasks, onOpen, canOpen, identity='', onEmptyF
     focused.current=null;
     if(target)target.focus({preventScroll:true});else if(!tasks.length)onEmptyFocus?.();
   },[revision,identity]);
-  if (!tasks.length) return null;
+  const decisionsFor=(handling:ReturnType<typeof ownerWorkPresentation>)=>onTeamDecision&&handling?.teamNeedsAttention ? handling.teams.filter(team=>team.conversationId===identity && team.needsAttention && !team.cancelRequested && (team.pendingDecisionCount ?? team.pendingQuestionCount ?? 0)>0) : [];
+  // The composer's pinned parent can have its own decision at the same time as a
+  // member does. Do not remove the member's entry or duplicate the parent button.
+  const pinned=decisionsFor(ownerWorkPresentation(pinnedTask));
+  if (!tasks.length && !pinned.length) return null;
   const work = tasks.map(task => {
-    const { group, label: status, busy, actionLabel: action } = workCollectionPresentation(task);
-    return { task, progress: getRecentTaskProgress(task), attention: group === 'attention', status, busy, action };
+    const { group, label: status, busy, actionLabel: action, handling } = workCollectionPresentation(task);
+    return { task, teams:decisionsFor(handling), progress: getRecentTaskProgress(task), attention: group === 'attention', status, busy, action };
   });
   // Decisions stay visible independently of the background-work disclosure.
   // The caller continues to own admission, settled filtering and task identity.
@@ -39,7 +45,7 @@ export function ConversationWork({ tasks, onOpen, canOpen, identity='', onEmptyF
   const counts = new Map<string, number>();
   for (const item of background) counts.set(item.status, (counts.get(item.status) || 0) + 1);
   const summary = [...counts].map(([status, count]) => `${count} ${status}`).join(' · ');
-  const renderTask = ({ task, progress, attention: needsAttention, status, busy, action }: typeof work[number]) => {
+  const renderTask = ({ task, progress, attention: needsAttention, status, busy, action, teams }: typeof work[number]) => {
     const phone = phoneConversationId(task) !== null;
     const StatusIcon = ['paused', 'interrupted'].includes(task.status) ? IconPauseCircle : task.status === 'failed' ? IconError : needsAttention ? IconInfo : IconClock;
     const recent = !needsAttention && progress.source !== 'task' && progress.title && progress.title !== task.goal && progress.title !== status ? `，最近记录：${progress.title}` : '';
@@ -50,9 +56,11 @@ export function ConversationWork({ tasks, onOpen, canOpen, identity='', onEmptyF
         <MotionFeedback as="span" identity={needsAttention ? action : status} initial={false} className="pw-work-entry-state">{needsAttention ? action : status}</MotionFeedback>
         <IconChevronRight className="pw-work-chevron" size={16} aria-hidden="true" />
       </Button>
+      {onTeamDecision && teams.map(team=><ConversationTeamDecisions key={team.teamRunId} team={team} distinguish={teams.length>1} onOpen={onTeamDecision}/>)}
     </li>;
   };
   return <section ref={root} className="pw-conversation-work" aria-label="对话任务" onFocusCapture={event=>{const node=event.target as HTMLElement,id=node.closest<HTMLElement>('[data-work-task-id]')?.dataset.workTaskId||'';focused.current={node,id,identity}}} onBlurCapture={event=>{if(event.relatedTarget instanceof Node?!event.currentTarget.contains(event.relatedTarget):(event.target as HTMLElement).isConnected&&!(event.target as HTMLElement).closest('[inert]'))focused.current=null}}>
+    {onTeamDecision && pinned.map(team=><ConversationTeamDecisions key={team.teamRunId} team={team} distinguish onOpen={onTeamDecision}/>)}
     {attention.length > 0 && <ol className="pw-work-list pw-work-attention-list" aria-label="需要处理的工作">{attention.map(renderTask)}</ol>}
     {background.length === 1 && <ol className="pw-work-list" aria-label="后台工作">{background.map(renderTask)}</ol>}
     {background.length > 1 && <div className="pw-work-group" data-expanded={expanded}>

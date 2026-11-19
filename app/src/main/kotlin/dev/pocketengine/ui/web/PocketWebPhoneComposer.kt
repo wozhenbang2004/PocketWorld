@@ -33,6 +33,17 @@ internal class PocketWebPhoneComposer(
     @Volatile private var reviewGeneration = 0L
     @Volatile private var presentationEpoch = 0
     private var phoneDraft = ""
+    @Volatile private var picked: PhoneDraftMessagePin? = null
+    @Volatile private var pinLost = false
+    private var sourceEditTicket = 0L
+    private fun draftHere() = !controller.hasChannelPhoneOrigin && controller.webPrivateOwnerVisible() &&
+        picked?.conversation.let { it == null || it == controller.state.conversationId && it == controller.composerDraft?.conversationId }
+    private fun pickedCurrent(pin: PhoneDraftMessagePin): Boolean {
+        if(!draftHere()) return false
+        val last = controller.state.messages.lastOrNull { it.role == "user" } ?: return false
+        return last.id == pin.message && last.sourceRevision == pin.version && last.textOnlyHandoffEligible &&
+            PhoneDraftMessagePin.from(last.ownerOriginalLocator) == pin
+    }
     @Volatile private var phoneDraftRevision = 0L
     private var phoneIntent = false
     private var phoneExecutionMode = "background"
@@ -44,10 +55,18 @@ internal class PocketWebPhoneComposer(
     fun clearReviews() { phoneReviews.clear(); reviewGeneration++ }
     fun documentChanged() { presentationEpoch++ }
 
-    fun snapshot(): JSONObject = JSONObject().put("text", phoneDraft).put("revision", phoneDraftRevision)
-        .put("epoch", presentationEpoch).put("phone", phoneIntent).put("mode", phoneExecutionMode).put("startReceipt", phoneStartReceipt).put("channelOrigin", controller.hasChannelPhoneOrigin)
+    fun snapshot(): JSONObject {
+        val pin=picked
+        val source=when { pinLost && !draftHere() -> "elsewhere"; pinLost -> "unverified"; pin==null -> "none"; !draftHere() -> "elsewhere"; !pickedCurrent(pin) -> "changed"; else -> "current" }
+        val receipt=phoneStartReceipt?.takeIf { source!="elsewhere" && (!it.optBoolean("ownerPickedMessage") ||
+            !controller.hasChannelPhoneOrigin && it.optString("draftConversationId")==controller.state.conversationId) }
+        return JSONObject().put("text", if(source=="elsewhere") "" else phoneDraft)
+        .put("sourceState",source).put("sourceEditTicket",sourceEditTicket).put("revision", phoneDraftRevision)
+        .put("epoch", presentationEpoch).put("phone", phoneIntent).put("mode", phoneExecutionMode).put("startReceipt", receipt).put("channelOrigin", controller.hasChannelPhoneOrigin)
+    }
 
     fun appendVoice(text: String) {
+        check(!pinLost && (picked == null || draftHere())) { "另一段对话的原手机草稿仍保留，没有加入录音文字" }
         phoneDraft = if (phoneDraft.isBlank()) text else phoneDraft + "\n" + text
         phoneDraftRevision++
         clearReviews()
@@ -62,12 +81,18 @@ internal class PocketWebPhoneComposer(
     fun editDraft(args: JSONObject) {
         require(requiredInt(args, "epoch") == presentationEpoch) { "原手机输入窗口已变化，草稿仍保留" }
         val text = requiredString(args, "text", true); require(text.length <= 12000)
+        check((picked == null && !pinLost || draftHere()) && (!pinLost || text.isBlank())) { "所选原话属于其他窗口或来源已变化，原草稿没有被覆盖" }
+        if(args.has("sourceEditTicket") || picked!=null || pinLost)check(requiredLong(args,"sourceEditTicket")==sourceEditTicket &&
+            requiredString(args,"draftConversation",true)==controller.state.conversationId.orEmpty()) { "手机草稿来源已切换，未采用其他窗口的迟到输入" }
+        if(text.isBlank()&&(picked!=null||pinLost)){picked=null;pinLost=false;++sourceEditTicket}
         phoneDraft = text; phoneDraftRevision++; clearReviews()
     }
 
     /** Owner-selected original text only. Staging never creates a task or grants phone access. */
     fun stageOriginalMessage(args: JSONObject): JSONObject {
-        checkedPayload(args, setOf("conversationId", "messageId", "sourceRevision", "epoch", "revision"))
+        checkedPayload(args, setOf("conversationId", "messageId", "sourceRevision", "epoch", "revision", "keepDraft"))
+        val keep = args.has("keepDraft") && requiredBoolean(args,"keepDraft")
+        if(keep)check(draftHere() && phoneDraft.isNotBlank() && (pinLost || picked?.let { !pickedCurrent(it) }==true)) { "原草稿或当前来源已变化，未重新关联" }
         check(!isClosed() && controller.webPrivateOwnerVisible() && !controller.hasChannelPhoneOrigin) { "请回到原私人对话准备手机任务" }
         check(requiredInt(args, "epoch") == presentationEpoch && requiredLong(args, "revision") == phoneDraftRevision) { "手机草稿已变化，原文字仍保留" }
         val conversation = requiredString(args, "conversationId")
@@ -80,16 +105,20 @@ internal class PocketWebPhoneComposer(
         check(message.role == "user" && message.sourceRevision > 0 && message.sourceRevision == requiredLong(args, "sourceRevision")
             && message.ownerOriginalLocator?.optString("conversationId") == conversation) { "请从这段私人对话中的原主人消息准备手机任务" }
         check(message.textOnlyHandoffEligible && message.attachmentCount == 0 && message.attachments.isEmpty() && message.attachmentFiles.isEmpty()) { "这条请求含附件或来源/预览引用，或尚未核实完整资料，不能只复制文字；请在手机目标中整理完整任务、联系人和内容" }
-        val goal = message.content.trim()
+        val goal = if(keep) phoneDraft.trim() else message.content.trim()
         require(goal.isNotEmpty() && goal.length <= 4000) { "手机任务目标需为 1–4000 字；请自行整理完整目标，不会截断原请求" }
         check(phoneDraft.isBlank() || phoneDraft.trim() == goal) { "已有另一份手机草稿，请先保留或处理；没有覆盖原文字" }
-        phoneDraft = goal
+        val pin = requireNotNull(PhoneDraftMessagePin.from(message.ownerOriginalLocator)) { "这条原话没有可核对的原件" }
+        check(pin.conversation == conversation && pin.message == id && pin.version == message.sourceRevision &&
+            (keep || !pinLost && (picked == null || picked == pin))) { "保留的手机草稿来自另一条原话，未把相同文字当成同一条消息" }
+        picked = pin;pinLost=false;++sourceEditTicket
+        if(!keep)phoneDraft = goal
         phoneDraftRevision++
         phoneIntent = true
         phoneStartReceipt = null
         clearReviews()
         return snapshot().put("staged", true).put("taskCreated", false).put("executionStarted", false)
-            .put("message", "原请求已放入手机目标草稿。核对完整目标、联系人和内容，再审阅执行位置与范围；尚未启动或发送。")
+            .put("message", if(keep) "草稿文字未修改，已关联你刚选的这条原话。仍须审阅后才会提交。" else "原请求已放入手机目标草稿。核对完整目标、联系人和内容，再审阅执行位置与范围；尚未启动或发送。")
     }
 
     fun prepare(id: String, args: JSONObject) {
@@ -111,6 +140,8 @@ internal class PocketWebPhoneComposer(
         val handle = UUID.randomUUID().toString()
         val conversation = controller.state.conversationId.orEmpty()
         val channel = controller.hasChannelPhoneOrigin
+        val pin=picked
+        check(!pinLost && (pin == null || !channel && pin.conversation == conversation && pickedCurrent(pin))) { "所选的原请求已换版、移出窗口或不再是最新交代。原草稿保留，没有关联其他消息" }
         val modelScope = if (channel) null else controller.conversationModelScope()
         val modelStatus = controller.nativeModelSelection().status()
         check(!modelStatus.pending()) { "请等待原模型设置回执" }
@@ -124,7 +155,7 @@ internal class PocketWebPhoneComposer(
                 check(phoneReviewCurrent(original)) { "原手机草稿或模型设置已变化，请重新核对" }
                 when {
                     channel -> original
-                    conversation.isNotBlank() -> original.copy(linked = controller.prepareConversationPhoneStart(conversation, goal, mode))
+                    conversation.isNotBlank() -> original.copy(linked = controller.prepareConversationPhoneStart(conversation, goal, mode, pin?.locator()))
                     else -> original.copy(draft = controller.prepareDraftPhoneStart(modelScope!!, goal, mode))
                 }.let { review ->
                     if (channel) review else review.copy(conditions = readConditions(mode))
@@ -217,12 +248,16 @@ internal class PocketWebPhoneComposer(
     /** Equivalent to the former Activity saveable presentation state, never an execution grant. */
     fun savePresentation(): JSONObject = JSONObject().put("phoneDraft", phoneDraft)
         .put("phoneDraftRevision", phoneDraftRevision).put("phoneIntent", phoneIntent).put("phoneExecutionMode", phoneExecutionMode)
-        .put("phoneStartReceipt", phoneStartReceipt)
+        .put("phoneStartReceipt", phoneStartReceipt).put("phoneSourceFormat",1)
+        .also { out -> picked?.let { out.put("phoneDraftOriginal", it.locator()) }; if(pinLost)out.put("phoneSourceLost",true) }
 
     fun restorePresentation(saved: JSONObject?) {
         if (saved == null) return
         val text = saved.optString("phoneDraft")
         if (text.length <= 12000) phoneDraft = text
+        ++sourceEditTicket;picked=PhoneDraftMessagePin.from(saved.optJSONObject("phoneDraftOriginal"))
+        pinLost=phoneDraft.isNotBlank() && (saved.optBoolean("phoneSourceLost") || saved.has("phoneDraftOriginal") && picked==null ||
+            !saved.has("phoneSourceFormat") && !saved.has("phoneDraftOriginal"))
         phoneDraftRevision = saved.optLong("phoneDraftRevision").coerceAtLeast(0)
         phoneIntent = saved.optBoolean("phoneIntent")
         phoneExecutionMode = saved.optString("phoneExecutionMode").takeIf { it in setOf("background", "main_screen") } ?: "background"
@@ -232,7 +267,7 @@ internal class PocketWebPhoneComposer(
     }
 
     private fun phoneReviewCurrent(review: PhoneReview): Boolean = phoneIntent && phoneExecutionMode == review.mode && review.reviewGeneration == reviewGeneration &&
-        review.originRevision == controller.phoneOriginRevision &&
+        review.originRevision == controller.phoneOriginRevision && !pinLost && picked.let { it == null || pickedCurrent(it) } &&
         !isClosed() && controller.webPrivateOwnerVisible() &&
         SystemClock.elapsedRealtime() < review.expires && acceptsWindow(review.window) &&
         review.viewEpoch == controller.composerViewEpoch && review.composerKey == controller.composerDraft?.key.orEmpty() &&
@@ -245,14 +280,14 @@ internal class PocketWebPhoneComposer(
         .put("reviewHandle", handle).put("goal", review.goal).put("mode", review.mode)
         .put("draftEpoch", review.draftEpoch).put("draftRevision", review.draftRevision)
         .put("composerKey", review.composerKey).put("composerEpoch", review.viewEpoch).put("draftConversationId", review.conversation)
-        .also { identity -> review.linked?.view()?.let { identity.put("requestId", it.getString("requestId")).put("conversationId", it.getString("conversationId")) } }
+        .also { identity -> review.linked?.view()?.let { identity.put("requestId", it.getString("requestId")).put("conversationId", it.getString("conversationId")).put("ownerPickedMessage",it.optBoolean("ownerPickedMessage")) } }
 
     private fun consumePhoneDraft(receipt: JSONObject) {
         if (receipt.optString("status") == "accepted" && receipt.optLong("draftRevision", -1) == phoneDraftRevision &&
             receipt.optInt("draftEpoch", -1) == presentationEpoch && receipt.optInt("composerEpoch", -1) == controller.composerViewEpoch &&
             receipt.optString("composerKey") == controller.composerDraft?.key.orEmpty() &&
             receipt.optString("draftConversationId") == controller.state.conversationId.orEmpty() && phoneDraft.trim() == receipt.optString("goal").trim()) {
-            phoneDraft = ""; phoneDraftRevision++
+            phoneDraft = ""; if(picked!=null||pinLost)++sourceEditTicket;picked=null;pinLost=false;phoneDraftRevision++
         }
     }
 

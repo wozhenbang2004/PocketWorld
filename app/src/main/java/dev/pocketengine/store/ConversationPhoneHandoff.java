@@ -42,6 +42,17 @@ final class ConversationPhoneHandoff {
         return result.put("reviewDigest",digest(result));
     }
 
+    static JSONObject picked(JSONObject review,JSONObject locator)throws Exception {
+        if(!REVIEW.equals(review.optString("format")))throw new SecurityException("缺少原手机目标审阅");
+        JSONObject src=review.getJSONObject("source");
+        if(locator==null||!"owner_native_original".equals(locator.optString("kind"))||
+                !src.getString("generation").equals(locator.optString("generation"))||!src.getString("conversationId").equals(locator.optString("conversationId"))||
+                !src.getString("sourceMessageId").equals(locator.optString("recordId"))||src.getLong("sourceMessageRevision")!=TaskExecutionScope.exactLong(locator,"recordVersion",1,Long.MAX_VALUE)||
+                !src.getString("bodyFingerprint").equals(locator.optString("fingerprint")))throw new SecurityException("手机目标所选的原消息已换版或变化，未关联其他消息；草稿保留");
+        JSONObject marked=new JSONObject(review.toString());marked.remove("reviewDigest");marked.put("sourceSelection","owner_selected_latest");
+        return marked.put("reviewDigest",digest(marked));
+    }
+
     static JSONObject link(JSONObject review,long createdAt)throws Exception {
         if(!REVIEW.equals(review.optString("format"))||createdAt<1)throw new SecurityException("缺少原生手机任务审阅");
         JSONObject result=new JSONObject(review.toString());result.put("format",LINK).put("createdAt",createdAt);return result;

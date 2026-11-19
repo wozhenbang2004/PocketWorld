@@ -7,6 +7,7 @@ import { Tabs, TabList, Tab, TabPanel } from './shell-library';
 import { Accordion, AccordionItem, Button, CheckboxField, IconButton, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { MemoryAssertionFields } from './MemoryAssertionFields';
 import { ProjectMemoryQuote } from './ProjectMemoryQuote';
+import { ProjectMemoryNote } from './ProjectMemoryNote';
 import { MemoryHistoryWorkspace } from './MemoryHistoryWorkspace';
 import { WorkingStatus } from './library/journey-motion';
 import { FormDraftNotice, useFormDrafts, type RegisterBeforeLeave } from './form-drafts';
@@ -30,7 +31,7 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, registerBe
   const [filter, setFilter] = useState('all');
   const [draftMeta, setDraftMeta] = useState<Data>({ layer: 'fact', reason: '', applicability: '', confidence: '0.5' });
   const [namespaces, setNamespaces] = useState<Data[]>([]), [namespace, setNamespace] = useState('private'), [history, setHistory] = useState<Data | null>(null), [capacity, setCapacity] = useState<Data | null>(null);
-  const [scopeName, setScopeName] = useState(''), [projectQuote, setProjectQuote] = useState(false);
+  const [scopeName, setScopeName] = useState(''), [projectEntry, setProjectEntry] = useState<'' | 'quote' | 'note'>('');
   const projectScope: string = snapshot?.namespaceStatus === 'project' && namespace && namespace !== 'private' && typeof snapshot.scope?.spaceId === 'string' && snapshot.scope.spaceId.startsWith('project:') ? snapshot.scope.spaceId : '';
   const projectLabel = projectScope ? (scopeName || '项目') + ' · ' + projectScope.slice(8, 16) : '';
   const quoteBack = useRef<(() => void) | null>(null);
@@ -55,7 +56,7 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, registerBe
   const clearConsolidation = () => { selectedHandles.current.forEach(closeHandle); selectedHandles.current = []; setConsolidation([]); };
   const load = (candidate: LearningCandidateTarget | null = null) => {
     if (entered.current || !alive.current) return;
-    closeRecord(); clearConsolidation(); setHistory(null); setCapacity(null);
+    setProjectEntry(''); closeRecord(); clearConsolidation(); setHistory(null); setCapacity(null);
     // A same-scope refresh may keep its last reading on screen, never its admission.
     currentList.current = false; setSnapshotCurrent(false);
     void invoke('knowledge.snapshot', {}, value => { setSnapshot(value); currentList.current = true; setSnapshotCurrent(true); setScopeName(value.scopeName || ''); setNotice(''); }).then(value => {
@@ -64,7 +65,7 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, registerBe
   };
   const changeNamespace = async (value: string) => {
     if (entered.current || !alive.current) return;
-    closeRecord(); clearConsolidation(); setHistory(null); setCapacity(null); setSelectingConsolidation(false);
+    setProjectEntry(''); closeRecord(); clearConsolidation(); setHistory(null); setCapacity(null); setSelectingConsolidation(false);
     // Native selection retires the old scope and every choice handle, even if
     // the new scope fails. Do not present the old rows as a valid fallback.
     currentList.current = false; setSnapshotCurrent(false); setSnapshot(null); setScopeName(''); setNamespace(''); setNamespaces([]); setNotice('');
@@ -78,7 +79,7 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, registerBe
     else setNotice('范围切换未完成，请重新选择范围。');
   };
   useEffect(() => { alive.current = true; load(initialCandidate); return () => { alive.current = false; closeHandle(readHandle.current); closeHandle(reviewHandle.current); selectedHandles.current.forEach(closeHandle); }; }, []);
-  useEffect(() => { registerTransientBack(projectQuote || review || selection || tab === 'history' ? () => { if (projectQuote) { quoteBack.current?.(); return true; } if (historyBack.current?.()) return true; if (!review && !selection) return false; if (!busy) { if (review) closeReview(); else formDraft.guard(closeRecord); } return true; } : null); return () => registerTransientBack(null); }, [projectQuote, review, selection, busy, tab, registerTransientBack]);
+  useEffect(() => { registerTransientBack(projectEntry || review || selection || tab === 'history' ? () => { if (projectEntry) { quoteBack.current?.(); return true; } if (historyBack.current?.()) return true; if (!review && !selection) return false; if (!busy) { if (review) closeReview(); else formDraft.guard(closeRecord); } return true; } : null); return () => registerTransientBack(null); }, [projectEntry, review, selection, busy, tab, registerTransientBack]);
   useEffect(() => {
     if (!operation?.operationHandle || operation.settled) return;
     const handle = operation.operationHandle; let active = true, reading = false;
@@ -89,14 +90,14 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, registerBe
     return () => { active = false; clearInterval(timer); };
   }, [operation?.operationHandle, operation?.settled, run]);
   const openReview = (value: Data) => { setReview(value); reviewHandle.current = value.reviewHandle; setAcknowledged(false); };
-  const choose = (row: Data, candidate: boolean, origin: LearningCandidateTarget | null = null) => { if (!currentList.current || entered.current) return; openedRecord.current = row.id; listScrollPosition.current = collectionPanel.current?.closest('.pw-secondary-scroll')?.scrollTop || 0; closeRecord(); void invoke('knowledge.get', { id: row.id, candidate }, async value => {
+  const choose = (row: Data, candidate: boolean, origin: LearningCandidateTarget | null = null, receipt = '') => { if (!currentList.current || entered.current) return; openedRecord.current = row.id; listScrollPosition.current = collectionPanel.current?.closest('.pw-secondary-scroll')?.scrollTop || 0; closeRecord(); void invoke('knowledge.get', { id: row.id, candidate }, async value => {
     if (origin && value.candidate?.id !== origin.id) { closeHandle(value.readHandle); throw new Error('原批次候选身份不符，请返回学习任务重新读取。'); }
     const record = value.candidate || value.record;
     const saved = await formDraft.open(String(record?.ownerId || 'owner') + ':' + String(record?.spaceId || scopeName || 'private'), (candidate ? 'candidate:' : 'record:') + row.id, String(record?.revision ?? ''), { text: record?.text || '', layer: record?.layer || 'fact', reason: record?.reason || '', applicability: record?.applicability || '', confidence: String(record?.confidence ?? 0.5) });
     if (!saved) { closeHandle(value.readHandle); return; }
-    setSelection(value); readHandle.current = value.readHandle; setDraft(saved.text); setDraftMeta({ layer: saved.layer, reason: saved.reason, applicability: saved.applicability, confidence: saved.confidence }); setReason(''); setAttempted(false); setNotice(origin ? `已定位“${origin.sourceTitle}”的原候选。批次登记修订 ${origin.revision}，当前修订 ${record?.revision ?? '未知'}；请按当前内容核对。` : '');
+    setSelection(value); readHandle.current = value.readHandle; setDraft(saved.text); setDraftMeta({ layer: saved.layer, reason: saved.reason, applicability: saved.applicability, confidence: saved.confidence }); setReason(''); setAttempted(false); setNotice(origin ? `已定位“${origin.sourceTitle}”的原候选。批次登记修订 ${origin.revision}，当前修订 ${record?.revision ?? '未知'}；请按当前内容核对。` : receipt);
   }); };
-  const refreshSelection = (id: string, isCandidate: boolean) => {
+  const refreshSelection = (id: string, isCandidate: boolean, receipt = '') => {
     // Re-read storage after a write rather than keep an unusable, stale revision.
     // This also serves uncertain outcomes without repeating the mutation.
     void invoke('knowledge.snapshot', {}, value => {
@@ -105,7 +106,7 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, registerBe
     }).then(value => {
       if (!value || !alive.current) return;
       const current = rows(value[isCandidate ? 'candidates' : 'records']).find(row => row.id === id);
-      if (current) choose(current, isCandidate);
+      if (current) choose(current, isCandidate, null, receipt);
       else { closeRecord(); setNotice('当前记录已不在此范围中，列表已重新读取。'); }
     });
   };
@@ -161,7 +162,7 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, registerBe
         <TabList className="pw-material-navigation pw-collection-navigation" aria-label="记忆视图"><Tab id="records" isDisabled={busy || !snapshotCurrent}>已保存</Tab><Tab id="candidates" isDisabled={busy || !snapshotCurrent}>待审阅</Tab><Tab id="history" isDisabled={busy || !snapshotCurrent}>旧事与来源</Tab></TabList>
         <TabPanel id={tab}>
       <header className="pw-memory-scope-heading"><div className="pw-memory-scope-copy"><p className="pw-detail-location">{scopeName || (busy ? '正在核对记忆范围' : '记忆范围尚未确认')}</p><WorkingStatus active={busy}>正在核对原回执…</WorkingStatus></div><IconButton className="pw-utility-icon" icon={IconRefresh} aria-label="重新读取记忆" title="重新读取记忆" disabled={busy} onClick={() => load()} /></header>
-      {snapshotCurrent && !!projectScope && tab !== 'history' && <div className="pw-form-actions"><Button variant="secondary" disabled={busy || running} onClick={() => setProjectQuote(true)}>摘录项目原文</Button></div>}
+      {snapshotCurrent && !!projectScope && tab !== 'history' && <div className="pw-form-actions">{tab === 'records' && <Button variant="secondary" disabled={busy || running} onClick={() => setProjectEntry('note')}>写项目约定</Button>}<Button variant={tab === 'records' ? 'ghost' : 'secondary'} disabled={busy || running} onClick={() => setProjectEntry('quote')}>摘录项目原文</Button></div>}
       {tab === 'history' ? <MemoryHistoryWorkspace key={namespace + ':' + String(!!snapshot)} scopeKey={namespace + ':' + String(snapshot?.cognitionRevision || '')} readOnly={busy || !snapshotCurrent} run={run} registerTransientBack={registerHistoryBack} /> : <>
       {snapshot && (collection.length > 0 || hasFilters) && <div className="pw-memory-tools">
         <SearchField className="pw-secondary-search" data-input-size="medium" aria-label="筛选当前读取的记忆" placeholder={tab === 'candidates' ? '查找候选' : '查找记忆'} clearLabel="清除搜索" value={query} onChange={setQuery} />
@@ -198,6 +199,7 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, registerBe
       {record?.assertion && <p>主体：{record.assertion.subjectLabel || '未知'} · 陈述类型：{record.assertion.kind} · 关系：{record.assertion.predicate} · {record.assertion.object}。保存不证明陈述为真。</p>}
       {!attempted && candidate && record?.status === 'pending' && <>{candidateHasEdits && <p className="pw-memory-context pw-knowledge-notice" role="status">先保存刚才的修改，再采用更新后的候选。</p>}<div className="pw-form-actions pw-memory-decisions"><Button disabled={busy || formDraft.stale || !!formDraft.conflict || formDraft.requiresRecheck} onClick={() => candidateHasEdits ? prepare('edit', { draft: { text: draft, ...draftMeta, confidence: Number(draftMeta.confidence) } }) : prepare('accept')}>{candidateHasEdits ? '先保存修改' : '核对并采用候选'}</Button></div></>}
 <section className="pw-knowledge-evidence"><h3>来源与关联</h3>
+      {!candidate && projectScope && record?.spaceId === projectScope && record?.formation === 'explicit_save' && record?.layer === 'procedural' && !record?.learningCandidateId && Array.isArray(record?.sourceRefs) && !record.sourceRefs.length && Array.isArray(record?.sourceIds) && !record.sourceIds.length && <p className="pw-muted">{record.source || '未登记来源'} · 没有关联文件原文</p>}
       <div className="pw-form-actions">{rows(record?.sourceRefs).map((ref, index) => <Button key={ref.sourceId + ':' + ref.revision} variant="ghost" disabled={busy || attempted} onClick={() => { setSource(null); void invoke('knowledge.source', { readHandle: readHandle.current, index, offset: 0 }, setSource); }}>{snapshot?.namespaceStatus === 'project' && ref.kind === 'workspace_file' && ref.workspace?.path ? `查看原段 · ${ref.workspace.path} · v${ref.revision}` : `查看来源 ${index + 1}`}</Button>)}{candidate && rows(record?.recordRefs).map((ref, index) => <Button key={ref.id + ':' + ref.revision} variant="ghost" disabled={busy || attempted} onClick={() => { setSource(null); void invoke('knowledge.parent', { readHandle: readHandle.current, index }, value => setSource({ title: '父记忆的精确版本', text: value.record?.text })); }}>查看父记忆 {index + 1}</Button>)}</div>
       {source && <section className="pw-source-record"><h3>{source.title}</h3><pre className="pw-source-copy" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{source.text}</pre>{source.hasMore && <Button variant="ghost" disabled={busy} onClick={() => { setSource(null); void invoke('knowledge.source', { readHandle: readHandle.current, index: source.index, offset: source.nextOffset }, setSource); }}>继续读取原文</Button>}</section>}
       </section>
@@ -213,8 +215,12 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, registerBe
       {!attempted && <Button variant="ghost" disabled={busy} onClick={() => formDraft.discard(() => { setDraft(record?.text || ''); setDraftMeta({ layer: record?.layer || 'fact', reason: record?.reason || '', applicability: record?.applicability || '', confidence: String(record?.confidence ?? 0.5) }); closeRecord(); })}>放弃未提交的修改</Button>}
       {(attempted || formDraft.requiresRecheck) && <div className="pw-form-actions"><p className="pw-muted">本次提交已结束或结果待核对。重新读取只查询当前状态，不会重复提交。</p><Button variant="secondary" disabled={busy} onClick={() => { formDraft.clearSubmitted(); refreshSelection(record.id, candidate); }}>重新读取当前状态</Button></div>}
     </section>}
-    {projectQuote && snapshotCurrent && !!projectScope && <ProjectMemoryQuote key={projectScope} name={projectLabel} spaceId={projectScope} run={run} back={quoteBack} close={() => setProjectQuote(false)} revisit={id => {
-      setProjectQuote(false); setTab('candidates'); setQuery(''); setFilter('all');
+    {projectEntry === 'note' && snapshotCurrent && !!projectScope && <ProjectMemoryNote key={projectScope} name={projectLabel} spaceId={projectScope} run={run} back={quoteBack} close={() => setProjectEntry('')} revisit={(id, existing) => {
+      setProjectEntry(''); setTab('records'); setQuery(''); setFilter('all');
+      if (id) refreshSelection(id, false, existing ? '这个项目已有相同的手写约定，未重复保存或改变状态。' : '已保存到这个项目。'); else load();
+    }} />}
+    {projectEntry === 'quote' && snapshotCurrent && !!projectScope && <ProjectMemoryQuote key={projectScope} name={projectLabel} spaceId={projectScope} run={run} back={quoteBack} close={() => setProjectEntry('')} revisit={id => {
+      setProjectEntry(''); setTab('candidates'); setQuery(''); setFilter('all');
       if (id) refreshSelection(id, true); else load();
     }} />}
     <SettingsDialog className="pw-memory-modal" isOpen={!!review} onClose={() => { if (!busy) closeReview(); }} title={operationLabel[review?.operation] || '核对记忆修改'}><div className="pw-knowledge-review">

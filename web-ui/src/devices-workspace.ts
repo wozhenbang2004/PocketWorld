@@ -93,6 +93,15 @@ export function samePhoneGoalArchive(value: DeviceData | null, peer: DeviceData 
     && value.targetDeviceId === peer.deviceId && value.instanceId === peer.instanceId && value.targetFingerprint === peer.certificateFingerprint
     && value.localDeviceId === local.deviceId && value.localInstanceId === local.instanceId;
 }
+export function waitingPhoneGoalPage(value: unknown, local: DeviceData) {
+  if (!object(value) || value.kind !== 'waitingPhoneGoals' || value.readOnly !== true || !identity(local.deviceId) || !identity(local.instanceId)
+    || value.localDeviceId !== local.deviceId || value.localInstanceId !== local.instanceId || !identity(value.waitingHandle) || !positiveInteger(value.capturedAt)
+    || typeof value.hasMore !== 'boolean' || typeof value.canReadNewer !== 'boolean' || !Array.isArray(value.rows) || value.rows.length > 24
+    || !value.rows.every((r: unknown) => object(r) && identity(r.taskId) && identity(r.operationId) && typeof r.sourceDeviceId === 'string'
+      && /^pw1_[a-f0-9]{64}$/.test(r.sourceDeviceId) && ['not_started','interrupted_before_start'].includes(r.waitingState) && identity(r.goal) && positiveInteger(r.createdAt) && ['main_screen','background'].includes(r.screenMode))
+    || new Set(value.rows.map((row: DeviceData) => JSON.stringify([row.taskId,row.operationId]))).size !== value.rows.length) throw new Error('这批待接手记录无法与本机原身份核对。');
+  return value;
+}
 export type PhoneArchiveSide = 'sent' | 'received';
 export function receivedPhoneArchiveReturn(value: unknown, row: DeviceData, peer: DeviceData, local: DeviceData): ReceivedPhoneGoalReturn {
   if (!object(value) || value.kind !== 'receivedGoalReturn' || value.readOnly !== true || value.taskId !== row.taskId || value.operationId !== row.operationId

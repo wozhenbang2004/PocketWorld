@@ -25,11 +25,20 @@ public final class NativeDeviceTaskHistoryHost {
         private void require()throws Exception{if(closed)throw new SecurityException("原历史窗口已关闭");io.check();original.requireCurrent();}
         public JSONObject view()throws Exception{
             require();JSONObject view=original.view(),wire=original.originalWire();
-            if(directPhoneGoal(wire))view.put("phoneGoalResult",true);
-            return view;
+            if(directPhoneGoal(wire))view.put("phoneGoalResult",true).put("localPhoneResultPath",localPhoneResultPath(wire));
+            require();return view;
         }
         private boolean directPhoneGoal(JSONObject wire) {
             return DeviceProtocol.isDirectPhoneGoal(wire,local.deviceId(),original.taskId(),original.operationId());
+        }
+        private static final class NoAcceptedRun extends IllegalStateException {
+            NoAcceptedRun(){super("还没有这份目标的已核实执行编号。先读取原派发回执；不会另开任务。");}
+        }
+        /** Navigation only. Never connect to a peer or imply task.get permission or a finished result. */
+        private String localPhoneResultPath(JSONObject wire)throws Exception{
+            try { phoneGoalBinding(wire);return "original_run"; }
+            catch(NoAcceptedRun pending){return "need_dispatch_receipt";}
+            catch(SecurityException mismatch){return "unverified_source";}
         }
         /** The permitted object comes from the original stored, authenticated acceptance, not UI input.
          * A deterministic child ID or an accepted submission without a run is not a result binding. */
@@ -40,8 +49,8 @@ public final class NativeDeviceTaskHistoryHost {
                 throw new SecurityException("只能从本机机主的原工作读取这份目标。");
             JSONObject allocation=tasks.deviceTasks().childAllocationForOperation(original.taskId(),original.operationId());
             JSONObject binding=allocation.optJSONObject("childBinding");
-            if(binding==null||binding.optString("runId").isEmpty()||binding.optLong("executorEpoch")<=0)
-                throw new IllegalStateException("还没有这份目标的已核实执行编号。先读取原派发回执；不会另开任务。");
+            if(!original.operationId().equals(allocation.optString("anchorOperationId")))throw new SecurityException("这条记录不是原目标派发");
+            if(binding==null)throw new NoAcceptedRun();
             String child=DeviceProtocol.receiverTaskId(wire);
             if(!original.operationId().equals(allocation.optString("anchorOperationId"))||!"task".equals(binding.optString("acceptedObjectKind"))
                 ||!original.taskId().equals(binding.optString("parentTaskId"))||!original.operationId().equals(binding.optString("sourceOperationId"))
@@ -49,6 +58,7 @@ public final class NativeDeviceTaskHistoryHost {
                 ||!original.targetDeviceId().equals(binding.optString("executorDeviceId"))||!wire.getString("instanceId").equals(binding.optString("instanceId"))
                 ||!child.equals(binding.optString("objectId"))||!child.equals(binding.optString("localTaskId")))
                 throw new SecurityException("原派发与目标设备、任务、实例的接受回执不一致，未读取结果。");
+            if(binding.optString("runId").isEmpty()||binding.optLong("executorEpoch")<=0)throw new NoAcceptedRun();
             return new JSONObject().put("taskId",child).put("runId",binding.getString("runId")).put("executorEpoch",binding.getLong("executorEpoch"));
         }
         /** Explicit task.get, independently authorized even if the owner can read operation.get.
@@ -106,7 +116,10 @@ public final class NativeDeviceTaskHistoryHost {
         /** Original bounded IO worker only; no network IO while holding TaskStore/SQLite lock. */
         public JSONObject query()throws Exception{
             require();JSONObject frozen=original.originalWire();if(!local.deviceId().equals(frozen.getString("callerDeviceId")))throw new SecurityException("当前原生设备身份不是原SQL caller");PairingCoordinator.HistoryRoute route=source.currentHistoryRoute(original.targetDeviceId(),original.grantId());long now=System.currentTimeMillis();var query=route.historyQuery(local,"operation.get",original.operationId(),original.resourceBinding(),now,5000,null);if(!frozen.getString("instanceId").equals(query.envelope().instanceId()))throw new SecurityException("目标原实例已改变；不能把新实例空结果认作旧操作未发生");
-            DeviceCapabilityPort.Reply actual=source.readHistory(query.envelope(),io);require();query.requireTargetPeer(actual.peer(),System.currentTimeMillis());JSONObject response=DeviceProtocol.validateMessage(actual.response());if(!"DeviceResponse".equals(response.getString("messageType"))||!query.envelope().requestId().equals(response.getString("requestId"))||!"operation.get".equals(response.getString("method"))||!original.targetDeviceId().equals(response.getString("executorDeviceId"))||!frozen.getString("instanceId").equals(response.getString("instanceId")))throw new SecurityException("不是这次原对象历史query的实际响应");JSONObject typed=response.getJSONObject("result");tasks.deviceTasks().recordOwnerHistory(original,actual.peer(),typed);return new JSONObject().put("readOnly",true).put("newRun",false).put("retrySubmitted",false).put("unknownRefunded",false).put("operationReceipt",typed).put("unknown",!typed.getBoolean("accepted")||typed.getString("effectState").equals("unknown")).put("businessVerified",false);
+            DeviceCapabilityPort.Reply actual=source.readHistory(query.envelope(),io);require();query.requireTargetPeer(actual.peer(),System.currentTimeMillis());JSONObject response=DeviceProtocol.validateMessage(actual.response());if(!"DeviceResponse".equals(response.getString("messageType"))||!query.envelope().requestId().equals(response.getString("requestId"))||!"operation.get".equals(response.getString("method"))||!original.targetDeviceId().equals(response.getString("executorDeviceId"))||!frozen.getString("instanceId").equals(response.getString("instanceId")))throw new SecurityException("不是这次原对象历史query的实际响应");JSONObject typed=response.getJSONObject("result");tasks.deviceTasks().recordOwnerHistory(original,actual.peer(),typed);JSONObject read=new JSONObject().put("readOnly",true).put("newRun",false).put("retrySubmitted",false).put("unknownRefunded",false).put("operationReceipt",typed).put("unknown",!typed.getBoolean("accepted")||typed.getString("effectState").equals("unknown")).put("businessVerified",false);
+            // Keep the signed operation receipt unchanged. Re-read only this local binding after recording it.
+            if(directPhoneGoal(frozen))read.put("localPhoneResultPath",localPhoneResultPath(frozen));
+            require();return read;
         }
         @Override public void close(){closed=true;io.cancel();}
     }

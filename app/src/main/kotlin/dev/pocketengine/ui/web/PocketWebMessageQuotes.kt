@@ -37,11 +37,12 @@ internal class PocketWebMessageQuotes(private val controller: PocketWorldControl
                 val locator = message.ownerOriginalLocator ?: error("这条消息没有可核对的原文身份")
                 check(locator.optString("conversationId").isNotEmpty() && locator.optString("conversationId") == draft.conversationId) { "原消息不属于当前私人会话" }
                 clear()
+                // Native domain entry advances the owner epoch. Freeze the admitted window, not its predecessor.
+                controller.enterOwnerDomain("taskMemory")
                 val original = Window(UUID.randomUUID().toString(), id, message.sourceRevision, message.content,
                     locator.toString(), controller.webWindowTicket(), draft.key, controller.composerViewEpoch, draft.revision)
                 window = original
-                controller.enterOwnerDomain("taskMemory")
-                done(JSONObject().put("windowId", original.id).put("text", original.text).put("maxChars", 4000), null)
+                done(JSONObject().put("windowId", original.id).put("text", original.text).put("maxChars", 4000).put("draftRevision", original.draftRevision), null)
             }
             "messageQuote.stage" -> {
                 fields(args, "windowId", "offset", "chars")
@@ -56,8 +57,9 @@ internal class PocketWebMessageQuotes(private val controller: PocketWorldControl
                 controller.stageOwnerOriginalReferenceReceipt(JSONObject().put("ownerLocator", JSONObject(original.locator)).put("offset", offset).put("chars", chars)) { result, error ->
                     if (window !== original || !controller.webPrivateOwnerVisible() || controller.webWindowTicket() != original.owner) {
                         done(null, "原引用窗口已变化，请核对原草稿")
-                    } else if (error != null || result?.optBoolean("selectionValidated") != true || result?.optBoolean("draftStaged") != true) {
-                        done(null, error ?: "原选区尚未确认加入草稿，请重新核对")
+                    } else if (error != null || result == null || result.opt("selectionValidated") != true || result.opt("draftStaged") != true ||
+                        result.opt("persisted") != true || result.optString("key") != original.draftKey || result.optLong("fromRevision", -1) != original.draftRevision) {
+                        done(null, error ?: "原选区尚未确认保存到这份草稿，请先核对原输入")
                     } else done(PocketWebState.publicValue(result) as JSONObject, null)
                 }
             }

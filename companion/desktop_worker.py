@@ -10,8 +10,6 @@ import json
 import os
 from pathlib import Path
 import sys
-import time
-import uuid
 
 from desktop_sessions import WindowsDesktopHealth
 
@@ -66,6 +64,7 @@ def main():
     parser = argparse.ArgumentParser(description="PocketWorld lightweight Windows Companion (user-session only)")
     parser.add_argument("--config", type=Path)
     parser.add_argument("--reviewed-config-sha256", help="Reject startup unless these exact reviewed installed settings are still current")
+    parser.add_argument("--owner-phone-receipts", action="store_true", help="Keep a read-only local phone work receipt icon for this explicitly started installed service")
     actions = parser.add_mutually_exclusive_group(required=True)
     actions.add_argument("--serve", action="store_true")
     actions.add_argument("--local-stop", action="store_true")
@@ -87,6 +86,8 @@ def main():
     args = parser.parse_args()
     if args.reviewed_config_sha256 is not None and (not args.serve or args.development_state):
         parser.error("A reviewed-config digest only narrows a fixed installed --serve action")
+    if args.owner_phone_receipts and (not args.serve or not args.reviewed_config_sha256 or not getattr(sys, "frozen", False) or os.name != "nt"):
+        parser.error("The receipt entry only belongs to this explicitly started installed Windows service")
     if (args.environment or args.harness_definition or args.allow_harness_write) and not (args.list_harnesses or args.enable_harness):
         parser.error("Harness configuration arguments require --list-harnesses or --enable-harness")
     if args.list_harnesses and (args.harness_definition or args.allow_harness_write):
@@ -206,12 +207,13 @@ def main():
     if args.manual_takeover_after_os_restart or args.identity_dir is not None:
         raise ValueError("Recovery-only arguments cannot authorize an ordinary serve/command action")
     if args.local_stop:
-        descriptor = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600) if not marker.exists() else None
-        if descriptor is not None:
+        from desktop_stop_receipt import new_request, save_installed_request
+        if installed is not None:
+            save_installed_request(installed, launch.check_current)
+        elif not marker.exists():  # Source development only; retain its explicit local config.
+            descriptor = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(descriptor, "wb") as stream:
-                stream.write(json.dumps({"format": "pocketworld.desktop-local-stop.v1", "requestId": str(uuid.uuid4()),
-                                         "requestedAt": int(time.time() * 1000), "message": "Local owner paused input; do not auto-resume"}).encode())
-                stream.flush(); os.fsync(stream.fileno())
+                stream.write(new_request()); stream.flush(); os.fsync(stream.fileno())
         print("Local desktop stop requested. Previously dispatched input may remain unknown; it will not be replayed.")
         return
     if args.clear_local_stop:
@@ -234,7 +236,7 @@ def main():
     try:
         from pocket_companion import main as original_main
         sys.argv = [sys.argv[0], "--config", str(config)]
-        original_main(config_override=launch)
+        original_main(config_override=launch, owner_phone_receipts=args.owner_phone_receipts)
     finally:
         if handle is not None:
             from ctypes import wintypes as w

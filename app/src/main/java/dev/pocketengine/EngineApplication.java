@@ -1613,15 +1613,18 @@ public final class EngineApplication extends Application implements dev.pocketen
         }finally{if(review.taskId!=null)pushTask(review.taskId);}
     }
     public ConversationPhoneStartReview prepareConversationPhoneStart(String conversationId,String goal,String mode,JSONObject scopeChoices)throws Exception {
-        return prepareConversationPhoneStart(conversationId,goal,mode,scopeChoices,null);
+        return prepareConversationPhoneStart(conversationId,goal,mode,scopeChoices,null,null);
+    }
+    public ConversationPhoneStartReview preparePickedConversationPhoneStart(String conversationId,String goal,String mode,JSONObject scopeChoices,JSONObject originalLocator)throws Exception {
+        return prepareConversationPhoneStart(conversationId,goal,mode,scopeChoices,null,java.util.Objects.requireNonNull(originalLocator));
     }
     public ConversationPhoneStartReview prepareOwnerWorkPhone(TaskStore.OwnerWorkPreparation preparation,String mode,JSONObject scopeChoices)throws Exception {
         java.util.Objects.requireNonNull(preparation).checkCurrent();JSONObject proposed=preparation.view();
         if(!"phone".equals(proposed.getString("kind")))throw new SecurityException("这不是原手机工作提案");
         JSONObject source=preparation.phoneSource();
-        return prepareConversationPhoneStart(source.getString("conversationId"),proposed.getJSONObject("contract").getString("goal"),mode,scopeChoices,preparation);
+        return prepareConversationPhoneStart(source.getString("conversationId"),proposed.getJSONObject("contract").getString("goal"),mode,scopeChoices,preparation,null);
     }
-    private ConversationPhoneStartReview prepareConversationPhoneStart(String conversationId,String goal,String mode,JSONObject scopeChoices,TaskStore.OwnerWorkPreparation preparation)throws Exception {
+    private ConversationPhoneStartReview prepareConversationPhoneStart(String conversationId,String goal,String mode,JSONObject scopeChoices,TaskStore.OwnerWorkPreparation preparation,JSONObject originalLocator)throws Exception {
         var assistant=conversationPhoneAssistant();tasks.requireExecutionEnabled();
         goal=goal==null?"":goal.trim();
         if(goal.isEmpty()||goal.length()>4000)throw new IllegalArgumentException("请填写 1–4000 字的手机任务目标");
@@ -1641,11 +1644,12 @@ public final class EngineApplication extends Application implements dev.pocketen
         SettingsStore.validate(config);dev.pocketengine.runtime.ModelGateway.validate(config);
         JSONObject source=preparation==null?assistant.preparePhoneHandoffSource(conversationId):preparation.phoneSource();
         JSONObject facts=json("modelName",config.model,"provider",config.provider,"toolLimit",tools,"modelCallLimit",models,"scopeMinutes",minutes,"modelSelectionRevision",selected.revision());
-        TaskStore.ConversationPhoneReview creation=preparation==null?tasks.prepareConversationPhone(source,goal,mode,facts):tasks.prepareConversationPhone(source,goal,mode,facts,preparation);
+        TaskStore.ConversationPhoneReview creation=originalLocator!=null?tasks.preparePickedConversationPhone(source,goal,mode,facts,originalLocator):preparation==null?tasks.prepareConversationPhone(source,goal,mode,facts):tasks.prepareConversationPhone(source,goal,mode,facts,preparation);
         JSONObject view=new JSONObject(facts.toString()).put("requestId",creation.view().getString("requestId"))
                 .put("conversationId",source.getString("conversationId")).put("conversationTitle",source.optString("conversationTitle","原对话"))
                 .put("goal",goal).put("mode",mode).put("expiresAt",System.currentTimeMillis()+120_000L)
                 .put("screenDisclosure",config.sendScreenshots?"执行时，可见文字和获准的屏幕截图会发送到本次模型。":"执行时，可见文字会发送到本次模型；当前未开启屏幕截图发送。");
+        if(originalLocator!=null)view.put("ownerPickedMessage",true);
         return new ConversationPhoneStartReview(this,tasks,creation,config,selected.revision(),preferenceRevision,view);
     }
     private void requireConversationPhoneReviewCurrent(ConversationPhoneStartReview review,java.util.function.BooleanSupplier ownerCurrent)throws Exception {

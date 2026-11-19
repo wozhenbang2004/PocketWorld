@@ -19,15 +19,15 @@ final class CloudWorkspaceChoice {
         if(!hash(stored.opt("profileBinding"))||!hash(stored.opt("workspaceAnchor")))return result;
         for(int n=0;n<currentProfiles.length();n++){
             JSONObject p=currentProfiles.getJSONObject(n);
-            if(stored.get("profileId").equals(p.opt("id"))&&stored.get("profileBinding").equals(p.opt("bindingHash"))&&p.optBoolean("hasToken"))return result.put("target",stored);
+            if(stored.get("profileId").equals(p.opt("id"))&&stored.get("profileBinding").equals(p.opt("bindingHash"))&&p.optBoolean("hasToken"))return result.put("target",stored).put("ownerDeclaredByos",prefs.getBoolean("ownerDeclaredByos",false));
         }
         return result; // A replaced/deleted account must not see the previous owner's location metadata.
     }
-    private void put(long expected,JSONObject next)throws Exception {
-        if(expected<0||expected!=revision())throw new IllegalStateException("常用云环境已变，请重新读取后再选择");
+    private void put(long expected,JSONObject next,boolean byos)throws Exception {
+        if(expected<0||expected!=revision())throw new IllegalStateException("常用主机工作区已变，请重新读取后再选择");
         SharedPreferences.Editor edit=prefs.edit().putLong("revision",Math.addExact(expected,1));
-        if(next==null)edit.remove("target");else edit.putString("target",next.toString());
-        if(!edit.commit())throw new IllegalStateException("手机尚未确认保存常用云环境，请重新读取；不重试执行");
+        if(next==null){edit.remove("target");edit.remove("ownerDeclaredByos");}else edit.putString("target",next.toString()).putBoolean("ownerDeclaredByos",byos);
+        if(!edit.commit())throw new IllegalStateException("手机尚未确认保存常用主机工作区，请重新读取；不重试执行");
     }
     void select(JSONObject profile,JSONObject observed,JSONObject request,long expected)throws Exception {
         String worker=request.getString("worker"),env=request.getString("environmentId"),pf=profile.getString("id"),pb=profile.getString("bindingHash");
@@ -37,11 +37,18 @@ final class CloudWorkspaceChoice {
                 ||location==null||!"companion_host_workspace_v1".equals(location.opt("format"))||!hash(location.opt("anchor"))||!location.get("anchor").equals(request.opt("workspaceAnchor"))
                 ||!"persistent_operations".equals(location.opt("jobRegistry"))||!"not_guaranteed".equals(location.opt("runningAfterSupervisorRestart"))||location.opt("processSandbox")!=Boolean.FALSE)
             throw new SecurityException("这不是由当前主机核对的本地工作区，未记住其他目录或 SSH 第二跳");
-        put(expected,new JSONObject().put("profileId",pf).put("profileBinding",pb).put("environmentId",env).put("workspaceAnchor",location.get("anchor")).put("worker",worker));
+        put(expected,new JSONObject().put("profileId",pf).put("profileBinding",pb).put("environmentId",env).put("workspaceAnchor",location.get("anchor")).put("worker",worker),false);
+    }
+    void label(JSONArray currentProfiles,JSONObject request,long expected)throws Exception {
+        JSONObject target=view(currentProfiles).optJSONObject("target");
+        JSONObject supplied=new JSONObject(request.toString()).put("profileBinding",request.getString("_profileBinding"));
+        if(!(request.opt("ownerDeclaredByos") instanceof Boolean)||!dev.pocketengine.store.CloudWorkspaceJobs.same(target,supplied))
+            throw new SecurityException("现在的原工作区与标签选择不符；没有改动其他主机");
+        put(expected,target,request.getBoolean("ownerDeclaredByos"));
     }
     void forget(JSONObject profile,JSONArray currentProfiles,long expected)throws Exception {
         JSONObject target=view(currentProfiles).optJSONObject("target");
         if(target==null||!profile.get("id").equals(target.opt("profileId"))||!profile.get("bindingHash").equals(target.opt("profileBinding")))throw new SecurityException("这不是已保存的原主机，不移除其他选择");
-        put(expected,null);
+        put(expected,null,false);
     }
 }

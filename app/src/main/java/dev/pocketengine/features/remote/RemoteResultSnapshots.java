@@ -47,6 +47,7 @@ public final class RemoteResultSnapshots {
         for(int i=0;i<files.length();i++){JSONObject file=files.getJSONObject(i);long size=file.getLong("bytes");if(!selected.getString(i).equals(file.optString("path"))||size<0||size>262144||!file.optString("sha256").matches("[a-f0-9]{64}")||!file.optString("fileVersion").matches("[a-f0-9]{64}"))throw new SecurityException("快照文件路径/大小/hash/版本不完整");total=Math.addExact(total,size);safe.put(new JSONObject().put("path",file.getString("path")).put("bytes",size).put("sha256",file.getString("sha256")).put("fileVersion",file.getString("fileVersion")));}
         if(total>524288||total!=actual.getLong("bytes"))throw new SecurityException("快照字节总量不一致或超过512KiB");
         JSONObject result=new JSONObject().put("source",new JSONObject(source.toString())).put("files",safe).put("bytes",total).put("immutableArtifact",true).put("authorshipVerified",false).put("captureSource",actual.getString("captureSource"));
+        JSONObject hold=CloudTakeoutWindow.receipt(actual);if(hold!=null)result.put("takeoutWindow",hold);
         for(String key:new String[]{"snapshotId","snapshotVersion","operationId","jobId","jobOperationId","environmentId","worker","capturedAt","status","threadId","sessionId","turnId","workspaceIdentity","consistency","atomicWorkspaceSnapshot"})if(actual.has(key))result.put(key,actual.get(key));return result;
     }
     public static JSONObject file(JSONObject actual,JSONObject nativeSnapshot,String path)throws Exception {

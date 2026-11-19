@@ -8,7 +8,7 @@ type Condition={state:'ready'|'blocked'|'unknown';message?:string;settings?:Reme
 export type PhoneConditions={notification:Condition;screen:Condition};
 export type PhoneReviewDisplay={
   goal:string;mode:string;toolLimit:number;modelCallLimit:number;scopeMinutes:number;
-  message?:string;conversationId?:string;conversationTitle?:string;modelName?:string;screenDisclosure?:string;
+  ownerPickedMessage?:boolean;message?:string;conversationId?:string;conversationTitle?:string;modelName?:string;screenDisclosure?:string;
   conditions?:PhoneConditions;
 };
 type Live={reviewHandle:string;expiresInMs?:number;documentEpoch?:number};
@@ -43,7 +43,7 @@ export function PhoneScopeReview({shown,live,pending,unknown,onStart,onClose,onC
   }];
   return <PermissionReview title={shown.goal} context={conditions?'计划使用'+planned:'在'+planned+'执行'}
     reason={[shown.message,shown.screenDisclosure].filter(Boolean).join(' ')}
-    fields={[...stated,...(shown.conversationId?[{label:'结果返回',value:shown.conversationTitle||'原私人对话'}]:[]),
+    fields={[...stated,...(shown.ownerPickedMessage===true?[{label:'目标来源',value:'你在这段对话选定的原消息。若原话或最新交代改变，将暂停提交。'}]:[]),...(shown.conversationId?[{label:'结果返回',value:shown.conversationTitle||'原私人对话'}]:[]),
       ...(shown.modelName?[{label:'本次模型',value:shown.modelName}]:[]),{label:'工具调用上限',value:shown.toolLimit},
       {label:'模型调用上限',value:shown.modelCallLimit},{label:'本次期限',value:shown.scopeMinutes<0?'使用原授权期限':shown.scopeMinutes===0?'不设截止时间':shown.scopeMinutes+' 分钟'}]}
     error={error} onReject={live&&!pending?onClose:undefined}

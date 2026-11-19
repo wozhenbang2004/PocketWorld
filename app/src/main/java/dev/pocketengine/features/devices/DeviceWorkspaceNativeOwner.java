@@ -343,6 +343,10 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
         }
         public JSONObject historyLinks(String id) throws Exception { tasks.get(id, false); return tasks.deviceTasks().childOverview(id, 24); }
         public JSONObject historyPage(String id,String target,String after) throws Exception { return tasks.deviceTasks().childHistoryPage(id,target,after,24); }
+        public JSONObject waitingPhoneGoals(String afterCaller,String afterOp)throws Exception {
+            DeviceIdentity.LocalIdentity local=existingIdentity();if(local==null)throw new SecurityException("本机原设备身份不可读取");
+            return tasks.deviceTasks().waitingPhoneGoals(local.deviceId(),local.instanceId(),afterCaller,afterOp);
+        }
         public JSONObject phoneGoalIndex(String target,String parentAfter,String after,boolean received) throws Exception {
             DeviceIdentity.LocalIdentity local=existingIdentity();JSONObject peer=trust.peer(target);
             if(local==null||peer==null)throw new SecurityException("原本机或配对设备身份已变化，未读取其他设备");

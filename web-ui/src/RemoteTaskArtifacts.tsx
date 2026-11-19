@@ -7,6 +7,13 @@ import { holdRemoteReads, remoteObject as object, remoteRows as rows, type Remot
 type Run = (action: string, args?: Data) => Promise<any>;
 type Props = { snapshot: Data; busy: boolean; active: boolean; run: Run };
 const json = (value: unknown) => typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+const takeoutMs = 7 * 24 * 60 * 60 * 1000;
+function pickupWindow(version: Data): string {
+  const hold = object(version.takeoutWindow), until = hold.normalPruneProtectedUntil, capture = version.capturedAt;
+  if (hold.protocol !== 'companion_selected_bytes_takeout_v1' || !Number.isSafeInteger(capture) || capture <= 0 || !Number.isSafeInteger(until) || until - capture !== takeoutMs || !Number.isFinite(new Date(until).getTime())) return '这份回执没有主机保管期限。要离线保留，请把原件存到手机。';
+  const date = new Date(until).toLocaleString('zh-CN', {year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+  return Date.now() < until ? '主机普通清理不会在 '+date+' 前移除这版原件。要离线使用，请存入手机。' : date+' 起已不受普通清理保护；不代表文件已删，仍可核对原版本。';
+}
 
 /** Digest/selection-bound confirmation; Back consumes only this review. */
 export function RemoteActionReview({ identity, title, active, busy, expiresAt, onClose, onConfirm, children, confirmLabel = '确认这一次' }: {
@@ -91,6 +98,7 @@ export function RemoteTaskArtifacts({ snapshot, busy, active, run }: Props) {
       <Accordion><AccordionItem title="按明确路径采集（高级）"><TextAreaField label="明确文件路径，每行一个（1–8 个）" value={manual} onChange={value => { live.current.manual = value; setManual(value); }} isDisabled={busy} /><Button variant="secondary" disabled={!browse || !manual.trim() || manual.split('\n').filter(line => line.trim()).length > 8} onClick={() => { const paths = manual.split('\n').map(line => line.trim()).filter(Boolean); setFreeze({ reviewId: snapshot.reviewId, manual, command: 'captureSnapshot', args: { paths }, files: paths.map(path => ({ path })) }); }}>核对并保存指定文件快照</Button></AccordionItem></Accordion>
       {rows(task.operations).filter(row => row.tool === 'remote_snapshot').slice(-4).map(row => <p key={row.operationId} className="pw-field-hint">快照操作 {row.operationId} · {row.state === 'unknown' ? '回执待核对，只查询原编号，不重新采集' : row.receipt?.message || row.state}</p>)}
       {saved.map(version => <section className="pw-remote-frozen" key={version.snapshotId}><h4>冻结版本 · {String(version.snapshotVersion).slice(0, 16)}</h4><p>{version.bytes} 字节 · 原 job {version.jobId}</p>
+        <p className="pw-field-hint">{pickupWindow(version)}</p>
         {rows(version.files).map(file => {
           const local = rows(snapshot.snapshotAttachments).find(row => row.snapshotId === version.snapshotId && row.path === file.path);
           const attachmentId = local?.attachment?.id;
@@ -108,7 +116,7 @@ export function RemoteTaskArtifacts({ snapshot, busy, active, run }: Props) {
       {freeze && <RemoteActionReview identity={`${snapshot.windowHandle}:${freeze.reviewId}:${JSON.stringify(freeze.files)}`} title="冻结这些明确文件" active={active} busy={busy} onClose={() => setFreeze(null)} confirmLabel="确认冻结此版本" onConfirm={() => {
         if (!browse || freeze.reviewId !== live.current.snapshot.reviewId || freeze.selected && freeze.selected !== JSON.stringify(live.current.snapshot.selectedResultFiles) || freeze.manual !== undefined && freeze.manual !== live.current.manual) return;
         void safeRun(`remoteTask.${freeze.command}`, freeze.args); setFreeze(null);
-      }}><p>原 job：{source.jobId}</p>{rows(freeze.files).map(file => <p key={file.path}>{file.path}{file.sha256 ? <><br />{file.bytes} 字节 · SHA-256 {file.sha256}</> : null}</p>)}<p>只保存上述范围，不递归扫描。已读版本漂移会拒绝；未知回执不自动重试。</p></RemoteActionReview>}
+      }}><p>原 job：{source.jobId}</p>{rows(freeze.files).map(file => <p key={file.path}>{file.path}{file.sha256 ? <><br />{file.bytes} 字节 · SHA-256 {file.sha256}</> : null}</p>)}<p>只保存上述范围，不递归扫描。已读版本漂移会拒绝；未知回执不自动重试。</p><p>{result.takeoutPolicy?.protocol === 'companion_selected_bytes_takeout_v1' && result.takeoutPolicy.durationMs === takeoutMs ? '主机接受后，正常清理至少保留 7 天。具体期限看原回执；这不保证主机在线或已备份到手机。' : '这台主机未声明固定取回期限；冻结不等于已经保存到手机。'}</p></RemoteActionReview>}
     </div></AccordionItem>
     <AccordionItem title="项目版本与对话分支"><div className="pw-remote-section">
       <p className="pw-muted">比较原 job 前后的冻结源码。未报告的变化按归属未知显示；文件恢复与对话分支分别审阅。</p>

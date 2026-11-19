@@ -15,6 +15,7 @@ import json
 import ntpath
 import os
 from pathlib import Path
+import sys
 import threading
 import uuid
 
@@ -495,7 +496,7 @@ def run_native_pairing(config_path, *, installed=None, launch_config=None, ident
         config_store = NativePairingConfig(manager, path, raw, current_installation=installation_current)
         controller = PairingOwnerController(manager, local, config_store)
         host = PairingLanHost(controller)
-        start = show_pairing_window(controller, host)
+        start = show_pairing_window(controller, host, offer_local_receipts=installed is not None and getattr(sys, "frozen", False))
         if not start:
             return {"businessListenerStarted": False, "paired": controller.completed}
         config_store.current()
@@ -504,7 +505,7 @@ def run_native_pairing(config_path, *, installed=None, launch_config=None, ident
         manager.device_companion = DeviceCompanionService(manager, local_identity=local, native_lan_reservations=reservations)
         manager.device_companion.start()  # Same original manager/ledger, exact transferred sockets.
         host.close()  # Consumed sockets now belong only to the original service.
-        serve_original_manager(manager)
+        serve_original_manager(manager, owner_phone_receipts=start == "with_local_receipts")
         return {"businessListenerStarted": True, "paired": True}
     finally:
         if host is not None:

@@ -379,6 +379,13 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         return runCatching { app.retainedPhoneSurface(task.id, raw.getString("runId"), raw.getInt("coordinatorEpoch"), task.executionMode) }.getOrNull()
     }
     internal fun webMemoryScopeTicket(): Any = Pair(ownerEpochs["memoryReview"] ?: 0, memoryReviewScope)
+    /** Destination display/check only; a client-supplied id never becomes a project selection. */
+    internal fun webProjectConventionDestination(): String {
+        check(webPrivateOwnerVisible() && ownerDomain == "memoryReview") { "请回到原私人记忆管理页" }
+        val scope = memoryReviewScope as? MemoryReviewScope.Project ?: error("请先明确选择原项目，没有回退私人全局空间")
+        val meta = scope.selected.metadata(); check(meta.opt("selectionCurrent") == true) { "项目选择已失效，请重新核对" }
+        return meta.getString("spaceId")
+    }
     /** Personal identity is intentionally independent of the memory workspace's namespace picker. */
     internal fun webPersonalProfileSummary(): JSONObject? =
         if (closed) null else runCatching { app.settings.personalProfileSummary() }.getOrNull()
@@ -1021,9 +1028,31 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     internal fun stageOwnerOriginalReferenceReceipt(payload: JSONObject, done: (JSONObject?, String?) -> Unit): String {
         check(webPrivateOwnerVisible()) { "请回到原私人消息页面" }
         check(webOwnerReceipts.size < 32) { "请先等待已有操作回执" }
-        val owner = webWindowTicket()
+        val model = ownerComposer ?: error("原草稿已关闭")
+        val before = model.active(); val owner = webWindowTicket(); val epoch = chatViewEpoch
         val original = stageOwnerOriginalReference(JSONObject(payload.toString()))
-        awaitWebOwnerReceipt("taskMemory", "selectOwnerOriginalReference", original, owner, done)
+        awaitWebOwnerReceipt("taskMemory", "selectOwnerOriginalReference", original, owner) { receipt, failure ->
+            if (failure != null || receipt == null) done(null, failure ?: "没有收到原选段回执")
+            else try {
+                val staged = model.active()
+                val ref = receipt.getJSONObject("ownerSourceRef")
+                check(receipt.opt("selectionValidated") == true && receipt.opt("draftStaged") == true &&
+                    receipt.opt("bodyIncluded") == false && receipt.opt("modelCalled") == false && receipt.opt("executionAuthorized") == false &&
+                    ref.optString("sourceConversationId") == before.conversationId && before.conversationId == state.conversationId &&
+                    ownerComposer === model && staged.key == before.key && epoch == chatViewEpoch && staged.revision == Math.addExact(before.revision, 1L) &&
+                    staged.sourceRefs().toString() == dev.pocketengine.features.assistant.OwnerSourceReferences.checked(before.sourceRefs().put(ref)).toString()) {
+                    "选区和原草稿版本不再一致，请核对原输入；没有重复添加"
+                }
+                // The store captures this exact edit now and verifies its atomic write before acknowledging.
+                persistComposer(model) { storage ->
+                    if (!webPrivateOwnerVisible() || webWindowTicket() != owner || ownerComposer !== model ||
+                        model.activeKey() != before.key || model.active().revision != staged.revision) done(null, "原草稿窗口或版本已变化，请回原输入核对；没有重复添加")
+                    else if (storage != null) done(null, "选区已加入当前输入，但未确认保存在本机；请先核对原草稿，不要重复添加")
+                    else done(JSONObject().put("selectionValidated", true).put("draftStaged", true).put("persisted", true)
+                        .put("key", before.key).put("epoch", epoch).put("fromRevision", before.revision).put("revision", staged.revision), null)
+                }
+            } catch (error: Exception) { done(null, message(error)) }
+        }
         return original
     }
     private val unconfirmedNewMemory = mutableSetOf<String>()
@@ -1693,11 +1722,16 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             MemoryReviewScope.Private -> when (command) {
                 "openSource" -> app.nativeOwnerWorkflows.source(payload)
                 "proposeConsolidation" -> app.proposeMemoryConsolidation(payload.getJSONArray("selections"), original)
-                "projectFileChoices", "findProjectFileChoices", "locateProjectFileQuote", "proposeProjectFile" -> throw SecurityException("请先明确选择原生项目记忆范围")
+                "projectFileChoices", "findProjectFileChoices", "locateProjectFileQuote", "proposeProjectFile", "saveProjectConvention" -> throw SecurityException("请先明确选择原生项目记忆范围")
                 else -> app.nativeOwnerWorkflows.memory(command, payload)
             }
             is MemoryReviewScope.Project -> when (command) {
                 "openSource" -> scope.native.readFileSourceForOwner(scope.selected, dev.pocketengine.features.memory.SourceRef.fromJson(payload))
+                "saveProjectConvention" -> {
+                    require(payload.keys().asSequence().toSet() == setOf("text"))
+                    original.check()
+                    scope.native.handleForOwner(scope.selected, command, payload)
+                }
                 "projectFileChoices" -> JSONObject().put("files", scope.native.fileChoicesForOwner(scope.selected))
                 "findProjectFileChoices" -> {
                     require(payload.keys().asSequence().toSet() == setOf("filter"))
@@ -1974,7 +2008,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                     require(receipt.opt("selectionValidated")==true&&receipt.opt("bodyIncluded")==false&&receipt.opt("modelCalled")==false&&receipt.opt("executionAuthorized")==false)
                     val refs=draft.sourceRefs();refs.put(receipt.getJSONObject("ownerSourceRef"))
                     model.editSources(target.key,target.revision,dev.pocketengine.features.assistant.OwnerSourceReferences.checked(refs));publishComposer();scheduleComposerSave()
-                    receipt.put("draftStaged",true);state=state.copy(notice="原文精确范围已加入原私聊草稿，尚未发送；发送时会再次核对来源")
+                    receipt.put("draftStaged",true);state=state.copy(notice="原文范围已加入当前输入，尚未发送；发送时会再次核对来源")
                 }catch(staging:Exception){envelope.put("ok",false).put("error",message(staging));state=state.copy(error=message(staging))}
                 if (domain == "memoryReview" && error != null && command == "snapshot") {
                     if (capturedMemoryScope is MemoryReviewScope.Project && !capturedMemoryScope.selected.metadata().optBoolean("selectionCurrent")) memoryReviewScope = MemoryReviewScope.Unavailable(message(error))
@@ -2987,6 +3021,20 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             }
         }
     }
+    internal fun readPhoneTaskRequest(task:String, run:String, epoch:Int, offset:Int, review:String, ownerWindow:()->Boolean, done:(JSONObject?,String?)->Unit) {
+        require(epoch>=0 && (run.isEmpty() && epoch==0 || run.isNotBlank() && epoch>0) && (review.isEmpty() && offset==0 || review.matches(Regex("[a-f0-9]{64}"))))
+        val revision=conversationSourceRevision
+        fun current() = !closed && webPrivateOwnerVisible() && ownerWindow() && revision==conversationSourceRevision
+        check(current()) { "请在原私人手机工作的目标页查看" }
+        io.execute {
+            val result=runCatching {
+                check(current()) { "原手机工作已关闭" }
+                app.tasks.conversationPhoneRequestPage(task,run,epoch,offset,review,dev.pocketengine.core.RunControl())
+            }
+            main.post { if(!current()) done(null,"原手机工作或原话已变化，未显示其他消息")
+                else result.fold({done(it,null)},{done(null,message(it))}) }
+        }
+    }
     internal fun readMessageOrigin(reply: String, source: String, offset: Int, done: (JSONObject?, String?) -> Unit) {
         check(webPrivateOwnerVisible()) { "请回到原私人对话" }
         val conversation = state.conversationId ?: error("原对话未读取")
@@ -3149,11 +3197,12 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val request = channelPhoneRequest; channelPhoneBlocked = true
         if (request != null) io.execute { try { app.cancelChannelPhone(request.getString("requestId")) } catch (error: Exception) { main.post { if (!closed) state = state.copy(error = message(error)) } } }
     }
-    internal fun prepareConversationPhoneStart(conversation: String, goal: String, mode: String): EngineApplication.ConversationPhoneStartReview {
+    internal fun prepareConversationPhoneStart(conversation: String, goal: String, mode: String, picked: JSONObject? = null): EngineApplication.ConversationPhoneStartReview {
         check(webPrivateOwnerVisible() && conversation.isNotBlank() && state.conversationId == conversation && composerDraft?.conversationId == conversation) { "请回到原私人对话核对这次手机任务" }
         check(!hasChannelPhoneOrigin) { "渠道请求保留原渠道归属，不能改为私人对话任务" }
-        return app.prepareConversationPhoneStart(conversation, goal, mode, JSONObject()
-            .put("scopeMinutes", newTaskScopeMinutes).put("toolLimit", newTaskToolBudget).put("modelCallLimit", newTaskModelBudget))
+        val choices = JSONObject().put("scopeMinutes", newTaskScopeMinutes).put("toolLimit", newTaskToolBudget).put("modelCallLimit", newTaskModelBudget)
+        return if (picked == null) app.prepareConversationPhoneStart(conversation, goal, mode, choices)
+        else app.preparePickedConversationPhoneStart(conversation, goal, mode, choices, picked)
     }
     internal fun prepareDraftPhoneStart(scope: String, goal: String, mode: String): EngineApplication.DraftPhoneStartReview {
         check(webPrivateOwnerVisible() && state.conversationId.isNullOrBlank() && composerDraft?.conversationId.isNullOrBlank() && scope == conversationModelScope()) { "请回到原新对话草稿核对这次手机任务" }

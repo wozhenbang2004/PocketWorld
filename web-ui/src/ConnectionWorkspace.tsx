@@ -312,7 +312,7 @@ function RemoteWork({ profile, state, data, run, supported, back, visible, cloud
   // This is guidance, never permission. The original native review/admission remains authoritative.
   const nextStep = !profile.hasToken ? { title: '先接通这台电脑', detail: '返回连接概览，在连接设置中补充原 Companion 令牌。不会安装、登录或更换电脑上的代理。', action: '' }
     : unresolved.length ? { title: '先核对原提交', detail: '此连接有结果未明的原操作。使用上方只读查询或打开原任务，不再创建同一工作。', action: '' }
-    : !environmentFresh ? { title: sameHost ? '核对常用云环境' : '读取电脑提供的工作环境', detail: '电脑连接、工作目录、代理安装、模型登录是四件事。先取得当前环境目录，不根据已安装软件推定可启动。', action: 'environments' }
+    : !environmentFresh ? { title: sameHost ? (saved?.ownerDeclaredByos ? '核对我的自带云工作区' : '核对常用主机工作区') : '读取电脑提供的工作环境', detail: '电脑连接、工作目录、代理安装、模型登录是四件事。先取得当前环境目录，不根据已安装软件推定可启动。', action: 'environments' }
     : !environments?.length ? { title: '电脑尚未提供工作环境', detail: '在电脑 Companion 配置允许的目录与执行器后，重新读取。不自动创建目录或安装软件。', action: 'environments' }
     : !environment ? { title: '选择这次使用的工作目录', detail: '从下方实际环境中选择；不会自动采用上次浏览的其他目录。', action: 'environment' }
     : !workerReady ? { title: selectedWorker ? '这个代理当前不可用' : '选择电脑上的执行器', detail: text(object(selectedWorker?.reason).message || selectedWorker?.reason) || '从此环境实际返回的选项中选择。电脑有 Codex 或 Claude 命令，不等于该环境已配置并能启动它。', action: 'worker' }
@@ -391,6 +391,20 @@ function RemoteWork({ profile, state, data, run, supported, back, visible, cloud
       setSavedReply(value);
     }).catch(() => {});
   };
+  const labelCloudChoice = (byos: boolean) => {
+    if (!saved || !sameHost || locked || waiting.current || !formCurrent()) return;
+    const selected = formVersion.current;
+    void request('remote.setWorkspaceLabel', { ...binding(profile), expectedRevision:saved.revision, environmentId:sameHost.environmentId,
+      worker:sameHost.worker, workspaceAnchor:sameHost.workspaceAnchor, ownerDeclaredByos:byos }).then(value => {
+      if (formVersion.current !== selected || !nativeActive()) return;
+      const after = cloudChoice(value), target = after?.target;
+      if (!target || !after || after.revision !== saved.revision+1 || after.ownerDeclaredByos !== byos || target.profileId !== sameHost.profileId ||
+        target.profileBinding !== sameHost.profileBinding || target.environmentId !== sameHost.environmentId || target.worker !== sameHost.worker || target.workspaceAnchor !== sameHost.workspaceAnchor) {
+        setDraftError('手机未确认这个工作区的标记。没有连接主机或开始工作。'); return;
+      }
+      setSavedReply(value);
+    }).catch(() => {});
+  };
   const probeWorker = () => {
     if (locked || !formCurrent() || waiting.current || !selectedWorker || !environmentFresh) return;
     const selected = ++formVersion.current;
@@ -433,7 +447,7 @@ function RemoteWork({ profile, state, data, run, supported, back, visible, cloud
       {originalCloudReady&&<Button variant="ghost" disabled={locked} onClick={()=>setShowCloudLocation(false)}>收起位置详情</Button>}
       <Button variant="ghost" disabled={locked || !profile.hasToken} onClick={() => readEnvironments()}>读取当前工作环境</Button></div>
     {supported('remote.rememberWorkspace') && <CloudWorkspaceChoice profile={profile} value={saved} environment={environment} worker={selectedWorker} fresh={environmentFresh}
-      locked={locked} useSaved={() => readEnvironments(true)} save={() => changeCloudChoice(false)} forget={() => changeCloudChoice(true)}/>}
+      locked={locked} useSaved={() => readEnvironments(true)} save={() => changeCloudChoice(false)} forget={() => changeCloudChoice(true)} label={supported('remote.setWorkspaceLabel') ? labelCloudChoice : undefined}/>}
     {!environments && <p className="pw-field-hint">{profile.hasToken ? '读取这台电脑已提供的目录与执行器，不会自动创建或安装。' : '请返回连接概览，在连接设置中补充令牌。'}</p>}
     {!environmentFresh && (environmentId || operation) && <p className="pw-field-hint">草稿与原操作保留；开始另一项工作前，需要重新读取环境与核对执行器。</p>}
     {environments?.length === 0 && <p>未取得可用工作环境；不会自动创建电脑目录或安装执行器。</p>}

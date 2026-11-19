@@ -19,13 +19,14 @@ internal class PocketWebKnowledge(private val controller: PocketWorldController)
     private val identities = linkedMapOf<String, Pin>()
     private val projectFiles = linkedMapOf<String, Pin>()
     private val projectQuotes = linkedMapOf<String, Pin>()
+    private val projectNotes = linkedMapOf<String, Pin>()
     private data class Operation(val owner: Any, val payload: JSONObject, val domain: String = "memoryReview", var requestId: String = "", var result: JSONObject? = null, var error: String? = null, var settled: Boolean = false)
     private val operations = linkedMapOf<String, Operation>()
     private var generation = 0L
     companion object {
-        val COMMANDS = setOf("knowledge.snapshot", "knowledge.get", "knowledge.source", "knowledge.parent", "knowledge.review", "knowledge.confirm", "knowledge.close", "knowledge.namespaces", "knowledge.namespace", "knowledge.project.files", "knowledge.project.locate", "knowledge.project.propose", "knowledge.history", "knowledge.capacity", "knowledge.assertion.prepare", "knowledge.assertion.review", "knowledge.consolidation.review", "knowledge.consolidation.start", "knowledge.consolidation.query", "knowledge.consolidation.stop", "learning.snapshot", "learning.jobs", "learning.job", "learning.episode.inspect", "learning.episode.retain", "learning.create", "learning.run.review", "learning.run.confirm", "learning.operation.query", "learning.operation.stop", "learning.stop", "learning.skip.review", "learning.skip.confirm")
+        val COMMANDS = setOf("knowledge.snapshot", "knowledge.get", "knowledge.source", "knowledge.parent", "knowledge.review", "knowledge.confirm", "knowledge.close", "knowledge.namespaces", "knowledge.namespace", "knowledge.project.files", "knowledge.project.locate", "knowledge.project.propose", "knowledge.project.note.review", "knowledge.project.note.confirm", "knowledge.history", "knowledge.capacity", "knowledge.assertion.prepare", "knowledge.assertion.review", "knowledge.consolidation.review", "knowledge.consolidation.start", "knowledge.consolidation.query", "knowledge.consolidation.stop", "learning.snapshot", "learning.jobs", "learning.job", "learning.episode.inspect", "learning.episode.retain", "learning.create", "learning.run.review", "learning.run.confirm", "learning.operation.query", "learning.operation.stop", "learning.stop", "learning.skip.review", "learning.skip.confirm")
     }
-    fun clear() { generation++; reads.clear(); reviews.clear(); sources.clear(); choices.clear(); identities.clear(); projectFiles.clear(); projectQuotes.clear(); operations.clear() }
+    fun clear() { generation++; reads.clear(); reviews.clear(); sources.clear(); choices.clear(); identities.clear(); projectFiles.clear(); projectQuotes.clear(); projectNotes.clear(); operations.clear() }
     private fun fields(value: JSONObject, vararg keys: String) { require(value.keys().asSequence().all { it in keys }) { "原审核参数含不适用字段" } }
     private fun text(value: JSONObject, key: String, max: Int = 128): String { val s = value.opt(key); require(s is String && s.isNotBlank() && s.length <= max && '\u0000' !in s) { "请重新选择原记录" }; return s }
     private fun number(value: JSONObject, key: String): Long { val n = value.opt(key); require((n is Int || n is Long) && (n as Number).toLong() > 0) { "原修订无效" }; return (n as Number).toLong() }
@@ -71,6 +72,31 @@ internal class PocketWebKnowledge(private val controller: PocketWorldController)
             "knowledge.namespace" -> {
                 fields(args, "choiceHandle"); val choice = if (args.optString("choiceHandle").isBlank()) null else selected(choices, text(args, "choiceHandle"))
                 clear(); controller.selectMemoryNamespace(choice, done)
+            }
+            "knowledge.project.note.review" -> {
+                fields(args, "expectedSpace", "text")
+                val space = controller.webProjectConventionDestination()
+                check(space == text(args, "expectedSpace", 200)) { "原项目已变化，没有准备写入" }
+                val body = text(args, "text", 4000)
+                require(body == body.trim() && body == body.trim { it <= ' ' } && Charsets.UTF_8.newEncoder().canEncode(body)) { "请去除首尾空白并使用完整文字" }
+                val review = pin(projectNotes, JSONObject().put("spaceId", space).put("text", body), 1)
+                // The editor already owns this text: no second plaintext copy in generic replay receipts.
+                done(JSONObject().put("review", review).put("spaceId", space).put("chars", body.length), null)
+            }
+            "knowledge.project.note.confirm" -> {
+                fields(args, "review")
+                val note = selected(projectNotes, text(args, "review"), true); val space = note.getString("spaceId")
+                check(controller.webProjectConventionDestination() == space) { "请回到同一原项目重新核对" }
+                call("memoryReview", "saveProjectConvention", JSONObject().put("text", note.getString("text")), done) { receipt ->
+                    val row = receipt.getJSONObject("record"); val scope = receipt.getJSONObject("scope")
+                    val existing = receipt.opt("alreadyRecorded"); val id = row.getString("id")
+                    check(existing is Boolean && receipt.opt("executionAuthorized") == false && scope.optString("ownerId") == "owner" && scope.optString("spaceId") == space &&
+                        row.optString("ownerId") == "owner" && row.optString("spaceId") == space && id.isNotBlank() && row.getLong("revision") >= 1 &&
+                        row.getString("text") == note.getString("text") && row.optString("formation") == "explicit_save" && row.optString("layer") == "procedural" &&
+                        row.getJSONArray("sourceRefs").length() == 0 && row.getJSONArray("sourceIds").length() == 0 &&
+                        (existing || row.getLong("revision") == 1L && row.opt("core") == false)) { "没有取得原项目约定的保存回执，请核对已保存记录" }
+                    JSONObject().put("spaceId", space).put("recordId", id).put("alreadyRecorded", existing)
+                }
             }
             "knowledge.project.files" -> {
                 fields(args, "filter"); val filter = args.opt("filter"); require(filter is String && filter.length <= 160)
@@ -237,7 +263,7 @@ internal class PocketWebKnowledge(private val controller: PocketWorldController)
                     result
                 } }
             }
-            "knowledge.close" -> { fields(args, "handle"); val id = text(args, "handle"); reads.remove(id); reviews.remove(id); projectFiles.remove(id); projectQuotes.remove(id); done(JSONObject().put("closed", true), null) }
+            "knowledge.close" -> { fields(args, "handle"); val id = text(args, "handle"); reads.remove(id); reviews.remove(id); projectFiles.remove(id); projectQuotes.remove(id); projectNotes.remove(id); done(JSONObject().put("closed", true), null) }
             "learning.snapshot" -> { fields(args); call("learning", "snapshot", JSONObject(), done) }
             "learning.jobs" -> { fields(args, "cursor"); call("learning", "listLearningJobs", JSONObject().put("cursor", args.optString("cursor")).put("limit", 20), done) }
             "learning.job" -> { fields(args, "taskId"); call("learning", "getLearningJob", JSONObject().put("taskId", text(args, "taskId")), done) }

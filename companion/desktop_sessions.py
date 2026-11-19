@@ -24,7 +24,7 @@ class WindowsDesktopHealth:
             raise ValueError("The original window is not available in this interactive session")
         return target
 
-    def probe(self, pid=None, window_id=None):
+    def probe(self, pid=None, window_id=None, *, session_only=False):
         if os.name != "nt":
             return {"available": False, "reason": "windows_interactive_session_required", "platform": os.name,
                     "nativeGuiVerified": False}
@@ -72,6 +72,10 @@ class WindowsDesktopHealth:
             desktop_name = name.value
         finally:
             u.CloseDesktop(desktop)
+        if session_only and pid is None and window_id is None:
+            # A local owner receipt window needs the active, unlocked native
+            # session only. Do not enumerate displays or inspect foreground apps.
+            return {"available": True, "sessionId": session.value, "desktop": desktop_name}
         class MonitorInfo(ctypes.Structure):
             _fields_ = [("size", w.DWORD), ("monitor", w.RECT), ("work", w.RECT), ("flags", w.DWORD), ("device", w.WCHAR * 32)]
         callback_type = ctypes.WINFUNCTYPE(w.BOOL, w.HANDLE, w.HDC, ctypes.POINTER(w.RECT), w.LPARAM)

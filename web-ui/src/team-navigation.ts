@@ -15,3 +15,6 @@ export type TeamButlerRequest = {
 };
 
 export type TeamRunFocus = { requestId: string; runId: string };
+
+export type TeamDecisionOrigin = { parentTaskId: string; parentRunId: string; parentEpoch: number; conversationId: string; teamRunId: string };
+export const teamDecisionEntryKey = (source: TeamDecisionOrigin) => JSON.stringify(['team-decisions',source.conversationId,source.parentTaskId,source.parentRunId,source.parentEpoch,source.teamRunId]);

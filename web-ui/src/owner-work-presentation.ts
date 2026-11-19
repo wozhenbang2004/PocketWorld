@@ -10,7 +10,7 @@ export type OwnerWorkTeam = {
   goal: string; status: string; taskStatus: string; phase: string; updatedAt: number;
   needsAttention: boolean; active: boolean; cancelRequested: boolean; readOnly: true;
   memberCount?: number; completedMemberCount?: number; pendingMemberCount?: number;
-  pendingQuestionCount?: number; attentionCount?: number;
+  pendingQuestionCount?: number; pendingDecisionCount?: number; attentionCount?: number;
 };
 const count = (value: unknown): number | undefined => Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : undefined;
 
@@ -30,7 +30,7 @@ function workTeams(raw: Data, available: boolean): OwnerWorkTeam[] {
       goal: text(row.goal), status: text(row.status), taskStatus: text(row.taskStatus), phase: text(row.phase), updatedAt: Number(row.updatedAt),
       needsAttention: row.needsAttention, active: row.active, cancelRequested: row.cancelRequested === true, readOnly: true,
       memberCount: count(row.memberCount), completedMemberCount: count(row.completedMemberCount), pendingMemberCount: count(row.pendingMemberCount),
-      pendingQuestionCount: count(row.pendingQuestionCount), attentionCount: count(row.attentionCount) });
+      pendingQuestionCount: count(row.pendingQuestionCount), pendingDecisionCount: count(row.pendingDecisionCount), attentionCount: count(row.attentionCount) });
   }
   return teams;
 }

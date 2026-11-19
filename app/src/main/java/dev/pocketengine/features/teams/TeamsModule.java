@@ -86,6 +86,7 @@ public final class TeamsModule implements EngineModule {
     private synchronized JSONObject definition(String id)throws Exception{JSONArray all=definitions();for(int i=0;i<all.length();i++)if(id.equals(all.getJSONObject(i).getString("id")))return new JSONObject(all.getJSONObject(i).toString());throw new SecurityException("原已配置团队不存在");}
     /** Native private-owner read only, deliberately not a model command. */
     public JSONObject ownerAttention(String afterRunId,String afterItemId,int limit)throws Exception{return coordinator.ownerAttention(afterRunId,afterItemId,limit);}
+    public JSONObject ownerDecisionPage(String runId)throws Exception{return coordinator.ownerDecisionPage(runId);}
     public boolean parentOrchestrationConfigured(){return parentHost!=null;}
     public boolean continuousResearchConfigured(){return researchHost!=null;}
     public TeamCoordinator.OriginalCancellation originalCancellation(String run)throws Exception{return coordinator.originalCancellation(run);}

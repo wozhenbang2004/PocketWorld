@@ -23,6 +23,7 @@ import ssl
 import sqlite3
 import stat
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -166,7 +167,7 @@ class JobManager:
             self.ledger.execute("INSERT OR IGNORE INTO workspace_location_identity(slot,id) VALUES(1,?)", (str(uuid.uuid4()),))
             self.location_store = self.ledger.execute("SELECT id FROM workspace_location_identity WHERE slot=1").fetchone()[0]
         # In-flight prepare bodies/Git cannot be replayed after a supervisor restart.
-        for op, raw in self.ledger.execute("SELECT operation_id,details FROM operations WHERE details IS NOT NULL").fetchall():
+        for op, raw in self.ledger.execute("SELECT operation_id,details FROM operations WHERE details IS NOT NULL AND last_status IN ('preparing','uploading','finalizing')").fetchall():
             original = json.loads(raw)
             if original.get("protocol") == assignment_projects.PROTOCOL and original.get("status") in {"preparing", "uploading", "finalizing"}:
                 original.update(status="unknown", revision=original.get("revision", 0) + 1, copiesMayRemain=True, cleanupConfirmed=False)
@@ -823,6 +824,42 @@ class JobManager:
             raise RequestError("Configured workspace is no longer the original regular directory", 409)
         return hashlib.sha256(json.dumps([env["root"], info.st_dev, info.st_ino], separators=(",", ":")).encode()).hexdigest()
 
+    # Keep approved byte limits and the ordinary 500-detail policy. A bounded subset of jobs may hold
+    # already-frozen bytes through a short pickup window; this is not a new store or a deletion timer.
+    CLOUD_TAKEOUT_MS = 7 * 24 * 60 * 60 * 1000
+    CLOUD_TAKEOUT_JOBS = 64
+    CLOUD_TAKEOUT_PROTOCOL = "companion_selected_bytes_takeout_v1"
+
+    @classmethod
+    def _normal_prune_hold(cls, job):
+        deadline = 0
+        if cls._cloud_archival_scope(job) is None:
+            return deadline
+        for snapshot in job.get("resultSnapshots", []):
+            if not isinstance(snapshot, dict) or snapshot.get("jobId") != job.get("id") or snapshot.get("jobOperationId") != job.get("operationId") or snapshot.get("immutableArtifact") is not True:
+                continue
+            hold = snapshot.get("takeoutWindow")
+            captured = snapshot.get("capturedAt")
+            if isinstance(hold, dict) and hold.get("protocol") == cls.CLOUD_TAKEOUT_PROTOCOL and type(captured) is int and captured > 0:
+                until = hold.get("normalPruneProtectedUntil")
+                if type(until) is int and until == captured + cls.CLOUD_TAKEOUT_MS:
+                    deadline = max(deadline, until)
+        return deadline
+
+    @staticmethod
+    def _cloud_archival_scope(job):
+        # Public, non-executable job identity only. No prompt, bytes, command, grant or protocol handle.
+        if not isinstance(job, dict) or any(job.get(k) for k in ("assignmentWorkspace", "nativeDeviceOperation", "teamContext")):
+            return None
+        keys = ("id", "operationId", "environmentId", "worker", "hostWorkspaceAnchor", "workspaceIdentity")
+        if not all(isinstance(job.get(k), str) for k in keys):
+            return None
+        if not all(re.fullmatch(r"[a-f0-9]{64}", job[k]) for k in keys[-2:]) or job["worker"] == "command":
+            return None
+        if not all(re.fullmatch(r"[A-Za-z0-9_-]{1,80}", job[k]) for k in keys[:4]):
+            return None
+        return {k: job[k] for k in keys}
+
     def operation(self, operation):
         operation = identifier(operation, "operationId")
         with self.lock:
@@ -841,6 +878,9 @@ class JobManager:
                 result.update({key: detail[key] for key in ("protocol", "worker", "environmentId", "environmentBinding", "backendSelection", "model", "readOnly")})
             elif found[2] and harness_registry.external(detail.get("worker")):
                 result.update({key: detail[key] for key in ("protocol", "worker", "environmentId", "environmentBinding", "harnessSelection", "model", "modeId", "readOnly") if key in detail})
+            scope = self._cloud_archival_scope(detail.get("cloudAdmission") or {}) if found[2] else None
+            if scope and scope["id"] == found[0] and scope["operationId"] == operation:
+                result.update(scope, cloudArchive="companion_cloud_admission_archive_v1")
             return result
 
     def submit(self, request, *, native_device_admission=None):
@@ -1190,6 +1230,25 @@ class JobManager:
             if old.get("steeringUnknown") or any(receipt.get("status") in {"queued", "sending", "unknown"}
                     for receipt in old.get("approvalReceipts", []) + old.get("questionReceipts", []) + old.get("teamToolReceipts", [])):
                 continue
+            if self._normal_prune_hold(old) > self.now():
+                continue
+            scope = self._cloud_archival_scope(old)
+            if scope is not None:
+                # Freeze the already-observed identity in the SAME operation row before retiring its detail.
+                # An empty, damaged or mismatched original row is not replaceable.
+                record = self.ledger.execute("SELECT job_id,details FROM operations WHERE operation_id=?", (old["operationId"],)).fetchone()
+                if record is None or record[0] != jobid:
+                    continue
+                try:
+                    details = json.loads(record[1]) if record[1] else {}
+                    if not isinstance(details, dict) or details.get("cloudAdmission", scope) != scope:
+                        continue
+                    details["cloudAdmission"] = scope
+                    self.ledger.execute("UPDATE operations SET details=? WHERE operation_id=? AND job_id=?", (json.dumps(details), old["operationId"], jobid))
+                    self.ledger.commit()
+                except (ValueError, sqlite3.Error):
+                    self.ledger.rollback()
+                    continue  # Keep the original detail when durable identity could not be preserved.
             self.jobs.pop(jobid, None)
             (self.state / ("job-" + jobid + ".json")).unlink(missing_ok=True)
 
@@ -1262,6 +1321,8 @@ class JobManager:
             result.update(status="unknown", message="Original input state persistence unconfirmed; no successful revision or ready state is published")
         elif job.get("inputState"):
             result["inputState"] = json.loads(json.dumps(job["inputState"]))
+        if self._cloud_archival_scope(job):
+            result["takeoutPolicy"] = {"protocol": self.CLOUD_TAKEOUT_PROTOCOL, "durationMs": self.CLOUD_TAKEOUT_MS}
         result["resultSnapshots"] = [self._snapshot_public(value) for value in job.get("resultSnapshots", []) if value.get("protocol") != project_history.PROTOCOL]
         result["projectHistory"] = project_history.summary(job)
         for snapshot in result["resultSnapshots"]:
@@ -2424,6 +2485,12 @@ class JobManager:
             snapshots = [snapshot for snapshot in retained if snapshot.get("protocol") != project_history.PROTOCOL]
             if len(snapshots) >= 4:
                 raise RequestError("Original job already has four retained snapshots; none were silently replaced", 409)
+            protected = self._cloud_archival_scope(job) is not None
+            hold_check = self.now()
+            if protected and self._normal_prune_hold(job) <= hold_check:
+                occupied = sum(1 for held in self.jobs.values() if self._normal_prune_hold(held) > hold_check)
+                if occupied >= self.CLOUD_TAKEOUT_JOBS:
+                    raise RequestError("云端原件取回窗口暂时已满。这次没有冻结文件，也没有覆盖之前的版本；请稍后重新核对。", 409)
             env = self._snapshot_environment(job)
             identity = self._snapshot_job_identity(job)
             files = [self._artifact_bytes(env, path) for path in paths]
@@ -2444,6 +2511,9 @@ class JobManager:
                         "captureSource": "selected_current_workspace_after_settled_original_job", "authorshipVerified": False,
                         "immutableArtifact": True, "bytes": total, "files": files, "fingerprint": fingerprint, "workspaceIdentity": job["workspaceIdentity"],
                         "consistency": "two_read_content_stat_fence", "atomicWorkspaceSnapshot": False}
+            if protected:
+                snapshot["takeoutWindow"] = {"protocol": self.CLOUD_TAKEOUT_PROTOCOL,
+                                             "normalPruneProtectedUntil": snapshot["capturedAt"] + self.CLOUD_TAKEOUT_MS}
             assignment_workspaces.contribution(self, job, snapshot, RequestError)
             for key in ("threadId", "sessionId", "turnId"):
                 if job.get(key):
@@ -2842,7 +2912,7 @@ def initialize(path: Path, workspace: str):
     print("Created configuration and private token file. Enter the token on your phone; it is not printed here.")
 
 
-def main(*, config_override=None):
+def main(*, config_override=None, owner_phone_receipts=False):
     parser = argparse.ArgumentParser(description="PocketEngine owner Companion")
     parser.add_argument("--config", type=Path)
     parser.add_argument("--init", action="store_true")
@@ -2905,10 +2975,10 @@ def main(*, config_override=None):
         except BaseException:
             manager.close()
             raise
-    serve_original_manager(manager)
+    serve_original_manager(manager, owner_phone_receipts=owner_phone_receipts)
 
 
-def serve_original_manager(manager):
+def serve_original_manager(manager, *, owner_phone_receipts=False):
     """Continue the SAME original manager after an explicit native owner action.
 
     Pairing has no new Agent, HTTP-token permission conversion or parallel DB.
@@ -2925,7 +2995,7 @@ def serve_original_manager(manager):
     tls = bool(config.get("tlsCert") and config.get("tlsKey"))
     if not loopback and (not config.get("allowRemote", False) or not tls):
         raise ValueError("Non-loopback binding requires allowRemote=true and TLS certificate/key")
-    server = None
+    server = receipt_entry = None
     try:
         server = CompanionServer((host, int(config.get("port", 8766))), manager)
         if tls:
@@ -2934,10 +3004,17 @@ def serve_original_manager(manager):
             context.load_cert_chain(config["tlsCert"], config["tlsKey"])
             server.socket = context.wrap_socket(server.socket, server_side=True, do_handshake_on_connect=False)
         print("Pocket World Companion listening; authentication required; press Ctrl+C to stop.")
+        if owner_phone_receipts and os.name == "nt" and getattr(sys, "frozen", False) and manager.device_companion is not None:
+            try:
+                from desktop_phone_receipts import open_local_entry
+                receipt_entry = open_local_entry(manager)
+            except Exception:
+                print("Owner receipt entry unavailable; the original Companion is still serving.", file=sys.stderr)
         server.serve_forever(poll_interval=0.2)
     except KeyboardInterrupt:
         pass
     finally:
+        if receipt_entry is not None: receipt_entry.close()
         if server is not None:
             server.server_close()
         manager.close()

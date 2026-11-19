@@ -57,6 +57,10 @@ public final class CloudWorkspaceJobs {
         for(String k:new String[]{"id","operationId","profileId","profileBinding","environmentId","worker","hostWorkspaceAnchor","workspaceIdentity","serviceBase"})proof.put(k,receipt.get(k));
         t.put("cloudHostAdmission",proof); // Immutable original identity, never the live process status or grant.
     }
+    public static boolean archived(JSONObject value) {
+        return value!=null&&"companion_cloud_admission_archive_v1".equals(value.opt("cloudArchive"))
+            && Boolean.TRUE.equals(value.opt("archived"))&&"unknown".equals(value.opt("status"));
+    }
     private static JSONObject project(JSONObject t)throws Exception {
         JSONObject s=t.getJSONObject("externalRefs").getJSONObject("hostWorkspace"),e=t.optJSONObject("evidence");
         String goal=t.optString("goal");int end=goal.length()>200&&Character.isHighSurrogate(goal.charAt(199))?199:200;
@@ -66,16 +70,18 @@ public final class CloudWorkspaceJobs {
         boolean current=accepted(t,e,s);
         if(current||accepted(t,t.optJSONObject("cloudHostAdmission"),s))row.put("stage","host_acknowledged").put("jobId",t.getString("externalId"))
             .put("executorStatus",current?e.optString("executorStatus"):"unknown");
+        JSONObject proof=t.optJSONObject("cloudHostAdmission");
+        if(accepted(t,proof,s)&&Boolean.TRUE.equals(proof.opt("detailRetired")))row.put("detailRetired",true);
         return row;
     }
     public static JSONObject page(JSONObject target,String position,SshWorkHistory.Headers headers,SshWorkHistory.Original original,SshWorkHistory.Check check)throws Exception {
-        if(!valid(target)||position==null||position.length()>2048)throw new IllegalArgumentException("原云工作读取范围无效");
+        if(!valid(target)||position==null||position.length()>2048)throw new IllegalArgumentException("原主机工作读取范围无效");
         JSONArray found=new JSONArray();int scanned=0,hydrated=0;long start=SystemClock.elapsedRealtime();boolean more;
         do {
             check.current();
             JSONObject page=headers.read(position,Math.min(8-found.length(),Math.min(16-hydrated,64-scanned)));
             String next=page.getString("nextCursor");more=page.getBoolean("hasMore");
-            if(more&&(next.isEmpty()||position.equals(next)))throw new IllegalStateException("原云工作读取位置未推进");
+            if(more&&(next.isEmpty()||position.equals(next)))throw new IllegalStateException("原主机工作读取位置未推进");
             position=next;JSONArray rows=page.getJSONArray("tasks");scanned+=rows.length();
             for(int i=0;i<rows.length();i++) {
                 JSONObject h=rows.getJSONObject(i);if(!personal(h)||!"remote".equals(h.opt("kind"))||!"remote".equals(h.opt("feature")))continue;

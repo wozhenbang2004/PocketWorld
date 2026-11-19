@@ -114,11 +114,28 @@ class PhoneTaskRouter:
         return True
 
     def invoke(self, action, params):
+        return self._invoke(action, params)
+
+    def read_for_local_receipt(self, peer_id, operation_id):
+        """In-process Windows owner UI only. The local scope fence is not serializable,
+        not an RPC field, not a lease and never returned to phone/Web/MCP clients."""
+        retained = {}
+        value = self._invoke("status", {"peerDeviceId": peer_id, "operationId": operation_id}, retained)
+        safe = {key: value[key] for key in ("operationId", "peerDeviceId", "phoneStateUnconfirmed", "currentOperationRead") if key in value}
+        if isinstance(value.get("phoneGoalOutcome"), dict) and isinstance(value.get("task"), dict):
+            safe["phoneGoalOutcome"] = value["phoneGoalOutcome"]  # Bounded original_phone_goal output.
+            safe["task"] = {key: value["task"][key] for key in ("taskId", "runId", "executorEpoch", "state", "updatedAt") if key in value["task"]}
+        # The native display never receives raw task.result, control leases,
+        # pending questions, screenshots, evidence or model/phone credentials.
+        return safe, retained.get("current")
+
+    def _invoke(self, action, params, retained=None):
         if not isinstance(params, dict):
             raise PhoneTaskError("Parameters must be an object")
         if self.closed or self.service.loop is None or self.service.closed:
             raise PhoneTaskError("Enable the existing paired device service first", 503)
-        future = asyncio.run_coroutine_threadsafe(self.execute(action, copy.deepcopy(params)), self.service.loop)
+        work = self.execute(action, copy.deepcopy(params)) if retained is None else self.execute(action, copy.deepcopy(params), local_task_read=retained)
+        future = asyncio.run_coroutine_threadsafe(work, self.service.loop)
         try:
             return future.result(timeout=58)
         except concurrent.futures.TimeoutError:
@@ -192,7 +209,7 @@ class PhoneTaskRouter:
         finally:
             self.pending.pop(request_id, None)
 
-    async def _read(self, value, method, object_id, options=None):
+    async def _read(self, value, method, object_id, options=None, *, local_task_read=None):
         connection, peer, route = self._route(value["peerDeviceId"], value["grantId"], True)
         ticket = route.history_query(self.service.identity, method, object_id, value["resourceBinding"], self.manager.now(), options=options)
         response = await self._exchange(connection, peer, ticket, ticket.envelope)
@@ -203,6 +220,14 @@ class PhoneTaskRouter:
         ticket.require_target_peer(peer, self.manager.now())
         if response["messageType"] == "DeviceError":
             raise PhoneTaskError("Phone denied the current original-result read", 403)
+        if local_task_read is not None and method == "task.get":
+            def still_current():
+                if self.closed or self.service.closed or self.connections.get(connection) is not peer: return False
+                # Local-only revalidation of the very route used by task.get. No
+                # new query/ticket, session extension, network read or restoration.
+                ticket.require_target_peer(peer, self.manager.now())
+                return True
+            local_task_read["current"] = still_current
         return response["result"]
 
     async def _mutation(self, operation_id, semantic, connection, peer, ticket, envelope, original=None):
@@ -360,7 +385,7 @@ class PhoneTaskRouter:
         # memory or SQL. All immutable scope and native semantics passed first.
         value.update(updates)
 
-    async def execute(self, action, params):
+    async def execute(self, action, params, *, local_task_read=None):
         if self.closed:
             raise PhoneTaskError("Phone task surface is closed; accepted phone work remains on the phone", 503)
         if action in {"acquire_control", "answer", "steer", "resume"}:
@@ -467,7 +492,8 @@ class PhoneTaskRouter:
                     self._save(value["operationId"], value)
                 snapshot = self._public(value)
                 if value.get("taskId"):
-                    task = await self._read(value, "task.get", value["taskId"])
+                    task = (await self._read(value, "task.get", value["taskId"]) if local_task_read is None
+                            else await self._read(value, "task.get", value["taskId"], local_task_read=local_task_read))
                     from phone_task_outcome import is_phone_action_goal, original_phone_goal
                     if is_phone_action_goal(value):
                         fingerprint, current_row = self._row(value["operationId"])

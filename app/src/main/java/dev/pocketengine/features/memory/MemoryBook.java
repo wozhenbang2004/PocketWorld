@@ -2373,6 +2373,24 @@ public final class MemoryBook {
     }
     /** Called only while the native facade holds its selected owner/Local monitors, then Book.
      * Project task context/audiences are deliberately not connected by this owner-management port. */
+    /** A handwritten convention has no file evidence and grants no task audience. Exact matches
+     * navigate to the existing row (even when inactive); never edit or reactivate it as a retry. */
+    private JSONObject saveProjectConvention(JSONObject projectScope,JSONObject input,long now)throws Exception{
+        if(input.length()!=1||!(input.opt("text") instanceof String))throw new IllegalArgumentException("项目手写约定只接受本次输入的文字");
+        String text=bounded(input.getString("text"),1,4000,"项目约定");
+        if(text.isBlank())throw new IllegalArgumentException("请写下本项目的约定");
+        Scope selected=Scope.from(projectScope);if(!selected.isProject())throw new SecurityException("没有原生项目范围，未保存约定");
+        String source="主人在本项目手写的约定";
+        for(JSONObject prior:records.values()){
+            if(!selected.matches(prior)||!source.equals(prior.optString("source"))||!"procedural".equals(prior.optString("layer"))
+                    ||!"explicit_save".equals(prior.optString("formation"))||prior.optBoolean("archiveOnly")||prior.has("learningCandidateId")||prior.has("assertion")
+                    ||prior.getJSONArray("sourceRefs").length()!=0||prior.getJSONArray("sourceIds").length()!=0||!text.equals(prior.getString("text")))continue;
+            return new JSONObject().put("record",copy(prior)).put("alreadyRecorded",true);
+        }
+        namespaceFormat=true;assertionFormat=true;archiveFormat=true;
+        JSONObject row=save(projectScope,new JSONObject().put("text",text).put("layer","procedural").put("source",source),now);
+        return new JSONObject().put("record",row).put("alreadyRecorded",false);
+    }
     synchronized JSONObject projectForOwner(ProjectMemoryNamespaces.Selection selected,String command,JSONObject input)throws Exception {
         selected.requireBook(this);JSONObject scope=new ProjectScope(selected.projectId());
         // No incoming locator, nested scope or reconstructed token can override the native choice.
@@ -2400,6 +2418,7 @@ public final class MemoryBook {
             case "getParentRecord":{JSONObject record=get(scope,input.getString("id"));if(record.getLong("revision")!=SourceRef.integer(input,"revision",1))throw new IllegalStateException("父记忆已变化，请刷新后查看");return new JSONObject().put("record",record);}
             case "listCandidates":return new JSONObject().put("candidates",listCandidates(scope));
             case "getCandidate":return new JSONObject().put("candidate",getCandidate(scope,input.getString("id")));
+            case "saveProjectConvention":result=saveProjectConvention(scope,input,now);break;
             case "save":{
                 JSONObject record=input.getJSONObject("record");
                 if(record.has("sourceRefs")&&record.getJSONArray("sourceRefs").length()>0)throw new SecurityException("项目原文须由原生同项目文件选择绑定，不能由JSON附加来源");

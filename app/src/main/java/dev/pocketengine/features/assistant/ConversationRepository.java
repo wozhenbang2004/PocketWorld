@@ -521,13 +521,20 @@ public final class ConversationRepository {
     JSONObject preparePhoneHandoffSource(String conversation)throws Exception{
         requirePhoneHandoffTransaction();
         if(conversation==null||conversation.isBlank()||conversation.length()>240||!StandardCharsets.UTF_8.newEncoder().canEncode(conversation))throw new IllegalArgumentException("原私人会话身份无效");
-        String id;
+        return phoneHandoffSourceFacts(conversation,latestPhoneUser(conversation));
+    }
+    /** For first issuance from a user-selected message. Later chat is not interchangeable. */
+    public void requireLatestPhoneHandoffSource(JSONObject source)throws Exception{
+        requirePhoneHandoffSource(source);
+        if(!latestPhoneUser(source.getString("conversationId")).equals(source.getString("sourceMessageId")))
+            throw new SecurityException("这段对话已有更新的主人请求，未把旧手机目标交给另一条消息");
+    }
+    private String latestPhoneUser(String conversation)throws Exception{
         // Select the last native user row before checking availability. A withdrawn or
         // deleted latest intention must not silently fall back to an older instruction.
         try(Cursor row=db.rawQuery("SELECT s.source_id FROM assistant_sources s JOIN assistant_messages m ON m.generation=s.generation AND m.source_id=s.source_id AND m.conversation_id=s.conversation_id WHERE s.generation=? AND s.conversation_id=? AND s.role='user' ORDER BY m.sequence DESC LIMIT 1",new String[]{activeGeneration(),conversation})){
-            if(!row.moveToFirst())throw new SecurityException("此原会话没有可固定的主人消息，请先保存本次要求");id=row.getString(0);
+            if(!row.moveToFirst())throw new SecurityException("此原会话没有可固定的主人消息，请先保存本次要求");return row.getString(0);
         }
-        return phoneHandoffSourceFacts(conversation,id);
     }
     /** Exact native proposal source, never a fallback to a later or older intention. */
     public JSONObject preparePhoneHandoffSource(String conversation,String sourceMessageId)throws Exception{

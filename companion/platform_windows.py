@@ -514,6 +514,12 @@ class WindowsBackend:
             raise PlatformError("Only a specifically owned UUID cache object may be deleted", 403)
         return self._delete_owned_bytes(root, relative, expected_sha256, expected_bytes, current)
 
+    def discard_previous_stop_receipt(self, root, before, current):
+        # One derived local UI receipt only; never the actual pause/recovery marker.
+        if not isinstance(before, bytes) or not 0 < len(before) <= 2048:
+            raise PlatformError("Original compact stop receipt required", 403)
+        return self._delete_owned_bytes(root, "desktop-local-stop-receipt.json", hashlib.sha256(before).hexdigest(), len(before), current)
+
     def delete_local_control_file(self, root, relative, expected_sha256, expected_bytes, current=lambda: None):
         # Only the local signed-recovery path uses this narrow marker cleanup.
         # It is never registered as a remote tool or general workspace delete.

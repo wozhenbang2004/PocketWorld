@@ -207,14 +207,14 @@ public final class RemoteOwnerWorkflows {
 
         long lifecycle,generation;synchronized(this){lifecycle=window.lifecycleRevision;generation=++window.readGeneration;checkReadCurrent(window,lifecycle,generation);window.fresh=false;window.review=null;window.queryStatus="querying";window.lastReadAttemptAt=System.currentTimeMillis();}
         JSONObject target=tasks.remoteOwnerTarget(window.task),payload=new JSONObject().put("profileId",target.getString("profileId")).put("serviceBase",target.getString("serviceBase"));String job=target.optString("jobId");
-        if(target.has("hostWorkspace"))payload.put("_expectedHostWorkspace",new JSONObject(target.getJSONObject("hostWorkspace").toString()));
+        if(target.has("hostWorkspace"))payload.put("_expectedHostWorkspace",new JSONObject(target.getJSONObject("hostWorkspace").toString())).put("_expectedCloudJob",job);
         String capturedBinding;JSONObject result;try{
             capturedBinding=target.has("profileBinding")?target.getString("profileBinding"):module().profileBindingHash(target.getString("profileId"));
             if(!capturedBinding.equals(module().profileBindingHash(target.getString("profileId"))))throw new SecurityException("原后端连接代次已变化，不能改用新配置查询旧任务");payload.put("_profileBinding",capturedBinding);if(target.has("backendSelection"))payload.put("backendSelection",new JSONObject(target.getJSONObject("backendSelection").toString()));
             checkReadCurrent(window,lifecycle,generation);
             if(!sameReadTarget(target,tasks.remoteOwnerTarget(window.task),false))throw new SecurityException("读取前原task/run/job已变化");
             if(target.has("backendSelection")){if(inspectRecovery)throw new SecurityException("此后端没有冷会话续接协议");result=module().readBackendJob(target,()->checkReadCurrent(window,lifecycle,generation));}
-            else if(job.isEmpty())result=module().handle("reconcileOperation",payload.put("operationId",target.getString("jobOperationId")));
+            else if(job.isEmpty()||target.has("hostWorkspace")&&!inspectRecovery)result=module().handle("reconcileOperation",payload.put("operationId",target.getString("jobOperationId")));
             else result=module().handle(inspectRecovery?"readSessionRecovery":"getJob",payload.put("jobId",job).put("jobOperationId",target.getString("jobOperationId")));
             // The original HTTP timeout remains bounded. A dispatched GET may still finish;
             // leaving this page invalidates its observation, not the remote execution.
@@ -228,6 +228,11 @@ public final class RemoteOwnerWorkflows {
             return unchanged;
         }
         checkReadCurrent(window,lifecycle,generation);
+        if(target.has("hostWorkspace")&&dev.pocketengine.store.CloudWorkspaceJobs.archived(result)){
+            tasks.noteCloudJobDetailRetired(window.task,target,result);emitTask(window.task);
+            synchronized(this){checkReadCurrent(window,lifecycle,generation);window.queryStatus="archived_operation";window.result=null;window.artifact=null;window.directory=null;window.selectedFiles.clear();window.snapshotFile=null;}
+            return response(window,false,null,lifecycle,generation);
+        }
         tasks.updateExternal(window.task,result);if(result.has("inputState")&&tasks.get(window.task,false).has("remoteInputScope"))tasks.reconcileRemoteInputs(window.task,result);emitTask(window.task);
         // A committed cursor acknowledges observations only, never an approval/answer or job dispatch.
         if(dev.pocketengine.features.remote.RemoteJobEvents.supported(result)&&!result.optString("id").isEmpty()){

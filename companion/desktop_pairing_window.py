@@ -8,7 +8,7 @@ from desktop_sessions import WindowsDesktopHealth
 from platform_backend import PlatformError
 
 
-def show_pairing_window(controller, host):
+def show_pairing_window(controller, host, *, offer_local_receipts=False):
     if os.name != "nt" or WindowsDesktopHealth().probe().get("available") is not True:
         raise PlatformError("Pairing management requires the real logged-in, unlocked Windows owner desktop")
     from ctypes import wintypes as w
@@ -219,7 +219,9 @@ def show_pairing_window(controller, host):
                 elif action == 104:
                     controller.config_store.current()
                     host.business_reservations()  # actual held sockets, not guessed port numbers
-                    start_bridge = True; user.DestroyWindow(hwnd)
+                    with_receipts = offer_local_receipts and user.SendMessageW(controls["phone_receipts"], 0xF0, 0, 0) == 1
+                    start_bridge = "with_local_receipts" if with_receipts else True
+                    user.DestroyWindow(hwnd)
                 elif action == 105:
                     user.DestroyWindow(hwnd)
             except (ValueError, PermissionError, PlatformError) as error:
@@ -295,7 +297,9 @@ def show_pairing_window(controller, host):
         start_button = control("BUTTON", "启动桥接（不重放旧任务）", 264, bottom - 8, 260, 31, 104, 0x10000)
         control("BUTTON", "关闭，不启动服务", width - 255, bottom - 8, 205, 31, 105, 0x10000)
         user.EnableWindow(review_button, False); user.EnableWindow(start_button, False)
-        status = control("STATIC", "选择手机也能访问的本机地址，或手动填写，再创建一次性邀请。选地址不会监听；关闭窗口不会撤销已确认的配对。", 16, bottom + 32, width - 50, 52)
+        status = control("STATIC", "选择手机也能访问的本机地址，或手动填写，再创建一次性邀请。选地址不会监听；关闭窗口不会撤销已确认的配对。", 16, bottom + 28, width - 50, 44 if offer_local_receipts else 52)
+        if offer_local_receipts:
+            controls["phone_receipts"] = control("BUTTON", "启动桥接时，在本机通知区域保留「手机工作回执」入口", 16, bottom + 72, width - 50, 23, 301, 0x3 | 0x10000)
         user.SetTimer(window, 1, 500, None)
         user.ShowWindow(window, 5); user.SetForegroundWindow(window)
         message = w.MSG()

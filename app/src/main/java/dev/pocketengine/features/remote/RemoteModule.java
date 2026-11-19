@@ -87,6 +87,10 @@ public final class RemoteModule implements EngineModule {
         return dev.pocketengine.store.CloudWorkspaceJobs.same(selected,expected);
     }
     /** Native private-window callers only. No new HTTP requests, authorization or CLI probing. */
+    public synchronized JSONObject labelWorkspaceForOwner(JSONObject request,long expected)throws Exception {
+        JSONArray visible=new JSONArray().put(requireProfileBinding(request.getString("profileId"),request.getString("_profileBinding")));
+        cloudWorkspace.label(visible,request,expected);return cloudWorkspace.view(visible);
+    }
     public synchronized JSONObject selectCloudWorkspaceForOwner(JSONObject request,JSONObject originalCatalog,long expected,boolean forget)throws Exception {
         JSONObject profile=requireProfileBinding(request.getString("profileId"),request.getString("_profileBinding"));
         JSONArray current=new JSONArray();for(int i=0;i<profiles.length();i++)current.put(publicProfile(profiles.getJSONObject(i)));
@@ -382,7 +386,9 @@ public final class RemoteModule implements EngineModule {
     }
     private static void requireExpectedHost(JSONObject input,JSONObject actual)throws Exception {
         JSONObject host=input.optJSONObject("_expectedHostWorkspace");
-        if(host!=null&&!actual.optString("id").isEmpty()&&!matchesHostJob(host,actual))throw new SecurityException("未获得原云工作目录、账户和执行器的同一作业回执");
+        if(host!=null&&!actual.optString("id").isEmpty()&&(!matchesHostJob(host,actual)
+                ||!input.optString("_expectedCloudJob").isEmpty()&&!input.optString("_expectedCloudJob").equals(actual.opt("id"))))
+            throw new SecurityException("未获得原云工作目录、账户和执行器的同一作业回执");
     }
     private JSONObject unknownOperation(JSONObject intent)throws Exception {
         intent.put("status","unknown").put("message","电脑是否接收本次任务尚未确认。请查看电脑任务列表并核对operationId；不要直接重复提交。");recordOperation(intent);return new JSONObject(intent.toString());
@@ -476,6 +482,8 @@ public final class RemoteModule implements EngineModule {
         if(op!=null&&op.has("backendSelection")&&result.optString("id").isEmpty())return unknownOperation(op);
         result.put("profileId",profileId);
         requireExpectedHost(input,result);
+        if(input.has("_expectedHostWorkspace")&&dev.pocketengine.store.CloudWorkspaceJobs.archived(result))
+            return result.put("queryOnly",true).put("resubmitted",false); // Never grant controls or recreate a watcher from an archived identity.
         if(!result.optString("id").isEmpty())acceptReceipt(result);
         else if(op!=null){op.put("status","unknown").put("message",result.optString("message","未找到接收回执，请核对实际结果；没有自动重试"));recordOperation(op);}
         context.emit(id(),new JSONObject().put("kind","operation_reconciled").put("operation",metadata(result)));
@@ -495,7 +503,7 @@ public final class RemoteModule implements EngineModule {
         if(!job.isEmpty())identifier(new JSONObject().put("job",job),"job");
         if(!HarnessCapabilityObservation.GEMINI_WORKER.equals(expected.optString("worker"))||!expected.optString("environmentBinding").matches("[a-f0-9]{64}"))throw new SecurityException("缺少原SQL后端目标");identifier(expected,"environmentId");
         BoundRequest target;synchronized(this){if(closed)throw new SecurityException("原模块已关闭");requireProfileRevision(profile,binding);target=bind(profile,required(expected,"serviceBase",2048));}
-        String path=job.isEmpty()?"/v1/operations/"+operation:"/v1/jobs/"+job;dispatchGate.beforeDispatch(path);originalOwnerCurrent.beforeDispatch();synchronized(this){requireProfileRevision(profile,binding);}
+        String path=job.isEmpty()||expected.has("hostWorkspace")?"/v1/operations/"+operation:"/v1/jobs/"+job;dispatchGate.beforeDispatch(path);originalOwnerCurrent.beforeDispatch();synchronized(this){requireProfileRevision(profile,binding);}
         JSONObject actual;try{actual=target.request(path,null,15);}catch(java.io.IOException unavailable){originalOwnerCurrent.beforeDispatch();return backendQueryUnknown(expected,"未取得原操作回执；保留原记录，只查询而不重提");}
         originalOwnerCurrent.beforeDispatch();synchronized(this){requireProfileRevision(profile,binding);}
         if(!actual.optString("operationId").isEmpty()&&!operation.equals(actual.optString("operationId")))throw new SecurityException("查询返回了另一原操作");

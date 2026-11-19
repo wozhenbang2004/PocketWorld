@@ -480,6 +480,28 @@ public final class TeamCoordinator implements AutoCloseable {
     /** Navigation metadata only. Reading the original context never starts an executor. */
     public synchronized JSONArray history()throws Exception{JSONArray history=new JSONArray();for(JSONObject summary:archived.values())history.put(JsonFiles.copy(summary));return history;}
     public synchronized JSONObject get(String id)throws Exception{return JsonFiles.copy(required(id).json);}
+    private JSONArray retainedAttention(String id)throws Exception {
+        Run hot=runs.get(id);JSONObject summary=archived.get(id);
+        if(hot==null&&summary==null)throw new IllegalArgumentException("原协作记录已不可读取");
+        JSONObject original=hot==null?JsonFiles.read(contextFile(id)):hot.json;
+        if(!id.equals(original.optString("id"))||hot==null&&summary.optLong("revision")!=original.optLong("revision"))
+            throw new IllegalStateException("原协作记录缺失或版本不一致，请重新读取");
+        return TeamAttention.forRun(original);
+    }
+    /** Foreground owner lookup for one known run. Reading an archived record does not hydrate a worker. */
+    synchronized JSONObject ownerDecisionPage(String id)throws Exception {
+        JSONArray originals=retainedAttention(id),items=new JSONArray();int total=0;
+        for(int i=0;i<originals.length();i++){
+            JSONObject item=originals.getJSONObject(i);if(!TeamAttention.isOwnerDecision(item))continue;
+            total++;if(items.length()>=8)continue;
+            JSONObject row=new JSONObject();
+            for(String key:new String[]{"id","kind","runId","memberId","memberName","generation","memberGeneration","identityRevision","workItemId","assignmentId","questionId","childKind","round","taskId","status"})
+                if(item.has(key))row.put(key,item.get(key));
+            String title=item.optString("title");int end=title.offsetByCodePoints(0,Math.min(160,title.codePointCount(0,title.length())));
+            items.put(row.put("title",title.substring(0,end)).put("titleTruncated",end<title.length()));
+        }
+        return new JSONObject().put("runId",id).put("items",items).put("total",total).put("readOnly",true).put("executionAuthorized",false);
+    }
     /** Bounded owner inbox scan; archived contexts are read without hydrating, restoring or starting runs. */
     public synchronized JSONObject ownerAttention(String afterRunId,String afterItemId,int limit)throws Exception {
         if(limit<1||limit>8||afterRunId==null||afterItemId==null||afterItemId.length()>320||!afterRunId.isEmpty()&&!afterRunId.matches("[a-f0-9-]{36}")||afterRunId.isEmpty()&&!afterItemId.isEmpty())throw new IllegalArgumentException("团队待处理分页无效");
@@ -487,9 +509,7 @@ public final class TeamCoordinator implements AutoCloseable {
         java.util.List<String> remaining=new java.util.ArrayList<>();for(String id:ids)if(id.compareTo(afterRunId)>0||id.equals(afterRunId)&&!afterItemId.isEmpty())remaining.add(id);
         JSONArray items=new JSONArray();int count=Math.min(limit,remaining.size());String next="";int scanned=0;
         for(int index=0;index<count;index++){
-            String id=remaining.get(index);Run hot=runs.get(id);JSONObject original=hot==null?JsonFiles.read(contextFile(id)):hot.json;
-            if(!id.equals(original.optString("id"))||hot==null&&archived.get(id).optLong("revision")!=original.optLong("revision"))throw new IllegalStateException("原团队待处理记录缺失或版本不一致，请重新读取");
-            JSONArray candidates=new JSONArray();TeamAttention.append(original,candidates);java.util.SortedMap<String,JSONObject> ordered=new java.util.TreeMap<>();
+            String id=remaining.get(index);JSONArray candidates=retainedAttention(id);java.util.SortedMap<String,JSONObject> ordered=new java.util.TreeMap<>();
             for(int row=0;row<candidates.length();row++){JSONObject candidate=candidates.getJSONObject(row);ordered.put(candidate.getString("id"),candidate);}
             scanned++;String last="";
             for(java.util.Map.Entry<String,JSONObject> entry:ordered.entrySet()){

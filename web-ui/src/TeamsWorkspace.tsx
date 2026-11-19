@@ -19,8 +19,9 @@ import { TeamMemberAvatar, TeamMemberIdentity } from './TeamMemberIdentity';
 import { teamAvatarShape, teamAvatarShapes, teamMemberLabel, teamMessageIdentity, teamMessageAuthor } from './team-identity';
 import { teamResearchDeliveries, TeamResearchDeliveries, type TeamResearchDelivery } from './TeamResearchDeliveries';
 import { TeamFollowUps, TeamResultHandoff } from './TeamResultHandoff';
-import { teamFollowUpFocus, teamFollowUps, teamResultReading, type TeamFollowUp } from './team-result-reading';
+import { teamFollowUpFocus, teamFollowUps, teamResultReading, type AttentionFocus, type TeamFollowUp } from './team-result-reading';
 import { teamCanPause, teamCanResume, teamGoalTitle, teamHasEnded, teamNeedsAttention, teamPhaseLabel, teamProgressLabel, teamRoleLabel, teamStatusLabel as status, teamTimeLabel } from './team-presentation';
+import type { TeamAttentionLocator } from './NotificationTeamAttention';
 import type { TeamButlerRequest, TeamOwnerWorkLink, TeamRunFocus } from './team-navigation';
 import { HarnessEvidence } from './HarnessEvidence';
 import { harnessWorkerLabel, isTeamHarness } from './harness-capabilities';
@@ -156,6 +157,35 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     scroll.addEventListener('scroll', remember, { passive: true });
     return () => { cancelAnimationFrame(frame); scroll.removeEventListener('scroll', remember); };
   }, [viewKey]);
+  const decisionTarget=useRef<{handle:string;focus:AttentionFocus}|null>(null);
+  const showDecisionTarget=(id:string,handle:string,focus:AttentionFocus)=>{
+    decisionTarget.current={handle,focus};
+    setRunSections(old=>({...old,[id]:focus.kind==='question'||focus.kind==='workItem'?'details':'progress'}));
+    if(focus.kind==='changed'){setNotice(focus.message||'原待办已变化，请查看原协作。');return}
+    setMemberFilters(old=>({...old,[id]:''}));
+    if(focus.kind==='question')setDetailSections(old=>({...old,[id]:[...new Set([...(old[id]||[]),'conversation'])]}));
+    if(focus.kind==='workItem')setExpandedItems(old=>({...old,[id]:[...new Set([...(old[id]||[]),focus.workItemId!])]}));
+    if(focus.kind==='member')setExpandedMembers(old=>({...old,[id]:[...new Set([...(old[id]||[]),focus.memberId!])]}));
+  };
+  // Resolve after the exact reading and its disclosure have committed. A first run
+  // visit also schedules ordinary scroll restoration above; it must not override this target.
+  useLayoutEffect(()=>{
+    const pending=decisionTarget.current;
+    if(!pending||pending.handle!==reading?.viewHandle||!workspaceActive)return;
+    const frame=requestAnimationFrame(()=>{
+      if(decisionTarget.current!==pending||currentReading.current?.viewHandle!==pending.handle||!ownsNativeWindow()||document.hidden)return;
+      decisionTarget.current=null;
+      const focus=pending.focus, selector=focus.kind==='question'?`[data-message-id="${CSS.escape(focus.messageId!)}"]`
+        :focus.kind==='workItem'?`[data-work-item-id="${CSS.escape(focus.workItemId!)}"]`
+        :focus.kind==='member'?`[data-team-member-id="${CSS.escape(focus.memberId!)}"]`:'.pw-team-run h2';
+      const target=root.current?.querySelector<HTMLElement>(selector), child=focus.taskId?target?.querySelector<HTMLElement>(`[data-team-source-task="${CSS.escape(focus.taskId)}"]`):null;
+      if(!target)setNotice('原事项在当前阅读范围尚未显示，没有定位其他分工。');
+      else if(focus.taskId&&!child)setNotice('已定位原分工，这份子任务当前没有独立入口。没有转到其他轮次。');
+      const control=child||(focus.kind==='member'?target?.querySelector<HTMLElement>('[aria-controls^="team-member-detail-"]'):focus.kind==='workItem'?target?.querySelector<HTMLElement>('button[aria-expanded]'):target);
+      control?.focus({preventScroll:true});(control||target)?.scrollIntoView({block:'center'});
+    });
+    return ()=>cancelAnimationFrame(frame);
+  },[reading?.viewHandle,workspaceActive]);
   const invoke = async (action: string, args: Data = {}, accept?: (result: Data) => void, rejected?: (failure: unknown) => void) => {
     if (entered.current || backgrounded.current || !ownsNativeWindow()) return; entered.current = true; const generation = ++requestGeneration.current; setBusy(true); setError(''); setNotice('');
     try { const result = object(await run(action, args)); if (alive.current && generation === requestGeneration.current) accept?.(result); return result; }
@@ -223,24 +253,20 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     if (!requestId || requestId === handledAttention.current || !workspaceActive || !catalogReady || busy || entered.current || backgrounded.current || !ownsNativeWindow()) return;
     handledAttention.current = requestId;
     const locator = Object.fromEntries(['runId', 'memberId', 'generation', 'memberGeneration', 'identityRevision', 'workItemId', 'assignmentId', 'questionId', 'childKind', 'round', 'taskId']
-      .filter(key => attentionFocus?.[key] !== undefined).map(key => [key, attentionFocus![key]]));
+      .filter(key => attentionFocus?.[key] !== undefined).map(key => [key, attentionFocus![key]])) as TeamAttentionLocator;
     void invoke('teams.readAttention', locator, result => {
-      if (result.reading?.run?.id !== locator.runId) throw new Error('原团队待处理身份不匹配，请刷新通知。');
-      setResultSource(null); acceptReading(result.reading);
-      const focus = object(result.focus), id = result.reading.run.id;
-      setRunSections(old => ({ ...old, [id]: focus.kind === 'question' || focus.kind === 'workItem' ? 'details' : 'progress' }));
-      if (focus.kind === 'question') setDetailSections(old => ({ ...old, [id]: [...new Set([...(old[id] || []), 'conversation'])] }));
-      setMemberFilters(old => ({ ...old, [id]: '' }));
-      if (focus.kind === 'workItem') setExpandedItems(old => ({ ...old, [id]: [...new Set([...(old[id] || []), focus.workItemId])] }));
-      if (focus.kind === 'member') setExpandedMembers(old => ({ ...old, [id]: [...new Set([...(old[id] || []), focus.memberId])] }));
-      if (focus.kind === 'changed') setNotice(label(focus.message));
-      requestAnimationFrame(() => {
-        const selector = focus.kind === 'workItem' ? `[data-work-item-id="${CSS.escape(String(focus.workItemId))}"]` : focus.kind === 'question' ? `[data-message-id="${CSS.escape(String(focus.messageId))}"]`
-          : focus.kind === 'member' ? `[data-team-member-id="${CSS.escape(String(focus.memberId))}"]` : '.pw-team-run h2';
-        const target = root.current?.querySelector<HTMLElement>(selector);
-        (focus.kind === 'member' ? target?.querySelector<HTMLElement>('[aria-controls^="team-member-detail-"]') : focus.kind === 'workItem' ? target?.querySelector<HTMLElement>('button[aria-expanded]') : target)?.focus({ preventScroll: true });
-        target?.scrollIntoView({ block: 'start' });
-      });
+      const next=result.reading, source=attentionFocus?.ownerWork;
+      if (next?.kind!=='run'||!next.viewHandle||next.run?.id!==locator.runId) { release(next); throw new Error('没有读到这项待办的原协作。'); }
+      if(source) {
+        const link=next.ownerWorkLink;
+        if(!link||link.currentRun!==true||link.readOnly!==true||link.stopping!==false||link.taskId!==source.parentTaskId
+            ||link.runId!==source.parentRunId||link.epoch!==source.parentEpoch||link.conversationId!==source.conversationId||link.teamRunId!==source.teamRunId){
+          release(next);throw new Error('发起这项待办的原工作已经变化，没有打开其他分工。');
+        }
+      }
+      const focus=teamFollowUpFocus(next,object(result.focus),locator),id=next.run.id;
+      setResultSource(null); acceptReading(next);
+      showDecisionTarget(id,next.viewHandle,focus);
       onAttentionConsumed?.(requestId);
     }, () => onAttentionConsumed?.(requestId));
   }, [attentionFocus?.requestId, workspaceActive, catalogReady, busy]);
@@ -563,24 +589,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       acceptReading(next);
       if (focus.kind === 'changed') { setNotice(focus.message || '这项原事项已变化。'); return; }
       setResultSource(origin);
-      const id = item.locator.runId;
-      setRunSections(old => ({ ...old, [id]: focus.kind === 'member' ? 'progress' : 'details' }));
-      if (focus.kind === 'question') {
-        setMemberFilters(old => ({ ...old, [id]: '' }));
-        setDetailSections(old => ({ ...old, [id]: [...new Set([...(old[id] || []), 'conversation'])] }));
-      }
-      if (focus.kind === 'workItem') setExpandedItems(old => ({ ...old, [id]: [...new Set([...(old[id] || []), focus.workItemId!])] }));
-      if (focus.kind === 'member') setExpandedMembers(old => ({ ...old, [id]: [...new Set([...(old[id] || []), focus.memberId!])] }));
-      requestAnimationFrame(() => {
-        if (currentReading.current?.viewHandle !== next.viewHandle || !ownsNativeWindow()) return;
-        const selector = focus.kind === 'question' ? `[data-message-id="${CSS.escape(focus.messageId!)}"]`
-          : focus.kind === 'workItem' ? `[data-work-item-id="${CSS.escape(focus.workItemId!)}"]` : `[data-team-member-id="${CSS.escape(focus.memberId!)}"]`;
-        const target = root.current?.querySelector<HTMLElement>(selector);
-        const exactChild = focus.taskId ? target?.querySelector<HTMLElement>(`[data-team-source-task="${CSS.escape(focus.taskId)}"]`) : null;
-        if (focus.taskId && !exactChild) setNotice('已定位原分工，当前记录没有这份子任务的独立入口。未转到其他轮次。');
-        const control = exactChild || (focus.kind === 'question' ? target : target?.querySelector<HTMLElement>(focus.kind === 'member' ? '[aria-controls^="team-member-detail-"]' : 'button[aria-expanded]'));
-        control?.focus({ preventScroll: true }); (control || target)?.scrollIntoView({ block: 'center' });
-      });
+      showDecisionTarget(item.locator.runId,next.viewHandle,focus);
     });
   };
   const deliveries=runSection==='result'?teamResearchDeliveries(current,messages):[];

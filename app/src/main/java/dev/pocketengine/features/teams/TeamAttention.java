@@ -14,6 +14,13 @@ public final class TeamAttention {
         return output;
     }
 
+    /** Explicit member decisions only. An interruption or failed attempt can need inspection
+     * without asking the owner a question or requesting their approval. */
+    public static boolean isOwnerDecision(JSONObject item) {
+        return "question".equals(item.optString("kind")) || "member_attention".equals(item.optString("kind"))
+                && item.optString("status").matches("awaiting_approval|awaiting_input|awaiting_user|needs_confirmation");
+    }
+
     static void append(JSONObject run, JSONArray output) throws Exception {
         JSONArray members = run.optJSONArray("members");
         if (members == null || run.optString("status").matches("cancelled|completed")) return;

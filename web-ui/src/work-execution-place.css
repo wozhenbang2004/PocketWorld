@@ -1,0 +1,5 @@
+.pw-work-execution-place { display: flex; gap: 9px; align-items: flex-start; padding: 8px 0; min-width: 0; color: var(--pw-copy); }
+.pw-work-execution-place > svg { flex: none; margin-top: 2px; }
+.pw-work-execution-place > div { display: flex; flex-wrap: wrap; gap: 2px 10px; min-width: 0; font: 400 12px/19px var(--pw-font); }
+.pw-work-execution-place strong { color: var(--pw-ink); font-weight: 550; overflow-wrap: anywhere; }
+.pw-work-execution-place small { flex-basis: 100%; font: inherit; overflow-wrap: anywhere; }

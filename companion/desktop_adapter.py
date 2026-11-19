@@ -96,7 +96,16 @@ class DesktopAdapter:
     def _watch_local_stop(self):
         while not self._watchdog_stop.wait(0.05):
             if self.stop_marker.exists():
-                self.local_stop()
+                self.paused = True  # Fence new input before even reading optional receipt metadata.
+                try:
+                    from desktop_stop_receipt import acknowledge, witness
+                    original = witness(self.manager)
+                except Exception:
+                    original = None
+                outcome = self.local_stop()  # Original driver/leases/viewer stop, regardless of evidence availability.
+                if original is not None:
+                    try: acknowledge(self.manager, original, outcome)
+                    except Exception: pass  # No receipt, no claim. Never retry the stop or resume.
                 return
             if callable(self.viewer_cleanup):
                 try:

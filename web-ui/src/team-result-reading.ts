@@ -25,20 +25,26 @@ export function teamResultReading(run: Data | null, messages: unknown) {
 
 export type TeamFollowUp = { key: string; title: string; detail: string; locator: TeamAttentionLocator };
 const optional = ['identityRevision', 'workItemId', 'assignmentId', 'questionId', 'childKind', 'round', 'taskId'] as const;
+export function originalAttentionLocator(row: Data): TeamAttentionLocator | null {
+  if (!text(row.runId) || !text(row.memberId) || !['question','member_attention'].includes(row.kind)
+      || !Number.isSafeInteger(row.generation) || row.generation < 0 || !Number.isSafeInteger(row.memberGeneration) || row.memberGeneration < 0) return null;
+  if (row.identityRevision != null && (!Number.isInteger(row.identityRevision) || row.identityRevision < 1) ||
+        ['workItemId', 'assignmentId', 'questionId', 'taskId'].some(k => row[k] != null && !text(row[k]).trim()) ||
+        (row.kind === 'question') !== !!row.questionId || row.questionId && !row.assignmentId ||
+        row.childKind && (!['research', 'phone'].includes(row.childKind) || !roundId(row.round) || !text(row.taskId)) || row.round != null && !row.childKind) return null;
+  return { runId: row.runId, generation: row.generation, memberId: row.memberId, memberGeneration: row.memberGeneration,
+      ...Object.fromEntries(optional.filter(k => row[k] != null).map(k => [k, row[k]])) };
+}
 export function teamFollowUps(run: Data | null, attention: unknown): TeamFollowUp[] {
   if (!run?.id || run.status === 'cancelled') return [];
   const result: TeamFollowUp[] = [], seen = new Set<string>();
   for (const row of rows(attention)) {
     if (!row || row.runId !== run.id || row.source !== 'retained_team_snapshot' || row.readOnly !== true || row.executionAuthorized !== false ||
-        !['question', 'member_attention'].includes(row.kind) || !text(row.memberId) || !Number.isInteger(row.generation) || !Number.isInteger(row.memberGeneration)) continue;
+        !text(row.memberId)) continue;
     const member = rows(run.members).find(m => m.id === row.memberId);
     if (!member || (run.generation != null && run.generation !== row.generation) || (member.generation != null && member.generation !== row.memberGeneration)) continue;
-    if (row.identityRevision != null && (!Number.isInteger(row.identityRevision) || row.identityRevision < 1) ||
-        ['workItemId', 'assignmentId', 'questionId', 'taskId'].some(k => row[k] != null && !text(row[k]).trim()) ||
-        (row.kind === 'question') !== !!row.questionId || row.questionId && !row.assignmentId ||
-        row.childKind && (!['research', 'phone'].includes(row.childKind) || !roundId(row.round) || !text(row.taskId)) || row.round != null && !row.childKind) continue;
-    const locator: TeamAttentionLocator = { runId: row.runId, generation: row.generation, memberId: row.memberId, memberGeneration: row.memberGeneration,
-      ...Object.fromEntries(optional.filter(k => row[k] != null).map(k => [k, row[k]])) };
+    const locator = originalAttentionLocator(row);
+    if (!locator) continue;
     const key = JSON.stringify(locator);
     if (seen.has(key)) continue;
     seen.add(key);
