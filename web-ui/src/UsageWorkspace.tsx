@@ -32,16 +32,20 @@ const groupTitle = (row: UsageSummary, dimension: Dimension) => dimension === 'm
 const groupSubtitle = (row: UsageSummary, dimension: Dimension) => dimension === 'model' ? row.provider || '服务未记录' : dimension === 'purpose' ? `${row.attempts} 次调用` : row.latestTaskLabel ? `最近任务：${row.latestTaskLabel}` : '任务与辅助调用';
 const groupRows = (report: UsageReport, dimension: Dimension) => dimension === 'model' ? report.byModel : dimension === 'purpose' ? report.byPurpose : report.byConversation;
 const sortedGroups = (report: UsageReport, dimension: Dimension) => [...groupRows(report, dimension)].sort((a, b) => (b.normalized.total.knownSubtotal ?? -1) - (a.normalized.total.knownSubtotal ?? -1));
-const isPartialReport = (report: UsageReport) => report.queryLimited || report.conflictingCalls > 0 || report.invalidReceipts > 0 || report.invalidTimestamps > 0 || isPartialCount(report.totals.normalized.total);
+const isPartialReport = (report: UsageReport) => report.queryLimited || report.conflictingCalls > 0 || report.invalidReceipts > 0 || report.invalidTimestamps > 0 || report.oversizedRows > 0 || isPartialCount(report.totals.normalized.total);
 
 
-type WebUsageTotals = { metrics: Record<string, number>; receipts: number; unavailableReceipts: number; unknownProviderUsage: number; unknownOutcomes: number; nextCursor: string };
+type WebUsageTotals = { metrics: Record<string, number>; receipts: number; unavailableReceipts: number; unknownProviderUsage: number; unknownOutcomes: number; observedAt: number; nextCursor: string };
 const webMetrics: Array<[string, string]> = [
   ['searchRequests', '搜索请求'], ['fetchRequests', '网页读取'], ['pagesRead', '读到正文'],
-  ['sourceRefs', '保留来源'], ['hostedModelRequests', '厂商搜索调用'],
-  ['hostedInputTokens', '额外输入 Token'], ['hostedOutputTokens', '额外输出 Token'], ['failedCalls', '失败或无结果的操作'],
+  ['sourceRefs', '保留来源'], ['failedCalls', '失败或无结果的操作'],
 ];
-const emptyWebTotals = (): WebUsageTotals => ({ metrics: Object.fromEntries(webMetrics.map(([key]) => [key, 0])), receipts: 0, unavailableReceipts: 0, unknownProviderUsage: 0, unknownOutcomes: 0, nextCursor: '' });
+const providerMetrics: Array<[string, string]> = [
+  ['hostedModelRequests', '厂商搜索调用'],
+  ['hostedInputTokens', '额外输入 Token'], ['hostedOutputTokens', '额外输出 Token'],
+];
+const allWebMetrics = [...webMetrics, ...providerMetrics];
+const emptyWebTotals = (): WebUsageTotals => ({ metrics: Object.fromEntries(allWebMetrics.map(([key]) => [key, 0])), receipts: 0, unavailableReceipts: 0, unknownProviderUsage: 0, unknownOutcomes: 0, observedAt: 0, nextCursor: '' });
 function WebUsagePanel({ supported, query }: { supported: (action: string) => boolean; query: UsageQuery }) {
   const [totals, setTotals] = useState<WebUsageTotals | null>(null), current = useRef<WebUsageTotals | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
@@ -59,7 +63,7 @@ function WebUsagePanel({ supported, query }: { supported: (action: string) => bo
         if (!result || result.fromInclusive !== query.fromInclusive || result.toExclusive !== query.toExclusive || result.zoneId !== query.zoneId || typeof result.metrics !== 'object' || !result.metrics) throw new Error('联网用量尚未取得当前日期的有效回执。');
         const metrics = result.metrics as Record<string, unknown>;
         const next = { ...collected, metrics: { ...collected.metrics } };
-        for (const [key] of webMetrics) {
+        for (const [key] of allWebMetrics) {
           const value = metrics[key];
           if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) throw new Error('这页联网计数无法核对，请重新读取。');
           next.metrics[key] += value;
@@ -70,7 +74,8 @@ function WebUsagePanel({ supported, query }: { supported: (action: string) => bo
           next[key] += value;
         }
         cursor = typeof result.nextCursor === 'string' ? result.nextCursor : '';
-        collected = { ...next, nextCursor: cursor };
+        const observedAt = result.observedAt;
+        collected = { ...next, nextCursor: cursor, observedAt: typeof observedAt === 'number' && Number.isSafeInteger(observedAt) && observedAt > 0 ? observedAt : 0 };
         current.current = collected; setTotals(collected);
         if (!cursor) break;
       }
@@ -79,14 +84,26 @@ function WebUsagePanel({ supported, query }: { supported: (action: string) => bo
   }, [query.fromInclusive, query.toExclusive, query.zoneId]);
   useEffect(() => { if (available) void load(); return () => { generation.current++; }; }, [available, load]);
   const date = (value: number) => new Intl.DateTimeFormat('zh-CN', { timeZone: query.zoneId, month: 'long', day: 'numeric' }).format(value);
+  const metricRows = (items: Array<[string, string]>, data: WebUsageTotals) => <dl className="pw-usage-detail-facts">{items.map(([key, title]) => {
+    const providerTokens = key === 'hostedInputTokens' || key === 'hostedOutputTokens';
+    const unknown = providerTokens ? data.unknownProviderUsage : key === 'failedCalls' ? data.unknownOutcomes : 0;
+    const eligible = providerTokens ? data.metrics.hostedModelRequests : data.receipts;
+    const partial = unknown > 0 || !!data.nextCursor || data.unavailableReceipts > 0;
+    return <div key={key}><dt>{title}</dt><dd>{unknown > 0 && unknown === eligible ? '未报告' : <>
+      {data.metrics[key].toLocaleString('zh-CN')}{partial && <small className="pw-usage-known">已知小计</small>}
+    </>}</dd></div>;
+  })}</dl>;
   return <section className="pw-usage-primary" aria-label="联网使用情况">
-    <div className="pw-usage-section-heading"><h3>联网活动</h3><Button variant="ghost" disabled={busy || !available} onClick={() => void load()}>刷新</Button></div>
+    <div className="pw-usage-section-heading"><h3>已保存的联网回执</h3><Button variant="ghost" disabled={busy || !available} onClick={() => void load()}>刷新</Button></div>
     <p className="pw-usage-caption">{date(query.fromInclusive)} — {date(query.toExclusive - 1)} · {query.zoneId}。统计已保存的私人工作回执，应用重启后仍可查看。</p>
     {!available && <p className="pw-usage-state">当前宿主尚未提供按日期读取的联网记录，请更新应用后查看。</p>}
     {error && <p className="pw-usage-state" role="alert">{error} {totals ? '下方保留已读取部分。' : ''}</p>}
     {totals && <>
-      <dl className="pw-facts">{webMetrics.map(([key, title]) => <div key={key}><dt>{title}</dt><dd>{totals.metrics[key].toLocaleString('zh-CN')}{totals.nextCursor || error ? '（已读取）' : ''}</dd></div>)}</dl>
-      <p className="pw-usage-caption">来自 {totals.receipts.toLocaleString('zh-CN')} 条已保存的联网活动回执。未保存回执的中断请求不计入。</p>
+      <p className="pw-usage-caption">{totals.observedAt > 0 ? `最后读取于 ${new Date(totals.observedAt).toLocaleString('zh-CN', { timeZone: query.zoneId })}` : '读取时间未知'} · 已读取 {totals.receipts.toLocaleString('zh-CN')} 条有效回执</p>
+      {totals.receipts > 0 ? <>
+        <h3>搜索与阅读</h3>{metricRows(webMetrics, totals)}
+        <h3>厂商搜索用量</h3>{metricRows(providerMetrics, totals)}
+      </> : <div className="pw-usage-empty"><IconFileText size={28} aria-hidden/><h3>{totals.nextCursor || totals.unavailableReceipts ? '尚未读到可核对的回执' : '这段时间没有保留联网回执'}</h3><p>搜索或读取网页后，可在这里核对已保存的工作记录。</p></div>}
       {totals.unknownProviderUsage > 0 && <p className="pw-usage-caption">{totals.unknownProviderUsage} 次厂商搜索没有完整 Token 回执，额外 Token 仅显示已知小计。</p>}
       {totals.unknownOutcomes > 0 && <p className="pw-usage-caption">{totals.unknownOutcomes} 条旧记录未保存成败计数，没有将它们当作成功。</p>}
       {totals.unavailableReceipts > 0 && <p className="pw-usage-caption">有 {totals.unavailableReceipts} 条历史回执无法完整读取，当前汇总可能不完整。</p>}
@@ -224,7 +241,7 @@ export function UsageWorkspace({ supported, records, renderBudget, diagnostics, 
   latest.current = { supported };
   const registerChildBack = useCallback<Back>(handler => { childBack.current = handler; }, []);
   const available = supported('usage.trends'), owner = useSyncExternalStore(bridge.subscribe, ownerTicket, ownerTicket);
-  const day = view.day || '', needsReport = !['records', 'budget', 'diagnostics'].includes(view.kind);
+  const day = view.day || '', needsReport = !['records', 'budget', 'diagnostics', 'web'].includes(view.kind);
   const query = useMemo(() => {
     if (!day) return range.query;
     const [year, month, date] = day.split('-').map(Number);
@@ -316,7 +333,7 @@ export function UsageWorkspace({ supported, records, renderBudget, diagnostics, 
         {current.totals.attempts > 0 ? <section className="pw-usage-primary" aria-label="当前时段用量"><Total report={current} title="累计用量" onCache={showMetrics}/>
           <div className="pw-usage-trend-heading"><h3>每日消耗</h3><Button variant="ghost" trailingIcon={IconChevronRight} data-usage-focus="trends" onClick={() => open({ kind: 'trends' })}>分析趋势</Button></div>
           <DailyChart report={current} days={range.days} metric="total" selected={selectedDay} onSelect={setSelectedDay} onOpenDay={showDay}/>
-        </section> : <div className="pw-usage-empty"><IconFileText size={28} aria-hidden/><h3>这段时间还没有记录</h3><p>完成模型调用后，这里会按天显示保留的用量。</p></div>}
+        </section> : <div className="pw-usage-empty"><IconFileText size={28} aria-hidden/><h3>{isPartialReport(current) ? '尚未读到可核对的调用' : '这段时间还没有记录'}</h3><p>{isPartialReport(current) ? '部分记录未能计入，可在统计说明查看原因。' : '完成模型调用后，这里会按天显示保留的用量。'}</p></div>}
         {current.byModel.length > 0 && <section className="pw-usage-sources"><header className="pw-usage-section-heading"><h3>主要模型</h3><Button variant="ghost" trailingIcon={IconChevronRight} onClick={() => { setDimension('model'); setFilter(''); setLimit(10); open({ kind: 'analysis' }); }} data-usage-focus="sources">查看分布</Button></header>
           <GroupList entries={sortedGroups(current, 'model').slice(0, 3)} dimension="model" onOpen={row => showGroup(row, 'model')}/>
         </section>}
@@ -341,7 +358,7 @@ export function UsageWorkspace({ supported, records, renderBudget, diagnostics, 
     {view.kind === 'overview' && <>
         <div className="pw-usage-utility-list">{current && <Button variant="ghost" trailingIcon={IconChevronRight} className="pw-usage-utility" onClick={showMetrics} data-usage-focus="metrics"><span>Token 与费用<small>输入、输出、缓存与估算</small></span></Button>}
           {records && <Button variant="ghost" trailingIcon={IconChevronRight} className="pw-usage-utility" onClick={() => open({ kind: 'records' })} data-usage-focus="records"><span>调用记录<small>逐次查看原始用量</small></span></Button>}
-          {supported('webSearch.snapshot') && <Button variant="ghost" trailingIcon={IconChevronRight} className="pw-usage-utility" onClick={() => open({ kind: 'web' })} data-usage-focus="web"><span>联网活动<small>搜索、网页读取与额外厂商用量</small></span></Button>}
+          {supported('webSearch.usage') && <Button variant="ghost" trailingIcon={IconChevronRight} className="pw-usage-utility" onClick={() => open({ kind: 'web' })} data-usage-focus="web"><span>联网活动<small>搜索、网页读取与额外厂商用量</small></span></Button>}
           {renderBudget && <Button variant="ghost" trailingIcon={IconChevronRight} className="pw-usage-utility" onClick={() => open({ kind: 'budget' })} data-usage-focus="budget"><span>预算与限制<small>管理调用上限</small></span></Button>}
         </div>
     </>}
