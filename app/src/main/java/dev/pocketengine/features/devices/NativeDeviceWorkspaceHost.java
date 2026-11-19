@@ -192,6 +192,7 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         default JSONObject withdrawnReceivedPhoneGoals(String caller,String operation)throws Exception{throw new IllegalStateException("此宿主没有原设备启动前撤回记录");}
         default JSONObject failedReceivedPhoneGoals(String caller,String operation)throws Exception{throw new IllegalStateException("此宿主没有本机失败原执行目录");}
         default JSONObject startedReceivedPhoneGoals(String caller,String operation)throws Exception{throw new IllegalStateException("此本机宿主没有已接手目录");}
+        default JSONObject findWaitingPhoneGoals(String caller,String op,String query)throws Exception{throw new IllegalStateException("本机未提供待接手原目标查找");}
         default JSONObject waitingPhoneGoals(String afterCaller,String afterOp,boolean results)throws Exception {throw new IllegalStateException("本机未提供待接手工作索引");}
         default JSONObject phoneGoalIndex(String target,String parentAfter,String operationAfter,boolean received) throws Exception { throw new IllegalStateException("本机未提供手机目标记录"); }
         default JSONObject phoneGoalIndex(String target,String parentAfter,String operationAfter,boolean received,String searchText)throws Exception {
@@ -554,6 +555,7 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         public JSONObject startedReceivedPhoneGoals(String caller,String operation)throws Exception{
             current();JSONObject page=copy(control.startedReceivedPhoneGoals(caller,operation));current();return page;
         }
+        public JSONObject findWaitingPhoneGoals(String caller,String op,String query)throws Exception{current();JSONObject result=copy(control.findWaitingPhoneGoals(caller,op,query));current();return result;}
         public JSONObject waitingPhoneGoals(String afterCaller,String afterOp,boolean results)throws Exception {current();return copy(control.waitingPhoneGoals(afterCaller,afterOp,results));}
         /** No history window: only the owner's retained, non-actionable page. */
         public JSONObject savedDirectedPhoneDispatches(JSONObject selected,String source,String after)throws Exception {

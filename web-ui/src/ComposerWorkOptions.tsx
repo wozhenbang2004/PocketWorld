@@ -8,10 +8,10 @@ export function ComposerWorkOptions({intent,onIntent,open,onOpenChange,phoneAvai
  const destination=intent==='chat'?'交给管家':intent==='background'?'手机后台独立屏':'手机主屏';
  const choose=(action:()=>void)=>{onOpenChange(false);action()};
  return <PopoverTrigger isOpen={open} onOpenChange={onOpenChange}>
-  {intent==='chat'?<IconButton icon={IconControls} size="medium" aria-label="工作设置：交给管家" title="工作设置"/>:<Button variant="ghost" size="small" className="pw-input-mode-trigger" trailingIcon={IconChevronDown} aria-label={`执行位置：${destination}，打开工作设置`}>{intent==='background'?'独立屏':'手机主屏'}</Button>}
+  {intent==='chat'?<IconButton icon={IconControls} size="medium" aria-label="工作设置：交给管家" title="工作设置"/>:<Button variant="ghost" size="small" className="pw-input-mode-trigger" data-workspace-entry="phone-place" trailingIcon={IconChevronDown} aria-label={`执行位置：${destination}，打开工作设置`}>{intent==='background'?'独立屏':'手机主屏'}</Button>}
   <Popover aria-label="工作设置" className="pw-composer-work-options" placement="top start">
    <PopoverHeader title="工作设置"/>
-   <section><RadioOptions label="执行位置" value={intent} options={[{id:'chat',label:'交给管家',disabled},{id:'background',label:'手机后台独立屏',disabled:!phoneAvailable||disabled},{id:'main_screen',label:'手机主屏操作',disabled:!phoneAvailable||disabled}]} onChange={value=>{if(!disabled)choose(()=>onIntent(value as Intent))}}/><p>用于接下来发送的内容；正在执行的工作保持原位置。</p></section>
+   <section><RadioOptions label="执行位置" value={intent} options={[{id:'chat',label:'交给管家',disabled},{id:'background',label:'手机后台独立屏',description:'需要用屏时只用独立屏，准备不足也不会改用主屏。',disabled:!phoneAvailable||disabled},{id:'main_screen',label:'手机主屏操作',description:'需要用屏时会切换应用，占用你手中的屏幕。',disabled:!phoneAvailable||disabled}]} onChange={value=>{if(!disabled)choose(()=>onIntent(value as Intent))}}/><p>用于接下来发送的内容；正在执行的工作保持原位置。</p></section>
    <section className="pw-composer-work-settings">
     {onCloudGoal&&<Button variant="ghost" leadingIcon={IconServer} disabled={disabled} onClick={()=>choose(onCloudGoal)}>带目标去我的主机</Button>}
     {onMemory&&<Button variant="ghost" leadingIcon={IconBook} onClick={()=>choose(onMemory)}>{memoryPaused?'本对话的个人记忆 · 已暂停':'本对话的个人记忆'}</Button>}

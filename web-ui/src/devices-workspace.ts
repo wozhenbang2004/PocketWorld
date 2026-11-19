@@ -106,8 +106,9 @@ export function samePhoneGoalArchive(value: DeviceData | null, peer: DeviceData 
     && value.localDeviceId === local.deviceId && value.localInstanceId === local.instanceId;
 }
 const startedPhases=new Set(['preparing','running','pausing','paused','stopping','verifying','awaiting_user','waiting_user','awaiting_approval','waiting_approval','waiting_permission','interrupted','reconciling','reconciliation_required','blocked_unknown']);
-export function waitingPhoneGoalPage(value: unknown, local: DeviceData) {
+export function waitingPhoneGoalPage(value: unknown, local: DeviceData, search='') {
   if (!object(value) || value.kind !== 'waitingPhoneGoals' || value.readOnly !== true
+    || (value.searchText ?? '')!==search || search!==''&&(Array.from(search).length>64||value.withdrawnOnly!==false||value.failedOnly!==false||value.declinedOnly!==false||value.startedOnly!==false||value.resultOnly!==false)
     || value.withdrawnOnly!==undefined&&typeof value.withdrawnOnly!=='boolean'||value.withdrawnOnly===true&&(value.declinedOnly!==false||value.failedOnly!==false||value.startedOnly!==false||value.resultOnly!==false||value.rows?.length>6)
     || value.failedOnly!==undefined&&typeof value.failedOnly!=='boolean'||value.failedOnly===true&&(value.declinedOnly!==false||value.startedOnly!==false||value.resultOnly!==false)
     || value.declinedOnly!==undefined&&typeof value.declinedOnly!=='boolean'||value.declinedOnly===true&&(value.startedOnly!==false||value.resultOnly!==false||value.rows?.length>6)
@@ -115,7 +116,7 @@ export function waitingPhoneGoalPage(value: unknown, local: DeviceData) {
     || (value.resultOnly === true || value.startedOnly===true || value.declinedOnly===true || value.failedOnly===true || value.withdrawnOnly===true) && (!Number.isSafeInteger(value.limitedCandidates) || value.limitedCandidates < 0 || value.limitedCandidates > 24) || !identity(local.deviceId) || !identity(local.instanceId)
     || value.localDeviceId !== local.deviceId || value.localInstanceId !== local.instanceId || !identity(value.waitingHandle) || !positiveInteger(value.capturedAt)
     || typeof value.hasMore !== 'boolean' || typeof value.canReadNewer !== 'boolean' || !Array.isArray(value.rows) || value.rows.length > 24
-    || !value.rows.every((r: unknown) => object(r) && identity(r.taskId) && identity(r.operationId) && typeof r.sourceDeviceId === 'string'
+    || !value.rows.every((r: unknown) => object(r) && (r.matchedLater===undefined||!!search&&r.matchedLater===true) && identity(r.taskId) && identity(r.operationId) && typeof r.sourceDeviceId === 'string'
       && /^pw1_[a-f0-9]{64}$/.test(r.sourceDeviceId) && (value.withdrawnOnly===true
         ? r.waitingState==='withdrawn_before_start' && r.notDispatched===true && positiveInteger(r.withdrawnAt) && r.declinedAt===undefined && r.runId===undefined && r.epoch===undefined
         : value.declinedOnly===true

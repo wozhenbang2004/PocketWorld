@@ -34,7 +34,9 @@ internal class PocketWebMemoryDrafts(private val controller: PocketWorldControll
     private fun selection(args: JSONObject) { fields(args, "taskId", "runId", "epoch", "operationId", "proposalDigest") }
     private fun presentation(row: JSONObject): JSONObject {
         val result = JSONObject().put("proposal", row.getJSONObject("proposal")).put("apply", row.getJSONObject("apply"))
-        for (key in arrayOf("status", "undo", "receipt", "record", "recordCurrent", "undoAvailable", "undoUnavailableReason", "duplicate", "existingCandidate", "queryOriginalReceipt", "originalEffectUnconfirmed", "message", "replayAllowed")) {
+        // The native query may inspect the live row for undo eligibility. Its text is not the historical receipt.
+        // Only the explicit, version-bound saved_record projection delivers the live formal body.
+        for (key in arrayOf("status", "undo", "receipt", "recordCurrent", "undoAvailable", "undoUnavailableReason", "duplicate", "existingCandidate", "queryOriginalReceipt", "originalEffectUnconfirmed", "message", "replayAllowed")) {
             if (row.has(key)) result.put(key, row.get(key))
         }
         return result
@@ -45,7 +47,16 @@ internal class PocketWebMemoryDrafts(private val controller: PocketWorldControll
         if (action == "memoryDraft.close") { fields(args, "handle"); if (window?.id == text(args, "handle")) clear(); done(JSONObject().put("closed", true), null); return }
         check(!busy) { "请等待原审阅回执" }
         if (action == "memoryDraft.open" || action == "memoryDraft.query" || action == "memoryDraft.undo") {
-            selection(args)
+            val savedRecord = action == "memoryDraft.query" && args.opt("view") == "saved_record"
+            val chosenRevision = if (savedRecord) {
+                fields(args, "taskId", "runId", "epoch", "operationId", "proposalDigest", "view", "chosenRevision")
+                if (!args.has("chosenRevision")) null else args.opt("chosenRevision").let {
+                    require((it is Int || it is Long) && (it as Number).toLong() > 0) { "请重新核对原记忆版本" }; (it as Number).toLong()
+                }
+            } else { selection(args); null }
+            val foregroundConversation = if (savedRecord) controller.state.conversationId else null
+            val memoryRevision = if (savedRecord) controller.state.memoryRefreshRevision else -1L
+            val sourceRevision = if (savedRecord) controller.conversationSourceRevision else -1L
             val task = text(args, "taskId"); val run = text(args, "runId"); val epoch = epoch(args); val operation = text(args, "operationId")
             val digest = text(args, "proposalDigest", 64); require(digest.matches(Regex("[a-f0-9]{64}")))
             clear(); val request = generation; val owner = controller.webWindowTicket(); val control = RunControl(); selectorControl = control; busy = true
@@ -55,6 +66,7 @@ internal class PocketWebMemoryDrafts(private val controller: PocketWorldControll
                     check(controller.webPrivateOwnerVisible() && controller.webWindowTicket() == owner && generation == request)
                     control.check()
                     val host = controller.conversationMemoryDraftHost()
+                    if (savedRecord) return@runCatching host.originalSavedRecordForOwner(task, run, epoch, operation, digest, foregroundConversation, chosenRevision)
                     val row = if (action == "memoryDraft.undo") host.undoForOwner(task, run, epoch, operation, digest, control)
                         else host.queryForOwner(task, run, epoch, operation)
                     check(row.getJSONObject("proposal").getString("proposalDigest") == digest) { "原提案内容已变化" }
@@ -70,6 +82,11 @@ internal class PocketWebMemoryDrafts(private val controller: PocketWorldControll
                     if (request != generation || !controller.webPrivateOwnerVisible() || controller.webWindowTicket() != owner) { acquired?.close(); control.cancel(); done(null, "原记忆审阅窗口已变化，请查询原操作结果，不要重复提交"); return@post }
                     if (selectorControl === control) selectorControl = null
                     busy = false
+                    if (savedRecord && (controller.state.conversationId != foregroundConversation || controller.state.memoryRefreshRevision != memoryRevision ||
+                            controller.conversationSourceRevision != sourceRevision ||
+                            answer.getOrNull()?.let { System.currentTimeMillis() >= it.getLong("readExpiresAt") } == true)) {
+                        control.cancel(); done(null, "原个人记忆阅读窗口已变化，请重新核对"); return@post
+                    }
                     answer.fold({ result ->
                         acquired?.let { native -> Window(UUID.randomUUID().toString(), native, owner, control).also { window = it; result.put("handle", it.id) } }
                         if (acquired == null) control.cancel()
@@ -91,7 +108,9 @@ internal class PocketWebMemoryDrafts(private val controller: PocketWorldControll
                 check(current(original)) { "原审阅窗口已变化" }; original.control.check()
                 when (action) {
                     "memoryDraft.source" -> original.review.sourcePageForOwner(input.getInt("index"), input.getInt("offset"), original.control)
-                    "memoryDraft.confirm" -> original.review.confirm(original.control)
+                    "memoryDraft.confirm" -> original.review.confirm(original.control).let { result ->
+                        if (result.has("proposal") && result.has("apply")) presentation(result) else result // A duplicate already has a live projection.
+                    }
                     else -> original.review.cancel().let(::presentation)
                 }
             }

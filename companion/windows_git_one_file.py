@@ -28,18 +28,19 @@ def pieces(path,*,root=False):
     return parts
 
 
-def child(pins,packs,oid,name,check):
+def child(pins,packs,oid,name,check,*,missing_ok=False):
     raw,_=_object_body(pins,packs,oid,b"tree",1024*1024)
-    exact=None; fold=unicodedata.normalize("NFKC",name).casefold(); compare=_native_compare(pins.api,check)
+    exact=None; opaque=False; fold=unicodedata.normalize("NFKC",name).casefold(); compare=_native_compare(pins.api,check)
     for mode,label,object_id in entries(raw,packs.width):
         if label==name.encode("utf-8"):
             if exact is not None: reject()
             exact=(mode,object_id); continue
         try: spelling=label.decode("utf-8")
-        except UnicodeError: continue
+        except UnicodeError:
+            opaque=True; continue
         if unicodedata.normalize("NFKC",spelling).casefold()==fold or compare(spelling,name)==0: reject()
-    if exact is None: reject()
-    return exact
+    if exact is None and (not missing_ok or opaque): reject()
+    return exact  # original positive reader unchanged; no absence if the complete spelling check was inconclusive
 
 
 @contextmanager

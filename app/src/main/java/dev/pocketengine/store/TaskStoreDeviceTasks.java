@@ -977,6 +977,9 @@ public final class TaskStoreDeviceTasks {
     public JSONObject startedReceivedPhoneGoals(String here,String instance,String afterCaller,String afterOp)throws Exception{
         synchronized(owner){return ReceivedPhoneGoalIndex.started(db,here,instance,afterCaller,afterOp);}
     }
+    public JSONObject findWaitingPhoneGoals(String here,String instance,String caller,String op,String query)throws Exception{
+        synchronized(owner){return ReceivedPhoneGoalIndex.findWaiting(db,here,instance,caller,op,query);}
+    }
     public JSONObject waitingPhoneGoals(String here,String instance,String afterCaller,String afterOp,boolean results)throws Exception{
         synchronized(owner){return ReceivedPhoneGoalIndex.waiting(db,here,instance,afterCaller,afterOp,results);}
     }

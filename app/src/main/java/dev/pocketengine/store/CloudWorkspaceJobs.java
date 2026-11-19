@@ -66,7 +66,7 @@ public final class CloudWorkspaceJobs {
         JSONObject refs=t==null?null:t.optJSONObject("externalRefs"),s=refs==null?null:refs.optJSONObject("hostWorkspace");
         if(s==null||!matches(t,s))return null;
         JSONObject row=project(t),out=new JSONObject();
-        for(String k:new String[]{"taskId","runId","stage","jobId","detailRetired","executorStatus"})if(row.has(k))out.put(k,row.get(k));
+        for(String k:new String[]{"taskId","runId","epoch","stage","jobId","detailRetired","executorStatus","previouslySeenEnd"})if(row.has(k))out.put(k,row.get(k));
         return out;
     }
     private static JSONObject project(JSONObject t)throws Exception {
@@ -75,11 +75,24 @@ public final class CloudWorkspaceJobs {
         JSONObject row=new JSONObject().put("taskId",t.get("id")).put("runId",t.get("runId")).put("epoch",t.getInt("coordinatorEpoch"))
             .put("goal",goal.length()>200?goal.substring(0,end)+"…":goal).put("taskStatus",t.getString("status")).put("updatedAt",t.optLong("updatedAt"))
             .put("stage","phone_registered");
-        boolean current=accepted(t,e,s);
-        if(current||accepted(t,t.optJSONObject("cloudHostAdmission"),s))row.put("stage","host_acknowledged").put("jobId",t.getString("externalId"))
-            .put("executorStatus",current?e.optString("executorStatus"):"unknown");
         JSONObject proof=t.optJSONObject("cloudHostAdmission");
-        if(accepted(t,proof,s)&&Boolean.TRUE.equals(proof.opt("detailRetired")))row.put("detailRetired",true);
+        boolean pinned=accepted(t,proof,s);
+        boolean current=accepted(t,e,s)&&(!pinned||proof.get("workspaceIdentity").equals(e.opt("workspaceIdentity")));
+        if(current||pinned)row.put("stage","host_acknowledged").put("jobId",t.getString("externalId"))
+                .put("executorStatus",current?e.optString("executorStatus"):"unknown");
+        if(pinned&&Boolean.TRUE.equals(proof.opt("detailRetired")))row.put("detailRetired",true);
+        // Retiring the host detail is not evidence that the phone never saw a terminal report.
+        // Both original physical receipts must agree. No audit-body fetch, inferred code, current process or task completion.
+        if(pinned&&current){
+            String status=e.optString("executorStatus");
+            if(status.matches("completed|failed|cancelled")&&status.equals(t.opt("executionStatus"))&&!e.has("ownerReconciliation")){
+                JSONObject terminal=new JSONObject().put("format","pocketworld.seen-host-job-end.v1").put("taskId",t.get("id"))
+                        .put("runId",t.get("runId")).put("epoch",t.getInt("coordinatorEpoch")).put("jobId",t.get("externalId")).put("status",status);
+                Object code=e.opt("exitCode");
+                if((code instanceof Integer||code instanceof Long)&&((Number)code).longValue()==((Number)code).intValue())terminal.put("exitCode",((Number)code).intValue());
+                row.put("previouslySeenEnd",terminal);
+            }
+        }
         return row;
     }
     public static JSONObject page(JSONObject target,String position,SshWorkHistory.Headers headers,SshWorkHistory.Original original,SshWorkHistory.Check check)throws Exception {

@@ -87,7 +87,7 @@ export function RemoteTaskArtifacts({ snapshot, busy, active, run }: Props) {
     <AccordionItem title="执行输出与当前文件"><div className="pw-remote-section">
       <p className="pw-muted">执行端实际回执不等于当前文件树或冻结成果；退出码 0 也不证明目标完成。</p>
       {result.exitCode != null && <p>退出码：{result.exitCode}</p>}
-      {result.output&&<OriginalJobOutput key={`${source.jobId}:${source.jobOperationId}:${result.capturedAt}`} result={result} source={source}/>}
+      {result.output&&<OriginalJobOutput key={`${snapshot.windowHandle}:${source.profileId}:${source.environmentId}:${source.worker}:${source.workspaceIdentity}:${source.jobId}:${source.jobOperationId}`} result={result} source={source}/>}
       {result.diff&&<div><h4>执行器报告的差异</h4><pre>{result.diff}</pre>{(result.diffViewTruncated||result.diffTruncated)&&<p className="pw-field-hint">差异内容显示有截断。</p>}</div>}
       <TextField label="原工作区相对文件路径" value={artifactPath} onChange={setArtifactPath} isDisabled={busy} />
       <Button variant="secondary" disabled={!enabled || !artifactPath.trim() || artifactPath.length > 2048} onClick={() => void safeRun('remoteTask.readArtifact', { path: artifactPath.trim() })}>核对当前文件字节与 SHA</Button>

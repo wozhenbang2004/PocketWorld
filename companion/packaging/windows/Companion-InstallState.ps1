@@ -139,6 +139,11 @@ function Repair-PWTransaction($Paths, [switch]$FromVerifiedInstaller) {
     Assert-PWPrivateAcl $Paths.Transaction $Paths.Sid
     $journal = Read-PWJson $Paths.Transaction
     if ($journal.ownerSid -ne $Paths.Sid -or $journal.schemaVersion -ne 1 -or $journal.id -notmatch '^[a-f0-9]{32}$') { throw 'Unknown installation recovery record; no cleanup performed.' }
+    $leaveTask = $journal.PSObject.Properties['loginTaskUntouched']
+    if ($null -ne $leaveTask -and ($leaveTask.Value -isnot [bool] -or -not $leaveTask.Value -or $null -ne $journal.previousPointer -or
+        $journal.previousTaskXml -or $journal.nextPointer.loginStartEnabled -isnot [bool] -or $journal.nextPointer.loginStartEnabled)) {
+        throw 'First-install journal cannot request a login change. Nothing repaired.'
+    }
     if ($journal.phase -notin @('prepared', 'committed')) { throw 'Unknown transaction phase; original record retained.' }
     Assert-PWPrivateAcl $Paths.Registry $Paths.Sid
     $registry = Read-PWJson $Paths.Registry
@@ -169,8 +174,10 @@ function Repair-PWTransaction($Paths, [switch]$FromVerifiedInstaller) {
         if ($currentHash -ne $restoreHash) { Set-PWFixedEntryAtomic $Paths $name (Join-Path $restorePointer.root ('tools\' + $name)) $restoreHash $currentHash $journal.id }
     }
     $taskName = 'PocketWorld-Companion-' + $Paths.Sid
-    if ($journal.previousTaskXml) { Register-ScheduledTask -TaskName $taskName -Xml $journal.previousTaskXml -Force | Out-Null }
-    elseif (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false }
+    if ($null -eq $leaveTask) {
+        if ($journal.previousTaskXml) { Register-ScheduledTask -TaskName $taskName -Xml $journal.previousTaskXml -Force | Out-Null }
+        elseif (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false }
+    }
     if ($null -ne $journal.previousPointer) { Write-PWJsonAtomic $Paths.Current $journal.previousPointer }
     elseif (Test-Path -LiteralPath $Paths.Current) {
         $current = Read-PWJson $Paths.Current
@@ -179,7 +186,7 @@ function Repair-PWTransaction($Paths, [switch]$FromVerifiedInstaller) {
     }
     Remove-Item -LiteralPath $Paths.Transaction
 }
-function Set-PWCurrentTransaction($Paths, $NextPointer) {
+function Set-PWCurrentTransaction($Paths, $NextPointer, [switch]$NeverTouchLoginTask) {
     if (Test-Path -LiteralPath $Paths.Transaction) { throw 'An interrupted installation needs explicit Manage Repair before another change.' }
     Assert-PWStopped $Paths
     if ($NextPointer.loginStartEnabled) { Assert-PWFixedConfig $Paths $Paths.Config -Required }
@@ -188,8 +195,12 @@ function Set-PWCurrentTransaction($Paths, $NextPointer) {
     $previousManifest = if ($null -ne $previous) { Assert-PWRelease $Paths $previous } else { $null }
     $taskName = 'PocketWorld-Companion-' + $Paths.Sid
     $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    if ($NeverTouchLoginTask -and ($null -ne $previous -or $null -ne $task -or $NextPointer.loginStartEnabled -isnot [bool] -or $NextPointer.loginStartEnabled)) {
+        throw 'Graphical first install cannot adopt an existing pointer/login task or enable any login preference.'
+    }
     $oldXml = if ($task) { Export-ScheduledTask -TaskName $taskName } else { '' }
     $journal = @{schemaVersion=1;id=[guid]::NewGuid().ToString('N');ownerSid=$Paths.Sid;phase='prepared';previousPointer=$previous;previousTaskXml=$oldXml;nextPointer=$NextPointer}
+    if ($NeverTouchLoginTask) { $journal['loginTaskUntouched']=$true }
     $entryIdentities = @{}
     foreach ($name in @('Launch-Companion.ps1', 'Manage-Companion.ps1', 'Companion-InstallState.ps1')) {
         $oldPath = Join-Path $Paths.Home $name
@@ -207,7 +218,7 @@ function Set-PWCurrentTransaction($Paths, $NextPointer) {
         foreach ($name in @('Launch-Companion.ps1', 'Manage-Companion.ps1', 'Companion-InstallState.ps1')) {
             Set-PWFixedEntryAtomic $Paths $name (Join-Path $NextPointer.root ('tools\' + $name)) (Get-PWFixedEntryHash $nextManifest $name) $entryIdentities[$name] $journal.id
         }
-        Set-PWLoginTask $Paths ([bool]$NextPointer.loginStartEnabled)
+        if (-not $NeverTouchLoginTask) { Set-PWLoginTask $Paths ([bool]$NextPointer.loginStartEnabled) }
         Write-PWJsonAtomic $Paths.Current $NextPointer
         $journal.phase = 'committed'; Write-PWJsonAtomic $Paths.Transaction $journal
         Remove-Item -LiteralPath $Paths.Transaction

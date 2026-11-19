@@ -71,7 +71,7 @@ type Data = Record<string, any>;
 type Snapshot = { state?: Data; view?: { section?: string | null; resumeRevision?: number; taskId?: string | null }; composer?: Data | null; capabilities?: { commands?: string[] } };
 type BackHandlerRegistration = (handler: (() => boolean) | null) => void;
 type TeamNavigationProps = { teamRunFocus?: TeamRunFocus; onTeamRunFocusConsumed?: (requestId: string) => void; onAskButlerForTeam?: (request: TeamButlerRequest) => void; onOpenTeamOwnerWork?: (link: TeamOwnerWorkLink, intent: 'overview' | 'supplement') => void };
-type PhoneNavigationProps = { sentPhoneFocus?: SentPhoneGoalFocus; onReturnToPartnerTask?: () => void };
+type PhoneNavigationProps = { onChoosePhonePlace?: () => void; sentPhoneFocus?: SentPhoneGoalFocus; onReturnToPartnerTask?: () => void };
 type Props = PhoneNavigationProps & TeamNavigationProps & { cloudGoal?: CloudGoal; onCloudGoalUsed?: (id:string)=>void; capabilityMemory?: CapabilityWorkspaceMemory; onStartCapability?: (purpose: CapabilityPurpose) => void; teamAttentionFocus?: Data; onTeamAttentionConsumed?:(requestId:string)=>void; registerBeforeLeave?: (guard: PermissionLeaveGuard | null) => void; route: string; onBack: () => void; snapshot: Snapshot; registerBackHandler?: BackHandlerRegistration; navigationTrigger?: ReactNode; navigationRevision?: number; onNavigationPageChange?: (page: string) => void; onOpenSetup?: (capability?: SetupCapability, origin?: SettingsDirectoryOrigin) => void; settingsRestore?: SettingsDirectoryOrigin; onReturnToSetup?: () => void; onOpenProjectDraft?: OpenProjectDraft; onOpenProjects?: () => void; originGoal?: string; returnLabel?: string; initialProjectId?: string; localDraft?: LocalWorkspaceDraft; onLocalDraftChange?: (draft: LocalWorkspaceDraft) => void };
 type Run = (action: string, args?: Data) => Promise<any>;
 const object = (value: any): Data => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -782,7 +782,7 @@ function PhoneSettings({ state, supported, run, navigate, registerTransientBack,
 /** Original BackgroundPhoneSetup flow composed with the selected BoardUI
  * fields, radio options, accordion and SettingsModal. It reads the existing
  * display state; this page does not create a task or a second connection. */
-function BackgroundSettings({ state, supported, run, onReturn, returnLabel = '手机能力', registerTransientBack }: { state: Data; supported: (action: string) => boolean; run: Run; onReturn: () => void; returnLabel?: string; registerTransientBack: BackHandlerRegistration }) {
+function BackgroundSettings({ state, supported, run, onChoosePhonePlace, onReturn, returnLabel = '手机能力', registerTransientBack }: { state: Data; supported: (action: string) => boolean; run: Run; onReturn: () => void; onChoosePhonePlace?:()=>void; returnLabel?: string; registerTransientBack: BackHandlerRegistration }) {
   const display = object(object(state.features).display), adb = object(display.adb), discovery = object(adb.discovery), shizuku = object(display.shizuku);
   const phoneSetup = object(object(state.features).phone_setup), pairing = object(phoneSetup.pairing), autoCapture = object(pairing.autoCapture);
   const audioRecovery = object(phoneSetup.audioRecovery), audioPending = audioRecovery.pendingCount;
@@ -796,7 +796,7 @@ function BackgroundSettings({ state, supported, run, onReturn, returnLabel = '�
   const [manual, setManual] = useState(false), [portText, setPortText] = useState(''), [selected, setSelected] = useState('');
   const [code, setCode] = useState(''), [pairPort, setPairPort] = useState<number | undefined>();
   const [panel, setPanel] = useState<'setup' | 'checks'>('setup');
-  const [mainScreenConsent, setMainScreenConsent] = useState(false), [requesting, setRequesting] = useState(false);
+  const [requesting, setRequesting] = useState(false);
   const [unknownResult, setUnknownResult] = useState(false);
   const [awaiting, setAwaiting] = useState<{ key: string; before: string; busySeen: boolean } | null>(null);
   const pairGuard = useRef(false);
@@ -811,6 +811,9 @@ function BackgroundSettings({ state, supported, run, onReturn, returnLabel = '�
   const requiresCheck = connection.requiresConnectionCheck || unknownResult;
   const resultSignature = (key: string) => JSON.stringify([object(state.moduleResults)[key] ?? null, object(state.moduleErrors)[key] ?? null]);
   const closeSecrets = () => setCode('');
+  const mainLocation = (disabled: boolean, primary = false) => onChoosePhonePlace
+    ? <Button variant={primary ? 'primary' : 'secondary'} disabled={disabled} onClick={onChoosePhonePlace}>去输入处选择手机主屏</Button>
+    : <p className="pw-field-hint">在需要使用的私人输入旁打开「工作设置 → 执行位置」，再选择手机主屏。这里不会更换现有任务的屏幕。</p>;
   const selectPanel = (value: 'setup' | 'checks') => { setCode(''); setPanel(value); };
   useEffect(() => {
     if (!openWirelessWhenArmed || autoCapture.active !== true ||
@@ -818,7 +821,7 @@ function BackgroundSettings({ state, supported, run, onReturn, returnLabel = '�
     setOpenWirelessWhenArmed(false);
     void run('settings.openSystem', { section: 'wireless' }).catch(() => {});
   }, [openWirelessWhenArmed, autoCapture.active, state.backgroundSetupOpen, state.webWorkspaceTaskOpen]);
-  useEffect(() => { registerTransientBack(() => { if (Object.values(ownerBack.current).some(handler => handler?.())) return true; if (mainScreenConsent) { setMainScreenConsent(false); return true; } if (panel === 'checks') { selectPanel('setup'); return true; } if (showWirelessSetup) { setCode(''); setShowWirelessSetup(false); return true; } return false; }); return () => registerTransientBack(null); }, [panel, mainScreenConsent, showWirelessSetup, registerTransientBack]);
+  useEffect(() => { registerTransientBack(() => { if (Object.values(ownerBack.current).some(handler => handler?.())) return true; if (panel === 'checks') { selectPanel('setup'); return true; } if (showWirelessSetup) { setCode(''); setShowWirelessSetup(false); return true; } return false; }); return () => registerTransientBack(null); }, [panel, showWirelessSetup, registerTransientBack]);
   useEffect(() => {
     if (state.backgroundSetupOpen === true) ownerOpened.current = true;
     else if (ownerOpened.current) { setCode(''); onReturn(); }
@@ -831,7 +834,7 @@ function BackgroundSettings({ state, supported, run, onReturn, returnLabel = '�
     if (connection.requiresConnectionCheck || ['paired', 'needs_pairing', 'identity_forgotten'].includes(connection.phase)) setCode('');
     if (connection.helperConnected && !connection.requiresConnectionCheck) setUnknownResult(false);
   }, [connection.phase, connection.requiresConnectionCheck, connection.busy, connection.identityPresent, connection.helperConnected]);
-  useEffect(() => { if (connection.taskOwned) { setCode(''); setMainScreenConsent(false); } }, [connection.taskOwned]);
+  useEffect(() => { if (connection.taskOwned) setCode(''); }, [connection.taskOwned]);
   useEffect(() => { setCode(''); setPortText(''); setManual(false); setSelected(''); }, [kind]);
   useEffect(() => { setCode(''); }, [host, port]);
   useEffect(() => {
@@ -930,7 +933,7 @@ function BackgroundSettings({ state, supported, run, onReturn, returnLabel = '�
          </Button>}
          {shizukuAuthorized && <CapabilityAction action="background.shizuku.start" supported={supported} run={run} disabled={!canUseExistingShizuku} primary={!wirelessSaved}>使用已授权 Shizuku</CapabilityAction>}
          {shizukuAvailable && !shizukuAuthorized && <CapabilityAction action="background.shizuku.permission" supported={supported} run={run} disabled={!canUseExistingShizuku || shizuku.permissionRequestPending === true}>授权已有 Shizuku</CapabilityAction>}
-         <Button variant={wirelessSaved || shizukuAuthorized ? 'secondary' : 'primary'} disabled={locked || !supported('background.selectMainScreen')} onClick={() => setMainScreenConsent(true)}>使用主屏模式（免配对）</Button>
+         {mainLocation(locked,!wirelessSaved&&!shizukuAuthorized)}
        </div>
        {wirelessSaved && savedEndpoints.length > 1 && <p className="pw-field-hint">发现多个本机连接端口，无法安全地猜测。请展开下方连接设置明确选择。</p>}
        {wirelessSaved && savedEndpoints.length === 0 && !discovery.discovering && <><p className="pw-field-hint">已保存授权身份，但尚未找到本机连接服务；不需要重新输入配对码。</p>
@@ -974,14 +977,14 @@ function BackgroundSettings({ state, supported, run, onReturn, returnLabel = '�
         </div>
       </>}
     </Card>}
-    {connection.loaded && !connection.supported && <Card title="此系统使用主屏兼容模式" description="后台独立屏需要 Android 14 或以上；执行主屏任务时会切换应用并占用当前屏幕。"><Button variant="secondary" disabled={connection.taskOwned || connection.busy || !supported('background.selectMainScreen')} onClick={() => setMainScreenConsent(true)}>选择主屏兼容模式</Button></Card>}
+    {connection.loaded && !connection.supported && <Card title="此系统使用主屏兼容模式" description="后台独立屏需要 Android 14 或以上；执行主屏任务时会切换应用并占用当前屏幕。">{mainLocation(connection.taskOwned||connection.busy)}</Card>}
 
         {(connected || connection.taskOwned || alternate) && <section className="pw-background-retained"><h3>{connection.taskOwned ? '继续核对原任务' : connected ? '助手连接已保留' : '保留当前兼容连接'}</h3><p>{connection.taskOwned ? '原任务仍持有执行资源，本页不会重建连接或开始另一项任务。' : connected ? '开始任务时还会核对输入、取帧和独立显示能力。' : '当前使用已选的 Shizuku 或电脑 ADB 路线。本页不会自动切换为无线配对。'}</p><Button variant="secondary" onClick={() => selectPanel('checks')}>查看实际能力检查</Button></section>}
       </TabPanel>
       <TabPanel id="checks">    <Card title="本机能力检查" description="逐项来自当前系统检查。已连接仍需核对输入、取帧和输入法隔离能力；从系统设置返回后刷新。">
 
       {list(object(state.phoneReadiness).groups).length === 0 ? <Empty>尚未取得本机能力检查结果。</Empty> : <Accordion variant="divided">{list(object(state.phoneReadiness).groups).map(group => <AccordionItem key={text(group.id)} id={text(group.id)} title={<span className="pw-readiness-title"><span>{text(group.title)}</span><small>{({ ready: '可用', blocked: '需准备', unsupported: '本机不支持', unknown: '尚未核实' } as Data)[text(group.state)] || '尚未核实'}</small></span>}>
-        {list(group.checks).length === 0 ? <p className="pw-field-hint">尚未取得实际检查明细。</p> : list(group.checks).map((check, index) => <div key={text(check.id, String(index))} className="pw-readiness-check"><p>{text(check.message, '尚未取得实际状态')}</p>{check.state !== 'ready' && <div className="pw-form-actions">{['accessibility', 'notifications'].includes(check.action) ? <CapabilityAction action="settings.openSystem" args={{ section: check.action }} supported={supported} run={run}>{check.action === 'accessibility' ? '检查界面权限' : '检查任务通知'}</CapabilityAction> : ['background_setup', 'retry'].includes(check.action) ? <CapabilityAction action="background.refresh" supported={supported} run={run}>重新核对</CapabilityAction> : check.action === 'main_screen_choice' ? <Button variant="secondary" disabled={connection.taskOwned || connection.busy || !supported('background.selectMainScreen')} onClick={() => setMainScreenConsent(true)}>选择主屏兼容模式</Button> : null}</div>}</div>)}
+        {list(group.checks).length === 0 ? <p className="pw-field-hint">尚未取得实际检查明细。</p> : list(group.checks).map((check, index) => <div key={text(check.id, String(index))} className="pw-readiness-check"><p>{text(check.message, '尚未取得实际状态')}</p>{check.state !== 'ready' && <div className="pw-form-actions">{['accessibility', 'notifications'].includes(check.action) ? <CapabilityAction action="settings.openSystem" args={{ section: check.action }} supported={supported} run={run}>{check.action === 'accessibility' ? '检查界面权限' : '检查任务通知'}</CapabilityAction> : ['background_setup', 'retry'].includes(check.action) ? <CapabilityAction action="background.refresh" supported={supported} run={run}>重新核对</CapabilityAction> : check.action === 'main_screen_choice' ? mainLocation(connection.taskOwned||connection.busy) : null}</div>}</div>)}
       </AccordionItem>)}</Accordion>}
       <div className="pw-form-actions">{state.accessibilityEnabled !== true && <CapabilityAction action="settings.openSystem" args={{ section: 'accessibility' }} supported={supported} run={run}>设置界面读取权限</CapabilityAction>}{state.notificationsEnabled !== true && <CapabilityAction action="settings.openSystem" args={{ section: 'notifications' }} supported={supported} run={run}>允许任务通知</CapabilityAction>}</div>
     </Card>
@@ -995,7 +998,6 @@ function BackgroundSettings({ state, supported, run, onReturn, returnLabel = '�
     </div></section>
     <section className="pw-background-preferences" aria-label="后台偏好"><h3>后台偏好</h3><BackgroundAudioSettings state={state} supported={supported} run={run} registerBack={handler => { ownerBack.current.audio = handler; }}/></section>
     <div className="pw-background-return"><Button variant={connection.helperConnected && !requiresCheck ? 'primary' : 'ghost'} onClick={() => { setCode(''); onReturn(); }}>{connection.helperConnected && !requiresCheck ? `助手已连接，返回${returnLabel}` : `返回${returnLabel}`}</Button></div>
-    <SettingsDialog isOpen={mainScreenConsent} title="改用主屏兼容模式？" onClose={() => setMainScreenConsent(false)}><p>助手执行时会切换应用并占用当前屏幕。请先完成界面读取与任务通知授权；此处只选择模式，不会开始原目标。</p><div className="pw-form-actions"><Button variant="secondary" onClick={() => setMainScreenConsent(false)}>暂不使用</Button><CapabilityAction action="background.selectMainScreen" supported={supported} run={run} disabled={connection.taskOwned || connection.busy} primary>明确选择主屏模式</CapabilityAction></div></SettingsDialog>
   </div>;
 }
 function HistoryPage({ usage, supported, run }: { usage: boolean; supported: (action: string) => boolean; run: Run }) {
@@ -1721,7 +1723,7 @@ function settingsEntryDetail(id: string, state: Data): string {
   return '';
 }
 
-export default function Secondary({ sentPhoneFocus, cloudGoal, onCloudGoalUsed, teamRunFocus, onTeamRunFocusConsumed, onAskButlerForTeam, onOpenTeamOwnerWork, capabilityMemory, onStartCapability, teamAttentionFocus, onTeamAttentionConsumed, registerBeforeLeave, route, onBack, snapshot, registerBackHandler, navigationTrigger, navigationRevision, onNavigationPageChange, onOpenSetup, settingsRestore, onReturnToSetup, onOpenProjectDraft, onOpenProjects, originGoal, returnLabel, initialProjectId, localDraft, onLocalDraftChange }: Props) {
+export default function Secondary({ onChoosePhonePlace, sentPhoneFocus, cloudGoal, onCloudGoalUsed, teamRunFocus, onTeamRunFocusConsumed, onAskButlerForTeam, onOpenTeamOwnerWork, capabilityMemory, onStartCapability, teamAttentionFocus, onTeamAttentionConsumed, registerBeforeLeave, route, onBack, snapshot, registerBackHandler, navigationTrigger, navigationRevision, onNavigationPageChange, onOpenSetup, settingsRestore, onReturnToSetup, onOpenProjectDraft, onOpenProjects, originGoal, returnLabel, initialProjectId, localDraft, onLocalDraftChange }: Props) {
   const pageLeaveGuard = useRef<PermissionLeaveGuard | null>(null);
   const registerPageLeave = useCallback((guard: PermissionLeaveGuard | null) => {
     pageLeaveGuard.current = guard; registerBeforeLeave?.(guard);
@@ -1959,7 +1961,7 @@ export default function Secondary({ sentPhoneFocus, cloudGoal, onCloudGoalUsed, 
               renderProxy={registerBack => <ProxyWorkspace state={state} run={run} registerTransientBack={registerBack} />} />
           : page === 'phone' ? <PhoneSettings state={state} supported={supported} run={run} navigate={navigate} registerTransientBack={registerTransientBack} initialView={phonePresentation.current} onViewChange={view => { phonePresentation.current = view; }} />
           : isPhonePage ? <PhoneSettings key={page} state={state} supported={supported} run={run} navigate={navigate} registerTransientBack={registerTransientBack} initialView={phoneView} direct />
-          : page === 'background' ? <BackgroundSettings state={state} supported={supported} run={run} onReturn={onReturnToSetup || returnToPhone} returnLabel={onReturnToSetup ? '准备中心' : trail.current.at(-1)?.settingId === 'background' ? '设置' : '手机能力'} registerTransientBack={registerTransientBack} />
+          : page === 'background' ? <BackgroundSettings onChoosePhonePlace={onChoosePhonePlace} state={state} supported={supported} run={run} onReturn={onReturnToSetup || returnToPhone} returnLabel={onReturnToSetup ? '准备中心' : trail.current.at(-1)?.settingId === 'background' ? '设置' : '手机能力'} registerTransientBack={registerTransientBack} />
           : page === 'usage' ? renderUsage(registerTransientBack)
           : page === 'history' ? <HistoryPage key={page} usage={false} supported={supported} run={run} />
           : page === 'archives' || page === 'storage' ? <DataManagement key={page} kind={page} data={object(page === 'archives' ? state.ownerArchives : state.projectStorage)} supported={supported} run={run} registerTransientBack={registerTransientBack} navigate={navigate} />

@@ -10585,6 +10585,16 @@ public final class TaskStore {
         return new JSONObject().put("parent",parent).put("workPlan",plan).put("approvedReview",team.optJSONObject("teamOutputReview"))
                 .put("previousReviews",team.optJSONArray("teamOutputReviewHistory")).put("integration",teamIntegrationContext(run,reader));
     }
+    // Optional history must not make an otherwise valid old independent review unreadable.
+    // Bound the whole closed grant before bringing its private JSON into the application.
+    private JSONObject closedTeamReviewerGrant(String id,String run,int epoch,boolean marked){
+        String sql="SELECT grant_json FROM runs WHERE task_id=? AND run_id=? AND epoch=? AND status='completed' AND length(CAST(grant_json AS BLOB))<=131072";
+        String[] args=marked?new String[]{id,run,String.valueOf(epoch),"\""+dev.pocketengine.features.teams.TeamReviewerRouteRecord.KEY+"\""}:new String[]{id,run,String.valueOf(epoch)};
+        try(Cursor row=db.rawQuery(sql+(marked?" AND instr(grant_json,?)>0":""),args)){
+            if(!row.moveToFirst()||row.isNull(0))return null;
+            try{return new JSONObject(row.getString(0));}catch(org.json.JSONException unverified){return null;}
+        }
+    }
     /** One specific review child; the team's latest review field cannot answer both versions. */
     public synchronized JSONObject teamVersionReviewForOwner(String run,String hash,RunControl reader)throws Exception {
         reader.check();JSONObject team=teamWriteTask(run);if(!hash.matches("[a-f0-9]{64}"))throw new SecurityException("没有准确独审版本");
@@ -10601,6 +10611,11 @@ public final class TaskStore {
                 child.getString("runId").equals(proof.opt("runId"))&&Boolean.TRUE.equals(proof.opt("verdictSubmitted"))&&
                 proof.optString("verdict").matches("no_blocking_findings|changes_requested|inconclusive")){
             result.put("verdict",proof.getString("verdict")).put("completeOriginalFilesRead",Boolean.TRUE.equals(proof.opt("completeOriginalFilesRead")));
+            // Only a genuinely completed SQL attempt can expose presence. Never expose configuration/credential digests to the owner/model.
+            if("completed".equals(child.opt("status"))){
+                JSONObject closed=closedTeamReviewerGrant(id,child.getString("runId"),child.getInt("coordinatorEpoch"),true);
+                if(closed!=null&&dev.pocketengine.features.teams.TeamReviewerRouteRecord.matches(closed.optJSONObject(dev.pocketengine.features.teams.TeamReviewerRouteRecord.KEY),child,proof))result.put("reviewRouteCaptured",true);
+            }
             String finding=proof.optString("findings");if(!finding.isBlank()&&finding.length()<=4000)result.put("findings",finding);
         }
         return result;
@@ -10626,17 +10641,34 @@ public final class TaskStore {
         }finally{db.endTransaction();}
     }
     public synchronized JSONObject finishTeamReview(JSONObject binding,dev.pocketengine.core.RunOutcome outcome,dev.pocketengine.features.teams.TeamFrozenReview.Proof nativeProof,RunControl original)throws Exception {
+        return finishTeamReview(binding,outcome,nativeProof,original,null); // historical callers supply no route evidence
+    }
+    public synchronized JSONObject finishTeamReview(JSONObject binding,dev.pocketengine.core.RunOutcome outcome,dev.pocketengine.features.teams.TeamFrozenReview.Proof nativeProof,RunControl original,dev.pocketengine.features.teams.TeamReviewerRouteCapture origin)throws Exception {
         db.beginTransaction();try{checkTeamAssignmentSettlement(binding,original);
             JSONObject task=teamAssignmentIdentity(binding),proof=nativeProof.snapshot();if(!binding.getString("runId").equals(task.optString("runId"))||binding.getInt("coordinatorEpoch")!=task.optInt("coordinatorEpoch"))throw new SecurityException("旧独审结算不能覆盖新attempt");for(String key:new String[]{"taskId","runId","teamRunId","planHash"})if(!binding.getString(key).equals(proof.getString(key)))throw new SecurityException("独审阅读证据不是原执行");
             checkTeamReviewCurrent(binding);JSONObject evidence=new JSONObject(outcome.evidence.toString()).put("teamIndependentReview",proof).put("reviewText",outcome.summary);
             boolean complete=proof.optBoolean("completeOriginalFilesRead")&&proof.optBoolean("verdictSubmitted")&&outcome.status.equals("needs_confirmation")&&!task.optBoolean("cancelRequested");String status=complete?"completed":outcome.status;
+            // No model-supplied outcome or copied public proof can supply private route identity.
+            evidence.remove(dev.pocketengine.features.teams.TeamReviewerRouteRecord.KEY);
+            JSONObject route=complete&&origin!=null?origin.originalRecord(this,original,binding,proof):null;
             endAttempt(binding.getString("taskId"),binding.getString("runId"),status,outcome.summary,evidence);
             // endAttempt owns terminal normalization (including unresolved operations).
             // Publish the status it actually saved in this transaction, not our requested
             // status, so the parent approval gate cannot see a falsely completed review.
             String settledStatus=required(binding.getString("taskId")).getString("status");
+            JSONObject team=teamWriteTask(binding.getString("teamRunId"));
+            if(route!=null&&"completed".equals(settledStatus)&&!team.has("teamOutputReview")&&
+                    dev.pocketengine.features.teams.TeamReviewerRouteRecord.firstLocal(team.optJSONObject("teamWriteScope"),team.optJSONObject("teamWorkPlan"))){
+                // Private metadata only on the actual, already closed run. No live grant, permission flags,
+                // public team receipt or model context contains the fingerprint.
+                String key=dev.pocketengine.features.teams.TeamReviewerRouteRecord.KEY,reviewRun=binding.getString("runId"),id=binding.getString("taskId");int epoch=binding.getInt("coordinatorEpoch");
+                JSONObject bounds=closedTeamReviewerGrant(id,reviewRun,epoch,false);
+                if(bounds!=null&&!bounds.has(key)){String encoded=bounds.put(key,route).toString();
+                    if(encoded.getBytes(StandardCharsets.UTF_8).length<=131072){ContentValues metadata=new ContentValues();metadata.put("grant_json",encoded);
+                        db.update("runs",metadata,"task_id=? AND run_id=? AND epoch=? AND status='completed'",new String[]{id,reviewRun,String.valueOf(epoch)});}}
+            }
             JSONObject receipt=new JSONObject(proof.toString()).put("status",settledStatus).put("summary",outcome.summary).put("reviewerKind","independent_original_runner").put("executionAuthorized",false).put("businessVerified",false);
-            JSONObject team=teamWriteTask(binding.getString("teamRunId"));receipt.put("parentBudget",teamBudgetSnapshot(binding.getString("teamRunId")));team.put("teamIndependentReview",receipt);write(team);db.setTransactionSuccessful();return receipt;
+            receipt.put("parentBudget",teamBudgetSnapshot(binding.getString("teamRunId")));team.put("teamIndependentReview",receipt);write(team);db.setTransactionSuccessful();return receipt;
         }finally{db.endTransaction();}
     }
     /** First approval of the original local selected-file plan only; never a recovery,

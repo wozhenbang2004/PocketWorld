@@ -44,7 +44,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
     private data class ReceiptOrigin(val task: String, val operation: String, val source: String, val here: String, val instance: String, val digest: String, val mode: String,
         val reviewRun: String = "", val reviewEpoch: Int = 0, val reviewRecordedAt: Long = 0,val activeRun:String="",val activeEpoch:Int=0,val failed:Boolean=false)
     private data class WaitingPage(val handle: String,val window: Host.Window,val epoch: Long,val here: String,val instance: String,
-        val after: Pair<String,String>,val previous: List<Pair<String,String>>,val next: Pair<String,String>?,val rows: Map<Pair<String,String>,ReceiptOrigin>,val results: Boolean,val started:Boolean,val declined:Boolean,val failed:Boolean,val withdrawn:Boolean)
+        val after: Pair<String,String>,val previous: List<Pair<String,String>>,val next: Pair<String,String>?,val rows: Map<Pair<String,String>,ReceiptOrigin>,val results: Boolean,val started:Boolean,val declined:Boolean,val failed:Boolean,val withdrawn:Boolean,val search:String)
     @Volatile private var waitingPage: WaitingPage? = null
     private data class RulePage(val handle:String,val native:Host.OwnerModelRules,val window:Host.Window,val epoch:Long)
     @Volatile private var ownerRules:RulePage?=null
@@ -65,7 +65,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         val COMMANDS = setOf("devices.discovery.start", "devices.discovery.stop", "devices.discovery.reviewConnection", "devices.snapshot", "devices.createInvitation", "devices.inspectInvitation", "devices.readOwnerModelRules", "devices.disableOwnerModelRule", "devices.readSavedPeerScope", "devices.changeLocalPeerName", "devices.continueFirstPair", "devices.reviewPairing", "devices.advancePairing", "devices.reviewPeerGrant",
             "devices.readPendingGoalInput", "devices.reviewGrant", "devices.reviewConnection", "devices.reviewRelay", "devices.reviewAction", "devices.reviewGoal", "devices.reviewResult", "devices.reviewApproval",
             "devices.confirm", "devices.reject", "devices.discard", "devices.recoveryAddresses", "devices.openRecovery", "devices.recoverPairing", "devices.reviewAbandonment", "devices.openTask", "devices.readTask", "devices.reviewResumeRequest",
-            "devices.readPhoneGoalArchive", "devices.readReceivedPhoneGoals", "devices.readLocalReviewedPhoneGoal", "devices.readReviewedPhoneInbox", "devices.readWaitingPhoneGoals", "devices.returnToReceivedPhoneGoal", "devices.prepareReceivedModelReturn", "devices.openHistory", "devices.checkLocalExportedFile", "devices.openCheckedLocalFile", "devices.queryHistory", "devices.queryPhoneGoalResult", "devices.stopHistory",
+            "devices.readPhoneGoalArchive", "devices.readReceivedPhoneGoals", "devices.readLocalReviewedPhoneGoal", "devices.readReviewedPhoneInbox", "devices.readWaitingPhoneGoals", "devices.findWaitingPhoneGoals", "devices.returnToReceivedPhoneGoal", "devices.prepareReceivedModelReturn", "devices.openHistory", "devices.checkLocalExportedFile", "devices.openCheckedLocalFile", "devices.queryHistory", "devices.queryPhoneGoalResult", "devices.stopHistory",
             "devices.pairImage.pick", "devices.pairImage.review", "devices.pairImage.close",
             "devices.desktop.open", "devices.desktop.negotiate", "devices.desktop.status",
             "devices.desktop.control", "devices.desktop.input", "devices.desktop.close")
@@ -280,23 +280,38 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         }
         return receipt.put("modelReturnHandle",place.handle)
     }
-    private fun waitingGoals(args: JSONObject, original: Host.Window, epoch: Long): JSONObject {
+    private fun waitingGoals(args: JSONObject, original: Host.Window, epoch: Long, searching:Boolean): JSONObject {
+        val search:String
         val old: WaitingPage?;val after: Pair<String,String>;val previous: List<Pair<String,String>>;val results:Boolean;val started:Boolean;val declined:Boolean;val failed:Boolean;val withdrawn:Boolean
         if(args.has("waitingHandle")){
-            fields(args,"waitingHandle","direction");old=waitingFor(text(args,"waitingHandle"),original,epoch);results=old.results;started=old.started;declined=old.declined;failed=old.failed;withdrawn=old.withdrawn
+            fields(args,"waitingHandle","direction");old=waitingFor(text(args,"waitingHandle"),original,epoch);results=old.results;started=old.started;declined=old.declined;failed=old.failed;withdrawn=old.withdrawn;search=old.search
+            require(searching==search.isNotEmpty()) { "搜索页与完整受理目录不能混用" }
             when(text(args,"direction")){
                 "older" -> { after=requireNotNull(old.next); previous=(old.previous+listOf(old.after)).takeLast(32) }
                 "newer" -> { require(old.previous.isNotEmpty());after=old.previous.last();previous=old.previous.dropLast(1) }
                 else -> error("仅能读取本机较早或较新的一批接纳记录")
             }
         }else{
-            fields(args,"queue");val lane=if(args.has("queue"))text(args,"queue") else "pending"
+            if(searching)fields(args,"searchText")else fields(args,"queue")
+            search=if(searching)text(args,"searchText",128).trim().also{require(it.isNotEmpty())}else ""
+            val lane=if(!searching && args.has("queue"))text(args,"queue") else "pending"
             require(lane in setOf("pending","results","started","declined","failed","withdrawn"));withdrawn=lane=="withdrawn";results=lane=="results";started=lane=="started";declined=lane=="declined";failed=lane=="failed"
             old=null;after="" to "";previous=emptyList()
         }
         val here=latest.getJSONObject("local");val id=here.getString("deviceId");val instance=here.getString("instanceId")
-        val page=if(withdrawn)original.withdrawnReceivedPhoneGoals(after.first,after.second) else if(failed)original.failedReceivedPhoneGoals(after.first,after.second) else if(declined)original.declinedReceivedPhoneGoals(after.first,after.second) else if(started)original.startedReceivedPhoneGoals(after.first,after.second) else original.waitingPhoneGoals(after.first,after.second,results)
-        require(page.opt("readOnly")==true && page.opt("waitingOnly")==(!started&&!declined&&!failed&&!withdrawn) && page.optBoolean("withdrawnOnly")==withdrawn && page.optBoolean("failedOnly")==failed && page.optBoolean("startedOnly")==started && page.optBoolean("declinedOnly")==declined && page.opt("resultOnly")==results && page.opt("localDeviceId")==id && page.opt("localInstanceId")==instance)
+        var seek=after
+        fun part():JSONObject{
+            current(original,epoch);if(old!=null)require(waitingPage===old)
+            val page=if(searching)original.findWaitingPhoneGoals(seek.first,seek.second,search)else if(withdrawn)original.withdrawnReceivedPhoneGoals(seek.first,seek.second) else if(failed)original.failedReceivedPhoneGoals(seek.first,seek.second) else if(declined)original.declinedReceivedPhoneGoals(seek.first,seek.second) else if(started)original.startedReceivedPhoneGoals(seek.first,seek.second) else original.waitingPhoneGoals(seek.first,seek.second,results)
+            require(page.opt("readOnly")==true && page.opt("waitingOnly")==(!started&&!declined&&!failed&&!withdrawn) && page.optBoolean("withdrawnOnly")==withdrawn && page.optBoolean("failedOnly")==failed && page.optBoolean("startedOnly")==started && page.optBoolean("declinedOnly")==declined && page.opt("resultOnly")==results && page.opt("localDeviceId")==id && page.opt("localInstanceId")==instance)
+            return page
+        }
+        var page=part();var count=1
+        // At most three 24-envelope windows per explicit search click; never query a partner or loop until a match.
+        while(searching && count<3 && page.getJSONArray("rows").length()==0 && page.getBoolean("hasMore")){
+            val nextSeek=page.getString("lastParent") to page.getString("lastOperation")
+            require(nextSeek!=seek && nextSeek.first.isNotEmpty() && nextSeek.second.isNotEmpty());seek=nextSeek;page=part();count++
+        }
         val rows=page.getJSONArray("rows").objects();require(rows.size<=(if(declined||withdrawn)6 else 24))
         // A closed decision has NO actionable or navigable task entries. Its handle only moves the page.
         val keys=if(declined||withdrawn)emptyMap() else rows.associate { val task=it.getString("taskId");val op=it.getString("operationId")
@@ -305,18 +320,19 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                 if(failed||started)it.getJSONObject(if(failed)"failedRun" else "startedRun").getString("runId") else "",if(failed||started)it.getJSONObject(if(failed)"failedRun" else "startedRun").getInt("epoch") else 0,failed) }
         require(declined||withdrawn||keys.size==rows.size)
         val next=if(page.getBoolean("hasMore")) page.getString("lastParent") to page.getString("lastOperation") else null
-        val index=WaitingPage(UUID.randomUUID().toString(),original,epoch,id,instance,after,previous,next,keys,results,started,declined,failed,withdrawn)
+        val index=WaitingPage(UUID.randomUUID().toString(),original,epoch,id,instance,after,previous,next,keys,results,started,declined,failed,withdrawn,search)
         synchronized(this){current(original,epoch);if(old!=null)require(waitingPage===old);waitingPage=index}
         val display=JSONArray();for(row in rows)display.put(JSONObject().also { item ->
             for(key in listOf("taskId","operationId","sourceDeviceId","goal","screenMode","createdAt","waitingState"))item.put(key,row.get(key))
             row.optJSONObject("sourceIdentity")?.let{item.put("sourceIdentity",it)}
+            if(searching && row.optBoolean("matchedLater"))item.put("matchedLater",true)
             if(row.optBoolean("textOnly"))item.put("textOnly",true)
             if(withdrawn)item.put("withdrawnAt",row.getLong("withdrawnAt")).put("notDispatched",true)
             if(declined)item.put("declinedAt",row.getLong("declinedAt")).put("notDispatched",true)
             if(failed){val run=row.getJSONObject("failedRun");for(key in listOf("runId","epoch","registeredAt","stateRecordedAt"))item.put(key,run.get(key))}
             if(started){val run=row.getJSONObject("startedRun");for(key in listOf("runId","epoch","taskState","runState","registeredAt","stopRequested"))item.put(key,run.get(key))}
             if(results)item.put("reviewRecordedAt",row.getLong("reviewRecordedAt")) })
-        return JSONObject().put("kind","waitingPhoneGoals").put("withdrawnOnly",withdrawn).put("failedOnly",failed).put("declinedOnly",declined).put("startedOnly",started).put("resultOnly",results).put("limitedCandidates",page.getInt("limitedCandidates")).put("readOnly",true).put("waitingHandle",index.handle).put("localDeviceId",id)
+        return JSONObject().put("kind","waitingPhoneGoals").put("searchText",search.takeIf{it.isNotEmpty()}).put("withdrawnOnly",withdrawn).put("failedOnly",failed).put("declinedOnly",declined).put("startedOnly",started).put("resultOnly",results).put("limitedCandidates",page.getInt("limitedCandidates")).put("readOnly",true).put("waitingHandle",index.handle).put("localDeviceId",id)
             .put("localInstanceId",instance).put("capturedAt",System.currentTimeMillis()).put("rows",display).put("hasMore",next!=null).put("canReadNewer",previous.isNotEmpty())
     }
     @Synchronized private fun archiveFor(handle: String, original: Host.Window, epoch: Long): PhoneArchive {
@@ -733,7 +749,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         val ownerModelRule=action=="devices.readOwnerModelRules"||action=="devices.disableOwnerModelRule"
         val pendingInput=action=="devices.readPendingGoalInput"
         val previewRevision=if(pendingInput)controller.deviceWorkspaceRevision else -1L
-        val ids = if(pendingInput||ownerModelRule||action in setOf("devices.inspectInvitation","devices.pairImage.review","devices.continueFirstPair")||action=="devices.readPhoneGoalArchive"&&args.has("localCopy")||action=="devices.openCheckedLocalFile"||action=="devices.checkLocalExportedFile"||phoneResultRead||action=="devices.readLocalReviewedPhoneGoal"||action=="devices.readReviewedPhoneInbox") emptyArray() else taskIds()
+        val ids = if(action=="devices.findWaitingPhoneGoals"||pendingInput||ownerModelRule||action in setOf("devices.inspectInvitation","devices.pairImage.review","devices.continueFirstPair")||action=="devices.readPhoneGoalArchive"&&args.has("localCopy")||action=="devices.openCheckedLocalFile"||action=="devices.checkLocalExportedFile"||phoneResultRead||action=="devices.readLocalReviewedPhoneGoal"||action=="devices.readReviewedPhoneInbox") emptyArray() else taskIds()
         fun taskId(): String = text(args, "taskId").also { require(it in ids) { "请从原设备任务记录选择" } }
         val work = Runnable {
             var snapshot: JSONObject? = null; var value: JSONObject? = null; var error: String? = null
@@ -930,7 +946,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                     "devices.readReviewedPhoneInbox" -> reviewedInbox(args,original,epoch)
                     "devices.readLocalReviewedPhoneGoal" -> localReviewedPhoneGoal(args,original,epoch)
                     "devices.prepareReceivedModelReturn" -> prepareModelPlace(args,original,epoch)
-                    "devices.readWaitingPhoneGoals" -> waitingGoals(args,original,epoch)
+                    "devices.readWaitingPhoneGoals","devices.findWaitingPhoneGoals" -> waitingGoals(args,original,epoch,action=="devices.findWaitingPhoneGoals")
                     "devices.readPhoneGoalArchive", "devices.readReceivedPhoneGoals" -> phoneArchivePage(args, original, epoch, action == "devices.readReceivedPhoneGoals")
                     "devices.openHistory" -> {
                         fields(args, "taskId", "operationId", "historyPageHandle", "archiveHandle")
@@ -1114,7 +1130,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                 }
                 current(original, epoch)
             } catch (failure: Exception) { if (action == "devices.discovery.start" && runCatching { current(original, epoch) }.isFailure) original.stopLanDiscovery(); error = if (failure is org.json.JSONException) "原设备信息不完整，请刷新核对。" else failure.message?.take(400) ?: "设备操作结果待核对" }
-            if (value?.optString("kind")!="firstIdentity" && !phoneResultRead && !pendingInput && !ownerModelRule && action !in setOf("devices.prepareReceivedModelReturn","devices.openCheckedLocalFile","devices.checkLocalExportedFile","devices.readPhoneGoalArchive","devices.readReceivedPhoneGoals","devices.readWaitingPhoneGoals","devices.readLocalReviewedPhoneGoal","devices.readReviewedPhoneInbox") && (action != "devices.readTask" || !args.has("historyPageHandle"))) {
+            if (value?.optString("kind")!="firstIdentity" && !phoneResultRead && !pendingInput && !ownerModelRule && action !in setOf("devices.prepareReceivedModelReturn","devices.openCheckedLocalFile","devices.checkLocalExportedFile","devices.readPhoneGoalArchive","devices.readReceivedPhoneGoals","devices.readWaitingPhoneGoals","devices.findWaitingPhoneGoals","devices.readLocalReviewedPhoneGoal","devices.readReviewedPhoneInbox") && (action != "devices.readTask" || !args.has("historyPageHandle"))) {
                 try { current(original, epoch); snapshot = captureSnapshot(original, ids) } catch (_: Exception) { }
             }
             val result = JSONObject().put("value", value ?: JSONObject.NULL).put("snapshot", snapshot ?: JSONObject.NULL)
@@ -1135,7 +1151,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                         if(left<=0L){done(null,"这次邀请已到期，没有重建或重新显示。");return@post}
                         invite.put("remainingMs",left)
                     }
-                    if(action=="devices.readWaitingPhoneGoals" && error==null && runCatching {
+                    if((action=="devices.readWaitingPhoneGoals"||action=="devices.findWaitingPhoneGoals") && error==null && runCatching {
                         waitingFor(result.getJSONObject("value").getString("waitingHandle"),original,epoch)
                     }.isFailure){done(null,"本机收件目录已变化，未交付过期的记录");return@post}
                     if(action=="devices.readReviewedPhoneInbox" && error==null && runCatching {

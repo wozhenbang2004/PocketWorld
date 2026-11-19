@@ -1066,8 +1066,15 @@ internal class PocketWebBridge(
             if (action in PocketWebMemoryDrafts.COMMANDS) {
                 // Review/open/query carry live private text; even a mutation reply can contain the old record.
                 // The original operation journal, not the Web request-ID cache, owns that outcome.
+                val originalTask = if (action == "memoryDraft.query" && args.opt("view") == "saved_record") requiredString(args, "taskId") else null
+                val originalWindow = if (originalTask == null) null else captureWindow()
+                fun originalAnswerVisible() = originalTask != null && !closed && documentId != null && section == null &&
+                    (if (taskViewId != null) taskViewId == originalTask else controller.state.messages.any { it.role == "assistant" && it.taskId == originalTask })
+                if (originalWindow != null) check(originalAnswerVisible()) { "请回到原私人回答查看这条记忆" }
                 memoryDrafts.dispatch(action, args) { result, error ->
-                    completePrivateMemoryReply(id, action, result, error)
+                    if (originalWindow != null && (!acceptsWindow(originalWindow) || !originalAnswerVisible()))
+                        completePrivateMemoryReply(id, action, null, "原回答窗口已变化，没有交付记忆正文")
+                    else completePrivateMemoryReply(id, action, result, error)
                     publishState()
                 }; return
             }
@@ -1228,7 +1235,7 @@ internal class PocketWebBridge(
                         "devices.reviewResult" -> value?.optJSONObject("view")?.let { it.has("summary") || it.has("evidence") }==true
                         "devices.readPendingGoalInput" -> value?.optJSONObject("input")!=null
                         "devices.reviewGoal" -> value?.optJSONObject("view")?.has("goal")==true
-                        "devices.readReviewedPhoneInbox","devices.readReceivedPhoneGoals","devices.readPhoneGoalArchive","devices.readWaitingPhoneGoals" ->
+                        "devices.readReviewedPhoneInbox","devices.readReceivedPhoneGoals","devices.readPhoneGoalArchive","devices.readWaitingPhoneGoals","devices.findWaitingPhoneGoals" ->
                             (value?.optJSONArray("rows")?.length()?:0)>0 || !value?.optString("searchText").isNullOrEmpty()
                         else -> false
                     }

@@ -1,11 +1,12 @@
 import {useEffect, useRef, useState} from 'react';
 import {bridge} from './bridge';
+import type {ReviewedPlace} from './phone-review-place';
 import {Accordion, AccordionItem, Button} from './forms-library';
 import {PermissionReview} from './shell-library';
 import './phone-scope-review.css';
 
 type Remedy='notifications'|'accessibility';
-type Condition={state:'ready'|'blocked'|'unknown';message?:string;settings?:Remedy};
+type Condition={state:'ready'|'blocked'|'unknown';message?:string;settings?:Remedy|ReviewedPlace};
 // Older or partially delivered private reviews have no reliable slot evidence.
 export type PhoneConditions={notification:Condition;screen:Condition;capacity?:Pick<Condition,'state'|'message'>};
 export type PhoneReviewDisplay={
@@ -56,9 +57,9 @@ function PrivateReviewDetails({shown,live,capacityFact,past=false}:{shown:PhoneR
 }
 
 // Exit retains the original description only. Re-checking prepares a review, never a task.
-export function PhoneScopeReview({shown,live,pending,unknown,onStart,onClose,onCheck,onSettings,error}:{
+export function PhoneScopeReview({shown,live,pending,unknown,onStart,onClose,onCheck,onSettings,onPlace,error}:{
   shown:PhoneReviewDisplay;live:Live|null;pending:boolean;unknown:boolean;onStart?:()=>void;onClose:()=>void;
-  onCheck?:(handle:string)=>void;onSettings?:(handle:string,target:Remedy)=>void;error?:string;
+  onCheck?:(handle:string)=>void;onSettings?:(handle:string,target:Remedy)=>void;onPlace?:(handle:string,place:ReviewedPlace)=>void;error?:string;
 }){
   const conditions=shown.conditions,handle=live?.reviewHandle,epoch=live?.documentEpoch;
   const [invalid,setInvalid]=useState(''),invalidNow=useRef('');
@@ -95,19 +96,25 @@ export function PhoneScopeReview({shown,live,pending,unknown,onStart,onClose,onC
     {error&&<p role="alert" className="pw-error">{error}</p>}
   </div>;
   const decision=pending?{title:'正在等待回执',detail:'暂不能确认这一步的结果，请勿重复提交。'}:privateDecision(conditions,expired);
-  const remedy=!expired&&issue?.settings&&onSettings;
+  const target=issue?.state==='blocked'&&!expired?issue.settings:undefined;
+  const system=target==='notifications'||target==='accessibility'?target:undefined;
+  const place=shown.mode==='background'&&(target==='background_setup'||target==='main_screen_choice')?target:undefined;
   return <div className="pw-phone-scope-review"><PermissionReview {...controls} title={decision.title} context={'计划使用'+planned}
     approveLabel={screen?.state==='ready'?'确认提交目标':'先提交目标'}>
     <div className="pw-phone-review-step"><p role="status">{decision.detail}</p>
       {!expired&&canSubmit&&screen?.state!=='ready'&&screen?.message&&<p>第一次需要用屏时会再检查。实际读到的内容以原任务记录为准。</p>}
       {retry&&<div className="pw-phone-review-remedies">
-        {remedy&&<Button variant={canSubmit?'secondary':'primary'} disabled={!live||pending}
-          onClick={()=>{if(!handle||!issue.settings||!current())return;invalidate(handle);onSettings(handle,issue.settings)}}>
-          {issue.settings==='notifications'?'查看任务通知设置':'查看无障碍设置'}
+        {system&&onSettings&&<Button variant={canSubmit?'secondary':'primary'} disabled={!live||pending}
+          onClick={()=>{if(!handle||!current())return;invalidate(handle);onSettings(handle,system)}}>
+          {system==='notifications'?'查看任务通知设置':'查看无障碍设置'}
         </Button>}
-        {onCheck&&<Button variant={!remedy&&(expired||!canSubmit)?'primary':'ghost'} disabled={!live||pending}
+        {place&&onPlace&&<Button variant="secondary" disabled={!live||pending} onClick={()=>{
+          if(!handle||!current())return;onPlace(handle,place);
+        }}>{place==='background_setup'?'查看独立屏准备':'回原草稿选择执行位置'}</Button>}
+        {onCheck&&<Button variant={!system&&(expired||!canSubmit)?'primary':'ghost'} disabled={!live||pending}
           onClick={()=>{if(handle&&!pending&&!document.hidden){invalidate(handle);onCheck(handle)}}}>重新核对</Button>}
       </div>}
+      {place&&onPlace&&<p className="pw-field-hint">{place==='background_setup'?'在准备页选「后台独立屏 → 连接与检查」。回来后再核对原目标，不会自动连接或提交。':'主屏会占用手中的屏幕。只有你在原草稿选择后才会更换位置；仍需重新核对。'}</p>}
     </div>
     <PrivateReviewDetails shown={shown} live={live}
       capacityFact={!expired&&(!hasNotification||hasSlot)?capacity?.message||(hasSlot?'本次核对时有可用位置。':capacity?.state==='blocked'?'这个执行位置暂不可用。':'暂不能核实这个执行位置是否空闲。'):undefined}/>

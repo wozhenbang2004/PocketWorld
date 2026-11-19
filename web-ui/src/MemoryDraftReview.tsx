@@ -9,6 +9,7 @@ import { ShimmerText } from './library';
 import type { ConversationDraftTarget } from './SkillDraftReview';
 import { MemoryAssertionFields } from './MemoryAssertionFields';
 import { ScopedMemoryEvidence } from './ScopedMemoryEvidence';
+import { OriginalSavedMemory, originalMemoryWindow } from './OriginalSavedMemory';
 import { usePendingCandidateDeadline } from './usePendingCandidateDeadline';
 
 type Data = Record<string, any>;
@@ -23,6 +24,7 @@ export function MemoryDraftReview({ target, onClose, onOpenMemory }: {
 }) {
   const [value, setValue] = useState<Data | null>(null), [reviewClosed, setReviewClosed] = useState(false);
   const [error, setError] = useState(''), [busy, setBusy] = useState(true), [attempted, setAttempted] = useState(false), [undoUncertain, setUndoUncertain] = useState(false);
+  const [focused, setFocused] = useState<{ id: string; revision: number; duplicate: boolean; windowKey: string } | null>(null);
   const handle = useRef(''), alive = useRef(true), entered = useRef(false);
   const original = { taskId: target.taskId, runId: target.runId, epoch: target.epoch, operationId: target.operationId, proposalDigest: target.proposalDigest };
   useEffect(() => {
@@ -70,14 +72,16 @@ export function MemoryDraftReview({ target, onClose, onOpenMemory }: {
   const action = proposal.action || review?.action;
   const assertion = review?.after?.assertion || (action === 'forget' ? review?.before?.assertion : null);
   const originalRecord = value?.receipt?.record || apply.record || apply.receipt?.record;
-  const record = value && Object.prototype.hasOwnProperty.call(value, 'record') ? value.record : originalRecord;
   const candidate = value?.existingCandidate;
   const undoAvailable = (value?.undoAvailable ?? value?.receipt?.undoAvailable ?? apply.undoAvailable ?? apply.receipt?.undoAvailable) === true;
   const undoReason = value?.undoUnavailableReason || value?.receipt?.undoUnavailableReason || apply.undoUnavailableReason || apply.receipt?.undoUnavailableReason;
   const outcomeMessage = value?.undo?.message || value?.message || apply.message;
   const saved = outcomeStatus === 'saved', reverted = outcomeStatus === 'reverted', duplicate = outcomeStatus === 'already_saved';
   const undoPending = undoUncertain || ['unknown', 'undoing_unknown'].includes(value?.undo?.status);
-  const displayedRecord = record || (duplicate ? candidate : originalRecord);
+  const receiptRecord = duplicate ? (value?.receipt?.existingRecord || apply.existingRecord) : originalRecord;
+  const displayedRecord = receiptRecord || (duplicate ? candidate : null);
+  const canReadSaved = (saved || duplicate) && action !== 'forget' && typeof receiptRecord?.id === 'string' &&
+    Number.isSafeInteger(receiptRecord.revision) && receiptRecord.revision > 0;
   const expiry = review?.after?.expiresAt;
   const candidatePin = action === 'create' ? proposal.candidate : undefined;
   const candidateUntil = pending && review?.after?.status === 'pending' && typeof candidatePin?.id === 'string' && Number.isSafeInteger(candidatePin.revision) && candidatePin.revision > 0 && candidatePin.id === review.after.id && candidatePin?.revision === review.after.revision && Number.isSafeInteger(expiry) && expiry > 0 ? expiry : 0;
@@ -107,8 +111,9 @@ export function MemoryDraftReview({ target, onClose, onOpenMemory }: {
     <Drawer.Overlay className="pw-overlay" />
     <Drawer.Content className="pw-drawer pw-memory-draft-drawer" aria-describedby="memory-draft-description">
       <div className="pw-drawer-handle" />
-      <header className="pw-drawer-header"><div><Drawer.Title>{title}</Drawer.Title><Drawer.Description id="memory-draft-description">{dismissOnly ? '原来源不允许用于记忆整理。你仍可以忽略这份提案。' : undoPending ? '原保存已完成，请查询这次撤销的实际结果。' : saved || reverted || duplicate ? '查看这次修改的实际结果。' : '查看内容与来源，决定是否保存。'}</Drawer.Description></div><IconButton icon={IconClose} aria-label="返回原回答" disabled={busy} onClick={close} /></header>
+      <header className="pw-drawer-header"><div><Drawer.Title>{focused ? '这条个人记忆' : title}</Drawer.Title><Drawer.Description id="memory-draft-description">{focused ? '只核对原回执指向的正式记录，不打开个人目录。' : dismissOnly ? '原来源不允许用于记忆整理。你仍可以忽略这份提案。' : undoPending ? '原保存已完成，请查询这次撤销的实际结果。' : saved || reverted || duplicate ? '查看这次修改的实际结果。' : '查看内容与来源，决定是否保存。'}</Drawer.Description></div><IconButton icon={IconClose} aria-label="返回原回答" disabled={busy} onClick={close} /></header>
       <div className="pw-drawer-body pw-memory-draft-review pw-knowledge-workspace">
+        {focused ? <OriginalSavedMemory {...focused} target={original} close={onClose} manage={onOpenMemory ? () => { onOpenMemory({ id: focused.id, candidate: false }); onClose(); } : undefined} /> : <>
         {busy && <ShimmerText>正在读取记忆…</ShimmerText>}
         {error && <p className="pw-memory-draft-error" role="alert">{error}</p>}
         {outcomeStatus && <p className="pw-memory-draft-result" role="status">{dismissOnly ? '只可忽略，不显示原话或建议正文。' : undoPending ? '撤销结果待核对，请查询这次修改。' : status[outcomeStatus] || '提案状态待核对'}</p>}
@@ -116,12 +121,12 @@ export function MemoryDraftReview({ target, onClose, onOpenMemory }: {
         {expiredReceipt && onOpenMemory && <Button variant="ghost" disabled={busy} onClick={() => { onOpenMemory({ id: apply.candidateId, candidate: true }); onClose(); }}>查看原建议</Button>}
         {expiredReceipt && value?.queryOriginalReceipt === true && <p className="pw-muted">本机确认这次没有新增记忆，原操作的回执留存尚待核对。</p>}
         {(saved || reverted || duplicate) && <section className="pw-memory-draft-receipt" aria-label="保存结果">
-          {!record && !duplicate && typeof originalRecord?.text === 'string' && <p className="pw-muted">本次保存时的内容</p>}
+          {typeof receiptRecord?.text === 'string' && <p className="pw-muted">{duplicate ? '当时匹配到的记忆内容' : '这次保存时的内容'}，不是当前版本的证明</p>}
           {typeof displayedRecord?.text === 'string' && <p className="pw-reading-copy">{displayedRecord.text}</p>}
           {typeof undoReason === 'string' && <p className="pw-muted">{undoReason}</p>}
           <div className="pw-action-row">
-            {(saved || duplicate) && typeof record?.id === 'string' && value?.recordCurrent !== false && onOpenMemory && action !== 'forget' && <Button variant="secondary" disabled={busy} onClick={() => { onOpenMemory({ id: record.id, candidate: false }); onClose(); }}>查看记忆</Button>}
-            {duplicate && !record && typeof candidate?.id === 'string' && onOpenMemory && <Button variant="secondary" disabled={busy} onClick={() => { onOpenMemory({ id: candidate.id, candidate: true }); onClose(); }}>查看待确认内容</Button>}
+            {canReadSaved && <Button variant="secondary" disabled={busy} onClick={() => { setFocused({ id: receiptRecord.id, revision: receiptRecord.revision, duplicate, windowKey: originalMemoryWindow() }); setValue(null); }}>只看这条记忆</Button>}
+            {duplicate && !receiptRecord && typeof candidate?.id === 'string' && onOpenMemory && <Button variant="secondary" disabled={busy} onClick={() => { onOpenMemory({ id: candidate.id, candidate: true }); onClose(); }}>查看待确认内容</Button>}
             {saved && action === 'create' && undoAvailable && !undoPending && <Button variant="ghost" leadingIcon={IconUndo} disabled={busy} onClick={() => { void request('memoryDraft.undo', original, acceptOutcome, () => setUndoUncertain(true)); }}>撤销这次保存</Button>}
           </div>
         </section>}
@@ -147,8 +152,9 @@ export function MemoryDraftReview({ target, onClose, onOpenMemory }: {
         {reviewClosed && <p className="pw-muted" role="status">原审阅窗口已关闭。没有因此确认或忽略提案。</p>}
         {reviewClosed || canReopen ? <Button variant="secondary" disabled={busy} onClick={() => { void request('memoryDraft.open', original, result => { handle.current = result.handle || ''; setValue(result); setReviewClosed(false); setAttempted(false); setUndoUncertain(false); }); }}>重新核对原提案</Button>
           : (!pending || attempted || error || undoUncertain) && <Button variant="ghost" disabled={busy} onClick={queryOriginal}>查询这次修改</Button>}
+        </>}
       </div>
-      {pending && <section className="pw-memory-draft-confirmation"><div className="pw-action-row">
+      {!focused && pending && <section className="pw-memory-draft-confirmation"><div className="pw-action-row">
         {!dismissOnly && <Button disabled={busy || candidateExpired} onClick={() => { if (candidateUntil && Date.now() >= candidateUntil) return; const id = handle.current; handle.current = ''; setAttempted(true); void request('memoryDraft.confirm', { handle: id }, acceptOutcome); }}>{action === 'forget' ? '忘记这条记忆' : action === 'update' ? '更新记忆' : '记住'}</Button>}
         <Button variant="ghost" disabled={busy} onClick={() => { const id = handle.current; handle.current = ''; setAttempted(true); void request('memoryDraft.cancel', { handle: id }, acceptOutcome); }}>忽略</Button>
       </div></section>}

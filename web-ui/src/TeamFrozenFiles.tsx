@@ -7,7 +7,7 @@ import type {WorkFileSource} from './team-navigation';
 
 type Data = Record<string, any>;
 type FileRow = {artifactId:string;assignmentId:string;memberId:string;path:string;kind:'text'|'deletion'|'binary_or_large';sha256:string;retainedChars?:number;currentVersion:number;currentExists:boolean;matchesOwnerBase:boolean;retainedApplied:boolean;truncated:boolean;beforeBytes?:number;afterBytes?:number};
-type Approval = {teamRunId:string;planHash:string;projectId:string;files:{path:string;existing:boolean;version?:number;sha256?:string}[];approvalHandle:string;startsIntegration:false;firstProject?:boolean;parentCheckoutId?:string;sourceDigest?:string;snapshotIdentity?:string;reviewerTaskId?:string;reviewerRunId?:string;startsChecks?:false;packagesProject?:false};
+type Approval = {teamRunId:string;planHash:string;projectId:string;files:{path:string;existing:boolean;version?:number;sha256?:string}[];approvalHandle:string;startsIntegration:false;firstProject?:boolean;parentCheckoutId?:string;sourceDigest?:string;snapshotIdentity?:string;reviewRouteCaptured?:boolean;reviewerTaskId?:string;reviewerRunId?:string;startsChecks?:false;packagesProject?:false};
 type IntegrationCapture={integrationTaskId:string;reviewId:string;planHash:string;matchingFiles:number;total:number;active:boolean;unresolved:boolean;status:string;businessVerified:false};
 type Reading = {projectReviewOrigin?:ProjectTeamReviewOrigin;fullProject?:boolean;revisionComparison?:RevisionComparison;revisionWarning?:string;projectId:string;integrationCapture?:IntegrationCapture;ownerDecision?:{state:string;reviewId?:string;registrationKind?:string;separateIntegratorStartRequired?:boolean};fileHandle:string;teamRunId:string;planHash:string;files:FileRow[];incompleteCount:number;capturedAt:number;readOnly:true};
 type Page = {id:string;body:string;end:number;size:number};
@@ -121,6 +121,7 @@ export function TeamFrozenFiles({team, view, active, disabled, run, onOpen, back
           <details><summary>核对原项目固定基线与独审记录</summary>
             <p>原项目副本：<code>{approval.parentCheckoutId}</code></p><p>源码摘要：<code>{approval.sourceDigest}</code></p>
             <p>完整目录与字节身份：<code>{approval.snapshotIdentity}</code></p><p>独审任务：<code>{approval.reviewerTaskId}</code> · 本次执行 <code>{approval.reviewerRunId}</code></p>
+            <p>{approval.reviewRouteCaptured===true?'本次独审有原生模型线路记录，不代表每次都用了同一家服务。':'这次独审没有可核对的历史模型线路，不用当前默认模型补填。'}</p>
           </details></>}
         <ul>{approval.files.map(file=><li key={file.path}>{file.existing?'修改':'新增'}：<code>{file.path}</code>{approval.firstProject&&<> · 基线 v{file.version}<details><summary>冻结文件摘要</summary><code>{file.sha256}</code></details></>}</li>)}</ul>
         <CheckboxField isSelected={ack} onChange={setAck} isDisabled={busy}>我已核对这些文件的完整差异和写回目标</CheckboxField>

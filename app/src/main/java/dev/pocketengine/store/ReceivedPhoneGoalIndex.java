@@ -54,6 +54,11 @@ final class ReceivedPhoneGoalIndex {
     static JSONObject waiting(SQLiteDatabase db,String here,String localInstance,String afterCaller,String afterOp,boolean results)throws Exception{
         return scan(db,here,localInstance,null,afterCaller,afterOp,results?Shelf.RESULT:Shelf.PENDING,new LocalPhoneGoalSearch(""));
     }
+    static JSONObject findWaiting(SQLiteDatabase db,String here,String instance,String caller,String op,String query)throws Exception{
+        LocalPhoneGoalSearch term=new LocalPhoneGoalSearch(query);
+        if(!term.active())throw new IllegalArgumentException("请输入本机待接手原目标的文字");
+        return scan(db,here,instance,null,caller,op,Shelf.PENDING,term);
+    }
     static JSONObject declined(SQLiteDatabase db,String here,String instance,String afterCaller,String afterOp)throws Exception{
         return scan(db,here,instance,null,afterCaller,afterOp,Shelf.DECLINED,new LocalPhoneGoalSearch(""));
     }

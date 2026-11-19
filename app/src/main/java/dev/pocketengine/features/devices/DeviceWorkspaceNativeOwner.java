@@ -411,6 +411,10 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
             DeviceIdentity.LocalIdentity local=existingIdentity();if(local==null)throw new SecurityException("无法核对这部接收手机的原身份");
             return tasks.deviceTasks().startedReceivedPhoneGoals(local.deviceId(),local.instanceId(),caller,operation);
         }
+        public JSONObject findWaitingPhoneGoals(String caller,String op,String query)throws Exception{
+            DeviceIdentity.LocalIdentity local=existingIdentity();if(local==null)throw new SecurityException("没有这部收件手机原来的身份");
+            return tasks.deviceTasks().findWaitingPhoneGoals(local.deviceId(),local.instanceId(),caller,op,query);
+        }
         public JSONObject waitingPhoneGoals(String afterCaller,String afterOp,boolean results)throws Exception {
             DeviceIdentity.LocalIdentity local=existingIdentity();if(local==null)throw new SecurityException("本机原设备身份不可读取");
             return tasks.deviceTasks().waitingPhoneGoals(local.deviceId(),local.instanceId(),afterCaller,afterOp,results);

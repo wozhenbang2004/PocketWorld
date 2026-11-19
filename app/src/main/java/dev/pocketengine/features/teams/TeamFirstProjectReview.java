@@ -34,7 +34,8 @@ public final class TeamFirstProjectReview {
         return new JSONObject().put("state","eligible_project_first").put("teamRunId",parent.get("teamRunId")).put("parentTaskId",parent.get("parentTaskId")).put("parentRunId",parent.get("parentRunId"))
                 .put("parentEpoch",parent.get("parentEpoch")).put("targetProjectId",parent.get("targetProjectId")).put("checkoutId",dev.get("checkoutId")).put("planHash",hash)
                 .put("reviewerTaskId",ind.get("taskId")).put("reviewerRunId",ind.get("runId")).put("workPlanId",work.get("planId")).put("selectionHash",base.get("selectionHash"))
-                .put("parentSourceDigest",base.get("parentSourceDigest")).put("sourceDigest",base.get("sourceDigest")).put("snapshotIdentity",base.get("snapshotIdentity"));
+                .put("parentSourceDigest",base.get("parentSourceDigest")).put("sourceDigest",base.get("sourceDigest")).put("snapshotIdentity",base.get("snapshotIdentity"))
+                .put("reviewRouteCaptured",Boolean.TRUE.equals(verdict.opt("reviewRouteCaptured")));
     }
     public static Map<String,JSONObject> originals(JSONObject independent)throws Exception{
         JSONArray files=independent.getJSONArray("files");need(files.length()>=1&&files.length()<=MAX_FIRST_EDITION);Map<String,JSONObject> pending=new HashMap<>();

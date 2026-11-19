@@ -67,10 +67,17 @@ def tree(root):
 def bundle(frozen_dir, driver_binary, driver_sha256, source_commit, version, output, driver_provenance,
            *, runtime_provenance=None, runtime_notices=None, driver_notices=None,
            signing_provenance=None, management_dir=None, allow_unsigned_development=False,
-           agent_desktop_binary=None, agent_desktop_provenance=None):
+           agent_desktop_binary=None, agent_desktop_provenance=None, first_install_handoff=None):
     frozen_dir, driver_binary, output = Path(frozen_dir), Path(driver_binary), Path(output)
     if type(allow_unsigned_development) is not bool:
         raise ValueError("Development mode must be an explicit boolean")
+    if first_install_handoff is not None:
+        handoff = Path(first_install_handoff).absolute()
+        if (allow_unsigned_development or os.name != "nt" or handoff.parent != output.absolute().parent
+                or handoff == output.absolute() or handoff.exists() or handoff.is_symlink()
+                or output.suffix.lower() != ".zip"):
+            raise ValueError("First-install handoff needs a new sibling directory and a production Windows ZIP; no dev fallback")
+        safe_name(handoff.name); safe_name(output.name)
     if not allow_unsigned_development and os.name != "nt":
         raise ValueError("Release bundles require the Windows signature-verification builder")
     if not re.fullmatch(r"[a-f0-9]{64}", driver_sha256) or file_hash(driver_binary) != driver_sha256:
@@ -159,6 +166,14 @@ def bundle(frozen_dir, driver_binary, driver_sha256, source_commit, version, out
         if not re.fullmatch(r"[a-f0-9]{64}", unsigned or ""): raise ValueError("Management source/build hash missing")
         admitted["tools/"+name] = admitted_hash("tools/"+name, path, unsigned)
     signers = {name: signed[name]["signerThumbprint"] for name in admitted if name in signed}
+    if first_install_handoff is not None:
+        # The real installer accepts ONE independently trusted publisher for all seven required targets.
+        # Independent per-file signature success alone cannot prove this is installable with that contract.
+        pins = [signers[name] for name in sorted(required_signed)]
+        if (any(not isinstance(pin, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", pin) for pin in pins)
+                or len({pin.upper() for pin in pins}) != 1):
+            raise ValueError("First-install handoff requires one valid signer thumbprint across all seven required files")
+        common_signer = pins[0].upper()
     admitted.update({"licenses/runtime/"+name: runtime["licenseFiles"][name] for name, _ in license_files})
     admitted["licenses/cua-driver-THIRD-PARTY-NOTICES.md"] = CUA_NOTICES_SHA256
     admitted["licenses/cua-driver-MIT.txt"] = file_hash(source / "licenses/cua-driver-MIT.txt")
@@ -225,9 +240,46 @@ def bundle(frozen_dir, driver_binary, driver_sha256, source_commit, version, out
                 info = zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0))
                 info.compress_type, info.external_attr = zipfile.ZIP_DEFLATED, 0o100600 << 16
                 archive.writestr(info, raw)
-    return {"path": str(output), "sha256": file_hash(output), "bytes": output.stat().st_size,
-            "sourceCommit": source_commit, "guiAcceptance": "unverified"}
+    result = {"path": str(output), "sha256": file_hash(output), "bytes": output.stat().st_size,
+              "sourceCommit": source_commit, "guiAcceptance": "unverified"}
+    if first_install_handoff is not None:
+        result["firstInstallHandoff"] = first_install_sidecars(output, handoff, result, version, common_signer,
+                                                              admitted["tools/Install-Companion.ps1"])
+    return result
 
+
+def first_install_sidecars(bundle_path, dest, result, version, thumbprint, installer_sha):
+    """Publish the SAME signed bootstrap, not a generated command/script or a new installer trust root.
+    A builder must distribute the two pins independently; no user tool auto-imports this inventory.
+    """
+    name = "Install-Companion.ps1"
+    if os.name != "nt" or result["bytes"] > 2 * 1024**3:
+        raise ValueError("The graphical first-install path needs an actual Windows build and a ZIP within its limit")
+    with tempfile.TemporaryDirectory(prefix=".pw-first-install-", dir=dest.parent) as temp:
+        staged = Path(temp) / "prepared"; staged.mkdir()
+        with bundle_path.open("rb") as file, zipfile.ZipFile(file) as archive:
+            files = archive.infolist()
+            matched = [f for f in files if f.filename.casefold() == ("tools/"+name).casefold()]
+            if len(files)>20000 or len(matched)!=1 or matched[0].filename!="tools/"+name or not 0<matched[0].file_size<=1024*1024:
+                raise ValueError("Exact signed installer missing or unsuitable; no first-install handoff")
+            with archive.open(matched[0]) as src:
+                raw = src.read(1024*1024+1)
+            if len(raw)!=matched[0].file_size or hashlib.sha256(raw).hexdigest()!=installer_sha:
+                raise ValueError("Archived and signature-verified installer differ")
+        runner = staged / name
+        with runner.open("xb") as out: out.write(raw)
+        verify_authenticode(runner, thumbprint)
+        if file_hash(runner)!=installer_sha or file_hash(bundle_path)!=result["sha256"] or bundle_path.stat().st_size!=result["bytes"]:
+            raise ValueError("Selected final archive or standalone installer changed")
+        details = {"format":"pocketworld.windows-first-install-handoff.v1","product":"PocketWorld-Companion","version":version,
+                   "platform":"windows-x64","sourceCommit":result["sourceCommit"],"zip":{"name":bundle_path.name,
+                   "bytes":result["bytes"],"sha256":result["sha256"]},"installer":{"name":name,"bytes":len(raw),"sha256":installer_sha},
+                   "expectedSignerThumbprint":thumbprint,"independentOwnerVerificationRequired":True,"guiAcceptance":"unverified"}
+        with (staged/"first-install.json").open("x",encoding="utf-8",newline="\n") as f:
+            json.dump(details,f,indent=2,sort_keys=True); f.write("\n")
+        # Windows rename of a complete prepared directory fails if dest appeared; never replace another kit.
+        staged.rename(dest)
+    return {"directory":str(dest),"installer":name,"inventory":"first-install.json","expectedSignerThumbprint":thumbprint}
 
 
 def verify_authenticode(path, thumbprint):
@@ -256,12 +308,13 @@ def main():
     parser.add_argument("--signing-provenance", type=Path)
     parser.add_argument("--management-dir", type=Path)
     parser.add_argument("--allow-unsigned-development", action="store_true")
+    parser.add_argument("--first-install-handoff", type=Path, help="Signed builds only: new sibling folder for the same approved installer and publisher inventory")
     args = parser.parse_args()
     print(json.dumps(bundle(args.frozen_dir, args.driver_binary, args.driver_sha256, args.source_commit, args.version, args.output, args.driver_provenance,
         runtime_provenance=args.runtime_provenance, runtime_notices=args.runtime_notices, driver_notices=args.driver_notices,
         signing_provenance=args.signing_provenance, management_dir=args.management_dir,
         agent_desktop_binary=args.agent_desktop_binary, agent_desktop_provenance=args.agent_desktop_provenance,
-        allow_unsigned_development=args.allow_unsigned_development)))
+        allow_unsigned_development=args.allow_unsigned_development, first_install_handoff=args.first_install_handoff)))
 
 
 if __name__ == "__main__":

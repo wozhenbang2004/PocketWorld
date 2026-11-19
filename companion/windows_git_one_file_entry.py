@@ -76,6 +76,8 @@ def show(ctx,settings,src,locked):
         _dialog("没有打开这个原文件","原提交或确切路径可能已不可核对；二进制、LFS 指针、文本或对象超限、链接及同名映射冲突也不会打开。没有从工作树补读。",[],retire=closed); return
     while current():
         actions=[("show","查看完整原文本"),("ids","查看原提交、Git 对象和字节摘要")]
+        if file.repository and file.git and "selectedFile" not in src:
+            actions.insert(1,("parent","对照同一路径在直接父提交中的版本\n先选真正的父提交，不查工作树或整个提交历史。"))
         if file.repository and file.git:
             actions.insert(1,("save","只保存这一份文件的独立副本\n先核对原选择和新位置，不复制整个项目。"))
         if file.repository and file.git and file.mode=="100644":
@@ -83,6 +85,9 @@ def show(ctx,settings,src,locked):
         selected=_dialog("已核实一份已提交原文件",f"{file.path}\n{file.size:,} 字节 · 原提交 {src['commit'][:12]}\n"
                          "这不是当前磁盘文件，也不是整仓核验或副本。",actions,retire=closed)
         if selected is None or not current(): return
+        if selected=="parent":
+            from windows_git_parent_file_entry import show_parent
+            show_parent(ctx,settings,src,file,current,_observe); continue
         if selected=="work":
             from windows_git_workfile_entry import compare
             compare(ctx,settings,src,file,current,_observe); continue

@@ -293,6 +293,46 @@ public final class NativeConversationMemoryDraftHost {
                 .put("status","rejected".equals(result.getString("status"))?"saved":result.getString("status")).put("undoAvailable",false).put("queryOriginalReceipt",true).put("replayAllowed",false);
         if("rejected".equals(result.getString("status")))row.put("undoUnavailableReason",result.getString("message"));return row;
     }
+    /** One explicit owner read in the original answer. Unlike queryForOwner, this never settles a journal,
+     * opens candidates, follows source references or substitutes a similarly worded record. */
+    public JSONObject originalSavedRecordForOwner(String task,String run,int epoch,String operation,String digest,
+                                                  String foregroundConversation,Long chosenRevision)throws Exception {
+        JSONObject row=tasks.memoryProposalForOwner(task,run,epoch,operation),proposal=row.getJSONObject("proposal");
+        if(foregroundConversation==null||foregroundConversation.isBlank()||!foregroundConversation.equals(row.getString("conversationId"))
+                ||!digest.equals(proposal.getString("proposalDigest"))||!Set.of("create","update").contains(proposal.getString("action")))
+            throw new SecurityException("请回到原私人回答查看这条记忆");
+        JSONObject controls=tasks.conversationRepository().personalMemoryControls(foregroundConversation);
+        if(!controls.getBoolean("enabled"))
+            throw new SecurityException("此对话已停用个人记忆，没有回读正文");
+        JSONObject applied=row.getJSONObject("apply"),undo=row.getJSONObject("undo");
+        if(!Set.of("not_requested","rejected").contains(undo.getString("status")))throw new SecurityException("原保存可能已撤销，请先核对原回执");
+        ConversationMemoryReceipt.require(proposal,applied);
+        for(String k:new String[]{"taskId","runId","epoch","operationId","proposalDigest"})
+            if(!proposal.get(k).equals(applied.get(k)))throw new SecurityException("原操作与保存回执不符");
+        boolean duplicate="rejected".equals(applied.getString("status"))&&"existing_personal_memory".equals(applied.optString("outcome"));
+        if(!duplicate&&!"saved".equals(applied.getString("status")))throw new SecurityException("尚无这条正式记忆的保存结果");
+        JSONObject pin=applied.getJSONObject(duplicate?"existingRecord":"record"); // Never a candidate or caller-supplied record ID.
+        String id=pin.getString("id");long original=positive(pin,"revision");
+        if(!id.matches("[a-f0-9-]{36}")||!ownerPersonalRecord(pin))throw new SecurityException("原回执未指向本人正式记忆");
+        JSONObject out=origin(task,run,epoch,operation,digest).put("format","pocketworld.original-saved-personal-memory.v1")
+                .put("duplicate",duplicate).put("id",id).put("originalRevision",original);
+        JSONObject current=memory.handle("get",new JSONObject().put("scope",scope()).put("id",id)).getJSONObject("record");
+        JSONObject after=tasks.conversationRepository().personalMemoryControls(foregroundConversation);
+        if(!after.getBoolean("enabled")||after.getLong("readRevision")!=controls.getLong("readRevision"))throw new SecurityException("原对话的读取选择已变化");
+        if(!id.equals(current.getString("id"))||!ownerPersonalRecord(current))throw new SecurityException("不能核对原个人记忆");
+        long revision=positive(current,"revision"),now=System.currentTimeMillis();
+        if(revision<original||revision==original&&!pin.getString("text").equals(current.getString("text")))throw new SecurityException("原版本内容不可核对");
+        out.put("currentRevision",revision).put("readExpiresAt",now+600_000L);
+        if(!Boolean.TRUE.equals(current.opt("active"))||current.optBoolean("archiveOnly")||!current.isNull("expiresAt")&&positive(current,"expiresAt")<=now)
+            return out.put("status","not_active");
+        if(revision!=(chosenRevision==null?original:chosenRevision.longValue()))return out.put("status","changed");
+        if(!current.isNull("expiresAt"))out.put("readExpiresAt",Math.min(out.getLong("readExpiresAt"),positive(current,"expiresAt")));
+        return out.put("status","read").put("text",current.getString("text"));
+    }
+    private static boolean ownerPersonalRecord(JSONObject row){
+        return "owner".equals(row.optString("ownerId"))&&"private".equals(row.optString("spaceId"))
+                &&PersonalMemorySemantics.ownerAssertion(row.optJSONObject("assertion"));
+    }
     /** An accepted original candidate is a native receipt. A coincidentally matching text or
      * absent target does not prove this particular correction/forget, so those stay unknown. */
     public JSONObject queryForOwner(String task,String run,int epoch,String operation)throws Exception {

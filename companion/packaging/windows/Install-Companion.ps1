@@ -1,33 +1,106 @@
-<# User-session installer. No service, elevated driver, firewall rule or port forwarding.
+﻿<# User-session installer. No service, elevated driver, firewall rule or port forwarding.
    A trusted SHA-256 (and, for release use, expected Authenticode signer) is mandatory.
    This source has not been executed on a real Windows machine by the Linux build.
 #>
-[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
+[CmdletBinding(DefaultParameterSetName = 'Graphical', SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
 param(
-    [Parameter(Mandatory = $true)][string]$Bundle,
-    [Parameter(Mandatory = $true)][ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ExpectedSha256,
-    [string]$ExpectedSignerThumbprint,
-    [switch]$AllowUnsignedDevelopment,
-    [switch]$EnableLoginStart,
-    [switch]$DisableLoginStart,
-    [switch]$Repair,
-    [string]$Config
+    [Parameter(ParameterSetName = 'Graphical')][switch]$FirstInstall,
+    [Parameter(ParameterSetName = 'Bundle', Mandatory = $true)][string]$Bundle,
+    [Parameter(ParameterSetName = 'Bundle', Mandatory = $true)][ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ExpectedSha256,
+    [Parameter(ParameterSetName = 'Bundle')][string]$ExpectedSignerThumbprint,
+    [Parameter(ParameterSetName = 'Bundle')][switch]$AllowUnsignedDevelopment,
+    [Parameter(ParameterSetName = 'Bundle')][switch]$EnableLoginStart,
+    [Parameter(ParameterSetName = 'Bundle')][switch]$DisableLoginStart,
+    [Parameter(ParameterSetName = 'Bundle')][switch]$Repair,
+    [Parameter(ParameterSetName = 'Bundle')][string]$Config
 )
 $ErrorActionPreference = 'Stop'
-if ($EnableLoginStart -and $DisableLoginStart) { throw 'Choose enable or disable, not both.' }
-if ($Repair -and ($EnableLoginStart -or $DisableLoginStart -or $Config)) { throw 'Repair restores only the original transaction; no new configuration/login change is accepted.' }
-if (-not [Environment]::Is64BitOperatingSystem) { throw 'Windows x64 is required.' }
-$bundlePath = (Resolve-Path -LiteralPath $Bundle).Path
-$bundleStream = [IO.File]::Open($bundlePath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
-$hasher = [Security.Cryptography.SHA256]::Create()
-try { $actualBundleHash = [BitConverter]::ToString($hasher.ComputeHash($bundleStream)).Replace('-', '') } finally { $hasher.Dispose() }
-if ($actualBundleHash -ne $ExpectedSha256) { $bundleStream.Dispose(); throw 'Bundle hash mismatch; nothing installed.' }
-$bundleStream.Position = 0
-$homeRoot = Join-Path $env:LOCALAPPDATA 'PocketWorld\Companion'
-$releases = Join-Path $homeRoot 'releases'
-$state = Join-Path $homeRoot 'state'
-$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-$stage = Join-Path $releases ('.staging-' + [guid]::NewGuid().ToString('N'))
+$graphicalFirst = $PSCmdlet.ParameterSetName -eq 'Graphical'
+$installerPath = $PSCommandPath
+
+function Show-PWSetupMessage([string]$Body, [string]$Title, [string]$Buttons = 'OK', [string]$Icon = 'Information') {
+    $default = if ($Buttons -eq 'YesNo') { 'Button2' } else { 'Button1' }
+    return [Windows.Forms.MessageBox]::Show($Body, $Title, $Buttons, $Icon, $default)
+}
+function Read-PWFirstSelection([string]$Installer) {
+    if ($env:OS -ne 'Windows_NT' -or -not [Environment]::Is64BitProcess -or -not [Environment]::UserInteractive -or
+        [Threading.Thread]::CurrentThread.GetApartmentState() -ne 'STA') { throw 'Use a normal interactive x64 Windows PowerShell desktop session. No installer or service was started.' }
+    # Pre-run trust cannot be established by a running script: the owner must already have checked its
+    # publisher in Explorer. The hash and certificate below are independently supplied, NEVER filled from the ZIP.
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+    $sig = Get-AuthenticodeSignature -LiteralPath $Installer
+    if ($sig.Status -ne 'Valid' -or $null -eq $sig.SignerCertificate) { throw '这个首装入口没有有效的 Windows 发布者签名。未安装；本窗口不接受未签名开发包。' }
+    $pick = [Windows.Forms.OpenFileDialog]::new()
+    try {
+        $pick.Title = '第 1 步：选择从可信发布者取得的原 Windows Companion ZIP（不要选 APK 或源码 ZIP）'
+        $pick.Filter = 'Windows Companion 程序包 (*.zip)|*.zip'
+        $pick.Multiselect = $false; $pick.CheckFileExists = $true; $pick.DereferenceLinks = $false
+        $pick.RestoreDirectory = $true
+        if ($pick.ShowDialog() -ne 'OK') { return }
+        $file = [IO.Path]::GetFullPath($pick.FileName)
+    } finally { $pick.Dispose() }
+    if ($file -notmatch '^[A-Za-z]:\\' -or $file -match '[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]' -or [IO.Path]::GetExtension($file) -ne '.zip' -or
+        [IO.DriveInfo]::new([IO.Path]::GetPathRoot($file)).DriveType -ne 'Fixed') { throw '请选择本机固定磁盘上的完整原 ZIP。不会从网络地址下载或从快捷方式取包。' }
+    Assert-ExistingAncestors ([IO.Path]::GetDirectoryName($file))
+    $item = Get-Item -LiteralPath $file -Force
+    if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+        ($item.Attributes -band 0x441000) -or $item.Length -lt 22 -or $item.Length -gt 2147483648) { throw '不是支持的本机普通 ZIP，或文件尚未保存在本机。不联网补取。' }
+    $form = [Windows.Forms.Form]::new()
+    try {
+        $form.Text = '第 2 步：核对独立发布资料'
+        $form.StartPosition = 'CenterScreen'; $form.AutoSize = $true; $form.AutoSizeMode = 'GrowAndShrink'
+        $form.AutoScaleMode = 'Font'; $form.MaximizeBox = $false; $form.MinimizeBox = $false
+        $grid = [Windows.Forms.TableLayoutPanel]::new()
+        $grid.AutoSize = $true; $grid.ColumnCount = 1; $grid.Padding = [Windows.Forms.Padding]::new(16)
+        $form.Controls.Add($grid)
+        function Add-PWTrustLabel([string]$Text) {
+            $label = [Windows.Forms.Label]::new(); $label.AutoSize = $true; $label.MaximumSize = [Drawing.Size]::new(570,0)
+            $label.Text = $Text; $label.UseMnemonic = $false; $grid.Controls.Add($label)
+        }
+        Add-PWTrustLabel ('文件：' + $file)
+        Add-PWTrustLabel '从你另行核对的可信发布信息粘贴这两项。不从当前 ZIP、旁边的校验文件或本机签名自动填入。没有这些资料就取消。'
+        Add-PWTrustLabel '完整 ZIP 的 SHA-256（64 个十六进制字符）'
+        $hash = [Windows.Forms.TextBox]::new(); $hash.Width = 550; $hash.MaxLength = 180; $grid.Controls.Add($hash)
+        Add-PWTrustLabel '发布者代码签名证书指纹（40 个十六进制字符，不是 ZIP 摘要）'
+        $signer = [Windows.Forms.TextBox]::new(); $signer.Width = 550; $signer.MaxLength = 140; $grid.Controls.Add($signer)
+        $next = [Windows.Forms.Button]::new(); $next.AutoSize = $true; $next.Text = '核对所选包（尚不安装）'
+        $next.DialogResult = 'OK'; $next.Enabled = $false; $grid.Controls.Add($next)
+        $cancel = [Windows.Forms.Button]::new(); $cancel.AutoSize = $true; $cancel.Text = '取消'; $cancel.DialogResult = 'Cancel'; $grid.Controls.Add($cancel)
+        $form.CancelButton = $cancel
+        $validate = { $next.Enabled = ($hash.Text.Trim() -cmatch '^[A-Fa-f0-9]{64}$' -and $signer.Text.Trim() -cmatch '^[A-Fa-f0-9]{40}$') }
+        $hash.Add_TextChanged($validate); $signer.Add_TextChanged($validate)
+        if ($form.ShowDialog() -ne 'OK') { return }
+        $h = $hash.Text.Trim(); $t = $signer.Text.Trim()
+        if ($h -cnotmatch '^[A-Fa-f0-9]{64}$' -or $t -cnotmatch '^[A-Fa-f0-9]{40}$' -or $sig.SignerCertificate.Thumbprint -ne $t) {
+            throw '资料或签名者不符：没有安装，不替换你输入的指纹。'
+        }
+        return @{file=$file; sha=$h; signer=$t}
+    } finally { $form.Dispose() }
+}
+function Read-PWFirstManifest($Stream) {
+    # Preview only a bounded, unambiguous manifest AFTER the separately approved archive SHA matched.
+    Add-Type -AssemblyName System.IO.Compression
+    $zip = [IO.Compression.ZipArchive]::new($Stream,[IO.Compression.ZipArchiveMode]::Read,$true)
+    try {
+        if ($zip.Entries.Count -gt 20000) { throw '包的条目超过原安装上限。' }
+        $found = @($zip.Entries | Where-Object { $_.FullName -ieq 'bundle-manifest.json' })
+        if ($found.Count -ne 1 -or $found[0].FullName -cne 'bundle-manifest.json' -or $found[0].Length -lt 1 -or $found[0].Length -gt 8388608) { throw '缺少唯一、受限的 Windows 包清单。' }
+        $entry = $found[0]; $s = $entry.Open()
+        try {
+            $buf = [byte[]]::new([int]$entry.Length); $at = 0
+            while ($at -lt $buf.Length) {
+                $n = $s.Read($buf,$at,$buf.Length-$at); if ($n -le 0) { throw '程序包清单提前结束。' }; $at += $n
+            }
+            if ($s.ReadByte() -ne -1) { throw '程序包清单长度不符。' }
+            $m = [Text.UTF8Encoding]::new($false,$true).GetString($buf) | ConvertFrom-Json
+        } finally { $s.Dispose() }
+        if ($m.sourceCommit -isnot [string] -or $m.version -isnot [string] -or $m.product -cne 'PocketWorld-Companion' -or $m.platform -cne 'windows-x64' -or $m.schemaVersion -ne 1 -or
+            $m.codeSigning -cne 'verified_final_bytes' -or $m.sourceCommit -cnotmatch '\A[a-f0-9]{40}\z' -or
+            $m.version -cnotmatch '\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z') { throw '不是已签名的 Windows x64 Companion 正式格式；源码、开发包和 APK 不能用于这里。' }
+        return @{version=$m.version; commit=$m.sourceCommit}
+    } finally { $zip.Dispose(); $Stream.Position = 0 }
+}
 function Assert-PlainDirectory([string]$Path) {
     $item = Get-Item -LiteralPath $Path -Force
     if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Install/state directory must not be a reparse point.' }
@@ -39,6 +112,46 @@ function Assert-ExistingAncestors([string]$Path) {
         $candidate = $candidate.Parent
     }
 }
+# The GUI path is first-install-only; command-line installation, repair and explicit dev behavior stay separate.
+$firstCommitted = $false; $bundleStream = $null; $installLock = $null
+try {
+if ($graphicalFirst) {
+    if ($WhatIfPreference) { Write-Output 'Would open the signed first-install wizard; nothing would be installed or started.'; return }
+    $homeRoot = Join-Path $env:LOCALAPPDATA 'PocketWorld\Companion'
+    if (Test-Path -LiteralPath $homeRoot) { throw '已存在这个用户的伴侣目录。首装窗口不会使用、覆盖或修复它。如能确认是自己原先的签名安装，可从原固定工作台进入；不认识的文件不要运行。只有留有原安装事务才走原可信包的 Repair，空目录不能证明可恢复。' }
+    $selection = Read-PWFirstSelection $installerPath
+    if ($null -eq $selection) { return }
+    $Bundle = $selection.file; $ExpectedSha256 = $selection.sha; $ExpectedSignerThumbprint = $selection.signer
+}
+if ($EnableLoginStart -and $DisableLoginStart) { throw 'Choose enable or disable, not both.' }
+if ($Repair -and ($EnableLoginStart -or $DisableLoginStart -or $Config)) { throw 'Repair restores only the original transaction; no new configuration/login change is accepted.' }
+if (-not [Environment]::Is64BitOperatingSystem) { throw 'Windows x64 is required.' }
+$bundlePath = (Resolve-Path -LiteralPath $Bundle).Path
+$bundleStream = [IO.File]::Open($bundlePath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+if ($graphicalFirst -and ($bundleStream.Length -lt 22 -or $bundleStream.Length -gt 2147483648)) { throw '所选原 ZIP 大小变化或超限。没有安装。' }
+$hasher = [Security.Cryptography.SHA256]::Create()
+try { $actualBundleHash = [BitConverter]::ToString($hasher.ComputeHash($bundleStream)).Replace('-', '') } finally { $hasher.Dispose() }
+if ($actualBundleHash -ne $ExpectedSha256) { $bundleStream.Dispose(); throw 'Bundle hash mismatch; nothing installed.' }
+$bundleStream.Position = 0
+if ($graphicalFirst) {
+    try {
+        $preview = Read-PWFirstManifest $bundleStream
+        $review = "程序：PocketWorld Companion $($preview.version)（Windows x64）
+源码提交：$($preview.commit)
+原 ZIP：$bundlePath
+SHA-256：$ExpectedSha256
+发布者指纹：$ExpectedSignerThumbprint
+安装到当前用户：$homeRoot
+
+下一步由原安装器逐项校验程序和管理脚本的签名与完整性。不会自动启动服务、配对、创建凭据或开启登录启动。现在安装？"
+        if ((Show-PWSetupMessage $review '第 3 步：只安装到这台电脑' 'YesNo' 'Question') -ne 'Yes') { $bundleStream.Dispose(); return }
+    } catch { $bundleStream.Dispose(); throw }
+}
+$homeRoot = Join-Path $env:LOCALAPPDATA 'PocketWorld\Companion'
+$releases = Join-Path $homeRoot 'releases'
+$state = Join-Path $homeRoot 'state'
+$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$stage = Join-Path $releases ('.staging-' + [guid]::NewGuid().ToString('N'))
 function Set-PrivateDirectoryAcl([string]$Path) {
     $acl = [Security.AccessControl.DirectorySecurity]::new()
     $acl.SetAccessRuleProtection($true, $false)
@@ -65,7 +178,17 @@ Assert-ExistingAncestors $homeRoot
 if (Test-Path -LiteralPath $homeRoot) {
     if ((Get-Acl -LiteralPath $homeRoot).GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid) { throw 'Existing install belongs to another owner.' }
 }
-if (-not $Repair) { New-Item -ItemType Directory -Path $homeRoot, $releases, $state -Force | Out-Null }
+if ($graphicalFirst) {
+    # No adoption of a previous install, unknown file or version directory. CreateNew on the install lock
+    # below separates a concurrently-started installer from this first-owner action.
+    if (Test-Path -LiteralPath $homeRoot) { throw '首装位置已经变化；没有覆盖其他安装。' }
+    if (Get-ScheduledTask -TaskName ('PocketWorld-Companion-' + $sid) -ErrorAction SilentlyContinue) { throw '已有原登录任务；首装不会替它调整启动项。' }
+    $companyRoot = [IO.Path]::GetDirectoryName($homeRoot)
+    if (-not (Test-Path -LiteralPath $companyRoot)) { New-Item -ItemType Directory -Path $companyRoot -ErrorAction Stop | Out-Null }
+    Assert-ExistingAncestors $companyRoot
+    New-Item -ItemType Directory -Path $homeRoot -ErrorAction Stop | Out-Null
+    New-Item -ItemType Directory -Path $releases,$state -ErrorAction Stop | Out-Null
+} elseif (-not $Repair) { New-Item -ItemType Directory -Path $homeRoot, $releases, $state -Force | Out-Null }
 foreach ($path in @($homeRoot, $releases, $state)) { Assert-PlainDirectory $path }
 # Private data stays outside versioned releases. No Everyone/Users ACL expansion.
 if (-not $Repair) { foreach ($path in @($homeRoot, $releases, $state)) { Set-PrivateDirectoryAcl $path } }
@@ -78,7 +201,8 @@ else {
         }
     }
 }
-$installLock = [IO.File]::Open((Join-Path $homeRoot 'install.lock'), [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+$lockMode = if ($graphicalFirst) { [IO.FileMode]::CreateNew } else { [IO.FileMode]::OpenOrCreate }
+$installLock = [IO.File]::Open((Join-Path $homeRoot 'install.lock'), $lockMode, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
 New-Item -ItemType Directory -Path $stage | Out-Null
 try {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -163,6 +287,10 @@ try {
     $previous = if (Test-Path -LiteralPath $paths.Current) { Read-PWCurrent $paths } else { $null }
     $taskName = 'PocketWorld-Companion-' + $sid
     $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    if ($graphicalFirst -and ($null -ne $previous -or $null -ne $existingTask -or (Test-Path -LiteralPath $paths.Registry) -or
+            (Test-Path -LiteralPath $paths.Config) -or (Test-Path -LiteralPath (Join-Path $releases $manifest.version)))) {
+        throw '原位置已有安装、配置或启动记录；首装没有采用它，请核对原安装。'
+    }
     $loginEnabled = $false
     if ($null -ne $previous) { $loginEnabled = [bool]$previous.loginStartEnabled -and $null -ne $existingTask -and $existingTask.State -ne 'Disabled' }
     if ($EnableLoginStart) { $loginEnabled = $true }
@@ -192,7 +320,8 @@ try {
         manifestSha256=(Get-FileHash -LiteralPath (Join-Path $destination 'bundle-manifest.json') -Algorithm SHA256).Hash;
         allowUnsignedDevelopment=[bool]$AllowUnsignedDevelopment;signerThumbprint=$ExpectedSignerThumbprint}
     $null = Assert-PWRelease $paths $pointer
-    Set-PWCurrentTransaction $paths $pointer
+    Set-PWCurrentTransaction $paths $pointer -NeverTouchLoginTask:$graphicalFirst
+    if ($graphicalFirst) { $firstCommitted = $true }
     Write-Output ('Installed ' + $manifest.version + '. Login preference preserved; no task or process was resumed.')
     Write-Output ('Open the current installed app to check this computer or pair a phone: ' + (Join-Path $destination 'app\PocketWorld-Companion.exe'))
     Write-Output ('Stable entry after an update: ' + (Join-Path $paths.Home 'Manage-Companion.ps1') + ' -Action OpenDesk. Opening it does not start a service.')
@@ -202,4 +331,41 @@ try {
     $bundleStream.Dispose()
     $installLock.Dispose()
     if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
+}
+
+if ($graphicalFirst -and $firstCommitted) {
+    $later = Join-Path $paths.Home 'Manage-Companion.ps1'
+    $note = "已安装 $($manifest.version)。现在只打开本机工作台？首次可在那里选择一个本机工作文件夹，然后决定是否与手机配对。服务仍未启动。
+
+以后无需输命令：在文件资源管理器找到 $later，右键选「使用 PowerShell 运行」。它默认只打开同一工作台。"
+    if ((Show-PWSetupMessage $note '安装完成' 'YesNo' 'Question') -ne 'Yes') { return }
+    # A no-argument frozen EXE opens ONLY the existing native owner desk. Hold the normal shared
+    # installation lock while verifying the exact just-installed pointer; don't trust an updated/stale path.
+    $readLock = [IO.File]::Open((Join-Path $paths.Home 'install.lock'),[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+    try {
+        if (Test-Path -LiteralPath $paths.Transaction) { throw '安装事务已变化；没有启动。' }
+        $now = Read-PWCurrent $paths
+        if ($now.installId -cne $pointer.installId -or $now.version -cne $pointer.version -or $now.manifestSha256 -ne $pointer.manifestSha256 -or
+            $now.allowUnsignedDevelopment -isnot [bool] -or $now.allowUnsignedDevelopment -or $now.signerThumbprint -ne $ExpectedSignerThumbprint) {
+            throw '当前安装已不是刚才核准的版本；没有启动。'
+        }
+        & (Join-Path $now.root 'app\PocketWorld-Companion.exe')
+        if ($LASTEXITCODE -ne 0) { throw '原工作台未正常打开或已异常退出；安装未被重做。' }
+    } finally { $readLock.Dispose() }
+}
+} catch {
+    if (-not $graphicalFirst) { throw }
+    $why = $_.Exception.Message
+    $heading = if ($firstCommitted) { '伴侣已安装，未确认工作台已打开' } else { '不能确认首装完成' }
+    if ($env:OS -ne 'Windows_NT' -or -not [Environment]::UserInteractive) { throw }
+    try {
+        Add-Type -AssemblyName System.Windows.Forms
+        [void](Show-PWSetupMessage ($why + "`n`n没有自动重试、修复或启动服务。") $heading 'OK' 'Warning')
+    } catch { Write-Error ($heading + ': ' + $why) }
+    throw
+} finally {
+    # Failures before the staging try/finally (hash, target, ACL or lock checks) must not leave
+    # the chosen archive or lock in use if the caller kept this PowerShell session open.
+    if ($null -ne $bundleStream) { $bundleStream.Dispose() }
+    if ($null -ne $installLock) { $installLock.Dispose() }
 }

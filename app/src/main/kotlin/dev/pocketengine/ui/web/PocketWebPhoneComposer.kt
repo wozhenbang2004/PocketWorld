@@ -238,7 +238,14 @@ internal class PocketWebPhoneComposer(
         val state = if (issue.optString("state") == "blocked") "blocked" else "unknown"
         return JSONObject().put("state", state).put("message", issue.optString("message")).also { view ->
             val action = issue.optString("action")
-            if (state == "blocked" && action == settings) view.put("settings", action)
+            // Keep the native non-authorizing route for this exact failed background check.
+            // openReviewedSettings still accepts only the two Android settings targets.
+            val place = settings == "accessibility" && when (issue.optString("id")) {
+                "backgroundConnected", "backgroundClean" -> action == "background_setup"
+                "backgroundSupported" -> action == "main_screen_choice"
+                else -> false
+            }
+            if (state == "blocked" && (action == settings || place)) view.put("settings", action)
         }
     }
 
