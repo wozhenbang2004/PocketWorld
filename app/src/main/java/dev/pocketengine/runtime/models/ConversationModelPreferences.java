@@ -110,6 +110,20 @@ public final class ConversationModelPreferences {
         }
     }
 
+    /** Only after a completed, model-free first reply. Keep a pre-existing opaque editor preference for its next ordinary
+     * message. No configuration/credential is resolved, no submission is pinned, and a fresh install writes nothing. */
+    public void carryExistingEditorChoice(String originalDraft,String conversationId)throws Exception{
+        String from=draft(originalDraft),to=conversation(conversationId);
+        if(!originalDraft.startsWith("new:")||Files.notExists(file)||snapshot(from).isNull("target"))return;
+        transaction(root->{
+            JSONObject rows=root.getJSONObject("scopes"),original=rows.optJSONObject(from);
+            if(original!=null&&!original.isNull("target")&&!rows.has(to)){
+                rows.put(to,new JSONObject().put("revision",1L).put("target",copy(original.getJSONObject("target"))));rows.remove(from);
+            }
+            return new JSONObject();
+        });
+    }
+
     /** A confirmed original receipt binds the draft preference to the newly allocated conversation. */
     public void confirmSubmission(String clientId, String conversationId) throws Exception {
         identity(clientId); String destination = conversation(conversationId);

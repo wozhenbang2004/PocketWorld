@@ -55,7 +55,25 @@ public final class OwnerComposerState {
         public final String clientId,draftKey,fingerprint,conversationId,mode;
         public final long draftRevision;
         private final String originalTarget;
-        private Pending(String client,String key,long revision,String fingerprint,String conversation,String mode,JSONObject target)throws Exception{
+        /** Provenance of a private read-only composer intent, never permission to run or read again. */
+        public final boolean primaryDisplayOnly;
+        // Two Android activity instances may restore the same pending client before the first one retires.
+        // A shared weak process fence tracks that original callback only; it cannot create work or survive a process restart.
+        private static final java.util.WeakHashMap<String,java.lang.ref.WeakReference<DisplayFence>> fences=new java.util.WeakHashMap<>();
+        private static final class DisplayFence{final String key;volatile String closedConversation;volatile java.util.function.BooleanSupplier origin;DisplayFence(String key){this.key=key;}}
+        private static synchronized DisplayFence fence(String key){var weak=fences.get(key);var live=weak==null?null:weak.get();if(live==null){live=new DisplayFence(key);fences.remove(key);fences.put(live.key,new java.lang.ref.WeakReference<>(live));}return live;}
+        private final DisplayFence display;
+        public void watchOriginalDisplaySender(java.util.function.BooleanSupplier origin){if(display!=null)synchronized(display){if(display.closedConversation==null)display.origin=origin;}}
+        public void releaseOriginalDisplaySender(java.util.function.BooleanSupplier origin){if(display!=null)synchronized(display){if(display.origin==origin)display.origin=null;}}
+        boolean mayBeginDisplayRead(){return display!=null&&display.closedConversation==null;}
+        boolean retainLookupWhenSenderGone(String storedConversation){if(display==null)return false;synchronized(display){
+            if(display.closedConversation!=null){if(!display.closedConversation.equals(storedConversation))throw new IllegalStateException("原来源窗口已变化");return true;}
+            if(display.origin!=null&&display.origin.getAsBoolean())return false;display.closedConversation=storedConversation;display.origin=null;return true;
+        }}
+        private boolean provedMissingIn(String conversation){return display!=null&&conversation!=null&&conversation.equals(display.closedConversation);}
+        private Pending(String client,String key,long revision,String fingerprint,String conversation,String mode,JSONObject target,boolean primaryDisplayOnly)throws Exception{
+            if(primaryDisplayOnly&&(isWorkKey(key)||target!=null&&target.length()!=0))throw new IllegalArgumentException("本机读数定位不能指向原工作");
+            this.primaryDisplayOnly=primaryDisplayOnly;display=primaryDisplayOnly?fence(client):null;
             if(!uuid(client)||!validKey(key)||revision<1||!fingerprint.matches("[a-f0-9]{64}")||!conversation.isEmpty()&&!conversationId(conversation)||!mode(mode))throw new IllegalArgumentException("原输入待核对身份无效");
             clientId=client;draftKey=key;draftRevision=revision;this.fingerprint=fingerprint;conversationId=conversation;this.mode=mode;
             JSONObject locator=new JSONObject();if(target!=null&&target.length()>0){
@@ -67,8 +85,8 @@ public final class OwnerComposerState {
         }
         /** Display/reconciliation locator only. Never pass it to a launch or resume operation. */
         public JSONObject originalTarget()throws Exception{return new JSONObject(originalTarget);}
-        private JSONObject json()throws Exception{return new JSONObject().put("clientId",clientId).put("draftKey",draftKey).put("draftRevision",draftRevision)
-                .put("fingerprint",fingerprint).put("conversationId",conversationId).put("mode",mode).put("originalTarget",originalTarget());}
+        private JSONObject json()throws Exception{JSONObject row=new JSONObject().put("clientId",clientId).put("draftKey",draftKey).put("draftRevision",draftRevision)
+                .put("fingerprint",fingerprint).put("conversationId",conversationId).put("mode",mode).put("originalTarget",originalTarget());return primaryDisplayOnly?row.put("primaryDisplayOnly",true):row;}
     }
     public static final class Acknowledgement {
         public final boolean matched,cleared,migrated;
@@ -208,13 +226,21 @@ public final class OwnerComposerState {
         return prepare(client,key,expected,fingerprint,target,excluded,false);
     }
     public synchronized Pending prepare(String client,String key,long expected,String fingerprint,JSONObject target,boolean excluded,boolean lockDefaults)throws Exception {
+        return prepare(client,key,expected,fingerprint,target,excluded,lockDefaults,false);
+    }
+    public synchronized Pending preparePrimaryDisplay(String client,String key,long expected,String fingerprint,boolean excluded,boolean lockDefaults)throws Exception{
+        Draft draft=require(key,expected);
+        if(dev.pocketengine.phone.reading.PrimaryDisplayQuestion.parse(draft.text)==null||draft.attachments().length()!=0||draft.sourceRefs().length()!=0||draft.previewRefs().length()!=0||draft.objectRefs().length()!=0)throw new SecurityException("仅能登记原私人草稿的单一主屏读数");
+        return prepare(client,key,expected,fingerprint,null,excluded,lockDefaults,true);
+    }
+    private Pending prepare(String client,String key,long expected,String fingerprint,JSONObject target,boolean excluded,boolean lockDefaults,boolean localRead)throws Exception {
         if(lockDefaults!=firstTaskDefaultsLocked.contains(key)||lockDefaults&&(!excluded||target!=null))throw new IllegalStateException("此草稿须按原新委托范围发送，未交给另一项工作");
         if(excluded!=oneMessageExcluded.contains(key))throw new IllegalStateException("原草稿的单条记忆限制不适用于另一提交入口，没有发送");
         Draft draft=require(key,expected);if((blank(draft.text)&&draft.attachments().length()==0)||draft.text.trim().length()>12000)throw new IllegalArgumentException("请保留草稿并将本条输入缩至12000字内；纯附件消息必须已有真实附件选择");
         Pending duplicate=matchingPending(key,fingerprint);if(duplicate!=null)return duplicate;
         if(excluded&&hasPending(key))throw new IllegalStateException("本条排除自动整理的原输入尚待核对，未发送第二条");
         if(pending.containsKey(client)||pending.size()>=MAX_PENDING)throw new IllegalStateException("待核对输入已达本机上限，请先查询原回执；未发送新输入");
-        Pending next=new Pending(client,key,draft.revision,fingerprint,draft.conversationId,draft.mode,target);pending.put(client,next);revision=increment(revision);return next;
+        Pending next=new Pending(client,key,draft.revision,fingerprint,draft.conversationId,draft.mode,target,localRead);pending.put(client,next);revision=increment(revision);return next;
     }
     /** Caller has validated an exact native not-admitted receipt. Keep every draft byte;
      * only a later explicit owner Send may prepare a new identity. */
@@ -233,10 +259,23 @@ public final class OwnerComposerState {
     }
     /** Caller supplies an already validated native ACK, never an LLM/tool self-reported success. */
     public synchronized Acknowledgement acknowledge(String client,String conversation)throws Exception {
+        return acknowledge(client,conversation,false);
+    }
+    /** Release the waiting locator only. Never erase the submitted/editor text or loosen its restrictions. */
+    public synchronized Acknowledgement finishMissingDisplayReading(Pending original,String savedConversation)throws Exception{
+        if(original==null||!original.provedMissingIn(savedConversation)||pending.get(original.clientId)!=original||!drafts.containsKey(original.draftKey))throw new SecurityException("原本机读数草稿已变化");
+        if(!savedConversation.isEmpty()&&(!conversationId(savedConversation)||!original.conversationId.isEmpty()&&!original.conversationId.equals(savedConversation)))throw new SecurityException("原本机读数不属于这个对话");
+        // A preserved editor with special first-message rules or a colliding draft stays exactly where it is.
+        if(!savedConversation.isEmpty()&&drafts.get(original.draftKey).revision==original.draftRevision&&!oneMessageExcluded.contains(original.draftKey)&&!firstMessagePaused.contains(original.draftKey)
+                &&!firstTaskDefaultsLocked.contains(original.draftKey)&&(!original.conversationId.isEmpty()||!drafts.containsKey(conversationKey(savedConversation))))
+            return acknowledge(original.clientId,savedConversation,true);
+        pending.remove(original.clientId);revision=increment(revision);return new Acknowledgement(true,false,false,original.draftKey,original.draftKey);
+    }
+    private Acknowledgement acknowledge(String client,String conversation,boolean keepText)throws Exception {
         Pending p=pending.get(client);if(p==null)return new Acknowledgement(false,false,false,activeKey,activeKey);
         if(!conversationId(conversation)||!p.conversationId.isEmpty()&&!p.conversationId.equals(conversation))throw new SecurityException("回执不属于原输入对话");
         Draft prior=drafts.get(p.draftKey);if(prior==null)throw new IllegalStateException("原草稿不可核对，未清除当前输入");
-        String target=isWorkKey(prior.key)?prior.key:conversationKey(conversation);boolean clear=prior.revision==p.draftRevision,migrate=!prior.key.equals(target);
+        String target=isWorkKey(prior.key)?prior.key:conversationKey(conversation);boolean clear=!keepText&&prior.revision==p.draftRevision,migrate=!prior.key.equals(target);
         Draft remaining=clear?new Draft(prior.key,prior.conversationId,increment(prior.revision),"",prior.mode,new JSONArray(),prior.scrollIndex,prior.scrollOffset,prior.anchorMessage,prior.observedMessage,prior.newReplies,"","",new JSONArray(),new JSONArray(),new JSONArray()):prior;
         boolean releaseOne=oneMessageExcluded.contains(prior.key);
         if(releaseOne&&!clear)remaining=prior.content(prior.text,prior.mode,prior.attachments(),prior.voiceText,prior.voiceInputId);
@@ -284,7 +323,7 @@ public final class OwnerComposerState {
                 if(!(raw instanceof String key)||!state.oneMessageExcluded.contains(key)||!key.startsWith("new:")||!state.drafts.get(key).conversationId.isEmpty()||!state.firstTaskDefaultsLocked.add(key))throw new IllegalArgumentException("默认偏好限制不属于原新草稿");}
         }
         if(!state.drafts.containsKey(state.activeKey)||isWorkKey(state.activeKey))throw new IllegalArgumentException("原活动对话草稿不存在");
-        for(int i=0;i<pending.length();i++){JSONObject row=pending.getJSONObject(i);Pending p=new Pending(row.getString("clientId"),row.getString("draftKey"),integer(row,"draftRevision",1,Long.MAX_VALUE),row.getString("fingerprint"),row.getString("conversationId"),row.getString("mode"),row.getJSONObject("originalTarget"));Draft d=state.drafts.get(p.draftKey);if(d==null||!d.conversationId.equals(p.conversationId)||p.draftRevision>d.revision||state.pending.put(p.clientId,p)!=null)throw new IllegalArgumentException("待核对输入不属于原草稿版本");}
+        for(int i=0;i<pending.length();i++){JSONObject row=pending.getJSONObject(i);Pending p=new Pending(row.getString("clientId"),row.getString("draftKey"),integer(row,"draftRevision",1,Long.MAX_VALUE),row.getString("fingerprint"),row.getString("conversationId"),row.getString("mode"),row.getJSONObject("originalTarget"),Boolean.TRUE.equals(row.opt("primaryDisplayOnly")));Draft d=state.drafts.get(p.draftKey);if(d==null||!d.conversationId.equals(p.conversationId)||p.draftRevision>d.revision||state.pending.put(p.clientId,p)!=null)throw new IllegalArgumentException("待核对输入不属于原草稿版本");}
         for(String key:state.oneMessageExcluded)if(state.pending.values().stream().filter(item->item.draftKey.equals(key)).count()>1)throw new IllegalArgumentException("单条记忆限制不能绑定多条待核对输入");
         return state;
     }

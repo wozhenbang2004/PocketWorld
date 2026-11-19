@@ -22,6 +22,7 @@ export type ButlerHomeTask = {
 export type ButlerHomeProps = {
   ready: boolean;
   modelReady: boolean;
+  localDisplayDraft?: boolean;
   modelSetup: ReactNode;
   composer: ReactNode;
   preparations?: (visible: ButlerHomeTask[]) => ReactNode;
@@ -53,7 +54,7 @@ function originalSavedResult(task: ButlerHomeTask, view = workCollectionPresenta
 /** Adapt the retained Affect AssistantHome / Composer composition around the
  * real shared input and BoardUI task rows. This view reads
  * the native private-work projection; only the original task owns decisions. */
-export function ButlerHome({ ready, modelReady, modelSetup, composer, preparations, phoneActivity, hasPreparations = false, tasks, canOpen, onOpen, onAllWork, onScrollTop, initialScrollTop = 0, moreWork = false, active = true, canReadReports=false }: ButlerHomeProps) {
+export function ButlerHome({ ready, modelReady, localDisplayDraft=false, modelSetup, composer, preparations, phoneActivity, hasPreparations = false, tasks, canOpen, onOpen, onAllWork, onScrollTop, initialScrollTop = 0, moreWork = false, active = true, canReadReports=false }: ButlerHomeProps) {
   const scroller = useRef<HTMLDivElement>(null), workRoot = useRef<HTMLElement>(null);
   const allWorkButton = useRef<HTMLButtonElement>(null);
   const focused = useRef<{ node: HTMLElement; id: string } | null>(null);
@@ -200,7 +201,7 @@ export function ButlerHome({ ready, modelReady, modelSetup, composer, preparatio
       </Button>
     </li>;
   };
-  const modelConnection = ready && !modelReady && <div className="pw-butler-model-setup">{modelSetup}<p>草稿可以先写，连接后再发送。</p></div>;
+  const modelConnection = ready && !modelReady && !localDisplayDraft && <div className="pw-butler-model-setup">{modelSetup}<p>草稿可以先写，连接后再发送。</p></div>;
 
   return <main className="pw-chat-workspace pw-butler-workspace" aria-label="管家" data-empty={empty || undefined}>
     <div ref={scroller} className="pw-butler-scroll" onScroll={event => { if (restored.current) reportScroll.current?.(event.currentTarget.scrollTop); }}>

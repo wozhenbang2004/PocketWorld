@@ -1539,8 +1539,45 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     // In-process native proof only; restored pending entries still require their original receipt.
     private val notSentChatReceipts=mutableMapOf<String,JSONObject>()
     private val clearingNotSentChat=mutableSetOf<String>()
+    private fun carryDisplayEditorChoice(key:String,conversation:String){io.execute { runCatching { app.conversationModels().carryExistingEditorChoice(key,conversation) }.onFailure { failure->
+        main.post { if(!closed)state=state.copy(notice="原草稿的模型偏好未随对话迁移，下次普通发送前请核对："+message(failure)) }
+    } }}
+    private val checkingLocalDisplayInputs=mutableSetOf<String>()
     fun queryChatSubmission(client:String) {
         if(notSentChatReceipts.containsKey(client)){clearNotSentChat(client);return}
+        val original=ownerComposer?.pending(client)
+        if(original?.primaryDisplayOnly==true){
+            if(submittingChatClient==client||!webPrivateOwnerVisible()||ownerComposer?.activeKey()!=original.draftKey||canRetryLocallyUnsent(client))return
+            val window=displayedPhoneWindowVersion()
+            if(!checkingLocalDisplayInputs.add(client))return
+            io.execute {
+                val result=runCatching {
+                    val assistant=app.features.module("assistant") as? dev.pocketengine.features.assistant.AssistantModule ?: error("原话存储未就绪")
+                    assistant.lookupOwnerDisplayInput(original) { displayedPhoneWindowAlive(window)&&webPrivateOwnerVisible()&&ownerComposer?.activeKey()==original.draftKey&&ownerComposer?.pending(client)===original }
+                }
+                main.post {
+                    checkingLocalDisplayInputs.remove(client)
+                    val model=ownerComposer
+                    if(model==null||!displayedPhoneWindowAlive(window)||!webPrivateOwnerVisible()||model.activeKey()!=original.draftKey||model.pending(client)!==original||submittingChatClient==client)return@post
+                    result.fold({ outcome ->
+                        val receipt=outcome.optJSONObject("receipt")
+                        if(receipt!=null){receiveChatAcknowledgement(receipt,client,true);return@fold}
+                        if(outcome.opt("originalSenderPending")==true&&outcome.opt("clientMessageId")==client){state=state.copy(notice="原窗口仍在确认这次读数，未另行读取。可稍后查询。");return@fold}
+                        if(outcome.opt("noStoredReading")!=true||outcome.opt("clientMessageId")!=client)return@fold
+                        val saved=outcome.getString("savedConversation")
+                        try {
+                            val change=model.finishMissingDisplayReading(original,saved)
+                            if(change.matched){
+                                publishComposer(change.migrated);if(change.migrated){chatViewEpoch++;voiceInputViewChanged();carryDisplayEditorChoice(original.draftKey,saved)}
+                                state=state.copy(chatReceipts=state.chatReceipts-client,notice="没有留存这次可核实的主屏读数。原稿还在；如需现在的值，请明确再次发送。")
+                                persistOwnerComposer();if(saved.isNotEmpty()&&state.conversationId==saved)feature("assistant","get",JSONObject().put("conversationId",saved))
+                            }
+                        }catch(failure:Exception){state=state.copy(error="草稿仍保留，请回原输入核对："+message(failure))}
+                    },{failure->state=state.copy(error="原读数暂不能核对，草稿仍保留；可以稍后再查，没有重新读取："+message(failure))})
+                }
+            }
+            return
+        }
         if(client.isNotBlank())feature("assistant","getSubmission",JSONObject().put("clientMessageId",client))
     }
     private fun clearNotSentChat(client:String) {
@@ -1549,7 +1586,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val original=model.pending(client)?:run{notSentChatReceipts.remove(client);return}
         if(!clearingNotSentChat.add(client))return
         io.execute {
-            val cleanup=runCatching{app.conversationModels().rejectSubmission(client,original.conversationId)}
+            val cleanup=runCatching{if(!receipt.optBoolean("nativeLocalRead"))app.conversationModels().rejectSubmission(client,original.conversationId)}
             main.post {
                 clearingNotSentChat.remove(client)
                 if(closed)return@post
@@ -1591,14 +1628,17 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         if(receipt.optString("status") in setOf("accepted","queued","consumed","withdrawn")) {
             locallyUnsent.remove(client)
             val acceptedConversation=receipt.getString("conversationId")
-            io.execute { runCatching { app.conversationModels().confirmSubmission(client,acceptedConversation); app.settings.modelSelection().changed() }.onFailure { failure ->
+            if(receipt.optBoolean("nativeLocalRead")){
+                // Optional editor housekeeping only AFTER the reply exists; a zero-model install neither selects nor creates a model.
+                if(original!=null&&original.conversationId.isEmpty())carryDisplayEditorChoice(original.draftKey,acceptedConversation)
+            }else io.execute { runCatching { app.conversationModels().confirmSubmission(client,acceptedConversation); app.settings.modelSelection().changed() }.onFailure { failure ->
                 main.post { if(!closed)state=state.copy(notice="原输入已接收，对话模型偏好回执仍待核对："+message(failure)) }
             } }
             try {
                 val model=ownerComposer;val oldKey=model?.activeKey();val ack=model?.acknowledge(client,receipt.getString("conversationId"))
                 if(ack?.matched==true){publishComposer(oldKey==ack.previousKey);if(ack.migrated&&oldKey==ack.previousKey){chatViewEpoch++;voiceInputViewChanged()};scheduleComposerSave()}
             }catch(error:Exception){state=state.copy(notice=message(error))}
-            refreshCurrentConversationTurn()
+            refreshCurrentConversationTurn(readWithoutModel=receipt.optBoolean("nativeLocalRead"))
             if(state.conversationId==receipt.optString("conversationId"))feature("assistant","get",JSONObject().put("conversationId",state.conversationId))
         } else if(receipt.optString("status")=="rejected") {
             locallyUnsent.remove(client)
@@ -2706,6 +2746,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         if (!visible) closeNativeEvaluation()
         if (voiceForeground != visible) { webWindowEpoch++; phoneViewerWindowEpoch++ }
         voiceForeground=visible;if(!visible)voiceInputModeChanged()
+        if(visible&&webPrivateOwnerVisible())ownerComposer?.let{model->model.pending().filter{it.primaryDisplayOnly&&it.draftKey==model.activeKey()}.forEach{queryChatSubmission(it.clientId)}}
         if (visible) refreshTaskAnnouncementPreference()
         taskAnnouncements.setForeground(visible && privateWorkspaceView())
         (app.features.module("channels") as? dev.pocketengine.features.channels.ChannelsModule)?.setNativeOwnerForeground(activity, visible)
@@ -3125,11 +3166,11 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         try{voiceInputModeChanged();model.selectConversation(id);chatViewEpoch++;publishComposer(true);state=state.copy(messages=emptyList(),chatActiveTurn=null,foregroundTurn=null,chatBusy=false);refreshCurrentConversationTurn();voiceInputViewChanged();persistOwnerComposer();feature("assistant","get",JSONObject().put("conversationId",id))}
         catch(error:Exception){state=state.copy(error=message(error))}
     }
-    private fun refreshCurrentConversationTurn(snapshot: JSONObject? = null): Boolean {
+    private fun refreshCurrentConversationTurn(snapshot: JSONObject? = null,readWithoutModel:Boolean=false): Boolean {
         try {
             val assistant = snapshot ?: app.features.module("assistant")?.snapshot() ?: throw IllegalStateException("原私聊宿主尚未准备")
             val turn = dev.pocketengine.features.assistant.ConversationTurnProjection.current(assistant, state.conversationId, state.chatActiveTurn) {
-                try { app.chatInputModel(it).optBoolean("available") } catch (_: Exception) { false }
+                readWithoutModel || try { app.chatInputModel(it).optBoolean("available") } catch (_: Exception) { false }
             }
             val foreground = turn?.takeUnless { it.optString("executionRole") == "owner_work" || state.tasks.firstOrNull { task -> task.id == it.optString("taskId") }?.raw?.optString("executionRole") == "owner_work" }
             state = state.copy(chatActiveTurn = foreground, foregroundTurn = foreground, chatBusy = foreground != null,
@@ -3140,12 +3181,29 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             return false
         }
     }
-    fun sendChat(text:String,key:String,viewEpoch:Int) {
+    /** A read-free projection of the exact native draft. "ready" never grants permission to sample. */
+    internal fun primaryDisplayDraftGate(draft:OwnerComposerState.Draft):String? {
+        if(dev.pocketengine.phone.reading.PrimaryDisplayQuestion.parse(draft.text)==null)return null
+        if(draft.attachments().length()!=0||draft.sourceRefs().length()!=0||draft.previewRefs().length()!=0||draft.objectRefs().length()!=0||state.selectedChatAttachments.isNotEmpty())return null
+        return when {
+            !webPrivateOwnerVisible()||hasChannelPhoneOrigin||draft.key!=composerDraft?.key||draft.conversationId!=state.conversationId.orEmpty() -> "owner_unavailable"
+            state.chatBusy||state.chatSubmitting -> "busy"
+            !app.executionAllowed() -> "execution_unavailable"
+            else -> "ready"
+        }
+    }
+    @JvmOverloads fun sendChat(text:String,key:String,viewEpoch:Int,primaryDisplayRevision:Long?=null,primaryDisplayWindow:(()->Boolean)?=null) {
         if((text.isBlank()&&state.selectedChatAttachments.isEmpty())||text.trim().length>12000||state.chatSubmitting)return
         val model=ownerComposer ?: run{state=state.copy(error="原草稿尚未读取，未发送");return}
         val draft=model.active()
         if(draft.key!=key||chatViewEpoch!=viewEpoch||text!=draft.text||draft.conversationId!=state.conversationId.orEmpty()){state=state.copy(error="原输入视图已变化，请核对保留草稿；没有发送到其他对话");return}
-        if (!refreshCurrentConversationTurn()) return
+        val displayGate=primaryDisplayDraftGate(draft)
+        if(displayGate!=null&&displayGate!="ready"){state=state.copy(error="原私人窗口或本机执行尚未就绪，请先核对。没有读取，也没有改用模型");return}
+        if((displayGate!=null||primaryDisplayRevision!=null)&&(displayGate!="ready"||primaryDisplayRevision!=draft.revision||primaryDisplayWindow?.invoke()!=true)) {
+            state=state.copy(error="原本机读数草稿或窗口已变化，请核对。没有读取，也没有改用模型");return
+        }
+        if (!refreshCurrentConversationTurn(readWithoutModel=displayGate!=null)) return
+        if(displayGate!=null&&state.chatBusy){state=state.copy(error="原对话仍有工作，未开始另一次读数");return}
         val binding=state.chatActiveTurn
         if(state.chatBusy&&(binding==null||binding.optString("conversationId")!=state.conversationId)){state=state.copy(error="原任务绑定仍在准备或收尾，请稍后刷新；没有新建第二任务");return}
         if(state.chatBusy&&try{!app.chatInputModel(binding!!).optBoolean("available")}catch(_:Exception){true}){state=state.copy(error="原任务正在收尾，请核对原消息后再发送");return}
@@ -3166,14 +3224,17 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         if(firstPaused)input.put("firstMessageWithoutPersonalMemory",true)
         if(excluded)input.put("excludeThisInputFromLearning",true)
         if(lockDefaults)input.put("firstTaskWithoutDefaultWrites",true)
-        if(!state.chatBusy)input.put("executionScope",newTaskExecutionScope())
+        if(displayGate!=null)input.put("ownerDisplayScope",JSONObject().put("deadlineAt",newTaskDeadlineAt()))
+        else if(!state.chatBusy)input.put("executionScope",newTaskExecutionScope())
         if(selectedObjects.length()>0)input.put("ownerObjectRefs",selectedObjects)
         state.conversationId?.let{input.put("conversationId",it)}
         if(state.chatBusy)for(key in listOf("taskId","runId","epoch"))input.put(key,binding!!.get(key))
-        try{model.prepare(client,draft.key,draft.revision,fingerprint,if(state.chatBusy)binding else null,excluded,lockDefaults);publishComposer()}
+        try{if(displayGate!=null)model.preparePrimaryDisplay(client,draft.key,draft.revision,fingerprint,excluded,lockDefaults)
+            else model.prepare(client,draft.key,draft.revision,fingerprint,if(state.chatBusy)binding else null,excluded,lockDefaults)
+            publishComposer()}
         catch(error:Exception){state=state.copy(error=message(error));return}
         submittingChatClient=client;composerSaving=true;state=state.copy(chatSubmitting=true,error=null,chatReceipts=state.chatReceipts+(client to JSONObject().put("clientMessageId",client).put("status","unconfirmed")))
-        persistPreparedChat(client,input,model,false)
+        persistPreparedChat(client,input,model,false,primaryDisplayWindow)
     }
     private val ownerWorkInputCallbacks = mutableMapOf<String, (JSONObject?, String?) -> Unit>()
     /** Work editors retain their original run and never select the conversation composer. */
@@ -3380,21 +3441,28 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         if(target.length()==0)return !state.chatBusy
         return state.chatBusy&&actual!=null&&listOf("taskId","runId","epoch").all{target.opt(it)==actual.opt(it)}
     }
-    fun retryLocallyUnsent(client:String) {
+    fun retryLocallyUnsent(client:String,primaryDisplayWindow:(()->Boolean)?=null) {
         if(!canRetryLocallyUnsent(client)){state=state.copy(notice="只有本进程确认尚未派发、且原输入版本仍相同的请求可明确重试；重开或未查到回执不会自动重发");return}
         val local=locallyUnsent[client]?:return;val model=ownerComposer?:return
+        if(model.pending(client)?.primaryDisplayOnly==true&&primaryDisplayWindow?.invoke()!=true){state=state.copy(notice="请回原私人输入确认重新保存并发送，没有读取");return}
         submittingChatClient=client;state=state.copy(chatSubmitting=true,error=null);composerSaving=true
-        persistPreparedChat(client,JSONObject(local.payload),model,true)
+        persistPreparedChat(client,JSONObject(local.payload),model,true,primaryDisplayWindow)
     }
-    private fun persistPreparedChat(client:String,input:JSONObject,model:OwnerComposerState,localRetry:Boolean) {
+    private fun persistPreparedChat(client:String,input:JSONObject,model:OwnerComposerState,localRetry:Boolean,primaryDisplayWindow:(()->Boolean)?=null) {
         // The native client identity is durable BEFORE calling the original send entry point.
         // A late completion after detach never sends; reopening queries this ID only.
         main.removeCallbacks(composerSave);val version=model.revision()
         val originalPending=model.pending(client)?:return
+        // A local reading must originate from this private, visible composer, not assistant.send issued by a tool or a different workspace.
+        val displayOrigin=if(input.has("ownerDisplayScope")) {
+            val window=phoneViewerWindowEpoch
+            java.util.function.BooleanSupplier { primaryDisplayWindow?.invoke()==true&&displayedPhoneWindowAlive(window)&&webPrivateOwnerVisible()&&!hasChannelPhoneOrigin&&ownerComposer===model&&state.conversationId.orEmpty()==originalPending.conversationId&&model.activeKey()==originalPending.draftKey&&model.pending(client)===originalPending }
+        }else null
+        if(displayOrigin!=null)originalPending.watchOriginalDisplaySender(displayOrigin)
         val saving=if(localRetry)ownerComposerStore.saveAfterLocalUnsentFailure(model)else ownerComposerStore.save(model)
         saving.whenComplete { _,error -> main.post {
             if(closed)return@post
-            if(error!=null){ownerWorkInputCallbacks.remove(client)?.invoke(null, "原输入尚未保存，未发送；草稿与原输入身份仍保留");locallyUnsent[client]=LocalUnsent(input.toString(),originalPending.draftKey,originalPending.draftRevision);if(submittingChatClient==client)submittingChatClient=null;state=state.copy(chatSubmitting=false,error="输入定位未能保存，本次未发送；可修复后明确重新保存并发送同一原身份："+composerFailure(error));return@post}
+            if(error!=null){if(displayOrigin!=null)originalPending.releaseOriginalDisplaySender(displayOrigin);ownerWorkInputCallbacks.remove(client)?.invoke(null, "原输入尚未保存，未发送；草稿与原输入身份仍保留");locallyUnsent[client]=LocalUnsent(input.toString(),originalPending.draftKey,originalPending.draftRevision);if(submittingChatClient==client)submittingChatClient=null;state=state.copy(chatSubmitting=false,error="输入定位未能保存，本次未发送；可修复后明确重新保存并发送同一原身份："+composerFailure(error));return@post}
             if(ownerComposer?.revision()==version)composerSaving=false
             val pendingInput=ownerComposer?.pending(client)
             if(pendingInput==null||pendingInput.fingerprint!=originalPending.fingerprint)return@post
@@ -3415,6 +3483,20 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                         })
                         getTask(nativeInput.getString("taskId"))
                     } }
+                }
+            } else if(displayOrigin!=null) {
+                // The owner explicitly sent this particular local question. Never enter model selection (including on error).
+                io.execute {
+                    val result=runCatching {
+                        val assistant=app.features.module("assistant") as? dev.pocketengine.features.assistant.AssistantModule ?: error("私人对话未就绪")
+                        assistant.sendOwnerDisplayQuestion(input,originalPending,displayOrigin)
+                    }
+                    originalPending.releaseOriginalDisplaySender(displayOrigin)
+                    main.post { if(!closed)result.fold({receiveChatAcknowledgement(it,client)},{_->
+                        if(submittingChatClient==client)submittingChatClient=null
+                        state=state.copy(chatSubmitting=submittingChatClient!=null,notice="这条本机读数的回执未确认。回原输入可核对，没有重测或改用模型。")
+                        if(webPrivateOwnerVisible()&&model.activeKey()==originalPending.draftKey)queryChatSubmission(client)
+                    }) }
                 }
             } else {
                 val scope=if(originalPending.conversationId.isNotBlank())dev.pocketengine.runtime.models.ConversationModelPreferences.conversation(originalPending.conversationId)
@@ -3474,7 +3556,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     val newTaskToolBudget: Int get() = app.conversationModelStepLimit(conversationModelScope())
     val newTaskModelBudget: Int get() = dev.pocketengine.store.TaskExecutionScope.defaultModelBudget(newTaskToolBudget)
     fun selectNewTaskDeadline(minutes: Int) { require(minutes in setOf(0,30,120)); newTaskScopeMinutes = minutes }
-    private fun newTaskExecutionScope(): JSONObject = JSONObject().put("deadlineAt", if (newTaskScopeMinutes == 0) 0L else System.currentTimeMillis() + newTaskScopeMinutes * 60_000L).put("toolLimit", newTaskToolBudget).put("modelCallLimit", newTaskModelBudget)
+    private fun newTaskDeadlineAt():Long = if (newTaskScopeMinutes == 0) 0L else System.currentTimeMillis() + newTaskScopeMinutes * 60_000L
+    private fun newTaskExecutionScope(): JSONObject = JSONObject().put("deadlineAt",newTaskDeadlineAt()).put("toolLimit", newTaskToolBudget).put("modelCallLimit", newTaskModelBudget)
     fun configureExecutionScope(task: UiTask, minutes: Int, tools: Int, models: Int) {
         if (minutes !in setOf(-1,0,30,120) || tools !in 1..400 || models !in 1..512) return
         native("configureTaskExecutionScope", JSONObject().put("taskId",task.id).put("expectedRevision",task.raw.optJSONObject("executionScope")?.optLong("revision") ?: 0L).put("deadlineAt",if(minutes == -1) task.raw.getJSONObject("executionScope").getLong("deadlineAt") else if(minutes==0)0L else System.currentTimeMillis()+minutes*60_000L).put("toolLimit",tools).put("modelCallLimit",models))

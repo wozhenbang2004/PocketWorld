@@ -710,6 +710,7 @@ public final class ConversationRepository {
         if(!bound)throw new SecurityException("这条消息不是原答复对应的主人请求");
         JSONObject state=source(sourceId),original=message(conversation,sourceId);
         if(state==null||original==null||!conversation.equals(state.optString("conversationId"))||!"user".equals(state.optString("role"))||!phoneResultAvailable(state))return result.put("message","原请求已删除或不再可用");
+        if("primary_display".equals(reply.opt("nativeDeliveryKind"))&&(original.optLong("revision")!=reply.optLong("primaryDisplaySourceRevision",-1)||original.optBoolean("importAssignedIdentity")))return result.put("message","原问题已换版，未把新文字当作当时的读数请求");
         String text=original.getString("content");if(offset>text.length()||offset>0&&offset<text.length()&&Character.isLowSurrogate(text.charAt(offset))&&Character.isHighSurrogate(text.charAt(offset-1)))throw new IllegalArgumentException("原文分页起点无效");
         int end=Math.min(text.length(),offset+maxChars);if(end<text.length()&&end>offset&&Character.isHighSurrogate(text.charAt(end-1)))end--;
         return result.put("available",true).put("text",text.substring(offset,end)).put("offset",offset).put("nextOffset",end).put("totalChars",text.length()).put("hasMore",end<text.length());

@@ -1706,6 +1706,16 @@ internal class PocketWebBridge(
         }
     }
 
+    private fun primaryDisplayComposerWindow(): () -> Boolean {
+        require(section == null && taskViewId == null && controller.conversationReader == null && controller.state.filePath == null &&
+            !phoneComposer.intent && !controller.hasChannelPhoneOrigin && controller.webPrivateOwnerVisible()) { "请从原私人输入发送主屏读数请求" }
+        val document = requireNotNull(documentId)
+        val ticket = commandFence.ticket()
+        val epoch = controller.composerViewEpoch
+        return { !closed && documentId == document && taskViewId == null && controller.conversationReader == null &&
+            commandFence.accepts(ticket) && controller.composerViewEpoch == epoch }
+    }
+
     private fun dispatch(action: String, args: JSONObject): JSONObject? {
         when (action) {
             "execution.review" -> {
@@ -1754,7 +1764,8 @@ internal class PocketWebBridge(
                     else -> {
                         val text = requiredString(args, "text", true)
                         require(controller.composerDraft?.text == text && ChatInputRules.canSend(controller.state, false, text)) { "原输入尚不可发送，请核对保留草稿与原任务" }
-                        controller.sendChat(text, key, epoch)
+                        val localRevision=if(args.has("primaryDisplayRevision"))requiredLong(args,"primaryDisplayRevision").also { require(it>0) } else null
+                        controller.sendChat(text,key,epoch,localRevision,localRevision?.let { primaryDisplayComposerWindow() })
                     }
                 }
             }
@@ -1794,7 +1805,12 @@ internal class PocketWebBridge(
             "composer.query", "composer.retry", "composer.returnPending" -> {
                 val client = requiredString(args, "clientMessageId")
                 require(controller.composerPending.any { it.clientId == client } || controller.state.chatReceipts.containsKey(client)) { "原输入回执身份不可核对" }
-                when (action) { "composer.query" -> controller.queryChatSubmission(client); "composer.retry" -> controller.retryLocallyUnsent(client); else -> controller.returnToPendingComposer(client) }
+                when (action) {
+                    "composer.query" -> controller.queryChatSubmission(client)
+                    "composer.retry" -> controller.retryLocallyUnsent(client,
+                        if (controller.composerPending.any { it.clientId == client && it.primaryDisplayOnly }) primaryDisplayComposerWindow() else null)
+                    else -> controller.returnToPendingComposer(client)
+                }
             }
             "conversation.new" -> { leaveTask(); leaveConnection(); reviews.clear(); phoneComposer.clearReviews(); controller.newConversation() }
             "conversation.select" -> { leaveTask(); leaveConnection(); reviews.clear(); phoneComposer.clearReviews(); controller.openConversation(requiredString(args, "id")) }

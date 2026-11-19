@@ -1259,6 +1259,80 @@ public final class TaskStore {
         original.check();checkCapabilityCurrent(id,run,epoch,"phone_practice_target");JSONObject task=required(id);
         if(!task.optBoolean("ownerPhonePractice")||!"phone".equals(task.optString("kind")))throw new SecurityException("owner_practice_required");
     }
+    /** Private owner composer only. These values cannot be constructed from a model or bridge receipt. */
+    public static final class OwnerDisplayRead {
+        private final TaskStore issuer;private final String conversation,message,client,fingerprint,goal;private final long revision,policy,deadline;
+        private final java.util.function.BooleanSupplier owner;private final dev.pocketengine.phone.reading.PrimaryDisplaySample sample;
+        private OwnerDisplayRead(TaskStore issuer,String conversation,JSONObject source,long policy,long deadline,java.util.function.BooleanSupplier owner,dev.pocketengine.phone.reading.PrimaryDisplaySample sample)throws Exception{
+            this.issuer=issuer;this.conversation=conversation;message=source.getString("id");client=source.getString("clientMessageId");fingerprint=source.getString("requestFingerprint");
+            goal=source.getString("content");revision=source.getLong("revision");this.policy=policy;this.deadline=deadline;this.owner=owner;this.sample=sample;
+        }
+    }
+    private JSONObject originalDisplayQuestion(String conversation,String message,String client,long revision,long deadline,java.util.function.BooleanSupplier owner)throws Exception{
+        requireExecutionEnabled();
+        if(owner==null||!owner.getAsBoolean()||deadline!=0&&deadline<=System.currentTimeMillis())
+            throw new SecurityException("原私人窗口、工作范围或等待状态已变化，没有改走普通手机任务");
+        JSONObject row=conversationRepository.message(conversation,message),source=conversationRepository.source(message);
+        if(row==null||source==null||!"owner".equals(source.opt("ownerId"))||!"private".equals(source.opt("spaceId"))||!"user".equals(source.opt("role"))
+                ||source.optBoolean("deleted")||source.optBoolean("nativeProvenanceImported")||row.optBoolean("importAssignedIdentity")||!"user".equals(row.opt("role"))
+                ||revision!=1||revision!=row.optLong("revision")||revision!=source.optLong("revision")||!conversation.equals(source.opt("conversationId"))
+                ||!client.equals(row.opt("clientMessageId"))||!client.equals(source.opt("clientMessageId"))||!row.getString("requestFingerprint").equals(source.opt("requestFingerprint"))
+                ||!"unconfirmed".equals(row.getJSONObject("submission").opt("status"))||row.getJSONObject("submission").has("taskId")
+                ||dev.pocketengine.phone.reading.PrimaryDisplayQuestion.parse(row.getString("content"))==null)
+            throw new SecurityException("本机屏幕读数只接受当前私人原话，不会读取模型或复制的请求");
+        for(String key:new String[]{"attachments","ownerSourceRefs","ownerPreviewRefs","ownerObjectRefs"})if(row.has(key)&&row.getJSONArray(key).length()!=0)throw new SecurityException("这不是单一主屏读数请求");
+        return row;
+    }
+    public OwnerDisplayRead captureOwnerDisplayRead(Context context,String conversation,String message,String client,long revision,String expectedFingerprint,String expectedText,JSONObject scope,java.util.function.BooleanSupplier owner)throws Exception{
+        // This native read has no model or dispatch allowance at all. Keep the owner's original deadline.
+        if(scope==null||scope.length()!=1||!scope.has("deadlineAt"))throw new SecurityException("未核实原输入范围，不读取本机");
+        long deadline=TaskExecutionScope.exactLong(scope,"deadlineAt",0,Long.MAX_VALUE),policy;JSONObject row;
+        synchronized(this){
+            if(read(client)!=null||ownerConversationUnresolved(conversation)!=null)throw new SecurityException("此原输入已有任务或原工作在等核对，没有重复读取");
+            row=originalDisplayQuestion(conversation,message,client,revision,deadline,owner);policy=executionPolicySnapshot.revision;
+            if(!expectedFingerprint.equals(row.opt("requestFingerprint"))||!expectedText.equals(row.opt("content")))throw new SecurityException("已固定的原话与存档不符，没有读取");
+        }
+        if(!executionEnabled()||policy!=executionPolicySnapshot.revision||!owner.getAsBoolean())throw new SecurityException("原私人窗口或执行状态已变化");
+        // Framework calls happen outside the SQLite transaction. The result can be published only to this original request.
+        var sample=dev.pocketengine.phone.reading.PrimaryDisplaySample.read(context,dev.pocketengine.phone.reading.PrimaryDisplayQuestion.parse(row.getString("content")));
+        return new OwnerDisplayRead(this,conversation,row,policy,deadline,owner,sample);
+    }
+    /** P64 uses the same immutable client ID as task, run and operation key. Absence means only "no stored result". */
+    public synchronized boolean absentOwnerDisplayLedger(String client)throws Exception{
+        if(closed||!hostReady.getAsBoolean())throw new IllegalStateException("本机账本尚未就绪");
+        try(Cursor rows=db.rawQuery("SELECT 1 FROM tasks WHERE task_id=? UNION ALL SELECT 1 FROM runs WHERE run_id=? OR task_id=? UNION ALL SELECT 1 FROM operations WHERE operation_id=? OR task_id=? LIMIT 1",new String[]{client,client,client,client,client})){
+            return !rows.moveToFirst();
+        }
+    }
+    /** Same SQLite transaction as the originating owner's final input acknowledgement and visible reply; no executable grant. */
+    public synchronized JSONObject saveOwnerDisplayRead(OwnerDisplayRead original,boolean blockDefaults)throws Exception{
+        if(original==null||original.issuer!=this||!db.inTransaction())throw new SecurityException("主屏读数必须随原私人消息一起保存");
+        JSONObject row=originalDisplayQuestion(original.conversation,original.message,original.client,original.revision,original.deadline,original.owner);
+        if(executionPolicySnapshot.revision!=original.policy||!original.goal.equals(row.getString("content"))||!original.fingerprint.equals(row.getString("requestFingerprint")))
+            throw new SecurityException("原读数来源或执行开关已变化，未保存为其他任务");
+        String id=original.client;if(read(id)!=null)throw new SecurityException("原输入已有任务，不重新测量或换绑");
+        String status=original.sample.observed()?"completed":"failed",answer=original.sample.answer(original.goal.trim().matches("(?s)^[A-Za-z].*"));
+        JSONObject source=new JSONObject().put("messageId",original.message).put("messageRevision",original.revision).put("requestFingerprint",original.fingerprint);
+        JSONObject evidence=original.sample.evidence().put("modelCalled",false).put("settingsChanged",false).put("source",source);
+        JSONObject task=base(id,original.goal,"local","tool").put("feature","local").put("command","readOwnerPrimaryDisplay").put("ownerPrimaryDisplayRead",source)
+                .put("conversationId",original.conversation).put("runId",id).put("coordinatorEpoch",1).put("status","running");
+        if(blockDefaults)task.put("ownerDefaultsWriteBlocked",true);
+        write(task);long now=System.currentTimeMillis();
+        JSONObject grant=new JSONObject().put("principalId","owner").put("spaceId","private").put("mode","display_read_only").put("tools",new JSONArray())
+                .put("expiresAt",now).put("remainingOperations",0).put("stepCeiling",1).put("allowedInferencePurposes",new JSONArray());
+        ContentValues run=new ContentValues();run.put("run_id",id);run.put("task_id",id);run.put("epoch",1);run.put("status","running");run.put("grant_json",grant.toString());
+        run.put("checkpoint","{}");run.put("created_at",now);run.put("updated_at",now);db.insertOrThrow("runs",null,run);
+        ContentValues operation=new ContentValues();operation.put("operation_id",id);operation.put("task_id",id);operation.put("run_id",id);operation.put("tool","native_owner_primary_display_mode");
+        operation.put("arguments",source.toString());operation.put("state","receipt");operation.put("receipt",evidence.toString());operation.put("created_at",now);db.insertOrThrow("operations",null,operation);
+        endAttempt(id,id,status,answer,evidence);
+        // Publish from the actual settled task/run and stored operation, not merely the intended final state.
+        JSONObject settled=required(id);
+        try(Cursor saved=db.rawQuery("SELECT r.status,o.receipt FROM runs r JOIN operations o ON o.task_id=r.task_id AND o.run_id=r.run_id WHERE r.task_id=? AND r.run_id=? AND r.epoch=1 AND o.operation_id=? AND o.tool=? AND o.state='receipt'",new String[]{id,id,id,"native_owner_primary_display_mode"})){
+            if(!saved.moveToFirst()||!status.equals(saved.getString(0))||!evidence.toString().equals(saved.getString(1))||!status.equals(settled.opt("status"))||!answer.equals(settled.opt("summary")))
+                throw new SecurityException("原主屏读数尚未在同一次任务结算，不投递结果");
+        }
+        return new JSONObject().put("taskId",id).put("runId",id).put("epoch",1).put("status",settled.getString("status")).put("answer",settled.getString("summary")).put("sourceRevision",original.revision);
+    }
     public synchronized JSONObject createCapabilityTask(String goal,String conversationId)throws Exception{return createCapabilityTask(goal,conversationId,false);}
     /** Only the ordinary private new-task host can select this narrower write boundary. */
     public synchronized JSONObject createCapabilityTask(String goal,String conversationId,boolean blockDefaults)throws Exception{
@@ -11561,6 +11635,7 @@ public final class TaskStore {
         requireExecutionEnabled();
         if((OwnerWorkTask.isOwnerWork(required(id))||required(id).has("ownerWorkTakeover"))&&!nativeOwnerWork)throw new SecurityException("持久工作必须通过原queued claim或准确代次的明确继续，不可通用重启");
         if(OwnerPhoneControlScope.marked(required(id)))throw new SecurityException("手控不能继续为模型或另起运行");
+        if(required(id).has("ownerPrimaryDisplayRead"))throw new SecurityException("只可核对此次原读数，不能续为屏幕控制或模型执行");
         if(required(id).has("ownerLocalTerminal"))throw new SecurityException("原手动终端只查询、输入或停止同一进程，不能恢复为模型或重新启动");
         if(required(id).has(RuntimeSetupHost.KEY))throw new SecurityException("本机工具准备只能查看、停止或重新审阅，不能恢复为模型或重放原安装");
         db.beginTransaction();try{
@@ -16303,6 +16378,7 @@ public final class TaskStore {
     public synchronized void updateExternal(String id,JSONObject receipt)throws Exception{db.beginTransaction();try{updateExternal(id,receipt,false);db.setTransactionSuccessful();}finally{db.endTransaction();}}
     private void updateExternal(String id,JSONObject receipt,boolean reviewedAdmission)throws Exception{
         JSONObject t=required(id);String raw=receipt.optString("status",receipt.optBoolean("ok",true)?"response_received":"failed");
+        if(t.has("ownerPrimaryDisplayRead"))throw new SecurityException("已冻结的本机读数不能由外部回执替换");
         JSONObject registered=t.optJSONObject("externalRefs"),location=registered==null?null:registered.optJSONObject("hostWorkspace");
         JSONObject host=CloudWorkspaceJobs.matches(t,location)?location:null;
         if(t.optString("feature").equals("remote")){
