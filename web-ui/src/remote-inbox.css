@@ -56,3 +56,33 @@
 .pw-remote-message-group .pw-remote-list-toolbar { min-width: 0; flex-wrap: wrap; gap: 12px; }
 .pw-remote-message-group .pw-remote-filters { flex-wrap: wrap; }
 .pw-remote-message-group .pw-remote-list-toolbar > button { white-space: normal; min-height: 44px; text-align: start; }
+
+/* The foreground inbox routes by intent. Its tabs and both native readers
+ * use the existing theme and navigation motion, never a dashboard of totals. */
+.pw-redesign .pw-workspace .pw-remote-inbox{max-width:824px;gap:16px}
+.pw-inbox-lanes,.pw-inbox-panel{min-width:0}
+.pw-inbox-lanes>[role=tablist],.pw-inbox-lanes [role=tablist]{max-width:100%}
+.pw-inbox-lanes [role=tab]{min-height:44px}
+.pw-inbox-panel{display:grid;gap:22px;padding:3px 0 12px}
+.pw-inbox-panel[hidden]{display:none}
+.pw-inbox-panel .pw-notification-attention+.pw-notification-attention{border-top:1px solid var(--pw-divider);padding-top:14px}
+.pw-inbox-panel .pw-remote-section-title h2{margin:0;font:600 1.05rem/1.45 var(--pw-font);color:var(--pw-ink)}
+.pw-inbox-panel .pw-remote-section-title>button{min-height:44px;min-width:44px}
+.pw-inbox-panel .pw-notification-attention,.pw-inbox-panel .pw-remote-message-group{display:grid;min-width:0;gap:10px}
+.pw-inbox-panel .pw-notification-group{gap:4px}
+.pw-inbox-panel .pw-notification-group-heading{padding-inline:4px}
+.pw-inbox-panel .pw-task-list{gap:0}
+.pw-inbox-panel .pw-task-row{width:100%;height:auto;min-width:0;min-height:58px;padding:9px 4px;border:0;border-radius:8px;box-shadow:none;background:transparent}
+.pw-inbox-panel .pw-task-row-copy{min-width:0;overflow-wrap:anywhere}
+.pw-inbox-panel .pw-task-row-status{flex:none}
+.pw-inbox-panel .pw-task-row-summary{font-size:.8125rem}
+.pw-inbox-original-line{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px;align-items:center;min-width:0;border-bottom:1px solid var(--pw-divider)}
+.pw-inbox-panel .pw-inbox-row-alt{min-width:44px;min-height:44px;padding:3px 6px;color:var(--pw-copy)}
+.pw-inbox-panel .pw-task-list>.pw-task-row+.pw-task-row{border-top:1px solid var(--pw-divider);border-radius:0}
+.pw-inbox-source{display:flex;align-items:center;flex-wrap:wrap;gap:4px}
+.pw-inbox-source>button{min-height:44px;color:var(--pw-copy)}
+.pw-inbox-source>button[aria-pressed=true]{background:var(--pw-selected);color:var(--pw-ink)}
+.pw-inbox-unread{margin-inline-start:4px;font-size:.75rem;white-space:nowrap;font-variant-numeric:tabular-nums}
+@media(forced-colors:active){.pw-inbox-lanes [aria-pressed=true],.pw-inbox-lanes [role=tab][aria-selected=true]{outline:1px solid Highlight;outline-offset:-2px}}
+.pw-inbox-lanes [role=tab][aria-selected=true] .text-accent-600{color:var(--pw-ink)}
+.pw-inbox-lanes [data-pw-motion-indicator]{background:var(--pw-ink)}

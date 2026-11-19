@@ -44,7 +44,7 @@ export function ChatNavigationMenu({title,navigationTrigger,isOpen,onOpenChange,
    </PopoverTrigger>:<span dir="auto">{title}</span>}</h1>
   <div ref={actionsGlass} className="pw-chat-navigation-actions pw-navigation-glass" role="group" aria-label="查找与导航">
    <IconButton icon={IconSearch} className="pw-chat-glass-action" aria-label="搜索工作" onClick={event=>{const trigger=event.currentTarget;choose(()=>onConversations(trigger))}}/>
-   <IconButton ref={triggerRef} icon={IconMenu} className="pw-chat-glass-action" aria-label={unread>0?`打开全局导航，${unread} 条未读通知`:'打开全局导航'} title="打开全局导航" aria-haspopup="dialog" data-unread={unread>0||undefined} onClick={()=>choose(onNavigation)}/>
+   <IconButton ref={triggerRef} icon={IconMenu} className="pw-chat-glass-action" aria-label={unread>0?`打开全局导航，${unread} 条外部消息未读`:'打开全局导航'} title="打开全局导航" aria-haspopup="dialog" data-unread={unread>0||undefined} onClick={()=>choose(onNavigation)}/>
   </div>
  </nav>;
 }

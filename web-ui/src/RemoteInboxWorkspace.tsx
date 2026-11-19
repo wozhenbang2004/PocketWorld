@@ -4,9 +4,13 @@ import { IconArrowLeft, IconArrowUpRight, IconAttention, IconCheck, IconLink, Ic
 import {Button,IconButton,SettingsDialog,TextField} from './forms-library';
 import {bridge} from './bridge';
 import './remote-inbox.css';
+import {Tabs,TabList,Tab,TabPanel} from './shell-library';
 import {NotificationTaskAttention} from './NotificationTaskAttention';
 import {NotificationTeamAttention,type TeamAttentionLocator} from './NotificationTeamAttention';
-export type NotificationViewMemory={remoteFilter?:'all'|'unread'|'issues'|'archived';teamCursor?:string;teamItemCursor?:string;teamPrior?:{run:string;item:string}[];teamFocus?:string;taskMode?:'attention'|'taskUpdates';taskCursor?:string;taskPrior?:string[];taskFocus?:string};
+export type InboxLane='attention'|'updates';
+export type UpdateSource='results'|'external';
+export type TaskInboxPage={cursor?:string;prior?:string[];focus?:string};
+export type NotificationViewMemory={lane?:InboxLane;updateSource?:UpdateSource;externalOpen?:string;externalUnreadRequest?:number;externalUnreadConsumed?:number;taskPages?:Partial<Record<'attention'|'taskUpdates',TaskInboxPage>>;remoteFilter?:'all'|'unread'|'issues'|'archived';teamCursor?:string;teamItemCursor?:string;teamPrior?:{run:string;item:string}[];teamFocus?:string;taskMode?:'attention'|'taskUpdates';taskCursor?:string;taskPrior?:string[];taskFocus?:string};
 
 type Event = {
   seq:number; source_key:string; kind:string; title:string; body:string;
@@ -33,6 +37,15 @@ function when(iso:string) {
   return Number.isFinite(ms)?new Date(ms).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}):'时间未知';
 }
 export default function RemoteInboxWorkspace({state,navigationTrigger,onBack,registerBack,onOpenTask,onOpenTeamAttention,memory}: {state?:State;onOpenTask:(id:string,review?:boolean)=>void;onOpenTeamAttention:(locator:TeamAttentionLocator)=>void;memory:NotificationViewMemory;navigationTrigger?:ReactNode;onBack:()=>void;registerBack?:(handler:(()=>boolean)|null)=>void}) {
+  const nativeEntry=state?.openRevision&&(state.selectedSeq||state.selectionError)?JSON.stringify([state.configId,state.openRevision,state.selectedSeq,state.selectionError]):'';
+  const openingExternal=!!nativeEntry&&nativeEntry!==memory.externalOpen,unreadRequest=memory.externalUnreadRequest||0;
+  const openingUnread=unreadRequest>0&&unreadRequest!==(memory.externalUnreadConsumed||0);
+  const [lane,setLane]=useState<InboxLane>(openingExternal||openingUnread?'updates':memory.lane||'attention'),[source,setSource]=useState<UpdateSource>(openingExternal||openingUnread?'external':memory.updateSource||'results');
+  const showLane=(next:InboxLane)=>{memory.lane=next;setLane(next)};
+  const showSource=(next:UpdateSource)=>{memory.updateSource=next;setSource(next)};
+  const external=lane==='updates'&&source==='external';
+  const unread=Number.isSafeInteger(state?.unread)&&Number(state?.unread)>0?Number(state?.unread):undefined;
+  const wantedEvent=useRef<{seq:number;config:string;revision:number;key?:string}|null>(null);
   const [endpoint,setEndpoint]=useState('');
   const [token,setToken]=useState('');
   const [pushToken,setPushToken]=useState('');
@@ -41,14 +54,27 @@ export default function RemoteInboxWorkspace({state,navigationTrigger,onBack,reg
   const [working,setWorking]=useState(false);
   const [message,setMessage]=useState('');
   const [error,setError]=useState('');
-  const [filter,setFilter]=useState<'all'|'unread'|'issues'|'archived'>(memory.remoteFilter||'all');
+  const [filter,setFilter]=useState<'all'|'unread'|'issues'|'archived'>(openingUnread&&!openingExternal?'unread':memory.remoteFilter||'all');
+  const chooseFilter=(next:typeof filter)=>{wantedEvent.current=null;setFilter(next)};
   useEffect(()=>{memory.remoteFilter=filter},[filter]);
   const entering=useRef(false),alive=useRef(true);
   const [disconnectConfirm,setDisconnectConfirm]=useState(false);
   useEffect(()=>{alive.current=true;return()=>{alive.current=false}},[]);
   useEffect(()=>{setError('');setMessage('');setToken('');setPushToken('');setDistributor('');setEndpoint(state?.endpoint||'');setDisconnectConfirm(false)},[state?.configId]);
-  useEffect(()=>{if(!state?.selectedSeq)return;const item=state.events?.find(item=>item.seq===state.selectedSeq);setFilter(item?.archived?'archived':'all')},[state?.openRevision]);
-  useEffect(()=>{if(!state?.selectedSeq)return;const row=list.current?.querySelector<HTMLElement>(`[data-motion-key="${state.selectedSeq}"]`);row?.scrollIntoView({block:'nearest'});row?.focus({preventScroll:true})},[state?.openRevision,filter]);
+  // A real Android notification names an external item, not a pending approval.
+  // Consume the visibility intent once, never the message's read/archive state.
+  useLayoutEffect(()=>{
+    if(!openingExternal&&!openingUnread)return;
+    memory.externalUnreadConsumed=unreadRequest;wantedEvent.current=null;
+    showLane('updates');showSource('external');
+    if(!openingExternal){setFilter('unread');return;}
+    memory.externalOpen=nativeEntry;
+    const item=state?.events?.find(row=>row.seq===state.selectedSeq);
+    if(state?.selectedSeq&&state.openRevision&&!state.selectionError){
+      wantedEvent.current={seq:state.selectedSeq,key:item?.source_key,config:state.configId||'',revision:state.openRevision};
+      setFilter(item?.archived?'archived':'all');
+    }
+  },[nativeEntry,unreadRequest,memory]);
   const list=useRef<HTMLElement>(null),configId=useId();
   const readFocus=useRef<{seq:number;index:number;origin:HTMLElement;identity:string}|null>(null);
   useEffect(()=>{if(state?.endpoint)setEndpoint(previous=>previous||state.endpoint||'')},[state?.endpoint]);
@@ -61,9 +87,20 @@ export default function RemoteInboxWorkspace({state,navigationTrigger,onBack,reg
       .filter(item=>filter==='archived'?item.archived:!item.archived&&(filter==='all'||filter==='unread'&&!item.read||filter==='issues'&&item.kind==='github_issue'))
       .sort((a,b)=>b.seq-a.seq);
   },[state?.events,filter]);
+  useLayoutEffect(()=>{
+    const target=wantedEvent.current;if(!external||!target)return;
+    if(target.config!==(state?.configId||'')||target.revision!==state?.openRevision||target.seq!==state?.selectedSeq){wantedEvent.current=null;return;}
+    const item=state?.events?.find(event=>event.seq===target.seq);
+    if(!item||(target.key!==undefined&&item.source_key!==target.key))return;
+    target.key=item.source_key;
+    if(item.archived&&filter!=='archived'){setFilter('archived');return;}
+    if(!entries.some(event=>event.seq===target.seq&&event.source_key===target.key))return;
+    const row=list.current?.querySelector<HTMLElement>(`[data-motion-key="${target.seq}"]`);
+    if(row){wantedEvent.current=null;row.scrollIntoView({block:'nearest'});row.focus({preventScroll:true})}
+  },[external,entries,filter,state?.configId,state?.openRevision,state?.selectedSeq]);
   const listIdentity=JSON.stringify([state?.configId||'',filter]);
   const listRevision=JSON.stringify(entries.map(item=>[item.seq,item.read,item.archived,item.priority]));
-  useCollectionMotion(list,listIdentity,listRevision,{active:!!state?.configured&&Array.isArray(state?.events)&&!configOpen});
+  useCollectionMotion(list,listIdentity,listRevision,{active:external&&!!state?.configured&&Array.isArray(state?.events)&&!configOpen});
   useLayoutEffect(()=>{
     const returning=readFocus.current;
     if(!returning)return;
@@ -104,19 +141,60 @@ export default function RemoteInboxWorkspace({state,navigationTrigger,onBack,reg
   }
   return <main className="pw-remote-inbox pw-page" aria-label="通知与待处理中心">
     <header className="pw-remote-inbox-head">
-      <div className="pw-remote-title"><IconButton icon={IconArrowLeft} aria-label="返回对话" onClick={onBack}/><h1>通知</h1></div>
+      <div className="pw-remote-title"><IconButton icon={IconArrowLeft} aria-label="返回上一页" onClick={onBack}/><h1>通知</h1></div>
       <div className="pw-remote-inbox-actions">
-        {state?.configured&&<><IconButton icon={IconRefresh} aria-label="同步通知" disabled={working} onClick={()=>void act('remoteInbox.sync')}/><IconButton icon={IconSettings} aria-label="通知连接与接收设置" aria-haspopup="dialog" aria-expanded={configOpen} aria-controls={configId} onClick={()=>setConfigOpen(true)}/></>}
+        {external&&state?.configured&&<><IconButton icon={IconRefresh} aria-label="同步通知" disabled={working} onClick={()=>void act('remoteInbox.sync')}/><IconButton icon={IconSettings} aria-label="通知连接与接收设置" aria-haspopup="dialog" aria-expanded={configOpen} aria-controls={configId} onClick={()=>setConfigOpen(true)}/></>}
         {navigationTrigger}
       </div>
     </header>
-    {state?.error&&<MotionFeedback identity={state.error} role="alert" className="pw-remote-note is-error">{state.error}</MotionFeedback>}
-    {error&&<MotionFeedback identity={error} role="alert" className="pw-remote-note is-error">{error}</MotionFeedback>}
-    {message&&<MotionFeedback identity={message} role="status" className="pw-remote-note">{message}</MotionFeedback>}
-    <NotificationTaskAttention enabled={state?.available===true} onOpenTask={onOpenTask} memory={memory}/>
-    <NotificationTeamAttention enabled={state?.available===true&&bridge.getState().capabilities.commands.includes('teams.attention')} onOpen={onOpenTeamAttention} memory={memory}/>
-    <section className="pw-remote-message-group" aria-label="远程消息"><header className="pw-remote-section-title"><h2>远程消息</h2><span>最近消息 · 最多 300 条，长消息会更少</span></header>
+    {external&&state?.error&&<MotionFeedback identity={state.error} role="alert" className="pw-remote-note is-error">{state.error}</MotionFeedback>}
+    {external&&!configOpen&&error&&<MotionFeedback identity={error} role="alert" className="pw-remote-note is-error">{error}</MotionFeedback>}
+    {external&&!configOpen&&message&&<MotionFeedback identity={message} role="status" className="pw-remote-note">{message}</MotionFeedback>}
+    <Tabs selectedKey={lane} onSelectionChange={key=>{wantedEvent.current=null;showLane(key==='updates'?'updates':'attention')}} className="pw-inbox-lanes">
+      <TabList aria-label="通知用途"><Tab id="attention">待我处理</Tab><Tab id="updates">更新记录</Tab></TabList>
+      <TabPanel id="attention" className="pw-inbox-panel">
+        <NotificationTaskAttention key="decisions" mode="attention" enabled={state?.available===true&&bridge.getState().capabilities.commands.includes('history.read')} onOpenTask={onOpenTask} memory={memory}/>
+        <NotificationTeamAttention enabled={state?.available===true&&bridge.getState().capabilities.commands.includes('teams.attention')} onOpen={onOpenTeamAttention} memory={memory}/>
+      </TabPanel>
+      <TabPanel id="updates" className="pw-inbox-panel">
+        <div className="pw-inbox-source" role="group" aria-label="更新来源"><Button variant="ghost" aria-pressed={source==='results'} onClick={()=>{wantedEvent.current=null;showSource('results')}}>工作结果</Button><Button variant="ghost" aria-pressed={source==='external'} onClick={()=>{wantedEvent.current=null;showSource('external')}}>外部消息{unread!==undefined&&<span className="pw-inbox-unread" aria-label={unread+' 条外部消息未读'}>{unread} 未读</span>}</Button></div>
+        {source==='results'?<NotificationTaskAttention key="outcomes" mode="taskUpdates" enabled={state?.available===true&&bridge.getState().capabilities.commands.includes('history.read')} onOpenTask={onOpenTask} memory={memory}/>:<section className="pw-remote-message-group" aria-label="外部消息">
+        <header className="pw-remote-section-title"><h2>外部消息</h2><span>最近接收 · 最多 300 条</span></header>
     {state?.selectionError&&<MotionFeedback identity={state.selectionError+String(state.openRevision)} role="alert" className="pw-remote-note is-error">{state.selectionError}</MotionFeedback>}
+
+    {(hasEvents||filter!=='all')&&<div className="pw-remote-list-toolbar">
+      <div role="group" aria-label="筛选通知" className="pw-remote-filters">
+        {([{key:'all',label:'全部'},{key:'unread',label:'未读'},{key:'issues',label:'开源 Issue'},{key:'archived',label:'已归档'}] as const).map(option=><Button key={option.key} variant="ghost" aria-pressed={filter===option.key} onClick={()=>chooseFilter(option.key)}>{option.label}</Button>)}
+      </div>
+      <Button variant="ghost" disabled={working||!entries.some(item=>!item.read)} onClick={()=>update(entries.filter(item=>!item.read),'read',true)}>当前已载入消息全部已读</Button>
+    </div>}
+    <section ref={list} className="pw-remote-list" aria-label="通知列表" tabIndex={-1}>
+      {entries.length===0?<div className="pw-remote-empty"><IconNotification size={30} aria-hidden/><h2>{!hasSnapshot?'尚未取得通知状态':filter==='unread'?'没有未读通知':filter==='archived'?'没有已归档通知':filter==='issues'?'没有开源 Issue 通知':state?.configured?'尚未收到外部消息':'尚未连接外部消息'}</h2>
+        <p>{!hasSnapshot?'连接与通知尚未读取完成，请核对当前状态后再继续。':state?.configured?'服务有新事件后会出现在这里。接收消息不会启动 Agent 或执行任务。':'连接自己的通知服务，接收 Issue、PR 回复和服务事件。'}</p>
+        {filter!=='all'?<Button variant="secondary" onClick={()=>chooseFilter('all')}>查看全部通知</Button>:hasSnapshot&&!state?.configured&&<Button leadingIcon={IconLink} disabled={working||state?.available===false} onClick={()=>setConfigOpen(true)}>连接通知服务</Button>}
+        {state?.available===false&&<p>当前状态不可用，请返回本机主人界面后重新进入。</p>}
+      </div>
+      :entries.map(item=><article key={item.seq} data-motion-key={String(item.seq)} tabIndex={-1} className="pw-remote-item" data-read={item.read?'true':'false'} data-selected={state?.selectedSeq===item.seq||undefined}>
+        <div className="pw-remote-icon">{item.priority==='attention'?<IconAttention size={18}/>:<IconNotification size={18}/>}</div>
+        <div className="pw-remote-item-main">
+          <div className="pw-remote-meta"><span>{item.origin}</span><span>{when(item.created_at)}</span>
+            {item.priority==='attention'&&<span className="pw-remote-urgent">优先关注</span>}
+            {!item.read&&<span className="pw-remote-unread">未读</span>}
+          </div>
+          <h3>{item.title}</h3>
+          {item.body&&<p>{item.body}</p>}
+          <div className="pw-remote-item-actions">
+            {safeUrl(item.url)&&<Button variant="ghost" disabled={working} onClick={()=>void act('remoteInbox.open',identity(item))}>查看来源 <IconArrowUpRight size={14}/></Button>}
+            {item.read?<Button variant="ghost" disabled={working} onClick={()=>update([item],'read',false)}>标记未读</Button>:<Button variant="ghost" disabled={working} onClick={()=>markRead(item.seq)}><IconCheck size={14}/>标记已读</Button>}
+            <Button variant="ghost" disabled={working} onClick={()=>update([item],'archived',!item.archived)}>{item.archived?'移回收件箱':'归档'}</Button>
+          </div>
+        </div>
+      </article>)}
+    </section>
+    {entries.some(item=>item.kind==='github_issue')&&<p className="pw-remote-footnote">Issue 未分配不等于可直接认领；贡献前请先核对仓库规则、评论和关联 PR。</p>}
+    </section>}</TabPanel>
+    </Tabs>
+    <SettingsDialog isOpen={configOpen} title="连接与接收设置" closeLabel="返回通知" onClose={()=>{if(!working){if(disconnectConfirm)setDisconnectConfirm(false);else setConfigOpen(false)}}}>
     {state?.notificationPermission&&(!state.notificationPermission.appEnabled||!state.notificationPermission.normalEnabled||!state.notificationPermission.attentionEnabled)&&<div className="pw-remote-note">{!state.notificationPermission.appEnabled?'系统通知已关闭；应用内消息仍保留。':'部分远程消息渠道已关闭；对应消息可能不会显示系统提醒。'}<Button variant="ghost" onClick={()=>void act('remoteInbox.notificationSettings')}>系统通知设置</Button></div>}
     {state?.configured&&<section className="pw-remote-status" aria-label="接收状态">
       <span className="pw-remote-dot" aria-hidden="true"/>
@@ -124,7 +202,6 @@ export default function RemoteInboxWorkspace({state,navigationTrigger,onBack,reg
         <small>{state?.lastSync?.status==='waiting_network'?'等待网络，尚未尝试本次同步':state?.lastSync?.status==='credentials_required'?'凭据已失效，请重新配置':state?.lastSync?.status==='connection_failed'?'最近一次同步失败，请检查网络后重试':state?.lastSync?.status==='more_pending'?'仍有历史消息待补收':state?.lastSync?.lastSuccessAt?'最近成功同步 '+when(new Date(state.lastSync.lastSuccessAt).toISOString()):'尚无成功同步记录'}。系统限制、离线或进程停止均可能延迟消息。</small></MotionFeedback>
       <MotionFeedback initial={false} identity={Number(state?.unread||0)} className="pw-remote-count">{Number(state?.unread||0)} <small>未读</small></MotionFeedback>
     </section>}
-    <SettingsDialog isOpen={configOpen} title="连接与接收设置" closeLabel="返回通知" onClose={()=>{if(!working){if(disconnectConfirm)setDisconnectConfirm(false);else setConfigOpen(false)}}}>
     <section id={configId} className="pw-remote-config" aria-label="通知服务配置">
       <p className="pw-remote-config-intro">连接自己的 HTTPS 事件服务，接收 Issue、PR 回复及服务消息。</p>
       <div className="pw-remote-fields">
@@ -167,36 +244,5 @@ export default function RemoteInboxWorkspace({state,navigationTrigger,onBack,reg
         :<Button variant="secondary" disabled={working} onClick={()=>void act('remoteInbox.startLive')}>开启接收</Button>}</div>
     </section>}
     </SettingsDialog>
-    {(hasEvents||filter!=='all')&&<div className="pw-remote-list-toolbar">
-      <div role="group" aria-label="筛选通知" className="pw-remote-filters">
-        {([{key:'all',label:'全部'},{key:'unread',label:'未读'},{key:'issues',label:'开源 Issue'},{key:'archived',label:'已归档'}] as const).map(option=><Button key={option.key} variant="ghost" aria-pressed={filter===option.key} onClick={()=>setFilter(option.key)}>{option.label}</Button>)}
-      </div>
-      <Button variant="ghost" disabled={working||!entries.some(item=>!item.read)} onClick={()=>update(entries.filter(item=>!item.read),'read',true)}>当前已载入消息全部已读</Button>
-    </div>}
-    <section ref={list} className="pw-remote-list" aria-label="通知列表" tabIndex={-1}>
-      {entries.length===0?<div className="pw-remote-empty"><IconNotification size={30} aria-hidden/><h2>{!hasSnapshot?'尚未取得通知状态':filter==='unread'?'没有未读通知':filter==='archived'?'没有已归档通知':filter==='issues'?'没有开源 Issue 通知':state?.configured?'还没有收到通知':'把新的消息收在这里'}</h2>
-        <p>{!hasSnapshot?'连接与通知尚未读取完成，请核对当前状态后再继续。':state?.configured?'服务有新事件后会出现在这里。接收消息不会启动 Agent 或执行任务。':'连接自己的通知服务，接收 Issue、PR 回复和服务事件。'}</p>
-        {filter!=='all'?<Button variant="secondary" onClick={()=>setFilter('all')}>查看全部通知</Button>:hasSnapshot&&!state?.configured&&<Button leadingIcon={IconLink} disabled={working||state?.available===false} onClick={()=>setConfigOpen(true)}>连接通知服务</Button>}
-        {state?.available===false&&<p>当前状态不可用，请返回本机主人界面后重新进入。</p>}
-      </div>
-      :entries.map(item=><article key={item.seq} data-motion-key={String(item.seq)} tabIndex={-1} className="pw-remote-item" data-read={item.read?'true':'false'} data-selected={state?.selectedSeq===item.seq||undefined}>
-        <div className="pw-remote-icon">{item.priority==='attention'?<IconAttention size={18}/>:<IconNotification size={18}/>}</div>
-        <div className="pw-remote-item-main">
-          <div className="pw-remote-meta"><span>{item.origin}</span><span>{when(item.created_at)}</span>
-            {item.priority==='attention'&&<span className="pw-remote-urgent">优先关注</span>}
-            {!item.read&&<span className="pw-remote-unread">未读</span>}
-          </div>
-          <h3>{item.title}</h3>
-          {item.body&&<p>{item.body}</p>}
-          <div className="pw-remote-item-actions">
-            {safeUrl(item.url)&&<Button variant="ghost" disabled={working} onClick={()=>void act('remoteInbox.open',identity(item))}>查看来源 <IconArrowUpRight size={14}/></Button>}
-            {item.read?<Button variant="ghost" disabled={working} onClick={()=>update([item],'read',false)}>标记未读</Button>:<Button variant="ghost" disabled={working} onClick={()=>markRead(item.seq)}><IconCheck size={14}/>标记已读</Button>}
-            <Button variant="ghost" disabled={working} onClick={()=>update([item],'archived',!item.archived)}>{item.archived?'移回收件箱':'归档'}</Button>
-          </div>
-        </div>
-      </article>)}
-    </section>
-    {entries.some(item=>item.kind==='github_issue')&&<p className="pw-remote-footnote">Issue 未分配不等于可直接认领；贡献前请先核对仓库规则、评论和关联 PR。</p>}
-    </section>
   </main>;
 }

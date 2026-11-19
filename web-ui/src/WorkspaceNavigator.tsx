@@ -15,7 +15,7 @@ type Props = {
   searchOpen: boolean; openSearch: () => void; closeSearch: () => void; search: ReactNode; searchTrigger: Ref<HTMLButtonElement>;
   memory: OwnerNavigationMemory; navigate: (key: string) => void; openConversation?: (id: string) => void;
   organizeConversation?: (id: string) => void; newConversation?: () => void; newPending: boolean;
-  profileName: string; avatar?: string; canProfile: boolean;
+  profileName: string; avatar?: string; canProfile: boolean; openUnread?: () => void;
 };
 
 const first = ['butler', 'tasks', 'artifacts', 'projects', 'devices'];
@@ -37,7 +37,7 @@ const names: Record<string, string> = { devices: '设备', artifacts: '成果' }
  * items and conversation IDs onto three faces of its existing drawer or desktop rail. */
 export function WorkspaceNavigator({items, selected, recent, selectedConversation, desktop, compact, onToggleCompact,
   directoryOpen, setDirectoryOpen, searchOpen, openSearch, closeSearch, search, searchTrigger, memory, navigate,
-  openConversation, organizeConversation, newConversation, newPending, profileName, avatar, canProfile}: Props) {
+  openConversation, organizeConversation, newConversation, newPending, profileName, avatar, canProfile, openUnread}: Props) {
   const face: Face = searchOpen ? 'records' : directoryOpen ? 'directory' : 'home';
   const mini = compact && face === 'home';
   const scroll = useRef<HTMLDivElement>(null), directoryButton = useRef<HTMLButtonElement>(null), back = useRef<HTMLButtonElement>(null);
@@ -130,7 +130,7 @@ export function WorkspaceNavigator({items, selected, recent, selectedConversatio
         </span>{!mini && <span className="pw-navigation-profile-copy"><strong dir="auto">{profile}</strong></span>}</span>
       </Button>
       {Number.isSafeInteger(unread) && unread > 0 && !inbox?.disabled && <IconButton icon={IconNotification}
-        aria-label={unread + ' 条未读通知，打开通知'} title="未读通知" data-owner-unread onClick={() => choose('remoteInbox')}/>}
+        aria-label={unread + ' 条外部消息未读，打开外部未读'} title="外部未读消息" data-owner-unread onClick={() => {remember();if(openUnread)openUnread();else navigate('remoteInbox')}}/>}
       <IconButton icon={IconSettings} aria-label="设置" title="设置" aria-current={selected === 'settings' ? 'page' : undefined} onClick={() => choose('settings')}/>
     </div></footer>}
   </>;
