@@ -474,7 +474,13 @@ public final class AdaptivePhonePort implements PhonePort {
                 ||ObservationSafety.unknownEffect(result.optString("error",result.optString("code")));
     }
     private synchronized void dropRefusedSurface(NativeSensitiveStep.OwnerRequired owner,RunControl control){
-        try{if(lastObservedOwnerSurface(control)!=null)owner.retainSurfaceKey(latest);}catch(Exception unavailable){/* Unknown stays read-only. */}
+        try{
+            // This is an internal refusal key, not the owner-facing observation. Where an
+            // app policy stamps the accepted tree, require its original revision today.
+            if(lastObservedOwnerSurface(control,rule->source instanceof dev.pocketengine.phone.access.GuardedPhonePort guarded
+                    ? guarded.referencePolicyCurrent()&&rule==guarded.policyRevision()
+                    : rule==-1)!=null)owner.retainSurfaceKey(latest);
+        }catch(Exception unavailable){/* Unknown stays read-only. */}
         clearReferences();
     }
     @Override public synchronized void clearReferences() {
