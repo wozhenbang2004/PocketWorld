@@ -11,24 +11,38 @@ import {attachmentActionPayload,attachmentDocumentKey,attachmentFrame,fileBytes,
 import './attachment-workspace.css';
 import './attachment-page.css';
 
-type Props={state:Json;registerBack:(handler:(()=>boolean)|null)=>void;onReturnToSearch?:()=>void;onAskButler?:(reference:Json)=>void;onReturnFocus?:(event:Event)=>void;openTaskId?:string};
+export type FileDraftTarget={key:string;epoch:number;revision:number;conversationId:string;label:string};
+type Props={
+ state:Json;registerBack:(handler:(()=>boolean)|null)=>void;onReturnToSearch?:()=>void;onReturnFocus?:(event:Event)=>void;openTaskId?:string;
+ draftTarget?:FileDraftTarget;
+ onStageFile?:(reference:Json,target:FileDraftTarget,stillCurrent:()=>boolean)=>Promise<boolean>;
+ onOpenDraft?:(reference:Json,target:FileDraftTarget,closeOriginal:()=>Promise<unknown>)=>Promise<boolean>;
+};
+type DraftHandoff={scope:string;target:FileDraftTarget;phase:'adding'|'added'|'opening'|'failed';error?:string};
 const fileOrigins:Record<string,string>={
  created_text:'生成的文本',created_document:'生成的文档',document_extract:'文档摘录',generated_media:'生成的媒体',
  derived_media:'原件加工成果',managed_build_output:'构建产物',remote_result_snapshot:'已保存的远端成果',
 };
 /** One file surface for conversation attachments, task outcomes and the private library. */
-export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onAskButler,onReturnFocus,openTaskId}:Props) {
+export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onReturnFocus,openTaskId,draftTarget,onStageFile,onOpenDraft}:Props) {
  const incoming=obj(state.attachmentWorkspace),retained=useRef<Json|null>(null);
  if(!incoming.open)retained.current=null;else if(incoming.ready)retained.current=incoming;
  // Keep the same editor mounted while native window authority is temporarily revoked.
  const view=incoming.open&&!incoming.ready&&retained.current?{...retained.current,ready:false}:incoming,file=obj(view.file),snapshot=obj(view.snapshot);
  const [error,setError]=useState(''),[pending,setPending]=useState(0),[page,setPage]=useState('1');
+ const [draftHandoff,setDraftHandoff]=useState<DraftHandoff|null>(null);
+ const draftFlight=useRef<DraftHandoff|null>(null);
  const [previewContinuation,setPreviewContinuation]=useState('');
  const scroller=useRef<HTMLDivElement>(null),heading=useRef<HTMLDivElement>(null),positions=useRef(new Map<string,number>()),returningToSearch=useRef(false);
  const continuationHeading=useRef<HTMLDivElement>(null);
  const hasOriginal=Object.keys(obj(view.originalFile)).length>0;
  const mode=view.documentDraft?'edit':view.comparison?'compare':view.processingOpen?'process':hasOriginal?'original':view.documentOpen?'read':file.id?'detail':'list';
  const location=JSON.stringify([view.windowId,view.taskId,file.id,file.sha256,mode]),locationRef=useRef(location);locationRef.current=location;
+ // Success remains attached to the same draft after native receipt advances its revision.
+ const draftScope=JSON.stringify([view.windowId,view.taskId,file.id,file.sha256,draftTarget?.key,draftTarget?.epoch,draftTarget?.conversationId]);
+ const currentDraftScope=useRef(draftScope);currentDraftScope.current=draftScope;
+ const handoff=draftHandoff?.scope===draftScope?draftHandoff:null;
+ const draftBusy=draftHandoff?.phase==='adding'||draftHandoff?.phase==='opening';
  const rememberPosition=()=>{if(scroller.current)positions.current.set(locationRef.current,scroller.current.scrollTop)};
  useLayoutEffect(()=>{
   if(!view.open){positions.current.clear();return;}
@@ -37,9 +51,9 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onAskBu
  },[view.open,location]);
  useEffect(()=>{if(view.open)returningToSearch.current=false},[view.windowId]);
  const alive=useRef(true),tail=useRef<Promise<unknown>>(Promise.resolve()),beforeBack=useRef<(()=>Promise<AttachmentFrame|undefined>)|null>(null),latest=useRef(view);latest.current=view;
- const act=useCallback((command:string,args:Json={},after?:AttachmentFrame)=>{
+ const act=useCallback((command:string,args:Json={},after?:AttachmentFrame,showError=true)=>{
   let payload:Json;
-  try{payload=attachmentActionPayload(after??attachmentFrame(view),command,structuredClone(args))}catch(cause){setError(cause instanceof Error?cause.message:'原文件页面已变化');return Promise.reject(cause)}
+  try{payload=attachmentActionPayload(after??attachmentFrame(view),command,structuredClone(args))}catch(cause){if(showError)setError(cause instanceof Error?cause.message:'原文件页面已变化');return Promise.reject(cause)}
   const windowId=payload.windowId,epoch=bridge.getDocumentEpoch();setPending(x=>x+1);setError('');
   const operation=tail.current.catch(()=>{}).then(async()=>{
    const current=obj(bridge.getState().state.attachmentWorkspace);
@@ -49,31 +63,69 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onAskBu
    return result;
   });
   tail.current=operation;
-  return operation.catch(cause=>{if(alive.current)setError(cause instanceof Error?cause.message:'原文件操作未确认');throw cause}).finally(()=>{if(alive.current)setPending(x=>Math.max(0,x-1))});
+  return operation.catch(cause=>{if(alive.current&&showError)setError(cause instanceof Error?cause.message:'原文件操作未确认');throw cause}).finally(()=>{if(alive.current)setPending(x=>Math.max(0,x-1))});
  },[view.windowId,view.frameId,view.ready]);
  const run=(command:string,args:Json={})=>{
   rememberPosition();
   const leavesEditor=['openOriginal','continueDocument','openProcessing','compareParent','read','ocr','selectFile','attach','chooseSource','newDocument','continueTask','refresh'].includes(command);
   void Promise.resolve(leavesEditor?beforeBack.current?.():undefined).then(frame=>act(command,args,frame)).catch(()=>{});
  };
- const goBack=useCallback(()=>{if(!latest.current.open)return false;if(latest.current.busy||!latest.current.ready)return true;if(scroller.current)positions.current.set(locationRef.current,scroller.current.scrollTop);const save=beforeBack.current;void Promise.resolve(save?.()).then(frame=>act('back',{},frame)).catch(()=>{});return true},[act]);
+ const goBack=useCallback(()=>{
+  const current=latest.current,transfer=draftFlight.current;
+  if(!current.open)return false;
+  if(current.busy||!current.ready||transfer&&(transfer.phase==='opening'||!current.originalFile))return true;
+  if(scroller.current)positions.current.set(locationRef.current,scroller.current.scrollTop);
+  void Promise.resolve(beforeBack.current?.()).then(frame=>act('back',{},frame)).catch(()=>{});
+  return true;
+ },[act]);
  const registerBeforeBack=useCallback((handler:(()=>Promise<AttachmentFrame|undefined>)|null)=>{beforeBack.current=handler},[]);
  useEffect(()=>{alive.current=true;registerBack(goBack);return()=>{alive.current=false;registerBack(null)}},[registerBack,goBack]);
  useEffect(()=>{setError('');setPage('1')},[view.windowId,file.id,file.sha256]);
  const busy=pending>0||!!view.busy||!view.ready,privateFiles=!view.group&&!view.team,hasFile=typeof file.id==='string';
+ const canStage=privateFiles&&hasFile&&typeof file.sha256==='string'&&!!draftTarget&&!!onStageFile&&!!onOpenDraft;
  const title=hasOriginal?'查看原件':view.comparison?'原图对照':view.documentDraft?'编辑文档':view.processingOpen?'处理原件':view.documentOpen?'按来源读取':hasFile?'文件来源':view.team?'成员文件成果':view.taskId?'原任务的文件与成果':'文件与成果';
  const close=()=>{
-  if(!view.ready)return;
+  if(!view.ready||draftFlight.current)return;
   const returnToWork=view.fromWorkResult===true&&!!view.taskId&&openTaskId!==view.taskId;
   if(view.busy){if(!returnToWork)run('close');return}
   void Promise.resolve(beforeBack.current?.()).then(frame=>act(returnToWork?'continueTask':'close',{},frame)).catch(()=>{});
  };
- const returnToSearch=()=>{if(busy||!onReturnToSearch)return;returningToSearch.current=true;void Promise.resolve(beforeBack.current?.()).then(frame=>act('close',{},frame)).then(()=>onReturnToSearch()).catch(()=>{returningToSearch.current=false})};
- const askButler=()=>{
-  if(busy||!privateFiles||!hasFile||!onAskButler||typeof file.sha256!=='string')return;
+ const returnToSearch=()=>{if(busy||draftFlight.current||!onReturnToSearch)return;returningToSearch.current=true;void Promise.resolve(beforeBack.current?.()).then(frame=>act('close',{},frame)).then(()=>onReturnToSearch()).catch(()=>{returningToSearch.current=false})};
+ const handOffFile=async()=>{
+  if(busy||draftFlight.current||!canStage||!draftTarget||!onStageFile||!onOpenDraft)return;
+  const target=handoff?.phase==='added'?handoff.target:draftTarget;
+  const added=handoff?.phase==='added';
   const reference={kind:'artifact',id:file.id,sha256:file.sha256},epoch=bridge.getDocumentEpoch();
-  returningToSearch.current=true;
-  void Promise.resolve(beforeBack.current?.()).then(frame=>act('close',{},frame)).then(()=>{if(bridge.getDocumentEpoch()===epoch&&!document.hidden)onAskButler(reference)}).catch(()=>{returningToSearch.current=false});
+  const readSource=()=>obj(bridge.getState().state.attachmentWorkspace);
+  const stillCurrent=()=>{
+   const current=readSource(),selected=obj(current.file);
+   return alive.current&&currentDraftScope.current===draftScope&&bridge.getDocumentEpoch()===epoch&&!document.hidden&&
+    current.open===true&&current.ready===true&&current.windowId===view.windowId&&current.taskId===view.taskId&&selected.id===file.id&&selected.sha256===file.sha256;
+  };
+  if(!stillCurrent())return;
+  let closing:Promise<unknown>|undefined;
+  const closeOriginal=()=>closing??=(async()=>{
+   if(!stillCurrent())throw new Error('原件位置已变化，请重新打开原件。');
+   rememberPosition();
+   await beforeBack.current?.();
+   const frame=attachmentFrame(readSource());
+   if(!stillCurrent()||!frame)throw new Error('原件位置已变化，请重新打开原件。');
+   returningToSearch.current=true;
+   try{return await act('close',{},frame,false)}catch(error){returningToSearch.current=false;throw error}
+  })();
+  const request:DraftHandoff={scope:draftScope,target,phase:added?'opening':'adding'};
+  draftFlight.current=request;
+  setDraftHandoff(request);
+  try{
+   const accepted=await (added?onOpenDraft(reference,target,closeOriginal):onStageFile(reference,target,stillCurrent));
+   if(!accepted)throw new Error(added?`「${target.label}」草稿暂未打开，请重新核对后再试。`:`文件尚未确认加入「${target.label}」草稿，请重试。`);
+   if(stillCurrent())setDraftHandoff({...request,phase:'added'});
+  }catch(error){
+   if(stillCurrent())setDraftHandoff({...request,phase:added?'added':'failed',error:error instanceof Error?error.message:'草稿操作尚未确认，请重试。'});
+  }finally{
+   draftFlight.current=null;
+   if(alive.current&&!stillCurrent())setDraftHandoff(current=>current===request?null:current);
+  }
  };
  const objectTitle=String(file.name||view.documentDraft?.name||snapshot.artifact?.path||(view.taskId?'这次工作的成果':'文件与成果'));
  const objectVersion=Number.isSafeInteger(file.sourceVersion)&&file.sourceVersion>0?`来源版本 ${file.sourceVersion}`:hasFile?'固定原件':'';
@@ -93,8 +145,13 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onAskBu
  useLayoutEffect(()=>{
   if(mode==='original'&&continuationVisible)focusContinuation();
  },[mode,continuationVisible,continuationKey]);
- const reuseFile=privateFiles&&hasFile&&onAskButler&&typeof file.sha256==='string';
- const reuseAction=reuseFile&&<Button variant="secondary" disabled={busy} onClick={askButler}>带到对话草稿</Button>;
+ const reuseAction=canStage&&draftTarget&&<>
+  <Button variant="secondary" className="pw-file-draft-action" disabled={busy||draftBusy} aria-busy={draftBusy||undefined} onClick={()=>void handOffFile()}>
+   {handoff?.phase==='opening'?'正在打开话题草稿…':handoff?.phase==='adding'?'正在加入话题草稿…':handoff?.phase==='added'?'查看话题草稿':`加入「${draftTarget.label}」草稿`}
+  </Button>
+  {handoff?.error?<p className="pw-file-draft-status pw-error" role="alert">{handoff.error}</p>:
+   handoff?.phase==='added'&&<p className="pw-file-draft-status" role="status">已加入「{handoff.target.label}」草稿。</p>}
+ </>;
  const exportAction=<Button variant="secondary" disabled={busy||view.exportPending} onClick={()=>run('export')}>{view.exportPending?'等待导出选择器':'导出到手机'}</Button>;
  const fileMenu=<ContextMenuTrigger key={`${file.id}:${file.sha256}`}>{({open})=><>
   <IconButton icon={IconMore} aria-label="更多文件操作" disabled={busy} onClick={event=>open(event.currentTarget)}/>
@@ -110,7 +167,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onAskBu
  const original=obj(view.originalFile);
  const sourceFiles=resultFilesOnly?[]:rows(snapshot.sources),savedFiles=rows(snapshot.artifacts),hasLibraryFiles=sourceFiles.length+savedFiles.length>0;
  const libraryActions=privateFiles&&!resultFilesOnly&&<div className="pw-action-row pw-file-library-actions"><Button variant={hasLibraryFiles?'secondary':'primary'} leadingIcon={IconUpload} disabled={busy} onClick={()=>run('import')}>导入文件</Button><Button variant="ghost" leadingIcon={IconFileAdd} disabled={busy||!!view.pendingDocumentTask} onClick={()=>run('newDocument')}>创建文档</Button>{view.taskId&&!view.choosingSource&&<Button variant="ghost" disabled={busy} onClick={()=>run('chooseSource')}>从附件库关联</Button>}</div>;
- return <Drawer.Root open={view.open===true} onOpenChange={open=>{if(!open)close()}} direction="right" handleOnly dismissible={false} shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-file-page-underlay"/><Drawer.Content className="pw-drawer pw-file-workspace pw-file-page" data-file-object-id={file.id||undefined} data-file-version={file.sha256||undefined} data-file-view={mode} onOpenAutoFocus={event=>{event.preventDefault();heading.current?.focus({preventScroll:true})}} onCloseAutoFocus={event=>{if(returningToSearch.current)event.preventDefault();onReturnFocus?.(event)}} onEscapeKeyDown={event=>{event.preventDefault();goBack()}} onInteractOutside={event=>{event.preventDefault()}} aria-describedby="pw-file-page-description"><header className="pw-drawer-header pw-file-page-header">{mode==='original'?<Button variant="ghost" size="small" leadingIcon={IconArrowLeft} disabled={busy} onClick={goBack}>来源与操作</Button>:<IconButton icon={IconArrowLeft} aria-label={backLabel} title={backLabel} onClick={goBack} disabled={!!view.busy}/>} <div ref={heading} tabIndex={-1}><Drawer.Title>{objectTitle}</Drawer.Title><Drawer.Description id="pw-file-page-description">{[hasFile||view.documentDraft?title:'成果工作区',fileOrigin,fileRunProvenance(file.runProvenance),objectVersion,view.group?'原群任务':view.team?'原团队分工':view.taskId?'来自原工作':'私人文件库'].filter(Boolean).join(' · ')}</Drawer.Description></div>{onReturnToSearch&&<Button variant="ghost" size="small" disabled={busy} onClick={returnToSearch}>返回搜索</Button>}<IconButton icon={IconClose} aria-label="返回原工作区" title="返回原工作区" disabled={pending>0} onClick={close}/></header><div className="pw-drawer-body pw-file-page-scroll" ref={scroller} onScroll={rememberPosition}>
+ return <Drawer.Root open={view.open===true} onOpenChange={open=>{if(!open)close()}} direction="right" handleOnly dismissible={false} shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-file-page-underlay"/><Drawer.Content className="pw-drawer pw-file-workspace pw-file-page" data-file-object-id={file.id||undefined} data-file-version={file.sha256||undefined} data-file-view={mode} onOpenAutoFocus={event=>{event.preventDefault();heading.current?.focus({preventScroll:true})}} onCloseAutoFocus={event=>{if(returningToSearch.current)event.preventDefault();onReturnFocus?.(event)}} onEscapeKeyDown={event=>{event.preventDefault();goBack()}} onInteractOutside={event=>{event.preventDefault()}} aria-describedby="pw-file-page-description"><header className="pw-drawer-header pw-file-page-header">{mode==='original'?<Button variant="ghost" size="small" leadingIcon={IconArrowLeft} disabled={busy||draftHandoff?.phase==='opening'} onClick={goBack}>来源与操作</Button>:<IconButton icon={IconArrowLeft} aria-label={backLabel} title={backLabel} onClick={goBack} disabled={!!view.busy||draftBusy}/>} <div ref={heading} tabIndex={-1}><Drawer.Title>{objectTitle}</Drawer.Title><Drawer.Description id="pw-file-page-description">{[hasFile||view.documentDraft?title:'成果工作区',fileOrigin,fileRunProvenance(file.runProvenance),objectVersion,view.group?'原群任务':view.team?'原团队分工':view.taskId?'来自原工作':'私人文件库'].filter(Boolean).join(' · ')}</Drawer.Description></div>{onReturnToSearch&&<Button variant="ghost" size="small" disabled={busy||draftBusy} onClick={returnToSearch}>返回搜索</Button>}<IconButton icon={IconClose} aria-label="返回原工作区" title="返回原工作区" disabled={pending>0||draftBusy} onClick={close}/></header><div className="pw-drawer-body pw-file-page-scroll" ref={scroller} onScroll={rememberPosition}>
  {view.busy&&<div className="pw-action-row"><p role="status">正在核对原记录…</p><Button variant="ghost" onClick={()=>run('cancel')}>停止本次读取</Button></div>}
  {(error||view.error)&&<p className="pw-error" role="alert">{error||view.error}</p>}{view.notice&&<p role="status">{view.notice}</p>}
  {!view.ready&&<p>回到当前工作区后继续查看，原文件、记录和当前输入保留。</p>}
