@@ -55,22 +55,36 @@ internal class PocketWebPhoneComposer(
     fun clearReviews() { phoneReviews.clear(); reviewGeneration++ }
     fun documentChanged() { presentationEpoch++ }
 
-    private fun blankReceiptHere(original: JSONObject) = !original.has("draftRequestId") ||
-        !controller.hasChannelPhoneOrigin && controller.webPrivateOwnerVisible() && controller.state.conversationId.isNullOrBlank() &&
-        controller.composerDraft?.key == original.optString("composerKey") && controller.composerDraft?.conversationId.isNullOrBlank()
-    private fun blankTextElsewhere() = phoneDraft.isNotBlank() && phoneStartReceipt?.let {it.has("draftRequestId") && !blankReceiptHere(it)}==true
+    // A submitted private goal belongs to its original composer, not whichever chat is later on screen.
+    private data class LinkedGoalOwner(val composer:String,val conversation:String)
+    private var heldLinkedGoal:LinkedGoalOwner?=null
+    private fun linkedOwner(original:JSONObject)=LinkedGoalOwner(original.optString("composerKey"),original.optString("conversationId"))
+    private fun linkedHere(owner:LinkedGoalOwner)=owner.composer.isNotBlank() && owner.conversation.isNotBlank() &&
+        !controller.hasChannelPhoneOrigin && controller.webPrivateOwnerVisible() && controller.state.conversationId==owner.conversation &&
+        controller.composerDraft?.key==owner.composer && controller.composerDraft?.conversationId==owner.conversation
+    private fun receiptHere(original: JSONObject) = when {
+        original.has("draftRequestId") -> !controller.hasChannelPhoneOrigin && controller.webPrivateOwnerVisible() && controller.state.conversationId.isNullOrBlank() &&
+            controller.composerDraft?.key==original.optString("composerKey") && controller.composerDraft?.conversationId.isNullOrBlank()
+        original.has("requestId") -> linkedHere(linkedOwner(original))
+        else -> true
+    }
+    private fun textElsewhere() = phoneDraft.isNotBlank() && (heldLinkedGoal?.let{!linkedHere(it)}==true ||
+        phoneStartReceipt?.let {it.has("draftRequestId") && !receiptHere(it)}==true)
+    private fun checkFirstOnly(original:JSONObject,goal:String)=original.has("requestId") && receiptHere(original) &&
+        original.optString("status")=="accepted" && !original.optBoolean("admitted") && goal.isNotBlank() && original.optString("goal").trim()==goal.trim()
     fun snapshot(): JSONObject {
         val pin=picked
-        val source=when { blankTextElsewhere() -> "elsewhere"; pinLost && !draftHere() -> "elsewhere"; pinLost -> "unverified"; pin==null -> "none"; !draftHere() -> "elsewhere"; !pickedCurrent(pin) -> "changed"; else -> "current" }
-        val receipt=phoneStartReceipt?.takeIf { source!="elsewhere" && blankReceiptHere(it) && (!it.optBoolean("ownerPickedMessage") ||
+        val source=when { textElsewhere() -> "elsewhere"; pinLost && !draftHere() -> "elsewhere"; pinLost -> "unverified"; pin==null -> "none"; !draftHere() -> "elsewhere"; !pickedCurrent(pin) -> "changed"; else -> "current" }
+        val receipt=phoneStartReceipt?.takeIf { source!="elsewhere" && receiptHere(it) && (!it.optBoolean("ownerPickedMessage") ||
             !controller.hasChannelPhoneOrigin && it.optString("draftConversationId")==controller.state.conversationId) }
         return JSONObject().put("text", if(source=="elsewhere") "" else phoneDraft)
         .put("sourceState",source).put("sourceEditTicket",sourceEditTicket).put("revision", phoneDraftRevision)
+        .put("firstCheckOnly",receipt?.let{checkFirstOnly(it,phoneDraft)}==true)
         .put("epoch", presentationEpoch).put("phone", phoneIntent).put("mode", phoneExecutionMode).put("startReceipt", receipt).put("channelOrigin", controller.hasChannelPhoneOrigin)
     }
 
     fun appendVoice(text: String) {
-        check(!blankTextElsewhere() && !pinLost && (picked == null || draftHere())) { "另一段对话的原手机草稿仍保留，没有加入录音文字" }
+        check(!textElsewhere() && !pinLost && (picked == null || draftHere())) { "另一段对话的原手机草稿仍保留，没有加入录音文字" }
         phoneDraft = if (phoneDraft.isBlank()) text else phoneDraft + "\n" + text
         phoneDraftRevision++
         clearReviews()
@@ -85,10 +99,11 @@ internal class PocketWebPhoneComposer(
     fun editDraft(args: JSONObject) {
         require(requiredInt(args, "epoch") == presentationEpoch) { "原手机输入窗口已变化，草稿仍保留" }
         val text = requiredString(args, "text", true); require(text.length <= 12000)
-        check(!blankTextElsewhere() && (picked == null && !pinLost || draftHere()) && (!pinLost || text.isBlank())) { "所选原话属于其他窗口或来源已变化，原草稿没有被覆盖" }
+        check(!textElsewhere() && (picked == null && !pinLost || draftHere()) && (!pinLost || text.isBlank())) { "所选原话属于其他窗口或来源已变化，原草稿没有被覆盖" }
         if(args.has("sourceEditTicket") || picked!=null || pinLost)check(requiredLong(args,"sourceEditTicket")==sourceEditTicket &&
             requiredString(args,"draftConversation",true)==controller.state.conversationId.orEmpty()) { "手机草稿来源已切换，未采用其他窗口的迟到输入" }
         if(text.isBlank()&&(picked!=null||pinLost)){picked=null;pinLost=false;++sourceEditTicket}
+        if(text.isBlank())heldLinkedGoal=null
         phoneDraft = text; phoneDraftRevision++; clearReviews()
     }
 
@@ -109,7 +124,7 @@ internal class PocketWebPhoneComposer(
         check(message.role == "user" && message.sourceRevision > 0 && message.sourceRevision == requiredLong(args, "sourceRevision")
             && message.ownerOriginalLocator?.optString("conversationId") == conversation) { "请从这段私人对话中的原主人消息准备手机任务" }
         check(message.textOnlyHandoffEligible && message.attachmentCount == 0 && message.attachments.isEmpty() && message.attachmentFiles.isEmpty()) { "这条请求含附件或来源/预览引用，或尚未核实完整资料，不能只复制文字；请在手机目标中整理完整任务、联系人和内容" }
-        check(!blankTextElsewhere()) { "另一份新对话仍保留原手机目标，没有替换它" }
+        check(!textElsewhere()) { "另一份新对话仍保留原手机目标，没有替换它" }
         val goal = if(keep) phoneDraft.trim() else message.content.trim()
         require(goal.isNotEmpty() && goal.length <= 4000) { "手机任务目标需为 1–4000 字；请自行整理完整目标，不会截断原请求" }
         check(phoneDraft.isBlank() || phoneDraft.trim() == goal) { "已有另一份手机草稿，请先保留或处理；没有覆盖原文字" }
@@ -120,7 +135,7 @@ internal class PocketWebPhoneComposer(
         if(!keep)phoneDraft = goal
         phoneDraftRevision++
         phoneIntent = true
-        phoneStartReceipt = null
+        phoneStartReceipt = null;heldLinkedGoal=null // the explicitly selected original message now owns this text
         clearReviews()
         return snapshot().put("staged", true).put("taskCreated", false).put("executionStarted", false)
             .put("message", if(keep) "草稿文字未修改，已关联你刚选的这条原话。仍须审阅后才会提交。" else "原请求已放入手机目标草稿。核对完整目标、联系人和内容，再审阅执行位置与范围；尚未启动或发送。")
@@ -140,9 +155,10 @@ internal class PocketWebPhoneComposer(
                 && requiredLong(expected, "origin") == controller.phoneOriginRevision) { "原手机草稿已变化，请返回核对原目标；没有准备其他任务" }
         }
         require(!controller.state.phoneSubmitting && controller.state.activeTaskId == null) { "请先处理当前工作；没有创建第二个手机任务" }
-        check(!blankTextElsewhere()) { "请回到保存手机目标的原草稿；没有替换原请求" }
+        check(!textElsewhere()) { "请回到保存手机目标的原草稿；没有替换原请求" }
         val prior=phoneStartReceipt
-        if(prior!=null && blankReceiptHere(prior)){
+        if(prior!=null && receiptHere(prior)){
+            check(!checkFirstOnly(prior,goal)){"这段原目标已经建单，请查询这次启动。编辑成新目标后仍可重新审阅。"}
             check(prior.optString("status") !in setOf("pending","unknown") || !prior.has("requestId") && !prior.has("draftRequestId") && prior.optString("goal").trim()!=goal.trim()){"原手机请求的启动结果待核对，请先查询原请求。草稿仍保留。"}
             check(!(prior.has("draftRequestId") && prior.optString("status")=="accepted" && !prior.optBoolean("admitted") && prior.optString("goal").trim()==goal.trim())){"这个目标已有原任务，请打开该任务；没有重复提交。"}
         }
@@ -258,7 +274,8 @@ internal class PocketWebPhoneComposer(
     /** Equivalent to the former Activity saveable presentation state, never an execution grant. */
     fun savePresentation(): JSONObject = JSONObject().put("phoneDraft", phoneDraft)
         .put("phoneDraftRevision", phoneDraftRevision).put("phoneIntent", phoneIntent).put("phoneExecutionMode", phoneExecutionMode)
-        .put("phoneStartReceipt", phoneStartReceipt).put("phoneSourceFormat",1)
+        .put("phoneStartReceipt", phoneStartReceipt).put("phoneSourceFormat",1).put("privateGoalOwnerFormat",1)
+        .also { out->heldLinkedGoal?.let{out.put("privateGoalOwner",JSONObject().put("composerKey",it.composer).put("conversationId",it.conversation))} }
         .also { out -> picked?.let { out.put("phoneDraftOriginal", it.locator()) }; if(pinLost)out.put("phoneSourceLost",true) }
 
     fun restorePresentation(saved: JSONObject?) {
@@ -272,6 +289,13 @@ internal class PocketWebPhoneComposer(
         phoneIntent = saved.optBoolean("phoneIntent")
         phoneExecutionMode = saved.optString("phoneExecutionMode").takeIf { it in setOf("background", "main_screen") } ?: "background"
         phoneStartReceipt = saved.optJSONObject("phoneStartReceipt")?.let { JSONObject(it.toString()) }
+        heldLinkedGoal=if(phoneDraft.isBlank())null else {
+            saved.optJSONObject("privateGoalOwner")?.let(::linkedOwner) ?:when {
+                saved.has("privateGoalOwner") -> LinkedGoalOwner("","") // malformed state is never a cross-chat fallback
+                !saved.has("privateGoalOwnerFormat") -> phoneStartReceipt?.takeIf{it.has("requestId")&&!it.optBoolean("admitted")}?.let(::linkedOwner)
+                else -> null
+            }
+        }
         // Restoring a view cannot prove whether its previous worker completed.
         if (phoneStartReceipt?.optString("status") == "pending") phoneStartReceipt?.put("status", "unknown")
     }
@@ -296,11 +320,11 @@ internal class PocketWebPhoneComposer(
         }
 
     private fun consumePhoneDraft(receipt: JSONObject) {
-        if (receipt.optString("status") == "accepted" && (!receipt.has("draftRequestId") || receipt.optBoolean("admitted")) && receipt.optLong("draftRevision", -1) == phoneDraftRevision &&
+        if (receipt.optString("status") == "accepted" && (!receipt.has("draftRequestId") && !receipt.has("requestId") || receipt.optBoolean("admitted")) && receipt.optLong("draftRevision", -1) == phoneDraftRevision &&
             receipt.optInt("draftEpoch", -1) == presentationEpoch && receipt.optInt("composerEpoch", -1) == controller.composerViewEpoch &&
             receipt.optString("composerKey") == controller.composerDraft?.key.orEmpty() &&
             receipt.optString("draftConversationId") == controller.state.conversationId.orEmpty() && phoneDraft.trim() == receipt.optString("goal").trim()) {
-            phoneDraft = ""; if(picked!=null||pinLost)++sourceEditTicket;picked=null;pinLost=false;phoneDraftRevision++
+            phoneDraft = "";heldLinkedGoal=null; if(picked!=null||pinLost)++sourceEditTicket;picked=null;pinLost=false;phoneDraftRevision++
         }
     }
 
@@ -319,10 +343,12 @@ internal class PocketWebPhoneComposer(
         val absent=blank && same && error==null && result!=null && result.optString("status")=="not_found" && result.optBoolean("queryOnly")
         val accepted=error==null && task!=null && same && (!linked && !blank || result?.optBoolean("accepted")==true)
         // An allocation seen before an uncertain SQL write is not proof that a task is available to open.
-        if(blank||linked)for(key in listOf("taskId","runId","epoch","admitted","taskStatus","canRetire"))receipt.remove(key)
+        if(blank||linked)for(key in listOf("taskId","runId","epoch","admitted","admissionState","taskStatus","canRetire"))receipt.remove(key)
         if(same && task!=null && (!blank && !linked || accepted))receipt.put("taskId",task)
         if(same && result!=null && (!blank && !linked || accepted)){
             for(key in listOf("runId","epoch","admitted"))if(result.has(key))receipt.put(key,result.get(key))
+            if(linked && result.optString("admissionState") in setOf("admitted","service_denied","component_unconfirmed","run_recorded","no_run","unconfirmed"))
+                receipt.put("admissionState",result.getString("admissionState"))
             if(result.has("status"))receipt.put("taskStatus",result.get("status"))
         }
         if(absent)receipt.put("canRetire",true)
@@ -337,6 +363,8 @@ internal class PocketWebPhoneComposer(
             }
             accepted && linked -> when(result?.optString("admissionState")){
                 "admitted" -> "Android 已接纳原私聊首次执行的服务请求；不代表已经读屏、操作或完成。"
+                "service_denied" -> "Android 明确拒绝了这次原服务启动请求。目标文字保留，没有重试。"
+                "component_unconfirmed" -> "系统没有返回这次请求的原服务组件，不能确认已启动。目标文字保留，没有重试。"
                 "run_recorded" -> "查到原私聊的首次执行登记，尚无可核对的 Android 服务接纳回执。"
                 "no_run" -> "原私聊的手机目标已保存，但没有首次执行记录；没有重新启动。"
                 else -> "已核对原私聊的手机目标，首次准入记录仍不可确认。"
@@ -367,7 +395,7 @@ internal class PocketWebPhoneComposer(
         fun current() = originalWindow() && phoneIntent && shownAt==presentationEpoch && controller.webPrivateOwnerVisible() &&
             !controller.hasChannelPhoneOrigin && controller.state.conversationId.isNullOrBlank() && controller.composerDraft?.key==composer
         val receipt=phoneStartReceipt
-        val fromReceipt=receipt!=null && blankReceiptHere(receipt) && receipt.optString("status")=="accepted" &&
+        val fromReceipt=receipt!=null && receiptHere(receipt) && receipt.optString("status")=="accepted" &&
             receipt.optString("draftRequestId")==request && receipt.optString("taskId")==request && receipt.optString("runId")==run && receipt.optInt("epoch",-1)==1
         val fromRecent=shownRecentScope==Triple(composer,presentationEpoch,controller.displayedPhoneWindowVersion()) && shownRecentFirst[request]==run
         require(current() && (fromReceipt||fromRecent)) { "请回原私人草稿，重新查看这条首次轮次记录" }
@@ -412,10 +440,10 @@ internal class PocketWebPhoneComposer(
             phoneStartReceipt?.optString("reviewHandle")==original.optString("reviewHandle")
         if(original.has("draftRequestId")){
             checkedPayload(args,if(retire)setOf("draftRequestId","confirmed") else setOf("draftRequestId"))
-            val request=requiredString(args,"draftRequestId");require(current() && blankReceiptHere(original) && original.getString("draftRequestId")==request){"请查询原草稿中的手机请求"}
+            val request=requiredString(args,"draftRequestId");require(current() && receiptHere(original) && original.getString("draftRequestId")==request){"请查询原草稿中的手机请求"}
             if(retire)require(requiredBoolean(args,"confirmed") && original.optBoolean("canRetire") && original.optString("status")=="unknown"){"先查询原请求；已有任务不会被关闭"}
-            controller.lookupDraftPhone(request,original.getString("composerKey"),retire,false,{current() && blankReceiptHere(original)}) { result,error ->
-                if(current() && blankReceiptHere(original)){
+            controller.lookupDraftPhone(request,original.getString("composerKey"),retire,false,{current() && receiptHere(original)}) { result,error ->
+                if(current() && receiptHere(original)){
                     val settled=phoneStartReceipt?.takeIf {it.optString("status")=="accepted" && it.optBoolean("admitted") && result?.optBoolean("admitted")!=true}
                     complete(id,settled?:recordPhoneReceipt(original,result,error),null);publishState()
                 }
@@ -425,10 +453,18 @@ internal class PocketWebPhoneComposer(
         check(!retire){"不能关闭其他来源的手机请求"}
         checkedPayload(args,setOf("requestId","conversationId"))
         require(original.optString("requestId")==requiredString(args,"requestId") && original.optString("conversationId")==requiredString(args,"conversationId")){"请查询原手机启动回执中的请求"}
-        require(controller.state.conversationId==original.getString("conversationId") && current()){"请从原对话查询手机任务"}
+        require(receiptHere(original) && current()){"请从原对话查询手机任务"}
         controller.queryConversationPhoneStart(original.getString("requestId"),original.getString("conversationId")) { result,error ->
-            if(current() && controller.state.conversationId==original.getString("conversationId")){complete(id,recordPhoneReceipt(original,result,error),null);publishState()}
-            else complete(id,null,"原对话窗口已变化")
+            if(current() && receiptHere(original)){
+                if(error!=null||result==null)complete(id,null,"这次没有取得原启动的新回执，未提交新任务")
+                else {
+                val known=phoneStartReceipt?.takeIf { it.optString("reviewHandle")==original.optString("reviewHandle") && it.optString("status")=="accepted" &&
+                    it.optString("admissionState") in setOf("admitted","service_denied","component_unconfirmed") && result.optString("admissionState")=="run_recorded" &&
+                    result.optString("requestId")==it.optString("requestId") && result.optString("conversationId")==it.optString("conversationId") &&
+                    result.optString("runId")==it.optString("runId") && result.optInt("epoch",-1)==1 && it.optInt("epoch",-1)==1 }
+                complete(id,known?:recordPhoneReceipt(original,result,null),null);publishState()
+                }
+            } else complete(id,null,"原对话窗口已变化")
         }
     }
 
@@ -439,13 +475,18 @@ internal class PocketWebPhoneComposer(
         require(phoneReviewCurrent(review)) { "原对话、目标窗口或执行范围已变化，请重新核对" }
         require(!controller.state.phoneSubmitting && controller.state.activeTaskId == null) { "已有原工作正在处理，未重复开始" }
         val original = phoneReceiptIdentity(handle, review)
+        if(review.linked!=null&&phoneDraft.isNotBlank())heldLinkedGoal=linkedOwner(original)
         val completed: (JSONObject?, String?) -> Unit = { result, error ->
             val retained=phoneStartReceipt
-            if(retained?.optString("reviewHandle")==handle && original.has("draftRequestId") && retained.optString("status") in setOf("accepted","rejected") && (retained.optBoolean("admitted") || result?.optBoolean("admitted")!=true)){
-                if(blankReceiptHere(retained))complete(id,retained,null) else complete(id,null,"原手机回执留在发起草稿")
+            val knownChat=original.has("requestId") && retained?.optString("status")=="accepted" &&
+                retained.optString("admissionState") in setOf("admitted","service_denied","component_unconfirmed")
+            if(retained?.optString("reviewHandle")==handle && knownChat && (error!=null||result?.optString("admissionState")!=retained.optString("admissionState"))){
+                if(receiptHere(retained))complete(id,retained,null) else complete(id,null,"这次启动回执保留在原私聊")
+            } else if(retained?.optString("reviewHandle")==handle && original.has("draftRequestId") && retained.optString("status") in setOf("accepted","rejected") && (retained.optBoolean("admitted") || result?.optBoolean("admitted")!=true)){
+                if(receiptHere(retained))complete(id,retained,null) else complete(id,null,"原手机回执留在发起草稿")
             } else if(retained?.optString("reviewHandle")==handle) {
                 val receipt=recordPhoneReceipt(original,result,error)
-                if(blankReceiptHere(receipt))complete(id,receipt,null) else complete(id,null,"原手机回执留在发起草稿")
+                if(receiptHere(receipt))complete(id,receipt,null) else complete(id,null,"原手机回执留在发起草稿")
                 publishState()
             } else complete(id,null,"原启动窗口已变化，未覆盖已核对的回执")
         }

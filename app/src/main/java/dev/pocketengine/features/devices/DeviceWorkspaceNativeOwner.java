@@ -351,6 +351,10 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
         }
         public JSONObject historyLinks(String id) throws Exception { tasks.get(id, false); return tasks.deviceTasks().childOverview(id, 24); }
         public JSONObject historyPage(String id,String target,String after) throws Exception { return tasks.deviceTasks().childHistoryPage(id,target,after,24); }
+        public JSONObject closedReceivedPhoneGoals(String caller,String operation)throws Exception{
+            DeviceIdentity.LocalIdentity local=existingIdentity();if(local==null)throw new SecurityException("本机身份不可核对");
+            return tasks.deviceTasks().closedReceivedPhoneGoals(local.deviceId(),local.instanceId(),caller,operation);
+        }
         public JSONObject waitingPhoneGoals(String afterCaller,String afterOp,boolean results)throws Exception {
             DeviceIdentity.LocalIdentity local=existingIdentity();if(local==null)throw new SecurityException("本机原设备身份不可读取");
             return tasks.deviceTasks().waitingPhoneGoals(local.deviceId(),local.instanceId(),afterCaller,afterOp,results);
@@ -382,6 +386,9 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
             return new NativeDeviceWorkspaceHost.HistoryAction() {
                 public JSONObject view() throws Exception { return nativeWindow.view(); }
                 public JSONObject query() throws Exception { JSONObject result = nativeWindow.query(); app.pushTask(id); changed(); return result; }
+                public JSONObject checkLocalExportedFile() throws Exception {
+                    return nativeWindow.checkLocalExportedFile(dev.pocketengine.features.attachments.AttachmentRepository.get(app).book);
+                }
                 public JSONObject queryPhoneGoalResult() throws Exception { return nativeWindow.queryPhoneGoalResult(); }
                 public JSONObject requestStop() throws Exception {
                     nativeWindow.view();

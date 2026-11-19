@@ -60,6 +60,12 @@ class ComposeActivity : ComponentActivity() {
     // A legacy result has no request nonce and cannot authorize any current export.
     @Suppress("unused")
     private val legacyOutcomeExportPicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { }
+    private val formalFilePicker=AttachmentExportPicker(activityResultRegistry,"formal_project_file_export"){id,uri->
+        if(acceptBusinessResult("formalFile:$id"))runCatching{controller.formalFileExports.picked(id,uri)}.onFailure{controller.formalFileExports.discardUnconfirmedPicker(id)}
+    }
+    internal fun chooseFormalFileTarget(id:String,mime:String,name:String):OutcomeExportLaunch {
+        check(businessCurrent());armBusinessPicker("formalFile:$id");return formalFilePicker.launch(id,mime,name)
+    }
     private val outcomeExportPicker = AttachmentExportPicker(activityResultRegistry){requestId,uri->if (acceptBusinessResult("outcome:$requestId")) controller.attachmentOutcomes.exportResult(requestId,uri)}
     private fun restoreOutcomeDocument(requestId:String){
         if (!businessCurrent()) return
@@ -477,5 +483,5 @@ class ComposeActivity : ComponentActivity() {
         controller.projectGitImports.save(outState)
         super.onSaveInstanceState(outState)
     }
-    override fun onDestroy() { developerLogExporter.shutdown(); if (::webHost.isInitialized) webHost.close(); attachmentPicker.close(); outcomeExportPicker.close(); if (functionalPackDocumentSlot.isInitialized()) functionalPackDocuments.close(); if (sourceDocuments.isInitialized()) sourceDocuments.value.close();workingFilePickers.values.toList().forEach { it.unregister() };workingFilePickers.clear();if (::controller.isInitialized) runCatching { controller.detach() }; businessMounted=false; if (::media.isInitialized) media.close(); super.onDestroy() }
+    override fun onDestroy() { developerLogExporter.shutdown(); if (::webHost.isInitialized) webHost.close(); attachmentPicker.close(); outcomeExportPicker.close(); formalFilePicker.close(); if (functionalPackDocumentSlot.isInitialized()) functionalPackDocuments.close(); if (sourceDocuments.isInitialized()) sourceDocuments.value.close();workingFilePickers.values.toList().forEach { it.unregister() };workingFilePickers.clear();if (::controller.isInitialized) runCatching { controller.detach() }; businessMounted=false; if (::media.isInitialized) media.close(); super.onDestroy() }
 }

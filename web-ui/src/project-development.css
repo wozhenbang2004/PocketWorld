@@ -19,3 +19,5 @@
 .pw-checkout-review-diff { max-height: 45dvh; overflow: auto; white-space: pre; tab-size: 2; }
 
 .pw-host-file-comparison{padding:0;list-style:none}.pw-host-file-comparison li{display:grid;gap:.18rem;padding:.35rem 0}.pw-host-file-comparison code{overflow-wrap:anywhere}.pw-host-file-comparison span{font-size:.85em;opacity:.75}
+
+.pw-formal-file-delivery{margin-block:.35rem;overflow-wrap:anywhere}.pw-formal-file-delivery .pw-form-actions{align-items:center;flex-wrap:wrap}

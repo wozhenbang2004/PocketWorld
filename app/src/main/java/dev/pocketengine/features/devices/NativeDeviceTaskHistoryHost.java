@@ -33,6 +33,8 @@ public final class NativeDeviceTaskHistoryHost {
                 && original.taskId().equals(wire.optString("parentTaskId"))){
                 String tool=invocation.optString("toolName"),effect=invocation.optString("effect");
                 if("command.run".equals(tool)&&"write".equals(effect))view.put("directWorkspaceCommand",true);
+                if("workspace.export".equals(tool)&&"read".equals(effect)&&original.directExportForLocalBook(local.deviceId()))
+                    view.put("canCheckLocalExportedFile",true).put("exportRequestRunId",wire.getString("runId")).put("exportRequestEpoch",wire.getInt("executorEpoch"));
                 if(OwnerWindowsFileDelivery.source(wire,local.deviceId(),local.instanceId()))view.put("directWorkspaceFileDelivery",true);
                 if(("workspace.read".equals(tool)||"workspace.list".equals(tool))&&"read".equals(effect)){
                     JSONObject arguments=invocation.optJSONObject("arguments");
@@ -43,6 +45,9 @@ public final class NativeDeviceTaskHistoryHost {
             }
             if(directPhoneGoal(wire))view.put("phoneGoalResult",true).put("localPhoneResultPath",localPhoneResultPath(wire));
             require();return view;
+        }
+        public JSONObject checkLocalExportedFile(dev.pocketengine.features.attachments.AttachmentBook book)throws Exception{
+            require();JSONObject result=dev.pocketengine.features.devices.transport.OwnerReceivedFileBook.check(book,original,local.deviceId(),io);require();return result;
         }
         private boolean directPhoneGoal(JSONObject wire) {
             return DeviceProtocol.isDirectPhoneGoal(wire,local.deviceId(),original.taskId(),original.operationId());

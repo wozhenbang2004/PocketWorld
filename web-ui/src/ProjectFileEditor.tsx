@@ -1,3 +1,4 @@
+import { ProjectFormalFileDelivery } from './ProjectFormalFileDelivery';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { IconArrowLeft, IconCopy, IconRefresh } from './icons';
 import { Button, TextAreaField } from './forms-library';
@@ -40,7 +41,10 @@ export function ProjectFileEditor({ path, version, draft, state, conflict, mode,
     <header className="pw-file-heading"><div><h2 className="pw-file-name">{path.split('/').at(-1)}</h2><p className="pw-file-path">{path.includes('/')?path.slice(0,path.lastIndexOf('/')):'项目根目录'}</p><p>版本 {draft?.version ?? version}<span className={draft?.dirty ? 'pw-file-dirty' : ''}>{draft?.dirty ? ' · 未保存' : ' · 当前文件'}</span></p></div>{draft?.dirty && <span className="pw-file-state-dot" aria-hidden="true"/>}</header>
     {state.fileLoading ? <div className="pw-loading-file" aria-busy="true"><ShimmerText>正在读取文件</ShimmerText><Skeleton width="85%" height={13}/><Skeleton width="65%" height={13}/><Skeleton width="94%" height={13}/></div> : state.fileReady && draft ? <>
       {state.fileSaving && <ProgressBar label="正在保存当前文件" isIndeterminate showValueLabel={false} size="sm"/>}
-      {conflict && <div className="pw-file-notice" role="alert"><p>原文件版本已变化。当前草稿仍保留，请比较后再决定。</p><Button variant="ghost" leadingIcon={IconCopy} onClick={copy}>复制保留的草稿</Button></div>}
+      {state.fileReady && !state.fileSaving && version>0 && can('projects.fileExport.review') && <ProjectFormalFileDelivery
+      key={String(state.projectId)+':'+path+':'+version} projectId={state.projectId} projectName={state.projects?.find((row:Data)=>row.id===state.projectId)?.name||'当前项目'}
+      path={path} version={version} dirty={draft?.dirty===true}/>}
+    {conflict && <div className="pw-file-notice" role="alert"><p>原文件版本已变化。当前草稿仍保留，请比较后再决定。</p><Button variant="ghost" leadingIcon={IconCopy} onClick={copy}>复制保留的草稿</Button></div>}
       {state.fileError && <MotionFeedback identity={state.fileError} className="pw-error" role="alert">{state.fileError}</MotionFeedback>}
       {adoption.message && <MotionFeedback identity={adoption.message} className={adoption.unknown ? 'pw-error' : 'pw-muted'} role={adoption.unknown ? 'alert' : 'status'}>{adoption.message}</MotionFeedback>}
       <Tabs selectedKey={mode} onSelectionChange={key => switchMode(key as FileLayer)} className="pw-file-tabs">

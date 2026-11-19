@@ -4,27 +4,28 @@ import time
 import device_protocol as protocol
 from device_pairing import validate_grant
 from windows_command_receipt import project as command_receipt
-from windows_received_job import COMMAND, FILE, admission
+from windows_received_job import COMMAND, EXPORT, FILE, admission
+from windows_workspace_export import PROFILE as EXPORT_PROFILE, project as workspace_export, show as show_export
 from windows_received_file import PROFILE as FILE_PROFILE, project as workspace_file
 from windows_workspace_read import PROFILE as READ_PROFILE, project as workspace_read
 
 BATCH = """SELECT rid,operation_id,fingerprint,updated_at,CASE WHEN
     ((json_extract(doc,'$.protocol')='native-device-command-v1' AND json_extract(doc,'$.audience.toolName')='command.run')
-     OR (json_extract(doc,'$.protocol')='native-device-tool-v1' AND json_extract(doc,'$.audience.toolName') IN ('workspace.list','workspace.read','workspace.receive')))
+     OR (json_extract(doc,'$.protocol')='native-device-tool-v1' AND json_extract(doc,'$.audience.toolName') IN ('workspace.list','workspace.read','workspace.receive','workspace.export')))
     AND json_extract(doc,'$.audience.callerDeviceId')=?
     AND json_extract(doc,'$.audience.originDeviceId')=json_extract(doc,'$.audience.callerDeviceId')
     THEN json_extract(doc,'$.audience.toolName') END FROM
     (SELECT rowid rid,operation_id,fingerprint,last_status,updated_at,CASE WHEN json_valid(details) THEN details END AS doc
      FROM operations WHERE rowid<? ORDER BY rowid DESC LIMIT 64) ORDER BY rid DESC"""
 
-TOOLS = {COMMAND: "白名单命令", FILE: "接收所选文件", "workspace.list": "查看目录", "workspace.read": "读取文本"}
+TOOLS = {COMMAND: "白名单命令", FILE: "接收所选文件", EXPORT: "手机请求取走文件", "workspace.list": "查看目录", "workspace.read": "读取文本"}
 LABEL = {"queued": "已在这台电脑排队", "running": "这台电脑已启动命令", "exited_zero": "原命令以 0 退出",
          "exited_nonzero": "原命令以非零码退出", "stopped": "原命令已停止，之前的影响未撤回",
          "not_started": "原执行器确认未启动进程", "unknown": "原命令的执行结果仍待核对",
          "accepted_only": "已接单，原执行文件未能核对"}
 
 
-def local_record(view, peer, item, *, read=False, revision=None, archive=False, locate=False, ticket=None, held=None):
+def local_record(view, peer, item, *, read=False, revision=None, archive=False, locate=False, ticket=None, held=None, export_guard=None):
     # This is the unlocked receiver owner's local view, never a synthetic MTLS
     # history permission. Admit only the direct source and its still-current original read scope.
     if not view._peer_current(peer): return None
@@ -33,7 +34,7 @@ def local_record(view, peer, item, *, read=False, revision=None, archive=False, 
         row = manager.ledger.execute("SELECT fingerprint,job_id,last_status,details FROM operations WHERE rowid=? AND operation_id=?",
                                      (item[0], operation)).fetchone()
         if not row or row[0] != item[2]: return None
-        original = admission(manager, operation, row)
+        original = admission(manager, operation, row, owner_export=True)
         if not original: return None
         source, accepted = original
         now = manager.now()
@@ -51,6 +52,10 @@ def local_record(view, peer, item, *, read=False, revision=None, archive=False, 
             return None
         if revision is not None and manager.jobs.get(row[1], {}).get("nativeDeviceRevision") != revision:
             return None
+        if export_guard is not None or read and source["toolName"]==EXPORT:
+            if source["toolName"]!=EXPORT or locate or archive: return None
+            summary=workspace_export(receiver,manager,operation,row,original,grant,now)
+            return summary.get("_guard")==export_guard if export_guard is not None else summary
         if locate:
             from windows_received_location import access
             return access(manager,operation,row,original,grant,now,revision,ticket,read)
@@ -68,6 +73,11 @@ def show(view, peer, item):
     phase = receipt["phase"]
     until = time.monotonic() + 60
     def current(): return time.monotonic() < until and bool(local_record(view, peer, item, revision=receipt.get("revision")))
+    if receipt["profile"] == EXPORT_PROFILE:
+        def export_current():
+            return time.monotonic()<until and bool(local_record(view,peer,item,revision=receipt.get("revision"),export_guard=receipt.get("_guard")))
+        show_export(view,receipt,export_current)
+        return
     if receipt["profile"] == FILE_PROFILE:
         titles={"receipt_only":"接过这次文件投递，落盘未核实","receiving":"原传输正在等候或接收字节",
                 "target_unconfirmed":"原文件写入结果未知，请勿补发","not_dispatched":"Windows 确认未派发目标替换",

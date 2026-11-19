@@ -352,6 +352,20 @@ public final class TaskStoreDeviceTasks {
         public String taskId(){return id;}public String operationId(){return operation;}public JSONObject originalWire()throws Exception{return new JSONObject(wire);}
         public String targetDeviceId()throws Exception{return originalWire().getString("targetDeviceId");}public String grantId()throws Exception{return originalWire().getString("grantId");}public JSONObject resourceBinding()throws Exception{return originalWire().getJSONObject("resourceBinding");}
         public void requireCurrent()throws Exception{issuer.requireOwnerHistory(this);}
+        /** Used only for a private owner's local Book lookup. No active receiving grant or route is issued. */
+        public boolean directExportForLocalBook(String localDevice)throws Exception{
+            synchronized(issuer.owner){requireCurrent();JSONObject w=originalWire(),parent=issuer.task(id),a=w.getJSONObject("arguments");
+                return "owner".equals(parent.optString("actorId"))&&"private".equals(parent.optString("spaceId"))&&parent.optJSONObject("origin")==null
+                    &&"ToolInvocation".equals(w.optString("messageType"))&&"tool.invoke".equals(w.optString("method"))&&"workspace-v1".equals(w.optString("capabilityVersion"))
+                    &&"workspace".equals(w.getJSONObject("resourceBinding").optString("kind"))&&"workspace.export".equals(a.optString("toolName"))&&"read".equals(a.optString("effect"))
+                    &&localDevice.equals(w.optString("callerDeviceId"))&&localDevice.equals(w.optString("originDeviceId"))&&id.equals(w.optString("rootTaskId"))
+                    &&id.equals(w.optString("parentTaskId"))&&id.equals(w.optString("localTaskId"))&&operation.equals(w.optString("operationId"));
+            }
+        }
+        public JSONObject exportedFileForLocalBook(String localDevice)throws Exception{
+            synchronized(issuer.owner){if(!directExportForLocalBook(localDevice))throw new SecurityException("这不是本机私人原任务的直接文件导出");
+                JSONObject w=originalWire();return issuer.recordedFileDescriptor(id,operation,w,w.getString("targetDeviceId"),w.getString("instanceId"),false,true);}
+        }
         public JSONObject view()throws Exception{requireCurrent();JSONObject original=originalWire();return new JSONObject().put("taskId",id).put("operationId",operation).put("targetDeviceId",original.getString("targetDeviceId")).put("instanceId",original.getString("instanceId")).put("argumentsDigest",original.getString("argumentsDigest")).put("resourceBinding",resourceBinding()).put("readOnly",true).put("newRun",false).put("retrySubmitted",false).put("unknownRefunded",false);}
     }
     public OwnerHistoryEvidence ownerHistoryEvidence(String id,String originalOperation)throws Exception{
@@ -415,15 +429,31 @@ public final class TaskStoreDeviceTasks {
         if(!"ToolInvocation".equals(wire.optString("messageType"))||!java.util.Set.of("workspace.export","workspace.project.export").contains(wire.getJSONObject("arguments").optString("toolName"))
             ||!approval.receivingGrant().targetDeviceId().equals(wire.getString("targetDeviceId"))||!approval.receivingGrant().grantId().equals(wire.getString("grantId"))
             ||!dev.pocketengine.features.devices.DeviceProtocol.resourceEquals(wire.getJSONObject("resourceBinding"),approval.resourceBinding()))throw new SecurityException("不是原已选范围的明确文件导出");
-        JSONObject saved;try(Cursor row=db.rawQuery("SELECT receipt FROM operations WHERE task_id=? AND operation_id=? AND run_id=? AND state='receipt'",new String[]{approval.id,operation,wire.getString("runId")})){
+        return recordedFileDescriptor(approval.id,operation,wire,peer.deviceId(),approval.receivingGrant().targetInstanceId(),project,false);
+    }
+    /** Fixed descriptor already authenticated at this exact local submission. Alone this is not a file, route or permission. */
+    private JSONObject recordedFileDescriptor(String id,String operation,JSONObject wire,String target,String instance,boolean project,boolean localBook)throws Exception{
+        JSONObject saved;try(Cursor row=db.rawQuery("SELECT receipt FROM operations WHERE task_id=? AND operation_id=? AND run_id=? AND state='receipt'",new String[]{id,operation,wire.getString("runId")})){
             if(!row.moveToFirst()||row.isNull(0))throw new SecurityException("没有原SQL已核文件操作");saved=new JSONObject(row.getString(0));}
         JSONObject accepted=saved.getJSONObject("nativeDeviceAcceptedBinding"),send=saved.getJSONObject("nativeDeviceSend"),typed=accepted.getJSONObject("verifiedReceipt");
         if(!"write_claimed".equals(send.optString("state"))||!operation.equals(accepted.getString("sourceOperationId"))||!wire.getString("argumentsDigest").equals(accepted.getString("operationArgumentsDigest"))
-            ||!peer.deviceId().equals(accepted.getString("executorDeviceId"))||!"reported".equals(typed.optString("effectState"))||!"succeeded".equals(typed.optString("status")))throw new SecurityException("文件缺少原已发送/已接受/成功结果证据");
+            ||!target.equals(accepted.getString("executorDeviceId"))||!"reported".equals(typed.optString("effectState"))||!"succeeded".equals(typed.optString("status")))throw new SecurityException("文件缺少原已发送/已接受/成功结果证据");
+        if(localBook){
+            dev.pocketengine.features.devices.DeviceProtocol.validateMessage(typed);
+            JSONObject audience=typed.getJSONObject("audience");
+            if(!"OperationReceipt".equals(typed.optString("messageType"))||!Boolean.TRUE.equals(typed.opt("accepted"))||!"operation".equals(audience.optString("kind"))
+                ||!operation.equals(typed.optString("operationId"))||!operation.equals(audience.optString("objectId"))||!target.equals(typed.optString("executorDeviceId"))
+                ||!instance.equals(typed.optString("instanceId"))||!wire.getString("argumentsDigest").equals(typed.optString("argumentsDigest"))
+                ||!wire.getString("argumentsDigest").equals(audience.optString("argumentsDigest"))||!wire.getString("runId").equals(audience.optString("requestRunId"))
+                ||wire.getLong("executorEpoch")!=audience.getLong("requestExecutorEpoch")||wire.getLong("authorizationEpoch")!=audience.getLong("authorizationEpoch")
+                ||!dev.pocketengine.features.devices.DeviceProtocol.resourceEquals(wire.getJSONObject("resourceBinding"),audience.getJSONObject("resourceBinding")))throw new SecurityException("原导出回执不属于本次工作");
+            for(String field:new String[]{"originDeviceId","callerDeviceId","targetDeviceId","instanceId","rootTaskId","localTaskId","grantId"})
+                if(!wire.getString(field).equals(audience.optString(field)))throw new SecurityException("原导出受众已变化");
+        }
         JSONObject payload=typed.getJSONObject("payload"),descriptor=payload.optJSONObject("nativeToolResult");if(descriptor==null)descriptor=payload;
         dev.pocketengine.features.devices.DeviceProtocol.validateMessage(descriptor);
-        if(!"ArtifactDescriptor".equals(descriptor.optString("messageType"))||!(project?"project_bundle":"file").equals(descriptor.optString("kind"))||!peer.deviceId().equals(descriptor.getString("executorDeviceId"))
-            ||!approval.receivingGrant().targetInstanceId().equals(descriptor.getString("instanceId"))||!operation.equals(descriptor.getString("operationId"))||!wire.getString("localTaskId").equals(descriptor.getString("taskId"))
+        if(!"ArtifactDescriptor".equals(descriptor.optString("messageType"))||!(project?"project_bundle":"file").equals(descriptor.optString("kind"))||!target.equals(descriptor.getString("executorDeviceId"))
+            ||!instance.equals(descriptor.getString("instanceId"))||!operation.equals(descriptor.getString("operationId"))||!wire.getString("localTaskId").equals(descriptor.getString("taskId"))
             ||!wire.getString("runId").equals(descriptor.getString("requestRunId"))||wire.getLong("executorEpoch")!=descriptor.getLong("requestExecutorEpoch")||descriptor.has("runId")||descriptor.has("executorEpoch")
             ||descriptor.getLong("size")>dev.pocketengine.features.attachments.AttachmentBook.MAX_FILE_BYTES)throw new SecurityException("文件身份不是原目标/实例/操作/执行或超过原附件上限");
         return new JSONObject(descriptor.toString());
@@ -923,6 +953,9 @@ public final class TaskStoreDeviceTasks {
     }
     public JSONObject receivedPhoneGoalIndex(String here,String instance,String caller,String afterTask,String afterOperation,String searchText)throws Exception{
         synchronized(owner){return ReceivedPhoneGoalIndex.read(db,here,instance,caller,afterTask,afterOperation,searchText);}
+    }
+    public JSONObject closedReceivedPhoneGoals(String here,String instance,String afterCaller,String afterOp)throws Exception{
+        synchronized(owner){return ReceivedPhoneGoalIndex.closed(db,here,instance,afterCaller,afterOp);}
     }
     public JSONObject readLocallyReviewedPhoneGoal(JSONObject selected,int page,String stamp)throws Exception{
         synchronized(owner){return ReceivedPhoneReviewArchive.read(db,selected,page,stamp);}

@@ -11,7 +11,7 @@ internal enum class OutcomeExportLaunch { REQUESTED, NOT_STARTED, UNKNOWN }
 
 /** Registers results for the original export nonce; registration/restoration never launches a picker. */
 internal class AttachmentExportPicker(
-    private val registry:ActivityResultRegistry,private val result:(String,Uri?)->Unit
+    private val registry:ActivityResultRegistry,private val keyPrefix:String="attachment_outcome_export",private val result:(String,Uri?)->Unit
 ) {
     private val launchers=linkedMapOf<String,ActivityResultLauncher<Intent>>()
     fun restore(requestId:String){register(requestId)}
@@ -19,7 +19,7 @@ internal class AttachmentExportPicker(
         require(requestId.matches(Regex("[a-f0-9-]{36}")))
         var delivered=false
         // Re-registering the same key also retrieves a result the registry retained after an unknown launch exception.
-        val launcher=registry.register("attachment_outcome_export_$requestId",ActivityResultContracts.StartActivityForResult()){actual->
+        val launcher=registry.register("${keyPrefix}_$requestId",ActivityResultContracts.StartActivityForResult()){actual->
             delivered=true
             launchers.remove(requestId)?.unregister()
             result(requestId,if(actual.resultCode==Activity.RESULT_OK)actual.data?.data else null)

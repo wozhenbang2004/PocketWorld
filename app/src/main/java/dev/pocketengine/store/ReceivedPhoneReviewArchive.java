@@ -12,6 +12,10 @@ final class ReceivedPhoneReviewArchive {
     private static final int PAGE=1400;
     private ReceivedPhoneReviewArchive(){}
     static JSONObject read(SQLiteDatabase db,JSONObject selection,int page,String stamp)throws Exception{
+        return read(db,selection,page,stamp,false);
+    }
+    static JSONObject checkedMetadata(SQLiteDatabase db,JSONObject selection)throws Exception{return read(db,selection,0,"",true);}
+    private static JSONObject read(SQLiteDatabase db,JSONObject selection,int page,String stamp,boolean metadataOnly)throws Exception{
         String id=selection.getString("taskId"),op=selection.getString("operationId"),caller=selection.getString("sourceId"),
                 here=selection.getString("localId"),instance=selection.getString("localInstance");
         if(page<0||page>TaskAuditStore.MAX_CORE_BYTES/PAGE+1||page>0&&stamp.isEmpty())throw new SecurityException("请从本次原结果的页码读取");
@@ -19,7 +23,9 @@ final class ReceivedPhoneReviewArchive {
                 +"CASE WHEN length(CAST(i.envelope_json AS BLOB))<="+DeviceProtocol.MAX_CONTROL_BYTES+" THEN i.envelope_json END,"
                 +"CASE WHEN length(CAST(t.document AS BLOB))<="+TaskAuditStore.MAX_CORE_BYTES+" THEN t.document END "
                 +"FROM device_inbound i JOIN tasks t ON t.task_id=i.local_task_id WHERE i.caller_device_id=? AND i.remote_operation_id=? AND i.local_task_id=? AND i.method='task.submitGoal'";
-        JSONObject task;
+        String part=selection.optString("displayPart","result");
+        if(!"result".equals(part)&&!("goal".equals(part)&&!stamp.isEmpty()&&!metadataOnly))throw new SecurityException("只能从当时已核对的原结果打开收到的目标");
+        JSONObject task;String receivedGoal;
         try(Cursor row=db.rawQuery(sql,new String[]{caller,op,id})){
             if(!row.moveToFirst()||row.isNull(4))throw new SecurityException("原接纳记录不可核对");
             if(row.isNull(5))throw new IllegalStateException("原工作正文超过本机这次读取的上限，未使用通用状态作为成果");
@@ -36,6 +42,9 @@ final class ReceivedPhoneReviewArchive {
                     ||!wire.getString("localTaskId").equals(from.opt("remoteLocalTaskId"))||!selection.getString("screenMode").equals(DeviceProtocol.receivedPhoneScopeMode(task))
                     ||!selection.getString("originDigest").equals(DeviceProtocol.sha256(DeviceProtocol.canonicalBytes(from))))
                 throw new SecurityException("原手机、任务或派单身份不一致，未打开文字");
+            // The source text is precisely the bounded goal that was signed and accepted by THIS B.
+            // The surrounding envelope, context, attachments and execution evidence are never projected.
+            receivedGoal=wire.getJSONObject("arguments").getString("goal");
         }
         JSONObject saved=task.optJSONObject("deviceGoalResult"),evidence=task.optJSONObject("evidence");
         JSONObject check=evidence==null?null:evidence.optJSONObject("nativeDeviceGoalOwnerReview");
@@ -57,11 +66,12 @@ final class ReceivedPhoneReviewArchive {
         String reference=TaskStore.capabilityFingerprint(new JSONObject().put("task",id).put("operation",op).put("wire",selection.getString("wireDigest"))
                 .put("run",run).put("epoch",epoch).put("review",digest).put("at",saved.getLong("reviewedAt")).put("kept",kept));
         if(!stamp.isEmpty()&&!stamp.equals(reference))throw new SecurityException("本机原结果已变化，不可接读另一份文字");
-        String text=saved.getString("summary");int count=text.codePointCount(0,text.length()),pages=Math.max(1,(count+PAGE-1)/PAGE);
+        if(metadataOnly)return new JSONObject().put("hasText",!saved.getString("summary").isEmpty()).put("runId",run).put("epoch",epoch).put("reviewedAt",saved.getLong("reviewedAt")).put("keptOnPhone",kept).put("stamp",reference);
+        String text="goal".equals(part)?receivedGoal:saved.getString("summary");int count=text.codePointCount(0,text.length()),pages=Math.max(1,(count+PAGE-1)/PAGE);
         if(page>=pages)throw new IllegalArgumentException("不在这份原文字的分页范围");
         int start=text.offsetByCodePoints(0,page*PAGE),end=text.offsetByCodePoints(start,Math.min(PAGE,count-page*PAGE));
         return new JSONObject().put("kind","localReceivedReviewedText").put("readOnly",true).put("taskId",id).put("operationId",op)
                 .put("sourceId",caller).put("localId",here).put("localInstance",instance).put("runId",run).put("epoch",epoch).put("reviewedAt",saved.getLong("reviewedAt"))
-                .put("keptOnPhone",kept).put("page",page).put("pages",pages).put("stamp",reference).put("text",text.substring(start,end));
+                .put("keptOnPhone",kept).put("part",part).put("longOriginalGoal",receivedGoal.codePointCount(0,receivedGoal.length())>160).put("page",page).put("pages",pages).put("stamp",reference).put("text",text.substring(start,end));
     }
 }

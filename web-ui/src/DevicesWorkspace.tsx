@@ -2,12 +2,13 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import './collaboration-depth.css';
 import './device-control-reading.css';
 import { Accordion, AccordionItem, Button, CheckboxField, RadioOptions, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
-import { DeviceRequestScope, deviceChannelWasConnected, deviceConnectionLabel, deviceGrantInput, deviceHistoryLabel, deviceHistoryReceipt, deviceOriginalTaskActions, isReceivedPhoneTask, receivedPhoneGoalReturn, matchesReceivedPhoneGoal, type ReceivedPhoneGoalReturn, type SentPhoneGoalFocus, PHONE_ACTION_WINDOW_MS, deviceRecordedScopes, devicePhoneGoalArchive, localReceivedPhonePage, samePhoneGoalArchive, receivedPhoneArchiveReturn, waitingPhoneGoalPage, type PhoneArchiveSide, deviceTaskHistoryPage, deviceTaskHistoryLinks, deviceTaskDetails, deviceMethodLabels, deviceOperationLabels, devicePhoneGoalResult, deviceReceipt, deviceReview, deviceRows as rows, deviceSnapshot, deviceStrings as strings, deviceTaskRows, deviceWorkspaceTaskMode, type DeviceData as Data } from './devices-workspace';
+import { DeviceRequestScope, deviceChannelWasConnected, deviceConnectionLabel, deviceGrantInput, deviceHistoryLabel, deviceHistoryReceipt, deviceOriginalTaskActions, isReceivedPhoneTask, receivedPhoneGoalReturn, matchesReceivedPhoneGoal, type ReceivedPhoneGoalReturn, type SentPhoneGoalFocus, PHONE_ACTION_WINDOW_MS, deviceRecordedScopes, devicePhoneGoalArchive, localReceivedPhonePage, localReviewedInbox, samePhoneGoalArchive, receivedPhoneArchiveReturn, waitingPhoneGoalPage, type PhoneArchiveSide, deviceTaskHistoryPage, deviceTaskHistoryLinks, deviceTaskDetails, deviceMethodLabels, deviceOperationLabels, devicePhoneGoalResult, deviceReceipt, deviceReview, deviceRows as rows, deviceSnapshot, deviceStrings as strings, deviceTaskRows, deviceWorkspaceTaskMode, type DeviceData as Data } from './devices-workspace';
 import { IconAdd, IconArrowLeft, IconChevronRight, IconClock, IconDevices, IconLayers, IconMonitor, IconPhone, IconRefresh, IconShieldCheck } from './icons';
 import { DesktopViewer } from './DesktopViewer';
 import { WindowsCommandReceipt } from './WindowsCommandReceipt';
 import { WindowsWorkspaceReadReceipt } from './WindowsWorkspaceReadReceipt';
 import { WindowsFileDeliveryReceipt } from './WindowsFileDeliveryReceipt';
+import { OriginalLocalExportedFile } from './OriginalLocalExportedFile';
 import { DeviceTaskPreparation, type PreparedPhone } from './DeviceTaskPreparation';
 import { PhoneControlPreparation } from './PhoneControlPreparation';
 import { WorkspaceSectionHeading } from './WorkspaceSectionHeading';
@@ -79,6 +80,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const [waitingPhones, setWaitingPhones] = useState<Data | null>(null);
   const [waitingBlock,setWaitingBlock]=useState<Data|null>(null);
   const [phoneArchive, setPhoneArchive] = useState<Data | null>(null);
+  const [closedInbox,setClosedInbox]=useState<Data|null>(null);
   const [ownText,setOwnText]=useState<Data|null>(null),ownTextSequence=useRef(0);
   const closeOwnText=()=>{ownTextSequence.current++;setOwnText(null);};
   const autoReadSource=useRef('');
@@ -127,6 +129,8 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   };
   const selectPeer = (next: string) => {
     if (selectedPeer.current === next) return;
+    if(closedInbox?.closedHandle)void run('devices.discard',{closedHandle:closedInbox.closedHandle}).catch(()=>{});
+    setClosedInbox(null);
     if (waitingPhones?.waitingHandle) void run('devices.discard', { waitingHandle: waitingPhones.waitingHandle }).catch(() => {});
     if (phoneArchive?.archiveHandle) void run('devices.discard', { archiveHandle: phoneArchive.archiveHandle }).catch(() => {});
     closeOwnText();setModelReturnFocus(undefined); setPhoneArchive(null); setArchiveFind({key:'',text:''}); setWaitingPhones(null);
@@ -139,7 +143,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   };
   const acceptReview = (value: Data) => { const actual = deviceReview(value); handle.current = actual.viewHandle; setReview(actual); setAck(false); setFuture(false); setHistoryReceipt(null); setPhoneGoalResult(null); setHistoryStopSubmitted(false); setRaw(''); setForm(''); setInvitation(''); };
   const clearSensitive = (enabled = false, keepPairEntry = false) => {
-    setDesktopOpen(false); setDiscoveryAck(false); setAdvertise(false); setDiscoveryPeer('');closeOwnText(); setModelReturnFocus(undefined); setPhoneArchive(null); setArchiveFind({key:'',text:''}); setWaitingPhones(null);
+    setDesktopOpen(false); setDiscoveryAck(false); setAdvertise(false); setDiscoveryPeer('');setClosedInbox(null);closeOwnText(); setModelReturnFocus(undefined); setPhoneArchive(null); setArchiveFind({key:'',text:''}); setWaitingPhones(null);
     scope.current.invalidate(enabled); handle.current = ''; setReview(null); setAck(false); setFuture(false); setRaw(''); setInvitation('');
     setForm(old => keepPairEntry && (old === 'add' || old === 'invite') ? old : ''); setAddress(''); setHost(''); setPort(''); setRecoveryAddresses([]); setHistoryReceipt(null); setPhoneGoalResult(null); setHistoryStopSubmitted(false); setTaskDetails({}); setSnapshot(null); setError(''); setNotice(''); setWorkBusy(false); setControlBusy(false);
     void run('devices.discard', {}).catch(() => {});
@@ -283,6 +287,16 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     setForm('work');
   };
   const openDesktopPreparation = () => { rememberReadingPosition('detail'); setError(''); setNotice(''); setDesktopOpen(true); };
+  // See the next available step without making old work a prerequisite for new work.
+  const peerEntry = !peer || retired(peer) ? null
+    : !deviceChannelWasConnected(peer) && available(peer.actions?.connect) && supported('devices.reviewAction')
+      ? { kind: 'connect', label: '核对并连接', icon: IconDevices, open: () => actionReview('peer.connect', { deviceId: peer.deviceId }) }
+    : desktopPeer ? { kind: 'desktop', label: '准备查看桌面', icon: IconMonitor, open: openDesktopPreparation }
+    : phonePeer && supported('deviceTaskScope.prepare')
+      ? { kind: 'goal', label: '准备交办', icon: IconAdd, open: prepareDeviceGoal }
+    : deviceChannelWasConnected(peer) && supported('devices.snapshot')
+      ? { kind: 'capabilities', label: '核对可用能力', icon: IconLayers, open: () => readPeerCapabilities() }
+      : null;
   const localPhone = rows(state.phoneReadiness?.groups);
   const phoneStatus = (id: string) => { const value = localPhone.find(row => row.id === id); return ({ ready: '本机检查可用', blocked: '需要准备', unsupported: '本机不支持', unknown: '尚未核实' } as Record<string,string>)[value?.state] || '尚未核实'; };
   const localScreenDetail = (id: string) => {
@@ -327,9 +341,20 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const activeArchive = samePhoneGoalArchive(phoneArchive, peer, local) && (phoneArchive?.sourceTaskId||'')===(sourceFocus?.taskId||'')
     && (!sourceFocus || peer===focusedPeer) ? phoneArchive : null;
   const waitingPage = waitingPhones && waitingPhones.localDeviceId === local.deviceId && waitingPhones.localInstanceId === local.instanceId ? waitingPhones : null;
+  const localInbox=closedInbox&&closedInbox.localDeviceId===local.deviceId&&closedInbox.localInstanceId===local.instanceId?closedInbox:null;
+  const readClosedInbox=(direction?:'older'|'newer')=>{
+    if(busy||selectedPeer.current||direction&&!localInbox)return;
+    closeOwnText();
+    if(waitingPhones?.waitingHandle)void run('devices.discard',{waitingHandle:waitingPhones.waitingHandle}).catch(()=>{});
+    setWaitingPhones(null);setWaitingBlock(null);
+    void invoke('devices.readReviewedPhoneInbox',direction?{closedHandle:localInbox!.closedHandle,direction}:{},value=>{
+      if(!selectedPeer.current)setClosedInbox(localReviewedInbox(value,local));
+    });
+  };
   const sourceLabel = (id: string) => { const known = peers.find(p => p.deviceId === id); return known ? name(known) : '来源设备 ' + id.slice(-6); };
   const readWaiting = (direction?: 'older' | 'newer', results = false) => {
     if (busy || selectedPeer.current || direction && !waitingPage) return;
+    if(localInbox){closeOwnText();setClosedInbox(null);void run('devices.discard',{closedHandle:localInbox.closedHandle}).catch(()=>{});}
     const resultLane = direction ? waitingPage!.resultOnly === true : results;
     void invoke('devices.readWaitingPhoneGoals', direction ? { waitingHandle: waitingPage!.waitingHandle, direction } : resultLane ? { queue: 'results' } : {}, value => {
       if (!selectedPeer.current) {
@@ -378,17 +403,19 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     if(autoReadSource.current===k || !supported('devices.readPhoneGoalArchive'))return;
     autoReadSource.current=k;readPhoneArchive('sent'); // This method reads only this phone's retained records.
   },[sourceFocus,focusedPeer,busy,peerId,local.deviceId,local.instanceId]);
-  const ownTextShown=ownText&&activeArchive?.side==='received'&&ownText.archiveHandle===activeArchive.archiveHandle?ownText:null;
-  const readOwnText=(row:Data,page=0,before?:Data)=>{
-    if(busy||sourceFocus||!peer||selectedPeer.current!==peer.deviceId||!activeArchive||activeArchive.side!=='received'
-      ||!rows(activeArchive.rows).some(it=>it.taskId===row.taskId&&it.operationId===row.operationId&&it.mayCheckLocalText===true))return;
-    const ticket=++ownTextSequence.current, archive=activeArchive;
-    setOwnText({archiveHandle:archive.archiveHandle,row,page:null});
-    void invoke('devices.readLocalReviewedPhoneGoal',{archiveHandle:archive.archiveHandle,taskId:row.taskId,operationId:row.operationId,
-      ...(before?{page,stamp:before.stamp}:{})}, value=>{
-      if(ticket!==ownTextSequence.current||selectedPeer.current!==peer.deviceId)return;
-      const actual=localReceivedPhonePage(value,archive,row,page,before);
-      setOwnText({archiveHandle:archive.archiveHandle,row,page:actual});
+  const ownTextShown=ownText && (ownText.home?!!localInbox&&ownText.archiveHandle===localInbox.closedHandle:activeArchive?.side==='received'&&ownText.archiveHandle===activeArchive.archiveHandle)?ownText:null;
+  const readOwnText=(row:Data,page=0,before?:Data,home=ownText?.home===true,part:string=before?.part||'result')=>{
+    const archive=home?localInbox:activeArchive;
+    if(busy||sourceFocus||!archive||(home?!!selectedPeer.current:!peer||selectedPeer.current!==peer.deviceId||archive.side!=='received')
+      ||!rows(archive.rows).some(it=>it.taskId===row.taskId&&it.operationId===row.operationId&&(home?it.sourceDeviceId===row.sourceDeviceId:it.mayCheckLocalText===true)))return;
+    const ticket=++ownTextSequence.current,handle=home?archive.closedHandle:archive.archiveHandle;
+    const resultPage=part==='goal'?(before?.part==='result'?before.page:ownText?.resultPage||0):page;
+    setOwnText({archiveHandle:handle,home,row,resultPage,page:null});
+    void invoke('devices.readLocalReviewedPhoneGoal',{[home?'closedHandle':'archiveHandle']:handle,taskId:row.taskId,operationId:row.operationId,
+      ...(before?{page,stamp:before.stamp,part}:{})}, value=>{
+      if(ticket!==ownTextSequence.current||(home?!!selectedPeer.current:selectedPeer.current!==peer?.deviceId))return;
+      const actual=localReceivedPhonePage(value,archive,row,page,before,part);
+      setOwnText({archiveHandle:handle,home,row,resultPage,page:actual});
     });
   };
   const openArchivedGoal = (row: Data, sourceWork: boolean) => {
@@ -597,9 +624,10 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
         <div className="pw-device-heading-copy">
           {peerId && !desktopOpen && <Button variant="ghost" className="pw-device-back" leadingIcon={IconArrowLeft} disabled={busy} onClick={() => { selectPeer(''); setForm(''); setRaw(''); }}>所有设备</Button>}
           <h2 tabIndex={-1}>{desktopOpen ? '电脑桌面' : peer ? name(peer) : '设备详情'}</h2>
-          {!desktopOpen && peer && <p>{peerPlatform(peer) || (retired(peer) ? '原设备记录' : '已配对设备')}</p>}
+          {!desktopOpen && peer && <p>{[peerPlatform(peer), deviceConnectionLabel(peer)].filter(Boolean).join(' · ')}</p>}
         </div>
         {!desktopOpen && <div className="pw-device-heading-actions">
+          {peerEntry && <Button variant="primary" leadingIcon={peerEntry.icon} disabled={busy} onClick={peerEntry.open}>{peerEntry.label}</Button>}
           <Button variant="ghost" iconOnly leadingIcon={IconRefresh} aria-label="重读这台设备的连接记录" title="重读这台设备的连接记录" disabled={busy} onClick={refresh} />
         </div>}
       </header>}
@@ -719,7 +747,16 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
             <WorkspaceSectionHeading title="交给本机的工作" description="查看本机接纳记录，不联系发送设备" actions={<>
               <Button variant={waitingPage && !waitingPage.resultOnly ? 'primary' : 'secondary'} disabled={busy} onClick={() => readWaiting()}>待接手</Button>
               <Button variant={waitingPage?.resultOnly ? 'primary' : 'secondary'} disabled={busy} onClick={() => readWaiting(undefined,true)}>待核对成果</Button>
+              {supported('devices.readReviewedPhoneInbox')&&<Button variant={localInbox?'primary':'secondary'} disabled={busy} onClick={()=>readClosedInbox()}>已核对原文</Button>}
             </>} />
+            {localInbox&&<><p>这是这部手机自己核对过的文字工作；原发起设备不需要在线或仍在配对名单。</p>
+              {localInbox.limitedCandidates>0&&<p>另有 {localInbox.limitedCandidates} 项已结束记录无法核对，未列作已核对原文。</p>}
+              {!localInbox.rows.length&&<p>这一页没有可核对的本机原件。{localInbox.hasMore&&'可以继续查看较早记录。'}</p>}
+              {rows(localInbox.rows).map(row=><article className="pw-device-history-entry" key={JSON.stringify([row.taskId,row.operationId])}><h4 dir="auto">{row.goal}</h4>
+                <p>{time(row.reviewedAt)} 核对 · 原发起设备 …{String(row.sourceDeviceId).slice(-8)} · {row.keptOnPhone?'只回状态':'允许读取摘要'}{!row.hasText&&' · 原结果无文字'}</p>
+                <Button variant="secondary" disabled={busy||!supported('devices.readLocalReviewedPhoneGoal')} onClick={()=>readOwnText(row,0,undefined,true)}>{row.hasText?'重看本机原文':'查看当时的核对'}</Button></article>)}
+              <div className="pw-form-actions">{localInbox.canReadNewer&&<Button variant="ghost" disabled={busy} onClick={()=>readClosedInbox('newer')}>较新记录</Button>}
+                {localInbox.hasMore&&<Button variant="secondary" disabled={busy} onClick={()=>readClosedInbox('older')}>较早记录</Button>}</div></>}
             {waitingPage && <><p role="status">{time(waitingPage.capturedAt)} 读取。{waitingPage.resultOnly ? '以下原执行已结束，需机主核对；此处不显示或交回摘要。' : '接纳不等于已同意使用模型；过期的目标只能按原记录处理。'}</p>
               {waitingPage.resultOnly && waitingPage.limitedCandidates > 0 && <p>另有 {waitingPage.limitedCandidates} 项旧记录超过本次读取上限，无法判断是否待核对。可从对应设备的「它交给我的」单项查看。</p>}
               {!waitingPage.rows.length && <p>这一批没有可核对的{waitingPage.resultOnly ? '待审成果' : '待接手目标'}。{waitingPage.hasMore && '可以再查较早记录。'}</p>}
@@ -775,14 +812,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               {deviceChannelWasConnected(peer) && <Button variant="secondary" disabled={busy || !supported('devices.snapshot')} onClick={readPeerCapabilities}>核对这台手机的能力记录</Button>}
             </div>}
           </section>
-          {originalWork || <section className="pw-device-no-work"><h3>这台设备的工作</h3><p>本机暂未读到关联的原工作。</p>
-            {!retired(peer) && <div className="pw-form-actions">
-              {!deviceChannelWasConnected(peer) && available(peer.actions?.connect) ? <Button variant="secondary" disabled={busy} onClick={() => actionReview('peer.connect', { deviceId: peer.deviceId })}>核对并连接这台设备</Button>
-                : desktopPeer ? <Button variant="secondary" disabled={busy} onClick={openDesktopPreparation}>核对桌面观看范围</Button>
-                : !phoneAccess && !received?.count && deviceChannelWasConnected(peer) && supported('devices.snapshot') ? <Button variant="secondary" disabled={busy} onClick={readPeerCapabilities}>向对方读取能力与授权</Button>
-                : received?.workRecorded && supported('deviceTaskScope.prepare') ? <Button variant="secondary" disabled={busy} onClick={prepareDeviceGoal}>{phonePeer && !desktopPeer ? '为这部手机写目标' : '写目标，再选择设备范围'}</Button> : null}
-            </div>}
-          </section>}
+          {originalWork || <section className="pw-device-no-work"><h3>这台设备的工作</h3><p>本机暂未读到关联的原工作。</p></section>}
           <Accordion className="pw-device-disclosures">
             {((!desktopPeer || phonePeer) && supported('devices.readPhoneGoalArchive') || supported('devices.readReceivedPhoneGoals')) && <AccordionItem id="phone-goal-archive" title={desktopPeer && !phonePeer ? '这台电脑交给本机的工作' : '找回往来目标'} description="查本机留下的记录，无需对方在线" icon={IconClock}>
               <div className="pw-form-actions" role="group" aria-label="读取方向">
@@ -814,9 +844,9 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
             {!retired(peer) && (desktopPeer || phonePeer || supported('deviceTaskScope.prepare')) && <AccordionItem id="peer-work-options" title="新工作与手动查看" description="新目标要重新选择设备和范围，不沿用原工作的权限" icon={IconLayers}>
               {!deviceChannelWasConnected(peer) && <p>准备目标不代表对端已接收。实际执行仍需核对原设备连接和本次授权。</p>}
               <div className="pw-form-actions">
-              {desktopPeer && <Button disabled={busy} leadingIcon={IconMonitor} onClick={openDesktopPreparation}>核对并选择桌面范围</Button>}
+              {desktopPeer && peerEntry?.kind !== 'desktop' && <Button disabled={busy} leadingIcon={IconMonitor} onClick={openDesktopPreparation}>核对并选择桌面范围</Button>}
               {phonePeer && !retired(peer) && supported('phoneControl.prepare') && <Button disabled={busy} onClick={() => setForm('manual')}>选择手机与屏幕</Button>}
-              {!retired(peer) && supported('deviceTaskScope.prepare') && <Button variant={desktopPeer ? 'secondary' : 'primary'} disabled={busy} onClick={prepareDeviceGoal}>{phonePeer && !desktopPeer ? '为这部手机准备工作' : '选择设备并准备目标'}</Button>}
+              {!retired(peer) && supported('deviceTaskScope.prepare') && peerEntry?.kind !== 'goal' && <Button variant="secondary" disabled={busy} onClick={prepareDeviceGoal}>{phonePeer && !desktopPeer ? '为这部手机准备工作' : '准备目标，再选执行设备'}</Button>}
               </div>
               {desktopPeer && <p className="pw-field-hint">准备页只核对电脑与观看范围，不打开画面，不申请控制。</p>}
               {phonePeer && <div><p>写目标后，选择主屏或独立后台屏及准确应用范围，再审阅开始。“完成目标”由模型操作；“手动控制”由你刷新静态画面后逐次点击、滑动或输入，不是实时视频镜像。</p>
@@ -863,13 +893,16 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
         </AccordionItem></Accordion>}
       </>}
     </section>
-    <SettingsDialog isOpen={!!ownTextShown} onClose={closeOwnText} title="本机已核对的原文">
-      {ownTextShown&&<div className="pw-device-form"><h3 dir="auto">{ownTextShown.row.goal}</h3>
+    <SettingsDialog isOpen={!!ownTextShown} onClose={closeOwnText} title={ownTextShown?.page?.part==='goal'?'当时收到的完整目标':'本机已核对的原文'}>
+      {ownTextShown&&<div className="pw-device-form">{ownTextShown.page?.part!=='goal'&&<h3 dir="auto">{ownTextShown.row.goal}</h3>}
         {error&&<><p role="alert">{error}</p><Button variant="secondary" disabled={busy} onClick={()=>readOwnText(ownTextShown.row)}>重新核对原文</Button></>}<WorkingStatus active={busy}>正在核对本机原执行记录…</WorkingStatus>
         {ownTextShown.page&&<><p>本机核对时间：{time(ownTextShown.page.reviewedAt)}</p>
-          <p>{ownTextShown.page.keptOnPhone?'当时只回完成状态，文字留在这部手机。':'当时允许原发起设备凭有效读取权限查看已核对摘要的前 2,048 字；不代表它已经读过。'}</p>
+          <p>{ownTextShown.page.part==='goal'?'这是原发起设备当时直接交给本机的目标，不含它的其他对话或资料。':ownTextShown.page.keptOnPhone?'当时只回完成状态，文字留在这部手机。':'当时允许原发起设备凭有效读取权限查看已核对摘要的前 2,048 字；不代表它已经读过。'}</p>
           <div aria-live="polite"><p className="pw-source-copy" dir="auto">{ownTextShown.page.text||'这份已核对的原结果没有文字。'}</p>
           {ownTextShown.page.pages>1&&<p>第 {ownTextShown.page.page+1} / {ownTextShown.page.pages} 段</p>}</div>
+          {ownTextShown.page.longOriginalGoal===true&&<div className="pw-form-actions"><Button variant="secondary" disabled={busy}
+            onClick={()=>{const goal=ownTextShown.page.part==='goal';readOwnText(ownTextShown.row,goal?ownTextShown.resultPage:0,ownTextShown.page,ownTextShown.home,goal?'result':'goal');}}>
+            {ownTextShown.page.part==='goal'?'回到已核对的结果':'查看完整原目标'}</Button></div>}
           <div className="pw-form-actions">{ownTextShown.page.page>0&&<Button variant="ghost" disabled={busy} onClick={()=>readOwnText(ownTextShown.row,ownTextShown.page.page-1,ownTextShown.page)}>上一段</Button>}
             {ownTextShown.page.page+1<ownTextShown.page.pages&&<Button variant="secondary" disabled={busy} onClick={()=>readOwnText(ownTextShown.row,ownTextShown.page.page+1,ownTextShown.page)}>下一段</Button>}</div></>}
         <p className="pw-device-footnote">仅查看本机保存的原件，没有联系发起设备或重新派工。</p>
@@ -979,6 +1012,9 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               && <Button variant="ghost" disabled={busy || !supported('devices.openTask')} onClick={returnPhoneSource}>回到本机发起这件事的原工作</Button>}
           </section>}
           {review.kind === 'history' && originalView.directWorkspaceRead && <WindowsWorkspaceReadReceipt original={originalView} read={historyReceipt} />}
+          {review.kind === 'history' && originalView.canCheckLocalExportedFile === true && <OriginalLocalExportedFile
+            key={review.viewHandle} handle={review.viewHandle} original={originalView} disabled={busy || !supported('devices.checkLocalExportedFile')}
+            check={accept => void invoke('devices.checkLocalExportedFile', { viewHandle: review.viewHandle }, accept)} />}
           {review.kind === 'history' && originalView.directWorkspaceFileDelivery === true && <WindowsFileDeliveryReceipt original={originalView} read={historyReceipt} />}
           {review.kind === 'history' && originalView.directWorkspaceCommand === true && <WindowsCommandReceipt original={originalView} read={historyReceipt} />}
           {review.kind === 'history' && <>{originalView.phoneGoalResult === true && <h3>原派发回执</h3>}<p>执行设备 {originalView.targetDeviceId}</p><p>原操作 {originalView.operationId}</p><ResourceScope resource={originalView.resourceBinding} /><p role="status">{deviceHistoryLabel(historyReceipt, originalView)}</p><p>查询只读取原操作；未知效果保留原占用次数。请求停止后仍需核对回执。</p>{historyReceipt && <Accordion><AccordionItem id="original-receipt" title="原操作回执详情"><pre className="pw-source-copy">{JSON.stringify(historyReceipt, null, 2)}</pre></AccordionItem></Accordion>}{(originalView.phoneGoalResult !== true || phoneResultPath !== 'need_dispatch_receipt') && <Button disabled={busy} onClick={() => queryHistory()}>查询原操作回执</Button>}{originalView.archiveReadOnly ? <p>从历史目录只读打开，不会停止或重发原任务。</p> : !historyStopSubmitted ? <><CheckboxField isSelected={ack} onChange={setAck} isDisabled={busy}>我已核对上方原设备、原操作与范围，要求停止这次操作</CheckboxField><Button variant="secondary" disabled={busy || !ack} onClick={() => queryHistory(true)}>请求停止这次原操作</Button></> : <p>本窗口已提交过停止请求。继续查询原回执核对结果。</p>}</>}

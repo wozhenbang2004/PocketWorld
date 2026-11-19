@@ -1084,8 +1084,8 @@ public final class TaskStore {
             db.setTransactionSuccessful();return first;
         }finally{db.endTransaction();}
     }
-    public synchronized void rememberFirstConversationPhoneServiceRequest(String id,String conversation,JSONObject receipt)throws Exception{
-        db.beginTransaction();try{ConversationPhoneFirstAdmission.requested(db,required(id),conversation,receipt);db.setTransactionSuccessful();}
+    public synchronized void rememberFirstConversationPhoneServiceOutcome(String id,String conversation,JSONObject receipt,String state)throws Exception{
+        db.beginTransaction();try{ConversationPhoneFirstAdmission.serviceOutcome(db,required(id),conversation,receipt,state);db.setTransactionSuccessful();}
         finally{db.endTransaction();}
     }
     /** Unknown means query-only: it is never permission to allocate or start another task. */

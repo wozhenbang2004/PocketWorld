@@ -133,10 +133,20 @@ export function devicePhoneGoalArchive(value: unknown, peer: DeviceData, local: 
     || new Set(value.rows.map((row: DeviceData) => JSON.stringify([row.taskId, row.operationId]))).size !== value.rows.length) throw new Error('原手机、本机派发或目录已变化，请重新读取。');
   return value;
 }
+export function localReviewedInbox(value:unknown,local:DeviceData){
+  if(!object(value)||value.kind!=='reviewedPhoneInbox'||value.readOnly!==true||value.localDeviceId!==local.deviceId||value.localInstanceId!==local.instanceId||!identity(value.closedHandle)
+    ||!Array.isArray(value.rows)||value.rows.length>6||typeof value.hasMore!=='boolean'||typeof value.canReadNewer!=='boolean'||!Number.isSafeInteger(value.limitedCandidates)||value.limitedCandidates<0
+    ||!value.rows.every((r:unknown)=>object(r)&&identity(r.taskId)&&identity(r.operationId)&&identity(r.sourceDeviceId)&&typeof r.goal==='string'&&positiveInteger(r.reviewedAt)&&typeof r.keptOnPhone==='boolean'&&typeof r.hasText==='boolean')
+    ||new Set(value.rows.map((r:DeviceData)=>JSON.stringify([r.taskId,r.operationId]))).size!==value.rows.length)throw new Error('本机已核对目录身份已变化，请重新读取。');
+  return value;
+}
 /** Already reviewed on this receiving phone. This is not A's task.get or a new execution. */
-export function localReceivedPhonePage(value: unknown, archive: DeviceData, row: DeviceData, page: number, before?: DeviceData) {
-  if (!object(value)||value.kind!=='localReceivedReviewedText'||value.readOnly!==true||archive.side!=='received'||value.archiveHandle!==archive.archiveHandle
-    ||value.taskId!==row.taskId||value.operationId!==row.operationId||value.sourceId!==archive.targetDeviceId||value.localId!==archive.localDeviceId||value.localInstance!==archive.localInstanceId
+export function localReceivedPhonePage(value: unknown, archive: DeviceData, row: DeviceData, page: number, before?: DeviceData, part='result') {
+  const home=archive.kind==='reviewedPhoneInbox';
+  if (!object(value)||value.kind!=='localReceivedReviewedText'||value.readOnly!==true||(value.part??'result')!==part
+    ||value.longOriginalGoal!==undefined&&typeof value.longOriginalGoal!=='boolean'||(!home&&archive.side!=='received')||value.archiveHandle!==(home?archive.closedHandle:archive.archiveHandle)
+    ||home&&(value.reviewedAt!==row.reviewedAt||value.keptOnPhone!==row.keptOnPhone)
+    ||value.taskId!==row.taskId||value.operationId!==row.operationId||value.sourceId!==(home?row.sourceDeviceId:archive.targetDeviceId)||value.localId!==archive.localDeviceId||value.localInstance!==archive.localInstanceId
     ||typeof value.text!=='string'||Array.from(value.text).length>1400||!digest(value.stamp)||!identity(value.runId)||!positiveInteger(value.epoch)||!positiveInteger(value.reviewedAt)
     ||typeof value.keptOnPhone!=='boolean'||value.page!==page||!positiveInteger(value.pages)||value.pages>188||page<0||page>=value.pages
     ||before&&(before.stamp!==value.stamp||before.runId!==value.runId||before.epoch!==value.epoch||before.reviewedAt!==value.reviewedAt||before.keptOnPhone!==value.keptOnPhone))

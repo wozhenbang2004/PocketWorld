@@ -39,8 +39,7 @@ public final class DeviceReceivedAttachmentPublisher {
         JSONObject descriptor = exact.json(); String kind = descriptor.getString("kind");
         if (kind.equals("screenshot") && descriptor.getLong("expiresAt") <= System.currentTimeMillis()) throw new SecurityException("Observed image expired; capture again");
         if (!kind.equals("file") && !kind.equals("screenshot") && !(kind.equals("project_bundle")&&originalProjectEvidence)) throw new SecurityException("Project bundles require the original owner review/import path");
-        String role = "device_file_" + DeviceProtocol.sha256((exact.sourceDeviceId + "\0" + exact.artifactId).getBytes(java.nio.charset.StandardCharsets.UTF_8)).substring(0, 24);
-        String plan = DeviceProtocol.sha256(DeviceProtocol.canonicalBytes(new JSONObject().put("reference", descriptor).put("receivingTaskId", frozenReceivingTaskId).put("receivingRunId", frozenReceivingRunId).put("receivingEpoch", frozenReceivingEpoch)));
+        String role = role(exact), plan = plan(exact,frozenReceivingTaskId,frozenReceivingRunId,frozenReceivingEpoch);
         // The SQL authority also checks this RunControl. Suppress only this callback's
         // recursive invocation on the same thread, not the SQL check or other authorities.
         ThreadLocal<Boolean> checking = new ThreadLocal<>();
@@ -53,18 +52,27 @@ public final class DeviceReceivedAttachmentPublisher {
             JSONObject prior = book.findNativeResult(originalLocalOperationId, role, frozenReceivingTaskId, frozenReceivingRunId, plan, original);
             if (prior.getBoolean("found")) return receipt(exact, prior, true);
             cache.finish(exact, current); // Full disk/hash + atomic byte landing, not metadata.
-            JSONObject source = new JSONObject().put("kind", "device_received_file").put("artifactKind",kind).put("sourceDeviceId", exact.sourceDeviceId)
-                .put("artifactId", exact.artifactId).put("transferId", exact.transferId).put("versionId", exact.versionId).put("contentDigest", exact.sha256)
-                .put("taskId", frozenReceivingTaskId).put("receivingOriginalTaskId", frozenReceivingTaskId).put("receivingOriginalRunId", frozenReceivingRunId).put("receivingOriginalEpoch", frozenReceivingEpoch)
-                .put("sourceTaskId", exact.taskId).put("sourceRunId", exact.runId).put("sourceOperationId", exact.operationId).put("descriptorDigest", exact.contentIdentity());
-            for (String field : new String[]{"executorEpoch", "requestRunId", "requestExecutorEpoch"}) if (descriptor.has(field)) source.put("source" + Character.toUpperCase(field.charAt(0)) + field.substring(1), descriptor.get(field));
-            if (kind.equals("screenshot")) source.put("observationRef", descriptor.getJSONObject("observationRef")).put("resourceBinding", descriptor.getJSONObject("resourceBinding")).put("expiresAt", descriptor.getLong("expiresAt"));
+            JSONObject source = source(exact,frozenReceivingTaskId,frozenReceivingRunId,frozenReceivingEpoch);
             try (InputStream actualBytes = cache.openVerified(exact, current)) {
                 JSONObject published = book.importNativeResult(actualBytes, descriptor.getString("name"), descriptor.getString("mimeType"), source,
                     originalLocalOperationId, role, frozenReceivingTaskId, frozenReceivingRunId, plan, original);
                 return receipt(exact, published, false);
             }
         }
+    }
+    static String role(DeviceArtifactTransfer.Reference exact)throws Exception{return "device_file_" + DeviceProtocol.sha256((exact.sourceDeviceId + "\0" + exact.artifactId).getBytes(java.nio.charset.StandardCharsets.UTF_8)).substring(0, 24);}
+    static String plan(DeviceArtifactTransfer.Reference exact,String frozenReceivingTaskId,String frozenReceivingRunId,int frozenReceivingEpoch)throws Exception{
+        JSONObject descriptor=exact.json();return DeviceProtocol.sha256(DeviceProtocol.canonicalBytes(new JSONObject().put("reference", descriptor).put("receivingTaskId", frozenReceivingTaskId).put("receivingRunId", frozenReceivingRunId).put("receivingEpoch", frozenReceivingEpoch)));
+    }
+    static JSONObject source(DeviceArtifactTransfer.Reference exact,String frozenReceivingTaskId,String frozenReceivingRunId,int frozenReceivingEpoch)throws Exception{
+        JSONObject descriptor=exact.json();String kind=descriptor.getString("kind");
+        JSONObject source = new JSONObject().put("kind", "device_received_file").put("artifactKind",kind).put("sourceDeviceId", exact.sourceDeviceId)
+            .put("artifactId", exact.artifactId).put("transferId", exact.transferId).put("versionId", exact.versionId).put("contentDigest", exact.sha256)
+            .put("taskId", frozenReceivingTaskId).put("receivingOriginalTaskId", frozenReceivingTaskId).put("receivingOriginalRunId", frozenReceivingRunId).put("receivingOriginalEpoch", frozenReceivingEpoch)
+            .put("sourceTaskId", exact.taskId).put("sourceRunId", exact.runId).put("sourceOperationId", exact.operationId).put("descriptorDigest", exact.contentIdentity());
+        for (String field : new String[]{"executorEpoch", "requestRunId", "requestExecutorEpoch"}) if (descriptor.has(field)) source.put("source" + Character.toUpperCase(field.charAt(0)) + field.substring(1), descriptor.get(field));
+        if (kind.equals("screenshot")) source.put("observationRef", descriptor.getJSONObject("observationRef")).put("resourceBinding", descriptor.getJSONObject("resourceBinding")).put("expiresAt", descriptor.getLong("expiresAt"));
+        return source;
     }
     private static JSONObject receipt(DeviceArtifactTransfer.Reference exact, JSONObject attachment, boolean originalPublication) throws Exception {
         if (!exact.sha256.equals(attachment.getString("sha256")) || exact.bytes != attachment.getLong("size")) throw new SecurityException("Original Book byte identity differs from the fixed descriptor");

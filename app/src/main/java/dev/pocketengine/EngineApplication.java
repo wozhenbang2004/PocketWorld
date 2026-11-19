@@ -1713,12 +1713,17 @@ public final class EngineApplication extends Application implements dev.pocketen
             admit(id,review.mode,review.config,false,null,0,"",new NewDraftPhoneAdmission(control->{
                 control.check();return tasks.beginReviewedConversationPhone(review.creation,confirmedAt,review.config.maxSteps,
                         assigned->{writeEntered[0]=true;allocated.accept(assigned);},()->{control.check();return current.call();});
-            },current));
-            tasks.rememberFirstConversationPhoneServiceRequest(id,review.conversationId,originalPhoneAdmissionReceipt(id));
+            },current,state->tasks.rememberFirstConversationPhoneServiceOutcome(id,review.conversationId,originalPhoneAdmissionReceipt(id),state)));
+            tasks.rememberFirstConversationPhoneServiceOutcome(id,review.conversationId,originalPhoneAdmissionReceipt(id),"admitted");
             return queryConversationPhoneStart(id,review.conversationId).put("duplicate",false).put("budgetIncreased",false);
         }catch(Exception failure){
             if(!writeEntered[0])throw new ConversationPhoneStartRejected(failure);
-            // Allocation may precede a rollback. Do not manufacture a saved task or a new attempt.
+            // Only a committed original OS response may close this wait. A generic failed run is not a refusal.
+            try{
+                JSONObject original=queryConversationPhoneStart(id,review.conversationId);
+                if(original.optBoolean("accepted") && java.util.Set.of("service_denied","component_unconfirmed").contains(original.optString("admissionState")))
+                    return original.put("duplicate",false);
+            }catch(Exception missing){failure.addSuppressed(missing);}
             throw failure;
         }finally{
             if(writeEntered[0])try{if(tasks.get(id,false)!=null){pushTask(id);queueConversationPhoneResults();}}catch(Exception unknown){/* Query the same original request. */}
@@ -1798,7 +1803,11 @@ public final class EngineApplication extends Application implements dev.pocketen
     private String admit(String taskId,String executionMode,ModelConfig c,boolean manualOnly)throws Exception {return admit(taskId,executionMode,c,manualOnly,null,0);}
     private String admit(String taskId,String executionMode,ModelConfig c,boolean manualOnly,String expectedRun,int expectedEpoch)throws Exception {return admit(taskId,executionMode,c,manualOnly,expectedRun,expectedEpoch,"");}
     @FunctionalInterface private interface NewDraftPhoneWrite { JSONObject begin(RunControl original)throws Exception; }
-    private record NewDraftPhoneAdmission(NewDraftPhoneWrite write,java.util.concurrent.Callable<Boolean> current){}
+    @FunctionalInterface private interface FirstServiceOutcome { void record(String state)throws Exception; }
+    private record NewDraftPhoneAdmission(NewDraftPhoneWrite write,java.util.concurrent.Callable<Boolean> current,FirstServiceOutcome outcome){
+        private NewDraftPhoneAdmission(NewDraftPhoneWrite write,java.util.concurrent.Callable<Boolean> current){this(write,current,null);}
+        void noteRefusal(String state,RuntimeException original){if(outcome!=null)try{outcome.record(state);}catch(Exception storage){original.addSuppressed(storage);}}
+    }
     private synchronized String admit(String taskId,String executionMode,ModelConfig c,boolean manualOnly,String expectedRun,int expectedEpoch,String feedback)throws Exception {
         return admit(taskId,executionMode,c,manualOnly,expectedRun,expectedEpoch,feedback,null);
     }
@@ -1835,9 +1844,18 @@ public final class EngineApplication extends Application implements dev.pocketen
                 if(!Boolean.TRUE.equals(firstDraft.current().call()))throw new SecurityException("原手机草稿审阅已变化，未请求系统启动");
                 nextControl.check();
             }
-            android.content.ComponentName requested=startForegroundService(new Intent(this,PhoneRunService.class).setAction(PhoneRunService.START).putExtra("taskId",taskId).putExtra("phoneRunId",t.getString("runId")).putExtra("phoneEpoch",t.getInt("coordinatorEpoch")).putExtra("manualOnly",manualOnly));
-            if(firstDraft!=null&&(requested==null||!getPackageName().equals(requested.getPackageName())||!PhoneRunService.class.getName().equals(requested.getClassName())))
-                throw new IllegalStateException("Android 未接纳原手机服务启动，原首次轮次仍可核对");
+            Intent start=new Intent(this,PhoneRunService.class).setAction(PhoneRunService.START).putExtra("taskId",taskId).putExtra("phoneRunId",t.getString("runId")).putExtra("phoneEpoch",t.getInt("coordinatorEpoch")).putExtra("manualOnly",manualOnly);
+            android.content.ComponentName requested;
+            try{requested=startForegroundService(start);}
+            catch(RuntimeException failure){
+                if(firstDraft!=null && (failure instanceof SecurityException || android.os.Build.VERSION.SDK_INT>=31 &&
+                        failure instanceof android.app.ForegroundServiceStartNotAllowedException))firstDraft.noteRefusal("service_denied",failure);
+                throw failure;
+            }
+            if(firstDraft!=null&&(requested==null||!getPackageName().equals(requested.getPackageName())||!PhoneRunService.class.getName().equals(requested.getClassName()))){
+                var failure=new IllegalStateException("系统没有返回原手机服务组件，不能确认这次启动");
+                firstDraft.noteRefusal("component_unconfirmed",failure);throw failure;
+            }
         }catch(Exception ex){
             nextControl.cancel();try{tasks.endAttempt(taskId,t.getString("runId"),"failed","无法启动前台任务，请回到应用重试",new JSONObject());}
             finally{released(taskId,nextControl);resources.releasePhone(token);if(display!=null)display.unpinOwner(nextControl);}throw ex;

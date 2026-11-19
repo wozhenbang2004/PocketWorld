@@ -79,6 +79,39 @@ public final class AttachmentBook {
         for(String key:new String[]{"operationId","role","taskId","runId","planDigest"}){String wanted=switch(key){case "operationId"->operation;case "role"->role;case "taskId"->task==null?"":task;case "runId"->run==null?"":run;default->planDigest;};if(!wanted.equals(nativeSource.optString(key)))throw new SecurityException("原产物发布身份与这次固定计划不同");}
         verifyBytes(id,actual.getString("sha256"),control,false);return visible(actual).put("found",true).put("publicationEntered",true).put("originalPublication",true);
     }
+    /** Owner recheck of ONE already published device file. No enumeration, source/URI read, repair, payload or write. */
+    public synchronized VerifiedMetadata verifiedPrivateReceivedOriginal(String operation,String role,String task,String run,String planDigest,
+            JSONObject exactSource,String digest,long size,RunControl cancellation)throws Exception{
+        String id=nativeResultId(operation,role,task,run,planDigest);cancellation.checkpoint();
+        if(!"device_received_file".equals(exactSource.optString("kind"))||!"file".equals(exactSource.optString("artifactKind"))
+                ||!role.matches("device_file_[0-9a-f]{24}")||!digest.matches("[a-f0-9]{64}")||size<0||size>MAX_FILE_BYTES)
+            throw new SecurityException("不是原设备普通文件");
+        File record=new File(root,id+".json"),blob=new File(root,id+".blob"),part=new File(root,id+".part"),pending=new File(root,id+".json.pending");
+        if(Files.notExists(record.toPath(),LinkOption.NOFOLLOW_LINKS)&&Files.notExists(blob.toPath(),LinkOption.NOFOLLOW_LINKS)
+                &&Files.notExists(part.toPath(),LinkOption.NOFOLLOW_LINKS)&&Files.notExists(pending.toPath(),LinkOption.NOFOLLOW_LINKS))return null;
+        if(exists(part)||exists(pending)||!Files.isRegularFile(record.toPath(),LinkOption.NOFOLLOW_LINKS)||!Files.isRegularFile(blob.toPath(),LinkOption.NOFOLLOW_LINKS))throw new IllegalStateException("原发布记录不完整");
+        JSONObject bound=new JSONObject(exactSource.toString()).put("nativePublication",new JSONObject().put("operationId",operation).put("role",role).put("taskId",task).put("runId",run).put("planDigest",planDigest));
+        // Do not call internal(), verifyBytes(), inventory(), or the processor-facing helpers:
+        // their success and error paths can publish/revoke eligibility for OTHER output chains.
+        IndexReadBudget budget=new IndexReadBudget();
+        BasicFileAttributes before=Files.readAttributes(blob.toPath(),BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);
+        JSONObject metadata=readIndex(record.toPath(),budget);
+        if(!id.equals(metadata.opt("id"))||!before.isRegularFile()||before.size()!=size
+                ||!privateOutputSource(metadata)||size!=metadata.getLong("size")||!digest.equals(metadata.getString("sha256"))
+                ||!dev.pocketengine.features.devices.DeviceProtocol.resourceEquals(bound,metadata.getJSONObject("source")))throw new SecurityException("原私人附件来源或作用域已变化");
+        MessageDigest sha=MessageDigest.getInstance("SHA-256");long count=0;
+        try(InputStream in=Files.newInputStream(blob.toPath(),LinkOption.NOFOLLOW_LINKS)){
+            byte[] chunk=new byte[32768];
+            for(int n;(n=in.read(chunk))!=-1;){cancellation.checkpoint();if(n==0||n>size-count)throw new java.io.IOException("原件长度已变化");count+=n;sha.update(chunk,0,n);}
+        }
+        if(count!=size||!digest.equals(hex(sha.digest())))throw new SecurityException("原件字节与固定版本不符");
+        BasicFileAttributes after=Files.readAttributes(blob.toPath(),BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);
+        JSONObject fixed=readIndex(record.toPath(),budget);
+        if(!after.isRegularFile()||after.size()!=size||!java.util.Objects.equals(before.fileKey(),after.fileKey())
+                ||!before.lastModifiedTime().equals(after.lastModifiedTime())||!dev.pocketengine.features.devices.DeviceProtocol.resourceEquals(metadata,fixed)||exists(part)||exists(pending)
+                ||!Files.isRegularFile(record.toPath(),LinkOption.NOFOLLOW_LINKS)||!Files.isRegularFile(blob.toPath(),LinkOption.NOFOLLOW_LINKS))throw new SecurityException("核实期间原登记已变化");
+        cancellation.checkpoint();return new VerifiedMetadata(fixed);
+    }
     public synchronized JSONObject importNativeResult(InputStream input,String name,String mime,JSONObject source,String operation,String role,String task,String run,String planDigest,RunControl control)throws Exception{
         JSONObject prior=findNativeResult(operation,role,task,run,planDigest,control);if(prior.getBoolean("found"))return prior;
         JSONObject nativeSource=source==null?new JSONObject():new JSONObject(source.toString());requireNativeParents(nativeSource,control);nativeSource.put("nativePublication",new JSONObject().put("operationId",operation).put("role",role).put("taskId",task==null?"":task).put("runId",run==null?"":run).put("planDigest",planDigest));

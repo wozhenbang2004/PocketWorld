@@ -8,6 +8,7 @@ export type PhoneStartReceipt = {
   runId?: string;
   epoch?: number;
   admitted?: boolean;
+  admissionState?: 'admitted'|'service_denied'|'component_unconfirmed'|'run_recorded'|'no_run'|'unconfirmed';
   taskStatus?: string;
   message: string;
 };
@@ -27,6 +28,10 @@ export function phoneStartReceipt(value: unknown, expected?: ReviewedPhoneIdenti
     : (row.status === 'accepted' || row.accepted === true) && taskId ? 'accepted' : 'unknown';
   const runId = original ? identity(row.runId) : undefined;
   const epoch = runId && Number.isSafeInteger(row.epoch) && (row.epoch as number) > 0 ? row.epoch as number : undefined;
+  const phase=row.admissionState,first=!!runId&&epoch===1;
+  const admissionState:PhoneStartReceipt['admissionState']=original&&status==='accepted'&&requestId&&conversationId&&
+    (first&&(phase==='admitted'&&row.admitted===true||phase==='service_denied'&&row.admitted===false||phase==='component_unconfirmed'||phase==='run_recorded')||
+     !runId&&(phase==='no_run'||phase==='unconfirmed'))?phase:undefined;
   const taskStatus = identity(row.taskStatus) || (row.accepted === true && row.status !== 'accepted' ? identity(row.status) : undefined);
   const message = typeof row.message === 'string' && row.message ? row.message
     : status === 'accepted' ? '原手机任务已创建。'
@@ -37,7 +42,7 @@ export function phoneStartReceipt(value: unknown, expected?: ReviewedPhoneIdenti
     ...(requestId ? { requestId } : {}), ...(conversationId ? { conversationId } : {}),
     ...(taskId ? { taskId } : {}), ...(runId && epoch ? { runId, epoch } : {}),
     ...(original && typeof row.admitted === 'boolean' ? { admitted: row.admitted } : {}),
-    ...(original && taskStatus ? { taskStatus } : {}), message };
+    ...(admissionState?{admissionState}:{}), ...(original && taskStatus ? { taskStatus } : {}), message };
 }
 
 export function phoneStartFailure(error: unknown, expected?: ReviewedPhoneIdentity): PhoneStartReceipt {
