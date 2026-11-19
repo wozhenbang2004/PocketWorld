@@ -18,12 +18,16 @@ def source_text(current, title, hint, initial, *, review=False):
     return _ask(current, lookup=False, source=(title,hint,initial,review))
 
 
-def _ask(current, *, lookup, source=None):
+def ask_committed_path(current):
+    return _ask(current,lookup=True,project_path=True)
+
+
+def _ask(current, *, lookup, source=None, project_path=False):
     # Standard dialog template: scale in dialog units, native tab order, IME,
     # multiline edit, Escape and system-close. IDOK only returns a LOCAL draft.
     def string(text): return (text + "\0").encode("utf-16le")
     width,height = (365,192) if source else (292,82 if lookup else 147)
-    title = source[0] if source else ("找回这台电脑接过的原操作" if lookup else "交给手机 · 写下这次目标")
+    title = source[0] if source else "原提交中的相对文件路径" if project_path else ("找回这台电脑接过的原操作" if lookup else "交给手机 · 写下这次目标")
     template = bytearray(struct.pack("<IIHhhhh", 0x80C808C0, 0, 4, 0, 0, width,height))
     template.extend(b"\0\0\0\0" + string(title) + struct.pack("<H", 9) + string("Segoe UI"))
     def item(style, x, y, width, height, ident, atom, title):
@@ -31,12 +35,13 @@ def _ask(current, *, lookup, source=None):
         template.extend(struct.pack("<IIhhhhHHH", style | 0x50000000, 0, x, y, width, height, ident, 0xffff, atom))
         template.extend(string(title) + b"\0\0")
     hint = "在手机「原派发」里查看完整的原操作编号。只查这台电脑，不联系手机。" if lookup else "只发送这里的文字，不附带电脑文件、项目或历史。"
+    if project_path: hint="填写从项目根开始的确切文件路径，如 src/Main.kt。不会按文件名搜索或打开当前工作树。"
     review = bool(source and source[3])
     item(0, 9, 7, width-19, 24 if source else 19, 100, 0x82, source[1] if source else hint)
     control_style = (0x003010c4 | (0x800 if review else 0)) if source else (0x80 if lookup else 0x00201044)
     item(0x00800000 | 0x10000 | control_style, 9, 33 if source else 27, width-19, 130 if source else 17 if lookup else 86, 101, 0x81, "")
     buttons_y = height-26 if not lookup else 54
-    item(0x10001, width-137, buttons_y, 73, 16, 1, 0x80, "返回核对" if review else "预览差异" if source else "找原回执" if lookup else "核对草稿")
+    item(0x10001, width-137, buttons_y, 73, 16, 1, 0x80, "返回核对" if review else "预览差异" if source else "核对路径" if project_path else "找原回执" if lookup else "核对草稿")
     item(0x10000, width-60, buttons_y, 51, 16, 2, 0x80, "取消")
     user, kernel = c.WinDLL("user32", use_last_error=True), c.WinDLL("kernel32")
     proc = c.WINFUNCTYPE(c.c_ssize_t, w.HWND, w.UINT, w.WPARAM, w.LPARAM)
@@ -69,9 +74,9 @@ def _ask(current, *, lookup, source=None):
                 return 0
             if message == 0x10 or message == 0x113 and not current():
                 finish(hwnd, 2); return 1
-            if source and message==0x111 and wp&0xffff==101 and (wp>>16)&0xffff==0x501:  # EN_MAXTEXT
+            if (source or project_path) and message==0x111 and wp&0xffff==101 and (wp>>16)&0xffff==0x501:  # EN_MAXTEXT
                 overflow=True
-                write(hwnd,100,"输入超过编辑框上限，不能把截断文字保存为补丁。请取消后重新起草。")
+                write(hwnd,100,"输入超出上限；请取消后重新填写确切路径。" if project_path else "输入超过编辑框上限，不能把截断文字保存为补丁。请取消后重新起草。")
                 return 1
             if message == 0x111 and wp & 0xffff in (1, 2):
                 if wp & 0xffff == 1 and current():
@@ -86,9 +91,12 @@ def _ask(current, *, lookup, source=None):
                             if read(hwnd,101,text,len(text))!=units: finish(hwnd,2); return 1
                             value=text.value  # Empty file, whitespace and final newline are meaningful.
                     else:
-                        text=c.create_unicode_buffer(2001); read(hwnd,101,text,len(text))
+                        if project_path and overflow: return 1
+                        text=c.create_unicode_buffer(2001); count=read(hwnd,101,text,len(text))
                         if not text.value.strip(): return 1
-                        value=text.value.strip()
+                        if project_path and (count!=send(control(hwnd,101),0x0e,0,0) or text.value!=text.value.strip()):
+                            write(hwnd,100,"请填写完整的确切相对路径，不要有首尾空白。"); return 1
+                        value=text.value if project_path else text.value.strip()
                 finish(hwnd, 1 if value is not None else 2); return 1
         except Exception:
             value = None; finish(hwnd, 2); return 1

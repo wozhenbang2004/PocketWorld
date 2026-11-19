@@ -372,7 +372,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     const captured = item?.phoneActionScope ? item.actions.capturedAt : snapshot?.taskActions?.[task.id]?.capturedAt;
     return [captured + PHONE_ACTION_WINDOW_MS, item?.phoneActionScope?.executionDeadline ?? task.raw.deviceExecutionScope?.deadline, grant?.expiresAt];
   });
-  const nextExpiry = Math.min(...[validUntil, ...actionExpiries, ...rows(peer?.receivedGrantScopes).map(row => row.expiresAt), ...rows(peer?.grantScopes).map(row => row.expiresAt)]
+  const nextExpiry = Math.min(...[validUntil, ...actionExpiries, ...rows(waitingPhones?.rows).map(row=>row.sourceIdentity?.expiresAt), ...rows(peer?.receivedGrantScopes).map(row => row.expiresAt), ...rows(peer?.grantScopes).map(row => row.expiresAt)]
     .filter(t => Number.isSafeInteger(t) && t > now));
   const [clockRevision, tickClock] = useState(0);
   useEffect(() => {
@@ -487,7 +487,12 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
       if(!selectedPeer.current){setClosedInbox(localReviewedInbox(value,local,search));setClosedDraft(search);}
     });
   };
-  const sourceLabel = (id: string) => { const known = peers.find(p => p.deviceId === id); return known ? name(known) : '来源设备 ' + id.slice(-6); };
+  const sourceLabel = (id:string, original?:Data) => {
+    const known=original && Number.isSafeInteger(original.expiresAt) && original.expiresAt>Date.now() &&
+      peers.find(p=>p.deviceId===id && !retired(p) && p.instanceId===original.instanceId &&
+        p.certificateFingerprint===original.fingerprint && p.authorizationEpoch===original.authorizationEpoch);
+    return known ? name(known) : '来源设备 '+id.slice(-6);
+  };
   const readWaiting = (direction?: 'older' | 'newer', wanted:'pending'|'started'|'results'|'declined'='pending') => {
     if (busy || selectedPeer.current || direction && !waitingPage) return;
     if(localInbox){closeOwnText();setClosedInbox(null);setClosedDraft('');void run('devices.discard',{closedHandle:localInbox.closedHandle}).catch(()=>{});}
@@ -950,7 +955,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               {!waitingPage.rows.length && <p>这一批没有可核对的{waitingPage.declinedOnly?'本机不接手记录':waitingPage.startedOnly?'正在处理、暂停或中断的原执行':waitingPage.resultOnly ? '待审成果' : '待接手目标'}。{waitingPage.hasMore && '可以再查较早记录。'}</p>}
               {rows(waitingPage.rows).map(row => {const blocked=waitingBlock?.waitingHandle===waitingPage.waitingHandle&&waitingBlock?.taskId===row.taskId&&waitingBlock?.operationId===row.operationId?waitingBlock:null;
                 return <div className="pw-device-history-entry" key={JSON.stringify([row.taskId,row.operationId])}>
-                <h4 dir="auto">{row.goal}</h4><p>来自 {sourceLabel(row.sourceDeviceId)} · {waitingPage.declinedOnly?'本机接纳 '+time(row.createdAt):waitingPage.startedOnly?'本机登记执行 '+time(row.registeredAt):waitingPage.resultOnly ? '产生结果 ' + time(row.reviewRecordedAt) : time(row.createdAt)}{row.waitingState === 'interrupted_before_start' && ' · 本机已中断，未启动'}</p>
+                <h4 dir="auto">{row.goal}</h4><p>来自 {sourceLabel(row.sourceDeviceId,row.sourceIdentity)} · {waitingPage.declinedOnly?'本机接纳 '+time(row.createdAt):waitingPage.startedOnly?'本机登记执行 '+time(row.registeredAt):waitingPage.resultOnly ? '产生结果 ' + time(row.reviewRecordedAt) : time(row.createdAt)}{row.waitingState === 'interrupted_before_start' && ' · 本机已中断，未启动'}</p>
                 {waitingPage.declinedOnly&&<p>{time(row.declinedAt)} 本机决定不接手 · 从未启动</p>}
                 {waitingPage.startedOnly&&<p>任务记录：{taskLabels[row.taskState]}{row.taskState!==row.runState&&' · 执行记录：'+taskLabels[row.runState]}{row.stopRequested&&' · 已请求停止，非停止回执'}</p>}
                 {blocked && <p role="status">{({original_not_retained:'本机保存了原派单，但已没有当时的接手授权；不会从记录中重建执行。',
@@ -1219,7 +1224,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
                 openModelSettingsFor(source);
               } else { closeReview(); openModels(); }
             }}>更换本机模型</Button>}{originalView.source === 'local_account' && <p role="alert">这个账号当前不支持跨设备目标，请先在模型设置选择已授权 API 模型。</p>}<CheckboxField isSelected={future} onChange={setFuture} isDisabled={busy}>以后同一配对授权、模型与范围内的目标自动处理</CheckboxField>{future && <p>未来策略：工具 {originalView.policyToolBudget} 次 · 模型 {originalView.policyModelBudget} 次 · 至 {time(originalView.policyExpiresAt)}。模型、配对代次或范围改变后重新审阅。</p>}</>}
-          {review.kind === 'action' && <><h3>{declining?'不接手这项工作':deviceOperationLabels[originalView.operation]}</h3>{originalView.peer && <><p>{name(originalView.peer)} · {originalView.peer.deviceId}</p><p className="pw-source-copy">{fingerprint(originalView.peer.certificateFingerprint)}</p></>}{originalView.taskId && <><p>{originalView.goal || originalView.pendingGoal?.goal}</p><p>原任务 {originalView.taskId}{originalView.runId ? ` · 执行 ${originalView.runId} · 代次 ${originalView.executorEpoch}` : ' · 从未启动的原目标'}</p>{originalView.origin && <p>原发起设备 {originalView.origin.originDeviceId} · 请求设备 {originalView.origin.callerDeviceId}</p>}{originalView.resourceBinding && <ResourceScope resource={originalView.resourceBinding} />}</>}{originalView.lease && <p>{originalView.lease.serviceBase} · {originalView.lease.inviterDeviceId}</p>}{declining&&<p>来自 {sourceLabel(originalView.pendingGoal.callerDeviceId)} · 本机接纳于 {time(originalView.pendingGoal.acceptedAt)}</p>}<p>{declining?'确认后，本机会结束这份从未启动的原派单。不运行模型，不向发起设备发消息。':originalView.operation === 'peer.revoke' ? '本机撤销会使旧授权失效，对端是否收到撤销另看真实回执。已经发生的动作无法撤回。' : originalView.operation.startsWith('task.') ? '只控制这项原任务，不重新提交目标。暂停、继续与停止仍以执行端回执为准。' : '变更本机接收或连接不会把正在执行的任务标记为停止。'}</p></>}
+          {review.kind === 'action' && <><h3>{declining?'不接手这项工作':deviceOperationLabels[originalView.operation]}</h3>{originalView.peer && <><p>{name(originalView.peer)} · {originalView.peer.deviceId}</p><p className="pw-source-copy">{fingerprint(originalView.peer.certificateFingerprint)}</p></>}{originalView.taskId && <><p>{originalView.goal || originalView.pendingGoal?.goal}</p><p>原任务 {originalView.taskId}{originalView.runId ? ` · 执行 ${originalView.runId} · 代次 ${originalView.executorEpoch}` : ' · 从未启动的原目标'}</p>{originalView.origin && <p>原发起设备 {originalView.origin.originDeviceId} · 请求设备 {originalView.origin.callerDeviceId}</p>}{originalView.resourceBinding && <ResourceScope resource={originalView.resourceBinding} />}</>}{originalView.lease && <p>{originalView.lease.serviceBase} · {originalView.lease.inviterDeviceId}</p>}{declining&&<p>来自 {sourceLabel(originalView.pendingGoal.callerDeviceId,rows(waitingPage?.rows).find(row=>row.taskId===originalView.taskId && row.operationId===originalView.pendingGoal.operationId && row.sourceDeviceId===originalView.pendingGoal.callerDeviceId && row.createdAt===originalView.pendingGoal.acceptedAt)?.sourceIdentity)} · 本机接纳于 {time(originalView.pendingGoal.acceptedAt)}</p>}<p>{declining?'确认后，本机会结束这份从未启动的原派单。不运行模型，不向发起设备发消息。':originalView.operation === 'peer.revoke' ? '本机撤销会使旧授权失效，对端是否收到撤销另看真实回执。已经发生的动作无法撤回。' : originalView.operation.startsWith('task.') ? '只控制这项原任务，不重新提交目标。暂停、继续与停止仍以执行端回执为准。' : '变更本机接收或连接不会把正在执行的任务标记为停止。'}</p></>}
           {review.kind === 'connection' && <>{originalView.discoveredAddress && <p role="alert">此地址来自未认证的局域网广播。确认只更新本机连接地址并尝试原证书双向 TLS；不重新配对、不扩大权限，不代表地址已验证或设备在线。选错地址会连接失败，可用原设备邀请恢复。</p>}<p>更新原设备 {originalView.deviceId} 的连接地址。</p><p className="pw-source-copy">已配对证书完整指纹：{fingerprint(originalView.certificateFingerprint)}</p><ResourceScope resource={Object.fromEntries(Object.entries(originalView).filter(([key]) => ['host', 'port', 'controlPort', 'bulkPort', 'serviceBase', 'path', 'connectionKind', 'kind', 'expiresAt'].includes(key)))} /></>}
           {review.kind === 'relay' && <><p>{originalView.serviceBase} · 至 {time(originalView.expiresAt)}</p><p>只在内存中使用这份临时租约；不产生设备权限，双端身份仍要核对。</p><p>原邀请设备 {originalView.inviterDeviceId}</p></>}
           {review.kind === 'abandon' && <><p>只放弃本机这次待配对记录，对端可能已经保存配对。这里不会代替对端撤销。</p><p className="pw-source-copy">原设备指纹：{fingerprint(originalView.inviterFingerprint)}</p></>}

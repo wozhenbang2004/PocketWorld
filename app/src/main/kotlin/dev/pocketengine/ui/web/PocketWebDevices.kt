@@ -306,6 +306,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         synchronized(this){current(original,epoch);if(old!=null)require(waitingPage===old);waitingPage=index}
         val display=JSONArray();for(row in rows)display.put(JSONObject().also { item ->
             for(key in listOf("taskId","operationId","sourceDeviceId","goal","screenMode","createdAt","waitingState"))item.put(key,row.get(key))
+            row.optJSONObject("sourceIdentity")?.let{item.put("sourceIdentity",it)}
             if(row.optBoolean("textOnly"))item.put("textOnly",true)
             if(declined)item.put("declinedAt",row.getLong("declinedAt")).put("notDispatched",true)
             if(started){val run=row.getJSONObject("startedRun");for(key in listOf("runId","epoch","taskState","runState","registeredAt","stopRequested"))item.put(key,run.get(key))}

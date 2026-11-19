@@ -12,6 +12,18 @@ import org.json.JSONObject;
 /** B's own accepted requests, not the sender's outbox and not authority to execute one. */
 final class ReceivedPhoneGoalIndex {
     private ReceivedPhoneGoalIndex() {}
+    /** This row's original incoming grant is issued HERE. Its epoch can therefore bind the caller
+     * peer row, unlike an oppositely issued grant. An older incarnation never inherits a nickname. */
+    private static JSONObject sourceIdentity(SQLiteDatabase db,String here,String source,String grant,long epoch,long now) {
+        String sql="SELECT p.instance_id,p.fingerprint,p.authorization_epoch,g.expires_at FROM device_peers p "
+                +"JOIN device_grants g ON g.peer_device_id=p.device_id AND g.authorization_epoch=p.authorization_epoch "
+                +"WHERE p.device_id=? AND p.revoked=0 AND g.grant_id=? AND g.local_device_id=? AND g.authorization_epoch=? AND g.revoked=0 AND g.expires_at>?";
+        try(Cursor row=db.rawQuery(sql,new String[]{source,grant,here,Long.toString(epoch),Long.toString(now)})){
+            if(!row.moveToFirst())return null;
+            return new JSONObject().put("instanceId",row.getString(0)).put("fingerprint",row.getString(1))
+                    .put("authorizationEpoch",row.getLong(2)).put("expiresAt",row.getLong(3));
+        } catch(android.database.sqlite.SQLiteException | JSONException unavailable){ return null; /* A name is optional; preserve the original incoming row. */ }
+    }
     private enum Shelf{PEER,PENDING,RESULT,CLOSED,STARTED,DECLINED}
     private static final Set<String> OPEN_PHASES=Set.of("preparing","running","pausing","paused","stopping","verifying","awaiting_user","waiting_user",
             "awaiting_approval","waiting_approval","waiting_permission","interrupted","reconciling","reconciliation_required","blocked_unknown");
@@ -126,6 +138,7 @@ final class ReceivedPhoneGoalIndex {
                     String goal=wire.getJSONObject("arguments").getString("goal"); if (goal.trim().isEmpty()||!closed&&!search.matches(goal)) continue;
                     if (goal.codePointCount(0,goal.length())>160) goal=goal.substring(0,goal.offsetByCodePoints(0,160))+"…";
                     items.put(new JSONObject().put("taskId",task).put("operationId",op).put("argumentsDigest",digest)
+                            .put("sourceIdentity",shelf==Shelf.PENDING||started||declined||results?sourceIdentity(db,here,source,c.getString(4),c.getLong(5),System.currentTimeMillis()):null)
                             .put("sourceDeviceId",source).put("declinedAt",declined?Long.valueOf(declinedAt):null).put("startedRun",startedRun).put("closedReview",closedReview).put("mayCheckLocalText",!waiting&&zero&&"completed".equals(header.opt("status"))&&!header.optString("runId").isEmpty()&&header.optInt("coordinatorEpoch")>0?true:null)
                             .put("textOnly",textOnly||zero&&"assistant".equals(header.opt("kind"))?true:null).put("reviewRun",review==null?null:review.getString("runId"))
                             .put("reviewEpoch",review==null?null:review.getInt("epoch")).put("reviewRecordedAt",review==null?null:review.getLong("recordedAt"))

@@ -7,6 +7,7 @@ from desktop_owner_entry import _dialog, _folder
 from desktop_sessions import WindowsDesktopHealth
 from platform_backend import PlatformError
 from windows_git_source import Incomplete, capture, registered
+from windows_git_one_file_entry import show as one_file
 from windows_git_copy import storage_limit
 from windows_git_copy_entry import browse as browse_copies, confirm_copy
 
@@ -83,24 +84,31 @@ def _review_source(context,settings,source,locked,*,content=False):
             # Private/unprintable names have no example; do not log any path.
             sample = _display(check["example"])
             why += "\n原提交中的条目：" + (sample if len(sample)<=176 else "…"+sample[-175:])
-        _dialog("没有确认完整的目录映射",why+"\n没有创建文件、目录或副本。",[],retire=locked)
+        choice=_dialog("没有确认完整的目录映射",why+"\n没有创建文件、目录或副本。",
+                       [("one","另选原提交中的一个文件，只读")],retire=locked)
+        if choice=="one" and not locked(): one_file(context,settings,source,locked)
         return
     if content:
         actual = result.get("committedContentReview",{})
         if not actual.get("complete"):
             why = REASONS.get(actual.get("reason"),REASONS["native_read_unavailable"])
-            _dialog("没有确认全部已提交文件的正文",why+"\n没有保存部分文件清单、写入或启动工作。",[],retire=locked)
+            pick=_dialog("没有确认全部已提交文件的正文",why+"\n没有保存部分文件清单、写入或启动工作。",
+                         [("one","另选一个文件，只核它的已提交原文")],retire=locked)
+            if pick=="one" and not locked(): one_file(context,settings,source,locked)
             return
         text = f"{source['commit'][:12]} · {actual['files']} 个文件，{actual['logicalBytes']/1048576:.1f} MiB。"
         text += "\n已逐一核实 Git 保存的原始字节；没有读取未提交改动、应用过滤器、复制文件或启动执行器。"
         if actual["lfsHeaderFiles"]: text += f"\n{actual['lfsHeaderFiles']} 个文件含 LFS 指针版本头；已核实的是指针，不是外部大文件。"
         limit = storage_limit(actual)
         choices = [("digest","查看完整内容清单编号")]
-        if limit: text += "\n"+limit
+        if limit:
+            text += "\n"+limit
+            choices.insert(0,("one","另选一个文件，只核它的已提交原文"))
         else: choices.insert(0,("copy","另存本机独立源码副本\n先查看确切新位置与范围；不会启动项目。"))
         action = _dialog("原提交的文件正文已核对",text,choices,retire=locked)
         if locked(): return
-        if action=="copy": confirm_copy(context,settings,result,locked)
+        if action=="one": one_file(context,settings,source,locked)
+        elif action=="copy": confirm_copy(context,settings,result,locked)
         elif action=="digest":
             _dialog("已提交文件内容编号",actual["contentManifestDigest"]+"\n按原路径、模式、Git 对象号、长度和 SHA-256 绑定。只是本次本机核对，不是副本、权限或交付回执。",[],retire=locked)
         return
@@ -192,10 +200,12 @@ def open_source(context, settings):
         summary = f"{source_label} · {where}\n{when} 核实提交 {result['commit'][:12]} 与其根树。"
         summary += "\n这是已提交的版本；未检查未提交改动、子目录或所有对象，未创建副本，也未开放项目生产。"
         action = _dialog("已核对这台 Windows 上的 Git 来源",summary,
-             [("names","检查这次提交的目录映射\n逐层核对文件名和目录；不读取文件正文或创建副本。"),
+             [("one","查看原提交中的一个文件\n直接输入相对路径或逐层选取；不必先核对或保存整个项目。"),
+              ("names","检查这次提交的目录映射\n逐层核对文件名和目录；不读取文件正文或创建副本。"),
               ("identity","查看完整仓库与源版本编号")],retire=locked)
         if locked(): return
-        if action=="names":
+        if action=="one": one_file(context,settings,result,locked)
+        elif action=="names":
             _review_source(context,settings,result,locked)
         elif action=="identity":
             details = f"本机仓库标识：{result['repositoryAnchor']}\n提交 ({result['objectFormat']})：{result['commit']}\n根树：{result['tree']}"

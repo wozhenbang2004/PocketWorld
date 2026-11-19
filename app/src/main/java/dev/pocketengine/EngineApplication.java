@@ -1492,6 +1492,8 @@ public final class EngineApplication extends Application implements dev.pocketen
     }
     private dev.pocketengine.features.proxy.NativeHarnessGatewayBridge existingTaskHarnessGatewayBridge(String task,String run,String lease)throws Exception {var module=features.module("proxy");if(!(module instanceof dev.pocketengine.features.proxy.ProxyModule))throw new SecurityException("原网关不可用");var bridge=((dev.pocketengine.features.proxy.ProxyModule)module).existingHarnessGateway(task,run);if(bridge==null||!bridge.leaseId().equals(lease))throw new SecurityException("原准确网关不在本进程；保留SQL未知，不重建");return bridge;}
     private JSONObject existingTaskHarnessGateway(String task,String run)throws Exception {var module=features.module("proxy");if(!(module instanceof dev.pocketengine.features.proxy.ProxyModule))return null;var proxy=(dev.pocketengine.features.proxy.ProxyModule)module;var bridge=proxy.existingHarnessGateway(task,run);return bridge==null?null:bridge.snapshot().put("target",proxy.harnessGatewayTarget(bridge.leaseId()));}
+    /** Display identity only. Never admits input; avoids taking the writer monitor on the accessibility UI thread. */
+    public boolean retainsShownPhoneControl(String id,RunControl shown){return id!=null&&shown!=null&&currentPhoneControl(id)==shown;}
     public synchronized RunControl control(String id){return currentPhoneControl(id);}
     /** Native task-sheet scope page only; never exposed through feature/model JSON. */
     public dev.pocketengine.features.local.project.OwnerProjectEditScope.Page openOwnerEditScopePage(String id)throws Exception {

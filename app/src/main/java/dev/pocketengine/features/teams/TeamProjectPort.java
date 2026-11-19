@@ -14,7 +14,7 @@ import org.json.JSONObject;
 final class TeamProjectPort implements CapabilityPort {
     interface Current {void check()throws Exception;}
     private final TaskStore tasks;private final LocalModule local;private final JSONObject binding;private final RunControl original;
-    private final CapabilityPort files;private final Current current;private ProjectCapabilityPort project;private volatile boolean closed;
+    private final CapabilityPort files;private final Current current;private ProjectCapabilityPort project;private boolean integratorRole;private volatile boolean closed;
     TeamProjectPort(TaskStore tasks,LocalModule local,JSONObject binding,RunControl original,CapabilityPort files,Current current)throws Exception{this.tasks=tasks;this.local=local;this.binding=new JSONObject(binding.toString());this.original=original;this.files=files;this.current=current;}
     private void check(RunControl control)throws Exception{if(closed||control!=original)throw new SecurityException("原成员项目工具已关闭或控制改变");current.check();tasks.checkTeamAssignmentExecution(binding,original);}
     private void checkRenewedSource(RunControl control)throws Exception {
@@ -27,19 +27,24 @@ final class TeamProjectPort implements CapabilityPort {
     private boolean fileTool(String name){return name!=null&&name.matches("team_(prepare_draft|list_files|read_dependency|request_input|send_message|freeze_outputs|read_integration|integrate_file|prepare_integrated_project)");}
     private boolean projectTool(String name){return ProjectCapabilityPort.isTeamProjectRead(name)||name!=null&&name.matches("project_(execute|process_input|stop)");}
     @Override public void prepareTurnSurface(RunControl control)throws Exception {
-        check(control);if(project==null){JSONObject context=tasks.teamProjectContextIfReady(binding,original);if(context!=null){ModelCapabilityAdapters.Binding nativeBinding=new ModelCapabilityAdapters.Binding(binding.getString("taskId"),binding.getString("runId"),binding.getInt("coordinatorEpoch"),original,true,context.getString("projectId"));TaskStoreCapabilityAuthority authority=new TaskStoreCapabilityAuthority(tasks,nativeBinding,event->{try{tasks.event(binding.getString("taskId"),binding.getString("runId"),binding.getInt("coordinatorEpoch"),event);}catch(Exception failure){original.cancel();throw new IllegalStateException("原项目审批通知未持久化",failure);}});project=new ProjectCapabilityPort(nativeBinding,authority,original,files,local,tasks,context.getString("checkoutId"),context.getJSONObject("selection").getString("runtimeId"));}}
+        check(control);if(project==null){JSONObject context=tasks.teamProjectContextIfReady(binding,original);if(context!=null){integratorRole="integrator".equals(binding.optString("memberId"))&&"unique_integrator".equals(context.getJSONObject("selection").getString("role"));ModelCapabilityAdapters.Binding nativeBinding=new ModelCapabilityAdapters.Binding(binding.getString("taskId"),binding.getString("runId"),binding.getInt("coordinatorEpoch"),original,true,context.getString("projectId"));TaskStoreCapabilityAuthority authority=new TaskStoreCapabilityAuthority(tasks,nativeBinding,event->{try{tasks.event(binding.getString("taskId"),binding.getString("runId"),binding.getInt("coordinatorEpoch"),event);}catch(Exception failure){original.cancel();throw new IllegalStateException("原项目审批通知未持久化",failure);}});project=new ProjectCapabilityPort(nativeBinding,authority,original,files,local,tasks,context.getString("checkoutId"),context.getJSONObject("selection").getString("runtimeId"));}}
         if(project==null)files.prepareTurnSurface(control);else project.prepareTurnSurface(control);
     }
     @Override public JSONArray tools()throws Exception {JSONArray input=project==null?files.tools():project.tools(),out=new JSONArray();for(int i=0;i<input.length();i++){JSONObject tool=input.getJSONObject(i);String name=tool.getJSONObject("function").getString("name");if(fileTool(name)||project!=null&&projectTool(name)&&(!name.equals("project_package")||isIntegrator())){
             if(name.equals("project_plan")){
                 tool=new JSONObject(tool.toString());JSONObject function=tool.getJSONObject("function");
-                function.getJSONObject("parameters").getJSONObject("properties").put(TeamProjectCheckReferences.FIELD,new JSONObject().put("type","string").put("minLength",64).put("maxLength",64));
-                function.put("description","本团队可用project_inspect的teamProjectChecks。准确显选检查只传intent=command、expectedSourceDigest、teamCheckRef，不传argv等命令参数；只生成待审方案。"+function.getString("description"));
+                JSONObject props=function.getJSONObject("parameters").getJSONObject("properties");
+                props.put(TeamProjectCheckReferences.FIELD,new JSONObject().put("type","string").put("minLength",64).put("maxLength",64));
+                boolean integrating=isIntegrator();props.getJSONObject("intent").put("enum",new JSONArray(integrating?new String[]{"command","freeze_package"}:new String[]{"edit","patch","command"}));
+                props.remove("includePaths");
+                if(integrating)props.getJSONObject("packageMode").put("enum",new JSONArray().put("source_project"));
+                function.put("description","本项显选检查只传intent=command、expectedSourceDigest、project_inspect中本项的teamCheckRef，不重写命令；只生成待审方案。"+
+                        (integrating?"整合者只能再提出完整固定源码包：intent=freeze_package、packageMode=source_project、准确源码SHA及entryPath；不是只打改动路径的子包。":"作者只可提出所选路径的edit/patch或原检查，不能打包。"));
             }
             out.put(tool);
         }}return out;}
-    private boolean isIntegrator()throws Exception{return binding.optString("memberId").equals("integrator");}
-    @Override public boolean supports(String name){return fileTool(name)&&files.supports(name)||project!=null&&projectTool(name)&&project.supports(name)&&(!name.equals("project_package")||binding.optString("memberId").equals("integrator"));}
+    private boolean isIntegrator(){return integratorRole;}
+    @Override public boolean supports(String name){return fileTool(name)&&files.supports(name)||project!=null&&projectTool(name)&&project.supports(name)&&(!name.equals("project_package")||isIntegrator());}
     private CapabilityPort selected(String name)throws Exception {if(!supports(name))throw new SecurityException("没有此成员已挂载项目能力；先准备真实副本，不降级成另写文字文件");return projectTool(name)?project:files;}
     @Override public boolean sideEffecting(String name){return projectTool(name)?project==null||project.sideEffecting(name):files.sideEffecting(name);}
     @Override public dev.pocketengine.core.ExecutionPlanning.Access planningAccess(String name,JSONObject arguments)throws Exception{return !supports(name)?dev.pocketengine.core.ExecutionPlanning.Access.DENY:projectTool(name)?project.planningAccess(name,arguments):files.planningAccess(name,arguments);}

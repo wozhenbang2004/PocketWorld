@@ -57,6 +57,10 @@ public final class PhoneAccessibilityService extends AccessibilityService {
     private final java.util.concurrent.atomic.AtomicLong keyFocusRevision = new java.util.concurrent.atomic.AtomicLong();
     private volatile PhoneInputMethod phoneInputMethod;
     private final Handler main = new Handler(Looper.getMainLooper());
+    private final OwnerOverlayReads<PhoneOwnerControls.ViewState> openControlRead=new OwnerOverlayReads<>(main),shownControlRead=new OwnerOverlayReads<>(main);
+    private PhoneOwnerControls openingControls;
+    private RunControl openingRun;
+    private OwnerReturnButton openingReturn;
     // INSTANCE_LOCK guards feed publication and ownership; platform reads stay outside it.
     private final Map<Integer,PhoneUiSignals> displaySignals = new LinkedHashMap<>();
     private final Map<Integer,Integer> windowDisplays = new LinkedHashMap<>();
@@ -93,8 +97,12 @@ public final class PhoneAccessibilityService extends AccessibilityService {
     private record OwnerReturnButton(RunControl control,long pause,String operation,android.app.PendingIntent action,java.util.function.BooleanSupplier current){}
     private volatile OwnerReturnButton ownerReturnButton;
     public void bindOriginalOwnerReturn(RunControl original,long revision,String operation,android.app.PendingIntent action,java.util.function.BooleanSupplier current){
-        runOnMain(()->{if(instance!=this||original==null||original!=control||ownerControls==null||pause==null||!current.getAsBoolean())return;
-            ownerReturnButton=new OwnerReturnButton(original,revision,operation,action,current);refreshOwnerControls(ownerControls,"原手机任务");});
+        runOnMain(()->{if(instance!=this||original==null||!current.getAsBoolean())return;
+            var requested=new OwnerReturnButton(original,revision,operation,action,current);
+            // The already granted hand-back may arrive while its original overlay is still being verified. Do not display or send yet.
+            if(openingRun==original)openingReturn=requested;
+            if(original!=control||ownerControls==null||pause==null)return;
+            ownerReturnButton=requested;refreshOwnerControls(ownerControls,"原手机任务");});
     }
     public boolean ownerReturnVisible(RunControl original,long revision,String operation){
         OwnerReturnButton b=ownerReturnButton;RenderedOwnerAction shown=renderedOwnerAction;
@@ -372,8 +380,20 @@ public final class PhoneAccessibilityService extends AccessibilityService {
             if (!(getApplication() instanceof EngineApplication)) return;
             EngineApplication app=(EngineApplication)getApplication();
             PhoneOwnerControls bound=new PhoneOwnerControls(app,taskId,runControl);
-            if(!bound.view(goal).current())return;
-            removeControls();
+            if(!bound.retained())return;
+            openingReturn=openingRun==runControl?openingReturn:control==runControl?ownerReturnButton:null;
+            openingControls=bound;openingRun=runControl;
+            openControlRead.request(()->bound.view(goal),first->{
+                if(openingControls!=bound||openingRun!=runControl)return;
+                var heldReturn=openingReturn;clearOpeningControls();
+                if(instance!=this||first==null||!first.current()||!bound.retained())return;
+                installOwnerControls(taskId,goal,runControl,app,bound,first,heldReturn);
+            });
+        });
+    }
+    private void installOwnerControls(String taskId,String goal,RunControl runControl,EngineApplication app,PhoneOwnerControls bound,
+                                     PhoneOwnerControls.ViewState first,OwnerReturnButton heldReturn){
+            removeInstalledControls();
             control = runControl;
             ownerControls=bound;
             LinearLayout panel = new LinearLayout(this);
@@ -405,7 +425,7 @@ public final class PhoneAccessibilityService extends AccessibilityService {
             grip.setOnClickListener(v -> {
                 boolean expand = details.getVisibility() != View.VISIBLE;
                 details.setVisibility(expand ? View.VISIBLE : View.GONE);
-                grip.setText(expand ? "任务 ▴" : "任务 ▾");
+                grip.setText(expand ? "任务 ▴" : "任务 ▾");updateOwnerGripLabel();
             });
             // refreshOwnerControls installs a distinct Android View for each displayed intention.
             ownerActionSlot=new android.widget.FrameLayout(this);
@@ -429,7 +449,7 @@ public final class PhoneAccessibilityService extends AccessibilityService {
                     var original = runControl.hostRunIdentity();
                     if (original == null) throw new IllegalStateException("原任务暂不可核对");
                     if (showQuickPanel(new org.json.JSONObject().put("taskId", taskId).put("runId", original.runId()).put("epoch", original.epoch()))) {
-                        details.setVisibility(View.GONE); grip.setText("任务 ▾");
+                        details.setVisibility(View.GONE); grip.setText("任务 ▾");updateOwnerGripLabel();
                     }
                 } catch (Exception unavailable) { app.error(unavailable.getMessage() == null ? "请回原任务重新打开快捷补充" : unavailable.getMessage()); }
             });
@@ -452,22 +472,25 @@ public final class PhoneAccessibilityService extends AccessibilityService {
                 panel.post(position::keepVisible);
                 updateVisibility();
             } catch (RuntimeException unavailable) {
-                removeControls();
+                removeInstalledControls();
                 return;
             }
             cancellation = () -> main.post(() -> {
-                if (control == runControl) removeControls();
+                if (control == runControl) removeInstalledControls();
             });
             runControl.onCancel(cancellation);
             ownerApp=app;
+            var posted=new java.util.concurrent.atomic.AtomicBoolean();
             ownerObserver=event->{
                 org.json.JSONObject task=event.optJSONObject("task");
-                if("task".equals(event.optString("type"))&&task!=null&&taskId.equals(task.optString("id")))
-                    main.post(()->refreshOwnerControls(bound,goal));
+                if("task".equals(event.optString("type"))&&task!=null&&taskId.equals(task.optString("id"))&&posted.compareAndSet(false,true))
+                    main.post(()->{posted.set(false);refreshOwnerControls(bound,goal);});
             };
             app.addObserver(ownerObserver);
+            if(heldReturn!=null&&heldReturn.control()==runControl&&returnReady(heldReturn))ownerReturnButton=heldReturn;
+            renderOwnerControls(bound,goal,bound.samePause(first)?first:PhoneOwnerControls.reading());
+            // Close the gap between the first read and registration. This only reads retained task facts.
             refreshOwnerControls(bound,goal);
-        });
     }
 
     private static boolean returnReady(OwnerReturnButton button){
@@ -478,8 +501,15 @@ public final class PhoneAccessibilityService extends AccessibilityService {
     }
     private void refreshOwnerControls(PhoneOwnerControls expected,String goal) {
         if(expected==null||ownerControls!=expected||ownerActionSlot==null||status==null)return;
-        PhoneOwnerControls.ViewState state=expected.view(goal);
-        OwnerReturnButton hand=ownerReturnButton;
+        shownControlRead.request(()->expected.view(goal),state->{
+            if(instance!=this||ownerControls!=expected||ownerActionSlot==null||status==null)return;
+            if(!expected.retained()){removeInstalledControls();return;}
+            renderOwnerControls(expected,goal,state!=null&&state.current()&&expected.samePause(state)?state:PhoneOwnerControls.reading());
+        });
+    }
+    private void renderOwnerControls(PhoneOwnerControls expected,String goal,PhoneOwnerControls.ViewState state){
+        // A pending source read cannot create a hand-back control; preserve the candidate for a later verified row.
+        OwnerReturnButton hand=state.current()&&state.pause()>=0?ownerReturnButton:null;
         if(hand!=null&&(control==null||hand.control()!=control||!control.isPaused()||control.isCancelled()||hand.pause()!=control.pauseRevision()||!returnReady(hand))){ownerReturnButton=null;hand=null;}
         RenderedOwnerAction shown=renderedOwnerAction;
         if(shown==null||shown.owner()!=expected||shown.hand()!=hand||!state.sameInput(shown.state())){
@@ -495,7 +525,11 @@ public final class PhoneAccessibilityService extends AccessibilityService {
         boolean waiting=hand==null&&submittingOwnerAction!=null&&(state.action()==PhoneOwnerControls.Action.RESUME_LOCAL||state.action()==PhoneOwnerControls.Action.RESUME_SOURCE);
         pause.setEnabled(!waiting&&(hand!=null||state.action()!=PhoneOwnerControls.Action.NONE));
         status.setText(shortText(state.message(),140));
-        if(controlGrip!=null)controlGrip.setContentDescription("拖动可移动手机任务控制条；点击"+(controlDetails!=null&&controlDetails.getVisibility()==View.VISIBLE?"收起":"展开")+"操作。"+state.message());
+        updateOwnerGripLabel();
+    }
+    private void updateOwnerGripLabel(){
+        // The private goal is a separately expanded detail, never the collapsed grip’s spoken name.
+        if(controlGrip!=null)controlGrip.setContentDescription("拖动可移动手机任务控制条；点击"+(controlDetails!=null&&controlDetails.getVisibility()==View.VISIBLE?"收起":"展开")+"操作");
     }
     private void performShownOwnerAction(RenderedOwnerAction shown,String goal,Button source){
         if(source!=pause||shown!=renderedOwnerAction||!visible||ownerApp==null||instance!=this)return;
@@ -524,7 +558,11 @@ public final class PhoneAccessibilityService extends AccessibilityService {
     }
 
     public void hideControls() { runOnMain(this::removeControls); }
-    public void hideControls(RunControl original) { runOnMain(()->{if(original!=null&&control==original)removeControls();}); }
+    public void hideControls(RunControl original) { runOnMain(()->{
+        if(original==null)return;
+        if(openingRun==original)clearOpeningControls();
+        if(control==original)removeInstalledControls();
+    }); }
     public boolean hasVisibleControls() { return visible; }
     /** The Web host may replace the overlay only after observing an actionable
      * stop button for this exact run. This identity grants no control authority. */
@@ -609,7 +647,10 @@ public final class PhoneAccessibilityService extends AccessibilityService {
         return b;
     }
 
-    private void removeControls() {
+    private void clearOpeningControls(){openControlRead.clear();openingControls=null;openingRun=null;openingReturn=null;}
+    private void removeControls(){clearOpeningControls();removeInstalledControls();}
+    private void removeInstalledControls() {
+        shownControlRead.clear();
         ownerReturnButton=null;renderedOwnerAction=null;submittingOwnerAction=null;ownerVisibilityVersion++;
         ownerActionSlot=null;
         clearInAppStopSurface();

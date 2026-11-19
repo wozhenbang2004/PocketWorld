@@ -1,5 +1,6 @@
 package dev.pocketengine.ui.web
 
+import dev.pocketengine.features.memory.PersonalMemorySemantics
 import dev.pocketengine.ui.MemoryLearningReviewGuard
 import dev.pocketengine.ui.PocketWorldController
 import java.util.UUID
@@ -48,6 +49,8 @@ internal class PocketWebPersonal(private val controller: PocketWorldController) 
         return JSONObject(pin.body)
     }
     private fun row(original: JSONObject): JSONObject = original.getJSONObject(if (original.getBoolean("candidate")) "candidateRecord" else "record")
+    private fun canReviewShorterTerm(record: JSONObject, until: Long, now: Long): Boolean =
+        runCatching { record.opt("active") == true && record.optString("assertionStatus") == "current" && PersonalMemorySemantics.canShortenManualNote(record, until, now) }.getOrDefault(false)
     private fun prepare(review: JSONObject): String {
         val handle = pin(reviews, review)
         while (receipts.size >= 24) receipts.remove(receipts.keys.first())
@@ -125,6 +128,10 @@ internal class PocketWebPersonal(private val controller: PocketWorldController) 
                     val original = JSONObject().put("candidate", candidate)
                         .put(if (candidate) "candidateRecord" else "record", result.getJSONObject(if (candidate) "candidate" else "record"))
                     result.optJSONArray("relatedRecords")?.let { original.put("relatedRecords", it) }
+                    if (!candidate) {
+                        val now = System.currentTimeMillis()
+                        result.put("canReviewShorterTerm", canReviewShorterTerm(row(original), now - now % 60_000L + 60_000L, now))
+                    }
                     result.put("readHandle", pin(reads, original)).put("candidateSelected", candidate)
                 }
             }
@@ -159,12 +166,14 @@ internal class PocketWebPersonal(private val controller: PocketWorldController) 
                 }
             }
             "profile.memory.review" -> {
-                fields(args, "readHandle", "operation", "text", "reason", "core", "draft")
-                val original = selected(reads, text(args, "readHandle"))
-                val before = row(original)
                 val operation = text(args, "operation")
+                if (operation == "shorten") fields(args, "readHandle", "operation", "calendar")
+                else fields(args, "readHandle", "operation", "text", "reason", "core", "draft")
+                val readHandle = text(args, "readHandle")
+                val original = selected(reads, readHandle)
+                val before = row(original)
                 val candidate = original.getBoolean("candidate")
-                require(operation in if (candidate) setOf("accept", "reject") else setOf("correct", "forget", "core")) {
+                require(operation in if (candidate) setOf("accept", "reject") else setOf("correct", "forget", "core", "shorten")) {
                     "个人页可纠正或遗忘正式记忆、采纳或忽略候选；候选正文和主体请在原记忆审核页一并核对"
                 }
                 val payload = JSONObject().put("id", before.getString("id"))
@@ -174,6 +183,14 @@ internal class PocketWebPersonal(private val controller: PocketWorldController) 
                         val corrected = text(args, "text", 4000).trim()
                         require(corrected != before.getString("text")) { "正文没有变化" }
                         payload.put("expectedRevision", revision).put("text", corrected); "correctReviewed"
+                    }
+                    "shorten" -> {
+                        val calendar = args.getJSONObject("calendar")
+                        fields(calendar, "date", "time", "zone", "laterOverlap")
+                        val now = System.currentTimeMillis()
+                        val until = PocketWebFormTime.instant(calendar, now)
+                        require(canReviewShorterTerm(before, until, now)) { "只能为这条仍有效的手写记忆选择更早的未来期限" }
+                        payload.put("expectedRevision", revision).put("expiresAt", until); "shortenManualNote"
                     }
                     "forget" -> { payload.put("expectedRevision", revision); "forgetReviewed" }
                     "core" -> {
@@ -188,11 +205,16 @@ internal class PocketWebPersonal(private val controller: PocketWorldController) 
                     val checked = if (candidate) MemoryLearningReviewGuard.payload(command, before, before, payload)
                         else if (operation == "forget") MemoryLearningReviewGuard.forgetPayload(before, before) else payload
                     val review = JSONObject().put("original", original).put("command", command).put("payload", checked)
+                    if (operation == "shorten") {
+                        selected(reads, readHandle) // Do not mint a review after the original detail has closed.
+                        review.put("termReadHandle", readHandle)
+                    }
                     val handle = prepare(review)
                     JSONObject().put("reviewHandle", handle).put("receiptHandle", handle).put("operation", operation).put("before", before)
-                        .put("relatedRecords", original.optJSONArray("relatedRecords") ?: JSONArray()).put("changeKind", if (operation == "correct") "update" else "add")
+                        .put("relatedRecords", original.optJSONArray("relatedRecords") ?: JSONArray()).put("changeKind", if (operation == "correct" || operation == "shorten") "update" else "add")
                         .put("afterText", checked.optString("text")).put("core", checked.opt("core"))
                         .put("reason", checked.optString("reason")).put("executionAuthorized", false)
+                        .also { if (operation == "shorten") it.put("expiresAt", checked.getLong("expiresAt")).put("zone", args.getJSONObject("calendar").getString("zone")).put("reviewExpiresAt", minOf(reviews.getValue(handle).expires, reads.getValue(readHandle).expires)) }
                 }
             }
             "profile.memory.confirm" -> {
@@ -204,6 +226,11 @@ internal class PocketWebPersonal(private val controller: PocketWorldController) 
                 val before = original?.let(::row)
                 val command = review.getString("command")
                 val payload = review.getJSONObject("payload")
+                if (command == "shortenManualNote" && review.has("termReadHandle") &&
+                    (runCatching { selected(reads, review.getString("termReadHandle")) }.isFailure || payload.getLong("expiresAt") <= System.currentTimeMillis())) {
+                    recordReceipt(handle, "unchanged", JSONObject().put("saved", false).put("undoAvailable", false).put("message", "原阅读窗口已关闭或所选期限已过，没有更改这条记忆。"))
+                    done(receiptView(handle, selected(receipts, handle)), null); return
+                }
                 recordReceipt(handle, "unknown", JSONObject().put("undoAvailable", false).put("message", "原操作已提交，等待真实回执；未自动重发"))
                 callMemory(command, payload, original, done) { result ->
                     if (result.optString("status") == "expired_not_saved") {

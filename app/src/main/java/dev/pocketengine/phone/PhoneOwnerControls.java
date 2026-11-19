@@ -22,6 +22,10 @@ final class PhoneOwnerControls {
         this.app=Objects.requireNonNull(app);this.taskId=Objects.requireNonNull(taskId);this.original=Objects.requireNonNull(original);born=original.hostRunIdentity();
     }
     private boolean ownsControl(){return born!=null&&taskId.equals(born.taskId())&&original==app.control(taskId)&&original.matchesHostRun(taskId,born.runId(),born.epoch());}
+    boolean retained(){return born!=null&&taskId.equals(born.taskId())&&app.retainsShownPhoneControl(taskId,original)&&
+            original.matchesHostRun(taskId,born.runId(),born.epoch())&&!original.isCancelled();}
+    boolean samePause(ViewState state){return state!=null&&(state.pause()<0||state.pause()==original.pauseRevision());}
+    static ViewState reading(){return state(true,Action.NONE,-1,"正在核对原任务，暂不能据此继续执行");}
     Intent originalReview(Context context)throws Exception{
         if(born==null||!taskId.equals(born.taskId()))throw new IllegalStateException("缺少原任务身份");
         return PhoneNotificationControls.open(context,EngineApplication.json("id",taskId,"runId",born.runId(),"coordinatorEpoch",born.epoch())).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);

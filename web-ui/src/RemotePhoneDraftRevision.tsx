@@ -4,7 +4,7 @@ import {Button,TextAreaField} from './forms-library';
 import {remoteObject as object,type RemoteData as Data} from './remote-task-workspace';
 
 type Pin={id:string;revision:number;scopeHash:string;localState:'draft'|'queued'|'withdrawn'|'claimed'};
-type Saved={revision:number;updatedAt:number};
+type Saved={revision:number;updatedAt:number;textSha256:string};
 type Props={task:string;run:string;epoch:number;row:Pin;original:string;onSaved:(stamp:Saved)=>void;onCancel:()=>void};
 const op='remoteTask.phoneDrafts.';
 const digest=async(v:string)=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(v))),n=>n.toString(16).padStart(2,'0')).join('');
@@ -33,7 +33,7 @@ export function RemotePhoneDraftRevision({task,run,epoch,row,original,onSaved,on
       }else{
         if(r.queued!==false||r.localState!=='draft'||r.previousRevision!==row.revision||r.revision!==row.revision+1||!Number.isSafeInteger(r.updatedAt)||r.updatedAt<=0)
           throw Error('本机保存回执未确认。请回原清单检查版本，不会自动重试。');
-        onSaved({revision:r.revision,updatedAt:r.updatedAt});
+        onSaved({revision:r.revision,updatedAt:r.updatedAt,textSha256:sha});
       }
     }catch(e){if(same()){hold(null);fail(e instanceof Error?e.message:'原稿版本不能核对。未自动保存或发送。')}}
     finally{flight.current=false;if(alive.current)spin(false)}

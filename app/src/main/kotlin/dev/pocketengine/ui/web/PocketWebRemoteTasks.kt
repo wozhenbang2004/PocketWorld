@@ -95,8 +95,12 @@ internal class PocketWebRemoteTasks(
             result.put("draftScopes", scopes)
             result.put("inputDrafts", JSONArray().also { rows -> original.optJSONArray("inputDrafts").objects().forEach { draft ->
                 val scope = scopes.optJSONObject(draft.optString("mode"))
-                rows.put(JSONObject(draft.toString()).put("targetCurrent", scope != null &&
-                    RemoteTaskDrafts.same(scope, draft.optJSONObject("scope"))))
+                val same=scope!=null&&RemoteTaskDrafts.same(scope,draft.optJSONObject("scope"))
+                rows.put(JSONObject(draft.toString()).also {proof->
+                    proof.remove("phoneScopeHash");proof.put("targetCurrent",same)
+                    if(same&&draft.optString("state") in setOf("draft","queued")&&draft.isNull("operationId"))
+                        proof.put("phoneScopeHash",dev.pocketengine.store.TaskStore.capabilityFingerprint(requireNotNull(scope)))
+                })
             } })
             val committed = original.optJSONObject("eventRead")
             val progress = committed ?: original.optJSONObject("result")?.optJSONObject("progress")

@@ -8,6 +8,8 @@ import './collaboration-depth.css';
 import { RemoteSavedResults } from './RemoteSavedResults';
 import { RemoteOfflinePickup } from './RemoteOfflinePickup';
 import {RemotePhoneDraftShelf} from './RemotePhoneDraftShelf';
+import {RemotePhoneDraftFollow} from './RemotePhoneDraftFollow';
+import {originalEditorWindow,rememberOriginalEditor,rememberedOriginalEditor,validPhoneDraftPin,type PhoneDraftPin} from './remote-draft-continuity';
 import { RemoteTaskArtifacts } from './RemoteTaskArtifacts';
 import { RemoteTaskPreview } from './RemoteTaskPreview';
 import { RemoteTaskHarness } from './RemoteTaskHarness';
@@ -17,7 +19,6 @@ type Run = (action: string, args?: Data) => Promise<any>;
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 const executionLabel = (value: string) => ({ waiting_approval: '等待你决定', awaiting_approval: '等待你决定', working: '进行中', running: '进行中', waiting: '等待下一步', completed: '已完成', failed: '未完成', paused: '已暂停', cancelled: '已停止', status: '执行状态', tool: '工具观察' } as Record<string,string>)[value] || value;
 const workerLabel = (value: string) => ({ codex_app_server: 'Codex', pi: 'Pi', claude_code: 'Claude Code' } as Record<string,string>)[value] || value;
-const storedEditors = new Map<string, RemoteEditor>();
 const supported = (action: string) => bridge.getState().capabilities.commands.includes(action);
 const windowIdentity = () => {
   const view = object(bridge.getState().view);
@@ -79,22 +80,27 @@ function useRemoteTask(taskId:string,runId:string,coordinatorEpoch:number) {
   return { snapshot, pending, error, stale, act, current: () => live.current };
 }
 
-export function RemoteDraftEditor({ snapshot, busy, active = true, run }: { snapshot: Data; busy: boolean; active?: boolean; run: Run }) {
-  const taskId = String(snapshot.taskId), [editor, setEditor] = useState<RemoteEditor>(() => storedEditors.get(taskId) || remoteEditor(snapshot, crypto.randomUUID()));
-  const [notice, setNotice] = useState(''), [pasting, setPasting] = useState(false), [clipboardUsed, setClipboardUsed] = useState('');
+type DraftEditorProps={snapshot:Data;busy:boolean;active?:boolean;run:Run;follow?:PhoneDraftPin|null};
+export function RemoteDraftEditor(props:DraftEditorProps) {
+  const key=originalEditorWindow(props.snapshot,bridge.getDocumentEpoch());
+  return <ScopedRemoteDraftEditor {...props} cacheKey={key} key={key??'unbound:'+String(props.snapshot.windowHandle??'')}/>;
+}
+function ScopedRemoteDraftEditor({snapshot,busy,active=true,run,follow,cacheKey}:DraftEditorProps&{cacheKey:string|null}) {
+  const taskId = String(snapshot.taskId), [editor, setEditor] = useState<RemoteEditor>(() => rememberedOriginalEditor(cacheKey,snapshot) || remoteEditor(snapshot, crypto.randomUUID()));
+  const [notice, setNotice] = useState(''), [pasting, setPasting] = useState(false), [clipboardUsed, setClipboardUsed] = useState(''), [openedPin,setOpenedPin]=useState('');
   const live = useRef({ snapshot, editor, active, busy }), mounted = useRef(true), used = useRef('');
   live.current = { snapshot, editor, active, busy };
-  const edit = (next: RemoteEditor) => { live.current.editor = next; setEditor(next); setNotice(''); storedEditors.set(taskId, next); if (storedEditors.size > 32) storedEditors.delete(storedEditors.keys().next().value!); };
+  const edit = (next: RemoteEditor) => { live.current.editor = next; setEditor(next); setNotice(''); rememberOriginalEditor(cacheKey,live.current.snapshot,next); };
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
     const saved = rows(snapshot.inputDrafts).find(row => row.id === editor.id);
     if (saved && saved.text === editor.text && saved.mode === editor.mode && saved.revision > editor.revision && saved.targetCurrent === true) edit(savedRemoteEditor(saved));
-    else if (!saved && editor.revision === 0 && !editor.scope && snapshot.fresh === true && !snapshot.teamRemoteWriter && !snapshot.configurationOnly) {
+    else if (!saved && editor.revision === 0 && !editor.scope && editor.text==='' && cacheKey && snapshot.fresh === true && !snapshot.teamRemoteWriter && !snapshot.configurationOnly) {
       // Opening may precede the first protocol observation. Attach only a new,
       // never-bound editor; an existing scope must not follow a different turn.
       const scopes = object(snapshot.draftScopes);
       const initial = remoteEditor(snapshot, editor.id, scopes[editor.mode] ? editor.mode : undefined);
-      if (initial.scope) edit({ ...initial, text: editor.text });
+      if (initial.scope) edit(initial);
     }
   }, [snapshot]);
   const state = remoteDraftState(snapshot, editor), delivery = object(snapshot.inputDelivery), currentTurn = object(delivery.currentTurn), nextTurn = object(delivery.nextTurn);
@@ -116,9 +122,14 @@ export function RemoteDraftEditor({ snapshot, busy, active = true, run }: { snap
     } catch (failure) { if (mounted.current && sameRemoteEditor(captured, live.current.editor)) setNotice(message(failure)); }
     finally { if (mounted.current) setPasting(false); }
   };
-  if (snapshot.configurationOnly || snapshot.teamRemoteWriter || !rows(snapshot.inputDrafts).length && (snapshot.draftEditorAvailable === false || delivery.protocolEvidenceReported !== true || !nextTurn.adapterMounted && !currentTurn.adapterMounted)) return null;
+  if (snapshot.configurationOnly || snapshot.teamRemoteWriter || !follow && !rows(snapshot.inputDrafts).length && (snapshot.draftEditorAvailable === false || delivery.protocolEvidenceReported !== true || !nextTurn.adapterMounted && !currentTurn.adapterMounted)) return null;
+  const pinKey=follow?JSON.stringify([follow.taskId,follow.runId,follow.epoch,follow.id,follow.revision,follow.scopeHash,follow.textSha256]):'';
+  if(follow&&openedPin!==pinKey)return <section className="pw-remote-drafts" aria-label="核对手机所选原稿"><RemotePhoneDraftFollow pin={follow} snapshot={snapshot}
+      active={active&&!busy&&!pasting&&!!cacheKey} wouldReplace={editor.text!==''&&editor.text!==(state.saved?.text??'')}
+      open={picked=>{edit(savedRemoteEditor(picked));setOpenedPin(pinKey)}}/></section>;
   return <section className="pw-remote-drafts" aria-label="原会话输入草稿">
     <div className="pw-section-heading"><h3>原会话输入草稿</h3><Button variant="ghost" size="small" disabled={busy || pasting || !active} onClick={() => edit(remoteEditor(snapshot, crypto.randomUUID()))}>新草稿</Button></div>
+    {!cacheKey&&<p className="pw-field-hint">还不能核对原主机、执行轮次和会话；不恢复或接收其他页面输入。</p>}
     <p className="pw-muted">保存和排队只写入本机。查询、重连或恢复页面不会自动发送；发送仍使用原会话配置。</p>
     {rows(snapshot.inputDrafts).length > 0 && <SelectField label="已保存的草稿" value={state.saved ? editor.id : ''} isDisabled={busy || pasting || !active}
       options={rows(snapshot.inputDrafts).map(row => ({ id: row.id, label: `${row.mode === 'steer' ? '当前执行' : '下一轮'} · ${row.state} · ${String(row.text || '').slice(0, 32)}` }))}
@@ -127,7 +138,7 @@ export function RemoteDraftEditor({ snapshot, busy, active = true, run }: { snap
       options={[{ id: 'next_turn', label: '排队到下一轮', description: '原会话结算后明确发送', disabled: nextTurn.adapterMounted !== true }, ...(currentTurn.adapterMounted ? [{ id: 'steer', label: '补充当前执行', description: currentTurn.delivery === 'native_queue' ? '写入原生队列，是否消费仍待观察' : '仅发给已核对的原 turn' }] : [])]} />
     {delivery.driver === 'pi' && <p className="pw-field-hint">{nextTurn.noToolsSessionOnly ? 'Pi no-tools 会话不提供编码工具能力。' : ''}队列接受不证明模型已消费；只核对原任务回执。</p>}
     {delivery.driver === 'codex_app_server' && <p className="pw-field-hint">接受输入不证明模型已采用；停止任务也不会回滚已经发生的作用。</p>}
-    <TextAreaField label="草稿内容" value={editor.text} onChange={text => edit({ ...live.current.editor, text })} rows={5} maxLength={12000} isDisabled={busy || pasting || !active || !!state.saved && !['draft', 'queued'].includes(state.saved.state)} />
+    <TextAreaField label="草稿内容" value={editor.text} onChange={text => edit({ ...live.current.editor, text })} rows={5} maxLength={12000} isDisabled={busy || pasting || !active || !cacheKey || !editor.scope || !!state.saved && !['draft', 'queued'].includes(state.saved.state)} />
     {state.saved && !['draft', 'queued'].includes(state.saved.state) && <p className="pw-field-hint">原操作：{state.saved.deliveryStatus || state.saved.journalState || state.saved.state}。仅查询原记录，不会重复派发。</p>}
     {!state.sameTarget && <p className="pw-field-error">原草稿或会话身份已变化，保留文字供你核对。请查询后明确新建草稿。</p>}
     {state.saved?.state === 'queued' && !state.unchanged && <p className="pw-field-hint">编辑内容尚未保存，不能发送旧队列条目。</p>}
@@ -181,7 +192,7 @@ function RemoteQuestion({ request, snapshot, busy, run }: { request: Data; snaps
 }
 
 export function RemoteTaskWorkspace({ taskId, raw, receipt, savedFiles, openProject }: { taskId: string; raw: Data; receipt?:Data; savedFiles: Data[]; openProject?:(pin:HostSourcePin)=>void }) {
-  const [observing,setObserving]=useState(''),selectedWindow=useRef('');
+  const [observing,setObserving]=useState(''),selectedWindow=useRef(''),[follow,setFollow]=useState<PhoneDraftPin|null>(null);
   const origin=object(raw.origin),privateTask=raw.id===taskId&&raw.actorId==='owner'&&raw.spaceId==='private'&&raw.feature==='remote';
   const personal=privateTask&&raw.command==='submitJob'&&(!raw.origin||origin.kind==='native_remote_private_inputs')&&!raw.teamRunId&&!raw.parentTaskId&&!raw.memberId;
   const nativeProject=privateTask&&raw.command==='submitJob'&&!raw.teamRunId&&!raw.parentTaskId&&!raw.memberId&&/^[a-f0-9]{64}$/.test(raw.remoteProjectStartScopeHash||'')&&
@@ -191,8 +202,8 @@ export function RemoteTaskWorkspace({ taskId, raw, receipt, savedFiles, openProj
   const attempt=JSON.stringify([taskId,raw.runId,raw.coordinatorEpoch]),ticket=()=>JSON.stringify([attempt,windowIdentity()]);
   const foreground=taskVisible(taskId),supportedChoice=supported('remoteTask.open')&&supported('remoteTask.stopObservation'),onlineView=canObserve&&supportedChoice&&foreground&&observing===ticket();
   useEffect(()=>{
-    selectedWindow.current='';setObserving('');
-    const retire=()=>{if(selectedWindow.current&&(document.hidden||!taskVisible(taskId)||selectedWindow.current!==ticket())){selectedWindow.current='';setObserving('')}};
+    selectedWindow.current='';setObserving('');setFollow(null);
+    const retire=()=>{if(selectedWindow.current&&(document.hidden||!taskVisible(taskId)||selectedWindow.current!==ticket())){selectedWindow.current='';setObserving('');setFollow(null)}};
     const off=bridge.subscribe(retire);document.addEventListener('visibilitychange',retire);
     return()=>{off();document.removeEventListener('visibilitychange',retire)};
   },[attempt]);
@@ -200,7 +211,7 @@ export function RemoteTaskWorkspace({ taskId, raw, receipt, savedFiles, openProj
   const accepted=proof?.stage==='host_acknowledged'&&typeof proof.jobId==='string'&&proof.jobId.length>0;
   return <><section className="pw-remote-workspace" aria-label="原主机任务的本机回执">
     <div className="pw-section-heading"><h3>本机回执</h3>{canObserve&&<Button variant="secondary" disabled={!foreground||!supportedChoice} onClick={()=>{
-      if(taskVisible(taskId)){selectedWindow.current=onlineView?'':ticket();setObserving(selectedWindow.current)}
+      if(taskVisible(taskId)){setFollow(null);selectedWindow.current=onlineView?'':ticket();setObserving(selectedWindow.current)}
     }}>{onlineView?'停止查询，只看本机':'查询原主机的这次作业'}</Button>}</div>
     <p className="pw-field-hint">{accepted?(proof!.detailRetired===true?'原主机曾接单，详细记录已归档。':'原主机曾接单。'):
       nativeProject?(origin.kind==='native_remote_session_branch'?'这是一条已登记的独立会话分支。':'这是从原项目历史登记的工作。'):'这里展示手机留存的原任务记录。'}
@@ -212,18 +223,22 @@ export function RemoteTaskWorkspace({ taskId, raw, receipt, savedFiles, openProj
   </section>
     <RemoteSavedResults taskId={taskId} rows={savedFiles} openProject={openProject}/>
     {personal&&<RemoteOfflinePickup task={raw} saved={savedFiles}/>}
-    {canObserve&&raw.hasPhoneDraftRows===true&&<RemotePhoneDraftShelf taskId={taskId} runId={raw.runId} epoch={raw.coordinatorEpoch}/>}
-    {onlineView&&<LiveRemoteTask key={attempt} taskId={taskId} runId={raw.runId} coordinatorEpoch={raw.coordinatorEpoch}/>}</>;
+    {canObserve&&raw.hasPhoneDraftRows===true&&<RemotePhoneDraftShelf taskId={taskId} runId={raw.runId} epoch={raw.coordinatorEpoch} onObserve={supportedChoice&&foreground?p=>{
+      if(!taskVisible(taskId)||!validPhoneDraftPin(p)||p.taskId!==taskId||p.runId!==raw.runId||p.epoch!==raw.coordinatorEpoch)return false;
+      setFollow(p);selectedWindow.current=ticket();setObserving(selectedWindow.current);return true;
+    }:undefined}/>}
+    {onlineView&&<LiveRemoteTask key={attempt} taskId={taskId} runId={raw.runId} coordinatorEpoch={raw.coordinatorEpoch} follow={follow}/>}</>;
 }
 
 /** Only an explicitly opened private host observation mounts the network-backed poller. */
-function LiveRemoteTask({taskId,runId,coordinatorEpoch}:{taskId:string;runId:string;coordinatorEpoch:number}) {
+function LiveRemoteTask({taskId,runId,coordinatorEpoch,follow}:{taskId:string;runId:string;coordinatorEpoch:number;follow:PhoneDraftPin|null}) {
   const { snapshot, pending, error, stale, act, current } = useRemoteTask(taskId,runId,coordinatorEpoch);
   const enabled = !!snapshot && !stale && taskVisible(taskId), source = object(snapshot?.source);
   if (!supported('remoteTask.open')) return null;
   return <section className="pw-remote-workspace pw-depth-collaboration" aria-label="原电脑任务"><div className="pw-section-heading"><h3>电脑会话</h3><Button variant="secondary" disabled={!!pending || !taskVisible(taskId)} onClick={() => void act(!snapshot || stale ? 'remoteTask.open' : 'remoteTask.refresh')}>{pending ? '正在核对…' : !snapshot || stale ? '重新打开原任务' : '查询原任务'}</Button></div>
+    {follow&&!snapshot&&<p className="pw-field-hint" role="status">仅核对原主机与手机所选 v{follow.revision}，不发送草稿。</p>}
     {error && <p className="pw-field-error" role="alert">{error}</p>}{stale && <p className="pw-field-hint">原页面已变化，请重新核对；没有自动发送旧输入。</p>}
-    {snapshot && <><div className="pw-remote-session-identity"><p className="pw-muted">{workerLabel(source.worker || '原执行器')} · {executionLabel(source.executorStatus || '状态待核对')}</p>
+    {snapshot && <>{follow&&<RemoteDraftEditor key={taskId+':selected'} snapshot={snapshot} busy={!!pending} active={enabled} run={act} follow={follow}/>}<div className="pw-remote-session-identity"><p className="pw-muted">{workerLabel(source.worker || '原执行器')} · {executionLabel(source.executorStatus || '状态待核对')}</p>
       {source.threadId && <Accordion className="pw-remote-identity"><AccordionItem title="原会话身份"><p className="pw-source-copy">{source.threadId}</p><p className="pw-field-hint">{source.worker} · {source.executorStatus}</p></AccordionItem></Accordion>}</div>
       {source.cloudJobDetailRetired === true && <p role="status">主机保留了这项原作业的接单编号，详细运行记录已清理。不能据此继续进程或恢复旧审批；已经存到手机的成果仍可在下方打开。</p>}
       {!snapshot.fresh && !stale && !source.cloudJobDetailRetired && <p className="pw-field-hint">{snapshot.reason || '请查询原任务后再作出新的决定。'}</p>}
@@ -232,7 +247,7 @@ function LiveRemoteTask({taskId,runId,coordinatorEpoch}:{taskId:string;runId:str
         {['decline', 'accept', ...(!snapshot.teamRemoteWriter ? ['cancel'] : [])].map(decision => <Button key={decision} variant={decision === 'accept' ? 'primary' : decision === 'cancel' ? 'ghost' : 'secondary'} disabled={!enabled || !!pending || !snapshot.fresh || !approval.requestId || decision === 'accept' && (approval.canAccept !== true || Array.isArray(snapshot.teamMemberApprovalAcceptIds) && !snapshot.teamMemberApprovalAcceptIds.includes(approval.requestId))} onClick={() => { const now = current(); if (!now || now.reviewId !== snapshot.reviewId || remoteApprovalClaim(now, approval.requestId)) return; void act('remoteTask.approve', { requestId: approval.requestId, decision }); }}>{decision === 'accept' ? '只允许这一次' : decision === 'cancel' ? '取消这一次' : '拒绝这一次'}</Button>)}</div>}</section>)}
       {rows(snapshot.task?.operations).filter(operation => operation.tool === 'remote_approval').slice(-8).map(operation => <p className="pw-field-hint" key={operation.operationId}>本机单次决定：{operation.arguments?.requestId} · {operation.arguments?.decision} · {operation.state === 'remote_approval_receipt' ? '已收到协议回执，非工具成功' : '决定已登记，仅查询原回执'}</p>)}
       {rows(source.pendingQuestions).map(request => <RemoteQuestion key={`${taskId}:${source.jobOperationId}:${request.requestId}:${request.requestHash}`} request={request} snapshot={snapshot} busy={!enabled || !!pending} run={act} />)}
-      <RemoteDraftEditor key={taskId} snapshot={snapshot} busy={!!pending} active={enabled} run={act} />
+      {!follow&&<RemoteDraftEditor key={taskId} snapshot={snapshot} busy={!!pending} active={enabled} run={act} />}
       </div><aside className="pw-remote-context" aria-label="执行观察与来源">
       <RemoteProgress snapshot={snapshot} />
       <RemoteTaskHarness snapshot={snapshot} busy={!!pending} active={enabled} run={act} returnToTask={() => void act('remoteTask.open')} />
