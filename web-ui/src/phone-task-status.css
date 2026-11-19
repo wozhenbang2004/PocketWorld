@@ -45,7 +45,11 @@
 .pw-phone-activity-actions > button { justify-content: flex-start; min-height: 44px; }
 .pw-reply-activity-bar { display: flex; align-items: center; flex: none; gap: 8px; min-height: 44px; margin-inline: 20px; font-size: 12px; color: var(--pw-copy); }
 .pw-reply-activity-bar > span { flex: 1; }
-.pw-reply-activity-bar > button { flex: none; }
+.pw-reply-handoff { justify-content: space-between; gap: 4px 12px; flex-wrap: wrap; padding-block: 6px; border-bottom: 1px solid var(--pw-divider); }
+.pw-reply-handoff-copy { display: grid; min-width: 0; gap: 2px; overflow-wrap: anywhere; }
+.pw-reply-handoff-copy strong { font: 550 14px/20px var(--pw-font); color: var(--pw-ink); }
+.pw-reply-handoff-actions { display: flex; flex: none; flex-wrap: wrap; align-items: center; gap: 6px; }
+.pw-reply-handoff-actions button { min-height: var(--pw-control-target); }
 .pw-composer-host.pw-squircle-composer .pw-composer-toolbar .pw-composer-intent > .pw-input-mode-trigger {
   display: flex;
   flex: 0 1 auto;

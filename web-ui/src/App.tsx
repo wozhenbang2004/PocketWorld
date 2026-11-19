@@ -269,7 +269,7 @@ export default function App(){
  const workSearch=useRef<HTMLButtonElement>(null),previousCommandOpen=useRef(false);
  useEffect(()=>{if((workOpen||desktopNavigation)&&previousCommandOpen.current&&!commandOpen)workSearch.current?.focus();previousCommandOpen.current=commandOpen;},[workOpen,desktopNavigation,commandOpen]);
  const [taskLayer,setTaskLayer]=useState<TaskLayer>('overview'),[projectPickerOpen,setProjectPickerOpen]=useState(false),[fileDisplayOpen,setFileDisplayOpen]=useState(false);
- const [taskFiltersOpen,setTaskFiltersOpen]=useState(false),[endedScopeOrigin,setEndedScopeOrigin]=useState<{filter:WorkCollectionFilter;query:string}|null>(null),[taskContextExpanded,setTaskContextExpanded]=useState(false);
+ const [taskFiltersOpen,setTaskFiltersOpen]=useState(false),[endedScopeOrigin,setEndedScopeOrigin]=useState<{filter:WorkCollectionFilter;query:string}|null>(null);
  const [phoneViewerExpanded,setPhoneViewerExpanded]=useState(false);
  useEffect(()=>{setPhoneViewerExpanded(false)},[state.conversationId,route,taskId,taskOpen]);
  const projectScroll=useRef<HTMLElement>(null),projectListTop=useRef(new Map<string,number>());
@@ -588,7 +588,7 @@ export default function App(){
   const origin=historyOrigin||(searchQuery===undefined&&!nativeWindowAlreadyOpen&&taskHistoryOrigin.current?.taskId===id?taskHistoryOrigin.current.origin:undefined);
   taskHistoryOrigin.current=origin?{taskId:id,origin}:null;
   invalidateContinuation();
-  rememberTaskPosition();setTaskContextExpanded(false);const request=++reviewRequest.current;const readReview=entry==='review'||entry==='scope'||tasks.some(task=>task.id===id&&attention(task));openedTaskId.current=null;setReviewPending(false);setTaskOpening(true);setWorkOpen(false);setCommandOpen(false);setTaskId(id);setTaskLayer(entry==='review'?'overview':entry);setTaskOpen(true);setReview(null);setReviewNote('');setReviewFeedbackOpen(false);setReviewSubmitted(false);setReviewReceipt('');setQuestionPending(false);
+  rememberTaskPosition();const request=++reviewRequest.current;const readReview=entry==='review'||entry==='scope'||tasks.some(task=>task.id===id&&attention(task));openedTaskId.current=null;setReviewPending(false);setTaskOpening(true);setWorkOpen(false);setCommandOpen(false);setTaskId(id);setTaskLayer(entry==='review'?'overview':entry);setTaskOpen(true);setReview(null);setReviewNote('');setReviewFeedbackOpen(false);setReviewSubmitted(false);setReviewReceipt('');setQuestionPending(false);
   const window={taskId:id,request,documentEpoch:bridge.getDocumentEpoch(),resumeRevision:Number(obj(bridge.getState().view).resumeRevision||0)};reviewWindow.current=window;
   // Open the original host window before obtaining its single-use review handle.
   // Internal task opens do not emit another external-navigation request.
@@ -1172,6 +1172,7 @@ export default function App(){
  };
  const taskReviewBody=(task:Task)=>{
   const progress=getRecentTaskProgress(task);
+  const stage=workCollectionPresentation(task).group;
   const actionNames=asArray<{action:string;label:string}>(review?.actions).map(x=>x.action),approved=asArray<Json>(review?.approvals),unresolved=asArray<Json>(review?.unresolvedOperations);
   const protectedDisabled=taskOpening||reviewPending||reviewStale||reviewSubmitted;
   const scope=obj(review?.approvalExecutionScope||review?.task?.raw?.executionScope),currentScope=obj(task.raw?.executionScope);
@@ -1200,12 +1201,28 @@ export default function App(){
   const hasDecision=!!review?.ownerQuestion||!!project||actionNames.some(action=>action!=='tasks.scope'&&action!=='tasks.plan.enter');
   const ordinaryResume=!project&&!review?.ownerQuestion&&!approved.length&&!unresolved.length&&actionNames.includes('tasks.resume')&&actionNames.every(action=>['tasks.resume','tasks.scope','tasks.plan.enter','tasks.deleteScreenshot'].includes(action));
   const resumeFeedback=<Accordion variant="divided" className="pw-compact-disclosures" expandedKeys={reviewFeedbackOpen?['resume-feedback']:[]} onExpandedChange={keys=>setReviewFeedbackOpen(keys.has('resume-feedback'))}><AccordionItem id="resume-feedback" title="补充说明（可选）" description={reviewNote?'已填写':undefined}><TextAreaField label="本次补充" value={reviewNote} onChange={setReviewNote} placeholder="需要调整的内容" isDisabled={protectedDisabled}/></AccordionItem></Accordion>;
-  const decisionFirst=(!!review?.ownerQuestion||actionNames.includes('tasks.approve')&&approved.length>0)&&!actionNames.includes('tasks.confirm')&&!actionNames.includes('tasks.resolve');
+  const inspectResult=stage==='ended'||actionNames.includes('tasks.confirm');
+  const decisionFirst=stage==='attention'&&!inspectResult;
+  const overviewActive=taskOpen&&!taskOpening&&openedTaskId.current===task.id&&taskLayer==='overview';
   const taskFiles=obj(snapshot?.view).taskId===task.id&&task.raw?.actorId==='owner'&&task.raw?.spaceId==='private'&&task.raw?.contextAvailable!==false&&task.raw?.taskProjection!=='source_unavailable'&&task.raw?.kind!=='inference'&&can('attachmentWorkspace.open')
    ? {taskId:task.id,supported:can('tasks.resultFiles'),onOpen:(file:TaskResultFile,target:HTMLButtonElement)=>openTaskResultFile(task.id,file,target),
       onBrowse:()=>run('attachmentWorkspace.open',{taskId:task.id})}
    : undefined;
-  const evidence=<div key="task-evidence" className="pw-task-evidence">{decisionFirst&&<Button variant="ghost" className="pw-task-context-toggle" aria-expanded={taskContextExpanded} aria-controls={`pw-task-context-${task.id}`} onClick={()=>setTaskContextExpanded(value=>!value)}>查看任务上下文<IconChevronDown size={16}/></Button>}<div id={`pw-task-context-${task.id}`} hidden={decisionFirst&&!taskContextExpanded}><TaskOutcome task={review&&!reviewStale?review.task:task} messages={messages} resultFiles={taskFiles} active={taskOpen&&!taskOpening&&openedTaskId.current===task.id&&taskLayer==='overview'&&(!decisionFirst||taskContextExpanded)} canReadReport={can('ownerWork.report.read')} readIdentity={`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}:${navigationRevision}`} onCopy={copyWithLocalFeedback} onOpenProjectPackage={!packageOpening&&!taskOpening&&can('projects.package.preview.inspect')&&can('projects.package.preview.open')&&can('tasks.close')?openTaskPackage:undefined} onOpenAttachment={can('attachments.open')?(messageId,id,sha256)=>run('attachments.open',{messageId,id,sha256}):undefined}/></div></div>;
+  const latestProgress=stage==='running'&&running(task)&&<section key="task-current-progress" className="pw-work-current-progress">
+   <h3>目前进展</h3>
+   <BlurCrossfade identity={`${task.id}:${progress.operationId||progress.position||progress.title}`}>
+    <strong>{progress.source==='task'&&progress.status!=='unknown'?'最近确认的状态':progress.title}</strong>
+    <p dir="auto">{progress.detail||(progress.source==='task'?progress.title:progress.stateLabel)}</p>
+   </BlurCrossfade>
+  </section>;
+  const evidence=<TaskOutcome key="task-evidence" task={review&&!reviewStale?review.task:task} messages={messages} resultFiles={taskFiles}
+   active={overviewActive} showEmptyResult={inspectResult&&task.status==='completed'} deferExecutionDetails={!inspectResult&&task.status!=='failed'}
+   canReadReport={can('ownerWork.report.read')} readIdentity={`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}:${navigationRevision}`}
+   onCopy={copyWithLocalFeedback} onOpenProjectPackage={!packageOpening&&!taskOpening&&can('projects.package.preview.inspect')&&can('projects.package.preview.open')&&can('tasks.close')?openTaskPackage:undefined}
+   onOpenAttachment={can('attachments.open')?(messageId,id,sha256)=>run('attachments.open',{messageId,id,sha256}):undefined}/>;
+  const workFacts=<OwnerWorkFacts key="task-handling" task={task} onTeam={can('teams.readRun')?openWorkTeam:undefined}
+   onReport={can('conversation.select')?()=>void returnToTaskConversation(task):undefined}
+   onReconcile={overviewActive&&can('tasks.open')?target=>openTask(target.taskId,'process',false,undefined,undefined,target):undefined}/>;
   const refreshControl=can('tasks.review')&&<IconButton icon={IconRefresh} aria-label={review?'重新核对':'读取可用操作'} title={review?'重新核对':'读取可用操作'} disabled={readingReview||questionPending} onClick={showTaskReview}/>;
   const reviewStatus=<>{readingReview&&<ThinkingLoader phase="正在读取当前任务"/>}{reviewStale&&<p className="pw-error">任务已有新进展，请重新核对后再操作。</p>}{continuation&&<section aria-label="原项目续接回执"><p className="pw-muted" role="status">{continuation.message}</p>{!project&&projectNote&&<Accordion variant="divided"><AccordionItem id="continuation-feedback" title="本次反馈"><p className="pw-approval-copy">{projectNote}</p></AccordionItem></Accordion>}{continuation.status==='unknown'&&can('tasks.review')&&<Button variant="secondary" disabled={readingReview} onClick={showTaskReview}>核对原任务状态</Button>}{['continued','unknown'].includes(continuation.status)&&can('conversation.select')&&<Button variant="ghost" disabled={!!state.chatSubmitting} onClick={()=>selectConversation(continuation.original.conversationId)}>返回原对话，草稿保留</Button>}</section>}{!continuation&&(reviewSubmitted||reviewReceipt)&&!review?.ownerQuestion&&(reviewReceipt?<p className="pw-muted" role="status">{reviewReceipt}</p>:state.taskActionErrors?.[task.id]?<p className="pw-error" role="alert">本次提交未确认。请先重新核对原任务，再决定是否操作。</p>:<p className="pw-muted" role="status">已提交这次决定，等待任务回执。</p>)}</>;
   const decision=(review||reviewPending||continuation||(canReadProject||attention(task))&&can('tasks.review'))&&<div key="task-decision" className="pw-task-decision">
@@ -1214,13 +1231,12 @@ export default function App(){
       {review&&(!reviewStale||!!review.ownerQuestion)&&(ordinaryResume?resumeFeedback:hasDecision?<PermissionReview title={project?'继续原项目任务':actionNames.includes('tasks.confirm')?'这份结果是否达到目标？':'处理这次任务'} headerAction={refreshControl}><div className="pw-protected-actions">{projectControls}{review.ownerQuestion&&<OwnerTaskQuestion key={review.reviewHandle} question={review.ownerQuestion as OwnerQuestionView} text={questionAnswer} onTextChange={setQuestionAnswer} disabled={protectedDisabled} canAnswer={actionNames.includes('tasks.answerQuestion')} canChoose={actionNames.includes('tasks.answerQuestionChoice')} submit={submitQuestion}/>}{actionNames.includes('tasks.confirm')&&<Accordion variant="divided" className="pw-compact-disclosures" expandedKeys={reviewFeedbackOpen?['result-feedback']:[]} onExpandedChange={keys=>setReviewFeedbackOpen(keys.has('result-feedback'))}><AccordionItem id="result-feedback" title="补充说明（可选）" description={reviewNote?'已填写':undefined}><TextAreaField label="本次结果反馈" value={reviewNote} onChange={setReviewNote} placeholder="已完成或仍需调整的内容"/></AccordionItem></Accordion>}{actionNames.includes('tasks.approve')&&approvalNavigation}{actionNames.includes('tasks.approve')&&approved.map(p=><TaskApproval key={`${review.reviewHandle}:${p.approvalId||p.id}`} approval={p} executionScope={scope} disabled={protectedDisabled} onDecision={args=>reviewedAction('tasks.approve',args)}/>)}{actionNames.includes('tasks.resolve')&&unresolved.map(op=><section className="pw-approval-item" key={op.operationId}><h4>{op.title||op.toolName||'动作结果核对'}</h4><p>{op.summary||op.message||'请依据实际观察核对这次动作是否已经发生。'}</p><div className="pw-action-row"><Button variant="secondary" disabled={protectedDisabled} onClick={()=>reviewedAction('tasks.resolve',{operationId:op.operationId,outcome:'occurred'})}>确认已发生</Button><Button variant="secondary" disabled={protectedDisabled} onClick={()=>reviewedAction('tasks.resolve',{operationId:op.operationId,outcome:'not_occurred'})}>确认未发生</Button></div></section>)}{!project&&actionNames.includes('tasks.resume')&&<TextAreaField label="本次补充" value={reviewNote} onChange={setReviewNote} placeholder="继续前需要补充什么？"/>}{!review.actions?.length&&<p className="pw-muted">当前没有待作出的新决定。</p>}</div></PermissionReview>:<div className="pw-section-heading pw-task-review-tools"><p className="pw-muted">当前没有待作出的新决定。</p>{refreshControl}</div>)}
      </div>;
   return <Tabs className="pw-work-object-tabs" selectedKey={taskLayer==='scope'?'goal':taskLayer} onSelectionChange={key=>showTaskLayer(String(key) as TaskLayer)}>
-   <TabList aria-label="查看这件工作"><Tab id="overview">成果与进展</Tab><Tab id="goal">目标</Tab><Tab id="process">过程</Tab></TabList>
+   <TabList aria-label="查看这件工作"><Tab id="overview">概览</Tab><Tab id="goal">目标</Tab><Tab id="process">过程</Tab></TabList>
    {/* Keep the result document mounted while reading deeper task details. */}
    <TabPanel id="overview" shouldForceMount hidden={taskLayer!=='overview'}>
-    <section className="pw-task-overview pw-task-review" aria-label="任务结果与处理">
-     {decisionFirst?[decision,evidence]:[evidence,decision]}
+    <section className="pw-task-overview pw-task-review" aria-label="这件工作的进展、决定与成果">
+     {inspectResult?[evidence,decision,workFacts]:decisionFirst?[decision,workFacts,evidence]:[latestProgress,workFacts,evidence,decision]}
      {taskLayer==='overview'&&ownerWorkActions(task)}
-     <OwnerWorkFacts task={task} onTeam={can('teams.readRun')?openWorkTeam:undefined} onReport={can('conversation.select')?()=>void returnToTaskConversation(task):undefined} onReconcile={taskOpen&&!taskOpening&&openedTaskId.current===task.id&&can('tasks.open')?target=>openTask(target.taskId,'process',false,undefined,undefined,target):undefined}/>
      {taskOpen&&openedTaskId.current===task.id&&!taskOpening&&task.raw?.hasOwnerWorkPreparations&&<ButlerPreparationEntries key={'preparations-task:'+task.id} sourceTaskId={task.id} conversationId={privateTaskConversationId(task)||''} active={taskLayer==='overview'&&!preparationTarget} refreshKey={String(task.raw?.ownerWorkPreparationCount||0)+':'+preparationRevision} can={can} run={bridge.command} onOpen={setPreparationTarget}/>}
      {task.raw?.ownerWorkPreparation?.sourceTaskId&&task.raw?.ownerWorkPreparation?.proposalId&&task.raw?.ownerWorkPreparation?.sourceConversationId&&<Button variant="ghost" leadingIcon={IconChat} onClick={()=>setPreparationTarget({sourceTaskId:task.raw!.ownerWorkPreparation.sourceTaskId,proposalId:task.raw!.ownerWorkPreparation.proposalId,sourceConversationId:task.raw!.ownerWorkPreparation.sourceConversationId})}>查看管家的原工作准备</Button>}
      {taskOpen&&openedTaskId.current===task.id&&!taskOpening&&workSupplementTarget?.taskId===task.id&&can('ownerWork.supplement.read')&&<OwnerWorkSupplement key={workIdentityKey(workSupplementTarget)} target={workSupplementTarget} task={task} can={can} registerBeforeLeave={registerWorkSupplementBeforeLeave} onClose={()=>setWorkSupplementTarget(null)} onSelectOriginal={identity=>void targetWork(task,identity)}/>}
@@ -1235,7 +1251,6 @@ export default function App(){
      {taskOpen&&taskLayer==='overview'&&task.raw?.developmentContext&&can('projectLive.open')&&<ConversationModelPickerVisibility key={'live:'+task.id}>{pickerVisible=><ProjectLivePreview taskId={task.id} run={act} nativeVisible={!pickerVisible&&!phoneViewerObscured} onBackChange={registerLivePreviewBack}/>}</ConversationModelPickerVisibility>}
      {currentScope.executionPhase==='planning'&&<p className="pw-muted" role="status">原任务处于只读规划。{Number(currentScope.planRevision)>0?`当前计划版本 ${String(currentScope.planRevision)}，确认准确计划后才能在原范围内继续。`:'尚未提交计划正文，重新打开页面不会启动执行。'}</p>}
 
-     {running(task)&&(progress.source!=='task'||progress.status==='unknown')&&<section className="pw-task-progress" aria-label="最近进展"><ProgressCircle aria-label="任务正在执行" isIndeterminate size="sm"/><div><BlurCrossfade identity={`${task.id}:${progress.operationId||progress.position||progress.title}`}><strong>{progress.title}</strong></BlurCrossfade>{progress.detail&&progress.detail!==task.summary&&<p>{progress.detail}</p>}</div></section>}
      {openedTaskId.current===task.id&&!taskOpening&&task.raw?.kind==='assistant'&&can('conversation.drafts')&&<ConversationDrafts key={'drafts:'+task.id} taskId={task.id} refreshRevision={Number(state.memoryRefreshRevision||0)} open={openConversationDraft}/>}
 
      <Accordion variant="divided" className="pw-task-disclosures" aria-label="更多任务资料">
@@ -1380,12 +1395,35 @@ export default function App(){
  const conversationWorkRows=conversationWork.filter(task=>task.id!==representedPhoneTaskId&&task.id!==chatAttention?.id);
  const butlerWorkRows=asArray<Task>(state.ownerWork).filter(task=>task.id!==representedPhoneTaskId&&isButlerHomeWork(task));
  const conversationWorkIds=new Set(conversationWorkRows.map(task=>task.id));
- const replyActivity=state.chatBusy&&!composerHasChatStop?<div className="pw-reply-activity-bar"><span>{state.chatActiveTurn?.resourceState==='queued'?'回复已排队':state.chatActiveTurn?.resourceState==='retained'?'回复等待补充':state.chatActiveTurn?.resourceState==='stopping'?'正在停止回复':'正在回复'}</span>{currentCancelIdentity&&can('chat.cancel')&&<Button variant="ghost" size="small" onClick={stopOriginalChat}>停止回复</Button>}</div>:null;
+ const awayFromConversation=route!=='chat'&&route!=='butler';
+ const returnToForegroundReply=()=>{
+  const conversationId=foregroundTurn?.conversationId;
+  if(typeof conversationId!=='string'||!conversationId)return;
+  void navigate('chat',undefined,{stillCurrent:()=>!document.hidden&&bridge.getState().state.conversationId===conversationId});
+ };
+ const replyStop=!composerHasChatStop&&currentCancelIdentity&&can('chat.cancel')&&
+  <Button variant="ghost" size="small" onClick={stopOriginalChat}>停止回复</Button>;
+ const replyActivity=foregroundTurn&&(awayFromConversation||route==='chat'&&!composerHasChatStop)?
+  <div className={`pw-reply-activity-bar${awayFromConversation?' pw-reply-handoff':''}`}>
+   <span className="pw-reply-handoff-copy">
+    {awayFromConversation&&<strong dir="auto">{currentConversation?.title||'当前对话'}</strong>}
+    <span role="status" dir="auto">{conversationActivity}</span>
+   </span>
+   <div className="pw-reply-handoff-actions">
+    {awayFromConversation&&<Button variant="ghost" size="small" onClick={returnToForegroundReply}>回到原对话</Button>}
+    {replyStop}
+   </div>
+  </div>:null;
  const modelSetupAction=can('setup.read')
   ? <Button variant="secondary" size="small" data-workspace-entry="connect-model" disabled={modelSetupOpening} onClick={()=>void openModelSetup()}>{modelSetupOpening?'正在读取接入状态…':'连接模型'}</Button>
   : <ConversationModelStartButton/>;
  const composerRegion=<div className="pw-composer-region">
-   {route==='butler'&&ready&&(messages.length>0&&!!state.conversationId||!!foregroundTurn||pendingHere)&&<div className="pw-butler-conversation-context"><Button variant="ghost" size="small" leadingIcon={IconChat} onClick={()=>navigate('chat')} aria-label={pendingHere?'核对当前输入':`继续话题：${currentConversation?.title||'当前对话'}`} title={currentConversation?.title||'当前对话'}><span>{pendingHere?'核对当前输入':foregroundTurn?'查看当前回复':'继续'}{currentConversation?.title?' · '+currentConversation.title:''}</span><IconChevronRight size={15} aria-hidden="true"/></Button></div>}
+   {route==='butler'&&ready&&(messages.length>0&&!!state.conversationId||!!foregroundTurn||pendingHere)&&<div className="pw-butler-conversation-context">
+    <Button variant="ghost" size="small" leadingIcon={IconChat} onClick={foregroundTurn&&!pendingHere?returnToForegroundReply:()=>void navigate('chat')} aria-label={pendingHere?'核对当前输入':`继续话题：${currentConversation?.title||'当前对话'}`} title={currentConversation?.title||'当前对话'}>
+     <span>{pendingHere?'核对当前输入':foregroundTurn?`${conversationActivity} · 查看话题`:'继续'}{currentConversation?.title?' · '+currentConversation.title:''}</span><IconChevronRight size={15} aria-hidden="true"/>
+    </Button>
+    {replyStop}
+   </div>}
    {route==='chat'&&hasNewReplies&&<Button variant="secondary" className="pw-new-replies" onClick={goToLatest}>有新回复 · 回到最新</Button>}
    {route==='chat'&&chatAttention&&<Button variant="ghost" className="pw-chat-attention" data-task-id={chatAttention.id} trailingIcon={IconChevronRight} aria-label={`${can('tasks.review')?taskActionLabel(chatAttention):'查看任务'}：${chatAttention.goal}`} disabled={taskOpening} onClick={()=>openTask(chatAttention.id,can('tasks.review')?'review':'overview')}><span className="pw-chat-attention-copy"><small>{can('tasks.review')?taskActionLabel(chatAttention):'查看任务'}</small><b>{chatAttention.goal}</b></span></Button>}
    {route==='chat'&&ready&&messages.length>0&&!composerModelName&&<div className="pw-butler-model-setup">{modelSetupAction}</div>}

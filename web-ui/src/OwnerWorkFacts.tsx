@@ -10,14 +10,18 @@ import './owner-work.css';
 export function OwnerWorkFacts({ task, onReport, onReconcile, onTeam }: { task: unknown; onReport?: () => void; onReconcile?: (target: ReportReconciliationTarget) => void; onTeam?: (team: OwnerWorkTeam) => void }) {
   const work = ownerWorkPresentation(task);
   if (!work) return null;
+  const showHandling = work.waitingForButler || work.waitingForChildren || work.delivered ||
+    work.state === 'needs_review' || work.state === 'unavailable' || work.resultState === '来源不可用';
+  const showResult = work.resultAvailable || work.resultState === '原结果不可用';
+  if (!showHandling && !showResult && !work.teams.length && !work.teamsUnavailable) return null;
   return <section className="pw-owner-work-facts" aria-label="成果与管家处理" data-handling={work.state}>
-    <div className="pw-owner-work-handling">
+    {showHandling && <div className="pw-owner-work-handling">
       {work.waitingForButler && work.state === 'running' && <ProgressCircle isIndeterminate size="sm" aria-label="管家正在核对结果" />}
       <div><strong>{work.handlingLabel}</strong>{work.reason && <p>{work.reason}</p>}</div>
       {work.delivered && onReport && <Button variant="ghost" trailingIcon={IconChevronRight} onClick={onReport}>回到汇报话题</Button>}
       {work.receiptReconciliation && onReconcile && <Button variant="ghost" trailingIcon={IconChevronRight} onClick={() => onReconcile(work.receiptReconciliation!)}>查看整理记录</Button>}
-    </div>
-    {(work.resultAvailable || !work.teams.length) && <p className="pw-owner-work-result-state">{work.resultState}</p>}
+    </div>}
+    {showResult && <p className="pw-owner-work-result-state">{work.resultState}</p>}
     <OwnerWorkTeams teams={work.teams} onOpen={onTeam} />
     {work.teamsUnavailable && <p className="pw-owner-work-result-state" role="status">协作进展待读取，请稍后重新打开这件工作。</p>}
   </section>;

@@ -86,12 +86,14 @@ function useProjectPackages(task: unknown, active: boolean, identity: string) {
 }
 
 /** Composition of PW-05 Answer and PW-22 file actions around host-owned evidence. */
-export function TaskOutcome({ task, messages, active, canReadReport, readIdentity, onCopy, onOpenAttachment, onOpenProjectPackage, resultFiles }: {
+export function TaskOutcome({ task, messages, active, canReadReport, readIdentity, onCopy, onOpenAttachment, onOpenProjectPackage, resultFiles, showEmptyResult, deferExecutionDetails }: {
   task: unknown;
   messages: unknown;
   active: boolean;
   canReadReport: boolean;
   readIdentity: string;
+  showEmptyResult: boolean;
+  deferExecutionDetails: boolean;
   onCopy: (text: string) => Promise<unknown>;
   onOpenAttachment?: (messageId: string, id: string, sha256: string) => void;
   onOpenProjectPackage?: (target: PackagePreviewTarget) => void;
@@ -142,7 +144,7 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   const revision = JSON.stringify([settlementTitle, !!resultText, !!outcome.image, !!remotePhone, screenshot?.imageId, reply?.id, files.map(file => [file.id, file.sha256]), outcome.projectPackages.map(item => [item.operationId, item.archiveSha256])]);
   useCollectionMotion(root, owner, revision, {layout: false});
   const hasExecutionRecord = !!(resultText || outcome.image || remotePhone || phoneStatus || outcome.partial);
-  const executionResult = (hasExecutionRecord || !settlementTitle) && <div className="pw-outcome-document">
+  const executionResult = (hasExecutionRecord || showEmptyResult && !settlementTitle) && <div className="pw-outcome-document">
       <header className="pw-outcome-heading"><h3>{hasExecutionRecord ? title : outcome.projectPackages.length ? '结果正文' : '暂无可读取的结果正文'}</h3></header>
       {resultText ? <div data-motion-key="result-body"><AIAnswer text={resultText} showActions={!progress} onCopy={progress ? undefined : () => onCopy(resultText)} onCopyCode={onCopy}/></div>
         : !settlementTitle && <p className="pw-reading-note">{files.length ? '可先查看下方关联答复中的附件。' : '当前记录未提供可读取的结果正文。'}</p>}
@@ -192,7 +194,7 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
       </div>}
     </section>}
     {report && <OwnerWorkReport key={JSON.stringify(report)} target={report} active={active} supported={canReadReport} identity={readIdentity} onCopy={onCopy} />}
-    {executionResult && (report ? <Accordion variant="divided" className="pw-reading-disclosures" aria-label="执行原始结果"><AccordionItem id="execution-result" title="查看执行原始结果" description="保留执行时的正文和画面">{executionResult}</AccordionItem></Accordion> : executionResult)}
+    {executionResult && (report || deferExecutionDetails ? <Accordion variant="divided" className="pw-reading-disclosures" aria-label="执行原始记录"><AccordionItem id="execution-result" title="查看执行原始记录">{executionResult}</AccordionItem></Accordion> : executionResult)}
 
     {/* These files belong to the linked message, not necessarily to the current run. */}
     {files.length > 0 && <section className="pw-outcome-deliverables" aria-label="关联答复中的附件">

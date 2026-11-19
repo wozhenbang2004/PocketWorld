@@ -40,6 +40,10 @@
 .pw-task-source-links > .button-press-motion { min-height: 44px; padding-inline: 0; color: var(--pw-accent); font-size: 13px; }
 .pw-task-body .pw-task-disclosures { margin-top: 0; }
 .pw-task-body .pw-task-overview { gap: var(--pw-gap-section); }
+.pw-work-current-progress { display: grid; gap: var(--pw-gap-related); padding-block: 0 var(--pw-gap-content); border-bottom: 1px solid var(--pw-divider); }
+.pw-work-current-progress h3 { margin: 0; font: 550 17px/25px var(--pw-font); }
+.pw-work-current-progress strong { display: block; font: 550 14px/22px var(--pw-font); }
+.pw-work-current-progress p { margin: 2px 0 0; font: 400 14px/22px var(--pw-font); color: var(--pw-copy); white-space: pre-wrap; overflow-wrap: anywhere; }
 .pw-task-body .pw-task-outcome.pw-task-reading { margin: 0; }
 
 /* Work is one related collection under the answer, not independent chat bubbles. */
