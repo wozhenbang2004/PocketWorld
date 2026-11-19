@@ -235,6 +235,12 @@ public final class TaskStoreTeamWriteHost implements TeamCoordinator.BudgetHost,
         if(context!=null&&integrations.containsKey(run))context.put("activeAttempt",true);
         TeamWorkReview.Prepared review=context==null?TeamWorkReview.prepare(workspace,run,scope.getString("targetProjectId"),assignments):TeamWorkReview.prepareRecovery(workspace,run,scope.getString("targetProjectId"),assignments,context);read.check();return review;
     }
+    TeamOwnerFileReading readOwnerFrozenFiles(JSONObject run,RunControl reader)throws Exception{
+        String id=run.getString("id");JSONObject captured=review(id,reader).snapshot();String warning="";TeamOwnerRevisionFiles revision=null;
+        try{revision=TeamOwnerRevisionFiles.capture(tasks,workspace,run,captured,reader);}
+        catch(Exception unavailable){reader.check();warning="此次未能锁定上版写回与本次冻结的同一组原件。下方只是打开时项目对照，不替代修订前后对照。";}
+        reader.check();return new TeamOwnerFileReading(id,captured,revision,warning);
+    }
     /** Reopen reads native existing decisions and progress; never re-approves, re-runs or replays them. */
     public JSONObject reviewSnapshot(String run,RunControl read)throws Exception {
         JSONObject result=review(run,read).snapshot(),state=tasks.teamReviewState(run);for(String key:new String[]{"independentReview","approvedReview"})if(state.has(key))result.put(key,state.get(key));return result.put("integration",integrationState(run));

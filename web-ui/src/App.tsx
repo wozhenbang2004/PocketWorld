@@ -114,7 +114,7 @@ import type {TaskResultFile} from './TaskResultFiles';
 import {PhoneTaskStatus} from './PhoneTaskStatus';
 import {PhoneTaskOriginalRequest} from './PhoneTaskOriginalRequest';
 import {PHONE_RECORD,PhoneOriginalActionReview} from './PhoneOriginalActionReview';
-import {EarlierDraftPhoneStarts,BlankPhoneReceiptActions} from './BlankPhoneStarts';
+import {EarlierDraftPhoneStarts,BlankPhoneReceiptActions,type BlankFirstRun} from './BlankPhoneStarts';
 import {PhoneNotificationReturn,originalPhoneNotice,type PhoneNotice} from './PhoneNotificationReturn';
 import {PhoneScopeReview,type PhoneReviewDisplay} from './PhoneScopeReview';
 import {PhonePauseInstruction,isPrivateLocalPhone} from './PhonePauseInstruction';
@@ -304,7 +304,7 @@ export default function App(){
  const phoneNotification=originalPhoneNotice(state.originalPhoneNotification);
  const [phoneNoticePin,setPhoneNoticePin]=useState<PhoneNotice|null>(null),[phoneNoticePanel,setPhoneNoticePanel]=useState<string|null>(null);
  const phoneNoticeRef=useRef<PhoneNotice|null>(null),phoneNoticeSeen=useRef('');
- const phoneActivityPick=useRef<{handle:string;navigation:number;document:number;resume:number;entry:'review'|'overview'}|null>(null);
+ const phoneActivityPick=useRef<{kind:'activity'|'blank_draft';handle:string;navigation:number;document:number;resume:number;entry:'review'|'overview'}|null>(null);
  useEffect(()=>{setPhoneViewerExpanded(false)},[state.conversationId,route,taskId,taskOpen]);
  const projectScroll=useRef<HTMLElement>(null),projectListTop=useRef(new Map<string,number>());
  const projectTaskReturn=useRef<ProjectTaskReturn|null>(null);
@@ -806,13 +806,13 @@ export default function App(){
   if(differentRun()){setPhoneNoticePanel(note.token);return}
   phoneNoticeRef.current=note;setPhoneNoticePin(note);setPhoneNoticePanel(null);
   const pick=phoneActivityPick.current;
-  openTask(note.taskId,note.activityHandle&&pick?.handle===note.activityHandle?pick.entry:'overview',false,undefined,undefined,{runId:note.runId,epoch:note.epoch},stillHere);
+  openTask(note.taskId,note.selection&&pick?.kind===note.selection.kind&&pick.handle===note.selection.handle?pick.entry:'overview',false,undefined,undefined,{runId:note.runId,epoch:note.epoch},stillHere);
  };
  useEffect(()=>{
   const note=phoneNotification;if(!note||document.hidden||phoneNoticeSeen.current===note.token||!can('tasks.open'))return;
   phoneNoticeSeen.current=note.token;
-  if(note.activityHandle){const pick=phoneActivityPick.current;
-   if(pick?.handle!==note.activityHandle||pick.navigation!==navigationWindow.current||pick.document!==bridge.getDocumentEpoch()||pick.resume!==Number(obj(bridge.getState().view).resumeRevision||0))return}
+  if(note.selection){const pick=phoneActivityPick.current;
+   if(pick?.kind!==note.selection.kind||pick.handle!==note.selection.handle||pick.navigation!==navigationWindow.current||pick.document!==bridge.getDocumentEpoch()||pick.resume!==Number(obj(bridge.getState().view).resumeRevision||0))return}
   if(note.current)enterPhoneNotification(note);
   else setPhoneNoticePanel(note.token)
  },[phoneNotification?.token,can,openTask]);
@@ -865,9 +865,16 @@ export default function App(){
     .catch(()=>{if(here()){const receipt:PhoneStartReceipt={...original,status:'unknown',canRetire:false,message:'没有收到本次查询的回执。可以稍后再查，未重新启动任务。'};setPhoneStart(receipt);setLocalStatus(receipt.message)}})
     .finally(()=>{phoneAction.current=false;setPhoneReviewPending(false)});
  };
+ const openBlankFirst=can('phone.draft.original')&&can('tasks.open')?(first:BlankFirstRun)=>{
+  const now=bridge.getState(),key=now.composer?.key,phone=obj(now.phoneDraft);
+  if(document.hidden||typeof key!=='string'||!key||now.state.conversationId||phone.phone!==true||phone.channelOrigin===true)return;
+  phoneActivityPick.current={kind:'blank_draft',handle:first.draftRequestId,navigation:navigationWindow.current,document:bridge.getDocumentEpoch(),
+   resume:Number(obj(now.view).resumeRevision||0),entry:'overview'};
+  setPhoneReview(null);run('phone.draft.original',{composer:key,...first});
+ }:undefined;
  const blankReceiptActions=(receipt:PhoneStartReceipt)=><BlankPhoneReceiptActions receipt={receipt} pending={phoneReviewPending}
   onCheck={can('phone.query')?()=>queryOriginalPhone():undefined} onCloseWait={can('phone.draft.retireUncreated')?()=>queryOriginalPhone(true):undefined}
-  onTask={id=>{if(!document.hidden){setPhoneReview(null);openTask(id)}}}/>;
+  onTask={openBlankFirst}/>;
  const preparePhone=(original?:string)=>{
   if(document.hidden||phoneAction.current||['changed','elsewhere','unverified'].includes(phoneDraft.sourceState)||!phoneText.value.trim()||!can('phone.prepare'))return;
   const previous=original?phoneReviewLive.current:null;
@@ -1634,7 +1641,7 @@ export default function App(){
      if(!isPrivateLocalPhone(task)){openTask(task.id,entry);return}
      if(document.hidden||!surface?.activityHandle||!can('phone.activity.original'))return;
      const {taskId,runId,epoch,activityHandle}=surface;
-     phoneActivityPick.current={handle:activityHandle,navigation:navigationWindow.current,document:bridge.getDocumentEpoch(),resume:Number(obj(bridge.getState().view).resumeRevision||0),entry};
+     phoneActivityPick.current={kind:'activity',handle:activityHandle,navigation:navigationWindow.current,document:bridge.getDocumentEpoch(),resume:Number(obj(bridge.getState().view).resumeRevision||0),entry};
      run('phone.activity.original',{taskId,runId,epoch,activityHandle})}}
     onControl={(action,identity,shownPause)=>triggerPhoneControl(action,identity,isPrivateLocalPhone(task),shownPause)}/>)}</>:null;
  const representedPhoneTaskIds=new Set(phoneRows.map(row=>row.task.id));
@@ -1701,7 +1708,7 @@ export default function App(){
    {route==='butler'&&ready&&!!composerModelName&&!messages.length&&!foregroundTurn&&!butlerWorkRows.length&&!homeHasPreparations&&!phoneActivity&&
     stageExample&&<ConversationStarters onDraft={stageExample}/>}
    {intent!=='chat'&&['elsewhere','changed','unverified'].includes(phoneDraft.sourceState)&&<p className="pw-field-hint" role="status">{phoneDraft.sourceState==='elsewhere'?'手机草稿仍留在原私人对话，这里不会显示或提交它。':phoneDraft.sourceState==='changed'?'原消息已换版或不是最新交代。草稿已保留。要改用最新交代，请在那条消息的操作里选择「保留手机草稿，关联这条原话」。':'这份保留草稿缺少可核对的原消息。原文字还在，可在最新主人消息的操作里重新指定来源，或清空后另写。'}</p>}
-   {intent!=='chat'&&phoneDraft.phone===true&&!state.conversationId&&!phoneDraft.channelOrigin&&composer.key&&can('phone.draft.recentStarts')&&<EarlierDraftPhoneStarts key={chatOwner} composer={String(composer.key)} except={phoneStart?.taskId} onTask={openTask}/>}
+   {intent!=='chat'&&phoneDraft.phone===true&&!state.conversationId&&!phoneDraft.channelOrigin&&composer.key&&can('phone.draft.recentStarts')&&<EarlierDraftPhoneStarts key={chatOwner} composer={String(composer.key)} except={phoneStart?.taskId} onTask={openBlankFirst}/>}
    {phoneStart&&phoneStart.draftRequestId&&phoneStart.status!=='rejected'&&!phoneReview&&<section className="pw-input-receipt" aria-label="本次草稿的手机任务"><Receipt receipt={phoneStart}/>{blankReceiptActions(phoneStart)}</section>}
    {phoneStart?.status==='unknown'&&!phoneStart.draftRequestId&&!phoneReview&&<section className="pw-input-receipt" aria-label="原手机启动回执"><Receipt receipt={phoneStart}/>{phoneStart.requestId&&phoneStart.conversationId&&can('phone.query')?<Button variant="ghost" size="small" disabled={phoneReviewPending} onClick={()=>queryOriginalPhone()}>查询原手机请求</Button>:<Button variant="ghost" size="small" onClick={()=>phoneStart.taskId?openTask(phoneStart.taskId):navigate('tasks')}>核对原任务记录</Button>}</section>}{(state.voiceInput?.reviewAvailable||composer.voiceText)&&<div className="pw-voice-review"><p>有听写文字待核对。</p>{can('voice.review')&&<Button variant="secondary" disabled={voicePending} onClick={openVoiceReview}>核对原听写</Button>}{can('voice.discard')&&<Button variant="ghost" disabled={voicePending} onClick={discardVoice}>丢弃本次听写</Button>}</div>}<ConversationDelivery rows={pendingInputs} can={can} submitting={!!state.chatSubmitting} onAction={(action,row)=>{
     if(action==='return'&&row.work){returnToWorkInput(row);return}
@@ -1962,7 +1969,7 @@ export default function App(){
  {memoryDraftTarget&&<MemoryDraftReview key={`${memoryDraftTarget.runId}:${memoryDraftTarget.operationId}`} target={memoryDraftTarget} onOpenMemory={target=>{setMemoryDraftTarget(null);openPersonalMemory({view:'memory',...target})}} onClose={()=>setMemoryDraftTarget(null)}/>}
  {state.quickPanelVoice&&<QuickPanelVoiceDraft key={state.quickPanelVoice.handoffId} handoff={state.quickPanelVoice} input={obj(state.voiceInput)} run={act}/>}
  {showPhoneNotice&&phoneNotification&&<PhoneNotificationReturn key={phoneNotification.token} notice={phoneNotification} busy={phoneNotification.checking}
-  changed={tasks.some(t=>t.id===phoneNotification.taskId&&(t.raw?.runId!==phoneNotification.runId||t.raw?.coordinatorEpoch!==phoneNotification.epoch))} onClose={returnFromPhoneNotice} onSame={can('tasks.open')?()=>enterPhoneNotification(phoneNotification):undefined}
+  chatVisible={route==='chat'&&!taskOpen&&(intent==='chat'||!!state.conversationReader)} changed={tasks.some(t=>t.id===phoneNotification.taskId&&(t.raw?.runId!==phoneNotification.runId||t.raw?.coordinatorEpoch!==phoneNotification.epoch))} onClose={returnFromPhoneNotice} onSame={can('tasks.open')?()=>enterPhoneNotification(phoneNotification):undefined}
   onRefresh={can('phone.notice.refresh')?()=>{void bridge.command('phone.notice.refresh',{noticeHandle:phoneNotification.token}).catch(()=>{})}:undefined}/>}
  {messageOriginTarget&&('phoneResult' in messageOriginTarget?<PhoneReturnedReport key={messageOriginTarget.phoneResult.deliveryId} target={messageOriginTarget} onClose={()=>setMessageOriginTarget(null)}/>:<MessageOriginReader key={`${messageOriginTarget.conversationId}:${messageOriginTarget.messageId}`} target={messageOriginTarget} onClose={()=>setMessageOriginTarget(null)}/>)}
  {messageQuoteTarget&&<MessageQuote key={`${messageQuoteTarget.key}:${messageQuoteTarget.epoch}:${messageQuoteTarget.messageId}`} target={messageQuoteTarget} onClose={()=>setMessageQuoteTarget(null)}/>}

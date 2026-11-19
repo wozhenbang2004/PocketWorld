@@ -124,10 +124,18 @@ public final class NativeDeviceTaskHistoryHost {
                 ||outcome!=null&&(!(outcome.opt("summary") instanceof String)||!(outcome.opt("truncated") instanceof Boolean)))
                 throw new SecurityException("原手机返回的成果格式不能核对。");
             boolean confirmed="confirmed".equals(review);String summary=confirmed?outcome.getString("summary"):"";
+            boolean kept=outcome!=null&&outcome.has("summaryWithheld");
+            if(kept&&(!Boolean.TRUE.equals(outcome.opt("summaryWithheld"))||!confirmed||!summary.isEmpty()||outcome.getBoolean("truncated")))
+                throw new SecurityException("原手机的只回状态选择与摘要不一致，不展示内容");
             if(confirmed&&(!"succeeded".equals(task.optString("state"))||summary.codePointCount(0,summary.length())>2048))
                 throw new SecurityException("对端确认状态与原目标的结束状态或摘要范围不一致。");
+            if(!summary.isEmpty()){
+                require();long now=System.currentTimeMillis(),until=query.originalTextDisplayUntil(actual.peer(),now);
+                if(until<=now)throw new SecurityException("这次原结果读取已到期，未展示旧文字；请手动重新读取。");
+                binding.put("textReadUntil",until).put("textReadRemainingMs",until-now).put("textTargetFingerprint",actual.peer().certificateFingerprint());
+            }
             return binding.put("state",task.getString("state")).put("updatedAt",task.getLong("updatedAt")).put("review",review).put("summary",summary)
-                .put("truncated",confirmed&&outcome.getBoolean("truncated"))
+                .put("truncated",confirmed&&outcome.getBoolean("truncated")).put("summaryWithheld",kept?Boolean.TRUE:null)
                 .put("instanceId",wire.getString("instanceId")).put("readOnly",true);
         }
         /** Original bounded IO worker only; no network IO while holding TaskStore/SQLite lock. */

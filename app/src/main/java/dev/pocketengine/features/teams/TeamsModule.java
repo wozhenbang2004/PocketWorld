@@ -104,8 +104,7 @@ public final class TeamsModule implements EngineModule {
     public TeamProjectRoundHost.Page newProjectRoundPage(TeamProjectRoundHost host,String run)throws Exception{return host.open(coordinator,run);}
     public TeamProjectRoundHost.Page newFailedProjectRoundPage(TeamProjectRoundHost host,String run,String item)throws Exception{return host.open(coordinator,run,item);}
     public TeamOwnerFileReading readOwnerFrozenFiles(String runId,dev.pocketengine.core.RunControl reader)throws Exception{
-        reader.check();TeamWorkReview.Prepared source=requireWriteHost().review(runId,reader);reader.check();
-        return new TeamOwnerFileReading(runId,source.snapshot());
+        reader.check();return requireWriteHost().readOwnerFrozenFiles(coordinator.retainedOwnerReading(runId),reader);
     }
     public JSONObject ownerTextDecision(TeamOwnerFileReading evidence,dev.pocketengine.core.RunControl reader)throws Exception{return requireWriteHost().ownerTextDecision(evidence,reader);}
     public TaskStoreTeamWriteHost.TextOutputApproval reviewOwnerTextApproval(TeamOwnerFileReading evidence)throws Exception{return requireWriteHost().reviewOwnerTextApproval(evidence);}

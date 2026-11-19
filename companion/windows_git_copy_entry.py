@@ -42,7 +42,7 @@ def show_receipt(ctx,evidence,locked,settings=None):
         try: reveal(ctx,evidence["operation"],locked)
         except (AttributeError,OSError,ValueError,TypeError,PlatformError):
             _dialog("未打开原副本","没有同时核实原目录、用于定位的原成员和本机系统文件夹入口。不会改开上级目录、同名替代物或执行文件。",[],retire=locked)
-    elif chosen=="patches": patches.browse(ctx,evidence["operation"],locked)
+    elif chosen=="patches": patches.browse(ctx,evidence["operation"],locked,_observe)
     elif chosen=="compare": _compare(ctx,evidence["operation"],locked,settings)
     elif chosen=="identity":
         _dialog("原副本编号",f"操作：{evidence['operation']}\n原提交：{facts['commit']}\n原始内容清单：{facts['content']}\n不含执行权、手机授权或 Git 历史。",[],retire=locked)
@@ -86,8 +86,13 @@ def _compare(ctx,op,locked,settings):
     counts += f"\n不可读取 {result['unreadable']}，因父目录未绑定而未读 {result['unvisited']}；未绑定的原目录 {result['unboundDirectories']}，在原目录中另见的新入口 {result['newEntries']}。"
     if result["directoryChanged"]: counts += "\n读取期间目录仍在变化，不能宣称核对完整。"
     choices = [("inspect","选择一处修改与原提交对照")] if result["candidates"] and not result["directoryChanged"] else []
-    if _dialog("不能判作原保存时的完整副本",counts+"\n没有读取替换/新增文件的正文，没有同步、修复或删除。",choices,retire=locked)=="inspect" and not locked():
-        _choose_change(ctx,settings,op,result,locked)
+    if result["newParents"] and not result["directoryChanged"]: choices.append(("added","从原目录选一份新增源码"))
+    picked=_dialog("不能判作原保存时的完整副本",counts+"\n没有读取替换/新增文件的正文，没有同步、修复或删除。",choices,retire=locked)
+    if locked(): return
+    if picked=="inspect": _choose_change(ctx,settings,op,result,locked)
+    elif picked=="added":
+        from windows_added_source_entry import choose
+        choose(ctx,settings,op,result,locked,_observe)
 
 
 def _choose_change(ctx,settings,op,report,locked):

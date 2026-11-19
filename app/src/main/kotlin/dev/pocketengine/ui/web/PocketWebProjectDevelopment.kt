@@ -40,7 +40,7 @@ internal class PocketWebProjectDevelopment(
         private val ownerDrafts = linkedMapOf<String, JSONObject>()
         private val deliveryFields = arrayOf("constraints", "deliverable", "completionCriteria")
         val COMMANDS = setOf("projects.development.read", "projects.development.draft", "projects.development.inspect",
-            "projects.development.hostSource", "projects.development.resolveHostSource", "projects.development.compareHostSource",
+            "projects.development.hostSource", "projects.development.resolveHostSource", "projects.development.compareHostSource", "projects.development.readHostDiff",
             "projects.development.prepare", "projects.development.queryCopy", "projects.development.review",
             "projects.development.start", "projects.development.query", "projects.development.dismiss", "projects.development.close") + PocketWebCheckoutFiles.COMMANDS
     }
@@ -166,6 +166,14 @@ internal class PocketWebProjectDevelopment(
                 check(!busy && !pending(original.project)) { "原项目输入仍待核对，草稿没有替换" }
                 updateDraft(original.project) { copyDeliveryFields(retainedFields, it.put("goal", goal).put("checkoutId", checkout)) }; review = null
                 done(JSONObject().put("saved", true).put("projectId", original.project), null)
+            }
+            "projects.development.readHostDiff" -> {
+                fields(args, "viewHandle", "checkoutId", "evidenceDigest", "path", "originalSha256", "phoneSha256")
+                check(review == null) { "请先关闭原项目审阅" }
+                val checkout = text(args, "checkoutId"); val path = text(args, "path", 240)
+                fun hash(key: String) = text(args, key, 64).also { require(it.matches(Regex("[a-f0-9]{64}"))) }
+                val evidence = hash("evidenceDigest"); val host = hash("originalSha256"); val phone = hash("phoneSha256")
+                working(original, done) { controller.projectDevelopmentForWeb().readChangedHostTextForOwner(original.project, checkout, evidence, path, host, phone) { current(original) } }
             }
             "projects.development.compareHostSource" -> {
                 fields(args, "viewHandle", "checkoutId", "evidenceDigest")

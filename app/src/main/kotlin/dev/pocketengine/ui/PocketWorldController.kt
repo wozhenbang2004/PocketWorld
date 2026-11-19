@@ -60,14 +60,26 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         private set
     internal fun showRemoteAttention(locator: JSONObject) { remoteAttentionNotice=JSONObject(locator.toString()); if(locator.optJSONObject("original")?.optString("fingerprint")!=locator.optJSONObject("current")?.optString("fingerprint"))state=state.copy(notice="原通知对应旧状态；已打开原任务，问题和审批将重新查询，不响应旧请求。"); focusTask(locator.getString("taskId")) }
     internal fun consumeRemoteAttention(taskId: String) { if(remoteAttentionNotice?.optString("taskId")==taskId)remoteAttentionNotice=null }
-    private var phoneNoticeRead=0L
+    @Volatile private var phoneNoticeRead=0L
+    // Reserve while a draft's SQLite admission is read; never overtake a newer card or notification.
+    internal fun reserveFirstPhoneRead() = ++phoneNoticeRead
+    internal fun firstPhoneReadCurrent(ticket:Long) = !closed && phoneNoticeRead==ticket
     internal var originalPhoneNotification by mutableStateOf<JSONObject?>(null)
         private set
     internal fun readPhoneNotification(locator:JSONObject, refreshToken:String?=null, activityWindow:(()->Boolean)?=null){
         if(closed||activityWindow?.invoke()==false)return
         val origin=JSONObject(locator.toString());val serial=++phoneNoticeRead;val navigation=state.requestedTaskRevision
         // Only an explicit in-app selection, or a refresh of its retained reader, carries this provenance.
-        val shown=if(activityWindow!=null||refreshToken!=null&&origin.optString("returnSource")=="activity") origin.optString("activityHandle").takeIf{it.isNotBlank()} else null
+        val inApp=activityWindow!=null||refreshToken!=null
+        val draft=inApp && origin.optString("returnSource")=="blank_draft" && origin.optString("draftRequestId")==origin.optString("taskId") && origin.optInt("epoch")==1
+        val shown=when {
+            draft -> origin.optString("draftRequestId").takeIf{it.isNotBlank()}
+            inApp && (activityWindow!=null||origin.optString("returnSource")=="activity") -> origin.optString("activityHandle").takeIf{it.isNotBlank()}
+            else -> null
+        }
+        if(shown==null && (activityWindow!=null || refreshToken!=null && origin.optString("returnSource") in setOf("activity","blank_draft"))){
+            showTaskNoticeWarning("原选择的轮次身份不可核对，没有打开其他任务");return
+        }
         if(refreshToken==null)originalPhoneNotification=null
         else if(originalPhoneNotification?.optString("noticeHandle")!=refreshToken||!webPrivateOwnerVisible())return
         val token=refreshToken?:java.util.UUID.randomUUID().toString()
@@ -82,7 +94,10 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 }else if(row.optBoolean("conventional")){
                     if(refreshToken==null)focusTask(row.getString("taskId"))
                 }else if(privateWorkspaceView() && (refreshToken==null||webPrivateOwnerVisible() && originalPhoneNotification?.optString("noticeHandle")==refreshToken)){
-                    if(shown!=null)row.put("returnSource","activity").put("activityHandle",shown)
+                    if(shown!=null) {
+                        if(draft)row.put("returnSource","blank_draft").put("draftRequestId",shown)
+                        else row.put("returnSource","activity").put("activityHandle",shown)
+                    }
                     originalPhoneNotification=row.put("noticeHandle",token)
                     if(refreshToken==null)state=state.copy(requestedTaskId=null)
                 }else {originalPhoneNotification=null;showTaskNoticeWarning(if(shown!=null)"请回到原私人工作区再查看所选轮次" else "请回到私人工作区后再打开原手机通知")}

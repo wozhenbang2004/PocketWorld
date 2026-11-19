@@ -561,6 +561,8 @@ class PhoneTaskRouter:
                             # Do not forward extra/unverified text from an unconfirmed
                             # outcome. Keep the existing task snapshot for ordinary controls.
                             task["result"]["phoneGoalOutcome"] = {key: outcome[key] for key in ("review", "summary", "truncated")}
+                            if outcome.get("summaryWithheld") is True:
+                                task["result"]["phoneGoalOutcome"]["summaryWithheld"] = True
                     snapshot["task"] = task
                 return snapshot
             while True:

@@ -100,7 +100,14 @@ public final class DeviceTaskCoordinator {
         JSONObject evidence=task.optJSONObject("evidence"),check=evidence==null?null:evidence.optJSONObject("nativeDeviceGoalOwnerReview");
         if(check==null||!check.optBoolean("completed")||!check.optBoolean("sameRun")||!(saved.opt("summary") instanceof String)){onward.put("review","unverified");return;}
         JSONObject reviewed=new JSONObject(saved.toString());reviewed.put("closed",false);reviewed.remove("ownerVerified");reviewed.remove("reviewedAt");
+        boolean privateChoice=saved.has("ownerOnlyText")||check.has("ownerOnlyText");
+        if(privateChoice){
+            if(!Boolean.TRUE.equals(saved.opt("ownerOnlyText"))||!Boolean.TRUE.equals(check.opt("ownerOnlyText"))
+                    ||!DevicePrivateText.mayKeepOriginalText(task)){onward.put("review","unverified");return;}
+            reviewed.remove("ownerOnlyText");
+        }
         if(!TaskStore.capabilityFingerprint(reviewed).equals(check.optString("resultDigest"))){onward.put("review","unverified");return;}
+        if(privateChoice){onward.put("review","confirmed").put("summaryWithheld",true);return;}
         String text=saved.getString("summary");int length=text.codePointCount(0,text.length());
         // At most 2,048 Unicode code points (8 KiB UTF-8), never split a surrogate pair.
         onward.put("review","confirmed").put("truncated",length>2048).put("summary",length>2048?text.substring(0,text.offsetByCodePoints(0,2048)):text);

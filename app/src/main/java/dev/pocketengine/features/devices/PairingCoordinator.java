@@ -142,6 +142,15 @@ public final class PairingCoordinator {
         private final OutgoingGrant route;private final DeviceTaskEnvelope envelope;
         private HistoryQuery(OutgoingGrant route,DeviceTaskEnvelope envelope){this.route=route;this.envelope=envelope;}
         public DeviceTaskEnvelope envelope(){return envelope;}
+        /** Local upper bound on displaying text already obtained from THIS original task.get.
+         * Never issue/extend a network ticket or revive a grant for a view. */
+        public long originalTextDisplayUntil(DeviceIdentity.AuthenticatedPeer actual,long now)throws Exception{
+            if(!"task.get".equals(envelope.method()))throw new SecurityException("Only an original task result has a text read window");
+            requireTargetPeer(actual,now);JSONObject grant=route.grant,history=grant.optJSONObject("historyRead");
+            long ordinary=contains(grant.optJSONArray("capabilities"),"task.get")?grant.optLong("expiresAt"):0;
+            long retained=history!=null&&contains(history.optJSONArray("methods"),"task.get")?history.optLong("expiresAt"):0;
+            return Math.min(envelope.deadline(),Math.max(ordinary,retained));
+        }
         public void requireTargetPeer(DeviceIdentity.AuthenticatedPeer actual,long now)throws Exception{route.checkHistoryCurrent(envelope.method(),envelope.resourceBinding(),now);if(envelope.deadline()<=now||actual==null||!route.target.deviceId().equals(actual.deviceId())||!route.target.certificateFingerprint().equals(actual.certificateFingerprint()))throw new SecurityException("History query expired or belongs to another authenticated target");}
     }
     public static final class HistoryRoute {

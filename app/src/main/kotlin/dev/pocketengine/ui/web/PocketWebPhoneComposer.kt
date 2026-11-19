@@ -345,6 +345,41 @@ internal class PocketWebPhoneComposer(
         return receipt
     }
 
+    // At most the five ids actually shown in the original private draft's recent-creation list.
+    private var shownRecentScope:Triple<String,Int,Long>?=null
+    private val shownRecentFirst=LinkedHashMap<String,String?>()
+    private fun rememberFirst(row:JSONObject) {
+        val request=row.optString("draftRequestId")
+        if(row.opt("accepted")!=true||request.isBlank()||row.optString("taskId")!=request)return
+        shownRecentFirst[request]=row.optString("runId").takeIf{it.isNotBlank()&&row.optInt("epoch",-1)==1&&row.optString("admissionState") in setOf("admitted","run_recorded")}
+    }
+    /** A draft creation is not a run. Read its immutable first pairing rather than today's task header. */
+    fun openFirstDraftRun(id:String,args:JSONObject, originalWindow:()->Boolean) {
+        checkedPayload(args,setOf("composer","draftRequestId","runId","epoch"))
+        val composer=requiredString(args,"composer");val request=requiredString(args,"draftRequestId");val run=requiredString(args,"runId")
+        require(requiredInt(args,"epoch")==1) { "原草稿只关联首次执行，没有转到其他轮次" }
+        val shownAt=presentationEpoch
+        fun current() = originalWindow() && phoneIntent && shownAt==presentationEpoch && controller.webPrivateOwnerVisible() &&
+            !controller.hasChannelPhoneOrigin && controller.state.conversationId.isNullOrBlank() && controller.composerDraft?.key==composer
+        val receipt=phoneStartReceipt
+        val fromReceipt=receipt!=null && blankReceiptHere(receipt) && receipt.optString("status")=="accepted" &&
+            receipt.optString("draftRequestId")==request && receipt.optString("taskId")==request && receipt.optString("runId")==run && receipt.optInt("epoch",-1)==1
+        val fromRecent=shownRecentScope==Triple(composer,presentationEpoch,controller.displayedPhoneWindowVersion()) && shownRecentFirst[request]==run
+        require(current() && (fromReceipt||fromRecent)) { "请回原私人草稿，重新查看这条首次轮次记录" }
+        val serial=controller.reserveFirstPhoneRead()
+        controller.lookupDraftPhone(request,composer,false,false,{current() && controller.firstPhoneReadCurrent(serial)}) { row,error ->
+            if(error!=null||!current()||!controller.firstPhoneReadCurrent(serial)||row==null||row.opt("accepted")!=true||
+                row.optString("taskId")!=request||row.optString("draftRequestId")!=request||row.optString("runId")!=run||row.optInt("epoch",-1)!=1||
+                row.optString("admissionState") !in setOf("admitted","run_recorded")) {
+                complete(id,null,"原草稿没有这次可核对的首次轮次，没有打开后继任务")
+            } else {
+                val locator=JSONObject().put("taskId",request).put("runId",run).put("epoch",1).put("returnSource","blank_draft").put("draftRequestId",request)
+                controller.readPhoneNotification(locator,activityWindow=::current)
+                complete(id,JSONObject().put("reading",true),null)
+            }
+        }
+    }
+
     fun recentDraft(id:String,args:JSONObject){
         checkedPayload(args,setOf("composer","details","draftRequestId"));val composer=requiredString(args,"composer")
         val request=if(args.has("draftRequestId"))requiredString(args,"draftRequestId") else null
@@ -352,7 +387,18 @@ internal class PocketWebPhoneComposer(
         require(request==null||!details){"请核对一个原请求"}
         check(phoneIntent && controller.composerDraft?.key==composer){"请回到原手机草稿"}
         val window=captureWindow();val epoch=presentationEpoch
-        controller.lookupDraftPhone(request,composer,false,details,{phoneIntent && epoch==presentationEpoch && acceptsWindow(window)}) { result,error -> complete(id,result,error) }
+        controller.lookupDraftPhone(request,composer,false,details,{phoneIntent && epoch==presentationEpoch && acceptsWindow(window)}) { result,error ->
+            if(error==null && result!=null){
+                val scope=Triple(composer,epoch,controller.displayedPhoneWindowVersion())
+                if(request==null){
+                    shownRecentFirst.clear();shownRecentScope=scope
+                    if(details)result.optJSONArray("rows")?.let { rows -> for(i in 0 until minOf(5,rows.length()))rows.optJSONObject(i)?.let(::rememberFirst) }
+                }else if(shownRecentScope==scope && shownRecentFirst.containsKey(request)){
+                    shownRecentFirst[request]=null;if(result.optString("draftRequestId")==request)rememberFirst(result)
+                }
+            }
+            complete(id,result,error)
+        }
     }
     fun query(id: String, args: JSONObject, retire: Boolean = false) {
         val original=phoneStartReceipt?.let {JSONObject(it.toString())} ?: error("没有可查询的原手机请求")

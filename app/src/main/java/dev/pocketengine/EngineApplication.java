@@ -551,7 +551,10 @@ public final class EngineApplication extends Application implements dev.pocketen
     public synchronized dev.pocketengine.store.TaskStoreDeviceTasks.GoalResultReview reviewDeviceGoalResult(String id,String run,int epoch)throws Exception{return tasks.deviceTasks().reviewGoalResult(id,run,epoch);}
     /** Native B-owner historical verification only; not the remote task.respond handler. */
     public synchronized JSONObject confirmDeviceGoalResult(dev.pocketengine.store.TaskStoreDeviceTasks.GoalResultReview review,boolean completed)throws Exception{
-        JSONObject result=tasks.deviceTasks().confirmGoalResult(review,completed);var session=deviceGoalSessions.get(review.taskId());if(session!=null&&session.originalControl()==control(review.taskId())&&session.originalControl().matchesHostRun(review.taskId(),review.runId(),review.executorEpoch())){session.markOwnerResultClosed();session.originalControl().cancel();startService(new Intent(this,PhoneRunService.class).setAction(PhoneRunService.DEVICE_GOAL_CLOSE_RESULT).putExtra("taskId",review.taskId()).putExtra("deviceRunId",review.runId()).putExtra("deviceEpoch",review.executorEpoch()));}pushTask(review.taskId());return result;
+        return confirmDeviceGoalResult(review,completed,false);
+    }
+    public synchronized JSONObject confirmDeviceGoalResult(dev.pocketengine.store.TaskStoreDeviceTasks.GoalResultReview review,boolean completed,boolean keepTextLocal)throws Exception{
+        JSONObject result=tasks.deviceTasks().confirmGoalResult(review,completed,keepTextLocal);var session=deviceGoalSessions.get(review.taskId());if(session!=null&&session.originalControl()==control(review.taskId())&&session.originalControl().matchesHostRun(review.taskId(),review.runId(),review.executorEpoch())){session.markOwnerResultClosed();session.originalControl().cancel();startService(new Intent(this,PhoneRunService.class).setAction(PhoneRunService.DEVICE_GOAL_CLOSE_RESULT).putExtra("taskId",review.taskId()).putExtra("deviceRunId",review.runId()).putExtra("deviceEpoch",review.executorEpoch()));}pushTask(review.taskId());return result;
     }
     public synchronized dev.pocketengine.store.TaskStoreDeviceTasks.GoalModelReview reviewDeviceGoalModel(String id)throws Exception{
         var admission=pendingDeviceGoals.get(id);if(admission==null)throw new SecurityException("没有该原目标的当前认证准入；不能由持久JSON造peer");

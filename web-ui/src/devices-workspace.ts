@@ -161,7 +161,10 @@ export function devicePhoneGoalResult(value: unknown, review: DeviceData): Devic
   if (!object(result) || result.readOnly !== true || result.instanceId !== review.view.instanceId || !identity(result.taskId)
     || !identity(result.runId) || !positiveInteger(result.executorEpoch) || !identity(result.state) || !positiveInteger(result.updatedAt)
     || !['confirmed','none','pending','not_confirmed','unverified','unavailable'].includes(result.review) || typeof result.summary !== 'string'
-    || typeof result.truncated !== 'boolean' || (result.review !== 'confirmed' && (result.summary || result.truncated))) throw new Error('缺少原任务、原执行或准确结果回执。');
+    || typeof result.truncated !== 'boolean' || result.summaryWithheld!==undefined && (result.summaryWithheld!==true || result.review!=='confirmed' || result.summary!=='' || result.truncated!==false)
+    || (result.review !== 'confirmed' && (result.summary || result.truncated))) throw new Error('缺少原任务、原执行或准确结果回执。');
+  if(result.summary && (!positiveInteger(result.textReadUntil) || !positiveInteger(result.textReadRemainingMs) || result.textReadRemainingMs>5000 || !digest(result.textTargetFingerprint)))
+    throw new Error('原宿主未提供这次文字读取的有效期，未展示正文。');
   return result;
 }
 export function deviceHistoryLabel(value: DeviceData | null, view?: DeviceData): string {

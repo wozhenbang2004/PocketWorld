@@ -60,10 +60,17 @@ public final class RemoteInputAttachments {
     private AttachmentBook book(){return remote().resultAttachmentBook();}
     private dev.pocketengine.features.channels.ChannelsModule.PrivateInputSource privateFile(String id)throws Exception {
         documents().requireOwnerAttachment(id);JSONObject file=book().get(id),source=file.optJSONObject("source");
-        if(!file.optString("principalId").equals("owner")||!file.optString("spaceId").equals("private")||source!=null&&source.has("groupSpaceId"))throw new SecurityException("群技术副本或其他空间不能当作私人原件外传");
-        if(source!=null&&!source.optString("taskId").isEmpty()){
-            JSONObject task=tasks.get(source.getString("taskId"),false),origin=task==null?null:task.optJSONObject("origin");
-            if(task!=null&&(!task.optString("actorId").equals("owner")||!task.optString("spaceId").equals("private")||origin!=null&&origin.optString("kind").matches("group|channel|reviewed_external_group")))throw new SecurityException("外部群/渠道成果须通过其原受众权限，不能改作私人附件");
+        if(!"owner".equals(file.opt("principalId"))||!"private".equals(file.opt("spaceId"))||file.optBoolean("outputSourceRetired")||
+                source!=null&&(source.has("groupSpaceId")||"group".equals(source.opt("kind"))||source.optString("kind").startsWith("group_")))
+            throw new SecurityException("已撤回、群技术副本或其他空间的文件不能当作私人原件外传");
+        // Ordinary owner SAF imports deliberately carry no originating task. A declared task, however,
+        // is a required provenance check at listing, review and transfer; losing it never removes its scope.
+        if(source!=null&&source.has("taskId")&&!"".equals(source.opt("taskId"))){
+            if(!(source.opt("taskId") instanceof String original)||original.isBlank()||original.length()>128)throw new SecurityException("附件原来源任务身份无法核对");
+            JSONObject task=tasks.get(original,false);
+            if(task==null||!original.equals(task.opt("id")))throw new SecurityException("附件所指原任务已不可核对，未将它转作私人文件外传");
+            JSONObject origin=task.optJSONObject("origin");
+            if(!"owner".equals(task.opt("actorId"))||!"private".equals(task.opt("spaceId"))||origin!=null&&origin.optString("kind").matches("group|channel|reviewed_external_group|native_remote_group_inputs"))throw new SecurityException("外部群/渠道成果须通过其原受众权限，不能改作私人附件");
         }
         if(source!=null&&source.optString("kind").matches("weixin_owner_dm_image|qq_owner_dm_image|weixin_owner_dm_media|qq_owner_dm_media")){
             Object module=features.module("channels");if(!(module instanceof dev.pocketengine.features.channels.ChannelsModule))throw new SecurityException("原渠道来源无法核对，未外传此图片");

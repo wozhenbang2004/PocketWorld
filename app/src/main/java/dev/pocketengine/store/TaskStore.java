@@ -10247,6 +10247,36 @@ public final class TaskStore {
         JSONObject ancestor=team;for(int depth=0;depth<16;depth++){requirePrivateOwner(ancestor);if(ancestor.optBoolean("cancelRequested")||ancestor.optString("status").matches("completed|cancelled|stopping"))throw new SecurityException("原团队或父任务已停止或已确认完成，不能批准新的整合");String parent=ancestor.optString("parentTaskId");if(parent.isEmpty())return;ancestor=required(parent);}throw new SecurityException("原任务父链超限");
     }
     public synchronized JSONObject teamReviewState(String teamRun)throws Exception {JSONObject team=teamWriteTask(teamRun),result=new JSONObject();if(team.has("teamIndependentReview"))result.put("independentReview",new JSONObject(team.getJSONObject("teamIndependentReview").toString()));if(team.has("teamOutputReview"))result.put("approvedReview",new JSONObject(team.getJSONObject("teamOutputReview").toString()));return result;}
+    /** Private foreground evidence only. The caller supplies a retained coordinator record,
+     * never a project path or a task chosen by the WebView. No execution grant is required to read history. */
+    public synchronized JSONObject teamRevisionFilesForOwner(String run,RunControl reader)throws Exception {
+        reader.check();JSONObject team=teamWriteTask(run),plan=team.optJSONObject("teamWorkPlan"),scope=team.getJSONObject("teamWriteScope");
+        if(plan==null||!plan.has("lastRevisionRequestId"))return null;
+        String p=team.getString("parentTaskId"),r=team.getString("parentRunId");requirePrivateOwner(required(p));
+        JSONObject parent=new JSONObject().put("parentTaskId",p).put("parentRunId",r).put("parentEpoch",originalRunEpoch(p,r)).put("targetProjectId",scope.getString("targetProjectId"));
+        return new JSONObject().put("parent",parent).put("workPlan",plan).put("approvedReview",team.optJSONObject("teamOutputReview"))
+                .put("previousReviews",team.optJSONArray("teamOutputReviewHistory")).put("integration",teamIntegrationContext(run,reader));
+    }
+    /** One specific review child; the team's latest review field cannot answer both versions. */
+    public synchronized JSONObject teamVersionReviewForOwner(String run,String hash,RunControl reader)throws Exception {
+        reader.check();JSONObject team=teamWriteTask(run);if(!hash.matches("[a-f0-9]{64}"))throw new SecurityException("没有准确独审版本");
+        String id=UUID.nameUUIDFromBytes(("team-review:"+run+":"+hash).getBytes(StandardCharsets.UTF_8)).toString();
+        JSONObject child=read(id),result=new JSONObject().put("planHash",hash).put("status","not_recorded");
+        if(child==null)return result;
+        requirePrivateOwner(child);JSONObject origin=child.getJSONObject("origin"),identity=child.getJSONObject("teamAssignment");
+        if(!team.getString("id").equals(child.opt("parentTaskId"))||!"team_review".equals(origin.opt("kind"))||!id.equals(origin.opt("assignmentId"))||
+                !run.equals(origin.opt("teamRunId"))||!"reviewer".equals(identity.opt("memberId"))||!id.equals(identity.opt("assignmentId"))||
+                !run.equals(identity.opt("teamRunId"))||!hash.equals(identity.opt("planHash"))||!hash.equals(capabilityFingerprint(identity.getJSONObject("plan"))))throw new SecurityException("独审原件身份改变");
+        JSONObject evidence=child.optJSONObject("evidence"),proof=evidence==null?null:evidence.optJSONObject("teamIndependentReview");
+        result.put("status",child.getString("status"));
+        if(proof!=null&&id.equals(proof.opt("taskId"))&&run.equals(proof.opt("teamRunId"))&&hash.equals(proof.opt("planHash"))&&
+                child.getString("runId").equals(proof.opt("runId"))&&Boolean.TRUE.equals(proof.opt("verdictSubmitted"))&&
+                proof.optString("verdict").matches("no_blocking_findings|changes_requested|inconclusive")){
+            result.put("verdict",proof.getString("verdict")).put("completeOriginalFilesRead",Boolean.TRUE.equals(proof.opt("completeOriginalFilesRead")));
+            String finding=proof.optString("findings");if(!finding.isBlank()&&finding.length()<=4000)result.put("findings",finding);
+        }
+        return result;
+    }
     private void checkTeamReviewCurrent(JSONObject binding)throws Exception {
         JSONArray assignments=teamAssignmentsForReview(binding.getString("teamRunId"),new RunControl()),current=new JSONArray();
         for(int i=0;i<assignments.length();i++){JSONObject assignment=assignments.getJSONObject(i);if(!assignment.optString("status").equals("completed"))throw new SecurityException("原作者修订尚未冻结，独审失效");JSONArray refs=assignment.getJSONArray("artifacts");for(int j=0;j<refs.length();j++)current.put(refs.getJSONObject(j));}

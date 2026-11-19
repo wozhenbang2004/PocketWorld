@@ -253,7 +253,7 @@ internal class PocketWebBridge(
             "ownerWork.supplement.read", "ownerWork.supplement.edit", "ownerWork.supplement.send", "ownerWork.supplement.query",
             "attachments.pick", "attachments.openPicker", "attachments.closePicker", "attachments.toggle", "attachments.remove", "attachments.open", "sources.open", "sources.read", "sources.close",
             "phone.request.original",
-            "phone.result.original", "phone.resultNotice.read", "phone.resultNotice.set", "phone.activity.original",
+            "phone.result.original", "phone.resultNotice.read", "phone.resultNotice.set", "phone.activity.original", "phone.draft.original",
             "quickVoice.start", "quickVoice.save", "quickVoice.close", "quickVoice.return",
             "skillDraft.open", "skillDraft.read", "skillDraft.source", "skillDraft.confirm", "skillDraft.cancel", "skillDraft.query", "skillDraft.close", "voice.start", "voice.stop", "voice.review", "voice.accept", "voice.discard", "speech.speak", "speech.stop", "speech.taskAnnouncements", "speech.stopTaskAnnouncement",
             "tasks.refresh", "tasks.open", "tasks.close", "tasks.stop", "tasks.review", "tasks.confirm", "tasks.approve", "tasks.resolve", "tasks.resume", "tasks.scope", "tasks.plan.enter", "tasks.answerQuestion", "tasks.answerQuestionChoice", "tasks.deleteScreenshot", "privacy.screenshots.read", "privacy.screenshots.save",
@@ -1246,6 +1246,12 @@ internal class PocketWebBridge(
             if (action == "phone.start") { phoneComposer.start(id, args); return }
             if (action == "phone.query") { phoneComposer.query(id, args); return }
             if (action == "phone.draft.recentStarts") { phoneComposer.recentDraft(id,args); return }
+            if (action == "phone.draft.original") {
+                val doc=documentId; val page=commandFence.ticket(); val owner=controller.displayedPhoneWindowVersion()
+                fun current() = !closed && doc!=null && documentId==doc && commandFence.accepts(page) &&
+                    section==null && taskViewId==null && controller.displayedPhoneWindowAlive(owner)
+                phoneComposer.openFirstDraftRun(id,args,::current);return
+            }
             if (action == "phone.draft.retireUncreated") { phoneComposer.query(id,args,true); return }
             if (action == "phone.ownerStep.review" || action == "phone.ownerStep.leave") {
                 val leaving = action == "phone.ownerStep.leave"

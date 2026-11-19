@@ -407,6 +407,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const activeQuestionKeys = new Set(rows(reading?.attention).filter(item => item.kind === 'question').map(questionKey));
   const isCurrentQuestion = (message: Data) => message.kind === 'assignment_question' && message.state === 'pending' && activeQuestionKeys.has(questionKey(message));
   const workItems = rows(object(current?.workPlan).items);
+  const revisionRequest=object(current?.workPlan).lastRevisionRequestId;
+  const hasFrozenRevision=!!revisionRequest&&rows(current?.parentRequests).some(p=>p.kind==='revision_proposal'&&p.state==='applied_to_work_revision'&&p.revisionRequestId===revisionRequest);
   const runSection = runSections[current?.id || ''] || 'progress';
   const expandedDetails = detailSections[current?.id || ''] || [];
   const materialsActive = runSection === 'details' && expandedDetails.includes('materials');
@@ -879,8 +881,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
                   value.input?.workItemId!==row.workItemId||value.input?.assignmentId!==row.assignmentId||value.input?.text!==row.text||!Array.isArray(value.input?.affected)||!value.input.affected.length){
                 release(value,'reviewHandle');throw new Error('原提案或工作项已变化，没有开始修订。');
               }reviewResult(value);
-            });}}/>:undefined} frozenFiles={current.productionScope && (current.mode === 'produce' || current.workPlan) && (fileEntry&&fileEntry.view===reading?.viewHandle || current.status === 'awaiting_review' || workItems.some(item => rows(item.artifacts).length > 0) || members.some(member => rows(member.roundStates).some(phase => rows(phase.artifacts).length > 0))) && bridge.getState().capabilities.commands.includes('teams.readFrozenOutputs')
-            ? <TeamFrozenFiles key={reading?.viewHandle || current.id} team={current.id} view={reading?.viewHandle || ''} entry={fileEntry&&fileEntry.view===reading?.viewHandle?fileEntry:undefined} run={run} active={workspaceActive && runSection === 'result'} disabled={!canRead || materialBusy} onOpen={setReadingFiles} back={frozenFilesBack} memberName={name}/> : undefined} sources={deliveries.length>0 ? <TeamResearchDeliveries records={deliveries} disabled={!canRead||materialBusy||!bridge.getState().capabilities.commands.includes('teams.openResearchTask')} open={openMemberDelivery}
+            });}}/>:undefined} frozenFiles={current.productionScope && (current.mode === 'produce' || current.workPlan) && (fileEntry&&fileEntry.view===reading?.viewHandle || current.status === 'awaiting_review' || hasFrozenRevision || workItems.some(item => rows(item.artifacts).length > 0) || members.some(member => rows(member.roundStates).some(phase => rows(phase.artifacts).length > 0))) && bridge.getState().capabilities.commands.includes('teams.readFrozenOutputs')
+            ? <TeamFrozenFiles key={reading?.viewHandle || current.id} team={current.id} hasRevision={hasFrozenRevision} view={reading?.viewHandle || ''} entry={fileEntry&&fileEntry.view===reading?.viewHandle?fileEntry:undefined} run={run} active={workspaceActive && runSection === 'result'} disabled={!canRead || materialBusy} onOpen={setReadingFiles} back={frozenFilesBack} memberName={name}/> : undefined} sources={deliveries.length>0 ? <TeamResearchDeliveries records={deliveries} disabled={!canRead||materialBusy||!bridge.getState().capabilities.commands.includes('teams.openResearchTask')} open={openMemberDelivery}
             expanded={!!shownMemberSources[current.id]} onExpanded={value=>setShownMemberSources(old=>({...old,[current.id]:value}))}/> : undefined} stopped={current.status === 'cancelled'}
             actions={{ items: followUps, read: openFollowUp, disabled: !canRead || materialBusy, expanded: !!allResultActions[current.id],
               toggle: () => setAllResultActions(old => ({ ...old, [current.id]: !old[current.id] })) }}

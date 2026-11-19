@@ -119,6 +119,20 @@ public final class LocalModule implements EngineModule {
             return original;
         }
     }
+    /** Explicit read of one already selected private text pair. Not a model tool, remote connection, editor or upload. */
+    public JSONObject readChangedHostTextForOwner(String project,String checkout,String expected,String path,String originalSha,String phoneSha,
+            dev.pocketengine.features.local.project.ProjectHostOrigin.TaskLookup tasks,java.util.function.BooleanSupplier owner)throws Exception{
+        if(owner==null||!owner.getAsBoolean()||closed||expected==null||!expected.matches("[a-f0-9]{64}"))throw new SecurityException("原项目信息已变化");
+        var original=phoneHostOriginForOwner(project,checkout);if(original==null||!expected.equals(original.digest()))throw new SecurityException("原导入来源不可核对");
+        File files; synchronized(this){files=content(checkout);}
+        var control=new RunControl();try(var gate=control.retainAuthorityCheck(()->{if(closed||!owner.getAsBoolean())throw new SecurityException("已离开原私人项目，未返回文件内容");})){
+            control.check();var book=dev.pocketengine.features.attachments.AttachmentRepository.get(context.android).book;
+            JSONObject result=original.reviewedText(files,path,originalSha,phoneSha,book,tasks,control,()->!closed&&owner.getAsBoolean());
+            JSONObject row=projectCheckoutForHost(checkout);
+            if(!project.equals(row.opt("projectId"))||!expected.equals(row.getJSONObject("sourceImport").opt("sourceEvidenceSha256")))throw new SecurityException("读取期间原副本身份已变化");
+            control.check();return result;
+        }
+    }
     public JSONObject compareSavedHostSourceForOwner(String project,String checkout,String expected,java.util.function.BooleanSupplier owner)throws Exception {
         if(owner==null||!owner.getAsBoolean()||closed||expected==null||!expected.matches("[a-f0-9]{64}"))throw new SecurityException("原项目来源核对已过期");
         var original=phoneHostOriginForOwner(project,checkout);

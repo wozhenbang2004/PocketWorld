@@ -78,7 +78,7 @@ def compare(ctx,op,checkpoint,progress):
     report = dict(matched=0,different=0,replaced=0,missing=0,unreadable=0,unvisited=0,
                   unboundDirectories=0,newEntries=0,directoryChanged=False)
     names,stamps,observed = {},{},0
-    report.update(comparable=0,candidates=[])
+    report.update(comparable=0,candidates=[],newParentCount=0,newParents=[])
     def candidate(path,state,identity,info):
         report["comparable"]+=1
         if len(report["candidates"])<64:
@@ -105,13 +105,17 @@ def compare(ctx,op,checkpoint,progress):
             physical, handle, _ = tree.nodes[path]
             stamps[path] = stamp(tree.api,handle)
             wanted,seen = children[path],set()
+            extras=0
             with os.scandir(_ext(physical)) as listing:
                 for entry in listing:
                     observed+=1
                     if observed>24000: _bad()
                     if not observed%128: checkpoint()
                     if entry.name in wanted: seen.add(entry.name)
-                    else: report["newEntries"]+=1  # Don't retain, open or descend into any new name.
+                    else: extras+=1  # Don't retain/open any NEW name or descend into it.
+            if extras:
+                report["newEntries"]+=extras; report["newParentCount"]+=1
+                if len(report["newParents"])<64: report["newParents"].append({"path":path,"count":extras})
             names[path]=seen
         for n,(path,row) in enumerate(rows.items(),1):
             checkpoint()

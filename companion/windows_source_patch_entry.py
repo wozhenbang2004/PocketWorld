@@ -33,26 +33,42 @@ def detail(ctx,op,row,locked):
                 f"\n原文件 SHA-256：{f['baseSha']}\n选定 SHA-256：{f['currentSha']}\n完整补丁 SHA-256：{f['patchSha']}",[],retire=locked)
 
 
-def browse(ctx,op,locked):
-    try: rows=sorted(records(ctx,op).values(),key=lambda r:r["at"],reverse=True)
-    except Exception:
-        if not locked(): _dialog("没有核实本次副本的补丁记录","没有搜索其他目录或代用别的副本。",[],retire=locked)
-        return
+def browse(ctx,op,locked,observe=None):
+    from windows_added_source import records as additions
+    from windows_added_source_entry import detail as added_detail
+    rows=[]; unavailable=False
+    for reader,kind in ((records,"tracked"),(additions,"added")):
+        try: rows.extend((kind,r) for r in reader(ctx,op).values())
+        except Exception: unavailable=True  # A damaged/newer bank never hides valid results in the other one.
+    rows.sort(key=lambda pair:pair[1]["at"],reverse=True)
     if not rows:
-        if not locked(): _dialog("这次副本尚无保存补丁的记录","核对差异或阅读节选不会保存文件。",[],retire=locked)
+        if not locked():
+            chosen=_dialog("没有可核实的单文件补丁","有一组原记录不可读取；不会在其他目录中寻找替代品。" if unavailable else
+                           "尚无可用单项；已经另存的多文件原件可单独查看。",
+                           [("sets","查看这个副本的多文件补丁")] if observe else [],retire=locked)
+            if chosen=="sets" and not locked():
+                from windows_patch_set_entry import menu
+                menu(ctx,op,locked,observe)
         return
     page=0
     while not locked():
         actions=[]
-        for i,r in enumerate(rows[page*4:page*4+4],page*4):
+        for i,(kind,r) in enumerate(rows[page*4:page*4+4],page*4):
             f=r["fields"]; path=f["path"]; stamp=time.strftime("%m-%d %H:%M",time.localtime(r["at"]/1000))
-            actions.append((("patch",i),(path if len(path)<=100 else "…"+path[-99:])+f"\n{stamp} · 选定版本 {f['currentOid'][:12]}"))
+            note=("新增文件 · "+f["sourceOid"][:12]) if kind=="added" else ("修改原文件 · "+f["currentOid"][:12])
+            actions.append((("patch",i),(path if len(path)<=100 else "…"+path[-99:])+f"\n{stamp} · "+note))
+        if observe: actions.append(("sets","多文件交付补丁\n选择几份原产物另存，或查看以前的完整组合。"))
         if page: actions.append(("prev","上一页"))
         if 4*(page+1)<len(rows): actions.append(("next","下一页"))
-        pick=_dialog("这次副本另存的单文件变更","包括中断后只有意图的记录。打开后只核对已留存原件，不读取现在的源代码。",actions,retire=locked)
+        pick=_dialog("这次副本另存的单文件变更","包括只有保存意图的记录。打开后只核对已留存的原补丁。"+(" 有一组记录暂不能核实。" if unavailable else ""),actions,retire=locked)
         if pick=="prev": page-=1; continue
         if pick=="next": page+=1; continue
-        if pick is not None and not locked(): detail(ctx,op,rows[pick[1]],locked)
+        if pick=="sets" and observe and not locked():
+            from windows_patch_set_entry import menu
+            menu(ctx,op,locked,observe); return
+        if pick is not None and not locked():
+            kind,r=rows[pick[1]]
+            (added_detail if kind=="added" else detail)(ctx,op,r,locked)
         return
 
 

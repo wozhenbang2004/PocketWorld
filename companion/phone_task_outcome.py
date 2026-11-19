@@ -47,18 +47,21 @@ def original_phone_goal(row, task, caller):
     if row["resourceBinding"] == {"screenMode":"capabilities"} and origin.get("textReturnContract") != wire.TEXT_RETURN:
         raise PermissionError("The original phone did not accept the explicit text return contract")
     outcome = details.get("phoneGoalOutcome")
-    review, summary, truncated = "unavailable", "", False
+    review, summary, truncated, kept = "unavailable", "", False, False
     if outcome is not None:
         if (not isinstance(outcome, dict) or outcome.get("review") not in ("confirmed", "none", "pending", "not_confirmed", "unverified", "unavailable")
                 or not isinstance(outcome.get("summary"), str) or type(outcome.get("truncated")) is not bool):
             raise PermissionError("Original phone result could not be verified")
         review = outcome["review"]
+        kept = "summaryWithheld" in outcome
+        if kept and (outcome["summaryWithheld"] is not True or review != "confirmed" or outcome["summary"] != "" or outcome["truncated"] is not False):
+            raise PermissionError("The phone's status-only choice is inconsistent; no result was shown")
         if review == "confirmed":
             summary, truncated = outcome["summary"], outcome["truncated"]
             if task.get("state") != "succeeded" or len(summary) > 2048:
                 raise PermissionError("Phone completion and its bounded result disagree")
     return dict(operationId=operation, peerDeviceId=target, instanceId=instance, taskId=task_id, runId=run, executorEpoch=generation,
-                review=review, summary=summary, truncated=truncated)
+                review=review, summary=summary, truncated=truncated, **({"summaryWithheld": True} if kept else {}))
 
 
 def original_dispatch_only(row, receipt, caller):

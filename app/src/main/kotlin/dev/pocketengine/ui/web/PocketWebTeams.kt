@@ -659,12 +659,15 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 })
             }
             "teams.readFrozenDiff" -> {
-                fields(args,"viewHandle","fileHandle","artifactId","offset")
+                val revision = args.has("basis")
+                if (revision) { fields(args,"viewHandle","fileHandle","basis","path","offset"); require(text(args,"basis") == "written_to_frozen") }
+                else fields(args,"viewHandle","fileHandle","artifactId","offset")
                 val owner = readings[text(args,"viewHandle")] ?: error("原协作记录已关闭")
                 val files = fileWindow?.takeIf { it.owner === owner && owner.live && it.handle == text(args,"fileHandle") } ?: error("请重新打开这份原文件目录")
                 val offset = args.opt("offset"); require(offset is Int && offset >= 0) { "原差异位置不正确" }
                 val captured = files.captured ?: error("原文件目录已关闭")
-                deliver(captured.page(text(args,"artifactId"),offset).put("fileHandle",files.handle),null)
+                val part = if (revision) captured.revisionPage(text(args,"path",240),offset) else captured.page(text(args,"artifactId"),offset)
+                deliver(part.put("fileHandle",files.handle),null)
             }
             "teams.reviewFrozenTextApproval", "teams.approveFrozenText" -> {
                 val confirming = action == "teams.approveFrozenText"

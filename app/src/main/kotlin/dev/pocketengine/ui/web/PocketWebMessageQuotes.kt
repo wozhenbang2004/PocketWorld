@@ -1,6 +1,8 @@
 package dev.pocketengine.ui.web
 
+import android.os.SystemClock
 import dev.pocketengine.core.RunControl
+import dev.pocketengine.features.assistant.AssistantModule
 import dev.pocketengine.ui.PocketWorldController
 import java.util.UUID
 import org.json.JSONObject
@@ -16,13 +18,16 @@ internal class PocketWebMessageQuotes(private val controller: PocketWorldControl
     private var window: Window? = null
 
     private data class Shelf(val id: String, val conversation: String, val key: String, val epoch: Int, val owner: Any, val ids: Set<String>)
+    private data class Read(val id: String, val page: Shelf, val entry: String, val proof: AssistantModule.LocalShelfRead, val draft: Long, val expiry: Long)
     private var shelf: Shelf? = null
+    private var read: Read? = null
+    private var stagingPage: String? = null
     @Volatile private var cycle = 0L
     @Volatile private var pending: RunControl? = null
 
     companion object {
         val COMMANDS = setOf("messageQuote.open", "messageQuote.stage", "messageQuote.close", "composer.source.remove", "messageQuote.pin",
-            "messageShelf.list", "messageShelf.read", "messageShelf.remove", "messageShelf.close")
+            "messageShelf.list", "messageShelf.read", "messageShelf.remove", "messageShelf.close", "messageShelf.dismiss", "messageShelf.stage")
     }
 
     fun clear() {
@@ -32,7 +37,10 @@ internal class PocketWebMessageQuotes(private val controller: PocketWorldControl
         if (previous != null) controller.leaveOwnerDomain("taskMemory")
     }
 
-    private fun invalidateShelf() { ++cycle; pending?.cancel(); pending = null; shelf = null }
+    private fun invalidateShelf() {
+        ++cycle; pending?.cancel(); pending = null; shelf = null; read = null
+        if (stagingPage != null) { stagingPage = null; controller.leaveOwnerDomain("taskMemory") }
+    }
 
     fun dispatch(action: String, args: JSONObject, done: (JSONObject?, String?) -> Unit) {
         when (action) {
@@ -87,7 +95,7 @@ internal class PocketWebMessageQuotes(private val controller: PocketWorldControl
             "messageShelf.list" -> {
                 fields(args, "conversationId", "key", "epoch")
                 val conversation = text(args, "conversationId"); val key = text(args, "key"); val epoch = integer(args, "epoch").toInt()
-                check(window == null && pending == null) { "请先关闭原选区或等待当前操作" }
+                check(window == null && pending == null && stagingPage == null) { "请先关闭原选区或等待当前操作" }
                 invalidateShelf(); val owner = controller.webWindowTicket()
                 shelfWork(conversation, key, epoch, { controller.webWindowTicket() == owner }, { result, failure ->
                     if (failure == null && result != null) {
@@ -101,14 +109,60 @@ internal class PocketWebMessageQuotes(private val controller: PocketWorldControl
                 fields(args, "shelfWindow", "id")
                 val id = text(args, "id")
                 val page = shelf?.takeIf { it.id == text(args, "shelfWindow") && id in it.ids && it.owner == controller.webWindowTicket() } ?: error("请重新打开本对话的原备忘")
-                shelfWork(page.conversation, page.key, page.epoch, { shelf === page && controller.webWindowTicket() == page.owner }, { result, failure ->
+                check(stagingPage == null) { "正在保存原草稿，请先核对" }
+                read = null; val draft = controller.composerDraft?.revision ?: error("原输入已关闭")
+                var issued: AssistantModule.LocalShelfRead? = null
+                shelfWork(page.conversation, page.key, page.epoch, { shelf === page && controller.webWindowTicket() == page.owner && controller.composerDraft?.revision == draft }, { result, failure ->
                     if (result != null && failure == null) {
                         if (action == "messageShelf.remove") shelf = page.copy(ids = page.ids - id)
-                        else result.put("readExpiresAt", System.currentTimeMillis() + 120_000L)
+                        else {
+                            val proof = issued
+                            if (proof == null) { done(null, "没有取得这段原话的本机阅读证明"); return@shelfWork }
+                            val preview = Read(UUID.randomUUID().toString(), page, id, proof, draft, SystemClock.elapsedRealtime() + 120_000L)
+                            read = preview; result.put("readWindow", preview.id).put("draftRevision", draft).put("readExpiresAt", System.currentTimeMillis() + 120_000L)
+                        }
                         done(result.put("shelfWindow", page.id), null)
                     } else done(null, failure ?: "原备忘无法核对")
-                }) { native, control -> if (action == "messageShelf.read") native.readLocalReference(page.conversation, id, control)
+                }) { native, control -> if (action == "messageShelf.read") native.readLocalReference(page.conversation, id, control) { issued = it }
                     else native.removeLocalReference(page.conversation, id, control) }
+            }
+            "messageShelf.dismiss" -> {
+                fields(args, "shelfWindow", "readWindow")
+                if (read?.id == text(args, "readWindow") && read?.page?.id == text(args, "shelfWindow")) read = null
+                done(JSONObject().put("dismissed", true), null)
+            }
+            "messageShelf.stage" -> {
+                fields(args, "shelfWindow", "readWindow")
+                val page = shelf?.takeIf { it.id == text(args, "shelfWindow") && it.owner == controller.webWindowTicket() } ?: error("请从同一私聊重新打开原话")
+                val reviewed = read?.takeIf { it.page === page && it.id == text(args, "readWindow") && it.entry in page.ids } ?: error("请先在这条备忘中查看原话")
+                check(stagingPage == null && pending == null) { "请先核对上一次草稿操作" }
+                fun current() = shelf === page && controller.webWindowTicket() == page.owner && SystemClock.elapsedRealtime() < reviewed.expiry &&
+                    controller.composerDraft?.revision == reviewed.draft && controller.composerDraft?.key == page.key && controller.composerViewEpoch == page.epoch
+                check(current()) { "原话预览或当前草稿已变化，请重新核对" }
+                read = null // One click consumes this proof, including failed or uncertain outcomes.
+                shelfWork(page.conversation, page.key, page.epoch, ::current, { payload, failure ->
+                    if (failure != null || payload == null || !current()) done(null, failure ?: "原备忘已变化，没有使用旧选区")
+                    else try {
+                        val draft = controller.composerDraft ?: error("原草稿已关闭")
+                        if (reviewed.proof.alreadySelected(draft.sourceRefs())) {
+                            invalidateShelf()
+                            done(JSONObject().put("alreadyInDraft", true).put("changed", false).put("key", page.key).put("epoch", page.epoch)
+                                .put("revision", reviewed.draft).put("shelfWindow", page.id).put("readWindow", reviewed.id), null)
+                            return@shelfWork
+                        }
+                        // This existing domain has no snapshot/model call on entry. Its original source transaction rechecks the full reference again.
+                        controller.enterOwnerDomain("taskMemory"); stagingPage = page.id
+                        controller.stageOwnerOriginalReferenceReceipt(payload) { receipt, error ->
+                            val same = stagingPage == page.id && shelf === page
+                            if (same) invalidateShelf()
+                            if (!same || receipt == null || error != null || receipt.opt("draftStaged") != true || receipt.opt("persisted") != true ||
+                                receipt.opt("selectionValidated") != true || receipt.optString("key") != page.key || receipt.optInt("epoch",-1) != page.epoch ||
+                                receipt.optLong("fromRevision",-1L) != reviewed.draft || receipt.optLong("revision",-1L) != reviewed.draft + 1L)
+                                done(null, error ?: "先核对原草稿的引用，未确认前请勿重复添加")
+                            else done(receipt.put("shelfWindow", page.id).put("readWindow", reviewed.id), null)
+                        }
+                    } catch (e: Exception) { if (stagingPage == page.id) invalidateShelf(); done(null, e.message ?: "原草稿未能确认") }
+                }) { native, control -> native.localShelfDraftRange(reviewed.proof, control) }
             }
             "messageShelf.close" -> {
                 fields(args, "shelfWindow")

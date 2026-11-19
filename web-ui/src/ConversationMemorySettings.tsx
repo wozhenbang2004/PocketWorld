@@ -61,7 +61,7 @@ export function ConversationMemorySettings({conversationId,composer,isOpen,onClo
     finally{writing.current=false;if(alive.current&&serial===request.current)setPending(false);}
   };
   const canShelf=!!single&&!!composer&&Number.isSafeInteger(composer.epoch)&&['list','read','remove','close'].every(name=>bridge.getState().capabilities.commands.includes('messageShelf.'+name));
-  if(isOpen&&shelf===shelfVisit&&canShelf&&composer)return <ConversationReferenceShelf key={conversationId+':'+composer.epoch} conversationId={conversationId} draftKey={composer.key} epoch={composer.epoch} onClose={()=>setShelf(null)}/>;
+  if(isOpen&&shelf===shelfVisit&&canShelf&&composer)return <ConversationReferenceShelf key={conversationId+':'+composer.epoch} conversationId={conversationId} draftKey={composer.key} epoch={composer.epoch} onClose={()=>setShelf(null)} onReturnDraft={()=>{setShelf(null);close();}}/>;
   return <SettingsDialog isOpen={isOpen} title="本对话的个人记忆" onClose={close}>
     {pending&&!controls&&<ShimmerText>正在读取此对话设置…</ShimmerText>}
     {error&&<p className="pw-error" role="alert">{error}</p>}

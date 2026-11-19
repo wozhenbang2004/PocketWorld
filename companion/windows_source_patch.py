@@ -20,6 +20,10 @@ from windows_source_inventory import _origin, load, show_bound_child
 from windows_source_publisher import DirectoryTree, _ext
 
 PROFILE = "pocketworld.windows-local-single-file-patch.v1"
+ADDED_PROFILE = "pocketworld.windows-local-added-file-patch.v1"
+ADDED_BANK = 4
+SET_PROFILE = "pocketworld.windows-local-selected-patch-set.v1"
+SET_BANK, SET_LIMIT, SET_FILE = 3, 2*1024*1024, "changes.patch"
 BANK, LIMIT = 8, 320*1024
 FILENAME = "change.patch"
 
@@ -135,36 +139,69 @@ def records(ctx,op):
     return rows
 
 
-def _read_file(ctx,tree,stack,expected,f):
-    h,origin=tree.open_file(FILENAME); stack.callback(tree.api.k.CloseHandle,h)
+def _read_file(ctx,tree,stack,expected,f,*,bundle=False,content=False):
+    filename,limit=(SET_FILE,SET_LIMIT) if bundle else (FILENAME,LIMIT)
+    h,origin=tree.open_file(filename); stack.callback(tree.api.k.CloseHandle,h)
     if expected is not None and origin!=expected: _bad()
-    reader=WindowsHandleReader(tree.api,h,LIMIT)
+    reader=WindowsHandleReader(tree.api,h,limit)
     if reader.size!=f["bytes"]: _bad()
-    reader.seek(0); sha=hashlib.sha256()
-    while reader.position<reader.size: sha.update(reader.read(min(262144,reader.size-reader.position)))
+    reader.seek(0); sha=hashlib.sha256(); blocks=[] if content or bundle else None
+    while reader.position<reader.size:
+        block=reader.read(min(262144,reader.size-reader.position)); sha.update(block)
+        if blocks is not None: blocks.append(block)
     if not reader.verify_unchanged() or sha.hexdigest()!=f["patchSha"]: _bad()
-    return origin
+    if bundle:
+        joined=b"".join(blocks); start=0
+        for member in f["members"]:
+            end=start+member["bytes"]
+            if end>len(joined) or hashlib.sha256(joined[start:end]).hexdigest()!=member["sha256"]: _bad()
+            start=end
+        if start!=len(joined): _bad()
+    return (origin,b"".join(blocks)) if content else origin
 
 
 def check(ctx,op,row,locked,*,show=False):
     if locked() or row not in records(ctx,op).values(): _bad()
+    return checked_output(ctx,op,row,locked,show=show,added=False)
+
+
+def output_names(ctx,op,rid,slot,*,added,bundle=False):
+    if (re.fullmatch("[a-f0-9]{32}",op) is None or re.fullmatch("[a-f0-9]{32}",rid) is None
+            or type(slot) is not int or added and bundle or not 0<=slot<(SET_BANK if bundle else ADDED_BANK if added else BANK)): _bad()
+    if bundle:
+        return (SET_PROFILE,f"source-patchset-v1-{op}-slot-{slot}.json","source-patchset-v1-"+rid+"-result.json",
+                ntpath.join(ctx.state,"review-set-"+rid))
+    if added:
+        return (ADDED_PROFILE,f"source-added-v1-{op}-slot-{slot}.json","source-added-v1-"+rid+"-result.json",
+                ntpath.join(ctx.state,"review-add-"+rid))
+    return PROFILE,_slot(op,slot),_receipt(rid),_target(ctx,rid)
+
+
+def checked_output(ctx,op,row,locked,*,show,added,bundle=False,content=False):
+    # The caller has checked its own immutable slot/schema. Both variants use
+    # the same exact-file check and fixed safe filename but separate banks.
     rid,f=row["id"],row["fields"]
-    end=_read(ctx,_receipt(rid),4096)
+    profile,_,receipt,base=output_names(ctx,op,rid,0,added=added,bundle=bundle)
+    filename=SET_FILE if bundle else FILENAME
+    if row.get("format")!=profile or locked() or content and (show or bundle): _bad()
+    end=_read(ctx,receipt,4096)
     if end is None: return "pending"
-    if (end.get("format")!=PROFILE or end.get("id")!=rid or end.get("copy")!=op or end.get("patchSha")!=f["patchSha"]
+    if (end.get("format")!=profile or end.get("id")!=rid or end.get("copy")!=op or end.get("patchSha")!=f["patchSha"]
             or not _origin(end.get("folder")) or not _origin(end.get("file"))): _bad()
-    base=_target(ctx,rid)
     with ExitStack() as stack:
         _,state,_=stack.enter_context(ctx.backend.directory(ctx.state)); ctx.backend.api.private_access(state,ctx.sid,require_protected=True)
         tree=DirectoryTree(ctx,base,stack,end["folder"])
-        _read_file(ctx,tree,stack,end["file"],f)
+        fixed=_read_file(ctx,tree,stack,end["file"],f,bundle=bundle,content=content)
+        if content:
+            if locked(): _bad()
+            return fixed[1]  # original single patch from the SAME physically checked read
         if show:
             # Don't open a private state parent, an unknown sibling or an association.
             # Check the exact single entry without scanning unbounded foreign names.
             with os.scandir(_ext(base)) as members:
                 first=next(members,None)
-                if first is None or first.name!=FILENAME or next(members,None) is not None: _bad()
-            show_bound_child(ctx,stack,base,ntpath.join(base,FILENAME),locked)
+                if first is None or first.name!=filename or next(members,None) is not None: _bad()
+            show_bound_child(ctx,stack,base,ntpath.join(base,filename),locked)
     return "saved"
 
 
@@ -184,24 +221,32 @@ def save(ctx,settings,op,item,result,locked,checkpoint):
         checkpoint()
         if locked(): _bad()
         if owner["source"]["environmentId"] not in dict(registered(ctx,settings)): _bad()
+    return publish_output(ctx,op,rid,f,result["patch"],next(n for n in range(BANK) if n not in rows),current,added=False)
+
+
+def publish_output(ctx,op,rid,f,raw,slot,current,*,added,bundle=False):
+    profile,slot_file,receipt,base=output_names(ctx,op,rid,slot,added=added,bundle=bundle)
+    filename,limit=(SET_FILE,SET_LIMIT) if bundle else (FILENAME,LIMIT)
+    if (not isinstance(raw,bytes) or not 0<len(raw)<=limit or len(raw)!=f["bytes"]
+            or hashlib.sha256(raw).hexdigest()!=f["patchSha"]): _bad()
     def factual():
         ctx.check_current_pointer()
         ctx.backend.assert_private_directory(ctx.state,ctx.sid)
-    row={"format":PROFILE,"id":rid,"fields":f,"at":int(time.time()*1000)}
+    row={"format":profile,"id":rid,"fields":f,"at":int(time.time()*1000)}
     with ExitStack() as stack:
         _,state,_=stack.enter_context(ctx.backend.directory(ctx.state)); ctx.backend.api.private_access(state,ctx.sid,require_protected=True)
         current()
-        _store(ctx,_slot(op,next(n for n in range(BANK) if n not in rows)),row,16384,current)
+        _store(ctx,slot_file,row,49152 if bundle else 16384,current)
         # Private, unique, new folder: never adopt even an empty old folder.
         current()
-        path=_target(ctx,rid); tree=DirectoryTree(ctx,path,stack,None,create_root=True)
-        capture=ctx.backend.create_private_snapshot(path,FILENAME,result["patch"],maximum=LIMIT,current=current)
+        tree=DirectoryTree(ctx,base,stack,None,create_root=True)
+        capture=ctx.backend.create_private_snapshot(base,filename,raw,maximum=limit,current=current)
         if (capture.get("parentIdentity")!=tree.nodes[""][2] or capture.get("sha256")!=f["patchSha"]
                 or capture.get("bytes")!=f["bytes"]): _bad()
-        file_id=_read_file(ctx,tree,stack,None,f)
+        file_id=_read_file(ctx,tree,stack,None,f,bundle=bundle)
         if capture.get("fileIdentity")!=file_id[:3]: _bad()
         # Publication may already have happened if a window closes here. Write
         # only its factual original receipt, not another patch or any repair.
-        _store(ctx,_receipt(rid),{"format":PROFILE,"id":rid,"copy":op,"patchSha":f["patchSha"],
+        _store(ctx,receipt,{"format":profile,"id":rid,"copy":op,"patchSha":f["patchSha"],
                                  "folder":tree.origins[""],"file":file_id},4096,factual)
     return row

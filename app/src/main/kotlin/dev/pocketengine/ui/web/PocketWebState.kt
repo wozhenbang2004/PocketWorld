@@ -12,7 +12,9 @@ internal object PocketWebState {
     private val hidden = setOf(
         "apikey", "password", "passphrase", "privatekey", "clientsecret", "accesstoken",
         "refreshtoken", "idtoken", "bearer", "bearertoken", "authorization", "secret",
-        "token", "invitationtoken", "invitationuri", "loginchallenge", "signedurl", "localphonepauseinput"
+        "token", "invitationtoken", "invitationuri", "loginchallenge", "signedurl", "localphonepauseinput",
+        // The project run selection holds private file paths, range fingerprints and record revisions. It is native audit, not Web state.
+        "projectmemoryread"
     )
     private val imageFields = setOf("imagedataurl", "screenshotdataurl", "screenshotbase64")
     private val unscopedMemoryReads = setOf("memory.list", "memory.search")

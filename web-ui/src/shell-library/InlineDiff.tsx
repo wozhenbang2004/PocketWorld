@@ -6,7 +6,7 @@ import { useMemo } from 'react';
 import { IconCheck, IconClose, IconCode } from '../icons';
 import { compareFileText, type FileDiffPart } from '../file-diff';
 
-export function InlineDiff({ before, after, versionLabel, beforeLabel = '原版本', afterLabel = '当前草稿', onApply, onCancel, pending = false }: { before: string; after: string; versionLabel: string; beforeLabel?: string; afterLabel?: string; onApply?: () => void; onCancel?: () => void; pending?: boolean }) {
+export function InlineDiff({ before, after, versionLabel, beforeLabel = '原版本', afterLabel = '当前草稿', onApply, onCancel, pending = false, readOnly = false }: { before: string; after: string; versionLabel: string; beforeLabel?: string; afterLabel?: string; onApply?: () => void; onCancel?: () => void; pending?: boolean; readOnly?: boolean }) {
   const same = before === after;
   const comparison = useMemo(() => compareFileText(before, after), [before, after]);
   const content = (parts: FileDiffPart[], side: 'before' | 'after') => parts.map((part, index) =>
@@ -21,6 +21,6 @@ export function InlineDiff({ before, after, versionLabel, beforeLabel = '原版�
         <section><h4>{afterLabel}</h4><pre aria-label={afterLabel + '内容'}>{after ? content(comparison.after, 'after') : <span className="acc-muted">（空文件）</span>}</pre></section>
       </div>
     </>}
-    <footer><span className="acc-muted">保存仍以原文件版本核对</span><span className="acc-spacer" />{onCancel && <button type="button" className="acc-btn" onClick={onCancel} disabled={pending}><IconClose size={15} />返回编辑</button>}{onApply && <button type="button" className="acc-btn acc-btn-primary" onClick={onApply} disabled={pending || same}><IconCheck size={15} />{pending ? '正在保存…' : '保存这份修改'}</button>}</footer>
+    {!readOnly && <footer><span className="acc-muted">保存仍以原文件版本核对</span><span className="acc-spacer" />{onCancel && <button type="button" className="acc-btn" onClick={onCancel} disabled={pending}><IconClose size={15} />返回编辑</button>}{onApply && <button type="button" className="acc-btn acc-btn-primary" onClick={onApply} disabled={pending || same}><IconCheck size={15} />{pending ? '正在保存…' : '保存这份修改'}</button>}</footer>}
   </section>;
 }

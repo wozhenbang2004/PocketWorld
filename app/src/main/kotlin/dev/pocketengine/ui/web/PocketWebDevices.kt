@@ -480,7 +480,9 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         // Original local task control uses the existing control lane, independent of slow peer reads.
         if (controlLane && action != "devices.confirm") discard(original)
         val epoch = generation.get()
-        val ids = taskIds()
+        val phoneResultRead=action=="devices.queryPhoneGoalResult"
+        val readRevision=if(phoneResultRead) controller.deviceWorkspaceRevision else -1L
+        val ids = if(phoneResultRead) emptyArray() else taskIds()
         fun taskId(): String = text(args, "taskId").also { require(it in ids) { "请从原设备任务记录选择" } }
         val work = Runnable {
             var snapshot: JSONObject? = null; var value: JSONObject? = null; var error: String? = null
@@ -701,9 +703,10 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                         original.discardReview(); store("action", native, view, original, epoch)
                     }
                     "devices.confirm", "devices.reject" -> {
-                        fields(args, "viewHandle", "acknowledged", "useForFutureGoals", "completed", "approved")
+                        fields(args, "viewHandle", "acknowledged", "useForFutureGoals", "completed", "approved","keepTextLocal")
                         if (action == "devices.confirm") require(bool(args, "acknowledged")) { "请明确核对本次设备范围与影响" }
                         val old = selected(args, original, epoch)
+                        if(args.has("keepTextLocal")) require(action=="devices.confirm" && old.kind=="result" && old.view.opt("canKeepOriginalText")==true && bool(args,"completed") && bool(args,"keepTextLocal"))
                         var nativeReceipt: JSONObject? = null
                         if (action == "devices.reject") { require(old.kind == "pair"); original.rejectPairing(old.native as Host.PairReview) }
                         else {
@@ -714,7 +717,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                                 "connection" -> original.confirmConnectionUpdate(old.native as Host.ConnectionReview)
                                 "relay" -> original.confirmRelayLease(old.native as Host.RelayLeaseReview)
                                 "goal" -> original.confirmGoal(old.native as Host.GoalReview, bool(args, "useForFutureGoals"))
-                                "result" -> original.confirmResult(old.native as Host.ResultReview, bool(args, "completed"))
+                                "result" -> original.confirmResult(old.native as Host.ResultReview, bool(args, "completed"),args.has("keepTextLocal"))
                                 "approval" -> original.decideApproval(old.native as Host.ApprovalReview, bool(args, "approved"))
                                 "abandon" -> original.confirmPairingAbandonment(old.native as Host.AbandonReview)
                                 "resume" -> {
@@ -767,7 +770,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                 }
                 current(original, epoch)
             } catch (failure: Exception) { if (action == "devices.discovery.start" && runCatching { current(original, epoch) }.isFailure) original.stopLanDiscovery(); error = if (failure is org.json.JSONException) "原设备信息不完整，请刷新核对。" else failure.message?.take(400) ?: "设备操作结果待核对" }
-            if (action !in setOf("devices.readPhoneGoalArchive","devices.readReceivedPhoneGoals","devices.readWaitingPhoneGoals") && (action != "devices.readTask" || !args.has("historyPageHandle"))) {
+            if (!phoneResultRead && action !in setOf("devices.readPhoneGoalArchive","devices.readReceivedPhoneGoals","devices.readWaitingPhoneGoals") && (action != "devices.readTask" || !args.has("historyPageHandle"))) {
                 try { current(original, epoch); snapshot = captureSnapshot(original, ids) } catch (_: Exception) { }
             }
             val result = JSONObject().put("value", value ?: JSONObject.NULL).put("snapshot", snapshot ?: JSONObject.NULL)
@@ -775,6 +778,15 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                 gate.compareAndSet(call, null)
                 if (runCatching { current(original, epoch) }.isFailure) done(null, "原设备窗口已变化，请读取原回执，不要重复提交")
                 else {
+                    val text=if(phoneResultRead) result.optJSONObject("value")?.optJSONObject("result") else null
+                    if(text!=null && text.optString("summary").isNotEmpty()){
+                        val left=minOf(text.optLong("textReadRemainingMs"),text.optLong("textReadUntil")-System.currentTimeMillis())
+                        if(left<=0L || readRevision!=controller.deviceWorkspaceRevision){
+                            done(null,"原设备状态或这次读取时限已变化，未向界面交付正文。请手动重读。")
+                            return@post
+                        }
+                        text.put("textReadRemainingMs",left)
+                    }
                     snapshot?.let { latest = JSONObject(it.toString()) }
                     done(PocketWebState.publicValue(result) as JSONObject, error)
                 }

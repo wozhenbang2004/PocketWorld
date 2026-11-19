@@ -342,9 +342,11 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
                 public JSONObject view() throws Exception {
                     JSONObject value=nativeReview.view();
                     if(DevicePrivateText.applies(task))value.put("textResultReader",task.getJSONObject("origin").getString("callerDeviceId"));
+                    if(!task.optBoolean("cancelRequested")&&DevicePrivateText.mayKeepOriginalText(task))value.put("canKeepOriginalText",true);
                     return value;
                 }
-                public void confirm(boolean completed) throws Exception { app.confirmDeviceGoalResult(nativeReview, completed); changed(); }
+                public void confirm(boolean completed) throws Exception {confirm(completed,false);}
+                public void confirm(boolean completed,boolean keepTextLocal) throws Exception { app.confirmDeviceGoalResult(nativeReview, completed,keepTextLocal); changed(); }
             };
         }
         public JSONObject historyLinks(String id) throws Exception { tasks.get(id, false); return tasks.deviceTasks().childOverview(id, 24); }

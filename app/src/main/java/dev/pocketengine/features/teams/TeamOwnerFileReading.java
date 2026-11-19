@@ -14,7 +14,10 @@ public final class TeamOwnerFileReading {
     private final JSONObject description;
     private final Map<String,String> text=new LinkedHashMap<>();
     private final Map<String,JSONObject> entries=new LinkedHashMap<>();
-    TeamOwnerFileReading(String teamRun,JSONObject captured)throws Exception{
+    private final TeamOwnerRevisionFiles revision;
+    TeamOwnerFileReading(String teamRun,JSONObject captured)throws Exception{this(teamRun,captured,null,"");}
+    TeamOwnerFileReading(String teamRun,JSONObject captured,TeamOwnerRevisionFiles revision,String revisionWarning)throws Exception{
+        this.revision=revision;
         JSONObject original=captured.getJSONObject("plan");
         if(!"pocketworld.team.integration.v1".equals(original.getString("format"))||!teamRun.equals(original.getString("teamRunId")))throw new SecurityException("原团队文件计划身份不符");
         team=teamRun;plan=captured.getString("planHash");if(!plan.matches("[a-f0-9]{64}"))throw new SecurityException("原团队文件计划指纹缺失");
@@ -42,6 +45,8 @@ public final class TeamOwnerFileReading {
         description=new JSONObject().put("teamRunId",team).put("projectId",original.getString("targetProjectId")).put("planHash",plan).put("capturedAt",System.currentTimeMillis()).put("files",rows)
                 .put("incompleteCount",captured.getJSONArray("incompleteAssignments").length()).put("recovery",captured.optBoolean("recovery"))
                 .put("readOnly",true).put("executionAuthorized",false);
+        if(revision!=null)description.put("revisionComparison",revision.index());
+        if(!revisionWarning.isEmpty())description.put("revisionWarning",revisionWarning);
         if(captured.optBoolean("recovery")){
             JSONObject identity=original.getJSONObject("recovery");int matching=0;for(int i=0;i<rows.length();i++)if(rows.getJSONObject(i).getBoolean("retainedApplied"))matching++;
             description.put("integrationCapture",new JSONObject().put("integrationTaskId",identity.getString("taskId")).put("reviewId",identity.getString("reviewId"))
@@ -61,11 +66,19 @@ public final class TeamOwnerFileReading {
     boolean sameTextComparison(TeamOwnerFileReading next){
         return completeTextComparison&&next.completeTextComparison&&team.equals(next.team)&&plan.equals(next.plan)&&projectHeads.equals(next.projectHeads)&&text.equals(next.text);
     }
-    public synchronized JSONObject page(String id,int offset)throws Exception{
-        JSONObject original=entries.get(id);if(original==null)throw new SecurityException("这份文件不在打开时的原目录");
-        String body=text.get(id);if(body==null||offset<0||offset>body.length()||offset>0&&offset<body.length()&&Character.isLowSurrogate(body.charAt(offset))&&Character.isHighSurrogate(body.charAt(offset-1)))throw new SecurityException("没有这段可读的原文差异");
+    public JSONObject revisionPage(String path,int offset)throws Exception{
+        if(revision==null)throw new SecurityException("原窗口没有这次修订的冻结对照");
+        return revision.page(path,offset);
+    }
+    static int pageEnd(String body,int offset){
+        if(body==null||offset<0||offset>body.length()||offset>0&&offset<body.length()&&Character.isLowSurrogate(body.charAt(offset))&&Character.isHighSurrogate(body.charAt(offset-1)))throw new SecurityException("没有这段可读的原文差异");
         int end=Math.min(body.length(),offset+6000);
         if(end<body.length()&&end>offset&&Character.isHighSurrogate(body.charAt(end-1))&&Character.isLowSurrogate(body.charAt(end)))end--;
+        return end;
+    }
+    public synchronized JSONObject page(String id,int offset)throws Exception{
+        JSONObject original=entries.get(id);if(original==null)throw new SecurityException("这份文件不在打开时的原目录");
+        String body=text.get(id);int end=pageEnd(body,offset);
         int known=contiguous.getOrDefault(id,-1);if(offset==0||known>=offset)contiguous.put(id,Math.max(known,end));
         return new JSONObject().put("allTextRangesReturned",shownAllOriginalDiffs()).put("teamRunId",team).put("planHash",plan).put("artifactId",id).put("assignmentId",original.getString("assignmentId"))
                 .put("offset",offset).put("endOffset",end).put("retainedChars",body.length()).put("nativeTruncated",original.getBoolean("truncated"))

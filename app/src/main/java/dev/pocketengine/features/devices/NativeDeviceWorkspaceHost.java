@@ -199,6 +199,10 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
     public interface ResultAction {
         JSONObject view() throws Exception;
         void confirm(boolean completed) throws Exception;
+        default void confirm(boolean completed,boolean keepTextLocal)throws Exception {
+            if(keepTextLocal)throw new SecurityException("原宿主不支持仅本机保留摘要，未确认成果");
+            confirm(completed);
+        }
     }
     public interface ApprovalAction {
         JSONObject view() throws Exception;
@@ -417,8 +421,12 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
             return new ResultReview(this, nextReview(), source, copy(safe));
         }
         public void confirmResult(ResultReview review, boolean completed) throws Exception {
+            confirmResult(review,completed,false);
+        }
+        public void confirmResult(ResultReview review,boolean completed,boolean keepTextLocal)throws Exception{
             current(); if (review == null || review.window != this || review.generation != reviewGeneration.get()) throw new SecurityException("结果核对已离开当前任务窗口");
-            consume(review.generation); review.source.confirm(completed);
+            if(keepTextLocal&&(!completed||!review.source.view().optBoolean("canKeepOriginalText")))throw new SecurityException("不是这份纯文字原结果的状态回执选择");
+            consume(review.generation); review.source.confirm(completed,keepTextLocal);
         }
         public void pauseTask(String id) throws Exception { current(); control.pauseAvailability(id).require(); control.pause(id); }
         public void resumeTask(String id) throws Exception { current(); control.resumeAvailability(id).require(); control.resume(id); }

@@ -17,8 +17,11 @@ public final class TeamParentRevisionOffer {
         return result;
     }
     static boolean local(JSONObject run) {
+        return !run.optString("status").matches("completed|stopping|cancelled")&&localFiles(run);
+    }
+    static boolean localFiles(JSONObject run) {
         JSONObject scope=run.optJSONObject("productionScope"),plan=run.optJSONObject("workPlan");
-        if(scope==null||scope.has("projectSelection")||plan==null||!"produce".equals(run.optString("mode"))||run.optString("status").matches("completed|stopping|cancelled"))return false;
+        if(scope==null||scope.has("projectSelection")||plan==null||!"produce".equals(run.optString("mode")))return false;
         JSONArray slots=scope.optJSONArray("assignments");
         if(slots==null||slots.length()==0)return false;
         for(int i=0;i<slots.length();i++){JSONObject slot=slots.optJSONObject(i);if(slot==null||slot.has("remoteSelection")||slot.has("projectSelection"))return false;}

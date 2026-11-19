@@ -3,7 +3,7 @@
 A replacement is a NEW observed comparison side, never historical authority.
 The baseline, if readable, comes from the exact original commit, never HEAD.
 """
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 import difflib
 import hashlib
 import ntpath
@@ -24,7 +24,9 @@ TEXT_LIMIT = 128*1024
 def _bad(): raise PlatformError("Selected source or current copy observation changed")
 
 
-def historical_blob(ctx,settings,source,path,row,checkpoint):
+@contextmanager
+def original_commit(ctx,settings,source,checkpoint):
+    """Pinned original repository and COMMIT. Never resolve HEAD for a historical claim."""
     if not settings: _bad()
     root = dict(registered(ctx,settings)).get(source["environmentId"])
     if not root: _bad()
@@ -39,6 +41,13 @@ def historical_blob(ctx,settings,source,path,row,checkpoint):
         commit,_ = _object_body(pins,packs,source["commit"],b"commit",256*1024)
         oid = _tree_id(commit,algo)
         if oid!=source["tree"]: _bad()
+        yield pins,packs,oid
+        if dict(registered(ctx,settings)).get(source["environmentId"])!=root: _bad()
+        pins.recheck_absence(checkpoint)
+
+
+def historical_blob(ctx,settings,source,path,row,checkpoint):
+    with original_commit(ctx,settings,source,checkpoint) as (pins,packs,oid):
         pieces = relative_parts(path)
         # Verify each path component inside the immutable commit, not a file
         # currently bearing that path in the original working directory.
@@ -52,8 +61,6 @@ def historical_blob(ctx,settings,source,path,row,checkpoint):
         if mode!=row["mode"].encode("ascii") or oid!=row["object"] or row["bytes"]>TEXT_LIMIT: _bad()
         body,_ = _object_body(pins,packs,oid,b"blob",MAX_FILE)
         if len(body)!=row["bytes"] or hashlib.sha256(body).hexdigest()!=row["sha256"]: _bad()
-        if dict(registered(ctx,settings)).get(source["environmentId"])!=root: _bad()
-        pins.recheck_absence(checkpoint)
         return body
 
 

@@ -15,6 +15,10 @@ public final class DevicePrivateText {
 
     public static boolean applies(JSONObject task) {
         JSONObject scope=task.optJSONObject("deviceExecutionScope"), origin=task.optJSONObject("origin");
+        JSONObject saved=task.optJSONObject("deviceGoalResult"),evidence=task.optJSONObject("evidence");
+        JSONObject review=evidence==null?null:evidence.optJSONObject("nativeDeviceGoalOwnerReview");
+        // An explicit local-only completion can narrow egress even if another old marker is missing.
+        if(saved!=null&&saved.has("ownerOnlyText")||review!=null&&review.has("ownerOnlyText"))return true;
         if(origin!=null&&DeviceProtocol.textMarker(origin.opt("textReturnContract")))return true;
         if(scope==null)return false;
         if(Boolean.TRUE.equals(scope.opt("reviewedTextOnly")))return true;
@@ -26,6 +30,15 @@ public final class DevicePrivateText {
         String signed=resource==null?"":resource.optString("screenMode");
         return "main_screen".equals(signed)||"background".equals(signed)
                 ||"main_screen".equals(scope.opt("mode"))||"background".equals(scope.opt("mode"));
+    }
+
+    /** Only for the receiving owner's existing, direct, no-screen goal review. Not a new read permission. */
+    public static boolean mayKeepOriginalText(JSONObject task) {
+        JSONObject from=task.optJSONObject("origin"),scope=task.optJSONObject("deviceExecutionScope");
+        return from!=null&&scope!=null&&applies(task)&&"GOAL".equals(task.opt("deviceExecutionKind"))&&"paired_device".equals(from.opt("kind"))
+                &&scope.optLong("toolLimit",-1)==0&&!from.optString("callerDeviceId").isEmpty()&&from.optString("callerDeviceId").equals(from.opt("originDeviceId"))
+                &&!from.optString("targetDeviceId").isEmpty()&&!from.optString("remoteOperationId").isEmpty()
+                &&!from.optString("parentTaskId").isEmpty()&&from.optString("parentTaskId").equals(from.opt("rootTaskId"));
     }
 
     static JSONObject identity(JSONObject task) throws Exception {

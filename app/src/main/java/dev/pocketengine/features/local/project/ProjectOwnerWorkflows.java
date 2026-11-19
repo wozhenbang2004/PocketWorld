@@ -63,6 +63,9 @@ public final class ProjectOwnerWorkflows {
         if(expected!=null&&!result.optBoolean("taskVerified"))throw new SecurityException("原私人主机委托和所选文件不再匹配，未打开其他任务");
         return result;
     }
+    public JSONObject readChangedHostTextForOwner(String project,String checkout,String evidence,String path,String originalSha,String phoneSha,java.util.function.BooleanSupplier owner)throws Exception{
+        requireOrdinaryFileOwner(project,checkout);return local.readChangedHostTextForOwner(project,checkout,evidence,path,originalSha,phoneSha,id->tasks.get(id,false),owner);
+    }
     public JSONObject compareHostSourceForOwner(String project,String checkout,String evidence,java.util.function.BooleanSupplier current)throws Exception{
         requireOrdinaryFileOwner(project,checkout);return local.compareSavedHostSourceForOwner(project,checkout,evidence,current);
     }

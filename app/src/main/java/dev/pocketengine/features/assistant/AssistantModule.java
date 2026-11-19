@@ -210,12 +210,33 @@ public final class AssistantModule implements EngineModule {
         requireLocalShelfOwner(owner);
         if(!durable())throw new IllegalStateException("原会话数据库不可用");return historyRepository.removeOwnerShelfReference(conversation,id,owner);
     }
-    public JSONObject readLocalReference(String conversation,String id,RunControl owner)throws Exception{
+    /** An owner read can issue one in-process source proof, never serialized or sent to Web. No original text. */
+    public static final class LocalShelfRead {
+        private final AssistantModule host;private final String conversation,id,reference;
+        private LocalShelfRead(AssistantModule host,String conversation,String id,JSONObject reference){this.host=host;this.conversation=conversation;this.id=id;this.reference=reference.toString();}
+        public boolean alreadySelected(JSONArray references)throws Exception{
+            JSONArray refs=OwnerSourceReferences.checked(references);for(int i=0;i<refs.length();i++)if(reference.equals(refs.getJSONObject(i).toString()))return true;return false;
+        }
+    }
+    private static JSONObject shelfLocator(String conversation,JSONObject r)throws Exception{
+        JSONObject ref=r.getJSONObject("sourceRef");
+        return new JSONObject().put("kind","owner_native_original").put("generation",r.getString("generation")).put("conversationId",conversation)
+                .put("recordId",ref.getString("sourceId")).put("recordVersion",ref.getLong("revision")).put("fingerprint",r.getString("bodyFingerprint"));
+    }
+    /** Recheck the exact already-opened row; a read/ID alone cannot shape a different source or range. */
+    public JSONObject localShelfDraftRange(LocalShelfRead reviewed,RunControl owner)throws Exception{
+        requireLocalShelfOwner(owner);if(reviewed==null||reviewed.host!=this||!durable())throw new SecurityException("原对话备忘阅读已经失效");
+        JSONObject current=historyRepository.ownerShelfReference(reviewed.conversation,reviewed.id);
+        if(!current.toString().equals(reviewed.reference))throw new SecurityException("这条备忘的原选区已变化，请重新打开");
+        SourceRef source=SourceRef.fromJson(current.getJSONObject("sourceRef"));requireOwnerSourceNotForgotten(source);
+        try(var inspection=inspectOwnerSources()){inspection.requireSource(current);}owner.check();
+        return new JSONObject().put("ownerLocator",shelfLocator(reviewed.conversation,current)).put("offset",current.getInt("offset")).put("chars",current.getInt("chars"));
+    }
+    public JSONObject readLocalReference(String conversation,String id,RunControl owner,java.util.function.Consumer<LocalShelfRead> checked)throws Exception{
         requireLocalShelfOwner(owner);
         if(!durable())throw new IllegalStateException("原会话数据库不可用");
         owner.check();JSONObject r=historyRepository.ownerShelfReference(conversation,id),ref=r.getJSONObject("sourceRef");
-        JSONObject locator=new JSONObject().put("kind","owner_native_original").put("generation",r.getString("generation")).put("conversationId",conversation)
-                .put("recordId",ref.getString("sourceId")).put("recordVersion",ref.getLong("revision")).put("fingerprint",r.getString("bodyFingerprint"));
+        JSONObject locator=shelfLocator(conversation,r);
         int offset=r.getInt("offset"),chars=r.getInt("chars");SourceRef source=SourceRef.fromJson(ref);requireOwnerSourceNotForgotten(source);
         try(var inspection=inspectOwnerSources()){inspection.requireSource(r);}
         JSONObject page=readOwnerSearchHit(new JSONObject().put("ownerLocator",locator).put("offset",offset).put("maxChars",Math.max(64,chars)),owner);
@@ -225,7 +246,7 @@ public final class AssistantModule implements EngineModule {
                 span.getInt("offset")!=offset||body.length()<chars||chars<body.length()&&Character.isHighSurrogate(body.charAt(chars-1))&&Character.isLowSurrogate(body.charAt(chars)))throw new SecurityException("这段本人原话已变化，没有展示旧内容");
         try(var inspection=inspectOwnerSources()){inspection.requireSource(r);}requireOwnerSourceNotForgotten(source);
         if(!historyRepository.ownerShelfReference(conversation,id).toString().equals(r.toString()))throw new SecurityException("这条备忘已变化");
-        owner.check();return new JSONObject().put("id",id).put("conversationId",conversation).put("chars",chars).put("text",body.substring(0,chars)).put("formalMemorySaved",false).put("modelCalled",false);
+        owner.check();checked.accept(new LocalShelfRead(this,conversation,id,r));return new JSONObject().put("id",id).put("conversationId",conversation).put("chars",chars).put("text",body.substring(0,chars)).put("formalMemorySaved",false).put("modelCalled",false);
     }
     ConversationRepository.OwnerSourceInspection inspectOwnerSources(){if(!durable())throw new IllegalStateException("原DB来源权威未激活，未提升旧引用");return historyRepository.inspectOwnerSources();}
     ConversationRepository.OwnerSourceInspection inspectOwnerSources(dev.pocketengine.features.memory.ConversationHistory.SourceBytes bytes){if(!durable())throw new IllegalStateException("原DB来源权威未激活，未提升旧引用");return historyRepository.inspectOwnerSources(bytes);}

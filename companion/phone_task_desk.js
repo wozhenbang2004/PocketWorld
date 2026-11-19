@@ -108,7 +108,7 @@ function acceptSnapshot(result, operation, revision) {
       not_confirmed:"The result was not confirmed on the receiving phone.", unverified:"The phone could not verify the original result.",
       unavailable:"The receiving phone did not return a verifiable goal result."};
     byId("result-summary").textContent = outcome.review === "confirmed" && task.state === "succeeded" && typeof outcome.summary === "string"
-      ? (outcome.summary || "The phone confirmed completion without a text summary.") + (outcome.truncated === true ? " (Partial summary from the phone.)" : "")
+      ? (outcome.summaryWithheld === true ? "The owner confirmed completion and kept the text on the phone." : outcome.summary || "The phone confirmed completion without a text summary.") + (outcome.truncated === true ? " (Partial summary from the phone.)" : "")
       : (labels[outcome.review] || "No verified goal result was returned.");
   } else {
     byId("result-summary").textContent = typeof summary === "string" && summary ? "Task status: " + summary : task.state === "waiting_approval" ? "Your phone is waiting for your review." : "The original task is " + task.state.replaceAll("_", " ") + ".";

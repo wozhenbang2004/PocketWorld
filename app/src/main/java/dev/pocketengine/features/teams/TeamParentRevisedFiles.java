@@ -9,9 +9,13 @@ import org.json.JSONObject;
  * a grant, replace an approval or start/resume the previous integrator. */
 final class TeamParentRevisedFiles {
     private TeamParentRevisedFiles() {}
-    private record Round(String operation,String request,String previousReview,String previousPlan,int affectedItems) {}
+    record Round(String operation,String request,String previousReview,String previousPlan,int affectedItems) {}
     private static Round round(JSONObject parent,JSONObject run,JSONObject sql)throws Exception {
-        if(sql==null||!TeamParentRevisionOffer.local(run))return null;
+        return TeamParentRevisionOffer.local(run)?ownerRound(parent,run,sql):null;
+    }
+    // Foreground historical reading remains valid after work stops; it confers no action.
+    static Round ownerRound(JSONObject parent,JSONObject run,JSONObject sql)throws Exception {
+        if(sql==null||!TeamParentRevisionOffer.localFiles(run))return null;
         JSONObject saved=run.getJSONObject("workPlan");String id=run.getString("id"),request=sql.optString("lastRevisionRequestId");
         if(!request.matches("[a-f0-9-]{36}")||!sql.optString("lastRevisionReviewDigest").matches("[a-f0-9]{64}")||
                 !request.equals(saved.optString("lastRevisionRequestId"))||!sql.optString("planId").equals(saved.optString("planId"))||sql.optInt("revision")!=saved.optInt("revision"))return null;

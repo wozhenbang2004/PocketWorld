@@ -74,6 +74,32 @@ public final class ProjectHostOrigin {
                 !same(staged,"manifestIdentity",imported.getString("manifestIdentity"))||!same(imported,"sourceEvidenceSha256",ProjectSources.digest(e)))return null;
         return new ProjectHostOrigin(row,e);
     }
+    @FunctionalInterface public interface TaskLookup { JSONObject read(String id)throws Exception; }
+    /** Reopen both genuine local sources; paths, a cached preview, or a digest alone do not supply either text. */
+    public JSONObject reviewedText(File files,String path,String hostSha,String phoneSha,dev.pocketengine.features.attachments.AttachmentBook book,
+            TaskLookup tasks,dev.pocketengine.core.RunControl control,java.util.function.BooleanSupplier current)throws Exception{
+        if(!hostSha.matches("[0-9a-f]{64}")||!phoneSha.matches("[0-9a-f]{64}")||hostSha.equals(phoneSha))throw changed();
+        JSONObject chosen=null;JSONArray claims=original.getJSONArray("files");
+        for(int i=0;i<claims.length();i++){JSONObject c=claims.getJSONObject(i);if(path.equals(c.opt("path"))&&hostSha.equals(c.opt("sha256"))){
+            if(chosen!=null)throw changed();chosen=c;
+        }}
+        if(chosen==null||chosen.getLong("bytes")>ProjectHostFileComparison.TEXT_LIMIT)throw new IllegalArgumentException("没有这份可阅读的原选文本，或超过每侧 64 KiB。");
+        JSONObject wire=ProjectSources.copy(chosen);wire.remove("bytes");String id=task();
+        ProjectHostSource capture=ProjectHostSource.read(id,new JSONArray().put(wire),()->tasks.read(id),book,control);
+        JSONObject src=capture.evidence();
+        if(!same(src,"originalBindingDigest",original.getString("originalBindingDigest"))||!same(src,"snapshotId",original.getString("snapshotId"))||
+                !same(src,"snapshotVersion",original.getString("snapshotVersion")))throw changed();
+        String phone=ProjectHostFileComparison.selectedChangedText(files,chosen,phoneSha,current);
+        byte[] host=capture.bytes(path);String before=ProjectHostFileComparison.text(host);control.check();
+        JSONObject finalTask=tasks.read(id);
+        if(finalTask==null||!same(original,"originalBindingDigest",ProjectHostSource.bindingDigest(RemoteSavedOriginal.resolve(finalTask,wire))))throw changed();
+        JSONObject actual=book.get(wire.getString("attachmentId"));
+        if(!"owner".equals(actual.opt("principalId"))||!"private".equals(actual.opt("spaceId"))||actual.optBoolean("outputSourceRetired"))throw changed();
+        RemoteSavedOriginal.requireLive(finalTask,actual);control.check();
+        return new JSONObject().put("projectId",project).put("checkoutId",checkout).put("path",path).put("evidenceDigest",digest).put("snapshotVersion",original.getString("snapshotVersion"))
+            .put("originalSha256",hostSha).put("phoneSha256",phoneSha).put("originalBytes",host.length).put("phoneBytes",phone.getBytes(StandardCharsets.UTF_8).length)
+            .put("before",before).put("after",phone).put("networkUsed",false).put("written",false);
+    }
     public JSONObject compareSavedFiles(File files,java.util.function.BooleanSupplier check)throws Exception{
         JSONArray observed=ProjectHostFileComparison.read(files,original.getJSONArray("files"),ProjectHostSource.MAX_COUNT,ProjectHostSource.MAX_FILE,ProjectHostSource.MAX_BYTES,check);
         return new JSONObject().put("projectId",project).put("checkoutId",checkout).put("evidenceDigest",digest)

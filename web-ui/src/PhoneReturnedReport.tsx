@@ -11,16 +11,40 @@ import './phone-returned-report.css';
 
 type WindowView={resumeRevision?:number;section?:string|null;taskId?:string|null};
 export type PhoneReportTarget={conversationId:string;messageId:string;sourceRevision:number;phoneResult:PhoneResult;
-  readerWindow:number;documentEpoch:number;resume:number;changes:number;returnFocus:HTMLElement};
+  readerWindow:number;documentEpoch:number;resume:number;changes:number;returnFocus:HTMLElement;noticeOrigin?:string};
 const view=()=>(bridge.getState().view||{}) as WindowView;
 export function phoneReportTarget(conversationId:string,messageId:string,sourceRevision:number,phoneResult:PhoneResult,returnFocus:HTMLElement,readerWindow=0):PhoneReportTarget{
   return {conversationId,messageId,sourceRevision,phoneResult,readerWindow,documentEpoch:bridge.getDocumentEpoch(),resume:Number(view().resumeRevision),
     changes:Number(bridge.getState().state.traceSourceRevision),returnFocus};
 }
+type NoticeSource={token:string;taskId:string;runId:string;epoch:number;status:string};
+type ShownReply={conversationId:string;messageId:string;sourceRevision:number;readerWindow:number;result:PhoneResult};
+/** Join only already-present private receipt markers. No query for another chat or older messages. */
+export function shownPhoneReply(n:NoticeSource):ShownReply|null{
+  const {state,capabilities}=bridge.getState(),v=view(),note=state.originalPhoneNotification,h=state.conversationReader;
+  if(document.hidden||v.section||v.taskId||!capabilities.commands.includes('phone.result.original')||
+    note?.noticeHandle!==n.token||note.taskId!==n.taskId||note.runId!==n.runId||note.epoch!==n.epoch||note.status!==n.status)return null;
+  if(h&&(!Number.isSafeInteger(h.window)||h.window<1||h.loading||h.error||h.limited))return null;
+  const conversationId=h?h.conversation:state.conversationId,rows=h?h.messages:state.messages;
+  if(typeof conversationId!=='string'||!conversationId||!Array.isArray(rows))return null;
+  let found:ShownReply|null=null;
+  for(const row of rows){
+    if(typeof row?.id!=='string'||!row.id||row.sourceRevision!==1||row.taskId!==n.taskId)continue;
+    const r=messagePhoneResult(row);
+    if(!r||r.taskId!==n.taskId||r.runId!==n.runId||r.epoch!==n.epoch||r.status!==n.status)continue;
+    if(found)return null;
+    found={conversationId,messageId:row.id,sourceRevision:row.sourceRevision,readerWindow:h?h.window:0,result:r};
+  }
+  return found;
+}
 function current(t:PhoneReportTarget){
   const {state,capabilities}=bridge.getState(),v=view(),f=t.phoneResult;
   if(document.hidden||!capabilities.commands.includes('phone.result.original')||v.section||v.taskId||bridge.getDocumentEpoch()!==t.documentEpoch
-    ||v.resumeRevision!==t.resume||state.traceSourceRevision!==t.changes)return false;
+    ||v.resumeRevision!==t.resume||state.traceSourceRevision!==t.changes||t.noticeOrigin&&state.originalPhoneNotification?.noticeHandle!==t.noticeOrigin)return false;
+  if(t.noticeOrigin){
+    const linked=shownPhoneReply({token:t.noticeOrigin,taskId:f.taskId,runId:f.runId,epoch:f.epoch,status:f.status});
+    if(!linked||linked.messageId!==t.messageId||linked.sourceRevision!==t.sourceRevision||linked.conversationId!==t.conversationId||linked.readerWindow!==t.readerWindow)return false;
+  }
   const h=state.conversationReader;
   const rows=t.readerWindow>0?(h?.window===t.readerWindow&&h.conversation===t.conversationId&&!h.loading&&!h.error?h.messages:null):
     !h&&state.conversationId===t.conversationId?state.messages:null;
@@ -38,7 +62,7 @@ export function PhoneReturnedReport({target:t,onClose}:{target:PhoneReportTarget
   const [expired,setExpired]=useState(false),[page,setPage]=useState<Page|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(true);
   const attempts=useRef(0),inFlight=useRef(false),digest=useRef(''),previous=useRef<number[]>([]),request=useRef(0);
   const original=t.phoneResult,valid=current(t),available=!expired&&valid;
-  const Sheet=t.readerWindow>0?Drawer.NestedRoot:Drawer.Root;
+  const Sheet=t.readerWindow>0||t.noticeOrigin?Drawer.NestedRoot:Drawer.Root;
   const close=useRef(onClose);close.current=onClose;
   useEffect(()=>registerOverlayBack(()=>close.current()),[]);
   useEffect(()=>{if(!valid){++attempts.current;inFlight.current=false;setPage(null);setExpired(true);}},[valid]);
@@ -70,7 +94,8 @@ export function PhoneReturnedReport({target:t,onClose}:{target:PhoneReportTarget
     return()=>{document.removeEventListener('visibilitychange',obscure);++attempts.current;inFlight.current=false;};
   },[t]);
   return <Sheet open onOpenChange={open=>{if(!open)onClose();}}><Drawer.Portal><Drawer.Overlay className="pw-overlay"/>
-    <Drawer.Content className="pw-drawer" onCloseAutoFocus={e=>{e.preventDefault();if(current(t)&&t.returnFocus.isConnected&&(t.readerWindow>0?t.returnFocus.closest<HTMLElement>('[data-reader-id]')?.dataset.readerId:t.returnFocus.closest<HTMLElement>('[data-message-id]')?.dataset.messageId)===t.messageId)t.returnFocus.focus({preventScroll:true});}}>
+    <Drawer.Content className="pw-drawer" onCloseAutoFocus={e=>{e.preventDefault();if(current(t)&&t.returnFocus.isConnected&&(t.noticeOrigin?t.returnFocus.dataset.phoneResultReturn===t.noticeOrigin:
+      (t.readerWindow>0?t.returnFocus.closest<HTMLElement>('[data-reader-id]')?.dataset.readerId:t.returnFocus.closest<HTMLElement>('[data-message-id]')?.dataset.messageId)===t.messageId))t.returnFocus.focus({preventScroll:true});}}>
       <div className="pw-drawer-handle"/><header className="pw-drawer-header"><div><Drawer.Title>这轮手机任务的原文</Drawer.Title>
         <Drawer.Description>第 {original.epoch} 轮 · {states[original.status]}。这里保留的是当时的文字总结，不会继续操作手机。</Drawer.Description></div>
         <IconButton icon={IconClose} aria-label="返回原回执" onClick={onClose}/></header>

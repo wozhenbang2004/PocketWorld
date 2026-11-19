@@ -1,4 +1,5 @@
-import { Accordion, AccordionItem } from './forms-library';
+import { Accordion, AccordionItem, Button, SettingsDialog } from './forms-library';
+import { InlineDiff } from './shell-library';
 
 export type HostComparedFile = { path: string; state: 'same' | 'changed' | 'missing' | 'limit' | 'unverified';
   originalBytes: number; originalSha256: string; phoneBytes?: number; phoneSha256?: string };
@@ -19,14 +20,33 @@ export function checkedHostFiles(value: unknown, count: number): HostComparedFil
   }
   return value as HostComparedFile[];
 }
-export function ProjectHostComparedFiles({ value }: { value: HostComparison }) {
+export type HostDiff = { path: string; snapshotVersion: string; before: string; after: string; evidenceDigest: string; viewHandle: string };
+export function ProjectHostDiff({ diff, close }: { diff: HostDiff; close: () => void }) {
+  return <SettingsDialog isOpen title="这一份文件改了什么" onClose={close} closeLabel="返回核对列表">
+    <p><code>{diff.path}</code></p>
+    <InlineDiff before={diff.before} after={diff.after} versionLabel={diff.snapshotVersion} beforeLabel="导入时的主机原件" afterLabel="刚核对的手机已保存版本" readOnly/>
+    <p className="pw-field-hint">只读对照，显示这次重读的两份内容，不随之后的改动刷新。未改写文件，也未发送到主机。</p>
+    <Button variant="secondary" onClick={close}>返回核对列表</Button>
+  </SettingsDialog>;
+}
+export function checkedHostText(value: Record<string, any>, file: HostComparedFile): Pick<HostDiff, 'before' | 'after'> {
+  if (value.networkUsed !== false || value.written !== false || value.path !== file.path || value.originalSha256 !== file.originalSha256 ||
+      value.phoneSha256 !== file.phoneSha256 || value.originalBytes !== file.originalBytes || value.phoneBytes !== file.phoneBytes ||
+      typeof value.before !== 'string' || typeof value.after !== 'string' || value.before.length > 65536 || value.after.length > 65536 ||
+      new TextEncoder().encode(value.before).length !== file.originalBytes || new TextEncoder().encode(value.after).length !== file.phoneBytes)
+    throw new Error('两侧真实内容或版本不符合原来选中的文件。');
+  return { before: value.before, after: value.after };
+}
+export function ProjectHostComparedFiles({ value, onRead, busy }: { value: HostComparison; onRead?: (file: HostComparedFile) => void; busy: boolean }) {
   const counts = value.files.reduce((total, file) => { total[file.state]++; return total; }, { same: 0, changed: 0, missing: 0, limit: 0, unverified: 0 });
   const summary = [counts.changed && `${counts.changed} 份已改`, counts.missing && `${counts.missing} 份缺失`, counts.same && `${counts.same} 份相同`,
     counts.limit + counts.unverified > 0 && `${counts.limit + counts.unverified} 份未核实`].filter(Boolean).join(' · ');
   return <section aria-label="本机已保存文件与导入时的主机版本">
     <p role="status">{summary}</p>
     <ul className="pw-host-file-comparison">{value.files.map(file =>
-      <li key={file.path}><code>{file.path}</code><span>{labels[file.state]}{typeof file.phoneBytes === 'number' && file.state === 'changed' ? ` · ${file.originalBytes} → ${file.phoneBytes} 字节` : ''}</span></li>)}</ul>
+      <li key={file.path}><code>{file.path}</code><span>{labels[file.state]}{typeof file.phoneBytes === 'number' && file.state === 'changed' ? ` · ${file.originalBytes} → ${file.phoneBytes} 字节` : ''}</span>
+        {file.state === 'changed' && onRead && file.originalBytes <= 65536 && file.phoneBytes! <= 65536 &&
+          <Button variant="ghost" size="small" disabled={busy} onClick={() => onRead(file)}>查看这份内容差异</Button>}</li>)}</ul>
     <Accordion><AccordionItem id="host-file-evidence" title="范围与文件摘要" description={new Date(value.observedAt).toLocaleTimeString()}>
       <p>只逐份核对当初选入的路径和手机已保存的字节，不包括未保存草稿、新增的其他路径或远端今天的文件。没有回传任何修改。</p>
       {value.files.map(file => <p key={file.path}><code>{file.path}</code><br/>导入时 SHA-256：{file.originalSha256}

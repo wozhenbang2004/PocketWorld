@@ -181,6 +181,8 @@ class ResultView:
         if outcome.get("review") == "confirmed":
             # Native plain text only. Keep paragraphs; do not turn result content into links/actions.
             summary = "".join(ch if ch in "\n\t" or not unicodedata.category(ch).startswith("C") else "�" for ch in outcome["summary"])
+            if outcome.get("summaryWithheld") is True:
+                summary = "机主确认了完成，只交回状态；文字留在原手机。"
             parts = _parts((summary or "手机已确认结束，未提供文字摘要。") + ("\n（手机只返回了部分摘要）" if outcome["truncated"] else ""))
             title = "原手机已确认这份成果"
         else:
