@@ -36,3 +36,9 @@
 .pw-navigation-drawer .pw-drawer-body.pw-navigation-search-host { overflow: hidden; }
 .pw-navigation-search-host > .pw-navigation-actions { flex: none; }
 .pw-navigation-search-host > .pw-navigation-browse { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.pw-work-search .pw-command .pw-command-title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}

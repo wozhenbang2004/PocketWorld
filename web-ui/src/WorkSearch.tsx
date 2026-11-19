@@ -12,11 +12,24 @@ export type WorkSearchItem = { kind: Exclude<WorkSearchKind, 'all'>; id: string;
 export type WorkSearchMemory = { query?: string; kind?: WorkSearchKind; selectedId?: string; scrollTop?: number; pages?: number };
 type SearchReply = { items: WorkSearchItem[]; nextCursor?: string; notices: string[] };
 const kinds = { conversation: '对话', work: '工作', artifact: '成果', project: '项目' };
+const scopeHints = { all: '查找保存的工作、对话内容、成果和项目', conversation: '查找对话标题与保存的原文', work: '查找工作目标与摘要', artifact: '查找文件名与文件信息', project: '查找已保存的项目名称' };
 const filters: { id: WorkSearchKind; label: string }[] = [{ id: 'all', label: '全部' }, { id: 'work', label: '工作' }, { id: 'conversation', label: '对话' }, { id: 'artifact', label: '成果' }, { id: 'project', label: '项目' }];
 const icons = { conversation: IconChat, work: IconLayers, artifact: IconFile, project: IconFolder };
 const itemKey = (item: WorkSearchItem) => `${item.kind}:${item.id}:${item.sha256 || ''}`;
 const scopeLabel = (kind: WorkSearchKind) => kind === 'all' ? '工作、对话、成果与项目' : kinds[kind];
 const record = (value: unknown): Record<string, any> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
+// Keep the matching passage visible even when a small screen clips the native excerpt.
+function passagePreview(excerpt: string, query: string) {
+  const body = excerpt.replace(/\s+/gu, ' ').trim();
+  const needle = query.replace(/\s+/gu, ' ').trim();
+  if (!needle) return body;
+  const at = body.toLowerCase().indexOf(needle.toLowerCase());
+  if (at < 0) return body;
+  const before = Array.from(body.slice(0, at));
+  return before.length > 12 ? '…' + before.slice(-12).join('') + body.slice(at) : body;
+}
+const hitDate = new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
 function readReply(value: unknown, kind: WorkSearchKind, query: string, cursor: string, prior: readonly string[]): SearchReply {
   const data = record(value);
   if (data.kind !== kind || data.query !== query || data.executionAuthorized !== false || !Array.isArray(data.items) || data.items.length > 40 || data.items.some((item: any) =>
@@ -116,21 +129,31 @@ export function WorkSearch({ supported, identity, memory, onOpen, onClose, label
   const resetPosition = () => { request.current++; pending.current = false; memory.selectedId = undefined; memory.scrollTop = 0; memory.pages = 1; restored.current = false; };
   const changeQuery = (value: string) => { if (openingRef.current) return; resetPosition(); memory.query = value; setQuery(value); };
   const changeKind = (value: WorkSearchKind) => { if (value === kind || openingRef.current) return; resetPosition(); memory.kind = value; setKind(value); };
-  const commands = useMemo<WorkCommand[]>(() => (visibleReply?.items || []).map(item => ({
-    id: itemKey(item), group: '', title: item.title || '未命名', icon: icons[item.kind],
-    meta: [kinds[item.kind], item.status ? labelStatus(item.status) : '', item.updatedAt ? new Date(item.updatedAt).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' }) : ''].filter(Boolean).join(' · '),
-    description: item.excerpt,
-    onSelect: () => {
-      if (openingRef.current) return;
-      const owner = ++openingRequest.current, expected = { ...current.current }, epoch = bridge.getDocumentEpoch();
-      const stillCurrent = () => active.current && alive.current && owner === openingRequest.current && openingRef.current
-        && expected.query === current.current.query && expected.kind === current.current.kind && expected.identity === current.current.identity
-        && epoch === bridge.getDocumentEpoch() && !document.hidden;
-      openingRef.current = true; setOpening(true); memory.selectedId = itemKey(item);
-      void Promise.resolve().then(() => { if (stillCurrent()) return onOpen(item, stillCurrent); }).catch(failure => { if (stillCurrent()) setError(failure instanceof Error ? failure.message : '尚未打开这条结果，请重试。'); })
-        .finally(() => { if (owner === openingRequest.current) { openingRef.current = false; if (alive.current) setOpening(false); } });
-    },
-  })), [visibleReply, onOpen, labelStatus, memory]);
+  const commands = useMemo<WorkCommand[]>(() => (visibleReply?.items || []).map(item => {
+    const passage = item.kind === 'conversation' && !!item.recordId;
+    const preview = passagePreview(item.excerpt || '', query);
+    const timestamp = new Date(item.updatedAt || 0);
+    const date = item.updatedAt && Number.isFinite(timestamp.getTime()) ? hitDate.format(timestamp) : '';
+    return {
+      id: itemKey(item), group: '', title: (passage && preview) || item.title || '未命名', icon: icons[item.kind],
+      meta: [passage ? '对话原文' : kinds[item.kind], item.status ? labelStatus(item.status) : '', date].filter(Boolean).join(' · '),
+      description: passage ? undefined : preview,
+      onSelect: () => {
+        if (openingRef.current) return;
+        const owner = ++openingRequest.current, expected = { ...current.current }, epoch = bridge.getDocumentEpoch();
+        const stillCurrent = () => active.current && alive.current && owner === openingRequest.current && openingRef.current
+          && expected.query === current.current.query && expected.kind === current.current.kind && expected.identity === current.current.identity
+          && epoch === bridge.getDocumentEpoch() && !document.hidden;
+        openingRef.current = true; setOpening(true); memory.selectedId = itemKey(item);
+        void Promise.resolve().then(() => { if (stillCurrent()) return onOpen(item, stillCurrent); }).catch(failure => { if (stillCurrent()) setError(failure instanceof Error ? failure.message : '尚未打开这条结果，请重试。'); })
+          .finally(() => { if (owner === openingRequest.current) { openingRef.current = false; if (alive.current) setOpening(false); } });
+      },
+    };
+  }), [visibleReply, query, onOpen, labelStatus, memory]);
+  const shown = visibleReply?.items.length || 0;
+  const footerSummary = shown
+    ? `已显示 ${shown} 条${query.trim() ? '匹配结果' : '记录'}`
+    : scopeHints[kind];
   return <motion.div className="pw-work-search" ref={root} inert={!present} aria-hidden={!present || undefined}
     initial={reduce ? false : { opacity: 0, clipPath: 'inset(0 0 calc(100% - 48px) 0 round 20px)' }}
     animate={{ opacity: 1, clipPath: 'inset(0 0 0 0 round 20px)' }}
@@ -143,7 +166,7 @@ export function WorkSearch({ supported, identity, memory, onOpen, onClose, label
       controls={<div className="pw-search-kind-filters" role="group" aria-label="查找对象">{filters.map(option => <Button key={option.id} variant="ghost" aria-pressed={kind === option.id} disabled={opening} onClick={() => changeKind(option.id)}>{option.label}</Button>)}</div>}
       emptyMessage={visibleReply?.nextCursor ? '当前已读取范围内没有命中，可以继续查找更早的记录。' : visibleReply?.notices.length ? '已读取范围内没有命中；还有部分记录尚未读全，请查看下方说明。' : query.trim() ? `没有找到匹配的${scopeLabel(kind)}。试试目标中的关键词或文件名。` : `还没有可显示的${scopeLabel(kind)}记录。`}
       status={!supported ? <p className="pw-search-status" role="status">当前版本尚未提供工作搜索。</p> : opening ? <p className="pw-search-status" role="status">正在打开原记录…</p> : error ? <div className="pw-search-status" role="alert"><p>{error}</p><Button variant="secondary" onClick={() => { if (visibleReply?.nextCursor) void read(visibleReply.nextCursor); else setAttempt(value => value + 1); }}>重新读取</Button></div> : loading ? <p className="pw-search-status" role="status">{visibleReply ? '正在读取更多结果…' : `正在搜索${scopeLabel(kind)}…`}</p> : undefined}
-      footer={<><p>{kind === 'artifact' ? '查找文件名与文件信息' : kind === 'conversation' ? '查找对话标题与保存的原文' : kind === 'work' ? '查找工作目标与摘要' : kind === 'project' ? '查找已保存的项目名称' : '查找保存的工作、对话内容、成果和项目'}</p>
+      footer={<><p>{footerSummary}</p>
         {visibleReply?.nextCursor && <Button variant="ghost" disabled={loading || opening} onClick={() => void read(visibleReply.nextCursor)}>{visibleReply.items.length ? '查看更多结果' : '继续查找'}</Button>}
         {visibleReply?.notices.map((notice, index) => <p className="pw-search-notice" key={index}>{notice}</p>)}</>} />
   </motion.div>;
