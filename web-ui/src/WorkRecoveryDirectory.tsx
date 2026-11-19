@@ -1,20 +1,17 @@
 import { useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Button, IconButton, SearchField } from './forms-library';
-import { MotionFeedback, useCollectionMotion } from './library/journey-motion';
-import { ProgressCircle } from './library';
-import { IconClose, IconCheckCircle, IconChevronRight, IconClock, IconError, IconGrid, IconHistory, IconPauseCircle, IconSearch, IconInfo } from './icons';
+import { useCollectionMotion } from './library/journey-motion';
+import { IconClose, IconChevronRight, IconGrid, IconHistory, IconSearch } from './icons';
 import { workCollectionPresentation, type WorkCollectionFilter, type WorkCollectionTask } from './work-collection';
 import { WorkDirectoryControls, type useWorkDirectory } from './WorkDirectory';
+import { firstFollowUp, readFollowUp, WorkBrief, WorkQueueRow, type WorkEntry, type WorkReading } from './WorkFollowUp';
 import './work-recovery-directory.css';
 
 type Directory = ReturnType<typeof useWorkDirectory>;
-type Entry = 'overview' | 'review';
-type Origin = { id: string; scope: WorkCollectionFilter; query: string; updatedAt: number };
+type Origin = { id: string; entry: WorkEntry; scope: WorkCollectionFilter; query: string; updatedAt: number };
 const scopes: { id: WorkCollectionFilter; title: string }[] = [
   { id: 'all', title: '全部' }, { id: 'attention', title: '待处理' }, { id: 'running', title: '进行中' }, { id: 'ended', title: '已结束' },
 ];
-const when = (at?: number) => at && Number.isFinite(at) && at > 0
-  ? new Date(at).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
 
 /** Search replaces the title, not an extra row above the results. Closing keeps its query. */
 export function WorkFindTitle({ editing, query, onQuery, edit, close }: {
@@ -34,45 +31,45 @@ export function WorkFindTitle({ editing, query, onQuery, edit, close }: {
     : '我的工作'}</h1></div>;
 }
 
-// This is a reading decision, not execution permission. Native review still owns every write.
-function nextStep(task: WorkCollectionTask, canReview: boolean, canContinue: boolean): { label: string; entry: Entry } {
-  const view = workCollectionPresentation(task);
-  if (!canReview || task.raw?.contextAvailable === false) return { label: '查看原工作', entry: 'overview' };
-  if (view.actionLabel === '核对操作') return { label: '核对原操作', entry: 'review' };
-  if (['paused', 'interrupted', 'failed'].includes(task.status))
-    return { label: canContinue && task.raw?.controls?.canContinue === true ? '核对后继续' : task.status === 'failed' ? '查看失败原因' : '查看中断原因', entry: 'review' };
-  return { label: view.actionLabel, entry: 'review' };
-}
-
 type Props = {
   directory: Directory; live: WorkCollectionTask[]; canContinue: (task: WorkCollectionTask) => boolean; scroll: RefObject<HTMLElement | null>; ready: boolean; canOpen: boolean; canReview: boolean;
   scope: WorkCollectionFilter; query: string; selectScope: (value: WorkCollectionFilter) => void;
   clearQuery: () => void; drillEnded: () => void; start: () => void; history: () => void;
-  open: (id: string, entry: Entry, query: string) => void;
+  open: (id: string, entry: WorkEntry, query: string) => void;
   registerReturn: (fn: (() => boolean) | null) => void; extra?: ReactNode;
 };
 export function WorkRecoveryDirectory({ directory, live, canContinue, scroll, ready, canOpen, canReview, scope, query, selectScope,
   clearQuery, drillEnded, start, history, open, registerReturn, extra }: Props) {
   const origin = useRef<Origin | null>(null), focusReturn = useRef<HTMLDivElement>(null);
   const [returning, setReturning] = useState<Origin | null>(null);
-  const items = directory.tasks, groups = { attention: [] as WorkCollectionTask[], running: [] as WorkCollectionTask[], ended: [] as WorkCollectionTask[] };
-  for (const task of items) groups[workCollectionPresentation(task).group].push(task);
+  const items = directory.tasks, groups: Record<Exclude<WorkCollectionFilter, 'all'>, WorkReading[]> = { attention: [], running: [], ended: [] };
+  for (const task of items) {
+    const item = readFollowUp(task, canReview, canContinue(task));
+    groups[item.group].push(item);
+  }
   const moreEnded = scope === 'all' && (groups.ended.length > 3 || directory.hasMore);
   const visibleEnded = scope === 'all' ? groups.ended.slice(0, 3) : groups.ended;
   const visible = [...groups.attention, ...groups.running, ...visibleEnded];
-  const motionRevision = JSON.stringify(visible.map(t => [t.id, t.goal, t.status, t.summary, workCollectionPresentation(t).label]));
+  const searched = !!query.trim(), filtered = searched || scope !== 'all';
+  // Searching is for locating an exact original; do not displace a match with a feature.
+  const brief = searched ? undefined : firstFollowUp(visible);
+  const compact = (rows: WorkReading[]) => rows.filter(v => v !== brief);
+  const attentionRows = compact(groups.attention), runningRows = compact(groups.running), endedRows = compact(visibleEnded);
+  const hasQueue = !!(attentionRows.length || runningRows.length || endedRows.length || moreEnded && visibleEnded.length);
+  const motionRevision = JSON.stringify([brief?.task.id, visible.map(v => [v.task.id, v.goal, v.kind, v.label, v.next.entry, v.next.label])]);
   useCollectionMotion(scroll, JSON.stringify([scope, query]), motionRevision, { active: ready && directory.loaded && !directory.busy });
   const matchesScope = (o: Origin) => o.scope === scope && o.query === query;
 
-  const visit = (task: WorkCollectionTask, entry: Entry) => {
+  const visit = (task: WorkCollectionTask, entry: WorkEntry) => {
     if (!canOpen) return;
-    origin.current = { id: task.id, scope, query, updatedAt: task.updatedAt || 0 }; setReturning(null);
+    origin.current = { id: task.id, entry, scope, query, updatedAt: task.updatedAt || 0 }; setReturning(null);
     if (scroll.current) directory.rememberScroll(scroll.current.scrollTop);
     open(task.id, entry, query);
   };
   const focusOriginal = (o: Origin) => {
-    const row = Array.from(scroll.current?.querySelectorAll<HTMLElement>('[data-task-id]') || []).find(el => el.dataset.taskId === o.id);
-    if (!row || !row.matches('button:not(:disabled)')) return false;
+    const buttons = Array.from(scroll.current?.querySelectorAll<HTMLElement>('button[data-task-id]:not(:disabled)') || []).filter(el => el.dataset.taskId === o.id);
+    const row = buttons.find(el => el.dataset.workEntry === o.entry) || buttons[0];
+    if (!row) return false;
     row.focus({ preventScroll: true });
     const bounds = row.getBoundingClientRect(), view = scroll.current, frame = view?.getBoundingClientRect();
     const tools = view?.querySelector<HTMLElement>('[data-work-scopes]')?.getBoundingClientRect();
@@ -98,11 +95,11 @@ export function WorkRecoveryDirectory({ directory, live, canContinue, scroll, re
     if (focusOriginal(returning)) setReturning(null);
     else focusReturn.current?.focus({ preventScroll: true });
   }, [returning, scope, query, directory.loaded, directory.busy, directory.error, motionRevision]);
-  const previousFocus = useRef<{ id: string; node: HTMLElement } | null>(null);
+  const previousFocus = useRef<{ id: string; entry: WorkEntry; node: HTMLElement } | null>(null);
   useLayoutEffect(() => {
     const previous = previousFocus.current;
     if (returning || origin.current || !previous || previous.node.isConnected || document.activeElement !== document.body) return;
-    focusOriginal({ id: previous.id, scope, query, updatedAt: 0 }); previousFocus.current = null;
+    previousFocus.current = null; focusOriginal({ id: previous.id, entry: previous.entry, scope, query, updatedAt: 0 });
   }, [scope, query, motionRevision, returning]);
   const scopeKey = (id: WorkCollectionFilter) => { origin.current = null; setReturning(null); selectScope(id); };
   // Only offer another scope from a current, still-readable, owner-private original.
@@ -120,43 +117,31 @@ export function WorkRecoveryDirectory({ directory, live, canContinue, scroll, re
     setReturning({ ...returning, scope: targetScope, query: retainQuery ? query : '' });
     selectScope(targetScope); if (!retainQuery) clearQuery();
   };
-  const renderRow = (task: WorkCollectionTask) => {
-    const view = workCollectionPresentation(task), next = view.group === 'attention' ? nextStep(task, canReview, canContinue(task)) : null;
-    const Icon = view.completed ? IconCheckCircle : task.status === 'failed' ? IconError
-      : ['paused', 'interrupted'].includes(task.status) ? IconPauseCircle : next ? IconInfo : IconClock;
-    const timestamp = when(task.updatedAt);
-    return <Button key={task.id} variant="ghost" className="pw-task-row" disabled={!canOpen} data-motion-key={task.id} data-task-id={task.id}
-      data-work-entry={next?.entry || 'overview'} data-task-status={task.status} onClick={() => visit(task, next?.entry || 'overview')}>
-      <span className="pw-task-row-status" aria-hidden>{view.busy ? <ProgressCircle aria-label={view.label} isIndeterminate size="sm"/> : <Icon size={20}/>}</span>
-      <span className="pw-task-row-copy"><b title={task.goal} dir="auto">{task.goal}</b>
-        {task.summary && task.summary !== task.goal && <span className="pw-task-row-summary" dir="auto">{task.summary}</span>}
-        <span className="pw-task-row-meta"><MotionFeedback as="span" identity={view.label} initial={false}>{view.label}</MotionFeedback>
-          {next ? <span className="pw-work-next-step">{next.label}</span> : timestamp && <time>{timestamp}</time>}</span>
-      </span><IconChevronRight size={18} aria-hidden/>
-    </Button>;
-  };
-  const searched = !!query.trim(), filtered = searched || scope !== 'all';
+  const renderRow = (item: WorkReading) => <WorkQueueRow key={item.task.id} item={item} canOpen={canOpen} visit={visit}/>;
   return <main ref={scroll} className="pw-page pw-tasks-page pw-depth-tasks pw-recovery-directory" data-work-scope-current={scope}
     onScroll={e => directory.rememberScroll(e.currentTarget.scrollTop)} onFocusCapture={e => {
-      const node = e.target as HTMLElement, id = node.closest<HTMLElement>('[data-task-id]')?.dataset.taskId;
-      previousFocus.current = id ? { id, node } : null;
+      const node = e.target as HTMLElement, button = node.closest<HTMLElement>('button[data-task-id]');
+      previousFocus.current = button?.dataset.taskId ? { id: button.dataset.taskId, entry: button.dataset.workEntry as WorkEntry, node } : null;
     }}>
     <div className="pw-task-status-filters" data-work-scopes role="group" aria-label="工作范围">{scopes.map(s => <Button key={s.id} variant="ghost"
       data-work-scope={s.id} aria-pressed={scope === s.id} onClick={() => scopeKey(s.id)}>{s.title}</Button>)}</div>
-    {returning && matchesScope(returning) && directory.loaded && !directory.busy && !directory.error && !visible.some(t => t.id === returning.id) &&
+    {returning && matchesScope(returning) && directory.loaded && !directory.busy && !directory.error && !visible.some(v => v.task.id === returning.id) &&
       <div ref={focusReturn} className="pw-work-return-notice" tabIndex={-1} role="status">
         <span>刚查看的工作不在当前列表。</span>{canLocate ? <Button variant="ghost" onClick={relocate}>在「{scopes.find(s => s.id === targetScope)?.title}」中定位</Button>
           : <Button variant="ghost" disabled={!canOpen} onClick={() => {
           const id = returning.id; origin.current = returning; setReturning(null); open(id, 'overview', '');
         }}>查看原工作</Button>}<IconButton icon={IconClose} aria-label="留在当前列表" onClick={() => { setReturning(null); scroll.current?.querySelector<HTMLElement>('[aria-pressed="true"]')?.focus({ preventScroll: true }); }}/>
       </div>}
-    <section className="pw-task-results" aria-label="工作列表" data-has-active={!!groups.running.length || undefined}>
-      {!!groups.attention.length && <section className="pw-task-collection pw-work-attention" aria-label="待你处理"><h3>待你处理</h3><div className="pw-task-list">{groups.attention.map(renderRow)}</div></section>}
-      {!!groups.running.length && <section className="pw-task-collection" aria-label="正在跟进"><h3>正在跟进</h3><div className="pw-task-list">{groups.running.map(renderRow)}</div></section>}
-      {!!visibleEnded.length && <section className="pw-task-collection pw-ended-tasks" aria-label={scope === 'ended' ? '已结束的工作' : '最近结束'}>
-        <div className="pw-work-ended-heading"><h3>{scope === 'ended' ? '已结束的工作' : '最近结束'}</h3>
-          {moreEnded && <Button variant="ghost" size="small" trailingIcon={IconChevronRight} data-work-ended-link onClick={drillEnded}>查看已结束</Button>}</div>
-        <div className="pw-task-list">{visibleEnded.map(renderRow)}</div></section>}
+    <section className="pw-task-results pw-follow-directory" aria-label="工作列表" data-work-split={!!brief && hasQueue || undefined}>
+      {brief && <WorkBrief key={brief.task.id} item={brief} canOpen={canOpen} visit={visit}/>}
+      {hasQueue && <div className="pw-follow-queue">
+        {!!attentionRows.length && <section className="pw-task-collection pw-work-attention" aria-label="需要关注"><h3>需要关注</h3><div className="pw-task-list">{attentionRows.map(renderRow)}</div></section>}
+        {!!runningRows.length && <section className="pw-task-collection" aria-label="进行中"><h3>进行中</h3><div className="pw-task-list">{runningRows.map(renderRow)}</div></section>}
+        {(!!endedRows.length || moreEnded && !!visibleEnded.length) && <section className="pw-task-collection pw-ended-tasks" aria-label="已结束的工作">
+          <div className="pw-work-ended-heading"><h3>{scope === 'ended' ? '已结束的工作' : '最近结束'}</h3>
+            {moreEnded && <Button variant="ghost" size="small" trailingIcon={IconChevronRight} data-work-ended-link onClick={drillEnded}>查看已结束</Button>}</div>
+          {!!endedRows.length && <div className="pw-task-list">{endedRows.map(renderRow)}</div>}</section>}
+      </div>}
       {!ready && <p className="pw-muted" role="status">正在连接工作目录…</p>}
       {ready && directory.enabled && !directory.loaded && !directory.busy && !directory.error && <p className="pw-muted" role="status">正在读取工作目录…</p>}
       {ready && !directory.enabled && <p className="pw-muted" role="status">当前版本暂不能读取保存的工作。</p>}

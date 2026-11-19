@@ -20,3 +20,44 @@
 .pw-recovery-directory .pw-work-attention>h3{color:var(--pw-ink);}
 .pw-depth-tasks.pw-recovery-directory .pw-work-next-step{color:var(--pw-ink);font-weight:550;}
 .pw-depth-tasks.pw-recovery-directory .pw-work-next-step::before{content:"";display:inline-block;height:.75em;border-inline-start:1px solid var(--pw-edge);margin-inline-end:var(--pw-gap-related);}
+
+/* A reading surface for one original, then the queue. No nested sheets or status cards. */
+.pw-recovery-directory .pw-follow-directory,
+.pw-recovery-directory .pw-follow-queue { display: grid; grid-template-columns: minmax(0,1fr); min-width: 0; gap: var(--pw-gap-section); }
+.pw-recovery-directory .pw-follow-brief { display: grid; align-content: start; justify-items: start; min-width: 0;
+  padding: clamp(16px, 3.5vw, 28px); gap: var(--pw-gap-related); border-radius: 18px; background: var(--pw-surface);
+  color: var(--pw-ink); box-shadow: var(--pw-shadow-surface); }
+.pw-follow-brief .pw-follow-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 4px var(--pw-gap-control); width: 100%; margin: 0 0 var(--pw-gap-control); }
+.pw-follow-kicker { display: inline-flex; align-items: center; gap: 6px; color: var(--pw-copy); font-size: .8125rem; font-weight: 550; }
+.pw-follow-mark { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 22px; color: var(--pw-copy); }
+.pw-follow-brief[data-follow-kind="decision"] .pw-follow-kicker,
+.pw-follow-row[data-follow-kind="decision"] .pw-follow-mark { color: var(--pw-ink); }
+.pw-follow-heading time { color: var(--pw-copy); font: 400 .75rem/1.5 var(--pw-font); font-variant-numeric: tabular-nums; }
+.pw-recovery-directory .pw-follow-brief h2 { margin: 0; max-width: 100%; color: var(--pw-ink);
+  font: 600 clamp(1.25rem, 1.06rem + .9vw, 1.75rem)/1.35 var(--pw-font); letter-spacing: -.025em; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.pw-follow-brief .pw-follow-state { color: var(--pw-copy); font: 500 .875rem/1.6 var(--pw-font); }
+.pw-follow-brief .pw-follow-facts { display: grid; gap: var(--pw-gap-control); width: 100%; min-width: 0; margin: var(--pw-gap-control) 0 0;
+  padding-inline-start: var(--pw-gap-control); border-inline-start: 2px solid var(--pw-edge); }
+.pw-follow-facts dt { margin: 0 0 2px; color: var(--pw-copy); font-size: .75rem; line-height: 1.5; }
+.pw-follow-facts dd { margin: 0; color: var(--pw-ink); font: 400 .875rem/1.6 var(--pw-font); overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.pw-follow-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--pw-gap-related); max-width: 100%; margin-top: var(--pw-gap-control); }
+.pw-follow-actions > button { min-width: 0; min-height: var(--pw-control-target); max-width: 100%; white-space: normal; }
+.pw-recovery-directory .pw-follow-queue .pw-task-collection,
+.pw-recovery-directory .pw-follow-queue .pw-ended-tasks { grid-column: auto; min-width: 0; margin: 0; }
+.pw-redesign .pw-recovery-directory .pw-follow-queue .pw-task-list { background: transparent; padding: 0; box-shadow: none; }
+.pw-recovery-directory .pw-follow-row .pw-task-row-copy b { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.pw-recovery-directory .pw-follow-row .pw-task-row-copy .pw-task-row-summary { -webkit-line-clamp: 1; }
+.pw-recovery-directory .pw-follow-row time { margin-inline-start: auto; white-space: nowrap; }
+.pw-recovery-directory .pw-follow-row .pw-work-next-step { font-weight: 450; }
+.pw-recovery-directory .pw-follow-row[data-follow-kind="decision"] .pw-work-next-step { font-weight: 600; }
+@media (min-width: 900px) {
+  .pw-redesign .pw-depth-tasks.pw-recovery-directory .pw-follow-directory[data-work-split="true"] {
+    display: grid; grid-template-columns: minmax(0,1.12fr) minmax(0,1fr); align-items: start; gap: clamp(24px, 4vw, 48px); }
+}
+@media (max-width: 359px) {
+  .pw-recovery-directory .pw-follow-brief { padding: 14px; }
+  .pw-follow-actions { gap: 2px; }
+}

@@ -71,7 +71,7 @@ export function workCollectionPresentation(task: WorkCollectionTask) {
     : task.status === 'failed' ? '查看原因' : ['paused', 'interrupted'].includes(task.status) ? '继续处理'
     : group === 'attention' ? '查看待办' : task.status === 'queued' ? '查看排队'
     : group === 'running' ? '查看进展' : handling?.resultAvailable || handling?.delivered ? '查看结果' : '查看详情';
-  return { group, label, actionLabel, handling, completed,
+  return { group, label, actionLabel, handling, completed, reconciliation, pendingApproval,
     busy: group === 'running' && (active && task.status !== 'queued' || handling?.state === 'running'
       || handling?.teams.some(team => ['running', 'stopping'].includes(team.status))) };
 }
