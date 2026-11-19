@@ -10,6 +10,21 @@ type Data = Record<string, any>;
 export type AnswerSourceTarget = { messageId?: string; taskId?: string };
 type SourceSelection = { handle: string; key: string; title: string };
 
+function webCoverage(value: unknown): string {
+  return value === 'snippet_only' ? '搜索摘要'
+    : value === 'partial_body' ? '网页部分摘录'
+    : value === 'bounded_body' ? '网页摘录' : '';
+}
+
+function publicPageAddress(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  try {
+    const address = new URL(value);
+    return address.protocol === 'https:' && !address.username && !address.password &&
+      !address.search && !address.hash ? address.href : '';
+  } catch { return ''; }
+}
+
 // Presentation identity only: native rotates read handles on every list read.
 // The current handle, never this key or the public pin, authorizes a detail read.
 function sourceKey(entry: Data): string {
@@ -54,6 +69,11 @@ export function AnswerSources({ target, revision, onClose }: { target: AnswerSou
   }, [busy, result, selected, viewKey]);
   const entries: Data[] = Array.isArray(result?.entries) ? result.entries : [];
   const detail = result?.detail, range = detail?.readRange, current = result?.status === 'current';
+  const context = detail?.context;
+  const webReading = webCoverage(context?.webCoverage);
+  const publicPage = publicPageAddress(context?.publicPageUrl);
+  const observedAt = new Date(context?.observedAt ?? NaN);
+  const webTimestamp = Number.isFinite(observedAt.valueOf()) ? observedAt.toLocaleString('zh-CN') : '';
   const list = () => { returnFocus.current = selected?.key || null; setSelected(null); setOffset(0); setPrevious([]); };
   const reload = () => {
     if (error) {
@@ -87,10 +107,25 @@ export function AnswerSources({ target, revision, onClose }: { target: AnswerSou
           <Button variant="ghost" className="pw-source-row" key={entry.sourceHandle} data-source-key={sourceKey(entry)} leadingIcon={IconFileText} trailingIcon={IconChevronRight} aria-label={`查看原保留内容：${entry.title || '原来源'}`} onClick={() => {
             if (body.current) positions.current.set(viewKey, body.current.scrollTop);
             setSelected({ handle: entry.sourceHandle, key: sourceKey(entry), title: entry.title || '原来源' }); setOffset(0); setPrevious([]);
-          }}><span className="pw-source-row-copy"><b>{entry.title || '原来源'}</b>{entry.label && <small>{entry.label}</small>}</span></Button> :
+          }}><span className="pw-source-row-copy"><b>{entry.title || '原来源'}</b>{entry.label && <small>{[webCoverage(entry.webCoverage), entry.label].filter(Boolean).join(' · ')}</small>}</span></Button> :
           <div className="pw-source-unavailable" key={entry.sourceHandle || index}><IconFileText size={20} aria-hidden="true"/><div><h3>{entry.title || '原来源'}</h3>{entry.label && <p>{entry.label}</p>}<p className="pw-muted">{entry.reason || '此来源当前不可读'}</p></div></div>
         )}</div><div className="pw-action-row pw-source-pagination">{cursor > 0 && <Button variant="ghost" onClick={() => setCursor(value => Math.max(0, value - 20))}>上一组来源</Button>}{Number.isInteger(result.nextCursor) && result.nextCursor >= 0 && <Button variant="secondary" onClick={() => setCursor(result.nextCursor)}>下一组来源</Button>}</div><p className="pw-muted">仅覆盖原执行当前保留的记录，不等于完整历史。</p></>}
-        {current && selected && <>{detail?.context?.url && <p className="pw-source-url">{detail.context.url}</p>}{result.frame?.status === 'retained' && ['image/png', 'image/jpeg', 'image/webp'].includes(result.frame.mimeType) && typeof result.frame.imageBase64 === 'string' ? <img className="pw-task-image" alt="与原观察关联的保留屏帧" src={'data:' + result.frame.mimeType + ';base64,' + result.frame.imageBase64} /> : result.frame?.reason && <p className="pw-muted">{result.frame.reason}</p>}<div className="pw-source-copy" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{detail?.body || '没有可显示的原保留文本。'}</div><nav className="pw-source-read-navigation" aria-label="来源原文分段">{range && <p>原文本 {range.offset}–{Number(range.offset || 0) + Number(range.chars || 0)} / {range.totalChars} 字符</p>}<div className="pw-action-row">{previous.length > 0 && <Button variant="ghost" onClick={() => { setOffset(previous.at(-1)!); setPrevious(value => value.slice(0, -1)); }}>上一段</Button>}{Number.isInteger(detail?.nextOffset) && detail.nextOffset >= 0 && <Button variant="secondary" onClick={() => { setPrevious(value => [...value, offset]); setOffset(detail.nextOffset); }}>下一段</Button>}</div></nav></>}
+        {current && selected && <>
+          {webReading && <p className="pw-muted">{webReading}{webTimestamp && ` · 获取于 ${webTimestamp}`}</p>}
+          {context?.url && <p className="pw-source-url">{context.url}</p>}
+          {publicPage && <a className="pw-source-live-link" href={publicPage} rel="noreferrer">在浏览器打开当前网页</a>}
+          {!webReading && (result.frame?.status === 'retained' && ['image/png', 'image/jpeg', 'image/webp'].includes(result.frame.mimeType) && typeof result.frame.imageBase64 === 'string'
+            ? <img className="pw-task-image" alt="与原观察关联的保留屏帧" src={'data:' + result.frame.mimeType + ';base64,' + result.frame.imageBase64} />
+            : result.frame?.reason && <p className="pw-muted">{result.frame.reason}</p>)}
+          <div className="pw-source-copy" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{detail?.body || '没有可显示的原保留文本。'}</div>
+          <nav className="pw-source-read-navigation" aria-label="来源原文分段">
+            {range && <p>保留文本 {range.offset}–{Number(range.offset || 0) + Number(range.chars || 0)} / {range.totalChars} 字符</p>}
+            <div className="pw-action-row">
+              {previous.length > 0 && <Button variant="ghost" onClick={() => { setOffset(previous.at(-1)!); setPrevious(value => value.slice(0, -1)); }}>上一段</Button>}
+              {Number.isInteger(detail?.nextOffset) && detail.nextOffset >= 0 && <Button variant="secondary" onClick={() => { setPrevious(value => [...value, offset]); setOffset(detail.nextOffset); }}>下一段</Button>}
+            </div>
+          </nav>
+        </>}
       </div>
     </Drawer.Content>
   </Drawer.Portal></Drawer.Root>;
