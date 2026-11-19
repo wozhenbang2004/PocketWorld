@@ -48,6 +48,7 @@ export function isReceivedPhoneTask(task: DeviceData, snapshot: DeviceData | nul
           && typeof origin.remoteLocalTaskId === 'string' && /^ba1_[a-f0-9]{64}$/.test(origin.remoteLocalTaskId)));
 }
 /** A local return bookmark, never a review, model selection, or execution authority. */
+export type SentPhoneGoalFocus = { taskId: string; deviceId: string; instanceId: string; certificateFingerprint: string };
 export type ReceivedPhoneGoalReturn = { taskId: string; instanceId: string; sourceId: string; targetId: string; parentTaskId: string; operationId: string; grantId: string; epoch: number; peerDetail: boolean; leftAt: number };
 export function receivedPhoneGoalReturn(task: DeviceData, snapshot: DeviceData | null, peerDetail = false): ReceivedPhoneGoalReturn | undefined {
   if (!isReceivedPhoneTask(task, snapshot) || !identity(task.id) || !identity(snapshot?.local?.instanceId)) return;
@@ -120,10 +121,13 @@ export function receivedPhoneArchiveReturn(value: unknown, row: DeviceData, peer
   return { taskId: value.taskId, operationId: value.operationId, targetId: value.targetId, instanceId: value.instanceId, sourceId: value.sourceId,
     parentTaskId: value.parentTaskId, grantId: value.grantId, epoch: value.epoch, peerDetail: true, leftAt: Date.now() };
 }
-export function devicePhoneGoalArchive(value: unknown, peer: DeviceData, local: DeviceData, side: PhoneArchiveSide) {
-  if (!object(value) || value.kind !== 'phoneGoalArchive' || value.searchText !== undefined && (typeof value.searchText !== 'string' || Array.from(value.searchText).length > 64) || (value.side ?? 'sent') !== side || !samePhoneGoalArchive(value, peer, local) || value.readOnly !== true || !identity(value.archiveHandle)
+export function devicePhoneGoalArchive(value: unknown, peer: DeviceData, local: DeviceData, side: PhoneArchiveSide, sourceTaskId = '') {
+  if (!object(value) || value.kind !== 'phoneGoalArchive' || (value.sourceTaskId ?? '') !== sourceTaskId
+    || !!sourceTaskId && (side !== 'sent' || value.searchText) || value.searchText !== undefined && (typeof value.searchText !== 'string' || Array.from(value.searchText).length > 64) || (value.side ?? 'sent') !== side || !samePhoneGoalArchive(value, peer, local) || value.readOnly !== true || !identity(value.archiveHandle)
     || !Array.isArray(value.rows) || value.rows.length > 24 || typeof value.hasMore !== 'boolean' || typeof value.canReadNewer !== 'boolean'
-    || !value.rows.every((row: unknown) => object(row) && identity(row.taskId) && identity(row.operationId) && typeof row.goal === 'string' && !!row.goal
+    || !value.rows.every((row: unknown) => object(row) && identity(row.taskId) && (!sourceTaskId || row.taskId === sourceTaskId) && identity(row.operationId) && typeof row.goal === 'string' && !!row.goal
+      && (row.targetAcceptedAt === undefined || !!sourceTaskId && positiveInteger(row.targetAcceptedAt))
+      && (row.targetRunRecorded === undefined || row.targetRunRecorded === true && positiveInteger(row.targetAcceptedAt))
       && (['main_screen', 'background'].includes(row.screenMode) || row.textOnly === true && row.screenMode === 'capabilities') && positiveInteger(row.createdAt))
     || new Set(value.rows.map((row: DeviceData) => JSON.stringify([row.taskId, row.operationId]))).size !== value.rows.length) throw new Error('原手机、本机派发或目录已变化，请重新读取。');
   return value;

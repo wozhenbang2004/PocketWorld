@@ -165,7 +165,11 @@ class WindowsWorkspaceFiles(WorkspaceFiles):
                 receipt["nativeReplacement"] = value
                 self.database.execute("UPDATE file_operations SET receipt=? WHERE operation_id=?", (json.dumps(receipt), operation))
                 self.database.commit()
-            result = self.backend.compare_and_swap(env["root"], path, before, value, current, record_intent=record_intent)
+            kwargs={"record_intent":record_intent}
+            if _received:
+                from windows_received_location import bind
+                kwargs["note_landing"]=lambda parent,leaf,fact:bind(self,env,path,operation,fingerprint,desired,len(value),parent,leaf,fact)
+            result = self.backend.compare_and_swap(env["root"], path, before, value, current, **kwargs)
             receipt.update(result)
             if result.get("verified"):
                 actual = self.raw(env, path)

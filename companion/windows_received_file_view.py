@@ -55,12 +55,21 @@ def offer(view,peer,item,receipt,title,text,current):
     revision=receipt["revision"]
     def use(**kwargs): return local_record(view,peer,item,revision=revision,archive=True,**kwargs)
     ticket=use()
-    if not ticket:
-        view._dialog(title,text+"\n当前只有回执：没有同时核对到原留存记录和现行工作区文件读取范围。",[],current)
+    landing=local_record(view,peer,item,revision=revision,locate=True)
+    choices=[]
+    if ticket:
+        choices.append(("open","在这台电脑查看当时的原文件\n只读这次留存，不查看现在的目标，也不启动文件关联。"))
+    if landing:
+        choices.append(("locate","在资源管理器选中工作区原文件\n另行核对今天的同一文件；通过后打开它所在的文件夹，不打开文件。"))
+    if not choices:
+        view._dialog(title,text+"\n当前只有回执：没有同时核对到原留存或落点记录以及所需的现行读取范围。",[],current)
         return
-    action=view._dialog(title,text+"\n可另行核对这次接收时留下的版本；不会打开工作区里现在的同名文件。",
-                        [("open","在这台电脑查看当时的原文件\n只读，不按文档类型启动程序或发回手机。")],current)
-    if action!="open" or not current(): return
+    action=view._dialog(title,text+"\n历史留存和工作区现在的文件分开核对。"+("系统文件夹会显示其他条目；打开后由你关闭，撤销配对不会收回它。" if landing else ""),choices,current)
+    if not current(): return
+    if action=="locate" and landing:
+        from windows_received_location import open_selected
+        open_selected(view,peer,item,receipt,landing); return
+    if action!="open" or not ticket: return
     until=time.monotonic()+600  # view lifetime, never a grant extension
     def active():
         try:

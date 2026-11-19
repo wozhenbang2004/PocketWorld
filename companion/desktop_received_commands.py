@@ -24,7 +24,7 @@ LABEL = {"queued": "已在这台电脑排队", "running": "这台电脑已启动
          "accepted_only": "已接单，原执行文件未能核对"}
 
 
-def local_record(view, peer, item, *, read=False, revision=None, archive=False, ticket=None, held=None):
+def local_record(view, peer, item, *, read=False, revision=None, archive=False, locate=False, ticket=None, held=None):
     # This is the unlocked receiver owner's local view, never a synthetic MTLS
     # history permission. Admit only the direct source and its still-current original read scope.
     if not view._peer_current(peer): return None
@@ -51,6 +51,9 @@ def local_record(view, peer, item, *, read=False, revision=None, archive=False, 
             return None
         if revision is not None and manager.jobs.get(row[1], {}).get("nativeDeviceRevision") != revision:
             return None
+        if locate:
+            from windows_received_location import access
+            return access(manager,operation,row,original,grant,now,revision,ticket,read)
         if archive:
             from windows_received_file_view import access
             return access(manager, operation, row, original, grant, now, revision, ticket, held)

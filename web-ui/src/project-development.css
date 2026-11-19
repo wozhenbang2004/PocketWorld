@@ -17,3 +17,5 @@
 .pw-checkout-editor textarea { min-height: 34dvh; font-family: monospace; tab-size: 2; white-space: pre; overflow: auto; }
 .pw-checkout-adoption { display: grid; gap: var(--pw-gap-content,16px); min-width: 0; }
 .pw-checkout-review-diff { max-height: 45dvh; overflow: auto; white-space: pre; tab-size: 2; }
+
+.pw-host-file-comparison{padding:0;list-style:none}.pw-host-file-comparison li{display:grid;gap:.18rem;padding:.35rem 0}.pw-host-file-comparison code{overflow-wrap:anywhere}.pw-host-file-comparison span{font-size:.85em;opacity:.75}

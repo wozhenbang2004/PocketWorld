@@ -1,3 +1,4 @@
+import { checkedHostFiles, ProjectHostComparedFiles, type HostComparison } from './ProjectHostFileComparison';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Accordion, AccordionItem, Button, SelectField, SettingsDialog, TextAreaField } from './forms-library';
 import { bridge } from './bridge';
@@ -50,6 +51,7 @@ function AndroidBuildConditions({ wrapper, runtime }: { wrapper: Data; runtime: 
 export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can, onOpenTask, onOpenHostOriginal, onTaskRegistered, onPrepareTools, onConnectModel, onOpenTerminal, registerBack, onInteractionBusyChange }: Props) {
   const [view, setView] = useState<Data | null>(null), [goal, setGoal] = useState(''), [checkout, setCheckout] = useState('');
   const [hostOrigin, setHostOrigin] = useState<Data | null>(null);
+  const [hostFiles, setHostFiles] = useState<HostComparison | null>(null);
   const [requirements, setRequirements] = useState<DeliveryRequirements>(() => deliveryRequirements());
   const [source, setSource] = useState<Data | null>(null), [review, setReview] = useState<Data | null>(null), [submission, setSubmission] = useState<Data | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [expired, setExpired] = useState(false), [copyResult, setCopyResult] = useState<Data | null>(null);
@@ -176,13 +178,13 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
     || !copyResult && !!view?.draft?.copyRequestId && view?.draft?.copyStatus !== 'ready';
   const interactionBusy = active && (busy || pending || !!review || filesOpen || copyUnconfirmed);
   useEffect(() => { onInteractionBusyChange?.(interactionBusy); return () => onInteractionBusyChange?.(false); }, [interactionBusy, onInteractionBusyChange]);
-  const closeFiles = () => { setFilesOpen(false); sourceAttempt.current = ''; setSource(null); };
+  const closeFiles = () => { setFilesOpen(false); setHostFiles(null); sourceAttempt.current = ''; setSource(null); };
   const available = rows(view?.checkouts);
   const origin = hostOrigin?.viewHandle === view?.viewHandle && hostOrigin?.projectId === projectId && hostOrigin?.checkoutId === checkout ? hostOrigin : null;
   const readOrigin = (open: boolean) => {
     if (!checkout || !handle.current || open && (!origin?.taskVerified || !onOpenHostOriginal)) return;
     const viewHandle = handle.current, original = checkout;
-    if (!open) setHostOrigin(null);
+    if (!open) { setHostOrigin(null); setHostFiles(null); }
     void invoke(open ? 'projects.development.resolveHostSource' : 'projects.development.hostSource',
       { viewHandle, checkoutId: original, ...(open ? { evidenceDigest: origin!.evidenceDigest } : {}) }, value => {
         if (draft.current.checkoutId !== original || handle.current !== viewHandle || value.projectId !== projectId || value.checkoutId !== original)
@@ -193,6 +195,17 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
           onOpenHostOriginal!(value.taskId);
         } else setHostOrigin({ ...value, viewHandle });
       });
+  };
+  const compareHostFiles = () => {
+    if (!origin?.localSourceRecorded || !checkout || !handle.current) return;
+    const { evidenceDigest, snapshotVersion, files } = origin, viewHandle = handle.current, original = checkout;
+    setHostFiles(null);
+    void invoke('projects.development.compareHostSource', { viewHandle, checkoutId: original, evidenceDigest }, value => {
+      if (handle.current !== viewHandle || draft.current.checkoutId !== original || value.projectId !== projectId || value.checkoutId !== original ||
+          value.evidenceDigest !== evidenceDigest || value.snapshotVersion !== snapshotVersion || !Number.isSafeInteger(value.observedAt) || value.observedAt <= 0)
+        throw new Error('副本或导入时的来源已变化，请回到原副本重新核对。');
+      setHostFiles({ viewHandle, evidenceDigest, observedAt: value.observedAt, files: checkedHostFiles(value.files, files) });
+    });
   };
   const copy = (query: boolean) => {
     if (!query) setCopyResult({ unconfirmed: true });
@@ -239,11 +252,13 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
       <SelectField label="要工作的私人副本" value={checkout} isDisabled={disabled} options={[{ id: '', label: available.length ? '选择已有私人副本' : '尚未准备私人副本' },
         ...available.map(row => ({ id: row.checkoutId, label: `${row.name || name} · ${new Date(row.createdAt || 0).toLocaleString()}` })),
         ...(checkout && !available.some(row => row.checkoutId === checkout) ? [{ id: checkout, label: '原副本暂不可用，请核对' }] : [])]}
-        onChange={value => { setCheckout(value); setSource(null); setHostOrigin(null); sourceAttempt.current = ''; retain({ ...draft.current, checkoutId: value }); }} />
+        onChange={value => { setCheckout(value); setSource(null); setHostOrigin(null); setHostFiles(null); sourceAttempt.current = ''; retain({ ...draft.current, checkoutId: value }); }} />
       {available.some(row => row.checkoutId === checkout && row.hostSource === true) && can('projects.development.hostSource') &&
         <div className="pw-form-actions"><Button variant="ghost" disabled={busy || !!review || filesOpen} onClick={() => readOrigin(false)}>核对导入来源</Button>
           {origin && <div role="status">{origin.localSourceRecorded ? <p>来自主机冻结版本 {origin.snapshotVersion} · {origin.files} 份文件 · {origin.bytes} 字节。这里只记录导入时的版本，不代表本机文件未改或主机现在在线。</p> :
             <p>保留了这份旧副本，但缺少可核对的原来源；不会按项目名猜测委托。</p>}
+            {origin.localSourceRecorded && can('projects.development.compareHostSource') && <Button variant="secondary" disabled={busy || !!review || filesOpen} onClick={compareHostFiles}>对照本机已保存版本</Button>}
+            {hostFiles && origin.evidenceDigest === hostFiles.evidenceDigest && view.viewHandle === hostFiles.viewHandle && <ProjectHostComparedFiles value={hostFiles}/>}
             {origin.taskVerified && onOpenHostOriginal && can('projects.development.resolveHostSource') && can('tasks.open') ?
               <Button variant="secondary" disabled={busy || !!review || filesOpen} onClick={() => readOrigin(true)}>打开原主机委托</Button> :
               origin.localSourceRecorded && !origin.taskVerified ? <p>原私人任务或冻结文件回执目前不能核对。</p> : null}</div>}</div>}

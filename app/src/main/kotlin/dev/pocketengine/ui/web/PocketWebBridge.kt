@@ -253,7 +253,7 @@ internal class PocketWebBridge(
             "ownerWork.supplement.read", "ownerWork.supplement.edit", "ownerWork.supplement.send", "ownerWork.supplement.query",
             "attachments.pick", "attachments.openPicker", "attachments.closePicker", "attachments.toggle", "attachments.remove", "attachments.open", "sources.open", "sources.read", "sources.close",
             "phone.request.original",
-            "phone.result.original", "phone.resultNotice.read", "phone.resultNotice.set",
+            "phone.result.original", "phone.resultNotice.read", "phone.resultNotice.set", "phone.activity.original",
             "quickVoice.start", "quickVoice.save", "quickVoice.close", "quickVoice.return",
             "skillDraft.open", "skillDraft.read", "skillDraft.source", "skillDraft.confirm", "skillDraft.cancel", "skillDraft.query", "skillDraft.close", "voice.start", "voice.stop", "voice.review", "voice.accept", "voice.discard", "speech.speak", "speech.stop", "speech.taskAnnouncements", "speech.stopTaskAnnouncement",
             "tasks.refresh", "tasks.open", "tasks.close", "tasks.stop", "tasks.review", "tasks.confirm", "tasks.approve", "tasks.resolve", "tasks.resume", "tasks.scope", "tasks.plan.enter", "tasks.answerQuestion", "tasks.answerQuestionChoice", "tasks.deleteScreenshot", "privacy.screenshots.read", "privacy.screenshots.save",
@@ -345,6 +345,7 @@ internal class PocketWebBridge(
         check(Looper.myLooper() == Looper.getMainLooper())
         cancelStatePublication()
         commandFence.invalidate()
+        if (documentReplaced) controller.forgetShownPhoneActivity()
         if (documentReplaced) localSourceIntake.close() else localSourceIntake.pause()
         projectGitImport.close()
         phoneViewer.clear()
@@ -1178,9 +1179,10 @@ internal class PocketWebBridge(
             }
             if (action in setOf("accounts.models", "accounts.model.review", "accounts.logout.review", "accounts.model.select", "accounts.logout.confirm")) { accountCommand(id, action, args); return }
             if (action in PocketWebMessageQuotes.COMMANDS) {
-                if (action == "messageQuote.open" || action == "messageQuote.stage")
+                if (action == "messageQuote.open" || action == "messageQuote.stage" || action == "messageQuote.pin" || action.startsWith("messageShelf.") && action != "messageShelf.close")
                     require(section == null && taskViewId == null && controller.webPrivateOwnerVisible()) { "请回到原私人对话选择引用" }
-                messageQuotes.dispatch(action, args) { result, error -> complete(id, result, error, retainValue = action != "messageQuote.open"); publishState() }; return
+                messageQuotes.dispatch(action, args) { result, error -> val local = action == "messageQuote.pin" || action.startsWith("messageShelf.")
+                    complete(id, result, error, retainValue = action != "messageQuote.open" && !local, replayHint = if (local) "请重新打开本对话备忘核对；没有重放上次内容或操作" else null); publishState() }; return
             }
             if (action == "sources.open") {
                 checkedPayload(args, setOf("messageId", "taskId"))
@@ -1286,6 +1288,16 @@ internal class PocketWebBridge(
                     publishState()
                 }
                 return
+            }
+            if (action == "phone.activity.original") {
+                checkedPayload(args, setOf("taskId","runId","epoch","activityHandle"))
+                val page=commandFence.ticket();val document=documentId;val owner=controller.displayedPhoneWindowVersion()
+                fun current() = !closed && document!=null && documentId==document && commandFence.accepts(page) &&
+                    section==null && taskViewId==null && controller.displayedPhoneWindowAlive(owner)
+                controller.openShownPhoneActivity(requiredString(args,"taskId"),requiredString(args,"runId"),requiredInt(args,"epoch"),
+                    requiredString(args,"activityHandle"),::current)
+                // Admitted a historical read only. Opening the task still requires the original runs row.
+                complete(id,JSONObject().put("reading",true),null,retainValue=false);return
             }
             if (action == "phone.resultNotice.read" || action == "phone.resultNotice.set") {
                 val change = action.endsWith(".set")

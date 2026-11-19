@@ -139,6 +139,15 @@ public final class ConversationRepository {
         }finally{inspection.visiting.remove(key);if(outer)derivedInspection.remove();}
     }
 
+    JSONObject ownerShelfList(String conversation)throws Exception{return read(()->ConversationReferenceShelf.list(db,activeGeneration(),conversation));}
+    JSONObject ownerShelfReference(String conversation,String id)throws Exception{return read(()->ConversationReferenceShelf.reference(db,activeGeneration(),conversation,id));}
+    JSONObject addOwnerShelfReference(String conversation,JSONObject reference,String label,RunControl owner)throws Exception{
+        return transaction(()->{owner.check();JSONObject row=ConversationReferenceShelf.add(db,activeGeneration(),conversation,reference,label,System.currentTimeMillis());owner.check();return row;});
+    }
+    JSONObject removeOwnerShelfReference(String conversation,String id,RunControl owner)throws Exception{
+        return transaction(()->{owner.check();JSONObject row=ConversationReferenceShelf.remove(db,activeGeneration(),conversation,id);owner.check();return row;});
+    }
+
     /** The returned metadata is issued from the real saved assistant row, not its caller. */
     public JSONObject nativeAssistantSource(String sourceId)throws Exception{
         JSONObject state=metadata(sourceId);if(state==null||!"assistant".equals(state.optString("role")))throw new SourceUnavailable("原助手来源不存在");
@@ -950,7 +959,7 @@ public final class ConversationRepository {
         if(db.update("assistant_import_records",tombstone,"generation=? AND conversation_id=? AND record_id=? AND record_version=? AND deleted=0",new String[]{gen,conversation,record,Long.toString(version)})!=1)throw new IllegalStateException("原导入记录已变化，请刷新后重试");
         ContentValues erased=new ContentValues();erased.putNull("data");db.update("assistant_import_fragments",erased,"generation=? AND record_id=?",new String[]{gen,record});db.execSQL("UPDATE assistant_import_documents SET redacted=1 WHERE generation=?",new Object[]{gen});
     }
-    public void deleteConversation(String conversation,String reason)throws Exception{ContentValues c=new ContentValues();c.put("deleted",1);c.put("delete_reason",reason);c.put("header_json",new JSONObject().put("conversationId",conversation).put("deleted",true).toString());if(db.update("assistant_conversations",c,"generation=? AND conversation_id=? AND deleted=0",new String[]{activeGeneration(),conversation})!=1)throw new IllegalArgumentException("对话不存在");db.execSQL("UPDATE assistant_sources SET revision=revision+1,deleted=1,unavailable_reason=? WHERE generation=? AND conversation_id=? AND deleted=0",new Object[]{reason,activeGeneration(),conversation});ContentValues erased=new ContentValues();erased.putNull("body");erased.put("body_bytes",0);erased.put("body_sha","");db.update("assistant_messages",erased,"generation=? AND conversation_id=?",new String[]{activeGeneration(),conversation});
+    public void deleteConversation(String conversation,String reason)throws Exception{ConversationReferenceShelf.clear(db,activeGeneration(),conversation);ContentValues c=new ContentValues();c.put("deleted",1);c.put("delete_reason",reason);c.put("header_json",new JSONObject().put("conversationId",conversation).put("deleted",true).toString());if(db.update("assistant_conversations",c,"generation=? AND conversation_id=? AND deleted=0",new String[]{activeGeneration(),conversation})!=1)throw new IllegalArgumentException("对话不存在");db.execSQL("UPDATE assistant_sources SET revision=revision+1,deleted=1,unavailable_reason=? WHERE generation=? AND conversation_id=? AND deleted=0",new Object[]{reason,activeGeneration(),conversation});ContentValues erased=new ContentValues();erased.putNull("body");erased.put("body_bytes",0);erased.put("body_sha","");db.update("assistant_messages",erased,"generation=? AND conversation_id=?",new String[]{activeGeneration(),conversation});
         db.execSQL("UPDATE assistant_import_records SET deleted=1,record_version=record_version+1,unavailable_reason=? WHERE generation=? AND conversation_id=? AND deleted=0",new Object[]{reason,activeGeneration(),conversation});ContentValues fragments=new ContentValues();fragments.putNull("data");db.update("assistant_import_fragments",fragments,"generation=? AND conversation_id=?",new String[]{activeGeneration(),conversation});db.execSQL("UPDATE assistant_import_documents SET redacted=1 WHERE generation=?",new Object[]{activeGeneration()});ConversationOrganization.changed(db,activeGeneration());}
     public int retire(JSONArray removed,String cause)throws Exception{
         int affected=0;String gen=activeGeneration();for(int i=0;i<removed.length();i++){JSONArray refs=removed.getJSONObject(i).optJSONArray("sourceRefs");for(int j=0;refs!=null&&j<refs.length();j++){SourceRef ref=SourceRef.fromJson(refs.getJSONObject(j));if(!"message".equals(ref.kind)||!"owner".equals(ref.ownerId)||!"private".equals(ref.spaceId))continue;
@@ -1220,7 +1229,7 @@ public final class ConversationRepository {
     /** Called only after the original outer SQLite transaction has positively committed. */
     public void activatedAfterCommit(){synchronized(monitor){reloadAuthority();}}
     public void activationUncertain(){healthy=false;}
-    public void discardStage(String stage){synchronized(monitor){if(generation!=null&&generation.equals(stage))throw new SecurityException("不能清理当前原文权威");for(String table:List.of("assistant_import_records","assistant_import_fragments","assistant_import_documents","assistant_messages","assistant_sources","assistant_conversations"))db.delete(table,"generation=?",new String[]{stage});}}
+    public void discardStage(String stage){synchronized(monitor){if(generation!=null&&generation.equals(stage))throw new SecurityException("不能清理当前原文权威");ConversationReferenceShelf.clearGeneration(db,stage);for(String table:List.of("assistant_import_records","assistant_import_fragments","assistant_import_documents","assistant_messages","assistant_sources","assistant_conversations"))db.delete(table,"generation=?",new String[]{stage});}}
     private static long integer(JSONObject value,String key,long minimum){Object number=value.opt(key);if(!(number instanceof Byte||number instanceof Short||number instanceof Integer||number instanceof Long)||((Number)number).longValue()<minimum)throw new IllegalArgumentException(key+"必须为实际整数");return ((Number)number).longValue();}
     private static String[] append(List<String> list,String value){ArrayList<String> result=new ArrayList<>(list);result.add(value);return result.toArray(new String[0]);}
     private static String encode(JSONObject value){return Base64.getUrlEncoder().withoutPadding().encodeToString(value.toString().getBytes(StandardCharsets.UTF_8));}

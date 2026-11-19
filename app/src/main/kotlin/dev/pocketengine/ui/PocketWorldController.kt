@@ -63,26 +63,29 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     private var phoneNoticeRead=0L
     internal var originalPhoneNotification by mutableStateOf<JSONObject?>(null)
         private set
-    internal fun readPhoneNotification(locator:JSONObject, refreshToken:String?=null){
-        if(closed)return
+    internal fun readPhoneNotification(locator:JSONObject, refreshToken:String?=null, activityWindow:(()->Boolean)?=null){
+        if(closed||activityWindow?.invoke()==false)return
         val origin=JSONObject(locator.toString());val serial=++phoneNoticeRead;val navigation=state.requestedTaskRevision
+        // Only an explicit in-app selection, or a refresh of its retained reader, carries this provenance.
+        val shown=if(activityWindow!=null||refreshToken!=null&&origin.optString("returnSource")=="activity") origin.optString("activityHandle").takeIf{it.isNotBlank()} else null
         if(refreshToken==null)originalPhoneNotification=null
         else if(originalPhoneNotification?.optString("noticeHandle")!=refreshToken||!webPrivateOwnerVisible())return
         val token=refreshToken?:java.util.UUID.randomUUID().toString()
         io.execute{
             val result=runCatching{app.tasks.originalPhoneNotification(origin.getString("taskId"),origin.getString("runId"),origin.getInt("epoch"))}
             main.post{
-                if(closed||serial!=phoneNoticeRead||navigation!=state.requestedTaskRevision)return@post
+                if(closed||serial!=phoneNoticeRead||navigation!=state.requestedTaskRevision||activityWindow?.invoke()==false)return@post
                 val row=result.getOrNull()
-                if(row==null){
+                if(row==null||shown!=null&&row.optBoolean("conventional")){
                     if(refreshToken!=null && originalPhoneNotification?.optString("noticeHandle")==refreshToken)originalPhoneNotification=null
-                    showTaskNoticeWarning("原手机通知的执行记录已不可核对，没有打开后继任务")
+                    showTaskNoticeWarning(if(shown!=null)"所选手机轮次的记录已不可核对，没有打开后继任务" else "原手机通知的执行记录已不可核对，没有打开后继任务")
                 }else if(row.optBoolean("conventional")){
                     if(refreshToken==null)focusTask(row.getString("taskId"))
                 }else if(privateWorkspaceView() && (refreshToken==null||webPrivateOwnerVisible() && originalPhoneNotification?.optString("noticeHandle")==refreshToken)){
+                    if(shown!=null)row.put("returnSource","activity").put("activityHandle",shown)
                     originalPhoneNotification=row.put("noticeHandle",token)
                     if(refreshToken==null)state=state.copy(requestedTaskId=null)
-                }else {originalPhoneNotification=null;showTaskNoticeWarning("请回到私人工作区后再打开原手机通知")}
+                }else {originalPhoneNotification=null;showTaskNoticeWarning(if(shown!=null)"请回到原私人工作区再查看所选轮次" else "请回到私人工作区后再打开原手机通知")}
             }
         }
     }
@@ -418,6 +421,30 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 else result.fold({ done(it, null) }, { done(null, message(it)) }) }
         } } catch (failure: Exception) { done(null, message(failure)) }
     }
+    // Read-only display witnesses. Keep a few prior runs in this owner window so a racing successor
+    // cannot steal a click on the original card. No controls, observations or result text are captured.
+    private val shownPhoneActivity = LinkedHashMap<Triple<String,String,Int>,String>()
+    private var shownActivityWindow = -1L
+    internal fun forgetShownPhoneActivity() = synchronized(shownPhoneActivity) {
+        shownPhoneActivity.clear(); shownActivityWindow = -1L
+    }
+    private fun activityHandle(key: Triple<String,String,Int>, owner: Long): String? = synchronized(shownPhoneActivity) {
+        if (!displayedPhoneWindowAlive(owner)) return@synchronized null
+        if (shownActivityWindow != owner) { shownPhoneActivity.clear(); shownActivityWindow = owner }
+        shownPhoneActivity[key] ?: java.util.UUID.randomUUID().toString().also {
+            if (shownPhoneActivity.size >= 16) shownPhoneActivity.remove(shownPhoneActivity.keys.first())
+            shownPhoneActivity[key] = it
+        }
+    }
+    internal fun openShownPhoneActivity(id: String, run: String, epoch: Int, handle: String, current: () -> Boolean) {
+        val owner = displayedPhoneWindowVersion()
+        require(current() && webPrivateOwnerVisible() && handle.isNotBlank() && synchronized(shownPhoneActivity) {
+            shownActivityWindow == owner && shownPhoneActivity[Triple(id,run,epoch)] == handle
+        }) { "请回原手机任务卡重新查看，没有打开后继轮次" }
+        val locator=JSONObject().put("taskId",id).put("runId",run).put("epoch",epoch).put("activityHandle",handle)
+        readPhoneNotification(locator, activityWindow={ current() && webPrivateOwnerVisible() && displayedPhoneWindowAlive(owner) })
+    }
+
     internal fun retainedPrivatePhoneSurface(task: UiTask): JSONObject? {
         val raw = task.raw
         if (!webPrivateOwnerVisible() || raw.optString("id") != task.id || raw.optString("kind") != "phone" ||
@@ -426,7 +453,13 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             raw.optString("runId").isBlank() || raw.optInt("coordinatorEpoch", -1) < 1) return null
         val scope = raw.optJSONObject("executionScope")?.opt("revision")
         val revision = if (task.status == "paused" && (scope is Int || scope is Long)) (scope as Number).toLong() else -1L
-        return runCatching { app.retainedPhoneSurface(task.id, raw.getString("runId"), raw.getInt("coordinatorEpoch"), task.executionMode, revision) }.getOrNull()
+        val owner = displayedPhoneWindowVersion()
+        val run = raw.getString("runId"); val epoch = raw.getInt("coordinatorEpoch")
+        val row = runCatching { app.retainedPhoneSurface(task.id, run, epoch, task.executionMode, revision) }.getOrNull() ?: return null
+        if (row.optString("taskId") != task.id || row.optString("runId") != run || row.optInt("epoch",-1) != epoch) return null
+        // Do not mutate the runner's retained object or issue another observation.
+        val handle=activityHandle(Triple(task.id,run,epoch),owner) ?: return null
+        return JSONObject(row.toString()).put("activityHandle",handle)
     }
     internal fun webMemoryScopeTicket(): Any = Pair(ownerEpochs["memoryReview"] ?: 0, memoryReviewScope)
     /** Destination display/check only; a client-supplied id never becomes a project selection. */
@@ -1131,6 +1164,22 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         if (draft.key != key || !key.startsWith("new:") || draft.conversationId.isNotEmpty()) return null
         return JSONObject().put("paused", model.firstMessagePaused(key))
             .put("saving", writingDraftMemory == key).put("confirmed", key !in unconfirmedDraftMemory)
+    }
+    /** Local bookmark work has its own private UI call surface; none is a model/remote tool. */
+    internal fun requestConversationShelf(conversation: String, key: String, epoch: Int, current: () -> Boolean,
+        control: dev.pocketengine.core.RunControl, done: (JSONObject?, String?) -> Unit,
+        work: (dev.pocketengine.features.assistant.AssistantModule) -> JSONObject) {
+        fun original() = webPrivateOwnerVisible() && current() && !state.chatSubmitting && epoch == composerViewEpoch &&
+            conversation.isNotBlank() && conversation == state.conversationId && key == "conversation:$conversation" &&
+            composerDraft?.key == key && oneMessageLearningState(key)?.opt("pending") == false
+        check(original()) { "请回到本机原私聊，等待当前输入确认" }
+        val owner = webWindowTicket()
+        control.setAuthorityCheck { check(original() && webWindowTicket() == owner) { "原对话备忘窗口已变化" } }
+        requestPersonalOwner(::original, done) {
+            control.check()
+            val native = app.features.module("assistant") as? dev.pocketengine.features.assistant.AssistantModule ?: error("本机原话未就绪")
+            work(native).also { control.check() }
+        }
     }
     internal fun oneMessageLearningState(key: String): JSONObject? {
         val model = ownerComposer ?: return null

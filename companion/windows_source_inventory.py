@@ -185,7 +185,14 @@ def reveal(ctx,op,locked):
 
 def show_bound_child(ctx,stack,base,candidate,locked):
     """Only with original parent + child already pinned by caller. Never open the child."""
-    api=ctx.backend.api
+    def current():
+        ctx.check_current_pointer()
+        return not locked()
+    return show_selected_child(ctx.backend.api,stack,base,candidate,current)
+
+
+def show_selected_child(api,stack,base,candidate,current):
+    """Selector, not opener. Caller keeps literal parent and file handles pinned throughout."""
     shell,ole = ctypes.WinDLL("shell32"),ctypes.WinDLL("ole32")
     ptr,w = ctypes.c_void_p,api.w
     ole.CoInitializeEx.argtypes,ole.CoInitializeEx.restype = [ptr,w.DWORD],ctypes.c_long
@@ -217,5 +224,4 @@ def show_bound_child(ctx,stack,base,candidate,locked):
     tail = last(child)
     if not tail: _bad()
     items = (ptr*1)(tail)
-    ctx.check_current_pointer()
-    if locked() or show(parent,1,items,0)!=0: _bad()
+    if not current() or show(parent,1,items,0)!=0: _bad()

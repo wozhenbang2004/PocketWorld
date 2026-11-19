@@ -56,7 +56,7 @@ function RouteMaterials({ kind, option, view, draft, disabled, update }: { kind:
   </AccordionItem>;
 }
 
-export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange, onSaved, onOpenDevices, autoOpen = false, directed }: { directed?: { deviceId: string; instanceId: string; certificateFingerprint: string }; autoOpen?: boolean; taskId: string; peers?: Data[]; run: Run; onBackChange?: (handler: (() => boolean) | null) => void; onSaved?: () => void; onOpenDevices?: () => void }) {
+export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange, onSaved, onOpenDevices, onOpenOriginal, autoOpen = false, directed }: { directed?: { deviceId: string; instanceId: string; certificateFingerprint: string }; autoOpen?: boolean; taskId: string; peers?: Data[]; run: Run; onBackChange?: (handler: (() => boolean) | null) => void; onSaved?: () => void; onOpenDevices?: () => void; onOpenOriginal?: () => void }) {
   const [open, setOpen] = useState(false), [view, setView] = useState<Data | null>(null), [drafts, setDrafts] = useState<Record<string, RouteDraft>>({});
   const [review, setReview] = useState<Data | null>(null), [ack, setAck] = useState(false), [removeUnavailable, setRemoveUnavailable] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
@@ -142,6 +142,7 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
   const peerIds = [...new Set(rows(view?.options).map(option => option.targetDeviceId))];
   return <section className="pw-task-capabilities" aria-label="本任务的远端设备范围">
     <Button variant="secondary" onClick={read} disabled={busy}>{directedId ? '读取所选手机的可用范围' : '选择本任务的远端设备'}</Button>
+    {directedId && !open && onOpenOriginal && <Button variant="ghost" disabled={busy} onClick={onOpenOriginal}>查看这份工作的原派单</Button>}
     {directedId && !open && <p>这份工作只给{deviceName(directedId, peers)}。点读取才核对它已授权的范围，不会发送目标或启动执行。</p>}
     {notice && <p role="status">{notice}</p>}
     <SettingsDialog isOpen={open} onClose={() => requestExit('close')} title={review ? review.kind === 'import' ? '核对原项目包导入' : '核对本任务设备范围' : directedId ? '核对所选手机的范围' : view?.humanInputOnly ? '选择一个手控手机屏幕' : '选择远端手机或电脑'}>

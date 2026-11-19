@@ -51,7 +51,14 @@ public final class TeamParentHost {
         if(TeamCoordinator.RESEARCH_FORMAT.equals(run.optString("researchExecutionFormat"))){
             result.put("parentBudget",tasks.teamBudgetSnapshot(id)).put("researchReadViews",new JSONArray().put("research_summary").put("member_output")).put("outputRangeLimit",8000).put("researchOutputs",coordinator.parentResearchOutputIndex(id));return result;
         }
-        JSONObject review=tasks.teamReviewState(id);if(review.optJSONObject("independentReview")!=null)result.put("independentReview",smallReview(review.getJSONObject("independentReview")));if(review.optJSONObject("approvedReview")!=null)result.put("approvedReview",smallReview(review.getJSONObject("approvedReview")));result.put("integration",integration(id));return result;
+        JSONObject review=tasks.teamReviewState(id);if(review.optJSONObject("independentReview")!=null)result.put("independentReview",smallReview(review.getJSONObject("independentReview")));if(review.optJSONObject("approvedReview")!=null)result.put("approvedReview",smallReview(review.getJSONObject("approvedReview")));JSONObject integrator=integration(id);result.put("integration",integrator);
+        JSONObject work=task.optJSONObject("teamWorkPlan");
+        if(work!=null&&work.has("lastRevisionRequestId")&&TeamParentRevisionOffer.local(run)){
+            String recorded=integrator.optString("planHash");JSONObject round=TeamParentRevisedFiles.previous(source.view(),run,work,recorded);
+            if(round==null)round=TeamParentRevisedFiles.registered(source.view(),run,work,recorded,review,integrator);
+            if(round!=null)result.put("revisionDecision",round);
+        }
+        return result;
     }
     private static JSONObject smallReview(JSONObject source)throws Exception{JSONObject out=new JSONObject();for(String key:new String[]{"taskId","runId","reviewId","planHash","status","verdict","stale","completeOriginalFilesRead","approvedAt"})if(source.has(key))out.put(key,source.get(key));return out;}
     private JSONObject integration(String id)throws Exception {
@@ -89,10 +96,22 @@ public final class TeamParentHost {
                 case "question":{JSONObject question=tasks.teamParentQuestion(source,id,args.getString("assignmentId"),args.getString("questionId"));out=range(question.getString("question"),args.optInt("offset",0),args.optInt("length",4000)).put("assignmentId",args.getString("assignmentId")).put("questionId",question.getString("questionId")).put("state",question.getString("state"));break;}
                 case "review":{
                     JSONObject review=writes.review(id,original).snapshot();String hash=review.getString("planHash");
-                    if(args.has("expectedPlanHash")&&!hash.equals(args.getString("expectedPlanHash")))throw new SecurityException("原冻结计划已经变化，没有交回另一版文件或独审意见");
+                    JSONObject state=tasks.teamReviewState(id),run=coordinator.retainedOwnerReading(id),sql=tasks.teamParentAccess(source,id,false).optJSONObject("teamWorkPlan");
+                    if(args.has("expectedPlanHash")&&!hash.equals(args.getString("expectedPlanHash"))){
+                        // A fresh comparison after a replaced grant has a new recovery parent. Return
+                        // only the exact requested grant receipt if it still exists, never substitute that comparison.
+                        JSONObject grant=state.optJSONObject("approvedReview");String expected=args.getString("expectedPlanHash");
+                        JSONObject known=TeamParentRevisedFiles.previous(source.view(),run,sql,expected);
+                        if(known==null&&grant!=null&&grant.has("previousReviewId")&&expected.equals(grant.opt("planHash")))
+                            known=TeamParentRevisedFiles.registered(source.view(),run,sql,expected,state,integration(id));
+                        if(known==null)throw new SecurityException("原冻结计划已经变化，没有交回另一版文件或独审意见");
+                        out=known.put("source","exact_revision_receipt").put("fileBodiesIncluded",false);break;
+                    }
                     out=new JSONObject().put("teamRunId",id).put("planHash",hash).put("canIntegrate",review.getBoolean("canIntegrate")).put("incompleteAssignments",review.getJSONArray("incompleteAssignments")).put("files",review.getJSONObject("plan").getJSONArray("files")).put("ownerApprovalRequiredForIntegration",true).put("businessVerified",false);
-                    JSONObject state=tasks.teamReviewState(id),assessment=TeamParentReviewFeedback.beforeIntegration(id,hash,review,state);
-                    out.put("requiresOwnerReview",true).put("awaitingOwnerDecision",assessment!=null&&assessment.getBoolean("awaitingOwnerDecision")).put("reviewState",assessment==null?"owner_approval_registered":assessment.getString("state"));
+                    JSONObject assessment=TeamParentRevisedFiles.awaiting(source.view(),run,sql,hash,review,state);
+                    if(assessment!=null)out.put("revisionDecision",assessment);
+                    else assessment=TeamParentReviewFeedback.beforeIntegration(id,hash,review,state);
+                    out.put("requiresOwnerReview",assessment!=null&&assessment.optBoolean("requiresOwnerReview")).put("awaitingOwnerDecision",assessment!=null&&assessment.getBoolean("awaitingOwnerDecision")).put("reviewState",assessment==null?"owner_approval_registered":assessment.getString("state"));
                     JSONObject finding=TeamParentReviewFeedback.finding(id,hash,state.optJSONObject("independentReview"));
                     if(finding!=null)out.put("independentFinding",finding);
                     break;
@@ -203,7 +222,20 @@ public final class TeamParentHost {
             case "request_integration":{
                 tasks.claimTeamParentAction(source,id);String expected=args.getString("expectedPlanHash");
                 JSONObject previous=tasks.inspectTeamIntegration(id);
-                if(!previous.optString("status").equals("not_started"))return status(source,id).put("state","original_integrator_already_registered").put("queryOnly",true).put("requiresOwnerReview",false).put("message","原唯一整合者已登记；请核对其原回执与版本，不由父模型重复启动。");
+                if(!previous.optString("status").equals("not_started")){
+                    JSONObject answer=status(source,id).put("state","original_integrator_already_registered").put("queryOnly",true).put("requiresOwnerReview",false)
+                            .put("message","原唯一整合者已登记；请核对其原回执与版本，不由父模型重复启动。");
+                    JSONObject run=coordinator.retainedOwnerReading(id),sql=tasks.teamParentAccess(source,id,false).optJSONObject("teamWorkPlan");
+                    if(sql!=null&&sql.has("lastRevisionRequestId")&&TeamParentRevisionOffer.local(run)){
+                        JSONObject decisions=tasks.teamReviewState(id),actual=answer.optJSONObject("integration");
+                        JSONObject assessment=TeamParentRevisedFiles.previous(source.view(),run,sql,expected);
+                        if(assessment==null)assessment=TeamParentRevisedFiles.registered(source.view(),run,sql,expected,decisions,actual==null?integration(id):actual);
+                        if(assessment==null&&!expected.equals(previous.optString("planHash")))
+                            assessment=TeamParentRevisedFiles.awaiting(source.view(),run,sql,expected,writes.review(id,original).snapshot(),decisions);
+                        if(assessment!=null)answer.put("requestedPlanHash",expected).put("registeredIntegratorPlanHash",previous.optString("planHash")).put("state",assessment.getString("state")).put("message",assessment.getString("message")).put("revisionDecision",assessment);
+                    }
+                    source.checkCurrent();return answer;
+                }
                 JSONObject current=writes.review(id,original).snapshot(),state=tasks.teamReviewState(id);
                 JSONObject blocked=TeamParentReviewFeedback.beforeIntegration(id,expected,current,state);
                 if(blocked!=null){JSONObject answer=status(source,id);for(java.util.Iterator<String> keys=blocked.keys();keys.hasNext();){String key=keys.next();answer.put(key,blocked.get(key));}source.checkCurrent();return answer;}

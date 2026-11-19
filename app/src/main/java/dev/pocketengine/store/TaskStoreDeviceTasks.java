@@ -930,6 +930,18 @@ public final class TaskStoreDeviceTasks {
     public JSONObject ownerPhoneGoalIndex(String here,String target,String instance,String parentAfter,String afterOperation,String searchText)throws Exception{
         synchronized(owner){return OwnerPhoneGoalIndex.read(db,here,target,instance,parentAfter,afterOperation,searchText);}
     }
+    /** Past work remains readable after the task's execution deadline, but this lookup never grants execution. */
+    public JSONObject directedPhoneDispatches(String here,DirectedPhoneTarget target,String source,String parentAfter,String afterOperation)throws Exception{
+        DeviceProtocol.identifier(source,"sourceTaskId");
+        synchronized(owner){
+            JSONObject t=task(source), marker=t.optJSONObject("ownerDeviceWork");
+            if(!source.equals(t.opt("id"))||!"owner".equals(t.opt("actorId"))||!"private".equals(t.opt("spaceId"))||t.has("origin")
+                    ||!"assistant".equals(t.opt("kind"))||!"capabilities".equals(t.opt("executionMode"))||!t.optString("conversationId").isEmpty()
+                    ||marker==null||!"pocketworld.owner-device-work.v1".equals(marker.opt("format"))||!source.equals(marker.opt("requestId"))
+                    ||!target.equals(DirectedPhoneTarget.fromTask(t)))throw new SecurityException("这不是原私人工作当时选定的手机，未读取其他派单");
+            return OwnerPhoneGoalIndex.read(db,here,target.deviceId(),target.instanceId(),parentAfter,afterOperation,"",source);
+        }
+    }
     /** Local owner index only. Resolve the next anchor inside the same original parent/target;
      * keyset ordering keeps concurrent newer allocations from shifting this reading position. */
     public JSONObject childHistoryPage(String parentTaskId,String target,String afterOperation,int limit)throws Exception{

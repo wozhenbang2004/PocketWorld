@@ -119,6 +119,16 @@ public final class LocalModule implements EngineModule {
             return original;
         }
     }
+    public JSONObject compareSavedHostSourceForOwner(String project,String checkout,String expected,java.util.function.BooleanSupplier owner)throws Exception {
+        if(owner==null||!owner.getAsBoolean()||closed||expected==null||!expected.matches("[a-f0-9]{64}"))throw new SecurityException("原项目来源核对已过期");
+        var original=phoneHostOriginForOwner(project,checkout);
+        if(original==null||!expected.equals(original.digest()))throw new SecurityException("所选原主机导入身份已变化");
+        File files; synchronized(this){files=content(checkout);}
+        JSONObject observation=original.compareSavedFiles(files,()->!closed&&owner.getAsBoolean());
+        JSONObject row=projectCheckoutForHost(checkout),source=row.optJSONObject("sourceImport");
+        if(!owner.getAsBoolean()||!project.equals(row.opt("projectId"))||source==null||!expected.equals(source.opt("sourceEvidenceSha256")))throw new SecurityException("读取期间原项目或副本身份已变化");
+        return observation;
+    }
     public synchronized JSONObject projectCheckoutForHost(String checkoutId)throws Exception {if(closed)throw new IllegalStateException("项目执行器已关闭");return new JSONObject(checkout(checkoutId).toString());}
     @FunctionalInterface private interface ProjectImageBytes {byte[] read()throws Exception;}
     /** The original capability host checks its SQL grant against these actual catalog facts.

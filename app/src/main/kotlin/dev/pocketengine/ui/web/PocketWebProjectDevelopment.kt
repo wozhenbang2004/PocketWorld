@@ -40,7 +40,7 @@ internal class PocketWebProjectDevelopment(
         private val ownerDrafts = linkedMapOf<String, JSONObject>()
         private val deliveryFields = arrayOf("constraints", "deliverable", "completionCriteria")
         val COMMANDS = setOf("projects.development.read", "projects.development.draft", "projects.development.inspect",
-            "projects.development.hostSource", "projects.development.resolveHostSource",
+            "projects.development.hostSource", "projects.development.resolveHostSource", "projects.development.compareHostSource",
             "projects.development.prepare", "projects.development.queryCopy", "projects.development.review",
             "projects.development.start", "projects.development.query", "projects.development.dismiss", "projects.development.close") + PocketWebCheckoutFiles.COMMANDS
     }
@@ -166,6 +166,13 @@ internal class PocketWebProjectDevelopment(
                 check(!busy && !pending(original.project)) { "原项目输入仍待核对，草稿没有替换" }
                 updateDraft(original.project) { copyDeliveryFields(retainedFields, it.put("goal", goal).put("checkoutId", checkout)) }; review = null
                 done(JSONObject().put("saved", true).put("projectId", original.project), null)
+            }
+            "projects.development.compareHostSource" -> {
+                fields(args, "viewHandle", "checkoutId", "evidenceDigest")
+                check(review == null) { "请先关闭原项目审阅" }
+                val checkout = text(args, "checkoutId"); val evidence = text(args, "evidenceDigest", 64)
+                require(evidence.matches(Regex("[a-f0-9]{64}")))
+                working(original, done) { controller.projectDevelopmentForWeb().compareHostSourceForOwner(original.project, checkout, evidence) { current(original) } }
             }
             "projects.development.hostSource", "projects.development.resolveHostSource" -> {
                 val opening = action == "projects.development.resolveHostSource"

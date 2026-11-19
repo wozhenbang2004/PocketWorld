@@ -361,6 +361,13 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
                     .put("instanceId",peer.getString("instanceId")).put("side","received");
             return tasks.deviceTasks().ownerPhoneGoalIndex(local.deviceId(),target,peer.getString("instanceId"),parentAfter,after,searchText).put("localInstanceId",local.instanceId()).put("side","sent");
         }
+        public JSONObject directedPhoneDispatches(String target,String source,String parentAfter,String after)throws Exception {
+            DeviceIdentity.LocalIdentity local=existingIdentity();JSONObject peer=trust.peer(target);
+            if(local==null||peer==null||peer.optBoolean("revoked")||!target.equals(peer.opt("deviceId")))throw new SecurityException("原配对身份不可核对，没有换用其他设备");
+            var pinned=new DirectedPhoneTarget(target,peer.getString("instanceId"),peer.getString("fingerprint"));
+            return tasks.deviceTasks().directedPhoneDispatches(local.deviceId(),pinned,source,parentAfter,after)
+                    .put("targetFingerprint",pinned.certificateFingerprint()).put("localInstanceId",local.instanceId()).put("side","sent");
+        }
         public NativeDeviceWorkspaceHost.HistoryAction openHistory(String id, String operation) throws Exception {
             DeviceIdentity.LocalIdentity local = existingIdentity(); if (local == null) throw new SecurityException("本机设备身份不存在，不能继承原结果读取范围");
             NativeDeviceTaskHistoryHost original = new NativeDeviceTaskHistoryHost(tasks, local, new NativeDeviceTaskHistoryHost.NativeReads() {

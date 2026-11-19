@@ -150,7 +150,8 @@ def publish(args,env):
  verify=verify_callback(runner,h['payload'],args.handoff.resolve())
  verify((args.handoff/'release.json').read_bytes()) # production App verifier before any API write
  client=publisher.Client(env.get('GITHUB_TOKEN',''))
- return publisher.publish(client,h['tag'],args.head,assets,verify,args.publish,args.resume_release_id,args.recover_orphan_tag)
+ return publisher.publish(client,h['tag'],args.head,assets,verify,args.publish,args.resume_release_id,args.recover_orphan_tag,
+     require_fresh_main=env.get('GITHUB_EVENT_NAME')=='push')
 
 def main():
  p=argparse.ArgumentParser(description=__doc__);p.add_argument('mode',choices=['prepare','publish'])

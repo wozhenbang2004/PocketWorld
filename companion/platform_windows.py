@@ -615,25 +615,30 @@ class WindowsBackend:
             return {"status": "completed" if actual is None else "unknown", "deleted": actual is None,
                     "verified": actual is None, "deletionMethod": "original_file_handle_disposition"}
 
-    def _replacement_fact(self, root, relative):
+    def _replacement_fact(self, root, relative, *, note_file=None):
         try:
             if self.read_bytes(root, relative) is None:
                 return {"state": "absent"}
             with self.open_reader(root, relative, LIMIT) as reader:
                 data = reader.read(LIMIT)
-                return {"state": "present", "fileIdentity": reader.identity, "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)}
+                fact={"state": "present", "fileIdentity": reader.identity, "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)}
+                if note_file is not None:
+                    try:
+                        if reader.verify_unchanged(): note_file(reader.handle)
+                    except (OSError,ValueError,TypeError,AttributeError,PlatformError): pass
+                return fact
         except FileNotFoundError:
             return {"state": "absent"}
         except (OSError, PlatformError):
             return {"state": "unavailable"}
 
-    def compare_and_swap(self, root, relative, before, after, current=lambda: None, *, record_intent=lambda value: None):
+    def compare_and_swap(self, root, relative, before, after, current=lambda: None, *, record_intent=lambda value: None, note_landing=None):
         if (before is not None and not isinstance(before, bytes)) or not isinstance(after, bytes):
             raise PlatformError("Configuration CAS requires original raw bytes", 400)
         if max(len(before or b""), len(after)) > LIMIT:
             raise PlatformError("Configuration exceeds the existing byte bound", 413)
         parts = relative_parts(relative)
-        with self.directory(root, parts[:-1]) as (path, _, identity):
+        with self.directory(root, parts[:-1]) as (path, parent_handle, identity):
             token = uuid.uuid4().hex
             temporary_name, backup_name = ".pocketworld-write-" + token, ".pocketworld-before-" + token
             prefix = "/".join(parts[:-1])
@@ -676,13 +681,26 @@ class WindowsBackend:
                     self.api.checked(self.api.k.MoveFileExW(temporary, target, 0x8))
                 else:
                     self.api.checked(self.api.k.ReplaceFileW(target, temporary, backup, 0, None, None))
-                facts = {"target": self._replacement_fact(root, relative), "temporary": self._replacement_fact(root, temporary_relative),
+                landed=[]
+                def observe(handle):
+                    # ReplaceFileW can preserve the displaced file's creation time.
+                    # Bind what was actually read after the operation, NOT a pre-move timestamp.
+                    from windows_file_revisions import _identity
+                    landed.append((_identity(self.api,parent_handle),_identity(self.api,handle)))
+                target_fact=(self._replacement_fact(root,relative,note_file=observe)
+                             if note_landing is not None else self._replacement_fact(root,relative))
+                facts = {"target": target_fact, "temporary": self._replacement_fact(root, temporary_relative),
                          "backup": self._replacement_fact(root, backup_relative) if before is not None else {"state": "not_requested"}}
                 verified = self.read_bytes(root, relative) == after and facts["target"].get("fileIdentity") == temporary_identity
                 # Preserve a concurrent writer's actual displaced bytes. Never
                 # automatically restore old bytes over a third, newer edit.
                 if before is not None:
                     verified = verified and facts["backup"].get("sha256") == intent["beforeSha256"] and facts["backup"].get("fileIdentity") == intent["beforeObject"].get("fileIdentity")
+                if verified and len(landed)==1:
+                    # Optional private receiver history. Never erase a verified
+                    # original replacement if its extra local locator is unavailable.
+                    try: note_landing(*landed[0],target_fact)
+                    except Exception: pass
                 intent.update(phase="readback_verified" if verified else "recovery_required", objects=facts)
                 return {"status": "completed" if verified else "unknown", "verified": verified,
                         "replacementAttempted": True, "version": bytes_version(after),

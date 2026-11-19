@@ -2,6 +2,7 @@ import {useCallback,useEffect,useRef,useState} from 'react';
 import {Button,SettingsDialog,StretchSwitch} from './forms-library';
 import {ShimmerText} from './library';
 import {bridge} from './bridge';
+import {ConversationReferenceShelf} from './ConversationReferenceShelf';
 
 type Controls={conversationId:string;enabled:boolean;revision:number};
 function controlsOf(value:unknown,conversationId:string):Controls {
@@ -16,6 +17,8 @@ export function ConversationMemorySettings({conversationId,composer,isOpen,onClo
   registerBack:(handler:(()=>boolean)|null)=>void;
 }) {
   const [controls,setControls]=useState<Controls|null>(null),[pending,setPending]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
+  const [shelf,setShelf]=useState<string|null>(null);
+  const shelfVisit=JSON.stringify([conversationId,composer?.key,composer?.epoch,bridge.getDocumentEpoch()]);
   const request=useRef(0),alive=useRef(true),writing=useRef(false);
   const changed=useRef(onChanged);changed.current=onChanged;
   const load=useCallback(async()=>{
@@ -29,7 +32,8 @@ export function ConversationMemorySettings({conversationId,composer,isOpen,onClo
   useEffect(()=>{setControls(null);setNotice('');if(conversationId)void load();},[conversationId,load]);
   useEffect(()=>{if(isOpen)void load();},[isOpen,load]);
   const close=useCallback(()=>{if(!writing.current)onClose();},[onClose]);
-  useEffect(()=>{registerBack(isOpen?()=>{close();return true;}:null);return()=>registerBack(null);},[isOpen,close,registerBack]);
+  useEffect(()=>{if(!isOpen)setShelf(null);},[isOpen,conversationId]);
+  useEffect(()=>{registerBack(isOpen?()=>{if(shelf)setShelf(null);else close();return true;}:null);return()=>registerBack(null);},[isOpen,shelf,close,registerBack]);
   const save=async(enabled:boolean)=>{
     if(!controls||writing.current)return;writing.current=true;const serial=++request.current;
     setPending(true);setError('');setNotice('');
@@ -56,6 +60,8 @@ export function ConversationMemorySettings({conversationId,composer,isOpen,onClo
     }catch(failure){if(alive.current&&serial===request.current)setError(failure instanceof Error?failure.message:String(failure));}
     finally{writing.current=false;if(alive.current&&serial===request.current)setPending(false);}
   };
+  const canShelf=!!single&&!!composer&&Number.isSafeInteger(composer.epoch)&&['list','read','remove','close'].every(name=>bridge.getState().capabilities.commands.includes('messageShelf.'+name));
+  if(isOpen&&shelf===shelfVisit&&canShelf&&composer)return <ConversationReferenceShelf key={conversationId+':'+composer.epoch} conversationId={conversationId} draftKey={composer.key} epoch={composer.epoch} onClose={()=>setShelf(null)}/>;
   return <SettingsDialog isOpen={isOpen} title="本对话的个人记忆" onClose={close}>
     {pending&&!controls&&<ShimmerText>正在读取此对话设置…</ShimmerText>}
     {error&&<p className="pw-error" role="alert">{error}</p>}
@@ -64,6 +70,7 @@ export function ConversationMemorySettings({conversationId,composer,isOpen,onClo
     {single&&<><StretchSwitch label="只让下一条不参与自动整理" description="只限这份原私聊草稿：发送前可撤销，原输入被接收后即用完。不关闭已有偏好；消息仍保留在对话，不撤回另外保存过的内容。" checked={single.excluded===true} disabled={pending||single.saving||single.pending} busy={single.saving} onChange={value=>{void setSingle(value);}}/>
       {single.pending&&single.excluded&&<p className="pw-muted">正在核对原输入，未把单条限制挪给另一条消息。</p>}
       {single.confirmed===false&&!single.saving&&!single.pending&&<Button variant="secondary" disabled={pending} onClick={()=>void setSingle(single.excluded===true)}>重新保存本条选择</Button>}</>}
+    {canShelf&&<Button variant="secondary" disabled={pending||single.pending} onClick={()=>setShelf(shelfVisit)}>本对话备忘</Button>}
     {notice&&<p role="status">{notice}</p>}
     <div className="pw-action-row"><Button variant="ghost" disabled={pending} onClick={()=>{void load();}}>读取当前设置</Button><Button variant="ghost" disabled={pending} onClick={()=>{close();onManage();}}>管理我的记忆</Button></div>
   </SettingsDialog>;

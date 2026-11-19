@@ -178,6 +178,7 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         default JSONObject phoneGoalIndex(String target,String parentAfter,String operationAfter,boolean received,String searchText)throws Exception {
             if(!searchText.isEmpty())throw new IllegalStateException("本机未提供原目标查找");return phoneGoalIndex(target,parentAfter,operationAfter,received);
         }
+        default JSONObject directedPhoneDispatches(String target,String source,String parentAfter,String after)throws Exception {throw new IllegalStateException("本机未提供原任务派单索引");}
         HistoryAction openHistory(String originalTaskId, String originalOperationId) throws Exception;
         void pause(String originalTaskId) throws Exception;
         void resume(String originalTaskId) throws Exception;
@@ -481,6 +482,9 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         public JSONObject historyLinks(String id) throws Exception { current(); return copy(control.historyLinks(id)); }
         public JSONObject historyPage(String id,String target,String after) throws Exception { current(); return copy(control.historyPage(id,target,after)); }
         public JSONObject waitingPhoneGoals(String afterCaller,String afterOp,boolean results)throws Exception {current();return copy(control.waitingPhoneGoals(afterCaller,afterOp,results));}
+        public JSONObject directedPhoneDispatches(String target,String source,String parentAfter,String after)throws Exception {
+            current();JSONObject page=copy(control.directedPhoneDispatches(target,source,parentAfter,after));current();return page;
+        }
         public JSONObject phoneGoalIndex(String target,String parentAfter,String after,boolean received) throws Exception { current(); return copy(control.phoneGoalIndex(target,parentAfter,after,received)); }
         public JSONObject phoneGoalIndex(String target,String parentAfter,String after,boolean received,String searchText)throws Exception {
             current();JSONObject page=copy(control.phoneGoalIndex(target,parentAfter,after,received,searchText));current();return page;

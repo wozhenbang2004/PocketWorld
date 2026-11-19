@@ -161,7 +161,12 @@ class NativeFileVersions:
         op,fp=delivery
         kind=_audience_class(raw,path,sha)
         proof=_seal(delivery,vault,scope,sha,len(raw),ids,kind)
-        self._change("""UPDATE operations SET details=json_set(details,'$.windowsIncomingFile.archive',json(?))
+        self.bind_direct_witness("archive",{"class":kind,"seal":proof},op,fp)
+
+    def bind_direct_witness(self,field,value,op,fp):
+        # Only these two private v1 evidence fields, bound once in the original direct admission.
+        key={"archive":"$.windowsIncomingFile.archive","landing":"$.windowsIncomingFile.landing"}[field]
+        self._change("""UPDATE operations SET details=json_set(details,?,json(?))
                WHERE operation_id=? AND json_valid(details)
                AND json_extract(details,'$.protocol')='native-device-tool-v1'
                AND json_extract(details,'$.audience.toolName')='workspace.receive'
@@ -169,8 +174,7 @@ class NativeFileVersions:
                AND json_extract(details,'$.historyAudience.argumentsDigest')=fingerprint
                AND json_extract(details,'$.windowsIncomingFile.format')='windows-original-file-delivery-v1'
                AND json_extract(details,'$.windowsIncomingFile.fileOperationFingerprint')=?
-               AND json_type(details,'$.windowsIncomingFile.archive') IS NULL""",
-               (json.dumps({"class":kind,"seal":proof}),op,fp))
+               AND json_type(details,?) IS NULL""",(key,json.dumps(value),op,fp,key))
 
     def delivery_bytes(self,env,path,version,delivery,kind,proof,held):
         if not isinstance(version,str) or not re.fullmatch(r"sha256:[a-f0-9]{64}",version) or not _hash(proof): _bad()

@@ -1,5 +1,6 @@
 package dev.pocketengine.ui.web
 
+import dev.pocketengine.core.RunControl
 import dev.pocketengine.ui.PocketWorldController
 import java.util.UUID
 import org.json.JSONObject
@@ -10,19 +11,28 @@ internal class PocketWebMessageQuotes(private val controller: PocketWorldControl
     private data class Window(
         val id: String, val messageId: String, val sourceRevision: Long, val text: String,
         val locator: String, val owner: Any, val draftKey: String, val draftEpoch: Int,
-        val draftRevision: Long, val prior: Prior? = null, var submitted: Boolean = false
+        val draftRevision: Long, val prior: Prior?, val shelfEligible: Boolean, var submitted: Boolean = false
     )
     private var window: Window? = null
 
+    private data class Shelf(val id: String, val conversation: String, val key: String, val epoch: Int, val owner: Any, val ids: Set<String>)
+    private var shelf: Shelf? = null
+    @Volatile private var cycle = 0L
+    @Volatile private var pending: RunControl? = null
+
     companion object {
-        val COMMANDS = setOf("messageQuote.open", "messageQuote.stage", "messageQuote.close", "composer.source.remove")
+        val COMMANDS = setOf("messageQuote.open", "messageQuote.stage", "messageQuote.close", "composer.source.remove", "messageQuote.pin",
+            "messageShelf.list", "messageShelf.read", "messageShelf.remove", "messageShelf.close")
     }
 
     fun clear() {
+        invalidateShelf()
         val previous = window
         window = null
         if (previous != null) controller.leaveOwnerDomain("taskMemory")
     }
+
+    private fun invalidateShelf() { ++cycle; pending?.cancel(); pending = null; shelf = null }
 
     fun dispatch(action: String, args: JSONObject, done: (JSONObject?, String?) -> Unit) {
         when (action) {
@@ -51,15 +61,65 @@ internal class PocketWebMessageQuotes(private val controller: PocketWorldControl
                 // Native domain entry advances the owner epoch. Freeze the admitted window, not its predecessor.
                 controller.enterOwnerDomain("taskMemory")
                 val original = Window(UUID.randomUUID().toString(), id, revision, content,
-                    locator.toString(), controller.webWindowTicket(), draft.key, controller.composerViewEpoch, draft.revision, prior)
+                    locator.toString(), controller.webWindowTicket(), draft.key, controller.composerViewEpoch, draft.revision, prior,
+                    prior == null && controller.state.messages.singleOrNull { it.id == id && it.role == "user" }?.submission?.let { ack ->
+                        ack.optString("conversationId") == draft.conversationId && ack.optString("messageId") == id && ack.optString("clientMessageId").isNotBlank() &&
+                            ack.optString("status") in setOf("accepted", "queued", "consumed") } == true &&
+                        locator.optString("kind") == "owner_native_original" && locator.optString("recordId") == id && locator.optLong("recordVersion", -1L) == revision && draft.key == "conversation:${draft.conversationId}" &&
+                        controller.oneMessageLearningState(draft.key)?.opt("pending") == false)
                 window = original
-                done(JSONObject().put("windowId", original.id).put("text", original.text).put("maxChars", 4000).put("draftRevision", original.draftRevision).put("registeredRangeOnly", prior != null), null)
+                done(JSONObject().put("windowId", original.id).put("text", original.text).put("maxChars", 4000).put("draftRevision", original.draftRevision).put("registeredRangeOnly", prior != null).put("shelfEligible", original.shelfEligible), null)
+            }
+            "messageQuote.pin" -> {
+                fields(args, "windowId", "offset", "chars", "label")
+                val original = window?.takeIf { it.id == text(args, "windowId") && it.shelfEligible } ?: error("只能从原私聊自己的消息保留原话")
+                checkCurrent(original); check(!original.submitted && pending == null) { "请先核对原窗口回执" }
+                val offset = integer(args, "offset").toInt(); val chars = integer(args, "chars").toInt()
+                require(chars in 1..4000 && offset <= original.text.length - chars) { "请选择最多4000个字符的原话" }
+                val label = args.opt("label"); require(label is String && label.length <= 60) { "请用不超过60个字符的备忘名" }
+                val locator = JSONObject(original.locator); val conversation = locator.getString("conversationId")
+                val payload = JSONObject().put("ownerLocator", locator).put("offset", offset).put("chars", chars)
+                shelfWork(conversation, original.draftKey, original.draftEpoch,
+                    { window === original && !original.submitted && controller.composerDraft?.revision == original.draftRevision }, done) { native, control ->
+                    native.pinLocalReference(conversation, payload, label, control).put("windowId", original.id)
+                }
+            }
+            "messageShelf.list" -> {
+                fields(args, "conversationId", "key", "epoch")
+                val conversation = text(args, "conversationId"); val key = text(args, "key"); val epoch = integer(args, "epoch").toInt()
+                check(window == null && pending == null) { "请先关闭原选区或等待当前操作" }
+                invalidateShelf(); val owner = controller.webWindowTicket()
+                shelfWork(conversation, key, epoch, { controller.webWindowTicket() == owner }, { result, failure ->
+                    if (failure == null && result != null) {
+                        val rows = result.getJSONArray("entries")
+                        val page = Shelf(UUID.randomUUID().toString(), conversation, key, epoch, owner, (0 until rows.length()).map { rows.getJSONObject(it).getString("id") }.toSet())
+                        shelf = page; done(result.put("shelfWindow", page.id), null)
+                    } else done(null, failure ?: "未读取原对话备忘")
+                }) { native, control -> native.localReferenceShelf(conversation, control) }
+            }
+            "messageShelf.read", "messageShelf.remove" -> {
+                fields(args, "shelfWindow", "id")
+                val id = text(args, "id")
+                val page = shelf?.takeIf { it.id == text(args, "shelfWindow") && id in it.ids && it.owner == controller.webWindowTicket() } ?: error("请重新打开本对话的原备忘")
+                shelfWork(page.conversation, page.key, page.epoch, { shelf === page && controller.webWindowTicket() == page.owner }, { result, failure ->
+                    if (result != null && failure == null) {
+                        if (action == "messageShelf.remove") shelf = page.copy(ids = page.ids - id)
+                        else result.put("readExpiresAt", System.currentTimeMillis() + 120_000L)
+                        done(result.put("shelfWindow", page.id), null)
+                    } else done(null, failure ?: "原备忘无法核对")
+                }) { native, control -> if (action == "messageShelf.read") native.readLocalReference(page.conversation, id, control)
+                    else native.removeLocalReference(page.conversation, id, control) }
+            }
+            "messageShelf.close" -> {
+                fields(args, "shelfWindow")
+                if (shelf?.id == text(args, "shelfWindow")) invalidateShelf()
+                done(JSONObject().put("closed", true), null)
             }
             "messageQuote.stage" -> {
                 fields(args, "windowId", "offset", "chars")
                 val original = window?.takeIf { it.id == text(args, "windowId") } ?: error("原引用窗口已关闭")
                 checkCurrent(original)
-                check(!original.submitted) { "本次原选区已提交核对，请查看原草稿；需要调整时重新打开原消息" }
+                check(!original.submitted && pending == null) { "本次原选区已提交核对，请查看原草稿；需要调整时重新打开原消息" }
                 val offset = integer(args, "offset").toInt()
                 val chars = integer(args, "chars").toInt()
                 require(chars in 1..4000 && offset <= original.text.length - chars) { "请选择最多 4000 个字符的原文范围" }
@@ -86,6 +146,18 @@ internal class PocketWebMessageQuotes(private val controller: PocketWorldControl
             }
             else -> error("未接入的原文引用操作")
         }
+    }
+
+    private fun shelfWork(conversation: String, key: String, epoch: Int, current: () -> Boolean, done: (JSONObject?, String?) -> Unit,
+        work: (dev.pocketengine.features.assistant.AssistantModule, RunControl) -> JSONObject) {
+        check(pending == null) { "正在核对原备忘，请稍候" }
+        val token = cycle; val control = RunControl(); pending = control
+        try {
+            controller.requestConversationShelf(conversation, key, epoch, { cycle == token && pending === control && current() }, control, { result, error ->
+                if (pending === control) pending = null
+                if (cycle != token || !current()) done(null, "原备忘窗口已关闭，请重新读取") else done(result, error)
+            }) { native -> work(native, control) }
+        } catch (failure: Exception) { if (pending === control) pending = null; control.cancel(); throw failure }
     }
 
     private fun retainedRange(prior: Prior, conversation: String, id: String, revision: Long): Pair<JSONObject, String> {

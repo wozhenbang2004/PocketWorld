@@ -74,6 +74,11 @@ public final class ProjectHostOrigin {
                 !same(staged,"manifestIdentity",imported.getString("manifestIdentity"))||!same(imported,"sourceEvidenceSha256",ProjectSources.digest(e)))return null;
         return new ProjectHostOrigin(row,e);
     }
+    public JSONObject compareSavedFiles(File files,java.util.function.BooleanSupplier check)throws Exception{
+        JSONArray observed=ProjectHostFileComparison.read(files,original.getJSONArray("files"),ProjectHostSource.MAX_COUNT,ProjectHostSource.MAX_FILE,ProjectHostSource.MAX_BYTES,check);
+        return new JSONObject().put("projectId",project).put("checkoutId",checkout).put("evidenceDigest",digest)
+            .put("snapshotVersion",original.getString("snapshotVersion")).put("observedAt",System.currentTimeMillis()).put("files",observed);
+    }
     public JSONObject summary(JSONObject task)throws Exception{
         JSONArray files=original.getJSONArray("files");
         JSONObject out=new JSONObject().put("projectId",project).put("checkoutId",checkout).put("evidenceDigest",digest).put("localSourceRecorded",true)

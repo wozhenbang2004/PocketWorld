@@ -37,10 +37,11 @@ export function PhoneTaskStatus({ task, surface, can, onOpen, onControl }: Props
   const canPause = identity && !stopping && (!surface || !surface.paused) && task.status === 'running' && can('phone.pause');
   const canResume = identity && !stopping && (local ? !!surface?.displayedPause : !surface || surface.paused) && task.status === 'paused' && !conversationInlineAttention(task) && can('phone.resume');
   const canWatch=identity&&local&&surface&&!stopping&&can('phone.resultNotice.read')&&can('phone.resultNotice.set');
+  const canOpen = can('tasks.open') && (!local || !!surface?.activityHandle && can('phone.activity.original'));
   const canStop = !!identity && can('phone.stop') && !stopping;
 
   return <section className="pw-phone-activity" aria-label="当前手机任务" data-task-id={task.id}>
-    <Button variant="ghost" className="pw-phone-activity-open" disabled={!can('tasks.open')} onClick={onOpen}
+    <Button variant="ghost" className="pw-phone-activity-open" disabled={!canOpen} onClick={onOpen}
       aria-label={`${stage}：${task.goal}。 ${surfaceLabel}，查看任务`} title={surfaceLabel||task.goal}>
       <span className="pw-phone-activity-mark" aria-hidden="true">{busy ? <ProgressCircle isIndeterminate size="sm" aria-label={status} /> : <IconMonitor size={18} />}</span>
       <span className="pw-phone-activity-copy"><strong dir="auto">{task.goal || '手机任务'}</strong><span>{[stage,compactSurface].filter(Boolean).join(' · ')}</span></span>
@@ -52,10 +53,10 @@ export function PhoneTaskStatus({ task, surface, can, onOpen, onControl }: Props
         <div className="pw-phone-activity-actions">
           {canPause && <Button variant="ghost" leadingIcon={IconPauseCircle} onClick={() => control('phone.pause')}>暂停任务</Button>}
           {canResume && <Button variant="ghost" leadingIcon={IconPlay} disabled={local&&!sameDisplayedPause(menuPause,surface?.displayedPause)} onClick={() => control('phone.resume')}>{local?'继续这次暂停':'继续任务'}</Button>}
-          {canResume && can('tasks.open') && can('phone.pauseNote.read') && isPrivateLocalPhone(task) &&
+          {canResume && canOpen && can('phone.pauseNote.read') && isPrivateLocalPhone(task) &&
             <Button variant="ghost" onClick={() => { setMenuOpen(false); onOpen(); }}>打开原任务补充后继续</Button>}
           {menuOpen&&canWatch&&<PrivatePhoneResultReminder target={identity!}/>}
-          {can('tasks.open') && <Button variant="ghost" leadingIcon={IconMonitor} onClick={() => { setMenuOpen(false); onOpen(); }}>查看任务详情</Button>}
+          {canOpen && <Button variant="ghost" leadingIcon={IconMonitor} onClick={() => { setMenuOpen(false); onOpen(); }}>查看任务详情</Button>}
         </div>
       </Popover>
     </PopoverTrigger>}

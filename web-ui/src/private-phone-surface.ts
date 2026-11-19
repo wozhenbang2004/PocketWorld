@@ -20,7 +20,7 @@ export function sameDisplayedPause(a?:DisplayedPhonePause,b?:DisplayedPhonePause
   return !!a&&!!b&&a.pauseRevision===b.pauseRevision&&a.scopeRevision===b.scopeRevision&&a.displayHandle===b.displayHandle;
 }
 export type PrivatePhoneSurface = {
-  taskId:string; runId:string; epoch:number; requestedMode:'main_screen'|'background';
+  taskId:string; runId:string; epoch:number; activityHandle?:string; requestedMode:'main_screen'|'background';
   surfaceState:'bound'|'unconfirmed'|'handoff_unconfirmed'|'other_surface';
   paused:boolean; stopRequested:boolean; displayedPause?:DisplayedPhonePause; lastObservation?:{displayId:number;packageName?:string;emptyDisplayVerified?:true;basis?:Basis;changedDuringRead?:true};
 };
@@ -33,6 +33,8 @@ export function privatePhoneSurface(task:Task|undefined, collection:any):Private
   const row=matches[0],mode=task.executionMode||task.raw?.executionMode;
   if(row.requestedMode!==mode||!['main_screen','background'].includes(mode)||!['bound','unconfirmed','handoff_unconfirmed','other_surface'].includes(row.surfaceState)||typeof row.paused!=='boolean'||typeof row.stopRequested!=='boolean')return null;
   const out:PrivatePhoneSurface={...id,requestedMode:mode,surfaceState:row.surfaceState,paused:row.paused,stopRequested:row.stopRequested};
+  if(typeof row.activityHandle==='string'&&/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(row.activityHandle))
+    out.activityHandle=row.activityHandle;
   if(task.status==='paused'&&out.paused&&!out.stopRequested&&out.surfaceState!=='other_surface'&&out.surfaceState!=='handoff_unconfirmed')
     out.displayedPause=retainedPause(row.displayedPause);
   const obs=row.lastObservation;

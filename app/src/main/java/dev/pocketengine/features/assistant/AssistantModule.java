@@ -191,6 +191,42 @@ public final class AssistantModule implements EngineModule {
         requireOwnerSourceNotForgotten(ref);try(var inspection=inspectOwnerSources()){inspection.requireSource(selected.getJSONObject(0));}requireOwnerSourceNotForgotten(ref);original.check();
         return new JSONObject().put("ownerSourceRef",selected.getJSONObject(0)).put("selectionValidated",true).put("bodyIncluded",false).put("modelCalled",false).put("formalMemorySaved",false).put("executionAuthorized",false);
     }
+    /** Dedicated owner UI. None of the shelf methods are dispatched as module or model commands. */
+    private static void requireLocalShelfOwner(RunControl owner)throws Exception{
+        if(owner==null||owner.hasHostRun())throw new SecurityException("原话备忘不属于任务或模型工具");owner.check();
+    }
+    public JSONObject localReferenceShelf(String conversation,RunControl owner)throws Exception{
+        requireLocalShelfOwner(owner);
+        if(!durable())throw new IllegalStateException("原会话数据库未启用，不能读取本对话备忘");
+        owner.check();JSONObject list=historyRepository.ownerShelfList(conversation);owner.check();return list;
+    }
+    public JSONObject pinLocalReference(String conversation,JSONObject originalRange,String label,RunControl owner)throws Exception{
+        requireLocalShelfOwner(owner);
+        if(!durable()||!conversation.equals(originalRange.getJSONObject("ownerLocator").getString("conversationId")))throw new SecurityException("不能给其他会话保留原话");
+        JSONObject r=selectOwnerOriginalReference(originalRange,owner).getJSONObject("ownerSourceRef");
+        return historyRepository.addOwnerShelfReference(conversation,r,label,owner);
+    }
+    public JSONObject removeLocalReference(String conversation,String id,RunControl owner)throws Exception{
+        requireLocalShelfOwner(owner);
+        if(!durable())throw new IllegalStateException("原会话数据库不可用");return historyRepository.removeOwnerShelfReference(conversation,id,owner);
+    }
+    public JSONObject readLocalReference(String conversation,String id,RunControl owner)throws Exception{
+        requireLocalShelfOwner(owner);
+        if(!durable())throw new IllegalStateException("原会话数据库不可用");
+        owner.check();JSONObject r=historyRepository.ownerShelfReference(conversation,id),ref=r.getJSONObject("sourceRef");
+        JSONObject locator=new JSONObject().put("kind","owner_native_original").put("generation",r.getString("generation")).put("conversationId",conversation)
+                .put("recordId",ref.getString("sourceId")).put("recordVersion",ref.getLong("revision")).put("fingerprint",r.getString("bodyFingerprint"));
+        int offset=r.getInt("offset"),chars=r.getInt("chars");SourceRef source=SourceRef.fromJson(ref);requireOwnerSourceNotForgotten(source);
+        try(var inspection=inspectOwnerSources()){inspection.requireSource(r);}
+        JSONObject page=readOwnerSearchHit(new JSONObject().put("ownerLocator",locator).put("offset",offset).put("maxChars",Math.max(64,chars)),owner);
+        JSONObject span=page.getJSONObject("readRange");String body=page.getString("body");
+        if(!"current".equals(page.optString("status"))||!"user".equals(page.optString("role"))||"retired_for_derived_context".equals(page.optString("derivedUseStatus"))||
+                !conversation.equals(page.getString("conversationId"))||!ref.getString("sourceId").equals(page.getString("recordId"))||ref.getLong("revision")!=page.getLong("recordVersion")||
+                span.getInt("offset")!=offset||body.length()<chars||chars<body.length()&&Character.isHighSurrogate(body.charAt(chars-1))&&Character.isLowSurrogate(body.charAt(chars)))throw new SecurityException("这段本人原话已变化，没有展示旧内容");
+        try(var inspection=inspectOwnerSources()){inspection.requireSource(r);}requireOwnerSourceNotForgotten(source);
+        if(!historyRepository.ownerShelfReference(conversation,id).toString().equals(r.toString()))throw new SecurityException("这条备忘已变化");
+        owner.check();return new JSONObject().put("id",id).put("conversationId",conversation).put("chars",chars).put("text",body.substring(0,chars)).put("formalMemorySaved",false).put("modelCalled",false);
+    }
     ConversationRepository.OwnerSourceInspection inspectOwnerSources(){if(!durable())throw new IllegalStateException("原DB来源权威未激活，未提升旧引用");return historyRepository.inspectOwnerSources();}
     ConversationRepository.OwnerSourceInspection inspectOwnerSources(dev.pocketengine.features.memory.ConversationHistory.SourceBytes bytes){if(!durable())throw new IllegalStateException("原DB来源权威未激活，未提升旧引用");return historyRepository.inspectOwnerSources(bytes);}
     void requireOwnerSourceNotForgotten(SourceRef ref)throws Exception{

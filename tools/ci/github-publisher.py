@@ -130,7 +130,13 @@ def bind_manifest(verification,tag,assets):
  actual={a['name']:(a['sha256'],a['bytes']) for a in assets if a['name']!='release.json'}
  if expected!=actual:raise Stop('Signed asset set does not match uploaded APK/patch')
 
-def publish(client,tag,head,assets,verify_manifest,activate=False,resume_release_id=None,recover_orphan_tag=False):
+def require_current_main(client,head):
+ ref=client.json('/repos/'+REPO+'/git/ref/heads/main')
+ obj=ref.get('object') if isinstance(ref,dict) else None
+ if not isinstance(obj,dict) or ref.get('ref')!='refs/heads/main' or obj.get('type')!='commit' or obj.get('sha')!=head:
+  raise Stop('Automatic release source is no longer current main; no publication attempted')
+
+def publish(client,tag,head,assets,verify_manifest,activate=False,resume_release_id=None,recover_orphan_tag=False,*,require_fresh_main=False):
  """verify_manifest(bytes) MUST use existing App verifier and compare pinned identity.
  All bytes are fetched from uploaded draft asset IDs, not trusted upload responses.
  Failures preserve the draft for inspection; this function never deletes/replaces.
@@ -143,6 +149,7 @@ def publish(client,tag,head,assets,verify_manifest,activate=False,resume_release
  before=latest_identity(client)
  if before is not None:
   if _version.version_code(tag)<=_version.version_code(before[1]):raise Stop('Release tag must exceed current GitHub latest tag')
+ if require_fresh_main and activate:require_current_main(client,head)
  if resume_release_id is None:
   if client.json('/repos/'+REPO+'/releases/tags/'+tag,allow404=True) is not None:raise Stop('Tag already has a release; do not overwrite')
   existing_ref=client.json('/repos/'+REPO+'/git/ref/tags/'+tag,allow404=True)
@@ -199,6 +206,8 @@ def publish(client,tag,head,assets,verify_manifest,activate=False,resume_release
  if latest_identity(client)!=before:raise Stop('Another release advanced; draft retained')
  check_tag(client,tag,head)
  if not activate:return {'status':'verified_draft','releaseId':rid,'published':False}
+ # Outside lost-PATCH recovery: on mismatch there was no activation to reconcile.
+ if require_fresh_main:require_current_main(client,head)
  try:
   result=client.json('/repos/'+REPO+'/releases/'+str(rid),'PATCH',{'draft':False,'make_latest':'true'})
  except Exception:
