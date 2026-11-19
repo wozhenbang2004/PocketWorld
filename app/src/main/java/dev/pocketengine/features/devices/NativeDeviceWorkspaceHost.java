@@ -32,6 +32,10 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         /** Explicit owner click. Disable is not evidence that an accepted remote task stopped. */
         void setEnabled(boolean enabled) throws Exception;
     }
+    public interface OwnerModelRules {
+        JSONObject view() throws Exception;
+        JSONObject disable(String originalChoice) throws Exception;
+    }
     public interface PairingOwner {
         default org.json.JSONArray relayLeases() throws Exception { return new org.json.JSONArray(); }
         default RelayLeaseAction reviewRelayLease(String raw) throws Exception { throw new SecurityException("本机中继配置尚未接线"); }
@@ -42,6 +46,9 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         /** Explicit click only. Return the one-use short-lived invitation for display, not logs. */
         java.util.List<String> localAddresses() throws Exception;
         String createInvitation(String selectedLocalAddress) throws Exception;
+        default OwnerModelRules ownerModelRules(String here,String hereInstance,String hereFp,String peer,String instance,String fp,long epoch,int offset)throws Exception {
+            throw new SecurityException("本机模型规则查询不可用");
+        }
         default JSONObject readSavedPeerScope(String id,String instance,String fingerprint)throws Exception { throw new SecurityException("原签回执本机查询不可用"); }
         default void changeLocalPeerName(String here,String hereInstance,String hereFp,String id,String instance,String fp,String expected,String name)throws Exception { throw new SecurityException("本机伙伴备注不可用"); }
         void advancePairing(String candidateId) throws Exception;
@@ -336,6 +343,13 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         }
         public void removeRelayLease(String serviceBase, String inviterDeviceId) throws Exception { current(); nextReview(); pairing.removeRelayLease(serviceBase, inviterDeviceId); }
         public String createInvitation(String address) throws Exception { current(); inviteAvailability().require(); return Objects.requireNonNull(pairing.createInvitation(address)); }
+        public OwnerModelRules ownerModelRules(String here,String hereInstance,String hereFp,String peer,String instance,String fp,long epoch,int offset)throws Exception {
+            current();OwnerModelRules source=pairing.ownerModelRules(here,hereInstance,hereFp,peer,instance,fp,epoch,offset);
+            return new OwnerModelRules(){
+                public JSONObject view()throws Exception{current();return copy(source.view());}
+                public JSONObject disable(String choice)throws Exception{current();return copy(source.disable(choice));}
+            };
+        }
         public JSONObject readSavedPeerScope(String id,String instance,String fingerprint)throws Exception {
             current(); JSONObject result=copy(pairing.readSavedPeerScope(id,instance,fingerprint)); current(); return result;
         }

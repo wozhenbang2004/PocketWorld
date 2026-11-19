@@ -46,6 +46,8 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
     private data class WaitingPage(val handle: String,val window: Host.Window,val epoch: Long,val here: String,val instance: String,
         val after: Pair<String,String>,val previous: List<Pair<String,String>>,val next: Pair<String,String>?,val rows: Map<Pair<String,String>,ReceiptOrigin>,val results: Boolean,val started:Boolean,val declined:Boolean,val failed:Boolean,val withdrawn:Boolean)
     @Volatile private var waitingPage: WaitingPage? = null
+    private data class RulePage(val handle:String,val native:Host.OwnerModelRules,val window:Host.Window,val epoch:Long)
+    @Volatile private var ownerRules:RulePage?=null
     // Across the local model-settings detour keep IDs only. No goal text, model selection or native Admission.
     private data class ModelPlace(val handle:String,val source:ReceiptOrigin,val issuedEpoch:Long,val until:Long)
     @Volatile private var modelPlace:ModelPlace?=null
@@ -60,8 +62,8 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
     private val desktopInFlight = AtomicReference<String?>(null)
     private val pairingImage = PocketWebPairingImage()
     companion object {
-        val COMMANDS = setOf("devices.discovery.start", "devices.discovery.stop", "devices.discovery.reviewConnection", "devices.snapshot", "devices.createInvitation", "devices.inspectInvitation", "devices.readSavedPeerScope", "devices.changeLocalPeerName", "devices.continueFirstPair", "devices.reviewPairing", "devices.advancePairing", "devices.reviewPeerGrant",
-            "devices.reviewGrant", "devices.reviewConnection", "devices.reviewRelay", "devices.reviewAction", "devices.reviewGoal", "devices.reviewResult", "devices.reviewApproval",
+        val COMMANDS = setOf("devices.discovery.start", "devices.discovery.stop", "devices.discovery.reviewConnection", "devices.snapshot", "devices.createInvitation", "devices.inspectInvitation", "devices.readOwnerModelRules", "devices.disableOwnerModelRule", "devices.readSavedPeerScope", "devices.changeLocalPeerName", "devices.continueFirstPair", "devices.reviewPairing", "devices.advancePairing", "devices.reviewPeerGrant",
+            "devices.readPendingGoalInput", "devices.reviewGrant", "devices.reviewConnection", "devices.reviewRelay", "devices.reviewAction", "devices.reviewGoal", "devices.reviewResult", "devices.reviewApproval",
             "devices.confirm", "devices.reject", "devices.discard", "devices.recoveryAddresses", "devices.openRecovery", "devices.recoverPairing", "devices.reviewAbandonment", "devices.openTask", "devices.readTask", "devices.reviewResumeRequest",
             "devices.readPhoneGoalArchive", "devices.readReceivedPhoneGoals", "devices.readLocalReviewedPhoneGoal", "devices.readReviewedPhoneInbox", "devices.readWaitingPhoneGoals", "devices.returnToReceivedPhoneGoal", "devices.prepareReceivedModelReturn", "devices.openHistory", "devices.checkLocalExportedFile", "devices.openCheckedLocalFile", "devices.queryHistory", "devices.queryPhoneGoalResult", "devices.stopHistory",
             "devices.pairImage.pick", "devices.pairImage.review", "devices.pairImage.close",
@@ -82,7 +84,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         if (!preserveImageChoice) pairingImage.clear()
         // Keep running-lane gates until their own callbacks settle; an invalidated read cannot
         // race a new review on this same native Window and close its resources.
-        generation.incrementAndGet(); review = null; historyPages.clear(); phoneArchive = null; waitingPage = null; closedPage=null; latest = JSONObject()
+        generation.incrementAndGet(); review = null; ownerRules=null; historyPages.clear(); phoneArchive = null; waitingPage = null; closedPage=null; latest = JSONObject()
         desktopGeneration.incrementAndGet(); desktop?.close(); desktop = null
         desktopInFlight.set(null); runCatching { window()?.closeDesktop() }
         runCatching { window()?.stopLanDiscovery() }
@@ -689,6 +691,11 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
             done(JSONObject().put("value", JSONObject().put("candidatesDisabled", true).put("stopRequested", true)).put("snapshot", captureSnapshot(original, taskIds())), null); return
         }
         if (action == "devices.discard") {
+            if(args.has("rulesHandle")){
+                fields(args,"rulesHandle");val handle=text(args,"rulesHandle")
+                val closed=synchronized(this){if(ownerRules?.handle!=handle)false else{ownerRules=null;true}}
+                done(JSONObject().put("closed",closed),null);return
+            }
             if(args.has("closedHandle")){
                 fields(args,"closedHandle");val expected=text(args,"closedHandle")
                 synchronized(this){if(closedPage?.handle==expected)closedPage=null}
@@ -706,7 +713,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
             }
             fields(args, "viewHandle")
             val handle = if (args.has("viewHandle")) text(args, "viewHandle") else ""
-            if (handle.isBlank()) { synchronized(this) { phoneArchive = null; waitingPage = null; closedPage=null }; original.stopLanDiscovery() }
+            if (handle.isBlank()) { synchronized(this) { phoneArchive = null; waitingPage = null; closedPage=null; ownerRules=null }; original.stopLanDiscovery() }
             val closed = discard(original, handle)
             done(JSONObject().put("closed", closed), null); return
         }
@@ -723,11 +730,14 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         }catch(failure:Exception){gate.compareAndSet(call,null);throw failure}
         val phoneResultRead=action=="devices.queryPhoneGoalResult"
         val readRevision=if(phoneResultRead) controller.deviceWorkspaceRevision else -1L
-        val ids = if(action in setOf("devices.inspectInvitation","devices.pairImage.review","devices.continueFirstPair")||action=="devices.readPhoneGoalArchive"&&args.has("localCopy")||action=="devices.openCheckedLocalFile"||action=="devices.checkLocalExportedFile"||phoneResultRead||action=="devices.readLocalReviewedPhoneGoal"||action=="devices.readReviewedPhoneInbox") emptyArray() else taskIds()
+        val ownerModelRule=action=="devices.readOwnerModelRules"||action=="devices.disableOwnerModelRule"
+        val pendingInput=action=="devices.readPendingGoalInput"
+        val previewRevision=if(pendingInput)controller.deviceWorkspaceRevision else -1L
+        val ids = if(pendingInput||ownerModelRule||action in setOf("devices.inspectInvitation","devices.pairImage.review","devices.continueFirstPair")||action=="devices.readPhoneGoalArchive"&&args.has("localCopy")||action=="devices.openCheckedLocalFile"||action=="devices.checkLocalExportedFile"||phoneResultRead||action=="devices.readLocalReviewedPhoneGoal"||action=="devices.readReviewedPhoneInbox") emptyArray() else taskIds()
         fun taskId(): String = text(args, "taskId").also { require(it in ids) { "请从原设备任务记录选择" } }
         val work = Runnable {
             var snapshot: JSONObject? = null; var value: JSONObject? = null; var error: String? = null
-            var inviteDeadline=0L
+            var inviteDeadline=0L;var previewDeadline=0L
             try {
                 current(original, epoch)
                 val before by lazy { captureSnapshot(original, ids) }
@@ -740,6 +750,22 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                         fields(args, "deviceId", "candidateId"); val id = text(args, "deviceId"); peer(before, id)
                         val native = original.reviewDiscoveredConnection(id, text(args, "candidateId"))
                         store("connection", native, native.view(), original, epoch)
+                    }
+                    "devices.readOwnerModelRules" -> {
+                        fields(args,"here","hereInstance","hereFingerprint","peer","instance","fingerprint","epoch","offset")
+                        val native=original.ownerModelRules(text(args,"here"),text(args,"hereInstance"),text(args,"hereFingerprint"),text(args,"peer"),text(args,"instance"),
+                            text(args,"fingerprint"),integer(args,"epoch",1,9_007_199_254_740_991L),integer(args,"offset",0,127).toInt())
+                        val view=native.view();val handle=UUID.randomUUID().toString()
+                        synchronized(this){current(original,epoch);ownerRules=RulePage(handle,native,original,epoch)}
+                        JSONObject().put("kind","ownerModelRules").put("rulesHandle",handle).put("view",view)
+                    }
+                    "devices.disableOwnerModelRule" -> {
+                        fields(args,"rulesHandle","choice","acknowledged");require(bool(args,"acknowledged")) { "请先确认改为逐单审阅的影响" }
+                        val choice=text(args,"choice")
+                        val handle=text(args,"rulesHandle")
+                        val held=synchronized(this){current(original,epoch);val page=ownerRules?.takeIf { it.handle==handle && it.window===original && it.epoch==epoch }
+                            ?:error("原本机规则窗口已关闭，请重新查看");ownerRules=null;page}
+                        JSONObject().put("modelRuleDisabled",held.native.disable(choice))
                     }
                     "devices.readSavedPeerScope" -> {
                         fields(args,"deviceId","instanceId","fingerprint")
@@ -818,6 +844,15 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                         store("connection", native, native.view(), original, epoch)
                     }
                     "devices.reviewRelay" -> { fields(args, "raw"); val native = original.reviewRelayLease(text(args, "raw", 4096)); store("relay", native, native.view(), original, epoch) }
+                    "devices.readPendingGoalInput" -> {
+                        val source=waitingPending(args).first
+                        val preview=controller.readPendingDeviceGoalInput(source.task,source.operation)
+                        require(preview.opt("taskId")==source.task && DeviceProtocol.sha256(DeviceProtocol.canonicalBytes(preview.getJSONObject("origin")))==source.digest)
+                        val fresh=waitingPending(args);require(fresh.first==source && fresh.second.getLong("deviceStateRevision")==preview.getLong("revision"))
+                        val left=minOf(25_000L,preview.getLong("viewUntil")-System.currentTimeMillis());require(left>0L)
+                        previewDeadline=android.os.SystemClock.elapsedRealtime()+left
+                        JSONObject().put("waitingHandle",text(args,"waitingHandle")).put("localInstanceId",source.instance).put("input",preview)
+                    }
                     "devices.reviewGoal" -> if(!args.has("waitingHandle")){
                         fields(args, "taskId"); val native=original.reviewGoal(taskId());store("goal",native,native.view(),original,epoch)
                     }else{
@@ -1079,7 +1114,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                 }
                 current(original, epoch)
             } catch (failure: Exception) { if (action == "devices.discovery.start" && runCatching { current(original, epoch) }.isFailure) original.stopLanDiscovery(); error = if (failure is org.json.JSONException) "原设备信息不完整，请刷新核对。" else failure.message?.take(400) ?: "设备操作结果待核对" }
-            if (value?.optString("kind")!="firstIdentity" && !phoneResultRead && action !in setOf("devices.prepareReceivedModelReturn","devices.openCheckedLocalFile","devices.checkLocalExportedFile","devices.readPhoneGoalArchive","devices.readReceivedPhoneGoals","devices.readWaitingPhoneGoals","devices.readLocalReviewedPhoneGoal","devices.readReviewedPhoneInbox") && (action != "devices.readTask" || !args.has("historyPageHandle"))) {
+            if (value?.optString("kind")!="firstIdentity" && !phoneResultRead && !pendingInput && !ownerModelRule && action !in setOf("devices.prepareReceivedModelReturn","devices.openCheckedLocalFile","devices.checkLocalExportedFile","devices.readPhoneGoalArchive","devices.readReceivedPhoneGoals","devices.readWaitingPhoneGoals","devices.readLocalReviewedPhoneGoal","devices.readReviewedPhoneInbox") && (action != "devices.readTask" || !args.has("historyPageHandle"))) {
                 try { current(original, epoch); snapshot = captureSnapshot(original, ids) } catch (_: Exception) { }
             }
             val result = JSONObject().put("value", value ?: JSONObject.NULL).put("snapshot", snapshot ?: JSONObject.NULL)
@@ -1087,6 +1122,13 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                 gate.compareAndSet(call, null)
                 if (runCatching { current(original, epoch) }.isFailure) done(null, "原设备窗口已变化，请读取原回执，不要重复提交")
                 else {
+                    if(pendingInput && error==null && runCatching {
+                        val (source,raw)=waitingPending(args);val preview=result.getJSONObject("value").getJSONObject("input")
+                        require(previewRevision==controller.deviceWorkspaceRevision && preview.opt("taskId")==source.task && raw.getLong("deviceStateRevision")==preview.getLong("revision")
+                            && controller.retainedDeviceGoalCondition(source.task)=="retained")
+                        val left=minOf(preview.getLong("viewUntil")-System.currentTimeMillis(),previewDeadline-android.os.SystemClock.elapsedRealtime())
+                        require(left>0L);preview.put("remainingMs",left)
+                    }.isFailure){done(null,"原派单、准入或这次阅读窗口已变化，未交付内容");return@post}
                     if(action=="devices.createInvitation" && error==null){
                         val invite=result.getJSONObject("value")
                         val left=minOf(invite.getLong("expiresAt")-System.currentTimeMillis(),inviteDeadline-android.os.SystemClock.elapsedRealtime())

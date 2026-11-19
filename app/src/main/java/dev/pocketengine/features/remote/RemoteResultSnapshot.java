@@ -17,10 +17,13 @@ public final class RemoteResultSnapshot {
         }
         if(!source.optString("jobId").isEmpty()&&!source.getString("jobId").equals(result.optString("id")))throw new SecurityException("成果回执属于另一job");
         JSONObject view=new JSONObject().put("operationId",result.getString("operationId")).put("jobId",result.optString("id")).put("capturedAt",System.currentTimeMillis()).put("kind","driver_report").put("immutableArtifact",false);
+        JSONObject room=RemoteSnapshotRoom.observed(result,source);if(room!=null)view.put("snapshotRoom",room).put("workspaceIdentity",room.getString("workspaceIdentity"));
         JSONObject policy=CloudTakeoutWindow.policy(result);if(policy!=null)view.put("takeoutPolicy",policy);
         for(String key:new String[]{"profileId","serviceBase","environmentId","worker","threadId","sessionId","turnId","status","exitCode","outputTruncated","diffTruncated","model","reportedModel","promptResultIdentity"})if(result.has(key))view.put(key,result.get(key));
         JSONObject progress=RemoteInteractions.progress(result);if(progress!=null)view.put("progress",progress);
-        for(String key:new String[]{"output","diff"})if(result.opt(key) instanceof String){String value=result.getString(key);int end=Math.min(65536,value.length());if(end<value.length()&&end>0&&Character.isHighSurrogate(value.charAt(end-1)))end--;view.put(key,value.substring(0,end)).put(key+"ViewTruncated",end<value.length());}
+        for(String key:new String[]{"output","diff"})if(result.opt(key) instanceof String){String value=result.getString(key);
+            if(key.equals("output")&&RemoteOutputExcerpt.add(view,result,source,value))continue;
+            int end=Math.min(RemoteOutputExcerpt.VIEW_UNITS,value.length());if(end<value.length()&&end>0&&Character.isHighSurrogate(value.charAt(end-1)))end--;view.put(key,value.substring(0,end)).put(key+"ViewTruncated",end<value.length());}
         return view;
     }
     public static JSONObject artifact(JSONObject bytes,JSONObject source,String expectedPath)throws Exception {

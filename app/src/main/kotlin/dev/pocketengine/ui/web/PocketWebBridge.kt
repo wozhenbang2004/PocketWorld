@@ -281,7 +281,7 @@ internal class PocketWebBridge(
             "phone.resultImage.held", "phone.result.original", "phone.resultNotice.read", "phone.resultNotice.set", "phone.activity.original", "phone.draft.original",
             "quickVoice.start", "quickVoice.save", "quickVoice.close", "quickVoice.return",
             "skillDraft.open", "skillDraft.read", "skillDraft.source", "skillDraft.confirm", "skillDraft.cancel", "skillDraft.query", "skillDraft.close", "voice.start", "voice.stop", "voice.review", "voice.accept", "voice.discard", "speech.speak", "speech.stop", "speech.taskAnnouncements", "speech.stopTaskAnnouncement",
-            "tasks.refresh", "tasks.open", "tasks.close", "tasks.recoverTeamFile", "tasks.teamRemainder.read", "tasks.teamRemainder.close", "tasks.teamRemainder.continue", "tasks.stop", "tasks.review", "tasks.confirm", "tasks.approve", "tasks.resolve", "tasks.resume", "tasks.scope", "tasks.plan.enter", "tasks.answerQuestion", "tasks.answerQuestionChoice", "tasks.deleteScreenshot", "privacy.screenshots.read", "privacy.screenshots.save",
+            PocketWebProjectReviewReturn.DIRECTORY, PocketWebProjectReviewReturn.ORIGINAL, "tasks.refresh", "tasks.open", "tasks.close", "tasks.recoverTeamFile", "tasks.teamRemainder.read", "tasks.teamRemainder.close", "tasks.teamRemainder.continue", "tasks.stop", "tasks.review", "tasks.confirm", "tasks.approve", "tasks.resolve", "tasks.resume", "tasks.scope", "tasks.plan.enter", "tasks.answerQuestion", "tasks.answerQuestionChoice", "tasks.deleteScreenshot", "privacy.screenshots.read", "privacy.screenshots.save",
             "projects.refresh", "projects.select", "projects.create", "projects.open", "projects.newFile", "projects.edit", "projects.save", "projects.close", "projects.history", "projects.revision", "projects.useRevision", "projects.retry",
             "settings.reviewModelTransport", "settings.saveLocalObservation", "settings.openSystem", "settings.openBrowser", "settings.openAppUpdates",
             "webSearch.snapshot", "webSearch.save",
@@ -1047,8 +1047,13 @@ internal class PocketWebBridge(
                     val conversation = requiredString(args, "conversationId")
                     require(conversation == controller.state.conversationId) { "请返回原私人对话设置记忆" }
                 } else if (action != "profile.identity") requireSection("profile")
-                // Profile/memory reads do not leave source bodies in generic replay receipts.
-                personal.dispatch(action, args) { result, error -> complete(id, result, error, retainValue = action == "profile.save"); publishState() }; return
+                // Only this original, still-visible owner editor receives the full immediate save result.
+                val savedWindow = if (action == "profile.save") captureWindow() else null
+                personal.dispatch(action, args) { result, error ->
+                    if (savedWindow == null) complete(id, result, error, retainValue = false)
+                    else completeProfileSave(id, args.opt("expectedRevision"), savedWindow, result, error)
+                    publishState()
+                }; return
             }
             if (action in PocketWebKnowledge.COMMANDS) {
                 if (action == "knowledge.close") check(section in setOf("memory", "memoryReview", "learning")) else if (action.startsWith("knowledge.")) check(section in setOf("memory", "memoryReview")) { "请先打开记忆管理页" } else requireSection("learning")
@@ -1100,6 +1105,24 @@ internal class PocketWebBridge(
                         fileRemainder.submit(task,requiredString(args,"reviewHandle"),current,{ review,started,ended -> teams.continueOwnerRemaining(review,{ started(it) },{ ended(it) }) },reply)
                     }
                     else -> error("无此原文件操作")
+                }
+                return
+            }
+            if (action == PocketWebProjectReviewReturn.DIRECTORY || action == PocketWebProjectReviewReturn.ORIGINAL) {
+                val parent=requiredString(args,"taskId");val window=captureWindow()
+                fun current() = !closed && acceptsWindow(window) && taskViewId==parent && controller.webPrivateOwnerVisible()
+                check(current()) { "请先打开这次原项目任务" }
+                controller.runTeamPhoneWork {
+                    val result=runCatching {
+                        check(current());val read=dev.pocketengine.core.RunControl()
+                        try{PocketWebProjectReviewReturn.read(action,args,controller.nativeTokenBudgetHost().tasks,read){
+                            controller.webPluginFeatureHost().module("teams") as? dev.pocketengine.features.teams.TeamsModule ?: error("原团队宿主尚未接入")
+                        }}finally{read.cancel()}
+                    }
+                    main.post {
+                        if (!current()) complete(id,null,"原项目任务页面已关闭，没有改到别的原件")
+                        else result.fold({ complete(id,it,null,retainValue=false) },{ complete(id,null,it.message?:"原项目协作审阅暂不可读") })
+                    }
                 }
                 return
             }
@@ -1203,14 +1226,16 @@ internal class PocketWebBridge(
                         "devices.queryPhoneGoalResult" -> !value?.optJSONObject("result")?.optString("summary").isNullOrEmpty()
                         "devices.readLocalReviewedPhoneGoal" -> value?.has("text")==true
                         "devices.reviewResult" -> value?.optJSONObject("view")?.let { it.has("summary") || it.has("evidence") }==true
+                        "devices.readPendingGoalInput" -> value?.optJSONObject("input")!=null
                         "devices.reviewGoal" -> value?.optJSONObject("view")?.has("goal")==true
                         "devices.readReviewedPhoneInbox","devices.readReceivedPhoneGoals","devices.readPhoneGoalArchive","devices.readWaitingPhoneGoals" ->
                             (value?.optJSONArray("rows")?.length()?:0)>0 || !value?.optString("searchText").isNullOrEmpty()
                         else -> false
                     }
                     val onceInvite=action=="devices.createInvitation" && error==null
-                    complete(id,result,error,"outcome_unknown",retainValue=!privateText && !onceInvite && action!="devices.checkLocalExportedFile" && action!="devices.readSavedPeerScope",
+                    complete(id,result,error,"outcome_unknown",retainValue=!privateText && !onceInvite && action!="devices.checkLocalExportedFile" && action!="devices.readSavedPeerScope" && action!="devices.readOwnerModelRules",
                         replayHint=if(onceInvite)"这次邀请已显示；不会从回执重新显示令牌、二维码或生成另一份邀请。"
+                            else if(action=="devices.readOwnerModelRules")"本机规则的查看窗口已结束，请重新打开。没有执行任何更改。"
                             else if(action=="devices.readSavedPeerScope")"原授权显示窗口已结束；重新读取只核对本机保存的单据，不联系伙伴。"
                             else if(privateText)"原文字读取或审阅已结束，请回到原工作重新核对；没有重放正文或执行操作。" else null)
                     if (!action.startsWith("devices.desktop.")) publishState()
@@ -1539,13 +1564,22 @@ internal class PocketWebBridge(
         complete(id, JSONObject().put("status", "rejected").put("message", message?.take(300) ?: "这次操作未接受，请重新打开任务。"), null)
     }
 
-    private fun complete(id: String, value: JSONObject?, error: String?, errorCode: String = "not_accepted", retainValue: Boolean = true, replayHint: String? = null) {
+    private fun completeProfileSave(id: String, expected: Any?, window: PocketWebWindowTicket, result: JSONObject?, failure: String?) {
+        val confirmed = ConfirmedProfileSave.fromNative(expected, result, failure)
+        val original = !closed && acceptsWindow(window) && section == "profile" && taskViewId == null && controller.webPrivateOwnerVisible()
+        val hint = "请回个人中心核对原保存；没有重复更改设置。"
+        val message = if (confirmed != null) null else if (original) failure ?: hint else hint
+        complete(id, if (original && confirmed != null) result else confirmed?.summary(), message,
+            retainValue = false, replayHint = hint, profileSave = confirmed)
+    }
+    private fun complete(id: String, value: JSONObject?, error: String?, errorCode: String = "not_accepted", retainValue: Boolean = true, replayHint: String? = null, profileSave: ConfirmedProfileSave? = null) {
         if (closed) return
         val identity = pendingCommands.remove(id) ?: return
         val response = JSONObject().put("v", 1).put("kind", "result").put("id", id).put("ok", error == null)
         if (error == null) response.put("value", value ?: JSONObject()) else response.put("error", JSONObject().put("code", errorCode).put("message", error))
         // Transient reads are not durable command receipts. Keep only a small replay rejection.
-        val replay = if (retainValue || error != null && replayHint == null) response else JSONObject().put("v", 1).put("kind", "result").put("id", id).put("ok", false)
+        val replay = if (profileSave != null && error == null) JSONObject().put("v", 1).put("kind", "result").put("id", id).put("ok", true).put("value", profileSave.summary())
+        else if (retainValue || error != null && replayHint == null) response else JSONObject().put("v", 1).put("kind", "result").put("id", id).put("ok", false)
             .put("error", JSONObject().put("code", if (replayHint == null) "preview_expired" else "original_receipt_required").put("message", replayHint ?: "原读取结果已过期，请重新读取"))
         commandReceipts[id] = identity to replay
         while (commandReceipts.size > 128) commandReceipts.remove(commandReceipts.keys.first())

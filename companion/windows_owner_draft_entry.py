@@ -57,7 +57,7 @@ def start(ctx,settings,op,locked,observe,*,only=None):
     edit(ctx,settings,op,base,retired,observe)
 
 
-def exact(ctx,settings,op,path,original_id,commit,oid,size,sha,active,request,observe):
+def exact(ctx,settings,op,path,original_id,commit,oid,size,sha,active,request,observe,*,bookmark=None):
     # Separate owner entry. No generic inventory/picker, alternate path, remote text, or automatic selection.
     from desktop_sessions import WindowsDesktopHealth
     health=WindowsDesktopHealth()
@@ -74,10 +74,10 @@ def exact(ctx,settings,op,path,original_id,commit,oid,size,sha,active,request,ob
     if (base is None or base.path!=path or base.commit!=commit or base.oid!=oid or base.origin!=tuple(original_id)
             or len(base.raw)!=size or model.digest(base.raw)!=sha or not request()):
         _dialog("未打开本机草稿","没有同时核实原读取和这一份本机原文件。不会改开其他路径、用回执片段代替正文或新建空稿。",[],retire=retired); return
-    edit(ctx,settings,op,base,retired,observe,original_request=request)
+    edit(ctx,settings,op,base,retired,observe,original_request=request,bookmark=bookmark)
 
 
-def edit(ctx,settings,op,base,retired,observe,*,original_request=None,previous=None,prior_artifact=None,work_text=None,work_scope=None,start_at=None):
+def edit(ctx,settings,op,base,retired,observe,*,original_request=None,previous=None,prior_artifact=None,work_text=None,work_scope=None,start_at=None,bookmark=None):
     bom,eol,initial=model.unpack(base.raw)
     convention=("CRLF" if eol=="\r\n" else "LF")+(" · 保留 UTF-8 BOM" if bom else " · UTF-8 无 BOM")
     label=base.path if len(base.path)<=75 else "…"+base.path[-74:]
@@ -86,6 +86,7 @@ def edit(ctx,settings,op,base,retired,observe,*,original_request=None,previous=N
             (not isinstance(work_text,str) or not callable(work_scope) or previous is not None or original_request is not None)): model.block()
     if start_at is not None and (type(start_at) is not int or not 0<=start_at<=len(initial.encode("utf-16le"))//2
                                 or original_request is not None or previous is not None or work_scope is not None): model.block()
+    if bookmark is not None and (original_request is None or not callable(bookmark)): model.block()
     proof_required=original_request if original_request is not None else prior_artifact
     draft=work_text if work_scope is not None else initial if previous is None else previous
     while not retired():
@@ -135,7 +136,7 @@ def edit(ctx,settings,op,base,retired,observe,*,original_request=None,previous=N
             if not visible: return
             if row is None:
                 _dialog("未确认这份补丁已保存","原件、可用名额或保存证据不足。可能留有原请求；请从这份副本的「已另存的单文件变更」核对，不会自动重做。",[],retire=retired)
-            else: detail(ctx,op,row,retired)
+            else: detail(ctx,op,row,retired,bookmark=(lambda:bookmark(row)) if bookmark is not None else None)
             return
 
 
@@ -164,7 +165,7 @@ def resume(ctx,settings,op,row,locked):
         edit(ctx,settings,op,base,retired,_observe,previous=display,prior_artifact=still_saved)
 
 
-def detail(ctx,op,row,locked,*,settings=None,read_patch=None):
+def detail(ctx,op,row,locked,*,settings=None,read_patch=None,bookmark=None):
     try: state=model.check(ctx,op,row,locked)
     except Exception: state="unavailable"
     if locked(): return
@@ -175,11 +176,13 @@ def detail(ctx,op,row,locked,*,settings=None,read_patch=None):
                 "原回执、文件身份或字节现在不能重新核对。")+" 不会重新生成或改开同名项。",[],retire=locked); return
     path=model.destination(ctx,op,f)
     actions=[("show","在文件资源管理器中定位原补丁\n不打开文件、不调用关联程序。"),("ids","查看原文、草稿和补丁编号")]
+    if bookmark is not None: actions.insert(0,("mark","标记到刚才的原读取，仅此 Windows 可见"))
     if settings: actions[:0]=[("resume","从已保存的这份草稿继续编辑\n只从本机原件还原完整草稿，不回写项目或手机。"),
                               ("text","另存或查看完整草稿文本\n单独保留一份可阅读的 draft.txt，原补丁不变。")]
     if state=="saved" and read_patch is not None: actions.insert(0,("read-patch","在伴侣中阅读完整原补丁"))
     picked=_dialog("机主草稿补丁已核实",text+f"\n{f['bytes']:,} 字节 · "+path,actions,retire=locked)
     if locked(): return
+    if picked=="mark" and bookmark is not None: bookmark(); return
     if picked=="read-patch" and read_patch is not None: read_patch(); return
     if picked=="resume" and settings: resume(ctx,settings,op,row,locked)
     elif picked=="text" and settings:

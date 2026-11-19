@@ -1334,6 +1334,9 @@ class JobManager:
         if self._cloud_archival_scope(job):
             result["takeoutPolicy"] = {"protocol": self.CLOUD_TAKEOUT_PROTOCOL, "durationMs": self.CLOUD_TAKEOUT_MS}
         result["resultSnapshots"] = [self._snapshot_public(value) for value in job.get("resultSnapshots", []) if value.get("protocol") != project_history.PROTOCOL]
+        room = result_files.original_snapshot_room(job, result["resultSnapshots"])
+        if room is not None:
+            result["snapshotRoom"] = room
         result["projectHistory"] = project_history.summary(job)
         for snapshot in result["resultSnapshots"]:
             for file in snapshot.get("assignmentContribution", {}).get("files", []):
@@ -2493,7 +2496,7 @@ class JobManager:
                 raise RequestError("Snapshot request does not match the original job operation/session/turn", 409)
             retained = job.get("resultSnapshots", [])
             snapshots = [snapshot for snapshot in retained if snapshot.get("protocol") != project_history.PROTOCOL]
-            if len(snapshots) >= 4:
+            if len(snapshots) >= result_files.MAX_JOB_SNAPSHOTS:
                 raise RequestError("Original job already has four retained snapshots; none were silently replaced", 409)
             protected = self._cloud_archival_scope(job) is not None
             hold_check = self.now()
@@ -2506,7 +2509,7 @@ class JobManager:
             files = [self._artifact_bytes(env, path) for path in paths]
             result_files.require_expected(files, expected, RequestError)
             total = sum(file["bytes"] for file in files)
-            if total > 512 * 1024 or sum(snapshot["bytes"] for snapshot in snapshots) + total > 1024 * 1024:
+            if total > result_files.MAX_CAPTURE_BYTES or sum(snapshot["bytes"] for snapshot in snapshots) + total > result_files.MAX_JOB_BYTES:
                 raise RequestError("Selected snapshot exceeds 512 KiB or original job 1 MiB total snapshot limit", 413)
             # A second exact content/stat read rejects replacement, edits and cross-file races.
             for file in files:

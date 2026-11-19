@@ -59,7 +59,7 @@ def choose(view,rows,current):
         return rows[pick[1]] if pick is not None and current() else None
 
 
-def show(view,stamp,current):
+def show(view,stamp,current,*,bookmarks=False):
     try:
         if not current(): return
         read=stamp(full=True)
@@ -77,6 +77,17 @@ def show(view,stamp,current):
             try:
                 return bool(current() and stamp(full=False,expected_work=read.original_work) and dict(registered(ctx,settings)).get(eid)==root)
             except Exception: return False
+        def local_active():
+            try:
+                if not active(): return False
+                with ctx.backend.directory(root) as (_,bound,_): return tuple(_identity(ctx.backend.api,bound))==read.origin
+            except Exception: return False
+        def exact_request(): return local_active() and stamp(full=True,expected_work=read.original_work)==read
+        if bookmarks:
+            from windows_git_copy_entry import _observe
+            from windows_read_draft_link import open_marked
+            if exact_request(): open_marked(view,ctx,read,local_active,exact_request,_observe)
+            return
         handoff=None
         with ctx.backend.directory(root) as (_,h,_):
             if tuple(_identity(ctx.backend.api,h))!=read.origin or not active() or stamp(full=True)!=read: stop()
@@ -102,7 +113,6 @@ def show(view,stamp,current):
             if equal and file["mode"]=="100644" and file["bytes"]<=MAX_TEXT:
                 actions.insert(0,("draft","单独在这台电脑起草这个文件的补丁\n另行核对机主原文件，不把草稿带回手机任务。"))
             choice=view._dialog(title,text,actions,active)
-            def exact_request(): return active() and stamp(full=True,expected_work=read.original_work)==read
             if choice=="draft" and exact_request():
                 permission=view._dialog("转到机主自己的本机项目？",f"{path} · 原提交 {row['source']['commit'][:12]}\n"
                         f"将从原仓库与机主私有副本读取这一份完整文件（{file['bytes']:,} 字节），不是展开手机回执片段。"
@@ -116,16 +126,13 @@ def show(view,stamp,current):
                              f"\n原副本：{row['operation']}\n原提交：{row['source']['commit']}\n手机读取 SHA-256：{read.sha}"
                              f"\n副本原清单 SHA-256：{file['sha256']}",[],active)
         if handoff is not None:
-            # The comparison's root handle is closed before a human spends time editing. Do not
-            # lease a workspace or service lock; check the same local ancestor only while the UI is up.
-            def draft_active():
-                try:
-                    if not active(): return False
-                    with ctx.backend.directory(root) as (_,bound,_): return tuple(_identity(ctx.backend.api,bound))==read.origin
-                except Exception: return False
+            # Release the original handles between owner interactions. Revalidate the same root and live receipt.
             from windows_git_copy_entry import _observe
             from windows_owner_draft_entry import exact
-            try: exact(ctx,settings,*handoff,draft_active,exact_request,_observe)
+            from windows_read_draft_link import pin_saved
+            def bookmark(saved):
+                pin_saved(view,ctx,read,row,path,file,file_ids[path],saved,local_active,exact_request,_observe)
+            try: exact(ctx,settings,*handoff,local_active,exact_request,_observe,bookmark=bookmark)
             except Exception:
                 if current(): view._dialog("本机草稿不能继续","不会重开其他目录或把手机回执正文当作原文件。如果已确认另存，请到原副本的补丁记录核实；不会重做。",[],current)
     except Exception:

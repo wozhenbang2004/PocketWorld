@@ -10673,6 +10673,42 @@ public final class TaskStore {
         }
         owner.check();return new JSONObject().put("state","eligible").put("reviewerTaskId",independent.getString("taskId")).put("reviewerRunId",independent.getString("runId")).put("targetProjectId",scope.getString("targetProjectId"));
     }
+    private JSONObject parentProjectForTeamReturn(String taskId,String run,int epoch)throws Exception{
+        JSONObject parent=required(taskId);requirePrivateOwner(parent);requireOwnerWorkPreparationTargetCurrent(parent);
+        if(!dev.pocketengine.features.teams.TeamProjectReviewReturn.parent(parent)||!run.equals(parent.opt("runId"))||epoch!=parent.optInt("coordinatorEpoch",-1))
+            throw new SecurityException("原私人项目任务或执行轮次已变，没有打开新的工作");
+        return parent;
+    }
+    /** Only the foreground original project asks for these. Read a bounded page of its own SQL links, never the global team list. */
+    public synchronized JSONObject projectTeamFirstReviews(String taskId,String run,int epoch,String after,RunControl reader)throws Exception{
+        reader.check();JSONObject parent=parentProjectForTeamReturn(taskId,run,epoch);
+        java.util.List<JSONObject> links=dev.pocketengine.features.teams.TeamProjectReviewReturn.links(parent);int start=0;
+        if(!after.isEmpty()){while(start<links.size()&&!after.equals(links.get(start).opt("taskId")))start++;if(start>=links.size())throw new SecurityException("原索引已变化，请从原任务重新读取");start++;}
+        int end=Math.min(links.size(),start+dev.pocketengine.features.teams.TeamProjectReviewReturn.PAGE_SIZE);JSONArray rows=new JSONArray();
+        for(int i=start;i<end;i++){
+            reader.check();JSONObject link=links.get(i),team=read(link.getString("taskId"));
+            if(!dev.pocketengine.features.teams.TeamProjectReviewReturn.linked(parent,team,link)||team.has("teamOutputReview")||team.optJSONObject("teamIndependentReview")==null||
+                    team.optJSONObject("teamWriteScope")==null||team.getJSONObject("teamWriteScope").optJSONObject("projectSelection")==null)continue;
+            String teamRun=link.getString("runId"),hash=team.getJSONObject("teamIndependentReview").optString("planHash");
+            try{
+                JSONObject source=dev.pocketengine.features.teams.TeamProjectReviewReturn.mark(parent,team,link,firstProjectTeamOutputFacts(teamRun,hash,reader));
+                String goal=team.optString("goal");rows.put(new JSONObject().put("source",source).put("title",goal.length()>80?goal.substring(0,80)+"…":goal));
+            }catch(SecurityException|org.json.JSONException notFirst){reader.check();} // Unsupported/old first editions are not presented as current decisions.
+        }
+        reader.check();return new JSONObject().put("taskId",taskId).put("runId",run).put("epoch",epoch).put("rows",rows).put("after",after)
+                .put("nextAfter",end<links.size()?links.get(end-1).getString("taskId"):"").put("readOnly",true).put("executionAuthorized",false);
+    }
+    public synchronized JSONObject requireProjectTeamFirstReturn(JSONObject requested,String teamRun,RunControl reader)throws Exception{
+        reader.check();JSONObject parent=parentProjectForTeamReturn(requested.getString("parentTaskId"),requested.getString("parentRunId"),requested.getInt("parentEpoch"));
+        for(JSONObject link:dev.pocketengine.features.teams.TeamProjectReviewReturn.links(parent)){
+            if(!teamRun.equals(link.opt("runId"))||!requested.optString("teamTaskId").equals(link.opt("taskId")))continue;
+            JSONObject team=required(link.getString("taskId"));
+            if(!dev.pocketengine.features.teams.TeamProjectReviewReturn.linked(parent,team,link))break;
+            JSONObject source=dev.pocketengine.features.teams.TeamProjectReviewReturn.mark(parent,team,link,firstProjectTeamOutputFacts(teamRun,requested.getString("planHash"),reader));
+            if(!canonical(source).equals(canonical(requested)))break;reader.check();return source;
+        }
+        throw new SecurityException("原项目分工、首版文件或独审已变化，没有打开另一份成果");
+    }
     /** First native project edition only. This query does not reserve or consume any permission. */
     public synchronized JSONObject firstProjectTeamOutputFacts(String run,String hash,RunControl owner)throws Exception{
         owner.check();JSONObject team=teamWriteTask(run);requirePrivateOwner(team);checkTeamIntegrationParents(team);
@@ -16378,6 +16414,8 @@ public final class TaskStore {
         if(OwnerWorkTask.isOwnerWork(result)&&result.optBoolean("contextAvailable")&&result.getJSONObject("controls").optBoolean("canContinue")){
             result.getJSONObject("controls").put("continuationHistory",TaskRunDocumentReader.resumeHistoryForUi(db,id,result.getString("runId"),result.getInt("coordinatorEpoch")));
         }
+        if(!limited&&dev.pocketengine.features.teams.TeamProjectReviewReturn.parent(result)&&result.optJSONArray("relatedTasks")!=null)
+            result.put("mayReadProjectTeamFirstReviews",true); // The original project has a work plan; only an actual SQL read can report a pending first review.
         JSONObject contextCheck=TaskAuditStore.contextBudgetCheck(db,result);result.put("contextBudgetCheck",contextCheck==null?JSONObject.NULL:contextCheck);
         JSONObject events=TaskAuditStore.eventPage(db,id,"",32,65536),operations=TaskAuditStore.operationPage(db,id,"",24,65536);
         JSONArray eventBodies=new JSONArray(),operationBodies=new JSONArray(),eventRows=events.getJSONArray("entries"),operationRows=operations.getJSONArray("entries");

@@ -12,6 +12,7 @@ import { projectPackageTaskIdentity, type PackagePreviewTarget } from './project
 import { TaskResultFiles, type TaskResultFile } from './TaskResultFiles';
 import { ProjectPackageFiles, canReadProjectPackageFiles } from './ProjectPackageFiles';
 import {TaskPhoneFinalScreen} from './PhoneFinalScreenReceipt';
+import {PhoneTaskConversationReturn,type PhoneConversationOrigin} from './PhoneTaskConversationReturn';
 import { RetainedPhoneImage } from './RetainedPhoneImage';
 import { HeldPhoneResultImage } from './HeldPhoneResultImage';
 import './task-reading.css';
@@ -98,7 +99,7 @@ function useProjectPackages(task: unknown, active: boolean, identity: string) {
 }
 
 /** Composition of PW-05 Answer and PW-22 file actions around host-owned evidence. */
-export function TaskOutcome({ task, messages, active, canReadReport, readIdentity, onCopy, onOpenAttachment, onOpenProjectPackage, resultFiles, showEmptyResult, deferExecutionDetails, onFollowUp }: {
+export function TaskOutcome({ task, messages, active, canReadReport, readIdentity, onCopy, onOpenAttachment, onOpenProjectPackage, resultFiles, showEmptyResult, deferExecutionDetails, onFollowUp, onReadPhoneConversation }: {
   task: unknown;
   messages: unknown;
   active: boolean;
@@ -110,6 +111,7 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   onOpenAttachment?: (messageId: string, id: string, sha256: string) => void;
   onOpenProjectPackage?: (target: PackagePreviewTarget) => void;
   onFollowUp?: () => void;
+  onReadPhoneConversation?: (origin:PhoneConversationOrigin) => void;
   resultFiles?: {
     taskId: string;
     supported: boolean;
@@ -187,6 +189,7 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
       <h3>{settlementTitle}</h3>
       {settlementDetail && settlementDetail !== settlementTitle && <p>{settlementDetail}</p>}
     </div>}
+    {active && onReadPhoneConversation && <PhoneTaskConversationReturn task={record} onRead={onReadPhoneConversation}/>}
     {active && !outcome.image && !outcome.retained?.image && !remotePhone && <HeldPhoneResultImage task={record} readIdentity={readIdentity}/>}
     {resultFiles && active && <TaskResultFiles {...resultFiles} active={active} readIdentity={`${readIdentity}:${owner}:${status || ''}`}/>}
     {packageRead.eligible && <section className="pw-outcome-deliverables" aria-label="项目固定成果" aria-busy={packageRead.busy || undefined}>

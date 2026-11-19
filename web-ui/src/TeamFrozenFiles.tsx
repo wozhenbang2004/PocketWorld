@@ -2,18 +2,19 @@ import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 import { Button, CheckboxField, SettingsDialog } from './forms-library';
 import { bridge } from './bridge';
 import {TeamRevisionFileComparison,originalRevision,type RevisionComparison} from './TeamRevisionFileComparison';
+import {sameProjectTeamReview,type ProjectTeamReviewOrigin} from './project-team-review-origin';
 import type {WorkFileSource} from './team-navigation';
 
 type Data = Record<string, any>;
 type FileRow = {artifactId:string;assignmentId:string;memberId:string;path:string;kind:'text'|'deletion'|'binary_or_large';sha256:string;retainedChars?:number;currentVersion:number;currentExists:boolean;matchesOwnerBase:boolean;retainedApplied:boolean;truncated:boolean;beforeBytes?:number;afterBytes?:number};
 type Approval = {teamRunId:string;planHash:string;projectId:string;files:{path:string;existing:boolean;version?:number;sha256?:string}[];approvalHandle:string;startsIntegration:false;firstProject?:boolean;parentCheckoutId?:string;sourceDigest?:string;snapshotIdentity?:string;reviewerTaskId?:string;reviewerRunId?:string;startsChecks?:false;packagesProject?:false};
 type IntegrationCapture={integrationTaskId:string;reviewId:string;planHash:string;matchingFiles:number;total:number;active:boolean;unresolved:boolean;status:string;businessVerified:false};
-type Reading = {fullProject?:boolean;revisionComparison?:RevisionComparison;revisionWarning?:string;projectId:string;integrationCapture?:IntegrationCapture;ownerDecision?:{state:string;reviewId?:string;registrationKind?:string;separateIntegratorStartRequired?:boolean};fileHandle:string;teamRunId:string;planHash:string;files:FileRow[];incompleteCount:number;capturedAt:number;readOnly:true};
+type Reading = {projectReviewOrigin?:ProjectTeamReviewOrigin;fullProject?:boolean;revisionComparison?:RevisionComparison;revisionWarning?:string;projectId:string;integrationCapture?:IntegrationCapture;ownerDecision?:{state:string;reviewId?:string;registrationKind?:string;separateIntegratorStartRequired?:boolean};fileHandle:string;teamRunId:string;planHash:string;files:FileRow[];incompleteCount:number;capturedAt:number;readOnly:true};
 type Page = {id:string;body:string;end:number;size:number};
 
 export function TeamFrozenFiles({team, view, active, disabled, run, onOpen, back, memberName, entry, hasRevision=false}:{
   team:string;view:string;hasRevision?:boolean;active:boolean;disabled:boolean;run:(action:string,args:Data)=>Promise<any>;
-  entry?:{requestId:string;source:WorkFileSource;returnToWork?:(reason?:string)=>void};memberName:(id:string)=>string;onOpen:(shown:boolean)=>void;back:MutableRefObject<(()=>boolean)|null>;
+  entry?:{requestId:string;source:WorkFileSource|ProjectTeamReviewOrigin;returnToWork?:(reason?:string)=>void};memberName:(id:string)=>string;onOpen:(shown:boolean)=>void;back:MutableRefObject<(()=>boolean)|null>;
 }) {
   const [shown,setShown]=useState(false),[source,setSource]=useState<Reading|null>(null),[selected,setSelected]=useState(''),[page,setPage]=useState<Page|null>(null);
   const [busy,setBusy]=useState(false),[error,setError]=useState('');
@@ -34,11 +35,12 @@ export function TeamFrozenFiles({team, view, active, disabled, run, onOpen, back
     document.addEventListener('visibilitychange',hide);
     return()=>{if(back.current===handler)back.current=null;document.removeEventListener('visibilitychange',hide);};
   },[shown,back,projectView]);
-  const open=async(fromWork?:WorkFileSource)=>{
+  const open=async(origin?:WorkFileSource|ProjectTeamReviewOrigin)=>{
+    const fromWork=origin&&'fileReview' in origin?origin:undefined,fromProject=origin&&'selectionHash' in origin?origin:undefined;
     if(disabled||!active||opened.current||!view)return;
     const seq=++generation.current;opened.current=true;pending.current=true;onOpen(true);setShown(true);setBusy(true);setError('');
     try{
-      const result=await run('teams.readFrozenOutputs',{viewHandle:view,...(fromWork?{fromWork}:{})}) as Reading;
+      const result=await run('teams.readFrozenOutputs',{viewHandle:view,...(fromWork?{fromWork}:fromProject?{fromProject}:{})}) as Reading;
       if(seq!==generation.current){release(result?.fileHandle);return;}
       if(!result?.fileHandle||result.readOnly!==true||result.teamRunId!==team||!Array.isArray(result.files)||!/^[a-f0-9]{64}$/.test(result.planHash)){
         release(result?.fileHandle);throw new Error('这份目录不属于原协作，请返回重新读取。');
@@ -54,8 +56,12 @@ export function TeamFrozenFiles({team, view, active, disabled, run, onOpen, back
       if(fromWork&&(result.planHash!==fromWork.fileReview.planHash||result.files.length!==fromWork.fileReview.fileCount||result.ownerDecision?.state!=='eligible')){
         release(result.fileHandle);throw new Error('原文件不再等待这次核对，没有展示其他版本。');
       }
+      if(fromProject&&(!sameProjectTeamReview(fromProject,result.projectReviewOrigin)||result.fullProject!==true||result.projectId!==fromProject.projectId||
+          result.planHash!==fromProject.planHash||result.files.length!==fromProject.fileCount||result.ownerDecision?.state!=='eligible_project_first')){
+        release(result.fileHandle);throw new Error('这份原项目首版独审或冻结目录已变，没有改到另一项。');
+      }
       current.current=result;setSource(result);
-    }catch(e){if(seq===generation.current){const reason=e instanceof Error?e.message:String(e);if(fromWork&&entry?.returnToWork&&!document.hidden){close();entry.returnToWork(reason)}else setError(reason);}}
+    }catch(e){if(seq===generation.current){const reason=e instanceof Error?e.message:String(e);if(origin&&entry?.returnToWork&&!document.hidden){close();entry.returnToWork(reason)}else setError(reason);}}
     finally{if(seq===generation.current){pending.current=false;setBusy(false);}}
   };
   const usedEntry=useRef('');

@@ -1,3 +1,4 @@
+import type {ProjectTeamReviewOrigin} from './project-team-review-origin';
 import type { TeamPackageMark } from './team-delivered-package';
 
 /** Native-verified links keep collaboration in the work that requested it. */
@@ -31,7 +32,7 @@ export function sameTeamProposal(left:TeamProposalMark,right:unknown):boolean{
 }
 export const teamProposalEntryKey=(source:TeamDecisionOrigin)=>JSON.stringify(['team-revisions',source.conversationId,source.parentTaskId,source.parentRunId,source.parentEpoch,source.teamRunId]);
 export type WorkPackageSource = TeamDecisionOrigin & {deliveredPackage:TeamPackageMark};
-export type TeamRunFocus = { requestId: string; runId: string; fromWork?: WorkFileSource|WorkProposalSource|WorkPackageSource; returnToWork?: (reason?:string)=>void };
+export type TeamRunFocus = { requestId: string; runId: string; fromProject?:ProjectTeamReviewOrigin; fromWork?: WorkFileSource|WorkProposalSource|WorkPackageSource; returnToWork?: (reason?:string)=>void };
 export function teamFileMark(input:unknown): TeamFileReviewMark | null {
   if(!input||typeof input!=='object')return null;
   const m=input as Record<string,unknown>,id=(v:unknown):v is string=>typeof v==='string'&&/^[a-f0-9-]{36}$/.test(v);

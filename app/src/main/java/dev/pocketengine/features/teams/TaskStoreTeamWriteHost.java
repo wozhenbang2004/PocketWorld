@@ -319,6 +319,12 @@ public final class TaskStoreTeamWriteHost implements TeamCoordinator.BudgetHost,
         if(!TeamIntegrationFiles.progress(workspace,context.getJSONObject("binding"),context.getJSONArray("receipts")).getBoolean("complete"))throw new SecurityException("当前成果已改变，请先重审真实差异，不会覆盖新内容");
         return TeamWriteScope.afterIntegrated(workspace,tasks.teamWriteScopeForOwner(run,read),input.getString("memberId"),context.getString("reviewId"),context.getString("planHash"));
     }
+    JSONObject projectFirstReviewOrigin(JSONObject requested,String team,RunControl read)throws Exception{
+        JSONObject mark=tasks.requireProjectTeamFirstReturn(requested,team,read);
+        if(projects==null||reviews.containsKey(team)||integrations.containsKey(team))throw new SecurityException("原协作仍在执行或本机项目宿主不可读");
+        projects.checkFirstOutputBaseline(new JSONObject(mark.toString()).put("targetProjectId",mark.getString("projectId")),read);
+        read.check();return mark;
+    }
     JSONObject ownerTextDecision(TeamOwnerFileReading shown,RunControl reader)throws Exception{
         reader.check();if(!shown.hasCompleteTextComparison())return new JSONObject().put("state","read_only");
         try{

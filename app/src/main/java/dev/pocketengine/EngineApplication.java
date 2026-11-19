@@ -557,6 +557,12 @@ public final class EngineApplication extends Application implements dev.pocketen
         if(pending.deadline()<=System.currentTimeMillis())return "expired";
         try{pending.checkCurrent();return "retained";}catch(Exception unavailable){return "original_conditions_unavailable";}
     }
+    /** Owner's foreground preview is not a GoalModelReview; it never consults a model or begins work. */
+    public synchronized JSONObject readPendingDeviceGoalInput(String id,String operation)throws Exception{
+        var admission=pendingDeviceGoals.get(id);
+        if(admission==null||!operation.equals(admission.request().operationId()))throw new SecurityException("本机已没有这一次派单的原认证准入，不能从历史重建");
+        return tasks.deviceTasks().pendingGoalInput(id,admission);
+    }
     public synchronized boolean pendingDeviceGoalUsesNoScreen(String id){var pending=pendingDeviceGoals.get(id);return pending!=null&&pending.noPhoneSurface();}
     public synchronized JSONObject cancelPendingDeviceGoal(String id)throws Exception{
         var admission=pendingDeviceGoals.get(id);if(admission==null)throw new SecurityException("没有本机保留的原未启动目标准入");JSONObject result=tasks.deviceTasks().cancelPendingGoal(id,admission);pendingDeviceGoals.remove(id,admission);pushTask(id);return result;

@@ -1,3 +1,4 @@
+import { originalSnapshotRoom, selectionBlock, captureBytes } from './remote-snapshot-room';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import './collaboration-depth.css';
 import { Accordion, AccordionItem, Button, CheckboxField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
@@ -5,6 +6,8 @@ import { RemoteSnapshotPickup } from './RemoteSnapshotPickup';
 import { OpenRemoteSavedFile } from './RemoteSavedResults';
 import { registerOverlayBack } from './overlay-back';
 import { holdRemoteReads, remoteObject as object, remoteRows as rows, type RemoteData as Data } from './remote-task-workspace';
+
+import { OriginalJobOutput } from './OriginalJobOutput';
 
 type Run = (action: string, args?: Data) => Promise<any>;
 type Props = { snapshot: Data; busy: boolean; active: boolean; run: Run };
@@ -74,6 +77,8 @@ export function RemoteTaskArtifacts({ snapshot, busy, active, run }: Props) {
   useEffect(() => { setSelectedSnapshot(null); setChangeModel(false); setModel(''); setEffort(''); setRecoveryAck(false); }, [source.jobOperationId, source.modelOptions?.digest]);
   if (snapshot.configurationOnly || snapshot.teamRemoteWriter || task.teamRunId || source.assignmentWorkspace) return null;
   const result = object(snapshot.result), artifact = object(snapshot.artifact), frozen = object(snapshot.snapshotFile), project = object(snapshot.projectHistoryPage), history = object(project.history), before = object(history.baseline), after = object(history.after), diff = object(snapshot.projectHistoryDiff), projectReview = object(snapshot.projectHistoryReview);
+  const room = originalSnapshotRoom(result, source), mayStart = browse && room?.remainingCount !== 0;
+  const selectedFits = selectedBytes <= captureBytes && (!room || selectedBytes <= room.remainingBytes);
   const operation = object(snapshot.projectHistoryOperation), returnReview = object(snapshot.conversationResultReview), returnScope = object(returnReview.scope), destination = object(returnScope.inputSource);
   const models = rows(source.modelOptions?.models), selectedModel = models.find(item => item.id === model);
   const continuationPayload = () => { const now = live.current; return { prompt: now.prompt, ...(now.selectedSnapshot ? { snapshotId: now.selectedSnapshot.snapshotId, snapshotVersion: now.selectedSnapshot.snapshotVersion } : {}),
@@ -81,23 +86,29 @@ export function RemoteTaskArtifacts({ snapshot, busy, active, run }: Props) {
   return <Accordion className="pw-remote-artifacts" allowsMultipleExpanded>
     <AccordionItem title="执行输出与当前文件"><div className="pw-remote-section">
       <p className="pw-muted">执行端实际回执不等于当前文件树或冻结成果；退出码 0 也不证明目标完成。</p>
-      {result.exitCode != null && <p>退出码：{result.exitCode}</p>}{['output', 'diff'].map(key => result[key] ? <div key={key}><h4>{key === 'output' ? '输出' : '执行器报告的差异'}</h4><pre>{result[key]}</pre>{(result[`${key}ViewTruncated`] || result[`${key}Truncated`]) && <p className="pw-field-hint">正文显示有截断。</p>}</div> : null)}
+      {result.exitCode != null && <p>退出码：{result.exitCode}</p>}
+      {result.output&&<OriginalJobOutput key={`${source.jobId}:${source.jobOperationId}:${result.capturedAt}`} result={result} source={source}/>}
+      {result.diff&&<div><h4>执行器报告的差异</h4><pre>{result.diff}</pre>{(result.diffViewTruncated||result.diffTruncated)&&<p className="pw-field-hint">差异内容显示有截断。</p>}</div>}
       <TextField label="原工作区相对文件路径" value={artifactPath} onChange={setArtifactPath} isDisabled={busy} />
       <Button variant="secondary" disabled={!enabled || !artifactPath.trim() || artifactPath.length > 2048} onClick={() => void safeRun('remoteTask.readArtifact', { path: artifactPath.trim() })}>核对当前文件字节与 SHA</Button>
       {artifact.path && <div><h4>{artifact.path} · {artifact.bytes} 字节</h4><p>SHA-256 {artifact.sha256}</p><p className="pw-field-hint">这是读取时的工作区字节，尚未冻结。</p>{artifact.preview === 'utf8_text' ? <pre>{artifact.text}</pre> : <p>二进制原件已核对大小与 SHA。</p>}{artifact.viewTruncated && <p>文字预览已截断。</p>}</div>}
     </div></AccordionItem>
     <AccordionItem title="成果文件与冻结版本"><div className="pw-remote-section">
       <p className="pw-muted">原 job 结算后读取所选文件。文件冻结只证明采集时的实际字节与来源，不证明独占作者。</p>
+      {room ? <p className="pw-field-hint" role="status">原主机上次核对：这次作业还剩 {room.remainingCount} / 4 个快照位、{room.remainingBytes.toLocaleString('zh-CN')} 字节。
+        {room.remainingCount===0?'不能再冻结新版本；已在本机登记的版本仍可取回。':'单次最多 8 个文件、512 KiB，每个不超过 256 KiB。不是预留空间。'}</p>
+        :browse&&<p className="pw-field-hint">原主机未返回这次作业的剩余容量。单次最多 8 个文件、512 KiB，每个不超过 256 KiB。</p>}
       <TextField label="工作区相对目录（留空为根目录）" value={path} onChange={setPath} isDisabled={busy} />
       <div className="pw-form-actions"><Button variant="secondary" disabled={!browse} onClick={() => void safeRun('remoteTask.listResultFiles', { path, offset: 0 })}>读取这个目录</Button>{directory.path && <Button variant="ghost" disabled={!browse} onClick={() => { const parent = directory.path.includes('/') ? directory.path.slice(0, directory.path.lastIndexOf('/')) : ''; setPath(parent); void safeRun('remoteTask.listResultFiles', { path: parent, offset: 0 }); }}>上一级</Button>}</div>
-      {rows(directory.files).map(file => { const chosen = selected.some(row => row.path === file.path); return <div className="pw-remote-file" key={file.path}><div><strong>{file.name || file.path}</strong><small>{file.kind === 'directory' ? '目录' : `${file.bytes} 字节`}</small></div><Button variant="ghost" disabled={!browse || file.kind !== 'directory' && !chosen && (!file.selectable || selected.length >= 8)} onClick={() => { if (file.kind === 'directory') { setPath(file.path); void safeRun('remoteTask.listResultFiles', { path: file.path, offset: 0 }); } else void safeRun('remoteTask.selectResultFile', { path: file.path }); }}>{file.kind === 'directory' ? '进入' : chosen ? '移除选择' : '读取并选择'}</Button></div>; })}
+      {rows(directory.files).map(file => { const chosen = selected.some(row => row.path === file.path), block = chosen ? '' : selectionBlock(file, selected.length, selectedBytes, room); return <div className="pw-remote-file" key={file.path}><div><strong>{file.name || file.path}</strong><small>{file.kind === 'directory' ? '目录' : `${file.bytes} 字节`}{block&&` · ${block}`}</small></div><Button variant="ghost" disabled={!browse || !!block} onClick={() => { if (file.kind === 'directory') { setPath(file.path); void safeRun('remoteTask.listResultFiles', { path: file.path, offset: 0 }); } else void safeRun('remoteTask.selectResultFile', { path: file.path }); }}>{file.kind === 'directory' ? '进入' : chosen ? '移除选择' : '读取并选择'}</Button></div>; })}
       {directory.nextOffset != null && <Button variant="ghost" disabled={!browse} onClick={() => void safeRun('remoteTask.listResultFiles', { path: directory.path || '', offset: directory.nextOffset })}>沿同目录版本读取下一页</Button>}
       {directory.inspectionLimitReached && <p className="pw-field-hint">已到本轮检视上限，请进入更具体的目录。</p>}
       {selected.length > 0 && <section aria-label="已选择的成果文件"><h4>已选择 {selected.length} / 8 个文件</h4><p className="pw-field-hint">{selectedBytes} / 524288 字节 · 跨目录选择会保留，冻结前可在这里移除。</p>
         {selected.map(file => <div className="pw-remote-file" key={file.path}><div><strong>{file.path}</strong><small>{file.bytes} 字节</small></div><Button variant="ghost" disabled={!browse} aria-label={`移除选择 ${file.path}`} onClick={() => void safeRun('remoteTask.selectResultFile', { path: file.path })}>移除</Button></div>)}
         {selected.length >= 8 && <p className="pw-field-hint">已达到单次文件数量上限，先移除不需要的文件再添加。</p>}
-        <Button disabled={!browse} onClick={() => setFreeze({ reviewId: snapshot.reviewId, selected: JSON.stringify(selected), command: 'captureSelectedSnapshot', args: {}, files: selected })}>核对并冻结所选版本</Button></section>}
-      <Accordion><AccordionItem title="按明确路径采集（高级）"><TextAreaField label="明确文件路径，每行一个（1–8 个）" value={manual} onChange={value => { live.current.manual = value; setManual(value); }} isDisabled={busy} /><Button variant="secondary" disabled={!browse || !manual.trim() || manual.split('\n').filter(line => line.trim()).length > 8} onClick={() => { const paths = manual.split('\n').map(line => line.trim()).filter(Boolean); setFreeze({ reviewId: snapshot.reviewId, manual, command: 'captureSnapshot', args: { paths }, files: paths.map(path => ({ path })) }); }}>核对并保存指定文件快照</Button></AccordionItem></Accordion>
+        {!selectedFits&&<p role="status">已选内容超过这次原作业可用字节，请移除部分文件。</p>}
+        <Button disabled={!mayStart || !selectedFits} onClick={() => setFreeze({ reviewId: snapshot.reviewId, selected: JSON.stringify(selected), command: 'captureSelectedSnapshot', args: {}, files: selected })}>核对并冻结所选版本</Button></section>}
+      <Accordion><AccordionItem title="按明确路径采集（高级）"><TextAreaField label="明确文件路径，每行一个（1–8 个）" value={manual} onChange={value => { live.current.manual = value; setManual(value); }} isDisabled={busy} /><Button variant="secondary" disabled={!mayStart || !manual.trim() || manual.split('\n').filter(line => line.trim()).length > 8} onClick={() => { const paths = manual.split('\n').map(line => line.trim()).filter(Boolean); setFreeze({ reviewId: snapshot.reviewId, manual, command: 'captureSnapshot', args: { paths }, files: paths.map(path => ({ path })) }); }}>核对并保存指定文件快照</Button></AccordionItem></Accordion>
       {rows(task.operations).filter(row => row.tool === 'remote_snapshot').slice(-4).map(row => <p key={row.operationId} className="pw-field-hint">快照操作 {row.operationId} · {row.state === 'unknown' ? '回执待核对，只查询原编号，不重新采集' : row.receipt?.message || row.state}</p>)}
       {saved.map(version => <section className="pw-remote-frozen" key={version.snapshotId}><h4>冻结版本 · {String(version.snapshotVersion).slice(0, 16)}</h4><p>{version.bytes} 字节 · 原 job {version.jobId}</p>
         <p className="pw-field-hint">{pickupWindow(version)}</p>
@@ -115,7 +126,7 @@ export function RemoteTaskArtifacts({ snapshot, busy, active, run }: Props) {
       </section>)}
       {frozen.path && <div><h4>冻结原件：{frozen.path}</h4><p>{frozen.bytes} 字节 · SHA-256 {frozen.sha256}</p>{frozen.preview === 'utf8_text' ? <pre>{frozen.text}</pre> : <p>二进制原件已核对完整字节与 SHA。</p>}{frozen.viewTruncated && <p>预览已截断；SHA 对应完整冻结原件。</p>}</div>}
       {freeze && <RemoteActionReview identity={`${snapshot.windowHandle}:${freeze.reviewId}:${JSON.stringify(freeze.files)}`} title="冻结这些明确文件" active={active} busy={busy} onClose={() => setFreeze(null)} confirmLabel="确认冻结此版本" onConfirm={() => {
-        if (!browse || freeze.reviewId !== live.current.snapshot.reviewId || freeze.selected && freeze.selected !== JSON.stringify(live.current.snapshot.selectedResultFiles) || freeze.manual !== undefined && freeze.manual !== live.current.manual) return;
+        if (!mayStart || freeze.reviewId !== live.current.snapshot.reviewId || freeze.selected && (!selectedFits || freeze.selected !== JSON.stringify(live.current.snapshot.selectedResultFiles)) || freeze.manual !== undefined && freeze.manual !== live.current.manual) return;
         void safeRun(`remoteTask.${freeze.command}`, freeze.args); setFreeze(null);
       }}><p>原 job：{source.jobId}</p>{rows(freeze.files).map(file => <p key={file.path}>{file.path}{file.sha256 ? <><br />{file.bytes} 字节 · SHA-256 {file.sha256}</> : null}</p>)}<p>只保存上述范围，不递归扫描。已读版本漂移会拒绝；未知回执不自动重试。</p><p>{result.takeoutPolicy?.protocol === 'companion_selected_bytes_takeout_v1' && result.takeoutPolicy.durationMs === takeoutMs ? '主机接受后，正常清理至少保留 7 天。具体期限看原回执；这不保证主机在线或已备份到手机。' : '这台主机未声明固定取回期限；冻结不等于已经保存到手机。'}</p></RemoteActionReview>}
     </div></AccordionItem>

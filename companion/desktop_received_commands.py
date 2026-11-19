@@ -214,13 +214,14 @@ def _show_read(view, peer, item, receipt, current, *, offer_work):
         if offer_work: choices.append(("work", "查看这次手机任务在此工作区的读取"))
         if kind != "receipt_only" and can_check_root(): choices.append(("root", "核对原工作区在这台电脑的位置"))
         if kind=="text_snapshot" and can_check_root():
+            choices.append(("marks","查看机主为这次原读取标记的本机补丁"))
             choices.append(("compare","对照这次读取和一个本机源码副本\n仅核对这份文件的两个历史版本，不读取现在的项目。"))
         choice = view._dialog(title, body, choices + [("ids","核对原操作和 Windows 工作编号")], current)
-        if choice=="compare" and current():
+        if choice in ("compare","marks") and current():
             from windows_task_source_match import show
             def stamp(*,full,expected_work=None):
                 return local_record(view,peer,item,revision=revision,match_source=True,read=full,required_work=expected_work)
-            show(view,stamp,current)
+            show(view,stamp,current,bookmarks=choice=="marks")
             continue
         if choice == "root":
             path = local_record(view, peer, item, revision=revision, read_root=True, read=True)

@@ -229,6 +229,7 @@ def _page(context, facts, notice):
             body += " 配对或重启不会自行恢复桌面。"
     if facts["configured"] and facts["interactive"]:
         actions.append(("LocalProjectWork", "继续本机项目工作\n按原登记找底稿、草稿或多文件补丁，不需要先选择仓库或启动服务。"))
+        actions.append(("CommandSetup", "核对本机可接的命令\n看一个工作区已登记的命令名；可单独核对一项，不运行或授权。"))
         actions.append(("ProjectSource", "核对一个本机 Git 项目的来源\n只从本机已登记工作区读取提交，不启动服务或项目工作。"))
     if notice: body += "\n\n" + notice
     return _dialog(heading, body, [*actions, ("Refresh", "重新读取本机状态")])
@@ -274,6 +275,10 @@ def open_installed_desk():
             if action == "LocalProjectWork":
                 from windows_project_workbench import open_work
                 open_work(context, facts["settings"])
+                notice = ""; continue
+            if action == "CommandSetup":
+                from windows_command_preflight_entry import open_setup
+                open_setup(context, facts["settings"])
                 notice = ""; continue
             if action == "ProjectSource":
                 from windows_git_source_entry import open_source

@@ -146,15 +146,18 @@ public final class TaskStoreDeviceTasks {
         }
     }
     private static String modelPolicyKey(DeviceExecutionAdmission admission)throws Exception{
-        return "device_goal_model_policy:"+TaskStore.capabilityFingerprint(new JSONObject().put("callerDeviceId",admission.request().callerDeviceId()).put("originDeviceId",admission.request().originDeviceId()).put("targetDeviceId",admission.request().targetDeviceId()).put("grantId",admission.request().grantId()).put("resourceBinding",admission.request().resourceBinding()));
+        return OwnerPeerModelRules.key(admission.request().callerDeviceId(),admission.request().originDeviceId(),admission.request().targetDeviceId(),admission.request().grantId(),admission.request().resourceBinding());
+    }
+    public OwnerPeerModelRules ownerPeerModelRules(String here,String peer,String instance,String fingerprint,long epoch,int offset)throws Exception {
+        return new OwnerPeerModelRules(owner,db,here,peer,instance,fingerprint,epoch,offset);
     }
     private JSONObject modelPolicy(String key)throws Exception{try(Cursor row=db.rawQuery("SELECT value FROM meta WHERE key=?",new String[]{key})){return row.moveToFirst()?new JSONObject(row.getString(0)):null;}}
     /** Public native route reference only; never a key, model grant, or permission constructor. */
     public JSONObject goalModelPolicy(DeviceExecutionAdmission admission)throws Exception{
-        admission.checkCurrent();synchronized(owner){JSONObject policy=modelPolicy(modelPolicyKey(admission));if(policy==null)return null;requireModelPolicyScope(policy,admission);return duplicate(policy);}
+        admission.checkCurrent();synchronized(owner){JSONObject policy=modelPolicy(modelPolicyKey(admission));if(policy==null||policy.has("ownerDisabledAt"))return null;requireModelPolicyScope(policy,admission);return duplicate(policy);}
     }
     private void requireModelPolicyScope(JSONObject policy,DeviceExecutionAdmission admission)throws Exception{
-        if(!"pocketworld.device-goal-model-policy.v1".equals(policy.optString("format"))||!admission.nativeGrantFingerprint().equals(policy.optString("grantFingerprint"))
+        if(policy.has("ownerDisabledAt")||!"pocketworld.device-goal-model-policy.v1".equals(policy.optString("format"))||!admission.nativeGrantFingerprint().equals(policy.optString("grantFingerprint"))
                 ||admission.request().authorizationEpoch()!=policy.optLong("authorizationEpoch")||policy.optLong("expiresAt")<=System.currentTimeMillis()
                 ||admission.deadline()>policy.optLong("expiresAt")||admission.toolBudget()>policy.optLong("toolBudget")||admission.modelBudget()>policy.optLong("modelBudget")
                 ||!TaskStore.capabilityFingerprint(new JSONObject().put("resourceBinding",admission.request().resourceBinding()).put("toolNames",admission.toolNames())).equals(policy.optString("scopeDigest")))throw new SecurityException("B本机模型策略、原PairGrant版本或准确范围已变化；需本机重新审阅，未改用默认模型");
@@ -218,7 +221,7 @@ public final class TaskStoreDeviceTasks {
     private JSONObject goalModelPolicyStatus(String callerDeviceId,String targetDeviceId)throws Exception{
         synchronized(owner){JSONArray policies=new JSONArray();boolean truncated=false;int scanned=0;
             try(Cursor rows=db.rawQuery("SELECT value FROM meta WHERE key GLOB 'device_goal_model_policy:*' ORDER BY rowid DESC LIMIT 129",null)){while(rows.moveToNext()){
-                if(++scanned>128){truncated=true;break;}JSONObject policy=new JSONObject(rows.getString(0));if(!callerDeviceId.equals(policy.optString("callerDeviceId"))||!targetDeviceId.equals(policy.optString("targetDeviceId"))||policy.optLong("expiresAt")<=System.currentTimeMillis())continue;
+                if(++scanned>128){truncated=true;break;}JSONObject policy=new JSONObject(rows.getString(0));if(policy.has("ownerDisabledAt")||!callerDeviceId.equals(policy.optString("callerDeviceId"))||!targetDeviceId.equals(policy.optString("targetDeviceId"))||policy.optLong("expiresAt")<=System.currentTimeMillis())continue;
                 JSONObject grant=null;try(Cursor row=db.rawQuery("SELECT body_json,authorization_epoch,revoked FROM device_grants WHERE grant_id=? AND peer_device_id=? AND local_device_id=?",new String[]{policy.getString("grantId"),callerDeviceId,targetDeviceId})){if(row.moveToFirst())grant=new JSONObject(row.getString(0)).put("authorizationEpoch",row.getLong(1)).put("revoked",row.getInt(2)!=0);}
                 if(grant==null||grant.optBoolean("revoked")||grant.optLong("expiresAt")<=System.currentTimeMillis()||!policy.getString("grantFingerprint").equals(dev.pocketengine.features.devices.DeviceProtocol.sha256(dev.pocketengine.features.devices.DeviceProtocol.canonicalBytes(grant))))continue;
                 if(policies.length()==8){truncated=true;break;}policies.put(policy);
@@ -1136,6 +1139,23 @@ public final class TaskStoreDeviceTasks {
         JSONObject scope=current.getJSONObject("deviceExecutionScope"),origin=current.getJSONObject("origin");if(scope.optLong("toolsUsed")!=0||scope.optLong("modelCallsUsed")!=0||current.optInt("coordinatorEpoch")!=0)throw new SecurityException("原目标已有执行/用量证据，不能按未启动取消");
         try(Cursor row=db.rawQuery("SELECT envelope_json,accepted_at,arguments_digest FROM device_inbound WHERE local_task_id=? AND method='task.submitGoal'",new String[]{id})){if(!row.moveToFirst())throw new SecurityException("原Goal接受记录缺失");JSONObject wire=new JSONObject(row.getString(0));long acceptedAt=row.getLong(1);String digest=row.getString(2);if(row.moveToNext())throw new SecurityException("原Goal接受身份不唯一");if(!id.equals(dev.pocketengine.features.devices.DeviceProtocol.receiverTaskId(wire))||!digest.equals(wire.optString("argumentsDigest"))||!current.getString("goal").equals(wire.getJSONObject("arguments").getString("goal"))||!dev.pocketengine.features.devices.DeviceProtocol.resourceEquals(scope.getJSONObject("resourceBinding"),wire.getJSONObject("resourceBinding")))throw new SecurityException("原Goal接受身份/资源/摘要已变化");for(String field:new String[]{"originDeviceId","callerDeviceId","targetDeviceId","grantId","authorizationEpoch"})if(!dev.pocketengine.features.devices.DeviceProtocol.canonical(origin.opt(field)).equals(dev.pocketengine.features.devices.DeviceProtocol.canonical(wire.opt(field))))throw new SecurityException("原Goal受众不能由JSON替换");
             return new JSONObject().put("id",id).put("goal",current.getString("goal")).put("status",current.getString("status")).put("revision",current.optLong("deviceStateRevision")).put("originDeviceId",origin.getString("originDeviceId")).put("callerDeviceId",origin.getString("callerDeviceId")).put("acceptedAt",acceptedAt).put("operationId",wire.getString("operationId")).put("argumentsDigest",digest).put("scopeFingerprint",TaskStore.capabilityFingerprint(scope));
+        }
+    }
+    /** Read the exact sender-selected data only, while the same original job has never started.
+     * Going to Settings to provision a model is not a prerequisite for understanding a request. */
+    public JSONObject pendingGoalInput(String id,DeviceExecutionAdmission admission)throws Exception{
+        admission.checkCurrent();
+        synchronized(owner){
+            JSONObject facts=pendingGoalFacts(id);requireSameSession(task(id),admission);
+            var request=admission.request();
+            if(admission.kind()!=DeviceExecutionAdmission.Kind.GOAL||!id.equals(DeviceProtocol.receiverTaskId(request.json()))
+                    ||!request.operationId().equals(facts.opt("operationId"))||!request.argumentsDigest().equals(facts.opt("argumentsDigest"))
+                    ||!request.arguments().getString("goal").equals(facts.opt("goal"))||!facts.getString("status").matches("queued|awaiting_user"))
+                throw new SecurityException("原目标已变化，未显示附带内容");
+            JSONObject result=new JSONObject().put("taskId",id).put("goal",facts.getString("goal")).put("origin",admission.origin())
+                    .put("originalInput",dev.pocketengine.features.devices.DeviceContextSnapshot.originalReviewInput(admission))
+                    .put("revision",facts.getLong("revision")).put("viewUntil",Math.min(admission.deadline(),System.currentTimeMillis()+25_000L));
+            admission.checkCurrent();return result;
         }
     }
     public boolean hasPendingGoalCancellation(String id){synchronized(owner){try{pendingGoalFacts(id);return true;}catch(Exception notPending){return false;}}}

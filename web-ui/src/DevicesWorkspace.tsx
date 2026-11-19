@@ -6,9 +6,11 @@ import { DeviceRequestScope, archivedPhoneStopAttemptLine, archivedPhoneStopLine
 import { IconAdd, IconArrowLeft, IconChevronRight, IconClock, IconDevices, IconLayers, IconMonitor, IconPhone, IconRefresh, IconShieldCheck } from './icons';
 import { DesktopViewer } from './DesktopViewer';
 import { ReceivedGoalInputReview, originalDeviceInputReady } from './ReceivedGoalInputReview';
+import { PendingReceivedGoalInput } from './PendingReceivedGoalInput';
 import { PairingInvitationDisplay, shownPairingInvitation, type ShownPairingInvitation } from './PairingInvitationDisplay';
 import { SavedPhoneDispatches } from './SavedPhoneDispatches';
 import { SavedPeerScopeReceipt } from './SavedPeerScopeReceipt';
+import { PeerModelAutoRules } from './PeerModelAutoRules';
 import { LocalPeerNameEditor } from './LocalPeerNameEditor';
 import { WindowsCommandReceipt } from './WindowsCommandReceipt';
 import { WindowsWorkspaceReadReceipt } from './WindowsWorkspaceReadReceipt';
@@ -129,6 +131,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const [firstPair,setFirstPair]=useState<{handle:string;picker:string;inviteId:string;deviceId:string;fingerprint:string;expiresAt:number;until:number}|null>(null);
   const [waitingPhones, setWaitingPhones] = useState<Data | null>(null);
   const [waitingBlock,setWaitingBlock]=useState<Data|null>(null);
+  const [inputPick,setInputPick]=useState('');
   const [phoneArchive, setPhoneArchive] = useState<Data | null>(null);
   const [closedInbox,setClosedInbox]=useState<Data|null>(null),[closedDraft,setClosedDraft]=useState('');
   const [ownText,setOwnText]=useState<Data|null>(null),ownTextSequence=useRef(0);
@@ -175,6 +178,8 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
       if (alive.current && scope.current.owns(ticket)) {
         if (action === 'devices.openTask' || action === 'devices.openCheckedLocalFile' || action === 'devices.discard') accept?.(response);
         else { const receipt = deviceReceipt(response); if (receipt.snapshot) acceptSnapshot(receipt.snapshot); accept?.(receipt.value, receipt.snapshot); }
+      } else if (typeof response?.value?.rulesHandle === 'string') {
+        void run('devices.discard', { rulesHandle: response.value.rulesHandle }).catch(() => {});
       } else if (typeof response?.value?.viewHandle === 'string') {
         void run('devices.discard', { viewHandle: response.value.viewHandle }).catch(() => {});
       }
@@ -972,6 +977,11 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
                 {waitingPage.withdrawnOnly&&<p>{time(row.withdrawnAt)} 原发起设备已撤回 · 本机未启动</p>}
                 {waitingPage.declinedOnly&&<p>{time(row.declinedAt)} 本机决定不接手 · 从未启动</p>}
                 {waitingPage.startedOnly&&<p>任务记录：{taskLabels[row.taskState]}{row.taskState!==row.runState&&' · 执行记录：'+taskLabels[row.runState]}{row.stopRequested&&' · 已请求停止，非停止回执'}</p>}
+                {!review && !form && !waitingPage.resultOnly && !waitingPage.startedOnly && !waitingPage.failedOnly && !waitingPage.withdrawnOnly && !waitingPage.declinedOnly &&
+                  row.waitingState!=='interrupted_before_start' && (!blocked||blocked.state==='local_review_unavailable') && supported('devices.readPendingGoalInput') &&
+                  <PendingReceivedGoalInput key={JSON.stringify([waitingPage.waitingHandle,snapshot?.capturedAt,row.waitingState])} handle={waitingPage.waitingHandle} here={waitingPage.localDeviceId} instance={waitingPage.localInstanceId} row={row} busy={busy}
+                    active={inputPick===JSON.stringify([waitingPage.waitingHandle,row.taskId,row.operationId])} select={()=>setInputPick(JSON.stringify([waitingPage.waitingHandle,row.taskId,row.operationId]))}
+                    read={done=>{void invoke('devices.readPendingGoalInput',{waitingHandle:waitingPage.waitingHandle,taskId:row.taskId,operationId:row.operationId},done);}}/>}
                 {blocked && <p role="status">{({original_not_retained:'本机保存了原派单，但已没有当时的接手授权；不会从记录中重建执行。',
                   expired:'原派单已到期，不能再启动。',interrupted_before_start:'上次接手在开始前中断，没有原执行可恢复。',original_conditions_unavailable:'无法再次核对原授权和本机条件；本次没有启动。'} as Record<string,string>)[blocked.state] || blocked.reason || '本机未建立模型审阅。请查看原工作与本机模型，尚未开始执行。'}</p>}
                 {!waitingPage.declinedOnly&&!waitingPage.withdrawnOnly&&<div className="pw-form-actions">{!waitingPage.resultOnly && !waitingPage.startedOnly && !waitingPage.failedOnly && <Button disabled={busy||!supported('devices.reviewGoal')} onClick={()=>reviewWaiting(row)}>{blocked?'重新核对接手条件':'核对本机接手'}</Button>}
@@ -1099,6 +1109,10 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
                 <p>上次对方只公开了设备身份和这一份授权回执，未公布工具或忙闲。不代表对方离线。</p>}
               {rows(peer.capabilitySnapshot?.capabilities).filter(cap => !phoneAccess || !['phone.tools.main', 'phone.tools.background'].includes(cap.id)).map(cap => <p key={cap.id}>{cap.id} · {capabilityCaveat || (cap.ready === true && cap.authorized === true ? '上次核对时可用' : cap.reason || '上次未报告就绪')}</p>)}
               <h4>允许这台设备在本机使用</h4>{rows(peer.grantScopes).map((scope, index) => <GrantScope key={index} scope={scope} />)}
+              {!retired(peer) && supported('devices.readOwnerModelRules') && supported('devices.disableOwnerModelRule') && <PeerModelAutoRules
+                key={JSON.stringify([local.deviceId,local.instanceId,local.certificateFingerprint,peer.deviceId,peer.instanceId,peer.certificateFingerprint,peer.authorizationEpoch])}
+                here={local} peer={peer} busy={busy} act={(action,args,done)=>{void invoke(action,args,done);}}
+                discard={handle=>{void run('devices.discard',{rulesHandle:handle}).catch(()=>{});}} resource={item=><ResourceScope resource={item}/>} />}
               <h4>本机可在对端使用</h4>{rows(peer.receivedGrantScopes).map((scope, index) => <GrantScope key={index} scope={scope} />)}
               {!retired(peer) && supported('devices.readSavedPeerScope') && <SavedPeerScopeReceipt
                 key={JSON.stringify([local.deviceId,local.instanceId,peer.deviceId,peer.instanceId,peer.certificateFingerprint,peer.authorizationEpoch])}

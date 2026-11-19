@@ -701,7 +701,9 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 deliver(result, null)
             }
             "teams.readFrozenOutputs" -> {
-                fields(args, "viewHandle","fromWork")
+                fields(args, "viewHandle","fromWork","fromProject")
+                require(!(args.has("fromWork")&&args.has("fromProject")))
+                val projectSource = if(args.has("fromProject")) args.getJSONObject("fromProject") else null
                 val source = if (args.has("fromWork")) args.getJSONObject("fromWork").also {
                     fields(it,"parentTaskId","parentRunId","parentEpoch","conversationId","teamRunId","fileReview")
                 } else null
@@ -720,9 +722,15 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                             && now.optLong("revision",-1) == shown.getLong("revision")) { "原协作已更新，先刷新原记录；没有读取另一轮成果" }
                     }
                     stillSame(); val marker = source?.let { controller.requireWorkFileReview(it,runId) }
+                    val projectMark = projectSource?.let { PocketWebProjectReviewReturn.original(module,it,runId,files.reader) }
                     val result = module.readOwnerFrozenFiles(runId,files.reader); stillSame()
                     val index = result.index(); val decision = module.ownerTextDecision(result,files.reader)
                     if (source != null && marker != null) { requireWorkFileIndex(index,decision,marker); controller.requireWorkFileReview(source,runId) }
+                    if(projectSource!=null && projectMark!=null) {
+                        check(owner.projectRun);PocketWebProjectReviewReturn.index(index,decision,projectMark)
+                        controller.nativeTokenBudgetHost().tasks.requireProjectTeamFirstReturn(projectSource,runId,files.reader)
+                        index.put("projectReviewOrigin",projectMark)
+                    }
                     files.install(result); index.put("fileHandle",files.handle).put("ownerDecision",decision).put("fullProject",owner.projectRun)
                 }, accept = { result ->
                     check(fileWindow === files && owner.live && files.captured != null) { "原成果阅读已关闭" }

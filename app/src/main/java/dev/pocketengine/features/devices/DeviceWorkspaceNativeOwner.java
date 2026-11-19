@@ -272,6 +272,20 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
         public NativeDeviceWorkspaceHost.PairingReviewAction inspectWithFirstIdentity(String invitation,NativeDeviceWorkspaceHost.IdentityGate gate)throws Exception{
             return network.inspectInvitation(invitation,java.util.Objects.requireNonNull(gate));
         }
+        public NativeDeviceWorkspaceHost.OwnerModelRules ownerModelRules(String here,String hereInstance,String hereFp,String peer,String instance,String fp,long epoch,int offset)throws Exception {
+            DeviceIdentity.LocalIdentity local=existingIdentity();
+            if(local==null||!local.deviceId().equals(here)||!local.instanceId().equals(hereInstance)||!local.certificateFingerprint().equals(hereFp))
+                throw new SecurityException("本机身份已变化");
+            var page=tasks.deviceTasks().ownerPeerModelRules(here,peer,instance,fp,epoch,offset);
+            return new NativeDeviceWorkspaceHost.OwnerModelRules() {
+                private void current()throws Exception {
+                    DeviceIdentity.LocalIdentity now=existingIdentity();
+                    if(now==null||!here.equals(now.deviceId())||!hereInstance.equals(now.instanceId())||!hereFp.equals(now.certificateFingerprint()))throw new SecurityException("原规则所在的本机身份已变化");
+                }
+                public JSONObject view()throws Exception {current();return page.view().put("hereInstance",hereInstance).put("hereFingerprint",hereFp);}
+                public JSONObject disable(String choice)throws Exception {current();JSONObject receipt=page.disable(choice);changed();return receipt;}
+            };
+        }
         public JSONObject readSavedPeerScope(String id,String instance,String fingerprint)throws Exception {
             return DeviceSavedPeerScope.read(DeviceWorkspaceNativeOwner.this,id,instance,fingerprint);
         }

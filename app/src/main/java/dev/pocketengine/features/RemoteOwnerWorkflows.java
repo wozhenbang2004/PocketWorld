@@ -2,6 +2,7 @@ package dev.pocketengine.features;
 
 import dev.pocketengine.core.EventSink;
 import dev.pocketengine.features.remote.RemoteModule;
+import dev.pocketengine.features.remote.RemoteSnapshotRoom;
 import dev.pocketengine.features.remote.HarnessCapabilityObservation;
 import dev.pocketengine.features.teams.TeamsModule;
 import dev.pocketengine.store.TaskStore;
@@ -411,7 +412,7 @@ public final class RemoteOwnerWorkflows {
     }
     private JSONObject captureSnapshot(Window window,JSONObject input)throws Exception {
         JSONObject operation,source;String capturedBinding;JSONArray paths=dev.pocketengine.features.remote.RemoteResultSnapshots.paths(input.getJSONArray("paths"));
-        synchronized(this){checkReview(window,input.getString("reviewId"));source=new JSONObject(window.source.toString());capturedBinding=window.profileBinding;operation=tasks.claimRemoteResultSnapshot(source,paths);window.fresh=false;window.review=null;window.snapshotFile=null;}
+        synchronized(this){checkReview(window,input.getString("reviewId"));source=new JSONObject(window.source.toString());capturedBinding=window.profileBinding;RemoteSnapshotRoom.requireRoom(window.result,source,null);operation=tasks.claimRemoteResultSnapshot(source,paths);window.fresh=false;window.review=null;window.snapshotFile=null;}
         emitTask(window.task);JSONObject request=new JSONObject(source.toString()).put("operationId",operation.getString("operationId")).put("paths",paths).put("_profileBinding",capturedBinding),result;
         try{result=module().captureResultSnapshot(request);}catch(Exception unavailable){result=new JSONObject().put("status","unknown").put("operationId",operation.getString("operationId"));for(String key:new String[]{"profileId","serviceBase","jobId","jobOperationId","environmentId","worker"})result.put(key,source.get(key));}
         tasks.recordRemoteResultSnapshot(window.task,operation.getString("operationId"),result);emitTask(window.task);return responseIfOpen(window,tasks.remoteOwnerOperation(window.task,operation.getString("operationId")));
@@ -444,19 +445,21 @@ public final class RemoteOwnerWorkflows {
     private JSONObject selectResultFile(Window window,JSONObject input)throws Exception {
         JSONObject source;String binding,path=input.getString("path"),review=input.getString("reviewId");
         synchronized(this){checkResultRead(window,review);if(window.selectedFiles.remove(path)!=null)return response(window,true,null);
-            boolean selectable=false;JSONArray entries=window.directory==null?null:window.directory.optJSONArray("files");for(int i=0;entries!=null&&i<entries.length();i++){JSONObject entry=entries.getJSONObject(i);if(path.equals(entry.optString("path"))&&entry.optBoolean("selectable"))selectable=true;}
-            if(!selectable||window.selectedFiles.size()>=8)throw new SecurityException("请在当前目录明确选择最多8个可保存文件");source=new JSONObject(window.source.toString());for(String key:new String[]{"jobId","jobOperationId","environmentId","worker","workspaceIdentity"})if(!source.getString(key).equals(window.directory.optString(key)))throw new SecurityException("目录不属于当前原job，请重新核对");binding=window.profileBinding;}
+            Long listedBytes=null;JSONArray entries=window.directory==null?null:window.directory.optJSONArray("files");for(int i=0;entries!=null&&i<entries.length();i++){JSONObject entry=entries.getJSONObject(i);if(path.equals(entry.optString("path"))&&entry.optBoolean("selectable"))listedBytes=entry.getLong("bytes");}
+            if(listedBytes==null||window.selectedFiles.size()>=8)throw new SecurityException("请在当前目录明确选择最多8个可保存文件");source=new JSONObject(window.source.toString());for(String key:new String[]{"jobId","jobOperationId","environmentId","worker","workspaceIdentity"})if(!source.getString(key).equals(window.directory.optString(key)))throw new SecurityException("目录不属于当前原job，请重新核对");binding=window.profileBinding;
+            // A known over-budget choice need not read the remote file bytes merely to reject it afterwards.
+            RemoteSnapshotRoom.requireRoom(window.result,source,RemoteSnapshotRoom.selectionBytes(window.selectedFiles.values(),listedBytes));}
         JSONObject bytes=module().handle("readArtifact",new JSONObject(source.toString()).put("path",path).put("_profileBinding",binding));
         dev.pocketengine.features.remote.RemoteResultSnapshot.artifact(bytes,source,path);
         if(!bytes.optString("fileVersion").matches("[a-f0-9]{64}"))throw new SecurityException("原文件没有真实版本回执");
         JSONObject selected=new JSONObject().put("path",path).put("bytes",bytes.getLong("bytes")).put("sha256",bytes.getString("sha256")).put("fileVersion",bytes.getString("fileVersion"));
-        synchronized(this){checkResultRead(window,review);long total=selected.getLong("bytes");for(JSONObject file:window.selectedFiles.values())total=Math.addExact(total,file.getLong("bytes"));if(window.selectedFiles.size()>=8||total>524288)throw new SecurityException("本次所选文件超过8个或512KiB");window.selectedFiles.put(path,selected);}
+        synchronized(this){checkResultRead(window,review);long total=selected.getLong("bytes");for(JSONObject file:window.selectedFiles.values())total=Math.addExact(total,file.getLong("bytes"));RemoteSnapshotRoom.requireRoom(window.result,source,total);if(window.selectedFiles.size()>=8||total>524288)throw new SecurityException("本次所选文件超过8个或512KiB");window.selectedFiles.put(path,selected);}
         return response(window,true,null);
     }
     private JSONObject captureSelectedSnapshot(Window window,JSONObject input)throws Exception {
         JSONObject operation,source;String binding;JSONArray paths=new JSONArray(),expected=new JSONArray();long revision;
         synchronized(this){checkResultRead(window,input.getString("reviewId"));for(JSONObject file:window.selectedFiles.values()){paths.put(file.getString("path"));expected.put(new JSONObject(file.toString()));}
-            source=new JSONObject(window.source.toString());binding=window.profileBinding;revision=window.lifecycleRevision;operation=tasks.claimRemoteResultSnapshot(source,paths,expected);window.fresh=false;window.review=null;}
+            source=new JSONObject(window.source.toString());binding=window.profileBinding;revision=window.lifecycleRevision;RemoteSnapshotRoom.requireRoom(window.result,source,RemoteSnapshotRoom.selectionBytes(window.selectedFiles.values(),0));operation=tasks.claimRemoteResultSnapshot(source,paths,expected);window.fresh=false;window.review=null;}
         JSONObject payload=new JSONObject(source.toString()).put("operationId",operation.getString("operationId")).put("paths",paths).put("expectedFiles",expected).put("_profileBinding",binding),actual;
         dev.pocketengine.core.RunControl current=resultReadControl(window,source.getString("profileId"),binding,revision);
         try{actual=module().captureResultSnapshot(payload,()->current.check());}

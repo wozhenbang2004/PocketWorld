@@ -185,6 +185,7 @@ function Segmented({ label, value, options, disabled, onChange }: { label: strin
 /** Personal views share the existing host-owned profile and memory records. */
 export function ProfileWorkspace({ state, supported, run, onBack, onSettings, registerBack, registerBeforeLeave, presentationKey, initialTarget, targetRequestKey, onOpenAdvancedMemory, onOpenCommitments, onOpenReminders }: Props) {
   const [profile, setProfile] = useState<PersonalProfile | null>(null);
+  const [savedReceipt, setSavedReceipt] = useState<{section: Section; revision: number} | null>(null);
   const [memories, setMemories] = useState<Memories>(emptyMemories);
   const [memoryError, setMemoryError] = useState(''), [memoryAvailable, setMemoryAvailable] = useState(false);
   const [loaded, setLoaded] = useState(false), [view, setView] = useState<View>('home');
@@ -223,6 +224,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   const canEnter = supported('connections.enter'), canRead = supported('profile.snapshot'), canSave = supported('profile.save');
   const locked = !!pending;
   const formLocked = locked || avatarPicking || !canSave;
+  const pendingSavedRead = !!editor && !!savedReceipt && editor.section===savedReceipt.section && !!profile && profile.revision < savedReceipt.revision;
   const profileConflict = !!editor && !!profile && editor.original.revision !== profile.revision && !sameSection(editor.original, profile, editor.section);
   const pendingUntil = selection?.candidate && selection.record.status === 'pending' ? selection.record.expiresAt : null;
   const expiredCandidate = usePendingCandidateDeadline(Number.isSafeInteger(pendingUntil) && pendingUntil > 0 ? pendingUntil : 0);
@@ -505,18 +507,25 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   };
   const saveProfile = () => {
     const frozen = current.current.editor;
-    if (!frozen || !profileDirty(frozen) || !canSave || profileConflict || avatarPicker.current) return;
+    if (!frozen || !profileDirty(frozen) || !canSave || profileConflict || pendingSavedRead || avatarPicker.current) return;
     const values = sectionValues(frozen.draft, frozen.section);
     void action('正在保存', async () => {
       const result = object(await call('profile.save', { expectedRevision: frozen.original.revision, section: frozen.section, values }));
       if (!alive.current) return;
+      if (result.format==='pocketworld.profile-save-receipt.v1' && result.profileIncluded===false && !('profile' in result) &&
+          result.saved===true && result.persisted===true && Number.isSafeInteger(result.profileRevision) && result.profileRevision===frozen.original.revision+1) {
+        setSavedReceipt({section:frozen.section,revision:result.profileRevision});
+        setNotice('原请求已保存，没有重复写入。这张回执不含当前资料。');return;
+      }
       const saved = profileOf(result.profile);
       if (result.saved !== true || result.persisted !== true || !saved || saved.revision !== frozen.original.revision + 1) {
         if (saved) acceptProfile(saved);
         throw new Error(string(result.message || result.error) || '保存尚未确认，当前输入已保留。请读取最新资料后核对。');
       }
-      setProfile(saved); setEditor({ section: frozen.section, original: saved, draft: { ...saved } }); setNotice(frozen.section === 'identity' ? '已保存个人资料' : '已保存，后续私人对话会参考这些偏好');
-      try { await readSnapshot(); } catch { if (alive.current) setError('资料已保存，最新设置暂未完整读取，请刷新后继续。'); }
+      setSavedReceipt(null); setProfile(saved); setEditor({ section: frozen.section, original: saved, draft: { ...saved } });
+      // The settings store wrote only this section under its original revision; its chat-write toggle did not change.
+      setAgentPreferences(prior=>prior?.revision===frozen.original.revision?{...prior,revision:saved.revision}:null);
+      setNotice(frozen.section==='identity'?'已保存个人资料':'已保存为默认偏好；允许参考这些设置的私人对话可使用。');
     });
   };
   const saveAgentPreferenceControl = (enabled: boolean) => {
@@ -939,7 +948,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   const feedbackVisible = !!feedback && !(view === 'memory' && feedback.operation === 'shorten' && selection?.id !== feedback.targetId) && (['memories', 'memory', 'memory-history'].includes(view) || view === 'memory-new' && (createUnknown || feedback.value.status === 'settings_required'));
   const preferenceSection = feedback && !feedback.needsQuery ? preferenceSectionOf(feedback.value) : null;
   const headingLabel = view === 'memory' && selection?.candidate ? '记忆建议' : view === 'memory' && selection?.historical ? '记忆详情' : labels[view];
-  const headerSave = editor ? <Button className="pw-profile-save" size="small" disabled={locked || avatarPicking || !profileDirty(editor) || profileConflict || !canSave} onClick={saveProfile}>{pending === '正在保存' ? '保存中' : '保存'}</Button>
+  const headerSave = editor ? <Button className="pw-profile-save" size="small" disabled={locked || avatarPicking || !profileDirty(editor) || profileConflict || pendingSavedRead || !canSave} onClick={saveProfile}>{pending === '正在保存' ? '保存中' : '保存'}</Button>
     : view === 'memory-new' ? <Button className="pw-profile-save" size="small" disabled={locked || createUnknown || !newMemoryText.trim() || newMemoryExpiry === 'custom' && (!newMemoryCalendar || !validCalendarTime(newMemoryCalendar)) || settingsRequiredFor(feedback, 'create', undefined, newMemoryText.trim()) || !supported('profile.memory.createReview') || !supported('profile.memory.confirm')} onClick={saveNewMemory}>{pending === '正在保存记忆' ? '保存中' : newMemoryExpiry === 'custom' ? '核对' : '保存'}</Button>
       : view === 'memory' && selection && !selection.candidate && !selection.historical ? <Button className="pw-profile-save" size="small" disabled={locked || !memoryDirty(selection) || !selection.draft.trim() || memoryConflict || memoryUnknown || settingsRequiredFor(feedback, 'correct', selection.id, selection.draft.trim()) || !supported('profile.memory.confirm')} onClick={saveMemory}>{pending === '正在保存记忆' ? '保存中' : '保存'}</Button>
         : view === 'memories' || view === 'memory-history' ? <IconButton icon={IconSettings} aria-label="记忆设置" title="记忆设置" disabled={locked} onClick={openMemorySettings} />
@@ -975,6 +984,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
             {(feedback.needsQuery || ['unknown', 'conflict'].includes(feedback.value.status)) && <Button variant="secondary" size="small" leadingIcon={IconRefresh} disabled={locked || !supported('profile.memory.query')} onClick={() => readReceipt()}>查询这次修改</Button>}
           </div>
         </MotionFeedback>}
+        {pendingSavedRead && <Button variant="secondary" size="small" disabled={locked} onClick={()=>{void action('正在核对当前资料',async()=>{await readSnapshot();setSavedReceipt(null);setNotice('当前设置已重新读取。');});}}>核对当前设置</Button>}
         {loaded && profile && view === 'home' && <>
           <section className="pw-profile-identity" aria-label="个人资料"><Avatar profile={profile} large /><div><h2>{profile.nickname || '我的资料'}</h2>{profile.addressAs && profile.addressAs !== profile.nickname && <p>称呼我为 {profile.addressAs}</p>}<Button variant="ghost" size="small" className="pw-profile-edit-link" onClick={() => openEditor('identity')}>编辑资料<IconChevronRight size={15} aria-hidden="true" /></Button></div></section>
           <p className="pw-profile-scope">这里的偏好用于私人管家的交流与做事方式；每次工作的明确要求和已确认范围优先。</p>

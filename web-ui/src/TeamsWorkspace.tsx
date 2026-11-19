@@ -17,6 +17,7 @@ import { TeamStartReview } from './TeamStartReview';
 import { canInspectFileContinuation, TeamFileContinuationReview } from './TeamFileContinuation';
 import { TeamFailedWorkHandoff, FailedHandoffReview } from './TeamFailedWorkHandoff';
 import { TeamParentRevisions,TeamParentRevisionReview } from './TeamParentRevisions';
+import type {ProjectTeamReviewOrigin} from './project-team-review-origin';
 import { TeamFrozenFiles } from './TeamFrozenFiles';
 import { resetTeamProductionAcknowledgments, teamDefinitionPayload, teamProductionDraft, teamProductionEditorMember } from './team-production';
 import { TeamMemberAvatar, TeamMemberIdentity } from './TeamMemberIdentity';
@@ -128,7 +129,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const resultBack = useRef<() => boolean>(() => false);
   const handledAttention = useRef('');
   const handledRunFocus = useRef('');
-  const [fileEntry,setFileEntry]=useState<{view:string;requestId:string;source:WorkFileSource;returnToWork?:(reason?:string)=>void}|null>(null);
+  const [fileEntry,setFileEntry]=useState<{view:string;requestId:string;source:WorkFileSource|ProjectTeamReviewOrigin;returnToWork?:(reason?:string)=>void}|null>(null);
   const [proposalEntry,setProposalEntry]=useState<{source:WorkProposalSource;returnToWork?:(reason?:string)=>void}|null>(null);
   const [workPackage,setWorkPackage]=useState<{view:string;returnToWork:(reason?:string)=>void}|null>(null);
   const focusedPackage=workPackage&&workPackage.view===reading?.viewHandle?workPackage:null;
@@ -257,10 +258,10 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     const requestId = runFocus?.requestId, runId = runFocus?.runId;
     if (!requestId || !runId || requestId === handledRunFocus.current || !workspaceActive || !catalogReady || busy || entered.current || backgrounded.current || !ownsNativeWindow()) return;
     handledRunFocus.current = requestId;
-    const from=runFocus?.fromWork,proposal=from&&'proposal' in from?from:undefined,files=from&&'fileReview' in from?from:undefined,pack=from&&'deliveredPackage' in from?from:undefined;
+    const project=runFocus?.fromProject,from=runFocus?.fromWork,proposal=from&&'proposal' in from?from:undefined,files=from&&'fileReview' in from?from:undefined,pack=from&&'deliveredPackage' in from?from:undefined;
     void invoke('teams.readRun', { runId,...(proposal?{proposalOrigin:proposal}:{}) }, result => {
       const next=result.reading;
-      if (next?.run?.id !== runId||!next.viewHandle) {release(next);throw new Error('原协作记录身份不匹配，请从原工作重新打开。');}
+      if (next?.run?.id !== runId||!next.viewHandle||project&&(from||project.teamRunId!==runId||!next.run.productionScope||!next.run.workPlan)) {release(next);throw new Error('原协作记录身份不匹配，请从原工作重新打开。');}
       if(from){
         const link=next.ownerWorkLink;
         if(!link||link.currentRun!==true||link.readOnly!==true||link.stopping!==false||link.taskId!==from.parentTaskId||link.runId!==from.parentRunId
@@ -273,11 +274,12 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       setEditor(null); setMemberDraft(null); setResultSource(null); closeReview(); closePhoneSelection();
       acceptReading(next);setProposalEntry(proposal?{source:proposal,returnToWork:runFocus?.returnToWork}:null);
       setWorkPackage(pack&&runFocus?.returnToWork?{view:next.viewHandle,returnToWork:runFocus.returnToWork}:null);
-      setFileEntry(files?{view:next.viewHandle,source:files,requestId,returnToWork:runFocus?.returnToWork}:null);
-      setRunSections(old => ({ ...old, [runId]: from?'result':'progress' }));
+      const returned=project||files;
+      setFileEntry(returned?{view:next.viewHandle,source:returned,requestId,returnToWork:runFocus?.returnToWork}:null);
+      setRunSections(old => ({ ...old, [runId]: from||project?'result':'progress' }));
       setComposeOpen(false);
       onRunFocusConsumed?.(requestId);
-    }, failure => {onRunFocusConsumed?.(requestId);if(runFocus?.fromWork)runFocus.returnToWork?.(failure instanceof Error?failure.message:'原文件或提案目录已变化。');});
+    }, failure => {onRunFocusConsumed?.(requestId);if(runFocus?.fromWork||runFocus?.fromProject)runFocus.returnToWork?.(failure instanceof Error?failure.message:'原文件或提案目录已变化。');});
   }, [runFocus?.requestId, workspaceActive, catalogReady, busy]);
   useEffect(() => {
     const requestId = label(attentionFocus?.requestId);

@@ -97,9 +97,12 @@ import {useProjectRevision} from './useProjectRevision';
 import {packageOperationTarget,type PackagePreviewTarget} from './project-preview';
 import {useProjectPackageHandoff} from './useProjectPackageHandoff';
 import {TaskOutcome} from './TaskOutcome';
+import {locatePhoneReturn,phoneSourceStillOpen,type PhoneConversationOrigin} from './PhoneTaskConversationReturn';
 import {OwnerWorkFacts,WorkGoal} from './OwnerWorkFacts';
 import {WorkExecutionPlace} from './WorkExecutionPlace';
 import {OwnerWorkSupplement,type WorkSupplementTarget,type WorkSupplementLeave} from './OwnerWorkSupplement';
+import {ProjectTeamFirstReviews} from './ProjectTeamFirstReviews';
+import type {ProjectTeamReviewOrigin} from './project-team-review-origin';
 import {sameTeamPackage} from './team-delivered-package';
 import {ownerWorkPresentation,type OwnerWorkTeam} from './owner-work-presentation';
 import type {TeamWorkTarget} from './ConversationTeamDecisions';
@@ -745,9 +748,12 @@ export default function App(){
  },[invalidateContinuation]);
  const backFromTask=useCallback(()=>{if(taskMenuOpen){setTaskMenuOpen(false);return}if(deviceScopeBack.current?.()||capabilityBack.current?.()||livePreviewBack.current?.()||taskTransientBack.current?.())return;if(taskLayer==='scope'){showTaskLayer('goal');return}const origin=taskReconciliationOrigin.current;if(origin?.openedId===taskId){openTask(origin.taskId,origin.layer,false,origin.history);return}void closeTask().then(closed=>{if(closed&&searchReturn)showWorkSearch()})},[taskMenuOpen,taskId,taskLayer,showTaskLayer,openTask,closeTask,searchReturn,showWorkSearch]);
  const selectConversation=useCallback((id:string)=>{void navigate('chat',()=>{if(can('conversation.select'))run('conversation.select',{id})});},[can,run,navigate]);
- const returnToTaskConversation=async(task:Task,associate=false)=>{
+ const returnToTaskConversation=async(task:Task,associate=false,phoneRead?:PhoneConversationOrigin)=>{
   const conversationId=privateTaskConversationId(task);
   if(!conversationId||returningConversation||bridge.getState().state.chatSubmitting||!can('conversation.select'))return;
+  if(phoneRead&&(associate||phoneRead.taskId!==task.id||phoneRead.conversationId!==conversationId||!phoneSourceStillOpen(phoneRead))){
+   setLocalError('原手机轮次或阅读窗口已变化，没有打开其他对话。');return
+  }
   const request=++conversationReturnRequest.current,documentEpoch=bridge.getDocumentEpoch(),navigation=navigationWindow.current;
   setReturningConversation(task.id);
   // Closing a task over a secondary workspace legitimately advances the host's
@@ -757,7 +763,8 @@ export default function App(){
   const current=()=>request===conversationReturnRequest.current&&documentEpoch===bridge.getDocumentEpoch()&&!document.hidden;
   try{
    if(taskOpen&&!await closeTask()||!current()||navigationWindow.current!==navigation)return;
-   await navigate('chat',undefined,{taskClosed:true});
+   const entered=await navigate('chat',undefined,{taskClosed:true});
+   if(phoneRead&&!entered)return;
    const destination=navigationWindow.current;
    const atDestination=()=>current()&&navigationWindow.current===destination;
    const waitForSnapshot=(matches:()=>boolean,failure:string)=>new Promise<boolean>((resolve,reject)=>{
@@ -772,6 +779,7 @@ export default function App(){
    if(!atDestination())return;
    const reader=bridge.getState().state.conversationReader;
    if(reader){
+    if(phoneRead)throw new Error('另一份历史阅读窗口已打开，未关闭它或改读其他回执。');
     if(!can('conversation.reader.close'))throw new Error('请先关闭历史阅读窗口，再回到这件事的对话。');
     await act('conversation.reader.close',{window:reader.window,conversationId:reader.conversation});
     if(!await waitForSnapshot(()=>!bridge.getState().state.conversationReader,'历史阅读窗口尚未关闭，请关闭后再回到所属对话。'))return;
@@ -783,6 +791,11 @@ export default function App(){
    // instead. Confirm both the identity and its editable conversation surface.
    if(!await waitForSnapshot(()=>bridge.getState().state.conversationId===conversationId&&!bridge.getState().state.conversationReader,'尚未确认已回到所属对话，请从对话列表重新打开。'))return;
    if(current()&&navigationWindow.current===destination&&bridge.getState().state.conversationId===conversationId){
+    if(phoneRead){
+     const found=await locatePhoneReturn(phoneRead,()=>chatMessageList.current,atDestination,stopFollowing,saveReading);
+     if(atDestination()&&found!=='left')setLocalStatus(found==='found'?'已定位第 '+phoneRead.epoch+' 轮的原回执。':found==='absent'?'已回到原私聊。当前消息窗口未找到这轮的唯一回执，不代表任务没有结果。':'已回到原私聊，未能定位原回执在页面中的位置。');
+     return
+    }
     if(!await changeIntent('chat')||!atDestination())return;
     if(associate){
       if(!await stageButlerObject({kind:'work',id:task.id,runId:task.raw?.runId,epoch:task.raw?.coordinatorEpoch},atDestination))return;
@@ -1154,6 +1167,15 @@ export default function App(){
      });};
      void openRelatedWorkspace('teams',origin,()=>{setTeamAttentionFocus(undefined);setTeamRunFocus({requestId:crypto.randomUUID(),runId:source.teamRunId,fromWork:proposal||files,returnToWork});});
    }else if('memberId' in locator) void openRelatedWorkspace('teams',origin,()=>{setTeamRunFocus(undefined);setTeamAttentionFocus({...locator,ownerWork:source,requestId:crypto.randomUUID()});});
+ };
+ const openProjectTeamReview=(source:ProjectTeamReviewOrigin)=>{
+   const live=bridge.getState(),row=asArray<Task>(live.state.tasks).find(t=>t.id===source.parentTaskId),raw=row?.raw;
+   if(document.hidden||!taskOpen||taskId!==source.parentTaskId||openedTaskId.current!==taskId||obj(live.view).taskId!==taskId||raw?.runId!==source.parentRunId||
+      raw?.coordinatorEpoch!==source.parentEpoch||raw?.conversationId!==source.conversationId||raw?.developmentContext?.projectId!==source.projectId||
+      raw?.developmentContext?.checkoutId!==source.checkoutId||!can('teams.readRun')||!can('teams.readFrozenOutputs')){setLocalError('原项目或执行轮次已经变化，没有打开替代工作。');return;}
+   const origin:WorkspaceOrigin={...captureWorkspaceOrigin(),task:{id:source.parentTaskId,layer:taskLayer,expected:{runId:source.parentRunId,epoch:source.parentEpoch}}};
+   const back=(reason?:string)=>{if(document.hidden||relatedOrigin.current!==origin)return;void restoreWorkspace(origin).then(()=>{if(reason&&!document.hidden)setLocalError(reason)});};
+   void openRelatedWorkspace('teams',origin,()=>{setTeamAttentionFocus(undefined);setTeamRunFocus({requestId:crypto.randomUUID(),runId:source.teamRunId,fromProject:source,returnToWork:back})});
  };
  const openWorkTeam=(team:OwnerWorkTeam,openPackage=false)=>{
    if(!can('teams.readRun'))return;
@@ -1530,6 +1552,7 @@ export default function App(){
   </section>;
   const evidence=<TaskOutcome key="task-evidence" task={review&&!reviewStale?review.task:task} messages={messages} resultFiles={taskFiles}
    active={overviewActive} showEmptyResult={inspectResult&&task.status==='completed'} deferExecutionDetails={!inspectResult&&task.status!=='failed'}
+   onReadPhoneConversation={overviewActive&&obj(snapshot?.view).taskId===task.id&&!state.chatSubmitting&&!state.conversationReader&&!returningConversation&&can('tasks.close')&&can('conversation.select')?origin=>void returnToTaskConversation(task,false,origin):undefined}
    canReadReport={can('ownerWork.report.read')} readIdentity={`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}:${navigationRevision}`}
    onCopy={copyWithLocalFeedback} onFollowUp={followOriginal} onOpenProjectPackage={!packageOpening&&!taskOpening&&can('projects.package.preview.inspect')&&can('projects.package.preview.open')&&can('tasks.close')?openTaskPackage:undefined}
    onOpenAttachment={can('attachments.open')?(messageId,id,sha256)=>run('attachments.open',{messageId,id,sha256}):undefined}/>;
@@ -1586,6 +1609,9 @@ export default function App(){
        <PhonePauseInstruction key={'phone-pause-note:'+task.id} task={task} visible={taskLayer==='overview' && !phoneViewerObscured && !phoneViewerExpanded && obj(snapshot?.view).taskId===task.id} run={act}/>}
      {taskOpen&&phoneViewerFor(task)}
      {taskOpen&&task.raw?.feature==='remote'&&can('remoteTask.open')&&<RemoteTaskWorkspace key={task.id} taskId={task.id} raw={obj(task.raw)} receipt={task.hostReceipt} savedFiles={asArray<Json>(task.raw?.remoteSnapshotAttachments)} openProject={can('remoteTask.stageSavedSources')&&can('projects.localSource.openPrepared')?pin=>{void navigate('projects',()=>run('projects.localSource.openPrepared',pin));}:undefined}/>}
+     {overviewActive&&task.raw?.mayReadProjectTeamFirstReviews===true&&can('tasks.projectTeamReviews')&&can('tasks.projectTeamReview.original')&&can('teams.readFrozenOutputs')&&can('teams.readRun')&&
+       <ProjectTeamFirstReviews key={task.id+':'+task.raw.runId+':'+task.raw.coordinatorEpoch} id={task.id} run={task.raw.runId} epoch={task.raw.coordinatorEpoch}
+         project={task.raw.developmentContext?.projectId} checkout={task.raw.developmentContext?.checkoutId} conversation={task.raw.conversationId} active={overviewActive} onOpen={openProjectTeamReview}/>}
      {taskOpen&&taskLayer==='overview'&&task.raw?.developmentContext&&can('projectLive.open')&&<ConversationModelPickerVisibility key={'live:'+task.id}>{pickerVisible=><ProjectLivePreview taskId={task.id} run={act} nativeVisible={!pickerVisible&&!phoneViewerObscured} onBackChange={registerLivePreviewBack}/>}</ConversationModelPickerVisibility>}
      {currentScope.executionPhase==='planning'&&<p className="pw-muted" role="status">原任务处于只读规划。{Number(currentScope.planRevision)>0?`当前计划版本 ${String(currentScope.planRevision)}，确认准确计划后才能在原范围内继续。`:'尚未提交计划正文，重新打开页面不会启动执行。'}</p>}
 

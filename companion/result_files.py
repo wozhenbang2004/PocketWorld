@@ -8,6 +8,26 @@ from workspace_files import FileError
 
 PAGE = 100
 MAX_ENTRIES = 10_000
+MAX_CAPTURE_BYTES = 512 * 1024
+MAX_JOB_BYTES = 1024 * 1024
+MAX_JOB_SNAPSHOTS = 4
+
+
+def original_snapshot_room(job, ordinary):
+    """Only this settled job's retained, non-project-history captures; never a host-wide quota or a reservation."""
+    if job.get("status") not in {"completed", "failed", "cancelled"} or not re.fullmatch(r"[a-f0-9]{64}", str(job.get("workspaceIdentity", ""))):
+        return None
+    if not isinstance(ordinary, list) or len(ordinary) > MAX_JOB_SNAPSHOTS:
+        return None
+    sizes = [row.get("bytes") if isinstance(row, dict) else None for row in ordinary]
+    if any(type(n) is not int or not 0 <= n <= MAX_CAPTURE_BYTES for n in sizes) or sum(sizes) > MAX_JOB_BYTES:
+        return None
+    keys = {"jobId": "id", "jobOperationId": "operationId", "environmentId": "environmentId", "worker": "worker", "workspaceIdentity": "workspaceIdentity"}
+    if any(not isinstance(job.get(field), str) or not job[field] for field in keys.values()):
+        return None
+    return {"protocol": "original_result_snapshot_room_v1", **{k: job[field] for k, field in keys.items()},
+            "maximumCount": MAX_JOB_SNAPSHOTS, "maximumBytes": MAX_JOB_BYTES, "captureMaximumBytes": MAX_CAPTURE_BYTES,
+            "retainedCount": len(sizes), "retainedBytes": sum(sizes)}
 
 
 def expected_files(request, paths, error):
