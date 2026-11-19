@@ -159,13 +159,17 @@ export function archivedPhoneStopLine(value:ArchivedPhoneStop,time:(at:number)=>
   const state=value.state==='request_recorded'?'已登记停止请求，当时未确认停下':value.state==='reported_stopped'?'当时报告已停下':'当时已结束，未登记停止请求';
   return '原停止回执：'+state+'。对方登记请求于 '+time(value.requestReceivedAt)+'。';
 }
+export function archivedPhoneAcceptanceLine(row:{targetAcceptedAt?:number;targetRunRecorded?:boolean},time:(at:number)=>string) {
+  if(!row.targetAcceptedAt)return '没有可核对的原接单回执，不能据此判断是否送达。';
+  return '原设备已于 '+time(row.targetAcceptedAt)+' 接收'+(row.targetRunRecorded?'；回执也留有当时的执行编号。':'。');
+}
 export function devicePhoneGoalArchive(value: unknown, peer: DeviceData, local: DeviceData, side: PhoneArchiveSide, sourceTaskId = '') {
   if (!object(value) || value.kind !== 'phoneGoalArchive' || (value.sourceTaskId ?? '') !== sourceTaskId
     || !!sourceTaskId && (side !== 'sent' || value.searchText) || value.searchText !== undefined && (typeof value.searchText !== 'string' || Array.from(value.searchText).length > 64) || (value.side ?? 'sent') !== side || !samePhoneGoalArchive(value, peer, local) || value.readOnly !== true || !identity(value.archiveHandle)
     || value.oldTargetIdentityChanged!==undefined && (value.oldTargetIdentityChanged!==true || side!=='sent' || !!sourceTaskId)
     || !Array.isArray(value.rows) || value.rows.length > 24 || typeof value.hasMore !== 'boolean' || typeof value.canReadNewer !== 'boolean'
     || !value.rows.every((row: unknown) => object(row) && identity(row.taskId) && (!sourceTaskId || row.taskId === sourceTaskId) && identity(row.operationId) && typeof row.goal === 'string' && !!row.goal
-      && (row.targetAcceptedAt === undefined || !!sourceTaskId && positiveInteger(row.targetAcceptedAt))
+      && (row.targetAcceptedAt === undefined || side==='sent' && positiveInteger(row.targetAcceptedAt))
       && (row.stopAttempt === undefined || !!sourceTaskId && side==='sent' && row.stopReceipt===undefined && isArchivedPhoneStopAttempt(row.stopAttempt))
       && (row.stopReceipt === undefined || !!sourceTaskId && side==='sent' && isArchivedPhoneStop(row.stopReceipt))
       && (row.targetRunRecorded === undefined || row.targetRunRecorded === true && positiveInteger(row.targetAcceptedAt))

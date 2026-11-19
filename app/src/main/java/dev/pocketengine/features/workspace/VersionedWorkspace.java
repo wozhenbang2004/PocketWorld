@@ -143,6 +143,28 @@ public final class VersionedWorkspace {
         JSONObject project=new JSONObject().put("id",id).put("name",name.trim()).put("createdAt",System.currentTimeMillis()).put("sourceImport",new JSONObject().put("clientId",importClientId).put("packageSha256",packageSha).put("executionAuthorityRestored",false));
         all.put(project);nativeProjects=null;recordWrite.write(catalog,new JSONObject().put("projects",all));publishNativeProjects(all);return JsonFiles.copy(project);
     }
+    public synchronized RemovedProjectFiles.Shelf removedFilesForOwner(String project,java.util.function.BooleanSupplier live)throws Exception{
+        requireArchiveRoot();return RemovedProjectFiles.load(this,RemovedProjectFiles.folder(root,projects(),project),project,live);
+    }
+    public synchronized JSONObject removedFileHistoryForOwner(RemovedProjectFiles.Shelf shelf,int index,java.util.function.BooleanSupplier live)throws Exception{
+        requireArchiveRoot();File dir=RemovedProjectFiles.folder(root,projects(),shelf.project);
+        if(!java.nio.file.Files.isDirectory(dir.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS))throw new IllegalStateException("原项目目录已变化");
+        return shelf.versions(this,dir,index,live);
+    }
+    public synchronized JSONObject removedFileTextForOwner(RemovedProjectFiles.Shelf shelf,int index,JSONObject selected,java.util.function.BooleanSupplier live)throws Exception{
+        requireArchiveRoot();File dir=RemovedProjectFiles.folder(root,projects(),shelf.project);
+        if(!java.nio.file.Files.isDirectory(dir.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS))throw new IllegalStateException("原项目目录已变化");
+        return shelf.originalText(this,dir,index,selected,live);
+    }
+    JSONObject originalTextOfRecord(String project,String path,JSONObject entry,JSONObject selected)throws Exception{
+        FileSnapshot v=new FileSnapshot(this,project,path,entry);
+        if(v.tombstone||!"text".equals(v.kind)||!v.revisionId.equals(selected.opt("revisionId"))||
+                v.version!=selected.getInt("version")||v.sizeBytes!=selected.getLong("sizeBytes")||!v.sha256.equals(selected.opt("sha256")))
+            throw new IllegalStateException("所选文字修订的原字节身份已经变化，未读替代内容");
+        JSONObject out=new JSONObject().put("path",path).put("version",v.version).put("revisionId",v.revisionId).put("sha256",v.sha256).put("bytes",v.sizeBytes);
+        String text=completeEditorText(v);
+        return text==null?out.put("state","over_text_limit"):out.put("state","complete_text").put("text",text);
+    }
     public synchronized JSONArray list(String projectId)throws Exception {
         File folder=project(projectId);JSONArray result=new JSONArray();File[] files=committedRecords(folder);
         if(files!=null){Arrays.sort(files);for(File file:files){JSONObject head=JsonFiles.read(file);if(head.optBoolean("deleted"))continue;result.put(metadata(head));}}
@@ -199,7 +221,10 @@ public final class VersionedWorkspace {
         catch(Exception presentationUnavailable){/* The original file commit remains authoritative; never report it as a failed write. */}
     }
     public synchronized JSONArray history(String projectId,String path)throws Exception {
-        JSONObject head=head(projectId,path);JSONArray result=new JSONArray(),all=head.optJSONArray("history");
+        return historyOfRecord(projectId,path,head(projectId,path));
+    }
+    JSONArray historyOfRecord(String projectId,String path,JSONObject head)throws Exception {
+        JSONArray result=new JSONArray(),all=head.optJSONArray("history");
         if(all!=null)for(int i=0;i<all.length();i++){JSONObject v=all.getJSONObject(i);FileSnapshot pin=new FileSnapshot(this,projectId,path,v);result.put(pin.json().put("at",v.getLong("at")).put("deleted",pin.tombstone).put("characters",v.optString("content").length()));}
         return result;
     }

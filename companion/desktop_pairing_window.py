@@ -7,9 +7,11 @@ from desktop_owner_confirmation import confirm_local_pairing, confirm_local_pair
 from desktop_sessions import WindowsDesktopHealth
 from platform_backend import PlatformError
 import windows_read_pairing as read_pairing
+from windows_pairing_return import READY, window_class
+from windows_owner_surface import OwnerSurface, OWNER_STYLE, USE_DEFAULT, columns
 
 
-def show_pairing_window(controller, host, *, offer_local_receipts=False):
+def show_pairing_window(controller, host, *, offer_local_receipts=False, installed_owner=None):
     if os.name != "nt" or WindowsDesktopHealth().probe().get("available") is not True:
         raise PlatformError("Pairing management requires the real logged-in, unlocked Windows owner desktop")
     from ctypes import wintypes as w
@@ -27,8 +29,9 @@ def show_pairing_window(controller, host, *, offer_local_receipts=False):
         "GetWindowTextW": ([w.HWND, w.LPWSTR, ctypes.c_int], ctypes.c_int), "SetWindowTextW": ([w.HWND, w.LPCWSTR], w.BOOL),
         "SendMessageW": ([w.HWND, w.UINT, w.WPARAM, w.LPARAM], ctypes.c_ssize_t), "EnableWindow": ([w.HWND, w.BOOL], w.BOOL),
         "SetTimer": ([w.HWND, ctypes.c_size_t, w.UINT, ctypes.c_void_p], ctypes.c_size_t), "KillTimer": ([w.HWND, ctypes.c_size_t], w.BOOL),
-        "SystemParametersInfoW": ([w.UINT, w.UINT, ctypes.c_void_p, w.UINT], w.BOOL),
-        "AdjustWindowRectEx": ([ctypes.POINTER(w.RECT), w.DWORD, w.BOOL, w.DWORD], w.BOOL),
+        "IsDialogMessageW": ([w.HWND, ctypes.POINTER(w.MSG)], w.BOOL),
+        "SetPropW": ([w.HWND,w.LPCWSTR,w.HANDLE],w.BOOL), "RemovePropW": ([w.HWND,w.LPCWSTR],w.HANDLE),
+        "GetPropW": ([w.HWND,w.LPCWSTR],w.HANDLE), "IsWindow": ([w.HWND],w.BOOL),
         "CreatePopupMenu": ([], w.HMENU), "DestroyMenu": ([w.HMENU], w.BOOL),
         "AppendMenuW": ([w.HMENU, w.UINT, ctypes.c_size_t, w.LPCWSTR], w.BOOL),
         "TrackPopupMenuEx": ([w.HMENU, w.UINT, ctypes.c_int, ctypes.c_int, w.HWND, ctypes.c_void_p], w.UINT),
@@ -41,6 +44,7 @@ def show_pairing_window(controller, host, *, offer_local_receipts=False):
         getattr(user, name).argtypes, getattr(user, name).restype = arguments, result
     kernel.GetModuleHandleW.argtypes, kernel.GetModuleHandleW.restype = [w.LPCWSTR], w.HINSTANCE
     instance = kernel.GetModuleHandleW(None)
+    surface = None
     window = status = invitation_edit = candidate_edit = start_button = review_button = None
     controls, choices = {}, []
     extra_options, extra_selected = [], set()
@@ -53,6 +57,10 @@ def show_pairing_window(controller, host, *, offer_local_receipts=False):
     def notice(message):
         if status:
             user.SetWindowTextW(status, message[:700])
+
+    def require_visible():
+        if surface is None or not surface.fits(showing=True):
+            raise PlatformError("工作区、比例或窗口位置已改变。请移回打开时的显示器并让窗口完整可见，或关闭后重新打开。没有代为确认。")
 
     def selected_host():
         value = text(controls["host"], 64)
@@ -122,7 +130,12 @@ def show_pairing_window(controller, host, *, offer_local_receipts=False):
             return 0
         if message == 0x111:
             action = wparam & 0xFFFF
+            # Some original confirmations have separate top-level windows. Do not make the main window
+            # a return target while a command (including any nested confirmation, menu or QR loop) is active.
+            restore = return_class and hwnd == window and user.RemovePropW(hwnd, READY) == 1
+            if return_class and user.GetPropW(hwnd, READY): return 0
             try:
+                if action in (101, 103, 104, 107): require_visible()
                 if 200 <= action < 200 + len(choices) and (wparam >> 16) & 0xffff == 0:  # BN_CLICKED
                     checkbox = choices[action - 200][1]
                     if lparam == checkbox and user.SendMessageW(checkbox, 0xF0, 0, 0) == 1:
@@ -212,7 +225,8 @@ def show_pairing_window(controller, host, *, offer_local_receipts=False):
                     if selected == 0: return 0
                     if not 1101 <= selected < 1101 + len(rows): raise PlatformError("原本机配对事务选择无效")
                     review = controller.prepare_recovery_review(rows[selected - 1101])
-                    proof = confirm_local_pairing_recovery(review.summary)
+                    proof = confirm_local_pairing_recovery(review.summary, anchor=hwnd)
+                    require_visible()
                     address = host.start_recovery(selected_host(), review, proof)
                     fixed = review.record["originalCommit"]
                     value = ("仅恢复原回执，非新邀请。请在手机原配对记录的恢复入口手动填写：\r\n"
@@ -232,7 +246,8 @@ def show_pairing_window(controller, host, *, offer_local_receipts=False):
                         raise PlatformError("先由手机导入邀请并提交候选")
                     review = controller.prepare_review(candidate, selected_scopes(), int(text(controls["budget"], 3)), int(text(controls["minutes"], 2)),
                                                        user.SendMessageW(controls["history"], 0xF0, 0, 0) == 1)
-                    proof = confirm_local_pairing(review.summary)
+                    proof = confirm_local_pairing(review.summary, anchor=hwnd)
+                    require_visible()
                     host.confirm(review, proof)
                     user.EnableWindow(review_button, False)
                     freeze_scopes()
@@ -256,38 +271,33 @@ def show_pairing_window(controller, host, *, offer_local_receipts=False):
                 notice(str(error))
             except Exception:
                 notice("本机配对操作未确认。请检查原状态；不要自动重试或重放旧操作。")
+            finally:
+                if restore and user.IsWindow(hwnd): user.SetPropW(hwnd, READY, 1)
             return 0
         if message == 2:
+            if return_class: user.RemovePropW(hwnd, READY)
             user.PostQuitMessage(0); return 0
         return user.DefWindowProcW(hwnd, message, wparam, lparam)
 
-    area = w.RECT()
-    if not user.SystemParametersInfoW(0x30, 0, ctypes.byref(area), 0):
-        raise PlatformError("Owner desktop working area is unavailable")
-    # All control geometry below is CLIENT space. Caption/frame dimensions
-    # cannot eat the status/actions or let a resize clip the reviewed controls.
-    style = 0x00CA0000  # caption + system menu + minimize, no silent arbitrary resize
-    width, height = min(1020, area.right - area.left - 80), min(800, area.bottom - area.top - 100)
-    if width < 720 or height < 620:
-        raise PlatformError("Owner scope review needs a usable desktop working area; no clipped confirmation fallback")
-    class_name = "PocketWorldDevicePairing-" + __import__("uuid").uuid4().hex
+    # Create hidden, then use the chosen HWND's monitor, physical DPI, title bar and taskbar reservation.
+    # A fixed 100px deduction used to reject every normal 720p work area even when the controls would fit.
+    style = OWNER_STYLE
+    return_class = window_class(installed_owner)
+    class_name = return_class or ("PocketWorldDevicePairing-" + __import__("uuid").uuid4().hex)
     klass = WindowClass(0, procedure, 0, 0, instance, None, None, w.HBRUSH(6), None, class_name)
     if not user.RegisterClassW(ctypes.byref(klass)):
         raise ctypes.WinError(ctypes.get_last_error())
-    frame = w.RECT(0, 0, width, height)
-    if not user.AdjustWindowRectEx(ctypes.byref(frame), style, False, 0):
-        user.UnregisterClassW(class_name, instance); raise ctypes.WinError(ctypes.get_last_error())
-    window = user.CreateWindowExW(0, class_name, "PocketWorld · 本机设备配对与授权", style, area.left + 20, area.top + 20,
-                                  frame.right - frame.left, frame.bottom - frame.top, None, None, instance, None)
+    window = user.CreateWindowExW(0, class_name, "PocketWorld · 本机设备配对与授权", style,
+                                  USE_DEFAULT, 0, 200, 100, None, None, instance, None)
     if not window:
         user.UnregisterClassW(class_name, instance); raise ctypes.WinError(ctypes.get_last_error())
     def control(kind, value, x, y, ww, hh, ident=0, extra=0):
-        handle = user.CreateWindowExW(0x200 if kind == "EDIT" else 0, kind, value, 0x40000000 | 0x10000000 | extra,
-                                      x, y, ww, hh, window, w.HMENU(ident) if ident else None, instance, None)
-        if not handle: raise ctypes.WinError(ctypes.get_last_error())
-        return handle
+        return surface.child(instance, kind, value, x, y, ww, hh, ident, extra, 0x200 if kind == "EDIT" else 0)
     try:
-        control("STATIC", "电脑只做轻桥接，不需Codex；以下操作仅由本机主人确认，不启动第二Agent。", 16, 12, width - 40, 22)
+        surface = OwnerSurface(user, window, style, (1020, 800), (720, 440))
+        width, height = surface.width, surface.height
+        compact = height < 680
+        control("STATIC", "本机配对 · 选择范围后仍须在电脑核对；打开此页不会启动服务。", 16, 12, width - 32, 22)
         controls["choose_address"] = control("BUTTON", "选择本机地址", 16, 39, 140, 28, 109, 0x10000)
         configured = controller.manager.config.get("devices", {}).get("listen", {})
         initial_host = configured.get("host", "")
@@ -306,7 +316,8 @@ def show_pairing_window(controller, host, *, offer_local_receipts=False):
         # Keep actual desktop scope reachable on a laptop without preselecting it.
         options = sorted(controller.scope_options(), key=lambda item: 0 if item["id"] == "desktop" else
                          1 if item["id"].startswith(read_pairing.PREFIX) else 2)
-        visible = min(8, max(1, (height - 570) // 24))
+        visible = min(8, max(1, (height - (445 if compact else 570)) // 27))
+        if compact: visible = min(visible, 6)
         for index, option in enumerate(options[:visible]):
             checkbox = control("BUTTON", scope_label(option).replace("&", "&&"), 20, 143 + 24 * index, width - 60, 24, 200 + index, 0x3 | 0x10000)
             choices.append((option, checkbox))
@@ -316,22 +327,38 @@ def show_pairing_window(controller, host, *, offer_local_receipts=False):
         if extra_options:
             controls["more_scopes"] = control("BUTTON", f"其他范围（另有 {len(extra_options)} 项，已选 0）", 20, field_y, width - 60, 26, 108, 0x10000)
             field_y += 30
-        control("STATIC", "工具总额度", 16, field_y, 110, 24)
-        controls["budget"] = control("EDIT", "20", 130, field_y - 2, 62, 27, extra=0x10000)
-        control("STATIC", "执行授权分钟", 210, field_y, 125, 24)
-        controls["minutes"] = control("EDIT", "60", 340, field_y - 2, 62, 27, extra=0x10000)
-        controls["history"] = control("BUTTON", "另允许24小时查原结果（见核对范围）", 425, field_y - 2, width - 460, 27, 300, 0x3 | 0x10000)
-        invitation_edit = control("EDIT", "邀请尚未创建。地址需由手机可达；不会自动打开公开HTTP或把长期令牌交给页面。", 16, field_y + 34, width - 50, 86, extra=0x4 | 0x800 | 0x200000)
-        candidate_edit = control("EDIT", "等待手机候选。仅有邀请、候选或pending pin均不能使用业务工具。", 16, field_y + 128, width - 50, max(54, bottom - field_y - 182), extra=0x4 | 0x800 | 0x200000)
-        review_button = control("BUTTON", "核对指纹与准确授权", 16, bottom - 8, 235, 31, 103, 0x10000)
-        start_button = control("BUTTON", "启动桥接（不重放旧任务）", 264, bottom - 8, 260, 31, 104, 0x10000)
-        control("BUTTON", "关闭，不启动服务", width - 255, bottom - 8, 205, 31, 105, 0x10000)
+        control("STATIC", "工具总额度", 16, field_y, 85, 24)
+        controls["budget"] = control("EDIT", "20", 105, field_y - 2, 54, 27, extra=0x10000)
+        control("STATIC", "执行授权分钟", 175, field_y, 102, 24)
+        controls["minutes"] = control("EDIT", "60", 281, field_y - 2, 54, 27, extra=0x10000)
+        controls["history"] = control("BUTTON", "另允许24小时查原结果（见核对范围）", 355, field_y - 2, width - 371, 27, 300, 0x3 | 0x10000)
+        # Preserve BOTH complete scrollable readouts; in a short viewport they share a row.
+        invite_body = "邀请尚未创建。地址需由手机可达；不会自动打开公开HTTP或把长期令牌交给页面。"
+        candidate_body = "等待手机候选。仅有邀请、候选或pending pin均不能使用业务工具。"
+        reading = 0x4 | 0x800 | 0x200000 | 0x10000  # multiline, read-only, vertical scroll, tab stop
+        if compact:
+            (ix, iw), (cx, cw) = columns(width, 2)
+            label_y, pane_y = field_y + 30, field_y + 53
+            pane_h = bottom - 17 - pane_y
+            if pane_h < 48: raise PlatformError("没有足够空间同时显示原邀请与候选，未开放操作。")
+            control("STATIC", "本次邀请", ix, label_y, iw, 22)
+            control("STATIC", "手机候选与指纹", cx, label_y, cw, 22)
+            invitation_edit = control("EDIT", invite_body, ix, pane_y, iw, pane_h, extra=reading)
+            candidate_edit = control("EDIT", candidate_body, cx, pane_y, cw, pane_h, extra=reading)
+        else:
+            invitation_edit = control("EDIT", invite_body, 16, field_y + 34, width - 32, 86, extra=reading)
+            candidate_edit = control("EDIT", candidate_body, 16, field_y + 128, width - 32, max(54, bottom - field_y - 182), extra=reading)
+        (rx, rw), (sx, sw), (ex, ew) = columns(width, 3)
+        review_button = control("BUTTON", "核对指纹与准确授权", rx, bottom - 8, rw, 31, 103, 0x10000)
+        start_button = control("BUTTON", "启动桥接（不重放旧任务）", sx, bottom - 8, sw, 31, 104, 0x10000)
+        control("BUTTON", "关闭，不启动服务", ex, bottom - 8, ew, 31, 105, 0x10000)
         user.EnableWindow(review_button, False); user.EnableWindow(start_button, False)
         status = control("STATIC", "选择手机也能访问的本机地址，或手动填写，再创建一次性邀请。选地址不会监听；关闭窗口不会撤销已确认的配对。", 16, bottom + 28, width - 50, 44 if offer_local_receipts else 52)
         if offer_local_receipts:
             half = (width - 50) // 2
             controls["phone_receipts"] = control("BUTTON", "保留设备工作回执（只读）", 16, bottom + 72, half, 23, 301, 0x3 | 0x10000)
             controls["phone_work"] = control("BUTTON", "保留「交给手机」入口（仅文字）", 16 + half, bottom + 72, half, 23, 302, 0x3 | 0x10000)
+        if return_class: user.SetPropW(window, READY, 1)  # absent on unsupported installs; failure leaves normal pairing intact
         user.SetTimer(window, 1, 500, None)
         user.ShowWindow(window, 5); user.SetForegroundWindow(window)
         message = w.MSG()
@@ -339,9 +366,11 @@ def show_pairing_window(controller, host, *, offer_local_receipts=False):
             result = user.GetMessageW(ctypes.byref(message), None, 0, 0)
             if result == 0: break
             if result < 0: raise ctypes.WinError(ctypes.get_last_error())
+            if message.message == 0x100 and message.wParam == 9 and user.IsDialogMessageW(window, ctypes.byref(message)): continue
             user.TranslateMessage(ctypes.byref(message)); user.DispatchMessageW(ctypes.byref(message))
         return start_bridge
     finally:
         user.KillTimer(window, 1)
         user.DestroyWindow(window)
+        if surface: surface.close()
         user.UnregisterClassW(class_name, instance)

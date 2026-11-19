@@ -519,7 +519,7 @@ public final class AgentRunner {
             if(firstOwnerReturnPage!=null&&(!(phone instanceof DeferredPhoneSession originalSession)||!originalSession.initialized()||!intent.deviceReadAllowed()||!control.phoneSurfaceActive()||!phone.isConnected())){
                 JSONObject blocked=firstOwnerReturnPage.blocked(control.pauseRevision());return finish(taskId,"awaiting_user",blocked.getString("message"),blocked,steps,initialConfig,sink);
             }
-            if(intent.deviceReadAllowed()&&control.phoneSurfaceActive()&&DeferredPhoneSession.initialized(phone)&&!phone.isConnected())return finish(taskId,"awaiting_user","请先开启手机操作权限，再继续任务。",evidence,steps,initialConfig,sink);
+            if(intent.deviceReadAllowed()&&control.phoneSurfaceActive()&&DeferredPhoneSession.initialized(phone)&&!phone.isConnected())return finish(taskId,"awaiting_user","原手机执行环境暂不可用。请核对原执行位置与连接，再决定是否继续。",originalPhoneServiceWait(evidence,taskId,phone,control,"bound_port_unavailable"),steps,initialConfig,sink);
             requireIntentImageInput(intent,initialConfig);
             emit(taskId, "run", "running", DeferredPhoneSession.initialized(phone)&&intent.deviceReadAllowed()?(storedMessages == null ? "开始观察手机，准备执行目标。" : "正在恢复任务并重新观察手机。"):"正在处理原目标；实际使用手机时才准备并读取原显示。", null, intent.diagnostics(), initialConfig, sink);
             if(phone!=null)phone.clearReferences();
@@ -567,7 +567,7 @@ public final class AgentRunner {
                 if(repeatedTools.stopRequired())return stopForProgressGuard(taskId,journal,history,steps,latest,config,sink,contextBudget,repeatedTools);
                 intent.update(recallIntent);
                 if(routes!=null){routes.ownerBoundary(recallIntent);routes.requireCurrentSources(control);}
-                if(intent.deviceReadAllowed()&&control.phoneSurfaceActive()&&DeferredPhoneSession.initialized(phone)&&!phone.isConnected())return finish(taskId,"awaiting_user","请先开启手机操作权限，再继续任务。",evidence,steps,config,sink);
+                if(intent.deviceReadAllowed()&&control.phoneSurfaceActive()&&DeferredPhoneSession.initialized(phone)&&!phone.isConnected())return finish(taskId,"awaiting_user","原手机执行环境暂不可用。请核对原执行位置与连接，再决定是否继续。",originalPhoneServiceWait(evidence,taskId,phone,control,"bound_port_unavailable"),steps,config,sink);
                 requireIntentImageInput(intent,config);
                 if(intent.deviceReadAllowed()&&DeferredPhoneSession.initialized(phone)&&control.phoneSurfaceActive()&&latest.optBoolean("noDeviceObservation")){
                     latest=observe(taskId,config,control,sink,planning);evidence=latest;appendCapturedObservation(history,latest,config,contextBudget,screens,control);
@@ -1143,6 +1143,8 @@ public final class AgentRunner {
                             history.put(toolResult(call,receipt,config));
                             appendUnissuedReplies(history,calls,index+1,failure("batch_tail_not_dispatched","手机尚未准备完成；本批后续调用未派发，原任务及已有回执保留。").put("accepted",false).put("nativeDispatched",false).put("effectStatus","not_dispatched"),config);
                             evidence=new JSONObject(receipt.toString());
+                            String stoppedService=dev.pocketengine.phone.PhoneReadiness.stoppedServiceCheck(unavailable,deferred.executionMode());
+                            if(!stoppedService.isEmpty())evidence=originalPhoneServiceWait(evidence,taskId,deferred,control,stoppedService);
                             checkpoint(taskId,journal,history,steps,latest,config,toolSink,contextBudget,repeatedTools);
                             diagnosticToolReceipt(toolDiagnostic,receipt);emit(taskId,"tool","awaiting_user",receipt.getString("message"),name,receipt,config,toolSink);
                             return finish(taskId,"awaiting_user",receipt.getString("message"),evidence,steps,config,toolSink);
@@ -2060,6 +2062,17 @@ public final class AgentRunner {
                 .put("message", "").put("timestamp", System.currentTimeMillis()).put("stream", data));
     }
 
+    /** Store a reason only on this original task result, not in a tool reply or model request. */
+    private static JSONObject originalPhoneServiceWait(JSONObject evidence,String taskId,PhonePort phone,RunControl control,String condition)throws Exception {
+        var original=control.hostRunIdentity();
+        if(original==null||!taskId.equals(original.taskId())||!(phone instanceof DeferredPhoneSession deferred)||deferred.originalControl()!=control||
+                !deferred.matchesHostScope(taskId,original.runId(),original.epoch()))return evidence;
+        JSONObject result=new JSONObject();
+        for(var keys=evidence.keys();keys.hasNext();){String key=keys.next();result.put(key,evidence.get(key));} // Do not mutate or re-encode a prior frame.
+        return result.put("originalPhoneServiceWait",new JSONObject().put("format","pocketworld.phone-service-wait.v1")
+                .put("taskId",taskId).put("runId",original.runId()).put("epoch",original.epoch())
+                .put("mode",deferred.executionMode()).put("condition",condition));
+    }
     private static JSONObject nativeStepLimitEvidence(JSONObject evidence,RunControl control)throws Exception {
         JSONObject result=new JSONObject(evidence.toString());RunControl.HostRunIdentity run=control.hostRunIdentity();
         result.put("nativeStopReason","step_limit");if(run!=null)result.put("nativeStopRunId",run.runId()).put("nativeStopEpoch",run.epoch());return result;

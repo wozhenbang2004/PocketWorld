@@ -80,7 +80,7 @@ final class BackgroundPhoneRun {
             if(!AndroidPhoneReadiness.snapshot(service,null).getJSONObject("taskNotifications").optBoolean("ready"))throw new SecurityException("停止入口不可用，请开启任务通知或重新启用手机操作服务");
             startLeaseWatch(runningId,runningRunId,runningEpoch,ownerControl);
             worker.execute(()->{if(deviceGoal!=null)runDeviceGoal(lastStartId);else run(runningId,runningRunId,runningEpoch,runningGoal,runningConfig,ownerControl,lastStartId,manualOnly);});
-        }catch(Exception unavailable){finishAttempt(runningId,runningRunId,ownerControl,new RunOutcome("awaiting_user",safeMessage(unavailable),new JSONObject()),lastStartId);}
+        }catch(Exception unavailable){finishAttempt(runningId,runningRunId,ownerControl,new RunOutcome(deviceGoal==null?"awaiting_user":"interrupted",deviceGoal==null?safeMessage(unavailable):"原设备后台执行器未能启动，请核对本机的可见停止条件。",new JSONObject()),lastStartId);}
     }
     void onTaskEvent(JSONObject task){
         if(task==null||!matches(task.optString("id"),task.optString("runId"),task.optInt("coordinatorEpoch"),app.control(runningId)))return;
@@ -110,13 +110,16 @@ final class BackgroundPhoneRun {
         if(!finishing.compareAndSet(false,true))return;waitingForUser=false;++ownerWaitGeneration;
         worker.execute(()->{JSONObject evidence=closeHeld(runningId,runningRunId,runningEpoch);recordRelease(evidence);main.post(()->completeRuntime(startId));});
     }
-    void destroy(){
+    void destroy(){destroy(false);}
+    void destroyAfterStartupFailure(){destroy(true);}
+    private void destroy(boolean startupFailed){
         if(!finishing.compareAndSet(false,true))return;
+        boolean neverStartedPeerHost=startupFailed&&deviceGoal!=null&&!started.get()&&!ownerControl.isCancelled();
         synchronized(this){destroyed=true;waitingForUser=false;++ownerWaitGeneration;}
         ownerControl.removeCancelAction(cancelAction);ownerControl.cancel();
         if(leaseWatch!=null)leaseWatch.cancel(false);
         JSONObject pending=closeHeldAsync();
-        try{app.tasks.endAttempt(runningId,runningRunId,"cancelled","执行服务已结束；原后台资源清理以回执为准",withOriginalEvidence(runningId,runningRunId,runningEpoch,pending));}
+        try{app.tasks.endAttempt(runningId,runningRunId,neverStartedPeerHost?"interrupted":"cancelled",neverStartedPeerHost?"原设备后台宿主未获启动，原执行已中断；资源清理以回执为准。":"执行服务已结束；原后台资源清理以回执为准",withOriginalEvidence(runningId,runningRunId,runningEpoch,pending));}
         catch(Exception unavailable){app.error("原后台任务中断状态保存失败，请核对已有结果");}
         app.released(runningId,ownerControl);worker.shutdownNow();releaseWakeLock();
     }
@@ -161,10 +164,10 @@ final class BackgroundPhoneRun {
                 String decided=pendingDeviceApproval;if(decided!=null)main.post(()->{try{if(waitingForUser&&app.originalDeviceGoalSession(runningId)==deviceGoal)app.resumeDeviceExecution(runningId,decided);}catch(Exception changed){pendingDeviceApproval=null;app.error("原设备审批续接条件已变化，请核对原任务");}});
                 return;
             }
-            finishAttempt(runningId,runningRunId,ownerControl,result,startId);
+            finishAttempt(runningId,runningRunId,ownerControl,PhoneRunService.endedDeviceGoal(result),startId);
         }catch(Exception unavailable){
             deviceGoal.runnerFailed();JSONObject evidence=new JSONObject();if(background!=null){try{evidence.put("displayRelease",closeBackground(background));}catch(Exception unknown){/* Original cleanup remains unconfirmed. */}background=null;taskBackgroundPort=null;}
-            finishAttempt(runningId,runningRunId,ownerControl,new RunOutcome(ownerControl.isCancelled()?"cancelled":"awaiting_user","原设备后台目标已停止派发，请核对原屏幕、模型与授权；未换主屏或创建替代执行",evidence),startId);
+            finishAttempt(runningId,runningRunId,ownerControl,new RunOutcome(ownerControl.isCancelled()?"cancelled":"interrupted","原设备后台目标已停止派发，请核对原屏幕、模型与授权；未换主屏或创建替代执行",evidence),startId);
         }finally{if(background!=null)closeBackground(background);releaseWakeLock();app.features.sendState();}
     }
     private void run(String id,String runId,int epoch,String goal,ModelConfig config,RunControl control,int startId,boolean manualOnly){

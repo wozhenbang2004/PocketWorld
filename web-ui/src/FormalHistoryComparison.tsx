@@ -30,9 +30,9 @@ function Request({project,path,version,versions}:{project:string;path:string;ver
     finally{if(current()){flight.current=false;spin(false)}}
   }
   return <div><Button size="small" variant="secondary" aria-expanded={!!pins} disabled={pending} onClick={()=>pins?hide():void inspect()}>{pins?'收起版本对照':pending?'正在核对两版依据':'比较两个保留版本'}</Button>
-    {error&&<p role="alert" className="pw-field-error">{error}</p>}{pins&&<Pair pins={pins}/>}</div>;
+    {error&&<p role="alert" className="pw-field-error">{error}</p>}{pins&&<ObservedFormalHistoryPair pins={pins}/>}</div>;
 }
-function Pair({pins}:{pins:RevisionPin[]}){
+export function ObservedFormalHistoryPair({pins}:{pins:RevisionPin[]}){
   const [first,chooseA]=useState(pins.length-2),[last,chooseB]=useState(pins.length-1),[editing,edit]=useState<'a'|'b'|null>(null);
   const a=pins[first],b=pins[last],result=originalHistoryDifference(a,b);
   const row=(p:RevisionPin)=><div key={p.revisionId}><dt>v{p.version} · {p.kind==='tombstone'?'删除记录':(p.kind==='binary'?'二进制':'文字')+' · '+p.bytes.toLocaleString('zh-CN')+' 字节'}</dt><dd>修订 {p.revisionId}{p.kind!=='tombstone'&&<><br/>SHA-256 {p.sha256}</>}</dd></div>;

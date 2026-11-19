@@ -47,8 +47,8 @@ def confirm_local_recovery(summary, *, manual_attestation=False):
                     warning=warning + "旧操作仍可能已经发生，保持unknown，不会重放。新任务必须重新观察和取得新lease。\r\n")
 
 
-def confirm_local_pairing(summary):
-    return _confirm(summary, purpose="device_pairing", title="PocketWorld · 核对两端指纹和本机授权", button="确认此设备和准确授权",
+def confirm_local_pairing(summary, *, anchor=None):
+    return _confirm(summary, purpose="device_pairing", anchor=anchor, title="PocketWorld · 核对两端指纹和本机授权", button="确认此设备和准确授权",
                     warning="请在手机和本机逐一核对下面两个完整指纹。只允许下列准确能力、资源、额度和期限。\r\n候选设备尚无业务权限；完成后仍需独立双向TLS核验。\r\n")
 
 
@@ -57,12 +57,12 @@ def confirm_local_phone_goal(summary):
                     button="确认发送这一次", warning="只把核对过的文字交给这台手机；可能由手机机主已选的模型服务处理。不代替机主确认，不共享电脑项目或屏幕。\r\n")
 
 
-def confirm_local_pairing_recovery(summary):
-    return _confirm(summary, purpose="device_pairing_recovery", title="PocketWorld · 仅恢复原已提交配对回执", button="开放30秒原回执只读通道",
+def confirm_local_pairing_recovery(summary, *, anchor=None):
+    return _confirm(summary, purpose="device_pairing_recovery", anchor=anchor, title="PocketWorld · 仅恢复原已提交配对回执", button="开放30秒原回执只读通道",
                     warning="此操作仅让原已核验的同一设备取回原不可变回执，不重新配对、续期、加额度或启动业务。\r\n撤销、换代、scope变更或到期后不能借恢复重新授权。\r\n")
 
 
-def _confirm(summary, *, purpose, title, button, warning):
+def _confirm(summary, *, purpose, title, button, warning, anchor=None):
     if os.name != "nt":
         raise PlatformError("Local owner recovery confirmation requires a real Windows desktop")
     if not isinstance(summary, str) or not summary or len(summary) > 16000:
@@ -96,7 +96,9 @@ def _confirm(summary, *, purpose, title, button, warning):
     kernel.GetModuleHandleW.argtypes, kernel.GetModuleHandleW.restype = [w.LPCWSTR], w.HINSTANCE
     challenge = "".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(8))
     sequence, events, confirmed = "", 0, False
-    window = edit = status = hook = None
+    window = edit = status = hook = surface = unreg = None
+    is_pairing = purpose in {"device_pairing", "device_pairing_recovery"}
+    in_loop = False
     @hookproc
     def keyboard(code, kind, pointer):
         nonlocal sequence, events
@@ -116,6 +118,9 @@ def _confirm(summary, *, purpose, title, button, warning):
         if message == 0x111 and (wparam & 0xFFFF) == 1001 and ((wparam >> 16) & 0xFFFF) == 0x300 and edit and user.GetWindowTextLengthW(edit) == 0:
             sequence = ""
         if message == 0x111 and (wparam & 0xFFFF) == 1002:
+            if is_pairing and (surface is None or not surface.fits(showing=True)):
+                user.SetWindowTextW(status, "请将核对窗口完整放回打开它的显示器，或取消后重新核对。原授权未确认。")
+                return 0
             text = ctypes.create_unicode_buffer(64)
             user.GetWindowTextW(edit, text, len(text))
             if sequence == challenge and text.value.upper() == challenge and user.GetForegroundWindow() == hwnd:
@@ -124,27 +129,44 @@ def _confirm(summary, *, purpose, title, button, warning):
                 user.SetWindowTextW(status, "未确认：请在本窗口亲自输入完整挑战码；远端输入、粘贴和自动点击不能代替确认。")
             return 0
         if message == 2:
-            user.PostQuitMessage(0); return 0
+            if not is_pairing or in_loop: user.PostQuitMessage(0)
+            return 0
         return user.DefWindowProcW(hwnd, message, wparam, lparam)
     instance = kernel.GetModuleHandleW(None)
     class_name = "PocketWorldLocalRecovery-" + secrets.token_hex(8)
     klass = WindowClass(0, procedure, 0, 0, instance, None, None, w.HBRUSH(6), None, class_name)
     if not user.RegisterClassW(ctypes.byref(klass)):
         raise ctypes.WinError(ctypes.get_last_error())
-    window = user.CreateWindowExW(0, class_name, title, 0x00CF0000, 40, 40, 900, 690, None, None, instance, None)
-    if not window:
-        raise ctypes.WinError(ctypes.get_last_error())
-    message = warning + "同用户任意代码执行不等于OS沙箱隔离；请先停掉不可信命令。\r\n\r\n" + summary
-    user.CreateWindowExW(0x200, "EDIT", message, 0x40000000 | 0x10000000 | 0x00200000 | 0x4 | 0x800, 16, 16, 850, 450, window, None, instance, None)
-    user.CreateWindowExW(0, "STATIC", "请在本窗口亲自键入：" + challenge, 0x40000000 | 0x10000000, 16, 480, 850, 30, window, None, instance, None)
-    edit = user.CreateWindowExW(0x200, "EDIT", "", 0x40000000 | 0x10000000 | 0x10000, 16, 514, 260, 32, window, w.HMENU(1001), instance, None)
-    user.SendMessageW(edit, 0xC5, 8, 0)  # EM_LIMITTEXT
-    user.CreateWindowExW(0, "BUTTON", button, 0x40000000 | 0x10000000 | 0x10000, 300, 514, 280, 34, window, w.HMENU(1002), instance, None)
-    status = user.CreateWindowExW(0, "STATIC", "关闭窗口即取消。", 0x40000000 | 0x10000000, 16, 565, 850, 60, window, None, instance, None)
     try:
+        if is_pairing:
+            from windows_owner_surface import OwnerSurface, OWNER_STYLE, anchor_origin, api
+            unreg = api(user, "UnregisterClassW", (w.LPCWSTR, w.HINSTANCE), w.BOOL)
+            dialog_key = api(user, "IsDialogMessageW", (w.HWND, ctypes.POINTER(w.MSG)), w.BOOL)
+            x, y = anchor_origin(user, anchor)
+            window = user.CreateWindowExW(0, class_name, title, OWNER_STYLE, x, y, 200, 100, None, None, instance, None)
+        else:
+            window = user.CreateWindowExW(0, class_name, title, 0x00CF0000, 40, 40, 900, 690, None, None, instance, None)
+        if not window: raise ctypes.WinError(ctypes.get_last_error())
+        message = warning + "同用户任意代码执行不等于OS沙箱隔离；请先停掉不可信命令。\r\n\r\n" + summary
+        if is_pairing:
+            surface = OwnerSurface(user, window, OWNER_STYLE, (880, 620), (530, 350))
+            width, height = surface.width, surface.height
+            surface.child(instance, "EDIT", message, 16, 16, width-32, height-181, extra=0x210804, extended=0x200)
+            surface.child(instance, "STATIC", "请在本窗口亲自键入：" + challenge, 16, height-152, width-32, 28)
+            edit = surface.child(instance, "EDIT", "", 16, height-116, 160, 34, 1001, 0x10000, 0x200)
+            surface.child(instance, "BUTTON", button, 192, height-116, width-208, 34, 1002, 0x10000)
+            status = surface.child(instance, "STATIC", "关闭窗口即取消。", 16, height-67, width-32, 54)
+        else:
+            user.CreateWindowExW(0x200, "EDIT", message, 0x40000000 | 0x10000000 | 0x00200000 | 0x4 | 0x800, 16, 16, 850, 450, window, None, instance, None)
+            user.CreateWindowExW(0, "STATIC", "请在本窗口亲自键入：" + challenge, 0x40000000 | 0x10000000, 16, 480, 850, 30, window, None, instance, None)
+            edit = user.CreateWindowExW(0x200, "EDIT", "", 0x40000000 | 0x10000000 | 0x10000, 16, 514, 260, 32, window, w.HMENU(1001), instance, None)
+            user.CreateWindowExW(0, "BUTTON", button, 0x40000000 | 0x10000000 | 0x10000, 300, 514, 280, 34, window, w.HMENU(1002), instance, None)
+            status = user.CreateWindowExW(0, "STATIC", "关闭窗口即取消。", 0x40000000 | 0x10000000, 16, 565, 850, 60, window, None, instance, None)
+        user.SendMessageW(edit, 0xC5, 8, 0)  # EM_LIMITTEXT; unchanged physical challenge
         hook = user.SetWindowsHookExW(13, keyboard, instance, 0)
         if not hook:
             raise PlatformError("Native non-injected owner confirmation is unavailable; no fallback auto-confirm")
+        in_loop = True
         user.ShowWindow(window, 5); user.SetForegroundWindow(window); user.SetFocus(edit)
         message = w.MSG()
         while True:
@@ -153,12 +175,16 @@ def _confirm(summary, *, purpose, title, button, warning):
                 break
             if result < 0:
                 raise ctypes.WinError(ctypes.get_last_error())
+            if is_pairing and message.message == 0x100 and message.wParam == 9 and dialog_key(window, ctypes.byref(message)): continue
             user.TranslateMessage(ctypes.byref(message)); user.DispatchMessageW(ctypes.byref(message))
     finally:
+        in_loop = False
         if hook:
             user.UnhookWindowsHookEx(hook)
-        if not confirmed:
+        if not confirmed and window:
             user.DestroyWindow(window)
+        if surface: surface.close()
+        if unreg is not None: unreg(class_name, instance)
     if not confirmed:
         raise PlatformError("Local owner canceled confirmation; no new authority granted", 409)
     return PhysicalOwnerConfirmation(_LOCAL_UI, int(time.time() * 1000), hashlib.sha256(challenge.encode()).hexdigest(), events,

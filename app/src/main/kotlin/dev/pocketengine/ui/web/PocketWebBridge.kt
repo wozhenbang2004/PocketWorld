@@ -222,6 +222,8 @@ internal class PocketWebBridge(
     private val projectGitImport = PocketWebProjectGitImport(controller.projectGitImports) {
         !closed && documentId != null && section == null && taskViewId == null && controller.webPrivateOwnerVisible() && controller.state.filePath == null
     }
+    private val removedProjectFiles=PocketWebRemovedProjectFiles(controller,{ project -> !closed && documentId!=null && section==null && taskViewId==null &&
+        controller.webPrivateOwnerVisible() && controller.state.projectId==project && controller.state.filePath==null },::captureWindow,::acceptsWindow)
     private val projectDevelopment = PocketWebProjectDevelopment(controller, { !closed && documentId != null && section == null && taskViewId == null && controller.webPrivateOwnerVisible() }, ::captureWindow, ::acceptsWindow)
     private val knowledge = PocketWebKnowledge(controller, projectDevelopment::conventionDraft)
     private val butlerPreparations = PocketWebButlerPreparations(controller, { !closed && documentId != null && controller.webPrivateOwnerVisible() }, ::captureWindow, ::acceptsWindow)
@@ -284,6 +286,7 @@ internal class PocketWebBridge(
             PocketWebProjectReviewReturn.DIRECTORY, PocketWebProjectReviewReturn.ORIGINAL, "tasks.refresh", "tasks.open", "tasks.close", "tasks.recoverTeamFile", "tasks.teamRemainder.read", "tasks.teamRemainder.close", "tasks.teamRemainder.continue", "tasks.stop", "tasks.review", "tasks.confirm", "tasks.approve", "tasks.resolve", "tasks.resume", "tasks.scope", "tasks.plan.enter", "tasks.answerQuestion", "tasks.answerQuestionChoice", "tasks.deleteScreenshot", "privacy.screenshots.read", "privacy.screenshots.save",
             "projects.refresh", "projects.select", "projects.create", "projects.open", "projects.newFile", "projects.edit", "projects.save", "projects.close", "projects.history", "projects.revision", "projects.useRevision", "projects.retry",
             "projects.historyComparison",
+            "projects.removedFiles.list", "projects.removedFiles.history", "projects.removedFiles.text", "projects.removedFiles.close",
             "settings.reviewModelTransport", "settings.saveLocalObservation", "settings.openSystem", "settings.openBrowser", "settings.openAppUpdates",
             "webSearch.snapshot", "webSearch.save",
             "connections.enter", "connections.leave", "models.snapshot", "models.review", "models.select", "models.connection.add", "models.connection.edit", "models.connection.test", "models.connection.select", "devices.snapshot", "history.read", "usage.read", "usage.task", "usage.trends", "usage.trends.close", "usage.close", "usage.reestimate", "trace.read", "trace.detail", "trace.close",
@@ -351,6 +354,7 @@ internal class PocketWebBridge(
         section = null; taskReturnSection = null; taskViewId = null
         taskPage?.let(controller::leaveGroupTask); taskPage = null
         controller.closeNativeInferenceHistory()
+        removedProjectFiles.clear()
         controller.closeQueuedOwnerInputs()
         controller.persistOwnerComposer()
         fileRemainder.clear(); pendingCommands.clear(); commandReceipts.clear()
@@ -500,6 +504,9 @@ internal class PocketWebBridge(
             retiredWorkspaceCleanup(action, args)?.let { result ->
                 complete(id, result, null)
                 return
+            }
+            if (action in PocketWebRemovedProjectFiles.COMMANDS){
+                removedProjectFiles.dispatch(action,args){r,e->complete(id,r,e,retainValue=false)};return
             }
             if (action == "projects.historyComparison") {
                 checkedPayload(args, setOf("projectId","path","version","versions"));requireFile(args)

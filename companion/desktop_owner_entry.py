@@ -199,6 +199,9 @@ def _page(context, facts, notice):
         actions.append(("Initialize", "选择工作文件夹\n选好后再确认初始化。"))
     elif facts["busy"]:
         heading = "原伴侣正在使用本机工作区"
+        from windows_pairing_return import supported
+        if supported(context):
+            actions.append(("ActivePairing","找回已经打开的本机配对窗口\n只查这次安装，不新建邀请或启动服务。"))
         body += "\n可能正在配对或运行服务，不能据此确认手机已经连接。请回到原配对窗口，或在手机「我的设备」查看这台电脑。不会另起一个。"
         body += "\n若选择了「交给手机」，从本机通知区域准备文字工作；不会自动联系设备。"
         body += "\n如果启动时保留了「设备工作回执」，可在 Windows 时钟旁的通知区域（包括折叠图标）中打开，区分本机接单与交给手机的工作。"
@@ -274,6 +277,10 @@ def open_installed_desk():
             action = _page(context, facts, notice)
             if action is None: return
             if action == "Refresh": notice = ""; continue
+            if action == "ActivePairing":
+                from windows_pairing_return import offer
+                if offer(context): return  # do not pop a new owner desk over the original pairing window
+                notice = ""; continue
             if action == "OwnerStartMenu":
                 from windows_owner_start_menu import offer
                 offer(context)

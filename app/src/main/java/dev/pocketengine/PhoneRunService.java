@@ -248,8 +248,11 @@ public final class PhoneRunService extends Service {
             if(!refreshBackgroundNotifications(session))throw new IllegalStateException("原后台任务通知未发布，未启动执行");
             session.start(intent.getBooleanExtra("manualOnly",false));
         }catch(Exception unavailable){
-            if(session!=null){backgroundRuns.remove(id,session);if(primaryBackgroundNotice==session)primaryBackgroundNotice=null;session.destroy();}
-            else{original.cancel();try{app.tasks.endAttempt(id,run,"awaiting_user",safeMessage(unavailable),new JSONObject());}catch(Exception ignored){app.error("原后台启动结果保存尚未确认");}app.released(id,original);}
+            if(session!=null){backgroundRuns.remove(id,session);if(primaryBackgroundNotice==session)primaryBackgroundNotice=null;session.destroyAfterStartupFailure();}
+            else{
+                var goal=app.originalDeviceGoalSession(id);boolean paired=goal!=null&&goal.originalControl()==original;
+                original.cancel();try{app.tasks.endAttempt(id,run,paired?"interrupted":"awaiting_user",paired?"原设备目标未能启动原后台宿主；本次执行已中断。":safeMessage(unavailable),new JSONObject());}catch(Exception ignored){app.error("原后台启动结果保存尚未确认");}app.released(id,original);
+            }
             app.pushTask(id);settleForegroundOwnership(startId);
         }
     }
@@ -390,7 +393,7 @@ public final class PhoneRunService extends Service {
             if(!AndroidPhoneReadiness.snapshot(this,null).getJSONObject("taskNotifications").optBoolean("ready"))throw new SecurityException("设备目标需要本机可见任务通知和停止入口");
             if("main_screen".equals(session.admission().hostMode())){PhoneAccessibilityService phone=PhoneAccessibilityService.get();if(phone==null)throw new SecurityException("原主屏无障碍未连接");phone.showControls(id,runningGoal,original);}
             startLeaseWatch(id,runningRunId,runningEpoch,original);worker.execute(()->runDeviceGoal(session,startId));
-        }catch(Exception unavailable){finishAttempt(id,admittedRun,original,new RunOutcome("awaiting_user","原设备目标本机模型或可见停止条件不可用，未借主屏START",new JSONObject()),startId);}
+        }catch(Exception unavailable){finishAttempt(id,admittedRun,original,new RunOutcome("interrupted","原设备目标未能启动：请核对本机模型和可见停止入口。本次执行已中断。",new JSONObject()),startId);}
     }
     private void runDeviceGoal(dev.pocketengine.features.devices.DeviceGoalSession session,int startId){
         String id=session.taskId(),run=runningRunId;RunControl original=session.originalControl();
@@ -431,9 +434,14 @@ public final class PhoneRunService extends Service {
                 app.pushTask(id);main.post(()->cancelHeldOriginal(id,run,original.hostRunIdentity().epoch(),original));
                 String decided=pendingDeviceApproval;if(decided!=null)main.post(()->{try{if(waitingForUser&&session==deviceGoal)app.resumeDeviceExecution(id,decided);}catch(Exception stale){pendingDeviceApproval=null;app.error("原审批后续接条件已变化，请核对原任务；未新建run");}});return;
             }
-            finishAttempt(id,run,original,result,startId);
-        }catch(Exception unavailable){session.runnerFailed();finishAttempt(id,run,original,new RunOutcome(original.isCancelled()?"cancelled":"awaiting_user","原设备目标已停止派发，请核对原模型、授权与操作记录；未新建执行",new JSONObject()),startId);}
+            // Only the return above keeps the original host alive to accept an answer.
+            finishAttempt(id,run,original,endedDeviceGoal(result),startId);
+        }catch(Exception unavailable){session.runnerFailed();finishAttempt(id,run,original,new RunOutcome(original.isCancelled()?"cancelled":"interrupted","原设备目标已停止派发，请核对原模型、授权与操作记录；未新建执行",new JSONObject()),startId);}
         finally{if(physical instanceof AndroidPhonePort mainPort&&physical!=heldPort)mainPort.closeExtensions();releaseWakeLock();app.features.sendState();}
+    }
+    static RunOutcome endedDeviceGoal(RunOutcome outcome){
+        if(!outcome.status.matches("awaiting_user|paused"))return outcome;
+        return new RunOutcome("interrupted","原设备目标执行器已退出，没有保留可答复或继续的窗口；请核对这次原执行。",outcome.evidence);
     }
     /** Explicit no-model phone-tools host. No START/GATEWAY_ONLY, ModelConfig or AgentRunner is used. */
     private void startDeviceTools(String id,int startId){
@@ -451,7 +459,7 @@ public final class PhoneRunService extends Service {
             runningGoal=task.getString("goal");runningConfig=null;startTaskForeground(task);startLeaseWatch(id,runningRunId,runningEpoch,original);
             if(admission.executionMode().equals("main_screen")){PhoneAccessibilityService phone=PhoneAccessibilityService.get();if(phone==null)throw new SecurityException("本机无障碍未连接");phone.showControls(id,runningGoal,original);}
             worker.execute(()->runDeviceTools(session,startId));
-        }catch(Exception unavailable){finishAttempt(id,admittedRun,original,new RunOutcome("awaiting_user","原设备工具本机条件不可用，未运行模型或切换显示",new JSONObject()),startId);}
+        }catch(Exception unavailable){finishAttempt(id,admittedRun,original,new RunOutcome("interrupted","原设备工具宿主未能启动，请核对本机工具条件；没有切换显示。",new JSONObject()),startId);}
     }
     private void requireDeviceToolsReady(String mode,RunControl original)throws Exception{
         if(original!=ownerControl||original!=app.control(runningId)||original.isCancelled())throw new SecurityException("设备工具原控制已变化");
@@ -488,11 +496,11 @@ public final class PhoneRunService extends Service {
             evidence.put("modelRequests",0).put("executionKind","DEVICE_TOOLS");
             if(deviceTools!=null){deviceTools.close();deviceTools=null;}
             if(background!=null){JSONObject released=closeBackground(background);evidence.put("displayRelease",released);background=null;if(!released.optBoolean("releaseConfirmed"))throw new SecurityException("原后台屏释放尚未核实");}
-            finishAttempt(id,run,original,new RunOutcome(original.isCancelled()?"cancelled":"paused",original.isCancelled()?"原设备工具已停止后续派发，已有结果保留":"原设备工具期限已到，原身份和实际回执保留",evidence),startId);
+            finishAttempt(id,run,original,new RunOutcome(original.isCancelled()?"cancelled":"interrupted",original.isCancelled()?"原设备工具已停止后续派发，已有结果保留":destroyed?"原设备工具服务已退出，实际回执保留。":"原设备工具期限已到，原执行已退出，已有回执保留。",evidence),startId);
         }catch(Exception stopped){
             if(deviceTools!=null){deviceTools.close();deviceTools=null;}
             if(background!=null){try{evidence.put("displayRelease",closeBackground(background));}catch(Exception ignored){}background=null;}
-            finishAttempt(id,run,original,new RunOutcome(original.isCancelled()?"cancelled":"awaiting_user","原设备工具已停止派发；请核对实际操作与本机权限，未运行模型或回落显示",evidence),startId);
+            finishAttempt(id,run,original,new RunOutcome(original.isCancelled()?"cancelled":"interrupted","原设备工具执行器已退出；请核对实际操作与本机权限，没有切换显示。",evidence),startId);
         }finally{if(port instanceof AndroidPhonePort mainPort)mainPort.closeExtensions();if(background!=null)closeBackground(background);releaseWakeLock();app.features.sendState();}
     }
     /** Service resource ownership is separate from task execution. This branch never creates a

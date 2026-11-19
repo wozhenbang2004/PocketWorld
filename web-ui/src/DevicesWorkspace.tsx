@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import './collaboration-depth.css';
 import './device-control-reading.css';
 import { Accordion, AccordionItem, Button, CheckboxField, RadioOptions, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
-import { DeviceRequestScope, archivedPhoneStopAttemptLine, archivedPhoneStopLine, deviceChannelWasConnected, deviceConnectionLabel, deviceGrantInput, deviceHistoryLabel, deviceHistoryReceipt, deviceOriginalTaskActions, isReceivedPhoneTask, receivedPhoneGoalReturn, matchesReceivedPhoneGoal, type ReceivedPhoneGoalReturn, type SentPhoneGoalFocus, PHONE_ACTION_WINDOW_MS, deviceRecordedScopes, devicePhoneGoalArchive, localReceivedPhonePage, localReviewedInbox, samePhoneGoalArchive, receivedPhoneArchiveReturn, waitingPhoneGoalPage, type PhoneArchiveSide, deviceTaskHistoryPage, deviceTaskHistoryLinks, deviceTaskDetails, deviceMethodLabels, deviceOperationLabels, devicePhoneGoalResult, deviceReceipt, deviceReview, deviceRows as rows, deviceSnapshot, deviceStrings as strings, deviceTaskRows, deviceWorkspaceTaskMode, type DeviceData as Data } from './devices-workspace';
+import { DeviceRequestScope, archivedPhoneAcceptanceLine, archivedPhoneStopAttemptLine, archivedPhoneStopLine, deviceChannelWasConnected, deviceConnectionLabel, deviceGrantInput, deviceHistoryLabel, deviceHistoryReceipt, deviceOriginalTaskActions, isReceivedPhoneTask, receivedPhoneGoalReturn, matchesReceivedPhoneGoal, type ReceivedPhoneGoalReturn, type SentPhoneGoalFocus, PHONE_ACTION_WINDOW_MS, deviceRecordedScopes, devicePhoneGoalArchive, localReceivedPhonePage, localReviewedInbox, samePhoneGoalArchive, receivedPhoneArchiveReturn, waitingPhoneGoalPage, type PhoneArchiveSide, deviceTaskHistoryPage, deviceTaskHistoryLinks, deviceTaskDetails, deviceMethodLabels, deviceOperationLabels, devicePhoneGoalResult, deviceReceipt, deviceReview, deviceRows as rows, deviceSnapshot, deviceStrings as strings, deviceTaskRows, deviceWorkspaceTaskMode, type DeviceData as Data } from './devices-workspace';
 import { IconAdd, IconArrowLeft, IconChevronRight, IconClock, IconDevices, IconLayers, IconMonitor, IconPhone, IconRefresh, IconShieldCheck } from './icons';
 import { DesktopViewer } from './DesktopViewer';
 import { ReceivedGoalInputReview, originalDeviceInputReady } from './ReceivedGoalInputReview';
@@ -853,7 +853,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               read={(args,accept)=>{void invoke('devices.readPhoneGoalArchive',args,accept)}}/>
             : activeArchive && <>{!rows(activeArchive.rows).length && <p role="status">{activeArchive.hasMore?'这一页没有能核对的原派单，可以继续查看较早记录。':'本机没有找到能核对的原派单，无法据此判断对方是否收到。'}</p>}
               {rows(activeArchive.rows).map(row=><article className="pw-device-history-entry" key={row.operationId}>
-                <h4 dir="auto">{row.goal}</h4><p>{time(row.createdAt)} · {row.targetAcceptedAt?('对方已接单 '+time(row.targetAcceptedAt)+(row.targetRunRecorded?'，已记录执行编号':'')):'已保存派单，尚无可核对的对方接单回执'}</p>
+                <h4 dir="auto">{row.goal}</h4><p>{time(row.createdAt)} · {archivedPhoneAcceptanceLine(row,time)}</p>
                 {row.stopReceipt?<p>{archivedPhoneStopLine(row.stopReceipt,time)}</p>:row.stopAttempt&&<p>{archivedPhoneStopAttemptLine(row.stopAttempt,time)}</p>}
                 <Button variant="secondary" disabled={busy||!supported('devices.openHistory')} onClick={()=>openArchivedGoal(row,false)}>核对原回执与成果</Button>
               </article>)}
@@ -1066,7 +1066,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
                 {supported('devices.readReceivedPhoneGoals') && <Button variant={activeArchive && archiveSide === 'received' ? 'secondary' : 'ghost'} aria-pressed={!!activeArchive && archiveSide === 'received'} disabled={busy} onClick={() => readPhoneArchive('received')}>{desktopPeer && !phonePeer ? '读取本机接纳的电脑派工' : '它交给我的'}</Button>}
               </div>
               {activeArchive && <>
-                <p role="status">{archiveSide === 'received' ? '这里只列本机从这台伙伴当前身份收到的目标，不代表已同意开始。换证或换实例前的来单不混入；找回原工作不会重启。' : '这里只列本机为这部手机保留的目标，不代表已经送达或完成。打开原派发后，由你决定是否读取回执或成果。'}</p>
+                <p role="status">{archiveSide === 'received' ? '这里只列本机从这台伙伴当前身份收到的目标，不代表已同意开始。换证或换实例前的来单不混入；找回原工作不会重启。' : '这里只读本机留档。设备接收不是机主已读；过去登记过执行也不代表现在仍在运行或已经完成。'}</p>
                 <form className="pw-form-actions" onSubmit={e=>{e.preventDefault();if(!busy && archiveDraft.trim())readPhoneArchive(archiveSide,undefined,archiveDraft)}}>
                   <SearchField aria-label="查找已保存的原目标" placeholder="输入原目标里的词" value={archiveDraft} isDisabled={busy}
                     onChange={value=>setArchiveFind({key:findKey,text:Array.from(value).slice(0,64).join('')})} />
@@ -1078,6 +1078,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
                 {!activeArchive.rows.length && <p>{activeArchive.searchText ? activeArchive.hasMore ? '这段记录没有命中，可以继续查更早的记录。' : '这段可核对的记录没有命中。' : '这一批本机记录里没有能核对的直接手机目标。'}</p>}
                 {rows(activeArchive.rows).map(row => <div className="pw-device-history-entry" key={JSON.stringify([row.taskId, row.operationId])}>
                   <h4 dir="auto">{row.goal}</h4>{row.matchedLater===true && <p>关键词出现在原目标的后文。</p>}<p>{time(row.createdAt)} · {row.textOnly === true ? '仅文字，不使用屏幕' : row.screenMode === 'background' ? '独立后台屏' : '主屏'}</p>
+                  {archiveSide === 'sent' && <p>{archivedPhoneAcceptanceLine(row,time)}</p>}
                   <div className="pw-form-actions">{archiveSide === 'received'
                     ? <><Button variant="secondary" disabled={busy || !supported('devices.returnToReceivedPhoneGoal')} onClick={() => openArchivedGoal(row, false)}>找回本机接纳的原工作</Button>
                       {row.mayCheckLocalText===true&&supported('devices.readLocalReviewedPhoneGoal')&&<Button variant="ghost" disabled={busy} onClick={()=>readOwnText(row)}>重看本机已核对原文</Button>}</>

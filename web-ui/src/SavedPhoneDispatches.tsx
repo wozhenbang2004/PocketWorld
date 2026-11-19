@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { Button } from './forms-library';
-import { archivedPhoneStopAttemptLine, archivedPhoneStopLine, isArchivedPhoneStopAttempt, isArchivedPhoneStop, type ArchivedPhoneStopAttempt, type ArchivedPhoneStop, type DeviceData, type SentPhoneGoalFocus } from './devices-workspace';
+import { archivedPhoneAcceptanceLine, archivedPhoneStopAttemptLine, archivedPhoneStopLine, isArchivedPhoneStopAttempt, isArchivedPhoneStop, type ArchivedPhoneStopAttempt, type ArchivedPhoneStop, type DeviceData, type SentPhoneGoalFocus } from './devices-workspace';
 
-type Row = {goal:string; createdAt:number; targetAcceptedAt?:number; stopReceipt?:ArchivedPhoneStop; stopAttempt?:ArchivedPhoneStopAttempt};
+type Row = {goal:string; createdAt:number; targetAcceptedAt?:number; targetRunRecorded?:true; stopReceipt?:ArchivedPhoneStop; stopAttempt?:ArchivedPhoneStopAttempt};
 type Page = {rows:Row[]; after:string; next:string; previous:string[]};
 const positiveTime=(n:unknown):n is number=>typeof n==='number' && Number.isSafeInteger(n) && n>0;
 const time=(n:number)=>new Date(n).toLocaleString();
@@ -21,10 +21,10 @@ export function SavedPhoneDispatches({source,local,busy,read}:Props){
         ||value.target.instanceId!==target.instanceId||value.target.certificateFingerprint!==target.certificateFingerprint
         ||typeof value.nextAfter!=='string'||value.nextAfter!==''&&(!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value.nextAfter)||value.nextAfter===after)
         ||!Array.isArray(value.rows)||value.rows.length>24||!value.rows.every((r:Row)=>r&&typeof r.goal==='string'&&r.goal.trim()
-          &&Array.from(r.goal).length<=161&&positiveTime(r.createdAt)&&(r.targetAcceptedAt===undefined||positiveTime(r.targetAcceptedAt))&&(r.stopReceipt===undefined||isArchivedPhoneStop(r.stopReceipt))
+          &&Array.from(r.goal).length<=161&&positiveTime(r.createdAt)&&(r.targetAcceptedAt===undefined||positiveTime(r.targetAcceptedAt))&&(r.targetRunRecorded===undefined||r.targetRunRecorded===true&&positiveTime(r.targetAcceptedAt))&&(r.stopReceipt===undefined||isArchivedPhoneStop(r.stopReceipt))
           &&(r.stopAttempt===undefined||r.stopReceipt===undefined&&isArchivedPhoneStopAttempt(r.stopAttempt))))
         throw new Error('留档与这份工作当时选定的手机不符，未显示其他派单。');
-      setPage({rows:value.rows.map(({goal,createdAt,targetAcceptedAt,stopReceipt,stopAttempt}:Row)=>({goal,createdAt,targetAcceptedAt,stopReceipt,stopAttempt})),after,next:value.nextAfter,previous});
+      setPage({rows:value.rows.map(({goal,createdAt,targetAcceptedAt,targetRunRecorded,stopReceipt,stopAttempt}:Row)=>({goal,createdAt,targetAcceptedAt,targetRunRecorded,stopReceipt,stopAttempt})),after,next:value.nextAfter,previous});
     });
   };
   return <div>
@@ -32,10 +32,10 @@ export function SavedPhoneDispatches({source,local,busy,read}:Props){
     {page&&<>
       {!page.rows.length&&<p role="status">{page.next?'这页没有能核对的派单，可以再看较早记录。':'本机在这一页没有可核对的原派单。'}</p>}
       {page.rows.map((row,i)=><article className="pw-device-history-entry" key={page.after+':'+i}>
-        <h4 dir="auto">{row.goal}</h4><p>本机留档 {time(row.createdAt)} · {row.targetAcceptedAt?'对方当时已接单 '+time(row.targetAcceptedAt):'没有可核对的对方接单回执'}</p>
+        <h4 dir="auto">{row.goal}</h4><p>本机留档 {time(row.createdAt)} · {archivedPhoneAcceptanceLine(row,time)}</p>
         {row.stopReceipt?<p>{archivedPhoneStopLine(row.stopReceipt,time)}</p>:row.stopAttempt&&<p>{archivedPhoneStopAttemptLine(row.stopAttempt,time)}</p>}
       </article>)}
-      <p className="pw-device-footnote">接单不等于对方机主已读或工作已完成。这里没有对方的成果或当前状态。</p>
+      <p className="pw-device-footnote">设备接收不是机主已读；登记过执行也不代表现在仍在运行或已经完成。这里没有对方的成果或当前状态。</p>
     </>}
     <div className="pw-form-actions">
       {!page?<Button variant="secondary" disabled={busy} onClick={()=>load()}>查看本机派单留档</Button>:<>

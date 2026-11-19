@@ -5,6 +5,7 @@ import './knowledge-depth.css';
 import './memory-reading.css';
 import { useSurfaceEnter } from './library/surface-motion';
 import { MemoryAssertionFields } from './MemoryAssertionFields';
+import { MemoryConflictEvidence } from './MemoryConflictEvidence';
 import { conflictReceiptMatches, MemoryConflictDecision, reviewedConflict } from './MemoryConflictDecision';
 import { WorkingStatus } from './library/journey-motion';
 import { MemoryReadingWindow, memoryHistoryStatus, taskMemorySelectionDetails, taskMemorySummary, taskMemoryVisibleRecords } from './memory-history';
@@ -158,7 +159,7 @@ export function MemoryHistoryWorkspace({ run, scopeKey, registerTransientBack, i
       </AccordionItem></Accordion>}
       {!page && !cognition && !task && !busy && <p className="pw-knowledge-empty-copy">{view === 'history' ? '输入关键词或记载日期，查找保存过的原文。也可以按主体核对当前认知与未决冲突。' : '搜索原任务，再查看当时提供给模型的记忆凭据。'}</p>}
       {cognition && <section aria-label="已读取的主体认知"><p className="pw-knowledge-caption">当前 {rows(cognition.current).length} · 历史 {rows(cognition.history).length} · 待审冲突 {rows(cognition.pendingConflicts).length}</p>
-        {rows(cognition.conflictGroups).map(group => <ConflictReview key={group.conflictHandle} group={group} busy={locked} onReview={args => { void invoke('memoryHistory.conflict.review', args, openReview); }} />)}
+        {rows(cognition.conflictGroups).map(group => <ConflictReview key={group.conflictHandle} group={group} pending={rows(cognition.pendingConflicts)} deadline={cognition.conflictReadExpiresAt} invoke={invoke} busy={locked} onReview={args => { void invoke('memoryHistory.conflict.review', args, openReview); }} />)}
         {(['current', 'history'] as const).map(key => rows(cognition[key]).length > 0 && <section className="pw-knowledge-directory-group" key={key}><header className="pw-knowledge-group-heading"><h3>{key === 'current' ? '当前认知' : '历史、计划或尚未生效'}</h3><span>{rows(cognition[key]).length}</span></header><div className="pw-memory-list">{rows(cognition[key]).map(row => <article key={row.id} className="pw-memory-list-item"><Button variant="ghost" className="pw-memory-row" data-history-id={`${key}:${row.id}`} trailingIcon={IconChevronRight} disabled={locked} onClick={() => choose(row, `${key}:${row.id}`)}><span className="pw-memory-row-copy"><strong>{row.text}</strong><small>{row.assertion?.kind} · {row.assertionStatus}</small></span></Button></article>)}</div></section>)}
       </section>}
       {page && <section className="pw-knowledge-section"><h3 className="pw-knowledge-section-heading">{view === 'history' ? '匹配的旧事' : '原任务记录'}</h3>
@@ -195,13 +196,14 @@ export function MemoryHistoryWorkspace({ run, scopeKey, registerTransientBack, i
   </section>;
 }
 
-function ConflictReview({ group, busy, onReview }: { group: Data; busy: boolean; onReview: (args: Data) => void }) {
+function ConflictReview({ group, pending, deadline, busy, invoke, onReview }: { group: Data; pending: Data[]; deadline: number; busy: boolean; invoke: (action: string, args: Data, receive: (value: Data) => void) => Promise<unknown>; onReview: (args: Data) => void }) {
   const [choice, setChoice] = useState(''), [reason, setReason] = useState('');
   const originals = rows(group.records), coexist = choice === ':coexist', chosen = originals.find(row => `keep:${row.id}` === choice);
   const options = originals.map(row => ({ id: `keep:${row.id}`, label: row.text, description: `${row.reviewRole === 'protected_current' ? '此前受保护的当前版本' : '待核对'} · 修订 ${row.revision}` }));
   if (originals.length >= 2) options.push({ id: ':coexist', label: '这些内容并存', description: '不指定唯一版本，需要说明保留理由。' });
   return <section className="pw-source-record pw-knowledge-conflict"><h3>核对这组冲突</h3>
     <p className="pw-muted">新的推断不会自动替换主人纠正过的内容。先逐条对照，再决定以后如何参考。</p>
+    <MemoryConflictEvidence group={group} pending={pending} deadline={deadline} busy={busy} invoke={invoke} />
     <RadioOptions label={originals.length >= 2 ? '保留哪一条，或允许并存' : '核对要保留的版本'} value={choice} options={options} onChange={setChoice} isDisabled={busy} />
     <TextAreaField label="这样处理的理由" value={reason} onChange={setReason} maxLength={1000} isDisabled={busy} />
     <Button variant="secondary" disabled={busy || !(coexist ? originals.length >= 2 : chosen) || !reason.trim()} onClick={() => onReview({

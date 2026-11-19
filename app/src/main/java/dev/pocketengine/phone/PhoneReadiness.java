@@ -68,10 +68,29 @@ public final class PhoneReadiness {
             JSONObject check = checks.getJSONObject(i);
             if (!"ready".equals(check.optString("state"))) {
                 String message = check.optString("message");
-                if (!message.isEmpty()) throw new IllegalStateException(message);
+                if (!message.isEmpty()) {
+                    String code=check.optString("code");
+                    if ("serviceConnected".equals(check.optString("id")) && "blocked".equals(check.optString("state")) &&
+                            "accessibility".equals(check.optString("action")) &&
+                            ("accessibility_disabled".equals(code) || "accessibility_not_connected".equals(code)))
+                        throw new ServiceNotReady(mode,code,message);
+                    throw new IllegalStateException(message);
+                }
             }
         }
         throw new IllegalStateException("手机操作条件暂不可核对，请重新检查");
+    }
+
+    // Preserve the original failed check without treating its human message, a wrapper, or today's
+    // permission as proof of what happened then. This does not change admission or the existing wait.
+    private static final class ServiceNotReady extends IllegalStateException {
+        final String mode,code;
+        ServiceNotReady(String mode,String code,String message){super(message);this.mode=mode;this.code=code;}
+    }
+    public static String stoppedServiceCheck(Throwable cause,String mode) {
+        for(int i=0;cause!=null&&i<8;i++,cause=cause.getCause())
+            if(cause instanceof ServiceNotReady check&&check.mode.equals(mode))return check.code;
+        return "";
     }
 
     /** Allow an already enabled service to finish binding inside the original preparation. */

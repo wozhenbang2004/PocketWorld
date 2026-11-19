@@ -1,5 +1,6 @@
 package dev.pocketengine.ui.web
 
+import dev.pocketengine.features.memory.SourceRef
 import dev.pocketengine.ui.MemoryHistoryReviewGuard
 import dev.pocketengine.ui.MemoryLearningReviewGuard
 import dev.pocketengine.ui.PocketWorldController
@@ -193,15 +194,19 @@ internal class PocketWebMemoryHistory(private val controller: PocketWorldControl
                         val original = JSONObject().put("subjectId", subject).put("records", JSONArray(group.map { copy(it).apply { remove("readHandle") } }))
                         groups.put(JSONObject().put("records", original.getJSONArray("records")).put("conflictHandle", pin(session, "conflict", original)))
                     }
-                    value.put("conflictGroups", groups)
+                    value.put("conflictGroups", groups).put("conflictReadExpiresAt", session.expires)
                 }
             }
             "memoryHistory.source" -> {
-                fields(args, "readHandle", "index", "span", "offset"); val (session, original) = selected(args, "readHandle", "memory-record")
+                fields(args, "readHandle", "index", "span", "offset", "conflictHandle"); val (session, original) = selected(args, "readHandle", "memory-record")
                 require(args.opt("span") is Boolean); val span = args.getBoolean("span"); val row = original.getJSONObject("record")
                 val refs = (if (span) row.optJSONObject("assertion")?.optJSONArray("evidenceSpans") else row.optJSONArray("sourceRefs")) ?: JSONArray()
-                val reference = copy(refs.getJSONObject(index(args, "index", refs.length()))); val offset = offset(args)
-                memoryCurrent(session, original, done) { call(session, if (span) "readAssertionEvidence" else "openSource", reference, done) { sourcePage(it, offset) } }
+                val ix = index(args, "index", refs.length()); val reference = copy(refs.getJSONObject(ix)); val offset = offset(args)
+                if (args.has("conflictHandle")) {
+                    val (same, group) = selected(args, "conflictHandle", "conflict")
+                    check(span && same === session && original.getString("subjectId") == group.getString("subjectId")) { "原冲突与这一版不属同一阅读窗口" }
+                    conflictSpan(session, group, row, ix, reference, offset, done)
+                } else memoryCurrent(session, original, done) { call(session, if (span) "readAssertionEvidence" else "openSource", reference, done) { sourcePage(it, offset) } }
             }
             "memoryHistory.review" -> {
                 fields(args, "readHandle", "text"); val (session, original) = selected(args, "readHandle", "memory-record")
@@ -328,6 +333,29 @@ internal class PocketWebMemoryHistory(private val controller: PocketWorldControl
                 }
             }
             else -> error("未接入的原来源操作")
+        }
+    }
+    /** Explicitly compare one registered span in an already visible private conflict, never open the whole source. */
+    private fun conflictSpan(session: Session, group: JSONObject, row: JSONObject, ix: Int, ref: JSONObject, offset: Int, done: (JSONObject?, String?) -> Unit) {
+        val source = SourceRef.fromJson(ref.getJSONObject("sourceRef"))
+        check(session.domain == "memoryReview" && source.kind in setOf("message", "task_evidence") && source.ownerId == "owner" && source.spaceId == "private" &&
+            source.ownerId == session.displayedScope.getString("ownerId") && source.spaceId == session.displayedScope.getString("spaceId") &&
+            source.ownerId == row.getString("ownerId") && source.spaceId == row.getString("spaceId"))
+        val member = rows(group.getJSONArray("records")).singleOrNull { MemoryLearningReviewGuard.sameReview(row, it) && conflictGroup(row) == conflictGroup(it) &&
+            row.optString("reviewRole") == it.optString("reviewRole") && row.getString("assertionStatus") == it.getString("assertionStatus") } ?: error("不能定位这组里的确切版本")
+        val span = member.getJSONObject("assertion").getJSONArray("evidenceSpans").getJSONObject(ix)
+        check(SourceRef.fromJson(span.getJSONObject("sourceRef")) == source && listOf("offset", "chars", "sha256").all { span.get(it) == ref.get(it) })
+        val memoryRevision = controller.state.memoryRefreshRevision; val sourceRevision = controller.conversationSourceRevision
+        fun stillCurrent() = controller.state.memoryRefreshRevision == memoryRevision && controller.conversationSourceRevision == sourceRevision
+        conflictCurrent(session, group, done) {
+            check(stillCurrent()) { "原冲突或来源已变化" }
+            call(session, "readAssertionEvidence", ref, done) { value ->
+                check(stillCurrent() && value.opt("verifiedOriginalSpan") == true && value.opt("assertionTruthVerified") == false && value.opt("executionAuthorized") == false &&
+                    SourceRef.fromJson(value.getJSONObject("sourceRef")) == source && listOf("offset", "chars", "sha256").all { value.get(it) == ref.get(it) } &&
+                    value.getString("text").length == ref.getInt("chars")) { "这段原文未能按原登记核对" }
+                sourcePage(value, offset).put("format", "pocketworld.conflict-span-page.v1").put("spanOffset", ref.getInt("offset"))
+                    .put("recordId", row.getString("id")).put("recordRevision", row.getLong("revision")).put("index", ix).put("readExpiresAt", session.expires)
+            }
         }
     }
     // Match the Book's owner / space / subject / predicate / condition tuple, not labels or iteration order.

@@ -2,6 +2,9 @@ package dev.pocketengine.store;
 
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
+import android.util.JsonReader;
+import android.util.JsonToken;
+import java.io.StringReader;
 import dev.pocketengine.features.devices.DeviceProtocol;
 import dev.pocketengine.features.devices.DirectedPhoneTarget;
 import java.util.ArrayList;
@@ -45,8 +48,8 @@ final class OwnerPhoneGoalIndex {
         String query="SELECT b.parent_task_id,b.parent_operation_id,b.created_at,l.wire_digest,"
                 +"CASE WHEN length(CAST(l.wire_json AS BLOB))<="+DeviceProtocol.MAX_CONTROL_BYTES+" THEN l.wire_json END,"
                 +"CASE WHEN length(CAST(t.ui_header AS BLOB))<=32768 THEN t.ui_header END,"
-                +(selected==null?"CASE WHEN length(CAST(b.child_binding AS BLOB))<=32768 THEN b.child_binding END,b.arguments_digest,NULL "
-                        :selected.generation()==1?"NULL,NULL,NULL ":"NULL,NULL,CASE WHEN length(CAST(b.receipt_json AS BLOB))<=67584 THEN b.receipt_json END ")
+                +(selected!=null && selected.generation()>1
+                    ?"CASE WHEN length(CAST(b.receipt_json AS BLOB))<=67584 THEN b.receipt_json END ":"NULL ")
                 +"FROM device_child_budget b LEFT JOIN device_child_links l ON l.parent_task_id=b.parent_task_id AND l.parent_operation_id=b.parent_operation_id AND l.allocation_id=b.allocation_id "
                 +"LEFT JOIN tasks t ON t.task_id=b.parent_task_id"+where+" ORDER BY b.created_at DESC,b.parent_task_id,b.parent_operation_id LIMIT 25";
         JSONArray items=new JSONArray();String parent="",op="";int scanned=0;boolean more=false;
@@ -59,7 +62,7 @@ final class OwnerPhoneGoalIndex {
             if(!parent.equals(header.opt("id"))||!"owner".equals(header.opt("actorId"))||!"private".equals(header.opt("spaceId"))||header.has("origin")
                     ||!target.equals(wire.opt("targetDeviceId"))||!instance.equals(wire.opt("instanceId"))||!row.getString(3).equals(wire.opt("argumentsDigest"))
                     ||!DeviceProtocol.isDirectPhoneGoal(wire,here,parent,op)||!row.getString(3).equals(DeviceProtocol.argumentsDigest(wire)))continue;
-            if(selected!=null&&!selected.owns(row.isNull(8)?null:row.getString(8),parent,op,row.getString(3)))continue;
+            if(selected!=null&&!selected.owns(row.isNull(6)?null:row.getString(6),parent,op,row.getString(3)))continue;
             JSONObject input=wire.optJSONObject("arguments");String goal=input==null?"":input.optString("goal");
             if(goal.trim().isEmpty()||!search.matches(goal))continue;
             int length=goal.codePointCount(0,goal.length());String preview=length>160?goal.substring(0,goal.offsetByCodePoints(0,160))+"…":goal;
@@ -70,7 +73,7 @@ final class OwnerPhoneGoalIndex {
                 JSONObject stop=SentPhoneStopReceipt.localFact(db,originalPhone,parent,op,wire);
                 if(stop!=null)item.put(stop.has("localPhase")?"stopAttempt":"stopReceipt",stop);
             }
-            if(!row.isNull(6)&&!row.isNull(7))acceptedFact(item,row.getString(6),row.getString(7),wire,parent,op);
+            acceptedFact(db,item,wire,parent,op);
             items.put(item);
         }}
         if(selected!=null&&!selected.equals(LocalPhoneDispatchPin.current(db,target)))throw new SecurityException("本机配对记录已更新，请重读原设备");
@@ -79,9 +82,36 @@ final class OwnerPhoneGoalIndex {
                 .put("sourceTaskId",source.isEmpty()?null:source).put("targetDeviceId",target).put("instanceId",instance).put("localDeviceId",here).put("readOnly",true);
     }
     /** Project only two facts from the native authenticated acceptance; never expose a stored receipt or peer output. */
-    private static void acceptedFact(JSONObject item,String raw,String anchorDigest,JSONObject wire,String parent,String operation)throws Exception{
-        JSONObject binding;
-        try{binding=new JSONObject(raw);}catch(org.json.JSONException unreadable){return;}
+    private static void acceptedFact(SQLiteDatabase db,JSONObject item,JSONObject wire,String parent,String operation)throws Exception{
+        // Read at most one bounded binding per *matched* original wire. An unrelated task,
+        // former device generation or another allocation never enters this projection.
+        String sql="SELECT CASE WHEN length(CAST(child_binding AS BLOB))<=32768 THEN child_binding END,arguments_digest "
+                +"FROM device_child_budget WHERE parent_task_id=? AND parent_operation_id=? AND target_device_id=? AND allocation_id=?";
+        JSONObject binding=new JSONObject(),budget=wire.optJSONObject("budget"); String anchorDigest;
+        if(budget==null||!(budget.opt("allocationId") instanceof String allocation)||!allocation.matches("[A-Za-z0-9][A-Za-z0-9_-]{0,127}"))return;
+        try(Cursor row=db.rawQuery(sql,new String[]{parent,operation,wire.getString("targetDeviceId"),allocation})){
+            if(!row.moveToFirst()||row.isNull(0)||row.isNull(1))return;
+            anchorDigest=row.getString(1);
+            // verifiedReceipt can include a private response body. Skip it rather than parse,
+            // return or cache it; the native child link already verified the original acceptance.
+            try(JsonReader reader=new JsonReader(new StringReader(row.getString(0)))){
+                reader.beginObject();
+                while(reader.hasNext()){
+                    String key=reader.nextName();
+                    if(binding.has(key))return;
+                    switch(key){
+                        case "accepted" -> {if(reader.peek()!=JsonToken.BOOLEAN)return;binding.put(key,reader.nextBoolean());}
+                        case "acceptedAt","executorEpoch" -> {if(reader.peek()!=JsonToken.NUMBER)return;binding.put(key,reader.nextLong());}
+                        case "acceptedObjectKind","objectId","localTaskId","parentTaskId","parentOperationId","sourceOperationId","targetOperationId",
+                                "executorDeviceId","instanceId","operationArgumentsDigest","argumentsDigest","runId" -> {
+                            if(reader.peek()!=JsonToken.STRING)return;String v=reader.nextString();if(v.length()>128)return;binding.put(key,v);
+                        }
+                        default -> reader.skipValue();
+                    }
+                }
+                reader.endObject();if(reader.peek()!=JsonToken.END_DOCUMENT)return;
+            }catch(java.io.IOException|IllegalStateException|NumberFormatException unreadable){return;}
+        }
         String task=DeviceProtocol.receiverTaskId(wire);
         if(!Boolean.TRUE.equals(binding.opt("accepted"))||!"task".equals(binding.opt("acceptedObjectKind"))
                 ||!task.equals(binding.opt("objectId"))||!task.equals(binding.opt("localTaskId"))
@@ -89,9 +119,9 @@ final class OwnerPhoneGoalIndex {
                 ||!operation.equals(binding.opt("sourceOperationId"))||!operation.equals(binding.opt("targetOperationId"))
                 ||!wire.getString("targetDeviceId").equals(binding.opt("executorDeviceId"))||!wire.getString("instanceId").equals(binding.opt("instanceId"))
                 ||!wire.getString("argumentsDigest").equals(binding.opt("operationArgumentsDigest"))||!anchorDigest.equals(binding.opt("argumentsDigest"))
-                ||!(binding.opt("acceptedAt") instanceof Number)||binding.optLong("acceptedAt")<=0)return;
+                ||!(binding.opt("acceptedAt") instanceof Number)||binding.optLong("acceptedAt")<=0||binding.optLong("acceptedAt")>DeviceProtocol.MAX_SAFE_INTEGER)return;
         item.put("targetAcceptedAt",binding.getLong("acceptedAt"));
-        if(binding.opt("runId") instanceof String&&!binding.getString("runId").isEmpty()&&binding.opt("executorEpoch") instanceof Number
-                &&binding.optLong("executorEpoch")>0)item.put("targetRunRecorded",true);
+        if(binding.optString("runId").matches("[A-Za-z0-9][A-Za-z0-9_-]{0,127}")&&binding.opt("executorEpoch") instanceof Number
+                &&binding.optLong("executorEpoch")>0&&binding.optLong("executorEpoch")<=DeviceProtocol.MAX_SAFE_INTEGER)item.put("targetRunRecorded",true);
     }
 }

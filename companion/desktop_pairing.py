@@ -524,7 +524,8 @@ def run_native_pairing(config_path, *, installed=None, launch_config=None, ident
         config_store = NativePairingConfig(manager, path, raw, current_installation=installation_current)
         controller = PairingOwnerController(manager, local, config_store)
         host = PairingLanHost(controller)
-        start = show_pairing_window(controller, host, offer_local_receipts=installed is not None and getattr(sys, "frozen", False))
+        installed_owner = installed if getattr(sys, "frozen", False) else None
+        start = show_pairing_window(controller, host, offer_local_receipts=installed_owner is not None, installed_owner=installed_owner)
         if not start:
             return {"businessListenerStarted": False, "paired": controller.completed}
         config_store.current()

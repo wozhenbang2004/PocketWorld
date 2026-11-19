@@ -13723,6 +13723,14 @@ public final class TaskStore {
     }
     public synchronized void endAttempt(String id,String runId,String status,String summary,JSONObject evidence)throws Exception{
         db.beginTransaction();try{JSONObject t=required(id);if(!runId.equals(t.optString("runId")))return;
+            if(ClosedReceivingPhoneDecision.matches(db,t,id,runId,status)){
+                // The owner's original transaction already closed this run. Native display
+                // cleanup has its own exact-run phone_resource_release journal; never replace
+                // the reviewed outcome with generic teardown evidence or infer that cleanup succeeded.
+                if(!hasUnresolved(id)&&!deviceTasks.hasUnstoppedChildOperations(id,runId)){db.setTransactionSuccessful();return;}
+                // An independently unresolved effect still takes the ordinary reconciliation path.
+                status=t.getString("status");summary=t.optString("summary");evidence=t.getJSONObject("evidence");
+            }
             if(t.optJSONObject("executionScope")!=null&&TaskExecutionScope.planning(t.getJSONObject("executionScope"))&&status.matches("completed|needs_confirmation")){status="awaiting_user";summary="只读规划已停在原任务，等待审阅准确计划；没有批准执行";}
             t.remove("developmentSession");
             boolean channel=t.optJSONObject("origin")!=null&&t.getJSONObject("origin").optString("kind").matches("channel|group|reviewed_external_group");
@@ -15727,6 +15735,12 @@ public final class TaskStore {
     }
     public synchronized void finish(String id,String status,String summary,JSONObject evidence)throws Exception{
         JSONObject t=read(id);if(t==null)return;JSONObject clean=new JSONObject(evidence.toString());String image=clean.optString("imageBase64"),writtenImage=null;
+        if(clean.has("originalPhoneServiceWait")){
+            JSONObject wait=clean.optJSONObject("originalPhoneServiceWait");
+            if(!"awaiting_user".equals(status)||!PhoneActionRecovery.local(t)||wait==null||!"pocketworld.phone-service-wait.v1".equals(wait.opt("format"))||
+                    !id.equals(wait.opt("taskId"))||!t.optString("runId").equals(wait.opt("runId"))||t.optInt("coordinatorEpoch")!=wait.optInt("epoch",-1)||
+                    !t.optString("executionMode").equals(wait.opt("mode")))clean.remove("originalPhoneServiceWait");
+        }
         clean.remove("imageBase64");clean.remove("imageDataUrl");clean.remove("imageFile");clean.remove("imageSha256");clean.remove("screenshot");
         clean.remove("screenshotCapture");JSONObject previous=t.optJSONObject("evidence");
         // A disabled or failed new capture must not erase the owner's existing result image.

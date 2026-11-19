@@ -425,7 +425,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                 row.optJSONObject("stopReceipt")?.let { safe.put("stopReceipt",it) }
                     ?:row.optJSONObject("stopAttempt")?.let { safe.put("stopAttempt",it) }
             }
-            if(source.isNotEmpty() && row.has("targetAcceptedAt")) {
+            if(!received && row.has("targetAcceptedAt")) {
                 safe.put("targetAcceptedAt",row.getLong("targetAcceptedAt"))
                 if(row.optBoolean("targetRunRecorded"))safe.put("targetRunRecorded",true)
             }
