@@ -31,7 +31,7 @@ public final class TeamWorkReview {
         }
         plan.put("retained",retained).put("recovery",new JSONObject().put("taskId",context.getString("taskId")).put("reviewId",context.getString("reviewId")).put("planHash",context.getString("planHash")).put("receiptsHash",TeamWorkFiles.hash(TeamWorkFiles.canonical(receipts))));
         boolean active=context.getBoolean("activeAttempt"),unknown=context.getBoolean("hasUnresolved");
-        review.put("planHash",TeamWorkFiles.hash(TeamWorkFiles.canonical(plan))).put("canIntegrate",complete&&!active&&!unknown).put("recovery",true).put("integrationStatus",context.getString("status")).put("blockedReason",unknown?"原整合操作尚有未知效果，请先核对原操作":active?"原整合执行尚未结束，请先停止并等待原执行结束":"");return new Prepared(review);
+        review.put("planHash",TeamWorkFiles.hash(TeamWorkFiles.canonical(plan))).put("canIntegrate",complete&&!active&&!unknown).put("recovery",true).put("integrationStatus",context.getString("status")).put("integrationActive",active).put("integrationUnresolved",unknown).put("blockedReason",unknown?"原整合操作尚有未知效果，请先核对原操作":active?"原整合执行尚未结束，请先停止并等待原执行结束":"");return new Prepared(review);
     }
     /** assignments must come from the native TaskStore provider, never model-supplied artifact JSON. */
     public static JSONObject read(TeamWorkFiles.Workspace workspace,String teamRun,String target,JSONArray assignments)throws Exception {

@@ -40,9 +40,11 @@ public final class DeviceExecutionAdmission {
         JSONObject modelSource = request.arguments().optJSONObject("modelSource");
         if (kind == Kind.GOAL && modelSource != null && !"local".equals(modelSource.optString("kind")))
             throw new SecurityException("设备目标只能使用本机已授权模型；不接收凭据或借配对扩大推理受众");
-        if(DeviceProtocol.isDirectTextReturn(request.json())) {
+        if(DeviceProtocol.ownerTextRequest(request.json())) {
             // The peer may propose the narrow contract, never issue its grant.
             // Check B's own original grant too; not just a capability description on A.
+            if(DeviceProtocol.isAndroidTextReturn(request.json()) && request.deadline()>System.currentTimeMillis()+600_000L)
+                throw new SecurityException("此原手机文字工作最长十分钟，不续期");
             JSONObject grant=permission.grant(); boolean canRead=false;
             JSONArray methods=permission.capabilities(),tools=permission.toolNames();
             for(int i=0;i<methods.length();i++)if("task.get".equals(methods.opt(i)))canRead=true;
@@ -74,7 +76,7 @@ public final class DeviceExecutionAdmission {
         if(!"task.submitGoal".equals(original.method()))return false;
         String location=original.resourceBinding().optString("screenMode");
         return ("main_screen".equals(location)||"background".equals(location)) && original.budget().optLong("toolCalls",-1)==0
-                || DeviceProtocol.isDirectTextReturn(original.json());
+                || DeviceProtocol.ownerTextRequest(original.json());
     }
     public boolean noPhoneSurface(){return kind==Kind.GOAL && zeroToolPhoneGoal(request);}
     /** Local host selection, never used as a replacement for the signed resource. */
@@ -99,7 +101,7 @@ public final class DeviceExecutionAdmission {
     public String spaceId() { return "device:" + request.callerDeviceId(); }
     public JSONObject origin() throws Exception {
         JSONObject envelope = request.json();
-        return new JSONObject().put("kind", "paired_device").put("textReturnContract",DeviceProtocol.isDirectTextReturn(envelope)?DeviceProtocol.TEXT_RETURN:null)
+        return new JSONObject().put("kind", "paired_device").put("textReturnContract",DeviceProtocol.ownerTextRequest(envelope)?request.arguments().getString("textReturnContract"):null)
                 .put("originDeviceId", request.originDeviceId()).put("callerDeviceId", request.callerDeviceId())
                 .put("targetDeviceId", request.targetDeviceId()).put("grantId", request.grantId())
                 .put("authorizationEpoch", request.authorizationEpoch())

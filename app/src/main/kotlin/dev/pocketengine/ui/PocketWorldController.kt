@@ -405,13 +405,18 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         app.confirmPendingDeviceGoalCancellation(review)
     internal fun webUiCanInteract(): Boolean = !closed && voiceForeground && !activity.isFinishing && !activity.isDestroyed
     internal fun webPrivateOwnerVisible(): Boolean = webUiCanInteract() && privateWorkspaceView()
+    // Plain atomic/volatile probes only: this guard is also read inside the short original-pause commit.
+    internal fun displayedPhoneWindowVersion() = phoneViewerWindowEpoch
+    internal fun displayedPhoneWindowAlive(version: Long) = !closed && voiceForeground && phoneViewerWindowEpoch == version
     internal fun retainedPrivatePhoneSurface(task: UiTask): JSONObject? {
         val raw = task.raw
         if (!webPrivateOwnerVisible() || raw.optString("id") != task.id || raw.optString("kind") != "phone" ||
             raw.optString("actorId") != "owner" || raw.optString("spaceId") != "private" || !raw.isNull("origin") ||
             !raw.isNull("parentTaskId") || !raw.isNull("ownerPhoneControl") || !raw.isNull("ownerDeviceWork") ||
             raw.optString("runId").isBlank() || raw.optInt("coordinatorEpoch", -1) < 1) return null
-        return runCatching { app.retainedPhoneSurface(task.id, raw.getString("runId"), raw.getInt("coordinatorEpoch"), task.executionMode) }.getOrNull()
+        val scope = raw.optJSONObject("executionScope")?.opt("revision")
+        val revision = if (task.status == "paused" && (scope is Int || scope is Long)) (scope as Number).toLong() else -1L
+        return runCatching { app.retainedPhoneSurface(task.id, raw.getString("runId"), raw.getInt("coordinatorEpoch"), task.executionMode, revision) }.getOrNull()
     }
     internal fun webMemoryScopeTicket(): Any = Pair(ownerEpochs["memoryReview"] ?: 0, memoryReviewScope)
     /** Destination display/check only; a client-supplied id never becomes a project selection. */
@@ -524,6 +529,13 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 app.nativeOwnerWorkflows.source(input)
             } else {
                 val result = try { app.nativeOwnerWorkflows.memory(command, input) }
+                catch (expired: dev.pocketengine.features.memory.MemoryBook.ExpiredPendingCandidateException) {
+                    check(command == "acceptCandidate" && frozen?.optBoolean("candidate") == true && reviewed != null &&
+                        reviewed.getString("status") == "pending" && reviewed.getString("id") == expired.candidateId &&
+                        reviewed.getLong("revision") == expired.revision && reviewed.getLong("expiresAt") == expired.expiresAt)
+                    JSONObject().put("status", "expired_not_saved").put("saved", false).put("undoAvailable", false)
+                        .put("candidateId", expired.candidateId).put("candidateRevision", expired.revision).put("expiresAt", expired.expiresAt).put("checkedAt", expired.checkedAt)
+                }
                 catch (duplicate: dev.pocketengine.features.memory.MemoryBook.PersonalMemoryDuplicateException) {
                     val existing = duplicate.existingRecord()
                     val candidate = duplicate.existingCandidate()
@@ -590,7 +602,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                                 if (actual.optLong("revision") >= state.agentPreferences.optLong("revision")) state = state.copy(agentPreferences = actual)
                             }
                         }
-                        if (memoryChanged) state = state.copy(memoryRefreshRevision = state.memoryRefreshRevision + 1)
+                        if (memoryChanged && receipt.optString("status") != "expired_not_saved") state = state.copy(memoryRefreshRevision = state.memoryRefreshRevision + 1)
                         done(receipt, null)
                     }, { done(null, message(it)) })
                 }
@@ -3440,6 +3452,26 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             }
         } } catch (error: Exception) { state = state.copy(error = message(error)); completed?.invoke(null, message(error)) }
     }
+    /** Home and original viewer Continue the shown pause only. Unlike generic cold continuation, losing
+     * the original control must not allocate a new phone attempt or reuse the original model consent. */
+    internal fun resumeDisplayedPhone(task: UiTask, pause: Long, scope: Long, handle: String, current: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
+        val id = task.id; val run = task.raw.optString("runId"); val epoch = task.raw.optInt("coordinatorEpoch", -1)
+        if (!current() || !webPrivateOwnerVisible() || !dev.pocketengine.store.PhoneActionRecovery.local(task.raw) || task.status != "paused") {
+            done(null, "请在原私人手机任务核对这次暂停"); return
+        }
+        try { controls.execute {
+            val result = runCatching { app.resumeDisplayedPhoneRun(id, run, epoch, pause, scope, handle) { current() } }
+            main.post {
+                if (!current() || !webPrivateOwnerVisible()) { done(null, "原窗口已变化，请回原任务核对实际回执；不要重复继续"); return@post }
+                result.fold({ value ->
+                    state = state.copy(notice = "已接纳这次继续，等待原任务的新回执", taskActionErrors = state.taskActionErrors - id)
+                    if (task.executionMode == "main_screen") moveOriginalPhoneToBackground(value, current)
+                    done(value, null)
+                }, { failure -> done(null, message(failure)) })
+                getTask(id)
+            }
+        } } catch (error: Exception) { done(null, message(error)) }
+    }
     /** This route can only resume the already-live original pause. Unlike a generic continuation it cannot start a replacement attempt. */
     internal fun mainPhoneOwnerStep(task: UiTask, run: String, epoch: Int, operation: String, leave: Boolean,
                                    current: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
@@ -3483,11 +3515,13 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             }
         } } catch (failure: Exception) { done(null, message(failure)) }
     }
-    private fun moveOriginalPhoneToBackground(receipt: JSONObject) {
+    private fun moveOriginalPhoneToBackground(receipt: JSONObject, current: () -> Boolean = { true }) {
         val id = receipt.optString("taskId"); val run = receipt.optString("runId"); val epoch = receipt.optInt("epoch", -1)
         if (id.isBlank() || run.isBlank() || epoch < 1) return
         main.postDelayed({
-            if (!closed && !activity.isFinishing && !activity.isDestroyed && app.control(id)?.matchesHostRun(id, run, epoch) == true) activity.moveTaskToBack(true)
+            val control = app.control(id)
+            if (!closed && current() && !activity.isFinishing && !activity.isDestroyed && control?.matchesHostRun(id, run, epoch) == true &&
+                (!receipt.has("displayHandle") || control.stillRunningFromDisplay(receipt.optString("displayHandle"), receipt.optLong("pauseRevision", -1)))) activity.moveTaskToBack(true)
         }, 350)
     }
     internal fun releaseHeldPhoneResources(task: UiTask, window: android.view.View) {

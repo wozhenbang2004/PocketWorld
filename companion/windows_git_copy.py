@@ -9,11 +9,13 @@ import ntpath
 import re
 import time
 
-from device_project_packages import MAX_FILES, MAX_FILE, MAX_TOTAL, manifest_identity
+from assignment_projects import manifest_identity
 from platform_backend import PlatformError
-from windows_git_contents import ContentProblem
+from windows_git_contents import ContentProblem, MAX_FILES, MAX_FILE, MAX_TOTAL
 from windows_git_source import capture, registered
 from windows_installation import _object
+from windows_source_publisher import disk, publish
+import windows_source_inventory as inventory
 
 PROFILE = "pocketworld.windows-local-source-file-copy.v1"
 BANK = 8
@@ -29,7 +31,7 @@ def storage_limit(review):
     if not review.get("files"): return "这次提交没有可通过此入口保存的普通文件。"
     if (review["files"]>MAX_FILES or review["logicalBytes"]>MAX_TOTAL
             or review.get("largestFileBytes",MAX_FILE+1)>MAX_FILE):
-        return "超过现有独立落盘上限（2,000 个文件、单件 2 MiB、合计 16 MiB）；正文核对有效，但这里不能制作完整副本。"
+        return "超过本机源码副本上限（8,192 个文件、单件 16 MiB、合计 128 MiB）；不写部分副本。"
     return None
 
 
@@ -56,7 +58,7 @@ def _read(ctx,name,limit):
 
 
 def _store(ctx,name,value,limit,current):
-    ctx.backend.create_private_snapshot(ctx.state,name,_json(value),maximum=limit,current=current)
+    return ctx.backend.create_private_snapshot(ctx.state,name,_json(value),maximum=limit,current=current)
 
 
 def _native_id(value):
@@ -64,13 +66,13 @@ def _native_id(value):
 
 
 class Material:
-    def __init__(self): self.files,self.directories,self.rows,self.size = {},[],[],0
+    def __init__(self): self.names,self.directories,self.rows,self.size = set(),[],[],0
 
     def keep(self,path,mode,oid,raw,sha):
         self.size += len(raw)
-        if (len(self.files)>=MAX_FILES or self.size>MAX_TOTAL or len(raw)>MAX_FILE
-                or path in self.files): raise ContentProblem("content_limit")
-        self.files[path] = raw
+        if (len(self.names)>=MAX_FILES or self.size>MAX_TOTAL or len(raw)>MAX_FILE
+                or path in self.names): raise ContentProblem("content_limit")
+        self.names.add(path)  # only metadata survives this first source pass
         self.rows.append({"path":path,"mode":mode,"object":oid,"bytes":len(raw),"sha256":sha})
 
 
@@ -144,7 +146,7 @@ def inspect(ctx,row):
         if target_id==sealed["root"]:
             evidence.update(status="published_unconfirmed",path=ntpath.join(ctx.state,target))
             if final and final.get("status")=="completed" and final.get("root")==target_id:
-                evidence.update(status="saved",savedAt=final.get("at"))
+                evidence.update(status="saved",savedAt=final.get("at"),itemsRecorded=bool(inventory._claim_ok(final.get("items"))))
         elif final and final.get("status")=="completed":
             evidence["status"]="saved_original_unavailable"
     if (evidence["status"] in ("failed","incomplete") and opened and _native_id(opened.get("root"))
@@ -169,18 +171,27 @@ def save(ctx,settings,source,checkpoint,progress,phase,locked):
         raise CopyBlocked("source_changed")
     manifest = {"format":PROFILE,"source":original,"directories":material.directories,"files":material.rows}
     digest = manifest_identity(manifest)
+    # Bound saved IDs plus their 64-bit creation timestamps before reserving any slot.
+    if len(_json(manifest))+64*(len(material.directories)+len(material.rows))+1024>inventory.LIMIT:
+        raise CopyBlocked("inventory_limit")
     n = next(n for n in range(BANK) if all(used!=n for used,_ in records))
     target = _target(op)
-    def current():
-        checkpoint()
-        if locked(): raise PlatformError("Original local interactive owner is not available")
-        if source["environmentId"] not in dict(registered(ctx,settings)): raise PlatformError("Original registration differs")
+    last_check = 0.
+    def current(force=False):
+        nonlocal last_check
+        checkpoint()  # checked for every object, including owner close/lock and the total time bound
+        now = time.monotonic()
+        if force or now-last_check>=0.25:
+            if locked(): raise PlatformError("Original local interactive owner is not available")
+            if source["environmentId"] not in dict(registered(ctx,settings)): raise PlatformError("Original registration differs")
+            last_check = now
     def ensure_state():
         ctx.check_current_pointer()
         ctx.backend.assert_private_directory(ctx.state,ctx.sid)
     with ctx.backend.directory(ctx.state) as (_,state_handle,state_identity):
         ctx.backend.api.private_access(state_handle,ctx.sid,require_protected=True)
-        current()
+        current(True)
+        if not disk(ctx,original)["enough"]: raise CopyBlocked("disk_space")
         for leaf in (target,".pocketworld-project-"+op):
             try: existing = ctx.backend.api.open(ntpath.join(ctx.state,leaf),directory=True)
             except OSError as error:
@@ -192,7 +203,7 @@ def save(ctx,settings,source,checkpoint,progress,phase,locked):
         # staging tree. A collision/failure is never retried under another ID.
         row = {"format":PROFILE,"install":install,"operation":op,"target":target,"source":original,
                "at":int(time.time()*1000),"manifestDigest":digest}
-        _store(ctx,_slot(n),row,16384,current)
+        _store(ctx,_slot(n),row,16384,lambda:current(True))
         phase("正在把已核实的源文件写入独立的私有暂存目录，并核对实际字节")
         evidence = {"operation":op,"install":install,"manifestDigest":digest}
         def record(phase_id,intent):
@@ -200,15 +211,31 @@ def save(ctx,settings,source,checkpoint,progress,phase,locked):
                     or intent.get("manifestDigest")!=digest or intent.get("parentIdentity")!=state_identity
                     or not _native_id(intent.get("temporaryIdentity"))):
                 raise PlatformError("Original staging identity not verified")
-            _store(ctx,_phase(op,phase_id),{**evidence,"root":intent["temporaryIdentity"]},4096,current)
+            if phase_id=="items":
+                value = {"format":inventory.PROFILE,"operation":op,"manifest":manifest,"root":intent["temporaryIdentity"],
+                         "rootOrigin":intent["rootOrigin"],"directories":intent["directories"],"files":intent["files"]}
+                return inventory.claim(_store(ctx,_phase(op,"items"),value,inventory.LIMIT,ensure_state))
+            if phase_id not in ("opened","stage"): raise PlatformError("Original publication phase unknown")
+            _store(ctx,_phase(op,phase_id),{**evidence,"root":intent["temporaryIdentity"]},4096,lambda:current(True))
             if phase_id=="stage": phase("原暂存目录内容已核实，正在以不覆盖的方式发布并回读目标")
-        outcome = ctx.backend.import_project_copy(ctx.state,target,manifest,material.files,current,
-            record_intent=lambda state:record("stage",state),local_staging_id=op,local_on_open=lambda state:record("opened",state))
+        def feed(append):
+            class Sink:
+                def __init__(self): self.directories=[]
+                def keep(self,path,mode,oid,raw,sha): append(path,mode,oid,raw,sha)
+            current(True)
+            again = capture(ctx,settings,source["environmentId"],layout_for=source,content=True,
+                checkpoint=current, material=Sink(),
+                on_count=lambda n,t,size:phase(f"已按原内容编号写入独立暂存：{n}/{t} 个文件，{size/1048576:.1f} MiB"))
+            if not again.get("committedContentReview",{}).get("complete") or source_facts(again)!=original:
+                raise PlatformError("Exact original contents no longer available")
+        outcome = publish(ctx,op,digest,manifest,feed,current,record,phase)
         complete = (outcome.get("status")=="completed" and outcome.get("verified") is True and outcome.get("delivered") is True
                     and outcome.get("path")==target and outcome.get("manifestDigest")==digest and _native_id(outcome.get("directoryIdentity")))
         status = "completed" if complete else "failed" if outcome.get("publicationAttempted") is False and outcome.get("status")=="failed" else "unknown"
         final = {**evidence,"status":status,"at":int(time.time()*1000)}
-        if complete: final["root"] = outcome["directoryIdentity"]
+        if complete:
+            final["root"] = outcome["directoryIdentity"]
+            final["items"] = outcome["items"]
         if status=="failed": final["cleanupConfirmed"] = outcome.get("cleanupPending") is False
         # Save only the factual result even if the progress window closed
         # after a physical publication. Never turn later cancellation into undo.

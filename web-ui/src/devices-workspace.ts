@@ -34,12 +34,18 @@ export function deviceTaskDetails(value: unknown, taskId: string): DeviceData {
 }
 export const PHONE_ACTION_WINDOW_MS = 30_000;
 export function isReceivedPhoneTask(task: DeviceData, snapshot: DeviceData | null): boolean {
-  const origin = task.raw?.origin;
+  const raw=task.raw, origin=raw?.origin, scope=raw?.deviceExecutionScope, resource=scope?.resourceBinding;
+  const appOnly=raw?.kind==='assistant' && (['main_screen','background'].includes(raw.receivedZeroToolAppScope)
+    || raw.deviceExecutionKind==='GOAL' && scope?.executionKind==='GOAL' && scope.toolLimit===0 && resource?.screenMode===scope.mode
+      && ['main_screen','background'].includes(scope.mode) && Number.isSafeInteger(resource.androidUserId) && Array.isArray(resource.packageNames) && resource.packageNames.length>0);
   return object(origin) && origin.kind === 'paired_device' && identity(origin.callerDeviceId) && origin.callerDeviceId === origin.originDeviceId
     && identity(origin.targetDeviceId) && origin.targetDeviceId === snapshot?.local?.deviceId && identity(origin.remoteOperationId) && identity(origin.grantId)
     && (['main_screen','background'].includes(task.raw.executionMode) || task.raw.executionMode === 'capabilities'
-      && origin.textReturnContract === 'pocketworld.direct-text.owner-reviewed-result.v1' && origin.rootTaskId === origin.remoteOperationId
-      && origin.parentTaskId === origin.remoteOperationId && origin.remoteLocalTaskId === origin.remoteOperationId);
+      && (appOnly || origin.textReturnContract === 'pocketworld.direct-text.owner-reviewed-result.v1' && origin.rootTaskId === origin.remoteOperationId
+        && origin.parentTaskId === origin.remoteOperationId && origin.remoteLocalTaskId === origin.remoteOperationId
+        || origin.textReturnContract === 'pocketworld.original-phone-allocation.owner-reviewed-text.v1' && identity(origin.rootTaskId)
+          && origin.rootTaskId === origin.parentTaskId && origin.rootTaskId !== origin.remoteOperationId
+          && typeof origin.remoteLocalTaskId === 'string' && /^ba1_[a-f0-9]{64}$/.test(origin.remoteLocalTaskId)));
 }
 /** A local return bookmark, never a review, model selection, or execution authority. */
 export type ReceivedPhoneGoalReturn = { taskId: string; instanceId: string; sourceId: string; targetId: string; parentTaskId: string; operationId: string; grantId: string; epoch: number; peerDetail: boolean; leftAt: number };
@@ -115,10 +121,10 @@ export function receivedPhoneArchiveReturn(value: unknown, row: DeviceData, peer
     parentTaskId: value.parentTaskId, grantId: value.grantId, epoch: value.epoch, peerDetail: true, leftAt: Date.now() };
 }
 export function devicePhoneGoalArchive(value: unknown, peer: DeviceData, local: DeviceData, side: PhoneArchiveSide) {
-  if (!object(value) || value.kind !== 'phoneGoalArchive' || (value.side ?? 'sent') !== side || !samePhoneGoalArchive(value, peer, local) || value.readOnly !== true || !identity(value.archiveHandle)
+  if (!object(value) || value.kind !== 'phoneGoalArchive' || value.searchText !== undefined && (typeof value.searchText !== 'string' || Array.from(value.searchText).length > 64) || (value.side ?? 'sent') !== side || !samePhoneGoalArchive(value, peer, local) || value.readOnly !== true || !identity(value.archiveHandle)
     || !Array.isArray(value.rows) || value.rows.length > 24 || typeof value.hasMore !== 'boolean' || typeof value.canReadNewer !== 'boolean'
     || !value.rows.every((row: unknown) => object(row) && identity(row.taskId) && identity(row.operationId) && typeof row.goal === 'string' && !!row.goal
-      && (['main_screen', 'background'].includes(row.screenMode) || side === 'received' && row.textOnly === true && row.screenMode === 'capabilities') && positiveInteger(row.createdAt))
+      && (['main_screen', 'background'].includes(row.screenMode) || row.textOnly === true && row.screenMode === 'capabilities') && positiveInteger(row.createdAt))
     || new Set(value.rows.map((row: DeviceData) => JSON.stringify([row.taskId, row.operationId]))).size !== value.rows.length) throw new Error('原手机、本机派发或目录已变化，请重新读取。');
   return value;
 }

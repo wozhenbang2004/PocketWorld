@@ -1,3 +1,4 @@
+import {teamFileMark,type TeamFileReviewMark} from './team-navigation';
 type Data = Record<string, unknown>;
 const object = (value: unknown): Data => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Data : {};
 const text = (value: unknown) => typeof value === 'string' ? value.trim() : '';
@@ -10,7 +11,7 @@ export type OwnerWorkTeam = {
   goal: string; status: string; taskStatus: string; phase: string; updatedAt: number;
   needsAttention: boolean; active: boolean; cancelRequested: boolean; readOnly: true;
   memberCount?: number; completedMemberCount?: number; pendingMemberCount?: number;
-  pendingQuestionCount?: number; pendingDecisionCount?: number; attentionCount?: number;
+  pendingQuestionCount?: number; pendingDecisionCount?: number; attentionCount?: number; fileReview?:TeamFileReviewMark;
 };
 const count = (value: unknown): number | undefined => Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : undefined;
 
@@ -30,7 +31,7 @@ function workTeams(raw: Data, available: boolean): OwnerWorkTeam[] {
       goal: text(row.goal), status: text(row.status), taskStatus: text(row.taskStatus), phase: text(row.phase), updatedAt: Number(row.updatedAt),
       needsAttention: row.needsAttention, active: row.active, cancelRequested: row.cancelRequested === true, readOnly: true,
       memberCount: count(row.memberCount), completedMemberCount: count(row.completedMemberCount), pendingMemberCount: count(row.pendingMemberCount),
-      pendingQuestionCount: count(row.pendingQuestionCount), pendingDecisionCount: count(row.pendingDecisionCount), attentionCount: count(row.attentionCount) });
+      pendingQuestionCount: count(row.pendingQuestionCount), pendingDecisionCount: count(row.pendingDecisionCount), attentionCount: count(row.attentionCount), fileReview:teamFileMark(row.fileReview)??undefined });
   }
   return teams;
 }

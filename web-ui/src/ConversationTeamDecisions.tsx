@@ -6,11 +6,34 @@ import type {OwnerWorkTeam} from './owner-work-presentation';
 import type {TeamAttentionLocator} from './NotificationTeamAttention';
 import {originalAttentionLocator} from './team-result-reading';
 import {teamStatusLabel} from './team-presentation';
-import {teamDecisionEntryKey,type TeamDecisionOrigin} from './team-navigation';
+import {sameTeamFiles,teamDecisionEntryKey,teamFileEntryKey,type TeamDecisionOrigin,type TeamFileReviewMark,type WorkFileSource} from './team-navigation';
 
 type Item={locator:TeamAttentionLocator;name:string;title:string;detail:string};
 type Page={items:Item[];total:number};
-export type OpenTeamDecision=(locator:TeamAttentionLocator,source:TeamDecisionOrigin)=>void;
+export type TeamWorkTarget = TeamAttentionLocator | {runId:string;fileReview:TeamFileReviewMark};
+export type OpenTeamDecision=(locator:TeamWorkTarget,source:TeamDecisionOrigin)=>void;
+
+function WorkFileLink({source,label,onOpen}:{source:WorkFileSource;label:string;onOpen:OpenTeamDecision}){
+  const entry=teamFileEntryKey(source),seq=useRef(0),pending=useRef(false);
+  const [busy,setBusy]=useState(false),[error,setError]=useState('');
+  useEffect(()=>{const retire=()=>{if(document.hidden){seq.current++;pending.current=false;setBusy(false);setError('')}};
+    document.addEventListener('visibilitychange',retire);return()=>{seq.current++;document.removeEventListener('visibilitychange',retire)}},[entry]);
+  const open=async()=>{
+    if(pending.current||document.hidden||bridge.getState().state.conversationId!==source.conversationId)return;
+    const turn=++seq.current;pending.current=true;setBusy(true);setError('');
+    const current=()=>turn===seq.current&&!document.hidden&&bridge.getState().state.conversationId===source.conversationId;
+    try{
+      const result=await bridge.command('teams.attention',source);
+      if(!current())return;
+      if(result.readOnly!==true||result.executionAuthorized!==false||result.runId!==source.teamRunId||result.parentTaskId!==source.parentTaskId
+        ||result.parentRunId!==source.parentRunId||result.parentEpoch!==source.parentEpoch||result.conversationId!==source.conversationId||!sameTeamFiles(source.fileReview,result.fileReview))throw new Error('这版文件或原工作已变，没有离开对话。');
+      onOpen({runId:source.teamRunId,fileReview:source.fileReview},source);
+    }catch(e){if(current())setError(e instanceof Error?e.message:'原文件待核对，没有打开另一版。')}
+    finally{if(current()){pending.current=false;setBusy(false)}}
+  };
+  return <><Button size="small" variant="ghost" data-workspace-entry={entry} trailingIcon={IconChevronRight} disabled={busy} onClick={()=>void open()}>
+    {label}{busy?'正在核对原文件…':`核对独审返回的 ${source.fileReview.fileCount} 份文件`}</Button>{error&&<p role="alert">{error}</p>}</>;
+}
 
 function pageFor(value:Record<string,any>,source:TeamDecisionOrigin):Page {
   if(value.runId!==source.teamRunId||value.parentTaskId!==source.parentTaskId||value.parentRunId!==source.parentRunId
@@ -45,9 +68,11 @@ export function ConversationTeamDecisions({team,distinguish,onOpen}:{team:OwnerW
     catch(error){if(current())setReading({stamp,error:error instanceof Error?error.message:'未能读取这组原待办。'})}
   };
   const count=team.pendingDecisionCount??team.pendingQuestionCount??0;
-  if(!team.needsAttention||team.cancelRequested||count<1)return null;
+  if(!team.needsAttention||team.cancelRequested||count<1&&!team.fileReview)return null;
   return <div className="pw-conversation-team-decisions">
-    <Button size="small" variant="ghost" data-workspace-entry={entry} aria-expanded={!!shown} aria-controls={id}
+    {team.fileReview&&<WorkFileLink key={teamFileEntryKey({...source,fileReview:team.fileReview})}
+      source={{...source,fileReview:team.fileReview}} label={distinguish&&team.goal?team.goal+' · ':''} onOpen={onOpen}/>}
+    {count>0&&<><Button size="small" variant="ghost" data-workspace-entry={entry} aria-expanded={!!shown} aria-controls={id}
       trailingIcon={shown?IconChevronDown:IconChevronRight} onClick={()=>shown?close():void open()}>
       {distinguish&&team.goal?`${team.goal} · `:''}{team.pendingQuestionCount===count?`${count} 个成员问题`:`${count} 项成员待办`}
     </Button>
@@ -59,6 +84,6 @@ export function ConversationTeamDecisions({team,distinguish,onOpen}:{team:OwnerW
           onClick={()=>{if(!document.hidden&&bridge.getState().state.conversationId===source.conversationId)onOpen(item.locator,source)}}>
           <span><small>{item.name} · {item.detail}</small><strong dir="auto">{item.title||'查看原分工'}</strong></span>
         </Button>)}{shown.page.total>shown.page.items.length&&<p>仅显示前 {shown.page.items.length} 项，其余请从上方原工作查看。</p>}</>}
-    </div>}
+    </div>}</>}
   </div>;
 }

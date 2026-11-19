@@ -166,6 +166,9 @@ public final class DeviceCapabilityPort implements CapabilityPort {
                     JSONObject terminal = new JSONObject(payload.toString()).put("parentTaskId", taskId).put("parentOperationId", allocation.getString("anchorOperationId")).put("argumentsDigest", allocation.getString("anchorArgumentsDigest"))
                             .put("executorDeviceId", route.targetDeviceId()).put("instanceId", actual.response().getString("instanceId"))
                             .put("childTaskId", result.getString("localTaskId")).put("childRunId", result.getString("runId"));
+                    // Restricted text receipts intentionally contain no raw status body.
+                    // Settle only from the authenticated outer receipt for this exact prepared dispatch.
+                    if(DeviceProtocol.isAndroidTextReturn(originalWire))terminal.put("status",result.getString("status")).put("executorEpoch",result.getLong("executorEpoch"));
                     JSONObject settled=devices.settleChild(coordinator.authenticatedChildResult(actual.peer(), terminal));return parentView(result,settled);
                 }
                 return parentView(result,new JSONObject().put("allocationAuthorizationRetained",true).put("singleOperationIsNotAllocationClosed",true));

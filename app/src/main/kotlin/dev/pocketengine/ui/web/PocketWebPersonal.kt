@@ -206,6 +206,14 @@ internal class PocketWebPersonal(private val controller: PocketWorldController) 
                 val payload = review.getJSONObject("payload")
                 recordReceipt(handle, "unknown", JSONObject().put("undoAvailable", false).put("message", "原操作已提交，等待真实回执；未自动重发"))
                 callMemory(command, payload, original, done) { result ->
+                    if (result.optString("status") == "expired_not_saved") {
+                        check(command == "acceptCandidate" && before != null && before.getString("status") == "pending" &&
+                            result.opt("saved") == false && result.opt("undoAvailable") == false && result.getString("candidateId") == before.getString("id") &&
+                            result.getLong("candidateRevision") == before.getLong("revision") && result.getLong("expiresAt") == before.getLong("expiresAt") &&
+                            result.getLong("expiresAt") in 1L..result.getLong("checkedAt")) { "建议的原期限尚未核对" }
+                        recordReceipt(handle, "expired_not_saved", result)
+                        return@callMemory receiptView(handle, selected(receipts, handle))
+                    }
                     if (command == "shortenManualNote" && result.optString("status") == "unchanged" && result.opt("saved") == false) {
                         recordReceipt(handle, "unchanged", result.put("undoAvailable", false))
                         return@callMemory receiptView(handle, selected(receipts, handle))

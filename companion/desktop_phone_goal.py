@@ -108,7 +108,7 @@ class PhoneWorkEntry:
         if not self.current(peer): return
         fingerprint, value = self.receipts.router._row(operation)
         row = (None, operation, fingerprint)
-        if self.receipts._source_current(peer, row): self.receipts._read(peer, row)
+        if self.receipts._source_current(peer, row): self.receipts.choose_outgoing(peer, row)
 
     def prepare(self):
         peers = self.receipts._peers()

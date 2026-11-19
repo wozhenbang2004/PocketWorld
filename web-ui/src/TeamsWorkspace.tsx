@@ -24,7 +24,7 @@ import { TeamFollowUps, TeamResultHandoff } from './TeamResultHandoff';
 import { teamFollowUpFocus, teamFollowUps, teamResultReading, type AttentionFocus, type TeamFollowUp } from './team-result-reading';
 import { teamCanPause, teamCanResume, teamGoalTitle, teamHasEnded, teamNeedsAttention, teamPhaseLabel, teamProgressLabel, teamRoleLabel, teamStatusLabel as status, teamTimeLabel } from './team-presentation';
 import type { TeamAttentionLocator } from './NotificationTeamAttention';
-import type { TeamButlerRequest, TeamOwnerWorkLink, TeamRunFocus } from './team-navigation';
+import {sameTeamFiles,type TeamButlerRequest,type TeamOwnerWorkLink,type TeamRunFocus,type WorkFileSource} from './team-navigation';
 import { HarnessEvidence } from './HarnessEvidence';
 import { harnessWorkerLabel, isTeamHarness } from './harness-capabilities';
 import './team-continuity.css';
@@ -123,6 +123,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const resultBack = useRef<() => boolean>(() => false);
   const handledAttention = useRef('');
   const handledRunFocus = useRef('');
+  const [fileEntry,setFileEntry]=useState<{view:string;requestId:string;source:WorkFileSource;returnToWork?:(reason?:string)=>void}|null>(null);
   const workspaceActive = state.webWorkspaceSection === 'teams' && !state.webWorkspaceTaskOpen;
   const workspaceWindow = useRef({ active: false, revision: Number(state.webWorkspaceResumeRevision || 0) });
   const ownsNativeWindow = () => {
@@ -246,13 +247,21 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     if (!requestId || !runId || requestId === handledRunFocus.current || !workspaceActive || !catalogReady || busy || entered.current || backgrounded.current || !ownsNativeWindow()) return;
     handledRunFocus.current = requestId;
     void invoke('teams.readRun', { runId }, result => {
-      if (result.reading?.run?.id !== runId) throw new Error('原协作记录身份不匹配，请从原工作重新打开。');
+      const next=result.reading,from=runFocus?.fromWork;
+      if (next?.run?.id !== runId||!next.viewHandle) {release(next);throw new Error('原协作记录身份不匹配，请从原工作重新打开。');}
+      if(from){
+        const link=next.ownerWorkLink;
+        if(!link||link.currentRun!==true||link.readOnly!==true||link.stopping!==false||link.taskId!==from.parentTaskId||link.runId!==from.parentRunId
+          ||link.epoch!==from.parentEpoch||link.conversationId!==from.conversationId||link.teamRunId!==from.teamRunId||runId!==from.teamRunId||!sameTeamFiles(from.fileReview,link.fileReview)){
+          release(next);throw new Error('原文件审阅已变化，没有打开另一轮。');
+        }
+      }
       setEditor(null); setMemberDraft(null); setResultSource(null); closeReview(); closePhoneSelection();
-      acceptReading(result.reading);
-      setRunSections(old => ({ ...old, [runId]: 'progress' }));
+      acceptReading(next);setFileEntry(from?{view:next.viewHandle,source:from,requestId,returnToWork:runFocus?.returnToWork}:null);
+      setRunSections(old => ({ ...old, [runId]: from?'result':'progress' }));
       setComposeOpen(false);
       onRunFocusConsumed?.(requestId);
-    }, () => onRunFocusConsumed?.(requestId));
+    }, failure => {onRunFocusConsumed?.(requestId);if(runFocus?.fromWork)runFocus.returnToWork?.(failure instanceof Error?failure.message:'原文件目录已变化。');});
   }, [runFocus?.requestId, workspaceActive, catalogReady, busy]);
   useEffect(() => {
     const requestId = label(attentionFocus?.requestId);
@@ -855,8 +864,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       </section>
         </TabPanel>
         <TabPanel id="result">
-          <TeamResultHandoff result={teamResult} frozenFiles={current.productionScope && (current.mode === 'produce' || current.workPlan) && (current.status === 'awaiting_review' || workItems.some(item => rows(item.artifacts).length > 0) || members.some(member => rows(member.roundStates).some(phase => rows(phase.artifacts).length > 0))) && bridge.getState().capabilities.commands.includes('teams.readFrozenOutputs')
-            ? <TeamFrozenFiles key={reading?.viewHandle || current.id} team={current.id} view={reading?.viewHandle || ''} run={run} active={workspaceActive && runSection === 'result'} disabled={!canRead || materialBusy} onOpen={setReadingFiles} back={frozenFilesBack} memberName={name}/> : undefined} sources={deliveries.length>0 ? <TeamResearchDeliveries records={deliveries} disabled={!canRead||materialBusy||!bridge.getState().capabilities.commands.includes('teams.openResearchTask')} open={openMemberDelivery}
+          <TeamResultHandoff result={teamResult} frozenFiles={current.productionScope && (current.mode === 'produce' || current.workPlan) && (fileEntry&&fileEntry.view===reading?.viewHandle || current.status === 'awaiting_review' || workItems.some(item => rows(item.artifacts).length > 0) || members.some(member => rows(member.roundStates).some(phase => rows(phase.artifacts).length > 0))) && bridge.getState().capabilities.commands.includes('teams.readFrozenOutputs')
+            ? <TeamFrozenFiles key={reading?.viewHandle || current.id} team={current.id} view={reading?.viewHandle || ''} entry={fileEntry&&fileEntry.view===reading?.viewHandle?fileEntry:undefined} run={run} active={workspaceActive && runSection === 'result'} disabled={!canRead || materialBusy} onOpen={setReadingFiles} back={frozenFilesBack} memberName={name}/> : undefined} sources={deliveries.length>0 ? <TeamResearchDeliveries records={deliveries} disabled={!canRead||materialBusy||!bridge.getState().capabilities.commands.includes('teams.openResearchTask')} open={openMemberDelivery}
             expanded={!!shownMemberSources[current.id]} onExpanded={value=>setShownMemberSources(old=>({...old,[current.id]:value}))}/> : undefined} stopped={current.status === 'cancelled'}
             actions={{ items: followUps, read: openFollowUp, disabled: !canRead || materialBusy, expanded: !!allResultActions[current.id],
               toggle: () => setAllResultActions(old => ({ ...old, [current.id]: !old[current.id] })) }}

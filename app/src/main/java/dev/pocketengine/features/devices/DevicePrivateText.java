@@ -17,7 +17,7 @@ public final class DevicePrivateText {
 
     public static boolean requested(DeviceTaskEnvelope request) {
         JSONObject wire = request.json(); String operation = request.operationId();
-        if(DeviceProtocol.isDirectTextReturn(wire))return true;
+        if(DeviceProtocol.ownerTextRequest(wire))return true;
         return "task.submitGoal".equals(request.method()) && request.originDeviceId().equals(request.callerDeviceId())
                 && !request.callerDeviceId().equals(request.targetDeviceId()) && operation != null && !operation.isEmpty()
                 && operation.equals(wire.opt("rootTaskId")) && operation.equals(wire.opt("parentTaskId")) && operation.equals(wire.opt("localTaskId"))
@@ -26,7 +26,7 @@ public final class DevicePrivateText {
 
     public static boolean applies(JSONObject task) {
         JSONObject scope = task.optJSONObject("deviceExecutionScope"), origin = task.optJSONObject("origin");
-        if (origin!=null && DeviceProtocol.TEXT_RETURN.equals(origin.opt("textReturnContract")))return true;
+        if (origin!=null && DeviceProtocol.textMarker(origin.opt("textReturnContract")))return true;
         if (scope == null) return false;
         // Fixed at the original native admission. Incomplete later metadata may
         // never switch this task back to the unrestricted snapshot serializer.
@@ -44,7 +44,7 @@ public final class DevicePrivateText {
         JSONObject origin = task.getJSONObject("origin"), safe = new JSONObject();
         for (String key : new String[]{"kind","originDeviceId","callerDeviceId","targetDeviceId","grantId","authorizationEpoch",
                 "rootTaskId","parentTaskId","remoteLocalTaskId","remoteOperationId"}) safe.put(key, origin.get(key));
-        if(DeviceProtocol.acceptedTextReturn(task))safe.put("textReturnContract",DeviceProtocol.TEXT_RETURN);
+        if(DeviceProtocol.acceptedTextReturn(task))safe.put("textReturnContract",origin.getString("textReturnContract"));
         return new JSONObject().put("origin", safe).put("rootTaskId", task.getString("rootTaskId"))
                 .put("remoteParentTaskId", task.optString("remoteParentTaskId")).put("executionKind", task.getString("deviceExecutionKind"))
                 .put("transportStateIsNotExecutionState", true);

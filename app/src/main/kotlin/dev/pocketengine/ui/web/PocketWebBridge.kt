@@ -194,6 +194,10 @@ internal class PocketWebBridge(
         !closed && documentId != null && section == null && taskViewId == null && controller.state.filePath == null &&
             projectPreview?.snapshot()?.optBoolean("visible") != true && projectLivePreview?.snapshot()?.optBoolean("mounted") != true
     }
+    private val localSourceIntake = PocketWebLocalSourceIntake(controller.projectPackages, {
+        !closed && documentId != null && section == null && taskViewId == null &&
+            controller.webPrivateOwnerVisible() && controller.state.filePath == null
+    }, { controller.state.projectId })
     private val projectGitImport = PocketWebProjectGitImport(controller.projectGitImports) {
         !closed && documentId != null && section == null && taskViewId == null && controller.webPrivateOwnerVisible() && controller.state.filePath == null
     }
@@ -241,7 +245,7 @@ internal class PocketWebBridge(
             "models.accounts.open", "models.accounts.review", "models.accounts.close",
             "models.groups.snapshot", "models.conversation.snapshot", "models.conversation.close"
         )
-        val commands: Set<String> = linkedSetOf(
+        val commands: Set<String> = PocketWebLocalSourceIntake.COMMANDS + linkedSetOf(
             "conversation.captureHostGoal", "conversation.openHostGoal",
             "app.ready", "app.refresh", "notice.dismiss", "notice.task.close", "phone.notice.refresh", "phone.notice.close", "error.dismiss", "execution.read", "execution.review", "execution.confirm",
             "composer.edit", "composer.send", "composer.mode", "composer.intent", "composer.reading", "composer.query", "composer.retry", "composer.returnPending",
@@ -299,6 +303,7 @@ internal class PocketWebBridge(
         started = false
         cancelStatePublication()
         presentation.close()
+        localSourceIntake.close()
         projectGitImport.close()
         background.clear()
         remoteInbox.close()
@@ -340,6 +345,7 @@ internal class PocketWebBridge(
         check(Looper.myLooper() == Looper.getMainLooper())
         cancelStatePublication()
         commandFence.invalidate()
+        if (documentReplaced) localSourceIntake.close() else localSourceIntake.pause()
         projectGitImport.close()
         phoneViewer.clear()
         background.clear()
@@ -385,6 +391,7 @@ internal class PocketWebBridge(
             controller.modelSelectionRevision
             projection = PocketWebState.snapshot(controller)
             projection?.getJSONObject("state")?.put("projectPreview", projectPreview?.snapshot() ?: JSONObject.NULL)
+            projection?.getJSONObject("state")?.put("localSourceIntake", localSourceIntake.snapshot() ?: JSONObject.NULL)
             projection?.getJSONObject("state")?.put("projectGitImport", projectGitImport.snapshot() ?: JSONObject.NULL)
             projection?.getJSONObject("state")?.put("projectLivePreview", projectLivePreview?.snapshot() ?: JSONObject.NULL)
             projection?.getJSONObject("state")?.put("appearance", presentation.snapshot())
@@ -507,6 +514,10 @@ internal class PocketWebBridge(
                     complete(id, result, error, code.ifEmpty { "preview_unavailable" }, retainValue = action != "phone.viewer.frame")
                 }
                 return
+            }
+            if (action in PocketWebLocalSourceIntake.COMMANDS) {
+                complete(id, localSourceIntake.dispatch(action, args), null, retainValue = false)
+                publishState(); return
             }
             if (action in PocketWebProjectGitImport.COMMANDS) {
                 complete(id, projectGitImport.dispatch(action, args), null, retainValue = false)
@@ -1271,7 +1282,17 @@ internal class PocketWebBridge(
                 val task = requireTask(requiredString(args, "taskId"))
                 require(isPhoneTask(task) && canUseTaskControls(task) && task.raw.optString("runId") == requiredString(args, "runId") && task.raw.optInt("coordinatorEpoch", -1) == requiredInt(args, "epoch")) { "原手机任务或执行代次已变化，请刷新核对" }
                 if (action == "phone.resume") require(task.status == "paused" && PocketWebTaskActions.unresolvedForReview(task).isEmpty() && pendingCapabilityApprovals(task).isEmpty()) { "请先核对原任务的暂停、未决动作与授权" }
-                controller.controlOriginalPhone(task, action.substringAfter('.')) { result, error -> complete(id, result, error, "outcome_unknown"); publishState() }
+                if (action == "phone.resume" && dev.pocketengine.store.PhoneActionRecovery.local(task.raw)) {
+                    checkedPayload(args, setOf("taskId", "runId", "epoch", "pauseRevision", "scopeRevision", "displayHandle"))
+                    val pause = requiredLong(args, "pauseRevision"); val scope = requiredLong(args, "scopeRevision"); val handle = requiredString(args, "displayHandle")
+                    require(pause > 0 && scope > 0 && handle.length == 36 && controller.webPrivateOwnerVisible()) { "请展开原私人任务核对这一暂停" }
+                    val page = commandFence.ticket(); val owner = controller.displayedPhoneWindowVersion()
+                    // The guard passed into the SQL/control commit only reads volatile page/owner identity.
+                    fun current() = !closed && commandFence.accepts(page) && controller.displayedPhoneWindowAlive(owner)
+                    controller.resumeDisplayedPhone(task, pause, scope, handle, ::current) { result, error ->
+                        complete(id, result, error, "outcome_unknown", retainValue = false); publishState()
+                    }
+                } else controller.controlOriginalPhone(task, action.substringAfter('.')) { result, error -> complete(id, result, error, "outcome_unknown"); publishState() }
                 return
             }
             val result = dispatch(action, args)
@@ -1942,7 +1963,7 @@ internal class PocketWebBridge(
     }
     private fun requireTask(id: String): UiTask = controller.state.tasks.firstOrNull { it.id == id } ?: error("原任务不在当前读取窗口，请刷新后重新打开")
     private fun leaveTask() { phoneViewer.clear(); localPages.clear(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); composerModels.clear(); taskViewId = null; controller.closeWebTaskView(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.clear(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); commandFence.invalidate(); taskReviewGeneration++; taskPage?.let(controller::leaveGroupTask); taskPage = null }
-    private fun leaveConnection() { projectGitImport.close(); phoneViewer.clear(); controller.webChannels.clear(); controller.webSkills.clear(); commandFence.invalidate(); ++domainGeneration; modelReviews.clear(); automation.clear(); mcpImports.clear(); executionReviews.clear(); sourceReader.clear(); messageQuotes.clear(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.clear(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); connectionPages.clear(); teamPages.clear(); groupPages.clear(); mediaPages.clear(); realtimePages.clear(); proxyPages.clear(); planPages.clear(); commitmentPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); devicePages.clear(); pluginPages.clear(); localPages.clear(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); accountWorkspace.invalidate(); composerModels.clear(); aiSources.clear(); conversationModels.clear(); deviceWindow?.close(); deviceWindow = null; section?.let { if (it == "memory") controller.leaveOwnerDomain("memoryReview") else if (it in ownerDomains) controller.leaveOwnerDomain(it) }; section?.takeIf { it == "archives" || it == "storage" }?.let(dataPages::close); section = null }
+    private fun leaveConnection() { localSourceIntake.close(); projectGitImport.close(); phoneViewer.clear(); controller.webChannels.clear(); controller.webSkills.clear(); commandFence.invalidate(); ++domainGeneration; modelReviews.clear(); automation.clear(); mcpImports.clear(); executionReviews.clear(); sourceReader.clear(); messageQuotes.clear(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.clear(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); connectionPages.clear(); teamPages.clear(); groupPages.clear(); mediaPages.clear(); realtimePages.clear(); proxyPages.clear(); planPages.clear(); commitmentPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); devicePages.clear(); pluginPages.clear(); localPages.clear(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); accountWorkspace.invalidate(); composerModels.clear(); aiSources.clear(); conversationModels.clear(); deviceWindow?.close(); deviceWindow = null; section?.let { if (it == "memory") controller.leaveOwnerDomain("memoryReview") else if (it in ownerDomains) controller.leaveOwnerDomain(it) }; section?.takeIf { it == "archives" || it == "storage" }?.let(dataPages::close); section = null }
     /**
      * Navigation already disposes these workspace handles in leaveConnection().
      * React unmount cleanup may arrive after that transition. Acknowledge only

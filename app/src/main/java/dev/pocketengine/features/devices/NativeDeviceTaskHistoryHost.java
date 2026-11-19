@@ -110,6 +110,7 @@ public final class NativeDeviceTaskHistoryHost {
                 ||binding.getLong("executorEpoch")!=task.optLong("executorEpoch",-1)||!original.targetDeviceId().equals(task.optString("executorDeviceId"))
                 ||!wire.getString("instanceId").equals(task.optString("instanceId"))||!original.taskId().equals(detail.optString("rootTaskId"))
                 ||!original.taskId().equals(detail.optString("remoteParentTaskId"))||!"paired_device".equals(origin.optString("kind"))
+                ||DeviceProtocol.isAndroidTextReturn(wire)&&!DeviceProtocol.ANDROID_TEXT_RETURN.equals(origin.opt("textReturnContract"))
                 ||!original.operationId().equals(origin.optString("remoteOperationId"))||!wire.getString("localTaskId").equals(origin.optString("remoteLocalTaskId"))
                 ||!local.deviceId().equals(origin.optString("originDeviceId"))||!local.deviceId().equals(origin.optString("callerDeviceId"))
                 ||!original.targetDeviceId().equals(origin.optString("targetDeviceId"))||!original.grantId().equals(origin.optString("grantId"))

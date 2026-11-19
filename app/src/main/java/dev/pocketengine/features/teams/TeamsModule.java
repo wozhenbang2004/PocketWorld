@@ -103,6 +103,8 @@ public final class TeamsModule implements EngineModule {
         reader.check();TeamWorkReview.Prepared source=requireWriteHost().review(runId,reader);reader.check();
         return new TeamOwnerFileReading(runId,source.snapshot());
     }
+    public JSONObject ownerTextDecision(TeamOwnerFileReading evidence,dev.pocketengine.core.RunControl reader)throws Exception{return requireWriteHost().ownerTextDecision(evidence,reader);}
+    public TaskStoreTeamWriteHost.TextOutputApproval reviewOwnerTextApproval(TeamOwnerFileReading evidence)throws Exception{return requireWriteHost().reviewOwnerTextApproval(evidence);}
     public TaskStoreTeamWriteHost.WorkPlanPage newWorkPlanPage(String runId)throws Exception{return requireWriteHost().newWorkPlanPage(coordinator,runId,context::model);}
     public TeamWriteScope captureWriteScope(String parent,String parentRun,String project,JSONObject reviewedDefinition)throws Exception{return requireWriteHost().captureScope(parent,parentRun,project,reviewedDefinition);}
     public TaskStoreTeamWriteHost.RemoteRevisionPage newRemoteRevisionPage(String runId,String assignmentId)throws Exception{return requireWriteHost().newRemoteRevisionPage(coordinator,runId,assignmentId);}

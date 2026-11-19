@@ -3,6 +3,7 @@ package dev.pocketengine.store;
 import dev.pocketengine.features.devices.DeviceProtocol;
 import dev.pocketengine.features.devices.DirectedPhoneTarget;
 import dev.pocketengine.features.devices.DevicePrivateText;
+import dev.pocketengine.features.devices.AndroidTextHandoff;
 
 import android.content.ContentValues;
 import android.database.Cursor;
@@ -285,7 +286,7 @@ public final class TaskStoreDeviceTasks {
         private final TaskStoreDeviceTasks issuer;private final String id,run,policyDigest,goal;private final int epoch;private final RunControl original;private final JSONObject route;private final dev.pocketengine.features.devices.NativeDeviceTaskScopeHost.RouteOption option;private final DeviceExecutionAdmission forwarded;
         private OwnerRouteApproval(TaskStoreDeviceTasks issuer,String id,String run,int epoch,RunControl original,JSONObject route,dev.pocketengine.features.devices.NativeDeviceTaskScopeHost.RouteOption option,String policyDigest,DeviceExecutionAdmission forwarded)throws Exception{this.issuer=issuer;this.id=id;this.run=run;this.epoch=epoch;this.original=original;this.route=duplicate(route);this.option=option;this.policyDigest=policyDigest;this.forwarded=forwarded;goal=issuer.task(id).getString("goal");}
         public void checkCurrent(RunControl actual)throws Exception{issuer.requireSourceRoute(this,actual);}
-        public dev.pocketengine.features.devices.PairingCoordinator.OutgoingGrant receivingGrant(){return option.receivingGrant();}public String routeId(){return option.optionId();}public String sourceKey(){return option.sourceKey();}public String kind(){return route.optString("kind");}public String capabilityVersion(){return option.capabilityVersion();}public JSONObject resourceBinding()throws Exception{return option.resourceBinding();}public java.util.Map<String,String> toolEffects()throws Exception{java.util.Map<String,String> result=new java.util.LinkedHashMap<>();JSONObject selected=route.getJSONObject("toolDeclarations");for(String name:dev.pocketengine.features.devices.DeviceProtocol.objectKeys(selected))result.put(name,selected.getString(name));return java.util.Collections.unmodifiableMap(new java.util.LinkedHashMap<>(result));}public int toolBudget(){return route.optInt("toolBudget");}public int modelBudget(){return route.optInt("modelBudget");}public long deadline(){return route.optLong("deadline");}public String parentGoal(){return goal;}public boolean forwarded(){return forwarded!=null;}public boolean permitsForwarding(){return route.optJSONArray("downstreamShares")!=null&&route.optJSONArray("downstreamShares").length()>0;}
+        public dev.pocketengine.features.devices.PairingCoordinator.OutgoingGrant receivingGrant(){return option.receivingGrant();}public String routeId(){return option.optionId();}public String sourceKey(){return option.sourceKey();}public String kind(){return route.optString("kind");}public String capabilityVersion(){return option.capabilityVersion();}public JSONObject resourceBinding()throws Exception{return option.resourceBinding();}public java.util.Map<String,String> toolEffects()throws Exception{java.util.Map<String,String> result=new java.util.LinkedHashMap<>();JSONObject selected=route.getJSONObject("toolDeclarations");for(String name:dev.pocketengine.features.devices.DeviceProtocol.objectKeys(selected))result.put(name,selected.getString(name));return java.util.Collections.unmodifiableMap(new java.util.LinkedHashMap<>(result));}public int toolBudget(){return route.optInt("toolBudget");}public int modelBudget(){return route.optInt("modelBudget");}public long deadline(){return route.optLong("deadline");}public String parentGoal(){return goal;}public boolean forwarded(){return forwarded!=null;}public boolean ownerReviewedAndroidText(){return forwarded==null && option.androidText() && AndroidTextHandoff.bounded(route);}public boolean permitsForwarding(){return route.optJSONArray("downstreamShares")!=null&&route.optJSONArray("downstreamShares").length()>0;}
         public JSONObject view()throws Exception{return duplicate(route).put("executionAuthorized",false);}
         public JSONArray sourceTargetShares(String issuerDeviceId,String sourceAllocation)throws Exception{checkCurrent(original);JSONArray shares=new JSONArray().put(dev.pocketengine.features.devices.DelegationGrant.targetShare(issuerDeviceId,sourceAllocation,option.receivingGrant().targetDeviceId(),option.resourceBinding(),route.getLong("localToolShare"),route.getLong("localModelShare")));JSONArray children=route.optJSONArray("downstreamShares");for(int i=0;children!=null&&i<children.length();i++){JSONObject share=children.getJSONObject(i);shares.put(dev.pocketengine.features.devices.DelegationGrant.targetShare(issuerDeviceId,sourceAllocation,share.getString("targetDeviceId"),share.getJSONObject("resourceBinding"),share.getLong("toolBudget"),share.getLong("modelBudget")));}return shares;}
     }
@@ -313,6 +314,11 @@ public final class TaskStoreDeviceTasks {
             long localTools=dev.pocketengine.features.devices.DeviceProtocol.integer(choice.localToolShare(),"localToolShare",0,tools),localModels=dev.pocketengine.features.devices.DeviceProtocol.integer(choice.localModelShare(),"localModelShare",0,models);JSONArray shares=new JSONArray();long forwardTools=0,forwardModels=0;for(int i=0;i<selected.shares().size();i++){var share=selected.shares().get(i);var amount=choice.shares().get(i);long childTools=dev.pocketengine.features.devices.DeviceProtocol.integer(amount.toolBudget(),"toolBudget",0,400),childModels=dev.pocketengine.features.devices.DeviceProtocol.integer(amount.modelBudget(),"modelBudget",0,1000);if(childTools+childModels<1)throw new SecurityException("下游份额不能是空额度");forwardTools=Math.addExact(forwardTools,childTools);forwardModels=Math.addExact(forwardModels,childModels);shares.put(new JSONObject().put("targetDeviceId",share.targetDeviceId()).put("resourceBinding",share.resourceBinding()).put("toolBudget",childTools).put("modelBudget",childModels));}
             JSONObject forward=grant.optJSONObject("forwardingScope");if(shares.length()>0&&(!option.kind().equals("goal")||forward==null||localModels<1||forwardTools>forward.getLong("toolBudget")||forwardModels>forward.getLong("modelBudget"))||localTools+forwardTools>tools||localModels+forwardModels>models||shares.length()==0&&(localTools!=tools||localModels!=models))throw new SecurityException("B本机和每C/D准确resource份额必须非重叠且总和不超过这一原预留");
             JSONObject declarations=new JSONObject();for(var effect:option.toolEffects().entrySet())declarations.put(effect.getKey(),effect.getValue());JSONObject route=new JSONObject().put("optionId",option.optionId()).put("sourceKey",option.sourceKey()).put("kind",option.kind()).put("targetDeviceId",option.receivingGrant().targetDeviceId()).put("instanceId",option.receivingGrant().targetInstanceId()).put("grantId",option.receivingGrant().grantId()).put("authorizationEpoch",option.receivingGrant().authorizationEpoch()).put("grantFingerprint",dev.pocketengine.features.devices.DeviceProtocol.sha256(dev.pocketengine.features.devices.DeviceProtocol.canonicalBytes(grant))).put("capabilityVersion",option.capabilityVersion()).put("resourceBinding",option.resourceBinding()).put("toolDeclarations",declarations).put("toolBudget",tools).put("modelBudget",models).put("deadline",end).put("localToolShare",localTools).put("localModelShare",localModels).put("downstreamShares",shares).put("contextMode","goal_only").put("files",selected.files()).put("projects",selected.projects());
+            if(option.androidText()){
+                route.put("textReturnContract",DeviceProtocol.ANDROID_TEXT_RETURN);
+                if(manual||!state.has("directPhone")||selections.size()!=1||!AndroidTextHandoff.bounded(route)||end>now+600_000L)
+                    throw new SecurityException("原文字工作只能选这部手机、十分钟以内、零工具及至多三次模型调用，不附带文件、项目或其它路线");
+            }
             if(manual){OwnerPhoneControlScope.requireRoute(route);if(2L*tools>state.getLong("toolsAvailable"))throw new SecurityException("手控需为每次对端操作保留一次本机派发额度；对端份额最多为当前总额度的一半");}
             long[] committed=sourceRouteCommitted(id,option.sourceKey());extraTools=Math.addExact(extraTools,Math.max(0,tools-committed[0]));extraModels=Math.addExact(extraModels,Math.max(0,models-committed[1]));routes.put(route);
         }
@@ -323,7 +329,7 @@ public final class TaskStoreDeviceTasks {
     public java.util.List<OwnerRouteApproval> sourceApprovalsForRun(String id,String run,int epoch,RunControl original,java.util.List<dev.pocketengine.features.devices.NativeDeviceTaskScopeHost.RouteOption> options)throws Exception{
         synchronized(owner){JSONObject current=sourceOwnerTask(id);access.checkRun(id,run,epoch,original,false);if(!original.matchesHostRun(id,run,epoch))throw new SecurityException("不是原父RunControl");JSONObject scope=current.optJSONObject("deviceSourceScope");if(scope==null)return java.util.List.of();if(!scope.getString("goal").equals(current.getString("goal"))||scope.getLong("parentScopeRevision")!=current.getJSONObject("executionScope").getLong("revision"))throw new SecurityException("原owner设备范围版本已失效，不能自动适配新父范围");String digest=TaskStore.capabilityFingerprint(scope);java.util.ArrayList<OwnerRouteApproval> result=new java.util.ArrayList<>();JSONArray routes=scope.getJSONArray("routes");for(int i=0;i<routes.length();i++){JSONObject selected=routes.getJSONObject(i);dev.pocketengine.features.devices.NativeDeviceTaskScopeHost.RouteOption found=null;for(var option:options)if(option.optionId().equals(selected.getString("optionId")))found=option;if(found==null)throw new SecurityException("原目标没有同通道新鲜能力事实/原grant句柄，未用paired列表替代");requireOptionMatches(selected,found);result.add(new OwnerRouteApproval(this,id,run,epoch,original,selected,found,digest,null));}return java.util.Collections.unmodifiableList(new java.util.ArrayList<>(result));}
     }
-    private static void requireOptionMatches(JSONObject route,dev.pocketengine.features.devices.NativeDeviceTaskScopeHost.RouteOption option)throws Exception{option.receivingGrant().checkCurrent(System.currentTimeMillis());JSONObject declarations=new JSONObject();for(var item:option.toolEffects().entrySet())declarations.put(item.getKey(),item.getValue());if(!route.getString("grantFingerprint").equals(dev.pocketengine.features.devices.DeviceProtocol.sha256(dev.pocketengine.features.devices.DeviceProtocol.canonicalBytes(option.receivingGrant().grant())))||!route.getString("capabilityVersion").equals(option.capabilityVersion())||!dev.pocketengine.features.devices.DeviceProtocol.resourceEquals(route.getJSONObject("resourceBinding"),option.resourceBinding()) )throw new SecurityException("原owner选定目标grant/资源/工具版本已变化，需新native审阅");for(String name:dev.pocketengine.features.devices.DeviceProtocol.objectKeys(route.getJSONObject("toolDeclarations")))if(!route.getJSONObject("toolDeclarations").getString(name).equals(declarations.optString(name)))throw new SecurityException("原已选工具声明已变化；未自动采纳新工具");}
+    private static void requireOptionMatches(JSONObject route,dev.pocketengine.features.devices.NativeDeviceTaskScopeHost.RouteOption option)throws Exception{option.receivingGrant().checkCurrent(System.currentTimeMillis());JSONObject declarations=new JSONObject();for(var item:option.toolEffects().entrySet())declarations.put(item.getKey(),item.getValue());if(AndroidTextHandoff.selected(route)!=option.androidText()||option.androidText()&&!AndroidTextHandoff.bounded(route))throw new SecurityException("原手机文字约定或份额变化，不能改用其它能力");if(!route.getString("grantFingerprint").equals(dev.pocketengine.features.devices.DeviceProtocol.sha256(dev.pocketengine.features.devices.DeviceProtocol.canonicalBytes(option.receivingGrant().grant())))||!route.getString("capabilityVersion").equals(option.capabilityVersion())||!dev.pocketengine.features.devices.DeviceProtocol.resourceEquals(route.getJSONObject("resourceBinding"),option.resourceBinding()) )throw new SecurityException("原owner选定目标grant/资源/工具版本已变化，需新native审阅");for(String name:dev.pocketengine.features.devices.DeviceProtocol.objectKeys(route.getJSONObject("toolDeclarations")))if(!route.getJSONObject("toolDeclarations").getString(name).equals(declarations.optString(name)))throw new SecurityException("原已选工具声明已变化；未自动采纳新工具");}
     private void requireSourceRoute(OwnerRouteApproval proof,RunControl actual)throws Exception{
         if(proof==null||proof.issuer!=this||actual!=proof.original)throw new SecurityException("不是本原TaskStore签发的源路由证明");synchronized(owner){actual.check();access.checkRun(proof.id,proof.run,proof.epoch,actual,false);if(actual.isCancelled()||actual.isPaused()||!actual.matchesHostRun(proof.id,proof.run,proof.epoch)||owner.taskExecutionDeadline(proof.id,proof.run,proof.epoch)<=System.currentTimeMillis()||proof.deadline()<=System.currentTimeMillis())throw new SecurityException("原源任务或路由已停止/到期");JSONObject current=task(proof.id);if(proof.forwarded!=null){Live binding=live.get(proof.run);if(binding==null||binding.original!=actual||binding.admission!=proof.forwarded)throw new SecurityException("没有原已验A委派的B执行");proof.forwarded.checkCurrent();}else{sourceOwnerTask(proof.id);JSONObject scope=current.optJSONObject("deviceSourceScope");if(scope==null||scope.getLong("parentScopeRevision")!=current.getJSONObject("executionScope").getLong("revision")||!proof.policyDigest.equals(TaskStore.capabilityFingerprint(scope)))throw new SecurityException("原owner设备范围已撤回或换版");}requireOptionMatches(proof.route,proof.option);}
     }
@@ -673,8 +679,8 @@ public final class TaskStoreDeviceTasks {
                     long now = System.currentTimeMillis();
                     JSONObject scope = admission.scope().put("toolsUsed", 0).put("modelCallsUsed", 0).put("revision", 1);
                     current = new JSONObject().put("id", id).put("goal", goal)
-                            .put("kind", admission.executionMode().equals("capabilities") ? "assistant" : "phone")
-                            .put("executionMode", admission.executionMode()).put("actorId", admission.principalId()).put("spaceId", admission.spaceId())
+                            .put("kind", admission.hostMode().equals("capabilities") ? "assistant" : "phone")
+                            .put("executionMode", admission.hostMode()).put("actorId", admission.principalId()).put("spaceId", admission.spaceId())
                             .put("origin", admission.origin()).put("rootTaskId", envelope.getString("rootTaskId"))
                             .put("remoteParentTaskId", envelope.optString("parentTaskId"))
                             .put("deviceHistoryRetainedUntil",dev.pocketengine.features.devices.DeviceProtocol.MAX_SAFE_INTEGER)
@@ -716,7 +722,14 @@ public final class TaskStoreDeviceTasks {
         JSONObject original = task.getJSONObject("origin"), current = admission.origin(), scope = task.getJSONObject("deviceExecutionScope");
         for (String key : new String[]{"originDeviceId", "callerDeviceId", "targetDeviceId", "grantId", "authorizationEpoch", "rootTaskId", "remoteLocalTaskId"})
             if (!dev.pocketengine.features.devices.DeviceProtocol.canonical(original.opt(key)).equals(dev.pocketengine.features.devices.DeviceProtocol.canonical(current.opt(key)))) throw new SecurityException("设备会话来源或授权代次已变化");
-        if (!task.getString("executionMode").equals(admission.executionMode()) || !task.getString("deviceExecutionKind").equals(admission.kind().name())
+        String storedMode=task.getString("executionMode"),signedMode=admission.executionMode();
+        boolean sameMode=storedMode.equals(signedMode);
+        if(admission.noPhoneSurface()){
+            // Legacy rows can retain their original signed phone mode. Their live leases are never migrated.
+            sameMode=(sameMode||storedMode.equals(admission.hostMode()))&&signedMode.equals(scope.getString("mode"))
+                    &&DeviceProtocol.canonical(scope.getJSONObject("resourceBinding")).equals(DeviceProtocol.canonical(admission.request().resourceBinding()));
+        }
+        if (!sameMode || !task.getString("deviceExecutionKind").equals(admission.kind().name())
                 || admission.deadline() != scope.getLong("deadline") || admission.toolBudget() != scope.getInt("toolLimit")
                 || admission.modelBudget() != scope.getInt("modelCallLimit")
                 || !admission.request().json().optString("capabilityVersion",dev.pocketengine.features.devices.DeviceProtocol.VERSION).equals(scope.optString("capabilityVersion",dev.pocketengine.features.devices.DeviceProtocol.VERSION))
@@ -798,13 +811,16 @@ public final class TaskStoreDeviceTasks {
                 JSONObject scope = current.getJSONObject("deviceExecutionScope"); long now = System.currentTimeMillis(), expires = scope.getLong("deadline");
                 if (expires <= now || admission.kind()==DeviceExecutionAdmission.Kind.DEVICE_TOOLS&&scope.getInt("toolLimit")<1 || admission.kind() == DeviceExecutionAdmission.Kind.GOAL && scope.getInt("modelCallLimit") < 1)
                     throw new SecurityException("设备执行条件或预算不足");
-                String mode=admission.executionMode(); boolean phone = !mode.equals("capabilities");
+                String mode=admission.hostMode(); boolean phone = !mode.equals("capabilities");
+                // Only the first run of a fully revalidated zero-tool row can narrow a legacy task's local host.
+                // The signed scope, inbound envelope, resource binding and original identity stay unchanged.
+                if(admission.noPhoneSurface())current.put("kind","assistant").put("executionMode",mode);
                 if(phone)try{owner.requirePhoneLeaseFree(mode);}
                 catch(IllegalStateException held){throw new SecurityException("手机仍有原执行租约；到期不等于旧执行器已停止",held);}
                 String run = UUID.randomUUID().toString();boundRun=run; int epoch = current.optInt("coordinatorEpoch") + 1;
                 JSONObject permission = new JSONObject().put("principalId", admission.principalId()).put("spaceId", admission.spaceId())
                         .put("nativePairedDevice", true).put("grantId", admission.request().grantId()).put("authorizationEpoch", admission.request().authorizationEpoch())
-                        .put("mode", admission.executionMode()).put("expiresAt", expires).put("tools", admission.toolNames())
+                        .put("mode", mode).put("expiresAt", expires).put("tools", admission.toolNames())
                         .put("remainingOperations", scope.getInt("toolLimit") - scope.getInt("toolsUsed"))
                         .put("stepCeiling", Math.max(1,Math.min(400, scope.getInt("toolLimit")))).put("deviceScopeRevision", scope.getLong("revision"));
                 ContentValues row = new ContentValues(); row.put("run_id", run); row.put("task_id", id); row.put("epoch", epoch); row.put("status", "running");
@@ -898,10 +914,16 @@ public final class TaskStoreDeviceTasks {
         synchronized(owner){return ReceivedPhoneGoalIndex.waiting(db,here,instance,afterCaller,afterOp,results);}
     }
     public JSONObject receivedPhoneGoalIndex(String here,String instance,String caller,String afterTask,String afterOperation)throws Exception{
-        synchronized(owner){return ReceivedPhoneGoalIndex.read(db,here,instance,caller,afterTask,afterOperation);}
+        return receivedPhoneGoalIndex(here,instance,caller,afterTask,afterOperation,"");
+    }
+    public JSONObject receivedPhoneGoalIndex(String here,String instance,String caller,String afterTask,String afterOperation,String searchText)throws Exception{
+        synchronized(owner){return ReceivedPhoneGoalIndex.read(db,here,instance,caller,afterTask,afterOperation,searchText);}
     }
     public JSONObject ownerPhoneGoalIndex(String here,String target,String instance,String parentAfter,String afterOperation)throws Exception{
-        synchronized(owner){return OwnerPhoneGoalIndex.read(db,here,target,instance,parentAfter,afterOperation);}
+        return ownerPhoneGoalIndex(here,target,instance,parentAfter,afterOperation,"");
+    }
+    public JSONObject ownerPhoneGoalIndex(String here,String target,String instance,String parentAfter,String afterOperation,String searchText)throws Exception{
+        synchronized(owner){return OwnerPhoneGoalIndex.read(db,here,target,instance,parentAfter,afterOperation,searchText);}
     }
     /** Local owner index only. Resolve the next anchor inside the same original parent/target;
      * keyset ordering keeps concurrent newer allocations from shifting this reading position. */
@@ -950,7 +972,7 @@ public final class TaskStoreDeviceTasks {
         synchronized (owner) {
             JSONObject current = task(id); requireDevice(current); requireSameSession(current, admission);
             String run = current.getString("runId"); Live binding = live.get(run);
-            if (binding == null || binding.original != original || binding.admission != admission || admission.kind() != DeviceExecutionAdmission.Kind.GOAL
+            if (binding == null || binding.original != original || binding.admission != admission || admission.kind() != DeviceExecutionAdmission.Kind.GOAL || admission.noPhoneSurface()
                     || !original.matchesHostRun(id, run, current.getInt("coordinatorEpoch")) || !"preparing".equals(current.optString("status"))
                     || !"capabilities".equals(current.getString("executionMode")) || owner.get(id, false).getJSONArray("operations").length() != 0) throw new SecurityException("没有原设备项目首次准入");
             JSONObject resource = current.getJSONObject("deviceExecutionScope").getJSONObject("resourceBinding");
@@ -1417,6 +1439,9 @@ public final class TaskStoreDeviceTasks {
     }
     public ChildReservation reserveChildNative(String id,String run,int epoch,RunControl original,String operation,JSONObject unsignedWire,OwnerRouteApproval sourceApproval)throws Exception{
         synchronized(owner){requireSourceRoute(sourceApproval,original);if(!sourceApproval.id.equals(id)||!sourceApproval.run.equals(run)||sourceApproval.epoch!=epoch||!sourceApproval.receivingGrant().targetDeviceId().equals(unsignedWire.optString("targetDeviceId"))||!sourceApproval.kind().equals(unsignedWire.optString("method").equals("task.submitGoal")?"goal":"tool_session")||!dev.pocketengine.features.devices.DeviceProtocol.resourceEquals(sourceApproval.resourceBinding(),unsignedWire.getJSONObject("resourceBinding"))||!sourceApproval.capabilityVersion().equals(unsignedWire.optString("capabilityVersion")))throw new SecurityException("原prepared wire不属于此native owner/A路由证明");
+            boolean privateText=sourceApproval.ownerReviewedAndroidText();
+            if(privateText!=DeviceProtocol.isAndroidTextReturn(unsignedWire)||!privateText&&unsignedWire.getJSONObject("arguments").has("textReturnContract"))
+                throw new SecurityException("不能用普通目标、原预算或其它来源冒充已核对的原手机文字派单");
             JSONObject budget=unsignedWire.getJSONObject("budget");if(budget.getInt("toolCalls")!=sourceApproval.toolBudget()||budget.getInt("modelCalls")!=sourceApproval.modelBudget()||unsignedWire.getLong("deadline")>sourceApproval.deadline())throw new SecurityException("出站固定份额不属于原native审阅范围");db.beginTransaction();try{
                 boolean exists;try(Cursor known=db.rawQuery("SELECT 1 FROM device_child_budget WHERE parent_task_id=? AND allocation_id=?",new String[]{id,budget.getString("allocationId")})){exists=known.moveToFirst();}
                 if(!exists){long[] committed=sourceRouteCommitted(id,sourceApproval.sourceKey());if(budget.getLong("toolCalls")>sourceApproval.toolBudget()-committed[0]||budget.getLong("modelCalls")>sourceApproval.modelBudget()-committed[1])throw new SecurityException("原owner路由生命周期份额已预留/使用；新Goal operation不刷新route上限");}

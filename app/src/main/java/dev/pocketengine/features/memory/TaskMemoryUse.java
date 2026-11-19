@@ -201,9 +201,15 @@ public final class TaskMemoryUse {
         return readTaskMemoryReceipt(authenticatedScope,expected,fence,null);
     }
     public JSONObject readTaskMemoryReceipt(JSONObject authenticatedScope,ReceiptRef expected,MemoryHostFence fence,ReadAudience readAudience)throws Exception{
+        return readReceipt(authenticatedScope,expected,fence,readAudience,false);
+    }
+    JSONObject readOwnerManagementReceipt(JSONObject authenticatedScope,ReceiptRef expected,MemoryHostFence fence)throws Exception{
+        return readReceipt(authenticatedScope,expected,fence,null,true);
+    }
+    private JSONObject readReceipt(JSONObject authenticatedScope,ReceiptRef expected,MemoryHostFence fence,ReadAudience readAudience,boolean ownerManagementView)throws Exception{
         MemoryBook.Scope scope=scope(authenticatedScope);requireScope(scope,expected.task);requireFence(fence);MemoryAudienceSelection audience=captureAudience(readAudience,bookScope(scope));
         return fence.admit(()->{checkAudience(audience);synchronized(book){Provided proof=provided(scope,expected);if(proof==null)return unavailable(expected,"native_proof_unavailable");
-            requireAudienceReferences(audience,proof.references());JSONObject result=project(scope,expected,proof);checkAudience(audience);return result;
+            requireAudienceReferences(audience,proof.references());JSONObject result=project(scope,expected,proof,ownerManagementView);checkAudience(audience);return result;
         }});
     }
     /** Source expansion is tied to a current record in a proven request, not an arbitrary source ID. */
@@ -288,13 +294,14 @@ public final class TaskMemoryUse {
         }});
     }
 
-    private JSONObject project(MemoryBook.Scope scope,ReceiptRef expected,Provided proof)throws Exception{
+    private JSONObject project(MemoryBook.Scope scope,ReceiptRef expected,Provided proof)throws Exception{return project(scope,expected,proof,false);}
+    private JSONObject project(MemoryBook.Scope scope,ReceiptRef expected,Provided proof,boolean ownerManagementView)throws Exception{
         if(proof==null)return unavailable(expected,"native_proof_unavailable");
         String taskState=taskStatus(task(scope,expected.task),expected.task);
         String taskGate=proof.revoked?"revoked":taskState,status=taskGate;
         JSONArray records=new JSONArray(),refs=proof.references();
         for(int i=0;i<refs.length();i++){
-            JSONObject row=book.taskReferenceState(bookScope(scope),refs.getJSONObject(i));
+            JSONObject row=book.taskReferenceState(bookScope(scope),refs.getJSONObject(i),ownerManagementView);
             if(!"current".equals(taskGate)){row.remove("text");row.put("status",taskGate);}
             if(!"current".equals(row.getString("status"))&&"current".equals(status))status="invalidated";
             records.put(row);

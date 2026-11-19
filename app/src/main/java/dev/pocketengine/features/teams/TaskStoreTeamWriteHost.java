@@ -275,6 +275,45 @@ public final class TaskStoreTeamWriteHost implements TeamCoordinator.BudgetHost,
         if(!TeamIntegrationFiles.progress(workspace,context.getJSONObject("binding"),context.getJSONArray("receipts")).getBoolean("complete"))throw new SecurityException("当前成果已改变，请先重审真实差异，不会覆盖新内容");
         return TeamWriteScope.afterIntegrated(workspace,tasks.teamWriteScopeForOwner(run,read),input.getString("memberId"),context.getString("reviewId"),context.getString("planHash"));
     }
+    JSONObject ownerTextDecision(TeamOwnerFileReading shown,RunControl reader)throws Exception{
+        reader.check();if(!shown.hasCompleteTextComparison())return new JSONObject().put("state","read_only");
+        try{
+            JSONObject facts=tasks.firstLocalTeamOutputDecision(shown.team(),shown.plan(),reader);
+            JSONObject display=new JSONObject().put("state",facts.getString("state"));if(facts.has("reviewId"))display.put("reviewId",facts.getString("reviewId"));return display;
+        }catch(Exception unavailable){reader.check();return new JSONObject().put("state","read_only");}
+    }
+    /** New, short-lived owner confirmation. The file-reading handle alone cannot approve anything. */
+    public final class TextOutputApproval implements AutoCloseable {
+        private final TeamOwnerFileReading shown;private final RunControl authority=new RunControl();
+        private final String reviewerTask,reviewerRun,project;
+        private final long expires=android.os.SystemClock.elapsedRealtime()+120_000;
+        private final java.util.concurrent.atomic.AtomicBoolean spent=new java.util.concurrent.atomic.AtomicBoolean();
+        private TextOutputApproval(TeamOwnerFileReading seen)throws Exception{
+            shown=seen;if(!shown.shownAllOriginalDiffs())throw new SecurityException("请先逐份加载并核对本次原始文本差异");
+            verifiedOriginal();
+            JSONObject facts=tasks.firstLocalTeamOutputDecision(shown.team(),shown.plan(),authority);
+            if(!"eligible".equals(facts.getString("state")))throw new SecurityException("原计划不再需要或不允许这次批准，请重读原成果");
+            reviewerTask=facts.getString("reviewerTaskId");reviewerRun=facts.getString("reviewerRunId");project=facts.getString("targetProjectId");
+        }
+        private TeamWorkReview.Prepared verifiedOriginal()throws Exception{
+            authority.check();TeamWorkReview.Prepared fresh=review(shown.team(),authority);
+            if(!shown.sameTextComparison(new TeamOwnerFileReading(shown.team(),fresh.snapshot())))throw new SecurityException("原冻结文件、文本或项目基线已变，请重新打开并核对差异");
+            return fresh;
+        }
+        public JSONObject preview()throws Exception{
+            authority.check();JSONArray paths=new JSONArray(),files=shown.index().getJSONArray("files");
+            for(int i=0;i<files.length();i++){JSONObject file=files.getJSONObject(i);paths.put(new JSONObject().put("path",file.getString("path")).put("existing",file.getBoolean("currentExists")));}
+            return new JSONObject().put("teamRunId",shown.team()).put("planHash",shown.plan()).put("projectId",project).put("files",paths).put("startsIntegration",false);
+        }
+        public JSONObject confirm()throws Exception{
+            if(!spent.compareAndSet(false,true)||android.os.SystemClock.elapsedRealtime()>=expires)throw new SecurityException("这份写回许可审阅已用过或过期，请查询原登记");
+            TeamWorkReview.Prepared fresh=verifiedOriginal();JSONObject receipt=tasks.approveFirstLocalTeamOutputs(shown.team(),fresh,shown.plan(),authority,reviewerTask,reviewerRun);
+            String id=receipt.getString("reviewId");if(id.isEmpty()||!shown.plan().equals(receipt.getString("planHash"))||!"owner".equals(receipt.optString("actorId"))||!"private".equals(receipt.optString("spaceId")))throw new SecurityException("原批准回执身份不符，请刷新核对，不重复提交");
+            changed.accept(shown.team());return new JSONObject().put("teamRunId",shown.team()).put("planHash",shown.plan()).put("reviewId",id).put("state","approved_current").put("startedByThisAction",false);
+        }
+        @Override public void close(){authority.cancel();}
+    }
+    TextOutputApproval reviewOwnerTextApproval(TeamOwnerFileReading seen)throws Exception{return new TextOutputApproval(seen);}
     public JSONObject approve(String run,String expectedHash,RunControl read)throws Exception {JSONObject result=tasks.approveTeamOutputs(run,review(run,read),expectedHash,read);changed.accept(run);return result;}
     /** A separate original child/run/context, never a producer impersonating its own reviewer. */
     public JSONObject independentlyReview(String run,String expectedPlanHash,JSONObject nativeTeamRun,ModelConfig model)throws Exception {

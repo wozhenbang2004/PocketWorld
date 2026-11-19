@@ -216,13 +216,70 @@ public final class RunControl {
     public void resume() { synchronized (monitor) { ownerPaused=false;conditionWait=null;paused = false; monitor.notifyAll(); } }
     /** Native return confirmation only; a later owner pause/cancel must win. */
     public void resumeAtPauseRevision(long expectedPauseRevision) throws InterruptedException {
+        resumeAtPauseRevision(expectedPauseRevision,null);
+    }
+    public void resumeAtPauseRevision(long expectedPauseRevision,java.util.function.BooleanSupplier shown) throws InterruptedException {
         // Authority callbacks can themselves pause or acquire TaskStore locks.
         check();
         synchronized(monitor) {
             if(cancelled.get()||Thread.currentThread().isInterrupted())throw new InterruptedException("Run stopped");
-            if(!paused||pauseRevision.get()!=expectedPauseRevision)throw new SecurityException("暂停状态已变化，旧交还确认失效");
+            if((shown!=null&&(!shown.getAsBoolean()||!ownerPaused||conditionWait!=null))||!paused||pauseRevision.get()!=expectedPauseRevision)throw new SecurityException("暂停状态已变化，旧交还确认失效");
             ownerPaused=false;conditionWait=null;paused=false;monitor.notifyAll();
         }
+    }
+    /** No authority callback while building a system notification. In particular, a model/condition wait is not an owner pause. */
+    public boolean ownerPausedAt(long revision){synchronized(monitor){return !cancelled.get()&&paused&&ownerPaused&&conditionWait==null&&revision>0&&pauseRevision.get()==revision;}}
+    private String notificationPauseHandle;private long notificationPauseNumber=-1;
+    /** Process-local UI stamp, minted only for a real owner pause. A replacement controller cannot inherit it. */
+    public String notificationPauseHandle(long revision){synchronized(monitor){
+        if(!ownerPausedAt(revision))throw new SecurityException("原主人暂停已变化");
+        if(notificationPauseNumber!=revision){notificationPauseHandle=java.util.UUID.randomUUID().toString();notificationPauseNumber=revision;}
+        return notificationPauseHandle;
+    }}
+    public boolean matchesNotificationPause(String handle,long revision){synchronized(monitor){return handle!=null&&revision==notificationPauseNumber&&handle.equals(notificationPauseHandle)&&ownerPausedAt(revision);}}
+    private String displayPauseHandle;private long displayPauseNumber=-1;
+    /** UI presentation, not Android intent authority. Never export/reuse the notification handle. */
+    public String displayedPauseHandle(long revision){synchronized(monitor){
+        if(!ownerPausedAt(revision))return null;
+        if(displayPauseNumber!=revision){displayPauseHandle=java.util.UUID.randomUUID().toString();displayPauseNumber=revision;}
+        return displayPauseHandle;
+    }}
+    private boolean matchesDisplayedPause(String handle,long revision){synchronized(monitor){
+        return handle!=null&&revision==displayPauseNumber&&handle.equals(displayPauseHandle)&&ownerPausedAt(revision);
+    }}
+    /** A delayed UI return must not hide the owner page for a later pause, held step or replacement. */
+    public boolean stillRunningFromDisplay(String handle,long revision){synchronized(monitor){
+        return handle!=null&&handle.equals(displayPauseHandle)&&displayPauseNumber==revision&&pauseRevision.get()==revision&&!paused&&!cancelled.get();
+    }}
+    @FunctionalInterface public interface StoredPauseCommit {void afterRecorded(long expiresAt,DispatchEntry record)throws Exception;}
+    @FunctionalInterface public interface NotifiedPausePolicy {void withOriginalScope(StoredPauseCommit commit)throws Exception;}
+    /** First run re-entrant authority outside Tasks. The store then holds its own scope lock; the short
+     * monitor section only commits that original local receipt before waking, never an Android/model call.
+     * A retained callback or a different pause cannot release this control. */
+    public void resumeNotifiedPause(long revision,String handle,NotifiedPausePolicy policy)throws Exception{
+        resumeWitnessedPause(revision,()->matchesNotificationPause(handle,revision),policy);
+    }
+    /** An ordinary app Continue is live-only. No current controller/same pause => no wake or new run. */
+    public void resumeDisplayedPause(long revision,String handle,java.util.function.BooleanSupplier window,NotifiedPausePolicy policy)throws Exception{
+        java.util.Objects.requireNonNull(window);
+        resumeWitnessedPause(revision,()->window.getAsBoolean()&&matchesDisplayedPause(handle,revision),policy);
+    }
+    private void resumeWitnessedPause(long revision,java.util.function.BooleanSupplier current,NotifiedPausePolicy policy)throws Exception{
+        java.util.Objects.requireNonNull(policy);check();Thread caller=Thread.currentThread();
+        AtomicBoolean available=new AtomicBoolean(true);boolean[] resumed={false};
+        try{policy.withOriginalScope((expiresAt,record)->{
+            if(Thread.currentThread()!=caller||!available.compareAndSet(true,false))throw new SecurityException("原暂停恢复已失效");
+            synchronized(monitor){
+                if(expiresAt<=System.currentTimeMillis()||caller.isInterrupted()||!current.getAsBoolean())
+                    throw new SecurityException("原主人暂停已变化，未唤醒执行");
+                // The execution-admission check is the same lock-free gate used by dispatchAtPauseState.
+                AuthorityCheck admitted=executionAdmission;if(admitted!=null)admitted.check();
+                java.util.Objects.requireNonNull(record).enter();
+                if(cancelled.get()||caller.isInterrupted())throw new InterruptedException("原手机执行已停止");
+                if(expiresAt<=System.currentTimeMillis()||!current.getAsBoolean()||!paused||!ownerPaused||conditionWait!=null||pauseRevision.get()!=revision)throw new SecurityException("原暂停、窗口或期限已变化，未唤醒");
+                ownerPaused=false;conditionWait=null;paused=false;resumed[0]=true;monitor.notifyAll();
+            }
+        });if(!resumed[0])throw new SecurityException("未收到原暂停的恢复回执");}finally{available.set(false);}
     }
     public void check() throws InterruptedException {
         if (cancelled.get() || Thread.currentThread().isInterrupted()) throw new InterruptedException("Run stopped");

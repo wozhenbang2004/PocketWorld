@@ -698,7 +698,7 @@ class WindowsBackend:
                     except (OSError, PlatformError):
                         pass  # Keep uncertain material, never remove a substituted name.
 
-    def import_project_copy(self, root, relative, manifest, files, current, *, record_intent, local_staging_id=None, local_on_open=None):
+    def import_project_copy(self, root, relative, manifest, files, current, *, record_intent):
         """Publish ONE reviewed new directory, never overwrite/merge a live project.
 
         Original operation stores intent before native rename. Unknown publication retains
@@ -718,13 +718,7 @@ class WindowsBackend:
         for name in directories: relative_parts(name)
         sid = self.logon_context()["userSid"]
         with self.directory(root, parts[:-1]) as (parent, parent_handle, parent_identity):
-            # A locally reviewed Git-source copy reserves its exact recovery
-            # names before ANY staging. Existing device imports keep their own
-            # original operation, random staging, manifests and grant boundary.
-            if (local_staging_id is None) != (local_on_open is None) or (local_staging_id is not None
-                    and (not re.fullmatch(r"[a-f0-9]{32}",local_staging_id) or not callable(local_on_open))):
-                raise PlatformError("Original local copy staging identity is invalid",400)
-            stage_name = ".pocketworld-project-" + (local_staging_id or uuid.uuid4().hex)
+            stage_name = ".pocketworld-project-" + uuid.uuid4().hex
             stage = ntpath.join(parent,stage_name)
             prefix = "/".join(parts[:-1])
             stage_relative = prefix+"/"+stage_name if prefix else stage_name
@@ -743,7 +737,6 @@ class WindowsBackend:
                     raise PlatformError("New project staging directory identity invalid")
                 identity=self.api.identity(info); intent["temporaryIdentity"]=identity
                 self.api.private_access(handle,sid,require_protected=True)
-                if local_on_open is not None: local_on_open(dict(intent))
                 # Keep the original root handle open; all descendant opens retain native
                 # non-reparse ancestors. No pathlib/open or POSIX assignment fallback.
                 for name in directories:
@@ -784,12 +777,6 @@ class WindowsBackend:
                     return {"status":"unknown","verified":False,"delivered":False,"publicationAttempted":True,
                             "nativeProjectImport":intent,"recoveryMaterialsRetained":True,
                             "message":"Project publication unconfirmed; inspect original source/target identities without replay"}
-                if local_staging_id is not None:
-                    # A local source copy has its own fixed recovery record.
-                    # Never delete/replay material after a failure: its private
-                    # staging directory may be partially written or replaced.
-                    return {"status":"failed","verified":False,"delivered":False,"publicationAttempted":False,
-                            "nativeProjectImport":intent,"cleanupPending":True,"automaticStagingCleanupAttempted":False}
                 # Only known owned bytes/directories are removed. Any substitution, extra
                 # file or failed identity check retains material; never recursive rmtree.
                 cleanup = not created or identity is not None

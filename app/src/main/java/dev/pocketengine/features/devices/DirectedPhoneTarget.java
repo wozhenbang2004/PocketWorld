@@ -32,7 +32,8 @@ public record DirectedPhoneTarget(String deviceId, String instanceId, String cer
         for (int i=0;i<routes.length();i++) {
             JSONObject route=routes.getJSONObject(i);
             if (!deviceId.equals(route.opt("targetDeviceId")) || !instanceId.equals(route.opt("instanceId"))
-                    || !phoneSurface(route.optJSONObject("resourceBinding")) || route.getJSONArray("downstreamShares").length()!=0)
+                    || (AndroidTextHandoff.selected(route) ? routes.length()!=1 || !AndroidTextHandoff.bounded(route) : !phoneSurface(route.optJSONObject("resourceBinding")))
+                    || route.getJSONArray("downstreamShares").length()!=0)
                 throw new SecurityException("这份目标限定原手机，不得换设备、换实例或继续转交");
         }
     }

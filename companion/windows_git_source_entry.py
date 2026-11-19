@@ -121,11 +121,11 @@ def open_source(context, settings):
         choices = registered(context, settings)
     except (Incomplete, PlatformError, OSError, ValueError):
         if _dialog("本机登记暂不可核对", REASONS["configuration_changed"], [history], retire=locked)=="copies" and not locked():
-            browse_copies(context,locked)
+            browse_copies(context,locked,settings)
         return
     if not choices:
         if _dialog("没有可供预检的本机工作区", "仅接受原安装已登记的 Windows 本机目录；不接受 SSH/网络位置或伴侣私有安装目录。",[history],retire=locked)=="copies" and not locked():
-            browse_copies(context,locked)
+            browse_copies(context,locked,settings)
         return
     page = 0
     while not locked():
@@ -139,7 +139,7 @@ def open_source(context, settings):
         if selected == "next": page += 1; continue
         if selected == "previous": page -= 1; continue
         if selected is None or locked(): return
-        if selected=="copies": browse_copies(context,locked); return
+        if selected=="copies": browse_copies(context,locked,settings); return
         key = selected[1]
         result = capture(context, settings, key)
         if locked(): return

@@ -1,65 +1,73 @@
 package dev.pocketengine.phone;
 
+import android.content.Context;
+import android.content.Intent;
 import dev.pocketengine.EngineApplication;
 import dev.pocketengine.core.RunControl;
 import java.util.Objects;
+import java.util.function.BooleanSupplier;
 import org.json.JSONObject;
 
-/** Native overlay binding only. The original Application/TaskStore still decides pause/resume/stop. */
+/** Buttons are bound to one native source and one displayed intention, not to a live toggle. */
 final class PhoneOwnerControls {
+    enum Action { NONE, PAUSE, RESUME_LOCAL, RESUME_SOURCE, REVIEW }
+    record ViewState(boolean current,Action action,long pause,long scope,String displayHandle,String message) {
+        boolean sameInput(ViewState other){return other!=null&&action==other.action&&pause==other.pause&&scope==other.scope&&Objects.equals(displayHandle,other.displayHandle);}
+    }
     private final EngineApplication app;
     private final String taskId;
     private final RunControl original;
+    private final RunControl.HostRunIdentity born;
     PhoneOwnerControls(EngineApplication app,String taskId,RunControl original) {
-        this.app=Objects.requireNonNull(app);this.taskId=Objects.requireNonNull(taskId);this.original=Objects.requireNonNull(original);
+        this.app=Objects.requireNonNull(app);this.taskId=Objects.requireNonNull(taskId);this.original=Objects.requireNonNull(original);born=original.hostRunIdentity();
     }
-    private boolean ownsControl() {return original==app.control(taskId);}
-    private boolean ownsRun()throws Exception {
-        if(!ownsControl()||!original.hasHostRun())return false;
-        // The overlay needs the native run tuple, not the growing audit history.
-        JSONObject task=app.tasks.foregroundNotificationContextSnapshot(taskId);
-        return task!=null&&"phone".equals(task.optString("kind"))&&"main_screen".equals(task.optString("executionMode"))
-                &&task.optString("status").matches("preparing|running|pausing|paused|awaiting_user|reconciling")
-                &&original.matchesHostRun(taskId,task.optString("runId"),task.optInt("coordinatorEpoch"))&&ownsControl();
+    private boolean ownsControl(){return born!=null&&taskId.equals(born.taskId())&&original==app.control(taskId)&&original.matchesHostRun(taskId,born.runId(),born.epoch());}
+    Intent originalReview(Context context)throws Exception{
+        if(born==null||!taskId.equals(born.taskId()))throw new IllegalStateException("缺少原任务身份");
+        return PhoneNotificationControls.open(context,EngineApplication.json("id",taskId,"runId",born.runId(),"coordinatorEpoch",born.epoch())).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
     }
-    void toggle() {
-        try {
-            if(!ownsControl()||!original.hasHostRun()||original.isCancelled())return;
-            var identity=original.hostRunIdentity();
-            if(original.isPaused())app.resumeOriginalPhoneRun(taskId,identity.runId(),identity.epoch());
-            else app.pauseOriginalPhoneRun(taskId,identity.runId(),identity.epoch());
-        } catch(Exception unavailable) {app.error("原手机任务状态暂不可核对，请返回应用；未继续执行");}
-    }
+    /** Pause is idempotent and never calls resume, even if the runtime changed before touch-up. */
     boolean pause() {
         try {
-            if(!ownsControl()||!original.hasHostRun()||original.isCancelled())return false;
-            var identity=original.hostRunIdentity();
-            if(!original.isPaused())app.pauseOriginalPhoneRun(taskId,identity.runId(),identity.epoch());
+            if(!ownsControl()||original.isCancelled())return false;
+            if(!original.isPaused())app.pauseOriginalPhoneRun(taskId,born.runId(),born.epoch());
             return true;
         } catch(Exception unavailable) {
             if(!ownsControl())return false;
-            original.pause();app.error("已请求暂停原控制，请返回应用核对任务状态");return true;
+            if(!original.isPaused())original.pause();app.error("已请求暂停原控制，请返回应用核对任务状态");return true;
         }
+    }
+    /** An expired source can still be opened read-only; never pause the successor on its behalf. */
+    boolean holdForReturn(){return !ownsControl()||original.isCancelled()||pause();}
+    void resume(ViewState shown,BooleanSupplier visible)throws Exception {
+        if(!visible.getAsBoolean()||!ownsControl()||!original.ownerPausedAt(shown.pause()))throw new SecurityException("眼前的原暂停已变化");
+        if(shown.action()==Action.RESUME_LOCAL)app.resumeDisplayedPhoneRun(taskId,born.runId(),born.epoch(),shown.pause(),shown.scope(),shown.displayHandle(),visible);
+        else if(shown.action()==Action.RESUME_SOURCE)app.resumeSourceOverlayPhoneRun(taskId,born.runId(),born.epoch(),original,shown.pause(),visible);
+        else throw new SecurityException("这不是已显示的继续动作");
     }
     void stop() {
         if(!ownsControl())return;
-        try {
-            var identity=original.hostRunIdentity();
-            if(identity==null)original.cancel();else app.stopOriginalPhoneRun(taskId,identity.runId(),identity.epoch());
-        } catch(Exception unavailable) {original.cancel();app.error("已停止原执行控制，请返回应用核对任务记录");}
+        try {app.stopOriginalPhoneRun(taskId,born.runId(),born.epoch());}
+        catch(Exception unavailable){if(ownsControl()){original.cancel();app.error("已停止原执行控制，请返回应用核对任务记录");}}
     }
     ViewState view(String goal) {
         try {
-            if(!ownsRun())return new ViewState(false,false,false,"原任务已结束或执行身份变化，请返回应用查看记录");
-            if(original.isCancelled())return new ViewState(true,false,false,"正在停止后续操作，已发生的动作不会撤回");
-            if(app.tasks.hasUnresolved(taskId))return new ViewState(true,original.isPaused(),!original.isPaused(),"动作结果待核对，请暂停并返回原任务确认后再继续");
-            return new ViewState(true,original.isPaused(),true,original.isPaused()?"已请求暂停；继续时会重新观察原任务":goal);
-        } catch(Exception unavailable) {return new ViewState(ownsControl(),original.isPaused(),false,"原任务状态暂不可核对，请返回应用");}
+            JSONObject row=ownsControl()?app.tasks.originalPhoneOverlayContext(taskId):null;
+            if(row==null||!born.runId().equals(row.optString("runId"))||born.epoch()!=row.optInt("epoch",-1)||!ownsControl()||
+                    !row.optString("status").matches("preparing|running|pausing|paused|awaiting_user|reconciling"))
+                return state(false,Action.NONE,-1,"原任务已结束或执行身份变化，请返回原任务查看记录");
+            long revision=original.pauseRevision();
+            if(original.isCancelled())return state(true,Action.NONE,revision,"正在停止后续操作，已发生的动作不会撤回");
+            boolean unresolved=row.optBoolean("unresolved");
+            if(!original.isPaused())return state(true,Action.PAUSE,revision,unresolved?"动作结果待核对，可先暂停并返回原任务":goal);
+            if(!"paused".equals(row.optString("status"))||unresolved||!original.ownerPausedAt(revision))
+                return state(true,Action.REVIEW,revision,unresolved?"有未核对的动作，请查看原任务；不会自动继续":"已停在原任务，请核对暂停或本人步骤");
+            if(!row.getBoolean("privateLocal"))return row.optBoolean("identifiedSource")?state(true,Action.RESUME_SOURCE,revision,"原来源任务已暂停；普通继续不处理本人步骤"):
+                    state(true,Action.REVIEW,revision,"这次暂停的来源尚未核实，请查看原任务");
+            long scope=row.optLong("scopeRevision",-1);String handle=scope<1?null:original.displayedPauseHandle(revision);
+            if(handle==null)return state(true,Action.REVIEW,revision,"这次暂停仍需核对，请查看原任务");
+            return new ViewState(true,Action.RESUME_LOCAL,revision,scope,handle,"已暂停。继续只恢复面前的原执行，不代表已取得新屏幕");
+        } catch(Exception unavailable){return state(ownsControl(),Action.NONE,-1,"原任务状态暂不可核对，请返回应用");}
     }
-    static final class ViewState {
-        final boolean current,paused,canToggle;
-        final String message;
-        ViewState(boolean current,boolean paused,boolean canToggle,String message){this.current=current;this.paused=paused;this.canToggle=canToggle;this.message=message;}
-    }
+    private static ViewState state(boolean current,Action action,long pause,String message){return new ViewState(current,action,pause,-1,null,message);}
 }
-

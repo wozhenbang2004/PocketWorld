@@ -10,8 +10,12 @@ import org.json.JSONObject;
 /** Local index of this owner's submitted phone goals, not the peer's task list or a result cache. */
 final class OwnerPhoneGoalIndex {
     private OwnerPhoneGoalIndex() {}
-    static JSONObject read(SQLiteDatabase db,String here,String target,String instance,String parentAfter,String operationAfter) throws Exception {
+    static JSONObject read(SQLiteDatabase db,String here,String target,String instance,String parentAfter,String operationAfter)throws Exception {
+        return read(db,here,target,instance,parentAfter,operationAfter,"");
+    }
+    static JSONObject read(SQLiteDatabase db,String here,String target,String instance,String parentAfter,String operationAfter,String searchText) throws Exception {
         DeviceProtocol.deviceId(here,"ownerDeviceId");DeviceProtocol.deviceId(target,"targetDeviceId");DeviceProtocol.identifier(instance,"targetInstanceId");
+        LocalPhoneGoalSearch search=new LocalPhoneGoalSearch(searchText);
         String where=" WHERE b.target_device_id=?";ArrayList<String> args=new ArrayList<>();args.add(target);
         if (!parentAfter.isEmpty() || !operationAfter.isEmpty()) {
             DeviceProtocol.identifier(parentAfter,"parentTaskId");DeviceProtocol.identifier(operationAfter,"operationId");long time;
@@ -39,11 +43,11 @@ final class OwnerPhoneGoalIndex {
                     ||!target.equals(wire.opt("targetDeviceId"))||!instance.equals(wire.opt("instanceId"))||!row.getString(3).equals(wire.opt("argumentsDigest"))
                     ||!DeviceProtocol.isDirectPhoneGoal(wire,here,parent,op)||!row.getString(3).equals(DeviceProtocol.argumentsDigest(wire)))continue;
             JSONObject input=wire.optJSONObject("arguments");String goal=input==null?"":input.optString("goal");
-            if(goal.trim().isEmpty())continue;
-            int length=goal.codePointCount(0,goal.length());
+            if(goal.trim().isEmpty()||!search.matches(goal))continue;
+            int length=goal.codePointCount(0,goal.length());String preview=length>160?goal.substring(0,goal.offsetByCodePoints(0,160))+"…":goal;
             items.put(new JSONObject().put("taskId",parent).put("operationId",op).put("argumentsDigest",row.getString(3))
-                    .put("goal",length>160?goal.substring(0,goal.offsetByCodePoints(0,160))+"…":goal)
-                    .put("screenMode",wire.getJSONObject("resourceBinding").getString("screenMode")).put("createdAt",row.getLong(2)));
+                    .put("goal",preview).put("matchedLater",search.beyondPreview(preview)?true:null)
+                    .put("screenMode",wire.getJSONObject("resourceBinding").getString("screenMode")).put("textOnly",DeviceProtocol.isAndroidTextReturn(wire)?true:null).put("createdAt",row.getLong(2)));
         }}
         return new JSONObject().put("rows",items).put("hasMore",more).put("lastParent",parent).put("lastOperation",op)
                 .put("targetDeviceId",target).put("instanceId",instance).put("localDeviceId",here).put("readOnly",true);

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Accordion, AccordionItem, Button, CheckboxField, SettingsDialog, TextField } from './forms-library';
 import { bridge } from './bridge';
-import { materialPath, routeDraft, routeTitle, scopeRows as rows, scopeSelection, type RouteDraft, type ScopeData as Data } from './device-task-scope';
+import { materialPath, phoneTextOnly, routeDraft, routeTitle, scopeRows as rows, scopeSelection, type RouteDraft, type ScopeData as Data } from './device-task-scope';
 
 type Run = (action: string, args?: Data) => Promise<any>;
 const time = (value: any) => Number.isSafeInteger(Number(value)) ? new Date(Number(value)).toLocaleString() : '尚未确认';
@@ -14,13 +14,13 @@ function ScopeFacts({ value, peers, human = false }: { value: Data; peers: Data[
   const writes = declarations.filter(row => row.effect === 'write').length, external = declarations.filter(row => row.effect === 'external').length;
   const target = resource.kind === 'desktop' ? `电脑屏幕 ${resource.displayId}${resource.windowId ? ' · 指定窗口 ' + resource.windowId : ''}`
     : resource.screenMode === 'main_screen' || resource.screenMode === 'background' ? `${resource.screenMode === 'background' ? '独立后台屏' : '手机主屏'} · ${(resource.packageNames || []).join('、') || '按原授权应用范围'}`
-    : resource.projectId ? `项目 ${resource.projectId}${resource.checkoutId ? ' · 工作副本 ' + resource.checkoutId : ''}` : resource.screenMode === 'capabilities' ? '仅对方授权的能力范围，不含手机屏幕' : '对端明确授权的资源';
+    : resource.projectId ? `项目 ${resource.projectId}${resource.checkoutId ? ' · 工作副本 ' + resource.checkoutId : ''}` : phoneTextOnly(value) ? '只发本次目标，不带附件、记忆、项目或屏幕' : resource.screenMode === 'capabilities' ? '仅对方授权的能力范围，不含手机屏幕' : '对端明确授权的资源';
   return <>
     <dl className="pw-facts">
       <div><dt>接收设备</dt><dd>{deviceName(value.targetDeviceId || '', peers)}</dd></div>
       <div><dt>使用方式</dt><dd>{routeTitle(value, human)}</dd></div>
       <div><dt>作用范围</dt><dd>{target}</dd></div>
-      <div><dt>操作影响</dt><dd>{human ? '你逐次进行全屏输入；不调用模型，不继承 AI 自动操作权限' : value.kind === 'goal' ? '对端模型在原授权工具范围内处理目标' : writes || external ? `含 ${writes} 项写入操作、${external} 项外部影响能力，执行时仍受原工具审批约束` : declarations.length && declarations.every(row => row.effect === 'read') ? '当前列出的工具仅报告读取能力' : '尚未取得完整操作影响，不能推定只读'}</dd></div>
+      <div><dt>操作影响</dt><dd>{human ? '你逐次进行全屏输入；不调用模型，不继承 AI 自动操作权限' : phoneTextOnly(value) ? '对方不使用工具；机主核对后，本机可从原工作查看最多 2,048 个字的摘要' : value.kind === 'goal' ? '对端模型在原授权工具范围内处理目标' : writes || external ? `含 ${writes} 项写入操作、${external} 项外部影响能力，执行时仍受原工具审批约束` : declarations.length && declarations.every(row => row.effect === 'read') ? '当前列出的工具仅报告读取能力' : '尚未取得完整操作影响，不能推定只读'}</dd></div>
       {value.toolBudget !== undefined && <div><dt>累计份额</dt><dd>工具 {value.toolBudget} 次 · 模型 {value.modelBudget} 次</dd></div>}
       {value.deadline && <div><dt>截止</dt><dd>{time(value.deadline)}</dd></div>}
     </dl>
@@ -165,10 +165,10 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
                 <ScopeFacts value={option} peers={peers} human={view.humanInputOnly} />
                 {draft.selected && <>
                   {!!draft.missingShares.length && <><p role="alert">有 {draft.missingShares.length} 项原下游范围当前无法核对，未自动替换或移除。</p><Button variant="secondary" disabled={busy} onClick={() => update({ ...draft, missingShares: [] })}>明确移除这些旧下游选择</Button></>}
-                  <TextField label={'工具总份额（最多 ' + option.toolBudgetMaximum + ' 次）'} value={draft.tools} inputMode="numeric" isDisabled={busy} onChange={tools => update({ ...draft, tools })} />
+                  {phoneTextOnly(option) ? <p>工具 0 次，不使用屏幕。</p> : <TextField label={'工具总份额（最多 ' + option.toolBudgetMaximum + ' 次）'} value={draft.tools} inputMode="numeric" isDisabled={busy} onChange={tools => update({ ...draft, tools })} />}
                   {option.kind === 'goal' && <TextField label={'模型总份额（最多 ' + option.modelBudgetMaximum + ' 次）'} value={draft.models} inputMode="numeric" isDisabled={busy} onChange={models => update({ ...draft, models })} />}
                   <p>本次截止：{time(draft.deadline)}</p><div className="pw-form-actions">
-                    {(view.humanInputOnly ? [1,5] : [15,60]).map(minutes => <Button key={minutes} variant="ghost" disabled={busy} onClick={() => update({ ...draft, deadline: String(Math.min(Date.now() + minutes * 60_000, Number(view.deadlineMaximum), Number(option.deadlineMaximum))) })}>从现在起 {minutes} 分钟内</Button>)}
+                    {(view.humanInputOnly ? [1,5] : phoneTextOnly(option) ? [3,10] : [15,60]).map(minutes => <Button key={minutes} variant="ghost" disabled={busy} onClick={() => update({ ...draft, deadline: String(Math.min(Date.now() + minutes * 60_000, Number(view.deadlineMaximum), Number(option.deadlineMaximum))) })}>从现在起 {minutes} 分钟内</Button>)}
                   </div>
                   {view.humanInputOnly ? <p>只接收你在原手控页的每次明确操作，不启动代理；换设备或屏幕必须重新准备和审阅。画面仅在本页短时显示，不自动刷新，不是实时视频。</p> : option.kind === 'goal' ? <p>只将本次目标交给对端已授权模型；对端仍核对本机策略，不继承本机账号或私人记忆。</p> : <p>由本任务模型调用对端明确工具。手机主屏与独立屏不互相兜底；电脑工具也不依赖 Codex 或 Claude 安装。</p>}
                   <Accordion>

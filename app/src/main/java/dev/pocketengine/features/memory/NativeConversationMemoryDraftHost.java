@@ -139,10 +139,32 @@ public final class NativeConversationMemoryDraftHost {
     public final class Review implements AutoCloseable {
         private final String task,run,operation,conversation,draft,proposal,view,reviewDigest;
         private final int epoch;
+        private final long expiresAt;
         private boolean closed,submitted,provided;
-        private Review(String task,String run,int epoch,String operation,String conversation,JSONObject draft,JSONObject proposal,JSONObject presentation)throws Exception {this.task=task;this.run=run;this.epoch=epoch;this.operation=operation;this.conversation=conversation;this.draft=draft.toString();this.proposal=proposal.toString();presentation.put("expiresAt",System.currentTimeMillis()+600_000L);reviewDigest=digest(presentation);view=presentation.put("reviewDigest",reviewDigest).toString();}
+        private Review(String task,String run,int epoch,String operation,String conversation,JSONObject draft,JSONObject proposal,JSONObject presentation)throws Exception {this.task=task;this.run=run;this.epoch=epoch;this.operation=operation;this.conversation=conversation;this.draft=draft.toString();this.proposal=proposal.toString();expiresAt=System.currentTimeMillis()+600_000L;presentation.put("expiresAt",expiresAt);reviewDigest=digest(presentation);view=presentation.put("reviewDigest",reviewDigest).toString();}
         public synchronized JSONObject view()throws Exception{provided=true;return new JSONObject(view).put("closed",closed).put("submitted",submitted);}
-        private void live()throws Exception{if(closed||submitted||System.currentTimeMillis()>new JSONObject(view).getLong("expiresAt"))throw new SecurityException("原记忆审阅已关闭、过期或提交");originalTask(task,run,epoch);checkedOwnerRow(task,run,epoch,operation,new JSONObject(proposal).getString("proposalDigest"));}
+        private void live()throws Exception{if(closed||submitted||System.currentTimeMillis()>=expiresAt)throw new SecurityException("原记忆审阅已关闭、过期或提交");originalTask(task,run,epoch);checkedOwnerRow(task,run,epoch,operation,new JSONObject(proposal).getString("proposalDigest"));}
+        /** Existing owner review only. Never enumerate other sources or send the raw document to Web. */
+        public synchronized JSONObject sourcePageForOwner(int index,int offset,RunControl nativeOwner)throws Exception {
+            live();java.util.Objects.requireNonNull(nativeOwner).check();
+            JSONArray registered=new JSONObject(view).getJSONArray("sourceRefs");
+            if(!provided||index<0||index>=registered.length()||offset<0||offset>4_000_000)throw new SecurityException("请从原审阅选择原话及页段");
+            SourceRef ref=SourceRef.fromJson(registered.getJSONObject(index));
+            if(!"message".equals(ref.kind)||!"owner".equals(ref.ownerId)||!"private".equals(ref.spaceId))throw new SecurityException("只有原私人提案登记的主人原话可读");
+            JSONArray pin=new JSONArray().put(ref.toJson()),selection=new JSONArray().put(new JSONObject().put("sourceId",ref.sourceId).put("revision",ref.revision));
+            return sources.withCurrentUserSources(pin,()->tasks.withMemoryProposalSourceCurrent(task,run,epoch,conversation,selection,()->{
+                nativeOwner.check();live();
+                var document=sources.read(ref);
+                if(document==null||!ref.equals(document.ref)||document.text==null)throw new SecurityException("原话版本不可核对");
+                String text=document.text;int length=text.length();
+                if(offset>length||offset<length&&Character.isLowSurrogate(text.charAt(offset)))throw new IllegalArgumentException("原话起点无效");
+                int end=(int)Math.min((long)offset+8000,length);if(end<length&&end>offset&&Character.isHighSurrogate(text.charAt(end-1)))end--;
+                nativeOwner.check();live();
+                return new JSONObject().put("kind","message").put("sourceRef",ref.toJson()).put("index",index).put("offset",offset).put("nextOffset",end)
+                        .put("totalChars",length).put("hasMore",end<length).put("text",text.substring(offset,end)).put("title",document.title)
+                        .put("readExpiresAt",expiresAt).put("reviewDigest",reviewDigest);
+            }));
+        }
         public synchronized JSONObject confirm(RunControl nativeOwner)throws Exception {
             live();java.util.Objects.requireNonNull(nativeOwner).check();if(!provided)throw new SecurityException("请先读取完整的新旧记忆正文和来源");JSONObject proposal=new JSONObject(this.proposal),draft=new JSONObject(this.draft);boolean[] entered={false};
             if(!tasks.claimMemoryProposalApplyForOwner(task,run,epoch,operation,proposal.getString("proposalDigest"),reviewDigest))throw new SecurityException("原确认已领取，只能查询已有回执");submitted=true;

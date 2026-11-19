@@ -9,7 +9,10 @@ const roundId = (v: unknown) => Number.isInteger(v) && Number(v) >= 1 && Number(
 /** Run.summary doubles as a coordinator progress line. The durable assistant
  * summary message survives an intervention/stop which overwrites that field. */
 export function teamResultReading(run: Data | null, messages: unknown) {
-  const raw = text(run?.summary);
+  const saved = text(run?.summary);
+  // Earlier production runs persisted this pre-integration prompt even after real writes.
+  const raw = run?.mode==='produce'&&run?.phase==='review'&&saved==='实际成员草稿成果已保留，请查看真实文件差异并逐项审查；原项目尚未整合'
+    ? '作者已交回冻结文件。请在原成果页核对实际差异与原项目写回情况。':saved;
   const sources = rows(messages).filter(row => row?.kind === 'summary' && row.role === 'assistant' &&
     text(row.messageId) && text(row.content).trim());
   const source = sources.at(-1);

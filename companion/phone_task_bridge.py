@@ -131,6 +131,14 @@ class PhoneTaskRouter:
             raise PhoneTaskError("Local text-only scope is required", 403)
         return self._invoke("run", params, owner_goal_fence=fence)
 
+    def read_dispatch_for_local_owner(self, peer_id, operation_id, window_current):
+        # Private local option, never registered as an RPC action/parameter.
+        if not callable(window_current) or not window_current():
+            raise PhoneTaskError("Original owner window changed", 409)
+        held = {"onlyDispatch": True, "window": window_current}
+        value = self._invoke("status", {"peerDeviceId":peer_id,"operationId":operation_id}, held)
+        return value, held.get("current")
+
     def read_for_local_receipt(self, peer_id, operation_id):
         """In-process Windows owner UI only. The local scope fence is not serializable,
         not an RPC field, not a lease and never returned to phone/Web/MCP clients."""
@@ -201,7 +209,7 @@ class PhoneTaskRouter:
             ticket = pairing.restore_outgoing_grant(peer, grant_id, self.manager.now())
         return connection, peer, ticket
 
-    async def _exchange(self, connection, peer, ticket, envelope, timeout=12):
+    async def _exchange(self, connection, peer, ticket, envelope, timeout=12, *, visible=None):
         if self.closed or len(self.pending) >= 32:
             raise PhoneTaskError("Phone request capacity is unavailable; no new request was queued", 503)
         ticket.require_target_peer(peer, self.manager.now())
@@ -212,6 +220,7 @@ class PhoneTaskRouter:
         self.pending[request_id] = (connection, peer, envelope, future)
         try:
             def before_write(actual_peer):
+                if visible is not None and not visible(): raise PermissionError("Original local receipt window retired")
                 if self.closed or self.service.closed or actual_peer is not peer or self.connections.get(connection) is not peer:
                     raise PermissionError("Original phone channel generation changed before dispatch")
                 current = self.service._paired(peer.device_id)
@@ -231,7 +240,9 @@ class PhoneTaskRouter:
     async def _read(self, value, method, object_id, options=None, *, local_task_read=None):
         connection, peer, route = self._route(value["peerDeviceId"], value["grantId"], True)
         ticket = route.history_query(self.service.identity, method, object_id, value["resourceBinding"], self.manager.now(), options=options)
-        response = await self._exchange(connection, peer, ticket, ticket.envelope)
+        visible=local_task_read.get("window") if local_task_read is not None and local_task_read.get("onlyDispatch") is True else None
+        response = (await self._exchange(connection,peer,ticket,ticket.envelope,visible=visible) if visible is not None
+                    else await self._exchange(connection,peer,ticket,ticket.envelope))
         # Returning a read to the owner is a separate boundary from sending it:
         # revocation, expiry or replacement during a reply must not reveal it.
         if self.closed or self.service.closed or self.connections.get(connection) is not peer:
@@ -239,10 +250,10 @@ class PhoneTaskRouter:
         ticket.require_target_peer(peer, self.manager.now())
         if response["messageType"] == "DeviceError":
             raise PhoneTaskError("Phone denied the current original-result read", 403)
-        if local_task_read is not None and method == "task.get":
+        if local_task_read is not None and method == ("operation.get" if local_task_read.get("onlyDispatch") is True else "task.get"):
             def still_current():
                 if self.closed or self.service.closed or self.connections.get(connection) is not peer: return False
-                # Local-only revalidation of the very route used by task.get. No
+                # Local-only revalidation of the exact original read. No
                 # new query/ticket, session extension, network read or restoration.
                 ticket.require_target_peer(peer, self.manager.now())
                 return True
@@ -494,6 +505,17 @@ class PhoneTaskRouter:
             original_fingerprint, value = self._row(params["operationId"])
             if value["peerDeviceId"] != params["peerDeviceId"]:
                 raise PhoneTaskError("Original operation belongs to a different fixed phone", 403)
+            if local_task_read is not None and local_task_read.get("onlyDispatch") is True:
+                current = local_task_read.get("window")
+                from phone_task_outcome import is_phone_action_goal, original_dispatch_only
+                if action!="status" or not callable(current) or not current() or not is_phone_action_goal(value):
+                    raise PhoneTaskError("No original owner dispatch window",403)
+                # Exactly one original operation.get; no task.get, mutation or polling.
+                receipt=await self._read(value,"operation.get",value["operationId"],local_task_read=local_task_read)
+                fingerprint, source = self._row(value["operationId"]); guard=local_task_read.get("current")
+                if fingerprint!=original_fingerprint or not current() or not callable(guard) or not guard():
+                    raise PhoneTaskError("Original dispatch or history permission changed",403)
+                return original_dispatch_only(source,receipt,self.service.identity.device_id)
             if action == "cancel":
                 cancel_id = wire.identifier(params.get("cancelOperationId"), "cancelOperationId")
                 semantic = {"operationId": cancel_id, "targetOperationId": value["operationId"], "peerDeviceId": value["peerDeviceId"]}

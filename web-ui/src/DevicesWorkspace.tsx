@@ -77,6 +77,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const [taskDetails, setTaskDetails] = useState<Record<string, Data>>({}), [historyReceipt, setHistoryReceipt] = useState<Data | null>(null), [historyStopSubmitted, setHistoryStopSubmitted] = useState(false);
   const [waitingPhones, setWaitingPhones] = useState<Data | null>(null);
   const [phoneArchive, setPhoneArchive] = useState<Data | null>(null);
+  const [archiveFind,setArchiveFind]=useState({key:'',text:''});
   const [phoneGoalResult, setPhoneGoalResult] = useState<Data | null>(null);
   const [preparingDeviceWork, setPreparingDeviceWork] = useState(false);
   const [workPhone, setWorkPhone] = useState<PreparedPhone>();
@@ -123,7 +124,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     if (selectedPeer.current === next) return;
     if (waitingPhones?.waitingHandle) void run('devices.discard', { waitingHandle: waitingPhones.waitingHandle }).catch(() => {});
     if (phoneArchive?.archiveHandle) void run('devices.discard', { archiveHandle: phoneArchive.archiveHandle }).catch(() => {});
-    setModelReturnFocus(undefined); setPhoneArchive(null); setWaitingPhones(null);
+    setModelReturnFocus(undefined); setPhoneArchive(null); setArchiveFind({key:'',text:''}); setWaitingPhones(null);
     closeReview(); // Retire pending review handles before changing the list/detail scope.
     setNotice(''); setError(''); setTaskDetails({});
     setDiscoveryAck(false); setAdvertise(false); setDiscoveryPeer('');
@@ -133,7 +134,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   };
   const acceptReview = (value: Data) => { const actual = deviceReview(value); handle.current = actual.viewHandle; setReview(actual); setAck(false); setFuture(false); setHistoryReceipt(null); setPhoneGoalResult(null); setHistoryStopSubmitted(false); setRaw(''); setForm(''); setInvitation(''); };
   const clearSensitive = (enabled = false, keepPairEntry = false) => {
-    setDesktopOpen(false); setDiscoveryAck(false); setAdvertise(false); setDiscoveryPeer(''); setModelReturnFocus(undefined); setPhoneArchive(null); setWaitingPhones(null);
+    setDesktopOpen(false); setDiscoveryAck(false); setAdvertise(false); setDiscoveryPeer(''); setModelReturnFocus(undefined); setPhoneArchive(null); setArchiveFind({key:'',text:''}); setWaitingPhones(null);
     scope.current.invalidate(enabled); handle.current = ''; setReview(null); setAck(false); setFuture(false); setRaw(''); setInvitation('');
     setForm(old => keepPairEntry && (old === 'add' || old === 'invite') ? old : ''); setAddress(''); setHost(''); setPort(''); setRecoveryAddresses([]); setHistoryReceipt(null); setPhoneGoalResult(null); setHistoryStopSubmitted(false); setTaskDetails({}); setSnapshot(null); setError(''); setNotice(''); setWorkBusy(false); setControlBusy(false);
     void run('devices.discard', {}).catch(() => {});
@@ -332,11 +333,14 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     });
   };
   const archiveSide: PhoneArchiveSide = activeArchive?.side === 'received' ? 'received' : 'sent';
-  const readPhoneArchive = (side: PhoneArchiveSide, direction?: 'older' | 'newer') => {
+  const findKey=JSON.stringify([local?.deviceId,local?.instanceId,peer?.deviceId,peer?.instanceId,peer?.certificateFingerprint,archiveSide]);
+  const archiveDraft=archiveFind.key===findKey?archiveFind.text:String(activeArchive?.searchText||'');
+  const readPhoneArchive = (side: PhoneArchiveSide, direction?: 'older' | 'newer', searchText='') => {
     if (busy || !peer || selectedPeer.current !== peer.deviceId || direction && (!activeArchive || archiveSide !== side)) return;
-    const target = peer.deviceId;
-    void invoke(side === 'received' ? 'devices.readReceivedPhoneGoals' : 'devices.readPhoneGoalArchive', direction ? { archiveHandle: activeArchive!.archiveHandle, direction } : { targetDeviceId: target }, value => {
-      const actual = devicePhoneGoalArchive(value, peer, local, side); if (selectedPeer.current === target) setPhoneArchive(actual);
+    const target = peer.deviceId, keyword=direction?String(activeArchive?.searchText||''):searchText.trim();
+    void invoke(side === 'received' ? 'devices.readReceivedPhoneGoals' : 'devices.readPhoneGoalArchive', direction ? { archiveHandle: activeArchive!.archiveHandle, direction } : { targetDeviceId: target, ...(keyword?{searchText:keyword}:{}) }, value => {
+      const actual = devicePhoneGoalArchive(value, peer, local, side); if(String(actual.searchText||'')!==keyword)throw new Error('这次本机查找已变化，请再查一次。');
+      if (selectedPeer.current === target) {setPhoneArchive(actual); setArchiveFind({key:JSON.stringify([local?.deviceId,local?.instanceId,peer.deviceId,peer.instanceId,peer.certificateFingerprint,side]),text:keyword});}
     });
   };
   const openArchivedGoal = (row: Data, sourceWork: boolean) => {
@@ -695,16 +699,23 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               </div>
               {activeArchive && <>
                 <p role="status">{archiveSide === 'received' ? '这是本机已收到并保存的直接目标，不代表你已同意开始。找回原工作不会重启任务。' : '这里只列本机为这部手机保留的目标，不代表已经送达或完成。打开原派发后，由你决定是否读取回执或成果。'}</p>
-                {!activeArchive.rows.length && <p>这一批本机记录里没有能核对的直接手机目标。</p>}
+                <form className="pw-form-actions" onSubmit={e=>{e.preventDefault();if(!busy && archiveDraft.trim())readPhoneArchive(archiveSide,undefined,archiveDraft)}}>
+                  <SearchField aria-label="查找已保存的原目标" placeholder="输入原目标里的词" value={archiveDraft} isDisabled={busy}
+                    onChange={value=>setArchiveFind({key:findKey,text:Array.from(value).slice(0,64).join('')})} />
+                  <Button type="submit" variant="secondary" disabled={busy||!archiveDraft.trim()}>查找</Button>
+                  {activeArchive.searchText && <Button type="button" variant="ghost" disabled={busy} onClick={()=>readPhoneArchive(archiveSide)}>显示全部</Button>}
+                </form>
+                {activeArchive.searchText && <p role="status">只在这部设备的{archiveSide==='received'?'本机已接收':'本机已发出'}原目标中查找「{activeArchive.searchText}」，不会查询对端或成果。</p>}
+                {!activeArchive.rows.length && <p>{activeArchive.searchText ? activeArchive.hasMore ? '这段记录没有命中，可以继续查更早的记录。' : '这段可核对的记录没有命中。' : '这一批本机记录里没有能核对的直接手机目标。'}</p>}
                 {rows(activeArchive.rows).map(row => <div className="pw-device-history-entry" key={JSON.stringify([row.taskId, row.operationId])}>
-                  <h4 dir="auto">{row.goal}</h4><p>{time(row.createdAt)} · {row.textOnly === true ? '仅文字，不使用屏幕' : row.screenMode === 'background' ? '独立后台屏' : '主屏'}</p>
+                  <h4 dir="auto">{row.goal}</h4>{row.matchedLater===true && <p>关键词出现在原目标的后文。</p>}<p>{time(row.createdAt)} · {row.textOnly === true ? '仅文字，不使用屏幕' : row.screenMode === 'background' ? '独立后台屏' : '主屏'}</p>
                   <div className="pw-form-actions">{archiveSide === 'received'
                     ? <Button variant="secondary" disabled={busy || !supported('devices.returnToReceivedPhoneGoal')} onClick={() => openArchivedGoal(row, false)}>找回本机接纳的原工作</Button>
                     : <><Button variant="secondary" disabled={busy} onClick={() => openArchivedGoal(row, false)}>核对这次原派发</Button>
                       <Button variant="ghost" disabled={busy || !supported('devices.openTask')} onClick={() => openArchivedGoal(row, true)}>打开本机原工作</Button></>}</div>
                 </div>)}
                 <div className="pw-form-actions">{activeArchive.canReadNewer && <Button variant="ghost" disabled={busy} onClick={() => readPhoneArchive(archiveSide, 'newer')}>较新记录</Button>}
-                  {activeArchive.hasMore && <Button variant="secondary" disabled={busy} onClick={() => readPhoneArchive(archiveSide, 'older')}>更早记录</Button>}</div>
+                  {activeArchive.hasMore && <Button variant="secondary" disabled={busy} onClick={() => readPhoneArchive(archiveSide, 'older')}>{activeArchive.searchText?'查更早的记录':'更早记录'}</Button>}</div>
               </>}
             </AccordionItem>}
             {!retired(peer) && (desktopPeer || phonePeer || supported('deviceTaskScope.prepare')) && <AccordionItem id="peer-work-options" title="新工作与手动查看" description="新目标要重新选择设备和范围，不沿用原工作的权限" icon={IconLayers}>

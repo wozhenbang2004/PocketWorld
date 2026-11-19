@@ -82,6 +82,14 @@ public final class PhoneAccessibilityService extends AccessibilityService {
     private LinearLayout controls;
     private TextView status;
     private Button pause;
+    private android.widget.FrameLayout ownerActionSlot;
+    private record RenderedOwnerAction(PhoneOwnerControls owner,PhoneOwnerControls.ViewState state,OwnerReturnButton hand){}
+    private volatile RenderedOwnerAction renderedOwnerAction;
+    private RenderedOwnerAction submittingOwnerAction;
+    private volatile long ownerVisibilityVersion;
+    // At most one explicit visible-owner resume in flight. Never queue a tap for a future screen.
+    private static final java.util.concurrent.ThreadPoolExecutor OWNER_RESUME=new java.util.concurrent.ThreadPoolExecutor(0,1,20,java.util.concurrent.TimeUnit.SECONDS,
+            new java.util.concurrent.SynchronousQueue<>(),r->{Thread t=new Thread(r,"pocket-visible-owner-resume");t.setDaemon(true);return t;});
     private record OwnerReturnButton(RunControl control,long pause,String operation,android.app.PendingIntent action,java.util.function.BooleanSupplier current){}
     private volatile OwnerReturnButton ownerReturnButton;
     public void bindOriginalOwnerReturn(RunControl original,long revision,String operation,android.app.PendingIntent action,java.util.function.BooleanSupplier current){
@@ -89,7 +97,8 @@ public final class PhoneAccessibilityService extends AccessibilityService {
             ownerReturnButton=new OwnerReturnButton(original,revision,operation,action,current);refreshOwnerControls(ownerControls,"原手机任务");});
     }
     public boolean ownerReturnVisible(RunControl original,long revision,String operation){
-        OwnerReturnButton b=ownerReturnButton;return visible&&instance==this&&b!=null&&b.control()==original&&b.pause()==revision&&b.operation().equals(operation)&&b.current().getAsBoolean();
+        OwnerReturnButton b=ownerReturnButton;RenderedOwnerAction shown=renderedOwnerAction;
+        return visible&&instance==this&&b!=null&&shown!=null&&shown.hand()==b&&b.control()==original&&original.isPaused()&&!original.isCancelled()&&b.pause()==revision&&b.operation().equals(operation)&&returnReady(b);
     }
     private Button controlGrip;
     private LinearLayout controlDetails;
@@ -363,7 +372,7 @@ public final class PhoneAccessibilityService extends AccessibilityService {
             if (!(getApplication() instanceof EngineApplication)) return;
             EngineApplication app=(EngineApplication)getApplication();
             PhoneOwnerControls bound=new PhoneOwnerControls(app,taskId,runControl);
-            if(!bound.view(goal).current)return;
+            if(!bound.view(goal).current())return;
             removeControls();
             control = runControl;
             ownerControls=bound;
@@ -398,29 +407,16 @@ public final class PhoneAccessibilityService extends AccessibilityService {
                 details.setVisibility(expand ? View.VISIBLE : View.GONE);
                 grip.setText(expand ? "任务 ▴" : "任务 ▾");
             });
-            pause = button(runControl.isPaused() ? "继续" : "暂停");
-            pause.setOnClickListener(v -> {
-                OwnerReturnButton hand=ownerReturnButton;
-                if(hand!=null&&hand.control()==runControl&&ownerReturnVisible(runControl,runControl.pauseRevision(),hand.operation())){
-                    try{hand.action().send();}catch(android.app.PendingIntent.CanceledException stale){app.error("这次交还按钮已失效，请打开原任务核对");}
-                }else bound.toggle();
-                refreshOwnerControls(bound,goal);
-            });
+            // refreshOwnerControls installs a distinct Android View for each displayed intention.
+            ownerActionSlot=new android.widget.FrameLayout(this);
             Button stop = button("停止");
             stop.setOnClickListener(v -> bound.stop());
-            Button back = button("返回应用");
-            back.setOnClickListener(v -> {
-                if(!bound.pause())return;
-                refreshOwnerControls(bound,goal);
-                Intent launch = getPackageManager().getLaunchIntentForPackage(getPackageName());
-                if (launch != null) {
-                    launch.putExtra("quickPanelTaskId",taskId); // Existing Compose launcher resolves the exact original task, not the currently viewed conversation.
-                    launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
-                    try { startActivity(launch); } catch (RuntimeException ignored) { }
-                }
-            });
+            Button back = button("暂停并返回原任务");
+            back.setOnClickListener(v -> {if(ownerControls==bound&&visible&&bound.holdForReturn()){
+                refreshOwnerControls(bound,goal);openOriginalOwnerReview(bound,app);
+            }});
             actions.addView(grip);
-            actions.addView(pause);
+            actions.addView(ownerActionSlot);
             actions.addView(stop);
             panel.addView(actions);
             LinearLayout more = new LinearLayout(this);
@@ -474,16 +470,57 @@ public final class PhoneAccessibilityService extends AccessibilityService {
         });
     }
 
+    private static boolean returnReady(OwnerReturnButton button){
+        try{return button!=null&&button.current().getAsBoolean();}catch(RuntimeException stale){return false;}
+    }
+    private void openOriginalOwnerReview(PhoneOwnerControls bound,EngineApplication app){
+        try{startActivity(bound.originalReview(this));}catch(Exception unavailable){app.error("未能打开这次手机执行，请从原任务记录核对");}
+    }
     private void refreshOwnerControls(PhoneOwnerControls expected,String goal) {
-        if(ownerControls!=expected||pause==null||status==null)return;
+        if(expected==null||ownerControls!=expected||ownerActionSlot==null||status==null)return;
         PhoneOwnerControls.ViewState state=expected.view(goal);
         OwnerReturnButton hand=ownerReturnButton;
-        boolean canReturn=hand!=null&&control!=null&&hand.control()==control&&hand.pause()==control.pauseRevision()&&hand.current().getAsBoolean();
-        if(hand!=null&&!hand.current().getAsBoolean())ownerReturnButton=null;
-        pause.setText(canReturn?"本人已处理，交还":state.paused?"继续":"暂停");
-        pause.setEnabled(canReturn||state.canToggle);
-        status.setText(shortText(state.message,140));
-        if(controlGrip!=null)controlGrip.setContentDescription("拖动可移动手机任务控制条；点击"+(controlDetails!=null&&controlDetails.getVisibility()==View.VISIBLE?"收起":"展开")+"操作。"+state.message);
+        if(hand!=null&&(control==null||hand.control()!=control||!control.isPaused()||control.isCancelled()||hand.pause()!=control.pauseRevision()||!returnReady(hand))){ownerReturnButton=null;hand=null;}
+        RenderedOwnerAction shown=renderedOwnerAction;
+        if(shown==null||shown.owner()!=expected||shown.hand()!=hand||!state.sameInput(shown.state())){
+            // Android can deliver click after ACTION_UP. Do not replace a captured Pause listener with
+            // Resume/handback on that same View. Retire the old View; unchanged task events retain focus.
+            if(pause!=null){pause.setEnabled(false);pause.setOnClickListener(null);}
+            var binding=new RenderedOwnerAction(expected,state,hand);renderedOwnerAction=binding;
+            String label=hand!=null?"本人已处理，交还":switch(state.action()){
+                case PAUSE->"暂停";case RESUME_LOCAL,RESUME_SOURCE->"继续这次暂停";case REVIEW->"核对原暂停";case NONE->"暂不可控制";};
+            Button next=button(label);pause=next;ownerActionSlot.removeAllViews();ownerActionSlot.addView(next);
+            next.setOnClickListener(v->performShownOwnerAction(binding,goal,next));
+        }
+        boolean waiting=hand==null&&submittingOwnerAction!=null&&(state.action()==PhoneOwnerControls.Action.RESUME_LOCAL||state.action()==PhoneOwnerControls.Action.RESUME_SOURCE);
+        pause.setEnabled(!waiting&&(hand!=null||state.action()!=PhoneOwnerControls.Action.NONE));
+        status.setText(shortText(state.message(),140));
+        if(controlGrip!=null)controlGrip.setContentDescription("拖动可移动手机任务控制条；点击"+(controlDetails!=null&&controlDetails.getVisibility()==View.VISIBLE?"收起":"展开")+"操作。"+state.message());
+    }
+    private void performShownOwnerAction(RenderedOwnerAction shown,String goal,Button source){
+        if(source!=pause||shown!=renderedOwnerAction||!visible||ownerApp==null||instance!=this)return;
+        EngineApplication app=ownerApp;PhoneOwnerControls bound=shown.owner();
+        if(shown.hand()!=null){
+            var hand=shown.hand();
+            if(hand==ownerReturnButton&&ownerReturnVisible(hand.control(),hand.pause(),hand.operation()))try{hand.action().send();}
+                catch(android.app.PendingIntent.CanceledException stale){app.error("这次交还按钮已失效，请打开原任务核对");}
+            // A stale handback must never turn into a plain Resume or Pause.
+        }else switch(shown.state().action()){
+            case PAUSE->{if(control!=null&&control.pauseRevision()==shown.state().pause())bound.pause();}
+            case REVIEW->openOriginalOwnerReview(bound,app);
+            case RESUME_LOCAL,RESUME_SOURCE->{
+                if(submittingOwnerAction!=null)return;
+                long version=ownerVisibilityVersion;submittingOwnerAction=shown;source.setEnabled(false);
+                java.util.function.BooleanSupplier current=()->instance==this&&visible&&ownerVisibilityVersion==version&&renderedOwnerAction==shown;
+                try{OWNER_RESUME.execute(()->{
+                    try{bound.resume(shown.state(),current);}catch(Exception unavailable){if(current.getAsBoolean())app.error("未取得这次暂停的继续回执，请返回原任务核对，不要重复继续");}
+                    finally{main.post(()->{if(submittingOwnerAction==shown)submittingOwnerAction=null;if(ownerControls==bound)refreshOwnerControls(bound,goal);});}
+                });}catch(java.util.concurrent.RejectedExecutionException busy){submittingOwnerAction=null;app.error("原控制请求仍在处理，未排队或继续新的执行");refreshOwnerControls(bound,goal);}
+                return;
+            }
+            case NONE->{return;}
+        }
+        refreshOwnerControls(bound,goal);
     }
 
     public void hideControls() { runOnMain(this::removeControls); }
@@ -573,7 +610,8 @@ public final class PhoneAccessibilityService extends AccessibilityService {
     }
 
     private void removeControls() {
-        ownerReturnButton=null;
+        ownerReturnButton=null;renderedOwnerAction=null;submittingOwnerAction=null;ownerVisibilityVersion++;
+        ownerActionSlot=null;
         clearInAppStopSurface();
         if (control != null && cancellation != null) control.removeCancelAction(cancellation);
         if(ownerApp!=null&&ownerObserver!=null)ownerApp.removeObserver(ownerObserver);
@@ -599,7 +637,9 @@ public final class PhoneAccessibilityService extends AccessibilityService {
     void restoreAfterCapture(Object token) { captureHides.remove(token); updateVisibility(); }
 
     private void updateVisibility() {
-        visible = controls != null && captureHides.isEmpty() && SystemClock.uptimeMillis() >= inAppStopUntil;
+        boolean show=controls!=null&&captureHides.isEmpty()&&SystemClock.uptimeMillis()>=inAppStopUntil;
+        if(show!=visible)ownerVisibilityVersion++;
+        visible=show;
         if (controls != null) controls.setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
         if (quickPanel != null) quickPanel.captureHidden(!captureHides.isEmpty());
     }

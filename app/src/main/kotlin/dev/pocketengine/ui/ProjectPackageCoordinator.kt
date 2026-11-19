@@ -41,7 +41,18 @@ internal class ProjectPackageCoordinator(
     private var closed = false
     private var activated = false
     private var mounted = false
-    private var pickerImport: JSONObject? = null
+    private var pickerImport by mutableStateOf<JSONObject?>(null)
+    private var webSourcePin: JSONObject? = null
+    private class HostSourceWait(val task: String, val token: String, val done: (JSONObject?, String?) -> Unit) { @Volatile var active = true }
+    private var hostSourceWait: HostSourceWait? = null
+    private fun finishHostSource(wait: HostSourceWait, value: JSONObject?, error: String?) {
+        if (hostSourceWait !== wait) return
+        wait.active = false; hostSourceWait = null; wait.done(value, error)
+    }
+    fun cancelHostSourceWait(task: String, token: String) {
+        if (hostSourceWait?.let { it.task == task && it.token == token } == true) cancel()
+    }
+    val webSourcePickerPending get() = pickerImport != null
     private var pickerExport: JSONObject? = null
     private var restoredPicker = false
     private var foreground = false
@@ -62,14 +73,14 @@ internal class ProjectPackageCoordinator(
     }
     private fun local() = app.features.module("local") as? LocalModule ?: error("原项目模块不可用")
     private fun requireOwner() { check(!closed && mounted && privateOwner()) { "请返回原私人项目入口操作" } }
-    fun activate(project: String?, checkout: JSONObject?) {
+    fun activate(project: String?, checkout: JSONObject?, sourcesOnly: Boolean = false, prepared: Pair<String, String>? = null) {
         check(!closed && privateOwner()) { "请返回原私人项目入口操作" }; mounted = true
         val checkoutId = checkout?.getString("id")
-        if (activated && state.checkoutId == checkoutId && state.projectId == project) { processPickerResults(); return }
+        if (activated && state.checkoutId == checkoutId && state.projectId == project) { if (sourcesOnly) refreshSourceStages(prepared); processPickerResults(); return }
         activated = true
         retainPosition(); cancel(); val pin = positions.remove(positionKey(project, checkoutId))
-        state = ProjectPackageState(checkoutId = checkoutId, projectId = project, pendingFreeze = pin?.optJSONObject("pendingFreeze"), pendingImport = pin?.optJSONObject("pendingImport"), notice = if (pin != null) "只恢复原动作定位；未恢复确认或执行。请先核对原结果。" else null)
-        refresh(); processPickerResults()
+        state = ProjectPackageState(checkoutId = checkoutId, projectId = project, exportStatus = state.exportStatus, pendingFreeze = pin?.optJSONObject("pendingFreeze"), pendingImport = pin?.optJSONObject("pendingImport"), notice = if (pin != null) "只恢复原动作定位；未恢复确认或执行。请先核对原结果。" else null)
+        if (sourcesOnly) refreshSourceStages(prepared) else refresh(); processPickerResults()
     }
     fun deactivate() { mounted = false; cancel(); closePreview() }
     private fun processPickerResults() {
@@ -342,6 +353,106 @@ internal class ProjectPackageCoordinator(
             }
         }
     }
+    /** Fixed files already in this phone's private Book, not a remote submit/read or general attachment bridge. */
+    fun stageSavedHostSources(task: String, token: String, claims: org.json.JSONArray, current: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
+        check(foreground && !closed && privateOwner() && current() && !state.busy && state.pendingImport == null && state.pendingFreeze == null &&
+            pickerImport == null && pickerExport == null && taskExport?.phase !in setOf("checking", "document_requested", "selection_returned", "writing")) {
+            "请在原私人主机任务完成当前操作后，再选择手机原件"
+        }
+        require(token.matches(Regex("[a-f0-9-]{36}"))); check(hostSourceWait == null)
+        val requested = org.json.JSONArray(claims.toString())
+        val wait = HostSourceWait(task, token, done); hostSourceWait = wait
+        val visible = { wait.active && current() }
+        try { work(ownerCurrent = visible, onFailure = { finishHostSource(wait, null, it.message ?: "没有准备完整本机源码") }) { c, _ ->
+            val gate = c.retainAuthorityCheck { check(visible() && !closed && foreground && privateOwner()) { "已离开原任务，未继续准备源码" } }
+            val actual = try {
+                val book = dev.pocketengine.features.attachments.AttachmentRepository.get(app).book
+                val source = dev.pocketengine.features.local.project.ProjectHostSource.read(task, requested, { app.tasks.get(task, false) }, book, c)
+                local().stageSavedHostSourceForOwner(source, c)
+            } finally { gate.close() }
+            val receipt = JSONObject().put("taskId", task).put("id", actual.getString("selectionId")).put("sha", actual.getString("sha256"))
+                .put("files", actual.getJSONObject("sourceEvidence").getInt("files")).put("snapshotVersion", actual.getJSONObject("sourceEvidence").getJSONObject("original").getString("snapshotVersion"))
+            return@work { finishHostSource(wait, receipt, null) }
+        } } catch (e: Exception) { finishHostSource(wait, null, e.message ?: "原准备窗口已结束") }
+    }
+    // The web owner directory only reads prior selections. Opening it never opens a provider,
+    // mounts a checkout, or fetches unrelated task artifacts and received attachments.
+    private fun refreshSourceStages(prepared: Pair<String, String>?) = work { _, _ ->
+        val rows = local().listStagedProjectPackagesForOwner().objects()
+        val target = prepared?.let { (id, sha) ->
+            rows.singleOrNull { it.optBoolean("available") && it.optString("selectionId") == id && it.optString("sha256") == sha &&
+                it.optJSONObject("sourceEvidence")?.optString("sourceKind") == "host_saved_snapshot" }
+                ?: error("原任务准备的那份手机源码已失效，没有选中其他工程")
+        }
+        return@work {
+            if (target != null && state.pendingImport == null) {
+                webSourcePin = null
+                state = state.copy(stagedPackages = rows, staged = target, importPlan = null, imported = null, notice = "只准备了原主机任务中选定的手机原件，尚未创建项目。")
+            } else state = state.copy(stagedPackages = rows)
+        }
+    }
+    fun openWebSourceIntake(prepared: Pair<String, String>? = null) {
+        check(foreground && !closed && privateOwner() && !state.busy && pickerExport == null &&
+            state.pendingFreeze == null && taskExport?.phase !in setOf("checking", "document_requested", "selection_returned", "writing") &&
+            (pickerImport == null || pickerImport?.optString("sourceKind") in setOf("saf_tree", "external_zip")) &&
+            (state.pendingImport == null || state.pendingImport?.optString("clientImportId") == webSourcePin?.optString("clientImportId"))) {
+            "请先结束当前项目包操作，再导入本机源码"
+        }
+        activate(null, null, sourcesOnly = true, prepared = prepared)
+        val original = webSourcePin
+        val found = matchesWebSourceReceipt(state.imported)
+        state = state.copy(ownerPanelRequested = true, sourceImportRequested = true, importPlan = null,
+            pendingImport = state.pendingImport ?: original?.takeUnless { found },
+            notice = if (original != null && !found) "保留了原创建定位。先核对原结果，不会重复创建。" else null, error = null)
+    }
+    fun closeWebSourceIntake() {
+        if (!state.sourceImportRequested || state.checkoutId != null || state.projectId != null) return
+        retireOwnerSourcePicker()
+        if (pickerImport != null) restoredPicker = true
+        forgetImportPlan(); closeOwnerPanel(); deactivate()
+    }
+    fun confirmWebSourcePlan(client: String) {
+        requireOwner()
+        val pin = state.importPlan?.optJSONObject("plan") ?: error("请重新核对这份源码")
+        check(!state.busy && state.pendingImport == null && pin.optString("clientImportId") == client &&
+            pin.optString("mode") == "new_project" && pin.has("sourceEvidenceSha256") && !pin.has("targetCheckoutId") &&
+            state.staged?.optJSONObject("sourceEvidence")?.optString("sourceKind") in setOf("saf_tree", "external_zip", "host_saved_snapshot")) { "来源或创建方案已变化，没有开始新的导入" }
+        webSourcePin = JSONObject(pin.toString())
+        confirmImport()
+    }
+    fun releaseMissingWebSource(client: String) {
+        val pin = state.pendingImport ?: error("原创建定位已变化")
+        check(state.retryImport && client == webSourcePin?.optString("clientImportId") && client == pin.optString("clientImportId"))
+        work { _, _ ->
+            val found = local().findProjectPackageImportForOwner(JSONObject(pin.toString()))
+            if (found.optBoolean("found")) app.features.sendState()
+            return@work {
+                if (found.optBoolean("found")) state = state.copy(pendingImport = null, retryImport = false, importPlan = null, imported = found, notice = "已找到原工作副本，未另起创建。")
+                else {
+                    webSourcePin = null
+                    state = state.copy(pendingImport = null, retryImport = false, importPlan = null, imported = null, staged = null, notice = "原操作仍未找到已发布副本。已放下定位，没有重试或删除项目。")
+                }
+            }
+        }
+    }
+    fun matchesWebSourcePlan(pin: JSONObject): Boolean {
+        val original = webSourcePin ?: return false
+        return original.getString("clientImportId") == pin.optString("clientImportId") &&
+            original.getString("planDigest") == pin.optString("planDigest") && original.getString("selectionId") == pin.optString("selectionId")
+    }
+    fun matchesWebSourceReceipt(row: JSONObject?): Boolean {
+        val original = webSourcePin ?: return false
+        val source = row?.optJSONObject("sourceImport") ?: return false
+        return source.optString("clientId") == original.getString("clientImportId") && source.optString("mode") == "new_project" &&
+            source.optString("packageSha256") == original.getString("packageSha256") && source.optString("manifestIdentity") == original.getString("manifestIdentity") &&
+            source.optString("sourceEvidenceSha256") == original.getString("sourceEvidenceSha256") && row.optString("name") == original.getString("projectName")
+    }
+    fun newWebSourceSelection() {
+        requireOwner()
+        check(!state.busy && state.pendingImport == null && pickerImport == null) { "请先核对原创建结果" }
+        webSourcePin = null
+        state = state.copy(staged = null, importPlan = null, imported = null, notice = null, error = null)
+    }
     fun openSourceImport() {
         requireOwner()
         if (state.busy) { state = state.copy(notice = "请先完成当前读取，再选择现有源码；当前选择未改变。"); return }
@@ -353,9 +464,12 @@ internal class ProjectPackageCoordinator(
     fun pickSourceZip(generated: Boolean, stripRoot: Boolean) = pickSource("external_zip", generated, stripRoot)
     private fun pickSource(kind: String, generated: Boolean, stripRoot: Boolean) {
         requireOwner(); if (state.busy || pickerImport != null || state.pendingFreeze != null || state.pendingImport != null) return
-        pickerImport = JSONObject().put("selectionId", UUID.randomUUID().toString()).put("checkoutId", state.checkoutId.orEmpty()).put("projectId", state.projectId.orEmpty()).put("sourceKind", kind).put("includeGeneratedRoots", generated).put("stripSingleRoot", stripRoot)
+        val id = UUID.randomUUID().toString()
+        pickerImport = JSONObject().put("selectionId", id).put("ownerSourcePicker", true).put("checkoutId", state.checkoutId.orEmpty()).put("projectId", state.projectId.orEmpty()).put("sourceKind", kind).put("includeGeneratedRoots", generated).put("stripSingleRoot", stripRoot)
         restoredPicker = false
-        if (kind == "saf_tree") activity.pickProjectSourceDirectory() else activity.pickProjectPackageDocument()
+        state = state.copy(staged = null, imported = null, importPlan = null, notice = null, error = null)
+        try { activity.pickOwnerProjectSource(id, kind == "saf_tree") }
+        catch (_: RuntimeException) { retireOwnerSourcePicker(); state = state.copy(error = "无法打开系统文件选择器，未读取或创建项目。") }
     }
     fun clearInterruptedSources() {
         if (state.busy) return
@@ -366,7 +480,30 @@ internal class ProjectPackageCoordinator(
         pickerImport = JSONObject().put("selectionId", UUID.randomUUID().toString()).put("checkoutId", state.checkoutId.orEmpty()).put("projectId", state.projectId.orEmpty())
         restoredPicker = false; activity.pickProjectPackageDocument()
     }
-    fun importResult(uri: Uri?) { importUri = uri; if (uri == null) pickerImport = null else processPickerResults() }
+    private fun retireOwnerSourcePicker() {
+        val pin = pickerImport ?: return
+        if (!pin.optBoolean("ownerSourcePicker")) return
+        activity.cancelOwnerProjectSource(pin.getString("selectionId"))
+        pickerImport = null; importUri = null
+    }
+    fun sourceResult(id: String, uri: Uri?) {
+        if (pickerImport?.optBoolean("ownerSourcePicker") != true || pickerImport?.optString("selectionId") != id) return
+        acceptImportResult(uri)
+    }
+    fun importResult(uri: Uri?) {
+        // A late legacy package/tree result is not this new source picker's grant.
+        if (pickerImport?.optBoolean("ownerSourcePicker") != true) acceptImportResult(uri)
+    }
+    private fun acceptImportResult(uri: Uri?) {
+        importUri = uri
+        if (uri == null) {
+            if (!restoredPicker && pickerImport?.optString("sourceKind") in setOf("saf_tree", "external_zip")) state = state.copy(notice = "没有选取源码，未创建项目。")
+            pickerImport = null
+        } else if (restoredPicker) {
+            pickerImport = null; importUri = null
+            state = state.copy(error = "原选择窗口已结束，请重新选取源码；未读取返回的内容。")
+        } else processPickerResults()
+    }
     private fun finishImport() {
         if (!foreground || !mounted || state.busy) return
         val uri = importUri; importUri = null
@@ -377,7 +514,7 @@ internal class ProjectPackageCoordinator(
         work { c, _ ->
             if (pin.optString("sourceKind") == "saf_tree") {
                 val actual = dev.pocketengine.features.local.project.android.AndroidProjectSourceTree(app, uri, c).use { tree -> local().stageSourceTreeForOwner(tree, tree.sourceLabel(), pin.getString("selectionId"), pin.getBoolean("includeGeneratedRoots"), c) }
-                return@work { state = state.copy(staged = actual, importPlan = null, sourceImportRequested = true, notice = "目录已完整读取并复核。请核对清单，再明确创建新项目；未执行代码。") }
+                return@work { state = state.copy(staged = actual, stagedPackages = withStage(actual), imported = null, importPlan = null, sourceImportRequested = true, notice = "目录已完整读取并复核。请核对清单，再明确创建新项目；未执行代码。") }
             }
             val sourceLabel = if (pin.optString("sourceKind") == "external_zip") runCatching { app.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { row -> if (row.moveToFirst()) row.getString(0) else null } }.getOrNull() ?: "已有ZIP源码" else "PocketWorld项目包"
             val opened = app.contentResolver.openInputStream(uri) ?: error("所选项目包无法读取")
@@ -390,9 +527,11 @@ internal class ProjectPackageCoordinator(
                 if (pin.optString("sourceKind") == "external_zip") local().stageSourceZipForOwner(checked, sourceLabel, pin.getString("selectionId"), pin.getBoolean("stripSingleRoot"), pin.getBoolean("includeGeneratedRoots"), c)
                 else local().stageProjectPackageForOwner(checked, pin.getString("selectionId"))
             } } finally { c.removeCancelAction(cancel) }
-            return@work { state = state.copy(staged = actual, importPlan = null, notice = if (actual.has("sourceEvidence")) "普通ZIP源码已完整读取。请核对实际范围，再明确创建新项目；未执行代码。" else "项目包已读取，请核对后明确导入；尚未运行。") }
+            return@work { state = state.copy(staged = actual, stagedPackages = withStage(actual), imported = null, importPlan = null, notice = if (actual.has("sourceEvidence")) "普通ZIP源码已完整读取。请核对实际范围，再明确创建新项目；未执行代码。" else "项目包已读取，请核对后明确导入；尚未运行。") }
         }
     }
+    private fun withStage(actual: JSONObject) = listOf(JSONObject(actual, arrayOf("selectionId", "sha256", "manifestIdentity", "sourceEvidence", "manifest", "complete", "sizeBytes", "deviceSource")).put("available", true)) +
+        state.stagedPackages.filterNot { it.optString("selectionId") == actual.optString("selectionId") }
     /** IDs/digests come from the original Book list, never a remote path or model JSON. */
     fun selectDevicePackage(attachmentId: String, sha256: String) {
         requireOwner(); if (state.busy || state.pendingImport != null || state.pendingFreeze != null) return
@@ -453,9 +592,12 @@ internal class ProjectPackageCoordinator(
         if (!visible) { cancel(); closePreview() }
         else processPickerResults()
     }
-    fun leavePrivate() { invalidateTaskExportSelection(); pendingTeamResult = null; pendingTeamIntent = null; mounted = false; retainPosition(); cancel(); state = state.copy(preview = null, artifact = null, selection = null, staged = null, importPlan = null) }
+    fun leavePrivate() { retireOwnerSourcePicker(); invalidateTaskExportSelection(); pendingTeamResult = null; pendingTeamIntent = null; mounted = false; retainPosition(); cancel(); state = state.copy(preview = null, artifact = null, selection = null, staged = null, importPlan = null) }
     fun cancel() {
+        val source = hostSourceWait
+        source?.active = false
         generation++; control?.cancel(); future?.cancel(true); control = null; future = null
+        if (source != null) finishHostSource(source, null, "已停止本次等待。已固定的临时选集可在项目中核对，未创建或执行工程。")
         taskExport?.let { selected ->
             if (selected.phase == "checking") {
                 selected.selected = false
@@ -468,7 +610,7 @@ internal class ProjectPackageCoordinator(
         }
         state = state.copy(busy = false, notice = if (state.pendingFreeze != null || state.pendingImport != null) "等待已停止。写入结果尚需核对原动作，未自动重试。" else state.notice)
     }
-    fun detach() { invalidateTaskExportSelection(); cancel(); closed = true }
+    fun detach() { retireOwnerSourcePicker(); invalidateTaskExportSelection(); cancel(); closed = true }
     private fun matches(pin: JSONObject) = !closed && mounted && privateOwner() && pin.optString("checkoutId") == state.checkoutId.orEmpty() && pin.optString("projectId") == state.projectId.orEmpty()
     private fun work(ownerCurrent: (() -> Boolean)? = null, onFailure: ((Exception) -> Unit)? = null, call: (RunControl, Long) -> (() -> Unit)) {
         if (ownerCurrent == null) requireOwner() else check(!closed && privateOwner() && ownerCurrent()) { "原固定包导出窗口已变化" }
@@ -498,16 +640,22 @@ internal class ProjectPackageCoordinator(
     /** Small native locators only. No file bytes, URI permissions, confirmation or auto-execution. */
     fun save(out: Bundle) {
         retainPosition()
+        webSourcePin?.let { out.putString("ownerLocalSourcePosition", it.toString()) }
         out.putString("projectPackageActions", org.json.JSONArray(positions.values.toList().takeLast(41)).toString())
         pickerImport?.let { out.putString("projectPackageImportPicker", it.toString()) }; pickerExport?.let { out.putString("projectPackageExportPicker", it.toString()) }
         state.exportStatus?.let { out.putString("projectPackageExportStatus", it.toString()) }
     }
     fun restore(saved: Bundle?) {
         runCatching {
+            webSourcePin = saved?.getString("ownerLocalSourcePosition")?.takeIf { it.length <= 4096 }?.let(::JSONObject)?.takeIf {
+                it.optString("mode") == "new_project" && !it.has("targetCheckoutId") &&
+                    listOf("planDigest", "sourceEvidenceSha256", "manifestIdentity", "packageSha256").all { key -> it.optString(key).matches(Regex("[a-f0-9]{64}")) } &&
+                    listOf("clientImportId", "selectionId", "projectName").all { key -> it.optString(key).isNotBlank() }
+            }
             saved?.getString("projectPackageActions")?.takeIf { it.length <= 131072 }?.let { text ->
                 org.json.JSONArray(text).objects().take(41).forEach { pin -> positions[positionKey(pin.optString("projectId"), pin.optString("checkoutId"))] = pin }
             }
-            pickerImport = saved?.getString("projectPackageImportPicker")?.takeIf { it.length <= 1024 }?.let(::JSONObject)
+            pickerImport = saved?.getString("projectPackageImportPicker")?.takeIf { it.length <= 1024 }?.let(::JSONObject)?.takeUnless { it.optBoolean("ownerSourcePicker") }
             pickerExport = saved?.getString("projectPackageExportPicker")?.takeIf { it.length <= 4096 }?.let(::JSONObject)
             restoredPicker = pickerImport != null || pickerExport != null
             saved?.getString("projectPackageExportStatus")?.takeIf { it.length <= 4096 }?.let { text ->

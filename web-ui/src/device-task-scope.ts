@@ -13,7 +13,9 @@ const sameResource = (a: ScopeData, b: ScopeData): boolean => {
     : JSON.stringify(value) ?? 'null';
   return canonical(a) === canonical(b);
 };
+export const phoneTextOnly = (route: ScopeData) => route.textReturnContract === 'pocketworld.original-phone-allocation.owner-reviewed-text.v1';
 export function routeTitle(option: ScopeData, human = false): string {
+  if (phoneTextOnly(option)) return "只让这部手机处理文字";
   const scope = option.resourceBinding || {};
   const phone = scope.screenMode === 'main_screen' ? '主屏' : scope.screenMode === 'background' ? '独立屏' : '';
   if (phone) return human ? '由你操作对方手机' + phone : option.kind === 'goal' ? '让对方手机在' + phone + '完成目标' : '本机助手使用对方手机' + phone + '工具';
@@ -47,7 +49,9 @@ const integer = (value: string, min: number, max: number, label: string) => {
 };
 /** Only translates user choices. The native Window resolves every option and validates authority. */
 export function scopeSelection(view: ScopeData, drafts: Record<string, RouteDraft>, now = Date.now()): ScopeData[] {
-  return scopeRows(view.options).filter(option => drafts[option.optionId]?.selected).map(option => {
+  const selected=scopeRows(view.options).filter(option => drafts[option.optionId]?.selected);
+  if(selected.length>1 && selected.some(phoneTextOnly)) throw new Error('只派发文字时不能同时使用屏幕或其他范围。请只保留一个选择。');
+  return selected.map(option => {
     const draft = drafts[option.optionId];
     if (draft.missingShares.length) throw new Error('请明确处理当前无法核对的旧下游选择，再保存范围。');
     const toolBudget = integer(draft.tools, view.humanInputOnly ? 2 : option.kind === 'goal' ? 0 : 1, Math.min(400, option.toolBudgetMaximum, view.humanInputOnly ? Math.floor(Number(view.toolsAvailable) / 2) : 400), '工具份额');

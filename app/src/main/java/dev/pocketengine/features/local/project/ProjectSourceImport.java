@@ -129,6 +129,19 @@ public final class ProjectSourceImport {
     }
     public static long copyArchive(InputStream input,File target,Current current)throws Exception{return copy(input,target,ProjectPackageArchive.MAX_ARCHIVE_BYTES,current).bytes;}
     public static String fileSha(File file,Current current)throws Exception{if(Files.isSymbolicLink(file.toPath())||!file.isFile())throw new SecurityException("源码暂存不是普通文件");try(InputStream input=Files.newInputStream(file.toPath(),LinkOption.NOFOLLOW_LINKS)){return copy(input,null,ProjectPackageArchive.MAX_ARCHIVE_BYTES,current).sha;}}
+    /** These are already verified, explicitly chosen TEXT originals on this phone, not a live host tree or a SAF grant. */
+    public static Selection savedHost(ProjectHostSource capture, File root, Current current)throws Exception {
+        freshDirectory(root);current.check();
+        for(String name:capture.paths()){
+            current.check();
+            Files.write(target(root,path(name)).toPath(),capture.bytes(name),java.nio.file.StandardOpenOption.WRITE,
+                java.nio.file.StandardOpenOption.CREATE_NEW,LinkOption.NOFOLLOW_LINKS);
+        }
+        JSONObject original=capture.evidence();
+        String label="主机成果-"+original.getString("snapshotVersion").substring(0,Math.min(12,original.getString("snapshotVersion").length()));
+        Selection selection=finish(root,capture.selectionId,label,"host_saved_snapshot",false,new JSONArray(),original,current);
+        ProjectHostSource.requireManifest(selection.evidence(),selection.frozen.manifest());return selection;
+    }
     /** Only the original managed Git reader can create Result. The portable
      * source package intentionally excludes .git; native publication separately
      * copies that exact, reviewed metadata into the new unpublished checkout. */

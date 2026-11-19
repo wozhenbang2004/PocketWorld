@@ -35,7 +35,7 @@ internal class PocketWebDocumentFence(private val issue: () -> String = { UUID.r
 
 /** Separately fences commands already passed from the host into the bridge's own main queue. */
 internal class PocketWebCommandFence {
-    private var generation = 0L
+    @Volatile private var generation = 0L
     fun ticket(): Long = generation
     fun invalidate() { generation++ }
     fun accepts(ticket: Long): Boolean = ticket == generation

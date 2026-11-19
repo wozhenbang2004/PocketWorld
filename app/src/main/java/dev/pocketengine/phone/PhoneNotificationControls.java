@@ -18,7 +18,24 @@ public final class PhoneNotificationControls {
     public static boolean handles(String action){return PhoneRunService.STOP.equals(action)||PAUSE.equals(action)||RESUME.equals(action);}
     public static Intent command(Context context,String action,JSONObject task)throws Exception {
         if(!handles(action))throw new IllegalArgumentException("不支持的手机通知动作");
-        return identify(new Intent(context,PhoneRunService.class).setAction(action),action,task);
+        Intent identified=identify(new Intent(context,PhoneRunService.class).setAction(action),action,task);
+        if(!RESUME.equals(action))return identified;
+        // Older callers may retain an unconfirmed request; dispatch will refuse it, never bind it to a later pause.
+        try{return reviewedResume(context,task,identified);}catch(Exception unavailable){return identified;}
+    }
+    public static Intent reviewedResume(Context context,JSONObject task)throws Exception{
+        return reviewedResume(context,task,identify(new Intent(context,PhoneRunService.class).setAction(RESUME),RESUME,task));
+    }
+    private static Intent reviewedResume(Context context,JSONObject task,Intent identified)throws Exception{
+        if(!(context.getApplicationContext() instanceof EngineApplication app))throw new SecurityException("原手机宿主不可用");
+        String id=task.getString("id"),run=task.getString("runId");int epoch=task.getInt("coordinatorEpoch");RunControl original=app.control(id);
+        if(original==null||!original.matchesHostRun(id,run,epoch)||!original.isPaused()||original.isCancelled())throw new SecurityException("原暂停已变化");
+        long pause=original.pauseRevision();if(!original.ownerPausedAt(pause))throw new SecurityException("请从原任务处理这次等待");
+        long scope=app.tasks.notificationResumeScope(id,run,epoch,original,pause);
+        if(scope<1||original!=app.control(id)||!original.ownerPausedAt(pause))throw new SecurityException("原暂停或范围已变化");
+        String handle=original.notificationPauseHandle(pause);
+        return identified.setData(identified.getData().buildUpon().appendPath(Long.toString(pause)).appendPath(Long.toString(scope)).appendPath(handle).build())
+                .putExtra("reviewedPhonePause",pause).putExtra("reviewedPhoneScope",scope).putExtra("originalPauseHandle",handle);
     }
     public static final String OWNER_RETURN="dev.pocketengine.PHONE_OWNER_RETURN_STEP";
     /** This single immutable notification belongs to one refusal, pause and retained service hold.
@@ -78,7 +95,17 @@ public final class PhoneNotificationControls {
             if(PhoneRunService.STOP.equals(intent.getAction())){if(active)app.stopOriginalPhoneRun(id,run,epoch);else original.cancel();return true;}
             if(!active||original.isCancelled())return false;
             if(PAUSE.equals(intent.getAction())){if(!original.isPaused())app.pauseOriginalPhoneRun(id,run,epoch);}
-            else if(original.isPaused())app.resumeOriginalPhoneRun(id,run,epoch);
+            else{
+                long pause=intent.getLongExtra("reviewedPhonePause",-1),scope=intent.getLongExtra("reviewedPhoneScope",-1);
+                String handle=intent.getStringExtra("originalPauseHandle");
+                if(handle==null||handle.length()!=36){app.error("旧通知不含原暂停凭据，未恢复手机操作");return false;}
+                Uri expected=new Uri.Builder().scheme("pocketengine-phone").authority("owner").appendPath(RESUME).appendPath(id).appendPath(run)
+                        .appendPath(Integer.toString(epoch)).appendPath(Long.toString(pause)).appendPath(Long.toString(scope)).appendPath(handle).build();
+                if(pause<1||scope<1||!expected.equals(intent.getData())||!original.matchesNotificationPause(handle,pause)){
+                    app.error("这条通知不属于当前暂停，没有继续手机操作；请打开原任务核对");return false;
+                }
+                app.resumeNotifiedPhoneRun(id,run,epoch,pause,scope,handle);
+            }
             return true;
         } catch(Exception unavailable) {
             if(nativeOwner&&PhoneRunService.STOP.equals(intent.getAction()))original.cancel();

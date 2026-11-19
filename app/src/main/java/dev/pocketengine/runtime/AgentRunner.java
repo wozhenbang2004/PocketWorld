@@ -137,6 +137,7 @@ public final class AgentRunner {
     private AgentRunner(PhonePort phone,CapabilityPort capabilities,ContextBudgetPolicy.Source contextBudgets,
                 RequestProjection requestProjection,OwnerInputs ownerInputs,NativeInstructionProfile profile,RequestClockContext requestClock){
         this.instructionProfile=java.util.Objects.requireNonNull(profile);
+        if(profile==NativeInstructionProfile.PAIRED_DEVICE_TEXT&&phone!=null)throw new IllegalArgumentException("纯文字设备任务不能绑定物理手机口");
         this.requestClock=java.util.Objects.requireNonNull(requestClock);
         if(phone==null&&capabilities==null)throw new IllegalArgumentException("An actual executor port is required");
         this.phone=phone;this.capabilities=capabilities;
@@ -616,6 +617,9 @@ public final class AgentRunner {
                 historyTurnPrepared.set(true);
                 tools=intent.filter(tools,this::intentEffecting);
                 tools=planningTools(tools,planning,turnPlanning);
+                // The peer text contract authorizes a model answer, not even a global outcome/phase tool.
+                // Seal the complete catalog AFTER every contribution and before budgeting, routing or any provider adapter.
+                if(instructionProfile==NativeInstructionProfile.PAIRED_DEVICE_TEXT)tools=new JSONArray();
                 if(boundedToolCatalog)dev.pocketengine.core.ScopedToolCatalog.requireModelRequestBudget(tools);
                 withdrawHistoricalImages(screens,history,control);
                 // Keep current native control facts separate from untrusted memory/extension/recovery data.
@@ -644,6 +648,7 @@ public final class AgentRunner {
                 java.util.List<String> requestedOwnerIds=ownerMessageIds(requestHistory);
                 final String[] nativeRequest={""}, nativeTraceMember={""}, nativeTraceTurn={""};JSONObject response;
                 boolean nativeApprovedResponse=approvedCall!=null;
+                if(nativeApprovedResponse&&instructionProfile==NativeInstructionProfile.PAIRED_DEVICE_TEXT)throw new SecurityException("零工具原任务不能续接工具调用");
                 if(nativeApprovedResponse){response=approvedCall.take(history,control);approvedCall=null;}
                 else {
                 final RequestHistoryProjection materializedHistory=RequestHistoryProjection.prepare(requestProjection,nativeProvenance,config,control,privatePreferencesProvided);
@@ -876,6 +881,12 @@ public final class AgentRunner {
                 try{if(!nativeApprovedResponse)stepRouting.requireLightCurrent();}catch(ModelGateway.RequestRefreshRequired changed){
                     if(capabilities!=null)capabilities.modelRequestAbandoned(nativeRequest[0]);continue modelTurns;
                 }
+                if(instructionProfile==NativeInstructionProfile.PAIRED_DEVICE_TEXT&&!response.isNull("tool_calls")
+                        &&(response.optJSONArray("tool_calls")==null||response.getJSONArray("tool_calls").length()!=0)){
+                    // A mixed text + unsolicited call is not a text result. Never checkpoint it as an answer or dispatch it.
+                    if(capabilities!=null)capabilities.modelRequestAbandoned(nativeRequest[0]);
+                    return finish(taskId,"failed","模型返回了原文字任务未授权的工具调用；未执行，也没有可交回的文字结果。",new JSONObject().put("unsolicitedToolRejected",true),steps,config,sink);
+                }
                 if(!nativeApprovedResponse&&!stepRouting.acceptLightResponse(response,capabilities)){
                     if(capabilities!=null)capabilities.modelRequestAbandoned(nativeRequest[0]);
                     stepRouting.rejectLight();
@@ -929,6 +940,8 @@ public final class AgentRunner {
                     requirePlanningCurrent(planning,turnPlanning);
                     RunControl.HostRunIdentity finalRun=control.hostRunIdentity();
                     if(finalRun!=null){evidence.put("nativeFinalAnswer",new JSONObject().put("format","pocketworld.runner-final-answer.v1").put("taskId",taskId).put("runId",finalRun.runId()).put("coordinatorEpoch",finalRun.epoch()).put("messageIndex",finalAnswerIndex).put("historyLength",history.length()).put("answerFingerprint",CompactionPlan.fingerprint(finalMessage.getString("content"))).put("inputBoundaryEmpty",true));if(routes!=null){JSONObject candidate=routes.candidate(control);if(candidate!=null)evidence.put("nativePhoneRoute",candidate);}checkpoint(taskId,journal,history,steps,evidence,config,sink,contextBudget,repeatedTools);}
+                    if(instructionProfile==NativeInstructionProfile.PAIRED_DEVICE_TEXT)
+                        return finish(taskId,"needs_confirmation",clean(answer,config),evidence,steps,config,sink);
                     String verificationNotice = !intent.deviceReadAllowed()?"以下仅为讨论答复；没有读取或操作设备。":!DeferredPhoneSession.initialized(phone)?"以下答复基于实际工具结果；本次未启用手机，外部效果仍以对应收据为准。":evidence.optBoolean("ok", true) ? "模型已结束操作，请核对当前页面。" : "结果页面暂时无法重新读取，请在手机上亲自确认。";
                     return finish(taskId, "needs_confirmation", verificationNotice + "\n" + clean(answer, config), evidence, steps, config, sink);
                 }

@@ -12,13 +12,16 @@ import org.json.JSONObject;
 final class ReceivedPhoneGoalIndex {
     private ReceivedPhoneGoalIndex() {}
 
-    static JSONObject read(SQLiteDatabase db, String here, String localInstance, String source, String afterTask, String afterOp) throws Exception {
-        return scan(db,here,localInstance,DeviceProtocol.deviceId(source,"callerDeviceId"),afterTask,afterOp,false);
+    static JSONObject read(SQLiteDatabase db,String here,String localInstance,String source,String afterTask,String afterOp)throws Exception {
+        return read(db,here,localInstance,source,afterTask,afterOp,"");
+    }
+    static JSONObject read(SQLiteDatabase db, String here, String localInstance, String source, String afterTask, String afterOp,String searchText) throws Exception {
+        return scan(db,here,localInstance,DeviceProtocol.deviceId(source,"callerDeviceId"),afterTask,afterOp,false,new LocalPhoneGoalSearch(searchText));
     }
     static JSONObject waiting(SQLiteDatabase db,String here,String localInstance,String afterCaller,String afterOp,boolean results)throws Exception{
-        return scan(db,here,localInstance,null,afterCaller,afterOp,results);
+        return scan(db,here,localInstance,null,afterCaller,afterOp,results,new LocalPhoneGoalSearch(""));
     }
-    private static JSONObject scan(SQLiteDatabase db,String here,String localInstance,String issuer,String anchorId,String afterOp,boolean results)throws Exception{
+    private static JSONObject scan(SQLiteDatabase db,String here,String localInstance,String issuer,String anchorId,String afterOp,boolean results,LocalPhoneGoalSearch search)throws Exception{
         DeviceProtocol.deviceId(here,"targetDeviceId"); DeviceProtocol.identifier(localInstance,"instanceId");
         boolean waiting=issuer==null; String where=" WHERE i.method='task.submitGoal'";
         ArrayList<String> args=new ArrayList<>();
@@ -45,17 +48,19 @@ final class ReceivedPhoneGoalIndex {
                 task=c.getString(0); op=c.getString(1); source=c.getString(8);
                 if (here.equals(source) || c.isNull(6) || c.isNull(7) || c.getLong(2)<=0 || c.getLong(5)<=0) continue;
                 try {
-                    JSONObject wire=new JSONObject(c.getString(6)), header=new JSONObject(c.getString(7)); boolean textOnly=DeviceProtocol.isDirectTextReturn(wire);
+                    JSONObject wire=new JSONObject(c.getString(6)), header=new JSONObject(c.getString(7)); boolean textOnly=DeviceProtocol.ownerTextRequest(wire);
                     if(waiting && !results && (!header.optString("runId").isEmpty() || header.optInt("coordinatorEpoch",-1)!=0 || !Boolean.FALSE.equals(header.opt("cancelRequested"))
                             || !("queued".equals(header.opt("status"))||"awaiting_user".equals(header.opt("status"))||"interrupted".equals(header.opt("status")))))continue;
                     JSONObject origin=header.getJSONObject("origin"); String parent=wire.getString("parentTaskId"), digest=c.getString(3);
                     if (!here.equals(wire.opt("targetDeviceId")) || !localInstance.equals(wire.opt("instanceId"))
+                            || !source.equals(wire.opt("callerDeviceId")) || !source.equals(wire.opt("originDeviceId"))
                             || !(DeviceProtocol.isDirectPhoneGoal(wire,source,parent,op)||textOnly) || !task.equals(DeviceProtocol.receiverTaskId(wire))
                             || !digest.equals(wire.opt("argumentsDigest")) || !digest.equals(DeviceProtocol.argumentsDigest(wire))
                             || !c.getString(4).equals(wire.opt("grantId")) || c.getLong(5)!=wire.getLong("authorizationEpoch")) continue;
                     String mode=wire.getJSONObject("resourceBinding").getString("screenMode");
-                    if(textOnly&&!DeviceProtocol.TEXT_RETURN.equals(origin.opt("textReturnContract")))continue;
-                    if (!task.equals(header.opt("id")) || !"phone".equals(header.opt("kind")) || !mode.equals(header.opt("executionMode"))
+                    if(textOnly&&!wire.getJSONObject("arguments").getString("textReturnContract").equals(origin.opt("textReturnContract")))continue;
+                    boolean zero=wire.getJSONObject("budget").optLong("toolCalls",-1)==0;
+                    if (!task.equals(header.opt("id")) || !DeviceProtocol.receivedHostMatches(mode,zero,header)
                             || !("paired_device:"+source).equals(header.opt("actorId")) || !("device:"+source).equals(header.opt("spaceId"))
                             || !"paired_device".equals(origin.opt("kind")) || !source.equals(origin.opt("callerDeviceId")) || !source.equals(origin.opt("originDeviceId"))
                             || !here.equals(origin.opt("targetDeviceId")) || !op.equals(origin.opt("remoteOperationId")) || !parent.equals(origin.opt("rootTaskId"))
@@ -72,13 +77,13 @@ final class ReceivedPhoneGoalIndex {
                         try(Cursor r=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND epoch=? AND run_id=?",
                                 new String[]{task, Integer.toString(review.getInt("epoch")),review.getString("runId")})){if(!r.moveToFirst())continue;}
                     }
-                    String goal=wire.getJSONObject("arguments").getString("goal"); if (goal.trim().isEmpty()) continue;
+                    String goal=wire.getJSONObject("arguments").getString("goal"); if (goal.trim().isEmpty()||!search.matches(goal)) continue;
                     if (goal.codePointCount(0,goal.length())>160) goal=goal.substring(0,goal.offsetByCodePoints(0,160))+"…";
                     items.put(new JSONObject().put("taskId",task).put("operationId",op).put("argumentsDigest",digest)
-                            .put("sourceDeviceId",source).put("textOnly",textOnly?true:null).put("reviewRun",review==null?null:review.getString("runId"))
+                            .put("sourceDeviceId",source).put("textOnly",textOnly||zero&&"assistant".equals(header.opt("kind"))?true:null).put("reviewRun",review==null?null:review.getString("runId"))
                             .put("reviewEpoch",review==null?null:review.getInt("epoch")).put("reviewRecordedAt",review==null?null:review.getLong("recordedAt"))
                             .put("waitingState",results?"result_review":waiting?("interrupted".equals(header.opt("status"))?"interrupted_before_start":"not_started"):null).put("originDigest",DeviceProtocol.sha256(DeviceProtocol.canonicalBytes(origin))).put("screenMode",mode)
-                            .put("goal",goal).put("createdAt",c.getLong(2)));
+                            .put("goal",goal).put("matchedLater",search.beyondPreview(goal)?true:null).put("createdAt",c.getLong(2)));
                 } catch (JSONException | DeviceProtocol.ProtocolException invalid) { /* Never replace missing provenance with a nearby task. */ }
             }
         }
@@ -92,8 +97,8 @@ final class ReceivedPhoneGoalIndex {
         JSONObject origin=source.optJSONObject("origin");String caller=origin==null?"":origin.optString("callerDeviceId");
         if(origin==null||!"paired_device".equals(origin.opt("kind"))||caller.isEmpty()||!caller.equals(origin.opt("originDeviceId"))
                 ||!origin.optString("rootTaskId").equals(origin.opt("parentTaskId"))||!("paired_device:"+caller).equals(source.opt("actorId"))
-                ||!("device:"+caller).equals(source.opt("spaceId"))||!(DeviceProtocol.acceptedTextReturn(source)||"main_screen".equals(source.opt("executionMode"))||"background".equals(source.opt("executionMode"))))return null;
-        if(!"GOAL".equals(source.opt("deviceExecutionKind"))||!"phone".equals(source.opt("kind"))||!"needs_confirmation".equals(source.opt("status"))
+                ||!("device:"+caller).equals(source.opt("spaceId"))||DeviceProtocol.receivedPhoneScopeMode(source).isEmpty())return null;
+        if(!"needs_confirmation".equals(source.opt("status"))
                 ||run.isEmpty()||epoch<1||result==null||!"needs_confirmation".equals(result.opt("status"))
                 ||!Boolean.FALSE.equals(result.opt("closed"))||!Boolean.TRUE.equals(result.opt("nativeRunnerExited"))
                 ||!Boolean.TRUE.equals(result.opt("nativeDispatchClosed"))||!run.equals(result.opt("runId"))||epoch!=result.optInt("executorEpoch",-1)

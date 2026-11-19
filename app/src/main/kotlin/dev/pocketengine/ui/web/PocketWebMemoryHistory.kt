@@ -103,8 +103,11 @@ internal class PocketWebMemoryHistory(private val controller: PocketWorldControl
     }
     private fun taskCurrent(session: Session, saved: JSONObject, done: (JSONObject?, String?) -> Unit, next: (JSONObject, JSONObject) -> Unit) {
         val receipt = saved.getJSONObject("receipt"); val row = saved.getJSONObject("record")
+        fun checkAnswer() { if (saved.has("answerMessageId")) check(binding(controller.webAnswerMemoryReference(saved.getString("answerMessageId"))).toString() == binding(receipt).toString()) { "原回答与提供回执已变化" } }
+        checkAnswer()
         call(session, "readTaskMemoryReceipt", binding(receipt), { value, error ->
             if (value == null) done(null, error) else try {
+                checkAnswer()
                 val checked = checkedReceipt(value)
                 check(checked.opt("receiptId") == receipt.opt("receiptId")) { "原提供回执已变化" }
                 val now = rows(checked.getJSONArray("records")).singleOrNull { it.opt("id") == row.opt("id") } ?: error("原记忆已不在这次提供回执中")
@@ -237,7 +240,12 @@ internal class PocketWebMemoryHistory(private val controller: PocketWorldControl
                 if (original.has("messageId")) check(binding(controller.webAnswerMemoryReference(original.getString("messageId"))).toString() == binding.toString()) { "原回答的记忆引用已变化" }
                 call(session, "readTaskMemoryReceipt", binding, done) { value ->
                     val receipt = checkedReceipt(value); val frozen = copy(receipt)
-                    rows(receipt.getJSONArray("records")).forEach { row -> row.put("readHandle", pinTaskRecord(session, JSONObject().put("receipt", frozen).put("record", copy(row)))) }
+                    rows(receipt.getJSONArray("records")).forEach { row ->
+                        val selected = JSONObject().put("receipt", frozen).put("record", copy(row))
+                        if (original.has("messageId")) selected.put("answerMessageId", original.getString("messageId"))
+                        row.put("readHandle", pinTaskRecord(session, selected))
+                    }
+                    if (original.has("messageId")) receipt.put("answerReadExpiresAt", session.expires)
                     receipt
                 }
             }
@@ -271,6 +279,10 @@ internal class PocketWebMemoryHistory(private val controller: PocketWorldControl
             "taskMemory.review" -> {
                 fields(args, "readHandle", "operation", "text", "replacementHandle"); val (session, original) = selected(args, "readHandle", "task-record"); val operation = text(args, "operation")
                 require(operation in setOf("correct", "forget", "replace"))
+                if (original.has("answerMessageId")) {
+                    val target = original.getJSONObject("record")
+                    check(operation == "correct" && target.opt("personalOwnerReview") == true && target.opt("ownerId") == "owner" && target.opt("spaceId") == "private") { "原回答只能纠正这条当前本人记忆，不能代替其他审核" }
+                }
                 val kept = if (operation == "replace") selected(args, "replacementHandle", "replacement").let { (same, replacement) ->
                     check(same === session && replacement.getJSONObject("original").toString() == original.toString()) { "替代选择不属于这个原版本" }; replacement.getJSONObject("record")
                 } else null
@@ -288,7 +300,16 @@ internal class PocketWebMemoryHistory(private val controller: PocketWorldControl
                 fields(args, "reviewHandle"); val (session, review) = selected(args, "reviewHandle", "task-review", consume = true)
                 taskCurrent(session, review.getJSONObject("original"), done) { receipt, _ ->
                     call(session, review.getString("command"), review.getJSONObject("payload"), done) { result ->
-                        val feedback = TaskMemoryEvidenceGuard.feedback(result, receipt, review.getString("command"), review.getJSONObject("payload")); retire(session); result.put("feedback", feedback)
+                        val command = review.getString("command")
+                        val feedback = TaskMemoryEvidenceGuard.feedback(result, receipt, command, review.getJSONObject("payload")); retire(session)
+                        if (command == "correctTaskMemoryReviewed" && review.getJSONObject("original").has("answerMessageId")) {
+                            // Keep other task cleanup metadata and unrelated derivation IDs in the original native journal.
+                            check(result.opt("executionAuthorized") == false) { "原纠正回执不完整" }
+                            val projected = JSONObject().put("feedback", feedback).put("executionAuthorized", result.getBoolean("executionAuthorized"))
+                            for (key in listOf("taskId","runId","requestId","answerId","receiptId")) projected.put(key,result.getString(key))
+                            val row = result.getJSONObject("record")
+                            projected.put("record", JSONObject().also { record -> for (key in listOf("id","revision","text","ownerId","spaceId")) record.put(key,row.get(key)) })
+                        } else result.put("feedback", feedback)
                     }
                 }
             }

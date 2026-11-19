@@ -5,6 +5,7 @@ import { Drawer } from './shell-library';
 import { Button, IconButton } from './forms-library';
 import { memoryHistoryStatus, taskMemoryVisibleRecords } from './memory-history';
 import './source-reading.css';
+import {AnswerMemoryCorrection,canCorrectProvided} from './AnswerMemoryCorrection';
 
 type Data = Record<string, any>;
 type SourceCursor = { index: number; offset: number; previous: number[] };
@@ -19,12 +20,13 @@ export function ProvidedMemories({ messageId, revision, onClose, onManage, regis
   const [receipt, setReceipt] = useState<Data | null>(null), [selected, setSelected] = useState<Data | null>(null);
   const [source, setSource] = useState<Data | null>(null), [error, setError] = useState(''), [busy, setBusy] = useState(true);
   const [sourceCursor, setSourceCursor] = useState<SourceCursor | null>(null);
-  const [refresh, setRefresh] = useState(0);
+  const [refresh, setRefresh] = useState(0), [correcting,setCorrecting]=useState(false), [outcome,setOutcome]=useState('');
+  const correctionBack=useRef<(()=>boolean)|null>(null), attention=useRef(0);
   const session = useRef(''), generation = useRef(0), live = useRef(true), reading = useRef<number | null>(null);
   const closeSession = () => { const id = session.current; session.current = ''; if (id) void bridge.command('memoryHistory.close', { handle: id }).catch(() => {}); };
   useEffect(() => { live.current = true; return () => { live.current = false; generation.current++; closeSession(); }; }, []);
   useEffect(() => {
-    const version = ++generation.current; reading.current = null; closeSession(); setReceipt(null); setSelected(null); setSource(null); setSourceCursor(null); setError(''); setBusy(true);
+    const version = ++generation.current; reading.current = null; closeSession(); setCorrecting(false); setReceipt(null); setSelected(null); setSource(null); setSourceCursor(null); setError(''); setBusy(true);
     const current = () => live.current && generation.current === version;
     void (async () => {
       try {
@@ -42,19 +44,23 @@ export function ProvidedMemories({ messageId, revision, onClose, onManage, regis
     })();
   }, [messageId, revision, refresh]);
   useEffect(() => {
-    const hidden = () => {
-      if (document.visibilityState !== 'visible') {
-        generation.current++; reading.current = null; closeSession(); setReceipt(null); setSelected(null); setSource(null); setSourceCursor(null); setBusy(false);
-        setError('已离开原阅读窗口，返回后请重新核对这条回答。');
-      }
-    };
-    document.addEventListener('visibilitychange', hidden); return () => document.removeEventListener('visibilitychange', hidden);
+    let documentEpoch=bridge.getDocumentEpoch();
+    const retire=()=>{attention.current++;generation.current++;reading.current=null;closeSession();setCorrecting(false);setOutcome('');setReceipt(null);setSelected(null);setSource(null);setSourceCursor(null);setBusy(false);
+      setError('已离开原阅读窗口，返回后请重新核对这条回答。')};
+    const hidden=()=>{if(document.hidden)retire()};
+    const off=bridge.subscribe(()=>{const next=bridge.getDocumentEpoch();if(next!==documentEpoch){documentEpoch=next;retire()}});
+    document.addEventListener('visibilitychange',hidden);return()=>{off();document.removeEventListener('visibilitychange',hidden)};
   }, []);
+  useEffect(()=>{
+    const expires=receipt?.answerReadExpiresAt;if(!Number.isSafeInteger(expires))return;
+    const timer=setTimeout(()=>{attention.current++;generation.current++;reading.current=null;closeSession();setCorrecting(false);setReceipt(null);setSelected(null);setSource(null);setSourceCursor(null);setBusy(false);setError('原回答阅读窗口已过期，请重新核对。')},Math.max(0,expires-Date.now()));
+    return()=>clearTimeout(timer);
+  },[receipt]);
   const returnToMemories = () => {
     generation.current++; reading.current = null; setSelected(null); setSource(null); setSourceCursor(null); setError(''); setBusy(false);
   };
   useEffect(() => {
-    registerBack(() => { if (selected) returnToMemories(); else onClose(); return true; });
+    registerBack(() => { if(correctionBack.current?.()) return true; if (selected) returnToMemories(); else onClose(); return true; });
     return () => registerBack(null);
   }, [selected, registerBack, onClose]);
   const readSource = async (index: number, offset = 0, previous: number[] = []) => {
@@ -79,7 +85,10 @@ export function ProvidedMemories({ messageId, revision, onClose, onManage, regis
   const groups = preferences.length
     ? [{ title: '偏好类记忆', items: preferences }, { title: '同次请求的其他条目', items: records.filter(row => !isPreference(row)) }]
     : [{ title: '', items: records }];
-  return <Drawer.Root open onOpenChange={open => { if (!open) onClose(); }} shouldScaleBackground={false}><Drawer.Portal>
+  const canCorrect = canCorrectProvided(receipt,selected) && ['taskMemory.review','taskMemory.confirm'].every(action=>bridge.getState().capabilities.commands.includes(action));
+  const attended=attention.current;
+  const finishCorrection=(message:string)=>{if(!live.current||document.hidden||attention.current!==attended)return;setOutcome(message);setCorrecting(false);setReceipt(null);setSelected(null);setSource(null);setSourceCursor(null);setRefresh(n=>n+1)};
+  return <Drawer.Root open onOpenChange={open => { if (!open && !correctionBack.current?.()) onClose(); }} shouldScaleBackground={false}><Drawer.Portal>
     <Drawer.Overlay className="pw-overlay"/><Drawer.Content className="pw-drawer pw-answer-sources" aria-describedby="provided-memory-description">
       <div className="pw-drawer-handle"/><header className="pw-drawer-header">
         {selected && <IconButton icon={IconChevronLeft} aria-label="返回本次记忆列表" disabled={busy} onClick={returnToMemories}/>}<div><Drawer.Title>{selected ? '这条记忆' : provided ? '本次提供的记忆' : '核对本次记忆'}</Drawer.Title></div>
@@ -87,6 +96,7 @@ export function ProvidedMemories({ messageId, revision, onClose, onManage, regis
       </header>
       <Drawer.Description id="provided-memory-description" className="pw-source-description">{!provided ? '在这里核对这条回答的原请求，不用现在的设置或新的检索代替。' : selected ? '这条记忆曾提供给模型。可以对照原来源，但不能据此断定模型读过原文。' : '下列记忆条目有原请求的提供回执，不代表模型采用了它们。'}</Drawer.Description>
       <div className="pw-drawer-body">
+        {outcome&&<p className="pw-muted" role="status">{outcome}</p>}
         {busy && <p className="pw-muted" role="status">正在核对原请求与记忆版本…</p>}{error && <p className="pw-error" role="alert">{error}</p>}
         {receipt && !provided && <p className="pw-muted">这条回答的原生提供回执当前不可读，未用新的检索结果代替。</p>}
         {provided && !selected && <>
@@ -101,6 +111,7 @@ export function ProvidedMemories({ messageId, revision, onClose, onManage, regis
         {selected && <>
           <p className="pw-source-copy" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{selected.text}</p>
           <p className="pw-muted">{selected.source || '原记忆记录'} · {statusLabel(selected.status)}{selected.expiresAt ? ` · 有效至 ${new Date(selected.expiresAt).toLocaleDateString()}` : ''}</p>
+          {canCorrect&&<Button variant="ghost" size="small" disabled={busy} onClick={()=>{setSource(null);setSourceCursor(null);setCorrecting(true)}}>纠正这条已保存记忆</Button>}
           {rows(selected.sourceRefs).length ? <div className="pw-action-row">{rows(selected.sourceRefs).map((_, index) => <Button key={index} variant="secondary" disabled={busy} onClick={() => void readSource(index)}>查看原来源 {index + 1}</Button>)}</div> : <p className="pw-muted">这条记录未附原文来源；显示的内容是保存的记忆。</p>}
           {source && <section className="pw-source-record"><h3>{source.title || '原来源'}</h3>{source.status && source.status !== 'current' ? <p className="pw-muted">{memoryHistoryStatus(source.status)}，未显示旧正文。</p> : <p className="pw-source-copy" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{source.text}</p>}
             <div className="pw-action-row">{source.previous.length > 0 && <Button variant="ghost" disabled={busy} onClick={() => void readSource(source.index, source.previous.at(-1), source.previous.slice(0, -1))}>上一段原文</Button>}{source.hasMore && <Button variant="ghost" disabled={busy} onClick={() => void readSource(source.index, source.nextOffset, [...source.previous, source.offset])}>继续读取原文</Button>}</div>
@@ -108,6 +119,7 @@ export function ProvidedMemories({ messageId, revision, onClose, onManage, regis
           {error && sourceCursor && <Button variant="secondary" disabled={busy} onClick={() => void readSource(sourceCursor.index, sourceCursor.offset, sourceCursor.previous)}>重试读取本段</Button>}
         </>}
       </div>
+      {correcting&&canCorrect&&receipt&&selected&&<AnswerMemoryCorrection key={selected.readHandle} receipt={receipt} row={selected} backRef={correctionBack} onClose={()=>setCorrecting(false)} onOutcome={finishCorrection}/>}
     </Drawer.Content>
   </Drawer.Portal></Drawer.Root>;
 }

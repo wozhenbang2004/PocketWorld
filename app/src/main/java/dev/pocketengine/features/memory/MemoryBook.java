@@ -211,6 +211,14 @@ public final class MemoryBook {
         public JSONObject existingRecord()throws Exception{return record==null?null:new JSONObject(record);}
         public JSONObject existingCandidate()throws Exception{return candidate==null?null:new JSONObject(candidate);}
     }
+    /** Only the still-pending, exact-revision, pre-write deadline guard can produce this outcome. */
+    public static final class ExpiredPendingCandidateException extends IllegalStateException {
+        public final String candidateId;
+        public final long revision, expiresAt, checkedAt;
+        private ExpiredPendingCandidateException(String id,long revision,long expiresAt,long checkedAt){
+            super("这条建议已到期，不能采纳");this.candidateId=id;this.revision=revision;this.expiresAt=expiresAt;this.checkedAt=checkedAt;
+        }
+    }
     /** Native explicit personal form only. Ordinary save/import/update keep their contracts. */
     public synchronized JSONObject savePersonalNoteForOwner(JSONObject authenticatedScope,String text,String layer,Long expiresAt,long now)throws Exception {
         Scope scope=MemoryArchive.ownerScope(authenticatedScope);JSONObject draft=PersonalMemorySemantics.ownerNote(text,layer,expiresAt,now);
@@ -507,7 +515,8 @@ public final class MemoryBook {
             return new JSONObject().put("candidate",copy(old)).put("record",copy(require(scope,old.getString("acceptedRecordId"))));
         }
         requirePending(old,revision);JSONArray refs=old.getJSONArray("sourceRefs");verifyCandidateSources(scope,old,now);
-        if(expiryTime(old.opt("expiresAt"))<=now)throw new IllegalStateException("这条候选已过有效期，请先核对并修改期限");
+        Object deadline=checkedExpiry(old.opt("expiresAt"));
+        if(deadline instanceof Number&&((Number)deadline).longValue()<=now)throw new ExpiredPendingCandidateException(id,revision,((Number)deadline).longValue(),now);
         JSONObject duplicate=personalRecordDuplicate(scope,old,now);if(duplicate!=null)throw new PersonalMemoryDuplicateException(viewRecord(duplicate),null);
         if(records.size()>=MAX_RECORDS)throw new IllegalStateException("记忆已达到1000条，请先整理或删除");
         String recordId=UUID.randomUUID().toString();
@@ -1641,7 +1650,8 @@ public final class MemoryBook {
         return new JSONObject().put("ownerId",scope.ownerId).put("spaceId",scope.spaceId).put("id",row.getString("id"))
                 .put("revision",row.getLong("revision")).put("selection",selected.getString("selection")).put("sourceRefs",refs);
     }
-    JSONObject taskReferenceState(Scope scope,JSONObject reference)throws Exception {
+    JSONObject taskReferenceState(Scope scope,JSONObject reference)throws Exception {return taskReferenceState(scope,reference,false);}
+    JSONObject taskReferenceState(Scope scope,JSONObject reference,boolean ownerManagementView)throws Exception {
         JSONObject result=copy(reference);String id=reference.getString("id");long revision=reference.getLong("revision");
         JSONObject row=records.get(id);String status="current";JSONArray replacements=new JSONArray();
         if(row==null||!scope.matches(row)){
@@ -1668,6 +1678,9 @@ public final class MemoryBook {
             else if(!retrievalSourcesLive(row,new LinkedHashMap<>()))status="source_unavailable";
         }
         if("current".equals(status)){
+            // UI eligibility from this already checked row. No subject body, new search, or model metadata.
+            if(ownerManagementView&&"owner".equals(scope.ownerId)&&"private".equals(scope.spaceId)&&!row.has("appKnowledge")
+                    &&PersonalMemorySemantics.ownerAssertion(row.optJSONObject("assertion")))result.put("personalOwnerReview",true);
             JSONObject current=viewRecord(row);for(String field:Set.of("text","layer","tier","core","source","confidence","expiresAt","supersedes","supersededAt","validationStatus","applicability"))
                 if(current.has(field))result.put(field,current.get(field));
         }

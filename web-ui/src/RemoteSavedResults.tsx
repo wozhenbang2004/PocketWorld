@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { bridge } from './bridge';
+import {HostSavedProjectPreparation,type HostSourcePin} from './HostSavedProjectPreparation';
 import { Accordion, AccordionItem, Button } from './forms-library';
 import { remoteObject as object, type RemoteData as Data } from './remote-task-workspace';
 
@@ -33,12 +34,13 @@ export function OpenRemoteSavedFile({taskId,row,disabled=false}:{taskId:string;r
 }
 
 /** Source is the selected original TaskStore task, not the remote service or a global file inventory. */
-export function RemoteSavedResults({taskId,rows}:{taskId:string;rows:Data[]}) {
+export function RemoteSavedResults({taskId,rows,openProject}:{taskId:string;rows:Data[];openProject?:(pin:HostSourcePin)=>void}) {
   if(!rows.length)return null;
   const records=rows.length<=64?rows.filter(r=>selection(taskId,r)):[],limited=records.length!==rows.length;
   const files=<>{records.map(row=><div key={JSON.stringify([row.snapshotId,row.path,row.attachment.id])} className="pw-remote-file">
     <div><strong>{row.path}</strong><small>{row.bytes} 字节 · 此任务已存到手机</small></div><OpenRemoteSavedFile taskId={taskId} row={row}/>
-  </div>)}{limited&&<p className="pw-field-hint">有保存记录已无法核对，未改用其他文件。</p>}</>;
+  </div>)}{openProject&&records.length>0&&<HostSavedProjectPreparation task={taskId} files={records.map(row=>({claim:selection(taskId,row)!,bytes:row.bytes}))} openProject={openProject}/>}
+    {limited&&<p className="pw-field-hint">有保存记录已无法核对，未改用其他文件。</p>}</>;
   return records.length===1&&!limited?<section aria-label="本机保存的原成果">{files}</section>:
     <Accordion><AccordionItem id="original-host-files-on-phone" title={`手机已存原件 · ${records.length}`}>{files}</AccordionItem></Accordion>;
 }

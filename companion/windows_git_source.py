@@ -245,6 +245,11 @@ def _tree_id(body, algo):
     return oid.decode("ascii")
 
 
+def repository_anchor(context,environment_id,pins,dot):
+    parts = [PROFILE,context.install_state["installId"],environment_id,pins.nodes[()][3],dot[3]]
+    return hashlib.sha256(json.dumps(parts,separators=(",",":")).encode()).hexdigest()
+
+
 def capture(context, settings_digest, environment_id, *, layout_for=None, content=False, checkpoint=lambda: None, on_count=lambda *_: None, material=None):
     facts = {"format": PROFILE, "environmentId": environment_id, "sourceVerified": False, "projectProduction": False,
              "scope": "committed_head_and_root_tree_only", "treeRecursivelyVerified": False,
@@ -264,8 +269,7 @@ def capture(context, settings_digest, environment_id, *, layout_for=None, conten
             # Recheck this installed workspace AND its .git before opening a
             # replacement's refs. Pin the original head/branch before expanding
             # data; a new tip isn't consent to review that other version.
-            identity = [PROFILE,context.install_state["installId"],environment_id,pins.nodes[()][3],dot[3]]
-            anchor = hashlib.sha256(json.dumps(identity,separators=(",",":")).encode()).hexdigest()
+            anchor = repository_anchor(context,environment_id,pins,dot)
             if layout_for is not None:
                 expected = {"format":PROFILE,"sourceVerified":True,"environmentId":environment_id,"repositoryAnchor":anchor}
                 if any(layout_for.get(k)!=v for k,v in expected.items()): _fail("original_source_changed")

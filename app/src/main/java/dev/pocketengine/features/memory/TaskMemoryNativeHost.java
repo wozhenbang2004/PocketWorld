@@ -105,7 +105,7 @@ public final class TaskMemoryNativeHost {
                 public JSONObject admit(Admission action)throws Exception{synchronized(tasks){check();return action.run();}}
             };
             TaskMemoryUse use=use();
-            if("readTaskMemoryReceipt".equals(command))return use.readTaskMemoryReceipt(authenticated,receipt,fence);
+            if("readTaskMemoryReceipt".equals(command))return use.readOwnerManagementReceipt(authenticated,receipt,fence);
             String id=payload.getString("id");long revision=SourceRef.integer(payload,"expectedRevision",1);
             if("readTaskMemorySource".equals(command))return use.readTaskMemorySource(authenticated,receipt,id,revision,SourceRef.fromJson(payload.getJSONObject("sourceRef")),
                     payload.has("offset")?Math.toIntExact(SourceRef.integer(payload,"offset",0)):0,

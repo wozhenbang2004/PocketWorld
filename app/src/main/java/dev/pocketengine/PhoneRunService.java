@@ -401,7 +401,8 @@ public final class PhoneRunService extends Service {
             PowerManager power=getSystemService(PowerManager.class);wakeLock=power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"PocketEngine:DeviceGoal");wakeLock.setReferenceCounted(false);wakeLock.acquire(30_000L);
             app.setStatus(id,"running","原设备目标在本机已授权模型与准确能力范围执行",original);
             var port=app.deviceGoalCapabilities(session);var journal=app.tasks.journal(id,run,runningEpoch,original);
-            session.runnerStarted();RunOutcome result=new AgentRunner(scopedPhone,port,dev.pocketengine.runtime.context.ContextBudgetPolicy.currentHostSource(),null,app.deviceOwnerInputs().runnerInputs(session)).run(id,runningGoal,runningConfig,original,event->app.record(id,event,original),journal);
+            var profile=session.admission().noPhoneSurface()?dev.pocketengine.runtime.NativeInstructionProfile.PAIRED_DEVICE_TEXT:dev.pocketengine.runtime.NativeInstructionProfile.PHONE;
+            session.runnerStarted();RunOutcome result=new AgentRunner(scopedPhone,port,dev.pocketengine.runtime.context.ContextBudgetPolicy.currentHostSource(),null,app.deviceOwnerInputs().runnerInputs(session),profile).run(id,runningGoal,runningConfig,original,event->app.record(id,event,original),journal);
             var finished=session.runnerFinished(result);if(deadlineReached||original.isCancelled()){finishAttempt(id,run,original,new RunOutcome("cancelled","原设备目标已停止后续派发；已有动作与下游未知效果不冒作已撤销",result.evidence),startId);return;}
             if(result.status.equals("needs_confirmation")){
                 synchronized(this){if(destroyed||original.isCancelled()||app.control(id)!=original)throw new InterruptedException("原设备目标已停止");app.tasks.deviceTasks().recordGoalIdle(finished);original.pause();waitingForUser=true;ownerWaitGeneration++;pendingDeviceApproval=null;}
@@ -816,9 +817,17 @@ public final class PhoneRunService extends Service {
                     builder.addAction(action.build());PhoneNotificationControls.markOwnerReturn(builder,t,h.operation(),h.pause(),h.scope());
                 }else if(owner.isPaused()&&(MainPhoneOwnerStep.needsOwner(t)||t.optJSONObject(MainPhoneOwnerStep.KEY)!=null))builder.addAction(new Notification.Action.Builder(null,"查看原任务",open).build());
                 else if(owner.isPaused()&&app.tasks.hasUnresolved(id))builder.addAction(new Notification.Action.Builder(null,"核对原动作",open).build());
-                else{String action=owner.isPaused()?PhoneNotificationControls.RESUME:PhoneNotificationControls.PAUSE;
-                    PendingIntent control=PendingIntent.getService(this,0,PhoneNotificationControls.command(this,action,t),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
-                    builder.addAction(new Notification.Action.Builder(null,owner.isPaused()?"继续原任务":"暂停",control).build());}
+                else if(owner.isPaused())try{
+                    // Unique even across two pauses of the same run. An old Android button cannot be retargeted.
+                    PendingIntent control=PendingIntent.getService(this,0,PhoneNotificationControls.reviewedResume(this,t),PendingIntent.FLAG_IMMUTABLE);
+                    var action=new Notification.Action.Builder(null,"继续本次暂停",control);
+                    if(android.os.Build.VERSION.SDK_INT>=31)action.setAuthenticationRequired(true);
+                    builder.addAction(action.build());
+                }catch(Exception unconfirmed){builder.addAction(new Notification.Action.Builder(null,"查看原暂停",open).build());}
+                else{
+                    PendingIntent control=PendingIntent.getService(this,0,PhoneNotificationControls.command(this,PhoneNotificationControls.PAUSE,t),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
+                    builder.addAction(new Notification.Action.Builder(null,"暂停",control).build());
+                }
             }
         }catch(Exception invalid){app.error("原任务通知控制暂不可用，请打开应用核对");}
         try{dev.pocketengine.features.assistant.notifications.OwnerPhoneQuestionNotification.add(builder,this,t);}catch(Exception unavailable){/* Original open/stop/pause routes remain usable. */}

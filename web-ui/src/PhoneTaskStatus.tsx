@@ -6,7 +6,7 @@ import { IconChevronRight, IconMonitor, IconMore, IconPauseCircle, IconPlay, Ico
 import { ProgressCircle } from './library';
 import { phoneRunIdentity } from './phone-start';
 import { isPrivateLocalPhone } from './PhonePauseInstruction';
-import { phoneSurfaceLabel, type PrivatePhoneSurface } from './private-phone-surface';
+import { phoneSurfaceLabel, sameDisplayedPause, type DisplayedPhonePause, type PrivatePhoneSurface } from './private-phone-surface';
 import { conversationInlineAttention } from './conversation-work';
 import { workCollectionPresentation } from './work-collection';
 import './phone-task-status.css';
@@ -17,23 +17,24 @@ type Props = {
   surface?: PrivatePhoneSurface;
   can: (action: string) => boolean;
   onOpen: () => void;
-  onControl: (action: string, identity: { taskId: string; runId: string; epoch: number }) => void;
+  onControl: (action: string, identity: { taskId: string; runId: string; epoch: number }, shownPause?: DisplayedPhonePause) => void;
 };
 
 /** One current-task row, using the retained BoardUI controls and anchored menu.
  * The host can acknowledge the actual stop button before yielding its overlay. */
 export function PhoneTaskStatus({ task, surface, can, onOpen, onControl }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const identity = phoneRunIdentity(task);
-  useEffect(() => setMenuOpen(false), [task.id, identity?.runId, identity?.epoch, task.status]);
+  const [menuPause, setMenuPause] = useState<DisplayedPhonePause>();
+  const identity = phoneRunIdentity(task), local = isPrivateLocalPhone(task);
+  useEffect(() => setMenuOpen(false), [task.id, identity?.runId, identity?.epoch, task.status, surface?.displayedPause?.displayHandle, surface?.displayedPause?.scopeRevision]);
   const { label: status, busy } = workCollectionPresentation(task);
   const surfaceLabel = surface ? phoneSurfaceLabel(surface) : '';
   const compactSurface = surface ? phoneSurfaceLabel(surface,true) : '';
   const stopping = task.status === 'stopping' || surface?.stopRequested === true;
   const stage = stopping ? '正在停止' : mainPhoneStep(task) ? '等你在手机上亲自处理' : surface?.paused && task.status === 'running' ? '已请求暂停，等待任务回执' : status;
-  const control = (action: string) => { setMenuOpen(false); if (identity) onControl(action, identity); };
+  const control = (action: string) => { setMenuOpen(false); if (identity) onControl(action, identity, action==='phone.resume'?menuPause:undefined); };
   const canPause = identity && !stopping && (!surface || !surface.paused) && task.status === 'running' && can('phone.pause');
-  const canResume = identity && !stopping && (!surface || surface.paused) && task.status === 'paused' && !conversationInlineAttention(task) && can('phone.resume');
+  const canResume = identity && !stopping && (local ? !!surface?.displayedPause : !surface || surface.paused) && task.status === 'paused' && !conversationInlineAttention(task) && can('phone.resume');
   const canStop = !!identity && can('phone.stop') && !stopping;
 
   return <section className="pw-phone-activity" aria-label="当前手机任务" data-task-id={task.id}>
@@ -43,12 +44,12 @@ export function PhoneTaskStatus({ task, surface, can, onOpen, onControl }: Props
       <span className="pw-phone-activity-copy"><strong dir="auto">{task.goal || '手机任务'}</strong><span>{[stage,compactSurface].filter(Boolean).join(' · ')}</span></span>
       <IconChevronRight size={15} aria-hidden="true" />
     </Button>
-    {(canPause || canResume) && <PopoverTrigger isOpen={menuOpen} onOpenChange={setMenuOpen}>
+    {(canPause || canResume) && <PopoverTrigger isOpen={menuOpen} onOpenChange={open=>{setMenuPause(open?surface?.displayedPause:undefined);setMenuOpen(open)}}>
       <IconButton icon={IconMore} aria-label="手机任务操作" title="手机任务操作" />
       <Popover aria-label="手机任务操作" className="pw-phone-activity-menu" placement="bottom end">
         <div className="pw-phone-activity-actions">
           {canPause && <Button variant="ghost" leadingIcon={IconPauseCircle} onClick={() => control('phone.pause')}>暂停任务</Button>}
-          {canResume && <Button variant="ghost" leadingIcon={IconPlay} onClick={() => control('phone.resume')}>继续任务</Button>}
+          {canResume && <Button variant="ghost" leadingIcon={IconPlay} disabled={local&&!sameDisplayedPause(menuPause,surface?.displayedPause)} onClick={() => control('phone.resume')}>{local?'继续这次暂停':'继续任务'}</Button>}
           {canResume && can('tasks.open') && can('phone.pauseNote.read') && isPrivateLocalPhone(task) &&
             <Button variant="ghost" onClick={() => { setMenuOpen(false); onOpen(); }}>打开原任务补充后继续</Button>}
           {can('tasks.open') && <Button variant="ghost" leadingIcon={IconMonitor} onClick={() => { setMenuOpen(false); onOpen(); }}>查看任务详情</Button>}

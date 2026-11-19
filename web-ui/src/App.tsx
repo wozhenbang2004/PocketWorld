@@ -74,6 +74,7 @@ import {ReadingView} from './ReadingView';
 import {ReadingContext,type ReadingDocument,type ReadingSnapshot} from './reading-context';
 import {ComposerSourceReferences,ComposerObjectReferences} from './ComposerSourceReferences';
 import {ComposerPreviewReferences} from './ComposerPreviewReferences';
+import {ProjectLocalSourceIntake} from './ProjectLocalSourceIntake';
 import {ProjectGitIntake,type PublicGitDraft} from './ProjectGitIntake';
 import {ProjectPreviewPane,useProjectPreview} from './ProjectPreviewPane';
 import {ProjectFileEditor} from './ProjectFileEditor';
@@ -92,7 +93,8 @@ import {OwnerWorkFacts,WorkGoal} from './OwnerWorkFacts';
 import {WorkExecutionPlace} from './WorkExecutionPlace';
 import {OwnerWorkSupplement,type WorkSupplementTarget,type WorkSupplementLeave} from './OwnerWorkSupplement';
 import {ownerWorkPresentation,type OwnerWorkTeam} from './owner-work-presentation';
-import {teamDecisionEntryKey,type TeamDecisionOrigin,type TeamButlerRequest,type TeamOwnerWorkLink,type TeamRunFocus} from './team-navigation';
+import type {TeamWorkTarget} from './ConversationTeamDecisions';
+import {teamDecisionEntryKey,teamFileEntryKey,type TeamDecisionOrigin,type TeamButlerRequest,type TeamOwnerWorkLink,type TeamRunFocus} from './team-navigation';
 import {TaskApproval} from './TaskApproval';
 import {continuationBlocks,continuationFailed,continuationRequest,continuationSettled,continuationUnknown,privateProjectTask,projectContinuation,type ContinuationSubmission} from './task-continuation';
 import {TaskInference} from './TaskInference';
@@ -116,7 +118,7 @@ import {PhoneNotificationReturn,originalPhoneNotice,type PhoneNotice} from './Ph
 import {PhoneScopeReview,type PhoneReviewDisplay} from './PhoneScopeReview';
 import {PhonePauseInstruction,isPrivateLocalPhone} from './PhonePauseInstruction';
 import {PhoneMainOwnerStep,mainPhoneStep} from './PhoneMainOwnerStep';
-import {privatePhoneSurface,phoneSurfaceLabel} from './private-phone-surface';
+import {privatePhoneSurface,phoneSurfaceLabel,sameDisplayedPause,type DisplayedPhonePause} from './private-phone-surface';
 import {ButlerPreparationEntries,ButlerPreparationDetail,type ButlerPreparationTarget} from './ButlerPreparations';
 import {ownerWorkContinuationNote,ownerWorkContinuationReply,type WorkControlFeedback} from './owner-work-continuation';
 import {backgroundConversationWork,conversationActivityLabel,conversationInlineAttention,conversationTaskCompact,conversationWorkActionLabel,foregroundConversationTurn,messageReplyContext,messageTaskResult,ownerWorkIdentity,privateTaskConversationId,workIdentityKey,type ReplyContext,type TaskResult,type WorkIdentity} from './conversation-work';
@@ -468,7 +470,7 @@ export default function App(){
  },[can]);
  const run=useCallback((action:string,args:Json={},onAccepted?:(value:any)=>void)=>{void act(action,args).then(value=>{onAccepted?.(value)}).catch(error=>{if(!action.startsWith('tasks.')||!args.id)setLocalError(error instanceof Error?error.message:String(error))});},[act]);
  // Each click rechecks the displayed original against the newest private phone projection; the native command rechecks ownership again.
- const exactPhoneControl=(action:string,shown:{taskId:string;runId:string;epoch:number},isLocal:boolean)=>{
+ const exactPhoneControl=(action:string,shown:{taskId:string;runId:string;epoch:number},isLocal:boolean,shownPause?:DisplayedPhonePause)=>{
   if(!isLocal)return act(action,shown);
   const native=bridge.getState().state,current=asArray<Task>(native.tasks).find(row=>row.id===shown.taskId);
   const live=privatePhoneSurface(current,native.livePrivatePhones);
@@ -476,10 +478,19 @@ export default function App(){
      action==='phone.pause'&&(live.paused||current.status!=='running')||
      action==='phone.resume'&&(!live.paused||current.status!=='paused'||conversationInlineAttention(current)))
     return Promise.reject(new Error('这次手机执行或控制状态已变化。请核对原任务，不会操作其他屏幕。'));
+  if(action==='phone.resume'){
+    if(!shownPause||!sameDisplayedPause(shownPause,live.displayedPause))return Promise.reject(new Error('原暂停或其范围已变化。请核对现在的暂停，这次点击没有继续。'));
+    return act(action,{taskId:shown.taskId,runId:shown.runId,epoch:shown.epoch,...shownPause},shown.taskId).then(receipt=>{
+      if(receipt?.taskId!==shown.taskId||receipt.runId!==shown.runId||receipt.epoch!==shown.epoch||!sameDisplayedPause(shownPause,receipt)||
+         receipt.continuedOriginalRun!==true||receipt.budgetIncreased!==false)
+        throw new Error('未取得这次暂停的完整继续回执。请查看原任务，不要重复继续。');
+      return receipt;
+    });
+  }
   return act(action,{taskId:shown.taskId,runId:shown.runId,epoch:shown.epoch});
  };
- const triggerPhoneControl=(action:string,shown:{taskId:string;runId:string;epoch:number},isLocal:boolean)=>{
-  void exactPhoneControl(action,shown,isLocal).catch(error=>setLocalError(error instanceof Error?error.message:String(error)));
+ const triggerPhoneControl=(action:string,shown:{taskId:string;runId:string;epoch:number},isLocal:boolean,shownPause?:DisplayedPhonePause)=>{
+  void exactPhoneControl(action,shown,isLocal,shownPause).catch(error=>setLocalError(error instanceof Error?error.message:String(error)));
  };
  const cancelPending=useRef(new Set<string>());
  const [cancelFeedback,setCancelFeedback]=useState<Record<string,{error:boolean;message:string}>>({});
@@ -1085,12 +1096,19 @@ export default function App(){
      }).catch(error=>{if(current())setLocalError(error instanceof Error?error.message:'团队尚未关联，请核对原草稿。')});
    });
  };
- const openConversationTeamDecision=(locator:TeamAttentionLocator,source:TeamDecisionOrigin)=>{
+ const openConversationTeamDecision=(locator:TeamWorkTarget,source:TeamDecisionOrigin)=>{
    const live=bridge.getState();
    if(document.hidden||route!=='chat'||taskOpen||live.state.conversationId!==source.conversationId||locator.runId!==source.teamRunId||!can('teams.readAttention'))return;
-   const origin={...captureWorkspaceOrigin(),focus:null,focusKey:teamDecisionEntryKey(source),
+   const files='fileReview' in locator?{...source,fileReview:locator.fileReview}:undefined;
+   if(files&&!can('teams.readFrozenOutputs'))return;
+   const origin={...captureWorkspaceOrigin(),focus:null,focusKey:files?teamFileEntryKey(files):teamDecisionEntryKey(source),
      drawerChat:{id:source.conversationId,draftKey:String(live.composer?.key||''),documentEpoch:bridge.getDocumentEpoch()}};
-   void openRelatedWorkspace('teams',origin,()=>{setTeamRunFocus(undefined);setTeamAttentionFocus({...locator,ownerWork:source,requestId:crypto.randomUUID()});});
+   if(files){
+     const returnToWork=(reason?:string)=>{if(document.hidden||relatedOrigin.current!==origin)return;void restoreWorkspace(origin).then(()=>{
+       if(reason&&!document.hidden&&bridge.getState().state.conversationId===source.conversationId)setLocalError(reason);
+     });};
+     void openRelatedWorkspace('teams',origin,()=>{setTeamAttentionFocus(undefined);setTeamRunFocus({requestId:crypto.randomUUID(),runId:source.teamRunId,fromWork:files,returnToWork});});
+   }else if(!('fileReview' in locator)) void openRelatedWorkspace('teams',origin,()=>{setTeamRunFocus(undefined);setTeamAttentionFocus({...locator,ownerWork:source,requestId:crypto.randomUUID()});});
  };
  const openWorkTeam=(team:OwnerWorkTeam)=>{
    if(!can('teams.readRun'))return;
@@ -1374,7 +1392,7 @@ export default function App(){
   const canCheckConnection=target.preparation==='blocked'&&preparationSession.taskId===target.taskId&&preparationSession.runId===target.runId&&preparationSession.coordinatorEpoch===target.epoch&&preparationSession.state==='not_initialized'&&preparationSession.physicalDisplayHeld===false&&task.raw?.evidence?.message===target.detail;
   return <ConversationModelPickerVisibility>{pickerVisible=><PhoneViewer key={`${task.id}:${target.runId}:${target.epoch}`} task={target} expanded={phoneViewerExpanded} onExpandedChange={setPhoneViewerExpanded} nativeVisible={!pickerVisible&&!phoneViewerObscured&&taskOpen&&taskLayer==='overview'}
    tasks={relatedViewers} onSelectTask={can('tasks.open')?selected=>openTask(selected.taskId,'overview',false,undefined,undefined,selected):undefined}
-   onPause={phoneControllable&&(!local||!live?.paused)&&task.status==='running'&&can('phone.pause')?identity=>exactPhoneControl('phone.pause',identity,local):undefined} onResume={phoneControllable&&(!local||live?.paused)&&task.status==='paused'&&!conversationInlineAttention(task)&&can('phone.resume')?identity=>exactPhoneControl('phone.resume',identity,local):undefined}
+   onPause={phoneControllable&&(!local||!live?.paused)&&task.status==='running'&&can('phone.pause')?identity=>exactPhoneControl('phone.pause',identity,local):undefined} onResume={phoneControllable&&(!local||live?.displayedPause)&&task.status==='paused'&&!conversationInlineAttention(task)&&can('phone.resume')?identity=>exactPhoneControl('phone.resume',identity,local,live?.displayedPause):undefined}
    onStop={phoneControllable&&!terminal(task)&&task.status!=='interrupted'&&task.status!=='stopping'&&can('phone.stop')?identity=>exactPhoneControl('phone.stop',identity,local):undefined}
    onOpenSetup={canCheckConnection&&can('setup.read')?()=>{setPhoneViewerExpanded(false);void openSetup('phone')}:undefined}
    onOpenTask={can('tasks.open')?identity=>{setPhoneViewerExpanded(false);if(taskOpen&&openedTaskId.current===identity.taskId){showTaskLayer(task.status==='failed'?'process':'overview');if(attention(task)&&can('tasks.review')&&!reviewPending)loadTaskReview(identity.taskId)}else openTask(identity.taskId,task.status==='failed'?'process':attention(task)&&can('tasks.review')?'review':'overview')}:undefined}/>}</ConversationModelPickerVisibility>;
@@ -1470,7 +1488,7 @@ export default function App(){
      {taskOpen && openedTaskId.current===task.id && !taskOpening && isPrivateLocalPhone(task) && can('phone.pauseNote.read') && can('phone.pauseNote.continue') &&
        <PhonePauseInstruction key={'phone-pause-note:'+task.id} task={task} visible={taskLayer==='overview' && !phoneViewerObscured && !phoneViewerExpanded && obj(snapshot?.view).taskId===task.id} run={act}/>}
      {taskOpen&&phoneViewerFor(task)}
-     {taskOpen&&task.raw?.feature==='remote'&&can('remoteTask.open')&&<RemoteTaskWorkspace key={task.id} taskId={task.id} raw={obj(task.raw)} receipt={task.hostReceipt} savedFiles={asArray<Json>(task.raw?.remoteSnapshotAttachments)}/>}
+     {taskOpen&&task.raw?.feature==='remote'&&can('remoteTask.open')&&<RemoteTaskWorkspace key={task.id} taskId={task.id} raw={obj(task.raw)} receipt={task.hostReceipt} savedFiles={asArray<Json>(task.raw?.remoteSnapshotAttachments)} openProject={can('remoteTask.stageSavedSources')&&can('projects.localSource.openPrepared')?pin=>{void navigate('projects',()=>run('projects.localSource.openPrepared',pin));}:undefined}/>}
      {taskOpen&&taskLayer==='overview'&&task.raw?.developmentContext&&can('projectLive.open')&&<ConversationModelPickerVisibility key={'live:'+task.id}>{pickerVisible=><ProjectLivePreview taskId={task.id} run={act} nativeVisible={!pickerVisible&&!phoneViewerObscured} onBackChange={registerLivePreviewBack}/>}</ConversationModelPickerVisibility>}
      {currentScope.executionPhase==='planning'&&<p className="pw-muted" role="status">原任务处于只读规划。{Number(currentScope.planRevision)>0?`当前计划版本 ${String(currentScope.planRevision)}，确认准确计划后才能在原范围内继续。`:'尚未提交计划正文，重新打开页面不会启动执行。'}</p>}
 
@@ -1603,7 +1621,7 @@ export default function App(){
    .filter(row=>row.surface!==null||!isPrivateLocalPhone(row.task)&&row.task.id===activeTask?.id);
  const phoneActivity=phoneRows.length?<>{phoneRows.map(({task,surface})=><PhoneTaskStatus key={JSON.stringify([task.id,task.raw?.runId,task.raw?.coordinatorEpoch])} task={task} surface={surface||undefined} can={can}
     onOpen={()=>openTask(task.id,attention(task)&&can('tasks.review')?'review':'overview')}
-    onControl={(action,identity)=>triggerPhoneControl(action,identity,!!surface)}/>)}</>:null;
+    onControl={(action,identity,shownPause)=>triggerPhoneControl(action,identity,isPrivateLocalPhone(task),shownPause)}/>)}</>:null;
  const representedPhoneTaskIds=new Set(phoneRows.map(row=>row.task.id));
  const chatAttention=conversationAttention&&!representedPhoneTaskIds.has(conversationAttention.id)?conversationAttention:undefined;
  const conversationWorkRows=conversationWork.filter(task=>!representedPhoneTaskIds.has(task.id)&&task.id!==chatAttention?.id);
@@ -1834,7 +1852,8 @@ export default function App(){
       <TabPanel id="preview" className="pw-project-preview-panel" style={{translate:'none',opacity:1,transition:'none'}}>{desktopNavigation?<div className="pw-project-connected-workspace" data-preview-open="true"><motion.section layoutScroll className="pw-project-files-pane" aria-label="项目文件"><header className="pw-project-connected-header"><h2>项目文件</h2></header>{projectFiles}</motion.section><section className="pw-project-preview-panel" aria-label="项目预览"><ProjectPreviewPane control={projectPreview} composer={composer}/></section></div>:<ProjectPreviewPane control={projectPreview} composer={composer}/>}</TabPanel>
     </Tabs>
 
-  </section>:projects.length>0?<section className="pw-project-library" aria-label="项目目录"><header><h2>你的项目</h2><div className="pw-project-library-actions">{can('projects.gitImport.open')&&<Button variant="ghost" onClick={()=>run('projects.gitImport.open')}>从 Git 导入</Button>}{can('projects.create')&&<Button variant="secondary" leadingIcon={IconAdd} onClick={()=>openCreate('project')}>新项目</Button>}</div></header><div>{projects.map(project=><Button key={project.id} variant="ghost" className="pw-project-library-row" data-motion-key={project.id} leadingIcon={IconFolder} trailingIcon={IconChevronRight} disabled={!can('projects.select')} onClick={()=>run('projects.select',{id:project.id})}>{project.name}</Button>)}</div></section>:!ready?<p className="pw-muted" role="status">正在读取项目…</p>:<div className="pw-empty pw-project-empty"><IconFolder size={26} aria-hidden="true"/><h3>从一个项目开始</h3><p>把相关任务、文件和成果放在一起，随时接着做。</p><div className="pw-project-library-actions">{can('projects.create')&&<Button variant="primary" leadingIcon={IconAdd} onClick={()=>openCreate('project')}>新建项目</Button>}{can('projects.gitImport.open')&&<Button variant="ghost" onClick={()=>run('projects.gitImport.open')}>从 Git 导入</Button>}</div></div>}
+  </section>:projects.length>0?<section className="pw-project-library" aria-label="项目目录"><header><h2>你的项目</h2><div className="pw-project-library-actions">{can('projects.localSource.open')&&<Button variant="ghost" onClick={()=>run('projects.localSource.open')}>从手机导入</Button>}{can('projects.gitImport.open')&&<Button variant="ghost" onClick={()=>run('projects.gitImport.open')}>从 Git 导入</Button>}{can('projects.create')&&<Button variant="secondary" leadingIcon={IconAdd} onClick={()=>openCreate('project')}>新项目</Button>}</div></header><div>{projects.map(project=><Button key={project.id} variant="ghost" className="pw-project-library-row" data-motion-key={project.id} leadingIcon={IconFolder} trailingIcon={IconChevronRight} disabled={!can('projects.select')} onClick={()=>run('projects.select',{id:project.id})}>{project.name}</Button>)}</div></section>:!ready?<p className="pw-muted" role="status">正在读取项目…</p>:<div className="pw-empty pw-project-empty"><IconFolder size={26} aria-hidden="true"/><h3>从一个项目开始</h3><p>把相关任务、文件和成果放在一起，随时接着做。</p><div className="pw-project-library-actions">{can('projects.create')&&<Button variant="primary" leadingIcon={IconAdd} onClick={()=>openCreate('project')}>新建项目</Button>}{can('projects.localSource.open')&&<Button variant="ghost" onClick={()=>run('projects.localSource.open')}>从手机导入</Button>}{can('projects.gitImport.open')&&<Button variant="ghost" onClick={()=>run('projects.gitImport.open')}>从 Git 导入</Button>}</div></div>}
+  <ProjectLocalSourceIntake state={state.localSourceIntake}/>
   <ProjectGitIntake state={state.projectGitImport} toolReturn={projectGitToolReturn} onPrepareTools={can('setup.runtime.read')?()=>{void openSetup('tools')}:undefined}/>
  </motion.main>;
  const workspaceNotices=<>{route!=='chat'&&replyActivity}{currentCancelFeedback&&<div className={currentCancelFeedback.error?'pw-banner pw-banner-error':'pw-banner'} role={currentCancelFeedback.error?'alert':'status'}><p>{currentCancelFeedback.message}</p></div>}{(localError||state.error)&&<div className="pw-banner pw-banner-error" role="alert"><IconInfo size={17}/><p>{localError||state.error}</p>{localError&&<IconButton icon={IconClose} aria-label="关闭这条操作提示" onClick={()=>setLocalError('')}/>}</div>}{Object.entries(obj(state.attachmentOpens)).filter(([,value])=>value.error).map(([key,value])=><div className="pw-banner pw-banner-error" role="alert" key={key}><p>{value.error}</p></div>)}{(localStatus||state.notice)&&<div className="pw-banner" role="status"><p>{localStatus||state.notice}</p>{(localStatus||can('notice.dismiss'))&&<IconButton icon={IconClose} aria-label="关闭这条提示" onClick={()=>{setLocalStatus('');if(state.notice&&can('notice.dismiss'))run('notice.dismiss')}}/>}</div>}
@@ -1846,7 +1865,7 @@ export default function App(){
   {isPrimaryRoute?<NavigationChrome>
   {(route!=='chat'||desktopNavigation)&&<header className="pw-app-header">
    {route==='tasks'&&endedScopeOrigin?<IconButton ref={navigationBackGlass} icon={IconArrowLeft} aria-label="返回工作总览" title="返回工作总览" onClick={restoreWorkScope}/>:route==='projects'&&state.filePath?<IconButton ref={navigationBackGlass} icon={IconArrowLeft} aria-label="返回项目文件" disabled={fileAdoption.pending||!!state.fileSaving} onClick={()=>{if(!fileAdoption.isPending()&&!bridge.getState().state.fileSaving&&!projectFileBack.current?.())run('projects.close',fileIdentity)}}/>:(route==='projects'||route==='tasks')&&relatedOrigin.current?<IconButton ref={navigationBackGlass} icon={IconArrowLeft} aria-label={relatedOrigin.current.label} title={relatedOrigin.current.label} onClick={returnFromSecondary}/>:route==='projects'&&state.projectTaskReturn?.taskId?<IconButton ref={navigationBackGlass} icon={IconArrowLeft} aria-label="回到原任务" onClick={()=>openTask(state.projectTaskReturn.taskId)}/>:navigationTrigger}
-   {route==='tasks'?<WorkFindTitle editing={taskFiltersOpen} query={taskQuery} onQuery={setTaskQuery} edit={()=>setTaskFiltersOpen(true)} close={closeWorkFind}/>:route==='chat'?<div className="pw-current-work pw-chat-title"><h1 title={currentTitle} aria-label={messages.length?currentTitle:'PocketWorld'}>{messages.length>0&&currentConversation&&can('conversation.organization.read')?<Button variant="ghost" className="pw-chat-title-trigger" aria-label="整理当前对话" onClick={()=>setOrganizationTarget(currentConversation.id)}><span className="pw-chat-title-text">{currentTitle}</span><IconChevronDown size={16} aria-hidden="true"/></Button>:messages.length?currentTitle:'PocketWorld'}</h1></div>:route==='projects'&&!state.filePath?<PopoverTrigger isOpen={projectPickerOpen} onOpenChange={setProjectPickerOpen}><Button variant="ghost" className="pw-object-title" aria-label="切换项目"><h1>{currentTitle}</h1><IconChevronDown size={16}/></Button><Popover aria-label="切换项目"><PopoverHeader title="项目"/><div className="pw-project-menu">{projects.map(project=><Button key={project.id} variant="ghost" aria-current={project.id===state.projectId?'true':undefined} onClick={()=>{setProjectPickerOpen(false);run('projects.select',{id:project.id})}}><IconFolder size={17}/><span>{project.name}</span>{project.id===state.projectId&&<small>当前</small>}</Button>)}{can('projects.create')&&<Button variant="secondary" leadingIcon={IconAdd} onClick={()=>{setProjectPickerOpen(false);openCreate('project')}}>新项目</Button>}</div></Popover></PopoverTrigger>:<div className="pw-current-work"><BlurCrossfade identity={currentTitle}><h1>{currentTitle}</h1></BlurCrossfade></div>}
+   {route==='tasks'?<WorkFindTitle editing={taskFiltersOpen} query={taskQuery} onQuery={setTaskQuery} edit={()=>setTaskFiltersOpen(true)} close={closeWorkFind}/>:route==='chat'?<div className="pw-current-work pw-chat-title"><h1 title={currentTitle} aria-label={messages.length?currentTitle:'PocketWorld'}>{messages.length>0&&currentConversation&&can('conversation.organization.read')?<Button variant="ghost" className="pw-chat-title-trigger" aria-label="整理当前对话" onClick={()=>setOrganizationTarget(currentConversation.id)}><span className="pw-chat-title-text">{currentTitle}</span><IconChevronDown size={16} aria-hidden="true"/></Button>:messages.length?currentTitle:'PocketWorld'}</h1></div>:route==='projects'&&!state.filePath?<PopoverTrigger isOpen={projectPickerOpen} onOpenChange={setProjectPickerOpen}><Button variant="ghost" className="pw-object-title" aria-label="切换项目"><h1>{currentTitle}</h1><IconChevronDown size={16}/></Button><Popover aria-label="切换项目"><PopoverHeader title="项目"/><div className="pw-project-menu">{projects.map(project=><Button key={project.id} variant="ghost" aria-current={project.id===state.projectId?'true':undefined} onClick={()=>{setProjectPickerOpen(false);run('projects.select',{id:project.id})}}><IconFolder size={17}/><span>{project.name}</span>{project.id===state.projectId&&<small>当前</small>}</Button>)}{can('projects.localSource.open')&&<Button variant="ghost" onClick={()=>{setProjectPickerOpen(false);run('projects.localSource.open')}}>从手机导入</Button>}{can('projects.create')&&<Button variant="secondary" leadingIcon={IconAdd} onClick={()=>{setProjectPickerOpen(false);openCreate('project')}}>新项目</Button>}</div></Popover></PopoverTrigger>:<div className="pw-current-work"><BlurCrossfade identity={currentTitle}><h1>{currentTitle}</h1></BlurCrossfade></div>}
    {isChatSurface?<div ref={headerActionsGlass} className="pw-header-actions pw-navigation-glass" role="group" aria-label="对话操作">
     {can('remoteInbox.state')&&Number(state.remoteInbox?.unread||0)>0&&<IconButton icon={IconNotification} aria-label={'外部消息 · '+state.remoteInbox.unread+' 条未读'} title="外部未读消息" onClick={openUnreadMessages}/>}
     {can('conversation.new')&&<IconButton icon={IconNewChat} aria-label="聊件新事" title="聊件新事" disabled={!!state.chatSubmitting} onClick={()=>{void navigate('butler',()=>run('conversation.new'))}}/>}

@@ -87,7 +87,16 @@ public final class TeamParentHost {
                 case "artifacts":{JSONArray refs=artifacts(source,id,original);out=new JSONObject().put("teamRunId",id).put("artifacts",refs).put("complete",true).put("businessVerified",false);break;}
                 case "output":{JSONArray refs=artifacts(source,id,original);JSONObject exact=null;for(int i=0;i<refs.length();i++)if(args.getString("artifactId").equals(refs.getJSONObject(i).getString("artifactId")))exact=refs.getJSONObject(i);if(exact==null)throw new SecurityException("成果不属于原父团队当前冻结贡献");JSONObject actual=TeamWorkReview.artifact(workspace,exact);source.checkCurrent();tasks.checkTeamArtifact(exact,original);out=artifactOutput(actual,args.optInt("offset",0),args.optInt("length",4000)).put("source",exact).put("immutable",true).put("businessVerified",false);break;}
                 case "question":{JSONObject question=tasks.teamParentQuestion(source,id,args.getString("assignmentId"),args.getString("questionId"));out=range(question.getString("question"),args.optInt("offset",0),args.optInt("length",4000)).put("assignmentId",args.getString("assignmentId")).put("questionId",question.getString("questionId")).put("state",question.getString("state"));break;}
-                case "review":{JSONObject review=writes.review(id,original).snapshot();out=new JSONObject().put("teamRunId",id).put("planHash",review.getString("planHash")).put("canIntegrate",review.getBoolean("canIntegrate")).put("incompleteAssignments",review.getJSONArray("incompleteAssignments")).put("files",review.getJSONObject("plan").getJSONArray("files")).put("requiresOwnerReview",true).put("businessVerified",false);break;}
+                case "review":{
+                    JSONObject review=writes.review(id,original).snapshot();String hash=review.getString("planHash");
+                    if(args.has("expectedPlanHash")&&!hash.equals(args.getString("expectedPlanHash")))throw new SecurityException("原冻结计划已经变化，没有交回另一版文件或独审意见");
+                    out=new JSONObject().put("teamRunId",id).put("planHash",hash).put("canIntegrate",review.getBoolean("canIntegrate")).put("incompleteAssignments",review.getJSONArray("incompleteAssignments")).put("files",review.getJSONObject("plan").getJSONArray("files")).put("ownerApprovalRequiredForIntegration",true).put("businessVerified",false);
+                    JSONObject state=tasks.teamReviewState(id),assessment=TeamParentReviewFeedback.beforeIntegration(id,hash,review,state);
+                    out.put("requiresOwnerReview",true).put("awaitingOwnerDecision",assessment!=null&&assessment.getBoolean("awaitingOwnerDecision")).put("reviewState",assessment==null?"owner_approval_registered":assessment.getString("state"));
+                    JSONObject finding=TeamParentReviewFeedback.finding(id,hash,state.optJSONObject("independentReview"));
+                    if(finding!=null)out.put("independentFinding",finding);
+                    break;
+                }
                 case "integration":out=integration(id);break;
                 default:throw new IllegalArgumentException("请选择原团队状态、事件、补充回执、成果或审阅视图");
             }
@@ -186,10 +195,19 @@ public final class TeamParentHost {
             }if(!args.has("workItemId"))throw new IllegalArgumentException("按原workItem逐项继续，不恢复整队cancelled或猜最新成员任务");JSONObject continued=coordinator.continueForParent(source,input,(nextRun,nextMember)->tasks.continueTeamParentItem(source,id,args.getString("workItemId"),args.getInt("itemRevision"),args.getInt("ownerGeneration"),nextRun,nextMember),models.get(),false);tasks.updateExternal(id,continued);changed.accept(id);return status(source,id).put("budgetIncreased",false);
             case "reassign":JSONObject transferred=tasks.transferTeamParentItem(source,id,args.getString("workItemId"),args.getString("newMemberId"),args.getInt("itemRevision"),args.getInt("ownerGeneration"));JSONObject refreshed=coordinator.refreshWorkItems(id,transferred);tasks.updateExternal(id,refreshed);changed.accept(id);return status(source,id).put("budgetIncreased",false);
             case "request_review":{
-                tasks.claimTeamParentAction(source,id);JSONObject receipt=writes.independentlyReview(id,args.getString("expectedPlanHash"),coordinator.get(id),models.get());coordinator.recordIndependentReview(id,receipt);tasks.updateExternal(id,coordinator.get(id));changed.accept(id);return status(source,id).put("independentReview",smallReview(receipt));}
+                tasks.claimTeamParentAction(source,id);String hash=args.getString("expectedPlanHash");JSONObject receipt=writes.independentlyReview(id,hash,coordinator.get(id),models.get());coordinator.recordIndependentReview(id,receipt);tasks.updateExternal(id,coordinator.get(id));changed.accept(id);
+                JSONObject answer=status(source,id).put("independentReview",smallReview(receipt));
+                JSONObject finding=TeamParentReviewFeedback.finding(id,hash,tasks.teamReviewState(id).optJSONObject("independentReview"));
+                if(finding!=null&&receipt.optString("taskId").equals(finding.getString("reviewerTaskId"))&&receipt.optString("runId").equals(finding.getString("reviewerRunId")))answer.put("independentFinding",finding);
+                source.checkCurrent();return answer;}
             case "request_integration":{
-                tasks.claimTeamParentAction(source,id);JSONObject state=tasks.teamReviewState(id),approved=state.optJSONObject("approvedReview");if(approved==null||!approved.optString("planHash").equals(args.getString("expectedPlanHash")))return status(source,id).put("state","awaiting_owner_exact_plan_approval").put("requiresOwnerReview",true).put("message","已请求原成果审阅；模型不能批准。请主人在原团队成果页核对实际diff与planHash后明确批准，未整合");
-                JSONObject previous=tasks.inspectTeamIntegration(id);if(!previous.optString("status").equals("not_started"))return status(source,id).put("state","original_integrator_already_registered").put("queryOnly",true).put("message","原唯一整合者已登记；部分/未知/暂停恢复回原生审阅，不由父模型再启");JSONObject receipt=writes.integrate(id,approved.getString("reviewId"),models.get());coordinator.recordIntegration(id,receipt);changed.accept(id);return status(source,id);}
+                tasks.claimTeamParentAction(source,id);String expected=args.getString("expectedPlanHash");
+                JSONObject previous=tasks.inspectTeamIntegration(id);
+                if(!previous.optString("status").equals("not_started"))return status(source,id).put("state","original_integrator_already_registered").put("queryOnly",true).put("requiresOwnerReview",false).put("message","原唯一整合者已登记；请核对其原回执与版本，不由父模型重复启动。");
+                JSONObject current=writes.review(id,original).snapshot(),state=tasks.teamReviewState(id);
+                JSONObject blocked=TeamParentReviewFeedback.beforeIntegration(id,expected,current,state);
+                if(blocked!=null){JSONObject answer=status(source,id);for(java.util.Iterator<String> keys=blocked.keys();keys.hasNext();){String key=keys.next();answer.put(key,blocked.get(key));}source.checkCurrent();return answer;}
+                JSONObject approved=state.getJSONObject("approvedReview");source.checkCurrent();JSONObject receipt=writes.integrate(id,approved.getString("reviewId"),models.get());coordinator.recordIntegration(id,receipt);changed.accept(id);return status(source,id);}
             case "revise":{
                 tasks.claimTeamParentAction(source,id);coordinator.recordParentRevision(source,input);tasks.updateExternal(id,coordinator.get(id));changed.accept(id);return status(source,id).put("state","awaiting_native_revision_review").put("workItemId",args.getString("workItemId")).put("requiresOwnerReview",true).put("message","修订只是原团队中可见的提案；请主人在原工作项审阅当前冻结版本、依赖闭包与预算，旧审查不授权新内容");}
             default:throw new IllegalArgumentException("此团队阶段控制未开放");

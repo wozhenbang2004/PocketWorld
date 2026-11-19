@@ -4,6 +4,7 @@ import android.os.SystemClock
 import android.os.Handler
 import android.os.Looper
 import dev.pocketengine.core.RunControl
+import dev.pocketengine.features.teams.TaskStoreTeamWriteHost
 import dev.pocketengine.features.teams.TeamOwnerFileReading
 import dev.pocketengine.features.teams.AgentSlot
 import dev.pocketengine.features.teams.TeamPhoneHost
@@ -30,7 +31,18 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
         @Volatile var captured: TeamOwnerFileReading? = null
             private set
         @Synchronized fun install(value: TeamOwnerFileReading) { reader.check(); check(owner.live); captured = value }
-        @Synchronized override fun close() { reader.cancel(); captured = null }
+        private var approval: TaskStoreTeamWriteHost.TextOutputApproval? = null
+        private var token: String? = null
+        @Synchronized fun offer(exact: TaskStoreTeamWriteHost.TextOutputApproval): String {
+            reader.check(); check(owner.live && captured != null); approval?.close(); approval = exact
+            return UUID.randomUUID().toString().also { token = it }
+        }
+        @Synchronized fun take(value: String): TaskStoreTeamWriteHost.TextOutputApproval {
+            reader.check(); check(owner.live && token == value) { "这份许可审阅已使用或关闭，请核对原批准记录" }
+            token = null; return requireNotNull(approval)
+        }
+        @Synchronized fun discard(value: String) { if (token == value) { approval?.close(); approval = null; token = null } }
+        @Synchronized override fun close() { reader.cancel(); captured = null; approval?.close(); approval = null; token = null }
     }
     private var fileWindow: FileWindow? = null
     private class Reading(val kind: String, val original: String) {
@@ -59,7 +71,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
     companion object {
         val COMMANDS = setOf("teams.attention", "teams.readAttention", "teams.snapshot", "teams.readRun", "teams.readDefinition", "teams.reviewDefinition", "teams.prepareDraftStart",
             "teams.reviewStart", "teams.reviewRemove", "teams.confirm", "teams.control", "teams.sendMessage",
-            "teams.readFrozenOutputs", "teams.readFrozenDiff", "teams.reviewWorkItemContinuation", "teams.answerAssignment", "teams.probeMember", "teams.closeReading", "teams.reviewPhoneStart", "teams.reviewMember", "teams.openResearchTask")
+            "teams.readFrozenOutputs", "teams.readFrozenDiff", "teams.reviewFrozenTextApproval", "teams.approveFrozenText", "teams.reviewWorkItemContinuation", "teams.answerAssignment", "teams.probeMember", "teams.closeReading", "teams.reviewPhoneStart", "teams.reviewMember", "teams.openResearchTask")
     }
 
     fun clear() {
@@ -328,11 +340,12 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
         when (action) {
             "teams.attention" -> {
                 if (args.has("parentTaskId")) {
-                    fields(args, "parentTaskId", "parentRunId", "parentEpoch", "conversationId", "teamRunId")
+                    fields(args, "parentTaskId", "parentRunId", "parentEpoch", "conversationId", "teamRunId", "fileReview")
                     val parent = text(args, "parentTaskId"); val parentRun = text(args, "parentRunId"); val conversation = text(args, "conversationId")
                     val teamRun = text(args, "teamRunId"); val epoch = args.opt("parentEpoch")
                     require(epoch is Int && epoch > 0) { "原工作代次无效" }
-                    controller.readWebWorkDecisions(parent, parentRun, epoch, conversation, teamRun) { value, error ->
+                    val mark = if (args.has("fileReview")) args.getJSONObject("fileReview") else null
+                    controller.readWebWorkDecisions(parent, parentRun, epoch, conversation, teamRun, mark) { value, error ->
                         if (currentWindow()) deliver(value?.let { PocketWebState.publicValue(it) as JSONObject }, error)
                         else done(null, "原对话已变化，请重新打开这件工作")
                     }
@@ -396,7 +409,8 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 }
             }
             "teams.closeReading" -> {
-                fields(args, "viewHandle", "reviewHandle", "phoneHandle", "fileHandle"); readings.remove(args.optString("viewHandle"))?.retire()
+                fields(args, "viewHandle", "reviewHandle", "phoneHandle", "fileHandle", "approvalHandle"); readings.remove(args.optString("viewHandle"))?.retire()
+                if (args.has("approvalHandle")) fileWindow?.discard(text(args,"approvalHandle"))
                 fileWindow?.takeIf { !it.owner.live || it.handle == args.optString("fileHandle") }?.let { it.close(); fileWindow = null }
                 reviews.remove(args.optString("reviewHandle"))?.close()
                 phonePages.remove(args.optString("phoneHandle"))?.original?.let { runCatching { it.close() } }
@@ -596,7 +610,10 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 deliver(result, null)
             }
             "teams.readFrozenOutputs" -> {
-                fields(args, "viewHandle")
+                fields(args, "viewHandle","fromWork")
+                val source = if (args.has("fromWork")) args.getJSONObject("fromWork").also {
+                    fields(it,"parentTaskId","parentRunId","parentEpoch","conversationId","teamRunId","fileReview")
+                } else null
                 val owner = readings[text(args,"viewHandle")]?.takeIf { it.kind == "run" && it.live } ?: error("请重新打开原团队成果")
                 val shown = JSONObject(owner.original)
                 require(shown.optJSONObject("productionScope") != null && (shown.optString("mode") == "produce" || shown.optJSONObject("workPlan") != null)) { "原协作没有文件制作范围" }
@@ -611,8 +628,11 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                         check(now.optString("id") == runId && now.optInt("generation",-1) == shown.getInt("generation")
                             && now.optLong("revision",-1) == shown.getLong("revision")) { "原协作已更新，先刷新原记录；没有读取另一轮成果" }
                     }
-                    stillSame(); val result = module.readOwnerFrozenFiles(runId,files.reader); stillSame(); files.install(result)
-                    result.index().put("fileHandle",files.handle)
+                    stillSame(); val marker = source?.let { controller.requireWorkFileReview(it,runId) }
+                    val result = module.readOwnerFrozenFiles(runId,files.reader); stillSame()
+                    val index = result.index(); val decision = module.ownerTextDecision(result,files.reader)
+                    if (source != null && marker != null) { requireWorkFileIndex(index,decision,marker); controller.requireWorkFileReview(source,runId) }
+                    files.install(result); index.put("fileHandle",files.handle).put("ownerDecision",decision)
                 }, accept = { result ->
                     check(fileWindow === files && owner.live && files.captured != null) { "原成果阅读已关闭" }
                     deliver(result,null)
@@ -625,6 +645,30 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 val offset = args.opt("offset"); require(offset is Int && offset >= 0) { "原差异位置不正确" }
                 val captured = files.captured ?: error("原文件目录已关闭")
                 deliver(captured.page(text(args,"artifactId"),offset).put("fileHandle",files.handle),null)
+            }
+            "teams.reviewFrozenTextApproval", "teams.approveFrozenText" -> {
+                val confirming = action == "teams.approveFrozenText"
+                if (confirming) fields(args,"viewHandle","fileHandle","approvalHandle") else fields(args,"viewHandle","fileHandle")
+                val owner = readings[text(args,"viewHandle")] ?: error("原团队已关闭")
+                val files = fileWindow?.takeIf { it.owner === owner && owner.live && it.handle == text(args,"fileHandle") } ?: error("请重读原冻结文件")
+                val original = files.captured ?: error("原冻结目录不可用")
+                if (confirming) {
+                    val approval = files.take(text(args,"approvalHandle"))
+                    hostWork(approval, work = {
+                        try { check(currentWindow() && owner.live); files.reader.check(); approval.confirm() } finally { approval.close() }
+                    }, accept = { receipt -> deliver(receipt.put("fileHandle",files.handle),null) })
+                } else {
+                    hostWork(work = {
+                        check(currentWindow() && owner.live); files.reader.check()
+                        val module = controller.webPluginFeatureHost().module("teams") as? TeamsModule ?: error("原团队不可用")
+                        val approval = module.reviewOwnerTextApproval(original)
+                        try { val shown = approval.preview(); shown.put("approvalHandle",files.offer(approval)).put("fileHandle",files.handle) }
+                        catch (failure: Exception) { approval.close(); throw failure }
+                    }, accept = { shown ->
+                        check(fileWindow === files && owner.live && files.captured === original) { "原成果审阅已关闭" }
+                        deliver(shown,null)
+                    })
+                }
             }
             "teams.reviewWorkItemContinuation" -> {
                 fields(args, "viewHandle", "workItemId")

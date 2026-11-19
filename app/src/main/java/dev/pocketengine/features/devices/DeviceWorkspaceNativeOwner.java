@@ -292,7 +292,9 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
             JSONObject task = tasks.get(id, false);
             if (!TaskStoreDeviceTasks.deviceTask(task) || !"GOAL".equals(task.optString("deviceExecutionKind")) || !app.hasPendingDeviceGoal(id)) return NativeDeviceWorkspaceHost.Availability.blocked("当前没有待确认的设备目标");
             if (!task.optString("runId").isEmpty() || task.optBoolean("cancelRequested")) return NativeDeviceWorkspaceHost.Availability.blocked("任务状态已变化，请查看执行结果");
-            if ("background".equals(task.optString("executionMode")) ? !backgroundGoalCapacity() : app.activePhoneRunCount()>0) return NativeDeviceWorkspaceHost.Availability.blocked("所选屏幕暂无可用运行位置，请先处理占用它的原任务");
+            boolean textOnly=app.pendingDeviceGoalUsesNoScreen(id);
+            if(textOnly&&app.activePhoneRunCount()>0)return NativeDeviceWorkspaceHost.Availability.blocked("本机执行器正忙。文字任务不占屏幕，须等原执行释放后再接手。");
+            if (!textOnly&&("background".equals(task.optString("executionMode")) ? !backgroundGoalCapacity() : app.activePhoneRunCount()>0)) return NativeDeviceWorkspaceHost.Availability.blocked("所选屏幕暂无可用运行位置，请先处理占用它的原任务");
             return NativeDeviceWorkspaceHost.Availability.ready();
         }
         public NativeDeviceWorkspaceHost.GoalReviewAction review(String id) throws Exception {
@@ -351,12 +353,13 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
             DeviceIdentity.LocalIdentity local=existingIdentity();if(local==null)throw new SecurityException("本机原设备身份不可读取");
             return tasks.deviceTasks().waitingPhoneGoals(local.deviceId(),local.instanceId(),afterCaller,afterOp,results);
         }
-        public JSONObject phoneGoalIndex(String target,String parentAfter,String after,boolean received) throws Exception {
+        public JSONObject phoneGoalIndex(String target,String parentAfter,String after,boolean received) throws Exception {return phoneGoalIndex(target,parentAfter,after,received,"");}
+        public JSONObject phoneGoalIndex(String target,String parentAfter,String after,boolean received,String searchText) throws Exception {
             DeviceIdentity.LocalIdentity local=existingIdentity();JSONObject peer=trust.peer(target);
             if(local==null||peer==null)throw new SecurityException("原本机或配对设备身份已变化，未读取其他设备");
-            if(received)return tasks.deviceTasks().receivedPhoneGoalIndex(local.deviceId(),local.instanceId(),target,parentAfter,after)
+            if(received)return tasks.deviceTasks().receivedPhoneGoalIndex(local.deviceId(),local.instanceId(),target,parentAfter,after,searchText)
                     .put("instanceId",peer.getString("instanceId")).put("side","received");
-            return tasks.deviceTasks().ownerPhoneGoalIndex(local.deviceId(),target,peer.getString("instanceId"),parentAfter,after).put("localInstanceId",local.instanceId()).put("side","sent");
+            return tasks.deviceTasks().ownerPhoneGoalIndex(local.deviceId(),target,peer.getString("instanceId"),parentAfter,after,searchText).put("localInstanceId",local.instanceId()).put("side","sent");
         }
         public NativeDeviceWorkspaceHost.HistoryAction openHistory(String id, String operation) throws Exception {
             DeviceIdentity.LocalIdentity local = existingIdentity(); if (local == null) throw new SecurityException("本机设备身份不存在，不能继承原结果读取范围");

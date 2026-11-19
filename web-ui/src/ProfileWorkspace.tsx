@@ -49,7 +49,7 @@ type Editor = { section: Section; original: PersonalProfile; draft: PersonalProf
 type MemorySelection = { id: string; candidate: boolean; value: Data; record: Data; originalText: string; draft: string; historical?: boolean };
 type MemoryReview = { value: Data; operation: 'forget' | 'accept' | 'reject'; id: string; candidate: boolean };
 type MutationOperation = 'create' | 'correct' | 'shorten' | MemoryReview['operation'];
-type MemoryFeedback = { value: Data; operation: MutationOperation; needsQuery: boolean; targetId?: string; submittedText?: string; term?: { id: string; revision: number; until: number } };
+type MemoryFeedback = { value: Data; operation: MutationOperation; needsQuery: boolean; targetId?: string; submittedText?: string; candidateTerm?: { revision: number; expiresAt: number }; term?: { id: string; revision: number; until: number } };
 type AvatarPicker = { id: string; editor: number };
 type AvatarPoll = { sequence: number; key: string | undefined; visibility: number; picker: AvatarPicker };
 const labels: Record<View, string> = { home: '我与管家', identity: '编辑资料', communication: '交流偏好', behavior: '做事偏好', memories: '个人记忆', memory: '编辑记忆', 'memory-new': '记住一件事', 'memory-settings': '记忆设置', 'memory-history': '过去的记忆' };
@@ -100,8 +100,32 @@ function validShortenReceipt(receipt: Data, original: MemoryFeedback): boolean {
   if (receipt.status === 'unchanged') return receipt.saved === false && !!string(receipt.message);
   return receipt.status === 'saved' && receipt.saved === true && receipt.record?.id === term.id && receipt.record.revision === term.revision + 1 && receipt.record.expiresAt === term.until;
 }
+function validExpiredCandidateReceipt(receipt: Data, original: MemoryFeedback): boolean {
+  const term = original.candidateTerm;
+  return original.operation === 'accept' && !!original.targetId && !!term && receipt.status === 'expired_not_saved' &&
+    receipt.receiptHandle === original.value.receiptHandle && receipt.saved === false && receipt.undoAvailable === false &&
+    receipt.candidateId === original.targetId && receipt.candidateRevision === term.revision && receipt.expiresAt === term.expiresAt &&
+    Number.isSafeInteger(receipt.checkedAt) && receipt.checkedAt >= term.expiresAt;
+}
+function usePendingDeadline(expiresAt: number): boolean {
+  const [, render] = useState(0);
+  useEffect(() => {
+    if (!expiresAt) return;
+    let timer: number | undefined;
+    const refresh = () => {
+      window.clearTimeout(timer);
+      const left = expiresAt - Date.now();
+      if (left > 0) timer = window.setTimeout(refresh, Math.min(left, 0x7fffffff));
+      else render(value => value + 1);
+    };
+    refresh(); document.addEventListener('visibilitychange', refresh);
+    return () => { window.clearTimeout(timer); document.removeEventListener('visibilitychange', refresh); };
+  }, [expiresAt]);
+  return expiresAt > 0 && Date.now() >= expiresAt;
+}
 function feedbackLabel(feedback: MemoryFeedback): string {
   if (feedback.needsQuery || feedback.value.status === 'unknown') return '这次修改的结果待核对';
+  if (feedback.value.status === 'expired_not_saved') return '这条建议已到期，本次没有保存为个人记忆';
   if (feedback.operation === 'shorten' && feedback.value.status === 'not_submitted') return '这次缩短期限尚未提交，原期限未改';
   if (feedback.operation === 'shorten' && feedback.value.status === 'unchanged') return string(feedback.value.message) || '原期限未改';
   if (feedback.operation === 'shorten' && feedback.value.status === 'saved') return `原记忆的有效期已缩短至 ${retentionLabel(feedback.value.record?.expiresAt)}`;
@@ -146,7 +170,7 @@ const manualMemory = (row: Data) => row.source === '主人主动添加' || row.s
 function memoryOrigin(row: Data, candidate = false): string {
   if (candidate) {
     switch (row.status) {
-      case 'pending': return '建议 · 待你决定是否保存';
+      case 'pending': return expiredMemory(row) ? '建议已到期' : '建议 · 待你决定是否保存';
       case 'accepted': return '建议已采纳';
       case 'rejected': return '建议已忽略';
       case 'invalidated': return '建议已失效';
@@ -209,6 +233,8 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   const locked = !!pending;
   const formLocked = locked || avatarPicking || !canSave;
   const profileConflict = !!editor && !!profile && editor.original.revision !== profile.revision && !sameSection(editor.original, profile, editor.section);
+  const pendingUntil = selection?.candidate && selection.record.status === 'pending' ? selection.record.expiresAt : null;
+  const expiredCandidate = usePendingDeadline(Number.isSafeInteger(pendingUntil) && pendingUntil > 0 ? pendingUntil : 0);
   const pendingCandidates = memories.candidates.filter(row => row.status === 'pending');
   const activeMemories = memories.current.filter(row => !historicalMemory(row));
   const searchText = query.trim().toLocaleLowerCase();
@@ -689,7 +715,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
     const frozen = current.current.selection;
     if (!frozen || memoryConflict || memoryUnknown || !readHandle.current || (operation !== 'forget' && memoryDirty(frozen))) return;
     if (operation === 'forget' ? frozen.candidate : !frozen.candidate || frozen.record.status !== 'pending') return;
-    if (operation === 'accept' && settingsRequiredFor(current.current.feedback, operation, frozen.id)) return;
+    if (operation === 'accept' && (expiredMemory(frozen.record) || settingsRequiredFor(current.current.feedback, operation, frozen.id))) return;
     void action('正在读取修改范围', async () => {
       const prepared = await checkedReview(operation, frozen, operation === 'reject' ? { reason: '用户在个人中心选择忽略这条候选。' } : {});
       if (!alive.current) { closeHandle(prepared.handle); return; }
@@ -701,10 +727,19 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   };
   const applyMemoryReview = async (frozen: MemoryReview, handle: string) => {
       reviewHandle.current = ''; setReview(null);
-      rememberReceipt({ receiptHandle: frozen.value.receiptHandle, undoAvailable: false }, frozen.operation, true, frozen.id);
+      const before = frozen.value.before;
+      const pending: MemoryFeedback = { value: { receiptHandle: frozen.value.receiptHandle, undoAvailable: false }, operation: frozen.operation, targetId: frozen.id, needsQuery: true };
+      if (frozen.operation === 'accept' && before?.id === frozen.id && before.status === 'pending' && Number.isSafeInteger(before.revision) && before.revision > 0 && Number.isSafeInteger(before.expiresAt) && before.expiresAt > 0)
+        pending.candidateTerm = { revision: before.revision, expiresAt: before.expiresAt };
+      if (alive.current) setFeedback(pending);
       let completed = false;
       try {
         const receipt = object(await call('profile.memory.confirm', { reviewHandle: handle }));
+        if (receipt.status === 'expired_not_saved') {
+          if (!validExpiredCandidateReceipt(receipt, pending)) throw new Error('这条建议的期限回执尚未核对。');
+          if (alive.current) { setFeedback({ ...pending, value: receipt, needsQuery: false }); if (current.current.selection?.id === frozen.id) setMemoryUnknown(false); }
+          return;
+        }
         if (settlePreferenceReceipt(receipt, frozen.value.receiptHandle, frozen.operation, frozen.id)) return;
         if (frozen.operation === 'accept' && receipt.duplicate === true && receipt.status === 'already_saved') {
           if (receipt.receiptHandle !== frozen.value.receiptHandle || !string((receipt.record || receipt.candidate)?.id)) throw new Error('相同内容的原回执尚未完整核对。');
@@ -771,10 +806,15 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
           // arrive after the editor has been unlocked for a new explicit save.
           result = object(await call('profile.memory.query', { receiptHandle: frozen.value.receiptHandle }));
         }
-        if (result.receiptHandle !== frozen.value.receiptHandle || !['not_submitted', 'settings_required', 'saved', 'already_saved', 'reverted', 'unknown', 'conflict', 'unchanged'].includes(result.status) || (result.status === 'unchanged' || frozen.operation === 'shorten' && result.status === 'saved') && !validShortenReceipt(result, frozen) || result.status === 'settings_required' && !preferenceSectionOf(result)) throw new Error('这次修改的回执尚未完整读取。');
+        if (result.status === 'expired_not_saved' && !validExpiredCandidateReceipt(result, frozen)) throw new Error('这条建议的期限回执尚未核对。');
+        if (result.receiptHandle !== frozen.value.receiptHandle || !['not_submitted', 'settings_required', 'saved', 'already_saved', 'reverted', 'unknown', 'conflict', 'unchanged', 'expired_not_saved'].includes(result.status) || (result.status === 'unchanged' || frozen.operation === 'shorten' && result.status === 'saved') && !validShortenReceipt(result, frozen) || result.status === 'settings_required' && !preferenceSectionOf(result)) throw new Error('这次修改的回执尚未完整读取。');
         if (!alive.current) return;
         settled = true;
         setFeedback({ ...frozen, value: result, needsQuery: false });
+        if (result.status === 'expired_not_saved') {
+          if (current.current.selection?.id === frozen.targetId) setMemoryUnknown(false);
+          return;
+        }
         if (result.status === 'settings_required') {
           if (frozen.operation === 'create') setCreateUnknown(false);
           if (current.current.selection?.id === frozen.targetId) setMemoryUnknown(false);
@@ -967,8 +1007,8 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
         {view === 'memory' && selection && <div className="pw-profile-memory-editor">
           <span className="pw-profile-memory-status">{memoryOrigin(selection.record, selection.candidate)}</span>
           {selection.candidate ? <>
-            <p className="pw-profile-intro">{selection.record.status === 'pending' ? '这是一条建议，还没有作为个人记忆保存。采纳只是决定记住，不是核实为事实。' : retiredSuggestion ? '这条建议当前不可处理，不显示旧内容或原文。' : '这条建议已经处理，不能再次采纳或忽略。'}</p>
-            {selection.record.status === 'pending' && relatedRecords.length > 0 && <section className="pw-profile-memory-comparison"><h2>同项已有记录</h2>{relatedRecords.map(row => <p className="pw-profile-candidate-copy" key={row.id}>{string(row.text)}</p>)}<p className="pw-profile-list-hint">采纳会新增这条记忆。需要纠正已有内容时，请修改对应记录。</p><h2>待确认内容</h2></section>}
+            <p className="pw-profile-intro">{selection.record.status === 'pending' ? expiredCandidate ? '已过这条建议的采纳期限。你仍可核对来源、暂不处理或忽略它。' : '这是一条建议，还没有作为个人记忆保存。采纳只是决定记住，不是核实为事实。' : retiredSuggestion ? '这条建议当前不可处理，不显示旧内容或原文。' : '这条建议已经处理，不能再次采纳或忽略。'}</p>
+            {selection.record.status === 'pending' && !expiredCandidate && relatedRecords.length > 0 && <section className="pw-profile-memory-comparison"><h2>同项已有记录</h2>{relatedRecords.map(row => <p className="pw-profile-candidate-copy" key={row.id}>{string(row.text)}</p>)}<p className="pw-profile-list-hint">采纳会新增这条记忆。需要纠正已有内容时，请修改对应记录。</p><h2>待确认内容</h2></section>}
             {!retiredSuggestion && <p className="pw-profile-candidate-copy">{selection.originalText}</p>}
           </> : selection.historical ? <><p className="pw-profile-intro">这条内容已退出当前背景。</p><p className="pw-profile-candidate-copy">{selection.originalText}</p></> : <TextAreaField className="pw-profile-field" fieldClassName="pw-profile-input pw-profile-memory-input" label="记忆内容" value={selection.draft} onChange={value => { if (!busy.current) { setSelection(old => old ? { ...old, draft: value } : old); setNotice(''); } }} rows={5} maxLength={4000} resize="none" isDisabled={locked} />}
           {!selection.candidate && !selection.historical && <p className="pw-profile-list-hint">保存表示可以作为个人记忆参考，不代表内容已经核实。</p>}
@@ -983,7 +1023,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
           {selection.candidate ? selection.record.status === 'pending' && <>
             <p className="pw-profile-list-hint" id="personal-candidate-choice">暂不保存只返回，不改变建议状态。忽略建议会将这条移出待确认。</p>
             <div className="pw-profile-actions pw-profile-candidate-actions" role="group" aria-label="处理这条建议" aria-describedby="personal-candidate-choice">
-              <Button disabled={locked || memoryConflict || memoryUnknown || candidateResultUnclear || settingsRequiredFor(feedback, 'accept', selection.id) || !supported('profile.memory.confirm')} onClick={() => prepareReview('accept')}>记住</Button>
+              <Button disabled={locked || expiredCandidate || memoryConflict || memoryUnknown || candidateResultUnclear || settingsRequiredFor(feedback, 'accept', selection.id) || !supported('profile.memory.confirm')} onClick={() => prepareReview('accept')}>记住</Button>
               <Button variant="secondary" disabled={locked || memoryUnknown || candidateResultUnclear} onClick={back}>暂不保存</Button>
               <Button variant="ghost" disabled={locked || memoryConflict || memoryUnknown || candidateResultUnclear || !supported('profile.memory.confirm')} onClick={() => prepareReview('reject')}>忽略建议</Button>
             </div>

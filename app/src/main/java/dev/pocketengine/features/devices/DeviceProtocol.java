@@ -98,7 +98,7 @@ public final class DeviceProtocol {
             keys(args,set("goal executionMode"),set("contextSnapshot modelSource delegationAuthorization textReturnContract"));text(args.opt("goal"),"goal",12000);if(!"agent".equals(args.opt("executionMode")))throw fail("invalid_request","Goal submission requires executionMode=agent");
             for(String name:set("contextSnapshot modelSource delegationAuthorization"))if(args.has(name)&&args.optJSONObject(name)==null)throw fail("invalid_request","Invalid "+name);
             if(args.has("delegationAuthorization"))DelegationGrant.validateWireProof(args.optJSONObject("delegationAuthorization"));
-            if(args.has("textReturnContract")&&!isDirectTextReturn(value))throw fail("invalid_request","Text handoff requires the exact zero-tool, direct, no-project contract");
+            if(args.has("textReturnContract")&&!ownerTextRequest(value))throw fail("invalid_request","Text handoff requires the exact zero-tool, direct, no-project contract");
         }else if("desktop.viewer".equals(method)){
             String action=args.optString("action");Set<String> required=new HashSet<>(set("action viewerSessionId")),optional=new HashSet<>();
             switch(action){
@@ -238,34 +238,81 @@ public final class DeviceProtocol {
     }
     public static String argumentsDigest(JSONObject envelope){try{JSONObject bound=new JSONObject();for(String key:objectKeys(envelope))if(!NON_SEMANTIC.contains(key))bound.put(key,envelope.get(key));return sha256(canonical(bound).getBytes(StandardCharsets.UTF_8));}catch(ProtocolException failure){throw failure;}catch(Exception impossible){throw new IllegalStateException(impossible);}}
     public static final String TEXT_RETURN="pocketworld.direct-text.owner-reviewed-result.v1";
-    public static boolean isDirectTextReturn(JSONObject request){
+    public static final String ANDROID_TEXT_RETURN="pocketworld.original-phone-allocation.owner-reviewed-text.v1";
+    public static boolean textMarker(Object value){return TEXT_RETURN.equals(value)||ANDROID_TEXT_RETURN.equals(value);}
+    private static boolean textShape(JSONObject request,String marker){
         JSONObject args=request.optJSONObject("arguments"),binding=request.optJSONObject("resourceBinding"),budget=request.optJSONObject("budget");
-        JSONObject model=args==null?null:args.optJSONObject("modelSource");String op=request.optString("operationId"),caller=request.optString("callerDeviceId");
+        JSONObject model=args==null?null:args.optJSONObject("modelSource");
+        String caller=request.optString("callerDeviceId");
         JSONArray visited=request.optJSONArray("visitedDevices"),chain=request.optJSONArray("delegationChain");
         return "GoalSubmission".equals(request.opt("messageType"))&&"task.submitGoal".equals(request.opt("method"))&&VERSION.equals(request.opt("capabilityVersion"))
-                &&args!=null&&args.length()==4&&TEXT_RETURN.equals(args.opt("textReturnContract"))&&"agent".equals(args.opt("executionMode"))
+                &&args!=null&&args.length()==4&&marker.equals(args.opt("textReturnContract"))&&"agent".equals(args.opt("executionMode"))
                 &&args.opt("goal") instanceof String&&!args.optString("goal").trim().isEmpty()&&model!=null&&model.length()==1&&"local".equals(model.opt("kind"))
                 &&binding!=null&&binding.length()==1&&"capabilities".equals(binding.opt("screenMode"))&&budget!=null&&budget.length()==3&&budget.optLong("toolCalls",-1)==0
                 &&!request.has("observationRef")&&!request.has("dependencySnapshot")&&!request.has("replyCursor")&&request.optInt("maxDelegationDepth",-1)==1
-                &&budget.optLong("modelCalls")>=1&&budget.optLong("modelCalls")<=3&&!op.isEmpty()&&op.equals(request.opt("rootTaskId"))
-                &&op.equals(request.opt("parentTaskId"))&&op.equals(request.opt("localTaskId"))&&!caller.isEmpty()&&caller.equals(request.opt("originDeviceId"))
+                &&budget.optLong("modelCalls")>=1&&budget.optLong("modelCalls")<=3&&!caller.isEmpty()&&caller.equals(request.opt("originDeviceId"))
                 &&!caller.equals(request.opt("targetDeviceId"))&&(!request.has("visitedDevices")||visited!=null&&visited.length()==1&&caller.equals(visited.opt(0)))
                 &&(!request.has("delegationChain")||chain!=null&&chain.length()==0);
     }
-    /** Native original admission marker only. A plain capabilities grant is not a request to return private results. */
+    public static boolean isDirectTextReturn(JSONObject request){
+        String op=request.optString("operationId");
+        return textShape(request,TEXT_RETURN)&&!op.isEmpty()&&op.equals(request.opt("rootTaskId"))
+                &&op.equals(request.opt("parentTaskId"))&&op.equals(request.opt("localTaskId"));
+    }
+    /** This is the existing Android source: actual parent, different prepared child
+     * operation, deterministic allocation. Never equate these to the Windows form. */
+    public static boolean isAndroidTextReturn(JSONObject wire){
+        if(!textShape(wire,ANDROID_TEXT_RETURN))return false;
+        String parent=wire.optString("parentTaskId"),op=wire.optString("operationId");
+        if(parent.isEmpty()||op.isEmpty()||parent.equals(op)||!parent.equals(wire.opt("rootTaskId"))||!parent.equals(wire.opt("traceId"))
+                ||wire.opt("visitedDevices")==null||wire.opt("delegationChain")==null||wire.optInt("attempt",-1)<1
+                ||wire.optLong("attempt",-1)!=wire.optLong("executorEpoch",-2))return false;
+        String allocation=allocationId(parent,wire.optString("targetDeviceId"),wire.optJSONObject("resourceBinding"),"goal",op);
+        return allocation.equals(wire.opt("localTaskId"))&&allocation.equals(wire.optJSONObject("budget").opt("allocationId"));
+    }
+    public static boolean ownerTextRequest(JSONObject wire){return isDirectTextReturn(wire)||isAndroidTextReturn(wire);}
+    /** A plain capabilities grant is never consent to return a historical task. */
     public static boolean acceptedTextReturn(JSONObject task){
         JSONObject origin=task.optJSONObject("origin"),scope=task.optJSONObject("deviceExecutionScope"),binding=scope==null?null:scope.optJSONObject("resourceBinding");
-        if(origin==null||scope==null||binding==null||!TEXT_RETURN.equals(origin.opt("textReturnContract"))||!"GOAL".equals(task.opt("deviceExecutionKind"))
+        if(origin==null||scope==null||binding==null||!textMarker(origin.opt("textReturnContract"))||!"GOAL".equals(task.opt("deviceExecutionKind"))
                 ||!Boolean.TRUE.equals(scope.opt("reviewedTextOnly"))||!"paired_device".equals(origin.opt("kind"))||!"capabilities".equals(scope.opt("mode"))
                 ||!"GOAL".equals(scope.opt("executionKind"))||scope.optInt("modelCallLimit")<1||scope.optInt("modelCallLimit")>3
                 ||scope.has("sourceShare")||scope.has("forwardingProof")||scope.optLong("toolLimit",-1)!=0||binding.length()!=1||!"capabilities".equals(binding.opt("screenMode")))return false;
-        String op=origin.optString("remoteOperationId");
-        return !op.isEmpty()&&op.equals(origin.opt("rootTaskId"))&&op.equals(origin.opt("parentTaskId"))&&op.equals(origin.opt("remoteLocalTaskId"))
-            &&!origin.optString("callerDeviceId").isEmpty()&&origin.optString("callerDeviceId").equals(origin.opt("originDeviceId"))
-            &&!origin.optString("callerDeviceId").equals(origin.opt("targetDeviceId"))&&origin.optJSONObject("sourceShare")==null;
+        String op=origin.optString("remoteOperationId"),parent=origin.optString("parentTaskId"),caller=origin.optString("callerDeviceId");
+        if(op.isEmpty()||parent.isEmpty()||!parent.equals(origin.opt("rootTaskId"))||caller.isEmpty()||!caller.equals(origin.opt("originDeviceId"))
+                ||caller.equals(origin.opt("targetDeviceId"))||origin.optJSONObject("sourceShare")!=null)return false;
+        if(TEXT_RETURN.equals(origin.opt("textReturnContract")))return op.equals(parent)&&op.equals(origin.opt("remoteLocalTaskId"));
+        String allocation=allocationId(parent,origin.optString("targetDeviceId"),binding,"goal",op);
+        return !parent.equals(op)&&parent.equals(origin.opt("traceId"))&&allocation.equals(origin.opt("remoteLocalTaskId"))
+                &&allocation.equals(scope.opt("allocationId"))&&scope.optInt("maxDelegationDepth",-1)==1;
+    }
+    /** Local inbox navigation only. The signed app scope may intentionally have NO local phone host. */
+    public static boolean receivedHostMatches(String signed,boolean zero,JSONObject row){
+        boolean app="main_screen".equals(signed)||"background".equals(signed);
+        return app&&"phone".equals(row.opt("kind"))&&signed.equals(row.opt("executionMode"))
+                ||zero&&(app||"capabilities".equals(signed))&&"assistant".equals(row.opt("kind"))&&"capabilities".equals(row.opt("executionMode"));
+    }
+    /** Full native row, never a grant. An ordinary capabilities/project assistant is not a received phone goal. */
+    public static String receivedPhoneScopeMode(JSONObject task){
+        JSONObject origin=task.optJSONObject("origin"),scope=task.optJSONObject("deviceExecutionScope");
+        if(!"GOAL".equals(task.opt("deviceExecutionKind"))||origin==null||!"paired_device".equals(origin.opt("kind")))return "";
+        String caller=origin.optString("callerDeviceId"),local=task.optString("executionMode");
+        if(caller.isEmpty()||!caller.equals(origin.opt("originDeviceId"))||caller.equals(origin.opt("targetDeviceId"))
+                ||!("paired_device:"+caller).equals(task.opt("actorId"))||!("device:"+caller).equals(task.opt("spaceId")))return "";
+        if(("main_screen".equals(local)||"background".equals(local))&&"phone".equals(task.opt("kind")))return local; // existing physical host
+        if(scope==null||!"GOAL".equals(scope.opt("executionKind"))||scope.optLong("toolLimit",-1)!=0
+                ||origin.optString("parentTaskId").isEmpty()||!origin.optString("parentTaskId").equals(origin.opt("rootTaskId")))return "";
+        JSONObject binding=scope.optJSONObject("resourceBinding");if(binding==null)return "";
+        String signed=binding.optString("screenMode");
+        if(!signed.equals(scope.opt("mode"))||!receivedHostMatches(signed,true,task))return "";
+        if("capabilities".equals(signed))return acceptedTextReturn(task)?signed:"";
+        JSONArray packages=binding.optJSONArray("packageNames");
+        return !binding.has("projectId")&&!binding.has("checkoutId")&&binding.opt("androidUserId") instanceof Number
+                &&packages!=null&&packages.length()>0?signed:"";
     }
     /** Shared by the owner-only local index and the original device history reader. */
     public static boolean isDirectPhoneGoal(JSONObject wire,String here,String parent,String operation) {
+            if(isAndroidTextReturn(wire))return here.equals(wire.opt("callerDeviceId"))&&parent.equals(wire.opt("parentTaskId"))&&operation.equals(wire.opt("operationId"));
             JSONObject resource=wire.optJSONObject("resourceBinding");
             return resource!=null&&"GoalSubmission".equals(wire.optString("messageType"))&&"task.submitGoal".equals(wire.optString("method"))
                 && ("main_screen".equals(resource.optString("screenMode"))||"background".equals(resource.optString("screenMode")))

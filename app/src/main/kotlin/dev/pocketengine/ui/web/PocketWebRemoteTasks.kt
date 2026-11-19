@@ -72,7 +72,7 @@ internal class PocketWebRemoteTasks(
             "gateway.prepareContinuation" to setOf("snapshotId", "snapshotVersion"), "openHarnessConfig" to setOf("operationId", "restoreOperationId", "selectionFromTask"))
         private fun independentReview(command: String) = command.startsWith("gateway.") && command != "gateway.prepareContinuation" || command.endsWith("HarnessConfig") || command == "cancelHarnessConfigPreview"
         val COMMANDS = fields.keys.map { "remoteTask.$it" }.toSet() +
-            setOf("remoteTask.open", "remoteTask.close", "remoteTask.openLocalSnapshot", "remoteSessions.read", "remoteSessions.open") + PocketWebRemotePreview.COMMANDS + PocketWebRemoteInputs.COMMANDS
+            setOf("remoteTask.open", "remoteTask.close", "remoteTask.openLocalSnapshot", "remoteTask.stageSavedSources", "remoteTask.cancelSourcePreparation", "remoteSessions.read", "remoteSessions.open") + PocketWebRemotePreview.COMMANDS + PocketWebRemoteInputs.COMMANDS
 
         /** All lineage and delivery decisions use the same native rules as execution. */
         internal fun presentSnapshot(original: JSONObject): JSONObject {
@@ -170,6 +170,23 @@ internal class PocketWebRemoteTasks(
     }
 
     fun dispatch(action: String, args: JSONObject, done: (JSONObject?, String?) -> Unit) {
+        if (action == "remoteTask.cancelSourcePreparation") {
+            require(args.keys().asSequence().toSet() == setOf("taskId", "token"))
+            controller.projectPackages.cancelHostSourceWait(string(args, "taskId"), string(args, "token"))
+            done(JSONObject().put("closed", true), null); return
+        }
+        if (action == "remoteTask.stageSavedSources") {
+            require(args.keys().asSequence().toSet() == setOf("taskId", "token", "claims"))
+            val task = string(args, "taskId"); val claims = args.getJSONArray("claims")
+            require(claims.length() in 1..8 && claims.toString().length <= 32768) { "请从原冻结版本选取最多八份手机原件" }
+            val window = captureWindow()
+            val current = { acceptsWindow(window) && taskCurrent(task) && controller.webPrivateOwnerVisible() }
+            check(current()) { "请回到原私人主机任务" }
+            controller.projectPackages.stageSavedHostSources(task, string(args, "token"), claims, current) { result, error ->
+                if (current()) done(result, error) else done(null, "原任务窗口已变化，未打开或创建项目")
+            }
+            return
+        }
         if(action=="remoteTask.openLocalSnapshot"){openLocalSnapshot(args,done);return}
         if (action in PocketWebRemoteInputs.COMMANDS) { inputPages.dispatch(action, args, done); return }
         if (action in PocketWebRemotePreview.COMMANDS) {

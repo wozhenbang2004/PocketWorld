@@ -250,6 +250,10 @@ public final class TaskAuditStore {
             else if(value instanceof JSONObject){if(jsonBytes(value,8192,0)>=0)out.put(key,new JSONObject(value.toString()));else out.put("metadataLimited",true);}
         }
         JSONObject learning=task.optJSONObject("sourceLearningJob");if(learning!=null){JSONObject small=new JSONObject().put("headerOnly",true).put("inputsIncluded",false).put("executionAuthorized",false);for(String field:new String[]{"format","revision","nextIndex","reservedModelAttempts"}){Object value=learning.opt(field);if(value instanceof Number||value instanceof Boolean||value instanceof String&&((String)value).length()<=160)small.put(field,value);}out.put("sourceLearningJob",small);}
+        if("capabilities".equals(task.opt("executionMode"))){
+            String signed=dev.pocketengine.features.devices.DeviceProtocol.receivedPhoneScopeMode(task);
+            if("main_screen".equals(signed)||"background".equals(signed))out.put("receivedZeroToolAppScope",signed);
+        }
         JSONObject pendingPhoneResult=ReceivedPhoneGoalIndex.pendingSlot(task);
         if(pendingPhoneResult!=null)out.put("receivedPhoneResultSlot",pendingPhoneResult);
         JSONObject phoneLink=conversationPhoneLink(task);if(phoneLink!=null)out.put("conversationPhoneLink",phoneLink);

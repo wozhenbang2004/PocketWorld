@@ -5,9 +5,12 @@ import org.json.JSONObject;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/** Owner-only display of one actual native comparison. Never usable to approve or integrate files. */
+/** Owner-only snapshot of a real native comparison. Reading never grants authority. */
 public final class TeamOwnerFileReading {
     private final String team,plan;
+    private final boolean completeTextComparison;
+    private final Map<String,Integer> contiguous=new LinkedHashMap<>();
+    private final Map<String,String> projectHeads=new LinkedHashMap<>();
     private final JSONObject description;
     private final Map<String,String> text=new LinkedHashMap<>();
     private final Map<String,JSONObject> entries=new LinkedHashMap<>();
@@ -17,6 +20,7 @@ public final class TeamOwnerFileReading {
         team=teamRun;plan=captured.getString("planHash");if(!plan.matches("[a-f0-9]{64}"))throw new SecurityException("原团队文件计划指纹缺失");
         JSONArray files=original.getJSONArray("files"),diffs=captured.getJSONArray("diffs"),rows=new JSONArray();
         if(files.length()!=diffs.length()||files.length()>32)throw new SecurityException("原文件目录与实际差异不一致");
+        boolean allText=files.length()>0&&captured.getBoolean("canIntegrate")&&!captured.optBoolean("recovery")&&captured.getJSONArray("incompleteAssignments").length()==0;
         for(int i=0;i<files.length();i++){
             JSONObject file=files.getJSONObject(i),diff=diffs.getJSONObject(i);String id=file.getString("artifactId");
             if(entries.containsKey(id)||!team.equals(file.getString("teamRunId"))||!original.getString("targetProjectId").equals(file.getString("targetProjectId")))throw new SecurityException("原冻结文件重复或不属于这个项目");
@@ -30,19 +34,40 @@ public final class TeamOwnerFileReading {
                     .put("kind",deleted?"deletion":hasText?"text":"binary_or_large");
             if(hasText){String body=diff.getString("diff");if(body.length()>65536)throw new SecurityException("原生差异超出保留范围");if(diff.getBoolean("truncated")&&!body.isEmpty()&&Character.isHighSurrogate(body.charAt(body.length()-1)))body=body.substring(0,body.length()-1);text.put(id,body);row.put("retainedChars",body.length());}
             for(String key:new String[]{"beforeBytes","afterBytes","beforeHash","afterHash"})if(diff.has(key))row.put(key,diff.get(key));
+            projectHeads.put(id,diff.getString("currentHash")+":"+diff.optString("currentRevisionId")+":"+diff.getInt("currentVersion")+":"+diff.getBoolean("currentExists"));
+            allText&=hasText&&!row.getBoolean("truncated")&&row.getBoolean("matchesOwnerBase")&&!row.getBoolean("retainedApplied");
             entries.put(id,row);rows.put(row);
         }
-        description=new JSONObject().put("teamRunId",team).put("planHash",plan).put("capturedAt",System.currentTimeMillis()).put("files",rows)
+        completeTextComparison=allText;
+        description=new JSONObject().put("teamRunId",team).put("projectId",original.getString("targetProjectId")).put("planHash",plan).put("capturedAt",System.currentTimeMillis()).put("files",rows)
                 .put("incompleteCount",captured.getJSONArray("incompleteAssignments").length()).put("recovery",captured.optBoolean("recovery"))
                 .put("readOnly",true).put("executionAuthorized",false);
+        if(captured.optBoolean("recovery")){
+            JSONObject identity=original.getJSONObject("recovery");int matching=0;for(int i=0;i<rows.length();i++)if(rows.getJSONObject(i).getBoolean("retainedApplied"))matching++;
+            description.put("integrationCapture",new JSONObject().put("integrationTaskId",identity.getString("taskId")).put("reviewId",identity.getString("reviewId"))
+                    .put("planHash",identity.getString("planHash")).put("matchingFiles",matching).put("total",rows.length()).put("active",captured.getBoolean("integrationActive"))
+                    .put("unresolved",captured.getBoolean("integrationUnresolved")).put("status",captured.getString("integrationStatus")).put("businessVerified",false));
+        }
     }
     public JSONObject index()throws Exception{return new JSONObject(description.toString());}
-    public JSONObject page(String id,int offset)throws Exception{
+    String team(){return team;}
+    String plan(){return plan;}
+    boolean hasCompleteTextComparison(){return completeTextComparison;}
+    synchronized boolean shownAllOriginalDiffs(){
+        if(!completeTextComparison)return false;
+        for(Map.Entry<String,String> file:text.entrySet())if(contiguous.getOrDefault(file.getKey(),-1)!=file.getValue().length())return false;
+        return true;
+    }
+    boolean sameTextComparison(TeamOwnerFileReading next){
+        return completeTextComparison&&next.completeTextComparison&&team.equals(next.team)&&plan.equals(next.plan)&&projectHeads.equals(next.projectHeads)&&text.equals(next.text);
+    }
+    public synchronized JSONObject page(String id,int offset)throws Exception{
         JSONObject original=entries.get(id);if(original==null)throw new SecurityException("这份文件不在打开时的原目录");
         String body=text.get(id);if(body==null||offset<0||offset>body.length()||offset>0&&offset<body.length()&&Character.isLowSurrogate(body.charAt(offset))&&Character.isHighSurrogate(body.charAt(offset-1)))throw new SecurityException("没有这段可读的原文差异");
         int end=Math.min(body.length(),offset+6000);
         if(end<body.length()&&end>offset&&Character.isHighSurrogate(body.charAt(end-1))&&Character.isLowSurrogate(body.charAt(end)))end--;
-        return new JSONObject().put("teamRunId",team).put("planHash",plan).put("artifactId",id).put("assignmentId",original.getString("assignmentId"))
+        int known=contiguous.getOrDefault(id,-1);if(offset==0||known>=offset)contiguous.put(id,Math.max(known,end));
+        return new JSONObject().put("allTextRangesReturned",shownAllOriginalDiffs()).put("teamRunId",team).put("planHash",plan).put("artifactId",id).put("assignmentId",original.getString("assignmentId"))
                 .put("offset",offset).put("endOffset",end).put("retainedChars",body.length()).put("nativeTruncated",original.getBoolean("truncated"))
                 .put("diff",body.substring(offset,end)).put("readOnly",true);
     }

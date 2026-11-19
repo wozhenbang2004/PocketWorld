@@ -89,13 +89,7 @@ internal class PocketWebMemoryDrafts(private val controller: PocketWorldControll
             val answer = runCatching {
                 check(current(original)) { "原审阅窗口已变化" }; original.control.check()
                 when (action) {
-                    "memoryDraft.source" -> {
-                        val refs = original.review.view().getJSONArray("sourceRefs"); val index = input.getInt("index"); require(index < refs.length())
-                        val selected = refs.getJSONObject(index); val actual = controller.readOriginalMemorySource(selected); original.control.check()
-                        val text = actual.getString("text"); val offset = input.getInt("offset"); require(offset <= text.length && (offset == text.length || !Character.isLowSurrogate(text[offset])))
-                        var end = minOf(offset + 8000, text.length); if (end < text.length && end > offset && Character.isHighSurrogate(text[end - 1])) end--
-                        JSONObject().put("title", actual.optString("title", "原来源")).put("text", text.substring(offset, end)).put("offset", offset).put("nextOffset", end).put("totalChars", text.length).put("hasMore", end < text.length).put("sourceRef", selected).put("index", index)
-                    }
+                    "memoryDraft.source" -> original.review.sourcePageForOwner(input.getInt("index"), input.getInt("offset"), original.control)
                     "memoryDraft.confirm" -> original.review.confirm(original.control)
                     else -> original.review.cancel().let(::presentation)
                 }
@@ -103,6 +97,9 @@ internal class PocketWebMemoryDrafts(private val controller: PocketWorldControll
             main.post {
                 if (!current(original)) { done(null, "原窗口已关闭；请按原任务查询保存结果，不要重复提交"); return@post }
                 busy = false
+                if (action == "memoryDraft.source" && answer.getOrNull()?.let { System.currentTimeMillis() >= it.getLong("readExpiresAt") } == true) {
+                    done(null, "原提案阅读窗口已过期，请在原回答重新核对"); return@post
+                }
                 if (action != "memoryDraft.source") { window = null; original.review.close() }
                 answer.fold({ done(PocketWebState.publicValue(it) as JSONObject, null) }, { done(null, it.message ?: "原操作结果尚未核对，请查询原提案") })
             }

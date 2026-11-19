@@ -1,3 +1,4 @@
+import type {HostSourcePin} from './HostSavedProjectPreparation';
 import { useEffect, useRef, useState } from 'react';
 import { Accordion, AccordionItem, Button, CheckboxField, RadioOptions, SelectField, StretchSwitch, TextAreaField } from './forms-library';
 import { bridge } from './bridge';
@@ -169,7 +170,7 @@ function RemoteQuestion({ request, snapshot, busy, run }: { request: Data; snaps
   </section>;
 }
 
-export function RemoteTaskWorkspace({ taskId, raw, receipt, savedFiles }: { taskId: string; raw: Data; receipt?:Data; savedFiles: Data[] }) {
+export function RemoteTaskWorkspace({ taskId, raw, receipt, savedFiles, openProject }: { taskId: string; raw: Data; receipt?:Data; savedFiles: Data[]; openProject?:(pin:HostSourcePin)=>void }) {
   const [observing,setObserving]=useState('');
   const personal=raw.id===taskId&&raw.actorId==='owner'&&raw.spaceId==='private'&&raw.feature==='remote'&&raw.command==='submitJob'&&
     (!raw.origin||object(raw.origin).kind==='native_remote_private_inputs')&&!raw.teamRunId&&!raw.parentTaskId&&!raw.memberId;
@@ -182,7 +183,7 @@ export function RemoteTaskWorkspace({ taskId, raw, receipt, savedFiles }: { task
     <p className="pw-field-hint">{accepted?(proof!.detailRetired===true?'原主机曾接单，详细记录已归档。':'原主机曾接单。'):'这条本机记录只确认手机已登记。'}{!onlineView&&'当前只读手机记录。'}</p>
     {accepted&&<p className="pw-field-hint">原主机作业：<code>{proof!.jobId}</code>{proof!.detailRetired!==true&&proof!.executorStatus&&proof!.executorStatus!=='unknown'&&' · 上次回执：'+executionLabel(proof!.executorStatus)}</p>}
   </section>}
-    <RemoteSavedResults taskId={taskId} rows={savedFiles}/>
+    <RemoteSavedResults taskId={taskId} rows={savedFiles} openProject={openProject}/>
     {onlineView&&<LiveRemoteTask key={taskId} taskId={taskId}/>}</>;
 }
 
