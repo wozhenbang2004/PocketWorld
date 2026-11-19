@@ -113,7 +113,8 @@ def candidates(ctx,op,parent,checkpoint):
         return {"items":picked,"more":False}
 
 
-def original_absence(ctx,settings,source,path,checkpoint):
+@contextmanager
+def held_original_absence(ctx,settings,source,path,checkpoint):
     parts=relative_parts(path)
     with original_commit(ctx,settings,source,checkpoint) as (pins,packs,oid):
         by=_native_compare(ctx.backend.api,checkpoint)
@@ -129,10 +130,15 @@ def original_absence(ctx,settings,source,path,checkpoint):
                     exact=(mode,child)
             if i==len(parts)-1:
                 if exact is not None: _bad()
-                return oid  # immutable, verified parent tree actually contained NO such entry
+                yield oid,pins  # verified original parent tree contained no such entry
+                return
             if exact is None or exact[0]!=DIR: _bad()
             oid=exact[1]
     _bad()
+
+
+def original_absence(ctx,settings,source,path,checkpoint):
+    with held_original_absence(ctx,settings,source,path,checkpoint) as (oid,_): return oid
 
 
 def _new_patch(path,algo,raw):

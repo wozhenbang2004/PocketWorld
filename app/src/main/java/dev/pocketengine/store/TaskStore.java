@@ -2302,6 +2302,19 @@ public final class TaskStore {
         if(!currentFiles.isEmpty())return null;
         return new JSONObject().put("planHash",r.getString("planHash")).put("reviewerTaskId",r.getString("taskId")).put("reviewerRunId",r.getString("runId")).put("projectId",project).put("fileCount",files.length());
     }
+    private JSONObject ownerWorkTeamPackageMark(JSONObject team)throws Exception{
+        if(!dev.pocketengine.features.teams.TeamWorkPackageReturn.possible(team))return null;
+        String id=dev.pocketengine.features.teams.TeamDeliveryWorkers.taskId(team.getString("runId"),"integrator","");
+        JSONObject worker=read(id),mark=dev.pocketengine.features.teams.TeamWorkPackageReturn.mark(team,worker);
+        if(mark==null||hasUnresolved(id))return null;
+        try(Cursor actual=db.rawQuery("SELECT status,epoch FROM runs WHERE task_id=? AND run_id=?",new String[]{id,worker.getString("runId")})){
+            if(!actual.moveToFirst()||!"completed".equals(actual.getString(0))||actual.getInt(1)!=worker.optInt("coordinatorEpoch",-1))return null;
+        }
+        // Bounded original row only: no manifest, archive bytes or file names in the work list.
+        // The target's existing TeamProjectPackageSelection revalidates full operation/manifest identity.
+        try(Cursor op=db.rawQuery("SELECT state FROM operations WHERE task_id=? AND operation_id=? AND tool='project_execute'",
+                new String[]{id,mark.getString("operationId")})){return op.moveToFirst()&&"receipt".equals(op.getString(0))&&!op.moveToNext()?mark:null;}
+    }
     public synchronized JSONObject ownerWorkLinkForTeam(String teamRunId)throws Exception {
         if(teamRunId==null||teamRunId.isEmpty()||teamRunId.length()>240)return null;
         String id=externalTask("teams",teamRunId);if(id==null)id=operationTask("teams",teamRunId);if(id==null)return null;
@@ -2318,7 +2331,7 @@ public final class TaskStore {
                 .put("conversationId",work.getString("conversationId")).put("currentRun",current).put("readOnly",true)
                 .put("teamTaskId",team.getString("id")).put("teamRunId",teamRunId)
                 .put("stopping",work.optBoolean("cancelRequested")||team.optBoolean("cancelRequested")||work.optString("status").matches("cancelled|canceled|stopped")||team.optString("executionStatus").matches("cancelled|cancel|taken_over|takeover|stopping"));
-        if(current){link.put("goal",work.optString("goal"));if(!link.getBoolean("stopping")){JSONObject marker=ownerWorkFileReviewMark(work,team);if(marker!=null)link.put("fileReview",marker);}}
+        if(current){link.put("goal",work.optString("goal"));if(!link.getBoolean("stopping")){JSONObject marker=ownerWorkFileReviewMark(work,team);if(marker!=null)link.put("fileReview",marker);JSONObject pack=ownerWorkTeamPackageMark(team);if(pack!=null)link.put("deliveredPackage",pack);}}
         return link;
     }
     /** The current work's own teams, read from TaskStore receipts. Historical
@@ -2357,7 +2370,10 @@ public final class TaskStore {
                 if(progress!=null)for(String key:new String[]{"memberCount","completedMemberCount","pendingMemberCount","pendingQuestionCount","pendingDecisionCount","attentionCount"})if(progress.has(key))row.put(key,progress.get(key));
                 if(!stopped&&!unresolved){int proposals=progress==null?0:progress.optInt("pendingParentRevisionCount",0);
                     if(proposals>0&&proposals<=16&&!work.optString("status").matches("completed|stopping|cancelled|paused|pausing|interrupted")&&team.optJSONObject("teamWorkPlan")!=null&&team.getJSONObject("teamWorkPlan").optLong("expiresAt")>System.currentTimeMillis())row.put("pendingParentRevisionCount",proposals).put("needsAttention",true);
-                    JSONObject marker=ownerWorkFileReviewMark(work,team);if(marker!=null)row.put("fileReview",marker).put("needsAttention",true);}
+                    JSONObject marker=ownerWorkFileReviewMark(work,team);if(marker!=null)row.put("fileReview",marker).put("needsAttention",true);
+                    JSONObject pack=ownerWorkTeamPackageMark(team);
+                    if(pack!=null){row.put("deliveredPackage",pack);
+                        if(marker==null&&dev.pocketengine.features.teams.TeamWorkPackageReturn.solelyAuthorReview(team,progress))row.put("needsAttention",false);}}
                 teams.put(row);
             }
         }catch(SecurityException|dev.pocketengine.features.memory.TaskStoreMemoryReader.RawMessageUnavailable unavailable){

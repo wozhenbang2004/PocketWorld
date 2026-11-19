@@ -245,9 +245,13 @@ def _tree_id(body, algo):
     return oid.decode("ascii")
 
 
-def repository_anchor(context,environment_id,pins,dot):
-    parts = [PROFILE,context.install_state["installId"],environment_id,pins.nodes[()][3],dot[3]]
+def anchor_for_ids(context,environment_id,repository_id,git_id):
+    parts = [PROFILE,context.install_state["installId"],environment_id,repository_id,git_id]
     return hashlib.sha256(json.dumps(parts,separators=(",",":")).encode()).hexdigest()
+
+
+def repository_anchor(context,environment_id,pins,dot):
+    return anchor_for_ids(context,environment_id,pins.nodes[()][3],dot[3])
 
 
 def capture(context, settings_digest, environment_id, *, selected_project=None, layout_for=None, content=False, checkpoint=lambda: None, on_count=lambda *_: None, material=None):

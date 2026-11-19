@@ -16,11 +16,11 @@ export function finalPackage(value:unknown,teamId:string):FinalPackage|null {
     &&typeof p.archiveBytes==='number'&&Number.isSafeInteger(p.archiveBytes)&&p.archiveBytes>0&&p.archiveBytes<=20*1024*1024
     &&typeof p.fileCount==='number'&&Number.isSafeInteger(p.fileCount)&&p.fileCount>=0&&p.fileCount<=2000&&typeof p.name==='string'?p as FinalPackage:null;
 }
-export function TeamFinalPackageReading({item,handle,live,disabled,exportState}:{item:FinalPackage;handle:string;live:()=>boolean;disabled:boolean;exportState:unknown}){
-  const [open,setOpen]=useState(false),button=useRef<HTMLButtonElement|null>(null);
+export function TeamFinalPackageReading({item,handle,live,disabled,exportState,fromWork}:{item:FinalPackage;handle:string;live:()=>boolean;disabled:boolean;exportState:unknown;fromWork?:()=>void}){
+  const [open,setOpen]=useState(!!fromWork),button=useRef<HTMLButtonElement|null>(null);
   const windowKey=()=>!document.hidden&&live()?JSON.stringify([bridge.getDocumentEpoch(),item.teamRunId,handle,item.operationId,item.artifactId,item.archiveSha256]):'';
-  const close=()=>{setOpen(false);requestAnimationFrame(()=>button.current?.focus());};
-  return <>{open?<ProjectPackageFiles item={item} onClose={close} team={{handle,key:windowKey}}/>:
+  const close=()=>{if(fromWork){fromWork();return;}setOpen(false);requestAnimationFrame(()=>button.current?.focus());};
+  return <>{open?<ProjectPackageFiles item={item} onClose={close} team={{handle,key:windowKey,fromParentWork:!!fromWork}}/>:
     <Button ref={button} variant="secondary" trailingIcon={IconChevronRight} disabled={disabled}
       onClick={()=>{if(windowKey())setOpen(true);}}>查看完整项目包 · {item.fileCount} 个文件</Button>}
     <TeamFinalPackageSave item={item} handle={handle} live={live} disabled={disabled} show={open} status={exportState}/>

@@ -274,6 +274,12 @@ public final class AssistantModule implements EngineModule {
         JSONObject receipt=historyRepository.setPersonalMemoryForOwner(conversation,revision,enabled);
         context.emit(id(),new JSONObject().put("phase","personal_memory_changed").put("conversationId",conversation).put("bodyIncluded",false));return receipt;
     }
+    /** Native owner UI only. This affects original user rows written later, not past learning or current context. */
+    public JSONObject excludeNewInputsForOwner(String conversation,long revision,boolean excluded)throws Exception{
+        if(!durable())throw new IllegalStateException("请先核对原文迁移，再设置此对话的新原话");
+        JSONObject receipt=historyRepository.excludeNewInputsForOwner(conversation,revision,excluded);
+        context.emit(id(),new JSONObject().put("phase","personal_memory_changed").put("conversationId",conversation).put("bodyIncluded",false));return receipt;
+    }
     public boolean personalMemoryEnabled(String conversation)throws Exception{
         if(conversation==null||conversation.isEmpty())return true;
         return durable()?historyRepository.personalMemoryControls(conversation).getBoolean("enabled"):!Boolean.FALSE.equals(find(conversation).opt("personalMemoryEnabled"));

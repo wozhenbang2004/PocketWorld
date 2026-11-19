@@ -487,7 +487,7 @@ public final class HostToolSupervisor implements CapabilityPort {
         String conversation=task==null?"":task.optString("conversationId");EngineModule assistant=host.module("assistant");
         if(!conversation.isEmpty()&&assistant instanceof dev.pocketengine.features.assistant.AssistantModule){
             JSONObject controls=((dev.pocketengine.features.assistant.AssistantModule)assistant).personalMemoryControlsForOwner(conversation);
-            state.put("conversationId",conversation).put("conversationEnabled",controls.getBoolean("enabled")).put("conversationRevision",controls.getLong("revision"));
+            state.put("conversationId",conversation).put("conversationEnabled",controls.getBoolean("enabled")).put("conversationRevision",controls.getLong("readRevision"));
         }return state;
     }
     private static boolean readingAllowed(JSONObject policy){return policy.optBoolean("projectScope")||policy.optBoolean("readingEnabled")&&policy.optBoolean("conversationEnabled");}

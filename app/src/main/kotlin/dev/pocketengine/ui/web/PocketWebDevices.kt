@@ -44,7 +44,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
     private data class ReceiptOrigin(val task: String, val operation: String, val source: String, val here: String, val instance: String, val digest: String, val mode: String,
         val reviewRun: String = "", val reviewEpoch: Int = 0, val reviewRecordedAt: Long = 0,val activeRun:String="",val activeEpoch:Int=0,val failed:Boolean=false)
     private data class WaitingPage(val handle: String,val window: Host.Window,val epoch: Long,val here: String,val instance: String,
-        val after: Pair<String,String>,val previous: List<Pair<String,String>>,val next: Pair<String,String>?,val rows: Map<Pair<String,String>,ReceiptOrigin>,val results: Boolean,val started:Boolean,val declined:Boolean,val failed:Boolean)
+        val after: Pair<String,String>,val previous: List<Pair<String,String>>,val next: Pair<String,String>?,val rows: Map<Pair<String,String>,ReceiptOrigin>,val results: Boolean,val started:Boolean,val declined:Boolean,val failed:Boolean,val withdrawn:Boolean)
     @Volatile private var waitingPage: WaitingPage? = null
     // Across the local model-settings detour keep IDs only. No goal text, model selection or native Admission.
     private data class ModelPlace(val handle:String,val source:ReceiptOrigin,val issuedEpoch:Long,val until:Long)
@@ -181,7 +181,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
     @Synchronized private fun beginControl(original:Host.Window,args:JSONObject,picking:Boolean):Pair<Long,PendingPick?>{
         val pick=if(picking){
             fields(args,"operation","waitingHandle","taskId","operationId");require(text(args,"operation")=="task.cancelPending")
-            val page=waitingFor(text(args,"waitingHandle"),original,generation.get());require(!page.results && !page.started && !page.declined && !page.failed)
+            val page=waitingFor(text(args,"waitingHandle"),original,generation.get());require(!page.results && !page.started && !page.declined && !page.withdrawn && !page.failed)
             val row=page.rows[text(args,"taskId") to text(args,"operationId")]?:error("请选择原目录里的未启动工作")
             PendingPick(page.handle,page.epoch,row)
         }else null
@@ -216,7 +216,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
     private fun waitingPending(args: JSONObject): Pair<ReceiptOrigin,JSONObject> {
         fields(args,"waitingHandle","taskId","operationId")
         val index=waitingFor(text(args,"waitingHandle"),requireNotNull(window()),generation.get())
-        require(!index.results && !index.started && !index.declined && !index.failed) { "请从本机待接手页重新读取原目标" }
+        require(!index.results && !index.started && !index.declined && !index.withdrawn && !index.failed) { "请从本机待接手页重新读取原目标" }
         return checkedPending(receivedEntry(args))
     }
     private fun checkedPending(source:ReceiptOrigin):Pair<ReceiptOrigin,JSONObject>{
@@ -279,9 +279,9 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         return receipt.put("modelReturnHandle",place.handle)
     }
     private fun waitingGoals(args: JSONObject, original: Host.Window, epoch: Long): JSONObject {
-        val old: WaitingPage?;val after: Pair<String,String>;val previous: List<Pair<String,String>>;val results:Boolean;val started:Boolean;val declined:Boolean;val failed:Boolean
+        val old: WaitingPage?;val after: Pair<String,String>;val previous: List<Pair<String,String>>;val results:Boolean;val started:Boolean;val declined:Boolean;val failed:Boolean;val withdrawn:Boolean
         if(args.has("waitingHandle")){
-            fields(args,"waitingHandle","direction");old=waitingFor(text(args,"waitingHandle"),original,epoch);results=old.results;started=old.started;declined=old.declined;failed=old.failed
+            fields(args,"waitingHandle","direction");old=waitingFor(text(args,"waitingHandle"),original,epoch);results=old.results;started=old.started;declined=old.declined;failed=old.failed;withdrawn=old.withdrawn
             when(text(args,"direction")){
                 "older" -> { after=requireNotNull(old.next); previous=(old.previous+listOf(old.after)).takeLast(32) }
                 "newer" -> { require(old.previous.isNotEmpty());after=old.previous.last();previous=old.previous.dropLast(1) }
@@ -289,31 +289,32 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
             }
         }else{
             fields(args,"queue");val lane=if(args.has("queue"))text(args,"queue") else "pending"
-            require(lane in setOf("pending","results","started","declined","failed"));results=lane=="results";started=lane=="started";declined=lane=="declined";failed=lane=="failed"
+            require(lane in setOf("pending","results","started","declined","failed","withdrawn"));withdrawn=lane=="withdrawn";results=lane=="results";started=lane=="started";declined=lane=="declined";failed=lane=="failed"
             old=null;after="" to "";previous=emptyList()
         }
         val here=latest.getJSONObject("local");val id=here.getString("deviceId");val instance=here.getString("instanceId")
-        val page=if(failed)original.failedReceivedPhoneGoals(after.first,after.second) else if(declined)original.declinedReceivedPhoneGoals(after.first,after.second) else if(started)original.startedReceivedPhoneGoals(after.first,after.second) else original.waitingPhoneGoals(after.first,after.second,results)
-        require(page.opt("readOnly")==true && page.opt("waitingOnly")==(!started&&!declined&&!failed) && page.optBoolean("failedOnly")==failed && page.optBoolean("startedOnly")==started && page.optBoolean("declinedOnly")==declined && page.opt("resultOnly")==results && page.opt("localDeviceId")==id && page.opt("localInstanceId")==instance)
-        val rows=page.getJSONArray("rows").objects();require(rows.size<=(if(declined)6 else 24))
+        val page=if(withdrawn)original.withdrawnReceivedPhoneGoals(after.first,after.second) else if(failed)original.failedReceivedPhoneGoals(after.first,after.second) else if(declined)original.declinedReceivedPhoneGoals(after.first,after.second) else if(started)original.startedReceivedPhoneGoals(after.first,after.second) else original.waitingPhoneGoals(after.first,after.second,results)
+        require(page.opt("readOnly")==true && page.opt("waitingOnly")==(!started&&!declined&&!failed&&!withdrawn) && page.optBoolean("withdrawnOnly")==withdrawn && page.optBoolean("failedOnly")==failed && page.optBoolean("startedOnly")==started && page.optBoolean("declinedOnly")==declined && page.opt("resultOnly")==results && page.opt("localDeviceId")==id && page.opt("localInstanceId")==instance)
+        val rows=page.getJSONArray("rows").objects();require(rows.size<=(if(declined||withdrawn)6 else 24))
         // A closed decision has NO actionable or navigable task entries. Its handle only moves the page.
-        val keys=if(declined)emptyMap() else rows.associate { val task=it.getString("taskId");val op=it.getString("operationId")
+        val keys=if(declined||withdrawn)emptyMap() else rows.associate { val task=it.getString("taskId");val op=it.getString("operationId")
             (task to op) to ReceiptOrigin(task,op,it.getString("sourceDeviceId"),id,instance,it.getString("originDigest"),it.getString("screenMode"),
                 if(results)it.getString("reviewRun") else "", if(results)it.getInt("reviewEpoch") else 0, if(results)it.getLong("reviewRecordedAt") else 0,
                 if(failed||started)it.getJSONObject(if(failed)"failedRun" else "startedRun").getString("runId") else "",if(failed||started)it.getJSONObject(if(failed)"failedRun" else "startedRun").getInt("epoch") else 0,failed) }
-        require(declined||keys.size==rows.size)
+        require(declined||withdrawn||keys.size==rows.size)
         val next=if(page.getBoolean("hasMore")) page.getString("lastParent") to page.getString("lastOperation") else null
-        val index=WaitingPage(UUID.randomUUID().toString(),original,epoch,id,instance,after,previous,next,keys,results,started,declined,failed)
+        val index=WaitingPage(UUID.randomUUID().toString(),original,epoch,id,instance,after,previous,next,keys,results,started,declined,failed,withdrawn)
         synchronized(this){current(original,epoch);if(old!=null)require(waitingPage===old);waitingPage=index}
         val display=JSONArray();for(row in rows)display.put(JSONObject().also { item ->
             for(key in listOf("taskId","operationId","sourceDeviceId","goal","screenMode","createdAt","waitingState"))item.put(key,row.get(key))
             row.optJSONObject("sourceIdentity")?.let{item.put("sourceIdentity",it)}
             if(row.optBoolean("textOnly"))item.put("textOnly",true)
+            if(withdrawn)item.put("withdrawnAt",row.getLong("withdrawnAt")).put("notDispatched",true)
             if(declined)item.put("declinedAt",row.getLong("declinedAt")).put("notDispatched",true)
             if(failed){val run=row.getJSONObject("failedRun");for(key in listOf("runId","epoch","registeredAt","stateRecordedAt"))item.put(key,run.get(key))}
             if(started){val run=row.getJSONObject("startedRun");for(key in listOf("runId","epoch","taskState","runState","registeredAt","stopRequested"))item.put(key,run.get(key))}
             if(results)item.put("reviewRecordedAt",row.getLong("reviewRecordedAt")) })
-        return JSONObject().put("kind","waitingPhoneGoals").put("failedOnly",failed).put("declinedOnly",declined).put("startedOnly",started).put("resultOnly",results).put("limitedCandidates",page.getInt("limitedCandidates")).put("readOnly",true).put("waitingHandle",index.handle).put("localDeviceId",id)
+        return JSONObject().put("kind","waitingPhoneGoals").put("withdrawnOnly",withdrawn).put("failedOnly",failed).put("declinedOnly",declined).put("startedOnly",started).put("resultOnly",results).put("limitedCandidates",page.getInt("limitedCandidates")).put("readOnly",true).put("waitingHandle",index.handle).put("localDeviceId",id)
             .put("localInstanceId",instance).put("capturedAt",System.currentTimeMillis()).put("rows",display).put("hasMore",next!=null).put("canReadNewer",previous.isNotEmpty())
     }
     @Synchronized private fun archiveFor(handle: String, original: Host.Window, epoch: Long): PhoneArchive {
@@ -391,6 +392,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
             for (key in listOf("taskId", "operationId", "goal", "screenMode", "createdAt")) safe.put(key, row.get(key))
             if(received&&row.optBoolean("mayCheckLocalText"))safe.put("mayCheckLocalText",true)
             if(row.optBoolean("textOnly"))safe.put("textOnly",true)
+            if(source.isNotEmpty())row.optJSONObject("stopReceipt")?.let { safe.put("stopReceipt",it) }
             if(source.isNotEmpty() && row.has("targetAcceptedAt")) {
                 safe.put("targetAcceptedAt",row.getLong("targetAcceptedAt"))
                 if(row.optBoolean("targetRunRecorded"))safe.put("targetRunRecorded",true)

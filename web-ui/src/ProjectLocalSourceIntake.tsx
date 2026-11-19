@@ -3,11 +3,11 @@ import {bridge} from './bridge';
 import {Button, SettingsDialog, StretchSwitch, TextField} from './forms-library';
 import './project-git-intake.css';
 
-type Source = {id:string;sha:string;manifest:string;kind:'saf_tree'|'external_zip'|'host_saved_snapshot';hostVersion?:string;label:string;files:number;bytes:number;omitted:number;paths:string[]};
+type Source = {id:string;sha:string;manifest:string;kind:'saf_tree'|'external_zip'|'host_saved_snapshot';hostVersion?:string;fixedPackage?:{manifest:string;archive:string;omitted:number};label:string;files:number;bytes:number;omitted:number;paths:string[]};
 type Intake = {window:string;busy:boolean;picking:boolean;notice?:string;error?:string;staged?:Source;saved:Source[];
   reviewId?:string;reviewName?:string;pendingId?:string;pendingName?:string;otherPending?:boolean;mayRetry?:boolean;mayRelease?:boolean;project?:string;checkout?:string;name?:string};
 const prefix='projects.localSource.', number=(n:number)=>new Intl.NumberFormat('zh-CN').format(n);
-const sourceKind=(s:Source)=>s.kind==='host_saved_snapshot'?'原主机任务已存手机的文件':s.kind==='saf_tree'?'文件夹':'源码 ZIP';
+const sourceKind=(s:Source)=>s.kind==='host_saved_snapshot'?'原主机任务已存手机的文件':s.kind==='saf_tree'?'文件夹':s.fixedPackage?'PocketWorld 源项目包':'源码 ZIP';
 
 export function ProjectLocalSourceIntake({state}:{state?:Intake}) {
   // A system picker pauses this document. Close only when the project surface actually unmounts,
@@ -46,6 +46,7 @@ function SourcePanel({state}:{state:Intake}){
           <Button variant="ghost" disabled={busy} onClick={()=>void act('another')}>导入另一份源码</Button></div></>
       :source?<><h3>{state.reviewId?'核对新项目':'已固定本次源码'}</h3>
         {source.kind==='host_saved_snapshot'&&<p>只包含在原任务中选定的 UTF-8 文件，不是整份主机仓库，也没有授予运行权限。</p>}
+        {source.fixedPackage&&<p>已核对包内文件，按原相对路径放进新项目，不带外层 project/。{source.fixedPackage.omitted>0&&`原包另有 ${number(source.fixedPackage.omitted)} 项未收录。`}不会恢复旧任务、工具环境或执行权限。</p>}
         <dl><div><dt>来源</dt><dd dir="auto">{source.label} · {sourceKind(source)}</dd></div>
           {state.reviewId&&<div><dt>去向</dt><dd dir="auto">此手机 · 新私人项目「{state.reviewName}」</dd></div>}
           <div><dt>已选范围</dt><dd>{number(source.files)} 个文件 · {number(source.bytes)} 字节{source.omitted>0&&` · 跳过 ${number(source.omitted)} 项`}</dd></div></dl>
@@ -53,6 +54,7 @@ function SourcePanel({state}:{state:Intake}){
           {source.paths?.length>0&&<ul>{source.paths.map(path=><li key={path}><bdi>{path}</bdi></li>)}</ul>}
           {source.files>source.paths.length&&<p>仅列出前 {source.paths.length} 个文件。</p>}
           {source.hostVersion&&<p>原冻结版本：<bdi>{source.hostVersion}</bdi></p>}
+          {source.fixedPackage&&<><p>所选原 ZIP 的 SHA-256：<bdi>{source.fixedPackage.archive}</bdi></p><p>原包清单摘要：<bdi>{source.fixedPackage.manifest}</bdi></p></>}
           <p>临时包 SHA-256：<bdi>{source.sha}</bdi></p></details>
         {state.reviewId?<><p>只复制这份固定源码。原目录、其他项目和运行授权都不变。</p>
           <div className="pw-action-row"><Button variant="primary" disabled={busy} onClick={()=>void act('confirm',{actionId:state.reviewId})}>确认创建新项目</Button>
@@ -69,7 +71,7 @@ function SourcePanel({state}:{state:Intake}){
           <Button variant="secondary" disabled={busy} onClick={()=>void act('zip',{stripRoot:strip})}>选择源码 ZIP</Button></div>
         <details><summary>导入范围和 ZIP 选项</summary>
           <p>默认跳过依赖、常见凭据文件和构建输出。最多 2,000 个文件，单文件 2 MiB，解包合计 16 MiB，原 ZIP 最多 20 MiB。不联网、不执行代码。</p>
-          <StretchSwitch label="去掉 ZIP 唯一外层目录" checked={strip} disabled={busy} onChange={setStrip}/></details>
+          <StretchSwitch label="去掉普通 ZIP 唯一外层目录" checked={strip} disabled={busy} onChange={setStrip}/></details>
         {state.saved?.length>0&&<><h3>已固定、可继续的源码</h3>{state.saved.map(s=>
           <Button key={s.id} variant="ghost" disabled={busy} onClick={()=>void act('select',{id:s.id,sha:s.sha})}>
             {s.label} · {sourceKind(s)} · {number(s.files)} 个文件</Button>)}</>}

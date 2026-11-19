@@ -1,0 +1,31 @@
+/* Only the original private preflight. Let the existing drawer own scroll, focus and motion. */
+.pw-phone-scope-review .pw-scope-fields:empty { display: none; }
+.pw-phone-scope-review .cb-permission2-heading > .cb-grow,
+.pw-phone-review-details, .pw-phone-review-details section { min-inline-size: 0; }
+.pw-phone-scope-review .cb-permission2-actions .cb-row,
+.pw-phone-review-remedies { display: flex; flex-wrap: wrap; gap: 8px; }
+.pw-phone-scope-review :is(.pw-phone-review-remedies,.cb-permission2-actions) button {
+  block-size: auto; min-block-size: 44px; max-inline-size: 100%; white-space: normal; overflow-wrap: anywhere;
+}
+.pw-phone-scope-review :is(.pw-phone-review-remedies,.cb-permission2-actions) button:not(.pw-press) > span {
+  min-inline-size: 0; max-inline-size: 100%; flex-shrink: 1;
+}
+.pw-phone-scope-review .pw-press-label { white-space: normal; overflow-wrap: anywhere; }
+.pw-phone-review-remedies { margin-block-start: 10px; }
+.pw-phone-review-step { margin-block: 10px 16px; }
+.pw-phone-review-step p, .pw-phone-review-details p {
+  margin: 0; color: var(--pw-copy); line-height: 1.55; overflow-wrap: anywhere;
+}
+.pw-phone-review-step p + p, .pw-phone-review-details section > p + p { margin-block-start: 5px; }
+.pw-phone-review-details { display: grid; gap: 18px; overflow-wrap: anywhere; }
+.pw-phone-review-details h3 {
+  margin: 0 0 5px; font: inherit; font-weight: 600; color: var(--pw-ink);
+}
+.pw-phone-review-details .pw-phone-review-goal { white-space: pre-wrap; color: var(--pw-ink); }
+.pw-phone-review-destination { margin-block-start: 10px; padding: 8px 12px; border-radius: 12px; background: var(--pw-inset); }
+.pw-phone-review-destination strong { display: block; font-weight: 500; color: var(--pw-ink); }
+.pw-phone-review-limits { display: grid; gap: 5px; margin: 9px 0 0; }
+.pw-phone-review-limits > div { display: flex; flex-wrap: wrap; gap: 0 .75em; align-items: baseline; }
+.pw-phone-review-limits dt { color: var(--pw-muted); }
+.pw-phone-review-limits dd { flex: 1 1 10em; min-inline-size: 0; margin: 0; color: var(--pw-copy); }
+.pw-phone-review-unknown { margin-block-end: 8px; }

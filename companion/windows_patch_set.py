@@ -9,11 +9,12 @@ from windows_added_source import _owner,records as added_records
 from windows_git_copy import _json,_read
 from windows_removed_source import records as removed_records
 from windows_owner_draft import records as owner_drafts
+from windows_new_source_draft import records as new_drafts
 from windows_git_tree import _component,_native_compare
-from windows_source_patch import (LIMIT,SET_BANK as BANK,SET_PROFILE as PROFILE,SET_LIMIT,
+from windows_source_patch import (LIMIT,SET_BANK as BANK,SET_PROFILE as PROFILE,SET_LIMIT,PROPOSED_SET_BANK,PROPOSED_SET_PROFILE,
                                   _blob,_quoted,checked_output,output_names,publish_output,records as tracked_records)
 
-READERS=(("edit",tracked_records),("add",added_records),("remove",removed_records),("draft",owner_drafts))
+READERS=(("edit",tracked_records),("add",added_records),("remove",removed_records),("draft",owner_drafts),("newdraft",new_drafts))
 MAX=8
 MARKER=b"\\ No newline at end of file"
 
@@ -53,12 +54,12 @@ def catalog(ctx,op):
 
 
 def _member(kind,row):
-    if kind not in ("edit","add","remove","draft"): _bad()
+    if kind not in ("edit","add","remove","draft","newdraft"): _bad()
     f=row["fields"]
     return {"kind":kind,"id":row["id"],"path":f["path"],"sha256":f["patchSha"],"bytes":f["bytes"],
-            "base":({"state":"absent","tree":f["parentTree"]} if kind=="add" else {"state":"tracked","oid":f["originalOid"]}),
+            "base":({"state":"absent","tree":f["parentTree"]} if kind in ("add","newdraft") else {"state":"tracked","oid":f["originalOid"]}),
             "to":({"state":"remove_original_path"} if kind=="remove" else f["sourceOid"] if kind=="add" else
-                  f["draftOid"] if kind=="draft" else f["currentOid"])}
+                  f["draftOid"] if kind in ("draft","newdraft") else f["currentOid"])}
 
 
 def _patch(raw,member,fields,algo):
@@ -68,15 +69,15 @@ def _patch(raw,member,fields,algo):
     p=member["path"]; a,b=_quoted("a/",p),_quoted("b/",p)
     lines=raw[:-1].split(b"\n")
     if lines.pop(0)!=b"diff --git "+a+b" "+b: _bad()
-    kind=member["kind"]; added=kind=="add"; removed=kind=="remove"; whole=added or removed
+    kind=member["kind"]; added=kind in ("add","newdraft"); removed=kind=="remove"; whole=added or removed
     target=(member["base"]["oid"] if removed else member["to"]).encode()
     if whole:
         mode=b"deleted file mode "+fields["mode"].encode() if removed else b"new file mode 100644"
         base_oid,new_oid=(target,b"0"*len(target)) if removed else (b"0"*len(target),target)
         if len(lines)<2 or lines[:2]!=[mode,b"index "+base_oid+b".."+new_oid]: _bad()
         del lines[:2]
-        count=fields["originalBytes" if removed else "sourceBytes"]
-        digest=fields["originalSha" if removed else "sourceSha"]
+        count=fields["originalBytes" if removed else "draftBytes" if kind=="newdraft" else "sourceBytes"]
+        digest=fields["originalSha" if removed else "draftSha" if kind=="newdraft" else "sourceSha"]
         if not lines:
             if count!=0 or digest!=_sha(b"") or _blob(b"",algo).encode()!=target: _bad()
             return
@@ -138,7 +139,7 @@ def prepare(ctx,op,selected,locked,checkpoint):
     for m,row in planned:
         current()
         data=checked_output(ctx,op,row,locked,show=False,added=m["kind"]=="add",removed=m["kind"]=="remove",
-                            draft=m["kind"]=="draft",content=True)
+                            draft=m["kind"]=="draft",newdraft=m["kind"]=="newdraft",content=True)
         _patch(data,m,row["fields"],source["objectFormat"])
         chunks.append(data)
     current(); raw=b"".join(chunks)
@@ -147,7 +148,10 @@ def prepare(ctx,op,selected,locked,checkpoint):
     return {"fields":fields,"patch":raw}
 
 
-def key(fields): return _sha(_json([PROFILE,fields]))[:32]
+def has_proposal(fields): return any(m["kind"]=="newdraft" for m in fields["members"])
+
+
+def key(fields): return _sha(_json([PROPOSED_SET_PROFILE if has_proposal(fields) else PROFILE,fields]))[:32]
 
 
 def _valid(ctx,op,f,owner):
@@ -159,14 +163,15 @@ def _valid(ctx,op,f,owner):
     width=40 if source["objectFormat"]=="sha1" else 64; seen=set(); last=b""; total=0
     for m in f["members"]:
         if not isinstance(m,dict) or set(m)!={"kind","id","path","sha256","bytes","base","to"}: return False
-        if (m["kind"] not in ("add","edit","remove","draft") or not _hash(m["id"],32) or (m["kind"],m["id"]) in seen or not _hash(m["sha256"],64)
+        if (m["kind"] not in ("add","edit","remove","draft","newdraft") or not _hash(m["id"],32) or (m["kind"],m["id"]) in seen or not _hash(m["sha256"],64)
                 or type(m["bytes"]) is not int or not 0<m["bytes"]<=LIMIT or not isinstance(m["path"],str)): return False
         if (m["to"]!={"state":"remove_original_path"} if m["kind"]=="remove" else not _hash(m["to"],width)): return False
         base=m["base"]
         if not isinstance(base,dict): return False
-        expected={"state","tree"} if m["kind"]=="add" else {"state","oid"}
-        if (set(base)!=expected or m["kind"]=="add" and (base["state"]!="absent" or not _hash(base["tree"],width))
-                or m["kind"]!="add" and (base["state"]!="tracked" or not _hash(base["oid"],width))): return False
+        addition=m["kind"] in ("add","newdraft")
+        expected={"state","tree"} if addition else {"state","oid"}
+        if (set(base)!=expected or addition and (base["state"]!="absent" or not _hash(base["tree"],width))
+                or not addition and (base["state"]!="tracked" or not _hash(base["oid"],width))): return False
         path=m["path"].encode()
         if path<=last: return False
         last=path; total+=m["bytes"]; seen.add((m["kind"],m["id"]))
@@ -174,27 +179,33 @@ def _valid(ctx,op,f,owner):
     return total==f["bytes"]
 
 
-def records(ctx,op):
+def records(ctx,op,*,proposed=False):
+    if type(proposed) is not bool: _bad()
     owner=_owner(ctx,op); rows={}; seen=set()
-    for n in range(BANK):
-        _,slot,_,_=output_names(ctx,op,"0"*32,n,added=False,bundle=True)
+    profile=PROPOSED_SET_PROFILE if proposed else PROFILE
+    for n in range(PROPOSED_SET_BANK if proposed else BANK):
+        _,slot,_,_=output_names(ctx,op,"0"*32,n,added=False,bundle=True,proposed_set=proposed)
         # Eight bounded 2 KiB UTF-8 paths and their version IDs can exceed the
         # original single-file 16 KiB receipt bound.
         r=_read(ctx,slot,49152)
         if r is None: continue
         f=r["fields"]; rid=r["id"]
-        if (r.get("format")!=PROFILE or not _valid(ctx,op,f,owner) or rid!=key(f) or rid in seen
+        if (r.get("format")!=profile or not _valid(ctx,op,f,owner) or has_proposal(f)!=proposed or rid!=key(f) or rid in seen
                 or type(r.get("at")) is not int or not 0<=r["at"]<=4102444800000): _bad()
         seen.add(rid); rows[n]=r
     return rows
 
 
+def proposed_records(ctx,op): return records(ctx,op,proposed=True)
+
+
 def save(ctx,op,prepared,locked,checkpoint):
     expected=prepared["fields"]; rid=key(expected)
-    rows=records(ctx,op)
+    proposed=has_proposal(expected); capacity=PROPOSED_SET_BANK if proposed else BANK
+    rows=records(ctx,op,proposed=proposed)
     for r in rows.values():
         if r["id"]==rid: return r  # including an interrupted save: no repeat
-    if len(rows)>=BANK: _bad()
+    if len(rows)>=capacity: _bad()
     # Materialize every confirmed member again by its original private handle
     # and SHA. Missing members never yield a silently partial multi-file patch.
     fixed=prepare(ctx,op,[(m["kind"],m["id"]) for m in expected["members"]],locked,checkpoint)
@@ -202,4 +213,5 @@ def save(ctx,op,prepared,locked,checkpoint):
     def current():
         checkpoint(); ctx.check_current_pointer()
         if locked(): _bad()
-    return publish_output(ctx,op,rid,expected,fixed["patch"],next(n for n in range(BANK) if n not in rows),current,added=False,bundle=True)
+    return publish_output(ctx,op,rid,expected,fixed["patch"],next(n for n in range(capacity) if n not in rows),current,
+                          added=False,bundle=True,proposed_set=proposed)

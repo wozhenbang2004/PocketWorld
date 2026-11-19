@@ -388,6 +388,10 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
             DeviceIdentity.LocalIdentity local=existingIdentity();if(local==null)throw new SecurityException("本机决定不能与接收手机核对");
             return tasks.deviceTasks().declinedReceivedPhoneGoals(local.deviceId(),local.instanceId(),caller,operation);
         }
+        public JSONObject withdrawnReceivedPhoneGoals(String caller,String operation)throws Exception{
+            DeviceIdentity.LocalIdentity local=existingIdentity();if(local==null)throw new SecurityException("无法核对这部接收手机的原身份");
+            return tasks.deviceTasks().withdrawnReceivedPhoneGoals(local.deviceId(),local.instanceId(),caller,operation);
+        }
         public JSONObject failedReceivedPhoneGoals(String caller,String operation)throws Exception{
             DeviceIdentity.LocalIdentity local=existingIdentity();if(local==null)throw new SecurityException("无法核对这部接收手机的原身份");
             return tasks.deviceTasks().failedReceivedPhoneGoals(local.deviceId(),local.instanceId(),caller,operation);
@@ -430,7 +434,8 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
             for(int i=0;i<records.length();i++){
                 JSONObject row=records.getJSONObject(i);if(!source.equals(row.opt("taskId")))throw new SecurityException("原私人任务发生变化");
                 JSONObject safe=new JSONObject().put("goal",row.getString("goal")).put("createdAt",row.getLong("createdAt"));
-                if(row.has("targetAcceptedAt"))safe.put("targetAcceptedAt",row.getLong("targetAcceptedAt"));rows.put(safe);
+                if(row.has("targetAcceptedAt"))safe.put("targetAcceptedAt",row.getLong("targetAcceptedAt"));
+                if(row.optJSONObject("stopReceipt")!=null)safe.put("stopReceipt",row.getJSONObject("stopReceipt"));rows.put(safe);
             }
             String next="";
             if(page.getBoolean("hasMore")){

@@ -724,14 +724,20 @@ public final class ConversationRepository {
         if(source.getBoolean("deleted")){ContentValues erased=new ContentValues();erased.putNull("body");erased.put("body_bytes",0);erased.put("body_sha","");db.update("assistant_messages",erased,"generation=? AND source_id=?",new String[]{gen,ref.sourceId});}
     }
     public void saveConversation(JSONObject conversation)throws Exception{synchronized(monitor){saveConversation(activeGeneration(),conversation);}}
-    private void saveConversation(String gen,JSONObject conversation)throws Exception{synchronized(monitor){JSONObject header=new JSONObject(conversation.toString());header.remove("messages");header.remove("messagePage");header.remove("nativeUserTitle");
+    private void saveConversation(String gen,JSONObject conversation)throws Exception{saveConversation(gen,conversation,false);}
+    private void saveConversation(String gen,JSONObject conversation,boolean reviewedMemoryChange)throws Exception{synchronized(monitor){JSONObject header=new JSONObject(conversation.toString());header.remove("messages");header.remove("messagePage");header.remove("nativeUserTitle");
         // Same original monitor/transaction as owner metadata writes; an old reply/ACK header cannot overwrite a newer manual title.
         try(Cursor size=db.rawQuery("SELECT length(CAST(header_json AS BLOB)) FROM assistant_conversations WHERE generation=? AND conversation_id=? AND deleted=0 LIMIT 1",new String[]{gen,header.getString("conversationId")})){
             if(size.moveToFirst()&&size.getLong(0)>MAX_BYTES)throw new ReadLimited("original_conversation_header_exceeds_inline_budget");
         }
         try(Cursor prior=db.rawQuery("SELECT header_json FROM assistant_conversations WHERE generation=? AND conversation_id=? AND deleted=0 LIMIT 1",new String[]{gen,header.getString("conversationId")})){
             if(prior.moveToFirst()){
-                JSONObject current=new JSONObject(prior.getString(0));Object owned=current.opt("nativeUserTitle");
+                JSONObject current=new JSONObject(prior.getString(0));
+                // Ordinary reply/ACK saves do not author memory choices for an existing conversation.
+                if(!reviewedMemoryChange)for(String key:List.of("personalMemoryEnabled","excludeNewLearningInputs","personalMemoryRevision","personalMemoryReadRevision")){
+                    if(current.has(key))header.put(key,current.get(key));else header.remove(key);
+                }
+                Object owned=current.opt("nativeUserTitle");
                 if(owned!=null&&owned!=JSONObject.NULL){
                     if(!(owned instanceof String)||((String)owned).isBlank()||((String)owned).length()>120||!StandardCharsets.UTF_8.newEncoder().canEncode((String)owned))throw new IllegalStateException("原手工会话标题状态无法核对，未用旧回复覆盖");
                     header.put("title",owned).put("nativeUserTitle",owned);
@@ -751,7 +757,10 @@ public final class ConversationRepository {
         JSONObject meta=new JSONObject(message.toString());String body=meta.getString("content");if(!StandardCharsets.UTF_8.newEncoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT).onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT).canEncode(body))throw new IllegalArgumentException("原文含不完整Unicode字符，未隐式替换后保存");byte[] bodyBytes=body.getBytes(StandardCharsets.UTF_8);meta.remove("content");meta.remove("ownerOriginalLocator");long sequence=importedSequence;
         boolean existing=false;
         try(Cursor row=db.rawQuery("SELECT sequence,meta_json FROM assistant_messages WHERE generation=? AND source_id=? LIMIT 1",new String[]{gen,id})){if(row.moveToFirst()){existing=true;sequence=row.getLong(0);if(new JSONObject(row.getString(1)).optBoolean("personalMemoryExcluded"))meta.put("personalMemoryExcluded",true);}}
-        if(!existing&&importedSequence<0&&"user".equals(message.getString("role"))&&gen.equals(activeGeneration())&&!personalMemoryControls(header(conversation)).getBoolean("enabled"))meta.put("personalMemoryExcluded",true);
+        if(!existing&&importedSequence<0&&"user".equals(message.getString("role"))&&gen.equals(activeGeneration())){
+            JSONObject choices=personalMemoryControls(header(conversation));
+            if(!choices.getBoolean("enabled")||choices.getBoolean("excludeNewInputs")&&!message.optBoolean("importAssignedIdentity"))meta.put("personalMemoryExcluded",true);
+        }
         if(sequence<0)try(Cursor row=db.rawQuery("SELECT max(n)+1 FROM (SELECT coalesce(max(sequence),0) n FROM assistant_messages WHERE generation=? AND conversation_id=? UNION ALL SELECT coalesce(max(sequence),0) n FROM assistant_import_records WHERE generation=? AND conversation_id=?)",new String[]{gen,conversation,gen,conversation})){row.moveToFirst();sequence=row.getLong(0);}
         ContentValues v=new ContentValues();v.put("generation",gen);v.put("source_id",id);v.put("conversation_id",conversation);v.put("sequence",sequence);v.put("revision",state.getLong("revision"));v.put("body",body);v.put("body_bytes",bodyBytes.length);v.put("body_sha","sha256:"+shaBytes(bodyBytes));v.put("meta_json",meta.toString());Object at=message.opt("at");if(at instanceof Byte||at instanceof Short||at instanceof Integer||at instanceof Long)v.put("at_ms",((Number)at).longValue());else v.putNull("at_ms");db.insertWithOnConflict("assistant_messages",null,v,SQLiteDatabase.CONFLICT_REPLACE);ConversationOrganization.changed(db,gen);
     }
@@ -759,15 +768,28 @@ public final class ConversationRepository {
     /** Owner controls live in the existing conversation header, not a second preference store. */
     public JSONObject personalMemoryControls(String conversation)throws Exception{return read(()->personalMemoryControls(header(conversation)));}
     private static JSONObject personalMemoryControls(JSONObject header)throws Exception{
-        Object enabled=header.opt("personalMemoryEnabled"),revision=header.opt("personalMemoryRevision");
-        if(enabled!=null&&!(enabled instanceof Boolean)||revision!=null&&(!(revision instanceof Integer||revision instanceof Long)||((Number)revision).longValue()<0))throw new IllegalStateException("此对话的个人记忆设置不可核对");
-        return new JSONObject().put("conversationId",header.getString("conversationId")).put("enabled",enabled==null||Boolean.TRUE.equals(enabled)).put("revision",revision==null?0:((Number)revision).longValue());
+        Object enabled=header.opt("personalMemoryEnabled"),excluded=header.opt("excludeNewLearningInputs"),revision=header.opt("personalMemoryRevision");
+        if(enabled!=null&&!(enabled instanceof Boolean)||excluded!=null&&!(excluded instanceof Boolean)||revision!=null&&(!(revision instanceof Integer||revision instanceof Long)||((Number)revision).longValue()<0))throw new IllegalStateException("此对话的个人记忆设置不可核对");
+        long settingsRevision=revision==null?0:((Number)revision).longValue();
+        Object read=header.opt("personalMemoryReadRevision");
+        if(read!=null&&(!(read instanceof Integer||read instanceof Long)||((Number)read).longValue()<0||((Number)read).longValue()>settingsRevision))throw new IllegalStateException("此对话的个人记忆读取修订不可核对");
+        // Before the split there was only the owner settings revision; preserve that exact identity.
+        return new JSONObject().put("conversationId",header.getString("conversationId")).put("enabled",enabled==null||Boolean.TRUE.equals(enabled)).put("excludeNewInputs",Boolean.TRUE.equals(excluded))
+                .put("revision",settingsRevision).put("readRevision",read==null?settingsRevision:((Number)read).longValue());
     }
     public JSONObject setPersonalMemoryForOwner(String conversation,long revision,boolean enabled)throws Exception{
+        return setOwnerMemoryChoice(conversation,revision,"personalMemoryEnabled",enabled);
+    }
+    public JSONObject excludeNewInputsForOwner(String conversation,long revision,boolean excluded)throws Exception{
+        return setOwnerMemoryChoice(conversation,revision,"excludeNewLearningInputs",excluded);
+    }
+    private JSONObject setOwnerMemoryChoice(String conversation,long revision,String field,boolean value)throws Exception{
         return transaction(()->{JSONObject header=header(conversation),before=personalMemoryControls(header);
             if(revision<0||revision!=before.getLong("revision"))throw new IllegalStateException("此对话的个人记忆设置已变化，请刷新后保存");
-            header.put("personalMemoryEnabled",enabled).put("personalMemoryRevision",Math.addExact(revision,1));saveConversation(header);
-            return personalMemoryControls(header).put("saved",true).put("persisted",true);
+            long next=Math.addExact(revision,1);
+            long readRevision="personalMemoryEnabled".equals(field)?next:before.getLong("readRevision");
+            header.put(field,value).put("personalMemoryRevision",next).put("personalMemoryReadRevision",readRevision);saveConversation(activeGeneration(),header,true);
+            return personalMemoryControls(header(conversation)).put("saved",true).put("persisted",true);
         });
     }
     public JSONObject header(String conversation)throws Exception{try(Cursor size=db.rawQuery("SELECT length(CAST(header_json AS BLOB)) FROM assistant_conversations WHERE generation=? AND conversation_id=? AND deleted=0 LIMIT 1",new String[]{activeGeneration(),conversation})){if(size.moveToFirst()&&size.getLong(0)>MAX_BYTES)throw new ReadLimited("original_conversation_header_exceeds_inline_budget");}try(Cursor row=db.rawQuery("SELECT header_json FROM assistant_conversations WHERE generation=? AND conversation_id=? AND deleted=0 LIMIT 1",new String[]{activeGeneration(),conversation})){if(!row.moveToFirst())throw new IllegalArgumentException("对话不存在");return new JSONObject(row.getString(0));}}

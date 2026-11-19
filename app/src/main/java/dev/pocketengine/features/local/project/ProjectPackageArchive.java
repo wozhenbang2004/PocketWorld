@@ -146,6 +146,10 @@ public final class ProjectPackageArchive {
     /** Ordinary ZIP is not a PocketWorld package: all declared entries are bounded before ZipFile allocation. */
     public static void preflightSourceZip(File archive)throws Exception {preflightDirectory(archive,ProjectSourceImport.MAX_ENTRIES,MAX_TOTAL_BYTES);}
 
+    /** A source picker may also receive our bounded package (16 MiB payload plus its 1 MiB manifest).
+     * Returns the expanded directory total so an ordinary ZIP must still meet its original 16 MiB cap. */
+    static long preflightSelectedZip(File archive)throws Exception{return preflightDirectory(archive,ProjectSourceImport.MAX_ENTRIES,MAX_TOTAL_BYTES+MAX_MANIFEST_BYTES,MAX_FILE_BYTES,4096);}
+
     /** The same policy is applied to imported manifests. An archive never restores accounts or grants. */
     public static String excluded(String path, boolean directory, boolean includeGeneratedRoots) {
         String[] parts = path.split("/");
@@ -217,7 +221,7 @@ public final class ProjectPackageArchive {
     /** Bounds APK ZIP declarations before Android parses resources. No extraction or signature claim. */
     public static void preflightAndroidApk(File archive)throws Exception {preflightDirectory(archive,20000,256L*1024*1024,64L*1024*1024,65535);}
     private static void preflightDirectory(File archive,int entryLimit,long expandedLimit)throws Exception {preflightDirectory(archive,entryLimit,expandedLimit,MAX_FILE_BYTES,4096);}
-    private static void preflightDirectory(File archive,int entryLimit,long expandedLimit,long entryByteLimit,int extraLimit)throws Exception {
+    private static long preflightDirectory(File archive,int entryLimit,long expandedLimit,long entryByteLimit,int extraLimit)throws Exception {
         try(var channel=Files.newByteChannel(archive.toPath(),java.nio.file.StandardOpenOption.READ,LinkOption.NOFOLLOW_LINKS)){
             long size=channel.size();if(size<22||size>MAX_ARCHIVE_BYTES)throw new SecurityException("项目包ZIP大小无效");
             int tailSize=(int)Math.min(size,65557);java.nio.ByteBuffer tail=java.nio.ByteBuffer.allocate(tailSize).order(java.nio.ByteOrder.LITTLE_ENDIAN);channel.position(size-tailSize);readFully(channel,tail);int end=-1;
@@ -240,7 +244,7 @@ public final class ProjectPackageArchive {
                 java.nio.ByteBuffer localPath=java.nio.ByteBuffer.allocate(name);readFully(channel,localPath);for(int n=0;n<name;n++)if(localPath.get(n)!=central.get(at+46+n))throw new SecurityException("项目包ZIP本地路径与目录不一致");
                 at+=46+name+extra+comment;
             }
-            if(at!=central.limit())throw new SecurityException("项目包ZIP条目数与真实目录不同");
+            if(at!=central.limit())throw new SecurityException("项目包ZIP条目数与真实目录不同");return expanded;
         }
     }
     private static void readFully(java.nio.channels.SeekableByteChannel channel,java.nio.ByteBuffer buffer)throws Exception {

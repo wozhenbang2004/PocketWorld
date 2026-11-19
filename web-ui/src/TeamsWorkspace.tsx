@@ -28,6 +28,7 @@ import {deliveryReading,TeamDeliveryWorkers} from './TeamDeliveryWorkers';
 import { teamFollowUpFocus, teamFollowUps, teamResultReading, type AttentionFocus, type TeamFollowUp } from './team-result-reading';
 import { teamCanPause, teamCanResume, teamGoalTitle, teamHasEnded, teamNeedsAttention, teamPhaseLabel, teamProgressLabel, teamRoleLabel, teamStatusLabel as status, teamTimeLabel } from './team-presentation';
 import type { TeamAttentionLocator } from './NotificationTeamAttention';
+import {sameTeamPackage} from './team-delivered-package';
 import {sameTeamFiles,sameTeamProposal,type WorkProposalSource,type TeamButlerRequest,type TeamOwnerWorkLink,type TeamRunFocus,type WorkFileSource} from './team-navigation';
 import { HarnessEvidence } from './HarnessEvidence';
 import { harnessWorkerLabel, isTeamHarness } from './harness-capabilities';
@@ -129,6 +130,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const handledRunFocus = useRef('');
   const [fileEntry,setFileEntry]=useState<{view:string;requestId:string;source:WorkFileSource;returnToWork?:(reason?:string)=>void}|null>(null);
   const [proposalEntry,setProposalEntry]=useState<{source:WorkProposalSource;returnToWork?:(reason?:string)=>void}|null>(null);
+  const [workPackage,setWorkPackage]=useState<{view:string;returnToWork:(reason?:string)=>void}|null>(null);
+  const focusedPackage=workPackage&&workPackage.view===reading?.viewHandle?workPackage:null;
   const focusedProposal=proposalEntry&&reading?.run?.id===proposalEntry.source.teamRunId?proposalEntry:null;
   const proposalRead=(runId:string)=>({runId,...(focusedProposal?.source.teamRunId===runId?{proposalOrigin:focusedProposal.source}:{})});
   const revisionRows=rows(reading?.revisionOffers).filter(row=>!focusedProposal||row.canReview===true&&sameTeamProposal(focusedProposal.source.proposal,row));
@@ -254,7 +257,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     const requestId = runFocus?.requestId, runId = runFocus?.runId;
     if (!requestId || !runId || requestId === handledRunFocus.current || !workspaceActive || !catalogReady || busy || entered.current || backgrounded.current || !ownsNativeWindow()) return;
     handledRunFocus.current = requestId;
-    const from=runFocus?.fromWork,proposal=from&&'proposal' in from?from:undefined,files=from&&'fileReview' in from?from:undefined;
+    const from=runFocus?.fromWork,proposal=from&&'proposal' in from?from:undefined,files=from&&'fileReview' in from?from:undefined,pack=from&&'deliveredPackage' in from?from:undefined;
     void invoke('teams.readRun', { runId,...(proposal?{proposalOrigin:proposal}:{}) }, result => {
       const next=result.reading;
       if (next?.run?.id !== runId||!next.viewHandle) {release(next);throw new Error('原协作记录身份不匹配，请从原工作重新打开。');}
@@ -262,12 +265,14 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
         const link=next.ownerWorkLink;
         if(!link||link.currentRun!==true||link.readOnly!==true||link.stopping!==false||link.taskId!==from.parentTaskId||link.runId!==from.parentRunId
           ||link.epoch!==from.parentEpoch||link.conversationId!==from.conversationId||link.teamRunId!==from.teamRunId||runId!==from.teamRunId||files&&!sameTeamFiles(files.fileReview,link.fileReview)
+          ||pack&&(!sameTeamPackage(pack.deliveredPackage,link.deliveredPackage)||!sameTeamPackage(pack.deliveredPackage,finalPackage(next.finalProjectPackage,runId)))
           ||proposal&&rows(next.revisionOffers).filter(row=>row.canReview===true&&sameTeamProposal(proposal.proposal,row)).length!==1){
-          release(next);throw new Error('原文件或提案已变化，没有打开另一轮。');
+          release(next);throw new Error(pack?'原团队签收或包版本已变化，没有打开替代成果。':'原文件或提案已变化，没有打开另一轮。');
         }
       }
       setEditor(null); setMemberDraft(null); setResultSource(null); closeReview(); closePhoneSelection();
       acceptReading(next);setProposalEntry(proposal?{source:proposal,returnToWork:runFocus?.returnToWork}:null);
+      setWorkPackage(pack&&runFocus?.returnToWork?{view:next.viewHandle,returnToWork:runFocus.returnToWork}:null);
       setFileEntry(files?{view:next.viewHandle,source:files,requestId,returnToWork:runFocus?.returnToWork}:null);
       setRunSections(old => ({ ...old, [runId]: from?'result':'progress' }));
       setComposeOpen(false);
@@ -369,7 +374,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     document.addEventListener('visibilitychange', visibility); window.addEventListener('pagehide', hide);
     return () => { document.removeEventListener('visibilitychange', visibility); window.removeEventListener('pagehide', hide); };
   });
-  useEffect(() => { registerTransientBack(() => { if (frozenFilesBack.current?.()) return true; if (materialBack.current?.()) return true; if (busy) return true; if (review) { closeReview(); return true; } if (phoneSelection) { closePhoneSelection(); return true; } if (memberDraft) { memberFormDraft.guard(() => setMemberDraft(null)); return true; } if (editor) { formDraft.guard(() => setEditor(null)); return true; } if (resultBack.current()) return true; if (focusedProposal?.returnToWork) { leaveWithDrafts(focusedProposal.returnToWork); return true; } if (reading) { back(); return true; } return false; }); return () => registerTransientBack(null); }, [reading, review, phoneSelection, memberDraft, editor, busy, focusedProposal, registerTransientBack]);
+  useEffect(() => { registerTransientBack(() => { if (frozenFilesBack.current?.()) return true; if (materialBack.current?.()) return true; if (busy) return true; if (review) { closeReview(); return true; } if (phoneSelection) { closePhoneSelection(); return true; } if (memberDraft) { memberFormDraft.guard(() => setMemberDraft(null)); return true; } if (editor) { formDraft.guard(() => setEditor(null)); return true; } if (resultBack.current()) return true; if(focusedPackage){leaveWithDrafts(focusedPackage.returnToWork);return true;} if (focusedProposal?.returnToWork) { leaveWithDrafts(focusedProposal.returnToWork); return true; } if (reading) { back(); return true; } return false; }); return () => registerTransientBack(null); }, [reading, review, phoneSelection, memberDraft, editor, busy, focusedPackage, focusedProposal, registerTransientBack]);
   const definition = reading?.kind === 'definition' ? object(reading.definition) : null;
   const definitionReady = workspaceActive && (!definition || !!reading?.viewHandle);
   const current = reading?.kind === 'run' ? object(reading.run) : null;
@@ -897,9 +902,9 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
             actions={{ items: followUps, read: openFollowUp, disabled: !canRead || materialBusy, expanded: !!allResultActions[current.id],
               toggle: () => setAllResultActions(old => ({ ...old, [current.id]: !old[current.id] })) }}
             finalPackageReader={teamPackage&&reading&&workspaceActive&&runSection==='result'&&bridge.getState().capabilities.commands.includes('teams.readFinalPackageFiles')
-              ? <TeamFinalPackageReading key={reading.viewHandle+':'+teamPackage.operationId} item={teamPackage} handle={reading.viewHandle} disabled={!canRead||materialBusy} exportState={state.teamFinalPackageExport===undefined?reading.finalPackageExport:state.teamFinalPackageExport}
+              ? <TeamFinalPackageReading key={reading.viewHandle+':'+teamPackage.operationId} item={teamPackage} handle={reading.viewHandle} fromWork={focusedPackage?()=>leaveWithDrafts(focusedPackage.returnToWork):undefined} disabled={!canRead||materialBusy} exportState={state.teamFinalPackageExport===undefined?reading.finalPackageExport:state.teamFinalPackageExport}
                   live={()=>ownsNativeWindow()&&currentReading.current?.viewHandle===reading.viewHandle&&currentReading.current?.run?.id===teamPackage.teamRunId}/> : undefined}
-            openOriginalReview={current.status === 'awaiting_review' && reading?.taskId ? openAwaitingReview : undefined}
+            openOriginalReview={current.status === 'awaiting_review' && (!focusedPackage||followUps.length>0||rows(reading?.revisionOffers).length>0) && reading?.taskId ? openAwaitingReview : undefined}
             openMembers={() => { setResultSource(resultOrigin('members')); jumpToRunSection('members'); }}
             openMessage={id => { setResultSource(resultOrigin('summary-original')); focusMessage(id); }}/>
         </TabPanel>

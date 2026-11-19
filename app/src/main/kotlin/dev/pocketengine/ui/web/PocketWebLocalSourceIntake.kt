@@ -31,9 +31,14 @@ internal class PocketWebLocalSourceIntake(private val original: ProjectPackageCo
     private fun stageRow(row: JSONObject?, preview: Boolean = false): JSONObject? {
         val evidence = evidence(row) ?: return null
         val actual = row ?: return null
+        val fixed = evidence.optJSONObject("original")?.takeIf { evidence.optString("sourceKind") == "external_zip" &&
+            evidence.optBoolean("ordinaryZipIsPocketWorldPackage") && it.optString("fixedPackageManifestIdentity").matches(Regex("[a-f0-9]{64}")) &&
+            it.optString("originalArchiveSha256").matches(Regex("[a-f0-9]{64}")) && it.optInt("fixedPackageOmitted", -1) in 0..2000 }
         return JSONObject().put("id", actual.getString("selectionId")).put("sha", actual.getString("sha256"))
             .put("manifest", actual.getString("manifestIdentity")).put("kind", evidence.getString("sourceKind"))
             .put("label", evidence.optString("sourceLabel").take(120)).put("files", evidence.optInt("files"))
+            .put("fixedPackage", fixed?.let { JSONObject().put("manifest", it.getString("fixedPackageManifestIdentity"))
+                .put("archive", it.getString("originalArchiveSha256")).put("omitted", it.getInt("fixedPackageOmitted")) })
             .put("hostVersion", evidence.optJSONObject("original")?.optString("snapshotVersion")?.takeIf { evidence.optString("sourceKind") == "host_saved_snapshot" })
             .put("bytes", evidence.optLong("expandedBytes")).put("omitted", evidence.optInt("omittedCount"))
             .put("paths", JSONArray().apply { if (preview) actual.optJSONObject("manifest")?.optJSONArray("files")?.let { rows ->

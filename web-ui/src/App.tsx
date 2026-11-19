@@ -99,6 +99,7 @@ import {TaskOutcome} from './TaskOutcome';
 import {OwnerWorkFacts,WorkGoal} from './OwnerWorkFacts';
 import {WorkExecutionPlace} from './WorkExecutionPlace';
 import {OwnerWorkSupplement,type WorkSupplementTarget,type WorkSupplementLeave} from './OwnerWorkSupplement';
+import {sameTeamPackage} from './team-delivered-package';
 import {ownerWorkPresentation,type OwnerWorkTeam} from './owner-work-presentation';
 import type {TeamWorkTarget} from './ConversationTeamDecisions';
 import {teamDecisionEntryKey,teamFileEntryKey,teamProposalEntryKey,type TeamDecisionOrigin,type TeamButlerRequest,type TeamOwnerWorkLink,type TeamRunFocus} from './team-navigation';
@@ -153,7 +154,7 @@ type Review={reviewHandle:string;task?:Task;ownerQuestion?:Json|null;actions?:{a
 type TaskReviewWindow={taskId:string;request:number;documentEpoch:number;resumeRevision:number};
 type PhoneReview=PhoneReviewDisplay&{reviewHandle:string;expiresInMs?:number;documentEpoch?:number;originalDraft?:{composer:string;conversation:string;ownerEpoch:number;revision:number;origin:number};requestId?:string;draftRequestId?:string;provider?:string};
 type TaskLayer='overview'|'goal'|'process'|'scope'|'homeReport';
-type WorkspaceOrigin={route:string;label:string;drawerChat?:{id:string;draftKey:string;documentEpoch:number};settingsDirectory?:SettingsDirectoryOrigin;goal?:string;projectId?:string;contextProjectId?:string;task?:{id:string;layer:TaskLayer};focus?:HTMLElement|null;focusKey?:string;modelPicker?:boolean;parent?:WorkspaceOrigin|null};
+type WorkspaceOrigin={route:string;label:string;drawerChat?:{id:string;draftKey:string;documentEpoch:number};settingsDirectory?:SettingsDirectoryOrigin;goal?:string;projectId?:string;contextProjectId?:string;task?:{id:string;layer:TaskLayer;expected?:{runId:string;epoch:number}};focus?:HTMLElement|null;focusKey?:string;modelPicker?:boolean;parent?:WorkspaceOrigin|null};
 type FileDraft={text:string;baseline:string;version:number;dirty:boolean;submitted?:string};
 type ProjectTaskReturn={projectId:string;taskId:string;checkoutId?:string;query?:string;entry:ProjectWorkEntry;focusOutcome:boolean};
 const asArray=<T,>(x:any):T[]=>Array.isArray(x)?x:[];
@@ -634,7 +635,12 @@ export default function App(){
    try{await act('projects.select',{id:origin.projectId})}catch{return}
   }
   if(!current())return;
-  if(origin.task)openTask(origin.task.id,origin.task.layer,false,undefined,rereadOriginal?'':undefined);
+  if(origin.task){
+   const {id,layer,expected}=origin.task;
+   const sameWork=()=>!expected||asArray<Task>(bridge.getState().state.tasks).some(row=>row.id===id&&row.raw?.runId===expected.runId&&row.raw?.coordinatorEpoch===expected.epoch);
+   if(!sameWork()){setLocalError('原工作的执行轮次已变化，没有打开新一轮。');return;}
+   openTask(id,layer,false,undefined,rereadOriginal?'':undefined,expected,expected?sameWork:undefined);
+  }
   else if(origin.modelPicker)requestAnimationFrame(()=>{if(current())modelPicker.current?.open('models')});
   else if(!origin.settingsDirectory)requestAnimationFrame(()=>{
    if(!current())return;
@@ -1148,8 +1154,23 @@ export default function App(){
      void openRelatedWorkspace('teams',origin,()=>{setTeamAttentionFocus(undefined);setTeamRunFocus({requestId:crypto.randomUUID(),runId:source.teamRunId,fromWork:proposal||files,returnToWork});});
    }else if('memberId' in locator) void openRelatedWorkspace('teams',origin,()=>{setTeamRunFocus(undefined);setTeamAttentionFocus({...locator,ownerWork:source,requestId:crypto.randomUUID()});});
  };
- const openWorkTeam=(team:OwnerWorkTeam)=>{
+ const openWorkTeam=(team:OwnerWorkTeam,openPackage=false)=>{
    if(!can('teams.readRun'))return;
+   if(openPackage){
+     const live=bridge.getState(),mark=team.deliveredPackage;
+     const work=asArray<Task>(live.state.tasks).find(row=>row.id===team.parentTaskId),rows=ownerWorkPresentation(work)?.teams;
+     const exact=rows?.find(row=>row.teamRunId===team.teamRunId&&row.taskId===team.taskId&&row.parentRunId===team.parentRunId
+       &&row.conversationId===team.conversationId&&row.parentEpoch===team.parentEpoch);
+     if(document.hidden||!taskOpen||taskId!==team.parentTaskId||openedTaskId.current!==taskId||obj(live.view).taskId!==taskId
+       ||!can('teams.readFinalPackageFiles')||!mark||!exact||exact.cancelRequested||!sameTeamPackage(mark,exact.deliveredPackage)){
+       setLocalError('原工作或签收包已变化，没有打开替代成果。');return;
+     }
+     const source={parentTaskId:team.parentTaskId,parentRunId:team.parentRunId,parentEpoch:team.parentEpoch,conversationId:team.conversationId,teamRunId:team.teamRunId,deliveredPackage:mark};
+     const origin:WorkspaceOrigin={...captureWorkspaceOrigin(),task:{id:team.parentTaskId,layer:taskLayer,expected:{runId:team.parentRunId,epoch:team.parentEpoch}}};
+     const returnToWork=(reason?:string)=>{if(document.hidden||relatedOrigin.current!==origin)return;
+       void restoreWorkspace(origin).then(()=>{if(reason&&!document.hidden)setLocalError(reason)});};
+     void openRelatedWorkspace('teams',origin,()=>{setTeamAttentionFocus(undefined);setTeamRunFocus({requestId:crypto.randomUUID(),runId:team.teamRunId,fromWork:source,returnToWork});});return;
+   }
    void openRelatedWorkspace('teams',undefined,()=>{setTeamAttentionFocus(undefined);setTeamRunFocus({requestId:crypto.randomUUID(),runId:team.teamRunId});});
  };
  const openTeamOwnerWork=(link:TeamOwnerWorkLink,intent:'overview'|'supplement')=>{

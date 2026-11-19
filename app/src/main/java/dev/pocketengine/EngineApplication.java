@@ -4862,6 +4862,10 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
         features.clearWorkingMemory(new JSONObject().put("ownerId","owner").put("spaceId","private"));
         return receipt;
     }
+    public synchronized JSONObject excludeNewConversationInputsForOwner(String conversation,long revision,boolean excluded)throws Exception{
+        EngineModule module=features.module("assistant");if(!(module instanceof dev.pocketengine.features.assistant.AssistantModule))throw new IllegalStateException("原对话暂不可用");
+        return ((dev.pocketengine.features.assistant.AssistantModule)module).excludeNewInputsForOwner(conversation,revision,excluded);
+    }
     private boolean personalContextEnabled(JSONObject task)throws Exception{
         String conversation=task.optString("conversationId");return conversation.isEmpty()||conversationPersonalMemoryForOwner(conversation).getBoolean("enabled");
     }

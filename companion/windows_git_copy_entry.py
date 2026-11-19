@@ -46,8 +46,13 @@ def show_receipt(ctx,evidence,locked,settings=None):
                             ("compare","核对现在的原文件\n用此副本保存时的逐项清单比较，不需要源仓库仍然在线。")]
         else: message += "\n旧回执没有保留可重新绑定的逐文件清单；不会用同名文件推断当前内容。"
     actions.append(("patches","已另存的单文件变更\n只查这次副本的本机补丁原件，不需要当前源仓库。"))
+    if settings and state=="saved" and not leaf and evidence.get("itemsRecorded"):
+        actions.append(("new-draft","为新文件起草源码提议\n只另存 Git 新增补丁，不在仓库或副本中创建文件。"))
     chosen = _dialog(title,message,actions,retire=locked)
     if locked(): return
+    if chosen=="new-draft" and settings and not leaf:
+        from windows_new_source_draft_entry import start as start_new
+        start_new(ctx,settings,evidence["operation"],locked,_observe); return
     if chosen=="one-text":
         from desktop_phone_goal_text import source_text
         from windows_git_one_copy import saved

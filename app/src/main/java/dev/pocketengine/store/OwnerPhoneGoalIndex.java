@@ -3,6 +3,7 @@ package dev.pocketengine.store;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import dev.pocketengine.features.devices.DeviceProtocol;
+import dev.pocketengine.features.devices.DirectedPhoneTarget;
 import java.util.ArrayList;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -14,9 +15,11 @@ final class OwnerPhoneGoalIndex {
         return read(db,here,target,instance,parentAfter,operationAfter,"");
     }
     static JSONObject read(SQLiteDatabase db,String here,String target,String instance,String parentAfter,String operationAfter,String searchText) throws Exception {
-        return read(db,here,target,instance,parentAfter,operationAfter,searchText,"");
+        return read(db,here,target,instance,parentAfter,operationAfter,searchText,"",null);
     }
-    static JSONObject read(SQLiteDatabase db,String here,String target,String instance,String parentAfter,String operationAfter,String searchText,String source) throws Exception {
+    static JSONObject read(SQLiteDatabase db,String here,String target,String instance,String parentAfter,String operationAfter,String searchText,String source,DirectedPhoneTarget originalPhone) throws Exception {
+        if((source.isEmpty())!=(originalPhone==null)||originalPhone!=null&&(!target.equals(originalPhone.deviceId())||!instance.equals(originalPhone.instanceId())))
+            throw new SecurityException("原私人任务与执行手机身份不相符");
         DeviceProtocol.deviceId(here,"ownerDeviceId");DeviceProtocol.deviceId(target,"targetDeviceId");DeviceProtocol.identifier(instance,"targetInstanceId");
         // A specific private original task has already verified its durable directed target; it must
         // remain readable even when the peer record no longer exists. Only the partner folder uses current pairing.
@@ -63,6 +66,7 @@ final class OwnerPhoneGoalIndex {
             JSONObject item=new JSONObject().put("taskId",parent).put("operationId",op).put("argumentsDigest",row.getString(3))
                     .put("goal",preview).put("matchedLater",search.beyondPreview(preview)?true:null)
                     .put("screenMode",wire.getJSONObject("resourceBinding").getString("screenMode")).put("textOnly",DeviceProtocol.isAndroidTextReturn(wire)?true:null).put("createdAt",row.getLong(2));
+            if(originalPhone!=null)item.put("stopReceipt",SentPhoneStopReceipt.localFact(db,originalPhone,parent,op,wire));
             if(!row.isNull(6)&&!row.isNull(7))acceptedFact(item,row.getString(6),row.getString(7),wire,parent,op);
             items.put(item);
         }}

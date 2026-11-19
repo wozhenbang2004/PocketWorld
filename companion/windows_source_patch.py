@@ -30,6 +30,8 @@ BANK, LIMIT = 8, 320*1024
 FILENAME = "change.patch"
 DRAFT_PROFILE = "pocketworld.windows-owner-draft-patch.v1"
 DRAFT_BANK = 8
+NEW_DRAFT_BANK,NEW_DRAFT_PROFILE=4,"pocketworld.windows-owner-proposed-new-source.v1"
+PROPOSED_SET_BANK,PROPOSED_SET_PROFILE=2,"pocketworld.windows-local-proposed-source-patch-set.v1"
 
 
 def _bad(): raise PlatformError("Original single-file change or publication cannot be verified")
@@ -174,16 +176,23 @@ def check(ctx,op,row,locked,*,show=False):
     return checked_output(ctx,op,row,locked,show=show,added=False)
 
 
-def output_names(ctx,op,rid,slot,*,added,bundle=False,removed=False,draft=False):
+def output_names(ctx,op,rid,slot,*,added,bundle=False,removed=False,draft=False,newdraft=False,proposed_set=False):
     if (re.fullmatch("[a-f0-9]{32}",op) is None or re.fullmatch("[a-f0-9]{32}",rid) is None
-            or type(slot) is not int or sum((bool(added),bool(bundle),bool(removed),bool(draft)))>1
-            or not 0<=slot<(DRAFT_BANK if draft else SET_BANK if bundle else REMOVED_BANK if removed else ADDED_BANK if added else BANK)): _bad()
+            or type(slot) is not int or sum((bool(added),bool(bundle),bool(removed),bool(draft),bool(newdraft)))>1
+            or type(proposed_set) is not bool or proposed_set and not bundle
+            or not 0<=slot<(PROPOSED_SET_BANK if proposed_set else NEW_DRAFT_BANK if newdraft else DRAFT_BANK if draft else SET_BANK if bundle else REMOVED_BANK if removed else ADDED_BANK if added else BANK)): _bad()
+    if newdraft:
+        return (NEW_DRAFT_PROFILE,f"source-new-draft-v1-{op}-slot-{slot}.json","source-new-draft-v1-"+rid+"-result.json",
+                ntpath.join(ctx.state,"review-new-draft-"+rid))
     if draft:
         return (DRAFT_PROFILE,f"source-draft-v1-{op}-slot-{slot}.json","source-draft-v1-"+rid+"-result.json",
                 ntpath.join(ctx.state,"review-draft-"+rid))
     if removed:
         return (REMOVED_PROFILE,f"source-remove-v1-{op}-slot-{slot}.json","source-remove-v1-"+rid+"-result.json",
                 ntpath.join(ctx.state,"review-remove-"+rid))
+    if proposed_set:
+        return (PROPOSED_SET_PROFILE,f"source-proposed-set-v1-{op}-slot-{slot}.json","source-proposed-set-v1-"+rid+"-result.json",
+                ntpath.join(ctx.state,"review-proposed-set-"+rid))
     if bundle:
         return (SET_PROFILE,f"source-patchset-v1-{op}-slot-{slot}.json","source-patchset-v1-"+rid+"-result.json",
                 ntpath.join(ctx.state,"review-set-"+rid))
@@ -193,11 +202,12 @@ def output_names(ctx,op,rid,slot,*,added,bundle=False,removed=False,draft=False)
     return PROFILE,_slot(op,slot),_receipt(rid),_target(ctx,rid)
 
 
-def checked_output(ctx,op,row,locked,*,show,added,bundle=False,content=False,removed=False,draft=False,hold=None,member_index=None):
+def checked_output(ctx,op,row,locked,*,show,added,bundle=False,content=False,removed=False,draft=False,hold=None,member_index=None,newdraft=False):
     # The caller has checked its own immutable slot/schema. Single-file variants use
     # the same exact-file check and fixed safe filename but separate banks.
     rid,f=row["id"],row["fields"]
-    profile,_,receipt,base=output_names(ctx,op,rid,0,added=added,bundle=bundle,removed=removed,draft=draft)
+    profile,_,receipt,base=output_names(ctx,op,rid,0,added=added,bundle=bundle,removed=removed,draft=draft,newdraft=newdraft,
+                                        proposed_set=bundle and row.get("format")==PROPOSED_SET_PROFILE)
     filename=SET_FILE if bundle else FILENAME
     if (row.get("format")!=profile or locked() or content and (show or bundle)
             or hold is not None and (not isinstance(hold,ExitStack) or not draft or not content)
@@ -243,8 +253,8 @@ def save(ctx,settings,op,item,result,locked,checkpoint):
     return publish_output(ctx,op,rid,f,result["patch"],next(n for n in range(BANK) if n not in rows),current,added=False)
 
 
-def publish_output(ctx,op,rid,f,raw,slot,current,*,added,bundle=False,removed=False,draft=False):
-    profile,slot_file,receipt,base=output_names(ctx,op,rid,slot,added=added,bundle=bundle,removed=removed,draft=draft)
+def publish_output(ctx,op,rid,f,raw,slot,current,*,added,bundle=False,removed=False,draft=False,newdraft=False,proposed_set=False):
+    profile,slot_file,receipt,base=output_names(ctx,op,rid,slot,added=added,bundle=bundle,removed=removed,draft=draft,newdraft=newdraft,proposed_set=proposed_set)
     filename,limit=(SET_FILE,SET_LIMIT) if bundle else (FILENAME,LIMIT)
     if (not isinstance(raw,bytes) or not 0<len(raw)<=limit or len(raw)!=f["bytes"]
             or hashlib.sha256(raw).hexdigest()!=f["patchSha"]): _bad()
@@ -259,10 +269,10 @@ def publish_output(ctx,op,rid,f,raw,slot,current,*,added,bundle=False,removed=Fa
         # Private, unique, new folder: never adopt even an empty old folder.
         current()
         tree=DirectoryTree(ctx,base,stack,None,create_root=True)
-        capture=ctx.backend.create_private_snapshot(base,filename,raw,maximum=limit,current=current,**({"bind_birth":True} if draft else {}))
+        capture=ctx.backend.create_private_snapshot(base,filename,raw,maximum=limit,current=current,**({"bind_birth":True} if draft or newdraft or proposed_set else {}))
         if (capture.get("parentIdentity")!=tree.nodes[""][2] or capture.get("sha256")!=f["patchSha"]
                 or capture.get("bytes")!=f["bytes"]): _bad()
-        expected=capture["fileOrigin"] if draft else None
+        expected=capture["fileOrigin"] if draft or newdraft or proposed_set else None
         file_id=_read_file(ctx,tree,stack,expected,f,bundle=bundle)
         if capture.get("fileIdentity")!=file_id[:3]: _bad()
         # Publication may already have happened if a window closes here. Write

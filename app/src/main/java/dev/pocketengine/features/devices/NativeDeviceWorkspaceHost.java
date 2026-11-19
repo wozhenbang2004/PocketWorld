@@ -182,6 +182,7 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
             if(!query.isEmpty())throw new IllegalStateException("原宿主未提供本机文字查找");return closedReceivedPhoneGoals(caller,operation);
         }
         default JSONObject declinedReceivedPhoneGoals(String caller,String operation)throws Exception{throw new IllegalStateException("此宿主没有本机不接手记录");}
+        default JSONObject withdrawnReceivedPhoneGoals(String caller,String operation)throws Exception{throw new IllegalStateException("此宿主没有原设备启动前撤回记录");}
         default JSONObject failedReceivedPhoneGoals(String caller,String operation)throws Exception{throw new IllegalStateException("此宿主没有本机失败原执行目录");}
         default JSONObject startedReceivedPhoneGoals(String caller,String operation)throws Exception{throw new IllegalStateException("此本机宿主没有已接手目录");}
         default JSONObject waitingPhoneGoals(String afterCaller,String afterOp,boolean results)throws Exception {throw new IllegalStateException("本机未提供待接手工作索引");}
@@ -529,6 +530,9 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         }
         public JSONObject declinedReceivedPhoneGoals(String caller,String operation)throws Exception{
             current();JSONObject page=copy(control.declinedReceivedPhoneGoals(caller,operation));current();return page;
+        }
+        public JSONObject withdrawnReceivedPhoneGoals(String caller,String operation)throws Exception{
+            current();JSONObject page=copy(control.withdrawnReceivedPhoneGoals(caller,operation));current();return page;
         }
         public JSONObject failedReceivedPhoneGoals(String caller,String operation)throws Exception{
             current();JSONObject page=copy(control.failedReceivedPhoneGoals(caller,operation));current();return page;

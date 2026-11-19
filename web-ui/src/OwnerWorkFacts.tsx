@@ -7,7 +7,7 @@ import './owner-work.css';
 
 /** The Brief/Assets relationship from Affect AgentChat, rendered with the
  * retained BoardUI controls and host-owned facts instead of demo data. */
-export function OwnerWorkFacts({ task, onReport, onReconcile, onTeam }: { task: unknown; onReport?: () => void; onReconcile?: (target: ReportReconciliationTarget) => void; onTeam?: (team: OwnerWorkTeam) => void }) {
+export function OwnerWorkFacts({ task, onReport, onReconcile, onTeam }: { task: unknown; onReport?: () => void; onReconcile?: (target: ReportReconciliationTarget) => void; onTeam?: (team: OwnerWorkTeam, openPackage?:boolean) => void }) {
   const work = ownerWorkPresentation(task);
   if (!work) return null;
   const showHandling = work.waitingForButler || work.waitingForChildren || work.delivered ||

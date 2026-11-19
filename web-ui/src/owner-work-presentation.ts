@@ -1,3 +1,4 @@
+import {teamPackageMark,type TeamPackageMark} from './team-delivered-package';
 import {teamFileMark,type TeamFileReviewMark} from './team-navigation';
 type Data = Record<string, unknown>;
 const object = (value: unknown): Data => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Data : {};
@@ -11,7 +12,7 @@ export type OwnerWorkTeam = {
   goal: string; status: string; taskStatus: string; phase: string; updatedAt: number;
   needsAttention: boolean; active: boolean; cancelRequested: boolean; readOnly: true;
   memberCount?: number; completedMemberCount?: number; pendingMemberCount?: number;
-  pendingQuestionCount?: number; pendingDecisionCount?: number; pendingParentRevisionCount?: number; attentionCount?: number; fileReview?:TeamFileReviewMark;
+  pendingQuestionCount?: number; pendingDecisionCount?: number; pendingParentRevisionCount?: number; attentionCount?: number; fileReview?:TeamFileReviewMark; deliveredPackage?:TeamPackageMark;
 };
 const count = (value: unknown): number | undefined => Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : undefined;
 
@@ -31,7 +32,7 @@ function workTeams(raw: Data, available: boolean): OwnerWorkTeam[] {
       goal: text(row.goal), status: text(row.status), taskStatus: text(row.taskStatus), phase: text(row.phase), updatedAt: Number(row.updatedAt),
       needsAttention: row.needsAttention, active: row.active, cancelRequested: row.cancelRequested === true, readOnly: true,
       memberCount: count(row.memberCount), completedMemberCount: count(row.completedMemberCount), pendingMemberCount: count(row.pendingMemberCount),
-      pendingParentRevisionCount: count(row.pendingParentRevisionCount), pendingQuestionCount: count(row.pendingQuestionCount), pendingDecisionCount: count(row.pendingDecisionCount), attentionCount: count(row.attentionCount), fileReview:teamFileMark(row.fileReview)??undefined });
+      pendingParentRevisionCount: count(row.pendingParentRevisionCount), pendingQuestionCount: count(row.pendingQuestionCount), pendingDecisionCount: count(row.pendingDecisionCount), attentionCount: count(row.attentionCount), fileReview:teamFileMark(row.fileReview)??undefined, deliveredPackage:teamPackageMark(row.deliveredPackage)??undefined });
   }
   return teams;
 }
@@ -62,13 +63,18 @@ export function ownerWorkPresentation(value: unknown) {
   };
   const teams = workTeams(raw, available), teamActive = teams.some(team => team.active);
   const stopped = raw.cancelRequested === true || ['cancelled', 'canceled', 'stopped'].includes(text(task.status));
+  const activeTeams=teams.filter(team=>team.active);
   const teamNeedsAttention = !stopped && teams.some(team => team.needsAttention);
   const relatedCurrent = !text(work.relatedRunId) || work.relatedRunId === raw.runId;
   const pendingChildren = !relatedCurrent ? [] : Array.isArray(handling.pendingChildren) ? handling.pendingChildren.map(object)
     : Array.isArray(work.relatedPendingChildren) ? work.relatedPendingChildren.map(object) : [];
+  const returnedRow=(child:Data)=>child.feature==='teams'&&child.hasUnresolvedOperations===false&&child.executionStatus==='awaiting_review'&&
+    activeTeams.some(team=>team.deliveredPackage&&!team.needsAttention&&team.taskId===child.taskId&&team.runId===child.runId&&team.epoch===child.epoch);
+  const onlyReturnedTeam=relatedCurrent&&raw.ownerWorkTeamsUnavailable!==true&&activeTeams.length>0&&
+    activeTeams.every(team=>!!team.deliveredPackage&&!team.needsAttention&&team.status==='awaiting_review')&&pendingChildren.every(returnedRow);
   const waitingForChildren = available && (teamActive || pendingChildren.length > 0);
-  const childNeedsAttention = available && !stopped && pendingChildren.some(child => child.hasUnresolvedOperations === true
-    || [text(child.executionStatus), text(child.status)].some(status => /^(awaiting_approval|awaiting_input|awaiting_user|awaiting_review|needs_confirmation|reconciling|interrupted|unknown|not_found)$/.test(status)));
+  const childNeedsAttention = available && !stopped && pendingChildren.some(child => !returnedRow(child)&&(child.hasUnresolvedOperations === true
+    || [text(child.executionStatus), text(child.status)].some(status => /^(awaiting_approval|awaiting_input|awaiting_user|awaiting_review|needs_confirmation|reconciling|interrupted|unknown|not_found)$/.test(status))));
   const teamsUnavailable = available && raw.ownerWorkTeamsUnavailable === true;
   const teamLabel = teams.some(team => (team.pendingQuestionCount || 0) > 0) ? '团队有问题等你回答'
     : teams.some(team => (team.pendingParentRevisionCount||0)>0) ? '管家有修订提案等你核对'
@@ -76,11 +82,12 @@ export function ownerWorkPresentation(value: unknown) {
     : teams.some(team => team.status === 'awaiting_review') ? '团队成果等你核对' : '团队需要你处理';
   const childLabel = stopped ? '关联任务的停止状态待核对' : childNeedsAttention ? '关联任务需要处理' : '等待关联任务完成';
   const handlingLabel = !available ? '原工作来源不可用' : ownerDecision ? ownerDecision.label : teamNeedsAttention ? teamLabel
-    : teamActive ? stopped ? '团队停止状态待核对' : teams.filter(team => team.active).every(team => team.status === 'paused') ? '团队协作已暂停' : '团队正在推进'
+    : teamActive ? stopped ? '团队停止状态待核对' : onlyReturnedTeam ? '完整项目包可查看' : teams.filter(team => team.active).every(team => team.status === 'paused') ? '团队协作已暂停' : '团队正在推进'
     : waitingForChildren ? childLabel : labels[state];
   const reason = !available ? '原来源已删除、停用或暂不可核对。保留工作身份与允许的控制。'
     : ownerDecision ? text(task.summary) || text(handling.reason)
     : teamNeedsAttention ? '打开原协作处理当前问题，已有结果仍保留在原工作。'
+    : onlyReturnedTeam&&!stopped ? '原团队已保存固定版本，可在协作进展打开。这不是当前主项目或业务结果的验收。'
     : waitingForChildren ? stopped ? '原工作已要求停止，关联任务尚未确认结束。请查看原记录的当前状态。'
       : '关联任务尚未结束，当前是阶段进展，管家还没有形成完整汇报。'
     : text(handling.reason);
@@ -92,7 +99,7 @@ export function ownerWorkPresentation(value: unknown) {
     ? { taskId: text(reconciliation.taskId), runId: text(reconciliation.runId), epoch: Number(reconciliation.epoch) } : null;
   const needsAttention = available && (!!ownerDecision || teamNeedsAttention || childNeedsAttention || state === 'needs_review'
     || state === 'unavailable' && resultAvailable && !stopped);
-  const actionLabel = ownerDecision ? ownerDecision.action : teamNeedsAttention ? '处理团队问题' : teamActive ? stopped ? '查看停止进展' : '查看团队进展'
+  const actionLabel = ownerDecision ? ownerDecision.action : teamNeedsAttention ? '处理团队问题' : teamActive ? stopped ? '查看停止进展' : onlyReturnedTeam ? '查看协作成果' : '查看团队进展'
     : waitingForChildren ? childNeedsAttention ? '处理关联任务' : '查看关联进展'
     : needsAttention ? '核对管家汇报' : resultAvailable || reportMessageId ? '查看结果' : '查看详情';
   return {

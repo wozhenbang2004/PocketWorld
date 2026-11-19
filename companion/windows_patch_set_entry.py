@@ -9,7 +9,7 @@ from windows_source_patch import SET_FILE,checked_output,output_names
 def _short(s,n=94): return s if len(s)<=n else "…"+s[-n+1:]
 
 
-def _title(m): return {"add":"新增 · ","edit":"修改 · ","remove":"移除原路径 · ","draft":"机主草稿 · "}[m["kind"]]+_short(m["path"])
+def _title(m): return {"add":"新增 · ","edit":"修改 · ","remove":"移除原路径 · ","draft":"机主草稿 · ","newdraft":"机主拟新增 · "}[m["kind"]]+_short(m["path"])
 
 
 def _end(m,length=None): return "移除原路径（不是空文件）" if m["kind"]=="remove" else m["to"][:length]
@@ -19,6 +19,8 @@ def _warning(members):
     n=sum(m["kind"]=="remove" for m in members)
     drafts=sum(m["kind"]=="draft" for m in members)
     note=f"\n含 {drafts} 项机主已另存的草稿；它们不是仓库中已经发生的修改。" if drafts else ""
+    proposals=sum(m["kind"]=="newdraft" for m in members)
+    if proposals: note+=f"\n含 {proposals} 项机主拟新增源码；这些路径并未因此在仓库或副本中创建，实际应用前需另核当前项目。"
     return note+(f"\n其中 {n} 项会在你日后手动应用补丁时移除原路径。现在不删除任何文件。" if n else "")
 
 
@@ -27,7 +29,7 @@ def inspect_members(members,locked):
     while not locked():
         actions=[]
         for i,m in enumerate(members[page*4:page*4+4],page*4):
-            before="原提交无此项" if m["kind"]=="add" else m["base"]["oid"][:10]
+            before="原提交无此项" if m["kind"] in ("add","newdraft") else m["base"]["oid"][:10]
             actions.append((("item",i),_title(m)+"\n"+before+" → "+_end(m,10)+f"，单项补丁 {m['bytes']} 字节"))
         if page: actions.append(("prev","上一页"))
         if 4*(page+1)<len(members): actions.append(("next","下一页"))
@@ -36,7 +38,7 @@ def inspect_members(members,locked):
         elif click=="prev": page-=1
         elif click is not None and not locked():
             m=members[click[1]]; base=m["base"]
-            before="原提交中无此名称，父树："+base["tree"] if m["kind"]=="add" else "原 blob："+base["oid"]
+            before="原提交中无此名称，父树："+base["tree"] if m["kind"] in ("add","newdraft") else "原 blob："+base["oid"]
             _dialog("这项补丁的原版本",f"{m['path']}\n{before}\n目标：{_end(m)}\n原单项记录：{m['id']}\n原补丁 SHA-256：{m['sha256']}",[],retire=locked)
         else: return
 
@@ -45,7 +47,7 @@ def detail(ctx,op,row,locked,*,read_patch=None):
     if locked(): return
     f=row["fields"]
     def check(show=False):
-        if row not in sets.records(ctx,op).values(): raise ValueError("Missing original patch set")
+        if row not in sets.records(ctx,op,proposed=row.get("format")==sets.PROPOSED_SET_PROFILE).values(): raise ValueError("Missing original patch set")
         return checked_output(ctx,op,row,locked,show=show,added=False,bundle=True)
     try: state=check()
     except Exception: state="unavailable"
@@ -69,7 +71,7 @@ def detail(ctx,op,row,locked,*,read_patch=None):
             if not locked(): _dialog("没有定位原组合补丁","原件或唯一目录成员未能再核实，不打开上级目录。",[],retire=locked)
 
 
-def _choose(ctx,rows,locked):
+def _choose(ctx,rows,locked,available):
     selected=set(); page=0
     while not locked():
         actions=[]
@@ -82,7 +84,10 @@ def _choose(ctx,rows,locked):
         click=_dialog("哪些文件属于这次交付？",f"已选 {len(selected)}/8。再次点同一项取消。只从这个副本的已留存单项原件组合，不会读取当前代码。",actions,retire=locked)
         if click=="next": page+=1
         elif click=="prev": page-=1
-        elif click=="prepare" and not locked(): return [(rows[i][0],rows[i][1]["id"]) for i in sorted(selected)]
+        elif click=="prepare" and not locked():
+            if not available[any(rows[i][0]=="newdraft" for i in selected)]:
+                _dialog("所选类型没有可用的原保存位置","普通组合与含机主拟新增的组合分开保留；对应组已满或无法核实。不换位置或覆盖。",[],retire=locked); continue
+            return [(rows[i][0],rows[i][1]["id"]) for i in sorted(selected)]
         elif isinstance(click,tuple) and click[0]=="pick" and not locked():
             index=click[1]
             if index in selected: selected.remove(index); continue
@@ -99,21 +104,29 @@ def _choose(ctx,rows,locked):
 def menu(ctx,op,locked,observe):
     if locked(): return
     rows,damaged=sets.catalog(ctx,op)
-    try: kept=sorted(sets.records(ctx,op).values(),key=lambda r:r["at"],reverse=True)
-    except Exception:
-        _dialog("无法核对这个副本的组合记录","没有创建或覆盖文件；原有单文件补丁入口不受影响。",[],retire=locked); return
-    actions=[("choose","选择单文件产物\n选 2–8 份同一原提交、不同路径的补丁，确认后才另存。")] if len(rows)>=2 and len(kept)<sets.BANK else []
+    kept=[]; available={}; uncertain=False
+    for proposed,capacity in ((False,sets.BANK),(True,sets.PROPOSED_SET_BANK)):
+        try:
+            bank=sets.records(ctx,op,proposed=proposed)
+            kept.extend(bank.values()); available[proposed]=len(bank)<capacity
+        except Exception:
+            uncertain=True; available[proposed]=False  # the other bank stays separately readable
+    kept.sort(key=lambda r:r["at"],reverse=True)
+    eligible=(available[False] and sum(k!="newdraft" for k,_ in rows)>=2 or
+              available[True] and len(rows)>=2 and any(k=="newdraft" for k,_ in rows))
+    actions=[("choose","选择单文件产物\n选 2–8 份同一原提交、不同路径的补丁，确认后才另存。")] if eligible else []
     for i,r in enumerate(kept):
         f=r["fields"]; actions.append((("kept",i),f"查看已有组合 · {len(f['members'])} 个文件\n"+_short("、".join(m["path"] for m in f["members"]),88)))
     text="组合产物保存在本机，不能代替完整项目或运行回执。"
     if len(rows)<2: text+=" 当前不足两份可选择的单文件记录。"
-    if len(kept)>=sets.BANK: text+=" 本副本的三个组合位置均有原记录，不自动覆盖。"
+    if not available[False] or not available[True]: text+=" 普通组合保留三份，含拟新增的组合另保留两份；不可用的位置不覆盖、不补写。"
+    if uncertain: text+=" 有一组原组合记录暂不能核对。"
     if damaged: text+=" 有一组单文件记录不可核实，未作为候选。"
     click=_dialog("多文件交付补丁",text,actions,retire=locked)
     if locked(): return
     if isinstance(click,tuple) and click[0]=="kept": detail(ctx,op,kept[click[1]],locked); return
     if click!="choose": return
-    selected=_choose(ctx,rows,locked)
+    selected=_choose(ctx,rows,locked,available)
     if not selected: return
     visible,result=observe("核对选中的单文件原件","正在逐个核实原私有目录、补丁身份、字节摘要、单一路径和补丁段……",locked,
                            lambda point,_:sets.prepare(ctx,op,selected,locked,point),45)
@@ -123,7 +136,7 @@ def menu(ctx,op,locked,observe):
     f=result["fields"]; rid=sets.key(f)
     prior=next((r for r in kept if r["id"]==rid),None)
     if prior: detail(ctx,op,prior,locked); return
-    _,_,_,base=output_names(ctx,op,rid,0,added=False,bundle=True)
+    _,_,_,base=output_names(ctx,op,rid,0,added=False,bundle=True,proposed_set=sets.has_proposal(f))
     text=(f"原提交 {f['commit'][:12]} · {len(f['members'])} 个不同文件 · {f['bytes']} 字节。"
           f"\n只会写到新位置：{ntpath.join(base,SET_FILE)}\n保存前再核全部原件。不会提交、应用到仓库、运行程序或发送给手机。")+_warning(f["members"])
     while not locked():

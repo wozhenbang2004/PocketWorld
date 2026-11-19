@@ -9,13 +9,14 @@ from windows_git_copy import _json, inspect, slots
 from windows_git_copy_entry import _observe, show_receipt
 from windows_git_source import registered
 from windows_owner_draft import records as drafts
+from windows_new_source_draft import records as new_drafts
 from windows_source_patch import records as tracked
 from windows_added_source import records as additions
 from windows_removed_source import records as removals
-from windows_patch_set import records as sets
+from windows_patch_set import records as sets, proposed_records as proposed_sets
 
-READERS={"draft":drafts,"tracked":tracked,"added":additions,"removed":removals,"set":sets}
-LABEL={"copy":"项目底稿","file":"单文件底稿","draft":"机主草稿","tracked":"修改补丁","added":"新增补丁","removed":"移除建议","set":"多文件补丁"}
+READERS={"draft":drafts,"newdraft":new_drafts,"tracked":tracked,"added":additions,"removed":removals,"set":sets,"proposedSet":proposed_sets}
+LABEL={"copy":"项目底稿","file":"单文件底稿","draft":"机主草稿","newdraft":"机主拟新增","tracked":"修改补丁","added":"新增补丁","removed":"移除建议","set":"多文件补丁","proposedSet":"多文件补丁（含拟新增）"}
 
 
 def bad(): raise PlatformError("Original installed-owner record cannot be bound")
@@ -42,7 +43,7 @@ class Item:
         if self.kind=="copy": return "整项目独立副本"
         if self.kind=="file": return self.source["selectedFile"]["path"]
         f=self.record["fields"]
-        return f"{len(f['members'])} 个已选文件" if self.kind=="set" else f["path"]
+        return f"{len(f['members'])} 个已选文件" if self.kind in ("set","proposedSet") else f["path"]
 
     @property
     def key(self): return (self.owner["operation"],self.kind,self.owner["operation"] if self.kind in ("copy","file") else self.record["id"])
@@ -119,7 +120,8 @@ def reopen(ctx,settings,item,locked):
     if item.kind=="draft":
         from windows_owner_draft_entry import detail
         detail(ctx,op,record,locked,settings=settings,read_patch=read_patch); return
-    if item.kind=="set": from windows_patch_set_entry import detail
+    if item.kind=="newdraft": from windows_new_source_draft_entry import detail
+    elif item.kind in ("set","proposedSet"): from windows_patch_set_entry import detail
     elif item.kind=="added": from windows_added_source_entry import detail
     elif item.kind=="removed": from windows_removed_source_entry import detail
     elif item.kind=="tracked": from windows_source_patch_entry import detail

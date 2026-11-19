@@ -108,14 +108,17 @@ export function samePhoneGoalArchive(value: DeviceData | null, peer: DeviceData 
 const startedPhases=new Set(['preparing','running','pausing','paused','stopping','verifying','awaiting_user','waiting_user','awaiting_approval','waiting_approval','waiting_permission','interrupted','reconciling','reconciliation_required','blocked_unknown']);
 export function waitingPhoneGoalPage(value: unknown, local: DeviceData) {
   if (!object(value) || value.kind !== 'waitingPhoneGoals' || value.readOnly !== true
+    || value.withdrawnOnly!==undefined&&typeof value.withdrawnOnly!=='boolean'||value.withdrawnOnly===true&&(value.declinedOnly!==false||value.failedOnly!==false||value.startedOnly!==false||value.resultOnly!==false||value.rows?.length>6)
     || value.failedOnly!==undefined&&typeof value.failedOnly!=='boolean'||value.failedOnly===true&&(value.declinedOnly!==false||value.startedOnly!==false||value.resultOnly!==false)
     || value.declinedOnly!==undefined&&typeof value.declinedOnly!=='boolean'||value.declinedOnly===true&&(value.startedOnly!==false||value.resultOnly!==false||value.rows?.length>6)
     || value.startedOnly!==undefined && typeof value.startedOnly!=='boolean' || value.startedOnly===true && value.resultOnly!==false
-    || (value.resultOnly === true || value.startedOnly===true || value.declinedOnly===true || value.failedOnly===true) && (!Number.isSafeInteger(value.limitedCandidates) || value.limitedCandidates < 0 || value.limitedCandidates > 24) || !identity(local.deviceId) || !identity(local.instanceId)
+    || (value.resultOnly === true || value.startedOnly===true || value.declinedOnly===true || value.failedOnly===true || value.withdrawnOnly===true) && (!Number.isSafeInteger(value.limitedCandidates) || value.limitedCandidates < 0 || value.limitedCandidates > 24) || !identity(local.deviceId) || !identity(local.instanceId)
     || value.localDeviceId !== local.deviceId || value.localInstanceId !== local.instanceId || !identity(value.waitingHandle) || !positiveInteger(value.capturedAt)
     || typeof value.hasMore !== 'boolean' || typeof value.canReadNewer !== 'boolean' || !Array.isArray(value.rows) || value.rows.length > 24
     || !value.rows.every((r: unknown) => object(r) && identity(r.taskId) && identity(r.operationId) && typeof r.sourceDeviceId === 'string'
-      && /^pw1_[a-f0-9]{64}$/.test(r.sourceDeviceId) && (value.declinedOnly===true
+      && /^pw1_[a-f0-9]{64}$/.test(r.sourceDeviceId) && (value.withdrawnOnly===true
+        ? r.waitingState==='withdrawn_before_start' && r.notDispatched===true && positiveInteger(r.withdrawnAt) && r.declinedAt===undefined && r.runId===undefined && r.epoch===undefined
+        : value.declinedOnly===true
         ? r.waitingState==='declined_before_start' && r.notDispatched===true && positiveInteger(r.declinedAt) && r.runId===undefined && r.epoch===undefined
         : value.failedOnly===true
         ? r.waitingState==='failed_run' && identity(r.runId) && positiveInteger(r.epoch) && positiveInteger(r.registeredAt) && positiveInteger(r.stateRecordedAt) && r.stateRecordedAt>=r.registeredAt
@@ -137,6 +140,14 @@ export function receivedPhoneArchiveReturn(value: unknown, row: DeviceData, peer
   return { taskId: value.taskId, operationId: value.operationId, targetId: value.targetId, instanceId: value.instanceId, sourceId: value.sourceId,
     parentTaskId: value.parentTaskId, grantId: value.grantId, epoch: value.epoch, ...(row.waitingState==='failed_run'?{failedOriginalRun:true as const}:{}), ...(['original_run','failed_run'].includes(row.waitingState)?{runId:value.runId,executorEpoch:value.executorEpoch}:{}), peerDetail: true, leftAt: Date.now() };
 }
+export type ArchivedPhoneStop={state:'request_recorded'|'reported_stopped'|'reported_ended'; requestReceivedAt:number};
+export function isArchivedPhoneStop(value:unknown):value is ArchivedPhoneStop {
+  return object(value) && ['request_recorded','reported_stopped','reported_ended'].includes(value.state) && positiveInteger(value.requestReceivedAt);
+}
+export function archivedPhoneStopLine(value:ArchivedPhoneStop,time:(at:number)=>string) {
+  const state=value.state==='request_recorded'?'已登记停止请求，当时未确认停下':value.state==='reported_stopped'?'当时报告已停下':'当时已结束，未登记停止请求';
+  return '原停止回执：'+state+'。对方登记请求于 '+time(value.requestReceivedAt)+'。';
+}
 export function devicePhoneGoalArchive(value: unknown, peer: DeviceData, local: DeviceData, side: PhoneArchiveSide, sourceTaskId = '') {
   if (!object(value) || value.kind !== 'phoneGoalArchive' || (value.sourceTaskId ?? '') !== sourceTaskId
     || !!sourceTaskId && (side !== 'sent' || value.searchText) || value.searchText !== undefined && (typeof value.searchText !== 'string' || Array.from(value.searchText).length > 64) || (value.side ?? 'sent') !== side || !samePhoneGoalArchive(value, peer, local) || value.readOnly !== true || !identity(value.archiveHandle)
@@ -144,6 +155,7 @@ export function devicePhoneGoalArchive(value: unknown, peer: DeviceData, local: 
     || !Array.isArray(value.rows) || value.rows.length > 24 || typeof value.hasMore !== 'boolean' || typeof value.canReadNewer !== 'boolean'
     || !value.rows.every((row: unknown) => object(row) && identity(row.taskId) && (!sourceTaskId || row.taskId === sourceTaskId) && identity(row.operationId) && typeof row.goal === 'string' && !!row.goal
       && (row.targetAcceptedAt === undefined || !!sourceTaskId && positiveInteger(row.targetAcceptedAt))
+      && (row.stopReceipt === undefined || !!sourceTaskId && side==='sent' && isArchivedPhoneStop(row.stopReceipt))
       && (row.targetRunRecorded === undefined || row.targetRunRecorded === true && positiveInteger(row.targetAcceptedAt))
       && (row.mayCheckLocalText===undefined || side==='received' && row.mayCheckLocalText===true)
       && (['main_screen', 'background'].includes(row.screenMode) || row.textOnly === true && row.screenMode === 'capabilities') && positiveInteger(row.createdAt))

@@ -107,7 +107,11 @@ internal class PocketWebPersonal(private val controller: PocketWorldController) 
                 callProfile("memoryLearning", args, done)
             }
             "profile.conversation.read", "profile.conversation.save" -> {
-                if (action == "profile.conversation.read") fields(args, "conversationId") else fields(args, "conversationId", "expectedRevision", "enabled")
+                if (action == "profile.conversation.read") fields(args, "conversationId")
+                else if (args.has("excludeNewInputs")) {
+                    fields(args, "conversationId", "expectedRevision", "excludeNewInputs")
+                    require(args.opt("excludeNewInputs") is Boolean) { "原对话的新原话选择无效" }
+                } else fields(args, "conversationId", "expectedRevision", "enabled")
                 text(args, "conversationId")
                 callProfile(if (action == "profile.conversation.read") "conversationRead" else "conversationSave", args, done)
             }

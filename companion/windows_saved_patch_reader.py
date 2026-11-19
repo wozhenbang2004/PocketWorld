@@ -35,7 +35,7 @@ def capture(ctx,item,index,locked,check):
     check()
     owner=original(ctx,item.owner); op=owner["operation"]; kind=item.kind
     if (locked() or kind not in READERS or ("selectedFile" in owner["source"] and kind!="draft")
-            or (kind=="set")!=(index is not None)): bad()
+            or (kind in ("set","proposedSet"))!=(index is not None)): bad()
     rows=[r for r in READERS[kind](ctx,op).values() if r["id"]==item.record["id"]]
     if len(rows)!=1 or _json(rows[0])!=_json(item.record): bad()
     r=rows[0]; f=r["fields"]
@@ -47,7 +47,7 @@ def capture(ctx,item,index,locked,check):
         check()
         return locked()
     raw=checked_output(ctx,op,r,stale,show=False,added=kind=="added",removed=kind=="removed",draft=kind=="draft",
-                       bundle=kind=="set",content=index is None,member_index=index)
+                       bundle=kind in ("set","proposedSet"),content=index is None,member_index=index,newdraft=kind=="newdraft")
     if type(raw) is not bytes or len(raw)!=size or hashlib.sha256(raw).hexdigest()!=sha: bad()
     result=pages(raw); check()
     if locked(): bad()
@@ -72,7 +72,7 @@ def choose(members,locked):
 def show(ctx,item,locked):
     if locked(): return
     member=None
-    if item.kind=="set":
+    if item.kind in ("set","proposedSet"):
         member=choose(item.record["fields"]["members"],locked)
         if member is None or locked(): return
     visible,result=_observe("读取真实留存的原补丁","核对原目录、文件出生身份和字节 SHA；不会应用差异或从现有源码重组。",

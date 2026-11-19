@@ -590,8 +590,15 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                     if (command == "conversationRead") app.conversationPersonalMemoryForOwner(conversation)
                     else {
                         val revision = input.opt("expectedRevision")
-                        require((revision is Int || revision is Long) && (revision as Number).toLong() >= 0 && input.opt("enabled") is Boolean) { "请刷新此对话的原记忆设置" }
-                        app.setConversationPersonalMemoryForOwner(conversation, (revision as Number).toLong(), input.getBoolean("enabled"))
+                        require((revision is Int || revision is Long) && (revision as Number).toLong() >= 0) { "请刷新此对话的原记忆设置" }
+                        val expected = (revision as Number).toLong()
+                        if (input.has("excludeNewInputs")) {
+                            require(!input.has("enabled") && input.opt("excludeNewInputs") is Boolean) { "每次只可更改一种原对话范围" }
+                            app.excludeNewConversationInputsForOwner(conversation, expected, input.getBoolean("excludeNewInputs"))
+                        } else {
+                            require(input.opt("enabled") is Boolean) { "请核对个人记忆开关" }
+                            app.setConversationPersonalMemoryForOwner(conversation, expected, input.getBoolean("enabled"))
+                        }
                     }
                 }
                 "save" -> {

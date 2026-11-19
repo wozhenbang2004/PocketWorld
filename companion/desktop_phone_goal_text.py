@@ -9,6 +9,10 @@ def ask_goal(current):
     return _ask(current, lookup=False)
 
 
+def ask_new_source_path(current):
+    return _ask(current,lookup=True,project_path="new-source")
+
+
 def ask_original_operation(current):
     return _ask(current, lookup=True)
 
@@ -28,6 +32,7 @@ def _ask(current, *, lookup, source=None, project_path=False):
     def string(text): return (text + "\0").encode("utf-16le")
     width,height = (365,192) if source else (292,82 if lookup else 147)
     title = source[0] if source else "原提交中的相对文件路径" if project_path else ("找回这台电脑接过的原操作" if lookup else "交给手机 · 写下这次目标")
+    if project_path=="new-source": title="新源码拟用的相对路径"
     template = bytearray(struct.pack("<IIHhhhh", 0x80C808C0, 0, 4, 0, 0, width,height))
     template.extend(b"\0\0\0\0" + string(title) + struct.pack("<H", 9) + string("Segoe UI"))
     def item(style, x, y, width, height, ident, atom, title):
@@ -36,6 +41,7 @@ def _ask(current, *, lookup, source=None, project_path=False):
         template.extend(string(title) + b"\0\0")
     hint = "在手机「原派发」里查看完整的原操作编号。只查这台电脑，不联系手机。" if lookup else "只发送这里的文字，不附带电脑文件、项目或历史。"
     if project_path: hint="填写从项目根开始的确切文件路径，如 src/Main.kt。不会按文件名搜索或打开当前工作树。"
+    if project_path=="new-source": hint="在原目录下为一个新文件取名，如 src/NewFeature.kt。只核对是否可提议，不会创建该项目文件。"
     review = bool(source and source[3])
     item(0, 9, 7, width-19, 24 if source else 19, 100, 0x82, source[1] if source else hint)
     control_style = (0x003010c4 | (0x800 if review else 0)) if source else (0x80 if lookup else 0x00201044)

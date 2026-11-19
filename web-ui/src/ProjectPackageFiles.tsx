@@ -27,7 +27,7 @@ function windowKey(task: string) {
 
 /** Mounted only for the source package the owner just selected from its original work. */
 export type PackageFileSource = Pick<ProjectPackageOutcome,'taskId'|'operationId'|'artifactId'|'archiveSha256'|'runId'|'epoch'|'projectId'|'checkoutId'|'name'> & { currentRun?:boolean };
-type TeamFileWindow={handle:string; key:()=>string};
+type TeamFileWindow={handle:string; key:()=>string; fromParentWork?:boolean};
 export function ProjectPackageFiles({ item, onClose, onWholePackage, onCheckout, team }: {
   item: PackageFileSource; onClose: () => void; onWholePackage?: () => void; onCheckout?: (member: SourceMember) => void; team?:TeamFileWindow;
 }) {
@@ -88,7 +88,7 @@ export function ProjectPackageFiles({ item, onClose, onWholePackage, onCheckout,
     return () => { alive.current = false; ++serial.current; pending.current = false; unsubscribe(); removeBack(); document.removeEventListener('visibilitychange', invalidate); };
   }, []);
   return <section className="pw-package-members" aria-label="固定包内文件">
-    <Button variant="ghost" size="small" leadingIcon={IconArrowLeft} onClick={goBack}>{file ? '返回包内文件' : team ? '返回原团队成果' : '返回原工作成果'}</Button>
+    <Button variant="ghost" size="small" leadingIcon={IconArrowLeft} onClick={goBack}>{file ? '返回包内文件' : team?.fromParentWork ? '返回发起协作的工作' : team ? '返回原团队成果' : '返回原工作成果'}</Button>
     <h4 ref={heading} tabIndex={-1} dir="auto">{file ? file.path : item.name}</h4>
     <p className="pw-field-hint">{file ? `${fileBytes(file.bytes)} · UTF-8 原文` : team ? '这次协作已签收的固定版本 · 只读，不运行代码' : `${item.currentRun ? '本轮' : '较早一轮'}保存的固定版本 · 只读，不运行代码`}</p>
     <div hidden={!!file}>
