@@ -12,14 +12,16 @@ internal class PocketWebRemotePhoneDrafts(private val controller:PocketWorldCont
     private val accepts:(PocketWebWindowTicket)->Boolean,private val showing:()->String?){
     companion object{
         private const val PREFIX="remoteTask.phoneDrafts."
-        val COMMANDS=setOf(PREFIX+"list",PREFIX+"read",PREFIX+"withdraw")
+        val COMMANDS=setOf(PREFIX+"list",PREFIX+"read",PREFIX+"withdraw")+PocketWebRemotePhoneDraftEdit.COMMANDS
     }
     private data class Review(val task:String,val run:String,val epoch:Int,val ticket:PocketWebWindowTicket,val pin:String,
         val sha:String,val handle:String,val until:Long)
     private val main=Handler(Looper.getMainLooper());@Volatile private var turn=0L
+    private val changes=PocketWebRemotePhoneDraftEdit(controller,capture,accepts,showing)
     private var selected:Review?=null
-    fun clear(){turn++;selected=null}
+    fun clear(){turn++;selected=null;changes.clear()}
     fun dispatch(action:String,args:JSONObject,done:(JSONObject?,String?)->Unit){
+        if(action in PocketWebRemotePhoneDraftEdit.COMMANDS){turn++;selected=null;changes.dispatch(action,args,done);return}
         val mode=action.removePrefix(PREFIX)
         val required=setOf("taskId","runId","coordinatorEpoch")+when(mode){"list"->emptySet();"read"->setOf("id","revision","scopeHash");"withdraw"->setOf("reviewHandle");else->error("未知本机原稿操作")}
         require(args.keys().asSequence().toSet()==required&&args.toString().length<=2048){"请选择这一执行轮次的一份本机原稿"}

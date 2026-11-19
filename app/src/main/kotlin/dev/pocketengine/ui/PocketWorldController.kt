@@ -2308,6 +2308,10 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         return if(mode=="withdraw")app.tasks.withdrawPrivateRemotePhoneDraft(pin,requireNotNull(textSha)){webPrivateOwnerVisible()&&current()}
             else {require(mode=="list"||mode=="read");app.tasks.privateRemotePhoneDrafts(pin,mode=="list")}
     }
+    internal fun reviseUnsentPhoneDraft(pin:JSONObject,priorSha:String,text:String,newSha:String,current:()->Boolean):JSONObject{
+        check(webPrivateOwnerVisible()&&current())
+        return app.tasks.revisePrivateRemotePhoneDraft(pin,priorSha,text,newSha){webPrivateOwnerVisible()&&current()}
+    }
     internal val offlineRemotePickup by lazy { dev.pocketengine.features.remote.RemotePhonePickup(
         app.tasks, dev.pocketengine.features.attachments.AttachmentRepository.get(activity).book) }
     fun remoteManagedSessions(): JSONObject {

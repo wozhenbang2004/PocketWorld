@@ -17,7 +17,8 @@ internal class PocketWebProjectDevelopment(
     private val captureWindow: () -> PocketWebWindowTicket,
     private val acceptsWindow: (PocketWebWindowTicket) -> Boolean
 ) {
-    private class Page(val handle: String, val project: String, val window: PocketWebWindowTicket, val generation: Long) {
+    private data class ReturnToDraft(val handle:String,val project:String,val checkout:String,val draftDigest:String,val until:Long)
+    private class Page(val handle: String, val project: String, val window: PocketWebWindowTicket, val generation: Long, val requested:ReturnToDraft?=null) {
         // Set only when this specific page actually reads the native draft. Guarded by the shared draft monitor.
         var shownSeal:String?=null
     }
@@ -46,6 +47,17 @@ internal class PocketWebProjectDevelopment(
             "projects.development.hostSource", "projects.development.resolveHostSource", "projects.development.compareHostSource", "projects.development.readHostDiff",
             "projects.development.prepare", "projects.development.queryCopy", "projects.development.review",
             "projects.development.start", "projects.development.query", "projects.development.dismiss", "projects.development.close") + PocketWebCheckoutFiles.COMMANDS
+    }
+    // Only a transient comparison guard for the already-authorized ordinary project reader. No Book, body or grant.
+    @Volatile private var stagedReturn: ReturnToDraft? = null
+    fun invalidateDraftReturn() { synchronized(drafts){ stagedReturn=null } }
+    private fun requireReturn(project:String,handle:String):ReturnToDraft = synchronized(drafts){
+        val held=stagedReturn
+        check(held!=null && held.project==project && held.handle==handle && SystemClock.elapsedRealtime()<held.until &&
+            !pending(project) && restoreFailure==null && dev.pocketengine.features.local.project.ProjectSources.digest(draft(project))==held.draftDigest) {
+            "刚才那份原草稿已变化、过期或不再待交办。未打开其他副本或草稿。"
+        }
+        held
     }
     fun clear() { generation++; page = null; review = null; busy = false; files.clear() }
     private fun public(value: JSONObject) = PocketWebState.publicValue(value) as JSONObject
@@ -90,7 +102,12 @@ internal class PocketWebProjectDevelopment(
         if (durable) check(editor.commit()) { "原请求引用没有确认保存，没有开始执行；请核对本机存储空间" } else editor.apply()
     }
     private fun shownDraft(original:Page):JSONObject = synchronized(drafts){
-        val value=draft(original.project);original.shownSeal=ProjectConventionDraft.bind(value).seal;ProjectConventionDraft.ownerView(value)
+        val value=draft(original.project)
+        original.requested?.let { guard ->
+            check(requireReturn(original.project,guard.handle)===guard && guard.checkout==value.optString("checkoutId")) { "原项目草稿定位已失效" }
+            stagedReturn=null // Successful native snapshot consumes the hint. No second, less restricted read on failure.
+        }
+        original.shownSeal=ProjectConventionDraft.bind(value).seal;ProjectConventionDraft.ownerView(value)
     }
     private fun editShownDraft(original:Page,durable:Boolean=false,change:(JSONObject)->Unit):ProjectConventionDraft.Bound = synchronized(drafts){
         updateDraft(original.project,durable){value->
@@ -122,7 +139,10 @@ internal class PocketWebProjectDevelopment(
         check(ProjectConventionDraft.present(saved)?.toString() == mark.toString() && saved.getString("constraints") == row.getString("text")) {
             "草稿写入结果待核对，请在原项目核对，不要重复放入"
         }
-        reply.put("written",true)
+        val target=ReturnToDraft(UUID.randomUUID().toString(),project,checkout,
+            dev.pocketengine.features.local.project.ProjectSources.digest(saved),SystemClock.elapsedRealtime()+120_000L)
+        stagedReturn=target
+        reply.put("written",true).put("draftReturnHandle",target.handle).put("draftReturnExpiresAt",System.currentTimeMillis()+120_000L)
     }
     private fun pending(project: String): Boolean = draft(project).optJSONObject("submission")?.optString("status") in setOf("pending", "unknown", "unconfirmed")
     private fun copy(value: JSONObject) = JSONObject(value.toString())
@@ -149,6 +169,7 @@ internal class PocketWebProjectDevelopment(
         val selectedModel = model()
         return actual.put("viewHandle", original.handle).put("model", selectedModel.value()).put("modelRevision", selectedModel.revision())
             .put("draft", shownDraft(original)).put("commandsAuthorized", false)
+            .also { out -> original.requested?.let { out.put("openedDraftReturn",it.handle) } }
             .put("draftRecoveryRequired", restoreFailure != null).put("draftRecoveryMessage", restoreFailure ?: "")
     }
     private fun recordSubmission(original: JSONObject, result: JSONObject?, error: String?, viewer:Page): JSONObject {
@@ -185,10 +206,11 @@ internal class PocketWebProjectDevelopment(
             done(JSONObject().put("viewClosed", true).put("taskStopped", false), null); return
         }
         if (action == "projects.development.read") {
-            fields(args, "projectId"); val project = text(args, "projectId")
+            fields(args, "projectId", "draftReturnHandle"); val project = text(args, "projectId")
             check(ownerCurrent() && controller.webPrivateOwnerVisible() && controller.state.projectId == project &&
                 controller.state.projects.any { it.id == project }) { "请打开当前私人项目后再读取" }
-            clear(); val original = Page(UUID.randomUUID().toString(), project, captureWindow(), generation); page = original
+            val target=if(args.has("draftReturnHandle"))requireReturn(project,text(args,"draftReturnHandle")) else null
+            clear(); val original = Page(UUID.randomUUID().toString(), project, captureWindow(), generation,target); page = original
             working(original, done) { metadata(original) }; return
         }
         val original = selected(args)

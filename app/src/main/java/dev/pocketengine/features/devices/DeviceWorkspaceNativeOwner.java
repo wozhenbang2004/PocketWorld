@@ -53,6 +53,13 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
                 network.prepareArtifactReceive(peer,deadline,current);
                 if(!network.queueArtifactChunk(peer.deviceId(),peer.certificateFingerprint(),transfer,offset,bytes,deadline,current))throw new java.io.IOException("原bulk队列尚未接受，未宣称送达");
             }
+            public String ownerDisplayName(PairingCoordinator.OutgoingGrant original)throws Exception {
+                DeviceIdentity.LocalIdentity here=existingIdentity(); String id=original.targetDeviceId(); JSONObject peer=trust.peer(id);
+                if(here==null||peer==null||peer.optBoolean("revoked",true)||!original.isOriginalTarget(id,peer.optString("instanceId"),peer.optString("fingerprint")))return "";
+                original.checkCurrent(System.currentTimeMillis());
+                String name=peerNames.get(here,id,peer.getString("instanceId"),peer.getString("fingerprint"));
+                return name.isEmpty()?"":name+" · "+id.substring(Math.max(0,id.length()-6));
+            }
             public boolean hasMoreOutgoingGrants() { return DeviceWorkspaceNativeOwner.this.hasMoreOutgoingGrants(); }
         }, originalTaskHost(), evidence -> { evidence.requireCurrent(); return artifactsForNativeWork().receive(evidence); }, evidence -> artifactsForNativeWork().receiveFile(evidence));
         app.setDeviceObservedImageSink(this::publishObservedImage);

@@ -28,7 +28,7 @@ LABEL = {"queued": "已在这台电脑排队", "running": "这台电脑已启动
          "accepted_only": "已接单，原执行文件未能核对"}
 
 
-def local_record(view, peer, item, *, read=False, revision=None, archive=False, locate=False, ticket=None, held=None, export_guard=None, work_key=False, required_work=None, read_root=False, project_inventory=None):
+def local_record(view, peer, item, *, read=False, revision=None, archive=False, locate=False, ticket=None, held=None, export_guard=None, work_key=False, required_work=None, read_root=False, project_inventory=None, match_source=False):
     # This is the unlocked receiver owner's local view, never a synthetic MTLS
     # history permission. Admit only the direct source and its still-current original read scope.
     if not view._peer_current(peer): return None
@@ -62,9 +62,9 @@ def local_record(view, peer, item, *, read=False, revision=None, archive=False, 
         if project_inventory is not None:
             from windows_project_inventory import access
             return access(manager, peer, operation, row, original, grant, now, revision, project_inventory, ticket)
-        if read_root:
+        if read_root or match_source:
             from windows_read_root import local
-            return local(manager, operation, row, original, grant, now, revision, display=read)
+            return local(manager, operation, row, original, grant, now, revision, display=read,match_source=match_source)
         if work_key: return work
         if export_guard is not None or read and source["toolName"] in (EXPORT, PROJECT_EXPORT):
             if source["toolName"] not in (EXPORT, PROJECT_EXPORT) or locate or archive: return None
@@ -195,7 +195,15 @@ def _show_read(view, peer, item, receipt, current, *, offer_work):
         choices = ([] if kind == "receipt_only" else [("content", "查看原文本片段" if kind == "text_snapshot" else "查看原目录项")])
         if offer_work: choices.append(("work", "查看这次手机任务在此工作区的读取"))
         if kind != "receipt_only" and can_check_root(): choices.append(("root", "核对原工作区在这台电脑的位置"))
+        if kind=="text_snapshot" and can_check_root():
+            choices.append(("compare","对照这次读取和一个本机源码副本\n仅核对这份文件的两个历史版本，不读取现在的项目。"))
         choice = view._dialog(title, body, choices + [("ids","核对原操作和 Windows 工作编号")], current)
+        if choice=="compare" and current():
+            from windows_task_source_match import show
+            def stamp(*,full,expected_work=None):
+                return local_record(view,peer,item,revision=revision,match_source=True,read=full,required_work=expected_work)
+            show(view,stamp,current)
+            continue
         if choice == "root":
             path = local_record(view, peer, item, revision=revision, read_root=True, read=True)
             if path and can_check_root():

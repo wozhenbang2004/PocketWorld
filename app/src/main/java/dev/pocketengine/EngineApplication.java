@@ -1616,7 +1616,7 @@ public final class EngineApplication extends Application implements dev.pocketen
             throw new IllegalStateException("草稿模型设置已变化，请重新核对手机任务");
         SettingsStore.validate(config);dev.pocketengine.runtime.ModelGateway.validate(config);
         JSONObject view=json("draftRequestId",java.util.UUID.randomUUID().toString(),"goal",goal,"mode",mode,"modelName",config.model,"provider",config.provider,"toolLimit",tools,"modelCallLimit",models,"scopeMinutes",minutes)
-                .put("screenDisclosure",config.sendScreenshots?"执行时，可见文字和获准的屏幕截图会发送到本次模型。":"执行时，可见文字会发送到本次模型；当前未开启屏幕截图发送。");
+                .put("screenDisclosure",dev.pocketengine.phone.observation.PhoneScreenDisclosure.review(config.localCaptureAllowed,config.localOcrAllowed,config.sendScreenshots));
         return new DraftPhoneStartReview(this,scopeKey,preference.getLong("revision"),config,status.revision(),view);
     }
     private void requireDraftPhoneReviewCurrent(DraftPhoneStartReview review,java.util.function.BooleanSupplier ownerCurrent)throws Exception {
@@ -1698,7 +1698,7 @@ public final class EngineApplication extends Application implements dev.pocketen
         JSONObject view=new JSONObject(facts.toString()).put("requestId",creation.view().getString("requestId"))
                 .put("conversationId",source.getString("conversationId")).put("conversationTitle",source.optString("conversationTitle","原对话"))
                 .put("goal",goal).put("mode",mode).put("expiresAt",System.currentTimeMillis()+120_000L)
-                .put("screenDisclosure",config.sendScreenshots?"执行时，可见文字和获准的屏幕截图会发送到本次模型。":"执行时，可见文字会发送到本次模型；当前未开启屏幕截图发送。");
+                .put("screenDisclosure",dev.pocketengine.phone.observation.PhoneScreenDisclosure.review(config.localCaptureAllowed,config.localOcrAllowed,config.sendScreenshots));
         if(originalLocator!=null)view.put("ownerPickedMessage",true);
         return new ConversationPhoneStartReview(this,tasks,creation,config,selected.revision(),preferenceRevision,view);
     }

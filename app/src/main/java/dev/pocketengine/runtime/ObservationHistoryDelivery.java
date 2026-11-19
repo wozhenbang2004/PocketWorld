@@ -6,6 +6,7 @@ import static dev.pocketengine.runtime.DurableHistoryCodec.markObservationWithou
 import static dev.pocketengine.runtime.DurableHistoryCodec.safeJson;
 
 import dev.pocketengine.core.ModelConfig;
+import dev.pocketengine.core.RunControl;
 import dev.pocketengine.runtime.context.RunContextBudget;
 import dev.pocketengine.runtime.history.RecentScreenHistory;
 import org.json.JSONArray;
@@ -37,6 +38,9 @@ final class ObservationHistoryDelivery {
         first.put("text",RecentScreenHistory.PREFIX+text.substring(OBSERVATION_PREFIX.length()));
     }
     static void append(JSONArray history, JSONObject observation, ModelConfig config, RunContextBudget contextBudget,int maxImages,int maxImageChars) throws Exception {
+        append(history,observation,config,contextBudget,maxImages,maxImageChars,null);
+    }
+    static void append(JSONArray history, JSONObject observation, ModelConfig config, RunContextBudget contextBudget,int maxImages,int maxImageChars,RunControl originalPhone) throws Exception {
         if(observation.optBoolean("noDeviceObservation"))return;
         JSONObject nativeData=dev.pocketengine.features.memory.TaskMemoryHistory.observationData(observation);
         JSONObject text = safeJson(nativeData, config, false);
@@ -46,7 +50,12 @@ final class ObservationHistoryDelivery {
                 && ("image/jpeg".equals(mime) || "image/png".equals(mime) || "image/webp".equals(mime))
                 && image.matches("[A-Za-z0-9+/=\\r\\n]+") && image.length() % 4 == 0;
         text.put("actualImageAttached", hasImage);
-        if (!hasImage) text.put("visionNotice", config.sendScreenshots ? "没有可发送的截图；只依据当前控件树文字。" : "已关闭截图发送；只依据当前控件树文字。");
+        if (!hasImage) {
+            JSONObject b=nativeData.optJSONObject("observationBinding");
+            boolean bound=originalPhone!=null && b!=null && originalPhone.matchesHostRun(b.optString("taskId"),b.optString("runId"),b.optInt("epoch",-1)) &&
+                    originalPhone.pauseRevision()==b.optLong("pauseRevision",-1) && originalPhone.phoneSurfaceActive() && !originalPhone.isCancelled();
+            text.put("visionNotice", dev.pocketengine.phone.observation.PhoneScreenDisclosure.withoutImage(text,config.sendScreenshots,bound));
+        }
         JSONArray content = new JSONArray().put(new JSONObject().put("type", "text")
                 .put("text", ("project_image_snapshot".equals(nativeData.optString("kind"))?PROJECT_IMAGE_PREFIX:OBSERVATION_PREFIX) + text));
         if (hasImage) content.put(new JSONObject().put("type", "image_url").put("image_url",

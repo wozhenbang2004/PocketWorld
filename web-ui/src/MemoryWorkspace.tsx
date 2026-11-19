@@ -7,7 +7,7 @@ import { Tabs, TabList, Tab, TabPanel } from './shell-library';
 import { Accordion, AccordionItem, Button, CheckboxField, IconButton, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { MemoryAssertionFields } from './MemoryAssertionFields';
 import { ProjectMemoryQuote } from './ProjectMemoryQuote';
-import {ProjectConventionDraftAction,manualConvention} from './ProjectConventionDraftAction';
+import {ProjectConventionDraftAction,manualConvention,type OpenProjectDraft} from './ProjectConventionDraftAction';
 import { ProjectMemoryNote } from './ProjectMemoryNote';
 import { ScopedMemoryEvidence } from './ScopedMemoryEvidence';
 import { MemoryHistoryWorkspace } from './MemoryHistoryWorkspace';
@@ -24,7 +24,7 @@ const recordStatus = (value: string) => ({ pending: '待审阅', accepted: '已�
 const eligible = (row: Data) => row.active === true && row.consolidationBlocked === false && row.ownerId === 'owner' && row.spaceId === 'private';
 
 /** Existing BoardUI reading rows, native namespace selection, and exact record review. */
-export function MemoryWorkspace({ domain, run, registerTransientBack, registerBeforeLeave, initialCandidate = null, alreadyShownError = '' }: { domain: string; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void; registerBeforeLeave?: RegisterBeforeLeave; initialCandidate?: LearningCandidateTarget | null; alreadyShownError?: string }) {
+export function MemoryWorkspace({ onOpenProjectDraft, domain, run, registerTransientBack, registerBeforeLeave, initialCandidate = null, alreadyShownError = '' }: { onOpenProjectDraft?:OpenProjectDraft; domain: string; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void; registerBeforeLeave?: RegisterBeforeLeave; initialCandidate?: LearningCandidateTarget | null; alreadyShownError?: string }) {
   const formDraft = useFormDrafts(run, 'memory', registerBeforeLeave);
   const [snapshot, setSnapshot] = useState<Data | null>(null), [selection, setSelection] = useState<Data | null>(null), [review, setReview] = useState<Data | null>(null);
   const [snapshotCurrent, setSnapshotCurrent] = useState(false), currentList = useRef(false);
@@ -200,7 +200,7 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, registerBe
     {selection && <section ref={selectionPanel} tabIndex={-1} className="pw-source-record pw-memory-reading"><header className="pw-memory-detail-header"><Button variant="ghost" leadingIcon={IconChevronLeft} disabled={busy} onClick={() => formDraft.guard(closeRecord)}>返回列表</Button><div className="pw-memory-detail-copy">{snapshot?.namespaceStatus === 'project' && <p className="pw-detail-location">仅此项目 · {projectLabel}</p>}<h2>{candidate ? '候选审阅' : '这条记忆'}</h2><WorkingStatus active={busy}>正在核对原回执…</WorkingStatus></div></header>
       <div className="pw-memory-document"><p className="pw-reading-copy">{record?.text}</p>{record?.applicability && <p className="pw-memory-context">适用条件：{record.applicability}</p>}{record?.reason && <p className="pw-memory-context">依据：{record.reason}</p>}</div><p className="pw-muted pw-knowledge-status">{layer(record?.layer)}{record?.core ? ' · 核心记忆' : ''} · 原修订 {record?.revision} · {recordStatus(record?.status) || (record?.active ? '当前可用' : '已停用')}</p>
       {!candidate && !attempted && snapshotCurrent && projectScope && manualConvention(record,projectScope) &&
-        <ProjectConventionDraftAction key={selection.readHandle} row={record} readHandle={selection.readHandle} expires={selection.readExpiresAt} project={projectScope.slice(8)}
+        <ProjectConventionDraftAction onOpenProjectDraft={onOpenProjectDraft} key={selection.readHandle} row={record} readHandle={selection.readHandle} expires={selection.readExpiresAt} project={projectScope.slice(8)}
           disabled={busy || !!review || draft!==record.text || formDraft.stale || !!formDraft.conflict || formDraft.requiresRecheck} run={run} back={conventionDraftBack}/>}
       {record?.assertion && <p>主体：{record.assertion.subjectLabel || '未知'} · 陈述类型：{record.assertion.kind} · 关系：{record.assertion.predicate} · {record.assertion.object}。保存不证明陈述为真。</p>}
       {!attempted && candidate && record?.status === 'pending' && <>{candidateHasEdits && <p className="pw-memory-context pw-knowledge-notice" role="status">先保存刚才的修改，再采用更新后的候选。</p>}<div className="pw-form-actions pw-memory-decisions"><Button disabled={busy || formDraft.stale || !!formDraft.conflict || formDraft.requiresRecheck} onClick={() => candidateHasEdits ? prepare('edit', { draft: { text: draft, ...draftMeta, confidence: Number(draftMeta.confidence) } }) : prepare('accept')}>{candidateHasEdits ? '先保存修改' : '核对并采用候选'}</Button></div></>}

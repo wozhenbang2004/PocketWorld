@@ -6,9 +6,18 @@ import { materialPath, phoneTextOnly, routeDraft, routeTitle, scopeRows as rows,
 type Run = (action: string, args?: Data) => Promise<any>;
 const time = (value: any) => Number.isSafeInteger(Number(value)) ? new Date(Number(value)).toLocaleString() : '尚未确认';
 const deviceName = (id: string, peers: Data[]) => peers.find(peer => peer.deviceId === id)?.label || '设备 ' + id.slice(-8);
+const routeName = (route:Data, names:Data[]):string => {
+  const instance=route.targetInstanceId || route.instanceId;
+  if(!route.sourceKey || !route.targetDeviceId || !instance || !route.grantId || !Number.isSafeInteger(route.authorizationEpoch))return '';
+  const labels=new Set(names.filter(n=>n.sourceKey===route.sourceKey && n.targetDeviceId===route.targetDeviceId &&
+    n.targetInstanceId===instance && n.grantId===route.grantId && n.authorizationEpoch===route.authorizationEpoch &&
+    typeof n.label==='string' && n.label).map(n=>n.label));
+  return labels.size===1 ? [...labels][0] : '';
+};
+
 const tools = (value: any): string => Array.isArray(value) ? value.map(row => row.toolName).join('、') : value && typeof value === 'object' ? Object.keys(value).join('、') : '未提供';
 
-function ScopeFacts({ value, peers, human = false }: { value: Data; peers: Data[]; human?: boolean }) {
+function ScopeFacts({ value, peers, names, human = false }: { value: Data; peers: Data[]; names:Data[]; human?: boolean }) {
   const resource = value.resourceBinding || {};
   const declarations = Array.isArray(value.toolDeclarations) ? value.toolDeclarations : Object.entries(value.toolDeclarations || {}).map(([toolName, effect]) => ({ toolName, effect }));
   const writes = declarations.filter(row => row.effect === 'write').length, external = declarations.filter(row => row.effect === 'external').length;
@@ -17,7 +26,7 @@ function ScopeFacts({ value, peers, human = false }: { value: Data; peers: Data[
     : resource.projectId ? `项目 ${resource.projectId}${resource.checkoutId ? ' · 工作副本 ' + resource.checkoutId : ''}` : phoneTextOnly(value) ? '只发本次目标，不带附件、记忆、项目或屏幕' : resource.screenMode === 'capabilities' ? '仅对方授权的能力范围，不含手机屏幕' : '对端明确授权的资源';
   return <>
     <dl className="pw-facts">
-      <div><dt>接收设备</dt><dd>{deviceName(value.targetDeviceId || '', peers)}</dd></div>
+      <div><dt>接收设备</dt><dd>{routeName(value,names) || deviceName(value.targetDeviceId || '', peers)}</dd></div>
       <div><dt>使用方式</dt><dd>{routeTitle(value, human)}</dd></div>
       <div><dt>作用范围</dt><dd>{target}</dd></div>
       <div><dt>操作影响</dt><dd>{human ? '你逐次进行全屏输入；不调用模型，不继承 AI 自动操作权限' : phoneTextOnly(value) ? '对方不使用工具；机主核对后，本机可从原工作查看最多 2,048 个字的摘要' : value.kind === 'goal' ? '对端模型在原授权工具范围内处理目标' : writes || external ? `含 ${writes} 项写入操作、${external} 项外部影响能力，执行时仍受原工具审批约束` : declarations.length && declarations.every(row => row.effect === 'read') ? '当前列出的工具仅报告读取能力' : '尚未取得完整操作影响，不能推定只读'}</dd></div>
@@ -147,7 +156,12 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
       if (pendingSave.current && mounted.current) { pendingSave.current = false; setNotice('保存结果尚未确认。请重新读取已保存范围，没有自动重做。'); setView(null); }
     });
   };
+  const ownerNames=rows(view?.ownerDisplayNames);
   const peerIds = [...new Set(rows(view?.options).map(option => option.targetDeviceId))];
+  const groupName=(id:string) => {
+    const labels=new Set(rows(view?.options).filter(option=>option.targetDeviceId===id).map(option=>routeName(option,ownerNames)));
+    return labels.size===1 && !labels.has('') ? [...labels][0] : deviceName(id,peers);
+  };
   return <section className="pw-task-capabilities" aria-label="本任务的远端设备范围">
     <Button variant="secondary" onClick={read} disabled={busy}>{directedId ? '读取' + scopeLabel : '选择本任务的远端设备'}</Button>
     {directedId && !open && onOpenOriginal && <Button variant="ghost" disabled={busy} onClick={onOpenOriginal}>查看这份工作的原派单</Button>}
@@ -164,14 +178,14 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
           <dl className="pw-facts"><div><dt>当前可分配</dt><dd>工具 {view.toolsAvailable} 次 · 模型 {view.modelsAvailable} 次</dd></div><div><dt>原任务最晚截止</dt><dd>{time(view.deadlineMaximum)}</dd></div></dl>
           <p>{view.humanInputOnly ? '每次对端操作同时占用一次本机派发额度；对端份额至少 2 次，最多分配当前总额的一半。每次刷新也占用调用。' : '发起设备操作本身还至少占用 1 次本机工具调用；不要把全部剩余额度分给对端。'}已执行和未知结果的占用不会因改范围退回。</p>
           {unavailable.length > 0 && <><p role="alert">有 {unavailable.length} 项已保存范围当前未能读取。可能是离线、授权到期或资源变化，未替换成其他设备。</p><CheckboxField isSelected={removeUnavailable} isDisabled={busy} onChange={setRemoveUnavailable}>这次保存明确移除当前不可读取的旧选择（不会撤回已发生的操作）</CheckboxField></>}
-          {peerIds.map(id => <section key={id}><h3>{deviceName(id, peers)}</h3><Accordion>
+          {peerIds.map(id => <section key={id}><h3>{groupName(id)}</h3><Accordion>
             {rows(view.options).filter(option => option.targetDeviceId === id).map(option => {
               const draft = drafts[option.optionId]; if (!draft) return null;
               const update = (next: RouteDraft) => { dismissReview(); setDrafts(old => ({ ...(view.humanInputOnly && next.selected ? Object.fromEntries(Object.entries(old).map(([id, value]) => [id, { ...value, selected: false }])) : old), [option.optionId]: next })); };
               const shareCount = Object.values(draft.shares).filter(row => row.selected).length;
               return <AccordionItem key={option.optionId} id={option.optionId} title={routeTitle(option, view.humanInputOnly)} description={draft.selected ? '已选择 · 尚未执行' : '未选择'}>
                 <CheckboxField isSelected={draft.selected} isDisabled={busy} onChange={selected => update({ ...draft, selected })}>将这个准确范围用于本任务</CheckboxField>
-                <ScopeFacts value={option} peers={peers} human={view.humanInputOnly} />
+                <ScopeFacts value={option} peers={peers} names={ownerNames} human={view.humanInputOnly} />
                 {draft.selected && <>
                   {!!draft.missingShares.length && <><p role="alert">有 {draft.missingShares.length} 项原下游范围当前无法核对，未自动替换或移除。</p><Button variant="secondary" disabled={busy} onClick={() => update({ ...draft, missingShares: [] })}>明确移除这些旧下游选择</Button></>}
                   {phoneTextOnly(option) ? <p>工具 0 次，不使用屏幕。</p> : <TextField label={'工具总份额（最多 ' + option.toolBudgetMaximum + ' 次）'} value={draft.tools} inputMode="numeric" isDisabled={busy} onChange={tools => update({ ...draft, tools })} />}
@@ -199,12 +213,12 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
           {rows(view.unavailableOptions).length > 0 && <Accordion><AccordionItem id="unavailable" title={`有 ${rows(view.unavailableOptions).length} 项范围暂不可用`}><p>这些范围没有替换成其他设备，也不阻止你选择已核对的设备。</p>{rows(view.unavailableOptions).map((item,index) => <p key={index}>{deviceName(item.targetDeviceId, peers)}：{item.reason === 'grant_unavailable' ? '原授权到期、撤销或无法核对' : item.reason === 'capability_read_unavailable' ? '连接或能力读取未完成，请核对对端接收服务与当前网络' : '设备身份或能力时效不匹配，需要重新读取'}</p>)}</AccordionItem></Accordion>}
           {!peerIds.length && <p>{view.directWorkspace ? '这台原电脑没有授予可用的只读工作区。请在电脑上核对原范围，不会改用其他设备。' : view.directPhone ? '未读取到这部原手机可用的直接范围。请检查对端连接及已有授权；不会改投其他设备或继续转派。' : view.humanInputOnly ? '没有可手控的手机范围。请先连接对端，并由对端主人授权主屏或独立屏、准确应用、全屏捕获与输入，再重新读取。不会改用电脑或模型代理。' : '未读取到可选择的设备范围。请在设备页连接对端，并由对端明确授权工具或目标范围，再回来重新读取。'}</p>}
           {view.hasMoreOptions && <p>还有未读取的授权记录。未显示的设备不会自动加入本任务。</p>}
-          <div className="pw-form-actions"><Button disabled={busy || unavailable.length > 0 && !removeUnavailable} onClick={prepare}>核对这次范围修改</Button><Button variant="ghost" disabled={busy} onClick={read}>重新读取</Button>{onOpenDevices && <Button variant="ghost" disabled={busy} onClick={() => requestExit('devices')}>管理设备与连接</Button>}</div>
+          <div className="pw-form-actions"><Button disabled={busy || unavailable.length > 0 && !removeUnavailable} onClick={prepare}>核对这次范围修改</Button><Button variant="ghost" disabled={busy} onClick={read}>重新读取</Button>{onOpenDevices && <Button variant="ghost" disabled={busy} onClick={() => requestExit('devices')}>{directedId?'查看这份工作的原设备连接':'管理设备与连接'}</Button>}</div>
           {rows(view.pendingProjectImports).map(item => <div key={item.operationId || item.receiveOperationId}><p>原项目包等待独立导入确认</p><Button variant="secondary" disabled={busy} onClick={() => { void invoke('deviceTaskScope.reviewImport', { pageHandle: page.current, operationId: item.receiveOperationId || item.operationId }, acceptReview); }}>核对这份原项目包</Button></div>)}
         </>}
         {review && <>
           <h3>{review.goal || view?.goal}</h3><p>{review.kind === 'scope' ? '下面是原生解析后的准确选择。保存不发送目标、不开始任务，不为对端扩大授权。' : '确认只允许原任务导入这份已经接收的项目包；不会立即执行、覆盖已有项目或创建第二项任务。'}</p>
-          {rows(review.routes).map(route => <div key={route.sourceKey}><ScopeFacts value={route} peers={peers} human={view?.humanInputOnly} />
+          {rows(review.routes).map(route => <div key={route.sourceKey}><ScopeFacts value={route} peers={peers} names={ownerNames} human={view?.humanInputOnly} />
             <p>上下文：仅本次目标（goal_only）；私人记忆与整份工作区不提供。</p>
             {['files','projects'].map(kind => rows(route[kind]).map(item => <p key={kind + item.id}>{kind === 'files' ? '原件' : '项目包'}：{item.name || item.id} → {item.path} · {item.size} 字节 · {item.expectedVersion === 'absent' ? '仅新建' : '覆盖已核对版本 ' + item.expectedVersion}<br />SHA-256：{item.sha256}</p>))}
             {rows(route.downstreamShares).length > 0 && <><p>对端本机：工具 {route.localToolShare} 次 · 模型 {route.localModelShare} 次</p>{rows(route.downstreamShares).map((item,index) => <p key={index}>下游 {deviceName(item.targetDeviceId, peers)} · {JSON.stringify(item.resourceBinding)} · 工具 {item.toolBudget} 次 · 模型 {item.modelBudget} 次</p>)}</>}

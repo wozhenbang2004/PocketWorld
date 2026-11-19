@@ -51,8 +51,21 @@ final class TeamProjectPort implements CapabilityPort {
     private JSONObject checks()throws Exception{return TeamProjectCheckReferences.index(binding,tasks.teamProjectContextIfReady(binding,original));}
     @Override public void validate(String name,JSONObject args)throws Exception{selected(name).validate(name,nativeArgs(name,args,original));}
     @Override public JSONObject execute(String name,JSONObject args,RunControl control)throws Exception {check(control);JSONObject result=selected(name).execute(name,nativeArgs(name,args,control),control);
-        if(isCheck(name,args))return TeamProjectCheckReferences.proposal(result,args.getString(TeamProjectCheckReferences.FIELD));
-        if(name.equals("project_inspect")&&Boolean.TRUE.equals(result.opt("ok"))&&!Boolean.FALSE.equals(result.opt("accepted")))return result.put("teamProjectChecks",checks());
+        if(isCheck(name,args)){
+            String handle=args.getString(TeamProjectCheckReferences.FIELD);JSONObject proposal=TeamProjectCheckReferences.proposal(result,handle);
+            // Only the normal project planner may supply this live, verified digest. A caller's claimed
+            // source or a persisted old template cannot make a prior successful run current.
+            if("project_plan_ready".equals(proposal.optString("code"))){
+                String template=TeamProjectCheckProgress.template(checks(),handle);
+                JSONObject old=TeamProjectCheckProgress.existing(template,tasks.teamProjectCheckProgress(binding,proposal.getString("sourceDigest"),template,control));
+                if(old!=null)return old;
+            }
+            return proposal;
+        }
+        if(name.equals("project_inspect")&&Boolean.TRUE.equals(result.opt("ok"))&&!Boolean.FALSE.equals(result.opt("accepted"))){
+            String live=result.getJSONObject("source").getString("sourceDigest");
+            return result.put("teamProjectChecks",TeamProjectCheckProgress.withEvidence(checks(),tasks.teamProjectCheckProgress(binding,live,null,control)));
+        }
         if(name.equals("project_plan")&&result.has("planRef")&&result.has("planDigest")){result=new JSONObject(result.toString());result.remove("plan");result.put("inlineCompatibilityCopyOmitted",true).put("fullPlanStoredInOriginalTaskStore",true).put("readFullManifestWith","project_plan_manifest");}
         return result;}
     @Override public JSONObject contextSnapshot(String query)throws Exception {return files.contextSnapshot(query).put("teamProjectChecks",checks());}

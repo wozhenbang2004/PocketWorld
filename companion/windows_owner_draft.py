@@ -146,7 +146,7 @@ def records(ctx,op):
     return result
 
 
-def save(ctx,settings,op,base,display,reviewed,locked,checkpoint):
+def save(ctx,settings,op,base,display,reviewed,locked,checkpoint,*,original_request=None):
     def gate():
         checkpoint()
         if locked(): block()
@@ -155,14 +155,15 @@ def save(ctx,settings,op,base,display,reviewed,locked,checkpoint):
     with original(ctx,settings,op,base.path,gate) as (again,src):
         if again!=base: block()
         fields,raw=proposal(ctx,op,again,display,gate)
-        if (fields,raw)!=reviewed: block()
+        if (fields,raw)!=reviewed or (original_request is not None and not original_request()): block()
         rid=key(fields); rows=records(ctx,op)
         old=next((r for r in rows.values() if r["id"]==rid),None)
         if old is not None: return old
         if len(rows)>=DRAFT_BANK: raise PlatformError("All original draft slots are occupied")
         def current():
             gate()
-            if not dict(registered(ctx,settings)).get(src["environmentId"]): block()
+            if (not dict(registered(ctx,settings)).get(src["environmentId"])
+                    or (original_request is not None and not original_request())): block()
         return publish_output(ctx,op,rid,fields,raw,next(n for n in range(DRAFT_BANK) if n not in rows),
                               current,added=False,draft=True)
 

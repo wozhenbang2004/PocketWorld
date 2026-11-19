@@ -1,5 +1,6 @@
 import {useEffect,useRef,useState} from 'react';
 import {bridge} from './bridge';
+import {RemotePhoneDraftRevision} from './RemotePhoneDraftRevision';
 import {Button,SettingsDialog} from './forms-library';
 import {remoteObject as object,type RemoteData as Data} from './remote-task-workspace';
 
@@ -14,10 +15,12 @@ const hash=async(s:string)=>Array.from(new Uint8Array(await crypto.subtle.digest
 export function RemotePhoneDraftShelf({taskId,runId,epoch}:{taskId:string;runId:string;epoch:number}){
   const [opened,show]=useState(false),[rows,setRows]=useState<Head[]>([]),[review,setReview]=useState<{row:Head;text:string;token:string}|null>(null),
     [busy,spin]=useState(false),[notice,tell]=useState(''),[error,fail]=useState(''),flight=useRef(false),generation=useRef(0),liveness=useRef(true);
-  const reset=()=>{++generation.current;flight.current=false;spin(false);setRows([]);setReview(null);tell('');fail('');show(false)};
+  const [editing,edit]=useState(false),[leave,askLeave]=useState(false);
+  const reset=()=>{edit(false);askLeave(false);++generation.current;flight.current=false;spin(false);setRows([]);setReview(null);tell('');fail('');show(false)};
   useEffect(()=>{liveness.current=true;reset();const paused=()=>{if(document.hidden)reset()};document.addEventListener('visibilitychange',paused);
     return()=>{liveness.current=false;++generation.current;document.removeEventListener('visibilitychange',paused)}},[taskId,runId,epoch]);
   const where=()=>bridge.getDocumentEpoch()+':'+String(object(bridge.getState().view).resumeRevision);
+  const canEdit=()=>['reviewEdit','saveEdit'].every(m=>bridge.getState().capabilities.commands.includes('remoteTask.phoneDrafts.'+m));
   const can=()=>!document.hidden&&object(bridge.getState().view).taskId===taskId&&['list','read','withdraw'].every(m=>bridge.getState().capabilities.commands.includes('remoteTask.phoneDrafts.'+m));
   async function access(mode:'list'|'read'|'withdraw',row?:Head){
     if(flight.current||!can()||mode==='read'&&(!row||!['draft','queued'].includes(row.localState))||mode==='withdraw'&&!review)return;
@@ -45,16 +48,18 @@ export function RemotePhoneDraftShelf({taskId,runId,epoch}:{taskId:string;runId:
   }
   if(!bridge.getState().capabilities.commands.includes('remoteTask.phoneDrafts.list'))return null;
   return <div><Button variant="ghost" size="small" disabled={busy||!can()} onClick={()=>void access('list')}>查看本机原会话草稿</Button>
-    {opened&&<SettingsDialog isOpen title={review?'核对这份未发送的原稿':'这次作业的手机草稿'} closeLabel="返回原任务" onClose={reset}>
-      {review?<><p className="pw-field-hint">{label[review.row.localState]} · 版本 {review.row.revision}</p>
+    {opened&&<SettingsDialog isOpen title={editing?'修改未发草稿':review?'核对这份未发送的原稿':'这次作业的手机草稿'} closeLabel="返回原任务" onClose={()=>editing?askLeave(true):reset()}>
+      {leave?<><p>离开会丢弃尚未保存的输入。如果刚刚点过保存，可在原清单核对版本，不会自动重试。</p><div className="pw-form-actions"><Button variant="secondary" onClick={reset}>离开本页</Button><Button onClick={()=>askLeave(false)}>返回原稿</Button></div></>:null}
+      <div hidden={leave}>{editing&&review?<RemotePhoneDraftRevision task={taskId} run={runId} epoch={epoch} row={review.row} original={review.text}
+        onCancel={()=>{edit(false);askLeave(false)}} onSaved={s=>{const id=review.row.id;edit(false);askLeave(false);setReview(null);setRows(old=>old.map(v=>v.id===id?{...v,...s,localState:'draft'}:v));tell(`本机原稿已保存为 v${s.revision}，没有排队或发送。`)}}/>:review?<><p className="pw-field-hint">{label[review.row.localState]} · 版本 {review.row.revision}</p>
         <pre className="pw-file-revision-content">{review.text}</pre><p className="pw-field-hint">只从手机撤下这份草稿，不会撤回主机已收到的内容。</p>
-        <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={()=>void access('list')}>保留原稿</Button>
+        <div className="pw-form-actions">{canEdit()&&<Button variant="secondary" disabled={busy} onClick={()=>edit(true)}>在手机上修改</Button>}<Button variant="ghost" disabled={busy} onClick={()=>void access('list')}>返回清单</Button>
           <Button disabled={busy} onClick={()=>void access('withdraw')}>撤下这份未发草稿</Button></div></>:
         <><p className="pw-field-hint">只查当前原任务在手机登记的版本，不联系主机。已领取的内容不能在此撤回。</p>
           {rows.map(v=><div key={v.id} className="pw-remote-file"><div><strong>{v.mode==='steer'?'当前轮次补充':'下一轮说明'}</strong><small>{label[v.localState]} · v{v.revision} · {new Date(v.updatedAt).toLocaleString('zh-CN',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</small></div>
             {['draft','queued'].includes(v.localState)&&<Button size="small" variant="ghost" disabled={busy} onClick={()=>void access('read',v)}>核对原稿</Button>}</div>)}
           {!busy&&!rows.length&&!error&&<p>这个执行轮次没有仍可核对的手机草稿。未列出不代表已经撤下。</p>}
-          <Button variant="ghost" size="small" disabled={busy} onClick={()=>void access('list')}>重读本机清单</Button></>}
+          <Button variant="ghost" size="small" disabled={busy} onClick={()=>void access('list')}>重读本机清单</Button></>}</div>
       {notice&&<p role="status">{notice}</p>}{error&&<p role="alert">{error}</p>}
     </SettingsDialog>}</div>;
 }

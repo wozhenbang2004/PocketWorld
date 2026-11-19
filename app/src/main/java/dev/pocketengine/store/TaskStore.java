@@ -6466,6 +6466,22 @@ public final class TaskStore {
         exact.remove("item");return exact.put("id",before.get("id")).put("previousRevision",before.get("revision"))
             .put("revision",withdrawn.getLong("revision")).put("localState","withdrawn").put("hostRecall",false);
     }
+    /** Same existing non-claimed row only. Editing never creates, enqueues, dispatches, or retargets a message. */
+    public synchronized JSONObject revisePrivateRemotePhoneDraft(JSONObject pin,String oldSha,String replacement,String reviewedSha,java.util.function.BooleanSupplier owner)throws Exception{
+        JSONObject original=privateRemotePhoneDrafts(pin,false),before=original.getJSONObject("item");
+        String sha=dev.pocketengine.features.remote.RemotePhoneDrafts.textFingerprint(replacement);
+        if(!before.getString("textSha256").equals(oldSha)||!sha.equals(reviewedSha)||sha.equals(oldSha))throw new SecurityException("原稿或审阅的新文字已改变；未覆盖");
+        String taskId=pin.getString("taskId"),id=before.getString("id");long revision=before.getLong("revision"),next=Math.addExact(revision,1);
+        JSONObject task=required(taskId),row=remoteDraft(task,id);
+        if(row==null||row.getLong("revision")!=revision||!before.get("localState").equals(row.opt("state"))||!row.isNull("operationId")
+                ||!before.get("scopeHash").equals(capabilityFingerprint(row.getJSONObject("scope")))||!before.get("text").equals(row.opt("text"))||!owner.getAsBoolean())
+            throw new SecurityException("本机原稿被领取或原主人窗口发生变化；未覆盖");
+        row.put("text",replacement).put("state","draft").put("revision",next).put("updatedAt",System.currentTimeMillis());write(task);
+        JSONObject updated=privateRemotePhoneDrafts(new JSONObject(pin.toString()).put("revision",next),false).getJSONObject("item");
+        if(!"draft".equals(updated.opt("localState"))||!sha.equals(updated.opt("textSha256")))throw new IllegalStateException("未取得新版本的可核对回执；请重读本机原稿，不自动重试");
+        original.remove("item");return original.put("id",id).put("previousRevision",revision).put("revision",next).put("scopeHash",updated.get("scopeHash"))
+                .put("previousLocalState",before.get("localState")).put("localState","draft").put("queued",false).put("textSha256",sha).put("updatedAt",updated.get("updatedAt"));
+    }
     /** Saving/queueing is local intent, not provider acceptance or future execution permission. */
     public synchronized JSONObject saveRemoteDraft(JSONObject source,String profileGeneration,String draftId,long revision,String mode,String text,boolean queued)throws Exception {
         if(!draftId.matches("[a-f0-9-]{36}")||revision<0)throw new SecurityException("原草稿编号/版本无效");text=dev.pocketengine.features.remote.RemoteTaskDrafts.text(text);
@@ -7574,12 +7590,82 @@ public final class TaskStore {
     private static boolean teamProjectReceiptMatchesContext(JSONObject context,String taskId,String operationId,JSONObject receipt)throws Exception {
         JSONObject route=receipt.optJSONObject("projectExecution");return route!=null&&taskId.equals(route.optString("taskId"))&&operationId.equals(route.optString("operationId"))&&context.getString("checkoutId").equals(route.optString("checkoutId"))&&context.getJSONObject("selection").getString("selectionHash").equals(route.optString("teamProjectSelectionHash"));
     }
+    /** This positive proof is shared by final freeze and by the worker's read of its own current checks. */
+    private JSONObject teamPassedCheck(JSONObject context,String taskId,String digest,String template,String operation,String run,JSONObject args,JSONObject envelope)throws Exception {
+        if(!teamProjectReceiptMatchesContext(context,taskId,operation,envelope))return null;
+        JSONObject plan=args.getJSONObject("plan");if(!digest.equals(plan.getString("sourceDigest"))||!template.equals(dev.pocketengine.features.teams.TeamProjectWorkspaces.templateId(context.getJSONObject("selection"),plan)))return null;
+        JSONObject backend=envelope.optJSONObject("executionReceipt");if(backend==null||!envelope.optString("status").equals("completed")||!Boolean.TRUE.equals(envelope.opt("accepted"))||!backend.optBoolean("receiptReceived")||!backend.optString("status").equals("completed")||backend.optInt("exitCode",1)!=0||!backend.optBoolean("resourcesReleased")||!backend.optBoolean("processExited")||!backend.optBoolean("processGroupAbsent")||backend.optBoolean("timedOut")||backend.optBoolean("outputLimitExceeded")||backend.optBoolean("cancelRequested")||!backend.optString("sourceCheckStatus").equals("pre_exec_manifest_verified")||!backend.optString("provider").equals("managed_process")||!backend.optString("kind").equals("command"))return null;
+        JSONObject step=dev.pocketengine.features.local.project.ProjectBuildPlan.step(plan,args.getString("stepId"));
+        if(step.getJSONObject("payload").optString("terminalMode").equals("pty")&&(!backend.optBoolean("processSessionAbsent")
+                ||!dev.pocketengine.features.local.runtime.NativeProcessSupervisor.PTY_EXIT_RESULT_CONTRACT.equals(backend.optString("terminalNativeContract"))))return null;
+        return new JSONObject().put("templateId",template).put("operationId",operation).put("runId",run).put("sourceDigest",digest)
+                .put("planDigest",plan.getString("planDigest")).put("exitCode",0).put("resourcesReleased",true).put("receiptHash",capabilityFingerprint(backend));
+    }
     private JSONObject teamProjectChecks(JSONObject task,String digest)throws Exception {
         JSONObject context=teamProjectAssociation(task,task.getString("runId"),task.getInt("coordinatorEpoch")),selected=context.getJSONObject("selection");JSONArray templates=selected.getJSONArray("templates"),proof=new JSONArray();for(int t=0;t<templates.length();t++){JSONObject template=templates.getJSONObject(t);if(!template.getBoolean("requiredForFreeze"))continue;JSONObject found=null;
-            try(Cursor rows=db.rawQuery("SELECT operation_id,run_id,arguments,state,receipt FROM operations WHERE task_id=? AND tool='project_execute' ORDER BY created_at",new String[]{task.getString("id")})){while(rows.moveToNext()){if(!rows.getString(3).equals("receipt")||rows.isNull(4))continue;JSONObject envelope=new JSONObject(rows.getString(4));if(!teamProjectReceiptMatchesContext(context,task.getString("id"),rows.getString(0),envelope))continue;JSONObject args=projectStoredArguments(task.getString("id"),rows.getString(1),new JSONObject(rows.getString(2))),plan=args.getJSONObject("plan");if(!digest.equals(plan.getString("sourceDigest"))||!template.getString("id").equals(dev.pocketengine.features.teams.TeamProjectWorkspaces.templateId(selected,plan)))continue;JSONObject backend=envelope.optJSONObject("executionReceipt");if(backend==null||!envelope.optString("status").equals("completed")||!Boolean.TRUE.equals(envelope.opt("accepted"))||!backend.optBoolean("receiptReceived")||!backend.optString("status").equals("completed")||backend.optInt("exitCode",1)!=0||!backend.optBoolean("resourcesReleased")||!backend.optBoolean("processExited")||!backend.optBoolean("processGroupAbsent")||backend.optBoolean("timedOut")||backend.optBoolean("outputLimitExceeded")||backend.optBoolean("cancelRequested")||!backend.optString("sourceCheckStatus").equals("pre_exec_manifest_verified")||!backend.optString("provider").equals("managed_process")||!backend.optString("kind").equals("command"))continue;
-                JSONObject route=envelope.getJSONObject("projectExecution"),step=dev.pocketengine.features.local.project.ProjectBuildPlan.step(plan,args.getString("stepId"));if(!task.getString("id").equals(route.optString("taskId"))||!rows.getString(0).equals(route.optString("operationId"))||!context.getString("checkoutId").equals(route.optString("checkoutId"))||!selected.getString("selectionHash").equals(route.optString("teamProjectSelectionHash")))continue;if(step.getJSONObject("payload").optString("terminalMode").equals("pty")&&(!backend.optBoolean("processSessionAbsent")||!dev.pocketengine.features.local.runtime.NativeProcessSupervisor.PTY_EXIT_RESULT_CONTRACT.equals(backend.optString("terminalNativeContract"))))continue;found=new JSONObject().put("templateId",template.getString("id")).put("operationId",rows.getString(0)).put("runId",rows.getString(1)).put("sourceDigest",digest).put("planDigest",plan.getString("planDigest")).put("exitCode",0).put("resourcesReleased",true).put("receiptHash",capabilityFingerprint(backend));}}
+            try(Cursor rows=db.rawQuery("SELECT operation_id,run_id,arguments,state,receipt FROM operations WHERE task_id=? AND tool='project_execute' ORDER BY created_at",new String[]{task.getString("id")})){while(rows.moveToNext()){if(!rows.getString(3).equals("receipt")||rows.isNull(4))continue;JSONObject envelope=new JSONObject(rows.getString(4));if(!teamProjectReceiptMatchesContext(context,task.getString("id"),rows.getString(0),envelope))continue;JSONObject args=projectStoredArguments(task.getString("id"),rows.getString(1),new JSONObject(rows.getString(2)));
+                JSONObject match=teamPassedCheck(context,task.getString("id"),digest,template.getString("id"),rows.getString(0),rows.getString(1),args,envelope);if(match!=null)found=match;}}
             if(found==null)throw new TeamProjectDeliveryIncomplete("缺少当前完整源码版本的真实成功/已释放检查："+template.getString("id"));proof.put(found);
         }if(proof.length()==0)throw new SecurityException("原项目没有同版必要检查");return new JSONObject().put("sourceDigest",digest).put("checks",proof).put("allRequiredChecksPassed",true).put("businessVerified",false);
+    }
+    /** Read-only evidence in an already metered original project_inspect / project_plan. No checkout,
+     * proposal, operation, approval or retry is created here. Only a complete read can suppress a fresh
+     * proposal as already satisfied. Large/missing records are explicitly unknown rather than "not run". */
+    public synchronized JSONObject teamProjectCheckProgress(JSONObject binding,String digest,String wanted,RunControl original)throws Exception {
+        if(digest==null||!digest.matches("[a-f0-9]{64}"))throw new SecurityException("需要原工作副本的准确源码摘要");
+        checkTeamAssignmentExecution(binding,original);
+        String id=binding.getString("taskId");JSONObject context=teamProjectContext(binding,original),selected=context.getJSONObject("selection");
+        if(wanted!=null){boolean allowed=false;JSONArray templates=selected.getJSONArray("templates");for(int i=0;i<templates.length();i++)allowed|=wanted.equals(templates.getJSONObject(i).getString("id"));if(!allowed)throw new SecurityException("原检查不属于此成员");}
+        dev.pocketengine.features.teams.TeamProjectCheckProgress progress=new dev.pocketengine.features.teams.TeamProjectCheckProgress(digest);
+        final int rowLimit=128,bodyLimit=512*1024;long bytesLeft=8L*1024*1024;
+        boolean own=!db.inTransaction();if(own)db.beginTransactionNonExclusive();
+        try{
+            String query="SELECT o.operation_id,o.run_id,o.state,length(CAST(o.arguments AS BLOB)),coalesce(length(CAST(o.receipt AS BLOB)),0),p.plan_ref,p.bytes " +
+                    "FROM operations o LEFT JOIN project_plan_uses u ON u.operation_id=o.operation_id LEFT JOIN project_plans p ON p.plan_ref=u.plan_ref " +
+                    "WHERE o.task_id=? AND o.tool='project_execute' AND (p.checkout_id IS NULL OR p.checkout_id=?) ORDER BY o.created_at DESC,o.rowid DESC LIMIT ?";
+            try(Cursor rows=db.rawQuery(query,new String[]{id,context.getString("checkoutId"),String.valueOf(rowLimit+1)})){
+                int count=0;
+                while(rows.moveToNext()){
+                    original.check();if(++count>rowLimit){progress.incomplete();break;}
+                    long a=rows.getLong(3),b=rows.getLong(4),p=rows.isNull(6)?0:rows.getLong(6);
+                    if(a<1||a>bodyLimit||p<0||p>dev.pocketengine.features.local.project.ProjectPlanRecords.MAX_PLAN_BYTES||a+p>bytesLeft){progress.incomplete();continue;}
+                    bytesLeft-=a+p;
+                    String op=rows.getString(0),run=rows.getString(1),state=rows.getString(2);
+                    try{
+                        JSONObject stored=new JSONObject(TaskStoreTextReader.read(db,TaskStoreTextReader.Column.OPERATION_ARGUMENTS,op,bodyLimit));
+                        if(stored.has("planRef")&&(rows.isNull(5)||!rows.getString(5).equals(stored.getString("planRef")))){progress.incomplete();continue;}
+                        // Resolve the immutable original row first. Do not invalidate a read of this version
+                        // because an unrelated earlier source is outside the newer integrator's renewed scope.
+                        int epoch;try(Cursor prior=db.rawQuery("SELECT epoch FROM runs WHERE task_id=? AND run_id=?",new String[]{id,run})){
+                            if(!prior.moveToFirst()){progress.incomplete();continue;}epoch=prior.getInt(0);
+                        }
+                        JSONObject originalRun=new JSONObject().put("taskId",id).put("runId",run).put("coordinatorEpoch",epoch);
+                        JSONObject args=dev.pocketengine.features.local.project.ProjectPlanRecords.resolve(db,originalRun,stored),plan=args.getJSONObject("plan");
+                        if(!context.getString("checkoutId").equals(plan.getString("checkoutId"))||!digest.equals(plan.getString("sourceDigest")))continue;
+                        String template=dev.pocketengine.features.teams.TeamProjectWorkspaces.templateId(selected,plan);if(template.isEmpty()||wanted!=null&&!wanted.equals(template))continue;
+                        if(b<0||b>bodyLimit||b>bytesLeft){progress.incomplete();continue;}bytesLeft-=b;
+                        JSONObject envelope=b==0?null:new JSONObject(TaskStoreTextReader.read(db,TaskStoreTextReader.Column.OPERATION_RECEIPT,op,bodyLimit));
+                        if(envelope!=null&&envelope.has("projectExecution")&&!teamProjectReceiptMatchesContext(context,id,op,envelope))continue;
+                        if("receipt".equals(state)&&envelope!=null&&!envelope.has("projectExecution")&&Boolean.FALSE.equals(envelope.opt("accepted"))&&"not_dispatched".equals(envelope.optString("status")))continue;
+                        teamProjectContextForPlan(id,run,epoch,plan); // same current selection/authority used by final freeze
+                        JSONObject proof=!"receipt".equals(state)||envelope==null?null:teamPassedCheck(context,id,digest,template,op,run,args,envelope);
+                        JSONObject backend=envelope==null?null:envelope.optJSONObject("executionReceipt");
+                        boolean released=proof==null&&"receipt".equals(state)&&envelope!=null&&teamProjectReceiptMatchesContext(context,id,op,envelope)
+                                &&backend!=null&&"managed_process".equals(backend.optString("provider"))&&"command".equals(backend.optString("kind"))
+                                &&backend.optBoolean("receiptReceived")&&backend.optBoolean("resourcesReleased")&&backend.optBoolean("processExited")&&backend.optBoolean("processGroupAbsent")
+                                &&backend.optString("status").matches("completed|failed|cancelled");
+                        if(released&&"pty".equals(dev.pocketengine.features.local.project.ProjectBuildPlan.step(plan,args.getString("stepId")).getJSONObject("payload").optString("terminalMode")))
+                            released=backend.optBoolean("processSessionAbsent")&&dev.pocketengine.features.local.runtime.NativeProcessSupervisor.PTY_EXIT_RESULT_CONTRACT.equals(backend.optString("terminalNativeContract"));
+                        JSONObject route=envelope==null?null:envelope.optJSONObject("projectExecution");
+                        boolean readable=route!=null&&run.equals(binding.getString("runId"))&&run.equals(route.optString("runId"))
+                                &&binding.getInt("coordinatorEpoch")==route.optInt("coordinatorEpoch",-1)&&op.equals(route.optString("jobId"))
+                                &&"native_host_operation".equals(route.optString("authority"))&&teamProjectReceiptMatchesContext(context,id,op,envelope);
+                        progress.observed(template,op,run,proof!=null?"verified":released?"released_without_passing_receipt":"not_settled",proof,readable);
+                    }catch(org.json.JSONException|IllegalArgumentException|IllegalStateException|SecurityException unreadable){progress.incomplete();}
+                }
+            }
+            checkTeamAssignmentExecution(binding,original);JSONObject result=progress.view();if(own)db.setTransactionSuccessful();return result;
+        }finally{if(own)db.endTransaction();}
     }
     public synchronized JSONObject teamProjectFreezeEvidence(JSONObject binding,String digest,RunControl original)throws Exception {checkTeamAssignment(binding,"team_freeze_outputs",original);return teamProjectChecks(teamAssignmentIdentity(binding),digest);}
     public synchronized void prepareTeamProjectFreeze(JSONObject binding,String operation,dev.pocketengine.features.teams.TeamProjectWorkspaces.FreezeCapture capture,RunControl original)throws Exception {

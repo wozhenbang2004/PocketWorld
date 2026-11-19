@@ -51,6 +51,30 @@ def start(ctx,settings,op,locked,observe):
         if _dialog("未打开这份原文件","已修改或替换的副本、二进制、混合换行、LFS 指针或无法核对的原提交均不载入。没有写入。",
                    [("again","返回原清单另选")],retire=retired)!="again": return
     else: return
+    edit(ctx,settings,op,base,retired,observe)
+
+
+def exact(ctx,settings,op,path,original_id,commit,oid,size,sha,active,request,observe):
+    # Separate owner entry. No generic inventory/picker, alternate path, remote text, or automatic selection.
+    from desktop_sessions import WindowsDesktopHealth
+    health=WindowsDesktopHealth()
+    first=health.probe(session_only=True)
+    session=first.get("sessionId")
+    if first.get("available") is not True or type(session) is not int or session<=0: return
+    def retired():
+        live=health.probe(session_only=True)
+        return live.get("available") is not True or live.get("sessionId")!=session or not active()
+    if retired() or not request(): return
+    visible,base=observe("核对要单独起草的本机原文件",path+"\n从机主已选的原 Git 提交与独立副本读取，不从手机回执取正文。",
+                         retired,lambda check,_: model.prepare(ctx,settings,op,path,check),40)
+    if not visible or retired(): return
+    if (base is None or base.path!=path or base.commit!=commit or base.oid!=oid or base.origin!=tuple(original_id)
+            or len(base.raw)!=size or model.digest(base.raw)!=sha or not request()):
+        _dialog("未打开本机草稿","没有同时核实原读取和这一份本机原文件。不会改开其他路径、用回执片段代替正文或新建空稿。",[],retire=retired); return
+    edit(ctx,settings,op,base,retired,observe,original_request=request)
+
+
+def edit(ctx,settings,op,base,retired,observe,*,original_request=None):
     bom,eol,initial=model.unpack(base.raw)
     convention=("CRLF" if eol=="\r\n" else "LF")+(" · 保留 UTF-8 BOM" if bom else " · UTF-8 无 BOM")
     label=base.path if len(base.path)<=75 else "…"+base.path[-74:]
@@ -84,7 +108,7 @@ def start(ctx,settings,op,locked,observe):
             if pick=="edit": break
             if pick!="save" or retired(): return
             visible,row=observe("核对并另存这次补丁","再次核对原提交、原副本和刚才看过的全部差异，不替换已有文件。",retired,
-                                lambda check,_: model.save(ctx,settings,op,base,draft,reviewed,retired,check),60)
+                                lambda check,_: model.save(ctx,settings,op,base,draft,reviewed,retired,check,original_request=original_request),60)
             if not visible: return
             if row is None:
                 _dialog("未确认这份补丁已保存","原件、可用名额或保存证据不足。可能留有原请求；请从这份副本的「已另存的单文件变更」核对，不会自动重做。",[],retire=retired)

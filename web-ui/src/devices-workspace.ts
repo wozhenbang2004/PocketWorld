@@ -48,7 +48,7 @@ export function isReceivedPhoneTask(task: DeviceData, snapshot: DeviceData | nul
           && typeof origin.remoteLocalTaskId === 'string' && /^ba1_[a-f0-9]{64}$/.test(origin.remoteLocalTaskId)));
 }
 /** A local return bookmark, never a review, model selection, or execution authority. */
-export type SentPhoneGoalFocus = { taskId: string; deviceId: string; instanceId: string; certificateFingerprint: string };
+export type SentPhoneGoalFocus = { purpose?: 'partner_connection'; taskId: string; deviceId: string; instanceId: string; certificateFingerprint: string };
 export type ReceivedPhoneGoalReturn = { taskId: string; instanceId: string; sourceId: string; targetId: string; parentTaskId: string; operationId: string; grantId: string; epoch: number; runId?:string; executorEpoch?:number; modelReturnHandle?:string; peerDetail: boolean; leftAt: number };
 export function receivedPhoneGoalReturn(task: DeviceData, snapshot: DeviceData | null, peerDetail = false): ReceivedPhoneGoalReturn | undefined {
   if (!isReceivedPhoneTask(task, snapshot) || !identity(task.id) || !identity(snapshot?.local?.instanceId)) return;

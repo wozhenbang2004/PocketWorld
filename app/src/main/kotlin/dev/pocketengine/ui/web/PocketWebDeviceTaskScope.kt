@@ -143,7 +143,7 @@ internal class PocketWebDeviceTaskScope(
                             check(epoch == generation && visible(task) && owner == controller.webWindowTicket()) { "原任务窗口已变化" }
                             page = created
                         }
-                        native.view().put("pageHandle", created.id)
+                        native.view().put("ownerDisplayNames",native.ownerDisplayNames()).put("pageHandle", created.id)
                     } catch (failure: Throwable) {
                         synchronized(lifetime) { if (page === created) page = null; created.alive = false; native.close() }
                         throw failure

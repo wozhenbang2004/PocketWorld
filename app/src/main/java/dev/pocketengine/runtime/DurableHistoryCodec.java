@@ -141,8 +141,9 @@ final class DurableHistoryCodec {
                     message.put("content", profile.instructions());
                 }
                 JSONArray content = message.optJSONArray("content");
+                String nativeFingerprint=contextBudget==null?null:contextBudget.observationFingerprint(original);
                 if (content != null) {
-                    markObservationWithoutImage(message);
+                    markObservationWithoutImage(message,nativeFingerprint!=null);
                     JSONArray textOnly = new JSONArray();
                     for (int part = 0; part < content.length(); part++) {
                         JSONObject value = content.optJSONObject(part);
@@ -161,10 +162,7 @@ final class DurableHistoryCodec {
                     validateCalls(calls);
                     for (int call = 0; call < calls.length(); call++) {JSONObject item=calls.getJSONObject(call);pending.add(item.getString("id"));String name=item.getJSONObject("function").optString("name");if(referenceTool(name))referenceCalls.put(item.getString("id"),name);else referenceCalls.remove(item.getString("id"));}
                 } else if (!(message.opt("content") instanceof String) && content == null) throw new JournalFailure();
-                if (contextBudget != null) {
-                    String fingerprint=contextBudget.observationFingerprint(original);
-                    if(fingerprint!=null)nativeObservations.put(result.length(),fingerprint);
-                }
+                if(nativeFingerprint!=null)nativeObservations.put(result.length(),nativeFingerprint);
                 result.put(message);
             }
             closePending(result, pending);
@@ -205,7 +203,8 @@ final class DurableHistoryCodec {
      * Owner prose is a string; queued/attached owner rows carry their own identities. Neither is
      * native provenance. Nested page text and evidence must never be rewritten as image metadata.
      */
-    static void markObservationWithoutImage(JSONObject message) throws Exception {
+    static void markObservationWithoutImage(JSONObject message) throws Exception { markObservationWithoutImage(message,false); }
+    private static void markObservationWithoutImage(JSONObject message,boolean originalObservation) throws Exception {
         if (!"user".equals(message.optString("role")) || message.has("ownerMessageId")
                 || message.has("ownerInputMode") || message.has("ownerAttachmentRefs") || message.has("ownerSourceRefs") || message.has("ownerPreviewRefs") || message.has("ownerObjectRefs") || message.has("ownerRecallFeedback")) return;
         JSONArray parts = message.optJSONArray("content");
@@ -229,8 +228,10 @@ final class DurableHistoryCodec {
         } catch (Exception malformed) { return; }
         if (!(data.opt("actualImageAttached") instanceof Boolean)) return;
         if (data.getBoolean("actualImageAttached") || !(data.opt("visionNotice") instanceof String)
-                || data.getString("visionNotice").isBlank()) {
-            data.put("actualImageAttached", false).put("visionNotice",PROJECT_IMAGE_PREFIX.equals(prefix)?"原工程图片未附在当前上下文；仅保留来源信息，不能据此声称已看图片。":"历史截图未附在当前上下文；只依据保留的控件树文字。");
+                || data.getString("visionNotice").isBlank() || originalObservation && dev.pocketengine.phone.observation.PhoneScreenDisclosure.previousTreeOnlyNotice(data.opt("visionNotice"))) {
+            data.put("actualImageAttached", false).put("visionNotice",PROJECT_IMAGE_PREFIX.equals(prefix)?"原工程图片未附在当前上下文；仅保留来源信息，不能据此声称已看图片。":
+                    RecentScreenHistory.PREFIX.equals(prefix)?"这条历史记录在当前上下文未附原图，不代表当前屏幕或新的操作依据。":
+                    dev.pocketengine.phone.observation.PhoneScreenDisclosure.withoutImage(data,null,originalObservation));
             first.put("text", prefix + data);
         }
     }

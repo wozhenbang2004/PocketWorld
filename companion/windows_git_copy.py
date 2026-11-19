@@ -194,12 +194,21 @@ def save(ctx,settings,source,checkpoint,progress,phase,locked):
         ctx.backend.assert_private_directory(ctx.state,ctx.sid)
     with ExitStack() as hold, ctx.backend.directory(ctx.state) as (_,state_handle,state_identity):
         ctx.backend.api.private_access(state_handle,ctx.sid,require_protected=True)
+        env=original["environmentId"]; root=dict(registered(ctx,settings)).get(env)
+        if not root: raise CopyBlocked("source_changed")
+        work_origin=None
+        try:
+            _,work_handle,_=hold.enter_context(ctx.backend.directory(root))
+            from windows_source_publisher import _origin as native_origin
+            work_origin=native_origin(ctx.backend.api,ctx.backend.api.info(work_handle))
+        except (OSError,PlatformError):
+            pass  # Optional cross-check witness; never reject/upgrade a legacy direct-root copy just for this field.
         if "selectedProject" in original:
             from windows_git_subproject import source_pins
-            env=original["environmentId"]; root=dict(registered(ctx,settings)).get(env)
-            if not root: raise CopyBlocked("source_changed")
+            if work_origin is not None and original["selectedProject"]["parent"]!=work_origin: raise CopyBlocked("source_changed")
             # No rebinding in the gap between the two source passes or at final publication.
             source_pins(ctx,root,env,original["selectedProject"],hold)
+            work_origin=original["selectedProject"]["parent"]
         current(True)
         if not disk(ctx,original)["enough"]: raise CopyBlocked("disk_space")
         for leaf in (target,".pocketworld-project-"+op):
@@ -224,6 +233,7 @@ def save(ctx,settings,source,checkpoint,progress,phase,locked):
             if phase_id=="items":
                 value = {"format":inventory.PROFILE,"operation":op,"manifest":manifest,"root":intent["temporaryIdentity"],
                          "rootOrigin":intent["rootOrigin"],"directories":intent["directories"],"files":intent["files"]}
+                if work_origin is not None: value["registeredRootOrigin"]=work_origin
                 return inventory.claim(_store(ctx,_phase(op,"items"),value,inventory.LIMIT,ensure_state))
             if phase_id not in ("opened","stage"): raise PlatformError("Original publication phase unknown")
             _store(ctx,_phase(op,phase_id),{**evidence,"root":intent["temporaryIdentity"]},4096,lambda:current(True))
@@ -246,6 +256,7 @@ def save(ctx,settings,source,checkpoint,progress,phase,locked):
         if complete:
             final["root"] = outcome["directoryIdentity"]
             final["items"] = outcome["items"]
+            if work_origin is not None: final["registeredRootOrigin"]=work_origin
         if status=="failed": final["cleanupConfirmed"] = outcome.get("cleanupPending") is False
         # Save only the factual result even if the progress window closed
         # after a physical publication. Never turn later cancellation into undo.

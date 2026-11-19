@@ -111,7 +111,9 @@ function GrantSelection({ review, busy, confirm }: { review: Data; busy: boolean
   </>;
 }
 
-export function DevicesWorkspace({ state, data, supported, run, registerTransientBack, openModels, modelReturn, sourceFocus }: { sourceFocus?: SentPhoneGoalFocus; modelReturn?: ReceivedPhoneGoalReturn; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void; openModels?: (origin?: ReceivedPhoneGoalReturn) => void }) {
+export function DevicesWorkspace({ state, data, supported, run, registerTransientBack, openModels, modelReturn, sourceFocus, onReturnToPartnerTask }: { sourceFocus?: SentPhoneGoalFocus; onReturnToPartnerTask?: () => void; modelReturn?: ReceivedPhoneGoalReturn; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void; openModels?: (origin?: ReceivedPhoneGoalReturn) => void }) {
+  const pinnedConnection=sourceFocus?.purpose==='partner_connection';
+  const [pinnedLocalRead,setPinnedLocalRead]=useState(0);
   const [snapshot, setSnapshot] = useState<Data | null>(null), [peerId, setPeerId] = useState(''), [form, setForm] = useState(''), [raw, setRaw] = useState('');
   const [address, setAddress] = useState(''), [inviteId, setInviteId] = useState(''), [host, setHost] = useState(''), [port, setPort] = useState(''), [recoveryAddresses, setRecoveryAddresses] = useState<string[]>([]);
   const [invitation, setInvitation] = useState<ShownPairingInvitation|null>(null), [review, setReview] = useState<Data | null>(null), [ack, setAck] = useState(false), [future, setFuture] = useState(false);
@@ -173,7 +175,9 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     finally { if (scope.current.finish(ticket) && alive.current) setPending(false); }
   };
   // Supplying a deviceId asks that peer for fresh capabilities. Local reads must also work offline.
-  const refresh = () => { void invoke('devices.snapshot'); };
+  const refresh = () => { void invoke('devices.snapshot',{},(_value,actual)=>{
+    if(pinnedConnection && Number.isSafeInteger(actual?.capturedAt))setPinnedLocalRead(actual!.capturedAt);
+  }); };
   const closeReview = () => {
     const old = handle.current; handle.current = ''; scope.current.invalidate(document.visibilityState === 'visible');
     setReview(null); setAck(false); setFuture(false); setHistoryReceipt(null); setPhoneGoalResult(null); setHistoryStopSubmitted(false); setWorkBusy(false); setControlBusy(false);
@@ -195,6 +199,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   };
   const acceptReview = (value: Data) => { const actual = deviceReview(value); handle.current = actual.viewHandle; setReview(actual); setAck(false); setFuture(false); setHistoryReceipt(null); setPhoneGoalResult(null); setHistoryStopSubmitted(false); setRaw(''); setForm(''); setInvitation(null); };
   const clearSensitive = (enabled = false, keepPairEntry = false) => {
+    if(pinnedConnection)setPinnedLocalRead(0);
     setFirstPair(null);setDesktopOpen(false); setDiscoveryAck(false); setAdvertise(false); setDiscoveryPeer('');setClosedInbox(null);setClosedDraft('');closeOwnText(); setModelReturnFocus(undefined); setPhoneArchive(null); setArchiveFind({key:'',text:''}); setWaitingPhones(null);
     scope.current.invalidate(enabled); handle.current = ''; setReview(null); setAck(false); setFuture(false); setRaw(''); setInvitation(null);
     setForm(old => keepPairEntry && (old === 'add' || old === 'invite') ? old : ''); setAddress(''); setHost(''); setPort(''); setRecoveryAddresses([]); setHistoryReceipt(null); setPhoneGoalResult(null); setHistoryStopSubmitted(false); setTaskDetails({}); setSnapshot(null); setError(''); setNotice(''); setWorkBusy(false); setControlBusy(false);
@@ -465,7 +470,8 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
       acceptReview(value);
     });
   };
-  const focusedPeer=sourceFocus?peers.find(it=>it.deviceId===sourceFocus.deviceId && it.instanceId===sourceFocus.instanceId
+  const pinnedReadReady=!pinnedConnection || pinnedLocalRead>0 && Number.isSafeInteger(snapshot?.capturedAt) && snapshot!.capturedAt>=pinnedLocalRead;
+  const focusedPeer=sourceFocus && pinnedReadReady?peers.find(it=>it.deviceId===sourceFocus.deviceId && it.instanceId===sourceFocus.instanceId
     && it.certificateFingerprint===sourceFocus.certificateFingerprint && !retired(it)):undefined;
   const activeArchive = samePhoneGoalArchive(phoneArchive, peer, local) && (phoneArchive?.sourceTaskId||'')===(sourceFocus?.taskId||'')
     && (!sourceFocus || peer===focusedPeer) ? phoneArchive : null;
@@ -527,7 +533,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     });
   };
   useEffect(()=>{
-    if(!sourceFocus || !focusedPeer || busy || !snapshot || document.visibilityState!=='visible')return;
+    if(!sourceFocus || pinnedConnection || !focusedPeer || busy || !snapshot || document.visibilityState!=='visible')return;
     if(peerId!==sourceFocus.deviceId){selectPeer(sourceFocus.deviceId);return;}
     const k=JSON.stringify([sourceFocus.taskId,sourceFocus.deviceId,sourceFocus.instanceId,sourceFocus.certificateFingerprint,local.deviceId,local.instanceId]);
     if(autoReadSource.current===k || !supported('devices.readPhoneGoalArchive'))return;
@@ -788,7 +794,29 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
         {error && <MotionFeedback identity={error} className="pw-device-feedback" role="alert">{error}</MotionFeedback>}
         {notice && <MotionFeedback identity={notice} className="pw-device-feedback" role="status">{notice}</MotionFeedback>}
         <WorkingStatus active={busy && !form}>正在读取原设备回执…</WorkingStatus>
-        {sourceFocus && <section className="pw-device-section" aria-label="原任务派单">
+        {sourceFocus && pinnedConnection && <section className="pw-device-section" aria-label="原工作指定的设备连接">
+          <WorkspaceSectionHeading title={focusedPeer?name(focusedPeer):'原工作的执行设备'} description="这里只读取本机记录，不联系设备或启动任务。" />
+          {!snapshot || !pinnedReadReady ? <p>等待读取本机当前保存的伙伴身份。</p> : !focusedPeer ? <p role="status">{peers.some(row=>row.deviceId===sourceFocus.deviceId)
+            ? '原伙伴已撤销，或者证书或实例已变化，没有打开现在的设备。'
+            : snapshot.hasMorePeers?'原身份不在本次本机读取范围。没有改选其他伙伴。':'本机没有匹配这份工作的原伙伴。没有改选其他设备。'}</p>
+            : <><p>上次连接检查：{deviceConnectionLabel(focusedPeer)}</p>
+                {!deviceChannelWasConnected(focusedPeer) && <p>{focusedPeer.actions?.connect?.reason || '连接需要你单独核对；尚未联系对方。'}</p>}
+                {deviceChannelWasConnected(focusedPeer) && <p>连接记录不代表现在可执行。回到这份原工作后再核对设备范围。</p>}
+                {!deviceChannelWasConnected(focusedPeer) && available(focusedPeer.actions?.connect) && supported('devices.reviewAction') &&
+                  <Button variant="secondary" disabled={busy} onClick={() => { void invoke('devices.reviewAction',{operation:'peer.connect',deviceId:sourceFocus.deviceId},value=>{
+                    const next=deviceReview(value), target=next.view?.peer;
+                    if(next.kind!=='action' || next.view?.operation!=='peer.connect' || !target || retired(target) ||
+                      target.deviceId!==sourceFocus.deviceId || target.instanceId!==sourceFocus.instanceId || target.certificateFingerprint!==sourceFocus.certificateFingerprint){
+                      if(next.viewHandle)void run('devices.discard',{viewHandle:next.viewHandle}).catch(()=>{});
+                      setError('核对期间原设备身份已变化，没有连接。');return;
+                    }
+                    acceptReview(value);
+                  }); }}>核对并连接这台原设备</Button>}</>}
+          <Accordion><AccordionItem id="pinned-connection-identity" title="这份工作固定的身份"><p className="pw-source-copy">原设备 {sourceFocus.deviceId}<br/>原证书 {fingerprint(sourceFocus.certificateFingerprint)}</p></AccordionItem></Accordion>
+          <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={refresh}>重读本机连接记录</Button>
+            {onReturnToPartnerTask && <Button disabled={busy || !!review} onClick={onReturnToPartnerTask}>返回这份原工作</Button>}</div>
+        </section>}
+        {sourceFocus && !pinnedConnection && <section className="pw-device-section" aria-label="原任务派单">
           <WorkspaceSectionHeading title="这份工作的原派单" description={focusedPeer?'交给 '+name(focusedPeer)+' · 仅查本机记录':'只核对当时选定的那台手机'} />
           {!snapshot ? <p>尚未读取本机保存的设备身份。</p> : !focusedPeer ? <SavedPhoneDispatches key={JSON.stringify([sourceFocus.taskId,sourceFocus.deviceId,sourceFocus.instanceId,sourceFocus.certificateFingerprint,local.deviceId,local.instanceId])}
               source={sourceFocus} local={local} busy={busy||!local.deviceId||!local.instanceId||!supported('devices.readPhoneGoalArchive')}
@@ -1169,7 +1197,10 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
       <p className="pw-source-copy">本机完整指纹：<bdi>{fingerprint(local.certificateFingerprint)}</bdi></p>
       <Button variant="secondary" onClick={() => setInvitation(null)}>清除显示，回到配对进度</Button>
     </div></SettingsDialog>
-    <SettingsDialog isOpen={!!review && (!sourceFocus || !!focusedPeer && review.kind==='history' && review.view?.taskId===sourceFocus.taskId && review.view?.targetDeviceId===sourceFocus.deviceId && review.view?.instanceId===sourceFocus.instanceId)} onClose={closeReview} title={review?.kind === 'pair' ? '范围与双端身份' : review?.kind === 'grant' ? '原设备权限修改' : review?.kind === 'goal' ? '用本机模型处理原目标' : review?.kind === 'result' ? '核对这次原成果' : review?.kind === 'approval' ? '核对这次设备操作' : review?.kind === 'recovery' ? '原配对结果只读窗口' : review?.kind === 'resume' ? '核对这次恢复请求' : review?.kind === 'history' ? (originalView.phoneGoalResult === true ? '这次手机目标与派发' : '原设备操作回执') : '核对原设备操作'}><div className="pw-collaboration-dialog" data-collaboration-kind="DevicesWorkspace">
+    <SettingsDialog isOpen={!!review && (!sourceFocus || !!focusedPeer && (pinnedConnection
+      ? review.kind==='action' && review.view?.operation==='peer.connect' && review.view?.peer?.deviceId===sourceFocus.deviceId &&
+        review.view?.peer?.instanceId===sourceFocus.instanceId && review.view?.peer?.certificateFingerprint===sourceFocus.certificateFingerprint
+      : review.kind==='history' && review.view?.taskId===sourceFocus.taskId && review.view?.targetDeviceId===sourceFocus.deviceId && review.view?.instanceId===sourceFocus.instanceId))} onClose={closeReview} title={review?.kind === 'pair' ? '范围与双端身份' : review?.kind === 'grant' ? '原设备权限修改' : review?.kind === 'goal' ? '用本机模型处理原目标' : review?.kind === 'result' ? '核对这次原成果' : review?.kind === 'approval' ? '核对这次设备操作' : review?.kind === 'recovery' ? '原配对结果只读窗口' : review?.kind === 'resume' ? '核对这次恢复请求' : review?.kind === 'history' ? (originalView.phoneGoalResult === true ? '这次手机目标与派发' : '原设备操作回执') : '核对原设备操作'}><div className="pw-collaboration-dialog" data-collaboration-kind="DevicesWorkspace">
       {review && <div className="pw-device-review">
         {error && <p role="alert">{error}</p>}
         {['pair', 'grant'].includes(review.kind) && !exactGrant ? <GrantSelection key={review.viewHandle} review={review} busy={busy} confirm={args => { void invoke('devices.reviewGrant', args, acceptReview); }} /> : <>

@@ -49,6 +49,8 @@ public final class RemotePhoneDrafts {
         var digest=MessageDigest.getInstance("SHA-256");digest.update(encoded);StringBuilder out=new StringBuilder(64);for(byte b:digest.digest())
             out.append(Character.forDigit((b>>>4)&15,16)).append(Character.forDigit(b&15,16));return out.toString();
     }
+    /** Rejects unavailable/ill-formed replacement text before it can displace a real draft. */
+    public static String textFingerprint(String text)throws Exception{return hash(RemoteTaskDrafts.text(text));}
     /** TaskStore supplies its raw task and its own durable original job target. No profile service is consulted. */
     public static JSONObject inspect(JSONObject task,JSONObject target,JSONObject selection,boolean list)throws Exception{
         if(!personal(task))throw changed();

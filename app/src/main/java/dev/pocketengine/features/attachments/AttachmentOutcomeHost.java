@@ -26,6 +26,7 @@ public final class AttachmentOutcomeHost {
     public JSONObject snapshot(String taskId,RunControl control)throws Exception {
         control.check();JSONObject task=ownerTask(taskId);JSONArray selected=task==null?new JSONArray():tasks.ownerAttachmentReferences(taskId);
         JSONObject inventory=documents.ownerAttachmentInventoryForHost();JSONArray files=inventory.getJSONArray("attachments"),sources=new JSONArray(),results=new JSONArray(),jobs=new JSONArray();Set<String> included=new HashSet<>();
+        var captured=new dev.pocketengine.features.remote.RemoteFileCaptureAttempt(task,tasks::remoteOwnerOperation);
         for(int i=0;i<selected.length();i++){
             JSONObject pinned=selected.getJSONObject(i),meta=find(files,pinned.getString("id"));
             if(meta==null||!sameReference(pinned,meta))sources.put(new JSONObject(pinned.toString()).put("availability","input_changed").put("name","原来源文件不可读"));
@@ -49,7 +50,11 @@ public final class AttachmentOutcomeHost {
                 JSONObject result=row(meta,"result");
                 if(task!=null){
                     String artifactRun=result.optString("sourceTaskRunId"),currentRun=task.optString("runId");
-                    result.put("runProvenance",artifactRun.isBlank()?"unrecorded":artifactRun.equals(currentRun)?"current":"earlier");
+                    if(kind.equals("remote_result_snapshot")){
+                        // Book metadata alone does not establish a capture run. Keep the all-or-nothing original-result reader unchanged.
+                        result.remove("sourceTaskRunId");result.put("runProvenance","unrecorded");
+                        JSONObject proof=captured.forFile(meta);if(proof!=null)for(String k:new String[]{"sourceTaskRunId","sourceCoordinatorEpoch","sourceRunEvidence","runProvenance"})result.put(k,proof.get(k));
+                    }else result.put("runProvenance",artifactRun.isBlank()?"unrecorded":artifactRun.equals(currentRun)?"current":"earlier");
                 }
                 results.put(result);
             }

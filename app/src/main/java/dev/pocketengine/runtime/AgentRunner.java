@@ -1922,7 +1922,7 @@ public final class AgentRunner {
     private static void appendCapturedObservation(JSONArray history,JSONObject observation,ModelConfig config,RunContextBudget budget,RecentScreenHistory screens,RunControl original)throws Exception {
         if(screens!=null&&config.sendScreenshots&&imageInputAvailable(config))screens.retain(observation,original);
         int before=history.length();
-        appendObservation(history,observation,config,budget);
+        ObservationHistoryDelivery.append(history,observation,config,budget,MAX_IMAGES,MAX_IMAGE_CHARS,original);
         if(screens!=null&&history.length()>before)screens.nativeUpload(history.getJSONObject(history.length()-1),observation,original);
     }
     private static void removeNativeImage(JSONObject message,String notice)throws Exception {

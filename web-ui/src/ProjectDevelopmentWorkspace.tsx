@@ -1,3 +1,4 @@
+import type {ProjectDraftReturn} from './ProjectConventionDraftAction';
 import { checkedHostFiles, checkedHostText, ProjectHostComparedFiles, ProjectHostDiff, type HostComparedFile, type HostComparison, type HostDiff, type HostEditorFile } from './ProjectHostFileComparison';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Accordion, AccordionItem, Button, SelectField, SettingsDialog, TextAreaField } from './forms-library';
@@ -19,7 +20,7 @@ const deliveryRequirements = (value: Data = {}): DeliveryRequirements => ({
 });
 const sameDraft = (draft: DevelopmentDraft, original: Data) => draft.goal === original.goal && draft.checkoutId === original.checkoutId &&
   deliveryFields.every(key => draft[key] === (original[key] || ''));
-type Props = { projectId: string; name: string; active: boolean; run: (action: string, args?: Data) => Promise<any>; can: (action: string) => boolean;
+type Props = { returnTarget?:ProjectDraftReturn; onDismissReturn?:()=>void; projectId: string; name: string; active: boolean; run: (action: string, args?: Data) => Promise<any>; can: (action: string) => boolean;
   onOpenTask: (id: string, checkoutId?: string) => void; onOpenHostOriginal?: (id: string) => void; onTaskRegistered: () => void; onPrepareTools: () => void; onConnectModel: () => void; onOpenTerminal: () => void;
   registerBack: (handler: (() => boolean) | null) => void; onInteractionBusyChange?: (busy: boolean) => void };
 const rows = (value: unknown): Data[] => Array.isArray(value) ? value : [];
@@ -48,8 +49,10 @@ function AndroidBuildConditions({ wrapper, runtime }: { wrapper: Data; runtime: 
 
 /** Existing project checkout + original Assistant admission. No command is
  * approved here, and reopening never repeats a submission or copy creation. */
-export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can, onOpenTask, onOpenHostOriginal, onTaskRegistered, onPrepareTools, onConnectModel, onOpenTerminal, registerBack, onInteractionBusyChange }: Props) {
+export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, projectId, name, active, run, can, onOpenTask, onOpenHostOriginal, onTaskRegistered, onPrepareTools, onConnectModel, onOpenTerminal, registerBack, onInteractionBusyChange }: Props) {
   const [view, setView] = useState<Data | null>(null), [goal, setGoal] = useState(''), [checkout, setCheckout] = useState('');
+  const returned=useRef(''),focusReturned=useRef(false),noticeArea=useRef<HTMLDivElement>(null);
+  const [deliveryOpen,setDeliveryOpen]=useState(false);
   const [hostOrigin, setHostOrigin] = useState<Data | null>(null);
   const [hostFiles, setHostFiles] = useState<HostComparison | null>(null), [hostDiff, setHostDiff] = useState<HostDiff | null>(null);
   const [hostEditor, setHostEditor] = useState<HostEditorFile | null>(null);
@@ -93,8 +96,16 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
   };
   const read = () => {
     if (latest.current.active && !entered.current && !document.hidden && latest.current.can('projects.development.read')) readAttempt.current = ownerWindow();
-    return invoke('projects.development.read', { projectId }, value => {
+    const pinned=returnTarget&&returned.current!==returnTarget.handle?returnTarget:null;
+    return invoke('projects.development.read', {projectId,...(pinned?{draftReturnHandle:pinned.handle}:{})}, value => {
     if (value.projectId !== projectId || typeof value.viewHandle !== 'string') throw new Error('没有取得这个原项目的页面，请重新读取。');
+    if(pinned){
+      if(value.openedDraftReturn!==pinned.handle||value.draft?.projectId!==pinned.projectId||value.draft?.checkoutId!==pinned.checkoutId||
+          value.draft?.ownerPickedConvention?.checkoutId!==pinned.checkoutId||!Number.isSafeInteger(value.draft?.ownerPickedConvention?.revision)){
+        void latest.current.run('projects.development.close',{viewHandle:value.viewHandle}).catch(()=>{});throw new Error('原项目草稿的定位没有得到确认，没有显示其他草稿。');
+      }
+      returned.current=pinned.handle;focusReturned.current=true;setDeliveryOpen(true);
+    }
     handle.current = value.viewHandle; setView(value); sourceAttempt.current = ''; setSource(null);
     const incoming = value.draft || {}, here = draft.current;
     const selectedCopy = incoming.ownerPickedConvention && (!here.constraints || keptNativePick.current) && (!here.checkoutId || here.checkoutId===incoming.checkoutId) &&
@@ -175,6 +186,9 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
   const picked = view?.draft?.ownerPickedConvention;
   const currentPicked = !sourceConflict && keptNativePick.current && picked && Number.isSafeInteger(picked.revision) && picked.revision>0 && picked.checkoutId===checkout &&
     requirements.constraints && view?.draft?.constraints===requirements.constraints ? picked : null;
+  useEffect(()=>{if(!active||!view||!focusReturned.current||!currentPicked||document.hidden)return;
+    focusReturned.current=false;noticeArea.current?.focus({preventScroll:true});noticeArea.current?.scrollIntoView({block:'nearest',behavior:'auto'});
+  },[active,view,currentPicked]);
   const removePicked = () => { setRequirements(value=>({...value,constraints:''})); retain({...draft.current,constraints:''});
     setView(value=>value ? {...value,draft:{...value.draft,ownerPickedConvention:null}} : value); };
   const readable = can('projects.development.read');
@@ -277,6 +291,10 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
     void invoke('projects.development.start', { viewHandle: handle.current, reviewHandle: selected.reviewHandle }, receipt => applySubmission(receipt, marker));
   };
   const androidWrapper = source?.projectId === projectId && source.checkoutId === checkout && source.androidGradleWrapper?.sourceDigest === source.sourceDigest ? source.androidGradleWrapper : null;
+  if(returnTarget&&returned.current!==returnTarget.handle)return <section hidden={!active} className="pw-project-development pw-settings-section" aria-label="核对原项目草稿">
+    <p role="status">{error||'正在核对刚才写入的原项目草稿…'}</p>
+    {error&&<Button variant="ghost" onClick={onDismissReturn}>收起定位，返回项目概览</Button>}
+  </section>;
   return <section hidden={!active} className="pw-project-development pw-local-workspace pw-settings-section" aria-label="使用默认模型开发项目">
     <header className="pw-development-intro"><h3>让模型接手开发</h3><p>在私人副本中工作，结果由你审阅后导回项目。</p></header>
     {error && <p className="pw-local-inline-notice" role="alert">{error}</p>}
@@ -292,9 +310,9 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
         {draft.current.checkoutId===view.draft.checkoutId&&<details><summary>对照本副本的两份限制</summary><p>本页普通文字</p><p dir="auto" className="pw-reading-copy">{draft.current.constraints||'（本页为空）'}</p><p>项目当前所选约定 · 修订 {view.draft.ownerPickedConvention.revision}</p><p dir="auto" className="pw-reading-copy">{view.draft.constraints}</p></details>}
         {draft.current.checkoutId===view.draft.checkoutId?<><Button variant="secondary" size="small" disabled={busy||pending} onClick={()=>reconcileSource(true)}>在本页使用项目当前约定</Button><Button variant="ghost" size="small" disabled={busy||pending} onClick={()=>reconcileSource(false)}>用本页普通文字替换草稿约定</Button></>:<p>工作副本不同，不展示另一份正文，也不能互相覆盖。请保留本页文字后，退出并打开原项目副本。</p>}</div>}
       <TextAreaField label="这次的目标" value={goal} isDisabled={disabled} onChange={value => { if (value.length <= 12000) { setGoal(value); retain({ ...draft.current, goal: value }); } }} hint="例如：做一个能在手机预览的番茄钟，先用本地数据。不要填写密码或令牌。" />
-      {currentPicked && <div className="pw-local-inline-notice"><p>已从本项目手写约定修订 {currentPicked.revision} 放入本次草稿，尚不是模型采用的证据。</p>
+      {currentPicked && <div ref={noticeArea} tabIndex={-1} className="pw-local-inline-notice"><p>已从本项目手写约定修订 {currentPicked.revision} 放入本次草稿，尚不是模型采用的证据。</p>
         <Button variant="ghost" size="small" disabled={disabled} onClick={removePicked}>移除本次约定</Button></div>}
-      <Accordion><AccordionItem id="development-delivery" title="交付要求" description={deliveryFields.some(key => requirements[key].trim()) ? '已补充约束、交付物或完成标准' : '选填：约束、交付物与完成标准'}>
+      <Accordion expandedKeys={deliveryOpen?['development-delivery']:[]} onExpandedChange={keys=>setDeliveryOpen(keys.has('development-delivery'))}><AccordionItem id="development-delivery" title="交付要求" description={deliveryFields.some(key => requirements[key].trim()) ? '已补充约束、交付物或完成标准' : '选填：约束、交付物与完成标准'}>
         <TextAreaField label="限制与约束" value={requirements.constraints} isDisabled={disabled} hint="例如：保留已有数据，沿用当前组件，每项最多 4000 字。"
           onChange={value => { if (value.length <= 4000) {
             if(currentPicked && value!==requirements.constraints)setView(previous=>previous?{...previous,draft:{...previous.draft,ownerPickedConvention:null}}:previous);

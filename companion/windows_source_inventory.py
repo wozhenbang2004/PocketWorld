@@ -44,7 +44,7 @@ def _claim_ok(ref):
             and re.fullmatch("[a-f0-9]{64}",ref["sha256"]) and _id(ref["fileIdentity"]))
 
 
-def load(ctx,op):
+def load(ctx,op,*,work_root=False):
     from windows_git_copy import _phase, _read, inspect, slots
     if not isinstance(op,str) or not re.fullmatch("[a-f0-9]{32}",op): _bad()
     row = next((r for _,r in slots(ctx) if r["operation"]==op),None)
@@ -70,7 +70,15 @@ def load(ctx,op):
     df, ff = saved.get("directories"),saved.get("files")
     if (not isinstance(df,list) or len(df)!=len(dirs) or not all(_origin(i) for i in df)
             or not isinstance(ff,list) or len(ff)!=len(rows) or not all(_origin(i) for i in ff)): _bad()
-    return saved["rootOrigin"],dirs,rows,children,dict(zip(manifest["directories"],df)),dict(zip(rows,ff))
+    result=(saved["rootOrigin"],dirs,rows,children,dict(zip(manifest["directories"],df)),dict(zip(rows,ff)))
+    if not work_root: return result
+    declared=manifest["source"].get("selectedProject",{}).get("parent")
+    if "registeredRootOrigin" in saved or "registeredRootOrigin" in final:
+        proof=saved.get("registeredRootOrigin")
+        if not _origin(proof) or proof!=final.get("registeredRootOrigin") or (declared is not None and proof!=declared): _bad()
+    else: proof=declared   # Only an originally recorded, verified subproject proof; no later backfill.
+    if not _origin(proof): _bad()
+    return (*result,tuple(proof))
 
 
 def compare(ctx,op,checkpoint,progress):

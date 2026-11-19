@@ -270,7 +270,7 @@ internal class PocketWebPhoneComposer(
             .put("originalDraft", review.conditions?.let { JSONObject().put("composer", review.composerKey).put("conversation", review.conversation)
                 .put("ownerEpoch", review.viewEpoch).put("revision", review.draftRevision).put("origin", review.originRevision) })
             .put("conditions", review.conditions).put("expiresInMs", (review.expires - SystemClock.elapsedRealtime()).coerceAtLeast(0L))
-            .put("screenDisclosure", shown?.optString("screenDisclosure") ?: "执行时，屏幕与可见文字会发送到本次配置的模型。")
+            .put("screenDisclosure", shown?.optString("screenDisclosure")?.takeIf { it.isNotBlank() } ?: "本次未取得分项读取设置。执行时允许的屏幕内容可能提供给对应模型；当前没有据此读取或发送画面。")
             .put("message", when {
                 review.conditions != null -> if (review.mode == "background") "任务需要用屏时，只使用后台独立屏，不切换到手机主屏。" else "任务需要用屏时，才会使用手机主屏。"
                 review.mode == "background" -> "在后台独立屏处理这个目标；连接不可用时等待，不切换到手机主屏。"
