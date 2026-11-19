@@ -121,7 +121,7 @@ type Review={reviewHandle:string;task?:Task;ownerQuestion?:Json|null;actions?:{a
 type TaskReviewWindow={taskId:string;request:number;documentEpoch:number;resumeRevision:number};
 type PhoneReview={reviewHandle:string;goal:string;mode:string;toolLimit:number;modelCallLimit:number;scopeMinutes:number;message?:string;requestId?:string;conversationId?:string;conversationTitle?:string;modelName?:string;provider?:string;screenDisclosure?:string};
 type TaskLayer='overview'|'goal'|'process'|'scope';
-type WorkspaceOrigin={route:string;label:string;goal?:string;projectId?:string;contextProjectId?:string;task?:{id:string;layer:TaskLayer};focus?:HTMLElement|null;focusKey?:string;modelPicker?:boolean;parent?:WorkspaceOrigin|null};
+type WorkspaceOrigin={route:string;label:string;drawerChat?:{id:string;draftKey:string;documentEpoch:number};goal?:string;projectId?:string;contextProjectId?:string;task?:{id:string;layer:TaskLayer};focus?:HTMLElement|null;focusKey?:string;modelPicker?:boolean;parent?:WorkspaceOrigin|null};
 type FileDraft={text:string;baseline:string;version:number;dirty:boolean;submitted?:string};
 type PackageNavigation={id:number;target:PackagePreviewTarget;documentEpoch:number;resumeRevision:number;navigationRevision:number;originalProjectId:string;destinationProjectId?:string;closed:Promise<boolean>};
 const asArray=<T,>(x:any):T[]=>Array.isArray(x)?x:[];
@@ -521,8 +521,13 @@ export default function App(){
  };
  const restoreWorkspace=async(origin:WorkspaceOrigin,keepOrigin=false)=>{
   const navigation=navigationWindow.current,documentEpoch=bridge.getDocumentEpoch();
-  const closed=await navigate(origin.route==='setup'?'butler':origin.route,()=>{if(!keepOrigin)relatedOrigin.current=origin.parent||null},{keepOrigin:true});
-  const current=()=>navigationWindow.current===navigation+1&&documentEpoch===bridge.getDocumentEpoch()&&!document.hidden;
+  const source=origin.drawerChat;
+  // Opening the work directory never changes the native composer. Do not select,
+  // overwrite or resurrect a conversation if another surface has replaced that owner.
+  const sameChat=()=>{const live=bridge.getState();return !source||(bridge.getDocumentEpoch()===source.documentEpoch&&String(live.state.conversationId||'')===source.id&&(!!source.id||String(live.composer?.key||'')===source.draftKey));};
+  const closed=await navigate(origin.route==='setup'?'butler':origin.route,()=>{if(!keepOrigin)relatedOrigin.current=origin.parent||null},{keepOrigin:true,...(source?{stillCurrent:sameChat}:{})});
+  if(!closed&&source&&!sameChat()&&navigationWindow.current===navigation&&!document.hidden){setLocalError('原对话或草稿已切换。未打开其他输入，请从导航重新选择原对话。');return;}
+  const current=()=>navigationWindow.current===navigation+1&&documentEpoch===bridge.getDocumentEpoch()&&!document.hidden&&sameChat();
   if(!closed||!current())return;
   if(origin.projectId&&can('projects.select')&&bridge.getState().state.projectId!==origin.projectId){
    try{await act('projects.select',{id:origin.projectId})}catch{return}
@@ -534,7 +539,7 @@ export default function App(){
    if(!current())return;
    const retained=origin.focus?.isConnected&&!origin.focus.closest('[hidden],[inert]')?origin.focus:null;
    const entry=origin.focusKey?Array.from(workspace.current?.querySelectorAll<HTMLElement>('[data-workspace-entry]')||[]).find(node=>node.dataset.workspaceEntry===origin.focusKey&&!node.closest('[hidden],[inert]')):null;
-   const target=retained||entry||workspace.current?.querySelector<HTMLElement>('.pw-project-overview h2,.pw-secondary-header h1,.pw-app-header h1');
+   const target=retained||entry||(source?chatMenuTrigger.current:null)||workspace.current?.querySelector<HTMLElement>('.pw-project-overview h2,.pw-secondary-header h1,.pw-app-header h1');
    if(target){if(!target.matches('button,a,input,textarea,select,[tabindex]'))target.tabIndex=-1;target.focus({preventScroll:true})}
   });
  };
@@ -1058,9 +1063,11 @@ export default function App(){
    // Outcomes cover the current workspace; closing them must reveal that same route.
    setWorkOpen(false);setCommandOpen(false);
    if(can('attachmentWorkspace.open'))run('attachmentWorkspace.open');
+  }else if(key==='tasks'&&route==='chat'&&!desktopNavigation){
+   const live=bridge.getState();void openRelatedWorkspace('tasks',{...captureWorkspaceOrigin(),focus:null,focusKey:undefined,drawerChat:{id:String(live.state.conversationId||''),draftKey:String(live.composer?.key||''),documentEpoch:bridge.getDocumentEpoch()}});
   }else if(key==='setup')openSetup();
   else navigate(key);
- },[can,run,openSetup,navigate]);
+ },[can,run,route,desktopNavigation,openRelatedWorkspace,openSetup,navigate]);
  const workNav:WorkNavItem[]=useMemo(()=>[
   {key:'butler',label:'管家',icon:IconSparkles,group:'主入口'},
   {key:'tasks',label:'我的工作',icon:IconCalendar,group:'工作',status:attentionTasks.length?'有工作需要处理':undefined},
@@ -1625,6 +1632,7 @@ export default function App(){
     {can('remoteInbox.state')&&Number(state.remoteInbox?.unread||0)>0&&<IconButton icon={IconNotification} aria-label={'通知 · '+state.remoteInbox.unread+' 条未读'} title="通知" onClick={()=>navigate('remoteInbox')}/>}
     {can('conversation.new')&&<IconButton icon={IconNewChat} aria-label="聊件新事" title="聊件新事" disabled={!!state.chatSubmitting} onClick={()=>{void navigate('butler',()=>run('conversation.new'))}}/>}
    </div>:route==='tasks'?<div ref={headerActionsGlass} className="pw-primary-tools pw-navigation-glass" role="group" aria-label="工作目录操作">
+    {!desktopNavigation&&(endedScopeOrigin||relatedOrigin.current)&&navigationTrigger}
     {!taskFiltersOpen&&can('tasks.refresh')&&<IconButton icon={IconRefresh} aria-label="刷新任务" onClick={()=>{taskDirectory.reset();run('tasks.refresh')}}/>}
     {taskFiltersOpen?<IconButton icon={IconClose} aria-label="收起搜索，保留关键词" onClick={closeWorkFind}/>:taskQuery?<IconButton icon={IconClose} aria-label="清除关键词" onClick={()=>{setTaskQuery('');requestAnimationFrame(()=>workspace.current?.querySelector<HTMLElement>('[data-work-search-entry]')?.focus({preventScroll:true}))}}/>:<IconButton icon={IconSearch} data-work-search-entry aria-label="搜索工作" onClick={()=>setTaskFiltersOpen(true)}/>}
    </div>:route==='projects'&&(state.filePath||state.projectTaskReturn?.taskId||relatedOrigin.current)?navigationTrigger:<span className="pw-header-spacer" aria-hidden="true"/>}
