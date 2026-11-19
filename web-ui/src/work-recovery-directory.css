@@ -16,7 +16,7 @@
   .pw-depth-tasks.pw-recovery-directory[data-work-scope-current="all"] .pw-ended-tasks .pw-task-row-summary{-webkit-line-clamp:1;}
   .pw-depth-tasks.pw-recovery-directory .pw-work-ended-heading{margin:0;min-height:var(--pw-control-target);}
 }
-.pw-recovery-directory .pw-task-status-filters{position:sticky;top:var(--pw-navigation-chrome-height,0px);z-index:2;}
+.pw-recovery-directory .pw-task-status-filters{position:sticky;top:0;z-index:2;}
 .pw-recovery-directory .pw-work-attention>h3{color:var(--pw-ink);}
 .pw-depth-tasks.pw-recovery-directory .pw-work-next-step{color:var(--pw-ink);font-weight:550;}
 .pw-depth-tasks.pw-recovery-directory .pw-work-next-step::before{content:"";display:inline-block;height:.75em;border-inline-start:1px solid var(--pw-edge);margin-inline-end:var(--pw-gap-related);}
