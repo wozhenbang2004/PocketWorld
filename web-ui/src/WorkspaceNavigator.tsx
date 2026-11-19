@@ -18,9 +18,9 @@ type Props = {
   profileName: string; avatar?: string; canProfile: boolean; openUnread?: () => void;
 };
 
-const first = ['butler', 'tasks', 'artifacts', 'projects', 'devices'];
+const first = ['butler', 'tasks', 'artifacts', 'remoteInbox', 'projects', 'devices'];
 const directoryGroups: { name: string; keys: readonly string[] }[] = [
-  { name: '跟进与协作', keys: ['remoteInbox', 'automation', 'teams'] },
+  { name: '跟进与协作', keys: ['automation', 'teams'] },
   { name: '我的资料', keys: ['memory', 'media'] },
   { name: '工具与设置', keys: ['capabilities', 'model-settings', 'setup', 'developer-logs'] },
 ];
@@ -32,6 +32,10 @@ const terms: Record<string, string> = {
 };
 const normalize = (text: string) => text.normalize('NFKC').toLocaleLowerCase('en-US').trim();
 const names: Record<string, string> = { devices: '设备', artifacts: '成果' };
+// External unread messages have their own shortcut. The notification route
+// opens all attention sources; presenting that count here implies a false total.
+const withoutUnreadBadge = (item: WorkNavItem): WorkNavItem =>
+  item.key === 'remoteInbox' ? { ...item, count: undefined } : item;
 
 /** The app remains the only route/guard owner. This shell projects the same real
  * items and conversation IDs onto three faces of its existing drawer or desktop rail. */
@@ -45,7 +49,7 @@ export function WorkspaceNavigator({items, selected, recent, selectedConversatio
   const [query, setQuery] = useState(memory.query || ''), [showPinned, setShowPinned] = useState(!!memory.showPinned);
   const [badAvatar, setBadAvatar] = useState<string>();
   const index = useMemo(() => new Map(items.map(i => [i.key, i])), [items]);
-  const home = first.flatMap(key => { const item = index.get(key); return item ? [{ ...item, label: names[key] || item.label, group: '日常工作' }] : []; });
+  const home = first.flatMap(key => { const item = index.get(key); return item ? [{ ...withoutUnreadBadge(item), label: names[key] || item.label, group: '日常工作' }] : []; });
   const directory: WorkNavItem[] = [], used = new Set([...first, 'settings']);
   for (const group of directoryGroups) for (const key of group.keys) {
     used.add(key); const item = index.get(key); if (item) directory.push({ ...item, group: group.name });
@@ -54,7 +58,7 @@ export function WorkspaceNavigator({items, selected, recent, selectedConversatio
   for (const item of items) if (!used.has(item.key)) directory.push({ ...item, group: item.group || '其他功能' });
   const needle = normalize(query);
   const found = needle ? items.filter(i => needle.split(/\s+/).every(t => normalize([i.label, i.group, terms[i.key] || ''].join(' ')).includes(t)))
-    .map(i => ({ ...i, group: '匹配的功能' })) : directory;
+    .map(i => ({ ...withoutUnreadBadge(i), group: '匹配的功能' })) : directory;
   const onDirectoryRoute = directory.find(i => i.key === selected);
   const inbox = index.get('remoteInbox'), unread = Number(inbox?.count || 0);
   const pinned = recent.filter(c => Number(c.pinOrder) > 0), unpinned = recent.filter(c => !(Number(c.pinOrder) > 0)).slice(0, 5);

@@ -18,6 +18,7 @@ import {replyActivityPhase,useReplyRows} from './ConversationReply';
 import {ConversationLinkedReason,ConversationOpening,ConversationStarters,ConversationTurnActivity} from './ConversationSurface';
 import {MotionFeedback,useCollectionMotion} from './library/journey-motion';
 import {useConversationReading} from './useConversationReading';
+import {ConversationReadingNav} from './ConversationReadingNav';
 import {ConversationDelivery,conversationPending,useConversationRegistration} from './ConversationDelivery';
 import {WorkSearch,type WorkSearchItem,type WorkSearchMemory} from './WorkSearch';
 import {WorkSearchOriginalReader} from './WorkSearchOriginalReader';
@@ -73,14 +74,15 @@ import {ComposerSourceReferences,ComposerObjectReferences} from './ComposerSourc
 import {ComposerPreviewReferences} from './ComposerPreviewReferences';
 import {ProjectPreviewPane,useProjectPreview} from './ProjectPreviewPane';
 import {ProjectFileEditor} from './ProjectFileEditor';
-import {ProjectWorkspaceOverview,type ProjectWorkCollectionView} from './ProjectWorkspaceOverview';
+import {ProjectWorkspaceOverview,type ProjectWorkCollectionView,type ProjectWorkEntry} from './ProjectWorkspaceOverview';
 import {ProjectDevelopmentWorkspace} from './ProjectDevelopmentWorkspace';
 import {ProjectWorkStart,emptyProjectWorkDraft,type ProjectWorkDraft} from './ProjectWorkStart';
 import {ProjectWorkLauncher,type ProjectWorkPresentation} from './ProjectWorkLauncher';
 import type {LocalWorkspaceDraft} from './LocalWorkspace';
 import {fileWorkspaceKey,type FileLayer} from './project-file';
 import {useProjectRevision} from './useProjectRevision';
-import {packageOperationTarget,packagePreviewChoices,type PackagePreviewChoices,type PackagePreviewTarget} from './project-preview';
+import {packageOperationTarget,type PackagePreviewTarget} from './project-preview';
+import {useProjectPackageHandoff} from './useProjectPackageHandoff';
 import {TaskOutcome} from './TaskOutcome';
 import {OwnerWorkFacts,WorkGoal} from './OwnerWorkFacts';
 import {OwnerWorkSupplement,type WorkSupplementTarget,type WorkSupplementLeave} from './OwnerWorkSupplement';
@@ -124,7 +126,7 @@ type PhoneReview={reviewHandle:string;goal:string;mode:string;toolLimit:number;m
 type TaskLayer='overview'|'goal'|'process'|'scope';
 type WorkspaceOrigin={route:string;label:string;drawerChat?:{id:string;draftKey:string;documentEpoch:number};settingsDirectory?:SettingsDirectoryOrigin;goal?:string;projectId?:string;contextProjectId?:string;task?:{id:string;layer:TaskLayer};focus?:HTMLElement|null;focusKey?:string;modelPicker?:boolean;parent?:WorkspaceOrigin|null};
 type FileDraft={text:string;baseline:string;version:number;dirty:boolean;submitted?:string};
-type PackageNavigation={id:number;target:PackagePreviewTarget;documentEpoch:number;resumeRevision:number;navigationRevision:number;originalProjectId:string;destinationProjectId?:string;closed:Promise<boolean>};
+type ProjectTaskReturn={projectId:string;taskId:string;entry:ProjectWorkEntry;focusOutcome:boolean};
 const asArray=<T,>(x:any):T[]=>Array.isArray(x)?x:[];
 const obj=(x:any):Json=>x&&typeof x==='object'&&!Array.isArray(x)?x:{};
 const labelStatus=(s:string)=>({queued:'等待执行',preparing:'准备中',running:'执行中',pausing:'正在暂停',paused:'已暂停',stopping:'正在停止',verifying:'正在核对',needs_confirmation:'请确认结果',awaiting_user:'待你处理',waiting_user:'待你处理',waiting_approval:'等待授权',awaiting_approval:'等待授权',interrupted:'已中断',completed:'已完成',failed:'未完成',cancelled:'已停止',canceled:'已停止',stopped:'已停止',waiting_permission:'等待授权',reconciling:'等待核对动作',reconciliation_required:'等待核对动作',unknown:'等待核对动作'} as Record<string,string>)[s]||s||'待处理';
@@ -277,7 +279,7 @@ export default function App(){
  const [phoneViewerExpanded,setPhoneViewerExpanded]=useState(false);
  useEffect(()=>{setPhoneViewerExpanded(false)},[state.conversationId,route,taskId,taskOpen]);
  const projectScroll=useRef<HTMLElement>(null),projectListTop=useRef(new Map<string,number>());
- const projectTaskReturn=useRef<{projectId:string;taskId:string}|null>(null);
+ const projectTaskReturn=useRef<ProjectTaskReturn|null>(null);
  const taskList=useRef<HTMLElement>(null),workListReturn=useRef<(()=>boolean)|null>(null),workDrillFocus=useRef<'origin'|'ended'|null>(null);
  const registerWorkReturn=useCallback((handler:(()=>boolean)|null)=>{workListReturn.current=handler},[]);
  const closeWorkFind=useCallback(()=>{setTaskFiltersOpen(false);requestAnimationFrame(()=>workspace.current?.querySelector<HTMLElement>('[data-work-search-entry]')?.focus({preventScroll:true}))},[]);
@@ -390,7 +392,7 @@ export default function App(){
  const conversationStream=conversationDraft?.text.trim()?conversationDraft:null;
  const {rows:replyRows,continued:wasReplyVisible}=useReplyRows(String(state.conversationId||''),messages,conversationDraft,foregroundTurn as WorkIdentity|null,route==='chat'&&commands.length>0);
  const streamMarker=conversationStream?`${conversationStream.requestId}:${conversationStream.generation}:${conversationStream.sequence}`:'';
- const {content:chatContent,messageList:chatMessageList,hasNewReplies,saveReading,rememberChatPosition,goToLatest,stopFollowing}=useConversationReading({scroll,active:route==='chat',conversationId:String(state.conversationId||''),composer,messages,streamMarker,paused:readingDocuments.length>0||!!messageOriginTarget||!!state.conversationReader||!!state.queuedInputsPage});
+ const {content:chatContent,messageList:chatMessageList,readingNav,saveReading,rememberChatPosition,goToLatest,stopFollowing}=useConversationReading({scroll,active:route==='chat',conversationId:String(state.conversationId||''),composer,messages,streamMarker,paused:readingDocuments.length>0||!!messageOriginTarget||!!state.conversationReader||!!state.queuedInputsPage});
  const openReading=useCallback((document:ReadingSnapshot)=>{rememberChatPosition();const entry={...document,key:++readingSerial.current};setReadingDocuments(previous=>[...previous,entry])},[rememberChatPosition]);
  const activeTask=tasks.find(x=>x.id===state.activeTaskId);const selectedTask=tasks.find(x=>x.id===taskId);const currentProject=projects.find(x=>x.id===state.projectId);const currentConversation=conversations.find(x=>x.id===state.conversationId);
  useEffect(()=>setTaskMenuOpen(false),[taskId,taskOpen,taskLayer,selectedTask?.status,selectedTask?.raw?.runId,selectedTask?.raw?.coordinatorEpoch,personalDocumentEpoch,snapshot?.view?.resumeRevision]);
@@ -530,7 +532,7 @@ export default function App(){
  const openNotifications=(afterNavigate?:()=>void)=>route==='remoteInbox'
   ?navigate('remoteInbox',afterNavigate,{keepOrigin:true})
   :openRelatedWorkspace('remoteInbox',captureNavigationOrigin(),afterNavigate);
- const restoreWorkspace=async(origin:WorkspaceOrigin,keepOrigin=false)=>{
+ const restoreWorkspace=async(origin:WorkspaceOrigin,keepOrigin=false,rereadOriginal=false)=>{
   const navigation=navigationWindow.current,documentEpoch=bridge.getDocumentEpoch();
   const source=origin.drawerChat;
   // Opening the work directory never changes the native composer. Do not select,
@@ -547,7 +549,7 @@ export default function App(){
    try{await act('projects.select',{id:origin.projectId})}catch{return}
   }
   if(!current())return;
-  if(origin.task)openTask(origin.task.id,origin.task.layer);
+  if(origin.task)openTask(origin.task.id,origin.task.layer,false,undefined,rereadOriginal?'':undefined);
   else if(origin.modelPicker)requestAnimationFrame(()=>{if(current())modelPicker.current?.open('models')});
   else if(!origin.settingsDirectory)requestAnimationFrame(()=>{
    if(!current())return;
@@ -696,59 +698,24 @@ export default function App(){
   if(await openRelatedWorkspace('projects')&&navigationWindow.current===navigation+1)run('projects.select',{id:projectId});
  };
  const previewBlocked=!!(searchOriginal||projectWorkReviewOpen||providedMemoryMessage||conversationMemoryOpen||permissionOptionsOpen||organizationTarget||state.attachmentWorkspace?.open||phoneViewerExpanded||workOpen||commandOpen||taskOpen||projectPickerOpen||fileDisplayOpen||newProjectOpen||newFileOpen||phoneReview||voiceReview||state.chatAttachmentPickerOpen||messageQuoteTarget||messageOriginTarget||sourceSelection||skillDraftTarget||memoryDraftTarget||routeReferenceTarget||state.quickPanelVoice);
- const projectPreview=useProjectPreview({value:state.projectPreview,exportValue:state.projectPackageExport,projectId:String(state.projectId||''),resumeRevision:Number(obj(snapshot?.view).resumeRevision||0),active:route==='projects'&&!state.filePath,blocked:previewBlocked,can,onReturned:()=>navigate('chat'),onPackageTask:(id,entry='process')=>openTask(id,entry)});
- const packageSequence=useRef(0),packageNavigation=useRef<PackageNavigation|null>(null);
- const [packageRequest,setPackageRequest]=useState(0),[packageOpening,setPackageOpening]=useState(false),[packageReady,setPackageReady]=useState<{request:PackageNavigation;choices:PackagePreviewChoices}|null>(null);
- const packageLocation=useRef({route,navigationRevision,projectId:String(state.projectId||''),resumeRevision:Number(obj(snapshot?.view).resumeRevision||0),blocked:previewBlocked});
- packageLocation.current={route,navigationRevision,projectId:String(state.projectId||''),resumeRevision:Number(obj(snapshot?.view).resumeRevision||0),blocked:previewBlocked};
- const packageCurrent=(request:PackageNavigation)=>{const now=packageLocation.current;return packageNavigation.current===request&&!document.hidden&&bridge.getDocumentEpoch()===request.documentEpoch&&now.resumeRevision===request.resumeRevision&&now.route==='projects'&&now.navigationRevision===request.navigationRevision&&!now.blocked&&(now.projectId===request.originalProjectId||!!request.destinationProjectId&&now.projectId===request.destinationProjectId)};
- const cancelPackageNavigation=()=>{packageNavigation.current=null;setPackageOpening(false);setPackageReady(null)};
- const openTaskPackage=(target:PackagePreviewTarget)=>{
-  if(packageNavigation.current||taskOpening||!can('projects.package.preview.inspect')||!can('projects.package.preview.open')||!can('tasks.close'))return;
-  const id=++packageSequence.current,closed=navigate('projects');
-  packageNavigation.current={id,target,closed,documentEpoch:bridge.getDocumentEpoch(),resumeRevision:Number(obj(snapshot?.view).resumeRevision||0),navigationRevision:navigationRevision+1,originalProjectId:String(state.projectId||'')};
-  setPackageReady(null);setPackageOpening(true);setPackageRequest(id);
+ const packageReturn=useRef<{target:PackagePreviewTarget;origin:WorkspaceOrigin;epoch:number;navigation:number;projectFocus:ProjectTaskReturn|null}|null>(null);
+ const returnFromPackage=(id:string,operationId?:string)=>{
+  const saved=packageReturn.current;
+  if(saved&&saved.target.taskId===id&&saved.target.operationId===operationId&&saved.epoch===bridge.getDocumentEpoch()&&saved.navigation===navigationWindow.current){
+   packageReturn.current=null;projectTaskReturn.current=saved.projectFocus?{...saved.projectFocus,focusOutcome:false}:null;
+   void restoreWorkspace(saved.origin,false,true);
+  }else openTask(id,operationId?'overview':'review',false,undefined,operationId?'':undefined);
  };
- useEffect(()=>{
-  const request=packageNavigation.current;if(!request||request.id!==packageRequest)return;
-  let mounted=true;
-  void(async()=>{
-   if(!await request.closed)throw new Error('原任务窗口尚未关闭，请回原任务核对后再打开固定包。');
-   if(!mounted||!packageCurrent(request))return;
-   const result=await bridge.command('projects.package.preview.inspect',request.target);
-   if(!mounted||!packageCurrent(request))return;
-   const choices=packagePreviewChoices(result,request.target);
-   if(!choices)throw new Error('固定包描述与原任务操作不符，未切换到另一份成果。');
-   request.destinationProjectId=choices.projectId;
-   const observed=bridge.getState().state;
-   if(observed.projectId!==choices.projectId||observed.filePath){
-    if(!can('projects.select'))throw new Error('原项目导航暂不可用，草稿仍保留。');
-    await bridge.command('projects.select',{id:choices.projectId});
-   }
-   if(!mounted||!packageCurrent(request))return;
-   await new Promise<void>((resolve,reject)=>{
-    let unsubscribe=()=>{};const timer=window.setTimeout(()=>{unsubscribe();reject(new Error('尚未读取到原项目页面，未再次打开或开始工作。'))},5000);
-    const check=()=>{if(!mounted||!packageCurrent(request)){clearTimeout(timer);unsubscribe();resolve();return}const latest=bridge.getState().state;if(latest.projectId===choices.projectId&&!latest.filePath&&asArray<Json>(latest.projects).some(project=>project.id===choices.projectId)){clearTimeout(timer);unsubscribe();resolve()}};
-    unsubscribe=bridge.subscribe(check);check();
-   });
-   if(mounted&&packageCurrent(request))setPackageReady({request,choices});
-  })().catch(error=>{if(mounted&&packageCurrent(request)){cancelPackageNavigation();toast.error(error instanceof Error?error.message:String(error),{id:'project-package-error'})}});
-  return()=>{mounted=false};
- },[packageRequest]);
- useEffect(()=>{
-  const request=packageNavigation.current;if(request&&!packageCurrent(request))cancelPackageNavigation();
- },[route,navigationRevision,state.projectId,snapshot?.view?.resumeRevision,previewBlocked]);
- useEffect(()=>{
-  // Native can acknowledge tasks.close before React commits our own route change.
-  // Only native lifecycle facts are synchronous; local navigation is checked above after render.
-  const invalidate=()=>{const request=packageNavigation.current;if(request&&(document.hidden||bridge.getDocumentEpoch()!==request.documentEpoch||Number(obj(bridge.getState().view).resumeRevision||0)!==request.resumeRevision))cancelPackageNavigation()};
-  const unsubscribe=bridge.subscribe(invalidate);document.addEventListener('visibilitychange',invalidate);
-  return()=>{unsubscribe();document.removeEventListener('visibilitychange',invalidate);packageNavigation.current=null};
- },[]);
- useEffect(()=>{
-  if(!packageReady||!packageCurrent(packageReady.request)||state.projectId!==packageReady.choices.projectId||state.filePath||!projects.some(project=>project.id===packageReady.choices.projectId))return;
-  if(projectPreview.showPackage(packageReady.choices))cancelPackageNavigation();
- },[packageReady,state.projectId,state.filePath,projects,route,previewBlocked]);
+ const projectPreview=useProjectPreview({value:state.projectPreview,exportValue:state.projectPackageExport,projectId:String(state.projectId||''),resumeRevision:Number(obj(snapshot?.view).resumeRevision||0),active:route==='projects'&&!state.filePath,blocked:previewBlocked,can,onReturned:()=>navigate('chat'),onPackageTask:returnFromPackage});
+ const packageHandoff=useProjectPackageHandoff({route,navigationRevision,projectId:String(state.projectId||''),blocked:previewBlocked,
+  navigation:()=>navigationWindow.current,supported:can,show:projectPreview.showPackage,error:message=>toast.error(message,{id:'project-package-error'}),
+  leaveTask:stillCurrent=>navigate('projects',undefined,{keepOrigin:true,stillCurrent})});
+ const packageOpening=packageHandoff.opening;
+ const openTaskPackage=(target:PackagePreviewTarget)=>{
+  if(!taskOpen||taskOpening||taskId!==target.taskId||openedTaskId.current!==target.taskId)return;
+  const origin=captureNavigationOrigin(),projectFocus=projectTaskReturn.current,epoch=bridge.getDocumentEpoch();
+  packageHandoff.open(target,()=>{packageReturn.current={target,origin,projectFocus,epoch,navigation:navigationWindow.current}});
+ };
  const previewRefsUnavailable=asArray<Json>(composer.previewRefs).length>0&&composer.previewRefsAvailable!==true;
  const previousRequestedTask=useRef(0),previousRequestedProject=useRef(0),previousRequestedConnection=useRef(0);
  useEffect(()=>{
@@ -1059,6 +1026,12 @@ export default function App(){
  };
  const taskDirectory=useWorkDirectory({tasks,query:taskQuery,filter:filter as WorkCollectionFilter,enabled:ready&&route==='tasks'&&can('work.tasks.list'),identity:`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}`,scrollRef:taskList});
  const projectDirectory=useWorkDirectory({tasks,projectId:String(state.projectId||''),query:projectWorkView.query,filter:projectWorkView.filter,enabled:ready&&route==='projects'&&!!state.projectId&&!state.filePath&&projectSection==='work'&&!projectPreview.expanded&&can('work.tasks.list'),identity:`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}`,scrollRef:projectScroll});
+ useLayoutEffect(()=>{
+  const origin=projectTaskReturn.current;
+  if(!origin?.focusOutcome||origin.taskId!==taskId||!taskOpen||taskOpening||taskLayer!=='overview'||openedTaskId.current!==taskId||snapshot?.view?.taskId!==taskId)return;
+  const outcome=taskScroll.current?.querySelector<HTMLElement>('.pw-task-outcome');
+  if(outcome){origin.focusOutcome=false;outcome.tabIndex=-1;outcome.focus({preventScroll:true});outcome.scrollIntoView({block:'start',behavior:'instant'})}
+ },[taskOpen,taskOpening,taskId,taskLayer,selectedTask?.id,snapshot?.view?.taskId]);
  const drillEndedWork=()=>{
   if(taskList.current)taskDirectory.rememberScroll(taskList.current.scrollTop);
   setEndedScopeOrigin({filter:filter as WorkCollectionFilter,query:taskQuery});setTaskFiltersOpen(false);
@@ -1263,6 +1236,7 @@ export default function App(){
   const overviewActive=taskOpen&&!taskOpening&&openedTaskId.current===task.id&&taskLayer==='overview';
   const taskFiles=obj(snapshot?.view).taskId===task.id&&task.raw?.actorId==='owner'&&task.raw?.spaceId==='private'&&task.raw?.contextAvailable!==false&&task.raw?.taskProjection!=='source_unavailable'&&task.raw?.kind!=='inference'&&can('attachmentWorkspace.open')
    ? {taskId:task.id,supported:can('tasks.resultFiles'),onOpen:(file:TaskResultFile,target:HTMLButtonElement)=>openTaskResultFile(task.id,file,target),
+      onOriginalRequest: privateTaskConversationId(task) && can('conversation.select') && !state.chatSubmitting && !returningConversation ? () => void returnToTaskConversation(task) : undefined,
       onBrowse:()=>run('attachmentWorkspace.open',{taskId:task.id})}
    : undefined;
   const latestProgress=stage==='running'&&running(task)&&<section key="task-current-progress" className="pw-work-current-progress">
@@ -1463,7 +1437,7 @@ export default function App(){
     </Button>
     {replyStop}
    </div>}
-   {route==='chat'&&hasNewReplies&&<Button variant="secondary" className="pw-new-replies" onClick={goToLatest}>有新回复 · 回到最新</Button>}
+   {route==='chat'&&<ConversationReadingNav {...readingNav}/>}
    {route==='chat'&&chatAttention&&<Button variant="ghost" className="pw-chat-attention" data-task-id={chatAttention.id} trailingIcon={IconChevronRight} aria-label={`${can('tasks.review')?taskActionLabel(chatAttention):'查看任务'}：${chatAttention.goal}`} disabled={taskOpening} onClick={()=>openTask(chatAttention.id,can('tasks.review')?'review':'overview')}><span className="pw-chat-attention-copy"><small>{can('tasks.review')?taskActionLabel(chatAttention):'查看任务'}</small><b>{chatAttention.goal}</b></span></Button>}
    {route==='chat'&&ready&&messages.length>0&&!composerModelName&&<div className="pw-butler-model-setup">{modelSetupAction}</div>}
    {intent==='chat'&&<ComposerSourceReferences key={`${draftKey}:${draftEpoch}`} composer={composer} disabled={!!state.chatSubmitting||!can('composer.source.remove')}/>}
@@ -1513,7 +1487,7 @@ export default function App(){
   onSetup={can('setup.read')?kind=>{void openSetup(kind==='phone'?'phone':'tools')}:undefined}/>;
  const chatNavigation=!desktopNavigation&&<ChatNavigationMenu title={messages.length?currentTitle:'与管家对话'} navigationTrigger={<IconButton ref={chatBackGlass} icon={IconArrowLeft} className="pw-chat-glass-trigger" aria-label="返回管家" onClick={()=>navigate('butler')}/>} onHome={()=>navigate('butler')} isOpen={chatMenuOpen} onOpenChange={setChatMenuOpen} triggerRef={chatMenuTrigger} submitting={!!state.chatSubmitting} unread={can('remoteInbox.state')?Number(state.remoteInbox?.unread||0):0} onNewConversation={can('conversation.new')?()=>{void navigate('butler',()=>run('conversation.new'))}:undefined} onConversations={trigger=>{navigationReturnFocus.current=trigger;showWorkSearch()}} onNavigation={()=>{navigationReturnFocus.current=chatMenuTrigger.current;setCommandOpen(false);setWorkOpen(true)}} onOrganize={currentConversation&&can('conversation.organization.read')?()=>setOrganizationTarget(currentConversation.id):undefined} onMemory={state.conversationId&&can('profile.conversation.read')?()=>setConversationMemoryOpen(true):undefined} onNotifications={can('remoteInbox.state')?()=>{void openNotifications()}:undefined} onSettings={()=>navigate('settings')}/>;
  const chatPage=<main className={`pw-chat-workspace${ready&&!messages.length&&!foregroundTurn?' pw-chat-empty':''}`}>
-  <div ref={scroll} className="pw-conversation-scroll" data-conversation-id={String(state.conversationId||'')} onScroll={saveReading} aria-label="当前对话消息"><div ref={chatContent} className="pw-conversation-content">
+  <div ref={scroll} tabIndex={-1} className="pw-conversation-scroll" data-conversation-id={String(state.conversationId||'')} onScroll={saveReading} aria-label="当前对话消息"><div ref={chatContent} className="pw-conversation-content">
    {ready&&messages.length>0&&state.conversationId&&can('conversation.reader.open')&&<Button variant="ghost" size="small" leadingIcon={IconHistory} onClick={()=>run('conversation.reader.open',{conversationId:state.conversationId})}>浏览对话记录</Button>}
    {!ready?<div className="pw-start"><AgentAvatar agentId="main" state="idle" size={40}/><ShimmerText>正在恢复当前工作</ShimmerText><div className="pw-loading-copy" aria-hidden="true"><Skeleton width="68%" height={13}/><Skeleton width="92%" height={13}/><Skeleton width="80%" height={13}/></div></div>:!messages.length&&!foregroundTurn?<ConversationOpening setup={!composerModelName?modelSetupAction:undefined}
     editing={editingChat} pending={pendingHere} onDraft={stageExample}/>:null}
@@ -1608,7 +1582,8 @@ export default function App(){
     <Tabs selectedKey={projectPreview.expanded?'preview':projectSection} onSelectionChange={key=>{if(key==='preview')projectPreview.open();else showProjectSection(key==='files'?'files':'work')}} className="pw-project-tabs">
       <TabList aria-label="项目工作方式"><Tab id="work" icon={IconLayers}>工作</Tab><Tab id="files" icon={IconFolder}>文件</Tab><Tab id="preview" icon={IconPlay} isDisabled={!can('projects.preview')&&!projectPreview.expanded}>预览</Tab></TabList>
       <TabPanel id="work" shouldForceMount hidden={projectSection!=='work'||projectPreview.expanded}>
-       <ProjectWorkspaceOverview project={currentProject} directory={projectDirectory} view={projectWorkView} onViewChange={updateProjectWorkView} directoryAvailable={can('work.tasks.list')} canOpenTask={can('tasks.open')} onOpenTask={id=>{projectTaskReturn.current={projectId:currentProject.id,taskId:id};openTask(id)}} onOpenFiles={()=>showProjectSection('files')} onOpenPreview={projectPreview.open} onOpenTerminal={()=>void openRelatedWorkspace('local')} canPreview={can('projects.preview')} onAskButler={can('composer.object.add')?()=>askButlerAbout({kind:'project',id:currentProject.id}):undefined}
+       <ProjectWorkspaceOverview project={currentProject} directory={projectDirectory} view={projectWorkView} onViewChange={updateProjectWorkView} directoryAvailable={can('work.tasks.list')} canOpenTask={can('tasks.open')} canReview={can('tasks.review')} canContinue={task=>can(task.raw?.executionRole==='owner_work'?'ownerWork.control':'tasks.resume')}
+        onOpenTask={(id,entry,query)=>{projectTaskReturn.current={projectId:currentProject.id,taskId:id,entry,focusOutcome:entry==='outcomes'};openTask(id,entry==='outcomes'?'overview':entry,false,undefined,query)}} onOpenTerminal={()=>void openRelatedWorkspace('local')} onAskButler={can('composer.object.add')?()=>askButlerAbout({kind:'project',id:currentProject.id}):undefined}
         startContent={can('projects.development.read')||can('projectWork.open')&&can('projectWork.confirm')?<ProjectWorkLauncher key={currentProject.id}
           active={route==='projects'&&!taskOpen&&!state.filePath&&projectSection==='work'&&!projectPreview.expanded&&!projectPickerOpen&&!newProjectOpen&&!newFileOpen&&!workOpen&&!commandOpen}
           resumeProfile={!!projectWorkDrafts[currentProject.id]?.operation}
@@ -1670,8 +1645,9 @@ export default function App(){
    const origin=projectTaskReturn.current;projectTaskReturn.current=null;
    if(!origin||taskOpen||route!=='projects'||state.projectId!==origin.projectId||state.filePath||projectSection!=='work'||projectPreview.expanded)return;
    const overview=projectScroll.current?.querySelector<HTMLElement>('.pw-project-overview');
-   const row=Array.from(overview?.querySelectorAll<HTMLElement>('[data-task-id]')||[]).find(node=>node.dataset.taskId===origin.taskId);
-   const target=row?.querySelector<HTMLElement>('button:not(:disabled)')||overview?.querySelector<HTMLElement>('input:not(:disabled),h2');
+   const row=Array.from(overview?.querySelectorAll<HTMLElement>('[data-project-task-id]')||[]).find(node=>node.dataset.projectTaskId===origin.taskId);
+   const buttons=Array.from(row?.querySelectorAll<HTMLElement>('button:not(:disabled)')||[]);
+   const target=buttons.find(button=>button.dataset.workEntry===origin.entry)||buttons[0]||overview?.querySelector<HTMLElement>('input:not(:disabled),h2');
    if(target){event.preventDefault();if(target.tagName==='H2')target.tabIndex=-1;target.focus({preventScroll:true})}
   }} onEscapeKeyDown={event=>{if(taskMenuOpen){event.preventDefault();setTaskMenuOpen(false)}}}><header className="pw-drawer-header pw-task-header">
    <IconButton icon={IconArrowLeft} aria-label={taskLayer==='scope'?'返回工作目标':taskReconciliationOrigin.current?.openedId===taskId?'返回原工作':'返回原页面'} onClick={backFromTask}/>

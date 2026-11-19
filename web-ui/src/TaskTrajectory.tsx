@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { IconClock, IconClose, IconList, IconRefresh } from './icons';
 import { bridge } from './bridge';
 import { Accordion, AccordionItem, Button, IconButton, SearchField } from './forms-library';
@@ -33,6 +33,10 @@ function metadataOnly(node: TraceNode): TraceNode {
 /** The native source has independent page/detail slots. Complete the bounded
  * compact pages in sequence, keeping node identity stable while live data grows. */
 function useTraceWindow(task: TaskHeader, selectedRun: string, active: boolean, canRead: boolean, documentEpoch: number) {
+  const currentRun = typeof task.raw?.runId === 'string' ? task.raw.runId : '';
+  const requestedRun = selectedRun || currentRun;
+  const expectedEpoch = !selectedRun && currentRun && Number.isSafeInteger(task.raw?.coordinatorEpoch)
+    ? Number(task.raw?.coordinatorEpoch) : undefined;
   const scope = JSON.stringify([taskHistoryIdentity(task), selectedRun, documentEpoch]);
   const [visible, setVisible] = useState(() => !document.hidden);
   const [loaded, setLoaded] = useState<TraceWindow | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState('');
@@ -72,7 +76,9 @@ function useTraceWindow(task: TaskHeader, selectedRun: string, active: boolean, 
     const ownsWindow = () => alive.current && current.current.enabled && current.current.scope === scope && request.current === ticket;
     const valid = () => ownsWindow() && bridge.getDocumentEpoch() === documentEpoch;
     try {
-      let cursor = '', runId = selectedRun, epoch: number | undefined, pages = 0, limited = false;
+      // 'Current' in the visible work must not silently become a newer native
+      // attempt while the original header and checkpoint are still displayed.
+      let cursor = '', runId = requestedRun, epoch = expectedEpoch, pages = 0, limited = false;
       let collected: TraceNode[] = [], head: ExecutionTracePage | undefined;
       const prior: string[] = [];
       do {
@@ -105,7 +111,7 @@ function useTraceWindow(task: TaskHeader, selectedRun: string, active: boolean, 
         queuedRefresh.current = null; void readRef.current(false);
       }
     }
-  }, [scope, selectedRun, task.id, documentEpoch]);
+  }, [scope, requestedRun, expectedEpoch, task.id, documentEpoch]);
   const readRef = useRef(read); readRef.current = read;
   const live = !selectedRun && traceInProgress(task.status);
   useEffect(() => {
@@ -292,7 +298,7 @@ function TraceDetails({ selection, page, complete, close, active }: { selection:
   </Drawer.NestedRoot>;
 }
 
-export function TaskTrajectory({ task, active, canRead, registerTransientBack }: { task: TaskHeader; active: boolean; canRead: boolean; registerTransientBack?: (handler: (() => boolean) | null) => void }) {
+export function TaskTrajectory({ task, active, canRead, registerTransientBack, currentCheckpoint }: { task: TaskHeader; currentCheckpoint?: ReactNode; active: boolean; canRead: boolean; registerTransientBack?: (handler: (() => boolean) | null) => void }) {
   const documentEpoch = useSyncExternalStore(bridge.subscribe, bridge.getDocumentEpoch, bridge.getDocumentEpoch);
   const [popoverContainer, setPopoverContainer] = useState<Element>();
   const bindRoot = useCallback((element: HTMLElement | null) => { if (element) setPopoverContainer(element.closest('[role="dialog"]') || undefined); }, []);
@@ -343,7 +349,8 @@ export function TaskTrajectory({ task, active, canRead, registerTransientBack }:
   const select = (node: TraceNode) => { if (page) setSelection({ node, taskId: task.id, runId: page.runId, epoch: page.epoch, documentEpoch }); };
   const locate = (node: TraceNode) => { setQuery(''); setFilter('all'); setViewMode('events'); setHighlighted(node.id); setLocateTicket(value => value + 1); };
   const runs = page?.runs || [], currentRunId = typeof task.raw?.runId === 'string' ? task.raw.runId : '';
-  return <section ref={bindRoot} className="pw-execution-trace" aria-label="执行调用轨迹" aria-busy={readWindow.busy} data-completeness={complete ? 'complete' : readWindow.view?.backfilling ? 'loading' : 'partial'}>
+  return <>{!selectedRun && currentCheckpoint}
+    <section ref={bindRoot} className="pw-execution-trace" aria-label="执行调用轨迹" aria-busy={readWindow.busy} data-completeness={complete ? 'complete' : readWindow.view?.backfilling ? 'loading' : 'partial'}>
     <header className="pw-trace-toolbar">
       <Select aria-label="选择执行记录" selectedKey={selectedRun || 'current'} onSelectionChange={key => chooseRun(key === 'current' ? '' : String(key))}
         triggerClassName="pw-trace-run-trigger" popoverClassName="pw-trace-run-popover" popoverContainer={popoverContainer} className="pw-trace-run-select" isDisabled={!canRead}>
@@ -378,5 +385,5 @@ export function TaskTrajectory({ task, active, canRead, registerTransientBack }:
     </>}
     {!page && canRead && !readWindow.busy && !readWindow.error && <p className="pw-trace-note">打开此页后读取原任务轨迹。</p>}
     <TraceDetails selection={selected} page={page} complete={complete} close={close} active={active && readWindow.enabled}/>
-  </section>;
+  </section></>;
 }

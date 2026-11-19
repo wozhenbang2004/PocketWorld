@@ -148,7 +148,7 @@ internal class PocketWebWorkSearch(
         fields(args, if (conversationResult == null) setOf("taskId") else setOf("taskId", "conversationId", "resultMessageId"))
         val taskId = args.opt("taskId") as? String ?: error("原工作身份缺失")
         require(taskId.isNotBlank() && taskId.length <= 240 && taskId == taskId.trim() && '\u0000' !in taskId) { "原工作身份无效" }
-        fun requireVisibleTask() {
+        fun requireVisibleTask(): JSONObject {
             control.check()
             val task = host.tasks.getForUi(taskId, false) ?: error("原工作已不可读取")
             check(task.optString("id") == taskId && task.optString("actorId") == "owner" && task.optString("spaceId") == "private" &&
@@ -156,6 +156,7 @@ internal class PocketWebWorkSearch(
                 task.optString("taskProjection") != "source_unavailable" && task.optBoolean("contextAvailable", true)) { "原工作来源已不可读取" }
             if (conversationResult != null) check(conversationResult.taskId == taskId && task.optString("runId") == conversationResult.runId &&
                 task.optInt("coordinatorEpoch") == conversationResult.epoch && task.optString("status") == "completed") { "原任务状态已变化，请打开当前工作核对成果" }
+            return task
         }
         requireVisibleTask()
         val snapshot = host.ownerOutcomeSnapshot(taskId, control)
@@ -166,15 +167,26 @@ internal class PocketWebWorkSearch(
         val available = artifacts.filter { it.optString("sourceTaskId") == taskId && it.optString("availability") == "available" }
             .sortedBy { it.optString("runProvenance") != "current" }
         val limit = 8
+        fun fileHeader(file: JSONObject) = JSONObject().put("id", file.getString("id")).put("sha256", file.getString("sha256"))
+            .put("name", file.getString("name")).put("mimeType", file.getString("mimeType")).put("size", file.getLong("size"))
         val files = JSONArray()
-        available.take(limit).forEach { file ->
-            files.put(JSONObject().put("id", file.getString("id")).put("sha256", file.getString("sha256"))
-                .put("name", file.getString("name")).put("mimeType", file.getString("mimeType")).put("size", file.getLong("size"))
-                .put("runProvenance", file.optString("runProvenance", "unrecorded")))
-        }
-        requireVisibleTask()
-        return JSONObject().put("taskId", taskId).put("files", files).put("readLimited",
+        available.take(limit).forEach { file -> files.put(fileHeader(file).put("runProvenance", file.optString("runProvenance", "unrecorded"))) }
+        val page = JSONObject().put("taskId", taskId).put("files", files).put("readLimited",
             snapshot.getJSONObject("indexDiagnostics").getBoolean("incomplete") || artifacts.size != available.size || available.size > limit)
+        val current = requireVisibleTask()
+        if (conversationResult == null) {
+            // Only the original private work can offer inputs. A chat completion receipt
+            // remains scoped to that run's outputs, even for a work with input but no output.
+            val sources = snapshot.getJSONArray("sources").objects()
+            val readable = sources.filter { it.optString("availability") == "available" }
+            val sourceLimit = 4
+            val inputs = JSONArray()
+            readable.take(sourceLimit).forEach { inputs.put(fileHeader(it)) }
+            page.put("sourceFiles", inputs).put("moreSourceFiles", readable.size > sourceLimit)
+                .put("sourceUnavailable", readable.size < sources.size)
+                .put("hasRequestAttachments", current.optJSONObject("ownerWork")?.optBoolean("hasInitialAttachments") == true)
+        }
+        return page
     }
 
     private fun search(args: JSONObject, control: RunControl): JSONObject {

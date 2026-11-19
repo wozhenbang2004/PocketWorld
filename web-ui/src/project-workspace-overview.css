@@ -80,3 +80,13 @@
   .pw-project-work-meta { justify-content: flex-start; }
   .pw-project-overview .pw-project-work-row > span { gap: 9px; }
 }
+
+/* The status and its related saved result stay on the same work row.
+ * Files and preview already have project tabs; the terminal is a secondary tool. */
+.pw-redesign .pw-project-work-list.pw-depth-tasks { padding: 0; }
+.pw-project-work-list li + li { border-top: 1px solid var(--pw-edge); }
+.pw-project-work-list .pw-follow-row { border-bottom: 0; }
+.pw-project-work-list .pw-task-row-meta { white-space: normal; }
+.pw-project-work-list li[data-selected] > .pw-follow-row { background: var(--pw-inset); }
+.pw-project-work-list .pw-project-result-link { margin-inline-start: 30px; max-width: calc(100% - 30px); min-height: 44px; }
+.pw-project-overview .pw-project-terminal-link { margin-top: 16px; min-height: 44px; }

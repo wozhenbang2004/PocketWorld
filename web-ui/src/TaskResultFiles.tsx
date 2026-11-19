@@ -1,47 +1,67 @@
-import { useEffect, useId, useState, type MouseEvent } from 'react';
+import { useEffect, useId, useState, useSyncExternalStore, type MouseEvent } from 'react';
 import { fileBytes, fileRunProvenance } from './attachment-workspace';
 import { bridge } from './bridge';
-import { Button } from './forms-library';
+import { Accordion, AccordionItem, Button } from './forms-library';
 import { IconChevronRight, IconFile } from './icons';
 
 export type TaskResultFile = { id: string; sha256: string; name: string; mimeType: string; size: number; runProvenance?: 'current' | 'earlier' | 'unrecorded' };
 
-type FilePage = { key: string; files: TaskResultFile[]; limited: boolean; error?: string };
+type FilePage = { key: string; files: TaskResultFile[]; sources: TaskResultFile[]; limited: boolean; sourceUnavailable?: boolean; hasRequestAttachments?: boolean; error?: string };
 
-export function TaskResultFiles({ taskId, active, supported, readIdentity, onOpen, onBrowse }: {
+function usableFile(value: unknown): value is TaskResultFile {
+  if (!value || typeof value !== 'object') return false;
+  const file = value as Partial<TaskResultFile>;
+  return typeof file.id === 'string' && !!file.id && file.id.length <= 240 && !file.id.includes('\0') &&
+    typeof file.sha256 === 'string' && /^[a-f0-9]{64}$/.test(file.sha256) && typeof file.name === 'string' && !!file.name &&
+    typeof file.mimeType === 'string' && typeof file.size === 'number' && Number.isSafeInteger(file.size) && file.size >= 0;
+}
+
+export function TaskResultFiles({ taskId, active, supported, readIdentity, onOpen, onBrowse, onOriginalRequest }: {
   taskId: string;
   active: boolean;
   supported: boolean;
   readIdentity: string;
   onOpen: (file: TaskResultFile, target: HTMLButtonElement) => void;
   onBrowse: () => void;
+  onOriginalRequest?: () => void;
 }) {
   const heading = useId();
   const [page, setPage] = useState<FilePage | null>(null);
   const [retry, setRetry] = useState(0);
-  const key = JSON.stringify([taskId, readIdentity, retry]);
+  const [expandedSources, setExpandedSources] = useState('');
+  const windowEpoch = useSyncExternalStore(bridge.subscribe, () => {
+    const view = bridge.getState().view as { taskId?: string; section?: string };
+    return !view?.section && view?.taskId === taskId ? bridge.getDocumentEpoch() : -1;
+  });
+  const key = JSON.stringify([taskId, windowEpoch, readIdentity, retry]);
   const current = page?.key === key ? page : null;
   const busy = active && supported && !current;
   useEffect(() => {
-    if (!active || !supported) return;
+    if (!active || !supported || windowEpoch < 0) return;
     let alive = true;
     let sequence = 0;
-    const epoch = bridge.getDocumentEpoch();
     const read = () => {
       const request = ++sequence;
-      if (document.hidden) return;
       const stillOpen = () => {
-        const view = bridge.getState().view as { taskId?: string } | undefined;
-        return alive && sequence === request && !document.hidden && bridge.getDocumentEpoch() === epoch && view?.taskId === taskId;
+        const view = bridge.getState().view as { taskId?: string; section?: string } | undefined;
+        return alive && sequence === request && !document.hidden && bridge.getDocumentEpoch() === windowEpoch && !view?.section && view?.taskId === taskId;
       };
+      if (!stillOpen()) return;
       void bridge.command('tasks.resultFiles', { taskId }).then(value => {
         if (!stillOpen()) return;
         if (value?.taskId !== taskId || !Array.isArray(value.files) || value.files.length > 8 || typeof value.readLimited !== 'boolean') {
           throw new Error('文件列表与原工作不符，请重新读取。');
         }
-        setPage({ key, files: value.files, limited: value.readLimited });
+        // Older hosts only returned outputs. Never infer inputs from a message body or filename.
+        const sources: unknown = value.sourceFiles === undefined ? [] : value.sourceFiles;
+        if (!Array.isArray(sources) || sources.length > 4) throw new Error('来源文件尚未核对，请到原工作文件查看。');
+        const files: TaskResultFile[] = value.files.filter(usableFile);
+        const inputs = sources.filter(usableFile);
+        setPage({ key, files, sources: inputs, sourceUnavailable: value.sourceUnavailable === true || inputs.length !== sources.length,
+          hasRequestAttachments: value.hasRequestAttachments === true,
+          limited: value.readLimited || files.length !== value.files.length || value.moreSourceFiles === true });
       }).catch(error => {
-        if (stillOpen()) setPage({ key, files: [], limited: false, error: error instanceof Error ? error.message : '无法读取这件工作的文件。' });
+        if (stillOpen()) setPage({ key, files: [], sources: [], limited: false, error: error instanceof Error ? error.message : '无法读取这件工作的文件。' });
       });
     };
     read();
@@ -50,22 +70,36 @@ export function TaskResultFiles({ taskId, active, supported, readIdentity, onOpe
       alive = false;
       document.removeEventListener('visibilitychange', read);
     };
-  }, [active, supported, key, taskId]);
+  }, [active, supported, key, taskId, windowEpoch]);
 
-  if (supported && !busy && current && !current.files.length && !current.limited && !current.error) return null;
-  return <section className="pw-outcome-deliverables" aria-labelledby={heading} aria-busy={busy || undefined}>
-    <div className="pw-reading-section-heading"><h4 id={heading}>工作文件</h4></div>
-    {busy && <p className="pw-reading-note" role="status">正在读取已保存的文件…</p>}
-    {current?.error && <p className="pw-reading-note pw-error" role="alert">{current.error}</p>}
-    {current?.files.length ? <div className="pw-outcome-files">{current.files.map(file => {
-      const metadata = `${fileRunProvenance(file.runProvenance) || '生成轮次未记录'} · ${fileBytes(file.size)}`;
+  if (windowEpoch < 0) return null;
+  const outputs = current?.files ?? [], sources = current?.sources ?? [];
+  const hasSources = !!(sources.length || current?.sourceUnavailable || current?.hasRequestAttachments);
+  if (supported && !busy && current && !outputs.length && !hasSources && !current.limited && !current.error) return null;
+  const fileList = (items: TaskResultFile[], input: boolean) => <div className="pw-outcome-files">{items.map(file => {
+      const metadata = input ? fileBytes(file.size) : `${fileRunProvenance(file.runProvenance) || '生成轮次未记录'} · ${fileBytes(file.size)}`;
       return <Button key={`${file.id}:${file.sha256}`} variant="secondary" className="pw-outcome-file" leadingIcon={IconFile} trailingIcon={IconChevronRight}
-        aria-label={`打开原件：${file.name}，${metadata}`} disabled={!active} onClick={(event: MouseEvent<HTMLButtonElement>) => onOpen(file, event.currentTarget)}>
+        aria-label={`${input ? '打开来源文件' : '打开原件'}：${file.name}，${metadata}`} disabled={!active} onClick={(event: MouseEvent<HTMLButtonElement>) => onOpen(file, event.currentTarget)}>
         <span className="pw-outcome-file-copy"><span dir="auto">{file.name}</span><small>{metadata}</small></span>
       </Button>;
-    })}</div> : null}
-    {current?.limited && <p className="pw-reading-note" role="status">部分文件未在此处列出。</p>}
-    {(!supported || current?.limited || current?.error) && <div className="pw-action-row">
+    })}</div>;
+  const sourceContent = <>
+    {sources.length > 0 && fileList(sources, true)}
+    {current?.sourceUnavailable && <p className="pw-reading-note" role="status">有来源文件的原版本暂不可读取。</p>}
+    {current?.hasRequestAttachments && (onOriginalRequest
+      ? <Button variant="ghost" disabled={!active} onClick={onOriginalRequest}>回原话题找交办附件</Button>
+      : <p className="pw-reading-note">交办消息含有附件，可回原话题查看。</p>)}
+  </>;
+  return <section className="pw-outcome-deliverables" aria-labelledby={heading} aria-busy={busy || undefined}>
+    <div className="pw-reading-section-heading"><h4 id={heading}>{outputs.length ? '已保存的文件' : hasSources ? '来源文件' : '工作文件'}</h4></div>
+    {busy && <p className="pw-reading-note" role="status">正在读取工作文件…</p>}
+    {current?.error && <p className="pw-reading-note pw-error" role="alert">{current.error}</p>}
+    {outputs.length > 0 && fileList(outputs, false)}
+    {hasSources && (outputs.length ? <Accordion variant="divided" className="pw-reading-disclosures"
+      expandedKeys={expandedSources === taskId ? ['source-files'] : []} onExpandedChange={keys => setExpandedSources(keys.has('source-files') ? taskId : '')}>
+      <AccordionItem id="source-files" title="来源文件">{sourceContent}</AccordionItem></Accordion> : sourceContent)}
+    {current?.limited && <p className="pw-reading-note" role="status">文件清单未列全。</p>}
+    {(!supported || current?.limited || current?.error || current?.sourceUnavailable) && <div className="pw-action-row">
       <Button variant="ghost" disabled={!active} onClick={onBrowse}>查看原工作文件</Button>
       {current?.error && <Button variant="ghost" disabled={!active} onClick={() => setRetry(value => value + 1)}>重新读取</Button>}
     </div>}

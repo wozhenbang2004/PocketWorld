@@ -10,7 +10,7 @@ import { capabilityActionSections, capabilityNextStep, capabilityCheckAction, ca
 import './capabilities-workspace.css';
 import './capability-purpose.css';
 
-export type CapabilityWorkspaceMemory = { view?: string; scrollTop?: number; focusId?: string; selectedTool?: string; policyOrigin?: 'list' | 'catalog' };
+export type CapabilityWorkspaceMemory = { view?: string; scrollTop?: number; focusId?: string; selectedTool?: string; skillLibrarySourceTool?: Pick<CatalogTool, 'name' | 'source'>; policyOrigin?: 'list' | 'catalog' };
 type Capability = { id: string; label: string; state: string; installed: boolean; detail?: string; checks?: Record<string, any>[]; notifications?: { checks?: Record<string, any>[] }; runtime?: Record<string, any> };
 type CapabilityObservation = { capabilities: Capability[]; observedAt: number; executionAuthorized: false };
 const purposes: Record<CapabilityPurpose, { title: string; description: string; icon: typeof IconSearch; route?: string; prepare?: SetupCapability; preparationLabel?: string }> = {
@@ -77,6 +77,15 @@ export function CapabilitiesWorkspace({ state, onNavigate, onPrepare, run, suppo
     document.addEventListener('visibilitychange', resume);
     return () => { observationAlive.current = false; observationGeneration.current++; document.removeEventListener('visibilitychange', resume); };
   }, [observe, state.webWorkspaceResumeRevision]);
+  // Only an actual trip from a registered skill tool records this parent.
+  // Only display identity is retained, never an execution or review handle.
+  const [skillLibrarySourceTool] = useState(() => memory?.view === 'catalog' ? memory.skillLibrarySourceTool : undefined);
+  useEffect(() => { if (memory) delete memory.skillLibrarySourceTool; }, [memory]);
+  const openSkillLibrary = (tool?: CatalogTool) => {
+    remember();
+    if (memory) { memory.skillLibrarySourceTool = tool && { name: tool.name, source: tool.source }; memory.focusId = tool ? 'catalog-skill-source' : 'skills'; }
+    onNavigate('skills');
+  };
   const registerPolicyLeave = useCallback((guard: PermissionLeaveGuard | null) => { beforeLeave.current = guard; }, []);
   const registerCatalogBack = useCallback((back: (() => boolean) | null) => { catalogBack.current = back; }, []);
   const leave = (next: () => void) => { if (!beforeLeave.current?.(next)) next(); };
@@ -97,6 +106,7 @@ export function CapabilitiesWorkspace({ state, onNavigate, onPrepare, run, suppo
   useEffect(() => { registerBeforeLeave?.(next => beforeLeave.current?.(next) || false); return () => registerBeforeLeave?.(null); }, [registerBeforeLeave]);
   const openPolicy = (tool = '') => { policyOrigin.current = journey.view === 'list' ? 'list' : 'catalog'; if (memory) memory.policyOrigin = policyOrigin.current; setSelectedTool(tool); journey.open('policy'); };
   const sourceRoute = (tool: CatalogTool) => tool.source === 'installed_plugin' ? 'plugins' : ({ skills: 'skills', project: 'local', remote: 'devices', devices: 'devices', teams: 'teams', ssh: 'ssh', media: 'media', automation: 'automation' } as Record<string, string>)[tool.category];
+  const returnTool = skillLibrarySourceTool && catalog?.tools.find(tool => tool.name === skillLibrarySourceTool.name && tool.source === skillLibrarySourceTool.source && sourceRoute(tool) === 'skills');
   const selectedCapability = observation?.capabilities.find(item => journey.view === `purpose:${item.id}`);
   const purposesByAction = (observation?.capabilities || []).map(item => ({ item, next: capabilityNextStep(item) }));
   const selectedState = selectedCapability ? capabilityNextStep(selectedCapability) : undefined;
@@ -166,7 +176,7 @@ export function CapabilitiesWorkspace({ state, onNavigate, onPrepare, run, suppo
       <DataOperationHeading title="连接与管理" parent="能力" description="准备做事需要的方法、服务和执行位置。" onBack={() => journey.open('list')} />
       {onPrepare && <section className="pw-capabilities-preparation pw-material-content" aria-label="手机能力准备"><DataOperationRow id="setup" title="准备这台手机" detail="按需准备手机操作、开发、语音与后台运行" icon={IconPhone} onOpen={() => onPrepare()} /></section>}
       <section className="pw-capabilities-group" aria-label="方法与任务选择"><header><h2>方法与任务选择</h2></header><div className="pw-capabilities-list pw-material-content">
-        <DataOperationRow id="skills" title="技能与方法" detail="安装和阅读做事步骤，脚本执行单独审批" icon={IconSkill} onOpen={onNavigate} />
+        <DataOperationRow id="skills" title="技能与方法" detail="阅读做事方法，决定是否启用" icon={IconSkill} onOpen={() => openSkillLibrary()} />
         <DataOperationRow id="workProfiles" title="工作配置" detail="选择模型、技能与工具，不授予执行权限" icon={IconFileSettings} onOpen={onNavigate} />
       </div></section>
       <section className="pw-capabilities-group" aria-label="扩展与服务"><header><h2>扩展与服务</h2></header><div className="pw-capabilities-list pw-material-content">
@@ -181,7 +191,7 @@ export function CapabilitiesWorkspace({ state, onNavigate, onPrepare, run, suppo
     <div className="pw-capabilities-catalog-view" hidden={journey.view !== 'catalog'}>
       <DataOperationHeading title="工具目录" parent="能力" description="查找已登记的工具。未获准的插件工具只在相应安装里管理。" onBack={() => journey.open('list')} />
       <div className="pw-capabilities-controls"><Button variant="secondary" data-capability-focus="catalog-installations" onClick={() => openInstalled('catalog-installations')}>核对已安装工具与授权</Button><Button variant="ghost" onClick={() => journey.open('sources')}>管理来源</Button>{canEdit && <Button variant="ghost" onClick={() => openPolicy()}>审批规则</Button>}</div>
-      {canRead ? <ToolCatalogBrowser standalone tools={catalog?.tools || []} loading={loading} error={error} onReload={() => void reload()} registerBack={registerCatalogBack} detail={tool => <div className="pw-capabilities-tool-actions">{canEdit && tool.configurable && <Button disabled={loading || !!error} onClick={() => openPolicy(tool.name)}>设置这个工具的审批</Button>}{sourceRoute(tool) && <Button variant="secondary" onClick={() => onNavigate(sourceRoute(tool))}>管理相关功能</Button>}{onPrepare && (tool.category === 'phone' || tool.category === 'semantic') && <Button variant="secondary" onClick={() => onPrepare()}>准备这台手机</Button>}<Button variant="ghost" onClick={() => onNavigate('workProfiles')}>管理工作配置</Button></div>} /> : <p className="pw-tool-status">当前版本未提供工具目录读取。仍可管理技能、插件、服务与执行位置。</p>}
+      {canRead && skillLibrarySourceTool && !catalog ? (error ? <div><p role="alert">{error}</p><Button variant="secondary" disabled={loading} onClick={() => void reload()}>重新读取原工具目录</Button></div> : <p role="status">正在核对原工具…</p>) : canRead ? <ToolCatalogBrowser standalone initialTool={returnTool?.name} tools={catalog?.tools || []} loading={loading} error={error} onReload={() => void reload()} registerBack={registerCatalogBack} detail={tool => <div className="pw-capabilities-tool-actions">{canEdit && tool.configurable && <Button disabled={loading || !!error} onClick={() => openPolicy(tool.name)}>设置这个工具的审批</Button>}{sourceRoute(tool) && <Button variant="secondary" data-capability-focus={sourceRoute(tool) === 'skills' ? 'catalog-skill-source' : undefined} onClick={() => sourceRoute(tool) === 'skills' ? openSkillLibrary(tool) : onNavigate(sourceRoute(tool))}>管理相关功能</Button>}{onPrepare && (tool.category === 'phone' || tool.category === 'semantic') && <Button variant="secondary" onClick={() => onPrepare()}>准备这台手机</Button>}<Button variant="ghost" onClick={() => onNavigate('workProfiles')}>管理工作配置</Button></div>} /> : <p className="pw-tool-status">当前版本未提供工具目录读取。仍可管理技能、插件、服务与执行位置。</p>}
       {!!catalog?.notices.length && <Accordion variant="divided" defaultExpandedKeys={[]}><AccordionItem id="catalog-notices" title="目录范围与读取说明">{catalog.notices.map((notice, index) => <p className="pw-tool-boundary" key={index}>{notice}</p>)}</AccordionItem></Accordion>}
     </div>
   </div>;

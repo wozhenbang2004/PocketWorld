@@ -1,0 +1,15 @@
+.pw-new-replies.pw-reading-nav {
+  display: flex; align-items: center; justify-content: center; flex-wrap: wrap;
+  max-width: min(26rem, calc(100% - 24px)); padding: 0 3px;
+}
+.pw-reading-nav[data-notice] { border-radius: 20px; }
+.pw-reading-nav .pw-reading-jump, .pw-reading-nav .pw-reading-dismiss {
+  min-height: 44px; height: auto; border: 0; border-radius: 999px;
+  box-shadow: none; color: var(--pw-ink); background: transparent;
+}
+.pw-reading-nav .pw-reading-jump { min-width: 0; max-width: 100%; padding: 6px 11px; white-space: normal; }
+.pw-reading-nav .pw-reading-dismiss { width: 44px; min-width: 44px; color: var(--pw-muted); }
+.pw-reading-nav button:is(:hover, :focus-visible) { background: var(--pw-inset); }
+.pw-reading-nav button:focus-visible { outline: 2px solid var(--pw-ink); outline-offset: -3px; }
+.pw-reading-notice { flex: 1 1 100%; padding: 9px 12px 0; line-height: 1.5; overflow-wrap: anywhere; }
+@media (prefers-reduced-motion: reduce) { .pw-new-replies.pw-reading-nav { animation: none; } }

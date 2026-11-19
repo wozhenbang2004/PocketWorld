@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { bridge } from './bridge';
+import { captureReadingPlace, readingReturnDelta, type ReadingPlace } from './conversation-reading-place';
 
 type Message = { id?: string; role: string; at?: number; content: string };
 type Reading = { top: number; index: number; offset: number; anchor: string; observed: string; following: boolean; unread: boolean };
@@ -15,6 +16,13 @@ type Options = {
   paused: boolean;
 };
 const atEnd = (node: HTMLElement) => node.scrollHeight - node.clientHeight - node.scrollTop <= 4;
+const awayFromTail = (node: HTMLElement) => node.scrollHeight - node.clientHeight - node.scrollTop > Math.min(160, Math.max(72, node.clientHeight / 4));
+const readingNotices = {
+  '': '', loading: '正在读取对话，稍后可再试。',
+  unanchored: '无法标记刚才的位置。可以只查看最新，或关闭提示留在这里。',
+  missing: '当前记录未包含原消息，未跳到其他位置。',
+  changed: '原文或排版已变化，已回到原消息。', edge: '已回到原消息，窗口边缘限制了对齐位置。',
+} as const;
 const messageId = (message?: Message, index = 0) => message ? message.id || `${message.role}:${message.at}:${index}` : '';
 const contentTop = (node: HTMLElement, row: HTMLElement) => row.getBoundingClientRect().top - node.getBoundingClientRect().top - node.clientTop + node.scrollTop;
 // The navigation can overlap the scroller. Anchors describe the readable area
@@ -53,6 +61,10 @@ export function useConversationReading({ scroll, active, conversationId, compose
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const messageList = useRef<HTMLDivElement>(null);
   const [hasNewReplies, setHasNewReplies] = useState(false);
+  const [away, setAway] = useState(false);
+  const [returnPoint, setReturnPoint] = useState<ReadingPlace | null>(null);
+  const [readingNotice, setReadingNotice] = useState<keyof typeof readingNotices>('');
+  const documentEpoch = bridge.getDocumentEpoch();
   const key = conversationId || composer.key || '';
   const last = messages.at(-1), lastId = messageId(last, messages.length - 1);
   const lastContent = last?.content;
@@ -90,6 +102,9 @@ export function useConversationReading({ scroll, active, conversationId, compose
     const current = window.current, node = scroll.current;
     if (!current?.ready || !node?.isConnected || node.dataset.conversationId !== current.conversationId) return;
     current.reading.following = atEnd(node);
+    setAway(awayFromTail(node));
+    // A one-way choice only applies to the place that could not be captured.
+    setReadingNotice(previous => previous === 'unanchored' ? '' : previous);
     if (current.reading.following && !latest.current.paused) {
       current.reading.unread = false;
       setHasNewReplies(false);
@@ -107,6 +122,7 @@ export function useConversationReading({ scroll, active, conversationId, compose
     // conversation history is still loading or the composer is changing epoch.
     positions.current.set(current.key, { ...current.reading });
     setHasNewReplies(false);
+    setAway(false);
     if (!current.ready || !node?.isConnected || node.dataset.conversationId !== current.conversationId) return;
     // Streaming must not race a smooth scroll's intermediate scroll events.
     node.scrollTop = node.scrollHeight;
@@ -114,11 +130,68 @@ export function useConversationReading({ scroll, active, conversationId, compose
     persistReading();
   }, [scroll, rememberChatPosition, persistReading]);
 
+  // A peek never becomes a native bookmark or a command on a conversation.
+  // Keep it separate from the current position: scrolling the tail, opening a
+  // task or sending an explicit reply must not replace the one-step way back.
+  useLayoutEffect(() => { setReturnPoint(null); setReadingNotice(''); }, [conversationId, documentEpoch]);
+
+  const readingWindow = () => {
+    const current = window.current, node = scroll.current, list = messageList.current;
+    if (!active || paused || document.hidden || !current || !node?.isConnected ||
+      node.dataset.conversationId !== conversationId || current.conversationId !== conversationId ||
+      bridge.getDocumentEpoch() !== documentEpoch || String(bridge.getState().state.conversationId || '') !== conversationId) return;
+    return { current, node, list };
+  };
+  const viewLatest = () => {
+    const win = readingWindow(); if (!win) return;
+    const { current, node, list } = win;
+    if (!current.ready || !list) { setReadingNotice('loading'); return; }
+    if (readingNotice === 'unanchored') {
+      setReadingNotice(''); goToLatest(); node.focus({ preventScroll: true }); return;
+    }
+    const bounds = node.getBoundingClientRect(), top = bounds.top + node.clientTop + readingTopInset(node);
+    const row = readingRow(list, top), message = row ? messages[Number(row.dataset.messageIndex)] : undefined;
+    // A synthetic index is fine for rendering but cannot identify a retained
+    // message after the native history window has moved.
+    const place = row && message?.id && message.id === row.dataset.messageId
+      ? captureReadingPlace(row, message.content, top, bounds.top + node.clientTop + node.clientHeight) : null;
+    if (!place) { setReadingNotice('unanchored'); return; }
+    setReturnPoint(place); setReadingNotice('');
+    goToLatest();
+  };
+  const returnToPlace = () => {
+    const win = readingWindow(); if (!win || !returnPoint) return;
+    const { current, node, list } = win;
+    if (!current.ready || !list) { setReadingNotice('loading'); return; }
+    const index = messages.findIndex(message => message.id === returnPoint.messageId);
+    const row = index >= 0 ? list.children.item(index) as HTMLElement | null : null;
+    if (!row || row.dataset.messageId !== returnPoint.messageId || row.dataset.messageIndex !== String(index)) {
+      setReadingNotice('missing'); return;
+    }
+    const top = node.getBoundingClientRect().top + node.clientTop + readingTopInset(node);
+    const target = readingReturnDelta(row, messages[index].content, top, returnPoint);
+    const scrollTop = node.scrollTop + target.delta;
+    current.reading.following = false;
+    node.scrollTop = scrollTop;
+    // Focus the article, not a task/permission button or the keyboard.
+    row.focus({ preventScroll: true });
+    setReturnPoint(null);
+    setReadingNotice(!target.exact ? 'changed' : Math.abs(node.scrollTop - scrollTop) > 1 ? 'edge' : '');
+    setAway(awayFromTail(node));
+    rememberChatPosition(); persistReading();
+  };
+  const dismissReturn = () => {
+    const win = readingWindow(); if (!win) return;
+    setReturnPoint(null); setReadingNotice('');
+    win.node.focus({ preventScroll: true });
+  };
+
   const stopFollowing = useCallback(() => {
     if (window.current) window.current.reading.following = false;
   }, []);
 
   useLayoutEffect(() => {
+    setAway(false);
     if (!active || !key) { window.current = null; return; }
     const saved = positions.current.get(key);
     const belongs = composer.conversationId === conversationId;
@@ -158,6 +231,7 @@ export function useConversationReading({ scroll, active, conversationId, compose
       current.ready = true;
       current.marker = marker;
       setHasNewReplies(reading.unread);
+      setAway(awayFromTail(node));
       rememberChatPosition();
       return;
     }
@@ -191,6 +265,7 @@ export function useConversationReading({ scroll, active, conversationId, compose
         node.scrollTop = node.scrollHeight;
         rememberChatPosition();
       }
+      setAway(awayFromTail(node));
     });
     observer.observe(node);
     observer.observe(body);
@@ -198,5 +273,7 @@ export function useConversationReading({ scroll, active, conversationId, compose
   }, [active, key, scroll, rememberChatPosition]);
 
   useEffect(() => () => { if (saveTimer.current) clearTimeout(saveTimer.current); }, []);
-  return { content, messageList, hasNewReplies, saveReading, rememberChatPosition, goToLatest, stopFollowing };
+  return { content, messageList, saveReading, rememberChatPosition, goToLatest, stopFollowing,
+    readingNav: { showLatest: away || hasNewReplies, unread: hasNewReplies, canReturn: !!returnPoint,
+      oneWay: readingNotice === 'unanchored', notice: readingNotices[readingNotice], viewLatest, returnToPlace, dismissReturn } };
 }

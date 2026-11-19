@@ -61,7 +61,7 @@ const entry = (value: unknown): value is string => typeof value === 'string' && 
 
 export function projectPackageTaskIdentity(taskValue: unknown): { taskId: string; projectId: string; checkoutId: string } | null {
   const task = record(taskValue), raw = record(task.raw), development = record(raw.developmentContext);
-  return identifier(task.id) && raw.kind === 'assistant' && raw.actorId === 'owner' && raw.spaceId === 'private' && raw.origin == null &&
+  return identifier(task.id) && raw.id === task.id && raw.contextAvailable !== false && raw.sourceCurrentReadRequired !== true && raw.taskProjection !== 'source_unavailable' && raw.kind === 'assistant' && raw.actorId === 'owner' && raw.spaceId === 'private' && raw.origin == null &&
     identifier(development.projectId) && identifier(development.checkoutId)
     ? { taskId: task.id, projectId: development.projectId, checkoutId: development.checkoutId } : null;
 }

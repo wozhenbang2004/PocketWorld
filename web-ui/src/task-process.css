@@ -26,3 +26,17 @@
 .pw-task-process .pw-audit-navigation { gap: var(--pw-gap-control); margin-top: var(--pw-gap-section); padding-top: 0; }
 .pw-task-process .pw-history-window { flex-basis: 100%; padding: 0; }
 .pw-task-process .pw-audit-navigation > button { min-width: 44px; }
+
+/* Current work facts belong to the original run, before its expert trace.
+ * A past attempt has its own source and must not inherit this checkpoint. */
+.pw-process-checkpoint { display: grid; gap: 8px; min-width: 0; margin: 4px 0 18px; }
+.pw-process-checkpoint header { display: grid; gap: 2px; }
+.pw-process-eyebrow, .pw-checkpoint-evidence small { color: var(--pw-copy); font-size: 12px; line-height: 18px; }
+.pw-process-checkpoint h3 { margin: 0; color: var(--pw-ink); font-size: 18px; line-height: 26px; font-weight: 600; }
+.pw-process-checkpoint p { margin: 0; color: var(--pw-copy); font-size: 14px; line-height: 22px; overflow-wrap: anywhere; }
+.pw-checkpoint-evidence { display: grid; justify-items: start; min-width: 0; gap: 2px; }
+.pw-checkpoint-evidence p { color: var(--pw-ink); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+.pw-checkpoint-evidence button { min-height: 44px; max-width: 100%; }
+.pw-task-process .pw-task-event-copy { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.pw-task-process .pw-audit-return { justify-self: start; align-self: flex-start; min-height: 44px; margin-top: 4px; }

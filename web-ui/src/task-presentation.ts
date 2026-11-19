@@ -55,12 +55,15 @@ export interface TaskEventRecord {
   position?: number;
   runId: string;
   isCurrentRun: boolean;
+  hasRecordedId: boolean;
   type: string;
   status: string;
   title: string;
   detail: string;
   stateLabel: string;
   at?: number;
+  /** The original, already-readable message when the row preview was shortened. */
+  fullDetail?: string;
   bodyAvailable: boolean;
   readLimited: boolean;
   partial: boolean;
@@ -164,6 +167,8 @@ export function getTaskEventHistory(task: unknown): TaskEventHistory {
     // A limited row's embedded event is never read, even if a malformed snapshot includes one.
     const readLimited = page ? entry.status === 'read_limited' : false;
     const event = page ? entry.status === 'available' ? row(entry.event) : undefined : entry;
+    // SQL rows belong to this task; never present a body that identifies a different owner task.
+    if (text(entry.taskId) && text(entry.taskId) !== id || text(event?.taskId) && text(event?.taskId) !== id) return;
     const bodyAvailable = event !== undefined;
     if (!bodyAvailable && !text(entry.eventKey) && position === undefined) return;
     const eventRun = event ? text(event.runId) : '';
@@ -171,14 +176,17 @@ export function getTaskEventHistory(task: unknown): TaskEventHistory {
     const status = event ? text(event.status) : '';
     const stateLabel = bodyAvailable ? labels[status] || '原记录' : '正文未载入';
     const message = event ? text(event.message) : '';
+    const preview = excerpt(message, 360), shortened = message !== preview;
     // Snapshot fallback keys are only render keys and are never host event/action identities.
-    const key = page ? text(entry.eventKey) || `event:${id}:${position ?? index}` :
-      text(event?.eventKey) || text(event?.id) || `snapshot-event:${id}:${index}`;
-    entries.push({id: key, position, runId: eventRun, isCurrentRun: !!runId && eventRun === runId,
+    const recordedId = page ? text(entry.eventKey) : text(event?.eventKey) || text(event?.id);
+    const key = recordedId || (page ? `event:${id}:${position ?? index}` : `snapshot-event:${id}:${index}`);
+    const epochMatches = (value: unknown) => value == null || value === raw.coordinatorEpoch;
+    entries.push({id: key, hasRecordedId: !!recordedId, position, runId: eventRun,
+      isCurrentRun: !!runId && eventRun === runId && epochMatches(event?.epoch) && epochMatches(event?.coordinatorEpoch),
       type, status, title: titles[type] || '任务记录',
-      detail: bodyAvailable ? excerpt(message, 360) || stateLabel : '此条记录正文尚未载入', stateLabel,
+      detail: bodyAvailable ? preview || stateLabel : '此条记录正文尚未载入', stateLabel,
       at: event ? number(event.at) ?? number(event.timestamp) : undefined,
-      bodyAvailable, readLimited, partial: !bodyAvailable || Array.from(message).length > 360});
+      ...(shortened ? {fullDetail: message} : {}), bodyAvailable, readLimited, partial: !bodyAvailable || shortened});
   });
   const hasMore = page?.hasMore === true;
   const readLimited = page?.readLimited === true || entries.some(entry => entry.readLimited || !entry.bodyAvailable);

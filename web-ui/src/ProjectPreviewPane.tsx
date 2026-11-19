@@ -11,7 +11,7 @@ type Data = Record<string, any>;
 type Action = 'projects.preview.mode' | 'projects.preview.reload' | 'projects.preview.close' | 'projects.preview.return';
 type PackageExportTarget = Pick<PackagePreviewChoices, 'taskId' | 'operationId' | 'artifactId' | 'artifactSha256'>;
 type PackageExportState = PackageExportTarget & { kind: 'project_package_export'; requestId: string; projectId: string; status: string; message: string; exported: boolean; bytes?: number };
-type Options = { value: unknown; exportValue?: unknown; projectId: string; resumeRevision: number; active: boolean; blocked: boolean; can: (action: string) => boolean; onReturned: () => void; onPackageTask: (taskId: string, entry?: 'process' | 'review') => void };
+type Options = { value: unknown; exportValue?: unknown; projectId: string; resumeRevision: number; active: boolean; blocked: boolean; can: (action: string) => boolean; onReturned: () => void; onPackageTask: (taskId: string, operationId?: string) => void };
 const exportPhases = new Set(['checking', 'document_requested', 'selection_returned', 'writing', 'exported', 'cancelled', 'rejected', 'unknown']);
 const exportPendingPhases = new Set(['checking', 'document_requested', 'selection_returned', 'writing']);
 const sameExportTarget = (value: PackageExportTarget | null, target: PackageExportTarget | null) => !!value && !!target &&
@@ -206,16 +206,25 @@ export function useProjectPreview(options: Options) {
       setUnknown(failure?.code === 'outcome_unknown'); setError(failure instanceof Error ? failure.message : String(failure));
     }).finally(() => { if (generation.current === request) { pending.current = false; setBusy(''); } });
   };
+  const returnToPackageTask = () => {
+    if (busy || exportBusy || optionsRef.current.blocked || !optionsRef.current.can('tasks.open')) return false;
+    const taskId = choices?.taskId || view?.taskId;
+    if (!taskId) return false;
+    const operationId = choices?.operationId || view?.packageOperationId;
+    hide(); optionsRef.current.onPackageTask(taskId, operationId); return true;
+  };
   const handleBack = () => {
     if (!expanded) return false;
     if (exportBusy) return true;
     if (view?.selecting && !busy && !unknown) action('projects.preview.mode', { enabled: false });
-    else hide();
+    else if (choices || view?.packageOperationId) {
+      if (!busy && !returnToPackageTask()) hide();
+    } else hide();
     return true;
   };
   return { expanded, view, busy, error, unknown, open, hide, action, handleBack, showPackage, choices, selectedEntry, setSelectedEntry, openPackage,
     exportPackage, exportState, exportBusy, exportTarget, resumeRevision: options.resumeRevision,
-    returnToPackageTask: () => { const taskId = view?.taskId || choices?.taskId; if (taskId) { hide(); optionsRef.current.onPackageTask(taskId, view ? 'review' : 'process'); } }, blocked: options.blocked, can: options.can };
+    returnToPackageTask, blocked: options.blocked, can: options.can };
 }
 
 export function ProjectPreviewPane({ control, composer }: { control: ReturnType<typeof useProjectPreview>; composer: Data }) {
@@ -275,7 +284,7 @@ export function ProjectPreviewPane({ control, composer }: { control: ReturnType<
         onClick={() => control.action('projects.preview.mode', { enabled: !view?.selecting })}>{view?.selecting ? '退出选择' : '选择元素'}</Button>
       {fixed && control.exportTarget && <Button variant="secondary" size="small" disabled={working || unknown || blocked || !can('projects.package.export')} onClick={control.exportPackage}>导出固定包</Button>}
       <span className="pw-grow"/>
-      {view && can('tasks.open') && <IconButton icon={IconHistory} aria-label="核对原任务" title="核对原任务" disabled={working} onClick={control.returnToPackageTask}/>}
+      {view && !fixed && can('tasks.open') && <IconButton icon={IconHistory} aria-label="核对原任务" title="核对原任务" disabled={working} onClick={control.returnToPackageTask}/>}
       <IconButton icon={IconRefresh} aria-label="重新载入预览" title="重新载入会使旧元素引用失效" disabled={!view || working || unknown || !can('projects.preview.reload')} onClick={() => control.action('projects.preview.reload')}/>
       <IconButton icon={IconClose} aria-label="关闭预览" title="关闭后需要重新选择元素" disabled={!view || working || unknown || !can('projects.preview.close')} onClick={() => control.action('projects.preview.close')}/>
     </div>}
@@ -307,8 +316,8 @@ export function ProjectPreviewPane({ control, composer }: { control: ReturnType<
         <dl className="pw-preview-source-details"><dt>原任务</dt><dd>{view.taskId}</dd><dt>项目</dt><dd>{String(view.metadata.projectId || '')}</dd>{fixed && <><dt>原操作</dt><dd>{view.packageOperationId}</dd><dt>固定版本</dt><dd>{String(view.metadata.artifactId || '')}</dd><dt>归档摘要</dt><dd>{String(view.metadata.artifactSha256 || '')}</dd></>}</dl>
       </AccordionItem></Accordion>}
     <footer className="pw-preview-footer">
-      <Button variant="ghost" leadingIcon={IconArrowLeft} size="small" disabled={control.exportBusy} onClick={control.hide}>返回项目文件</Button>
-      {choosing && <Button variant="secondary" size="small" disabled={working} onClick={control.returnToPackageTask}>返回原任务</Button>}
+      {(choosing || fixed) && can('tasks.open') && <Button variant="secondary" size="small" leadingIcon={IconArrowLeft} disabled={working || blocked} onClick={control.returnToPackageTask}>返回原工作</Button>}
+      <Button variant="ghost" size="small" disabled={control.exportBusy} onClick={control.hide}>{choosing || fixed ? '留在项目' : '返回项目'}</Button>
       {view && <Button variant="primary" size="small" disabled={working || unknown || !can('projects.preview.return')} onClick={() => control.action('projects.preview.return')}>返回原对话</Button>}
     </footer>
   </section>;

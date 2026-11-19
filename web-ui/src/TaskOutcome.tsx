@@ -23,6 +23,10 @@ const stoppedAttemptTitles: Record<string, string> = {
 
 type PackageRead = { identity: string; taskId: string; items: unknown[]; hasMore: boolean; readLimited: boolean; nextCursor: string; unavailable: unknown[] };
 const packageReadSupported = () => bridge.getState().capabilities.commands.includes('tasks.projectPackages');
+const packageWindowOwns = (taskId: string) => {
+  const view = bridge.getState().view as { section?: string | null; taskId?: string | null } | undefined;
+  return !!taskId && !!view && view.section == null && view.taskId === taskId;
+};
 const packageReadWindow = () => {
   const view = bridge.getState().view as { section?: string; taskId?: string; resumeRevision?: number };
   return JSON.stringify([bridge.getDocumentEpoch(), view.section, view.taskId, view.resumeRevision]);
@@ -32,20 +36,22 @@ const packageReadWindow = () => {
  * never rescan the plans; each additional history page is an explicit read. */
 function useProjectPackages(task: unknown, active: boolean, identity: string) {
   const target = projectPackageTaskIdentity(task), taskId = target?.taskId || '';
-  const scope = JSON.stringify([identity, taskId, target?.projectId, target?.checkoutId]);
+  const record = task as { status?: string; raw?: { runId?: string; coordinatorEpoch?: number } } | null;
+  const settled = ['needs_confirmation', 'completed', 'paused', 'interrupted', 'failed', 'stopped', 'cancelled', 'canceled'].includes(record?.status || '');
+  const scope = JSON.stringify([identity, taskId, target?.projectId, target?.checkoutId, record?.raw?.runId, record?.raw?.coordinatorEpoch, settled]);
   const [supported, setSupported] = useState(packageReadSupported);
   const [retained, setRetained] = useState<PackageRead | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const saved = useRef<PackageRead | null>(null), alive = useRef(false), pending = useRef(false), generation = useRef(0);
   const current = useRef({ scope, enabled: false }); current.current = { scope, enabled: active && supported && !!target };
   const read = useCallback(async (cursor = '') => {
-    if (!alive.current || !current.current.enabled || current.current.scope !== scope || document.hidden || pending.current) return;
+    if (!alive.current || !current.current.enabled || current.current.scope !== scope || document.hidden || !packageWindowOwns(taskId) || pending.current) return;
     const previous = saved.current?.identity === scope ? saved.current : null;
     if (cursor && previous?.nextCursor !== cursor) { setError('成果读取位置已变化，请重新读取固定成果。'); return; }
     const request = ++generation.current, windowIdentity = packageReadWindow();
     pending.current = true; setBusy(true); setError('');
     const accepts = () => alive.current && current.current.enabled && current.current.scope === scope && request === generation.current &&
-      !document.hidden && packageReadWindow() === windowIdentity;
+      !document.hidden && packageWindowOwns(taskId) && packageReadWindow() === windowIdentity;
     try {
       const result = await bridge.command('tasks.projectPackages', { taskId, cursor });
       if (!accepts()) return;
@@ -69,7 +75,9 @@ function useProjectPackages(task: unknown, active: boolean, identity: string) {
     let windowIdentity = packageReadWindow();
     const invalidate = () => { generation.current++; pending.current = false; saved.current = null; setRetained(null); setBusy(false); };
     if (saved.current?.identity !== scope) invalidate();
-    if (active && supported && taskId) void read();
+    // tasks.open may acknowledge before the new native owner window is published.
+    // Wait for that exact task; the subscription below resumes this read when it arrives.
+    if (active && supported && packageWindowOwns(taskId)) void read();
     const inspect = () => {
       setSupported(packageReadSupported());
       const next = packageReadWindow();
@@ -82,7 +90,7 @@ function useProjectPackages(task: unknown, active: boolean, identity: string) {
     document.addEventListener('visibilitychange', visibility); window.addEventListener('pagehide', invalidate);
     return () => { alive.current = false; generation.current++; pending.current = false; unsubscribe(); document.removeEventListener('visibilitychange', visibility); window.removeEventListener('pagehide', invalidate); };
   }, [active, supported, scope, taskId, read]);
-  return { eligible: !!target, supported, page: retained?.identity === scope ? retained : null, busy, error, read };
+  return { eligible: !!target, supported, waiting: active && supported && !!target && !packageWindowOwns(taskId), page: retained?.identity === scope ? retained : null, busy, error, read };
 }
 
 /** Composition of PW-05 Answer and PW-22 file actions around host-owned evidence. */
@@ -102,6 +110,7 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
     supported: boolean;
     onOpen: (file: TaskResultFile, target: HTMLButtonElement) => void;
     onBrowse: () => void;
+    onOriginalRequest?: () => void;
   };
 }) {
   const [clock, setClock] = useState(Date.now);
@@ -183,14 +192,14 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
           </span>
         </Button>)}</div>
       </>}
-      {packageRead.busy && <p className="pw-reading-note" role="status">正在读取原任务保存的固定成果…</p>}
+      {packageRead.waiting ? <p className="pw-reading-note" role="status">正在打开原工作，随后读取已保存的版本…</p> : packageRead.busy && <p className="pw-reading-note" role="status">正在读取原任务保存的固定成果…</p>}
       {packageRead.error && <p className="pw-reading-note pw-error" role="alert">{packageRead.error}</p>}
       {!packageRead.supported && <p className="pw-reading-note">当前连接尚不能读取项目固定成果。</p>}
       {packageRead.page && !outcome.projectPackages.length && !packageRead.busy && <p className="pw-reading-note">{outcome.projectPackagesPartial ? '这一段原记录尚未提供可核对的固定成果。' : '当前读取的原保存记录中没有固定成果。'}</p>}
       {outcome.projectPackagesPartial && <p className="pw-outcome-limit" role="status">{packageRead.page?.hasMore ? '还有原保存记录尚未读取。' : '部分原保存记录未能完整核对，当前列表不代表全部交付物。'}{packageRead.page?.readLimited ? ' 本次另有记录因读取限制或凭证不可用而保留缺口。' : ''}</p>}
       {active && packageRead.supported && <div className="pw-action-row">
-        {packageRead.page?.hasMore && <Button variant="secondary" disabled={packageRead.busy} onClick={() => void packageRead.read(packageRead.page!.nextCursor)}>继续读取固定成果</Button>}
-        <Button variant="ghost" disabled={packageRead.busy} onClick={() => void packageRead.read()}>重新读取固定成果</Button>
+        {packageRead.page?.hasMore && <Button variant="secondary" disabled={packageRead.busy || packageRead.waiting} onClick={() => void packageRead.read(packageRead.page!.nextCursor)}>继续读取固定成果</Button>}
+        <Button variant="ghost" disabled={packageRead.busy || packageRead.waiting} onClick={() => void packageRead.read()}>重新读取固定成果</Button>
       </div>}
     </section>}
     {report && <OwnerWorkReport key={JSON.stringify(report)} target={report} active={active} supported={canReadReport} identity={readIdentity} onCopy={onCopy} />}
