@@ -307,6 +307,14 @@ export default function App(){
  const closeReading=useCallback(()=>{setReadingDocuments(previous=>previous.slice(0,-1))},[]);
  useEffect(()=>{setReadingDocuments([])},[state.conversationId,route,taskId,taskOpen]);
  const messageTaskAnchors=useMemo(()=>taskMessageAnchors(messages),[messages]);
+ const savedReplyDetails=useMemo(()=>messages.map(message=>({
+  refs:sourceRefs(message),phoneResult:messagePhoneResult(message),taskResult:messageTaskResult(message),replyContext:messageReplyContext(message)
+ })),[messages]);
+ const replyTasksById=useMemo(()=>{
+  const byId=new Map<string,Task>();
+  for(const task of tasks)if(!byId.has(task.id))byId.set(task.id,task);
+  return byId;
+ },[tasks]);
  const conversationWork=backgroundConversationWork(tasks,asArray<Task>(state.ownerWork),state.conversationId);
 
  useEffect(()=>{setSkillDraftTarget(null);setMemoryDraftTarget(null);setRouteReferenceTarget(null);setMessageQuoteTarget(null);setMessageOriginTarget(null)},[state.conversationId,route]);
@@ -366,7 +374,7 @@ export default function App(){
  const scroll=useRef<HTMLDivElement>(null);
  const conversationDraft=foregroundConversationDraft(state);
  const conversationStream=conversationDraft?.text.trim()?conversationDraft:null;
- const replyRows=useReplyRows(String(state.conversationId||''),messages,conversationDraft,foregroundTurn as WorkIdentity|null,route==='chat'&&commands.length>0);
+ const {rows:replyRows,continued:wasReplyVisible}=useReplyRows(String(state.conversationId||''),messages,conversationDraft,foregroundTurn as WorkIdentity|null,route==='chat'&&commands.length>0);
  const streamMarker=conversationStream?`${conversationStream.requestId}:${conversationStream.generation}:${conversationStream.sequence}`:'';
  const {content:chatContent,hasNewReplies,saveReading,rememberChatPosition,goToLatest,stopFollowing}=useConversationReading({scroll,active:route==='chat',conversationId:String(state.conversationId||''),composer,messages,streamMarker,paused:readingDocuments.length>0||!!messageOriginTarget||!!state.conversationReader||!!state.queuedInputsPage});
  const openReading=useCallback((document:ReadingSnapshot)=>{rememberChatPosition();const entry={...document,key:++readingSerial.current};setReadingDocuments(previous=>[...previous,entry])},[rememberChatPosition]);
@@ -1419,10 +1427,9 @@ export default function App(){
       {draft?.truncated&&<p className="pw-muted">仅预览前 32,768 个字符，完整结果以正式回复为准。</p>}
      </article>;
     }
-    const {message:m,index}=row;
-    const id=m.id||`${m.role}:${m.at}:${index}`,refs=sourceRefs(m);
-    const phoneResult=messagePhoneResult(m),taskResult=messageTaskResult(m),replyContext=messageReplyContext(m);
-    const linked=tasks.find(t=>t.id===(m.taskId||m.submission?.taskId));
+    const {message:m,index}=row,continued=wasReplyVisible(row);
+    const id=m.id||`${m.role}:${m.at}:${index}`,{refs,phoneResult,taskResult,replyContext}=savedReplyDetails[index];
+    const linked=replyTasksById.get(m.taskId||m.submission?.taskId);
     const traceTaskId=phoneResult?.taskId||taskResult?.taskId||m.taskId;
     const linkedFeedback=linked&&!phoneResult&&!taskResult&&linked.id!==representedPhoneTaskId&&linked.id!==chatAttention?.id&&!conversationWorkIds.has(linked.id)&&messageTaskAnchors.get(linked.id)===index?linked:null;
     const completedFeedback=linkedFeedback&&conversationTaskCompact(linkedFeedback);
@@ -1430,12 +1437,12 @@ export default function App(){
     const earlierRun=returnedWork&&linked?.raw?.runId&&(linked.raw.runId!==returnedWork.runId||linked.raw.coordinatorEpoch!==returnedWork.epoch);
     const inlineResult=!earlierRun&&!phoneResult&&taskResult?.kind==='owner_work'&&taskResult.status==='completed'&&!taskResult.noticeKind&&!!m.id;
     const canQuote=intent==='chat'&&m.quoteAvailable&&can('messageQuote.open')&&can('messageQuote.stage')&&can('messageQuote.close');
-    return <article key={row.key} tabIndex={-1} data-message-index={index} data-message-id={id} data-reply-continuing={row.continued||undefined} className={`pw-message pw-message-${m.role}`} aria-label={m.role==='assistant'?(phoneResult||taskResult?'任务结果':'助手回复'):'你的消息'}>
+    return <article key={row.key} tabIndex={-1} data-message-index={index} data-message-id={id} data-reply-continuing={continued||undefined} className={`pw-message pw-message-${m.role}`} aria-label={m.role==='assistant'?(phoneResult||taskResult?'任务结果':'助手回复'):'你的消息'}>
      {m.role==='assistant'&&<ReplyActivity phase={null}/>}
      {m.role==='assistant'?<CitedAnswer continuous text={m.content} onCopyCode={copyWithLocalFeedback} sources={refs as any} onOpenSource={()=>openSource(m)}/>:m.content?<div className="pw-user-text">{m.content}</div>:null}
      {asArray<Json>(m.attachments).length>0&&<div className="pw-message-files">{asArray<Json>(m.attachments).map(file=><Button key={file.id||file.name} variant="secondary" size="small" leadingIcon={IconFile} disabled={!can('attachments.open')||!file.sha256||!!state.attachmentOpens?.[`${file.id}:${file.sha256}`]?.checking} onClick={()=>run('attachments.open',{messageId:m.id,id:file.id,sha256:file.sha256})}>{file.name||'原附件'}</Button>)}</div>}
      {m.submission&&<Receipt receipt={m.submission}/>}
-     <MotionFeedback className="pw-message-footer" identity={`${id}:${m.submission?.status||'saved'}:${refs.map(source=>source.id).join(',')}`} initial={row.continued}>
+     <MotionFeedback className="pw-message-footer" identity={`${id}:${m.submission?.status||'saved'}:${refs.map(source=>source.id).join(',')}`} initial={continued}>
      {m.role==='user'&&m.submission?.status==='queued'&&m.submission?.taskId&&can('queued.open')&&<Button variant="ghost" className="pw-message-queue-action" leadingIcon={IconClock} onClick={()=>run('queued.open',{taskId:m.submission!.taskId,conversationId:state.conversationId})}>已入队 · 查看或调整</Button>}
      {linkedFeedback&&(attention(linkedFeedback)||linkedFeedback.status==='failed')&&<Button variant="ghost" className="pw-message-work-action" leadingIcon={completedFeedback?IconCheckCircle:attention(linkedFeedback)||linkedFeedback.status==='failed'?IconError:IconClock} aria-label={`查看任务详情：${linkedFeedback.goal}`} title={linkedFeedback.goal} disabled={!can('tasks.open')} onClick={()=>openTask(linkedFeedback.id,attention(linkedFeedback)&&can('tasks.review')?'review':'overview')}><span className="pw-message-work-next">{taskNeedsReconciliation(linkedFeedback)?'有操作待核对':attention(linkedFeedback)?taskActionLabel(linkedFeedback):linkedFeedback.status==='failed'?'查看失败原因':terminal(linkedFeedback)?'查看详情':'查看进展'}<IconChevronRight size={15} aria-hidden="true"/></span></Button>}
      {(m.content||m.role==='assistant'||canQuote||(m.retainedSources&&can('sources.open')))&&<div className="pw-message-tools">
@@ -1446,7 +1453,7 @@ export default function App(){
         }}>
         {openingChatResultId===m.id?'正在读取成果…':earlierRun?'查看所属工作':returnedWork.status==='completed'?'查看成果':'查看这次工作'}
        </Button>}
-      {m.role==='assistant'&&!!m.content&&<MessageActions onCopy={()=>copyWithLocalFeedback(m.content)} onSpeak={can('speech.speak')&&m.id&&m===messages.filter(x=>x.role==='assistant').at(-1)?playing=>run(playing?'speech.speak':'speech.stop',{messageId:m.id}):undefined} speaking={!!state.speaking}/>}
+      {m.role==='assistant'&&!!m.content&&<MessageActions onCopy={()=>copyWithLocalFeedback(m.content)} onSpeak={can('speech.speak')&&m.id&&row.lastOfRole?playing=>run(playing?'speech.speak':'speech.stop',{messageId:m.id}):undefined} speaking={!!state.speaking}/>}
       <PopoverTrigger isOpen={messageMenu===id} onOpenChange={value=>setMessageMenu(value?id:null)}>
        <IconButton icon={IconMore} size="small" aria-label="消息操作与来源"/>
        <Popover className="pw-message-popover" aria-label="消息操作与来源"><div className="pw-message-menu">
@@ -1454,7 +1461,7 @@ export default function App(){
         {m.role==='assistant'&&completedFeedback&&linkedFeedback&&can('tasks.open')&&<Button variant="ghost" aria-label={`查看任务详情：${linkedFeedback.goal}`} onClick={()=>{setMessageMenu(null);openTask(linkedFeedback.id)}}>查看任务详情</Button>}
         {!!m.content&&<Button variant="ghost" leadingIcon={IconBook} onClick={()=>{const source=Array.from(scroll.current?.querySelectorAll<HTMLElement>('[data-message-id]')||[]).find(row=>row.dataset.messageId===id);openReading({kind:'message',title:m.role==='assistant'?'阅读回复':'阅读消息',text:m.content,returnFocus:source?.querySelector<HTMLElement>('button[aria-label="消息操作与来源"]')});setMessageMenu(null)}}>阅读与选字</Button>}
         {m.role!=='assistant'&&!!m.content&&<MessageActions onCopy={()=>copyWithLocalFeedback(m.content)}/>}
-        {m.role==='user'&&m===messages.filter(message=>message.role==='user').at(-1)&&m.id&&m.quoteAvailable&&Number(m.sourceRevision)>0&&!!m.content.trim()&&can('phone.draft.fromMessage')&&can('phone.prepare')&&<Button variant="ghost" leadingIcon={IconMonitor} disabled={phoneReviewPending||!!state.chatSubmitting||!!state.chatBusy||!!state.phoneSubmitting||!!state.activeTaskId||isListening||phoneStart?.status==='unknown'} onClick={()=>stageMessageForPhone(m)}>准备手机任务</Button>}
+        {m.role==='user'&&row.lastOfRole&&m.id&&m.quoteAvailable&&Number(m.sourceRevision)>0&&!!m.content.trim()&&can('phone.draft.fromMessage')&&can('phone.prepare')&&<Button variant="ghost" leadingIcon={IconMonitor} disabled={phoneReviewPending||!!state.chatSubmitting||!!state.chatBusy||!!state.phoneSubmitting||!!state.activeTaskId||isListening||phoneStart?.status==='unknown'} onClick={()=>stageMessageForPhone(m)}>准备手机任务</Button>}
 
         {m.id&&replyContext?.replyToMessageIds.length&&can('message.origin')?<Button variant="ghost" leadingIcon={IconHistory} onClick={()=>{const source=Array.from(scroll.current?.querySelectorAll<HTMLElement>('[data-message-id]')||[]).find(row=>row.dataset.messageId===id);rememberChatPosition();setMessageOriginTarget({conversationId:String(state.conversationId),messageId:m.id!,sourceMessageIds:replyContext.replyToMessageIds,returnFocus:source?.querySelector<HTMLElement>('button[aria-label="消息操作与来源"]')});setMessageMenu(null)}}>查看对应原请求</Button>:null}
         {m.role==='user'&&m.submission?.taskId&&can('queued.open')&&<Button variant="ghost" leadingIcon={IconClock} onClick={()=>{setMessageMenu(null);run('queued.open',{taskId:m.submission!.taskId,conversationId:state.conversationId})}}>原任务的输入队列</Button>}

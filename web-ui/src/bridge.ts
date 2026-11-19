@@ -1,4 +1,5 @@
 import { consumeOverlayBack } from './overlay-back.ts';
+import { dequal } from 'dequal/lite';
 
 export type PocketSnapshot = {
   revision?: number;
@@ -89,11 +90,18 @@ function receive(input: NativeMessage | string) {
   if (message.kind === 'state' && message.snapshot && Number.isFinite(message.revision)) {
     if ((message.revision as number) <= (current.revision || 0)) return;
     const next = message.snapshot;
+    const state = next.state || {};
+    // Native sends complete JSON snapshots, even for a single draft delta.
+    // Only reuse the saved window when every field matches, including receipts
+    // and attachments. IDs or source revisions alone do not cover these changes.
+    const unchangedMessages = state.conversationId === current.state.conversationId
+      && Array.isArray(state.messages) && Array.isArray(current.state.messages)
+      && dequal(state.messages, current.state.messages);
     advertisedCommands = Array.isArray(next.capabilities?.commands) ? next.capabilities.commands : [];
     current = {
       ...next,
       revision: message.revision,
-      state: next.state || {},
+      state: unchangedMessages ? { ...state, messages: current.state.messages } : state,
       composer: next.composer || null,
       capabilities: { commands: documentBound ? advertisedCommands : [] },
       host: { ...current.host, ...next.host, connected: true, ready: documentBound },

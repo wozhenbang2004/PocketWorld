@@ -1,4 +1,4 @@
-import {useLayoutEffect,useRef} from 'react';
+import {useLayoutEffect,useMemo,useRef} from 'react';
 import {IconChevronRight} from './icons';
 import {Button} from './forms-library';
 import {ReplyPhaseStatus,type ReplyActivityState} from './library/adapted/reply-activity';
@@ -8,7 +8,8 @@ import {messageReplyContext,type WorkIdentity} from './conversation-work';
 import type {ConversationStream} from './conversation-stream';
 
 type SavedReply={id?:string;role:string;at?:number;taskId?:string;memoryReference?:Record<string,any>};
-type ReplyRow<M>={kind:'message';key:string;message:M;index:number;continued:boolean}|{kind:'live';key:string;draft:ConversationStream|null};
+type SavedRow<M>={kind:'message';key:string;message:M;index:number;request:string|null;lastOfRole:boolean};
+type ReplyRow<M>=SavedRow<M>|{kind:'live';key:string;draft:ConversationStream|null};
 const requestKey=(conversation:string,request:WorkIdentity&{requestId:string})=>JSON.stringify([conversation,request.taskId,request.runId,request.epoch,request.requestId]);
 
 /** A saved reply must name the exact native request AND answer receipt. Similar
@@ -22,25 +23,38 @@ function savedRequestKey(conversation:string,message:SavedReply){
 
 /** A render projection only. Saved history and the native transient draft stay
  * separate data; a common keyed sibling keeps the visible answer body alive. */
-export function useReplyRows<M extends SavedReply>(conversation:string,messages:readonly M[],draft:ConversationStream|null,turn:WorkIdentity|null,active:boolean):ReplyRow<M>[] {
+export function useReplyRows<M extends SavedReply>(conversation:string,messages:readonly M[],draft:ConversationStream|null,turn:WorkIdentity|null,active:boolean) {
  const visible=useDocumentVisible(),observed=useRef({conversation,requests:new Set<string>()});
- const saved=messages.map(message=>savedRequestKey(conversation,message)),counts=new Map<string,number>();
- saved.forEach(key=>{if(key)counts.set(key,(counts.get(key)||0)+1)});
+ const {savedRows,counts}=useMemo(()=>{
+  const counts=new Map<string,number>();
+  let lastAssistant=-1,lastUser=-1;
+  const keys=messages.map((message,index)=>{
+   if(message.role==='assistant')lastAssistant=index;
+   else if(message.role==='user')lastUser=index;
+   const key=savedRequestKey(conversation,message);
+   if(key)counts.set(key,(counts.get(key)||0)+1);
+   return key;
+  });
+  const savedRows=messages.map((message,index):SavedRow<M>=>{
+   const key=keys[index],exact=key&&counts.get(key)===1?key:null;
+   return {kind:'message',key:exact?`reply:${exact}`:`message:${message.id||`${message.role}:${message.at}:${index}`}`,message,index,
+    request:exact,lastOfRole:index===lastAssistant||index===lastUser};
+  });
+  return {savedRows,counts};
+ },[conversation,messages]);
  const live=draft?requestKey(conversation,draft):null;
- const rows:ReplyRow<M>[]=messages.map((message,index)=>{
-  const key=saved[index],exact=key&&counts.get(key)===1?key:null;
-  return {kind:'message',key:exact?`reply:${exact}`:`message:${message.id||`${message.role}:${message.at}:${index}`}`,message,index,
-   continued:!!exact&&observed.current.conversation===conversation&&observed.current.requests.has(exact)};
- });
- if(turn&&(!live||!counts.has(live)))rows.push({kind:'live',key:live?`reply:${live}`:`waiting:${JSON.stringify([conversation,turn.taskId,turn.runId,turn.epoch])}`,draft});
+ const rows:ReplyRow<M>[]=turn&&(!live||!counts.has(live))
+  ? [...savedRows,{kind:'live',key:live?`reply:${live}`:`waiting:${JSON.stringify([conversation,turn.taskId,turn.runId,turn.epoch])}`,draft}]
+  : savedRows;
+ const seen=observed.current.conversation===conversation?observed.current.requests:null;
  useLayoutEffect(()=>{
   if(observed.current.conversation!==conversation)observed.current={conversation,requests:new Set()};
   if(active&&visible&&live&&!counts.has(live)){
    observed.current.requests.add(live);
    while(observed.current.requests.size>128)observed.current.requests.delete(observed.current.requests.values().next().value!);
   }
- },[conversation,active,visible,live,messages]);
- return rows;
+ },[conversation,active,visible,live,counts]);
+ return {rows,continued:(row:SavedRow<M>)=>!!row.request&&!!seen?.has(row.request)};
 }
 
 type ReplyPhase={label:string;state:ReplyActivityState};
