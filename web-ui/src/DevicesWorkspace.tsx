@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import './collaboration-depth.css';
 import './device-control-reading.css';
 import { Accordion, AccordionItem, Button, CheckboxField, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
-import { DeviceRequestScope, deviceConnectionLabel, deviceGrantInput, deviceHistoryLabel, deviceHistoryReceipt, deviceTaskDetails, deviceMethodLabels, deviceOperationLabels, deviceReceipt, deviceReview, deviceRows as rows, deviceSnapshot, deviceStrings as strings, deviceTaskRows, deviceWorkspaceTaskMode, type DeviceData as Data } from './devices-workspace';
+import { DeviceRequestScope, deviceConnectionLabel, deviceGrantInput, deviceHistoryLabel, deviceHistoryReceipt, deviceTaskHistoryLinks, deviceTaskDetails, deviceMethodLabels, deviceOperationLabels, deviceReceipt, deviceReview, deviceRows as rows, deviceSnapshot, deviceStrings as strings, deviceTaskRows, deviceWorkspaceTaskMode, type DeviceData as Data } from './devices-workspace';
 import { IconAdd, IconArrowLeft, IconChevronRight, IconMonitor, IconPhone, IconRefresh, IconShieldCheck } from './icons';
 import { DesktopViewer } from './DesktopViewer';
 import { DeviceTaskPreparation } from './DeviceTaskPreparation';
@@ -68,7 +68,6 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const rememberReadingPosition = (view: 'list' | 'detail') => { readingPositions.current[view] = readingRoot.current?.closest<HTMLElement>('.pw-secondary-scroll')?.scrollTop || 0; };
   const busy = workBusy || controlBusy;
   const alive = useRef(true), scope = useRef(new DeviceRequestScope()), handle = useRef(''), selectedPeer = useRef(peerId), resumed = useRef(state.webWorkspaceResumeRevision), nativeRevision = useRef(state.deviceWorkspaceRevision);
-  selectedPeer.current = peerId;
   const acceptSnapshot = (value: any) => { const actual = deviceSnapshot(value); setSnapshot(old => !old || actual.capturedAt >= old.capturedAt ? actual : old); };
   const invoke = async (action: string, args: Data = {}, accept?: (value: Data) => void, lane = 'work') => {
     if (!alive.current || document.visibilityState !== 'visible' || scope.current.hasPending(lane)) return;
@@ -95,6 +94,12 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     const old = handle.current; handle.current = ''; scope.current.invalidate(document.visibilityState === 'visible');
     setReview(null); setAck(false); setFuture(false); setHistoryReceipt(null); setHistoryStopSubmitted(false); setWorkBusy(false); setControlBusy(false);
     if (old) void run('devices.discard', { viewHandle: old }).catch(() => {});
+  };
+  const selectPeer = (next: string) => {
+    if (selectedPeer.current === next) return;
+    closeReview(); // Retire pending review handles before changing the list/detail scope.
+    selectedPeer.current = next;
+    setPeerId(next);
   };
   const acceptReview = (value: Data) => { const actual = deviceReview(value); handle.current = actual.viewHandle; setReview(actual); setAck(false); setFuture(false); setHistoryReceipt(null); setHistoryStopSubmitted(false); setRaw(''); setForm(''); setInvitation(''); };
   const clearSensitive = (enabled = false) => {
@@ -125,7 +130,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     if (invitation) { setInvitation(''); return true; }
     if (form) { clearSensitive(true); refresh(); return true; }
     if (desktopOpen) { setDesktopOpen(false); return true; }
-    if (peerId) { setPeerId(''); return true; }
+    if (peerId) { selectPeer(''); return true; }
     return false;
   }); return () => registerTransientBack(null); }, [review, invitation, form, desktopOpen, peerId, preparingDeviceWork, registerTransientBack]);
   useEffect(() => {
@@ -162,6 +167,19 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
       setNotice(original.kind === 'pair' ? '本机指纹与权限确认已提交。等待双端完成握手，以原配对状态为准。' : original.kind === 'resume' ? extra.approved === true ? '已处理这次原执行的恢复请求，实际进展以原任务回执为准。' : '已拒绝这次恢复请求，原任务未因本次拒绝而继续。' : original.kind === 'action' && original.view.operation?.startsWith('task.') ? '已发出原任务控制请求。实际暂停、继续或停止以原任务回执为准。' : '原生处理已返回，请核对下方实际状态。');
     }, original.kind === 'resume' || original.kind === 'action' && original.view.operation?.startsWith('task.') ? 'control' : 'work');
   };
+  const openHistory = (taskId: string, link: Data) => {
+    const selected = selectedPeer.current;
+    if (selected !== peerId || !deviceTaskHistoryLinks(taskDetails[taskId], taskId, selected)
+      .some(row => row.operationId === link.operationId && row.targetDeviceId === link.targetDeviceId)) return;
+    void invoke('devices.openHistory', { taskId, operationId: link.operationId }, value => {
+      if (value.kind !== 'history' || value.view?.taskId !== taskId ||
+        value.view?.operationId !== link.operationId || value.view?.targetDeviceId !== link.targetDeviceId) {
+        if (typeof value.viewHandle === 'string') void run('devices.discard', { viewHandle: value.viewHandle }).catch(() => {});
+        throw new Error('回执与所选设备或原操作不符，请重新读取。');
+      }
+      acceptReview(value);
+    });
+  };
   const queryHistory = (stop = false) => {
     const original = review; if (original?.kind !== 'history' || busy || stop && (!ack || historyStopSubmitted)) return;
     if (stop) setHistoryStopSubmitted(true);
@@ -191,7 +209,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     <section ref={readingRoot} className="pw-settings-section pw-devices-reading pw-depth-collaboration" data-device-view={desktopOpen ? 'desktop' : peerId ? 'detail' : 'list'}>
       {(desktopOpen || peerId) && <header className="pw-device-heading">
         <div className="pw-device-heading-copy">
-          {peerId && !desktopOpen && <Button variant="ghost" className="pw-device-back" leadingIcon={IconArrowLeft} disabled={busy} onClick={() => { setPeerId(''); setForm(''); setRaw(''); }}>所有设备</Button>}
+          {peerId && !desktopOpen && <Button variant="ghost" className="pw-device-back" leadingIcon={IconArrowLeft} disabled={busy} onClick={() => { selectPeer(''); setForm(''); setRaw(''); }}>所有设备</Button>}
           <h2 tabIndex={-1}>{desktopOpen ? '电脑桌面' : peer ? name(peer) : '设备详情'}</h2>
           {!desktopOpen && peer && <p>{peer.platform || '已配对设备'}</p>}
         </div>
@@ -225,7 +243,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               </>} />
             {(peers.length > 5 || query) && <SearchField className="pw-device-search" fieldClassName="pw-collaboration-search" shape="rounded" aria-label="搜索已配对设备" placeholder="搜索名称或设备" value={query} onChange={setQuery} />}
             {peers.length ? <div className="pw-device-directory">{peerSections.filter(section => section.peers.length > 0).map(section => <section className="pw-collaboration-group" key={section.id} aria-label={section.title}><header className="pw-collaboration-group-heading"><h3>{section.title}</h3><span>{section.peers.length} 台</span></header><div className="pw-device-list">
-              {section.peers.map(row => <Button key={row.deviceId} data-motion-key={`peer:${row.deviceId}`} variant="ghost" className="pw-device-row" leadingIcon={/android|ios|phone/i.test(row.platform || '') ? IconPhone : IconMonitor} trailingIcon={IconChevronRight} disabled={busy} aria-label={`查看 ${name(row)} 的设备与授权`} onClick={() => { rememberReadingPosition('list'); setPeerId(row.deviceId); setError(''); }}>
+              {section.peers.map(row => <Button key={row.deviceId} data-motion-key={`peer:${row.deviceId}`} variant="ghost" className="pw-device-row" leadingIcon={/android|ios|phone/i.test(row.platform || '') ? IconPhone : IconMonitor} trailingIcon={IconChevronRight} disabled={busy} aria-label={`查看 ${name(row)} 的设备与授权`} onClick={() => { rememberReadingPosition('list'); selectPeer(row.deviceId); setError(''); }}>
                 <span className="pw-device-row-copy"><span className="pw-device-row-name">{name(row)}</span><span className="pw-device-row-status">{deviceConnectionLabel(row)}</span><small>{row.platform || '已配对设备'} · {deviceTaskRows(state.tasks, snapshot, row.deviceId).length} 项关联任务</small></span>
               </Button>)}
             </div></section>)}{query && !visiblePeers.length && <div className="pw-device-empty"><h3>没有匹配的设备</h3><p>换个名称搜索，或查看全部已配对设备。</p><Button variant="secondary" onClick={() => setQuery('')}>清除搜索</Button></div>}</div> : null}
@@ -326,7 +344,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
           <div className="pw-device-task-list">
             {tasks.slice(0, 40).map(task => {
               const controls = snapshot?.taskActions?.[task.id] || {}, request = controls.resumeRequest;
-              const details = taskDetails[task.id], links = rows(details?.history?.links);
+              const details = taskDetails[task.id], links = deviceTaskHistoryLinks(details, task.id, peerId);
               return <article className="pw-device-task" key={task.id} data-motion-key={`task:${task.id}`}>
                 <header><h4>{task.goal || '原设备任务'}</h4><span>{taskLabels[task.status] || task.status || '状态待读取'}</span></header>
                 {task.summary && <p className="pw-device-task-summary">{task.summary}</p>}
@@ -343,9 +361,9 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
                 <Accordion className="pw-device-task-history"><AccordionItem id={`history-${task.id}`} headingLevel={5} title="设备操作记录" description={details ? `已读取 ${links.length} 项原操作` : undefined}>
                   <Button variant="ghost" disabled={busy} onClick={() => { void invoke('devices.readTask', { taskId: task.id }, value => { const actual = deviceTaskDetails(value, task.id); setTaskDetails(old => ({ ...old, [task.id]: actual })); }); }}>{details ? '刷新原设备操作记录' : '读取原设备操作记录'}</Button>
                   {details && <>
-                    {!links.length && <p>本次原生读取没有返回已关联的设备操作。</p>}
-                    {links.map(link => <div className="pw-device-history-entry" key={link.operationId}><p>设备 {link.targetDeviceId} · 原操作 {link.operationId}</p><p>{link.terminalReceipt?.terminal === true && link.terminalReceipt?.stopped === true && link.terminalReceipt?.hasUnresolved === false ? '执行端已有结束回执，业务成果仍待核对。' : String(link.holdState || '').includes('unknown') ? '执行效果仍未确认，原占用次数保留。' : link.childBinding ? '执行端已接受，尚未核对最终结果。' : '已保留这次原操作的关联记录。'}</p><Button variant="secondary" disabled={busy} onClick={() => { void invoke('devices.openHistory', { taskId: task.id, operationId: link.operationId }, acceptReview); }}>查看这次原操作回执</Button></div>)}
-                    {details.history.hasMore === true && <p>当前显示最近 24 项原设备操作。</p>}
+                    {!links.length && <p>{peerId ? '本次读取中没有这台设备的关联操作。' : '本次读取中没有关联的设备操作。'}</p>}
+                    {links.map(link => <div className="pw-device-history-entry" key={link.operationId}><p>设备 {link.targetDeviceId} · 原操作 {link.operationId}</p><p>{link.terminalReceipt?.terminal === true && link.terminalReceipt?.stopped === true && link.terminalReceipt?.hasUnresolved === false ? '执行端已有结束回执，业务成果仍待核对。' : String(link.holdState || '').includes('unknown') ? '执行效果仍未确认，原占用次数保留。' : link.childBinding ? '执行端已接受，尚未核对最终结果。' : '已保留这次原操作的关联记录。'}</p><Button variant="secondary" disabled={busy} onClick={() => openHistory(task.id, link)}>查看这次原操作回执</Button></div>)}
+                    {details.history.hasMore === true && <p>本次仅核对了此任务最近 24 项设备操作。</p>}
                   </>}
                 </AccordionItem></Accordion>
               </article>;

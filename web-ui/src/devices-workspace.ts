@@ -32,6 +32,10 @@ export function deviceTaskDetails(value: unknown, taskId: string): DeviceData {
   if (!object(value) || value.kind !== 'taskDetails' || value.taskId !== taskId || !object(value.actions) || !positiveInteger(value.actions.capturedAt) || !object(value.history) || !Array.isArray(value.history.links) || !value.history.links.every((link: unknown) => object(link) && link.parentTaskId === taskId && identity(link.operationId) && identity(link.targetDeviceId))) throw new Error('原设备任务关联回执不完整或任务已变化。');
   return value;
 }
+export function deviceTaskHistoryLinks(details: DeviceData | undefined, taskId: string, peerId: string): DeviceData[] {
+  if (!details || details.taskId !== taskId) return [];
+  return deviceRows(details.history?.links).filter(link => link.parentTaskId === taskId && (!peerId || link.targetDeviceId === peerId));
+}
 export function deviceHistoryReceipt(value: unknown, review: DeviceData): DeviceData {
   if (!object(value) || value.kind !== 'historyReceipt' || value.viewHandle !== review.viewHandle || !['taskId', 'operationId', 'targetDeviceId'].every(key => value[key] === review.view[key]) || !object(value.receipt) || typeof value.stopSubmitted !== 'boolean') throw new Error('回执不属于当前原任务、原操作与设备窗口。');
   const receipt = value.receipt;
