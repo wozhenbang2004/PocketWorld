@@ -79,7 +79,8 @@ def browse(ctx,op,locked,observe=None,*,draft_only=False,draft_settings=None):
         if pick is not None and not locked():
             kind,r=rows[pick[1]]
             if kind=="draft": draft_detail(ctx,op,r,locked,settings=draft_settings)
-            else: {"tracked":detail,"added":added_detail,"removed":removed_detail,"newdraft":new_detail}[kind](ctx,op,r,locked)
+            elif kind=="newdraft": new_detail(ctx,op,r,locked,settings=draft_settings)
+            else: {"tracked":detail,"added":added_detail,"removed":removed_detail}[kind](ctx,op,r,locked)
         return
 
 

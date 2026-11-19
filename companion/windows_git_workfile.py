@@ -1,6 +1,5 @@
 """Compare ONE explicitly selected, Git-tracked local worktree text. No status scan, index, shell or output."""
 from contextlib import ExitStack, contextmanager
-import ctypes
 from dataclasses import dataclass
 import difflib
 import hashlib
@@ -13,44 +12,10 @@ from windows_git_source import _object_body
 from windows_git_subproject import parent as checked_project_root
 from windows_git_tree import FILE
 from windows_source_diff import _lines
-from windows_source_publisher import _ext, _origin
-
-# Local material only. Before opening, check exact-entry enumeration attributes (RECALL_ON_OPEN
-# is advertised there). No wildcards. Also reject reparse/offline, likely recall and protected items.
-EXCLUDED=0x2|0x4|0x40|0x400|0x1000|0x4000|0x40000|0x100000|0x400000
-NO_RECALL,OPEN_REPARSE,BACKUP=0x00100000,0x00200000,0x02000000
-
+from windows_source_publisher import _origin
+from windows_local_read_handle import EXCLUDED, attributes as _attributes, open_fixed as _open
 
 def bad(): raise PlatformError("Cannot bind this local single-file worktree comparison")
-
-
-def _attributes(api,path,*,absent=False):
-    find,close=api.k.FindFirstFileW,api.k.FindClose
-    find.argtypes,find.restype=[api.w.LPCWSTR,api.w.LPWIN32_FIND_DATAW],api.w.HANDLE
-    close.argtypes,close.restype=[api.w.HANDLE],api.w.BOOL
-    item=api.w.WIN32_FIND_DATAW()
-    h=find(_ext(path),ctypes.byref(item))
-    if h==ctypes.c_void_p(-1).value:
-        error=ctypes.get_last_error()
-        if absent and error==2: return None
-        raise ctypes.WinError(error)
-    try:
-        if item.cFileName!=ntpath.basename(path): bad()  # refuse alternate 8.3 or case aliases
-        return item.dwFileAttributes
-    finally: api.checked(close(h))
-
-
-def _open(api,path,directory,stack,*,body=False):
-    flags=_attributes(api,path)
-    if flags&EXCLUDED or bool(flags&0x10)!=directory: bad()
-    access=0x80000000 if body else 0x80  # GENERIC_READ only after the owner accepts this particular file.
-    h=api.k.CreateFileW(_ext(path),access,1,None,3,NO_RECALL|OPEN_REPARSE|(BACKUP if directory else 0),None)
-    if h==ctypes.c_void_p(-1).value: raise ctypes.WinError(ctypes.get_last_error())
-    stack.callback(api.k.CloseHandle,h)
-    info=api.info(h); actual=api.final(h)
-    if (actual.casefold()!=_ext(path).casefold() or ntpath.basename(actual)!=ntpath.basename(path)
-            or info.attributes&EXCLUDED or bool(info.attributes&0x10)!=directory or not directory and info.links!=1): bad()
-    return h,info,tuple(_origin(api,info))
 
 
 @dataclass(frozen=True)
@@ -114,17 +79,33 @@ def _content(raw):
     return text.replace("\r\n","\n").replace("\r","\n"),fmt
 
 
+def _body(live,pins,stack):
+    h,info,birth=_open(pins.api,live.path,False,stack,body=True)
+    if birth!=live.file or _version(info)!=live.version: bad()
+    reader=WindowsHandleReader(pins.api,h,MAX_TEXT)
+    reader.seek(0); data=reader.read(MAX_TEXT)
+    if not reader.verify_unchanged() or len(data)!=live.version[0]: bad()
+    return reader,data
+
+
+@contextmanager
+def same_observation(ctx,settings,source,committed,reviewed,sha,check):
+    """Hold the originally observed physical working file/version. No search or replacement."""
+    with selected(ctx,settings,source,committed,check) as (live,pins,_,_,stack):
+        if live!=reviewed: bad()
+        reader,data=_body(live,pins,stack)
+        if hashlib.sha256(data).hexdigest()!=sha: bad()
+        check(); yield data
+        if not reader.verify_unchanged(): bad()
+
+
 def compare(ctx,settings,source,committed,reviewed,check):
     with selected(ctx,settings,source,committed,check) as (live,pins,packs,oid,stack):
         if live!=reviewed: bad()
         before,_=_object_body(pins,packs,oid,b"blob",MAX_TEXT)
         if len(before)!=committed.size or hashlib.sha256(before).hexdigest()!=committed.sha: bad()
         check()
-        h,info,birth=_open(pins.api,live.path,False,stack,body=True)
-        if birth!=reviewed.file or _version(info)!=reviewed.version: bad()
-        reader=WindowsHandleReader(pins.api,h,MAX_TEXT)
-        reader.seek(0); data=reader.read(MAX_TEXT)
-        if not reader.verify_unchanged() or len(data)!=reviewed.version[0]: bad()
+        reader,data=_body(live,pins,stack)
         old,a=_content(before); new,b=_content(data); check()
         same=before==data
         # Exact raw hashes remain authoritative. The text diff normalizes BOM/newlines for reading;

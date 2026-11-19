@@ -66,7 +66,10 @@ final class OwnerPhoneGoalIndex {
             JSONObject item=new JSONObject().put("taskId",parent).put("operationId",op).put("argumentsDigest",row.getString(3))
                     .put("goal",preview).put("matchedLater",search.beyondPreview(preview)?true:null)
                     .put("screenMode",wire.getJSONObject("resourceBinding").getString("screenMode")).put("textOnly",DeviceProtocol.isAndroidTextReturn(wire)?true:null).put("createdAt",row.getLong(2));
-            if(originalPhone!=null)item.put("stopReceipt",SentPhoneStopReceipt.localFact(db,originalPhone,parent,op,wire));
+            if(originalPhone!=null){
+                JSONObject stop=SentPhoneStopReceipt.localFact(db,originalPhone,parent,op,wire);
+                if(stop!=null)item.put(stop.has("localPhase")?"stopAttempt":"stopReceipt",stop);
+            }
             if(!row.isNull(6)&&!row.isNull(7))acceptedFact(item,row.getString(6),row.getString(7),wire,parent,op);
             items.put(item);
         }}

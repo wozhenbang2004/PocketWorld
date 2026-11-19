@@ -133,10 +133,14 @@ class NativeCommandAdmission:
         database.execute("SAVEPOINT " + savepoint)
         try:
             claim = self.receiver.budget.claim(job["operationId"], self.envelope, self.permission, database)
+            detail = {"protocol": COMMAND_PROTOCOL, "audience": self.audience(),
+                      "historyAudience": accepted_audience(self.envelope, self.permission, job["operationId"], job["updatedAt"])}
+            if self.manager.platform.name == "windows":
+                from windows_command_name import FIELD, witnessed
+                seal = witnessed(self.manager, self.request, job, detail)
+                if seal is not None: detail[FIELD] = seal  # Private ledger only. Never add names or seals to a public job or peer frame.
             database.execute("INSERT INTO operations(operation_id,fingerprint,job_id,last_status,updated_at,details) VALUES (?,?,?,?,?,?)",
-                             (job["operationId"], self.fingerprint, job["id"], "queued", job["updatedAt"],
-                              json.dumps({"protocol": COMMAND_PROTOCOL, "audience": self.audience(),
-                                          "historyAudience": accepted_audience(self.envelope, self.permission, job["operationId"], job["updatedAt"])})))
+                             (job["operationId"], self.fingerprint, job["id"], "queued", job["updatedAt"], json.dumps(detail)))
             database.execute("RELEASE SAVEPOINT " + savepoint)
             return claim
         except BaseException:

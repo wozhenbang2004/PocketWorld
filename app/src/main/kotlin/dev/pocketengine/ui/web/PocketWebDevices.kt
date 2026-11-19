@@ -392,7 +392,10 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
             for (key in listOf("taskId", "operationId", "goal", "screenMode", "createdAt")) safe.put(key, row.get(key))
             if(received&&row.optBoolean("mayCheckLocalText"))safe.put("mayCheckLocalText",true)
             if(row.optBoolean("textOnly"))safe.put("textOnly",true)
-            if(source.isNotEmpty())row.optJSONObject("stopReceipt")?.let { safe.put("stopReceipt",it) }
+            if(source.isNotEmpty()){
+                row.optJSONObject("stopReceipt")?.let { safe.put("stopReceipt",it) }
+                    ?:row.optJSONObject("stopAttempt")?.let { safe.put("stopAttempt",it) }
+            }
             if(source.isNotEmpty() && row.has("targetAcceptedAt")) {
                 safe.put("targetAcceptedAt",row.getLong("targetAcceptedAt"))
                 if(row.optBoolean("targetRunRecorded"))safe.put("targetRunRecorded",true)

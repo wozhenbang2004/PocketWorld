@@ -120,8 +120,10 @@ def reopen(ctx,settings,item,locked):
     if item.kind=="draft":
         from windows_owner_draft_entry import detail
         detail(ctx,op,record,locked,settings=settings,read_patch=read_patch); return
-    if item.kind=="newdraft": from windows_new_source_draft_entry import detail
-    elif item.kind in ("set","proposedSet"): from windows_patch_set_entry import detail
+    if item.kind=="newdraft":
+        from windows_new_source_draft_entry import detail
+        detail(ctx,op,record,locked,read_patch=read_patch,settings=settings); return
+    if item.kind in ("set","proposedSet"): from windows_patch_set_entry import detail
     elif item.kind=="added": from windows_added_source_entry import detail
     elif item.kind=="removed": from windows_removed_source_entry import detail
     elif item.kind=="tracked": from windows_source_patch_entry import detail

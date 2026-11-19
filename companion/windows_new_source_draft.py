@@ -1,5 +1,5 @@
 """An owner-written /dev/null -> new ordinary source proposal; never create or edit that project file."""
-from contextlib import contextmanager
+from contextlib import ExitStack,contextmanager
 import ntpath
 import os
 import re
@@ -98,12 +98,53 @@ def records(ctx,op):
     return rows
 
 
-def save(ctx,settings,op,reviewed,display,expected,check):
+_BODY_FIELDS=frozenset(("draftBytes","draftSha","draftOid","bytes","patchSha"))
+
+
+@contextmanager
+def held_saved(ctx,op,row,check):
+    # Only OUR fixed new-file profile can supply an empty base. No working file,
+    # generic patch importer, arbitrary path, fuzzy application, or other member of a set.
+    from windows_patch_set import _member,_patch
+    def locked():
+        check()
+        return False
+    check()
+    if not any(_json(r)==_json(row) for r in records(ctx,op).values()): block()
+    src=_owner(ctx,op)["source"]; algo=src["objectFormat"]
+    f=row["fields"]; proof={k:v for k,v in f.items() if k not in _BODY_FIELDS}
+    with ExitStack() as pins:
+        raw=checked_output(ctx,op,row,locked,show=False,added=False,newdraft=True,content=True,hold=pins)
+        target=_patch(raw,_member("newdraft",row),f,algo,proposal_text=True)
+        bom,eol,display=unpack(target)
+        if bom or eol!="\n" or proposal((proof,algo),display)!=(f,raw): block()
+        check()
+        yield (proof,algo),display
+
+
+def read_saved(ctx,op,row,check):
+    with held_saved(ctx,op,row,check) as (_,display): return display  # historic text only; no repository access
+
+
+def restore(ctx,settings,op,row,check):
+    with held_saved(ctx,op,row,check) as (old,display):
+        with original(ctx,settings,op,old[0]["path"],check) as (proof,algo,current):
+            if (proof,algo)!=old: block()
+            current()
+            return (proof,algo),display
+
+
+def save(ctx,settings,op,reviewed,display,expected,check,*,previous=None):
     proof,algo=reviewed
-    with original(ctx,settings,op,proof["path"],check) as (again,current_algo,current):
+    with ExitStack() as held:
+        again,current_algo,current=held.enter_context(original(ctx,settings,op,proof["path"],check))
         if (again,current_algo)!=(proof,algo): block()
         f,raw=proposal((again,current_algo),display)
         if (f,raw)!=expected: block()
+        if previous is not None:
+            prior,old_text=held.enter_context(held_saved(ctx,op,previous,check))
+            if prior!=(again,current_algo) or f["draftSha"]==previous["fields"]["draftSha"] or old_text==display: block()
+            # The old physically verified read-only file stays pinned until the independent new receipt is published.
         rows=records(ctx,op); rid=key(f)
         old=next((r for r in rows.values() if r["id"]==rid),None)
         if old is not None: return old

@@ -39,8 +39,8 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
             reader.check(); check(owner.live && captured != null); approval?.close(); approval = exact
             return UUID.randomUUID().toString().also { token = it }
         }
-        @Synchronized fun take(value: String): TaskStoreTeamWriteHost.TextOutputApproval {
-            reader.check(); check(owner.live && token == value) { "这份许可审阅已使用或关闭，请核对原批准记录" }
+        @Synchronized fun take(value: String, project: Boolean): TaskStoreTeamWriteHost.TextOutputApproval {
+            reader.check(); check(owner.live && token == value && PocketWebFirstProjectOutput.matches(approval,project)) { "这份许可审阅已使用或关闭，请核对原批准记录" }
             token = null; return requireNotNull(approval)
         }
         @Synchronized fun discard(value: String) { if (token == value) { approval?.close(); approval = null; token = null } }
@@ -77,7 +77,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
     companion object {
         val COMMANDS = setOf("teams.attention", "teams.readAttention", "teams.snapshot", "teams.readRun", "teams.readDefinition", "teams.reviewDefinition", "teams.prepareDraftStart",
             "teams.reviewStart", "teams.reviewRemove", "teams.confirm", "teams.control", "teams.sendMessage",
-            "teams.readFrozenOutputs", "teams.readFrozenDiff", "teams.reviewFrozenTextApproval", "teams.approveFrozenText", "teams.reviewParentRevision", "teams.reviewWorkItemContinuation", "teams.reviewSoleFailedHandoff", "teams.answerAssignment", "teams.probeMember", "teams.closeReading", "teams.reviewPhoneStart", "teams.reviewMember", "teams.openResearchTask", "teams.openDeliveryWorker", "teams.readFinalPackageFiles", "teams.chooseFinalPackageTarget", "teams.saveFinalPackageTarget", "teams.discardFinalPackageTarget")
+            "teams.readFrozenOutputs", "teams.readFrozenDiff", "teams.reviewFrozenTextApproval", "teams.approveFrozenText", PocketWebFirstProjectOutput.REVIEW, PocketWebFirstProjectOutput.CONFIRM, "teams.reviewParentRevision", "teams.reviewWorkItemContinuation", "teams.reviewSoleFailedHandoff", "teams.answerAssignment", "teams.probeMember", "teams.closeReading", "teams.reviewPhoneStart", "teams.reviewMember", "teams.openResearchTask", "teams.openDeliveryWorker", "teams.readFinalPackageFiles", "teams.chooseFinalPackageTarget", "teams.saveFinalPackageTarget", "teams.discardFinalPackageTarget")
     }
 
     fun clear() {
@@ -723,7 +723,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                     val result = module.readOwnerFrozenFiles(runId,files.reader); stillSame()
                     val index = result.index(); val decision = module.ownerTextDecision(result,files.reader)
                     if (source != null && marker != null) { requireWorkFileIndex(index,decision,marker); controller.requireWorkFileReview(source,runId) }
-                    files.install(result); index.put("fileHandle",files.handle).put("ownerDecision",decision)
+                    files.install(result); index.put("fileHandle",files.handle).put("ownerDecision",decision).put("fullProject",owner.projectRun)
                 }, accept = { result ->
                     check(fileWindow === files && owner.live && files.captured != null) { "原成果阅读已关闭" }
                     deliver(result,null)
@@ -740,14 +740,15 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 val part = if (revision) captured.revisionPage(text(args,"path",240),offset) else captured.page(text(args,"artifactId"),offset)
                 deliver(part.put("fileHandle",files.handle),null)
             }
-            "teams.reviewFrozenTextApproval", "teams.approveFrozenText" -> {
-                val confirming = action == "teams.approveFrozenText"
+            "teams.reviewFrozenTextApproval", "teams.approveFrozenText", PocketWebFirstProjectOutput.REVIEW, PocketWebFirstProjectOutput.CONFIRM -> {
+                val project = action == PocketWebFirstProjectOutput.REVIEW || action == PocketWebFirstProjectOutput.CONFIRM
+                val confirming = action == "teams.approveFrozenText" || action == PocketWebFirstProjectOutput.CONFIRM
                 if (confirming) fields(args,"viewHandle","fileHandle","approvalHandle") else fields(args,"viewHandle","fileHandle")
                 val owner = readings[text(args,"viewHandle")] ?: error("原团队已关闭")
                 val files = fileWindow?.takeIf { it.owner === owner && owner.live && it.handle == text(args,"fileHandle") } ?: error("请重读原冻结文件")
                 val original = files.captured ?: error("原冻结目录不可用")
                 if (confirming) {
-                    val approval = files.take(text(args,"approvalHandle"))
+                    val approval = files.take(text(args,"approvalHandle"),project)
                     hostWork(approval, work = {
                         try { check(currentWindow() && owner.live); files.reader.check(); approval.confirm() } finally { approval.close() }
                     }, accept = { receipt -> deliver(receipt.put("fileHandle",files.handle),null) })
@@ -755,7 +756,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                     hostWork(work = {
                         check(currentWindow() && owner.live); files.reader.check()
                         val module = controller.webPluginFeatureHost().module("teams") as? TeamsModule ?: error("原团队不可用")
-                        val approval = module.reviewOwnerTextApproval(original)
+                        val approval = PocketWebFirstProjectOutput.open(module,original,project)
                         try { val shown = approval.preview(); shown.put("approvalHandle",files.offer(approval)).put("fileHandle",files.handle) }
                         catch (failure: Exception) { approval.close(); throw failure }
                     }, accept = { shown ->

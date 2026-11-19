@@ -1,3 +1,14 @@
+const firstStates={preparing:'准备中',running:'登记为执行中',stopping:'正在停手',paused:'已暂停',awaiting_user:'等待你处理',
+  needs_confirmation:'等待你确认',reconciling:'有操作结果待核对',interrupted:'已中断',failed:'执行失败',cancelled:'已取消',stopped:'已停止',completed:'已记为完成'} as const;
+export type BlankFirstRecord={taskId:string;runId:string;epoch:1;status:keyof typeof firstStates;updatedAt:number};
+export const firstRecordLabel=(record:BlankFirstRecord)=>firstStates[record.status];
+function blankFirstRecord(row:Record<string,any>,draft:unknown,task:unknown,run:unknown,epoch:unknown):BlankFirstRecord|undefined{
+  const f=row.firstRunRecord;
+  if(!draft||task!==draft||typeof task!=='string'||typeof run!=='string'||!run||epoch!==1||f?.format!=='pocketworld.draft-first-run-status.v1'||
+    f.taskId!==task||f.runId!==run||f.epoch!==1||typeof f.status!=='string'||!Object.hasOwn(firstStates,f.status)||
+    f.status!==(typeof row.taskStatus==='string'?row.taskStatus:row.status)||!Number.isSafeInteger(f.updatedAt)||f.updatedAt<=0||f.updatedAt>8_640_000_000_000_000)return;
+  return {taskId:task,runId:run,epoch:1,status:f.status as keyof typeof firstStates,updatedAt:f.updatedAt};
+}
 export type PhoneStartReceipt = {
   status: 'accepted' | 'rejected' | 'unknown';
   requestId?: string;
@@ -10,6 +21,8 @@ export type PhoneStartReceipt = {
   admitted?: boolean;
   admissionState?: 'admitted'|'service_denied'|'component_unconfirmed'|'run_recorded'|'no_run'|'unconfirmed';
   taskStatus?: string;
+  firstRecord?:BlankFirstRecord;
+  firstReadUnconfirmed?:boolean;
   message: string;
 };
 type ReviewedPhoneIdentity = { requestId?: string; conversationId?: string; draftRequestId?: string };
@@ -33,6 +46,8 @@ export function phoneStartReceipt(value: unknown, expected?: ReviewedPhoneIdenti
     (first&&(phase==='admitted'&&row.admitted===true||phase==='service_denied'&&row.admitted===false||phase==='component_unconfirmed'&&row.admitted!==true||phase==='run_recorded'&&row.admitted!==true)||
      !runId&&(phase==='no_run'||phase==='unconfirmed'))?phase:undefined;
   const taskStatus = identity(row.taskStatus) || (row.accepted === true && row.status !== 'accepted' ? identity(row.status) : undefined);
+  const firstRecord=status==='accepted'&&draftRequestId&&admissionState&&!['no_run','unconfirmed'].includes(admissionState)
+    ?blankFirstRecord(row,draftRequestId,taskId,runId,epoch):undefined;
   const message = typeof row.message === 'string' && row.message ? row.message
     : status === 'accepted' ? '原手机任务已创建。'
     : status === 'rejected' ? '这次任务尚未接纳，草稿仍保留。'
@@ -42,7 +57,8 @@ export function phoneStartReceipt(value: unknown, expected?: ReviewedPhoneIdenti
     ...(requestId ? { requestId } : {}), ...(conversationId ? { conversationId } : {}),
     ...(taskId ? { taskId } : {}), ...(runId && epoch ? { runId, epoch } : {}),
     ...(original && typeof row.admitted === 'boolean' ? { admitted: row.admitted } : {}),
-    ...(admissionState?{admissionState}:{}), ...(original && taskStatus ? { taskStatus } : {}), message };
+    ...(admissionState?{admissionState}:{}), ...(original && taskStatus ? { taskStatus } : {}),
+    ...(firstRecord?{firstRecord}:{}),...(draftRequestId&&original&&row.firstRunReadUnconfirmed===true?{firstReadUnconfirmed:true}:{}),message };
 }
 
 export function phoneStartFailure(error: unknown, expected?: ReviewedPhoneIdentity): PhoneStartReceipt {

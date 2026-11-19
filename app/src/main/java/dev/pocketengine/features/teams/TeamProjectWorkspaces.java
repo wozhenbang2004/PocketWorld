@@ -100,6 +100,14 @@ public final class TeamProjectWorkspaces {
         if(!phoneIntegratorOnly)for(int i=0;i<items.length();i++)requireCheck(forWorkItem(value,items.getJSONObject(i)));requireCheck(forIntegrator(value));if(failedBaseline!=null){failedBaseline.checkCurrent();value.put("ownerSelectedKnownFailedBaseline",true);value.remove("selectionHash");value.put("selectionHash",TaskStore.capabilityFingerprint(value));}current.check();synchronized(sources){if(!sources.containsKey(captured.getString("snapshotIdentity"))&&sources.size()>=8)throw new IllegalStateException("原完整基线保留已满，未丢弃未决资源");sources.put(captured.getString("snapshotIdentity"),source);}return new Selection(()->{current.check();if(failedBaseline!=null)failedBaseline.checkCurrent();},value);
     }
     public void checkSelectionCurrent(Selection selection)throws Exception {selection.checkCurrent();JSONObject value=selection.view();LocalModule.TeamProjectSource actual=selectedSource(value);if(!value.getString("snapshotIdentity").equals(actual.view().getString("snapshotIdentity")))throw new SecurityException("完整基线文件/空目录/执行位在审阅后改变");selection.checkCurrent();}
+    /** Read the exact previously selected local checkout; this never prepares another copy, runs a command or gives a model access. */
+    void checkFirstOutputBaseline(JSONObject facts,RunControl owner)throws Exception {
+        owner.check();JSONObject now=local.captureTeamProjectSourceForHost(facts.getString("checkoutId"),facts.getString("parentSourceDigest")).view();
+        if(!facts.getString("targetProjectId").equals(now.opt("parentProjectId"))||!facts.getString("checkoutId").equals(now.opt("parentCheckoutId"))||
+                !facts.getString("sourceDigest").equals(now.opt("sourceDigest"))||!facts.getString("snapshotIdentity").equals(now.opt("snapshotIdentity")))
+            throw new SecurityException("原完整项目基线已改变，请重读源项目，未登记许可");
+        owner.check();
+    }
     private static JSONObject filter(JSONObject selected,JSONObject item,boolean integrator)throws Exception {
         JSONObject out=new JSONObject(selected.toString());JSONArray templates=selected.getJSONArray("templates"),kept=new JSONArray(),files=item==null?new JSONArray():item.getJSONArray("files");java.util.Set<String> paths=new java.util.HashSet<>();for(int i=0;i<files.length();i++)paths.add(files.getJSONObject(i).getString("path"));
         for(int i=0;i<templates.length();i++){JSONObject t=templates.getJSONObject(i);boolean use=integrator?t.getBoolean("forIntegrator"):!t.getBoolean("integratorOnly");JSONArray required=t.getJSONArray("forOutputPaths");for(int p=0;!integrator&&p<required.length();p++)use&=paths.contains(required.getString(p));if(use)kept.put(t);}

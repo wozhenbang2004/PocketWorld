@@ -329,10 +329,7 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
             reviewAvailability(id).require(); TaskStoreDeviceTasks.GoalModelReview review = app.reviewDeviceGoalModel(id);
             return new NativeDeviceWorkspaceHost.GoalReviewAction() {
                 public JSONObject view() throws Exception {
-                    JSONObject view = review.view(), task = tasks.get(id, false), context = task.optJSONObject("deviceContextSnapshot");
-                    view.put("goal", task.optString("goal"));
-                    if (context != null) view.put("contextSummary", context.optString("summary")).put("contextArtifactCount", context.optJSONArray("artifacts") == null ? 0 : context.getJSONArray("artifacts").length()).put("contextRetention", context.optString("retention"));
-                    return view;
+                    return review.ownerInputView();
                 }
                 public void confirm(boolean future) throws Exception { app.confirmDeviceGoalModel(review, future); changed(); }
             };
@@ -435,7 +432,8 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
                 JSONObject row=records.getJSONObject(i);if(!source.equals(row.opt("taskId")))throw new SecurityException("原私人任务发生变化");
                 JSONObject safe=new JSONObject().put("goal",row.getString("goal")).put("createdAt",row.getLong("createdAt"));
                 if(row.has("targetAcceptedAt"))safe.put("targetAcceptedAt",row.getLong("targetAcceptedAt"));
-                if(row.optJSONObject("stopReceipt")!=null)safe.put("stopReceipt",row.getJSONObject("stopReceipt"));rows.put(safe);
+                if(row.optJSONObject("stopReceipt")!=null)safe.put("stopReceipt",row.getJSONObject("stopReceipt"));
+                else if(row.optJSONObject("stopAttempt")!=null)safe.put("stopAttempt",row.getJSONObject("stopAttempt"));rows.put(safe);
             }
             String next="";
             if(page.getBoolean("hasMore")){

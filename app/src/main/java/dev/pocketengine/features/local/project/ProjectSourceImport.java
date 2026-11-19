@@ -47,7 +47,7 @@ public final class ProjectSourceImport {
     }
     private static final class Scan {
         final TreeMap<String,Entry> files=new TreeMap<>(),directories=new TreeMap<>();
-        final TreeMap<String,String> omitted=new TreeMap<>();final Set<String> handles=new HashSet<>();int visited;
+        final TreeMap<String,String> omitted=new TreeMap<>();final Set<String> handles=new HashSet<>();int visited;String skippedHandle;
         JSONArray omissions()throws Exception{JSONArray rows=new JSONArray();for(var item:omitted.entrySet())rows.put(new JSONObject().put("path",item.getKey()).put("reason",item.getValue()));return rows;}
         String identity()throws Exception{JSONArray entries=new JSONArray();for(var item:directories.entrySet())entries.put(identity(item.getKey(),item.getValue()));for(var item:files.entrySet())entries.put(identity(item.getKey(),item.getValue()));return ProjectSources.digest(new JSONObject().put("entries",entries).put("omitted",omissions()));}
         private JSONObject identity(String path,Entry entry)throws Exception{return new JSONObject().put("path",path).put("handle",entry.handle).put("directory",entry.directory).put("bytes",entry.advertisedBytes==null?JSONObject.NULL:entry.advertisedBytes);}
@@ -67,31 +67,58 @@ public final class ProjectSourceImport {
         try(var contents=Files.list(directory.toPath())){if(contents.findAny().isPresent())throw new SecurityException("源码导入只能写入这次新空暂存目录");}
     }
     private static void count(Scan scan)throws Exception{if(++scan.visited>MAX_ENTRIES)throw new IllegalArgumentException("来源超过10000个目录条目，未导入部分工程");}
-    private static Scan enumerate(Tree source,boolean generated,Current current)throws Exception {
-        Scan scan=new Scan();String root=source.rootHandle();if(root==null||root.isEmpty())throw new IllegalArgumentException("没有可读取的主人所选目录");scan.handles.add(root);enumerate(source,root,"",generated,scan,current);return scan;
+    /** Literal owner-selected directory below the selected tree, never a pattern, root, file or published deletion. */
+    public static String checkedSkipDirectory(String value)throws Exception {
+        if(value==null||value.isEmpty())return "";
+        if(value.contains("*")||value.contains("?"))throw new IllegalArgumentException("跳过目录请填写原件的确切相对路径，不使用通配符");
+        return path(value);
     }
-    private static void enumerate(Tree source,String handle,String parent,boolean generated,Scan scan,Current current)throws Exception {
+    private static Scan enumerate(Tree source,boolean generated,String skip,Current current)throws Exception {
+        Scan scan=new Scan();String root=source.rootHandle();if(root==null||root.isEmpty())throw new IllegalArgumentException("没有可读取的主人所选目录");scan.handles.add(root);enumerate(source,root,"",generated,skip,scan,current);
+        if(!skip.isEmpty()&&scan.skippedHandle==null)throw new IllegalArgumentException("未在所选文件夹中找到可单独跳过的目录「"+skip+"」（或它已被默认排除），没有建立项目");return scan;
+    }
+    private static void enumerate(Tree source,String handle,String parent,boolean generated,String skip,Scan scan,Current current)throws Exception {
         current.check();List<Entry> children=source.children(handle);if(children==null||children.size()>MAX_ENTRIES)throw new IllegalArgumentException("目录读取未完整返回或条目超限");Set<String> siblingNames=new HashSet<>();
         for(Entry entry:children){current.check();count(scan);if(entry==null||entry.handle==null||entry.handle.isEmpty()||!scan.handles.add(entry.handle))throw new SecurityException("所选目录包含循环、重复目标或无法确定的文件别名，未导入部分工程");String name=component(entry.name),relative=path(parent.isEmpty()?name:parent+"/"+name);if(!siblingNames.add(name))throw new SecurityException("所选目录包含同名冲突，未覆盖文件");
             // Refuse unknown provider objects even if their names would otherwise be excluded.
             if(entry.virtual||entry.partial)throw new IllegalArgumentException("来源包含虚拟或尚未下载完整的文件，请先在原文件应用准备完成："+relative);
             if(omission(relative,entry.directory,generated,scan.omitted)!=null)continue;
-            if(entry.directory){if(scan.directories.size()>=ProjectPackageArchive.MAX_FILES)throw new IllegalArgumentException("源码目录超过2000项");scan.directories.put(relative,entry);enumerate(source,entry.handle,relative,generated,scan,current);}
-            else {if(entry.advertisedBytes!=null&&(entry.advertisedBytes<0||entry.advertisedBytes>ProjectPackageArchive.MAX_FILE_BYTES)||scan.files.size()>=ProjectPackageArchive.MAX_FILES)throw new IllegalArgumentException("源码文件超过单个2MiB或2000文件范围");scan.files.put(relative,entry);}
+            if(relative.equals(skip)){
+                if(!entry.directory)throw new IllegalArgumentException("「"+relative+"」是文件，不是这次要跳过的目录；未建立项目");
+                if(scan.omitted.size()>=ProjectPackageArchive.MAX_FILES)throw new IllegalArgumentException("源码排除清单超过2000项");
+                scan.skippedHandle=entry.handle;scan.omitted.put(relative,"owner_excluded_source_directory");continue;
+            }
+            if(entry.directory){if(scan.directories.size()>=ProjectPackageArchive.MAX_FILES)throw new IllegalArgumentException("源码目录超过2000项");scan.directories.put(relative,entry);enumerate(source,entry.handle,relative,generated,skip,scan,current);}
+            else {if(entry.advertisedBytes!=null&&(entry.advertisedBytes<0||entry.advertisedBytes>ProjectPackageArchive.MAX_FILE_BYTES))throw treeFileTooLarge(relative);if(scan.files.size()>=ProjectPackageArchive.MAX_FILES)throw new IllegalArgumentException("源码文件超过2000个，当前路径："+relative);scan.files.put(relative,entry);}
         }
     }
     public static Selection tree(Tree source,File emptyDestination,String selectionId,String label,boolean generated,Current current)throws Exception {
-        freshDirectory(emptyDestination);Scan before=enumerate(source,generated,current);if(before.files.isEmpty())throw new IllegalArgumentException("所选目录没有纳入的源码文件，请核对排除范围");
+        return tree(source,emptyDestination,selectionId,label,generated,"",current);
+    }
+    /** A relative-path suggestion from this real error, never a default selection or an assertion about all files there. */
+    public static final class FolderFileTooLarge extends IllegalArgumentException {
+        public final String suggestedDirectory;
+        private FolderFileTooLarge(String path){super("单个源码文件超过2MiB或大小无效："+path+"。可在导入范围中明确跳过它所在的目录后重新选择。");
+            String[] parts=path.split("/");String suggestion=null;
+            for(int i=1;i+2<parts.length;i++)if(parts[i].equals("build")&&Set.of("outputs","intermediates","generated","tmp").contains(parts[i+1])){
+                suggestion=String.join("/",java.util.Arrays.copyOf(parts,i+1));break;
+            }
+            suggestedDirectory=suggestion;
+        }
+    }
+    private static FolderFileTooLarge treeFileTooLarge(String path){return new FolderFileTooLarge(path);}
+    public static Selection tree(Tree source,File emptyDestination,String selectionId,String label,boolean generated,String excludedDirectory,Current current)throws Exception {
+        String skip=checkedSkipDirectory(excludedDirectory);freshDirectory(emptyDestination);Scan before=enumerate(source,generated,skip,current);if(before.files.isEmpty())throw new IllegalArgumentException("所选目录没有纳入的源码文件，请核对排除范围");
         for(String directory:before.directories.keySet()){current.check();File target=NativeCommandExecutor.within(emptyDestination,directory);if(!target.mkdirs()&&!target.isDirectory())throw new IllegalStateException("无法保留来源中的空目录");}
         TreeMap<String,String> hashes=new TreeMap<>();long total=0;
-        for(var item:before.files.entrySet()){current.check();File target=target(emptyDestination,item.getKey());Copy copied;try(InputStream input=source.open(item.getValue())){if(input==null)throw new IllegalStateException("原目录有文件无法打开，未导入部分工程");copied=copy(input,target,ProjectPackageArchive.MAX_FILE_BYTES,current);}
-            if(item.getValue().advertisedBytes!=null&&item.getValue().advertisedBytes!=copied.bytes)throw new SecurityException("原文件读取量与来源声明不同，请重新选择当前版本");total+=copied.bytes;if(total>ProjectPackageArchive.MAX_TOTAL_BYTES)throw new IllegalArgumentException("源码合计超过16MiB，未导入部分工程");hashes.put(item.getKey(),copied.sha);
+        for(var item:before.files.entrySet()){current.check();File target=target(emptyDestination,item.getKey());Copy copied;try(InputStream input=source.open(item.getValue())){if(input==null)throw new IllegalStateException("原目录有文件无法打开，未导入部分工程");copied=copy(input,target,ProjectPackageArchive.MAX_FILE_BYTES,current);}catch(ByteLimit limit){throw treeFileTooLarge(item.getKey());}
+            if(item.getValue().advertisedBytes!=null&&item.getValue().advertisedBytes!=copied.bytes)throw new SecurityException("原文件读取量与来源声明不同，请重新选择当前版本");total+=copied.bytes;if(total>ProjectPackageArchive.MAX_TOTAL_BYTES)throw new IllegalArgumentException("源码合计超过16MiB，当前文件："+item.getKey()+"。没有建立部分项目");hashes.put(item.getKey(),copied.sha);
         }
         // A directory provider is not a POSIX snapshot. Re-enumerate and reread the included bytes;
         // still declare atomicSourceFence=false rather than claiming a provider-wide transaction.
-        Scan after=enumerate(source,generated,current);if(!before.identity().equals(after.identity()))throw new SecurityException("来源目录在读取时变化，未发布混合版本工程");
-        for(var item:after.files.entrySet()){current.check();Copy checked;try(InputStream input=source.open(item.getValue())){if(input==null)throw new IllegalStateException("原文件复核读取失败，未发布工程");checked=copy(input,null,ProjectPackageArchive.MAX_FILE_BYTES,current);}if(!hashes.get(item.getKey()).equals(checked.sha))throw new SecurityException("原文件在读取时SHA变化，未发布混合版本工程");}
-        return finish(emptyDestination,selectionId,label,"saf_tree",generated,before.omissions(),new JSONObject().put("sourceFilesReread",true).put("providerAtomicSnapshot",false).put("executableBitsAvailable",false),current);
+        Scan after=enumerate(source,generated,skip,current);if(!java.util.Objects.equals(before.skippedHandle,after.skippedHandle)||!before.identity().equals(after.identity()))throw new SecurityException("来源目录在读取时变化，未发布混合版本工程");
+        for(var item:after.files.entrySet()){current.check();Copy checked;try(InputStream input=source.open(item.getValue())){if(input==null)throw new IllegalStateException("原文件复核读取失败，未发布工程");checked=copy(input,null,ProjectPackageArchive.MAX_FILE_BYTES,current);}catch(ByteLimit limit){throw treeFileTooLarge(item.getKey());}if(!hashes.get(item.getKey()).equals(checked.sha))throw new SecurityException("原文件在读取时SHA变化，未发布混合版本工程");}
+        return finish(emptyDestination,selectionId,label,"saf_tree",generated,before.omissions(),new JSONObject().put("ownerExcludedDirectory",skip.isEmpty()?null:skip).put("sourceFilesReread",true).put("providerAtomicSnapshot",false).put("executableBitsAvailable",false),current);
     }
     public static Selection zip(File archive,File emptyDestination,String selectionId,String label,boolean stripSingleRoot,boolean generated,Current current)throws Exception {
         freshDirectory(emptyDestination);current.check();if(Files.isSymbolicLink(archive.toPath())||!Files.isRegularFile(archive.toPath(),LinkOption.NOFOLLOW_LINKS)||archive.length()<22||archive.length()>ProjectPackageArchive.MAX_ARCHIVE_BYTES)throw new IllegalArgumentException("普通ZIP不是有界完整普通文件");long expanded=ProjectPackageArchive.preflightSelectedZip(archive);String archiveSha=fileSha(archive,current);long archiveBytes=archive.length();
@@ -151,9 +178,10 @@ public final class ProjectSourceImport {
     private static void parents(String relative,Scan scan)throws Exception {for(int slash=relative.indexOf('/');slash>=0;slash=relative.indexOf('/',slash+1)){String path=relative.substring(0,slash);if(!scan.directories.containsKey(path)){if(scan.directories.size()>=ProjectPackageArchive.MAX_FILES)throw new IllegalArgumentException("ZIP隐含目录超过2000项");scan.directories.put(path,new Entry(path,path,true,0L,false,false));}}}
     private static File target(File root,String path)throws Exception {File target=NativeCommandExecutor.within(root,path);File parent=target.getParentFile();if(!parent.isDirectory()&&!parent.mkdirs())throw new IllegalStateException("无法建立源码目录");if(Files.exists(target.toPath(),LinkOption.NOFOLLOW_LINKS))throw new SecurityException("源码目标不是新空文件，未覆盖");return target;}
     private static final class Copy {final String sha;final long bytes,crc;Copy(String sha,long bytes,long crc){this.sha=sha;this.bytes=bytes;this.crc=crc;}}
+    private static final class ByteLimit extends IllegalArgumentException {ByteLimit(){super("源码读取超过原生字节上限，未导入部分文件");}}
     private static Copy copy(InputStream input,File destination,int limit,Current current)throws Exception {
         MessageDigest sha=MessageDigest.getInstance("SHA-256");CRC32 crc=new CRC32();long bytes=0;int idleReads=0;byte[] buffer=new byte[8192];
-        try(java.nio.channels.FileChannel output=destination==null?null:java.nio.channels.FileChannel.open(destination.toPath(),java.nio.file.StandardOpenOption.CREATE_NEW,java.nio.file.StandardOpenOption.WRITE,LinkOption.NOFOLLOW_LINKS)){for(int count;(count=input.read(buffer))>=0;){current.check();if(count==0){if(++idleReads>8)throw new java.io.IOException("来源流连续返回零进度，未发布部分文件");continue;}idleReads=0;bytes+=count;if(bytes>limit)throw new IllegalArgumentException("源码读取超过原生字节上限，未导入部分文件");sha.update(buffer,0,count);crc.update(buffer,0,count);if(output!=null){java.nio.ByteBuffer data=java.nio.ByteBuffer.wrap(buffer,0,count);while(data.hasRemaining())output.write(data);}}current.check();if(output!=null)output.force(true);}
+        try(java.nio.channels.FileChannel output=destination==null?null:java.nio.channels.FileChannel.open(destination.toPath(),java.nio.file.StandardOpenOption.CREATE_NEW,java.nio.file.StandardOpenOption.WRITE,LinkOption.NOFOLLOW_LINKS)){for(int count;(count=input.read(buffer))>=0;){current.check();if(count==0){if(++idleReads>8)throw new java.io.IOException("来源流连续返回零进度，未发布部分文件");continue;}idleReads=0;bytes+=count;if(bytes>limit)throw new ByteLimit();sha.update(buffer,0,count);crc.update(buffer,0,count);if(output!=null){java.nio.ByteBuffer data=java.nio.ByteBuffer.wrap(buffer,0,count);while(data.hasRemaining())output.write(data);}}current.check();if(output!=null)output.force(true);}
         return new Copy(hex(sha.digest()),bytes,crc.getValue());
     }
     public static long copyArchive(InputStream input,File target,Current current)throws Exception{return copy(input,target,ProjectPackageArchive.MAX_ARCHIVE_BYTES,current).bytes;}

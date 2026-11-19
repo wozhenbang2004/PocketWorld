@@ -34,8 +34,13 @@ def compare(ctx,settings,src,file,current,observe):
     while current():
         choices=[("text","阅读这次实际读到的工作文件"),("ids","查看两份字节的 SHA-256")]
         if diff is not None: choices.insert(0,("diff","查看完整行差异\n换行和 BOM 按文字显示；原字节编号另列。"))
+        if diff is not None and max(file.size,live.version[0])<=32768:
+            choices.append(("draft","从这份已核工作文本起草独立补丁\n只用同一原提交的单文件副本作底稿；不回写工作文件。"))
         pick=_dialog(label,body,choices,retire=locked)
         if not current() or pick is None: return
+        if pick=="draft":
+            from windows_workfile_local_draft import start
+            start(ctx,settings,src,file,live,result,current,observe); continue
         if pick=="ids":
             _dialog("这次字节对照",f"原提交：{file.sha}\n工作文件：{result['currentSha']}\n不对应整个仓库或当前暂存区。",[],retire=locked); continue
         display=diff if pick=="diff" else result["current"]

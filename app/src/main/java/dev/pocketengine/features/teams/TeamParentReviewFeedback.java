@@ -41,7 +41,12 @@ final class TeamParentReviewFeedback {
         JSONObject approved=state.optJSONObject("approvedReview");
         if(approved!=null){
             if(expected.equals(approved.optString("planHash"))&&"owner".equals(approved.optString("actorId"))&&"private".equals(approved.optString("spaceId"))
-                    &&approved.optString("reviewId").matches("[a-f0-9-]{36}")&&team.equals(approved.getJSONObject("plan").optString("teamRunId")))return null;
+                    &&approved.optString("reviewId").matches("[a-f0-9-]{36}")&&team.equals(approved.getJSONObject("plan").optString("teamRunId"))){
+                if(TeamFirstProjectReview.registrationOnly(approved))
+                    return stop("first_project_files_registered_only","主人已登记这版原项目文件。这不是启动许可，不能以此发起整合、检查或打包。")
+                            .put("queryOnly",true).put("separateIntegratorStartRequired",true).put("executionAuthorized",false);
+                return null;
+            }
             return stop("prior_owner_review_needs_reconciliation","已有另一份主人许可，不能拿它写回这版文件。请核对原整合记录，不创建新执行。");
         }
         return stop("awaiting_owner_exact_plan_approval","本版独审已完整返回且没有阻断项，仍没有主人的本版写回许可。请主人核对原成果与目标；本次不会批准或整合。").put("requiresOwnerReview",true).put("awaitingOwnerDecision",true);

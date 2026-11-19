@@ -2,6 +2,7 @@
 from __future__ import annotations
 import ctypes as c
 from ctypes import wintypes as w
+from dataclasses import dataclass
 import struct
 
 
@@ -17,23 +18,44 @@ def ask_original_operation(current):
     return _ask(current, lookup=True)
 
 
-def source_text(current, title, hint, initial, *, review=False):
-    """An owner-local source draft or a read-only full diff, never a phone goal."""
-    return _ask(current, lookup=False, source=(title,hint,initial,review))
+START_LOCAL_DRAFT=object()  # Only returned by the distinct owner button on an eligible read-only source hit.
+
+
+@dataclass(frozen=True)
+class _Source:
+    title: str
+    hint: str
+    text: str
+    review: bool
+    selection: tuple | None
+    caret: int | None
+    from_hit: bool
+
+
+def source_text(current,title,hint,initial,*,review=False,selection=None,caret=None,from_hit=False):
+    """An owner-local draft or read-only text. Reading a match alone never enters the editor."""
+    if selection is not None and not review or caret is not None and review or from_hit and (not review or selection is None):
+        raise ValueError("Incompatible local text view")
+    return _ask(current,lookup=False,source=_Source(title,hint,initial,review,selection,caret,from_hit))
 
 
 def ask_committed_path(current):
     return _ask(current,lookup=True,project_path=True)
 
 
-def _ask(current, *, lookup, source=None, project_path=False):
+def ask_source_query(current):
+    return _ask(current,lookup=True,source_query=True)
+
+
+def _ask(current, *, lookup, source=None, project_path=False, source_query=False):
     # Standard dialog template: scale in dialog units, native tab order, IME,
     # multiline edit, Escape and system-close. IDOK only returns a LOCAL draft.
     def string(text): return (text + "\0").encode("utf-16le")
     width,height = (365,192) if source else (292,82 if lookup else 147)
-    title = source[0] if source else "原提交中的相对文件路径" if project_path else ("找回这台电脑接过的原操作" if lookup else "交给手机 · 写下这次目标")
+    title = source.title if source else "原提交中的相对文件路径" if project_path else ("找回这台电脑接过的原操作" if lookup else "交给手机 · 写下这次目标")
     if project_path=="new-source": title="新源码拟用的相对路径"
-    template = bytearray(struct.pack("<IIHhhhh", 0x80C808C0, 0, 4, 0, 0, width,height))
+    if source_query: title="在原副本中查找哪段文字？"
+    template = bytearray(struct.pack("<IIHhhhh", 0x80C808C0, 0, 5 if source and source.from_hit else 4, 0, 0, width,height))
     template.extend(b"\0\0\0\0" + string(title) + struct.pack("<H", 9) + string("Segoe UI"))
     def item(style, x, y, width, height, ident, atom, title):
         template.extend(b"\0" * (-len(template) % 4))
@@ -42,13 +64,15 @@ def _ask(current, *, lookup, source=None, project_path=False):
     hint = "在手机「原派发」里查看完整的原操作编号。只查这台电脑，不联系手机。" if lookup else "只发送这里的文字，不附带电脑文件、项目或历史。"
     if project_path: hint="填写从项目根开始的确切文件路径，如 src/Main.kt。不会按文件名搜索或打开当前工作树。"
     if project_path=="new-source": hint="在原目录下为一个新文件取名，如 src/NewFeature.kt。只核对是否可提议，不会创建该项目文件。"
-    review = bool(source and source[3])
-    item(0, 9, 7, width-19, 24 if source else 19, 100, 0x82, source[1] if source else hint)
+    if source_query: hint="输入区分大小写的完整字面文字（最多 96 个 UTF-16 单元），下一步仍需确认确切范围。不执行表达式。"
+    review = bool(source and source.review)
+    item(0, 9, 7, width-19, 24 if source else 19, 100, 0x82, source.hint if source else hint)
     control_style = (0x003010c4 | (0x800 if review else 0)) if source else (0x80 if lookup else 0x00201044)
     item(0x00800000 | 0x10000 | control_style, 9, 33 if source else 27, width-19, 130 if source else 17 if lookup else 86, 101, 0x81, "")
     buttons_y = height-26 if not lookup else 54
-    item(0x10001, width-137, buttons_y, 73, 16, 1, 0x80, "返回核对" if review else "预览差异" if source else "核对路径" if project_path else "找原回执" if lookup else "核对草稿")
+    item(0x10001, width-137, buttons_y, 73, 16, 1, 0x80, "返回核对" if review else "预览差异" if source else "核对路径" if project_path else "核对范围" if source_query else "找原回执" if lookup else "核对草稿")
     item(0x10000, width-60, buttons_y, 51, 16, 2, 0x80, "取消")
+    if source and source.from_hit: item(0x10000,9,buttons_y,93,16,3,0x80,"从此处起草")
     user, kernel = c.WinDLL("user32", use_last_error=True), c.WinDLL("kernel32")
     proc = c.WINFUNCTYPE(c.c_ssize_t, w.HWND, w.UINT, w.WPARAM, w.LPARAM)
     def signature(lib, name, args, result):
@@ -69,20 +93,31 @@ def _ask(current, *, lookup, source=None, project_path=False):
         nonlocal value, overflow
         try:
             if message == 0x110:  # WM_INITDIALOG
-                edit = control(hwnd, 101); send(edit, 0xc5, 262144 if source else 2000, 0)
+                edit = control(hwnd, 101); send(edit, 0xc5, 262144 if source else 96 if source_query else 2000, 0)
                 if source:
-                    units = len(source[2].encode("utf-16le"))//2
-                    if not current() or units>262144 or not write(hwnd,101,source[2]) or send(edit,0x0e,0,0)!=units:
+                    units = len(source.text.encode("utf-16le"))//2
+                    if not current() or units>262144 or not write(hwnd,101,source.text) or send(edit,0x0e,0,0)!=units:
                         finish(hwnd,2); return 0
                     send(edit,0xb1,0,0)  # caret at start, without selecting or copying text
                 focus(edit)
+                if source and source.selection is not None:
+                    start,end=source.selection
+                    if not review or type(start) is not int or type(end) is not int or not 0<=start<end<=units: finish(hwnd,2); return 0
+                    send(edit,0xb1,start,end); send(edit,0xb7,0,0)  # EM_SETSEL/EM_SCROLLCARET. No clipboard write.
+                if source and source.caret is not None:
+                    at=source.caret
+                    if review or type(at) is not int or not 0<=at<=units: finish(hwnd,2); return 0
+                    send(edit,0xb1,at,at); send(edit,0xb7,0,0)  # position without selecting/replacing the match
                 if not timer(hwnd, 1, 700, None): finish(hwnd, 2)
                 return 0
             if message == 0x10 or message == 0x113 and not current():
                 finish(hwnd, 2); return 1
-            if (source or project_path) and message==0x111 and wp&0xffff==101 and (wp>>16)&0xffff==0x501:  # EN_MAXTEXT
+            if (source or project_path or source_query) and message==0x111 and wp&0xffff==101 and (wp>>16)&0xffff==0x501:  # EN_MAXTEXT
                 overflow=True
-                write(hwnd,100,"输入超出上限；请取消后重新填写确切路径。" if project_path else "输入超过编辑框上限，不能把截断文字保存为补丁。请取消后重新起草。")
+                write(hwnd,100,"查找词过长，不能使用截断文字；请取消后重填。" if source_query else "输入超出上限；请取消后重新填写确切路径。" if project_path else "输入超过编辑框上限，不能把截断文字保存为补丁。请取消后重新起草。")
+                return 1
+            if message==0x111 and wp&0xffff==3 and (wp>>16)&0xffff==0 and source and source.from_hit:
+                if current() and not overflow: value=START_LOCAL_DRAFT; finish(hwnd,1)
                 return 1
             if message == 0x111 and wp & 0xffff in (1, 2):
                 if wp & 0xffff == 1 and current():
@@ -97,12 +132,13 @@ def _ask(current, *, lookup, source=None, project_path=False):
                             if read(hwnd,101,text,len(text))!=units: finish(hwnd,2); return 1
                             value=text.value  # Empty file, whitespace and final newline are meaningful.
                     else:
-                        if project_path and overflow: return 1
+                        if (project_path or source_query) and overflow: return 1
                         text=c.create_unicode_buffer(2001); count=read(hwnd,101,text,len(text))
                         if not text.value.strip(): return 1
                         if project_path and (count!=send(control(hwnd,101),0x0e,0,0) or text.value!=text.value.strip()):
                             write(hwnd,100,"请填写完整的确切相对路径，不要有首尾空白。"); return 1
-                        value=text.value if project_path else text.value.strip()
+                        if source_query and (count!=send(control(hwnd,101),0x0e,0,0) or count>96): return 1
+                        value=text.value if project_path or source_query else text.value.strip()
                 finish(hwnd, 1 if value is not None else 2); return 1
         except Exception:
             value = None; finish(hwnd, 2); return 1

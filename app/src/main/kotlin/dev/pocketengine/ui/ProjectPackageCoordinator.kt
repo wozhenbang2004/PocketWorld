@@ -25,7 +25,7 @@ internal data class ProjectPackageState(
     val exportStatus: JSONObject? = null,
     val retryFreeze: Boolean = false, val retryImport: Boolean = false, val missingSourceAction: String? = null,
     val ownerPanelRequested: Boolean = false, val sourceImportRequested: Boolean = false, val reviewingTaskDelivery: Boolean = false, val taskDelivery: JSONObject? = null,
-    val notice: String? = null, val error: String? = null
+    val notice: String? = null, val error: String? = null, val sourceSkipCandidate: String? = null
 )
 
 /** Owner navigation and cancellable document IO. Existing LocalModule/workspace remain authoritative. */
@@ -599,14 +599,16 @@ internal class ProjectPackageCoordinator(
         closePreview()
         state = state.copy(ownerPanelRequested = true, sourceImportRequested = true, reviewingTaskDelivery = false, taskDelivery = null, selection = null, error = null)
     }
-    fun pickSourceDirectory(generated: Boolean) = pickSource("saf_tree", generated, false)
+    fun pickSourceDirectory(generated: Boolean, excludedDirectory: String = "") = pickSource("saf_tree", generated, false, excludedDirectory)
     fun pickSourceZip(generated: Boolean, stripRoot: Boolean) = pickSource("external_zip", generated, stripRoot)
-    private fun pickSource(kind: String, generated: Boolean, stripRoot: Boolean) {
+    private fun pickSource(kind: String, generated: Boolean, stripRoot: Boolean, excludedDirectory: String = "") {
         requireOwner(); if (state.busy || pickerImport != null || state.pendingFreeze != null || state.pendingImport != null) return
         val id = UUID.randomUUID().toString()
-        pickerImport = JSONObject().put("selectionId", id).put("ownerSourcePicker", true).put("checkoutId", state.checkoutId.orEmpty()).put("projectId", state.projectId.orEmpty()).put("sourceKind", kind).put("includeGeneratedRoots", generated).put("stripSingleRoot", stripRoot)
+        val skip = dev.pocketengine.features.local.project.ProjectSourceImport.checkedSkipDirectory(excludedDirectory)
+        require(skip.isEmpty() || kind == "saf_tree") { "只能从本机文件夹导入时跳过一个目录" }
+        pickerImport = JSONObject().put("ownerExcludedDirectory", skip.takeIf { it.isNotEmpty() }).put("selectionId", id).put("ownerSourcePicker", true).put("checkoutId", state.checkoutId.orEmpty()).put("projectId", state.projectId.orEmpty()).put("sourceKind", kind).put("includeGeneratedRoots", generated).put("stripSingleRoot", stripRoot)
         restoredPicker = false
-        state = state.copy(staged = null, imported = null, importPlan = null, notice = null, error = null)
+        state = state.copy(staged = null, imported = null, importPlan = null, notice = null, error = null, sourceSkipCandidate = null)
         try { activity.pickOwnerProjectSource(id, kind == "saf_tree") }
         catch (_: RuntimeException) { retireOwnerSourcePicker(); state = state.copy(error = "无法打开系统文件选择器，未读取或创建项目。") }
     }
@@ -652,8 +654,10 @@ internal class ProjectPackageCoordinator(
         if (uri.scheme != "content" || uri.authority.isNullOrBlank()) { state = state.copy(error = "系统未授予可用 content 文件引用，未读取或写入其他路径"); return }
         work { c, _ ->
             if (pin.optString("sourceKind") == "saf_tree") {
-                val actual = dev.pocketengine.features.local.project.android.AndroidProjectSourceTree(app, uri, c).use { tree -> local().stageSourceTreeForOwner(tree, tree.sourceLabel(), pin.getString("selectionId"), pin.getBoolean("includeGeneratedRoots"), c) }
-                return@work { state = state.copy(staged = actual, stagedPackages = withStage(actual), imported = null, importPlan = null, sourceImportRequested = true, notice = "目录已完整读取并复核。请核对清单，再明确创建新项目；未执行代码。") }
+                val actual = try { dev.pocketengine.features.local.project.android.AndroidProjectSourceTree(app, uri, c).use { tree -> local().stageSourceTreeForOwner(tree, tree.sourceLabel(), pin.getString("selectionId"), pin.getBoolean("includeGeneratedRoots"), pin.optString("ownerExcludedDirectory", ""), c) } } catch (limit: dev.pocketengine.features.local.project.ProjectSourceImport.FolderFileTooLarge) {
+                    return@work { state = state.copy(error = limit.message, sourceSkipCandidate = limit.suggestedDirectory) }
+                }
+                return@work { state = state.copy(staged = actual, stagedPackages = withStage(actual), imported = null, importPlan = null, sourceImportRequested = true, sourceSkipCandidate = null, notice = "已读取并复核本次选定范围。请核对清单，再决定是否创建项目；未执行代码。") }
             }
             val sourceLabel = if (pin.optString("sourceKind") == "external_zip") runCatching { app.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { row -> if (row.moveToFirst()) row.getString(0) else null } }.getOrNull() ?: "已有ZIP源码" else "PocketWorld项目包"
             val opened = app.contentResolver.openInputStream(uri) ?: error("所选项目包无法读取")
@@ -666,7 +670,7 @@ internal class ProjectPackageCoordinator(
                 if (pin.optString("sourceKind") == "external_zip") local().stageSourceZipForOwner(checked, sourceLabel, pin.getString("selectionId"), pin.getBoolean("stripSingleRoot"), pin.getBoolean("includeGeneratedRoots"), c)
                 else local().stageProjectPackageForOwner(checked, pin.getString("selectionId"))
             } } finally { c.removeCancelAction(cancel) }
-            return@work { state = state.copy(staged = actual, stagedPackages = withStage(actual), imported = null, importPlan = null, notice = if (actual.has("sourceEvidence")) "普通ZIP源码已完整读取。请核对实际范围，再明确创建新项目；未执行代码。" else "项目包已读取，请核对后明确导入；尚未运行。") }
+            return@work { state = state.copy(staged = actual, stagedPackages = withStage(actual), imported = null, importPlan = null, notice = if (actual.has("sourceEvidence")) "已核对所选 ZIP。请查看实际录入的路径，再决定是否创建项目；未执行代码。" else "项目包已读取，请核对后明确导入；尚未运行。") }
         }
     }
     private fun withStage(actual: JSONObject) = listOf(JSONObject(actual, arrayOf("selectionId", "sha256", "manifestIdentity", "sourceEvidence", "manifest", "complete", "sizeBytes", "deviceSource")).put("available", true)) +

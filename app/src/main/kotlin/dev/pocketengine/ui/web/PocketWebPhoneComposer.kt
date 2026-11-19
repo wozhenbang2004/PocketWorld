@@ -351,13 +351,20 @@ internal class PocketWebPhoneComposer(
         val absent=blank && same && error==null && result!=null && result.optString("status")=="not_found" && result.optBoolean("queryOnly")
         val accepted=error==null && task!=null && same && (!linked && !blank || result?.optBoolean("accepted")==true)
         // An allocation seen before an uncertain SQL write is not proof that a task is available to open.
-        if(blank||linked)for(key in listOf("taskId","runId","epoch","admitted","admissionState","taskStatus","canRetire"))receipt.remove(key)
+        if(blank||linked)for(key in listOf("taskId","runId","epoch","admitted","admissionState","taskStatus","canRetire","firstRunRecord","firstRunReadUnconfirmed"))receipt.remove(key)
         if(same && task!=null && (!blank && !linked || accepted))receipt.put("taskId",task)
         if(same && result!=null && (!blank && !linked || accepted)){
             for(key in listOf("runId","epoch","admitted"))if(result.has(key))receipt.put(key,result.get(key))
             if((linked || blank) && result.optString("admissionState") in setOf("admitted","service_denied","component_unconfirmed","run_recorded","no_run","unconfirmed"))
                 receipt.put("admissionState",result.getString("admissionState"))
             if(result.has("status"))receipt.put("taskStatus",result.get("status"))
+            if(blank && result.opt("queryOnly")==true && result.opt("epoch")==1){
+                val first=result.optJSONObject("firstRunRecord")
+                if(first!=null && first.opt("format")=="pocketworld.draft-first-run-status.v1" && first.opt("taskId")==task &&
+                    first.opt("runId")==result.opt("runId") && first.opt("epoch")==1 && first.opt("status")==result.opt("status"))
+                    receipt.put("firstRunRecord",first)
+                else receipt.put("firstRunReadUnconfirmed",true)
+            }
         }
         if(absent)receipt.put("canRetire",true)
         if(rejected && !retired && result?.optBoolean("capacityChanged") == true)
@@ -462,7 +469,9 @@ internal class PocketWebPhoneComposer(
                     val settled=phoneStartReceipt?.takeIf {it.optString("status")=="accepted" &&
                         it.optString("reviewHandle")==original.optString("reviewHandle") && it.optString("draftRequestId")==request &&
                         (it.optBoolean("admitted") && result?.optBoolean("admitted")!=true || keepBlankSystemResult(it,result))}
-                    complete(id,settled?:recordPhoneReceipt(original,result,error),null);publishState()
+                    val retained=settled?.let { JSONObject(it.toString()).put("firstRunReadUnconfirmed",true) }
+                    if(retained!=null)phoneStartReceipt=retained
+                    complete(id,retained?:recordPhoneReceipt(original,result,error),null);publishState()
                 }
                 else complete(id,null,"原草稿窗口已变化")
             };return

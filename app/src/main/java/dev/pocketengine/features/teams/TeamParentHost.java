@@ -72,7 +72,7 @@ public final class TeamParentHost {
         }
         return result;
     }
-    private static JSONObject smallReview(JSONObject source)throws Exception{JSONObject out=new JSONObject();for(String key:new String[]{"taskId","runId","reviewId","planHash","status","verdict","stale","completeOriginalFilesRead","approvedAt"})if(source.has(key))out.put(key,source.get(key));return out;}
+    private static JSONObject smallReview(JSONObject source)throws Exception{JSONObject out=new JSONObject();for(String key:new String[]{"taskId","runId","reviewId","planHash","status","verdict","stale","completeOriginalFilesRead","approvedAt","registrationKind","separateIntegratorStartRequired"})if(source.has(key))out.put(key,source.get(key));return out;}
     private JSONObject integration(String id)throws Exception {
         JSONObject actual=writes.parentIntegrationState(id),out=smallReview(actual);
         for(String key:new String[]{"activeAttempt","hasUnresolved","currentFilesComplete","requiresOwnerReview","historicalStatus","progress","atomicBatch","projectDelivery"})if(actual.has(key))out.put(key,actual.get(key));
@@ -138,6 +138,8 @@ public final class TeamParentHost {
                     if(assessment!=null)out.put("revisionDecision",assessment);
                     else assessment=TeamParentReviewFeedback.beforeIntegration(id,hash,review,state);
                     out.put("requiresOwnerReview",assessment!=null&&assessment.optBoolean("requiresOwnerReview")).put("awaitingOwnerDecision",assessment!=null&&assessment.getBoolean("awaitingOwnerDecision")).put("reviewState",assessment==null?"owner_approval_registered":assessment.getString("state"));
+                    if(assessment!=null&&assessment.optBoolean("separateIntegratorStartRequired"))
+                        out.put("separateIntegratorStartRequired",true).put("executionAuthorized",false).put("message",assessment.getString("message"));
                     JSONObject finding=TeamParentReviewFeedback.finding(id,hash,state.optJSONObject("independentReview"));
                     if(finding!=null)out.put("independentFinding",finding);
                     break;
@@ -265,7 +267,8 @@ public final class TeamParentHost {
                 JSONObject current=writes.review(id,original).snapshot(),state=tasks.teamReviewState(id);
                 JSONObject blocked=TeamParentReviewFeedback.beforeIntegration(id,expected,current,state);
                 if(blocked!=null){JSONObject answer=status(source,id);for(java.util.Iterator<String> keys=blocked.keys();keys.hasNext();){String key=keys.next();answer.put(key,blocked.get(key));}source.checkCurrent();return answer;}
-                JSONObject approved=state.getJSONObject("approvedReview");source.checkCurrent();JSONObject receipt=writes.integrate(id,approved.getString("reviewId"),models.get());coordinator.recordIntegration(id,receipt);changed.accept(id);return status(source,id);}
+                JSONObject approved=state.getJSONObject("approvedReview");source.checkCurrent();
+                JSONObject receipt=writes.integrate(id,approved.getString("reviewId"),models.get());coordinator.recordIntegration(id,receipt);changed.accept(id);return status(source,id);}
             case "revise":{
                 tasks.claimTeamParentAction(source,id);JSONObject actual=null;
                 if(TeamParentRevisionOffer.local(coordinator.get(id)))try{actual=writes.parentIntegrationState(id);}catch(Exception unavailable){source.checkCurrent();} // Missing current heads must not become write authority.

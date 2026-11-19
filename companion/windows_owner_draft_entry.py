@@ -1,4 +1,5 @@
 """Native, owner-only authoring and recovery. No serving, editor process or working-tree write."""
+from contextlib import nullcontext
 from desktop_owner_entry import _dialog
 from desktop_phone_goal_text import source_text
 import windows_owner_draft as model
@@ -76,18 +77,27 @@ def exact(ctx,settings,op,path,original_id,commit,oid,size,sha,active,request,ob
     edit(ctx,settings,op,base,retired,observe,original_request=request)
 
 
-def edit(ctx,settings,op,base,retired,observe,*,original_request=None,previous=None,prior_artifact=None):
+def edit(ctx,settings,op,base,retired,observe,*,original_request=None,previous=None,prior_artifact=None,work_text=None,work_scope=None,start_at=None):
     bom,eol,initial=model.unpack(base.raw)
     convention=("CRLF" if eol=="\r\n" else "LF")+(" · 保留 UTF-8 BOM" if bom else " · UTF-8 无 BOM")
     label=base.path if len(base.path)<=75 else "…"+base.path[-74:]
     if (previous is None)!=(prior_artifact is None) or (original_request is not None and prior_artifact is not None): model.block()
+    if ((work_text is None)!=(work_scope is None) or work_scope is not None and
+            (not isinstance(work_text,str) or not callable(work_scope) or previous is not None or original_request is not None)): model.block()
+    if start_at is not None and (type(start_at) is not int or not 0<=start_at<=len(initial.encode("utf-16le"))//2
+                                or original_request is not None or previous is not None or work_scope is not None): model.block()
     proof_required=original_request if original_request is not None else prior_artifact
-    draft=initial if previous is None else previous
+    draft=work_text if work_scope is not None else initial if previous is None else previous
     while not retired():
         title=("临时草稿 · " if previous is None else "继续已保存的草稿 · ")+label
         hint=("只编辑内存中的文本，不保存到项目。点「预览差异」后仍可返回。" if previous is None else
               "已还原以前的完整草稿。旧补丁不覆盖；新修改仍相对原提交，确认后才能另存。")
-        draft=source_text(lambda:not retired(),title,hint,draft)
+        if work_scope is not None:
+            title="以本机工作文件起草 · "+label
+            hint="临时草稿，以刚才核对的全文起步。不会写回工作文件；预览后另行决定要不要保存补丁。"
+        if start_at is not None: hint="光标位于你刚选的原文命中之前，没有选中文字。这里只编辑临时草稿，不写回项目。"
+        draft=source_text(lambda:not retired(),title,hint,draft,caret=start_at)
+        start_at=None  # never reuse an old offset after the owner changes the draft
         if draft is None or retired(): return
         if previous is not None and draft==previous:
             if _dialog("仍是已保存的那个版本","没有新改动，不创建重复文件。",[("edit","继续编辑")],retire=retired)=="edit": continue
@@ -112,13 +122,16 @@ def edit(ctx,settings,op,base,retired,observe,*,original_request=None,previous=N
                          f"\n另存一份本机补丁（{len(raw):,} 字节）：\n"+model.destination(ctx,op,f)+
                          "\n只创建该新原件，不覆盖同名文件，不修改仓库或副本，不应用、执行或发送。")
             if previous is not None: description+="\n旧补丁不变。新补丁仍对原提交独立成立，不必先应用上一份。"
+            if work_scope is not None: description+="\n底稿来自原提交，起点是刚才核过的工作文件。你在这里另改的内容只属于新草稿。"
             pick=_dialog("把这次草稿另存为补丁？",description,
                          [("save","确认另存这一份补丁"),("edit","返回编辑刚才的草稿"),("inspect","再看完整差异")],retire=retired)
             if pick=="inspect": continue
             if pick=="edit": break
             if pick!="save" or retired(): return
-            visible,row=observe("核对并另存这次补丁","再次核对原提交、原副本和刚才看过的全部差异，不替换已有文件。",retired,
-                                lambda check,_: model.save(ctx,settings,op,base,draft,reviewed,retired,check,required_evidence=proof_required),60)
+            def publish(check,_):
+                with work_scope(check) if work_scope is not None else nullcontext():
+                    return model.save(ctx,settings,op,base,draft,reviewed,retired,check,required_evidence=proof_required)
+            visible,row=observe("核对并另存这次补丁","再次核对原提交、原副本和刚才看过的全部差异，不替换已有文件。",retired,publish,60)
             if not visible: return
             if row is None:
                 _dialog("未确认这份补丁已保存","原件、可用名额或保存证据不足。可能留有原请求；请从这份副本的「已另存的单文件变更」核对，不会自动重做。",[],retire=retired)

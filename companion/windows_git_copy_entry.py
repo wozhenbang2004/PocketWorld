@@ -41,6 +41,7 @@ def show_receipt(ctx,evidence,locked,settings=None):
                 actions.insert(1,("draft","从这份准确原文件起草补丁\n只编辑临时草稿，再决定是否另存。"))
         elif evidence.get("itemsRecorded"):
             if settings:
+                actions.append(("find","在原项目中查找一段文字\n只查一个已选目录的原文件，不递归，不查现在的工作树。"))
                 actions.insert(0,("draft","从原文件起草补丁\n只编辑一份临时文本；原仓库与副本保持不变。"))
             actions[:0] = [("open","在文件资源管理器中打开原副本\n定位原文件夹中的一个原条目，不打开文件或运行项目。"),
                             ("compare","核对现在的原文件\n用此副本保存时的逐项清单比较，不需要源仓库仍然在线。")]
@@ -75,6 +76,9 @@ def show_receipt(ctx,evidence,locked,settings=None):
         from windows_owner_draft_entry import start
         start(ctx,settings,evidence["operation"],locked,_observe,only=leaf["path"] if leaf else None)
     elif chosen=="patches": patches.browse(ctx,evidence["operation"],locked,None if leaf else _observe,draft_only=leaf is not None,draft_settings=settings)
+    elif chosen=="find" and settings and not leaf:
+        from windows_copy_find_entry import start as find_source
+        find_source(ctx,settings,evidence["operation"],locked,_observe)
     elif chosen=="compare": _compare(ctx,evidence["operation"],locked,settings)
     elif chosen=="identity":
         _dialog("原副本编号",f"操作：{evidence['operation']}\n原提交：{facts['commit']}\n原始内容清单：{facts['content']}\n不含执行权、手机授权或 Git 历史。",[],retire=locked)

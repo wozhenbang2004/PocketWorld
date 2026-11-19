@@ -323,21 +323,37 @@ public final class TaskStoreTeamWriteHost implements TeamCoordinator.BudgetHost,
         reader.check();if(!shown.hasCompleteTextComparison())return new JSONObject().put("state","read_only");
         try{
             JSONObject facts=tasks.firstLocalTeamOutputDecision(shown.team(),shown.plan(),reader);
-            JSONObject display=new JSONObject().put("state",facts.getString("state"));if(facts.has("reviewId"))display.put("reviewId",facts.getString("reviewId"));return display;
-        }catch(Exception unavailable){reader.check();return new JSONObject().put("state","read_only");}
+            JSONObject display=new JSONObject().put("state",facts.getString("state"));if(facts.has("reviewId"))display.put("reviewId",facts.getString("reviewId"));
+            if(TeamFirstProjectReview.registrationOnly(facts))display.put("registrationKind",TeamFirstProjectReview.REGISTRATION).put("separateIntegratorStartRequired",true);return display;
+        }catch(Exception notLocal){
+            reader.check();
+            try{JSONObject facts=tasks.firstProjectTeamOutputFacts(shown.team(),shown.plan(),reader);return new JSONObject().put("state",facts.getString("state"));}
+            catch(Exception unavailable){reader.check();return new JSONObject().put("state","read_only");}
+        }
     }
     /** New, short-lived owner confirmation. The file-reading handle alone cannot approve anything. */
     public final class TextOutputApproval implements AutoCloseable {
         private final TeamOwnerFileReading shown;private final RunControl authority=new RunControl();
-        private final String reviewerTask,reviewerRun,project;
+        private final String reviewerTask,reviewerRun,project,projectFacts;private final boolean firstProject;
+        private volatile boolean registering;
         private final long expires=android.os.SystemClock.elapsedRealtime()+120_000;
         private final java.util.concurrent.atomic.AtomicBoolean spent=new java.util.concurrent.atomic.AtomicBoolean();
-        private TextOutputApproval(TeamOwnerFileReading seen)throws Exception{
-            shown=seen;if(!shown.shownAllOriginalDiffs())throw new SecurityException("请先逐份加载并核对本次原始文本差异");
+        private TextOutputApproval(TeamOwnerFileReading seen,boolean firstProject)throws Exception{
+            shown=seen;this.firstProject=firstProject;if(!shown.shownAllOriginalDiffs())throw new SecurityException("请先逐份加载并核对本次原始文本差异");
             verifiedOriginal();
-            JSONObject facts=tasks.firstLocalTeamOutputDecision(shown.team(),shown.plan(),authority);
-            if(!"eligible".equals(facts.getString("state")))throw new SecurityException("原计划不再需要或不允许这次批准，请重读原成果");
+            JSONObject facts=firstProject?tasks.firstProjectTeamOutputFacts(shown.team(),shown.plan(),authority):tasks.firstLocalTeamOutputDecision(shown.team(),shown.plan(),authority);
+            if(!(firstProject?"eligible_project_first":"eligible").equals(facts.getString("state")))throw new SecurityException("原计划不再需要或不允许这次批准，请重读原成果");
+            if(firstProject)checkProject(facts);projectFacts=firstProject?TeamWorkFiles.canonical(facts):null;
             reviewerTask=facts.getString("reviewerTaskId");reviewerRun=facts.getString("reviewerRunId");project=facts.getString("targetProjectId");
+        }
+        private void checkProject(JSONObject facts)throws Exception{
+            if(projects==null||reviews.containsKey(shown.team())||integrations.containsKey(shown.team()))throw new SecurityException("原独审或整合尚未退出，或项目宿主不可用");
+            projects.checkFirstOutputBaseline(facts,authority);
+        }
+        public boolean firstProject(){return firstProject;}
+        public boolean approvesFirstProject(TaskStore issuer,RunControl owner,JSONObject facts)throws Exception{
+            return firstProject&&registering&&tasks==issuer&&authority==owner&&!authority.isCancelled()&&android.os.SystemClock.elapsedRealtime()<expires&&
+                    !reviews.containsKey(shown.team())&&!integrations.containsKey(shown.team())&&projectFacts.equals(TeamWorkFiles.canonical(facts));
         }
         private TeamWorkReview.Prepared verifiedOriginal()throws Exception{
             authority.check();TeamWorkReview.Prepared fresh=review(shown.team(),authority);
@@ -346,18 +362,27 @@ public final class TaskStoreTeamWriteHost implements TeamCoordinator.BudgetHost,
         }
         public JSONObject preview()throws Exception{
             authority.check();JSONArray paths=new JSONArray(),files=shown.index().getJSONArray("files");
-            for(int i=0;i<files.length();i++){JSONObject file=files.getJSONObject(i);paths.put(new JSONObject().put("path",file.getString("path")).put("existing",file.getBoolean("currentExists")));}
-            return new JSONObject().put("teamRunId",shown.team()).put("planHash",shown.plan()).put("projectId",project).put("files",paths).put("startsIntegration",false);
+            for(int i=0;i<files.length();i++){JSONObject file=files.getJSONObject(i),row=new JSONObject().put("path",file.getString("path")).put("existing",file.getBoolean("currentExists"));
+                if(firstProject)row.put("version",file.getInt("currentVersion")).put("sha256",file.getString("sha256"));paths.put(row);}
+            JSONObject value=new JSONObject().put("teamRunId",shown.team()).put("planHash",shown.plan()).put("projectId",project).put("files",paths).put("startsIntegration",false);
+            if(firstProject){JSONObject facts=new JSONObject(projectFacts);value.put("firstProject",true).put("parentCheckoutId",facts.getString("checkoutId")).put("sourceDigest",facts.getString("sourceDigest"))
+                    .put("snapshotIdentity",facts.getString("snapshotIdentity")).put("reviewerTaskId",reviewerTask).put("reviewerRunId",reviewerRun).put("startsChecks",false).put("packagesProject",false);}
+            return value;
         }
         public JSONObject confirm()throws Exception{
             if(!spent.compareAndSet(false,true)||android.os.SystemClock.elapsedRealtime()>=expires)throw new SecurityException("这份写回许可审阅已用过或过期，请查询原登记");
-            TeamWorkReview.Prepared fresh=verifiedOriginal();JSONObject receipt=tasks.approveFirstLocalTeamOutputs(shown.team(),fresh,shown.plan(),authority,reviewerTask,reviewerRun);
-            String id=receipt.getString("reviewId");if(id.isEmpty()||!shown.plan().equals(receipt.getString("planHash"))||!"owner".equals(receipt.optString("actorId"))||!"private".equals(receipt.optString("spaceId")))throw new SecurityException("原批准回执身份不符，请刷新核对，不重复提交");
-            changed.accept(shown.team());return new JSONObject().put("teamRunId",shown.team()).put("planHash",shown.plan()).put("reviewId",id).put("state","approved_current").put("startedByThisAction",false);
+            TeamWorkReview.Prepared fresh=verifiedOriginal();JSONObject receipt;
+            if(firstProject){checkProject(new JSONObject(projectFacts));registering=true;
+                try{receipt=tasks.approveFirstProjectTeamOutputs(shown.team(),fresh,shown.plan(),authority,this);}finally{registering=false;}}
+            else receipt=tasks.approveFirstLocalTeamOutputs(shown.team(),fresh,shown.plan(),authority,reviewerTask,reviewerRun);
+            String id=receipt.getString("reviewId");if((firstProject&&!TeamFirstProjectReview.registrationOnly(receipt))||id.isEmpty()||!shown.plan().equals(receipt.getString("planHash"))||!"owner".equals(receipt.optString("actorId"))||!"private".equals(receipt.optString("spaceId")))throw new SecurityException("原批准回执身份不符，请刷新核对，不重复提交");
+            changed.accept(shown.team());JSONObject saved=new JSONObject().put("teamRunId",shown.team()).put("planHash",shown.plan()).put("reviewId",id).put("state","approved_current").put("startedByThisAction",false);
+            if(firstProject)saved.put("registrationKind",TeamFirstProjectReview.REGISTRATION).put("separateIntegratorStartRequired",true);return saved;
         }
         @Override public void close(){authority.cancel();}
     }
-    TextOutputApproval reviewOwnerTextApproval(TeamOwnerFileReading seen)throws Exception{return new TextOutputApproval(seen);}
+    TextOutputApproval reviewOwnerTextApproval(TeamOwnerFileReading seen)throws Exception{return new TextOutputApproval(seen,false);}
+    TextOutputApproval reviewFirstProjectTextApproval(TeamOwnerFileReading seen)throws Exception{return new TextOutputApproval(seen,true);}
     public JSONObject approve(String run,String expectedHash,RunControl read)throws Exception {JSONObject result=tasks.approveTeamOutputs(run,review(run,read),expectedHash,read);changed.accept(run);return result;}
     /** A separate original child/run/context, never a producer impersonating its own reviewer. */
     public JSONObject independentlyReview(String run,String expectedPlanHash,JSONObject nativeTeamRun,ModelConfig model)throws Exception {

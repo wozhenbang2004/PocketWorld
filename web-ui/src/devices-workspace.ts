@@ -140,6 +140,14 @@ export function receivedPhoneArchiveReturn(value: unknown, row: DeviceData, peer
   return { taskId: value.taskId, operationId: value.operationId, targetId: value.targetId, instanceId: value.instanceId, sourceId: value.sourceId,
     parentTaskId: value.parentTaskId, grantId: value.grantId, epoch: value.epoch, ...(row.waitingState==='failed_run'?{failedOriginalRun:true as const}:{}), ...(['original_run','failed_run'].includes(row.waitingState)?{runId:value.runId,executorEpoch:value.executorEpoch}:{}), peerDetail: true, leftAt: Date.now() };
 }
+export type ArchivedPhoneStopAttempt={localPhase:'prepared_no_write'|'abandoned_before_write'|'write_unconfirmed'; preparedAt:number};
+export function isArchivedPhoneStopAttempt(value:unknown):value is ArchivedPhoneStopAttempt{
+  return object(value) && ['prepared_no_write','abandoned_before_write','write_unconfirmed'].includes(value.localPhase) && positiveInteger(value.preparedAt);
+}
+export function archivedPhoneStopAttemptLine(value:ArchivedPhoneStopAttempt,time:(at:number)=>string){
+  const detail=value.localPhase==='abandoned_before_write'?'本机在写入前放弃':value.localPhase==='write_unconfirmed'?'本机已开始发送流程，送达未确认':'没有登记开始写入';
+  return '本机曾在 '+time(value.preparedAt)+' 准备停止请求；'+detail+'。本机没有可核对的对方停止回执。';
+}
 export type ArchivedPhoneStop={state:'request_recorded'|'reported_stopped'|'reported_ended'; requestReceivedAt:number};
 export function isArchivedPhoneStop(value:unknown):value is ArchivedPhoneStop {
   return object(value) && ['request_recorded','reported_stopped','reported_ended'].includes(value.state) && positiveInteger(value.requestReceivedAt);
@@ -155,6 +163,7 @@ export function devicePhoneGoalArchive(value: unknown, peer: DeviceData, local: 
     || !Array.isArray(value.rows) || value.rows.length > 24 || typeof value.hasMore !== 'boolean' || typeof value.canReadNewer !== 'boolean'
     || !value.rows.every((row: unknown) => object(row) && identity(row.taskId) && (!sourceTaskId || row.taskId === sourceTaskId) && identity(row.operationId) && typeof row.goal === 'string' && !!row.goal
       && (row.targetAcceptedAt === undefined || !!sourceTaskId && positiveInteger(row.targetAcceptedAt))
+      && (row.stopAttempt === undefined || !!sourceTaskId && side==='sent' && row.stopReceipt===undefined && isArchivedPhoneStopAttempt(row.stopAttempt))
       && (row.stopReceipt === undefined || !!sourceTaskId && side==='sent' && isArchivedPhoneStop(row.stopReceipt))
       && (row.targetRunRecorded === undefined || row.targetRunRecorded === true && positiveInteger(row.targetAcceptedAt))
       && (row.mayCheckLocalText===undefined || side==='received' && row.mayCheckLocalText===true)

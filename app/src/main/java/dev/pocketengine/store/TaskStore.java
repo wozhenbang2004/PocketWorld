@@ -10647,7 +10647,10 @@ public final class TaskStore {
             if(!hash.equals(previous.optString("planHash")))return new JSONObject().put("state","previous_approval");
             if(!"owner".equals(previous.optString("actorId"))||!"private".equals(previous.optString("spaceId"))||!previous.optString("reviewId").matches("[a-f0-9-]{36}")
                     ||!run.equals(previous.getJSONObject("plan").optString("teamRunId"))||!hash.equals(capabilityFingerprint(previous.getJSONObject("plan"))))throw new SecurityException("原许可登记身份待核对");
-            return new JSONObject().put("state","approved_current").put("reviewId",previous.getString("reviewId"));
+            JSONObject saved=new JSONObject().put("state","approved_current").put("reviewId",previous.getString("reviewId"));
+            if(dev.pocketengine.features.teams.TeamFirstProjectReview.registrationOnly(previous))
+                saved.put("registrationKind",dev.pocketengine.features.teams.TeamFirstProjectReview.REGISTRATION).put("separateIntegratorStartRequired",true);
+            return saved;
         }
         JSONObject independent=team.optJSONObject("teamIndependentReview");
         if(independent==null||independent.optBoolean("stale")||!independent.optString("status").equals("completed")||!independent.optBoolean("completeOriginalFilesRead")||!independent.optString("verdict").equals("no_blocking_findings")||!hash.equals(independent.optString("planHash")))
@@ -10669,6 +10672,51 @@ public final class TaskStore {
             try(Cursor active=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND status='running' LIMIT 1",new String[]{child.getString("id")})){if(active.moveToFirst())throw new SecurityException("原成员仍有实际执行，未登记许可");}
         }
         owner.check();return new JSONObject().put("state","eligible").put("reviewerTaskId",independent.getString("taskId")).put("reviewerRunId",independent.getString("runId")).put("targetProjectId",scope.getString("targetProjectId"));
+    }
+    /** First native project edition only. This query does not reserve or consume any permission. */
+    public synchronized JSONObject firstProjectTeamOutputFacts(String run,String hash,RunControl owner)throws Exception{
+        owner.check();JSONObject team=teamWriteTask(run);requirePrivateOwner(team);checkTeamIntegrationParents(team);
+        JSONObject parent=teamWorkPlanParent(run),work=required(parent.getString("parentTaskId"));requirePrivateOwner(work);
+        if(hasUnresolved(team.getString("id"))||work.has("teamProjectRound")||teamHasPendingQuestion(team)||
+                read(dev.pocketengine.features.teams.TeamDeliveryWorkers.taskId(run,"integrator",""))!=null)
+            throw new SecurityException("原项目仍待核对或已有整合记录，不从首版入口登记");
+        JSONObject ind=team.getJSONObject("teamIndependentReview"),facts=dev.pocketengine.features.teams.TeamFirstProjectReview.begin(
+                team,parent,work.getJSONObject("developmentContext"),teamVersionReviewForOwner(run,hash,owner),hash);
+        JSONObject reviewer=required(facts.getString("reviewerTaskId"));requirePrivateOwner(reviewer);
+        if(!dev.pocketengine.features.teams.TeamDeliveryWorkers.original(reviewer,run,team.getString("id"),"reviewer",hash)||!facts.getString("reviewerRunId").equals(reviewer.opt("runId")))throw new SecurityException("原独审执行身份已变");
+        JSONObject coverage=teamFinalWorkerTasks(run);JSONArray workers=coverage.getJSONArray("workers");
+        if(!coverage.getBoolean("complete")||workers.length()!=1||!workers.getJSONObject(0).getBoolean("selectedVersion")||
+                !reviewer.getString("id").equals(workers.getJSONObject(0).opt("taskId")))throw new SecurityException("原项目已有其他审阅代次或欠缺完整身份，保留待审");
+        requireSettledFirstProjectTask(reviewer);
+        java.util.Map<String,JSONObject> seen=dev.pocketengine.features.teams.TeamFirstProjectReview.originals(ind);
+        JSONArray items=team.getJSONObject("teamWorkPlan").getJSONArray("items");
+        for(int i=0;i<items.length();i++){
+            JSONObject item=items.getJSONObject(i),child=required(item.getString("assignmentId"));requirePrivateOwner(child);currentTeamWorkItem(team,child.getJSONObject("teamAssignment"));
+            requireSettledFirstProjectTask(child);dev.pocketengine.features.teams.TeamFirstProjectReview.author(team,item,child,dev.pocketengine.features.teams.TeamProjectWorkspaces.forWorkItem(team.getJSONObject("teamWriteScope").getJSONObject("projectSelection"),item),seen);
+        }
+        if(!seen.isEmpty())throw new SecurityException("独审并未覆盖同一份当前冻结成果");owner.check();return facts;
+    }
+    private void requireSettledFirstProjectTask(JSONObject child)throws Exception{
+        String id=child.getString("id");if(child.optBoolean("cancelRequested")||hasUnresolved(id)||teamHasPendingQuestion(child)||!"completed".equals(child.opt("status")))throw new SecurityException("首版原成员未确定收尾");
+        try(Cursor row=db.rawQuery("SELECT run_id,epoch,status FROM runs WHERE task_id=? AND (run_id=? OR status='running')",
+                new String[]{id,child.getString("runId")})){if(!row.moveToFirst()||!child.getString("runId").equals(row.getString(0))||child.getInt("coordinatorEpoch")!=row.getInt(1)||!"completed".equals(row.getString(2))||row.moveToNext())throw new SecurityException("原任务缺少确定退出的准确执行");}
+    }
+    public synchronized JSONObject approveFirstProjectTeamOutputs(String run,dev.pocketengine.features.teams.TeamWorkReview.Prepared prepared,String hash,RunControl owner,
+            dev.pocketengine.features.teams.TaskStoreTeamWriteHost.TextOutputApproval browserReview)throws Exception{
+        db.beginTransaction();try{
+            JSONObject facts=firstProjectTeamOutputFacts(run,hash,owner);
+            if(browserReview==null||!browserReview.approvesFirstProject(this,owner,facts))throw new SecurityException("需要主人刚确认的原项目首版审阅");
+            JSONObject read=prepared.snapshot();JSONArray files=read.getJSONObject("plan").getJSONArray("files"),diffs=read.getJSONArray("diffs");
+            if(read.optBoolean("recovery")||!read.getBoolean("canIntegrate")||read.getJSONArray("incompleteAssignments").length()!=0||files.length()==0||files.length()!=diffs.length())throw new SecurityException("只登记首版、无缺失的文本计划");
+            for(int i=0;i<files.length();i++){JSONObject file=files.getJSONObject(i),d=diffs.getJSONObject(i);if(!"text_file".equals(file.opt("artifactKind"))||!(d.opt("diff") instanceof String)||
+                    d.getBoolean("truncated")||!d.getBoolean("matchesOwnerBase")||!file.getString("artifactId").equals(d.opt("artifactId")))throw new SecurityException("不把二进制、删除、截断或已变更基线当作本次许可");}
+            // The first-edition query rejects any previous review/integrator under this same SQL transaction.
+            // The existing writer rechecks immutable refs, plan hash and independent verdict; no new writer or worker.
+            JSONObject receipt=approveTeamOutputs(run,prepared,hash,owner,null),team=teamWriteTask(run),saved=team.getJSONObject("teamOutputReview");
+            if(!receipt.getString("reviewId").equals(saved.opt("reviewId"))||!hash.equals(saved.opt("planHash"))||saved.has("previousReviewId"))throw new SecurityException("登记不是首版同一份许可");
+            saved.put("registrationKind",dev.pocketengine.features.teams.TeamFirstProjectReview.REGISTRATION).put("separateIntegratorStartRequired",true);write(team);
+            owner.check();db.setTransactionSuccessful();return new JSONObject(saved.toString());
+        }finally{db.endTransaction();}
     }
     public synchronized JSONObject approveTeamOutputs(String teamRun,dev.pocketengine.features.teams.TeamWorkReview.Prepared prepared,String expectedHash,RunControl ownerRead)throws Exception {
         return approveTeamOutputs(teamRun,prepared,expectedHash,ownerRead,null);
@@ -10813,7 +10861,9 @@ public final class TaskStore {
         return startTeamIntegration(teamRun,reviewId,original,allocation,null,null);
     }
     public synchronized JSONObject startTeamIntegration(String teamRun,String reviewId,RunControl original,int allocation,String route,dev.pocketengine.features.teams.TaskStoreTeamWriteHost.RemainderReview remainder)throws Exception {
-        JSONObject team=teamWriteTask(teamRun),review=team.getJSONObject("teamOutputReview");checkTeamIntegrationParents(team);if(!reviewId.equals(review.getString("reviewId"))||team.optBoolean("cancelRequested")||team.optString("status").matches("cancelled|stopping|completed"))throw new SecurityException("原主人审查或团队状态已失效");
+        JSONObject team=teamWriteTask(teamRun),review=team.getJSONObject("teamOutputReview");checkTeamIntegrationParents(team);
+        if(dev.pocketengine.features.teams.TeamFirstProjectReview.registrationOnly(review))throw new SecurityException("主人只登记了原项目首版文件许可；没有单独的整合启动批准，未启动检查、写入或打包");
+        if(!reviewId.equals(review.getString("reviewId"))||team.optBoolean("cancelRequested")||team.optString("status").matches("cancelled|stopping|completed"))throw new SecurityException("原主人审查或团队状态已失效");
         String id=UUID.nameUUIDFromBytes(("team-integration:"+teamRun).getBytes(StandardCharsets.UTF_8)).toString();JSONObject task=read(id);
         JSONObject identity=new JSONObject().put("teamRunId",teamRun).put("assignmentId",id).put("memberId","integrator").put("targetProjectId",review.getJSONObject("plan").getString("targetProjectId")).put("files",review.getJSONObject("plan").getJSONArray("files")).put("plan",review.getJSONObject("plan")).put("planHash",review.getString("planHash")).put("reviewId",reviewId);
         if(task==null){task=base(id,"按主人审查的原团队成果逐文件整合，保留每份实际回执","assistant","capabilities").put("conversationId","").put("parentTaskId",team.getString("id")).put("status","queued").put("teamAssignment",identity).put("origin",new JSONObject().put("kind","team_integration").put("teamRunId",teamRun).put("assignmentId",id));write(task);}else if(!canonical(task.getJSONObject("teamAssignment")).equals(canonical(identity)))throw new SecurityException("唯一整合者的原计划不能替换");

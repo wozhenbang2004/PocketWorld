@@ -62,7 +62,7 @@ def _member(kind,row):
                   f["draftOid"] if kind in ("draft","newdraft") else f["currentOid"])}
 
 
-def _patch(raw,member,fields,algo):
+def _patch(raw,member,fields,algo,*,proposal_text=False):
     # Accept only the original bounded writer's one-file format. A valid-looking
     # first header does not admit a second hidden file, a binary block or extra directives.
     if type(raw) is not bytes or len(raw)!=member["bytes"] or _sha(raw)!=member["sha256"] or not raw.endswith(b"\n"): _bad()
@@ -70,6 +70,7 @@ def _patch(raw,member,fields,algo):
     lines=raw[:-1].split(b"\n")
     if lines.pop(0)!=b"diff --git "+a+b" "+b: _bad()
     kind=member["kind"]; added=kind in ("add","newdraft"); removed=kind=="remove"; whole=added or removed
+    if proposal_text and kind!="newdraft": _bad()
     target=(member["base"]["oid"] if removed else member["to"]).encode()
     if whole:
         mode=b"deleted file mode "+fields["mode"].encode() if removed else b"new file mode 100644"
@@ -80,7 +81,7 @@ def _patch(raw,member,fields,algo):
         digest=fields["originalSha" if removed else "draftSha" if kind=="newdraft" else "sourceSha"]
         if not lines:
             if count!=0 or digest!=_sha(b"") or _blob(b"",algo).encode()!=target: _bad()
-            return
+            return b"" if proposal_text else None
     else:
         stem=b"index "+member["base"]["oid"].encode()+b".."+target+b" "
         allowed=(stem+b"100644",) if kind=="draft" else (stem+b"100644",stem+b"100755")
@@ -112,6 +113,7 @@ def _patch(raw,member,fields,algo):
     if not seen: _bad()
     if whole and (len(reconstructed)!=count or _sha(reconstructed)!=digest
                   or _blob(bytes(reconstructed),algo).encode()!=target): _bad()
+    if proposal_text: return bytes(reconstructed)  # verified full /dev/null addition, not an arbitrary patch result
 
 
 def prepare(ctx,op,selected,locked,checkpoint):

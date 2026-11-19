@@ -4,7 +4,8 @@ import {Accordion,AccordionItem,Button,IconButton} from './forms-library';
 import {Drawer} from './shell-library';
 import {AIAnswer,MessageActions} from './library';
 import {useClosingSnapshot} from './library/surface-motion';
-import {PhoneReturnedReport,phoneReportTarget,type PhoneReportTarget} from './PhoneReturnedReport';
+import {PhoneReturnedReport,type PhoneReportTarget} from './PhoneReturnedReport';
+import {PhoneMessageReturn} from './PhoneMessageReturn';
 import {messagePhoneResult} from './phone-start';
 import {MessageQuote,type MessageQuoteTarget} from './MessageQuote';
 import {RegisteredQuoteTrail,sameQuoteVisit,type HistoryQuoteVisit} from './RegisteredQuoteTrail';
@@ -134,8 +135,13 @@ export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,r
    {shown.notice&&<p className="pw-muted">{shown.notice}</p>}
    {shown.hasMore&&!shown.limited&&<Button variant="ghost" disabled={!page||pending||shown.loading||!can('conversation.reader.earlier')} onClick={()=>void invoke('conversation.reader.earlier')}>查看更早消息</Button>}
    {shown.loading&&<p className="pw-muted" role="status">正在读取原消息…</p>}
-   {rows.map((message,index)=><article key={message.id} className={`pw-history-window-message pw-message-${message.role}`} tabIndex={-1} data-reader-index={index} data-reader-id={message.id} aria-label={message.role==='assistant'?'助手回复':'你的消息'}>
-    {message.role==='assistant'?<AIAnswer text={message.content} onCopyCode={copy} showActions={false}/>:<p className="pw-user-text">{message.content}</p>}
+   {rows.map((message,index)=>{const phone=message.id&&message.sourceRevision===1?messagePhoneResult(message):null,readPhone=!!phone&&can('phone.result.original');
+    return <article key={message.id} className={`pw-history-window-message pw-message-${message.role}`} tabIndex={-1} data-reader-index={index} data-reader-id={message.id} aria-label={message.role==='assistant'?'助手回复':'你的消息'}>
+    {phone&&message.id?<PhoneMessageReturn result={phone} conversation={shown.conversation} reader={shown.window} messageId={message.id} revision={message.sourceRevision}
+      body={message.content} locked={!page||page.window!==shown.window||page.loading||!!page.error||page.limited||pending}
+      onOriginal={readPhone?t=>{remember();setPhoneOriginal(t)}:undefined}>
+      <AIAnswer text={message.content} onCopyCode={copy} showActions={false}/>
+     </PhoneMessageReturn>:message.role==='assistant'?<AIAnswer text={message.content} onCopyCode={copy} showActions={false}/>:<p className="pw-user-text">{message.content}</p>}
     {Array.isArray(message.attachments)&&message.attachments.length>0&&<div className="pw-message-files">{message.attachments.map((file:Json)=><Button key={`${file.id}:${file.sha256}`} variant="ghost" leadingIcon={IconFile} disabled={!page||pending||!can('conversation.reader.attachment')} onClick={()=>void invoke('conversation.reader.attachment',{messageId:message.id,id:file.id,sha256:file.sha256})}>{file.name||'原附件'}</Button>)}</div>}
     {page?.window===shown.window&&message.role==='user'&&message.automaticLearningExcluded===true&&<Accordion className="pw-compact-disclosures"><AccordionItem id={'memory-'+message.id} title="这条原话已排除自动记忆整理"><p className="pw-muted">后来开启也不会补提炼。它仍是对话原文；这不代表类似内容从未另行保存。{message.originalDefaultWritesBlocked===true&&' 原任务也不能更改六项默认偏好。'}</p></AccordionItem></Accordion>}
     {page?.window===shown.window&&!page?.loading&&!page?.error&&!page?.limited&&message.role==='user'&&<RegisteredQuoteTrail message={message} locked={pending||!!visibleVisit&&visibleVisit.request!==message.id} locate={(range,target,from)=>{
@@ -151,17 +157,14 @@ export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,r
      {!!message.content&&<MessageActions onCopy={()=>copy(message.content)}/>}
      {message.role==='assistant'&&message.hostGoalTaskId&&can('tasks.open')&&<Button variant="ghost" size="small" leadingIcon={IconTool} disabled={pending} onClick={()=>void openLinkedTask(message,'overview')}>打开原主机工作</Button>}
      {message.role==='user'&&typeof message.readerInputTaskId==='string'&&message.readerInputTaskId&&can('tasks.open')&&<Button variant="ghost" size="small" className="pw-input-work" leadingIcon={IconTool} data-input-work={message.readerInputTaskId} data-input-revision={message.sourceRevision} aria-busy={loadingInput(message.id)} disabled={!page||pending} onClick={()=>void openLinkedTask(message,'overview')}>{loadingInput(message.id)?'正在读取…':'查看原工作'}</Button>}
-     {messagePhoneResult(message)&&message.sourceRevision===1&&can('phone.result.original')&&<Button variant="secondary" size="small" disabled={!page||page.loading||!!page.error||pending} onClick={event=>{
-       const r=messagePhoneResult(message),h=live.current;if(!r||!h||h.window!==shown.window||h.conversation!==shown.conversation)return;
-       remember();setPhoneOriginal(phoneReportTarget(h.conversation,message.id,message.sourceRevision,r,event.currentTarget,h.window));
-     }}>查看这轮原文</Button>}
-     {message.role==='assistant'&&!message.hostGoalTaskId&&(Number(message.sourceRevision)>0||message.phoneResult||message.taskResult)&&(message.phoneResult?.taskId||message.taskResult?.taskId||message.taskId)&&can('tasks.open')&&<>
+     {phone&&can('tasks.open')&&<Button variant="ghost" size="small" disabled={!page||pending} onClick={()=>void openLinkedTask(message,'process')}>所属工作的当前进展</Button>}
+     {message.role==='assistant'&&!phone&&!message.hostGoalTaskId&&(Number(message.sourceRevision)>0||message.phoneResult||message.taskResult)&&(message.phoneResult?.taskId||message.taskResult?.taskId||message.taskId)&&can('tasks.open')&&<>
       <Button variant="ghost" size="small" disabled={!page||pending} onClick={()=>void openLinkedTask(message,'overview')}>{message.phoneResult?'所属工作':'任务详情'}</Button>
       <Button variant="ghost" size="small" leadingIcon={IconTool} disabled={!page||pending} onClick={()=>void openLinkedTask(message,'process')}>{message.phoneResult?'当前进展':'执行轨迹'}</Button>
      </>}
     </div>
     {inputNotice?.error&&inputNotice.window===shown.window&&inputNotice.messageId===message.id&&<p className="pw-input-work-error" role="status">{inputNotice.error}</p>}
-   </article>)}
+   </article>})}
    {!shown.loading&&!shown.error&&!rows.length&&<p className="pw-muted">这份对话没有可读取的消息。</p>}
   </div>
   <footer className="pw-drawer-actions"><Button variant="ghost" disabled={pending} onClick={back}>{visibleVisit?'返回引用它的请求':'返回原输入'}</Button><Button variant="secondary" disabled={!page||submitting||pending||!can('conversation.reader.select')} onClick={()=>void invoke('conversation.reader.select')}>{submitting?'原输入正在登记':'在此对话继续'}</Button></footer>

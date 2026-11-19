@@ -5,3 +5,9 @@
 .pw-draft-start-list small{color:var(--pw-text-secondary,currentColor);line-height:1.45}
 .pw-draft-start-list button{flex:none}
 .pw-draft-start-actions{display:flex;flex-wrap:wrap;align-items:center;gap:.3rem}
+.pw-draft-first-return{display:grid;gap:.25em;min-inline-size:0}
+.pw-draft-first-status{display:flex;flex-wrap:wrap;align-items:baseline;gap:.15em .55em;color:var(--pw-ink)}
+.pw-draft-first-status small,.pw-draft-first-return>small{color:var(--pw-muted);line-height:1.45}
+.pw-draft-start-list li{flex-wrap:wrap}
+.pw-draft-start-list li>div{flex:1 1 12em}
+.pw-draft-start-list button,.pw-draft-start-actions button{min-block-size:44px;block-size:auto;max-inline-size:100%;white-space:normal;overflow-wrap:anywhere}

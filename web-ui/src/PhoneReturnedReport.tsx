@@ -55,6 +55,7 @@ function current(t:PhoneReportTarget){
       &&r.status===f.status&&r.endedAt===f.endedAt&&r.summaryChars===f.summaryChars&&r.summaryTruncated===f.summaryTruncated;
   });
 }
+export {current as phoneReportInSource};
 const states:Record<string,string>={completed:'执行结束',failed:'执行失败',cancelled:'已停止',interrupted:'已中断',
   paused:'已暂停',awaiting_user:'等待你处理',needs_confirmation:'等待确认',reconciling:'结果待核对'};
 type Page={text:string;offset:number;next:number;more:boolean;finalScreen:string|null};

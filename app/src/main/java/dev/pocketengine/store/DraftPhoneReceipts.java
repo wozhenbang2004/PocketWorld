@@ -13,6 +13,7 @@ import org.json.JSONObject;
 /** Local delivery acknowledgements for the original owner draft, never runnable or transferable authority. */
 final class DraftPhoneReceipts {
     private static final String TABLE="owner_blank_phone_starts";
+    private static final java.util.Set<String> FIRST_STATES=java.util.Set.of("preparing","running","stopping","paused","awaiting_user","needs_confirmation","reconciling","interrupted","failed","cancelled","stopped","completed");
     interface Lookup { JSONObject read(String id)throws Exception; }
     private DraftPhoneReceipts(){}
     static String scope(String key)throws Exception {
@@ -99,9 +100,13 @@ final class DraftPhoneReceipts {
                 return out.put("status","unavailable");
             out.put("accepted",true).put("taskId",request).put("status","saved").put("createdAt",c.getLong(3)).put("mode",c.getString(2));
             if(brief){String g=t.getString("goal");out.put("goal",g.substring(0,g.offsetByCodePoints(0,Math.min(120,g.codePointCount(0,g.length())))));}
-            if(!c.isNull(5))try(Cursor run=db.rawQuery("SELECT status FROM runs WHERE task_id=? AND run_id=? AND epoch=1",new String[]{request,c.getString(5)})){
+            if(!c.isNull(5))try(Cursor run=db.rawQuery("SELECT status,updated_at FROM runs WHERE task_id=? AND run_id=? AND epoch=1",new String[]{request,c.getString(5)})){
                 if(run.moveToFirst()){
                     out.put("runId",c.getString(5)).put("epoch",1).put("status",run.getString(0));
+                    // First Android admission is immutable; this separately describes the original run when explicitly queried.
+                    if(!run.isNull(0)&&FIRST_STATES.contains(run.getString(0))&&!run.isNull(1)&&run.getLong(1)>0)
+                        out.put("firstRunRecord",new JSONObject().put("format","pocketworld.draft-first-run-status.v1")
+                                .put("taskId",request).put("runId",c.getString(5)).put("epoch",1).put("status",run.getString(0)).put("updatedAt",run.getLong(1)));
                     if(!paired)return out.put("admitted",true).put("admissionState","admitted");
                     String stamp=serviceStamp(db,serviceKey(scope,request));
                     if(("service_denied:"+c.getString(5)).equals(stamp))return out.put("admitted",false).put("admissionState","service_denied");

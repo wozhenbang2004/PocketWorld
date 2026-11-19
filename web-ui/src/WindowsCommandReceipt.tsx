@@ -28,11 +28,19 @@ function checked(original: DeviceData, read: DeviceData) {
 }
 
 export function WindowsCommandReceipt({ original, read }: { original: DeviceData; read: DeviceData | null }) {
-  if (!read || read.readOnly !== true || read.managementOnly === true || original.directWorkspaceCommand !== true) return null;
+  if (original.directWorkspaceCommand !== true) return null;
+  const alias = original.originalRequestedCommandName;
+  const mine = typeof alias === 'string' && alias.length <= 48 && /^[A-Za-z]/.test(alias) && !/[^A-Za-z0-9_-]/.test(alias)
+    ? <Accordion><AccordionItem id="original-request-command-name" title="看本手机当时指定的命令名">
+        <p><bdi>{alias}</bdi> · 来自这笔私人原派单，不是 Windows 的接单或执行证明。不显示参数或程序路径。</p>
+      </AccordionItem></Accordion> : null;
+  if (read && (read.readOnly !== true || read.managementOnly === true)) return null;
+  if (!read) return mine;
   const w = checked(original, read);
-  if (!w) return <p>对端没有返回可核对的 Windows 本机命令记录。原操作状态不等于进程结果。</p>;
+  if (!w) return <>{mine}<p>对端没有返回可核对的 Windows 本机命令记录。原操作状态不等于进程结果。</p></>;
   return <section aria-label="Windows 原命令结果">
     <h3>{labels[w.phase]}</h3>
+    {mine}
     <p>本手机交办 · Windows 本机工作区 {w.environmentId} · {new Date(w.updatedAt).toLocaleString()}</p>
     <p>Windows 工作 <bdi>{w.jobId}</bdi>{w.exitCode != null ? <> · 退出码 {w.exitCode}</> : null}{w.cleanupVerified ? ' · 原进程组清理已核实' : ''}</p>
     <p>这是这条命令的回执，不证明仓库已修改、文件已交付或整个目标已完成。</p>

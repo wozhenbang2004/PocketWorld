@@ -7,6 +7,16 @@ import org.json.JSONObject;
 /** A bounded, explicitly selected data snapshot, never executable instructions or ambient memory. */
 public final class DeviceContextSnapshot {
     private DeviceContextSnapshot() { }
+    /** Only the input contributed by this original sender; no cwd, local model credentials or ambient owner context. */
+    public static JSONObject originalReviewInput(DeviceExecutionAdmission admission)throws Exception{
+        DeviceTaskEnvelope request=admission.request();
+        JSONObject view=new JSONObject().put("format","pocketworld.original-goal-input.v1")
+                .put("originDeviceId",request.originDeviceId()).put("sourceOperationId",request.operationId());
+        // Match DeviceGoalCapabilityPort.contextSnapshot: no-phone-surface jobs do not receive the sender's snapshot.
+        if(admission.noPhoneSurface())return view.put("mode","goal_text_only");
+        JSONObject source=request.arguments().optJSONObject("contextSnapshot");
+        return source==null?view.put("mode","no_selected_context"):view.put("mode","selected_context").put("snapshot",validate(source,request.originDeviceId()));
+    }
     public static JSONObject validate(JSONObject source, String originDeviceId) throws Exception {
         if (source == null) return new JSONObject().put("format", "pocketworld.device-context.v1")
                 .put("originDeviceId", originDeviceId).put("summary", "").put("artifacts", new JSONArray())

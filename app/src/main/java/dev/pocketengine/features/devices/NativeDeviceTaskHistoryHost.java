@@ -32,7 +32,11 @@ public final class NativeDeviceTaskHistoryHost {
                 && local.deviceId().equals(wire.optString("callerDeviceId")) && original.taskId().equals(wire.optString("rootTaskId"))
                 && original.taskId().equals(wire.optString("parentTaskId"))){
                 String tool=invocation.optString("toolName"),effect=invocation.optString("effect");
-                if("command.run".equals(tool)&&"write".equals(effect))view.put("directWorkspaceCommand",true);
+                if("command.run".equals(tool)&&"write".equals(effect)){
+                    view.put("directWorkspaceCommand",true);
+                    String name=privateCommandName(wire,invocation);
+                    if(name!=null)view.put("originalRequestedCommandName",name); // own fixed source request, not a receiver result or a tool declaration
+                }
                 if("workspace.export".equals(tool)&&"read".equals(effect)&&original.directExportForLocalBook(local.deviceId()))
                     view.put("canCheckLocalExportedFile",true).put("exportRequestRunId",wire.getString("runId")).put("exportRequestEpoch",wire.getInt("executorEpoch"));
                 if(OwnerWindowsFileDelivery.source(wire,local.deviceId(),local.instanceId()))view.put("directWorkspaceFileDelivery",true);
@@ -45,6 +49,15 @@ public final class NativeDeviceTaskHistoryHost {
             }
             if(directPhoneGoal(wire))view.put("phoneGoalResult",true).put("localPhoneResultPath",localPhoneResultPath(wire));
             require();return view;
+        }
+        private String privateCommandName(JSONObject wire,JSONObject invocation)throws Exception{
+            if(!"ToolInvocation".equals(wire.optString("messageType"))||!original.taskId().equals(wire.optString("localTaskId"))
+                ||!original.operationId().equals(wire.optString("operationId"))||!DeviceProtocol.argumentsDigest(wire).equals(wire.opt("argumentsDigest")))return null;
+            JSONObject parent=tasks.get(original.taskId(),false);
+            if(parent.optJSONObject("origin")!=null||!"owner".equals(parent.optString("actorId"))||!"private".equals(parent.optString("spaceId")))return null;
+            JSONObject args=invocation.optJSONObject("arguments");org.json.JSONArray words=args==null?null:args.optJSONArray("argv");
+            if(words==null||words.length()<1||words.length()>80)return null;
+            Object first=words.opt(0);return first instanceof String alias&&alias.matches("[A-Za-z][A-Za-z0-9_-]{0,47}")?alias:null;
         }
         public JSONObject checkLocalExportedFile(dev.pocketengine.features.attachments.AttachmentBook book)throws Exception{
             require();JSONObject result=dev.pocketengine.features.devices.transport.OwnerReceivedFileBook.check(book,original,local.deviceId(),io);require();return result;

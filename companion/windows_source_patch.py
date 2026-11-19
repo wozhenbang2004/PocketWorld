@@ -210,7 +210,7 @@ def checked_output(ctx,op,row,locked,*,show,added,bundle=False,content=False,rem
                                         proposed_set=bundle and row.get("format")==PROPOSED_SET_PROFILE)
     filename=SET_FILE if bundle else FILENAME
     if (row.get("format")!=profile or locked() or content and (show or bundle)
-            or hold is not None and (not isinstance(hold,ExitStack) or not draft or not content)
+            or hold is not None and (not isinstance(hold,ExitStack) or not (draft or newdraft) or not content)
             or member_index is not None and (not bundle or content or show or hold is not None or type(member_index) is not int)): _bad()
     end=_read(ctx,receipt,4096)
     if end is None: return "pending"

@@ -1031,6 +1031,27 @@ public final class ConversationRepository {
     public JSONObject searchOwnerOriginals(JSONObject options,RunControl original)throws Exception{return ownerOriginalSearch().search(options,original);}
     public JSONObject readOwnerSearchHit(JSONObject request,RunControl original)throws Exception{return ownerOriginalSearch().read(request,original);}
     /** One bounded, body-free currentness batch. No TaskStore/Book monitor or callback is acquired. */
+    /** Original completed-task filter, called under the same source monitor after exact mailbox adoption.
+     * No body column, generic UI record, source document or imported-content fallback is materialized. */
+    void requireAutomaticLearningRow(String conversation,SourceRef ref)throws Exception{
+        if(!Thread.holdsLock(monitor)||ref==null||!"message".equals(ref.kind)||!"owner".equals(ref.ownerId)||!"private".equals(ref.spaceId)||conversation==null||conversation.isBlank())
+            throw new SecurityException("自动整理缺少原私人对话来源");
+        String sql="SELECT m.meta_json FROM assistant_messages m JOIN assistant_sources s ON s.generation=m.generation AND s.source_id=m.source_id AND s.conversation_id=m.conversation_id "+
+                "WHERE m.generation=? AND m.conversation_id=? AND m.source_id=? AND m.revision=? AND s.revision=m.revision AND s.deleted=0 AND s.role='user' AND m.body IS NOT NULL "+
+                "AND length(CAST(m.meta_json AS BLOB)) BETWEEN 2 AND CAST(? AS INTEGER) LIMIT 1";
+        try(Cursor row=db.rawQuery(sql,new String[]{activeGeneration(),conversation,ref.sourceId,Long.toString(ref.revision),Integer.toString(MAX_BYTES)})){
+            if(!row.moveToFirst())throw new SourceUnavailable("原主人消息修订或自动整理范围不可核对");
+            JSONObject meta=new JSONObject(row.getString(0));
+            if(meta.has("importAssignedIdentity")&&!Boolean.FALSE.equals(meta.opt("importAssignedIdentity"))||!rowAllowsAutomaticLearning(meta,ref.sourceId))throw new SecurityException("此消息不作为自动整理来源");
+        }
+    }
+    private static boolean rowAllowsAutomaticLearning(JSONObject meta,String source)throws SourceUnavailable {
+        if(!source.equals(meta.opt("id"))||!"user".equals(meta.opt("role")))throw new SourceUnavailable("原话的自动整理范围不可核对");
+        Object excluded=meta.opt("personalMemoryExcluded");
+        if(excluded==null||Boolean.FALSE.equals(excluded))return true;
+        if(Boolean.TRUE.equals(excluded))return false;
+        throw new SourceUnavailable("原话的自动整理范围不可核对");
+    }
     public static class SourceUnavailable extends Exception {SourceUnavailable(String reason){super(reason);}}
     /** A definite original owner exclusion. Unknown/changed metadata is not this fact. */
     public static final class MemoryProposalExcluded extends SourceUnavailable {private MemoryProposalExcluded(){super("这条原话不可用于对话记忆提案");}}
@@ -1127,9 +1148,7 @@ public final class ConversationRepository {
                     if(actual.isNull(0))throw new SourceUnavailable("原话的记忆提案范围不可核对");
                     String raw=actual.getString(0);materialized(raw.getBytes(StandardCharsets.UTF_8).length);JSONObject meta;
                     try{meta=new JSONObject(raw);}catch(org.json.JSONException invalid){throw new SourceUnavailable("原话的记忆提案范围不可核对");}
-                    if(!ref.sourceId.equals(meta.opt("id"))||!"user".equals(meta.opt("role")))throw new SourceUnavailable("原话的记忆提案范围不可核对");
-                    if(Boolean.TRUE.equals(meta.opt("personalMemoryExcluded")))throw new MemoryProposalExcluded();
-                    if(meta.has("personalMemoryExcluded")&&!Boolean.FALSE.equals(meta.opt("personalMemoryExcluded")))throw new SourceUnavailable("原话的记忆提案范围不可核对");
+                    if(!rowAllowsAutomaticLearning(meta,ref.sourceId))throw new MemoryProposalExcluded();
                 }
             }
             current();String key=TaskMemoryTrace.rawFingerprint(part);if(!checkedNativeUsers.containsKey(key)&&checkedNativeUsers.size()>=100)throw limited("native_user_part_budget");checkedNativeUsers.put(key,new JSONObject(part.toString()));

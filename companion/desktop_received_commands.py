@@ -28,7 +28,7 @@ LABEL = {"queued": "已在这台电脑排队", "running": "这台电脑已启动
          "accepted_only": "已接单，原执行文件未能核对"}
 
 
-def local_record(view, peer, item, *, read=False, revision=None, archive=False, locate=False, ticket=None, held=None, export_guard=None, work_key=False, required_work=None, read_root=False, project_inventory=None, match_source=False):
+def local_record(view, peer, item, *, read=False, revision=None, archive=False, locate=False, ticket=None, held=None, export_guard=None, work_key=False, required_work=None, read_root=False, project_inventory=None, match_source=False, command_name=False):
     # This is the unlocked receiver owner's local view, never a synthetic MTLS
     # history permission. Admit only the direct source and its still-current original read scope.
     if not view._peer_current(peer): return None
@@ -59,6 +59,10 @@ def local_record(view, peer, item, *, read=False, revision=None, archive=False, 
         if source["toolName"] in (TEXT_WRITE, PROJECT_RECEIVE, PROJECT_CONFIRM, PROJECT_EXPORT) and (source["toolName"] not in grant["toolNames"] or "sourceShareId" in accepted): return None
         if revision is not None and manager.jobs.get(row[1], {}).get("nativeDeviceRevision") != revision:
             return None
+        if command_name:
+            if item[4]!=COMMAND or source["toolName"]!=COMMAND: return None
+            from windows_command_name import local
+            return local(manager,operation,row,original,grant,revision)
         if project_inventory is not None:
             from windows_project_inventory import access
             return access(manager, peer, operation, row, original, grant, now, revision, project_inventory, ticket)
@@ -83,7 +87,13 @@ def local_record(view, peer, item, *, read=False, revision=None, archive=False, 
         if source["toolName"]==TEXT_WRITE:
             from windows_text_write_receipt import project
             return project(manager,operation,row,original)
-        return (command_receipt if source["toolName"] == COMMAND else workspace_file if source["toolName"] == FILE else workspace_read)(manager, operation, row, original)
+        if source["toolName"] == COMMAND:
+            from windows_command_name import available
+            result=command_receipt(manager,operation,row,original)
+            if item[4]==COMMAND and result.get("revision") and available(row[3],original,grant):
+                result["_canIdentifyCommandName"]=True  # local owner window only; peer uses the unmodified command_receipt projection
+            return result
+        return (workspace_file if source["toolName"] == FILE else workspace_read)(manager, operation, row, original)
 
 
 def open_original_number(view, peer):
@@ -156,7 +166,15 @@ def show(view, peer, item, *, required_work=None, owning_current=lambda: True):
     body += "\n以上只说明这条命令，不证明仓库改动、文件交付或整个目标完成。无需手机在线。"
     while current():
         choices = ([("output", "查看这次命令留存的输出")] if "output" in receipt else []) + [("ids", "核对原操作与本机工作编号")]
+        if receipt.get("_canIdentifyCommandName"): choices.insert(0,("name","核对这次请求指定的白名单名称"))
         action = view._dialog(LABEL[phase], body, choices, current)
+        if action=="name" and current():
+            name=local_record(view,peer,item,command_name=True,revision=receipt.get("revision"),required_work=required_work)
+            if name:
+                view._dialog("这次原请求指定的命令名",name+"\n已按本机接单时留下的证据核对。不是程序路径，不显示其他参数，也不证明程序现在可用。",[],current)
+            elif current():
+                view._dialog("本次没有核到原命令名","原工作、别名留存或当前登记无法对应。没有根据输出、文件名或如今的唯一命令猜测。",[],current)
+            continue
         if action == "ids":
             view._dialog("可在原发起设备的操作回执中核对", f"原操作：{item[1]}\nWindows 工作：{receipt['jobId']}\n请求摘要：{item[2]}", [], current)
         elif action == "output":

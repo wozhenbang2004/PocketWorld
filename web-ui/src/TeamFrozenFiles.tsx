@@ -6,9 +6,9 @@ import type {WorkFileSource} from './team-navigation';
 
 type Data = Record<string, any>;
 type FileRow = {artifactId:string;assignmentId:string;memberId:string;path:string;kind:'text'|'deletion'|'binary_or_large';sha256:string;retainedChars?:number;currentVersion:number;currentExists:boolean;matchesOwnerBase:boolean;retainedApplied:boolean;truncated:boolean;beforeBytes?:number;afterBytes?:number};
-type Approval = {teamRunId:string;planHash:string;projectId:string;files:{path:string;existing:boolean}[];approvalHandle:string;startsIntegration:false};
+type Approval = {teamRunId:string;planHash:string;projectId:string;files:{path:string;existing:boolean;version?:number;sha256?:string}[];approvalHandle:string;startsIntegration:false;firstProject?:boolean;parentCheckoutId?:string;sourceDigest?:string;snapshotIdentity?:string;reviewerTaskId?:string;reviewerRunId?:string;startsChecks?:false;packagesProject?:false};
 type IntegrationCapture={integrationTaskId:string;reviewId:string;planHash:string;matchingFiles:number;total:number;active:boolean;unresolved:boolean;status:string;businessVerified:false};
-type Reading = {revisionComparison?:RevisionComparison;revisionWarning?:string;projectId:string;integrationCapture?:IntegrationCapture;ownerDecision?:{state:string;reviewId?:string};fileHandle:string;teamRunId:string;planHash:string;files:FileRow[];incompleteCount:number;capturedAt:number;readOnly:true};
+type Reading = {fullProject?:boolean;revisionComparison?:RevisionComparison;revisionWarning?:string;projectId:string;integrationCapture?:IntegrationCapture;ownerDecision?:{state:string;reviewId?:string;registrationKind?:string;separateIntegratorStartRequired?:boolean};fileHandle:string;teamRunId:string;planHash:string;files:FileRow[];incompleteCount:number;capturedAt:number;readOnly:true};
 type Page = {id:string;body:string;end:number;size:number};
 
 export function TeamFrozenFiles({team, view, active, disabled, run, onOpen, back, memberName, entry, hasRevision=false}:{
@@ -79,13 +79,16 @@ export function TeamFrozenFiles({team, view, active, disabled, run, onOpen, back
   };
 
   const reviewApproval=async()=>{
-    const original=current.current;if(!original||original.ownerDecision?.state!=='eligible'||!allLoaded||pending.current||!opened.current||unknown||registered)return;
+    const original=current.current,project=original?.ownerDecision?.state==='eligible_project_first';if(!original||(!project&&original.ownerDecision?.state!=='eligible')||!allLoaded||pending.current||!opened.current||unknown||registered)return;
     const seq=++generation.current;pending.current=true;setBusy(true);setError('');setAck(false);
     try{
-      const next=await run('teams.reviewFrozenTextApproval',{viewHandle:view,fileHandle:original.fileHandle});
+      const next=await run(project?'teams.reviewFirstProjectText':'teams.reviewFrozenTextApproval',{viewHandle:view,fileHandle:original.fileHandle});
       if(seq!==generation.current){if(next?.approvalHandle)void bridge.command('teams.closeReading',{approvalHandle:next.approvalHandle}).catch(()=>{});return;}
       if(next?.teamRunId!==team||next.fileHandle!==original.fileHandle||next.planHash!==original.planHash||!next.approvalHandle||!next.projectId||next.startsIntegration!==false
-        ||!Array.isArray(next.files)||next.files.length!==original.files.length||next.files.some((f:{path?:string;existing?:boolean},i:number)=>f.path!==original.files[i].path||f.existing!==original.files[i].currentExists))
+        ||project!==!!next.firstProject||project&&(next.startsChecks!==false||next.packagesProject!==false||next.projectId!==original.projectId||!next.parentCheckoutId
+          ||typeof next.sourceDigest!=='string'||typeof next.snapshotIdentity!=='string'||!(/^[a-f0-9]{64}$/.test(next.sourceDigest)&&/^[a-f0-9]{64}$/.test(next.snapshotIdentity))||!next.reviewerTaskId||!next.reviewerRunId)
+        ||!Array.isArray(next.files)||next.files.length!==original.files.length||next.files.some((f:{path?:string;existing?:boolean;sha256?:string;version?:number},i:number)=>f.path!==original.files[i].path
+          ||f.existing!==original.files[i].currentExists||project&&(f.version!==original.files[i].currentVersion||f.sha256!==original.files[i].sha256)))
         throw new Error('写回许可的文件或项目身份待核对，没有提交。');
       setApproval(next);
     }catch(e){if(seq===generation.current)setError(e instanceof Error?e.message:String(e));}
@@ -96,19 +99,24 @@ export function TeamFrozenFiles({team, view, active, disabled, run, onOpen, back
     const original=current.current,exact=approval;if(!original||!exact||!ack||pending.current||!opened.current||unknown||registered)return;
     const seq=++generation.current;pending.current=true;setBusy(true);setError('');setApproval(null);setAck(false);
     try{
-      const receipt=await run('teams.approveFrozenText',{viewHandle:view,fileHandle:original.fileHandle,approvalHandle:exact.approvalHandle});
+      const receipt=await run(exact.firstProject?'teams.approveFirstProjectText':'teams.approveFrozenText',{viewHandle:view,fileHandle:original.fileHandle,approvalHandle:exact.approvalHandle});
       if(seq!==generation.current)return;
-      if(receipt?.fileHandle!==original.fileHandle||receipt.teamRunId!==team||receipt.planHash!==original.planHash||receipt.state!=='approved_current'||!receipt.reviewId||receipt.startedByThisAction!==false)throw new Error('写回许可的结果未确认。');
+      if(receipt?.fileHandle!==original.fileHandle||receipt.teamRunId!==team||receipt.planHash!==original.planHash||receipt.state!=='approved_current'||!receipt.reviewId||receipt.startedByThisAction!==false||exact.firstProject&&(receipt.registrationKind!=='first_local_project_text_v1'||receipt.separateIntegratorStartRequired!==true))throw new Error('写回许可的结果未确认。');
       setRegistered(receipt.reviewId);
     }catch(e){if(seq===generation.current){setUnknown(true);setError((e instanceof Error?e.message:String(e))+' 请关闭并重新读取这份原文件目录核对登记，不重复提交。');}}
     finally{if(seq===generation.current){pending.current=false;setBusy(false);}}
   };
 
   return <><Button variant="secondary" size="small" disabled={disabled||!active||!view} onClick={()=>void open()}>{hasRevision?'核对上版写回与本次冻结':'查看冻结文件与原项目差异'}</Button>
-    <SettingsDialog isOpen={shown} title={approval?"核对这份写回许可":source?.revisionComparison?"核对原分工修订":"原协作的冻结文件"} onClose={dismiss} className="pw-team-modal">
-      <div className="pw-form-stack">{approval?<><p>这份许可只适用于下列原冻结文本。批准后，管家可在原授权内请求唯一整合者将它们写回原项目；本次不会启动整合或写入文件。</p>
+    <SettingsDialog isOpen={shown} title={approval?approval.firstProject?"核对完整项目的首版文件许可":"核对这份写回许可":source?.revisionComparison?"核对原分工修订":"原协作的冻结文件"} onClose={dismiss} className="pw-team-modal">
+      <div className="pw-form-stack">{approval?<><p>{approval.firstProject?'你正在给下列原冻结文本登记首版许可。这份登记不可用于发起整合。':'这份许可只适用于下列原冻结文本。批准后，管家可在原授权内请求唯一整合者将它们写回原项目；本次不会启动整合或写入文件。'}</p>
         <p className="pw-field-hint">原项目：<code>{approval.projectId}</code> · 计划 {approval.planHash.slice(0,12)}</p>
-        <ul>{approval.files.map(file=><li key={file.path}>{file.existing?'修改':'新增'}：<code>{file.path}</code></li>)}</ul>
+        {approval.firstProject&&<><p>仅登记这版已独审的原文件。不会启动整合者、执行检查或打包，每项后续写回仍须原操作单独批准。</p>
+          <details><summary>核对原项目固定基线与独审记录</summary>
+            <p>原项目副本：<code>{approval.parentCheckoutId}</code></p><p>源码摘要：<code>{approval.sourceDigest}</code></p>
+            <p>完整目录与字节身份：<code>{approval.snapshotIdentity}</code></p><p>独审任务：<code>{approval.reviewerTaskId}</code> · 本次执行 <code>{approval.reviewerRunId}</code></p>
+          </details></>}
+        <ul>{approval.files.map(file=><li key={file.path}>{file.existing?'修改':'新增'}：<code>{file.path}</code>{approval.firstProject&&<> · 基线 v{file.version}<details><summary>冻结文件摘要</summary><code>{file.sha256}</code></details></>}</li>)}</ul>
         <CheckboxField isSelected={ack} onChange={setAck} isDisabled={busy}>我已核对这些文件的完整差异和写回目标</CheckboxField>
         <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={cancelApproval}>返回文件，不批准</Button><Button disabled={busy||!ack} onClick={()=>void confirmApproval()}>仅批准这份写回许可</Button></div></>:
         (!source?.revisionComparison||projectView)&&<p className="pw-field-hint">对比打开时的项目版本和成员交回的文件。打开或读取文件不会批准、写回或启动工作。</p>}
@@ -131,9 +139,11 @@ export function TeamFrozenFiles({team, view, active, disabled, run, onOpen, back
                   {file.truncated&&<p className="pw-field-hint">原生比较只保留了一段差异，不能当作完整文件审阅。</p>}
                   {!source.revisionComparison&&<Button variant="ghost" disabled={busy} onClick={()=>{setSelected('');setPage(null);setError('');}}>收起差异</Button>}</>}</>}
           </section>)}
-          {registered||source.ownerDecision?.state==='approved_current'?<p role="status">这份计划的写回许可已登记。批准记录不是写入回执；实际整合请看原任务。</p>
-            :source.ownerDecision?.state==='eligible'&&!unknown?<><p className="pw-field-hint">{allLoaded?'所有文件的原始文本差异已加载，当前独审没有阻断项。':'完整加载每份原始差异后，才可单独核对写回许可。'}</p>
-              <Button variant="secondary" disabled={!allLoaded||busy} onClick={()=>void reviewApproval()}>核对写回许可</Button></>
+          {registered||source.ownerDecision?.state==='approved_current'?<p role="status">{source.ownerDecision?.state==='eligible_project_first'||source.ownerDecision?.registrationKind==='first_local_project_text_v1'&&source.ownerDecision.separateIntegratorStartRequired===true
+            ?'这版原项目文本已登记。没有授权启动整合，也没有写文件、运行检查或打包。':'这份计划的写回许可已登记。批准记录不是写入回执；实际整合请看原任务。'}</p>
+            :(source.ownerDecision?.state==='eligible'||source.ownerDecision?.state==='eligible_project_first')&&!unknown?<><p className="pw-field-hint">{allLoaded?'所有文件的原始文本差异已加载，当前独审没有阻断项。':'完整加载每份原始差异后，才可单独核对写回许可。'}</p>
+              <Button variant="secondary" disabled={!allLoaded||busy} onClick={()=>void reviewApproval()}>{source.ownerDecision?.state==='eligible_project_first'?'核对首版项目文件许可':'核对写回许可'}</Button></>
+              :source.fullProject&&source.ownerDecision?.state==='read_only'&&!source.revisionComparison?<p className="pw-field-hint">这份完整项目保留待核对。只有首版、全本机作者、完整原文独审且基线未变的文本才可在此登记；没有为其他版本、二进制或删除项批准写回。</p>
               :source.ownerDecision?.state==='independent_review_required'?<p className="pw-field-hint">没有与这版文件匹配的完整无阻断独审，此处不能批准。</p>:null}</>}
       </div>
     </SettingsDialog></>;

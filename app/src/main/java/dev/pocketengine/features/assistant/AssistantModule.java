@@ -1032,7 +1032,7 @@ public final class AssistantModule implements EngineModule {
     }
     /** Native automatic-learning adapter only; model text cannot assert a USER role or task identity. */
     public dev.pocketengine.features.KnowledgeLearningWorkflow.SourceDocument readAutomaticOwnerUtterance(SourceRef expected,String taskId,String runId,int epoch)throws Exception{
-        if(historyTasks==null||expected==null||epoch<1||runId==null||runId.isEmpty())throw new SecurityException("缺少原生主人任务来源");
+        if(historyTasks==null||expected==null||!"message".equals(expected.kind)||!"owner".equals(expected.ownerId)||!"private".equals(expected.spaceId)||epoch<1||runId==null||runId.isEmpty())throw new SecurityException("缺少原生主人任务来源");
         synchronized(historyTasks){
             JSONObject actual=historyTasks.get(taskId,false),origin=actual==null?null:actual.optJSONObject("origin");
             if(actual==null||!"owner".equals(actual.optString("actorId"))||!"private".equals(actual.optString("spaceId"))||!"completed".equals(actual.optString("status"))
@@ -1041,8 +1041,6 @@ public final class AssistantModule implements EngineModule {
                 JSONObject state=source(expected.sourceId);
                 if(state==null||!"user".equals(state.optString("role"))||!actual.optString("conversationId").equals(state.optString("conversationId")))throw new SecurityException("自动提炼只能读取该原对话的真实主人发言");
                 if(!personalMemoryEnabled(state.getString("conversationId")))throw new SecurityException("此对话已关闭个人记忆，不自动提炼原话");
-                JSONObject originalMessage=durable()?historyRepository.message(state.getString("conversationId"),expected.sourceId):findMessage(find(state.getString("conversationId")),expected.sourceId);
-                if(originalMessage==null||originalMessage.optBoolean("personalMemoryExcluded"))throw new SecurityException("此消息已排除自动记忆整理，不能在后来补提炼");
                 JSONArray inputs=actual.optJSONArray("ownerInputs");JSONObject adopted=null;
                 for(int i=0;inputs!=null&&i<inputs.length();i++){
                     JSONObject row=inputs.getJSONObject(i);
@@ -1050,8 +1048,13 @@ public final class AssistantModule implements EngineModule {
                 }
                 if(adopted==null||!taskId.equals(adopted.optString("acceptedTaskId"))||!"materialized".equals(adopted.optString("queueState"))
                         ||!runId.equals(adopted.optString("materializedRunId"))||epoch!=adopted.optInt("materializedEpoch")||expected.revision!=adopted.optLong("ownerMessageRevision"))throw new SecurityException("原成功执行未实际采用这份主人消息修订");
-                // The existing reader rechecks exact SourceRef, body role/revision,
-                // deleted/retired/forget state under the same original source lock.
+                if(durable())historyRepository.requireAutomaticLearningRow(state.getString("conversationId"),expected);
+                else{
+                    JSONObject legacy=findMessage(find(state.getString("conversationId")),expected.sourceId);
+                    if(legacy==null||legacy.has("personalMemoryExcluded")&&!Boolean.FALSE.equals(legacy.opt("personalMemoryExcluded")))throw new SecurityException("此消息的自动整理资格未核对");
+                }
+                // Only after eligibility and real adoption, the existing reader rechecks exact
+                // SourceRef, role/revision and deleted/retired/forget state under the same lock.
                 return readMemorySource(expected);
             });
         }

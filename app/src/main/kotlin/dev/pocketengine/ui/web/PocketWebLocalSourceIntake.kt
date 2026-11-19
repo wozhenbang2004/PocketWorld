@@ -37,6 +37,8 @@ internal class PocketWebLocalSourceIntake(private val original: ProjectPackageCo
         return JSONObject().put("id", actual.getString("selectionId")).put("sha", actual.getString("sha256"))
             .put("manifest", actual.getString("manifestIdentity")).put("kind", evidence.getString("sourceKind"))
             .put("label", evidence.optString("sourceLabel").take(120)).put("files", evidence.optInt("files"))
+            .put("excludedDirectory", evidence.optJSONObject("original")?.optString("ownerExcludedDirectory")?.takeIf {
+                evidence.optString("sourceKind") == "saf_tree" && it.isNotEmpty() && it.length <= 240 })
             .put("fixedPackage", fixed?.let { JSONObject().put("manifest", it.getString("fixedPackageManifestIdentity"))
                 .put("archive", it.getString("originalArchiveSha256")).put("omitted", it.getInt("fixedPackageOmitted")) })
             .put("hostVersion", evidence.optJSONObject("original")?.optString("snapshotVersion")?.takeIf { evidence.optString("sourceKind") == "host_saved_snapshot" })
@@ -67,6 +69,7 @@ internal class PocketWebLocalSourceIntake(private val original: ProjectPackageCo
         val state = original.state
         val plan = plan(); val pending = pending(); val result = result()
         return JSONObject().put("window", window).put("busy", state.busy).put("picking", original.webSourcePickerPending)
+            .put("suggestedSkip", state.sourceSkipCandidate?.takeIf { state.error != null && state.staged == null })
             .put("notice", state.notice).put("error", displayError(state.error)).put("staged", stageRow(state.staged, true))
             .put("saved", JSONArray(state.stagedPackages.mapNotNull { stageRow(it) }.take(4)))
             .put("reviewId", plan?.getString("clientImportId")).put("reviewName", plan?.getString("projectName"))
@@ -90,6 +93,7 @@ internal class PocketWebLocalSourceIntake(private val original: ProjectPackageCo
             "review" -> setOf("window", "id", "sha", "name")
             "confirm", "query", "retry", "releaseMissing" -> setOf("window", "actionId")
             "openProject" -> setOf("window", "project", "checkout")
+            "folder" -> if (args.has("excludedDirectory")) setOf("window", "excludedDirectory") else setOf("window")
             "zip" -> setOf("window", "stripRoot")
             else -> setOf("window")
         }
@@ -119,7 +123,10 @@ internal class PocketWebLocalSourceIntake(private val original: ProjectPackageCo
         when (op) {
             "folder", "zip" -> {
                 check(plan() == null && result() == null) { "请先返回选择来源" }
-                if (op == "folder") original.pickSourceDirectory(false)
+                if (op == "folder") {
+                    val skip = if (args.has("excludedDirectory")) args.get("excludedDirectory") as? String ?: error("跳过目录必须是确切相对路径") else ""
+                    original.pickSourceDirectory(false, skip)
+                }
                 else { require(args.get("stripRoot") is Boolean); original.pickSourceZip(false, args.getBoolean("stripRoot")) }
             }
             "select" -> {

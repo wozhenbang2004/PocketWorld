@@ -1,0 +1,8 @@
+.pw-phone-message-return { min-inline-size: 0; color: var(--pw-ink); }
+.pw-phone-message-return > header { display: flex; flex-wrap: wrap; align-items: baseline; gap: .16em .7em; margin-block-end: .5em; }
+.pw-phone-message-return > header small { color: var(--pw-muted); font-size: .82em; }
+.pw-phone-message-return > header strong { font-weight: 600; overflow-wrap: anywhere; }
+.pw-phone-return-empty { margin: 0; color: var(--pw-copy); line-height: 1.55; }
+.pw-phone-return-actions { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-block-start: .3em; }
+.pw-phone-return-actions button { min-block-size: 44px; block-size: auto; max-inline-size: 100%; white-space: normal; overflow-wrap: anywhere; }
+.pw-phone-return-actions button > span { min-inline-size: 0; flex-shrink: 1; }

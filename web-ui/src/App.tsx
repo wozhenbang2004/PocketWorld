@@ -74,7 +74,8 @@ import {ProjectConventionProvided} from './ProjectConventionProvided';
 import {ProvidedMemories} from './ProvidedMemories';
 import {MessageQuote,type MessageQuoteTarget} from './MessageQuote';
 import {MessageOriginReader,type MessageOriginTarget} from './MessageOriginReader';
-import {PhoneReturnedReport,phoneReportTarget,type PhoneReportTarget} from './PhoneReturnedReport';
+import {PhoneReturnedReport,type PhoneReportTarget} from './PhoneReturnedReport';
+import {PhoneMessageReturn} from './PhoneMessageReturn';
 import {ReadingView} from './ReadingView';
 import {ReadingContext,type ReadingDocument,type ReadingSnapshot} from './reading-context';
 import {ComposerSourceReferences,ComposerObjectReferences} from './ComposerSourceReferences';
@@ -1883,7 +1884,7 @@ export default function App(){
     const completedFeedback=linkedFeedback&&conversationTaskCompact(linkedFeedback);
     const returnedWork=phoneResult||(taskResult?.noticeKind?null:taskResult);
     const earlierRun=returnedWork&&linked?.raw?.runId&&(linked.raw.runId!==returnedWork.runId||linked.raw.coordinatorEpoch!==returnedWork.epoch);
-    const originalPhone=phoneResult&&!!m.id&&m.sourceRevision===1&&can('phone.result.original')&&(phoneResult.summaryTruncated||earlierRun||!linked?.raw?.runId);
+    const readPhone=!!m.id&&m.sourceRevision===1&&can('phone.result.original');
     const inlineResult=!earlierRun&&!phoneResult&&taskResult?.kind==='owner_work'&&taskResult.status==='completed'&&!taskResult.noticeKind&&!!m.id;
     const noteIdentity=!phoneResult&&!taskResult&&replyContext&&messageTaskAnchors.get(replyContext.taskId)===index?replyContext:null;
     const canQuote=intent==='chat'&&m.quoteAvailable&&can('messageQuote.open')&&can('messageQuote.stage')&&can('messageQuote.close');
@@ -1891,7 +1892,10 @@ export default function App(){
      {m.role==='assistant'&&<ConversationTurnActivity phase={null} conversation={String(state.conversationId||'')} identity={noteIdentity} task={linked}
       actionElsewhere={!!linkedFeedback&&(attention(linkedFeedback)||linkedFeedback.status==='failed')||!!chatAttention&&chatAttention.id===noteIdentity?.taskId}
       onRead={noteIdentity&&can('tasks.open')?layer=>openTurnNotes(noteIdentity,layer):undefined}/>}
-     {m.role==='assistant'?<CitedAnswer continuous text={m.content} onCopyCode={copyWithLocalFeedback} sources={refs as any} onOpenSource={()=>openSource(m)}/>:m.content?<div className="pw-user-text">{m.content}</div>:null}
+     {m.role==='assistant'&&phoneResult&&m.id&&m.sourceRevision===1?<PhoneMessageReturn result={phoneResult} conversation={String(state.conversationId||'')} messageId={m.id} revision={Number(m.sourceRevision)} body={m.content}
+       onOriginal={readPhone?setMessageOriginTarget:undefined} onRun={can('tasks.open')?(entry,t)=>openTask(t.phoneResult.taskId,entry,false,undefined,undefined,{runId:t.phoneResult.runId,epoch:t.phoneResult.epoch}):undefined}>
+       <CitedAnswer continuous text={m.content} onCopyCode={copyWithLocalFeedback} sources={refs as any} onOpenSource={()=>openSource(m)}/>
+     </PhoneMessageReturn>:m.role==='assistant'?<CitedAnswer continuous text={m.content} onCopyCode={copyWithLocalFeedback} sources={refs as any} onOpenSource={()=>openSource(m)}/>:m.content?<div className="pw-user-text">{m.content}</div>:null}
      {asArray<Json>(m.attachments).length>0&&<div className="pw-message-files">{asArray<Json>(m.attachments).map(file=><Button key={file.id||file.name} variant="secondary" size="small" leadingIcon={IconFile} disabled={!can('attachments.open')||!file.sha256||!!state.attachmentOpens?.[`${file.id}:${file.sha256}`]?.checking} onClick={()=>run('attachments.open',{messageId:m.id,id:file.id,sha256:file.sha256})}>{file.name||'原附件'}</Button>)}</div>}
      {m.submission&&<Receipt receipt={m.submission}/>}
      <MotionFeedback className="pw-message-footer" identity={`${id}:${m.submission?.status||'saved'}:${refs.map(source=>source.id).join(',')}`} initial={continued}>
@@ -1902,13 +1906,12 @@ export default function App(){
       <ConversationLinkedReason conversation={String(state.conversationId||'')} task={linkedFeedback}/>}
      {linkedFeedback&&(attention(linkedFeedback)||linkedFeedback.status==='failed')&&<Button variant="ghost" className="pw-message-work-action" leadingIcon={completedFeedback?IconCheckCircle:attention(linkedFeedback)||linkedFeedback.status==='failed'?IconError:IconClock} aria-label={`查看任务详情：${linkedFeedback.goal}`} title={linkedFeedback.goal} disabled={!can('tasks.open')} onClick={()=>openTask(linkedFeedback.id,attention(linkedFeedback)&&can('tasks.review')?'review':'overview')}><span className="pw-message-work-next">{taskNeedsReconciliation(linkedFeedback)?'有操作待核对':attention(linkedFeedback)?taskActionLabel(linkedFeedback):linkedFeedback.status==='failed'?'查看失败原因':terminal(linkedFeedback)?'查看详情':'查看进展'}<IconChevronRight size={15} aria-hidden="true"/></span></Button>}
      {(m.content||m.role==='assistant'||canQuote||(m.retainedSources&&can('sources.open')))&&<div className="pw-message-tools">
-       {returnedWork&&(originalPhone||can('tasks.open'))&&<Button variant="ghost" size="small" className="pw-message-trace" leadingIcon={IconFolder} disabled={inlineResult&&!!openingChatResultId}
+       {returnedWork&&(!phoneResult||!m.id||m.sourceRevision!==1)&&can('tasks.open')&&<Button variant="ghost" size="small" className="pw-message-trace" leadingIcon={IconFolder} disabled={inlineResult&&!!openingChatResultId}
         onClick={event=>{
-          if(originalPhone&&phoneResult&&m.id)setMessageOriginTarget(phoneReportTarget(String(state.conversationId||''),m.id,Number(m.sourceRevision),phoneResult,event.currentTarget));
-          else if(inlineResult&&taskResult&&m.id)void openChatResult(m.id,taskResult,event.currentTarget);
+          if(inlineResult&&taskResult&&m.id)void openChatResult(m.id,taskResult,event.currentTarget);
           else openTask(returnedWork.taskId,'overview',false,undefined,undefined,earlierRun?undefined:{runId:returnedWork.runId,epoch:returnedWork.epoch});
         }}>
-        {openingChatResultId===m.id?'正在读取成果…':originalPhone?'查看这轮原文':earlierRun?'查看所属工作':returnedWork.status==='completed'?'查看成果':'查看这次工作'}
+        {openingChatResultId===m.id?'正在读取成果…':earlierRun?'查看所属工作':returnedWork.status==='completed'?'查看成果':'查看这次工作'}
        </Button>}
       {m.role==='assistant'&&!!m.content&&<MessageActions onCopy={()=>copyWithLocalFeedback(m.content)} onSpeak={can('speech.speak')&&m.id&&row.lastOfRole?playing=>run(playing?'speech.speak':'speech.stop',{messageId:m.id}):undefined} speaking={!!state.speaking}/>}
       <PopoverTrigger isOpen={messageMenu===id} onOpenChange={value=>setMessageMenu(value?id:null)}>
