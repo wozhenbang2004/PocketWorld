@@ -30,6 +30,7 @@ public final class ProjectOwnerWorkflows {
         ProjectBuildPlan.identity(project);local.requireAvailableDraftProjectForOwner(project);JSONArray available=new JSONArray(),rows=local.ownerCheckoutRecords();
         for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(!project.equals(row.optString("projectId"))||!ordinaryCheckout(row))continue;
             available.put(new JSONObject().put("checkoutId",row.getString("id")).put("projectId",project).put("name",row.optString("name")).put("createdAt",row.optLong("createdAt"))
+                .put("draftWorkingCopy",row.optJSONObject(OwnerDraftWorkCopy.FIELD)!=null)
                 .put("taskPackageSource",row.optJSONObject("sourceImport")!=null&&ProjectTaskSourceOrigin.KIND.equals(row.getJSONObject("sourceImport").opt("sourceKind")))
                 .put("hostSource",row.optJSONObject("sourceImport")!=null&&"host_saved_snapshot".equals(row.getJSONObject("sourceImport").opt("sourceKind"))));}
         JSONObject picked=new JSONObject().put("projectId",project).put("checkouts",available).put("executionAuthorized",false);
@@ -48,6 +49,16 @@ public final class ProjectOwnerWorkflows {
         source.remove("files");
         if(wrapper!=null)source.put("androidGradleWrapper",wrapper);
         return source;
+    }
+    /** One real managed build, not code execution. Both the original kept edition and the derived whole tree must still agree. */
+    public JSONObject reviewFirstBuildForOwner(String project,String checkout)throws Exception {
+        requireOrdinaryFileOwner(project,checkout);JSONObject mark=local.projectCheckoutForHost(checkout).getJSONObject(OwnerDraftWorkCopy.FIELD);
+        var seed=tasks.ownerDraftWorkCopySeed(mark.getString("taskId"),mark.getString("draftId"),mark.getString("revisionId"),mark.getString("sha256"));
+        if(!seed.projectId.equals(project)||!seed.checkoutId.equals(checkout))throw new SecurityException("原稿没有建立这个工作副本");
+        JSONObject copy=local.findDraftWorkCopy(seed),plan=ProjectBuildPlan.create(local,new JSONObject().put("checkoutId",checkout).put("runtimeId","managed_process_v1")
+            .put("intent","build").put("ecosystem","node").put("expectedSourceDigest",copy.getString("initialCopyDigest")));
+        JSONObject pin=OwnerDraftFirstBuild.pin(seed,copy,plan);OwnerDraftFirstBuild.requireTooling(pin,local.projectRuntimeForHost("managed_process_v1"));
+        return new JSONObject().put("pin",pin).put("scripts",OwnerDraftFirstBuild.scripts(local.handle("export",new JSONObject().put("checkoutId",checkout)),pin));
     }
     public JSONObject prepareCheckoutForOwner(String project,String request)throws Exception{return local.prepareDevelopmentCheckoutForOwner(project,request);}
     /** Native owner-read fence for the existing checkout, including an already captured path listing. */
@@ -191,6 +202,13 @@ public final class ProjectOwnerWorkflows {
         if(!digest.matches("[a-f0-9]{64}")||!client.matches("[a-fA-F0-9-]{36}")||goal.codePoints().allMatch(Character::isWhitespace)||goal.length()>12000)throw new IllegalArgumentException("请选择真实项目、运行位置和1至12000字目标");
         JSONObject context=new JSONObject().put("format","pocketworld.development-context.v1").put("projectId",project).put("checkoutId",checkout).put("runtime",runtime)
                 .put("initialSourceDigest",digest).put("clientMessageId",client).put("filesAreUntrusted",true).put("authorityAdded",false);
+        if(ownerInput.has(OwnerDraftFirstBuild.FIELD)){
+            if(ownerStartFence.get()==null||ownerConvention.get()!=null||butlerPreparation.get()!=null||!OwnerDraftFirstBuild.GOAL.equals(goal)||
+                ownerInput.has("draftOnly")||ownerInput.has(OwnerRevisionSource.FIELD))throw new SecurityException("首次构建必须由主人独立核对此副本，不能继承别的任务或项目约定");
+            JSONObject pin=reviewFirstBuildForOwner(project,checkout).getJSONObject("pin");OwnerDraftFirstBuild.requireContext(pin,context);
+            if(!ProjectSources.canonical(pin).equals(ProjectSources.canonical(ownerInput.getJSONObject(OwnerDraftFirstBuild.FIELD))))throw new SecurityException("原稿副本或构建条件在审阅后已变化，没有提交");
+            context.put(OwnerDraftFirstBuild.FIELD,pin);
+        }
         if(ownerInput.has("draftOnly")){
             if(ownerInput.opt("draftOnly")!=Boolean.TRUE||butlerPreparation.get()==null||ownerStartFence.get()==null||
                 !"managed_process_v1".equals(runtime))throw new SecurityException("独立改稿只接受机主刚确认的原管家项目审阅");
@@ -212,7 +230,7 @@ public final class ProjectOwnerWorkflows {
         try{
             // sendNative synchronously calls the existing NativeInputHost before scheduling its sole runner.
             JSONObject message=new JSONObject().put("clientMessageId",client).put("message",goal).put("mode","queue");
-            if(context.has(OwnerRevisionSource.FIELD))message.put("firstMessageWithoutPersonalMemory",true).put("excludeThisInputFromLearning",true).put("firstTaskWithoutDefaultWrites",true);
+            if(context.has(OwnerRevisionSource.FIELD)||context.has(OwnerDraftFirstBuild.FIELD))message.put("firstMessageWithoutPersonalMemory",true).put("excludeThisInputFromLearning",true).put("firstTaskWithoutDefaultWrites",true);
             JSONObject ack=assistant.handle("send",message);
             if(ack.optString("status").matches("accepted|queued"))verifyAcknowledgement(ack,context);
             return ack;

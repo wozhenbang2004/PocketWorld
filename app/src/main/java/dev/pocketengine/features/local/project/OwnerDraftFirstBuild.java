@@ -1,0 +1,175 @@
+package dev.pocketengine.features.local.project;
+
+import java.nio.charset.StandardCharsets;
+import java.util.Set;
+import java.util.UUID;
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+/** A reviewed first build for ONE opened independent edition. This witness is not an approval. */
+public final class OwnerDraftFirstBuild {
+    public static final String FIELD="ownerDraftFirstBuild";
+    public static final Set<String> TOOLS=Set.of("project_inspect","project_plan","project_execute","project_status","project_log","project_collect_plan","project_generated_artifact");
+    public static final String GOAL="验证我打开的这份独立改稿副本。先按同一版 package.json 准备 Node 构建（project_plan，intent=build、ecosystem=node），让我另行确认具体命令。不要安装依赖、启动服务、改写源码或发布。失败时保留原退出和日志；若原构建成功，再查看 build 或 dist，将我另行确认的文件交回这个任务。";
+    private OwnerDraftFirstBuild(){}
+    public static String client(String identity){
+        if(identity==null||!identity.matches("[a-f0-9]{64}"))throw new IllegalArgumentException("没有同一份改稿副本");
+        return UUID.nameUUIDFromBytes(("private-draft-first-build-v1:"+identity).getBytes(StandardCharsets.UTF_8)).toString();
+    }
+    public static JSONObject pin(OwnerDraftWorkCopy.Seed seed,JSONObject copy,JSONObject issued)throws Exception{
+        if(!Boolean.TRUE.equals(copy.opt("found"))||!"ready".equals(copy.opt("status"))||!Boolean.FALSE.equals(copy.opt("recyclable"))||
+            !"selected_version".equals(copy.opt("currentFileState"))||!seed.identity.equals(copy.opt("workIdentity"))||
+            !seed.projectId.equals(copy.opt("projectId"))||!seed.checkoutId.equals(copy.opt("checkoutId")))throw new SecurityException("请从原稿打开实际独立副本；原路径变化时不能按旧稿构建。");
+        JSONObject plan=ProjectBuildPlan.verified(issued);JSONArray steps=plan.getJSONArray("steps");
+        if(!seed.projectId.equals(plan.opt("projectId"))||!seed.checkoutId.equals(plan.opt("checkoutId"))||
+            !copy.getString("initialCopyDigest").equals(plan.opt("sourceDigest")))throw new SecurityException("这个副本已经改动，不能再作为刚才那份稿的首次构建。");
+        if(!"managed_process_v1".equals(plan.opt("runtimeId"))||plan.optString("runtimeIdentity").isBlank()||
+            !"build".equals(plan.opt("intent"))||!"node".equals(plan.opt("ecosystem"))||steps.length()!=1||plan.opt("automaticChaining")!=Boolean.FALSE)
+            throw new SecurityException("没有这份工程单独的本机构建步骤。");
+        JSONObject step=steps.getJSONObject(0),p=step.getJSONObject("payload");String manager=p.optString("executable");JSONArray argv=p.optJSONArray("argv");
+        if(!Set.of("npm","pnpm").contains(manager)||!"project.runtime.run".equals(step.opt("localCommand"))||!"build".equals(step.opt("id"))||
+            !Boolean.TRUE.equals(step.opt("approvalRequired"))||argv==null||argv.length()!=2||!"run".equals(argv.opt(0))||!"build".equals(argv.opt(1)))
+            throw new IllegalStateException("所选工程没有声明可用的 Node build 脚本；语法检查不等于构建。");
+        if(!plan.optBoolean("available"))throw new IllegalStateException("这台手机尚未确认可用的 "+manager+" 运行环境；没有启动、下载或改用云端。");
+        return new JSONObject().put("workIdentity",seed.identity).put("projectId",seed.projectId).put("checkoutId",seed.checkoutId)
+            .put("sourceDigest",plan.getString("sourceDigest")).put("runtimeIdentity",plan.getString("runtimeIdentity"))
+            .put("planDigest",plan.getString("planDigest")).put("manager",manager);
+    }
+    public static JSONArray catalog(JSONArray visible)throws Exception{
+        JSONArray only=new JSONArray();for(int i=0;i<visible.length();i++){JSONObject f=visible.getJSONObject(i);if(TOOLS.contains(f.getJSONObject("function").getString("name")))only.put(f);}return only;
+    }
+    /** Native-only review fields, before collection, and the same two identities in its durable result.
+     * An earlier run's verified build can be an input. The new save does not become a new build. */
+    public static JSONObject reviewOperation(JSONObject pin,JSONObject plan,JSONObject operation)throws Exception{
+        requirePlan(pin,plan,operation.getString("taskId"));
+        JSONObject view=new JSONObject().put("action","build").put("manager",pin.getString("manager")).put("projectId",pin.getString("projectId"))
+            .put("checkoutId",pin.getString("checkoutId")).put("sourceDigest",pin.getString("sourceDigest")).put("taskId",operation.getString("taskId"))
+            .put("actionRunId",operation.getString("runId")).put("actionEpoch",operation.getInt("coordinatorEpoch")).put("actionOperationId",operation.getString("operationId"));
+        if("collect".equals(plan.opt("intent"))){
+            JSONObject choice=ProjectManagedOutput.verified(plan.getJSONArray("steps").getJSONObject(0).getJSONObject("payload").getJSONObject("artifactSelection")),origin=choice.getJSONObject("buildBinding");
+            JSONObject proved=choice.getJSONObject("buildReceipt").getJSONObject("binding");
+            requireSourceBinding(origin,proved);String buildId=origin.getString("operationId");
+            String receiptId=ProjectSources.digest(new JSONObject().put("planDigest",pin.getString("planDigest")).put("stepId","build").put("jobId",buildId).put("binding",proved));
+            if(!"native_host_operation".equals(proved.opt("authority"))||!receiptId.equals(choice.getString("buildReceiptIdentity"))||
+                !buildId.equals(choice.getString("buildJobId"))||operation.getString("operationId").equals(buildId)||
+                origin.getInt("coordinatorEpoch")<1||operation.getInt("coordinatorEpoch")<origin.getInt("coordinatorEpoch"))throw new SecurityException("收件和源构建不是可核对的两个操作");
+            view.put("action","collect").put("path",choice.getString("path")).put("bytes",choice.getLong("bytes")).put("sha256",choice.getString("sha256"))
+                .put("buildRunId",origin.getString("runId")).put("buildEpoch",origin.getInt("coordinatorEpoch")).put("buildOperationId",origin.getString("operationId"))
+                .put("buildReceiptIdentity",choice.getString("buildReceiptIdentity"));
+        }return view;
+    }
+    public static String outputPath(String relative){
+        String path=ProjectManagedOutput.path(relative);ProjectBuildOutputs.requireDirectory(path);
+        if(path.indexOf('/')<0)throw new SecurityException("请选择 build 或 dist 下的具体可见文件，不采纳其他目录");
+        return path;
+    }
+    public static void requireSourceBinding(JSONObject selected,JSONObject actual)throws Exception{
+        for(String k:new String[]{"taskId","runId","coordinatorEpoch","operationId"})
+            if(!ProjectSources.canonical(selected.get(k)).equals(ProjectSources.canonical(actual.get(k))))throw new SecurityException("源构建不属于同一实际项目操作与轮次");
+    }
+    /** Original approval rows are nested under the task. They do NOT include a taskId of their own. */
+    public static boolean reviewMatches(JSONObject approval,String task,String run,int epoch){
+        try{
+            JSONObject cap=approval.getJSONObject("capability"),view=approval.getJSONObject("firstBuildReview");
+            if(!"project_execute".equals(approval.opt("tool"))||!run.equals(approval.opt("runId"))||!task.equals(view.opt("taskId"))||
+                !run.equals(view.opt("actionRunId"))||epoch<1||epoch!=view.getInt("actionEpoch")||
+                !cap.getString("checkoutId").equals(view.getString("checkoutId"))||!cap.getString("sourceDigest").equals(view.getString("sourceDigest"))||
+                !view.getString("sourceDigest").matches("[a-f0-9]{64}"))return false;
+            String operation=ProjectBuildPlan.identity(view.getString("actionOperationId"));
+            if("build".equals(view.opt("action")))return "project.runtime.run".equals(cap.opt("command"))&&Set.of("npm","pnpm").contains(view.getString("manager"));
+            return "collect".equals(view.opt("action"))&&ProjectManagedOutput.COMMAND.equals(cap.opt("command"))&&
+                !operation.equals(ProjectBuildPlan.identity(view.getString("buildOperationId")))&&!ProjectBuildPlan.identity(view.getString("buildRunId")).isBlank()&&
+                view.getInt("buildEpoch")>0&&view.getInt("buildEpoch")<=epoch&&view.getLong("bytes")>=0&&view.getString("sha256").matches("[a-f0-9]{64}")&&
+                view.getString("buildReceiptIdentity").matches("[a-f0-9]{64}")&&outputPath(view.getString("path")).equals(view.getString("path"));
+        }catch(Exception invalid){return false;}
+    }
+    /** The stable capability and native plan remain unchanged. A new operation may consume the
+     * old decision ONLY for the explicit, proven-not-dispatched native proposal continuation. */
+    public static boolean sameApprovedProposal(JSONObject approval,JSONObject live)throws Exception{
+        JSONObject previous=approval.optJSONObject("firstBuildReview");if(previous==null)return false;
+        if(ProjectSources.canonical(previous).equals(ProjectSources.canonical(live)))return true;
+        if(!"approved".equals(approval.opt("state"))||!Boolean.TRUE.equals(approval.opt("nativeCapabilityRevalidationRequired"))||
+            !previous.getString("actionRunId").equals(approval.opt("continuedFromRun"))||
+            !previous.getString("actionOperationId").equals(approval.opt("notDispatchedOperationId"))||
+            !live.getString("actionRunId").equals(approval.opt("runId"))||live.getInt("actionEpoch")!=approval.optInt("continuedToEpoch",-1)||
+            live.getInt("actionEpoch")<=previous.getInt("actionEpoch"))return false;
+        JSONObject a=ProjectSources.copy(previous),b=ProjectSources.copy(live);
+        for(String k:new String[]{"actionRunId","actionEpoch","actionOperationId"}){a.remove(k);b.remove(k);}
+        return ProjectSources.canonical(a).equals(ProjectSources.canonical(b));
+    }
+    public static void requireTooling(JSONObject pin,JSONObject actual)throws Exception{
+        if(!pin.getString("runtimeIdentity").equals(actual.opt("identity"))||!Boolean.TRUE.equals(actual.opt("canExecute")))throw new IllegalStateException("本机运行环境在核对后发生变化；没有运行。");
+        boolean node=false,manager=false;JSONArray tools=actual.optJSONArray("tools");
+        for(int i=0;tools!=null&&i<tools.length();i++){JSONObject t=tools.getJSONObject(i);if(t.optBoolean("hashVerified")||t.optBoolean("probeVerified")){
+            node|="node".equals(t.opt("name"));manager|=pin.getString("manager").equals(t.opt("name"));
+        }}
+        if(!node||!manager)throw new IllegalStateException("这台手机尚未同时核实 Node 和项目的包管理器；没有安装依赖或切换运行位置。");
+        if(!actual.optBoolean("managedOutputCollectionAvailable"))throw new IllegalStateException("本机尚无原构建结果的收件能力，不能开始这条验证与交付流程。");
+    }
+    /** Only these inert manifest declarations reach the private review, never as authority or instructions. */
+    public static JSONObject scripts(JSONObject snapshot,JSONObject pin)throws Exception{
+        JSONObject version=ProjectSources.describe(snapshot);
+        for(String k:new String[]{"projectId","checkoutId","sourceDigest"})if(!pin.getString(k).equals(version.opt(k)))throw new SecurityException("读取期间副本已变化，没有展示另一版脚本");
+        String raw=ProjectSources.files(snapshot).get("package.json");
+        JSONObject scripts=raw==null?null:new JSONObject(raw).optJSONObject("scripts"),view=new JSONObject();
+        if(scripts==null||!(scripts.opt("build") instanceof String build)||build.isBlank())throw new IllegalStateException("package.json 没有非空的 build 脚本；没有当成可用构建。");
+        for(String k:new String[]{"prebuild","build","postbuild"})if(scripts.has(k)){
+            Object value=scripts.opt(k);
+            if(!(value instanceof String text)||text.length()>4096||text.codePoints().anyMatch(c->c<32&&c!='\n'&&c!='\r'&&c!='\t'||c>=0x7f&&c<=0x9f||c>=0x202a&&c<=0x202e||c>=0x2066&&c<=0x2069))
+                throw new IllegalStateException("构建脚本不能完整、安全地显示。请先在这个副本中核对 package.json，未开始。");
+            view.put(k,text);
+        }
+        return view;
+    }
+    public static void requireContext(JSONObject pin,JSONObject context)throws Exception{
+        if(pin.length()!=7||!"managed_process_v1".equals(context.opt("runtime"))||context.has("draftOnly")||context.has(OwnerRevisionSource.FIELD)||
+            !pin.getString("projectId").equals(context.opt("projectId"))||!pin.getString("checkoutId").equals(context.opt("checkoutId"))||
+            !pin.getString("sourceDigest").equals(context.opt("initialSourceDigest"))||!client(pin.getString("workIdentity")).equals(context.opt("clientMessageId"))||
+            !Set.of("npm","pnpm").contains(pin.getString("manager"))||!pin.getString("planDigest").matches("[a-f0-9]{64}")||pin.getString("runtimeIdentity").isBlank())
+            throw new SecurityException("不是原稿所选独立工程的首次构建交办");
+    }
+    /** Only the original host-enveloped operation may produce a public scalar fact; no output bodies here. */
+    public static JSONObject outcomeFact(JSONObject pin,JSONObject task,JSONObject row)throws Exception{
+        JSONObject request=ProjectDevelopment.originalPollRequest(task,row),plan=request.getJSONObject("plan"),binding=request.getJSONObject("binding");
+        if(!task.getString("id").equals(binding.opt("taskId"))||!task.getString("runId").equals(binding.opt("runId"))||
+            task.getInt("coordinatorEpoch")!=binding.optInt("coordinatorEpoch",-1)||!row.getString("operationId").equals(binding.opt("operationId")))return null;
+        requirePlan(pin,plan,task.getString("id"));
+        if(ProjectDevelopment.recordedReceipt(task,row)==null)return null;
+        JSONObject raw=row.getJSONObject("receipt").getJSONObject("executionReceipt");
+        JSONObject exact=ProjectDevelopment.exact(plan,ProjectBuildPlan.step(plan,request.getString("stepId")));
+        if("collect".equals(plan.opt("intent"))){
+            if(!"completed".equals(raw.opt("status"))||!ProjectManagedOutput.terminalReceipt(exact,raw))return null;
+            return reviewOperation(pin,plan,binding).put("kind","saved_file");
+        }
+        JSONObject exit=ProjectExecutionExit.from(exact,binding,raw);
+        if(exit==null||!"exit_code".equals(exit.opt("kind"))||!"pre_exec_manifest_verified".equals(raw.opt("sourceCheckStatus"))||
+            !Boolean.TRUE.equals(raw.opt("resourcesReleased"))||!Boolean.TRUE.equals(raw.opt("processGroupAbsent"))||
+            !Boolean.FALSE.equals(raw.opt("timedOut"))||!Boolean.FALSE.equals(raw.opt("cancelRequested")))return null;
+        int code=exit.getInt("value");if(code==0&&!"completed".equals(raw.opt("status"))||code!=0&&!"failed".equals(raw.opt("status")))return null;
+        return reviewOperation(pin,plan,binding).put("kind","build_exit").put("value",code);
+    }
+    public static dev.pocketengine.core.RunOutcome settle(dev.pocketengine.core.RunOutcome original,JSONObject fact)throws Exception{
+        if(!"completed".equals(original.status))return original;
+        boolean file=fact!=null&&"saved_file".equals(fact.opt("kind")),exit=fact!=null&&"build_exit".equals(fact.opt("kind"));
+        boolean ok=file||exit&&fact.getInt("value")==0;
+        String text=file?"本任务第 "+fact.getInt("actionEpoch")+" 轮已保留 "+fact.getString("path")+"（"+fact.getLong("bytes")+" 字节）。它是在第 "+fact.getInt("buildEpoch")+" 轮原构建后观察并选取的文件，不证明由本轮或该次构建新生成。可以在任务文件里查看。":
+            exit?"独立副本的本机构建命令退出码为 "+fact.getInt("value")+(ok?"。退出成功不等于已经保留生成文件；可在本任务继续核对输出。":"。请查看这次执行的日志，在原任务决定下一步；没有自动安装或重跑。"):
+            "这次没有核对到原构建的完整退出或已保留文件，不能凭文字答复算作完成。请回本任务查看待批准的命令或已发生的执行，不要重复提交。";
+        JSONObject evidence=new JSONObject(original.evidence.toString()).put("modelSummary",text);
+        if(fact!=null)evidence.put("firstBuildObservation",fact);return new dev.pocketengine.core.RunOutcome(ok?"completed":"failed",text,evidence);
+    }
+    /** Check again before native I/O. A generated-file save must trace to this task's actual build, not merely the same filename. */
+    public static void requirePlan(JSONObject pin,JSONObject issued,String task)throws Exception{
+        JSONObject p=ProjectBuildPlan.verified(issued);
+        if(!pin.getString("projectId").equals(p.opt("projectId"))||!pin.getString("checkoutId").equals(p.opt("checkoutId"))||
+            !pin.getString("sourceDigest").equals(p.opt("sourceDigest"))||!pin.getString("runtimeIdentity").equals(p.opt("runtimeIdentity"))||
+            !"managed_process_v1".equals(p.opt("runtimeId")))throw new SecurityException("首次构建不能更换工程、版本或运行环境");
+        if("build".equals(p.opt("intent"))&&pin.getString("planDigest").equals(p.opt("planDigest")))return;
+        if("collect".equals(p.opt("intent"))&&"managed_selected_output".equals(p.opt("ecosystem"))){
+            JSONObject choice=ProjectManagedOutput.verified(p.getJSONArray("steps").getJSONObject(0).getJSONObject("payload").getJSONObject("artifactSelection"));
+            outputPath(choice.getString("path"));
+            if(pin.getString("planDigest").equals(choice.getJSONObject("buildPlan").opt("planDigest"))&&task.equals(choice.getJSONObject("buildBinding").opt("taskId")))return;
+        }
+        throw new SecurityException("这次只审阅原版的构建或原构建后观察并选定的文件；没有执行其他操作。");
+    }
+}

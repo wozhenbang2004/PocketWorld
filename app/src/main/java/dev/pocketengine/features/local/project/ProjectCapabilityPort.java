@@ -49,9 +49,13 @@ public final class ProjectCapabilityPort implements CapabilityPort {
     public ProjectCapabilityPort(ModelCapabilityAdapters.Binding binding,ModelCapabilityAdapters.Authority authority,RunControl original,CapabilityPort existing,LocalModule local,TaskStore tasks,String nativeCheckoutId,String nativeRuntimeId,ToolOutputCapture.Factory outputCapture,dev.pocketengine.features.memory.ProjectMemoryAccess projectMemory)throws Exception {
         this(binding,authority,original,existing,local,tasks,nativeCheckoutId,nativeRuntimeId,outputCapture,projectMemory,null);
     }
-    private final JSONObject draftScope;private final FixedProjectDraftSource frozenDraftFiles;
+    private final JSONObject draftScope,firstBuild;private final FixedProjectDraftSource frozenDraftFiles;
     public ProjectCapabilityPort(ModelCapabilityAdapters.Binding binding,ModelCapabilityAdapters.Authority authority,RunControl original,CapabilityPort existing,LocalModule local,TaskStore tasks,String nativeCheckoutId,String nativeRuntimeId,ToolOutputCapture.Factory outputCapture,dev.pocketengine.features.memory.ProjectMemoryAccess projectMemory,JSONObject fixedDraftScope)throws Exception {
-        draftScope=fixedDraftScope==null?null:new JSONObject(fixedDraftScope.toString());
+        firstBuild=fixedDraftScope!=null&&fixedDraftScope.has(OwnerDraftFirstBuild.FIELD)?ProjectSources.copy(fixedDraftScope.getJSONObject(OwnerDraftFirstBuild.FIELD)):null;
+        if(firstBuild!=null){OwnerDraftFirstBuild.requireContext(firstBuild,fixedDraftScope);
+            if(existing!=null||projectMemory!=null||outputCapture!=null||!binding.projectId.equals(firstBuild.opt("projectId"))||!nativeCheckoutId.equals(firstBuild.opt("checkoutId"))||!"managed_process_v1".equals(nativeRuntimeId))
+                throw new SecurityException("独立工程验证不能挂接其他工具或副本");}
+        draftScope=firstBuild!=null||fixedDraftScope==null?null:new JSONObject(fixedDraftScope.toString());
         if(draftScope!=null&&(!ProjectEditDraft.selected(draftScope)||existing!=null||projectMemory!=null||outputCapture!=null||
             !nativeCheckoutId.equals(draftScope.opt("checkoutId"))||!binding.projectId.equals(draftScope.opt("projectId"))||
             !"managed_process_v1".equals(nativeRuntimeId)))throw new SecurityException("原机主独立改稿不能挂接其他权限或工作副本");
@@ -61,6 +65,14 @@ public final class ProjectCapabilityPort implements CapabilityPort {
         if(binding.projectId.isEmpty()||!original.hasHostRun()||!original.matchesHostRun(binding.taskId,binding.runId,binding.epoch))throw new SecurityException("项目工具需要已选项目和原宿主控制");checkoutIdentity=usesOwnerRevision()?null:checkoutIdentity(local.projectCheckoutForHost(checkout));checkCheckout();
         frozenDraftFiles=draftScope==null?null:new FixedProjectDraftSource(draftSnapshot(),draftScope);
         schemas=new SchemaDefinitions(runtimeId,runtimeFacts,binding.allowWrites).schemas;
+        if(firstBuild!=null){
+            OwnerDraftFirstBuild.requireTooling(firstBuild,runtimeFacts);
+            schemas.keySet().retainAll(OwnerDraftFirstBuild.TOOLS);
+            schemas.put("project_plan",draftSchema(props("intent",new JSONObject().put("type","string").put("enum",new JSONArray().put("build")),
+                "ecosystem",new JSONObject().put("type","string").put("enum",new JSONArray().put("node"))),"intent"));
+            if(!schemas.containsKey(TaskStoreProjectHost.TOOL))throw new SecurityException("原任务没有逐项命令审阅接口，未另行授予");
+            schemas.put(TaskStoreProjectHost.TOOL,draftSchema(props("planRef",text(80),"planDigest",text(64),"stepId",text(40)),"planRef","planDigest","stepId"));
+        }
         if(draftScope!=null){
             schemas.keySet().retainAll(ProjectEditDraft.TOOLS);
             schemas.put("project_list_files",draftSchema(props("after",text(240))));
@@ -72,6 +84,7 @@ public final class ProjectCapabilityPort implements CapabilityPort {
         if(existing!=null)for(String name:schemas.keySet())if(existing.supports(name))throw new IllegalArgumentException("项目工具名称已注册："+name);
         original.onCancel(imageCancellation);
     }
+    public boolean onlyIndependentFirstBuild(){return firstBuild!=null;}
     /** Owner preparation metadata only. Reads the original runtime facts and the same schema
      * definitions as the real port; creates no task, control, permission, runtime or process.
      * The original final CapabilitySnapshot and per-operation approval still govern execution. */
@@ -87,6 +100,13 @@ public final class ProjectCapabilityPort implements CapabilityPort {
     }
     private static JSONObject draftSchema(JSONObject properties,String... required)throws Exception{return new JSONObject().put("type","object").put("properties",properties).put("additionalProperties",false).put("required",new JSONArray(required));}
     private String toolDescription(String name){
+        if(firstBuild!=null)return switch(name){
+            case "project_inspect" -> "读取所选独立副本的构建身份，以及本轮可重新核对的原批准方案引用；不读其他工程或规则。";
+            case "project_plan" -> "仅为同一版副本登记 Node build 的原生方案，返回 planRef / planDigest / stepId。不是命令许可。";
+            case "project_execute" -> "仅按当前原生引用申请该次构建或选定文件保存。不得传 inline 方案；等机主批准。";
+            case "project_collect_plan" -> "按本任务原成功构建 executionId 列 build/dist 或为其中选定一份文件登记保留方案，不证明文件由该构建生成。";
+            default -> description(name);
+        };
         if(draftScope==null)return description(name);
         return switch(name){case "project_inspect"->"读取原任务确认的固定工程、源码摘要和可读文本数；不检查运行时。";
             case "project_list_files"->"列出固定版本的小型文本文件和SHA，每页24份，按nextAfter继续。";
@@ -169,6 +189,7 @@ public final class ProjectCapabilityPort implements CapabilityPort {
     private JSONObject normalize(String name,JSONObject raw)throws Exception {
         JSONObject args=new JSONObject((raw==null?new JSONObject():raw).toString());if(args.toString().length()>30000)throw new IllegalArgumentException("项目方案超过本次参数上限，请缩小项目或修改内容");PluginRules.validateArguments(args,schemas.get(name));
         if(name.equals("project_collect_plan")){
+            if(firstBuild!=null&&args.has("path"))OwnerDraftFirstBuild.outputPath(args.getString("path"));
             boolean browse=args.has("listDirectory");
             if(browse==args.has("path")||!browse&&args.has("cursor"))throw new IllegalArgumentException("请二选一：只读查看 listDirectory，或用准确 path 审阅单个文件。cursor 只用于继续原目录。");
             if(browse){
@@ -197,6 +218,7 @@ public final class ProjectCapabilityPort implements CapabilityPort {
         }
         if(name.equals("project_process_input"))ProjectCommandSpec.inputRequest(args);
         if(name.equals("project_plan")&&"command".equals(args.optString("intent")))ProjectCommandSpec.normalize(args);
+        if(firstBuild!=null&&args.has("plan"))OwnerDraftFirstBuild.requirePlan(firstBuild,args.getJSONObject("plan"),binding.taskId);
         if(args.has("plan")){JSONObject plan=ProjectBuildPlan.verified(args.getJSONObject("plan"));if(!checkout.equals(plan.getString("checkoutId"))||!binding.projectId.equals(plan.getString("projectId"))||!runtimeId.equals(plan.optString("runtimeId","termux")))throw new SecurityException("方案不属于已选项目或运行位置");if(!runtimeId.equals("termux")&&!plan.getString("runtimeIdentity").equals(local.projectRuntimeForHost(runtimeId).getString("identity")))throw new SecurityException("实际工具环境版本已变化，请重新生成方案");ProjectBuildPlan.step(plan,args.getString("stepId"));if(!plan.getString("sourceDigest").equals(ProjectSources.describe(local.handle("export",new JSONObject().put("checkoutId",checkout))).getString("sourceDigest")))throw new SecurityException("原方案源码已变化；先读当前文件，再生成新方案，planRef不能授权旧版本执行");}
         return args;
     }
@@ -251,7 +273,7 @@ public final class ProjectCapabilityPort implements CapabilityPort {
             if(operation!=null)throw new SecurityException("项目读取不能提供另一个prepared操作");
             JSONObject nativeInput=new JSONObject(args.toString()).put("checkoutId",checkout).put("runtimeId",runtimeId);
             switch(name){
-                case "project_inspect":if(draftScope!=null){result=new JSONObject().put("projectId",binding.projectId).put("checkoutId",checkout).put("sourceDigest",draftScope.getString("initialSourceDigest"))
+                case "project_inspect":if(firstBuild!=null){result=buildReference();break;}if(draftScope!=null){result=new JSONObject().put("projectId",binding.projectId).put("checkoutId",checkout).put("sourceDigest",draftScope.getString("initialSourceDigest"))
                     .put("workflow","只在这个已选项目制作一个小改稿。用 project_list_files／project_search 找文件，project_read_file 读原文和 SHA，再 project_plan(intent=draft_edit) 交出完整独立改稿。不能写回或执行。");break;}result=inspectView(local.handle("project.inspect",nativeInput)).put("approvedPlanProposals",tasks.approvedProjectPlanProposals(binding.taskId,binding.runId,binding.epoch,original));break;
                 case "project_read_file":result=draftScope!=null?frozenDraftFiles.read(args):capturedProjectRead(name,nativeInput,false);break;
                 case "project_search":result=draftScope!=null?frozenDraftFiles.list(args,true):capturedProjectRead(name,nativeInput,true);break;
@@ -266,10 +288,12 @@ public final class ProjectCapabilityPort implements CapabilityPort {
                         check(name,control);if(!usesOwnerRevision()&&!draft.getString("sourceDigest").equals(ProjectSources.describe(draftSnapshot()).opt("sourceDigest")))throw new SecurityException("原项目在准备期间变化，没有交付陈旧差异");
                         result=tasks.savePrivateProjectEditDraft(binding.taskId,binding.runId,binding.epoch,original,draft);nativeSuccessCode="project_edit_draft_saved";break;
                     }JSONObject plan;
+                    if(firstBuild!=null)nativeInput.put("expectedSourceDigest",firstBuild.getString("sourceDigest")).put("ecosystem","node");
                     if(args.getString("intent").equals("revert_operation")){JSONObject evidence=tasks.projectRevertEvidence(binding.taskId,binding.runId,binding.epoch,original,ProjectBuildPlan.identity(args.getString("revertOperationId")));plan=ProjectBuildPlan.revert(local,nativeInput,evidence.getJSONObject("plan"),evidence.getJSONObject("receipt"),evidence.getString("operationId"));}
                     else plan=ProjectBuildPlan.verified(local.handle("project.plan",nativeInput));
+                    if(firstBuild!=null)OwnerDraftFirstBuild.requirePlan(firstBuild,plan,binding.taskId);
                     result=tasks.recordProjectPlan(binding.taskId,binding.runId,binding.epoch,original,plan);
-                    if(!"freeze_package".equals(plan.optString("intent"))&&plan.getJSONArray("steps").length()>0)try{JSONObject inline=new JSONObject().put("plan",plan).put("stepId",plan.getJSONArray("steps").getJSONObject(0).getString("id"));ProjectPlanRecords.requireInline(inline);JSONObject compatible=new JSONObject(result.toString()).put("plan",plan);if(compatible.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length<=24000)result=compatible;}catch(IllegalArgumentException tooLarge){/* Native full bytes remain intact; return the exact reference only. */}
+                    if(firstBuild==null&&!"freeze_package".equals(plan.optString("intent"))&&plan.getJSONArray("steps").length()>0)try{JSONObject inline=new JSONObject().put("plan",plan).put("stepId",plan.getJSONArray("steps").getJSONObject(0).getString("id"));ProjectPlanRecords.requireInline(inline);JSONObject compatible=new JSONObject(result.toString()).put("plan",plan);if(compatible.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length<=24000)result=compatible;}catch(IllegalArgumentException tooLarge){/* Native full bytes remain intact; return the exact reference only. */}
                     nativeSuccessCode="project_plan_ready";
                     }catch(IllegalArgumentException|IllegalStateException|SecurityException rejected){String message=rejected.getMessage()==null?"原项目方案未能通过预检":rejected.getMessage();result=new JSONObject().put("ok",false).put("accepted",false).put("code","project_plan_rejected").put("status","not_dispatched").put("message",message.substring(0,Math.min(1600,message.length()))).put("projectEffectDispatched",false).put("requiresFreshSourceReview",true);}
                     break;}
@@ -306,16 +330,19 @@ public final class ProjectCapabilityPort implements CapabilityPort {
                     boolean managed=runtimeId.equals(ManagedProjectRuntime.RUNTIME_ID);
                     JSONObject prior=managed?tasks.originalManagedOutputRequestForTask(binding.taskId,binding.runId,binding.epoch,original,name,args.getString("executionId")):originalExecution(args.getString("executionId"));
                     if(!checkout.equals(prior.getJSONObject("plan").getString("checkoutId")))throw new SecurityException("所选原构建不属于当前工作副本");
+                    if(firstBuild!=null)OwnerDraftFirstBuild.requirePlan(firstBuild,prior.getJSONObject("plan"),binding.taskId);
                     if(args.has("listDirectory")){
                         result=local.managedOutputDirectoryForHost(prior,checkout,args.getString("listDirectory"),args.optJSONObject("cursor"),original,binding);
                         break; // Metadata is not a collect plan and is never registered as one.
                     }
                     String path=args.getString("path");JSONObject selection=managed?local.managedOutputSelectionForHost(prior,path,original,binding):local.handle("project.generatedArtifactPlan",prior.put("path",path));
                     JSONObject plan=ProjectBuildPlan.verified(local.handle("project.plan",new JSONObject().put("checkoutId",checkout).put("intent","collect").put("expectedSourceDigest",selection.getString("sourceDigest")).put("artifactSelection",selection)));
+                    if(firstBuild!=null)OwnerDraftFirstBuild.requirePlan(firstBuild,plan,binding.taskId);
                     result=tasks.recordProjectPlan(binding.taskId,binding.runId,binding.epoch,original,plan);nativeSuccessCode="project_collect_plan_ready";break;
                 }
                 case "project_generated_artifact":{
                     JSONObject prior=runtimeId.equals(ManagedProjectRuntime.RUNTIME_ID)?tasks.originalManagedOutputRequestForTask(binding.taskId,binding.runId,binding.epoch,original,name,args.getString("executionId")):originalExecution(args.getString("executionId")),plan=prior.getJSONObject("plan"),step=ProjectBuildPlan.step(plan,prior.getString("stepId"));
+                    if(firstBuild!=null)OwnerDraftFirstBuild.requirePlan(firstBuild,plan,binding.taskId);
                     if(ProjectManagedOutput.COMMAND.equals(step.getString("localCommand"))){result=local.managedOutputForHost(prior,original,binding);break;}
                     if(!"termux.collect".equals(step.getString("localCommand")))throw new SecurityException("请选择原collect执行");local.handle("project.poll",prior);
                     result=local.handle("project.generatedArtifact",new JSONObject().put("collectionPlan",step.getJSONObject("payload").getJSONObject("artifactSelection")).put("collectionJobId",args.getString("executionId")).put("binding",prior.getJSONObject("binding")));break;
@@ -326,7 +353,7 @@ public final class ProjectCapabilityPort implements CapabilityPort {
         if(!name.equals(TaskStoreProjectHost.TOOL))check(name,control);
         JSONObject modelView=draftScope!=null?new JSONObject(result.toString()):view(name,result);
         // The runner correctly classifies data-only JSON as unknown. Only these four completed native reads qualify.
-        if(draftScope!=null&&Set.of("project_inspect","project_list_files","project_search","project_read_file").contains(name))
+        if(firstBuild!=null&&"project_inspect".equals(name)||draftScope!=null&&Set.of("project_inspect","project_list_files","project_search","project_read_file").contains(name))
             modelView.put("ok",true).put("status","read");
         if(nativeSuccessCode!=null){
             // Native control-flow evidence only, never an arbitrary JSON success claim.
@@ -471,8 +498,22 @@ public final class ProjectCapabilityPort implements CapabilityPort {
     }
     private void rememberPreview(JSONObject result,String kind)throws Exception {JSONObject selected=new JSONObject().put("kind",kind);for(String key:new String[]{"previewId","projectId","checkoutId","sourceDigest","entryPath","packageArtifact"})if(result.has(key))selected.put(key,result.get(key));observedFilePreview=selected;}
     @Override public JSONObject contextSnapshot(String query)throws Exception {check("project_inspect",original);JSONObject context=existing==null?new JSONObject():new JSONObject(existing.contextSnapshot(query).toString());JSONObject project=projectReference();preparedRuntimeIdentity=draftScope==null?project.getString("runtimeIdentity"):null;preparedPauseRevision=original.pauseRevision();return context.put("developmentProject",project);}
+    private JSONObject buildReference()throws Exception{
+        if(!firstBuild.getString("runtimeIdentity").equals(local.projectRuntimeForHost(runtimeId).opt("identity")))throw new SecurityException("这台手机的构建工具身份已变化，请重新核对");
+        JSONArray proposals=tasks.approvedProjectPlanProposals(binding.taskId,binding.runId,binding.epoch,original),refs=new JSONArray();
+        for(int i=0;i<proposals.length();i++){JSONObject args=proposals.getJSONObject(i);
+            JSONObject ref=new JSONObject().put("planRef",args.getString("planRef")).put("planDigest",args.getString("planDigest")).put("stepId",args.getString("stepId"));
+            OwnerDraftFirstBuild.requirePlan(firstBuild,tasks.projectArguments(binding.taskId,binding.runId,binding.epoch,ref).getJSONObject("plan"),binding.taskId);
+            refs.put(ref);
+        }
+        return new JSONObject().put("projectId",binding.projectId).put("checkoutId",checkout).put("runtimeId",runtimeId)
+            .put("approvedPlanProposals",refs).put("approvedRefUse","有本轮明确批准的原生引用时只取这个引用，不重新造方案，派发仍须当前授权。")
+            .put("runtimeIdentity",firstBuild.getString("runtimeIdentity")).put("sourceDigest",firstBuild.getString("sourceDigest"))
+            .put("command",firstBuild.getString("manager")+" run build").put("workflow",OwnerDraftFirstBuild.GOAL).put("commandsAuthorized",false);
+    }
     private JSONObject projectReference()throws Exception {
         check("project_inspect",original);
+        if(firstBuild!=null)return buildReference();
         if(draftScope!=null)return frozenDraftFiles.reference(binding.projectId,checkout,binding.taskId,binding.runId,binding.epoch);
         JSONObject runtime=local.projectRuntimeForHost(runtimeId),row=local.projectCheckoutForHost(checkout);
         JSONObject reference=new JSONObject().put("projectId",binding.projectId).put("checkoutId",checkout).put("runtime",runtimeId).put("runtimeIdentity",runtime.getString("identity"))
@@ -509,7 +550,10 @@ public final class ProjectCapabilityPort implements CapabilityPort {
     @Override public boolean responseCurrent(RunControl control)throws Exception {try{if(projectMemory!=null)projectMemory.requireOriginal(control,binding.taskId,binding.runId,binding.epoch);check("project_inspect",control);if(draftScope!=null&&preparedPauseRevision!=original.pauseRevision())return false;if(preparedRuntimeIdentity!=null&&(!preparedRuntimeIdentity.equals(local.projectRuntimeForHost(runtimeId).getString("identity"))||preparedPauseRevision!=original.pauseRevision()))return false;return existing==null||existing.responseCurrent(control);}catch(Exception revoked){return false;}}
     @Override public boolean stepReadSourceCurrent(String name,JSONObject receipt,RunControl control)throws Exception{check("project_inspect",control);return !schemas.containsKey(name)&&existing!=null&&existing.stepReadSourceCurrent(name,receipt,control);}
     @Override public JSONObject beforeTool(String name,JSONObject args,RunControl control)throws Exception {
-        if(draftScope!=null){check(name,control);normalize(name,args);return null;}
+        if(draftScope!=null||firstBuild!=null){check(name,control);normalize(name,args);
+            if(firstBuild!=null&&TaskStoreProjectHost.TOOL.equals(name))dev.pocketengine.features.capabilities.ToolApprovalPermit.requireNativeOwnerReview(binding,name,args,control);
+            return null;
+        }
         if(name.equals("project_plan")||name.equals(TaskStoreProjectHost.TOOL)){
             check(name,control);JSONObject actual=normalize(name,args);java.util.LinkedHashSet<String> required=guidanceForArguments(name,actual);
             if(required.size()>ProjectGuidance.MAX_ACTIVE_SCOPES)return new JSONObject().put("ok",false).put("accepted",false).put("nativeDispatched",false).put("effectStatus","not_dispatched").put("status","not_dispatched").put("code","project_guidance_scope_too_large").put("message","本次操作跨越过多项目规则目录，请按模块缩小本次计划；没有派发操作。").put("automaticReplayAllowed",false).put("authorityAdded",false);
@@ -525,7 +569,7 @@ public final class ProjectCapabilityPort implements CapabilityPort {
         return existing==null?null:existing.beforeTool(name,args,control);
     }
     @Override public void afterTool(String name,JSONObject args,JSONObject receipt,RunControl control)throws Exception {
-        if(draftScope!=null)return; // Never look up live project rules for a fixed source.
+        if(draftScope!=null||firstBuild!=null)return; // Never look up live project rules for a fixed source.
         if(schemas.containsKey(name)&&receipt!=null&&!Boolean.FALSE.equals(receipt.opt("ok"))&&!Boolean.FALSE.equals(receipt.opt("accepted"))){
             if(java.util.Set.of("project_read_file","project_view_image","project_review_file").contains(name)&&args.has("path"))rememberGuidance(ProjectGuidance.parent(args.getString("path")));
             else if(java.util.Set.of("project_list_files","project_search").contains(name))rememberGuidance(ProjectGuidance.directory(args.optString("path","")));
@@ -539,7 +583,7 @@ public final class ProjectCapabilityPort implements CapabilityPort {
     @Override public void beforeModelRequest(String requestId,JSONArray messages,RunControl control)throws Exception{
         if(projectMemory!=null)projectMemory.requireOriginal(control,binding.taskId,binding.runId,binding.epoch);check("project_inspect",control);
         if(preparedPauseRevision!=original.pauseRevision()||draftScope==null&&(preparedRuntimeIdentity==null||!preparedRuntimeIdentity.equals(local.projectRuntimeForHost(runtimeId).getString("identity"))))throw new SecurityException("原项目请求准备后运行环境版本已变化，未发送旧定位");
-        if(draftScope!=null)return;
+        if(draftScope!=null||firstBuild!=null)return;
         if(existing!=null)existing.beforeModelRequest(requestId,messages,control);
         ProjectConventionDelivery.proposed(original,requestId,messages);
         requestedGuidance=preparedGuidance!=null&&preparedGuidance.includedIn(messages)?preparedGuidance:null;guidanceRequestId=requestId;

@@ -626,6 +626,7 @@ public final class AgentRunner {
                 // The peer text contract authorizes a model answer, not even a global outcome/phase tool.
                 // Seal the complete catalog AFTER every contribution and before budgeting, routing or any provider adapter.
                 if(instructionProfile==NativeInstructionProfile.PAIRED_DEVICE_TEXT)tools=new JSONArray();
+                if(instructionProfile==NativeInstructionProfile.INDEPENDENT_DRAFT_BUILD)tools=dev.pocketengine.features.local.project.OwnerDraftFirstBuild.catalog(tools);
                 if(instructionProfile==NativeInstructionProfile.SELECTED_PROJECT_REVISION)tools=dev.pocketengine.features.local.project.OwnerRevisionRunPrivacy.catalog(tools);
                 if(boundedToolCatalog)dev.pocketengine.core.ScopedToolCatalog.requireModelRequestBudget(tools);
                 withdrawHistoricalImages(screens,history,control);
@@ -894,9 +895,9 @@ public final class AgentRunner {
                     if(capabilities!=null)capabilities.modelRequestAbandoned(nativeRequest[0]);
                     return finish(taskId,"failed","模型返回了原文字任务未授权的工具调用；未执行，也没有可交回的文字结果。",new JSONObject().put("unsolicitedToolRejected",true),steps,config,sink);
                 }
-                if(instructionProfile==NativeInstructionProfile.SELECTED_PROJECT_REVISION&&!dev.pocketengine.features.local.project.OwnerRevisionRunPrivacy.offered(response,tools)){
+                if((instructionProfile==NativeInstructionProfile.SELECTED_PROJECT_REVISION||instructionProfile==NativeInstructionProfile.INDEPENDENT_DRAFT_BUILD)&&!dev.pocketengine.features.local.project.OwnerRevisionRunPrivacy.offered(response,tools)){
                     if(capabilities!=null)capabilities.modelRequestAbandoned(nativeRequest[0]);
-                    return finish(taskId,"failed","模型要求了本次选稿范围以外的动作，未执行；请在原交办核对实际成品。",new JSONObject().put("unsolicitedToolRejected",true),steps,config,sink);
+                    return finish(taskId,"failed",instructionProfile==NativeInstructionProfile.INDEPENDENT_DRAFT_BUILD?"模型要求了原独立构建范围以外的操作。没有执行，请回原任务看实际回执。":"模型要求了本次选稿范围以外的动作，未执行；请在原交办核对实际成品。",new JSONObject().put("unsolicitedToolRejected",true),steps,config,sink);
                 }
                 if(!nativeApprovedResponse&&!stepRouting.acceptLightResponse(response,capabilities)){
                     if(capabilities!=null)capabilities.modelRequestAbandoned(nativeRequest[0]);

@@ -43,7 +43,10 @@ internal class PocketWebDraftWorkCopy(private val tasks:()->TaskStore,private va
                 current();val seed=source();val host=local()
                 val existing=host.findDraftWorkCopy(seed)
                 when {
-                    action==FIND->existing
+                    action==FIND->existing.also { copy->
+                        try { tasks().firstBuildForDraft(seed)?.let { copy.put("firstBuild",it) } }
+                        catch(unavailable:Exception) { copy.put("firstBuildUnavailable",true) } // A missing optional child never hides the real working copy.
+                    }
                     action==OPEN->host.openDraftWorkCopy(seed){current();check(source().identity==seed.identity)}
                     action==MOVE_REVIEW->{
                         val from=args.getString("fromState");check(existing.opt("status")==from&&existing.opt("recyclable")==true){"这份副本已投入工作或不在原位置，没有移动。"}

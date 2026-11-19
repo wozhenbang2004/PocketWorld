@@ -11986,6 +11986,11 @@ public final class TaskStore {
         dev.pocketengine.features.local.project.ProjectBuildPlan.identity(selected.getString("projectId"));dev.pocketengine.features.local.project.ProjectBuildPlan.identity(selected.getString("checkoutId"));
         if(selected.has("draftOnly")&&(selected.opt("draftOnly")!=Boolean.TRUE||!"managed_process_v1".equals(selected.opt("runtime"))))throw new SecurityException("不能替换原生独立改稿约束");
         JSONObject clean=new JSONObject();if(selected.opt("draftOnly")==Boolean.TRUE)clean.put("draftOnly",true);for(String key:new String[]{"format","projectId","checkoutId","runtime","initialSourceDigest","clientMessageId"})clean.put(key,selected.get(key));clean.put("filesAreUntrusted",true).put("authorityAdded",false);
+        if(selected.has(dev.pocketengine.features.local.project.OwnerDraftFirstBuild.FIELD)){
+            JSONObject pin=selected.getJSONObject(dev.pocketengine.features.local.project.OwnerDraftFirstBuild.FIELD);dev.pocketengine.features.local.project.OwnerDraftFirstBuild.requireContext(pin,clean);
+            if(!dev.pocketengine.features.local.project.OwnerDraftFirstBuild.GOAL.equals(task.optString("goal"))||!selected.has("deliveryContract")||selected.has(OWNER_REVISION))throw new SecurityException("只在原生审阅的新私人构建任务绑定这份稿");
+            clean.put(dev.pocketengine.features.local.project.OwnerDraftFirstBuild.FIELD,new JSONObject(pin.toString()));
+        }
         if(selected.has(OWNER_REVISION)){
             if(!clean.optBoolean("draftOnly")||selected.has("deliveryContract"))throw new SecurityException("选定旧稿只能进入本机主人审阅的新拟稿任务");
             String recipient=selected.getString("revisionRecipient");if(!recipient.matches("[a-f0-9]{64}"))throw new SecurityException("已存稿缺少原确认模型");
@@ -12001,6 +12006,31 @@ public final class TaskStore {
         }
         JSONObject prior=task.optJSONObject("developmentContext");if(prior!=null&&!canonical(prior).equals(canonical(clean)))throw new SecurityException("原任务不能切换项目或执行位置");
         if(get(id,false).getJSONArray("operations").length()!=0)throw new SecurityException("不能向已开始的任务补挂项目");task.put("developmentContext",clean);write(task);
+    }
+    /** The existing mailbox is the sole index. A retry, source copy, project name or another task is never substituted. */
+    public synchronized JSONObject firstBuildForDraft(dev.pocketengine.features.local.project.OwnerDraftWorkCopy.Seed seed)throws Exception{
+        String client=dev.pocketengine.features.local.project.OwnerDraftFirstBuild.client(seed.identity);JSONObject msg=conversationRepository.read(()->conversationRepository.sourceByClient(client));
+        if(msg==null||msg.optBoolean("deleted")||!"private".equals(msg.opt("spaceId"))||!"owner".equals(msg.opt("ownerId")))return null;
+        JSONObject ack=msg.optJSONObject("submission");if(ack==null||!client.equals(ack.opt("clientMessageId"))||ack.optString("taskId").isBlank())return null;
+        JSONObject task=required(ack.getString("taskId"));requirePrivateOwner(task);JSONObject dc=task.optJSONObject("developmentContext"),pin=dc==null?null:dc.optJSONObject(dev.pocketengine.features.local.project.OwnerDraftFirstBuild.FIELD);
+        if(pin==null||!seed.identity.equals(pin.opt("workIdentity"))||!seed.projectId.equals(pin.opt("projectId"))||!seed.checkoutId.equals(pin.opt("checkoutId"))||
+            !"assistant".equals(task.opt("kind"))||!task.isNull("origin")||!msg.getString("conversationId").equals(task.opt("conversationId")))return null;
+        dev.pocketengine.features.local.project.OwnerDraftFirstBuild.requireContext(pin,dc);
+        return new JSONObject().put("id",task.getString("id")).put("runId",task.getString("runId")).put("epoch",task.getInt("coordinatorEpoch")).put("status",task.getString("status")).put("workIdentity",seed.identity).putOpt("observed",currentFirstBuildFact(task,pin));
+    }
+    private JSONObject currentFirstBuildFact(JSONObject task,JSONObject pin){
+        // No host query, replay or new effect. Never borrow an earlier success or another task's files.
+        String id=task.optString("id"),run=task.optString("runId");
+        try(Cursor rows=db.rawQuery("SELECT operation_id FROM operations WHERE task_id=? AND run_id=? AND tool='project_execute' ORDER BY rowid DESC LIMIT 1",new String[]{id,run})){
+            if(!rows.moveToFirst())return null;JSONObject binding=new JSONObject().put("taskId",id).put("runId",run).put("coordinatorEpoch",task.getInt("coordinatorEpoch")).put("operationId",rows.getString(0));
+            return dev.pocketengine.features.local.project.OwnerDraftFirstBuild.outcomeFact(pin,task,projectOperationForHost(binding));
+        }catch(Exception incomplete){return null;}
+    }
+    public synchronized dev.pocketengine.core.RunOutcome boundFirstBuildOutcome(String id,String run,int epoch,RunControl control,dev.pocketengine.core.RunOutcome result)throws Exception{
+        JSONObject task=required(id),dc=task.getJSONObject("developmentContext"),pin=dc.getJSONObject(dev.pocketengine.features.local.project.OwnerDraftFirstBuild.FIELD);
+        requirePrivateOwner(task);dev.pocketengine.features.local.project.OwnerDraftFirstBuild.requireContext(pin,dc);
+        if(!run.equals(task.opt("runId"))||epoch!=task.optInt("coordinatorEpoch")||!control.matchesHostRun(id,run,epoch))throw new SecurityException("构建回执不属于这个原任务轮次");
+        return "completed".equals(result.status)?dev.pocketengine.features.local.project.OwnerDraftFirstBuild.settle(result,currentFirstBuildFact(task,pin)):result;
     }
     /** Local owner explicitly opens one actually displayed saved answer. No namespace or source ID may be supplied. */
     public synchronized JSONObject originalProjectConventionForAnswer(String conversation,String messageId,String taskId,long revision)throws Exception{
@@ -12543,7 +12573,8 @@ public final class TaskStore {
      * The caller separately retains/checks the exact live control and its cancellation/pause state,
      * and verifies its one exact prepared operation while rejecting other prepared/unknown effects. */
     public synchronized void checkCapabilityCurrent(String id,String runId,int epoch,String name)throws Exception{
-        JSONObject task=required(id);if(dev.pocketengine.features.local.project.ProjectEditDraft.selected(task.optJSONObject("developmentContext"))&&!dev.pocketengine.features.local.project.ProjectEditDraft.TOOLS.contains(name))throw new SecurityException("此原任务仅批准查看固定工程与交付独立改稿");if(OwnerWorkTask.isOwnerWork(task))requireOwnerWorkSources(task);if(task.has("ownerWorkTakeover"))requireOwnerWorkTakeoverCurrent(task);requireOwnerWorkPreparationTargetCurrent(task);if(TaskStoreDeviceTasks.deviceTask(task)){deviceTasks.checkCapability(id,runId,epoch,name);return;}if(!"owner".equals(task.optString("actorId"))||!"private".equals(task.optString("spaceId"))||!runId.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch")||task.optBoolean("cancelRequested"))throw new SecurityException("能力调用身份或执行代次已失效");
+        JSONObject task=required(id);JSONObject dc=task.optJSONObject("developmentContext");if(dc!=null&&dc.has(dev.pocketengine.features.local.project.OwnerDraftFirstBuild.FIELD)&&!dev.pocketengine.features.local.project.OwnerDraftFirstBuild.TOOLS.contains(name))throw new SecurityException("本机首次验证不能扩展为其他工具");
+        if(dev.pocketengine.features.local.project.ProjectEditDraft.selected(task.optJSONObject("developmentContext"))&&!dev.pocketengine.features.local.project.ProjectEditDraft.TOOLS.contains(name))throw new SecurityException("此原任务仅批准查看固定工程与交付独立改稿");if(OwnerWorkTask.isOwnerWork(task))requireOwnerWorkSources(task);if(task.has("ownerWorkTakeover"))requireOwnerWorkTakeoverCurrent(task);requireOwnerWorkPreparationTargetCurrent(task);if(TaskStoreDeviceTasks.deviceTask(task)){deviceTasks.checkCapability(id,runId,epoch,name);return;}if(!"owner".equals(task.optString("actorId"))||!"private".equals(task.optString("spaceId"))||!runId.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch")||task.optBoolean("cancelRequested"))throw new SecurityException("能力调用身份或执行代次已失效");
         if(task.optString("kind").equals("teams")){if(!task.optString("status").matches("running|queued"))throw new SecurityException("团队已停止");JSONArray names=task.optJSONArray("capabilityTools");boolean found=false;if(names!=null)for(int i=0;i<names.length();i++)if(name.equals(names.optString(i)))found=true;if(!found)throw new SecurityException("团队未获得该证据工具授权");return;}
         if(!task.optString("status").matches("preparing|running"))throw new SecurityException("任务已暂停或结束，工具执行权已失效");
         try(Cursor run=db.rawQuery("SELECT status FROM runs WHERE run_id=? AND task_id=? AND epoch=?",new String[]{runId,id,String.valueOf(epoch)})){if(!run.moveToFirst()||!run.getString(0).equals("running"))throw new SecurityException("执行尝试已结束");}
@@ -12871,6 +12902,16 @@ public final class TaskStore {
     public synchronized JSONObject recordProjectPlan(String id,String run,int epoch,RunControl original,JSONObject full)throws Exception {
         if(dev.pocketengine.features.local.project.ProjectEditDraft.selected(required(id).optJSONObject("developmentContext")))throw new SecurityException("独立改稿不能创建可执行计划");
         checkCapability(id,run,epoch,"project_plan",original);JSONObject plan=dev.pocketengine.features.local.project.ProjectBuildPlan.verified(full);projectPlanContext(id,run,epoch,plan);requireNewTeamWholePackage(id,plan);
+        JSONObject selectedDev=required(id).optJSONObject("developmentContext");
+        if(selectedDev!=null&&selectedDev.has(dev.pocketengine.features.local.project.OwnerDraftFirstBuild.FIELD)){
+            dev.pocketengine.features.local.project.OwnerDraftFirstBuild.requirePlan(selectedDev.getJSONObject(dev.pocketengine.features.local.project.OwnerDraftFirstBuild.FIELD),plan,id);
+            if("collect".equals(plan.opt("intent"))){
+                JSONObject selected=plan.getJSONArray("steps").getJSONObject(0).getJSONObject("payload").getJSONObject("artifactSelection"),origin=selected.getJSONObject("buildBinding");
+                JSONObject prior=originalManagedOutputRequestForTask(id,run,epoch,original,"project_collect_plan",origin.getString("operationId"));
+                if(!prior.getJSONObject("plan").getString("planDigest").equals(selectedDev.getJSONObject(dev.pocketengine.features.local.project.OwnerDraftFirstBuild.FIELD).getString("planDigest")))throw new SecurityException("原构建不是这份独立副本的确切步骤");
+                dev.pocketengine.features.local.project.OwnerDraftFirstBuild.requireSourceBinding(origin,prior.getJSONObject("binding"));
+            }
+        }
         db.beginTransaction();try{JSONObject ref=dev.pocketengine.features.local.project.ProjectPlanRecords.store(db,new JSONObject().put("taskId",id).put("runId",run).put("coordinatorEpoch",epoch),plan);db.setTransactionSuccessful();return ref;}finally{db.endTransaction();}
     }
     /** Future package proposals/dispatches for this team contract only. Historical subset archives
@@ -13274,15 +13315,22 @@ public final class TaskStore {
             original.check();if(original.isPaused()||!original.hasHostRun()||!original.matchesHostRun(binding.getString("taskId"),binding.getString("runId"),binding.getInt("coordinatorEpoch")))throw new SecurityException("项目原控制已失效");
             checkCapabilityCurrent(binding.getString("taskId"),binding.getString("runId"),binding.getInt("coordinatorEpoch"),"project_execute");
             JSONObject row=projectOperation(binding,exact);if(!"prepared".equals(row.getString("state"))){db.setTransactionSuccessful();return new JSONObject().put("fresh",false).put("knownOperation",true);}
+            JSONObject dc=required(binding.getString("taskId")).optJSONObject("developmentContext");
+            boolean firstBuild=dc!=null&&dc.has(dev.pocketengine.features.local.project.OwnerDraftFirstBuild.FIELD);
+            JSONObject firstBuildReview=null;
+            if(firstBuild){
+                if(!row.getJSONObject("journalArguments").has("planRef"))throw new SecurityException("独立副本只接受本任务本轮原生保存的方案引用");
+                firstBuildReview=dev.pocketengine.features.local.project.OwnerDraftFirstBuild.reviewOperation(dc.getJSONObject(dev.pocketengine.features.local.project.OwnerDraftFirstBuild.FIELD),row.getJSONObject("arguments").getJSONObject("plan"),binding);
+            }
             requireNewTeamWholePackage(binding.getString("taskId"),row.getJSONObject("arguments").getJSONObject("plan"));
-            JSONObject liveService=projectLiveEditService(binding,exact);String serviceId=liveService==null?null:liveService.getString("operationId");
+            JSONObject liveService=projectLiveEditService(binding,exact);if(firstBuild&&liveService!=null)throw new SecurityException("首次构建不能沿用服务许可");String serviceId=liveService==null?null:liveService.getString("operationId");
             if(projectServiceCheckoutConflict(exact,binding.getString("operationId"),serviceId)){db.setTransactionSuccessful();return new JSONObject().put("fresh",false).put("notDispatched",true).put("status","not_dispatched").put("accepted",false).put("code","project_service_conflict").put("message","同一项目仍有原受控服务或冲突执行；请回原任务停止并确认释放。本步骤未派发");}
             JSONArray all=TaskOperationProjection.forTask(db,binding.getString("taskId"));for(int i=0;i<all.length();i++){JSONObject other=all.getJSONObject(i);if(!row.getString("operationId").equals(other.getString("operationId"))&&!other.getString("operationId").equals(serviceId)&&other.optString("state").matches("prepared|unknown|project_running|project_stopping"))throw new SecurityException("原任务有其他未决动作，不能派发项目命令");}
             // Only the original consumed startup approval can delegate these particular
             // existing source edits. Each write still spends an original journal operation.
-            JSONObject teamFileScope=teamProjectFileGrant(required(binding.getString("taskId")),row.getJSONObject("arguments").getJSONObject("plan"));
-            JSONObject ownerEditPermit=teamFileScope==null&&liveService==null?admitOwnerProjectEditScope(binding,exact,original,row):null;
-            JSONObject approval=ownerEditPermit!=null?new JSONObject().put("approved",true).put("approvalId",ownerEditPermit.getString("scopeId")):teamFileScope!=null?new JSONObject().put("approved",true).put("approvalId",teamFileScope.getString("grantId")):liveService==null?requireCapabilityApproval(binding.getString("taskId"),binding.getString("runId"),"project_execute",row.getJSONObject("journalArguments"),capability):new JSONObject().put("approved",true).put("approvalId",liveService.getJSONObject("receipt").getJSONObject("projectExecution").getString("approvalId"));
+            JSONObject teamFileScope=firstBuild?null:teamProjectFileGrant(required(binding.getString("taskId")),row.getJSONObject("arguments").getJSONObject("plan"));
+            JSONObject ownerEditPermit=!firstBuild&&teamFileScope==null&&liveService==null?admitOwnerProjectEditScope(binding,exact,original,row):null;
+            JSONObject approval=ownerEditPermit!=null?new JSONObject().put("approved",true).put("approvalId",ownerEditPermit.getString("scopeId")):teamFileScope!=null?new JSONObject().put("approved",true).put("approvalId",teamFileScope.getString("grantId")):liveService==null?requireCapabilityApproval(binding.getString("taskId"),binding.getString("runId"),"project_execute",row.getJSONObject("journalArguments"),capability,false,firstBuildReview):new JSONObject().put("approved",true).put("approvalId",liveService.getJSONObject("receipt").getJSONObject("projectExecution").getString("approvalId"));
             if(!approval.optBoolean("approved")){db.setTransactionSuccessful();return new JSONObject(approval.toString()).put("fresh",false).put("approvalRequired",true);}
             original.check();if(original.isPaused())throw new SecurityException("项目派发前已暂停");
             consumeTeamProjectFileGrant(required(binding.getString("taskId")),teamFileScope);
@@ -13887,7 +13935,15 @@ public final class TaskStore {
         return requireCapabilityApproval(id,runId,tool,args,capability,false);
     }
     private JSONObject requireCapabilityApproval(String id,String runId,String tool,JSONObject args,JSONObject capability,boolean requestOnly)throws Exception{
+        return requireCapabilityApproval(id,runId,tool,args,capability,requestOnly,null);
+    }
+    private JSONObject requireCapabilityApproval(String id,String runId,String tool,JSONObject args,JSONObject capability,boolean requestOnly,JSONObject firstBuildReview)throws Exception{
         JSONObject task=required(id);if(!runId.equals(task.optString("runId")))throw new SecurityException("审批执行代次已失效");
+        // A general policy permit, reviewer or permission from the source project is not the owner's approval of this build/file.
+        JSONObject buildContext=task.optJSONObject("developmentContext");
+        boolean scopedBuild="project_execute".equals(tool)&&buildContext!=null&&buildContext.has(dev.pocketengine.features.local.project.OwnerDraftFirstBuild.FIELD);
+        if(scopedBuild!=(firstBuildReview!=null))throw new SecurityException("独立副本操作必须来自本轮原生构建/收件提案");
+        boolean manualOnly=requestOnly||scopedBuild;
         String capabilityKey=canonical(capability);
         byte[] digest=java.security.MessageDigest.getInstance("SHA-256").digest(canonical(args).getBytes(StandardCharsets.UTF_8));StringBuilder encoded=new StringBuilder();for(byte value:digest)encoded.append(String.format(java.util.Locale.ROOT,"%02x",value&255));String hash=encoded.toString();
         JSONArray approvals=task.optJSONArray("approvals");if(approvals==null)approvals=new JSONArray();long now=System.currentTimeMillis();
@@ -13899,10 +13955,15 @@ public final class TaskStore {
                 continue;
             }
             if(runId.equals(a.optString("runId"))&&a.optLong("expiresAt")>now){
+                if(scopedBuild&&"denied".equals(a.opt("state")))return new JSONObject().put("approved",false).put("approvalId",a.getString("id")).put("state","denied");
+                if(scopedBuild&&!dev.pocketengine.features.local.project.OwnerDraftFirstBuild.sameApprovedProposal(a,firstBuildReview)){
+                    if(a.optString("state").matches("pending|approved"))a.put("state","invalidated").put("reason","independent_build_source_or_proposal_changed");
+                    continue;
+                }
                 if(a.optString("state").equals("approved")){if(requestOnly)return new JSONObject().put("approved",false).put("approvalId",a.getString("id")).put("state","approved").put("code","approved_file_requires_owner_continuation").put("message","这份文件的批准不在刚才展示的执行清单内；回原任务核对后再继续，未派发。");a.put("state","consumed");task.put("approvals",approvals);write(task);return new JSONObject().put("approved",true).put("approvalId",a.getString("id"));}
                 if(a.optString("state").equals("denied"))return new JSONObject().put("approved",false).put("approvalId",a.getString("id")).put("state","denied");
                 if(a.optString("state").equals("pending")){
-                    JSONObject policy=requestOnly?null:dev.pocketengine.features.capabilities.ToolApprovalPermit.currentApproval(id,runId,tool,args,capability);
+                    JSONObject policy=manualOnly?null:dev.pocketengine.features.capabilities.ToolApprovalPermit.currentApproval(id,runId,tool,args,capability);
                     if(policy==null)return new JSONObject().put("approved",false).put("approvalId",a.getString("id")).put("state","pending");
                     a.put("state","consumed").put("policyDecision",policy);task.put("approvals",approvals);write(task);
                     return new JSONObject().put("approved",true).put("approvalId",a.getString("id")).put("policyDecision",policy);
@@ -13910,8 +13971,10 @@ public final class TaskStore {
             }
         }
         if(approvals.length()>=100)throw new IllegalStateException("此任务审批记录已达上限");String approval=UUID.randomUUID().toString();
-        JSONObject policy=requestOnly?null:dev.pocketengine.features.capabilities.ToolApprovalPermit.currentApproval(id,runId,tool,args,capability);
+        JSONObject policy=manualOnly?null:dev.pocketengine.features.capabilities.ToolApprovalPermit.currentApproval(id,runId,tool,args,capability);
         JSONObject row=new JSONObject().put("id",approval).put("runId",runId).put("tool",tool).put("capability",approvalArguments(capability)).put("capabilityKey",capabilityKey).put("arguments",approvalArguments(args)).put("argumentsHash",hash).put("state",policy==null?"pending":"consumed").put("expiresAt",now+300_000L);
+        // Proposal identity is display/evidence, not part of the portable capability key. Source identity is pinned in the immutable native plan.
+        if(firstBuildReview!=null)row.put("firstBuildReview",new JSONObject(firstBuildReview.toString()));
         if(policy!=null)row.put("policyDecision",policy);approvals.put(row);task.put("approvals",approvals);write(task);
         return new JSONObject().put("approved",policy!=null).put("approvalId",approval).put("state",policy==null?"pending":"consumed");
     }
@@ -14049,6 +14112,7 @@ public final class TaskStore {
             TaskAttemptJournal.requireOriginal(db,id,task,runId);
             if(!currentAttemptRunning(task)){db.setTransactionSuccessful();return;}
             if(dev.pocketengine.features.local.project.ProjectEditDraft.selected(task.optJSONObject("developmentContext")))outcome=boundDraftOutcome(id,runId,epoch,original,outcome);
+            JSONObject boundProject=task.optJSONObject("developmentContext");if(boundProject!=null&&boundProject.has(dev.pocketengine.features.local.project.OwnerDraftFirstBuild.FIELD))outcome=boundFirstBuildOutcome(id,runId,epoch,original,outcome);
             String status=outcome.status,summary=outcome.summary;
             if(original.isCancelled()||task.optBoolean("cancelRequested")){
                 status="cancelled";summary="已停止后续操作；已有动作和结果保留，停止不代表撤销已发生的效果";

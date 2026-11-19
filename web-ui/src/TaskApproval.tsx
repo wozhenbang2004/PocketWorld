@@ -21,7 +21,15 @@ export function TaskApproval({approval,executionScope={},disabled,onDecision}:{a
  const planMatches=!team||original.planRef===capability.planRef&&original.planHash===capability.planHash;
  const executionMatches=executionOriginal.planRevision===capability.planRevision&&executionOriginal.planArtifactRef===capability.planArtifactRef&&executionOriginal.planHash===capability.planHash&&executionOriginal.scopeRevision===capability.scopeRevision;
  useEffect(()=>setScopeReviewed(false),[id,executionOriginal.planRevision,executionOriginal.planArtifactRef,executionOriginal.planHash,executionOriginal.scopeRevision]);
- const canApprove=view.canApprove===true&&planMatches&&(!execution||executionMatches)&&(!(team||live||execution)||scopeReviewed);
+ const reviewedBuild=object(approval.firstBuildReview),hasBuild=approval.firstBuildReview!=null;
+ const goodEpoch=(v:unknown)=>typeof v==='number'&&Number.isSafeInteger(v)&&v>0,positiveId=(v:unknown)=>typeof v==='string'&&/^[A-Za-z0-9_-]{1,80}$/.test(v);
+ const buildValid=!hasBuild||view.firstBuildVerified===true&&approval.tool==='project_execute'&&positiveId(reviewedBuild.taskId)&&reviewedBuild.actionRunId===approval.runId&&
+   positiveId(reviewedBuild.actionOperationId)&&goodEpoch(reviewedBuild.actionEpoch)&&reviewedBuild.checkoutId===capability.checkoutId&&
+   reviewedBuild.sourceDigest===capability.sourceDigest&&(
+     reviewedBuild.action==='build'&&['npm','pnpm'].includes(reviewedBuild.manager)||reviewedBuild.action==='collect'&&positiveId(reviewedBuild.buildRunId)&&
+     positiveId(reviewedBuild.buildOperationId)&&reviewedBuild.buildOperationId!==reviewedBuild.actionOperationId&&goodEpoch(reviewedBuild.buildEpoch)&&
+     typeof reviewedBuild.path==='string'&&Number.isSafeInteger(reviewedBuild.bytes)&&reviewedBuild.bytes>=0&&/^[a-f0-9]{64}$/.test(reviewedBuild.sha256));
+ const canApprove=buildValid&&view.canApprove===true&&planMatches&&(!execution||executionMatches)&&(!(team||live||execution)||scopeReviewed);
  const decide=(approved:boolean)=>onDecision({approvalId:id,approved,...(approved&&(team||live||execution)?{scopeReviewed}:{}),...(approved&&team?{planRef:original.planRef,planHash:original.planHash}:{}),...(approved&&execution?{planRevision:executionOriginal.planRevision,planArtifactRef:executionOriginal.planArtifactRef,planHash:executionOriginal.planHash}:{})});
  const originalFile=originalTeamApprovalFile(approval);
  const argumentFacts=Object.entries(args).filter(([key,value])=>key in labels&&(!originalFile||key!=='path')&&['string','number','boolean'].includes(typeof value));
@@ -32,6 +40,10 @@ export function TaskApproval({approval,executionScope={},disabled,onDecision}:{a
    {approval.reason&&<p className="pw-decision-context">{String(approval.reason)}</p>}
    {approval.description&&<p className="pw-decision-context">{String(approval.description)}</p>}
   </header>
+  {hasBuild&&(buildValid?<section className="pw-decision-section"><h5>{reviewedBuild.action==='build'?reviewedBuild.manager+' run build':'保留 '+reviewedBuild.path+' · '+reviewedBuild.bytes+' 字节'}</h5>
+    {reviewedBuild.action==='collect'?<><p>选自第 {reviewedBuild.buildEpoch} 轮原构建后观察到的文件。现在第 {reviewedBuild.actionEpoch} 轮申请保存所选版本，不重新构建；确认不等于文件已保存。实际保存轮次以任务文件回执为准。</p><p>核对文件：{reviewedBuild.sha256}</p></>:<p>只批准在这份独立副本上运行这次命令。脚本可能联网、执行其他脚本或改动该副本，不包含收件许可。</p>}
+    <details><summary>核对副本与原操作编号</summary><p>副本：{reviewedBuild.checkoutId} · 版本：{reviewedBuild.sourceDigest}</p>{reviewedBuild.action==='collect'&&<p>源构建：{reviewedBuild.buildRunId} / {reviewedBuild.buildOperationId}</p>}<p>{reviewedBuild.action==='collect'?'本次收件提案':'本次构建提案'}：{reviewedBuild.actionRunId} / {reviewedBuild.actionOperationId}</p></details>
+  </section>:<p role="status">未取得这次确切构建或收件的身份，不能批准。请回原任务核对。</p>)}
   {originalFile&&<TeamApprovalFileComparison key={originalFile.proof} source={originalFile} disabled={disabled}/>}
   {(view.semanticDescription||view.programRisk)&&<div className="pw-decision-notice">
    <h5>{view.programRisk?'本机程序风险':'操作影响'}</h5>

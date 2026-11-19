@@ -139,10 +139,12 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, pro
       if (alive.current && sequence === generation.current && handle.current === original) setError(`草稿未保存：${failureText(failure)}`);
     });
   };
-  const acceptReview = (value: Data) => {
+  const acceptReview = (value: Data, draftBuild = false) => {
+    if (draftBuild && (value.draftBuild !== true || !['npm','pnpm'].includes(value.manager) || typeof value.scripts?.build!=='string' || !value.scripts.build.trim() || draft.current.goal || deliveryFields.some(k => draft.current[k]))) throw new Error('已有输入或未核对真实构建命令，没有替换目标。');
+    if (!draftBuild && value.draftBuild === true) throw new Error('请在独立副本中重新核对首次构建。');
     if (value.projectId !== projectId || value.checkoutId !== draft.current.checkoutId ||
         value.source?.projectId !== projectId || value.source?.checkoutId !== value.checkoutId || value.runtimeId != null && value.runtimeId !== 'managed_process_v1' ||
-        typeof value.goal !== 'string' || value.goal.trim() !== draft.current.goal.trim() ||
+        typeof value.goal !== 'string' || !value.goal.trim() || !draftBuild && value.goal.trim() !== draft.current.goal.trim() ||
         !value.requestId || !value.reviewHandle || value.commandsAuthorized !== false || value.projectMemoryAuthorized !== false ||
         value.ownerPickedConventionRevision!==undefined&&(!Number.isSafeInteger(value.ownerPickedConventionRevision)||value.ownerPickedConventionRevision<1))
       throw new Error('审阅不属于这个项目或所选副本，没有开始工作。请重新读取项目条件。');
@@ -152,6 +154,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, pro
     }
     if (value.deliveryContract?.format !== 'pocketworld.owner-work-contract.v1' || value.deliveryContract.revision !== 1 || value.deliveryContract.goal !== value.goal)
       throw new Error('项目交付约定没有完整载入，请重新核对。');
+    if (draftBuild) { setReview(value); return; }
     draft.current = { goal: value.goal, checkoutId: value.checkoutId, ...deliveryRequirements(value.deliveryContract) };
     setGoal(draft.current.goal); setRequirements(deliveryRequirements(value.deliveryContract)); setReview(value);
   };
@@ -345,6 +348,9 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, pro
       {(view.draft?.copyRequestId || copyResult) && <div><Button variant="ghost" disabled={busy || !!review || filesOpen} onClick={() => void copy(true)}>查询原副本准备</Button>
         {copyResult?.partial && <div role="status"><p>原副本准备中断，部分文件已保留，不会覆盖。可在手动终端显式准备另一份完整副本，再返回选择；已有部分不会自动删除。</p><Button variant="secondary" disabled={busy || filesOpen} onClick={onOpenTerminal}>打开副本准备入口</Button></div>}
         {copyResult && !copyResult.found && !copyResult.partial && <p role="status">未发现这次准备的副本；显式准备仍使用同一请求，不会换一个身份重建。</p>}</div>}
+      {available.some(row => row.checkoutId === checkout && row.draftWorkingCopy === true) && can('projects.development.reviewDraftBuild') &&
+        <Button variant="secondary" disabled={disabled || !!goal || deliveryFields.some(k=>!!requirements[k]) || !source || view.model?.configured !== true}
+          onClick={()=>void invoke('projects.development.reviewDraftBuild',{viewHandle:handle.current,checkoutId:checkout},v=>acceptReview(v,true))}>验证这份改稿的 Node 构建</Button>}
       <div className="pw-form-actions"><Button disabled={disabled || !goal.trim() || !checkout || !source || view.model?.configured !== true} onClick={() => void invoke('projects.development.review', { viewHandle: handle.current, checkoutId: checkout, goal, ...requirements }, acceptReview)}>核对并开始</Button>
         <Button variant="ghost" disabled={busy || pending || !!review || filesOpen} onClick={() => void read()}>重新读取项目条件</Button>
         {checkout && !source && <Button variant="ghost" disabled={disabled} onClick={() => { sourceAttempt.current = ''; setView(previous => previous ? { ...previous } : previous); }}>重新读取副本版本</Button>}
@@ -366,7 +372,8 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, pro
     } : undefined}/>}
     {view && filesOpen && checkout && <ProjectCheckoutFiles key={`${view.viewHandle}|${checkout}`} projectId={projectId} checkoutId={checkout} viewHandle={view.viewHandle} run={run} hostFile={hostEditor || undefined} onClose={closeFiles} registerBack={registerFilesBack} />}
     <SettingsDialog isOpen={!!review} title="开始这个项目任务？" onClose={dismiss} closeLabel="返回修改目标">{review && <div className="pw-local-review">
-      <p>{review.goal}</p>
+      {review.draftBuild === true ? <><strong>{review.manager} run build</strong><p>这是独立副本 package.json 声明的脚本，可能更改副本、运行其他脚本或联网。下一步把目标交给显示的模型，不会运行命令。模型可见此副本的文件名和版本，以及之后按需读取的构建日志和产物记录。你还需要在该任务里另行确认命令和要保留的生成文件。</p>
+        <details><summary>查看这一版 package.json 的构建脚本</summary><dl className="pw-facts">{['prebuild','build','postbuild'].filter(k=>typeof review.scripts?.[k]==='string').map(k=><div key={k}><dt>{k}</dt><dd><code dir="ltr" style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{review.scripts[k]}</code></dd></div>)}</dl></details></> : <p>{review.goal}</p>}
       {deliveryFields.some(key => review.deliveryContract?.[key]) && <dl className="pw-facts">
         {review.deliveryContract.constraints && <div><dt>{review.ownerPickedConventionRevision?'所选手写约定 · 修订 '+review.ownerPickedConventionRevision:'限制与约束'}</dt><dd>{review.deliveryContract.constraints}</dd></div>}
         {review.deliveryContract.deliverable && <div><dt>要交付什么</dt><dd>{review.deliveryContract.deliverable}</dd></div>}

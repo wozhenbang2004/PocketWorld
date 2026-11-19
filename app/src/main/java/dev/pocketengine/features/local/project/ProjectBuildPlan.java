@@ -45,9 +45,9 @@ public final class ProjectBuildPlan {
         }
         if(!gradle&&files.keySet().stream().anyMatch(p->p.endsWith(".java")))ecosystems.put(ecosystem("java",files,p->p.endsWith(".java")));
         if(files.containsKey("index.html"))ecosystems.put(ecosystem("static",files,p->p.equals("index.html")));
-        JSONObject probe=local.handle("probe",new JSONObject()),termux=probe.optJSONObject("termux");
+        JSONObject termux=runtimeId.equals("termux")?local.handle("probe",new JSONObject()).optJSONObject("termux"):null;
         JSONArray observed=new JSONArray();String probeId="";long newest=-1;
-        JSONArray jobs=local.handle("listJobs",new JSONObject()).optJSONArray("termuxJobs");
+        JSONArray jobs=runtimeId.equals("termux")?local.handle("listJobs",new JSONObject()).optJSONArray("termuxJobs"):null;
         if(jobs!=null)for(int i=0;i<jobs.length();i++){
             JSONObject summary=jobs.getJSONObject(i);
             if(!"tool_probe".equals(summary.optString("kind"))||!"completed".equals(summary.optString("status"))||summary.optLong("createdAt")<newest)continue;
@@ -151,7 +151,7 @@ public final class ProjectBuildPlan {
         }
         else if(intent.equals("probe"))steps.put(step("probe","termux.probe",new JSONObject().put("checkoutId",checkout),runtimeId.equals("termux")?"读取Termux实际工具路径":"探测此手机环境的实际工具和版本",false));
         else{
-            boolean staged=false;JSONArray jobs=local.handle("listJobs",new JSONObject()).getJSONArray("termuxJobs");
+            boolean staged=false;JSONArray jobs=runtimeId.equals("termux")?local.handle("listJobs",new JSONObject()).getJSONArray("termuxJobs"):new JSONArray();
             for(int i=0;i<jobs.length();i++){JSONObject job=jobs.getJSONObject(i);Object exit=job.opt("exitCode");staged|=checkout.equals(job.optString("checkoutId"))&&digest.equals(job.optString("sourceDigest"))&&"project_stage".equals(job.optString("kind"))&&"completed".equals(job.optString("status"))&&Boolean.TRUE.equals(job.opt("receiptReceived"))&&(exit instanceof Integer||exit instanceof Long)&&((Number)exit).longValue()==0;}
             if(intent.equals("prepare")||runtimeId.equals("termux")&&!staged){
                 JSONObject preparation=ProjectSources.copy(base);boolean managedDownload=!runtimeId.equals("termux")&&inspection.getJSONObject("runtime").optBoolean("preparationAvailable");

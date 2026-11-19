@@ -55,7 +55,7 @@ internal class PocketWebTaskActions(
                 require(canUseTaskControls(task)) { "原审核窗口已关闭" }
                 val original = pendingCapabilityApprovals(task).firstOrNull { it.optString("approvalId", it.optString("id")) == approvalId }
                     ?: error("这项授权不在原审阅中")
-                PocketWebApprovals.requireDecision(original, args)
+                PocketWebApprovals.requireDecision(original, args, task)
                 if (PocketWebApprovals.isExecutionPlan(original)) {
                     checkedPayload(args, setOf("reviewHandle", "approvalId", "approved", "scopeReviewed", "planRevision", "planArtifactRef", "planHash"))
                     require(!specialOwnerTask(task)) { "请回原专用任务处理计划" }

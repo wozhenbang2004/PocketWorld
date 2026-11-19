@@ -44,7 +44,7 @@ public final class ToolPermissionPolicyPort implements CapabilityPort {
     private final String policyHash;
     private final ModelConfig reviewer;
     private final EventSink events;
-    private final boolean phone,mainModelOnly;
+    private final boolean phone,mainModelOnly,independentBuild;
     private final AutoCloseable policyFence;
     private volatile boolean closed;
     private JSONArray evidence=new JSONArray();
@@ -55,7 +55,7 @@ public final class ToolPermissionPolicyPort implements CapabilityPort {
     }
     public ToolPermissionPolicyPort(CapabilityPort existing,TaskStore tasks,ModelCapabilityAdapters.Binding binding,
             TaskStoreCapabilityAuthority.PolicySource source,java.util.function.LongSupplier revisionSource,ModelConfig model,EventSink events,boolean phone,boolean mainModelOnly)throws Exception {
-        this.mainModelOnly=mainModelOnly;
+        this.mainModelOnly=mainModelOnly;this.independentBuild=mainModelOnly&&existing instanceof dev.pocketengine.features.local.project.ProjectCapabilityPort p&&p.onlyIndependentFirstBuild();
         this.existing=java.util.Objects.requireNonNull(existing);this.tasks=tasks;this.binding=binding;this.revisionSource=revisionSource;this.events=events;this.phone=phone;
         policyRevision=revisionSource.getAsLong();JSONObject snapshot=CapabilityApprovalPolicy.normalize(source.current());
         if(policyRevision!=revisionSource.getAsLong())throw new SecurityException("审批策略在准备期间改变，请重新开始原任务");
@@ -100,7 +100,7 @@ public final class ToolPermissionPolicyPort implements CapabilityPort {
         JSONObject result=new JSONObject().put("decision","allow").put("risk","not_assessed").put("authorization","owner_rule");
         String approver=policy.mode().equals("full_access")?"full_access":"tool_rule";
         if(mainModelOnly&&choice==CapabilityApprovalPolicy.Decision.REVIEW){
-            choice=CapabilityApprovalPolicy.Decision.ASK;result.put("decision","ask").put("reason","你只同意把这份已存稿交给本轮主模型。此项另设复核，请亲自确认准确调用；没有发送给审核模型。");
+            choice=CapabilityApprovalPolicy.Decision.ASK;result.put("decision","ask").put("reason",independentBuild?"这次独立构建没有授权另一次审核模型调用。请亲自核对原工具的确切请求。":"你只同意把这份已存稿交给本轮主模型。此项另设复核，请亲自确认准确调用；没有发送给审核模型。");
         }
         if(choice==CapabilityApprovalPolicy.Decision.REVIEW){
             approver="ai_review";
@@ -135,7 +135,7 @@ public final class ToolPermissionPolicyPort implements CapabilityPort {
         if(choice==CapabilityApprovalPolicy.Decision.ASK){
             // A generic prompt stores exact arguments; never copy manuscript text into its persisted
             // payload. The owner's stronger rule remains effective, not silently treated as approval.
-            if(mainModelOnly&&arguments.length()>0)
+            if(mainModelOnly&&!independentBuild&&arguments.length()>0)
                 return refusal("approval_required",dev.pocketengine.features.local.project.OwnerRevisionRunPrivacy.MANUAL_SCOPE_BLOCK);
             JSONObject capability=new JSONObject().put("kind","tool_permission_policy").put("tool",name).put("definitionHash",schemaHash).put("policyHash",policyHash);
             JSONObject approval=tasks.requireCapabilityApproval(binding.taskId,binding.runId,name,arguments,capability);

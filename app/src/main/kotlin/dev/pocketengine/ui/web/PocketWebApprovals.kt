@@ -64,6 +64,11 @@ internal object PocketWebApprovals {
             if (matches) view.put("teamPlan", originalPlan)
             else view.put("readError", readError ?: "原计划与当前审批不一致，请重新核对")
         }
+        if (approval.has("firstBuildReview")) {
+            val matches = task != null && firstBuildMatches(approval, task)
+            view.put("firstBuildVerified", matches).put("canApprove", matches)
+            if (!matches) view.put("readError", "独立副本的原构建或这次收件身份不完整，不能批准")
+        }
         McpLocalProgramApprovalText.describe(capability)?.let { view.put("programRisk", it) }
         if (approval.optString("tool") == dev.pocketengine.features.semantic.SemanticCapabilityPort.DISPATCH) {
             view.put("semanticDescription", dev.pocketengine.features.semantic.SemanticApprovalText.describe(capability))
@@ -72,9 +77,15 @@ internal object PocketWebApprovals {
     }
 
     /** Positive decisions preserve the same explicit scope checks as the existing native UI. */
-    fun requireDecision(approval: JSONObject, args: JSONObject) {
+    private fun firstBuildMatches(approval: JSONObject, task: UiTask) =
+        dev.pocketengine.features.local.project.OwnerDraftFirstBuild.reviewMatches(approval, task.id,
+            task.raw.optString("runId"), task.raw.optInt("coordinatorEpoch", -1))
+
+    fun requireDecision(approval: JSONObject, args: JSONObject, task: UiTask? = null) {
         require(args.opt("approved") is Boolean) { "缺少有效授权决定" }
         if (!args.getBoolean("approved")) return
+        if (approval.has("firstBuildReview"))
+            require(task != null && firstBuildMatches(approval, task)) { "不是原轮的独立副本构建或收件，不能批准" }
         if (liveScope(approval) != null || isTeamPlan(approval) || isExecutionPlan(approval)) {
             require(args.opt("scopeReviewed") == true) { "请先核对本次完整范围与预算" }
         }

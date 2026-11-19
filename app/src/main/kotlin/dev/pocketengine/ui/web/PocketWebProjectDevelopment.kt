@@ -3,6 +3,7 @@ package dev.pocketengine.ui.web
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import dev.pocketengine.features.local.project.OwnerDraftFirstBuild
 import dev.pocketengine.features.local.project.ProjectOwnerWorkflows
 import dev.pocketengine.ui.PocketWorldController
 import org.json.JSONArray
@@ -46,7 +47,7 @@ internal class PocketWebProjectDevelopment(
         val COMMANDS = setOf("projects.development.read", "projects.development.draft", "projects.development.inspect",
             "projects.development.taskPackageSource", "projects.development.resolveTaskPackageSource",
             "projects.development.hostSource", "projects.development.resolveHostSource", "projects.development.compareHostSource", "projects.development.readHostDiff",
-            "projects.development.prepare", "projects.development.queryCopy", "projects.development.review",
+            "projects.development.prepare", "projects.development.queryCopy", "projects.development.reviewDraftBuild", "projects.development.review",
             "projects.development.start", "projects.development.query", "projects.development.dismiss", "projects.development.close") + PocketWebCheckoutFiles.COMMANDS
     }
     // Only a transient comparison guard for the already-authorized ordinary project reader. No Book, body or grant.
@@ -75,6 +76,9 @@ internal class PocketWebProjectDevelopment(
     private fun sameDraft(left: JSONObject, right: JSONObject): Boolean =
         left.optString("goal") == right.optString("goal") && left.optString("checkoutId") == right.optString("checkoutId") &&
             deliveryFields.all { left.optString(it) == right.optString(it) }
+    private fun untouchedBuildDraft(d:JSONObject,checkout:String)=ProjectConventionDraft.present(d)==null &&
+        (d.optString("checkoutId").isEmpty() || d.optString("checkoutId")==checkout) && d.optString("goal").isEmpty() && deliveryFields.all { d.optString(it).isEmpty() }
+    private fun matchesInput(d:JSONObject,input:JSONObject)=if(input.has(OwnerDraftFirstBuild.FIELD))untouchedBuildDraft(d,input.getString("checkoutId")) else sameDraft(d,input)
     private fun current(original: Page): Boolean = page === original && generation == original.generation &&
         ownerCurrent() && controller.webPrivateOwnerVisible() && acceptsWindow(original.window) &&
         controller.state.projectId == original.project && controller.state.projects.any { it.id == original.project }
@@ -219,7 +223,7 @@ internal class PocketWebProjectDevelopment(
             check(review == null && !busy) { "请先完成或关闭原项目审阅" }
             files.dispatch(action, args, original.project, { current(original) }, done); return
         }
-        if (action in setOf("projects.development.draft", "projects.development.prepare", "projects.development.review", "projects.development.start"))
+        if (action in setOf("projects.development.draft", "projects.development.prepare", "projects.development.reviewDraftBuild", "projects.development.review", "projects.development.start"))
             check(restoreFailure == null) { restoreFailure ?: "本机项目输入引用不可用" }
         when (action) {
             "projects.development.dismiss" -> {
@@ -297,6 +301,34 @@ internal class PocketWebProjectDevelopment(
                     observed
                 }
             }
+            "projects.development.reviewDraftBuild" -> {
+                fields(args,"viewHandle","checkoutId")
+                val checkout=text(args,"checkoutId")
+                fun untouched()=synchronized(drafts){
+                    val d=draft(original.project)
+                    check(!pending(original.project) && untouchedBuildDraft(d,checkout) && original.shownSeal==ProjectConventionDraft.bind(d).seal) { "请保留或清空当前未交办的目标；不会替换另一份草稿。" }
+                    ProjectConventionDraft.bind(d)
+                }
+                untouched();review=null
+                working(original,done){
+                    val host=controller.projectDevelopmentForWeb()
+                    val preparation=host.reviewFirstBuildForOwner(original.project,checkout);val pin=preparation.getJSONObject("pin")
+                    val actual=source(original,checkout);val selectedModel=model()
+                    check(pin.getString("sourceDigest")==actual.getString("sourceDigest") && selectedModel.value().optBoolean("configured")) { "所选版本或默认模型未就绪，未开始。" }
+                    val goal=OwnerDraftFirstBuild.GOAL;val contract=ProjectOwnerWorkflows.deliveryContractForOwner(JSONObject().put("goal",goal))
+                    val input=JSONObject().put("projectId",original.project).put("checkoutId",checkout).put("runtime","managed_process_v1")
+                        .put("expectedSourceDigest",pin.getString("sourceDigest")).put("clientMessageId",OwnerDraftFirstBuild.client(pin.getString("workIdentity")))
+                        .put("goal",goal).put(OwnerDraftFirstBuild.FIELD,pin)
+                    copyDeliveryFields(contract,input)
+                    check(current(original)) { "原项目窗口已关闭，没有准备新工作。" }
+                    val selected=Review(UUID.randomUUID().toString(),original,input.toString(),untouched(),selectedModel.revision(),SystemClock.elapsedRealtime()+120_000)
+                    review=selected
+                    JSONObject().put("reviewHandle",selected.handle).put("requestId",input.getString("clientMessageId")).put("projectId",original.project)
+                        .put("checkoutId",checkout).put("goal",goal).put("deliveryContract",contract).put("source",actual).put("model",selectedModel.value())
+                        .put("runtimeId","managed_process_v1").put("runtime","这台手机").put("expiresAt",System.currentTimeMillis()+120_000)
+                        .put("commandsAuthorized",false).put("projectMemoryAuthorized",false).put("draftBuild",true).put("manager",pin.getString("manager")).put("scripts",preparation.getJSONObject("scripts"))
+                }
+            }
             "projects.development.review" -> {
                 fields(args, "viewHandle", "checkoutId", "goal", *deliveryFields)
                 check(!pending(original.project)) { "请先查询原项目输入，不要重新开始" }
@@ -337,7 +369,7 @@ internal class PocketWebProjectDevelopment(
                 fun startCurrent(): Boolean {
                     val status = controller.nativeModelSelection().status()
                     return current(original) && SystemClock.elapsedRealtime() < selected.expires && !status.pending() && status.revision() == selected.modelRevision &&
-                        draft(original.project).let { sameDraft(it,input) && selected.picked.matches(it) }
+                        draft(original.project).let { matchesInput(it,input) && selected.picked.matches(it) }
                 }
                 check(startCurrent()) { "项目、默认模型或审阅期限已变化，请重新核对" }
                 review = null; busy = true
@@ -350,7 +382,7 @@ internal class PocketWebProjectDevelopment(
                     // reach Assistant; a killed Activity cannot turn unknown
                     // admission into permission to replay the goal.
                     updateDraft(original.project, true) {
-                        check(!pending(original.project) && sameDraft(it,input) && selected.picked.matches(it)) { "原交办或约定来源已变化，没有提交。" }
+                        check(!pending(original.project) && matchesInput(it,input) && selected.picked.matches(it)) { "原交办或约定来源已变化，没有提交。" }
                         it.put("submission", marker)
                     }
                     controller.startProjectInputFromDraftForWeb(input, selected.picked.copyMarker(), ::startCurrent) { result, error ->
