@@ -26,11 +26,14 @@ function windowKey(task: string) {
 }
 
 /** Mounted only for the source package the owner just selected from its original work. */
-export function ProjectPackageFiles({ item, onClose, onWholePackage, onCheckout }: {
-  item: ProjectPackageOutcome; onClose: () => void; onWholePackage?: () => void; onCheckout?: (member: SourceMember) => void;
+export type PackageFileSource = Pick<ProjectPackageOutcome,'taskId'|'operationId'|'artifactId'|'archiveSha256'|'runId'|'epoch'|'projectId'|'checkoutId'|'name'> & { currentRun?:boolean };
+type TeamFileWindow={handle:string; key:()=>string};
+export function ProjectPackageFiles({ item, onClose, onWholePackage, onCheckout, team }: {
+  item: PackageFileSource; onClose: () => void; onWholePackage?: () => void; onCheckout?: (member: SourceMember) => void; team?:TeamFileWindow;
 }) {
   const { taskId, operationId, artifactId, archiveSha256: artifactSha256 } = item;
-  const origin = useRef(windowKey(taskId)), current = useRef({ onClose, item }); current.current = { onClose, item };
+  const key=()=>team?team.key():windowKey(taskId);
+  const origin = useRef(key()), current = useRef({ onClose, item }); current.current = { onClose, item };
   const alive = useRef(false), serial = useRef(0), pending = useRef(false);
   const [page, setPage] = useState<Page | null>(null), [query, setQuery] = useState('');
   const [file, setFile] = useState<Entry | null>(null), [text, setText] = useState<string | null>(null);
@@ -48,14 +51,14 @@ export function ProjectPackageFiles({ item, onClose, onWholePackage, onCheckout 
     else heading.current?.focus();
   }, [file]);
   const read = async (choice: Choice) => {
-    if (pending.current || !alive.current || !origin.current || windowKey(taskId) !== origin.current || !canReadProjectPackageFiles()) return;
+    if (pending.current || !alive.current || !origin.current || key() !== origin.current || !(team ? bridge.getState().capabilities.commands.includes('teams.readFinalPackageFiles') : canReadProjectPackageFiles())) return;
     const generation = ++serial.current;
-    const accepts = () => alive.current && generation === serial.current && origin.current === windowKey(taskId) &&
+    const accepts = () => alive.current && generation === serial.current && origin.current === key() &&
       current.current.item.artifactId === artifactId && current.current.item.archiveSha256 === artifactSha256;
     pending.current = true; setBusy(true); setError(''); setFailed(null); setText(null);
     try {
       const args = 'file' in choice ? { path: choice.file.path, fileSha256: choice.file.sha256 } : choice;
-      const v = await bridge.command(command, { taskId, operationId, artifactId, artifactSha256, ...args });
+      const v = await bridge.command(team?'teams.readFinalPackageFiles':command, { ...(team?{viewHandle:team.handle}:{}), taskId, operationId, artifactId, artifactSha256, ...args });
       if (!accepts()) return;
       if (v?.taskId !== taskId || v.operationId !== operationId || v.artifactId !== artifactId || v.artifactSha256 !== artifactSha256 ||
           v.runId !== item.runId || v.epoch !== item.epoch || v.readOnly !== true) throw new Error('回执不属于这份原固定包。');
@@ -78,16 +81,16 @@ export function ProjectPackageFiles({ item, onClose, onWholePackage, onCheckout 
   };
   useEffect(() => {
     alive.current = true;
-    const invalidate = () => { if (!origin.current || origin.current !== windowKey(taskId)) { ++serial.current; current.current.onClose(); } };
+    const invalidate = () => { if (!origin.current || origin.current !== key()) { ++serial.current; current.current.onClose(); } };
     const unsubscribe = bridge.subscribe(invalidate), removeBack = registerOverlayBack(() => back.current());
     document.addEventListener('visibilitychange', invalidate);
     if (origin.current) void read({ offset: 0, query: '' }); else invalidate();
     return () => { alive.current = false; ++serial.current; pending.current = false; unsubscribe(); removeBack(); document.removeEventListener('visibilitychange', invalidate); };
   }, []);
   return <section className="pw-package-members" aria-label="固定包内文件">
-    <Button variant="ghost" size="small" leadingIcon={IconArrowLeft} onClick={goBack}>{file ? '返回包内文件' : '返回原工作成果'}</Button>
+    <Button variant="ghost" size="small" leadingIcon={IconArrowLeft} onClick={goBack}>{file ? '返回包内文件' : team ? '返回原团队成果' : '返回原工作成果'}</Button>
     <h4 ref={heading} tabIndex={-1} dir="auto">{file ? file.path : item.name}</h4>
-    <p className="pw-field-hint">{file ? `${fileBytes(file.bytes)} · UTF-8 原文` : `${item.currentRun ? '本轮' : '较早一轮'}保存的固定版本 · 只读，不运行代码`}</p>
+    <p className="pw-field-hint">{file ? `${fileBytes(file.bytes)} · UTF-8 原文` : team ? '这次协作已签收的固定版本 · 只读，不运行代码' : `${item.currentRun ? '本轮' : '较早一轮'}保存的固定版本 · 只读，不运行代码`}</p>
     <div hidden={!!file}>
       {page && page.total > pageSize && <form className="pw-action-row" onSubmit={e => { e.preventDefault(); void read({ offset: 0, query }); }}>
         <SearchField value={query} onChange={setQuery} maxLength={120} aria-label="在固定包中查找文件" placeholder="按文件名或路径查找" clearLabel="清空查找文字" />
@@ -97,7 +100,7 @@ export function ProjectPackageFiles({ item, onClose, onWholePackage, onCheckout 
         <div className="pw-outcome-files">{page.entries.map(f => readable(f)
           ? <Button key={f.path} variant="secondary" className="pw-outcome-file" leadingIcon={IconFile} trailingIcon={IconChevronRight} disabled={busy} onClick={e => { originalButton.current = e.currentTarget; setFile(f); void read({ file: f }); }}>
             <span className="pw-outcome-file-copy"><bdi>{f.path}</bdi><small>{fileBytes(f.bytes)} · 查看原文</small></span></Button>
-          : <div key={f.path} className="pw-outcome-file-copy pw-package-member-static"><bdi>{f.path}</bdi><small>{fileBytes(f.bytes)} · {f.kind === 'binary' ? '二进制文件' : '超过 64 KiB'}，可随整包导出</small></div>)}</div>
+          : <div key={f.path} className="pw-outcome-file-copy pw-package-member-static"><bdi>{f.path}</bdi><small>{fileBytes(f.bytes)} · {f.kind === 'binary' ? '二进制文件' : '超过 64 KiB'}{team?'，此处仅列出':'，可随整包导出'}</small></div>)}</div>
         {page.matched > pageSize && <div className="pw-action-row">
           <Button size="small" variant="ghost" disabled={busy || page.offset === 0} onClick={() => void read({ offset: page.offset - pageSize, query: page.query })}>上一页</Button>
           <Button size="small" variant="ghost" disabled={busy || page.offset + pageSize >= page.matched} onClick={() => void read({ offset: page.offset + pageSize, query: page.query })}>下一页</Button>
@@ -107,7 +110,7 @@ export function ProjectPackageFiles({ item, onClose, onWholePackage, onCheckout 
     {file && text !== null && (text === ''
       ? <p className="pw-muted">此固定文件为空（0 字节）。</p> : <pre className="pw-file-text" tabIndex={0} aria-label="固定文件原文">{text}</pre>)}
     {file && text !== null && onCheckout && bridge.getState().capabilities.commands.includes('projects.development.files.openSource') &&
-      <Button size="small" variant="secondary" disabled={busy} onClick={() => { if (origin.current === windowKey(taskId)) onCheckout({ path: file.path, fileSha256: file.sha256, bytes: file.bytes,
+      <Button size="small" variant="secondary" disabled={busy} onClick={() => { if (origin.current === key()) onCheckout({ path: file.path, fileSha256: file.sha256, bytes: file.bytes,
         projectId: item.projectId, checkoutId: item.checkoutId, artifactId, artifactSha256 }); }}>在原副本继续修改</Button>}
     {busy && <p role="status" className="pw-muted">{file ? '正在读取所选原文…' : '正在读取固定包清单…'}</p>}
     {error && <p role="alert" className="pw-error">{error}</p>}

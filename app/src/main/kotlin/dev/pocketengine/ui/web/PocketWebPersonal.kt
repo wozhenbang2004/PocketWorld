@@ -136,13 +136,21 @@ internal class PocketWebPersonal(private val controller: PocketWorldController) 
                 }
             }
             "profile.memory.createReview" -> {
-                fields(args, "text", "expiresAt")
+                val calendar = if (args.has("calendar")) args.getJSONObject("calendar") else null
+                if (calendar == null) fields(args, "text", "expiresAt") else {
+                    fields(args, "text", "calendar")
+                    fields(calendar, "date", "time", "zone", "laterOverlap")
+                }
                 val content = text(args, "text", 4000).trim()
-                val expires = args.opt("expiresAt")
+                val expires = calendar?.let { PocketWebFormTime.instant(it, System.currentTimeMillis()) } ?: args.opt("expiresAt")
                 require(expires == null || expires == JSONObject.NULL || (expires is Int || expires is Long) && (expires as Number).toLong() > System.currentTimeMillis()) { "请选择未来的有效期" }
                 val payload = JSONObject().put("text", content).put("expiresAt", expires ?: JSONObject.NULL)
-                val handle = prepare(JSONObject().put("command", "createPersonalNote").put("payload", payload))
-                done(JSONObject().put("reviewHandle", handle).put("receiptHandle", handle).put("operation", "create").put("changeKind", "add").put("afterText", content).put("expiresAt", expires ?: JSONObject.NULL), null)
+                val review = JSONObject().put("command", "createPersonalNote").put("payload", payload)
+                if (calendar != null) review.put("calendarZone", calendar.getString("zone"))
+                val handle = prepare(review)
+                val result = JSONObject().put("reviewHandle", handle).put("receiptHandle", handle).put("operation", "create").put("changeKind", "add").put("afterText", content).put("expiresAt", expires ?: JSONObject.NULL)
+                if (calendar != null) result.put("zone", review.getString("calendarZone")).put("reviewExpiresAt", reviews.getValue(handle).expires)
+                done(result, null)
             }
             "profile.memory.source" -> {
                 fields(args, "readHandle", "index", "offset")
@@ -226,6 +234,10 @@ internal class PocketWebPersonal(private val controller: PocketWorldController) 
                 val before = original?.let(::row)
                 val command = review.getString("command")
                 val payload = review.getJSONObject("payload")
+                if (command == "createPersonalNote" && review.has("calendarZone") && payload.getLong("expiresAt") <= System.currentTimeMillis()) {
+                    recordReceipt(handle, "not_submitted", JSONObject().put("saved", false).put("undoAvailable", false).put("reason", "deadline_passed").put("expiresAt", payload.getLong("expiresAt")))
+                    done(receiptView(handle, selected(receipts, handle)), null); return
+                }
                 if (command == "shortenManualNote" && review.has("termReadHandle") &&
                     (runCatching { selected(reads, review.getString("termReadHandle")) }.isFailure || payload.getLong("expiresAt") <= System.currentTimeMillis())) {
                     recordReceipt(handle, "unchanged", JSONObject().put("saved", false).put("undoAvailable", false).put("message", "原阅读窗口已关闭或所选期限已过，没有更改这条记忆。"))

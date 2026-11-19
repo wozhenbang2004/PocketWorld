@@ -46,15 +46,17 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
         @Synchronized override fun close() { reader.cancel(); captured = null; approval?.close(); approval = null; token = null }
     }
     private var fileWindow: FileWindow? = null
-    private class Reading(val kind: String, val original: String) {
+    private class Reading(val kind: String, val original: String, val projectRun: Boolean) {
         @Volatile var live = true
             private set
         var deliveryWorkers: String? = null
+        var finalPackage: dev.pocketengine.store.TaskStore.TeamProjectPackageSelection? = null
+        val packageRead = RunControl()
         private var itemPage: AutoCloseable? = null
         @Synchronized fun hold(page: AutoCloseable) {
             check(live) { "原分工窗口已关闭" }; itemPage?.close(); itemPage = page
         }
-        @Synchronized fun retire() { live = false; itemPage?.close(); itemPage = null }
+        @Synchronized fun retire() { live = false; packageRead.cancel(); finalPackage=null; itemPage?.close(); itemPage = null }
     }
     private data class Review(val command: String, val input: String, val expires: Long, val phonePage: TeamPhoneHost.Page? = null, val phoneReview: TeamPhoneHost.Review? = null, val productionSources: String? = null,
         val workItem: PocketWebTeamWorkReturn? = null, val ownerReading: Reading? = null, val proposal: TaskStoreTeamWriteHost.WorkPlanPage.ParentProposalReview? = null) {
@@ -73,7 +75,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
     companion object {
         val COMMANDS = setOf("teams.attention", "teams.readAttention", "teams.snapshot", "teams.readRun", "teams.readDefinition", "teams.reviewDefinition", "teams.prepareDraftStart",
             "teams.reviewStart", "teams.reviewRemove", "teams.confirm", "teams.control", "teams.sendMessage",
-            "teams.readFrozenOutputs", "teams.readFrozenDiff", "teams.reviewFrozenTextApproval", "teams.approveFrozenText", "teams.reviewParentRevision", "teams.reviewWorkItemContinuation", "teams.answerAssignment", "teams.probeMember", "teams.closeReading", "teams.reviewPhoneStart", "teams.reviewMember", "teams.openResearchTask", "teams.openDeliveryWorker")
+            "teams.readFrozenOutputs", "teams.readFrozenDiff", "teams.reviewFrozenTextApproval", "teams.approveFrozenText", "teams.reviewParentRevision", "teams.reviewWorkItemContinuation", "teams.answerAssignment", "teams.probeMember", "teams.closeReading", "teams.reviewPhoneStart", "teams.reviewMember", "teams.openResearchTask", "teams.openDeliveryWorker", "teams.readFinalPackageFiles")
     }
 
     fun clear() {
@@ -191,7 +193,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
         // Reading/editing is bound to the visible native window, not a timer.
         // clear()/closeReading retire it; mutations still compare the original
         // definition or run/member generations before accepting any change.
-        readings[handle] = Reading(kind, value.toString())
+        readings[handle] = Reading(kind, value.toString(), kind == "run" && value.optJSONObject("productionScope")?.optJSONObject("projectSelection") != null)
         val result = JSONObject().put("kind", kind).put("viewHandle", handle).put(kind, PocketWebState.publicValue(value))
         if (kind == "run") {
             val messages = teamConversationRows(value).onEach { row ->
@@ -303,8 +305,14 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                     val module=controller.webPluginFeatureHost().module("teams") as? TeamsModule ?: error("原团队宿主不可用")
                     module.ownerFinalWorkers(team)
                 }.getOrElse { dev.pocketengine.features.teams.TeamDeliveryWorkers.unavailable(team) }
+                val pack=if(!owner.projectRun) null else runCatching {
+                    check(currentWindow() && owner.live)
+                    val pin=controller.webTeamFinalPackage(team)
+                    pin to TaskProjectPackageFiles.teamDescriptor(pin)
+                }.getOrNull()
                 main.post {
                     if(currentWindow() && owner.live && readings[handle]===owner && observed.optString("teamRunId")==team){
+                        if(pack!=null){owner.finalPackage=pack.first;packet.put("finalProjectPackage",pack.second)}
                         owner.deliveryWorkers=observed.toString(); packet.put("deliveryWorkers",observed); finishReceipt(receipt)
                     } else done(null,"原团队窗口已关闭；没有打开其他执行或重发控制")
                 }
@@ -379,6 +387,18 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
             else controller.requestWebFeatureReceipt("teams", command, input, ::currentWindow, received)
         }
         when (action) {
+            "teams.readFinalPackageFiles" -> {
+                val handle=text(args,"viewHandle");val page=readings[handle]?.takeIf { it.live && it.kind=="run" } ?: error("原团队成果窗口已关闭")
+                val selected=page.finalPackage ?: error("这个原团队未提供已签收的完整包")
+                val query=JSONObject(args.toString()).also { it.remove("viewHandle") }
+                controller.runTeamPhoneWork {
+                    val reply=runCatching {check(currentWindow()&&page.live);controller.webReadTeamFinalPackage(selected,query,page.packageRead)}
+                    main.post {
+                        if(!currentWindow()||!page.live||readings[handle]!==page||page.finalPackage!==selected)done(null,"原团队窗口已变化，未返回文件正文")
+                        else reply.fold({done(it,null)},{done(null,it.message?:"这份原团队固定包暂不可读取")})
+                    }
+                }
+            }
             "teams.attention" -> {
                 if (args.has("parentTaskId")) {
                     fields(args, "parentTaskId", "parentRunId", "parentEpoch", "conversationId", "teamRunId", "fileReview", "proposalDirectory", "proposal")

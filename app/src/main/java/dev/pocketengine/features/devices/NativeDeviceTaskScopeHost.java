@@ -18,6 +18,9 @@ public final class NativeDeviceTaskScopeHost {
         Iterable<PairingCoordinator.OutgoingGrant> originalOutgoingGrants()throws Exception;
         /** Actual authenticated device.describe result with capturedAt/validUntil; not a UI/paired list. */
         JSONObject authenticatedCapabilities(String targetDeviceId)throws Exception;
+        default JSONObject authenticatedCapabilities(PairingCoordinator.OutgoingGrant original)throws Exception{
+            throw new SecurityException("当前宿主不能核对这份原授权所绑定的连接");
+        }
         default dev.pocketengine.features.local.LocalModule localModule(){return null;}
         default dev.pocketengine.features.attachments.AttachmentBook attachmentBook(){return null;}
         default void sendSelectedFile(DeviceIdentity.AuthenticatedPeer peer,java.util.UUID transfer,long offset,byte[] bytes,long deadline,dev.pocketengine.features.devices.transport.DeviceArtifactTransfer.Current current)throws Exception{throw new SecurityException("原文件发送器未安装");}
@@ -74,6 +77,11 @@ public final class NativeDeviceTaskScopeHost {
     }
     /** B owner's native pairing-range page can offer ONLY these typed live target/resource options. */
     public List<RouteOption> forwardingOptions()throws Exception{return options();}
+    // Caller resolved the exact owner's chosen local signed grants. Never consult other peers' manifests.
+    List<RouteOption> forwardingOptionsFor(List<PairingCoordinator.OutgoingGrant> chosen)throws Exception{
+        if(chosen.isEmpty()||chosen.size()>8)throw new SecurityException("请明确选择至多八个原授权范围");
+        return options(null,null,null,null,List.copyOf(chosen),true);
+    }
     public dev.pocketengine.core.CapabilityPort forwardedHostTools(DeviceExecutionAdmission nativeAAdmission,dev.pocketengine.core.RunControl original,DeviceIdentity.LocalIdentity existing,DeviceNativeRoute.Exchange transport)throws Exception{
         var run=java.util.Objects.requireNonNull(original).hostRunIdentity();if(run==null||originalHost==null)throw new SecurityException("没有B原目标native host");tasks.deviceTasks().requireForwardedSource(run.taskId(),nativeAAdmission,original);List<DeviceCapabilityPort.NativeRoute> routes=new ArrayList<>();for(var approval:tasks.deviceTasks().forwardedApprovalsForRun(run.taskId(),nativeAAdmission,original,options()))routes.add(new DeviceNativeRoute(tasks,existing,approval,original,transport,source));return new DeviceCapabilityPort(tasks,new DeviceTaskCoordinator(tasks,originalHost,existing.deviceId(),existing.instanceId()),original,routes,images,files);
     }
@@ -127,12 +135,15 @@ public final class NativeDeviceTaskScopeHost {
         if(rows!=null)rows.put(new JSONObject().put("targetDeviceId",grant.targetDeviceId()).put("grantId",grant.grantId()).put("reason",reason).put("executionAuthorized",false));
     }
     private List<RouteOption> options(JSONArray unavailable,DirectedPhoneTarget direct,DirectedWorkspaceTarget workspace,DirectedPhoneTarget manual)throws Exception{
-        ArrayList<RouteOption> result=new ArrayList<>();java.util.Set<String> optionIds=new java.util.HashSet<>(),unreachable=new java.util.HashSet<>();Map<String,JSONObject> facts=new LinkedHashMap<>();int count=0;long now=System.currentTimeMillis();for(PairingCoordinator.OutgoingGrant grant:source.originalOutgoingGrants()){
+        return options(unavailable,direct,workspace,manual,source.originalOutgoingGrants(),false);
+    }
+    private List<RouteOption> options(JSONArray unavailable,DirectedPhoneTarget direct,DirectedWorkspaceTarget workspace,DirectedPhoneTarget manual,Iterable<PairingCoordinator.OutgoingGrant> grants,boolean selectedForwards)throws Exception{
+        ArrayList<RouteOption> result=new ArrayList<>();java.util.Set<String> optionIds=new java.util.HashSet<>(),unreachable=new java.util.HashSet<>();Map<String,JSONObject> facts=new LinkedHashMap<>();int count=0;long now=System.currentTimeMillis();for(PairingCoordinator.OutgoingGrant grant:grants){
             if(direct!=null&&!direct.matches(grant)||workspace!=null&&!workspace.matches(grant)||manual!=null&&!manual.matches(grant))continue; // BEFORE reading any other peer's capabilities.
             if(++count>128)throw new SecurityException("native路由候选过多");
             try{grant.checkCurrent(now);}catch(Exception retired){if(unavailable==null)throw retired;unavailable(unavailable,grant,"grant_unavailable");continue;}
             if(unreachable.contains(grant.targetDeviceId())){unavailable(unavailable,grant,"capability_read_unavailable");continue;}
-            if(!facts.containsKey(grant.targetDeviceId()))try{facts.put(grant.targetDeviceId(),source.authenticatedCapabilities(grant.targetDeviceId()));}
+            if(!facts.containsKey(grant.targetDeviceId()))try{facts.put(grant.targetDeviceId(),selectedForwards||manual!=null?source.authenticatedCapabilities(grant):source.authenticatedCapabilities(grant.targetDeviceId()));}
             catch(Exception offline){if(unavailable==null)throw offline;unreachable.add(grant.targetDeviceId());unavailable(unavailable,grant,"capability_read_unavailable");continue;}
             JSONObject manifest=facts.get(grant.targetDeviceId());now=System.currentTimeMillis();
             try{grant.checkCurrent(now);}catch(Exception retired){if(unavailable==null)throw retired;unavailable(unavailable,grant,"grant_unavailable");continue;}

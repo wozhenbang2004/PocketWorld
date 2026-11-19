@@ -18,8 +18,8 @@ export function TeamFollowUps({ items, disabled, read, expanded = true, toggle }
   </section>;
 }
 
-export function TeamResultHandoff({ result, actions, sources, frozenFiles, revisionOffers, stopped, openMembers, openMessage, openOriginalReview }: {
-  result: ReturnType<typeof teamResultReading>; actions: Actions; sources?:ReactNode; frozenFiles?:ReactNode; revisionOffers?:ReactNode; stopped: boolean;
+export function TeamResultHandoff({ result, actions, sources, frozenFiles, finalPackageReader, revisionOffers, stopped, openMembers, openMessage, openOriginalReview }: {
+  result: ReturnType<typeof teamResultReading>; actions: Actions; sources?:ReactNode; frozenFiles?:ReactNode; finalPackageReader?:ReactNode; revisionOffers?:ReactNode; stopped: boolean;
   openMembers: () => void; openMessage: (id: string) => void; openOriginalReview?: () => void;
 }) {
   return <section className="pw-team-result" aria-label="本次协作成果">
@@ -27,6 +27,7 @@ export function TeamResultHandoff({ result, actions, sources, frozenFiles, revis
       {result.previous && <span className="pw-team-result-stale">历史版本</span>}</header>
     <TeamFollowUps {...actions}/>
     {revisionOffers}
+    {finalPackageReader}
     {frozenFiles}
     {openOriginalReview && <Button variant="secondary" size="small" disabled={actions.disabled} trailingIcon={IconChevronRight}
       onClick={openOriginalReview}>查看待审阅的原协作任务</Button>}
@@ -37,6 +38,6 @@ export function TeamResultHandoff({ result, actions, sources, frozenFiles, revis
       {result.excerpt && <p className="pw-field-hint">这里只保留了原汇总的节选。</p>}
       {result.messageId && <Button variant="ghost" size="small" data-team-follow-up="summary-original" disabled={actions.disabled} onClick={() => openMessage(result.messageId)}>查看汇总原消息</Button>}</>
       : <div className="pw-team-result-empty"><p>{stopped ? '协作已停止后续派发，成员已有的产出和记录仍可查看。' : '还没有能核对来源的共同汇总。各成员已保存的产出可以单独查看。'}</p>
-        {!sources && !frozenFiles && <Button variant="ghost" trailingIcon={IconChevronRight} data-team-follow-up="members" onClick={openMembers}>查看分工与产出</Button>}</div>}
+        {!sources && !frozenFiles && !finalPackageReader && <Button variant="ghost" trailingIcon={IconChevronRight} data-team-follow-up="members" onClick={openMembers}>查看分工与产出</Button>}</div>}
   </section>;
 }

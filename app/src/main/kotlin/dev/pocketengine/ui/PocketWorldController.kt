@@ -308,6 +308,9 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     internal val formalFileExports = ProjectFormalFileExport(app,this,activity::chooseFormalFileTarget)
     internal val attachmentOutcomes = AttachmentOutcomeCoordinator(activity,app,io,main,::outcomeOwnerWindow,::focusTask,::releaseOutcomeWindow).also { flow -> app.teamWorkspaceOutcomes?.let { flow.bindTeamOutcomes(it,::openTeamAssignment) } }
     fun openTeamArtifact(selected:dev.pocketengine.features.attachments.TeamWorkspaceOutcomeHost.Selection) = attachmentOutcomes.openTeamArtifact(selected)
+    internal fun webTeamFinalPackage(run: String) = app.tasks.teamProjectPackageForOwner(run)
+    internal fun webReadTeamFinalPackage(selected: dev.pocketengine.store.TaskStore.TeamProjectPackageSelection, args: JSONObject, control: dev.pocketengine.core.RunControl) =
+        dev.pocketengine.ui.web.TaskProjectPackageFiles.readTeam(app,selected,args,control)
     fun openTeamProjectPackage(runId: String) {
         if (closed || groupTaskPage != null || projectPackages.state.busy) return
         val navigation = projectWorkbench.navigationRevision(); val projectRequest = state.requestedProjectRevision; val selectedOwnerDomain = ownerDomain; val domainEpoch = ownerEpochs["teams"] ?: 0

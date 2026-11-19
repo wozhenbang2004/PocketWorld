@@ -329,12 +329,20 @@ public final class DeviceWorkspaceLanRuntime implements AutoCloseable, DeviceTra
         final CompletableFuture<JSONObject> result = new CompletableFuture<>();
         PendingRead(String target, PeerChannel channel, long expiry, PairingCoordinator.DiscoveryQuery proof) { this.target = target; this.channel = channel; expiresAt = expiry; this.proof = proof; }
     }
-    private PendingRead describe(PeerChannel channel) throws Exception {
+    private PendingRead describe(PeerChannel channel) throws Exception { return describe(channel,null); }
+    private static void checkDescriptionTarget(PairingCoordinator.OutgoingGrant expected,PeerChannel channel,DeviceTaskEnvelope request,long now)throws Exception{
+        if(expected==null)return;
+        expected.checkCurrent(now);
+        if(!request.targetDeviceId().equals(channel.peer.deviceId())||!expected.isOriginalTarget(channel.peer.deviceId(),request.instanceId(),channel.peer.certificateFingerprint()))
+            throw new SecurityException("这不是所选原设备、证书与实例的描述通道");
+    }
+    private PendingRead describe(PeerChannel channel,PairingCoordinator.OutgoingGrant expected) throws Exception {
         long now = System.currentTimeMillis(); descriptions.entrySet().removeIf(row -> { if (row.getValue().expiresAt > now) return false; row.getValue().result.completeExceptionally(new IOException("能力读取期限已到")); return true; });
-        for (PendingRead existing : descriptions.values()) if (existing.channel == channel) return existing;
+        for (PendingRead existing : descriptions.values()) if (existing.channel == channel) { checkDescriptionTarget(expected,channel,existing.proof.envelope(),now); return existing; }
         if (descriptions.size() >= 16) throw new IOException("正在核对其他设备，请稍后刷新");
         PairingCoordinator.DiscoveryQuery proof = owner.pairing().discoveryQuery(owner.existingIdentity(), channel.peer, now, 10000);
         proof.requireTargetPeer(channel.peer, now); DeviceTaskEnvelope request = proof.envelope();
+        checkDescriptionTarget(expected,channel,request,System.currentTimeMillis());
         PendingRead read = new PendingRead(channel.peer.deviceId(), channel, request.deadline(), proof); descriptions.put(request.requestId(), read);
         if (!channel.connection.sendControl(DeviceProtocol.canonicalBytes(request.json()))) {
             descriptions.remove(request.requestId(), read); read.result.completeExceptionally(new IOException("能力读取尚未进入发送队列"));
@@ -343,10 +351,14 @@ public final class DeviceWorkspaceLanRuntime implements AutoCloseable, DeviceTra
     }
     /** An explicit owner scope action may refresh READ-ONLY metadata on an already authenticated
      * channel. It never opens a channel, creates an identity, submits work or replays a task. */
-    public JSONObject readFreshAuthenticatedCapabilities(String id) throws Exception {
+    public JSONObject readFreshAuthenticatedCapabilities(String id) throws Exception { return readFreshAuthenticatedCapabilities(id,null); }
+    JSONObject readFreshAuthenticatedCapabilities(PairingCoordinator.OutgoingGrant original)throws Exception{
+        original.checkCurrent(System.currentTimeMillis());return readFreshAuthenticatedCapabilities(original.targetDeviceId(),original);
+    }
+    private JSONObject readFreshAuthenticatedCapabilities(String id,PairingCoordinator.OutgoingGrant expected)throws Exception{
         JSONObject fresh = authenticatedCapabilities(id); if (fresh != null) return fresh;
         PeerChannel actual = controlChannel(id); if (!channelOnline(actual)) return null;
-        PendingRead read = describe(actual);
+        PendingRead read = describe(actual,expected);
         try { read.result.get(Math.min(750, Math.max(1, read.expiresAt - System.currentTimeMillis())), TimeUnit.MILLISECONDS); }
         catch (java.util.concurrent.TimeoutException pendingRead) { return null; }
         return authenticatedCapabilities(id);

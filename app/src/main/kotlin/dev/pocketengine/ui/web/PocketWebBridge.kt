@@ -1290,7 +1290,7 @@ internal class PocketWebBridge(
                 return
             }
             if (action in PocketWebTeams.COMMANDS) {
-                requireSection("teams"); teamPages.dispatch(action, args) { result, error -> complete(id, result, error, "outcome_unknown"); publishState() }; return
+                requireSection("teams"); teamPages.dispatch(action, args) { result, error -> complete(id, result, error, "outcome_unknown", retainValue = action != "teams.readFinalPackageFiles"); if (action != "teams.readFinalPackageFiles") publishState() }; return
             }
             if (action == "conversation.openHostGoal") {
                 require(args.keys().asSequence().toSet()==setOf("messageId","taskId","conversationId"))

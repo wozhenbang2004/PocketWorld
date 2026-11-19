@@ -9,7 +9,7 @@ from windows_source_patch import SET_FILE,checked_output,output_names
 def _short(s,n=94): return s if len(s)<=n else "…"+s[-n+1:]
 
 
-def _title(m): return {"add":"新增 · ","edit":"修改 · ","remove":"移除原路径 · "}[m["kind"]]+_short(m["path"])
+def _title(m): return {"add":"新增 · ","edit":"修改 · ","remove":"移除原路径 · ","draft":"机主草稿 · "}[m["kind"]]+_short(m["path"])
 
 
 def _end(m,length=None): return "移除原路径（不是空文件）" if m["kind"]=="remove" else m["to"][:length]
@@ -17,7 +17,9 @@ def _end(m,length=None): return "移除原路径（不是空文件）" if m["kin
 
 def _warning(members):
     n=sum(m["kind"]=="remove" for m in members)
-    return f"\n其中 {n} 项会在你日后手动应用补丁时移除原路径。现在不删除任何文件。" if n else ""
+    drafts=sum(m["kind"]=="draft" for m in members)
+    note=f"\n含 {drafts} 项机主已另存的草稿；它们不是仓库中已经发生的修改。" if drafts else ""
+    return note+(f"\n其中 {n} 项会在你日后手动应用补丁时移除原路径。现在不删除任何文件。" if n else "")
 
 
 def inspect_members(members,locked):

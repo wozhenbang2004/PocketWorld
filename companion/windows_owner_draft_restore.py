@@ -1,4 +1,5 @@
 """Reopen only a verified output of our own draft renderer, in memory. Not a general patch importer."""
+from contextlib import ExitStack, contextmanager
 import re
 
 from windows_owner_draft import MAX_TEXT, block, digest, encode, original, records, unpack
@@ -53,15 +54,20 @@ def target(base,f,raw,check):
     return display
 
 
-def restore(ctx,settings,op,row,locked,checkpoint):
+@contextmanager
+def held_draft(ctx,settings,op,row,locked,checkpoint):
     def gate():
         checkpoint()
         if locked(): block()
     gate()
     if row not in records(ctx,op).values(): block()
     f=row["fields"]
-    with original(ctx,settings,op,f["path"],gate) as (base,_):
-        raw=checked_output(ctx,op,row,locked,show=False,added=False,draft=True,content=True)
+    with ExitStack() as pins, original(ctx,settings,op,f["path"],gate) as (base,source):
+        raw=checked_output(ctx,op,row,locked,show=False,added=False,draft=True,content=True,hold=pins)
         draft=target(base,f,raw,gate)
         gate()
-        return base,draft
+        yield base,draft,source
+
+
+def restore(ctx,settings,op,row,locked,checkpoint):
+    with held_draft(ctx,settings,op,row,locked,checkpoint) as (base,draft,_): return base,draft

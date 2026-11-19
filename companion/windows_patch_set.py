@@ -8,11 +8,12 @@ from platform_windows import relative_parts
 from windows_added_source import _owner,records as added_records
 from windows_git_copy import _json,_read
 from windows_removed_source import records as removed_records
+from windows_owner_draft import records as owner_drafts
 from windows_git_tree import _component,_native_compare
 from windows_source_patch import (LIMIT,SET_BANK as BANK,SET_PROFILE as PROFILE,SET_LIMIT,
                                   _blob,_quoted,checked_output,output_names,publish_output,records as tracked_records)
 
-READERS=(("edit",tracked_records),("add",added_records),("remove",removed_records))
+READERS=(("edit",tracked_records),("add",added_records),("remove",removed_records),("draft",owner_drafts))
 MAX=8
 MARKER=b"\\ No newline at end of file"
 
@@ -43,6 +44,7 @@ def _paths(ctx,members,checkpoint):
 
 
 def catalog(ctx,op):
+    _owner(ctx,op)  # Only the original whole-copy bank; a one-file selection is never a multi-file scope.
     rows=[]; missing=False
     for kind,reader in READERS:
         try: rows.extend((kind,row) for row in reader(ctx,op).values())
@@ -51,10 +53,12 @@ def catalog(ctx,op):
 
 
 def _member(kind,row):
+    if kind not in ("edit","add","remove","draft"): _bad()
     f=row["fields"]
     return {"kind":kind,"id":row["id"],"path":f["path"],"sha256":f["patchSha"],"bytes":f["bytes"],
             "base":({"state":"absent","tree":f["parentTree"]} if kind=="add" else {"state":"tracked","oid":f["originalOid"]}),
-            "to":({"state":"remove_original_path"} if kind=="remove" else f["sourceOid"] if kind=="add" else f["currentOid"])}
+            "to":({"state":"remove_original_path"} if kind=="remove" else f["sourceOid"] if kind=="add" else
+                  f["draftOid"] if kind=="draft" else f["currentOid"])}
 
 
 def _patch(raw,member,fields,algo):
@@ -78,7 +82,8 @@ def _patch(raw,member,fields,algo):
             return
     else:
         stem=b"index "+member["base"]["oid"].encode()+b".."+target+b" "
-        if not lines or lines.pop(0) not in (stem+b"100644",stem+b"100755"): _bad()
+        allowed=(stem+b"100644",) if kind=="draft" else (stem+b"100644",stem+b"100755")
+        if not lines or lines.pop(0) not in allowed: _bad()
     if len(lines)<3 or lines[:2]!=[b"--- "+(b"/dev/null" if added else a),b"+++ "+(b"/dev/null" if removed else b)]: _bad()
     cursor=2; seen=0; was=[0,0]; reconstructed=bytearray()
     while cursor<len(lines):
@@ -132,7 +137,8 @@ def prepare(ctx,op,selected,locked,checkpoint):
     chunks=[]
     for m,row in planned:
         current()
-        data=checked_output(ctx,op,row,locked,show=False,added=m["kind"]=="add",removed=m["kind"]=="remove",content=True)
+        data=checked_output(ctx,op,row,locked,show=False,added=m["kind"]=="add",removed=m["kind"]=="remove",
+                            draft=m["kind"]=="draft",content=True)
         _patch(data,m,row["fields"],source["objectFormat"])
         chunks.append(data)
     current(); raw=b"".join(chunks)
@@ -153,7 +159,7 @@ def _valid(ctx,op,f,owner):
     width=40 if source["objectFormat"]=="sha1" else 64; seen=set(); last=b""; total=0
     for m in f["members"]:
         if not isinstance(m,dict) or set(m)!={"kind","id","path","sha256","bytes","base","to"}: return False
-        if (m["kind"] not in ("add","edit","remove") or not _hash(m["id"],32) or (m["kind"],m["id"]) in seen or not _hash(m["sha256"],64)
+        if (m["kind"] not in ("add","edit","remove","draft") or not _hash(m["id"],32) or (m["kind"],m["id"]) in seen or not _hash(m["sha256"],64)
                 or type(m["bytes"]) is not int or not 0<m["bytes"]<=LIMIT or not isinstance(m["path"],str)): return False
         if (m["to"]!={"state":"remove_original_path"} if m["kind"]=="remove" else not _hash(m["to"],width)): return False
         base=m["base"]

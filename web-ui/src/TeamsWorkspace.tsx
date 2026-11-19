@@ -22,6 +22,7 @@ import { TeamMemberAvatar, TeamMemberIdentity } from './TeamMemberIdentity';
 import { teamAvatarShape, teamAvatarShapes, teamMemberLabel, teamMessageIdentity, teamMessageAuthor } from './team-identity';
 import { teamResearchDeliveries, TeamResearchDeliveries, type TeamResearchDelivery } from './TeamResearchDeliveries';
 import { TeamFollowUps, TeamResultHandoff } from './TeamResultHandoff';
+import { finalPackage, TeamFinalPackageReading } from './TeamFinalPackageReading';
 import {deliveryReading,TeamDeliveryWorkers} from './TeamDeliveryWorkers';
 import { teamFollowUpFocus, teamFollowUps, teamResultReading, type AttentionFocus, type TeamFollowUp } from './team-result-reading';
 import { teamCanPause, teamCanResume, teamGoalTitle, teamHasEnded, teamNeedsAttention, teamPhaseLabel, teamProgressLabel, teamRoleLabel, teamStatusLabel as status, teamTimeLabel } from './team-presentation';
@@ -409,6 +410,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const isCurrentQuestion = (message: Data) => message.kind === 'assignment_question' && message.state === 'pending' && activeQuestionKeys.has(questionKey(message));
   const workItems = rows(object(current?.workPlan).items);
   const deliveryWorkers=deliveryReading(reading?.deliveryWorkers,current?.id);
+  const teamPackage=current&&reading?.viewHandle?finalPackage(reading.finalProjectPackage,current.id):null;
   const pendingFinal=deliveryWorkers?.resourcesReleased===false;
   const revisionRequest=object(current?.workPlan).lastRevisionRequestId;
   const hasFrozenRevision=!!revisionRequest&&rows(current?.parentRequests).some(p=>p.kind==='revision_proposal'&&p.state==='applied_to_work_revision'&&p.revisionRequestId===revisionRequest);
@@ -893,6 +895,9 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
             expanded={!!shownMemberSources[current.id]} onExpanded={value=>setShownMemberSources(old=>({...old,[current.id]:value}))}/> : undefined} stopped={current.status === 'cancelled'}
             actions={{ items: followUps, read: openFollowUp, disabled: !canRead || materialBusy, expanded: !!allResultActions[current.id],
               toggle: () => setAllResultActions(old => ({ ...old, [current.id]: !old[current.id] })) }}
+            finalPackageReader={teamPackage&&reading&&workspaceActive&&runSection==='result'&&bridge.getState().capabilities.commands.includes('teams.readFinalPackageFiles')
+              ? <TeamFinalPackageReading key={reading.viewHandle+':'+teamPackage.operationId} item={teamPackage} handle={reading.viewHandle} disabled={!canRead||materialBusy}
+                  live={()=>ownsNativeWindow()&&currentReading.current?.viewHandle===reading.viewHandle&&currentReading.current?.run?.id===teamPackage.teamRunId}/> : undefined}
             openOriginalReview={current.status === 'awaiting_review' && reading?.taskId ? openAwaitingReview : undefined}
             openMembers={() => { setResultSource(resultOrigin('members')); jumpToRunSection('members'); }}
             openMessage={id => { setResultSource(resultOrigin('summary-original')); focusMessage(id); }}/>

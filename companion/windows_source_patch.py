@@ -188,13 +188,14 @@ def output_names(ctx,op,rid,slot,*,added,bundle=False,removed=False,draft=False)
     return PROFILE,_slot(op,slot),_receipt(rid),_target(ctx,rid)
 
 
-def checked_output(ctx,op,row,locked,*,show,added,bundle=False,content=False,removed=False,draft=False):
+def checked_output(ctx,op,row,locked,*,show,added,bundle=False,content=False,removed=False,draft=False,hold=None):
     # The caller has checked its own immutable slot/schema. Single-file variants use
     # the same exact-file check and fixed safe filename but separate banks.
     rid,f=row["id"],row["fields"]
     profile,_,receipt,base=output_names(ctx,op,rid,0,added=added,bundle=bundle,removed=removed,draft=draft)
     filename=SET_FILE if bundle else FILENAME
-    if row.get("format")!=profile or locked() or content and (show or bundle): _bad()
+    if (row.get("format")!=profile or locked() or content and (show or bundle)
+            or hold is not None and (not isinstance(hold,ExitStack) or not draft or not content)): _bad()
     end=_read(ctx,receipt,4096)
     if end is None: return "pending"
     if (end.get("format")!=profile or end.get("id")!=rid or end.get("copy")!=op or end.get("patchSha")!=f["patchSha"]
@@ -205,6 +206,7 @@ def checked_output(ctx,op,row,locked,*,show,added,bundle=False,content=False,rem
         fixed=_read_file(ctx,tree,stack,end["file"],f,bundle=bundle,content=content)
         if content:
             if locked(): _bad()
+            if hold is not None: hold.enter_context(stack.pop_all())  # same original read-only handles, never reopen by name
             return fixed[1]  # original single patch from the SAME physically checked read
         if show:
             # Don't open a private state parent, an unknown sibling or an association.

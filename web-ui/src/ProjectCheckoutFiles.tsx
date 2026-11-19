@@ -2,6 +2,7 @@ import type { HostEditorFile } from './ProjectHostFileComparison';
 import { useEffect, useRef, useState } from 'react';
 import { Accordion, AccordionItem, Button, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { InlineDiff } from './shell-library';
+import {checkoutEditorSelection,ProjectCheckoutTextSearch} from './ProjectCheckoutTextSearch';
 import {ProjectCheckoutPathSearch} from './ProjectCheckoutPathSearch';
 import { bridge } from './bridge';
 import type { SourceMember } from './project-preview';
@@ -21,7 +22,8 @@ const failureText = (error: unknown) => error instanceof Error ? error.message :
 
 export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, onClose, registerBack, sourceMember, hostFile }: Props) {
   const [listing, setListing] = useState<Data | null>(null), [file, setFile] = useState<Data | null>(null), [text, setText] = useState('');
-  const [finding,setFinding]=useState(false);
+  const [finding,setFinding]=useState(false),[finder,setFinder]=useState<'path'|'text'>('path');
+  const editorContainer=useRef<HTMLElement>(null);
   const [newPath, setNewPath] = useState(''), [busy, setBusy] = useState(false), [editing, setEditing] = useState(false), [error, setError] = useState('');
   const [treeOpen, setTreeOpen] = useState(true), [reviewed, setReviewed] = useState(false);
   const editorHeading = useRef<HTMLHeadingElement>(null);
@@ -38,6 +40,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     if (value.projectId !== projectId || value.checkoutId !== checkoutId || value.filesHandle !== handle.current) throw new Error('回执不属于这个原私人副本。');
     const next = { ...(currentFile.current?.fileHandle === value.fileHandle ? currentFile.current : {}), ...value };
     if (body) for (const key of ['saveStatus', 'message', 'saveError', 'importStatus', 'importReceipt', 'importMessage', 'importError', 'projectListRefreshMessage']) if (!(key in value)) delete next[key];
+    if (!('sourceHit' in value)) delete next.sourceHit;
     if (!('formalFile' in value)) delete next.formalFile;
     currentFile.current = next; setFile(next);
     if (body && typeof value.text === 'string') {
@@ -134,6 +137,13 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     const timer = window.setTimeout(() => setAdoptionExpired(true), remaining); return () => window.clearTimeout(timer);
   }, [adoption]);
   const locked = busy || editing || !!adoption, nativeText = file?.text || '';
+  const canFindText=['findText','findTextNext','readTextHit'].every(a=>bridge.getState().capabilities.commands.includes(command+a));
+  const sourceHit=file?.sourceHit,anchorable=!!(sourceHit&&file&&file.path===sourceHit.path&&file.latest?.expectedHash===sourceHit.sha256&&
+    !file.dirty&&!file.saveUnknown&&!file.conflict&&orphan===null&&typeof file.latest?.content==='string'&&text===file.latest.content);
+  const savedSource=typeof file?.latest?.content==='string'&&sourceHit&&file.latest.expectedHash===sourceHit.sha256?file.latest.content as string:null;
+  const savedExcerpt=!anchorable&&sourceHit&&savedSource!==null&&savedSource.slice(sourceHit.start,sourceHit.end)===sourceHit.query?
+    savedSource.slice(Math.max(savedSource.lastIndexOf('\n',sourceHit.start-1)+1,sourceHit.start-70),sourceHit.start)+sourceHit.query+
+      savedSource.slice(sourceHit.end,sourceHit.end+100).split('\n',1)[0]:null;
   const backLabel = sourceMember ? '返回原工作' : hostFile ? '返回本机项目' : '返回项目目标';
   const formalLink = (pin: Data | undefined, evidence: 'import_receipt' | 'equal_content') => {
     if (!file || !pin || pin.evidence !== evidence || pin.projectId !== projectId || pin.checkoutId !== checkoutId || pin.path !== file.path ||
@@ -151,7 +161,18 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     {!listing ? <Button variant="secondary" disabled={busy} onClick={() => void openFiles()}>{busy ? '正在核对原副本…' : '重新读取副本文件'}</Button> : <>
       {sourceMember || hostFile ? !file && <div><p dir="auto">{(sourceMember || hostFile)!.path}</p><Button variant="secondary" disabled={locked} onClick={() => void readFile((sourceMember || hostFile)!.path)}>{busy ? '正在读取同一文件…' : '重读原副本中的这个文件'}</Button></div> : <Accordion expandedKeys={new Set(treeOpen ? ['checkout-tree'] : [])} onExpandedChange={keys => setTreeOpen(Array.from(keys).includes('checkout-tree'))}><AccordionItem id="checkout-tree" title={file ? '切换文件或新建' : '选择要编辑的文件'} description={`${listing.fileCount} 个实际源码文件；另列保留草稿`}>
         {listing.draftError && <p role="alert">{listing.draftError}</p>}
-        {['find','findNext','readFound'].every(a=>bridge.getState().capabilities.commands.includes(command+a))&&<ProjectCheckoutPathSearch project={projectId} checkout={checkoutId}
+        {canFindText&&<div role="group" aria-label="按什么查找" className="pw-form-actions">{(['path','text'] as const).map(v=><Button key={v}
+          size="small" variant={finder===v?'secondary':'ghost'} aria-pressed={finder===v} disabled={locked} onClick={()=>{if(v!==finder){setFinding(false);setFinder(v)}}}>
+          {v==='path'?'文件名':'代码文字'}</Button>)}</div>}
+        {finder==='text'&&canFindText&&<ProjectCheckoutTextSearch project={projectId} checkout={checkoutId} filesHandle={handle.current} busy={locked} visible={setFinding} invoke={invoke}
+          open={(textHandle,hit,row,query)=>void invoke('readTextHit',{textHandle,hit},v=>{
+            const a=v.sourceHit;
+            if(!a||v.path!==row.path||a.path!==row.path||a.sha256!==row.sha256||a.line!==row.line||a.column!==row.column||a.query!==query||
+              v.latest?.expectedHash!==row.sha256||v.latest?.deleted!==false||typeof v.latest.content!=='string'||!Number.isSafeInteger(a.start)||!Number.isSafeInteger(a.end)||
+              a.start<0||a.end>v.latest.content.length||a.end-a.start!==query.length||v.latest.content.slice(a.start,a.end)!==query)throw Error('不能核对这行代码的原版，未定位到替代文件。');
+            setChoice(null);setAdoption(null);apply(v);setTreeOpen(false);requestAnimationFrame(()=>{editorHeading.current?.scrollIntoView({block:'nearest'});editorHeading.current?.focus({preventScroll:true})});
+          })}/>}
+        {finder==='path'&&['find','findNext','readFound'].every(a=>bridge.getState().capabilities.commands.includes(command+a))&&<ProjectCheckoutPathSearch project={projectId} checkout={checkoutId}
           filesHandle={handle.current} busy={locked} visible={setFinding} invoke={invoke} open={(searchHandle,hit)=>void invoke('readFound',{searchHandle,hit:hit.hit},v=>{
             if(v.path!==hit.path||v.matchedFileSha256!==hit.sha256||v.filesHandle!==handle.current||v.projectId!==projectId||v.checkoutId!==checkoutId)throw Error('不能核对命中的原文件，未打开其他路径。');
             setChoice(null);setAdoption(null);apply(v);setTreeOpen(false);requestAnimationFrame(()=>{editorHeading.current?.scrollIntoView({block:'nearest'});editorHeading.current?.focus({preventScroll:true})});
@@ -163,7 +184,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
         <TextField label="相对文件路径" value={newPath} onChange={setNewPath} isDisabled={locked} hint="例如 index.html 或 src/main.ts；不操作运行缓存和 Git 内部目录。" />
         <Button variant="secondary" disabled={locked || !newPath.trim()} onClick={() => void readFile(newPath.trim())}>打开或准备新文件草稿</Button>
       </AccordionItem></Accordion>}
-      {file && <section className="pw-checkout-editor"><header><h3 ref={editorHeading} tabIndex={-1}>{file.path}</h3><small>{file.baseHash === 'absent' ? '文件尚未存在' : '来自此副本的实际文件'} · {file.dirty ? '有未保存修改' : '没有未保存修改'}</small></header>
+      {file && <section ref={editorContainer} className="pw-checkout-editor"><header><h3 ref={editorHeading} tabIndex={-1}>{file.path}</h3><small>{file.baseHash === 'absent' ? '文件尚未存在' : '来自此副本的实际文件'} · {file.dirty ? '有未保存修改' : '没有未保存修改'}</small></header>
         {sourceMember && !reviewed ? <div>
           <p role="status">{file.latest.expectedHash === sourceMember.fileSha256 ? '刚读取的副本与任务当时保存的内容一致。' : '副本在交付后已改变。编辑的是当前副本，不会用旧包覆盖它。'}
             {(file.dirty || orphan !== null) && ' 此文件另有未保存草稿，进入编辑后可核对。'}</p>
@@ -173,6 +194,14 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
           <Button disabled={locked} onClick={() => setReviewed(true)}>编辑当前副本</Button>
         </div> : <>
         {orphan !== null && <div role="alert"><p>上次界面文字尚未确认缓存，与手机恢复的草稿不同。下面保留的是界面文字，选择前不会替换任一份。</p><InlineDiff before={nativeText} after={orphan} versionLabel="手机恢复的草稿" /><div className="pw-form-actions"><Button variant="secondary" disabled={locked} onClick={() => { const retained = orphan; blockedEdit.current = true; setOrphan(null); currentText.current = retained; setText(retained); /* explicit cache edit, never a source write */ const sequence = ++editSequence.current; void invoke('edit', { fileHandle: file.fileHandle, editSequence: sequence, text: retained }, value => { blockedEdit.current = false; apply({ ...value, text: retained }, false); }); }}>保留界面文字为草稿</Button><Button variant="secondary" disabled={locked} onClick={() => { interfaceDrafts.delete(keyFor(file.path)); setOrphan(null); currentText.current = nativeText; setText(nativeText); }}>采用已恢复的手机草稿</Button></div></div>}
+        {sourceHit&&<div><p role="status">已核对已保存文件第 {sourceHit.line} 行、第 {sourceHit.column} 列的「{sourceHit.query}」。
+          {(!anchorable)&&' 当前显示保留的草稿，不把已保存版本的行号套用到草稿。'}</p>
+          {savedExcerpt!==null&&<p className="pw-field-hint">已保存的行片段：<code dir="auto">{savedExcerpt}</code></p>}
+          {anchorable&&<Button size="small" variant="secondary" disabled={locked} onClick={()=>{
+            const area=editorContainer.current?.querySelector('textarea'),range=area&&checkoutEditorSelection(file.latest.content,sourceHit,area.value);
+            if(!area||!range){setError('编辑框和已读取的版本不一致，没有替你移动光标。');return}
+            area.focus();area.setSelectionRange(...range);
+          }}>在编辑框选中这一处</Button>}</div>}
         <TextAreaField label="副本文件内容" value={text} onChange={edit} isReadOnly={busy || !!adoption || orphan !== null} className="pw-code-editor" />
         {(file.conflict || file.saveUnknown) && <p role="status">{file.saveUnknown ? '保存结果待核对，请读取同一文件。' : '副本文件与保留草稿的基线不同。请比较后决定，未自动覆盖。'}</p>}
         <Accordion><AccordionItem id="checkout-file-diff" title="比较保留的修改"><InlineDiff before={file.baseContent || ''} after={text} versionLabel="草稿原基线" />{file.latest && file.conflict && <><h4>当前副本与保留草稿</h4><InlineDiff before={file.latest.content || ''} after={text} versionLabel="刚读取的副本" /></>}</AccordionItem></Accordion>

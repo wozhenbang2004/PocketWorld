@@ -46,7 +46,7 @@ final class DeviceWorkspaceGrantOwner {
     JSONObject inputs(String peerId) throws Exception {
         boolean firstPair = owner.trust.peer(peerId) == null, workScopesUnavailable = false;
         Catalog catalog; JSONArray options;
-        try { catalog = catalog(peerId); options = owner.localGrantOptions(); }
+        try { catalog = catalog(peerId, null); options = owner.localGrantOptions(); }
         catch (Exception unavailable) {
             if (!firstPair) throw unavailable;
             // No application, forwarding, model or screen catalogue may be required for identity-only pairing.
@@ -70,7 +70,8 @@ final class DeviceWorkspaceGrantOwner {
         return result;
     }
     JSONObject decorate(JSONObject view, String peerId) throws Exception { JSONObject inputs = inputs(peerId); for (String key : DeviceProtocol.objectKeys(inputs)) view.put(key, inputs.get(key)); return view; }
-    private Catalog catalog(String peerId) throws Exception {
+    // null = local candidates only; empty = direct grant review. Only explicitly chosen local candidates may trigger a read.
+    private Catalog catalog(String peerId, List<String> selected) throws Exception {
         Catalog result = new Catalog(); DeviceIdentity.LocalIdentity local = owner.existingIdentity();
         JSONObject snapshot = owner.trust.workspaceSnapshot(System.currentTimeMillis()); result.partialOrigins = snapshot.optBoolean("hasMore"); JSONArray peers = snapshot.getJSONArray("devices");
         for (int i = 0; i < peers.length(); i++) {
@@ -80,20 +81,46 @@ final class DeviceWorkspaceGrantOwner {
             String option = "origin_" + DeviceProtocol.sha256(DeviceProtocol.canonicalBytes(new JSONObject().put("deviceId", id).put("fingerprint", original.getString("fingerprint")).put("instanceId", original.getString("instanceId")))); result.origins.put(option, original);
         }
         result.partialForwards = owner.network.hasMoreOutgoingGrants();
-        // The original phone-domain producer owns capability/version/effect matching. It emits
-        // private native RouteOptions, not UI JSON, and never constructs a second task/Runner.
-        for (NativeDeviceTaskScopeHost.RouteOption route : owner.taskScopeHost().forwardingOptions()) {
-            PairingCoordinator.OutgoingGrant grant = route.receivingGrant(); JSONObject body = grant.grant();
-            if (grant.targetDeviceId().equals(peerId) || !PairingCoordinator.contains(body.getJSONArray("allowedOrigins"), peerId) || !body.optBoolean("allowDelegation") || body.optInt("maxDelegationDepth") < 2) continue;
-            JSONObject resource = route.resourceBinding();
-            String option = "forward_" + DeviceProtocol.sha256(DeviceProtocol.canonicalBytes(new JSONObject().put("targetDeviceId", grant.targetDeviceId()).put("resourceBinding", resource).put("grantId", grant.grantId()).put("epoch", grant.authorizationEpoch())));
-            if (!result.forwards.containsKey(option) && result.forwards.size() >= 16) { result.partialForwards = true; continue; }
+        if(selected!=null && selected.isEmpty())return result;
+        Map<String,Forward> candidates=new LinkedHashMap<>();
+        for(PairingCoordinator.OutgoingGrant grant:owner.nativeOutgoingGrants()){
+            JSONObject body=grant.grant(), peer=owner.trust.peer(grant.targetDeviceId());
+            if(peer==null || peer.optBoolean("revoked",true) || !grant.isOriginalTarget(grant.targetDeviceId(),peer.optString("instanceId"),peer.optString("fingerprint"))
+                    || grant.targetDeviceId().equals(peerId) || !PairingCoordinator.contains(body.getJSONArray("allowedOrigins"),peerId)
+                    || !body.optBoolean("allowDelegation") || body.optInt("maxDelegationDepth")<2
+                    || !(PairingCoordinator.contains(body.getJSONArray("capabilities"),"tool.invoke")||PairingCoordinator.contains(body.getJSONArray("capabilities"),"task.submitGoal")))continue;
+            JSONArray resources=body.getJSONArray("resources");
+            for(int i=0;i<resources.length();i++){
+                JSONObject resource=resources.getJSONObject(i);
+                String key=forwardKey(grant,peer.getString("fingerprint"),resource);
+                if(!candidates.containsKey(key) && candidates.size()>=16){result.partialForwards=true;continue;}
+                candidates.put(key,new Forward(grant,resource,new JSONArray(),new JSONArray()));
+            }
+        }
+        if(selected==null){result.forwards.putAll(candidates);return result;} // not a checked or signable downstream capability
+        Set<PairingCoordinator.OutgoingGrant> chosen=new LinkedHashSet<>();
+        for(String key:selected){
+            Forward candidate=candidates.get(key);
+            if(candidate==null)throw new SecurityException("所选转交设备、证书或授权范围已变化，未读取其他设备");
+            chosen.add(candidate.grant);
+        }
+        // Only the existing producer may intersect live target capabilities with the original grant.
+        // Empty/unavailable results are NOT replaced by local candidates.
+        for(NativeDeviceTaskScopeHost.RouteOption route:owner.taskScopeHost().forwardingOptionsFor(new ArrayList<>(chosen))){
+            PairingCoordinator.OutgoingGrant grant=route.receivingGrant();JSONObject peer=owner.trust.peer(grant.targetDeviceId());
+            if(peer==null || peer.optBoolean("revoked",true) || !grant.isOriginalTarget(grant.targetDeviceId(),peer.optString("instanceId"),peer.optString("fingerprint")))continue;
+            JSONObject resource=route.resourceBinding();String option=forwardKey(grant,peer.getString("fingerprint"),resource);
+            if(!selected.contains(option)||candidates.get(option)==null||candidates.get(option).grant!=grant)continue;
             Set<String> tools = new LinkedHashSet<>(), methods = new LinkedHashSet<>(); Forward previous = result.forwards.get(option);
             if (previous != null) { for (int i = 0; i < previous.tools.length(); i++) tools.add(previous.tools.getString(i)); for (int i = 0; i < previous.capabilities.length(); i++) methods.add(previous.capabilities.getString(i)); }
             tools.addAll(route.toolEffects().keySet()); methods.add(route.kind().equals("goal") ? "task.submitGoal" : "tool.invoke");
             result.forwards.put(option, new Forward(grant, resource, new JSONArray(tools), new JSONArray(methods)));
         }
         return result;
+    }
+    private static String forwardKey(PairingCoordinator.OutgoingGrant grant,String fingerprint,JSONObject resource)throws Exception{
+        return "forward_"+DeviceProtocol.sha256(DeviceProtocol.canonicalBytes(new JSONObject().put("targetDeviceId",grant.targetDeviceId()).put("instanceId",grant.targetInstanceId())
+                .put("fingerprint",fingerprint).put("resourceBinding",resource).put("grantId",grant.grantId()).put("epoch",grant.authorizationEpoch())));
     }
     Review review(String peerId, NativeDeviceWorkspaceHost.GrantChoice choice) throws Exception {
         if (DevicePairVisibility.OPTION.equals(choice.optionId)) {
@@ -104,12 +131,13 @@ final class DeviceWorkspaceGrantOwner {
         }
         // Local resource/options resolve independently; extras below cannot create local capability.
         NativeDeviceWorkspaceHost.GrantChoice local = new NativeDeviceWorkspaceHost.GrantChoice(choice.optionId, choice.toolBudget, choice.modelBudget, choice.expiresAt, false, 0, choice.historyReadExpiresAt, choice.historyReadMethods, java.util.Collections.emptyList(), java.util.Collections.emptyList(), 0, 0, choice.wholeDisplayCapture);
-        JSONObject grant = owner.reviewLocalGrantFor(peerId, local); Catalog catalog = catalog(peerId); Map<String, JSONObject> origins = new LinkedHashMap<>(); JSONArray allowed = grant.getJSONArray("allowedOrigins");
+        JSONObject grant = owner.reviewLocalGrantFor(peerId, local);
         if(PairingCoordinator.contains(grant.getJSONArray("toolNames"),DeviceScheduleDrafts.PROPOSE)&&(!choice.additionalOriginOptionIds.isEmpty()||!choice.forwardingOptionIds.isEmpty()))throw new SecurityException("计划草稿只授予本次直接配对设备，不接受转交或下游范围");
+        if(!choice.forwardingOptionIds.isEmpty()&&(!PairingCoordinator.contains(grant.getJSONArray("capabilities"),"task.submitGoal")||choice.toolBudget<1||choice.modelBudget<1||choice.forwardingToolBudget+choice.forwardingModelBudget<1))throw new SecurityException("继续委派需要本机目标处理、协调工具和有限次数");
+        Catalog catalog=catalog(peerId,choice.forwardingOptionIds);Map<String,JSONObject> origins=new LinkedHashMap<>();JSONArray allowed=grant.getJSONArray("allowedOrigins");
         for (String id : choice.additionalOriginOptionIds) { JSONObject peer = catalog.origins.get(id); if (peer == null) throw new SecurityException("转交来源不再是本机已认证的选项"); origins.put(id, peer); allowed.put(peer.getString("deviceId")); }
         List<PairingCoordinator.OutgoingGrant> nativeGrants = new ArrayList<>();
         if (!choice.forwardingOptionIds.isEmpty()) {
-            if (!PairingCoordinator.contains(grant.getJSONArray("capabilities"), "task.submitGoal") || choice.toolBudget < 1 || choice.modelBudget < 1 || choice.forwardingToolBudget + choice.forwardingModelBudget < 1) throw new SecurityException("继续委派需要本机目标处理、协调工具和有限次数");
             JSONArray pairs = new JSONArray(); Set<String> tools = new LinkedHashSet<>(), methods = new LinkedHashSet<>();
             for (String id : choice.forwardingOptionIds) {
                 Forward target = catalog.forwards.get(id); if (target == null) throw new SecurityException("下游设备或来源授权已变化，请重新核对"); target.grant.checkCurrent(System.currentTimeMillis()); nativeGrants.add(target.grant);

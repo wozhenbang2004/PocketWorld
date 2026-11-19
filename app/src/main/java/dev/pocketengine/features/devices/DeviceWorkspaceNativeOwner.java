@@ -47,6 +47,7 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
         taskScopeHost = new NativeDeviceTaskScopeHost(tasks, new NativeDeviceTaskScopeHost.NativeOptionSource() {
             public Iterable<PairingCoordinator.OutgoingGrant> originalOutgoingGrants() throws Exception { return nativeOutgoingGrants(); }
             public JSONObject authenticatedCapabilities(String id) throws Exception { return DeviceWorkspaceNativeOwner.this.authenticatedCapabilities(id); }
+            public JSONObject authenticatedCapabilities(PairingCoordinator.OutgoingGrant original)throws Exception{return network.readFreshAuthenticatedCapabilities(original);}
             public dev.pocketengine.features.local.LocalModule localModule(){return app.features.module("local") instanceof dev.pocketengine.features.local.LocalModule local?local:null;}
             public dev.pocketengine.features.attachments.AttachmentBook attachmentBook(){return dev.pocketengine.features.attachments.AttachmentRepository.get(app).book;}
             public void sendSelectedFile(DeviceIdentity.AuthenticatedPeer peer,java.util.UUID transfer,long offset,byte[] bytes,long deadline,dev.pocketengine.features.devices.transport.DeviceArtifactTransfer.Current current)throws Exception{

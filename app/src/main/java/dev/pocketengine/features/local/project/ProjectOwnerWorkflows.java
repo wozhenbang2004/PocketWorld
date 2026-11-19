@@ -72,6 +72,10 @@ public final class ProjectOwnerWorkflows {
         requireOrdinaryFileOwner(project,checkout);return local.compareSavedHostSourceForOwner(project,checkout,evidence,current);
     }
     public JSONObject filesForOwner(String project,String checkout)throws Exception {requireOrdinaryFileOwner(project,checkout);return local.handle("changes",new JSONObject().put("checkoutId",checkout));}
+    public CheckoutTextMatches findTextForOwner(String project,String checkout,String literal,CheckoutTextMatches previous,java.util.function.BooleanSupplier current)throws Exception{
+        requireOrdinaryFileOwner(project,checkout);CheckoutTextMatches found=local.findDevelopmentTextForOwner(project,checkout,literal,previous,current);
+        requireOrdinaryFileOwner(project,checkout);return found;
+    }
     public JSONObject fileForOwner(String project,String checkout,String path)throws Exception {requireOrdinaryFileOwner(project,checkout);return local.readDevelopmentFileForOwner(project,checkout,path);}
     public JSONObject saveFileForOwner(ProjectFileDraft.SaveIntent intent,java.util.function.BooleanSupplier current)throws Exception {requireOrdinaryFileOwner(intent.projectId,intent.checkoutId);return local.saveDevelopmentFileForOwner(intent,current);}
     public JSONObject reviewFileImportForOwner(String project,String checkout,String path)throws Exception {

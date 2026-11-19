@@ -145,3 +145,5 @@
 保留的文字草稿落后于正式文件时，可在原项目、同一路径核对旧版本、当前正式版本和所选稿。从可定位的未冲突分段中明确选择后，只放入干净的当前编辑草稿；已有冲突、重复定位、历史断层、删除重建与非文字都不自动采用。最终仍需独立保存正式版本，不通过云或另一部设备传输。
 
 在普通私人开发副本中，输入部分文件名/路径即可在该次完整文件清单中查找并按页看结果，也可仅看实际新增/修改；不把正文交给模型。命中文件打开时守住相同副本、路径和字节 SHA，已移除不会变成新文件草稿。单个原任务或主机文件入口不放大范围。参考 [DSH-Go 固定工作区查找](https://github.com/ccch1mneyyy/dsh-Go/blob/9ad11167c53a5da12ff8791c21f4327f5d8a9a25/app/lib/ui/files/workspace_browser.dart) 与 [Operit 按原环境读取目录](https://github.com/AAswordman/Operit/blob/7a39941bad80209973c535046a18195c5da9e647/app/src/main/java/com/ai/assistance/operit/ui/features/chat/webview/workspace/FileManager.kt#L187-L203)；保留 PocketWorld 原草稿及审阅保存边界。
+
+普通私人副本 → 文件 →「代码文字」由主人显式查找已保存 UTF-8 源码：固定字面、区分大小写、每行首次命中，复用本机 `ProjectFileQueries.search` 的隐藏/依赖/构建产物排除与 2,000 文件、16 MiB 覆盖回执。只有原查询游标可翻页；打开时复核同一路径、源码 SHA 与原行列，另有未保存草稿不套用行号。单文件任务入口不能从这里扩大到整份副本，不向模型/主机传输，不执行代码。

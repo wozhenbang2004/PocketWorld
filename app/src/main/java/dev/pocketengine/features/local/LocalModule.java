@@ -4,6 +4,7 @@ import dev.pocketengine.features.EngineModule;
 import dev.pocketengine.features.FeatureContext;
 import dev.pocketengine.features.workspace.JsonFiles;
 import dev.pocketengine.features.workspace.VersionedWorkspace;
+import dev.pocketengine.features.local.project.CheckoutTextMatches;
 import dev.pocketengine.features.local.project.ProjectDevelopment;
 import dev.pocketengine.features.local.project.ProjectSources;
 import dev.pocketengine.features.local.project.ProjectFileBytes;
@@ -1173,6 +1174,12 @@ public final class LocalModule implements EngineModule {
         File target=NativeCommandExecutor.within(content(id),VersionedWorkspace.path(path));
         if(target.exists())return read(id,path).put("deleted",false);
         return new JSONObject().put("checkoutId",id).put("path",path).put("content","").put("sha256","absent").put("bytes",0).put("deleted",true);
+    }
+    /** Only foreground owner text navigation; no command, task grant or remote host. */
+    public CheckoutTextMatches findDevelopmentTextForOwner(String project,String id,String literal,CheckoutTextMatches previous,java.util.function.BooleanSupplier owner)throws Exception{
+        final File selected;synchronized(this){if(closed||!project.equals(checkout(id).getString("projectId")))throw new SecurityException("原私人副本项目已变化");selected=content(id);}
+        dev.pocketengine.features.local.project.ProjectFileQueries.Current current=()->{if(closed||Thread.currentThread().isInterrupted()||!owner.getAsBoolean())throw new java.io.InterruptedIOException("原副本搜索已过期或关闭，请在原文件窗口重新查找");};
+        current.check();return CheckoutTextMatches.find(selected,project,id,literal,previous,current);
     }
     /** Native owner editor reads the active private tree, not the separately
      * versioned project. A missing source path is an explicit new-file draft. */

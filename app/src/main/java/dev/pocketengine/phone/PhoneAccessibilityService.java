@@ -417,8 +417,7 @@ public final class PhoneAccessibilityService extends AccessibilityService {
             status.setMaxWidth(Math.max(1, Math.min(dp(280), getResources().getDisplayMetrics().widthPixels - dp(32))));
             status.setText(runControl.isPaused() ? "已请求暂停，返回应用查看状态" : shortText(goal, 100));
             details.addView(status);
-            LinearLayout actions = new LinearLayout(this);
-            actions.setGravity(Gravity.CENTER_VERTICAL);
+            OwnerOverlayActionBar actions = new OwnerOverlayActionBar(this);
             Button grip = button("任务 ▾");
             controlGrip = grip;
             grip.setContentDescription("拖动可移动手机任务控制条；点击展开操作");
@@ -447,9 +446,7 @@ public final class PhoneAccessibilityService extends AccessibilityService {
             back.setOnClickListener(v -> {if(ownerControls==bound&&visible&&bound.holdForReturn()){
                 refreshOwnerControls(bound,goal);openOriginalOwnerReview(bound,app);
             }});
-            actions.addView(grip);
-            actions.addView(ownerActionSlot);
-            actions.addView(stop);
+            actions.bind(grip,ownerActionSlot,stop);
             panel.addView(actions);
             LinearLayout more = new LinearLayout(this);
             more.addView(back);

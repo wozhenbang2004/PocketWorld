@@ -4,6 +4,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import dev.pocketengine.core.RunControl
+import dev.pocketengine.features.local.project.CheckoutTextMatches
 import dev.pocketengine.features.local.project.CheckoutPathMatches
 import dev.pocketengine.features.local.project.ProjectFileDraft
 import dev.pocketengine.ui.ProjectAdoptedFormalFile
@@ -20,6 +21,8 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
     private class Page(val handle: String, val project: String, val checkout: String, val parentCurrent: () -> Boolean, val sourcePath: String? = null, @Volatile var initialPhoneSha: String? = null) {
         @Volatile var matches: CheckoutPathMatches? = null
         @Volatile var matchesUntil: Long = 0
+        @Volatile var textPage: CheckoutTextMatches? = null
+        @Volatile var textUntil: Long = 0
         var opened: Opened? = null
         var adoption: Adoption? = null
     }
@@ -35,11 +38,12 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
     private var busy = false
     companion object {
         val COMMANDS = setOf("projects.development.files.open", "projects.development.files.openSource", "projects.development.files.openHostChange", "projects.development.files.list", "projects.development.files.find", "projects.development.files.findNext", "projects.development.files.readFound", "projects.development.files.read",
+            "projects.development.files.findText", "projects.development.files.findTextNext", "projects.development.files.readTextHit",
             "projects.development.files.edit", "projects.development.files.save", "projects.development.files.resolve",
             "projects.development.files.cache", "projects.development.files.close", "projects.development.files.reviewImport",
             "projects.development.files.import", "projects.development.files.dismissImport", "projects.development.files.openFormal")
     }
-    fun clear() { val old = page; page = null; busy = false;old?.matches=null; old?.opened?.let { store.release(it.draft) } }
+    fun clear() { val old = page; page = null; busy = false;old?.matches=null; old?.textPage=null; old?.opened?.let { store.release(it.draft) } }
     private fun current(original: Page) = page === original && original.parentCurrent() && controller.webPrivateOwnerVisible() && controller.state.projectId == original.project
     private fun fields(args: JSONObject, vararg allowed: String) = require(args.keys().asSequence().all { it in allowed }) { "副本文件操作包含未声明字段" }
     private fun text(args: JSONObject, key: String, max: Int = 80, blank: Boolean = false): String {
@@ -50,6 +54,12 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
     }
     private fun selected(args: JSONObject): Page {
         val original = page; check(original != null && current(original) && original.handle == text(args, "filesHandle")) { "原私人副本文件窗口已关闭，请重新打开" }; return original
+    }
+    private fun textPage(original: Page,args: JSONObject): CheckoutTextMatches {
+        check(original.sourcePath==null && SystemClock.elapsedRealtime()<original.textUntil){"原副本搜索已结束，请重新查找"}
+        val value=original.textPage
+        check(value!=null && value.handle==text(args,"textHandle")){"请重新打开这次搜索的原页"}
+        return value
     }
     private fun opened(original: Page, args: JSONObject): Opened {
         val file = original.opened; check(file != null && file.handle == text(args, "fileHandle")) { "原文件已切换，请重新读取" }; return file
@@ -241,19 +251,43 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                     }
                 }
             }
-            "projects.development.files.read", "projects.development.files.readFound" -> {
+            "projects.development.files.findText", "projects.development.files.findTextNext" -> {
+                check(original.sourcePath==null){"原任务单文件入口不能搜索整个副本"}
+                val previous=if(action.endsWith(".findTextNext")){
+                    fields(args,"viewHandle","filesHandle","textHandle");textPage(original,args)
+                }else{fields(args,"viewHandle","filesHandle","query");null}
+                val literal=previous?.literal?:text(args,"query",128)
+                val until=SystemClock.elapsedRealtime()+60000
+                observe(original,done,{ found: CheckoutTextMatches ->
+                    original.textPage=found;original.textUntil=SystemClock.elapsedRealtime()+600000
+                    found.page().put("filesHandle",original.handle)
+                }){
+                    controller.projectDevelopmentForWeb().findTextForOwner(original.project,original.checkout,literal,previous) {
+                        current(original)&&SystemClock.elapsedRealtime()<until&&(previous==null||original.textPage===previous&&SystemClock.elapsedRealtime()<original.textUntil)
+                    }
+                }
+            }
+            "projects.development.files.read", "projects.development.files.readFound", "projects.development.files.readTextHit" -> {
+                val located=if(action.endsWith(".readTextHit")){
+                    fields(args,"viewHandle","filesHandle","textHandle","hit")
+                    val index=number(args,"hit");require(index in 0L until CheckoutTextMatches.PAGE.toLong())
+                    val source=textPage(original,args);source to source.selected(index.toInt())
+                }else null
                 val hit=if(action.endsWith(".readFound")){
                     check(original.sourcePath==null){"原任务只读所选文件"};fields(args,"viewHandle","filesHandle","searchHandle","hit")
                     val index=number(args,"hit");require(index in 0L..1999L);check(SystemClock.elapsedRealtime()<original.matchesUntil){"原查询已过期，请重新查找"}
                     (original.matches?:error("原查询已结束，请重新查找")).selected(text(args,"searchHandle"),index.toInt())
-                }else{fields(args, "viewHandle", "filesHandle", "path");null}
-                val path=hit?.path()?:text(args,"path",240)
+                }else{if(located==null)fields(args, "viewHandle", "filesHandle", "path");null}
+                val path=located?.second?.getString("path")?:hit?.path()?:text(args,"path",240)
                 if (original.sourcePath != null) {
                     check(path == original.sourcePath && !busy) { "只能重新核对已选择的原文件" }
                     original.opened?.let { store.release(it.draft) }; original.opened = null
                 }
                 work(original, done) {
                     val actual = controller.projectDevelopmentForWeb().fileForOwner(original.project, original.checkout, path)
+                    val anchor=located?.let{(source,selected)->
+                        check(textPage(original,args)===source){"原查询已经改变"};source.anchor(selected,actual)
+                    }
                     if(hit!=null){
                         check(SystemClock.elapsedRealtime()<original.matchesUntil&&actual.opt("projectId")==original.project&&actual.opt("checkoutId")==original.checkout){"原查询或副本已变化，请重新查找"}
                         CheckoutPathMatches.requireStillExact(hit,actual)
@@ -272,6 +306,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                     original.opened?.let { store.release(it.draft) }
                     val file = Opened(UUID.randomUUID().toString(), value); original.opened = file
                     val shown = info(original, file, true)
+                    if(anchor!=null)shown.put("sourceHit",anchor)
                     if(hit!=null)shown.put("matchedFileSha256",hit.sha())
                     original.initialPhoneSha = null // First real read succeeded. From here existing save CAS and adoption review govern this same path.
                     shown
