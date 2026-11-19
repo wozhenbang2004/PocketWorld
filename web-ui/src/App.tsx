@@ -538,11 +538,20 @@ export default function App(){
  const openModelSetup=async()=>{
   if(openingModelSetup.current||!can('setup.read'))return;
   const navigation=navigationWindow.current,documentEpoch=bridge.getDocumentEpoch(),conversation=state.conversationId;
+  const origin=captureWorkspaceOrigin(),selection=bridge.getState().state;
   openingModelSetup.current=true;setModelSetupOpening(true);
   try{
    const current=await bridge.command('setup.read').then(readSetup,()=>null).catch(()=>null);
-   if(document.hidden||navigationWindow.current!==navigation||bridge.getDocumentEpoch()!==documentEpoch||bridge.getState().state.conversationId!==conversation)return;
+   const live=bridge.getState();
+   if(document.hidden||navigationWindow.current!==navigation||bridge.getDocumentEpoch()!==documentEpoch||live.state.conversationId!==conversation)return;
    const pending=current?.preferences.status==='new'||current?.preferences.status==='in_progress';
+   // An unconfigured default is not an empty service list. The connection workspace reads both owners.
+   const stableSelection=selection.modelSelectionBusy===false&&live.state.modelSelectionBusy===false&&Number.isSafeInteger(selection.modelSelectionRevision)&&
+    selection.modelSelectionRevision>=0&&selection.modelSelectionRevision===live.state.modelSelectionRevision;
+   if(pending&&current?.model.availability==='unconfigured'&&!current.model.configured&&!current.model.testing&&stableSelection&&
+    !conversationModelName(live.state)&&live.capabilities.commands.includes('connections.enter')){
+    await openRelatedWorkspace('model-settings',origin);return;
+   }
    await openSetup(undefined,undefined,pending?'onboarding':'center');
   }finally{openingModelSetup.current=false;setModelSetupOpening(false);}
  };
@@ -1365,7 +1374,7 @@ export default function App(){
  const conversationWorkIds=new Set(conversationWorkRows.map(task=>task.id));
  const replyActivity=state.chatBusy&&!composerHasChatStop?<div className="pw-reply-activity-bar"><span>{state.chatActiveTurn?.resourceState==='queued'?'回复已排队':state.chatActiveTurn?.resourceState==='retained'?'回复等待补充':state.chatActiveTurn?.resourceState==='stopping'?'正在停止回复':'正在回复'}</span>{currentCancelIdentity&&can('chat.cancel')&&<Button variant="ghost" size="small" onClick={stopOriginalChat}>停止回复</Button>}</div>:null;
  const modelSetupAction=can('setup.read')
-  ? <Button variant="secondary" size="small" disabled={modelSetupOpening} onClick={()=>void openModelSetup()}>{modelSetupOpening?'正在读取接入状态…':'连接模型'}</Button>
+  ? <Button variant="secondary" size="small" data-workspace-entry="connect-model" disabled={modelSetupOpening} onClick={()=>void openModelSetup()}>{modelSetupOpening?'正在读取接入状态…':'连接模型'}</Button>
   : <ConversationModelStartButton/>;
  const composerRegion=<div className="pw-composer-region">
    {route==='butler'&&ready&&messages.length>0&&<div className="pw-butler-conversation-context"><Button variant="ghost" size="small" leadingIcon={IconChat} disabled={!state.conversationId} onClick={()=>navigate('chat')} aria-label={`继续话题：${currentConversation?.title||'当前对话'}`} title={currentConversation?.title||'当前对话'}><span>继续 · {currentConversation?.title||'当前对话'}</span><IconChevronRight size={15} aria-hidden="true"/></Button></div>}
