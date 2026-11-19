@@ -16,6 +16,7 @@ internal object PocketWebState {
     )
     private val imageFields = setOf("imagedataurl", "screenshotdataurl", "screenshotbase64")
     private val unscopedMemoryReads = setOf("memory.list", "memory.search")
+    private val scopedMemoryMirrors = setOf("memoryReview", "taskMemory")
 
     /** Preserve public object structure, but never return credential values or hidden host objects. */
     fun publicValue(value: Any?, images: Boolean = false, depth: Int = 0): Any {
@@ -163,11 +164,11 @@ internal object PocketWebState {
             .put("revisionLoading", state.revisionLoading).put("requestedProjectId", state.requestedProjectId ?: JSONObject.NULL)
             .put("requestedProjectRevision", state.requestedProjectRevision)
             .put("features", publicValue(state.features))
-            // The memory workspace reads its scoped command result. Publishing its native mirrors here
-            // would send complete source bodies before the selected page is checked and bounded.
-            .put("ownerSnapshots", JSONObject().also { out -> state.ownerSnapshots.forEach { (key, value) -> if (key != "memoryReview") out.put(key, publicValue(value)) } })
+            // Only the current checked memory window gets its result. Native audit mirrors may include
+            // full source bodies, even when the answer/history reader returned only one bounded page.
+            .put("ownerSnapshots", JSONObject().also { out -> state.ownerSnapshots.forEach { (key, value) -> if (key !in scopedMemoryMirrors) out.put(key, publicValue(value)) } })
             .put("ownerResponses", JSONObject().also { out -> state.ownerResponses.forEach { (domain, responses) ->
-                if (domain != "memoryReview") out.put(domain, JSONObject().also { result -> responses.forEach { (key, value) -> result.put(key, publicValue(value)) } })
+                if (domain !in scopedMemoryMirrors) out.put(domain, JSONObject().also { result -> responses.forEach { (key, value) -> result.put(key, publicValue(value)) } })
             } })
             .put("ownerPending", JSONArray(state.ownerPending.toList())).put("ownerErrors", JSONObject(state.ownerErrors))
             .put("ownerSource", JSONObject.NULL)

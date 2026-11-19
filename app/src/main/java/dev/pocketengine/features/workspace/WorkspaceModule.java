@@ -30,6 +30,20 @@ public final class WorkspaceModule implements EngineModule {
     public JSONObject removeProjectPackage(String id,String sha)throws Exception{return artifacts.removeProjectPackage(id,sha);}
     public long exportProjectPackage(String id,String sha,java.io.OutputStream destination)throws Exception{return artifacts.exportProjectPackage(id,sha,destination);}
     public JSONObject createImportedProject(String name,String client,String packageSha)throws Exception{return workspace.createImported(name,client,packageSha);}
+    /** Read one original source-import registration. Absence is not evidence that a checkout was ever published. */
+    public JSONObject sourceProjectRegistrationForOwner(String client,String sha,String reviewedName)throws Exception {
+        if(nativeClosed||client==null||!client.matches("[a-f0-9-]{36}")||sha==null||!sha.matches("[a-f0-9]{64}"))throw new SecurityException("原项目登记身份不可核对");
+        String expected=java.util.UUID.nameUUIDFromBytes(("project-package-import:"+client).getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
+        org.json.JSONArray all=workspace.projects();JSONObject match=null;
+        for(int i=0;i<all.length();i++){
+            JSONObject row=all.getJSONObject(i),src=row.optJSONObject("sourceImport");boolean id=expected.equals(row.optString("id")),op=src!=null&&client.equals(src.optString("clientId"));
+            if(!id&&!op)continue;
+            if(!id||!op||match!=null||!sha.equals(src.optString("packageSha256")))throw new SecurityException("项目目录有冲突的原导入登记，未选中其他工程");
+            match=row;
+        }
+        return new JSONObject().put("registered",match!=null).put("expectedProjectId",expected)
+            .put("reviewedNameCurrent",match!=null&&reviewedName.equals(match.optString("name")));
+    }
     /** Native callers retain their original TaskStore admission; these observations add no authority. */
     public VersionedWorkspace.FileSnapshot fileSnapshotForHost(String project,String path,int version)throws Exception{return workspace.snapshot(project,path,version);}
     public VersionedWorkspace.ProjectSnapshot projectSnapshotForHost(String project)throws Exception{return workspace.snapshotProject(project);}

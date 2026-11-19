@@ -43,6 +43,7 @@ public final class LocalModule implements EngineModule {
     private final Map<String,dev.pocketengine.features.local.preview.ProjectPreviewBundle.Verified> previews=new LinkedHashMap<>();
     private volatile boolean closed;
     private final Object projectPackageStaging=new Object();
+    private final dev.pocketengine.features.local.project.ProjectSourcePosition ownerSourcePosition;
     private dev.pocketengine.features.local.project.ProjectGitImport nativeGitImport;
     private dev.pocketengine.features.local.project.NativeExecutionCaches nativeExecutionCaches;
     private dev.pocketengine.store.TaskStore nativeCacheTasks;
@@ -53,6 +54,7 @@ public final class LocalModule implements EngineModule {
     /** Native composition injects an approved managed environment; raw feature JSON cannot install one. */
     public LocalModule(FeatureContext context,EngineModule projects,ProjectRuntime nativeRuntime)throws Exception {
         this.context=context;this.projects=projects;root=new File(context.android.getFilesDir().getCanonicalFile(),"local-development");
+        ownerSourcePosition=new dev.pocketengine.features.local.project.ProjectSourcePosition(new File(context.android.getNoBackupFilesDir().getCanonicalFile(),"owner-development"),LocalModule::verifiedPackageImportPlan);
         commands=new NativeCommandExecutor(new File(root,"command-receipts"),Arrays.asList(new File("/system/bin"),new File("/system/xbin")),job->context.emit(id(),json("kind","job","job",job)));
         termux=new TermuxBridge(context);
         projectRuntime=java.util.Objects.requireNonNull(nativeRuntime);String selected=projectRuntime.describe().getString("runtimeId");runtimes.put(selected,projectRuntime);runtimes.put("termux",new TermuxProjectRuntime(termux));for(String key:runtimes.keySet())runtimeGenerations.put(key,UUID.randomUUID().toString());
@@ -503,6 +505,64 @@ public final class LocalModule implements EngineModule {
         if(plan.has("sourceEvidenceSha256")){packageHash(plan.getString("sourceEvidenceSha256"));if(!"new_project".equals(plan.getString("mode")))throw new SecurityException("来源源码不采用原项目权限");}
         if(plan.getString("mode").equals("same_project_new_checkout")){allowed.addAll(java.util.Set.of("targetCheckoutId","projectId","expectedTargetSourceDigest"));packageIdentity(plan.getString("targetCheckoutId"));packageIdentity(plan.getString("projectId"));packageHash(plan.getString("expectedTargetSourceDigest"));}
         var keys=plan.keys();while(keys.hasNext())if(!allowed.contains(keys.next()))throw new SecurityException("项目包方案含未支持字段，未恢复授权");return plan;
+    }
+    /** Controller-only. Nothing in the feature/model command surface can write or retrieve this locator. */
+    public JSONObject ownerSourcePosition()throws Exception{return ownerSourcePosition.read();}
+    public JSONObject publishReviewedPhoneSource(JSONObject approved)throws Exception {
+        synchronized(ownerSourcePosition){
+            JSONObject plan=verifiedPackageImportPlan(approved);
+            if(!"new_project".equals(plan.optString("mode"))||!plan.has("sourceEvidenceSha256")||plan.has("targetCheckoutId")||plan.has("deviceSourceSha256"))
+                throw new SecurityException("这不是本机已有源码创建新副本的原方案");
+            ownerSourcePosition.checkLookup(approved);
+            JSONObject prior=actualPhoneSourcePosition(approved,false);
+            if(prior.optBoolean("found")){ownerSourcePosition.keep(approved);return prior;}
+            if(prior.optBoolean("checkoutWithoutProject"))throw new IllegalStateException("原副本存在，但项目登记不匹配；未当作可继续的项目或另行重建");
+            if(ownerSourcePosition.read().optJSONObject("plan")==null){
+                JSONObject staged=inspectStagedProjectPackageForOwner(plan.getString("selectionId"),plan.getString("packageSha256")),e=staged.getJSONObject("sourceEvidence");
+                if(!java.util.Set.of("saf_tree","external_zip","host_saved_snapshot").contains(e.optString("sourceKind"))||
+                    !plan.getString("sourceEvidenceSha256").equals(ProjectSources.digest(e))||!plan.getString("manifestIdentity").equals(staged.getString("manifestIdentity")))throw new SecurityException("本机源码未固定或已变化，未登记创建动作");
+            }
+            if(closed||Thread.currentThread().isInterrupted())throw new InterruptedException("原创建已停止");
+            ownerSourcePosition.keep(approved);
+            JSONObject applied=importProjectPackageForOwner(approved),actual=actualPhoneSourcePosition(approved,false);
+            if(!actual.optBoolean("found")||!actual.getString("id").equals(applied.optString("id")))throw new IllegalStateException("尚未核对到同一次创建的项目和工作副本，请按原定位查询");
+            return actual.put("continuedExisting",applied.optBoolean("continuedExisting"));
+        }
+    }
+    private JSONObject actualPhoneSourcePosition(JSONObject expected,boolean checkStaging)throws Exception {
+        JSONObject plan=verifiedPackageImportPlan(expected),checkout=findProjectPackageImportForOwner(expected);
+        JSONObject registry=packageWorkspace().sourceProjectRegistrationForOwner(plan.getString("clientImportId"),plan.getString("packageSha256"),plan.getString("projectName"));
+        boolean files=checkout.optBoolean("found"),project=registry.getBoolean("registered");
+        if(files&&!java.util.Set.of("saf_tree","external_zip","host_saved_snapshot").contains(checkout.getJSONObject("sourceImport").optString("sourceKind")))throw new SecurityException("原工作副本不是已确认的手机源码来源");
+        if(files&&!registry.getString("expectedProjectId").equals(checkout.optString("projectId")))throw new SecurityException("原副本与项目目录身份不一致，未打开其他工程");
+        if(files&&project)return checkout.put("projectRegistered",true);
+        // Either side can be absent. Never manufacture an editable checkout from the catalog row or a source locator.
+        JSONObject status=new JSONObject().put("found",false).put("projectRegistered",project).put("checkoutWithoutProject",files)
+            .put("clientImportId",plan.getString("clientImportId")).put("retryAvailable",false);
+        if(checkStaging&&!files&&(!project||registry.optBoolean("reviewedNameCurrent"))){
+            File stagedPath=new File(new File(context.android.getCacheDir(),"project-package-imports-v1"),plan.getString("selectionId")+".zip");
+            if(Files.isRegularFile(stagedPath.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS))try{
+                JSONObject staged=inspectStagedProjectPackageForOwner(plan.getString("selectionId"),plan.getString("packageSha256")),source=staged.getJSONObject("sourceEvidence");
+                boolean good=plan.getString("manifestIdentity").equals(staged.getString("manifestIdentity"))&&plan.getString("sourceEvidenceSha256").equals(ProjectSources.digest(source));
+                status.put("retryAvailable",good);
+            }catch(InterruptedException e){throw e;}catch(Exception unavailable){if(Thread.currentThread().isInterrupted())throw new InterruptedException("原核对已停止");}
+        }
+        return status;
+    }
+    public JSONObject queryReviewedPhoneSource(JSONObject expected)throws Exception {
+        synchronized(ownerSourcePosition){
+            ownerSourcePosition.checkLookup(expected);
+            return actualPhoneSourcePosition(expected,true);
+        }
+    }
+    public JSONObject releaseReviewedPhoneSource(JSONObject expected,boolean expectedFound)throws Exception {
+        synchronized(ownerSourcePosition){
+            ownerSourcePosition.checkLookup(expected);
+            JSONObject actual=actualPhoneSourcePosition(expected,false);
+            // If publication won a race with an earlier 'not found' query, put its real result back on screen.
+            if(actual.optBoolean("found")!=expectedFound)return actual.put("positionReleased",false);
+            ownerSourcePosition.release(expected);return actual.put("positionReleased",true);
+        }
     }
     /** Copy a new, unpublished checkout outside the runtime monitor; the final native publication is short. */
     public JSONObject importProjectPackageForOwner(JSONObject originalPlan)throws Exception {return importProjectPackage(originalPlan,null,null);}

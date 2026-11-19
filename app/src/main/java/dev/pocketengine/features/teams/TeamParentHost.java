@@ -209,7 +209,14 @@ public final class TeamParentHost {
                 if(blocked!=null){JSONObject answer=status(source,id);for(java.util.Iterator<String> keys=blocked.keys();keys.hasNext();){String key=keys.next();answer.put(key,blocked.get(key));}source.checkCurrent();return answer;}
                 JSONObject approved=state.getJSONObject("approvedReview");source.checkCurrent();JSONObject receipt=writes.integrate(id,approved.getString("reviewId"),models.get());coordinator.recordIntegration(id,receipt);changed.accept(id);return status(source,id);}
             case "revise":{
-                tasks.claimTeamParentAction(source,id);coordinator.recordParentRevision(source,input);tasks.updateExternal(id,coordinator.get(id));changed.accept(id);return status(source,id).put("state","awaiting_native_revision_review").put("workItemId",args.getString("workItemId")).put("requiresOwnerReview",true).put("message","修订只是原团队中可见的提案；请主人在原工作项审阅当前冻结版本、依赖闭包与预算，旧审查不授权新内容");}
+                tasks.claimTeamParentAction(source,id);JSONObject actual=null;
+                if(TeamParentRevisionOffer.local(coordinator.get(id)))try{actual=writes.parentIntegrationState(id);}catch(Exception unavailable){source.checkCurrent();} // Missing current heads must not become write authority.
+                JSONObject saved=coordinator.recordParentRevision(source,input,actual);tasks.updateExternal(id,saved);changed.accept(id);
+                if(!TeamParentRevisionOffer.local(saved))return status(source,id).put("state","awaiting_native_revision_review").put("workItemId",args.getString("workItemId")).put("requiresOwnerReview",true).put("message","提案已保留；完整项目或远端成果需走各自原生修订审阅，不通过本机所选文件入口。");
+                String operation=source.view().getString("preparedOperationId");boolean offered=false;JSONArray offers=TeamParentRevisionOffer.available(saved);
+                for(int i=0;i<offers.length();i++)if(operation.equals(offers.getJSONObject(i).getString("operationId"))&&offers.getJSONObject(i).optBoolean("canReview"))offered=true;
+                return status(source,id).put("state",offered?"awaiting_native_revision_review":"revision_proposal_recorded").put("workItemId",args.getString("workItemId")).put("requiresOwnerReview",offered)
+                        .put("message",offered?"原项目的所选文件已写回。这条具体修订已交到原团队成果页；主人可核对原作者、依赖、文件及预算后单独决定。还没有开始修订。":"修订建议已保留，但这个本机入口没有原文件已写回且仍一致的证明。没有发起可批准的修订，不会先整合被退回的文件来解锁。");}
             default:throw new IllegalArgumentException("此团队阶段控制未开放");
         }
     }

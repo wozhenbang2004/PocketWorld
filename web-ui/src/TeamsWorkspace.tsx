@@ -15,6 +15,7 @@ import { TeamEvidenceWorkspace } from './TeamEvidenceWorkspace';
 import { TeamQuickStartForm } from './TeamQuickStartForm';
 import { TeamStartReview } from './TeamStartReview';
 import { canInspectFileContinuation, TeamFileContinuationReview } from './TeamFileContinuation';
+import { TeamParentRevisions,TeamParentRevisionReview } from './TeamParentRevisions';
 import { TeamFrozenFiles } from './TeamFrozenFiles';
 import { resetTeamProductionAcknowledgments, teamDefinitionPayload, teamProductionDraft, teamProductionEditorMember } from './team-production';
 import { TeamMemberAvatar, TeamMemberIdentity } from './TeamMemberIdentity';
@@ -864,7 +865,14 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       </section>
         </TabPanel>
         <TabPanel id="result">
-          <TeamResultHandoff result={teamResult} frozenFiles={current.productionScope && (current.mode === 'produce' || current.workPlan) && (fileEntry&&fileEntry.view===reading?.viewHandle || current.status === 'awaiting_review' || workItems.some(item => rows(item.artifacts).length > 0) || members.some(member => rows(member.roundStates).some(phase => rows(phase.artifacts).length > 0))) && bridge.getState().capabilities.commands.includes('teams.readFrozenOutputs')
+          <TeamResultHandoff result={teamResult} revisionOffers={reading?.revisionOffers?.length ? <TeamParentRevisions rows={rows(reading.revisionOffers)} disabled={!canMutate||materialBusy||!bridge.getState().capabilities.commands.includes('teams.reviewParentRevision')} inspect={row=>{
+            const original=reading?.viewHandle;if(!original||!canMutate||materialBusy)return;
+            void invoke('teams.reviewParentRevision',{viewHandle:original,operationId:row.operationId},value=>{
+              if(currentReading.current?.viewHandle!==original||value.operation!=='reviseFromParent'||value.input?.runId!==current.id||value.input?.operationId!==row.operationId||
+                  value.input?.workItemId!==row.workItemId||value.input?.assignmentId!==row.assignmentId||value.input?.text!==row.text||!Array.isArray(value.input?.affected)||!value.input.affected.length){
+                release(value,'reviewHandle');throw new Error('原提案或工作项已变化，没有开始修订。');
+              }reviewResult(value);
+            });}}/>:undefined} frozenFiles={current.productionScope && (current.mode === 'produce' || current.workPlan) && (fileEntry&&fileEntry.view===reading?.viewHandle || current.status === 'awaiting_review' || workItems.some(item => rows(item.artifacts).length > 0) || members.some(member => rows(member.roundStates).some(phase => rows(phase.artifacts).length > 0))) && bridge.getState().capabilities.commands.includes('teams.readFrozenOutputs')
             ? <TeamFrozenFiles key={reading?.viewHandle || current.id} team={current.id} view={reading?.viewHandle || ''} entry={fileEntry&&fileEntry.view===reading?.viewHandle?fileEntry:undefined} run={run} active={workspaceActive && runSection === 'result'} disabled={!canRead || materialBusy} onOpen={setReadingFiles} back={frozenFilesBack} memberName={name}/> : undefined} sources={deliveries.length>0 ? <TeamResearchDeliveries records={deliveries} disabled={!canRead||materialBusy||!bridge.getState().capabilities.commands.includes('teams.openResearchTask')} open={openMemberDelivery}
             expanded={!!shownMemberSources[current.id]} onExpanded={value=>setShownMemberSources(old=>({...old,[current.id]:value}))}/> : undefined} stopped={current.status === 'cancelled'}
             actions={{ items: followUps, read: openFollowUp, disabled: !canRead || materialBusy, expanded: !!allResultActions[current.id],
@@ -1047,14 +1055,14 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
         </div>
       </footer>
     </>}</div></SettingsDialog>
-    <SettingsDialog className="pw-team-modal" isOpen={!!review} title={review?.operation === 'continueWorkItem' ? '核对原文件分工' : review?.operation === 'configureMember' ? '核对本次成员改动' : review?.operation === 'start' ? '开始这次协作' : review?.operation === 'cancel' ? '停止这次协作' : review?.operation === 'feedback' ? '修改要求并暂停' : review?.operation === 'remove' ? '移除编组' : '保存编组'} onClose={() => { if (!busy) closeReview(); }}><div className="pw-collaboration-dialog" data-collaboration-kind="TeamsWorkspace">
-      {review?.operation === 'continueWorkItem' ? <TeamFileContinuationReview facts={review.input} /> : review?.operation === 'configureMember' ? <>
+    <SettingsDialog className="pw-team-modal" isOpen={!!review} title={review?.operation === 'reviseFromParent' ? '核对原团队修订' : review?.operation === 'continueWorkItem' ? '核对原文件分工' : review?.operation === 'configureMember' ? '核对本次成员改动' : review?.operation === 'start' ? '开始这次协作' : review?.operation === 'cancel' ? '停止这次协作' : review?.operation === 'feedback' ? '修改要求并暂停' : review?.operation === 'remove' ? '移除编组' : '保存编组'} onClose={() => { if (!busy) closeReview(); }}><div className="pw-collaboration-dialog" data-collaboration-kind="TeamsWorkspace">
+      {review?.operation === 'reviseFromParent' ? <TeamParentRevisionReview facts={review.input}/> : review?.operation === 'continueWorkItem' ? <TeamFileContinuationReview facts={review.input} /> : review?.operation === 'configureMember' ? <>
         <TeamMemberIdentity member={review.member || {}} name={teamMemberLabel(review.member || {}, rows(review.roster))} size={40} />
         {review.input?.action === 'rename' ? <><p>改为：</p><TeamMemberIdentity member={{ ...review.member, name: review.input.name, avatarShape: review.input.avatarShape }} size={40} /><p>历史消息和已开始的轮次保留原身份；不改职责、权限、额度或执行状态。</p></>
           : review.input?.action === 'add' ? <><p>职责：{review.member?.role}</p><p>具体分工：{review.member?.assignment}</p><p>本机模型：{review.member?.model || '确认加入时的主模型'}</p><p>以暂停状态加入当前运行，保留独立新身份；未开始工作、未继承旧成员的独立资料范围或定向消息、未增加额度。同队共享目标和公开协作记录仍可用于这次分工。回到分工页后明确继续。</p></>
           : <><p>退出后保留已有产出和历史消息，未消费的补充不再唤醒这名成员；不会把任务交给其他成员。</p>{review.researchExit && <p>仅停止这名成员后续执行。旧成果按冻结作者与原资料范围核验，接任者不继承其资料读取权；到期、换版或撤回后不可继续用于新回答，可在“资料”中核对与撤回。</p>}{review.input?.newLeaderId && <p>接任汇总：{teamMemberLabel(rows(review.roster).find(member => member.id === review.input.newLeaderId) || { id: review.input.newLeaderId }, rows(review.roster))}</p>}<p>尚未完成的前置依赖会阻止退出。暂停和退出不承诺撤销已发生的效果。</p></>}
       </> : review?.operation === 'start' ? <TeamStartReview review={review} phoneTargets={phoneTargets} /> : review?.operation === 'feedback' ? <><p>发给{review.recipientName}的新要求：</p><AIAnswer text={review.text} showActions={false} /><p>相关成员会暂停；已有成果保留，受影响的总结待更新。你选择继续后才会处理新要求，不自动扩大权限或预算。</p></> : review?.operation === 'cancel' ? <p>停止这个原运行后续工作，保留消息、证据和已有成果。停止请求不代表未知外部操作已完成清理。</p> : review?.operation === 'remove' ? <p>移除“{review.definition?.name}”的后续启动配置，已有运行和成果保留。</p> : <><p>{review?.input?.name}</p>{rows(review?.input?.members).map(member => <section className="pw-source-record" key={member.id}><h3><TeamMemberIdentity member={member} name={teamMemberLabel(member, rows(review?.input?.members))} size={40} /></h3><p>{member.role}</p>{member.assignment && member.assignment !== member.role && member.runner !== 'phone_agent' && <p>具体分工：{member.assignment}</p>}{rows(member.dependsOn).length > 0 && <p>前置：{member.dependsOn.map((id: string) => rows(review?.input?.members).find(row => row.id === id)?.name || id).join('、')}</p>}{member.runner === 'phone_agent' ? <p>{teamPhoneTargetLabel(member.device, phoneTargets)} · {member.assignment}</p> : isTeamHarness(member.runner) ? <><p>执行器：{harnessWorkerLabel(undefined, member.runner)} · 电脑：{computerLabel(member)}</p><p>模型：{member.model || '执行器默认'}{member.modeId ? ` · 模式：${member.modeId}` : ''}</p></> : <p>模型：{member.model || '实际启动时的主模型'} · 本机模型连接</p>}{review?.input?.mode === 'produce' && <TeamProductionReview member={member} sources={object(catalog.productionSources)} />}</section>)}</>}
-      <CheckboxField isSelected={acknowledged} onChange={setAcknowledged} isDisabled={busy}>已核对这次操作与原目标</CheckboxField><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={closeReview}>返回</Button><Button disabled={busy || !acknowledged} onClick={async () => {
+      <CheckboxField isSelected={acknowledged} onChange={setAcknowledged} isDisabled={busy}>{review?.operation==='reviseFromParent'?'我同意以上修订原文、受影响的分工与文件，以及列出的团队模型和工具额度':'已核对这次操作与原目标'}</CheckboxField><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={closeReview}>返回</Button><Button disabled={busy || !acknowledged} onClick={async () => {
         const original = review; if (!original || entered.current || backgrounded.current || !ownsNativeWindow()) return; setReview(null); setAcknowledged(false);
         setBusy(true);
         try { if (original.operation === 'save') await formDraft.markSubmitted(); else if (original.operation === 'start') { const pending = { pendingStartTeamId: original.input.teamId, pendingStartSince: Date.now() }; if (original.draft) { const next = { ...editor, ...pending }; setEditor(next); setQuickStartPending(pendingStart(next)); formDraft.update(safeTeamDraft(next)); await formDraft.markSubmitted(); } else { const next = { goal, rounds, ...pending }; setSavedStartPending(pendingStart(next)); startDraft.update(next); await startDraft.markSubmitted(); } } else if (original.operation === 'configureMember' && memberDraft?.action !== 'exit') await memberFormDraft.markSubmitted(); else if (original.operation === 'feedback') await messageDraft.markSubmitted(); } catch (failure) { setBusy(false); setError((failure as Error).message); return; }
@@ -1066,6 +1074,11 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
           ...(original.operation === 'feedback' ? { memberId: original.memberId, text: original.text.trim() } : {}) } : { reviewHandle: original.reviewHandle }, result => {
           if (result.confirmed !== true) throw new Error('原团队操作尚未确认，请刷新核对。');
           if (original.operation === 'start' && (result.command !== 'start' || !result.reading?.run?.id || result.reading.run.teamId !== original.input.teamId)) throw new Error('启动回执身份待核对，请读取协作记录；不会再次启动。');
+          if(original.operation==='reviseFromParent'){
+            if(result.command!=='reviseFromParent'||result.reading?.run?.id!==original.input.runId||result.operationId!==original.input.operationId||result.workItemId!==original.input.workItemId||result.assignmentId!==original.input.assignmentId)
+              throw new Error('原修订是否已排队待核对，请刷新原协作，不要重发。');
+            acceptReading(result.reading);setNotice('已提交给这次列明的原分工。新成果尚未交回，不会自动写回项目。');return;
+          }
           if (original.operation === 'continueWorkItem') {
             if (result.command !== 'continueWorkItem' || result.reading?.run?.id !== original.input.runId
                 || result.assignmentId !== original.input.assignmentId || result.workItemId !== original.input.workItemId)
@@ -1101,7 +1114,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
           }
           setNotice('这次启动未被受理，目标与分工已保留。请重新核对后再确认开始。');
         });
-      }}>{review?.operation === 'continueWorkItem' ? '继续这个原分工' : review?.operation === 'start' ? '开始协作' : review?.operation === 'save' ? '保存编组' : '确认这一次操作'}</Button></div>
+      }}>{review?.operation === 'reviseFromParent' ? '按此范围开始修订' : review?.operation === 'continueWorkItem' ? '继续这个原分工' : review?.operation === 'start' ? '开始协作' : review?.operation === 'save' ? '保存编组' : '确认这一次操作'}</Button></div>
     </div></SettingsDialog>
   </section>;
 }

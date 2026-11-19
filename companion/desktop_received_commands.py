@@ -4,19 +4,20 @@ import time
 import device_protocol as protocol
 from device_pairing import validate_grant
 from windows_command_receipt import project as command_receipt
-from windows_received_job import COMMAND, admission
+from windows_received_job import COMMAND, FILE, admission
+from windows_received_file import PROFILE as FILE_PROFILE, project as workspace_file
 from windows_workspace_read import PROFILE as READ_PROFILE, project as workspace_read
 
 BATCH = """SELECT rid,operation_id,fingerprint,updated_at,CASE WHEN
     ((json_extract(doc,'$.protocol')='native-device-command-v1' AND json_extract(doc,'$.audience.toolName')='command.run')
-     OR (json_extract(doc,'$.protocol')='native-device-tool-v1' AND json_extract(doc,'$.audience.toolName') IN ('workspace.list','workspace.read')))
+     OR (json_extract(doc,'$.protocol')='native-device-tool-v1' AND json_extract(doc,'$.audience.toolName') IN ('workspace.list','workspace.read','workspace.receive')))
     AND json_extract(doc,'$.audience.callerDeviceId')=?
     AND json_extract(doc,'$.audience.originDeviceId')=json_extract(doc,'$.audience.callerDeviceId')
     THEN json_extract(doc,'$.audience.toolName') END FROM
     (SELECT rowid rid,operation_id,fingerprint,last_status,updated_at,CASE WHEN json_valid(details) THEN details END AS doc
      FROM operations WHERE rowid<? ORDER BY rowid DESC LIMIT 64) ORDER BY rid DESC"""
 
-TOOLS = {COMMAND: "白名单命令", "workspace.list": "查看目录", "workspace.read": "读取文本"}
+TOOLS = {COMMAND: "白名单命令", FILE: "接收所选文件", "workspace.list": "查看目录", "workspace.read": "读取文本"}
 LABEL = {"queued": "已在这台电脑排队", "running": "这台电脑已启动命令", "exited_zero": "原命令以 0 退出",
          "exited_nonzero": "原命令以非零码退出", "stopped": "原命令已停止，之前的影响未撤回",
          "not_started": "原执行器确认未启动进程", "unknown": "原命令的执行结果仍待核对",
@@ -51,7 +52,7 @@ def local_record(view, peer, item, *, read=False, revision=None):
         if revision is not None and manager.jobs.get(row[1], {}).get("nativeDeviceRevision") != revision:
             return None
         if not read: return True
-        return (command_receipt if source["toolName"] == COMMAND else workspace_read)(manager, operation, row, original)
+        return (command_receipt if source["toolName"] == COMMAND else workspace_file if source["toolName"] == FILE else workspace_read)(manager, operation, row, original)
 
 
 def show(view, peer, item):
@@ -61,6 +62,21 @@ def show(view, peer, item):
     phase = receipt["phase"]
     until = time.monotonic() + 60
     def current(): return time.monotonic() < until and bool(local_record(view, peer, item, revision=receipt.get("revision")))
+    if receipt["profile"] == FILE_PROFILE:
+        titles={"receipt_only":"接过这次文件投递，落盘未核实","receiving":"原传输正在等候或接收字节",
+                "target_unconfirmed":"原文件写入结果未知，请勿补发","not_dispatched":"Windows 确认未派发目标替换",
+                "write_verified_only":"有原文件落盘回执，传输收尾未确认","delivered":"已核实当时写入的文件"}
+        text="这是从原手机选来的一份文件，不是整仓导入，也不代表整个任务已完成。"
+        if "path" in receipt:
+            text+=f"\n当时目标：{receipt['path']}\n{receipt['bytes']} 字节，SHA-256 {receipt['sha256']}。"
+            if phase=="receiving": text+=f"\n只核实接收进度 {receipt['verifiedOffset']}/{receipt['bytes']}，不是目标已写。"
+            elif phase=="target_unconfirmed": text+="\n有原写入意图，没有最终字节证明。不能据此断言目标没写。"
+            elif phase=="not_dispatched": text+=("\nWindows 在替换前发现目标不再符合原条件；没有覆盖或读取其新内容给手机。" if receipt["targetConditionFailed"] else "\n原文件事务在目标替换前停止；接收字节不等于落盘。")
+            elif phase in ("delivered","write_verified_only"): text+="\n原生写入已回读同一文件身份与字节；不代表现在未被改动。"
+        else: text+="\n未取得一致的原选材、转移或落盘证明；未按同名路径打开或补写。"
+        text+=f"\n原操作：{item[1]}\nWindows 工作：{receipt['jobId']}"
+        view._dialog(titles[phase],text,[],current)
+        return
     if receipt["profile"] == READ_PROFILE:
         _show_read(view, peer, item, receipt, current)
         return

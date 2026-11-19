@@ -6,6 +6,17 @@ import org.json.JSONObject;
 /** The native original operation may record only the effect its reviewed memory action permits. */
 public final class ConversationMemoryReceipt {
     private ConversationMemoryReceipt(){}
+    /** A content-free explanation of a proved rejection, never an inference from today's clock. */
+    public static boolean expiredBeforeSave(JSONObject proposal,JSONObject receipt){
+        try{
+            if(!"create".equals(proposal.getString("action"))||!"create".equals(receipt.getString("action"))||!"rejected".equals(receipt.getString("status"))
+                    ||!"candidate_expired_before_save".equals(receipt.optString("outcome")))return false;
+            for(String field:new String[]{"accepted","mutationApplied","formalMemorySaved","undoAvailable"})if(!Boolean.FALSE.equals(receipt.opt(field)))return false;
+            JSONObject pin=proposal.getJSONObject("candidate");
+            return pin.getString("id").equals(receipt.getString("candidateId"))&&positive(pin,"revision")==positive(receipt,"candidateRevision")
+                    &&positive(receipt,"expiresAt")<=positive(receipt,"checkedAt");
+        }catch(Exception incomplete){return false;}
+    }
     public static void require(JSONObject proposal,JSONObject receipt)throws Exception {
         String action=proposal.getString("action"),phase=receipt.getString("status");
         if(!action.matches("create|update|forget")||!action.equals(receipt.optString("action")))throw new SecurityException("原记忆回执动作不符");
@@ -13,6 +24,7 @@ public final class ConversationMemoryReceipt {
             for(String field:new String[]{"accepted","mutationApplied","formalMemorySaved"})if(!receipt.has(field)||!receipt.isNull(field))throw new SecurityException("未知记忆结果不能称已保存或未修改");return;
         }
         if("rejected".equals(phase)){
+            if("candidate_expired_before_save".equals(receipt.optString("outcome"))&&!expiredBeforeSave(proposal,receipt))throw new SecurityException("未核对原候选与期限，不能称已到期未保存");
             for(String field:new String[]{"accepted","mutationApplied","formalMemorySaved"})if(!Boolean.FALSE.equals(receipt.opt(field)))throw new SecurityException("未进入修改的记忆回执不能称已保存");return;
         }
         if(!"saved".equals(phase)||!Boolean.TRUE.equals(receipt.opt("accepted"))||!Boolean.TRUE.equals(receipt.opt("mutationApplied"))||!Boolean.valueOf(!action.equals("forget")).equals(receipt.opt("formalMemorySaved")))throw new SecurityException("原记忆保存事实与阶段不一致");

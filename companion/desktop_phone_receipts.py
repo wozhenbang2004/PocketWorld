@@ -206,7 +206,7 @@ class ResultView:
                 if WindowsDesktopHealth().probe(session_only=True).get("available") is not True: return
                 while self.active():
                     direction = self._dialog("要看哪一端执行的工作？", "工作和结果都保留在原执行设备；这里不能启动或接管任务。",
-                                             [("incoming", "其他设备交给这台电脑的工作\n查看本机工作区的原命令、目录和文本读取，不需要发起设备在线。"),
+                                             [("incoming", "其他设备交给这台电脑的工作\n查看原命令、目录和文本读取，以及手机交来文件的原落盘回执。"),
                                               ("outgoing", "这台电脑交给手机的工作\n选择原派单后，只向那部手机查询。")])
                     if direction is None: return
                     incoming = direction == "incoming"
@@ -219,7 +219,7 @@ class ResultView:
                         if peer_page: choices.append(("newer", "上一页设备"))
                         if (peer_page + 1) * 6 < len(peers): choices.append(("older", "下一页设备"))
                         heading = "谁交给了这台 Windows 工作？" if incoming else "这台电脑派给手机的工作"
-                        hint = "选择原发起设备；只查看这台 Windows 实际接收的本机命令与工作区读取，不连接手机、云服务器或 SSH。"
+                        hint = "选择原发起设备；只查看这台 Windows 实际接收的本机命令、工作区读取与文件写入回执，不连接手机、云服务器或 SSH。"
                         peer = self._dialog(heading, hint if incoming and current else "选择手机上对应的配对身份，接下来只看这台电脑上的原派单。这里不检查手机在线，也不能接管手机。"
                                             if current else "本机没有可选的配对设备。这里不能新建工作或接管手机。", choices)
                         if peer is None: break

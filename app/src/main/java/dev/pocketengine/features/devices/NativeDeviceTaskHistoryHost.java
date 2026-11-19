@@ -33,6 +33,7 @@ public final class NativeDeviceTaskHistoryHost {
                 && original.taskId().equals(wire.optString("parentTaskId"))){
                 String tool=invocation.optString("toolName"),effect=invocation.optString("effect");
                 if("command.run".equals(tool)&&"write".equals(effect))view.put("directWorkspaceCommand",true);
+                if(OwnerWindowsFileDelivery.source(wire,local.deviceId(),local.instanceId()))view.put("directWorkspaceFileDelivery",true);
                 if(("workspace.read".equals(tool)||"workspace.list".equals(tool))&&"read".equals(effect)){
                     JSONObject arguments=invocation.optJSONObject("arguments");
                     Object path=arguments==null?null:arguments.has("path")?arguments.opt("path"):"workspace.list".equals(tool)?"":null;
@@ -133,6 +134,8 @@ public final class NativeDeviceTaskHistoryHost {
         public JSONObject query()throws Exception{
             require();JSONObject frozen=original.originalWire();if(!local.deviceId().equals(frozen.getString("callerDeviceId")))throw new SecurityException("当前原生设备身份不是原SQL caller");PairingCoordinator.HistoryRoute route=source.currentHistoryRoute(original.targetDeviceId(),original.grantId());long now=System.currentTimeMillis();var query=route.historyQuery(local,"operation.get",original.operationId(),original.resourceBinding(),now,5000,null);if(!frozen.getString("instanceId").equals(query.envelope().instanceId()))throw new SecurityException("目标原实例已改变；不能把新实例空结果认作旧操作未发生");
             DeviceCapabilityPort.Reply actual=source.readHistory(query.envelope(),io);require();query.requireTargetPeer(actual.peer(),System.currentTimeMillis());JSONObject response=DeviceProtocol.validateMessage(actual.response());if(!"DeviceResponse".equals(response.getString("messageType"))||!query.envelope().requestId().equals(response.getString("requestId"))||!"operation.get".equals(response.getString("method"))||!original.targetDeviceId().equals(response.getString("executorDeviceId"))||!frozen.getString("instanceId").equals(response.getString("instanceId")))throw new SecurityException("不是这次原对象历史query的实际响应");JSONObject typed=response.getJSONObject("result");tasks.deviceTasks().recordOwnerHistory(original,actual.peer(),typed);JSONObject read=new JSONObject().put("readOnly",true).put("newRun",false).put("retrySubmitted",false).put("unknownRefunded",false).put("operationReceipt",typed).put("unknown",!typed.getBoolean("accepted")||typed.getString("effectState").equals("unknown")).put("businessVerified",false);
+            JSONObject delivery=OwnerWindowsFileDelivery.checked(frozen,typed,local.deviceId(),local.instanceId());
+            if(delivery!=null)read.put("originalWindowsFileDelivery",delivery);
             // Keep the signed operation receipt unchanged. Re-read only this local binding after recording it.
             if(directPhoneGoal(frozen))read.put("localPhoneResultPath",localPhoneResultPath(frozen));
             require();return read;

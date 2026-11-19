@@ -23,7 +23,7 @@ internal data class ProjectPackageState(
     val stagedPackages: List<JSONObject> = emptyList(), val staged: JSONObject? = null, val importPlan: JSONObject? = null, val imported: JSONObject? = null,
     val pendingFreeze: JSONObject? = null, val pendingImport: JSONObject? = null,
     val exportStatus: JSONObject? = null,
-    val retryFreeze: Boolean = false, val retryImport: Boolean = false,
+    val retryFreeze: Boolean = false, val retryImport: Boolean = false, val missingSourceAction: String? = null,
     val ownerPanelRequested: Boolean = false, val sourceImportRequested: Boolean = false, val reviewingTaskDelivery: Boolean = false, val taskDelivery: JSONObject? = null,
     val notice: String? = null, val error: String? = null
 )
@@ -43,6 +43,7 @@ internal class ProjectPackageCoordinator(
     private var mounted = false
     private var pickerImport by mutableStateOf<JSONObject?>(null)
     private var webSourcePin: JSONObject? = null
+    private var preferredWebSource: Pair<String, String>? = null
     private class HostSourceWait(val task: String, val token: String, val done: (JSONObject?, String?) -> Unit) { @Volatile var active = true }
     private var hostSourceWait: HostSourceWait? = null
     private fun finishHostSource(wait: HostSourceWait, value: JSONObject?, error: String?) {
@@ -378,6 +379,19 @@ internal class ProjectPackageCoordinator(
     // The web owner directory only reads prior selections. Opening it never opens a provider,
     // mounts a checkout, or fetches unrelated task artifacts and received attachments.
     private fun refreshSourceStages(prepared: Pair<String, String>?) = work { _, _ ->
+        val position = local().ownerSourcePosition()
+        val durable = position.optJSONObject("plan")
+        if (durable != null) {
+            // The source cache or provider may have vanished. Its failure must not hide a published checkout.
+            return@work {
+                preferredWebSource = prepared
+                webSourcePin = JSONObject(durable.toString())
+                state = state.copy(importPlan = null, pendingImport = webSourcePin, retryImport = false,
+                    missingSourceAction = null, imported = null, error = null,
+                    notice = if (prepared != null) "刚准备的选集仍在。先核对上一次创建的实际副本，再选导入另一份。"
+                    else "已找回上次在这台手机明确创建的操作，请先核对真正的副本；没有恢复执行。")
+            }
+        }
         val rows = local().listStagedProjectPackagesForOwner().objects()
         val target = prepared?.let { (id, sha) ->
             rows.singleOrNull { it.optBoolean("available") && it.optString("selectionId") == id && it.optString("sha256") == sha &&
@@ -385,6 +399,13 @@ internal class ProjectPackageCoordinator(
                 ?: error("原任务准备的那份手机源码已失效，没有选中其他工程")
         }
         return@work {
+            if (position.optString("state") == "released" && webSourcePin?.let {
+                    it.optString("clientImportId") == position.optString("clientImportId") && it.optString("planDigest") == position.optString("planDigest")
+                } == true) {
+                val old = state.pendingImport
+                if (old == null || matchesWebSourcePlan(old)) state = state.copy(pendingImport = null, imported = null, importPlan = null, retryImport = false)
+                webSourcePin = null
+            }
             if (target != null && state.pendingImport == null) {
                 webSourcePin = null
                 state = state.copy(stagedPackages = rows, staged = target, importPlan = null, imported = null, notice = "只准备了原主机任务中选定的手机原件，尚未创建项目。")
@@ -398,6 +419,7 @@ internal class ProjectPackageCoordinator(
             (state.pendingImport == null || state.pendingImport?.optString("clientImportId") == webSourcePin?.optString("clientImportId"))) {
             "请先结束当前项目包操作，再导入本机源码"
         }
+        preferredWebSource = prepared
         activate(null, null, sourcesOnly = true, prepared = prepared)
         val original = webSourcePin
         val found = matchesWebSourceReceipt(state.imported)
@@ -407,7 +429,7 @@ internal class ProjectPackageCoordinator(
     }
     fun closeWebSourceIntake() {
         if (!state.sourceImportRequested || state.checkoutId != null || state.projectId != null) return
-        retireOwnerSourcePicker()
+        preferredWebSource = null; retireOwnerSourcePicker()
         if (pickerImport != null) restoredPicker = true
         forgetImportPlan(); closeOwnerPanel(); deactivate()
     }
@@ -422,15 +444,16 @@ internal class ProjectPackageCoordinator(
     }
     fun releaseMissingWebSource(client: String) {
         val pin = state.pendingImport ?: error("原创建定位已变化")
-        check(state.retryImport && client == webSourcePin?.optString("clientImportId") && client == pin.optString("clientImportId"))
+        check((state.retryImport || state.missingSourceAction == client) && client == webSourcePin?.optString("clientImportId") && client == pin.optString("clientImportId"))
         work { _, _ ->
-            val found = local().findProjectPackageImportForOwner(JSONObject(pin.toString()))
+            val found = local().releaseReviewedPhoneSource(JSONObject(pin.toString()), false)
             if (found.optBoolean("found")) app.features.sendState()
             return@work {
                 if (found.optBoolean("found")) state = state.copy(pendingImport = null, retryImport = false, importPlan = null, imported = found, notice = "已找到原工作副本，未另起创建。")
-                else {
+                else if (found.optBoolean("positionReleased")) {
                     webSourcePin = null
                     state = state.copy(pendingImport = null, retryImport = false, importPlan = null, imported = null, staged = null, notice = "原操作仍未找到已发布副本。已放下定位，没有重试或删除项目。")
+                    val next = preferredWebSource; preferredWebSource = null; refreshSourceStages(next)
                 }
             }
         }
@@ -450,8 +473,21 @@ internal class ProjectPackageCoordinator(
     fun newWebSourceSelection() {
         requireOwner()
         check(!state.busy && state.pendingImport == null && pickerImport == null) { "请先核对原创建结果" }
-        webSourcePin = null
-        state = state.copy(staged = null, importPlan = null, imported = null, notice = null, error = null)
+        val old = webSourcePin
+        fun clear() {
+            webSourcePin = null
+            state = state.copy(staged = null, importPlan = null, imported = null, notice = null, error = null)
+        }
+        if (old == null) { clear(); return }
+        check(matchesWebSourceReceipt(state.imported)) { "请先核对上次创建的实际副本" }
+        work { _, _ ->
+            val release = local().releaseReviewedPhoneSource(JSONObject(old.toString()), true)
+            return@work {
+                if (release.optBoolean("positionReleased") && release.optBoolean("found")) {
+                    clear(); val next = preferredWebSource; preferredWebSource = null; refreshSourceStages(next)
+                } else state = state.copy(pendingImport = old, imported = null, retryImport = false, notice = "上次副本状态已变化，先核对真正的原结果，没有另建。")
+            }
+        }
     }
     fun openSourceImport() {
         requireOwner()
@@ -555,15 +591,36 @@ internal class ProjectPackageCoordinator(
         state = state.copy(pendingImport = JSONObject(pin.toString()), retryImport = false)
         importOriginal(pin)
     }
-    private fun importOriginal(pin: JSONObject) = work { _, _ ->
-        val value = local().importProjectPackageForOwner(JSONObject(pin.toString())); app.features.sendState()
-        return@work { state = state.copy(pendingImport = null, retryImport = false, importPlan = null, imported = value, notice = "已创建新的实际工作副本，原目录未覆盖；未恢复旧任务或运行授权。明确打开新副本后再开始项目任务。") }
+    private fun importOriginal(pin: JSONObject) {
+        val phoneSource = matchesWebSourcePlan(pin)
+        work { _, _ ->
+            val original = JSONObject(pin.toString())
+            val value = if (phoneSource) local().publishReviewedPhoneSource(original) else local().importProjectPackageForOwner(original)
+            app.features.sendState()
+            return@work { state = state.copy(pendingImport = null, retryImport = false, missingSourceAction = null, importPlan = null, imported = value, notice = "已创建新的实际工作副本，原目录未覆盖；未恢复旧任务或运行授权。明确打开新副本后再开始项目任务。") }
+        }
     }
     fun queryImport() {
         val pin = state.pendingImport ?: return
+        val phoneSource = matchesWebSourcePlan(pin)
         work { _, _ ->
-            val value = local().findProjectPackageImportForOwner(JSONObject(pin.toString())); if (value.optBoolean("found")) app.features.sendState()
-            return@work { state = if (value.optBoolean("found")) state.copy(pendingImport = null, imported = value, retryImport = false, notice = "已找到原导入动作创建的副本；未重复导入") else state.copy(retryImport = true, notice = "原动作未发布副本。可明确重试这个原方案；目标变化仍会拒绝。") }
+            val original = JSONObject(pin.toString())
+            val value = if (phoneSource) local().queryReviewedPhoneSource(original) else local().findProjectPackageImportForOwner(original)
+            if (value.optBoolean("found")) app.features.sendState()
+            return@work {
+                state = if (value.optBoolean("found")) state.copy(pendingImport = null, importPlan = null, imported = value, retryImport = false, missingSourceAction = null, notice = "已找到原导入动作创建的副本；未重复导入")
+                else if (!phoneSource) state.copy(retryImport = true, notice = "原动作未发布副本。可明确重试这个原方案；目标变化仍会拒绝。")
+                else {
+                    val retry = value.optBoolean("retryAvailable")
+                    val result = when {
+                        value.optBoolean("checkoutWithoutProject") -> "能找到原副本文件，但项目目录没有相同登记。未当作可打开项目，也未重建。"
+                        value.optBoolean("projectRegistered") -> "原项目已登记，但没有找到可打开的完整工作副本。"
+                        else -> "没有找到该操作已发布的工作副本。"
+                    }
+                    state.copy(retryImport = retry, missingSourceAction = pin.getString("clientImportId"), notice = result +
+                        if (retry) "原暂存仍匹配，可明确沿同一方案重试。" else "当前没有可安全重试的原方案，可以放下定位后另选来源。")
+                }
+            }
         }
     }
     fun retryImport() { if (state.retryImport) state.pendingImport?.let(::importOriginal) }
@@ -581,7 +638,14 @@ internal class ProjectPackageCoordinator(
     }
     fun continueImported() {
         val selected = state.imported ?: return
+        val source = webSourcePin?.takeIf { matchesWebSourceReceipt(selected) }?.let { JSONObject(it.toString()) }
         work { _, _ ->
+            if (source != null) {
+                val now = local().queryReviewedPhoneSource(source)
+                if (!now.optBoolean("found") || now.optString("id") != selected.optString("id") || now.optString("projectId") != selected.optString("projectId"))
+                    return@work { state = state.copy(imported = null, pendingImport = source, retryImport = false, missingSourceAction = null,
+                        notice = "上次副本或项目登记已变化。请核对原创建记录，没有打开别的项目。") }
+            }
             val actual = local().handle("changes", JSONObject().put("checkoutId", selected.getString("id")))
             check(actual.getString("projectId") == selected.getString("projectId")) { "原导入副本身份已不可核对，未打开其他项目" }
             return@work { importedCheckout(JSONObject(selected.toString())) }

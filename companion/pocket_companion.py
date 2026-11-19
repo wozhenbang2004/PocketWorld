@@ -199,6 +199,8 @@ class JobManager:
                 self.ledger.execute("UPDATE steer_messages SET receipt=?, updated_at=? WHERE message_id=?", (json.dumps(receipt), self.now(), message_id))
         self.ledger.commit()
         self.files = self.platform.workspace_files(self.state, self.ledger)
+        if self.platform.name=="windows" and hasattr(self.files,"versions"):
+            self.files.versions.lock=self.lock  # one original SQLite ledger, same lock through native file revision IO
         self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=3, thread_name_prefix="pocket-job")
         self.closed = False
         self.environments = self._environments(config.get("environments", []))

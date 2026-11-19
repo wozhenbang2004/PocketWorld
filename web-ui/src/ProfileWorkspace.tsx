@@ -4,6 +4,7 @@ import { Accordion, AccordionItem, Button, IconButton, SearchField, SelectField,
 import { Radio, RadioGroup } from './forms-library/boardui/components/base/radio/radio';
 import { useSurfaceEnter } from './library/surface-motion';
 import { MotionFeedback, WorkingStatus, useCollectionMotion } from './library/journey-motion';
+import { usePendingCandidateDeadline } from './usePendingCandidateDeadline';
 import { PersonalMemorySources } from './PersonalMemorySources';
 import './profile.css';
 
@@ -106,22 +107,6 @@ function validExpiredCandidateReceipt(receipt: Data, original: MemoryFeedback): 
     receipt.receiptHandle === original.value.receiptHandle && receipt.saved === false && receipt.undoAvailable === false &&
     receipt.candidateId === original.targetId && receipt.candidateRevision === term.revision && receipt.expiresAt === term.expiresAt &&
     Number.isSafeInteger(receipt.checkedAt) && receipt.checkedAt >= term.expiresAt;
-}
-function usePendingDeadline(expiresAt: number): boolean {
-  const [, render] = useState(0);
-  useEffect(() => {
-    if (!expiresAt) return;
-    let timer: number | undefined;
-    const refresh = () => {
-      window.clearTimeout(timer);
-      const left = expiresAt - Date.now();
-      if (left > 0) timer = window.setTimeout(refresh, Math.min(left, 0x7fffffff));
-      else render(value => value + 1);
-    };
-    refresh(); document.addEventListener('visibilitychange', refresh);
-    return () => { window.clearTimeout(timer); document.removeEventListener('visibilitychange', refresh); };
-  }, [expiresAt]);
-  return expiresAt > 0 && Date.now() >= expiresAt;
 }
 function feedbackLabel(feedback: MemoryFeedback): string {
   if (feedback.needsQuery || feedback.value.status === 'unknown') return '这次修改的结果待核对';
@@ -234,7 +219,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   const formLocked = locked || avatarPicking || !canSave;
   const profileConflict = !!editor && !!profile && editor.original.revision !== profile.revision && !sameSection(editor.original, profile, editor.section);
   const pendingUntil = selection?.candidate && selection.record.status === 'pending' ? selection.record.expiresAt : null;
-  const expiredCandidate = usePendingDeadline(Number.isSafeInteger(pendingUntil) && pendingUntil > 0 ? pendingUntil : 0);
+  const expiredCandidate = usePendingCandidateDeadline(Number.isSafeInteger(pendingUntil) && pendingUntil > 0 ? pendingUntil : 0);
   const pendingCandidates = memories.candidates.filter(row => row.status === 'pending');
   const activeMemories = memories.current.filter(row => !historicalMemory(row));
   const searchText = query.trim().toLocaleLowerCase();

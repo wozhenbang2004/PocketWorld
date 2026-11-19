@@ -239,7 +239,7 @@ class CompanionHistory(NativeHistoryAudienceSource):
             if result is None:
                 result = copy.deepcopy(self.manager.operation(operation))
             if self.manager.platform.name == "windows" and detail.get("protocol") in {"native-device-command-v1", "native-device-tool-v1"}:
-                from windows_received_job import COMMAND, admission
+                from windows_received_job import COMMAND, FILE, admission
                 original = admission(self.manager, operation, row)
                 if original is not None and protocol.resource_equal(permission.audience, original[1]):
                     if original[0]["toolName"] == COMMAND:
@@ -249,6 +249,9 @@ class CompanionHistory(NativeHistoryAudienceSource):
                             result = {"id": row[1], "operationId": operation, "status": "unknown", "archived": True,
                                       "noAutomaticReplay": True}  # No cache-only output substituted for an unverified original.
                         result["windowsCommandReceipt"] = command
+                    elif original[0]["toolName"] == FILE:
+                        from windows_received_file import project
+                        result["windowsFileReceipt"] = project(self.manager,operation,row,original)
                     else:
                         from windows_workspace_read import project
                         snapshot = project(self.manager, operation, row, original)

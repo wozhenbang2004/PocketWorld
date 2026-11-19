@@ -6,8 +6,8 @@ import device_protocol as protocol
 from platform_backend import PlatformError
 from windows_installation import _object
 
-COMMAND, READS = "command.run", frozenset({"workspace.list", "workspace.read"})
-TOOLS = {COMMAND: "native-device-command-v1", **{k: "native-device-tool-v1" for k in READS}}
+COMMAND, FILE, READS = "command.run", "workspace.receive", frozenset({"workspace.list", "workspace.read"})
+TOOLS = {COMMAND: "native-device-command-v1", FILE: "native-device-tool-v1", **{k: "native-device-tool-v1" for k in READS}}
 
 
 def admission(manager, operation, row):

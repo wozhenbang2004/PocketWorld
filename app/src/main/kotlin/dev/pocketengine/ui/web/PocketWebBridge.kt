@@ -605,7 +605,7 @@ internal class PocketWebBridge(
                 attachmentPages.dispatch(action, attachmentArgs, conversationResult) { result, error -> complete(id, result, error); publishState() }; return
             }
             if (action in PocketWebMemoryHistory.COMMANDS) {
-                memoryHistory.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }; return
+                memoryHistory.dispatch(action, args) { result, error -> completePrivateMemoryReply(id, action, result, error); publishState() }; return
             }
             if (action in PocketWebBackground.COMMANDS) {
                 background.dispatch(action, args) { result, error -> complete(id, result, error, "outcome_unknown"); publishState() }
@@ -975,11 +975,20 @@ internal class PocketWebBridge(
             }
             if (action in PocketWebKnowledge.COMMANDS) {
                 if (action == "knowledge.close") check(section in setOf("memory", "memoryReview", "learning")) else if (action.startsWith("knowledge.")) check(section in setOf("memory", "memoryReview")) { "请先打开记忆管理页" } else requireSection("learning")
-                // Memory bodies and scoped source pages are live reads; duplicate IDs cannot restore their contents.
-                val retain = action !in setOf("knowledge.snapshot", "knowledge.get", "knowledge.source", "knowledge.parent")
-                knowledge.dispatch(action, args) { result, error -> complete(id, result, error, retainValue = retain); publishState() }; return
+                knowledge.dispatch(action, args) { result, error ->
+                    if (action.startsWith("knowledge.")) completePrivateMemoryReply(id, action, result, error)
+                    else complete(id, result, error) // Separate learning-job commands keep their original receipt contract.
+                    publishState()
+                }; return
             }
-            if (action in PocketWebMemoryDrafts.COMMANDS) { memoryDrafts.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }; return }
+            if (action in PocketWebMemoryDrafts.COMMANDS) {
+                // Review/open/query carry live private text; even a mutation reply can contain the old record.
+                // The original operation journal, not the Web request-ID cache, owns that outcome.
+                memoryDrafts.dispatch(action, args) { result, error ->
+                    completePrivateMemoryReply(id, action, result, error)
+                    publishState()
+                }; return
+            }
             if (action in PocketWebSkillDrafts.COMMANDS) { skillDrafts.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }; return }
             if (action in PocketWebLocal.COMMANDS) {
                 if (action.startsWith("local.execution.")) {
@@ -1309,18 +1318,30 @@ internal class PocketWebBridge(
         }
     }
 
+    /** The first reply still reaches its private owner. Replay must not bypass today's native scope, revision or foreground lease. */
+    private fun completePrivateMemoryReply(id: String, action: String, value: JSONObject?, error: String?) {
+        val hint = when (action) {
+            "memoryDraft.close", "memoryHistory.close", "knowledge.close" -> null // No record, source, selector or authority in a close ACK.
+            "memoryDraft.confirm", "memoryDraft.cancel", "memoryDraft.undo" -> "此请求不会重复执行，请在原提案查询实际结果。"
+            "knowledge.namespace" -> "原范围不会自动重新打开。请明确选择当前要查看的记忆范围。"
+            "knowledge.confirm", "knowledge.project.propose", "knowledge.project.note.confirm", "knowledge.consolidation.start", "knowledge.consolidation.stop",
+            "memoryHistory.confirm", "taskMemory.confirm" -> "此请求不会重复执行，请在原记忆或任务核对实际结果。"
+            else -> "原读取或审阅结果不能重放，请在原范围重新核对。"
+        }
+        complete(id, value, error, retainValue = hint == null, replayHint = hint)
+    }
     private fun completeOwnerWorkControlRejection(id: String, message: String?) {
         complete(id, JSONObject().put("status", "rejected").put("message", message?.take(300) ?: "这次操作未接受，请重新打开任务。"), null)
     }
 
-    private fun complete(id: String, value: JSONObject?, error: String?, errorCode: String = "not_accepted", retainValue: Boolean = true) {
+    private fun complete(id: String, value: JSONObject?, error: String?, errorCode: String = "not_accepted", retainValue: Boolean = true, replayHint: String? = null) {
         if (closed) return
         val identity = pendingCommands.remove(id) ?: return
         val response = JSONObject().put("v", 1).put("kind", "result").put("id", id).put("ok", error == null)
         if (error == null) response.put("value", value ?: JSONObject()) else response.put("error", JSONObject().put("code", errorCode).put("message", error))
         // Transient reads are not durable command receipts. Keep only a small replay rejection.
-        val replay = if (retainValue || error != null) response else JSONObject().put("v", 1).put("kind", "result").put("id", id).put("ok", false)
-            .put("error", JSONObject().put("code", "preview_expired").put("message", "原读取结果已过期，请重新读取"))
+        val replay = if (retainValue || error != null && replayHint == null) response else JSONObject().put("v", 1).put("kind", "result").put("id", id).put("ok", false)
+            .put("error", JSONObject().put("code", if (replayHint == null) "preview_expired" else "original_receipt_required").put("message", replayHint ?: "原读取结果已过期，请重新读取"))
         commandReceipts[id] = identity to replay
         while (commandReceipts.size > 128) commandReceipts.remove(commandReceipts.keys.first())
         emit(response)

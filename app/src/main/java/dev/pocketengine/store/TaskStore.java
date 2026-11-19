@@ -575,6 +575,7 @@ public final class TaskStore {
                         // original save or the current presence/absence of a memory record.
                         link.put("undoStatus",original.getJSONObject("undo").getString("status"));
                         if("rejected".equals(applyStatus)&&"existing_personal_memory".equals(applied.optString("outcome")))link.put("duplicate",true);
+                        if(dev.pocketengine.features.memory.ConversationMemoryReceipt.expiredBeforeSave(proposal,applied))link.put("candidateExpiredBeforeSave",true);
                     }
                     drafts.put(link);
                 }catch(Exception invalid){unavailable++;}

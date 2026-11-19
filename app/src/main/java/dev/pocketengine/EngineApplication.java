@@ -529,6 +529,12 @@ public final class EngineApplication extends Application implements dev.pocketen
     }
     /** Called by B's native owner model/permission page, never by a device or model JSON command. */
     public boolean hasPendingDeviceGoal(String id){return pendingDeviceGoals.containsKey(id);}
+    /** One explicit local inbox review. Never reacquire an Admission from the durable envelope. */
+    public synchronized String retainedDeviceGoalCondition(String id){
+        var pending=pendingDeviceGoals.get(id);if(pending==null)return "original_not_retained";
+        if(pending.deadline()<=System.currentTimeMillis())return "expired";
+        try{pending.checkCurrent();return "retained";}catch(Exception unavailable){return "original_conditions_unavailable";}
+    }
     public synchronized boolean pendingDeviceGoalUsesNoScreen(String id){var pending=pendingDeviceGoals.get(id);return pending!=null&&pending.noPhoneSurface();}
     public synchronized JSONObject cancelPendingDeviceGoal(String id)throws Exception{
         var admission=pendingDeviceGoals.get(id);if(admission==null)throw new SecurityException("没有本机保留的原未启动目标准入");JSONObject result=tasks.deviceTasks().cancelPendingGoal(id,admission);pendingDeviceGoals.remove(id,admission);pushTask(id);return result;

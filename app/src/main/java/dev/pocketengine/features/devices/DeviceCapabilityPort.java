@@ -168,7 +168,10 @@ public final class DeviceCapabilityPort implements CapabilityPort {
                             .put("childTaskId", result.getString("localTaskId")).put("childRunId", result.getString("runId"));
                     // Restricted text receipts intentionally contain no raw status body.
                     // Settle only from the authenticated outer receipt for this exact prepared dispatch.
-                    if(DeviceProtocol.isAndroidTextReturn(originalWire))terminal.put("status",result.getString("status")).put("executorEpoch",result.getLong("executorEpoch"));
+                    if(DeviceExecutionAdmission.zeroToolPhoneGoal(originalWire)){
+                        if(!Boolean.TRUE.equals(result.opt("accepted")))throw new SecurityException("原零工具回执没有已核对的接纳绑定，不结算预算");
+                        terminal.put("status",result.getString("status")).put("executorEpoch",result.getLong("executorEpoch"));
+                    }
                     JSONObject settled=devices.settleChild(coordinator.authenticatedChildResult(actual.peer(), terminal));return parentView(result,settled);
                 }
                 return parentView(result,new JSONObject().put("allocationAuthorizationRetained",true).put("singleOperationIsNotAllocationClosed",true));

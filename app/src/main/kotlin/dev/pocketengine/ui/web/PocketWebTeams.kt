@@ -5,6 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import dev.pocketengine.core.RunControl
 import dev.pocketengine.features.teams.TaskStoreTeamWriteHost
+import dev.pocketengine.features.teams.TeamParentRevisionOffer
 import dev.pocketengine.features.teams.TeamOwnerFileReading
 import dev.pocketengine.features.teams.AgentSlot
 import dev.pocketengine.features.teams.TeamPhoneHost
@@ -55,8 +56,8 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
         @Synchronized fun retire() { live = false; itemPage?.close(); itemPage = null }
     }
     private data class Review(val command: String, val input: String, val expires: Long, val phonePage: TeamPhoneHost.Page? = null, val phoneReview: TeamPhoneHost.Review? = null, val productionSources: String? = null,
-        val workItem: PocketWebTeamWorkReturn? = null, val ownerReading: Reading? = null) {
-        fun close() { runCatching { phonePage?.close() }; runCatching { workItem?.close() } }
+        val workItem: PocketWebTeamWorkReturn? = null, val ownerReading: Reading? = null, val proposal: TaskStoreTeamWriteHost.WorkPlanPage.ParentProposalReview? = null) {
+        fun close() { runCatching { phonePage?.close() }; runCatching { workItem?.close() }; runCatching { proposal?.close() } }
     }
     private data class PhonePage(val original: TeamPhoneHost.Page, val definition: String, val input: String, val expires: Long)
     @Volatile private var generation = 0L
@@ -71,7 +72,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
     companion object {
         val COMMANDS = setOf("teams.attention", "teams.readAttention", "teams.snapshot", "teams.readRun", "teams.readDefinition", "teams.reviewDefinition", "teams.prepareDraftStart",
             "teams.reviewStart", "teams.reviewRemove", "teams.confirm", "teams.control", "teams.sendMessage",
-            "teams.readFrozenOutputs", "teams.readFrozenDiff", "teams.reviewFrozenTextApproval", "teams.approveFrozenText", "teams.reviewWorkItemContinuation", "teams.answerAssignment", "teams.probeMember", "teams.closeReading", "teams.reviewPhoneStart", "teams.reviewMember", "teams.openResearchTask")
+            "teams.readFrozenOutputs", "teams.readFrozenDiff", "teams.reviewFrozenTextApproval", "teams.approveFrozenText", "teams.reviewParentRevision", "teams.reviewWorkItemContinuation", "teams.answerAssignment", "teams.probeMember", "teams.closeReading", "teams.reviewPhoneStart", "teams.reviewMember", "teams.openResearchTask")
     }
 
     fun clear() {
@@ -186,6 +187,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
             }
             result.put("messages", PocketWebState.publicValue(JSONArray(messages)))
             result.put("attention", PocketWebState.publicValue(TeamAttention.forRun(value)))
+            result.put("revisionOffers", PocketWebState.publicValue(TeamParentRevisionOffer.available(value)))
             controller.state.tasks.singleOrNull { it.raw.optString("feature") == "teams" && it.raw.optString("externalId") == value.optString("id")
                 && it.raw.optString("actorId") == "owner" && it.raw.optString("spaceId") == "private" }
                 ?.let { result.put("taskId", it.id) }
@@ -670,6 +672,25 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                     })
                 }
             }
+            "teams.reviewParentRevision" -> {
+                fields(args,"viewHandle","operationId")
+                val handle=text(args,"viewHandle"); val operation=text(args,"operationId",128)
+                val owner=readings[handle]?.takeIf { it.kind=="run" && it.live } ?: error("请重新打开原协作")
+                val retained=JSONObject(owner.original); val source=TeamParentRevisionOffer.exact(retained,operation)
+                reviews.entries.removeAll { (_, old) -> (old.expires <= SystemClock.elapsedRealtime()).also { if(it)old.close() } }
+                check(reviews.size<8) { "请先关闭已有团队操作审阅" }
+                var prepared: TaskStoreTeamWriteHost.WorkPlanPage.ParentProposalReview?=null
+                hostWork(work={
+                    val page=controller.openTeamWorkPlanPage(source.getString("teamRunId"));workingTeamPage=page
+                    owner.hold(page);check(currentWindow()&&owner.live) { "原协作窗口已关闭" };page.setForeground(true)
+                    page.reviewParentProposal(retained,operation).also { prepared=it }.preview()
+                },accept={ shown ->
+                    check(readings[handle]===owner&&owner.live) { "原团队记录已更换，未开始修订" }
+                    val token=UUID.randomUUID().toString()
+                    reviews[token]=Review("reviseFromParent","",SystemClock.elapsedRealtime()+120_000,ownerReading=owner,proposal=requireNotNull(prepared))
+                    deliver(JSONObject().put("operation","reviseFromParent").put("reviewHandle",token).put("input",PocketWebState.publicValue(shown)),null)
+                })
+            }
             "teams.reviewWorkItemContinuation" -> {
                 fields(args, "viewHandle", "workItemId")
                 val handle = text(args, "viewHandle")
@@ -694,7 +715,20 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 fields(args, "reviewHandle")
                 val captured = reviews.remove(text(args, "reviewHandle")) ?: error("原操作审阅已使用或关闭，请先核对原回执")
                 if (captured.expires <= SystemClock.elapsedRealtime()) { captured.close(); error("原操作审阅已过期") }
-                if (captured.workItem != null) {
+                if(captured.proposal!=null){
+                    val proposal=captured.proposal;val shown=proposal.preview();val owner=captured.ownerReading
+                    if(owner?.live!=true){captured.close();error("原修订窗口已关闭，未开始")}
+                    hostWork(proposal,work={
+                        try{check(owner.live&&currentWindow());proposal.confirm()}finally{proposal.close()}
+                    },accept={result->
+                        val op=shown.getString("operationId")
+                        val applied=result.optJSONArray("parentRequests").objects().singleOrNull { it.optString("operationId")==op && it.optString("state")=="applied_to_work_revision" }
+                        val requestId=result.getJSONObject("workPlan").getString("lastRevisionRequestId")
+                        check(result.optString("id")==shown.getString("runId") && applied!=null && requestId.isNotBlank() && applied.optString("revisionRequestId")==requestId) { "原修订是否已排队待核对，请刷新原协作，不要重发" }
+                        deliverReceipt(JSONObject().put("confirmed",true).put("command","reviseFromParent").put("operationId",op)
+                            .put("workItemId",shown.getString("workItemId")).put("assignmentId",shown.getString("assignmentId")).put("reading",view("run",result)))
+                    })
+                } else if (captured.workItem != null) {
                     val work = captured.workItem
                     if (captured.ownerReading?.live != true) { captured.close(); error("原分工审阅已关闭，没有开始工作") }
                     hostWork(work, work = {

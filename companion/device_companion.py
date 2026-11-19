@@ -493,7 +493,9 @@ class CompanionDeviceReceiver:
         try:
             job["nativeInputDispatchStarted"] = True
             self.manager._save(job)
-            result = self.manager.files._write_bytes(environment_id, environment, request, raw, current=lambda: self._input_current(descriptor))
+            receive_bytes = getattr(self.manager.files,"receive_bytes",None) if self.manager.platform.name=="windows" else None
+            writer = receive_bytes if callable(receive_bytes) else self.manager.files._write_bytes
+            result = writer(environment_id, environment, request, raw, current=lambda: self._input_current(descriptor))
             # Cleanup is still gated by the original live admission, before settling it.
             # A cleanup failure must not erase a factual target write receipt.
             try:
@@ -688,7 +690,7 @@ class CompanionDeviceReceiver:
                     raise
 
     def _native_tool(self, envelope, permission, peer=None):
-        self.require_workspace(envelope, permission)
+        _,original_environment = self.require_workspace(envelope, permission)
         incoming = envelope.arguments["toolName"] in {"workspace.receive", "workspace.project.receive"}
         if incoming:
             if self.manager._environment(envelope.get("resourceBinding")["environmentId"]).get("writeAllowed") is not True:
@@ -717,6 +719,10 @@ class CompanionDeviceReceiver:
                     raise PlatformError("Transfer already belongs to another original operation; request was not reserved",409)
                 if len(self._inputs)>=4 or sum(item[0]["bytes"] for item in self._inputs.values())+selected["bytes"]>40*1024*1024:
                     raise PlatformError("Native input cache full; request was not reserved",503)
+            file_witness = {}
+            if self.manager.platform.name=="windows" and envelope.arguments["toolName"]=="workspace.receive":
+                from windows_received_file import accepted as original_file
+                file_witness=original_file(self.manager,envelope,operation,original_environment)
             now, job_id = self.manager.now(), str(uuid.uuid4())
             job = {"id": job_id, "operationId": operation, "fingerprint": fingerprint, "worker": "device_tool", "status": "running",
                    "environmentId": envelope.get("resourceBinding")["environmentId"], "createdAt": now, "updatedAt": now, "output": "", "outputTruncated": False,
@@ -729,7 +735,7 @@ class CompanionDeviceReceiver:
                 job["budgetClaim"] = self.budget.claim(operation, envelope, permission, self.manager.ledger)
                 self.manager.ledger.execute("INSERT INTO operations(operation_id,fingerprint,job_id,last_status,updated_at,details) VALUES (?,?,?,?,?,?)",
                                             (operation, fingerprint, job_id, "running", now, json.dumps({"protocol": TOOL_PROTOCOL, "audience": _audience(envelope),
-                                                                                                      **({"inputTransferId": selected["transferId"]} if incoming else {}),
+                                                                                                      **({"inputTransferId": selected["transferId"]} if incoming else {}), **file_witness,
                                                                                                       "historyAudience": accepted_audience(envelope, permission, operation, now)})))
                 self.manager.ledger.execute("RELEASE SAVEPOINT " + savepoint)
             except BaseException:

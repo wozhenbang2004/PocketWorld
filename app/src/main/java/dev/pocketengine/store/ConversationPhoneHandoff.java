@@ -104,6 +104,8 @@ final class ConversationPhoneHandoff {
                 .put("status",status).put("content",summaryContent(summary)).put("summaryTruncated",summary.length()>MAX_CONTENT_CHARS)
                 .put("summaryChars",summary.length()).put("summaryDigest",summaryDigest(summary)).put("evidence",reference).put("endedAt",endedAt)
                 .put("executionAuthorized",false).put("resultVerified",false);
+        JSONObject finalPage=dev.pocketengine.phone.observation.PhoneFinalPageReceipt.retained(evidence,task.getString("id"),run,epoch);
+        if(finalPage!=null)result.put("finalScreenReceipt",finalPage);
         return result.put("resultDigest",digest(result));
     }
 
@@ -132,6 +134,9 @@ final class ConversationPhoneHandoff {
         if(end<summary.length()&&end>offset&&Character.isHighSurrogate(summary.charAt(end-1))&&Character.isLowSurrogate(summary.charAt(end)))end--;
         JSONObject out=new JSONObject();
         for(String field:new String[]{"taskId","runId","epoch","conversationId","deliveryId","status","endedAt","summaryChars","summaryTruncated","resultDigest","summaryDigest"})out.put(field,snapshot.get(field));
+        JSONObject finalPage=dev.pocketengine.phone.observation.PhoneFinalPageReceipt.project(snapshot.optJSONObject("finalScreenReceipt"),
+                snapshot.getString("taskId"),snapshot.getString("runId"),snapshot.getInt("epoch"));
+        if(finalPage!=null)out.put("finalScreenReceipt",finalPage);
         return out.put("offset",offset).put("nextOffset",end).put("hasMore",end<summary.length()).put("text",summary.substring(offset,end))
                 .put("executionAuthorized",false).put("resultVerified",false);
     }

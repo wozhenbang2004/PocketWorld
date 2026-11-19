@@ -67,6 +67,7 @@ internal class PocketWebLocalSourceIntake(private val original: ProjectPackageCo
             .put("reviewId", plan?.getString("clientImportId")).put("reviewName", plan?.getString("projectName"))
             .put("pendingId", pending?.getString("clientImportId")).put("pendingName", pending?.getString("projectName"))
             .put("otherPending", state.pendingImport != null && pending == null).put("mayRetry", pending != null && state.retryImport)
+            .put("mayRelease", pending != null && (state.retryImport || state.missingSourceAction == pending.optString("clientImportId")))
             .put("project", result?.getString("projectId")).put("checkout", result?.getString("id")).put("name", result?.optString("name"))
     }
 

@@ -557,7 +557,7 @@ class WindowsBackend:
             raise PlatformError("Original created Harness file identity/bytes are required for conditional deletion", 403)
         return self._delete_owned_bytes(root, relative, hashlib.sha256(before).hexdigest(), len(before), current, original_identity)
 
-    def _delete_owned_bytes(self, root, relative, expected_sha256, expected_bytes, current, expected_identity=None):
+    def _delete_owned_bytes(self, root, relative, expected_sha256, expected_bytes, current, expected_identity=None, *, expected_creation=None, private_sid=None):
         if not re.fullmatch(r"[a-f0-9]{64}", expected_sha256 or "") or type(expected_bytes) is not int or not 0 <= expected_bytes <= 20 * 1024 * 1024:
             raise PlatformError("Exact cached content hash and byte count required", 400)
         with self.directory(root) as (directory, _, identity):
@@ -572,6 +572,12 @@ class WindowsBackend:
             try:
                 if self.api.final(handle).casefold() != ("\\\\?\\" + target).casefold():
                     raise PlatformError("Cached object handle escaped its exact path", 403)
+                if private_sid is not None:
+                    self.api.private_access(handle,private_sid)
+                if expected_creation is not None:
+                    born=self.api.info(handle).created
+                    if expected_identity is None or [born.dwHighDateTime,born.dwLowDateTime]!=expected_creation:
+                        raise PlatformError("Original retained cache creation identity changed; nothing deleted",409)
                 reader = WindowsHandleReader(self.api, handle, 20 * 1024 * 1024)
                 if expected_identity is not None and reader.identity != expected_identity:
                     raise PlatformError("Original owned object identity changed; nothing deleted", 409)

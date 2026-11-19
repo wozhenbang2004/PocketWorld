@@ -838,7 +838,8 @@ if(runs.size()+archived.size()>=RETAINED_RUN_LIMIT)throw new IllegalStateExcepti
     }
     public JSONObject parentSnapshot(dev.pocketengine.store.TaskStore.TeamParentOrigin original,JSONObject input)throws Exception{original.checkCurrent();synchronized(this){Run run=required(input.getString("runId"));reviewedSnapshot(run,input);return JsonFiles.copy(run.json);}}
     /** A visible parent proposal only. The original native revision review still captures bases and grants. */
-    public JSONObject recordParentRevision(dev.pocketengine.store.TaskStore.TeamParentOrigin original,JSONObject input)throws Exception {
+    public JSONObject recordParentRevision(dev.pocketengine.store.TaskStore.TeamParentOrigin original,JSONObject input)throws Exception {return recordParentRevision(original,input,null);}
+    JSONObject recordParentRevision(dev.pocketengine.store.TaskStore.TeamParentOrigin original,JSONObject input,JSONObject actualIntegration)throws Exception {
         original.checkCurrent();synchronized(this){
             Run run=required(input.getString("runId"));reviewedSnapshot(run,input);
             JSONObject item=TeamWorkItems.find(run.json.getJSONObject("workPlan").getJSONArray("items"),input.getString("workItemId"));
@@ -847,8 +848,11 @@ if(runs.size()+archived.size()>=RETAINED_RUN_LIMIT)throw new IllegalStateExcepti
             if(text.length()>4000||text.codePoints().allMatch(Character::isWhitespace)||operation.isEmpty())throw new SecurityException("修订提案缺少原prepared动作或有效文字");
             JSONArray requests=run.json.optJSONArray("parentRequests");if(requests==null)requests=new JSONArray();
             for(int i=0;i<requests.length();i++)if(operation.equals(requests.getJSONObject(i).getString("operationId")))return JsonFiles.copy(run.json);
-            if(requests.length()>=16)throw new IllegalStateException("原团队已保留16条待核对父提案；请先处理，不丢弃或覆盖历史");
-            requests.put(TeamWorkItems.exactIdentity(item).put("operationId",operation).put("parentTaskId",original.view().getString("parentTaskId")).put("kind","revision_proposal").put("text",redact(text,run.config)).put("state","awaiting_owner_review").put("at",System.currentTimeMillis()).put("executionAuthorized",false));
+            int waiting=0;for(int i=0;i<requests.length();i++)if("awaiting_owner_review".equals(requests.getJSONObject(i).optString("state")))waiting++;
+            if(waiting>=16||requests.length()>=128)throw new IllegalStateException("原团队的修订记录已满，现有提案不会被丢弃或覆盖");
+            JSONObject bound=TeamParentRevisionOffer.basis(run.json,original.view(),actualIntegration);
+            JSONObject request=TeamWorkItems.exactIdentity(item).put("operationId",operation).put("parentTaskId",original.view().getString("parentTaskId")).put("kind","revision_proposal").put("text",redact(text,run.config)).put("state","awaiting_owner_review").put("at",System.currentTimeMillis()).put("executionAuthorized",false);
+            if(bound!=null)request.put("integratedBasis",bound);requests.put(request);
             run.json.put("parentRequests",requests);activity(run,"parent_revision_proposed","父代理提出沿原成果修订；等待主人在原工作项审阅，不自动扩权",item.getString("memberId"));save(run);return JsonFiles.copy(run.json);
         }
     }
@@ -1279,6 +1283,7 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
         if(closed||source.readOnlyRound||model==null||model.model.isEmpty())throw new SecurityException("原协调器已关闭、来源只读或未配置实际模型");source.checkCurrent();Run run=source.run;if(!run.children.isEmpty())throw new SecurityException("仍有原成员在执行");JSONObject actual=owner.approve();
         if(run.control==null||run.control.isCancelled()){run.control=new RunControl();run.generation++;run.json.put("generation",run.generation);}run.paused=false;run.config=model;
         Set<String> actors=new java.util.HashSet<>(),queuedActors=new java.util.HashSet<>();JSONArray affected=actual.getJSONArray("affectedWorkItemIds"),items=actual.getJSONObject("workPlan").getJSONArray("items");for(int i=0;i<affected.length();i++){JSONObject item=TeamWorkItems.find(items,affected.getString(i));actors.add(item.getString("memberId"));if(item.optString("status").equals("queued"))queuedActors.add(item.getString("memberId"));}for(String actor:actors){JSONObject member=member(run,actor);boolean ready=queuedActors.contains(actor);member.put("generation",member.getInt("generation")+1).put("ownerContinuationGeneration",member.getInt("generation")).put("paused",false).put("status",ready?"queued":"awaiting_user");}
+        TeamParentRevisionOffer.recordApplied(run.json,actual);
         run.json.put("callLimit",actual.getJSONObject("parentBudget").getInt("modelRequestLimit")).put("toolCallLimit",actual.getJSONObject("parentBudget").getInt("toolOperationLimit"));run.json.put("productionScope",actual.getJSONObject("scope")).put("workPlan",actual.getJSONObject("workPlan")).put("status","queued").put("phase","work_items").put("summaryStale",true);if(run.json.optJSONObject("independentReview")!=null)run.json.getJSONObject("independentReview").put("stale",true);nativeBudget(run,actual);activity(run,"work_item_revision","主人已确认准确工作项及受影响依赖的新修订；旧成果/审批保留且旧审查失效，原项目仍待本版独审与唯一整合",null);if(queuedActors.isEmpty())run.json.put("status","awaiting_user");save(run);if(!queuedActors.isEmpty())schedule(run);return JsonFiles.copy(run.json);
     }
     public interface WorkPlanStarter {JSONObject approve()throws Exception;}

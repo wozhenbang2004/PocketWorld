@@ -902,7 +902,9 @@ public final class AgentRunner {
                 if (calls == null || calls.length() == 0) {
                     if (answer.isEmpty()) throw new ModelGateway.GatewayException("模型没有返回文字或工具调用，请换用支持手机工具的模型。");
                     emit(taskId, "verification", "running", intent.deviceReadAllowed()&&DeferredPhoneSession.initialized(phone)?"正在重新观察结果，等待你确认。":"正在根据本次实际工具结果整理答复。", null, intent.diagnostics(), config, sink);
-                    evidence = !DeferredPhoneSession.initialized(phone)||!control.phoneSurfaceActive()||!intent.deviceReadAllowed()?new JSONObject().put("noDeviceObservation",true):observe(taskId, config, control, sink,planning,turnPlanning);
+                    String skippedFinalScreen=!intent.deviceReadAllowed()?"not_allowed":!DeferredPhoneSession.initialized(phone)?"not_entered":!control.phoneSurfaceActive()?"other_surface":null;
+                    RunControl.HostRunIdentity finalReadOwner=control.hostRunIdentity();
+                    evidence = skippedFinalScreen!=null?new JSONObject().put("noDeviceObservation",true):observe(taskId, config, control, sink,planning,turnPlanning);
                     requirePlanningCurrent(planning,turnPlanning);
                     evidence.put("modelSummary", clean(answer, config));
                     int finalAnswerIndex=history.length();JSONObject finalMessage=new JSONObject().put("role","assistant").put("content",clean(answer,config)).put("nativeTraceCallId",nativeRequest[0]);if(response.optJSONObject("provider_data")!=null)finalMessage.put("provider_data",safeJson(response.getJSONObject("provider_data"),config,false));history.put(finalMessage);
@@ -939,10 +941,17 @@ public final class AgentRunner {
                     // audit data, but must never turn it into task completion evidence.
                     requirePlanningCurrent(planning,turnPlanning);
                     RunControl.HostRunIdentity finalRun=control.hostRunIdentity();
-                    if(finalRun!=null){evidence.put("nativeFinalAnswer",new JSONObject().put("format","pocketworld.runner-final-answer.v1").put("taskId",taskId).put("runId",finalRun.runId()).put("coordinatorEpoch",finalRun.epoch()).put("messageIndex",finalAnswerIndex).put("historyLength",history.length()).put("answerFingerprint",CompactionPlan.fingerprint(finalMessage.getString("content"))).put("inputBoundaryEmpty",true));if(routes!=null){JSONObject candidate=routes.candidate(control);if(candidate!=null)evidence.put("nativePhoneRoute",candidate);}checkpoint(taskId,journal,history,steps,evidence,config,sink,contextBudget,repeatedTools);}
+                    JSONObject phoneFinalPage=null;
+                    if(finalRun!=null&&finalRun.equals(finalReadOwner)&&phone instanceof DeferredPhoneSession session&&session.originalControl()==control&&
+                            session.matchesHostScope(taskId,finalRun.runId(),finalRun.epoch())){
+                        phoneFinalPage=dev.pocketengine.phone.observation.PhoneFinalPageReceipt.from(control,finalRun,session.executionMode(),skippedFinalScreen,evidence);
+                    }
+                    if(finalRun!=null){evidence.put("nativeFinalAnswer",new JSONObject().put("format","pocketworld.runner-final-answer.v1").put("taskId",taskId).put("runId",finalRun.runId()).put("coordinatorEpoch",finalRun.epoch()).put("messageIndex",finalAnswerIndex).put("historyLength",history.length()).put("answerFingerprint",CompactionPlan.fingerprint(finalMessage.getString("content"))).put("inputBoundaryEmpty",true));if(phoneFinalPage!=null)evidence.getJSONObject("nativeFinalAnswer").put("phoneFinalPage",phoneFinalPage);if(routes!=null){JSONObject candidate=routes.candidate(control);if(candidate!=null)evidence.put("nativePhoneRoute",candidate);}checkpoint(taskId,journal,history,steps,evidence,config,sink,contextBudget,repeatedTools);}
                     if(instructionProfile==NativeInstructionProfile.PAIRED_DEVICE_TEXT)
                         return finish(taskId,"needs_confirmation",clean(answer,config),evidence,steps,config,sink);
                     String verificationNotice = !intent.deviceReadAllowed()?"以下仅为讨论答复；没有读取或操作设备。":!DeferredPhoneSession.initialized(phone)?"以下答复基于实际工具结果；本次未启用手机，外部效果仍以对应收据为准。":evidence.optBoolean("ok", true) ? "模型已结束操作，请核对当前页面。" : "结果页面暂时无法重新读取，请在手机上亲自确认。";
+                    String nativeCheck=dev.pocketengine.phone.observation.PhoneFinalPageReceipt.ownerNotice(phoneFinalPage);
+                    if(nativeCheck!=null)verificationNotice=nativeCheck;
                     return finish(taskId, "needs_confirmation", verificationNotice + "\n" + clean(answer, config), evidence, steps, config, sink);
                 }
                 if (calls.length() > 8) throw new ModelGateway.GatewayException("模型一次请求了过多手机动作，请更换模型或缩短目标。");

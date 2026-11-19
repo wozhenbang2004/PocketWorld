@@ -9,6 +9,7 @@ import { ShimmerText } from './library';
 import type { ConversationDraftTarget } from './SkillDraftReview';
 import { MemoryAssertionFields } from './MemoryAssertionFields';
 import { ScopedMemoryEvidence } from './ScopedMemoryEvidence';
+import { usePendingCandidateDeadline } from './usePendingCandidateDeadline';
 
 type Data = Record<string, any>;
 const proposalWindow = () => {
@@ -77,6 +78,14 @@ export function MemoryDraftReview({ target, onClose, onOpenMemory }: {
   const undoPending = undoUncertain || ['unknown', 'undoing_unknown'].includes(value?.undo?.status);
   const displayedRecord = record || (duplicate ? candidate : originalRecord);
   const expiry = review?.after?.expiresAt;
+  const candidatePin = action === 'create' ? proposal.candidate : undefined;
+  const candidateUntil = pending && review?.after?.status === 'pending' && typeof candidatePin?.id === 'string' && Number.isSafeInteger(candidatePin.revision) && candidatePin.revision > 0 && candidatePin.id === review.after.id && candidatePin?.revision === review.after.revision && Number.isSafeInteger(expiry) && expiry > 0 ? expiry : 0;
+  const candidateExpired = usePendingCandidateDeadline(candidateUntil);
+  const expiredReceipt = outcomeStatus === 'rejected' && apply.outcome === 'candidate_expired_before_save' && apply.action === 'create' &&
+    Object.entries(original).every(([key, field]) => apply[key] === field) && apply.accepted === false && apply.mutationApplied === false && apply.formalMemorySaved === false && apply.undoAvailable === false &&
+    typeof candidatePin?.id === 'string' && candidatePin.id === apply.candidateId && Number.isSafeInteger(candidatePin.revision) && candidatePin.revision > 0 && candidatePin.revision === apply.candidateRevision &&
+    Number.isSafeInteger(apply.expiresAt) && apply.expiresAt > 0 && Number.isSafeInteger(apply.checkedAt) && apply.expiresAt <= apply.checkedAt;
+
   const expiryLabel = typeof expiry === 'number' && Number.isSafeInteger(expiry) && expiry > 0 ? new Date(expiry).toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
   const title = undoPending ? '撤销结果待核对' : duplicate ? '已有相同内容' : reverted ? '已撤销这次保存' : saved ? action === 'forget' ? '已忘记这条记忆' : action === 'update' ? '已更新记忆' : '已记住'
     : action === 'forget' ? '忘记这条记忆' : action === 'update' ? '更新这条记忆' : '记住这件事';
@@ -103,6 +112,8 @@ export function MemoryDraftReview({ target, onClose, onOpenMemory }: {
         {error && <p className="pw-memory-draft-error" role="alert">{error}</p>}
         {outcomeStatus && <p className="pw-memory-draft-result" role="status">{undoPending ? '撤销结果待核对，请查询这次修改。' : status[outcomeStatus] || '提案状态待核对'}</p>}
         {typeof outcomeMessage === 'string' && outcomeMessage && <p>{outcomeMessage}</p>}
+        {expiredReceipt && onOpenMemory && <Button variant="ghost" disabled={busy} onClick={() => { onOpenMemory({ id: apply.candidateId, candidate: true }); onClose(); }}>查看原建议</Button>}
+        {expiredReceipt && value?.queryOriginalReceipt === true && <p className="pw-muted">本机确认这次没有新增记忆，原操作的回执留存尚待核对。</p>}
         {(saved || reverted || duplicate) && <section className="pw-memory-draft-receipt" aria-label="保存结果">
           {!record && !duplicate && typeof originalRecord?.text === 'string' && <p className="pw-muted">本次保存时的内容</p>}
           {typeof displayedRecord?.text === 'string' && <p className="pw-reading-copy">{displayedRecord.text}</p>}
@@ -117,7 +128,7 @@ export function MemoryDraftReview({ target, onClose, onOpenMemory }: {
         {review && !saved && !reverted && !duplicate && <>
           <div className="pw-memory-draft-comparison">
             {review.before && <section className="pw-source-record"><h3>原来记住的内容</h3><p className="pw-reading-copy">{review.before.text}</p></section>}
-            {review.after && <section className="pw-source-record"><h3>{action === 'create' ? '准备记住的内容' : '更新后'}</h3><p className="pw-reading-copy">{review.after.text}</p>{review.after.applicability && <p className="pw-muted">适用范围：{review.after.applicability}</p>}{expiryLabel && <p className="pw-muted">有效至 {expiryLabel}，到期后不再作为当前背景。</p>}</section>}
+            {review.after && <section className="pw-source-record"><h3>{action === 'create' ? '准备记住的内容' : '更新后'}</h3><p className="pw-reading-copy">{review.after.text}</p>{review.after.applicability && <p className="pw-muted">适用范围：{review.after.applicability}</p>}{expiryLabel && <p className="pw-muted">{candidateExpired ? `这条建议已于 ${expiryLabel} 到期，不能再采纳；仍可返回或明确忽略。` : `有效至 ${expiryLabel}，到期后不再作为当前背景。`}</p>}</section>}
           </div>
           <p className="pw-memory-draft-effect">{action === 'forget' ? '以后不再参考这条记忆，并处理依赖它的旧内容。原聊天保留，这次遗忘不能撤销。' : action === 'update' ? '保存后使用更新的内容，旧内容不再作为当前事实。' : '保存到个人记忆，供后续私人对话参考。你可以随时查看和纠正。'}</p>
           <Accordion variant="divided" className="pw-compact-disclosures">
@@ -137,7 +148,7 @@ export function MemoryDraftReview({ target, onClose, onOpenMemory }: {
           : (!pending || attempted || error || undoUncertain) && <Button variant="ghost" disabled={busy} onClick={queryOriginal}>查询这次修改</Button>}
       </div>
       {pending && <section className="pw-memory-draft-confirmation"><div className="pw-action-row">
-        <Button disabled={busy} onClick={() => { const id = handle.current; handle.current = ''; setAttempted(true); void request('memoryDraft.confirm', { handle: id }, acceptOutcome); }}>{action === 'forget' ? '忘记这条记忆' : action === 'update' ? '更新记忆' : '记住'}</Button>
+        <Button disabled={busy || candidateExpired} onClick={() => { if (candidateUntil && Date.now() >= candidateUntil) return; const id = handle.current; handle.current = ''; setAttempted(true); void request('memoryDraft.confirm', { handle: id }, acceptOutcome); }}>{action === 'forget' ? '忘记这条记忆' : action === 'update' ? '更新记忆' : '记住'}</Button>
         <Button variant="ghost" disabled={busy} onClick={() => { const id = handle.current; handle.current = ''; setAttempted(true); void request('memoryDraft.cancel', { handle: id }, acceptOutcome); }}>忽略</Button>
       </div></section>}
     </Drawer.Content>

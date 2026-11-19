@@ -127,8 +127,32 @@ public final class TaskStoreTeamWriteHost implements TeamCoordinator.BudgetHost,
         public synchronized TaskStore.TeamWorkRevisionReview approveRevisionParentBudget(TaskStore.TeamWorkRevisionReview exact,String digest)throws Exception {
             require();if(exact==null||pendingRevision!=exact||revisionOptions==null)throw new SecurityException("请先审阅本窗口完整项目修订预算");JSONObject prior=exact.source().view(),item=TeamWorkItems.find(prior.getJSONObject("workPlan").getJSONArray("items"),prior.getString("workItemId")),options=new JSONObject(revisionOptions.toString());tasks.approveTeamWorkRevisionParentBudget(exact,digest);pendingRevision=null;return reviewProjectRevision(item.getString("workItemId"),item.getInt("itemRevision"),item.getInt("ownerGeneration"),prior.getString("text"),options);
         }
-        public synchronized JSONObject approveRevision(TaskStore.TeamWorkRevisionReview exact,String digest)throws Exception {
-            require();if(exact==null||exact!=pendingRevision||mutation==null)throw new SecurityException("请先审阅此窗口准确工作项及受影响依赖的新基线与预算");JSONObject continued=coordinator.reviseWorkItems(mutation,()->{require();requireRevisionBase(exact.source());if(exact.projectSelection()!=null)projects.checkSelectionCurrent(exact.projectSelection());return tasks.approveTeamWorkRevision(exact,digest);},models.get());pendingRevision=null;mutation=null;tasks.updateExternal(run,continued);changed.accept(run);return continued;
+        public final class ParentProposalReview implements AutoCloseable {
+            private final TaskStore.TeamWorkRevisionReview exact;private final JSONObject proposal,display;private boolean consumed;
+            private ParentProposalReview(TaskStore.TeamWorkRevisionReview review,JSONObject original,JSONObject shown){exact=review;proposal=original;display=shown;}
+            public JSONObject preview()throws Exception{return new JSONObject(display.toString());}
+            public synchronized JSONObject confirm()throws Exception {
+                if(consumed)throw new SecurityException("这次修订确认已使用，请核对原分工");consumed=true;
+                return approveRevision(exact,exact.view().getString("digest"),proposal);
+            }
+            @Override public void close(){WorkPlanPage.this.close();}
+        }
+        public synchronized ParentProposalReview reviewParentProposal(JSONObject retained,String operation)throws Exception {
+            require();synchronized(coordinator){JSONObject current=TeamParentRevisionOffer.exact(coordinator.get(run),operation),seen=TeamParentRevisionOffer.exact(retained,operation);
+                if(!TeamWorkFiles.canonical(current).equals(TeamWorkFiles.canonical(seen)))throw new SecurityException("已读的原修订提案发生变化，请重新核对");
+                TaskStore.TeamWorkRevisionReview exact=reviewRevision(current.getString("workItemId"),current.getInt("itemRevision"),current.getInt("ownerGeneration"),current.getString("text"));
+                return new ParentProposalReview(exact,current,TeamParentRevisionOffer.preview(current,exact.view()));
+            }
+        }
+        public synchronized JSONObject approveRevision(TaskStore.TeamWorkRevisionReview exact,String digest)throws Exception {return approveRevision(exact,digest,null);}
+        private synchronized JSONObject approveRevision(TaskStore.TeamWorkRevisionReview exact,String digest,JSONObject proposal)throws Exception {
+            require();if(exact==null||exact!=pendingRevision||mutation==null)throw new SecurityException("请先审阅此窗口准确工作项及受影响依赖的新基线与预算");
+            JSONObject continued=coordinator.reviseWorkItems(mutation,()->{require();requireRevisionBase(exact.source());if(exact.projectSelection()!=null)projects.checkSelectionCurrent(exact.projectSelection());
+                if(proposal!=null){JSONObject current=TeamParentRevisionOffer.exact(coordinator.get(run),proposal.getString("operationId"));
+                    if(!TeamWorkFiles.canonical(current).equals(TeamWorkFiles.canonical(proposal)))throw new SecurityException("原提案身份已改变，不开始修订");
+                    TeamParentRevisionOffer.preview(current,exact.view());}
+                JSONObject committed=tasks.approveTeamWorkRevision(exact,digest);if(proposal!=null)committed.put("appliedParentProposal",proposal.getString("operationId"));return committed;
+            },models.get());pendingRevision=null;mutation=null;tasks.updateExternal(run,continued);changed.accept(run);return continued;
         }
         public void close(){alive=false;window.close();}
     }

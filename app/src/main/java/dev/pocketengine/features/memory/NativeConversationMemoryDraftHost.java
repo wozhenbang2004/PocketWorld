@@ -174,6 +174,16 @@ public final class NativeConversationMemoryDraftHost {
                     return switch(action){case "create"->{JSONObject candidate=proposal.getJSONObject("candidate");yield memory.acceptCandidate(scope(),candidate.getString("id"),candidate.getLong("revision"));}case "update"->{JSONObject target=proposal.getJSONObject("target");if(draft.has("assertion")){JSONObject content=updateDraft(draft,proposal.getJSONArray("sourceRefs"),NativeConversationMemoryDraftHost.this.record(target));yield sources.correctAssertionReviewed(scope(),target.getString("id"),target.getLong("revision"),content.getString("text"),content.getJSONObject("assertion"),proposal.getJSONArray("sourceRefs"));}yield sources.correctReviewed(scope(),target.getString("id"),target.getLong("revision"),bounded(draft,"text",1,4000));}case "forget"->{JSONObject target=proposal.getJSONObject("target");yield sources.forgetReviewed(scope(),target.getString("id"),target.getLong("revision"));}default->throw new SecurityException("未知原记忆操作");};
                 }));
                 JSONObject saved=savedReceipt(proposal,reviewDigest,result);record(saved);return saved.put("undoAvailable",saved.optBoolean("journalRecorded")&&undoAvailable(proposal,saved));
+            }catch(MemoryBook.ExpiredPendingCandidateException expired){
+                JSONObject pin=proposal.optJSONObject("candidate"),reviewed=new JSONObject(view).optJSONObject("after");
+                if(!entered[0]||!"create".equals(proposal.optString("action"))||pin==null||reviewed==null||!"pending".equals(reviewed.optString("status"))
+                        ||!expired.candidateId.equals(pin.getString("id"))||!expired.candidateId.equals(reviewed.getString("id"))
+                        ||expired.revision!=pin.getLong("revision")||expired.revision!=reviewed.getLong("revision")||expired.expiresAt!=reviewed.getLong("expiresAt"))
+                    throw new SecurityException("原期限与待审候选未核对，请查询原操作");
+                JSONObject result=receipt(proposal,reviewDigest,"rejected").put("accepted",false).put("mutationApplied",false).put("formalMemorySaved",false).put("undoAvailable",false)
+                        .put("outcome","candidate_expired_before_save").put("candidateId",expired.candidateId).put("candidateRevision",expired.revision)
+                        .put("expiresAt",expired.expiresAt).put("checkedAt",expired.checkedAt).put("message","原建议已到期，这次没有保存为个人记忆，也没有延长期限。");
+                ConversationMemoryReceipt.require(proposal,result);record(result);return result;
             }catch(PersonalMemorySemantics.PreferenceSettingRequiredException preference){
                 JSONObject result=receipt(proposal,reviewDigest,"rejected").put("accepted",false).put("mutationApplied",false).put("formalMemorySaved",false).put("undoAvailable",false)
                         .put("outcome","preference_setting_required").put("preferenceKey",preference.preferenceKey()).put("settingsSection",preference.settingsSection()).put("message",preference.getMessage());

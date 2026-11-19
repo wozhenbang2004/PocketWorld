@@ -391,6 +391,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     internal fun cancelSetupModelTest() { if (setupCoordinatorDelegate.isInitialized()) setupCoordinator.cancelModelTest() }
     internal fun nativeRuntimeSetup() = app.runtimeSetupForOwner()
     internal fun webPluginFeatureHost() = app.features
+    internal fun retainedDeviceGoalCondition(id: String): String = app.retainedDeviceGoalCondition(id)
     internal fun readOriginalDeviceTask(id: String): JSONObject = app.tasks.get(id, false)
     internal fun prepareOwnerPhoneControl(id: String, deadline: Long, tools: Int, current: () -> Boolean): JSONObject =
         app.tasks.prepareOwnerPhoneControl(id, deadline, tools) { !closed && webPrivateOwnerVisible() && current() }

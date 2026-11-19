@@ -6,6 +6,7 @@ import {Button,IconButton} from './forms-library';
 import {IconClose} from './icons';
 import {ShimmerText} from './library';
 import {messagePhoneResult,type PhoneResult} from './phone-start';
+import {finalScreenLine} from './PhoneFinalScreenReceipt';
 import './phone-returned-report.css';
 
 type WindowView={resumeRevision?:number;section?:string|null;taskId?:string|null};
@@ -31,7 +32,7 @@ function current(t:PhoneReportTarget){
 }
 const states:Record<string,string>={completed:'执行结束',failed:'执行失败',cancelled:'已停止',interrupted:'已中断',
   paused:'已暂停',awaiting_user:'等待你处理',needs_confirmation:'等待确认',reconciling:'结果待核对'};
-type Page={text:string;offset:number;next:number;more:boolean};
+type Page={text:string;offset:number;next:number;more:boolean;finalScreen:string|null};
 export function PhoneReturnedReport({target:t,onClose}:{target:PhoneReportTarget;onClose:()=>void}){
   useSyncExternalStore(bridge.subscribe,bridge.getState);
   const [expired,setExpired]=useState(false),[page,setPage]=useState<Page|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(true);
@@ -58,7 +59,8 @@ export function PhoneReturnedReport({target:t,onClose}:{target:PhoneReportTarget
         throw new Error('这段原文与所选回执不一致，没有改读其他结果。');
       digest.current=p.resultDigest;
       const index=previous.current.indexOf(offset);previous.current=index<0?[...previous.current,offset]:previous.current.slice(0,index+1);
-      setPage({text:p.text,offset,next:p.nextOffset,more:p.hasMore});
+      const finalScreen=finalScreenLine(p.finalScreenReceipt,original);
+      setPage({text:p.text,offset,next:p.nextOffset,more:p.hasMore,finalScreen});
     }catch(e){if(attempt===attempts.current&&current(t))setError(e instanceof Error?e.message:'原文未读到，可以重读这段。');}
     finally{if(attempt===attempts.current){inFlight.current=false;setBusy(false);}}
   }
@@ -74,7 +76,9 @@ export function PhoneReturnedReport({target:t,onClose}:{target:PhoneReportTarget
         <IconButton icon={IconClose} aria-label="返回原回执" onClick={onClose}/></header>
       <div className="pw-drawer-body">{!available?<p role="status">原回执或私人窗口已变化。请返回对话，从原回执重新打开。</p>:<>
         {busy&&<ShimmerText>正在核对这轮原文…</ShimmerText>}{error&&<p role="alert">{error}</p>}
-        {page&&<>{original.summaryChars===0?<p>这轮没有留下文字总结。</p>:<p className="pw-phone-report-text" dir="auto">{page.text}</p>}
+        {page&&<>{page.finalScreen?<p className="pw-field-hint"><strong>收尾时的屏幕：</strong>{page.finalScreen}</p>:
+          original.status==='needs_confirmation'||original.status==='completed'?<p className="pw-muted">这份原报告没有独立的终屏回执，不能据此确认当时的页面。</p>:null}
+          {original.summaryChars===0?<p>这轮没有留下文字总结。</p>:<p className="pw-phone-report-text" dir="auto">{page.text}</p>}
           {original.summaryChars>page.text.length&&<p className="pw-muted" role="status">原文位置 {page.offset+1}–{page.next} / {original.summaryChars}</p>}
           <div className="pw-action-row">
             {previous.current.length>1&&<Button variant="ghost" onClick={()=>void read(previous.current[previous.current.length-2])}>上一段</Button>}

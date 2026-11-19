@@ -73,10 +73,15 @@ public final class DeviceExecutionAdmission {
      * display host, phone port, observations or input, not even at startup. */
     public static final String ZERO_TOOL_PHONE_CONTRACT="pocketworld.zero-tool-phone.no-screen-reviewed.v2";
     public static boolean zeroToolPhoneGoal(DeviceTaskEnvelope original) {
-        if(!"task.submitGoal".equals(original.method()))return false;
-        String location=original.resourceBinding().optString("screenMode");
-        return ("main_screen".equals(location)||"background".equals(location)) && original.budget().optLong("toolCalls",-1)==0
-                || DeviceProtocol.ownerTextRequest(original.json());
+        return zeroToolPhoneGoal(original.json());
+    }
+    /** Also used on A's locally frozen original wire to read ONLY authenticated terminal accounting. */
+    static boolean zeroToolPhoneGoal(JSONObject original) {
+        if(!"task.submitGoal".equals(original.opt("method")))return false;
+        JSONObject resource=original.optJSONObject("resourceBinding"),budget=original.optJSONObject("budget");
+        String location=resource==null?"":resource.optString("screenMode");
+        return (("main_screen".equals(location)||"background".equals(location))&&budget!=null&&budget.optLong("toolCalls",-1)==0)
+                ||DeviceProtocol.ownerTextRequest(original);
     }
     public boolean noPhoneSurface(){return kind==Kind.GOAL && zeroToolPhoneGoal(request);}
     /** Local host selection, never used as a replacement for the signed resource. */

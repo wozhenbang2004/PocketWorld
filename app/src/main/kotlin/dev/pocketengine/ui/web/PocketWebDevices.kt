@@ -155,6 +155,17 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         val (digest,mode)=original.inbox.getValue(key)
         return ReceiptOrigin(key.first,key.second,original.target,original.localId,original.localInstance,digest,mode)
     }
+    /** One local, still-never-started received goal; an archive navigation token is not an action scope. */
+    private fun waitingPending(args: JSONObject): Pair<ReceiptOrigin,JSONObject> {
+        fields(args,"waitingHandle","taskId","operationId")
+        val index=waitingFor(text(args,"waitingHandle"),requireNotNull(window()),generation.get())
+        require(!index.results) { "请从本机待接手页重新读取原目标" }
+        val source=receivedEntry(args); val raw=controller.readOriginalDeviceTask(source.task)
+        checkReceivedTaskForReturn(args,raw)
+        require(raw.optString("runId").isEmpty()&&raw.optInt("coordinatorEpoch",-1)==0&&raw.opt("cancelRequested")==false
+            &&raw.optString("status") in setOf("queued","awaiting_user","interrupted")) { "原目标已启动或结束，不能再按未启动原件处理" }
+        return source to raw
+    }
     fun receivedTaskForReturn(args: JSONObject): String = receivedEntry(args).task
     fun checkReceivedTaskForReturn(args: JSONObject, raw: JSONObject): JSONObject {
         val source=receivedEntry(args);val origin=raw.optJSONObject("origin") ?: error("原接纳来源未能核对")
@@ -521,7 +532,32 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                         store("connection", native, native.view(), original, epoch)
                     }
                     "devices.reviewRelay" -> { fields(args, "raw"); val native = original.reviewRelayLease(text(args, "raw", 4096)); store("relay", native, native.view(), original, epoch) }
-                    "devices.reviewGoal" -> { fields(args, "taskId"); val native = original.reviewGoal(taskId()); store("goal", native, native.view(), original, epoch) }
+                    "devices.reviewGoal" -> if(!args.has("waitingHandle")){
+                        fields(args, "taskId"); val native=original.reviewGoal(taskId());store("goal",native,native.view(),original,epoch)
+                    }else{
+                        val (source,raw)=waitingPending(args);val facts=original.taskActions(source.task)
+                        val state=when {
+                            raw.getJSONObject("deviceExecutionScope").getLong("deadline")<=System.currentTimeMillis() -> "expired"
+                            raw.opt("status")=="interrupted" -> "interrupted_before_start"
+                            else -> controller.retainedDeviceGoalCondition(source.task)
+                        }
+                        val review=facts.getJSONObject("goalReview")
+                        val candidate=if(state=="retained"&&review.opt("available")==true){
+                            try{original.reviewGoal(source.task)}catch(_:Exception){null}
+                        }else null
+                        if(candidate!=null){
+                            try{
+                                waitingPending(args)
+                                val view=candidate.view();require(view.opt("taskId")==source.task&&DeviceProtocol.sha256(DeviceProtocol.canonicalBytes(view.getJSONObject("origin")))==source.digest)
+                                store("goal",candidate,view,original,epoch)
+                            }catch(changed:Exception){original.discardReview();throw changed}
+                        }else{
+                            waitingPending(args)
+                            JSONObject().put("kind","waitingGoalBlocked").put("waitingHandle",text(args,"waitingHandle")).put("taskId",source.task)
+                            .put("operationId",source.operation).put("sourceId",source.source).put("state",if(state=="retained")"local_review_unavailable" else state)
+                            .put("reason",if(state=="retained")review.optString("reason") else "").put("canRetire",facts.getJSONObject("pendingCancel").opt("available")==true)
+                        }
+                    }
                     "devices.reviewResult" -> {
                         val source=if(args.has("waitingHandle"))receivedEntry(args).also { require(it.reviewRun.isNotEmpty()) } else null
                         val id=source?.task ?: run { fields(args,"taskId");taskId() }
@@ -618,21 +654,26 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                             .put("stopSubmitted", history.stopSubmitted.get()).put("receipt", result)
                     }
                     "devices.reviewAction" -> {
-                        fields(args, "operation", "deviceId", "taskId", "serviceBase", "inviterDeviceId")
-                        val operation = text(args, "operation", 40)
+                        val operation=text(args,"operation",40)
+                        val waiting=if(args.has("waitingHandle")){
+                            fields(args,"operation","waitingHandle","taskId","operationId");require(operation=="task.cancelPending")
+                            waitingPending(JSONObject(args.toString()).also { it.remove("operation") }).first
+                        }else{fields(args,"operation","deviceId","taskId","serviceBase","inviterDeviceId");null}
                         val view = JSONObject().put("operation", operation)
                         var native: Any = view
                         when (operation) {
                             "receiver.enable", "receiver.disable" -> { original.receiverAvailability(operation == "receiver.enable").also { require(it.available) { it.reason } }; view.put("local", before.getJSONObject("local")) }
                             "peer.connect", "peer.disconnect", "peer.revoke" -> { val target = peer(before, text(args, "deviceId")); val available = target.getJSONObject("actions").getJSONObject(operation.substringAfter('.')); require(available.opt("available") == true) { available.optString("reason") }; view.put("peer", target) }
                             "task.stop", "task.pause", "task.resume", "task.cancelPending" -> {
-                                val id = taskId(); val actions = original.taskActions(id)
+                                val id=waiting?.task ?: taskId(); val actions=original.taskActions(id)
                                 val availability = actions.getJSONObject(if (operation == "task.cancelPending") "pendingCancel" else operation.substringAfter('.'))
                                 require(availability.opt("available") == true) { availability.optString("reason") }
                                 if (operation == "task.resume") require(actions.optJSONObject("resumeRequest")?.opt("ownerActionRequired") != true) { "请先核对对方这次原执行的恢复请求" }
                                 if (operation == "task.cancelPending" || operation == "task.stop" && actions.getJSONObject("pendingCancel").opt("available") == true) {
                                     val pending = controller.reviewPendingDeviceGoalCancellation(id)
-                                    val actual = pending.view(); require(actual.opt("taskId") == id)
+                                    val actual=pending.view();require(actual.opt("taskId")==id)
+                                    if(waiting!=null)require(actual.opt("callerDeviceId")==waiting.source&&actual.opt("originDeviceId")==waiting.source
+                                        &&actual.opt("operationId")==waiting.operation&&actual.opt("localOnly")==true&&actual.opt("runStarted")==false)
                                     native = TaskControl(id, "", 0, pending); view.put("pendingGoal", actual).put("taskId", id)
                                 } else {
                                     val actual = controller.readOriginalDeviceTask(id)

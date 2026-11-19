@@ -4,7 +4,7 @@ import { Accordion, AccordionItem, Button } from './forms-library';
 import { IconRefresh } from './icons';
 import type { ConversationDraftTarget } from './SkillDraftReview';
 
-type Draft = ConversationDraftTarget & { kind: 'skill' | 'memory'; action: string; title: string; apply: { status: string }; undoStatus?: string; duplicate?: boolean };
+type Draft = ConversationDraftTarget & { kind: 'skill' | 'memory'; action: string; title: string; apply: { status: string }; undoStatus?: string; duplicate?: boolean; candidateExpiredBeforeSave?: boolean };
 type Directory = { key: string; drafts?: Draft[]; partial?: boolean; error?: string };
 const applyLabels: Record<string, string> = { pending_owner: '待审阅', saved: '已处理', cancelled: '已放弃', rejected: '未保存', unknown: '结果待核对', applying_unknown: '结果待核对' };
 function draftStatus(draft: Draft) {
@@ -18,6 +18,7 @@ function draftStatus(draft: Draft) {
       case 'not_requested': break;
       default: return '原提案状态待核对';
     }
+    if (phase === 'rejected' && draft.action === 'create' && draft.candidateExpiredBeforeSave === true) return '建议已到期，这次没有保存';
     if (phase === 'rejected' && draft.duplicate === true) return '已有相同内容，本次未重复保存';
     if (phase === 'saved') return draft.action === 'forget' ? '这次已遗忘' : draft.action === 'update' ? '这次已更新' : '这次已保存';
   }

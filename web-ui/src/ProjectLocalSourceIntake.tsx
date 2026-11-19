@@ -5,7 +5,7 @@ import './project-git-intake.css';
 
 type Source = {id:string;sha:string;manifest:string;kind:'saf_tree'|'external_zip'|'host_saved_snapshot';hostVersion?:string;label:string;files:number;bytes:number;omitted:number;paths:string[]};
 type Intake = {window:string;busy:boolean;picking:boolean;notice?:string;error?:string;staged?:Source;saved:Source[];
-  reviewId?:string;reviewName?:string;pendingId?:string;pendingName?:string;otherPending?:boolean;mayRetry?:boolean;project?:string;checkout?:string;name?:string};
+  reviewId?:string;reviewName?:string;pendingId?:string;pendingName?:string;otherPending?:boolean;mayRetry?:boolean;mayRelease?:boolean;project?:string;checkout?:string;name?:string};
 const prefix='projects.localSource.', number=(n:number)=>new Intl.NumberFormat('zh-CN').format(n);
 const sourceKind=(s:Source)=>s.kind==='host_saved_snapshot'?'原主机任务已存手机的文件':s.kind==='saf_tree'?'文件夹':'源码 ZIP';
 
@@ -39,8 +39,8 @@ function SourcePanel({state}:{state:Intake}){
       {state.otherPending?<><h3>原项目包有待核对记录</h3><p>没有把其他来源当作本次导入。</p></>
       :state.pendingId?<><h3>{state.pendingName||'新项目'} · 原创建记录</h3><p>先按原操作核对这台手机是否已有副本，不另起一次创建。</p>
         <div className="pw-action-row"><Button variant="primary" disabled={busy} onClick={()=>void act('query',{actionId:state.pendingId})}>核对原结果</Button>
-        {state.mayRetry&&<><Button variant="secondary" disabled={busy} onClick={()=>void act('retry',{actionId:state.pendingId})}>沿同一方案重试</Button>
-        <Button variant="ghost" disabled={busy} onClick={()=>void act('releaseMissing',{actionId:state.pendingId})}>不重试，放下这次定位</Button></>}</div></>
+        {state.mayRetry&&<Button variant="secondary" disabled={busy} onClick={()=>void act('retry',{actionId:state.pendingId})}>沿同一方案重试</Button>}
+        {state.mayRelease&&<Button variant="ghost" disabled={busy} onClick={()=>void act('releaseMissing',{actionId:state.pendingId})}>放下这次创建定位</Button>}</div></>
       :state.project&&state.checkout?<><h3>{state.name} · 本机私人项目</h3><p>新工作副本已登记。打开后可以编辑文件，或再交给本机 Agent；没有启动任务。</p>
         <div className="pw-action-row"><Button variant="primary" disabled={busy} onClick={()=>void act('openProject',{project:state.project,checkout:state.checkout})}>打开这个项目</Button>
           <Button variant="ghost" disabled={busy} onClick={()=>void act('another')}>导入另一份源码</Button></div></>

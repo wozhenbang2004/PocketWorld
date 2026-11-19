@@ -11,6 +11,7 @@ import { bridge } from './bridge';
 import { projectPackageTaskIdentity, type PackagePreviewTarget } from './project-preview';
 import { TaskResultFiles, type TaskResultFile } from './TaskResultFiles';
 import { ProjectPackageFiles, canReadProjectPackageFiles } from './ProjectPackageFiles';
+import {TaskPhoneFinalScreen} from './PhoneFinalScreenReceipt';
 import './task-reading.css';
 
 const stoppedAttemptTitles: Record<string, string> = {
@@ -179,6 +180,7 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
       {outcome.partial && <MotionFeedback identity={`${owner}:partial`} className="pw-outcome-limit" role="status">部分结果记录尚未载入。</MotionFeedback>}
     </div>;
   return <section ref={root} className="pw-task-outcome pw-task-reading" aria-label="任务结果依据" data-result-source={outcome.source}>
+    {active&&<TaskPhoneFinalScreen task={record}/>}
     {settlementTitle && <div className="pw-outcome-settlement" role="status">
       <h3>{settlementTitle}</h3>
       {settlementDetail && settlementDetail !== settlementTitle && <p>{settlementDetail}</p>}

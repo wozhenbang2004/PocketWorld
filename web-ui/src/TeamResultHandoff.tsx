@@ -18,14 +18,15 @@ export function TeamFollowUps({ items, disabled, read, expanded = true, toggle }
   </section>;
 }
 
-export function TeamResultHandoff({ result, actions, sources, frozenFiles, stopped, openMembers, openMessage, openOriginalReview }: {
-  result: ReturnType<typeof teamResultReading>; actions: Actions; sources?:ReactNode; frozenFiles?:ReactNode; stopped: boolean;
+export function TeamResultHandoff({ result, actions, sources, frozenFiles, revisionOffers, stopped, openMembers, openMessage, openOriginalReview }: {
+  result: ReturnType<typeof teamResultReading>; actions: Actions; sources?:ReactNode; frozenFiles?:ReactNode; revisionOffers?:ReactNode; stopped: boolean;
   openMembers: () => void; openMessage: (id: string) => void; openOriginalReview?: () => void;
 }) {
   return <section className="pw-team-result" aria-label="本次协作成果">
     <header className="pw-team-result-heading"><h3 data-team-result-heading tabIndex={-1}>{result.previous ? '上次保存的共同汇总' : result.body ? '本轮共同汇总' : '本次协作成果'}</h3>
       {result.previous && <span className="pw-team-result-stale">历史版本</span>}</header>
     <TeamFollowUps {...actions}/>
+    {revisionOffers}
     {frozenFiles}
     {openOriginalReview && <Button variant="secondary" size="small" disabled={actions.disabled} trailingIcon={IconChevronRight}
       onClick={openOriginalReview}>查看待审阅的原协作任务</Button>}
