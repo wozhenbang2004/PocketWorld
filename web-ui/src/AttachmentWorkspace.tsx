@@ -41,7 +41,9 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  // Success remains attached to the same draft after native receipt advances its revision.
  const draftScope=JSON.stringify([view.windowId,view.taskId,file.id,file.sha256,draftTarget?.key,draftTarget?.epoch,draftTarget?.conversationId]);
  const currentDraftScope=useRef(draftScope);currentDraftScope.current=draftScope;
- const handoff=draftHandoff?.scope===draftScope?draftHandoff:null;
+ const currentHandoff=draftHandoff?.scope===draftScope?draftHandoff:null;
+ const draftHasFile=rows(obj(bridge.getState().composer).objectRefs).some(ref=>ref.kind==='artifact'&&ref.id===file.id&&ref.sha256===file.sha256);
+ const handoff=currentHandoff?.phase==='added'&&!draftHasFile?null:currentHandoff;
  const draftBusy=draftHandoff?.phase==='adding'||draftHandoff?.phase==='opening';
  const rememberPosition=()=>{if(scroller.current)positions.current.set(locationRef.current,scroller.current.scrollTop)};
  useLayoutEffect(()=>{
