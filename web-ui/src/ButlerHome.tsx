@@ -1,6 +1,6 @@
 import { useId, useLayoutEffect, useRef, type ReactNode } from 'react';
-import { Button, IconButton } from './forms-library';
-import { IconCheckCircle, IconChevronRight, IconClock, IconError, IconFolder, IconInfo, IconPauseCircle } from './icons';
+import { Button } from './forms-library';
+import { IconCheckCircle, IconChevronRight, IconClock, IconError, IconInfo, IconPauseCircle } from './icons';
 import { ProgressCircle } from './library';
 import { MotionFeedback, useCollectionMotion } from './library/journey-motion';
 import { getRecentTaskProgress } from './task-presentation';
@@ -22,12 +22,12 @@ export type ButlerHomeProps = {
   modelSetup: ReactNode;
   composer: ReactNode;
   preparations?: ReactNode;
+  phoneActivity?: ReactNode;
   hasPreparations?: boolean;
   tasks: ButlerHomeTask[];
   canOpen: boolean;
   onOpen: (task: ButlerHomeTask) => void;
   onAllWork: (filter?: WorkCollectionFilter) => void;
-  onArtifacts?: (task: ButlerHomeTask) => void;
   onScrollTop?: (top: number) => void;
   initialScrollTop?: number;
 };
@@ -37,7 +37,7 @@ const updatedAt = (task: ButlerHomeTask) => typeof task.updatedAt === 'number' &
 /** Adapt the retained Affect AssistantHome / Composer composition around the
  * real shared input and BoardUI task rows. This view reads
  * the native private-work projection; only the original task owns decisions. */
-export function ButlerHome({ ready, modelReady, modelSetup, composer, preparations, hasPreparations = false, tasks, canOpen, onOpen, onAllWork, onArtifacts, onScrollTop, initialScrollTop = 0 }: ButlerHomeProps) {
+export function ButlerHome({ ready, modelReady, modelSetup, composer, preparations, phoneActivity, hasPreparations = false, tasks, canOpen, onOpen, onAllWork, onScrollTop, initialScrollTop = 0 }: ButlerHomeProps) {
   const scroller = useRef<HTMLDivElement>(null), workRoot = useRef<HTMLElement>(null);
   const allWorkButton = useRef<HTMLButtonElement>(null);
   const focused = useRef<{ node: HTMLElement; id: string } | null>(null);
@@ -65,18 +65,18 @@ export function ButlerHome({ ready, modelReady, modelSetup, composer, preparatio
       const status = presentation.label;
       const detail = !contextAvailable ? task.summary?.trim() || '' : unknown ? progress.detail : handling?.waitingForButler || handling?.waitingForChildren || handling?.needsAttention ? handling.reason : task.summary?.trim() || (progress && progress.source !== 'task' ? progress.detail || progress.title : '');
       return { task, attention, status, detail: detail === status || detail === task.goal ? '' : detail,
-        handling, group: presentation.group, busy: presentation.busy, action: presentation.actionLabel };
+        handling, group: presentation.group, busy: presentation.busy, completed: presentation.completed, action: presentation.actionLabel };
     });
   const groups = ([
-    { id: 'attention', label: '需要你处理', limit: 4 },
-    { id: 'running', label: '正在推进', limit: 3 },
-    { id: 'ended', label: '近期结果', limit: 3 },
+    { id: 'attention', label: '等你处理', limit: 3 },
+    { id: 'running', label: '正在推进', limit: 2 },
+    { id: 'ended', label: '近期结果', limit: 2 },
   ] satisfies { id: WorkCollectionGroup; label: string; limit: number }[])
     .map(group => ({ ...group, items: work.filter(item => item.group === group.id) })).filter(group => group.items.length > 0);
   const visible = groups.flatMap(group => group.items.slice(0, group.limit));
-  const revision = JSON.stringify([ready, canOpen, Boolean(onArtifacts), visible.map(({ task, attention: needsAttention, handling }) => [task.id, task.status, needsAttention, handling?.state, handling?.handlingLabel, handling?.resultAvailable, handling?.delivered])]);
+  const revision = JSON.stringify([ready, canOpen, visible.map(({ task, attention: needsAttention, handling }) => [task.id, task.status, needsAttention, handling?.state, handling?.handlingLabel, handling?.resultAvailable, handling?.delivered])]);
   useCollectionMotion(workRoot, 'butler:owner:private', revision, { active: ready, layout: false });
-  const empty = ready && !work.length && !hasPreparations;
+  const empty = ready && !work.length && !hasPreparations && !phoneActivity;
 
   useLayoutEffect(() => {
     if (!ready || restored.current || !scroller.current) return;
@@ -101,11 +101,10 @@ export function ButlerHome({ ready, modelReady, modelSetup, composer, preparatio
     if (target && !target.disabled) target.focus({ preventScroll: true });
   }, [revision]);
 
-  const renderTask = ({ task, attention: needsAttention, status, detail, busy, action, handling, group }: typeof work[number]) => {
+  const renderTask = ({ task, attention: needsAttention, status, detail, busy, action, completed }: typeof work[number]) => {
     const StatusIcon = ['paused', 'interrupted'].includes(task.status) ? IconPauseCircle : task.status === 'failed' ? IconError
-      : needsAttention ? IconInfo : group === 'ended' && task.status === 'completed' ? IconCheckCircle : IconClock;
+      : needsAttention ? IconInfo : completed ? IconCheckCircle : IconClock;
     const date = new Date(updatedAt(task)), hasDate = updatedAt(task) > 0 && Number.isFinite(date.getTime());
-    const artifactsAvailable = onArtifacts && task.raw?.contextAvailable !== false && (handling?.resultAvailable || handling?.delivered);
     return <li key={task.id} data-task-id={task.id} data-motion-key={task.id} data-task-state={task.status} data-attention={needsAttention || undefined}>
       <Button variant="ghost" className="pw-butler-work-row" disabled={!canOpen} aria-label={`${action}：${task.goal || '委派工作'}`} aria-description={[status, detail].filter(Boolean).join('，')} onClick={() => onOpen(task)}>
         <span className="pw-butler-work-mark" data-attention={needsAttention || undefined} aria-hidden="true">{busy ? <ProgressCircle isIndeterminate size="sm" aria-label={status} /> : <StatusIcon size={18} />}</span>
@@ -114,9 +113,8 @@ export function ButlerHome({ ready, modelReady, modelSetup, composer, preparatio
           <span className="pw-butler-work-meta"><MotionFeedback as="span" identity={status} initial={false}>{status}</MotionFeedback>{hasDate && <time dateTime={date.toISOString()}>{date.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</time>}</span>
           {needsAttention && detail && <span className="pw-butler-work-detail" dir="auto">{detail}</span>}
         </span>
-        <span className="pw-butler-work-action"><span>{action}</span><IconChevronRight size={15} aria-hidden="true" /></span>
+        <IconChevronRight className="pw-butler-work-chevron" size={16} aria-hidden="true" />
       </Button>
-      {artifactsAvailable && <IconButton icon={IconFolder} className="pw-butler-artifacts" aria-label={`文件与版本：${task.goal || '委派工作'}`} title="文件与版本" onClick={() => onArtifacts?.(task)} />}
     </li>;
   };
   const modelConnection = ready && !modelReady && <div className="pw-butler-model-setup"><p>连接模型后即可开始。</p>{modelSetup}</div>;
@@ -124,12 +122,17 @@ export function ButlerHome({ ready, modelReady, modelSetup, composer, preparatio
   return <main className="pw-chat-workspace pw-butler-workspace" aria-label="管家" data-empty={empty || undefined}>
     <div ref={scroller} className="pw-butler-scroll" onScroll={event => { if (restored.current) reportScroll.current?.(event.currentTarget.scrollTop); }}>
       <div className="pw-butler-content">
-        {empty ? <header className="pw-butler-welcome"><h1>有什么事交给我？</h1>{modelConnection}</header> : modelConnection}
+        <section className="pw-butler-intake" aria-label="交办">
+          <header className="pw-butler-welcome"><h2>想交给我什么事？</h2></header>
+          {modelConnection}
+          {composer}
+        </section>
+        {phoneActivity}
         {preparations}
         {(!ready || work.length > 0) && <section ref={workRoot} className="pw-butler-work" aria-labelledby={workHeading} aria-busy={!ready}
           onFocusCapture={event => { const node = event.target as HTMLElement, id = node.closest<HTMLElement>('[data-task-id]')?.dataset.taskId; focused.current = id ? { node, id } : null; }}
           onBlurCapture={event => { const node = event.target as HTMLElement; if (event.relatedTarget instanceof Node ? !event.currentTarget.contains(event.relatedTarget) : node.isConnected && !node.closest('[inert],[hidden]') && !node.matches(':disabled')) focused.current = null; }}>
-          <header className="pw-butler-work-heading"><h2 id={workHeading}>最近工作</h2>{work.length > 0 && <Button ref={allWorkButton} variant="ghost" className="pw-butler-all-work" trailingIcon={IconChevronRight} onClick={() => onAllWork('all')}>全部工作</Button>}</header>
+          <header className="pw-butler-work-heading"><h2 id={workHeading}>跟进工作</h2>{work.length > 0 && <Button ref={allWorkButton} variant="ghost" className="pw-butler-all-work" trailingIcon={IconChevronRight} onClick={() => onAllWork('all')}>全部工作</Button>}</header>
           {!ready ? <p className="pw-butler-reading" role="status"><ProgressCircle isIndeterminate size="sm" aria-label="正在恢复工作记录" /><span>正在恢复工作记录…</span></p> : <>
             {groups.map(group => <section key={group.id} className="pw-butler-work-group" aria-labelledby={`${workHeading}-${group.id}`}>
               <header className="pw-butler-group-heading"><h3 id={`${workHeading}-${group.id}`}>{group.label}</h3>
@@ -142,7 +145,6 @@ export function ButlerHome({ ready, modelReady, modelSetup, composer, preparatio
         </section>}
       </div>
     </div>
-    {composer}
   </main>;
 }
 

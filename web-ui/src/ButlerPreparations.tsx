@@ -20,9 +20,9 @@ const targetStateLabels: Record<string, string> = { queued: '等待执行', prep
 const contractOf = (value: Data | null) => value?.contract && typeof value.contract.goal === 'string' && ['constraints', 'deliverable', 'completionCriteria'].every(key => value.contract[key] === undefined || typeof value.contract[key] === 'string') ? value.contract as { goal: string; constraints?: string; deliverable?: string; completionCriteria?: string } : undefined;
 
 /** The retained ConversationWork rows, backed by the durable proposal index. */
-export function ButlerPreparationEntries({ conversationId = '', sourceTaskId, representedTaskId, active, refreshKey, can, run, onOpen, onPresenceChange }: Shared & {
+export function ButlerPreparationEntries({ conversationId = '', sourceTaskId, representedTaskIds, active, refreshKey, can, run, onOpen, onPresenceChange }: Shared & {
   conversationId?: string; sourceTaskId?: string; active: boolean; refreshKey: string; onOpen: (target: ButlerPreparationTarget) => void;
-  representedTaskId?: string;
+  representedTaskIds?: ReadonlySet<string>;
   onPresenceChange?: (present: boolean) => void;
 }) {
   const [entries, setEntries] = useState<Data[]>([]), [cursor, setCursor] = useState(''), [more, setMore] = useState(false);
@@ -46,13 +46,12 @@ export function ButlerPreparationEntries({ conversationId = '', sourceTaskId, re
   const readKey = JSON.stringify([conversationId, sourceTaskId, refreshKey, ownerWindow()]);
   const readable = can('butler.preparations.list');
   useEffect(() => { if (!active || !readable) { attempted.current = ''; return; } if (!busy && !flight.current && attempted.current !== readKey) { attempted.current = readKey; void loadRef.current(); } }, [active, busy, readKey, readable]);
-  // Remove only progress already shown by the current-task row, and settled
-  // history. An allocated task may still need admission or receipt recovery.
+  // Keep this entry while the proposal is the only way to reach its next action.
   const relevant = entries.filter(row => {
     if (sourceTaskId) return row.sourceTaskId === sourceTaskId;
     const target = row.target;
     if (!target?.taskId) return !['dismissed', 'unavailable'].includes(row.state);
-    if (target.taskId === representedTaskId) return false;
+    if (target.runId && representedTaskIds?.has(target.taskId)) return false;
     return !target.runId || target.hasUnresolvedOperations !== false || !['completed', 'cancelled', 'canceled', 'stopped'].includes(target.status);
   });
   const visible = expanded ? relevant : relevant.slice(0, 3);
@@ -60,7 +59,7 @@ export function ButlerPreparationEntries({ conversationId = '', sourceTaskId, re
   useEffect(() => { onPresenceChange?.(present); return () => onPresenceChange?.(false); }, [present, onPresenceChange]);
   if (!present) return null;
   return <section className="pw-butler-preparations" aria-label={sourceTaskId ? '关联的准备记录' : '待处理与进行中的工作'} aria-busy={busy}>
-    {relevant.length > 0 && <header><h2>{sourceTaskId ? '关联的准备' : '工作与准备'}</h2></header>}
+    {relevant.length > 0 && <header><h2>{sourceTaskId ? '关联的准备' : '还需准备'}</h2></header>}
     {error && <p className="pw-error" role="alert">{error}</p>}
     {error && <Button variant="ghost" size="small" leadingIcon={IconRefresh} disabled={!active || busy} onClick={() => void load()}>重新读取工作记录</Button>}
     <ol>{visible.map(row => <li key={keyOf(row)}><Button variant="ghost" className="pw-preparation-row" leadingIcon={row.kind === 'phone' ? IconMonitor : IconFolder} trailingIcon={IconChevronRight} disabled={!active || busy} onClick={() => onOpen({ sourceTaskId: row.sourceTaskId, proposalId: row.proposalId, sourceConversationId: row.sourceConversationId })}>

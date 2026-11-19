@@ -88,9 +88,6 @@ public final class PhoneSetupModule implements EngineModule {
             else context.android.registerReceiver(unlockReceiver, unlock);
             lifecycleSignalsRegistered = true;
         } catch (RuntimeException unavailable) { lifecycleSignalsRegistered = false; }
-        // A cold process can start after the boot/unlock broadcast. Queue the same consent-
-        // checked connection inspection once the module has finished publishing its state.
-        main.postAtTime(() -> recoverAfterLifecycle(() -> { }), this, SystemClock.uptimeMillis());
     }
 
     static PhoneSetupModule current() { return instance; }
@@ -419,6 +416,10 @@ public final class PhoneSetupModule implements EngineModule {
     public static void onAccessibilityConnected() {
         PhoneSetupModule module = current();
         if (module != null) module.recoverAfterLifecycle(() -> { });
+    }
+
+    public void recoverOnHostReady() {
+        recoverAfterLifecycle(() -> { });
     }
 
     void recoverAfterLifecycle(Runnable finished) {

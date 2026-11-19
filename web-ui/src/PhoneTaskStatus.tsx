@@ -4,8 +4,8 @@ import { Popover, PopoverTrigger } from './shell-library';
 import { IconChevronRight, IconMonitor, IconMore, IconPauseCircle, IconPlay, IconStop } from './icons';
 import { ProgressCircle } from './library';
 import { phoneRunIdentity } from './phone-start';
-import { conversationInlineAttention, conversationWorkActionLabel, conversationWorkNeedsAttention } from './conversation-work';
-import { taskNeedsReconciliation } from './task-presentation';
+import { conversationInlineAttention } from './conversation-work';
+import { workCollectionPresentation } from './work-collection';
 import './phone-task-status.css';
 
 type Task = { id: string; goal: string; status: string; raw?: Record<string, any> };
@@ -14,18 +14,15 @@ type Props = {
   can: (action: string) => boolean;
   onOpen: () => void;
   onControl: (action: string, identity: { taskId: string; runId: string; epoch: number }) => void;
-  labelStatus: (status: string) => string;
 };
 
 /** One current-task row, using the retained BoardUI controls and anchored menu.
  * The host can acknowledge the actual stop button before yielding its overlay. */
-export function PhoneTaskStatus({ task, can, onOpen, onControl, labelStatus }: Props) {
+export function PhoneTaskStatus({ task, can, onOpen, onControl }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const identity = phoneRunIdentity(task);
   useEffect(() => setMenuOpen(false), [task.id, identity?.runId, identity?.epoch, task.status]);
-  const needsAttention = conversationWorkNeedsAttention(task);
-  const status = taskNeedsReconciliation(task) ? '有操作待核对' : needsAttention ? conversationWorkActionLabel(task) : labelStatus(task.status);
-  const busy = ['preparing', 'running', 'verifying', 'pausing', 'stopping'].includes(task.status) && !needsAttention;
+  const { label: status, busy } = workCollectionPresentation(task);
   const control = (action: string) => { setMenuOpen(false); if (identity) onControl(action, identity); };
   const canPause = identity && task.status === 'running' && can('phone.pause');
   const canResume = identity && task.status === 'paused' && !conversationInlineAttention(task) && can('phone.resume');

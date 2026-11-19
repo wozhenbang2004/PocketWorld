@@ -12523,20 +12523,43 @@ public final class TaskStore {
     public static String capabilityFingerprint(JSONObject value)throws Exception{
         byte[] digest=java.security.MessageDigest.getInstance("SHA-256").digest(canonical(value).getBytes(StandardCharsets.UTF_8));StringBuilder result=new StringBuilder();for(byte b:digest)result.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return result.toString();
     }
-    /** Ordinary capability host settlement uses the same durable final-answer boundary as research. */
-    public synchronized void finishCapabilityAttempt(String id,String runId,int epoch,RunControl original,dev.pocketengine.core.RunOutcome outcome)throws Exception {
+    private boolean currentAttemptRunning(JSONObject task)throws Exception {
+        String run=task.optString("runId");int epoch=task.optInt("coordinatorEpoch");
+        if(run.isEmpty()||epoch<1)return false;
+        try(Cursor row=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND run_id=? AND epoch=? AND status='running'",
+                new String[]{task.getString("id"),run,Integer.toString(epoch)})){return row.moveToFirst();}
+    }
+    public synchronized void markCapabilitySettlementUnconfirmed(String id,String runId,int epoch,RunControl original)throws Exception {
         JSONObject task=required(id);
-        if(original==null||!original.matchesHostRun(id,runId,epoch)||!runId.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch"))throw new SecurityException("完成回执不是当前原能力执行");
-        if(original.isCancelled()||task.optBoolean("cancelRequested")){
-            endAttempt(id,runId,"cancelled","已停止后续操作；已有动作和结果保留，停止不代表撤销已发生的效果",outcome.evidence);return;
-        }
-        String status=outcome.status;
-        if("needs_confirmation".equals(status)){
-            JSONObject origin=task.optJSONObject("origin");boolean effectRecorded;
-            try(Cursor operations=db.rawQuery("SELECT 1 FROM operations WHERE task_id=? AND tool<>? LIMIT 1",new String[]{id,dev.pocketengine.features.memory.TaskMemoryJournal.TOOL})){effectRecorded=operations.moveToFirst();}
-            if(!original.isCancelled()&&!task.optBoolean("cancelRequested")&&(origin==null||!"channel".equals(origin.optString("kind")))&&!task.has("developmentContext")&&!effectRecorded&&!hasUnreadOwnerDocumentReference(id,runId)&&nativeFinalAnswerContent(id,runId,epoch,outcome.evidence)!=null)status="completed";
-        }
-        endAttempt(id,runId,status,outcome.summary,outcome.evidence);
+        if(original==null||!original.matchesHostRun(id,runId,epoch)||!runId.equals(task.optString("runId"))
+                ||epoch!=task.optInt("coordinatorEpoch")||!currentAttemptRunning(task))return;
+        String message="执行已停止推进，结果保存待核对。已有记录保留，没有重放操作。";
+        task.put("status","reconciling").put("summary",message);
+        appendEvent(task,new JSONObject().put("type","run_settlement").put("status","unconfirmed")
+                .put("runId",runId).put("coordinatorEpoch",epoch).put("message",message));
+    }
+    /** Publishes one result in the transaction that settles the original attempt and outbox. */
+    public synchronized void finishCapabilityAttempt(String id,String runId,int epoch,RunControl original,dev.pocketengine.core.RunOutcome outcome)throws Exception {
+        db.beginTransaction();try{
+            JSONObject task=required(id);
+            if(original==null||!original.matchesHostRun(id,runId,epoch)||!runId.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch"))throw new SecurityException("完成回执不是当前原能力执行");
+            TaskAttemptJournal.requireOriginal(db,id,task,runId);
+            if(!currentAttemptRunning(task)){db.setTransactionSuccessful();return;}
+            String status=outcome.status,summary=outcome.summary;
+            if(original.isCancelled()||task.optBoolean("cancelRequested")){
+                status="cancelled";summary="已停止后续操作；已有动作和结果保留，停止不代表撤销已发生的效果";
+            }else if("needs_confirmation".equals(status)){
+                JSONObject origin=task.optJSONObject("origin");boolean effectRecorded;
+                try(Cursor operations=db.rawQuery("SELECT 1 FROM operations WHERE task_id=? AND tool<>? LIMIT 1",new String[]{id,dev.pocketengine.features.memory.TaskMemoryJournal.TOOL})){effectRecorded=operations.moveToFirst();}
+                if(!original.isCancelled()&&(origin==null||!"channel".equals(origin.optString("kind")))&&!task.has("developmentContext")&&!effectRecorded&&!hasUnreadOwnerDocumentReference(id,runId)&&nativeFinalAnswerContent(id,runId,epoch,outcome.evidence)!=null)status="completed";
+            }
+            endAttempt(id,runId,status,summary,outcome.evidence);
+            JSONObject settled=required(id);
+            appendEvent(settled,new JSONObject().put("taskId",id).put("runId",runId).put("coordinatorEpoch",epoch)
+                    .put("type","result").put("status",settled.getString("status"))
+                    .put("message",settled.optString("summary")).put("timestamp",System.currentTimeMillis()));
+            db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
     }
     public synchronized void endAttempt(String id,String runId,String status,String summary,JSONObject evidence)throws Exception{
         db.beginTransaction();try{JSONObject t=required(id);if(!runId.equals(t.optString("runId")))return;
@@ -15723,11 +15746,15 @@ public final class TaskStore {
                 while(c.moveToNext()){
                     JSONObject t=new JSONObject(c.getString(0));String status=t.optString("status");
                     if("inference".equals(t.optString("kind"))&&"recording".equals(status)){t.put("status","interrupted").put("summary","用量会话因进程重开结束；未收到的终态/用量仍未知，没有重发");write(t);continue;}
-                    if(!status.matches("running|preparing|paused|pausing|stopping|verifying|queued")&&!restoredUnknown.contains(t.getString("id")))continue;
+                    // Older hosts could publish a result event before settling the original run.
+                    boolean pendingOwnerSettlement=OwnerWorkTask.isOwnerWork(t)
+                            &&status.matches("completed|needs_confirmation|awaiting_user|failed|cancelled|reconciling")&&currentAttemptRunning(t);
+                    if(!status.matches("running|preparing|paused|pausing|stopping|verifying|queued")&&!pendingOwnerSettlement&&!restoredUnknown.contains(t.getString("id")))continue;
                     if(OwnerWorkTask.isOwnerWork(t)&&"queued".equals(status)&&t.optString("runId").isEmpty()&&!t.optBoolean("cancelRequested"))continue;
                     Object previousSummary=t.opt("summary");boolean hadSummary=t.has("summary");
                     String feature=t.optString("feature");
                     if(hasUnresolved(t.getString("id")))t.put("status","reconciling").put("summary","上次动作结果不明，请核对后继续原任务");
+                    else if(OwnerWorkTask.isOwnerWork(t)&&t.optBoolean("cancelRequested"))t.put("status","cancelled").put("summary","停止请求已保存；重启后未恢复执行，已有结果保留");
                     else if(t.optJSONObject("executionScope")!=null&&TaskExecutionScope.planning(t.getJSONObject("executionScope")))t.put("status",t.optBoolean("cancelRequested")?"cancelled":"awaiting_user").put("summary","只读规划状态及原支出已保留；请核对原计划后继续，未恢复写入或重放读取");
                     else if(t.optJSONObject("origin")!=null&&t.getJSONObject("origin").optString("kind").equals("channel")&&t.optBoolean("cancelRequested"))t.put("status","cancelled").put("summary","停止请求已保存；重启后未恢复执行，已有结果保留");
                     else if(feature.equals("remote")||feature.equals("ssh"))t.put("status","reconciling").put("summary","手机已重启，远端任务可能仍在执行；请核对原操作，未重提任务");

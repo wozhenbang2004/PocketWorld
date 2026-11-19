@@ -1,5 +1,24 @@
 # Login → model → message → tools: reliability contract
 
+## Private work settlement and cold phone recovery · 2026-11-19
+
+The shared capability runner sends progress against its admitted task, run and
+epoch. TaskStore saves the terminal state, original attempt, result presentation
+and durable outbox in one transaction, after inspecting unresolved operations
+and cancellation. A second settlement sees that the original attempt has
+already ended. An uncertain persistence result is reported independently of the
+actual tool outcome. At cold start, older owner-work records with a displayed
+terminal state and a still-running SQL attempt go through the existing recovery
+and outbox path for that original attempt.
+
+Ordinary public lookup uses the existing read-only research tools in the current
+thread. If one public page cannot be read, the assistant can return the evidence
+it obtained from other sources and name the gap. TaskStore still owns explicit
+planning, exact authorization and uncertain external effects.
+
+The phone connection inspection starts after the host's business state is ready.
+It uses the existing owner setting, lock-state and recovery coalescing checks.
+
 This is the shared maintenance contract for the native execution path and its diagnostics.
 It does not grant execution authority and must not become a second task or account store.
 

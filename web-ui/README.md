@@ -100,8 +100,10 @@ for timing/usage semantics, source boundaries, reuse decisions and verification.
 Each native phone-result message exposes an immutable `phoneResult` containing
 its task/run/epoch, delivery identity, ended status/time and summary limits.
 The message shows that ended run even when the task is running again. Its task
-link reads the current original task; it does not resume execution or reuse an
-old review. Ordinary or imported messages cannot supply this native read target.
+link opens the original run when the host can still verify that identity. If
+the current header confirms a later run, the link says it opens the parent work.
+Opening the work only reads it. Ordinary or imported messages cannot supply this
+native read target.
 
 A saved task that has no result message is linked from its original conversation.
 Native task headers carry the compact `conversationPhoneLink` display association;
@@ -124,11 +126,11 @@ group; full Android compilation and a source-matched APK are separate checks.
 
 ## Continuous phone viewing
 
-The conversation and original task detail can show one selected background phone
-run continuously, in an inline preview or expanded workspace. Card and expanded
-workspace share one feed. The owner can select another eligible task, pause or
-resume the selected original run, and close viewing without stopping execution
-or losing the conversation draft.
+The conversation shows an entry to its current background phone run. The work
+detail is where the owner opens the inline preview or expanded workspace. Card
+and expanded workspace share one feed. From that work the owner can select
+another eligible task in the same conversation, pause or resume the selected
+original run, or close viewing while the execution and draft stay available.
 
 This is a bounded JPEG preview of an already attached Android independent
 display, not E2B/VNC or video sent to the model. Reads are sequential, scheduled

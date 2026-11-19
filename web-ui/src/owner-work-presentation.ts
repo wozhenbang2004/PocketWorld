@@ -50,6 +50,11 @@ export function ownerWorkPresentation(value: unknown) {
   const entries = Array.isArray(work.deliveries) ? work.deliveries.map(object) : [];
   const delivery = entries.find(row => row.deliveryId === handling.deliveryId);
   const reportMessageId = available && state === 'reported' ? text(handling.reportMessageId) : '';
+  const taskStatus = text(task.status);
+  const ownerDecision = ['waiting_approval', 'awaiting_approval', 'waiting_permission', 'awaiting_permission'].includes(taskStatus)
+    ? { label: '等待你的授权', action: '处理授权' }
+    : ['awaiting_user', 'waiting_user'].includes(taskStatus) ? { label: '需要你处理', action: '查看待处理事项' }
+    : taskStatus === 'needs_confirmation' ? { label: '结果等你核对', action: '核对结果' } : null;
   const labels: Record<ButlerHandlingState, string> = {
     none: '尚无执行结果', pending: '结果已到，等待管家整理', running: '管家正在核对结果',
     reported: '管家已汇报', needs_review: '汇报结果待核对', unavailable: '管家接手已停止', unread: '管家处理状态待读取',
@@ -68,10 +73,11 @@ export function ownerWorkPresentation(value: unknown) {
     : teams.some(team => team.status === 'awaiting_approval') ? '团队等待授权'
     : teams.some(team => team.status === 'awaiting_review') ? '团队成果等你核对' : '团队需要你处理';
   const childLabel = stopped ? '关联任务的停止状态待核对' : childNeedsAttention ? '关联任务需要处理' : '等待关联任务完成';
-  const handlingLabel = !available ? '原工作来源不可用' : teamNeedsAttention ? teamLabel
+  const handlingLabel = !available ? '原工作来源不可用' : ownerDecision ? ownerDecision.label : teamNeedsAttention ? teamLabel
     : teamActive ? stopped ? '团队停止状态待核对' : teams.filter(team => team.active).every(team => team.status === 'paused') ? '团队协作已暂停' : '团队正在推进'
     : waitingForChildren ? childLabel : labels[state];
   const reason = !available ? '原来源已删除、停用或暂不可核对。保留工作身份与允许的控制。'
+    : ownerDecision ? text(task.summary) || text(handling.reason)
     : teamNeedsAttention ? '打开原协作处理当前问题，已有结果仍保留在原工作。'
     : waitingForChildren ? stopped ? '原工作已要求停止，关联任务尚未确认结束。请查看原记录的当前状态。'
       : '关联任务尚未结束，当前是阶段进展，管家还没有形成完整汇报。'
@@ -82,15 +88,16 @@ export function ownerWorkPresentation(value: unknown) {
     && reconciliation.state === 'unknown' && reconciliation.automaticReplayAllowed === false
     && !!text(reconciliation.taskId) && !!text(reconciliation.runId) && Number.isSafeInteger(reconciliation.epoch) && Number(reconciliation.epoch) > 0
     ? { taskId: text(reconciliation.taskId), runId: text(reconciliation.runId), epoch: Number(reconciliation.epoch) } : null;
-  const needsAttention = available && (teamNeedsAttention || childNeedsAttention || state === 'needs_review'
+  const needsAttention = available && (!!ownerDecision || teamNeedsAttention || childNeedsAttention || state === 'needs_review'
     || state === 'unavailable' && resultAvailable && !stopped);
-  const actionLabel = teamNeedsAttention ? '处理团队问题' : teamActive ? stopped ? '查看停止进展' : '查看团队进展'
-    : waitingForChildren ? childNeedsAttention ? '处理关联任务' : '查看关联进展' : needsAttention ? '核对管家汇报' : resultAvailable || reportMessageId ? '查看结果' : '查看详情';
+  const actionLabel = ownerDecision ? ownerDecision.action : teamNeedsAttention ? '处理团队问题' : teamActive ? stopped ? '查看停止进展' : '查看团队进展'
+    : waitingForChildren ? childNeedsAttention ? '处理关联任务' : '查看关联进展'
+    : needsAttention ? '核对管家汇报' : resultAvailable || reportMessageId ? '查看结果' : '查看详情';
   return {
     state, handlingLabel, actionLabel, reason, reportMessageId, resultAvailable, receiptReconciliation,
     teams, teamActive, teamNeedsAttention, teamsUnavailable, waitingForChildren,
     conversationId: text(work.conversationId) || text(raw.conversationId),
-    waitingForButler: available && !waitingForChildren && ['pending', 'running'].includes(state),
+    waitingForButler: available && !ownerDecision && !waitingForChildren && ['pending', 'running'].includes(state),
     needsAttention,
     delivered: available && state === 'reported' && !!reportMessageId,
     deliveryId: available ? text(handling.deliveryId) : '',

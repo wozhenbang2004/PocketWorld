@@ -19,7 +19,7 @@ const labels: Record<string, string> = {
   pausing: '正在暂停', stopping: '正在停止', cancelling: '正在停止',
   waiting_approval: '等待你的授权', awaiting_approval: '等待你的授权',
   waiting_permission: '等待你的授权', awaiting_permission: '等待你的授权',
-  needs_confirmation: '结果等你核对', awaiting_user: '等你补充信息', waiting_user: '等你补充信息',
+  needs_confirmation: '结果等你核对', awaiting_user: '需要你处理', waiting_user: '需要你处理',
   paused: '已暂停', interrupted: '已中断', completed: '已完成', failed: '本次未完成',
   cancelled: '已停止', canceled: '已停止', stopped: '已停止',
   reconciling: '结果待核对', reconciliation_required: '结果待核对', unknown: '结果待核对',
@@ -49,23 +49,29 @@ export function workCollectionPresentation(task: WorkCollectionTask) {
   const resumableFailure = task.status === 'failed' && raw.executionRole === 'owner_work' && raw.controls?.canContinue === true;
   const pendingApproval = !ended && Array.isArray(raw.approvals) && raw.approvals.some((approval: Record<string, any> | null) =>
     approval && ['pending', 'waiting'].includes(String(approval.state || approval.status || '')));
-  const attention = reconciliation || handling?.needsAttention === true || resumableFailure
+  const attention = nativeGroup === 'attention' || reconciliation || handling?.needsAttention === true || resumableFailure
     || pendingApproval || (!nativeGroup && taskNeedsAttention(task)) || task.status === 'awaiting_permission' || !active && !ended;
   // Re-evaluate current handling/controls even for a paged row. Only the exact
   // native operation distinction is borrowed; a stale group cannot hide a new decision.
   const group: WorkCollectionGroup = attention ? 'attention' : active || handling?.waitingForButler || handling?.waitingForChildren ? 'running' : 'ended';
-  const label = reconciliation ? '结果待核对' : handling && raw.contextAvailable === false ? handling.handlingLabel
-    : handling?.needsAttention || handling?.waitingForChildren ? handling.handlingLabel : resumableFailure ? '本次未完成，可继续处理'
-    : handling && ended && !['none', 'unread'].includes(handling.state) ? handling.handlingLabel
-    : group === 'attention' && active ? '需要你处理' : labels[task.status] || '状态待核对';
+  const waitingForInput = ['awaiting_user', 'waiting_user'].includes(task.status);
+  const label = reconciliation ? '结果待核对'
+    : raw.contextAvailable === false ? '原工作来源不可用'
+    : handling?.needsAttention || handling?.waitingForChildren ? handling.handlingLabel
+    : resumableFailure ? '本次未完成，可继续处理'
+    : handling?.waitingForButler && ended ? handling.handlingLabel
+    : task.status === 'completed' && handling?.delivered ? handling.handlingLabel
+    : group === 'attention' && active ? '需要你处理'
+    : labels[task.status] || '状态待核对';
+  const completed = group === 'ended' && task.status === 'completed' && raw.contextAvailable !== false;
   const actionLabel = reconciliation ? '核对操作' : handling?.needsAttention || handling?.waitingForChildren ? handling.actionLabel
     : task.status === 'needs_confirmation' ? '核对结果'
     : ['waiting_approval', 'awaiting_approval', 'waiting_permission', 'awaiting_permission'].includes(task.status) ? '处理授权'
-    : ['awaiting_user', 'waiting_user'].includes(task.status) ? '补充信息'
+    : waitingForInput ? '查看待处理事项'
     : task.status === 'failed' ? '查看原因' : ['paused', 'interrupted'].includes(task.status) ? '继续处理'
     : group === 'attention' ? '查看待办' : task.status === 'queued' ? '查看排队'
     : group === 'running' ? '查看进展' : handling?.resultAvailable || handling?.delivered ? '查看结果' : '查看详情';
-  return { group, label, actionLabel, handling,
+  return { group, label, actionLabel, handling, completed,
     busy: group === 'running' && (active && task.status !== 'queued' || handling?.state === 'running'
       || handling?.teams.some(team => ['running', 'stopping'].includes(team.status))) };
 }

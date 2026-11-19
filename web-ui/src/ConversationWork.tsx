@@ -4,18 +4,17 @@ import { Button } from './forms-library';
 import { ProgressCircle } from './library';
 import { getRecentTaskProgress } from './task-presentation';
 import { phoneConversationId } from './phone-start';
-import { conversationWorkActionLabel, conversationWorkNeedsAttention } from './conversation-work';
 import { MotionDisclosure, MotionFeedback, useCollectionMotion } from './library/journey-motion';
-import { ownerWorkPresentation } from './owner-work-presentation';
+import { workCollectionPresentation } from './work-collection';
 
 type Task = { id: string; goal: string; status: string; raw?: Record<string, any> };
 
 /** A compact continuation of the conversation; the existing task drawer owns its details. */
-export function ConversationWork({ tasks, labelStatus, onOpen, canOpen, identity='', onEmptyFocus }: { tasks: Task[]; labelStatus: (status: string) => string; onOpen: (task: Task) => void; canOpen: boolean; identity?:string; onEmptyFocus?:()=>void }) {
+export function ConversationWork({ tasks, onOpen, canOpen, identity='', onEmptyFocus }: { tasks: Task[]; onOpen: (task: Task) => void; canOpen: boolean; identity?:string; onEmptyFocus?:()=>void }) {
   const [expanded, setExpanded] = useState(false);
   const root=useRef<HTMLElement>(null),focused=useRef<{node:HTMLElement;id:string;identity:string}|null>(null);
   const listId = useId();
-  const revision=JSON.stringify([expanded,tasks.map(task=>{const work=ownerWorkPresentation(task);return [task.id,task.status,conversationWorkNeedsAttention(task),work?.state,work?.handlingLabel]})]);
+  const revision=JSON.stringify([expanded,tasks.map(task=>{const work=workCollectionPresentation(task);return [task.id,task.status,work.group,work.label]})]);
   useCollectionMotion(root,identity,revision,{active:tasks.length>0,layout:false});
   useLayoutEffect(()=>{
     const original=focused.current;
@@ -30,12 +29,8 @@ export function ConversationWork({ tasks, labelStatus, onOpen, canOpen, identity
   },[revision,identity]);
   if (!tasks.length) return null;
   const work = tasks.map(task => {
-    const progress = getRecentTaskProgress(task), attention = conversationWorkNeedsAttention(task);
-    const handling = ownerWorkPresentation(task);
-    const active = ['running', 'preparing', 'verifying', 'pausing', 'stopping', 'cancelling'].includes(task.status);
-    const status = progress.source === 'task' && progress.status === 'unknown' ? progress.stateLabel : handling?.waitingForButler || handling?.waitingForChildren || handling?.needsAttention ? handling.handlingLabel : attention && (active || task.status === 'queued') ? '需要处理' : labelStatus(task.status);
-    const teamBusy = handling?.teams.some(team => ['queued', 'running', 'preparing', 'stopping'].includes(team.status));
-    return { task, progress, attention, status, busy: (active || handling?.waitingForButler && handling.state === 'running' || teamBusy) && !attention, action: conversationWorkActionLabel(task) };
+    const { group, label: status, busy, actionLabel: action } = workCollectionPresentation(task);
+    return { task, progress: getRecentTaskProgress(task), attention: group === 'attention', status, busy, action };
   });
   // Decisions stay visible independently of the background-work disclosure.
   // The caller continues to own admission, settled filtering and task identity.

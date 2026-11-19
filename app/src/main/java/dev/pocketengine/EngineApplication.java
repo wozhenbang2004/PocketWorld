@@ -928,6 +928,7 @@ public final class EngineApplication extends Application implements dev.pocketen
     private void queueReadyMaintenance(long generation){
         // Existing bounded startup/idle paths keep their original unknown/not-started checks.
         capabilityWorkers.execute(()->{if(!businessReady()||bootstrap.generation()!=generation)return;
+            if(features.module("phone_setup") instanceof dev.pocketengine.phone.setup.PhoneSetupModule setup)setup.recoverOnHostReady();
             try{if(nativeOwnerWorkflows.warmSelectedAccountMetadata())main.post(()->{if(businessReady()&&bootstrap.generation()==generation){sendState();features.sendState();}});}catch(Exception unavailable){error("ChatGPT账号状态尚待核对，未清空旧状态");}
             if(!businessReady()||bootstrap.generation()!=generation)return;
             try{dev.pocketengine.features.automation.AutomationModule.reschedule(this);}catch(Exception unavailable){error("跟进调度尚待核对，请查看原提醒");}
@@ -2327,6 +2328,14 @@ public final class EngineApplication extends Application implements dev.pocketen
         if("result".equals(event.optString("type"))&&modelStreams!=null)modelStreams.clear(id,original,"run_settled");
         try{tasks.event(id,run,epoch,event);pushTask(id);}catch(Exception failure){RuntimeDiagnostics.event("run_settlement","unconfirmed","TASK_EVENT_PERSISTENCE_FAILED",original,failure);error("任务步骤保存失败，请检查可用空间");}
     }
+    private void recordCapabilityProgress(String id,String run,int epoch,RunControl original,JSONObject event){
+        if(!"result".equals(event.optString("type")))recordRunEvent(id,run,epoch,original,event);
+    }
+    private void reportUnconfirmedCapabilitySettlement(String id,String run,int epoch,RunControl original,Exception failure){
+        RuntimeDiagnostics.event("run_settlement","unconfirmed","CAPABILITY_SETTLEMENT_UNCONFIRMED",original,failure);
+        try{tasks.markCapabilitySettlementUnconfirmed(id,run,epoch,original);pushTask(id);}
+        catch(Exception unavailable){if(unavailable!=failure)failure.addSuppressed(unavailable);error("原工作结果暂未确认保存，请检查本机存储后重新打开工作。");}
+    }
     private void checkLiveExtensionControl(dev.pocketengine.runtime.extensions.ExtensionRuntime.Binding binding,RunControl original)throws Exception{
         if(original==null||!original.matchesHostRun(binding.taskId,binding.runId,binding.epoch)||original!=retainedTaskControl(binding.taskId)&&original!=capabilityControls.get(binding.taskId))throw new SecurityException("原任务的活动控制器已变化");
         original.check();if(original.isPaused())throw new SecurityException("任务已暂停，不能执行扩展");
@@ -3223,15 +3232,16 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
             return json("content",result.summary,"taskId",id,"status","running","developmentRetained",true,"nativeOwnerReplyRecorded",true);
         }
         JSONObject resume()throws Exception {
-            if(!lifecycle.resume())throw new IllegalStateException("原开发轮次已在运行或结束");control.removeCancelAction(cancel);boolean settlementCommitted=false;
+            if(!lifecycle.resume())throw new IllegalStateException("原开发轮次已在运行或结束");control.removeCancelAction(cancel);boolean settlementStarted=false,settlementCommitted=false;
             try{
                 if(!retainCurrent())throw new SecurityException("原开发服务已结束，不能自动重建");tasks.resumeDevelopmentTurn(id,control);
-                RunOutcome result=runner.run(id,goal,config,control,event->recordRunEvent(id,run,epoch,control,event),journal);
+                RunOutcome result=runner.run(id,goal,config,control,event->recordCapabilityProgress(id,run,epoch,control,event),journal);
                 if(runner.developmentYielded())return held(result);
+                settlementStarted=true;
                 tasks.finishCapabilityAttempt(id,run,epoch,control,result);settlementCommitted=true;pushTask(id);
                 return json("content",result.evidence.optString("modelSummary",result.summary),"taskId",id,"status",tasks.get(id,false).getString("status"),"nativeOwnerReplyRecorded",true);
             }catch(Exception failure){
-                if(settlementCommitted)throw failure;
+                if(settlementStarted){if(!settlementCommitted)reportUnconfirmedCapabilitySettlement(id,run,epoch,control,failure);throw failure;}
                 // held(result) may already have yielded and registered cancellation.
                 // Keep that existing path separate from a still-active resume failure.
                 if(lifecycle.phase()!=dev.pocketengine.core.RetainedRunLifecycle.Phase.ACTIVE){
@@ -3442,7 +3452,7 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
     private JSONObject runCapabilityAttempt(String id,JSONArray initial,ModelConfig config,RunControl control,dev.pocketengine.features.controlplane.NativeWorkProfileHost.Selection selectedProfile,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection project,dev.pocketengine.features.skills.NativeSkillExecutionHost.OwnerInvocation ownerSkill,CapabilityApprovalContinuation approval)throws Exception{
         if(approval!=null)synchronized(tasks){approval.requireCurrent(tasks);}
         if(selectedProfile!=null)nativeWorkProfiles().requireOwnedSelection(selectedProfile,control);RunControl existing=capabilityControls.putIfAbsent(id,control);if(existing!=null&&existing!=control)throw new IllegalStateException("该任务仍在执行");
-        capabilityInferenceModels.put(control,config);JSONObject attempt=null;boolean settlementCommitted=false,capabilityPortPrepared=false;
+        capabilityInferenceModels.put(control,config);JSONObject attempt=null;boolean settlementStarted=false,settlementCommitted=false,capabilityPortPrepared=false;
         dev.pocketengine.features.assistant.OwnerSourceRequestProjection ownerSources=null;
         try{
             JSONObject source=tasks.get(id,false).optJSONObject("origin");
@@ -3521,10 +3531,10 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
             if(approval!=null&&approval.attachmentCall)runner.bindApprovedCall(new dev.pocketengine.features.capabilities.ApprovedAttachmentContinuation(tasks,id,approval.runId,approval.epoch,approval.approvalId));
             RetainedDevelopmentRun development=ownerMailbox&&assistantInputs.containsKey(control)?new RetainedDevelopmentRun(attempt,config,control,runner,journal,sourceProjection):null;
             if(development!=null)runner.bindDevelopmentContinuation(development::retainCurrent);
-            RunOutcome result=ownerSkill==null?runner.run(id,attempt.optString("goal"),config.withStepCeiling(attempt.getInt("stepCeiling")),control,event->recordRunEvent(id,admittedRun,admittedEpoch,control,event),journal)
-                    :runner.runOwnerSkill(id,attempt.optString("goal"),config.withStepCeiling(attempt.getInt("stepCeiling")),control,event->recordRunEvent(id,admittedRun,admittedEpoch,control,event),journal,ownerSkill);
+            RunOutcome result=ownerSkill==null?runner.run(id,attempt.optString("goal"),config.withStepCeiling(attempt.getInt("stepCeiling")),control,event->recordCapabilityProgress(id,admittedRun,admittedEpoch,control,event),journal)
+                    :runner.runOwnerSkill(id,attempt.optString("goal"),config.withStepCeiling(attempt.getInt("stepCeiling")),control,event->recordCapabilityProgress(id,admittedRun,admittedEpoch,control,event),journal,ownerSkill);
             if(runner.developmentYielded())try{return development.held(result);}catch(Exception failed){runner.closeDevelopment(id,control,journal);throw failed;}
-            String status=result.status;
+            String status=result.status;settlementStarted=true;
             if(status.equals("paused")&&control.conditionWait()!=null)tasks.endAutomationConditionWait(id,attempt.getString("runId"),control,result.summary,result.evidence);
             else tasks.finishCapabilityAttempt(id,admittedRun,admittedEpoch,control,result);
             // Response projection can fail after the original durable outcome committed.
@@ -3537,17 +3547,20 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
             else if(lastOwnerReplyAttempted[0]!=null&&lastOwnerReplyAttempted[0].equals(response.optString("content"))){response.put("content",result.summary).put("nativeOwnerReplyPersistence","unconfirmed");} // No automatic duplicate write after an uncertain native reply commit.
             for(String key:new String[]{"memoryReference","memoryContext"})if(result.evidence.optJSONObject(key)!=null)response.put(key,result.evidence.getJSONObject(key));return response;
         }catch(dev.pocketengine.features.memory.OwnerSourceRunContext.ContinuationUnavailable unavailable){
-            if(settlementCommitted)throw unavailable;
+            if(settlementStarted){if(!settlementCommitted)reportUnconfirmedCapabilitySettlement(id,attempt.getString("runId"),attempt.getInt("coordinatorEpoch"),control,unavailable);throw unavailable;}
             if(attempt!=null)tasks.endAttempt(id,attempt.getString("runId"),"awaiting_user",unavailable.getMessage(),json("contextProvenance","context_provenance_unavailable","nextAction","new_private_conversation"));
             pushTask(id);return json("content",unavailable.getMessage(),"taskId",id,"status",tasks.get(id,false).getString("status"),"continuation","blocked","nextAction","new_private_conversation");
         }catch(RunControl.ConditionWaitException waiting){
-            if(settlementCommitted)throw waiting;
+            if(settlementStarted){if(!settlementCommitted)reportUnconfirmedCapabilitySettlement(id,attempt.getString("runId"),attempt.getInt("coordinatorEpoch"),control,waiting);throw waiting;}
             if(control.isCancelled()){if(attempt!=null)tasks.endAttempt(id,attempt.getString("runId"),"cancelled","已停止后续操作",new JSONObject());throw waiting;}
             if(attempt!=null)tasks.endAutomationConditionWait(id,attempt.getString("runId"),control,"运行条件暂不满足，已保留原任务与预算",new JSONObject());
             else if(!tasks.automationConditionWaiting(id)&&tasks.get(id,false).optString("runId").isEmpty())tasks.status(id,"preparing","运行条件暂不满足，已保留原触发身份");
             pushTask(id);return json("content","运行条件暂不满足，原目标与已发生的动作保留","taskId",id,"status",tasks.get(id,false).getString("status"));
         }catch(Exception failure){
-            if(settlementCommitted)throw failure;
+            if(settlementStarted){
+                if(!settlementCommitted)reportUnconfirmedCapabilitySettlement(id,attempt.getString("runId"),attempt.getInt("coordinatorEpoch"),control,failure);
+                throw failure;
+            }
             RuntimeDiagnostics.event("run_settlement",control.isCancelled()?"cancelled":"failed","CAPABILITY_RUN_FAILED",control,failure);
             if(attempt!=null){
                 boolean devicePreparationUnavailable=attempt.has("ownerDeviceWork")&&!capabilityPortPrepared&&!control.isCancelled();

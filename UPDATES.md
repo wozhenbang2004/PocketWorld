@@ -326,3 +326,11 @@ Primary contracts:
 - https://developer.android.com/reference/android/content/pm/PackageManager#canRequestPackageInstalls()
 - https://developer.android.com/reference/android/app/job/JobScheduler
 - https://github.com/google/archive-patcher/tree/50ca40a3de7983392a383ed3cc7b48e25f1b69b3
+## Parallel preview installation
+
+An `:app:assembleDebug -PpocketworldParallelPreview=true` build installs as
+`dev.pocketengine.preview` and shows **PocketWorld Preview** in the launcher.
+Android keeps this preview's database, account sign-in and permissions separate
+from the installed `dev.pocketengine` app. The preview has no update feed and
+can be installed alongside the official version. An in-place update of the
+official app requires its existing signing key and a compatible version code.

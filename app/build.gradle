@@ -42,6 +42,7 @@ if (!updateManifestUrl.isEmpty()) {
 }
 // Opt-in source distribution only. Does not enroll a device or include Firebase.
 def unifiedPushEnabled = providers.gradleProperty('pocketworldUnifiedPush').getOrElse('false') == 'true'
+def parallelPreview = providers.gradleProperty('pocketworldParallelPreview').getOrElse('false') == 'true'
 android {
     namespace 'dev.pocketengine'
     compileSdk (unifiedPushEnabled ? 36 : 35)
@@ -56,6 +57,7 @@ android {
         externalNativeBuild { cmake { arguments '-DANDROID_STL=c++_static' } }
         versionCode pocketworldVersion.versionCode
         versionName pocketworldVersion.versionName
+        manifestPlaceholders = [pocketworldAppLabel: '@string/app_name', pocketworldPhoneControlLabel: '@string/accessibility_name']
         resValue 'string', 'pocketworld_update_manifest_url', updateManifestUrl
         resValue 'string', 'pocketworld_update_public_key', updatePublicKey
         resValue 'bool', 'pocketworld_unified_push', unifiedPushEnabled.toString()
@@ -64,7 +66,18 @@ android {
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = '17' }
     buildFeatures { compose true }
-    buildTypes { release { minifyEnabled false } }
+    buildTypes {
+        debug {
+            if (parallelPreview) {
+                applicationIdSuffix '.preview'
+                manifestPlaceholders.pocketworldAppLabel = 'PocketWorld Preview'
+                manifestPlaceholders.pocketworldPhoneControlLabel = 'PocketWorld Preview Phone Control'
+                resValue 'string', 'pocketworld_update_manifest_url', ''
+                resValue 'string', 'pocketworld_update_public_key', ''
+            }
+        }
+        release { minifyEnabled false }
+    }
     testOptions { unitTests { includeAndroidResources = true } }
     lint { abortOnError true }
     externalNativeBuild {
