@@ -16,6 +16,7 @@ import { durationLabel, executionTraceDetail, executionTracePage, mergeTraceNode
   traceEventMatches, traceEvents, traceFailed, traceInProgress, traceRequestTiming, traceRole, traceRoleLabel, traceRows, traceStatus, traceSummary,
   traceTime, traceTurnCount, traceUsageBreakdown, type ExecutionTraceDetail, type ExecutionTracePage, type TraceAggregate, type TraceFilter, type TraceNode } from './execution-trace';
 import { taskHistoryIdentity, type TaskHeader } from './task-history';
+import { SavedDefaultChange } from './SavedDefaultChange';
 import './execution-trace.css';
 
 type TraceWindow = { scope: string; page: ExecutionTracePage; complete: boolean; backfilling: boolean; pages: number };
@@ -24,7 +25,7 @@ const filters: TraceFilter[] = ['all', 'model', 'tool', 'failed'];
 const POLL_MS = 3_000;
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
 const aggregateLabel = (value: TraceAggregate) => `${tokenLabel(value.value)}${value.value !== null && (value.missing > 0 || !value.final) ? ' +' : ''}`;
-const bodyKeys = ['message', 'preview', 'raw', 'input', 'output', 'options', 'schema', 'error', 'sourceRefs'] as const;
+const bodyKeys = ['message', 'preview', 'raw', 'input', 'output', 'options', 'schema', 'error', 'sourceRefs', 'preferenceChange'] as const;
 const getSourceRevision = () => String(bridge.getState().state.traceSourceRevision ?? 0);
 function metadataOnly(node: TraceNode): TraceNode {
   const metadata = { ...node }; for (const key of bodyKeys) delete metadata[key]; return metadata;
@@ -260,6 +261,7 @@ function TraceDetails({ selection, page, complete, close, active }: { selection:
             {sourceUnavailable && <p className="pw-trace-detail-source" role="status" data-source-state={read.detail!.sourceState}>{missing}</p>}
             {node.contentLimited && <p className="pw-trace-note">正文仅保留已记录的部分。</p>}
             <TabPanel id="summary">
+              {node.kind === 'tool' && node.name === 'agent_settings_set' && read.detail?.sourceState === 'current' && !read.busy && !read.error && <SavedDefaultChange value={node.preferenceChange} />}
               <dl className="pw-trace-facts pw-trace-primary-facts"><div><dt>状态</dt><dd>{traceStatus(node.status)}</dd></div><div><dt>耗时</dt><dd>{nodeDurationLabel(node)}</dd></div>
                 {node.model && <div><dt>模型</dt><dd>{node.model}</dd></div>}
                 {node.turnIndex != null && <div><dt>轮次</dt><dd>Turn {node.turnIndex}{node.stepIndex != null ? ` · Step ${node.stepIndex}` : ''}</dd></div>}
@@ -325,6 +327,7 @@ export function TaskTrajectory({ task, active, canRead, registerTransientBack, c
   const chooseRun = (key: string) => { if (key === selectedRun) return; setSelectedRun(key); setSelection(null); setHighlighted(null); setFolded(new Set()); setStepDisclosure({scope: '', values: new Map()}); };
   const toggle = (id: string) => setFolded(current => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   const nodes = page?.nodes || [];
+  const preferenceRequests = nodes.filter(node => node.kind === 'tool' && node.name === 'agent_settings_set' && typeof node.operationId === 'string' && node.operationId.length > 0);
   const events = useMemo(() => traceEvents(nodes), [page?.nodes]);
   const filteredEvents = useMemo(() => events.filter(row => traceEventMatches(row, filter, query)), [events, filter, query]);
   const stepScope = `${identity}:${page?.runId || ''}:${page?.epoch ?? ''}:${documentEpoch}`;
@@ -364,6 +367,11 @@ export function TaskTrajectory({ task, active, canRead, registerTransientBack, c
     {!canRead && <p className="pw-trace-note">当前应用尚未开放这份轨迹读取，可在进展记录和工具调用中查看原记录。</p>}
     {readWindow.error && <div className="pw-trace-read-error" role="alert"><p>{readWindow.error}</p>{page && <small>下方保留已读取的轨迹。自动刷新已暂停，刷新后继续补齐。</small>}</div>}
     {page && <>
+      {preferenceRequests.length > 0 && <Accordion variant="divided" className="pw-trace-disclosures"><AccordionItem id="original-default-requests" title="默认偏好保存请求" description={`已读到 ${preferenceRequests.length} 次，打开核对原结果`}>
+        <div className="pw-form-actions">{[...preferenceRequests].sort((a, b) => b.sequence - a.sequence).slice(0, 4).map(node =>
+          <Button key={node.id} variant="secondary" size="small" disabled={!active || !readWindow.enabled} onClick={() => select(node)}>查看记录 #{node.sequence}</Button>)}
+          {preferenceRequests.length > 4 && <Button variant="ghost" size="small" onClick={() => { setFilter('tool'); setQuery('保存默认偏好'); }}>筛选全部已读请求</Button>}</div>
+      </AccordionItem></Accordion>}
       <TraceOverview rows={events} mode={overviewMode} onModeChange={setOverviewMode} highlightedId={highlighted} turnCount={traceTurnCount(nodes)} toolCount={stats.tools} onLocate={locate}/>
       <div className="pw-trace-completeness" role="status"><span>{readWindow.view?.backfilling ? '正在补齐较早记录' : complete ? '当前快照已完整读取' : '当前为部分记录'} · {nodes.length} 条</span><span>{stats.models} 次请求{stats.failed ? ` · ${stats.failed} 条异常` : ''}</span></div>
       {stats.models > 0 && <dl className="pw-trace-token-summary" aria-label={complete ? '本次执行模型用量' : '已读取请求的部分用量'}><div><dt>输入 token</dt><dd>{aggregateLabel(stats.input)}</dd></div><div><dt>输出 token</dt><dd>{aggregateLabel(stats.output)}</dd></div></dl>}

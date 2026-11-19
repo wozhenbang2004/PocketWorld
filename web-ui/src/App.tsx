@@ -67,6 +67,7 @@ import {PhoneControlWorkspace} from './PhoneControlWorkspace';
 import {ProjectRuntimeHealth} from './ProjectRuntimeHealth';
 import {ProjectLivePreview} from './ProjectLivePreview';
 import {ProjectExecutionWorkspace} from './ProjectExecutionWorkspace';
+import {failedBuildFeedback,projectFeedbackKey,type ExecutionExit} from './project-execution-exit';
 import {RemoteTaskWorkspace,RemoteManagedSessionsWorkspace} from './RemoteTaskWorkspace';
 import {AnswerSources,type AnswerSourceTarget} from './AnswerSources';
 import {ProjectConventionProvided} from './ProjectConventionProvided';
@@ -397,7 +398,9 @@ export default function App(){
  const [taskMenuOpen,setTaskMenuOpen]=useState(false);
  const [localError,setLocalError]=useState(''),[localStatus,setLocalStatus]=useState(''),[review,setReview]=useState<Review|null>(null),[reviewPending,setReviewPending]=useState(false),[reviewSubmitted,setReviewSubmitted]=useState(false),[reviewNote,setReviewNote]=useState(''),[reviewFeedbackOpen,setReviewFeedbackOpen]=useState(false),[scopeTools,setScopeTools]=useState(''),[scopeModels,setScopeModels]=useState('');
  const [reviewReceipt,setReviewReceipt]=useState('');
- const [projectFeedback,setProjectFeedback]=useState<Record<string,string>>({});
+ const [projectFeedback,setProjectFeedback]=useState<Record<string,string>>({}),projectFeedbackRef=useRef<Record<string,string>>({});
+ const putProjectFeedback=(key:string,text:string)=>{if(!key)return;const next={...projectFeedbackRef.current,[key]:text};projectFeedbackRef.current=next;setProjectFeedback(next)};
+ const [locateProjectFeedback,setLocateProjectFeedback]=useState('');
  const [continuations,setContinuations]=useState<Record<string,ContinuationSubmission>>({}),continuationsRef=useRef<Record<string,ContinuationSubmission>>({});
  const reviewWindow=useRef<TaskReviewWindow|null>(null);
  const rememberContinuation=useCallback((value:ContinuationSubmission)=>{continuationsRef.current={...continuationsRef.current,[value.original.taskId]:value};setContinuations(continuationsRef.current)},[]);
@@ -1212,7 +1215,7 @@ export default function App(){
   if(action==='tasks.resume'&&projectContinuation(review)){
    if(continuationBlocks(continuationsRef.current[taskId])||!currentReviewWindow(reviewWindow.current))return;
    let submission:ReturnType<typeof continuationRequest>;
-   try{submission=continuationRequest(review,taskId,projectFeedback[taskId]||'')}catch(error){setTaskErrors(previous=>({...previous,[taskId]:error instanceof Error?error.message:String(error)}));return}
+   try{submission=continuationRequest(review,taskId,projectFeedback[projectFeedbackKey(review?.task)]||'')}catch(error){setTaskErrors(previous=>({...previous,[taskId]:error instanceof Error?error.message:String(error)}));return}
    const window=reviewWindow.current,originalTask=taskId;
    const pending:ContinuationSubmission={original:submission.original,status:'pending',message:'正在确认原项目任务续接。对话草稿仍保留，尚未发送。'};
    rememberContinuation(pending);setReviewSubmitted(true);setReviewReceipt('');
@@ -1383,9 +1386,25 @@ export default function App(){
   const executionTask=tasks.find(task=>task.id===scope);
   const memoryProposal=obj(obj(obj(operation).receipt).memoryDraft);const memoryTarget=memoryProposal.format==='pocketworld.conversation-memory-draft.v1'&&memoryProposal.taskId===scope&&memoryProposal.operationId===obj(operation).operationId&&memoryProposal.runId===obj(operation).runId?memoryProposal:null;
   const proposal=obj(obj(obj(operation).receipt).skillDraft);const draftTarget=proposal.format==='pocketworld.conversation-skill-draft.v1'&&proposal.taskId===scope&&proposal.operationId===obj(operation).operationId&&proposal.runId===obj(operation).runId?proposal:null;
-  return <section className="pw-operation-entry" key={key}><ToolCall id={op.id||String(index)} name={op.name} summary={op.stateLabel} status={op.status} input={op.arguments} result={op.result} durationMs={op.durationMs} open={expandedCalls[key]??false} onOpenChange={value=>setExpandedCalls(x=>({...x,[key]:value}))}/>{packageTarget&&can('projects.package.preview.inspect')&&<Button variant="secondary" disabled={packageOpening||taskOpening||!can('projects.package.preview.open')||!can('tasks.close')} onClick={()=>openTaskPackage(packageTarget)}>查看这次任务的固定包</Button>}{draftTarget&&can('skillDraft.open')&&<Button variant="secondary" onClick={()=>setSkillDraftTarget(draftTarget as ConversationDraftTarget)}>审阅原技能提案</Button>}{memoryTarget&&can('memoryDraft.open')&&<Button variant="secondary" onClick={()=>setMemoryDraftTarget(memoryTarget as ConversationDraftTarget)}>审阅原记忆提案</Button>}{op.readLimited&&<p className="pw-muted">这条记录仅保留摘要，详情需要回到原记录读取。</p>}{executionTask&&obj(operation).tool==='project_execute'&&can('local.execution.open')&&<ConversationModelPickerVisibility key={'log:'+key}>{pickerVisible=><ProjectExecutionWorkspace task={executionTask} operation={obj(operation)} active={taskOpen&&taskLayer==='process'&&!pickerVisible&&!phoneViewerObscured} run={act}/>}</ConversationModelPickerVisibility>}</section>;
+  return <section className="pw-operation-entry" key={key}><ToolCall id={op.id||String(index)} name={op.name} summary={op.stateLabel} status={op.status} input={op.arguments} result={op.result} durationMs={op.durationMs} open={expandedCalls[key]??false} onOpenChange={value=>setExpandedCalls(x=>({...x,[key]:value}))}/>{packageTarget&&can('projects.package.preview.inspect')&&<Button variant="secondary" disabled={packageOpening||taskOpening||!can('projects.package.preview.open')||!can('tasks.close')} onClick={()=>openTaskPackage(packageTarget)}>查看这次任务的固定包</Button>}{draftTarget&&can('skillDraft.open')&&<Button variant="secondary" onClick={()=>setSkillDraftTarget(draftTarget as ConversationDraftTarget)}>审阅原技能提案</Button>}{memoryTarget&&can('memoryDraft.open')&&<Button variant="secondary" onClick={()=>setMemoryDraftTarget(memoryTarget as ConversationDraftTarget)}>审阅原记忆提案</Button>}{op.readLimited&&<p className="pw-muted">这条记录仅保留摘要，详情需要回到原记录读取。</p>}{executionTask&&obj(operation).tool==='project_execute'&&(can('local.execution.observe')||can('local.execution.open'))&&<ConversationModelPickerVisibility key={'log:'+key}>{pickerVisible=><ProjectExecutionWorkspace task={executionTask} operation={obj(operation)} prepareFailure={taskOpen&&openedTaskId.current===executionTask.id&&can('tasks.review')?prepareFailedBuild:undefined} active={taskOpen&&taskLayer==='process'&&!pickerVisible&&!phoneViewerObscured} run={act}/>}</ConversationModelPickerVisibility>}</section>;
  };
  const taskActionLabel=(task:Task)=>conversationWorkActionLabel(task);
+ const prepareFailedBuild=(exit:ExecutionExit)=>{
+  const now=bridge.getState(),original=asArray<Task>(obj(now.state).tasks).find(t=>t.id===exit.taskId);
+  if(!original||document.hidden||!taskOpen||taskOpening||openedTaskId.current!==original.id||obj(now.view).taskId!==original.id||
+    reviewPending||reviewSubmitted||questionPending||continuationBlocks(continuationsRef.current[original.id]))throw Error('原任务窗口或续接状态已改变，未改写草稿。');
+  const key=projectFeedbackKey(original),note=failedBuildFeedback(original,exit);if(!key||!note)throw Error('原运行或副本已改变，未带到另一轮。');
+  const old=projectFeedbackRef.current[key]||'';if(!old.includes(note)){
+   const next=old?old+'\n\n'+note:note;if(next.length>8000)throw Error('原草稿将超过 8000 字，既有文字仍保留，请先整理。');putProjectFeedback(key,next);
+  }
+  setLocateProjectFeedback(key);showTaskLayer('overview');if(!review||reviewStale||projectFeedbackKey(review.task)!==key)refreshReview();
+ };
+ useEffect(()=>{
+  if(!locateProjectFeedback||!taskOpen||document.hidden||!selectedTask||projectFeedbackKey(selectedTask)!==locateProjectFeedback||
+    !review||reviewStale||projectFeedbackKey(review.task)!==locateProjectFeedback)return;
+  const id=window.requestAnimationFrame(()=>{const section=document.getElementById('pw-project-continuation-note');if(section){section.scrollIntoView({block:'nearest'});section.focus({preventScroll:true});setLocateProjectFeedback('')}});
+  return()=>window.cancelAnimationFrame(id);
+ },[locateProjectFeedback,taskOpen,selectedTask,review,reviewStale]);
  const showTaskReview=()=>refreshReview();
  // Match the existing full-window layer breakpoints, rather than coloring native
  // safe areas from a route hidden behind a file or reading workspace.
@@ -1447,14 +1466,14 @@ export default function App(){
   const project=projectContinuation(review),continuation=continuations[task.id];
   const canReadProject=privateProjectTask(task)&&['paused','interrupted','awaiting_user','needs_confirmation','failed','completed'].includes(task.status);
   const projectBlocked=protectedDisabled||continuationBlocks(continuation);
-  const projectNote=projectFeedback[task.id]||'';
-  const projectControls=project&&<section aria-label="原项目续接范围">
+  const projectNote=projectFeedback[projectFeedbackKey(task)]||'';
+  const projectControls=project&&<section id="pw-project-continuation-note" tabIndex={-1} aria-label="原项目续接范围">
    {review?.task&&!reviewStale&&<ContinuedProjectBinding key={review.reviewHandle} task={review.task} projects={projects} read={can('projectRuntime.read')?args=>bridge.command('projectRuntime.read',args):undefined}/>}
    <p>继续同一项目任务会立即开始原任务工作，不会自动发送对话草稿。</p>
    <p className="pw-muted">工具调用已用 {String(scope.toolsUsed??'未读取')} / 总上限 {String(scope.toolLimit??'未读取')}；模型调用已用 {String(scope.modelCallsUsed??'未读取')} / 总上限 {String(scope.modelCallLimit??'未读取')}。本次不增加额度，不延长截止时间。</p>
    <p className="pw-muted">{scope.deadlineAt===0?'沿用原任务未设置截止时间的范围，仍受剩余预算约束。':typeof scope.deadlineAt==='number'?`原截止时间：${new Date(scope.deadlineAt).toLocaleString('zh-CN')}。`:'原任务期限尚未读取。'}{scope.executionPhase==='planning'?' 原任务仍处于只读规划，继续不会批准具体执行。':''}</p>
    {project.reason&&<p role="status" className="pw-muted">{project.reason}</p>}
-   <TextAreaField label="本次修改要求" value={projectNote} onChange={value=>setProjectFeedback(previous=>({...previous,[task.id]:value}))} placeholder="看过原结果后，希望继续修改什么？" hint="必填，最多 8000 字。对话中的文字、引用和附件保持原样。" isRequired maxLength={8000} showCount isDisabled={projectBlocked||!actionNames.includes('tasks.resume')}/>
+   <TextAreaField label="本次修改要求" value={projectNote} onChange={value=>putProjectFeedback(projectFeedbackKey(task),value)} placeholder="看过原结果后，希望继续修改什么？" hint="必填，最多 8000 字。对话中的文字、引用和附件保持原样。" isRequired maxLength={8000} showCount isDisabled={projectBlocked||!actionNames.includes('tasks.resume')}/>
    {actionNames.includes('tasks.resume')&&actionNames.includes('tasks.confirm')&&<Button variant="secondary" disabled={projectBlocked||!projectNote.trim()||projectNote.trim().length>8000} onClick={()=>reviewedAction('tasks.resume')}>按本次反馈继续项目任务</Button>}
   </section>;
   const scopeEditor=<div className="pw-scope-editor">
@@ -1561,7 +1580,7 @@ export default function App(){
       {taskLayer==='overview'&&!task.raw?.ownerPhoneControl&&task.raw?.actorId==='owner'&&task.raw?.spaceId==='private'&&can('taskCapabilities.open')&&<TaskCapabilityWorkspace key={'capabilities:'+task.id} taskId={task.id} run={act} exportState={state.taskCapabilityExport} onBackChange={registerCapabilityBack} registerBeforeLeave={registerTaskPolicyBeforeLeave} onOpenTools={next=>void openRelatedWorkspace(next||'capabilities')}/>}
       {taskLayer==='overview'&&task.raw?.ownerRuntimeSetup&&can('setup.runtime.read')&&<Button variant="secondary" onClick={()=>openSetup('tools',task.id)}>查看工具准备进度</Button>}
       {taskLayer==='overview'&&task.raw?.developmentContext&&can('projectRuntime.read')&&<ProjectRuntimeHealth key={'runtime:'+task.id} taskId={task.id} run={act} onPrepareTools={can('setup.runtime.read')?()=>openSetup('tools'):undefined}/>}
-      {taskLayer==='overview'&&task.raw?.developmentContext&&can('local.execution.open')&&<ConversationModelPickerVisibility key={'execution:'+task.id}>{pickerVisible=><ProjectExecutionWorkspace task={task} active={taskOpen&&!pickerVisible&&!phoneViewerObscured} run={act}/>}</ConversationModelPickerVisibility>}
+      {taskLayer==='overview'&&task.raw?.developmentContext&&(can('local.execution.observe')||can('local.execution.open'))&&<ConversationModelPickerVisibility key={'execution:'+task.id}>{pickerVisible=><ProjectExecutionWorkspace task={task} active={taskOpen&&!pickerVisible&&!phoneViewerObscured} run={act} prepareFailure={can('tasks.review')?prepareFailedBuild:undefined}/>}</ConversationModelPickerVisibility>}
       {can('usage.task')&&<TaskInference key={task.id} taskId={task.id}/>}{can('tokenBudgets.open')&&<TokenBudgetsWorkspace key={'budget:'+task.id} taskId={task.id} supported={can} registerTransientBack={registerTaskBack}/>}
       {task.raw?.kind==='phone'&&!task.raw?.origin&&typeof task.raw.runId==='string'&&task.raw.runId&&Number.isSafeInteger(task.raw.coordinatorEpoch)&&task.raw.coordinatorEpoch>0&&can('routeReference.open')&&<Button variant="ghost" onClick={()=>setRouteReferenceTarget({taskId:task.id,runId:task.raw!.runId,epoch:task.raw!.coordinatorEpoch,namespace:'owner/private'})}>查看路线参考与分享</Button>}
       {task.raw?.evidence?.nativeFinalAnswer&&can('sources.open')&&<Button variant="ghost" onClick={()=>setSourceSelection({taskId:task.id})}>核对原回答来源</Button>}
@@ -1606,7 +1625,7 @@ export default function App(){
   const actions=asArray<{action:string}>(review.actions).map(x=>x.action),disabled=taskOpening||reviewSubmitted||reviewPending;
   if(taskLayer==='scope'&&actions.includes('tasks.scope'))return <footer className="pw-task-footer"><PressButton label="确认本次范围修订" disabled={disabled||!/^\d+$/.test(scopeTools)||!/^\d+$/.test(scopeModels)||Number(scopeTools)<1||Number(scopeTools)>400||Number(scopeModels)<1||Number(scopeModels)>512} onClick={()=>reviewedAction('tasks.scope',{minutes:Number(scopeMinutes),tools:Number(scopeTools),models:Number(scopeModels)})}/></footer>;
   if(taskLayer==='overview'&&actions.includes('tasks.confirm'))return <footer className="pw-task-footer"><Button variant="secondary" disabled={disabled} onClick={()=>reviewedAction('tasks.confirm',{completed:false,feedback:reviewNote})}>目标尚未达到</Button><PressButton label="确认达到目标" disabled={disabled} onClick={()=>reviewedAction('tasks.confirm',{completed:true,feedback:reviewNote})}/></footer>;
-   if(taskLayer==='overview'&&actions.includes('tasks.resume')){const project=projectContinuation(review),note=projectFeedback[task.id]||'';return <footer className="pw-task-footer"><PressButton label={project?'在原范围内继续项目任务':task.raw?.ownerDeviceWork&&!task.raw?.runId?'开始这项设备工作':'继续原任务'} disabled={disabled||!!project&&(continuationBlocks(continuations[task.id])||!note.trim()||note.trim().length>8000)} onClick={()=>reviewedAction('tasks.resume',{confirmed:true,feedback:reviewNote})}/></footer>;}
+   if(taskLayer==='overview'&&actions.includes('tasks.resume')){const project=projectContinuation(review),note=projectFeedback[projectFeedbackKey(task)]||'';return <footer className="pw-task-footer"><PressButton label={project?'在原范围内继续项目任务':task.raw?.ownerDeviceWork&&!task.raw?.runId?'开始这项设备工作':'继续原任务'} disabled={disabled||!!project&&(continuationBlocks(continuations[task.id])||!note.trim()||note.trim().length>8000)} onClick={()=>reviewedAction('tasks.resume',{confirmed:true,feedback:reviewNote})}/></footer>;}
   return null;
  };
  const selectedWorkIdentity=ownerWorkIdentity(selectedTask);

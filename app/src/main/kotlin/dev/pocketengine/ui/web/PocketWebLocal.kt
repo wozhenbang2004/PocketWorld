@@ -19,7 +19,10 @@ internal class PocketWebLocal(private val controller: PocketWorldController, pri
     private var viewer: Viewer? = null
     @Volatile private var generation = 0L
     private var busy = false
-    companion object { val COMMANDS = setOf("local.prepareCheckout", "local.describeCheckout", "local.terminal.review", "local.terminal.confirm", "local.terminal.query", "local.terminal.stop", "local.terminal.open", "local.terminal.read", "local.terminal.input", "local.terminal.inputReceipt", "local.terminal.close", "local.execution.open", "local.execution.readLogs", "local.execution.input", "local.execution.inputReceipt", "local.execution.stop", "local.execution.close") }
+    companion object {
+        // Publish only viewing. Interactive input/stop remain outside this surface.
+        val PROJECT_OBSERVATION_COMMANDS = setOf("local.execution.observe","local.execution.readLogs","local.execution.close")
+        val COMMANDS = PROJECT_OBSERVATION_COMMANDS + setOf("local.prepareCheckout", "local.describeCheckout", "local.terminal.review", "local.terminal.confirm", "local.terminal.query", "local.terminal.stop", "local.terminal.open", "local.terminal.read", "local.terminal.input", "local.terminal.inputReceipt", "local.terminal.close", "local.execution.open", "local.execution.readLogs", "local.execution.input", "local.execution.inputReceipt", "local.execution.stop", "local.execution.close") }
 
     fun clear() {
         generation++; busy = false
@@ -70,6 +73,9 @@ internal class PocketWebLocal(private val controller: PocketWorldController, pri
             "local.terminal.review" -> fields(args, "projectId", "checkoutId", "expectedSourceDigest", "runtimeId", "cwd", "env", "timeoutMillis", "columns", "rows", "inputByteLimit")
             "local.terminal.query", "local.terminal.stop" -> { fields(args, "taskId", "runId", "epoch", "executionId"); val task = id(args, "taskId"); require(id(args, "runId") == task && id(args, "executionId") == task && args.opt("epoch") == 1) { "不是原手动终端身份" } }
             "local.terminal.open" -> { fields(args, "taskId", "executionId"); id(args, "taskId"); id(args, "executionId") }
+            "local.execution.observe" -> {
+                fields(args,"taskId","executionId");check(taskView()==executionId(args,"taskId")){"请重新打开原私人任务"};executionId(args,"executionId")
+            }
             "local.execution.open" -> { fields(args, "taskId", "executionId", "observingOnly"); check(taskView() == executionId(args, "taskId")) { "请重新打开这份原项目任务" }; executionId(args, "executionId"); require(args.opt("observingOnly") is Boolean) { "请明确选择只读日志或原交互终端" } }
         }
         if (action == "local.execution.stop") { check(!originalViewer!!.stopRequested) { "已请求停止原进程，请读取原退出与资源回执，不要重复请求" }; originalViewer.stopRequested = true }
@@ -92,6 +98,11 @@ internal class PocketWebLocal(private val controller: PocketWorldController, pri
                     "local.terminal.open" -> {
                         opened = controller.localTerminalHost().openProjectTerminalForOwner(input.getString("taskId"), input.getString("executionId"), observation)
                         JSONObject().put("metadata", opened!!.metadata()).put("output", opened!!.readScreen())
+                    }
+                    "local.execution.observe" -> {
+                        opened=controller.localTerminalHost().openProjectExecutionForOwner(input.getString("taskId"),input.getString("executionId"),observation)
+                        val metadata=opened!!.metadata();check(metadata.opt("observingOnly")==true){"未取得只读观察回执"}
+                        JSONObject().put("metadata",metadata).put("output",opened!!.readScreen())
                     }
                     "local.execution.open" -> {
                         opened = if (input.getBoolean("observingOnly")) controller.localTerminalHost().openProjectExecutionForOwner(input.getString("taskId"), input.getString("executionId"), observation)

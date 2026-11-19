@@ -3,6 +3,7 @@ import type { ProcessRecord } from './task-process-checkpoint';
 import { presentOperation } from './task-presentation';
 import { phoneRunIdentity } from './phone-start';
 import { isPrivateLocalPhone } from './PhonePauseInstruction';
+import { originalStopObservation, stoppedAppWindows } from './stopped-phone-window';
 
 export type PhoneStopReceipt = { lines: string[]; record?: ProcessRecord };
 type Row = Record<string, any>;
@@ -77,19 +78,21 @@ export function phoneStopReceipt(task:TaskHeader, eventPage?:AuditPage, operatio
 
   // One historical observation, not a current phone screen. Do not infer the place from the
   // goal, the launch arguments or an earlier readable screen when a later observation failed.
-  const where = originals.find(entry => entry.type === 'observation' && entry.event.tool === 'phone_observe');
+  const checkedWindow=eventPage?.format==='pocketworld.task-audit-page.v1'&&eventPage.executionAuthorized===false&&Array.isArray(eventRows)&&eventRows.length<=40;
+  const {entry:where,gap:screenGap}=originalStopObservation(checkedWindow?eventRows:[],owner);
   const seen = object(where?.event.receipt), binding = object(seen?.observationBinding);
-  if (where?.event.status === 'completed' && seen?.ok === true && seen.changedDuringRead !== true && binding && match(binding) &&
+  const mode=task.raw?.executionMode;
+  const rightDisplay=(!task.executionMode||task.executionMode===mode)&&(mode==='main_screen'?seen?.displayId===0:mode==='background'&&typeof seen?.displayId==='number'&&seen.displayId>0);
+  if (where?.event.status === 'completed' && seen?.ok === true && seen.changedDuringRead === false && rightDisplay && binding && match(binding) &&
       id(seen.observationId) && seen.observationId === binding.observationId && id(seen.sessionId) && seen.sessionId === binding.sessionId &&
-      naturals(seen.displayId) && seen.displayId === binding.displayId && naturals(seen.pauseRevision) && seen.pauseRevision === binding.pauseRevision) {
+      naturals(seen.displayId) && seen.displayId<=2147483647 && seen.displayId === binding.displayId && naturals(seen.pauseRevision) && seen.pauseRevision === binding.pauseRevision) {
     screenRead = true;
-    const name = seen.packageName, app = object(seen.installedApp);
-    const known = app?.source === 'android_package_manager' && app.packageName === name && typeof name === 'string' && name.length <= 255 && /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$/.test(name);
     const screen = seen.displayId === 0 ? '主屏' : '独立屏 '+seen.displayId;
-    const place = screen + (seen.displayId > 0 && seen.screenState === 'display_has_no_app' && seen.emptyDisplayVerified === true ? ' · 屏内没有应用' : known ? ' · '+name : ' · 应用未核实');
+    const place = screen + ' · ' + (seen.displayId > 0 && seen.packageName==='' && seen.screenState === 'display_has_no_app' && seen.emptyDisplayVerified === true ? '屏内没有应用' : stoppedAppWindows(seen));
     if (record) lines.push('停前读到的现场：'+place);
     else record = {section:'events', id:where.eventKey, runId, locatable:true, label:'停前读到的现场', body:place};
   }
+  const gapLine=screenGap?'较新的观察正文或归属未能核对，没有用更早的画面推断停点。':undefined;
 
   // NativeSequenceProgress is an exact unissued suffix of one bounded plan, never a count of
   // the owner's remaining work. Cross-check its *finished* original planning call in this page.
@@ -113,9 +116,10 @@ export function phoneStopReceipt(task:TaskHeader, eventPage?:AuditPage, operatio
       else record = {section:'events', id:tail.eventKey, runId, locatable:true, label:'原操作序列停点', body};
     }
   }
-  if (!latest.length && !record) return {lines:['当前窗口没有能核对的本轮手机动作、现场或余步回执，不能据此判断什么都没做。']};
+  if (!latest.length && !record) return {lines:[...(gapLine?[gapLine]:[]),'当前窗口没有能核对的本轮手机动作、现场或余步回执，不能据此判断什么都没做。']};
+  if(gapLine)lines.push(gapLine);
   if (!latest.length) lines.unshift('当前窗口没有能核对的手机动作回执。这不代表没有执行过动作。');
-  const gaps = [!screenRead && '停前画面', !suffixRead && '哪些后续步骤未派发'].filter(Boolean);
+  const gaps = [!screenRead && !gapLine && '停前画面', !suffixRead && '哪些后续步骤未派发'].filter(Boolean);
   if (gaps.length) lines.push(gaps.join('、')+'：本轮已读记录未能核实。');
   return {lines,record};
 }

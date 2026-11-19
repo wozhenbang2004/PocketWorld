@@ -23,12 +23,14 @@ public final class ProjectOwnerTerminal {
             check();JSONObject original=target.originalRequest(),plan=original.getJSONObject("plan"),exact=ProjectDevelopment.exact(plan,ProjectBuildPlan.step(plan,original.getString("stepId"))),binding=original.getJSONObject("binding");
             JSONObject backend=local.projectReceiptForHost(exact,binding,false),durable=ProjectSources.copy(backend);durable.remove("activity");tasks.recordProjectOperation(binding,exact,durable);tasks.finishOwnerLocalTerminalFromReceipt(binding);
             JSONObject policy=local.automaticProjectLogPolicyForHost(exact.optString("runtimeId","termux"));int pageBytes=policy.getInt("automaticLogPageBytes");if(pageBytes!=8192&&pageBytes!=32768)throw new IllegalStateException("runtime_native_log_policy_invalid");
-            JSONObject log=local.projectLogForHost(exact,binding,cursor,pageBytes);check();if(backend.optJSONObject("activity")!=null)log.put("activity",ProjectSources.copy(backend.getJSONObject("activity")));return log.put("logObservationPolicy",policy).put("terminal",backend.optBoolean("receiptReceived")&&backend.optString("status").matches("completed|failed")).put("nativeStatus",backend.optString("status")).put("processExited",backend.optBoolean("processExited")).put("resourcesReleased",backend.optBoolean("resourcesReleased")).put("inputUncertain",inputUncertain);
+            JSONObject log=local.projectLogForHost(exact,binding,cursor,pageBytes);check();
+            JSONObject exit=ProjectExecutionExit.from(exact,binding,backend);if(exit!=null)log.put("observedExit",exit);
+            if(backend.optJSONObject("activity")!=null)log.put("activity",ProjectSources.copy(backend.getJSONObject("activity")));return log.put("logObservationPolicy",policy).put("terminal",backend.optBoolean("receiptReceived")&&backend.optString("status").matches("completed|failed")).put("nativeStatus",backend.optString("status")).put("processExited",backend.optBoolean("processExited")).put("resourcesReleased",backend.optBoolean("resourcesReleased")).put("inputUncertain",inputUncertain);
         }
         /** Native page/session owns the cursor; navigation can close this display without stopping the process. */
         public synchronized JSONObject readScreen()throws Exception {
             JSONObject metadata=check().metadata();if(screen==null)screen=new ProjectTerminalScreen(target.executionId,metadata.getInt("columns"),metadata.getInt("rows"));else screen.resize(metadata.getInt("columns"),metadata.getInt("rows"));
-            JSONObject page=read(screen.cursor()),view=screen.append(page);for(String key:new String[]{"terminal","nativeStatus","processExited","resourcesReleased","inputUncertain","activity","logObservationPolicy"})if(page.has(key))view.put(key,page.get(key));return view;
+            JSONObject page=read(screen.cursor()),view=screen.append(page);for(String key:new String[]{"terminal","nativeStatus","processExited","resourcesReleased","inputUncertain","activity","logObservationPolicy","observedExit"})if(page.has(key))view.put(key,page.get(key));return view;
         }
         /** Native owner accepts the existing finite input scope. Each action is still
          * prepared/consumed/ACKed in the original journal; unknown is never resent. */

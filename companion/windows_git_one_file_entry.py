@@ -53,7 +53,8 @@ def path_choice(ctx,settings,src,current,observe):
 def show(ctx,settings,src,locked):
     from windows_git_copy_entry import _observe
     health=WindowsDesktopHealth(); session=health.probe(session_only=True)
-    if session.get("available") is not True or locked(): return
+    if (session.get("available") is not True or type(session.get("sessionId")) is not int
+            or session["sessionId"]<=0 or locked()): return
     try: root=dict(registered(ctx,settings))[src["environmentId"]]
     except Exception: return
     def current():
@@ -77,9 +78,14 @@ def show(ctx,settings,src,locked):
         actions=[("show","查看完整原文本"),("ids","查看原提交、Git 对象和字节摘要")]
         if file.repository and file.git:
             actions.insert(1,("save","只保存这一份文件的独立副本\n先核对原选择和新位置，不复制整个项目。"))
+        if file.repository and file.git and file.mode=="100644":
+            actions.insert(1,("work","与这台电脑上的工作文件对照\n先核对同一路径，再决定是否读取当前文件。"))
         selected=_dialog("已核实一份已提交原文件",f"{file.path}\n{file.size:,} 字节 · 原提交 {src['commit'][:12]}\n"
                          "这不是当前磁盘文件，也不是整仓核验或副本。",actions,retire=closed)
         if selected is None or not current(): return
+        if selected=="work":
+            from windows_git_workfile_entry import compare
+            compare(ctx,settings,src,file,current,_observe); continue
         if selected=="save":
             from windows_git_copy_entry import confirm_copy
             from windows_git_one_copy import descriptor

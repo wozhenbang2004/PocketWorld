@@ -8,6 +8,7 @@ import { Accordion, AccordionItem, Button, IconButton } from './forms-library';
 import { IconArrowLeft, IconArrowRight, IconChevronRight, IconRefresh } from './icons';
 import { processCheckpoint, type ProcessRecord } from './task-process-checkpoint';
 import { phoneStopReceipt } from './phone-stop-receipt';
+import { phoneResourceHistory } from './phone-resource-history';
 import { getTaskEventHistory, getTaskOperations } from './task-presentation';
 import { taskAuditPage, taskHistoryIdentity, type AuditPage, type AuditSection, type TaskHeader } from './task-history';
 
@@ -87,7 +88,7 @@ export function TaskHistory({ task, canRead, canReadTrace = false, active = true
   const [expanded, setExpanded] = useState<{scope: string; keys: Set<string | number>}>({scope: '', keys: new Set()});
   const [target, setTarget] = useState<{scope: string; record: ProcessRecord} | null>(null);
   const [drill, setDrill] = useState<{scope: string; section: AuditSection} | null>(null);
-  const [locateMiss, setLocateMiss] = useState(''), surface = useRef<HTMLElement>(null), focusReturn = useRef('');
+  const [locateMiss, setLocateMiss] = useState(''), surface = useRef<HTMLElement>(null), focusReturn = useRef(''), releaseReturn = useRef('');
   const backToCheckpoint = useCallback(() => {
     focusReturn.current = identity; setDrill(null); setLocateMiss(''); setSelectedTab('trace');
   }, [identity]);
@@ -103,7 +104,10 @@ export function TaskHistory({ task, canRead, canReadTrace = false, active = true
     focusReturn.current = '';
     if (!restore) return;
     const root = surface.current?.querySelector<HTMLElement>('.pw-process-checkpoint');
-    const control = root?.querySelector<HTMLElement>('button') ?? root?.querySelector<HTMLElement>('h3');
+    const prior=releaseReturn.current;releaseReturn.current='';
+    const source=root?.querySelector<HTMLElement>('[data-phone-release-return]');
+    const control = prior ? (source?.dataset.phoneReleaseReturn===prior ? source : root?.querySelector<HTMLElement>('h3')) :
+      root?.querySelector<HTMLElement>('button') ?? root?.querySelector<HTMLElement>('h3');
     control?.focus({preventScroll: true}); control?.scrollIntoView({block: 'nearest'});
   }, [active, identity, selectedTab]);
   useLayoutEffect(() => {
@@ -126,11 +130,20 @@ export function TaskHistory({ task, canRead, canReadTrace = false, active = true
     operations: operationPage || operations.seedInvalid ? [] : task.raw?.operations } });
   const visibleTask = projected(events.page, operations.page), latestTask = projected(events.latest, operations.latest);
   const history = getTaskEventHistory(visibleTask), tools = getTaskOperations(visibleTask);
+  const originalRead = active && inOriginalTask && canRead;
+  const resources = originalRead ? phoneResourceHistory(latestTask,events.latest) : undefined;
+  const shownResources = events.page===events.latest ? resources : originalRead ? phoneResourceHistory(visibleTask,events.page) : undefined;
+  // Keep an original release entry readable when its native body carries no free-text message.
+  if(shownResources)history.entries=history.entries.map(entry=>{
+    const fact=entry.isCurrentRun&&entry.bodyAvailable&&entry.hasRecordedId?shownResources.records.get(entry.id):undefined;
+    return fact?{...entry,title:fact.label,detail:fact.body,fullDetail:undefined}:entry;
+  });
   const checkpoint = active && selectedTab === 'trace' ? processCheckpoint(latestTask, events.page === events.latest ? history.entries : getTaskEventHistory(latestTask).entries,
     operations.page === operations.latest ? tools : getTaskOperations(latestTask),
     inOriginalTask && canRead ? phoneStopReceipt(latestTask, events.latest, operations.latest) : undefined) : null;
-  const locate = (record: ProcessRecord) => {
+  const locate = (record: ProcessRecord, releaseSource = false) => {
     if (!active || record.runId !== task.raw?.runId) return;
+    releaseReturn.current=releaseSource?recordKey(record.runId,record.id):'';
     if (record.section === 'events') {
       events.showLatest();
       setExpanded({scope: identity, keys: new Set([recordKey(record.runId, record.id)])});
@@ -145,6 +158,9 @@ export function TaskHistory({ task, canRead, canReadTrace = false, active = true
       {checkpoint.record.locatable && <Button variant="ghost" trailingIcon={IconChevronRight} onClick={() => locate(checkpoint.record!)}>定位原记录</Button>}
     </div>}
     {checkpoint.lines?.map((line,index) => <p key={index} dir="auto">{line}</p>)}
+    {resources?.stored&&resources.stored!==resources.event?.body&&<p><strong>独立屏留存记录：</strong>{resources.stored}</p>}
+    {resources?.event&&!(checkpoint.record?.section==='events'&&checkpoint.record.id===resources.event.id&&checkpoint.record.body===resources.event.body)&&<div className="pw-checkpoint-evidence"><small>{resources.event.label}</small><p>{resources.event.body}</p>
+      {(checkpoint.record?.section!=='events'||checkpoint.record.id!==resources.event.id)&&<Button variant="ghost" trailingIcon={IconChevronRight} data-phone-release-return={recordKey(resources.event.runId,resources.event.id)} onClick={()=>locate(resources.event!,true)}>查看这笔清理记录</Button>}</div>}
   </section>;
   const navigation = (window: ReturnType<typeof useAuditWindow>, label: string) => <>
     {window.error && <p className="pw-error" role="alert">{window.error}</p>}

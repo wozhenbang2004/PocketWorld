@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Accordion, AccordionItem, Button, CheckboxField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import TerminalSurface from './TerminalSurface';
+import {ProjectExecutionExitPanel} from './ProjectExecutionExitPanel';
+import {originalExecutionExit,type ExecutionExit} from './project-execution-exit';
 import { bridge } from './bridge';
 import { registerOverlayBack } from './overlay-back';
 import { projectExecutionActivity, projectExecutionCanInput, projectExecutionRows, projectExecutionShouldRead, type ProjectExecutionData as Data } from './project-execution';
@@ -14,7 +16,7 @@ const keys = [{ id: '\r', label: 'Enter' }, { id: '\t', label: 'Tab' }, { id: '\
 
 /** One original project execution, displayed through the existing VT surface.
  * Open/read do not create a process; close only retires this observation session. */
-export function ProjectExecutionWorkspace({ task, operation, active = true, run = bridge.command }: { task: Data; operation?: Data; active?: boolean; run?: Run }) {
+export function ProjectExecutionWorkspace({ task, operation, active = true, run = bridge.command, prepareFailure }: { task: Data; operation?: Data; active?: boolean; run?: Run; prepareFailure?:(r:ExecutionExit)=>void }) {
   const entries = projectExecutionRows(task, operation), [selection, setSelection] = useState('');
   const [expanded, setExpanded] = useState(false), disclosureId = `execution:${task.id}:${operation?.operationId || 'list'}`;
   const selected = entries.find(row => row.operationId === selection) || entries.at(-1), execution = selected?.operationId || '', originalKey = `${task.id}|${execution}`;
@@ -39,18 +41,19 @@ export function ProjectExecutionWorkspace({ task, operation, active = true, run 
   };
   const request = async (action: string, args: Data = {}) => {
     if (!current() || pending.current) return;
-    const opening = action === 'local.execution.open', prior = currentPage.current;
+    const opening = action === 'local.execution.open' || action === 'local.execution.observe', prior = currentPage.current;
     if (!opening && !prior || opening && !selected) return;
     const token = {}, epoch = generation.current, owner = ownerWindow(), originalExecution = execution;
     pending.current = token; setBusy(action); setError('');
     const valid = () => alive.current && live.current.active && live.current.expanded && !document.hidden && epoch === generation.current && owner === ownerWindow() && execution === live.current.execution && pending.current === token;
     let acquired: Data | null = null;
     try {
-      const value = await run(action, opening ? { taskId: task.id, executionId: originalExecution, observingOnly: args.observingOnly } : { ...args, handle: prior!.handle });
+      const value = await run(action, opening ? { taskId: task.id, executionId: originalExecution, ...(action==='local.execution.observe'?{}:{observingOnly:args.observingOnly}) } : { ...args, handle: prior!.handle });
       if (opening) acquired = value;
       if (!valid()) { if (opening && value?.handle) void run('local.execution.close', { handle: value.handle }).catch(() => {}); return; }
       if (value?.taskId !== task.id || value.executionId !== originalExecution || typeof value.handle !== 'string' || !value.handle || !opening && value.handle !== prior!.handle) throw new Error('原项目执行回执身份不可核对，请重新打开原记录。');
       if (opening || action === 'local.execution.readLogs') {
+        if(action==='local.execution.observe'&&value.metadata?.observingOnly!==true)throw Error('未取得原执行的只读观察，不进入交互终端。');
         if (value.metadata?.taskId !== task.id || value.metadata?.executionId !== originalExecution || value.output?.executionId !== originalExecution) throw new Error('原日志或终端元数据身份不一致。');
         apply(value);
         if (opening) { setColumns(String(value.metadata.columns)); setHeight(String(value.metadata.rows)); live.current.uncertain = value.metadata.inputUncertain === true || value.output.inputUncertain === true; setUncertain(live.current.uncertain); setInputReceipt(null); live.current.stopRequested = stopped.has(originalKey) || value.stopRequested === true; setStopRequested(live.current.stopRequested); }
@@ -96,16 +99,20 @@ export function ProjectExecutionWorkspace({ task, operation, active = true, run 
     void request('local.execution.input', payload).then(result => { if (result?.nativeInputSettled && result.accepted && expectedText !== undefined && live.current.input === expectedText && current()) { live.current.input = ''; drafts.delete(originalKey); setInput(''); } });
   };
   const activity = projectExecutionActivity(output.activity || {}, execution), logPolicy = output.logObservationPolicy || {};
+  const commands=bridge.getState().capabilities.commands,canObserve=commands.includes('local.execution.observe'),canInteract=commands.includes('local.execution.open')&&commands.includes('local.execution.input');
+  const observed=originalExecutionExit(output.observedExit,metadata,output.nativeStatus);
   if (!entries.length) return null;
   return <Accordion className="pw-local-disclosures pw-project-execution" expandedKeys={expanded ? [disclosureId] : []} onExpandedChange={values => { const next = values.has(disclosureId); live.current.expanded = next; if (!next) close(); setExpanded(next); }}><AccordionItem id={disclosureId} title="执行终端与原日志" description={operation ? '这次原项目执行' : `${entries.length} 条已读取的项目执行记录`}>
     {!operation && entries.length > 1 && <SelectField label="原项目执行" value={execution} isDisabled={!!busy || stopReview} options={entries.map(row => ({ id: row.operationId, label: `${row.interactive ? '当前 PTY' : '只读执行'} · ${row.operationId}` }))} onChange={value => { if (pending.current || !current()) return; close(); live.current.execution = value; setSelection(value); }} />}
-    {!view ? <><p className="pw-field-hint">读取原标准输出、错误输出和记录游标。打开页面不会新建或恢复执行。</p><div className="pw-form-actions"><Button variant="secondary" disabled={!active || !!busy} onClick={() => { void request('local.execution.open', { observingOnly: true }); }}>查看原执行日志</Button>{selected?.interactive && <Button variant="secondary" disabled={!active || !!busy} onClick={() => { void request('local.execution.open', { observingOnly: false }); }}>打开原交互终端</Button>}</div></> : <>
+    {!view ? <><p className="pw-field-hint">读取原标准输出、错误输出和记录游标。打开页面不会新建或恢复执行。</p><div className="pw-form-actions"><Button variant="secondary" disabled={!active || !!busy} onClick={() => { void request(canObserve?'local.execution.observe':'local.execution.open', { observingOnly: true }); }}>查看原执行日志</Button>{selected?.interactive && canInteract && <Button variant="secondary" disabled={!active || !!busy} onClick={() => { void request('local.execution.open', { observingOnly: false }); }}>打开原交互终端</Button>}</div></> : <>
       <div className="pw-local-screen-toolbar"><span><strong>{metadata.executable}</strong><small>{metadata.workingDirectory}</small></span><Button variant="ghost" size="small" onClick={close}>关闭视图</Button></div>
       <p className="pw-field-hint pw-execution-scope">{metadata.observingOnly ? '只读观察，不能输入或停止执行。' : '原交互终端；输入仍受原任务时限、额度与进程状态约束。'}关闭视图只结束查看，不停止原进程。</p>
+      {observed&&<ProjectExecutionExitPanel key={JSON.stringify([view.handle,observed.executionId,observed.epoch,observed.kind,observed.value,observed.nativeStatus])} exit={observed} task={task} active={active&&!busy&&current()} prepare={prepareFailure}/>}
+      {!observed&&output.terminal&&<p className="pw-field-hint">此原回执没有可核对的进程退出码或信号；不推测原因。</p>}
       {activity && <p role="status" className="pw-local-inline-notice">{activity}</p>}
       {logPolicy.automaticLogPageReduced && <p role="status" className="pw-local-inline-notice">{logPolicy.ownerMessage || '原运行时已减少自动日志页的读取字节；仍读取同一份原日志。'}</p>}
       <div className="pw-local-screen"><TerminalSurface key={view.handle} dimensionMode="project" frame={frame || null} onFrameApplied={(revision, generation) => { if (alive.current && currentPage.current?.handle === view.handle) setPainted(`${view.handle}|${generation}|${revision}`); }} /></div>
-      <p className="pw-field-hint">原记录游标：{output.outputCursor ?? '尚未返回'}{output.hasMore ? ' · 后续原日志仍待读取' : ''}。{output.terminal ? `原进程已返回终态；资源释放${output.resourcesReleased ? '已确认' : '尚未确认'}。` : '运行与退出以原生回执为准。'}</p>
+      <p className="pw-field-hint">原记录游标：{output.outputCursor ?? '尚未返回'}{output.hasMore ? ' · 后续原日志仍待读取' : ''}。{output.terminal ? `原执行回执为终态；资源释放${output.resourcesReleased ? '已确认' : '尚未确认'}。` : '运行与退出以原生回执为准。'}</p>
       {(output.outputTruncated || frame?.gap || output.logIncompleteTail) && <p role="status" className="pw-local-inline-notice">{output.logIncompleteTail ? '原日志末条尚未写完整，只显示此前完整记录。' : '较早输出已被覆盖或截断，当前内容不是完整输出。'}已停止继续输入，不能把日志缺口当作进程完成。</p>}
       {!projectExecutionShouldRead(output) && !output.terminal && <p className="pw-field-hint">当前原状态不可自动轮询；请明确读取原记录，不会重放执行。</p>}
       <div className="pw-form-actions"><Button variant="secondary" disabled={!active || !!busy} onClick={() => { void request('local.execution.readLogs'); }}>读取原日志与退出回执</Button></div>

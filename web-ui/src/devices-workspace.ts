@@ -49,7 +49,7 @@ export function isReceivedPhoneTask(task: DeviceData, snapshot: DeviceData | nul
 }
 /** A local return bookmark, never a review, model selection, or execution authority. */
 export type SentPhoneGoalFocus = { purpose?: 'partner_connection'; taskId: string; deviceId: string; instanceId: string; certificateFingerprint: string };
-export type ReceivedPhoneGoalReturn = { taskId: string; instanceId: string; sourceId: string; targetId: string; parentTaskId: string; operationId: string; grantId: string; epoch: number; runId?:string; executorEpoch?:number; modelReturnHandle?:string; peerDetail: boolean; leftAt: number };
+export type ReceivedPhoneGoalReturn = { taskId: string; instanceId: string; sourceId: string; targetId: string; parentTaskId: string; operationId: string; grantId: string; epoch: number; runId?:string; executorEpoch?:number; failedOriginalRun?:true; modelReturnHandle?:string; peerDetail: boolean; leftAt: number };
 export function receivedPhoneGoalReturn(task: DeviceData, snapshot: DeviceData | null, peerDetail = false): ReceivedPhoneGoalReturn | undefined {
   if (!isReceivedPhoneTask(task, snapshot) || !identity(task.id) || !identity(snapshot?.local?.instanceId)) return;
   const raw = task.raw, origin = raw.origin;
@@ -62,7 +62,7 @@ export function matchesReceivedPhoneGoal(task: DeviceData, snapshot: DeviceData 
   const value = receivedPhoneGoalReturn(task, snapshot);
   return !!value && value.taskId === expected.taskId && value.instanceId === expected.instanceId && value.sourceId === expected.sourceId
     && value.targetId === expected.targetId && value.parentTaskId === expected.parentTaskId && value.operationId === expected.operationId && value.grantId === expected.grantId && value.epoch === expected.epoch
-    &&(!expected.runId || task.raw.runId===expected.runId && task.raw.coordinatorEpoch===expected.executorEpoch);
+    &&(!expected.runId || task.raw.runId===expected.runId && task.raw.coordinatorEpoch===expected.executorEpoch) && (!expected.failedOriginalRun || task.raw.status==='failed');
 }
 /** Only a deliberate per-task read can extend the native 40-row window. Facts cannot authorize
  * a click: expired or changed execution facts disappear; local reduction still uses native review. */
@@ -101,19 +101,23 @@ export function deviceOriginalTaskActions(task: DeviceData, details: DeviceData 
 export function samePhoneGoalArchive(value: DeviceData | null, peer: DeviceData | undefined, local: DeviceData) {
   return !!value && !!peer && identity(local.deviceId) && identity(local.instanceId) && identity(peer.instanceId) && /^[a-f0-9]{64}$/.test(peer.certificateFingerprint || '')
     && value.targetDeviceId === peer.deviceId && value.instanceId === peer.instanceId && value.targetFingerprint === peer.certificateFingerprint
+    && (value.side!=='received' || positiveInteger(value.receivedPeerEpoch) && value.receivedPeerEpoch===peer.authorizationEpoch)
     && value.localDeviceId === local.deviceId && value.localInstanceId === local.instanceId;
 }
 const startedPhases=new Set(['preparing','running','pausing','paused','stopping','verifying','awaiting_user','waiting_user','awaiting_approval','waiting_approval','waiting_permission','interrupted','reconciling','reconciliation_required','blocked_unknown']);
 export function waitingPhoneGoalPage(value: unknown, local: DeviceData) {
   if (!object(value) || value.kind !== 'waitingPhoneGoals' || value.readOnly !== true
+    || value.failedOnly!==undefined&&typeof value.failedOnly!=='boolean'||value.failedOnly===true&&(value.declinedOnly!==false||value.startedOnly!==false||value.resultOnly!==false)
     || value.declinedOnly!==undefined&&typeof value.declinedOnly!=='boolean'||value.declinedOnly===true&&(value.startedOnly!==false||value.resultOnly!==false||value.rows?.length>6)
     || value.startedOnly!==undefined && typeof value.startedOnly!=='boolean' || value.startedOnly===true && value.resultOnly!==false
-    || (value.resultOnly === true || value.startedOnly===true || value.declinedOnly===true) && (!Number.isSafeInteger(value.limitedCandidates) || value.limitedCandidates < 0 || value.limitedCandidates > 24) || !identity(local.deviceId) || !identity(local.instanceId)
+    || (value.resultOnly === true || value.startedOnly===true || value.declinedOnly===true || value.failedOnly===true) && (!Number.isSafeInteger(value.limitedCandidates) || value.limitedCandidates < 0 || value.limitedCandidates > 24) || !identity(local.deviceId) || !identity(local.instanceId)
     || value.localDeviceId !== local.deviceId || value.localInstanceId !== local.instanceId || !identity(value.waitingHandle) || !positiveInteger(value.capturedAt)
     || typeof value.hasMore !== 'boolean' || typeof value.canReadNewer !== 'boolean' || !Array.isArray(value.rows) || value.rows.length > 24
     || !value.rows.every((r: unknown) => object(r) && identity(r.taskId) && identity(r.operationId) && typeof r.sourceDeviceId === 'string'
       && /^pw1_[a-f0-9]{64}$/.test(r.sourceDeviceId) && (value.declinedOnly===true
         ? r.waitingState==='declined_before_start' && r.notDispatched===true && positiveInteger(r.declinedAt) && r.runId===undefined && r.epoch===undefined
+        : value.failedOnly===true
+        ? r.waitingState==='failed_run' && identity(r.runId) && positiveInteger(r.epoch) && positiveInteger(r.registeredAt) && positiveInteger(r.stateRecordedAt) && r.stateRecordedAt>=r.registeredAt
         : value.startedOnly===true
         ? r.waitingState==='original_run' && identity(r.runId) && positiveInteger(r.epoch) && startedPhases.has(r.taskState)
           &&(startedPhases.has(r.runState)||r.runState==='needs_confirmation')&&positiveInteger(r.registeredAt)&&typeof r.stopRequested==='boolean'
@@ -126,10 +130,11 @@ export type PhoneArchiveSide = 'sent' | 'received';
 export function receivedPhoneArchiveReturn(value: unknown, row: DeviceData, peer: DeviceData, local: DeviceData): ReceivedPhoneGoalReturn {
   if (!object(value) || value.kind !== 'receivedGoalReturn' || value.readOnly !== true || value.taskId !== row.taskId || value.operationId !== row.operationId
     || value.targetId !== local.deviceId || value.instanceId !== local.instanceId || value.sourceId !== peer.deviceId
-    || (row.waitingState==='original_run' ? value.runId!==row.runId || value.executorEpoch!==row.epoch : value.runId!==undefined || value.executorEpoch!==undefined)
+    || (row.waitingState==='failed_run' ? value.failedOriginalRun!==true : value.failedOriginalRun!==undefined)
+    || (['original_run','failed_run'].includes(row.waitingState) ? value.runId!==row.runId || value.executorEpoch!==row.epoch : value.runId!==undefined || value.executorEpoch!==undefined)
     || !identity(value.parentTaskId) || !identity(value.grantId) || !positiveInteger(value.epoch)) throw new Error('未能核对本机接纳的这次原任务。');
   return { taskId: value.taskId, operationId: value.operationId, targetId: value.targetId, instanceId: value.instanceId, sourceId: value.sourceId,
-    parentTaskId: value.parentTaskId, grantId: value.grantId, epoch: value.epoch, ...(row.waitingState==='original_run'?{runId:value.runId,executorEpoch:value.executorEpoch}:{}), peerDetail: true, leftAt: Date.now() };
+    parentTaskId: value.parentTaskId, grantId: value.grantId, epoch: value.epoch, ...(row.waitingState==='failed_run'?{failedOriginalRun:true as const}:{}), ...(['original_run','failed_run'].includes(row.waitingState)?{runId:value.runId,executorEpoch:value.executorEpoch}:{}), peerDetail: true, leftAt: Date.now() };
 }
 export function devicePhoneGoalArchive(value: unknown, peer: DeviceData, local: DeviceData, side: PhoneArchiveSide, sourceTaskId = '') {
   if (!object(value) || value.kind !== 'phoneGoalArchive' || (value.sourceTaskId ?? '') !== sourceTaskId

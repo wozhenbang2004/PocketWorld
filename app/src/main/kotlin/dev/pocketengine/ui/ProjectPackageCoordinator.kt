@@ -59,12 +59,18 @@ internal class ProjectPackageCoordinator(
     private var foreground = false
     private var exportUri: Uri? = null
     private var importUri: Uri? = null
-    private class TaskExport(val pin: JSONObject, val stillSelected: () -> Boolean, var done: ((JSONObject?, String?) -> Unit)?) {
+    private class TaskExport(val pin: JSONObject, var stillSelected: () -> Boolean, var done: ((JSONObject?, String?) -> Unit)?,
+        val team: dev.pocketengine.store.TaskStore.TeamProjectPackageSelection? = null) {
+        // An Android picker temporarily retires Teams reading handles. Its result is NOT permission
+        // to write after a page switch. Only a new click in the exact original result consumes it.
+        @Volatile var teamTarget: Uri? = null
+        var teamTargetName: String? = null
+        val targetProbe = RunControl()
         @Volatile var selected = true
         @Volatile var writeStarted = false
         var phase = "checking"
     }
-    private var taskExport: TaskExport? = null
+    @Volatile private var taskExport: TaskExport? = null
     private val positions = linkedMapOf<String, JSONObject>()
     private fun positionKey(project: String?, checkout: String?) = project.orEmpty() + ":" + checkout.orEmpty()
     private fun retainPosition() {
@@ -220,7 +226,14 @@ internal class ProjectPackageCoordinator(
     }
     fun closePreview() { state = state.copy(preview = null) }
     fun previewError(message: String) { state = state.copy(error = message.take(500)) }
-    fun exportSnapshot(): JSONObject? = state.exportStatus?.let { JSONObject(it.toString()) }
+    fun exportSnapshot(): JSONObject? = state.exportStatus?.takeUnless { it.has("teamRunId") }?.let { JSONObject(it.toString()) }
+    /** Display only inside the current original Teams result. Never publish its target name to other pages. */
+    fun teamExportSnapshot(descriptor: JSONObject): JSONObject? {
+        val row = state.exportStatus ?: return null
+        if (!row.has("teamRunId") || listOf("teamRunId", "taskId", "operationId", "runId", "epoch", "projectId", "checkoutId", "artifactId").any { row.opt(it) != descriptor.opt(it) } ||
+            row.opt("artifactSha256") != descriptor.opt("archiveSha256")) return null
+        return JSONObject(row.toString())
+    }
     private fun taskExportStatus(selected: TaskExport, phase: String, message: String, bytes: Long? = null, target: JSONObject? = null) {
         if (taskExport !== selected) return
         val pin = selected.pin
@@ -231,9 +244,10 @@ internal class ProjectPackageCoordinator(
             .put("artifactId", pin.getString("artifactId")).put("artifactSha256", pin.getString("sha256"))
             .put("projectId", pin.getString("projectId")).put("status", phase).put("message", message)
             .put("exported", phase == "exported")
+        if (pin.has("teamRunId")) for (key in listOf("teamRunId", "runId", "epoch", "checkoutId")) result.put(key, pin.get(key))
         if (bytes != null) result.put("bytes", bytes)
         if (target != null) result.put("targetReadback",target)
-        state = state.copy(exportStatus = result, notice = message)
+        state = state.copy(exportStatus = result, notice = if (selected.team == null) message else state.notice)
     }
     private fun completeTaskExport(selected: TaskExport, result: JSONObject?, error: String?) {
         val done = selected.done ?: return
@@ -243,7 +257,17 @@ internal class ProjectPackageCoordinator(
         taskExport === selected && selected.selected && selected.stillSelected()
     private fun requireTaskExportSource(selected: TaskExport): JSONObject {
         val pin = selected.pin
-        val source = app.tasks.ownerPackagePreviewSource(pin.getString("taskId"), pin.getString("operationId"))
+        val original = selected.team
+        val source = if (original != null) {
+            original.checkCurrent()
+            val facts = original.view(); val evidence = facts.getJSONObject("evidence"); val delivery = facts.getJSONObject("delivery")
+            check(facts.getString("teamRunId") == pin.getString("teamRunId") && delivery.getBoolean("complete") &&
+                delivery.getBoolean("fixedBaselineOnly") && !delivery.getBoolean("currentMainProjectVerified") &&
+                evidence.getString("runId") == pin.getString("runId") && evidence.getInt("coordinatorEpoch") == pin.getInt("epoch") &&
+                evidence.getString("checkoutId") == pin.getString("checkoutId")) { "原团队签收或整合者执行已变化，未导出" }
+            evidence.put("packageOperationId", evidence.getString("operationId")).put("artifactId", evidence.getJSONObject("packageArtifact").getString("id"))
+                .put("artifactSha256", evidence.getString("archiveSha256"))
+        } else app.tasks.ownerPackagePreviewSource(pin.getString("taskId"), pin.getString("operationId"))
         check(source.getString("taskId") == pin.getString("taskId") && source.getString("packageOperationId") == pin.getString("operationId") &&
             source.getString("projectId") == pin.getString("projectId") && source.getString("artifactId") == pin.getString("artifactId") &&
             source.getString("artifactSha256") == pin.getString("sha256")) { "原任务、操作或固定包版本已变化，未改用其他成果" }
@@ -252,13 +276,28 @@ internal class ProjectPackageCoordinator(
     }
     /** Explicit Web selection only. The old native package panel is not activated or mounted. */
     fun offerTaskExport(task: String, operation: String, artifactId: String, artifactSha256: String, project: String,
-        ownerCurrent: () -> Boolean, stillSelected: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
+        ownerCurrent: () -> Boolean, stillSelected: () -> Boolean, done: (JSONObject?, String?) -> Unit) =
+        offerPackageExport(task, operation, artifactId, artifactSha256, project, null, ownerCurrent, stillSelected, done)
+
+    fun offerTeamExport(original: dev.pocketengine.store.TaskStore.TeamProjectPackageSelection, current: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
+        val evidence = original.view().getJSONObject("evidence")
+        offerPackageExport(evidence.getString("taskId"), evidence.getString("operationId"), evidence.getJSONObject("packageArtifact").getString("id"),
+            evidence.getString("archiveSha256"), evidence.getString("projectId"), original, current, current, done)
+    }
+    private fun offerPackageExport(task: String, operation: String, artifactId: String, artifactSha256: String, project: String,
+        team: dev.pocketengine.store.TaskStore.TeamProjectPackageSelection?, ownerCurrent: () -> Boolean, stillSelected: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
         check(!closed && foreground && privateOwner() && ownerCurrent() && stillSelected()) { "请从原私人项目选择固定包导出" }
         check(!state.busy && pickerExport == null && pickerImport == null && exportUri == null) { "原文件操作尚未结束，请先核对原结果，没有重新打开文件选择器" }
         require(task.isNotBlank() && operation.isNotBlank() && artifactId.isNotBlank() && project.isNotBlank() && artifactSha256.matches(Regex("[a-f0-9]{64}"))) { "固定包导出身份不完整" }
         val pin = JSONObject().put("requestId", UUID.randomUUID().toString()).put("taskId", task).put("operationId", operation)
             .put("artifactId", artifactId).put("sha256", artifactSha256).put("projectId", project)
-        val selected = TaskExport(pin, stillSelected, done); taskExport = selected
+        if (team != null) {
+            val facts=team.view(); val evidence=facts.getJSONObject("evidence")
+            pin.put("teamRunId", facts.getString("teamRunId")).put("runId", evidence.getString("runId"))
+                .put("epoch", evidence.getInt("coordinatorEpoch")).put("checkoutId", evidence.getString("checkoutId"))
+        }
+        taskExport?.let { it.teamTarget = null; it.targetProbe.cancel() } // a fresh choice never inherits an earlier destination
+        val selected = TaskExport(pin, stillSelected, done, team); taskExport = selected
         taskExportStatus(selected, "checking", "正在核对这次任务保存的固定包。")
         work(ownerCurrent = { taskExportCurrent(selected) && ownerCurrent() }, onFailure = { failure ->
             if (selected.phase == "checking") taskExportStatus(selected, "rejected", failure.message?.take(600) ?: "原固定包暂不可核对，未打开导出位置")
@@ -274,7 +313,7 @@ internal class ProjectPackageCoordinator(
                 taskExportStatus(selected, "document_requested", "请选择固定包的保存位置；导出尚未完成。")
                 try {
                     activity.createProjectPackageDocument(exportName(artifact))
-                    completeTaskExport(selected, exportSnapshot(), null)
+                    completeTaskExport(selected, state.exportStatus?.let { JSONObject(it.toString()) }, null)
                 } catch (failure: Exception) {
                     if (pickerExport === pin) pickerExport = null
                     taskExportStatus(selected, "rejected", "系统文件选择器未能打开，未写入目标。")
@@ -283,14 +322,52 @@ internal class ProjectPackageCoordinator(
             }
         }
     }
+    /** Rebind only the exact signed result. No target URI, alternate artifact or path comes from Web. */
+    fun finishTeamExportChoice(original: dev.pocketengine.store.TaskStore.TeamProjectPackageSelection, request: String,
+        write: Boolean, current: () -> Boolean): JSONObject {
+        check(!closed && foreground && privateOwner() && current() && !state.busy && pickerExport == null && exportUri == null) { "请在原团队核对所选保存位置" }
+        val selected = taskExport ?: error("原保存位置已失效；未写入")
+        val first = selected.team ?: error("此保存位置不是团队选择")
+        check(selected.selected && selected.phase == "target_selected" && selected.pin.getString("requestId") == request &&
+            dev.pocketengine.store.TaskStore.capabilityFingerprint(first.view()) == dev.pocketengine.store.TaskStore.capabilityFingerprint(original.view())) { "目标不属于这次原团队整包选择；没有写入" }
+        val uri = selected.teamTarget ?: error("原系统目标已失效；没有恢复写入")
+        selected.teamTarget = null
+        if (!write) taskExportStatus(selected, "cancelled", "已放弃这次另存，没有写入。系统选择位置时可能已创建空文档。")
+        else {
+            selected.stillSelected = current
+            taskExportStatus(selected, "selection_returned", "已确认这份原团队完整包和所选目标，正在复核。")
+            pickerExport = selected.pin; exportUri = uri; finishExport()
+        }
+        return JSONObject(requireNotNull(state.exportStatus).toString())
+    }
     /** Retire only the original Web selection; a pending picker is consumed once when it returns. */
     fun invalidateTaskExportSelection() {
         val selected = taskExport ?: return
-        if (selected.phase !in setOf("checking", "document_requested", "selection_returned", "writing")) return
+        if (selected.phase !in setOf("checking", "document_requested", "checking_target", "target_selected", "selection_returned", "writing")) return
+        selected.teamTarget = null; selected.targetProbe.cancel()
         selected.selected = false
         if (selected.phase == "checking" || selected.phase == "writing") cancel()
         else taskExportStatus(selected, "cancelled", "原固定包窗口已变化，未向所选位置写入。")
         completeTaskExport(selected, null, "原固定包窗口已变化，导出未继续")
+    }
+    private fun inspectTeamTarget(selected: TaskExport, uri: Uri) {
+        selected.teamTarget = uri
+        taskExportStatus(selected, "checking_target", "正在核对系统选中的文件名；没有写入。")
+        fun current() = taskExport === selected && selected.selected && selected.teamTarget == uri && !selected.targetProbe.isCancelled
+        try { io.execute {
+            val name = runCatching { ProjectPackageDocument.name(app, uri, selected.targetProbe) { check(current()) } }.getOrNull()
+            main.post {
+                if (current()) {
+                    if (name == null) { selected.teamTarget = null; taskExportStatus(selected, "rejected", "无法核对所选位置的文件名，未写入。可重新选择系统位置。") }
+                    else {
+                        selected.teamTargetName = name
+                        taskExportStatus(selected, "target_selected", "保存到「$name」（${uri.authority}）？确认后才会把这份团队完整包写入所选文档。")
+                    }
+                }
+            }
+        } } catch (_: java.util.concurrent.RejectedExecutionException) {
+            selected.teamTarget = null; taskExportStatus(selected, "rejected", "原系统目标暂不可核对，未写入。")
+        }
     }
     private fun exportName(artifact: JSONObject) = artifact.optString("name", "PocketWorld").replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), "_").take(80) + ".pocketworld.zip"
     fun offerExport() {
@@ -308,6 +385,12 @@ internal class ProjectPackageCoordinator(
             if (selected == null || restoredPicker || !selected.selected || selected.phase != "document_requested") {
                 pickerExport = null; exportUri = null
                 if (selected != null) taskExportStatus(selected, "cancelled", "原固定包窗口已变化，未向所选位置写入。")
+                return
+            }
+            if (selected.team != null && uri != null) {
+                pickerExport = null; exportUri = null
+                if (!ProjectPackageDocument.allowed(app, uri)) taskExportStatus(selected, "rejected", "没有取得系统所选的外部文档，未写入。")
+                else inspectTeamTarget(selected, uri)
                 return
             }
             if (uri == null) taskExportStatus(selected, "cancelled", "已取消选择保存位置，固定包未导出。")
@@ -342,6 +425,7 @@ internal class ProjectPackageCoordinator(
             }
             if (selected != null) requireTaskExportSource(selected)
             requireCurrent(); val displayName=ProjectPackageDocument.name(app,uri,c,::requireCurrent)
+            if (selected?.team != null) check(displayName != null && displayName == selected.teamTargetName) { "所选文件名已变化，未写入；请重新选择位置" }
             requireCurrent(); if (selected != null) selected.writeStarted = true
             val opened = try {app.contentResolver.openOutputStream(uri, "wt") ?: error("所选位置无法写入")}
                 catch(failure:Exception){throw IllegalStateException("系统目标未返回写入回执，可能已创建或截断；请核对原位置，没有自动重写",failure)}
@@ -368,7 +452,7 @@ internal class ProjectPackageCoordinator(
                     else if(target.opt("status")=="destination_changed")"写入已返回，但所选文档名称发生变化；请核对原位置，没有自动重写。"
                     else if(target.opt("status")=="content_mismatch")"写入已返回，但所选位置回读不符；请核对原文件，没有自动重写。"
                     else "写入已返回，但所选位置无法回读；不能确认已保存完整包，没有自动重写。"
-                state=state.copy(notice=message)
+                if(selected?.team==null)state=state.copy(notice=message)
                 if(selected!=null)taskExportStatus(selected,if(verified)"exported" else "written_unverified",message,bytes,target)
             }
         }
@@ -744,7 +828,9 @@ internal class ProjectPackageCoordinator(
             saved?.getString("projectPackageExportStatus")?.takeIf { it.length <= 4096 }?.let { text ->
                 val status = JSONObject(text)
                 if (status.optString("kind") == "project_package_export") {
-                    if (status.optString("status") in setOf("checking", "document_requested", "selection_returned", "writing")) {
+                    if (status.optString("status") in setOf("checking_target", "target_selected") && status.has("teamRunId")) {
+                        status.put("status", "cancelled").put("exported", false).put("message", "原系统目标未保存到本机记录，未恢复写入；请重新选取位置。")
+                    } else if (status.optString("status") in setOf("checking", "document_requested", "selection_returned", "writing")) {
                         status.put("status", "unknown").put("exported", false).put("message", "原导出结果尚未确认；请核对所选文件，没有恢复写入或重新打开选择器。")
                     }
                     ProjectPackageDocument.restore(status)

@@ -388,6 +388,10 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
             DeviceIdentity.LocalIdentity local=existingIdentity();if(local==null)throw new SecurityException("本机决定不能与接收手机核对");
             return tasks.deviceTasks().declinedReceivedPhoneGoals(local.deviceId(),local.instanceId(),caller,operation);
         }
+        public JSONObject failedReceivedPhoneGoals(String caller,String operation)throws Exception{
+            DeviceIdentity.LocalIdentity local=existingIdentity();if(local==null)throw new SecurityException("无法核对这部接收手机的原身份");
+            return tasks.deviceTasks().failedReceivedPhoneGoals(local.deviceId(),local.instanceId(),caller,operation);
+        }
         public JSONObject startedReceivedPhoneGoals(String caller,String operation)throws Exception{
             DeviceIdentity.LocalIdentity local=existingIdentity();if(local==null)throw new SecurityException("无法核对这部接收手机的原身份");
             return tasks.deviceTasks().startedReceivedPhoneGoals(local.deviceId(),local.instanceId(),caller,operation);
@@ -400,8 +404,12 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
         public JSONObject phoneGoalIndex(String target,String parentAfter,String after,boolean received,String searchText) throws Exception {
             DeviceIdentity.LocalIdentity local=existingIdentity();JSONObject peer=trust.peer(target);
             if(local==null||peer==null)throw new SecurityException("原本机或配对设备身份已变化，未读取其他设备");
-            if(received)return tasks.deviceTasks().receivedPhoneGoalIndex(local.deviceId(),local.instanceId(),target,parentAfter,after,searchText)
-                    .put("instanceId",peer.getString("instanceId")).put("side","received");
+            if(received){
+                JSONObject page=tasks.deviceTasks().receivedPhoneGoalIndex(local.deviceId(),local.instanceId(),target,parentAfter,after,searchText);
+                if(peer.getLong("authorizationEpoch")!=page.optLong("receivedPeerEpoch")||!peer.getString("instanceId").equals(page.opt("instanceId"))||!peer.getString("fingerprint").equals(page.opt("targetFingerprint")))
+                    throw new SecurityException("本机接纳记录不是刚选择的原设备身份");
+                return page.put("side","received");
+            }
             return tasks.deviceTasks().ownerPhoneGoalIndex(local.deviceId(),target,peer.getString("instanceId"),parentAfter,after,searchText).put("localInstanceId",local.instanceId()).put("side","sent");
         }
         public JSONObject directedPhoneDispatches(String target,String source,String parentAfter,String after)throws Exception {

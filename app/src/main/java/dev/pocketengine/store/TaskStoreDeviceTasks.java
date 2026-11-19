@@ -955,6 +955,9 @@ public final class TaskStoreDeviceTasks {
     public JSONObject declinedReceivedPhoneGoals(String here,String instance,String afterCaller,String afterOp)throws Exception{
         synchronized(owner){return ReceivedPhoneGoalIndex.declined(db,here,instance,afterCaller,afterOp);}
     }
+    public JSONObject failedReceivedPhoneGoals(String here,String instance,String afterCaller,String afterOp)throws Exception{
+        synchronized(owner){return ReceivedPhoneGoalIndex.failed(db,here,instance,afterCaller,afterOp);}
+    }
     public JSONObject startedReceivedPhoneGoals(String here,String instance,String afterCaller,String afterOp)throws Exception{
         synchronized(owner){return ReceivedPhoneGoalIndex.started(db,here,instance,afterCaller,afterOp);}
     }

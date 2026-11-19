@@ -896,7 +896,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
             actions={{ items: followUps, read: openFollowUp, disabled: !canRead || materialBusy, expanded: !!allResultActions[current.id],
               toggle: () => setAllResultActions(old => ({ ...old, [current.id]: !old[current.id] })) }}
             finalPackageReader={teamPackage&&reading&&workspaceActive&&runSection==='result'&&bridge.getState().capabilities.commands.includes('teams.readFinalPackageFiles')
-              ? <TeamFinalPackageReading key={reading.viewHandle+':'+teamPackage.operationId} item={teamPackage} handle={reading.viewHandle} disabled={!canRead||materialBusy}
+              ? <TeamFinalPackageReading key={reading.viewHandle+':'+teamPackage.operationId} item={teamPackage} handle={reading.viewHandle} disabled={!canRead||materialBusy} exportState={state.teamFinalPackageExport===undefined?reading.finalPackageExport:state.teamFinalPackageExport}
                   live={()=>ownsNativeWindow()&&currentReading.current?.viewHandle===reading.viewHandle&&currentReading.current?.run?.id===teamPackage.teamRunId}/> : undefined}
             openOriginalReview={current.status === 'awaiting_review' && reading?.taskId ? openAwaitingReview : undefined}
             openMembers={() => { setResultSource(resultOrigin('members')); jumpToRunSection('members'); }}

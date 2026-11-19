@@ -51,12 +51,13 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
             private set
         var deliveryWorkers: String? = null
         var finalPackage: dev.pocketengine.store.TaskStore.TeamProjectPackageSelection? = null
+        var finalPackageKey: JSONObject? = null
         val packageRead = RunControl()
         private var itemPage: AutoCloseable? = null
         @Synchronized fun hold(page: AutoCloseable) {
             check(live) { "原分工窗口已关闭" }; itemPage?.close(); itemPage = page
         }
-        @Synchronized fun retire() { live = false; packageRead.cancel(); finalPackage=null; itemPage?.close(); itemPage = null }
+        @Synchronized fun retire() { live = false; packageRead.cancel(); finalPackage=null; finalPackageKey=null; itemPage?.close(); itemPage = null }
     }
     private data class Review(val command: String, val input: String, val expires: Long, val phonePage: TeamPhoneHost.Page? = null, val phoneReview: TeamPhoneHost.Review? = null, val productionSources: String? = null,
         val workItem: PocketWebTeamWorkReturn? = null, val ownerReading: Reading? = null, val proposal: TaskStoreTeamWriteHost.WorkPlanPage.ParentProposalReview? = null) {
@@ -75,7 +76,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
     companion object {
         val COMMANDS = setOf("teams.attention", "teams.readAttention", "teams.snapshot", "teams.readRun", "teams.readDefinition", "teams.reviewDefinition", "teams.prepareDraftStart",
             "teams.reviewStart", "teams.reviewRemove", "teams.confirm", "teams.control", "teams.sendMessage",
-            "teams.readFrozenOutputs", "teams.readFrozenDiff", "teams.reviewFrozenTextApproval", "teams.approveFrozenText", "teams.reviewParentRevision", "teams.reviewWorkItemContinuation", "teams.answerAssignment", "teams.probeMember", "teams.closeReading", "teams.reviewPhoneStart", "teams.reviewMember", "teams.openResearchTask", "teams.openDeliveryWorker", "teams.readFinalPackageFiles")
+            "teams.readFrozenOutputs", "teams.readFrozenDiff", "teams.reviewFrozenTextApproval", "teams.approveFrozenText", "teams.reviewParentRevision", "teams.reviewWorkItemContinuation", "teams.answerAssignment", "teams.probeMember", "teams.closeReading", "teams.reviewPhoneStart", "teams.reviewMember", "teams.openResearchTask", "teams.openDeliveryWorker", "teams.readFinalPackageFiles", "teams.chooseFinalPackageTarget", "teams.saveFinalPackageTarget", "teams.discardFinalPackageTarget")
     }
 
     fun clear() {
@@ -118,6 +119,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
             ref.opt("taskId") == taskId && ref.opt("runId") == childRun && ref.optInt("coordinatorEpoch", -1) == epoch &&
             ref.optInt("messageIndex", -1) == index && ref.optInt("chars", -1) == chars && ref.opt("sha256") == fingerprint
     }
+    fun finalPackageExportSnapshot(): JSONObject? = readings.values.lastOrNull()?.takeIf { it.live && it.kind == "run" }?.finalPackageKey?.let(controller.projectPackages::teamExportSnapshot)
     fun retainsRunReading(handle: String): Boolean = readings[handle]?.kind == "run"
     fun taskForDeliveryNavigation(args: JSONObject): JSONObject {
         check(controller.webPrivateOwnerVisible()) { "请回到私人团队原记录" }
@@ -312,7 +314,10 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 }.getOrNull()
                 main.post {
                     if(currentWindow() && owner.live && readings[handle]===owner && observed.optString("teamRunId")==team){
-                        if(pack!=null){owner.finalPackage=pack.first;packet.put("finalProjectPackage",pack.second)}
+                        if(pack!=null){
+                            owner.finalPackage=pack.first; owner.finalPackageKey=pack.second; packet.put("finalProjectPackage",pack.second)
+                            controller.projectPackages.teamExportSnapshot(pack.second)?.let { packet.put("finalPackageExport",it) }
+                        }
                         owner.deliveryWorkers=observed.toString(); packet.put("deliveryWorkers",observed); finishReceipt(receipt)
                     } else done(null,"原团队窗口已关闭；没有打开其他执行或重发控制")
                 }
@@ -387,6 +392,19 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
             else controller.requestWebFeatureReceipt("teams", command, input, ::currentWindow, received)
         }
         when (action) {
+            "teams.chooseFinalPackageTarget", "teams.saveFinalPackageTarget", "teams.discardFinalPackageTarget" -> {
+                val begin = action == "teams.chooseFinalPackageTarget"
+                if (begin) fields(args, "viewHandle", "operationId", "artifactId", "artifactSha256")
+                else fields(args, "viewHandle", "operationId", "artifactId", "artifactSha256", "requestId")
+                val page = readings[text(args, "viewHandle")]?.takeIf { it.live && it.kind == "run" } ?: error("这个原团队成果窗口已关闭")
+                val selected = page.finalPackage ?: error("本次原团队没有已签收的完整包")
+                val descriptor = page.finalPackageKey ?: error("请先重新打开原团队成果")
+                check(descriptor.getString("operationId") == text(args, "operationId") && descriptor.getString("artifactId") == text(args, "artifactId") &&
+                    descriptor.getString("archiveSha256") == text(args, "artifactSha256", 64)) { "这不是选中的原整包，未改变保存目标" }
+                val present = { currentWindow() && page.live && page.finalPackage === selected }
+                if (begin) controller.projectPackages.offerTeamExport(selected, present, done)
+                else deliver(controller.projectPackages.finishTeamExportChoice(selected, text(args, "requestId"), action == "teams.saveFinalPackageTarget", present), null)
+            }
             "teams.readFinalPackageFiles" -> {
                 val handle=text(args,"viewHandle");val page=readings[handle]?.takeIf { it.live && it.kind=="run" } ?: error("原团队成果窗口已关闭")
                 val selected=page.finalPackage ?: error("这个原团队未提供已签收的完整包")

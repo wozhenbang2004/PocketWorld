@@ -18,7 +18,7 @@ export type TraceNode = {
   providerToolCallId?: string; purpose?: string; message?: unknown; sourceStatus?: string;
   contentLimited?: boolean; effectPending?: boolean; completionMeaning?: string; timingMeaning?: string; wallClockAdjusted?: boolean;
   preview?: unknown; raw?: unknown; options?: unknown; schema?: unknown; sourceRefs?: unknown;
-  contentUnavailable?: unknown;
+  contentUnavailable?: unknown; preferenceChange?: unknown;
 };
 export type TraceRun = { runId: string; epoch: number; status: string; startedAt: number | null; updatedAt: number | null };
 export type ExecutionTracePage = {
@@ -167,7 +167,7 @@ export function nodeDurationLabel(node: TraceNode): string {
 
 const order = (a: TraceNode, b: TraceNode) => (a.startedAt ?? Number.MAX_SAFE_INTEGER) - (b.startedAt ?? Number.MAX_SAFE_INTEGER) || a.sequence - b.sequence || a.id.localeCompare(b.id);
 function searchText(node: TraceNode) {
-  return [node.name, node.model, node.callId, node.operationId, node.memberId, node.turnId, node.logicalRequestId,
+  return [node.name, node.kind === 'tool' && node.name === 'agent_settings_set' ? '保存默认偏好' : '', node.model, node.callId, node.operationId, node.memberId, node.turnId, node.logicalRequestId,
     node.stepId, node.requestId, traceRoleLabel(node), node.turnIndex == null ? '' : `Turn ${node.turnIndex}`,
     traceStatus(node.status), traceKind(node.kind), traceBody(node.error).text, traceBody(node.message).text].filter(Boolean).join(' ').toLocaleLowerCase();
 }

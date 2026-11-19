@@ -269,7 +269,7 @@ internal class PocketWebBridge(
             "models.accounts.open", "models.accounts.review", "models.accounts.close",
             "models.groups.snapshot", "models.conversation.snapshot", "models.conversation.close"
         )
-        val commands: Set<String> = PocketWebLocalSourceIntake.COMMANDS + linkedSetOf(
+        val commands: Set<String> = PocketWebLocal.PROJECT_OBSERVATION_COMMANDS + PocketWebLocalSourceIntake.COMMANDS + linkedSetOf(
             "conversation.captureHostGoal", "conversation.openHostGoal",
             "conversation.projectConvention.read", "conversation.projectConvention.stageFeedback",
             "app.ready", "app.refresh", "notice.dismiss", "notice.task.close", "phone.notice.refresh", "phone.notice.close", "error.dismiss", "execution.read", "execution.review", "execution.confirm",
@@ -429,6 +429,7 @@ internal class PocketWebBridge(
             projection?.getJSONObject("state")?.put("modelDiagnostics", modelDiagnostics.snapshot())
             projection?.getJSONObject("state")?.put("attachmentWorkspace", attachmentPages.snapshot())
             projection?.getJSONObject("state")?.put("taskCapabilityExport", taskCapabilities.exportSnapshot() ?: JSONObject.NULL)
+            if (section == "teams" && controller.webPrivateOwnerVisible()) projection?.getJSONObject("state")?.put("teamFinalPackageExport", teamPages.finalPackageExportSnapshot() ?: JSONObject.NULL)
             projection?.getJSONObject("state")?.put("systemSpeech", presentation.speechInfo())
             projection?.getJSONObject("state")?.put("routeReference", routeReferences.snapshot())
             projection?.getJSONObject("state")?.put("skillsWorkspace", controller.webSkills.snapshot())
@@ -1068,9 +1069,9 @@ internal class PocketWebBridge(
             if (action in PocketWebLocal.COMMANDS) {
                 if (action.startsWith("local.execution.")) {
                     if (action != "local.execution.close") require(taskViewId != null && controller.webPrivateOwnerVisible()) { "请先打开原私人项目任务" }
-                    if (action == "local.execution.open") require(requiredString(args, "taskId") == taskViewId) { "原项目任务已切换" }
+                    if (action == "local.execution.observe" || action == "local.execution.open") require(requiredString(args, "taskId") == taskViewId) { "原项目任务已切换" }
                 } else requireSection("local")
-                localPages.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }; return
+                localPages.dispatch(action, args) { result, error -> complete(id, result, error, retainValue = action !in PocketWebLocal.PROJECT_OBSERVATION_COMMANDS); publishState() }; return
             }
             if (action == "groups.openTask") {
                 requireSection("groups")
@@ -1290,7 +1291,7 @@ internal class PocketWebBridge(
                 return
             }
             if (action in PocketWebTeams.COMMANDS) {
-                requireSection("teams"); teamPages.dispatch(action, args) { result, error -> complete(id, result, error, "outcome_unknown", retainValue = action != "teams.readFinalPackageFiles"); if (action != "teams.readFinalPackageFiles") publishState() }; return
+                requireSection("teams"); teamPages.dispatch(action, args) { result, error -> complete(id, result, error, "outcome_unknown", retainValue = action !in setOf("teams.readFinalPackageFiles", "teams.chooseFinalPackageTarget", "teams.saveFinalPackageTarget", "teams.discardFinalPackageTarget")); if (action != "teams.readFinalPackageFiles") publishState() }; return
             }
             if (action == "conversation.openHostGoal") {
                 require(args.keys().asSequence().toSet()==setOf("messageId","taskId","conversationId"))

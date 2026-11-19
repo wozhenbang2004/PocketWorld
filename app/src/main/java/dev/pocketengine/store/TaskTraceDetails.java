@@ -37,6 +37,7 @@ final class TaskTraceDetails {
             if(assistant!=null)node.put("output",visible(assistant));
             else node.put("outputAvailability",new JSONObject().put("available",false).put("reason",messages==null?"original_checkpoint_unavailable_or_read_limited":"original_assistant_not_retained"));
         }else if("tool".equals(kind)){
+            node.remove("preferenceChange");
             operation(db,node);
             JSONObject call=toolCall(messages,node.optString("parentCallId"),node.optString("providerToolCallId"));
             if(call!=null&&unavailable(node.opt("input")))node.put("input",parse(call.getJSONObject("function").opt("arguments")));
@@ -64,8 +65,14 @@ final class TaskTraceDetails {
         }
         try(Cursor row=db.rawQuery("SELECT tool,arguments,receipt,state FROM operations WHERE task_id=? AND run_id=? AND operation_id=?",args)){
             if(!row.moveToFirst()||!node.optString("name").equals(row.getString(0)))return;
-            node.put("input",parse(row.getString(1))).put("operationState",row.getString(3)).put("operationBodySource","original_operation_row");
-            if(!row.isNull(2))node.put("output",parse(row.getString(2)));
+            Object input=parse(row.getString(1));String state=row.getString(3);
+            node.put("input",input).put("operationState",state).put("operationBodySource","original_operation_row");
+            if(!row.isNull(2)){
+                Object output=parse(row.getString(2));node.put("output",output);
+                // Only this exact database receipt, never the checkpoint fallback in detail().
+                JSONObject change=dev.pocketengine.features.capabilities.ReviewedPreferenceChange.fromOperation(row.getString(0),state,input,output);
+                if(change!=null)node.put("preferenceChange",change);
+            }
         }
     }
     private static boolean unavailable(Object value){return value==null||value==JSONObject.NULL||value instanceof JSONObject&&Boolean.FALSE.equals(((JSONObject)value).opt("available"));}

@@ -147,3 +147,5 @@
 在普通私人开发副本中，输入部分文件名/路径即可在该次完整文件清单中查找并按页看结果，也可仅看实际新增/修改；不把正文交给模型。命中文件打开时守住相同副本、路径和字节 SHA，已移除不会变成新文件草稿。单个原任务或主机文件入口不放大范围。参考 [DSH-Go 固定工作区查找](https://github.com/ccch1mneyyy/dsh-Go/blob/9ad11167c53a5da12ff8791c21f4327f5d8a9a25/app/lib/ui/files/workspace_browser.dart) 与 [Operit 按原环境读取目录](https://github.com/AAswordman/Operit/blob/7a39941bad80209973c535046a18195c5da9e647/app/src/main/java/com/ai/assistance/operit/ui/features/chat/webview/workspace/FileManager.kt#L187-L203)；保留 PocketWorld 原草稿及审阅保存边界。
 
 普通私人副本 → 文件 →「代码文字」由主人显式查找已保存 UTF-8 源码：固定字面、区分大小写、每行首次命中，复用本机 `ProjectFileQueries.search` 的隐藏/依赖/构建产物排除与 2,000 文件、16 MiB 覆盖回执。只有原查询游标可翻页；打开时复核同一路径、源码 SHA 与原行列，另有未保存草稿不套用行号。单文件任务入口不能从这里扩大到整份副本，不向模型/主机传输，不执行代码。
+
+原私人项目的本机执行终端可从已核对的 managed 原回执区分退出码、信号和未启动证据；没有已知原生协议或证据不全则不补码。只在当前同任务、同轮、同项目副本的 `build` 原操作明确非零退出且已清场、没有取消或超时后，才提供“整理这次失败给原任务”。主人审阅后仅追加结构化事实到本轮修改草稿，不带 stdout/stderr、命令或源码正文；需走原有任务续接审阅才会发送，不续权、不自动重跑。
