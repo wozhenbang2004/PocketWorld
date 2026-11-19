@@ -44,7 +44,7 @@ import {ConversationMemorySettings} from './ConversationMemorySettings';
 import DeveloperDiagnosticsWorkspace from './DeveloperDiagnosticsWorkspace';
 import {SetupWorkspace,type SetupDestination,type SetupView} from './SetupWorkspace';
 import {readSetup,type SetupCapability} from './setup-contract';
-import {AttachmentWorkspace} from './AttachmentWorkspace';
+import {AttachmentWorkspace,type FileDraftTarget} from './AttachmentWorkspace';
 import RemoteInboxWorkspace,{type NotificationViewMemory} from './RemoteInboxWorkspace';
 import type {TeamAttentionLocator} from './NotificationTeamAttention';
 import {ConversationOrganization,orderConversations} from './ConversationOrganization';
@@ -862,11 +862,12 @@ export default function App(){
      return false;
    });
  };
- const stageButlerObject=async(reference:Json,current:()=>boolean)=>{
+ const stageButlerObject=async(reference:Json,current:()=>boolean,reportInSource=false)=>{
    if(!current())return false;
    const draft=obj(bridge.getState().composer);
    if(draft.ready!==true||!draft.key||!Number.isSafeInteger(draft.epoch)||!Number.isSafeInteger(draft.revision)||!can('composer.object.add'))throw new Error('管家输入尚未就绪，请稍后关联当前对象。');
-   const receipt=await act('composer.object.add',{key:draft.key,epoch:draft.epoch,revision:draft.revision,reference});
+   const args={key:draft.key,epoch:draft.epoch,revision:draft.revision,reference};
+   const receipt=await (reportInSource?bridge.command('composer.object.add',args):act('composer.object.add',args));
    if(!current())return false;
    if(receipt?.added!==true)throw new Error('对象关联结果尚待核对，请查看原草稿。');
    return new Promise<boolean>((resolve,reject)=>{
@@ -880,6 +881,40 @@ export default function App(){
      };
      unsubscribe=bridge.subscribe(check);check();
    });
+ };
+ const conversationDraftId=String(state.conversationId||'');
+ const fileDraftTarget:FileDraftTarget|undefined=can('composer.object.add')&&composer.ready===true&&typeof composer.key==='string'&&composer.key&&
+  Number.isSafeInteger(composer.epoch)&&Number.isSafeInteger(composer.revision)&&composer.revision>0&&composer.conversationId===conversationDraftId
+  ?{key:composer.key,epoch:composer.epoch,revision:composer.revision,conversationId:conversationDraftId,label:currentConversation?.title||'当前管家输入'}:undefined;
+ const currentFileDraft=(target:FileDraftTarget)=>{
+  const native=bridge.getState(),draft=obj(native.composer);
+  if(document.hidden||draft.ready!==true||draft.key!==target.key||draft.epoch!==target.epoch||
+   draft.conversationId!==target.conversationId||String(native.state.conversationId||'')!==target.conversationId)return null;
+  return draft;
+ };
+ const stageFileInDraft=async(reference:Json,target:FileDraftTarget,stillOpen:()=>boolean)=>{
+  if(!stillOpen()||currentFileDraft(target)?.revision!==target.revision)throw new Error('目标草稿已经变化，请在这份原件重新选择当前草稿。');
+  const native=bridge.getState().state;
+  if(native.chatSubmitting||native.phoneSubmitting||phoneAction.current||phoneReviewPending)throw new Error('输入正在提交，请稍后从这份原件再试。');
+  return stageButlerObject(reference,()=>stillOpen()&&!!currentFileDraft(target),true);
+ };
+ const showFileDraft=async(reference:Json,target:FileDraftTarget,closeOriginal:()=>Promise<unknown>)=>{
+  const documentEpoch=bridge.getDocumentEpoch();
+  const stillAttached=()=>{
+   if(bridge.getDocumentEpoch()!==documentEpoch)return false;
+   const draft=currentFileDraft(target);
+   return asArray<Json>(draft?.objectRefs).some(ref=>ref.kind===reference.kind&&ref.id===reference.id&&ref.sha256===reference.sha256);
+  };
+  if(!stillAttached())throw new Error('原草稿中已找不到这份文件，请在原件中重新关联。');
+  const native=bridge.getState().state;
+  if(native.chatSubmitting||native.phoneSubmitting||phoneAction.current||phoneReviewPending)throw new Error('输入正在提交，文件仍留在原话题草稿。稍后再打开草稿。');
+  await closeOriginal();
+  if(!stillAttached()||!await navigate('butler',undefined,{stillCurrent:stillAttached})||!stillAttached())return false;
+  if(intent!=='chat'&&!await changeIntent('chat'))return false;
+  if(!stillAttached())return false;
+  setLocalStatus('已关联到管家输入，可以继续提问。');
+  requestAnimationFrame(()=>{if(stillAttached())workspace.current?.querySelector<HTMLTextAreaElement>('.pw-composer-row textarea:not(:disabled)')?.focus({preventScroll:true})});
+  return true;
  };
  const askButlerAbout=(reference:Json)=>{
    if(state.chatSubmitting||state.phoneSubmitting||phoneAction.current||phoneReviewPending){setLocalError('请先等待当前输入处理完成。');return;}
@@ -1613,7 +1648,8 @@ export default function App(){
   <ConversationHistoryWindow page={route==='chat'&&!taskOpen?state.conversationReader||null:null} submitting={!!state.chatSubmitting} can={can} act={act} registerBack={registerHistoryWindowBack} onCopy={copyWithLocalFeedback} onOpenTask={(id,entry,origin)=>openTask(id,entry,false,origin)}/>
   <ConversationQueuedInputs page={state.queuedInputsPage||null} can={can} act={act} registerBack={registerQueuedInputsBack}/>
   {searchOriginal&&<WorkSearchOriginalReader target={searchOriginal} identity={`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}`} onClose={closeSearchOriginal} onConversation={()=>{const target=searchOriginal;void openSearchResult({...target,ownerLocator:undefined}).catch(error=>setLocalError(error instanceof Error?error.message:String(error)))}} onCopy={copyWithLocalFeedback}/>}
-  <AttachmentWorkspace state={state} registerBack={registerAttachmentBack} onReturnFocus={restoreTaskFileFocus} openTaskId={taskOpen?taskId||undefined:undefined} onReturnToSearch={searchReturn?showWorkSearch:undefined} onAskButler={can('composer.object.add')?askButlerAbout:undefined}/>
+  <AttachmentWorkspace state={state} registerBack={registerAttachmentBack} onReturnFocus={restoreTaskFileFocus} openTaskId={taskOpen?taskId||undefined:undefined} onReturnToSearch={searchReturn?showWorkSearch:undefined}
+   draftTarget={fileDraftTarget} onStageFile={can('composer.object.add')?stageFileInDraft:undefined} onOpenDraft={showFileDraft}/>
   {organizationTarget&&<ConversationOrganization key={organizationTarget} conversationId={organizationTarget} onClose={()=>setOrganizationTarget(null)}/>}
   <Drawer.Root open={taskOpen} onOpenChange={open=>{if(!open){if(taskMenuOpen){setTaskMenuOpen(false);return}if(!deviceScopeBack.current?.()&&!capabilityBack.current?.()&&!livePreviewBack.current?.()&&!taskTransientBack.current?.())closeTask()}else setTaskOpen(true)}} direction="right" handleOnly shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay pw-work-object-overlay"/><Drawer.Content className="pw-drawer pw-task-drawer pw-work-object-surface pw-task-manga" data-task-layer={taskLayer} aria-describedby="pw-task-description" onCloseAutoFocus={event=>{
    if(!taskOpen&&route==='tasks'&&workListReturn.current?.()){event.preventDefault();return}
