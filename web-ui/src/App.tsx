@@ -7,9 +7,9 @@ import { FluidValueSlider } from './forms-library/uiux/FluidValueSlider';
  * remain in the host; a bridge acceptance never becomes a fabricated success.
  */
 import {useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState} from 'react';
-import {AnimatePresence,motion} from 'motion/react';
-import { IconAccount, IconAdd, IconArrowLeft, IconBook, IconCalendar, IconCalendarCheck, IconChat, IconCheckCircle, IconChevronDown, IconChevronRight, IconClock, IconClose, IconError, IconFile, IconFolder, IconGrid, IconHistory, IconImage, IconInfo, IconLayers, IconLink, IconMemory, IconMenu, IconMonitor, IconMore, IconNewChat, IconNotification, IconPlay, IconQuote, IconRefresh, IconSearch, IconSettings, IconShieldCheck, IconSidebarClose, IconSidebarOpen, IconSparkles, IconStop, IconTeam, IconTerminal, IconTool } from './icons';
-import {UNSAFE_PortalProvider} from 'react-aria/PortalProvider';
+import {motion} from 'motion/react';
+import { IconAccount, IconAdd, IconArrowLeft, IconBook, IconCalendar, IconCalendarCheck, IconChat, IconCheckCircle, IconChevronDown, IconChevronRight, IconClock, IconClose, IconError, IconFile, IconFolder, IconGrid, IconHistory, IconImage, IconInfo, IconLayers, IconLink, IconMemory, IconMenu, IconMonitor, IconMore, IconNewChat, IconNotification, IconPlay, IconQuote, IconRefresh, IconSearch, IconSettings, IconShieldCheck, IconSparkles, IconStop, IconTeam, IconTerminal, IconTool } from './icons';
+import {WorkspaceNavigator,type OwnerNavigationMemory} from './WorkspaceNavigator';
 
 import {bridge} from './bridge';
 import {usePocketSnapshot} from './usePocketSnapshot';
@@ -37,7 +37,7 @@ import {isButlerHomeWork,workCollectionPresentation,type WorkCollectionFilter} f
 import type {CapabilityPurpose} from './capability-journey';
 import {AgentAvatar,PressButton,ChatComposer,AIAnswer,MessageActions,ToolCall,ThinkingLoader,CitedAnswer,BlurCrossfade,Skeleton,ShimmerText,Toaster,toast,ProgressBar,ProgressCircle} from './library';
 import {Button,IconButton,TextField,TextAreaField,SearchField,SelectField,RadioOptions,CheckboxField,Accordion,AccordionItem,SettingsDialog} from './forms-library';
-import {Drawer,PopoverTrigger,Popover,PopoverHeader,TreeView,WorkSidebar,FilesBrowser,Tabs,TabList,Tab,TabPanel,PermissionReview,type WorkNavItem} from './shell-library';
+import {Drawer,PopoverTrigger,Popover,PopoverHeader,TreeView,FilesBrowser,Tabs,TabList,Tab,TabPanel,PermissionReview,type WorkNavItem} from './shell-library';
 import Secondary from './Secondary';
 import ProfileWorkspace,{type PersonalTarget} from './ProfileWorkspace';
 import {ConversationMemorySettings} from './ConversationMemorySettings';
@@ -250,6 +250,7 @@ export default function App(){
  const [chatMenuOpen,setChatMenuOpen]=useState(false);const chatMenuTrigger=useRef<HTMLButtonElement>(null);
  const navigationReturnFocus=useRef<HTMLElement|null>(null);
  const [navigationMoreOpen,setNavigationMoreOpen]=useState(false);
+ const ownerNavMemory=useRef<OwnerNavigationMemory>({});
  const navigationDrawer=useRef<HTMLDivElement>(null);
  const attachNavigationDrawer=useCallback((node:HTMLDivElement|null)=>{
   navigationDrawer.current=node;
@@ -262,12 +263,12 @@ export default function App(){
  useEffect(()=>{setChatMenuOpen(false)},[route,state.conversationId,desktopNavigation]);
  useEffect(()=>{setNavigationMoreOpen(false)},[route,state.conversationId,desktopNavigation,workOpen,commandOpen]);
  const [navigationCompact,setNavigationCompact]=useState(false);
- const effectiveCompact=desktopNavigation&&navigationCompact&&!commandOpen;
+ const effectiveCompact=desktopNavigation&&navigationCompact&&!commandOpen&&!navigationMoreOpen;
  useEffect(()=>{const media=window.matchMedia('(min-width: 1024px)');const update=()=>setDesktopNavigation(media.matches);update();media.addEventListener('change',update);return()=>media.removeEventListener('change',update)},[]);
  const previousDesktopNavigation=useRef(desktopNavigation);
  useEffect(()=>{if(previousDesktopNavigation.current===desktopNavigation)return;previousDesktopNavigation.current=desktopNavigation;setWorkOpen(!desktopNavigation&&commandOpen)},[desktopNavigation,commandOpen]);
  const workSearch=useRef<HTMLButtonElement>(null),previousCommandOpen=useRef(false);
- useEffect(()=>{if((workOpen||desktopNavigation)&&previousCommandOpen.current&&!commandOpen)workSearch.current?.focus();previousCommandOpen.current=commandOpen;},[workOpen,desktopNavigation,commandOpen]);
+ useEffect(()=>{if((workOpen||desktopNavigation)&&previousCommandOpen.current&&!commandOpen)workSearch.current?.focus({preventScroll:true});previousCommandOpen.current=commandOpen;},[workOpen,desktopNavigation,commandOpen]);
  const [taskLayer,setTaskLayer]=useState<TaskLayer>('overview'),[projectPickerOpen,setProjectPickerOpen]=useState(false),[fileDisplayOpen,setFileDisplayOpen]=useState(false);
  const [taskFiltersOpen,setTaskFiltersOpen]=useState(false),[endedScopeOrigin,setEndedScopeOrigin]=useState<{filter:WorkCollectionFilter;query:string}|null>(null);
  const [phoneViewerExpanded,setPhoneViewerExpanded]=useState(false);
@@ -1076,9 +1077,6 @@ export default function App(){
   {key:'settings',label:'设置',icon:IconSettings,group:'偏好'},
    {key:'developer-logs',label:'开发诊断',icon:IconTerminal,group:'偏好'}
  ],[attentionTasks.length,state.remoteInbox?.unread,can]);
- const primaryWorkNav=workNav.filter(item=>item.group==='主入口');
- const supportingWorkNav=workNav.filter(item=>item.group==='工作');
- const additionalWorkNav=workNav.filter(item=>!['主入口','工作'].includes(item.group||'')&&!['model-settings','settings'].includes(item.key));
  const openSearchResult=async(item:WorkSearchItem,searchCurrent:()=>boolean=()=>true)=>{
   if(!searchCurrent())return;
   const request=++searchOpenRequest.current,navigation=navigationWindow.current,documentEpoch=bridge.getDocumentEpoch();
@@ -1360,7 +1358,7 @@ export default function App(){
  };
  const composerHasChatStop=isChatSurface&&intent==='chat'&&!!state.chatBusy&&!!currentCancelIdentity&&can('chat.cancel');
  const conversationActivity=conversationActivityLabel(state);
- const recentWork=orderConversations(conversations as (Json & {id:string})[]).slice(0,Math.max(5,conversations.filter(c=>Number(c.pinOrder)>0).length));
+ const recentWork=orderConversations(conversations as (Json & {id:string})[]);
  // Bound read-only permission summary; grants and approvals remain native task operations.
  const permissionView=composerPermissionView(state);
  const permissionReviewLabel=permissionView&&['waiting_approval','awaiting_approval','waiting_permission'].includes(permissionView.status)?'审阅本次授权':'查看待处理事项';
@@ -1375,50 +1373,20 @@ export default function App(){
  // Only surface a decision that belongs to a task anchored in this conversation.
  const conversationAttention=intent==='chat'?tasks.reduce<Task|undefined>((latest,task)=>{const anchor=messageTaskAnchors.get(task.id);if(!conversationInlineAttention(task)||anchor===undefined)return latest;return !latest||anchor>messageTaskAnchors.get(latest.id)!?task:latest;},undefined):undefined;
  const navigationTrigger=desktopNavigation?<span className="pw-header-spacer" aria-hidden="true"/>:<Drawer.Trigger asChild><IconButton ref={isPrimaryRoute?navigationMenuGlass:undefined} icon={IconMenu} className={isChatSurface?'pw-chat-glass-trigger':undefined} aria-label="打开导航" data-testid="all_work" onClick={event=>{navigationReturnFocus.current=event.currentTarget}}/></Drawer.Trigger>;
- const navigationTitle=commandOpen?'搜索工作':'PocketWorld';
- const navigationContent=<>
-   <header className={`pw-drawer-header${commandOpen?' pw-search-header':''}`}>
-    {commandOpen&&<IconButton icon={IconArrowLeft} aria-label="返回导航" onClick={()=>setCommandOpen(false)}/>}
-    {desktopNavigation?<h2>{navigationTitle}</h2>:<Drawer.Title>{navigationTitle}</Drawer.Title>}
-    {desktopNavigation&&!commandOpen&&<IconButton icon={effectiveCompact?IconSidebarOpen:IconSidebarClose} aria-label={effectiveCompact?'展开导航':'收起导航'} aria-expanded={!effectiveCompact} title={effectiveCompact?'展开导航':'收起导航'} onClick={()=>setNavigationCompact(value=>!value)}/>}
-    {!desktopNavigation&&<><Drawer.Description id="pw-work-description" className="pw-sr-only">回到管家交代目标、跟进工作，或查找对话、任务与项目。</Drawer.Description><Drawer.Close asChild><IconButton icon={IconClose} aria-label="关闭导航"/></Drawer.Close></>}
-   </header>
-   <div className={`pw-drawer-body pw-navigation-search-host ${commandOpen?'pw-navigation-search':''}`}>
-   {<div className="pw-navigation-actions" inert={commandOpen} style={commandOpen?{visibility:'hidden'}:undefined}>
-    <div className="pw-navigation-quick-actions">
-    <Button ref={workSearch} variant="ghost" className="pw-navigation-search-trigger" leadingIcon={IconSearch} aria-label="搜索工作、对话、成果与项目" title="搜索工作" onClick={showWorkSearch}>搜索工作</Button>
-    {can('conversation.new')&&<Button variant="ghost" className="pw-navigation-new" leadingIcon={IconNewChat} aria-label="聊件新事" title="聊件新事" disabled={!!state.chatSubmitting} onClick={()=>{void navigate('butler',()=>run('conversation.new'))}}>新对话</Button>}
-    </div>
-   </div>}
-    <AnimatePresence initial={false}>{commandOpen&&<WorkSearch key="work-search" supported={can('work.search')} identity={`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}`} memory={workSearchMemory.current} onOpen={openSearchResult} labelStatus={labelStatus} onClose={()=>setCommandOpen(false)}/>}</AnimatePresence><div className="pw-navigation-browse" hidden={commandOpen}>
-     <WorkSidebar items={primaryWorkNav} label="管家主入口" compact={effectiveCompact} hideGroupLabels selected={navigationSelection} onNavigate={selectNavigation}/>
-     <WorkSidebar items={supportingWorkNav} label="工作记录与项目" compact={effectiveCompact} hideGroupLabels selected={navigationSelection} onNavigate={selectNavigation}/>
-     <UNSAFE_PortalProvider getContainer={()=>desktopNavigation?document.body:navigationDrawer.current??document.body}>
-     <PopoverTrigger isOpen={navigationMoreOpen} onOpenChange={setNavigationMoreOpen}>
-      <Button variant="ghost" className="pw-navigation-more" leadingIcon={IconMore} aria-label={Number(state.remoteInbox?.unread||0)>0?'更多工作区，有未读通知':'更多工作区'} title="更多工作区" data-has-unread={Number(state.remoteInbox?.unread||0)>0||undefined} data-selected={additionalWorkNav.some(item=>item.key===navigationSelection)||undefined}>更多工作区</Button>
-      <Popover className="pw-navigation-more-popover" dialogClassName="pw-navigation-more-dialog" aria-label="更多工作区" placement="bottom start" boundaryElement={desktopNavigation?undefined:navigationDrawer.current??undefined}>
-       <WorkSidebar items={additionalWorkNav} label="更多工作区" hideGroupLabels selected={navigationSelection} onNavigate={selectNavigation}/>
-      </Popover>
-     </PopoverTrigger>
-     </UNSAFE_PortalProvider>
-     <section className="pw-work-recent" aria-label="最近对话">
-      {[{label:'置顶',items:recentWork.filter(c=>Number(c.pinOrder)>0)},{label:'最近',items:recentWork.filter(c=>!(Number(c.pinOrder)>0))}].filter(group=>group.items.length>0).map(group=><div className="pw-conversation-group" key={group.label}>
-       <div className="pw-section-heading"><h3>{group.label}</h3></div>
-       <div className="pw-recent-work">{group.items.map(c=><div className="pw-conversation-row" key={c.id}><Button variant="ghost" leadingIcon={IconChat} title={c.title||'未命名对话'} aria-current={c.id===state.conversationId&&route==='chat'?'page':undefined} className={c.id===state.conversationId&&route==='chat'?'is-current':''} onClick={()=>selectConversation(c.id)}><span>{c.title||'未命名对话'}</span></Button>{can('conversation.organization.read')&&<IconButton icon={IconMore} aria-label={`整理对话：${c.title||'未命名对话'}`} onClick={()=>setOrganizationTarget(c.id)}/>}</div>)}</div>
-      </div>)}
-     </section>
-    </div>
-   </div>
-   {<footer className="pw-navigation-footer" inert={commandOpen} style={commandOpen?{visibility:'hidden'}:undefined}>
-    <div className="pw-navigation-account">
-     <Button variant="ghost" className="pw-navigation-profile" aria-label={`${personalName}，个人资料与偏好`} title="个人资料与偏好" aria-current={route==='profile'?'page':undefined} disabled={!can('profile.snapshot')} onClick={()=>selectNavigation('profile')}><span className="pw-navigation-profile-content"><span className="pw-sidebar-avatar" aria-hidden="true">{personalAvatar?<img src={personalAvatar} alt=""/>:personalName==='我的'?<IconAccount size={21}/>:Array.from(personalName)[0]}</span><span className="pw-navigation-profile-copy"><strong>{personalName}</strong><small>资料与偏好</small></span></span></Button>
-     <IconButton icon={IconSettings} aria-label="设置" title="设置" aria-current={navigationSelection==='settings'?'page':undefined} onClick={()=>selectNavigation('settings')}/>
-    </div>
-   </footer>}
- </>;
+ const navigationContent=<WorkspaceNavigator items={workNav} selected={navigationSelection} recent={recentWork}
+  selectedConversation={route==='chat'?String(state.conversationId||''):undefined}
+  desktop={desktopNavigation} compact={effectiveCompact} onToggleCompact={()=>setNavigationCompact(value=>!value)}
+  directoryOpen={navigationMoreOpen} setDirectoryOpen={setNavigationMoreOpen} searchOpen={commandOpen} openSearch={showWorkSearch}
+  closeSearch={()=>setCommandOpen(false)} searchTrigger={workSearch} memory={ownerNavMemory.current} navigate={selectNavigation}
+  search={<WorkSearch key="work-search" supported={can('work.search')} identity={`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}`}
+   memory={workSearchMemory.current} onOpen={openSearchResult} labelStatus={labelStatus} onClose={()=>setCommandOpen(false)}/>}
+  openConversation={can('conversation.select')?selectConversation:undefined}
+  organizeConversation={can('conversation.organization.read')?setOrganizationTarget:undefined}
+  newConversation={can('conversation.new')?()=>{void navigate('butler',()=>run('conversation.new'))}:undefined} newPending={!!state.chatSubmitting}
+  profileName={personalName} avatar={personalAvatar||undefined} canProfile={can('profile.snapshot')}/>;
  const allWork=!desktopNavigation&&<Drawer.Portal>
   <Drawer.Overlay className="pw-overlay pw-navigation-overlay"/>
-  <Drawer.Content ref={attachNavigationDrawer} className="pw-drawer pw-work-drawer pw-navigation-drawer pw-material-navigation" aria-describedby="pw-work-description" onEscapeKeyDown={event=>{if(navigationMoreOpen){event.preventDefault();setNavigationMoreOpen(false)}else if(commandOpen){event.preventDefault();if(!event.isComposing&&event.keyCode!==229)setCommandOpen(false)}}} onCloseAutoFocus={event=>{const target=navigationReturnFocus.current?.isConnected?navigationReturnFocus.current:chatMenuTrigger.current;if(taskOpen)event.preventDefault();else if(route==='chat'&&target){event.preventDefault();target.focus()}navigationReturnFocus.current=null}}>
+  <Drawer.Content ref={attachNavigationDrawer} className="pw-drawer pw-work-drawer pw-navigation-drawer pw-material-navigation" aria-describedby="pw-work-description" onEscapeKeyDown={event=>{if(navigationMoreOpen||commandOpen){event.preventDefault();if(event.isComposing||event.keyCode===229)return;if(navigationMoreOpen)setNavigationMoreOpen(false);else setCommandOpen(false)}}} onCloseAutoFocus={event=>{const target=navigationReturnFocus.current?.isConnected?navigationReturnFocus.current:chatMenuTrigger.current;if(taskOpen)event.preventDefault();else if(route==='chat'&&target){event.preventDefault();target.focus()}navigationReturnFocus.current=null}}>
    {navigationContent}
   </Drawer.Content>
  </Drawer.Portal>;
@@ -1626,7 +1594,7 @@ export default function App(){
   {searchReturn&&!state.attachmentWorkspace?.open&&<div className="pw-search-return"><Button variant="ghost" size="small" leadingIcon={IconArrowLeft} onClick={showWorkSearch}>返回搜索结果</Button></div>}</>;
  return <ReadingContext.Provider value={openReading}><ConversationModelPickerProvider ref={modelPicker} state={state} can={can} act={act} disabled={!ready} active={isChatSurface} channelPhoneModel={channelPhoneModel} onChannelModel={()=>{void navigate('models')}} onManage={()=>{const origin={...captureWorkspaceOrigin(),modelPicker:true};void openRelatedWorkspace('models',origin)}} onOpenMedia={can('media.snapshot')?()=>{const origin={...captureWorkspaceOrigin(),modelPicker:true};void openRelatedWorkspace('media',origin)}:undefined}><Drawer.Root swipeToOpen={!desktopNavigation} open={workOpen&&!desktopNavigation} onOpenChange={changeNavigation} direction="left" autoFocus shouldScaleBackground={false}>
  <div className="pw-app pw-redesign" data-navigation={desktopNavigation?'sidebar':'drawer'} data-route={route} data-file-open={!!state.filePath||undefined} data-vaul-drawer-wrapper=""><Toaster theme={state.appearance?.dark===true?'dark':'light'}/>
-  {desktopNavigation&&<aside className="pw-desktop-navigation pw-navigation-drawer pw-material-navigation" data-compact={effectiveCompact?'true':'false'} aria-label="侧边工作导航" onKeyDown={event=>{if(commandOpen&&event.key==='Escape'&&!event.nativeEvent.isComposing&&event.nativeEvent.keyCode!==229){event.preventDefault();setCommandOpen(false)}}}>{navigationContent}</aside>}
+  {desktopNavigation&&<aside className="pw-desktop-navigation pw-navigation-drawer pw-material-navigation" data-compact={effectiveCompact?'true':'false'} aria-label="侧边工作导航" onKeyDown={event=>{if(event.key!=='Escape'||event.nativeEvent.isComposing||event.nativeEvent.keyCode===229)return;if(navigationMoreOpen||commandOpen){event.preventDefault();if(navigationMoreOpen)setNavigationMoreOpen(false);else setCommandOpen(false)}}}>{navigationContent}</aside>}
   <div className="pw-main-workspace" ref={workspace}>
   {isPrimaryRoute?<NavigationChrome>
   {(route!=='chat'||desktopNavigation)&&<header className="pw-app-header">
