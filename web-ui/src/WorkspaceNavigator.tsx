@@ -97,7 +97,7 @@ export function WorkspaceNavigator({items, selected, recent, selectedConversatio
     </header>
     <div ref={scroll} className={'pw-drawer-body pw-owner-nav-body pw-navigation-search-host' + (face === 'records' ? ' pw-navigation-search' : '')}
       data-nav-face={face} data-mini={mini || undefined} onScroll={event => { if (event.target === event.currentTarget) remember(); }}>
-      <AnimatePresence initial={false}>{face === 'records' ? search : null}</AnimatePresence>
+      <AnimatePresence>{face === 'records' ? search : null}</AnimatePresence>
       {face === 'records' ? null : face === 'directory' ? <>
         <div className="pw-owner-nav-find"><SearchField value={query} onChange={changeQuery} maxLength={80} clearLabel="清除功能关键词" aria-label="按名称或用途查找功能" placeholder="查找功能"/></div>
         {found.length ? <WorkSidebar items={found} selected={selected} onNavigate={choose} label={needle ? '匹配的功能' : '功能目录'} hideGroupLabels={!!needle}/> :
