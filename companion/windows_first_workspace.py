@@ -16,6 +16,7 @@ from device_identity import device_id
 from platform_backend import PlatformError
 from platform_windows import local_root
 from windows_installation import _object, same_path
+from windows_pair_identity import KEY as DISCLOSURE, PROFILE as REQUIRED
 
 MARKER = "deferredOwnerFolderV1"
 PIN = "ownerSelectedDirectoryV1"
@@ -56,7 +57,8 @@ def setup(ctx, config):
     # Normal saved configs, hand-made empty configs and a consumed choice are never migrated.
     marker = config.get(MARKER)
     if (not signed(ctx) or config.get("environments") != [] or not isinstance(marker, dict)
-            or set(marker) != {"installId", "signer", "deviceId", "instanceId", "environmentId"} or marker["signer"] != ctx.current["signerThumbprint"].upper() or marker["installId"] != ctx.install_state["installId"]
+            or (set(marker) - {DISCLOSURE}) != {"installId", "signer", "deviceId", "instanceId", "environmentId"}
+            or (DISCLOSURE in marker and marker[DISCLOSURE] != REQUIRED) or marker["signer"] != ctx.current["signerThumbprint"].upper() or marker["installId"] != ctx.install_state["installId"]
             or not isinstance(marker["environmentId"], str) or not re.fullmatch(r"folder-[a-f0-9]{32}", marker["environmentId"])):
         return None
     witness = ctx.backend.read_optional_private_bytes(ctx.state, SETUP, ctx.sid, maximum=2048)
@@ -72,7 +74,8 @@ def admissible(ctx, config, marker):
             or not same_path(config["stateDir"], ctx.jobs) or not same_path(config["tokenFile"], ntpath.join(ctx.state, "companion-token.txt"))):
         bad()
     settings, desktop = config["devices"], config["desktop"]
-    if (not isinstance(settings, dict) or set(settings) not in ({"enabled", "identityDir", "routes"}, {"enabled", "identityDir", "routes", "listen"})
+    if (not isinstance(settings, dict) or (DISCLOSURE in settings) != (DISCLOSURE in marker)
+            or (DISCLOSURE in settings and settings[DISCLOSURE] != REQUIRED) or (set(settings) - {DISCLOSURE}) not in ({"enabled", "identityDir", "routes"}, {"enabled", "identityDir", "routes", "listen"})
             or type(settings["enabled"]) is not bool or settings["routes"] != [] or not same_path(settings["identityDir"], ctx.identity_dir)
             or not isinstance(desktop, dict) or set(desktop) != {"enabled"} or type(desktop["enabled"]) is not bool):
         bad()

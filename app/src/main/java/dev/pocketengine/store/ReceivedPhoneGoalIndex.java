@@ -13,17 +13,25 @@ import org.json.JSONObject;
 final class ReceivedPhoneGoalIndex {
     private ReceivedPhoneGoalIndex() {}
     private static final Set<String> DETACHED_CANDIDATES=Set.of("interrupted","failed","cancelled");
-    /** This row's original incoming grant is issued HERE. Its epoch can therefore bind the caller
-     * peer row, unlike an oppositely issued grant. An older incarnation never inherits a nickname. */
-    private static JSONObject sourceIdentity(SQLiteDatabase db,String here,String source,String grant,long epoch,long now) {
-        String sql="SELECT p.instance_id,p.fingerprint,p.authorization_epoch,g.expires_at FROM device_peers p "
-                +"JOIN device_grants g ON g.peer_device_id=p.device_id AND g.authorization_epoch=p.authorization_epoch "
-                +"WHERE p.device_id=? AND p.revoked=0 AND g.grant_id=? AND g.local_device_id=? AND g.authorization_epoch=? AND g.revoked=0 AND g.expires_at>?";
-        try(Cursor row=db.rawQuery(sql,new String[]{source,grant,here,Long.toString(epoch),Long.toString(now)})){
-            if(!row.moveToFirst())return null;
-            return new JSONObject().put("instanceId",row.getString(0)).put("fingerprint",row.getString(1))
-                    .put("authorizationEpoch",row.getLong(2)).put("expiresAt",row.getLong(3));
-        } catch(android.database.sqlite.SQLiteException | JSONException unavailable){ return null; /* A name is optional; preserve the original incoming row. */ }
+    /** Permission-directory evidence only. Never issues a Permission or substitutes for the final native checks. */
+    private record LocalGrant(JSONObject nameIdentity,String block,long until){}
+    private static final LocalGrant NO_GRANT=new LocalGrant(null,"unverifiable",0);
+    private static final String SOURCE_GRANT="SELECT p.instance_id,p.fingerprint,p.authorization_epoch,p.revoked,g.authorization_epoch,g.revoked,g.expires_at "
+            +"FROM device_grants g LEFT JOIN device_peers p ON p.device_id=g.peer_device_id WHERE g.grant_id=? AND g.peer_device_id=? AND g.local_device_id=?";
+    private static LocalGrant originalGrant(SQLiteDatabase db,String here,String source,String grant,long epoch,long now){
+        try(Cursor row=db.rawQuery(SOURCE_GRANT,new String[]{grant,source,here})){
+            if(epoch<1||!row.moveToFirst()||row.isNull(2)||row.isNull(3)||row.isNull(4)||row.isNull(5)||row.isNull(6))return NO_GRANT;
+            boolean sameGrant=row.getLong(4)==epoch;long until=sameGrant?row.getLong(6):0;
+            if(row.getInt(3)==1||sameGrant&&row.getInt(5)==1)return new LocalGrant(null,"revoked",until);
+            if(!sameGrant||row.getLong(2)!=epoch)return new LocalGrant(null,"changed",until);
+            if(until<=0||until>DeviceProtocol.MAX_SAFE_INTEGER||row.isNull(0)||row.isNull(1))return NO_GRANT;
+            if(until<=now)return new LocalGrant(null,"expired",until);
+            return new LocalGrant(new JSONObject().put("instanceId",row.getString(0)).put("fingerprint",row.getString(1))
+                    .put("authorizationEpoch",epoch).put("expiresAt",until),"",until);
+        }catch(android.database.sqlite.SQLiteException|JSONException unavailable){return NO_GRANT;}
+    }
+    static String pickupGrantBlock(SQLiteDatabase db,String here,String source,String grant,long epoch){
+        return originalGrant(db,here,source,grant,epoch,System.currentTimeMillis()).block();
     }
     // device_peers uses INSERT for a new identity; only rotatePeer changes a certificate/instance.
     // In the same transaction it records the epoch at which NEW device_id took that identity.
@@ -59,6 +67,11 @@ final class ReceivedPhoneGoalIndex {
         LocalPhoneGoalSearch term=new LocalPhoneGoalSearch(query);
         if(!term.active())throw new IllegalArgumentException("请输入本机待接手原目标的文字");
         return scan(db,here,instance,null,caller,op,Shelf.PENDING,term);
+    }
+    static JSONObject findBeforePickupDecision(SQLiteDatabase db,String here,String instance,String caller,String op,String query,boolean withdrawn)throws Exception{
+        LocalPhoneGoalSearch term=new LocalPhoneGoalSearch(query);
+        if(!term.active())throw new IllegalArgumentException("请输入要找的原目标文字");
+        return scan(db,here,instance,null,caller,op,withdrawn?Shelf.WITHDRAWN:Shelf.DECLINED,term);
     }
     static JSONObject declined(SQLiteDatabase db,String here,String instance,String afterCaller,String afterOp)throws Exception{
         return scan(db,here,instance,null,afterCaller,afterOp,Shelf.DECLINED,new LocalPhoneGoalSearch(""));
@@ -132,6 +145,8 @@ final class ReceivedPhoneGoalIndex {
                             || !here.equals(origin.opt("targetDeviceId")) || !op.equals(origin.opt("remoteOperationId")) || !parent.equals(origin.opt("rootTaskId"))
                             || !parent.equals(origin.opt("parentTaskId")) || !wire.getString("localTaskId").equals(origin.opt("remoteLocalTaskId"))
                             || !c.getString(4).equals(origin.opt("grantId")) || c.getLong(5)!=origin.getLong("authorizationEpoch")) continue;
+                    // Search only the bound incoming goal; a textual match never replaces the separate local decision proof below.
+                    if((declined||withdrawn)&&search.active()&&!search.matches(wire.getJSONObject("arguments").getString("goal")))continue;
                     long declinedAt=0;
                     if(declined){
                         try{declinedAt=ReceivedPhoneDeclineHistory.checkedAt(db,task,source,op,here,localInstance,mode,digest,c.getLong(2),origin);}
@@ -202,10 +217,13 @@ final class ReceivedPhoneGoalIndex {
                             }else if(!"running".equals(runPhase)&&!"interrupted".equals(runPhase)&&!"needs_confirmation".equals(runPhase))continue;
                         }
                     }
-                    String goal=wire.getJSONObject("arguments").getString("goal"); if (goal.trim().isEmpty()||!closed&&!search.matches(goal)) continue;
+                    String goal=wire.getJSONObject("arguments").getString("goal"); if (goal.trim().isEmpty()||!closed&&!declined&&!withdrawn&&!search.matches(goal)) continue;
                     if (goal.codePointCount(0,goal.length())>160) goal=goal.substring(0,goal.offsetByCodePoints(0,160))+"…";
+                    LocalGrant sourceGrant=shelf==Shelf.PENDING||started||declined||withdrawn||results||failed?originalGrant(db,here,source,c.getString(4),c.getLong(5),System.currentTimeMillis()):null;
                     items.put(new JSONObject().put("taskId",task).put("operationId",op).put("argumentsDigest",digest)
-                            .put("sourceIdentity",shelf==Shelf.PENDING||started||declined||withdrawn||results||failed?sourceIdentity(db,here,source,c.getString(4),c.getLong(5),System.currentTimeMillis()):null)
+                            .put("sourceIdentity",sourceGrant==null?null:sourceGrant.nameIdentity())
+                            .put("pickupGrantBlock",shelf==Shelf.PENDING&&!sourceGrant.block().isEmpty()?sourceGrant.block():null)
+                            .put("pickupGrantEndsAt",shelf==Shelf.PENDING&&sourceGrant.until()>0&&sourceGrant.until()<=DeviceProtocol.MAX_SAFE_INTEGER?Long.valueOf(sourceGrant.until()):null)
                             .put("pickupRequestEndsAt",shelf==Shelf.PENDING&&wire.optLong("deadline")>0&&wire.optLong("deadline")<=DeviceProtocol.MAX_SAFE_INTEGER?Long.valueOf(wire.getLong("deadline")):null)
                             .put("sourceDeviceId",source).put("withdrawnAt",withdrawn?Long.valueOf(withdrawnAt):null).put("declinedAt",declined?Long.valueOf(declinedAt):null).put("failedRun",failedRun).put("startedRun",startedRun).put("closedReview",closedReview).put("mayCheckLocalText",!waiting&&zero&&"completed".equals(header.opt("status"))&&!header.optString("runId").isEmpty()&&header.optInt("coordinatorEpoch")>0?true:null)
                             .put("textOnly",textOnly||zero&&"assistant".equals(header.opt("kind"))?true:null).put("reviewRun",review==null?null:review.getString("runId"))

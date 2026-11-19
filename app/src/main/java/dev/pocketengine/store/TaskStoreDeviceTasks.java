@@ -1022,6 +1022,16 @@ public final class TaskStoreDeviceTasks {
     public JSONObject startedReceivedPhoneGoals(String here,String instance,String afterCaller,String afterOp)throws Exception{
         synchronized(owner){return ReceivedPhoneGoalIndex.started(db,here,instance,afterCaller,afterOp);}
     }
+    public JSONObject findBeforePickupDecision(String here,String instance,String caller,String op,String query,boolean withdrawn)throws Exception{
+        synchronized(owner){return ReceivedPhoneGoalIndex.findBeforePickupDecision(db,here,instance,caller,op,query,withdrawn);}
+    }
+    /** A read of B's own trust directory for an already-held native goal, not peer I/O or a permission grant. */
+    public String originalPickupGrantBlock(String id,DeviceExecutionAdmission held){
+        JSONObject wire=held.request().json();if(held.kind()!=DeviceExecutionAdmission.Kind.GOAL)return "unverifiable";
+        if(!wire.optString("callerDeviceId").equals(wire.opt("originDeviceId")))return ""; // This direct inbox does not describe forwarded work.
+        if(!id.equals(DeviceProtocol.receiverTaskId(wire)))return "unverifiable";
+        synchronized(owner){return ReceivedPhoneGoalIndex.pickupGrantBlock(db,wire.optString("targetDeviceId"),wire.optString("callerDeviceId"),wire.optString("grantId"),wire.optLong("authorizationEpoch"));}
+    }
     public JSONObject findWaitingPhoneGoals(String here,String instance,String caller,String op,String query)throws Exception{
         synchronized(owner){return ReceivedPhoneGoalIndex.findWaiting(db,here,instance,caller,op,query);}
     }

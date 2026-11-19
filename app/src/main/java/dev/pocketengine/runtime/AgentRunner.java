@@ -1781,7 +1781,7 @@ public final class AgentRunner {
                 JSONObject selected=result.optJSONObject("result");JSONArray live=validation.optJSONArray("ownerWorkResults");
                 if(selected==null||!Boolean.TRUE.equals(selected.opt("available")))return contextCurrent;
                 if(live==null||selected.optString("taskId").isEmpty()||selected.optString("deliveryId").isEmpty()||!selected.optString("resultDigest").matches("[a-f0-9]{64}"))return false;
-                for(int i=0;i<live.length();i++){JSONObject current=live.getJSONObject(i);if(selected.getString("taskId").equals(current.optString("taskId"))&&selected.getString("deliveryId").equals(current.optString("deliveryId"))&&selected.getString("resultDigest").equals(current.optString("resultDigest")))return true;}return false;
+                for(int i=0;i<live.length();i++){JSONObject current=live.getJSONObject(i);if(selected.getString("taskId").equals(current.optString("taskId"))&&selected.getString("deliveryId").equals(current.optString("deliveryId"))&&selected.getString("resultDigest").equals(current.optString("resultDigest"))&&(!selected.has("requiredRunId")||selected.getString("requiredRunId").equals(current.opt("requiredRunId"))&&selected.getInt("requiredEpoch")==current.optInt("requiredEpoch",-1)))return true;}return false;
             }
             if(name.startsWith("skills_")&&validation.has("skillScopeFingerprint")){
                 String scope=validation.getString("skillScopeFingerprint");

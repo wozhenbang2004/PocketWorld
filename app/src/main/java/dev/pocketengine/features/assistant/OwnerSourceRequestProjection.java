@@ -105,7 +105,7 @@ public final class OwnerSourceRequestProjection implements AgentRunner.RequestPr
                     if(refs.length()>0){
                         inspection.requireObjectCarrier(row,inputConversation);
                         objectCarriers.put(row.getString("ownerMessageId"),new JSONObject().put("role","user").put("ownerMessageId",row.getString("ownerMessageId")).put("ownerMessageRevision",row.get("ownerMessageRevision")).put("ownerObjectRefs",refs));
-                        extra.put(text("主人明确关联的对象定位，仅用于理解本条输入所指的工作。它不是对象正文、当前状态证明、执行目标或审批。work的id对应owner_work_get.taskId；先读取原对象及后续变化，再按主人真实要求处理。不得把导航或关联视为启动、继续、修改或发布授权。"));
+                        extra.put(text("主人明确关联的对象定位，仅用于理解本条输入所指的工作。它不是对象正文、当前状态证明、执行目标或审批。work的id、runId、epoch分别传入owner_work_get的taskId、runId、epoch；先核对同轮合同、实际纳入的主人输入及同轮冻结成果。若原工作已换轮或本轮没有交付，不用别轮成果或摘要顶替，再向主人说明；先读取原对象及后续变化，再按主人真实要求处理。不得把导航或关联视为启动、继续、修改或发布授权。"));
                         extra.put(text(OwnerObjectReferences.locations(refs).toString()));
                     }
                 }

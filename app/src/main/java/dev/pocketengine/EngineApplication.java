@@ -557,6 +557,9 @@ public final class EngineApplication extends Application implements dev.pocketen
     }
     /** Called by B's native owner model/permission page, never by a device or model JSON command. */
     public boolean hasPendingDeviceGoal(String id){return pendingDeviceGoals.containsKey(id);}
+    public String originalPickupGrantBlock(String id){
+        var held=pendingDeviceGoals.get(id);return held==null?"not_retained":tasks.deviceTasks().originalPickupGrantBlock(id,held);
+    }
     /** Metadata only. No new admission, device probe, model read or synthetic grant. */
     public long matchingPendingDeviceGoalDeadline(String id,String caller,String operation,String digest){
         var held=pendingDeviceGoals.get(id);if(held==null)return 0;
@@ -2707,6 +2710,17 @@ public final class EngineApplication extends Application implements dev.pocketen
         var extensionBinding=new dev.pocketengine.runtime.extensions.ExtensionRuntime.Binding(id,run,epoch);checkLiveExtensionControl(extensionBinding,original);
         JSONObject development=task.optJSONObject("developmentContext");
         var binding=new dev.pocketengine.features.capabilities.ModelCapabilityAdapters.Binding(id,run,epoch,original,true,development==null?"":development.getString("projectId"));
+        if(dev.pocketengine.features.local.project.ProjectEditDraft.selected(development)){
+            if(selectedPhone!=null||selectedProfile!=null||task.has("origin")||task.optJSONObject("ownerWorkPreparation")==null||
+                !dev.pocketengine.features.capabilities.CapabilityApprovalPolicy.appliesToPrivateTask(task)||
+                !(features.module("local") instanceof dev.pocketengine.features.local.LocalModule host))throw new SecurityException("没有同一私人项目的已确认独立改稿范围");
+            var originalAuthority=new dev.pocketengine.features.capabilities.TaskStoreCapabilityAuthority(tasks,binding,features::emitApproval);
+            CapabilityPort drafts=new dev.pocketengine.features.local.project.ProjectCapabilityPort(binding,originalAuthority,original,null,host,tasks,development.getString("checkoutId"),development.getString("runtime"),null,null,development);
+            try{
+                tasks.authorizeTools(id,run,toolNames(drafts.tools()));
+                return withExecutionPlanning(id,original,new dev.pocketengine.features.capabilities.ToolPermissionPolicyPort(drafts,tasks,binding,()->settings.getEffectivePermissionPolicy(task.optString("conversationId")),settings::permissionPolicyRevision,inference,features::emitApproval,false));
+            }catch(Exception stopped){drafts.close();throw stopped;}
+        }
         if(task.has("ownerDeviceWork")){
             // The prepared task uses this same original runner and its captured model, but
             // never constructs the general local/SSH/extension or ambient-memory supervisor.
@@ -3159,7 +3173,7 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
         }
         if("owner_work_get".equals(tool)){
             return tasks.ownerWorkReadForButler(sourceTask,sourceRun,sourceEpoch,sourceControl,
-                    args.getString("taskId"),args.optString("deliveryId"),args.optInt("offset",0),args.optInt("maxChars",4000),args.optString("contextCursor"));
+                    args.getString("taskId"),args.optString("deliveryId"),args.optInt("offset",0),args.optInt("maxChars",4000),args.optString("contextCursor"),args.has("runId")?args.getString("runId"):null,args.has("epoch")?args.getInt("epoch"):0);
         }
         if("owner_work_prepare".equals(tool)){
             JSONObject proposed=tasks.proposeOwnerWorkPreparation(sourceTask,sourceRun,sourceEpoch,operation,args,sourceControl);
@@ -3896,6 +3910,8 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
                     if(current==null||!admittedRun.equals(current.optString("runId"))||admittedEpoch!=current.optInt("coordinatorEpoch")||!"owner".equals(current.optString("actorId"))||!"private".equals(current.optString("spaceId")))throw new SecurityException("完成答复不属于原主人执行代次");
                     EngineModule assistant=features.module("assistant");
                     if(!(assistant instanceof dev.pocketengine.features.assistant.AssistantModule))throw new IllegalStateException("原会话无法保存本轮正式答复");
+                    // Only the native artifact outcome below may publish completion for an explicitly draft-only job.
+                    if(dev.pocketengine.features.local.project.ProjectEditDraft.selected(current.optJSONObject("developmentContext")))return;
                     // Both initial chat and explicit same-task resume use the one typed native
                     // completion fact. This does not create an active chat or a new grant.
                     lastOwnerReplyAttempted[0]=reply.text;
@@ -3915,6 +3931,8 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
             RunOutcome result=ownerSkill==null?runner.run(id,attempt.optString("goal"),config.withStepCeiling(attempt.getInt("stepCeiling")),control,event->recordCapabilityProgress(id,admittedRun,admittedEpoch,control,event),journal)
                     :runner.runOwnerSkill(id,attempt.optString("goal"),config.withStepCeiling(attempt.getInt("stepCeiling")),control,event->recordCapabilityProgress(id,admittedRun,admittedEpoch,control,event),journal,ownerSkill);
             if(runner.developmentYielded())try{return development.held(result);}catch(Exception failed){runner.closeDevelopment(id,control,journal);throw failed;}
+            if(dev.pocketengine.features.local.project.ProjectEditDraft.selected(attempt.optJSONObject("developmentContext")))
+                result=tasks.boundDraftOutcome(id,admittedRun,admittedEpoch,control,result);
             String status=result.status;settlementStarted=true;
             if(status.equals("paused")&&control.conditionWait()!=null)tasks.endAutomationConditionWait(id,attempt.getString("runId"),control,result.summary,result.evidence);
             else tasks.finishCapabilityAttempt(id,admittedRun,admittedEpoch,control,result);

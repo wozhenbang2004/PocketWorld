@@ -255,6 +255,15 @@ public final class TaskStoreTeamWriteHost implements TeamCoordinator.BudgetHost,
         catch(Exception unavailable){reader.check();warning="此次未能锁定上版写回与本次冻结的同一组原件。下方只是打开时项目对照，不替代修订前后对照。";}
         reader.check();return new TeamOwnerFileReading(id,captured,revision,warning);
     }
+    /** Exact selected file, never the team's other files. Reading cannot approve, consume budget or dispatch. */
+    JSONObject readOwnerFileApprovalPage(String id,String run,int epoch,String approval,String proof,String expectedDiff,int offset,RunControl reader)throws Exception{
+        JSONObject source=tasks.ownerFileApprovalSource(id,run,epoch,approval,reader);
+        if(!proof.equals(source.getJSONObject("locator").getString("proof")))throw new SecurityException("这笔原文件或用途已变");
+        JSONObject page=TeamOwnerApprovalFileDiff.page(workspace,source,expectedDiff,offset,reader);
+        JSONObject fresh=tasks.ownerFileApprovalSource(id,run,epoch,approval,reader);
+        if(!TeamWorkFiles.canonical(source).equals(TeamWorkFiles.canonical(fresh)))throw new SecurityException("原审批在读取中已变化，未返回差异");
+        reader.check();return page;
+    }
     /** Reopen reads native existing decisions and progress; never re-approves, re-runs or replays them. */
     public JSONObject reviewSnapshot(String run,RunControl read)throws Exception {
         JSONObject result=review(run,read).snapshot(),state=tasks.teamReviewState(run);for(String key:new String[]{"independentReview","approvedReview"})if(state.has(key))result.put(key,state.get(key));return result.put("integration",integrationState(run));

@@ -820,8 +820,8 @@ class CompanionDeviceReceiver:
                 result["originalFileReceipt"] = self.manager.files.operation(operation)
             return result
 
-    async def receive(self, peer, raw):
-        envelope = None
+    async def receive(self, peer, raw, *, register_disclosure=None):
+        envelope = release_guard = None
         try:
             if not isinstance(peer, device_identity.AuthenticatedPeer):
                 raise PermissionError("Actual native mutual-TLS peer required; legacy token is not device authority")
@@ -841,18 +841,23 @@ class CompanionDeviceReceiver:
                               else self.pairing.check_permission(peer, envelope, self.manager.now()))
                 self._current_read(permission)
             if envelope.method == "device.describe":
-                result = self.describe()
-                receipts = self.pairing.discovery_grant_receipts(self.identity, permission, self.manager.now())
-                result["grantReceipts"] = []
-                for receipt in receipts:
-                    if len(protocol.canonical_bytes(result["grantReceipts"] + [receipt])) > 16384:
-                        result["grantReceiptsTruncated"] = True
-                        break
-                    result["grantReceipts"].append(receipt)
-                metadata = {key: value for key, value in result.items() if key not in {"capabilities", "grantReceipts"}}
-                now = self.manager.now()
-                result = protocol.device_description(self.identity.device_id, self.identity.instance_id, now,
-                                                     min(permission.deadline, now + 15000), result["capabilities"], result["grantReceipts"], metadata)
+                from windows_pair_identity import restricted
+                scoped = restricted(self, permission, peer)
+                if scoped is not None:
+                    result, release_guard = scoped  # Do not even collect the ordinary workspace/desktop catalog.
+                else:
+                    result = self.describe()
+                    receipts = self.pairing.discovery_grant_receipts(self.identity, permission, self.manager.now())
+                    result["grantReceipts"] = []
+                    for receipt in receipts:
+                        if len(protocol.canonical_bytes(result["grantReceipts"] + [receipt])) > 16384:
+                            result["grantReceiptsTruncated"] = True
+                            break
+                        result["grantReceipts"].append(receipt)
+                    metadata = {key: value for key, value in result.items() if key not in {"capabilities", "grantReceipts"}}
+                    now = self.manager.now()
+                    result = protocol.device_description(self.identity.device_id, self.identity.instance_id, now,
+                                                         min(permission.deadline, now + 15000), result["capabilities"], result["grantReceipts"], metadata)
             elif envelope.method == "desktop.viewer":
                 result = await asyncio.to_thread(self.desktop.viewer, envelope, permission)
             elif envelope.method == "tool.invoke":
@@ -898,7 +903,11 @@ class CompanionDeviceReceiver:
                                                include_cancellation=envelope.method == "operation.cancel")
             response = {"protocolVersion": protocol.VERSION, "protocolProfile": protocol.PROFILE, "messageType": "DeviceResponse", "requestId": envelope.get("requestId"),
                         "method": envelope.method, "executorDeviceId": self.identity.device_id, "instanceId": self.identity.instance_id, "result": result}
-            return protocol.canonical_bytes(protocol.validate_message(response))
+            encoded = protocol.canonical_bytes(protocol.validate_message(response))
+            if release_guard is not None:
+                release_guard(peer)
+                if register_disclosure is not None: register_disclosure(release_guard)
+            return encoded
         except Exception as failure:
             unknown = False
             if envelope is not None and envelope.side_effecting:
@@ -930,7 +939,9 @@ class DeviceCompanionService:
     """
     def __init__(self, manager, *, local_identity=None, native_lan_reservations=None):
         settings = manager.config.get("devices")
-        if not isinstance(settings, dict) or settings.get("enabled") is not True or set(settings) - {"enabled", "identityDir", "listen", "routes"}:
+        from windows_pair_identity import KEY, PROFILE
+        if (not isinstance(settings, dict) or settings.get("enabled") is not True or set(settings) - {"enabled", "identityDir", "listen", "routes", KEY}
+                or KEY in settings and (manager.platform.name != "windows" or settings[KEY] != PROFILE)):
             raise PlatformError("Explicit closed native devices configuration is required")
         self.manager, self.settings = manager, copy.deepcopy(settings)
         if local_identity is None:
@@ -1086,8 +1097,10 @@ class DeviceCompanionService:
                 await connection.close("incompatible"); return
             if self.phone_tasks.receive(connection, peer, frame.control):
                 return
-            response = await self.receiver.receive(peer, frame.control)
-            if not connection.send_control(response):
+            disclosure = []
+            response = await self.receiver.receive(peer, frame.control, register_disclosure=disclosure.append)
+            queued = connection.send_control(response, before_write=disclosure[0]) if disclosure else connection.send_control(response)
+            if not queued:
                 await connection.close()
         async def disconnected(delivery_may_be_unknown, error):
             self.connections.discard(connection)

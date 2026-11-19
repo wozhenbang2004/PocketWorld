@@ -30,7 +30,15 @@ internal object PocketWebApprovals {
                 if (isExecutionPlan(approval)) controller.readTaskExecutionPlanApproval(task.id, id)
                 else controller.readTeamParentPlanApproval(task.id, id)
             } else null
-            out.put(project(approval, original?.getOrNull(), original?.exceptionOrNull()?.message, task))
+            val row=project(approval, original?.getOrNull(), original?.exceptionOrNull()?.message, task)
+            if(approval.optString("tool")=="team_integrate_file")runCatching {
+                check(controller.webPrivateOwnerVisible())
+                val window=controller.webWindowTicket();val run=task.raw.getString("runId");val epoch=task.raw.getInt("coordinatorEpoch")
+                val reader=dev.pocketengine.core.RunControl.forOriginalRecovery(task.id,run,epoch)
+                reader.setAuthorityCheck { check(controller.webPrivateOwnerVisible()&&controller.webWindowTicket()==window) }
+                controller.nativeTokenBudgetHost().tasks.ownerFileApprovalSource(task.id,run,epoch,approval.getString("id"),reader).getJSONObject("locator")
+            }.getOrNull()?.let { row.getJSONObject("webReview").put("originalTeamFile",it) }
+            out.put(row)
         }
     }
 

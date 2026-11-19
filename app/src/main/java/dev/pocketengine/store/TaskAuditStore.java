@@ -23,7 +23,7 @@ import org.json.JSONTokener;
 public final class TaskAuditStore {
     public static final int MAX_PAGE_ROWS=40, MAX_PAGE_BYTES=131072, MAX_CORE_BYTES=262144;
     private static final int MAX_HEADER_BYTES=32768, MAX_NATIVE_EVENT_BYTES=1048576;
-    private static final Set<String> HEADER_FIELDS=Set.of("id","goal","kind","executionMode","actorId","spaceId","status","summary","feature","command","conversationId","runId","coordinatorEpoch","createdAt","updatedAt","cancelRequested","groupStateRevision","channelStateRevision","voiceStateRevision","origin","developmentContext","sshSelection","teamAssignment","parentTaskId","parentRunId","nativeExecutionMode","nativeInference","ownerNotification","resourceState");
+    private static final Set<String> HEADER_FIELDS=Set.of("projectEditDraftId","id","goal","kind","executionMode","actorId","spaceId","status","summary","feature","command","conversationId","runId","coordinatorEpoch","createdAt","updatedAt","cancelRequested","groupStateRevision","channelStateRevision","voiceStateRevision","origin","developmentContext","sshSelection","teamAssignment","parentTaskId","parentRunId","nativeExecutionMode","nativeInference","ownerNotification","resourceState");
     private TaskAuditStore(){}
 
     // The full calendar request and the repeated, escaped Provider identity can exceed
@@ -266,7 +266,7 @@ public final class TaskAuditStore {
     /** A long owner contract must not evict the project's navigation identity on a progress push. */
     private static JSONObject developmentHeader(JSONObject original)throws Exception {
         JSONObject view=new JSONObject();
-        for(String key:new String[]{"format","projectId","checkoutId","runtime","initialSourceDigest","clientMessageId","filesAreUntrusted","authorityAdded"}){
+        for(String key:new String[]{"format","projectId","checkoutId","runtime","initialSourceDigest","clientMessageId","filesAreUntrusted","authorityAdded","draftOnly"}){
             Object value=original.opt(key);if(value instanceof String&&((String)value).length()<=500||value instanceof Boolean)view.put(key,value);
         }
         JSONObject contract=original.optJSONObject("deliveryContract");

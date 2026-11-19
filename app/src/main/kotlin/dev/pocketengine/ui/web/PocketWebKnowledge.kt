@@ -3,6 +3,7 @@ package dev.pocketengine.ui.web
 import dev.pocketengine.features.memory.MemoryAssertionReview
 import dev.pocketengine.ui.MemoryLearningReviewGuard
 import dev.pocketengine.ui.PocketWorldController
+import dev.pocketengine.ui.MAX_ASSERTION_DISPLAY_MILLIS
 import dev.pocketengine.ui.assertionReviewDate
 import dev.pocketengine.ui.assertionReviewKeepsSources
 import java.util.UUID
@@ -242,10 +243,24 @@ internal class PocketWebKnowledge(private val controller: PocketWorldController,
                     .put("relationTarget", if (relation == null) JSONObject.NULL else identityChoice(original, args.getJSONObject("relationTarget"), "object", relation))
                     .put("kind", kind).put("predicate", identityText(args, "predicate", 160)).put("object", identityText(args, "object", 4000))
                 val condition = args.opt("condition"); require(condition is String && condition.length <= 1000); payload.put("condition", condition.trim { it <= ' ' })
-                for (key in listOf("eventTime", "validFrom", "validTo", "reviewAfter")) { val value = args.opt(key); require(value is String && value.length <= 64); payload.put(key, assertionReviewDate(value)) }
+                // Keep an unrenderable original only by copying this frozen candidate's exact Long,
+                // never a number rounded by WebView or a different date supplied by the caller.
+                val retainedTimes = mutableListOf<String>()
+                for (key in listOf("eventTime", "validFrom", "validTo", "reviewAfter")) {
+                    when (val input = args.opt(key)) {
+                        is JSONObject -> { require(input.length() == 1 && input.opt("keepOriginalOutOfRange") == true)
+                            val saved = row(original).optJSONObject("assertion")?.opt(key)
+                            require(saved is Long && saved > MAX_ASSERTION_DISPLAY_MILLIS) { "该候选没有可原样保留的超范围时间，请重新读取。" }
+                            payload.put(key, saved); retainedTimes += key }
+                        is String -> { require(input.length <= 64); payload.put(key, assertionReviewDate(input)) }
+                        else -> error("请明确核对这项时间")
+                    }
+                }
+                require(payload.isNull("validFrom") || payload.isNull("validTo") || payload.getLong("validTo") > payload.getLong("validFrom")) { "结束时间须晚于生效时间，请修改后再核对。" }
+                val shown = if (retainedTimes.isEmpty()) payload else JSONObject(payload.toString()).apply { retainedTimes.forEach { put(it, JSONObject().put("keepOriginalOutOfRange", true)) } }
                 val endpoints = JSONObject().put("subject", subject).put("relationTarget", relation ?: JSONObject.NULL)
                 current(original, done) { done(JSONObject().put("reviewHandle", pin(reviews, JSONObject().put("original", original).put("command", "reviewCandidateAssertion").put("payload", payload).put("endpoints", endpoints)))
-                    .put("operation", "assertion").put("before", row(original)).put("assertion", payload).put("endpoints", endpoints).put("executionAuthorized", false), null) }
+                    .put("operation", "assertion").put("before", row(original)).put("assertion", shown).put("endpoints", endpoints).put("executionAuthorized", false), null) }
             }
             "knowledge.consolidation.review" -> {
                 fields(args, "readHandles"); val handles = args.getJSONArray("readHandles"); require(handles.length() in 2..20); val frozen = JSONArray()

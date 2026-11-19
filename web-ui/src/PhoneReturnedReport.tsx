@@ -7,6 +7,8 @@ import {IconClose} from './icons';
 import {ShimmerText} from './library';
 import {cancelledPhoneSummaryNote,messagePhoneResult,type PhoneResult} from './phone-start';
 import {finalScreenLine} from './PhoneFinalScreenReceipt';
+import {MessageQuote,type MessageQuoteTarget} from './MessageQuote';
+import {discussionDraft,preparePhoneQuestion,questionStillHere} from './phone-result-question';
 import {usePhoneOriginalReadingPlace} from './phone-original-reading-place';
 import './phone-returned-report.css';
 
@@ -64,12 +66,41 @@ export function PhoneReturnedReport({target:t,onClose}:{target:PhoneReportTarget
   const [expired,setExpired]=useState(false),[page,setPage]=useState<Page|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(true);
   const attempts=useRef(0),inFlight=useRef(false),digest=useRef(''),previous=useRef<number[]>([]),request=useRef(0);
   const original=t.phoneResult,valid=current(t),available=!expired&&valid;
+  const [quote,setQuote]=useState<MessageQuoteTarget|null>(null),[asking,setAsking]=useState(false),[questionError,setQuestionError]=useState('');
+  const source=useRef<PhoneReportTarget|null>(t),flight=useRef(false),replace=useRef(false),backToButton=useRef(false),button=useRef<HTMLButtonElement>(null);
+  const here=()=>source.current===t&&current(t);
+  const sameQuote=!!quote&&available&&questionStillHere(t,quote,here);
+  const draft=available&&page?.text.trim()?discussionDraft(t,here):null;
+  function leave(){source.current=null;onClose()}
+  function returnToReport(){backToButton.current=true;replace.current=false;setQuote(null)}
+  async function ask(){
+    if(flight.current||!available||!draft||!here())return;
+    flight.current=true;setAsking(true);setQuestionError('');
+    try{const q=await preparePhoneQuestion(t,here);
+      if(!here())return;
+      if(!questionStillHere(t,q,here))throw Error('原输入已变化，没有打开另一份草稿。');
+      replace.current=true;setQuote(q);
+    }catch(failure){if(here())setQuestionError(failure instanceof Error?failure.message:'未能打开原聊天的引用。')}
+    finally{flight.current=false;if(here())setAsking(false)}
+  }
+  function staged(q:MessageQuoteTarget){
+    if(!questionStillHere(t,q,here))return;
+    // A positive native stage receipt is required by MessageQuote. Do not send or reconstruct any text.
+    replace.current=true;leave();
+    requestAnimationFrame(()=>{
+      if(!questionStillHere(t,q,()=>current(t))||document.querySelector('[aria-modal="true"]:not([inert])'))return;
+      const editors=document.querySelectorAll<HTMLTextAreaElement>('.pw-main-workspace .pw-composer-row textarea[aria-label="工作输入"]:not(:disabled)');
+      const input=editors.length===1?editors[0]:null;
+      if(input?.getClientRects().length&&!input.closest('[inert],[hidden],[aria-hidden="true"]'))input.focus({preventScroll:true});
+    });
+  }
   const cancellationNote=page?.offset===0&&!page.more?cancelledPhoneSummaryNote(original,page.text):undefined;
   const reading=usePhoneOriginalReadingPlace(t,available,page?.offset,()=>current(t));
   const Sheet=t.readerWindow>0||t.noticeOrigin?Drawer.NestedRoot:Drawer.Root;
-  const close=useRef(onClose);close.current=onClose;
-  useEffect(()=>registerOverlayBack(()=>close.current()),[]);
-  useEffect(()=>{if(!valid){++attempts.current;inFlight.current=false;setPage(null);setExpired(true);}},[valid]);
+  const back=useRef(()=>{});back.current=()=>{if(sameQuote)returnToReport();else leave()};
+  useEffect(()=>registerOverlayBack(()=>back.current()),[]);
+  useEffect(()=>{if(quote&&!sameQuote){returnToReport();if(available)setQuestionError('原输入已切换，请先核对原聊天的草稿。');}},[quote,sameQuote,available]);
+  useEffect(()=>{if(!valid){source.current=null;++attempts.current;inFlight.current=false;setPage(null);setExpired(true);}},[valid]);
   async function read(offset:number,manual=true){
     if(inFlight.current||!current(t))return;
     if(manual)reading.leaving(offset);
@@ -94,20 +125,25 @@ export function PhoneReturnedReport({target:t,onClose}:{target:PhoneReportTarget
     finally{if(attempt===attempts.current){inFlight.current=false;setBusy(false);}}
   }
   useEffect(()=>{
-    const obscure=()=>{if(document.hidden){++attempts.current;setExpired(true);setPage(null);}};
+    source.current=t;
+    const obscure=()=>{if(document.hidden){source.current=null;++attempts.current;setExpired(true);setPage(null);}};
     document.addEventListener('visibilitychange',obscure);void read(0,false);
-    return()=>{document.removeEventListener('visibilitychange',obscure);++attempts.current;inFlight.current=false;};
+    return()=>{source.current=null;document.removeEventListener('visibilitychange',obscure);++attempts.current;inFlight.current=false;};
   },[t]);
-  return <Sheet open onOpenChange={open=>{if(!open)onClose();}}><Drawer.Portal><Drawer.Overlay className="pw-overlay"/>
-    <Drawer.Content className="pw-drawer" onCloseAutoFocus={e=>{e.preventDefault();if(current(t)&&t.returnFocus.isConnected&&(t.noticeOrigin?t.returnFocus.dataset.phoneResultReturn===t.noticeOrigin:
+  if(quote&&sameQuote)return <MessageQuote target={quote} phoneReceipt={original.summaryTruncated?'excerpt':'full'} onClose={returnToReport} onStaged={()=>staged(quote)}/>;
+  return <Sheet open onOpenChange={open=>{if(!open)leave();}}><Drawer.Portal><Drawer.Overlay className="pw-overlay"/>
+    <Drawer.Content className="pw-drawer" onOpenAutoFocus={e=>{if(backToButton.current&&button.current){e.preventDefault();backToButton.current=false;button.current.focus({preventScroll:true});}}}
+      onCloseAutoFocus={e=>{e.preventDefault();if(!replace.current&&current(t)&&t.returnFocus.isConnected&&(t.noticeOrigin?t.returnFocus.dataset.phoneResultReturn===t.noticeOrigin:
       (t.readerWindow>0?t.returnFocus.closest<HTMLElement>('[data-reader-id]')?.dataset.readerId:t.returnFocus.closest<HTMLElement>('[data-message-id]')?.dataset.messageId)===t.messageId))t.returnFocus.focus({preventScroll:true});}}>
       <div className="pw-drawer-handle"/><header className="pw-drawer-header"><div><Drawer.Title>这轮手机任务的原文</Drawer.Title>
         <Drawer.Description>第 {original.epoch} 轮 · {states[original.status]}。这里保留的是当时的文字总结，不会继续操作手机。</Drawer.Description></div>
-        <IconButton icon={IconClose} aria-label="返回原回执" onClick={onClose}/></header>
+        <IconButton icon={IconClose} aria-label="返回原回执" onClick={leave}/></header>
       <div className="pw-drawer-body">{!available?<p role="status">原回执或私人窗口已变化。请返回对话，从原回执重新打开。</p>:<>
         {busy&&<ShimmerText>正在核对这轮原文…</ShimmerText>}{error&&<p role="alert">{error}</p>}
         {page&&<>{page.finalScreen?<p className="pw-field-hint"><strong>收尾时的屏幕：</strong>{page.finalScreen}</p>:
           original.status==='needs_confirmation'||original.status==='completed'?<p className="pw-muted">这份原报告没有独立的终屏回执，不能据此确认当时的页面。</p>:null}
+          {(draft||asking)&&<div className="pw-action-row"><Button ref={button} variant="secondary" disabled={asking} onClick={()=>void ask()}>{asking?'正在核对原聊天…':'在聊天里追问这份回执'}</Button></div>}
+          {questionError&&<p role="status">{questionError}</p>}
           {cancellationNote&&<p className="pw-field-hint">{cancellationNote}</p>}
           {original.summaryChars===0?<p>这轮没有留下文字总结。</p>:<p ref={reading.body} tabIndex={-1} className="pw-phone-report-text" dir="auto">{page.text}</p>}
           {original.summaryChars>page.text.length&&<p className="pw-muted" role="status">原文位置 {page.offset+1}–{page.next} / {original.summaryChars}</p>}

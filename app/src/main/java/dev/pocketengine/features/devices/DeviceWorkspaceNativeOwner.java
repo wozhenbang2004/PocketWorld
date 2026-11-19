@@ -331,10 +331,18 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
     private final class Goals implements NativeDeviceWorkspaceHost.GoalOwner {
         public NativeDeviceWorkspaceHost.Availability reviewAvailability(String id) throws Exception {
             JSONObject task = tasks.get(id, false);
-            if (!TaskStoreDeviceTasks.deviceTask(task) || !"GOAL".equals(task.optString("deviceExecutionKind")) || !app.hasPendingDeviceGoal(id)) return NativeDeviceWorkspaceHost.Availability.blocked("当前没有待确认的设备目标");
+            if (!TaskStoreDeviceTasks.deviceTask(task) || !"GOAL".equals(task.optString("deviceExecutionKind"))) return NativeDeviceWorkspaceHost.Availability.blocked("当前没有待确认的设备目标");
             if (!task.optString("runId").isEmpty() || task.optBoolean("cancelRequested") || !task.optString("status").matches("queued|awaiting_user")) return NativeDeviceWorkspaceHost.Availability.blocked("原工作不在可接手状态，请查看原记录");
             JSONObject scope=task.optJSONObject("deviceExecutionScope");
             if(scope==null||scope.optLong("deadline")<=System.currentTimeMillis())return NativeDeviceWorkspaceHost.Availability.blocked("原接手时限已过或无法核对，不能靠重新选择模型开始");
+            String grantBlock=app.originalPickupGrantBlock(id);
+            if(!grantBlock.isEmpty())return NativeDeviceWorkspaceHost.Availability.blocked(switch(grantBlock){
+                case "revoked" -> "这次原授权已撤回，只能查看接纳记录";
+                case "changed" -> "发起设备或原授权已换代，不能沿用这份授权接手";
+                case "expired" -> "这次原授权已到期，不能再接手";
+                case "not_retained" -> "本机未保留这次原认证准入，不能从记录重建";
+                default -> "本机不能核对发起设备的原授权，未开放接手";
+            });
             boolean textOnly=app.pendingDeviceGoalUsesNoScreen(id);
             if(textOnly&&app.activePhoneRunCount()>0)return NativeDeviceWorkspaceHost.Availability.blocked("本机执行器正忙。文字任务不占屏幕，须等原执行释放后再接手。");
             if (!textOnly&&("background".equals(task.optString("executionMode")) ? !backgroundGoalCapacity() : app.activePhoneRunCount()>0)) return NativeDeviceWorkspaceHost.Availability.blocked("所选屏幕暂无可用运行位置，请先处理占用它的原任务");
@@ -412,6 +420,10 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
             DeviceIdentity.LocalIdentity local=existingIdentity();if(local==null)throw new SecurityException("无法核对这部接收手机的原身份");
             return tasks.deviceTasks().startedReceivedPhoneGoals(local.deviceId(),local.instanceId(),caller,operation);
         }
+        public JSONObject findBeforePickupDecision(String caller,String op,String query,boolean withdrawn)throws Exception{
+            DeviceIdentity.LocalIdentity local=existingIdentity();if(local==null)throw new SecurityException("无法核对本机收件身份");
+            return tasks.deviceTasks().findBeforePickupDecision(local.deviceId(),local.instanceId(),caller,op,query,withdrawn);
+        }
         public JSONObject findWaitingPhoneGoals(String caller,String op,String query)throws Exception{
             DeviceIdentity.LocalIdentity local=existingIdentity();if(local==null)throw new SecurityException("没有这部收件手机原来的身份");
             return addOriginalPickupWindows(tasks.deviceTasks().findWaitingPhoneGoals(local.deviceId(),local.instanceId(),caller,op,query));
@@ -429,7 +441,10 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
                         row.getString("sourceDeviceId"),row.getString("operationId"),row.getString("argumentsDigest"));
                 // The held deadline also includes the receiving device's original grant limit.
                 row.put("pickupRetained",held>0);
-                if(signed>0)row.put("pickupBy",held>0?Math.min(held,signed):signed);
+                if(signed>0){
+                    long until=held>0?Math.min(held,signed):signed,issued=row.optLong("pickupGrantEndsAt");
+                    row.put("pickupBy",issued>0?Math.min(until,issued):until);
+                }
             }
             return page;
         }

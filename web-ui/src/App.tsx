@@ -136,7 +136,7 @@ import {PhonePauseInstruction,isPrivateLocalPhone,interruptedPrivatePhone,Interr
 import {PhoneMainOwnerStep,mainPhoneStep} from './PhoneMainOwnerStep';
 import {PhoneServiceRecovery} from './PhoneServiceRecovery';
 import {privatePhoneSurface,phoneSurfaceLabel,sameDisplayedPause,type DisplayedPhonePause} from './private-phone-surface';
-import {ButlerPreparationEntries,ButlerPreparationDetail,type ButlerPreparationTarget} from './ButlerPreparations';
+import {ConversationPreparationAction,conversationPreparationKey,type ConversationPreparation,ButlerPreparationEntries,ButlerPreparationDetail,type ButlerPreparationTarget} from './ButlerPreparations';
 import {ownerWorkContinuationNote,ownerWorkContinuationReply,type WorkControlFeedback} from './owner-work-continuation';
 import {backgroundConversationWork,conversationActivityLabel,conversationInlineAttention,conversationTaskCompact,conversationWorkActionLabel,foregroundConversationTurn,messageReplyContext,messageTaskResult,ownerWorkIdentity,privateTaskConversationId,workIdentityKey,type ReplyContext,type TaskResult,type WorkIdentity} from './conversation-work';
 import './conversation-work.css';
@@ -1909,6 +1909,37 @@ export default function App(){
     run(action==='query'?'composer.query':action==='retry'?'composer.retry':'composer.returnPending',{clientMessageId:row.clientMessageId});
    }}/></div>;
  const preparationRefreshKey=JSON.stringify([preparationRevision,tasks.filter(task=>task.raw?.hasOwnerWorkPreparations).map(task=>[task.id,task.raw?.ownerWorkPreparationCount])]);
+ const [conversationPreparations,setConversationPreparations]=useState<{conversation:string;rows:ConversationPreparation[]}|null>(null);
+ const receiveConversationPreparations=useCallback((conversation:string,rows:ConversationPreparation[])=>{
+   if(bridge.getState().state.conversationId!==conversation)return;
+   setConversationPreparations({conversation,rows});
+ },[]);
+ const anchoredPreparations=new Map<number,ConversationPreparation[]>();
+ const placedProposalKeys=new Set<string>();
+ const conversation=String(state.conversationId||'');
+ if(ready&&route==='chat'&&conversationPreparations?.conversation===conversation&&can('butler.preparation.read')){
+   const eligible=new Map<string,number>();
+   for(const row of replyRows){
+     if(row.kind==='live'||row.message.role!=='assistant'||!row.message.id)continue;
+     const reply=savedReplyDetails[row.index]?.replyContext;
+     if(reply?.replyId)eligible.set(workIdentityKey(reply),row.index);
+   }
+   for(const item of conversationPreparations.rows){
+     const index=eligible.get(workIdentityKey({taskId:item.sourceTaskId,runId:item.sourceRunId,epoch:item.sourceEpoch}));
+     if(index===undefined)continue;
+     const matches=anchoredPreparations.get(index)||[];
+     anchoredPreparations.set(index,[...matches,item]);
+     placedProposalKeys.add(conversationPreparationKey(item));
+   }
+ }
+ const openConversationPreparation=(target:ButlerPreparationTarget,trigger:HTMLButtonElement)=>{
+   if(route==='chat'){
+     if(document.hidden||target.sourceConversationId!==conversation||bridge.getState().state.conversationId!==conversation||taskOpen||preparationTarget)return;
+     inlinePreparationOrigin.current={conversationId:conversation,top:scroll.current?.scrollTop||0,trigger};
+     stopFollowing();
+   }
+   setPreparationTarget(target);
+ };
  const preparationEntries=(conversationId:string,homeRows?:Task[])=>{
   const representedTaskIds=new Set<string>();
   if(!homeRows&&can('tasks.open')){
@@ -1917,15 +1948,14 @@ export default function App(){
    for(const id of representedPhoneTaskIds)representedTaskIds.add(id);
   }
   const representedHomeRuns=homeRows?new Set((can('tasks.open')?[...homeRows,...phoneRows.map(row=>row.task)]:[]).flatMap(task=>typeof task.raw?.runId==='string'&&task.raw.runId&&Number.isSafeInteger(task.raw.coordinatorEpoch)&&task.raw.coordinatorEpoch>0?[JSON.stringify([task.id,task.raw.runId,task.raw.coordinatorEpoch])]:[])):undefined;
-  return <ButlerPreparationEntries representedHomeRuns={representedHomeRuns} onPresenceChange={conversationId?undefined:setHomeHasPreparations} key={'preparations:'+conversationId} conversationId={conversationId} representedTaskIds={representedTaskIds} active={ready&&!taskOpen&&!preparationTarget} refreshKey={preparationRefreshKey} can={can} run={bridge.command} onOpen={(target,trigger)=>{
-   if(route==='chat'&&target.sourceConversationId===state.conversationId){
-    inlinePreparationOrigin.current={conversationId:target.sourceConversationId,top:scroll.current?.scrollTop||0,trigger};
-    stopFollowing();
-   }
-   setPreparationTarget(target);
-  }}/>;
+  return <ButlerPreparationEntries representedHomeRuns={representedHomeRuns} onPresenceChange={conversationId?undefined:setHomeHasPreparations} key={'preparations:'+conversationId}
+   conversationId={conversationId} representedTaskIds={representedTaskIds} active={ready&&!taskOpen&&!preparationTarget} refreshKey={preparationRefreshKey}
+   can={can} run={bridge.command} onOpen={openConversationPreparation}
+   onConversationRows={conversationId?receiveConversationPreparations:undefined} placedProposalKeys={conversationId?placedProposalKeys:undefined}/>;
  };
  const preparationInline=!!preparationTarget&&!taskOpen&&route==='chat'&&preparationTarget.sourceConversationId===state.conversationId;
+ const preparationInlineAnchor=preparationInline&&preparationTarget?[...anchoredPreparations].find(([,rows])=>
+   rows.some(row=>conversationPreparationKey(row)===conversationPreparationKey(preparationTarget)))?.[0]:undefined;
  useLayoutEffect(()=>{
   const origin=inlinePreparationOrigin.current;
   if(preparationTarget||!origin)return;
@@ -1938,7 +1968,10 @@ export default function App(){
   key={preparationTarget.sourceTaskId+':'+preparationTarget.proposalId}
   target={preparationTarget} projects={projects} can={can} run={bridge.command} onClose={closePreparation}
   inline={preparationInline} registerBack={registerPreparationBack} registerBeforeLeave={registerPreparationBeforeLeave}
-  onOpenTask={id=>openTask(id)} onConversation={!preparationInline&&can('conversation.select')&&!state.chatSubmitting?selectConversation:undefined}
+  onOpenTask={(id, original)=>openTask(id,'overview',false,undefined,undefined,original)}
+  onOpenPhoneRun={original=>openTask(original.taskId,'overview',false,undefined,undefined,original)}
+  onOpenPhoneReport={setMessageOriginTarget}
+  onConversation={!preparationInline&&can('conversation.select')&&!state.chatSubmitting?selectConversation:undefined}
   onSetup={can('setup.read')?kind=>{void openSetup(kind==='phone'?'phone':'tools')}:undefined}/>;
  const chatNavigation=!desktopNavigation&&<ChatNavigationMenu title={messages.length?currentTitle:'与管家对话'} navigationTrigger={<IconButton ref={chatBackGlass} icon={IconArrowLeft} className="pw-chat-glass-trigger" aria-label="返回管家" onClick={()=>navigate('butler')}/>} onHome={()=>navigate('butler')} isOpen={chatMenuOpen} onOpenChange={setChatMenuOpen} triggerRef={chatMenuTrigger} submitting={!!state.chatSubmitting} unread={can('remoteInbox.state')?Number(state.remoteInbox?.unread||0):0} onNewConversation={can('conversation.new')?()=>{void navigate('butler',()=>run('conversation.new'))}:undefined} onConversations={trigger=>{navigationReturnFocus.current=trigger;showWorkSearch()}} onNavigation={()=>{navigationReturnFocus.current=chatMenuTrigger.current;setCommandOpen(false);setWorkOpen(true)}} onOrganize={currentConversation&&can('conversation.organization.read')?()=>setOrganizationTarget(currentConversation.id):undefined} onMemory={canEditMemoryHere?()=>setConversationMemoryOpen(true):undefined} onNotifications={can('remoteInbox.state')?()=>{void openNotifications()}:undefined} onSettings={()=>navigate('settings')}/>;
  const chatPage=<main className={`pw-chat-workspace${ready&&!messages.length&&!foregroundTurn?' pw-chat-empty':''}`}>
@@ -1977,6 +2010,11 @@ export default function App(){
        onOriginal={readPhone?setMessageOriginTarget:undefined} onRun={can('tasks.open')?(entry,t)=>openTask(t.phoneResult.taskId,entry,false,undefined,undefined,{runId:t.phoneResult.runId,epoch:t.phoneResult.epoch}):undefined}>
        <CitedAnswer continuous text={m.content} onCopyCode={copyWithLocalFeedback} sources={refs as any} onOpenSource={()=>openSource(m)}/>
      </PhoneMessageReturn>:m.role==='assistant'?<CitedAnswer continuous text={m.content} onCopyCode={copyWithLocalFeedback} sources={refs as any} onOpenSource={()=>openSource(m)}/>:m.content?<div className="pw-user-text">{m.content}</div>:null}
+     {!!anchoredPreparations.get(index)?.length&&<div className="pw-chat-preparation-actions" aria-label="这次交办的下一步">
+       {anchoredPreparations.get(index)!.map(item=><ConversationPreparationAction key={conversationPreparationKey(item)} row={item}
+          disabled={!!preparationTarget||taskOpen} onOpen={openConversationPreparation}/>)}
+     </div>}
+     {preparationInlineAnchor===index&&preparationDetail}
      {asArray<Json>(m.attachments).length>0&&<div className="pw-message-files">{asArray<Json>(m.attachments).map(file=><Button key={file.id||file.name} variant="secondary" size="small" leadingIcon={IconFile} disabled={!can('attachments.open')||!file.sha256||!!state.attachmentOpens?.[`${file.id}:${file.sha256}`]?.checking} onClick={()=>run('attachments.open',{messageId:m.id,id:file.id,sha256:file.sha256})}>{file.name||'原附件'}</Button>)}</div>}
      {m.submission&&<Receipt receipt={m.submission}/>}
      <MotionFeedback className="pw-message-footer" identity={`${id}:${m.submission?.status||'saved'}:${refs.map(source=>source.id).join(',')}`} initial={continued}>
@@ -2022,7 +2060,7 @@ export default function App(){
    })}</div>}
 
    {state.conversationId&&<div hidden={preparationInline}>{preparationEntries(String(state.conversationId))}</div>}
-   {preparationInline&&preparationDetail}
+   {preparationInline&&preparationInlineAnchor===undefined&&preparationDetail}
    <ConversationWork pinnedTask={chatAttention&&conversationWork.find(task=>task.id===chatAttention.id)} onTeamDecision={can('teams.attention')&&can('teams.readAttention')?openConversationTeamDecision:undefined} identity={String(state.conversationId||'')} onEmptyFocus={()=>workspace.current?.querySelector<HTMLTextAreaElement>('.pw-composer-row textarea:not(:disabled)')?.focus({preventScroll:true})} tasks={conversationWorkRows} canOpen={can('tasks.open')} onOpen={task=>openTask(task.id,attention(task)&&can('tasks.review')?'review':'overview')}/>
   </div></div>
   {composerRegion}</main>;

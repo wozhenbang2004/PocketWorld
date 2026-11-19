@@ -1,6 +1,7 @@
 import {useEffect,useState} from 'react';
 import {Accordion,AccordionItem,Button,CheckboxField} from './forms-library';
 import {PressButton} from './library';
+import {originalTeamApprovalFile,TeamApprovalFileComparison} from './TeamApprovalFileComparison';
 import './task-decisions.css';
 
 type Json=Record<string,any>;
@@ -22,7 +23,8 @@ export function TaskApproval({approval,executionScope={},disabled,onDecision}:{a
  useEffect(()=>setScopeReviewed(false),[id,executionOriginal.planRevision,executionOriginal.planArtifactRef,executionOriginal.planHash,executionOriginal.scopeRevision]);
  const canApprove=view.canApprove===true&&planMatches&&(!execution||executionMatches)&&(!(team||live||execution)||scopeReviewed);
  const decide=(approved:boolean)=>onDecision({approvalId:id,approved,...(approved&&(team||live||execution)?{scopeReviewed}:{}),...(approved&&team?{planRef:original.planRef,planHash:original.planHash}:{}),...(approved&&execution?{planRevision:executionOriginal.planRevision,planArtifactRef:executionOriginal.planArtifactRef,planHash:executionOriginal.planHash}:{})});
- const argumentFacts=Object.entries(args).filter(([key,value])=>key in labels&&['string','number','boolean'].includes(typeof value));
+ const originalFile=originalTeamApprovalFile(approval);
+ const argumentFacts=Object.entries(args).filter(([key,value])=>key in labels&&(!originalFile||key!=='path')&&['string','number','boolean'].includes(typeof value));
  return <section className="pw-approval-item pw-task-decision" aria-label="本次操作授权">
   <header className="pw-decision-heading">
    <span className="pw-decision-eyebrow">{execution?'审阅原任务计划':team?'确认工作计划':live?'确认服务范围':'需要你的确认'}</span>
@@ -30,6 +32,7 @@ export function TaskApproval({approval,executionScope={},disabled,onDecision}:{a
    {approval.reason&&<p className="pw-decision-context">{String(approval.reason)}</p>}
    {approval.description&&<p className="pw-decision-context">{String(approval.description)}</p>}
   </header>
+  {originalFile&&<TeamApprovalFileComparison key={originalFile.proof} source={originalFile} disabled={disabled}/>}
   {(view.semanticDescription||view.programRisk)&&<div className="pw-decision-notice">
    <h5>{view.programRisk?'本机程序风险':'操作影响'}</h5>
    {view.semanticDescription&&<p className="pw-approval-copy">{String(view.semanticDescription)}</p>}

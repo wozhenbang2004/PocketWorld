@@ -6,6 +6,7 @@ import time
 import device_identity
 import device_pairing as pairing
 import device_protocol as protocol
+import windows_pair_identity as pair_identity
 from desktop_owner_entry import _dialog
 from desktop_sessions import WindowsDesktopHealth
 from platform_backend import PlatformError
@@ -17,7 +18,7 @@ LABELS = {
     "workspace.project.export": "导出项目文件", "command.run": "运行已配置命令",
     "desktop.observe": "观察桌面", "desktop.act": "操作桌面", "desktop.control": "桌面控制",
     "desktop.viewer": "桌面观看与人工接管", "operation.get": "查原操作", "operation.cancel": "取消原操作",
-    "tool.invoke": "调用获准工具", "artifact.describe": "查原制品描述", "artifact.readChunk": "分块读取原制品",
+    "device.describe": "核对该设备身份与自己的授权回执", "tool.invoke": "调用获准工具", "artifact.describe": "查原制品描述", "artifact.readChunk": "分块读取原制品",
 }
 
 
@@ -56,6 +57,7 @@ def original(receiver, peer):
     # Never render the invitation, DER, signature or a workspace path from today's configuration.
     grant = completion["grantReceipt"]["body"]["grant"]
     for resource in grant["resources"]:
+        if pair_identity.exact(grant) and resource == pair_identity.BINDING: continue
         kind = {"workspace": "workspace-v1", "desktop": "desktop-v2"}.get(resource.get("kind"))
         if not kind: raise PlatformError("Unrecognized original Windows resource")
         protocol.validate_resource_binding(kind, resource)
@@ -90,6 +92,9 @@ def details(grant, commit):
              "对方实例：" + commit["joinerInstanceId"], "对方指纹：" + commit["joinerFingerprint"],
              "原授权：" + grant["grantId"], "签发范围摘要：" + commit["grantDigest"]]
     for r in grant["resources"]:
+        if pair_identity.exact(grant) and r == pair_identity.BINDING:
+            lines.append("仅配对：只核对本机身份和这份回执，不开放工作区或桌面。")
+            continue
         if r["kind"] == "workspace":
             lines.append("工作区 " + r["environmentId"] + " · 原绑定 " + r["binding"])
         else:

@@ -1,5 +1,13 @@
 # Login → model → message → tools: reliability contract
 
+## Continue the selected work, not the latest run with the same task ID
+
+An owner-linked work retains `(taskId, runId, epoch)` in the original private composer input. `owner_work_get` accepts `runId` and `epoch` only together. On the native read, an admitted original goal or an input actually materialized in this reader run fixes that task's target even when the model omits the tuple. A changed or conflicting round fails without inheriting another round’s sources or reading its result body. A plain historical browse is not an owner selection. No directory scan, new grant, model request, automatic resume or second knowledge store is added.
+
+For this exact read, use the existing work order and its original goal sources. A supplement’s text is offered only if its native checkpoint belongs to the selected round; queued, withdrawn or different-round supplements are not new instructions. Same-round operations are observations, not proof that the overall goal is complete. A retained result is identified by its native delivery ID and digest; page it under that ID. A different-round delivery is not a fallback. No published result means no result body, and an attachment, file path or draft mentioned in prose does not establish a reusable file. Original result sources and the selected round are rechecked before the model can reuse the evidence.
+
+Manual owner acceptance: associate the original work with a follow-up such as “按上次要求接着做”. Check the original contract, a same-round incorporated amendment, an unincorporated amendment without its text and the exact retained result. Advance the original work before its first read, between pages, and before model dispatch; no other round’s inputs or result may silently replace it. In a new round with no delivery, the previous round's result must not appear as this round's work. No material or action is sent merely by opening the composer.
+
 ## Private preview · original work and its files
 
 The work overview reads saved results from the existing attachment inventory
@@ -248,3 +256,5 @@ Evidence for the integrated source, with scopes kept separate:
 The fixed main-chain selection now contains 83 exact test classes. Its final preflight reports `not_run`: the pinned `android-all-instrumented-15-robolectric-13954326-i7.jar` is unavailable. Full Android host execution, SQLite upgrade/cold-recovery and cancellation journeys, full Kotlin/React type checks, APK packaging and device acceptance remain unverified. Existing read-range and diagnostic tests from the prior checkpoint remain separate evidence, not substitutes for those gates.
 
 Next acceptance action: in the complete locked host environment, run the fixed main-chain suite, including the original MCP canonical-settlement, large-receipt migration, before/after-result cancellation and native task-review tests; then exercise real conversation → tool → stored result → reopen on the current Android build. Keep this PR draft until those integration gaps are resolved. No CI dispatch or merge is part of this continuation.
+
+**Exact-input source retirement.** For a selected work round, a pending, withdrawn or other-checkpoint supplement contributes at most to the omitted count. The source reader and its pre-request validator do not open that original message, query its routing receipt or retain its body pin. The native task document is still the mailbox of record. Paging, counts and source dependencies describe the original goal and this round’s actual checkpointed supplements only; the unresolved-effect stop remains task-wide. Changing or retiring a selected source invalidates the visible receipt. A selected delivery index contains same-round status/identities only, never private audit envelopes; no file bytes or attachment permissions follow a locator.

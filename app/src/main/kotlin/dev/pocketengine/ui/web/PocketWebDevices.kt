@@ -303,22 +303,25 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                 else -> error("仅能读取本机较早或较新的一批接纳记录")
             }
         }else{
-            if(searching)fields(args,"searchText")else fields(args,"queue")
+            if(searching)fields(args,"searchText","queue")else fields(args,"queue")
             search=if(searching)text(args,"searchText",128).trim().also{require(it.isNotEmpty())}else ""
-            val lane=if(!searching && args.has("queue"))text(args,"queue") else "pending"
+            val lane=if(args.has("queue"))text(args,"queue") else "pending"
+            require(!searching || lane in setOf("pending","declined","withdrawn")) { "这里只在所选原目标目录中查找" }
             require(lane in setOf("pending","results","started","declined","failed","withdrawn"));withdrawn=lane=="withdrawn";results=lane=="results";started=lane=="started";declined=lane=="declined";failed=lane=="failed"
             old=null;after="" to "";previous=emptyList()
         }
         val here=latest.getJSONObject("local");val id=here.getString("deviceId");val instance=here.getString("instanceId")
-        var seek=after
+        var seek=after;var unverified=0
         fun part():JSONObject{
             current(original,epoch);if(old!=null)require(waitingPage===old)
-            val page=if(searching)original.findWaitingPhoneGoals(seek.first,seek.second,search)else if(withdrawn)original.withdrawnReceivedPhoneGoals(seek.first,seek.second) else if(failed)original.failedReceivedPhoneGoals(seek.first,seek.second) else if(declined)original.declinedReceivedPhoneGoals(seek.first,seek.second) else if(started)original.startedReceivedPhoneGoals(seek.first,seek.second) else original.waitingPhoneGoals(seek.first,seek.second,results)
+            val page=if(searching&&(withdrawn||declined))original.findBeforePickupDecision(seek.first,seek.second,search,withdrawn)
+                else if(searching)original.findWaitingPhoneGoals(seek.first,seek.second,search)else if(withdrawn)original.withdrawnReceivedPhoneGoals(seek.first,seek.second) else if(failed)original.failedReceivedPhoneGoals(seek.first,seek.second) else if(declined)original.declinedReceivedPhoneGoals(seek.first,seek.second) else if(started)original.startedReceivedPhoneGoals(seek.first,seek.second) else original.waitingPhoneGoals(seek.first,seek.second,results)
             require(page.opt("readOnly")==true && page.opt("waitingOnly")==(!started&&!declined&&!failed&&!withdrawn) && page.optBoolean("withdrawnOnly")==withdrawn && page.optBoolean("failedOnly")==failed && page.optBoolean("startedOnly")==started && page.optBoolean("declinedOnly")==declined && page.opt("resultOnly")==results && page.opt("localDeviceId")==id && page.opt("localInstanceId")==instance)
+            val limited=page.getInt("limitedCandidates");require(limited in 0..(if(declined||withdrawn)6 else 24));unverified+=limited
             return page
         }
         var page=part();var count=1
-        // At most three 24-envelope windows per explicit search click; never query a partner or loop until a match.
+        // At most three windows per click: 6 originals for closed decisions, 24 for pending. No peer query.
         while(searching && count<3 && page.getJSONArray("rows").length()==0 && page.getBoolean("hasMore")){
             val nextSeek=page.getString("lastParent") to page.getString("lastOperation")
             require(nextSeek!=seek && nextSeek.first.isNotEmpty() && nextSeek.second.isNotEmpty());seek=nextSeek;page=part();count++
@@ -338,6 +341,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
             row.optJSONObject("sourceIdentity")?.let{item.put("sourceIdentity",it)}
             if(!results&&!started&&!declined&&!withdrawn&&!failed){
                 item.put("pickupRetained",row.getBoolean("pickupRetained"))
+                if(row.has("pickupGrantBlock"))item.put("pickupGrantBlock",row.getString("pickupGrantBlock").also { require(it in setOf("revoked","changed","expired","unverifiable")) })
                 if(row.has("pickupBy"))item.put("pickupBy",row.getLong("pickupBy"))
             }
             if(searching && row.optBoolean("matchedLater"))item.put("matchedLater",true)
@@ -353,7 +357,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                     item.put("candidateState",state)
                 }
             } })
-        return JSONObject().put("kind","waitingPhoneGoals").put("searchText",search.takeIf{it.isNotEmpty()}).put("withdrawnOnly",withdrawn).put("failedOnly",failed).put("declinedOnly",declined).put("startedOnly",started).put("resultOnly",results).put("limitedCandidates",page.getInt("limitedCandidates")).put("readOnly",true).put("waitingHandle",index.handle).put("localDeviceId",id)
+        return JSONObject().put("kind","waitingPhoneGoals").put("searchText",search.takeIf{it.isNotEmpty()}).put("withdrawnOnly",withdrawn).put("failedOnly",failed).put("declinedOnly",declined).put("startedOnly",started).put("resultOnly",results).put("limitedCandidates",unverified).put("readOnly",true).put("waitingHandle",index.handle).put("localDeviceId",id)
             .put("localInstanceId",instance).put("capturedAt",System.currentTimeMillis()).put("rows",display).put("hasMore",next!=null).put("canReadNewer",previous.isNotEmpty())
     }
     @Synchronized private fun archiveFor(handle: String, original: Host.Window, epoch: Long): PhoneArchive {

@@ -25,13 +25,15 @@ public final class ProjectOwnerWorkflows {
     public JSONObject openProject(JSONObject input)throws Exception{return local.openProjectForOwner(input.getString("projectId"));}
     /** Read-only private choices. A team, Skill or unpublished Git copy is not
      * silently adopted as the owner's ordinary development workspace. */
-    public JSONObject inspectForOwner(String project)throws Exception {
-        ProjectBuildPlan.identity(project);JSONArray available=new JSONArray(),rows=local.snapshot().getJSONArray("checkouts");
+    public JSONObject inspectForOwner(String project)throws Exception {return inspectForOwner(project,true);}
+    public JSONObject inspectForOwner(String project,boolean includeRuntime)throws Exception {
+        ProjectBuildPlan.identity(project);JSONArray available=new JSONArray(),rows=local.ownerCheckoutRecords();
         for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(!project.equals(row.optString("projectId"))||!ordinaryCheckout(row))continue;
             available.put(new JSONObject().put("checkoutId",row.getString("id")).put("projectId",project).put("name",row.optString("name")).put("createdAt",row.optLong("createdAt"))
                 .put("taskPackageSource",row.optJSONObject("sourceImport")!=null&&ProjectTaskSourceOrigin.KIND.equals(row.getJSONObject("sourceImport").opt("sourceKind")))
                 .put("hostSource",row.optJSONObject("sourceImport")!=null&&"host_saved_snapshot".equals(row.getJSONObject("sourceImport").opt("sourceKind"))));}
-        return new JSONObject().put("projectId",project).put("checkouts",available).put("runtime",local.projectRuntimeForHost("managed_process_v1")).put("executionAuthorized",false);
+        JSONObject picked=new JSONObject().put("projectId",project).put("checkouts",available).put("executionAuthorized",false);
+        return includeRuntime?picked.put("runtime",local.projectRuntimeForHost("managed_process_v1")):picked;
     }
     private static boolean ordinaryCheckout(JSONObject value){return !value.has("teamProjectCopy")&&!value.has("skillExecutionCopy")&&!value.has("isolatedGit")&&!value.has("nativeGitImportPending");}
     public JSONObject sourceForOwner(String project,String checkout)throws Exception {return sourceForOwner(project,checkout,false);}
@@ -182,10 +184,15 @@ public final class ProjectOwnerWorkflows {
         String checkout=ProjectBuildPlan.identity(ownerInput.getString("checkoutId")),project=ProjectBuildPlan.identity(ownerInput.getString("projectId"));
         JSONObject contract=selectedDeliveryContract(ownerInput);
         String digest=ownerInput.getString("expectedSourceDigest"),client=ownerInput.getString("clientMessageId"),goal=contract.getString("goal");
-        String runtime=ownerInput.getString("runtime");local.projectRuntimeForHost(runtime);
+        String runtime=ownerInput.getString("runtime");if(!ownerInput.has("draftOnly"))local.projectRuntimeForHost(runtime);
         if(!digest.matches("[a-f0-9]{64}")||!client.matches("[a-fA-F0-9-]{36}")||goal.codePoints().allMatch(Character::isWhitespace)||goal.length()>12000)throw new IllegalArgumentException("请选择真实项目、运行位置和1至12000字目标");
         JSONObject context=new JSONObject().put("format","pocketworld.development-context.v1").put("projectId",project).put("checkoutId",checkout).put("runtime",runtime)
                 .put("initialSourceDigest",digest).put("clientMessageId",client).put("filesAreUntrusted",true).put("authorityAdded",false);
+        if(ownerInput.has("draftOnly")){
+            if(ownerInput.opt("draftOnly")!=Boolean.TRUE||butlerPreparation.get()==null||ownerStartFence.get()==null||
+                !"managed_process_v1".equals(runtime))throw new SecurityException("独立改稿只接受机主刚确认的原管家项目审阅");
+            context.put("draftOnly",true);
+        }
         if(butlerPreparation.get()==null)context.put("deliveryContract",contract);
         JSONObject prior=null;try{prior=assistant.handle("getSubmission",new JSONObject().put("clientMessageId",client));}catch(IllegalArgumentException absent){}
         if(prior!=null){verifyAcknowledgement(prior,context);return prior;}
@@ -206,6 +213,7 @@ public final class ProjectOwnerWorkflows {
         private NativeStart(ProjectOwnerWorkflows issuer,JSONObject context,dev.pocketengine.features.memory.ProjectMemoryAccess.Consent memory){this.issuer=issuer;this.context=context.toString();this.memory=memory;}
     }
     public JSONObject start(JSONObject ownerInput,dev.pocketengine.features.memory.ProjectMemoryAccess.Consent memory)throws Exception{
+        if(ownerInput.has("draftOnly"))throw new SecurityException("独立改稿只走已确认的原生私人管家交办，不合并记忆授权");
         java.util.Objects.requireNonNull(memory);String checkout=ProjectBuildPlan.identity(ownerInput.getString("checkoutId")),project=ProjectBuildPlan.identity(ownerInput.getString("projectId"));
         JSONObject contract=selectedDeliveryContract(ownerInput);
         String digest=ownerInput.getString("expectedSourceDigest"),client=ownerInput.getString("clientMessageId"),goal=contract.getString("goal"),runtime=ownerInput.getString("runtime");local.projectRuntimeForHost(runtime);

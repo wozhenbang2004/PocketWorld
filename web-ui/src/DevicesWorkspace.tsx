@@ -517,13 +517,15 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
         p.certificateFingerprint===original.fingerprint && p.authorizationEpoch===original.authorizationEpoch);
     return known ? name(known) : '来源设备 '+id.slice(-6);
   };
+  const waitingFindLane=waitingPage?.withdrawnOnly?'withdrawn':waitingPage?.declinedOnly?'declined':'pending';
+  const waitingFindLabel=waitingFindLane==='withdrawn'?'发起设备在启动前撤回':waitingFindLane==='declined'?'本机不接手':'待接手';
   const readWaiting = (direction?: 'older' | 'newer', wanted:'pending'|'started'|'results'|'declined'|'failed'|'withdrawn'='pending',query='') => {
     if (busy || selectedPeer.current || direction && !waitingPage) return;
     if(localInbox){closeOwnText();setClosedInbox(null);setClosedDraft('');void run('devices.discard',{closedHandle:localInbox.closedHandle}).catch(()=>{});}
     const lane=direction?(waitingPage!.withdrawnOnly?'withdrawn':waitingPage!.failedOnly?'failed':waitingPage!.declinedOnly?'declined':waitingPage!.startedOnly?'started':waitingPage!.resultOnly?'results':'pending'):wanted;setWaitingBlock(null);
     const search=direction?(waitingPage!.searchText||''):query.trim();
-    if(search&&(lane!=='pending'||!supported('devices.findWaitingPhoneGoals')))return;
-    void invoke(search?'devices.findWaitingPhoneGoals':'devices.readWaitingPhoneGoals',direction?{waitingHandle:waitingPage!.waitingHandle,direction}:search?{searchText:search}:lane!=='pending'?{queue:lane}:{},value=>{
+    if(search&&(!['pending','declined','withdrawn'].includes(lane)||!supported('devices.findWaitingPhoneGoals')))return;
+    void invoke(search?'devices.findWaitingPhoneGoals':'devices.readWaitingPhoneGoals',direction?{waitingHandle:waitingPage!.waitingHandle,direction}:{...(search?{searchText:search}:{}),...(lane!=='pending'?{queue:lane}:{})},value=>{
       if (!selectedPeer.current) {
         const page = waitingPhoneGoalPage(value,local,search);
         if ((page.withdrawnOnly===true)!==(lane==='withdrawn')||(page.failedOnly===true)!==(lane==='failed')||(page.resultOnly === true)!==(lane==='results')||(page.startedOnly===true)!==(lane==='started')||(page.declinedOnly===true)!==(lane==='declined')) throw new Error('原设备工作页已变化，未切换到其他记录。');
@@ -981,16 +983,16 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
                   {localInbox.searchText?'打开匹配段附近':row.hasText?'重看本机原文':'查看当时的核对'}</Button>}</article>)}
               <div className="pw-form-actions">{localInbox.canReadNewer&&<Button variant="ghost" disabled={busy} onClick={()=>readClosedInbox('newer')}>较新记录</Button>}
                 {localInbox.hasMore&&<Button variant="secondary" disabled={busy} onClick={()=>readClosedInbox('older')}>{localInbox.searchText?'查找较早记录':'较早记录'}</Button>}</div></>}
-            {waitingPage && <>{!waitingPage.resultOnly&&!waitingPage.startedOnly&&!waitingPage.declinedOnly&&!waitingPage.withdrawnOnly&&!waitingPage.failedOnly&&supported('devices.findWaitingPhoneGoals')&&
-              <PendingGoalFinder key={JSON.stringify([waitingPage.localDeviceId,waitingPage.localInstanceId])} applied={waitingPage.searchText||''} busy={busy}
-                find={query=>readWaiting(undefined,'pending',query)}/>}
-              {waitingPage.searchText&&<p role="status">只在本机待接手的原目标中查找「{waitingPage.searchText}」。不查附件、结果或对端。</p>}
+            {waitingPage && <>{!waitingPage.resultOnly&&!waitingPage.startedOnly&&!waitingPage.failedOnly&&supported('devices.findWaitingPhoneGoals')&&
+              <PendingGoalFinder key={JSON.stringify([waitingPage.localDeviceId,waitingPage.localInstanceId,waitingFindLane])} shelf={waitingFindLabel} applied={waitingPage.searchText||''} busy={busy}
+                find={query=>readWaiting(undefined,waitingFindLane,query)}/>}
+              {waitingPage.searchText&&<p role="status">只在「{waitingFindLabel}」的原目标里查找「{waitingPage.searchText}」。不查附件、结果或对端。</p>}
               <p role="status">{time(waitingPage.capturedAt)} 读取。{waitingPage.withdrawnOnly?'只列原发起设备的撤回已在本机登记、而且原工作未开始的记录。不是断网、机主不接手或运行中的停止请求。':waitingPage.failedOnly?'只列本机原任务和同一轮执行都登记为失败的记录，按原接纳时间排列；不读取对方状态或成果。':waitingPage.declinedOnly?'这里只列本机明确选择不接手、且凭原记录核对为从未启动的目标。按原接纳时间排列，不是对方已读回执。':waitingPage.startedOnly?'这是本机原执行留下的状态，不代表此刻仍在运行或一定能恢复。':waitingPage.resultOnly ? '这里列本机留存的未核对候选。仍待机主决定的可以核对；已经中断、失败或取消的只可本机查看。目录不显示或交回摘要。' : '接纳不等于已同意使用模型；过期的目标只能按原记录处理。'}</p>
               {waitingPage.resultOnly && waitingPage.limitedCandidates > 0 && <p>另有 {waitingPage.limitedCandidates} 项旧记录超过本次读取上限，无法判断是否待核对。可从对应设备的「它交给我的」单项查看。</p>}
               {waitingPage.withdrawnOnly&&waitingPage.limitedCandidates>0&&<p>另有 {waitingPage.limitedCandidates} 条候选记录不能核对为启动前撤回，未列入。</p>}
               {waitingPage.declinedOnly&&waitingPage.limitedCandidates>0&&<p>另有 {waitingPage.limitedCandidates} 条候选不能核对为本机决定，未列入。</p>}
               {(waitingPage.startedOnly||waitingPage.failedOnly)&&waitingPage.limitedCandidates>0&&<p>另有 {waitingPage.limitedCandidates} 项旧记录缺少可核对的执行信息，未列入。</p>}
-              {!waitingPage.rows.length && waitingPage.searchText && <p>这段待接手记录没有可核对的匹配。{waitingPage.hasMore?'还有较早的记录可继续查。':'已读到这批原记录末尾。'}</p>}
+              {!waitingPage.rows.length && waitingPage.searchText && <p>这段「{waitingFindLabel}」记录没有可核对的匹配。{waitingPage.hasMore?'还有较早的记录可继续查。':'已读到这批原记录末尾。'}</p>}
               {!waitingPage.rows.length && !waitingPage.searchText && <p>这一批没有可核对的{waitingPage.withdrawnOnly?'启动前撤回记录':waitingPage.failedOnly?'本机失败原执行':waitingPage.declinedOnly?'本机不接手记录':waitingPage.startedOnly?'正在处理、暂停或中断的原执行':waitingPage.resultOnly ? '待核对或只可在本机查看的候选成果' : '待接手目标'}。{waitingPage.hasMore && '可以再查较早记录。'}</p>}
               {rows(waitingPage.rows).map(row => {const blocked=waitingBlock?.waitingHandle===waitingPage.waitingHandle&&waitingBlock?.taskId===row.taskId&&waitingBlock?.operationId===row.operationId?waitingBlock:null;
                 const cannotPickUp=pickupUnavailable(row,now);
@@ -1027,7 +1029,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
                   {!waitingPage.declinedOnly&&<Button variant="ghost" disabled={busy} onClick={()=>readWaiting(undefined,'declined')}>本机不接手的记录</Button>}
                   {!waitingPage.withdrawnOnly&&<Button variant="ghost" disabled={busy} onClick={()=>readWaiting(undefined,'withdrawn')}>发起设备撤回的记录</Button>}</>}
                 {waitingPage.canReadNewer && <Button variant="ghost" disabled={busy} onClick={() => readWaiting('newer')}>较新记录</Button>}
-                {waitingPage.hasMore && <Button variant="secondary" disabled={busy} onClick={() => readWaiting('older')}>{waitingPage.searchText?'在较早的待接手中继续找':'查较早记录'}</Button>}</div>
+                {waitingPage.hasMore && <Button variant="secondary" disabled={busy} onClick={() => readWaiting('older')}>{waitingPage.searchText?'在较早的记录中继续找':'查较早记录'}</Button>}</div>
             </>}
           </section>}
           {originalWork}

@@ -106,6 +106,9 @@ public final class TeamsModule implements EngineModule {
     public TeamOwnerFileReading readOwnerFrozenFiles(String runId,dev.pocketengine.core.RunControl reader)throws Exception{
         reader.check();return requireWriteHost().readOwnerFrozenFiles(coordinator.retainedOwnerReading(runId),reader);
     }
+    public JSONObject readOwnerFileApprovalPage(String id,String run,int epoch,String approval,String proof,String expectedDiff,int offset,dev.pocketengine.core.RunControl reader)throws Exception{
+        return requireWriteHost().readOwnerFileApprovalPage(id,run,epoch,approval,proof,expectedDiff,offset,reader);
+    }
     public JSONObject ownerTextDecision(TeamOwnerFileReading evidence,dev.pocketengine.core.RunControl reader)throws Exception{return requireWriteHost().ownerTextDecision(evidence,reader);}
     public JSONObject projectFirstReviewOrigin(JSONObject source,String team,dev.pocketengine.core.RunControl reader)throws Exception{return requireWriteHost().projectFirstReviewOrigin(source,team,reader);}
     public TaskStoreTeamWriteHost.TextOutputApproval reviewFirstProjectTextApproval(TeamOwnerFileReading evidence)throws Exception{return requireWriteHost().reviewFirstProjectTextApproval(evidence);}

@@ -22,6 +22,7 @@ import uuid
 
 import device_identity
 import windows_read_pairing as read_pairing
+import windows_pair_identity as pair_identity
 import device_protocol as protocol
 from device_companion import CompanionDeviceReceiver
 from device_pairing import PairingCandidate
@@ -123,12 +124,13 @@ class NativePairingConfig:
 
 
 class PairingOwnerController:
-    def __init__(self, manager, local_identity, config_store):
+    def __init__(self, manager, local_identity, config_store, *, identity_choice=False):
         if not isinstance(local_identity, device_identity.LocalIdentity):
             raise TypeError("Load the existing native local identity first")
         self.manager, self.identity, self.config_store = manager, local_identity, config_store
         self.receiver = CompanionDeviceReceiver(manager, local_identity, native_management_only=True)
         self.coordinator = self.receiver.pairing
+        self.identity_choice = identity_choice
         self.lock = threading.RLock()
         self.invitation = self.pending = self.review = None
         self.completed = False
@@ -168,7 +170,7 @@ class PairingOwnerController:
             return True  # cannot establish separation; omit, never offer a broader scope
 
     def scope_options(self):
-        options = []
+        options = [pair_identity.option()] if self.identity_choice and pair_identity.fenced(self.config_store.value) else []
         for capability in self.receiver.describe()["capabilities"]:
             if capability["version"] == "workspace-v1" and self._workspace_contains_private_state(capability["resources"][0]):
                 continue
@@ -208,20 +210,24 @@ class PairingOwnerController:
         self.config_store.current()
         if not isinstance(candidate, PairingCandidate) or self.invitation is None or candidate.invite_id != self.invitation["inviteId"]:
             raise PlatformError("Current native verified invitation candidate is required")
-        protocol.integer(tool_budget, "toolBudget", 1, 400); protocol.integer(minutes, "minutes", 1, 60)
+        protocol.integer(minutes, "minutes", 1, 60)
         if type(history_read) is not bool or not isinstance(selected_ids, list) or not selected_ids or len(set(selected_ids)) != len(selected_ids):
             raise PlatformError("Explicit current native scope selections are required")
         available = {item["id"]: item for item in self.scope_options()}
         if any(key not in available for key in selected_ids):
             raise PlatformError("Selected native scope disappeared; review current capabilities")
         selected = [available[key] for key in selected_ids]
+        identity_only = pair_identity.alone(selected_ids)
+        if identity_only and (not self.identity_choice or history_read or self.receiver.trust.peer(candidate.device_id) is not None):
+            raise PlatformError("仅配对只用于这台新设备，不授历史，也不调整已有伙伴。")
+        protocol.integer(tool_budget, "toolBudget", 0 if identity_only else 1, 0 if identity_only else 400)
         narrow = read_pairing.narrow(selected_ids)
         tools = sorted({tool["toolName"] for item in selected for tool in item["toolDeclarations"]})
         resources = [binding for item in selected for binding in item["resources"]]
         now = self.manager.now()
-        grant = {"grantId": "owner-" + uuid.uuid4().hex, "peerDeviceId": candidate.device_id, "localDeviceId": self.identity.device_id,
+        grant = {"grantId": pair_identity.grant_id(identity_only, self.identity_choice), "peerDeviceId": candidate.device_id, "localDeviceId": self.identity.device_id,
                  "authorizationEpoch": 1, "issuedAt": now, "expiresAt": now + minutes * 60000,
-                 "capabilities": list(read_pairing.METHODS) if narrow else ["tool.invoke", "operation.get", "operation.cancel", "artifact.describe", "artifact.readChunk"],
+                 "capabilities": ["device.describe"] if identity_only else list(read_pairing.METHODS) if narrow else ["tool.invoke", "operation.get", "operation.cancel", "artifact.describe", "artifact.readChunk"],
                  "toolNames": tools, "resources": resources, "allowedOrigins": [candidate.device_id], "allowDelegation": False,
                  "maxDelegationDepth": 0, "toolBudget": tool_budget, "modelBudget": 0}
         if "desktop" in selected_ids:
@@ -229,12 +235,13 @@ class PairingOwnerController:
         if history_read:
             grant["historyRead"] = {"expiresAt": now + 86400000, "methods": ["operation.get"] if narrow else ["operation.get", "artifact.describe", "artifact.readChunk"]}
         read_pairing.guard(selected, grant, history_read)
+        pair_identity.guard(selected, grant)
         if len(protocol.canonical_bytes(grant)) > 8192:
             raise PlatformError("Select fewer exact scopes; the complete owner grant must fit its original reviewed bound")
         record = {"fingerprints": candidate.display(), "grant": grant, "selectedCapabilities": selected,
                   "workspacePaths": {item["id"]: self.manager._environment(item["resources"][0]["environmentId"])["root"] for item in selected if item["version"] == "workspace-v1"},
                   "endpoint": self.endpoint, "enableDesktop": "desktop" in selected_ids}
-        summary = ((read_pairing.summary(record) if narrow else "仅下列资源和工具；电脑不运行第二Agent/Goal，不需要Codex，模型额度为0。\r\n"
+        summary = ((pair_identity.summary(grant) if identity_only else read_pairing.summary(record) if narrow else "仅下列资源和工具；电脑不运行第二Agent/Goal，不需要Codex，模型额度为0。\r\n"
                    "主屏desktop授权覆盖当前交互会话的所有窗口，不是文件沙箱；命令也不是OS沙箱。\r\n")
                    + ("本次桌面授权包含手机实时查看电脑画面，以及人工鼠标和键盘接管；交还控制权后，AI必须重新观察再操作。\r\n" if "desktop.viewer" in grant["capabilities"] else "")
                    + "这不会恢复任何旧任务。完整指纹、地址、额度和期限：\r\n" + json.dumps(record, ensure_ascii=False, indent=2))
@@ -256,6 +263,9 @@ class PairingOwnerController:
         if any(item["id"] not in current or protocol.canonical_bytes(item) != protocol.canonical_bytes(current[item["id"]]) for item in checked["selectedCapabilities"]):
             raise PlatformError("Native resource changed during owner review; no authority granted")
         read_pairing.guard(checked["selectedCapabilities"], checked["grant"], "historyRead" in checked["grant"])
+        pair_identity.guard(checked["selectedCapabilities"], checked["grant"])
+        if pair_identity.alone([s["id"] for s in checked["selectedCapabilities"]]) and self.receiver.trust.peer(review.candidate.device_id) is not None:
+            raise PlatformError("对方已是现有伙伴，没有以首次配对替换原授权。")
         pending = self.coordinator.confirm_candidate_locally(self.identity, review.candidate, True, self.manager.now(), reviewed_owner_grant=checked["grant"])
         self.review, self.pending = review, pending
         return pending
@@ -522,7 +532,8 @@ def run_native_pairing(config_path, *, installed=None, launch_config=None, ident
     controller = host = None
     try:
         config_store = NativePairingConfig(manager, path, raw, current_installation=installation_current)
-        controller = PairingOwnerController(manager, local, config_store)
+        controller = PairingOwnerController(manager, local, config_store,
+            identity_choice=bool(getattr(sys, "frozen", False) and pair_identity.offer_allowed(installed, value, local)))
         host = PairingLanHost(controller)
         installed_owner = installed if getattr(sys, "frozen", False) else None
         start = show_pairing_window(controller, host, offer_local_receipts=installed_owner is not None, installed_owner=installed_owner)

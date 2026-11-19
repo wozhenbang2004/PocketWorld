@@ -14,6 +14,7 @@ public final class OwnerWorkTask {
     public static final String RESULT_HANDLING_FORMAT = "pocketworld.owner-result-handling.v1";
     public static final String CONTRACT_FORMAT = "pocketworld.owner-work-contract.v1";
     public static final String CONTEXT_FORMAT = "pocketworld.owner-work-context.v1";
+    static final String SELECTED_INPUT_SCOPE = "original_goal_and_selected_round_checkpointed_followups_only";
     static final int CONTEXT_INPUT_LIMIT = 128;
     static final int CONTEXT_PAGE_INPUT_LIMIT = 8;
     public static final int TAKEOVER_TOOL_LIMIT = 3;
@@ -46,6 +47,11 @@ public final class OwnerWorkTask {
         JSONObject reference = new JSONObject();
         for (String key : new String[]{"taskId", "conversationId", "runId", "epoch", "contextRevision", "contextDigest"})
             reference.put(key, context.get(key));
+        // A selected projection must never be revalidated with the broad mailbox reader.
+        if (context.has("selectedRoundInputs") || SELECTED_INPUT_SCOPE.equals(context.opt("inputScope"))) {
+            if (context.opt("selectedRoundInputs") != Boolean.TRUE) throw new SecurityException("所选轮次缺少原生读取范围");
+            reference.put("selectedRoundInputs", true);
+        }
         return reference;
     }
 
@@ -57,6 +63,7 @@ public final class OwnerWorkTask {
         if(original.has("sourceContextDigest")||cleaned==null)throw new SecurityException("需要本次原生工作上下文，不能再次认证派生回执");
         JSONObject visible=new JSONObject(cleaned.toString());
         for(String field:new String[]{"taskId","conversationId","runId","epoch","contextRevision"})visible.put(field,reference.get(field));
+        visible.remove("selectedRoundInputs");if(reference.has("selectedRoundInputs"))visible.put("selectedRoundInputs",true);
         visible.put("format",CONTEXT_FORMAT).put("available",true).remove("contextDigest");visible.remove("sourceContextDigest");
         // A cursor is a bounded locator, not source prose. Preserve it only after checking
         // that it names this exact native source revision and an actual input position.

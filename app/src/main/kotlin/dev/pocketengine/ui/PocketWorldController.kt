@@ -2640,6 +2640,15 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         return dev.pocketengine.media.voice.input.VoiceDraftInput.Authority { check(!closed&&voiceForeground&&captured==voiceContextEpoch.get()&&!activity.isFinishing&&!activity.isDestroyed) { "原生语音输入窗口已变化，请重新核对" } }
     }
     fun voiceInputModeChanged() { voiceContextEpoch.incrementAndGet();if(voiceInput.active())stopListening();invalidateQuickPanelVoice() }
+    /** Return from an original receipt to idle text input only. Unlike a manual input-mode change,
+     * this path must never cancel audio or discard an outstanding voice draft. */
+    internal fun switchIdleReceiptInput(changeMode: () -> Unit) {
+        val voice = voiceInput.snapshot()
+        check(!state.listening && quickPanelVoiceSession == null && quickPanelVoice == null &&
+            listOf("active","leaseHeld","resourceReleaseUnknown","reviewAvailable","staged").none { voice.optBoolean(it) }) { "请先处理原听写；没有切换输入" }
+        changeMode()
+        voiceContextEpoch.incrementAndGet(); chatViewEpoch++
+    }
     fun voiceInputTypeChanged(phone:Boolean) { voiceInputModeChanged();chatViewEpoch++;voiceInput.inputChanged(voiceTarget(phone)) }
     private fun voiceInputViewChanged() { voiceInput.inputChanged(voiceTarget(voiceInput.snapshot().optJSONObject("target")?.optBoolean("phoneInput") ?: false)) }
     fun startListening() { startSystemVoiceInput(false) }

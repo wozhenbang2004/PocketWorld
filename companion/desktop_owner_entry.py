@@ -321,7 +321,7 @@ def open_installed_desk():
             workspace, phone_receipts, phone_work = None, False, False
             if action == "InitializeDevicesOnly":
                 if _dialog("只准备这台电脑的设备身份？", "建立此安装的私有身份和本机凭据；不登记任何工作文件夹。"
-                           "\n本次不联网、不配对、不开桌面。以后可在原服务停止时另选文件夹。",
+                           "\n本次不联网、不配对、不开桌面。以后可另选文件夹。此安装的设备服务需要支持按伙伴限定披露的版本，请勿作为旧版连接配置使用。",
                            [("yes", "确认只准备设备")]) != "yes": continue
             if action == "Initialize":
                 workspace = _folder()

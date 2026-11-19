@@ -109,7 +109,7 @@ internal class PocketWebTaskActions(
                     }
                 }
                 try {
-                    if (pendingCapabilityApprovals(captured).any(PocketWebApprovals::needsOriginalPlan)) {
+                    if (pendingCapabilityApprovals(captured).any { PocketWebApprovals.needsOriginalPlan(it)||it.optString("tool")=="team_integrate_file" }) {
                         controller.runEcosystemControlWork(Runnable {
                             val result = runCatching { PocketWebApprovals.read(captured, controller) }
                                 .onFailure { RuntimeDiagnostics.event("diagnostics", "failed", "TASK_REVIEW_PLAN_READ_FAILED", null, it) }

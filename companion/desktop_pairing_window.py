@@ -7,6 +7,7 @@ from desktop_owner_confirmation import confirm_local_pairing, confirm_local_pair
 from desktop_sessions import WindowsDesktopHealth
 from platform_backend import PlatformError
 import windows_read_pairing as read_pairing
+import windows_pair_identity as pair_identity
 from windows_pairing_return import READY, window_class
 from windows_owner_surface import OwnerSurface, OWNER_STYLE, USE_DEFAULT, columns
 
@@ -49,6 +50,7 @@ def show_pairing_window(controller, host, *, offer_local_receipts=False, install
     controls, choices = {}, []
     extra_options, extra_selected = [], set()
     candidate, start_bridge, chosen_address = None, False, None
+    saved_budget = None
 
     def text(control, maximum=128):
         value = ctypes.create_unicode_buffer(maximum + 1)
@@ -73,6 +75,7 @@ def show_pairing_window(controller, host, *, offer_local_receipts=False, install
         return value
 
     def scope_label(option):
+        if option["id"] == pair_identity.OPTION: return "仅配对 · 手机只核对电脑身份（单独选择，不授桌面）"
         if option["version"] == "workspace-v1":
             path = controller.manager._environment(option["resources"][0]["environmentId"])["root"]
             label = "仅列目录、读小文本（独选）" if option["id"].startswith(read_pairing.PREFIX) else "工作区已配置的全部工具"
@@ -89,6 +92,24 @@ def show_pairing_window(controller, host, *, offer_local_receipts=False, install
     def selected_scopes():
         selected = [item["id"] for item, control in choices if user.SendMessageW(control, 0xF0, 0, 0) == 1]
         return selected + [item["id"] for item in extra_options if item["id"] in extra_selected]
+
+    def review_choices(ids):
+        read_pairing.narrow(ids)
+        limited = pair_identity.alone(ids)
+        if limited and user.SendMessageW(controls["history"], 0xF0, 0, 0) == 1:
+            raise PlatformError("仅配对不能开放历史；请先取消原结果延长读取。")
+        return limited
+
+    def budget_for_selection():
+        nonlocal saved_budget
+        limited = pair_identity.alone(selected_scopes())
+        if limited and saved_budget is None:
+            saved_budget = text(controls["budget"], 3)
+            user.SetWindowTextW(controls["budget"], "0")
+            user.EnableWindow(controls["budget"], False); user.EnableWindow(controls["history"], False)
+        elif not limited and saved_budget is not None:
+            user.SetWindowTextW(controls["budget"], saved_budget); saved_budget = None
+            user.EnableWindow(controls["budget"], True); user.EnableWindow(controls["history"], True)
 
     def freeze_scopes():
         for _, checkbox in choices:
@@ -140,10 +161,11 @@ def show_pairing_window(controller, host, *, offer_local_receipts=False, install
                     checkbox = choices[action - 200][1]
                     if lparam == checkbox and user.SendMessageW(checkbox, 0xF0, 0, 0) == 1:
                         try:
-                            read_pairing.narrow(selected_scopes())
+                            review_choices(selected_scopes())
                         except PlatformError:
                             user.SendMessageW(checkbox, 0xF1, 0, 0)  # undo only this new check; keep prior choices
                             raise
+                    if lparam == checkbox: budget_for_selection()
                 elif action == 110 and (wparam >> 16) & 0xffff == 0x300:  # EN_CHANGE: manual edit restores original explicit path.
                     chosen_address = None
                 elif action == 109 and host.thread is None:
@@ -204,8 +226,9 @@ def show_pairing_window(controller, host, *, offer_local_receipts=False, install
                         if key in extra_selected:
                             extra_selected.remove(key)
                         else:
-                            read_pairing.narrow(selected_scopes() + [key])
+                            review_choices(selected_scopes() + [key])
                             extra_selected.add(key)
+                        budget_for_selection()
                         user.SetWindowTextW(controls["more_scopes"], f"其他范围（另有 {len(extra_options)} 项，已选 {len(extra_selected)}）")
                 elif action == 107:
                     if host.thread is not None:
@@ -314,8 +337,8 @@ def show_pairing_window(controller, host, *, offer_local_receipts=False, install
         controls["issued"] = control("BUTTON", "查看已签授权（只读）", width - 189, 110, 160, 27, 111, 0x10000)
         # The management-only receiver enumerates workspaces before the desktop.
         # Keep actual desktop scope reachable on a laptop without preselecting it.
-        options = sorted(controller.scope_options(), key=lambda item: 0 if item["id"] == "desktop" else
-                         1 if item["id"].startswith(read_pairing.PREFIX) else 2)
+        options = sorted(controller.scope_options(), key=lambda item: 0 if item["id"] == pair_identity.OPTION else
+                         1 if item["id"] == "desktop" else 2 if item["id"].startswith(read_pairing.PREFIX) else 3)
         visible = min(8, max(1, (height - (445 if compact else 570)) // 27))
         if compact: visible = min(visible, 6)
         for index, option in enumerate(options[:visible]):
@@ -329,7 +352,7 @@ def show_pairing_window(controller, host, *, offer_local_receipts=False, install
             field_y += 30
         control("STATIC", "工具总额度", 16, field_y, 85, 24)
         controls["budget"] = control("EDIT", "20", 105, field_y - 2, 54, 27, extra=0x10000)
-        control("STATIC", "执行授权分钟", 175, field_y, 102, 24)
+        control("STATIC", "本次授权分钟", 175, field_y, 102, 24)
         controls["minutes"] = control("EDIT", "60", 281, field_y - 2, 54, 27, extra=0x10000)
         controls["history"] = control("BUTTON", "另允许24小时查原结果（见核对范围）", 355, field_y - 2, width - 371, 27, 300, 0x3 | 0x10000)
         # Preserve BOTH complete scrollable readouts; in a short viewport they share a row.

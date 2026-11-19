@@ -108,13 +108,16 @@ export function samePhoneGoalArchive(value: DeviceData | null, peer: DeviceData 
 const startedPhases=new Set(['preparing','running','pausing','paused','stopping','verifying','awaiting_user','waiting_user','awaiting_approval','waiting_approval','waiting_permission','interrupted','reconciling','reconciliation_required','blocked_unknown']);
 export function pickupUnavailable(row:DeviceData,now:number){
   if(row.waitingState==='interrupted_before_start')return '原工作在执行前中断，不能从这里重新开始。';
-  if(positiveInteger(row.pickupBy)&&row.pickupBy<=now)return '这份原派单已到接手时限，不能再启动。';
+  if(row.pickupGrantBlock==='revoked')return '本机已撤回这份原授权或配对，不能再接手。';
+  if(row.pickupGrantBlock==='changed')return '原设备或授权已换代，不能沿用这份原派单开始。';
+  if(row.pickupGrantBlock==='unverifiable')return '本机不能核对这次原授权。可重读本机记录，不会重新申请。';
+  if(row.pickupGrantBlock==='expired'||positiveInteger(row.pickupBy)&&row.pickupBy<=now)return '这份原派单已到接手时限，不能再启动。';
   if(row.pickupRetained===false)return '本机只留有原派单，没有当时的接手授权，不会重建。';
   return '';
 }
 export function waitingPhoneGoalPage(value: unknown, local: DeviceData, search='') {
   if (!object(value) || value.kind !== 'waitingPhoneGoals' || value.readOnly !== true
-    || (value.searchText ?? '')!==search || search!==''&&(Array.from(search).length>64||value.withdrawnOnly!==false||value.failedOnly!==false||value.declinedOnly!==false||value.startedOnly!==false||value.resultOnly!==false)
+    || (value.searchText ?? '')!==search || search!==''&&(Array.from(search).length>64||typeof value.withdrawnOnly!=='boolean'||typeof value.declinedOnly!=='boolean'||value.failedOnly!==false||value.startedOnly!==false||value.resultOnly!==false)
     || value.withdrawnOnly!==undefined&&typeof value.withdrawnOnly!=='boolean'||value.withdrawnOnly===true&&(value.declinedOnly!==false||value.failedOnly!==false||value.startedOnly!==false||value.resultOnly!==false||value.rows?.length>6)
     || value.failedOnly!==undefined&&typeof value.failedOnly!=='boolean'||value.failedOnly===true&&(value.declinedOnly!==false||value.startedOnly!==false||value.resultOnly!==false)
     || value.declinedOnly!==undefined&&typeof value.declinedOnly!=='boolean'||value.declinedOnly===true&&(value.startedOnly!==false||value.resultOnly!==false||value.rows?.length>6)
@@ -122,7 +125,7 @@ export function waitingPhoneGoalPage(value: unknown, local: DeviceData, search='
     || (value.resultOnly === true || value.startedOnly===true || value.declinedOnly===true || value.failedOnly===true || value.withdrawnOnly===true) && (!Number.isSafeInteger(value.limitedCandidates) || value.limitedCandidates < 0 || value.limitedCandidates > 24) || !identity(local.deviceId) || !identity(local.instanceId)
     || value.localDeviceId !== local.deviceId || value.localInstanceId !== local.instanceId || !identity(value.waitingHandle) || !positiveInteger(value.capturedAt)
     || typeof value.hasMore !== 'boolean' || typeof value.canReadNewer !== 'boolean' || !Array.isArray(value.rows) || value.rows.length > 24
-    || !value.rows.every((r: unknown) => object(r) && (r.matchedLater===undefined||!!search&&r.matchedLater===true) && identity(r.taskId) && identity(r.operationId) && typeof r.sourceDeviceId === 'string'
+    || !value.rows.every((r: unknown) => object(r) && (r.pickupGrantBlock===undefined || ['not_started','interrupted_before_start'].includes(r.waitingState) && ['revoked','changed','expired','unverifiable'].includes(r.pickupGrantBlock)) && (r.matchedLater===undefined||!!search&&r.matchedLater===true) && identity(r.taskId) && identity(r.operationId) && typeof r.sourceDeviceId === 'string'
       && /^pw1_[a-f0-9]{64}$/.test(r.sourceDeviceId) && (value.withdrawnOnly===true
         ? r.waitingState==='withdrawn_before_start' && r.notDispatched===true && positiveInteger(r.withdrawnAt) && r.declinedAt===undefined && r.runId===undefined && r.epoch===undefined
         : value.declinedOnly===true

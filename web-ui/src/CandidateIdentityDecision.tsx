@@ -1,10 +1,11 @@
+import { assertionTimes, assertionTime, displayAssertionTime, type AssertionTime } from './memory-assertion-time';
 type Row = Record<string, any>;
 type End = { mode: string; label: string; type: string; id?: string; previous?: string; donor?: string; donorRevision?: number; donorRole?: string };
-type Decision = { subject: End; target: End | null; kind: string; predicate: string; object: string; condition: string; dates: [string, number][]; removesQuote: boolean; removesAssertedTime: boolean };
+type TimeReview = { label: string; before: AssertionTime; after: AssertionTime; same: boolean };
+type Decision = { subject: End; target: End | null; kind: string; predicate: string; object: string; condition: string; dates: TimeReview[]; removesQuote: boolean; removesAssertedTime: boolean };
 const text = (v: any): v is string => typeof v === 'string' && !!v.trim();
 const rev = (v: any): v is number => Number.isSafeInteger(v) && v > 0;
 const kinds: Record<string, string> = { inferred: '推测', told: '转述', imagined: '计划或设想，未证实发生' };
-const times = [['eventTime', '发生或计划时间'], ['validFrom', '生效时间'], ['validTo', '结束时间'], ['reviewAfter', '下次核对时间']] as const;
 
 function end(choice: Row, proof: Row, before: Row, role: 'subject' | 'object'): End | null {
   if (!choice || !proof || proof.mode !== choice.mode) return null;
@@ -29,8 +30,19 @@ export function reviewedCandidateIdentity(v: Row | null): Decision | null {
   const subject = end(a.subject, proof.subject, b, 'subject');
   const target = a.relationTarget === null ? null : end(a.relationTarget, proof.relationTarget, b, 'object');
   if (!subject || (a.relationTarget === null ? proof.relationTarget !== null : !target || target.label !== a.object)) return null;
-  const dates: [string, number][] = [];
-  for (const [key, label] of times) { const n = a[key]; if (n === null) continue; if (!Number.isSafeInteger(n) || n < 0 || n > 8.64e15) return null; dates.push([label, n]); }
+  const dates: TimeReview[] = [];
+  for (const [key, label] of assertionTimes) {
+    if (!Object.hasOwn(a, key)) return null;
+    const raw = a[key], before = assertionTime(b.assertion?.[key]);
+    if (raw && typeof raw === 'object' && !Array.isArray(raw) && Object.keys(raw).length === 1 && raw.keepOriginalOutOfRange === true) {
+      if (before.kind !== 'outside') return null;
+      dates.push({ label, before, after: before, same: true }); continue;
+    }
+    const after = assertionTime(raw);
+    if (raw !== null && after.kind !== 'date') return null;
+    if (before.kind === 'unknown' && after.kind === 'unknown') continue;
+    dates.push({ label, before, after, same: before.kind === 'date' && after.kind === 'date' && before.ms === after.ms });
+  }
   return { subject, target, kind: kinds[a.kind], predicate: a.predicate, object: a.object, condition: a.condition, dates,
     removesAssertedTime: typeof b.assertion?.assertedAt === 'number', removesQuote: b.assertion?.kind === 'user_said' || (Array.isArray(b.assertion?.evidenceSpans) && b.assertion.evidenceSpans.length > 0) };
 }
@@ -50,6 +62,8 @@ export function CandidateIdentityDecision({ decision }: { decision: Decision | n
   return <><Endpoint heading="这条说的是谁" value={decision.subject} />
     {decision.target ? <Endpoint heading="明确关联到" value={decision.target} /> : <p className="pw-muted">只保留描述文字，不关联到另一个人物或实体。</p>}
     <section className="pw-memory-review-version"><h3>核对后的陈述</h3><p>{decision.kind} · {decision.predicate} · {decision.object}</p>
-      {decision.condition && <p>适用条件：{decision.condition}</p>}{decision.dates.map(([label, n]) => <p key={label}>{label}：{new Date(n).toLocaleString('zh-CN')}</p>)}</section>
+      {decision.condition && <p>适用条件：{decision.condition}</p>}{decision.dates.map(t => <div key={t.label}><strong>{t.label}</strong>{t.same
+        ? <p className="pw-muted">保持不变：{t.before.kind === 'outside' ? '原数值由本机原样保留，不换算日期。' : displayAssertionTime(t.after)}</p>
+        : <p>原来：{displayAssertionTime(t.before)}<br />本次：{t.after.kind === 'unknown' ? '清除这项时间，改为未知' : displayAssertionTime(t.after)}</p>}</div>)}</section>
     <p className="pw-muted">{decision.removesQuote ? '旧的逐字引文不作为修改后陈述的原话证明；原来源不删除。' : '这次核对不签发原话证明。'}{decision.removesAssertedTime && '旧的陈述时刻也不沿用。'}只更新待审候选，不会采用为正式记忆。</p></>;
 }

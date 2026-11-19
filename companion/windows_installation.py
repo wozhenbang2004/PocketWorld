@@ -229,7 +229,10 @@ class WindowsInstalledContext:
                       "environments": [] if devices_only else [{"id": "computer", "label": "我的电脑", "kind": "local", "root": root, "workers": ["command"], "commands": {}, "writeAllowed": False}]}
             if devices_only:
                 from windows_first_workspace import MARKER, SETUP, _encoded, new_marker
-                config[MARKER] = new_marker(self, local_identity)
+                from windows_pair_identity import KEY, PROFILE
+                # Older native services reject unknown device settings before starting any paired listener.
+                config["devices"][KEY] = PROFILE
+                config[MARKER] = {**new_marker(self, local_identity), KEY: PROFILE}
                 self.backend.create_private_snapshot(self.state, SETUP, _encoded(config[MARKER]), maximum=2048)
             self.backend.create_private_snapshot(self.state, "companion.json", (json.dumps(config, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
         return {"initialized": True, "deviceId": local_identity.device_id, "instanceId": local_identity.instance_id,

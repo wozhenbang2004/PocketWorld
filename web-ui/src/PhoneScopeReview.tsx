@@ -57,9 +57,9 @@ function PrivateReviewDetails({shown,live,capacityFact,past=false}:{shown:PhoneR
 }
 
 // Exit retains the original description only. Re-checking prepares a review, never a task.
-export function PhoneScopeReview({shown,live,pending,unknown,onStart,onClose,onCheck,onSettings,onPlace,error}:{
+export function PhoneScopeReview({shown,live,pending,unknown,onStart,onClose,onCheck,onSettings,onPlace,error,terms}:{
   shown:PhoneReviewDisplay;live:Live|null;pending:boolean;unknown:boolean;onStart?:()=>void;onClose:()=>void;
-  onCheck?:(handle:string)=>void;onSettings?:(handle:string,target:Remedy)=>void;onPlace?:(handle:string,place:ReviewedPlace)=>void;error?:string;
+  onCheck?:(handle:string)=>void;onSettings?:(handle:string,target:Remedy)=>void;onPlace?:(handle:string,place:ReviewedPlace)=>void;error?:string;terms?:{constraints?:string;deliverable?:string;completionCriteria?:string};
 }){
   const conditions=shown.conditions,handle=live?.reviewHandle,epoch=live?.documentEpoch;
   const [invalid,setInvalid]=useState(''),invalidNow=useRef('');
@@ -118,5 +118,10 @@ export function PhoneScopeReview({shown,live,pending,unknown,onStart,onClose,onC
     </div>
     <PrivateReviewDetails shown={shown} live={live}
       capacityFact={!expired&&(!hasNotification||hasSlot)?capacity?.message||(hasSlot?'本次核对时有可用位置。':capacity?.state==='blocked'?'这个执行位置暂不可用。':'暂不能核实这个执行位置是否空闲。'):undefined}/>
+    {terms&&<dl className="pw-phone-review-limits">
+      {terms.constraints&&<div><dt>本次限制</dt><dd dir="auto">{terms.constraints}</dd></div>}
+      {terms.deliverable&&<div><dt>要带回什么</dt><dd dir="auto">{terms.deliverable}</dd></div>}
+      {terms.completionCriteria&&<div><dt>怎样核对完成</dt><dd dir="auto">{terms.completionCriteria}</dd></div>}
+    </dl>}
   </PermissionReview></div>;
 }

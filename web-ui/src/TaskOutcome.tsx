@@ -10,6 +10,7 @@ import { OwnerWorkReport } from './OwnerWorkReport';
 import { bridge } from './bridge';
 import { projectPackageTaskIdentity, type PackagePreviewTarget } from './project-preview';
 import { TaskResultFiles, type TaskResultFile } from './TaskResultFiles';
+import { ProjectDraftDifference } from './ProjectDraftDifference';
 import { ProjectPackageFiles, canReadProjectPackageFiles } from './ProjectPackageFiles';
 import { PrepareTaskPackageProject } from './PrepareTaskPackageProject';
 import {TaskPhoneFinalScreen} from './PhoneFinalScreenReceipt';
@@ -185,6 +186,8 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
       {outcome.partial && <MotionFeedback identity={`${owner}:partial`} className="pw-outcome-limit" role="status">部分结果记录尚未载入。</MotionFeedback>}
     </div>;
   return <section ref={root} className="pw-task-outcome pw-task-reading" aria-label="任务结果依据" data-result-source={outcome.source}>
+    {record.raw?.developmentContext?.draftOnly===true&&typeof record.raw.projectEditDraftId==='string'&&/^[a-f0-9]{64}$/.test(record.raw.projectEditDraftId)&&<ProjectDraftDifference active={active} id={record.id} project={record.raw.developmentContext.projectId}
+      checkout={record.raw.developmentContext.checkoutId} pin={record.raw.projectEditDraftId}/>}
     {active&&<TaskPhoneFinalScreen task={record}/>}
     {settlementTitle && <div className="pw-outcome-settlement" role="status">
       <h3>{settlementTitle}</h3>

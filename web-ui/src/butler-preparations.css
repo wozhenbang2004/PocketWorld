@@ -72,3 +72,23 @@
  .pw-preparation-start { align-items:stretch; flex-direction:column; }
  .pw-preparation-start > button { width:100%; }
 }
+
+/* Next step belongs to the actual turn, not a tool list or a second task feed. */
+.pw-chat-preparation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pw-gap-related);
+  margin-block: var(--pw-gap-related);
+  min-width: 0;
+}
+.pw-chat-preparation-actions .pw-chat-preparation-action {
+  min-height: var(--pw-control-target);
+  max-width: 100%;
+  height: auto;
+  padding: 9px 12px;
+  white-space: normal;
+  text-align: start;
+}
+.pw-chat-preparation-action > span > span { display: grid; flex: 1; gap: 2px; min-width: 0; }
+.pw-chat-preparation-action strong { font-weight: 600; color: var(--pw-ink); }
+.pw-chat-preparation-action small { color: var(--pw-copy); font: 400 12px/1.4 var(--pw-font); }

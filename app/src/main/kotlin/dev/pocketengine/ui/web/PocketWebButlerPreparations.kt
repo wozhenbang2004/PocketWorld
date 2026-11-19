@@ -18,9 +18,10 @@ internal class PocketWebButlerPreparations(
 ) {
     private data class Page(val handle: String, val source: String, val proposal: String, val digest: String,
         val window: PocketWebWindowTicket, val generation: Long)
-    private data class PhoneReview(val handle: String, val page: Page, val native: EngineApplication.ConversationPhoneStartReview, val expires: Long)
+    private data class PhoneReview(val handle: String, val page: Page, val native: EngineApplication.ConversationPhoneStartReview, val expires: Long, val conditions: JSONObject)
     private data class ProjectReview(val handle: String, val page: Page, val native: TaskStore.OwnerWorkPreparation,
         val input: String, val modelRevision: Long, val expires: Long)
+    private val preflight = PrivatePhoneStartConditions(controller)
     private val main = Handler(Looper.getMainLooper())
     private val host get() = controller.nativeButlerHost()
     private val presentation = controller.butlerPreparationPresentationForWeb()
@@ -35,7 +36,7 @@ internal class PocketWebButlerPreparations(
         private val persistence = Any()
         private val unsavedDrafts = mutableSetOf<String>()
         val COMMANDS = setOf("butler.capabilities", "butler.preparations.list", "butler.preparation.read",
-            "butler.preparation.phone.review", "butler.preparation.phone.start", "butler.preparation.project.choices",
+            "butler.preparation.phone.review", "butler.preparation.phone.settings", "butler.preparation.phone.start", "butler.preparation.project.choices",
             "butler.preparation.project.prepare", "butler.preparation.project.queryCopy", "butler.preparation.project.review",
             "butler.preparation.project.start", "butler.preparation.draft", "butler.preparation.query", "butler.preparation.dismiss", "butler.preparation.close")
     }
@@ -105,11 +106,35 @@ internal class PocketWebButlerPreparations(
         val isPhone = input.getString("kind") == "phone"
         val same = result != null && if (isPhone) result.optString("requestId") == input.getString("requestId") &&
             result.optString("conversationId") == input.getString("conversationId") else result.optString("clientMessageId") == input.getString("clientMessageId")
-        val accepted = same && !result!!.optString("taskId").isBlank() && (if (isPhone) result.optBoolean("accepted") else result.optString("status") in setOf("accepted", "queued", "consumed"))
+        val accepted = same && !result!!.optString("taskId").isBlank() && (if (isPhone) result.optBoolean("accepted") && result.optString("taskId") == input.getString("requestId") else result.optString("status") in setOf("accepted", "queued", "consumed"))
+        if (isPhone && input.optString("status") == "accepted" && input.optString("taskId") == input.optString("requestId")) {
+            val pinned = input.optString("admissionState") in setOf("admitted", "service_denied", "component_unconfirmed")
+            if (!accepted || input.optInt("epoch", -1) == 1 &&
+                (result.optInt("epoch", -1) != 1 || result.optString("runId") != input.optString("runId") ||
+                    pinned && result.optString("admissionState") != input.optString("admissionState"))) {
+                // A missing read or a contradictory stamp must not replace an already observed, immutable first admission.
+                return receipt.put("latestReadUnconfirmed", true)
+            }
+        }
+        receipt.remove("latestReadUnconfirmed")
         val rejected = same && result!!.optString("taskId").isBlank() && (result.optBoolean("notAdmitted") || isPhone && result.optString("status") == "rejected")
         receipt.put("status", if (accepted) "accepted" else if (rejected) "rejected" else "unknown").put("queryOnly", !rejected)
         if (same) for (key in listOf("taskId", "runId", "epoch", "conversationId", "admitted", "notAdmitted")) if (result!!.has(key)) receipt.put(key, result.get(key))
         receipt.put("message", if (accepted) "原任务已保存，请按真实执行状态查看进度。" else if (rejected) "本次尚未进入任务启动，可以核对条件后重新审阅。" else "原启动回执待核对，请查询原请求；不会再次派发。")
+        if (isPhone) {
+            // The source is the canonical, first-run SQLite receipt, not the current task header or a model claim.
+            listOf("taskId","runId","epoch","admitted","notAdmitted","admissionState","taskStatus","error").forEach { receipt.remove(it) }
+            if (accepted) {
+                receipt.put("taskId", result.getString("taskId"))
+                val firstRun=result.optString("runId").isNotBlank() && result.optInt("epoch",-1)==1
+                if(firstRun)listOf("runId","epoch","admitted").forEach { key -> if(result.has(key))receipt.put(key,result.get(key)) }
+                val phase=result.optString("admissionState")
+                if((firstRun && phase in setOf("admitted","service_denied","component_unconfirmed","run_recorded")) ||
+                    (!firstRun && phase in setOf("no_run","unconfirmed")))receipt.put("admissionState",phase)
+                if(firstRun && result.optString("status") in setOf("preparing","running","completed","cancelled","stopped","failed","paused","awaiting_user","needs_confirmation","interrupted","reconciling"))
+                    receipt.put("taskStatus",result.getString("status"))
+            }
+        }
         if (error != null) receipt.put("error", error)
         saveMarker(original, receipt); return receipt
     }
@@ -160,7 +185,7 @@ internal class PocketWebButlerPreparations(
                         require(projectId.isNotBlank() || checkout.isBlank())
                         if (projectId.isNotBlank()) {
                             check(controller.state.projects.any { it.id == projectId }) { "请选择当前私人项目" }
-                            controller.projectDevelopmentForWeb().inspectForOwner(projectId)
+                            controller.projectDevelopmentForWeb().inspectForOwner(projectId, false)
                             if (checkout.isNotBlank()) controller.projectDevelopmentForWeb().sourceForOwner(projectId, checkout)
                         }
                         remember(original, "projectId" to projectId, "checkoutId" to checkout)
@@ -178,17 +203,31 @@ internal class PocketWebButlerPreparations(
                 remember(original, "mode" to mode)
                 work(original, done) {
                     val preparation = typed(original)
+                    val started = SystemClock.elapsedRealtime()
                     val native = host.prepareOwnerWorkPhone(preparation, mode, JSONObject().put("scopeMinutes", controller.newTaskScopeMinutes)
                         .put("toolLimit", controller.newTaskToolBudget).put("modelCallLimit", controller.newTaskModelBudget))
-                    check(current(original)); val retained = PhoneReview(UUID.randomUUID().toString(), original, native, SystemClock.elapsedRealtime() + 120_000)
-                    phone = retained; project = null; native.view().put("reviewHandle", retained.handle).put("contract", preparation.view().getJSONObject("contract"))
+                    val conditions = preflight.read(mode)
+                    val expires = started + 120_000
+                    check(current(original) && SystemClock.elapsedRealtime() < expires) { "原手机提案或本次核对已变化，请重新核对" }
+                    val retained = PhoneReview(UUID.randomUUID().toString(), original, native, expires, conditions)
+                    phone = retained; project = null
+                    native.view().put("reviewHandle", retained.handle).put("contract", preparation.view().getJSONObject("contract"))
+                        .put("conditions",JSONObject(conditions.toString())).put("expiresInMs",(expires-SystemClock.elapsedRealtime()).coerceAtLeast(0L))
                 }
+            }
+            "butler.preparation.phone.settings" -> {
+                fields(args,"viewHandle","reviewHandle","target")
+                val reviewed=phone
+                check(!busy && current(original) && reviewed!=null && reviewed.page===original && reviewed.handle==text(args,"reviewHandle") && SystemClock.elapsedRealtime()<reviewed.expires) { "请重新核对这份原手机提案" }
+                val opened=preflight.openSetting(reviewed.conditions,text(args,"target"));phone=null;done(opened,null)
             }
             "butler.preparation.phone.start" -> {
                 fields(args, "viewHandle", "reviewHandle"); check(!busy); requireNoUnresolvedStart(original)
                 val reviewed = phone; check(reviewed != null && reviewed.page === original && reviewed.handle == text(args, "reviewHandle") && SystemClock.elapsedRealtime() < reviewed.expires) { "这份手机审阅已关闭或过期" }
+                // Screen work remains deferred until actually needed; Android still checks notification and slot again at real admission.
+                check(PrivatePhoneStartConditions.canSubmit(reviewed.conditions)) { "上次核对未确认通知和执行位置；没有提交目标，请先重新核对" }
                 val input = reviewed.native.view().put("kind", "phone").put("status", "pending"); saveMarker(original, input); phone = null
-                val accepted = controller.startConversationPhone(reviewed.native, { current(original) && SystemClock.elapsedRealtime() < reviewed.expires }) { result, error ->
+                val accepted = controller.startConversationPhone(reviewed.native, { current(original) && SystemClock.elapsedRealtime() < reviewed.expires }, reviewed.conditions.getJSONObject("capacity")) { result, error ->
                     completeStart(original, input, result, error, done)
                 }
                 if (!accepted) completeStart(original, input, JSONObject().put("requestId", input.getString("requestId")).put("conversationId", input.getString("conversationId")).put("status", "rejected"), "尚未进入原手机启动", done)
@@ -196,7 +235,7 @@ internal class PocketWebButlerPreparations(
             "butler.preparation.project.choices" -> {
                 fields(args, "viewHandle", "projectId"); val projectId = text(args, "projectId")
                 remember(original, "projectId" to projectId)
-                work(original, done) { typed(original).checkCurrent(); controller.projectDevelopmentForWeb().inspectForOwner(projectId) }
+                work(original, done) { typed(original).checkCurrent(); controller.projectDevelopmentForWeb().inspectForOwner(projectId, false) }
             }
             "butler.preparation.project.prepare", "butler.preparation.project.queryCopy" -> {
                 fields(args, "viewHandle", "projectId"); val projectId = text(args, "projectId")
@@ -215,8 +254,9 @@ internal class PocketWebButlerPreparations(
                 }
             }
             "butler.preparation.project.review" -> {
-                fields(args, "viewHandle", "projectId", "checkoutId")
+                fields(args, "viewHandle", "projectId", "checkoutId", "draftOnly")
                 val projectId = text(args, "projectId"); val checkout = text(args, "checkoutId")
+                val draftOnly = args.opt("draftOnly") as? Boolean ?: error("请明确选择本次项目交付方式")
                 remember(original, "projectId" to projectId, "checkoutId" to checkout)
                 work(original, done) {
                     val preparation = typed(original); val proposed = preparation.view(); check(proposed.getString("kind") == "project")
@@ -225,10 +265,11 @@ internal class PocketWebButlerPreparations(
                     check(model.value().optBoolean("configured")) { "模型尚未就绪，提案和项目选择仍可保留" }
                     val input = JSONObject().put("projectId", projectId).put("checkoutId", checkout).put("expectedSourceDigest", source.getString("sourceDigest"))
                         .put("runtime", "managed_process_v1").put("clientMessageId", proposed.getString("clientMessageId")).put("goal", proposed.getJSONObject("contract").getString("goal"))
+                    if (draftOnly) input.put("draftOnly", true)
                     check(current(original)); val retained = ProjectReview(UUID.randomUUID().toString(), original, preparation, input.toString(), model.revision(), SystemClock.elapsedRealtime() + 120_000)
                     project = retained; phone = null
                     JSONObject().put("reviewHandle", retained.handle).put("projectId", projectId).put("checkoutId", checkout).put("source", source).put("model", model.value())
-                        .put("contract", proposed.getJSONObject("contract")).put("goal", input.getString("goal")).put("runtime", "这台手机").put("commandsAuthorized", false).put("projectMemoryAuthorized", false)
+                        .put("contract", proposed.getJSONObject("contract")).put("goal", input.getString("goal")).put("runtime", "这台手机").put("draftOnly", draftOnly).put("commandsAuthorized", false).put("projectMemoryAuthorized", false)
                 }
             }
             "butler.preparation.project.start" -> {

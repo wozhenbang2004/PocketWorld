@@ -62,9 +62,15 @@ public final class LocalModule implements EngineModule {
         development=new ProjectDevelopment(this);
     }
     @Override public String id(){return "local";}
-    @Override public synchronized JSONObject snapshot()throws Exception {
+    /** File-backed checkout registry only. Does not consult managed processes, Termux or jobs. */
+    public synchronized JSONArray ownerCheckoutRecords()throws Exception {
+        if(closed)throw new IllegalStateException("原项目模块已关闭");
         JSONArray checkouts=new JSONArray();File[] entries=new File(root,"checkouts").listFiles();
         if(entries!=null)for(File entry:entries)if(entry.isDirectory()&&new File(entry,"checkout.json").isFile())checkouts.put(JsonFiles.read(new File(entry,"checkout.json")));
+        return checkouts;
+    }
+    @Override public synchronized JSONObject snapshot()throws Exception {
+        JSONArray checkouts=ownerCheckoutRecords();
         return new JSONObject().put("tools",commands.tools()).put("jobs",commands.list()).put("legacyReceiptRecovery",commands.receiptRecovery()).put("termuxJobs",termux.list()).put("checkouts",checkouts).put("termux",termux.status()).put("projectRuntime",projectRuntime.describe()).put("projectRuntimes",projectRuntimesForOwner()).put("arbitraryAppUidShell",false).put("reviewedImportRequired",true).put("termuxReturnMaxBytes",TermuxWorkspaceTransfer.MAX_BYTES).put("projectDevelopment",development.snapshot());
     }
     /** Native-only wiring; no JSON operation can install an authorization provider. */
