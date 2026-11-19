@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import './collaboration-depth.css';
 import './device-control-reading.css';
 import { Accordion, AccordionItem, Button, CheckboxField, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
-import { DeviceRequestScope, deviceConnectionLabel, deviceGrantInput, deviceHistoryLabel, deviceHistoryReceipt, deviceTaskHistoryLinks, deviceTaskDetails, deviceMethodLabels, deviceOperationLabels, deviceReceipt, deviceReview, deviceRows as rows, deviceSnapshot, deviceStrings as strings, deviceTaskRows, deviceWorkspaceTaskMode, type DeviceData as Data } from './devices-workspace';
+import { DeviceRequestScope, deviceChannelWasConnected, deviceConnectionLabel, deviceGrantInput, deviceHistoryLabel, deviceHistoryReceipt, deviceTaskHistoryLinks, deviceTaskDetails, deviceMethodLabels, deviceOperationLabels, deviceReceipt, deviceReview, deviceRows as rows, deviceSnapshot, deviceStrings as strings, deviceTaskRows, deviceWorkspaceTaskMode, type DeviceData as Data } from './devices-workspace';
 import { IconAdd, IconArrowLeft, IconChevronRight, IconMonitor, IconPhone, IconRefresh, IconShieldCheck } from './icons';
 import { DesktopViewer } from './DesktopViewer';
 import { DeviceTaskPreparation } from './DeviceTaskPreparation';
@@ -192,8 +192,8 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const peers = rows(snapshot?.peers), pairings = rows(snapshot?.pendingPairings);
   const visiblePeers = peers.filter(peer => [name(peer), peer.deviceId, peer.platform].filter(Boolean).join(' ').toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const peerSections = [
-    { id: 'online', title: '已连接', peers: visiblePeers.filter(peer => !peer.revoked && peer.connection?.state === 'ONLINE') },
-    { id: 'other', title: '未连接或待核对', peers: visiblePeers.filter(peer => !peer.revoked && peer.connection?.state !== 'ONLINE') },
+    { id: 'online', title: '上次检查时已连接', peers: visiblePeers.filter(deviceChannelWasConnected) },
+    { id: 'other', title: '上次未连接或待核对', peers: visiblePeers.filter(peer => !peer.revoked && !deviceChannelWasConnected(peer)) },
     { id: 'revoked', title: '已撤销信任', peers: visiblePeers.filter(peer => peer.revoked) },
   ];
   const deviceView = desktopOpen ? 'desktop' : peerId ? `detail:${peerId}` : 'list';
@@ -298,9 +298,13 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
         {peerId && !peer && snapshot && <p className="pw-device-feedback" role="alert">这台设备不在当前读取页。保留原身份，请返回后刷新核对。</p>}
         {peer && <>
           <section className="pw-device-connection" aria-label="这台设备的连接状态">
-            <MotionFeedback identity={JSON.stringify([peer.deviceId, peer.connection?.state, peer.revoked])} initial={false} className="pw-device-connection-heading" role="status"><IconMonitor size={20} aria-hidden="true" /><h3>{deviceConnectionLabel(peer)}</h3></MotionFeedback>
-            <p>{peer.connection?.state === 'ONLINE' ? peer.connection?.path === 'RELAY_WSS' ? '当前通过出站 WSS 中继连接。' : peer.connection?.path === 'DIRECT_TLS' ? '当前通过直连 TLS 通道连接。' : '已连接，传输路径仍待核对。' : '未确认的操作仍需查看执行结果，离线不代表停止。'}</p>
-            <dl className="pw-facts"><div><dt>控制通道</dt><dd>{peer.connection?.state === 'ONLINE' ? `最近回执在线 · ${peer.connection?.path === 'RELAY_WSS' ? '临时 WSS 中继' : peer.connection?.path === 'DIRECT_TLS' ? '直连 mTLS' : '路径待核对'}` : '尚未核对为在线'}</dd></div>{desktopPeer && <div><dt>桌面画面</dt><dd>进入桌面后单独连接并核对，不随控制通道判为可用</dd></div>}</dl>
+            <MotionFeedback identity={JSON.stringify([peer.deviceId, peer.connection?.state, peer.revoked])} initial={false} className="pw-device-connection-heading" role="status"><IconMonitor size={20} aria-hidden="true" /><h3>{!peer.revoked && peer.connection?.state && '上次检查：'}{deviceConnectionLabel(peer)}</h3></MotionFeedback>
+            <dl className="pw-facts">
+              <div><dt>检查时间</dt><dd>{time(peer.connection?.observedAt)}</dd></div>
+              {deviceChannelWasConnected(peer) && <div><dt>当时的控制通道</dt><dd>{peer.connection?.path === 'RELAY_WSS' ? '临时 WSS 中继' : peer.connection?.path === 'DIRECT_TLS' ? '直连 mTLS' : '路径待核对'}</dd></div>}
+              {desktopPeer && <div><dt>桌面画面</dt><dd>需在桌面页单独连接，控制通道在线不代表能看到画面。</dd></div>}
+            </dl>
+            {!deviceChannelWasConnected(peer) && <p>断开连接不代表任务已停止，请查看原任务回执。</p>}
             {peer.connection?.unconfirmedTransportWrite === true && <p className="pw-device-inline-notice">有操作结果待确认，请查看原执行结果。</p>}
             {peer.revoked && <p>{peer.revocation?.peerAcknowledged === true ? '本机信任已撤销，对端已回执。' : '本机信任已撤销，对端仍未确认。'}</p>}
             <div className="pw-form-actions">

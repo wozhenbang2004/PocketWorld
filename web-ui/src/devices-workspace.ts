@@ -116,6 +116,8 @@ export class DeviceRequestScope {
   invalidate(enabled = this.enabled): void { this.generation++; this.enabled = enabled; this.pending.clear(); }
 }
 export type DeviceRequestTicket = { generation: number; sequence: number; lane: string };
-export const deviceConnectionLabel = (peer: DeviceData): string => peer.revoked === true ? '本机已撤销信任' : ({ CONNECTING: '正在建立加密连接', ONLINE: '加密连接在线', DEGRADED: '连接不稳定', OFFLINE: '当前离线', REVOKED: '连接已撤销', INCOMPATIBLE: '协议不兼容，未自动重试' } as Record<string, string>)[peer.connection?.state] || '实时连接尚未读取';
+// A native observation is not a live promise. DEGRADED still had an authenticated control channel.
+export const deviceChannelWasConnected = (peer: DeviceData): boolean => !peer.revoked && (peer.connection?.state === 'ONLINE' || peer.connection?.state === 'DEGRADED');
+export const deviceConnectionLabel = (peer: DeviceData): string => peer.revoked === true ? '本机已撤销信任' : ({ CONNECTING: '正在建立加密连接', ONLINE: '加密通道已连接', DEGRADED: '已连接，但不稳定', OFFLINE: '离线', REVOKED: '连接已撤销', INCOMPATIBLE: '协议不兼容，未自动重试' } as Record<string, string>)[peer.connection?.state] || '连接状态待核对';
 export const deviceOperationLabels: Record<string, string> = { 'receiver.enable': '启用本机设备接收', 'receiver.disable': '停用本机设备接收', 'peer.connect': '连接原设备', 'peer.disconnect': '停止主动连接', 'peer.revoke': '撤销本机设备信任', 'relay.remove': '移除临时中继租约', 'task.stop': '请求原任务停止', 'task.pause': '请求原任务暂停', 'task.resume': '继续同一次执行', 'task.cancelPending': '取消本机未启动目标' };
 export const deviceMethodLabels: Record<string, string> = { 'tool.invoke': '调用明确工具', 'task.submitGoal': '委派目标并使用已授权模型', 'task.cancel': '请求原任务停止', 'operation.cancel': '请求原操作停止', 'task.pause': '请求原任务暂停', 'task.get': '读取任务结果', 'task.events': '读取任务进展', 'operation.get': '读取操作回执', 'artifact.describe': '读取成果说明', 'artifact.readChunk': '读取成果内容', 'task.acquireControl': '申请原任务控制租约' };
