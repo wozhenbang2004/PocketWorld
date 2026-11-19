@@ -65,7 +65,11 @@ internal class PocketWebSetup(
         }
         var selected: Review? = null
         when (action) {
-            "setup.read", "setup.model.test" -> fields(args)
+            "setup.read" -> fields(args)
+            "setup.model.test" -> {
+                fields(args, "expectedSelectionRevision")
+                require(integer(args, "expectedSelectionRevision", -1) in 0L..9_007_199_254_740_991L) { "请先重新读取当前模型，再发送测试消息" }
+            }
             "setup.save" -> fields(args, "expectedRevision", "step", "capabilities", "status")
             "setup.runtime.read" -> {
                 fields(args, "taskId", "afterSequence", "maxBytes")
@@ -96,7 +100,7 @@ internal class PocketWebSetup(
                     when (action) {
                         "setup.read" -> controller.nativeSetupCoordinator().read()
                         "setup.save" -> controller.nativeSetupCoordinator().save(input)
-                        "setup.model.test" -> controller.nativeSetupCoordinator().testCurrentModel { current(owner, ticket, false) }
+                        "setup.model.test" -> controller.nativeSetupCoordinator().testCurrentModel(input.getLong("expectedSelectionRevision")) { current(owner, ticket, false) }
                         "setup.runtime.read" -> controller.nativeRuntimeSetup().read(input.optString("taskId"), integer(input, "afterSequence", 0), integer(input, "maxBytes", 32768).toInt())
                         "setup.runtime.review" -> controller.nativeRuntimeSetup().review(input.getString("mode")).also { acquired = it }.view()
                         "setup.runtime.start" -> controller.nativeRuntimeSetup().start(original!!.native.confirm())

@@ -167,8 +167,11 @@ public final class SetupPreferences {
             if (!stored.getString("fingerprint").equals(currentFingerprint))
                 return evidence.put("message", "模型配置或应用会话已变化，需要重新实测；保存设置不代表连接成功。");
             String outcome = stored.getString("outcome");
-            if ("testing".equals(outcome))
-                return evidence.put("testing", running).put("message", running ? "正在发送这一次测试请求…" : "上次测试未取得完整回执，结果未知；没有自动重试。");
+            if ("testing".equals(outcome)) {
+                if (running) return evidence.put("testing", true).put("message", "正在发送这一次测试请求…");
+                return evidence.put("textTestIssue", "unknown").put("message", "上次测试未取得完整回执，结果未知；没有自动重试。");
+            }
+            if ("failed".equals(outcome) || "unknown".equals(outcome)) evidence.put("textTestIssue", outcome);
             evidence.put("tested", "passed".equals(outcome)).put("message", stored.optString("message"));
             if (stored.optJSONObject("inferenceReference") != null)
                 evidence.put("inferenceReference", new JSONObject(stored.getJSONObject("inferenceReference").toString()));

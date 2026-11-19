@@ -183,7 +183,7 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [needsRead, setNeedsRead] = useState(false);
   const [entered, setEntered] = useState(false);
   const alive = useRef(false), generation = useRef(0), pending = useRef(false), reading = useRef(false), entering = useRef(false);
-  const returnRead = useRef(false);
+  const returnRead = useRef(false), readModelRevision = useRef(snapshot.state.modelSelectionRevision);
   const latest = useRef({ data, snapshot, onNavigate, onClose, entered }); latest.current = { data, snapshot, onNavigate, onClose, entered };
   const queue = useRef<Promise<unknown>>(Promise.resolve());
   // The native setup surface has one operation slot. A system-return refresh and
@@ -197,9 +197,23 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
     queue.current = request.then(() => undefined, () => undefined);
     return request;
   };
+  const readCurrentSetup = async () => {
+    const selected = latest.current.snapshot.state.modelSelectionRevision;
+    const result = await run('setup.read');
+    if (selected !== latest.current.snapshot.state.modelSelectionRevision) {
+      returnRead.current = true;
+      throw new Error('模型选择已变化，正在重新读取。');
+    }
+    return { value: result, selected };
+  };
   const heading = useRef<HTMLHeadingElement>(null), stepBody = useRef<HTMLDivElement>(null), stage = useRef<HTMLDivElement>(null), back = useRef<() => boolean>(() => false);
   const can = (action: string) => snapshot.capabilities.commands.includes(action);
   const locked = !entered || loading || !!working || needsRead;
+  const modelSelected = !!data?.model.configured && data.model.availability !== 'unavailable';
+  const textTesting = working === 'setup.model.test' || !!data?.model.testing;
+  const modelStateCurrent = !needsRead && snapshot.state.modelSelectionBusy !== true && readModelRevision.current === snapshot.state.modelSelectionRevision &&
+    (!modelSelected || (data?.model.selectionRevision !== undefined && data.model.selectionRevision === snapshot.state.modelSelectionRevision));
+  const textVerified = modelStateCurrent && modelSelected && !!data?.model.tested && !textTesting;
   const focused = !!initialCapability, onboarding = mode === 'onboarding';
   const resumeRevision = setupObject(snapshot.view).resumeRevision;
   const preparation = useRuntimePreparation(entered && !!data && (view === 'tools' || view === 'overview'), can, resumeRevision, run, runtimeTaskId);
@@ -214,16 +228,16 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
     } catch (failure) { if (alive.current && generation.current === ticket) setError(failureText(failure)); }
     finally { if (generation.current === ticket) { entering.current = false; if (alive.current) setLoading(false); } }
   };
-  const load = async () => {
+  const load = async (): Promise<void> => {
     if (!alive.current || pending.current || reading.current || !latest.current.snapshot.capabilities.commands.includes('setup.read')) return;
     if (!latest.current.entered) { await enter(); return; }
-    const ticket = generation.current, epoch = bridge.getDocumentEpoch(); reading.current = true; setLoading(true);
+    const ticket = generation.current, epoch = bridge.getDocumentEpoch(); reading.current = true; returnRead.current = false; setLoading(true);
     try {
-      const value = readSetup(await run('setup.read'));
+      const result = await readCurrentSetup(), value = readSetup(result.value);
       if (!alive.current || ticket !== generation.current || bridge.getDocumentEpoch() !== epoch) return;
-      setData(value); setNeedsRead(false); setError(''); returnRead.current = false;
+      if (!returnRead.current) { readModelRevision.current = result.selected; setData(value); setNeedsRead(false); setError(''); }
     } catch (failure) { if (alive.current && ticket === generation.current) { setError(failureText(failure)); setNeedsRead(true); } }
-    finally { if (ticket === generation.current) { reading.current = false; if (alive.current) setLoading(false); } }
+    finally { if (ticket === generation.current) { reading.current = false; if (alive.current) { setLoading(false); if (returnRead.current && !document.hidden) void loadRef.current(); } } }
   };
   const loadRef = useRef(load); loadRef.current = load;
   useEffect(() => {
@@ -246,11 +260,11 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
     const ticket = generation.current, epoch = bridge.getDocumentEpoch(); pending.current = true; setWorking('save'); setError(''); setNotice('');
     try {
       await run('setup.save', setupSaveInput(before, next));
-      const actual = setupSaveConfirmed(before, next, await run('setup.read'));
+      const result = await readCurrentSetup(), actual = setupSaveConfirmed(before, next, result.value);
       if (!alive.current || ticket !== generation.current || bridge.getDocumentEpoch() !== epoch) return false;
-      setData(actual); latest.current.data = actual; return true;
+      readModelRevision.current = result.selected; setData(actual); latest.current.data = actual; return true;
     } catch (failure) { if (alive.current && ticket === generation.current) { setError(failureText(failure)); setNeedsRead(true); } return false; }
-    finally { if (ticket === generation.current) { pending.current = false; if (alive.current) setWorking(''); } }
+    finally { if (ticket === generation.current) { pending.current = false; if (alive.current) { setWorking(''); if (returnRead.current && !document.hidden) void loadRef.current(); } } }
   };
   const openView = async (next: SetupView) => {
     if (!data || locked || preparation.working) return;
@@ -265,15 +279,17 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
   const finish = async (skip: boolean) => {
     if (pending.current || preparation.working) return;
     if (!onboarding) { preparation.dismissReview(); onClose(); return; }
-    if (!data || locked || !skip && (!data.model.configured || data.model.availability === 'unavailable')) return;
+    if (!data || locked || (!skip && !textVerified)) return;
     if (await save({ ...data.preferences, step: skip ? viewStep(view) : 'finish', status: skip ? 'skipped' : 'completed' })) onClose();
   };
   const close = () => {
     if (pending.current || preparation.working) return;
-    if (onboarding && data) void finish(true); else onClose();
+    if (onboarding && data) void finish(!textVerified); else onClose();
   };
   const command = async (action: string, args: Record<string, unknown> = {}) => {
     if (!data || pending.current || reading.current || needsRead || !can(action) || document.hidden) return;
+    if (action === 'setup.model.test' && (!modelStateCurrent || data.model.testing || latest.current.snapshot.state.modelSelectionBusy === true ||
+        args.expectedSelectionRevision !== latest.current.snapshot.state.modelSelectionRevision)) return;
     const ticket = generation.current, epoch = bridge.getDocumentEpoch(); pending.current = true; setWorking(action); setError(''); setNotice('');
     try {
       await run(action, args);
@@ -281,9 +297,9 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
         if (alive.current && ticket === generation.current) setNotice('返回这里后会重新检查。你也可以随时点刷新。');
         return;
       }
-      const actual = readSetup(await run('setup.read'));
+      const result = await readCurrentSetup(), actual = readSetup(result.value);
       if (!alive.current || ticket !== generation.current || bridge.getDocumentEpoch() !== epoch) return;
-      setData(actual); latest.current.data = actual;
+      readModelRevision.current = result.selected; setData(actual); latest.current.data = actual;
     } catch (failure) { if (alive.current && ticket === generation.current) { setError(failureText(failure)); setNeedsRead(true); } }
     finally { if (ticket === generation.current) { pending.current = false; if (alive.current) { setWorking(''); if (returnRead.current && !document.hidden) void loadRef.current(); } } }
   };
@@ -298,7 +314,7 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
       else { preparation.dismissReview(); setNotice(''); setView(parentView); }
       return true;
     }
-    if (onboarding && data) { void finish(true); return true; }
+    if (onboarding && data) { void finish(!textVerified); return true; }
     return false;
   };
   const capabilitySummary = (id: SetupCapability) => {
@@ -309,16 +325,36 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
     return data.permissions.notifications === true ? '任务通知已允许' : data.permissions.notifications === false ? '任务通知尚未允许' : '任务通知权限待检查';
   };
   const permissionAction = (kind: SetupPermission, value: boolean | null, label = '前往设置') => <Button variant={value === true ? 'secondary' : 'primary'} disabled={locked || !can('setup.permission')} onClick={() => permission(kind)}>{value === true ? '查看设置' : label}</Button>;
+  const textIssue = modelStateCurrent && modelSelected && !textTesting && !textVerified ? data?.model.textTestIssue : undefined;
+  const testAvailable = modelSelected && data?.model.selectionRevision !== undefined && can('setup.model.test');
+  const checkSettingsFirst = !textVerified && (!testAvailable || !!textIssue);
+  const manageModel = <Button className={checkSettingsFirst ? 'pw-setup-model-main' : undefined} variant={checkSettingsFirst ? 'primary' : 'ghost'} trailingIcon={IconChevronRight}
+    disabled={locked || !!preparation.working} onClick={() => void navigate('connections')}>
+    {data?.model.availability === 'unavailable' || textIssue ? '检查模型配置' : modelSelected ? '管理模型连接' : '连接模型'}
+  </Button>;
+  const testFirst = !textVerified && !checkSettingsFirst;
+  const testButton = <Button className={testFirst ? 'pw-setup-model-main' : undefined} variant={testFirst ? 'primary' : 'secondary'}
+    aria-describedby="pw-setup-test-cost" disabled={locked || !modelStateCurrent || textTesting || !testAvailable}
+    onClick={() => void command('setup.model.test', { expectedSelectionRevision: data?.model.selectionRevision })}>
+    {textTesting ? '正在等待回复…' : textVerified || textIssue ? '重新测试文本连接' : '测试文本连接'}
+  </Button>;
+  const testCost = <p id="pw-setup-test-cost" className="pw-setup-copy">{textIssue === 'unknown' ? '上次请求可能已产生用量。再次测试会另发一条消息。' : '会向所选服务发一条短消息，可能产生用量。'}这只检查文字回复，不验证工具或图片能力。</p>;
   const modelSection = data && <section className="pw-setup-model" aria-label="模型连接准备">
-    <WorkspaceSectionHeading title={data.model.label || '连接模型服务'}
-      description={data.model.configured || data.model.availability === 'unavailable' ? setupModelLabel(data.model) : '登录 ChatGPT 账号，或添加兼容的 API 服务。'} />
-    {data.model.message && <p className="pw-setup-copy" role={data.model.availability === 'unavailable' ? 'alert' : 'status'}>{data.model.message}</p>}
-    <Button className="pw-setup-model-action" variant={data.model.configured ? 'secondary' : 'primary'} trailingIcon={IconChevronRight} disabled={locked || !!preparation.working} onClick={() => void navigate('connections')}>{data.model.availability === 'unavailable' ? '检查模型连接' : data.model.configured ? '管理模型连接' : '连接模型'}</Button>
-    {(data.model.configured || data.model.details) && <Accordion className="pw-setup-model-check">
+    <WorkspaceSectionHeading title={data.model.label || '连接模型服务'} description={<span role="status" aria-atomic="true">{
+      !modelStateCurrent ? '当前模型状态待核对' : textTesting ? '正在等待这次文字回复' : modelSelected || data.model.availability === 'unavailable' ? setupModelLabel(data.model) : '登录 ChatGPT 账号，或添加兼容的 API 服务。'
+    }</span>}/>
+    {modelStateCurrent && data.model.message && <p className="pw-setup-copy" role={data.model.availability === 'unavailable' || textIssue === 'failed' ? 'alert' : 'status'}>{data.model.message}</p>}
+    {textVerified && <p className="pw-setup-copy">这次只验证了文字回复，没有验证工具或图片能力。</p>}
+    {testAvailable && !textVerified && testCost}
+    {modelSelected && !testAvailable && !textVerified && <p className="pw-setup-copy">当前入口不能测试文本连接，可前往模型设置核对。</p>}
+    <div className="pw-setup-model-choices">
+      {checkSettingsFirst && manageModel}
+      {testAvailable && !textVerified && testButton}
+      {!checkSettingsFirst && manageModel}
+    </div>
+    {(data.model.details || (textVerified && testAvailable)) && <Accordion className="pw-setup-model-check">
       {data.model.details && <AccordionItem id="setup-model-details" title="查看状态详情"><pre>{data.model.details}</pre></AccordionItem>}
-      {data.model.configured && <AccordionItem id="setup-model-check" title="检查文本连接" description={data.model.testing ? '正在测试文本连接…' : undefined}>
-        <div className="pw-setup-model-test"><p>会向当前服务发送一次测试请求，可能产生用量。工具与图像能力需分别测试。</p><Button variant="secondary" disabled={locked || !!data.model.testing || !can('setup.model.test')} onClick={() => void command('setup.model.test')}>{working === 'setup.model.test' || data.model.testing ? '正在测试文本连接…' : '测试文本连接'}</Button></div>
-      </AccordionItem>}
+      {textVerified && testAvailable && <AccordionItem id="setup-model-check" title="再次测试"><div className="pw-setup-model-test">{testCost}{testButton}</div></AccordionItem>}
     </Accordion>}
   </section>;
   const capabilityBody = (id: SetupCapability) => {
@@ -343,13 +379,14 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
     </>;
   };
   const title = view === 'overview' ? '能力准备' : view === 'model' ? onboarding ? '开始使用' : '模型连接' : capabilityCopy[view].title;
-  const returning = returnLabel || '返回原页面';
-  const canStartConversation = data?.model.configured === true && data.model.availability !== 'unavailable';
+  const returning = returnLabel || (onboarding ? '进入管家' : '返回原页面');
+  const skipLabel = `${modelSelected ? '暂不验证' : '稍后设置'}，${returning}`;
+  const leaveLabel = onboarding && !textVerified ? skipLabel : returning;
   const parentLabel = parentView === 'model' ? '返回模型连接' : '返回能力准备';
   const headerAction = () => { if (!back.current()) close(); };
   return <section className="pw-setup-workspace" aria-label={title} data-setup-step={viewStep(view)} data-setup-view={view} data-setup-mode={mode} data-setup-focused={focused}>
     <header className="pw-setup-header">
-      <Button variant="ghost" iconOnly leadingIcon={hasParent || focused ? IconArrowLeft : IconClose} className="pw-setup-close" aria-label={hasParent ? parentLabel : onboarding ? '稍后设置，进入管家' : returning} title={hasParent ? parentLabel : onboarding ? '稍后设置' : returning} disabled={!!working || !!preparation.working || onboarding && !!data && (loading || needsRead)} onClick={headerAction}/>
+      <Button variant="ghost" iconOnly leadingIcon={hasParent || focused ? IconArrowLeft : IconClose} className="pw-setup-close" aria-label={hasParent ? parentLabel : leaveLabel} title={hasParent ? parentLabel : leaveLabel} disabled={!!working || !!preparation.working || onboarding && !!data && (loading || needsRead)} onClick={headerAction}/>
       <h1 ref={heading} tabIndex={-1}>{title}</h1>
       {data && <Button variant="ghost" iconOnly leadingIcon={IconRefresh} className="pw-setup-refresh" aria-label="刷新准备状态" title="刷新准备状态" disabled={loading || !!working || !readable} onClick={() => void load()}/>}
     </header>
@@ -358,7 +395,7 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
         {originGoal?.trim() && <div className="pw-setup-origin"><span>当前要做的事</span><p>{originGoal}</p></div>}
         <div className="pw-setup-stage" ref={stage}>
           {view === 'overview' && <><div className="pw-setup-intro"><h2>准备想用的能力</h2><p>选择要做的事，查看对应状态和下一步。</p></div><div className="pw-setup-purpose-list">
-            <Button variant="ghost" className="pw-setup-purpose-row" onClick={() => void openView('model')} disabled={locked || !!preparation.working}><IconModel size={24} aria-hidden="true"/><span><strong>对话与推理</strong><small>{setupModelLabel(data.model)}</small></span><IconChevronRight size={18} aria-hidden="true"/></Button>
+            <Button variant="ghost" className="pw-setup-purpose-row" onClick={() => void openView('model')} disabled={locked || !!preparation.working}><IconModel size={24} aria-hidden="true"/><span><strong>对话与推理</strong><small>{modelStateCurrent ? setupModelLabel(data.model) : '当前模型状态待核对'}</small></span><IconChevronRight size={18} aria-hidden="true"/></Button>
             {setupCapabilities.map(id => { const copy = capabilityCopy[id], Icon = copy.icon; return <Button variant="ghost" key={id} className="pw-setup-purpose-row" onClick={() => void openView(id)} disabled={locked || !!preparation.working}><Icon size={24} aria-hidden="true"/><span><strong>{copy.title}</strong><small>{capabilitySummary(id)}</small></span><IconChevronRight size={18} aria-hidden="true"/></Button>; })}
           </div><p className="pw-setup-next-hint">准备只在你选择后进行。已开始的工具准备保留在原任务中，可随时查看或停止。</p></>}
           {view === 'model' && <>{modelSection}{onboarding && <div className="pw-setup-optional"><Button variant="ghost" trailingIcon={IconChevronRight} disabled={locked || !!preparation.working} onClick={() => void openView('overview')}>查看手机、开发与语音能力</Button></div>}</>}
@@ -367,7 +404,10 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
         {(error || needsRead || notice) && <div className="pw-setup-feedback">{error && <p role="alert" className="pw-setup-error">{error}</p>}{needsRead && <Button variant="secondary" disabled={loading || !!working} onClick={() => void load()}>刷新并核对</Button>}{notice && <p role="status" className="pw-setup-notice">{notice}</p>}</div>}
       </div>
       <footer className="pw-setup-footer">
-        {onboarding ? <>{canStartConversation && <Button className="pw-setup-next" disabled={locked || !!preparation.working} onClick={() => void finish(false)}>{working === 'save' ? '正在保存…' : '进入管家'}</Button>}<Button variant="ghost" className={canStartConversation ? 'pw-setup-skip' : 'pw-setup-next'} disabled={locked || !!preparation.working} onClick={() => void finish(true)}>稍后设置</Button></> : <Button className="pw-setup-next" variant="secondary" disabled={!!working || !!preparation.working} onClick={() => void finish(false)}>{returning}</Button>}
+        {onboarding ? <Button className="pw-setup-next" variant={textVerified ? 'primary' : 'ghost'}
+          disabled={locked || !!preparation.working || !can('setup.save')} onClick={() => void finish(!textVerified)}>
+          {working === 'save' ? '正在保存…' : textVerified ? returning : skipLabel}
+        </Button> : <Button className="pw-setup-next" variant="secondary" disabled={!!working || !!preparation.working} onClick={() => void finish(false)}>{returning}</Button>}
       </footer>
     </>}
   </section>;

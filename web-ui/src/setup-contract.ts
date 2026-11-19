@@ -8,7 +8,7 @@ export type SetupPreferences = { step: SetupStep; capabilities: SetupCapability[
 export type SetupRead = {
   version: 1; revision: number; preferences: SetupPreferences;
   model: { configured: boolean; label: string; tested: boolean; testing?: boolean; message?: string;
-    availability?: 'unconfigured' | 'unavailable'; details?: string };
+    availability?: 'unconfigured' | 'unavailable'; details?: string; textTestIssue?: 'failed' | 'unknown'; selectionRevision?: number };
   permissions: { accessibility: boolean | null; notifications: boolean | null; microphone: boolean | null; calendar: boolean | null; calendarRead: boolean | null; calendarWrite: boolean | null; batteryExempt: boolean | null; vendorBackgroundVisited: boolean | null };
   speech: { available: boolean | null; networkUse: string };
 };
@@ -56,6 +56,8 @@ export function readSetup(value: unknown): SetupRead {
     preferences: { step: preferences.step, status: preferences.status, capabilities: setupCapabilities.filter(id => preferences.capabilities.includes(id)) },
     model: { configured: model.configured === true, label: text(model.label), tested: model.configured === true && model.tested === true,
       testing: model.testing === true, message: text(model.message),
+      textTestIssue: model.textTestIssue === 'failed' || model.textTestIssue === 'unknown' ? model.textTestIssue : undefined,
+      selectionRevision: Number.isSafeInteger(model.selectionRevision) && model.selectionRevision >= 0 ? model.selectionRevision : undefined,
       availability: model.availability === 'unconfigured' || model.availability === 'unavailable' ? model.availability : undefined,
       details: text(model.details) },
     permissions: { accessibility: observed(permissions.accessibility), notifications: observed(permissions.notifications),
@@ -76,7 +78,15 @@ export function setupSaveConfirmed(before: SetupRead, next: SetupPreferences, va
   return actual;
 }
 export function permissionLabel(value: boolean | null): string { return value === true ? '已允许' : value === false ? '未允许' : '待检查'; }
-export function setupModelLabel(value: SetupRead['model']): string { return value.testing ? '正在测试文本连接' : value.availability === 'unavailable' ? '模型状态待核对' : value.tested ? '文本连接测试通过' : value.configured ? '已选择 · 尚未测试' : '尚未连接模型'; }
+export function setupModelLabel(value: SetupRead['model']): string {
+  if (value.availability === 'unavailable') return '模型连接需要核对';
+  if (!value.configured) return '尚未连接模型';
+  if (value.testing) return '正在等待这次文字回复';
+  if (value.tested) return '当前模型已通过文本连接测试';
+  if (value.textTestIssue === 'failed') return '上次文本连接测试未通过';
+  if (value.textTestIssue === 'unknown') return '上次测试结果未确认';
+  return '已选择模型 · 文本连接待验证';
+}
 export function speechNetworkLabel(value: string): string {
   if (value === 'requires_network') return '系统服务需要网络';
   if (value === 'declares_no_network_requirement') return '系统服务声明无需网络，仍需实际听写验证';

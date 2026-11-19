@@ -55,10 +55,11 @@ class SetupCoordinator(activity: Activity, private val app: EngineApplication) :
 
     /** Blocking worker call; exactly one explicit inference, using the existing SQL usage ledger. */
     @Throws(Exception::class)
-    fun testCurrentModel(originalOwnerCurrent: BooleanSupplier): JSONObject {
+    fun testCurrentModel(expectedSelectionRevision: Long, originalOwnerCurrent: BooleanSupplier): JSONObject {
         check(Looper.myLooper() != Looper.getMainLooper()) { "模型实测须在后台工作队列执行" }
         requireOwner(originalOwnerCurrent)
         val snapshot = capture()
+        check(snapshot.revision == expectedSelectionRevision) { "模型选择已变化，未发送测试消息。请刷新后核对。" }
         val operation = RunningTest(this, snapshot, RunControl())
         check(running.compareAndSet(null, operation)) { "已有一次模型实测正在结束，请等待原回执" }
         var enteredCall = false
@@ -182,16 +183,15 @@ class SetupCoordinator(activity: Activity, private val app: EngineApplication) :
             selected = captured.config
             val accountAvailable = !selected.usesAccount() || ModelGateway.accountModelAvailableForDisplay(selected.accountModel)
             result.put("configured", accountAvailable).put("label", safeMessage(selected.model, selected).take(240))
+                .put("selectionRevision", captured.revision)
             if (!accountAvailable) return result.put("availability", "unavailable")
                 .put("message", "已选账号模型，但当前账号授权或模型资料尚未确认；请回模型页核对。")
             val active = running.get()
             val evidence = preferences.modelEvidence(captured.fingerprint, active?.snapshot?.fingerprint == captured.fingerprint)
             evidence.keys().forEach { key -> result.put(key, evidence.get(key)) }
-            if (!result.has("message")) result.put("message", when {
-                !selected.usesAccount() && !selected.usesBedrock() && selected.apiKey.isEmpty() ->
-                    "已保存地址与模型，尚未提供密钥；请按服务要求配置并实测，保存不代表连接成功。"
-                else -> "模型配置已保存，尚未实测；测试会发送一次很短的真实请求，可能产生费用。"
-            })
+            if (!result.has("message") && !selected.usesAccount() && !selected.usesBedrock() && selected.apiKey.isEmpty()) {
+                result.put("message", "已保存地址与模型，但没有提供密钥。如果服务要求密钥，请先补充。")
+            }
         } catch (failure: Exception) {
             val message = safeFailure(failure, selected)
             if (message != lastModelFailure) RuntimeDiagnostics.event("diagnostics", "unconfirmed", "SETUP_MODEL_STATE_UNAVAILABLE", null, failure)
