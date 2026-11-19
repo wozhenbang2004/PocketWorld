@@ -1274,8 +1274,16 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
         private WorkMutationSource(Run run){this(run,false);}
         private WorkMutationSource(Run run,boolean readOnlyRound){this.readOnlyRound=readOnlyRound;this.run=run;original=run.control;generation=run.generation;revision=run.nativeRevision;captured=run.json.toString();wasCancelled=original!=null&&original.isCancelled();wasPaused=original!=null&&original.isPaused();}
         public JSONObject view()throws Exception{return new JSONObject(captured);}
+        void checkFileRemainder()throws Exception{
+            // Cold reconstruction sets paused=true even for a durable, already settled review.
+            // A previously live/paused team is restored as interrupted and fails the status check.
+            checkCurrent();if(readOnlyRound||original!=null&&run.paused||wasCancelled||wasPaused||!run.children.isEmpty()||!"awaiting_review".equals(run.json.opt("status"))||!"review".equals(run.json.opt("phase")))
+                throw new SecurityException("原团队未停在可继续交付的审阅位置，没有恢复已暂停、取消或仍活动的执行。");
+        }
         public void checkCurrent()throws Exception{if(run.control!=original||run.generation!=generation||run.nativeRevision!=revision||original!=null&&(original.isCancelled()!=wasCancelled||original.isPaused()!=wasPaused))throw new SecurityException("原工作计划源已变化，请重新审阅修订");}
     }
+    /** Same serialized team-owner queue, not the UI controller's single read/stop/approval worker. */
+    synchronized void enqueueOwnerRemainder(Runnable original){if(closed)throw new IllegalStateException("原团队宿主已关闭");coordinator.execute(original);}
     public synchronized WorkMutationSource workMutationSource(String id)throws Exception{Run run=required(id);if(closed||run.json.optJSONObject("workPlan")==null||run.json.optString("status").equals("cancelled")||!run.children.isEmpty()||assignmentFactory!=null&&assignmentFactory.hasActiveWork(id))throw new SecurityException("原工作项/独审/整合仍有实际执行，不能修改已冻结计划");return new WorkMutationSource(run);}
     /** Native read-only cold source; cancellation is preserved, never revived by this view. */
     public synchronized WorkMutationSource projectRoundSource(String id)throws Exception{Run run=required(id);if(closed||run.json.optJSONObject("workPlan")==null||!run.children.isEmpty()||assignmentFactory!=null&&assignmentFactory.hasActiveWork(id))throw new SecurityException("原团队仍有实际执行，不能读取为新轮固定来源");return new WorkMutationSource(run,true);}

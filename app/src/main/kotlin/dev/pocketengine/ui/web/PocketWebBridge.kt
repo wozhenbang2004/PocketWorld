@@ -152,6 +152,10 @@ internal class PocketWebBridge(
             d.optString("projectId")==pin.project && d.optString("checkoutId")==pin.checkout
     }
     @Volatile private var taskViewId: String? = null
+        set(value) { if (field != value) fileRemainder.clear(); field = value }
+    private val fileRemainder=PocketWebTeamFileRemainder<dev.pocketengine.features.teams.TaskStoreTeamWriteHost.RemainderReview>(
+        controller::runTeamPhoneWork, { main.post(it) }, { it.view() }, { publishState() })
+
     private data class PauseNoteReview(val handle: String, val task: String, val run: String, val epoch: Int, val pause: Long, val scope: Long,
                                        val window: PocketWebWindowTicket, val expires: Long)
     private var pauseNoteReview: PauseNoteReview? = null
@@ -269,7 +273,7 @@ internal class PocketWebBridge(
             "phone.result.original", "phone.resultNotice.read", "phone.resultNotice.set", "phone.activity.original", "phone.draft.original",
             "quickVoice.start", "quickVoice.save", "quickVoice.close", "quickVoice.return",
             "skillDraft.open", "skillDraft.read", "skillDraft.source", "skillDraft.confirm", "skillDraft.cancel", "skillDraft.query", "skillDraft.close", "voice.start", "voice.stop", "voice.review", "voice.accept", "voice.discard", "speech.speak", "speech.stop", "speech.taskAnnouncements", "speech.stopTaskAnnouncement",
-            "tasks.refresh", "tasks.open", "tasks.close", "tasks.recoverTeamFile", "tasks.stop", "tasks.review", "tasks.confirm", "tasks.approve", "tasks.resolve", "tasks.resume", "tasks.scope", "tasks.plan.enter", "tasks.answerQuestion", "tasks.answerQuestionChoice", "tasks.deleteScreenshot", "privacy.screenshots.read", "privacy.screenshots.save",
+            "tasks.refresh", "tasks.open", "tasks.close", "tasks.recoverTeamFile", "tasks.teamRemainder.read", "tasks.teamRemainder.close", "tasks.teamRemainder.continue", "tasks.stop", "tasks.review", "tasks.confirm", "tasks.approve", "tasks.resolve", "tasks.resume", "tasks.scope", "tasks.plan.enter", "tasks.answerQuestion", "tasks.answerQuestionChoice", "tasks.deleteScreenshot", "privacy.screenshots.read", "privacy.screenshots.save",
             "projects.refresh", "projects.select", "projects.create", "projects.open", "projects.newFile", "projects.edit", "projects.save", "projects.close", "projects.history", "projects.revision", "projects.useRevision", "projects.retry",
             "settings.reviewModelTransport", "settings.saveLocalObservation", "settings.openSystem", "settings.openBrowser", "settings.openAppUpdates",
             "webSearch.snapshot", "webSearch.save",
@@ -339,7 +343,7 @@ internal class PocketWebBridge(
         controller.closeNativeInferenceHistory()
         controller.closeQueuedOwnerInputs()
         controller.persistOwnerComposer()
-        pendingCommands.clear(); commandReceipts.clear()
+        fileRemainder.clear(); pendingCommands.clear(); commandReceipts.clear()
     }
 
     internal fun captureWindow(): PocketWebWindowTicket = PocketWebWindowTicket(commandFence.ticket(), controller.webWindowTicket())
@@ -1028,6 +1032,30 @@ internal class PocketWebBridge(
             if (action == "groups.openTask") {
                 requireSection("groups")
                 openOriginalTask(id, groupPages.taskForNavigation(args), true, "groups")
+                return
+            }
+            if (action.startsWith("tasks.teamRemainder.")) {
+                val task=requiredString(args,"taskId")
+                val ticket=captureWindow();val document=documentId
+                val current={ !closed && document!=null && document==documentId && acceptsWindow(ticket) && section==null && taskViewId==task && controller.webPrivateOwnerVisible() }
+                require(current()) { "请在原私人整合任务核对剩余文件" }
+                val teams=controller.webPluginFeatureHost().module("teams") as? dev.pocketengine.features.teams.TeamsModule ?: error("原文件团队宿主不可用")
+                val reply:(JSONObject?,String?)->Unit={ value,message -> complete(id,value,message,retainValue=false) }
+                when(action){
+                    "tasks.teamRemainder.read" -> {
+                        checkedPayload(args,setOf("taskId","runId","epoch"));val run=requiredString(args,"runId");val epoch=requiredInt(args,"epoch")
+                        fileRemainder.read(task,current,{ teams.reviewOwnerRemaining(task,run,epoch) { current() } },reply)
+                    }
+                    "tasks.teamRemainder.close" -> {
+                        checkedPayload(args,setOf("taskId","reviewHandle"));fileRemainder.dismiss(task,requiredString(args,"reviewHandle"))
+                        reply(JSONObject().put("closed",true),null)
+                    }
+                    "tasks.teamRemainder.continue" -> {
+                        checkedPayload(args,setOf("taskId","reviewHandle","confirmed"));require(requiredBoolean(args,"confirmed"))
+                        fileRemainder.submit(task,requiredString(args,"reviewHandle"),current,{ review,started,ended -> teams.continueOwnerRemaining(review,{ started(it) },{ ended(it) }) },reply)
+                    }
+                    else -> error("无此原文件操作")
+                }
                 return
             }
             if (action == "tasks.recoverTeamFile") {
@@ -2110,7 +2138,7 @@ internal class PocketWebBridge(
     }
     private fun requireTask(id: String): UiTask = controller.state.tasks.firstOrNull { it.id == id } ?: error("原任务不在当前读取窗口，请刷新后重新打开")
     private fun leaveTask() { projectGoal=null; phoneViewer.clear(); localPages.clear(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); composerModels.clear(); taskViewId = null; controller.closeWebTaskView(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.clear(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); commandFence.invalidate(); taskReviewGeneration++; taskPage?.let(controller::leaveGroupTask); taskPage = null }
-    private fun leaveConnection() { localSourceIntake.close(); projectGitImport.close(); phoneViewer.clear(); controller.webChannels.clear(); controller.webSkills.clear(); commandFence.invalidate(); ++domainGeneration; modelReviews.clear(); automation.clear(); mcpImports.clear(); executionReviews.clear(); sourceReader.clear(); messageQuotes.clear(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.clear(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); connectionPages.clear(); teamPages.clear(); groupPages.clear(); mediaPages.clear(); realtimePages.clear(); proxyPages.clear(); planPages.clear(); commitmentPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); devicePages.clear(); pluginPages.clear(); localPages.clear(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); accountWorkspace.invalidate(); composerModels.clear(); aiSources.clear(); conversationModels.clear(); deviceWindow?.close(); deviceWindow = null; section?.let { if (it == "memory") controller.leaveOwnerDomain("memoryReview") else if (it in ownerDomains) controller.leaveOwnerDomain(it) }; section?.takeIf { it == "archives" || it == "storage" }?.let(dataPages::close); section = null }
+    private fun leaveConnection() { localSourceIntake.close(); projectGitImport.close(); phoneViewer.clear(); controller.webChannels.clear(); controller.webSkills.clear(); commandFence.invalidate(); ++domainGeneration; modelReviews.clear(); automation.clear(); mcpImports.clear(); executionReviews.clear(); sourceReader.clear(); messageQuotes.clear(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.clear(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); connectionPages.clear(); teamPages.clear(); groupPages.clear(); mediaPages.clear(); realtimePages.clear(); proxyPages.clear(); planPages.clear(); commitmentPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); devicePages.clear(preserveModelPlace=true); pluginPages.clear(); localPages.clear(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); accountWorkspace.invalidate(); composerModels.clear(); aiSources.clear(); conversationModels.clear(); deviceWindow?.close(); deviceWindow = null; section?.let { if (it == "memory") controller.leaveOwnerDomain("memoryReview") else if (it in ownerDomains) controller.leaveOwnerDomain(it) }; section?.takeIf { it == "archives" || it == "storage" }?.let(dataPages::close); section = null }
     /**
      * Navigation already disposes these workspace handles in leaveConnection().
      * React unmount cleanup may arrive after that transition. Acknowledge only

@@ -751,15 +751,22 @@ class CompanionDeviceReceiver:
             with self.manager.lock:
                 if incoming:
                     return self._prepare_input(peer, envelope, permission, job)
-                result = (self._confirm_project(envelope, permission, job) if envelope.arguments["toolName"] == "workspace.project.confirm"
-                          else self._export_project(envelope, permission) if envelope.arguments["toolName"] == "workspace.project.export"
-                          else self._workspace(envelope, permission))
+                root_seal = None
+                if (self.manager.platform.name == "windows" and envelope.arguments["toolName"] in {"workspace.list", "workspace.read"}
+                        and envelope.get("originDeviceId") == envelope.get("callerDeviceId") and envelope.get("rootTaskId") == envelope.get("parentTaskId")
+                        and permission.source_share is None and "workspace.location" in permission.grant["toolNames"]):
+                    from windows_read_root import same_read
+                    result, root_seal = same_read(self, envelope, permission, original_environment, operation, job)
+                else:
+                    result = (self._confirm_project(envelope, permission, job) if envelope.arguments["toolName"] == "workspace.project.confirm"
+                              else self._export_project(envelope, permission) if envelope.arguments["toolName"] == "workspace.project.export"
+                              else self._workspace(envelope, permission))
             self._current(permission)
             with self.manager.lock:
                 status = result.get("status", "completed") if envelope.arguments["toolName"] in {"workspace.write", "workspace.project.confirm"} else "completed"
                 if self.manager.platform.name == "windows" and envelope.arguments["toolName"] in {"workspace.list", "workspace.read"}:
                     from windows_workspace_read import bind_original
-                    bind_original(self.manager, envelope, operation, job, result)
+                    bind_original(self.manager, envelope, operation, job, result, root_seal)
                 job.update(status=status, nativeToolResult=result, updatedAt=self.manager.now(), message="Original native tool receipt stored; user goal still requires verification")
                 self.manager._save(job)
             return result

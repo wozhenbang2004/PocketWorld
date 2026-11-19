@@ -3,15 +3,17 @@ import {Button,IconButton} from './forms-library';
 import {IconChevronRight,IconClose,IconHistory} from './icons';
 
 export type ShownPhoneRun={taskId:string;runId:string;epoch:number;activityHandle:string};
-type Phase='checking'|'requested'|'unconfirmed';
+type Phase='checking'|'requested'|'local_only'|'unconfirmed';
 type Item=ShownPhoneRun&{scope:string;ticket:number;phase:Phase};
 const matches=(a:ShownPhoneRun,b:ShownPhoneRun)=>a.taskId===b.taskId&&a.runId===b.runId&&a.epoch===b.epoch&&a.activityHandle===b.activityHandle;
 
-function originalStop(value:unknown,shown:ShownPhoneRun){
-  if(!value||typeof value!=='object')return false;
+function originalStop(value:unknown,shown:ShownPhoneRun):Phase{
+  if(!value||typeof value!=='object')return 'unconfirmed';
   const r=value as Record<string,unknown>;
-  return r.taskId===shown.taskId&&r.runId===shown.runId&&r.epoch===shown.epoch&&r.controlRequested===true&&
-    typeof r.newStopRequest==='boolean'&&r.budgetIncreased===false&&r.cleanupComplete===false;
+  if(r.taskId!==shown.taskId||r.runId!==shown.runId||r.epoch!==shown.epoch||r.controlRequested!==true||
+    r.budgetIncreased!==false||r.cleanupComplete!==false)return 'unconfirmed';
+  if(r.stopJournal==='unconfirmed'&&r.originalControlCancelled===true&&!('newStopRequest' in r))return 'local_only';
+  return !('stopJournal' in r)&&typeof r.newStopRequest==='boolean'?'requested':'unconfirmed';
 }
 
 // Presentation only, for direct taps in this foreground owner window. Never stores goals,
@@ -43,7 +45,7 @@ export function useInlinePhoneStops(scope:string|null,original:(target:ShownPhon
          !saved.current.some(row=>row.ticket===item.ticket))return;
       publish(saved.current.map(row=>row.ticket===item.ticket?{...row,phase}:row));
     };
-    try{void stop().then(value=>settle(originalStop(value,shown)?'requested':'unconfirmed'),()=>settle('unconfirmed'))}
+    try{void stop().then(value=>settle(originalStop(value,shown)),()=>settle('unconfirmed'))}
     catch{settle('unconfirmed')}
     return true
   }
@@ -54,8 +56,8 @@ export function PhoneInlineStopReceipt({item,goal,recordedStatus,onOpen,onDismis
   item:Item;goal?:string;recordedStatus?:string;onOpen?:()=>void;onDismiss:()=>void
 }){
   const cancelled=recordedStatus==='cancelled'||recordedStatus==='canceled'||recordedStatus==='stopped';
-  const title=item.phase==='requested'?'已请求停手':item.phase==='checking'?'正在核对停手回执':'没有取得停手回执';
-  const note=cancelled?(item.phase==='requested'?'任务已登记取消，动作和资源清理以原轮记录为准。':'任务已登记取消，不能据此确定是刚才点击生效。'):
+  const title=item.phase==='local_only'?'原控制器已收到停手':item.phase==='requested'?'已请求停手':item.phase==='checking'?'正在核对停手回执':'没有取得停手回执';
+  const note=item.phase==='local_only'?'账本回执、在途动作与资源清理尚未核实。':cancelled?(item.phase==='requested'?'任务已登记取消，动作和资源清理以原轮记录为准。':'任务已登记取消，不能据此确定是刚才点击生效。'):
     item.phase==='requested'?'尚未核实原轮结束或资源清理。':'可查看原记录；不会再次发送停止。';
   return <section className="pw-phone-activity" aria-label="这次停手回执">
     <Button variant="ghost" className="pw-phone-activity-open" disabled={!onOpen} onClick={onOpen}

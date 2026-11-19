@@ -372,6 +372,9 @@ public final class EngineApplication extends Application implements dev.pocketen
         }
     }
     private final java.util.concurrent.ConcurrentHashMap<String,BackgroundRun> backgroundRuns=new java.util.concurrent.ConcurrentHashMap<>();
+    // Admission provenance, not a second controller. Never reconstructed from a Web handle or an old task.
+    // Weak keys and exact release confine it to this native controller's lifetime.
+    private final java.util.Map<RunControl,TaskStore> privatePhoneStopOrigins=new java.util.WeakHashMap<>();
     private RunControl currentPhoneControl(String id){BackgroundRun run=id==null?null:backgroundRuns.get(id);return run!=null?run.control:id!=null&&id.equals(activeTaskId)?activeControl:null;}
     /** Snapshot for an already visible private task. Retained registry and local policy only: no TaskStore, service, PackageManager, helper, or physical phone call. */
     public JSONObject retainedPhoneSurface(String id,String run,int epoch,String requested,long displayedScopeRevision)throws Exception {
@@ -1644,12 +1647,17 @@ public final class EngineApplication extends Application implements dev.pocketen
             admit(request,review.mode,review.config,false,null,0,"",new NewDraftPhoneAdmission(control->{
                 control.check();return tasks.beginReviewedDraftPhone(request,review.scopeKey,review.goal,review.mode,deadline,review.tools,review.models,review.config.maxSteps,
                         id->{review.taskId=id;allocated.accept(id);},()->{control.check();return current.call();});
-            },current));
+            },current,state->tasks.rememberFirstDraftPhoneServiceRefusal(review.scopeKey,originalPhoneAdmissionReceipt(request),state)));
             tasks.rememberInitialDraftPhoneAdmission(review.scopeKey,originalPhoneAdmissionReceipt(review.taskId));
             return tasks.draftPhoneCreation(review.scopeKey,review.taskId);
         }catch(Exception failure){
             if(review.taskId==null)throw new DraftPhoneStartRejected(failure);
-            // The outer SQL transaction may have rolled back. Never invent a task/status to fill that gap.
+            // Only a committed result of the original Android call can resolve this exception.
+            try{
+                JSONObject original=tasks.draftPhoneCreation(review.scopeKey,review.taskId);
+                if(original.optBoolean("accepted")&&java.util.Set.of("service_denied","component_unconfirmed").contains(original.optString("admissionState")))
+                    return original;
+            }catch(Exception unavailable){failure.addSuppressed(unavailable);}
             throw failure;
         }finally{if(review.taskId!=null)try{if(tasks.get(review.taskId,false)!=null)pushTask(review.taskId);}catch(Exception unconfirmed){/* A notification is not an allocation receipt. */}}
     }
@@ -1843,6 +1851,8 @@ public final class EngineApplication extends Application implements dev.pocketen
         else{activeResourceToken=token;activeTaskId=taskId;activeControl=nextControl;activeConfig=captured;activeMode=executionMode;activePort=null;}
         try{
             nextControl.bindHostRun(taskId,t.getString("runId"),t.getInt("coordinatorEpoch"));
+            if(taskId.equals(t.optString("id")) && dev.pocketengine.store.PhoneActionRecovery.local(t))
+                privatePhoneStopOrigins.put(nextControl,tasks);
             if(firstDraft!=null){
                 if(!taskId.equals(t.getString("id"))||t.getInt("coordinatorEpoch")!=1||t.has("origin")||t.has("parentTaskId"))throw new SecurityException("首轮执行不属于原私人创建请求");
                 if(channelTaskHost!=null)channelTaskHost.protect(taskId,nextControl);
@@ -1890,14 +1900,34 @@ public final class EngineApplication extends Application implements dev.pocketen
         return json("taskId",id,"runId",run,"epoch",epoch,"controlRequested",true,"cleanupComplete",false,"workingMemoryCleared",memoryCleared,"budgetIncreased",false,"message","已请求暂停原执行；在途动作与资源清理以原回执为准");
     }
     public JSONObject stopOriginalPhoneRun(String id,String run,int epoch)throws Exception {
+        return stopOriginalPhoneRun(id,run,epoch,false);
+    }
+    /** Explicit owner UI stop, using exactly the existing stop admission, never the read-only display ticket. */
+    public JSONObject stopPrivatePhoneFromOwner(String id,String run,int epoch)throws Exception {
+        return stopOriginalPhoneRun(id,run,epoch,true);
+    }
+    private JSONObject stopOriginalPhoneRun(String id,String run,int epoch,boolean ownerUi)throws Exception {
         if(tasks!=null&&Thread.holdsLock(tasks))throw new IllegalStateException("related_task_capture_requires_unlocked_tasks");
         RunControl original=originalPhoneControl(id,run,epoch,true);TaskStore store=tasks;FeatureHost host=features;
         // Native lifecycle flags only; full audit is unrelated to stopping this retained run.
-        Runnable teamStops=null;if(!original.isCancelled()&&!store.cancellationContextSnapshot(id).optBoolean("cancelRequested"))try{teamStops=host.prepareOriginalPhoneTeamStops(id,run,epoch);}catch(Exception unavailable){/* Original child scope remains unknown below. */}
+        Runnable teamStops=null;
         TaskStore.PhoneStopBatch batch;
-        synchronized(store){
-            if(original.isCancelled()||store.cancellationContextSnapshot(id).optBoolean("cancelRequested"))teamStops=null;
-            batch=store.recordOriginalPhoneStopBatch(id,run,epoch,original);
+        try{
+            if(!original.isCancelled()&&!store.cancellationContextSnapshot(id).optBoolean("cancelRequested"))try{teamStops=host.prepareOriginalPhoneTeamStops(id,run,epoch);}catch(Exception unavailable){/* Original child scope remains unknown below. */}
+            synchronized(store){
+                if(original.isCancelled()||store.cancellationContextSnapshot(id).optBoolean("cancelRequested"))teamStops=null;
+                batch=store.recordOriginalPhoneStopBatch(id,run,epoch,original);
+            }
+        }catch(android.database.sqlite.SQLiteException unavailable){
+            synchronized(this){
+                if(!ownerUi||store!=tasks||host!=features||!host.ownsTaskStore(store)||privatePhoneStopOrigins.get(original)!=store||
+                        control(id)!=original||original.recoveryOnly()||!original.matchesHostRun(id,run,epoch))throw unavailable;
+            }
+            // A replacement cannot inherit this object. Do not infer a durable stop or guess the scope of descendants.
+            original.cancel();
+            return json("taskId",id,"runId",run,"epoch",epoch,"controlRequested",true,"originalControlCancelled",original.isCancelled(),
+                    "stopJournal","unconfirmed","cleanupComplete",false,"budgetIncreased",false,
+                    "message","原控制器已收到停手。账本回执、在途动作及清理情况尚未核实；没有补派子任务停止。");
         }
         original.cancel();boolean childrenQueued=false;
         if(teamStops==null)error("原团队停止身份尚未完整确认；没有重取已取消父任务的团队代次");
@@ -4661,6 +4691,7 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
     public synchronized void released(String id,RunControl owner){
         var questions=phoneQuestions(id,owner);if(questions!=null)questions.released(id,owner);if(deviceOwnerInputs!=null)deviceOwnerInputs.released(id,owner);
         if(id==null||owner==null||owner!=control(id))return;
+        privatePhoneStopOrigins.remove(owner);
         deferredPhoneSessions.remove(owner);
         var teamAdmission=teamPhoneRuns.get(id);if(teamAdmission!=null&&teamAdmission.originalControl()==owner)teamPhoneRuns.remove(id,teamAdmission);
         var deviceSession=deviceToolSessions.get(id);

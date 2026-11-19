@@ -3536,13 +3536,14 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             val reason = "原手机执行身份尚未读全，请刷新原任务"
             state = state.copy(error = reason); completed?.invoke(null, reason); return
         }
+        val privateStop = action == "stop" && webPrivateOwnerVisible() && dev.pocketengine.store.PhoneActionRecovery.local(task.raw)
         state = state.copy(taskActionErrors = state.taskActionErrors - id)
         try { controls.execute {
             val result = runCatching {
                 val execute = {
                   when (action) {
                     "pause" -> app.pauseOriginalPhoneRun(id, run, epoch)
-                    "stop" -> app.stopOriginalPhoneRun(id, run, epoch)
+                    "stop" -> if(privateStop) app.stopPrivatePhoneFromOwner(id, run, epoch) else app.stopOriginalPhoneRun(id, run, epoch)
                     "resume" -> app.continueOriginalPhoneTaskReceipt(id, run, epoch, feedback, true, task.executionMode)
                     else -> error("未知原手机控制操作")
                   }

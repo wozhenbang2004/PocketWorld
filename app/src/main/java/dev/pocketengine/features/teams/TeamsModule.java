@@ -121,6 +121,16 @@ public final class TeamsModule implements EngineModule {
     public JSONObject recoverOwnerOriginalFile(String id,String run,int epoch,String operation,java.util.function.BooleanSupplier ownerWindow)throws Exception{
         if(writeHost==null)throw new IllegalStateException("原团队文件宿主不可用");return writeHost.recoverOriginalFile(id,run,epoch,operation,ownerWindow);
     }
+    public TaskStoreTeamWriteHost.RemainderReview reviewOwnerRemaining(String id,String run,int epoch,java.util.function.BooleanSupplier originalWindow)throws Exception {
+        return requireWriteHost().reviewRemaining(coordinator,id,run,epoch,context.model(),originalWindow);
+    }
+    public void continueOwnerRemaining(TaskStoreTeamWriteHost.RemainderReview review,java.util.function.Consumer<JSONObject> started,java.util.function.Consumer<Exception> ended)throws Exception{
+        TaskStoreTeamWriteHost original=requireWriteHost();java.util.Objects.requireNonNull(review);java.util.Objects.requireNonNull(started);java.util.Objects.requireNonNull(ended);
+        coordinator.enqueueOwnerRemainder(()->{
+            Exception error=null;try{original.continueRemaining(review,context.model(),started);}catch(Exception failure){error=failure;}
+            ended.accept(error);
+        });
+    }
     public JSONObject ownerFinalWorkers(String runId)throws Exception{return writeHost==null?TeamDeliveryWorkers.unavailable(runId):writeHost.finalWorkers(runId);}
     private JSONArray definitions()throws Exception {JSONArray a=JsonFiles.read(file).optJSONArray("teams");return a==null?new JSONArray():a;}
     private void writeDefinitions(JSONArray teams)throws Exception {JSONObject document=JsonFiles.read(file);document.put("teams",teams);JsonFiles.write(file,document);}

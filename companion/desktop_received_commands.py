@@ -26,7 +26,7 @@ LABEL = {"queued": "已在这台电脑排队", "running": "这台电脑已启动
          "accepted_only": "已接单，原执行文件未能核对"}
 
 
-def local_record(view, peer, item, *, read=False, revision=None, archive=False, locate=False, ticket=None, held=None, export_guard=None, work_key=False, required_work=None):
+def local_record(view, peer, item, *, read=False, revision=None, archive=False, locate=False, ticket=None, held=None, export_guard=None, work_key=False, required_work=None, read_root=False):
     # This is the unlocked receiver owner's local view, never a synthetic MTLS
     # history permission. Admit only the direct source and its still-current original read scope.
     if not view._peer_current(peer): return None
@@ -55,6 +55,9 @@ def local_record(view, peer, item, *, read=False, revision=None, archive=False, 
             return None
         if revision is not None and manager.jobs.get(row[1], {}).get("nativeDeviceRevision") != revision:
             return None
+        if read_root:
+            from windows_read_root import local
+            return local(manager, operation, row, original, grant, now, revision, display=read)
         if work_key: return work
         if export_guard is not None or read and source["toolName"]==EXPORT:
             if source["toolName"]!=EXPORT or locate or archive: return None
@@ -141,10 +144,24 @@ def _show_read(view, peer, item, receipt, current, *, offer_work):
         else:
             body += f"\n原回执返回 {receipt['returned']} 项" + ("（原列表未完全返回）。" if receipt["sourceTruncated"] else "。")
         body += "\n这是当时的读取，不是当前目录或文件；没有重新扫描，也没有导入或修改项目。"
+    revision = receipt.get("revision")
+    def can_check_root():
+        return bool(current() and local_record(view, peer, item, revision=revision, read_root=True))
+    if kind != "receipt_only" and not can_check_root():
+        body += "\n只有当时的相对位置；缺少原目录凭据或可用的位置授权，不按同名目录推断。"
     while current():
         choices = ([] if kind == "receipt_only" else [("content", "查看原文本片段" if kind == "text_snapshot" else "查看原目录项")])
         if offer_work: choices.append(("work", "查看这次手机任务在此工作区的读取"))
+        if kind != "receipt_only" and can_check_root(): choices.append(("root", "核对原工作区在这台电脑的位置"))
         choice = view._dialog(title, body, choices + [("ids","核对原操作和 Windows 工作编号")], current)
+        if choice == "root":
+            path = local_record(view, peer, item, revision=revision, read_root=True, read=True)
+            if path and can_check_root():
+                view._dialog("刚刚核对的 Windows 工作目录", f"{path}\n当时登记号：{receipt['environmentId']}。"
+                             "原授权绑定和本机原目录身份本次相符。这不是目录浏览，不证明其中的文件现在仍在；位置没有发给手机。", [], can_check_root)
+            elif current():
+                view._dialog("没有核实原工作目录", "原目录或当前授权已无法核对。保留当时的读取回执；没有改用同名位置或打开文件夹。", [], current)
+            continue
         if choice == "work":
             group = local_record(view, peer, item, work_key=True)
             if group and current(): read_work.show(view, peer, item, group, current)

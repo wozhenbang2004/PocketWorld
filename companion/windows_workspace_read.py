@@ -15,7 +15,7 @@ def _sha(raw):
     return hashlib.sha256(raw).hexdigest()
 
 
-def bind_original(manager, envelope, operation, job, result):
+def bind_original(manager, envelope, operation, job, result, root_seal=None):
     """Called only by the actual reader at completion, inside the original save transaction.
     Pin digests of the exact requested relative path and already-bounded wire result.
     No path/content duplication and no backfill from a later directory or cache read.
@@ -29,11 +29,12 @@ def bind_original(manager, envelope, operation, job, result):
     raw = protocol.canonical_bytes(result)
     if len(raw) > 24576: return
     witness = {"format": PROFILE, "pathDigest": _sha(path.encode()), "resultDigest": _sha(raw)}
-    manager.ledger.execute("""UPDATE operations SET details=json_set(details,'$.windowsReadWitness',json(?))
+    extra = {"windowsReadRootSeal": root_seal} if root_seal else {}  # Owner-local only, not part of a wire projection.
+    manager.ledger.execute("""UPDATE operations SET details=json_set(json_patch(details, json(?)),'$.windowsReadWitness',json(?))
         WHERE operation_id=? AND job_id=? AND fingerprint=? AND json_extract(details,'$.protocol')='native-device-tool-v1'
         AND json_extract(details,'$.audience.toolName')=? AND json_extract(details,'$.historyAudience.argumentsDigest')=fingerprint
         AND json_type(details,'$.windowsReadWitness') IS NULL""",
-        (json.dumps(witness), operation, job["id"], job["fingerprint"], tool))
+        (json.dumps(extra), json.dumps(witness), operation, job["id"], job["fingerprint"], tool))
 
 
 def _plain(text, *, lines=False):

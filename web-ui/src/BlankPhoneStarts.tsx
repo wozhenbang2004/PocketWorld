@@ -2,7 +2,7 @@ import './blank-phone-starts.css';
 import {useEffect,useRef,useState} from 'react';
 import {bridge} from './bridge';
 import {Button} from './forms-library';
-import type {PhoneStartReceipt} from './phone-start';
+import {phoneStartReceipt,type PhoneStartReceipt} from './phone-start';
 
 export type BlankFirstRun={draftRequestId:string;runId:string;epoch:1};
 const uuid=(v:unknown):v is string=>typeof v==='string'&&/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(v);
@@ -10,14 +10,21 @@ function firstRun(v:any):BlankFirstRun|undefined{
   if(!v||!uuid(v.draftRequestId)||v.taskId!==v.draftRequestId||!uuid(v.runId)||v.epoch!==1)return;
   return {draftRequestId:v.taskId,runId:v.runId,epoch:1};
 }
-type Original={id:string;goal:string;at:number;first?:BlankFirstRun;admission:'admitted'|'run_recorded'|'no_run'|'unconfirmed'};
+const admissions={admitted:'Android 已接纳首次服务请求',service_denied:'Android 已拒绝首次服务启动',
+  component_unconfirmed:'系统没有返回原服务组件',run_recorded:'有首轮登记，服务是否接纳待核对',
+  no_run:'只有任务，没有首轮登记',unconfirmed:'首次准入暂不能核实'} as const;
+type Original={id:string;goal:string;at:number;first?:BlankFirstRun;admission:keyof typeof admissions};
+function firstDetails(row:any):Pick<Original,'admission'|'first'>{
+  const admission=phoneStartReceipt(row).admissionState??'unconfirmed';
+  return {admission,first:admission==='no_run'||admission==='unconfirmed'?undefined:firstRun(row)};
+}
 type Rows={owner:string;document:number;rows:Original[]};
 function originals(value:unknown):Original[]{
   if(!Array.isArray(value))return [];
   return value.slice(0,5).flatMap(row=>{
     if(!row||row.accepted!==true||typeof row.draftRequestId!=='string'||row.taskId!==row.draftRequestId||
       typeof row.goal!=='string'||!Number.isSafeInteger(row.createdAt)||row.createdAt<1)return [];
-    return [{id:row.taskId,goal:row.goal,at:row.createdAt,first:['admitted','run_recorded'].includes(row.admissionState)?firstRun(row):undefined,admission:row.admissionState==='admitted'?'admitted':row.admissionState==='run_recorded'?'run_recorded':row.admissionState==='no_run'?'no_run':'unconfirmed'}];
+    return [{id:row.taskId,goal:row.goal,at:row.createdAt,...firstDetails(row)}];
   });
 }
 
@@ -43,8 +50,7 @@ export function EarlierDraftPhoneStarts({composer,except,onTask}:{composer:strin
       if(ticket!==serial.current||!here())return;
       if(id){
         if(result?.accepted!==true||result.draftRequestId!==id||result.taskId!==id||!ids.includes(id)){setNote('这项原建单记录已不能核对，没有打开其他任务。');return}
-        const admission:Original['admission']=result.admissionState==='admitted'?'admitted':result.admissionState==='run_recorded'?'run_recorded':result.admissionState==='no_run'?'no_run':'unconfirmed';
-        const first=admission==='admitted'||admission==='run_recorded'?firstRun(result):undefined;
+        const {admission,first}=firstDetails(result);
         setSaved(old=>old?.owner===composer&&old.document===doc?{...old,rows:old.rows.map(row=>row.id===id?{...row,first,admission}:row)}:old);
         setNote(first?'已核对原草稿的首次轮次。':'已核对建单记录，暂时没有可打开的首次轮次。');return
       }
@@ -59,8 +65,8 @@ export function EarlierDraftPhoneStarts({composer,except,onTask}:{composer:strin
     <Button size="small" variant="ghost" aria-expanded={open} onClick={()=>{if(!here())return;if(open){++serial.current;setBusy(false);setOpen(false);setSaved(null);setNote('')}else load()}}>本草稿最近的手机任务 · {ids.length}</Button>
     {open&&<>{busy&&<small role="status">正在核对原记录…</small>}{note&&<p role="status">{note} <Button size="small" variant="ghost" disabled={busy} onClick={()=>load()}>再查一次</Button></p>}
       {!!rows.length&&<ul className="pw-draft-start-list">{rows.map(row=><li key={row.id}><div><strong>{row.goal}</strong>
-      <small>{new Date(row.at).toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})} · {row.admission==='admitted'?'有首次准入回执':row.admission==='run_recorded'?'有首次轮次，服务接收待核对':row.admission==='no_run'?'尚无执行轮次':'首次准入待核对'}</small></div>
-      {row.first&&onTask?<Button size="small" variant="secondary" disabled={busy} onClick={()=>{if(here()&&row.first)onTask(row.first)}}>查看首次执行</Button>:
+      <small>{new Date(row.at).toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})} · {admissions[row.admission]}</small></div>
+      {row.first&&onTask?<Button size="small" variant="secondary" disabled={busy} onClick={()=>{if(here()&&row.first)onTask(row.first)}}>查看首次记录</Button>:
         <Button size="small" variant="ghost" disabled={busy} onClick={()=>load(row.id)}>核对首轮登记</Button>}</li>)}</ul>}</>}
   </section>;
 }
@@ -68,8 +74,11 @@ export function EarlierDraftPhoneStarts({composer,except,onTask}:{composer:strin
 export function BlankPhoneReceiptActions({receipt,pending,onCheck,onCloseWait,onTask}:{receipt:PhoneStartReceipt;pending:boolean;onCheck?:()=>void;onCloseWait?:()=>void;onTask?:(first:BlankFirstRun)=>void}){
   if(!receipt.draftRequestId)return null;
   if(receipt.status==='accepted'&&receipt.taskId===receipt.draftRequestId){
-    const first=firstRun(receipt);
-    if(first&&onTask)return <Button size="small" variant="secondary" disabled={pending} onClick={()=>onTask(first)}>查看这次首次执行</Button>;
+    const first=receipt.admissionState==='no_run'||receipt.admissionState==='unconfirmed'?undefined:firstRun(receipt);
+    if(first&&onTask)return <div className="pw-draft-start-actions">
+      <Button size="small" variant="secondary" disabled={pending} onClick={()=>onTask(first)}>查看这次首轮记录</Button>
+      {receipt.admitted!==true&&onCheck&&<Button size="small" variant="ghost" disabled={pending} onClick={onCheck}>只查这次启动</Button>}
+    </div>;
     return onCheck?<Button size="small" variant="ghost" disabled={pending} onClick={onCheck}>核对首轮登记</Button>:null;
   }
   if(receipt.status!=='unknown')return null;

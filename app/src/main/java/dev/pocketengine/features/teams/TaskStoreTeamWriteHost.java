@@ -347,7 +347,7 @@ public final class TaskStoreTeamWriteHost implements TeamCoordinator.BudgetHost,
     public JSONObject approve(String run,String expectedHash,RunControl read)throws Exception {JSONObject result=tasks.approveTeamOutputs(run,review(run,read),expectedHash,read);changed.accept(run);return result;}
     /** A separate original child/run/context, never a producer impersonating its own reviewer. */
     public JSONObject independentlyReview(String run,String expectedPlanHash,JSONObject nativeTeamRun,ModelConfig model)throws Exception {
-        if(!run.equals(nativeTeamRun.getString("id"))||!nativeTeamRun.optString("mode").equals("produce"))throw new SecurityException("独审目标不是原制作团队");RunControl control=new RunControl();if(reviews.putIfAbsent(run,control)!=null)throw new IllegalStateException("原独审仍在运行，请查看原任务");JSONObject binding=null;boolean settled=false;java.util.concurrent.atomic.AtomicReference<AutoCloseable> liveFence=new java.util.concurrent.atomic.AtomicReference<>();
+        if(!run.equals(nativeTeamRun.getString("id"))||!nativeTeamRun.optString("mode").equals("produce"))throw new SecurityException("独审目标不是原制作团队");RunControl control=new RunControl();synchronized(integrations){if(integrations.containsKey(run)||reviews.putIfAbsent(run,control)!=null)throw new IllegalStateException("原独审或整合仍在运行，请查看原任务");}JSONObject binding=null;boolean settled=false;java.util.concurrent.atomic.AtomicReference<AutoCloseable> liveFence=new java.util.concurrent.atomic.AtomicReference<>();
         try{
             TeamWorkReview.Prepared actual=review(run,control);binding=tasks.startTeamReview(run,actual,expectedPlanHash,control,Math.min(24,model.maxSteps));if(binding.optBoolean("inspectOnly"))return binding;
             JSONObject original=new JSONObject(binding.toString());integrationTasks.put(original.getString("taskId"),control);liveFence.set(control.retainAuthorityCheck(()->tasks.checkTeamAssignmentCurrent(original,"team_review_manifest")));
@@ -362,16 +362,92 @@ public final class TaskStoreTeamWriteHost implements TeamCoordinator.BudgetHost,
         }catch(Exception failure){if(!settled&&binding!=null&&!binding.optBoolean("inspectOnly"))tasks.endAttempt(binding.getString("taskId"),binding.getString("runId"),control.isCancelled()?"cancelled":"interrupted","独立审查未取得确定终态；原阅读与模型回执保留",new JSONObject());throw failure;}
         finally{closeFence(liveFence);reviews.remove(run,control);if(binding!=null)integrationTasks.remove(binding.optString("taskId"),control);}
     }
+    /** One original private-window review. Only this host may arm it inside serialized admission. */
+    public final class RemainderReview {
+        private final String id,run,team,review,hash,route,shown;
+        private final int epoch;private final long until;
+        private final TeamCoordinator coordinator;private final TeamCoordinator.WorkMutationSource source;
+        private final java.util.function.BooleanSupplier window;private boolean used,armed;
+        private RemainderReview(TeamCoordinator coordinator,TeamCoordinator.WorkMutationSource source,JSONObject facts,String route,java.util.function.BooleanSupplier window)throws Exception{
+            this.coordinator=coordinator;this.source=source;this.window=window;this.route=route;shown=TeamWorkFiles.canonical(facts);
+            id=facts.getString("taskId");run=facts.getString("runId");epoch=facts.getInt("epoch");team=facts.getString("teamRunId");review=facts.getString("reviewId");hash=facts.getString("planHash");
+            until=android.os.SystemClock.elapsedRealtime()+120000;
+        }
+        private TaskStoreTeamWriteHost issuer(){return TaskStoreTeamWriteHost.this;}
+        public JSONObject view()throws Exception{return new JSONObject(shown);}
+        public void requireWindowBeforeCommit(){current();if(!used||armed)throw new SecurityException("原主人审阅尚未消费。");}
+        private void current(){if(!window.getAsBoolean()||android.os.SystemClock.elapsedRealtime()>=until)throw new SecurityException("原私人窗口已离开或审阅已到期，请重新核对剩余文件。");}
+        /** Caller is the native store, never handle() or a model/JSON caller. */
+        public void requireAdmission(String id,String run,int epoch,String team,String review,String hash,String route){
+            current();if(!armed||!used||!this.id.equals(id)||!this.run.equals(run)||this.epoch!=epoch||!this.team.equals(team)||!this.review.equals(review)||!this.hash.equals(hash)||!this.route.equals(route))
+                throw new SecurityException("这不是主人刚刚核对的原执行、文件或模型。");
+            armed=false; // consume before startAttempt, including failed admission
+        }
+    }
+    private JSONObject remainingFacts(JSONObject facts)throws Exception{
+        JSONObject ctx=facts.getJSONObject("context"),b=ctx.getJSONObject("binding"),files=TeamFileRemainder.files(workspace,ctx);
+        JSONArray remaining=files.getJSONArray("remaining"),approved=facts.getJSONArray("approved");int n=remaining.length();JSONObject parent=facts.getJSONObject("parent"),pool=facts.getJSONObject("budget");
+        if(facts.getInt("stepCeiling")-facts.getInt("stepsUsed")<n||facts.getInt("operationsLeft")<n||pool.getInt("remainingToolOperations")<n
+                ||pool.getInt("remainingModelRequests")<1||parent.getInt("remainingOperations")<n)throw new SecurityException("原父任务或整合者的可用额度不足，未重置额度或调用模型。");
+        for(int i=0;i<approved.length();i++){JSONObject a=approved.getJSONObject(i);
+            if(!TeamRemainingSelection.contains(remaining,a.getString("path"),a.getString("artifactId")))throw new SecurityException("有一项已有许可不属于本次剩余原文件，未挪用。");}
+        return files.put("taskId",b.getString("taskId")).put("runId",b.getString("runId")).put("epoch",b.getInt("coordinatorEpoch"))
+                .put("teamRunId",b.getString("teamRunId")).put("targetProjectId",b.getString("targetProjectId")).put("planHash",b.getString("planHash")).put("reviewId",b.getString("reviewId"))
+                .put("parentTaskId",parent.getString("parentTaskId")).put("parentRunId",parent.getString("parentRunId")).put("activeParentRunId",parent.getString("activeParentRunId"))
+                .put("activeParentEpoch",parent.getInt("activeParentEpoch")).put("parentOperationsLeft",parent.getInt("remainingOperations")).put("grantExpiresAt",facts.getLong("expiresAt"))
+                .put("parentExpiresAt",parent.getLong("expiresAt")).put("stepsUsed",facts.getInt("stepsUsed")).put("stepCeiling",facts.getInt("stepCeiling")).put("operationsLeft",facts.getInt("operationsLeft"))
+                .put("poolOperationsLeft",pool.getInt("remainingToolOperations")).put("poolModelsLeft",pool.getInt("remainingModelRequests"))
+                .put("approvalsDigest",TeamWorkFiles.hash(TeamWorkFiles.canonical(approved))).put("executionAuthorized",false);
+    }
+    RemainderReview reviewRemaining(TeamCoordinator coordinator,String id,String run,int epoch,ModelConfig model,java.util.function.BooleanSupplier window)throws Exception {
+        if(!window.getAsBoolean())throw new SecurityException("请进入原私人整合任务。");String route=TeamFileRemainder.route(model);
+        JSONObject original=tasks.originalTeamRemainder(id,run,epoch,route);String team=original.getJSONObject("context").getString("teamRunId");
+        synchronized(coordinator){
+            TeamCoordinator.WorkMutationSource source=coordinator.workMutationSource(team);source.checkFileRemainder();if(!team.equals(source.view().opt("id")))throw new SecurityException("原团队身份改变。");
+            JSONObject current=remainingFacts(tasks.originalTeamRemainder(id,run,epoch,route));source.checkFileRemainder();
+            if(!window.getAsBoolean()||integrationTasks.containsKey(id))throw new SecurityException("原私人窗口或整合控制器已改变。");
+            return new RemainderReview(coordinator,source,current,route,window);
+        }
+    }
+    JSONObject continueRemaining(RemainderReview exact,ModelConfig model,java.util.function.Consumer<JSONObject> admitted)throws Exception{
+        if(exact==null||exact.issuer()!=this)throw new SecurityException("请重新查看原文件清单。");
+        JSONObject result=integrate(exact.team,exact.review,model,exact,java.util.Objects.requireNonNull(admitted));
+        return exact.coordinator.recordIntegration(exact.team,result);
+    }
     /** Called only by the native owner request worker after an exact existing review, never by synthesis. */
     public JSONObject integrate(String run,String reviewId,ModelConfig model)throws Exception {
-        RunControl control=new RunControl();RunControl active=integrations.putIfAbsent(run,control);if(active!=null){JSONObject actual=integrationState(run);if(!reviewId.equals(actual.optString("reviewId")))throw new SecurityException("不是原唯一整合者审查");if(active.isPaused()){active.resume();return actual.put("continuationRequested",true);}throw new IllegalStateException("原唯一整合者仍在执行，请查看原任务");}
+        return integrate(run,reviewId,model,null,null);
+    }
+    private JSONObject integrate(String run,String reviewId,ModelConfig model,RemainderReview remainder,java.util.function.Consumer<JSONObject> admitted)throws Exception {
+        String route=TeamFileRemainder.route(model);RunControl control=new RunControl();RunControl active;
+        if(remainder!=null){
+            synchronized(remainder.coordinator){
+                synchronized(remainder){remainder.current();if(remainder.used)throw new SecurityException("这份续接审阅已使用。");remainder.used=true;}
+                remainder.source.checkFileRemainder();remainder.coordinator.workMutationSource(run);
+                synchronized(integrations){if(reviews.containsKey(run))throw new SecurityException("原团队正在独审，未接管其他执行。");active=integrations.putIfAbsent(run,control);}
+            }
+        }else synchronized(integrations){active=integrations.putIfAbsent(run,control);}
+        if(active!=null){if(remainder!=null)throw new SecurityException("原整合者已有控制器，未附着、恢复或重复派发。");JSONObject actual=integrationState(run);if(!reviewId.equals(actual.optString("reviewId")))throw new SecurityException("不是原唯一整合者审查");if(active.isPaused()){if(tasks.requiresTeamFileRemainderReview(run,reviewId))throw new SecurityException("原部分写回已有暂停控制器，请在原任务处理，不能从整合命令代为恢复。");active.resume();return actual.put("continuationRequested",true);}throw new IllegalStateException("原唯一整合者仍在执行，请查看原任务");}
         JSONObject binding=null;boolean settled=false;java.util.concurrent.atomic.AtomicReference<AutoCloseable> liveFence=new java.util.concurrent.atomic.AtomicReference<>();try {
-            binding=tasks.startTeamIntegration(run,reviewId,control,Math.min(24,model.maxSteps));if(binding.optBoolean("inspectOnly")){integrations.remove(run,control);return integrationState(run);}
+            if(remainder==null)binding=tasks.startTeamIntegration(run,reviewId,control,Math.min(24,model.maxSteps),route,null);
+            else synchronized(remainder.coordinator){
+                remainder.source.checkFileRemainder();synchronized(tasks){
+                    JSONObject now=remainingFacts(tasks.originalTeamRemainder(remainder.id,remainder.run,remainder.epoch,route));
+                    if(!route.equals(remainder.route)||!remainder.shown.equals(TeamWorkFiles.canonical(now))||reviews.containsKey(run)||integrationTasks.containsKey(remainder.id))throw new SecurityException("原文件、批准、预算或执行已改变，请重新核对。");
+                    remainder.current();remainder.armed=true;
+                    try{binding=tasks.startTeamIntegration(run,reviewId,control,Math.min(24,model.maxSteps),route,remainder);}finally{remainder.armed=false;}
+                    if(binding.optBoolean("inspectOnly"))throw new SecurityException("原整合者不再可续，没有执行。");
+                    binding.put("onlyRemainingFiles",now.getJSONArray("remaining"));
+                }
+            }
+            if(binding.optBoolean("inspectOnly")){integrations.remove(run,control);return integrationState(run);}
             integrationTasks.put(binding.getString("taskId"),control);
+            if(remainder!=null){JSONObject started=new JSONObject().put("taskId",remainder.id).put("fromRunId",remainder.run).put("runId",binding.getString("runId")).put("epoch",binding.getInt("coordinatorEpoch")).put("started",true).put("filesWrittenVerified",false);
+                try{admitted.accept(started);}catch(RuntimeException ignored){/* presentation cannot revoke committed admission */}}
             JSONObject original=new JSONObject(binding.toString());TeamIntegrationFiles filePort=new TeamIntegrationFiles(workspace,originalTasks.fileHost(original,control),control,original);TeamProjectWorkspaces projectHost=projects;boolean fullProject=tasks.teamProjectIntegrationSelection(original,control)!=null;if(fullProject&&projectHost==null)throw new SecurityException("原完整项目宿主未挂载，不能把仅文件CAS当完整项目交付");dev.pocketengine.core.CapabilityPort port=fullProject?projectHost.integratorPort(original,control,filePort):filePort;
             TeamIntegrationCompaction historySession=TeamIntegrationCompaction.open(tasks,original,control,model,port);liveFence.set(control.retainAuthorityCheck(historySession::checkCurrent));
             java.util.concurrent.atomic.AtomicReference<JSONObject> terminalEvent=new java.util.concurrent.atomic.AtomicReference<>();AgentRunner.RequestProjection projection=(history,config,live)->{if(live!=control||!live.matchesHostRun(original.getString("taskId"),original.getString("runId"),original.getInt("coordinatorEpoch")))throw new SecurityException("唯一整合者执行身份已变化");live.check();JSONArray request=new JSONArray(history.toString());request.getJSONObject(0).put("content",(fullProject?"本次是完整项目交付。先按下列规则完成全部原成果CAS，再调用team_prepare_integrated_project准备主人完整固定基线与准确已审输出的唯一结果副本；不得从成员目录引入额外文件。之后使用原project_inspect/search/read和原native commandTemplates的精确command方案；每个方案须主人批准当前sourceDigest。运行所有requiredForFreeze同版检查并确认真实退出/资源释放，再用intent=freeze_package/mode=source_project/明确entryPath生成并执行原生项目包方案，最后project_package按原executionId回读固定成果。不可编辑该组合副本、切换环境、用任意命令模板或覆盖父活跃checkout；命令同应用UID执行，不是OS沙箱。完整包是固定基线结果，不得声称当前主项目已测试。只有这些真实证据齐备才能收尾。\n":"")+"你是机主审查后的唯一文件整合者。本次原生planHash="+original.getString("planHash")+"；旧计划的读取和应用回执不能替代本计划。只能使用本次team_read_integration和team_integrate_file。先读原审查计划，只能逐项选择其中的原artifactId和path。team_read_integration默认是本轮有界索引；hasMore时按nextOffset/snapshotHash继续，完整冻结证据按view=evidence和原path/artifactId范围读取，旧审计按view=history再用其精确operation引用分块读取。页或来源变化须从第一页重读；旧内容不授权新操作。本child当前执行原上下文可用memory_raw_query(section=messages或operations)检索，再memory_raw_read按准确sourceId/revision分页回读；不能查询其他任务、私人记忆或outputs。历史整理是单独计同父池的SUMMARY请求，整理内容仍是低信任资料，不替代原工具事实或批准。project_plan以原planRef/planDigest/stepId执行，完整清单由project_plan_manifest按需读取，不依赖legacy inline副本。不得生成、修改、拼接或自动合并文件内容。所有文件副作用仍须原prepared操作、主人精确批准及当前版本CAS；暂停、冲突或未知效果时等待主人核对，不重放。只有实际逐文件回执齐备才说明整合完成，不代表业务验证通过。");return request;};
-            RunOutcome outcome=new AgentRunner(null,originalTasks.meter(historySession.port(),original),ContextBudgetPolicy.currentHostSource(),projection,null).run(original.getString("taskId"),"执行主人审查的原团队计划 "+original.getString("planHash")+"。请先读取原整合计划；每项只提交原path/artifactId，不产生新内容。",model.withStepCeiling(original.getInt("stepCeiling")),control,event->{try{if("result".equals(event.optString("type"))){terminalEvent.set(new JSONObject(event.toString()));return;}originalTasks.event(original,event);}catch(Exception failure){control.cancel();throw new IllegalStateException(failure);}},historySession.journal());
+            RunOutcome outcome=new AgentRunner(null,originalTasks.meter(historySession.port(),original),ContextBudgetPolicy.currentHostSource(),projection,null).run(original.getString("taskId"),"执行主人审查的原团队计划 "+original.getString("planHash")+"。请先读取原整合计划；每项只提交原path/artifactId，不产生新内容。"+(original.has("onlyRemainingFiles")?"本次主人只选择了剩余清单："+original.getJSONArray("onlyRemainingFiles")+"。跳过所有已写回文件；不要再为它们登记工具操作。":""),model.withStepCeiling(original.getInt("stepCeiling")),control,event->{try{if("result".equals(event.optString("type"))){terminalEvent.set(new JSONObject(event.toString()));return;}originalTasks.event(original,event);}catch(Exception failure){control.cancel();throw new IllegalStateException(failure);}},historySession.journal());
             closeFence(liveFence);control.check();if(terminalEvent.get()!=null)originalTasks.event(original,terminalEvent.get());String status=outcome.status;JSONObject evidence=new JSONObject(outcome.evidence.toString());
             // Runner has closed its tools and emitted the real terminal event. Only read-only settlement follows.
             TeamProjectWorkspaces.Delivery delivery=status.equals("needs_confirmation")&&fullProject?projectHost.integrationCompletion(original,control):null;if(delivery!=null)evidence.put("teamProjectDelivery",delivery.view());

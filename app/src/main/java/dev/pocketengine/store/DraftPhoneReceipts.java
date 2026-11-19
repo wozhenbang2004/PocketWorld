@@ -55,10 +55,32 @@ final class DraftPhoneReceipts {
     // Only after the explicit start obtained its own original host receipt. Do not take a later "continue".
     static void admitted(SQLiteDatabase db,String scopeKey,JSONObject ack)throws Exception{
         String task=id(ack.getString("taskId")),run=id(ack.getString("runId"));
-        if(ack.getInt("epoch")!=1)throw new SecurityException("这不是新草稿的原首次准入");
-        requireFirst(db,task,run);ContentValues receipt=new ContentValues();receipt.put("first_run",run);receipt.put("state","created");
+        if(!db.inTransaction()||ack.getInt("epoch")!=1)throw new SecurityException("这不是新草稿的原首次准入");
+        requireFirst(db,task,run);
+        if(serviceStamp(db,serviceKey(scope(scopeKey),task))!=null)throw new SecurityException("不能覆盖原首次系统回执");
+        ContentValues receipt=new ContentValues();receipt.put("first_run",run);receipt.put("state","created");
         if(db.update(TABLE,receipt,"request_id=? AND scope_sha=? AND ((state='paired' AND first_run=?) OR (state='created' AND (first_run IS NULL OR first_run=?)))",new String[]{task,scope(scopeKey),run,run})!=1)
             throw new SecurityException("原草稿的首次启动记录已变化");
+    }
+    private static String serviceKey(String scope,String request){return "blank_phone_first_service:"+scope+":"+request;}
+    private static String serviceStamp(SQLiteDatabase db,String key){
+        try(Cursor c=db.rawQuery("SELECT value FROM meta WHERE key=?",new String[]{key})){return c.moveToFirst()?c.getString(0):null;}
+    }
+    // The original draft receipt remains paired (also readable by older versions); the existing
+    // metadata ledger adds only the exact outcome of that one Android call, no goal or authority.
+    static void refused(SQLiteDatabase db,String scopeKey,JSONObject ack,String outcome)throws Exception{
+        if(!db.inTransaction()||!("service_denied".equals(outcome)||"component_unconfirmed".equals(outcome))||
+                ack.getInt("epoch")!=1||ack.getInt("coordinatorEpoch")!=1)
+            throw new SecurityException("缺少原草稿的首次系统回执");
+        String task=id(ack.getString("taskId")),run=id(ack.getString("runId")),scope=scope(scopeKey);
+        requireFirst(db,task,run);
+        try(Cursor c=db.rawQuery("SELECT 1 FROM "+TABLE+" WHERE request_id=? AND scope_sha=? AND state='paired' AND first_run=?",
+                new String[]{task,scope,run})){
+            if(!c.moveToFirst())throw new SecurityException("原草稿已不是这次系统启动");
+        }
+        String key=serviceKey(scope,task),stamp=outcome+":"+run;
+        db.execSQL("INSERT OR IGNORE INTO meta(key,value) VALUES(?,?)",new Object[]{key,stamp});
+        if(!stamp.equals(serviceStamp(db,key)))throw new SecurityException("原系统启动已有不同回执");
     }
     private static boolean direct(JSONObject t,String request){
         return t!=null&&request.equals(t.optString("id"))&&"phone".equals(t.optString("kind"))&&"owner".equals(t.optString("actorId"))&&"private".equals(t.optString("spaceId"))&&!t.has("origin")&&!t.has("parentTaskId")&&!t.has("conversationPhoneHandoff")&&!t.has("conversationId");
@@ -80,7 +102,11 @@ final class DraftPhoneReceipts {
             if(!c.isNull(5))try(Cursor run=db.rawQuery("SELECT status FROM runs WHERE task_id=? AND run_id=? AND epoch=1",new String[]{request,c.getString(5)})){
                 if(run.moveToFirst()){
                     out.put("runId",c.getString(5)).put("epoch",1).put("status",run.getString(0));
-                    return paired?out.put("admissionState","run_recorded"):out.put("admitted",true).put("admissionState","admitted");
+                    if(!paired)return out.put("admitted",true).put("admissionState","admitted");
+                    String stamp=serviceStamp(db,serviceKey(scope,request));
+                    if(("service_denied:"+c.getString(5)).equals(stamp))return out.put("admitted",false).put("admissionState","service_denied");
+                    if(("component_unconfirmed:"+c.getString(5)).equals(stamp))return out.put("admissionState","component_unconfirmed");
+                    return out.put("admissionState","run_recorded");
                 }
             }
             try(Cursor any=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? LIMIT 1",new String[]{request})){

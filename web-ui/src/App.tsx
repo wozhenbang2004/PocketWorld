@@ -1,4 +1,5 @@
 import {TeamOriginalFileReceipt} from './TeamOriginalFileReceipt';
+import {TeamRemainingFiles} from './TeamRemainingFiles';
 import { FluidValueSlider } from './forms-library/uiux/FluidValueSlider';
 /**
  * PocketWorld's controlled work surface.
@@ -859,7 +860,9 @@ export default function App(){
  const discardVoice=()=>{if(isListening&&can('voice.stop')){run('voice.stop');return}if(!can('voice.review')||!can('voice.discard'))return;setVoicePending(true);void act('voice.review',{phone:intent!=='chat'}).then(value=>act('voice.discard',{reviewHandle:value.reviewHandle})).catch(error=>setLocalError(error.message)).finally(()=>setVoicePending(false));};
  const sameLinkedStart=!!phoneStart?.requestId&&phoneStart.conversationId===state.conversationId&&
   phoneDraft.channelOrigin!==true&&phoneDraft.sourceState!=='elsewhere'&&phoneDraft.startReceipt?.requestId===phoneStart.requestId;
- const keepOriginalPhoneGoal=intent!=='chat'&&sameLinkedStart&&phoneStart?.status==='accepted'&&phoneStart.admitted!==true&&
+ const sameBlankStart=!!phoneStart?.draftRequestId&&!state.conversationId&&phoneDraft.channelOrigin!==true&&phoneDraft.sourceState!=='elsewhere'&&
+   phoneDraft.startReceipt?.draftRequestId===phoneStart.draftRequestId;
+ const keepOriginalPhoneGoal=intent!=='chat'&&(sameLinkedStart||sameBlankStart)&&phoneStart?.status==='accepted'&&phoneStart.admitted!==true&&
   phoneDraft.firstCheckOnly===true&&phoneText.value.trim()===String(phoneDraft.text||'').trim();
  const queryOriginalPhone=(retire=false)=>{
   const original=phoneStart;if(document.hidden||phoneAction.current||!original)return;
@@ -1491,6 +1494,7 @@ export default function App(){
   const decision=(originalIntegrator||review||reviewPending||continuation||(canReadProject||attention(task))&&can('tasks.review'))&&<div key="task-decision" className="pw-task-decision">
       {taskLayer==='overview'&&reviewStatus}
       {originalIntegrator&&<TeamOriginalFileReceipt key={task.id+':'+task.raw!.runId+':'+task.raw!.coordinatorEpoch} id={task.id} run={task.raw!.runId} epoch={task.raw!.coordinatorEpoch} directory={task.raw!.originalTeamFileEffects??(!reviewStale?review?.task?.raw?.originalTeamFileEffects:undefined)} disabled={taskOpening||reviewPending||!overviewActive} recover={input=>bridge.command('tasks.recoverTeamFile',input)}/>}
+      {originalIntegrator&&overviewActive&&can('tasks.teamRemainder.read')&&can('tasks.teamRemainder.continue')&&(task.raw!.mayReadOriginalFileRemainder??(!reviewStale&&review?.task?.raw?.mayReadOriginalFileRemainder))===true&&<TeamRemainingFiles key={task.id+':remaining:'+task.raw!.runId+':'+task.raw!.coordinatorEpoch} id={task.id} run={task.raw!.runId} epoch={task.raw!.coordinatorEpoch} disabled={reviewPending||taskOpening} command={(action,input)=>bridge.command(action,input)}/>}
       {!readingReview&&(!review||reviewStale&&!review.ownerQuestion||ordinaryResume&&(reviewSubmitted||!!reviewReceipt||!!state.taskActionErrors?.[task.id]))&&<div className="pw-section-heading pw-task-review-tools">{canReadProject&&!continuationBlocks(continuation)?<Button variant="secondary" onClick={showTaskReview}>核对继续原项目任务</Button>:<span className="pw-grow"/>}{refreshControl}</div>}
       {review&&!reviewStale&&phoneUnknown.length>0&&<PhoneOriginalActionReview key={review.reviewHandle} taskId={task.id} rows={phoneUnknown} more={task.raw?.privatePhoneUnconfirmed?.hasMore===true} disabled={protectedDisabled} allowRecord={actionNames.includes('tasks.resolve')} submit={args=>reviewedAction('tasks.resolve',args)}/>}
       {review&&(!reviewStale||!!review.ownerQuestion)&&(ordinaryResume?resumeFeedback:hasDecision?<PermissionReview title={project?'继续原项目任务':actionNames.includes('tasks.confirm')?'这份结果是否达到目标？':'处理这次任务'} headerAction={refreshControl}><div className="pw-protected-actions">{projectControls}{review.ownerQuestion&&<OwnerTaskQuestion key={review.reviewHandle} question={review.ownerQuestion as OwnerQuestionView} text={questionAnswer} onTextChange={setQuestionAnswer} disabled={protectedDisabled} canAnswer={actionNames.includes('tasks.answerQuestion')} canChoose={actionNames.includes('tasks.answerQuestionChoice')} submit={submitQuestion}/>}{actionNames.includes('tasks.confirm')&&<Accordion variant="divided" className="pw-compact-disclosures" expandedKeys={reviewFeedbackOpen?['result-feedback']:[]} onExpandedChange={keys=>setReviewFeedbackOpen(keys.has('result-feedback'))}><AccordionItem id="result-feedback" title="补充说明（可选）" description={reviewNote?'已填写':undefined}><TextAreaField label="本次结果反馈" value={reviewNote} onChange={setReviewNote} placeholder="已完成或仍需调整的内容"/></AccordionItem></Accordion>}{actionNames.includes('tasks.approve')&&approvalNavigation}{actionNames.includes('tasks.approve')&&approved.map(p=><TaskApproval key={`${review.reviewHandle}:${p.approvalId||p.id}`} approval={p} executionScope={scope} disabled={protectedDisabled} onDecision={args=>reviewedAction('tasks.approve',args)}/>)}{actionNames.includes('tasks.resolve')&&ordinaryUnknown.filter(op=>!!op.operationId).map(op=><section className="pw-approval-item" key={op.operationId}><h4>{op.title||op.toolName||'动作结果核对'}</h4><p>{op.summary||op.message||'请依据实际观察核对这次动作是否已经发生。'}</p><div className="pw-action-row"><Button variant="secondary" disabled={protectedDisabled} onClick={()=>reviewedAction('tasks.resolve',{operationId:op.operationId,outcome:'occurred'})}>确认已发生</Button><Button variant="secondary" disabled={protectedDisabled} onClick={()=>reviewedAction('tasks.resolve',{operationId:op.operationId,outcome:'not_occurred'})}>确认未发生</Button></div></section>)}{!project&&actionNames.includes('tasks.resume')&&<TextAreaField label="本次补充" value={reviewNote} onChange={setReviewNote} placeholder="继续前需要补充什么？"/>}{!review.actions?.length&&<p className="pw-muted">当前没有待作出的新决定。</p>}</div></PermissionReview>:phoneUnknown.length||task.raw?.originalTeamFileEffects?.rows?.length?null:<div className="pw-section-heading pw-task-review-tools"><p className="pw-muted">当前没有待作出的新决定。</p>{refreshControl}</div>)}
@@ -1668,7 +1672,7 @@ export default function App(){
  };
  const phoneActivity=phoneRows.length||stopReceipts.rows.length?<>{phoneRows.map(({task,surface})=>{
    const held=stopReceipts.rows.find(x=>surface?.activityHandle===x.activityHandle);
-   if(held?.phase==='requested'&&surface?.stopRequested)return null;
+   if((held?.phase==='requested'||held?.phase==='local_only')&&surface?.stopRequested)return null;
    return <PhoneTaskStatus key={JSON.stringify([task.id,task.raw?.runId,task.raw?.coordinatorEpoch])} task={task} surface={surface||undefined} can={can}
      onOpen={()=>{const entry=attention(task)&&can('tasks.review')?'review':'overview';
        if(!isPrivateLocalPhone(task)){openTask(task.id,entry);return}
@@ -1748,7 +1752,8 @@ export default function App(){
     stageExample&&<ConversationStarters onDraft={stageExample}/>}
    {intent!=='chat'&&['elsewhere','changed','unverified'].includes(phoneDraft.sourceState)&&<p className="pw-field-hint" role="status">{phoneDraft.sourceState==='elsewhere'?'手机草稿仍留在原私人对话，这里不会显示或提交它。':phoneDraft.sourceState==='changed'?'原消息已换版或不是最新交代。草稿已保留。要改用最新交代，请在那条消息的操作里选择「保留手机草稿，关联这条原话」。':'这份保留草稿缺少可核对的原消息。原文字还在，可在最新主人消息的操作里重新指定来源，或清空后另写。'}</p>}
    {intent!=='chat'&&phoneDraft.phone===true&&!state.conversationId&&!phoneDraft.channelOrigin&&composer.key&&can('phone.draft.recentStarts')&&<EarlierDraftPhoneStarts key={chatOwner} composer={String(composer.key)} except={phoneStart?.taskId} onTask={openBlankFirst}/>}
-   {phoneStart&&phoneStart.draftRequestId&&phoneStart.status!=='rejected'&&!phoneReview&&<section className="pw-input-receipt" aria-label="本次草稿的手机任务"><Receipt receipt={phoneStart}/>{blankReceiptActions(phoneStart)}</section>}
+   {phoneStart&&phoneStart.draftRequestId&&phoneStart.status!=='rejected'&&!phoneReview&&<section className="pw-input-receipt" aria-label="本次草稿的手机任务">{phoneStart.admissionState&&phoneStart.admissionState!=='admitted'?<p role="status">{phoneStart.message}</p>:<Receipt receipt={phoneStart}/>}
+     {blankReceiptActions(phoneStart)}{keepOriginalPhoneGoal&&<small>保留原目标，不会再次启动。编辑成新目标后可以重新审阅。</small>}</section>}
    {phoneStart&&!phoneStart.draftRequestId&&!phoneReview&&(keepOriginalPhoneGoal||phoneStart.status==='unknown'&&(!phoneStart.requestId||sameLinkedStart))&&
     <section className="pw-input-receipt" aria-label="原手机启动回执">
      {keepOriginalPhoneGoal?<p role="status">{phoneStart.message}</p>:<Receipt receipt={phoneStart}/>}
