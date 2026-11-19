@@ -127,7 +127,7 @@ export function waitingPhoneGoalPage(value: unknown, local: DeviceData, search='
         ? r.waitingState==='original_run' && identity(r.runId) && positiveInteger(r.epoch) && startedPhases.has(r.taskState)
           &&(startedPhases.has(r.runState)||r.runState==='needs_confirmation')&&positiveInteger(r.registeredAt)&&typeof r.stopRequested==='boolean'
         : value.resultOnly === true
-        ? r.waitingState === 'result_review' && positiveInteger(r.reviewRecordedAt) : ['not_started','interrupted_before_start'].includes(r.waitingState)) && identity(r.goal) && positiveInteger(r.createdAt) && (['main_screen','background'].includes(r.screenMode) || r.textOnly === true && r.screenMode === 'capabilities'))
+        ? r.waitingState === 'result_review' && positiveInteger(r.reviewRecordedAt) && (r.candidateState===undefined || ['interrupted','failed','cancelled'].includes(r.candidateState)) : ['not_started','interrupted_before_start'].includes(r.waitingState)) && identity(r.goal) && positiveInteger(r.createdAt) && (['main_screen','background'].includes(r.screenMode) || r.textOnly === true && r.screenMode === 'capabilities'))
     || new Set(value.rows.map((row: DeviceData) => JSON.stringify([row.taskId,row.operationId]))).size !== value.rows.length) throw new Error('这批待接手记录无法与本机原身份核对。');
   return value;
 }

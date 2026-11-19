@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { bridge } from './bridge';
 import { Button, SearchField } from './forms-library';
 import { IconArrowLeft, IconChevronRight, IconFile } from './icons';
@@ -28,8 +28,9 @@ function windowKey(task: string) {
 /** Mounted only for the source package the owner just selected from its original work. */
 export type PackageFileSource = Pick<ProjectPackageOutcome,'taskId'|'operationId'|'artifactId'|'archiveSha256'|'runId'|'epoch'|'projectId'|'checkoutId'|'name'> & { currentRun?:boolean };
 type TeamFileWindow={handle:string; key:()=>string; fromParentWork?:boolean};
-export function ProjectPackageFiles({ item, onClose, onWholePackage, onCheckout, team }: {
+export function ProjectPackageFiles({ item, onClose, onWholePackage, onCheckout, team, renderPrivateSource }: {
   item: PackageFileSource; onClose: () => void; onWholePackage?: () => void; onCheckout?: (member: SourceMember) => void; team?:TeamFileWindow;
+  renderPrivateSource?: (files: number, current: () => boolean) => ReactNode;
 }) {
   const { taskId, operationId, artifactId, archiveSha256: artifactSha256 } = item;
   const key=()=>team?team.key():windowKey(taskId);
@@ -115,6 +116,7 @@ export function ProjectPackageFiles({ item, onClose, onWholePackage, onCheckout,
     {busy && <p role="status" className="pw-muted">{file ? '正在读取所选原文…' : '正在读取固定包清单…'}</p>}
     {error && <p role="alert" className="pw-error">{error}</p>}
     {failed && <Button size="small" variant="secondary" disabled={busy} onClick={() => void read(failed)}>重读同一选择</Button>}
+    {!team && !file && page && renderPrivateSource?.(page.total, () => !!origin.current && origin.current === windowKey(taskId))}
     {!file && onWholePackage && <Button size="small" variant="ghost" disabled={busy} onClick={onWholePackage}>查看整包预览与导出选项</Button>}
   </section>;
 }

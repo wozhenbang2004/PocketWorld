@@ -15,7 +15,7 @@ internal class PocketWebLocalSourceIntake(private val original: ProjectPackageCo
         const val PREFIX = "projects.localSource."
         val COMMANDS = setOf("open", "openPrepared", "close", "folder", "zip", "select", "review", "back", "confirm",
             "query", "retry", "releaseMissing", "discard", "openProject", "another").map { PREFIX + it }.toSet()
-        private val KINDS = setOf("saf_tree", "external_zip", "host_saved_snapshot")
+        private val KINDS = setOf("saf_tree", "external_zip", "host_saved_snapshot", "task_source_package")
     }
     private var window by mutableStateOf<String?>(null)
     private var origin: String? = null
@@ -34,13 +34,17 @@ internal class PocketWebLocalSourceIntake(private val original: ProjectPackageCo
         val fixed = evidence.optJSONObject("original")?.takeIf { evidence.optString("sourceKind") == "external_zip" &&
             evidence.optBoolean("ordinaryZipIsPocketWorldPackage") && it.optString("fixedPackageManifestIdentity").matches(Regex("[a-f0-9]{64}")) &&
             it.optString("originalArchiveSha256").matches(Regex("[a-f0-9]{64}")) && it.optInt("fixedPackageOmitted", -1) in 0..2000 }
+        val taskPackage=evidence.optJSONObject("original")?.takeIf { evidence.optString("sourceKind")=="task_source_package" &&
+            it.opt("archiveSha256")==actual.opt("sha256") && it.opt("manifestIdentity")==actual.opt("manifestIdentity") }
+        if(evidence.optString("sourceKind")=="task_source_package" && taskPackage==null)return null
         return JSONObject().put("id", actual.getString("selectionId")).put("sha", actual.getString("sha256"))
             .put("manifest", actual.getString("manifestIdentity")).put("kind", evidence.getString("sourceKind"))
             .put("label", evidence.optString("sourceLabel").take(120)).put("files", evidence.optInt("files"))
             .put("excludedDirectory", evidence.optJSONObject("original")?.optString("ownerExcludedDirectory")?.takeIf {
                 evidence.optString("sourceKind") == "saf_tree" && it.isNotEmpty() && it.length <= 240 })
             .put("fixedPackage", fixed?.let { JSONObject().put("manifest", it.getString("fixedPackageManifestIdentity"))
-                .put("archive", it.getString("originalArchiveSha256")).put("omitted", it.getInt("fixedPackageOmitted")) })
+                .put("archive", it.getString("originalArchiveSha256")).put("omitted", it.getInt("fixedPackageOmitted")) }
+                ?: taskPackage?.let{JSONObject().put("manifest",it.getString("manifestIdentity")).put("archive",it.getString("archiveSha256")).put("omitted",evidence.getInt("omittedCount"))})
             .put("hostVersion", evidence.optJSONObject("original")?.optString("snapshotVersion")?.takeIf { evidence.optString("sourceKind") == "host_saved_snapshot" })
             .put("bytes", evidence.optLong("expandedBytes")).put("omitted", evidence.optInt("omittedCount"))
             .put("paths", JSONArray().apply { if (preview) actual.optJSONObject("manifest")?.optJSONArray("files")?.let { rows ->

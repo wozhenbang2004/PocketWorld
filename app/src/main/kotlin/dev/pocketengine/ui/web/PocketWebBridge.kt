@@ -222,6 +222,7 @@ internal class PocketWebBridge(
     private val projectGitImport = PocketWebProjectGitImport(controller.projectGitImports) {
         !closed && documentId != null && section == null && taskViewId == null && controller.webPrivateOwnerVisible() && controller.state.filePath == null
     }
+    private val taskPackagePreparation=PocketWebTaskPackagePreparation(controller)
     private val removedProjectFiles=PocketWebRemovedProjectFiles(controller,{ project -> !closed && documentId!=null && section==null && taskViewId==null &&
         controller.webPrivateOwnerVisible() && controller.state.projectId==project && controller.state.filePath==null },::captureWindow,::acceptsWindow)
     private val projectDevelopment = PocketWebProjectDevelopment(controller, { !closed && documentId != null && section == null && taskViewId == null && controller.webPrivateOwnerVisible() }, ::captureWindow, ::acceptsWindow)
@@ -285,6 +286,7 @@ internal class PocketWebBridge(
             "skillDraft.open", "skillDraft.read", "skillDraft.source", "skillDraft.confirm", "skillDraft.cancel", "skillDraft.query", "skillDraft.close", "voice.start", "voice.stop", "voice.review", "voice.accept", "voice.discard", "speech.speak", "speech.stop", "speech.taskAnnouncements", "speech.stopTaskAnnouncement",
             PocketWebProjectReviewReturn.DIRECTORY, PocketWebProjectReviewReturn.ORIGINAL, "tasks.refresh", "tasks.open", "tasks.close", "tasks.recoverTeamFile", "tasks.teamRemainder.read", "tasks.teamRemainder.close", "tasks.teamRemainder.continue", "tasks.stop", "tasks.review", "tasks.confirm", "tasks.approve", "tasks.resolve", "tasks.resume", "tasks.scope", "tasks.plan.enter", "tasks.answerQuestion", "tasks.answerQuestionChoice", "tasks.deleteScreenshot", "privacy.screenshots.read", "privacy.screenshots.save",
             "projects.refresh", "projects.select", "projects.create", "projects.open", "projects.newFile", "projects.edit", "projects.save", "projects.close", "projects.history", "projects.revision", "projects.useRevision", "projects.retry",
+            PocketWebTaskPackagePreparation.PREPARE, PocketWebTaskPackagePreparation.CLOSE,
             "projects.historyComparison",
             "projects.removedFiles.list", "projects.removedFiles.history", "projects.removedFiles.text", "projects.removedFiles.close",
             "settings.reviewModelTransport", "settings.saveLocalObservation", "settings.openSystem", "settings.openBrowser", "settings.openAppUpdates",
@@ -344,6 +346,7 @@ internal class PocketWebBridge(
         projectPreview?.close(); projectPreview = null; phoneViewer.clear()
         snapshotObserver.close()
         reviews.clear()
+        taskPackagePreparation.clear()
         taskHistory.clear(); workSearch.clear()
         phoneComposer.clearReviews()
         voiceInput.clear()
@@ -385,6 +388,7 @@ internal class PocketWebBridge(
         projectPreview?.invalidatePresentation(documentReplaced)
         taskReviewGeneration++
         domainGeneration++
+        taskPackagePreparation.clear()
         taskHistory.clear(); workSearch.clear()
         reviews.clear(); phoneComposer.clearReviews(); voiceInput.clear(); modelReviews.clear(); automation.clear(); mcpImports.clear(); executionReviews.clear(); sourceReader.clear(); messageQuotes.clear(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); memoryHistory.clear(); conversationOrganization.clear(); if (documentReplaced) taskCapabilities.clear() else taskCapabilities.background(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); connectionPages.clear(); teamPages.clear(); groupPages.clear(); mediaPages.clear(); realtimePages.clear(); proxyPages.clear(); planPages.clear(); commitmentPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); devicePages.clear(preserveImageChoice = !documentReplaced); pluginPages.clear(); localPages.clear(); projectDevelopment.invalidateDraftReturn(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); accountWorkspace.invalidate(); composerModels.clear(); aiSources.clear(); conversationModels.clear()
         if (documentReplaced) personal.clear() else personal.background()
@@ -504,6 +508,12 @@ internal class PocketWebBridge(
             retiredWorkspaceCleanup(action, args)?.let { result ->
                 complete(id, result, null)
                 return
+            }
+            if(action==PocketWebTaskPackagePreparation.PREPARE || action==PocketWebTaskPackagePreparation.CLOSE){
+                val task=requiredString(args,"taskId");val ticket=captureWindow();val document=documentId
+                val current={ !closed && document!=null && documentId==document && section==null && taskViewId==task && acceptsWindow(ticket) && controller.webPrivateOwnerVisible() }
+                require(current()){ "请在这份原私人工作中准备源码" }
+                taskPackagePreparation.dispatch(action,args,current){r,e->complete(id,r,e,retainValue=false)};return
             }
             if (action in PocketWebRemovedProjectFiles.COMMANDS){
                 removedProjectFiles.dispatch(action,args){r,e->complete(id,r,e,retainValue=false)};return

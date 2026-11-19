@@ -498,7 +498,7 @@ internal class ProjectPackageCoordinator(
         val rows = local().listStagedProjectPackagesForOwner().objects()
         val target = prepared?.let { (id, sha) ->
             rows.singleOrNull { it.optBoolean("available") && it.optString("selectionId") == id && it.optString("sha256") == sha &&
-                it.optJSONObject("sourceEvidence")?.optString("sourceKind") == "host_saved_snapshot" }
+                it.optJSONObject("sourceEvidence")?.optString("sourceKind") in setOf("host_saved_snapshot","task_source_package") }
                 ?: error("原任务准备的那份手机源码已失效，没有选中其他工程")
         }
         return@work {
@@ -511,7 +511,7 @@ internal class ProjectPackageCoordinator(
             }
             if (target != null && state.pendingImport == null) {
                 webSourcePin = null
-                state = state.copy(stagedPackages = rows, staged = target, importPlan = null, imported = null, notice = "只准备了原主机任务中选定的手机原件，尚未创建项目。")
+                state = state.copy(stagedPackages = rows, staged = target, importPlan = null, imported = null, notice = if(target.optJSONObject("sourceEvidence")?.optString("sourceKind")=="task_source_package") "只准备了原任务保存的这版固定源码，尚未创建项目。" else "只准备了原主机任务中选定的手机原件，尚未创建项目。")
             } else state = state.copy(stagedPackages = rows)
         }
     }

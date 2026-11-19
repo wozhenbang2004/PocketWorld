@@ -12,6 +12,7 @@ import org.json.JSONObject;
 /** B's own accepted requests, not the sender's outbox and not authority to execute one. */
 final class ReceivedPhoneGoalIndex {
     private ReceivedPhoneGoalIndex() {}
+    private static final Set<String> DETACHED_CANDIDATES=Set.of("interrupted","failed","cancelled");
     /** This row's original incoming grant is issued HERE. Its epoch can therefore bind the caller
      * peer row, unlike an oppositely issued grant. An older incarnation never inherits a nickname. */
     private static JSONObject sourceIdentity(SQLiteDatabase db,String here,String source,String grant,long epoch,long now) {
@@ -181,16 +182,25 @@ final class ReceivedPhoneGoalIndex {
                         }
                         catch(IllegalStateException|SecurityException|JSONException unavailable){limited++;continue;}
                     }
-                    JSONObject review=null;
+                    JSONObject review=null;String candidateState="";
                     if(results){
-                        if(!"needs_confirmation".equals(header.opt("status")))continue;
+                        String phase=header.optString("status");
+                        if(!"needs_confirmation".equals(phase)&&!DETACHED_CANDIDATES.contains(phase))continue;
+                        if(!(header.opt("cancelRequested") instanceof Boolean)||"needs_confirmation".equals(phase)&&header.optBoolean("cancelRequested"))continue;
                         review=header.optJSONObject("receivedPhoneResultSlot");
                         if(review==null)review=legacySlot(db,task,header);
                         if(review!=null&&review.optBoolean("limited")){limited++;continue;}
                         if(review==null || !header.getString("runId").equals(review.opt("runId"))
                                 || header.getInt("coordinatorEpoch")!=review.optInt("epoch",-1)||review.optLong("recordedAt")<=0)continue;
-                        try(Cursor r=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND epoch=? AND run_id=?",
-                                new String[]{task, Integer.toString(review.getInt("epoch")),review.getString("runId")})){if(!r.moveToFirst())continue;}
+                        try(Cursor r=db.rawQuery("SELECT status FROM runs WHERE task_id=? AND epoch=? AND run_id=?",
+                                new String[]{task,Integer.toString(review.getInt("epoch")),review.getString("runId")})){
+                            if(!r.moveToFirst())continue;
+                            String runPhase=r.getString(0);
+                            if(DETACHED_CANDIDATES.contains(phase)){
+                                if(!phase.equals(runPhase))continue;
+                                candidateState=phase; // Only a read-only local candidate, never a new verdict.
+                            }else if(!"running".equals(runPhase)&&!"interrupted".equals(runPhase)&&!"needs_confirmation".equals(runPhase))continue;
+                        }
                     }
                     String goal=wire.getJSONObject("arguments").getString("goal"); if (goal.trim().isEmpty()||!closed&&!search.matches(goal)) continue;
                     if (goal.codePointCount(0,goal.length())>160) goal=goal.substring(0,goal.offsetByCodePoints(0,160))+"…";
@@ -198,7 +208,7 @@ final class ReceivedPhoneGoalIndex {
                             .put("sourceIdentity",shelf==Shelf.PENDING||started||declined||withdrawn||results||failed?sourceIdentity(db,here,source,c.getString(4),c.getLong(5),System.currentTimeMillis()):null)
                             .put("sourceDeviceId",source).put("withdrawnAt",withdrawn?Long.valueOf(withdrawnAt):null).put("declinedAt",declined?Long.valueOf(declinedAt):null).put("failedRun",failedRun).put("startedRun",startedRun).put("closedReview",closedReview).put("mayCheckLocalText",!waiting&&zero&&"completed".equals(header.opt("status"))&&!header.optString("runId").isEmpty()&&header.optInt("coordinatorEpoch")>0?true:null)
                             .put("textOnly",textOnly||zero&&"assistant".equals(header.opt("kind"))?true:null).put("reviewRun",review==null?null:review.getString("runId"))
-                            .put("reviewEpoch",review==null?null:review.getInt("epoch")).put("reviewRecordedAt",review==null?null:review.getLong("recordedAt"))
+                            .put("candidateState",candidateState.isEmpty()?null:candidateState).put("reviewEpoch",review==null?null:review.getInt("epoch")).put("reviewRecordedAt",review==null?null:review.getLong("recordedAt"))
                             .put("waitingState",failed?"failed_run":withdrawn?"withdrawn_before_start":declined?"declined_before_start":started?"original_run":results?"result_review":waiting&&!closed?("interrupted".equals(header.opt("status"))?"interrupted_before_start":"not_started"):null).put("originDigest",DeviceProtocol.sha256(DeviceProtocol.canonicalBytes(origin))).put("screenMode",mode)
                             .put("goal",goal).put("matchedLater",!closed&&search.beyondPreview(goal)?true:null).put("createdAt",c.getLong(2)));
                 } catch (JSONException | DeviceProtocol.ProtocolException invalid) { /* Never replace missing provenance with a nearby task. */ }
@@ -217,7 +227,9 @@ final class ReceivedPhoneGoalIndex {
         if(origin==null||!"paired_device".equals(origin.opt("kind"))||caller.isEmpty()||!caller.equals(origin.opt("originDeviceId"))
                 ||!origin.optString("rootTaskId").equals(origin.opt("parentTaskId"))||!("paired_device:"+caller).equals(source.opt("actorId"))
                 ||!("device:"+caller).equals(source.opt("spaceId"))||DeviceProtocol.receivedPhoneScopeMode(source).isEmpty())return null;
-        if(!"needs_confirmation".equals(source.opt("status"))
+        String state=source.optString("status");
+        if(!"needs_confirmation".equals(state)&&!DETACHED_CANDIDATES.contains(state)
+                ||source.optJSONObject("evidence")!=null&&source.getJSONObject("evidence").has("nativeDeviceGoalOwnerReview")
                 ||run.isEmpty()||epoch<1||result==null||!"needs_confirmation".equals(result.opt("status"))
                 ||!Boolean.FALSE.equals(result.opt("closed"))||!Boolean.TRUE.equals(result.opt("nativeRunnerExited"))
                 ||!Boolean.TRUE.equals(result.opt("nativeDispatchClosed"))||!run.equals(result.opt("runId"))||epoch!=result.optInt("executorEpoch",-1)
@@ -226,11 +238,11 @@ final class ReceivedPhoneGoalIndex {
     }
     private static JSONObject legacySlot(SQLiteDatabase db,String id,JSONObject header)throws Exception{
         // Old installs had no marker. Only inspect one bounded candidate core at
-        // a time, after identifying the original source and needs-confirmation status.
+        // a time, after identifying the original source and an eligible recorded phase.
         try(Cursor c=db.rawQuery("SELECT CASE WHEN length(CAST(document AS BLOB))<="+TaskAuditStore.MAX_CORE_BYTES+
                 " THEN document END FROM tasks WHERE task_id=?",new String[]{id})){
             if(!c.moveToFirst())return null;if(c.isNull(0))return new JSONObject().put("limited",true);JSONObject source=new JSONObject(c.getString(0));
-            if(!id.equals(source.opt("id"))||!DeviceProtocol.canonical(header.getJSONObject("origin")).equals(DeviceProtocol.canonical(source.getJSONObject("origin"))))return null;
+            if(!id.equals(source.opt("id"))||!header.optString("status").equals(source.optString("status"))||!DeviceProtocol.canonical(header.getJSONObject("origin")).equals(DeviceProtocol.canonical(source.getJSONObject("origin"))))return null;
             return pendingSlot(source);
         }
     }

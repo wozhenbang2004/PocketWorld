@@ -78,13 +78,13 @@ public final class TeamParentHost {
         for(String key:new String[]{"activeAttempt","hasUnresolved","currentFilesComplete","requiresOwnerReview","historicalStatus","progress","atomicBatch","projectDelivery"})if(actual.has(key))out.put(key,actual.get(key));
         try{JSONObject recovered=writes.recoveredFilesForReading(coordinator,id,actual);if(recovered!=null)out.put("originalFileObservation",recovered);}
         catch(Exception noOriginalReading){out.put("originalFileObservationUnavailable",true);}
-        JSONArray receipts=actual.optJSONArray("receipts"),shown=new JSONArray();
-        for(int i=0;receipts!=null&&i<receipts.length();i++){
-            JSONObject source=receipts.getJSONObject(i),row=new JSONObject();
-            for(String key:new String[]{"operationId","artifactId","path","status","sha256","version","baseVersion","appliedVersion","appliedHash","contentHash","accepted"})if(source.has(key))row.put(key,source.get(key));
-            shown.put(row);
-        }
-        return out.put("teamRunId",id).put("fileReceipts",shown).put("fileReceiptCount",shown.length()).put("receiptBodiesIncluded",false).put("businessVerified",false);
+        // A tool receipt can be an approval request, a repeated observation or a conflict. Never
+        // hand a header-only row to the parent as proof of a written file.
+        if(actual.has("coordinatorEpoch"))out.put("coordinatorEpoch",actual.getInt("coordinatorEpoch"));
+        JSONObject progress=actual.optJSONObject("progress");
+        if(progress!=null)out.put("currentVerifiedFiles",progress.getInt("applied")+progress.getInt("retained"))
+                .put("fileOperationView","teams_get view=integration");
+        return out.put("teamRunId",id).put("receiptBodiesIncluded",false).put("businessVerified",false);
     }
     private JSONObject read(TaskStore.TeamParentOrigin source,JSONObject args,RunControl original,boolean waiting)throws Exception {
         String id=args.getString("teamRunId");JSONObject access=tasks.teamParentAccess(source,id,false);JSONObject reservation=tasks.beginTeamParentRead(source,id,args),receipt=new JSONObject().put("status","read_failed");
@@ -144,7 +144,12 @@ public final class TeamParentHost {
                     if(finding!=null)out.put("independentFinding",finding);
                     break;
                 }
-                case "integration":out=integration(id);break;
+                case "integration":{
+                    out=integration(id);
+                    if(out.has("progress")&&!out.optString("runId").isEmpty())out.put("fileOperationEvidence",tasks.teamParentFileOperationPage(source,args,out));
+                    else if(args.has("fileCursor"))throw new SecurityException("所选原整合执行不存在，未返回其他版本的回执");
+                    break;
+                }
                 default:throw new IllegalArgumentException("请选择原团队状态、事件、补充回执、成果或审阅视图");
             }
             source.checkCurrent();receipt=new JSONObject().put("status","read_completed").put("nativeReturned",true).put("modelConsumptionVerified",false);for(String key:new String[]{"source","researchOutput","offset","endOffset","totalChars","complete","nextEvent","state","timedOut"})if(out.has(key))receipt.put(key,out.get(key));return out.put("queryOnly",true);

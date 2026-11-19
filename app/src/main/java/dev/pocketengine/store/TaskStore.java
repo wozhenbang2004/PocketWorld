@@ -10536,6 +10536,51 @@ public final class TaskStore {
     public synchronized JSONObject teamIntegrationContext(String teamRun,RunControl ownerRead)throws Exception {
         ownerRead.check();return teamIntegrationContextCurrent(teamRun);
     }
+    /** Original parent query only; deliberately distinct from the child Runner's broad audit access. */
+    public synchronized JSONObject teamParentFileOperationPage(TeamParentOrigin parent,JSONObject args,JSONObject shown)throws Exception {
+        if(parent==null||!"teams_get".equals(parent.tool)||!"integration".equals(args.opt("view"))||!parent.argsHash.equals(capabilityFingerprint(args)))
+            throw new SecurityException("不是原父任务已计量的文件回执查询");
+        String teamRun=args.getString("teamRunId");int limit=args.has("limit")?TaskExecutionScope.exactInt(args,"limit",1,16):8;
+        boolean owns=!db.inTransaction();if(owns)db.beginTransactionNonExclusive();
+        try {
+            JSONObject team=teamParentAccess(parent,teamRun,false),review=team.getJSONObject("teamOutputReview");
+            String id=UUID.nameUUIDFromBytes(("team-integration:"+teamRun).getBytes(StandardCharsets.UTF_8)).toString();
+            JSONObject task=required(id),origin=task.getJSONObject("origin"),a=task.getJSONObject("teamAssignment"),progress=shown.getJSONObject("progress");
+            String run=task.getString("runId"),hash=review.getString("planHash"),reviewId=review.getString("reviewId");int epoch=task.getInt("coordinatorEpoch");
+            if(!TaskStoreTeamFileEffects.integrator(task)||!team.getString("id").equals(task.opt("parentTaskId"))||!teamRun.equals(origin.opt("teamRunId"))||
+                    !id.equals(origin.opt("assignmentId"))||!id.equals(a.opt("assignmentId"))||!"integrator".equals(a.opt("memberId"))||!teamRun.equals(a.opt("teamRunId"))||
+                    !canonical(a.getJSONObject("plan")).equals(canonical(review.getJSONObject("plan")))||!hash.equals(a.opt("planHash"))||!reviewId.equals(a.opt("reviewId"))||
+                    !id.equals(shown.opt("taskId"))||!run.equals(shown.opt("runId"))||epoch!=shown.optInt("coordinatorEpoch",-1)||epoch!=originalRunEpoch(id,run)||
+                    !id.equals(progress.opt("taskId"))||!hash.equals(progress.opt("planHash"))||!reviewId.equals(progress.opt("reviewId")))
+                throw new SecurityException("原整合者、审阅或当前观察已变化，请重新读取");
+            JSONObject binding=new JSONObject(a.toString()).put("taskId",id).put("runId",run).put("coordinatorEpoch",epoch);
+            String prefix=capabilityFingerprint(new JSONObject().put("team",teamRun).put("task",id).put("run",run).put("epoch",epoch).put("review",reviewId).put("plan",hash).put("heads",progress))+".";
+            String supplied=args.optString("fileCursor","");
+            if(!supplied.isEmpty()&&(!supplied.startsWith(prefix)||supplied.length()<=prefix.length()||supplied.length()>2048))throw new SecurityException("原文件观察、代次或续页标记已变化，请重新读取");
+            JSONObject page=TaskAuditStore.operationPage(db,id,supplied.isEmpty()?"":supplied.substring(prefix.length()),limit,64*1024,java.util.Set.of("team_integrate_file"));
+            JSONArray rows=page.getJSONArray("entries"),items=new JSONArray();int unbound=0,written=0,notDispatched=0;
+            for(int n=0;n<rows.length();n++){
+                JSONObject op=rows.getJSONObject(n);String operationRun=op.getString("runId");int operationEpoch=teamFileEvidenceEpoch(id,operationRun);
+                JSONObject evidence=dev.pocketengine.features.teams.TeamParentFileTrail.observe(binding,progress,task.optJSONArray("approvals"),op,operationEpoch);
+                if(evidence==null){unbound++;continue;}
+                if(evidence.has("writtenInRunId")){
+                    String writtenRun=evidence.getString("writtenInRunId");int writtenEpoch=operationRun.equals(writtenRun)?operationEpoch:teamFileEvidenceEpoch(id,writtenRun);
+                    if(writtenEpoch<1){unbound++;continue;}evidence.put("writtenInEpoch",writtenEpoch);
+                }
+                if("historical_write_verified".equals(evidence.opt("effect")))written++;
+                if(evidence.optString("effect").matches("not_dispatched_for_decision|original_base_conflict_no_write|original_operation_confirmed_not_dispatched"))notDispatched++;
+                items.put(evidence);
+            }
+            JSONObject result=new JSONObject().put("source","original_unique_integrator_file_operations").put("items",items).put("operationsRead",rows.length())
+                    .put("unattributedOrLimited",unbound).put("verifiedWriteOperationsOnPage",written).put("verifiedNotDispatchedOnPage",notDispatched)
+                    .put("hasMore",page.getBoolean("hasMore")).put("nextCursor",page.getBoolean("hasMore")?prefix+page.getString("nextCursor"):"")
+                    .put("countsAreOperationsNotFiles",true).put("headComparisonIsObservation",true).put("businessVerified",false).put("executionAuthorized",false);
+            checkTeamParentOriginSql(parent);if(owns)db.setTransactionSuccessful();return result;
+        }finally{if(owns)db.endTransaction();}
+    }
+    private int teamFileEvidenceEpoch(String task,String run){
+        try(Cursor row=db.rawQuery("SELECT epoch FROM runs WHERE task_id=? AND run_id=?",new String[]{task,run})){return row.moveToFirst()?row.getInt(0):0;}
+    }
     /** Original SQL read body; callers have already checked their native Control without re-entry. */
     private JSONObject teamIntegrationContextCurrent(String teamRun)throws Exception {
         JSONObject team=teamWriteTask(teamRun);String id=UUID.nameUUIDFromBytes(("team-integration:"+teamRun).getBytes(StandardCharsets.UTF_8)).toString();JSONObject task=get(id,false);if(task==null)return null;

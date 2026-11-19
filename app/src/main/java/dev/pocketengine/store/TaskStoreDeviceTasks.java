@@ -1147,10 +1147,10 @@ public final class TaskStoreDeviceTasks {
     }
     /** Native historical result review: no execution Permission, model route or new budget. */
     public static final class GoalResultReview {
-        private final TaskStoreDeviceTasks issuer;private final String id,run,digest;private final int epoch;private final JSONObject result;private boolean used;
-        private GoalResultReview(TaskStoreDeviceTasks issuer,String id,String run,int epoch,JSONObject result)throws Exception{this.issuer=issuer;this.id=id;this.run=run;this.epoch=epoch;this.result=duplicate(result);digest=TaskStore.capabilityFingerprint(result);}
+        private final TaskStoreDeviceTasks issuer;private final String id,run,digest;private final int epoch;private final JSONObject result;private final boolean mayDecide;private boolean used;
+        private GoalResultReview(TaskStoreDeviceTasks issuer,String id,String run,int epoch,JSONObject result,boolean mayDecide)throws Exception{this.issuer=issuer;this.id=id;this.run=run;this.epoch=epoch;this.result=duplicate(result);this.mayDecide=mayDecide;digest=TaskStore.capabilityFingerprint(result);}
         public String taskId(){return id;}public String runId(){return run;}public int executorEpoch(){return epoch;}
-        public JSONObject view()throws Exception{return duplicate(result).put("taskId",id).put("runId",run).put("executorEpoch",epoch).put("resultDigest",digest).put("historicalReviewOnly",true).put("newRun",false).put("newEffectsAllowed",false).put("remoteAuthorizationRevoked",false);}
+        public JSONObject view()throws Exception{return duplicate(result).put("taskId",id).put("runId",run).put("executorEpoch",epoch).put("resultDigest",digest).put("canRecordDecision",mayDecide).put("historicalReviewOnly",true).put("newRun",false).put("newEffectsAllowed",false).put("remoteAuthorizationRevoked",false);}
     }
     /** Called only with the opaque completion produced by SAME original DeviceGoalSession,
      * after the Runner has returned/closed its ports. Saving a tool's JSON result cannot mint it. */
@@ -1161,11 +1161,46 @@ public final class TaskStoreDeviceTasks {
         }
     }
     public GoalResultReview reviewGoalResult(String id,String run,int epoch)throws Exception{
-        synchronized(owner){JSONObject current=task(id);requireDevice(current);JSONObject result=current.optJSONObject("deviceGoalResult");if(!"GOAL".equals(current.optString("deviceExecutionKind"))||result==null||result.optBoolean("closed")||!result.optBoolean("nativeRunnerExited")||!result.optBoolean("nativeDispatchClosed")||!run.equals(current.optString("runId"))||epoch!=current.optInt("coordinatorEpoch")||!run.equals(result.optString("runId"))||epoch!=result.optInt("executorEpoch"))throw new SecurityException("没有该原run已退出的待核结果");Live active=live.get(run);if(active!=null&&!active.original.isPaused()&&!active.original.isCancelled())throw new SecurityException("原Runner仍可派发，不能核旧结果后继续原调用");return new GoalResultReview(this,id,run,epoch,result);}
+        synchronized(owner){JSONObject current=task(id);requireDevice(current);JSONObject result=current.optJSONObject("deviceGoalResult");if(!"GOAL".equals(current.optString("deviceExecutionKind"))||result==null||result.optBoolean("closed")||!result.optBoolean("nativeRunnerExited")||!result.optBoolean("nativeDispatchClosed")||!run.equals(current.optString("runId"))||epoch!=current.optInt("coordinatorEpoch")||!run.equals(result.optString("runId"))||epoch!=result.optInt("executorEpoch"))throw new SecurityException("没有该原run已退出的待核结果");Live active=live.get(run);if(active!=null&&!active.original.isPaused()&&!active.original.isCancelled())throw new SecurityException("原Runner仍可派发，不能核旧结果后继续原调用");// A retained candidate can still be read on its own phone after the host exits.
+            // Reading it must not turn an interrupted, cancelled or unresolved task into completed.
+            try(Cursor row=db.rawQuery("SELECT status FROM runs WHERE task_id=? AND run_id=? AND epoch=?",new String[]{id,run,Integer.toString(epoch)})){
+                if(!row.moveToFirst())throw new SecurityException("原待核成果没有匹配的本机执行记录");
+                String runState=row.getString(0);
+                boolean mayDecide=mayRecordOriginalDecision(current,runState);
+                return new GoalResultReview(this,id,run,epoch,result,mayDecide);
+            }
+        }
     }
+    private static boolean mayRecordOriginalDecision(JSONObject current,String runState){
+        return "needs_confirmation".equals(current.opt("status"))&&Boolean.FALSE.equals(current.opt("cancelRequested"))
+                && ("running".equals(runState)||"interrupted".equals(runState)||"needs_confirmation".equals(runState));
+    }
+
+    /** Metadata only, after the caller already authorized this exact original task.get. Do not
+     * construct a result reader, return a body, or treat an interrupted host as runnable. */
+    public boolean originalOwnerReviewPending(String id,String run,int epoch,long recordedAt,long sourceUpdatedAt)throws Exception{
+        if(run.isEmpty()||epoch<=0||recordedAt<=0)return false;
+        String sql="SELECT CASE WHEN length(CAST(t.ui_header AS BLOB))<=32768 THEN t.ui_header END,r.status "
+                +"FROM tasks t JOIN runs r ON r.task_id=t.task_id WHERE t.task_id=? AND r.run_id=? AND r.epoch=?";
+        synchronized(owner){
+            try(Cursor row=db.rawQuery(sql,new String[]{id,run,Integer.toString(epoch)})){
+                if(!row.moveToFirst()||row.isNull(0))return false;
+                JSONObject head;
+                try{head=new JSONObject(row.getString(0));}catch(org.json.JSONException unreadable){return false;}
+                if(!deviceTask(head)||!id.equals(head.opt("id"))||!run.equals(head.opt("runId"))||epoch!=head.optInt("coordinatorEpoch")
+                        ||!mayRecordOriginalDecision(head,row.getString(1)))return false;
+                JSONObject slot=head.optJSONObject("receivedPhoneResultSlot");
+                // Older original headers do not have a slot. Accept only the same captured
+                // update and lifecycle; never reopen a raw result or a different run to fill it.
+                return slot==null?sourceUpdatedAt>0&&sourceUpdatedAt==head.optLong("updatedAt")
+                        :run.equals(slot.opt("runId"))&&epoch==slot.optInt("epoch")&&recordedAt==slot.optLong("recordedAt");
+            }
+        }
+    }
+
     public JSONObject confirmGoalResult(GoalResultReview review,boolean completed)throws Exception{return confirmGoalResult(review,completed,false);}
     public JSONObject confirmGoalResult(GoalResultReview review,boolean completed,boolean keepTextLocal)throws Exception{
-        if(review==null||review.issuer!=this)throw new SecurityException("不是本原TaskStore的结果审阅");synchronized(owner){db.beginTransaction();try{GoalResultReview current=reviewGoalResult(review.id,review.run,review.epoch);if(review.used||!review.digest.equals(current.digest))throw new SecurityException("旧结果审阅已消费或summary/evidence已变化");JSONObject task=task(review.id),result=duplicate(current.result);
+        if(review==null||review.issuer!=this)throw new SecurityException("不是本原TaskStore的结果审阅");synchronized(owner){db.beginTransaction();try{GoalResultReview current=reviewGoalResult(review.id,review.run,review.epoch);if(review.used||!review.mayDecide||!current.mayDecide||!review.digest.equals(current.digest))throw new SecurityException("原执行已离开待核对状态，或原候选已变化；未保存决定或交回摘要");JSONObject task=task(review.id),result=duplicate(current.result);
             if(keepTextLocal&&(!completed||task.optBoolean("cancelRequested")||!DevicePrivateText.mayKeepOriginalText(task)))throw new SecurityException("只能在原接收手机核对这一次纯文字成果时选择保留摘要");
             // Keep the original result intact for this phone. Earlier digest-checked projections do not strip this marker:
             // their digest comparison also fails closed, instead of exposing a withheld summary.

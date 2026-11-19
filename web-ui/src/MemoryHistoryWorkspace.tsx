@@ -4,6 +4,7 @@ import { Accordion, AccordionItem, Button, CheckboxField, RadioOptions, SearchFi
 import './knowledge-depth.css';
 import './memory-reading.css';
 import { useSurfaceEnter } from './library/surface-motion';
+import { cognitionWindow, MemoryResolutionHistory } from './MemoryResolutionHistory';
 import { MemoryAssertionFields } from './MemoryAssertionFields';
 import { MemoryConflictEvidence } from './MemoryConflictEvidence';
 import { conflictReceiptMatches, MemoryConflictDecision, reviewedConflict } from './MemoryConflictDecision';
@@ -26,9 +27,11 @@ export function MemoryHistoryWorkspace({ run, scopeKey, registerTransientBack, i
   const [replacements, setReplacements] = useState<Data[]>([]), [replacement, setReplacement] = useState('');
   const [draft, setDraft] = useState(''), [review, setReview] = useState<Data | null>(null), [acknowledged, setAcknowledged] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
+  const cognitionAt = useRef('');
   const blocked = useRef(readOnly); blocked.current = readOnly;
   const locked = busy || readOnly;
   const window = useRef(new MemoryReadingWindow()), session = useRef(''), reviewHandle = useRef('');
+  const lease = useRef({ expires: 0, timer: 0, confirming: false });
   const [version, setVersion] = useState(() => window.current.capture());
   const selectedRef = useRef<Data | null>(null), focus = useRef<HTMLElement | null>(null), reading = useRef<HTMLElement | null>(null);
   const collection = useRef<HTMLElement | null>(null), listPosition = useRef(0), returnFocus = useRef('');
@@ -38,33 +41,51 @@ export function MemoryHistoryWorkspace({ run, scopeKey, registerTransientBack, i
   const closeReview = () => { closeHandle(reviewHandle.current); reviewHandle.current = ''; setReview(null); setAcknowledged(false); };
   const clearReading = () => { setSelected(null); selectedRef.current = null; setSource(null); setReplacements([]); setReplacement(''); setDraft(''); closeReview(); };
   const reset = () => {
+    globalThis.clearTimeout(lease.current.timer); lease.current = { expires: 0, timer: 0, confirming: false };
     window.current.invalidate(); closeHandle(session.current); session.current = '';
     // Even an already-empty view needs fresh handlers for this reading window.
     // Otherwise React can skip every no-op reset and retain a retired ticket.
     setVersion(window.current.capture());
     setBusy(false); setPage(null); setCognition(null); setTask(null); setReceipt(null); clearReading(); setError(''); setNotice('');
   };
+  const expire = () => {
+    if (!session.current) return;
+    const uncertain = lease.current.confirming;
+    reset(); setNotice(uncertain ? '原阅读窗口已到期，刚提交的修改没有取得可核对的回执。请重新读取状态，不要重复提交。' : '原阅读窗口已到期，已收起正文和来源。需要继续时请重新读取。');
+  };
+  const live = () => { if (session.current && Date.now() >= lease.current.expires) { expire(); return false; } return !document.hidden; };
   const invoke = async (action: string, args: Data, accept?: (value: Data) => void) => {
-    if (blocked.current || !privateTaskHistory && action.startsWith('taskMemory.')) return;
+    if (!live() || blocked.current || !privateTaskHistory && action.startsWith('taskMemory.')) return;
     const ticket = version;
     if (!window.current.enter(ticket)) return;
     setBusy(true); setError('');
+    const changing = action === 'memoryHistory.confirm' || action === 'taskMemory.confirm';
+    if (changing) lease.current.confirming = true;
     try {
       let input = args;
       if (['memoryHistory.search', 'memoryHistory.cognition', 'taskMemory.search', 'taskMemory.task'].includes(action)) {
         if (!session.current) {
           const opened = await run('memoryHistory.open', { view });
-          if (!window.current.current(ticket)) { closeHandle(opened.sessionHandle); return; }
-          session.current = opened.sessionHandle;
+          if (!window.current.current(ticket) || document.hidden) { closeHandle(opened.sessionHandle); return; }
+          if (typeof opened.sessionHandle !== 'string' || !opened.sessionHandle || opened.view !== view || !Number.isSafeInteger(opened.readExpiresAt) || opened.readExpiresAt <= Date.now()) {
+            closeHandle(opened.sessionHandle); throw new Error('没有取得当前原生阅读期限，未读取正文。');
+          }
+          const id = opened.sessionHandle; session.current = id; lease.current.expires = opened.readExpiresAt;
+          lease.current.timer = globalThis.setTimeout(() => { if (session.current === id) expire(); }, Math.max(0, opened.readExpiresAt - Date.now()));
         }
         input = { ...args, sessionHandle: session.current };
       }
       const result = await run(action, input);
-      if (window.current.current(ticket)) { accept?.(result); return result; }
-    } catch (failure) { if (window.current.current(ticket)) setError(failure instanceof Error ? failure.message : String(failure)); }
-    finally { window.current.finish(ticket); if (window.current.current(ticket)) setBusy(false); }
+      if (window.current.current(ticket) && live()) { accept?.(result); return result; }
+    } catch (failure) { if (window.current.current(ticket) && live()) {
+      // A failed presence check cannot keep a previous private receipt, opened source, or review alive.
+      if (action === 'taskMemory.receipt') { reset(); setNotice('本次未能核对原提供回执，已收起旧正文。需要时请从原任务重新读取。'); }
+      setError(failure instanceof Error ? failure.message : String(failure));
+    } }
+    finally { window.current.finish(ticket); if (window.current.current(ticket)) { if (changing) lease.current.confirming = false; setBusy(false); } }
   };
   const choose = (record: Data, identity = '') => {
+    if (!session.current || !window.current.current(version) || !live()) return;
     window.current.invalidate(); setBusy(false);
     setVersion(window.current.capture());
     closeHandle(selectedRef.current?.readHandle || '');
@@ -112,7 +133,7 @@ export function MemoryHistoryWorkspace({ run, scopeKey, registerTransientBack, i
   useEffect(() => {
     window.current.reopen();
     setVersion(window.current.capture());
-    return () => { window.current.close(); closeHandle(session.current); closeHandle(reviewHandle.current); session.current = ''; reviewHandle.current = ''; };
+    return () => { globalThis.clearTimeout(lease.current.timer); window.current.close(); closeHandle(session.current); closeHandle(reviewHandle.current); session.current = ''; reviewHandle.current = ''; };
   }, []);
   useEffect(() => { reset(); if(!privateTaskHistory)setView('history'); }, [scopeKey,privateTaskHistory]);
   useEffect(() => {
@@ -129,14 +150,17 @@ export function MemoryHistoryWorkspace({ run, scopeKey, registerTransientBack, i
     return () => registerTransientBack(null);
   }, [review, selected, busy, registerTransientBack]);
   useEffect(() => {
-    const hidden = () => { if (document.visibilityState !== 'visible') reset(); };
-    document.addEventListener('visibilitychange', hidden); return () => document.removeEventListener('visibilitychange', hidden);
+    const hidden = () => { if (document.visibilityState !== 'visible') reset(); else live(); };
+    const leave = () => reset(), resumed = () => { live(); };
+    document.addEventListener('visibilitychange', hidden); globalThis.addEventListener('pagehide', leave); globalThis.addEventListener('pageshow', resumed); globalThis.addEventListener('focus', resumed);
+    return () => { document.removeEventListener('visibilitychange', hidden); globalThis.removeEventListener('pagehide', leave); globalThis.removeEventListener('pageshow', resumed); globalThis.removeEventListener('focus', resumed); };
   }, []);
+  const monitorReceipt = taskMemoryVisibleRecords(receipt).some(row => row.status === 'current' && typeof row.readHandle === 'string' && !!row.readHandle);
   useEffect(() => {
-    if (!task?.taskHandle || !receipt) return;
+    if (!task?.taskHandle || !monitorReceipt) return;
     const timer = setInterval(() => { if (document.visibilityState === 'visible') void invoke('taskMemory.receipt', { taskHandle: task.taskHandle }, acceptReceipt); }, 2000);
     return () => clearInterval(timer);
-  }, [task?.taskHandle, !!receipt, version]);
+  }, [task?.taskHandle, monitorReceipt, version]);
   const details = taskMemorySelectionDetails(receipt);
   const pageRecords = rows(view === 'history' ? page?.matches : page?.tasks);
   const resultGroup = (row: Data) => view === 'history' ? (['pending_conflict', 'current', 'historical'].includes(row.temporalStatus) ? row.temporalStatus : 'unknown') : (['awaiting_user', 'blocked', 'failed'].includes(row.status) ? 'attention' : ['completed', 'cancelled'].includes(row.status) ? 'finished' : 'active');
@@ -155,7 +179,8 @@ export function MemoryHistoryWorkspace({ run, scopeKey, registerTransientBack, i
       {view === 'history' && <Accordion variant="divided" className="pw-compact-disclosures"><AccordionItem id="cognition" title="主体当前认知与冲突">
         <p className="pw-muted">未知主体不会归入主人；计划与想象不参与当前现实事实。</p>
         <TextField label="稳定主体身份" value={subject} onChange={value => { reset(); setSubject(value); }} maxLength={200} isDisabled={locked} />
-        <Button variant="ghost" disabled={locked || !subject.trim()} onClick={() => { clearReading(); setPage(null); setCognition(null); void invoke('memoryHistory.cognition', { subjectId: subject.trim() }, setCognition); }}>读取当前认知</Button>
+        <Button variant="ghost" disabled={locked || !subject.trim()} onClick={() => { clearReading(); setPage(null); setCognition(null); const origin = cognitionWindow();
+          void invoke('memoryHistory.cognition', { subjectId: subject.trim() }, value => { cognitionAt.current = origin; setCognition(value); }); }}>读取当前认知</Button>
       </AccordionItem></Accordion>}
       {!page && !cognition && !task && !busy && <p className="pw-knowledge-empty-copy">{view === 'history' ? '输入关键词或记载日期，查找保存过的原文。也可以按主体核对当前认知与未决冲突。' : '搜索原任务，再查看当时提供给模型的记忆凭据。'}</p>}
       {cognition && <section aria-label="已读取的主体认知"><p className="pw-knowledge-caption">当前 {rows(cognition.current).length} · 历史 {rows(cognition.history).length} · 待审冲突 {rows(cognition.pendingConflicts).length}</p>
@@ -176,7 +201,8 @@ export function MemoryHistoryWorkspace({ run, scopeKey, registerTransientBack, i
       </section>}
     </>}
     {selected && <section ref={reading} tabIndex={-1} className="pw-memory-reading"><header className="pw-memory-detail-header"><Button variant="ghost" leadingIcon={IconChevronLeft} disabled={locked} onClick={clearReading}>返回来源列表</Button><h2>{view === 'history' ? '这份已存记忆' : '这次提供的原版本'}</h2></header>
-      <div className="pw-memory-document"><p className="pw-reading-copy">{selected.text}</p></div><p className="pw-muted">原修订 {selected.revision} · {view === 'history' ? memoryHistoryStatus(selected.temporalStatus) : selected.status}。摘要不是原件。</p>
+      <div className="pw-memory-document"><p className="pw-reading-copy">{selected.text}</p></div><p className="pw-muted">原修订 {selected.revision} · {view === 'history' ? memoryHistoryStatus(selected.temporalStatus ?? selected.assertionStatus) : selected.status}。摘要不是原件。</p>
+      {view === 'history' && selected.assertionResolution && <MemoryResolutionHistory row={selected} cognition={cognition} originalWindow={cognitionAt.current} />}
       {selected.assertion && <Accordion variant="divided" className="pw-compact-disclosures"><AccordionItem id="history-assertion" title="主体与关系" description={selected.assertion.subjectLabel || '原记录的主体信息'}><MemoryAssertionFields readOnly candidate={selected} /></AccordionItem></Accordion>}
       <div className="pw-form-actions">{rows(selected.assertion?.evidenceSpans).map((_, index) => view === 'history' && <Button key={`span-${index}`} variant="ghost" disabled={locked} onClick={() => readSource(index, true)}>回读确切原句 {index + 1}</Button>)}{rows(selected.sourceRefs).map((_, index) => <Button key={`source-${index}`} variant="ghost" disabled={locked} onClick={() => readSource(index, false)}>查看原来源 {index + 1}</Button>)}</div>
       {view === 'tasks' && <div className="pw-form-actions">{rows(selected.sourceRefs).map((ref, index) => ref.kind === 'task_evidence' && <Button key={index} variant="ghost" disabled={locked} onClick={() => { if (selectedRef.current === selected) void invoke('taskMemory.source.focus', { readHandle: selected.readHandle, index }); }}>打开来源原任务 {index + 1}</Button>)}</div>}

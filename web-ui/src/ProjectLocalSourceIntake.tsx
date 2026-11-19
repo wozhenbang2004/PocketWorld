@@ -3,11 +3,11 @@ import {bridge} from './bridge';
 import {Button, SettingsDialog, StretchSwitch, TextField} from './forms-library';
 import './project-git-intake.css';
 
-type Source = {id:string;sha:string;manifest:string;kind:'saf_tree'|'external_zip'|'host_saved_snapshot';hostVersion?:string;excludedDirectory?:string;fixedPackage?:{manifest:string;archive:string;omitted:number};label:string;files:number;bytes:number;omitted:number;paths:string[]};
+type Source = {id:string;sha:string;manifest:string;kind:'saf_tree'|'external_zip'|'host_saved_snapshot'|'task_source_package';hostVersion?:string;excludedDirectory?:string;fixedPackage?:{manifest:string;archive:string;omitted:number};label:string;files:number;bytes:number;omitted:number;paths:string[]};
 type Intake = {window:string;busy:boolean;picking:boolean;notice?:string;error?:string;suggestedSkip?:string;staged?:Source;saved:Source[];
   reviewId?:string;reviewName?:string;pendingId?:string;pendingName?:string;otherPending?:boolean;mayRetry?:boolean;mayRelease?:boolean;project?:string;checkout?:string;name?:string};
 const prefix='projects.localSource.', number=(n:number)=>new Intl.NumberFormat('zh-CN').format(n);
-const sourceKind=(s:Source)=>s.kind==='host_saved_snapshot'?'原主机任务已存手机的文件':s.kind==='saf_tree'?'文件夹':s.fixedPackage?'PocketWorld 源项目包':'源码 ZIP';
+const sourceKind=(s:Source)=>s.kind==='task_source_package'?'原私人任务的固定源码':s.kind==='host_saved_snapshot'?'原主机任务已存手机的文件':s.kind==='saf_tree'?'文件夹':s.fixedPackage?'PocketWorld 源项目包':'源码 ZIP';
 
 export function ProjectLocalSourceIntake({state}:{state?:Intake}) {
   // A system picker pauses this document. Close only when the project surface actually unmounts,
@@ -45,6 +45,7 @@ function SourcePanel({state}:{state:Intake}){
         <div className="pw-action-row"><Button variant="primary" disabled={busy} onClick={()=>void act('openProject',{project:state.project,checkout:state.checkout})}>打开这个项目</Button>
           <Button variant="ghost" disabled={busy} onClick={()=>void act('another')}>导入另一份源码</Button></div></>
       :source?<><h3>{state.reviewId?'核对新项目':'已固定本次源码'}</h3>
+        {source.kind==='task_source_package'&&<p>从原任务保存的这版源码另建项目，不复制现在的工作目录，也不覆盖原副本。</p>}
         {source.kind==='host_saved_snapshot'&&<p>只包含在原任务中选定的 UTF-8 文件，不是整份主机仓库，也没有授予运行权限。</p>}
         {source.excludedDirectory&&<p>按你的选择跳过目录 <bdi>{source.excludedDirectory}/</bdi>。其中的文件没有读取，也不会进入新项目。</p>}
         {source.fixedPackage&&<p>已核对包内文件，按原相对路径放进新项目，不带外层 project/。{source.fixedPackage.omitted>0&&`原包另有 ${number(source.fixedPackage.omitted)} 项未收录。`}不会恢复旧任务、工具环境或执行权限。</p>}

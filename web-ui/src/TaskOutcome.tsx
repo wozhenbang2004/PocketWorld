@@ -11,6 +11,7 @@ import { bridge } from './bridge';
 import { projectPackageTaskIdentity, type PackagePreviewTarget } from './project-preview';
 import { TaskResultFiles, type TaskResultFile } from './TaskResultFiles';
 import { ProjectPackageFiles, canReadProjectPackageFiles } from './ProjectPackageFiles';
+import { PrepareTaskPackageProject } from './PrepareTaskPackageProject';
 import {TaskPhoneFinalScreen} from './PhoneFinalScreenReceipt';
 import {PhoneTaskConversationReturn,type PhoneConversationOrigin} from './PhoneTaskConversationReturn';
 import { RetainedPhoneImage } from './RetainedPhoneImage';
@@ -210,6 +211,7 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
         selectPackage(''); const target = packageButton.current;
         requestAnimationFrame(() => { if (!document.hidden && packageWindowOwns(readingPackage.taskId) && target?.isConnected && !target.closest('[hidden],[inert]')) target.focus(); });
       }}
+        renderPrivateSource={(files, current) => <PrepareTaskPackageProject item={readingPackage} files={files} current={current} />}
         onCheckout={onOpenProjectPackage ? sourceMember => { selectPackage(''); onOpenProjectPackage({ taskId: readingPackage.taskId, operationId: readingPackage.operationId, sourceMember }); } : undefined}
         onWholePackage={onOpenProjectPackage ? () => { selectPackage(''); onOpenProjectPackage({ taskId: readingPackage.taskId, operationId: readingPackage.operationId }); } : undefined}/>}
       {packageRead.waiting ? <p className="pw-reading-note" role="status">正在打开原工作，随后读取已保存的版本…</p> : packageRead.busy && <p className="pw-reading-note" role="status">正在读取原任务保存的固定成果…</p>}

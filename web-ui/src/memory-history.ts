@@ -15,7 +15,7 @@ export class MemoryReadingWindow {
 }
 
 export function memoryHistoryStatus(value: string) {
-  return ({ historical: '历史版本，不代表现在的事实', current: '当前记录，只读查阅', pending_conflict: '冲突待核，尚未确定当前事实' } as Record<string, string>)[value] || '主体或发生时间未记载';
+  return ({ historical: '历史版本，不代表现在的事实', current: '当前记录，只读查阅', pending_conflict: '冲突待核，尚未确定当前事实', not_yet_valid: '尚未生效，不当作当前事实', imagined_not_real_world_fact: '设想，不当作现实事实' } as Record<string, string>)[value] || '主体或发生时间未记载';
 }
 
 export function taskMemorySummary(receipt: Data | null) {

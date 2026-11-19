@@ -163,8 +163,9 @@ internal class PocketWebMemoryHistory(private val controller: PocketWorldControl
                 }
                 while (sessions.size >= 8) sessions.remove(sessions.keys.first())?.let(::retire)
                 val id = UUID.randomUUID().toString()
-                sessions[id] = Session(id, if (view == "history") "memoryReview" else "taskMemory", controller.webWindowTicket(), controller.webMemoryScopeTicket(), copy(scope), System.currentTimeMillis() + 600_000, message, answer)
-                done(JSONObject().put("sessionHandle", id).put("scope", scope).put("view", view), null)
+                val opened = Session(id, if (view == "history") "memoryReview" else "taskMemory", controller.webWindowTicket(), controller.webMemoryScopeTicket(), copy(scope), System.currentTimeMillis() + 600_000, message, answer)
+                sessions[id] = opened
+                done(JSONObject().put("sessionHandle", id).put("scope", scope).put("view", view).put("readExpiresAt", opened.expires), null)
             }
             "memoryHistory.search" -> {
                 fields(args, "sessionHandle", "query", "cursor"); val session = session(args, "memoryReview")

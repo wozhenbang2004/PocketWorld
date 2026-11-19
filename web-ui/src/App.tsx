@@ -96,6 +96,7 @@ import type {LocalWorkspaceDraft} from './LocalWorkspace';
 import {fileWorkspaceKey,type FileLayer} from './project-file';
 import {useProjectRevision} from './useProjectRevision';
 import {packageOperationTarget,type PackagePreviewTarget} from './project-preview';
+import {TaskPackageProjectContext} from './PrepareTaskPackageProject';
 import {useProjectPackageHandoff} from './useProjectPackageHandoff';
 import {TaskOutcome} from './TaskOutcome';
 import {locatePhoneReturn,phoneSourceStillOpen,type PhoneConversationOrigin} from './PhoneTaskConversationReturn';
@@ -1589,12 +1590,16 @@ export default function App(){
     <p dir="auto">{progress.detail||(progress.source==='task'?progress.title:progress.stateLabel)}</p>
    </BlurCrossfade>
   </section>;
-  const evidence=<TaskOutcome key="task-evidence" task={review&&!reviewStale?review.task:task} messages={messages} resultFiles={taskFiles}
+  const originalEvidence=<TaskOutcome key="task-evidence" task={review&&!reviewStale?review.task:task} messages={messages} resultFiles={taskFiles}
    active={overviewActive} showEmptyResult={inspectResult&&task.status==='completed'} deferExecutionDetails={!inspectResult&&task.status!=='failed'}
    onReadPhoneConversation={overviewActive&&obj(snapshot?.view).taskId===task.id&&!state.chatSubmitting&&!state.conversationReader&&!returningConversation&&can('tasks.close')&&can('conversation.select')?origin=>void returnToTaskConversation(task,false,origin):undefined}
    canReadReport={can('ownerWork.report.read')} readIdentity={`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}:${navigationRevision}`}
    onCopy={copyWithLocalFeedback} onFollowUp={followOriginal} onOpenProjectPackage={!packageOpening&&!taskOpening&&can('projects.package.preview.inspect')&&can('projects.package.preview.open')&&can('tasks.close')?openTaskPackage:undefined}
    onOpenAttachment={can('attachments.open')?(messageId,id,sha256)=>run('attachments.open',{messageId,id,sha256}):undefined}/>;
+  const evidence=<TaskPackageProjectContext.Provider key="task-evidence" value={taskOpen&&!taskOpening&&can('projects.localSource.openPrepared')&&can('tasks.close')?(original,pin)=>{
+    if(document.hidden||original!==taskId||openedTaskId.current!==original)return;
+    void navigate('projects',()=>run('projects.localSource.openPrepared',pin));
+  }:null}>{originalEvidence}</TaskPackageProjectContext.Provider>;
   const workFacts=<OwnerWorkFacts key="task-handling" task={task} onTeam={can('teams.readRun')?openWorkTeam:undefined}
    onReport={can('conversation.select')?()=>void returnToTaskConversation(task):undefined}
    onReconcile={overviewActive&&can('tasks.open')?target=>openTask(target.taskId,'process',false,undefined,undefined,target):undefined}/>;

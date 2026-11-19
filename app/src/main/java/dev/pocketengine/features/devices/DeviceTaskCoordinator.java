@@ -106,7 +106,12 @@ public final class DeviceTaskCoordinator {
         if(saved==null)return;
         if(!run.equals(saved.optString("runId"))||epoch!=saved.optInt("executorEpoch")||!saved.optBoolean("nativeRunnerExited")
             ||!saved.optBoolean("nativeDispatchClosed")||!"needs_confirmation".equals(saved.optString("status"))){onward.put("review","unverified");return;}
-        if(!saved.optBoolean("closed")){onward.put("review","pending");return;}
+        if(!saved.optBoolean("closed")){
+            // A retained candidate is not a currently actionable review. Keep the existing
+            // protocol vocabulary and send no candidate, evidence, or internal failure reason.
+            boolean pending=devices.originalOwnerReviewPending(task.getString("id"),run,epoch,saved.optLong("recordedAt"),task.optLong("updatedAt"));
+            onward.put("review",pending?"pending":"unverified");return;
+        }
         if(!saved.optBoolean("ownerVerified")||!"completed".equals(task.optString("status"))){onward.put("review","not_confirmed");return;}
         JSONObject evidence=task.optJSONObject("evidence"),check=evidence==null?null:evidence.optJSONObject("nativeDeviceGoalOwnerReview");
         if(check==null||!check.optBoolean("completed")||!check.optBoolean("sameRun")||!(saved.opt("summary") instanceof String)){onward.put("review","unverified");return;}

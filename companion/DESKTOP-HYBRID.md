@@ -307,6 +307,33 @@ python -I -B .\companion\packaging\windows\prepare_signing_inputs.py prepare @se
 而不是签名完成凭据或可安装包；不会挑选证书、签名、上传或自行联系签名者。
 独立签名后，最终文件仍须由原正式打包器逐项验证，不能把此请求改名代替签名结果。
 
+### 用发布者已经签好的原返回包组装，不覆盖未签候选
+
+此步骤**不能签名，也不能代出签名证明**。在受控 Windows x64 构建机，使用与原候选相同的准确干净
+产品提交。发布者已独立完成签名后，准备一个单独的本机返回目录：`app/` 是签好的原 Companion，
+`driver/` 是签好的两个原驱动，`tools/` 是签好的四个原管理脚本，根目录是发布者交回的
+`signing-provenance.json`。该回执沿原正式打包器的 `pocketworld.windows-signing.v1` 格式，
+仅含 `format/sourceCommit/complete/artifacts`；七个准确路径各含 `unsignedSha256/finalSha256/signatureStatus/signerThumbprint`。
+原待签 `signing-request.json` 可原样附在根目录，但不是发布者回执。不要用自己写的回执或从同一返回目录抄出的值充当独立核准。
+
+```powershell
+$selection = @('--candidate','C:\BuildOutput\candidate-new\candidate.json',
+  '--expected-zip-sha256',$approvedCandidateZipSha256, '--source-commit',$productCommit,
+  '--signed-return','C:\PublisherReturn\original-seven', '--receipt-sha256',$approvedPublisherReceiptSha256,
+  '--publisher-thumbprint',$approvedWindowsPublisherThumbprint)
+python -I -B .\companion\packaging\windows\assemble_signed_candidate.py check @selection
+# 选择另存本机完整发行候选时才运行；必须是全新的目录：
+python -I -B .\companion\packaging\windows\assemble_signed_candidate.py assemble @selection --output C:\BuildDelivery\new-kit
+```
+
+`check` 不写产物：复核原候选、未变成员、外部批准的回执摘要、七对签前/签后字节及 Windows 对准确
+发布者的真实签名判断。签前到签后的对应关系来自**有权限的发布者的原回执**，单凭同一签名证书不能证明来源。
+`assemble` 在新位置沿用已有正式打包器，另读回最终归档，并检查七个已签文件以外的所有原成员均未改变。
+成功的本机目录含 Windows x64 ZIP 及 `FirstInstallFiles`（同一签名安装脚本、交付清单）。
+原候选、原回执和已签返回文件不改写；不生成签名、不执行包内程序、不安装或上传。
+Windows 信任检查遵循本构建机的证书/撤销策略；这不是其他设备的信任、交互桌面实测或已经发布的证明。
+向机主交付时仍须另外提供可信的 ZIP 摘要和发布者指纹。
+
 ### 独立阶段与已签正式包
 
 | 组件 | 本实现固定版本与源码 | 事实源 |
