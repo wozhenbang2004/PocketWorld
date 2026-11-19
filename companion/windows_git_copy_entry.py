@@ -15,7 +15,8 @@ def show_receipt(ctx,evidence,locked,settings=None):
     if locked(): return
     facts, state = evidence["source"],evidence["status"]
     title = "原副本制作回执"
-    message = f"{facts['environmentId']} · 提交 {facts['commit'][:12]} · {facts['files']} 个文件"
+    source_label=facts["environmentId"]+(" / "+facts["selectedProject"]["path"] if "selectedProject" in facts else "")
+    message = f"{source_label} · 提交 {facts['commit'][:12]} · {facts['files']} 个文件"
     if state=="saved":
         message += "\n原发布回执已核实全部文件与目录，当前路径仍是原目录身份。若你后来编辑过，不能据此断言内容未变。"
     elif state=="saved_original_unavailable":
@@ -180,7 +181,8 @@ def browse(ctx,locked,settings=None):
         for n,r in rows[page*4:page*4+4]:
             source = r["source"]
             stamp = time.strftime("%m-%d %H:%M",time.localtime(r["at"]/1000))
-            choices.append((("item",n),f"{source['environmentId']} · {source['commit'][:12]}\n{stamp} · 查看这次原制作回执"))
+            name=(source["environmentId"]+(" / "+source["selectedProject"]["path"] if "selectedProject" in source else "")).replace("&","&&")
+            choices.append((("item",n),f"{name} · {source['commit'][:12]}\n{stamp} · 查看这次原制作回执"))
         if page: choices.append(("previous","上一页"))
         if (page+1)*4<len(rows): choices.append(("next","下一页"))
         chosen = _dialog("这台 Windows 的源码副本","包括未确认或中断的原操作。打开只核对回执与目录身份，不重做。",choices,retire=locked)
@@ -212,7 +214,8 @@ def confirm_copy(ctx,settings,source,locked):
         _dialog("无法核对目标磁盘的可用空间","仅检查这台电脑固定的私有成果位置；没有开始制作。",[],retire=locked); return
     if not space["enough"]:
         _dialog("目标磁盘空间不足",f"当前用户可用 {space['available']/1048576:.1f} MiB，预计需要约 {space['estimate']/1048576:.1f} MiB（含余量）。未写入、清理或改用别处。",[],retire=locked); return
-    text = (f"{source['environmentId']} · {source['commit'][:12]}\n{contents['files']} 个文件，{contents['logicalBytes']} 字节。"
+    name=source["environmentId"]+(" / "+source["selectedProject"]["path"] if "selectedProject" in source else "")
+    text = (f"{name} · {source['commit'][:12]}\n{contents['files']} 个文件，{contents['logicalBytes']} 字节。"
             f"\n新建本机位置：{path}\n当前可用 {space['available']/1073741824:.1f} GiB，预计需约 {space['estimate']/1048576:.1f} MiB（含余量，不预留）。\n只保存原提交中的源码文件，以及供本机核对的路径、文件身份和摘要清单。没有 .git 历史、未提交改动、运行环境或手机权限。"
             "不会改源仓库、覆盖已有目录、执行代码或发送文件。")
     if _dialog("要保存这份独立源码副本吗？",text,[("save","确认新建这个本机副本")],retire=locked)!="save" or locked(): return

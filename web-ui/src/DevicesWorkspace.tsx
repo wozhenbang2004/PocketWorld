@@ -8,6 +8,7 @@ import { DesktopViewer } from './DesktopViewer';
 import { PairingInvitationDisplay, shownPairingInvitation, type ShownPairingInvitation } from './PairingInvitationDisplay';
 import { SavedPhoneDispatches } from './SavedPhoneDispatches';
 import { SavedPeerScopeReceipt } from './SavedPeerScopeReceipt';
+import { LocalPeerNameEditor } from './LocalPeerNameEditor';
 import { WindowsCommandReceipt } from './WindowsCommandReceipt';
 import { WindowsWorkspaceReadReceipt } from './WindowsWorkspaceReadReceipt';
 import { WindowsFileDeliveryReceipt } from './WindowsFileDeliveryReceipt';
@@ -380,18 +381,25 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const phoneAccess = peer && phonePeer && !retired(peer) ? phoneSurfaceStatus(peer, now) : null;
   const desktopPeer = !!peer && (!!peer.windowsDesktop || /windows/i.test(peer.platform || '') || desktopScopes(peer, now, local.deviceId).length > 0
     || rows(peer.capabilitySnapshot?.capabilities).some(item => item.id === 'desktop' || String(item.id).startsWith('desktop.')));
+  const disclosure = peer?.capabilitySnapshot;
+  const lastIdentityOnly = !!peer && disclosure?.metadata?.disclosureScope === 'pair_identity_only' &&
+    disclosure.deviceId === peer.deviceId && disclosure.instanceId === peer.instanceId &&
+    Array.isArray(disclosure.capabilities) && !disclosure.capabilities.length;
+  // A cached description cannot create authority. A separately obtained working receipt, if any,
+  // must not be hidden behind an older identity-only description.
+  const identityOnlyHere = lastIdentityOnly && !rows(peer?.receivedGrantScopes).some(row => row.receivedScope === true &&
+    Number.isSafeInteger(row.expiresAt) && row.expiresAt > now && strings(row.capabilities).some(method => method === 'task.submitGoal' || method === 'tool.invoke'));
   const prepareDeviceGoal = () => {
     if (!peer || selectedPeer.current !== peer.deviceId || retired(peer)) return;
-    if (phonePeer && !desktopPeer) {
-      if (!/^pw1_[a-f0-9]{64}$/.test(peer.deviceId) || typeof peer.instanceId !== 'string' || !peer.instanceId || !/^[a-f0-9]{64}$/.test(peer.certificateFingerprint || '')) {
-        setError('这部手机的原配对身份尚未核对，未改成任意设备。'); return;
-      }
-      setWorkPhone({ deviceId: peer.deviceId, instanceId: peer.instanceId, certificateFingerprint: peer.certificateFingerprint, label: name(peer) });
-    } else setWorkPhone(undefined);
+    if (!phonePeer || desktopPeer || identityOnlyHere || !/^pw1_[a-f0-9]{64}$/.test(peer.deviceId) ||
+      typeof peer.instanceId !== 'string' || !peer.instanceId || !/^[a-f0-9]{64}$/.test(peer.certificateFingerprint || '')) {
+      setError('没有能锁定到这部手机的工作范围。没有创建任务，也没有换成其他设备。'); return;
+    }
+    setWorkPhone({ deviceId: peer.deviceId, instanceId: peer.instanceId, certificateFingerprint: peer.certificateFingerprint, label: name(peer) });
     setForm('work');
   };
   const prepareWindowsWorkspace = () => {
-    if (!peer || !desktopPeer || selectedPeer.current !== peer.deviceId || retired(peer)) return;
+    if (!peer || !desktopPeer || identityOnlyHere || selectedPeer.current !== peer.deviceId || retired(peer)) return;
     if (!/^pw1_[a-f0-9]{64}$/.test(peer.deviceId) || typeof peer.instanceId !== 'string' || !peer.instanceId || !/^[a-f0-9]{64}$/.test(peer.certificateFingerprint || '')) {
       setError('原 Windows 配对身份尚未核对，没有替换其他设备。'); return;
     }
@@ -403,6 +411,8 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const peerEntry = !peer || retired(peer) ? null
     : !deviceChannelWasConnected(peer) && available(peer.actions?.connect) && supported('devices.reviewAction')
       ? { kind: 'connect', label: '核对并连接', icon: IconDevices, open: () => actionReview('peer.connect', { deviceId: peer.deviceId }) }
+    : identityOnlyHere ? (deviceChannelWasConnected(peer) && supported('devices.snapshot')
+      ? { kind: 'capabilities', label: '向对端核对身份与回执', icon: IconLayers, open: readPeerCapabilities } : null)
     : desktopPeer ? { kind: 'desktop', label: '准备查看桌面', icon: IconMonitor, open: openDesktopPreparation }
     : phonePeer && supported('deviceTaskScope.prepare')
       ? { kind: 'goal', label: '准备交办', icon: IconAdd, open: prepareDeviceGoal }
@@ -1001,9 +1011,13 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
             {!retired(peer) && (desktopPeer || phonePeer || supported('deviceTaskScope.prepare')) && <AccordionItem id="peer-work-options" title="新工作与手动查看" description="新目标要重新选择设备和范围，不沿用原工作的权限" icon={IconLayers}>
               {!deviceChannelWasConnected(peer) && <p>准备目标不代表对端已接收。实际执行仍需核对原设备连接和本次授权。</p>}
               <div className="pw-form-actions">
-              {desktopPeer && peerEntry?.kind !== 'desktop' && <Button disabled={busy} leadingIcon={IconMonitor} onClick={openDesktopPreparation}>核对并选择桌面范围</Button>}
+              {desktopPeer && !identityOnlyHere && peerEntry?.kind !== 'desktop' && <Button disabled={busy} leadingIcon={IconMonitor} onClick={openDesktopPreparation}>核对并选择桌面范围</Button>}
               {phonePeer && !retired(peer) && supported('phoneControl.prepare') && <Button disabled={busy} onClick={() => setForm('manual')}>选择手机与屏幕</Button>}
-              {!retired(peer) && supported('deviceTaskScope.prepare') && peerEntry?.kind !== 'goal' && <Button variant="secondary" disabled={busy} onClick={desktopPeer ? prepareWindowsWorkspace : prepareDeviceGoal}>{desktopPeer ? '准备读取这台电脑的工作区' : phonePeer ? '为这部手机准备工作' : '准备目标，再选执行设备'}</Button>}
+              {!retired(peer) && !identityOnlyHere && (desktopPeer || phonePeer) && supported('deviceTaskScope.prepare') && peerEntry?.kind !== 'goal' &&
+                <Button variant="secondary" disabled={busy} onClick={desktopPeer ? prepareWindowsWorkspace : prepareDeviceGoal}>{desktopPeer ? '准备读取这台电脑的工作区' : '为这部手机准备工作'}</Button>}
+              {!retired(peer) && (identityOnlyHere || !desktopPeer && !phonePeer) && <p>{identityOnlyHere
+                ? '对方上次只公开身份。这里不创建交办任务，也不会改用其他设备。'
+                : '尚未核对到能锁定这台伙伴的工作方式。如果不指定设备，可从设备总览另行准备目标。'}</p>}
               </div>
               {desktopPeer && <p className="pw-field-hint">准备页只核对电脑与观看范围，不打开画面，不申请控制。</p>}
               {phonePeer && <div><p>写目标后，选择主屏或独立后台屏及准确应用范围，再审阅开始。“完成目标”由模型操作；“手动控制”由你刷新静态画面后逐次点击、滑动或输入，不是实时视频镜像。</p>
@@ -1043,6 +1057,15 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               {!peer.revoked && <Button variant="secondary" disabled={busy} onClick={() => { void invoke('devices.reviewPeerGrant', { deviceId: peer.deviceId }, acceptReview); }}>调整本机授予的权限</Button>}
             </AccordionItem>
             <AccordionItem id="identity" title="身份与连接设置" description="完整指纹、连接地址与信任管理">
+              {supported('devices.changeLocalPeerName') && (!retired(peer) || !!peer.ownerLocalName) && <LocalPeerNameEditor
+                key={JSON.stringify([local.deviceId,local.instanceId,peer.deviceId,peer.instanceId,peer.certificateFingerprint])}
+                current={peer.ownerLocalName || ''} busy={busy} retired={retired(peer)} save={(expected,next,done) => {
+                  void invoke('devices.changeLocalPeerName',{localDeviceId:local.deviceId,localInstanceId:local.instanceId,localFingerprint:local.certificateFingerprint,deviceId:peer.deviceId,instanceId:peer.instanceId,fingerprint:peer.certificateFingerprint,expected,name:next},(value,actual) => {
+                    if(value.localPeerNameSaved===true && value.deviceId===peer.deviceId && value.instanceId===peer.instanceId &&
+                      rows(actual?.peers).some(item=>item.deviceId===peer.deviceId && item.instanceId===peer.instanceId && item.certificateFingerprint===peer.certificateFingerprint && (item.ownerLocalName || '')===next)) done();
+                  });
+                }} />}
+
               <p className="pw-source-copy">设备 {peer.deviceId} · 授权版本 {peer.authorizationEpoch}</p>
               <p className="pw-source-copy">完整证书指纹：{fingerprint(peer.certificateFingerprint || peer.fingerprint)}</p>
               <div className="pw-form-actions">

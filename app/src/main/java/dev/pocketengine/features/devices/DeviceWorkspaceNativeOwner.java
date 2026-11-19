@@ -29,6 +29,7 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
     final TaskStore tasks;
     final TaskStoreDeviceTrust trust;
     final DeviceWorkspaceLanRuntime network;
+    private final DeviceOwnerPeerNames peerNames;
     private final NativeDeviceWorkspaceHost host;
     private final NativeDeviceTaskScopeHost taskScopeHost;
     private final DeviceWorkspaceGrantOwner grants;
@@ -39,6 +40,7 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
 
     public DeviceWorkspaceNativeOwner(EngineApplication originalApp, TaskStoreDeviceTrust originalSameDatabaseTrust, java.util.concurrent.Executor originalIngressWorker) {
         app = java.util.Objects.requireNonNull(originalApp); tasks = java.util.Objects.requireNonNull(app.tasks);
+        peerNames = new DeviceOwnerPeerNames(app);
         trust = java.util.Objects.requireNonNull(originalSameDatabaseTrust); network = new DeviceWorkspaceLanRuntime(this, originalIngressWorker); grants = new DeviceWorkspaceGrantOwner(this);
         host = new NativeDeviceWorkspaceHost(this::snapshot, new Receiver(), new Pairing(), new Goals(), new Controls(),
                 new DeviceWorkspaceDesktopOwner(this, originalIngressWorker));
@@ -152,7 +154,9 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
         JSONArray peers = original.getJSONArray("devices"); List<PairingCoordinator.OutgoingGrant> receivedGrants = network.nativeOutgoingGrants();
         for (int i = 0; i < peers.length(); i++) {
             JSONObject peer = peers.getJSONObject(i); String id = peer.getString("deviceId");
-            peer.put("label", "设备 " + id.substring(Math.max(0, id.length() - 4)));
+            String note=peerNames.get(local,id,peer.optString("instanceId"),peer.optString("certificateFingerprint"));
+            peer.put("label",note.isEmpty() ? "设备 " + id.substring(Math.max(0,id.length()-4)) : note+" · "+id.substring(Math.max(0,id.length()-6)));
+            if(!note.isEmpty())peer.put("ownerLocalName",note);
             DeviceTransportStatus.Snapshot connection = network.current(id);
             peer.put("connection", new JSONObject().put("state", connection.state().name()).put("path", connection.path().name())
                     .put("localListenerReady", connection.localListenerReady()).put("reconnectClientRunning", connection.reconnectClientRunning())
@@ -256,6 +260,9 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
         }
         public JSONObject readSavedPeerScope(String id,String instance,String fingerprint)throws Exception {
             return DeviceSavedPeerScope.read(DeviceWorkspaceNativeOwner.this,id,instance,fingerprint);
+        }
+        public void changeLocalPeerName(String here,String hereInstance,String hereFp,String id,String instance,String fp,String expected,String name)throws Exception {
+            peerNames.change(DeviceWorkspaceNativeOwner.this,here,hereInstance,hereFp,id,instance,fp,expected,name); changed();
         }
         public void advancePairing(String id) throws Exception { network.advancePairing(id); changed(); }
         public NativeDeviceWorkspaceHost.PairingReviewAction reviewCandidate(String id) throws Exception {

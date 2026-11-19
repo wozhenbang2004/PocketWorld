@@ -250,7 +250,7 @@ def repository_anchor(context,environment_id,pins,dot):
     return hashlib.sha256(json.dumps(parts,separators=(",",":")).encode()).hexdigest()
 
 
-def capture(context, settings_digest, environment_id, *, layout_for=None, content=False, checkpoint=lambda: None, on_count=lambda *_: None, material=None):
+def capture(context, settings_digest, environment_id, *, selected_project=None, layout_for=None, content=False, checkpoint=lambda: None, on_count=lambda *_: None, material=None):
     facts = {"format": PROFILE, "environmentId": environment_id, "sourceVerified": False, "projectProduction": False,
              "scope": "committed_head_and_root_tree_only", "treeRecursivelyVerified": False,
              "workingTreeChecked": False, "projectCopied": False, "capturedAt": int(time.time()*1000)}
@@ -261,8 +261,14 @@ def capture(context, settings_digest, environment_id, *, layout_for=None, conten
             _fail("original_mapping_changed")
         root = dict(registered(context, settings_digest)).get(environment_id)
         if not root: _fail("configuration_changed")
+        if layout_for is not None:
+            if selected_project is not None: _fail("selected_project_changed")
+            if "selectedProject" in layout_for:
+                selected_project=layout_for["selectedProject"]
+                if selected_project is None: _fail("selected_project_changed")
+        from windows_git_subproject import source_pins
         with ExitStack() as stack:
-            pins = Pins(context.backend,root,stack)
+            pins=source_pins(context,root,environment_id,selected_project,stack)
             dot = pins.node(".git")
             if dot is None: _fail("not_repository")
             if not dot[2]: _fail("external_layout")
@@ -319,6 +325,7 @@ def capture(context, settings_digest, environment_id, *, layout_for=None, conten
                 if content_review["complete"]:
                     facts.update(scope="raw_committed_tree_and_blob_content",treeRecursivelyVerified=True,
                                  workingTreeChecked=False,atomicWorkingTreeSnapshot=False)
+            if selected_project is not None: facts["selectedProject"]=selected_project
             facts.update(sourceVerified=True, repositoryAnchor=anchor, objectFormat=algo, commit=head, tree=tree,
                          branch=branch, rootEntries=count, objectStorage={"commit":commit_storage,"rootTree":tree_storage},
                          capturedAt=int(time.time()*1000))

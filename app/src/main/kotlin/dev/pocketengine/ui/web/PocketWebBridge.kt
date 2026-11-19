@@ -132,6 +132,13 @@ internal class PocketWebBridge(
     @Volatile private var closed = false
     private var revision = 0L
     private var lastState: String? = null
+    private val phoneObservationExpiry = PocketWebPhoneObservationExpiry(main) { original, rows ->
+        if (!closed && started && original == revision) {
+            // A subsequent genuine observation may look identical after the old fact was retired.
+            lastState = null
+            if (controller.webPrivateOwnerVisible()) emit(JSONObject().put("v",1).put("kind","privatePhoneObservationExpired").put("revision",original).put("sources",rows))
+        }
+    }
     private val choreographer by lazy { Choreographer.getInstance() }
     private var statePublicationScheduled = false
     private val statePublication = Choreographer.FrameCallback {
@@ -400,6 +407,7 @@ internal class PocketWebBridge(
     }
 
     private fun cancelStatePublication() {
+        phoneObservationExpiry.clear()
         if (!statePublicationScheduled) return
         choreographer.removeFrameCallback(statePublication)
         statePublicationScheduled = false
@@ -452,10 +460,15 @@ internal class PocketWebBridge(
                 if (section == null) taskViewId?.let { task -> controller.heldPrivatePhoneImage(task)?.let { view.put("heldPrivatePhoneImage", it.descriptor()) } }
             })
             .put("phoneDraft", phoneComposer.snapshot())
+        val bounds = phoneObservationExpiry.take(snapshot)
         val serialized = snapshot.toString()
-        if (!force && serialized == lastState) return
-        lastState = serialized
-        emit(JSONObject().put("v", 1).put("kind", "state").put("revision", ++revision).put("snapshot", snapshot))
+        val unchanged = !force && serialized == lastState
+        if (!unchanged) {
+            lastState = serialized
+            emit(JSONObject().put("v", 1).put("kind", "state").put("revision", ++revision).put("snapshot", snapshot))
+        }
+        // Even if two original observations have the same display label, use the last native deadline.
+        phoneObservationExpiry.bind(revision, if (controller.webPrivateOwnerVisible()) bounds else emptyList())
     }
 
     private fun process(raw: String) {

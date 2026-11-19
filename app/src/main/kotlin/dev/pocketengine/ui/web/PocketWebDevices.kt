@@ -60,7 +60,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
     private val desktopInFlight = AtomicReference<String?>(null)
     private val pairingImage = PocketWebPairingImage()
     companion object {
-        val COMMANDS = setOf("devices.discovery.start", "devices.discovery.stop", "devices.discovery.reviewConnection", "devices.snapshot", "devices.createInvitation", "devices.inspectInvitation", "devices.readSavedPeerScope", "devices.continueFirstPair", "devices.reviewPairing", "devices.advancePairing", "devices.reviewPeerGrant",
+        val COMMANDS = setOf("devices.discovery.start", "devices.discovery.stop", "devices.discovery.reviewConnection", "devices.snapshot", "devices.createInvitation", "devices.inspectInvitation", "devices.readSavedPeerScope", "devices.changeLocalPeerName", "devices.continueFirstPair", "devices.reviewPairing", "devices.advancePairing", "devices.reviewPeerGrant",
             "devices.reviewGrant", "devices.reviewConnection", "devices.reviewRelay", "devices.reviewAction", "devices.reviewGoal", "devices.reviewResult", "devices.reviewApproval",
             "devices.confirm", "devices.reject", "devices.discard", "devices.recoveryAddresses", "devices.openRecovery", "devices.recoverPairing", "devices.reviewAbandonment", "devices.openTask", "devices.readTask", "devices.reviewResumeRequest",
             "devices.readPhoneGoalArchive", "devices.readReceivedPhoneGoals", "devices.readLocalReviewedPhoneGoal", "devices.readReviewedPhoneInbox", "devices.readWaitingPhoneGoals", "devices.returnToReceivedPhoneGoal", "devices.prepareReceivedModelReturn", "devices.openHistory", "devices.checkLocalExportedFile", "devices.openCheckedLocalFile", "devices.queryHistory", "devices.queryPhoneGoalResult", "devices.stopHistory",
@@ -734,6 +734,16 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                         val id=text(args,"deviceId"); val instance=text(args,"instanceId"); val fp=text(args,"fingerprint"); val selected=peer(before,id)
                         require(selected.opt("revoked")==false && selected.opt("instanceId")==instance && selected.opt("certificateFingerprint")==fp) { "请重新打开原配对伙伴" }
                         JSONObject().put("savedPeerScope",original.readSavedPeerScope(id,instance,fp))
+                    }
+                    "devices.changeLocalPeerName" -> {
+                        fields(args,"localDeviceId","localInstanceId","localFingerprint","deviceId","instanceId","fingerprint","expected","name")
+                        val here=text(args,"localDeviceId"); val hereInstance=text(args,"localInstanceId"); val hereFp=text(args,"localFingerprint")
+                        val local=before.getJSONObject("local"); require(local.opt("deviceId")==here && local.opt("instanceId")==hereInstance && local.opt("certificateFingerprint")==hereFp) { "本机原身份已变化" }
+                        val id=text(args,"deviceId"); val instance=text(args,"instanceId"); val fp=text(args,"fingerprint")
+                        val expected=args.opt("expected") as? String ?: error("请核对旧备注"); val name=args.opt("name") as? String ?: error("请输入本机备注")
+                        val selected=peer(before,id); require(selected.opt("instanceId")==instance && selected.opt("certificateFingerprint")==fp && expected.length<=128 && name.length<=128) { "请重新打开原伙伴" }
+                        original.changeLocalPeerName(here,hereInstance,hereFp,id,instance,fp,expected,name)
+                        JSONObject().put("localPeerNameSaved",true).put("deviceId",id).put("instanceId",instance)
                     }
                     "devices.snapshot" -> { fields(args, "deviceId"); if (args.has("deviceId")) { val id = text(args, "deviceId"); peer(before, id); original.refreshPeerFacts(id) }; JSONObject().put("readOnly", true) }
                     "devices.createInvitation" -> {

@@ -15,6 +15,7 @@ type NativeMessage = {
   kind: string;
   revision?: number;
   snapshot?: PocketSnapshot;
+  sources?: unknown;
   id?: string;
   ok?: boolean;
   value?: unknown;
@@ -87,6 +88,19 @@ function receive(input: NativeMessage | string) {
   try { message = typeof input === 'string' ? JSON.parse(input) : input; }
   catch { return; }
   if (!message || message.v !== 1) return;
+  if (message.kind === 'privatePhoneObservationExpired') {
+    // Native can remove only a displayed fact of the same publication/run. Never change control, scope, status or the recorded task timeline.
+    if (!Number.isSafeInteger(message.revision) || message.revision!==current.revision || !Array.isArray(message.sources) ||
+        !message.sources.length || message.sources.length>8 || !Array.isArray(current.state.livePrivatePhones)) return;
+    const sources=message.sources.filter(row=>row && typeof row.taskId==='string' && typeof row.runId==='string' && Number.isInteger(row.epoch));
+    let changed=false;
+    const rows=current.state.livePrivatePhones.map((row:Record<string,any>)=>{
+      if (!row?.lastObservation || row.surfaceState!=='bound' || !sources.some(s=>s.taskId===row.taskId && s.runId===row.runId && s.epoch===row.epoch)) return row;
+      const {lastObservation: _retired, ...rest}=row; changed=true; return {...rest, lastObservationExpired:true};
+    });
+    if(changed){current={...current,state:{...current.state,livePrivatePhones:rows}};publish();}
+    return;
+  }
   if (message.kind === 'state' && message.snapshot && Number.isFinite(message.revision)) {
     if ((message.revision as number) <= (current.revision || 0)) return;
     const next = message.snapshot;

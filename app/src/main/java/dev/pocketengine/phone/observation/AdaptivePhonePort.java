@@ -98,13 +98,14 @@ public final class AdaptivePhonePort implements PhonePort {
             if(basis==null)return null;
             fact.put("changedDuringRead",true);
         }else{
-            String name=retained.optString("packageName");JSONObject installed=retained.optJSONObject("installedApp");
             if(scope.displayId>0&&"display_has_no_app".equals(retained.optString("screenState"))&&retained.optBoolean("emptyDisplayVerified"))
                 fact.put("emptyDisplayVerified",true);
-            else if(installed!=null&&"android_package_manager".equals(installed.optString("source"))&&
-                name.equals(installed.optString("packageName"))&&name.length()<=255&&name.matches("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+"))fact.put("packageName",name);
+            else OwnerObservedWindows.describe(retained,scope.displayId,fact);
         }
-        return originalPolicyVisible.test(rule)&&latest==retained&&original.pauseRevision()==revision?fact:null;
+        // The owner UI may retire this accepted reading even during a long model wait. This
+        // presentation deadline cannot renew it, create an observation or authorize input.
+        if(!originalPolicyVisible.test(rule)||latest!=retained||original.pauseRevision()!=revision||at>Long.MAX_VALUE-MAX_AGE_MS-1)return null;
+        return fact.put("ownerDisplayExpiryUptime",at+MAX_AGE_MS+1);
     }
     public boolean matchesHostScope(String task,String run,int epoch){return scope.taskId.equals(task)&&scope.runId.equals(run)&&scope.epoch==epoch;}
     public PhonePort physicalPort(){return source instanceof dev.pocketengine.phone.access.GuardedPhonePort?((dev.pocketengine.phone.access.GuardedPhonePort)source).physicalPort():source;}

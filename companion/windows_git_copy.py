@@ -3,6 +3,7 @@
 The fixed bank is an append-only artifact receipt, not another task scheduler.
 An interrupted/ambiguous entry is inspected, never replayed or garbage-collected.
 """
+from contextlib import ExitStack
 import hashlib
 import json
 import ntpath
@@ -13,6 +14,7 @@ from assignment_projects import manifest_identity
 from platform_backend import PlatformError
 from windows_git_contents import ContentProblem, MAX_FILES, MAX_FILE, MAX_TOTAL
 from windows_git_source import capture, registered
+from windows_git_subproject import valid as valid_selected_project
 from windows_installation import _object
 from windows_source_publisher import disk, publish
 import windows_source_inventory as inventory
@@ -80,7 +82,8 @@ def source_facts(source):
     review,contents = source.get("committedNameReview",{}),source.get("committedContentReview",{})
     if not (source.get("sourceVerified") is True and review.get("complete") is True and contents.get("complete") is True):
         raise PlatformError("Original complete local source evidence is required")
-    return {**{key:source[key] for key in SOURCE_KEYS},"mapping":review["mappingDigest"],
+    selected={"selectedProject":source["selectedProject"]} if "selectedProject" in source else {}
+    return {**{key:source[key] for key in SOURCE_KEYS},**selected,"mapping":review["mappingDigest"],
             "content":contents["contentManifestDigest"],"directories":review["directories"],"files":contents["files"],
             "bytes":contents["logicalBytes"],"largest":contents["largestFileBytes"],"lfsHeaders":contents["lfsHeaderFiles"]}
 
@@ -102,6 +105,7 @@ def slots(ctx):
             if (row.get("format")!=PROFILE or row.get("install")!=ctx.install_state["installId"]
                     or not isinstance(facts,dict) or not isinstance(facts.get("environmentId"),str)
                     or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}",facts["environmentId"])
+                    or "selectedProject" in facts and not valid_selected_project(facts["selectedProject"],row["install"],facts["environmentId"])
                     or not isinstance(facts.get("commit"),str) or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}",facts["commit"])
                     or facts.get("objectFormat") not in ("sha1","sha256")
                     or any(type(facts.get(k)) is not int or facts[k]<0 for k in ("files","bytes","directories","largest","lfsHeaders"))
@@ -188,8 +192,14 @@ def save(ctx,settings,source,checkpoint,progress,phase,locked):
     def ensure_state():
         ctx.check_current_pointer()
         ctx.backend.assert_private_directory(ctx.state,ctx.sid)
-    with ctx.backend.directory(ctx.state) as (_,state_handle,state_identity):
+    with ExitStack() as hold, ctx.backend.directory(ctx.state) as (_,state_handle,state_identity):
         ctx.backend.api.private_access(state_handle,ctx.sid,require_protected=True)
+        if "selectedProject" in original:
+            from windows_git_subproject import source_pins
+            env=original["environmentId"]; root=dict(registered(ctx,settings)).get(env)
+            if not root: raise CopyBlocked("source_changed")
+            # No rebinding in the gap between the two source passes or at final publication.
+            source_pins(ctx,root,env,original["selectedProject"],hold)
         current(True)
         if not disk(ctx,original)["enough"]: raise CopyBlocked("disk_space")
         for leaf in (target,".pocketworld-project-"+op):

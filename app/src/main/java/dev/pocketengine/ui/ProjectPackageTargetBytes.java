@@ -6,14 +6,23 @@ import java.io.InputStream;
 import java.security.MessageDigest;
 import java.util.Arrays;
 
-/** After an already authorized ZIP write closes: read at most its recorded length plus one. No writer or path. */
+/** After an already authorized document write closes: read at most its recorded length plus one. No writer or path. */
 final class ProjectPackageTargetBytes {
     static final String PROTOCOL="pocketworld.package.target-sha256.v1";
+    static final String TASK_OUTPUT_PROTOCOL="pocketworld.task-output.target-sha256.v1";
     interface Open { InputStream selected()throws Exception; }
     interface Gate { void current()throws Exception; }
     enum Outcome { MATCHED,DIFFERENT,UNREADABLE }
     static Outcome check(long expected,String sha,Open open,Gate gate,RunControl c)throws Exception{
-        if(expected<=0||expected>ProjectPackageArchive.MAX_ARCHIVE_BYTES||sha==null||!sha.matches("[a-f0-9]{64}"))throw new IllegalArgumentException("原固定包缺少有界的大小或摘要");
+        if(expected<=0||expected>ProjectPackageArchive.MAX_ARCHIVE_BYTES)throw new IllegalArgumentException("原固定包缺少有界的大小");
+        return read(expected,sha,open,gate,c);
+    }
+    static Outcome taskOutput(long expected,String sha,Open open,Gate gate,RunControl c)throws Exception{
+        if(expected<0||expected>dev.pocketengine.features.attachments.AttachmentBook.MAX_FILE_BYTES)throw new IllegalArgumentException("原任务文件超出范围");
+        return read(expected,sha,open,gate,c);
+    }
+    private static Outcome read(long expected,String sha,Open open,Gate gate,RunControl c)throws Exception{
+        if(sha==null||!sha.matches("[a-f0-9]{64}"))throw new IllegalArgumentException("原文件缺少字节摘要");
         gate.current();c.checkpoint();byte[] chunk=new byte[16384];long read=0;MessageDigest hash=MessageDigest.getInstance("SHA-256");
         try(InputStream in=open.selected()){
             if(in==null)return Outcome.UNREADABLE;Runnable close=()->{try{in.close();}catch(Exception ignored){}};c.onCancel(close);

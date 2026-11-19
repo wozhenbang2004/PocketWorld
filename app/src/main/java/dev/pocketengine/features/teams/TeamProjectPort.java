@@ -30,25 +30,51 @@ final class TeamProjectPort implements CapabilityPort {
         check(control);if(project==null){JSONObject context=tasks.teamProjectContextIfReady(binding,original);if(context!=null){ModelCapabilityAdapters.Binding nativeBinding=new ModelCapabilityAdapters.Binding(binding.getString("taskId"),binding.getString("runId"),binding.getInt("coordinatorEpoch"),original,true,context.getString("projectId"));TaskStoreCapabilityAuthority authority=new TaskStoreCapabilityAuthority(tasks,nativeBinding,event->{try{tasks.event(binding.getString("taskId"),binding.getString("runId"),binding.getInt("coordinatorEpoch"),event);}catch(Exception failure){original.cancel();throw new IllegalStateException("原项目审批通知未持久化",failure);}});project=new ProjectCapabilityPort(nativeBinding,authority,original,files,local,tasks,context.getString("checkoutId"),context.getJSONObject("selection").getString("runtimeId"));}}
         if(project==null)files.prepareTurnSurface(control);else project.prepareTurnSurface(control);
     }
-    @Override public JSONArray tools()throws Exception {JSONArray input=project==null?files.tools():project.tools(),out=new JSONArray();for(int i=0;i<input.length();i++){JSONObject tool=input.getJSONObject(i);String name=tool.getJSONObject("function").getString("name");if(fileTool(name)||project!=null&&projectTool(name)&&(!name.equals("project_package")||isIntegrator()))out.put(tool);}return out;}
+    @Override public JSONArray tools()throws Exception {JSONArray input=project==null?files.tools():project.tools(),out=new JSONArray();for(int i=0;i<input.length();i++){JSONObject tool=input.getJSONObject(i);String name=tool.getJSONObject("function").getString("name");if(fileTool(name)||project!=null&&projectTool(name)&&(!name.equals("project_package")||isIntegrator())){
+            if(name.equals("project_plan")){
+                tool=new JSONObject(tool.toString());JSONObject function=tool.getJSONObject("function");
+                function.getJSONObject("parameters").getJSONObject("properties").put(TeamProjectCheckReferences.FIELD,new JSONObject().put("type","string").put("minLength",64).put("maxLength",64));
+                function.put("description","本团队可用project_inspect的teamProjectChecks。准确显选检查只传intent=command、expectedSourceDigest、teamCheckRef，不传argv等命令参数；只生成待审方案。"+function.getString("description"));
+            }
+            out.put(tool);
+        }}return out;}
     private boolean isIntegrator()throws Exception{return binding.optString("memberId").equals("integrator");}
     @Override public boolean supports(String name){return fileTool(name)&&files.supports(name)||project!=null&&projectTool(name)&&project.supports(name)&&(!name.equals("project_package")||binding.optString("memberId").equals("integrator"));}
     private CapabilityPort selected(String name)throws Exception {if(!supports(name))throw new SecurityException("没有此成员已挂载项目能力；先准备真实副本，不降级成另写文字文件");return projectTool(name)?project:files;}
     @Override public boolean sideEffecting(String name){return projectTool(name)?project==null||project.sideEffecting(name):files.sideEffecting(name);}
     @Override public dev.pocketengine.core.ExecutionPlanning.Access planningAccess(String name,JSONObject arguments)throws Exception{return !supports(name)?dev.pocketengine.core.ExecutionPlanning.Access.DENY:projectTool(name)?project.planningAccess(name,arguments):files.planningAccess(name,arguments);}
-    @Override public void validate(String name,JSONObject args)throws Exception{selected(name).validate(name,args);}
-    @Override public JSONObject execute(String name,JSONObject args,RunControl control)throws Exception {check(control);JSONObject result=selected(name).execute(name,args,control);
+    private boolean isCheck(String name,JSONObject args){return "project_plan".equals(name)&&args!=null&&args.has(TeamProjectCheckReferences.FIELD);}
+    private JSONObject nativeArgs(String name,JSONObject args,RunControl control)throws Exception {
+        if(!isCheck(name,args))return args;
+        check(control);return TeamProjectCheckReferences.request(binding,tasks.teamProjectContext(binding,original),args);
+    }
+    private JSONObject checks()throws Exception{return TeamProjectCheckReferences.index(binding,tasks.teamProjectContextIfReady(binding,original));}
+    @Override public void validate(String name,JSONObject args)throws Exception{selected(name).validate(name,nativeArgs(name,args,original));}
+    @Override public JSONObject execute(String name,JSONObject args,RunControl control)throws Exception {check(control);JSONObject result=selected(name).execute(name,nativeArgs(name,args,control),control);
+        if(isCheck(name,args))return TeamProjectCheckReferences.proposal(result,args.getString(TeamProjectCheckReferences.FIELD));
+        if(name.equals("project_inspect")&&Boolean.TRUE.equals(result.opt("ok"))&&!Boolean.FALSE.equals(result.opt("accepted")))return result.put("teamProjectChecks",checks());
         if(name.equals("project_plan")&&result.has("planRef")&&result.has("planDigest")){result=new JSONObject(result.toString());result.remove("plan");result.put("inlineCompatibilityCopyOmitted",true).put("fullPlanStoredInOriginalTaskStore",true).put("readFullManifestWith","project_plan_manifest");}
         return result;}
-    @Override public JSONObject contextSnapshot(String query)throws Exception {JSONObject result=files.contextSnapshot(query);JSONObject context=tasks.teamProjectContextIfReady(binding,original);return result.put("teamProject",context==null?new JSONObject().put("ready",false).put("message","先准备原工作项的完整副本"):TeamProjectWorkspaces.summary(context.getJSONObject("selection")).put("ready",true).put("checkoutId",context.getString("checkoutId")).put("projectId",context.getString("projectId"))).put("scopeNotice","命令在同应用UID执行，独立目录不是OS权限沙箱；只接受原native模板与当前源码的明确逐方案批准");}
+    @Override public JSONObject contextSnapshot(String query)throws Exception {return files.contextSnapshot(query).put("teamProjectChecks",checks());}
     @Override public void beginRun(String goal,RunControl control)throws Exception{files.beginRun(goal,control);}
     @Override public void admitCapabilities(dev.pocketengine.core.CapabilitySnapshot snapshot,RunControl control)throws Exception{if(project==null)files.admitCapabilities(snapshot,control);else project.admitCapabilities(snapshot,control);}
-    @Override public JSONObject prepareTurn(String query,int round,int steps,RunControl control)throws Exception{prepareTurnSurface(control);JSONObject turn=project==null?files.prepareTurn(query,round,steps,control):project.prepareTurn(query,round,steps,control);JSONObject reference=turn.optJSONObject("reference");if(reference==null)reference=new JSONObject();reference.put("teamProject",contextSnapshot(query).getJSONObject("teamProject"));return turn.put("tools",tools()).put("reference",reference);}
+    @Override public JSONObject prepareTurn(String query,int round,int steps,RunControl control)throws Exception{
+        prepareTurnSurface(control);JSONObject turn=project==null?files.prepareTurn(query,round,steps,control):project.prepareTurn(query,round,steps,control);
+        JSONObject reference=turn.optJSONObject("reference");if(reference==null)reference=new JSONObject();
+        if(project!=null){
+            JSONObject index=checks();String prior=reference.optString("context");
+            // AgentRunner sends reference.context, not sibling JSON. Preserve the underlying project guidance
+            // and keep project_inspect as a fresh recovery path when the model's display window is small.
+            String line="原工作项显选检查（仅方案引用；不是执行批准或已通过；可再由project_inspect读取）："+index;
+            reference.put("context",prior.isEmpty()?line:prior+"\n\n"+line).put("teamProjectChecks",index);
+        }
+        return turn.put("tools",tools()).put("reference",reference);
+    }
     @Override public boolean responseCurrent(RunControl control)throws Exception{return project==null?files.responseCurrent(control):project.responseCurrent(control);}
     @Override public void beforeModelRequest(String request,JSONArray messages,RunControl control)throws Exception{checkRenewedSource(control);if(project==null)files.beforeModelRequest(request,messages,control);else project.beforeModelRequest(request,messages,control);}
     @Override public JSONObject afterModelResponse(String request,String answer,RunControl control)throws Exception{checkRenewedSource(control);return project==null?files.afterModelResponse(request,answer,control):project.afterModelResponse(request,answer,control);}
     @Override public void modelRequestAbandoned(String request)throws Exception{if(project==null)files.modelRequestAbandoned(request);else project.modelRequestAbandoned(request);}
-    @Override public JSONObject beforeTool(String name,JSONObject args,RunControl control)throws Exception{return project==null?files.beforeTool(name,args,control):project.beforeTool(name,args,control);}
+    @Override public JSONObject beforeTool(String name,JSONObject args,RunControl control)throws Exception{return project==null?files.beforeTool(name,args,control):project.beforeTool(name,nativeArgs(name,args,control),control);}
     @Override public void afterTool(String name,JSONObject args,JSONObject receipt,RunControl control)throws Exception{if(project==null)files.afterTool(name,args,receipt,control);else project.afterTool(name,args,receipt,control);}
     @Override public void endRun(RunControl control)throws Exception{if(project==null)files.endRun(control);else project.endRun(control);}
     // Preserve typed native consumers on the SAME original port/control; this adds no tool or authority.

@@ -19,10 +19,11 @@ function retainedPause(value:any):DisplayedPhonePause|undefined {
 export function sameDisplayedPause(a?:DisplayedPhonePause,b?:DisplayedPhonePause){
   return !!a&&!!b&&a.pauseRevision===b.pauseRevision&&a.scopeRevision===b.scopeRevision&&a.displayHandle===b.displayHandle;
 }
+type WindowDisposition='one_app'|'several_apps'|'non_app_active';
 export type PrivatePhoneSurface = {
   taskId:string; runId:string; epoch:number; activityHandle?:string; requestedMode:'main_screen'|'background';
   surfaceState:'bound'|'unconfirmed'|'handoff_unconfirmed'|'other_surface';
-  paused:boolean; stopRequested:boolean; displayedPause?:DisplayedPhonePause; lastObservation?:{displayId:number;packageName?:string;emptyDisplayVerified?:true;basis?:Basis;changedDuringRead?:true};
+  paused:boolean; stopRequested:boolean; displayedPause?:DisplayedPhonePause; lastObservationExpired?:true; lastObservation?:{displayId:number;windowDisposition?:WindowDisposition;packageName?:string;emptyDisplayVerified?:true;basis?:Basis;changedDuringRead?:true};
 };
 /** Presentation only. Never replace the identity with the global active id or use a task's requested App as an observation. */
 export function privatePhoneSurface(task:Task|undefined, collection:any):PrivatePhoneSurface|null {
@@ -38,6 +39,7 @@ export function privatePhoneSurface(task:Task|undefined, collection:any):Private
   if(task.status==='paused'&&out.paused&&!out.stopRequested&&out.surfaceState!=='other_surface'&&out.surfaceState!=='handoff_unconfirmed')
     out.displayedPause=retainedPause(row.displayedPause);
   const obs=row.lastObservation;
+  if(!obs&&out.surfaceState==='bound'&&row.lastObservationExpired===true)out.lastObservationExpired=true;
   if(row.surfaceState==='bound'&&obs&&Number.isSafeInteger(obs.displayId)&&(mode==='background'?obs.displayId>0:obs.displayId===0)){
     const reading=obs.basis,method=reading?.method;
     const basis:Basis|undefined=typeof method==='string'&&Object.hasOwn(reasons,method)?{method:method as Method}:undefined;
@@ -47,9 +49,13 @@ export function privatePhoneSurface(task:Task|undefined, collection:any):Private
       return out; // Never carry an app identity or touch target forward from a changing frame.
     }
     out.lastObservation={displayId:obs.displayId,...(basis?{basis}:{})};
-    if(obs.displayId>0&&obs.emptyDisplayVerified===true&&!obs.packageName)out.lastObservation.emptyDisplayVerified=true;
-    else if(obs.emptyDisplayVerified!==true&&typeof obs.packageName==='string'&&obs.packageName.length<=255&&/^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$/.test(obs.packageName))
-      out.lastObservation.packageName=obs.packageName;
+    if(obs.emptyDisplayVerified===true){
+      if(obs.displayId>0&&!obs.packageName&&!obs.windowDisposition)out.lastObservation.emptyDisplayVerified=true;
+    }else if((obs.windowDisposition==='several_apps'||obs.windowDisposition==='non_app_active')&&!obs.packageName)
+      out.lastObservation.windowDisposition=obs.windowDisposition;
+    else if(obs.windowDisposition==='one_app'&&typeof obs.packageName==='string'&&obs.packageName.length<=255&&/^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$/.test(obs.packageName)){
+      out.lastObservation.windowDisposition='one_app';out.lastObservation.packageName=obs.packageName;
+    }
   }
   return out;
 }
@@ -69,9 +75,13 @@ export function phoneSurfaceLabel(row:PrivatePhoneSurface,compact=false):string 
   if(row.surfaceState==='handoff_unconfirmed')return '原应用已移屏或位置待核对';
   if(row.surfaceState!=='bound')return '计划使用'+screen+' · 屏幕尚未核实';
   const last=row.lastObservation;
+  if(!last&&row.lastObservationExpired)return '上次观察已过时 · 当前应用未核实';
   if(!last)return '已绑定'+screen+' · 前台应用未核实';
   const actual=last.displayId>0?'独立屏 '+last.displayId:'主屏';
-  const where=last.emptyDisplayVerified?'屏内没有应用':last.packageName||'应用未核实';
+  const where=last.emptyDisplayVerified?'屏内没有应用':
+    last.windowDisposition==='several_apps'?(compact?'多个应用窗口':'读到不同应用的窗口，未认定单一前台应用'):
+    last.windowDisposition==='non_app_active'?(compact?'非应用窗口处于活动状态':'非应用窗口处于活动或焦点状态，前台应用未核实'):
+    last.windowDisposition==='one_app'&&last.packageName?'活动应用窗口：'+last.packageName:'应用未核实';
   if(!last.basis||last.emptyDisplayVerified)return '上次观察：'+actual+' · '+where;
   const line=observationLine(last.basis,compact);
   if(last.changedDuringRead)return compact?'上次观察：'+actual+' · 读取中画面变化':'上次观察：'+actual+' · '+line+'；读取时画面在变化，没有确认可点击的位置。';

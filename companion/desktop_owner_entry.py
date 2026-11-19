@@ -78,7 +78,7 @@ def _dialog(heading, body, choices, *, retire=None, progress=None):
     return choices[index][0] if 0 <= index < len(choices) else None
 
 
-def _folder():
+def _folder(*, root=None):
     # Use the Windows folder picker; never infer a workspace from cwd/home.
     class Browse(ctypes.Structure):
         _fields_ = [("owner", w.HWND), ("root", ctypes.c_void_p), ("display", w.LPWSTR), ("title", w.LPCWSTR),
@@ -89,13 +89,21 @@ def _folder():
     ole.CoUninitialize.argtypes, ole.CoUninitialize.restype = [], None
     if ole.CoInitializeEx(None, 2) not in (0, 1):  # S_OK or S_FALSE, balanced below.
         raise PlatformError("系统文件夹选择器当前不可用，未选择工作区")
+    root_id = ctypes.c_void_p()
     try:
         browse = shell.SHBrowseForFolderW
         browse.argtypes, browse.restype = [ctypes.POINTER(Browse)], ctypes.c_void_p
         path_for = shell.SHGetPathFromIDListEx
         path_for.argtypes, path_for.restype = [ctypes.c_void_p, w.LPWSTR, w.DWORD, w.DWORD], w.BOOL
         label = ctypes.create_unicode_buffer(260)
-        config = Browse(None, None, ctypes.cast(label, w.LPWSTR), "选择本地工作文件夹（此步不向手机授权）", 0x01 | 0x40 | 0x200, None, 0, 0)
+        if root is not None:
+            parse = shell.SHParseDisplayName
+            parse.argtypes,parse.restype = [w.LPCWSTR,ctypes.c_void_p,ctypes.POINTER(ctypes.c_void_p),w.DWORD,ctypes.POINTER(w.DWORD)],ctypes.c_long
+            if parse(root,None,ctypes.byref(root_id),0,None)<0 or not root_id.value:
+                raise PlatformError("无法将选择器限制在原已登记工作区")
+        title = "从这个工作区选择一个具体 Git 项目（不向手机授权）" if root else "选择本地工作文件夹（此步不向手机授权）"
+        # Project picking permits navigation only, not the Shell's Create Folder button.
+        config = Browse(None, root_id.value, ctypes.cast(label, w.LPWSTR), title, 0x01 | 0x40 | 0x200, None, 0, 0)
         pidl = browse(ctypes.byref(config))
         if not pidl: return None
         try:
@@ -105,6 +113,7 @@ def _folder():
         finally:
             ole.CoTaskMemFree(pidl)
     finally:
+        if root_id.value: ole.CoTaskMemFree(root_id)
         ole.CoUninitialize()
 
 

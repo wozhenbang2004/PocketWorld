@@ -366,6 +366,10 @@ internal class AttachmentOutcomeCoordinator(
         }
         val target=groupFrom(pin.optJSONObject("group"));val task=pin.optString("taskId").takeIf{it.isNotBlank()};val file=pin.getJSONObject("file")
         pin.put("exportPhase","writing")
+        if(target==null&&task!=null&&OriginalTaskOutputDelivery.selected(task,file)){
+            work(groupAuthority=false,onFinished={clearExport(pin)}){c,_->OriginalTaskOutputDelivery.write(app,app.attachmentOutcomes,task,file,uri,c) to null}
+            return
+        }
         work(groupAuthority=target!=null,onFinished={clearExport(pin)}){c,w->val result=if(target==null)app.attachmentOutcomes.export(task,file.getString("id"),file.getString("sha256"),uri,c)else groupCall(w){app.exportGroupOutcome(target,uri,c)};result.put("outcomeNotice","已导出真实文件；原任务与群投递状态分别保留") to null}
         }catch(failed:Exception){if(pin.optString("exportPhase")!="writing")clearExport(pin);state=state.copy(error=if(pin.optString("exportPhase")=="writing")"导出是否开始尚未确认；请核对所选目标文件，没有自动重写。"else safe(failed))}
     }

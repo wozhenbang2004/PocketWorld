@@ -3,7 +3,7 @@ import threading
 import time
 import unicodedata
 
-from desktop_owner_entry import _dialog
+from desktop_owner_entry import _dialog, _folder
 from desktop_sessions import WindowsDesktopHealth
 from platform_backend import PlatformError
 from windows_git_source import Incomplete, capture, registered
@@ -12,6 +12,8 @@ from windows_git_copy_entry import browse as browse_copies, confirm_copy
 
 REASONS = {
     "not_repository": "这个已登记目录本身没有 .git；不会向上、向下搜索，也不把普通文件夹当作项目。",
+    "outside_selected_root":"只接受这一个原登记工作区内的下级文件夹；不会使用外部路径或改选其他工作区。",
+    "selected_project_changed":"原工作区、所选路径、项目目录或原 .git 已经不能同时核对；不会改读同名项目。",
     "head_unresolved": "未找到可验证的当前提交。分支可能尚无首个提交，或原引用已不可用。",
     "external_layout": "本阶段不跟随外置工作树、子模块 gitfile、对象替代库或配置包含路径。",
     "config_format": "不能在此处核实这个仓库格式；不会调用 Git、读取外部配置或改写配置。",
@@ -114,6 +116,35 @@ def _review_source(context,settings,source,locked,*,content=False):
         _dialog("目录记录编号",check["mappingDigest"]+"\n绑定该根树的原路径、模式和对象编号，不是文件正文或交付回执。",[],retire=locked)
 
 
+def _project_parent(choices,locked):
+    if len(choices)==1: return choices[0][0]
+    page=0
+    while not locked():
+        buttons=[(("root",key),key+"\n"+_display(root)) for key,root in choices[page*5:page*5+5]]
+        if page: buttons.append(("prev","上一页"))
+        if (page+1)*5<len(choices): buttons.append(("next","下一页"))
+        selected=_dialog("项目属于哪个已登记工作区？","只在选定根内手动选择，不扫描其他工作区。",buttons,retire=locked)
+        if selected=="prev": page-=1; continue
+        if selected=="next": page+=1; continue
+        return selected[1] if selected and not locked() else None
+
+
+def _nested(context,settings,key,locked):
+    from windows_git_subproject import pick
+    try: selected=pick(context,settings,key,_folder,locked)
+    except Exception as exc:
+        if not locked(): _dialog("没有选定可核对的项目",REASONS.get(getattr(exc,"reason",None),REASONS["unsafe_layout"])
+                                 +" 没有登记新位置或读取文件正文。",[],retire=locked)
+        return None
+    if selected is None or locked(): return None
+    action=_dialog("核对这个项目的原提交？",key+" / "+selected["path"]+
+                   "\n只读取这个文件夹自身的普通 Git 元数据；不读取工作树、启动服务或改变手机授权。"
+                   "只核对不会在伴侣中登记此次选择；另行确认制作私有副本才会保存必要的来源证明。",
+                   [("inspect","仅核对这个子仓")],retire=locked)
+    if action=="inspect" and not locked(): return capture(context,settings,key,selected_project=selected)
+    return None
+
+
 def open_source(context, settings):
     def locked(): return not WindowsDesktopHealth().probe(session_only=True).get("available")
     history = ("copies","本机独立副本与原回执\n只核对已登记的本机制作记录，不依赖原仓库仍在当前提交。")
@@ -134,22 +165,31 @@ def open_source(context, settings):
         buttons = [(("workspace",key),label) for key,label in blocks]
         if page: buttons.append(("previous","上一页工作区"))
         if (page+1)*5 < len(choices): buttons.append(("next","下一页工作区"))
-        buttons.append(history)
+        buttons.extend([("nested","选择工作区中的一个 Git 项目文件夹\n适用于一个工作区里放了多个仓库；不会自动搜索。"),history])
         selected = _dialog("从哪个已登记的本机工作区核对？", "只读取这个根目录自身的 Git 元数据。不会运行 Git、读取工作文件正文或允许写入。",buttons,retire=locked)
         if selected == "next": page += 1; continue
         if selected == "previous": page -= 1; continue
         if selected is None or locked(): return
         if selected=="copies": browse_copies(context,locked,settings); return
-        key = selected[1]
-        result = capture(context, settings, key)
-        if locked(): return
+        if selected=="nested":
+            key=_project_parent(choices,locked)
+            if key is None: return
+            result=_nested(context,settings,key,locked)
+        else:
+            key=selected[1]; result=capture(context,settings,key)
+            if not locked() and not result["sourceVerified"] and result.get("reason")=="not_repository":
+                again=_dialog("这个工作区根不是 Git 仓库",key+"\n不会扫描子目录。若项目位于这里的下级文件夹，请选择确切的一个。",
+                              [("child","手动选择这个工作区里的 Git 项目")],retire=locked)
+                result=_nested(context,settings,key,locked) if again=="child" and not locked() else None
+        if result is None or locked(): return
         if not result["sourceVerified"]:
             _dialog("没有确认这个项目的源版本", key+"\n"+REASONS.get(result.get("reason"),REASONS["native_read_unavailable"]),[],retire=locked)
             return
         branch = result["branch"]
         when = time.strftime("%Y-%m-%d %H:%M:%S",time.localtime(result["capturedAt"]/1000))
         where = "分离 HEAD" if branch is None else "分支 "+_display(branch.removeprefix("refs/heads/"))
-        summary = f"{key} · {where}\n{when} 核实提交 {result['commit'][:12]} 与其根树。"
+        source_label=key+(" / "+result["selectedProject"]["path"] if "selectedProject" in result else "")
+        summary = f"{source_label} · {where}\n{when} 核实提交 {result['commit'][:12]} 与其根树。"
         summary += "\n这是已提交的版本；未检查未提交改动、子目录或所有对象，未创建副本，也未开放项目生产。"
         action = _dialog("已核对这台 Windows 上的 Git 来源",summary,
              [("names","检查这次提交的目录映射\n逐层核对文件名和目录；不读取文件正文或创建副本。"),

@@ -43,6 +43,7 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         java.util.List<String> localAddresses() throws Exception;
         String createInvitation(String selectedLocalAddress) throws Exception;
         default JSONObject readSavedPeerScope(String id,String instance,String fingerprint)throws Exception { throw new SecurityException("原签回执本机查询不可用"); }
+        default void changeLocalPeerName(String here,String hereInstance,String hereFp,String id,String instance,String fp,String expected,String name)throws Exception { throw new SecurityException("本机伙伴备注不可用"); }
         void advancePairing(String candidateId) throws Exception;
         java.util.List<String> recoveryAddresses() throws Exception;
         RecoveryEndpointAction openCommittedRecovery(String originalInviteId, String selectedLocalAddress) throws Exception;
@@ -336,6 +337,7 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         public JSONObject readSavedPeerScope(String id,String instance,String fingerprint)throws Exception {
             current(); JSONObject result=copy(pairing.readSavedPeerScope(id,instance,fingerprint)); current(); return result;
         }
+        public void changeLocalPeerName(String here,String hereInstance,String hereFp,String id,String instance,String fp,String expected,String name)throws Exception { current(); pairing.changeLocalPeerName(here,hereInstance,hereFp,id,instance,fp,expected,name); }
         public void advancePairing(String id) throws Exception { current(); pairing.advancePairing(id); }
         public java.util.List<String> recoveryAddresses() throws Exception { current(); return java.util.Collections.unmodifiableList(new java.util.ArrayList<>(pairing.recoveryAddresses())); }
         public RecoveryEndpoint openCommittedRecovery(String id, String address) throws Exception {

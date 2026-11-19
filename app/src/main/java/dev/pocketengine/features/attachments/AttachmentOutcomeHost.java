@@ -155,6 +155,11 @@ public final class AttachmentOutcomeHost {
         requireReference(taskId,artifactId,expectedSha256);JSONObject result=repository.exportVerifiedToUri(artifactId,expectedSha256,destination,control);
         requireReference(taskId,artifactId,expectedSha256);return result.put("taskId",taskId==null?"":taskId).put("verifiedBusinessSuccess",false);
     }
+    /** A compare-only native receipt. Does not read another file or grant an export. */
+    public JSONObject originalTaskOutputForExport(String taskId,JSONObject shown,RunControl control)throws Exception{
+        control.check();String id=shown.getString("id"),sha=shown.getString("sha256");requireReference(taskId,id,sha);
+        JSONObject pin=OriginalTaskOutputPin.checked(ownerTaskRequired(taskId),privateMetadata(id,sha),shown);control.check();return pin;
+    }
     public JSONObject originalMedia(String taskId,String operationId,String command,RunControl control)throws Exception {
         ownerTaskRequired(taskId);JSONObject source=tasks.ownerMediaOperationSource(taskId,operationId);
         if(!command.matches("getOperation|getJob|reconcileOperation|fetchResults|cancelJob"))throw new SecurityException("仅查询、获取或停止原媒体操作");

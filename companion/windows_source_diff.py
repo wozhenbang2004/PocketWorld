@@ -13,7 +13,7 @@ from platform_backend import PlatformError
 from platform_windows import WindowsHandleReader, relative_parts
 from windows_git_contents import MAX_FILE
 from windows_git_pack import PackUnavailable, PinnedPacks
-from windows_git_source import Incomplete, Pins, _format, _object_body, _tree_id, registered, repository_anchor
+from windows_git_source import Incomplete, _format, _object_body, _tree_id, registered, repository_anchor
 from windows_git_tree import DIR, TreeIssue, entries
 from windows_source_inventory import load
 from windows_source_publisher import DirectoryTree
@@ -31,7 +31,9 @@ def original_commit(ctx,settings,source,checkpoint):
     root = dict(registered(ctx,settings)).get(source["environmentId"])
     if not root: _bad()
     with ExitStack() as stack:
-        pins = Pins(ctx.backend,root,stack)
+        from windows_git_subproject import source_pins
+        if "selectedProject" in source and source["selectedProject"] is None: _bad()
+        pins=source_pins(ctx,root,source["environmentId"],source.get("selectedProject"),stack)
         dot = pins.node(".git")
         if not dot or not dot[2] or repository_anchor(ctx,source["environmentId"],pins,dot)!=source["repositoryAnchor"]: _bad()
         if pins.node(".git/commondir") is not None or pins.node(".git/objects/info/alternates") is not None: _bad()

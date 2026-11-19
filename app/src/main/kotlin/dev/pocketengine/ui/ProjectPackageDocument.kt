@@ -24,13 +24,18 @@ internal object ProjectPackageDocument {
         }.getOrNull().also {current()}}
         finally{c.removeCancelAction(stop)}
     }
-    fun readBack(context:Context,uri:Uri,before:String?,bytes:Long,sha:String,c:RunControl,current:()->Unit):JSONObject{
+    fun readBack(context:Context,uri:Uri,before:String?,bytes:Long,sha:String,c:RunControl,current:()->Unit)=
+        inspected(context,uri,before,bytes,sha,c,current,false)
+    fun taskOutput(context:Context,uri:Uri,before:String?,bytes:Long,sha:String,c:RunControl,current:()->Unit)=
+        inspected(context,uri,before,bytes,sha,c,current,true)
+    private fun inspected(context:Context,uri:Uri,before:String?,bytes:Long,sha:String,c:RunControl,current:()->Unit,taskFile:Boolean):JSONObject{
         current();val provider=printable(uri.authority,160)?:error("不是原保存位置")
-        val observed=ProjectPackageTargetBytes.check(bytes,sha,{
+        val open=ProjectPackageTargetBytes.Open {
             val signal=CancellationSignal();val stop=Runnable {signal.cancel()};c.onCancel(stop)
             try{current();context.contentResolver.openFileDescriptor(uri,"r",signal)?.let {ParcelFileDescriptor.AutoCloseInputStream(it)}}
             finally{c.removeCancelAction(stop)}
-        },current,c)
+        }
+        val observed=if(taskFile)ProjectPackageTargetBytes.taskOutput(bytes,sha,open,current,c) else ProjectPackageTargetBytes.check(bytes,sha,open,current,c)
         current();val after=name(context,uri,c,current)
         val verdict=when{
             before!=null&&after!=before -> "destination_changed"
@@ -38,7 +43,7 @@ internal object ProjectPackageDocument {
             observed==ProjectPackageTargetBytes.Outcome.DIFFERENT -> "content_mismatch"
             else -> "could_not_read"
         }
-        return JSONObject().put("protocol",ProjectPackageTargetBytes.PROTOCOL).put("status",verdict).put("provider",provider).also{
+        return JSONObject().put("protocol",if(taskFile)ProjectPackageTargetBytes.TASK_OUTPUT_PROTOCOL else ProjectPackageTargetBytes.PROTOCOL).put("status",verdict).put("provider",provider).also{
             if(after!=null&&before==after)it.put("displayName",after)
             if(verdict=="verified")it.put("bytes",bytes).put("sha256",sha)
         }
