@@ -36,11 +36,6 @@ public final class RemoteResultFiles {
         for(String key:new String[]{"profileId","serviceBase"})result.put(key,source.get(key));
         return result;
     }
-    private static boolean sameOrigin(JSONObject source,JSONObject expected)throws Exception {
-        if(source==null||source.length()!=expected.length())return false;
-        for(java.util.Iterator<String> keys=expected.keys();keys.hasNext();){String key=keys.next();if(key.equals("bytes")?source.optLong(key,-1)!=expected.getLong(key):!expected.get(key).equals(source.opt(key)))return false;}
-        return true;
-    }
     private static void stillOriginal(TaskStore tasks,String taskId,JSONObject original)throws Exception {
         JSONObject current=tasks.remoteResultSnapshot(taskId,original.getString("snapshotId"));
         if(!TaskStore.capabilityFingerprint(current).equals(TaskStore.capabilityFingerprint(original)))throw new SecurityException("原快照登记已变化，未关联本机成果");
@@ -51,21 +46,26 @@ public final class RemoteResultFiles {
                 .put("fileVersion",file.getString("fileVersion")).put("bytes",file.getLong("bytes"))
                 .put("sha256",file.getString("sha256")).put("attachment",new JSONObject(meta.toString())));
     }
+    private static Saved existing(TaskStore tasks,AttachmentBook book,String id,JSONObject snapshot,JSONObject file,
+                                  JSONObject source,RunControl current)throws Exception {
+        JSONObject known=book.verifiedPrivateRemoteCopy(source,current);if(known==null)return null;
+        stillOriginal(tasks,id,snapshot);current.check();return saved(tasks,id,snapshot,file,known);
+    }
+    /** Offline only. This path has no transport, byte provider, fallback import or new attachment ID. */
+    static Saved onPhone(TaskStore tasks,AttachmentBook book,JSONObject choice,RunControl current)throws Exception{
+        current.check();String id=choice.getString("taskId");JSONObject snapshot=tasks.offlineRemoteFileSnapshot(choice);
+        JSONObject file=manifest(snapshot,choice.getString("path"));
+        Saved kept=existing(tasks,book,id,snapshot,file,origin(id,snapshot,file),current);
+        if(!TaskStore.capabilityFingerprint(snapshot).equals(TaskStore.capabilityFingerprint(tasks.offlineRemoteFileSnapshot(choice))))
+            throw new SecurityException("核对期间原任务已变化，不能确认手机原件");
+        current.check();return kept;
+    }
     /** nativeRead must retain only lifecycle/profile checks: never acquire TaskStore while Book holds its monitor. */
     public static Saved save(TaskStore tasks,AttachmentBook book,String taskId,String snapshotId,String path,
                              OriginalBytes remoteBytes,RunControl nativeRead)throws Exception {
         nativeRead.check();JSONObject snapshot=tasks.remoteResultSnapshot(taskId,snapshotId),file=manifest(snapshot,path);
         JSONObject source=origin(taskId,snapshot,file);
-        // Recover a prior Book commit if the following SQL association ACK was lost. No second GET/import.
-        JSONArray known=book.list();
-        for(int i=0;i<known.length();i++){
-            JSONObject meta=known.getJSONObject(i);
-            if(!sameOrigin(meta.optJSONObject("source"),source))continue;
-            if(meta.getLong("size")!=file.getLong("bytes")||!meta.getString("sha256").equals(file.getString("sha256")))throw new SecurityException("本机原件登记不一致，不自动再下载");
-            book.readVerifiedMetadata(meta.getString("id"),file.getString("sha256"),nativeRead);
-            stillOriginal(tasks,taskId,snapshot);nativeRead.check();
-            return saved(tasks,taskId,snapshot,file,meta);
-        }
+        Saved kept=existing(tasks,book,taskId,snapshot,file,source,nativeRead);if(kept!=null)return kept;
         nativeRead.check();JSONObject actual=remoteBytes.read(new JSONObject(snapshot.toString()),path);
         RemoteResultSnapshots.file(actual,snapshot,path);
         byte[] bytes=Base64.getDecoder().decode(actual.getString("base64"));

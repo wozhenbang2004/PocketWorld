@@ -6,6 +6,7 @@ import os
 from desktop_owner_confirmation import confirm_local_pairing, confirm_local_pairing_recovery
 from desktop_sessions import WindowsDesktopHealth
 from platform_backend import PlatformError
+import windows_read_pairing as read_pairing
 
 
 def show_pairing_window(controller, host, *, offer_local_receipts=False):
@@ -65,7 +66,9 @@ def show_pairing_window(controller, host, *, offer_local_receipts=False):
 
     def scope_label(option):
         if option["version"] == "workspace-v1":
-            return option["id"] + " · " + controller.manager._environment(option["resources"][0]["environmentId"])["root"]
+            path = controller.manager._environment(option["resources"][0]["environmentId"])["root"]
+            label = "仅列目录、读小文本（独选）" if option["id"].startswith(read_pairing.PREFIX) else "工作区已配置的全部工具"
+            return label + " · " + option["resources"][0]["environmentId"] + " · " + path
         if option["id"] == "desktop":
             resources = option["resources"]
             if len(resources) == 1:
@@ -74,6 +77,10 @@ def show_pairing_window(controller, host, *, offer_local_receipts=False):
                 return f"Windows 会话 {binding['sessionId']} · {scope} · 手机观看与接管、桌面观察与操作"
             return f"桌面 · {len(resources)} 项范围，核对时逐项显示"
         return option["id"]
+
+    def selected_scopes():
+        selected = [item["id"] for item, control in choices if user.SendMessageW(control, 0xF0, 0, 0) == 1]
+        return selected + [item["id"] for item in extra_options if item["id"] in extra_selected]
 
     def freeze_scopes():
         for _, checkbox in choices:
@@ -116,7 +123,15 @@ def show_pairing_window(controller, host, *, offer_local_receipts=False):
         if message == 0x111:
             action = wparam & 0xFFFF
             try:
-                if action == 110 and (wparam >> 16) & 0xffff == 0x300:  # EN_CHANGE: manual edit restores original explicit path.
+                if 200 <= action < 200 + len(choices) and (wparam >> 16) & 0xffff == 0:  # BN_CLICKED
+                    checkbox = choices[action - 200][1]
+                    if lparam == checkbox and user.SendMessageW(checkbox, 0xF0, 0, 0) == 1:
+                        try:
+                            read_pairing.narrow(selected_scopes())
+                        except PlatformError:
+                            user.SendMessageW(checkbox, 0xF1, 0, 0)  # undo only this new check; keep prior choices
+                            raise
+                elif action == 110 and (wparam >> 16) & 0xffff == 0x300:  # EN_CHANGE: manual edit restores original explicit path.
                     chosen_address = None
                 elif action == 109 and host.thread is None:
                     from desktop_pairing_addresses import local_choices
@@ -141,9 +156,14 @@ def show_pairing_window(controller, host, *, offer_local_receipts=False):
                 elif action == 101:
                     invitation = host.start(selected_host(), control_port=int(text(controls["control"], 5)), bulk_port=int(text(controls["bulk"], 5)))
                     user.SetWindowTextW(invitation_edit, json.dumps(invitation, ensure_ascii=False, separators=(",", ":")))
-                    for key in ("choose_address", "host", "control", "bulk", "create"):
+                    for key in ("choose_address", "host", "control", "bulk", "create", "issued"):
                         user.EnableWindow(controls[key], False)
                     notice("120秒一次性邀请已创建。复制到手机的邀请导入入口；手机提交候选后，本机还必须核对两端指纹和准确授权。")
+                elif action == 111 and host.thread is None and controller.invitation is None:
+                    controller.config_store.current()
+                    from windows_issued_scope import show as show_issued_scope
+                    show_issued_scope(controller.receiver, lambda: host.thread is None and controller.invitation is None
+                                      and controller.config_store.current() is None)
                 elif action == 102:
                     user.SetFocus(invitation_edit)
                     user.SendMessageW(invitation_edit, 0xB1, 0, -1)  # select ALL actual invitation
@@ -167,7 +187,12 @@ def show_pairing_window(controller, host, *, offer_local_receipts=False):
                         picked = user.TrackPopupMenuEx(menu, 0x100 | 0x80, point.x, point.y, hwnd, None)
                     finally: user.DestroyMenu(menu)
                     if 1 <= picked <= len(extra_options):
-                        extra_selected.symmetric_difference_update([extra_options[picked - 1]["id"]])
+                        key = extra_options[picked - 1]["id"]
+                        if key in extra_selected:
+                            extra_selected.remove(key)
+                        else:
+                            read_pairing.narrow(selected_scopes() + [key])
+                            extra_selected.add(key)
                         user.SetWindowTextW(controls["more_scopes"], f"其他范围（另有 {len(extra_options)} 项，已选 {len(extra_selected)}）")
                 elif action == 107:
                     if host.thread is not None:
@@ -196,7 +221,7 @@ def show_pairing_window(controller, host, *, offer_local_receipts=False):
                              + "\r\n手机指纹: " + fixed["peerFingerprint"] + "\r\n30秒后自动关闭；当前撤销/到期/scope变动仍会拒绝。")
                     user.SetWindowTextW(invitation_edit, value)
                     user.SetWindowTextW(candidate_edit, review.summary)
-                    for key in ("choose_address", "host", "control", "bulk", "create", "qr", "recover", "budget", "minutes", "history"):
+                    for key in ("choose_address", "host", "control", "bulk", "create", "issued", "qr", "recover", "budget", "minutes", "history"):
                         user.EnableWindow(controls[key], False)
                     user.SetWindowTextW(controls["copy"], "复制恢复地址")
                     freeze_scopes()
@@ -205,9 +230,7 @@ def show_pairing_window(controller, host, *, offer_local_receipts=False):
                 elif action == 103:
                     if candidate is None:
                         raise PlatformError("先由手机导入邀请并提交候选")
-                    selected = [item["id"] for item, control in choices if user.SendMessageW(control, 0xF0, 0, 0) == 1]
-                    selected += [item["id"] for item in extra_options if item["id"] in extra_selected]
-                    review = controller.prepare_review(candidate, selected, int(text(controls["budget"], 3)), int(text(controls["minutes"], 2)),
+                    review = controller.prepare_review(candidate, selected_scopes(), int(text(controls["budget"], 3)), int(text(controls["minutes"], 2)),
                                                        user.SendMessageW(controls["history"], 0xF0, 0, 0) == 1)
                     proof = confirm_local_pairing(review.summary)
                     host.confirm(review, proof)
@@ -277,10 +300,12 @@ def show_pairing_window(controller, host, *, offer_local_receipts=False):
         controls["copy"] = control("BUTTON", "复制邀请", 220, 77, 145, 30, 102, 0x10000)
         controls["qr"] = control("BUTTON", "显示二维码", 380, 77, 145, 30, 106, 0x10000)
         controls["recover"] = control("BUTTON", "恢复原已提交回执", 540, 77, 170, 30, 107, 0x10000)
-        control("STATIC", "选择准确授权范围（默认未选择；包含本机私有状态的工作区不会列出）：", 16, 116, width - 40, 22)
+        control("STATIC", "新配对：选择范围（默认不选，不列本机私有目录）", 16, 116, width - 210, 24)
+        controls["issued"] = control("BUTTON", "查看已签授权（只读）", width - 189, 110, 160, 27, 111, 0x10000)
         # The management-only receiver enumerates workspaces before the desktop.
         # Keep actual desktop scope reachable on a laptop without preselecting it.
-        options = sorted(controller.scope_options(), key=lambda item: item["id"] != "desktop")
+        options = sorted(controller.scope_options(), key=lambda item: 0 if item["id"] == "desktop" else
+                         1 if item["id"].startswith(read_pairing.PREFIX) else 2)
         visible = min(8, max(1, (height - 570) // 24))
         for index, option in enumerate(options[:visible]):
             checkbox = control("BUTTON", scope_label(option).replace("&", "&&"), 20, 143 + 24 * index, width - 60, 24, 200 + index, 0x3 | 0x10000)
@@ -295,7 +320,7 @@ def show_pairing_window(controller, host, *, offer_local_receipts=False):
         controls["budget"] = control("EDIT", "20", 130, field_y - 2, 62, 27, extra=0x10000)
         control("STATIC", "执行授权分钟", 210, field_y, 125, 24)
         controls["minutes"] = control("EDIT", "60", 340, field_y - 2, 62, 27, extra=0x10000)
-        controls["history"] = control("BUTTON", "另允许24小时仅查本次成果", 425, field_y - 2, width - 460, 27, 300, 0x3 | 0x10000)
+        controls["history"] = control("BUTTON", "另允许24小时查原结果（见核对范围）", 425, field_y - 2, width - 460, 27, 300, 0x3 | 0x10000)
         invitation_edit = control("EDIT", "邀请尚未创建。地址需由手机可达；不会自动打开公开HTTP或把长期令牌交给页面。", 16, field_y + 34, width - 50, 86, extra=0x4 | 0x800 | 0x200000)
         candidate_edit = control("EDIT", "等待手机候选。仅有邀请、候选或pending pin均不能使用业务工具。", 16, field_y + 128, width - 50, max(54, bottom - field_y - 182), extra=0x4 | 0x800 | 0x200000)
         review_button = control("BUTTON", "核对指纹与准确授权", 16, bottom - 8, 235, 31, 103, 0x10000)

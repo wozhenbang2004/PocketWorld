@@ -241,7 +241,9 @@ class ResultView:
                                 choices.append((row, label + (f"\n工作区 {work.environment} · 手机任务 …{work.task[-10:]}" if work else "\n操作 …" + row[1][-16:])))
                             if len(pages) > 1: choices.append(("newer", "较新派单"))
                             if older is not None: choices.append(("older", "查看较早的原记录"))
-                            if incoming: choices.append(("find", "用手机上的完整原操作编号找回"))
+                            if incoming:
+                                choices.append(("find", "用手机上的完整原操作编号找回"))
+                                choices.append(("scope", "查看这台电脑给它签出的原授权"))
                             choices.append(("back", "返回设备"))
                             heading = ("这台 Windows 接收的原工作" if rows else "本批没有可核对的本机工作") if incoming else ("选择一笔原派单" if rows else "本批没有发给这台设备的原工作")
                             row = self._dialog(heading, "只读本机原执行器的工作和留存输出。断线不等于失败；没有记录也不会启动工作。" if incoming else
@@ -249,6 +251,10 @@ class ResultView:
                                                lambda: self._peer_current(peer) and (not incoming or all(received.local_record(self, peer, entry) for entry in rows)))
                             if row is None: return
                             if row == "back": break
+                            if row == "scope" and incoming:
+                                from windows_issued_scope import show as show_issued_scope
+                                show_issued_scope(self.receiver, self.active, peer)
+                                continue
                             if row == "find" and incoming: received.open_original_number(self, peer); continue
                             if row == "older": pages.append(older); continue
                             if row == "newer": pages.pop(); continue

@@ -6921,6 +6921,11 @@ public final class TaskStore {
     public synchronized JSONArray pendingRemoteResultSnapshots(String id)throws Exception {
         remoteOwnerTarget(id);JSONArray pending=new JSONArray();try(Cursor rows=db.rawQuery("SELECT operation_id FROM operations WHERE task_id=? AND tool='remote_snapshot' AND state='unknown' ORDER BY created_at LIMIT 8",new String[]{id})){while(rows.moveToNext())pending.put(remoteOwnerOperation(id,rows.getString(0)));}return pending;
     }
+    /** Private current attempt only; no profile lookup, host contact, event projection or execution grant. */
+    public synchronized JSONObject offlineRemoteFileSnapshot(JSONObject selection)throws Exception {
+        String id=selection.getString("taskId");
+        return dev.pocketengine.features.remote.RemotePhonePickup.selected(required(id),remoteOwnerTarget(id),selection);
+    }
     public synchronized JSONObject remoteResultSnapshot(String id,String snapshotId)throws Exception {
         remoteOwnerTarget(id);JSONArray snapshots=required(id).optJSONArray("remoteResultSnapshots");for(int i=0;snapshots!=null&&i<snapshots.length();i++)if(snapshotId.equals(snapshots.getJSONObject(i).optString("snapshotId")))return new JSONObject(snapshots.getJSONObject(i).toString());throw new SecurityException("原任务没有此原生快照回执");
     }
@@ -10162,7 +10167,11 @@ public final class TaskStore {
             JSONObject remoteDraftScope=teamRemoteDraftGrant(binding,tool,args,capability);
             JSONObject draftScope=teamDraftGrant(binding,tool,args,capability);
             if(draftScope==null&&remoteDraftScope==null&&tool.matches("team_(prepare_draft|write_file|delete_file|freeze_outputs)")&&(teamWriteTask(binding.getString("teamRunId")).optJSONObject("teamDraftScope")!=null||teamWriteTask(binding.getString("teamRunId")).optJSONObject("teamWorkPlan")!=null)){db.setTransactionSuccessful();return new JSONObject().put("dispatch",false).put("ok",false).put("accepted",false).put("code","team_draft_scope_required").put("requiresPause",true).put("message","原隔离草稿授权已过期、撤销、耗尽或不属于当前修订；请主人重新审阅，不自动续预算或授权");}
-            if(!question&&draftScope==null&&remoteDraftScope==null){JSONObject approval=requireCapabilityApproval(binding.getString("taskId"),binding.getString("runId"),tool,args,capability);if(!approval.optBoolean("approved")){db.setTransactionSuccessful();return new JSONObject().put("dispatch",false).put("ok",false).put("accepted",false).put("code","approval_required").put("approvalId",approval.getString("approvalId")).put("approvalState",approval.getString("state")).put("message","请在原成员任务核对并批准本次精确文件操作，或在团队一次审阅隔离草稿范围；尚未派发");}}
+            if(!question&&draftScope==null&&remoteDraftScope==null){JSONObject approval=tool.equals("team_integrate_file")&&binding.has("ownerApprovedOriginalFiles")
+                    ?claimApprovedOriginalFile(binding,tool,args,capability):requireCapabilityApproval(binding.getString("taskId"),binding.getString("runId"),tool,args,capability);
+                if(!approval.optBoolean("approved")){db.setTransactionSuccessful();return new JSONObject().put("dispatch",false).put("ok",false).put("accepted",false)
+                        .put("code",approval.optString("code","approval_required")).put("requiresPause",true).put("approvalId",approval.getString("approvalId")).put("approvalState",approval.getString("state"))
+                        .put("message",approval.optString("message","请在原成员任务核对并批准本次精确文件操作，或在团队一次审阅隔离草稿范围；尚未派发"));}}
             if(tool.equals("team_integrate_file")){JSONObject review=teamWriteTask(binding.getString("teamRunId")).getJSONObject("teamOutputReview");if(!review.getString("reviewId").equals(binding.getString("reviewId"))||!review.getString("planHash").equals(binding.getString("planHash"))||!review.getString("planHash").equals(capability.getString("planHash")))throw new SecurityException("唯一整合没有原主人审查");}
             checkTeamAssignment(binding,tool,original);
             if(draftScope!=null){draftScope.put("remainingOperations",draftScope.getInt("remainingOperations")-1);draftScope.getJSONArray("operationIds").put(operation);JSONObject draftTeam=teamWriteTask(binding.getString("teamRunId"));if(draftScope.optString("workItemId").isEmpty())draftTeam.put("teamDraftScope",draftScope);else currentTeamWorkItem(draftTeam,binding).put("draftScope",draftScope);write(draftTeam);}
@@ -10532,11 +10541,18 @@ public final class TaskStore {
             return e;
         }
     }
-    private boolean teamRemainderFenced(JSONObject task,String review)throws Exception{
+    private boolean localFileContinuationScope(JSONObject task)throws Exception{
         JSONObject assignment=task.optJSONObject("teamAssignment");if(assignment==null)return false;
-        JSONObject selection=assignment.getJSONObject("plan");if(selection.has("recovery")||selection.has("retained")||selection.getJSONArray("files").length()<2)return false;
+        JSONObject selection=assignment.getJSONObject("plan");if(selection.has("recovery")||selection.has("retained")||selection.getJSONArray("files").length()<1)return false;
+        JSONArray refs=selection.getJSONArray("files");for(int i=0;i<refs.length();i++)if(!"text_file".equals(refs.getJSONObject(i).opt("artifactKind")))return false;
         JSONObject scope=teamWriteTask(assignment.getString("teamRunId")).getJSONObject("teamWriteScope");if(scope.has("projectSelection"))return false;
-        JSONArray members=scope.getJSONArray("assignments");for(int i=0;i<members.length();i++){JSONObject m=members.getJSONObject(i);if(m.has("remoteSelection")||m.has("projectSelection"))return false;}
+        JSONArray members=scope.getJSONArray("assignments");for(int i=0;i<members.length();i++){JSONObject m=members.getJSONObject(i);if(m.has("remoteSelection")||m.has("projectSelection"))return false;}return true;
+    }
+    private boolean teamFileContinuationFenced(JSONObject task,String review)throws Exception{
+        return localFileContinuationScope(task)&&(TaskStoreTeamFileApproval.candidate(task,review,false)||teamRemainderFenced(task,review));
+    }
+    private boolean teamRemainderFenced(JSONObject task,String review)throws Exception{
+        if(!localFileContinuationScope(task)||task.getJSONObject("teamAssignment").getJSONObject("plan").getJSONArray("files").length()<2)return false;
         if(review.equals(task.opt("teamFileRemainderReviewId")))return true;
         if(task.optString("runId").isEmpty())return false;
         // A receipt recovered by the previous app version already has a native journal event.
@@ -10548,7 +10564,7 @@ public final class TaskStore {
     public synchronized boolean requiresTeamFileRemainderReview(String teamRun,String review)throws Exception{
         JSONObject team=teamWriteTask(teamRun);if(!review.equals(team.getJSONObject("teamOutputReview").getString("reviewId")))throw new SecurityException("不是原整合审阅。");
         String id=UUID.nameUUIDFromBytes(("team-integration:"+teamRun).getBytes(StandardCharsets.UTF_8)).toString();
-        JSONObject task=read(id);return task!=null&&teamRemainderFenced(task,review);
+        JSONObject task=read(id);return task!=null&&teamFileContinuationFenced(task,review);
     }
     private static JSONArray localIntegrationTools(){return new JSONArray().put("team_read_integration").put("team_integrate_file").put("memory_raw_query").put("memory_raw_read");}
     /** Native ownership, immutable author/reviewer set, active parent and both existing budgets. No start or refill. */
@@ -10561,7 +10577,7 @@ public final class TaskStore {
         if(!dev.pocketengine.features.teams.TeamDeliveryWorkers.original(task,teamRun,team.getString("id"),"integrator",hash)||!id.equals(binding.opt("taskId"))||!run.equals(binding.opt("runId"))
                 ||epoch!=binding.getInt("coordinatorEpoch")||originalRunEpoch(id,run)!=epoch||task.optBoolean("cancelRequested")||!task.optString("status").matches("interrupted|awaiting_user|needs_confirmation")
                 ||context.getBoolean("activeAttempt")||context.getBoolean("hasUnresolved")||teamHasPendingQuestion(task)||hasUnresolved(team.getString("id"))
-                ||!teamRemainderFenced(task,review)||work.has("lastRevisionRequestId")||scope.has("projectSelection")||binding.getJSONObject("plan").has("recovery")
+                ||!localFileContinuationScope(task)||work.has("lastRevisionRequestId")||scope.has("projectSelection")||binding.getJSONObject("plan").has("recovery")
                 ||task.has("executionScope")||task.has("teamProject")||task.has("workProfileRef")||task.has("workProfileIntent")||team.has("teamIntegratorProjectScope"))
             throw new SecurityException("原执行仍有待核对事项、已换代，或不属于本机已核对的部分写回。");
         checkTeamIntegrationParents(team);JSONObject parent=teamWorkPlanParent(teamRun),permission=grant(run);
@@ -10578,6 +10594,7 @@ public final class TaskStore {
                 ||!"capabilities".equals(permission.opt("mode"))||!canonical(localIntegrationTools()).equals(canonical(permission.getJSONArray("tools"))))
             throw new SecurityException("无法核实原模型、凭据或工具权限；不会改用当前默认配置。");
         int steps=checkpoint(run).getInt("steps");if(permission.getLong("expiresAt")<=System.currentTimeMillis()||steps>=permission.getInt("stepCeiling")||permission.getInt("remainingOperations")<=0)throw new SecurityException("原整合额度已用完或到期，不会补满。");
+        JSONObject rawPool=teamBudget(teamBudgetOwner(team));
         JSONArray approvals=task.optJSONArray("approvals"),approved=new JSONArray();for(int i=0;approvals!=null&&i<approvals.length();i++){JSONObject a=approvals.getJSONObject(i);
             if(a.optString("state").matches("scope_active|scope_waiting_run"))throw new SecurityException("原任务带有另一项持续权限，不迁移到文件续接。");
             if(a.optLong("expiresAt")<=System.currentTimeMillis())continue;
@@ -10585,9 +10602,19 @@ public final class TaskStore {
             if("pending".equals(a.opt("state")))throw new SecurityException("先在原任务处理当前待批准的文件操作；此处不代为批准。");
             if("approved".equals(a.opt("state"))){JSONObject cap=a.getJSONObject("capability");
                 if(!run.equals(a.opt("runId"))||!"team_integrate_file".equals(a.opt("tool"))||!hash.equals(cap.opt("planHash"))||!review.equals(cap.opt("reviewId")))throw new SecurityException("存在不属于本轮的批准，未迁移或使用。");
-                approved.put(new JSONObject().put("id",a.getString("id")).put("path",a.getJSONObject("arguments").getString("path")).put("artifactId",a.getJSONObject("arguments").getString("artifactId")).put("expiresAt",a.getLong("expiresAt")));}
+                JSONObject args=a.getJSONObject("arguments"),file=null;JSONArray files=binding.getJSONObject("plan").getJSONArray("files");
+                for(int f=0;f<files.length();f++){JSONObject selected=files.getJSONObject(f);if(args.getString("path").equals(selected.getString("path"))&&args.getString("artifactId").equals(selected.getString("artifactId"))){if(file!=null)throw new SecurityException("原批准文件不唯一。");file=selected;}}
+                if(file==null||args.length()!=2||!capabilityFingerprint(args).equals(a.opt("argumentsHash")))throw new SecurityException("批准的参数不是原文件。");
+                JSONObject exact=dev.pocketengine.features.teams.TeamIntegrationFiles.fileCapability(binding,file);
+                if(!canonical(exact).equals(a.opt("capabilityKey")))throw new SecurityException("原文件批准的完整能力范围已变。");
+                JSONObject old=a.optJSONObject("teamFileApprovalOrigin");String originRun=old==null?run:old.getString("runId");int originEpoch=old==null?epoch:old.getInt("epoch");
+                if(originEpoch<1||originEpoch>epoch||originalRunEpoch(id,originRun)!=originEpoch)throw new SecurityException("文件批准来自其他任务或未核实的执行。");
+                JSONObject proof=TaskStoreTeamFileApproval.source(db,binding,a,originRun,originEpoch,rawPool);
+                approved.put(new JSONObject().put("id",a.getString("id")).put("path",args.getString("path")).put("artifactId",args.getString("artifactId")).put("expiresAt",a.getLong("expiresAt")).put("source",proof));}
         }
-        JSONObject rawPool=teamBudget(teamBudgetOwner(team));JSONArray ledger=rawPool.getJSONArray("reservations");
+        boolean recovered=teamRemainderFenced(task,review);
+        if(!recovered&&approved.length()==0)throw new SecurityException("这次未核实有效、未消费且尚未派发的原文件批准；整合没有启动。");
+        JSONArray ledger=rawPool.getJSONArray("reservations");
         for(int i=0;i<ledger.length();i++){JSONObject r=ledger.getJSONObject(i);
             if(!id.equals(r.opt("childTaskId"))||"settled".equals(r.opt("state"))||"released_unstarted".equals(r.opt("state")))continue;
             // A terminal inference receipt may omit token counters. Its unit stays spent;
@@ -10598,7 +10625,7 @@ public final class TaskStore {
                     &&r.getJSONArray("inferenceCallIds").getString(0).equals(r.getJSONArray("actualReceiptRefs").getString(0)))continue;
             throw new SecurityException("原整合者仍有未结算的请求或操作，请先核对，未重放或退款。");}
         JSONObject pool=dev.pocketengine.features.teams.TeamParentBudget.snapshot(rawPool);
-        return new JSONObject().put("context",context).put("approved",approved).put("route",route).put("parent",parent).put("budget",pool)
+        return new JSONObject().put("context",context).put("approved",approved).put("recoveredFile",recovered).put("route",route).put("parent",parent).put("budget",pool)
                 .put("stepsUsed",steps).put("stepCeiling",permission.getInt("stepCeiling")).put("operationsLeft",permission.getInt("remainingOperations")).put("expiresAt",permission.getLong("expiresAt"));
     }
     public synchronized JSONObject startTeamIntegration(String teamRun,String reviewId,RunControl original,int allocation)throws Exception {
@@ -10611,7 +10638,7 @@ public final class TaskStore {
         if(task==null){task=base(id,"按主人审查的原团队成果逐文件整合，保留每份实际回执","assistant","capabilities").put("conversationId","").put("parentTaskId",team.getString("id")).put("status","queued").put("teamAssignment",identity).put("origin",new JSONObject().put("kind","team_integration").put("teamRunId",teamRun).put("assignmentId",id));write(task);}else if(!canonical(task.getJSONObject("teamAssignment")).equals(canonical(identity)))throw new SecurityException("唯一整合者的原计划不能替换");
         if(hasUnresolved(id)||task.optString("status").matches("preparing|running|stopping|cancelled|completed"))return new JSONObject(identity.toString()).put("taskId",id).put("inspectOnly",true);
         if(!task.optString("status").matches("queued|paused|awaiting_user|needs_confirmation|interrupted|failed"))throw new SecurityException("原唯一整合任务当前不可继续");
-        if(remainder==null&&teamRemainderFenced(task,reviewId))throw new SecurityException("请在原唯一整合任务查看已写回与剩余文件，再明确继续；不会直接重试或补额度。");
+        if(remainder==null&&teamFileContinuationFenced(task,reviewId))throw new SecurityException("请在原唯一整合任务查看已写回与剩余文件，再明确继续；不会直接重试或补额度。");
         if(teamProjectSelection(task)!=null)teamNativeProjectDeadline(task);
         JSONObject attempt=null;
         try {
@@ -10619,6 +10646,12 @@ public final class TaskStore {
             else{
                 db.beginTransaction();try{
                     remainder.requireAdmission(id,task.getString("runId"),task.getInt("coordinatorEpoch"),teamRun,reviewId,review.getString("planHash"),route);
+                    JSONArray sources=remainder.approvedFiles(),rows=task.optJSONArray("approvals");
+                    for(int i=0;i<sources.length();i++){JSONObject src=sources.getJSONObject(i),found=null;
+                        for(int j=0;rows!=null&&j<rows.length();j++){JSONObject row=rows.getJSONObject(j);if(src.getString("id").equals(row.opt("id")))found=row;}
+                        if(found==null||!"approved".equals(found.opt("state"))||found.getLong("expiresAt")<=System.currentTimeMillis()||!task.getString("runId").equals(found.opt("runId")))throw new SecurityException("文件批准已消费、到期或换代，未启动。");
+                        found.put("teamFileApprovalOrigin",new JSONObject(src.getJSONObject("source").toString()));}
+                    if(sources.length()>0)write(task); // Pin the original no-dispatch receipt; migration is not a new approval.
                     JSONObject bounded=startAttempt(id,"capabilities",allocation,true,false,null,null,null,null,true);
                     remainder.requireWindowBeforeCommit();db.setTransactionSuccessful();attempt=bounded;
                 }finally{db.endTransaction();}
@@ -13114,7 +13147,27 @@ public final class TaskStore {
                 .put("phase",receipt.optString("phase")).put("message",receipt.optString("message")).put("runId",run).put("epoch",epoch).put("operationId",operation);
         return getForUi(id,false).put("expired",!run.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch")||!"posted".equals(receipt.optString("phase"))).put("noticeOriginalRunId",run).put("noticeOriginalOperationId",operation).put("notificationReplayed",false).put("noticeContent",content);
     }
+    /** All checks and consumption occur inside the original claim transaction. No implicit policy
+     * can substitute a different approval, or dispatch a file which the foreground did not identify. */
+    private JSONObject claimApprovedOriginalFile(JSONObject binding,String tool,JSONObject args,JSONObject capability)throws Exception{
+        String id=binding.getString("taskId"),run=binding.getString("runId");JSONObject task=required(id),pin=null;
+        JSONArray selected=binding.getJSONArray("ownerApprovedOriginalFiles");for(int i=0;i<selected.length();i++){JSONObject p=selected.getJSONObject(i);
+            if(args.getString("path").equals(p.getString("path"))&&args.getString("artifactId").equals(p.getString("artifactId"))){if(pin!=null)throw new SecurityException("原文件批准不唯一，未派发。");pin=p;}}
+        if(pin==null)return requireCapabilityApproval(id,run,tool,args,capability,true); // may create a normal pending question; never consumes or dispatches here
+        JSONArray approvals=task.getJSONArray("approvals");for(int i=0;i<approvals.length();i++){JSONObject a=approvals.getJSONObject(i);if(!pin.getString("id").equals(a.opt("id")))continue;
+            if(!run.equals(task.opt("runId"))||binding.getInt("coordinatorEpoch")!=task.getInt("coordinatorEpoch")||!run.equals(a.opt("runId"))||!tool.equals(a.opt("tool"))
+                    ||!"approved".equals(a.opt("state"))||a.getLong("expiresAt")!=pin.getLong("expiresAt")||a.getLong("expiresAt")<=System.currentTimeMillis()
+                    ||!capabilityFingerprint(args).equals(a.opt("argumentsHash"))||!canonical(capability).equals(a.opt("capabilityKey"))
+                    ||!canonical(pin.getJSONObject("source")).equals(canonical(a.getJSONObject("teamFileApprovalOrigin"))))
+                return new JSONObject().put("approved",false).put("approvalId",a.getString("id")).put("state","not_current").put("code","approved_original_file_not_current")
+                        .put("message","本次选择的原文件批准已改变、消费或到期；未替换批准或派发，请回原任务核对。");
+            a.put("state","consumed");write(task);return new JSONObject().put("approved",true).put("approvalId",a.getString("id"));
+        }throw new SecurityException("没有找到本次选择的原文件批准，未派发。");
+    }
     public synchronized JSONObject requireCapabilityApproval(String id,String runId,String tool,JSONObject args,JSONObject capability)throws Exception{
+        return requireCapabilityApproval(id,runId,tool,args,capability,false);
+    }
+    private JSONObject requireCapabilityApproval(String id,String runId,String tool,JSONObject args,JSONObject capability,boolean requestOnly)throws Exception{
         JSONObject task=required(id);if(!runId.equals(task.optString("runId")))throw new SecurityException("审批执行代次已失效");
         String capabilityKey=canonical(capability);
         byte[] digest=java.security.MessageDigest.getInstance("SHA-256").digest(canonical(args).getBytes(StandardCharsets.UTF_8));StringBuilder encoded=new StringBuilder();for(byte value:digest)encoded.append(String.format(java.util.Locale.ROOT,"%02x",value&255));String hash=encoded.toString();
@@ -13127,10 +13180,10 @@ public final class TaskStore {
                 continue;
             }
             if(runId.equals(a.optString("runId"))&&a.optLong("expiresAt")>now){
-                if(a.optString("state").equals("approved")){a.put("state","consumed");task.put("approvals",approvals);write(task);return new JSONObject().put("approved",true).put("approvalId",a.getString("id"));}
+                if(a.optString("state").equals("approved")){if(requestOnly)return new JSONObject().put("approved",false).put("approvalId",a.getString("id")).put("state","approved").put("code","approved_file_requires_owner_continuation").put("message","这份文件的批准不在刚才展示的执行清单内；回原任务核对后再继续，未派发。");a.put("state","consumed");task.put("approvals",approvals);write(task);return new JSONObject().put("approved",true).put("approvalId",a.getString("id"));}
                 if(a.optString("state").equals("denied"))return new JSONObject().put("approved",false).put("approvalId",a.getString("id")).put("state","denied");
                 if(a.optString("state").equals("pending")){
-                    JSONObject policy=dev.pocketengine.features.capabilities.ToolApprovalPermit.currentApproval(id,runId,tool,args,capability);
+                    JSONObject policy=requestOnly?null:dev.pocketengine.features.capabilities.ToolApprovalPermit.currentApproval(id,runId,tool,args,capability);
                     if(policy==null)return new JSONObject().put("approved",false).put("approvalId",a.getString("id")).put("state","pending");
                     a.put("state","consumed").put("policyDecision",policy);task.put("approvals",approvals);write(task);
                     return new JSONObject().put("approved",true).put("approvalId",a.getString("id")).put("policyDecision",policy);
@@ -13138,7 +13191,7 @@ public final class TaskStore {
             }
         }
         if(approvals.length()>=100)throw new IllegalStateException("此任务审批记录已达上限");String approval=UUID.randomUUID().toString();
-        JSONObject policy=dev.pocketengine.features.capabilities.ToolApprovalPermit.currentApproval(id,runId,tool,args,capability);
+        JSONObject policy=requestOnly?null:dev.pocketengine.features.capabilities.ToolApprovalPermit.currentApproval(id,runId,tool,args,capability);
         JSONObject row=new JSONObject().put("id",approval).put("runId",runId).put("tool",tool).put("capability",approvalArguments(capability)).put("capabilityKey",capabilityKey).put("arguments",approvalArguments(args)).put("argumentsHash",hash).put("state",policy==null?"pending":"consumed").put("expiresAt",now+300_000L);
         if(policy!=null)row.put("policyDecision",policy);approvals.put(row);task.put("approvals",approvals);write(task);
         return new JSONObject().put("approved",policy!=null).put("approvalId",approval).put("state",policy==null?"pending":"consumed");
@@ -16078,8 +16131,11 @@ public final class TaskStore {
             result.put(dev.pocketengine.features.teams.TeamIntegrationFileRecovery.KEY,TaskStoreTeamFileEffects.directory(db,result));
         if(!limited&&TaskStoreTeamFileEffects.integrator(result)&&!result.optString("runId").isEmpty()&&!result.optBoolean("hasUnresolvedOperations")
                 &&result.optString("status").matches("interrupted|awaiting_user|needs_confirmation")&&result.optJSONObject("teamAssignment")!=null
-                &&teamRemainderFenced(result,result.getJSONObject("teamAssignment").getString("reviewId")))
-            result.put("mayReadOriginalFileRemainder",true); // navigation only; never a reusable approval
+                &&localFileContinuationScope(result)){
+            String review=result.getJSONObject("teamAssignment").getString("reviewId");
+            boolean approved=TaskStoreTeamFileApproval.candidate(result,review,true);
+            if(approved||teamRemainderFenced(result,review))result.put("mayReadOriginalFileRemainder",true);
+        } // navigation only; never a reusable approval
         if(!limited&&result.optBoolean("historyHasUnconfirmedOperations")&&PhoneActionRecovery.local(result))result.put(PhoneActionRecovery.KEY,PhoneActionRecovery.page(db,result));
         result.put("logicalRequests",InferenceRequestStore.list(db,id)).put("logicalRequestWindowLimit",16);
         JSONObject flags=new JSONObject();for(String type:new String[]{"memory_owner_consolidation","media_owner_prepared","browser_research_requested"})try(Cursor row=db.rawQuery("SELECT 1 FROM task_events WHERE task_id=? AND event_type=? LIMIT 1",new String[]{id,type})){flags.put(type,row.moveToFirst());}result.put("nativeEventTypeFlags",flags).put("nativeTaskKind",result.optJSONObject("sourceLearningJob")!=null?"source_learning":flags.optBoolean("memory_owner_consolidation")?"memory_consolidation":flags.optBoolean("media_owner_prepared")?"media":result.optString("kind"));

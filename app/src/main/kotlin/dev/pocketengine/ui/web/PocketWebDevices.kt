@@ -695,6 +695,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         fun taskId(): String = text(args, "taskId").also { require(it in ids) { "请从原设备任务记录选择" } }
         val work = Runnable {
             var snapshot: JSONObject? = null; var value: JSONObject? = null; var error: String? = null
+            var inviteDeadline=0L
             try {
                 current(original, epoch)
                 val before by lazy { captureSnapshot(original, ids) }
@@ -712,7 +713,11 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                     "devices.createInvitation" -> {
                         fields(args, "address"); val address = text(args, "address", 512)
                         require(address in strings(before.getJSONObject("actions").optJSONArray("localAddresses"))) { "请选择本机当前可用地址或已配置中继" }
-                        JSONObject().put("kind", "invitation").put("invitation", original.createInvitation(address)).put("displayOnce", true)
+                        val raw=original.createInvitation(address) // The one and only explicit creation; encoding is presentation only.
+                        val elapsed=android.os.SystemClock.elapsedRealtime();val now=System.currentTimeMillis()
+                        dev.pocketengine.features.devices.PairingInvitationDisplay.project(raw,now).also {
+                            inviteDeadline=elapsed+(it.getLong("expiresAt")-now).coerceIn(0L,300_000L)
+                        }
                     }
                     "devices.inspectInvitation" -> { fields(args, "raw"); val native = original.inspectInvitation(text(args, "raw", 16384)); store("pair", native, native.view(), original, epoch) }
                     "devices.pairImage.review" -> {
@@ -1023,6 +1028,12 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                 gate.compareAndSet(call, null)
                 if (runCatching { current(original, epoch) }.isFailure) done(null, "原设备窗口已变化，请读取原回执，不要重复提交")
                 else {
+                    if(action=="devices.createInvitation" && error==null){
+                        val invite=result.getJSONObject("value")
+                        val left=minOf(invite.getLong("expiresAt")-System.currentTimeMillis(),inviteDeadline-android.os.SystemClock.elapsedRealtime())
+                        if(left<=0L){done(null,"这次邀请已到期，没有重建或重新显示。");return@post}
+                        invite.put("remainingMs",left)
+                    }
                     if(action=="devices.readWaitingPhoneGoals" && error==null && runCatching {
                         waitingFor(result.getJSONObject("value").getString("waitingHandle"),original,epoch)
                     }.isFailure){done(null,"本机收件目录已变化，未交付过期的记录");return@post}

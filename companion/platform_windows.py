@@ -382,7 +382,7 @@ class WindowsBackend:
             k.CloseHandle(handle)
 
     @contextmanager
-    def directory(self, root, parts=()):
+    def directory(self, root, parts=(), *, lineage=None):
         root = local_root(os.fspath(root))
         if self.api.k.GetDriveTypeW(root[:3]) != 3:  # DRIVE_FIXED only, no mapped SMB aliases.
             raise PlatformError("Windows native workspace requires a local fixed drive; mapped network/removable drives are unsupported", 409)
@@ -404,6 +404,11 @@ class WindowsBackend:
                 expected = "\\\\?\\" + path.rstrip("\\")
                 if final.rstrip("\\").casefold() != expected.casefold():
                     raise PlatformError("Windows handle did not bind the configured directory", 403)
+                if lineage is not None:
+                    # Valid only while this context holds the original directory AND its ancestors.
+                    if info.indexHigh == info.indexLow == 0:
+                        raise PlatformError("Directory identity is unavailable for private scope comparison", 403)
+                    lineage.append(tuple(self.api.identity(info)))
             yield path, handles[-1], self.api.identity(self.api.info(handles[-1]))
         except OSError as failure:
             raise PlatformError("Windows directory is unavailable, shared for mutation, or unsafe", 403) from failure

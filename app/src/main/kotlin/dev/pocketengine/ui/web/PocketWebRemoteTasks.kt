@@ -23,6 +23,7 @@ internal class PocketWebRemoteTasks(
     private val changed: () -> Unit
 ) {
     val inputPages = PocketWebRemoteInputs(controller, captureWindow, acceptsWindow, taskView)
+    private val offlinePickup = PocketWebRemotePickup(controller, captureWindow, acceptsWindow, taskView)
     private val main = Handler(Looper.getMainLooper())
     private var generation = 0L
     private var nativeWindow: String? = null
@@ -72,7 +73,7 @@ internal class PocketWebRemoteTasks(
             "gateway.prepareContinuation" to setOf("snapshotId", "snapshotVersion"), "openHarnessConfig" to setOf("operationId", "restoreOperationId", "selectionFromTask"))
         private fun independentReview(command: String) = command.startsWith("gateway.") && command != "gateway.prepareContinuation" || command.endsWith("HarnessConfig") || command == "cancelHarnessConfigPreview"
         val COMMANDS = fields.keys.map { "remoteTask.$it" }.toSet() +
-            setOf("remoteTask.open", "remoteTask.close", "remoteTask.openLocalSnapshot", "remoteTask.stageSavedSources", "remoteTask.cancelSourcePreparation", "remoteSessions.read", "remoteSessions.open") + PocketWebRemotePreview.COMMANDS + PocketWebRemoteInputs.COMMANDS
+            setOf("remoteTask.open", "remoteTask.close", "remoteTask.openLocalSnapshot", "remoteTask.stageSavedSources", "remoteTask.cancelSourcePreparation", "remoteSessions.read", "remoteSessions.open") + PocketWebRemotePreview.COMMANDS + PocketWebRemoteInputs.COMMANDS + PocketWebRemotePickup.COMMANDS
 
         /** All lineage and delivery decisions use the same native rules as execution. */
         internal fun presentSnapshot(original: JSONObject): JSONObject {
@@ -121,7 +122,7 @@ internal class PocketWebRemoteTasks(
         val previous = nativeWindow; nativeWindow = null; originalTask = null
         previous?.let(controller::leaveRemoteTask)
     }
-    fun clear() { inputPages.clear(); closeTask(); listingGeneration++; listing = null; listedRows = emptyMap() }
+    fun clear() { offlinePickup.clear(); inputPages.clear(); closeTask(); listingGeneration++; listing = null; listedRows = emptyMap() }
     fun attachPreview(container: android.widget.FrameLayout) {
         check(preview == null)
         preview = PocketWebRemotePreview(controller, container, captureWindow, acceptsWindow, taskView, changed)
@@ -187,6 +188,7 @@ internal class PocketWebRemoteTasks(
             }
             return
         }
+        if(action in PocketWebRemotePickup.COMMANDS){offlinePickup.dispatch(action,args,done);return}
         if(action=="remoteTask.openLocalSnapshot"){openLocalSnapshot(args,done);return}
         if (action in PocketWebRemoteInputs.COMMANDS) { inputPages.dispatch(action, args, done); return }
         if (action in PocketWebRemotePreview.COMMANDS) {

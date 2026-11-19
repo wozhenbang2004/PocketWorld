@@ -26,13 +26,13 @@ public final class TeamFileRemainder {
         for(var entry:c.purposePlans.entrySet())purposes.put(entry.getKey(),plan(entry.getValue()));
         return TeamWorkFiles.hash(TeamWorkFiles.canonical(route.put("purposes",purposes)));
     }
-    static JSONObject files(TeamWorkFiles.Workspace workspace,JSONObject context)throws Exception{
+    static JSONObject files(TeamWorkFiles.Workspace workspace,JSONObject context,boolean hasApprovedFile)throws Exception{
         if(!workspace.byteFilesSupported())throw new IllegalStateException("原工作区没有可核对的原生文件版本。");
         JSONObject binding=context.getJSONObject("binding"),plan=binding.getJSONObject("plan");
         JSONObject progress=TeamIntegrationFiles.progress(workspace,binding,context.getJSONArray("receipts"));
         if(plan.has("recovery")||plan.has("retained"))throw new SecurityException("只处理没有修订的原文件。");
         JSONArray refs=plan.getJSONArray("files");for(int i=0;i<refs.length();i++){JSONObject ref=refs.getJSONObject(i);
             if(!"text_file".equals(workspace.nativeArtifact(ref.getString("artifactId"),ref.getString("sha256")).kind))throw new SecurityException("原成果不是本机文本，不从这里处理。");}
-        return TeamRemainingSelection.split(plan,progress);
+        return TeamRemainingSelection.split(plan,progress,hasApprovedFile);
     }
 }

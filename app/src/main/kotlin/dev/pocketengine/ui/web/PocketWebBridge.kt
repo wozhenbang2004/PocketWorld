@@ -264,7 +264,7 @@ internal class PocketWebBridge(
         )
         val commands: Set<String> = PocketWebLocalSourceIntake.COMMANDS + linkedSetOf(
             "conversation.captureHostGoal", "conversation.openHostGoal",
-            "conversation.projectConvention.read",
+            "conversation.projectConvention.read", "conversation.projectConvention.stageFeedback",
             "app.ready", "app.refresh", "notice.dismiss", "notice.task.close", "phone.notice.refresh", "phone.notice.close", "error.dismiss", "execution.read", "execution.review", "execution.confirm",
             "composer.edit", "composer.send", "composer.mode", "composer.intent", "composer.reading", "composer.query", "composer.retry", "composer.returnPending",
             "chat.cancel", "ownerWork.input", "ownerWork.control", "message.origin", "conversation.new", "conversation.select", "conversation.directory", "conversation.reader.open", "conversation.reader.close", "conversation.reader.earlier", "conversation.reader.refresh", "conversation.reader.position", "conversation.reader.select", "conversation.reader.attachment",
@@ -624,7 +624,7 @@ internal class PocketWebBridge(
                 conversationOrganization.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }; return
             }
             if (action in PocketWebRemoteTasks.COMMANDS) {
-                remoteTasks.dispatch(action, args) { result, error -> complete(id, result, error, retainValue = action != "remoteTask.clipboard"); publishState() }; return
+                remoteTasks.dispatch(action, args) { result, error -> complete(id, result, error, retainValue = action != "remoteTask.clipboard" && action !in PocketWebRemotePickup.COMMANDS); publishState() }; return
             }
             if (action in PocketWebTeamEvidence.COMMANDS) {
                 teamEvidence.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }; return
@@ -645,6 +645,17 @@ internal class PocketWebBridge(
                 fun visible()=section==null && taskViewId==null && !closed && acceptsWindow(origin) && controller.webPrivateOwnerVisible()
                 check(visible()){"请返回原私人对话查看项目交办依据"}
                 controller.requestProvidedProjectConvention(message,::visible){value,error->complete(id,value,error,retainValue=false)}
+                return
+            }
+            if (action == "conversation.projectConvention.stageFeedback") {
+                checkedPayload(args,setOf("messageId","key","epoch","revision","sourceRevision","answerAt","feedback"));val origin=captureWindow()
+                fun visible()=section==null && taskViewId==null && !closed && !phoneComposer.intent && acceptsWindow(origin) && controller.webPrivateOwnerVisible()
+                check(visible()) { "请回到原私人对话的普通输入" }
+                fun integer(name:String):Long{val v=args.opt(name);require((v is Int||v is Long)&& (v as Number).toLong()>=0);return (v as Number).toLong()}
+                controller.stageProjectAnswerAdjustment(requiredString(args,"messageId"),requiredString(args,"key"),requiredInt(args,"epoch"),
+                    integer("revision"),integer("sourceRevision"),integer("answerAt"),requiredString(args,"feedback"),::visible){value,error->
+                    complete(id,value,error,retainValue=false,replayHint="请核对原对话草稿；没有重新写入或发送");publishState()
+                }
                 return
             }
             if (action in PocketWebMemoryHistory.COMMANDS) {
@@ -1178,8 +1189,10 @@ internal class PocketWebBridge(
                             (value?.optJSONArray("rows")?.length()?:0)>0 || !value?.optString("searchText").isNullOrEmpty()
                         else -> false
                     }
-                    complete(id,result,error,"outcome_unknown",retainValue=!privateText && action!="devices.checkLocalExportedFile",
-                        replayHint=if(privateText)"原文字读取或审阅已结束，请回到原工作重新核对；没有重放正文或执行操作。" else null)
+                    val onceInvite=action=="devices.createInvitation" && error==null
+                    complete(id,result,error,"outcome_unknown",retainValue=!privateText && !onceInvite && action!="devices.checkLocalExportedFile",
+                        replayHint=if(onceInvite)"这次邀请已显示；不会从回执重新显示令牌、二维码或生成另一份邀请。"
+                            else if(privateText)"原文字读取或审阅已结束，请回到原工作重新核对；没有重放正文或执行操作。" else null)
                     if (!action.startsWith("devices.desktop.")) publishState()
                 }
                 return

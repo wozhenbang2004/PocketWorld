@@ -115,15 +115,15 @@ internal class PocketWebPairingImage {
             val codes = try { QRCodeMultiReader().decodeMultiple(frame, mapOf(DecodeHintType.TRY_HARDER to true, DecodeHintType.CHARACTER_SET to "UTF-8")) }
                 catch (_: ReaderException) { error("没有读到完整二维码。请保留四周白边，重新拍摄或粘贴原邀请。") }
             check(codes.isNotEmpty()) { "未识别到二维码，请保留完整白边并选一张清晰照片。" }
-            val code = codes.singleOrNull() ?: error("只接受一个完整二维码，请单独选择这次电脑邀请。")
+            val code = codes.singleOrNull() ?: error("只接受一个完整二维码，请单独选择这次原邀请。")
             // ZXing combines structured-append symbols into a synthetic result with
-            // no detector points/ECC. Windows emits one physical, level-M symbol.
+            // no detector points/ECC. Both native senders emit one physical, level-M symbol.
             require((code.resultPoints?.size ?: 0) in 3..4 && code.resultMetadata?.get(ResultMetadataType.ERROR_CORRECTION_LEVEL) == "M") {
-                "请使用电脑伴侣显示的单个原二维码，不接受拼接码。"
+                "请使用发起设备显示的单个原二维码，不接受拼接码。"
             }
             val octets = (code.resultMetadata?.get(ResultMetadataType.BYTE_SEGMENTS) as? List<*>)?.singleOrNull() as? ByteArray
-                ?: error("这不是电脑伴侣显示的完整邀请二维码；也可粘贴原邀请。")
-            require(octets.size in 1..2200) { "二维码超出电脑原邀请范围；请复制原邀请。" }
+                ?: error("这不是发起设备显示的完整邀请二维码；也可粘贴原邀请。")
+            require(octets.size in 1..2200) { "二维码超出原邀请的显示范围；请复制原邀请。" }
             val raw = try { StandardCharsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(octets)).toString() }
                 catch (_: java.nio.charset.CharacterCodingException) { error("二维码不是有效的原邀请文本。") }
             require(raw == code.text) { "二维码包含超出原邀请的内容，未读取为邀请。" }

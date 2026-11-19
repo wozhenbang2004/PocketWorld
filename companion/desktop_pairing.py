@@ -8,6 +8,7 @@ here: initialization is a separate, explicit owner action.
 from __future__ import annotations
 
 import copy
+from contextlib import ExitStack
 import asyncio
 import hashlib
 import ipaddress
@@ -20,6 +21,7 @@ import threading
 import uuid
 
 import device_identity
+import windows_read_pairing as read_pairing
 import device_protocol as protocol
 from device_companion import CompanionDeviceReceiver
 from device_pairing import PairingCandidate
@@ -137,15 +139,33 @@ class PairingOwnerController:
         self.recovery_response_prepared = False
 
     def _workspace_contains_private_state(self, binding):
-        root = ntpath.normcase(ntpath.normpath(self.manager._environment(binding["environmentId"])["root"]))
-        private = [str(self.manager.state), str(self.config_store.path.parent), str(self.identity.directory)]
+        # Admission to the NEW local pairing review only. Do not inspect contents,
+        # modify an old grant, or treat a string prefix as proof of physical separation.
+        from device_companion import workspace_binding
+        root = self.manager._environment(binding["environmentId"])["root"]
+        private = dict.fromkeys(str(path) for path in (self.manager.state, self.config_store.path.parent, self.identity.directory))
+        key = ntpath.normcase(ntpath.normpath(root))
         for item in private:
+            other = ntpath.normcase(ntpath.normpath(item))
             try:
-                if ntpath.commonpath([root, ntpath.normcase(ntpath.normpath(item))]) == root:
-                    return True
+                if ntpath.commonpath([key, other]) in (key, other):
+                    return True  # same, contains private state, or is inside it
             except ValueError:
-                pass
-        return False
+                pass  # different drive letters alone do not establish different objects
+        try:
+            with ExitStack() as held:
+                ours = []
+                held.enter_context(self.manager.platform.directory(root, lineage=ours))
+                if not ours or not protocol.resource_equal(binding, workspace_binding(self.manager, binding["environmentId"])):
+                    return True
+                for item in private:
+                    protected = []
+                    held.enter_context(self.manager.platform.directory(item, lineage=protected))
+                    if not protected or ours[-1] in protected or protected[-1] in ours:
+                        return True
+                return False  # all original ancestor chains were pinned together
+        except (PlatformError, OSError, ValueError):
+            return True  # cannot establish separation; omit, never offer a broader scope
 
     def scope_options(self):
         options = []
@@ -153,6 +173,10 @@ class PairingOwnerController:
             if capability["version"] == "workspace-v1" and self._workspace_contains_private_state(capability["resources"][0]):
                 continue
             options.append(copy.deepcopy(capability))
+            if self.manager.platform.name == "windows":
+                narrow_choice = read_pairing.choice(capability)
+                if narrow_choice is not None:
+                    options.append(narrow_choice)
         settings, health = self.manager.config.get("desktop", {}), WindowsDesktopHealth().probe()
         if (not any(item["id"] == "desktop" for item in options) and health.get("available") is True
                 and isinstance(settings.get("binary"), str) and Path(settings["binary"]).is_file()
@@ -191,25 +215,27 @@ class PairingOwnerController:
         if any(key not in available for key in selected_ids):
             raise PlatformError("Selected native scope disappeared; review current capabilities")
         selected = [available[key] for key in selected_ids]
+        narrow = read_pairing.narrow(selected_ids)
         tools = sorted({tool["toolName"] for item in selected for tool in item["toolDeclarations"]})
         resources = [binding for item in selected for binding in item["resources"]]
         now = self.manager.now()
         grant = {"grantId": "owner-" + uuid.uuid4().hex, "peerDeviceId": candidate.device_id, "localDeviceId": self.identity.device_id,
                  "authorizationEpoch": 1, "issuedAt": now, "expiresAt": now + minutes * 60000,
-                 "capabilities": ["tool.invoke", "operation.get", "operation.cancel", "artifact.describe", "artifact.readChunk"],
+                 "capabilities": list(read_pairing.METHODS) if narrow else ["tool.invoke", "operation.get", "operation.cancel", "artifact.describe", "artifact.readChunk"],
                  "toolNames": tools, "resources": resources, "allowedOrigins": [candidate.device_id], "allowDelegation": False,
                  "maxDelegationDepth": 0, "toolBudget": tool_budget, "modelBudget": 0}
         if "desktop" in selected_ids:
             grant["capabilities"].append("desktop.viewer")
         if history_read:
-            grant["historyRead"] = {"expiresAt": now + 86400000, "methods": ["operation.get", "artifact.describe", "artifact.readChunk"]}
+            grant["historyRead"] = {"expiresAt": now + 86400000, "methods": ["operation.get"] if narrow else ["operation.get", "artifact.describe", "artifact.readChunk"]}
+        read_pairing.guard(selected, grant, history_read)
         if len(protocol.canonical_bytes(grant)) > 8192:
             raise PlatformError("Select fewer exact scopes; the complete owner grant must fit its original reviewed bound")
         record = {"fingerprints": candidate.display(), "grant": grant, "selectedCapabilities": selected,
                   "workspacePaths": {item["id"]: self.manager._environment(item["resources"][0]["environmentId"])["root"] for item in selected if item["version"] == "workspace-v1"},
                   "endpoint": self.endpoint, "enableDesktop": "desktop" in selected_ids}
-        summary = ("仅下列资源和工具；电脑不运行第二Agent/Goal，不需要Codex，模型额度为0。\r\n"
-                   "主屏desktop授权覆盖当前交互会话的所有窗口，不是文件沙箱；命令也不是OS沙箱。\r\n"
+        summary = ((read_pairing.summary(record) if narrow else "仅下列资源和工具；电脑不运行第二Agent/Goal，不需要Codex，模型额度为0。\r\n"
+                   "主屏desktop授权覆盖当前交互会话的所有窗口，不是文件沙箱；命令也不是OS沙箱。\r\n")
                    + ("本次桌面授权包含手机实时查看电脑画面，以及人工鼠标和键盘接管；交还控制权后，AI必须重新观察再操作。\r\n" if "desktop.viewer" in grant["capabilities"] else "")
                    + "这不会恢复任何旧任务。完整指纹、地址、额度和期限：\r\n" + json.dumps(record, ensure_ascii=False, indent=2))
         if len(summary) > 16000:
@@ -225,10 +251,12 @@ class PairingOwnerController:
         self.config_store.current()
         # Re-read native configuration/resources after the physical dialog;
         # its click/JSON cannot swap the reviewed target or scope afterward.
+        checked = review.record
         current = {item["id"]: item for item in self.scope_options()}
-        if any(item["id"] not in current or protocol.canonical_bytes(item) != protocol.canonical_bytes(current[item["id"]]) for item in review.record["selectedCapabilities"]):
+        if any(item["id"] not in current or protocol.canonical_bytes(item) != protocol.canonical_bytes(current[item["id"]]) for item in checked["selectedCapabilities"]):
             raise PlatformError("Native resource changed during owner review; no authority granted")
-        pending = self.coordinator.confirm_candidate_locally(self.identity, review.candidate, True, self.manager.now(), reviewed_owner_grant=review.record["grant"])
+        read_pairing.guard(checked["selectedCapabilities"], checked["grant"], "historyRead" in checked["grant"])
+        pending = self.coordinator.confirm_candidate_locally(self.identity, review.candidate, True, self.manager.now(), reviewed_owner_grant=checked["grant"])
         self.review, self.pending = review, pending
         return pending
 

@@ -6,6 +6,7 @@ import { appendRemoteClipboard, managedRemoteRows, remoteApprovalClaim, remoteDr
 import './remote-task-workspace.css';
 import './collaboration-depth.css';
 import { RemoteSavedResults } from './RemoteSavedResults';
+import { RemoteOfflinePickup } from './RemoteOfflinePickup';
 import { RemoteTaskArtifacts } from './RemoteTaskArtifacts';
 import { RemoteTaskPreview } from './RemoteTaskPreview';
 import { RemoteTaskHarness } from './RemoteTaskHarness';
@@ -184,6 +185,7 @@ export function RemoteTaskWorkspace({ taskId, raw, receipt, savedFiles, openProj
     {accepted&&<p className="pw-field-hint">原主机作业：<code>{proof!.jobId}</code>{proof!.detailRetired!==true&&proof!.executorStatus&&proof!.executorStatus!=='unknown'&&' · 上次回执：'+executionLabel(proof!.executorStatus)}</p>}
   </section>}
     <RemoteSavedResults taskId={taskId} rows={savedFiles} openProject={openProject}/>
+    {personal&&<RemoteOfflinePickup task={raw} saved={savedFiles}/>}
     {onlineView&&<LiveRemoteTask key={taskId} taskId={taskId}/>}</>;
 }
 

@@ -12,6 +12,7 @@ import { projectPackageTaskIdentity, type PackagePreviewTarget } from './project
 import { TaskResultFiles, type TaskResultFile } from './TaskResultFiles';
 import { ProjectPackageFiles, canReadProjectPackageFiles } from './ProjectPackageFiles';
 import {TaskPhoneFinalScreen} from './PhoneFinalScreenReceipt';
+import { RetainedPhoneImage } from './RetainedPhoneImage';
 import './task-reading.css';
 
 const stoppedAttemptTitles: Record<string, string> = {
@@ -164,7 +165,7 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
       <header className="pw-outcome-heading"><h3>{hasExecutionRecord ? title : outcome.projectPackages.length ? '结果正文' : '暂无可读取的结果正文'}</h3></header>
       {resultText ? <div data-motion-key="result-body"><AIAnswer text={resultText} showActions={!progress} onCopy={progress ? undefined : () => onCopy(resultText)} onCopyCode={onCopy}/></div>
         : !settlementTitle && <p className="pw-reading-note">{files.length ? '可先查看下方关联答复中的附件。' : '当前记录未提供可读取的结果正文。'}</p>}
-      {outcome.image && <figure className="pw-outcome-image" data-motion-key={`image:${screenshot?.imageId || 'retained'}`}><img src={outcome.image} alt={imageLabel} loading="lazy" decoding="async"/><figcaption>{imageLabel}</figcaption></figure>}
+      {outcome.image && <RetainedPhoneImage task={record} src={outcome.image} label={imageLabel} active={active} readIdentity={readIdentity} motionKey={`image:${screenshot?.imageId || 'retained'}`}/>}
       {remotePhone && <figure className="pw-outcome-image" data-motion-key={`phone:${screenshot?.imageId}`}>
         <img src={remotePhone.image} alt={`设备 ${remotePhone.deviceId.slice(-4)} 的${remotePhone.screenMode === 'background' ? '独立屏' : '主屏'}观察快照`} loading="lazy" decoding="async"/>
         <figcaption>设备 {remotePhone.deviceId.slice(-4)} · {remotePhone.screenMode === 'background' ? '独立屏' : '主屏'} · {new Date(remotePhone.capturedAt).toLocaleString()} · {remotePhone.width} × {remotePhone.height}
@@ -236,7 +237,7 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
       {outcome.retained && <AccordionItem id="retained-result" title="任务保留的结果" description="与当前内容分开保留">
         <div className="pw-outcome-conversation">
           {outcome.retained.text && <AIAnswer text={outcome.retained.text} onCopy={() => onCopy(outcome.retained!.text)} onCopyCode={onCopy}/>}
-          {outcome.retained.image && <figure className="pw-outcome-image"><img src={outcome.retained.image} alt="任务保留的截图" loading="lazy"/><figcaption>{imageLabel}</figcaption></figure>}
+          {outcome.retained.image && <RetainedPhoneImage task={record} src={outcome.retained.image} label={imageLabel} active={active} readIdentity={readIdentity}/>}
         </div>
       </AccordionItem>}
       {reply?.text && <AccordionItem id="related-reply" title="对话中的相关答复" description="任务关联的对话内容">

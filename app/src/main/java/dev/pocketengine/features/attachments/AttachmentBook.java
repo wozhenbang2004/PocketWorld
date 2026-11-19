@@ -365,6 +365,46 @@ public final class AttachmentBook {
         JSONObject record=internal(id);if(!expectedSha256.equals(record.getString("sha256")))throw new InputChangedException();
         control.checkpoint();return new VerifiedMetadata(record);
     }
+    /** One specific frozen remote file in the owner's Book. Never returns the catalogue or
+     * reads unrelated blobs. An incomplete index, ambiguous origin or retired original is not a miss. */
+    public synchronized JSONObject verifiedPrivateRemoteCopy(JSONObject origin,RunControl current)throws Exception {
+        if(!"remote_result_snapshot".equals(origin.opt("kind"))||!Boolean.TRUE.equals(origin.opt("immutableArtifact"))
+                ||!Boolean.FALSE.equals(origin.opt("authorshipVerified"))||!origin.getString("sha256").matches("[a-f0-9]{64}")
+                ||origin.getLong("bytes")<0||origin.getLong("bytes")>262144)throw new SecurityException("不是原任务选定的冻结文件");
+        current.checkpoint();JSONArray catalogue=list();JSONObject chosen=null;
+        for(int i=0;i<catalogue.length();i++){
+            current.checkpoint();JSONObject meta=catalogue.getJSONObject(i),source=meta.optJSONObject("source");
+            if(!sameFrozenOrigin(source,origin))continue;
+            if(chosen!=null||!privateOutputSource(meta)||meta.getLong("size")!=origin.getLong("bytes")||!origin.getString("sha256").equals(meta.opt("sha256")))
+                throw new SecurityException("原件重复、已撤下或登记不符；未改取其他附件");
+            chosen=meta;
+        }
+        if(chosen==null)return null;
+        String id=chosen.getString("id"),sha=origin.getString("sha256");long size=origin.getLong("bytes");checkId(id);
+        Path blob=new File(root,id+".blob").toPath(),index=new File(root,id+".json").toPath();IndexReadBudget budget=new IndexReadBudget();
+        BasicFileAttributes before=Files.readAttributes(blob,BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);
+        JSONObject recorded=readIndex(index,budget);
+        if(!before.isRegularFile()||before.size()!=size||!privateOutputSource(recorded)||!id.equals(recorded.opt("id"))
+                ||!sameFrozenOrigin(recorded.optJSONObject("source"),origin)||recorded.getLong("size")!=size||!sha.equals(recorded.opt("sha256")))throw new SecurityException("冻结文件的手机登记已变化");
+        MessageDigest hash=MessageDigest.getInstance("SHA-256");long count=0;
+        try(InputStream in=Files.newInputStream(blob,LinkOption.NOFOLLOW_LINKS)){byte[] buffer=new byte[32768];
+            for(int n;(n=in.read(buffer))!=-1;){current.checkpoint();if(n==0)continue;if(n>size-count)throw new InputChangedException();count+=n;hash.update(buffer,0,n);}
+        }
+        JSONObject actual=readIndex(index,budget);BasicFileAttributes after=Files.readAttributes(blob,BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);
+        if(count!=size||!sha.equals(hex(hash.digest()))||!after.isRegularFile()||after.size()!=size
+                ||!before.lastModifiedTime().equals(after.lastModifiedTime())||!java.util.Objects.equals(before.fileKey(),after.fileKey())
+                ||!privateOutputSource(actual)||!id.equals(actual.opt("id"))||!sameFrozenOrigin(actual.optJSONObject("source"),origin)
+                ||actual.getLong("size")!=size||!sha.equals(actual.opt("sha256"))){revokeOutputEligibility(id);throw new InputChangedException();}
+        current.checkpoint();publishOutputEligibility(actual);return visible(actual);
+    }
+    private static boolean sameFrozenOrigin(JSONObject source,JSONObject expected)throws Exception{
+        if(source==null||source.length()!=expected.length())return false;
+        for(java.util.Iterator<String> keys=expected.keys();keys.hasNext();){
+            String key=keys.next();Object value=source.opt(key);
+            if("bytes".equals(key)){if(!(value instanceof Integer||value instanceof Long)||source.getLong(key)!=expected.getLong(key))return false;}
+            else if(!expected.get(key).equals(value))return false;
+        }return true;
+    }
     /** Native owner archive stream. Same private Book and full digest before/after;
      * no file path, URI, group source or old execution permission is exported. */
     public synchronized long exportOwnerArchiveBytes(String id,String sha,java.io.OutputStream destination,RunControl original)throws Exception {

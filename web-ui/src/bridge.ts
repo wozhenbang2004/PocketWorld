@@ -160,6 +160,8 @@ export const bridge = {
   getState: () => current,
   // UI request tickets can observe a changed native document without reading its secret token.
   getDocumentEpoch: () => hostDocumentEpoch,
+  // Observe replacement of this document without exposing its native token.
+  subscribeDocumentEpoch(listener: () => void) { tokenListeners.add(listener); return () => { tokenListeners.delete(listener); }; },
   waitForHostDocument: () => hostDocumentReady,
   async bindHostDocument() {
     await hostDocumentReady;

@@ -58,7 +58,7 @@ public final class TeamIntegrationFiles implements CapabilityPort {
         if(before.getInt("version")!=ref.getInt("expectedVersion")||!hash.equals(ref.getString("expectedHash")))return conflict("原项目在主人审查后发生变化，本文件未派发；请查看当前文件和已有整合回执");
         VersionedWorkspace.FileSnapshot nativeExpected=workspace.byteFilesSupported()?workspace.nativeFile(binding.getString("targetProjectId"),ref.getString("path"),before.getInt("version")):null;
         if(nativeExpected!=null&&(nativeExpected.version!=ref.getInt("expectedVersion")||!nativeExpected.sha256.equals(ref.getString("expectedHash"))))return conflict("原生字节基线已变化，未派发CAS");
-        JSONObject capability=new JSONObject().put("teamRunId",binding.getString("teamRunId")).put("assignmentId",binding.getString("assignmentId")).put("memberId",binding.getString("memberId")).put("targetProjectId",binding.getString("targetProjectId")).put("planHash",digest).put("reviewId",binding.getString("reviewId")).put("file",ref).put("requiresOwnerApproval",true);
+        JSONObject capability=fileCapability(binding,ref);
         long pause=original.pauseRevision();JSONObject claim=host.claim((String)operation,name,args,capability,original);if(!claim.optBoolean("dispatch")){if(claim.optString("code").isEmpty())throw new SecurityException("整合没有明确原生回执");return claim;}check(name);
         try{JSONObject actual;
             if(nativeExpected!=null){byte[] bytes=TeamWorkReview.isDeletion(ref)?null:TeamWorkReview.artifactBytes(workspace,ref);VersionedWorkspace.FileSnapshot[] written={null};java.util.UUID revision=TeamIntegrationFileRecovery.revisionId(binding,(String)operation,ref);original.dispatchAtPauseRevision(pause,()->written[0]=workspace.commitTeamFile(nativeExpected,bytes,revision));VersionedWorkspace.FileSnapshot reread=workspace.nativeFile(nativeExpected.projectId,nativeExpected.path,written[0].version);if(!reread.sha256.equals(ref.getString("sha256"))||!reread.revisionId.equals(written[0].revisionId)||!revision.toString().equals(reread.revisionId)||reread.tombstone!=TeamWorkReview.isDeletion(ref))throw new IllegalStateException("actual integrated byte/delete receipt differs");actual=reread.json();}
@@ -67,6 +67,10 @@ public final class TeamIntegrationFiles implements CapabilityPort {
                 if(!artifact.getString("content").equals(actual.getString("content"))||!written[0].getString("revisionId").equals(actual.getString("revisionId")))throw new IllegalStateException("actual integrated bytes differ");}
             return TeamIntegrationFileRecovery.applied(binding,ref,actual.getInt("version"),actual.getString("revisionId"));
         }catch(Exception unknown){return new JSONObject().put("ok",false).put("accepted",JSONObject.NULL).put("status","unknown").put("code","team_integration_unknown").put("operationId",operation).put("message","原文件整合没有确定回执；可能已有部分文件保存，只核对原操作，不会重放");}
+    }
+    /** Same exact canonical capability at original claim, owner review and continued claim. */
+    public static JSONObject fileCapability(JSONObject binding,JSONObject ref)throws Exception{
+        return new JSONObject().put("teamRunId",binding.getString("teamRunId")).put("assignmentId",binding.getString("assignmentId")).put("memberId",binding.getString("memberId")).put("targetProjectId",binding.getString("targetProjectId")).put("planHash",binding.getString("planHash")).put("reviewId",binding.getString("reviewId")).put("file",ref).put("requiresOwnerApproval",true);
     }
     static TeamIntegrationFileRecovery.Observed recoverOriginal(TeamWorkFiles.Workspace workspace,JSONObject selection)throws Exception{
         if("prepared".equals(selection.getString("operationState")))return TeamIntegrationFileRecovery.original(selection,null,null);

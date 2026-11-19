@@ -5,6 +5,7 @@ import { Accordion, AccordionItem, Button, CheckboxField, RadioOptions, SearchFi
 import { DeviceRequestScope, deviceChannelWasConnected, deviceConnectionLabel, deviceGrantInput, deviceHistoryLabel, deviceHistoryReceipt, deviceOriginalTaskActions, isReceivedPhoneTask, receivedPhoneGoalReturn, matchesReceivedPhoneGoal, type ReceivedPhoneGoalReturn, type SentPhoneGoalFocus, PHONE_ACTION_WINDOW_MS, deviceRecordedScopes, devicePhoneGoalArchive, localReceivedPhonePage, localReviewedInbox, samePhoneGoalArchive, receivedPhoneArchiveReturn, waitingPhoneGoalPage, type PhoneArchiveSide, deviceTaskHistoryPage, deviceTaskHistoryLinks, deviceTaskDetails, deviceMethodLabels, deviceOperationLabels, devicePhoneGoalResult, deviceReceipt, deviceReview, deviceRows as rows, deviceSnapshot, deviceStrings as strings, deviceTaskRows, deviceWorkspaceTaskMode, type DeviceData as Data } from './devices-workspace';
 import { IconAdd, IconArrowLeft, IconChevronRight, IconClock, IconDevices, IconLayers, IconMonitor, IconPhone, IconRefresh, IconShieldCheck } from './icons';
 import { DesktopViewer } from './DesktopViewer';
+import { PairingInvitationDisplay, shownPairingInvitation, type ShownPairingInvitation } from './PairingInvitationDisplay';
 import { SavedPhoneDispatches } from './SavedPhoneDispatches';
 import { WindowsCommandReceipt } from './WindowsCommandReceipt';
 import { WindowsWorkspaceReadReceipt } from './WindowsWorkspaceReadReceipt';
@@ -75,7 +76,7 @@ function GrantSelection({ review, busy, confirm }: { review: Data; busy: boolean
 export function DevicesWorkspace({ state, data, supported, run, registerTransientBack, openModels, modelReturn, sourceFocus }: { sourceFocus?: SentPhoneGoalFocus; modelReturn?: ReceivedPhoneGoalReturn; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void; openModels?: (origin?: ReceivedPhoneGoalReturn) => void }) {
   const [snapshot, setSnapshot] = useState<Data | null>(null), [peerId, setPeerId] = useState(''), [form, setForm] = useState(''), [raw, setRaw] = useState('');
   const [address, setAddress] = useState(''), [inviteId, setInviteId] = useState(''), [host, setHost] = useState(''), [port, setPort] = useState(''), [recoveryAddresses, setRecoveryAddresses] = useState<string[]>([]);
-  const [invitation, setInvitation] = useState(''), [review, setReview] = useState<Data | null>(null), [ack, setAck] = useState(false), [future, setFuture] = useState(false);
+  const [invitation, setInvitation] = useState<ShownPairingInvitation|null>(null), [review, setReview] = useState<Data | null>(null), [ack, setAck] = useState(false), [future, setFuture] = useState(false);
   const [workBusy, setWorkBusy] = useState(false), [controlBusy, setControlBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const [taskDetails, setTaskDetails] = useState<Record<string, Data>>({}), [historyReceipt, setHistoryReceipt] = useState<Data | null>(null), [historyStopSubmitted, setHistoryStopSubmitted] = useState(false);
   const [waitingPhones, setWaitingPhones] = useState<Data | null>(null);
@@ -85,6 +86,17 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const [ownText,setOwnText]=useState<Data|null>(null),ownTextSequence=useRef(0);
   const closeOwnText=()=>{ownTextSequence.current++;setOwnText(null);};
   const autoReadSource=useRef('');
+  useEffect(()=>{
+    if(!invitation)return;
+    const expire=()=>setInvitation(active=>active===invitation?null:active);
+    let timer=0;
+    const check=()=>{const left=Math.min(invitation.expiresAt-Date.now(),invitation.until-performance.now());
+      if(left<=0||document.hidden||snapshot?.local?.deviceId!==invitation.device||snapshot?.local?.instanceId!==invitation.instance
+        ||snapshot?.local?.certificateFingerprint!==invitation.fingerprint){expire();return;}
+      timer=window.setTimeout(check,Math.min(1000,left));
+    };
+    check();return()=>window.clearTimeout(timer);
+  },[invitation,snapshot?.local?.deviceId,snapshot?.local?.instanceId,snapshot?.local?.certificateFingerprint]);
   const [archiveFind,setArchiveFind]=useState({key:'',text:''});
   const [heldPhoneResult, setPhoneGoalResult] = useState<Data | null>(null);
   const [preparingDeviceWork, setPreparingDeviceWork] = useState(false);
@@ -104,7 +116,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const invoke = async (action: string, args: Data = {}, accept?: (value: Data, snapshot?: Data | null) => void, lane = 'work') => {
     if (!alive.current || document.visibilityState !== 'visible' || scope.current.hasPending(lane)) return;
     if (lane === 'control' && action !== 'devices.confirm') {
-      scope.current.invalidate(true); setWorkBusy(false); setReview(null); handle.current = ''; setInvitation(''); setForm(''); setRaw('');
+      scope.current.invalidate(true); setWorkBusy(false); setReview(null); handle.current = ''; setInvitation(null); setForm(''); setRaw('');
     }
     const ticket = scope.current.begin(lane); if (!ticket) return;
     const setPending = lane === 'control' ? setControlBusy : setWorkBusy;
@@ -142,10 +154,10 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     selectedPeer.current = next;
     setPeerId(next);
   };
-  const acceptReview = (value: Data) => { const actual = deviceReview(value); handle.current = actual.viewHandle; setReview(actual); setAck(false); setFuture(false); setHistoryReceipt(null); setPhoneGoalResult(null); setHistoryStopSubmitted(false); setRaw(''); setForm(''); setInvitation(''); };
+  const acceptReview = (value: Data) => { const actual = deviceReview(value); handle.current = actual.viewHandle; setReview(actual); setAck(false); setFuture(false); setHistoryReceipt(null); setPhoneGoalResult(null); setHistoryStopSubmitted(false); setRaw(''); setForm(''); setInvitation(null); };
   const clearSensitive = (enabled = false, keepPairEntry = false) => {
     setDesktopOpen(false); setDiscoveryAck(false); setAdvertise(false); setDiscoveryPeer('');setClosedInbox(null);setClosedDraft('');closeOwnText(); setModelReturnFocus(undefined); setPhoneArchive(null); setArchiveFind({key:'',text:''}); setWaitingPhones(null);
-    scope.current.invalidate(enabled); handle.current = ''; setReview(null); setAck(false); setFuture(false); setRaw(''); setInvitation('');
+    scope.current.invalidate(enabled); handle.current = ''; setReview(null); setAck(false); setFuture(false); setRaw(''); setInvitation(null);
     setForm(old => keepPairEntry && (old === 'add' || old === 'invite') ? old : ''); setAddress(''); setHost(''); setPort(''); setRecoveryAddresses([]); setHistoryReceipt(null); setPhoneGoalResult(null); setHistoryStopSubmitted(false); setTaskDetails({}); setSnapshot(null); setError(''); setNotice(''); setWorkBusy(false); setControlBusy(false);
     void run('devices.discard', {}).catch(() => {});
   };
@@ -169,7 +181,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     if (preparingDeviceWork) return true;
     if (ownText) {closeOwnText();return true;}
     if (review) { closeReview(); return true; }
-    if (invitation) { setInvitation(''); return true; }
+    if (invitation) { setInvitation(null); return true; }
     if (form) { clearSensitive(true); refresh(); return true; }
     if (desktopOpen) { setDesktopOpen(false); return true; }
     if (sourceFocus) return false; // Return to the same owner task instead of stepping to another peer.
@@ -997,7 +1009,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
                 });
               }}>核对所选图片</Button>}
             </div>
-            <p>可选电脑上这次邀请的截图或照片，保留四周白边。只在本机识别，不上传，也不自动加入。也可以粘贴邀请：</p>
+            <p>可选另一台手机或电脑这次邀请的截图或照片，保留四周白边。只在本机识别，不上传，也不自动加入。也可以粘贴邀请：</p>
           </>}
           <TextAreaField label={form === 'relay' ? '已有临时租约' : form === 'add' ? '对方的短时邀请' : '原设备短时邀请'} value={raw} onChange={setRaw} isDisabled={busy} hint="仅在当前窗口核对，离开或进入后台后清除。" />
           <Button disabled={busy || !raw.trim() || form === 'add' && !available(actions.join)} onClick={() => { void invoke(form === 'relay' ? 'devices.reviewRelay' : form === 'connection' ? 'devices.reviewConnection' : 'devices.inspectInvitation', { raw, ...(form === 'connection' ? { deviceId: peerId } : {}) }, acceptReview); }}>{form === 'add' ? '核对邀请与权限' : '读取原生审阅'}</Button>
@@ -1020,7 +1032,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
           </> : <>
             {inviteAddresses.length === 1 ? <p className="pw-source-copy">本次邀请使用 <bdi>{inviteAddresses[0]}</bdi></p>
               : <SelectField label="本机地址或已配置中继" value={inviteAddress} onChange={setAddress} options={inviteAddresses.map(value => ({ id: value, label: value }))} isDisabled={busy} />}
-            <Button disabled={busy || !inviteAddress || !supported('devices.createInvitation')} onClick={() => { void invoke('devices.createInvitation', { address: inviteAddress }, value => { if (value.displayOnce !== true || typeof value.invitation !== 'string' || !value.invitation) throw new Error('未取得原短时邀请。'); setInvitation(value.invitation); setRaw(''); setForm(''); }); }}>创建短时邀请</Button>
+            <Button disabled={busy || !inviteAddress || !supported('devices.createInvitation')} onClick={() => { void invoke('devices.createInvitation', { address: inviteAddress }, value => { setInvitation(shownPairingInvitation(value,local)); setRaw(''); setForm(''); }); }}>创建短时邀请</Button>
           </>}
         </section>}
         {pairingEntry && <Accordion className="pw-device-form-alternatives">
@@ -1035,11 +1047,10 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
         {form === 'recoveryRead' && <><TextField label="原设备显示的数字地址或已配置中继服务" value={host} onChange={setHost} isDisabled={busy} />{!/^wss:\/\/|^https:\/\//.test(host) && <TextField label="原恢复端口" value={port} onChange={setPort} isDisabled={busy} />}<Button disabled={busy || !host || !/^wss:\/\/|^https:\/\//.test(host) && !/^\d+$/.test(port)} onClick={() => { void invoke('devices.recoverPairing', { inviteId, host, port: /^wss:\/\/|^https:\/\//.test(host) ? 0 : Number(port) }, () => { setForm(''); setNotice('已查询原已提交配对结果，未重新授权。'); }); }}>只读取原配对结果</Button></>}
       </div>
     </div></SettingsDialog>
-    <SettingsDialog isOpen={!!invitation} onClose={() => setInvitation('')} title="将邀请交给另一台设备"><div className="pw-collaboration-dialog" data-collaboration-kind="DevicesWorkspace">
-      <p>只交给你信任的设备。在对方的「配对设备 → 对方已发邀请」粘贴，两端分别核对身份和权限。回到这里时不会再次显示邀请。</p>
-      <TextAreaField label="短时邀请，选中后可复制" value={invitation} isReadOnly />
+    <SettingsDialog isOpen={!!invitation} onClose={() => setInvitation(null)} title="将邀请交给另一台设备"><div className="pw-collaboration-dialog" data-collaboration-kind="DevicesWorkspace">
+      {invitation && <PairingInvitationDisplay invite={invitation}/>}
       <p className="pw-source-copy">本机完整指纹：<bdi>{fingerprint(local.certificateFingerprint)}</bdi></p>
-      <Button variant="secondary" onClick={() => setInvitation('')}>清除显示，回到配对进度</Button>
+      <Button variant="secondary" onClick={() => setInvitation(null)}>清除显示，回到配对进度</Button>
     </div></SettingsDialog>
     <SettingsDialog isOpen={!!review && (!sourceFocus || !!focusedPeer && review.kind==='history' && review.view?.taskId===sourceFocus.taskId && review.view?.targetDeviceId===sourceFocus.deviceId && review.view?.instanceId===sourceFocus.instanceId)} onClose={closeReview} title={review?.kind === 'pair' ? '范围与双端身份' : review?.kind === 'grant' ? '原设备权限修改' : review?.kind === 'goal' ? '用本机模型处理原目标' : review?.kind === 'result' ? '核对这次原成果' : review?.kind === 'approval' ? '核对这次设备操作' : review?.kind === 'recovery' ? '原配对结果只读窗口' : review?.kind === 'resume' ? '核对这次恢复请求' : review?.kind === 'history' ? (originalView.phoneGoalResult === true ? '这次手机目标与派发' : '原设备操作回执') : '核对原设备操作'}><div className="pw-collaboration-dialog" data-collaboration-kind="DevicesWorkspace">
       {review && <div className="pw-device-review">

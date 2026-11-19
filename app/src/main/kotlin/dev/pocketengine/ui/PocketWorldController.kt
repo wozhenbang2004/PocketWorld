@@ -1635,6 +1635,43 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             state.messages.singleOrNull { it.id==messageId && it.taskId==taskId && it.role=="assistant" }?.let { it.projectConventionRecorded && it.sourceRevision==original.sourceRevision }==true
         requestPersonalOwner(::valid,done) { app.tasks.originalProjectConventionForAnswer(conversation,messageId,taskId,original.sourceRevision) }
     }
+    /** A local, user-authored follow-up only. Recheck the saved original answer, then use the existing draft CAS/store. */
+    internal fun stageProjectAnswerAdjustment(messageId:String,key:String,epoch:Int,revision:Long,sourceRevision:Long,answerAt:Long,feedback:String,
+            current:()->Boolean, done:(JSONObject?,String?)->Unit) {
+        val comment=feedback.trim();require(comment.isNotEmpty() && comment.length<=600) { "请写下想调整的具体地方（最多 600 字）" }
+        val model=ownerComposer ?: error("原对话输入尚未就绪")
+        val conversation=state.conversationId ?: error("请回到原对话")
+        require(answerAt>0 && state.messages.singleOrNull { it.id==messageId && it.role=="assistant" && it.projectConventionRecorded }?.at==answerAt) { "原答复时间无法核对" }
+        fun samePage()=current() && webPrivateOwnerVisible() && ownerComposer===model && state.conversationId==conversation &&
+            key=="conversation:"+conversation && composerViewEpoch==epoch && model.active().key==key &&
+            state.messages.singleOrNull { it.id==messageId && it.projectConventionRecorded }?.at==answerAt
+        fun emptyOriginal():Boolean {
+            if(!samePage()||state.chatSubmitting||state.phoneSubmitting||state.listening||state.voiceInput.optBoolean("active")||composerSaving||composerPending.any { it.draftKey==key })return false
+            val d=model.active()
+            return d.revision==revision && d.conversationId==conversation && d.text.isEmpty() && d.voiceText.isEmpty() && d.voiceInputId.isEmpty() &&
+                d.attachments().length()==0 && d.sourceRefs().length()==0 && d.previewRefs().length()==0 && d.objectRefs().length()==0
+        }
+        check(emptyOriginal()) { "原输入框已有内容、正在保存或有待确认的发送；没有覆盖。" }
+        requestProvidedProjectConvention(messageId,::emptyOriginal){proof,readError->
+            if(proof==null||readError!=null){done(null,readError ?: "原回答的依据未能核对");return@requestProvidedProjectConvention}
+            try{
+                check(emptyOriginal() && proof.optString("messageId")==messageId && proof.optLong("sourceRevision")==sourceRevision &&
+                    proof.opt("providedToThisAnswer")==true && proof.opt("modelUseVerified")==false && proof.opt("currentSourceRead")==false) { "原回答、来源或草稿已改变，没有写入。" }
+                val quote=proof.getString("text");require(quote.isNotBlank() && quote.length<=4000)
+                val time=java.time.format.DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm:ss",java.util.Locale.ROOT).withZone(java.time.ZoneOffset.UTC).format(java.time.Instant.ofEpochMilli(answerAt))
+                val text="请调整本对话中 ${time} UTC 的那条答复。\n\n当时提供的项目约定（修订 ${sourceRevision}）：\n${quote}\n\n我的修改意见：\n${comment}"
+                val prior=model.active()
+                val updated=model.edit(key,revision,text,prior.mode,prior.attachments())
+                publishComposer()
+                persistComposer(model){failure->
+                    if(failure!=null || !samePage() || model.active().revision!=updated.revision || model.active().text!=text)
+                        done(null,"保存结果未确认，请核对原对话输入框；没有发送或自动重试。")
+                    else done(JSONObject().put("messageId",messageId).put("key",key).put("revision",updated.revision).put("savedDraft",true)
+                        .put("sent",false).put("projectMemoryChanged",false).put("modelCalled",false),null)
+                }
+            }catch(failure:Exception){done(null,message(failure))}
+        }
+    }
     /** Resolve the original answer in the visible native conversation, never a caller-supplied receipt. */
     internal fun webAnswerMemoryReference(messageId: String): JSONObject {
         check(webPrivateOwnerVisible()) { "请回到原私人对话" }
@@ -2225,6 +2262,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         catch (error: Exception) { state = state.copy(error = message(error)) }
     }
     /** Local stored metadata only; does not probe a CLI, query a remote job or select an authority. */
+    internal val offlineRemotePickup by lazy { dev.pocketengine.features.remote.RemotePhonePickup(
+        app.tasks, dev.pocketengine.features.attachments.AttachmentRepository.get(activity).book) }
     fun remoteManagedSessions(): JSONObject {
         if (closed || !privateWorkspaceView()) throw SecurityException("请回到私人电脑页读取原任务清单")
         return (app.remoteOwnerWorkflows ?: throw IllegalStateException("原电脑任务宿主未就绪")).managedSessions(activity)
