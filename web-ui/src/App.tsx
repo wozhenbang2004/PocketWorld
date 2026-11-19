@@ -8,7 +8,7 @@ import { FluidValueSlider } from './forms-library/uiux/FluidValueSlider';
  */
 import {useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState} from 'react';
 import {AnimatePresence,motion} from 'motion/react';
-import { IconAccount, IconAdd, IconArrowLeft, IconBook, IconCalendar, IconCalendarCheck, IconChat, IconCheckCircle, IconChevronDown, IconChevronRight, IconClock, IconClose, IconError, IconFile, IconFolder, IconGrid, IconHistory, IconImage, IconInfo, IconLayers, IconLink, IconMemory, IconMenu, IconMonitor, IconMore, IconNewChat, IconNotification, IconPauseCircle, IconPlay, IconQuote, IconRefresh, IconSearch, IconSettings, IconShieldCheck, IconSidebarClose, IconSidebarOpen, IconSparkles, IconStop, IconTeam, IconTerminal, IconTool } from './icons';
+import { IconAccount, IconAdd, IconArrowLeft, IconBook, IconCalendar, IconCalendarCheck, IconChat, IconCheckCircle, IconChevronDown, IconChevronRight, IconClock, IconClose, IconError, IconFile, IconFolder, IconGrid, IconHistory, IconImage, IconInfo, IconLayers, IconLink, IconMemory, IconMenu, IconMonitor, IconMore, IconNewChat, IconNotification, IconPlay, IconQuote, IconRefresh, IconSearch, IconSettings, IconShieldCheck, IconSidebarClose, IconSidebarOpen, IconSparkles, IconStop, IconTeam, IconTerminal, IconTool } from './icons';
 import {UNSAFE_PortalProvider} from 'react-aria/PortalProvider';
 
 import {bridge} from './bridge';
@@ -31,12 +31,13 @@ import {composerHasPayload} from './composer-send-policy';
 import {composerPermissionView} from './composer-permissions';
 import {PermissionPolicySettings,type PermissionLeaveGuard} from './PermissionPolicySettings';
 import {taskHistoryIdentity} from './task-history';
-import {WorkDirectoryControls,useWorkDirectory} from './WorkDirectory';
+import {useWorkDirectory} from './WorkDirectory';
+import {WorkFindTitle,WorkRecoveryDirectory} from './WorkRecoveryDirectory';
 import {isButlerHomeWork,workCollectionPresentation,type WorkCollectionFilter} from './work-collection';
 import type {CapabilityPurpose} from './capability-journey';
 import {AgentAvatar,PressButton,ChatComposer,AIAnswer,MessageActions,ToolCall,ThinkingLoader,CitedAnswer,BlurCrossfade,Skeleton,ShimmerText,Toaster,toast,ProgressBar,ProgressCircle} from './library';
 import {Button,IconButton,TextField,TextAreaField,SearchField,SelectField,RadioOptions,CheckboxField,Accordion,AccordionItem,SettingsDialog} from './forms-library';
-import {Drawer,PopoverTrigger,Popover,PopoverHeader,TreeView,WorkSidebar,FilesBrowser,Tabs,TabList,Tab,TabPanel,DecisionInbox,PermissionReview,type WorkNavItem} from './shell-library';
+import {Drawer,PopoverTrigger,Popover,PopoverHeader,TreeView,WorkSidebar,FilesBrowser,Tabs,TabList,Tab,TabPanel,PermissionReview,type WorkNavItem} from './shell-library';
 import Secondary from './Secondary';
 import ProfileWorkspace,{type PersonalTarget} from './ProfileWorkspace';
 import {ConversationMemorySettings} from './ConversationMemorySettings';
@@ -128,7 +129,6 @@ const labelStatus=(s:string)=>({queued:'等待执行',preparing:'准备中',runn
 const running=(t:Task)=>['queued','preparing','running','pausing','stopping','verifying'].includes(t.status);
 const attention=(t:Task)=>workCollectionPresentation(t).group==='attention';
 const terminal=(t:Task)=>['completed','failed','cancelled','canceled','stopped'].includes(t.status);
-const settledWork=(t:Task)=>workCollectionPresentation(t).group==='ended';
 const workStatusLabel=(t:Task)=>workCollectionPresentation(t).label;
 function phoneViewerTask(task?:Task):PhoneViewerTask|null{
  const raw=task?.raw,identity=phoneRunIdentity(task);
@@ -269,12 +269,21 @@ export default function App(){
  const workSearch=useRef<HTMLButtonElement>(null),previousCommandOpen=useRef(false);
  useEffect(()=>{if((workOpen||desktopNavigation)&&previousCommandOpen.current&&!commandOpen)workSearch.current?.focus();previousCommandOpen.current=commandOpen;},[workOpen,desktopNavigation,commandOpen]);
  const [taskLayer,setTaskLayer]=useState<TaskLayer>('overview'),[projectPickerOpen,setProjectPickerOpen]=useState(false),[fileDisplayOpen,setFileDisplayOpen]=useState(false);
- const [taskFiltersOpen,setTaskFiltersOpen]=useState(false),[endedExpanded,setEndedExpanded]=useState(false),[taskContextExpanded,setTaskContextExpanded]=useState(false);
+ const [taskFiltersOpen,setTaskFiltersOpen]=useState(false),[endedScopeOrigin,setEndedScopeOrigin]=useState<{filter:WorkCollectionFilter;query:string}|null>(null),[taskContextExpanded,setTaskContextExpanded]=useState(false);
  const [phoneViewerExpanded,setPhoneViewerExpanded]=useState(false);
  useEffect(()=>{setPhoneViewerExpanded(false)},[state.conversationId,route,taskId,taskOpen]);
  const projectScroll=useRef<HTMLElement>(null),projectListTop=useRef(new Map<string,number>());
  const projectTaskReturn=useRef<{projectId:string;taskId:string}|null>(null);
- const taskList=useRef<HTMLElement>(null),taskFocus=useRef<{id:string;node:HTMLElement}|null>(null);
+ const taskList=useRef<HTMLElement>(null),workListReturn=useRef<(()=>boolean)|null>(null),workDrillFocus=useRef<'origin'|'ended'|null>(null);
+ const registerWorkReturn=useCallback((handler:(()=>boolean)|null)=>{workListReturn.current=handler},[]);
+ const closeWorkFind=useCallback(()=>{setTaskFiltersOpen(false);requestAnimationFrame(()=>workspace.current?.querySelector<HTMLElement>('[data-work-search-entry]')?.focus({preventScroll:true}))},[]);
+ const selectWorkScope=(value:WorkCollectionFilter)=>{if(value===filter)return;setEndedScopeOrigin(null);workDrillFocus.current=null;setFilter(value)};
+ const restoreWorkScope=useCallback(()=>{
+  if(!endedScopeOrigin)return false;
+  setTaskFiltersOpen(false);setEndedScopeOrigin(null);workDrillFocus.current='origin';setTaskQuery(endedScopeOrigin.query);setFilter(endedScopeOrigin.filter);
+  return true;
+ },[endedScopeOrigin]);
+ useEffect(()=>{if(route!=='tasks'){setTaskFiltersOpen(false);workDrillFocus.current=null}},[route]);
  const projectDevelopmentBack=useRef<(()=>boolean)|null>(null);const registerProjectDevelopmentBack=useCallback((handler:(()=>boolean)|null)=>{projectDevelopmentBack.current=handler},[]);
  const projectFileBack=useRef<(()=>boolean)|null>(null);const registerProjectFileBack=useCallback((handler:(()=>boolean)|null)=>{projectFileBack.current=handler},[]);
  const [projectViews,setProjectViews]=useState<Record<string,{query:string;view:'files'|'tree'|'grid';expanded:string[];selected:string}>>({});
@@ -731,7 +740,7 @@ export default function App(){
  },[state.requestedTaskRevision,state.requestedTaskId,snapshot?.view?.taskId,tasks,can,openTask]);
  useEffect(()=>{const revision=Number(state.requestedProjectRevision||0);if(revision>previousRequestedProject.current)void navigate('projects');previousRequestedProject.current=revision;},[state.requestedProjectRevision,navigate]);
  useEffect(()=>{const revision=Number(state.requestedConnectionRevision||0);if(revision>previousRequestedConnection.current&&state.requestedConnectionSection)void navigate(state.requestedConnectionSection);previousRequestedConnection.current=revision;},[state.requestedConnectionRevision,state.requestedConnectionSection,navigate]);
- useEffect(()=>{bridge.setBackHandler(()=>{if(searchOriginal){closeSearchOriginal();return true}if(!preparationBeforeLeave.current&&preparationBack.current?.())return true;if(providedMemoryBack.current?.())return true;if(conversationMemoryBack.current?.())return true;if(queuedInputsBack.current?.())return true;if(historyWindowBack.current?.())return true;if(navigationMoreOpen){setNavigationMoreOpen(false);return true}if(chatMenuOpen){setChatMenuOpen(false);return true}if(permissionOptionsOpen){closePermissionOptions();return true}if(attachmentBack.current?.())return true;if(phoneViewerExpanded){setPhoneViewerExpanded(false);return true}if(readingDocuments.length){closeReading();return true}if(messageOriginTarget){setMessageOriginTarget(null);return true}if(messageQuoteTarget){setMessageQuoteTarget(null);return true}if(routeReferenceTarget){setRouteReferenceTarget(null);return true}if(skillDraftTarget){setSkillDraftTarget(null);return true}if(memoryDraftTarget){setMemoryDraftTarget(null);return true}if(sourceSelection){setSourceSelection(null);return true}if(messageMenu){setMessageMenu(null);return true}if(modelPicker.current?.handleBack())return true;if(state.chatAttachmentPickerOpen&&can('attachments.closePicker')){run('attachments.closePicker');return true}if(voiceReview){setVoiceReview(null);return true}if(phoneReview){if(!phoneReviewPending)setPhoneReview(null);return true}if(newProjectOpen||newFileOpen){closeCreate();return true}if(voiceOptionsOpen){setVoiceOptionsOpen(false);return true}if(workOptionsOpen){setWorkOptionsOpen(false);return true}if(commandOpen){setCommandOpen(false);return true}if(workOpen){setWorkOpen(false);return true}if(projectPickerOpen){setProjectPickerOpen(false);return true}if(fileDisplayOpen){setFileDisplayOpen(false);return true}if(taskOpen){backFromTask();return true}if(route==='tasks'&&taskFiltersOpen){setTaskFiltersOpen(false);return true}if(route==='projects'&&projectWorkBack.current?.())return true;if(route==='projects'&&projectDevelopmentBack.current?.())return true;if(route==='projects'&&projectPreview.handleBack())return true;if(route==='projects'&&state.filePath){if(fileAdoption.isPending()||bridge.getState().state.fileSaving)return true;if(projectFileBack.current?.())return true;if(can('projects.close')&&!fileAdoption.pending){run('projects.close',fileIdentity);return true}return true}if(route==='chat'){if(preparationBeforeLeave.current&&preparationBack.current?.())return true;void navigate('butler');return true}if(route!=='butler'){if(route!=='tasks'&&route!=='projects'&&secondaryBack.current?.())return true;if(route==='setup')closeSetup();else returnFromSecondary();return true}return false;});return()=>{bridge.setBackHandler(()=>false)};},[searchOriginal,closeSearchOriginal,navigationMoreOpen,chatMenuOpen,permissionOptionsOpen,closePermissionOptions,phoneViewerExpanded,messageQuoteTarget,messageOriginTarget,routeReferenceTarget,skillDraftTarget,memoryDraftTarget,sourceSelection,readingDocuments,closeReading,messageMenu,voiceReview,phoneReview,phoneReviewPending,newProjectOpen,newFileOpen,voiceOptionsOpen,workOptionsOpen,commandOpen,workOpen,projectPickerOpen,fileDisplayOpen,taskFiltersOpen,taskOpen,taskLayer,backFromTask,closeTask,route,state.filePath,state.chatAttachmentPickerOpen,fileIdentity,can,run,projectPreview,fileAdoption.pending]);
+ useEffect(()=>{bridge.setBackHandler(()=>{if(searchOriginal){closeSearchOriginal();return true}if(!preparationBeforeLeave.current&&preparationBack.current?.())return true;if(providedMemoryBack.current?.())return true;if(conversationMemoryBack.current?.())return true;if(queuedInputsBack.current?.())return true;if(historyWindowBack.current?.())return true;if(navigationMoreOpen){setNavigationMoreOpen(false);return true}if(chatMenuOpen){setChatMenuOpen(false);return true}if(permissionOptionsOpen){closePermissionOptions();return true}if(attachmentBack.current?.())return true;if(phoneViewerExpanded){setPhoneViewerExpanded(false);return true}if(readingDocuments.length){closeReading();return true}if(messageOriginTarget){setMessageOriginTarget(null);return true}if(messageQuoteTarget){setMessageQuoteTarget(null);return true}if(routeReferenceTarget){setRouteReferenceTarget(null);return true}if(skillDraftTarget){setSkillDraftTarget(null);return true}if(memoryDraftTarget){setMemoryDraftTarget(null);return true}if(sourceSelection){setSourceSelection(null);return true}if(messageMenu){setMessageMenu(null);return true}if(modelPicker.current?.handleBack())return true;if(state.chatAttachmentPickerOpen&&can('attachments.closePicker')){run('attachments.closePicker');return true}if(voiceReview){setVoiceReview(null);return true}if(phoneReview){if(!phoneReviewPending)setPhoneReview(null);return true}if(newProjectOpen||newFileOpen){closeCreate();return true}if(voiceOptionsOpen){setVoiceOptionsOpen(false);return true}if(workOptionsOpen){setWorkOptionsOpen(false);return true}if(commandOpen){setCommandOpen(false);return true}if(workOpen){setWorkOpen(false);return true}if(projectPickerOpen){setProjectPickerOpen(false);return true}if(fileDisplayOpen){setFileDisplayOpen(false);return true}if(taskOpen){backFromTask();return true}if(route==='tasks'&&taskFiltersOpen){closeWorkFind();return true}if(route==='tasks'&&restoreWorkScope())return true;if(route==='projects'&&projectWorkBack.current?.())return true;if(route==='projects'&&projectDevelopmentBack.current?.())return true;if(route==='projects'&&projectPreview.handleBack())return true;if(route==='projects'&&state.filePath){if(fileAdoption.isPending()||bridge.getState().state.fileSaving)return true;if(projectFileBack.current?.())return true;if(can('projects.close')&&!fileAdoption.pending){run('projects.close',fileIdentity);return true}return true}if(route==='chat'){if(preparationBeforeLeave.current&&preparationBack.current?.())return true;void navigate('butler');return true}if(route!=='butler'){if(route!=='tasks'&&route!=='projects'&&secondaryBack.current?.())return true;if(route==='setup')closeSetup();else returnFromSecondary();return true}return false;});return()=>{bridge.setBackHandler(()=>false)};},[searchOriginal,closeSearchOriginal,navigationMoreOpen,chatMenuOpen,permissionOptionsOpen,closePermissionOptions,phoneViewerExpanded,messageQuoteTarget,messageOriginTarget,routeReferenceTarget,skillDraftTarget,memoryDraftTarget,sourceSelection,readingDocuments,closeReading,messageMenu,voiceReview,phoneReview,phoneReviewPending,newProjectOpen,newFileOpen,voiceOptionsOpen,workOptionsOpen,commandOpen,workOpen,projectPickerOpen,fileDisplayOpen,taskFiltersOpen,closeWorkFind,restoreWorkScope,taskOpen,taskLayer,backFromTask,closeTask,route,state.filePath,state.chatAttachmentPickerOpen,fileIdentity,can,run,projectPreview,fileAdoption.pending]);
  useEffect(()=>{document.documentElement.dataset.pocketUi=ready?'ready':'connecting';},[ready]);
  useEffect(()=>{if(phoneDraft.phone===true)setIntent(phoneDraft.mode==='main_screen'?'main_screen':'background');else if(phoneDraft.phone===false)setIntent('chat');},[phoneDraft.phone,phoneDraft.mode]);
  useEffect(()=>{if(route==='projects'&&can('projects.refresh'))run('projects.refresh');else if((route==='tasks'||route==='butler')&&can('tasks.refresh'))run('tasks.refresh');},[route,can,run]);
@@ -994,15 +1003,16 @@ export default function App(){
  };
  const taskDirectory=useWorkDirectory({tasks,query:taskQuery,filter:filter as WorkCollectionFilter,enabled:ready&&route==='tasks'&&can('work.tasks.list'),identity:`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}`,scrollRef:taskList});
  const projectDirectory=useWorkDirectory({tasks,projectId:String(state.projectId||''),query:projectWorkView.query,filter:projectWorkView.filter,enabled:ready&&route==='projects'&&!!state.projectId&&!state.filePath&&projectSection==='work'&&!projectPreview.expanded&&can('work.tasks.list'),identity:`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}`,scrollRef:projectScroll});
- const filteredTasks=taskDirectory.tasks;
- const taskMotionRevision=JSON.stringify([endedExpanded,filteredTasks.map(task=>[task.id,task.status,task.goal,task.summary,attention(task)])]);
- useCollectionMotion(taskList,JSON.stringify([filter,taskQuery]),taskMotionRevision,{active:route==='tasks'&&ready&&!taskDirectory.busy});
+ const drillEndedWork=()=>{
+  if(taskList.current)taskDirectory.rememberScroll(taskList.current.scrollTop);
+  setEndedScopeOrigin({filter:filter as WorkCollectionFilter,query:taskQuery});setTaskFiltersOpen(false);
+  workDrillFocus.current='ended';setFilter('ended');
+ };
  useLayoutEffect(()=>{
-  const previous=taskFocus.current;if(route!=='tasks'||!previous||previous.node.isConnected||document.activeElement!==document.body)return;
-  const row=Array.from(taskList.current?.querySelectorAll<HTMLElement>('[data-task-id]')||[]).find(node=>node.dataset.taskId===previous.id);
-  const target=row?.matches('button:not(:disabled)')?row:row?.querySelector<HTMLElement>('button:not(:disabled)')||taskList.current?.querySelector<HTMLElement>('button:not(:disabled)');
-  target?.focus({preventScroll:true});taskFocus.current=null;
- },[route,taskMotionRevision]);
+  const target=workDrillFocus.current;if(!target||route!=='tasks'||!taskDirectory.loaded||taskDirectory.busy||taskDirectory.error||!taskList.current)return;
+  const list=taskList.current,control=target==='origin'?list.querySelector<HTMLElement>('[data-work-ended-link]')||list.querySelector<HTMLElement>('[data-work-scope="all"]'):list.querySelector<HTMLElement>('[data-work-scope="ended"]');
+  control?.focus({preventScroll:true});workDrillFocus.current=null;
+ },[route,filter,taskQuery,taskDirectory.loaded,taskDirectory.busy,taskDirectory.error]);
  const attentionTasks=tasks.filter(attention);
  const navigationSelection=state.attachmentWorkspace?.open?'artifacts':route==='chat'?'butler':['developer-logs','setup','remoteInbox','profile'].includes(route)?route:isPrimaryRoute?route:workspaceNavigationKey(secondaryPage||route);
  const selectNavigation=useCallback((key:string)=>{
@@ -1362,19 +1372,6 @@ export default function App(){
    {navigationContent}
   </Drawer.Content>
  </Drawer.Portal>;
- const renderTaskRow=(task:Task)=>{
-  const presentation=workCollectionPresentation(task);
-  const StatusIcon=presentation.completed?IconCheckCircle:task.status==='failed'?IconError:['paused','interrupted'].includes(task.status)?IconPauseCircle:presentation.group==='attention'?IconInfo:IconClock;
-  return <Button variant="ghost" key={task.id} className="pw-task-row" data-motion-key={task.id} data-task-id={task.id} data-task-status={task.status} onClick={()=>openTask(task.id,'overview',false,undefined,taskQuery)}>
-   <span className="pw-task-row-status" aria-hidden="true">{presentation.busy?<ProgressCircle aria-label={presentation.label} isIndeterminate size="sm"/>:<StatusIcon size={20}/>}</span>
-   <span className="pw-task-row-copy">
-    <b title={task.goal}>{task.goal}</b>
-    {task.summary&&task.summary!==task.goal&&<span className="pw-task-row-summary">{task.summary}</span>}
-    <span className="pw-task-row-meta"><MotionFeedback as="span" identity={presentation.label} initial={false}>{presentation.label}</MotionFeedback>{!!task.updatedAt&&<time>{timeLabel(task.updatedAt)}</time>}</span>
-   </span>
-   <IconChevronRight size={18} aria-hidden="true"/>
-  </Button>;
- };
  // The phone strip owns this task on Home and on its original conversation.
  const phoneTaskOnRoute=activeTask&&!terminal(activeTask)&&(route==='butler'||route==='chat'&&phoneConversationId(activeTask)===state.conversationId)?activeTask:undefined;
  const phoneActivity=phoneTaskOnRoute?<PhoneTaskStatus task={phoneTaskOnRoute} can={can} onOpen={()=>openTask(phoneTaskOnRoute.id,attention(phoneTaskOnRoute)&&can('tasks.review')?'review':'overview')} onControl={(action,identity)=>run(action,identity)}/>:null;
@@ -1506,29 +1503,10 @@ export default function App(){
    <ConversationWork identity={String(state.conversationId||'')} onEmptyFocus={()=>workspace.current?.querySelector<HTMLTextAreaElement>('.pw-composer-row textarea:not(:disabled)')?.focus({preventScroll:true})} tasks={conversationWorkRows} canOpen={can('tasks.open')} onOpen={task=>openTask(task.id,attention(task)&&can('tasks.review')?'review':'overview')}/>
   </div></div>
   {composerRegion}</main>;
- const endedTasks=filteredTasks.filter(t=>settledWork(t)&&!attention(t));
- const visibleEnded=filter==='ended'||endedExpanded?endedTasks:endedTasks.slice(0,3);
- const activeTaskStatus=({attention:'待处理',running:'进行中',ended:'已结束'} as Record<string,string>)[filter];
- const hasTaskFilters=filter!=='all'||!!taskQuery;
- const showTaskTools=ready||hasTaskFilters||taskFiltersOpen;
- const tasksPage=<main ref={taskList} className="pw-page pw-tasks-page pw-depth-tasks" data-tools={showTaskTools} onScroll={event=>taskDirectory.rememberScroll(event.currentTarget.scrollTop)} onFocusCapture={event=>{const node=event.target as HTMLElement,id=node.closest<HTMLElement>('[data-task-id]')?.dataset.taskId;taskFocus.current=id?{node,id}:null}} onBlurCapture={event=>{if(event.relatedTarget instanceof HTMLElement&&!event.currentTarget.contains(event.relatedTarget))taskFocus.current=null}}>
-    {showTaskTools&&<div className="pw-task-collection-tools">
-     <div className="pw-task-status-filters" role="group" aria-label="任务筛选">{[{id:'all',label:'全部'},{id:'attention',label:'待处理'},{id:'running',label:'进行中'},{id:'ended',label:'已结束'}].map(option=><Button key={option.id} variant="ghost" aria-pressed={filter===option.id} onClick={()=>setFilter(option.id)}>{option.label}</Button>)}</div>
-     <div className="pw-task-filters-reveal" data-open={taskFiltersOpen} inert={!taskFiltersOpen} aria-hidden={!taskFiltersOpen}><div className="pw-disclosure-clip"><section id="pw-task-filters" className="pw-task-filters" aria-label="搜索与筛选任务">
-       <div className="pw-task-list-tools"><SearchField value={taskQuery} onChange={setTaskQuery} maxLength={500} aria-label="搜索保存的工作" placeholder="搜索工作目标或摘要…"/><IconButton icon={IconHistory} aria-label="查看历史记录" title="历史记录" onClick={()=>navigate('history')}/></div>
-     </section></div></div>
-     {!taskFiltersOpen&&taskQuery&&<div className="pw-active-filter"><Button variant="ghost" aria-label={`修改任务筛选：${[activeTaskStatus,`关键词：${taskQuery}`].filter(Boolean).join('，')}`} onClick={()=>setTaskFiltersOpen(true)}><span className="pw-filter-summary"><IconSearch size={16} aria-hidden="true"/><span className="pw-filter-query">{taskQuery}</span></span></Button><IconButton icon={IconClose} aria-label="清除任务筛选" onClick={()=>{setFilter('all');setTaskQuery('')}}/></div>}
-    </div>}
-    <section className="pw-task-results" aria-label="任务列表" data-has-active={filteredTasks.some(t=>!attention(t)&&!settledWork(t))||undefined}>
-      {filteredTasks.some(attention)&&<DecisionInbox compact heading="待你处理" className="pw-priority-decisions" decisions={filteredTasks.filter(attention).map(t=>({id:t.id,title:t.goal,detail:workStatusLabel(t),primary:taskActionLabel(t),secondary:'查看工作'}))} onDecide={async(d,answer)=>{openTask(d.id,answer==='primary'&&can('tasks.review')?'review':'overview',false,undefined,taskQuery)}}/>}
-      {filteredTasks.some(t=>!attention(t)&&!settledWork(t))&&<section className="pw-task-collection" aria-label="正在跟进"><h3>正在跟进<span>{filteredTasks.filter(t=>!attention(t)&&!settledWork(t)).length}</span></h3><div className="pw-task-list">{filteredTasks.filter(t=>!attention(t)&&!settledWork(t)).map(renderTaskRow)}</div></section>}
-      {endedTasks.length>0&&<section className="pw-task-collection pw-ended-tasks" aria-label="最近结束"><h3>最近结束<span>{endedTasks.length}</span></h3><div className="pw-task-list">{visibleEnded.map(renderTaskRow)}</div>{filter!=='ended'&&endedTasks.length>3&&<Button variant="ghost" className="pw-show-all-tasks" onClick={()=>setEndedExpanded(value=>!value)}>{endedExpanded?'收起':'查看全部 '+endedTasks.length+' 项'}<IconChevronDown size={16}/></Button>}</section>}
-      {!ready&&<p className="pw-muted" role="status">正在读取任务…</p>}
-      {ready&&taskDirectory.loaded&&!filteredTasks.length&&!taskDirectory.busy&&!taskDirectory.error&&<div className="pw-empty pw-task-empty"><IconGrid size={24} aria-hidden="true"/><h3>{taskDirectory.hasMore?'还在查找更早的工作':hasTaskFilters?'没有匹配的工作':'还没有工作'}</h3><p>{taskDirectory.hasMore?'当前已读取范围内还没有匹配项，可以继续查找。':hasTaskFilters?'换个关键词，或清除筛选查看其他工作。':'交代给管家的事情，会在这里显示进展和结果。'}</p>{hasTaskFilters?<Button variant="secondary" onClick={()=>{setFilter('all');setTaskQuery('')}}>清除筛选</Button>:!taskDirectory.hasMore&&<Button variant="primary" onClick={()=>navigate('chat')}>开始对话</Button>}</div>}
-    </section>
-    <WorkDirectoryControls directory={taskDirectory}/>
-    {can('remoteSessions.read')&&<Accordion variant="divided"><AccordionItem id="remote-sessions" title="电脑端托管会话"><RemoteManagedSessionsWorkspace/></AccordionItem></Accordion>}
-  </main>;
+ const tasksPage=<WorkRecoveryDirectory directory={taskDirectory} live={tasks} canContinue={task=>can(task.raw?.executionRole==='owner_work'?'ownerWork.control':'tasks.resume')} scroll={taskList} ready={ready} canOpen={can('tasks.open')} canReview={can('tasks.review')}
+  scope={filter as WorkCollectionFilter} query={taskQuery} selectScope={selectWorkScope} clearQuery={()=>setTaskQuery('')} drillEnded={drillEndedWork}
+  start={()=>{void navigate('butler')}} history={()=>{void openRelatedWorkspace('history')}} open={(id,entry,query)=>openTask(id,entry,false,undefined,query)}
+  registerReturn={registerWorkReturn} extra={can('remoteSessions.read')&&<Accordion variant="divided"><AccordionItem id="remote-sessions" title="电脑端托管会话"><RemoteManagedSessionsWorkspace/></AccordionItem></Accordion>}/>;
  const showProjectSection=(section:'work'|'files')=>{projectPreview.hide();setProjectSections(previous=>({...previous,[String(state.projectId||'')]:section}))};
  const openProjectFile=(path:string)=>{if(!can('projects.open'))return;setProjectSections(previous=>({...previous,[String(state.projectId||'')]:'files'}));updateProjectView({selected:path});run('projects.open',{projectId:state.projectId,path})};
  const projectListBusy=asArray<string>(state.moduleBusy).includes('workspace.list')||packageOpening;
@@ -1579,12 +1557,15 @@ export default function App(){
   <div className="pw-main-workspace" ref={workspace}>
   {isPrimaryRoute?<NavigationChrome>
   {(route!=='chat'||desktopNavigation)&&<header className="pw-app-header">
-   {route==='projects'&&state.filePath?<IconButton ref={navigationBackGlass} icon={IconArrowLeft} aria-label="返回项目文件" disabled={fileAdoption.pending||!!state.fileSaving} onClick={()=>{if(!fileAdoption.isPending()&&!bridge.getState().state.fileSaving&&!projectFileBack.current?.())run('projects.close',fileIdentity)}}/>:(route==='projects'||route==='tasks')&&relatedOrigin.current?<IconButton ref={navigationBackGlass} icon={IconArrowLeft} aria-label={relatedOrigin.current.label} title={relatedOrigin.current.label} onClick={returnFromSecondary}/>:route==='projects'&&state.projectTaskReturn?.taskId?<IconButton ref={navigationBackGlass} icon={IconArrowLeft} aria-label="回到原任务" onClick={()=>openTask(state.projectTaskReturn.taskId)}/>:navigationTrigger}
-   {route==='chat'?<div className="pw-current-work pw-chat-title"><h1 title={currentTitle} aria-label={messages.length?currentTitle:'PocketWorld'}>{messages.length>0&&currentConversation&&can('conversation.organization.read')?<Button variant="ghost" className="pw-chat-title-trigger" aria-label="整理当前对话" onClick={()=>setOrganizationTarget(currentConversation.id)}><span className="pw-chat-title-text">{currentTitle}</span><IconChevronDown size={16} aria-hidden="true"/></Button>:messages.length?currentTitle:'PocketWorld'}</h1></div>:route==='projects'&&!state.filePath?<PopoverTrigger isOpen={projectPickerOpen} onOpenChange={setProjectPickerOpen}><Button variant="ghost" className="pw-object-title" aria-label="切换项目"><h1>{currentTitle}</h1><IconChevronDown size={16}/></Button><Popover aria-label="切换项目"><PopoverHeader title="项目"/><div className="pw-project-menu">{projects.map(project=><Button key={project.id} variant="ghost" aria-current={project.id===state.projectId?'true':undefined} onClick={()=>{setProjectPickerOpen(false);run('projects.select',{id:project.id})}}><IconFolder size={17}/><span>{project.name}</span>{project.id===state.projectId&&<small>当前</small>}</Button>)}{can('projects.create')&&<Button variant="secondary" leadingIcon={IconAdd} onClick={()=>{setProjectPickerOpen(false);openCreate('project')}}>新项目</Button>}</div></Popover></PopoverTrigger>:<div className="pw-current-work"><BlurCrossfade identity={currentTitle}><h1>{currentTitle}</h1></BlurCrossfade></div>}
+   {route==='tasks'&&endedScopeOrigin?<IconButton ref={navigationBackGlass} icon={IconArrowLeft} aria-label="返回工作总览" title="返回工作总览" onClick={restoreWorkScope}/>:route==='projects'&&state.filePath?<IconButton ref={navigationBackGlass} icon={IconArrowLeft} aria-label="返回项目文件" disabled={fileAdoption.pending||!!state.fileSaving} onClick={()=>{if(!fileAdoption.isPending()&&!bridge.getState().state.fileSaving&&!projectFileBack.current?.())run('projects.close',fileIdentity)}}/>:(route==='projects'||route==='tasks')&&relatedOrigin.current?<IconButton ref={navigationBackGlass} icon={IconArrowLeft} aria-label={relatedOrigin.current.label} title={relatedOrigin.current.label} onClick={returnFromSecondary}/>:route==='projects'&&state.projectTaskReturn?.taskId?<IconButton ref={navigationBackGlass} icon={IconArrowLeft} aria-label="回到原任务" onClick={()=>openTask(state.projectTaskReturn.taskId)}/>:navigationTrigger}
+   {route==='tasks'?<WorkFindTitle editing={taskFiltersOpen} query={taskQuery} onQuery={setTaskQuery} edit={()=>setTaskFiltersOpen(true)} close={closeWorkFind}/>:route==='chat'?<div className="pw-current-work pw-chat-title"><h1 title={currentTitle} aria-label={messages.length?currentTitle:'PocketWorld'}>{messages.length>0&&currentConversation&&can('conversation.organization.read')?<Button variant="ghost" className="pw-chat-title-trigger" aria-label="整理当前对话" onClick={()=>setOrganizationTarget(currentConversation.id)}><span className="pw-chat-title-text">{currentTitle}</span><IconChevronDown size={16} aria-hidden="true"/></Button>:messages.length?currentTitle:'PocketWorld'}</h1></div>:route==='projects'&&!state.filePath?<PopoverTrigger isOpen={projectPickerOpen} onOpenChange={setProjectPickerOpen}><Button variant="ghost" className="pw-object-title" aria-label="切换项目"><h1>{currentTitle}</h1><IconChevronDown size={16}/></Button><Popover aria-label="切换项目"><PopoverHeader title="项目"/><div className="pw-project-menu">{projects.map(project=><Button key={project.id} variant="ghost" aria-current={project.id===state.projectId?'true':undefined} onClick={()=>{setProjectPickerOpen(false);run('projects.select',{id:project.id})}}><IconFolder size={17}/><span>{project.name}</span>{project.id===state.projectId&&<small>当前</small>}</Button>)}{can('projects.create')&&<Button variant="secondary" leadingIcon={IconAdd} onClick={()=>{setProjectPickerOpen(false);openCreate('project')}}>新项目</Button>}</div></Popover></PopoverTrigger>:<div className="pw-current-work"><BlurCrossfade identity={currentTitle}><h1>{currentTitle}</h1></BlurCrossfade></div>}
    {isChatSurface?<div ref={headerActionsGlass} className="pw-header-actions pw-navigation-glass" role="group" aria-label="对话操作">
     {can('remoteInbox.state')&&Number(state.remoteInbox?.unread||0)>0&&<IconButton icon={IconNotification} aria-label={'通知 · '+state.remoteInbox.unread+' 条未读'} title="通知" onClick={()=>navigate('remoteInbox')}/>}
     {can('conversation.new')&&<IconButton icon={IconNewChat} aria-label="聊件新事" title="聊件新事" disabled={!!state.chatSubmitting} onClick={()=>{void navigate('butler',()=>run('conversation.new'))}}/>}
-   </div>:route==='tasks'?<div ref={headerActionsGlass} className="pw-primary-tools pw-navigation-glass" role="group" aria-label="工作目录操作">{can('tasks.refresh')&&<IconButton icon={IconRefresh} aria-label="刷新任务" onClick={()=>{taskDirectory.reset();run('tasks.refresh')}}/>}{showTaskTools&&<IconButton icon={IconSearch} aria-label="搜索与筛选任务" aria-expanded={taskFiltersOpen} aria-controls="pw-task-filters" onClick={()=>setTaskFiltersOpen(value=>!value)}/>}</div>:route==='projects'&&(state.filePath||state.projectTaskReturn?.taskId||relatedOrigin.current)?navigationTrigger:<span className="pw-header-spacer" aria-hidden="true"/>}
+   </div>:route==='tasks'?<div ref={headerActionsGlass} className="pw-primary-tools pw-navigation-glass" role="group" aria-label="工作目录操作">
+    {!taskFiltersOpen&&can('tasks.refresh')&&<IconButton icon={IconRefresh} aria-label="刷新任务" onClick={()=>{taskDirectory.reset();run('tasks.refresh')}}/>}
+    {taskFiltersOpen?<IconButton icon={IconClose} aria-label="收起搜索，保留关键词" onClick={closeWorkFind}/>:taskQuery?<IconButton icon={IconClose} aria-label="清除关键词" onClick={()=>{setTaskQuery('');requestAnimationFrame(()=>workspace.current?.querySelector<HTMLElement>('[data-work-search-entry]')?.focus({preventScroll:true}))}}/>:<IconButton icon={IconSearch} data-work-search-entry aria-label="搜索工作" onClick={()=>setTaskFiltersOpen(true)}/>}
+   </div>:route==='projects'&&(state.filePath||state.projectTaskReturn?.taskId||relatedOrigin.current)?navigationTrigger:<span className="pw-header-spacer" aria-hidden="true"/>}
   </header>}
    {workspaceNotices}
    {route==='chat'&&<>{chatNavigation}{phoneActivity}{replyActivity}</>}
@@ -1597,6 +1578,7 @@ export default function App(){
   <AttachmentWorkspace state={state} registerBack={registerAttachmentBack} onReturnFocus={restoreTaskFileFocus} openTaskId={taskOpen?taskId||undefined:undefined} onReturnToSearch={searchReturn?showWorkSearch:undefined} onAskButler={can('composer.object.add')?askButlerAbout:undefined}/>
   {organizationTarget&&<ConversationOrganization key={organizationTarget} conversationId={organizationTarget} onClose={()=>setOrganizationTarget(null)}/>}
   <Drawer.Root open={taskOpen} onOpenChange={open=>{if(!open){if(taskMenuOpen){setTaskMenuOpen(false);return}if(!deviceScopeBack.current?.()&&!capabilityBack.current?.()&&!livePreviewBack.current?.()&&!taskTransientBack.current?.())closeTask()}else setTaskOpen(true)}} direction="right" handleOnly shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay pw-work-object-overlay"/><Drawer.Content className="pw-drawer pw-task-drawer pw-work-object-surface pw-task-manga" data-task-layer={taskLayer} aria-describedby="pw-task-description" onCloseAutoFocus={event=>{
+   if(!taskOpen&&route==='tasks'&&workListReturn.current?.()){event.preventDefault();return}
    const origin=projectTaskReturn.current;projectTaskReturn.current=null;
    if(!origin||taskOpen||route!=='projects'||state.projectId!==origin.projectId||state.filePath||projectSection!=='work'||projectPreview.expanded)return;
    const overview=projectScroll.current?.querySelector<HTMLElement>('.pw-project-overview');
