@@ -11,6 +11,7 @@ import json
 import re
 
 VERSION = "1.0"
+TEXT_RETURN = "pocketworld.direct-text.owner-reviewed-result.v1"
 PROFILE = "pwp1_d605876f8926ee6c6d5d1fe9c4e19987e7466c672557d6483723009099b42009"
 MAX_CONTROL_BYTES = 65_536
 MAX_PAIRING_BYTES = 16_384
@@ -236,6 +237,21 @@ def receiver_task_id(envelope):
     return "dt1_" + hashlib.sha256(canonical_bytes(fields)).hexdigest()
 
 
+def direct_text_return(value):
+    args, binding, budget = value.get("arguments"), value.get("resourceBinding"), value.get("budget")
+    op, caller = value.get("operationId"), value.get("callerDeviceId")
+    return (value.get("messageType") == "GoalSubmission" and value.get("method") == "task.submitGoal" and value.get("capabilityVersion") == VERSION
+            and isinstance(args, dict) and set(args) == {"goal","executionMode","modelSource","textReturnContract"}
+            and args["textReturnContract"] == TEXT_RETURN and args["executionMode"] == "agent" and isinstance(args["goal"], str) and bool(args["goal"].strip())
+            and args["modelSource"] == {"kind":"local"} and binding == {"screenMode":"capabilities"} and isinstance(budget, dict)
+            and set(budget) == {"allocationId","toolCalls","modelCalls"} and not {"observationRef","dependencySnapshot","replyCursor"}.intersection(value)
+            and type(value.get("maxDelegationDepth")) is int and value["maxDelegationDepth"] == 1
+            and type(budget.get("toolCalls")) is int and budget["toolCalls"] == 0 and type(budget.get("modelCalls")) is int and 1 <= budget["modelCalls"] <= 3
+            and isinstance(op, str) and bool(op) and op == value.get("rootTaskId") == value.get("parentTaskId") == value.get("localTaskId")
+            and isinstance(caller, str) and bool(caller) and caller == value.get("originDeviceId") and caller != value.get("targetDeviceId")
+            and value.get("visitedDevices", [caller]) == [caller] and value.get("delegationChain", []) == [])
+
+
 def allocation_id(parent_task_id, target_device_id, resource_binding, kind, parent_prepared_operation_id=None):
     """Native original-parent allocation correlation. Never a grant or a spend receipt."""
     if kind not in ("tool_session", "goal") or not isinstance(resource_binding, dict):
@@ -385,7 +401,9 @@ def parse_request(raw):
         if not value.get("capabilityVersion") or not value.get("resourceBinding"):
             _fail("invalid_request", "Tool invocation requires a bound capability/resource")
     elif method == "task.submitGoal":
-        _keys(args, {"goal", "executionMode"}, {"contextSnapshot", "modelSource", "delegationAuthorization"})
+        _keys(args, {"goal", "executionMode"}, {"contextSnapshot", "modelSource", "delegationAuthorization", "textReturnContract"})
+        if "textReturnContract" in args and not direct_text_return(value):
+            _fail("invalid_request", "Text handoff requires an exact direct zero-tool goal with no project or context")
         if args["executionMode"] != "agent":
             _fail("invalid_request", "Goal submission requires executionMode=agent")
         text(args["goal"], "goal", 12000)

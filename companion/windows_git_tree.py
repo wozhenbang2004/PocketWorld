@@ -70,7 +70,7 @@ def _native_compare(api,checkpoint):
     return by_name
 
 
-def review(root_oid, root_bytes, width, read_tree, api, checkpoint, *, collect=None):
+def review(root_oid, root_bytes, width, read_tree, api, checkpoint, *, collect=None, directories=None):
     compare = _native_compare(api,checkpoint)
     directory_count, file_count, executable_count, rows = 0, 0, 0, 0
     metadata_bytes, cache = 0, {}
@@ -108,6 +108,7 @@ def review(root_oid, root_bytes, width, read_tree, api, checkpoint, *, collect=N
             encoded = path.encode("utf-8")
             digest.update(mode+b"\0"+len(encoded).to_bytes(4,"big")+encoded+bytes.fromhex(child))
             if mode==DIR:
+                if directories is not None: directories.append(path)
                 walk(child,path+"/",parents|{oid})
             else:
                 file_count += 1

@@ -10,6 +10,7 @@ import { useDataSettingsJourney } from './DataSettingsJourney';
 import { HarnessEvidence } from './HarnessEvidence';
 import { RemoteProjectBaseline } from './RemoteProjectBaseline';
 import { CloudWorkspaceJobs } from './CloudWorkspaceJobs';
+import { HostEnvironmentReadiness } from './HostEnvironmentReadiness';
 import { CloudWorkspaceChoice, cloudChoice, hostWorkspaceAnchor, originalCloudEnvironment } from './CloudWorkspaceChoice';
 import { RemoteInputFlow } from './RemoteTaskInputs';
 import { harnessOptions, harnessProbeReady, harnessSelection, harnessWorkerLabel, isConfiguredHarness } from './harness-capabilities';
@@ -451,6 +452,7 @@ function RemoteWork({ profile, state, data, run, supported, back, visible, cloud
     </div></section>:<section className="pw-connection-environment" data-remote-step="environment"><div className="pw-connection-section-toolbar"><h3>工作环境</h3>
       {originalCloudReady&&<Button variant="ghost" disabled={locked} onClick={()=>setShowCloudLocation(false)}>收起位置详情</Button>}
       <Button variant="ghost" disabled={locked || !profile.hasToken} onClick={() => readEnvironments()}>读取当前工作环境</Button></div>
+    <HostEnvironmentReadiness environment={environment} fresh={environmentFresh} disabled={locked||busy||!active} onRefresh={()=>readEnvironments()} onChoose={()=>focusStep('worker')}/>
     {supported('remote.rememberWorkspace') && <CloudWorkspaceChoice profile={profile} value={saved} environment={environment} worker={selectedWorker} fresh={environmentFresh}
       locked={locked} useSaved={() => readEnvironments(true)} save={() => changeCloudChoice(false)} forget={() => changeCloudChoice(true)} label={supported('remote.setWorkspaceLabel') ? labelCloudChoice : undefined}/>}
     {!environments && <p className="pw-field-hint">{profile.hasToken ? '读取这台电脑已提供的目录与执行器，不会自动创建或安装。' : '请返回连接概览，在连接设置中补充令牌。'}</p>}

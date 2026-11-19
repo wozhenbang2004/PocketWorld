@@ -6,8 +6,10 @@ import device_protocol as wire
 
 def is_phone_action_goal(row):
     scope = row.get("resourceBinding")
-    return (row.get("kind") == "task.submitGoal" and isinstance(scope, dict) and scope.get("screenMode") in ("main_screen", "background")
-            and type(scope.get("androidUserId")) is int and isinstance(scope.get("packageNames"), list) and bool(scope["packageNames"]))
+    return (row.get("kind") == "task.submitGoal" and isinstance(scope, dict) and
+            (scope == {"screenMode":"capabilities"} and row.get("originalTextReturn") == wire.TEXT_RETURN or
+             scope.get("screenMode") in ("main_screen", "background") and type(scope.get("androidUserId")) is int
+             and isinstance(scope.get("packageNames"), list) and bool(scope["packageNames"])))
 
 
 def original_phone_goal(row, task, caller):
@@ -42,6 +44,8 @@ def original_phone_goal(row, task, caller):
             or origin.get("rootTaskId") != operation or origin.get("parentTaskId") != operation or type(origin.get("authorizationEpoch")) is not int
             or any(origin.get(k) != expected[k] for k in ("originDeviceId", "callerDeviceId", "targetDeviceId", "grantId", "authorizationEpoch"))):
         raise PermissionError("Phone task is not the selected original dispatch")
+    if row["resourceBinding"] == {"screenMode":"capabilities"} and origin.get("textReturnContract") != wire.TEXT_RETURN:
+        raise PermissionError("The original phone did not accept the explicit text return contract")
     outcome = details.get("phoneGoalOutcome")
     review, summary, truncated = "unavailable", "", False
     if outcome is not None:

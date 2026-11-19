@@ -109,8 +109,8 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         val resource = scope.optJSONObject("resourceBinding") ?: return null
         if (task.opt("id") != id || task.opt("deviceExecutionKind") != "GOAL" || origin.opt("kind") != "paired_device" ||
             origin.opt("originDeviceId") != origin.opt("callerDeviceId") || origin.opt("rootTaskId") != origin.opt("parentTaskId") ||
-            resource.optString("screenMode") !in setOf("main_screen", "background") || resource.opt("androidUserId") !is Number ||
-            (resource.optJSONArray("packageNames")?.length() ?: 0) == 0) return null
+            !DeviceProtocol.acceptedTextReturn(task) && (resource.optString("screenMode") !in setOf("main_screen", "background") || resource.opt("androidUserId") !is Number ||
+            (resource.optJSONArray("packageNames")?.length() ?: 0) == 0)) return null
         return JSONObject().put("taskId", id).put("status", task.getString("status")).put("updatedAt", task.getLong("updatedAt"))
             .put("runId", task.optString("runId")).put("epoch", task.optInt("coordinatorEpoch")).put("instanceId", task.getString("deviceNativeInstanceId"))
             .put("sourceDeviceId", origin.getString("callerDeviceId")).put("targetDeviceId", origin.getString("targetDeviceId"))
@@ -200,6 +200,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         synchronized(this){current(original,epoch);if(old!=null)require(waitingPage===old);waitingPage=index}
         val display=JSONArray();for(row in rows)display.put(JSONObject().also { item ->
             for(key in listOf("taskId","operationId","sourceDeviceId","goal","screenMode","createdAt","waitingState"))item.put(key,row.get(key))
+            if(row.optBoolean("textOnly"))item.put("textOnly",true)
             if(results)item.put("reviewRecordedAt",row.getLong("reviewRecordedAt")) })
         return JSONObject().put("kind","waitingPhoneGoals").put("resultOnly",results).put("limitedCandidates",page.getInt("limitedCandidates")).put("readOnly",true).put("waitingHandle",index.handle).put("localDeviceId",id)
             .put("localInstanceId",instance).put("capturedAt",System.currentTimeMillis()).put("rows",display).put("hasMore",next!=null).put("canReadNewer",previous.isNotEmpty())
@@ -239,7 +240,10 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
             here.getString("deviceId"), here.getString("instanceId"), after, previous, next, digests, received, inbox)
         synchronized(this) { current(original, epoch); if (old != null) require(phoneArchive === old); phoneArchive = index }
         val display = JSONArray()
-        for (row in rows) display.put(JSONObject().also { safe -> for (key in listOf("taskId", "operationId", "goal", "screenMode", "createdAt")) safe.put(key, row.get(key)) })
+        for (row in rows) display.put(JSONObject().also { safe ->
+            for (key in listOf("taskId", "operationId", "goal", "screenMode", "createdAt")) safe.put(key, row.get(key))
+            if(received && row.optBoolean("textOnly"))safe.put("textOnly",true)
+        })
         return JSONObject().put("kind", "phoneGoalArchive").put("side", side).put("archiveHandle", index.handle).put("targetDeviceId", targetId).put("readOnly", true)
             .put("instanceId", index.targetInstance).put("targetFingerprint", index.fingerprint).put("localDeviceId", index.localId).put("localInstanceId", index.localInstance)
             .put("rows", display).put("hasMore", next != null).put("canReadNewer", previous.isNotEmpty())
@@ -524,8 +528,11 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                             fields(args, "taskId", "targetDeviceId")
                             val target = if (args.has("targetDeviceId")) text(args, "targetDeviceId").also { peer(latest, it) } else ""
                             val header = controller.state.tasks.firstOrNull { it.id == id }?.raw
-                            val before = if (header != null && header.optJSONObject("origin")?.optString("kind") == "paired_device" &&
-                                header.optString("executionMode") in setOf("main_screen", "background")) receivedPhoneActionScope(id) else null
+                            val headerOrigin=header?.optJSONObject("origin")
+                            val receivedCandidate=header!=null && headerOrigin?.optString("kind")=="paired_device" &&
+                                (header.optString("executionMode") in setOf("main_screen","background") ||
+                                    header.opt("executionMode")=="capabilities" && headerOrigin?.opt("textReturnContract")==DeviceProtocol.TEXT_RETURN)
+                            val before=if(receivedCandidate)receivedPhoneActionScope(id) else null
                             val actions = original.taskActions(id)
                             val response = JSONObject().put("kind", "taskDetails").put("taskId", id).put("actions", actions).put("history", readLocalHistoryPage(id, target, null, "", original, epoch))
                             if (before != null) {

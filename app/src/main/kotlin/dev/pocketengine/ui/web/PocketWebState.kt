@@ -139,6 +139,7 @@ internal object PocketWebState {
             .put("chatActiveTurn", publicValue(state.chatActiveTurn)).put("chatSendMode", state.chatSendMode)
             .put("foregroundTurn", publicValue(state.foregroundTurn))
             .put("originalTaskNotice", publicValue(controller.originalTaskNotice))
+            .put("originalPhoneNotification",publicValue(controller.originalPhoneNotification.takeIf {controller.webPrivateOwnerVisible()}))
             .put("chatReceipts", JSONObject().also { out -> state.chatReceipts.forEach { (key, value) -> out.put(key, publicValue(value)) } })
             .put("selectedChatAttachments", JSONArray().also { out -> state.selectedChatAttachments.forEach { out.put(attachment(it)) } })
             .put("chatAttachmentPickerOpen", state.chatAttachmentPickerOpen)

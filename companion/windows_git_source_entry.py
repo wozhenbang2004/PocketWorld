@@ -7,6 +7,8 @@ from desktop_owner_entry import _dialog
 from desktop_sessions import WindowsDesktopHealth
 from platform_backend import PlatformError
 from windows_git_source import Incomplete, capture, registered
+from windows_git_copy import storage_limit
+from windows_git_copy_entry import browse as browse_copies, confirm_copy
 
 REASONS = {
     "not_repository": "这个已登记目录本身没有 .git；不会向上、向下搜索，也不把普通文件夹当作项目。",
@@ -90,7 +92,14 @@ def _review_source(context,settings,source,locked,*,content=False):
         text = f"{source['commit'][:12]} · {actual['files']} 个文件，{actual['logicalBytes']/1048576:.1f} MiB。"
         text += "\n已逐一核实 Git 保存的原始字节；没有读取未提交改动、应用过滤器、复制文件或启动执行器。"
         if actual["lfsHeaderFiles"]: text += f"\n{actual['lfsHeaderFiles']} 个文件含 LFS 指针版本头；已核实的是指针，不是外部大文件。"
-        if _dialog("原提交的文件正文已核对",text,[("digest","查看完整内容清单编号")],retire=locked)=="digest" and not locked():
+        limit = storage_limit(actual)
+        choices = [("digest","查看完整内容清单编号")]
+        if limit: text += "\n"+limit
+        else: choices.insert(0,("copy","另存本机独立源码副本\n先查看确切新位置与范围；不会启动项目。"))
+        action = _dialog("原提交的文件正文已核对",text,choices,retire=locked)
+        if locked(): return
+        if action=="copy": confirm_copy(context,settings,result,locked)
+        elif action=="digest":
             _dialog("已提交文件内容编号",actual["contentManifestDigest"]+"\n按原路径、模式、Git 对象号、长度和 SHA-256 绑定。只是本次本机核对，不是副本、权限或交付回执。",[],retire=locked)
         return
     text = f"{source['commit'][:12]} · {check['directories']} 个子目录，{check['files']} 个普通文件。"
@@ -107,12 +116,17 @@ def _review_source(context,settings,source,locked,*,content=False):
 
 def open_source(context, settings):
     def locked(): return not WindowsDesktopHealth().probe(session_only=True).get("available")
+    history = ("copies","本机独立副本与原回执\n只核对已登记的本机制作记录，不依赖原仓库仍在当前提交。")
     try:
         choices = registered(context, settings)
     except (Incomplete, PlatformError, OSError, ValueError):
-        _dialog("本机登记暂不可核对", REASONS["configuration_changed"], [], retire=locked); return
+        if _dialog("本机登记暂不可核对", REASONS["configuration_changed"], [history], retire=locked)=="copies" and not locked():
+            browse_copies(context,locked)
+        return
     if not choices:
-        _dialog("没有可供预检的本机工作区", "仅接受原安装已登记的 Windows 本机目录；不接受 SSH/网络位置或伴侣私有安装目录。", [], retire=locked); return
+        if _dialog("没有可供预检的本机工作区", "仅接受原安装已登记的 Windows 本机目录；不接受 SSH/网络位置或伴侣私有安装目录。",[history],retire=locked)=="copies" and not locked():
+            browse_copies(context,locked)
+        return
     page = 0
     while not locked():
         blocks = [(key, key+"\n"+_display(root)) for key,root in choices[page*5:page*5+5]]
@@ -120,10 +134,12 @@ def open_source(context, settings):
         buttons = [(("workspace",key),label) for key,label in blocks]
         if page: buttons.append(("previous","上一页工作区"))
         if (page+1)*5 < len(choices): buttons.append(("next","下一页工作区"))
+        buttons.append(history)
         selected = _dialog("从哪个已登记的本机工作区核对？", "只读取这个根目录自身的 Git 元数据。不会运行 Git、读取工作文件正文或允许写入。",buttons,retire=locked)
         if selected == "next": page += 1; continue
         if selected == "previous": page -= 1; continue
         if selected is None or locked(): return
+        if selected=="copies": browse_copies(context,locked); return
         key = selected[1]
         result = capture(context, settings, key)
         if locked(): return

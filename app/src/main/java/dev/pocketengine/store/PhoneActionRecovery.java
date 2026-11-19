@@ -23,6 +23,25 @@ public final class PhoneActionRecovery {
                 &&task.isNull("origin")&&task.isNull("parentTaskId")&&task.isNull("ownerPhoneControl")&&task.isNull("ownerDeviceWork")
                 &&Set.of("main_screen","background").contains(task.optString("executionMode"))&&!task.optString("runId").isEmpty()&&task.optInt("coordinatorEpoch")>0;
     }
+    private static String safeStatus(String value){return value!=null&&value.matches("running|preparing|paused|completed|cancelled|stopped|failed|awaiting_user|needs_confirmation|interrupted|reconciling")?value:"recorded";}
+    private static String safeOperationState(String value){return value!=null&&value.matches("prepared|unknown|receipt|resolved|failed")?value:"recorded";}
+    /** Status of the exact retained run for an explicit notification open. No goals, observation data, arguments or receipt bodies. */
+    static JSONObject notificationRun(SQLiteDatabase db,JSONObject task,String run,int epoch)throws Exception{
+        String id=task.getString("id");boolean current=run.equals(task.optString("runId"))&&epoch==task.optInt("coordinatorEpoch");
+        if(!local(task)){
+            if(!current||!"phone".equals(task.optString("kind")))throw new SecurityException("原非私人通知轮次不再可打开");
+            // Existing group, channel and dedicated controls keep their current-only route.
+            return new JSONObject().put("conventional",true).put("taskId",id);
+        }
+        try(Cursor c=db.rawQuery("SELECT status,created_at,updated_at FROM runs WHERE task_id=? AND run_id=? AND epoch=?",new String[]{id,run,Integer.toString(epoch)})){
+            if(!c.moveToFirst()||c.getLong(1)<=0||c.getLong(2)<=0)throw new SecurityException("原通知对应的本机执行记录不可用");
+            JSONObject out=new JSONObject().put("format","pocketworld.private-phone-notification.v1").put("taskId",id).put("runId",run).put("epoch",epoch)
+                    .put("current",current).put("status",safeStatus(c.getString(0))).put("createdAt",c.getLong(1)).put("updatedAt",c.getLong(2)).put("readAt",System.currentTimeMillis());
+            try(Cursor op=db.rawQuery("SELECT o.tool,o.state,o.created_at FROM operations o WHERE o.task_id=? AND o.run_id=? AND "+FILTER+" ORDER BY o.rowid DESC LIMIT 1",new String[]{id,run})){
+                if(op.moveToFirst()&&op.getLong(2)>0)out.put("lastAction",new JSONObject().put("tool",op.getString(0)).put("state",safeOperationState(op.getString(1))).put("createdAt",op.getLong(2)));
+            }return out;
+        }
+    }
     private static JSONObject row(Cursor c,JSONObject task)throws Exception{
         String state=c.getString(2),run=c.getString(3);int epoch=c.isNull(5)?0:c.getInt(5);
         return new JSONObject().put("format",FORMAT).put("taskId",task.getString("id")).put("operationId",c.getString(0)).put("tool",c.getString(1))

@@ -243,7 +243,7 @@ internal class PocketWebBridge(
         )
         val commands: Set<String> = linkedSetOf(
             "conversation.captureHostGoal", "conversation.openHostGoal",
-            "app.ready", "app.refresh", "notice.dismiss", "notice.task.close", "error.dismiss", "execution.read", "execution.review", "execution.confirm",
+            "app.ready", "app.refresh", "notice.dismiss", "notice.task.close", "phone.notice.refresh", "phone.notice.close", "error.dismiss", "execution.read", "execution.review", "execution.confirm",
             "composer.edit", "composer.send", "composer.mode", "composer.intent", "composer.reading", "composer.query", "composer.retry", "composer.returnPending",
             "chat.cancel", "ownerWork.input", "ownerWork.control", "message.origin", "conversation.new", "conversation.select", "conversation.directory", "conversation.reader.open", "conversation.reader.close", "conversation.reader.earlier", "conversation.reader.refresh", "conversation.reader.position", "conversation.reader.select", "conversation.reader.attachment",
             "ownerWork.supplement.read", "ownerWork.supplement.edit", "ownerWork.supplement.send", "ownerWork.supplement.query",
@@ -1374,6 +1374,10 @@ internal class PocketWebBridge(
 
             "app.refresh", "tasks.refresh" -> controller.refresh()
             "notice.dismiss" -> controller.dismissNotice()
+            "phone.notice.refresh","phone.notice.close" -> {
+                checkedPayload(args,setOf("noticeHandle"));val token=requiredString(args,"noticeHandle")
+                if(action=="phone.notice.refresh")controller.refreshPhoneNotification(token) else controller.dismissPhoneNotification(token)
+            }
             "notice.task.close" -> controller.dismissOriginalTaskNotice()
             "error.dismiss" -> controller.dismissError()
             "composer.edit", "composer.send", "composer.mode" -> {

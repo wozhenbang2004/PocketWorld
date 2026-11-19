@@ -11,6 +11,7 @@ const verbs:Record<string,string>={phone_launch_app:'打开应用',phone_click_n
 const positive=(v:unknown):v is number=>typeof v==='number'&&Number.isSafeInteger(v)&&v>0;
 const id=(v:unknown):v is string=>typeof v==='string'&&v.length>0&&v.length<=240;
 const stamp=(n:unknown)=>positive(n)&&n<=8.64e15?new Date(n).toLocaleString(undefined,{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'}):'时间未确认';
+export const phoneRecordedActionLabel=(value:unknown):string|null=>typeof value==='string'&&Object.hasOwn(verbs,value)?verbs[value]:null;
 function held(r:Row,task:string){return r.format===PHONE_RECORD&&r.taskId===task&&id(r.operationId)&&typeof r.tool==='string'&&Object.hasOwn(verbs,r.tool)&&r.automaticReplay===false;}
 function neighbor(r:unknown){const n=r as Row;if(!n||!Object.hasOwn(verbs,n.tool)||!positive(n.createdAt))return null;return verbs[n.tool]+' · '+stamp(n.createdAt);}
 export function PhoneOriginalActionReview({rows,taskId,more,disabled,allowRecord,submit}:{rows:Row[];taskId:string;more:boolean;disabled:boolean;allowRecord:boolean;submit:(args:Row)=>void}){

@@ -15471,6 +15471,11 @@ public final class TaskStore {
      * fields. This is neither a UI header nor an execution grant: notification
      * actions still carry the original tuple to independently checked controls.
      * Keep the question/fallback branches intact without loading all audit rows. */
+    /** Owner notification navigation is a read. Resolves an old local phone run, never other tasks or the latest run. */
+    public synchronized JSONObject originalPhoneNotification(String id,String run,int epoch)throws Exception{
+        if(id==null||id.isBlank()||id.length()>100||run==null||run.isBlank()||run.length()>100||epoch<1)throw new SecurityException("原手机通知身份无效");
+        return PhoneActionRecovery.notificationRun(db,required(id),run,epoch);
+    }
     public synchronized JSONObject foregroundNotificationContextSnapshot(String id)throws Exception{
         JSONObject task=read(id);if(task==null)return null;
         JSONObject context=new JSONObject();

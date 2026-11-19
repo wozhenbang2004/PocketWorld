@@ -95,9 +95,10 @@ public final class DeviceProtocol {
             if(args.optJSONObject("arguments")==null)throw fail("invalid_request","Tool parameters must be an object");
             if(value.optString("capabilityVersion").isEmpty()||value.optJSONObject("resourceBinding")==null||value.optJSONObject("resourceBinding").length()==0)throw fail("invalid_request","Tool invocation requires a bound capability/resource");
         }else if("task.submitGoal".equals(method)){
-            keys(args,set("goal executionMode"),set("contextSnapshot modelSource delegationAuthorization"));text(args.opt("goal"),"goal",12000);if(!"agent".equals(args.opt("executionMode")))throw fail("invalid_request","Goal submission requires executionMode=agent");
+            keys(args,set("goal executionMode"),set("contextSnapshot modelSource delegationAuthorization textReturnContract"));text(args.opt("goal"),"goal",12000);if(!"agent".equals(args.opt("executionMode")))throw fail("invalid_request","Goal submission requires executionMode=agent");
             for(String name:set("contextSnapshot modelSource delegationAuthorization"))if(args.has(name)&&args.optJSONObject(name)==null)throw fail("invalid_request","Invalid "+name);
             if(args.has("delegationAuthorization"))DelegationGrant.validateWireProof(args.optJSONObject("delegationAuthorization"));
+            if(args.has("textReturnContract")&&!isDirectTextReturn(value))throw fail("invalid_request","Text handoff requires the exact zero-tool, direct, no-project contract");
         }else if("desktop.viewer".equals(method)){
             String action=args.optString("action");Set<String> required=new HashSet<>(set("action viewerSessionId")),optional=new HashSet<>();
             switch(action){
@@ -236,6 +237,33 @@ public final class DeviceProtocol {
         catch(ProtocolException failed){throw failed;}catch(Exception invalid){throw fail("invalid_json","Invalid UTF-8 JSON");}
     }
     public static String argumentsDigest(JSONObject envelope){try{JSONObject bound=new JSONObject();for(String key:objectKeys(envelope))if(!NON_SEMANTIC.contains(key))bound.put(key,envelope.get(key));return sha256(canonical(bound).getBytes(StandardCharsets.UTF_8));}catch(ProtocolException failure){throw failure;}catch(Exception impossible){throw new IllegalStateException(impossible);}}
+    public static final String TEXT_RETURN="pocketworld.direct-text.owner-reviewed-result.v1";
+    public static boolean isDirectTextReturn(JSONObject request){
+        JSONObject args=request.optJSONObject("arguments"),binding=request.optJSONObject("resourceBinding"),budget=request.optJSONObject("budget");
+        JSONObject model=args==null?null:args.optJSONObject("modelSource");String op=request.optString("operationId"),caller=request.optString("callerDeviceId");
+        JSONArray visited=request.optJSONArray("visitedDevices"),chain=request.optJSONArray("delegationChain");
+        return "GoalSubmission".equals(request.opt("messageType"))&&"task.submitGoal".equals(request.opt("method"))&&VERSION.equals(request.opt("capabilityVersion"))
+                &&args!=null&&args.length()==4&&TEXT_RETURN.equals(args.opt("textReturnContract"))&&"agent".equals(args.opt("executionMode"))
+                &&args.opt("goal") instanceof String&&!args.optString("goal").trim().isEmpty()&&model!=null&&model.length()==1&&"local".equals(model.opt("kind"))
+                &&binding!=null&&binding.length()==1&&"capabilities".equals(binding.opt("screenMode"))&&budget!=null&&budget.length()==3&&budget.optLong("toolCalls",-1)==0
+                &&!request.has("observationRef")&&!request.has("dependencySnapshot")&&!request.has("replyCursor")&&request.optInt("maxDelegationDepth",-1)==1
+                &&budget.optLong("modelCalls")>=1&&budget.optLong("modelCalls")<=3&&!op.isEmpty()&&op.equals(request.opt("rootTaskId"))
+                &&op.equals(request.opt("parentTaskId"))&&op.equals(request.opt("localTaskId"))&&!caller.isEmpty()&&caller.equals(request.opt("originDeviceId"))
+                &&!caller.equals(request.opt("targetDeviceId"))&&(!request.has("visitedDevices")||visited!=null&&visited.length()==1&&caller.equals(visited.opt(0)))
+                &&(!request.has("delegationChain")||chain!=null&&chain.length()==0);
+    }
+    /** Native original admission marker only. A plain capabilities grant is not a request to return private results. */
+    public static boolean acceptedTextReturn(JSONObject task){
+        JSONObject origin=task.optJSONObject("origin"),scope=task.optJSONObject("deviceExecutionScope"),binding=scope==null?null:scope.optJSONObject("resourceBinding");
+        if(origin==null||scope==null||binding==null||!TEXT_RETURN.equals(origin.opt("textReturnContract"))||!"GOAL".equals(task.opt("deviceExecutionKind"))
+                ||!Boolean.TRUE.equals(scope.opt("reviewedTextOnly"))||!"paired_device".equals(origin.opt("kind"))||!"capabilities".equals(scope.opt("mode"))
+                ||!"GOAL".equals(scope.opt("executionKind"))||scope.optInt("modelCallLimit")<1||scope.optInt("modelCallLimit")>3
+                ||scope.has("sourceShare")||scope.has("forwardingProof")||scope.optLong("toolLimit",-1)!=0||binding.length()!=1||!"capabilities".equals(binding.opt("screenMode")))return false;
+        String op=origin.optString("remoteOperationId");
+        return !op.isEmpty()&&op.equals(origin.opt("rootTaskId"))&&op.equals(origin.opt("parentTaskId"))&&op.equals(origin.opt("remoteLocalTaskId"))
+            &&!origin.optString("callerDeviceId").isEmpty()&&origin.optString("callerDeviceId").equals(origin.opt("originDeviceId"))
+            &&!origin.optString("callerDeviceId").equals(origin.opt("targetDeviceId"))&&origin.optJSONObject("sourceShare")==null;
+    }
     /** Shared by the owner-only local index and the original device history reader. */
     public static boolean isDirectPhoneGoal(JSONObject wire,String here,String parent,String operation) {
             JSONObject resource=wire.optJSONObject("resourceBinding");

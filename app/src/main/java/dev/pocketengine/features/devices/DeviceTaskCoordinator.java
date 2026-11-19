@@ -86,8 +86,8 @@ public final class DeviceTaskCoordinator {
             ||reader.authorizationEpoch()!=origin.optLong("authorizationEpoch")||reader.acceptedAuthorizationEpoch()!=reader.authorizationEpoch()
             ||origin.optString("parentTaskId").isEmpty()||!origin.optString("rootTaskId").equals(origin.optString("parentTaskId"))
             ||!DeviceProtocol.resourceEquals(resource,task.getJSONObject("deviceExecutionScope").getJSONObject("resourceBinding"))
-            ||!("main_screen".equals(resource.optString("screenMode"))||"background".equals(resource.optString("screenMode")))
-            ||!(resource.opt("androidUserId") instanceof Number)||resource.optJSONArray("packageNames")==null||resource.getJSONArray("packageNames").length()==0
+            ||!(DeviceProtocol.acceptedTextReturn(task) || ("main_screen".equals(resource.optString("screenMode"))||"background".equals(resource.optString("screenMode")))
+               &&resource.opt("androidUserId") instanceof Number&&resource.optJSONArray("packageNames")!=null&&resource.optJSONArray("packageNames").length()>0)
             ||run.isEmpty()||epoch<=0)return;
         JSONObject detail=snapshot.getJSONObject("result"),saved=task.optJSONObject("deviceGoalResult");
         JSONObject onward=new JSONObject().put("review","none").put("summary","").put("truncated",false);

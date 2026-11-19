@@ -235,3 +235,5 @@
 .pw-team-result-overview { display: grid; gap: 8px; padding: 18px; border-radius: 18px; background: var(--pw-inset); }
 .pw-team-result-overview h3 { margin: 0; font-size: 13px; font-weight: 600; }
 .pw-team-result-overview p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.75; }
+
+.pw-team-file-diff{white-space:pre-wrap;overflow-wrap:anywhere;max-height:45dvh;overflow:auto;font-family:monospace;line-height:1.5;}

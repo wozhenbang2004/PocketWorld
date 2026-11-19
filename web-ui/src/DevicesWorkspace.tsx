@@ -697,7 +697,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
                 <p role="status">{archiveSide === 'received' ? '这是本机已收到并保存的直接目标，不代表你已同意开始。找回原工作不会重启任务。' : '这里只列本机为这部手机保留的目标，不代表已经送达或完成。打开原派发后，由你决定是否读取回执或成果。'}</p>
                 {!activeArchive.rows.length && <p>这一批本机记录里没有能核对的直接手机目标。</p>}
                 {rows(activeArchive.rows).map(row => <div className="pw-device-history-entry" key={JSON.stringify([row.taskId, row.operationId])}>
-                  <h4 dir="auto">{row.goal}</h4><p>{time(row.createdAt)} · {row.screenMode === 'background' ? '独立后台屏' : '主屏'}</p>
+                  <h4 dir="auto">{row.goal}</h4><p>{time(row.createdAt)} · {row.textOnly === true ? '仅文字，不使用屏幕' : row.screenMode === 'background' ? '独立后台屏' : '主屏'}</p>
                   <div className="pw-form-actions">{archiveSide === 'received'
                     ? <Button variant="secondary" disabled={busy || !supported('devices.returnToReceivedPhoneGoal')} onClick={() => openArchivedGoal(row, false)}>找回本机接纳的原工作</Button>
                     : <><Button variant="secondary" disabled={busy} onClick={() => openArchivedGoal(row, false)}>核对这次原派发</Button>

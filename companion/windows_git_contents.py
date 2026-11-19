@@ -13,24 +13,26 @@ class ContentProblem(Exception):
     def __init__(self, reason): self.reason = reason
 
 
-def measure(rows, mapping, width, read_blob, checkpoint, on_count):
+def measure(rows, mapping, width, read_blob, checkpoint, on_count, material=None):
     if len(rows)>MAX_FILES: raise ContentProblem("content_limit")
     digest = hashlib.sha256(PROFILE.encode()+b"\0"+bytes.fromhex(mapping))
-    metadata, total, pointer_like = {}, 0, 0
+    metadata, total, largest, pointer_like = {}, 0, 0, 0
     on_count(0,len(rows),0)
     for n,(mode,path,oid) in enumerate(rows,1):
         checkpoint()
-        if oid not in metadata:
-            # No bytes escape this iteration. This is an observation of exact
-            # canonical Git bytes, not a persistent source lease for a worker.
+        if oid not in metadata or material is not None:
+            # Ordinary review retains digests only. A second, owner-confirmed
+            # local copy can retain bounded original bytes until native publication.
             raw = read_blob(oid, MAX_FILE)
             length = len(raw)
             if length>MAX_FILE or length>MAX_TOTAL-total: raise ContentProblem("content_limit")
             first = raw[:64].partition(b"\n")[0].removesuffix(b"\r")
             metadata[oid] = length,hashlib.sha256(raw).digest(),first in LFS_HEADERS
+            if material is not None: material.keep(path,mode.decode("ascii"),oid,raw,metadata[oid][1].hex())
             del raw
         length,sha,looks_pointer = metadata[oid]
         total += length
+        largest = max(largest,length)
         if total>MAX_TOTAL: raise ContentProblem("content_limit")
         pointer_like += looks_pointer
         name, obj = path.encode("utf-8"), bytes.fromhex(oid)
@@ -38,6 +40,6 @@ def measure(rows, mapping, width, read_blob, checkpoint, on_count):
         digest.update(mode+b"\0"+len(name).to_bytes(4,"big")+name+obj+length.to_bytes(8,"big")+sha)
         if not n%16 or n==len(rows): on_count(n,len(rows),total)
     return {"profile":PROFILE,"complete":True,"files":len(rows),"logicalBytes":total,
-            "uniqueBlobObjects":len(metadata),"lfsHeaderFiles":pointer_like,
+            "uniqueBlobObjects":len(metadata),"largestFileBytes":largest,"lfsHeaderFiles":pointer_like,
             "contentManifestDigest":digest.hexdigest(),"scope":"raw_committed_git_blobs",
             "filtersApplied":False,"lfsHydrated":False,"copied":False,"workingTreeChecked":False}

@@ -15,6 +15,7 @@ import { TeamEvidenceWorkspace } from './TeamEvidenceWorkspace';
 import { TeamQuickStartForm } from './TeamQuickStartForm';
 import { TeamStartReview } from './TeamStartReview';
 import { canInspectFileContinuation, TeamFileContinuationReview } from './TeamFileContinuation';
+import { TeamFrozenFiles } from './TeamFrozenFiles';
 import { resetTeamProductionAcknowledgments, teamDefinitionPayload, teamProductionDraft, teamProductionEditorMember } from './team-production';
 import { TeamMemberAvatar, TeamMemberIdentity } from './TeamMemberIdentity';
 import { teamAvatarShape, teamAvatarShapes, teamMemberLabel, teamMessageIdentity, teamMessageAuthor } from './team-identity';
@@ -109,6 +110,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const alive = useRef(true), requestGeneration = useRef(0), entered = useRef(false), currentReading = useRef<Data | null>(null);
   const backgrounded = useRef(document.visibilityState !== 'visible'), currentReview = useRef<Data | null>(null);
   const currentPhoneSelection = useRef<Data | null>(null);
+  const frozenFilesBack = useRef<(() => boolean) | null>(null);
+  const [readingFiles,setReadingFiles] = useState(false);
   const materialBack = useRef<(() => boolean) | null>(null);
   const materialBeforeLeave = useRef<((leave: () => void) => void) | null>(null);
   useEffect(() => { registerBeforeLeave?.(leave => formDraft.guard(() => startDraft.guard(() => messageDraft.guard(() => memberFormDraft.guard(() => { if (materialBeforeLeave.current) materialBeforeLeave.current(leave); else leave(); }))))); return () => registerBeforeLeave?.(null); }, [registerBeforeLeave, formDraft.guard, startDraft.guard, messageDraft.guard, memberFormDraft.guard]);
@@ -346,7 +349,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     document.addEventListener('visibilitychange', visibility); window.addEventListener('pagehide', hide);
     return () => { document.removeEventListener('visibilitychange', visibility); window.removeEventListener('pagehide', hide); };
   });
-  useEffect(() => { registerTransientBack(() => { if (materialBack.current?.()) return true; if (busy) return true; if (review) { closeReview(); return true; } if (phoneSelection) { closePhoneSelection(); return true; } if (memberDraft) { memberFormDraft.guard(() => setMemberDraft(null)); return true; } if (editor) { formDraft.guard(() => setEditor(null)); return true; } if (resultBack.current()) return true; if (reading) { back(); return true; } return false; }); return () => registerTransientBack(null); }, [reading, review, phoneSelection, memberDraft, editor, busy, registerTransientBack]);
+  useEffect(() => { registerTransientBack(() => { if (frozenFilesBack.current?.()) return true; if (materialBack.current?.()) return true; if (busy) return true; if (review) { closeReview(); return true; } if (phoneSelection) { closePhoneSelection(); return true; } if (memberDraft) { memberFormDraft.guard(() => setMemberDraft(null)); return true; } if (editor) { formDraft.guard(() => setEditor(null)); return true; } if (resultBack.current()) return true; if (reading) { back(); return true; } return false; }); return () => registerTransientBack(null); }, [reading, review, phoneSelection, memberDraft, editor, busy, registerTransientBack]);
   const definition = reading?.kind === 'definition' ? object(reading.definition) : null;
   const definitionReady = workspaceActive && (!definition || !!reading?.viewHandle);
   const current = reading?.kind === 'run' ? object(reading.run) : null;
@@ -360,7 +363,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const changed = !!current && latest.id === current.id && (latest.generation > current.generation
     || latest.generation === current.generation && latest.revision > current.revision);
   useEffect(() => {
-    if (!changed || !workspaceActive || busy || materialBusy || editor || memberDraft || review || phoneSelection || backgrounded.current) return;
+    if (!changed || !workspaceActive || busy || materialBusy || readingFiles || editor || memberDraft || review || phoneSelection || backgrounded.current) return;
     const runId = current!.id, originalHandle = reading?.viewHandle, generation = requestGeneration.current;
     let retired = false;
     const stillCurrent = () => !retired && alive.current && !backgrounded.current && ownsNativeWindow()
@@ -382,7 +385,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       });
     }, 250);
     return () => { retired = true; clearTimeout(timer); };
-  }, [changed, current?.id, reading?.viewHandle, workspaceActive, busy, materialBusy, editor, memberDraft, review, phoneSelection]);
+  }, [changed, current?.id, reading?.viewHandle, workspaceActive, busy, materialBusy, readingFiles, editor, memberDraft, review, phoneSelection]);
   const members = rows(current?.members), messages = rows(reading?.messages);
   const activeQuestionKeys = new Set(rows(reading?.attention).filter(item => item.kind === 'question').map(questionKey));
   const isCurrentQuestion = (message: Data) => message.kind === 'assignment_question' && message.state === 'pending' && activeQuestionKeys.has(questionKey(message));
@@ -852,7 +855,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       </section>
         </TabPanel>
         <TabPanel id="result">
-          <TeamResultHandoff result={teamResult} sources={deliveries.length>0 ? <TeamResearchDeliveries records={deliveries} disabled={!canRead||materialBusy||!bridge.getState().capabilities.commands.includes('teams.openResearchTask')} open={openMemberDelivery}
+          <TeamResultHandoff result={teamResult} frozenFiles={current.productionScope && (current.mode === 'produce' || current.workPlan) && (current.status === 'awaiting_review' || workItems.some(item => rows(item.artifacts).length > 0) || members.some(member => rows(member.roundStates).some(phase => rows(phase.artifacts).length > 0))) && bridge.getState().capabilities.commands.includes('teams.readFrozenOutputs')
+            ? <TeamFrozenFiles key={reading?.viewHandle || current.id} team={current.id} view={reading?.viewHandle || ''} run={run} active={workspaceActive && runSection === 'result'} disabled={!canRead || materialBusy} onOpen={setReadingFiles} back={frozenFilesBack} memberName={name}/> : undefined} sources={deliveries.length>0 ? <TeamResearchDeliveries records={deliveries} disabled={!canRead||materialBusy||!bridge.getState().capabilities.commands.includes('teams.openResearchTask')} open={openMemberDelivery}
             expanded={!!shownMemberSources[current.id]} onExpanded={value=>setShownMemberSources(old=>({...old,[current.id]:value}))}/> : undefined} stopped={current.status === 'cancelled'}
             actions={{ items: followUps, read: openFollowUp, disabled: !canRead || materialBusy, expanded: !!allResultActions[current.id],
               toggle: () => setAllResultActions(old => ({ ...old, [current.id]: !old[current.id] })) }}

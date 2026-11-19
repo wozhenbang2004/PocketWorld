@@ -9,6 +9,7 @@ import unicodedata
 import desktop_received_commands as received
 from desktop_owner_entry import _dialog
 from desktop_sessions import WindowsDesktopHealth
+from device_protocol import TEXT_RETURN
 from phone_task_bridge import PROTOCOL
 from phone_task_outcome import is_phone_action_goal
 
@@ -19,8 +20,10 @@ _STATE = {"succeeded":"已完成", "failed":"失败", "cancelled":"已取消", "
 _BATCH = """SELECT rid,operation_id,fingerprint,updated_at,CASE WHEN
        json_extract(doc,'$.protocol')=? AND json_extract(doc,'$.kind')='task.submitGoal'
        AND json_extract(doc,'$.peerDeviceId')=? AND json_extract(doc,'$.instanceId')=?
-       AND json_extract(doc,'$.operationId')=operation_id AND json_extract(doc,'$.resourceBinding.screenMode') IN ('main_screen','background')
-       AND json_type(doc,'$.resourceBinding.androidUserId')='integer' AND json_array_length(doc,'$.resourceBinding.packageNames')>0
+       AND json_extract(doc,'$.operationId')=operation_id AND
+       ((json_extract(doc,'$.resourceBinding.screenMode') IN ('main_screen','background')
+         AND json_type(doc,'$.resourceBinding.androidUserId')='integer' AND json_array_length(doc,'$.resourceBinding.packageNames')>0)
+        OR (json_extract(doc,'$.resourceBinding.screenMode')='capabilities' AND json_extract(doc,'$.originalTextReturn')=?))
        THEN json_extract(doc,'$.status') END FROM
        (SELECT rowid AS rid,operation_id,fingerprint,updated_at,CASE WHEN json_valid(details) THEN details END AS doc
         FROM operations WHERE rowid<? ORDER BY rowid DESC LIMIT 64) ORDER BY rid DESC"""
@@ -70,7 +73,7 @@ class ResultView:
         for _ in range(4):
             with self.manager.lock:
                 batch = (self.manager.ledger.execute(received.BATCH, (peer[0], cursor)) if incoming else
-                         self.manager.ledger.execute(_BATCH, (PROTOCOL, peer[0], peer[2], cursor))).fetchall()
+                         self.manager.ledger.execute(_BATCH, (PROTOCOL, peer[0], peer[2], TEXT_RETURN, cursor))).fetchall()
             for index, row in enumerate(batch):
                 cursor = row[0]
                 if isinstance(row[4], str) and (not incoming or received.local_record(self, peer, row)):

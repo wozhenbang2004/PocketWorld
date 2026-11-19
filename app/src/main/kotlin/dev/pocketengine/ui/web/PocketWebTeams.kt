@@ -3,6 +3,8 @@ package dev.pocketengine.ui.web
 import android.os.SystemClock
 import android.os.Handler
 import android.os.Looper
+import dev.pocketengine.core.RunControl
+import dev.pocketengine.features.teams.TeamOwnerFileReading
 import dev.pocketengine.features.teams.AgentSlot
 import dev.pocketengine.features.teams.TeamPhoneHost
 import dev.pocketengine.features.teams.TeamEvidenceDiscussion
@@ -23,6 +25,14 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /** Owner presentation for the original TeamsModule. No worker, grant or execution state lives here. */
 internal class PocketWebTeams(private val controller: PocketWorldController) {
+    private class FileWindow(val owner: Reading, val handle: String = UUID.randomUUID().toString()) : AutoCloseable {
+        val reader = RunControl()
+        @Volatile var captured: TeamOwnerFileReading? = null
+            private set
+        @Synchronized fun install(value: TeamOwnerFileReading) { reader.check(); check(owner.live); captured = value }
+        @Synchronized override fun close() { reader.cancel(); captured = null }
+    }
+    private var fileWindow: FileWindow? = null
     private class Reading(val kind: String, val original: String) {
         @Volatile var live = true
             private set
@@ -49,11 +59,11 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
     companion object {
         val COMMANDS = setOf("teams.attention", "teams.readAttention", "teams.snapshot", "teams.readRun", "teams.readDefinition", "teams.reviewDefinition", "teams.prepareDraftStart",
             "teams.reviewStart", "teams.reviewRemove", "teams.confirm", "teams.control", "teams.sendMessage",
-            "teams.reviewWorkItemContinuation", "teams.answerAssignment", "teams.probeMember", "teams.closeReading", "teams.reviewPhoneStart", "teams.reviewMember", "teams.openResearchTask")
+            "teams.readFrozenOutputs", "teams.readFrozenDiff", "teams.reviewWorkItemContinuation", "teams.answerAssignment", "teams.probeMember", "teams.closeReading", "teams.reviewPhoneStart", "teams.reviewMember", "teams.openResearchTask")
     }
 
     fun clear() {
-        generation++; snapshot = JSONObject(); readings.values.forEach { it.retire() }; readings.clear()
+        generation++; snapshot = JSONObject(); readings.values.forEach { it.retire() }; readings.clear(); fileWindow?.close(); fileWindow = null
         phonePages.values.forEach { runCatching { it.original.close() } }; phonePages.clear()
         reviews.values.forEach { it.close() }; reviews.clear()
         runCatching { workingTeamPage?.close() }
@@ -386,7 +396,8 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 }
             }
             "teams.closeReading" -> {
-                fields(args, "viewHandle", "reviewHandle", "phoneHandle"); readings.remove(args.optString("viewHandle"))?.retire()
+                fields(args, "viewHandle", "reviewHandle", "phoneHandle", "fileHandle"); readings.remove(args.optString("viewHandle"))?.retire()
+                fileWindow?.takeIf { !it.owner.live || it.handle == args.optString("fileHandle") }?.let { it.close(); fileWindow = null }
                 reviews.remove(args.optString("reviewHandle"))?.close()
                 phonePages.remove(args.optString("phoneHandle"))?.original?.let { runCatching { it.close() } }
                 deliver(JSONObject().put("closed", true), null)
@@ -583,6 +594,37 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                     .put("leaderId", run.optString("leaderId")).put("roster", PocketWebState.publicValue(JSONArray(roster)))
                     .put("researchExit", action == "exit" && run.optString("researchExecutionFormat") == dev.pocketengine.features.teams.TeamCoordinator.RESEARCH_FORMAT)
                 deliver(result, null)
+            }
+            "teams.readFrozenOutputs" -> {
+                fields(args, "viewHandle")
+                val owner = readings[text(args,"viewHandle")]?.takeIf { it.kind == "run" && it.live } ?: error("请重新打开原团队成果")
+                val shown = JSONObject(owner.original)
+                require(shown.optJSONObject("productionScope") != null && (shown.optString("mode") == "produce" || shown.optJSONObject("workPlan") != null)) { "原协作没有文件制作范围" }
+                val runId = shown.getString("id")
+                fileWindow?.close()
+                val files = FileWindow(owner); fileWindow = files; owner.hold(files)
+                hostWork(files, work = {
+                    val module = controller.webPluginFeatureHost().module("teams") as? TeamsModule ?: error("原团队宿主不可用")
+                    fun stillSame() {
+                        check(currentWindow() && owner.live) { "原成果窗口已关闭" }; files.reader.check()
+                        val now = module.retainedOwnerReading(runId)
+                        check(now.optString("id") == runId && now.optInt("generation",-1) == shown.getInt("generation")
+                            && now.optLong("revision",-1) == shown.getLong("revision")) { "原协作已更新，先刷新原记录；没有读取另一轮成果" }
+                    }
+                    stillSame(); val result = module.readOwnerFrozenFiles(runId,files.reader); stillSame(); files.install(result)
+                    result.index().put("fileHandle",files.handle)
+                }, accept = { result ->
+                    check(fileWindow === files && owner.live && files.captured != null) { "原成果阅读已关闭" }
+                    deliver(result,null)
+                })
+            }
+            "teams.readFrozenDiff" -> {
+                fields(args,"viewHandle","fileHandle","artifactId","offset")
+                val owner = readings[text(args,"viewHandle")] ?: error("原协作记录已关闭")
+                val files = fileWindow?.takeIf { it.owner === owner && owner.live && it.handle == text(args,"fileHandle") } ?: error("请重新打开这份原文件目录")
+                val offset = args.opt("offset"); require(offset is Int && offset >= 0) { "原差异位置不正确" }
+                val captured = files.captured ?: error("原文件目录已关闭")
+                deliver(captured.page(text(args,"artifactId"),offset).put("fileHandle",files.handle),null)
             }
             "teams.reviewWorkItemContinuation" -> {
                 fields(args, "viewHandle", "workItemId")

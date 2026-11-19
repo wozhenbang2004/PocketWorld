@@ -3,11 +3,11 @@ import { bridge } from './bridge';
 import { Button, SettingsDialog, TextAreaField } from './forms-library';
 import { messageQuoteRange } from './message-quote';
 
-export type MessageQuoteTarget = { messageId: string; sourceRevision: number; key: string; epoch: number };
+export type MessageQuoteTarget = { messageId: string; sourceRevision: number; key: string; epoch: number; prior?: { reader: number; request: string; revision: number; offset: number; chars: number } };
 type QuoteWindow = { windowId: string; text: string; maxChars: number; draftRevision: number };
 
 /** Selection only; the original locator and draft transaction remain in the native controller. */
-export function MessageQuote({ target, onClose }: { target: MessageQuoteTarget; onClose: () => void }) {
+export function MessageQuote({ target, onClose, onStaged }: { target: MessageQuoteTarget; onClose: () => void; onStaged?: () => void }) {
   const [view, setView] = useState<QuoteWindow | null>(null), [selection, setSelection] = useState({ start: 0, end: 0 });
   const [busy, setBusy] = useState(true), [attempted, setAttempted] = useState(false), [error, setError] = useState('');
   const alive = useRef(true), windowId = useRef(''), generation = useRef(0), textArea = useRef<HTMLTextAreaElement>(null), submitted = useRef(false);
@@ -21,7 +21,7 @@ export function MessageQuote({ target, onClose }: { target: MessageQuoteTarget; 
     document.addEventListener('visibilitychange', visibility);
     void bridge.command('messageQuote.open', target).then(value => {
       if (!alive.current || generation.current !== request) { if (value?.windowId) void bridge.command('messageQuote.close', { windowId: value.windowId }).catch(() => {}); return; }
-      if (typeof value?.windowId !== 'string' || !value.windowId || typeof value.text !== 'string' || value.maxChars !== 4000 || !Number.isSafeInteger(value.draftRevision) || value.draftRevision < 0) {
+      if (typeof value?.windowId !== 'string' || !value.windowId || typeof value.text !== 'string' || value.maxChars !== 4000 || target.prior && (value.registeredRangeOnly !== true || value.text.length !== target.prior.chars) || !Number.isSafeInteger(value.draftRevision) || value.draftRevision < 0) {
         if (typeof value?.windowId === 'string') void bridge.command('messageQuote.close', { windowId: value.windowId }).catch(() => {});
         throw new Error('原消息读取回执不完整。');
       }
@@ -46,11 +46,11 @@ export function MessageQuote({ target, onClose }: { target: MessageQuoteTarget; 
       if (value?.selectionValidated !== true || value.draftStaged !== true || value.persisted !== true || value.key !== target.key ||
           value.epoch !== target.epoch || !view || value.fromRevision !== view.draftRevision || value.revision !== view.draftRevision + 1)
         throw new Error('原选区尚未确认保存到这份草稿，请先核对原输入。');
-      onClose();
+      onClose(); onStaged?.();
     }).catch(failure => { if (alive.current) { setView(null); setError(failure instanceof Error ? failure.message : String(failure)); } }).finally(() => { if (alive.current) setBusy(false); });
   };
-  return <SettingsDialog isOpen onClose={onClose} title="引用这条消息">
-    <p>选择这次要用的原话。只把所选范围的定位保存到本草稿，不是长期记忆；发送前仍可移除，发送时会再次核对原消息。</p>
+  return <SettingsDialog isOpen onClose={onClose} title={target.prior ? '再次引用这段原话' : '引用这条消息'}>
+    <p>{target.prior ? '只显示上次登记的原段。可缩小选区，再加入本对话当前草稿；不会直接发送或保存为记忆。' : '选择这次要用的原话。只把所选范围的定位保存到本草稿，不是长期记忆；发送前仍可移除，发送时会再次核对原消息。'}</p>
     {view && <TextAreaField ref={textArea} label="长按或拖动选择原文" value={view.text} isReadOnly isDisabled={busy || attempted} rows={6} />}
     {view && <p className="pw-muted">{range ? `已选择 ${range.chars} / 4000 个字符` : '请选择完整的一段原话，最多 4000 个字符。'}</p>}
     {error && <p className="pw-error" role="alert">{error}</p>}

@@ -40,6 +40,17 @@ public final class DeviceExecutionAdmission {
         JSONObject modelSource = request.arguments().optJSONObject("modelSource");
         if (kind == Kind.GOAL && modelSource != null && !"local".equals(modelSource.optString("kind")))
             throw new SecurityException("设备目标只能使用本机已授权模型；不接收凭据或借配对扩大推理受众");
+        if(DeviceProtocol.isDirectTextReturn(request.json())) {
+            // The peer may propose the narrow contract, never issue its grant.
+            // Check B's own original grant too; not just a capability description on A.
+            JSONObject grant=permission.grant(); boolean canRead=false;
+            JSONArray methods=permission.capabilities(),tools=permission.toolNames();
+            for(int i=0;i<methods.length();i++)if("task.get".equals(methods.opt(i)))canRead=true;
+            if(!canRead||grant.optBoolean("allowDelegation")||grant.optJSONObject("forwardingScope")!=null||permission.sourceShare()!=null)
+                throw new SecurityException("原配对未授权这个来源直接核对本次文字结果");
+            for(int i=0;i<tools.length();i++)if(!java.util.Set.of("phone_request_user","phone_finish").contains(tools.getString(i)))
+                throw new SecurityException("纯文字工作不可借用项目、设备或屏幕工具授权");
+        }
         return new DeviceExecutionAdmission(permission, policy, kind, mode);
     }
     DeviceExecutionAdmission reauthorizeAccepted(DeviceTaskEnvelope accepted) throws Exception {
@@ -62,7 +73,8 @@ public final class DeviceExecutionAdmission {
     public static boolean zeroToolPhoneGoal(DeviceTaskEnvelope original) {
         if(!"task.submitGoal".equals(original.method()))return false;
         String location=original.resourceBinding().optString("screenMode");
-        return ("main_screen".equals(location)||"background".equals(location)) && original.budget().optLong("toolCalls",-1)==0;
+        return ("main_screen".equals(location)||"background".equals(location)) && original.budget().optLong("toolCalls",-1)==0
+                || DeviceProtocol.isDirectTextReturn(original.json());
     }
     public boolean noPhoneSurface(){return kind==Kind.GOAL && zeroToolPhoneGoal(request);}
     /** Local host selection, never used as a replacement for the signed resource. */
@@ -87,7 +99,7 @@ public final class DeviceExecutionAdmission {
     public String spaceId() { return "device:" + request.callerDeviceId(); }
     public JSONObject origin() throws Exception {
         JSONObject envelope = request.json();
-        return new JSONObject().put("kind", "paired_device")
+        return new JSONObject().put("kind", "paired_device").put("textReturnContract",DeviceProtocol.isDirectTextReturn(envelope)?DeviceProtocol.TEXT_RETURN:null)
                 .put("originDeviceId", request.originDeviceId()).put("callerDeviceId", request.callerDeviceId())
                 .put("targetDeviceId", request.targetDeviceId()).put("grantId", request.grantId())
                 .put("authorizationEpoch", request.authorizationEpoch())

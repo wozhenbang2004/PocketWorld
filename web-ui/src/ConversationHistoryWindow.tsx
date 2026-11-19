@@ -6,16 +6,17 @@ import {AIAnswer,MessageActions} from './library';
 import {useClosingSnapshot} from './library/surface-motion';
 import {PhoneReturnedReport,phoneReportTarget,type PhoneReportTarget} from './PhoneReturnedReport';
 import {messagePhoneResult} from './phone-start';
+import {MessageQuote,type MessageQuoteTarget} from './MessageQuote';
 import {RegisteredQuoteTrail,sameQuoteVisit,type HistoryQuoteVisit} from './RegisteredQuoteTrail';
 import './conversation-history-window.css';
 
 type Json=Record<string,any>;
 type Position={index:number;offset:number;anchor:string};
 export type ConversationHistoryTaskOrigin={readerWindow:number;readerConversationId:string;readerMessageId:string};
-type Props={page:Json|null;submitting:boolean;can:(action:string)=>boolean;act:(action:string,args?:Json)=>Promise<any>;registerBack:(handler:(()=>boolean)|null)=>void;onCopy:(text:string)=>Promise<unknown>;onOpenTask:(taskId:string,entry:'overview'|'process',origin:ConversationHistoryTaskOrigin,nativeAlreadyOpen?:boolean)=>void};
+type Props={page:Json|null;activeDraft?:{conversation:string;key:string;epoch:number};submitting:boolean;can:(action:string)=>boolean;act:(action:string,args?:Json)=>Promise<any>;registerBack:(handler:(()=>boolean)|null)=>void;onCopy:(text:string)=>Promise<unknown>;onOpenTask:(taskId:string,entry:'overview'|'process',origin:ConversationHistoryTaskOrigin,nativeAlreadyOpen?:boolean)=>void};
 /** A second, read-only history window. The active composer stays with its original
  * submission until the owner explicitly switches after its receipt has settled. */
-export function ConversationHistoryWindow({page,submitting,can,act,registerBack,onCopy,onOpenTask}:Props){
+export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,registerBack,onCopy,onOpenTask}:Props){
  const exit=useClosingSnapshot(page),shown:Json=exit.display??{};
  const scroll=useRef<HTMLDivElement>(null),live=useRef(page);live.current=page;
  const restored=useRef<number|null>(null),position=useRef<Position>({index:0,offset:0,anchor:''});
@@ -24,6 +25,10 @@ export function ConversationHistoryWindow({page,submitting,can,act,registerBack,
  const [phoneOriginal,setPhoneOriginal]=useState<PhoneReportTarget|null>(null);
  const [quoteVisit,setQuoteVisit]=useState<HistoryQuoteVisit|null>(null);
  const visibleVisit=quoteVisit&&sameQuoteVisit(page,quoteVisit)?quoteVisit:null;
+ const [reuse,setReuse]=useState<MessageQuoteTarget|null>(null);
+ const canReuse=!!visibleVisit&&activeDraft?.conversation===visibleVisit.conversation&&!submitting&&can('messageQuote.open')&&can('messageQuote.stage')&&can('conversation.reader.close');
+ const reviewing=canReuse&&reuse?.prior&&reuse.key===activeDraft?.key&&reuse.epoch===activeDraft?.epoch&&reuse.prior.reader===visibleVisit?.window&&reuse.prior.request===visibleVisit.request&&reuse.prior.revision===visibleVisit.requestRevision&&reuse.messageId===visibleVisit.target&&reuse.sourceRevision===visibleVisit.revision&&reuse.prior.offset===visibleVisit.offset&&reuse.prior.chars===visibleVisit.chars?reuse:null;
+ useEffect(()=>{if(reuse&&!reviewing)setReuse(null)},[reuse,reviewing]);
  const moveToQuoteRow=(visit:HistoryQuoteVisit,returning:boolean)=>{
   if(document.hidden||sending.current||!scroll.current||!sameQuoteVisit(live.current,visit))return false;
   const box=scroll.current;
@@ -108,7 +113,7 @@ export function ConversationHistoryWindow({page,submitting,can,act,registerBack,
   if(!button||button.disabled)return false;
   button.focus({preventScroll:true});return true;
  };
- const back=()=>{if(phoneOriginal){setPhoneOriginal(null);return true}if(returnFromQuote())return true;if(!live.current)return false;if(!sending.current)void invoke('conversation.reader.close');return true};
+ const back=()=>{if(reuse){setReuse(null);return true}if(phoneOriginal){setPhoneOriginal(null);return true}if(returnFromQuote())return true;if(!live.current)return false;if(!sending.current)void invoke('conversation.reader.close');return true};
  useEffect(()=>{registerBack(back);return()=>registerBack(null)});
  useEffect(()=>()=>{if(timer.current)clearTimeout(timer.current)},[]);
  useLayoutEffect(()=>{
@@ -138,7 +143,10 @@ export function ConversationHistoryWindow({page,submitting,can,act,registerBack,
      const visit={...range,returnInset:from.getBoundingClientRect().top-scroll.current.getBoundingClientRect().top,window:h.window,conversation:h.conversation,request:message.id,requestRevision:message.sourceRevision,target};
      if(moveToQuoteRow(visit,false))setQuoteVisit(visit);
     }}/>}
-    {visibleVisit?.target===message.id&&<Button variant="secondary" size="small" disabled={pending} onClick={returnFromQuote}>返回引用它的请求</Button>}
+    {visibleVisit?.target===message.id&&<div className="pw-action-row">
+     {canReuse&&activeDraft&&<Button variant="secondary" size="small" disabled={pending} onClick={()=>setReuse({messageId:visibleVisit.target,sourceRevision:visibleVisit.revision,key:activeDraft.key,epoch:activeDraft.epoch,prior:{reader:visibleVisit.window,request:visibleVisit.request,revision:visibleVisit.requestRevision,offset:visibleVisit.offset,chars:visibleVisit.chars}})}>本次再引用这段…</Button>}
+     <Button variant="ghost" size="small" disabled={pending} onClick={returnFromQuote}>返回引用它的请求</Button>
+    </div>}
     <div className="pw-action-row">
      {!!message.content&&<MessageActions onCopy={()=>copy(message.content)}/>}
      {message.role==='assistant'&&message.hostGoalTaskId&&can('tasks.open')&&<Button variant="ghost" size="small" leadingIcon={IconTool} disabled={pending} onClick={()=>void openLinkedTask(message,'overview')}>打开原主机工作</Button>}
@@ -157,6 +165,7 @@ export function ConversationHistoryWindow({page,submitting,can,act,registerBack,
    {!shown.loading&&!shown.error&&!rows.length&&<p className="pw-muted">这份对话没有可读取的消息。</p>}
   </div>
   <footer className="pw-drawer-actions"><Button variant="ghost" disabled={pending} onClick={back}>{visibleVisit?'返回引用它的请求':'返回原输入'}</Button><Button variant="secondary" disabled={!page||submitting||pending||!can('conversation.reader.select')} onClick={()=>void invoke('conversation.reader.select')}>{submitting?'原输入正在登记':'在此对话继续'}</Button></footer>
+  {reviewing&&<MessageQuote target={reviewing} onClose={()=>setReuse(null)} onStaged={()=>{if(live.current?.window===reviewing.prior?.reader)void invoke('conversation.reader.close')}}/>}
   {phoneOriginal&&page?.window===phoneOriginal.readerWindow&&<PhoneReturnedReport target={phoneOriginal} onClose={()=>setPhoneOriginal(null)}/>}
  </Drawer.Content></Drawer.Portal></Drawer.Root>;
 }

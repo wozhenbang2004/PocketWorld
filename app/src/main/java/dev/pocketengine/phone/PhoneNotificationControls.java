@@ -87,6 +87,19 @@ public final class PhoneNotificationControls {
         }
     }
     /** Read-only navigation. Exported Activity extras cannot resume, approve, stop or create any task. */
+    /** Take the immutable navigation tuple only. Does not load a task/approve an effect on the Activity thread. */
+    public static boolean takeOriginalOpen(Intent intent,Consumer<JSONObject> lookup,Consumer<String> unavailable){
+        if(intent==null||!OPEN.equals(intent.getAction()))return false;
+        String task=intent.getStringExtra("taskId"),run=intent.getStringExtra(RUN);int epoch=intent.getIntExtra(EPOCH,-1);
+        Uri source=intent.getData();intent.setAction(null);intent.removeExtra("taskId");intent.removeExtra(RUN);intent.removeExtra(EPOCH);
+        try{
+            if(task==null||run==null||task.isBlank()||run.isBlank()||task.length()>100||run.length()>100||epoch<1)throw new IllegalArgumentException();
+            Uri original=new Uri.Builder().scheme("pocketengine-phone").authority("owner").appendPath(OPEN).appendPath(task).appendPath(run).appendPath(Integer.toString(epoch)).build();
+            if(!original.equals(source))throw new SecurityException("通知来源已变化");
+            lookup.accept(new JSONObject().put("taskId",task).put("runId",run).put("epoch",epoch));
+        }catch(Exception changed){unavailable.accept("原手机通知身份无法核对，没有打开其他轮次");}
+        return true;
+    }
     public static boolean openRequestedTask(EngineApplication app,Intent intent,Consumer<String> focus) {
         if(intent==null||!OPEN.equals(intent.getAction()))return false;
         String id=intent.getStringExtra("taskId"),run=intent.getStringExtra(RUN);int epoch=intent.getIntExtra(EPOCH,-1);

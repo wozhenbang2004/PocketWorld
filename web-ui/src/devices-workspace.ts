@@ -37,7 +37,9 @@ export function isReceivedPhoneTask(task: DeviceData, snapshot: DeviceData | nul
   const origin = task.raw?.origin;
   return object(origin) && origin.kind === 'paired_device' && identity(origin.callerDeviceId) && origin.callerDeviceId === origin.originDeviceId
     && identity(origin.targetDeviceId) && origin.targetDeviceId === snapshot?.local?.deviceId && identity(origin.remoteOperationId) && identity(origin.grantId)
-    && ['main_screen','background'].includes(task.raw.executionMode);
+    && (['main_screen','background'].includes(task.raw.executionMode) || task.raw.executionMode === 'capabilities'
+      && origin.textReturnContract === 'pocketworld.direct-text.owner-reviewed-result.v1' && origin.rootTaskId === origin.remoteOperationId
+      && origin.parentTaskId === origin.remoteOperationId && origin.remoteLocalTaskId === origin.remoteOperationId);
 }
 /** A local return bookmark, never a review, model selection, or execution authority. */
 export type ReceivedPhoneGoalReturn = { taskId: string; instanceId: string; sourceId: string; targetId: string; parentTaskId: string; operationId: string; grantId: string; epoch: number; peerDetail: boolean; leftAt: number };
@@ -100,7 +102,7 @@ export function waitingPhoneGoalPage(value: unknown, local: DeviceData) {
     || typeof value.hasMore !== 'boolean' || typeof value.canReadNewer !== 'boolean' || !Array.isArray(value.rows) || value.rows.length > 24
     || !value.rows.every((r: unknown) => object(r) && identity(r.taskId) && identity(r.operationId) && typeof r.sourceDeviceId === 'string'
       && /^pw1_[a-f0-9]{64}$/.test(r.sourceDeviceId) && (value.resultOnly === true
-        ? r.waitingState === 'result_review' && positiveInteger(r.reviewRecordedAt) : ['not_started','interrupted_before_start'].includes(r.waitingState)) && identity(r.goal) && positiveInteger(r.createdAt) && ['main_screen','background'].includes(r.screenMode))
+        ? r.waitingState === 'result_review' && positiveInteger(r.reviewRecordedAt) : ['not_started','interrupted_before_start'].includes(r.waitingState)) && identity(r.goal) && positiveInteger(r.createdAt) && (['main_screen','background'].includes(r.screenMode) || r.textOnly === true && r.screenMode === 'capabilities'))
     || new Set(value.rows.map((row: DeviceData) => JSON.stringify([row.taskId,row.operationId]))).size !== value.rows.length) throw new Error('这批待接手记录无法与本机原身份核对。');
   return value;
 }
@@ -116,7 +118,7 @@ export function devicePhoneGoalArchive(value: unknown, peer: DeviceData, local: 
   if (!object(value) || value.kind !== 'phoneGoalArchive' || (value.side ?? 'sent') !== side || !samePhoneGoalArchive(value, peer, local) || value.readOnly !== true || !identity(value.archiveHandle)
     || !Array.isArray(value.rows) || value.rows.length > 24 || typeof value.hasMore !== 'boolean' || typeof value.canReadNewer !== 'boolean'
     || !value.rows.every((row: unknown) => object(row) && identity(row.taskId) && identity(row.operationId) && typeof row.goal === 'string' && !!row.goal
-      && ['main_screen', 'background'].includes(row.screenMode) && positiveInteger(row.createdAt))
+      && (['main_screen', 'background'].includes(row.screenMode) || side === 'received' && row.textOnly === true && row.screenMode === 'capabilities') && positiveInteger(row.createdAt))
     || new Set(value.rows.map((row: DeviceData) => JSON.stringify([row.taskId, row.operationId]))).size !== value.rows.length) throw new Error('原手机、本机派发或目录已变化，请重新读取。');
   return value;
 }

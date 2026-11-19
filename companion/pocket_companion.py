@@ -72,6 +72,21 @@ def original_job_cancellation_capability():
             "identityCheck": "locked_job_operation_before_mutation", "scope": "job_manager_cli_jobs_only"}
 
 
+def native_worker_presence(item, worker):
+    """Current supervisor's file metadata, not auth/protocol execution, and never an SSH probe."""
+    if item.get("kind") == "ssh" or worker == gemini_acp_profile.WORKER:
+        return None
+    if worker == "command":
+        commands = item.get("commands", {})
+        if not isinstance(commands, dict) or any(not isinstance(v, str) for v in commands.values()):
+            return False
+        paths = [v if os.path.isabs(v) else shutil.which(v) for v in commands.values()]
+        return any(p and Path(p).is_file() and (Path(p).suffix.lower() == ".exe" if os.name == "nt" else os.access(p, os.X_OK)) for p in paths)
+    executable = WORKERS.get(worker)
+    resolved = shutil.which(executable) if executable else None
+    return bool(resolved) and (os.name != "nt" or Path(resolved).suffix.lower() == ".exe")
+
+
 def worker_capabilities(worker):
     if harness_registry.external(worker):
         return {**harness_registry.capabilities(worker), "originalJobEvents": job_events.capability(worker)}
@@ -325,19 +340,12 @@ class JobManager:
                 if harness_registry.external(worker):
                     workers.append(harness_registry.descriptor(item, worker, self.auth_generation_salt))
                     continue
-                executable = WORKERS.get(worker)
-                if item.get("kind") == "ssh" or worker == gemini_acp_profile.WORKER:
-                    available = None
-                elif worker == "command":
-                    installed = [value if os.path.isabs(value) else shutil.which(value) for value in item.get("commands", {}).values()]
-                    available = any(value and Path(value).is_file() and (os.name != "nt" or Path(value).suffix.lower() == ".exe") for value in installed)
-                else:
-                    resolved = shutil.which(executable)
-                    available = bool(resolved) and (os.name != "nt" or Path(resolved).suffix.lower() == ".exe")
+                available = native_worker_presence(item, worker)
                 production = harness_registry.production_available(item) and harness_registry.production_worker(worker)
                 workers.append({"id": worker, "label": {"codex_app_server": "Codex", "claude": "Claude Code", "pi": "Pi", "gemini_acp": "Gemini fixed profile"}.get(worker, worker), "adapter": "native", "available": available, "availability": "requires_fixed_profile_probe" if worker == gemini_acp_profile.WORKER else "unverified_remote" if available is None else "installed" if available else "missing", "autonomousTools": worker == "kimi", "capabilities": {**worker_capabilities(worker), "assignmentWorkspace": production, "projectProduction": production and assignment_projects.capability(item).get("supported", False)}, **worker_executable_identity.inspect(item, worker)})
             location = self.host_workspace(item)
             entries.append({"id": eid, "label": item.get("label", eid), "kind": item.get("kind", "local"), "workers": workers,
+                            **({"ownerWorkspaceCheck": "pocketworld.owner-workspace-check.v1"} if sys.platform.startswith("linux") and item.get("kind","local")=="local" else {}),
                             **({"hostWorkspace": location} if location else {}),
                             "writeAllowed": bool(item.get("writeAllowed", False)), "sandboxed": False,
                             "bindingHash": self.environment_binding(eid, location=location), "workspace": item["root"],
@@ -2917,12 +2925,25 @@ def main(*, config_override=None, owner_phone_receipts=False, owner_phone_work=F
     parser.add_argument("--config", type=Path)
     parser.add_argument("--init", action="store_true")
     parser.add_argument("--workspace", default=".")
+    parser.add_argument("--check-workspace", action="store_true", help="Inspect existing Linux workspace configuration only; no service, token read or worker launch")
     parser.add_argument("--list-harnesses", action="store_true", help="List installed harness presets without starting or installing them")
     parser.add_argument("--enable-harness", help="Enable one installed harness in an owner environment")
     parser.add_argument("--environment", help="Original local environment ID for discovery or enablement")
     parser.add_argument("--harness-definition", type=Path, help="Owner JSON object containing command, args and optional env/label/authMethod")
     parser.add_argument("--allow-harness-write", action="store_true", help="Explicitly enable owner-managed writable external tools for this environment")
     args = parser.parse_args()
+    if args.check_workspace:
+        if config_override is not None or not args.config or args.init or args.list_harnesses or args.enable_harness or args.harness_definition or args.allow_harness_write or args.workspace != ".":
+            parser.error("--check-workspace only accepts an existing --config and optional --environment")
+        import owner_workspace_check
+        try:
+            report = owner_workspace_check.inspect(args.config.expanduser(), args.environment, WORKERS, native_worker_presence)
+        except owner_workspace_check.CheckError as invalid:
+            parser.error(str(invalid))  # fixed messages, never configuration or credential values
+        except (OSError, ValueError, TypeError, RecursionError):
+            parser.error("Could not inspect the original bounded regular JSON config; no service or worker was started")
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return
     if args.list_harnesses or args.enable_harness:
         import harness_cli
         if config_override is not None and args.enable_harness:

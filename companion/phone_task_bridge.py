@@ -260,6 +260,7 @@ class PhoneTaskRouter:
         value["dispatchAudience"] = {name: copy.deepcopy(envelope.get(name)) for name in
             ("originDeviceId", "callerDeviceId", "targetDeviceId", "instanceId", "grantId", "authorizationEpoch", "rootTaskId", "localTaskId", "resourceBinding")
             if envelope.get(name) is not None}
+        if wire.direct_text_return(envelope.json()): value["originalTextReturn"] = wire.TEXT_RETURN
         if original is not None:
             value["targetOperationId"] = original["operationId"]
         if envelope.method in CONTROL_METHODS:
@@ -454,12 +455,16 @@ class PhoneTaskRouter:
             wire.integer(params["toolCalls"], "toolCalls", 0, 400)
             wire.integer(params["modelCalls"], "modelCalls", 1, 1000)
             wire.integer(params["ttlMs"], "ttlMs", 1000, 86400000)
+            text_return = owner_goal_fence is not None and params["resourceBinding"] == {"screenMode":"capabilities"}
+            # A generic CLI or Web submission with identical goal/ID is not the
+            # reviewed native text contract, even when all ordinary fields match.
+            semantic = dict(params, originalTextReturn=wire.TEXT_RETURN) if text_return else params
             # Return the original receipt before any connectivity attempt on a duplicate.
             with self.manager.lock:
                 prior = self.manager.ledger.execute("SELECT 1 FROM operations WHERE operation_id=?", (operation_id,)).fetchone()
             if prior:
                 fingerprint, previous = self._row(operation_id)
-                if fingerprint != hashlib.sha256(wire.canonical_bytes(params)).hexdigest():
+                if fingerprint != hashlib.sha256(wire.canonical_bytes(semantic)).hexdigest():
                     raise PhoneTaskError("Original operation parameters changed", 409)
                 return self._public(previous)
             connection, peer, ticket = self._route(params["peerDeviceId"], params["grantId"])
@@ -476,10 +481,13 @@ class PhoneTaskRouter:
                          executorEpoch=1, capabilityVersion=params["capabilityVersion"], deadline=min(now + params["ttlMs"], ticket.deadline),
                          budget={"allocationId": wire.allocation_id(operation_id, peer.device_id, params["resourceBinding"], "goal", operation_id), "toolCalls": params["toolCalls"], "modelCalls": params["modelCalls"]},
                          arguments={"goal": params["goal"], "executionMode": "agent", "modelSource": {"kind": "local"}})
+            if text_return:
+                value["arguments"]["textReturnContract"] = wire.TEXT_RETURN
+                value["maxDelegationDepth"] = 1  # Only A to B; no third hop for this text.
             value["argumentsDigest"] = wire.arguments_digest(value)
             envelope = wire.parse_request(wire.canonical_bytes(value))
             if owner_goal_fence is not None: owner_goal_fence(connection, peer, ticket)
-            return await self._mutation(operation_id, params, connection, peer, ticket, envelope)
+            return await self._mutation(operation_id, semantic, connection, peer, ticket, envelope)
         if action in {"status", "wait", "events", "cancel"}:
             optional = {"timeoutMs"} if action == "wait" else {"cursor", "limit"} if action == "events" else {"cancelOperationId"} if action == "cancel" else set()
             wire._keys(params, {"operationId", "peerDeviceId"}, optional)

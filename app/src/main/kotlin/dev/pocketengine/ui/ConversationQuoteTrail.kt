@@ -40,6 +40,19 @@ internal class ConversationQuoteTrail private constructor(private val originals:
         return ConversationQuoteTrail(kept)
     }
 
+    /** For an explicit new draft review only. Both sides must still be in the retained native page.
+     * Never reconstruct the source from a Web locator, message text, or a past task's grant. */
+    fun registeredLocator(conversation: String, request: String, requestRevision: Long,
+                          target: String, revision: Long, offset: Int, chars: Int): JSONObject? {
+        val input = originals[request] ?: return null
+        val source = originals[target] ?: return null
+        if (input.revision != requestRevision || source.revision != revision || input.generation != source.generation ||
+            chars !in 1..4000 || offset < 0 || offset > source.length - chars ||
+            input.selected.none { it.id == target && it.revision == revision && it.digest == source.digest && it.offset == offset && it.chars == chars }) return null
+        return JSONObject().put("kind", "owner_native_original").put("generation", source.generation).put("conversationId", conversation)
+            .put("recordId", target).put("recordVersion", revision).put("fingerprint", source.digest)
+    }
+
     fun ranges(messageId: String?): JSONArray? {
         val input = messageId?.let(originals::get) ?: return null
         if (input.selected.isEmpty()) return null

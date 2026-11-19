@@ -45,6 +45,14 @@ def choices_for(description, peer, caller, now):
         if now < history.get("expiresAt", 0): readable.update(history.get("methods", []))
         if not {"operation.get", "task.get"} <= readable: continue
         for binding in grant["resources"]:
+            if binding == {"screenMode":"capabilities"}:
+                # This is the original context_goal grant, not a project/checkout
+                # and not an implicit screen grant. An unmarked old phone cannot receive it here.
+                if (profile.get("directTextReturnContract") == wire.TEXT_RETURN and "capabilities" in profile.get("supportedExecutionModes", [])
+                        and "task.get" in grant["capabilities"] and not grant.get("allowDelegation") and not grant.get("forwardingScope")
+                        and set(grant["toolNames"]) <= {"phone_request_user","phone_finish"}):
+                    scopes.append((grant, binding, review))
+                continue
             if (binding.get("screenMode") not in ("main_screen","background") or binding["screenMode"] not in profile.get("supportedExecutionModes", [])
                     or type(binding.get("androidUserId")) is not int or len(binding.get("packageNames", [])) != 1
                     or binding.get("allowWholeDisplayInput") or binding.get("allowWholeDisplayCapture")): continue
@@ -53,7 +61,7 @@ def choices_for(description, peer, caller, now):
             # tool calls are possible from this entry; even app/file/screen reads
             # need their separate existing workflow. Only the typed text travels.
             scopes.append((grant, binding, review))
-    return scopes
+    return sorted(scopes,key=lambda item:item[1].get("screenMode")!="capabilities")
 
 
 class PhoneWorkEntry:
@@ -114,12 +122,14 @@ class PhoneWorkEntry:
                    "\n只向这一个已配对身份读取当前能力和原签发授权。不发送目标、不读取屏幕或项目。", [("check","核对这台设备")], current) != "check": return
         scopes, _ = self.scopes(peer)
         if not scopes:
-            self.receipts._dialog("没有可用的手机目标范围", "对端未报告当前可接收的单应用原授权。请在手机核对接收开关、原模型和应用范围。不会切换设备或申请权限。", [], current); return
+            self.receipts._dialog("没有可用的手机目标范围", "对端未报告可用于本次文字工作的原授权。可在手机原配对范围中核对「处理目标，不访问本机项目」；旧版不会用普通任务替代。", [], current); return
         def scope_label(scope):
             grant, binding, review = scope
+            if binding["screenMode"]=="capabilities":
+                return "仅文字 · 不关联应用或屏幕\n" + ("机主现场审阅" if review else "可接收") + " · 授权 …" + grant["grantId"][-8:]
             return ("后台屏" if binding["screenMode"] == "background" else "主屏") + " · " + binding["packageNames"][0] + \
                    "\nAndroid 用户 " + str(binding["androidUserId"]) + (" · 机主现场审阅" if review else " · 可接收") + " · 授权 …" + grant["grantId"][-8:]
-        index = self.pick("选择这次工作的原手机范围", "只处理你写下的文字。本入口不读屏、不操作应用、不共享项目。", list(map(scope_label, scopes)), current)
+        index = self.pick("用哪项原授权处理文字？", "优先使用仅文字范围，无需开屏幕权限；不会读取或操作应用、共享项目。", list(map(scope_label, scopes)), current)
         if index is None: return
         chosen = scopes[index]; grant, binding, review = chosen
         text = ask_goal(current)

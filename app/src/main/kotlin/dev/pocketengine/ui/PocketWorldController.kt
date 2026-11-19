@@ -60,6 +60,41 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         private set
     internal fun showRemoteAttention(locator: JSONObject) { remoteAttentionNotice=JSONObject(locator.toString()); if(locator.optJSONObject("original")?.optString("fingerprint")!=locator.optJSONObject("current")?.optString("fingerprint"))state=state.copy(notice="原通知对应旧状态；已打开原任务，问题和审批将重新查询，不响应旧请求。"); focusTask(locator.getString("taskId")) }
     internal fun consumeRemoteAttention(taskId: String) { if(remoteAttentionNotice?.optString("taskId")==taskId)remoteAttentionNotice=null }
+    private var phoneNoticeRead=0L
+    internal var originalPhoneNotification by mutableStateOf<JSONObject?>(null)
+        private set
+    internal fun readPhoneNotification(locator:JSONObject, refreshToken:String?=null){
+        if(closed)return
+        val origin=JSONObject(locator.toString());val serial=++phoneNoticeRead;val navigation=state.requestedTaskRevision
+        if(refreshToken==null)originalPhoneNotification=null
+        else if(originalPhoneNotification?.optString("noticeHandle")!=refreshToken||!webPrivateOwnerVisible())return
+        val token=refreshToken?:java.util.UUID.randomUUID().toString()
+        io.execute{
+            val result=runCatching{app.tasks.originalPhoneNotification(origin.getString("taskId"),origin.getString("runId"),origin.getInt("epoch"))}
+            main.post{
+                if(closed||serial!=phoneNoticeRead||navigation!=state.requestedTaskRevision)return@post
+                val row=result.getOrNull()
+                if(row==null){
+                    if(refreshToken!=null && originalPhoneNotification?.optString("noticeHandle")==refreshToken)originalPhoneNotification=null
+                    showTaskNoticeWarning("原手机通知的执行记录已不可核对，没有打开后继任务")
+                }else if(row.optBoolean("conventional")){
+                    if(refreshToken==null)focusTask(row.getString("taskId"))
+                }else if(privateWorkspaceView() && (refreshToken==null||webPrivateOwnerVisible() && originalPhoneNotification?.optString("noticeHandle")==refreshToken)){
+                    originalPhoneNotification=row.put("noticeHandle",token)
+                    if(refreshToken==null)state=state.copy(requestedTaskId=null)
+                }else {originalPhoneNotification=null;showTaskNoticeWarning("请回到私人工作区后再打开原手机通知")}
+            }
+        }
+    }
+    internal fun refreshPhoneNotification(token:String){
+        val source=originalPhoneNotification
+        require(webPrivateOwnerVisible() && source!=null && source.optString("noticeHandle")==token){"原手机通知窗口已变化"}
+        if(source.optBoolean("checking"))return
+        originalPhoneNotification=JSONObject(source.toString()).put("checking",true);readPhoneNotification(source,token)
+    }
+    internal fun dismissPhoneNotification(token:String){
+        if(originalPhoneNotification?.optString("noticeHandle")==token){++phoneNoticeRead;originalPhoneNotification=null}
+    }
     var originalTaskNotice by mutableStateOf<JSONObject?>(null)
         private set
     internal fun showOriginalTaskNotice(original: JSONObject) {
@@ -3495,6 +3530,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         getTask(id)
         // Web-owned routes load the task without emitting another external navigation request.
         if (requestNavigation) {
+            ++phoneNoticeRead;originalPhoneNotification=null
             state = state.copy(requestedTaskId = id, requestedTaskRevision = state.requestedTaskRevision + 1)
         }
     }

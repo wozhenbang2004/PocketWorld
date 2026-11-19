@@ -245,12 +245,13 @@ def _tree_id(body, algo):
     return oid.decode("ascii")
 
 
-def capture(context, settings_digest, environment_id, *, layout_for=None, content=False, checkpoint=lambda: None, on_count=lambda *_: None):
+def capture(context, settings_digest, environment_id, *, layout_for=None, content=False, checkpoint=lambda: None, on_count=lambda *_: None, material=None):
     facts = {"format": PROFILE, "environmentId": environment_id, "sourceVerified": False, "projectProduction": False,
              "scope": "committed_head_and_root_tree_only", "treeRecursivelyVerified": False,
              "workingTreeChecked": False, "projectCopied": False, "capturedAt": int(time.time()*1000)}
     try:
         checkpoint()
+        if material is not None and not content: _fail("original_mapping_changed")
         if content and (not isinstance(layout_for,dict) or layout_for.get("committedNameReview",{}).get("complete") is not True):
             _fail("original_mapping_changed")
         root = dict(registered(context, settings_digest)).get(environment_id)
@@ -285,7 +286,8 @@ def capture(context, settings_digest, environment_id, *, layout_for=None, conten
             if layout_for is not None:
                 try:
                     path_review = review(tree,tree_body,packs.width,
-                        lambda oid: _object_body(pins,packs,oid,b"tree",1024*1024)[0],pins.api,checkpoint,collect=selected)
+                        lambda oid: _object_body(pins,packs,oid,b"tree",1024*1024)[0],pins.api,checkpoint,collect=selected,
+                        directories=None if material is None else material.directories)
                 except (Incomplete,TreeIssue,PackUnavailable) as error:
                     path_review = {"complete":False,"reason":error.reason,"example":getattr(error,"example",None)}
                 except (PlatformError,OSError,ValueError,TypeError):
@@ -297,7 +299,7 @@ def capture(context, settings_digest, environment_id, *, layout_for=None, conten
                 # Only now are regular blobs in the exact reviewed tree read.
                 try:
                     content_review = measure(selected,path_review["mappingDigest"],packs.width,
-                        lambda oid,limit: _object_body(pins,packs,oid,b"blob",limit)[0],checkpoint,on_count)
+                        lambda oid,limit: _object_body(pins,packs,oid,b"blob",limit)[0],checkpoint,on_count,material)
                 except (ContentProblem,Incomplete,PackUnavailable) as error:
                     content_review = {"complete":False,"reason":error.reason}
                 except (PlatformError,OSError,ValueError,TypeError):

@@ -29,7 +29,7 @@ public final class DeviceCapabilityRegistry {
                 .put("runtimeIds",new JSONArray(new String[]{"termux","managed_process_v1"})).put("concreteEffectsRequireExactOriginalApproval",true);
         JSONObject routes=new JSONObject().put("implemented",true).put("nativeRoutesReady",current.optBoolean("nativeDeviceRoutesReady")).put("toolNames",new JSONArray(DEVICES)).put("ordinaryPairingDoesNotDelegate",true);
         capabilities.put(new JSONObject().put("id","agent.goal").put("version","1.0").put("implemented",true).put("installed",true).put("authorized",enabled&&configured).put("ready",ready).put("busy",busy).put("blocked",!ready&&!canReview).put("reason",reason)
-                .put("zeroToolPhoneContract",DeviceExecutionAdmission.ZERO_TOOL_PHONE_CONTRACT)
+                .put("zeroToolPhoneContract",DeviceExecutionAdmission.ZERO_TOOL_PHONE_CONTRACT).put("directTextReturnContract",DeviceProtocol.TEXT_RETURN)
                 .put("admissionState",ready?"ready":canReview?"owner_review_available":"blocked").put("canSubmitForLocalReview",canReview).put("requiresLocalModelReview",!configured).put("defaultModelIsNotPolicy",true)
                 .put("requires",new JSONArray(new String[]{"B_native_owner_selected_model_policy","current_exact_PairGrant_revision","finite_original_budget","visible_stop_control"}))
                 .put("modelLocation","owner_selected_authorized_api").put("localInference",false).put("supportedExecutionModes",new JSONArray().put("capabilities").put("main_screen").put("background"))

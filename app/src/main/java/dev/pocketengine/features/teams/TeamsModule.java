@@ -99,6 +99,10 @@ public final class TeamsModule implements EngineModule {
     public TaskStoreTeamWriteHost.DraftScopePage newDraftScopePage(String runId)throws Exception{return requireWriteHost().newDraftScopePage(coordinator,runId);}
     public TeamProjectRoundHost.Page newProjectRoundPage(TeamProjectRoundHost host,String run)throws Exception{return host.open(coordinator,run);}
     public TeamProjectRoundHost.Page newFailedProjectRoundPage(TeamProjectRoundHost host,String run,String item)throws Exception{return host.open(coordinator,run,item);}
+    public TeamOwnerFileReading readOwnerFrozenFiles(String runId,dev.pocketengine.core.RunControl reader)throws Exception{
+        reader.check();TeamWorkReview.Prepared source=requireWriteHost().review(runId,reader);reader.check();
+        return new TeamOwnerFileReading(runId,source.snapshot());
+    }
     public TaskStoreTeamWriteHost.WorkPlanPage newWorkPlanPage(String runId)throws Exception{return requireWriteHost().newWorkPlanPage(coordinator,runId,context::model);}
     public TeamWriteScope captureWriteScope(String parent,String parentRun,String project,JSONObject reviewedDefinition)throws Exception{return requireWriteHost().captureScope(parent,parentRun,project,reviewedDefinition);}
     public TaskStoreTeamWriteHost.RemoteRevisionPage newRemoteRevisionPage(String runId,String assignmentId)throws Exception{return requireWriteHost().newRemoteRevisionPage(coordinator,runId,assignmentId);}
