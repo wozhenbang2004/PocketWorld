@@ -730,7 +730,7 @@ export default function App(){
   if(workControlEntered.current.has(key)||workControls[key]?.unknown)return;
   workControlEntered.current.add(key);
   setWorkControls(old=>({...old,[key]:{pending:true,unknown:false,message:''}}));
-  void act('ownerWork.control',{...identity,action},task.id).then(receipt=>{
+  void bridge.command('ownerWork.control',{...identity,action}).then(receipt=>{
    const message=receipt?.status==='rejected' ? receipt.message||'这次操作未开始，请处理后再试。'
      : receipt?.message||(action==='cancel'?'已请求停止这件事，等待状态更新。':'已提交继续原工作。');
    setWorkControls(old=>({...old,[key]:{pending:false,unknown:receipt?.status==='unknown',message}}));
@@ -741,7 +741,7 @@ export default function App(){
  const openTaskResultFile=(id:string,file:TaskResultFile,target:HTMLButtonElement)=>{
   const open=()=>{
    const native=bridge.getState();
-   if(document.hidden||openedTaskId.current!==id||native.view?.taskId!==id||native.state.attachmentWorkspace?.open||taskFileReturnFocus.current)return;
+   if(document.hidden||openedTaskId.current!==id||obj(native.view).taskId!==id||native.state.attachmentWorkspace?.open||taskFileReturnFocus.current)return;
    const origin={taskId:id,target};
    taskFileReturnFocus.current=origin;
    void act('attachmentWorkspace.open',{taskId:id,fileId:file.id,sha256:file.sha256,openOriginal:true},id).catch(()=>{
@@ -1112,7 +1112,7 @@ export default function App(){
   const ordinaryResume=!project&&!review?.ownerQuestion&&!approved.length&&!unresolved.length&&actionNames.includes('tasks.resume')&&actionNames.every(action=>['tasks.resume','tasks.scope','tasks.plan.enter','tasks.deleteScreenshot'].includes(action));
   const resumeFeedback=<Accordion variant="divided" className="pw-compact-disclosures" expandedKeys={reviewFeedbackOpen?['resume-feedback']:[]} onExpandedChange={keys=>setReviewFeedbackOpen(keys.has('resume-feedback'))}><AccordionItem id="resume-feedback" title="补充说明（可选）" description={reviewNote?'已填写':undefined}><TextAreaField label="本次补充" value={reviewNote} onChange={setReviewNote} placeholder="需要调整的内容" isDisabled={protectedDisabled}/></AccordionItem></Accordion>;
   const decisionFirst=(!!review?.ownerQuestion||actionNames.includes('tasks.approve')&&approved.length>0)&&!actionNames.includes('tasks.confirm')&&!actionNames.includes('tasks.resolve');
-  const taskFiles=task.raw?.actorId==='owner'&&task.raw?.spaceId==='private'&&task.raw?.contextAvailable!==false&&task.raw?.taskProjection!=='source_unavailable'&&task.raw?.kind!=='inference'&&can('attachmentWorkspace.open')
+  const taskFiles=obj(snapshot?.view).taskId===task.id&&task.raw?.actorId==='owner'&&task.raw?.spaceId==='private'&&task.raw?.contextAvailable!==false&&task.raw?.taskProjection!=='source_unavailable'&&task.raw?.kind!=='inference'&&can('attachmentWorkspace.open')
    ? {taskId:task.id,supported:can('tasks.resultFiles'),onOpen:(file:TaskResultFile,target:HTMLButtonElement)=>openTaskResultFile(task.id,file,target),
       onBrowse:()=>run('attachmentWorkspace.open',{taskId:task.id})}
    : undefined;
@@ -1482,7 +1482,7 @@ export default function App(){
   <ConversationHistoryWindow page={route==='chat'&&!taskOpen?state.conversationReader||null:null} submitting={!!state.chatSubmitting} can={can} act={act} registerBack={registerHistoryWindowBack} onCopy={copyWithLocalFeedback} onOpenTask={(id,entry,origin)=>openTask(id,entry,false,origin)}/>
   <ConversationQueuedInputs page={state.queuedInputsPage||null} can={can} act={act} registerBack={registerQueuedInputsBack}/>
   {searchOriginal&&<WorkSearchOriginalReader target={searchOriginal} identity={`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}`} onClose={closeSearchOriginal} onConversation={()=>{const target=searchOriginal;void openSearchResult({...target,ownerLocator:undefined}).catch(error=>setLocalError(error instanceof Error?error.message:String(error)))}} onCopy={copyWithLocalFeedback}/>}
-  <AttachmentWorkspace state={state} registerBack={registerAttachmentBack} onReturnFocus={restoreTaskFileFocus} onReturnToSearch={searchReturn?showWorkSearch:undefined} onAskButler={can('composer.object.add')?askButlerAbout:undefined}/>
+  <AttachmentWorkspace state={state} registerBack={registerAttachmentBack} onReturnFocus={restoreTaskFileFocus} openTaskId={taskOpen?taskId||undefined:undefined} onReturnToSearch={searchReturn?showWorkSearch:undefined} onAskButler={can('composer.object.add')?askButlerAbout:undefined}/>
   {organizationTarget&&<ConversationOrganization key={organizationTarget} conversationId={organizationTarget} onClose={()=>setOrganizationTarget(null)}/>}
   <Drawer.Root open={taskOpen} onOpenChange={open=>{if(!open){if(taskMenuOpen){setTaskMenuOpen(false);return}if(!deviceScopeBack.current?.()&&!capabilityBack.current?.()&&!livePreviewBack.current?.()&&!taskTransientBack.current?.())closeTask()}else setTaskOpen(true)}} direction="right" handleOnly shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay pw-work-object-overlay"/><Drawer.Content className="pw-drawer pw-task-drawer pw-work-object-surface pw-task-manga" data-task-layer={taskLayer} aria-describedby="pw-task-description" onCloseAutoFocus={event=>{
    const origin=projectTaskReturn.current;projectTaskReturn.current=null;

@@ -1,14 +1,5 @@
 /* MangaFlow's content/control separation applied to the existing device journey.
  * Live pixels stay unfiltered; material belongs to navigation and human controls. */
-.pw-devices-reading .pw-device-launcher {
-  padding: 20px;
-  border: 0;
-  border-radius: 24px;
-  background: var(--pw-surface);
-  box-shadow: var(--pw-shadow-surface);
-}
-.pw-devices-reading .pw-device-launcher .pw-form-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
-.pw-devices-reading .pw-device-launcher .pw-form-actions > button { flex: 1 1 140px; min-height: 48px; }
 .pw-devices-reading .pw-device-section-heading h3 { font-size: 15px; font-weight: 600; letter-spacing: -.015em; }
 .pw-devices-reading .pw-device-section-heading p { max-width: 42em; font-size: 13px; line-height: 1.65; color: var(--pw-copy); }
 .pw-devices-reading .pw-device-section + .pw-device-section { margin-top: 28px; }

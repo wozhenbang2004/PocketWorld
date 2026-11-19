@@ -29,7 +29,10 @@ export function TaskResultFiles({ taskId, active, supported, readIdentity, onOpe
     const read = () => {
       const request = ++sequence;
       if (document.hidden) return;
-      const stillOpen = () => alive && sequence === request && !document.hidden && bridge.getDocumentEpoch() === epoch && bridge.getState().view?.taskId === taskId;
+      const stillOpen = () => {
+        const view = bridge.getState().view as { taskId?: string } | undefined;
+        return alive && sequence === request && !document.hidden && bridge.getDocumentEpoch() === epoch && view?.taskId === taskId;
+      };
       void bridge.command('tasks.resultFiles', { taskId }).then(value => {
         if (!stillOpen()) return;
         if (value?.taskId !== taskId || !Array.isArray(value.files) || value.files.length > 8 || typeof value.readLimited !== 'boolean') {

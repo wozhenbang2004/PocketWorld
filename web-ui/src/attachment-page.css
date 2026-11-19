@@ -10,6 +10,10 @@
 .pw-file-page-header > div { display: grid; gap: 3px; min-width: 0; }
 .pw-file-page-header h2 { margin: 0; font: 550 18px/26px var(--pw-font); overflow-wrap: anywhere; }
 .pw-file-page-header p { margin: 0; color: var(--pw-copy); font: 400 12px/20px var(--pw-font); }
+.pw-file-page[data-file-view="original"] .pw-file-page-header > div { flex: 1 1 120px; }
+.pw-file-page[data-file-view="original"] .pw-file-page-header > button { flex: none; white-space: nowrap; }
+.pw-file-page .pw-original-text { min-width: 0; overflow-wrap: anywhere; }
+.pw-file-page .pw-original-text > .pw-action-row:empty { display: none; }
 .pw-drawer.pw-file-workspace.pw-file-page .pw-file-page-scroll { width: 100%; padding: 16px max(20px, calc((100vw - 960px) / 2)) max(28px, env(safe-area-inset-bottom)); overscroll-behavior: contain; scroll-padding-block: 20px; }
 .pw-file-page .pw-file-page-scroll > * { width: 100%; max-width: 960px; margin-inline: auto; }
 .pw-file-page .pw-file-page-scroll > .pw-document-editor { max-width: 960px; }

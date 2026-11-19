@@ -7,6 +7,7 @@ import { IconAdd, IconArrowLeft, IconChevronRight, IconMonitor, IconPhone, IconR
 import { DesktopViewer } from './DesktopViewer';
 import { DeviceTaskPreparation } from './DeviceTaskPreparation';
 import { PhoneControlPreparation } from './PhoneControlPreparation';
+import { WorkspaceSectionHeading } from './WorkspaceSectionHeading';
 import { desktopScopes } from './desktop-viewer';
 import { useSurfaceEnter } from './library/surface-motion';
 import { MotionFeedback, WorkingStatus, useCollectionMotion } from './library/journey-motion';
@@ -206,9 +207,8 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
         <WorkingStatus active={busy && !form}>正在读取原设备回执…</WorkingStatus>
         {!snapshot && !busy && <div className="pw-device-empty"><h3>尚未读取设备状态</h3><p>读取后查看已配对设备与连接状态。</p><Button variant="secondary" onClick={refresh}>读取设备状态</Button></div>}
         {snapshot && !peerId && <>
-          {supported('deviceTaskScope.prepare') && <section className="pw-device-section pw-device-launcher" aria-label="新建设备工作"><header className="pw-device-section-heading"><div><h3>选择操作方式</h3><p>让助手执行目标，或由你直接操作。电脑桌面可从下方设备打开。</p></div></header><div className="pw-form-actions"><Button disabled={busy} onClick={() => setForm('work')}>交给助手</Button>{supported('phoneControl.prepare') && <Button variant="secondary" disabled={busy} onClick={() => setForm('manual')}>自己控制手机</Button>}</div></section>}
           {pairings.length > 0 && <section className="pw-device-section" aria-label="等待核对的原配对">
-            <header className="pw-device-section-heading"><h3>配对待确认</h3><span>{pairings.length} 项</span></header>
+            <WorkspaceSectionHeading title="配对待确认" description={`${pairings.length} 项`} />
             <div className="pw-device-attention">
               {pairings.map(candidate => <article className="pw-device-pairing" key={candidate.candidateId || candidate.inviteId} data-motion-key={`pairing:${candidate.candidateId || candidate.inviteId}`}>
                 <div><h4>{candidate.label || '原设备配对'}</h4><p>{candidate.state === 'waiting_remote_confirmation' ? '等待另一台设备确认' : candidate.state === 'confirmed_for_mtls' ? '身份已确认，等待完成握手' : candidate.state === 'paired' ? '配对回执已产生，请核对当前信任' : '等待本机核对'}</p></div>
@@ -216,26 +216,26 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               </article>)}
             </div>
           </section>}
-          <section className="pw-device-section" aria-label="已配对设备">
-            <header className="pw-device-section-heading pw-device-directory-heading">
-              <h3>{peers.length ? `已配对设备 · ${peers.length} 台` : '配对设备'}</h3>
-              <div className="pw-device-heading-actions">
+          <section className="pw-device-section" aria-label="设备配对">
+            <WorkspaceSectionHeading title={peers.length ? '已配对设备' : '连接另一台设备'}
+              description={peers.length ? `${peers.length} 台` : '在同一局域网交换短期邀请，核对两端身份与授权范围。'}
+              actions={<>
                 <Button variant="ghost" iconOnly leadingIcon={IconRefresh} aria-label="刷新设备状态" title="刷新设备状态" disabled={busy} onClick={refresh} />
-                {peers.length > 0 && <Button leadingIcon={IconAdd} disabled={busy} onClick={() => { setForm('add'); setRaw(''); setAddress(''); }}>配对设备</Button>}
-              </div>
-            </header>
+                <Button variant={pairings.length || peers.length ? 'secondary' : 'primary'} leadingIcon={IconAdd} disabled={busy} onClick={() => { setForm('add'); setRaw(''); setAddress(''); }}>配对设备</Button>
+              </>} />
             {(peers.length > 5 || query) && <SearchField className="pw-device-search" fieldClassName="pw-collaboration-search" shape="rounded" aria-label="搜索已配对设备" placeholder="搜索名称或设备" value={query} onChange={setQuery} />}
             {peers.length ? <div className="pw-device-directory">{peerSections.filter(section => section.peers.length > 0).map(section => <section className="pw-collaboration-group" key={section.id} aria-label={section.title}><header className="pw-collaboration-group-heading"><h3>{section.title}</h3><span>{section.peers.length} 台</span></header><div className="pw-device-list">
               {section.peers.map(row => <Button key={row.deviceId} data-motion-key={`peer:${row.deviceId}`} variant="ghost" className="pw-device-row" leadingIcon={/android|ios|phone/i.test(row.platform || '') ? IconPhone : IconMonitor} trailingIcon={IconChevronRight} disabled={busy} aria-label={`查看 ${name(row)} 的设备与授权`} onClick={() => { rememberReadingPosition('list'); setPeerId(row.deviceId); setError(''); }}>
                 <span className="pw-device-row-copy"><span className="pw-device-row-name">{name(row)}</span><span className="pw-device-row-status">{deviceConnectionLabel(row)}</span><small>{row.platform || '已配对设备'} · {deviceTaskRows(state.tasks, snapshot, row.deviceId).length} 项关联任务</small></span>
               </Button>)}
-            </div></section>)}{query && !visiblePeers.length && <div className="pw-device-empty"><h3>没有匹配的设备</h3><p>换个名称搜索，或查看全部已配对设备。</p><Button variant="secondary" onClick={() => setQuery('')}>清除搜索</Button></div>}</div> : <div className="pw-device-empty">
-              <span className="pw-device-empty-icon" aria-hidden="true"><IconMonitor size={24} /><IconPhone size={19} /></span>
-              <h3>连接另一台设备</h3>
-              <p>同一局域网先交换短期邀请，核对两端身份与范围。需要时可在下方临时查找地址；同一 Wi-Fi 或服务广播不代表可信。</p>
-              <Button variant={pairings.length ? 'secondary' : 'primary'} disabled={busy} onClick={() => { setForm('add'); setRaw(''); setAddress(''); }}>{pairings.length ? '配对其他设备' : '配对设备'}</Button>
-            </div>}
+            </div></section>)}{query && !visiblePeers.length && <div className="pw-device-empty"><h3>没有匹配的设备</h3><p>换个名称搜索，或查看全部已配对设备。</p><Button variant="secondary" onClick={() => setQuery('')}>清除搜索</Button></div>}</div> : null}
           </section>
+          {supported('deviceTaskScope.prepare') && <section className="pw-device-section" aria-label="使用设备完成工作">
+            <WorkspaceSectionHeading title="在设备上工作" actions={<>
+              <Button variant="secondary" disabled={busy} onClick={() => setForm('work')}>交给助手</Button>
+              {supported('phoneControl.prepare') && <Button variant="ghost" disabled={busy} onClick={() => setForm('manual')}>自己控制手机</Button>}
+            </>} />
+          </section>}
           <section className="pw-device-section" aria-label="本机接收">
             <header className="pw-device-section-heading"><h3>本机接收</h3></header>
             <Accordion className="pw-device-disclosures pw-device-local-settings">

@@ -64,10 +64,6 @@
   width: 100%; max-width: none; margin: 0;
 }
 .pw-secondary-refactor .pw-settings-manga .pw-settings-categories { gap: 24px; }
-.pw-secondary-refactor .pw-settings-manga .pw-settings-category > h2 {
-  padding-inline: 4px; margin: 0 0 8px; font-size: 13px; line-height: 20px;
-  color: var(--pw-muted); font-weight: 500;
-}
 .pw-secondary-refactor .pw-settings-manga .pw-settings-category-content,
 .pw-secondary-refactor .pw-settings-manga > .pw-settings-results {
   padding: 8px 16px; border: 0; border-radius: 20px;

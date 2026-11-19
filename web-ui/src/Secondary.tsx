@@ -31,6 +31,7 @@ import {CommitmentsWorkspace} from './CommitmentsWorkspace';
 import {TokenBudgetsWorkspace} from './TokenBudgetsWorkspace';
 import {WorkProfilesWorkspace} from './WorkProfilesWorkspace';
 import {DevicesWorkspace} from './DevicesWorkspace';
+import { WorkspaceSectionHeading } from './WorkspaceSectionHeading';
 import {PluginsWorkspace} from './PluginsWorkspace';
 import { ModelPicker, PressButton } from './library';
 import { useSurfaceEnter } from './library/surface-motion';
@@ -1198,7 +1199,10 @@ function AccountsWorkspace({ state, data, supported, run, registerTransientBack,
   const loginActive = ['pending', 'exchanging'].includes(text(login.status));
   return <>
     <Card className="pw-accounts-workspace" ><div hidden={Boolean(catalog)} className="pw-accounts-overview">
-      <header className="pw-settings-object-heading"><div><h2>{onlyAccountId ? '账号与授权' : '你的账号'}</h2></div><div className="pw-form-actions">{!onlyAccountId && <PressButton compact disabled={locked || loginActive || needsAccountRead || !supported('accounts.beginLogin')} onClick={() => { setAccountFeedback(null); setAdding(true); }}>添加账号</PressButton>}{act('accounts.refresh', {}, '刷新状态')}</div></header>
+      <WorkspaceSectionHeading title={onlyAccountId ? '账号与授权' : '你的账号'} actions={<>
+        {!onlyAccountId && <PressButton compact disabled={locked || loginActive || needsAccountRead || !supported('accounts.beginLogin')} onClick={() => { setAccountFeedback(null); setAdding(true); }}>添加账号</PressButton>}
+        {act('accounts.refresh', {}, '刷新状态')}
+      </>} />
       {needsAccountRead && <p className="pw-field-hint">请先刷新账号状态，核对上次操作后再添加账号。</p>}
       {accountFeedback && !adding && <p className={accountFeedback.error ? 'pw-field-error' : 'pw-receipt-copy'} role={accountFeedback.error ? 'alert' : 'status'}>{accountFeedback.message}</p>}
       {state.modelRoute === 'account' && data.selectedModelRef && <div className="pw-selected-object"><h3>当前账号模型</h3><Facts items={[[ '模型', selected.modelId ], ['账号', accounts.find(row => row.id === selected.accountId)?.label ], ['可用状态', data.selectedModelUsable ? '当前引用可用' : '需要重新读取目录并选择' ]]} /></div>}
@@ -1638,7 +1642,7 @@ function DataManagement({ kind, ...props }: DataPageProps & { kind: 'archives' |
 }
 
 const SETTINGS_GROUPS = [
-  { id: 'models', title: 'AI 接入', entries: ['model-settings', 'web-search', 'proxy'] },
+  { id: 'models', title: '模型与服务', entries: ['model-settings', 'web-search', 'proxy'] },
   { id: 'preferences', title: '使用偏好', entries: ['setup', 'phone:appearance', 'phone:speech'] },
   { id: 'privacy', title: '权限与运行', entries: ['phone:execution', 'phone:observation', 'background'] },
   { id: 'data', title: '数据与应用', entries: ['usage', 'storage', 'archives', 'updates'] },
@@ -1877,7 +1881,7 @@ export default function Secondary({ teamRunFocus, onTeamRunFocusConsumed, onAskB
         {page === 'capabilities' ? <CapabilitiesWorkspace memory={capabilityMemory} onStartWork={onStartCapability} state={state} onNavigate={navigate} onPrepare={onOpenSetup} run={run} supported={supported} registerBack={registerTransientBack} registerBeforeLeave={registerPageLeave} /> : (page === 'settings' || page === 'connections') ? <div className="pw-settings-home pw-settings-preferences pw-settings-manga">
           <SearchField className="pw-secondary-search" data-input-size="medium" aria-label="搜索设置" placeholder="搜索设置" value={query} onChange={setQuery} shape="rounded" />
           {query.trim() ? <section className="pw-settings-results" aria-label="匹配的设置">{settingRows(filtered)}{filtered.length === 0 && <Empty>没有匹配的设置。</Empty>}</section>
-            : <div className="pw-settings-categories">{SETTINGS_GROUPS.map(group => <section key={group.id} className="pw-settings-category" data-settings-group={group.id} aria-label={group.title}><h2>{group.title}</h2><div className="pw-settings-category-content pw-material-panel">{settingRows(group.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}{group.id === 'privacy' && <div className="pw-settings-execution" aria-label="执行控制"><ExecutionControls state={state} supported={supported} run={run}/></div>}</div></section>)}</div>}
+            : <div className="pw-settings-categories">{SETTINGS_GROUPS.map(group => <section key={group.id} className="pw-settings-category" data-settings-group={group.id} aria-label={group.title}><WorkspaceSectionHeading title={group.title}/><div className="pw-settings-category-content pw-material-panel">{settingRows(group.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}{group.id === 'privacy' && <div className="pw-settings-execution" aria-label="执行控制"><ExecutionControls state={state} supported={supported} run={run}/></div>}</div></section>)}</div>}
         </div> : settingsGroup ? <section className="pw-settings-group-page">{settingRows(settingsGroup.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}</section>
           : page === 'web-search' ? <WebSearchSettings run={run} supported={supported} />
           : isAIPage ? <AICenter key={page + ':' + (navigationRevision || 0)} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} initialView={page === 'proxy' ? 'proxy' : 'main'} onHostSectionChange={setModelHostSection}

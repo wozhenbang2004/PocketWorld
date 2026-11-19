@@ -3,6 +3,7 @@ import { useSurfaceEnter } from './library/surface-motion';
 import { IconArrowLeft, IconChevronRight, IconClose, IconMicrophone, IconModel, IconMonitor, IconMoon, IconPhone, IconRefresh } from './icons';
 import { Accordion, AccordionItem, Button } from './forms-library';
 import { ProgressBar } from './library';
+import { WorkspaceSectionHeading } from './WorkspaceSectionHeading';
 import { backgroundConnection } from './forms-library/host-contracts';
 import { bridge, type PocketSnapshot } from './bridge';
 import { permissionLabel, readSetup, readSetupRuntime, readSetupRuntimeReview, runtimeCancelInput, runtimeLogText, runtimePreparing, runtimeProgressLabel,
@@ -309,7 +310,8 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
   };
   const permissionAction = (kind: SetupPermission, value: boolean | null, label = '前往设置') => <Button variant={value === true ? 'secondary' : 'primary'} disabled={locked || !can('setup.permission')} onClick={() => permission(kind)}>{value === true ? '查看设置' : label}</Button>;
   const modelSection = data && <section className="pw-setup-model" aria-label="模型连接准备">
-    <div className="pw-setup-model-summary"><IconModel size={24} aria-hidden="true"/><SetupRow title={data.model.label || '账号与服务'} status={setupModelLabel(data.model)}/></div>
+    <WorkspaceSectionHeading title={data.model.label || '连接模型服务'}
+      description={data.model.configured || data.model.availability === 'unavailable' ? setupModelLabel(data.model) : '登录 ChatGPT 账号，或添加兼容的 API 服务。'} />
     {data.model.message && <p className="pw-setup-copy" role={data.model.availability === 'unavailable' ? 'alert' : 'status'}>{data.model.message}</p>}
     <Button className="pw-setup-model-action" variant={data.model.configured ? 'secondary' : 'primary'} trailingIcon={IconChevronRight} disabled={locked || !!preparation.working} onClick={() => void navigate('connections')}>{data.model.availability === 'unavailable' ? '检查模型连接' : data.model.configured ? '管理模型连接' : '连接模型'}</Button>
     {(data.model.configured || data.model.details) && <Accordion className="pw-setup-model-check">
@@ -358,7 +360,7 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
             <Button variant="ghost" className="pw-setup-purpose-row" onClick={() => void openView('model')} disabled={locked || !!preparation.working}><IconModel size={24} aria-hidden="true"/><span><strong>对话与推理</strong><small>{setupModelLabel(data.model)}</small></span><IconChevronRight size={18} aria-hidden="true"/></Button>
             {setupCapabilities.map(id => { const copy = capabilityCopy[id], Icon = copy.icon; return <Button variant="ghost" key={id} className="pw-setup-purpose-row" onClick={() => void openView(id)} disabled={locked || !!preparation.working}><Icon size={24} aria-hidden="true"/><span><strong>{copy.title}</strong><small>{capabilitySummary(id)}</small></span><IconChevronRight size={18} aria-hidden="true"/></Button>; })}
           </div><p className="pw-setup-next-hint">准备只在你选择后进行。已开始的工具准备保留在原任务中，可随时查看或停止。</p></>}
-          {view === 'model' && <>{onboarding && <div className="pw-setup-intro"><h2>先连接一个模型</h2><p>登录已有账号，或添加模型服务，就能让管家接办事情。</p></div>}{modelSection}{onboarding && <div className="pw-setup-optional"><p>手机操作、开发与语音可以在需要时准备。</p><Button variant="ghost" trailingIcon={IconChevronRight} disabled={locked || !!preparation.working} onClick={() => void openView('overview')}>查看其他能力</Button></div>}</>}
+          {view === 'model' && <>{modelSection}{onboarding && <div className="pw-setup-optional"><Button variant="ghost" trailingIcon={IconChevronRight} disabled={locked || !!preparation.working} onClick={() => void openView('overview')}>查看手机、开发与语音能力</Button></div>}</>}
           {view !== 'overview' && view !== 'model' && <div className="pw-setup-purpose-detail"><p className="pw-setup-purpose-description">{capabilityCopy[view].description}</p>{capabilityBody(view)}</div>}
         </div>
         {(error || needsRead || notice) && <div className="pw-setup-feedback">{error && <p role="alert" className="pw-setup-error">{error}</p>}{needsRead && <Button variant="secondary" disabled={loading || !!working} onClick={() => void load()}>刷新并核对</Button>}{notice && <p role="status" className="pw-setup-notice">{notice}</p>}</div>}

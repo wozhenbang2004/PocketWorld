@@ -70,6 +70,7 @@ internal class PocketWebAttachments(
         }.getOrElse{JSONObject().put("available",false).put("error",it.message?:"原成果补充草稿尚未读取")} else null
         return JSONObject().put("open", true).put("ready", true).put("windowId", current.id).put("frameId", frameId)
             .put("taskId", state.taskId).put("group", state.group != null).put("team", state.team != null)
+            .put("fromWorkResult", state.fromWorkResult)
             .put("busy", state.busy).put("error", state.error).put("notice", state.notice)
             .put("snapshot", state.snapshot).put("file", state.file).put("document", state.document)
             .put("continuationDraft",continuationDraft)
