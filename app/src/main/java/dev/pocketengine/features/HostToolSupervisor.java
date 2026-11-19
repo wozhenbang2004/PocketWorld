@@ -154,7 +154,7 @@ public final class HostToolSupervisor implements CapabilityPort {
             add("skills","$skills_propose","skills_propose","根据1至20条已核对主人消息提出独立本地技能草稿，尚不保存、启用或执行。更新须先按原版本完整分页读取全部旧文件；主人另行展开前后文件审阅确认后才保存为停用包。来源、旧包或审阅变化须重新提案；未知保存只查询原回执。",true,dev.pocketengine.features.skills.NativeConversationSkillDraftHost.proposalProperties(),"action","manifest","resources","sources","reason");
         }
         if(host.hasConversationMemoryDrafts()&&(catalogueOnly||tasks.memoryProposalsEligible(this.taskId))){
-            add("memory","$memory_draft_sources","memory_draft_sources","列出原私人会话本run最终主请求已准备、当前仍可核对的完整主人消息身份；不返回正文，不证明模型已消费或完整会话。仅这些sourceId/revision可用于多轮记忆提案。",false,new JSONObject());
+            add("memory","$memory_draft_sources","memory_draft_sources","列出本轮主请求已准备、且允许用于记忆提案的完整主人消息身份；不返回正文，不证明模型已消费或完整会话。仅这些sourceId/revision可用于多轮记忆提案。",false,new JSONObject());
             add("memory","$memory_propose","memory_propose","根据1至20条已核对主人消息提出记忆新增、纠正或遗忘草稿。新增只建立待审候选；纠正与遗忘须指明确切原记忆版本。主人展开新旧正文、来源和影响后另行确认，才修改正式记忆；模型总结不等于主人事实确认。未知结果只查询原回执，不重复应用。可选assertion保留主体、条件和时间；quote必须逐字原句，offset为原消息UTF-16起点，sourceIndex为sources的从0开始索引。user_said的text/object/quote须一致，推断或转述另标kind；未知eventTime/validFrom/validTo/reviewAfter省略，不能用今天补事件时间，计划不是既成事实。",true,dev.pocketengine.features.memory.NativeConversationMemoryDraftHost.proposalProperties(),"action","sources","reason");
         }
         add("skills","$skill_reference_decision","skills_reference_decision","记录已读取的准确Skill版本在本轮实际采用的原步骤。须提供1至8个已返回确定回执的stepOperationIds；这只记录模型采用决定与原步骤证据，不证明业务成功或授予工具权限。",true,
@@ -628,7 +628,10 @@ public final class HostToolSupervisor implements CapabilityPort {
         if(tool==nativeRoutes.get(name)&&tool.feature.equals("workspace")&&Set.of("read","write","history","diff","createArtifact").contains(tool.command))
             dev.pocketengine.features.workspace.VersionedWorkspace.path(args.getString("path"));
         if(tool.command.equals("$skills_propose"))dev.pocketengine.features.skills.NativeConversationSkillDraftHost.checkedDraft(args);
-        if(tool.command.equals("$memory_propose"))dev.pocketengine.features.memory.NativeConversationMemoryDraftHost.checkedDraft(args);
+        if(tool.command.equals("$memory_propose")){
+            JSONObject draft=dev.pocketengine.features.memory.NativeConversationMemoryDraftHost.checkedDraft(args);
+            tasks.preparedMemoryProposalRefs(taskId,runId,epoch,draft.getJSONArray("sources"));
+        }
         if(tool.feature.equals("memory")&&Set.of("search","recall").contains(tool.command)&&projectMemory==null
                 &&!args.has("queries")&&!args.has("constraints")&&!"historical".equals(args.optString("mode")))
             dev.pocketengine.features.memory.MemoryBook.validateSearchQueryForHost(args.getString("query"));

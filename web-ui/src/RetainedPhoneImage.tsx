@@ -19,7 +19,7 @@ export function RetainedPhoneImage({task, src, label, active, readIdentity, moti
   if (!proof) return <figure className="pw-outcome-image" data-motion-key={motionKey}>
     <img src={src} alt={label} loading="lazy" decoding="async"/><figcaption>{label}</figcaption></figure>;
   // Changing results, privacy scope, task layer or read window discards all zoom and focus tickets.
-  return <InspectImage key={JSON.stringify([readIdentity,proof])} proof={proof} src={src} label={label} motionKey={motionKey}/>;
+  return <VerifiedRetainedPhoneImage key={JSON.stringify([readIdentity,proof])} proof={proof} src={src} label={label} motionKey={motionKey}/>;
 }
 
 function rememberScroll(trigger: HTMLElement) {
@@ -31,7 +31,7 @@ function rememberScroll(trigger: HTMLElement) {
   return () => { for (const {el,x,y} of parents) if (el.isConnected) { el.scrollLeft=x; el.scrollTop=y; } };
 }
 
-function InspectImage({proof: initial,src,label,motionKey}: Pick<Props,'src'|'label'|'motionKey'> & {proof:ImageProof}) {
+export function VerifiedRetainedPhoneImage({proof: initial,src,label,motionKey}: Pick<Props,'src'|'label'|'motionKey'> & {proof:ImageProof}) {
   const proof = useRef(initial).current; // The parent keys this instance to the entire original proof.
   const read = useCallback(() => currentImageWindow(proof), [proof]);
   const windowId = useSyncExternalStore(subscribeImageWindow, read);

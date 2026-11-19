@@ -1009,7 +1009,9 @@ public final class ConversationRepository {
     public JSONObject searchOwnerOriginals(JSONObject options,RunControl original)throws Exception{return ownerOriginalSearch().search(options,original);}
     public JSONObject readOwnerSearchHit(JSONObject request,RunControl original)throws Exception{return ownerOriginalSearch().read(request,original);}
     /** One bounded, body-free currentness batch. No TaskStore/Book monitor or callback is acquired. */
-    public static final class SourceUnavailable extends Exception {SourceUnavailable(String reason){super(reason);}}
+    public static class SourceUnavailable extends Exception {SourceUnavailable(String reason){super(reason);}}
+    /** A definite original owner exclusion. Unknown/changed metadata is not this fact. */
+    public static final class MemoryProposalExcluded extends SourceUnavailable {private MemoryProposalExcluded(){super("这条原话不可用于对话记忆提案");}}
     public OwnerSourceInspection inspectOwnerSources(){return new OwnerSourceInspection(null);}
     public OwnerSourceInspection inspectOwnerSources(ConversationHistory.SourceBytes bytes){return new OwnerSourceInspection(bytes);}
     public final class OwnerSourceInspection implements AutoCloseable {
@@ -1082,7 +1084,8 @@ public final class ConversationRepository {
         }
         /** Revalidate native PREPARE metadata only. This does not read a body, extend a
          * range, authorize an import, or assert that a provider consumed the request. */
-        public void requireNativeUserPart(JSONObject part,String conversation)throws Exception {
+        public void requireNativeUserPart(JSONObject part,String conversation)throws Exception {requireNativeUserPart(part,conversation,false);}
+        public void requireNativeUserPart(JSONObject part,String conversation,boolean forMemoryProposal)throws Exception {
             current();java.util.Set<String> fields=java.util.Set.of("sourceRef","sourceConversationId","generation","bodyFingerprint","utf8Bytes","coverage","offset","chars","unit");
             if(part.length()!=fields.size())throw new SecurityException("原主人准备事实只接受有界原生元数据");for(var keys=part.keys();keys.hasNext();)if(!fields.contains(keys.next()))throw new SecurityException("原主人准备事实不能携带正文或权限");
             JSONObject identity=part.getJSONObject("sourceRef");if(identity.length()!=5)throw new SecurityException("原主人准备事实身份无效");Object revision=identity.opt("revision");if(!(revision instanceof Integer||revision instanceof Long)||((Number)revision).longValue()<1)throw new SecurityException("原主人准备事实修订无效");
@@ -1092,8 +1095,21 @@ public final class ConversationRepository {
             if(bytes>MAX_BYTES||offset>Integer.MAX_VALUE||chars>Integer.MAX_VALUE||(long)offset+chars>Integer.MAX_VALUE
                     ||"full".equals(coverage)&&(offset!=0||chars<1||bytes<1)||"range".equals(coverage)&&(chars<1||chars>OwnerSourceReferences.MAX_RANGE_CHARS)
                     ||"unknown".equals(coverage)&&(offset!=0||chars!=0))throw new SecurityException("原主人准备事实范围不完整");
-            statement();String sql="SELECT 1 FROM meta a JOIN assistant_sources s ON s.generation=a.value JOIN assistant_messages m ON m.generation=s.generation AND m.source_id=s.source_id AND m.conversation_id=s.conversation_id JOIN assistant_conversations c ON c.generation=s.generation AND c.conversation_id=s.conversation_id WHERE a.key='assistant_history_generation' AND a.value=? AND s.source_id=? AND s.revision=? AND m.revision=s.revision AND s.conversation_id=? AND s.role='user' AND s.deleted=0 AND s.retired_through<s.revision AND s.context_retired=0 AND m.body IS NOT NULL AND m.body_sha=? AND m.body_bytes=? AND c.deleted=0 LIMIT 1";
-            try(Cursor actual=db.rawQuery(sql,new String[]{generation,ref.sourceId,Long.toString(ref.revision),conversation,fingerprint,Long.toString(bytes)},signal)){if(!actual.moveToFirst())throw new SourceUnavailable("原主人准备来源已删除、停用、换代或换版");}
+            statement();String sql="SELECT "+(forMemoryProposal?"m.meta_json":"1")+" FROM meta a JOIN assistant_sources s ON s.generation=a.value JOIN assistant_messages m ON m.generation=s.generation AND m.source_id=s.source_id AND m.conversation_id=s.conversation_id JOIN assistant_conversations c ON c.generation=s.generation AND c.conversation_id=s.conversation_id WHERE a.key='assistant_history_generation' AND a.value=? AND s.source_id=? AND s.revision=? AND m.revision=s.revision AND s.conversation_id=? AND s.role='user' AND s.deleted=0 AND s.retired_through<s.revision AND s.context_retired=0 AND m.body IS NOT NULL AND m.body_sha=? AND m.body_bytes=? AND c.deleted=0"+(forMemoryProposal?" AND length(CAST(m.meta_json AS BLOB))<=?":"")+" LIMIT 1";
+            String[] args={generation,ref.sourceId,Long.toString(ref.revision),conversation,fingerprint,Long.toString(bytes)};
+            if(forMemoryProposal){args=Arrays.copyOf(args,7);args[6]=Long.toString(remainingBytes());}
+            try(Cursor actual=db.rawQuery(sql,args,signal)){
+                if(!actual.moveToFirst())throw new SourceUnavailable(forMemoryProposal?"原主人准备来源已变化或无法在原读取预算内核对":"原主人准备来源已删除、停用、换代或换版");
+                if(forMemoryProposal){
+                    // Only the same admitted native row's metadata. Never project bodies, flags or reasons to the model.
+                    if(actual.isNull(0))throw new SourceUnavailable("原话的记忆提案范围不可核对");
+                    String raw=actual.getString(0);materialized(raw.getBytes(StandardCharsets.UTF_8).length);JSONObject meta;
+                    try{meta=new JSONObject(raw);}catch(org.json.JSONException invalid){throw new SourceUnavailable("原话的记忆提案范围不可核对");}
+                    if(!ref.sourceId.equals(meta.opt("id"))||!"user".equals(meta.opt("role")))throw new SourceUnavailable("原话的记忆提案范围不可核对");
+                    if(Boolean.TRUE.equals(meta.opt("personalMemoryExcluded")))throw new MemoryProposalExcluded();
+                    if(meta.has("personalMemoryExcluded")&&!Boolean.FALSE.equals(meta.opt("personalMemoryExcluded")))throw new SourceUnavailable("原话的记忆提案范围不可核对");
+                }
+            }
             current();String key=TaskMemoryTrace.rawFingerprint(part);if(!checkedNativeUsers.containsKey(key)&&checkedNativeUsers.size()>=100)throw limited("native_user_part_budget");checkedNativeUsers.put(key,new JSONObject(part.toString()));
         }
         /** A model/checkpoint cannot invent a selected source on an arbitrary user row. */

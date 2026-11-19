@@ -7,6 +7,7 @@ import './remote-task-workspace.css';
 import './collaboration-depth.css';
 import { RemoteSavedResults } from './RemoteSavedResults';
 import { RemoteOfflinePickup } from './RemoteOfflinePickup';
+import {RemotePhoneDraftShelf} from './RemotePhoneDraftShelf';
 import { RemoteTaskArtifacts } from './RemoteTaskArtifacts';
 import { RemoteTaskPreview } from './RemoteTaskPreview';
 import { RemoteTaskHarness } from './RemoteTaskHarness';
@@ -26,9 +27,10 @@ const taskVisible = (taskId: string) => document.visibilityState === 'visible' &
 const sourceLabel = (source: Data) => source.sourceProtocol === 'codex_public_child_v1' ? `Codex 子来源 ${source.nativeChildThreadId || ''}` : source.kind === 'child' ? `子来源 ${source.nativeAgentId || source.parentToolUseId || ''}` : '主／未标记来源';
 
 /** Only this hook owns a native original-task observation window. Nothing is replayed on resume. */
-function useRemoteTask(taskId: string) {
+function useRemoteTask(taskId:string,runId:string,coordinatorEpoch:number) {
+  const [ownerChoice]=useState(()=>crypto.randomUUID());
   const [snapshot, setSnapshot] = useState<Data | null>(null), [pending, setPending] = useState(''), [error, setError] = useState(''), [stale, setStale] = useState(false);
-  const live = useRef<Data | null>(null), active = useRef<object | null>(null), alive = useRef(true), generation = useRef(0), handle = useRef(''), identity = useRef(windowIdentity()), firstRead = useRef(false);
+  const live = useRef<Data | null>(null), active = useRef<object | null>(null), alive = useRef(true), generation = useRef(0), handle = useRef(''), identity = useRef(windowIdentity());
   const retire = () => { generation.current++; live.current = null; if (alive.current) { setStale(true); setError(''); } };
   const act: Run = async (action, args = {}) => {
     const opening = action === 'remoteTask.open';
@@ -37,13 +39,19 @@ function useRemoteTask(taskId: string) {
     const current = () => alive.current && generation.current === epoch && active.current === request && taskVisible(taskId) && windowIdentity() === window;
     active.current = request; setPending(action); setError('');
     try {
-      const value = await bridge.command(action, opening ? { taskId } : { ...args, windowHandle: captured!.windowHandle, reviewId: captured!.reviewId });
+      const value = await bridge.command(action, opening ? { taskId,runId,coordinatorEpoch,ownerChoice } : { ...args, windowHandle: captured!.windowHandle, reviewId: captured!.reviewId });
       if (!current()) { if (opening && value?.snapshot?.windowHandle) void bridge.command('remoteTask.close', { windowHandle: value.snapshot.windowHandle }).catch(() => {}); return; }
       if (action === 'remoteTask.clipboard') return value;
       const incoming = object(value?.snapshot);
       if (incoming.taskId !== taskId || typeof incoming.windowHandle !== 'string' || !incoming.windowHandle ||
         !opening && incoming.windowHandle !== captured?.windowHandle) throw new Error('原任务回执身份不可核对，请重新读取。');
-      handle.current = incoming.windowHandle; live.current = incoming; if (opening) firstRead.current = true; setSnapshot(incoming); setStale(false);
+      const readSource=object(incoming.source);
+      if((opening||action==='remoteTask.refresh'||action==='remoteTask.inspectRecovery')&&readSource.runId!=null&&
+          (readSource.runId!==runId||readSource.coordinatorEpoch!==coordinatorEpoch)){
+        if(opening)void bridge.command('remoteTask.close',{windowHandle:incoming.windowHandle}).catch(()=>{});
+        throw new Error('回执不是刚才选定的执行轮次，未展示为当前作业。');
+      }
+      handle.current = incoming.windowHandle; live.current = incoming; setSnapshot(incoming); setStale(false);
       return value;
     } catch (failure) { if (current()) { setError(message(failure)); live.current = null; setStale(true); } }
     finally { if (active.current === request) { active.current = null; if (alive.current) setPending(''); } }
@@ -54,17 +62,18 @@ function useRemoteTask(taskId: string) {
     const unsubscribe = bridge.subscribe(inspect);
     document.addEventListener('visibilitychange', inspect); window.addEventListener('pagehide', retire);
     return () => { alive.current = false; generation.current++; live.current = null; unsubscribe(); document.removeEventListener('visibilitychange', inspect); window.removeEventListener('pagehide', retire);
-      const original = handle.current; handle.current = ''; if (original) void bridge.command('remoteTask.close', { windowHandle: original }).catch(() => {}); };
-  }, [taskId]);
+      handle.current = '';
+      if(supported('remoteTask.stopObservation'))void bridge.command('remoteTask.stopObservation',{taskId,runId,coordinatorEpoch,ownerChoice}).catch(()=>{}); };
+  }, [taskId,runId,coordinatorEpoch,ownerChoice]);
   useEffect(() => {
-    if (!snapshot || stale || pending || snapshot.configurationOnly || !firstRead.current && snapshot.readPollAllowed !== true) return;
+    if (!snapshot || stale || pending || snapshot.configurationOnly || snapshot.readPollAllowed !== true) return;
     const captured = snapshot, originalWindow = windowIdentity(); let timer: ReturnType<typeof setTimeout>;
     const read = () => {
       if (!alive.current || live.current !== captured || !taskVisible(taskId) || windowIdentity() !== originalWindow) return;
       if (remoteReadsPaused() || active.current) { timer = setTimeout(read, 500); return; }
-      firstRead.current = false; void act('remoteTask.refresh');
+      void act('remoteTask.refresh');
     };
-    timer = setTimeout(read, firstRead.current ? 250 : snapshot.readPollDelayMillis === 500 ? 500 : 4000);
+    timer = setTimeout(read, snapshot.readPollDelayMillis === 500 ? 500 : 4000);
     return () => clearTimeout(timer);
   }, [snapshot, pending, stale]);
   return { snapshot, pending, error, stale, act, current: () => live.current };
@@ -172,26 +181,44 @@ function RemoteQuestion({ request, snapshot, busy, run }: { request: Data; snaps
 }
 
 export function RemoteTaskWorkspace({ taskId, raw, receipt, savedFiles, openProject }: { taskId: string; raw: Data; receipt?:Data; savedFiles: Data[]; openProject?:(pin:HostSourcePin)=>void }) {
-  const [observing,setObserving]=useState('');
-  const personal=raw.id===taskId&&raw.actorId==='owner'&&raw.spaceId==='private'&&raw.feature==='remote'&&raw.command==='submitJob'&&
-    (!raw.origin||object(raw.origin).kind==='native_remote_private_inputs')&&!raw.teamRunId&&!raw.parentTaskId&&!raw.memberId;
-  const foreground=taskVisible(taskId),onlineView=!personal||foreground&&!!observing&&observing===windowIdentity();
-  useEffect(()=>{const hidden=()=>{if(document.hidden)setObserving('')};document.addEventListener('visibilitychange',hidden);return()=>document.removeEventListener('visibilitychange',hidden)},[]);
+  const [observing,setObserving]=useState(''),selectedWindow=useRef('');
+  const origin=object(raw.origin),privateTask=raw.id===taskId&&raw.actorId==='owner'&&raw.spaceId==='private'&&raw.feature==='remote';
+  const personal=privateTask&&raw.command==='submitJob'&&(!raw.origin||origin.kind==='native_remote_private_inputs')&&!raw.teamRunId&&!raw.parentTaskId&&!raw.memberId;
+  const nativeProject=privateTask&&raw.command==='submitJob'&&!raw.teamRunId&&!raw.parentTaskId&&!raw.memberId&&/^[a-f0-9]{64}$/.test(raw.remoteProjectStartScopeHash||'')&&
+    (origin.kind==='native_remote_project_history'||origin.kind==='native_remote_session_branch');
+  const canObserve=privateTask&&raw.contextAvailable!==false&&!raw.contextWithdrawn&&!raw.sourceCurrentReadRequired&&raw.taskProjection!=='source_unavailable'&&
+    typeof raw.runId==='string'&&raw.runId.length>0&&raw.runId.length<=80&&raw.runId===raw.operationId&&Number.isSafeInteger(raw.coordinatorEpoch)&&raw.coordinatorEpoch>=0;
+  const attempt=JSON.stringify([taskId,raw.runId,raw.coordinatorEpoch]),ticket=()=>JSON.stringify([attempt,windowIdentity()]);
+  const foreground=taskVisible(taskId),supportedChoice=supported('remoteTask.open')&&supported('remoteTask.stopObservation'),onlineView=canObserve&&supportedChoice&&foreground&&observing===ticket();
+  useEffect(()=>{
+    selectedWindow.current='';setObserving('');
+    const retire=()=>{if(selectedWindow.current&&(document.hidden||!taskVisible(taskId)||selectedWindow.current!==ticket())){selectedWindow.current='';setObserving('')}};
+    const off=bridge.subscribe(retire);document.addEventListener('visibilitychange',retire);
+    return()=>{off();document.removeEventListener('visibilitychange',retire)};
+  },[attempt]);
   const proof=receipt?.taskId===taskId&&receipt.runId===raw.runId?receipt:undefined;
   const accepted=proof?.stage==='host_acknowledged'&&typeof proof.jobId==='string'&&proof.jobId.length>0;
-  return <>{personal&&<section className="pw-remote-workspace" aria-label="原主机任务的本机回执">
-    <div className="pw-section-heading"><h3>本机回执</h3><Button variant="secondary" disabled={!foreground||!supported('remoteTask.open')} onClick={()=>{if(taskVisible(taskId))setObserving(onlineView?'':windowIdentity())}}>{onlineView?'只看本机记录':'查询原主机'}</Button></div>
-    <p className="pw-field-hint">{accepted?(proof!.detailRetired===true?'原主机曾接单，详细记录已归档。':'原主机曾接单。'):'这条本机记录只确认手机已登记。'}{!onlineView&&'当前只读手机记录。'}</p>
+  return <><section className="pw-remote-workspace" aria-label="原主机任务的本机回执">
+    <div className="pw-section-heading"><h3>本机回执</h3>{canObserve&&<Button variant="secondary" disabled={!foreground||!supportedChoice} onClick={()=>{
+      if(taskVisible(taskId)){selectedWindow.current=onlineView?'':ticket();setObserving(selectedWindow.current)}
+    }}>{onlineView?'停止查询，只看本机':'查询原主机的这次作业'}</Button>}</div>
+    <p className="pw-field-hint">{accepted?(proof!.detailRetired===true?'原主机曾接单，详细记录已归档。':'原主机曾接单。'):
+      nativeProject?(origin.kind==='native_remote_session_branch'?'这是一条已登记的独立会话分支。':'这是从原项目历史登记的工作。'):'这里展示手机留存的原任务记录。'}
+      {onlineView?'停止查询只关闭观察，不停止主机作业。':'本页只读手机记录。'}</p>
+    {canObserve&&!supportedChoice&&<p className="pw-field-hint">当前安装版本不能固定这次执行轮次。仍可查看手机记录，没有改查别的作业。</p>}
+    {!canObserve&&<p className="pw-field-hint">当前页面不能核对原私人执行轮次；没有改查最新作业。来自团队或渠道的事项，可从原事项继续核对。</p>}
     {accepted&&<p className="pw-field-hint">原主机作业：<code>{proof!.jobId}</code>{proof!.detailRetired!==true&&proof!.executorStatus&&proof!.executorStatus!=='unknown'&&' · 上次回执：'+executionLabel(proof!.executorStatus)}</p>}
-  </section>}
+    {nativeProject&&<details className="pw-field-hint"><summary>所登记的执行轮次</summary>本次操作 <code>{raw.runId}</code> · 第 {raw.coordinatorEpoch} 轮</details>}
+  </section>
     <RemoteSavedResults taskId={taskId} rows={savedFiles} openProject={openProject}/>
     {personal&&<RemoteOfflinePickup task={raw} saved={savedFiles}/>}
-    {onlineView&&<LiveRemoteTask key={taskId} taskId={taskId}/>}</>;
+    {canObserve&&raw.hasPhoneDraftRows===true&&<RemotePhoneDraftShelf taskId={taskId} runId={raw.runId} epoch={raw.coordinatorEpoch}/>}
+    {onlineView&&<LiveRemoteTask key={attempt} taskId={taskId} runId={raw.runId} coordinatorEpoch={raw.coordinatorEpoch}/>}</>;
 }
 
 /** Only an explicitly opened private host observation mounts the network-backed poller. */
-function LiveRemoteTask({taskId}:{taskId:string}) {
-  const { snapshot, pending, error, stale, act, current } = useRemoteTask(taskId);
+function LiveRemoteTask({taskId,runId,coordinatorEpoch}:{taskId:string;runId:string;coordinatorEpoch:number}) {
+  const { snapshot, pending, error, stale, act, current } = useRemoteTask(taskId,runId,coordinatorEpoch);
   const enabled = !!snapshot && !stale && taskVisible(taskId), source = object(snapshot?.source);
   if (!supported('remoteTask.open')) return null;
   return <section className="pw-remote-workspace pw-depth-collaboration" aria-label="原电脑任务"><div className="pw-section-heading"><h3>电脑会话</h3><Button variant="secondary" disabled={!!pending || !taskVisible(taskId)} onClick={() => void act(!snapshot || stale ? 'remoteTask.open' : 'remoteTask.refresh')}>{pending ? '正在核对…' : !snapshot || stale ? '重新打开原任务' : '查询原任务'}</Button></div>

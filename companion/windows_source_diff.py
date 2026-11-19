@@ -46,7 +46,8 @@ def original_commit(ctx,settings,source,checkpoint):
         pins.recheck_absence(checkpoint)
 
 
-def historical_blob(ctx,settings,source,path,row,checkpoint):
+@contextmanager
+def bound_blob(ctx,settings,source,path,row,checkpoint):
     with original_commit(ctx,settings,source,checkpoint) as (pins,packs,oid):
         pieces = relative_parts(path)
         # Verify each path component inside the immutable commit, not a file
@@ -61,6 +62,11 @@ def historical_blob(ctx,settings,source,path,row,checkpoint):
         if mode!=row["mode"].encode("ascii") or oid!=row["object"] or row["bytes"]>TEXT_LIMIT: _bad()
         body,_ = _object_body(pins,packs,oid,b"blob",MAX_FILE)
         if len(body)!=row["bytes"] or hashlib.sha256(body).hexdigest()!=row["sha256"]: _bad()
+        yield body
+
+
+def historical_blob(ctx,settings,source,path,row,checkpoint):
+    with bound_blob(ctx,settings,source,path,row,checkpoint) as body:
         return body
 
 

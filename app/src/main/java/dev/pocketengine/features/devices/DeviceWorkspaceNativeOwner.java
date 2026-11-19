@@ -254,6 +254,9 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
         public NativeDeviceWorkspaceHost.PairingReviewAction inspectWithFirstIdentity(String invitation,NativeDeviceWorkspaceHost.IdentityGate gate)throws Exception{
             return network.inspectInvitation(invitation,java.util.Objects.requireNonNull(gate));
         }
+        public JSONObject readSavedPeerScope(String id,String instance,String fingerprint)throws Exception {
+            return DeviceSavedPeerScope.read(DeviceWorkspaceNativeOwner.this,id,instance,fingerprint);
+        }
         public void advancePairing(String id) throws Exception { network.advancePairing(id); changed(); }
         public NativeDeviceWorkspaceHost.PairingReviewAction reviewCandidate(String id) throws Exception {
             for (PairingCoordinator.Candidate candidate : pairing().pendingCandidates(System.currentTimeMillis())) if (id.equals(candidate.inviteId())) return candidateReview(candidate, null);

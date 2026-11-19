@@ -10,6 +10,7 @@ import org.json.JSONObject
 /** Explicit read model for the trusted local Web UI. No host authority is serialized. */
 internal object PocketWebState {
     private val hidden = setOf(
+        "remoteinputdrafts", "hasphonedraftrows",
         "apikey", "password", "passphrase", "privatekey", "clientsecret", "accesstoken",
         "refreshtoken", "idtoken", "bearer", "bearertoken", "authorization", "secret",
         "token", "invitationtoken", "invitationuri", "loginchallenge", "signedurl", "localphonepauseinput",
@@ -72,6 +73,7 @@ internal object PocketWebState {
         .put("raw", publicValue(row.raw, images, omitProjectContract = !originalProjectContract)).also { value ->
             if (!originalProjectContract && row.raw.optJSONObject("developmentContext")?.has("deliveryContract") == true)
                 value.getJSONObject("raw").getJSONObject("developmentContext").put("deliveryContractReadState","not_loaded")
+            if(dev.pocketengine.features.remote.RemotePhoneDrafts.hasLocalRows(row.raw))value.getJSONObject("raw").put("hasPhoneDraftRows",true)
             runCatching { dev.pocketengine.store.CloudWorkspaceJobs.receiptForTask(row.raw) }.getOrNull()?.let { value.put("hostReceipt",it) }
         }
 

@@ -23,11 +23,14 @@ internal class PocketWebRemoteTasks(
     private val changed: () -> Unit
 ) {
     val inputPages = PocketWebRemoteInputs(controller, captureWindow, acceptsWindow, taskView)
+    private val phoneDrafts=PocketWebRemotePhoneDrafts(controller,captureWindow,acceptsWindow,taskView)
     private val offlinePickup = PocketWebRemotePickup(controller, captureWindow, acceptsWindow, taskView)
     private val main = Handler(Looper.getMainLooper())
     private var generation = 0L
     private var nativeWindow: String? = null
     private var originalTask: String? = null
+    private data class Observe(val task:String,val run:String,val epoch:Int,val ownerChoice:String)
+    private var observation:Observe?=null
     private var snapshot: JSONObject? = null
     private var configuration: JSONObject? = null
     private var busy = false
@@ -73,7 +76,7 @@ internal class PocketWebRemoteTasks(
             "gateway.prepareContinuation" to setOf("snapshotId", "snapshotVersion"), "openHarnessConfig" to setOf("operationId", "restoreOperationId", "selectionFromTask"))
         private fun independentReview(command: String) = command.startsWith("gateway.") && command != "gateway.prepareContinuation" || command.endsWith("HarnessConfig") || command == "cancelHarnessConfigPreview"
         val COMMANDS = fields.keys.map { "remoteTask.$it" }.toSet() +
-            setOf("remoteTask.open", "remoteTask.close", "remoteTask.openLocalSnapshot", "remoteTask.stageSavedSources", "remoteTask.cancelSourcePreparation", "remoteSessions.read", "remoteSessions.open") + PocketWebRemotePreview.COMMANDS + PocketWebRemoteInputs.COMMANDS + PocketWebRemotePickup.COMMANDS
+            setOf("remoteTask.open", "remoteTask.stopObservation", "remoteTask.close", "remoteTask.openLocalSnapshot", "remoteTask.stageSavedSources", "remoteTask.cancelSourcePreparation", "remoteSessions.read", "remoteSessions.open") + PocketWebRemotePreview.COMMANDS + PocketWebRemoteInputs.COMMANDS + PocketWebRemotePickup.COMMANDS + PocketWebRemotePhoneDrafts.COMMANDS
 
         /** All lineage and delivery decisions use the same native rules as execution. */
         internal fun presentSnapshot(original: JSONObject): JSONObject {
@@ -119,10 +122,10 @@ internal class PocketWebRemoteTasks(
     private fun closeTask() {
         preview?.clear()
         generation++; snapshot = null; configuration = null; busy = false
-        val previous = nativeWindow; nativeWindow = null; originalTask = null
+        val previous = nativeWindow; nativeWindow = null; originalTask = null; observation=null
         previous?.let(controller::leaveRemoteTask)
     }
-    fun clear() { offlinePickup.clear(); inputPages.clear(); closeTask(); listingGeneration++; listing = null; listedRows = emptyMap() }
+    fun clear() { phoneDrafts.clear(); offlinePickup.clear(); inputPages.clear(); closeTask(); listingGeneration++; listing = null; listedRows = emptyMap() }
     fun attachPreview(container: android.widget.FrameLayout) {
         check(preview == null)
         preview = PocketWebRemotePreview(controller, container, captureWindow, acceptsWindow, taskView, changed)
@@ -188,6 +191,7 @@ internal class PocketWebRemoteTasks(
             }
             return
         }
+        if(action in PocketWebRemotePhoneDrafts.COMMANDS){phoneDrafts.dispatch(action,args,done);return}
         if(action in PocketWebRemotePickup.COMMANDS){offlinePickup.dispatch(action,args,done);return}
         if(action=="remoteTask.openLocalSnapshot"){openLocalSnapshot(args,done);return}
         if (action in PocketWebRemoteInputs.COMMANDS) { inputPages.dispatch(action, args, done); return }
@@ -224,11 +228,19 @@ internal class PocketWebRemoteTasks(
             controller.focusTask(id)
             done(JSONObject().put("taskId", id).put("navigationRequested", true), null); changed(); return
         }
-        if (action == "remoteTask.open") {
-            fields(args, setOf("taskId")); val task = string(args, "taskId")
+        if(action=="remoteTask.stopObservation"||action=="remoteTask.open"){
+            fields(args,setOf("taskId","runId","coordinatorEpoch","ownerChoice"));val task=string(args,"taskId",80);val run=string(args,"runId",80)
+            val n=args.opt("coordinatorEpoch");require((n is Int||n is Long)&&(n as Number).toLong() in 0L..Int.MAX_VALUE.toLong()){"原任务轮次不可核对"}
+            val shownEpoch=(n as Number).toInt();val ownerChoice=string(args,"ownerChoice",36)
+            require(runCatching{UUID.fromString(ownerChoice).toString()==ownerChoice}.getOrDefault(false)){"请重新选择这次主机观察"}
+            val chosen=Observe(task,run,shownEpoch,ownerChoice)
+            if(action=="remoteTask.stopObservation"){
+                val same=observation==chosen;if(same)closeTask()
+                done(JSONObject().put("closed",same).put("jobStopped",false),null);return
+            }
             require(taskCurrent(task)) { "请先打开这个原电脑任务" }
-            closeTask(); val epoch = generation; val window = captureWindow(); originalTask = task; busy = true
-            try { nativeWindow = controller.enterRemoteTask(task) { result, error ->
+            closeTask(); val epoch = generation; val window = captureWindow(); originalTask = task; observation=chosen; busy = true
+            try { nativeWindow = controller.enterSelectedRemoteTask(task,run,shownEpoch) { result, error ->
                 val original = result?.optJSONObject("snapshot")
                 if (epoch != generation || !acceptsWindow(window) || !taskCurrent(task)) {
                     original?.optString("windowId")?.takeIf(String::isNotBlank)?.let(controller::leaveRemoteTask)

@@ -13,6 +13,10 @@
 
 一手来源：[Muse 产品能力](https://ai.meta.com/muse/) · [Muse 安全架构](https://muse.ai/blog/security-and-safety-for-ai-agents-our-approach-with-muse) · [Grok Bot 官方概览](https://docs.x.ai/grok-bot/overview) · [产品设计](https://x.ai/news/designing-grok-bot) · [成果](https://docs.x.ai/grok-bot/files-and-results) · [技能与例程](https://docs.x.ai/grok-bot/skills-routines-and-automations)。
 
+主机任务详情只展示手机已存材料。包括从项目历史开始、单独会话分支、团队原事项在内的远程任务，只有主人选择本次任务／执行轮次后才打开对应主机观察；单独刷新复核相同 task、run 与 coordinator epoch，换代/离页不自动接着查询。已有独立批准的续接、团队守卫与成果权限不变。
+
+已经在原会话登记的手机草稿无需再开在线审阅才能撤下。清单只显示本次原 task/run/job 的本地版本，逐份明确核对正文后才可撤掉仍未领取的 draft/queued；派发中、未知或已发送的状态不假装撤回。离线页不能创建、排队或发送指令。
+
 ## 我们实际有和实际缺的
 
 - 现有 SSH 持有主机/用户名/工作目录绑定，有命令会话、PTY、SFTP 和本机原回执。关闭连接时原生可明确给出“远端是否结束尚未确认”，不能从这层冒充持久的云 Agent。

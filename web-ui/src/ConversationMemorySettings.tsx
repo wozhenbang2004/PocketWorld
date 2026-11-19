@@ -67,7 +67,7 @@ export function ConversationMemorySettings({conversationId,composer,isOpen,onClo
     {error&&<p className="pw-error" role="alert">{error}</p>}
     {controls&&<StretchSwitch label="使用我的资料、偏好和记忆" description="关闭后，此对话不引用个人资料与记忆，也不自动整理记忆候选。" checked={controls.enabled} disabled={pending} busy={pending} onChange={enabled=>{void save(enabled);}}/>}
     <p className="pw-muted">关闭后，后续请求不再带上过去查询或修改默认偏好时读到的设置值。你自己写的消息仍会保留，也仍可用于对话。已经发出的请求不能撤回。明确选用的项目资料保持原范围。</p>
-    {single&&<><StretchSwitch label="只让下一条不参与自动整理" description="只限这份原私聊草稿：发送前可撤销，原输入被接收后即用完。不关闭已有偏好；消息仍保留在对话，不撤回另外保存过的内容。" checked={single.excluded===true} disabled={pending||single.saving||single.pending} busy={single.saving} onChange={value=>{void setSingle(value);}}/>
+    {single&&<><StretchSwitch label="只让下一条不参与自动整理" description="这条原话不作为后台提炼或对话记忆建议的来源；发送前可撤销，受理后用完。原话仍留在对话，不关闭已有偏好，也不撤回另外保存的内容。" checked={single.excluded===true} disabled={pending||single.saving||single.pending} busy={single.saving} onChange={value=>{void setSingle(value);}}/>
       {single.pending&&single.excluded&&<p className="pw-muted">正在核对原输入，未把单条限制挪给另一条消息。</p>}
       {single.confirmed===false&&!single.saving&&!single.pending&&<Button variant="secondary" disabled={pending} onClick={()=>void setSingle(single.excluded===true)}>重新保存本条选择</Button>}</>}
     {canShelf&&<Button variant="secondary" disabled={pending||single.pending} onClick={()=>setShelf(shelfVisit)}>本对话备忘</Button>}

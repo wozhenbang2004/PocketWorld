@@ -58,12 +58,13 @@ internal class PocketWebMemoryDrafts(private val controller: PocketWorldControll
                     val row = if (action == "memoryDraft.undo") host.undoForOwner(task, run, epoch, operation, digest, control)
                         else host.queryForOwner(task, run, epoch, operation)
                     check(row.getJSONObject("proposal").getString("proposalDigest") == digest) { "原提案内容已变化" }
-                    val result = presentation(row)
                     if (action == "memoryDraft.open" && row.getJSONObject("apply").getString("status") == "pending_owner") {
                         acquired = host.reviewForOwner(task, run, epoch, operation, digest)
-                        result.put("review", acquired!!.view())
-                    }
-                    result
+                        val view = acquired!!.view()
+                        if (view.opt("dismissOnly") == true) JSONObject().put("proposal", JSONObject().put("action", row.getJSONObject("proposal").getString("action")))
+                            .put("apply", JSONObject().put("status", "pending_owner")).put("review", view)
+                        else presentation(row).put("review", view)
+                    } else presentation(row)
                 }
                 main.post {
                     if (request != generation || !controller.webPrivateOwnerVisible() || controller.webWindowTicket() != owner) { acquired?.close(); control.cancel(); done(null, "原记忆审阅窗口已变化，请查询原操作结果，不要重复提交"); return@post }

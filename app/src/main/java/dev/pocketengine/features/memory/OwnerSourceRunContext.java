@@ -349,6 +349,9 @@ public final class OwnerSourceRunContext {
     /** Exact selected source identities, not a complete-history assertion. Partial, absent,
      * legacy, retired, edited or summary-only evidence cannot become a full-message source. */
     public static JSONArray preparedUserRefs(SQLiteDatabase db,ConversationRepository originals,String task,String run,String conversation,JSONArray selected)throws Exception {
+        return preparedUserRefs(db,originals,task,run,conversation,selected,false);
+    }
+    public static JSONArray preparedUserRefs(SQLiteDatabase db,ConversationRepository originals,String task,String run,String conversation,JSONArray selected,boolean forMemoryProposal)throws Exception {
         if(selected==null||selected.length()<1||selected.length()>20)throw new IllegalArgumentException("请选择1到20条已实际准备的主人消息");JSONObject fact=loaded(db,task,run,null,null);
         if(!"final_main_request_prepared".equals(fact.optString("nativeUserExposureStage"))||!"prepared_parts_only".equals(fact.optString("nativeUserCollectionCoverage")))throw new SecurityException("原run缺少最终请求来源证明，不能从会话成员身份补全");
         JSONArray parts=fact.optJSONArray("nativeUserParts");if(parts==null||parts.length()>MAX_CARRIERS)throw new SecurityException("原run主人来源证明不可读");JSONArray result=new JSONArray();java.util.Set<String> seen=new java.util.HashSet<>();
@@ -356,18 +359,21 @@ public final class OwnerSourceRunContext {
             for(int i=0;i<selected.length();i++){
                 JSONObject selection=selected.getJSONObject(i);if(selection.length()!=2||!(selection.opt("sourceId") instanceof String)||!selection.has("revision"))throw new SecurityException("来源选择只允许sourceId和revision");String id=selection.getString("sourceId");long revision=integer(selection,"revision");if(!seen.add(id+":"+revision))throw new IllegalArgumentException("来源选择重复");JSONObject matched=null;
                 for(int j=0;j<parts.length();j++){JSONObject part=parts.getJSONObject(j);SourceRef ref=SourceRef.fromJson(part.getJSONObject("sourceRef"));if("full".equals(part.optString("coverage"))&&id.equals(ref.sourceId)&&revision==ref.revision&&conversation.equals(part.optString("sourceConversationId"))){matched=part;break;}}
-                if(matched==null)throw new SecurityException("所选原主人消息没有最终请求全文准备证明；范围、摘要或未知不能补作全文");check.requireNativeUserPart(matched,conversation);result.put(new JSONObject(matched.getJSONObject("sourceRef").toString()));
+                if(matched==null)throw new SecurityException("所选原主人消息没有最终请求全文准备证明；范围、摘要或未知不能补作全文");check.requireNativeUserPart(matched,conversation,forMemoryProposal);result.put(new JSONObject(matched.getJSONObject("sourceRef").toString()));
             }
         }return result;
     }
     /** Body-free discovery over this exact existing proof set; absence is unknown, not
      * evidence that the source did not occur elsewhere in the conversation. */
     public static JSONArray preparedUserSources(SQLiteDatabase db,ConversationRepository originals,String task,String run,String conversation)throws Exception {
+        return preparedUserSources(db,originals,task,run,conversation,false);
+    }
+    public static JSONArray preparedUserSources(SQLiteDatabase db,ConversationRepository originals,String task,String run,String conversation,boolean forMemoryProposal)throws Exception {
         JSONObject fact=loaded(db,task,run,null,null);JSONArray result=new JSONArray(),parts=fact.optJSONArray("nativeUserParts");
         if(!"final_main_request_prepared".equals(fact.optString("nativeUserExposureStage"))||parts==null)return result;if(parts.length()>MAX_CARRIERS)throw new SecurityException("原run主人来源证明不可读");
         java.util.Set<String> seen=new java.util.HashSet<>();try(var check=originals.inspectOwnerSources()){
             for(int i=0;i<parts.length();i++){JSONObject part=parts.getJSONObject(i);if(!"full".equals(part.optString("coverage"))||!conversation.equals(part.optString("sourceConversationId")))continue;
-                try{check.requireNativeUserPart(part,conversation);}catch(ConversationRepository.SourceUnavailable unavailable){continue;}
+                try{check.requireNativeUserPart(part,conversation,forMemoryProposal);}catch(ConversationRepository.SourceUnavailable unavailable){continue;}
                 SourceRef ref=SourceRef.fromJson(part.getJSONObject("sourceRef"));if(seen.add(ref.sourceId+":"+ref.revision))result.put(new JSONObject().put("sourceRef",ref.toJson()).put("coverage","full").put("exposureStage","final_main_request_prepared").put("modelConsumptionConfirmed",false));
             }
         }return result;

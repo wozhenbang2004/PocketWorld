@@ -415,16 +415,34 @@ public final class TaskStore {
     }
     /** Provenance selection only, never a model-controlled source grant or proof of consumption. */
     public synchronized JSONArray preparedConversationUserRefs(String id,String run,int epoch,String conversation,JSONArray selected)throws Exception {
+        return preparedConversationUserRefs(id,run,epoch,conversation,selected,false);
+    }
+    private JSONArray preparedConversationUserRefs(String id,String run,int epoch,String conversation,JSONArray selected,boolean forMemoryProposal)throws Exception {
         JSONObject task=required(id);requirePrivateOwner(task);
         if(!dev.pocketengine.features.memory.OwnerSourceRunContext.acceptsPrivateOwnerProjection(task)||task.optJSONObject("origin")!=null||!conversation.equals(task.optString("conversationId"))||!run.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch"))throw new SecurityException("来源选择不属于原私人会话执行");
-        JSONArray refs=dev.pocketengine.features.memory.OwnerSourceRunContext.preparedUserRefs(db,conversationRepository,id,run,conversation,selected);
+        JSONArray refs=dev.pocketengine.features.memory.OwnerSourceRunContext.preparedUserRefs(db,conversationRepository,id,run,conversation,selected,forMemoryProposal);
         requireScheduleProposalSources(id,run,epoch,conversation,refs);return refs;
     }
     public synchronized JSONArray preparedConversationUserSources(String id,String run,int epoch,String conversation)throws Exception {
+        return preparedConversationUserSources(id,run,epoch,conversation,false);
+    }
+    private JSONArray preparedConversationUserSources(String id,String run,int epoch,String conversation,boolean forMemoryProposal)throws Exception {
         requireSkillProposalCurrentTask(id,run,epoch);JSONObject task=required(id);if(!conversation.equals(task.optString("conversationId")))throw new SecurityException("来源发现不属于原会话");
-        JSONArray candidates=dev.pocketengine.features.memory.OwnerSourceRunContext.preparedUserSources(db,conversationRepository,id,run,conversation),current=new JSONArray();
+        JSONArray candidates=dev.pocketengine.features.memory.OwnerSourceRunContext.preparedUserSources(db,conversationRepository,id,run,conversation,forMemoryProposal),current=new JSONArray();
         for(int i=0;i<candidates.length();i++){JSONObject candidate=candidates.getJSONObject(i);try{requireScheduleProposalSources(id,run,epoch,conversation,new JSONArray().put(candidate.getJSONObject("sourceRef")));current.put(candidate);}catch(dev.pocketengine.features.automation.ScheduleSourceState.Unavailable|dev.pocketengine.features.automation.ScheduleSourceState.Invalidated withdrawn){/* An unavailable candidate is never supplied as a current source. */}}
         return current;
+    }
+    /** Memory proposals only: never change ordinary input, owner-selected quotes or independently authorized skills. */
+    private String memoryProposalConversation(String id,String run,int epoch)throws Exception {
+        JSONObject task=requireSkillProposalCurrentTask(id,run,epoch);
+        if(task.has("projectMemoryRead")||task.has("developmentContext"))throw new SecurityException("项目原任务不能借用个人记忆提案");
+        requireConversationMemoryEnabled(task);return task.getString("conversationId");
+    }
+    public synchronized JSONArray preparedMemoryProposalRefs(String id,String run,int epoch,JSONArray selected)throws Exception {
+        return preparedConversationUserRefs(id,run,epoch,memoryProposalConversation(id,run,epoch),selected,true);
+    }
+    public synchronized JSONArray preparedMemoryProposalSources(String id,String run,int epoch)throws Exception {
+        return preparedConversationUserSources(id,run,epoch,memoryProposalConversation(id,run,epoch),true);
     }
     public synchronized boolean skillProposalsEligible(String id)throws Exception {
         JSONObject task=get(id,false);return task!=null&&"owner".equals(task.optString("actorId"))&&"private".equals(task.optString("spaceId"))&&"assistant".equals(task.optString("kind"))&&!task.has("origin")&&!task.optString("conversationId").isBlank();
@@ -463,7 +481,8 @@ public final class TaskStore {
      * retirement SQL must commit before MemoryBook file writes; an outer SQL transaction
      * would undo the retirement after the file changed. The mutation may retire its own source. */
     public synchronized <T>T withMemoryProposalSourceCurrent(String id,String run,int epoch,String conversation,JSONArray selected,java.util.concurrent.Callable<T> action)throws Exception {
-        if(db.inTransaction())throw new SecurityException("原记忆来源核对不能包在可回滚的外层事务内");requireConversationMemoryEnabled(requireSkillProposalCurrentTask(id,run,epoch));preparedConversationUserRefs(id,run,epoch,conversation,selected);return action.call();
+        if(db.inTransaction())throw new SecurityException("原记忆来源核对不能包在可回滚的外层事务内");if(!conversation.equals(memoryProposalConversation(id,run,epoch)))throw new SecurityException("原记忆提案对话已变化");
+        preparedConversationUserRefs(id,run,epoch,conversation,selected,true);return action.call();
     }
     /** Audit reads retain the exact original run and operation even after source withdrawal. */
     public synchronized JSONObject skillProposalForOwner(String id,String run,int epoch,String operation)throws Exception{return conversationProposalForOwner(ConversationDraftKind.SKILL,id,run,epoch,operation);}
@@ -6431,6 +6450,21 @@ public final class TaskStore {
     }
     private static JSONObject remoteDraft(JSONObject task,String id)throws Exception {
         JSONArray rows=task.optJSONArray("remoteInputDrafts");for(int i=0;rows!=null&&i<rows.length();i++)if(id.equals(rows.getJSONObject(i).optString("id")))return rows.getJSONObject(i);return null;
+    }
+    /** Read/reconcile existing drafts only in this original TaskStore. Never creates, queues, sends or redirects one. */
+    public synchronized JSONObject privateRemotePhoneDrafts(JSONObject pin,boolean list)throws Exception {
+        String id=pin.getString("taskId");JSONObject original=required(id);requireRemoteDraftOwner(original);
+        return dev.pocketengine.features.remote.RemotePhoneDrafts.inspect(original,remoteOwnerTarget(id),pin,list);
+    }
+    public synchronized JSONObject withdrawPrivateRemotePhoneDraft(JSONObject pin,String textSha,java.util.function.BooleanSupplier owner)throws Exception{
+        JSONObject exact=privateRemotePhoneDrafts(pin,false),before=exact.getJSONObject("item");
+        if(!before.getString("textSha256").equals(textSha)||!owner.getAsBoolean())throw new SecurityException("原稿或主人窗口已变化；未撤下");
+        JSONObject withdrawn=withdrawRemoteDraft(pin.getString("taskId"),before.getString("id"),before.getLong("revision"));
+        if(!before.get("id").equals(withdrawn.opt("id"))||withdrawn.getLong("revision")!=Math.addExact(before.getLong("revision"),1)
+                ||!before.get("scopeHash").equals(capabilityFingerprint(withdrawn.getJSONObject("scope")))||!"withdrawn".equals(withdrawn.opt("state"))||!withdrawn.isNull("operationId"))
+            throw new IllegalStateException("未取得可核对的本机撤下回执；请重读原清单");
+        exact.remove("item");return exact.put("id",before.get("id")).put("previousRevision",before.get("revision"))
+            .put("revision",withdrawn.getLong("revision")).put("localState","withdrawn").put("hostRecall",false);
     }
     /** Saving/queueing is local intent, not provider acceptance or future execution permission. */
     public synchronized JSONObject saveRemoteDraft(JSONObject source,String profileGeneration,String draftId,long revision,String mode,String text,boolean queued)throws Exception {
@@ -16548,6 +16582,15 @@ public final class TaskStore {
     private JSONObject checkpoint(String runId)throws Exception{return TaskRunDocumentReader.forRun(db,runId);}
     private JSONObject checkpointForTask(String id)throws Exception{return TaskRunDocumentReader.latestForTask(db,id);}
     private JSONObject grant(String runId)throws Exception{return TaskRunDocumentReader.grantForRun(db,runId);}
+    /** Verify a cached read against the actual current private task without maintaining, decrypting or exporting the file. */
+    public synchronized boolean stillOwnsPrivateResultImage(PrivatePhoneResultImage image)throws Exception {
+        if(image==null||image.expires()<=System.currentTimeMillis())return false;
+        // Same bounded native document window as getForUi. A missing/large current row cannot lend its old bytes.
+        try(Cursor row=db.rawQuery("SELECT CASE WHEN length(CAST(document AS BLOB))<=262144 THEN document END,CASE WHEN length(CAST(ui_header AS BLOB))<=262144 THEN ui_header END FROM tasks WHERE task_id=?",new String[]{image.taskId()})){
+            return row.moveToFirst()&&!row.isNull(0)&&!row.isNull(1)&&image.stillSaved(new JSONObject(row.getString(0)),
+                    new JSONObject(row.getString(1)),System.currentTimeMillis());
+        }
+    }
     private static String resultImageSha256(byte[] bytes)throws Exception{StringBuilder hash=new StringBuilder();for(byte value:java.security.MessageDigest.getInstance("SHA-256").digest(bytes))hash.append(String.format(java.util.Locale.ROOT,"%02x",value&255));return hash.toString();}
     /** Read-only cache identity for these exact native result facts, never execution/confirmation authority. */
     private void projectResultImageIdentity(JSONObject task,JSONObject projection)throws Exception{

@@ -193,6 +193,45 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             main.post { taskScreenshotSaving = false; if (!closed) actual?.let { taskScreenshotPolicy = JSONObject(it.toString()) }; result.fold({ done(it, null) }, { state = state.copy(error = message(it)); done(null, message(it)) }) }
         } } catch (failure: Exception) { taskScreenshotSaving = false; done(null, message(failure)) }
     }
+    private var originalPhoneImageRead: Any? = null
+    private var openedPhoneImage: Pair<dev.pocketengine.store.TaskStore, dev.pocketengine.store.PrivatePhoneResultImage>? = null
+    internal fun forgetHeldPhoneImage() { openedPhoneImage = null }
+    /** Only a successful explicit task-open in the original backing store may bind this page, never an old cached row on entry. */
+    internal fun bindPhoneImageAfterOpen(): (UiTask) -> Unit {
+        val source = app.tasks
+        return { task ->
+            openedPhoneImage = if (!closed && webPrivateOwnerVisible() && webTaskViewId == task.id && app.tasks === source &&
+                !task.raw.optBoolean("taskCoreReadLimited") && task.raw.optString("taskProjection") != "summary")
+                dev.pocketengine.store.PrivatePhoneResultImage.cached(task.raw, System.currentTimeMillis())?.let { source to it }
+            else null
+        }
+    }
+    /** Descriptor only. All regular task snapshots continue to omit pixels; no path opens the file here. */
+    internal fun heldPrivatePhoneImage(id: String): dev.pocketengine.store.PrivatePhoneResultImage? {
+        val origin = openedPhoneImage ?: return null
+        if (closed || webTaskViewId != id || !webPrivateOwnerVisible() || app.tasks !== origin.first || id != origin.second.taskId()) return null
+        val raw = state.tasks.firstOrNull { it.id == id }?.raw ?: return null
+        return dev.pocketengine.store.PrivatePhoneResultImage.cached(raw, System.currentTimeMillis())?.takeIf { it == origin.second }
+    }
+    internal fun readHeldPrivatePhoneImage(id: String, args: JSONObject, visible: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
+        check(visible() && webPrivateOwnerVisible()) { "请在原私人手机任务查看这张截图。" }
+        val key = heldPrivatePhoneImage(id)?.takeIf { it.requested(args) } ?: error("这份原截图没有留在当前任务页。")
+        val origin = openedPhoneImage; val owner = webWindowTicket(); val store = app.tasks; val ticket = Any()
+        check(originalPhoneImageRead == null) { "上一份原截图核对尚未结束。" }; originalPhoneImageRead = ticket
+        try { io.execute {
+            // Only the small identity crosses this queue. No screenshot, file read, restore, action handle or permission.
+            val matches = runCatching { app.tasks === store && store.stillOwnsPrivateResultImage(key) }.getOrDefault(false)
+            main.post {
+                if (originalPhoneImageRead === ticket) originalPhoneImageRead = null
+                val result = runCatching {
+                    check(matches && !closed && origin != null && openedPhoneImage === origin && app.tasks === store && visible() && webPrivateOwnerVisible() && owner == webWindowTicket()) { "原截图已变化或暂不能核对，没有显示替代图。" }
+                    val raw = state.tasks.firstOrNull { it.id == id }?.raw ?: error("原任务已离开。")
+                    key.resultFrom(raw, System.currentTimeMillis())
+                }
+                result.fold({ done(it, null) }, { done(null, message(it)) })
+            }
+        } } catch (e: Exception) { if (originalPhoneImageRead === ticket) originalPhoneImageRead = null; done(null, message(e)) }
+    }
     internal fun deleteTaskScreenshot(task: UiTask, imageId: String, done: (JSONObject?, String?) -> Unit) {
         check(webPrivateOwnerVisible()) { "请在原私人任务核对截图" }
         val window = webWindowTicket(); val run = task.raw.getString("runId"); val epoch = task.raw.getInt("coordinatorEpoch")
@@ -2264,6 +2303,11 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         catch (error: Exception) { state = state.copy(error = message(error)) }
     }
     /** Local stored metadata only; does not probe a CLI, query a remote job or select an authority. */
+    internal fun readOrWithdrawPhoneDraft(pin:JSONObject,mode:String,textSha:String?,current:()->Boolean):JSONObject{
+        check(webPrivateOwnerVisible()&&current())
+        return if(mode=="withdraw")app.tasks.withdrawPrivateRemotePhoneDraft(pin,requireNotNull(textSha)){webPrivateOwnerVisible()&&current()}
+            else {require(mode=="list"||mode=="read");app.tasks.privateRemotePhoneDrafts(pin,mode=="list")}
+    }
     internal val offlineRemotePickup by lazy { dev.pocketengine.features.remote.RemotePhonePickup(
         app.tasks, dev.pocketengine.features.attachments.AttachmentRepository.get(activity).book) }
     fun remoteManagedSessions(): JSONObject {
@@ -2275,12 +2319,16 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         return (app.remoteOwnerWorkflows ?: throw IllegalStateException("原电脑任务宿主未就绪")).managedSessionTask(activity, task, identity)
     }
     fun enterRemoteTask(taskId: String): String = enterRemoteTask(taskId, null)
-    internal fun enterRemoteTask(taskId: String, done: ((JSONObject?, String?) -> Unit)?): String {
+    internal fun enterRemoteTask(taskId: String, done: ((JSONObject?, String?) -> Unit)?): String = openRemoteTaskWindow(taskId,null,null,done)
+    internal fun enterSelectedRemoteTask(taskId:String,run:String,epoch:Int,done:(JSONObject?,String?)->Unit):String = openRemoteTaskWindow(taskId,run,epoch,done)
+    private fun openRemoteTaskWindow(taskId:String,run:String?,epoch:Int?,done:((JSONObject?,String?)->Unit)?):String {
         ownerDomain?.let(::leaveOwnerDomain)
         ownerDomain = "remoteTask"; remoteOwnerWindow = UUID.randomUUID().toString(); remoteOwnerTask = taskId
         state = state.copy(ownerSnapshots = state.ownerSnapshots - "remoteTask", ownerResponses = state.ownerResponses - "remoteTask", ownerErrors = state.ownerErrors - "remoteTask")
         if (done == null) requestRemoteTask("open")
-        else requestOwnerDomainReceipt("remoteTask", "open", JSONObject().put("windowId", remoteOwnerWindow).put("taskId", taskId), done)
+        else requestOwnerDomainReceipt("remoteTask", "open", JSONObject().put("windowId", remoteOwnerWindow).put("taskId", taskId).also {
+            if(run!=null&&epoch!=null)it.put("shownRunId",run).put("shownEpoch",epoch)
+        }, done)
         return remoteOwnerWindow!!
     }
     fun enterRemoteProject(request: JSONObject): String {
@@ -4696,7 +4744,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         if (!keepConversationReader) closeConversationReader()
         if (requestNavigation) state = state.copy(requestedTaskId = id, requestedTaskRevision = state.requestedTaskRevision + 1)
     }
-    internal fun closeWebTaskView() { webTaskViewId = null }
+    internal fun closeWebTaskView() { webTaskViewId = null; forgetHeldPhoneImage() }
     /** Opening a bounded owner view is distinct from accepting a complete result review. */
     internal fun readTaskForOpen(id: String, current: () -> Boolean, complete: (UiTask?, String?) -> Unit) =
         readTaskForWeb(id, false, current, complete)

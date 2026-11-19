@@ -271,7 +271,7 @@ internal class PocketWebBridge(
             "ownerWork.supplement.read", "ownerWork.supplement.edit", "ownerWork.supplement.send", "ownerWork.supplement.query",
             "attachments.pick", "attachments.openPicker", "attachments.closePicker", "attachments.toggle", "attachments.remove", "attachments.open", "sources.open", "sources.read", "sources.close",
             "phone.request.original",
-            "phone.result.original", "phone.resultNotice.read", "phone.resultNotice.set", "phone.activity.original", "phone.draft.original",
+            "phone.resultImage.held", "phone.result.original", "phone.resultNotice.read", "phone.resultNotice.set", "phone.activity.original", "phone.draft.original",
             "quickVoice.start", "quickVoice.save", "quickVoice.close", "quickVoice.return",
             "skillDraft.open", "skillDraft.read", "skillDraft.source", "skillDraft.confirm", "skillDraft.cancel", "skillDraft.query", "skillDraft.close", "voice.start", "voice.stop", "voice.review", "voice.accept", "voice.discard", "speech.speak", "speech.stop", "speech.taskAnnouncements", "speech.stopTaskAnnouncement",
             "tasks.refresh", "tasks.open", "tasks.close", "tasks.recoverTeamFile", "tasks.teamRemainder.read", "tasks.teamRemainder.close", "tasks.teamRemainder.continue", "tasks.stop", "tasks.review", "tasks.confirm", "tasks.approve", "tasks.resolve", "tasks.resume", "tasks.scope", "tasks.plan.enter", "tasks.answerQuestion", "tasks.answerQuestionChoice", "tasks.deleteScreenshot", "privacy.screenshots.read", "privacy.screenshots.save",
@@ -318,6 +318,7 @@ internal class PocketWebBridge(
     fun close() {
         if (closed) return
         closed = true
+        controller.forgetHeldPhoneImage()
         started = false
         cancelStatePublication()
         presentation.close()
@@ -361,6 +362,7 @@ internal class PocketWebBridge(
     /** Synchronously invalidate queued commands and short-lived owner review handles. */
     fun invalidatePresentation(documentReplaced: Boolean) {
         check(Looper.myLooper() == Looper.getMainLooper())
+        controller.forgetHeldPhoneImage()
         cancelStatePublication()
         projectGoal=null; commandFence.invalidate()
         if (documentReplaced) controller.forgetShownPhoneActivity()
@@ -446,7 +448,9 @@ internal class PocketWebBridge(
         }
         domainErrors.forEach { (domain, error) -> projectedState.getJSONObject("ownerErrors").put(domain, error) }
         snapshot.put("capabilities", JSONObject().put("commands", JSONArray(commands.toList())))
-            .put("view", JSONObject().put("section", section ?: JSONObject.NULL).put("resumeRevision", workspaceResumeRevision).put("taskId", taskViewId ?: JSONObject.NULL))
+            .put("view", JSONObject().put("section", section ?: JSONObject.NULL).put("resumeRevision", workspaceResumeRevision).put("taskId", taskViewId ?: JSONObject.NULL).also { view ->
+                if (section == null) taskViewId?.let { task -> controller.heldPrivatePhoneImage(task)?.let { view.put("heldPrivatePhoneImage", it.descriptor()) } }
+            })
             .put("phoneDraft", phoneComposer.snapshot())
         val serialized = snapshot.toString()
         if (!force && serialized == lastState) return
@@ -624,7 +628,7 @@ internal class PocketWebBridge(
                 conversationOrganization.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }; return
             }
             if (action in PocketWebRemoteTasks.COMMANDS) {
-                remoteTasks.dispatch(action, args) { result, error -> complete(id, result, error, retainValue = action != "remoteTask.clipboard" && action !in PocketWebRemotePickup.COMMANDS); publishState() }; return
+                remoteTasks.dispatch(action, args) { result, error -> complete(id, result, error, retainValue = action != "remoteTask.clipboard" && action !in PocketWebRemotePickup.COMMANDS && action !in PocketWebRemotePhoneDrafts.COMMANDS); publishState() }; return
             }
             if (action in PocketWebTeamEvidence.COMMANDS) {
                 teamEvidence.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }; return
@@ -1190,8 +1194,9 @@ internal class PocketWebBridge(
                         else -> false
                     }
                     val onceInvite=action=="devices.createInvitation" && error==null
-                    complete(id,result,error,"outcome_unknown",retainValue=!privateText && !onceInvite && action!="devices.checkLocalExportedFile",
+                    complete(id,result,error,"outcome_unknown",retainValue=!privateText && !onceInvite && action!="devices.checkLocalExportedFile" && action!="devices.readSavedPeerScope",
                         replayHint=if(onceInvite)"这次邀请已显示；不会从回执重新显示令牌、二维码或生成另一份邀请。"
+                            else if(action=="devices.readSavedPeerScope")"原授权显示窗口已结束；重新读取只核对本机保存的单据，不联系伙伴。"
                             else if(privateText)"原文字读取或审阅已结束，请回到原工作重新核对；没有重放正文或执行操作。" else null)
                     if (!action.startsWith("devices.desktop.")) publishState()
                 }
@@ -1386,6 +1391,17 @@ internal class PocketWebBridge(
             if (action == "phone.start") { phoneComposer.start(id, args); return }
             if (action == "phone.query") { phoneComposer.query(id, args); return }
             if (action == "phone.draft.recentStarts") { phoneComposer.recentDraft(id,args); return }
+            if (action == "phone.resultImage.held") {
+                checkedPayload(args, setOf("taskId","runId","epoch","resultRevision","resultImageDigest","imageId","imageSha256"))
+                val target = requiredString(args,"taskId"); val origin = captureWindow(); val doc = documentId
+                fun visible() = !closed && documentId == doc && acceptsWindow(origin) && section == null && taskViewId == target && controller.webPrivateOwnerVisible()
+                controller.readHeldPrivatePhoneImage(target,args,::visible) { result,error ->
+                    // Original pixels must never become a cached bridge receipt or be replayed after navigation.
+                    val current = visible()
+                    complete(id, if (current) result else null, if (current) error else "原任务页面已关闭。", retainValue=false)
+                }
+                return
+            }
             if (action == "phone.draft.original") {
                 val doc=documentId; val page=commandFence.ticket(); val owner=controller.displayedPhoneWindowVersion()
                 fun current() = !closed && doc!=null && documentId==doc && commandFence.accepts(page) &&
@@ -2092,6 +2108,7 @@ internal class PocketWebBridge(
         // Keep the reader and draft unchanged until the original is checked.
         if (checkReaderInput == null) { enterWindow(); publishState() }
         val window = captureWindow()
+        val bindImage = controller.bindPhoneImageAfterOpen()
         controller.readTaskForOpen(taskId, { !closed && acceptsWindow(window) && (projectScope == null || projectReadCurrent(projectScope)) && (sourceWindowCurrent?.invoke() != false) }) { task, error ->
             if (closed) return@readTaskForOpen
             if (!acceptsWindow(window)) complete(requestId, null, "原任务窗口已关闭，请重新打开")
@@ -2108,6 +2125,7 @@ internal class PocketWebBridge(
                 checkReaderInput?.let { check -> check(task); enterWindow() }
                 if (isGroup(task)) taskPage = controller.enterGroupTask(task.id)
                 controller.completeWebTaskOpen(task.id, requestNavigation, keepConversationReader)
+                bindImage(task)
                 checkedDeviceFile?.let { file ->
                     require(entered && task.id==file.task && taskViewId==file.task && section==null)
                     val taskWindow=captureWindow()

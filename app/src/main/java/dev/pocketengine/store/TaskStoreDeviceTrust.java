@@ -134,6 +134,27 @@ public final class TaskStoreDeviceTrust implements PairingCoordinator.TrustStore
         }finally{db.endTransaction();}
     }
     @Override public synchronized void putOutgoingGrant(String target,String grant,JSONObject receipt,long now){ContentValues values=new ContentValues();values.put("target_device_id",target);values.put("grant_id",grant);values.put("receipt_json",DeviceProtocol.canonical(receipt));values.put("received_at",now);db.insertWithOnConflict("device_outgoing_grants",null,values,SQLiteDatabase.CONFLICT_REPLACE);}
+    /** Owner-only source, not a permission. Read one joined ORIGINAL mutual pairing and receipt.
+     * Ambiguous or rotated pairings return no details; another device is never inspected. */
+    public JSONObject savedPeerScopeEvidence(String id) throws Exception {
+        String query="SELECT i.invite_id,i.transcript_digest,i.receipt_json,c.attempts,c.record_json,g.grant_id,g.received_at,g.receipt_json "
+                +"FROM device_pairing_invites i JOIN device_pairing_candidates c ON c.invite_id=i.invite_id AND c.candidate_digest=i.transcript_digest "
+                +"JOIN device_outgoing_grants g ON g.target_device_id=i.peer_device_id "
+                +"WHERE i.peer_device_id=? AND i.state='consumed' AND c.state='consumed' AND g.received_at>=c.updated_at "
+                +"AND NOT EXISTS(SELECT 1 FROM device_identity_rotations r WHERE r.old_device_id=? OR r.new_device_id=?) "
+                +"ORDER BY g.received_at DESC,g.grant_id LIMIT 2";
+        try(Cursor row=db.rawQuery(query,new String[]{id,id,id})) {
+            if(!row.moveToFirst())return new JSONObject().put("state","no_matching_record");
+            if(row.getCount()!=1)return new JSONObject().put("state","not_single");
+            boolean invitedHere=row.getInt(3)>0;
+            JSONObject pair=new JSONObject(row.getString(2)), candidate=new JSONObject(row.getString(4));
+            return new JSONObject().put("state","record").put("inviteId",row.getString(0)).put("digest",row.getString(1))
+                    .put("invitedHere",invitedHere).put("pairStatus",pair.getString("status"))
+                    .put("inviter",pair.getJSONObject("localConfirmation"))
+                    .put("joiner",candidate.getJSONObject(invitedHere?"peerConfirmation":"localConfirmation"))
+                    .put("grantId",row.getString(5)).put("receivedAt",row.getLong(6)).put("signed",new JSONObject(row.getString(7)));
+        }
+    }
     @Override public JSONObject outgoingGrant(String target,String grant)throws Exception{try(Cursor row=db.rawQuery("SELECT receipt_json FROM device_outgoing_grants WHERE target_device_id=? AND grant_id=?",new String[]{target,grant})){return row.moveToFirst()?new JSONObject(row.getString(0)):null;}}
     @Override public synchronized JSONObject rotatePeer(JSONObject previous,JSONObject next,JSONObject receipt,long now)throws Exception{
         db.beginTransaction();try{

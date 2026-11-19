@@ -485,7 +485,7 @@ class WindowsBackend:
             finally:
                 self.api.k.CloseHandle(handle)
 
-    def create_private_snapshot(self, root, relative, raw, maximum=20 * 1024 * 1024, *, current=lambda: None):
+    def create_private_snapshot(self, root, relative, raw, maximum=20 * 1024 * 1024, *, current=lambda: None, bind_birth=False):
         """Publish an absent immutable cache object beneath an already-private root.
 
         State-root ACL provisioning is the installer's job, not inferred from
@@ -500,7 +500,14 @@ class WindowsBackend:
             try:
                 handle = self.api.open(temporary, create=True, write=True, delete=True)
                 self.api.write(handle, raw)
-                source_identity = self.api.identity(self.api.info(handle))
+                info = self.api.info(handle)
+                source_identity = self.api.identity(info)
+                extra = {}
+                if bind_birth:
+                    birth = [info.created.dwHighDateTime,info.created.dwLowDateTime]
+                    if not any(source_identity[1:]) or not any(birth):
+                        raise PlatformError("Cannot bind original Windows artifact creation")
+                    extra["fileOrigin"] = [*source_identity,*birth]
                 current()  # Final original grant/cancel gate at the native publication boundary.
                 attempted = True
                 # No name reopening for the source and no overwrite option.
@@ -520,7 +527,7 @@ class WindowsBackend:
                     if reader.identity != source_identity:
                         raise PlatformError("Published path no longer names the original snapshot; do not expose it")
                 return {"bytes": len(raw), "sha256": actual.hexdigest(), "parentIdentity": identity, "fileIdentity": source_identity,
-                        "publication": "original_handle_absent_only_rename"}
+                        "publication": "original_handle_absent_only_rename", **extra}
             finally:
                 if handle is not None:
                     # A failed/unknown rename may already have published the

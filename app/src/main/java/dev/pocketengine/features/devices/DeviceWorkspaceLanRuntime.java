@@ -458,6 +458,16 @@ public final class DeviceWorkspaceLanRuntime implements AutoCloseable, DeviceTra
         private final DeviceEndpointResolver.Resolved endpoint;
         private volatile PairingCoordinator.CandidateOffer offer;
         private volatile String state = "pending_local_review";
+        private final java.util.concurrent.atomic.AtomicBoolean advancing = new java.util.concurrent.atomic.AtomicBoolean();
+        private boolean terminal() {
+            return "rejected".equals(state) || "remote_trust_ended".equals(state) || "local_pair_saved".equals(state)
+                    || "local_pair_followup_unverified".equals(state) || "local_pair_connection_unavailable".equals(state) || "paired".equals(state);
+        }
+        private boolean originalCommitStored() throws Exception {
+            if (offer == null || !"consumed".equals(owner.trust.localPairingOfferState(invitation.getString("inviteId")))) return false;
+            JSONObject original = owner.trust.localPairingOffer(invitation.getString("inviteId"));
+            return original != null && offer.candidateDigest().equals(original.optString("candidateDigest"));
+        }
         Outgoing(JSONObject invitation, DeviceEndpointResolver.Resolved endpoint, DeviceWorkspaceGrantOwner.Review grant) throws Exception { this.invitation = new JSONObject(invitation.toString()); this.endpoint = endpoint; this.nativeGrantReview = grant; this.grant = grant == null ? null : grant.grant(); }
         public JSONObject view() throws Exception {
             DeviceIdentity.LocalIdentity local = owner.existingIdentity();
@@ -468,12 +478,22 @@ public final class DeviceWorkspaceLanRuntime implements AutoCloseable, DeviceTra
         public NativeDeviceWorkspaceHost.PairingReviewAction reviewGrant(NativeDeviceWorkspaceHost.GrantChoice choice) throws Exception { return new Outgoing(invitation, endpoint, owner.reviewGrantFor(invitation.getString("inviterDeviceId"), choice)); }
         public void confirmBothFingerprints() throws Exception {
             if (grant == null) throw new SecurityException("请先选择允许的权限范围"); nativeGrantReview.requireCurrent();
+            if (outgoing.size() >= 4) outgoing.entrySet().removeIf(row ->
+                    !row.getKey().equals(invitation.optString("inviteId")) && (row.getValue().terminal() || row.getValue().invitation.optLong("expiresAt") <= System.currentTimeMillis()));
             if (outgoing.size() >= 4) throw new IllegalStateException("还有正在配对的设备，请先完成它们");
             Outgoing known = outgoing.putIfAbsent(invitation.getString("inviteId"), this); if (known != null && known != this) throw new SecurityException("这次邀请已经开始配对，请核对原状态");
-            advance();
+            state = "local_review_only"; advance();
         }
         public void reject() { outgoing.remove(invitation.optString("inviteId"), this); state = "rejected"; }
         void advance() throws Exception {
+            if (!advancing.compareAndSet(false, true)) throw new SecurityException("这次原配对正在核对，不重复握手");
+            try {
+                if (terminal()) throw new SecurityException("这次原配对已有终态，请查看原回执，不再握手");
+                if (originalCommitStored()) { state = "local_pair_followup_unverified"; owner.changed(); return; }
+                advanceOriginal();
+            } finally { advancing.set(false); if (!terminal()) owner.changed(); }
+        }
+        private void advanceOriginal() throws Exception {
             if (System.currentTimeMillis() >= invitation.getLong("expiresAt")) throw new SecurityException("配对邀请已到期，请重新发起"); nativeGrantReview.requireCurrent();
             DeviceIdentity.LocalIdentity local = owner.existingIdentity(); byte[] der = Base64.getDecoder().decode(invitation.getString("certificateDer"));
             try (DeviceByteChannel raw = openPairing(endpoint, invitation.getString("inviterDeviceId"), false)) {
@@ -481,16 +501,33 @@ public final class DeviceWorkspaceLanRuntime implements AutoCloseable, DeviceTra
                     if (offer == null) offer = owner.pairing().prepareCandidateOffer(local, invitation, verified, grant, true, System.currentTimeMillis());
                     return offer.wireBytes();
                 });
-                JSONObject receipt = PairingCoordinator.verifyCandidateReceipt(offer, response); state = receipt.getString("state");
+                // The pinned inviter and original offer/digest, not socket failure, report this status.
+                JSONObject receipt = PairingCoordinator.verifyCandidateReceipt(offer, response); String remote = receipt.getString("state");
+                if ("rejected".equals(remote) || "paired".equals(remote) && Boolean.FALSE.equals(receipt.opt("currentlyTrusted"))) {
+                    state = "rejected".equals(remote) ? "rejected" : "remote_trust_ended"; owner.changed(); return;
+                }
+                state = "paired".equals(remote) ? "remote_commit_reported" : remote;
             }
-            if (!"confirmed_for_mtls".equals(state) && !"paired".equals(state)) { state = "waiting_remote_confirmation"; owner.changed(); return; }
+            if (!"confirmed_for_mtls".equals(state) && !"remote_commit_reported".equals(state)) { state = "waiting_remote_confirmation"; owner.changed(); return; }
             try (DeviceByteChannel raw = openPairing(endpoint, invitation.getString("inviterDeviceId"), true)) {
                 PairingCompletionTransport.exchange(DeviceTlsContexts.forPeer(local, der), der, raw, invitation.getLong("expiresAt"), new PairingCompletionTransport.Client() {
                     public byte[] request(DeviceIdentity.AuthenticatedPeer peer) throws Exception { return DeviceProtocol.canonicalBytes(PairingCoordinator.candidateFinalizeRequest(offer)); }
-                    public void accept(DeviceIdentity.AuthenticatedPeer peer, byte[] completion) throws Exception { retainOutgoingGrant(owner.pairing().acceptCandidateCompletion(offer, peer, completion, grant, System.currentTimeMillis())); if ("relay".equals(endpoint.kind)) invitationRelay(endpoint.serviceBase, peer.deviceId()).bindPeer(peer.deviceId()); saveBoundEndpoint(peer.deviceId(), invitation); }
+                    public void accept(DeviceIdentity.AuthenticatedPeer peer, byte[] completion) throws Exception {
+                        PairingCoordinator.OutgoingGrant accepted = owner.pairing().acceptCandidateCompletion(offer, peer, completion, grant, System.currentTimeMillis());
+                        state = "local_pair_saved"; retainOutgoingGrant(accepted);
+                        if ("relay".equals(endpoint.kind)) invitationRelay(endpoint.serviceBase, peer.deviceId()).bindPeer(peer.deviceId());
+                        saveBoundEndpoint(peer.deviceId(), invitation);
+                    }
                 });
+            } catch (Exception incomplete) {
+                // A timeout or invalid reply alone cannot establish either refusal or a commit.
+                // The original trust transaction can commit before retaining the reciprocal grant/address.
+                if (!"local_pair_saved".equals(state) && !originalCommitStored()) throw incomplete;
+                state = "local_pair_followup_unverified"; owner.changed(); return;
             }
-            state = "paired"; connectInviter(local, invitation.getString("inviterDeviceId"), der, endpoint); outgoing.remove(invitation.getString("inviteId"), this); owner.changed();
+            try { connectInviter(local, invitation.getString("inviterDeviceId"), der, endpoint); }
+            catch (Exception notStarted) { state = "local_pair_connection_unavailable"; owner.changed(); return; }
+            state = "paired"; outgoing.remove(invitation.getString("inviteId"), this); owner.changed();
         }
     }
     NativeDeviceWorkspaceHost.RecoveryEndpointAction openCommittedRecovery(String inviteId, String selectedAddress) throws Exception {
@@ -561,7 +598,7 @@ public final class DeviceWorkspaceLanRuntime implements AutoCloseable, DeviceTra
         for (Outgoing entry : outgoing.values()) {
             if (result.length() >= 8) { hidden++; continue; }
             JSONObject safe = entry.view(); safe.remove("grantOptions"); safe.remove("grantReview");
-            result.put(safe.put("candidateId", entry.invitation.getString("inviteId")).put("reviewAvailable", false).put("advanceAvailable", true));
+            result.put(safe.put("candidateId", entry.invitation.getString("inviteId")).put("reviewAvailable", false).put("joiningOriginal", true).put("advanceAvailable", !entry.terminal() && !entry.advancing.get()));
         }
         return hidden;
     }

@@ -60,7 +60,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
     private val desktopInFlight = AtomicReference<String?>(null)
     private val pairingImage = PocketWebPairingImage()
     companion object {
-        val COMMANDS = setOf("devices.discovery.start", "devices.discovery.stop", "devices.discovery.reviewConnection", "devices.snapshot", "devices.createInvitation", "devices.inspectInvitation", "devices.continueFirstPair", "devices.reviewPairing", "devices.advancePairing", "devices.reviewPeerGrant",
+        val COMMANDS = setOf("devices.discovery.start", "devices.discovery.stop", "devices.discovery.reviewConnection", "devices.snapshot", "devices.createInvitation", "devices.inspectInvitation", "devices.readSavedPeerScope", "devices.continueFirstPair", "devices.reviewPairing", "devices.advancePairing", "devices.reviewPeerGrant",
             "devices.reviewGrant", "devices.reviewConnection", "devices.reviewRelay", "devices.reviewAction", "devices.reviewGoal", "devices.reviewResult", "devices.reviewApproval",
             "devices.confirm", "devices.reject", "devices.discard", "devices.recoveryAddresses", "devices.openRecovery", "devices.recoverPairing", "devices.reviewAbandonment", "devices.openTask", "devices.readTask", "devices.reviewResumeRequest",
             "devices.readPhoneGoalArchive", "devices.readReceivedPhoneGoals", "devices.readLocalReviewedPhoneGoal", "devices.readReviewedPhoneInbox", "devices.readWaitingPhoneGoals", "devices.returnToReceivedPhoneGoal", "devices.prepareReceivedModelReturn", "devices.openHistory", "devices.checkLocalExportedFile", "devices.openCheckedLocalFile", "devices.queryHistory", "devices.queryPhoneGoalResult", "devices.stopHistory",
@@ -728,6 +728,12 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                         fields(args, "deviceId", "candidateId"); val id = text(args, "deviceId"); peer(before, id)
                         val native = original.reviewDiscoveredConnection(id, text(args, "candidateId"))
                         store("connection", native, native.view(), original, epoch)
+                    }
+                    "devices.readSavedPeerScope" -> {
+                        fields(args,"deviceId","instanceId","fingerprint")
+                        val id=text(args,"deviceId"); val instance=text(args,"instanceId"); val fp=text(args,"fingerprint"); val selected=peer(before,id)
+                        require(selected.opt("revoked")==false && selected.opt("instanceId")==instance && selected.opt("certificateFingerprint")==fp) { "请重新打开原配对伙伴" }
+                        JSONObject().put("savedPeerScope",original.readSavedPeerScope(id,instance,fp))
                     }
                     "devices.snapshot" -> { fields(args, "deviceId"); if (args.has("deviceId")) { val id = text(args, "deviceId"); peer(before, id); original.refreshPeerFacts(id) }; JSONObject().put("readOnly", true) }
                     "devices.createInvitation" -> {

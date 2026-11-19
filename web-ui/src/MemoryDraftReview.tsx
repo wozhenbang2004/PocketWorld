@@ -64,6 +64,7 @@ export function MemoryDraftReview({ target, onClose, onOpenMemory }: {
   }, [review]);
   const outcomeStatus = value?.status || apply.status;
   const pending = outcomeStatus === 'pending_owner' && !!review && !!handle.current && !attempted;
+  const dismissOnly = review?.dismissOnly === true;
   // A fresh native query must settle an uncertain attempt before the original review can reopen.
   const canReopen = outcomeStatus === 'pending_owner' && !review && !handle.current;
   const action = proposal.action || review?.action;
@@ -87,7 +88,7 @@ export function MemoryDraftReview({ target, onClose, onOpenMemory }: {
     Number.isSafeInteger(apply.expiresAt) && apply.expiresAt > 0 && Number.isSafeInteger(apply.checkedAt) && apply.expiresAt <= apply.checkedAt;
 
   const expiryLabel = typeof expiry === 'number' && Number.isSafeInteger(expiry) && expiry > 0 ? new Date(expiry).toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
-  const title = undoPending ? '撤销结果待核对' : duplicate ? '已有相同内容' : reverted ? '已撤销这次保存' : saved ? action === 'forget' ? '已忘记这条记忆' : action === 'update' ? '已更新记忆' : '已记住'
+  const title = dismissOnly ? '这份旧提案不能采纳' : undoPending ? '撤销结果待核对' : duplicate ? '已有相同内容' : reverted ? '已撤销这次保存' : saved ? action === 'forget' ? '已忘记这条记忆' : action === 'update' ? '已更新记忆' : '已记住'
     : action === 'forget' ? '忘记这条记忆' : action === 'update' ? '更新这条记忆' : '记住这件事';
   const status: Record<string, string> = { pending_owner: '待你确认', saved: action === 'forget' ? '这次遗忘已完成' : '这次记忆已保存', already_saved: '已有相同内容，本次没有重复保存', reverted: '这次保存已撤销', cancelled: '已放弃这个提案', rejected: '本次没有修改记忆', unknown: '修改结果待核对', applying_unknown: '修改结果待核对', conflict: '记忆已有后续变化，请查看最新内容' };
   const close = () => { if (!busy) onClose(); };
@@ -106,11 +107,11 @@ export function MemoryDraftReview({ target, onClose, onOpenMemory }: {
     <Drawer.Overlay className="pw-overlay" />
     <Drawer.Content className="pw-drawer pw-memory-draft-drawer" aria-describedby="memory-draft-description">
       <div className="pw-drawer-handle" />
-      <header className="pw-drawer-header"><div><Drawer.Title>{title}</Drawer.Title><Drawer.Description id="memory-draft-description">{undoPending ? '原保存已完成，请查询这次撤销的实际结果。' : saved || reverted || duplicate ? '查看这次修改的实际结果。' : '查看内容与来源，决定是否保存。'}</Drawer.Description></div><IconButton icon={IconClose} aria-label="返回原回答" disabled={busy} onClick={close} /></header>
+      <header className="pw-drawer-header"><div><Drawer.Title>{title}</Drawer.Title><Drawer.Description id="memory-draft-description">{dismissOnly ? '原来源不允许用于记忆整理。你仍可以忽略这份提案。' : undoPending ? '原保存已完成，请查询这次撤销的实际结果。' : saved || reverted || duplicate ? '查看这次修改的实际结果。' : '查看内容与来源，决定是否保存。'}</Drawer.Description></div><IconButton icon={IconClose} aria-label="返回原回答" disabled={busy} onClick={close} /></header>
       <div className="pw-drawer-body pw-memory-draft-review pw-knowledge-workspace">
         {busy && <ShimmerText>正在读取记忆…</ShimmerText>}
         {error && <p className="pw-memory-draft-error" role="alert">{error}</p>}
-        {outcomeStatus && <p className="pw-memory-draft-result" role="status">{undoPending ? '撤销结果待核对，请查询这次修改。' : status[outcomeStatus] || '提案状态待核对'}</p>}
+        {outcomeStatus && <p className="pw-memory-draft-result" role="status">{dismissOnly ? '只可忽略，不显示原话或建议正文。' : undoPending ? '撤销结果待核对，请查询这次修改。' : status[outcomeStatus] || '提案状态待核对'}</p>}
         {typeof outcomeMessage === 'string' && outcomeMessage && <p>{outcomeMessage}</p>}
         {expiredReceipt && onOpenMemory && <Button variant="ghost" disabled={busy} onClick={() => { onOpenMemory({ id: apply.candidateId, candidate: true }); onClose(); }}>查看原建议</Button>}
         {expiredReceipt && value?.queryOriginalReceipt === true && <p className="pw-muted">本机确认这次没有新增记忆，原操作的回执留存尚待核对。</p>}
@@ -125,7 +126,7 @@ export function MemoryDraftReview({ target, onClose, onOpenMemory }: {
           </div>
         </section>}
         {proposal.reason && !saved && !reverted && !duplicate && <p>{proposal.reason}</p>}
-        {review && !saved && !reverted && !duplicate && <>
+        {review && !dismissOnly && !saved && !reverted && !duplicate && <>
           <div className="pw-memory-draft-comparison">
             {review.before && <section className="pw-source-record"><h3>原来记住的内容</h3><p className="pw-reading-copy">{review.before.text}</p></section>}
             {review.after && <section className="pw-source-record"><h3>{action === 'create' ? '准备记住的内容' : '更新后'}</h3><p className="pw-reading-copy">{review.after.text}</p>{review.after.applicability && <p className="pw-muted">适用范围：{review.after.applicability}</p>}{expiryLabel && <p className="pw-muted">{candidateExpired ? `这条建议已于 ${expiryLabel} 到期，不能再采纳；仍可返回或明确忽略。` : `有效至 ${expiryLabel}，到期后不再作为当前背景。`}</p>}</section>}
@@ -148,7 +149,7 @@ export function MemoryDraftReview({ target, onClose, onOpenMemory }: {
           : (!pending || attempted || error || undoUncertain) && <Button variant="ghost" disabled={busy} onClick={queryOriginal}>查询这次修改</Button>}
       </div>
       {pending && <section className="pw-memory-draft-confirmation"><div className="pw-action-row">
-        <Button disabled={busy || candidateExpired} onClick={() => { if (candidateUntil && Date.now() >= candidateUntil) return; const id = handle.current; handle.current = ''; setAttempted(true); void request('memoryDraft.confirm', { handle: id }, acceptOutcome); }}>{action === 'forget' ? '忘记这条记忆' : action === 'update' ? '更新记忆' : '记住'}</Button>
+        {!dismissOnly && <Button disabled={busy || candidateExpired} onClick={() => { if (candidateUntil && Date.now() >= candidateUntil) return; const id = handle.current; handle.current = ''; setAttempted(true); void request('memoryDraft.confirm', { handle: id }, acceptOutcome); }}>{action === 'forget' ? '忘记这条记忆' : action === 'update' ? '更新记忆' : '记住'}</Button>}
         <Button variant="ghost" disabled={busy} onClick={() => { const id = handle.current; handle.current = ''; setAttempted(true); void request('memoryDraft.cancel', { handle: id }, acceptOutcome); }}>忽略</Button>
       </div></section>}
     </Drawer.Content>

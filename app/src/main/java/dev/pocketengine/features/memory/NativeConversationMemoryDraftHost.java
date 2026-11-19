@@ -77,11 +77,11 @@ public final class NativeConversationMemoryDraftHost {
         if(!"pending".equals(candidate.optString("status"))||positive(pin,"revision")!=candidate.getLong("revision")||!pin.getString("digest").equals(candidatePin(candidate).getString("digest"))||!digest(learningDraft(draft,refs)).equals(digest(candidateContent(candidate)))||!refsDigest(refs).equals(refsDigest(candidate.getJSONArray("sourceRefs"))))throw new SecurityException("原待审候选已修改、失效或审阅，不能用旧提案继续确认");return candidate;
     }
     public JSONObject sourcesForTask(String task,String run,int epoch,RunControl original)throws Exception {
-        if(original==null||!original.matchesHostRun(task,run,epoch))throw new SecurityException("来源发现缺少原运行控制器");tasks.checkCapability(task,run,epoch,"memory_draft_sources",original);JSONObject current=originalTask(task,run,epoch);
-        JSONArray refs=tasks.preparedConversationUserSources(task,run,epoch,current.getString("conversationId"));original.check();return new JSONObject().put("sources",refs).put("candidateCoverage","currently_verified_prepared_parts_only").put("completeConversation",false).put("bodyIncluded",false).put("modelConsumptionConfirmed",false).put("executionAuthorized",false);
+        if(original==null||!original.matchesHostRun(task,run,epoch))throw new SecurityException("来源发现缺少原运行控制器");tasks.checkCapability(task,run,epoch,"memory_draft_sources",original);originalTask(task,run,epoch);
+        JSONArray refs=tasks.preparedMemoryProposalSources(task,run,epoch);original.check();return new JSONObject().put("sources",refs).put("candidateCoverage","currently_verified_prepared_parts_only").put("completeConversation",false).put("bodyIncluded",false).put("modelConsumptionConfirmed",false).put("executionAuthorized",false);
     }
     public JSONObject proposeForTask(String task,String run,int epoch,String operation,JSONObject supplied,RunControl original)throws Exception {
-        JSONObject draft=checkedDraft(supplied);tasks.requireMemoryProposalPrepared(task,run,epoch,operation,draft,original);String conversation=originalTask(task,run,epoch).getString("conversationId");JSONArray selected=draft.getJSONArray("sources"),refs=tasks.preparedConversationUserRefs(task,run,epoch,conversation,selected);String action=draft.getString("action");
+        JSONObject draft=checkedDraft(supplied);tasks.requireMemoryProposalPrepared(task,run,epoch,operation,draft,original);String conversation=originalTask(task,run,epoch).getString("conversationId");JSONArray selected=draft.getJSONArray("sources"),refs=tasks.preparedMemoryProposalRefs(task,run,epoch,selected);String action=draft.getString("action");
         JSONObject projection=sources.withCurrentUserSources(refs,()->tasks.withMemoryProposalSourceCurrent(task,run,epoch,conversation,selected,()->{
             original.check();originalTask(task,run,epoch);tasks.requireMemoryProposalPrepared(task,run,epoch,operation,draft,original);
             if(action.equals("create")){SourceRef[] actual=new SourceRef[refs.length()];for(int i=0;i<refs.length();i++)actual[i]=SourceRef.fromJson(refs.getJSONObject(i));JSONObject content=learningDraft(draft,refs),candidate=memory.proposeLearning(scope(),content,actual).getJSONObject("candidate");
@@ -132,16 +132,26 @@ public final class NativeConversationMemoryDraftHost {
                 .put("contentNature","assistant_proposed_summary").put("truthVerified",false).put("sourceRefsDescribeProposal",!draft.has("assertion")).put("existingSourceLineagePreserved",!action.equals("create")).put("retireDerivedMemory",!action.equals("create")).put("forgetSameEvidenceMemory",action.equals("forget")).put("blocksOldSourceAutomaticReimport",action.equals("forget")).put("originalSourcesDeleted",false).put("requiresExplicitOwnerConfirm",true).put("executionAuthorized",false);
     }
     public Review reviewForOwner(String task,String run,int epoch,String operation,String expectedDigest)throws Exception {
-        JSONObject row=checkedOwnerRow(task,run,epoch,operation,expectedDigest),proposal=row.getJSONObject("proposal"),draft=checkedDraft(row.getJSONObject("arguments"));String conversation=originalTask(task,run,epoch).getString("conversationId");JSONArray selected=draft.getJSONArray("sources"),refs=tasks.preparedConversationUserRefs(task,run,epoch,conversation,selected);
-        if(!refsDigest(refs).equals(refsDigest(proposal.getJSONArray("sourceRefs"))))throw new SecurityException("原草稿消息来源已变化");JSONObject view=sources.withCurrentUserSources(refs,()->tasks.withMemoryProposalSourceCurrent(task,run,epoch,conversation,selected,()->presentation(proposal,draft,refs)));
-        return new Review(task,run,epoch,operation,conversation,draft,proposal,view);
+        JSONObject row=checkedOwnerRow(task,run,epoch,operation,expectedDigest),proposal=row.getJSONObject("proposal"),draft=checkedDraft(row.getJSONObject("arguments"));String conversation=originalTask(task,run,epoch).getString("conversationId");JSONArray selected=draft.getJSONArray("sources");
+        try{
+            JSONArray refs=tasks.preparedMemoryProposalRefs(task,run,epoch,selected);
+            if(!refsDigest(refs).equals(refsDigest(proposal.getJSONArray("sourceRefs"))))throw new SecurityException("原草稿消息来源已变化");
+            JSONObject view=sources.withCurrentUserSources(refs,()->tasks.withMemoryProposalSourceCurrent(task,run,epoch,conversation,selected,()->presentation(proposal,draft,refs)));
+            return new Review(task,run,epoch,operation,conversation,draft,proposal,view);
+        }catch(dev.pocketengine.features.assistant.ConversationRepository.MemoryProposalExcluded excluded){
+            // A previously journalled proposal remains dismissible by its exact owner; no stale source, reason or candidate body.
+            JSONArray originalRefs=tasks.preparedConversationUserRefs(task,run,epoch,conversation,selected);
+            if(!refsDigest(originalRefs).equals(refsDigest(proposal.getJSONArray("sourceRefs"))))throw new SecurityException("原提案身份不可核对");
+            JSONObject identity=new JSONObject().put("action",proposal.getString("action")).put("proposalDigest",expectedDigest);
+            return sources.withCurrentUserSources(originalRefs,()->new Review(task,run,epoch,operation,conversation,new JSONObject(),identity,new JSONObject().put("dismissOnly",true).put("sourceRefs",new JSONArray())));
+        }
     }
     public final class Review implements AutoCloseable {
         private final String task,run,operation,conversation,draft,proposal,view,reviewDigest;
         private final int epoch;
         private final long expiresAt;
-        private boolean closed,submitted,provided;
-        private Review(String task,String run,int epoch,String operation,String conversation,JSONObject draft,JSONObject proposal,JSONObject presentation)throws Exception {this.task=task;this.run=run;this.epoch=epoch;this.operation=operation;this.conversation=conversation;this.draft=draft.toString();this.proposal=proposal.toString();expiresAt=System.currentTimeMillis()+600_000L;presentation.put("expiresAt",expiresAt);reviewDigest=digest(presentation);view=presentation.put("reviewDigest",reviewDigest).toString();}
+        private boolean closed,submitted,provided;private final boolean dismissOnly;
+        private Review(String task,String run,int epoch,String operation,String conversation,JSONObject draft,JSONObject proposal,JSONObject presentation)throws Exception {this.task=task;this.run=run;this.epoch=epoch;this.operation=operation;this.conversation=conversation;this.draft=draft.toString();this.proposal=proposal.toString();dismissOnly=presentation.optBoolean("dismissOnly");expiresAt=System.currentTimeMillis()+600_000L;presentation.put("expiresAt",expiresAt);reviewDigest=digest(presentation);view=presentation.put("reviewDigest",reviewDigest).toString();}
         public synchronized JSONObject view()throws Exception{provided=true;return new JSONObject(view).put("closed",closed).put("submitted",submitted);}
         private void live()throws Exception{if(closed||submitted||System.currentTimeMillis()>=expiresAt)throw new SecurityException("原记忆审阅已关闭、过期或提交");originalTask(task,run,epoch);checkedOwnerRow(task,run,epoch,operation,new JSONObject(proposal).getString("proposalDigest"));}
         /** Existing owner review only. Never enumerate other sources or send the raw document to Web. */
@@ -166,7 +176,7 @@ public final class NativeConversationMemoryDraftHost {
             }));
         }
         public synchronized JSONObject confirm(RunControl nativeOwner)throws Exception {
-            live();java.util.Objects.requireNonNull(nativeOwner).check();if(!provided)throw new SecurityException("请先读取完整的新旧记忆正文和来源");JSONObject proposal=new JSONObject(this.proposal),draft=new JSONObject(this.draft);boolean[] entered={false};
+            live();java.util.Objects.requireNonNull(nativeOwner).check();if(dismissOnly||!provided)throw new SecurityException("该原提案无法确认保存，请核对来源或选择忽略");JSONObject proposal=new JSONObject(this.proposal),draft=new JSONObject(this.draft);boolean[] entered={false};
             if(!tasks.claimMemoryProposalApplyForOwner(task,run,epoch,operation,proposal.getString("proposalDigest"),reviewDigest))throw new SecurityException("原确认已领取，只能查询已有回执");submitted=true;
             try {
                 JSONObject result=sources.withCurrentUserSources(proposal.getJSONArray("sourceRefs"),()->tasks.withMemoryProposalSourceCurrent(task,run,epoch,conversation,draft.getJSONArray("sources"),()->{
@@ -197,7 +207,15 @@ public final class NativeConversationMemoryDraftHost {
             finally{closed=true;}
         }
         private void record(JSONObject result)throws Exception{try{tasks.recordMemoryProposalApplyForOwner(task,run,epoch,operation,reviewDigest,result);result.put("journalRecorded",true);}catch(Exception unavailable){result.put("journalRecorded",false).put("queryOriginalReceipt",true);}}
-        public synchronized JSONObject cancel()throws Exception{if(closed||submitted)throw new SecurityException("原审阅已经关闭或提交");try{return cancelForOwner(task,run,epoch,operation,new JSONObject(proposal).getString("proposalDigest"));}finally{closed=true;}}
+        public synchronized JSONObject cancel()throws Exception{
+            if(closed||submitted)throw new SecurityException("原审阅已经关闭或提交");if(dismissOnly)live();
+            try{JSONObject identity=new JSONObject(proposal),row=cancelForOwner(task,run,epoch,operation,identity.getString("proposalDigest"));
+                if(!dismissOnly)return row;
+                JSONObject result=new JSONObject().put("proposal",identity).put("apply",new JSONObject().put("status",row.getJSONObject("apply").getString("status")));
+                if("unconfirmed".equals(row.optString("candidateReviewStatus")))result.put("message","原提案已忽略，原候选的状态仍需核对。");
+                return result;
+            }finally{closed=true;}
+        }
         @Override public synchronized void close(){closed=true;}
     }
     private static JSONObject receipt(JSONObject proposal,String reviewDigest,String status)throws Exception{return origin(proposal.getString("taskId"),proposal.getString("runId"),proposal.getInt("epoch"),proposal.getString("operationId"),proposal.getString("proposalDigest")).put("reviewDigest",reviewDigest).put("action",proposal.getString("action")).put("status",status).put("executionAuthorized",false).put("replayAllowed",false);}

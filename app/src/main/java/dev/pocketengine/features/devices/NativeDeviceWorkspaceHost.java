@@ -42,6 +42,7 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         /** Explicit click only. Return the one-use short-lived invitation for display, not logs. */
         java.util.List<String> localAddresses() throws Exception;
         String createInvitation(String selectedLocalAddress) throws Exception;
+        default JSONObject readSavedPeerScope(String id,String instance,String fingerprint)throws Exception { throw new SecurityException("原签回执本机查询不可用"); }
         void advancePairing(String candidateId) throws Exception;
         java.util.List<String> recoveryAddresses() throws Exception;
         RecoveryEndpointAction openCommittedRecovery(String originalInviteId, String selectedLocalAddress) throws Exception;
@@ -332,6 +333,9 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         }
         public void removeRelayLease(String serviceBase, String inviterDeviceId) throws Exception { current(); nextReview(); pairing.removeRelayLease(serviceBase, inviterDeviceId); }
         public String createInvitation(String address) throws Exception { current(); inviteAvailability().require(); return Objects.requireNonNull(pairing.createInvitation(address)); }
+        public JSONObject readSavedPeerScope(String id,String instance,String fingerprint)throws Exception {
+            current(); JSONObject result=copy(pairing.readSavedPeerScope(id,instance,fingerprint)); current(); return result;
+        }
         public void advancePairing(String id) throws Exception { current(); pairing.advancePairing(id); }
         public java.util.List<String> recoveryAddresses() throws Exception { current(); return java.util.Collections.unmodifiableList(new java.util.ArrayList<>(pairing.recoveryAddresses())); }
         public RecoveryEndpoint openCommittedRecovery(String id, String address) throws Exception {

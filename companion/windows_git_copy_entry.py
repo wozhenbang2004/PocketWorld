@@ -32,6 +32,8 @@ def show_receipt(ctx,evidence,locked,settings=None):
     actions = [("identity","查看原操作和内容编号")]
     if state=="saved":
         if evidence.get("itemsRecorded"):
+            if settings:
+                actions.insert(0,("draft","从原文件起草补丁\n只编辑一份临时文本；原仓库与副本保持不变。"))
             actions[:0] = [("open","在文件资源管理器中打开原副本\n定位原文件夹中的一个原条目，不打开文件或运行项目。"),
                             ("compare","核对现在的原文件\n用此副本保存时的逐项清单比较，不需要源仓库仍然在线。")]
         else: message += "\n旧回执没有保留可重新绑定的逐文件清单；不会用同名文件推断当前内容。"
@@ -42,6 +44,9 @@ def show_receipt(ctx,evidence,locked,settings=None):
         try: reveal(ctx,evidence["operation"],locked)
         except (AttributeError,OSError,ValueError,TypeError,PlatformError):
             _dialog("未打开原副本","没有同时核实原目录、用于定位的原成员和本机系统文件夹入口。不会改开上级目录、同名替代物或执行文件。",[],retire=locked)
+    elif chosen=="draft":
+        from windows_owner_draft_entry import start
+        start(ctx,settings,evidence["operation"],locked,_observe)
     elif chosen=="patches": patches.browse(ctx,evidence["operation"],locked,_observe)
     elif chosen=="compare": _compare(ctx,evidence["operation"],locked,settings)
     elif chosen=="identity":

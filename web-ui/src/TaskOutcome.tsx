@@ -13,6 +13,7 @@ import { TaskResultFiles, type TaskResultFile } from './TaskResultFiles';
 import { ProjectPackageFiles, canReadProjectPackageFiles } from './ProjectPackageFiles';
 import {TaskPhoneFinalScreen} from './PhoneFinalScreenReceipt';
 import { RetainedPhoneImage } from './RetainedPhoneImage';
+import { HeldPhoneResultImage } from './HeldPhoneResultImage';
 import './task-reading.css';
 
 const stoppedAttemptTitles: Record<string, string> = {
@@ -186,6 +187,7 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
       <h3>{settlementTitle}</h3>
       {settlementDetail && settlementDetail !== settlementTitle && <p>{settlementDetail}</p>}
     </div>}
+    {active && !outcome.image && !outcome.retained?.image && !remotePhone && <HeldPhoneResultImage task={record} readIdentity={readIdentity}/>}
     {resultFiles && active && <TaskResultFiles {...resultFiles} active={active} readIdentity={`${readIdentity}:${owner}:${status || ''}`}/>}
     {packageRead.eligible && <section className="pw-outcome-deliverables" aria-label="项目固定成果" aria-busy={packageRead.busy || undefined}>
       <div className="pw-reading-section-heading"><h4>项目固定成果</h4>{outcome.projectPackages.length > 0 && <span>{outcome.projectPackages.length} 个已读取版本</span>}</div>
