@@ -11,6 +11,7 @@ import { bridge } from './bridge';
 import { projectPackageTaskIdentity, type PackagePreviewTarget } from './project-preview';
 import { TaskResultFiles, type TaskResultFile } from './TaskResultFiles';
 import { ProjectDraftDifference } from './ProjectDraftDifference';
+import type { OriginalProjectDraft } from './ButlerPreparations';
 import { ProjectPackageFiles, canReadProjectPackageFiles } from './ProjectPackageFiles';
 import { PrepareTaskPackageProject } from './PrepareTaskPackageProject';
 import {TaskPhoneFinalScreen} from './PhoneFinalScreenReceipt';
@@ -101,11 +102,14 @@ function useProjectPackages(task: unknown, active: boolean, identity: string) {
 }
 
 /** Composition of PW-05 Answer and PW-22 file actions around host-owned evidence. */
-export function TaskOutcome({ task, messages, active, canReadReport, readIdentity, onCopy, onOpenAttachment, onOpenProjectPackage, resultFiles, showEmptyResult, deferExecutionDetails, onFollowUp, onReadPhoneConversation }: {
+export function TaskOutcome({ task, messages, active, canReadReport, readIdentity, onCopy, onOpenAttachment, onOpenProjectPackage, resultFiles, showEmptyResult, deferExecutionDetails, onFollowUp, onReadPhoneConversation, focusedOriginalDraft, registerProjectDraftBeforeLeave, projectDraftSourceRetired }: {
   task: unknown;
   messages: unknown;
   active: boolean;
   canReadReport: boolean;
+  focusedOriginalDraft?:OriginalProjectDraft;
+  registerProjectDraftBeforeLeave?: (guard:()=>boolean)=>()=>void;
+  projectDraftSourceRetired?: boolean;
   readIdentity: string;
   showEmptyResult: boolean;
   deferExecutionDetails: boolean;
@@ -186,8 +190,9 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
       {outcome.partial && <MotionFeedback identity={`${owner}:partial`} className="pw-outcome-limit" role="status">部分结果记录尚未载入。</MotionFeedback>}
     </div>;
   return <section ref={root} className="pw-task-outcome pw-task-reading" aria-label="任务结果依据" data-result-source={outcome.source}>
-    {record.raw?.developmentContext?.draftOnly===true&&typeof record.raw.projectEditDraftId==='string'&&/^[a-f0-9]{64}$/.test(record.raw.projectEditDraftId)&&<ProjectDraftDifference active={active} id={record.id} project={record.raw.developmentContext.projectId}
-      checkout={record.raw.developmentContext.checkoutId} pin={record.raw.projectEditDraftId}/>}
+    {!projectDraftSourceRetired&&record.raw?.actorId==='owner'&&record.raw?.spaceId==='private'&&record.raw?.contextAvailable!==false&&record.raw?.contextWithdrawn!==true&&
+      record.raw?.sourceCurrentReadRequired!==true&&record.raw?.taskProjection!=='source_unavailable'&&record.raw?.developmentContext?.draftOnly===true&&typeof record.raw.projectEditDraftId==='string'&&/^[a-f0-9]{64}$/.test(record.raw.projectEditDraftId)&&<ProjectDraftDifference active={active} id={record.id} project={record.raw.developmentContext.projectId}
+      checkout={record.raw.developmentContext.checkoutId} pin={record.raw.projectEditDraftId} requested={focusedOriginalDraft} registerBeforeLeave={registerProjectDraftBeforeLeave}/>}
     {active&&<TaskPhoneFinalScreen task={record}/>}
     {settlementTitle && <div className="pw-outcome-settlement" role="status">
       <h3>{settlementTitle}</h3>

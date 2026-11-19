@@ -11,7 +11,15 @@ import './butler-preparations.css';
 
 type Data = Record<string, any>;
 export type ButlerPreparationTarget = { sourceTaskId: string; proposalId: string; sourceConversationId: string };
-export type ConversationPreparation = ButlerPreparationTarget & { sourceRunId: string; sourceEpoch: number; kind: 'phone' | 'project'; canPrepare: boolean; targetTaskId: string };
+export type OriginalProjectDraft = { taskId:string; runId:string; epoch:number; draftId:string };
+export type ConversationPreparation = ButlerPreparationTarget & { sourceRunId: string; sourceEpoch: number; kind: 'phone' | 'project'; canPrepare: boolean; targetTaskId: string; originalDraft?:OriginalProjectDraft; visibleOwnerRequest?:{messageId:string;revision:number} };
+function originalProjectDraft(row:Data):OriginalProjectDraft|undefined{
+  const t=row.target;
+  if(row.kind!=='project'||t?.status!=='completed'||t.canOpenOriginalRun!==true||typeof t.taskId!=='string'||
+    typeof t.originalRunId!=='string'||!t.originalRunId||t.runId!==t.originalRunId||!Number.isSafeInteger(t.originalEpoch)||
+    t.originalEpoch<=0||t.epoch!==t.originalEpoch||typeof t.originalProjectDraftId!=='string'||!/^[a-f0-9]{64}$/.test(t.originalProjectDraftId))return;
+  return {taskId:t.taskId,runId:t.originalRunId,epoch:t.originalEpoch,draftId:t.originalProjectDraftId};
+}
 export const conversationPreparationKey = (row: ButlerPreparationTarget) => JSON.stringify([row.sourceConversationId,row.sourceTaskId,row.proposalId]);
 function conversationPreparation(row: Data): ConversationPreparation | null {
   const id = (value: unknown): value is string => typeof value === 'string' && !!value && value.length <= 240;
@@ -21,16 +29,20 @@ function conversationPreparation(row: Data): ConversationPreparation | null {
   const canPrepare = row.state === 'proposed' && row.canPrepare === true && !targetTaskId;
   if (!canPrepare && !targetTaskId) return null;
   return { sourceTaskId: row.sourceTaskId, proposalId: row.proposalId, sourceConversationId: row.sourceConversationId,
-    sourceRunId: row.sourceRunId, sourceEpoch: row.sourceEpoch, kind: row.kind, canPrepare, targetTaskId };
+    sourceRunId: row.sourceRunId, sourceEpoch: row.sourceEpoch, kind: row.kind, canPrepare, targetTaskId, originalDraft:originalProjectDraft(row),
+    ...(row.kind==='project'&&id(row.visibleOwnerRequest?.messageId)&&Number.isSafeInteger(row.visibleOwnerRequest.revision)&&row.visibleOwnerRequest.revision>0
+      ? {visibleOwnerRequest:{messageId:row.visibleOwnerRequest.messageId,revision:row.visibleOwnerRequest.revision}} : {}) };
 }
-export function ConversationPreparationAction({ row, disabled, onOpen }: {
+export function ConversationPreparationAction({ row, disabled, onOpen, onDraft }: {
   row: ConversationPreparation; disabled: boolean; onOpen: (target: ButlerPreparationTarget, trigger: HTMLButtonElement) => void;
+  onDraft?: (target:OriginalProjectDraft) => void;
 }) {
-  const label = row.targetTaskId ? '查看这次工作' : row.kind === 'project' ? '核对项目工作' : '核对手机工作';
+  const draft=onDraft&&row.originalDraft;
+  const label = draft ? '查看这次改稿' : row.targetTaskId ? '查看这次工作' : row.kind === 'project' ? '核对项目工作' : '核对手机工作';
   return <Button className="pw-chat-preparation-action" variant="secondary" size="small"
     leadingIcon={row.kind === 'phone' ? IconMonitor : IconFolder} trailingIcon={IconChevronRight}
-    disabled={disabled} onClick={event => onOpen(row,event.currentTarget)}>
-    <span><strong>{label}</strong><small>{row.targetTaskId ? '已关联原任务，可查进度与结果' : '管家已拟好，尚未开始'}</small></span>
+    disabled={disabled} onClick={event => draft?onDraft?.(draft):onOpen(row,event.currentTarget)}>
+    <span><strong>{label}</strong><small>{draft?'独立改稿，原文件未写回':row.targetTaskId ? '已关联原任务，可查进度与结果' : '管家已拟好，尚未开始'}</small></span>
   </Button>;
 }
 type Shared = { can: (action: string) => boolean; run: (action: string, args?: Data) => Promise<any> };

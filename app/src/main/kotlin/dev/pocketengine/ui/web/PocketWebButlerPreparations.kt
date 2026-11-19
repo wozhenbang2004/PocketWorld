@@ -146,7 +146,7 @@ internal class PocketWebButlerPreparations(
             { done(null, "原启动回执的保存尚未确认，请查询原请求；不会再次派发。") }
         )
     }
-    fun dispatch(action: String, args: JSONObject, done: (JSONObject?, String?) -> Unit) {
+    fun dispatch(action: String, args: JSONObject, plainChat: Boolean = false, done: (JSONObject?, String?) -> Unit) {
         require(action in COMMANDS)
         check(ownerCurrent() && controller.webPrivateOwnerVisible()) { "请在私人管家入口处理这份工作" }
         if (action == "butler.capabilities") {
@@ -157,7 +157,21 @@ internal class PocketWebButlerPreparations(
             val conversation = if (args.has("conversationId")) text(args, "conversationId", blank = true) else ""
             val cursor = if (args.has("cursor")) text(args, "cursor", 4096, true) else ""
             val limit = if (args.has("limit")) args.getInt("limit") else 12; require(limit in 1..20)
-            work(null, done) { host.tasks.ownerWorkPreparations(conversation, cursor, limit) }; return
+            // The Web caller cannot choose IDs to probe. Use only current, uniquely visible
+            // native USER locators. A quote, import, old page or similarly worded row is not one.
+            val visible = mutableMapOf<String, Long>()
+            if (plainChat && conversation.isNotEmpty() && controller.state.conversationId == conversation) {
+                for (message in controller.state.messages) {
+                    val messageId = message.id ?: continue
+                    if (message.role != "user") continue
+                    val locator = message.ownerOriginalLocator
+                    if (visible.containsKey(messageId) || locator?.optString("kind") != "owner_native_original" ||
+                        locator.optString("conversationId") != conversation || locator.optString("recordId") != messageId ||
+                        message.sourceRevision <= 0 || locator.optLong("recordVersion", -1) != message.sourceRevision) visible[messageId] = -1
+                    else visible[messageId] = message.sourceRevision
+                }
+            }
+            work(null, done) { host.tasks.ownerWorkPreparations(conversation, cursor, limit, visible) }; return
         }
         if (action == "butler.preparation.read") {
             fields(args, "sourceTaskId", "proposalId"); check(!busy)

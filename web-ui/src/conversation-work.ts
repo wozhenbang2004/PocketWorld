@@ -57,6 +57,30 @@ export function privateTaskConversationId(task: unknown): string | null {
   return id(raw.conversationId) ? raw.conversationId : null;
 }
 
+/** Navigation only. A prepared project starts its own private execution conversation; opening
+ * that thread is not returning to the conversation where its owner requested this work. Never
+ * use this hint for execution, supplementary input, accepting a proposal, or reading a draft. */
+export function originatingRequestConversation(task: unknown): string | null {
+  const row=object(task), raw=object(row?.raw);
+  if (!row || !raw || row.id!==raw.id || raw.actorId!=='owner' || raw.spaceId!=='private') return null;
+  if (raw.kind!=='assistant' || !Object.hasOwn(raw,'ownerWorkPreparation')) return privateTaskConversationId(task);
+  const link=object(raw.ownerWorkPreparation), project=object(raw.developmentContext);
+  const uuid=(v:unknown):v is string=>typeof v==='string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+  if (!link || link.format!=='pocketworld.owner-work-preparation.v1' || !uuid(raw.id) || link.targetTaskId!==raw.id ||
+      !uuid(link.sourceTaskId) || link.sourceTaskId===raw.id || !uuid(link.proposalId) || !uuid(link.sourceConversationId) ||
+      typeof link.reviewDigest!=='string' || !/^[0-9a-f]{64}$/.test(link.reviewDigest) ||
+      raw.origin!=null || raw.teamRunId!=null || raw.memberId!=null || raw.contextAvailable===false ||
+      raw.contextWithdrawn===true || raw.taskProjection==='source_unavailable' || raw.executionMode!=='capabilities' ||
+      project?.format!=='pocketworld.development-context.v1' || !id(project.projectId) || !id(project.checkoutId)) return null;
+  // If an independently registered native delivery already identifies a destination, it must
+  // agree with the recorded proposal link. An absent result handler is not permission to guess.
+  const result=object(raw.resultHandling);
+  if(raw.nativeResultHandling===true && (!result || result.format!=='pocketworld.owner-result-handling.v1' ||
+      result.taskId!==raw.id || result.runId!==raw.runId || !positive(result.epoch) || result.epoch!==raw.coordinatorEpoch ||
+      result.conversationId!==link.sourceConversationId)) return null;
+  return link.sourceConversationId;
+}
+
 /** A background run never owns the main composer stop button or its thinking indicator. */
 export function foregroundConversationTurn(state: Data): Data | null {
   const value = object(Object.hasOwn(state, 'foregroundTurn') ? state.foregroundTurn : state.chatActiveTurn);

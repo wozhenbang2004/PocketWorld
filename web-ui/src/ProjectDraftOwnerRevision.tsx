@@ -1,6 +1,7 @@
-import {useEffect,useRef,useState} from 'react';
+import {useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {bridge} from './bridge';
 import {Button,TextAreaField} from './forms-library';
+import {ProjectDraftFileCopy} from './ProjectDraftFileCopy';
 import {InlineDiff} from './shell-library/InlineDiff';
 
 type Revision={taskId:string;draftId:string;path:string;revisionId:string;parentId?:string;ordinal:number;text:string;sha256:string;bytes:number;
@@ -12,9 +13,10 @@ function ticket(){const v=view();return JSON.stringify([bridge.getDocumentEpoch(
 /** Continuation of an actual retained after-text, not saving into the original project or replacing the AI's receipt. */
 export function ProjectDraftOwnerRevision({task,root,path,originalHash,protect}:{task:string;root:string;path:string;originalHash:string;protect:(value:boolean)=>void}){
   const [head,setHead]=useState<Revision|null>(null),[text,change]=useState(''),[note,state]=useState(''),[busy,spin]=useState(false);
+  const [fileLock,lockFile]=useState(false);
   const [compare,preview]=useState(false),[discard,ask]=useState(false),live=useRef(false),active=useRef(''),generation=useRef(0),request=useRef(false);
   const can=()=>!document.hidden&&!view()?.section&&view()?.taskId===task&&[EDIT,KEEP,CLOSE].every(k=>bridge.getState().capabilities.commands.includes(k));
-  useEffect(()=>{protect(busy||!!head&&text!==head.text);return()=>protect(false)},[busy,head,text,protect]);
+  useLayoutEffect(()=>{protect(busy||fileLock||!!head&&text!==head.text);return()=>protect(false)},[busy,fileLock,head,text,protect]);
   function reset(){++generation.current;active.current='';request.current=false;setHead(null);change('');state('');spin(false);preview(false);ask(false)}
   useEffect(()=>{live.current=true;reset();const leave=()=>{if(active.current&&(!can()||ticket()!==active.current))reset()};
     const off=bridge.subscribe(leave);document.addEventListener('visibilitychange',leave);return()=>{live.current=false;++generation.current;off();document.removeEventListener('visibilitychange',leave)};
@@ -36,19 +38,24 @@ export function ProjectDraftOwnerRevision({task,root,path,originalHash,protect}:
   }
   function close(){if(head&&can())void bridge.command(CLOSE,{taskId:task,editHandle:head.editHandle}).catch(()=>{});reset()}
   if(!can())return null;
-  if(!head)return <div><Button size="small" variant="secondary" disabled={busy} onClick={()=>void run(false)}>{busy?'读取独立稿…':'接着改这一稿'}</Button>{note&&<p className="pw-field-hint" role="status">{note}</p>}</div>;
+  if(!head)return <div className="pw-draft-actions">
+    <Button size="small" variant="secondary" disabled={busy||fileLock} onClick={()=>void run(false)}>{busy?'读取已保留的版本…':'在 App 里编辑'}</Button>
+    <ProjectDraftFileCopy task={task} root={root} revision={root} sha={originalHash} path={path} ordinal={0} disabled={busy} lock={lockFile}/>
+    <p className="pw-field-hint">若你之前保留过版本，编辑器打开你最后保留的一稿。</p>
+    {note&&<p className="pw-field-hint" role="status">{note}</p>}</div>;
   const dirty=text!==head.text,count=new TextEncoder().encode(text).length;
   return <section aria-label="继续编辑独立稿"><h4>{head.ordinal===0?'从原改稿继续':'你的第 '+head.ordinal+' 稿'}</h4>
     <p className="pw-field-hint">只保留在这个原任务里，不写入工程，也不发给模型。</p>
-    <TextAreaField label={path} value={text} onChange={v=>{change(v);ask(false);state('')}} isReadOnly={busy||head.ordinal>=8} className="pw-code-editor"/>
+    <TextAreaField label={path} value={text} onChange={v=>{change(v);ask(false);state('')}} isReadOnly={busy||fileLock||head.ordinal>=8} className="pw-code-editor"/>
     <div className="pw-form-actions">{dirty&&<Button size="small" variant="ghost" onClick={()=>preview(!compare)}>{compare?'收起比较':'对比上一稿'}</Button>}
-      <Button size="small" variant="secondary" disabled={busy||!dirty||count>24576||head.ordinal>=8} onClick={()=>void run(true)}>{busy?'正在核对…':'保留为新稿'}</Button>
-      <Button size="small" variant="ghost" disabled={busy} onClick={()=>dirty?ask(true):close()}>结束编辑</Button></div>
+      <Button size="small" variant="secondary" disabled={busy||fileLock||!dirty||count>24576||head.ordinal>=8} onClick={()=>void run(true)}>{busy?'正在核对…':'保留为新稿'}</Button>
+      <Button size="small" variant="ghost" disabled={busy||fileLock} onClick={()=>dirty?ask(true):close()}>结束编辑</Button></div>
+    {!dirty&&<ProjectDraftFileCopy key={head.revisionId} task={task} root={root} revision={head.revisionId} sha={head.sha256} path={path} ordinal={head.ordinal} disabled={busy} lock={lockFile}/>}
     {discard&&<div role="group" aria-label="放弃尚未保留的文字"><p>这次输入还没保留。</p><Button size="small" variant="secondary" onClick={()=>ask(false)}>留在这里</Button>
       <Button size="small" variant="ghost" onClick={close}>放弃本次输入</Button></div>}
     {compare&&dirty&&<InlineDiff before={head.text} after={text} beforeLabel="起始稿" afterLabel="当前输入" versionLabel={head.sha256.slice(0,8)} readOnly/>}
     {count>24576&&<p className="pw-field-error">本次完整稿超过 24 KiB；不会截断保存。</p>}
     {head.ordinal>=8&&<p className="pw-field-hint">这份任务已保留八个后续版本。当前完整稿仍可阅读。</p>}
-    {(note||dirty)&&<p role="status" className="pw-field-hint">{note||'尚未保留，请在离开原任务前保存。'}</p>}
+    {(note||dirty)&&<p role="status" className="pw-field-hint">{note||'尚未保留；切到后台会清除这次输入。要留下，请先点“保留为新稿”。'}</p>}
   </section>;
 }

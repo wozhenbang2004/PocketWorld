@@ -136,9 +136,9 @@ import {PhonePauseInstruction,isPrivateLocalPhone,interruptedPrivatePhone,Interr
 import {PhoneMainOwnerStep,mainPhoneStep} from './PhoneMainOwnerStep';
 import {PhoneServiceRecovery} from './PhoneServiceRecovery';
 import {privatePhoneSurface,phoneSurfaceLabel,sameDisplayedPause,type DisplayedPhonePause} from './private-phone-surface';
-import {ConversationPreparationAction,conversationPreparationKey,type ConversationPreparation,ButlerPreparationEntries,ButlerPreparationDetail,type ButlerPreparationTarget} from './ButlerPreparations';
+import {ConversationPreparationAction,conversationPreparationKey,type ConversationPreparation,ButlerPreparationEntries,ButlerPreparationDetail,type ButlerPreparationTarget,type OriginalProjectDraft} from './ButlerPreparations';
 import {ownerWorkContinuationNote,ownerWorkContinuationReply,type WorkControlFeedback} from './owner-work-continuation';
-import {backgroundConversationWork,conversationActivityLabel,conversationInlineAttention,conversationTaskCompact,conversationWorkActionLabel,foregroundConversationTurn,messageReplyContext,messageTaskResult,ownerWorkIdentity,privateTaskConversationId,workIdentityKey,type ReplyContext,type TaskResult,type WorkIdentity} from './conversation-work';
+import {backgroundConversationWork,conversationActivityLabel,conversationInlineAttention,conversationTaskCompact,conversationWorkActionLabel,foregroundConversationTurn,messageReplyContext,messageTaskResult,ownerWorkIdentity,privateTaskConversationId,originatingRequestConversation,workIdentityKey,type ReplyContext,type TaskResult,type WorkIdentity} from './conversation-work';
 import './conversation-work.css';
 import {taskMessageAnchors} from './task-outcome';
 import {OwnerTaskQuestion,useOwnerQuestionDraft} from './OwnerTaskQuestion';
@@ -357,6 +357,7 @@ export default function App(){
  const taskHistoryOrigin=useRef<{taskId:string;origin:ConversationHistoryTaskOrigin}|null>(null);
  const taskReconciliationOrigin=useRef<{taskId:string;layer:TaskLayer;openedId:string;expected:{runId:string;epoch:number};history?:ConversationHistoryTaskOrigin}|null>(null);
  const [taskOpening,setTaskOpening]=useState(false);
+ const [focusedOriginalDraft,setFocusedOriginalDraft]=useState<OriginalProjectDraft|null>(null);
  const [sourceSelection,setSourceSelection]=useState<AnswerSourceTarget|null>(null);
  const [projectConventionMessage,setProjectConventionMessage]=useState<string|null>(null);
  const [providedMemoryMessage,setProvidedMemoryMessage]=useState<string|null>(null);
@@ -390,6 +391,13 @@ export default function App(){
  const taskTransientBack=useRef<(()=>boolean)|null>(null);
  const capabilityBack=useRef<(()=>boolean)|null>(null);
  const taskPolicyBeforeLeave=useRef<PermissionLeaveGuard|null>(null);
+ const projectDraftBeforeLeave=useRef<(()=>boolean)|null>(null);
+ const registerProjectDraftBeforeLeave=useCallback((guard:()=>boolean)=>{
+  projectDraftBeforeLeave.current=guard;
+  return ()=>{if(projectDraftBeforeLeave.current===guard)projectDraftBeforeLeave.current=null};
+ },[]);
+ // A dirty project editor never replays the blocked action. Permission review retains its own guard.
+ const guardTaskLeave=useCallback((next:()=>void)=>projectDraftBeforeLeave.current?.()===true||taskPolicyBeforeLeave.current?.(next)===true,[]);
  const registerTaskPolicyBeforeLeave=useCallback((guard:PermissionLeaveGuard|null)=>{taskPolicyBeforeLeave.current=guard},[]);
  const deviceScopeBack=useRef<(()=>boolean)|null>(null);
  const registerDeviceScopeBack=useCallback((handler:(()=>boolean)|null)=>{deviceScopeBack.current=handler},[]);
@@ -543,11 +551,11 @@ export default function App(){
   else{phoneWindow.current++;phoneText.set(next);setPhoneReview(null);if(can('phone.draft.edit'))run('phone.draft.edit',{text:next,epoch:phoneDraft.epoch,...(Number.isSafeInteger(phoneDraft.sourceEditTicket)?{sourceEditTicket:phoneDraft.sourceEditTicket,draftConversation:String(state.conversationId||'')}:{})});}
  },[intent,chatDraft,phoneText,can,run,draftKey,draftEpoch,phoneDraft.epoch,phoneDraft.sourceEditTicket,state.conversationId]);
  const rememberTaskPosition=useCallback(()=>{const node=taskScroll.current;if(taskId&&node?.isConnected)taskReading.current.set(`${taskId}:${taskLayer}`,node.scrollTop)},[taskId,taskLayer]);
- const showTaskLayer=useCallback((next:TaskLayer)=>{const commit=()=>{rememberTaskPosition();setTaskLayer(next)};if(!taskPolicyBeforeLeave.current?.(commit))commit()},[rememberTaskPosition]);
+ const showTaskLayer=useCallback((next:TaskLayer)=>{const commit=()=>{rememberTaskPosition();setTaskLayer(next)};if(!guardTaskLeave(commit))commit()},[rememberTaskPosition]);
  const releasePhoneNotice=useCallback(()=>{const pin=phoneNoticeRef.current;if(!pin)return;phoneNoticeRef.current=null;setPhoneNoticePin(null);setPhoneNoticePanel(null);
   if(can('phone.notice.close'))void bridge.command('phone.notice.close',{noticeHandle:pin.token}).catch(()=>{});
  },[can]);
- const closeTask=useCallback(()=>{const commit=async()=>{if(workSupplementBeforeLeave.current&&!await workSupplementBeforeLeave.current())return false;releasePhoneNotice();homeReport.current=null;taskHistoryOrigin.current=null;taskReconciliationOrigin.current=null;rememberTaskPosition();invalidateContinuation();reviewWindow.current=null;reviewRequest.current++;openedTaskId.current=null;setTaskOpening(false);const closed=can('tasks.close')?act('tasks.close').then(()=>true,()=>false):Promise.resolve(false);setTaskOpen(false);setTaskLayer('overview');setWorkSupplementTarget(null);setReview(null);setReviewPending(false);setReviewSubmitted(false);setReviewReceipt('');setQuestionAnswer('');return closed;};if(taskPolicyBeforeLeave.current?.(()=>{void commit()}))return Promise.resolve(false);return commit();},[can,act,rememberTaskPosition,invalidateContinuation,releasePhoneNotice]);
+ const closeTask=useCallback(()=>{const commit=async()=>{if(workSupplementBeforeLeave.current&&!await workSupplementBeforeLeave.current())return false;releasePhoneNotice();homeReport.current=null;taskHistoryOrigin.current=null;taskReconciliationOrigin.current=null;rememberTaskPosition();invalidateContinuation();reviewWindow.current=null;reviewRequest.current++;openedTaskId.current=null;setTaskOpening(false);const closed=can('tasks.close')?act('tasks.close').then(()=>true,()=>false):Promise.resolve(false);setTaskOpen(false);setFocusedOriginalDraft(null);setTaskLayer('overview');setWorkSupplementTarget(null);setReview(null);setReviewPending(false);setReviewSubmitted(false);setReviewReceipt('');setQuestionAnswer('');return closed;};if(guardTaskLeave(()=>{void commit()}))return Promise.resolve(false);return commit();},[can,act,rememberTaskPosition,invalidateContinuation,releasePhoneNotice]);
  const changeNavigation=useCallback((open:boolean)=>{setWorkOpen(open);if(!open)setCommandOpen(false)},[]);
  const navigate=useCallback((requested:string,afterNavigate?:()=>void,options?:{keepOrigin?:boolean;taskClosed?:boolean;stillCurrent?:()=>boolean}):Promise<boolean>=>{
   if(options?.stillCurrent){if(!options.stillCurrent())return Promise.resolve(false)}else searchOpenRequest.current++;
@@ -588,7 +596,7 @@ export default function App(){
    if(options?.stillCurrent&&!options.stillCurrent())return false;
    navigationWindow.current++;setNavigationRevision(navigationWindow.current);setRoute(next);afterNavigate?.();return true;
   };
-  if(taskPolicyBeforeLeave.current?.(()=>{void navigate(requested,afterNavigate,options)}))return Promise.resolve(false);
+  if(guardTaskLeave(()=>{void navigate(requested,afterNavigate,options)}))return Promise.resolve(false);
   if(secondaryBeforeLeave.current?.(()=>{void commit()}))return Promise.resolve(false);
   if(route==='profile'&&next!=='profile'){
    setWorkOpen(false);setCommandOpen(false);
@@ -616,7 +624,7 @@ export default function App(){
   return {...origin,focus:null,focusKey:undefined,drawerChat:{id:String(live.state.conversationId||''),draftKey:String(live.composer?.key||''),documentEpoch:bridge.getDocumentEpoch()}};
  };
  const openRelatedWorkspace=async(destination:string,origin=captureWorkspaceOrigin(),afterNavigate?:()=>void):Promise<boolean|undefined>=>{
-  if(taskPolicyBeforeLeave.current?.(()=>{void openRelatedWorkspace(destination,origin,afterNavigate)}))return;
+  if(guardTaskLeave(()=>{void openRelatedWorkspace(destination,origin,afterNavigate)}))return;
   const navigation=navigationWindow.current,closingTask=taskOpen;
   if(closingTask&&!await closeTask())return;
   if(navigationWindow.current!==navigation)return;
@@ -660,7 +668,7 @@ export default function App(){
   });
  };
  const openSetup=async(capability?:SetupCapability,runtimeTaskId?:string,modelMode?:'onboarding'|'center',settingsDirectory?:SettingsDirectoryOrigin,phonePlace?:PhonePlaceReturn)=>{
-  if(taskPolicyBeforeLeave.current?.(()=>{void openSetup(capability,runtimeTaskId,modelMode,settingsDirectory,phonePlace)}))return;
+  if(guardTaskLeave(()=>{void openSetup(capability,runtimeTaskId,modelMode,settingsDirectory,phonePlace)}))return;
   const origin=captureWorkspaceOrigin(),navigation=navigationWindow.current,closingTask=taskOpen;
   if(closingTask&&!await closeTask())return;
   if(navigationWindow.current!==navigation)return;
@@ -713,7 +721,7 @@ export default function App(){
   const window={taskId:id,request,documentEpoch:bridge.getDocumentEpoch(),resumeRevision:Number(obj(bridge.getState().view).resumeRevision||0)};reviewWindow.current=window;
   void act('tasks.review',{id,...(approvalId?{approvalId}:{})},id).then(value=>{if(!currentReviewWindow(window))return;setReview(value);const raw=obj(value.task?.raw);setScopeTools(String(raw.toolLimit||raw.executionScope?.toolLimit||raw.scope?.toolLimit||''));setScopeModels(String(raw.modelCallLimit||raw.executionScope?.modelCallLimit||raw.scope?.modelCallLimit||''));}).catch(()=>{if(reviewRequest.current===request)setReview(null)}).finally(()=>{if(reviewRequest.current===request)setReviewPending(false)});
  },[can,act,currentReviewWindow,invalidateContinuation]);
- const openTask=useCallback((id:string,entry:TaskLayer|'review'='overview',nativeWindowAlreadyOpen=false,historyOrigin?:ConversationHistoryTaskOrigin,searchQuery?:string,expected?:{runId:string;epoch:number},stillCurrent?:()=>boolean,originalApprovalId?:string):void=>{
+ const openTask=useCallback((id:string,entry:TaskLayer|'review'='overview',nativeWindowAlreadyOpen=false,historyOrigin?:ConversationHistoryTaskOrigin,searchQuery?:string,expected?:{runId:string;epoch:number;draftId?:string},stillCurrent?:()=>boolean,originalApprovalId?:string):void=>{
   const noticeOrigin=phoneNoticeRef.current;
   const dropNotice=noticeOrigin&&(noticeOrigin.taskId!==id||originalPhoneNotice(bridge.getState().state?.originalPhoneNotification)?.token!==noticeOrigin.token||
     !!expected&&(expected.runId!==noticeOrigin.runId||expected.epoch!==noticeOrigin.epoch));
@@ -722,7 +730,7 @@ export default function App(){
   if(projectSource&&!nativeWindowAlreadyOpen)searchQuery??=projectSource.query||'';
   if(stillCurrent){if(!stillCurrent())return}else searchOpenRequest.current++;
   if(!nativeWindowAlreadyOpen&&!expected&&taskReconciliationOrigin.current?.openedId===id)expected=taskReconciliationOrigin.current.expected;
-  if(taskPolicyBeforeLeave.current?.(()=>openTask(id,entry,nativeWindowAlreadyOpen,historyOrigin,searchQuery,expected,stillCurrent,originalApprovalId)))return;
+  if(guardTaskLeave(()=>openTask(id,entry,nativeWindowAlreadyOpen,historyOrigin,searchQuery,expected,stillCurrent,originalApprovalId)))return;
   const commit=async()=>{
   if(preparationBeforeLeave.current&&!await leaveInlinePreparation())return;
   if(stillCurrent&&!stillCurrent())return;
@@ -732,6 +740,7 @@ export default function App(){
   const origin=historyOrigin||(searchQuery===undefined&&!nativeWindowAlreadyOpen&&taskHistoryOrigin.current?.taskId===id?taskHistoryOrigin.current.origin:undefined);
   taskHistoryOrigin.current=origin?{taskId:id,origin}:null;
   invalidateContinuation();
+  setFocusedOriginalDraft(expected?.draftId?{taskId:id,runId:expected.runId,epoch:expected.epoch,draftId:expected.draftId}:null);
   rememberTaskPosition();const request=++reviewRequest.current;const readReview=entry!=='homeReport'&&(entry==='review'||entry==='scope'||tasks.some(task=>task.id===id&&attention(task)));openedTaskId.current=null;setReviewPending(false);setTaskOpening(true);setWorkOpen(false);setCommandOpen(false);setTaskId(id);setTaskLayer(entry==='review'?'overview':entry);setTaskOpen(true);setReview(null);setReviewNote('');setReviewFeedbackOpen(false);setReviewSubmitted(false);setReviewReceipt('');setQuestionPending(false);
   const window={taskId:id,request,documentEpoch:bridge.getDocumentEpoch(),resumeRevision:Number(obj(bridge.getState().view).resumeRevision||0)};reviewWindow.current=window;
   // Open the original host window before obtaining its single-use review handle.
@@ -768,7 +777,7 @@ export default function App(){
  const backFromTask=useCallback(()=>{if(taskMenuOpen){setTaskMenuOpen(false);return}if(deviceScopeBack.current?.()||capabilityBack.current?.()||livePreviewBack.current?.()||taskTransientBack.current?.())return;if(taskLayer==='scope'){showTaskLayer('goal');return}const origin=taskReconciliationOrigin.current;if(origin?.openedId===taskId){openTask(origin.taskId,origin.layer,false,origin.history);return}void closeTask().then(closed=>{if(closed&&searchReturn)showWorkSearch()})},[taskMenuOpen,taskId,taskLayer,showTaskLayer,openTask,closeTask,searchReturn,showWorkSearch]);
  const selectConversation=useCallback((id:string)=>{void navigate('chat',()=>{if(can('conversation.select'))run('conversation.select',{id})});},[can,run,navigate]);
  const returnToTaskConversation=async(task:Task,associate=false,phoneRead?:PhoneConversationOrigin)=>{
-  const conversationId=privateTaskConversationId(task);
+  const conversationId=associate?privateTaskConversationId(task):originatingRequestConversation(task);
   if(!conversationId||returningConversation||bridge.getState().state.chatSubmitting||!can('conversation.select'))return;
   if(phoneRead&&(associate||phoneRead.taskId!==task.id||phoneRead.conversationId!==conversationId||!phoneSourceStillOpen(phoneRead))){
    setLocalError('原手机轮次或阅读窗口已变化，没有打开其他对话。');return
@@ -1046,7 +1055,7 @@ export default function App(){
     if(resultFileReturnFocus.current===origin)resultFileReturnFocus.current=null;
    });
   };
-  if(!taskPolicyBeforeLeave.current?.(open))open();
+  if(!guardTaskLeave(open))open();
  };
  const restoreTaskFileFocus=(event:Event)=>{
   const origin=resultFileReturnFocus.current;
@@ -1587,7 +1596,7 @@ export default function App(){
   const overviewActive=taskOpen&&!taskOpening&&openedTaskId.current===task.id&&taskLayer==='overview';
   const taskFiles=obj(snapshot?.view).taskId===task.id&&task.raw?.actorId==='owner'&&task.raw?.spaceId==='private'&&task.raw?.contextAvailable!==false&&task.raw?.taskProjection!=='source_unavailable'&&task.raw?.kind!=='inference'&&can('attachmentWorkspace.open')
    ? {taskId:task.id,supported:can('tasks.resultFiles'),onOpen:(file:TaskResultFile,target:HTMLButtonElement)=>openTaskResultFile(task.id,file,target),
-      onOriginalRequest: privateTaskConversationId(task) && can('conversation.select') && !state.chatSubmitting && !returningConversation ? () => void returnToTaskConversation(task) : undefined,
+      onOriginalRequest: originatingRequestConversation(task) && can('conversation.select') && !state.chatSubmitting && !returningConversation ? () => void returnToTaskConversation(task) : undefined,
       onBrowse:()=>run('attachmentWorkspace.open',{taskId:task.id})}
    : undefined;
   const latestProgress=stage==='running'&&running(task)&&<section key="task-current-progress" className="pw-work-current-progress">
@@ -1597,8 +1606,8 @@ export default function App(){
     <p dir="auto">{progress.detail||(progress.source==='task'?progress.title:progress.stateLabel)}</p>
    </BlurCrossfade>
   </section>;
-  const originalEvidence=<TaskOutcome key="task-evidence" task={review&&!reviewStale?review.task:task} messages={messages} resultFiles={taskFiles}
-   active={overviewActive} showEmptyResult={inspectResult&&task.status==='completed'} deferExecutionDetails={!inspectResult&&task.status!=='failed'}
+  const originalEvidence=<TaskOutcome key="task-evidence" registerProjectDraftBeforeLeave={registerProjectDraftBeforeLeave} projectDraftSourceRetired={task.raw?.contextAvailable===false||task.raw?.contextWithdrawn===true||task.raw?.sourceCurrentReadRequired===true||task.raw?.taskProjection==='source_unavailable'} task={review&&!reviewStale?review.task:task} messages={messages} resultFiles={taskFiles}
+   active={overviewActive} focusedOriginalDraft={focusedOriginalDraft?.taskId===task.id?focusedOriginalDraft:undefined} showEmptyResult={inspectResult&&task.status==='completed'} deferExecutionDetails={!inspectResult&&task.status!=='failed'}
    onReadPhoneConversation={overviewActive&&obj(snapshot?.view).taskId===task.id&&!state.chatSubmitting&&!state.conversationReader&&!returningConversation&&can('tasks.close')&&can('conversation.select')?origin=>void returnToTaskConversation(task,false,origin):undefined}
    canReadReport={can('ownerWork.report.read')} readIdentity={`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}:${navigationRevision}`}
    onCopy={copyWithLocalFeedback} onFollowUp={followOriginal} onOpenProjectPackage={!packageOpening&&!taskOpening&&can('projects.package.preview.inspect')&&can('projects.package.preview.open')&&can('tasks.close')?openTaskPackage:undefined}
@@ -1699,7 +1708,7 @@ export default function App(){
    <TabPanel id="goal" shouldForceMount hidden={taskLayer!=='goal'&&taskLayer!=='scope'}>
     <div hidden={taskLayer==='scope'} className="pw-work-goal-panel"><WorkGoal task={task}/>
      {phoneConversationId(task)&&can('phone.request.original')?<PhoneTaskOriginalRequest key={taskHistoryIdentity(task)} task={task} active={taskOpen&&!taskOpening&&taskLayer==='goal'&&openedTaskId.current===task.id&&obj(snapshot?.view).taskId===task.id}/>
-      :privateTaskConversationId(task)&&can('conversation.select')&&<Button variant="ghost" leadingIcon={IconChat} disabled={!!state.chatSubmitting||!!returningConversation} onClick={()=>void returnToTaskConversation(task)}>{phoneConversationId(task)?'打开所属对话':'查看原请求与补充'}</Button>}
+      :originatingRequestConversation(task)&&can('conversation.select')&&<Button variant="ghost" leadingIcon={IconChat} disabled={!!state.chatSubmitting||!!returningConversation} onClick={()=>void returnToTaskConversation(task)}>{phoneConversationId(task)?'打开所属对话':'查看原请求与补充'}</Button>}
      {privateTaskConversationId(task)&&(task.raw?.executionRole==='owner_work'||task.raw?.nativeResultHandling===true||task.raw?.ownerWorkPreparation)&&task.raw?.runId&&Number.isSafeInteger(task.raw?.coordinatorEpoch)&&task.raw.coordinatorEpoch>0&&can('conversation.select')&&can('composer.object.add')&&<Button variant="ghost" disabled={!!state.chatSubmitting||!!returningConversation} onClick={()=>void returnToTaskConversation(task,true)}>问管家这件事</Button>}
      {can('tasks.review')&&<Button variant="secondary" leadingIcon={IconShieldCheck} disabled={readingReview||questionPending} onClick={()=>{showTaskLayer('scope');if(!review||reviewStale)refreshReview()}}>查看执行范围与预算</Button>}
     </div>
@@ -1908,7 +1917,10 @@ export default function App(){
     if(action==='return'&&row.work){returnToWorkInput(row);return}
     run(action==='query'?'composer.query':action==='retry'?'composer.retry':'composer.returnPending',{clientMessageId:row.clientMessageId});
    }}/></div>;
- const preparationRefreshKey=JSON.stringify([preparationRevision,tasks.filter(task=>task.raw?.hasOwnerWorkPreparations).map(task=>[task.id,task.raw?.ownerWorkPreparationCount])]);
+ const preparationRefreshKey=JSON.stringify([preparationRevision,tasks.flatMap(task=>task.raw?.hasOwnerWorkPreparations
+  ? [[task.id,task.raw.ownerWorkPreparationCount]]
+  : task.raw?.ownerWorkPreparation&&task.raw?.developmentContext?.draftOnly===true
+   ? [[task.id,task.status,task.raw.runId,task.raw.coordinatorEpoch,task.raw.projectEditDraftId]] : [])]);
  const [conversationPreparations,setConversationPreparations]=useState<{conversation:string;rows:ConversationPreparation[]}|null>(null);
  const receiveConversationPreparations=useCallback((conversation:string,rows:ConversationPreparation[])=>{
    if(bridge.getState().state.conversationId!==conversation)return;
@@ -1918,15 +1930,28 @@ export default function App(){
  const placedProposalKeys=new Set<string>();
  const conversation=String(state.conversationId||'');
  if(ready&&route==='chat'&&conversationPreparations?.conversation===conversation&&can('butler.preparation.read')){
-   const eligible=new Map<string,number>();
+   const eligible=new Map<string,number|null>(),unidentifiedReplies=new Set<string>(),ordinaryPhonePlacement=new Map<string,number>();
+   const owners=new Map<string,{index:number;revision:number}|null>();
    for(const row of replyRows){
-     if(row.kind==='live'||row.message.role!=='assistant'||!row.message.id)continue;
-     const reply=savedReplyDetails[row.index]?.replyContext;
-     if(reply?.replyId)eligible.set(workIdentityKey(reply),row.index);
+     if(row.kind==='live'||!row.message.id)continue;
+     const m=row.message;
+     if(m.role==='user'){
+       const id=row.message.id;
+       owners.set(id,owners.has(id)||m.quoteAvailable!==true||!Number.isSafeInteger(m.sourceRevision)||Number(m.sourceRevision)<1?null:{index:row.index,revision:Number(m.sourceRevision)});
+     }else if(m.role==='assistant'){
+       const reply=savedReplyDetails[row.index]?.replyContext;
+       if(reply){const key=workIdentityKey(reply);eligible.set(key,eligible.has(key)||!reply.replyId?null:row.index);if(reply.replyId)ordinaryPhonePlacement.set(key,row.index);}
+       else if(m.taskId)unidentifiedReplies.add(m.taskId);
+     }
    }
    for(const item of conversationPreparations.rows){
-     const index=eligible.get(workIdentityKey({taskId:item.sourceTaskId,runId:item.sourceRunId,epoch:item.sourceEpoch}));
-     if(index===undefined)continue;
+     const key=workIdentityKey({taskId:item.sourceTaskId,runId:item.sourceRunId,epoch:item.sourceEpoch}),request=item.visibleOwnerRequest;
+     const owner=request&&owners.get(request.messageId);
+     // Prefer one saved reply. Never displace an ambiguous assistant row or guess between
+     // several owner inputs; use the same action under one native source only if no reply exists.
+     const index=item.kind==='phone'?ordinaryPhonePlacement.get(key):eligible.has(key)?eligible.get(key):
+       !unidentifiedReplies.has(item.sourceTaskId)&&owner&&owner.revision===request?.revision?owner.index:null;
+     if(index==null)continue;
      const matches=anchoredPreparations.get(index)||[];
      anchoredPreparations.set(index,[...matches,item]);
      placedProposalKeys.add(conversationPreparationKey(item));
@@ -2012,7 +2037,11 @@ export default function App(){
      </PhoneMessageReturn>:m.role==='assistant'?<CitedAnswer continuous text={m.content} onCopyCode={copyWithLocalFeedback} sources={refs as any} onOpenSource={()=>openSource(m)}/>:m.content?<div className="pw-user-text">{m.content}</div>:null}
      {!!anchoredPreparations.get(index)?.length&&<div className="pw-chat-preparation-actions" aria-label="这次交办的下一步">
        {anchoredPreparations.get(index)!.map(item=><ConversationPreparationAction key={conversationPreparationKey(item)} row={item}
-          disabled={!!preparationTarget||taskOpen} onOpen={openConversationPreparation}/>)}
+          disabled={!!preparationTarget||taskOpen} onOpen={openConversationPreparation}
+          onDraft={can('tasks.open')&&can('projectDraft.readDifference')?draft=>{
+           if(document.hidden||bridge.getState().state.conversationId!==item.sourceConversationId||preparationTarget||taskOpen)return;
+           stopFollowing();openTask(draft.taskId,'overview',false,undefined,undefined,draft);
+          }:undefined}/>)}
      </div>}
      {preparationInlineAnchor===index&&preparationDetail}
      {asArray<Json>(m.attachments).length>0&&<div className="pw-message-files">{asArray<Json>(m.attachments).map(file=><Button key={file.id||file.name} variant="secondary" size="small" leadingIcon={IconFile} disabled={!can('attachments.open')||!file.sha256||!!state.attachmentOpens?.[`${file.id}:${file.sha256}`]?.checking} onClick={()=>run('attachments.open',{messageId:m.id,id:file.id,sha256:file.sha256})}>{file.name||'原附件'}</Button>)}</div>}
@@ -2186,9 +2215,9 @@ export default function App(){
      {selectedTaskStop&&<IconButton icon={IconStop} aria-label={selectedTask?.status==='stopping'?'正在停止工作':'停止这件工作'} title={selectedTask?.status==='stopping'?'正在停止工作':'停止这件工作'} onClick={stopSelectedTask} disabled={selectedTaskUnavailable||selectedTask?.status==='stopping'||selectedPhoneSurface?.stopRequested||selectedWorkControl?.pending||selectedWorkControl?.unknown||selectedWorkControl?.usedForContinuation}
       data-phone-stop-task-id={selectedPhoneStop?.taskId} data-phone-stop-run-id={selectedPhoneStop?.runId} data-phone-stop-epoch={selectedPhoneStop?.epoch}/>}
     {selectedTask&&<WorkObjectMenu isOpen={taskMenuOpen} onOpenChange={setTaskMenuOpen} disabled={selectedTaskUnavailable} conversationPending={!!state.chatSubmitting||!!returningConversation} scopeDisabled={reviewPending||questionPending}
-     onConversation={privateTaskConversationId(selectedTask)&&can('conversation.select')?()=>{void returnToTaskConversation(selectedTask)}:undefined}
+     onConversation={originatingRequestConversation(selectedTask)&&can('conversation.select')?()=>{void returnToTaskConversation(selectedTask)}:undefined}
      onProject={projects.some(project=>project.id===selectedTask.raw?.developmentContext?.projectId)&&can('projects.select')?()=>{void openTaskProject(selectedTask)}:undefined}
-     onFiles={can('attachmentWorkspace.open')&&selectedTask.raw?.actorId==='owner'&&selectedTask.raw?.spaceId==='private'?()=>{const open=()=>run('attachmentWorkspace.open',{taskId:selectedTask.id});if(!taskPolicyBeforeLeave.current?.(open))open()}:undefined}
+     onFiles={can('attachmentWorkspace.open')&&selectedTask.raw?.actorId==='owner'&&selectedTask.raw?.spaceId==='private'?()=>{const open=()=>run('attachmentWorkspace.open',{taskId:selectedTask.id});if(!guardTaskLeave(open))open()}:undefined}
      onScope={can('tasks.review')?()=>{showTaskLayer('scope');if(!review||reviewStale)refreshReview()}:undefined}/>}
    </div>}
   </header>{selectedTask&&taskLayer!=='homeReport'&&selectedWorkControl?.message&&<div className="pw-task-control-feedback" role="status"><p>{selectedWorkControl.message}</p>{selectedWorkControl.unknown&&can('tasks.open')&&<Button variant="ghost" size="small" onClick={()=>openTask(selectedTask.id,taskLayer)}>核对原任务状态</Button>}</div>}{taskLayer!=='homeReport'&&selectedTask&&<>{taskErrors[selectedTask.id]&&<div className="pw-banner pw-banner-error pw-task-local-error" data-task-id={selectedTask.id} role="alert"><IconInfo size={17}/><p>{taskErrors[selectedTask.id]}</p></div>}{state.taskActionErrors?.[selectedTask.id]&&state.taskActionErrors[selectedTask.id]!==taskErrors[selectedTask.id]&&<div className="pw-banner pw-banner-error pw-task-local-error" data-task-id={selectedTask.id} role="alert"><IconInfo size={17}/><p>{state.taskActionErrors[selectedTask.id]}</p></div>}</>}<div ref={taskScroll} className="pw-drawer-body pw-task-body" onScroll={rememberTaskPosition}>{taskLayer!=='homeReport'&&selectedTask&&state.originalTaskNotice?.taskId===selectedTask.id&&<section className="pw-selected-object" aria-label="原任务通知"><h3>{state.originalTaskNotice.content?.title||"原任务提醒"}</h3><p style={{whiteSpace:"pre-wrap"}}>{state.originalTaskNotice.content?.body||"通知正文请在原任务执行过程的 post_notice 记录中核对。"}</p><p className="pw-muted">{state.originalTaskNotice.expired?"这条提醒属于先前的执行状态。":""}{state.originalTaskNotice.content?.message||"通知接口回执不代表已经显示或阅读。"}</p><Button variant="ghost" size="small" onClick={()=>run("notice.task.close")}>收起提醒</Button></section>}{selectedTask?<>{taskReviewBody(selectedTask)}</>:taskOpening?<ThinkingLoader phase="正在读取原任务"/>:<section className="pw-empty-small"><p className="pw-error" role="alert">{taskLayer==='homeReport'?'原工作或汇报已变化，请返回管家首页核对。':taskId&&taskErrors[taskId]||'原任务暂不可读取，请重新读取原历史窗口。'}</p>{taskLayer!=='homeReport'&&!noticeBinding&&taskId&&can('tasks.open')&&<Button variant="secondary" onClick={()=>openTask(taskId,taskLayer)}>重新读取原任务</Button>}</section>}</div>{selectedTask&&taskFooter(selectedTask)}</Drawer.Content></Drawer.Portal></Drawer.Root>

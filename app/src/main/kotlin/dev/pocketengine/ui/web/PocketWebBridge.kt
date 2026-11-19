@@ -211,8 +211,8 @@ internal class PocketWebBridge(
         !closed && (section == "models" || taskViewId != null) && controller.webPrivateOwnerVisible()
     }
     private val profilePages = PocketWebProfiles(controller, { !closed && documentId != null && section == "workProfiles" && controller.webPrivateOwnerVisible() })
-    private val projectDraftDifference=PocketWebProjectDraftDifference(controller,::captureWindow,::acceptsWindow) {
-        taskViewId.takeIf{!closed&&documentId!=null&&section==null&&controller.state.filePath==null}
+    private val projectDraftDifference=PocketWebProjectDraftDifference(controller.nativeButlerHost(),{controller.nativeButlerHost().tasks},controller::runPluginCatalogWork,::captureWindow,::acceptsWindow) {
+        taskViewId.takeIf{!closed&&documentId!=null&&section==null&&controller.state.filePath==null&&controller.webPrivateOwnerVisible()}
     }
     private val projectWorkPages = PocketWebProjectWork(controller, { documentId }) {
         !closed && documentId != null && section == null && taskViewId == null && controller.state.filePath == null &&
@@ -605,7 +605,7 @@ internal class PocketWebBridge(
                 projectDevelopment.dispatch(action, args) { result, error -> complete(id, result, error, retainValue = action !in PocketWebCheckoutFiles.COMMANDS && action !in setOf("projects.development.readHostDiff", "projects.development.read", "projects.development.review", "projects.development.start", "projects.development.query")); publishState() }; return
             }
             if (action in PocketWebButlerPreparations.COMMANDS) {
-                butlerPreparations.dispatch(action, args) { result, error -> complete(id, result, error, "outcome_unknown"); publishState() }; return
+                butlerPreparations.dispatch(action, args, section == null && taskViewId == null) { result, error -> complete(id, result, error, "outcome_unknown"); publishState() }; return
             }
             if (action in PocketWebProjectLivePreview.COMMANDS) {
                 if (action == "projectLive.open") require(requiredString(args, "taskId") == taskViewId) { "请先打开这份原项目任务" }

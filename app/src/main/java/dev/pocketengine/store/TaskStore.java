@@ -1512,6 +1512,12 @@ public final class TaskStore {
                     .put("originalRunId",originalRun).put("originalEpoch",originalEpoch)
                     .put("canOpenOriginalRun",!originalRun.isEmpty()&&originalEpoch>0&&originalRun.equals(run)&&originalEpoch==epoch)
                     .put("hasUnresolvedOperations",hasUnresolved(actual.getString("id")));
+            // Native completion binds a persisted draft to this exact initial run.
+            // Expose only its locator; opening the receipt still verifies the byte pair.
+            String draftId=actual.optString("projectEditDraftId");
+            if(current&&!dismissed&&linked.optBoolean("canOpenOriginalRun")&&"completed".equals(actual.optString("status"))&&
+                dev.pocketengine.features.local.project.ProjectEditDraft.selected(actual.optJSONObject("developmentContext"))&&draftId.matches("[a-f0-9]{64}"))
+                linked.put("originalProjectDraftId",draftId);
             view.put("target",linked).put("targetTaskId",actual.getString("id")).put("targetConversationId",conversation).put("canPrepare",false);if(current)view.put("state",run.isEmpty()?"prepared":"started");
         }return view;
     }
@@ -1525,6 +1531,11 @@ public final class TaskStore {
     }
     /** Durable metadata index on the original SQL connection; empty conversation means the private owner hub. */
     public synchronized JSONObject ownerWorkPreparations(String conversation,String cursor,int limit)throws Exception {
+        return ownerWorkPreparations(conversation,cursor,limit,java.util.Map.of());
+    }
+    /** Only match IDs already visible in this same native private chat. This display hint is not
+     * stored on the proposal, sent to the model, or usable as an input/source grant. */
+    public synchronized JSONObject ownerWorkPreparations(String conversation,String cursor,int limit,java.util.Map<String,Long> visibleOwnerRequests)throws Exception {
         if(conversation==null||conversation.length()>240||cursor==null||!cursor.isEmpty()&&!cursor.matches(OWNER_WORK_PREPARATION_INDEX+"[0-9]{20}:[a-f0-9-]{36}:[a-f0-9-]{36}")||limit<1||limit>20)throw new IllegalArgumentException("原工作准备提案分页范围无效");
         db.beginTransaction();try{
             String sql="SELECT key,value FROM meta WHERE key>=? AND key<?"+(cursor.isEmpty()?"":" AND key<?")+" ORDER BY key DESC LIMIT 121";
@@ -1534,7 +1545,14 @@ public final class TaskStore {
                 if(scanned>=120||entries.length()>=limit){more=true;break;}String key=rows.getString(0);JSONObject index=new JSONObject(rows.getString(1));scanned++;
                 if(!conversation.isEmpty()&&!conversation.equals(index.getString("sourceConversationId"))){next=key;continue;}
                 JSONObject source=required(index.getString("sourceTaskId")),proposal=ownerWorkPreparationRecord(source,index.getString("proposalId"));if(!key.equals(ownerWorkPreparationIndex(proposal)))throw new SecurityException("原准备提案分页索引不匹配");
-                JSONObject view=ownerWorkPreparationView(source,proposal);int size=view.toString().getBytes(StandardCharsets.UTF_8).length;if(bytes+size>131072){more=true;break;}
+                JSONObject view=ownerWorkPreparationView(source,proposal);
+                if(!conversation.isEmpty()&&!visibleOwnerRequests.isEmpty()&&"project".equals(proposal.opt("kind"))&&view.opt("available")==Boolean.TRUE&&conversation.equals(proposal.opt("sourceConversationId"))){
+                    JSONArray refs=proposal.getJSONArray("sourceMessageRefs");
+                    if(refs.length()==1){var ref=dev.pocketengine.features.memory.SourceRef.fromJson(refs.getJSONObject(0));
+                        if("message".equals(ref.kind)&&"owner".equals(ref.ownerId)&&"private".equals(ref.spaceId)&&Long.valueOf(ref.revision).equals(visibleOwnerRequests.get(ref.sourceId)))
+                            view.put("visibleOwnerRequest",new JSONObject().put("messageId",ref.sourceId).put("revision",ref.revision));}
+                }
+                int size=view.toString().getBytes(StandardCharsets.UTF_8).length;if(bytes+size>131072){more=true;break;}
                 entries.put(view);bytes+=size;next=key;
             }}db.setTransactionSuccessful();return new JSONObject().put("entries",entries).put("hasMore",more).put("nextCursor",more?next:"").put("scanned",scanned).put("executionAuthorized",false);
         }finally{db.endTransaction();}
