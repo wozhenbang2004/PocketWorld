@@ -38,6 +38,34 @@ public final class OwnerSourceReferences {
         }
         return checked;
     }
+    /** Last-mile filter on a disposable request copy. A consumed message in conversation history
+     * is not a selection for a different task. This can remove references, never add any. */
+    public static void restrictToTaskInputs(JSONArray projected,String taskId,JSONArray nativeInputs)throws Exception{
+        java.util.Map<String,JSONObject> accepted=null;Set<String> ambiguous=null;
+        for(int i=0;i<projected.length();i++){
+            JSONObject carrier=projected.getJSONObject(i);if(!"user".equals(carrier.opt("role"))||!carrier.has("ownerSourceRefs"))continue;
+            JSONArray selected=carrier.getJSONArray("ownerSourceRefs");if(selected.length()==0){carrier.remove("ownerSourceRefs");continue;}
+            if(accepted==null){
+                accepted=new java.util.HashMap<>();ambiguous=new HashSet<>();
+                for(int j=0;nativeInputs!=null&&j<nativeInputs.length();j++){
+                    JSONObject row=nativeInputs.getJSONObject(j);Object key=row.opt("messageId");
+                    if(key instanceof String id&&!id.isBlank()&&accepted.put(id,row)!=null)ambiguous.add(id);
+                }
+            }
+            Object id=carrier.opt("ownerMessageId");JSONObject input=id instanceof String?accepted.get(id):null;
+            if(input==null||"withdrawn".equals(input.opt("queueState"))){carrier.remove("ownerSourceRefs");continue;}
+            // Ordinary intake and an explicitly routed input both record the target task, real
+            // message version and selected ranges in TaskStore. A claimed id alone is not enough.
+            JSONArray original=input.optJSONArray("ownerSourceRefs");
+            boolean recorded=Integer.valueOf(1).equals(input.opt("queueFormat"))&&switch(input.optString("queueState")){
+                case "pending","admitted","claimed","materialized" -> true;default -> false;
+            };
+            if(!recorded||ambiguous.contains(id)||taskId==null||!taskId.equals(input.opt("acceptedTaskId"))||original==null||
+                    integer(input,"ownerMessageRevision",1,Long.MAX_VALUE)!=integer(carrier,"ownerMessageRevision",1,Long.MAX_VALUE)||
+                    !checked(original).toString().equals(checked(selected).toString()))
+                throw new SecurityException("本工作接收的原消息版本或选段未能核对，未用历史引用替代本次输入");
+        }
+    }
     private static String text(JSONObject row,String key,int maximum)throws Exception {
         Object raw=row.opt(key);if(!(raw instanceof String))throw new IllegalArgumentException("原文引用字段必须为文字："+key);String value=(String)raw;
         if(value.isEmpty()||value.length()>maximum||value.indexOf('\0')>=0||!StandardCharsets.UTF_8.newEncoder().canEncode(value)

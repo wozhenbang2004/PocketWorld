@@ -120,6 +120,25 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
         require(output.childRun.isNotBlank() && output.epoch > 0 && output.index >= 0 && output.chars > 0 && output.matches(ref)) { "这份原产出已变化" }
         return ResearchNavigation(id, output)
     }
+    // This reading can show a request to continue, never grant it. The original coordinator
+    // and SQL reservation still decide whether the exact saved answer can be used now.
+    private fun canAskToContinueSaved(run: JSONObject, question: JSONObject): Boolean {
+        if (question.optString("kind") != "assignment_question" || question.optString("state") != "answered"
+            || question.optString("answerActor") !in setOf("", "owner") || question.optString("answer").isBlank()
+            || question.optString("answerId").isBlank() || question.has("continuationClaim")
+            || run.optString("status") in setOf("completed", "cancelled", "stopping", "paused", "interrupted")) return false
+        val member = run.optJSONArray("members").objects().singleOrNull { it.optString("id") == question.optString("memberId") } ?: return false
+        val waiting = setOf("awaiting_input", "awaiting_user")
+        if (member.optBoolean("exited") || member.optBoolean("paused") || member.optString("status") !in waiting) return false
+        val assignment = if (run.optJSONObject("workPlan") == null) member.optJSONObject("assignmentTask") else {
+            run.getJSONObject("workPlan").optJSONArray("items").objects().singleOrNull {
+                it.optString("memberId") == member.optString("id") && it.optString("workItemId") == question.optString("workItemId")
+                    && it.optString("assignmentId") == question.optString("assignmentId") && it.optString("status") in waiting
+            }?.optJSONObject("assignmentTask")
+        } ?: return false
+        return assignment.optString("assignmentId") == question.optString("assignmentId") &&
+            assignment.optJSONArray("questions").objects().none { it.optString("state") == "pending" }
+    }
     private fun view(kind: String, value: JSONObject): JSONObject {
         while (readings.size >= 24) readings.remove(readings.keys.first())
         val handle = UUID.randomUUID().toString()
@@ -129,7 +148,10 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
         readings[handle] = Reading(kind, value.toString())
         val result = JSONObject().put("kind", kind).put("viewHandle", handle).put(kind, PocketWebState.publicValue(value))
         if (kind == "run") {
-            result.put("messages", PocketWebState.publicValue(JSONArray(teamConversationRows(value))))
+            val messages = teamConversationRows(value).onEach { row ->
+                if (canAskToContinueSaved(value, row)) row.put("canRequestSavedContinuation", true) else row.remove("canRequestSavedContinuation")
+            }
+            result.put("messages", PocketWebState.publicValue(JSONArray(messages)))
             result.put("attention", PocketWebState.publicValue(TeamAttention.forRun(value)))
             controller.state.tasks.singleOrNull { it.raw.optString("feature") == "teams" && it.raw.optString("externalId") == value.optString("id")
                 && it.raw.optString("actorId") == "owner" && it.raw.optString("spaceId") == "private" }
@@ -221,17 +243,32 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 } else done(null, "原团队窗口已关闭；操作结果保留，请回原记录核对，没有自动重发")
             }
         }
+        fun readOwnerRun(id: String, accept: (JSONObject?, String?) -> Unit) {
+            controller.runTeamPhoneWork {
+                val result = runCatching {
+                    check(currentWindow()) { "原团队阅读窗口已关闭" }
+                    val teams = controller.webPluginFeatureHost().module("teams") as? TeamsModule ?: error("原团队宿主尚未接入")
+                    teams.retainedOwnerReading(id).also { check(it.optString("id") == id) { "原团队运行身份不匹配" } }
+                }
+                main.post {
+                    if (!currentWindow()) done(null, "原团队阅读窗口已关闭，请回原记录核对")
+                    else result.fold({ accept(it, null) }, { accept(null, it.message ?: "原团队暂不可读") })
+                }
+            }
+        }
         fun feature(command: String, input: JSONObject, messageId: String? = null, attention: JSONObject? = null) {
-            controller.requestWebFeatureReceipt("teams", command, input, ::currentWindow) { result, error ->
-                if (!currentWindow()) { done(null, "原团队窗口已关闭；请回原运行核对结果，没有自动重发"); return@requestWebFeatureReceipt }
+            val received: (JSONObject?, String?) -> Unit = receive@{ result, error ->
+                if (!currentWindow()) { done(null, "原团队窗口已关闭；请回原运行核对结果，没有自动重发"); return@receive }
                 if (error != null || result == null) deliver(null, error ?: "原团队操作没有返回回执")
                 else if (originalGeneration == generation && window == controller.webWindowTicket() && controller.webPrivateOwnerVisible()) try {
                     if (command == "sendMessage") check(result.optJSONObject("messageReceipt")?.optString("messageId") == messageId
                         && result.optJSONObject("messageReceipt")?.optString("recipientMemberId") == input.getString("recipientMemberId")) { "原消息回执身份不匹配" }
                     if (command == "answerAssignment") check(result.optString("answerId") == messageId
-                        && result.optString("questionId") == input.getString("questionId")) { "原问题回执身份不匹配" }
+                        && result.optString("questionId") == input.getString("questionId")
+                        && result.optString("assignmentId") == input.getString("assignmentId")) { "原问题回执身份不匹配" }
                     val receipt = JSONObject().put("command", command).put("confirmed", true).put("result", PocketWebState.publicValue(result))
                     messageId?.let { receipt.put("messageId", it) }
+                    if (command == "answerAssignment") receipt.put("runId", input.getString("runId")).put("memberId", input.getString("memberId"))
                     if (command in setOf("get", "pause", "resume", "feedback", "continueMessages", "cancel", "sendMessage", "configureMember")) {
                         check(result.optString("id") == input.getString("runId")) { "原团队运行身份不匹配" }
                         receipt.put("reading", view("run", result))
@@ -252,18 +289,20 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                         if (command == "save") receipt.put("reading", view("definition", result))
                     }
                     if (command == "answerAssignment") {
-                        controller.requestFeatureReceipt("teams", "get", JSONObject().put("runId", input.getString("runId"))) { current, readError ->
+                        readOwnerRun(input.getString("runId")) { current, readError ->
                             if (originalGeneration == generation && window == controller.webWindowTicket() && controller.webPrivateOwnerVisible()) {
                                 if (readError == null && current != null && current.optString("id") == input.getString("runId")) receipt.put("reading", view("run", current))
                                 else receipt.put("readRequired", true)
                                 deliverReceipt(receipt)
                             } else done(null, "原回答窗口已关闭；回答结果保留，请回原问题核对，没有自动重发")
                         }
-                        return@requestWebFeatureReceipt
+                        return@receive
                     }
                     deliverReceipt(receipt)
                 } catch (failure: Exception) { deliver(null, failure.message ?: "原团队回执待核对") }
             }
+            if (command == "get") readOwnerRun(input.getString("runId"), received)
+            else controller.requestWebFeatureReceipt("teams", command, input, ::currentWindow, received)
         }
         when (action) {
             "teams.attention" -> {
@@ -557,7 +596,8 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 feature("probeMember", JSONObject().put("teamId", team.getString("id")).put("memberId", member))
             }
             "teams.control", "teams.sendMessage", "teams.answerAssignment" -> {
-                fields(args, "viewHandle", "command", "memberId", "text", "mode", "quoteMessageId", "messageId")
+                if (action == "teams.answerAssignment") fields(args, "viewHandle", "memberId", "text", "mode", "quoteMessageId", "messageId", "delivery")
+                else fields(args, "viewHandle", "command", "memberId", "text", "mode", "quoteMessageId", "messageId")
                 val run = reading(text(args, "viewHandle"), "run", true)
                 val member = args.optString("memberId").takeIf { it.isNotEmpty() }
                 if (action == "teams.control") {
@@ -576,9 +616,18 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                     require(quoteId.isEmpty() || quote != null) { "引用不属于这次原运行" }
                     input.put("quoteMessageId", quoteId)
                     if (action == "teams.answerAssignment") {
-                        check(quote != null && quote.optString("kind") == "assignment_question" && quote.optString("memberId") == member && quote.optString("state") == "pending") { "请回答这名成员的原问题" }
+                        check(quote != null && quote.optString("kind") == "assignment_question" && quote.optString("memberId") == member) { "请核对这名成员的原问题" }
+                        val delivery = if (args.has("delivery")) text(args, "delivery", 24) else "save"
+                        require(delivery in setOf("save", "continue", "continue_saved"))
+                        val answer = if (delivery == "continue_saved") {
+                            check(!args.has("text") && canAskToContinueSaved(run, quote) && quote.optString("answerId") == messageId) { "原成员、问题或已存回答发生变化，请重新读取" }
+                            quote.getString("answer") // Do not substitute a draft or reconstruct a possibly shortened Web preview.
+                        } else {
+                            check(quote.optString("state") == "pending") { "这条原问题已不再等待回答" }
+                            text(args, "text", 4000).trim()
+                        }
                         input.put("assignmentId", quote.getString("assignmentId")).put("questionId", quote.getString("questionId")).put("answerId", messageId)
-                            .put("answer", text(args, "text", 4000).trim()).put("continueSafely", true).put("mode", "reply")
+                            .put("answer", answer).put("continueSafely", delivery != "save").put("mode", "reply")
                         feature("answerAssignment", input, messageId)
                     } else {
                         val mode = text(args, "mode", 24); require(mode in setOf("discussion", "queue"))

@@ -9,6 +9,7 @@ import dev.pocketengine.ui.isOwnerPhoneControlTask
 import dev.pocketengine.ui.objects
 import dev.pocketengine.ui.pendingCapabilityApprovals
 import dev.pocketengine.ui.unresolvedOperations
+import dev.pocketengine.store.PhoneActionRecovery
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -24,6 +25,7 @@ internal class PocketWebTaskActions(
         object Accepted : Decision()
         class Plan(val action: String, val task: UiTask, val input: JSONObject) : Decision()
         class Continuation(val task: UiTask, val input: JSONObject) : Decision()
+        class PhoneOutcome(val task:UiTask,val operation:String,val outcome:String,val pin:JSONObject):Decision()
     }
 
     fun decide(action: String, args: JSONObject, taskViewId: String?): Decision {
@@ -69,8 +71,15 @@ internal class PocketWebTaskActions(
                     "tasks.resolve" -> {
                         val operation = requiredString(args, "operationId"); val outcome = requiredString(args, "outcome")
                         require(outcome in setOf("occurred", "not_occurred"))
-                        require(unresolvedForReview(task).any { it.optString("operationId", it.optString("id")) == operation }) { "这项原操作不在审阅中" }
-                        controller.resolveReviewedTask(task, operation, outcome)
+                        val op=unresolvedForReview(task).singleOrNull { it.optString("operationId",it.optString("id"))==operation } ?: error("这项原操作不在审阅中")
+                        val pin=if(op.optString("format")==PhoneActionRecovery.FORMAT){
+                            require(taskViewId==task.id && controller.webPrivateOwnerVisible() && op.optBoolean("canRecord") && requiredBoolean(args,"checkedOriginal") &&
+                                op.getString("runId")==requiredString(args,"operationRun") && op.getInt("epoch")==requiredInt(args,"operationEpoch") &&
+                                op.getString("tool")==requiredString(args,"operationTool")) { "请先核对这笔原手机动作；在途或其他轮的记录不能确认" }
+                            JSONObject(op.toString()).apply { remove("before");remove("after");put("reviewRun",task.raw.getString("runId"));put("reviewEpoch",task.raw.getInt("coordinatorEpoch")) }
+                        }else { require(!args.has("checkedOriginal"));null }
+                        if(pin!=null)return Decision.PhoneOutcome(task,operation,outcome,pin)
+                        controller.resolveReviewedTask(task,operation,outcome)
                     }
                     else -> controller.configureExecutionScope(task, requiredInt(args, "minutes"), requiredInt(args, "tools"), requiredInt(args, "models"))
                 }
@@ -164,7 +173,7 @@ internal class PocketWebTaskActions(
                 PocketWebOwnerQuestions.actions(question).forEach { allowed[it] = if (it == PocketWebOwnerQuestions.CHOOSE) "选择原问题答案" else "回答原问题" }
                 if (task.status == "needs_confirmation" && task.id != activeTaskId) allowed["tasks.confirm"] = "核对结果"
                 if (approvals.isNotEmpty()) allowed["tasks.approve"] = "审阅操作授权"
-                if (unknown.any { it.optString("operationId", it.optString("id")).isNotBlank() }) allowed["tasks.resolve"] = "核对原操作"
+                if (unknown.any { it.optString("operationId", it.optString("id")).isNotBlank() && (it.optString("format")!=PhoneActionRecovery.FORMAT || it.optBoolean("canRecord")) }) allowed["tasks.resolve"] = "核对原操作"
                 if (projectContinuation != null) {
                     if (!projectContinuation.has("reason")) allowed["tasks.resume"] = "在原范围内继续项目任务"
                 } else if (task.raw.optString("executionRole") != "owner_work" && !PocketWebOwnerQuestions.blocksGenericResume(task.raw) && !dev.pocketengine.phone.MainPhoneOwnerStep.needsOwner(task.raw) && task.raw.optJSONObject(dev.pocketengine.phone.MainPhoneOwnerStep.KEY) == null && (isPhoneTask(task) || task.raw.optString("kind") == "assistant") && task.id != activeTaskId && task.status in setOf("paused", "awaiting_user", "needs_confirmation", "interrupted") && !task.raw.optBoolean("cancelRequested") && unknown.isEmpty() && approvals.isEmpty()) allowed["tasks.resume"] = "确认继续原任务"
@@ -195,7 +204,19 @@ internal class PocketWebTaskActions(
                 .put("unresolvedOperations", PocketWebState.publicValue(JSONArray(unknown)))
         }
 
-        fun unresolvedForReview(task: UiTask): List<JSONObject> = unresolvedOperations(task).filterNot { it.optString("tool") in setOf("device_invoke_tool", "device_delegate_goal", "device_operation_get") }
+        fun unresolvedForReview(task: UiTask): List<JSONObject> {
+            val raw=task.raw
+            val ordinary=unresolvedOperations(task).filterNot { it.optString("tool") in setOf("device_invoke_tool","device_delegate_goal","device_operation_get") }
+            if(!PhoneActionRecovery.local(raw))return ordinary
+            // Never turn a truncated/unavailable phone ledger row into a generic one-click decision.
+            val other=ordinary.filterNot { PhoneActionRecovery.phoneTool(it.optString("tool")) }
+            val native=raw.optJSONObject(PhoneActionRecovery.KEY)
+            if(native==null||native.optString("format")!=PhoneActionRecovery.FORMAT||native.optString("taskId")!=task.id||
+                native.optString("reviewRun")!=raw.optString("runId")||native.optInt("reviewEpoch")!=raw.optInt("coordinatorEpoch"))return other
+            val rows=native.optJSONArray("rows").objects().filter { it.optString("format")==PhoneActionRecovery.FORMAT && it.optString("taskId")==task.id }
+            val selected=rows.map { it.getString("operationId") }.toSet()
+            return rows+other.filterNot { val id=it.optString("operationId",it.optString("id")); id in selected || rows.isNotEmpty() && id.isEmpty() }
+        }
         fun specialOwnerTask(task: UiTask) = isOwnerPhoneControlTask(task) || setOf("ownerRuntimeSetup", "ownerLocalTerminal", "ownerBackupUpload", "ownerStorageCleanup", "ownerArchivePhase", "ownerGit", "ownerGitImport", "ownerGitPublication", "ownerMcpDiscovery").any(task.raw::has) || MediaOwnerUi.isTask(task.raw) || task.raw.optJSONObject("sourceLearningJob") != null || task.raw.optJSONObject("nativeEventTypeFlags")?.optBoolean("memory_owner_consolidation") == true || task.raw.optJSONArray("events").objects().any { it.optString("type") == "memory_owner_consolidation" }
 
         fun runtimeSetupTask(task: UiTask) = task.raw.optJSONObject("ownerRuntimeSetup") != null &&

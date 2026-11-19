@@ -52,6 +52,20 @@ internal class PocketWebKnowledge(private val controller: PocketWorldController)
             } catch (failure: Exception) { done(null, failure.message) }
         }
     }
+    /** A saved source version does not by itself prove that the same memory still cites it. */
+    private fun evidence(handle: String, original: JSONObject, command: String, reference: JSONObject,
+                         done: (JSONObject?, String?) -> Unit, project: (JSONObject) -> JSONObject) {
+        current(original, done) {
+            call("memoryReview", command, reference, { page, error ->
+                if (page == null || error != null) done(null, error ?: "原来源未能核对")
+                else current(original, done) {
+                    // The source and selected record can change independently while the native read is in flight.
+                    readSelection(handle)
+                    done(page.put("readExpiresAt", reads.getValue(handle).expires), null)
+                }
+            }, project)
+        }
+    }
     fun dispatch(action: String, args: JSONObject, done: (JSONObject?, String?) -> Unit) {
         check(controller.webPrivateOwnerVisible()) { "请回到原私人管理页" }
         when (action) {
@@ -147,23 +161,29 @@ internal class PocketWebKnowledge(private val controller: PocketWorldController)
                     // Keep the original candidate object separate from this presentation discriminator.
                     val data = result.getJSONObject(if (candidate) "candidate" else "record")
                     val original = JSONObject().put("candidate", candidate).put(if (candidate) "candidateRecord" else "record", data)
-                    result.put("readHandle", pin(reads, original)).put("candidateSelected", candidate)
+                    val handle = pin(reads, original)
+                    result.put("readHandle", handle).put("readExpiresAt", reads.getValue(handle).expires).put("candidateSelected", candidate)
                 }
             }
             "knowledge.source" -> {
-                fields(args, "readHandle", "index", "offset"); val original = readSelection(text(args, "readHandle")); val refs = row(original).optJSONArray("sourceRefs") ?: JSONArray(); val index = args.opt("index"); require(index is Int && index in 0 until refs.length())
-                call("memoryReview", "openSource", refs.getJSONObject(index), done) { result ->
-                    val content = result.getString("text"); val rawOffset = args.opt("offset"); require(rawOffset is Int && rawOffset >= 0); val offset = rawOffset; require(offset <= content.length && (offset == content.length || !Character.isLowSurrogate(content[offset])))
-                    var end = minOf(offset + 8000, content.length); if (end < content.length && end > offset && Character.isHighSurrogate(content[end - 1])) end--
+                fields(args, "readHandle", "index", "offset"); val handle = text(args, "readHandle"); val original = readSelection(handle)
+                val refs = row(original).optJSONArray("sourceRefs") ?: JSONArray(); val index = args.opt("index"); require(index is Int && index in 0 until refs.length())
+                val reference = refs.getJSONObject(index); val expected = dev.pocketengine.features.memory.SourceRef.fromJson(reference)
+                val offset = args.opt("offset"); require(offset is Int && offset >= 0)
+                evidence(handle, original, "openSource", reference, done) { result ->
+                    check(expected == dev.pocketengine.features.memory.SourceRef.fromJson(result.getJSONObject("sourceRef")) && result.opt("kind") == expected.kind) { "来源与这条记录的原引用不一致" }
+                    val content = result.getString("text"); require(offset <= content.length && (offset == content.length || !Character.isLowSurrogate(content[offset])))
+                    var end = offset + minOf(8000, content.length - offset); if (end < content.length && end > offset && Character.isHighSurrogate(content[end - 1])) end--
                     result.put("text", content.substring(offset, end)).put("index", index).put("offset", offset).put("nextOffset", end).put("totalChars", content.length).put("hasMore", end < content.length)
                 }
             }
             "knowledge.parent" -> {
-                fields(args, "readHandle", "index"); val original = readSelection(text(args, "readHandle")); check(original.getBoolean("candidate")); val candidate = row(original)
+                fields(args, "readHandle", "index"); val handle = text(args, "readHandle"); val original = readSelection(handle); check(original.getBoolean("candidate")); val candidate = row(original)
                 check(MemoryLearningReviewGuard.validCandidateParents(candidate)); val refs = candidate.getJSONArray("recordRefs"); val index = args.opt("index"); require(index is Int && index in 0 until refs.length()); val reference = refs.getJSONObject(index)
-                current(original, done) { call("memoryReview", "getParentRecord", reference, done) { result ->
-                    val parent = result.getJSONObject("record"); check(parent.getString("id") == reference.getString("id") && MemoryLearningReviewGuard.revision(parent) == MemoryLearningReviewGuard.revision(reference)) { "父记忆版本已变化" }; result
-                } }
+                evidence(handle, original, "getParentRecord", reference, done) { result ->
+                    val parent = result.getJSONObject("record"); check(parent.getString("id") == reference.getString("id") && MemoryLearningReviewGuard.revision(parent) == MemoryLearningReviewGuard.revision(reference)) { "父记忆版本已变化" }
+                    JSONObject().put("index", index).put("record", JSONObject().put("id", parent.getString("id")).put("revision", MemoryLearningReviewGuard.revision(parent)).put("text", parent.getString("text")))
+                }
             }
             "knowledge.assertion.prepare" -> {
                 fields(args, "readHandle", "query", "retainHandles"); val original = readSelection(text(args, "readHandle")); check(original.getBoolean("candidate") && row(original).optString("status") == "pending")

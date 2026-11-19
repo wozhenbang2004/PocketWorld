@@ -23,6 +23,7 @@ def _date(value):
 
 
 def _request(raw):
+    if not isinstance(raw, bytes): raise ValueError("Original local record unavailable")
     value = _object(raw)
     if value.get("format") != "pocketworld.desktop-local-stop.v1" or not _uuid(value.get("requestId")) or not _date(value.get("requestedAt")):
         raise ValueError("The local pause marker has no recognizable original request")
@@ -30,6 +31,7 @@ def _request(raw):
 
 
 def _receipt(raw):
+    if not isinstance(raw, bytes): raise ValueError("Original local record unavailable")
     value = _object(raw)
     if (set(value) != {"format", "requestId", "markerSha256", "managerInstanceId", "observedAt", "driverStoppedVerified"}
             or value["format"] != _ACK or not _uuid(value["requestId"]) or not _uuid(value["managerInstanceId"])
@@ -41,7 +43,7 @@ def _receipt(raw):
 
 
 def _read(backend, root, sid, name):
-    return backend.read_private_bytes(root, name, sid, maximum=MAXIMUM)
+    return backend.read_optional_private_bytes(root, name, sid, maximum=MAXIMUM)
 
 
 def new_request():
@@ -53,11 +55,8 @@ def save_installed_request(context, current):
     # The registered directory is private. Publish the complete marker at once;
     # never truncate an old marker (recovery checks its exact bytes).
     context.backend.assert_private_directory(context.jobs, context.sid, require_protected=False)
-    try:
-        _read(context.backend, context.jobs, context.sid, MARKER)
+    if _read(context.backend, context.jobs, context.sid, MARKER) is not None:
         return  # Already requested, even if older marker bytes are not recognizable.
-    except FileNotFoundError:
-        pass
     context.backend.create_private_snapshot(context.jobs, MARKER, new_request(), MAXIMUM, current=current)
 
 
@@ -69,10 +68,9 @@ def owner_status(context):
         return ("unreadable",)
     try:
         raw = _read(backend, root, sid, MARKER)
-    except FileNotFoundError:
-        return ("none",)
     except (OSError, PlatformError):
         return ("unreadable",)
+    if raw is None: return ("none",)
     try:
         request, digest = _request(raw)
     except (ValueError, PlatformError, RecursionError):
@@ -105,13 +103,11 @@ def acknowledge(manager, original, outcome):
             raise PlatformError("Local pause identity changed; no receipt publication", 409)
     if outcome.get("paused") is not True or outcome.get("priorEffectsVerified") is not False: return
     current()
-    try:
-        before = _read(backend, root, sid, RECEIPT)
+    before = _read(backend, root, sid, RECEIPT)
+    if before is not None:
         old = _receipt(before)  # Do not replace unrelated/unrecognized private contents.
         if (old["requestId"], old["markerSha256"]) == (request, digest): return
         if not backend.discard_previous_stop_receipt(root, before, current).get("verified"): return
-    except FileNotFoundError:
-        pass
     proof = outcome.get("driverCleanupProof")
     raw = json.dumps({"format": _ACK, "requestId": request, "markerSha256": digest, "managerInstanceId": instance,
                       "observedAt": int(time.time()*1000),

@@ -104,7 +104,7 @@ export function ComposerSourceReferences({ composer, disabled }: { composer: Dat
   return <section className="pw-composer-context" aria-label="草稿中的原文引用">
     {refs.length > 0 && <Accordion className="pw-composer-context-disclosure"><AccordionItem id="source-references" title={`原文引用 · ${refs.length}`} description="已加入这份草稿，发送时核对原消息。">
       <div className="pw-composer-context-scroll" role="region" aria-label="原文引用清单" tabIndex={0}>
-        <p className="pw-composer-context-hint">当前保留的是原文定位，未读取正文。</p>
+        <p className="pw-composer-context-hint">这里只显示定位。发送后，这项工作可重新核对所选原文；同一对话另起工作不会凭旧输入再次展开这段引用。</p>
         {refs.map((ref, index) => {
           const source = ref.sourceRef || {};
           const id = JSON.stringify([ref.generation, ref.sourceConversationId, source.kind, source.sourceId, source.revision, ref.offset, ref.chars]);

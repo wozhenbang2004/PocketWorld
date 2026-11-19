@@ -1814,6 +1814,19 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
     private void publish(Run run)throws Exception{try{events.accept(new JSONObject().put("run",JsonFiles.copy(run.json)));}catch(RuntimeException ignored){}}
     private void persist()throws Exception{JsonFiles.write(file,new JSONObject().put("runs",list()).put("archived",history()));}
     private File contextFile(String id)throws Exception{if(id==null||id.isEmpty())throw new IllegalArgumentException("团队任务身份无效");return new File(new File(file.getParentFile(),file.getName()+".contexts"),TeamWorkFiles.hash(id)+".json");}
+    /** An owner opening a retained conversation needs its saved data, not an execution slot. */
+    synchronized JSONObject retainedOwnerReading(String id)throws Exception {
+        Run hot=runs.get(id);
+        return hot==null?archivedOriginal(id,archived.get(id)):JsonFiles.copy(hot.json);
+    }
+    private JSONObject archivedOriginal(String id,JSONObject summary)throws Exception {
+        if(summary==null)throw new IllegalArgumentException("团队任务不存在");
+        JSONObject original=JsonFiles.read(contextFile(id));
+        if(!id.equals(summary.optString("id"))||!id.equals(original.optString("id"))||!original.has("revision")||
+                !summary.has("revision")||original.getLong("revision")!=summary.getLong("revision"))
+            throw new IllegalStateException("原团队历史缺失或版本不一致，请重新读取原记录");
+        return original;
+    }
     private Run restored(JSONObject json)throws Exception{
         hydrate(json);
         if(json.optString("status").matches("running|queued|stopping|paused")){json.put("status","interrupted").put("phase","interrupted").put("summary","应用已重启，成员会话与轮次保留；只有主人明确继续才重新分配未完成的工作");JSONArray roster=json.getJSONArray("members");for(int m=0;m<roster.length();m++){JSONObject member=roster.getJSONObject(m);if(!done(member.optString("status")))member.put("status","interrupted");JSONArray states=member.getJSONArray("roundStates");for(int r=0;r<states.length();r++)if(!done(states.getJSONObject(r).optString("status")))states.getJSONObject(r).put("status","interrupted");}}
@@ -1832,8 +1845,8 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
         runs.remove(id);archived.put(id,summary);try{persist();}catch(Exception failure){archived.remove(id);runs.put(id,candidate);throw failure;}
     }
     private Run required(String id)throws Exception{
-        Run run=runs.get(id);if(run!=null)return run;JSONObject summary=archived.get(id);if(summary==null)throw new IllegalArgumentException("团队任务不存在");JSONObject original=JsonFiles.read(contextFile(id));
-        if(!id.equals(original.optString("id"))||original.optLong("revision")!=summary.optLong("revision"))throw new IllegalStateException("原团队历史缺失或版本不一致，未恢复执行");run=restored(original);makeRoom();archived.remove(id);runs.put(id,run);try{persist();}catch(Exception failure){runs.remove(id);archived.put(id,summary);throw failure;}return run;
+        Run run=runs.get(id);if(run!=null)return run;JSONObject summary=archived.get(id);
+        run=restored(archivedOriginal(id,summary));makeRoom();archived.remove(id);runs.put(id,run);try{persist();}catch(Exception failure){runs.remove(id);archived.put(id,summary);throw failure;}return run;
     }
     private static boolean active(Run run){return run.json.optString("status").matches("running|queued|stopping|paused");}
     private static void hydrate(JSONObject json)throws Exception{

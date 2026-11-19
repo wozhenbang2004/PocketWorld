@@ -3426,6 +3426,18 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun stopReviewedTask(task: UiTask) { if (isPhoneTask(task)) controlOriginalPhone(task, "stop") else native("stopTask", reviewedTaskInput(task)) }
     fun confirmReviewedTask(task: UiTask, done: Boolean, feedback: String) { native("confirmResult", reviewedTaskInput(task).put("resultReviewDigest", task.raw.optString("resultReviewDigest")).put("completed", done).put("feedback", feedback)) }
     fun resolveReviewedTask(task: UiTask, operationId: String, outcome: String) { native("resolveOperation", reviewedTaskInput(task).put("operationId", operationId).put("outcome", outcome)) }
+    internal fun recordReviewedPhoneOutcome(task:UiTask,operation:String,outcome:String,pin:JSONObject,current:()->Boolean,done:(JSONObject?,String?)->Unit) {
+        val host=webWindowTicket()
+        fun valid() = !closed && webPrivateOwnerVisible() && host==webWindowTicket() && current()
+        require(valid()) { "请回到原手机动作核对窗口" }
+        io.execute {
+            val result=runCatching { app.recordOriginalPhoneOutcome(task.id,operation,outcome,pin) { valid() } }
+            main.post {
+                if(!valid())done(null,"原窗口已变化。请在原动作记录核对是否已登记，不会自动重试")
+                else { result.fold({done(it,null)},{done(null,message(it))});getTask(task.id) }
+            }
+        }
+    }
     fun getTask(id: String) { native("getTask", JSONObject().put("taskId", id)) }
     fun focusTask(id: String) { focusTask(id, requestNavigation = true) }
 

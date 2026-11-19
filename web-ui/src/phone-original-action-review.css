@@ -1,0 +1,7 @@
+.pw-phone-unknown { min-width: 0; }
+.pw-phone-unknown ol { list-style: none; margin: .5rem 0; padding: 0; }
+.pw-phone-unknown li > button { justify-content: flex-start; text-align: start; flex-wrap: wrap; min-height: 44px; gap: .5rem; }
+.pw-phone-unknown small { font-variant-numeric: tabular-nums; opacity: .78; }
+.pw-phone-unknown-detail { margin-inline-start: .625rem; padding: .25rem .5rem .625rem; }
+.pw-phone-unknown-detail dl { display: grid; grid-template-columns: max-content 1fr; gap: .3rem .6rem; }
+.pw-phone-unknown-detail dd { margin: 0; overflow-wrap: anywhere; }

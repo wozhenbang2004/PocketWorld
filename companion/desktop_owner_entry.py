@@ -97,10 +97,7 @@ def _folder():
 
 
 def _present(context, root, filename):
-    try:
-        with context.backend.open_reader(root, filename, maximum=262144): return True
-    except FileNotFoundError:
-        return False
+    return context.backend.private_leaf_present(root, filename, context.sid, maximum=262144)
 
 
 def _original_in_use(context):
@@ -182,7 +179,7 @@ def _page(context, facts, notice):
     elif facts["busy"]:
         heading = "原伴侣正在使用本机工作区"
         body += "\n可能正在配对或运行服务，不能据此确认手机已经连接。请回到原配对窗口，或在手机「我的设备」查看这台电脑。不会另起一个。"
-        body += "\n如果启动时保留了「手机工作回执」，可在 Windows 时钟旁的通知区域（包括折叠图标）中打开，选择原派单。"
+        body += "\n如果启动时保留了「设备工作回执」，可在 Windows 时钟旁的通知区域（包括折叠图标）中打开，区分本机接单与交给手机的工作。"
     else:
         heading = "已有连接设置" if facts["devices"] else "可以与手机配对"
         body += "\n桌面能力" + ("已配置" if facts["desktop"] else "未启用") + "，不代表任何手机已获当前权限。"
@@ -261,7 +258,7 @@ def open_installed_desk():
                 control, bulk, local = facts["listeners"]
                 selected = _dialog("按这些已保存的地址启动？", f"已配对设备的控制：{control}\n已配对设备的文件：{bulk}\n仅本机的旧版服务：{local}"
                                    "\n\n手机还须连接；观看和输入均沿用原授权。",
-                                   [("yes", "只启动原服务"), ("receipts", "启动并保留「手机工作回执」入口\n在本次 Windows 通知区域随时打开；点选原工作才向原手机查询。")])
+                                   [("yes", "只启动原服务"), ("receipts", "启动并保留「设备工作回执」入口\n在本次 Windows 通知区域随时打开；本机接单在本机读，派给手机的工作才向手机查询。")])
                 if selected not in {"yes", "receipts"}: continue
                 phone_receipts = selected == "receipts"
             if action == "StopDesktop":

@@ -751,6 +751,9 @@ class CompanionDeviceReceiver:
             self._current(permission)
             with self.manager.lock:
                 status = result.get("status", "completed") if envelope.arguments["toolName"] in {"workspace.write", "workspace.project.confirm"} else "completed"
+                if self.manager.platform.name == "windows" and envelope.arguments["toolName"] in {"workspace.list", "workspace.read"}:
+                    from windows_workspace_read import bind_original
+                    bind_original(self.manager, envelope, operation, job, result)
                 job.update(status=status, nativeToolResult=result, updatedAt=self.manager.now(), message="Original native tool receipt stored; user goal still requires verification")
                 self.manager._save(job)
             return result

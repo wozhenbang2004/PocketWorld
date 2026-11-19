@@ -8,6 +8,7 @@ import { Accordion, AccordionItem, Button, CheckboxField, IconButton, SearchFiel
 import { MemoryAssertionFields } from './MemoryAssertionFields';
 import { ProjectMemoryQuote } from './ProjectMemoryQuote';
 import { ProjectMemoryNote } from './ProjectMemoryNote';
+import { ScopedMemoryEvidence } from './ScopedMemoryEvidence';
 import { MemoryHistoryWorkspace } from './MemoryHistoryWorkspace';
 import { WorkingStatus } from './library/journey-motion';
 import { FormDraftNotice, useFormDrafts, type RegisterBeforeLeave } from './form-drafts';
@@ -24,7 +25,7 @@ const eligible = (row: Data) => row.active === true && row.consolidationBlocked 
 /** Existing BoardUI reading rows, native namespace selection, and exact record review. */
 export function MemoryWorkspace({ domain, run, registerTransientBack, registerBeforeLeave, initialCandidate = null, alreadyShownError = '' }: { domain: string; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void; registerBeforeLeave?: RegisterBeforeLeave; initialCandidate?: LearningCandidateTarget | null; alreadyShownError?: string }) {
   const formDraft = useFormDrafts(run, 'memory', registerBeforeLeave);
-  const [snapshot, setSnapshot] = useState<Data | null>(null), [selection, setSelection] = useState<Data | null>(null), [review, setReview] = useState<Data | null>(null), [source, setSource] = useState<Data | null>(null);
+  const [snapshot, setSnapshot] = useState<Data | null>(null), [selection, setSelection] = useState<Data | null>(null), [review, setReview] = useState<Data | null>(null);
   const [snapshotCurrent, setSnapshotCurrent] = useState(false), currentList = useRef(false);
   const [assertionOpen, setAssertionOpen] = useState(false), [selectingConsolidation, setSelectingConsolidation] = useState(false);
   const [tab, setTab] = useState(domain === 'memoryReview' ? 'candidates' : 'records'), [query, setQuery] = useState(''), [draft, setDraft] = useState(''), [reason, setReason] = useState('');
@@ -52,7 +53,7 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, registerBe
   };
   const closeHandle = (handle: string) => { if (handle) void run('knowledge.close', { handle }).catch(() => {}); };
   const closeReview = () => { closeHandle(reviewHandle.current); reviewHandle.current = ''; setReview(null); setAcknowledged(false); };
-  const closeRecord = () => { closeReview(); closeHandle(readHandle.current); readHandle.current = ''; setSelection(null); setSource(null); setAttempted(false); setAssertionOpen(false); };
+  const closeRecord = () => { closeReview(); closeHandle(readHandle.current); readHandle.current = ''; setSelection(null); setAttempted(false); setAssertionOpen(false); };
   const clearConsolidation = () => { selectedHandles.current.forEach(closeHandle); selectedHandles.current = []; setConsolidation([]); };
   const load = (candidate: LearningCandidateTarget | null = null) => {
     if (entered.current || !alive.current) return;
@@ -200,8 +201,7 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, registerBe
       {!attempted && candidate && record?.status === 'pending' && <>{candidateHasEdits && <p className="pw-memory-context pw-knowledge-notice" role="status">先保存刚才的修改，再采用更新后的候选。</p>}<div className="pw-form-actions pw-memory-decisions"><Button disabled={busy || formDraft.stale || !!formDraft.conflict || formDraft.requiresRecheck} onClick={() => candidateHasEdits ? prepare('edit', { draft: { text: draft, ...draftMeta, confidence: Number(draftMeta.confidence) } }) : prepare('accept')}>{candidateHasEdits ? '先保存修改' : '核对并采用候选'}</Button></div></>}
 <section className="pw-knowledge-evidence"><h3>来源与关联</h3>
       {!candidate && projectScope && record?.spaceId === projectScope && record?.formation === 'explicit_save' && record?.layer === 'procedural' && !record?.learningCandidateId && Array.isArray(record?.sourceRefs) && !record.sourceRefs.length && Array.isArray(record?.sourceIds) && !record.sourceIds.length && <p className="pw-muted">{record.source || '未登记来源'} · 没有关联文件原文</p>}
-      <div className="pw-form-actions">{rows(record?.sourceRefs).map((ref, index) => <Button key={ref.sourceId + ':' + ref.revision} variant="ghost" disabled={busy || attempted} onClick={() => { setSource(null); void invoke('knowledge.source', { readHandle: readHandle.current, index, offset: 0 }, setSource); }}>{snapshot?.namespaceStatus === 'project' && ref.kind === 'workspace_file' && ref.workspace?.path ? `查看原段 · ${ref.workspace.path} · v${ref.revision}` : `查看来源 ${index + 1}`}</Button>)}{candidate && rows(record?.recordRefs).map((ref, index) => <Button key={ref.id + ':' + ref.revision} variant="ghost" disabled={busy || attempted} onClick={() => { setSource(null); void invoke('knowledge.parent', { readHandle: readHandle.current, index }, value => setSource({ title: '父记忆的精确版本', text: value.record?.text })); }}>查看父记忆 {index + 1}</Button>)}</div>
-      {source && <section className="pw-source-record"><h3>{source.title}</h3><pre className="pw-source-copy" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{source.text}</pre>{source.hasMore && <Button variant="ghost" disabled={busy} onClick={() => { setSource(null); void invoke('knowledge.source', { readHandle: readHandle.current, index: source.index, offset: source.nextOffset }, setSource); }}>继续读取原文</Button>}</section>}
+      {!attempted && record && <ScopedMemoryEvidence key={selection.readHandle} record={record} candidate={candidate} project={snapshot?.namespaceStatus === 'project'} handle={selection.readHandle} expires={selection.readExpiresAt} busy={busy} invoke={invoke} back={() => formDraft.guard(closeRecord)} />}
       </section>
       {!attempted && (!candidate || record?.status === 'pending') && <>
         <Accordion variant="divided" className="pw-compact-disclosures pw-memory-edit"><AccordionItem id="memory-edit" title={candidate ? '修改候选内容' : '纠正这条记忆'}>

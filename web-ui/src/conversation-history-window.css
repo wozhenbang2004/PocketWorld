@@ -9,3 +9,7 @@
 .pw-history-window-messages > button { align-self: center; flex: none; min-height: 44px; }
 .pw-history-window-message .pw-input-work { min-height: 44px; }
 .pw-history-window-message .pw-input-work-error { margin: 2px 0 0; font-size: .875rem; }
+.pw-history-quote-ranges { padding-inline-start: 1.4rem; }
+.pw-history-quote-ranges li + li { margin-top: .5rem; }
+.pw-history-quote-ranges small { display: block; }
+.pw-history-quote-ranges button { min-height: 44px; }

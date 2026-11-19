@@ -48,7 +48,8 @@ internal data class ConversationReadPage(
     val window: Long, val conversation: String, val title: String, val readingKey: String?,
     val messages: List<UiMessage> = emptyList(), val cursor: String = "", val hasMore: Boolean = false,
     val loading: Boolean = true, val error: String? = null, val notice: String? = null,
-    val rowBytes: Map<String,Int> = emptyMap(), val limited: Boolean = false, val index: Int = 0, val offset: Int = 0, val anchor: String = "", val bytes: Int = 0, val initialized: Boolean = false
+    val rowBytes: Map<String,Int> = emptyMap(), val limited: Boolean = false, val index: Int = 0, val offset: Int = 0, val anchor: String = "", val bytes: Int = 0, val initialized: Boolean = false,
+    val quoteTrail: ConversationQuoteTrail = ConversationQuoteTrail()
 ) {
     fun accept(native: JSONObject, older: Boolean): ConversationReadPage {
         require(native.optString("conversationId") == conversation) { "原历史窗口属于其他对话" }
@@ -79,6 +80,7 @@ internal data class ConversationReadPage(
         require(!page.has("hasMore") || page.opt("hasMore") is Boolean) { "原历史分页状态无效" }
         val next = page.optString("nextCursor"); require(next.length <= 2048 && (!page.optBoolean("hasMore") || next.isNotEmpty())) { "原历史游标不可核对" }
         return copy(title = native.optString("title", title), messages = combined, cursor = next, hasMore = page.optBoolean("hasMore"), loading = false, error = null,
+            quoteTrail = quoteTrail.update(conversation, nativeRows, combined.mapNotNull { it.id }.toSet(), older),
             bytes = actualBytes.toInt(), rowBytes=retainedBytes.filterKeys { key->combined.any { it.id==key } }, initialized = true, limited = false,
             notice = if (page.optBoolean("retentionLimitApplied")) "旧文件当前只提供原保留窗口，未显示成完整历史。" else if ((page.optJSONArray("gaps")?.length() ?: 0) > 0) "部分原件超出本次范围，未用摘要替代。" else if (newerReleased) "已载入较早消息，部分较新消息暂时移出阅读窗口；可继续向前查看，点击刷新返回最新消息。" else if (anchor.isNotBlank() && combined.none { it.id == anchor }) "上次阅读位置不在当前窗口，可继续查看较早消息；当前任务未切换。" else null)
     }

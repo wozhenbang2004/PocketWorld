@@ -8,7 +8,7 @@ const controls = new Set(["acquire_control", "answer", "steer", "resume"]);
 const settled = new Set(["succeeded", "failed", "cancelled", "interrupted", "expired", "rejected"]);
 let peer = null, busy = false, waitPending = false, scopes = [], description = null, currentTask = null;
 let selectedOperation = "", selectionVersion = 0, lockedControl = null, submission = null, draftRevision = 0;
-let watchVersion = 0, watchTimer = null, watching = false;
+let watchVersion = 0, watchTimer = null, watching = false, scopeKind = "phone";
 const inputDrafts = new Map(), cancelRecords = new Map(), eventViews = new Map();
 const show = value => { byId("result").textContent = JSON.stringify(value, null, 2); };
 const unknown = value => value?.status === "unknown" || value?.effectState === "unknown" || value?.phoneStateUnconfirmed === true || value?.currentRead === "unavailable";
@@ -153,36 +153,64 @@ function refreshInputs() {
   byId("new-task").disabled = blocked || !peer || !!submission && !submission.confirmed;
   byId("start-task").disabled = blocked || !peer || !scopePresent() || !byId("grant").value || !byId("version").value || !!submission;
 }
+function goalProfile() {
+  return description?.capabilities?.find(item => item.id === "agent.goal" && item.implemented === true && item.installed === true);
+}
+function submissionScope(grant, binding) {
+  const goal = goalProfile(), mode = binding?.screenMode;
+  // Pairing and an installed feature prove neither current admission nor access to a specific Android app.
+  if (!(grant.modelBudget >= 1 && grant.capabilities.includes("task.submitGoal")) || !goal?.version || goal.busy === true || goal.blocked === true ||
+      !Array.isArray(goal.supportedExecutionModes) || !goal.supportedExecutionModes.includes(mode)) return null;
+  const admission = goal.ready === true ? "ready" : goal.canSubmitForLocalReview === true ? "owner_review" : null;
+  if (!admission) return null;
+  const direct = ["main_screen", "background"].includes(mode) && Number.isSafeInteger(binding.androidUserId) && binding.androidUserId >= 0 &&
+    Array.isArray(binding.packageNames) && binding.packageNames.length > 0 && binding.packageNames.every(name => typeof name === "string" && !!name);
+  return direct || mode === "capabilities" ? {kind:direct ? "phone" : "capability", admission, version:goal.version} : null;
+}
+function currentChoice() {
+  const index = byId("scope-choice").value;
+  return index === "" ? null : scopes[Number(index)] || null;
+}
 function updateScopes(value) {
-  const previousGrant = byId("grant").value, previousBinding = byId("binding").value;
-  const previousTools = byId("tools").value, previousModels = byId("models").value;
+  const prior = currentChoice(), previousTools = byId("tools").value, previousModels = byId("models").value;
   description = value; scopes = [];
   const select = byId("scope-choice"); select.replaceChildren();
+  const pick = document.createElement("option"); pick.value = ""; pick.textContent = scopeKind === "phone" ? "Select an approved phone app scope" : "Select a separate capability scope"; select.append(pick);
   if (scopeFresh()) for (const receipt of description.grantReceipts || []) {
     const grant = receipt.body?.grant;
     if (receipt.body?.targetInstanceId !== description.instanceId || !grant || grant.expiresAt <= Date.now() || !Array.isArray(grant.capabilities)) continue;
     for (const binding of grant.resources || []) {
       if (!binding || !["main_screen", "background", "capabilities"].includes(binding.screenMode)) continue;
-      scopes.push({grant,binding});
-      if (grant.modelBudget < 1 || !grant.capabilities.includes("task.submitGoal")) continue;
+      const scope = submissionScope(grant,binding);
+      scopes.push({grant,binding,scope}); // Also keep read/control-only grants for the existing task, never as submit options.
+      if (!scope || scope.kind !== scopeKind) continue;
       const option = document.createElement("option"); option.value = String(scopes.length - 1);
-      const label = binding.screenMode === "main_screen" ? "Main screen" : binding.screenMode === "background" ? "Private display" : "Phone capabilities";
-      option.textContent = label + (binding.packageNames?.length ? " · " + binding.packageNames.join(", ") : ""); select.append(option);
+      const label = binding.screenMode === "main_screen" ? "Main screen" : binding.screenMode === "background" ? "Private display" : "Granted capability";
+      option.textContent = scope.kind === "phone" ? `${label} · Android user ${binding.androidUserId} · ${binding.packageNames.join(", ")}` :
+        [label, binding.projectId, binding.checkoutId, binding.runtimeId].filter(Boolean).join(" · ");
+      select.append(option);
+      if (prior && canonical(scopes[scopes.length-1]) === canonical(prior)) select.value = option.value;
     }
   }
-  if (!select.children.length) { const option = document.createElement("option"); option.value = ""; option.textContent = "No current task scope. Review this device on the phone."; select.append(option); }
-  const previousIndex = scopes.findIndex(item => item.grant.grantId === previousGrant && JSON.stringify(item.binding,null,2) === previousBinding && item.grant.capabilities.includes("task.submitGoal"));
-  if (previousIndex >= 0) select.value = String(previousIndex);
-  selectScope(); refreshInputs();
-  if (previousIndex >= 0) { byId("tools").value = previousTools; byId("models").value = previousModels; }
+  // Never default to a different grant, screen, Android profile or set of apps after refresh.
+  selectScope();
+  if (currentChoice()) { byId("tools").value = previousTools; byId("models").value = previousModels; }
 }
 function selectScope() {
-  const value = byId("scope-choice").value, selected = value === "" ? null : scopes[Number(value)];
-  byId("grant").value = selected?.grant.grantId || "";
-  byId("binding").value = selected ? JSON.stringify(selected.binding, null, 2) : "";
-  const advertised = description?.capabilities?.find(item => item.id === "agent.goal" && item.implemented === true && item.installed === true);
-  byId("version").value = advertised?.version || "";
-  if (selected) { byId("tools").value = Math.min(10, selected.grant.toolBudget); byId("models").value = Math.min(10, selected.grant.modelBudget); }
+  const selected = currentChoice(), scope = selected?.scope, goal = goalProfile();
+  byId("grant").value = scope ? selected.grant.grantId : "";
+  byId("binding").value = scope ? JSON.stringify(selected.binding, null, 2) : "";
+  byId("version").value = scope?.version || "";
+  const guidance = !scopePresent() ? "Check the selected phone. Being paired does not authorize a task." :
+    !scopeFresh() ? "The last phone capability report has expired. Check the connection again to see current scopes." :
+    goal?.busy === true ? "The phone’s executor is busy. No new work can be submitted now." :
+    (!goal || goal.blocked === true || (goal.ready !== true && goal.canSubmitForLocalReview !== true)) ? "Connected, but this phone has not reported that it can accept a goal. Review the receiver or model on the phone." :
+    !scope ? (byId("scope-choice").children.length > 1 ? "Choose the exact scope before sending." : scopeKind === "phone" ? "No currently granted Android app scope. Review the selected phone; pairing and capability-only access do not authorize an app task." : "No separate capability scope was granted.") :
+    scope.kind === "capability" ? "Separate capability work, not an Android app task. Only the original grant applies; this does not share a Windows project." :
+    scope.admission === "owner_review" ? "The phone can receive this goal for local owner review; execution is not ready." : "The phone reports it can accept this goal. Acceptance is not execution or a result.";
+  byId("scope-guidance").textContent = guidance;
+  byId("start-task").textContent = scope?.admission === "owner_review" ? "Send for phone owner review" : "Send to selected phone";
+  if (scope) { byId("tools").value = Math.min(10, selected.grant.toolBudget); byId("models").value = Math.min(10, selected.grant.modelBudget); }
   refreshInputs();
 }
 function renderRecent(value) {
@@ -334,6 +362,11 @@ function startWatching() {
   }
   void tick();
 }
+byId("switch-scope").onclick = () => {
+  draftRevision++; scopeKind = scopeKind === "phone" ? "capability" : "phone";
+  byId("switch-scope").textContent = scopeKind === "phone" ? "Other granted work" : "Return to phone app work";
+  updateScopes(description);
+};
 byId("scope-choice").onchange = () => { draftRevision++; selectScope(); };
 for (const id of ["goal","tools","models"]) byId(id).addEventListener("input", () => { draftRevision++; });
 byId("operation").addEventListener("input", () => selectOperation(byId("operation").value.trim()));
@@ -375,8 +408,8 @@ byId("submit").onsubmit = async event => {
       // User edits invalidate this Start even when the values were changed back.
       if (revision !== draftRevision) { notice("The phone scope or this draft changed. Review the current selection before starting a task."); return; }
       updateScopes(fresh.description);
-      const replacement = scopes.findIndex(item => canonical(item) === selectedScope);
-      if (!scopeFresh() || description.instanceId !== instance || replacement < 0 || version !== byId("version").value
+      const replacement = scopes.findIndex(item => item.scope?.kind === scopeKind && canonical(item) === selectedScope);
+      if (!scopeFresh() || description.instanceId !== instance || replacement < 0 || currentChoice() !== scopes[replacement] || version !== byId("version").value
           || selected.grant.expiresAt-Date.now() < 1000 || goal !== byId("goal").value || tools !== Number(byId("tools").value) || models !== Number(byId("models").value)) {
         notice("The phone scope or this draft changed. Review the current selection before starting a task."); return;
       }

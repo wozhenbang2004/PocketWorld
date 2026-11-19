@@ -880,6 +880,13 @@ internal class PocketWebBridge(
                     PocketWebTaskActions.Decision.Accepted -> { complete(id, accepted(), null); publishState() }
                     is PocketWebTaskActions.Decision.Plan -> submitExecutionPlanDecision(id, decision.action, decision.task, decision.input)
                     is PocketWebTaskActions.Decision.Continuation -> submitProjectContinuation(id, decision.task, decision.input)
+                    is PocketWebTaskActions.Decision.PhoneOutcome -> {
+                        val window=captureWindow();val doc=documentId;val privateRevision=controller.conversationSourceRevision
+                        val current={ !closed && doc!=null && doc==documentId && acceptsWindow(window) && taskViewId==decision.task.id && section==null && controller.conversationSourceRevision==privateRevision }
+                        controller.recordReviewedPhoneOutcome(decision.task,decision.operation,decision.outcome,decision.pin,current) { receipt,error ->
+                            complete(id,receipt,error,"outcome_unknown",retainValue=false);publishState()
+                        }
+                    }
                 }
                 return
             }
@@ -935,7 +942,9 @@ internal class PocketWebBridge(
             }
             if (action in PocketWebKnowledge.COMMANDS) {
                 if (action == "knowledge.close") check(section in setOf("memory", "memoryReview", "learning")) else if (action.startsWith("knowledge.")) check(section in setOf("memory", "memoryReview")) { "请先打开记忆管理页" } else requireSection("learning")
-                knowledge.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }; return
+                // Memory bodies and scoped source pages are live reads; duplicate IDs cannot restore their contents.
+                val retain = action !in setOf("knowledge.snapshot", "knowledge.get", "knowledge.source", "knowledge.parent")
+                knowledge.dispatch(action, args) { result, error -> complete(id, result, error, retainValue = retain); publishState() }; return
             }
             if (action in PocketWebMemoryDrafts.COMMANDS) { memoryDrafts.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }; return }
             if (action in PocketWebSkillDrafts.COMMANDS) { skillDrafts.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }; return }

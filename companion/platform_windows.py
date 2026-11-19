@@ -249,18 +249,41 @@ class WindowsBackend:
         with self.directory(root) as (_, handle, _identity):
             return self.api.private_access(handle, user_sid, require_protected=require_protected)
 
-    def read_private_bytes(self, root, relative, user_sid, *, maximum=LIMIT):
+    @contextmanager
+    def _private_leaf(self, root, relative, user_sid, *, optional):
         parts = relative_parts(relative)
         with self.directory(root, parts[:-1]) as (directory, _, _identity):
             target = ntpath.join(directory, parts[-1])
-            handle = self.api.open(target)
+            try:
+                handle = self.api.open(target)
+            except OSError as error:
+                # Distinguish ONLY a missing final file while the original
+                # ancestors are pinned. Outside this block directory() wraps
+                # OSError intentionally; path/DACL/sharing errors are not absence.
+                if not optional or getattr(error, "winerror", None) != 2: raise
+                yield None
+                return
             try:
                 if self.api.final(handle).casefold() != ("\\\\?\\" + target).casefold():
                     raise PlatformError("Private state handle escaped its reviewed path", 403)
                 self.api.private_access(handle, user_sid)
-                return self.api.read(handle, maximum)
+                yield handle
             finally:
                 self.api.k.CloseHandle(handle)
+
+    def read_private_bytes(self, root, relative, user_sid, *, maximum=LIMIT):
+        with self._private_leaf(root, relative, user_sid, optional=False) as handle:
+            return self.api.read(handle, maximum)
+
+    def read_optional_private_bytes(self, root, relative, user_sid, *, maximum=LIMIT):
+        with self._private_leaf(root, relative, user_sid, optional=True) as handle:
+            return None if handle is None else self.api.read(handle, maximum)
+
+    def private_leaf_present(self, root, relative, user_sid, *, maximum=LIMIT):
+        # The token/config presence gate checks a regular original identity
+        # and metadata; it must not read the token just to show a status.
+        with self._private_leaf(root, relative, user_sid, optional=True) as handle:
+            return handle is not None and WindowsHandleReader(self.api, handle, maximum).verify_unchanged()
 
     def process_identity(self, pid):
         """Actual PID generation/session; access failure is not exit evidence."""

@@ -238,6 +238,24 @@ class CompanionHistory(NativeHistoryAudienceSource):
             result = desktop_observation_readback(self.manager, operation, row[0], row[1], row[2], detail, self.manager.jobs.get(row[1]), permission)
             if result is None:
                 result = copy.deepcopy(self.manager.operation(operation))
+            if self.manager.platform.name == "windows" and detail.get("protocol") in {"native-device-command-v1", "native-device-tool-v1"}:
+                from windows_received_job import COMMAND, admission
+                original = admission(self.manager, operation, row)
+                if original is not None and protocol.resource_equal(permission.audience, original[1]):
+                    if original[0]["toolName"] == COMMAND:
+                        from windows_command_receipt import project
+                        command = project(self.manager, operation, row, original)
+                        if command["phase"] == "accepted_only":
+                            result = {"id": row[1], "operationId": operation, "status": "unknown", "archived": True,
+                                      "noAutomaticReplay": True}  # No cache-only output substituted for an unverified original.
+                        result["windowsCommandReceipt"] = command
+                    else:
+                        from windows_workspace_read import project
+                        snapshot = project(self.manager, operation, row, original)
+                        if snapshot["phase"] == "receipt_only" and "windowsReadWitness" in detail:
+                            # A once-bound completed read whose original is now missing or inconsistent.
+                            result = {"id": row[1], "operationId": operation, "status": "unknown", "noAutomaticReplay": True}
+                        result["windowsReadReceipt"] = snapshot  # Legacy ungated status/fields keep their existing behavior.
             if detail.get("audience", {}).get("toolName") in {"workspace.receive", "workspace.project.receive", "workspace.project.confirm"}:
                 result.update(copy.deepcopy(result.get("nativeToolResult", {})))
             if detail.get("audience", {}).get("toolName") in {"workspace.write", "workspace.receive"}:

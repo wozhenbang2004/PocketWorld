@@ -25,6 +25,21 @@ public final class NativeDeviceTaskHistoryHost {
         private void require()throws Exception{if(closed)throw new SecurityException("原历史窗口已关闭");io.check();original.requireCurrent();}
         public JSONObject view()throws Exception{
             require();JSONObject view=original.view(),wire=original.originalWire();
+            JSONObject invocation=wire.optJSONObject("arguments");
+            if("tool.invoke".equals(wire.optString("method")) && invocation!=null
+                && "workspace-v1".equals(wire.optString("capabilityVersion"))
+                && "workspace".equals(original.resourceBinding().optString("kind")) && local.deviceId().equals(wire.optString("originDeviceId"))
+                && local.deviceId().equals(wire.optString("callerDeviceId")) && original.taskId().equals(wire.optString("rootTaskId"))
+                && original.taskId().equals(wire.optString("parentTaskId"))){
+                String tool=invocation.optString("toolName"),effect=invocation.optString("effect");
+                if("command.run".equals(tool)&&"write".equals(effect))view.put("directWorkspaceCommand",true);
+                if(("workspace.read".equals(tool)||"workspace.list".equals(tool))&&"read".equals(effect)){
+                    JSONObject arguments=invocation.optJSONObject("arguments");
+                    Object path=arguments==null?null:arguments.has("path")?arguments.opt("path"):"workspace.list".equals(tool)?"":null;
+                    if(path instanceof String relative&&relative.length()<=2048)
+                        view.put("directWorkspaceRead",tool).put("directWorkspaceReadPathDigest",DeviceProtocol.sha256(relative.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+                }
+            }
             if(directPhoneGoal(wire))view.put("phoneGoalResult",true).put("localPhoneResultPath",localPhoneResultPath(wire));
             require();return view;
         }

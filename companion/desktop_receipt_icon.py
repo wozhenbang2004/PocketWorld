@@ -79,13 +79,13 @@ class LocalReceiptIcon:
         wc = WC(0, handler, 0, 0, instance, None, None, None, None, name)
         if not register(c.byref(wc)): return
         try:
-            hwnd = create(0, name, "PocketWorld 本机手机回执", 0, 0, 0, 0, 0, None, None, instance, None)
+            hwnd = create(0, name, "PocketWorld 设备工作回执", 0, 0, 0, 0, 0, None, None, instance, None)
             if not hwnd: return
             self.hwnd = hwnd
             try:
                 extract(sys.executable, 0, None, c.byref(native_icon), 1)
                 note.size, note.hwnd, note.id, note.flags, note.message = c.sizeof(note), hwnd, 1, 0x01 | 0x02 | 0x04 | 0x80, 0x8001
-                note.icon, note.tip, note.version = native_icon.value or load_icon(None, c.c_void_p(32512)), "PocketWorld · 手机工作回执（只读）", 4
+                note.icon, note.tip, note.version = native_icon.value or load_icon(None, c.c_void_p(32512)), "PocketWorld · 设备工作回执（只读）", 4
                 if not note.icon or not self.view.active() or not add(): return
                 self.installed = True; self.ready.set()
                 message = w.MSG()

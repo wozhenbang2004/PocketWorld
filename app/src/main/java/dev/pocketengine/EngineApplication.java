@@ -3608,6 +3608,9 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
                 currentHistory=tasks.projectConversationHistoryReferences(currentHistory,originalTask.getString("conversationId"));
                 currentHistory=tasks.projectOwnerSourceContext(id,admittedRun,admittedEpoch,live,currentHistory);
                 currentHistory=withOwnerWorkPreparationContract(id,live,currentHistory);
+                // Keep original-source retirement checks above. Only this admitted task's inputs
+                // may now re-materialize selected message ranges; prior conversation prose stays history.
+                dev.pocketengine.features.assistant.OwnerSourceReferences.restrictToTaskInputs(currentHistory,id,inputs);
                 if(hasTaskAttachments(originalTask))attachmentRoutePins.require(id,selected,false);return sourceProjection.project(currentHistory,selected,live);
                 }
                 @Override public void prepared(JSONArray nativeProvenance,JSONArray actualMessages,ModelConfig selected,RunControl live)throws Exception{sourceProjection.prepared(nativeProvenance,actualMessages,selected,live);}
@@ -4135,6 +4138,16 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
     }
     public JSONObject readTaskExecutionPlanApproval(String taskId,String approvalId)throws Exception{
         if(!businessReady())throw new SecurityException("原存储尚未完成启动核对");return tasks.readTaskExecutionPlanApproval(taskId,approvalId);
+    }
+    /** A private host read-review, never a model tool or a request to act on the phone. */
+    public synchronized JSONObject recordOriginalPhoneOutcome(String id,String operation,String outcome,JSONObject pinned,java.util.function.BooleanSupplier window)throws Exception{
+        if(pinned==null||window==null||!window.getAsBoolean())throw new SecurityException("请重新核对这笔原手机动作");
+        RunControl owner=control(id);
+        if(ownerActionActive||owner!=null&&!owner.isPaused()||capabilityControls.containsKey(id)||features.mediaControl(id)!=null||features.teamControl(id)!=null)
+            throw new IllegalStateException("请先等实际动作结束并暂停；没有覆盖在途回执");
+        JSONObject receipt=tasks.resolveOperation(id,operation,outcome,pinned,window);
+        if(!tasks.hasUnresolved(id)&&features.module("semantic") instanceof dev.pocketengine.features.semantic.SemanticModule semantic)semantic.releaseRun(owner);
+        pushTask(id);return receipt;
     }
     public JSONObject dispatchReviewedOwnerAction(String action,JSONObject input,java.util.function.BooleanSupplier current)throws Exception{
         if(current==null||!current.getAsBoolean())throw new SecurityException("原审阅窗口已关闭，未执行排队操作");return dispatchOwnerAction(action,input,current);

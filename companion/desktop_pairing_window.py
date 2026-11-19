@@ -299,7 +299,7 @@ def show_pairing_window(controller, host, *, offer_local_receipts=False):
         user.EnableWindow(review_button, False); user.EnableWindow(start_button, False)
         status = control("STATIC", "选择手机也能访问的本机地址，或手动填写，再创建一次性邀请。选地址不会监听；关闭窗口不会撤销已确认的配对。", 16, bottom + 28, width - 50, 44 if offer_local_receipts else 52)
         if offer_local_receipts:
-            controls["phone_receipts"] = control("BUTTON", "启动桥接时，在本机通知区域保留「手机工作回执」入口", 16, bottom + 72, width - 50, 23, 301, 0x3 | 0x10000)
+            controls["phone_receipts"] = control("BUTTON", "启动桥接时，在本机通知区域保留「设备工作回执」入口", 16, bottom + 72, width - 50, 23, 301, 0x3 | 0x10000)
         user.SetTimer(window, 1, 500, None)
         user.ShowWindow(window, 5); user.SetForegroundWindow(window)
         message = w.MSG()

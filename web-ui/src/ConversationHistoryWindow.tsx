@@ -6,6 +6,7 @@ import {AIAnswer,MessageActions} from './library';
 import {useClosingSnapshot} from './library/surface-motion';
 import {PhoneReturnedReport,phoneReportTarget,type PhoneReportTarget} from './PhoneReturnedReport';
 import {messagePhoneResult} from './phone-start';
+import {RegisteredQuoteTrail,sameQuoteVisit,type HistoryQuoteVisit} from './RegisteredQuoteTrail';
 import './conversation-history-window.css';
 
 type Json=Record<string,any>;
@@ -21,6 +22,22 @@ export function ConversationHistoryWindow({page,submitting,can,act,registerBack,
  const timer=useRef<ReturnType<typeof setTimeout>|null>(null),sending=useRef(false);
  const [pending,setPending]=useState(false),[error,setError]=useState('');
  const [phoneOriginal,setPhoneOriginal]=useState<PhoneReportTarget|null>(null);
+ const [quoteVisit,setQuoteVisit]=useState<HistoryQuoteVisit|null>(null);
+ const visibleVisit=quoteVisit&&sameQuoteVisit(page,quoteVisit)?quoteVisit:null;
+ const moveToQuoteRow=(visit:HistoryQuoteVisit,returning:boolean)=>{
+  if(document.hidden||sending.current||!scroll.current||!sameQuoteVisit(live.current,visit))return false;
+  const box=scroll.current;
+  const id=returning?visit.request:visit.target;
+  const row=Array.from(box.querySelectorAll<HTMLElement>('[data-reader-id]')).find(item=>item.dataset.readerId===id);
+  if(!row)return false;
+  const origin=returning?Array.from(row.querySelectorAll<HTMLButtonElement>('[data-quote-target]')).find(item=>item.dataset.quoteTarget===visit.target&&Number(item.dataset.quoteStart)===visit.offset&&Number(item.dataset.quoteSize)===visit.chars):null;
+  const anchor=origin&&!origin.disabled?origin:row;anchor.focus({preventScroll:true});
+  box.scrollTop+=anchor.getBoundingClientRect().top-box.getBoundingClientRect().top-(returning&&origin?visit.returnInset:0);return true;
+ };
+ const returnFromQuote=()=>{const v=visibleVisit;if(!v)return false;setQuoteVisit(null);moveToQuoteRow(v,true);return true};
+ useEffect(()=>{if(quoteVisit&&!visibleVisit)setQuoteVisit(null)},[quoteVisit,visibleVisit]);
+ useEffect(()=>{const retire=()=>{if(document.hidden)setQuoteVisit(null)};document.addEventListener('visibilitychange',retire);return()=>document.removeEventListener('visibilitychange',retire)},[]);
+
  const [inputNotice,setInputNotice]=useState<{window:number;messageId:string;error?:string}|null>(null);
  const returnToInput=useRef<(ConversationHistoryTaskOrigin&{taskId:string;revision:number})|null>(null);
  const rows:Json[]=Array.isArray(shown.messages)?shown.messages:[];
@@ -91,7 +108,7 @@ export function ConversationHistoryWindow({page,submitting,can,act,registerBack,
   if(!button||button.disabled)return false;
   button.focus({preventScroll:true});return true;
  };
- const back=()=>{if(phoneOriginal){setPhoneOriginal(null);return true}if(!live.current)return false;if(!sending.current)void invoke('conversation.reader.close');return true};
+ const back=()=>{if(phoneOriginal){setPhoneOriginal(null);return true}if(returnFromQuote())return true;if(!live.current)return false;if(!sending.current)void invoke('conversation.reader.close');return true};
  useEffect(()=>{registerBack(back);return()=>registerBack(null)});
  useEffect(()=>()=>{if(timer.current)clearTimeout(timer.current)},[]);
  useLayoutEffect(()=>{
@@ -106,16 +123,22 @@ export function ConversationHistoryWindow({page,submitting,can,act,registerBack,
  },[page?.window,marker]);
  useEffect(()=>{setError('');setPhoneOriginal(null)},[page?.window]);
  return <Drawer.Root open={!!page} onOpenChange={open=>{if(!open)back()}} dismissible={!pending} shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay"/><Drawer.Content className="pw-drawer pw-conversation-history-window" aria-describedby="pw-history-window-description" inert={!page} onOpenAutoFocus={event=>{if(focusOriginalInput())event.preventDefault()}} onCloseAutoFocus={exit.onCloseAutoFocus}>
-  <header className="pw-drawer-header"><div><Drawer.Title>{shown.title||'阅读对话'}</Drawer.Title><Drawer.Description id="pw-history-window-description">只读查看，原输入和发送回执仍留在原对话。</Drawer.Description></div><IconButton icon={IconRefresh} aria-label="刷新这份对话历史" disabled={!page||pending||!!shown.loading||!can('conversation.reader.refresh')} onClick={()=>void invoke('conversation.reader.refresh')}/><IconButton icon={IconClose} aria-label="返回原输入" disabled={!page||pending} onClick={back}/></header>
+  <header className="pw-drawer-header"><div><Drawer.Title>{shown.title||'阅读对话'}</Drawer.Title><Drawer.Description id="pw-history-window-description">只读查看，原输入和发送回执仍留在原对话。</Drawer.Description></div><IconButton icon={IconRefresh} aria-label="刷新这份对话历史" disabled={!page||pending||!!shown.loading||!can('conversation.reader.refresh')} onClick={()=>void invoke('conversation.reader.refresh')}/><IconButton icon={IconClose} aria-label={visibleVisit?'返回引用它的请求':'返回原输入'} disabled={!page||pending} onClick={back}/></header>
   <div className="pw-drawer-body pw-history-window-messages" ref={scroll} onScroll={saveReading}>
    {(error||shown.error)&&<p className="pw-error" role="alert">{error||shown.error}</p>}
    {shown.notice&&<p className="pw-muted">{shown.notice}</p>}
    {shown.hasMore&&!shown.limited&&<Button variant="ghost" disabled={!page||pending||shown.loading||!can('conversation.reader.earlier')} onClick={()=>void invoke('conversation.reader.earlier')}>查看更早消息</Button>}
    {shown.loading&&<p className="pw-muted" role="status">正在读取原消息…</p>}
-   {rows.map((message,index)=><article key={message.id} className={`pw-history-window-message pw-message-${message.role}`} data-reader-index={index} data-reader-id={message.id} aria-label={message.role==='assistant'?'助手回复':'你的消息'}>
+   {rows.map((message,index)=><article key={message.id} className={`pw-history-window-message pw-message-${message.role}`} tabIndex={-1} data-reader-index={index} data-reader-id={message.id} aria-label={message.role==='assistant'?'助手回复':'你的消息'}>
     {message.role==='assistant'?<AIAnswer text={message.content} onCopyCode={copy} showActions={false}/>:<p className="pw-user-text">{message.content}</p>}
     {Array.isArray(message.attachments)&&message.attachments.length>0&&<div className="pw-message-files">{message.attachments.map((file:Json)=><Button key={`${file.id}:${file.sha256}`} variant="ghost" leadingIcon={IconFile} disabled={!page||pending||!can('conversation.reader.attachment')} onClick={()=>void invoke('conversation.reader.attachment',{messageId:message.id,id:file.id,sha256:file.sha256})}>{file.name||'原附件'}</Button>)}</div>}
     {page?.window===shown.window&&message.role==='user'&&message.automaticLearningExcluded===true&&<Accordion className="pw-compact-disclosures"><AccordionItem id={'memory-'+message.id} title="这条原话已排除自动记忆整理"><p className="pw-muted">后来开启也不会补提炼。它仍是对话原文；这不代表类似内容从未另行保存。</p></AccordionItem></Accordion>}
+    {page?.window===shown.window&&!page?.loading&&!page?.error&&!page?.limited&&message.role==='user'&&<RegisteredQuoteTrail message={message} locked={pending||!!visibleVisit&&visibleVisit.request!==message.id} locate={(range,target,from)=>{
+     const h=live.current;if(!h||!scroll.current?.contains(from)||h.window!==shown.window||h.conversation!==shown.conversation)return;
+     const visit={...range,returnInset:from.getBoundingClientRect().top-scroll.current.getBoundingClientRect().top,window:h.window,conversation:h.conversation,request:message.id,requestRevision:message.sourceRevision,target};
+     if(moveToQuoteRow(visit,false))setQuoteVisit(visit);
+    }}/>}
+    {visibleVisit?.target===message.id&&<Button variant="secondary" size="small" disabled={pending} onClick={returnFromQuote}>返回引用它的请求</Button>}
     <div className="pw-action-row">
      {!!message.content&&<MessageActions onCopy={()=>copy(message.content)}/>}
      {message.role==='user'&&typeof message.readerInputTaskId==='string'&&message.readerInputTaskId&&can('tasks.open')&&<Button variant="ghost" size="small" className="pw-input-work" leadingIcon={IconTool} data-input-work={message.readerInputTaskId} data-input-revision={message.sourceRevision} aria-busy={loadingInput(message.id)} disabled={!page||pending} onClick={()=>void openLinkedTask(message,'overview')}>{loadingInput(message.id)?'正在读取…':'查看原工作'}</Button>}
@@ -132,7 +155,7 @@ export function ConversationHistoryWindow({page,submitting,can,act,registerBack,
    </article>)}
    {!shown.loading&&!shown.error&&!rows.length&&<p className="pw-muted">这份对话没有可读取的消息。</p>}
   </div>
-  <footer className="pw-drawer-actions"><Button variant="ghost" disabled={pending} onClick={back}>返回原输入</Button><Button variant="secondary" disabled={!page||submitting||pending||!can('conversation.reader.select')} onClick={()=>void invoke('conversation.reader.select')}>{submitting?'原输入正在登记':'在此对话继续'}</Button></footer>
+  <footer className="pw-drawer-actions"><Button variant="ghost" disabled={pending} onClick={back}>{visibleVisit?'返回引用它的请求':'返回原输入'}</Button><Button variant="secondary" disabled={!page||submitting||pending||!can('conversation.reader.select')} onClick={()=>void invoke('conversation.reader.select')}>{submitting?'原输入正在登记':'在此对话继续'}</Button></footer>
   {phoneOriginal&&page?.window===phoneOriginal.readerWindow&&<PhoneReturnedReport target={phoneOriginal} onClose={()=>setPhoneOriginal(null)}/>}
  </Drawer.Content></Drawer.Portal></Drawer.Root>;
 }

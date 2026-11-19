@@ -14582,6 +14582,9 @@ public final class TaskStore {
         }finally{db.endTransaction();}
     }
     public synchronized JSONObject resolveOperation(String id,String operationId,String outcome)throws Exception{
+        return resolveOperation(id,operationId,outcome,null,null);
+    }
+    public synchronized JSONObject resolveOperation(String id,String operationId,String outcome,JSONObject phoneSelection,java.util.function.BooleanSupplier ownerWindow)throws Exception{
         if(required(id).has("ownerLocalTerminal"))throw new SecurityException("手动终端只查询原进程/输入回执，不能人工确认未发生再重放");
         if(required(id).has(RuntimeSetupHost.KEY))throw new SecurityException("本机准备保留原进程与安装证据，不能人工确认未发生再重放");
         try(Cursor notice=db.rawQuery("SELECT 1 FROM operations WHERE task_id=? AND operation_id=? AND tool='post_notice'",new String[]{id,operationId})){if(notice.moveToFirst())throw new SecurityException("通知原提交与阅读状态不能用人工已发生/未发生覆盖；未知通知不会重发");}
@@ -14606,8 +14609,22 @@ public final class TaskStore {
         if(!outcome.equals("occurred")&&!outcome.equals("not_occurred"))throw new IllegalArgumentException("请根据实际现场确认已发生或未发生");
         JSONObject reconciliation=new JSONObject().put("source","owner_reconciliation").put("outcome",outcome).put("at",System.currentTimeMillis());if(mcp!=null){JSONObject actual=mcp.publicReceiptForHost();actual.put("ownerReconciliation",reconciliation).put("status","owner_reconciled").put("automaticallyVerified",false);reconciliation=actual;}ContentValues value=new ContentValues();value.put("state","resolved");value.put("receipt",reconciliation.toString());
         db.beginTransaction();try{
-            if(db.update("operations",value,"operation_id=? AND task_id=? AND state IN ('prepared','unknown')",new String[]{operationId,id})!=1)throw new IllegalArgumentException("没有需要核对的该动作");
-            JSONObject t=required(id);if(!hasUnresolved(id))t.put("status","paused").put("summary","动作结果已核对，可以继续原任务");write(t);JSONObject result=copy(t,false);
+            JSONObject t=required(id);String original=PhoneActionRecovery.checkedRun(db,t,operationId,phoneSelection);
+            if(original!=null){
+                // Owner classification is not an Android receipt. Keep any native evidence, never replace it with "success".
+                String prior=TaskStoreTextReader.read(db,TaskStoreTextReader.Column.OPERATION_RECEIPT,operationId,8*1024*1024);
+                JSONObject owner=new JSONObject(reconciliation.toString()).put("automaticallyVerified",false).put("automaticReplay",false);
+                if(prior!=null)owner.put("originalPhoneReceipt",new JSONObject(prior));
+                value.put("receipt",owner.toString());
+            }
+            if(original!=null&&(ownerWindow==null||!ownerWindow.getAsBoolean()))throw new SecurityException("原手机核对窗口已关闭，未登记结果");
+            int records=original==null?db.update("operations",value,"operation_id=? AND task_id=? AND state IN ('prepared','unknown')",new String[]{operationId,id})
+                    :db.update("operations",value,"operation_id=? AND task_id=? AND run_id=? AND state='unknown'",new String[]{operationId,id,original});
+            if(records!=1)throw new IllegalArgumentException("没有需要核对的该动作");
+            if(!hasUnresolved(id))t.put("status","paused").put("summary","动作结果已核对，可以继续原任务");write(t);
+            JSONObject result=original==null?copy(t,false):new JSONObject().put("format","pocketworld.owner-phone-reconciliation-receipt.v1")
+                    .put("taskId",id).put("runId",original).put("epoch",phoneSelection.getInt("epoch")).put("operationId",operationId)
+                    .put("outcome",outcome).put("recordedAt",reconciliation.getLong("at")).put("ownerRecorded",true).put("automaticallyVerified",false).put("automaticReplay",false);
             db.setTransactionSuccessful();return result;
         }finally{db.endTransaction();}
     }
@@ -15507,6 +15524,7 @@ public final class TaskStore {
         JSONArray chronological=new JSONArray();for(int i=eventBodies.length()-1;i>=0;i--)chronological.put(eventBodies.get(i));
         for(int i=operationRows.length()-1;i>=0;i--){JSONObject row=operationRows.getJSONObject(i);if(!"available".equals(row.optString("status")))continue;JSONObject operation=new JSONObject(row.toString());operation.remove("status");operationBodies.put(operation);}
         result.put("events",chronological).put("operations",operationBodies).put("taskProjection","detail_window").put("auditBodyIncluded",true).put("historyEventPage",events).put("historyOperationPage",operations).put("hasUnresolvedOperations",hasUnresolved(id)).put("historyHasUnconfirmedOperations",hasUnconfirmedForUi(id));
+        if(!limited&&result.optBoolean("historyHasUnconfirmedOperations")&&PhoneActionRecovery.local(result))result.put(PhoneActionRecovery.KEY,PhoneActionRecovery.page(db,result));
         result.put("logicalRequests",InferenceRequestStore.list(db,id)).put("logicalRequestWindowLimit",16);
         JSONObject flags=new JSONObject();for(String type:new String[]{"memory_owner_consolidation","media_owner_prepared","browser_research_requested"})try(Cursor row=db.rawQuery("SELECT 1 FROM task_events WHERE task_id=? AND event_type=? LIMIT 1",new String[]{id,type})){flags.put(type,row.moveToFirst());}result.put("nativeEventTypeFlags",flags).put("nativeTaskKind",result.optJSONObject("sourceLearningJob")!=null?"source_learning":flags.optBoolean("memory_owner_consolidation")?"memory_consolidation":flags.optBoolean("media_owner_prepared")?"media":result.optString("kind"));
         if("GATEWAY_ONLY".equals(result.optString("nativeExecutionMode")))result.put("gatewaySession",gatewayParentSessionForUi(id));

@@ -6,6 +6,7 @@ import threading
 import time
 import unicodedata
 
+import desktop_received_commands as received
 from desktop_owner_entry import _dialog
 from desktop_sessions import WindowsDesktopHealth
 from phone_task_bridge import PROTOCOL
@@ -62,16 +63,17 @@ class ResultView:
         current = self.receiver.trust.peer(peer[0])
         return current and not current["revoked"] and (current["fingerprint"], current["instanceId"], current["authorizationEpoch"]) == peer[1:4]
 
-    def _page(self, peer, before=None):
+    def _page(self, peer, before=None, *, incoming=False):
         # Index seek, bounded projection, release the business manager lock
         # between batches. Empty matched pages still expose the older cursor.
         selected, cursor = [], before if before is not None else 9223372036854775807
         for _ in range(4):
             with self.manager.lock:
-                batch = self.manager.ledger.execute(_BATCH, (PROTOCOL, peer[0], peer[2], cursor)).fetchall()
+                batch = (self.manager.ledger.execute(received.BATCH, (peer[0], cursor)) if incoming else
+                         self.manager.ledger.execute(_BATCH, (PROTOCOL, peer[0], peer[2], cursor))).fetchall()
             for index, row in enumerate(batch):
                 cursor = row[0]
-                if isinstance(row[4], str):
+                if isinstance(row[4], str) and (not incoming or received.local_record(self, peer, row)):
                     selected.append(row)
                     if len(selected) == 6:
                         return selected, cursor if index + 1 < len(batch) or len(batch) == 64 and cursor > 1 else None
@@ -160,33 +162,43 @@ class ResultView:
         def show():
             try:
                 if WindowsDesktopHealth().probe(session_only=True).get("available") is not True: return
-                peer_page = 0
                 while self.active():
-                    peers = self._peers()
-                    peer_page = min(peer_page, max(0, (len(peers) - 1) // 6))
-                    current = peers[peer_page * 6:peer_page * 6 + 6]
-                    choices = [(p, "设备 …" + p[0][-12:] + "\n配对指纹 …" + p[1][-12:]) for p in current]
-                    if peer_page: choices.append(("newer", "上一页设备"))
-                    if (peer_page + 1) * 6 < len(peers): choices.append(("older", "下一页设备"))
-                    peer = self._dialog("这台电脑派给手机的工作", "选择手机上对应的配对身份，接下来只看这台电脑上的原派单。这里不检查手机在线，也不能接管手机。"
-                                        if current else "本机没有可选的配对设备。这里不能新建工作或接管手机。", choices)
-                    if peer is None: return
-                    if peer in ("older", "newer"): peer_page += 1 if peer == "older" else -1; continue
-                    pages = [None]
-                    while self._peer_current(peer):
-                        rows, older = self._page(peer, pages[-1])
-                        choices = [(row, _STATE.get(row[4], "原派单") + " · " + _stamp(row[3]) + "\n操作 …" + row[1][-16:]) for row in rows]
-                        if len(pages) > 1: choices.append(("newer", "较新派单"))
-                        if older is not None: choices.append(("older", "查看较早的原记录"))
-                        choices.append(("back", "返回设备"))
-                        row = self._dialog("选择一笔原派单" if rows else "这批记录没有给该设备的手机动作任务",
-                                           "这里是电脑记录的状态。点选一笔才向同一手机回读；不会运行、恢复或重试任务。", choices,
-                                           lambda: self._peer_current(peer))
-                        if row is None: return
-                        if row == "back": break
-                        if row == "older": pages.append(older); continue
-                        if row == "newer": pages.pop(); continue
-                        self._read(peer, row)
+                    direction = self._dialog("要看哪一端执行的工作？", "工作和结果都保留在原执行设备；这里不能启动或接管任务。",
+                                             [("incoming", "其他设备交给这台电脑的工作\n查看本机工作区的原命令、目录和文本读取，不需要发起设备在线。"),
+                                              ("outgoing", "这台电脑交给手机的工作\n选择原派单后，只向那部手机查询。")])
+                    if direction is None: return
+                    incoming = direction == "incoming"
+                    peer_page = 0
+                    while self.active():
+                        peers = self._peers()
+                        peer_page = min(peer_page, max(0, (len(peers) - 1) // 6))
+                        current = peers[peer_page * 6:peer_page * 6 + 6]
+                        choices = [(p, "设备 …" + p[0][-12:] + "\n配对指纹 …" + p[1][-12:]) for p in current]
+                        if peer_page: choices.append(("newer", "上一页设备"))
+                        if (peer_page + 1) * 6 < len(peers): choices.append(("older", "下一页设备"))
+                        heading = "谁交给了这台 Windows 工作？" if incoming else "这台电脑派给手机的工作"
+                        hint = "选择原发起设备；只查看这台 Windows 实际接收的本机命令与工作区读取，不连接手机、云服务器或 SSH。"
+                        peer = self._dialog(heading, hint if incoming and current else "选择手机上对应的配对身份，接下来只看这台电脑上的原派单。这里不检查手机在线，也不能接管手机。"
+                                            if current else "本机没有可选的配对设备。这里不能新建工作或接管手机。", choices)
+                        if peer is None: break
+                        if peer in ("older", "newer"): peer_page += 1 if peer == "older" else -1; continue
+                        pages = [None]
+                        while self._peer_current(peer):
+                            rows, older = self._page(peer, pages[-1], incoming=incoming)
+                            choices = [(row, (received.TOOLS[row[4]] if incoming else _STATE.get(row[4], "原派单")) + " · " + _stamp(row[3]) + "\n操作 …" + row[1][-16:]) for row in rows]
+                            if len(pages) > 1: choices.append(("newer", "较新派单"))
+                            if older is not None: choices.append(("older", "查看较早的原记录"))
+                            choices.append(("back", "返回设备"))
+                            heading = ("这台 Windows 接收的原工作" if rows else "本批没有可核对的本机工作") if incoming else ("选择一笔原派单" if rows else "这批记录没有给该设备的手机动作任务")
+                            row = self._dialog(heading, "只读本机原执行器的工作和留存输出。断线不等于失败；没有记录也不会启动工作。" if incoming else
+                                               "这里是电脑记录的状态。点选一笔才向同一手机回读；不会运行、恢复或重试任务。", choices,
+                                               lambda: self._peer_current(peer) and (not incoming or all(received.local_record(self, peer, entry) for entry in rows)))
+                            if row is None: return
+                            if row == "back": break
+                            if row == "older": pages.append(older); continue
+                            if row == "newer": pages.pop(); continue
+                            if incoming: received.show(self, peer, row)
+                            else: self._read(peer, row)
             except Exception:
                 if self.active():
                     try: self._dialog("本次原回执窗口已结束", "原设备、桌面、读取授权或任务状态已变化；没有重放任何操作。", [])

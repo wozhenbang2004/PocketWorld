@@ -152,12 +152,14 @@ internal object PocketWebState {
             .put("revisionLoading", state.revisionLoading).put("requestedProjectId", state.requestedProjectId ?: JSONObject.NULL)
             .put("requestedProjectRevision", state.requestedProjectRevision)
             .put("features", publicValue(state.features))
-            .put("ownerSnapshots", JSONObject().also { out -> state.ownerSnapshots.forEach { (key, value) -> out.put(key, publicValue(value)) } })
+            // The memory workspace reads its scoped command result. Publishing its native mirrors here
+            // would send complete source bodies before the selected page is checked and bounded.
+            .put("ownerSnapshots", JSONObject().also { out -> state.ownerSnapshots.forEach { (key, value) -> if (key != "memoryReview") out.put(key, publicValue(value)) } })
             .put("ownerResponses", JSONObject().also { out -> state.ownerResponses.forEach { (domain, responses) ->
-                out.put(domain, JSONObject().also { result -> responses.forEach { (key, value) -> result.put(key, publicValue(value)) } })
+                if (domain != "memoryReview") out.put(domain, JSONObject().also { result -> responses.forEach { (key, value) -> result.put(key, publicValue(value)) } })
             } })
             .put("ownerPending", JSONArray(state.ownerPending.toList())).put("ownerErrors", JSONObject(state.ownerErrors))
-            .put("ownerSource", publicValue(state.ownerSource))
+            .put("ownerSource", JSONObject.NULL)
             .put("moduleResults", JSONObject().also { out -> state.moduleResults.forEach { (key, value) -> out.put(key, publicValue(value)) } })
             .put("moduleResultInputs", JSONObject().also { out -> state.moduleResultInputs.forEach { (key, value) -> out.put(key, publicValue(value)) } })
             .put("moduleBusy", JSONArray(state.moduleBusy.toList())).put("moduleErrors", JSONObject(state.moduleErrors))
@@ -193,7 +195,11 @@ internal object PocketWebState {
         } })
         data.put("conversationReader", controller.conversationReader?.let { page -> JSONObject()
             .put("window", page.window).put("conversation", page.conversation).put("title", page.title)
-            .put("messages", JSONArray().also { out -> page.messages.forEach { out.put(message(it)) } })
+            .put("messages", JSONArray().also { out -> page.messages.forEach { row ->
+                val view = message(row)
+                if (!page.loading && page.error == null && !page.limited) page.quoteTrail.ranges(row.id)?.let { view.put("registeredQuotes", it) }
+                out.put(view)
+            } })
             .put("cursor", page.cursor).put("hasMore", page.hasMore).put("loading", page.loading)
             .put("error", page.error ?: JSONObject.NULL).put("notice", page.notice ?: JSONObject.NULL)
             .put("limited", page.limited).put("index", page.index).put("offset", page.offset).put("anchor", page.anchor)
